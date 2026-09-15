@@ -567,6 +567,7 @@ public:
     }
 
     void PumpVideoTextures(double seconds) { m_registries.Textures().PumpVideoTextures(seconds); }
+    vulkan::VideoDecoderInventory ObserveVideoDecoders() { return m_registries.Textures().ObserveVideoDecoders(); }
     void SetVideoDecodeOptions(vulkan::TextureCache::VideoDecodeOptions options) {
         m_registries.Textures().SetVideoDecodeOptions(std::move(options));
     }

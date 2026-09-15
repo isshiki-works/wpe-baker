@@ -352,6 +352,14 @@ auto BuildMaterial(fs::VFS& vfs, ShaderCache& shader_cache,
     ApplyLegacyAtmosphereUniformAliases(wpmat, shader_info_ref);
     ApplyLegacyAtmosphereShaderCompat(wpmat, sd_units);
 
+    auto has_format_combo = [&](std::size_t texture_slot) {
+        if (texture_slot == 0) return true;
+        for (const auto& texture : shader_info_ref.texture_uniforms) {
+            if (texture.slot == i32(texture_slot) && texture.formatcombo) return true;
+        }
+        return false;
+    };
+
     for (const auto& el : wpmat.combos) {
         shader_info_ref.combos[el.first] = std::to_string(el.second.to_primitive());
     }
@@ -402,12 +410,10 @@ auto BuildMaterial(fs::VFS& vfs, ShaderCache& shader_cache,
                 return parsed_header.is_ok() ? rstd::move(parsed_header).unwrap_unchecked()
                                              : ImageHeader {};
             }();
-            if (i == 0) {
-                if (texh.format == TextureFormat::R8)
-                    shader_info_ref.combos["TEX0FORMAT"] = "FORMAT_R8";
-                else if (texh.format == TextureFormat::RG8)
-                    shader_info_ref.combos["TEX0FORMAT"] = "FORMAT_RG88";
-            }
+            if (has_format_combo(i) && texh.format == TextureFormat::R8)
+                shader_info_ref.combos["TEX" + std::to_string(i) + "FORMAT"] = "FORMAT_R8";
+            else if (has_format_combo(i) && texh.format == TextureFormat::RG8)
+                shader_info_ref.combos["TEX" + std::to_string(i) + "FORMAT"] = "FORMAT_RG88";
             if (texh.mipmap_larger) {
                 resolution = {
                     i32(texh.width), i32(texh.height), i32(texh.mapWidth), i32(texh.mapHeight)
@@ -438,6 +444,12 @@ auto BuildMaterial(fs::VFS& vfs, ShaderCache& shader_cache,
                 scene.RegisterTexture(String::make(rstd::cppstd::as_str(name).unwrap()),
                                       rstd::move(stex));
                 scene_texture = scene.Texture(rstd::cppstd::as_str(name).unwrap());
+            }
+            if (texh.type == ImageType::VIDEO) {
+                auto playback = scene.VideoControl(rstd::cppstd::as_str(name).unwrap());
+                if (playback.is_some() && (*playback)->BeginDurationProbe())
+                    (*playback)->PublishDuration(
+                        ProbeVideoDuration(vfs, rstd::cppstd::as_str(name).unwrap()));
             }
             if (scene_texture.is_some() && (**scene_texture).isSprite) {
                 material.hasSprite = true;
@@ -1062,6 +1074,49 @@ void ApplyTextureBinds(wpscene::Material&                             material,
                        std::span<const wpscene::MaterialPassBindItem> bindings,
                        const EffectRenderTargets&                     render_targets) {
     ApplyTextureBindsImpl(material, bindings, render_targets);
+}
+
+bool AppendEffectCommands(const wpscene::ImageEffect& effect,
+                          const EffectRenderTargets&   render_targets,
+                          SceneImageEffect&            scene_effect) {
+    auto resolve = [&](const std::string& name, bool destination) -> Option<SceneEffectTarget> {
+        auto target = render_targets.get(as_str(name).unwrap());
+        if (target.is_none()) return None();
+        if (name == "previous") {
+            return Some(destination ? SceneEffectTarget::LayerNext()
+                                    : SceneEffectTarget::LayerPrevious());
+        }
+        return Some(SceneEffectTarget::Named(rstd::cppstd::to_string((**target).as_str())));
+    };
+
+    bool valid { true };
+    for (const auto& command : effect.commands) {
+        Option<SceneImageEffect::CmdType> type;
+        if (command.command == "copy") {
+            type = Some(SceneImageEffect::CmdType::Copy);
+        } else if (command.command == "swap") {
+            type = Some(SceneImageEffect::CmdType::Swap);
+        } else {
+            rstd_error("Unknown effect command: {}", command.command);
+            valid = false;
+            continue;
+        }
+
+        auto destination = resolve(command.target, true);
+        auto source      = resolve(command.source, false);
+        if (destination.is_none() || source.is_none()) {
+            rstd_error("Unknown effect command dst or src: {} {}",
+                       command.target,
+                       command.source);
+            valid = false;
+            continue;
+        }
+        scene_effect.commands.push_back({ .cmd      = *type,
+                                          .dst      = rstd::move(*destination),
+                                          .src      = rstd::move(*source),
+                                          .afterpos = command.afterpos });
+    }
+    return valid;
 }
 
 void LoadConstvalue(SceneParseContext& context, SceneMaterial& material,

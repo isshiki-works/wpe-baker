@@ -1,7 +1,12 @@
 #include <rstd/test/gtest.hpp>
 
+#include <filesystem>
+#include <fstream>
+
+import rstd;
 import rstd.cppstd;
 import owe.user_property;
+import wescene.fs;
 import wescene.json;
 import wescene.testing.json_builder;
 
@@ -34,6 +39,63 @@ TEST(JsonAdapter, CommentsRequireExplicitOption) {
     auto member = value.get("value"_str);
     ASSERT_TRUE(member.is_some());
     EXPECT_EQ((*member)->as_i64().unwrap_or(rstd::i64()).to_primitive(), 1);
+}
+
+TEST(JsonAdapter, WpeVfsJsonAllowsTrailingCommasWithoutRelaxingDirectParse) {
+    EXPECT_TRUE(owe::ParseJson("[1,]").is_err());
+    EXPECT_TRUE(owe::ParseJson("{\"value\":1,}").is_err());
+
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("owe-json-trailing-" + std::to_string(rstd::process::id().to_primitive()));
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    {
+        std::ofstream output(root / "trailing.json");
+        output << R"({"items":[1,{"nested":"comma,] remains text",},],})";
+    }
+
+    {
+        owe::fs::VFS vfs;
+        auto physical = owe::fs::make_physical_fs(owe::fs::ToPath(root.string()));
+        ASSERT_TRUE(physical.is_ok());
+        ASSERT_TRUE(vfs.mount("/assets"_str, std::move(physical).unwrap_unchecked()).is_ok());
+
+        auto parsed = owe::ReadJsonFile(vfs, "/assets/trailing.json");
+        ASSERT_TRUE(parsed.is_ok());
+        auto value = parsed.unwrap();
+        const auto items = value.get("items"_str);
+        ASSERT_TRUE(items.is_some());
+        ASSERT_TRUE((*items)->is_array());
+        const auto array = (*items)->as_array();
+        ASSERT_TRUE(array.is_some());
+        EXPECT_EQ((**array).len(), rstd::usize(2));
+        const auto nested = (**array)[rstd::usize(1)].get("nested"_str);
+        ASSERT_TRUE(nested.is_some());
+        EXPECT_EQ(*(*nested)->as_str(), "comma,] remains text"_str);
+    }
+
+    std::filesystem::remove_all(root);
+}
+
+TEST(JsonAdapter, WpeVfsJsonStillRejectsConsecutiveCommas) {
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("owe-json-double-comma-" + std::to_string(rstd::process::id().to_primitive()));
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    {
+        std::ofstream output(root / "invalid.json");
+        output << R"({"items":[1,,2]})";
+    }
+
+    {
+        owe::fs::VFS vfs;
+        auto physical = owe::fs::make_physical_fs(owe::fs::ToPath(root.string()));
+        ASSERT_TRUE(physical.is_ok());
+        ASSERT_TRUE(vfs.mount("/assets"_str, std::move(physical).unwrap_unchecked()).is_ok());
+        EXPECT_TRUE(owe::ReadJsonFile(vfs, "/assets/invalid.json").is_err());
+    }
+
+    std::filesystem::remove_all(root);
 }
 
 TEST(JsonAdapter, ClonesSubtreesExplicitly) {

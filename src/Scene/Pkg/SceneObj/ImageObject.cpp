@@ -34,6 +34,7 @@ auto LoadImageAssetJson(ImageObject& object, owe::fs::VFS& vfs, SceneVersion ver
 
     owe::GetJsonValue(*json, "fullscreen", object.fullscreen, false);
     owe::GetJsonValue(*json, "passthrough", object.config.passthrough, false);
+    owe::GetJsonValue(*json, "autosize", object.autosize, false);
     owe::GetJsonValue(*json, "nopadding", object.nopadding, false);
     owe::GetJsonValue(*json, "solidlayer", object.solid_layer, false);
     owe::GetJsonValue(*json, "puppet", object.puppet, false);

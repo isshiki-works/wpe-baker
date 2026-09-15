@@ -79,6 +79,7 @@ struct ExtraInfo {
     HashSet<String>            transient_texture_families;
     Option<rg::TextureNodeRef> mip_framebuffer_history;
     const RenderSceneSnapshot* render_scene { nullptr };
+    const RenderLayerSelection* selection { nullptr };
 };
 
 static Option<vulkan::TextureRequest> BuildGraphTextureRequest(ExtraInfo&       extra,
@@ -135,17 +136,48 @@ static void FillCopyTextureRequests(ExtraInfo& extra, vulkan::CopyPass::Desc& de
     desc.dst_request = BuildGraphTextureRequest(extra, desc.dst);
 }
 
-static void AddCopyPass(ExtraInfo& extra, rg::TextureDesc in, rg::TextureDesc out) {
+static rg::TextureNodeRef AddCopyPass(ExtraInfo& extra, rg::TextureDesc in,
+                                      Option<rg::TextureDesc> out_desc,
+                                      bool preserve_source_across_frames) {
+    rg::TextureNodeRef copy {};
     extra.rgraph->addPass<vulkan::CopyPass>(
         "copy"_str,
         rg::PassNode::Type::Copy,
-        [in = std::move(in), out = std::move(out), &extra](rg::RenderGraphBuilder& builder,
-                                                           vulkan::CopyPass::Desc& desc) {
-            auto in_node  = builder.createTexture(in);
-            auto out_node = builder.createTexture(out, true);
-            rg::doCopy(builder, desc, in_node, out_node);
-            FillCopyTextureRequests(extra, desc);
+        [&copy,
+         in = std::move(in),
+         out_desc = std::move(out_desc),
+         preserve_source_across_frames,
+         &extra](rg::RenderGraphBuilder& builder, vulkan::CopyPass::Desc& pdesc) {
+            auto input = builder.createTexture(in);
+            if (preserve_source_across_frames) builder.markVirtualWrite(input);
+
+            auto state = builder.textureState(input);
+            rstd_assert(state.is_some());
+            if (state.is_none()) return;
+            auto desc =
+                out_desc.is_some() ? CloneTextureDesc(*out_desc) : CloneTextureDesc(state->desc);
+            if (out_desc.is_none()) {
+                auto suffix = rstd::format("_{}_copy", state->version);
+                desc.key.push_str(suffix.as_str());
+                desc.name.push_str(suffix.as_str());
+            }
+            copy = builder.createTexture(desc, true);
+            rg::doCopy(builder, pdesc, input, copy);
+            FillCopyTextureRequests(extra, pdesc);
+            pdesc.dst_matches_src = out_desc.is_none();
+            if (pdesc.dst_matches_src && pdesc.src_request.is_some()) {
+                pdesc.dst_request       = Some(pdesc.src_request->clone());
+                pdesc.dst_request->name = desc.key.clone();
+            }
         });
+    return copy;
+}
+
+static void AddCopyPass(ExtraInfo& extra, rg::TextureDesc in, rg::TextureDesc out) {
+    (void)AddCopyPass(extra,
+                      std::move(in),
+                      Some<rg::TextureDesc>(std::move(out)),
+                      false);
 }
 
 static rg::TextureNodeRef AddCopyPass(ExtraInfo& extra, rg::TextureNodeRef in,
@@ -287,7 +319,8 @@ static void AddMaterialTextureReads(SceneMaterial& material, std::string_view pa
 
 static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, ExtraInfo& extra,
                                    bool                defer_effect = false,
-                                   SceneRenderViewKind render_view  = SceneRenderViewKind::Primary);
+                                   SceneRenderViewKind render_view  = SceneRenderViewKind::Primary,
+                                   SceneImageEffectNode* effect_node = nullptr);
 
 static void LoadGraphEffects(SceneNodeLayer* effs, ExtraInfo& extra) {
     for (auto* eff : effs->ResolvedEffects()) {
@@ -295,22 +328,55 @@ static void LoadGraphEffects(SceneNodeLayer* effs, ExtraInfo& extra) {
         auto cmdItor = eff->commands.begin();
         auto cmdEnd  = eff->commands.end();
         int  nodePos = 0;
-        for (auto& n : eff->nodes) {
-            if (cmdItor != cmdEnd && nodePos == cmdItor->afterpos.to_primitive()) {
+        auto emit_commands = [&]() {
+            while (cmdItor != cmdEnd && nodePos == cmdItor->afterpos.to_primitive()) {
                 auto source = ResolveEffectTarget(*effs, cmdItor->src);
                 auto target = ResolveEffectTarget(*effs, cmdItor->dst);
-                AddCopyPass(extra, MakeTextureDesc(extra, source), MakeTextureDesc(extra, target));
-                cmdItor++;
+                switch (cmdItor->cmd) {
+                case SceneImageEffect::CmdType::Copy:
+                    (void)AddCopyPass(extra,
+                                      MakeTextureDesc(extra, source),
+                                      Some(MakeTextureDesc(extra, target)),
+                                      true);
+                    break;
+                case SceneImageEffect::CmdType::Swap: {
+                    auto temporary = AddCopyPass(extra,
+                                                 MakeTextureDesc(extra, source),
+                                                 None<rg::TextureDesc>(),
+                                                 true);
+                    (void)AddCopyPass(extra,
+                                      MakeTextureDesc(extra, target),
+                                      Some(MakeTextureDesc(extra, source)),
+                                      true);
+                    (void)AddCopyPass(
+                        extra, temporary, Some(MakeTextureDesc(extra, target)));
+                    break;
+                }
+                }
+                ++cmdItor;
             }
+        };
+        for (auto& n : eff->nodes) {
+            emit_commands();
             auto target = effs->ResolvedTarget(n);
-            ToGraphPass(n.sceneNode.as_ptr(), ResolveEffectTarget(*effs, target), extra);
+            n.graph_pass_index = None();
+            ToGraphPass(n.sceneNode.as_ptr(), ResolveEffectTarget(*effs, target), extra,
+                        false, SceneRenderViewKind::Primary, &n);
             nodePos++;
+        }
+        emit_commands();
+        if (cmdItor != cmdEnd) {
+            rstd_error("effect '{}' command afterpos {} exceeds pass count {}",
+                       eff->name,
+                       cmdItor->afterpos,
+                       nodePos);
         }
     }
 }
 
 static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, ExtraInfo& extra,
-                                   bool defer_effect, SceneRenderViewKind render_view) {
+                                   bool defer_effect, SceneRenderViewKind render_view,
+                                   SceneImageEffectNode* effect_node) {
     auto& rgraph = *extra.rgraph;
     auto& scene  = *extra.scene;
 
@@ -369,9 +435,12 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
              material_override,
              preserve_output = submesh.preserve_output,
              render_view,
+             effect_node,
              &scene,
              &extra](rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
                 const auto& pass        = builder.workPassNode();
+                if (effect_node != nullptr)
+                    effect_node->graph_pass_index = Some(u64(pass.handle.index.to_primitive()));
                 pdesc.node              = Some(rstd::mut_ref<SceneNode>::from_raw_parts(node));
                 pdesc.submesh_index     = u32(static_cast<rstd::uint32_t>(smi));
                 pdesc.graph_pass_index  = pass.pass.index;
@@ -430,7 +499,9 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                     auto msaa_state = builder.textureState(msaa_node);
                     if (msaa_state) pdesc.output_msaa_use = Some(msaa_state->use);
                 }
-                pdesc.transparent_clear = first_output_write && output_target.clear_on_first_write;
+                pdesc.transparent_clear = first_output_write && (output_target.clear_on_first_write ||
+                    (output_target.bind.screen && extra.selection != nullptr && extra.selection->transparent_background));
+                pdesc.capture_composition = output_target.bind.screen && extra.selection != nullptr && extra.selection->transparent_background;
                 pdesc.clear_output =
                     ! preserve_output &&
                     ((first_output_write && output_target.bind.screen) || pdesc.transparent_clear);
@@ -535,7 +606,7 @@ static void ConfigureNestedOutput(SceneNode* node, std::string_view output,
 static void EmitSceneNode(SceneNode* node, std::string_view inherited_output,
                           std::string_view inherited_camera, ExtraInfo& extra,
                           const Set<const SceneNode*>& emit_skip_subtrees,
-                          const BTreeSet<i32>&         linked_ids) {
+                          const BTreeSet<i32>&         linked_ids, std::int32_t inherited_owner = -1) {
     if (node == nullptr || emit_skip_subtrees.count(node) != 0) return;
 
     auto&      scene       = *extra.scene;
@@ -543,7 +614,11 @@ static void EmitSceneNode(SceneNode* node, std::string_view inherited_output,
     const auto link_source = scene.ResolveLayerLinkSource(*node);
     const i32 layer_id = link_source.is_some() ? link_source->value
                                                : (wallpaper.is_some() ? wallpaper->value : i32(-1));
-    const bool       elidable = scene.IsLayerElidable(WallpaperLayerId { .value = layer_id });
+    const auto generator = node->GeneratorIdentity();
+    const std::int32_t capture_owner = generator.is_some() ? generator->value.to_primitive() :
+        (wallpaper.is_some() ? wallpaper->value.to_primitive() : inherited_owner);
+    const bool selected = extra.selection == nullptr || extra.selection->contains(capture_owner);
+    const bool       elidable = !selected || scene.IsLayerElidable(WallpaperLayerId { .value = layer_id });
     const bool       linked   = link_source.is_some() && linked_ids.contains(link_source->value);
     bool             emit     = true;
     std::string      link_output;
@@ -586,7 +661,7 @@ static void EmitSceneNode(SceneNode* node, std::string_view inherited_output,
                           rstd::cppstd::as_string_view(*group_camera),
                           extra,
                           emit_skip_subtrees,
-                          linked_ids);
+                          linked_ids, capture_owner);
         }
         if (effect_layer != nullptr && effect_layer->HasRenderEffects()) {
             LoadGraphEffects(effect_layer, extra);
@@ -604,7 +679,7 @@ static void EmitSceneNode(SceneNode* node, std::string_view inherited_output,
                       inherited_camera,
                       extra,
                       emit_skip_subtrees,
-                      linked_ids);
+                      linked_ids, capture_owner);
     }
 }
 
@@ -704,9 +779,10 @@ static void EmitShadowPasses(ExtraInfo& extra) {
 }
 
 Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
-                                             const RenderSceneSnapshot& render_scene) {
+                                             const RenderSceneSnapshot& render_scene,
+                                             const RenderLayerSelection* selection) {
     auto      rgraph = Box<rg::RenderGraph>::make();
-    ExtraInfo extra { .rgraph = rgraph.get(), .scene = &scene, .render_scene = &render_scene };
+    ExtraInfo extra { .rgraph = rgraph.get(), .scene = &scene, .render_scene = &render_scene, .selection = selection };
 
     // The snapshot owns link-consumer discovery; graph build only consumes the
     // resulting source ids.
@@ -736,7 +812,8 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
     // Each step is either a CustomShaderPass (built on the synthetic node's
     // mesh+material) or a CopyPass (RT-to-RT blit).
     auto post_processes = scene.PostProcesses();
-    for (usize index {}; index < post_processes.len(); ++index) {
+    for (usize index {}; index < post_processes.len() &&
+        (selection == nullptr || selection->include_postprocessing); ++index) {
         const auto& pp = post_processes[index];
         for (auto& step : pp->steps) {
             if (step.is_Pass()) {

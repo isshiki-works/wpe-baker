@@ -895,12 +895,18 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, PassPrepareCo
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
             const bool default_writes_alpha = ! ((*m_desc.node)->Camera().empty() ||
                                                  sstart_with((*m_desc.node)->Camera(), "global"));
-            const bool writes_alpha = material_ref.alpha_write.unwrap_or(default_writes_alpha);
+            const bool writes_alpha = m_desc.capture_composition || material_ref.alpha_write.unwrap_or(default_writes_alpha);
 
             if (writes_alpha) colorMask |= VK_COLOR_COMPONENT_A_BIT;
             color_blend.colorWriteMask = colorMask;
 
             SetBlend(blendmode, color_blend);
+            if (m_desc.capture_composition && color_blend.blendEnable) {
+                // Export coverage rather than WPE's otherwise-unused screen alpha.
+                // Additive light changes color without attenuating the background.
+                color_blend.srcAlphaBlendFactor = blendmode == BlendMode::Additive ? VK_BLEND_FACTOR_ZERO : VK_BLEND_FACTOR_ONE;
+                color_blend.dstAlphaBlendFactor = blendmode == BlendMode::Additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            }
             SetAlphaBlendWritePolicy(color_blend, writes_alpha);
             m_desc.blending = color_blend.blendEnable;
 

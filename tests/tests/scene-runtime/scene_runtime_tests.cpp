@@ -492,6 +492,43 @@ TEST(SceneParserSoundScript, UserPropertyCanStartSilentSoundFromVolumeField) {
     EXPECT_FLOAT_EQ(controller->Volume(), 0.35f);
 }
 
+TEST(SceneParserSound, EmptyPlaylistIsAStableSilentControl) {
+    auto document = owe::wpscene::ParseSceneDocumentJson(
+        R"JSON({
+            "camera": {},
+            "general": {},
+            "objects": [{
+                "id": 1,
+                "name": "Empty sound",
+                "sound": [],
+                "startsilent": false
+            }]
+        })JSON",
+        owe::wpscene::kSceneVersionUnknown);
+    ASSERT_TRUE(document.is_some());
+
+    owe::fs::VFS                vfs;
+    wavsen::audio::SoundManager sound_manager;
+    owe::SceneParser            parser;
+    auto                        parsed = parser.Parse(
+        "empty-sound"_str,
+        ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
+        mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
+        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+    ASSERT_TRUE(parsed.is_ok());
+
+    auto scene = rstd::move(parsed).unwrap();
+    auto empty = scene.scene->RootMut()->FindByName("Empty sound");
+    ASSERT_NE(empty, nullptr);
+    EXPECT_FALSE(empty->IsPlaying());
+    empty->Play();
+    EXPECT_FALSE(empty->IsPlaying());
+    empty->Pause();
+    EXPECT_FALSE(empty->IsPlaying());
+    empty->Stop();
+    EXPECT_FALSE(empty->IsPlaying());
+}
+
 TEST(SceneParserScript, DynamicObjectsUseSceneIdentity) {
     auto document = owe::wpscene::ParseSceneDocumentJson(
         R"JSON({
@@ -503,7 +540,7 @@ TEST(SceneParserScript, DynamicObjectsUseSceneIdentity) {
                     "name": "Controller",
                     "visible": {
                         "value": true,
-                        "script": "let created; export function init(value) { created = thisScene.createLayer({size: '2 2'}); created.visible = false; return value; } export function update(value) { return value; }"
+                        "script": "let initial, runtime, stage = 0; export function init(value) { initial = thisScene.createLayer({size: '2 2'}); initial.visible = false; return value; } export function update(value) { if (stage++ === 0) { runtime = thisScene.createLayer({name: 'Runtime config', text: 'x', font: 'systemfont_arial', pointsize: 22, visible: {value: true, script: 'export function update(value) { return false; }'}}); runtime.origin = new Vec3(3, 4, 0); thisLayer.alpha = runtime.text === 'x' ? 0.25 : 0.75; } else if (stage === 2) { runtime.origin = new Vec3(5, 6, 0); thisScene.destroyLayer(runtime); } return value; }"
                     }
                 },
                 {"id": 7, "name": "Low"}
@@ -544,6 +581,107 @@ TEST(SceneParserScript, DynamicObjectsUseSceneIdentity) {
 
     EXPECT_TRUE(scene.scene->SetNodeVisible(*dynamic, true));
     EXPECT_TRUE(scene.scene->ConsumeRenderGraphDirty());
+
+    owe::script::TickSceneScripts(*scene.scene, owe::script::FrameInputs {});
+    auto runtime_config = scene.scene->RootMut()->FindByName("Runtime config");
+    ASSERT_NE(runtime_config, nullptr);
+    EXPECT_TRUE(runtime_config->Identity().Valid());
+    EXPECT_FLOAT_EQ(controller->UserAlpha(), 0.25f);
+    EXPECT_FLOAT_EQ(runtime_config->UserAlpha(), 1.0f);
+    EXPECT_TRUE(runtime_config->Translate().isApprox(Eigen::Vector3f { 3.0f, 4.0f, 0.0f }));
+    EXPECT_NE(runtime_config->Mesh(), nullptr);
+    EXPECT_FALSE(runtime_config->Visible());
+
+    owe::script::TickSceneScripts(*scene.scene, owe::script::FrameInputs {});
+    EXPECT_TRUE(runtime_config->Translate().isApprox(Eigen::Vector3f { 5.0f, 6.0f, 0.0f }));
+    EXPECT_FALSE(runtime_config->Visible());
+}
+
+TEST(SceneParserScript, ModuleFaultPreservesSourceFieldValueAndPeerBinding) {
+    auto document = owe::wpscene::ParseSceneDocumentJson(
+        R"JSON({
+            "camera": {},
+            "general": {},
+            "objects": [
+                {
+                    "id": 1, "name": "Faulted", "image": "models/util/solidlayer.json",
+                    "size": "2 2",
+                    "alpha": {"value": 0.75, "script": "const x = scene.nonexistent;"}
+                },
+                {
+                    "id": 2, "name": "Peer", "image": "models/util/solidlayer.json",
+                    "size": "2 2",
+                    "alpha": {"value": 0.25, "script": "export function init() { const faulted = thisScene.getLayer('Faulted'); faulted.alpha = faulted.alpha === 0.75 ? 0.4 : 0.2; } export function update() { return 0.25; }"}
+                }
+            ]
+        })JSON",
+        owe::wpscene::kSceneVersionUnknown);
+    ASSERT_TRUE(document.is_some());
+
+    auto assets = owe::fs::make_physical_fs(owe::fs::ToPath(WAYWALLEN_ASSETS_DIR));
+    ASSERT_TRUE(assets.is_ok());
+    owe::fs::VFS vfs;
+    ASSERT_TRUE(vfs.mount("/assets"_str, rstd::move(assets).unwrap_unchecked()).is_ok());
+    wavsen::audio::SoundManager sound_manager;
+    owe::SceneParser parser;
+    auto parsed = parser.Parse(
+        "module-fault-source-field"_str,
+        ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
+        mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
+        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+    ASSERT_TRUE(parsed.is_ok());
+
+    auto scene = rstd::move(parsed).unwrap();
+    auto faulted = scene.scene->RootMut()->FindByName("Faulted");
+    auto peer    = scene.scene->RootMut()->FindByName("Peer");
+    ASSERT_NE(faulted, nullptr);
+    ASSERT_NE(peer, nullptr);
+    EXPECT_FLOAT_EQ(faulted->UserAlpha(), 0.4f);
+    owe::script::TickSceneScripts(*scene.scene, owe::script::FrameInputs {});
+    EXPECT_FLOAT_EQ(peer->UserAlpha(), 0.25f);
+
+    owe::script::TickSceneScripts(*scene.scene, owe::script::FrameInputs {});
+    EXPECT_FLOAT_EQ(faulted->UserAlpha(), 0.4f);
+}
+
+TEST(SceneParserScript, ContainerModuleFaultKeepsAuthoredIdentity) {
+    auto document = owe::wpscene::ParseSceneDocumentJson(
+        R"JSON({
+            "camera": {},
+            "general": {},
+            "objects": [
+                {
+                    "id": 701, "name": "Faulted Container", "solid": true,
+                    "alpha": {"value": 0.75, "script": "const x = scene.nonexistent;"}
+                },
+                {
+                    "id": 702, "name": "Healthy Container", "solid": true,
+                    "alpha": {"value": 0.25, "script": "export function update() { return 0.25; }"}
+                }
+            ]
+        })JSON",
+        owe::wpscene::kSceneVersionUnknown);
+    ASSERT_TRUE(document.is_some());
+    owe::fs::VFS vfs;
+    wavsen::audio::SoundManager sound_manager;
+    owe::SceneParser parser;
+    auto parsed = parser.Parse(
+        "container-module-fault"_str,
+        ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
+        mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
+        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+    ASSERT_TRUE(parsed.is_ok());
+
+    auto scene = rstd::move(parsed).unwrap();
+    owe::script::TickSceneScripts(*scene.scene, owe::script::FrameInputs {});
+    auto faulted = scene.scene->RootMut()->FindByName("Faulted Container");
+    auto healthy = scene.scene->RootMut()->FindByName("Healthy Container");
+    ASSERT_NE(faulted, nullptr);
+    ASSERT_NE(healthy, nullptr);
+    ASSERT_TRUE(faulted->WallpaperIdentity().is_some());
+    EXPECT_EQ(faulted->WallpaperIdentity()->value, i32(701));
+    EXPECT_FLOAT_EQ(faulted->UserAlpha(), 0.75f);
+    EXPECT_FLOAT_EQ(healthy->UserAlpha(), 0.25f);
 }
 
 TEST(SceneParserText, EmptyStaticTextPreservesLayerHierarchy) {

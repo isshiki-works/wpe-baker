@@ -145,4 +145,72 @@ struct EqualVisitor {
 // Random
 using Random = effolkronium::random_thread_local;
 
+// An offline job owns its RNG and clock. The scope restores the caller's RNG
+// so two jobs stepped alternately on one thread do not affect one another.
+struct OfflineDependency {
+    std::int32_t owner { -1 }, target { -1 };
+    std::string operation, property, binding;
+    bool initialization { false };
+};
+
+// Stable trace contract consumed by the hybrid planner. owner_layer_id uses
+// the same authored identity as OfflineDependency::owner.
+struct OfflineSourceScriptError {
+    std::uint64_t binding_id {};
+    std::int32_t  owner_layer_id { -1 };
+    std::string   owner_name;
+    std::string   property;
+    std::string   phase;
+    std::string   script_sha;
+    std::string   message;
+    std::string   stack;
+};
+
+struct OfflineExecutionContext {
+    Random::engine_type random { 0 };
+    double epoch_ms { 946684800000.0 }; // 2000-01-01 UTC
+    double elapsed { 0.0 };
+    double delta { 0.0 };
+    bool failed { false };
+    bool trace_scene { false };
+    uint64_t runtime_ik_chain_solves { 0 };
+    std::vector<OfflineDependency> dependencies;
+    std::unordered_set<std::string> dependency_keys;
+    std::vector<OfflineSourceScriptError> source_script_errors;
+    std::vector<std::string> diagnostics;
+
+    void diagnose(std::string message, bool fatal = false) {
+        failed = failed || fatal;
+        if (std::find(diagnostics.begin(), diagnostics.end(), message) == diagnostics.end())
+            diagnostics.push_back(std::move(message));
+    }
+    void trace(OfflineDependency value) {
+        if (!trace_scene) return;
+        if (dependencies.size() >= 10000) { diagnose("Runtime dependency trace reached its 10000-entry limit"); return; }
+        std::string key = std::to_string(value.owner) + ':' + std::to_string(value.target) + ':' +
+            value.operation + ':' + value.property + ':' + value.binding + ':' + (value.initialization ? '1' : '0');
+        if (dependency_keys.insert(std::move(key)).second) dependencies.push_back(std::move(value));
+    }
+};
+
+inline thread_local OfflineExecutionContext* active_offline_execution = nullptr;
+
+class OfflineExecutionScope : NoCopy, NoMove {
+public:
+    explicit OfflineExecutionScope(OfflineExecutionContext& context)
+        : m_context(context), m_previous(active_offline_execution), m_random(Random::get_engine()) {
+        active_offline_execution = &context;
+        Random::engine() = context.random;
+    }
+    ~OfflineExecutionScope() {
+        m_context.random = Random::get_engine();
+        Random::engine() = m_random;
+        active_offline_execution = m_previous;
+    }
+private:
+    OfflineExecutionContext& m_context;
+    OfflineExecutionContext* m_previous;
+    Random::engine_type m_random;
+};
+
 } // namespace owe

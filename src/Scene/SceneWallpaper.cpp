@@ -1,5 +1,6 @@
 module;
 
+#include <random>
 #include <rstd/enum.hpp>
 
 module wescene.scene_wallpaper;
@@ -26,6 +27,8 @@ import wescene.resource;
 import wescene.scene_user_property;
 import wescene.script;
 import wescene.vulkan_render;
+
+#include "OfflineAnimationPeriods.h"
 
 using namespace owe;
 using namespace rstd::prelude;
@@ -233,11 +236,36 @@ public:
     ~SceneRuntimeController();
 
     bool init();
+    bool initOffline(SceneWallpaperConfig, RenderInitInfo, OfflineOptions);
+    bool step(uint64_t, double, const OfflineFrameInput&);
+    bool offline() const { return m_offline; }
+    const OfflineExecutionContext& offlineContext() const { return m_offline_context; }
+    std::string offlineError() const { return m_offline_error; }
+    std::string offlineVideoRateOverrides() const {
+        std::string out { "[" };
+        for (std::size_t i = 0; i < m_offline_video_rate_overrides.size(); ++i) {
+            const auto& value = m_offline_video_rate_overrides[i];
+            if (i != 0) out += ',';
+            out += "{\"owner_layer_id\":" + std::to_string(value.owner_layer_id);
+            out += ",\"rate_numerator\":" + std::to_string(value.rate_numerator);
+            out += ",\"rate_denominator\":" + std::to_string(value.rate_denominator);
+            out += ",\"applied_control_count\":" + std::to_string(value.applied_control_count) + '}';
+        }
+        out += ']';
+        return out;
+    }
+    const OfflineAudioFrame& audioReadback() const { return m_audio_frame; }
+    const RenderLayerSelection& offlineLayers() const { return m_offline_layers; }
+    double offlineFrameTime(uint64_t index) const {
+        return m_offline_options.fps_num ? static_cast<double>(static_cast<long double>(index) *
+            m_offline_options.fps_den / m_offline_options.fps_num) : double(index) * m_offline_dt;
+    }
     auto renderController() const { return m_render_controller.as_mut_ptr().as_raw_ptr(); }
     bool inited() const { return m_inited; }
 
     void post(MainMsg);
     void post(RenderMsg);
+    bool dispatch(MainMsg);
 
     void onLoadScene();
     void on(MainMsg::LoadScene_payload&&);
@@ -280,6 +308,16 @@ private:
     void       publishClearColor(array<float, 3> fallback);
 
     bool m_inited { false };
+    bool m_offline { false };
+    bool m_offline_failed { false };
+    uint64_t m_next_frame { 0 };
+    double m_offline_dt { 0.0 };
+    OfflineExecutionContext m_offline_context;
+    std::vector<OfflineVideoPlaybackRateOverrideResult> m_offline_video_rate_overrides;
+    std::string m_offline_error;
+    OfflineAudioFrame m_audio_frame;
+    OfflineOptions m_offline_options;
+    RenderLayerSelection m_offline_layers;
 
     SceneWallpaperConfig               m_config;
     rstd::json::Map                    m_user_properties;
@@ -322,6 +360,27 @@ public:
     void start();
     void stop();
     void post(RenderMsg);
+    bool dispatch(RenderMsg);
+    bool hasScene() const { return m_scene && m_rg.is_some(); }
+    auto applyOfflineVideoPlaybackRateOverrides(
+        std::span<const OfflineVideoPlaybackRateOverride> overrides)
+        -> OfflineVideoPlaybackRateOverrideApplication {
+        if (m_scene == nullptr) {
+            return { .error = "offline scene is unavailable for video rate overrides" };
+        }
+        return m_scene->ApplyOfflineVideoPlaybackRateOverrides(overrides);
+    }
+    bool stepOffline(uint64_t, double, const OfflineFrameInput&);
+    const CpuFrameResult& readback() const { return m_cpu_frame; }
+    std::string describeOfflineScene() const;
+    std::string animationPeriods() const { return m_scene ? DescribeOfflineAnimationPeriods(*m_scene) : "[]"; }
+    std::string describeOfflineProjection() const;
+    void invalidateOfflineFrame(uint64_t index, std::string message) {
+        m_cpu_frame = CpuFrameResult {};
+        m_cpu_frame.status = CpuFrameStatus::RenderError;
+        m_cpu_frame.frame_index = index;
+        m_cpu_frame.message = rstd::move(message);
+    }
     auto sender() const -> RenderSender;
 
     void on(RenderMsg::Init_payload&&);
@@ -406,6 +465,9 @@ private:
     audio::ResponseEngine               m_audio_response_engine;
     scene_audio::ResponseProcessor      m_scene_audio_response;
     bool                                m_first_frame_ok { false };
+    CpuFrameResult                      m_cpu_frame;
+    double                              m_step_dt { 0.0 };
+    uint64_t                            m_step_index { 0 };
 
     Atomic<array<float, 2>> m_mouse_pos { array<float, 2> { 0.5f, 0.5f } };
     Atomic<u32>             m_buttons_down {};
@@ -431,7 +493,29 @@ auto SceneRenderController::sender() const -> RenderSender {
 }
 
 void SceneRenderController::post(RenderMsg msg) {
+    if (m_main.offline()) { (void)dispatch(rstd::move(msg)); return; }
     if (m_tx) (void)m_tx->send(rstd::move(msg));
+}
+
+bool SceneRenderController::dispatch(RenderMsg message) {
+    RSTD_MATCH(rstd::move(message)) {
+        RSTD_CASE_PAYLOAD(Init, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetScene, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetFillMode, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetSpeed, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetUserProperty, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetMediaStatus, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetAudioResponseDemandCallback, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetAudioResponseEnabled, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetAudioPcmWindow, value) { on(rstd::move(value)); }
+        RSTD_CASE(EndAudioResponse) { m_audio_response_engine.end(); m_scene_audio_response.end(); }
+        RSTD_CASE_PAYLOAD(Stop, value) { on(rstd::move(value)); }
+        RSTD_CASE(Draw) { if (!m_main.offline()) onDraw(); }
+        RSTD_CASE_PAYLOAD(SwapchainReady, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(RequestPreparedPassDiagnostics, value) { on(rstd::move(value)); }
+        RSTD_CASE(Shutdown) { return true; }
+    }
+    return false;
 }
 
 auto SceneRenderController::loadBenchView() -> SceneLoadBenchRecorderView {
@@ -518,6 +602,7 @@ void SceneRenderController::stop() {
 
 void SceneRenderController::on(RenderMsg::Stop_payload&& m) {
     m_stopped = m.stop;
+    if (m_main.offline()) return;
     if (m.stop)
         frame_timer.Stop();
     else
@@ -525,7 +610,9 @@ void SceneRenderController::on(RenderMsg::Stop_payload&& m) {
 }
 
 void SceneRenderController::onDraw() {
-    frame_timer.FrameBegin();
+    const bool offline = m_main.offline();
+    const double delta = offline ? m_step_dt : frame_timer.TargetFrameTime();
+    if (!offline) frame_timer.FrameBegin();
     if (m_rg.is_some()) {
         const bool first_draw = ! m_first_frame_ok;
         auto       load_bench = loadBenchView();
@@ -547,10 +634,16 @@ void SceneRenderController::onDraw() {
         // The runtime is a no-op when no ScriptScene is installed.
         {
             owe::script::FrameInputs fi;
-            fi.frametime   = static_cast<float>(m_scene->Runtime().Frame().delta.to_primitive() *
-                                                m_speed.to_primitive());
-            fi.runtime     = static_cast<float>(m_scene->Runtime().Frame().elapsed.to_primitive());
-            fi.time_of_day = LocalTimeOfDay();
+            fi.frametime   = static_cast<float>(offline ? delta * m_speed.to_primitive() :
+                m_scene->Runtime().Frame().delta.to_primitive() * m_speed.to_primitive());
+            fi.runtime     = m_scene->Runtime().Frame().elapsed.to_primitive();
+            if (offline) {
+                const auto& clock = m_main.offlineContext();
+                double seconds = std::fmod(clock.epoch_ms / 1000.0 + clock.elapsed, 86400.0);
+                if (seconds < 0.0) seconds += 86400.0;
+                fi.time_of_day = static_cast<float>(seconds / 86400.0);
+            } else fi.time_of_day = LocalTimeOfDay();
+            if (offline && m_uniform_input) m_uniform_input->SetTimeOfDay(fi.time_of_day);
             auto ortho     = m_scene->Ortho();
             fi.canvas_w    = static_cast<float>(ortho[usize()].to_primitive());
             fi.canvas_h    = static_cast<float>(ortho[usize(1)].to_primitive());
@@ -584,7 +677,7 @@ void SceneRenderController::onDraw() {
 
         /* Advance video textures (no-op if none) before drawFrame so
          * the new RGBA frame is sampled by the same render pass. */
-        m_render->pumpVideoTextures(frame_timer.TargetFrameTime() * m_speed.to_primitive());
+        m_render->pumpVideoTextures(delta * m_speed.to_primitive());
 
         /* Upload any glyph rects the actuators added this tick. Runs after
          * TickSceneScripts (which calls FontFace::Populate) and before
@@ -595,11 +688,25 @@ void SceneRenderController::onDraw() {
         auto first_draw_span =
             first_draw ? SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_first_draw)
                        : rstd::bench::probe::SpanGuard {};
-        m_render->drawFrame(*m_scene);
+        if (offline) {
+            if (m_main.offlineContext().failed) return;
+            m_cpu_frame = m_render->drawFrameCpu(*m_scene);
+            m_cpu_frame.frame_index = m_step_index;
+            if (!m_cpu_frame.completed()) return;
+            for (const auto& pass : m_render->preparedPassDiagnostics()) {
+                if (pass.prepared) continue;
+                const std::string message = "Offline frame omitted an unprepared render pass: " + pass.pass_name;
+                if (active_offline_execution) active_offline_execution->diagnose(message, true);
+                invalidateOfflineFrame(m_step_index, message);
+                return;
+            }
+        } else m_render->drawFrame(*m_scene);
         (void)first_draw_span.finish();
         (void)first_frame_span.finish();
 
-        m_scene->PassFrameTime(frame_timer.TargetFrameTime() * m_speed.to_primitive());
+        if (offline) m_scene->Runtime().AdvanceOffline(f64(delta * m_speed.to_primitive()),
+            f64(m_main.offlineFrameTime(m_step_index + 1) * m_speed.to_primitive()));
+        else m_scene->PassFrameTime(delta * m_speed.to_primitive());
 
         if (first_draw) {
             m_first_frame_ok = true;
@@ -619,7 +726,37 @@ void SceneRenderController::onDraw() {
             m_load_bench          = None();
         }
     }
-    frame_timer.FrameEnd();
+    if (!offline) frame_timer.FrameEnd();
+}
+
+bool SceneRenderController::stepOffline(uint64_t index, double dt, const OfflineFrameInput& input) {
+    m_cpu_frame = CpuFrameResult {};
+    if (!hasScene()) return false;
+    m_step_dt = dt;
+    m_step_index = index;
+    setMousePos(input.cursor_x, input.cursor_y);
+    setMouseInWindow(input.cursor_in_window);
+    const uint32_t previous = buttonsDown().to_primitive();
+    m_buttons_down.store(u32(input.mouse_buttons_down));
+    m_buttons_pressed.store(u32(input.mouse_buttons_down & ~previous));
+    m_buttons_released.store(u32(previous & ~input.mouse_buttons_down));
+    if (input.media.is_some()) on(RenderMsg::SetMediaStatus_payload { *input.media });
+    if (input.pcm.is_some()) {
+        audio::ResponseFrame response {};
+        if (!m_audio_response_engine.analyze(*input.pcm, response)) {
+            invalidateOfflineFrame(index, "PCM snapshot rejected: expected 4096 stereo frames at 48000 Hz with a fresh nonzero sequence");
+            return false;
+        }
+        m_scene_audio_response.submit(rstd::move(response));
+    } else {
+        // An omitted snapshot means deterministic silence, not stale live PCM.
+        m_audio_response_engine.end();
+        m_scene_audio_response.end();
+    }
+    const double scaled_dt = dt * m_speed.to_primitive();
+    m_scene->Runtime().PrepareOfflineFrame(u64(index), f64(m_main.offlineContext().elapsed), f64(scaled_dt));
+    onDraw();
+    return m_cpu_frame.completed();
 }
 
 void SceneRenderController::on(RenderMsg::SetFillMode_payload&& m) {
@@ -642,7 +779,8 @@ void SceneRenderController::rebuildRenderGraph(vulkan::RenderGraphResourceRetent
     }
     {
         auto graph_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_graph_build);
-        m_rg            = Some(sceneToRenderGraph(*m_scene, m_render_scene));
+        m_rg            = Some(sceneToRenderGraph(*m_scene, m_render_scene,
+            m_main.offline() ? &m_main.offlineLayers() : nullptr));
     }
 
     if (m_main.isGenGraphviz()) (*m_rg)->ToGraphviz("graph.dot"_str);
@@ -732,7 +870,7 @@ void SceneRenderController::on(RenderMsg::SetScene_payload&& m) {
     }
     auto load_bench = loadBenchView();
     auto load_span  = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_load);
-    if (m.random_seed.is_some()) {
+    if (!m_main.offline() && m.random_seed.is_some()) {
         using Seed = decltype(Random::max());
         Random::seed(static_cast<Seed>(m.random_seed->to_primitive()));
     }
@@ -875,7 +1013,9 @@ void SceneRenderController::on(RenderMsg::Init_payload&& m) {
     }
 
     // inited, callback to load scene
-    if (m_main_tx) {
+    if (m_main.offline()) {
+        m_main.post(MainMsg::LoadScene(m_render->deviceCapabilities()));
+    } else if (m_main_tx) {
         (void)m_main_tx->send(MainMsg::LoadScene(m_render->deviceCapabilities()));
     }
 }
@@ -890,6 +1030,7 @@ void SceneRenderController::on(RenderMsg::SwapchainReady_payload&& m) {
     if (extent_changed && m_scene && m_rg.is_some()) {
         rebuildRenderGraph(vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
     }
+    if (m_main.offline()) return;
     if (m_stopped)
         frame_timer.Stop();
     else
@@ -897,6 +1038,10 @@ void SceneRenderController::on(RenderMsg::SwapchainReady_payload&& m) {
 }
 
 void SceneRenderController::on(RenderMsg::RequestPreparedPassDiagnostics_payload&& m) {
+    if (m_main.offline()) {
+        if (m.cb) m.cb(m_render->preparedPassDiagnostics());
+        return;
+    }
     if (! m_main_tx) return;
     auto diagnostics = m_render->preparedPassDiagnostics();
     (void)m_main_tx->send(
@@ -909,7 +1054,36 @@ auto SceneRuntimeController::sender() const -> MainSender {
 }
 
 void SceneRuntimeController::post(MainMsg msg) {
+    if (m_offline) { (void)dispatch(rstd::move(msg)); return; }
     if (m_main_tx) (void)m_main_tx->send(rstd::move(msg));
+}
+
+bool SceneRuntimeController::dispatch(MainMsg message) {
+    RSTD_MATCH(rstd::move(message)) {
+        RSTD_CASE_PAYLOAD(LoadScene, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(Configure, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetFps, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetVolume, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetVolumeScale, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetMuted, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetAudioClientIdentity, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(AudioDeviceEvent, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetFillMode, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetSpeed, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetUserProperty, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetFirstFrameCallback, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SetUserPropertyDiagnosticCallback, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(UserPropertyDiagnostics, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(SceneClearColorChanged, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(PreparedPassDiagnostics, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(Stop, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(PauseAudio, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(LoadBenchBatch, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(LoadBenchFinish, value) { on(rstd::move(value)); }
+        RSTD_CASE_PAYLOAD(FirstFrame, value) { on(rstd::move(value)); }
+        RSTD_CASE(Shutdown) { return true; }
+    }
+    return false;
 }
 
 void SceneRuntimeController::post(RenderMsg msg) { m_render_controller->post(rstd::move(msg)); }
@@ -1077,7 +1251,7 @@ void SceneRuntimeController::stopMainLoop() {
 
 void SceneRuntimeController::onLoadScene() {
     if (m_render_capabilities.is_some() && m_render_controller->renderInited()) {
-        if (! m_audio_activated) {
+        if (! m_offline && ! m_audio_activated) {
             auto tx = sender();
             m_sound_manager->activate(
                 [tx = rstd::move(tx)](wavsen::audio::AudioDeviceEvent event) mutable {
@@ -1109,6 +1283,7 @@ void SceneRuntimeController::on(MainMsg::Configure_payload&& m) {
 
 void SceneRuntimeController::on(MainMsg::SetFps_payload&& m) {
     m_config.fps = m.fps.to_primitive();
+    if (m_offline) return; // step(dt) is authoritative and has no timer FPS cap.
     if (m.fps >= u32(5)) {
         m_render_controller->frame_timer.SetRequiredFps(u16(m.fps.to_primitive()));
     }
@@ -1203,6 +1378,7 @@ void SceneRuntimeController::on(MainMsg::PreparedPassDiagnostics_payload&& m) {
 }
 
 void SceneRuntimeController::on(MainMsg::Stop_payload&& m) {
+    if (m_offline) { m_render_controller->post(RenderMsg::Stop(m.stop)); return; }
     const u64 generation = ++m_audio_pause_generation;
     if (m.stop) {
         if (m.scale_audio) m_sound_manager->set_volume_scale(f32(), m.fade_ms);
@@ -1263,7 +1439,7 @@ void SceneRuntimeController::loadScene() {
         finishLoadBench();
     };
 
-    if (m_config.random_seed.is_some()) {
+    if (!m_offline && m_config.random_seed.is_some()) {
         using Seed = decltype(Random::max());
         Random::seed(static_cast<Seed>(m_config.random_seed->to_primitive()));
     }
@@ -1295,10 +1471,10 @@ void SceneRuntimeController::loadScene() {
     }
     std::filesystem::path pkgPath_fs { m_config.source_pkg_path };
     pkgPath_fs.replace_extension("pkg");
-    std::string pkgPath  = pkgPath_fs.native();
-    std::string pkgEntry = pkgPath_fs.filename().replace_extension("json").native();
-    std::string pkgDir   = pkgPath_fs.parent_path().native();
-    std::string scene_id = pkgPath_fs.parent_path().filename().native();
+    std::string pkgPath  = pkgPath_fs.string();
+    std::string pkgEntry = pkgPath_fs.filename().replace_extension("json").string();
+    std::string pkgDir   = pkgPath_fs.parent_path().string();
+    std::string scene_id = pkgPath_fs.parent_path().filename().string();
     {
         auto span = SceneLoadSpan(loadBenchView(), &SceneLoadProbeIds::load_project_properties);
         MergeProjectUserProperties(pkgPath_fs.parent_path(), m_user_properties);
@@ -1388,12 +1564,12 @@ void SceneRuntimeController::loadScene() {
             m_user_property_diagnostic_cb(
                 CloneUserPropertyDiagnostics(scene->UserPropertyDiagnostics()));
         }
-        if (! m_config.cache_dir.empty()) {
+        if (!m_offline && ! m_config.cache_dir.empty()) {
             std::filesystem::path ls_dir =
                 std::filesystem::path(m_config.cache_dir) / "script_localstorage";
             std::error_code ec;
             std::filesystem::create_directories(ls_dir, ec);
-            std::string ls_file = (ls_dir / (scene_id + ".json")).native();
+            std::string ls_file = (ls_dir / (scene_id + ".json")).string();
             owe::script::SetScenePersistence(*scene, rstd::move(ls_file));
         }
 
@@ -1401,6 +1577,11 @@ void SceneRuntimeController::loadScene() {
     }
 
     auto parsed = rstd::move(parsed_scene).unwrap();
+    if (m_offline) {
+        m_render_controller->post(RenderMsg::SetScene(rstd::move(parsed.scene),
+            rstd::move(parsed.runtime_input), m_config.load_bench.clone(), m_config.random_seed));
+        return;
+    }
     auto rtx    = m_render_controller->sender();
     if (rtx.send(RenderMsg::SetScene(rstd::move(parsed.scene),
                                      rstd::move(parsed.runtime_input),
@@ -1414,6 +1595,7 @@ void SceneRuntimeController::loadScene() {
 }
 
 bool SceneRuntimeController::init() {
+    if (m_offline) return m_inited;
     if (m_inited) return true;
 
     // Wire render handler senders before starting the loops; otherwise an
@@ -1434,6 +1616,127 @@ bool SceneRuntimeController::init() {
     }
 
     m_inited = true;
+    return true;
+}
+
+bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInitInfo info,
+                                         OfflineOptions options) {
+    if (m_inited || m_offline) { m_offline_error = "Offline mode requires a fresh SceneWallpaper"; return false; }
+    m_offline = true;
+    if (!std::isfinite(options.epoch_ms) || !std::isfinite(config.speed) || config.speed <= 0.0f) {
+        m_offline_error = "Invalid offline epoch or playback speed";
+        return false;
+    }
+    if ((options.fps_num == 0) != (options.fps_den == 0)) {
+        m_offline_error = "Offline rational FPS requires a nonzero numerator and denominator";
+        return false;
+    }
+    m_offline_options = options;
+    m_offline_layers = info.layer_selection;
+    m_offline_context.epoch_ms = options.epoch_ms;
+    m_offline_context.trace_scene = options.trace_scene;
+    std::seed_seq seed { uint32_t(options.seed), uint32_t(options.seed >> 32) };
+    m_offline_context.random.seed(seed);
+    OfflineExecutionScope scope(m_offline_context);
+    auto audio_configured = m_sound_manager->configure_offline({ u32(2), u32(48000) });
+    if (audio_configured.is_err()) {
+        m_offline_error = rstd::cppstd::to_string(audio_configured.unwrap_err().as_str());
+        m_offline_failed = true;
+        return false;
+    }
+    info.offscreen = true;
+    info.output_mode = RenderOutputMode::CpuReadback;
+    info.video_hwdec = "none";
+    info.redraw_callback = {};
+    info.ex_swapchain_factory = {};
+    on(MainMsg::Configure_payload { rstd::move(config) });
+    m_render_controller->post(RenderMsg::Init(Box<RenderInitInfo>::make(rstd::move(info)), None()));
+    if (!m_render_controller->renderInited()) m_offline_error = "Offline Vulkan initialization failed";
+    else if (!m_render_controller->hasScene()) m_offline_error = "Offline scene loading failed; see engine diagnostics";
+    else if (m_offline_context.failed) m_offline_error = "Offline script initialization failed";
+    else {
+        auto applied = m_render_controller->applyOfflineVideoPlaybackRateOverrides(
+            std::span<const OfflineVideoPlaybackRateOverride>(
+                options.video_rate_overrides.data(), options.video_rate_overrides.size()));
+        if (!applied.ok()) {
+            m_offline_error = applied.error;
+            m_offline_failed = true;
+            return false;
+        }
+        m_offline_video_rate_overrides = rstd::move(applied.applied);
+        m_sound_manager->play(); m_inited = true; return true;
+    }
+    m_offline_failed = true;
+    return false;
+}
+
+bool SceneRuntimeController::step(uint64_t index, double dt, const OfflineFrameInput& input) {
+    m_audio_frame = OfflineAudioFrame {};
+    if (!m_offline || !m_inited || m_offline_failed) {
+        if (m_offline_error.empty()) m_offline_error = "Offline renderer is not ready";
+        m_render_controller->invalidateOfflineFrame(index, m_offline_error);
+        return false;
+    }
+    if (index != m_next_frame || index == std::numeric_limits<uint64_t>::max() || !std::isfinite(dt) || dt <= 0.0 ||
+        (m_next_frame != 0 && dt != m_offline_dt) ||
+        (m_offline_options.fps_num && dt != double(m_offline_options.fps_den) / m_offline_options.fps_num) ||
+        !std::isfinite(input.cursor_x) || !std::isfinite(input.cursor_y)) {
+        m_offline_error = "Expected the next sequential frame, a fixed positive dt, and finite cursor coordinates";
+        m_render_controller->invalidateOfflineFrame(index, m_offline_error);
+        return false;
+    }
+    m_offline_dt = dt;
+    m_offline_context.elapsed = offlineFrameTime(index) * m_config.speed;
+    m_offline_context.delta = dt * m_config.speed;
+    OfflineExecutionScope scope(m_offline_context);
+    if (!m_render_controller->stepOffline(index, dt, input) || m_offline_context.failed) {
+        // Scripts/particles may have mutated before a GPU error. Retrying the
+        // same index is unsafe; require a fresh load and replay instead.
+        m_offline_failed = true;
+        m_offline_error = m_render_controller->readback().message;
+        if (m_offline_context.failed && !m_offline_context.diagnostics.empty())
+            m_offline_error = m_offline_context.diagnostics.back();
+        if (m_offline_error.empty()) m_offline_error = "Offline frame failed; reload and replay required";
+        if (m_render_controller->readback().completed() || m_render_controller->readback().message.empty())
+            m_render_controller->invalidateOfflineFrame(index, m_offline_error);
+        return false;
+    }
+    // Compute cumulative sample boundaries rather than rounding dt * rate each
+    // frame (e.g. 144 fps must alternate sample counts). Audio retains the
+    // engine's independent playback clock when visual playback speed changes.
+    auto boundary = [&](uint64_t frame) -> long double {
+        if (m_offline_options.fps_num) {
+            // 64-bit index * 32-bit denominator * 48000 fits 128 bits.
+            const unsigned __int128 numerator = static_cast<unsigned __int128>(frame) *
+                m_offline_options.fps_den * 48000;
+            return static_cast<long double>(numerator / m_offline_options.fps_num);
+        }
+        return std::floor(static_cast<long double>(frame) * dt * 48000.0L);
+    };
+    const long double start = boundary(index);
+    const long double end = boundary(index + 1);
+    if (!std::isfinite(end) || start < 0 || end < start ||
+        end >= static_cast<long double>(std::numeric_limits<uint64_t>::max()) ||
+        end - start > static_cast<long double>(std::numeric_limits<uint32_t>::max())) {
+        m_offline_error = "Offline audio sample interval exceeds supported integer range";
+        m_offline_failed = true;
+        m_render_controller->invalidateOfflineFrame(index, m_offline_error);
+        return false;
+    }
+    m_audio_frame.sample_start = static_cast<uint64_t>(start);
+    m_audio_frame.frame_count = static_cast<uint32_t>(end - start);
+    m_audio_frame.samples.resize(static_cast<size_t>(m_audio_frame.frame_count) * 2);
+    auto mixed = m_sound_manager->mix_pcm(mut_ref<float[]>::from_raw_parts(
+        m_audio_frame.samples.data(), usize(m_audio_frame.samples.size())));
+    if (mixed.is_err() || m_offline_context.failed) {
+        m_offline_error = mixed.is_err() ? rstd::cppstd::to_string(mixed.unwrap_err().as_str()) :
+            (m_offline_context.diagnostics.empty() ? "Offline audio source failed" : m_offline_context.diagnostics.back());
+        m_offline_failed = true;
+        m_audio_frame = OfflineAudioFrame {};
+        m_render_controller->invalidateOfflineFrame(index, m_offline_error);
+        return false;
+    }
+    ++m_next_frame;
     return true;
 }
 
@@ -1461,6 +1764,197 @@ SceneWallpaper::~SceneWallpaper() = default;
 bool SceneWallpaper::inited() const { return m_runtime->inited(); }
 
 bool SceneWallpaper::init() { return m_runtime->init(); }
+
+bool SceneWallpaper::initOffline(SceneWallpaperConfig config, RenderInitInfo info,
+                                  OfflineOptions options) {
+    m_offscreen = true;
+    return m_runtime->initOffline(rstd::move(config), rstd::move(info), options);
+}
+
+bool SceneWallpaper::step(uint64_t index, double dt, const OfflineFrameInput& input) {
+    return m_runtime->step(index, dt, input);
+}
+
+const CpuFrameResult& SceneWallpaper::readback() const {
+    return m_runtime->renderController()->readback();
+}
+
+const OfflineAudioFrame& SceneWallpaper::audioReadback() const { return m_runtime->audioReadback(); }
+
+std::string SceneWallpaper::offlineError() const { return m_runtime->offlineError(); }
+
+std::vector<std::string> SceneWallpaper::offlineDiagnostics() const {
+    return m_runtime->offlineContext().diagnostics;
+}
+
+const std::vector<OfflineSourceScriptError>& SceneWallpaper::offlineSourceScriptErrors() const {
+    return m_runtime->offlineContext().source_script_errors;
+}
+
+std::vector<OfflineDependency> SceneWallpaper::offlineDependencies() const {
+    return m_runtime->offlineContext().dependencies;
+}
+
+uint64_t SceneWallpaper::offlineIkChainSolves() const {
+    return m_runtime->offlineContext().runtime_ik_chain_solves;
+}
+
+std::string SceneWallpaper::offlineSceneDescription() const {
+    return m_runtime->renderController()->describeOfflineScene();
+}
+
+std::string SceneWallpaper::offlineAnimationPeriods() const {
+    return m_runtime->renderController()->animationPeriods();
+}
+
+std::string SceneWallpaper::offlineProjection() const {
+    return m_runtime->renderController()->describeOfflineProjection();
+}
+
+std::string SceneWallpaper::offlineVideoRateOverrides() const {
+    return m_runtime->offlineVideoRateOverrides();
+}
+
+std::string SceneRenderController::describeOfflineProjection() const {
+    if (!m_scene) return "null";
+    auto active = m_scene->ActiveCamera();
+    if (active.is_none()) return "null";
+
+    std::string active_name;
+    const auto names = m_scene->CameraNames();
+    for (usize index {}; index < names.len(); ++index) {
+        auto candidate = m_scene->Camera(names[index].as_str());
+        if (candidate.is_some() && (*candidate).as_raw_ptr() == (*active).as_raw_ptr()) {
+            active_name = rstd::cppstd::to_string(names[index].as_str());
+            break;
+        }
+    }
+    const auto position = (*active)->GetPosition();
+    std::ostringstream out;
+    out << "{\"frame_index\":" << m_step_index
+        << ",\"active_camera_name\":"
+        << (active_name.empty() ? "null" : Dump(JsonFromStd(active_name)))
+        << ",\"active_camera_is_perspective\":"
+        << ((*active)->IsPerspective() ? "true" : "false")
+        << ",\"active_camera_position\":[" << position.x() << ',' << position.y() << ','
+        << position.z() << ']'
+        << ",\"active_camera_width\":" << (*active)->Width()
+        << ",\"active_camera_height\":" << (*active)->Height();
+    const auto ortho = m_scene->Ortho();
+    out << ",\"scene_ortho\":[" << ortho[usize()].to_primitive() << ','
+        << ortho[usize(1)].to_primitive() << ']'
+        << ",\"viewport_scale\":" << m_scene->ViewportScale().to_primitive()
+        << ",\"camera_parallax\":null}";
+    return out.str();
+}
+
+std::string SceneRenderController::describeOfflineScene() const {
+    if (!m_scene) return "[]";
+    std::ostringstream out;
+    out << '[';
+    bool first = true;
+    std::function<void(SceneNode*, std::int32_t)> visit = [&](SceneNode* node, std::int32_t inherited) {
+        if (node == nullptr) return;
+        const auto identity = node->WallpaperIdentity();
+        const auto generator = node->GeneratorIdentity();
+        const std::int32_t owner = generator.is_some() ? generator->value.to_primitive() :
+            (identity.is_some() ? identity->value.to_primitive() : inherited);
+        auto effective_parallax =
+            m_uniform_input ? m_uniform_input->EffectiveParallax(*node)
+                            : None<UniformEffectiveParallax>();
+        if (identity.is_some() || generator.is_some() ||
+            (owner >= 0 && node->Mesh() != nullptr)) {
+            if (!first) out << ',';
+            first = false;
+            out << "{\"id\":" << (identity.is_some() ? identity->value.to_primitive() : -1)
+                << ",\"owner\":" << owner << ",\"parent\":" << inherited
+                << ",\"name\":" << Dump(JsonFromStd(node->Name()))
+                << ",\"visible\":" << (node->Visible() ? "true" : "false")
+                << ",\"has_mesh\":" << (node->Mesh() != nullptr ? "true" : "false")
+                << ",\"has_effect_layer\":" << (node->HasLayer() ? "true" : "false")
+                << ",\"render_group\":" << (identity.is_some() && m_scene->RenderGroupCamera(*identity).is_some() ? "true" : "false")
+                << ",\"effective_parallax_depth\":";
+            if (effective_parallax.is_some()) {
+                out << '[' << (*effective_parallax).depth[usize()] << ','
+                    << (*effective_parallax).depth[usize(1)] << ']';
+            } else {
+                out << "null";
+            }
+            out << ",\"effective_parallax_source_id\":"
+                << (effective_parallax.is_some()
+                        ? std::to_string((*effective_parallax).source_object_id.to_primitive())
+                        : std::string("null"))
+                << ",\"materials\":[";
+            bool first_material = true;
+            auto append_materials = [&](SceneNode* render_node, std::string_view role) {
+            if (auto* mesh = render_node->Mesh(); mesh != nullptr) for (const auto& material : mesh->MaterialSlots()) {
+                if (!material) continue;
+                if (!first_material) out << ',';
+                first_material = false;
+                std::vector<std::string> active_uniforms;
+                bool                     uses_audio_spectrum { false };
+                const bool uses_system_media_thumbnail =
+                    m_scene->MaterialHasTextureUserBinding(*material, "$mediaThumbnail"_str) ||
+                    m_scene->MaterialHasTextureUserBinding(*material, "$mediaPreviousThumbnail"_str);
+                if (uses_system_media_thumbnail && active_offline_execution &&
+                    active_offline_execution->trace_scene && owner >= 0) {
+                    active_offline_execution->trace(
+                        { owner, -1, "input", "media", "system_media_texture", false });
+                }
+                auto is_audio_spectrum = [](std::string_view name) {
+                    return name == "g_AudioSpectrum16Left" ||
+                           name == "g_AudioSpectrum16Right" ||
+                           name == "g_AudioSpectrum32Left" ||
+                           name == "g_AudioSpectrum32Right" ||
+                           name == "g_AudioSpectrum64Left" ||
+                           name == "g_AudioSpectrum64Right";
+                };
+                if (material->customShader.variant.is_some()) {
+                    for (const auto& stage : material->customShader.variant->stages) {
+                        for (const auto& [name, _] : stage.uniforms) {
+                            bool seen { false };
+                            for (const auto& existing : active_uniforms)
+                                seen = seen || existing == name;
+                            if (! seen) active_uniforms.push_back(name);
+                            uses_audio_spectrum = uses_audio_spectrum || is_audio_spectrum(name);
+                        }
+                    }
+                }
+                out << "{\"shader\":" << Dump(JsonFromStd(material->customShader.shader ? material->customShader.shader->name : std::string()))
+                    << ",\"role\":" << Dump(JsonFromStd(role))
+                    << ",\"blend\":" << static_cast<int>(material->blenmode)
+                    << ",\"uses_audio_spectrum\":" << (uses_audio_spectrum ? "true" : "false")
+                    << ",\"uses_system_media_thumbnail\":"
+                    << (uses_system_media_thumbnail ? "true" : "false")
+                    << ",\"active_uniforms\":[";
+                bool first_uniform = true;
+                for (const auto& name : active_uniforms) {
+                    if (! first_uniform) out << ',';
+                    first_uniform = false;
+                    out << Dump(JsonFromStd(name));
+                }
+                out << "],\"textures\":[";
+                bool first_texture = true;
+                for (const auto& texture : material->textures) {
+                    if (!first_texture) out << ',';
+                    first_texture = false;
+                    out << Dump(JsonFromStd(texture));
+                }
+                out << "]}";
+            }
+            };
+            append_materials(node, "source");
+            if (node->HasLayer()) for (auto* effect : node->Layer()->ResolvedEffects())
+                if (effect != nullptr) for (auto& effect_node : effect->nodes)
+                    if (effect_node.sceneNode) append_materials(effect_node.sceneNode.as_ptr(), "effect");
+            out << "]}";
+        }
+        for (const auto& child : node->GetChildren()) visit(child.as_ptr(), owner);
+    };
+    visit(m_scene->RootMut().as_raw_ptr(), -1);
+    out << ']';
+    return out.str();
+}
 
 void SceneWallpaper::initVulkan(RenderInitInfo info) {
     m_offscreen = info.offscreen;

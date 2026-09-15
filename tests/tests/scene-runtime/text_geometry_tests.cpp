@@ -10,6 +10,33 @@ import wescene.scene;
 import wescene.text;
 import wescene.types;
 
+TEST(FontCache, WindowsSansSerifSystemAliasResolvesWithoutFallback) {
+#ifdef _WIN32
+    auto font =
+        owe::text::FontCache::ResolveSystemFont("systemfont_sansserif", /*fallback_to_any=*/false);
+    ASSERT_NE(font.bytes, nullptr);
+    EXPECT_FALSE(font.source.empty());
+#else
+    GTEST_SKIP() << "Windows DirectWrite alias test";
+#endif
+}
+
+TEST(FontCache, WindowsMissingNamedFontFallsBackToArial) {
+#ifdef _WIN32
+    auto arial =
+        owe::text::FontCache::ResolveSystemFont("systemfont_arial", /*fallback_to_any=*/false);
+    auto missing = owe::text::FontCache::ResolveSystemFont("WpeBaker Missing Font 9F73E1.ttf",
+                                                           /*fallback_to_any=*/true);
+    ASSERT_NE(arial.bytes, nullptr);
+    ASSERT_NE(missing.bytes, nullptr);
+    EXPECT_EQ(missing.source, arial.source);
+    EXPECT_EQ(missing.face_index, arial.face_index);
+    EXPECT_EQ(*missing.bytes, *arial.bytes);
+#else
+    GTEST_SKIP() << "Windows DirectWrite fallback test";
+#endif
+}
+
 TEST(FontFace, TabHasNoLayoutOrRasterizedGlyph) {
     auto font = owe::text::FontCache::ResolveSystemFont("systemfont_monospace");
     ASSERT_NE(font.bytes, nullptr);

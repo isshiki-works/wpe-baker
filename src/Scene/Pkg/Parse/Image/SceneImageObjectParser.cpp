@@ -65,6 +65,11 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
 
     auto& vfs = *context.vfs;
 
+    if (wpimgobj.autosize) {
+        auto size = ResolveImageAssetSize(context, rstd::cppstd::as_str(wpimgobj.image).unwrap());
+        if (size.is_some()) wpimgobj.size = { (*size)[usize()], (*size)[usize(1)] };
+    }
+
     bool       isPassthrough      = wpimgobj.config.passthrough;
     const bool alpha_can_change   = ! wpimgobj.alpha_user_key.empty() ||
                                     wpimgobj.field_bindings.HasAnimation("alpha"_str) ||
@@ -78,10 +83,21 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
     const Mdl::Mesh*      primary_puppet_mesh { nullptr };
     Vec<const Mdl::Mesh*> supplemental_puppet_meshes;
     if (! wpimgobj.puppet.empty()) {
-        auto parsed_puppet = Box<Mdl>::make();
-        if (! MdlParser::Parse(
-                rstd::cppstd::as_str(wpimgobj.puppet).unwrap(), vfs, *parsed_puppet)) {
-            rstd_error("parse puppet failed: {}", wpimgobj.puppet);
+        auto parsed_puppet  = Box<Mdl>::make();
+        bool missing_puppet = false;
+        if (! MdlParser::Parse(rstd::cppstd::as_str(wpimgobj.puppet).unwrap(),
+                               vfs,
+                               *parsed_puppet,
+                               &missing_puppet)) {
+            if (missing_puppet) {
+                const std::string message =
+                    "puppet unavailable: " + wpimgobj.puppet +
+                    "; using image plane";
+                rstd_warn("{}", message);
+                if (active_offline_execution) active_offline_execution->diagnose(message);
+            } else {
+                rstd_error("parse puppet failed: {}", wpimgobj.puppet);
+            }
         } else {
             has_bones =
                 parsed_puppet->puppet.is_some() && ! (*parsed_puppet->puppet)->bones.is_empty();
@@ -670,12 +686,16 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
         const bool allow_transparent_previous_final = ! solid_composite_context;
         const bool passthrough_can_composite_final =
             isPassthrough || ! parse_geometry.requires_source_draw;
+        std::int32_t authored_effect_ordinal { 0 };
         for (const auto& wpeffobj : wpimgobj.effects) {
+            const auto effect_ordinal = authored_effect_ordinal++;
             if (! wpeffobj.visible && ! wpeffobj.visible_can_change()) {
                 continue;
             }
             std::shared_ptr<SceneImageEffect> imgEffect = std::make_shared<SceneImageEffect>();
             imgEffect->name                             = wpeffobj.name;
+            imgEffect->authored_id                      = wpeffobj.id.to_primitive();
+            imgEffect->authored_ordinal                 = effect_ordinal;
             imgEffect->runtime_visible                  = wpeffobj.visible;
             const auto effect_id = scene.RegisterEffect(image_node_id, *imgEffectLayer, imgEffect);
             if (! wpeffobj.visible_user.empty()) {
@@ -742,38 +762,11 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                                                 String::make(as_str(rtname).unwrap()));
                 }
             }
-            // load! effect commands
-            {
-                for (const auto& el : wpeffobj.commands) {
-                    if (el.command != "copy") {
-                        rstd_error("Unknown effect command: {}", el.command);
-                        continue;
-                    }
-                    auto target = render_targets.get(as_str(el.target).unwrap());
-                    auto source = render_targets.get(as_str(el.source).unwrap());
-                    if (target.is_none() || source.is_none()) {
-                        rstd_error(
-                            "Unknown effect command dst or src: {} {}", el.target, el.source);
-                        continue;
-                    }
-                    auto command_target = el.target == "previous"
-                                              ? SceneEffectTarget::LayerNext()
-                                              : SceneEffectTarget::Named(
-                                                    rstd::cppstd::to_string((**target).as_str()));
-                    auto command_source = el.source == "previous"
-                                              ? SceneEffectTarget::LayerPrevious()
-                                              : SceneEffectTarget::Named(
-                                                    rstd::cppstd::to_string((**source).as_str()));
-                    imgEffect->commands.push_back({ .cmd      = SceneImageEffect::CmdType::Copy,
-                                                    .dst      = std::move(command_target),
-                                                    .src      = std::move(command_source),
-                                                    .afterpos = el.afterpos });
-                }
-            }
+            bool eff_mat_ok = AppendEffectCommands(wpeffobj, render_targets, *imgEffect);
 
-            bool eff_mat_ok { true };
-
-            for (std::size_t i_mat = 0; i_mat < wpeffobj.materials.size(); i_mat++) {
+            for (std::size_t i_mat = 0;
+                 eff_mat_ok && i_mat < wpeffobj.materials.size();
+                 i_mat++) {
                 wpscene::Material         wpmat = wpeffobj.materials.at(i_mat).clone();
                 SceneEffectTarget         matOutRT { SceneEffectTarget::LayerNext() };
                 Option<wpscene::Material> user_texture_fallback;
@@ -1153,6 +1146,9 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
 
     AssignNodeFieldAnimations(context, *spImgNode.as_ptr(), wpimgobj.field_bindings);
     WireFieldScripts(context, spImgNode, wpimgobj.field_bindings);
+    if (image_puppet_layer.is_some())
+        WirePuppetAnimationLayerScripts(
+            context, spImgNode, *image_puppet_layer, wpimgobj.puppet_layers);
     if (! wpimgobj.color_user_key.empty()) {
         context.scene->RegisterImageColorUserBinding(
             String::make(as_str(wpimgobj.color_user_key).unwrap()),

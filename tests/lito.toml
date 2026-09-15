@@ -56,6 +56,7 @@ name = "render-resource-tests"
 sources = [
   "tests/main.cpp",
   "tests/render-resource/buffer_resolver_tests.cpp",
+  "tests/render-resource/effect_command_tests.cpp",
   "tests/render-resource/render_graph_debug_tests.cpp",
   "tests/render-resource/render_resource_request_tests.cpp",
   "tests/render-resource/resource_model_tests.cpp",
@@ -63,12 +64,18 @@ sources = [
 ]
 
 [[test]]
+name = "effect-swap-gpu-tests"
+sources = ["tests/render-resource/effect_swap_gpu.cpp"]
+
+[[test]]
 name = "scene-runtime-tests"
 sources = [
   "tests/main.cpp",
   "tests/scene-runtime/particle_system_tests.cpp",
+  "tests/scene-runtime/puppet_ik_tests.cpp",
   "tests/scene-runtime/scene_resource_index_tests.cpp",
   "tests/scene-runtime/scene_runtime_tests.cpp",
+  "tests/scene-runtime/sprite_animation_tests.cpp",
   "tests/scene-runtime/scene_user_property_tests.cpp",
   "tests/scene-runtime/text_geometry_tests.cpp",
 ]
@@ -91,7 +98,11 @@ sources = ["tests/main.cpp", "tests/scene-schema/scene_schema_tests.cpp"]
 
 [[test]]
 name = "script-runtime-tests"
-sources = ["tests/main.cpp", "tests/script-runtime/script_runtime_tests.cpp"]
+sources = [
+  "tests/main.cpp",
+  "tests/script-runtime/script_fault_isolation_tests.cpp",
+  "tests/script-runtime/script_runtime_tests.cpp",
+]
 
 [[test]]
 name = "shader-parse-tests"

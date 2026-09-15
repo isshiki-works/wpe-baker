@@ -136,6 +136,7 @@ public:
     struct ResolvedBlob {
         std::shared_ptr<std::vector<std::byte>> bytes;
         std::string                             source; // path or "in-pkg:..."
+        std::uint32_t                           face_index { 0 }; // TTC / font collections
     };
 
     // Acquires (or reuses) a face for a resolved font source at the given

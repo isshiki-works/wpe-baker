@@ -382,6 +382,22 @@ ParticleSubSystem::ParticleSubSystem(Scene& scene, std::shared_ptr<SceneMesh> me
 
 ParticleSubSystem::~ParticleSubSystem() = default;
 
+void ParticleSubSystem::TraceExternalInput(ref<str> property) const {
+    if (active_offline_execution == nullptr || !active_offline_execution->trace_scene) return;
+    auto* node = m_owner_node;
+    while (node != nullptr) {
+        auto identity = node->GeneratorIdentity();
+        if (identity.is_none()) identity = node->WallpaperIdentity();
+        if (identity.is_some()) {
+            active_offline_execution->trace(
+                { identity->value.to_primitive(), -1, "input", rstd::cppstd::to_string(property),
+                  "particle_emitter", true });
+            return;
+        }
+        node = node->Parent();
+    }
+}
+
 void ParticleSubSystem::Finalize() {
     if (m_system.is_some()) return;
     if (m_world_space) m_spawn_pipeline.EnableWorldSpace();

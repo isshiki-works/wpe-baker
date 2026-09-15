@@ -19,8 +19,9 @@ class FinPass : public VulkanPass {
 public:
     struct Desc {
         // in
-        std::string_view result { rstd::cppstd::as_string_view(SpecTex_Default) }; // scene RT key
+        std::string result { rstd::cppstd::as_string_view(SpecTex_Default) }; // scene RT key
         rstd::Option<TextureRequest>              result_request;
+        rstd::Option<resource::TextureUseHandle>  graph_result_use;
         rstd::Option<resource::TextureUseHandle>  result_use;
         rstd::Option<resource::ExternalUseHandle> external_use;
         resource_registry::PreparedBarrierBatch   result_barrier;
@@ -33,6 +34,9 @@ public:
                          rstd::mut_ref<rstd::dyn<resource_registry::ExternalResourcePreparer>>,
                          const DeviceCapabilities&, rstd::uint32_t graphics_queue_family);
     bool setResultRequest(rstd::Option<TextureRequest>);
+    void setGraphSource(std::string name, rstd::Option<resource::TextureUseHandle>);
+    const std::string& resultName() const { return m_desc.result; }
+    bool hasGraphSource() const { return m_desc.graph_result_use.is_some(); }
     void resetResourceUses();
     void declareResources(ResourceDeclarationContext&) override;
     PassResourceUses                          resourceUses() const override;

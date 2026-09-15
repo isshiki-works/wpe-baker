@@ -14,6 +14,7 @@ import rstd.cppstd;
 import wescene.utils;
 import wescene.scene;
 import wescene.pkg_asset_version;
+import wavsen.video;
 
 using namespace owe;
 using namespace rstd::prelude;
@@ -37,6 +38,45 @@ using TexFlags = BitFlags<TexFlagEnum>;
 
 namespace
 {
+class RangeInputStream {
+public:
+    explicit RangeInputStream(rstd::io::ReadRange source)
+        : m_length(static_cast<rstd::int64_t>(source.len().to_primitive())),
+          m_reader(rstd::move(source).into_reader()) {}
+
+    int read(rstd::uint8_t* buffer, int size) {
+        if (size <= 0) return 0;
+        auto bytes = rstd::mut_ref<rstd::byte[]>::from_raw_parts(
+            reinterpret_cast<rstd::byte*>(buffer), usize(static_cast<std::size_t>(size)));
+        auto result = m_reader.read(rstd::as_u8_slice_mut(bytes));
+        return result.is_ok() ? static_cast<int>(rstd::move(result).unwrap_unchecked().to_primitive())
+                              : -1;
+    }
+
+    rstd::int64_t seek(rstd::int64_t offset, int whence) {
+        constexpr int AVSEEK_SIZE = 0x10000;
+        if (whence == AVSEEK_SIZE) return m_length;
+        rstd::io::SeekFrom from;
+        switch (whence) {
+        case 0:
+            if (offset < 0) return -1;
+            from = rstd::io::SeekFrom::from_start(u64(static_cast<rstd::uint64_t>(offset)));
+            break;
+        case 1: from = rstd::io::SeekFrom::from_current(i64(offset)); break;
+        case 2: from = rstd::io::SeekFrom::from_end(i64(offset)); break;
+        default: return -1;
+        }
+        auto result = m_reader.seek(from);
+        return result.is_ok() ? static_cast<rstd::int64_t>(
+                                    rstd::move(result).unwrap_unchecked().to_primitive())
+                              : -1;
+    }
+
+private:
+    rstd::int64_t         m_length { 0 };
+    rstd::io::RangeReader m_reader;
+};
+
 char* Lz4Decompress(const char* src, int size, int decompressed_size) {
     char* dst       = new char[static_cast<std::size_t>(decompressed_size)];
     int   load_size = LZ4_decompress_safe(src, dst, size, decompressed_size);
@@ -259,6 +299,40 @@ auto ParseExternalImage(std::string_view key, const std::string& path)
 }
 
 } // namespace
+
+auto owe::ProbeVideoDuration(fs::VFS& vfs, ref<str> name) -> Option<f64> {
+    auto image = TexImageParser(&vfs).Parse(name);
+    if (image.is_err()) {
+        auto error = rstd::move(image).unwrap_err();
+        rstd_warn("video duration probe {} parse failed: {}", name, error.message);
+        return None<f64>();
+    }
+    auto parsed = rstd::move(image).unwrap_unchecked();
+    if (parsed->header.type != ImageType::VIDEO || parsed->slots.empty() ||
+        parsed->slots[0].mipmaps.empty() || parsed->slots[0].mipmaps[0].video_source.is_none()) {
+        rstd_warn("video duration probe {} found no video source", name);
+        return None<f64>();
+    }
+    const auto& mip = parsed->slots[0].mipmaps[0];
+    auto factory = Box<dyn<FnMut<Box<dyn<wavsen::video::InputStream>>()>>>::make(
+        [source = (*mip.video_source).clone()]() -> Box<dyn<wavsen::video::InputStream>> {
+            return Box<dyn<wavsen::video::InputStream>>::make(RangeInputStream(source.clone()));
+        });
+    auto decoder = wavsen::video::VideoDecoder::open_from_stream(
+        rstd::move(factory), u32(mip.width), u32(mip.height), true, nullptr,
+        wavsen::video::OpenOpts { wavsen::video::HwAccel::None, String {} });
+    if (decoder.is_err()) {
+        auto error = rstd::move(decoder).unwrap_err();
+        rstd_warn("video duration probe {} open failed: {}", name, error.message);
+        return None<f64>();
+    }
+    auto duration = rstd::move(decoder).unwrap_unchecked()->duration();
+    if (duration.is_none() || ! duration->is_finite() || *duration <= f64()) {
+        rstd_warn("video duration probe {} returned no finite positive duration", name);
+        return None<f64>();
+    }
+    return duration;
+}
 
 auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParseError> {
     const auto name_view = rstd::cppstd::as_string_view(name);

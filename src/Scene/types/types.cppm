@@ -1,5 +1,9 @@
 module;
 
+// Make the global aligned allocation declarations visible before importing
+// standard-library templates, so Clang does not synthesize a second overload.
+#include <new>
+
 export module wescene.types;
 import wescene.core;
 import rstd;
@@ -187,6 +191,14 @@ struct VideoPlaybackSnapshot {
     rstd::f64 seek_seconds {};
 };
 
+struct VideoPlaybackPeriodMetadata {
+    rstd::Option<rstd::int64_t> duration_ticks;
+    rstd::Option<rstd::i32> time_base_num;
+    rstd::Option<rstd::i32> time_base_den;
+    rstd::Option<rstd::u64> frame_count;
+    bool loops { false };
+};
+
 class VideoPlaybackState {
 public:
     VideoPlaybackState()                                             = default;
@@ -226,12 +238,56 @@ public:
         m_duration.store(duration.unwrap_or(rstd::f64(-1.0)),
                          rstd::sync::atomic::Ordering::Release);
     }
+    bool BeginDurationProbe() {
+        return ! m_duration_probe_attempted.exchange(true, rstd::sync::atomic::Ordering::AcqRel);
+    }
+    void PublishDuration(rstd::Option<rstd::f64> duration) {
+        m_duration.store(duration.unwrap_or(rstd::f64(-1.0)),
+                         rstd::sync::atomic::Ordering::Release);
+    }
+    void PublishPeriodMetadata(const VideoPlaybackPeriodMetadata& metadata) {
+        rstd::int64_t duration_ticks(-1);
+        rstd::i32     time_base_num;
+        rstd::i32     time_base_den;
+        rstd::u64     frame_count;
+        if (metadata.duration_ticks.is_some())
+            duration_ticks = *metadata.duration_ticks;
+        if (metadata.time_base_num.is_some())
+            time_base_num = *metadata.time_base_num;
+        if (metadata.time_base_den.is_some())
+            time_base_den = *metadata.time_base_den;
+        if (metadata.frame_count.is_some())
+            frame_count = *metadata.frame_count;
+        m_duration_ticks.store(duration_ticks, rstd::sync::atomic::Ordering::Release);
+        m_time_base_num.store(time_base_num, rstd::sync::atomic::Ordering::Release);
+        m_time_base_den.store(time_base_den, rstd::sync::atomic::Ordering::Release);
+        m_frame_count.store(frame_count, rstd::sync::atomic::Ordering::Release);
+        m_loops.store(metadata.loops, rstd::sync::atomic::Ordering::Release);
+    }
     auto CurrentTime() const -> rstd::f64 {
         return m_current_time.load(rstd::sync::atomic::Ordering::Acquire);
     }
     auto Duration() const -> rstd::Option<rstd::f64> {
         auto value = m_duration.load(rstd::sync::atomic::Ordering::Acquire);
         return value >= rstd::f64() ? rstd::Some(value) : rstd::None<rstd::f64>();
+    }
+    auto PeriodMetadata() const -> VideoPlaybackPeriodMetadata {
+        auto ticks = m_duration_ticks.load(rstd::sync::atomic::Ordering::Acquire);
+        auto num = m_time_base_num.load(rstd::sync::atomic::Ordering::Acquire);
+        auto den = m_time_base_den.load(rstd::sync::atomic::Ordering::Acquire);
+        auto frames = m_frame_count.load(rstd::sync::atomic::Ordering::Acquire);
+        VideoPlaybackPeriodMetadata metadata {
+            .loops = m_loops.load(rstd::sync::atomic::Ordering::Acquire),
+        };
+        if (ticks > rstd::int64_t())
+            metadata.duration_ticks = rstd::Some(ticks);
+        if (num > rstd::i32())
+            metadata.time_base_num = rstd::Some(num);
+        if (den > rstd::i32())
+            metadata.time_base_den = rstd::Some(den);
+        if (frames > rstd::u64())
+            metadata.frame_count = rstd::Some(frames);
+        return metadata;
     }
 
 private:
@@ -241,6 +297,12 @@ private:
     rstd::sync::atomic::Atomic<rstd::f64> m_seek_seconds {};
     rstd::sync::atomic::Atomic<rstd::f64> m_current_time {};
     rstd::sync::atomic::Atomic<rstd::f64> m_duration { rstd::f64(-1.0) };
+    rstd::sync::atomic::Atomic<bool>      m_duration_probe_attempted { false };
+    rstd::sync::atomic::Atomic<bool>      m_loops { false };
+    rstd::sync::atomic::Atomic<rstd::int64_t> m_duration_ticks { rstd::int64_t(-1) };
+    rstd::sync::atomic::Atomic<rstd::i32> m_time_base_num {};
+    rstd::sync::atomic::Atomic<rstd::i32> m_time_base_den {};
+    rstd::sync::atomic::Atomic<rstd::u64> m_frame_count {};
 };
 
 enum class VertexType
@@ -311,22 +373,88 @@ struct SpriteFrame {
 class SpriteAnimation {
 public:
     const auto& GetAnimateFrame(double newtime) {
-        if ((m_remainTime -= newtime) < 0.0f) {
-            SwitchToNext();
-            const auto& frame = m_frames.at(m_curFrame);
-            m_remainTime      = frame.frametime;
+        const auto& current = m_frames.at(m_curFrame);
+        if (! std::isfinite(newtime) || newtime <= 0.0) {
+            return current;
         }
-        const auto& frame = m_frames.at(m_curFrame);
-        return frame;
+        // Invalid frame times do not define a period. Preserve the bounded
+        // legacy one-frame-per-call fallback instead of inventing a duration.
+        if (m_hasInvalidDuration || m_period <= 0.0 || ! std::isfinite(m_period)) {
+            if ((m_remainTime -= newtime) <= 0.0) {
+                SwitchToNext();
+                m_remainTime = static_cast<double>(m_frames.at(m_curFrame).frametime);
+            }
+            return m_frames.at(m_curFrame);
+        }
+
+        double      delta       = std::fmod(newtime, m_period);
+        std::size_t transitions {};
+        while (transitions <= m_frames.size()) {
+            if (m_remainTime > 0.0 && std::isfinite(m_remainTime)) {
+                if (delta < m_remainTime) {
+                    m_remainTime -= delta;
+                    return m_frames.at(m_curFrame);
+                }
+                delta -= m_remainTime;
+            }
+            SwitchToNext();
+            ++transitions;
+            m_remainTime = static_cast<double>(m_frames.at(m_curFrame).frametime);
+        }
+        return m_frames.at(m_curFrame);
     }
     const auto& GetCurFrame() const { return m_frames.at(m_curFrame); }
-    void        AppendFrame(const SpriteFrame& frame) { m_frames.push_back(frame); }
+    const auto& GetAnimateFrameSingleStep(double delta) {
+        const auto& current = m_frames.at(m_curFrame);
+        if (! std::isfinite(delta) || delta == 0.0) return current;
+        if (m_hasInvalidDuration || m_period <= 0.0 || ! std::isfinite(m_period)) {
+            m_remainTime -= std::abs(delta);
+            if (m_remainTime <= 0.0) {
+                if (delta > 0.0)
+                    SwitchToNext();
+                else
+                    SwitchToPrevious();
+                m_remainTime = static_cast<double>(m_frames.at(m_curFrame).frametime);
+            }
+            return m_frames.at(m_curFrame);
+        }
+        if (delta > 0.0) {
+            m_remainTime -= delta;
+            if (m_remainTime <= 0.0) {
+                SwitchToNext();
+                m_remainTime = static_cast<double>(m_frames.at(m_curFrame).frametime);
+            }
+        } else {
+            const auto duration = static_cast<double>(m_frames.at(m_curFrame).frametime);
+            m_remainTime += -delta;
+            if (m_remainTime >= duration) {
+                SwitchToPrevious();
+                m_remainTime = 0.0;
+            }
+        }
+        return m_frames.at(m_curFrame);
+    }
+    void AppendFrame(const SpriteFrame& frame) {
+        m_frames.push_back(frame);
+        const double duration = static_cast<double>(frame.frametime);
+        if (! std::isfinite(duration) || duration <= 0.0)
+            m_hasInvalidDuration = true;
+        else
+            m_period += duration;
+        if (m_frames.size() == 1) m_remainTime = duration;
+    }
     // Read a specific frame without advancing the internal cursor. Used by
     // the script-driven setFrame() override path.
     const SpriteFrame& GetFrame(usize i) const { return m_frames.at(i.to_primitive()); }
 
     usize numFrames() const { return usize(m_frames.size()); }
     usize CurrentFrameIndex() const { return usize(m_curFrame); }
+    double Duration() const { return m_hasInvalidDuration ? 0.0 : m_period; }
+    void SetCurrentFrame(usize i) {
+        if (m_frames.empty()) return;
+        m_curFrame    = i.to_primitive() % m_frames.size();
+        m_remainTime = static_cast<double>(m_frames.at(m_curFrame).frametime);
+    }
 
 private:
     void SwitchToNext() {
@@ -335,8 +463,16 @@ private:
         else
             m_curFrame++;
     }
+    void SwitchToPrevious() {
+        if (m_curFrame == 0)
+            m_curFrame = m_frames.size() - 1;
+        else
+            --m_curFrame;
+    }
     std::size_t m_curFrame { 0 };
     double      m_remainTime { 0 };
+    double      m_period { 0 };
+    bool        m_hasInvalidDuration { false };
 
     std::vector<SpriteFrame> m_frames;
 };

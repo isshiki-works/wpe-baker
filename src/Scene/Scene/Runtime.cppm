@@ -38,6 +38,16 @@ class SceneRuntime {
 public:
     const SceneFrame& Frame() const noexcept { return m_frame; }
 
+    // Sets the frame clock without running systems. Offline callers still run
+    // BeforeRender and Advance in the normal order for every exported frame.
+    void PrepareOfflineFrame(u64 index, f64 elapsed, f64 delta) {
+        m_frame.index = index;
+        m_frame.elapsed = elapsed;
+        m_frame.delta = delta;
+        ++m_frame.revision;
+        if (m_frame.revision == u64()) m_frame.revision = u64(1);
+    }
+
     void Register(Box<dyn<SceneRuntimeSystem>> system,
                   SceneRuntimeSchedule         schedule = SceneRuntimeSchedule::FrameAdvance) {
         if (schedule == SceneRuntimeSchedule::BeforeRender) {
@@ -54,8 +64,12 @@ public:
     }
 
     void Advance(f64 delta) {
+        AdvanceOffline(delta, m_frame.elapsed + delta);
+    }
+
+    void AdvanceOffline(f64 delta, f64 next_elapsed) {
         m_frame.delta = delta;
-        m_frame.elapsed += delta;
+        m_frame.elapsed = next_elapsed;
         ++m_frame.index;
         ++m_frame.revision;
         if (m_frame.revision == u64()) m_frame.revision = u64(1);

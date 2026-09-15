@@ -1358,6 +1358,9 @@ public:
     void Register(String property, Arc<SceneAnimationPlayback> playback);
     auto ForProperty(ref<str> property) const -> Option<Arc<SceneAnimationPlayback>>;
     auto Named(ref<str> name) const -> Option<Arc<SceneAnimationPlayback>>;
+    auto Playbacks() const noexcept -> slice<Arc<SceneAnimationPlayback>> {
+        return m_players.as_slice();
+    }
     void Advance(SceneNode& owner, double runtime, Vec<SceneAnimationEventDispatch>& events);
 
 private:
@@ -1534,6 +1537,8 @@ public:
 // back-link clearing below is a defence against Scene teardown ordering,
 // where a child held by an external Arc (e.g. actuator closures)
 // can outlive its parent during the children Vec destructor.
+class SceneTextureAnimationRegistry;
+
 class SceneNode : NoCopy, NoMove {
 public:
     struct ShadowParticipation {
@@ -1670,9 +1675,17 @@ public:
     void SetRotationAnimation(SceneAnimationTrack track);
     void SetAlphaAnimation(SceneAnimationTrack track);
     void RegisterAnimation(Arc<SceneAnimationPlayback> playback);
+    // Puppet layers are parsed outside the scene module.  Retain only this
+    // small provenance bit alongside the existing generic playback handle so
+    // consumers can report the real clip without Scene depending on PuppetLayer.
+    void RegisterPuppetAnimation(Arc<SceneAnimationPlayback> playback);
     void BindFieldAnimation(String field, Arc<SceneAnimationPlayback> playback);
     auto FieldAnimation(ref<str> field) const -> Option<Arc<SceneAnimationPlayback>>;
     auto NamedAnimation(ref<str> name) const -> Option<Arc<SceneAnimationPlayback>>;
+    auto AnimationPlaybacks() const noexcept -> slice<Arc<SceneAnimationPlayback>> {
+        return m_animations.Playbacks();
+    }
+    bool IsPuppetAnimation(const SceneAnimationPlayback& playback) const noexcept;
     void TickFieldAnimations(double runtime, Vec<SceneAnimationEventDispatch>& events);
     void SetAlphaSource(SceneNode* node) { m_alpha_source = node; }
 
@@ -1717,6 +1730,12 @@ public:
     };
     TextureAnimatorState&       TexAnim() { return m_tex_anim; }
     const TextureAnimatorState& TexAnim() const { return m_tex_anim; }
+    void SetTextureAnimationRegistry(SceneTextureAnimationRegistry* registry) {
+        m_texture_animation_registry = registry;
+    }
+    SceneTextureAnimationRegistry* TextureAnimationRegistry() const {
+        return m_texture_animation_registry;
+    }
 
     void Play() {
         if (m_sound_control) {
@@ -1851,6 +1870,8 @@ public:
 
     SceneNodeId              Identity() const { return m_identity; }
     Option<WallpaperLayerId> WallpaperIdentity() const { return m_wallpaper_identity; }
+    Option<WallpaperLayerId> GeneratorIdentity() const { return m_generator_identity; }
+    void SetGeneratorIdentity(Option<WallpaperLayerId> identity) { m_generator_identity = identity; }
     void        AttachLayer(std::shared_ptr<SceneNodeLayer> layer) { m_layer = rstd::move(layer); }
     bool        HasLayer() const { return static_cast<bool>(m_layer); }
     auto&       Layer() { return m_layer; }
@@ -1868,6 +1889,7 @@ private:
 
     SceneNodeId              m_identity;
     Option<WallpaperLayerId> m_wallpaper_identity;
+    Option<WallpaperLayerId> m_generator_identity;
     i32                      m_id { -1 };
     std::string              m_name;
 
@@ -1890,6 +1912,7 @@ private:
     SceneNode*                             m_alpha_source { nullptr };
     Vec<SceneNodeFieldAnimation>           m_field_animation_tracks;
     SceneAnimationSet                      m_animations;
+    Vec<Arc<SceneAnimationPlayback>>       m_puppet_animation_playbacks;
     float                                  m_brightness { 1.0f };
     bool                                   m_brightness_overridden { false };
     Eigen::Vector3f                        m_color { 1.0f, 1.0f, 1.0f };
@@ -1897,6 +1920,7 @@ private:
     Eigen::Vector3f                        m_base_color { 1.0f, 1.0f, 1.0f };
     float                                  m_base_alpha { 1.0f };
     TextureAnimatorState                   m_tex_anim {};
+    SceneTextureAnimationRegistry*         m_texture_animation_registry { nullptr };
     bool                                   m_layer_playing { true };
     float                                  m_volume { 1.0f };
     Option<Arc<dyn<SceneSoundControl>>>    m_sound_control;
@@ -1959,12 +1983,16 @@ struct SceneImageEffectNode {
     Arc<SceneNode>               sceneNode;
     bool                         uses_unit_final_quad { false };
     SceneShaderValueAnimationMap final_quad_shader_values;
+    // Assigned only while the render graph is built. It identifies this
+    // node's real graph pass without inferring it from a render-target name.
+    Option<u64>                  graph_pass_index;
 };
 
 struct SceneImageEffect {
     enum class CmdType
     {
         Copy,
+        Swap,
     };
     struct Command {
         CmdType           cmd { CmdType::Copy };
@@ -1973,6 +2001,9 @@ struct SceneImageEffect {
         i32               afterpos { 0 };
     };
     std::string                     name;
+    // Preserve author identity independently of runtime registration order.
+    std::int32_t                    authored_id { -1 };
+    std::int32_t                    authored_ordinal { -1 };
     SceneEffectId                   id;
     SceneNodeId                     owner;
     std::vector<Command>            commands;
@@ -2304,6 +2335,17 @@ public:
     void Rebuild(const Scene&);
     void Advance(f64 delta);
     auto Frame(SceneDrawItemId, usize texture_index) const -> Option<SceneTextureFrameView>;
+    auto FrameCount(const SceneNode&) const -> usize;
+    auto Duration(const SceneNode&) const -> f64;
+    auto Rate(const SceneNode&) const -> f64;
+    auto CurrentFrame(const SceneNode&) const -> usize;
+    bool IsPlaying(const SceneNode&) const;
+    void Play(SceneNode&);
+    void Stop(SceneNode&);
+    void Pause(SceneNode&);
+    void SetFrame(SceneNode&, usize);
+    void SetRate(SceneNode&, f64);
+    void Join(SceneNode&);
 
 private:
     struct Animation {
@@ -2315,6 +2357,13 @@ private:
         String texture;
         usize  held_frame { 0 };
         bool   was_playing { true };
+        f64    rate { 1.0 };
+        struct PrivatePlayer {
+            SpriteAnimation sprite;
+            bool            playing { true };
+            u64             revision { 1 };
+        };
+        Option<PrivatePlayer> private_player;
     };
 
     struct Entry {
@@ -2324,6 +2373,25 @@ private:
 
     static u64 Key(SceneDrawItemId draw) {
         return (rstd::as_cast<u64>(draw.generation) << u64(32)) | rstd::as_cast<u64>(draw.index);
+    }
+
+    auto BindingFor(const SceneNode&) const -> const Binding*;
+    auto EnsurePrivate(const SceneNode&, Binding&) -> Binding::PrivatePlayer*;
+    static void Touch(Binding::PrivatePlayer& player) {
+        ++player.revision;
+        if (player.revision == u64()) player.revision = u64(1);
+    }
+    template<typename Fn>
+    void ForNodeBindings(SceneNode& node, Fn&& fn) {
+        m_entries.iter_mut().for_each([&](auto entry) {
+            auto [_, state] = entry;
+            if (state->node != rstd::addressof(node)) return;
+            state->bindings.iter_mut().for_each([&](auto binding_entry) {
+                auto [index, binding] = binding_entry;
+                if (index != usize()) return;
+                fn(*binding);
+            });
+        });
     }
 
     HashMap<String, Animation> m_animations;
@@ -2590,6 +2658,27 @@ RenderSceneSnapshot ExtractRenderSceneSnapshot(Scene& scene);
 // Scene.h
 // ============================================================================
 
+// Capture-only controls supplied by an offline render job. They are never
+// serialized into an authored scene and are applied before its first frame.
+struct OfflineVideoPlaybackRateOverride {
+    std::int32_t  owner_layer_id { -1 };
+    std::uint64_t rate_numerator {};
+    std::uint64_t rate_denominator {};
+};
+
+struct OfflineVideoPlaybackRateOverrideResult {
+    std::int32_t  owner_layer_id { -1 };
+    std::uint64_t rate_numerator {};
+    std::uint64_t rate_denominator {};
+    std::uint32_t applied_control_count {};
+};
+
+struct OfflineVideoPlaybackRateOverrideApplication {
+    std::string error;
+    std::vector<OfflineVideoPlaybackRateOverrideResult> applied;
+    bool ok() const { return error.empty(); }
+};
+
 class Scene : NoCopy, NoMove {
 public:
     Scene();
@@ -2650,6 +2739,7 @@ public:
     };
     void RegisterMaterialTextureUserBinding(String key, MaterialTextureUserBinding binding);
     auto MaterialTextureUserBindings(ref<str> key) const -> slice<MaterialTextureUserBinding>;
+    bool MaterialHasTextureUserBinding(const SceneMaterial&, ref<str> key) const;
 
     void RegisterCameraPath(Arc<SceneCameraPath>);
     void RegisterCameraPathUserBinding(String key, Arc<SceneCameraPath>);
@@ -2657,6 +2747,8 @@ public:
     auto Texture(ref<str> name) const -> Option<ref<SceneTexture>>;
     auto TextureContentRevision(ref<str> name) const -> u64;
     auto VideoControl(ref<str> name) const -> Option<Arc<VideoPlaybackState>>;
+    auto ApplyOfflineVideoPlaybackRateOverrides(
+        std::span<const OfflineVideoPlaybackRateOverride>) -> OfflineVideoPlaybackRateOverrideApplication;
     auto TextureNames() const -> slice<String> { return m_texture_names.as_slice(); }
     void RegisterRenderTarget(String name, SceneRenderTarget target);
     auto RenderTarget(ref<str> name) const -> Option<ref<SceneRenderTarget>>;

@@ -71,12 +71,57 @@ struct SceneWallpaperConfig {
 
 class SceneRuntimeController;
 
+struct OfflineOptions {
+    uint64_t seed { 0 };
+    double epoch_ms { 946684800000.0 };
+    uint32_t fps_num { 0 }; // both zero: use step(dt); otherwise exact rational FPS
+    uint32_t fps_den { 0 };
+    bool trace_scene { false };
+    std::vector<OfflineVideoPlaybackRateOverride> video_rate_overrides;
+};
+
+struct OfflineFrameInput {
+    double cursor_x { 0.5 };
+    double cursor_y { 0.5 };
+    bool cursor_in_window { false };
+    uint32_t mouse_buttons_down { 0 };
+    Option<MediaStatus> media;
+    Option<audio::PcmWindow> pcm;
+};
+
+// Authored sound-layer mix for this output-frame interval. External response
+// PCM is a separate input and is never copied into this soundtrack implicitly.
+struct OfflineAudioFrame {
+    uint64_t sample_start { 0 };
+    uint32_t frame_count { 0 };
+    uint32_t sample_rate { 48000 };
+    uint32_t channels { 2 };
+    std::vector<float> samples;
+};
+
 class SceneWallpaper : NoCopy {
 public:
     SceneWallpaper();
     ~SceneWallpaper();
     bool init();
     bool inited() const;
+
+    // Dedicated synchronous CPU-output mode; call on a fresh instance.
+    // No realtime driver or sound device is started. Frame indices start at 0;
+    // dt is fixed for the job. Prewarm uses these same steps and discards pixels.
+    bool initOffline(SceneWallpaperConfig, RenderInitInfo, OfflineOptions = {});
+    bool step(uint64_t frame_index, double dt, const OfflineFrameInput& = {});
+    const CpuFrameResult& readback() const;
+    const OfflineAudioFrame& audioReadback() const;
+    std::string offlineError() const;
+    std::vector<std::string> offlineDiagnostics() const;
+    const std::vector<OfflineSourceScriptError>& offlineSourceScriptErrors() const;
+    std::vector<OfflineDependency> offlineDependencies() const;
+    uint64_t offlineIkChainSolves() const;
+    std::string offlineSceneDescription() const;
+    std::string offlineAnimationPeriods() const;
+    std::string offlineProjection() const;
+    std::string offlineVideoRateOverrides() const;
 
     void initVulkan(RenderInitInfo);
 

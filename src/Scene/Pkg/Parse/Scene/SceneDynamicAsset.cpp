@@ -79,8 +79,8 @@ Option<array<float, 2>> ResolveImageAssetSize(SceneParseContext& context, ref<st
         width             = frame.width;
         height            = frame.height;
     } else {
-        width  = static_cast<float>(header.width > 0 ? header.width : header.mapWidth);
-        height = static_cast<float>(header.height > 0 ? header.height : header.mapHeight);
+        width  = static_cast<float>(header.mapWidth > 0 ? header.mapWidth : header.width);
+        height = static_cast<float>(header.mapHeight > 0 ? header.mapHeight : header.height);
     }
     if (width <= 0.0f || height <= 0.0f) return None();
     return Some(array<float, 2> { width, height });
@@ -244,10 +244,11 @@ Option<Arc<SceneNode>> AttachCreatedLayer(SceneParseContext& context, SceneNode*
 
     SceneNode* parent =
         owner && owner->Parent() ? owner->Parent() : context.scene->RootMut().as_raw_ptr();
-    for (auto& before : (**parsed).ordered_before_nodes) parent->AppendChild(before.clone());
+    for (auto& before : (**parsed).ordered_before_nodes)
+        context.scene->AttachRuntimeNode(*parent, before.clone());
     auto node  = (*(**parsed).node).clone();
     node->ID() = i32(-1);
-    parent->AppendChild(node.clone());
+    context.scene->AttachRuntimeNode(*parent, node.clone());
     (void)context.node_id_map.remove(id);
     return Some(rstd::move(node));
 }
@@ -261,7 +262,6 @@ Option<Arc<SceneNode>> InstantiateLayerConfiguration(SceneParseContext& context,
         if (! text.FromJson(config, *context.vfs, context.pkg_version)) return None();
         text.id      = id;
         text.parent  = u32();
-        text.visible = true;
         ParseTextObj(context, text);
         return AttachCreatedLayer(context, owner, id);
     }
@@ -271,7 +271,6 @@ Option<Arc<SceneNode>> InstantiateLayerConfiguration(SceneParseContext& context,
         if (! image.FromJson(config, *context.vfs, context.pkg_version)) return None();
         image.id      = id;
         image.parent  = u32();
-        image.visible = true;
         ParseImageObj(context, image);
         return AttachCreatedLayer(context, owner, id);
     }
@@ -294,7 +293,8 @@ Option<Arc<SceneNode>> InstantiateLayerConfiguration(SceneParseContext& context,
     image.size    = { size[usize()], size[usize(1)] };
     image.solid   = true;
     image.parent  = u32();
-    image.visible = true;
+    owe::GetJsonValue(config, "name", image.name, false);
+    owe::GetJsonValue(config, "visible", image.visible, false);
     owe::GetJsonValue(config, "origin", image.origin, false);
     owe::GetJsonValue(config, "angles", image.angles, false);
     owe::GetJsonValue(config, "scale", image.scale, false);

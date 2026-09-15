@@ -183,6 +183,42 @@ auto RenderGraph::readTexture(NodeHandle pass_node, TextureNodeRef texture) -> b
     return true;
 }
 
+auto RenderGraph::writtenTexture(ref<str> key, Option<usize> version) const
+    -> Option<WrittenTextureState> {
+    Option<WrittenTextureState> selected;
+    for (usize index {}; index < m_dg.NodeNum(); ++index) {
+        auto node = getTexNode(NodeHandle { .index = index });
+        if (node.is_none() || node->key != key || node->writer.is_none() ||
+            ! isRenderPassNode(*node->writer)) continue;
+        if (version.is_some() && node->version != *version) continue;
+        if (selected.is_some() && selected->texture.version >= node->version) continue;
+        auto state = textureState(TextureNodeRef { .handle = node->handle });
+        if (state.is_none()) continue;
+        selected = Some(WrittenTextureState {
+            .texture = rstd::move(*state),
+            .writer = *node->writer,
+        });
+    }
+    return selected;
+}
+
+auto RenderGraph::writtenTexture(NodeHandle writer) const -> Option<WrittenTextureState> {
+    Option<WrittenTextureState> selected;
+    for (usize index {}; index < m_dg.NodeNum(); ++index) {
+        auto node = getTexNode(NodeHandle { .index = index });
+        if (node.is_none() || node->writer.is_none() || *node->writer != writer ||
+            !isRenderPassNode(*node->writer)) continue;
+        if (selected.is_some()) return None();
+        auto state = textureState(TextureNodeRef { .handle = node->handle });
+        if (state.is_none()) return None();
+        selected = Some(WrittenTextureState {
+            .texture = rstd::move(*state),
+            .writer = *node->writer,
+        });
+    }
+    return selected;
+}
+
 auto RenderGraph::topologicalOrder() const
     -> rstd::Result<rstd::vec::Vec<NodeHandle>, RenderGraphOrderError> {
     auto in_degree = rstd::vec::Vec<usize>::make();

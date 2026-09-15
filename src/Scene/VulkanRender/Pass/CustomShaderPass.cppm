@@ -78,6 +78,7 @@ public:
         bool                             blending { false };
         bool                             clear_output { false };
         bool                             transparent_clear { false };
+        bool                             capture_composition { false };
         bool                             clear_depth { false };
         float                            depth_clear_value { 1.0f };
         bool                             preserve_output { false };

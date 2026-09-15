@@ -1522,6 +1522,7 @@ Box<dyn<particle::ParticleEmitterProgram>> ParticleParser::GenEmitter(const wpsc
         .frequency = array_cast<float>(wpe.audiofrequency),
         .bounds    = array_cast<float>(wpe.audiobounds),
     };
+    if (audio_response.enable) subsystem.TraceExternalInput("audio"_str);
     if (wpe.name == "boxrandom") {
         ParticleBoxEmitterArgs box;
         box.emit_speed     = wpe.rate;

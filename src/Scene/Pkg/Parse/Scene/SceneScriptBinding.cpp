@@ -125,7 +125,7 @@ Arc<PuppetLayer> MakePuppetLayer(Arc<Puppet>                            puppet,
 void RegisterPuppetLayer(SceneParseContext& context, SceneNode* node, Arc<PuppetLayer> layer) {
     if (! node) return;
     for (const auto& playback : layer->AnimationPlaybacks())
-        node->RegisterAnimation(playback.clone());
+        node->RegisterPuppetAnimation(playback.clone());
     (void)context.puppet_layers->by_node.insert(node, rstd::move(layer));
 }
 
@@ -203,6 +203,7 @@ Option<Arc<PuppetLayer>> FindPuppetLayerWithBone(const Arc<PuppetLayerRegistry>&
 }
 
 script::ScriptScene& EnsureScriptScene(SceneParseContext& context) {
+    if (context.installed_script_scene != nullptr) return *context.installed_script_scene;
     if (context.script_scene.is_none()) {
         context.script_scene =
             Some(Box<script::ScriptScene>::make(Some(context.audio_response_demand.clone())));
@@ -383,6 +384,32 @@ Json ScriptInitialValueForField(std::string_view field, const Json& value) {
 namespace owe
 {
 
+namespace
+{
+
+Option<SceneUserVisibilityBinding> AnimationLayerVisibleUserBinding(const Json& visible) {
+    if (! visible.is_object()) return None();
+    auto user = visible.get("user"_str);
+    if (user.is_none()) return None();
+
+    SceneUserVisibilityBinding binding;
+    if ((*user)->is_string()) {
+        binding.key = String::make(*(*user)->as_str());
+    } else if ((*user)->is_object()) {
+        if (auto name = (*user)->get("name"_str); name.is_some()) {
+            auto value = (*name)->as_str();
+            if (value.is_some()) binding.key = String::make(*value);
+        }
+        if (auto condition = (*user)->get("condition"_str); condition.is_some()) {
+            binding.condition     = (*condition)->clone();
+            binding.has_condition = true;
+        }
+    }
+    return binding.empty() ? None() : Some(rstd::move(binding));
+}
+
+} // namespace
+
 void WireFieldScripts(SceneParseContext& context, const Arc<SceneNode>& node_sp,
                       const wpscene::FieldBindings&                   fb,
                       std::function<void(const script::ScriptValue&)> origin_apply,
@@ -415,6 +442,7 @@ void WireFieldScripts(SceneParseContext& context, const Arc<SceneNode>& node_sp,
         bool                        is_color     = false;
         bool                        is_volume    = false;
         bool                        is_parallax  = false;
+        bool                        is_visible   = false;
         if (field == "origin") {
             tgt  = script::NodeTransformTarget::Translate;
             kind = script::FieldKind::Vec3;
@@ -425,11 +453,8 @@ void WireFieldScripts(SceneParseContext& context, const Arc<SceneNode>& node_sp,
             tgt  = script::NodeTransformTarget::Rotation;
             kind = script::FieldKind::Vec3;
         } else if (field == "visible") {
-            // Side-effect-only script bound to visibility. update() may
-            // drive other layers via createLayer + property writes; we
-            // don't write a return value back to the node.
-            kind         = script::FieldKind::Bool;
-            has_actuator = false;
+            kind       = script::FieldKind::Bool;
+            is_visible = true;
         } else if (field == "alpha") {
             kind     = script::FieldKind::Scalar;
             is_alpha = true;
@@ -465,6 +490,15 @@ void WireFieldScripts(SceneParseContext& context, const Arc<SceneNode>& node_sp,
         if (! has_actuator) continue;
         if (is_alpha)
             ss.AddActuator({ fs, script::MakeNodeAlphaApply(node_sp.clone()) });
+        else if (is_visible)
+            ss.AddActuator({
+                fs,
+                [scene = context.scene.get(), hold = CopyableArcHold(node_sp.clone())](const script::ScriptValue& value) {
+                    if (scene == nullptr) return;
+                    if (auto* visible = std::get_if<script::BoolValue>(&value))
+                        (void)scene->SetNodeVisible(*hold.value, visible->v);
+                },
+            });
         else if (is_color)
             ss.AddActuator({ fs, script::MakeNodeColorApply(node_sp.clone()) });
         else if (is_volume)
@@ -483,6 +517,91 @@ void WireFieldScripts(SceneParseContext& context, const Arc<SceneNode>& node_sp,
             ss.AddActuator({ fs, scale_apply });
         else
             ss.AddActuator({ fs, script::MakeNodeTransformApply(node_sp.clone(), tgt) });
+    }
+}
+
+void WirePuppetAnimationLayerScripts(SceneParseContext& context,
+                                     const Arc<SceneNode>& owner,
+                                     const Arc<PuppetLayer>& puppet_layer,
+                                     std::span<PuppetLayer::AnimationLayer> authored_layers) {
+    for (const auto& authored : authored_layers) {
+        if (authored.visible_binding.is_none() || ! authored.visible_binding->is_object()) continue;
+
+        auto user_binding = AnimationLayerVisibleUserBinding(*authored.visible_binding);
+        const bool user_controls_visibility = user_binding.is_some();
+        if (user_binding.is_some()) {
+            if (context.user_properties.is_some()) {
+                auto property = (*context.user_properties)->get(user_binding->key.as_str());
+                if (property.is_some()) {
+                    auto visible = ResolveSceneUserVisibilityBinding(*user_binding, **property);
+                    if (visible.is_some())
+                        (void)puppet_layer->SetAnimationLayerVisible(authored.layer_id, *visible);
+                }
+            }
+            auto hold = CopyableArcHold(puppet_layer.clone());
+            context.scene->RegisterUserPropertyBinding(
+                user_binding->key.clone(),
+                Box<dyn<FnMut<void(ref<Json>)>>>::make(
+                    [hold, layer_id = authored.layer_id,
+                     binding = rstd::move(*user_binding)](ref<Json> property) mutable {
+                        auto visible = ResolveSceneUserVisibilityBinding(binding, *property);
+                        if (visible.is_some())
+                            (void)hold.value->SetAnimationLayerVisible(layer_id, *visible);
+                    }));
+        }
+
+        wpscene::FieldBindings fields;
+        (void)wpscene::AbsorbFieldBinding("visible", *authored.visible_binding, fields);
+        auto binding = fields.Get("visible"_str);
+        if (binding.is_none() || (**binding).script.is_none()) continue;
+
+        auto playback = puppet_layer->AnimationPlayback(authored.layer_id);
+        if (playback.is_none()) {
+            rstd_error("animation layer {} on '{}' has no playback; its visible script cannot be bound",
+                       authored.layer_id,
+                       owner->Name());
+            continue;
+        }
+
+        const auto& script_binding = *(**binding).script;
+        auto&       scripts        = EnsureScriptScene(context);
+        auto&       runtime        = scripts.runtime();
+        Json initial_value = script_binding.initial_value.clone();
+        if (user_controls_visibility) {
+            auto visible = puppet_layer->AnimationLayerVisible(authored.layer_id);
+            if (visible.is_some()) initial_value = rstd::into<Json>(*visible);
+        }
+        std::string sha = utils::genSha1(std::span<const char>(script_binding.source));
+        auto* field_script = runtime.MakeFieldScript(
+            script_binding.source,
+            sha,
+            script::FieldKind::Bool,
+            (**binding).ScriptProperties(),
+            initial_value,
+            script::ScriptBindingContext::ForAnimationLayer(owner.as_ptr(),
+                                                             puppet_layer.clone(),
+                                                             authored.layer_id,
+                                                             "visible"_str,
+                                                             rstd::move(*playback)));
+        if (field_script == nullptr) continue;
+        SetScriptInitializationOrder(context, *field_script, owner.as_ptr());
+        TrackRegisteredAssets(context, field_script);
+
+        // A top-level `visible.user` binding owns the selected runtime value.
+        // Its setter above updates the PuppetLayer directly; replaying an
+        // init-only script's cached return every frame would undo later user
+        // property changes. Scripts without a user binding keep the normal
+        // visibility return actuator.
+        if (user_controls_visibility) continue;
+
+        auto hold = CopyableArcHold(puppet_layer.clone());
+        scripts.AddActuator(
+            { field_script,
+              [hold, layer_id = authored.layer_id](const script::ScriptValue& value) mutable {
+                  auto visible = ScriptValueAsFloat(value);
+                  if (visible.is_some())
+                      (void)hold.value->SetAnimationLayerVisible(layer_id, *visible >= 0.5f);
+              } });
     }
 }
 

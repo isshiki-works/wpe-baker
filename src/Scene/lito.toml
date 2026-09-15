@@ -177,7 +177,6 @@ public-include-directories = [
 public-definitions = [
   'WAYWALLEN_WORKSHOP_DIR="workshop"',
   'WAYWALLEN_ASSETS_DIR="assets"',
-  "FT_SIZEOF_LONG=8",
 ]
 options = [
   "-Wextra",
@@ -244,7 +243,13 @@ visibility = "public"
 [external-dependencies.pkg-config.fontconfig]
 workspace = true
 visibility = "public"
+condition = 'target.family == "unix"'
 
 [external-dependencies.pkg-config.freetype]
 workspace = true
 visibility = "public"
+
+[[when]]
+condition = 'target.os == "windows"'
+[when.usage]
+system-libraries = ["dwrite"]

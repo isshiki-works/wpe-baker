@@ -1,0 +1,27 @@
+[package]
+name = "wpe-render"
+version.workspace = true
+
+[[bin]]
+name = "wpe-render"
+sources = ["main.cpp"]
+
+[dependencies.owe-core]
+workspace = true
+
+[dependencies.owe-scene]
+workspace = true
+
+[dependencies.rstd-cppstd]
+workspace = true
+
+[dependencies.rstd-json]
+workspace = true
+
+[dependencies.rstd-log]
+workspace = true
+
+[[when]]
+condition = 'target.os == "windows"'
+[when.usage]
+system-libraries = ["shell32"]

@@ -203,9 +203,15 @@ struct UniformNodeState {
 };
 
 struct UniformFrameInputs {
+    float time_of_day { 0.0f };
     array<float, 2>      pointer { 0.5f, 0.5f };
     array<float, 2>      pointer_last { 0.5f, 0.5f };
     scene_audio::Buffers audio;
+};
+
+struct UniformEffectiveParallax {
+    array<float, 2> depth;
+    i32             source_object_id { 0 };
 };
 
 class UniformSceneState {
@@ -220,6 +226,7 @@ public:
     bool SetNodeParallaxDepth(const SceneNode&, array<float, 2>);
     bool ApplyObjectParallaxDepth(i32, const Json&);
     auto NodeParallaxDepth(const SceneNode&) const -> Option<array<float, 2>>;
+    auto EffectiveParallax(const SceneNode&) const -> Option<UniformEffectiveParallax>;
     auto FindNodeState(const SceneNode*) const -> const UniformNodeState*;
     auto ComputeParallaxOffset(const UniformNodeState&, const SceneCamera&,
                                SceneRenderViewKind) const -> array<float, 2>;
@@ -236,6 +243,7 @@ public:
         m_orthographic_implicit_parallax = enabled;
     }
     void SetPointerInput(double, double);
+    void SetTimeOfDay(float value) { m_inputs.time_of_day = value; }
     void SetAudioSpectrum(const scene_audio::Buffers&);
     void Advance(const SceneFrame&);
     void ApplyUserProperty(std::string_view, const Json&);
@@ -274,8 +282,12 @@ public:
     explicit UniformRuntimeInput(Arc<UniformSceneState> state): m_state(rstd::move(state)) {}
 
     void SetPointerInput(double x, double y) { m_state->SetPointerInput(x, y); }
+    void SetTimeOfDay(float value) { m_state->SetTimeOfDay(value); }
     void SetAudioSpectrum(const scene_audio::Buffers& buffers) {
         m_state->SetAudioSpectrum(buffers);
+    }
+    auto EffectiveParallax(const SceneNode& node) const -> Option<UniformEffectiveParallax> {
+        return m_state->EffectiveParallax(node);
     }
 
 private:

@@ -1153,6 +1153,15 @@ void SceneNode::RegisterAnimation(Arc<SceneAnimationPlayback> playback) {
     m_animations.Register(rstd::move(playback));
 }
 
+void SceneNode::RegisterPuppetAnimation(Arc<SceneAnimationPlayback> playback) {
+    bool found = false;
+    for (const auto& existing : m_puppet_animation_playbacks) {
+        found = found || existing.as_ptr() == playback.as_ptr();
+    }
+    if (! found) m_puppet_animation_playbacks.push(playback.clone());
+    RegisterAnimation(rstd::move(playback));
+}
+
 void SceneNode::BindFieldAnimation(String field, Arc<SceneAnimationPlayback> playback) {
     m_animations.Register(rstd::move(field), rstd::move(playback));
 }
@@ -1215,6 +1224,13 @@ auto SceneNode::FieldAnimation(ref<str> field) const -> Option<Arc<SceneAnimatio
 
 auto SceneNode::NamedAnimation(ref<str> name) const -> Option<Arc<SceneAnimationPlayback>> {
     return m_animations.Named(name);
+}
+
+bool SceneNode::IsPuppetAnimation(const SceneAnimationPlayback& playback) const noexcept {
+    for (const auto& existing : m_puppet_animation_playbacks) {
+        if (existing.as_ptr().as_raw_ptr() == &playback) return true;
+    }
+    return false;
 }
 
 void SceneNode::TickFieldAnimations(double runtime, Vec<SceneAnimationEventDispatch>& events) {
@@ -1521,6 +1537,92 @@ auto Scene::VideoControl(ref<str> name) const -> Option<Arc<VideoPlaybackState>>
     return control.is_some() ? Some((*control)->clone()) : None<Arc<VideoPlaybackState>>();
 }
 
+namespace {
+
+bool OfflineVideoOwnerMatches(const SceneNode& node, std::int32_t owner_layer_id) {
+    const SceneNode* current = &node;
+    while (current != nullptr) {
+        auto generator = current->GeneratorIdentity();
+        if (generator.is_some()) return generator->value.to_primitive() == owner_layer_id;
+        auto wallpaper = current->WallpaperIdentity();
+        if (wallpaper.is_some()) return wallpaper->value.to_primitive() == owner_layer_id;
+        current = current->Parent();
+    }
+    return false;
+}
+
+} // namespace
+
+auto Scene::ApplyOfflineVideoPlaybackRateOverrides(
+    std::span<const OfflineVideoPlaybackRateOverride> overrides)
+    -> OfflineVideoPlaybackRateOverrideApplication {
+    OfflineVideoPlaybackRateOverrideApplication result;
+    struct PendingControl {
+        VideoPlaybackState*                 control;
+        OfflineVideoPlaybackRateOverride    rate;
+    };
+    std::vector<PendingControl> pending;
+
+    for (const auto& override : overrides) {
+        if (override.owner_layer_id < 0 || override.rate_numerator == 0 ||
+            override.rate_denominator == 0) {
+            result.error = "offline video rate override must name an owner and use a positive rate fraction";
+            return result;
+        }
+        const long double rate = static_cast<long double>(override.rate_numerator) /
+            static_cast<long double>(override.rate_denominator);
+        if (!std::isfinite(rate) || rate < 0.98L || rate > 1.02L) {
+            result.error = "offline video rate override must remain within 2 percent of rate 1";
+            return result;
+        }
+        bool found = false;
+        std::uint32_t owner_controls {};
+        for (auto* node : ResourceIndex().Nodes()) {
+            if (node == nullptr || !OfflineVideoOwnerMatches(*node, override.owner_layer_id)) continue;
+            const auto* mesh = node->Mesh();
+            if (mesh == nullptr) continue;
+            for (const auto& material : mesh->MaterialSlots()) {
+                if (!material) continue;
+                for (const auto& texture_name : material->textures) {
+                    auto texture = Texture(rstd::cppstd::as_str(texture_name).unwrap());
+                    if (texture.is_none() || !(**texture).isVideo) continue;
+                    auto handle = VideoControl(rstd::cppstd::as_str(texture_name).unwrap());
+                    if (handle.is_none()) continue;
+                    found = true;
+                    auto* control = (*handle).as_ptr().as_raw_ptr();
+                    auto existing = std::find_if(pending.begin(), pending.end(),
+                        [control](const PendingControl& value) { return value.control == control; });
+                    if (existing != pending.end()) {
+                        if (existing->rate.rate_numerator != override.rate_numerator ||
+                            existing->rate.rate_denominator != override.rate_denominator) {
+                            result.error = "offline video rate overrides conflict on a shared video control";
+                            return result;
+                        }
+                    } else {
+                        pending.push_back({ control, override });
+                    }
+                    ++owner_controls;
+                }
+            }
+        }
+        if (!found) {
+            result.error = "offline video rate override owner has no resolved video control";
+            return result;
+        }
+        result.applied.push_back(OfflineVideoPlaybackRateOverrideResult {
+            .owner_layer_id = override.owner_layer_id,
+            .rate_numerator = override.rate_numerator,
+            .rate_denominator = override.rate_denominator,
+            .applied_control_count = owner_controls,
+        });
+    }
+    for (const auto& value : pending) {
+        value.control->SetRate(rstd::f64(static_cast<double>(value.rate.rate_numerator) /
+                                         static_cast<double>(value.rate.rate_denominator)));
+    }
+    return result;
+}
+
 void Scene::RegisterRenderTarget(String name, SceneRenderTarget target) {
     if (! m_render_targets.contains_key(name.as_str())) m_render_target_names.push(name.clone());
     (void)m_render_targets.insert(rstd::move(name), rstd::move(target));
@@ -1622,6 +1724,14 @@ void Scene::RegisterMaterialTextureUserBinding(String key, MaterialTextureUserBi
 auto Scene::MaterialTextureUserBindings(ref<str> key) const -> slice<MaterialTextureUserBinding> {
     auto bindings = m_material_texture_user_index.get(key);
     return bindings.is_some() ? (*bindings)->as_slice() : slice<MaterialTextureUserBinding> {};
+}
+
+bool Scene::MaterialHasTextureUserBinding(const SceneMaterial& material, ref<str> key) const {
+    auto bindings = MaterialTextureUserBindings(key);
+    for (usize index {}; index < bindings.len(); ++index) {
+        if (bindings[index].material.get() == rstd::addressof(material)) return true;
+    }
+    return false;
 }
 
 namespace
@@ -1831,6 +1941,11 @@ bool SceneMaterial::TickShaderValueAnimations() {
 
 void SceneTextureAnimationRegistry::Rebuild(const Scene& scene) {
     auto previous = rstd::move(m_animations);
+    auto previous_entries = rstd::move(m_entries);
+    previous_entries.iter_mut().for_each([](auto entry) {
+        auto [_, state] = entry;
+        if (state->node != nullptr) state->node->SetTextureAnimationRegistry(nullptr);
+    });
     m_animations.clear();
     m_entries.clear();
     const auto& resources  = scene.ResourceIndex();
@@ -1841,6 +1956,7 @@ void SceneTextureAnimationRegistry::Rebuild(const Scene& scene) {
         if (draw.is_none() || draw->node == nullptr || draw->material == nullptr) continue;
 
         Entry entry { .node = draw->node };
+        auto previous_entry = previous_entries.remove(Key(record.id));
         for (std::size_t index = 0; index < draw->material->textures.size(); ++index) {
             const auto& texture_key = draw->material->textures[index];
             auto        texture     = scene.Texture(rstd::cppstd::as_str(texture_key).unwrap());
@@ -1860,13 +1976,19 @@ void SceneTextureAnimationRegistry::Rebuild(const Scene& scene) {
                 animation = m_animations.get_mut(texture_name.as_str());
             }
             if (animation.is_none()) continue;
-            (void)entry.bindings.insert(usize(index),
-                                        Binding {
-                                            .texture    = rstd::move(texture_name),
-                                            .held_frame = (**animation).sprite.CurrentFrameIndex(),
-                                        });
+            Binding binding { .texture    = rstd::move(texture_name),
+                              .held_frame = (**animation).sprite.CurrentFrameIndex() };
+            if (previous_entry.is_some() && (*previous_entry).node == draw->node) {
+                auto old_binding = (*previous_entry).bindings.remove(usize(index));
+                if (old_binding.is_some() && (*old_binding).texture == binding.texture)
+                    binding = rstd::move(*old_binding);
+            }
+            (void)entry.bindings.insert(usize(index), rstd::move(binding));
         }
-        if (! entry.bindings.is_empty()) (void)m_entries.insert(Key(record.id), rstd::move(entry));
+        if (! entry.bindings.is_empty()) {
+            draw->node->SetTextureAnimationRegistry(this);
+            (void)m_entries.insert(Key(record.id), rstd::move(entry));
+        }
     }
 }
 
@@ -1879,6 +2001,15 @@ void SceneTextureAnimationRegistry::Advance(f64 delta) {
         const bool  playing  = override.playing && override.current_frame < 0;
         state->bindings.iter_mut().for_each([&](auto binding_entry) {
             auto [_, binding] = binding_entry;
+            if ((*binding).private_player.is_some()) {
+                auto& player = *(*binding).private_player;
+                if (! player.playing) return;
+                const auto before = player.sprite.CurrentFrameIndex();
+                (void)player.sprite.GetAnimateFrameSingleStep(delta.to_primitive() *
+                                                               (*binding).rate.to_primitive());
+                if (before != player.sprite.CurrentFrameIndex()) Touch(player);
+                return;
+            }
             auto animation    = m_animations.get_mut(binding->texture.as_str());
             if (animation.is_none()) return;
             if (! playing && binding->was_playing) {
@@ -1908,6 +2039,7 @@ void SceneTextureAnimationRegistry::Advance(f64 delta) {
         if (! playing) return;
         state->bindings.iter_mut().for_each([&](auto binding_entry) {
             auto [_, binding] = binding_entry;
+            if ((*binding).private_player.is_some()) return;
             auto animation    = m_animations.get(binding->texture.as_str());
             if (animation.is_none()) return;
             binding->held_frame = (**animation).sprite.CurrentFrameIndex();
@@ -1923,6 +2055,17 @@ auto SceneTextureAnimationRegistry::Frame(SceneDrawItemId draw, usize texture_in
     if (binding.is_none()) return None();
     auto animation = m_animations.get((**binding).texture.as_str());
     if (animation.is_none() || (**animation).sprite.numFrames() == usize()) return None();
+
+    if ((**binding).private_player.is_some()) {
+        const auto& player = *(**binding).private_player;
+        const auto& frame  = player.sprite.GetCurFrame();
+        return Some(SceneTextureFrameView {
+            .rotation    = { frame.xAxis[0], frame.xAxis[1], frame.yAxis[0], frame.yAxis[1] },
+            .translation = { frame.x, frame.y },
+            .image_slot  = usize(static_cast<std::size_t>(frame.imageId)),
+            .revision    = player.revision,
+        });
+    }
 
     const auto&        override = (**entry).node->TexAnim();
     const SpriteFrame* frame;
@@ -1942,6 +2085,123 @@ auto SceneTextureAnimationRegistry::Frame(SceneDrawItemId draw, usize texture_in
         .image_slot  = usize(static_cast<std::size_t>(frame->imageId)),
         .revision    = (**animation).revision,
     });
+}
+
+auto SceneTextureAnimationRegistry::BindingFor(const SceneNode& node) const -> const Binding* {
+    const Binding* result = nullptr;
+    m_entries.iter().for_each([&](auto entry) {
+        auto [_, state] = entry;
+        if (result != nullptr || state->node != rstd::addressof(node)) return;
+        auto binding = state->bindings.get(usize());
+        if (binding.is_some()) result = rstd::addressof(**binding);
+    });
+    return result;
+}
+
+auto SceneTextureAnimationRegistry::EnsurePrivate(const SceneNode& node, Binding& binding)
+    -> Binding::PrivatePlayer* {
+    if (binding.private_player.is_some()) return rstd::addressof(*binding.private_player);
+    auto animation = m_animations.get(binding.texture.as_str());
+    if (animation.is_none()) return nullptr;
+    binding.private_player = Some(Binding::PrivatePlayer { .sprite = (**animation).sprite });
+    auto& player = *binding.private_player;
+    const auto& legacy = node.TexAnim();
+    if (legacy.current_frame >= 0) {
+        player.sprite.SetCurrentFrame(usize(static_cast<std::size_t>(legacy.current_frame)));
+        player.playing = false;
+    } else if (! legacy.playing) {
+        player.sprite.SetCurrentFrame(binding.held_frame);
+        player.playing = false;
+    }
+    return rstd::addressof(player);
+}
+
+auto SceneTextureAnimationRegistry::FrameCount(const SceneNode& node) const -> usize {
+    const auto* binding = BindingFor(node);
+    if (binding == nullptr) return usize();
+    if (binding->private_player.is_some()) return (*binding->private_player).sprite.numFrames();
+    auto animation = m_animations.get(binding->texture.as_str());
+    return animation.is_some() ? (**animation).sprite.numFrames() : usize();
+}
+
+auto SceneTextureAnimationRegistry::Duration(const SceneNode& node) const -> f64 {
+    const auto* binding = BindingFor(node);
+    if (binding == nullptr) return f64();
+    if (binding->private_player.is_some()) return f64((*binding->private_player).sprite.Duration());
+    auto animation = m_animations.get(binding->texture.as_str());
+    return animation.is_some() ? f64((**animation).sprite.Duration()) : f64();
+}
+
+auto SceneTextureAnimationRegistry::Rate(const SceneNode& node) const -> f64 {
+    const auto* binding = BindingFor(node);
+    return binding != nullptr ? binding->rate : f64(1.0);
+}
+
+auto SceneTextureAnimationRegistry::CurrentFrame(const SceneNode& node) const -> usize {
+    const auto* binding = BindingFor(node);
+    if (binding == nullptr) return usize();
+    if (binding->private_player.is_some()) return (*binding->private_player).sprite.CurrentFrameIndex();
+    const auto& override = node.TexAnim();
+    if (override.current_frame >= 0) {
+        const auto count = FrameCount(node);
+        return count == usize() ? usize()
+                                : usize(static_cast<std::size_t>(override.current_frame)) % count;
+    }
+    if (! override.playing) return binding->held_frame;
+    auto animation = m_animations.get(binding->texture.as_str());
+    return animation.is_some() ? (**animation).sprite.CurrentFrameIndex() : usize();
+}
+
+bool SceneTextureAnimationRegistry::IsPlaying(const SceneNode& node) const {
+    const auto* binding = BindingFor(node);
+    if (binding == nullptr) return false;
+    if (binding->private_player.is_some()) return (*binding->private_player).playing;
+    const auto& override = node.TexAnim();
+    return override.playing && override.current_frame < 0;
+}
+
+void SceneTextureAnimationRegistry::Play(SceneNode& node) {
+    ForNodeBindings(node, [&](Binding& binding) {
+        if (auto* player = EnsurePrivate(node, binding)) player->playing = true;
+    });
+}
+
+void SceneTextureAnimationRegistry::Stop(SceneNode& node) {
+    ForNodeBindings(node, [&](Binding& binding) {
+        if (auto* player = EnsurePrivate(node, binding)) {
+            player->sprite.SetCurrentFrame(usize());
+            player->playing = false;
+            binding.rate    = f64(1.0);
+            Touch(*player);
+        }
+    });
+}
+
+void SceneTextureAnimationRegistry::Pause(SceneNode& node) {
+    ForNodeBindings(node, [&](Binding& binding) {
+        if (auto* player = EnsurePrivate(node, binding)) player->playing = false;
+    });
+}
+
+void SceneTextureAnimationRegistry::SetFrame(SceneNode& node, usize frame) {
+    ForNodeBindings(node, [&](Binding& binding) {
+        if (auto* player = EnsurePrivate(node, binding)) {
+            player->sprite.SetCurrentFrame(frame);
+            Touch(*player);
+        }
+    });
+}
+
+void SceneTextureAnimationRegistry::SetRate(SceneNode& node, f64 rate) {
+    if (! rate.is_finite()) return;
+    ForNodeBindings(node, [&](Binding& binding) {
+        if (EnsurePrivate(node, binding) != nullptr) binding.rate = rate;
+    });
+}
+
+void SceneTextureAnimationRegistry::Join(SceneNode& node) {
+    ForNodeBindings(node, [](Binding& binding) { binding.private_player = None(); });
+    node.TexAnim() = {};
 }
 
 void Scene::RebuildResourceIndex() {

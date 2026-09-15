@@ -5,7 +5,11 @@ module;
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+#ifdef _WIN32
+#include "WindowsFontResolver.h"
+#else
 #include <fontconfig/fontconfig.h>
+#endif
 module wescene.text;
 import eigen;
 import wescene.pkg.spec_names;
@@ -81,7 +85,21 @@ std::shared_ptr<std::vector<std::byte>> ReadAll(const std::filesystem::path& pat
     return buf;
 }
 
-std::filesystem::path ResolveFontconfigCodepoint(std::uint32_t codepoint) {
+struct SystemFontLocation {
+    std::filesystem::path path;
+    std::uint32_t face_index { 0 };
+};
+
+std::string PathUtf8(const std::filesystem::path& path) {
+    auto value = path.generic_u8string();
+    return { reinterpret_cast<const char*>(value.data()), value.size() };
+}
+
+SystemFontLocation ResolveSystemCodepoint(std::uint32_t codepoint) {
+#ifdef _WIN32
+    auto resolved = windows::ResolveCodepoint(codepoint);
+    return {std::move(resolved.path), resolved.face_index};
+#else
     if (! FcInit()) return {};
 
     FcPattern* pat = FcPatternCreate();
@@ -113,7 +131,8 @@ std::filesystem::path ResolveFontconfigCodepoint(std::uint32_t codepoint) {
         out = std::filesystem::path(reinterpret_cast<const char*>(file));
     }
     FcPatternDestroy(match);
-    return out;
+    return {std::move(out), 0};
+#endif
 }
 
 } // namespace
@@ -210,13 +229,14 @@ struct FontFace::Impl {
         }
         if (fallback_misses.count(codepoint) != 0) return nullptr;
 
-        auto path = ResolveFontconfigCodepoint(codepoint);
+        auto resolved = ResolveSystemCodepoint(codepoint);
+        auto& path = resolved.path;
         if (path.empty()) {
             fallback_misses.insert(codepoint);
             return nullptr;
         }
 
-        std::string key = path.string();
+        std::string key = PathUtf8(path) + "#face=" + std::to_string(resolved.face_index);
         auto        it  = fallback_faces.find(key);
         if (it == fallback_faces.end()) {
             auto bytes = ReadAll(path);
@@ -231,7 +251,7 @@ struct FontFace::Impl {
                 FT_New_Memory_Face(lib,
                                    reinterpret_cast<const FT_Byte*>(bytes->data()),
                                    static_cast<FT_Long>(bytes->size()),
-                                   0,
+                                   static_cast<FT_Long>(resolved.face_index),
                                    &fallback->face) != 0 ||
                 FT_Set_Pixel_Sizes(fallback->face, 0, pixel_size) != 0) {
                 fallback_misses.insert(codepoint);
@@ -371,7 +391,8 @@ FontFace* FontCache::GetFace(const ResolvedBlob& font, std::uint32_t pixel_size)
     if (! font.bytes || font.bytes->empty() || font.source.empty() || pixel_size == 0)
         return nullptr;
 
-    auto source = rstd::cppstd::as_str(font.source).unwrap();
+    auto identity = font.source + "#face=" + std::to_string(font.face_index);
+    auto source = rstd::cppstd::as_str(identity).unwrap();
     if (auto source_faces = m_impl->faces.get_mut(source); source_faces.is_some()) {
         if (auto face = (*source_faces)->get_mut(u32(pixel_size)); face.is_some()) {
             return (*face)->as_mut_ptr().as_raw_ptr();
@@ -387,7 +408,7 @@ FontFace* FontCache::GetFace(const ResolvedBlob& font, std::uint32_t pixel_size)
     if (FT_New_Memory_Face(lib,
                            reinterpret_cast<const FT_Byte*>(blob_span.data()),
                            static_cast<FT_Long>(blob_span.size()),
-                           0,
+                           static_cast<FT_Long>(font.face_index),
                            &face->m_impl->face) != 0) {
         rstd_error("FT_New_Memory_Face failed");
         return nullptr;
@@ -437,16 +458,24 @@ FontCache* SceneFontCache(owe::Scene& scene) noexcept {
 // e.g. `systemfont_arial`. On Linux those exact files don't exist; fontconfig
 // has an alias table that maps Windows family names (Arial, Courier New, …)
 // to whatever the user actually has installed. Strip the prefix and ask fc.
-static std::filesystem::path ResolveViaFontconfig(std::string_view name) {
+static SystemFontLocation ResolveSystemFamily(std::string_view name) {
     constexpr std::string_view kPrefix = "systemfont_";
     // Match on the basename — scenes occasionally prefix a dir.
-    std::string base = std::filesystem::path(name).filename().native();
+    std::string base = PathUtf8(std::filesystem::u8path(name).filename());
     if (base.size() <= kPrefix.size() ||
         std::string_view(base).substr(0, kPrefix.size()) != kPrefix) {
         return {};
     }
     std::string family = base.substr(kPrefix.size());
     if (family.empty()) return {};
+#ifdef _WIN32
+    // Wallpaper Engine's built-in identifier uses the short UI name, while
+    // DirectWrite requires the installed family's full name.
+    if (family == "comicsans") family = "Comic Sans MS";
+    if (family == "sansserif") family = "Arial";
+    auto resolved = windows::ResolveFamily(family);
+    return {std::move(resolved.path), resolved.face_index};
+#else
     family[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(family[0])));
 
     if (! FcInit()) return {};
@@ -467,27 +496,42 @@ static std::filesystem::path ResolveViaFontconfig(std::string_view name) {
         out = std::filesystem::path(reinterpret_cast<const char*>(file));
     }
     FcPatternDestroy(match);
-    return out;
+    return {std::move(out), 0};
+#endif
 }
 
 FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool fallback_to_any) {
     namespace fs = std::filesystem;
 
-    auto try_load = [](const fs::path& p) -> ResolvedBlob {
+    auto try_load = [](const fs::path& p, std::uint32_t index = 0) -> ResolvedBlob {
         if (! fs::exists(p) || ! fs::is_regular_file(p)) return { nullptr, {} };
         auto bytes = ReadAll(p);
         if (! bytes) return { nullptr, {} };
-        return { std::move(bytes), p.string() };
+        return { std::move(bytes), PathUtf8(p), index };
+    };
+    auto unavailable = [&]() -> ResolvedBlob {
+        if (owe::active_offline_execution && ! name.empty()) {
+            owe::active_offline_execution->diagnose("font unavailable: " + std::string(name), true);
+        }
+        return { nullptr, {} };
     };
 
     if (! name.empty()) {
         // Direct path?
-        if (auto rb = try_load(fs::path(name)); rb.bytes) return rb;
+        auto direct = fs::u8path(name);
+        if (fs::exists(direct) && fs::is_regular_file(direct)) {
+            if (auto rb = try_load(direct); rb.bytes) return rb;
+            return unavailable();
+        }
         // WE's systemfont_<family> alias → fontconfig.
-        if (auto p = ResolveViaFontconfig(name); ! p.empty()) {
-            if (auto rb = try_load(p); rb.bytes) return rb;
+        if (auto resolved = ResolveSystemFamily(name); ! resolved.path.empty()) {
+            if (auto rb = try_load(resolved.path, resolved.face_index); rb.bytes) return rb;
+            return unavailable();
         }
         // Bare filename: search common roots.
+#ifdef _WIN32
+        auto roots = windows::FontRoots();
+#else
         std::vector<fs::path> roots { "/usr/share/fonts", "/usr/local/share/fonts" };
         if (auto* xdg = std::getenv("XDG_DATA_HOME"); xdg != nullptr) {
             roots.emplace_back(fs::path(xdg) / "fonts");
@@ -496,7 +540,8 @@ FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool
             roots.emplace_back(fs::path(home) / ".local/share/fonts");
             roots.emplace_back(fs::path(home) / ".fonts");
         }
-        std::string           base    = fs::path(name).filename().string();
+#endif
+        auto                  base    = fs::u8path(name).filename();
         std::size_t           scanned = 0;
         constexpr std::size_t kCap    = 8192;
         for (const auto& root : roots) {
@@ -514,16 +559,42 @@ FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool
                 if (! it->is_regular_file(ec)) continue;
                 if (it->path().filename() == base) {
                     if (auto rb = try_load(it->path()); rb.bytes) return rb;
+                    return unavailable();
                 }
             }
             if (scanned > kCap) break;
         }
     }
 
+#ifdef _WIN32
+    if (fallback_to_any && ! name.empty()) {
+        auto arial = ResolveSystemFamily("systemfont_arial");
+        if (! arial.path.empty()) {
+            if (auto rb = try_load(arial.path, arial.face_index); rb.bytes) {
+                if (owe::active_offline_execution) {
+                    owe::active_offline_execution->diagnose(
+                        "font unavailable: " + std::string(name) + "; using systemfont_arial");
+                }
+                return rb;
+            }
+        }
+        if (owe::active_offline_execution) {
+            owe::active_offline_execution->diagnose(
+                "font fallback unavailable: systemfont_arial for " + std::string(name), true);
+        }
+        return { nullptr, {} };
+    }
+#endif
+
+    if (owe::active_offline_execution && ! name.empty()) return unavailable();
     if (! fallback_to_any) return { nullptr, {} };
 
     // Last-resort fallback: any .ttf/.otf in the system roots.
+#ifdef _WIN32
+    auto roots = windows::FontRoots();
+#else
     std::vector<fs::path> roots { "/usr/share/fonts", "/usr/local/share/fonts" };
+#endif
     std::size_t           scanned = 0;
     constexpr std::size_t kCap    = 4096;
     for (const auto& root : roots) {
@@ -550,12 +621,12 @@ FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool
 
 // -- Atlas snapshot -------------------------------------------------------
 
-auto BuildAtlasImage(const FontFace& face, ref<str> key) -> Option<Arc<owe::Image>> {
+auto BuildAtlasImage(const FontFace& face, ref<str> key) -> Option<rstd::sync::Arc<owe::Image>> {
     auto fm  = face.Metrics();
     auto pix = face.AtlasPixels();
     if (fm.atlas_w == 0 || fm.atlas_h == 0 || pix.empty()) return None();
 
-    auto img = Arc<owe::Image>::make();
+    auto img = rstd::sync::Arc<owe::Image>::make();
     img->key = rstd::cppstd::to_string(key);
 
     img->header.width         = static_cast<std::int32_t>(fm.atlas_w);

@@ -353,6 +353,10 @@ auto ReadJsonFile(fs::VFS& vfs, fs::Path path, rstd::json::ParseOptions options)
     auto parse_error = [](auto error) {
         return JsonFileError { JsonFileErrorKind::Parse, rstd::format("{}", error) };
     };
+    // Wallpaper Engine scene and asset metadata occasionally uses one trailing
+    // comma. Keep ParseJson strict for non-resource callers; this boundary is
+    // the explicit compatibility opt-in for VFS-backed WPE JSON only.
+    options.allow_trailing_commas = true;
     auto content = rstd_try(fs::ReadFileContent(vfs, path), io_error);
     auto parsed  = rstd_try(ParseJson(content, options), parse_error);
     return Ok(rstd::move(parsed));

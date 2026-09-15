@@ -1,10 +1,10 @@
 module;
 
+#include <cmath>
+#include <limits>
 #include <rstd/macro.hpp>
 
 #include "vvk/macros.hpp"
-
-#include <unistd.h>
 
 module wescene.vulkan;
 import wescene.core;
@@ -675,7 +675,7 @@ MakeExternalProducerInfo(const Device& device, rstd::uint32_t width, rstd::uint3
 }
 
 void CloseSyncFd(int fd) {
-    if (fd >= 0) ::close(fd);
+    CloseExternalFileDescriptor(fd);
 }
 
 } // anonymous namespace
@@ -701,10 +701,40 @@ struct TextureCache::VideoRegistry {
         f64                                         last_pts { -1.0 };
         bool                                        have_frame { false };
         u64                                         applied_seek_sequence {};
+        bool                                        offline_clock_initialized { false };
+        double                                      offline_anchor_scene { 0.0 };
+        double                                      offline_anchor_media { 0.0 };
+        VideoPlaybackSnapshot                       offline_control;
+        double                                      offline_cycle { -1.0 };
+        bool                                        offline_drained { false };
+        Option<wavsen::video::Nv12Frame>            offline_pending;
 
         void Pump(double dt_seconds);
     };
     Vec<rstd::sync::Weak<dyn<TextureAllocationRuntime>>> runtimes;
+    struct ObservedRuntime {
+        VideoDecoderObservation observation;
+        rstd::sync::Weak<dyn<TextureAllocationRuntime>> runtime;
+    };
+    // Keep the union of actual successful opens, including allocations that later expire.
+    // Multiple material uses of one shared allocation do not create more records.
+    std::vector<ObservedRuntime> observed_runtimes;
+    std::uint64_t next_instance_id { 1 };
+    std::uint64_t peak_active_instances { 0 };
+
+    void Observe(std::uint64_t tick) {
+        std::uint64_t active = 0;
+        for (auto& entry : observed_runtimes) {
+            entry.observation.active = !entry.runtime.expired();
+            if (entry.observation.active) {
+                ++active;
+                entry.observation.last_observed_active_tick = tick;
+            } else if (!entry.observation.first_observed_inactive_tick.has_value()) {
+                entry.observation.first_observed_inactive_tick = tick;
+            }
+        }
+        peak_active_instances = std::max(peak_active_instances, active);
+    }
 
     const wavsen::video::Producer* ensureProducer(const Device& device, rstd::uint32_t width,
                                                   rstd::uint32_t height) {
@@ -918,6 +948,33 @@ TextureCache::CreateVideoTex(const Image&                                image,
               HwdecLabel(requested_hwdec),
               FrameKindLabel((*runtime.decoder)->kind()));
 
+    auto metadata = (*runtime.decoder)->stream_metadata();
+    if (runtime.playback.is_some()) {
+        (*runtime.playback)->PublishPeriodMetadata(VideoPlaybackPeriodMetadata {
+            .duration_ticks = metadata.duration_ticks,
+            .time_base_num  = metadata.time_base_num,
+            .time_base_den  = metadata.time_base_den,
+            .frame_count    = metadata.frame_count,
+            .loops          = true, // open_from_stream above enables EOF seek-to-zero.
+        });
+    }
+    VideoDecoderObservation observation;
+    observation.resource_key = image.key;
+    observation.instance_id = registry->next_instance_id++;
+    observation.codec = rstd::cppstd::to_string(metadata.codec.as_str());
+    if (metadata.coded_width.is_some()) observation.coded_width = metadata.coded_width->to_primitive();
+    if (metadata.coded_height.is_some()) observation.coded_height = metadata.coded_height->to_primitive();
+    observation.pixel_format = rstd::cppstd::to_string(metadata.pixel_format.as_str());
+    if (metadata.fps_num.is_some()) observation.fps_num = metadata.fps_num->to_primitive();
+    if (metadata.fps_den.is_some()) observation.fps_den = metadata.fps_den->to_primitive();
+    observation.fps_source = rstd::cppstd::to_string(metadata.fps_source.as_str());
+    observation.decoder_kind = FrameKindLabel((*runtime.decoder)->kind());
+    observation.metadata_unknown = observation.codec.empty() || observation.codec == "unknown_codec" ||
+        !observation.coded_width.has_value() || !observation.coded_height.has_value() ||
+        observation.pixel_format.empty() || !observation.fps_num.has_value() || !observation.fps_den.has_value();
+    observation.opened_at_tick = m_video_observation_tick;
+    observation.last_observed_active_tick = m_video_observation_tick;
+
     ImageSlots img_slots {};
     img_slots.slots.resize(1);
     img_slots.slots[0] = std::move(target_image);
@@ -925,6 +982,10 @@ TextureCache::CreateVideoTex(const Image&                                image,
     auto allocation    = rstd::sync::Arc<TextureAllocation>::make(rstd::move(img_slots),
                                                                   Some(runtime_owner.clone()));
     registry->runtimes.push(runtime_owner.downgrade());
+    registry->observed_runtimes.push_back(VideoRegistry::ObservedRuntime {
+        .observation = std::move(observation), .runtime = runtime_owner.downgrade(),
+    });
+    registry->Observe(m_video_observation_tick);
     return Some(rstd::move(allocation));
 }
 
@@ -936,7 +997,8 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
             (*s.playback)->PublishTime(s.pts_acc, (*s.decoder)->duration());
         }
     };
-    if (s.playback.is_some()) {
+    const bool offline = active_offline_execution != nullptr;
+    if (!offline && s.playback.is_some()) {
         auto state = (*s.playback)->Snapshot();
         if (state.seek_sequence != s.applied_seek_sequence) {
             auto seeked             = (*s.decoder)->seek(state.seek_seconds);
@@ -957,7 +1019,7 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         }
         dt_seconds *= state.rate.to_primitive();
     }
-    s.pts_acc += f64(dt_seconds);
+    if (!offline) s.pts_acc += f64(dt_seconds);
     auto* yuv = registry->ensureYuv(*device, s.width, s.height);
     if (! yuv) {
         publish_time();
@@ -970,9 +1032,93 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
     Option<wavsen::video::VkFrameLease>    vulkan_frame;
     Option<wavsen::video::VaapiFrameLease> vaapi_frame;
 
-    /* Drain decoded frames until we catch up to wall time. Cap to
-     * 4 frames per tick to avoid spiral-of-death on heavy stalls. */
     bool got_new = false;
+    if (offline) {
+        auto fail = [&](const std::string& message) {
+            active_offline_execution->diagnose(
+                "video[" + rstd::cppstd::to_string(s.key.as_str()) + "]: " + message, true);
+            rstd_error("PumpVideoTextures[{}]: {}", s.key.as_str(), message);
+        };
+        if (fkind != wavsen::video::FrameKind::Sw) {
+            fail("offline timestamp selection requires the configured software decoder");
+            return;
+        }
+        const double now = active_offline_execution->elapsed;
+        auto control = s.playback.is_some() ? (*s.playback)->Snapshot() : VideoPlaybackSnapshot {};
+        const bool first = !s.offline_clock_initialized;
+        const bool seek_changed = control.seek_sequence != s.applied_seek_sequence;
+        double media_time = first ? control.seek_seconds.to_primitive() :
+            s.offline_anchor_media + (s.offline_control.playing ?
+                (now - s.offline_anchor_scene) * s.offline_control.rate.to_primitive() : 0.0);
+        if (seek_changed) media_time = control.seek_seconds.to_primitive();
+        if (first || seek_changed || control.playing != s.offline_control.playing ||
+            control.rate != s.offline_control.rate) {
+            s.offline_anchor_scene = now;
+            s.offline_anchor_media = media_time;
+        }
+        s.offline_clock_initialized = true;
+        s.offline_control = control;
+        s.applied_seek_sequence = control.seek_sequence;
+        const auto duration = (*s.decoder)->duration();
+        if (duration.is_none() || !duration->is_finite() || *duration <= f64() ||
+            !std::isfinite(media_time) || media_time < 0.0) {
+            fail("offline video sampling requires a finite timestamp and positive video duration");
+            return;
+        }
+        const double duration_s = duration->to_primitive();
+        double quotient = media_time / duration_s;
+        const double nearest = std::round(quotient);
+        if (std::abs(quotient - nearest) <= 4.0 * std::numeric_limits<double>::epsilon() *
+            std::max(1.0, std::abs(quotient))) quotient = nearest;
+        const double cycle = std::floor(quotient);
+        const double cycle_start = cycle * duration_s;
+        s.pts_acc = f64(std::max(0.0, media_time - cycle_start));
+        if (first || seek_changed || cycle != s.offline_cycle) {
+            auto seeked = (*s.decoder)->seek(s.pts_acc);
+            if (seeked.is_err()) {
+                fail(rstd::cppstd::to_string(seeked.unwrap_err().message.as_str()));
+                return;
+            }
+            s.offline_pending = None();
+            s.offline_drained = false;
+            s.offline_cycle = cycle;
+            s.have_frame = false;
+            s.last_pts = f64(-1.0);
+        }
+        // Retain one future frame as lookahead. Only a frame whose PTS has
+        // arrived may replace the displayed image; output FPS does not change
+        // the source's sampling rate. Offline catch-up must not drop work.
+        while (!s.offline_drained) {
+            if (s.offline_pending.is_none()) {
+                wavsen::video::Nv12Frame candidate;
+                auto pulled = (*s.decoder)->next_frame(candidate);
+                if (pulled.is_err()) {
+                    fail(rstd::cppstd::to_string(pulled.unwrap_err().message.as_str()));
+                    return;
+                }
+                if (*pulled != wavsen::video::NextFrame::Ok) {
+                    // The decoder's eager loop has consumed the next cycle's
+                    // first frame. Seek again only when scene time wraps.
+                    s.offline_drained = true;
+                    break;
+                }
+                if (!candidate.pts_seconds.is_finite() || candidate.pts_seconds < f64()) {
+                    fail("decoded video frame has no usable presentation timestamp");
+                    return;
+                }
+                s.offline_pending = Some(rstd::move(candidate));
+            }
+            const double deadline = cycle_start + s.offline_pending->pts_seconds.to_primitive();
+            const double tolerance = 4.0 * std::numeric_limits<double>::epsilon() *
+                std::max(1.0, std::max(std::abs(deadline), std::abs(media_time)));
+            if (deadline - media_time > tolerance) break;
+            s.nv12_scratch = rstd::move(*s.offline_pending);
+            s.offline_pending = None();
+            s.last_pts = s.nv12_scratch.pts_seconds;
+            got_new = true;
+        }
+    } else {
+    /* Realtime pacing retains its bounded catch-up policy. */
     for (int i = 0; i < 4; ++i) {
         if (s.last_pts >= f64() && s.last_pts > s.pts_acc) break;
 
@@ -1043,6 +1189,7 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         s.last_pts = frame_pts;
         got_new    = true;
         if (decoder_looped) break;
+    }
     }
     if (! got_new && s.have_frame) {
         publish_time();
@@ -1165,8 +1312,10 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
 }
 
 void TextureCache::PumpVideoTextures(double dt_seconds) {
+    ++m_video_observation_tick;
     if (m_video_registry.is_none()) return;
     auto* registry = m_video_registry->get();
+    registry->Observe(m_video_observation_tick);
     registry->runtimes.retain([](const rstd::sync::Weak<dyn<TextureAllocationRuntime>>& runtime) {
         return ! runtime.expired();
     });
@@ -1174,6 +1323,19 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
         auto runtime = weak.upgrade();
         if (runtime) runtime->Pump(dt_seconds);
     }
+}
+
+VideoDecoderInventory TextureCache::ObserveVideoDecoders() {
+    VideoDecoderInventory inventory;
+    inventory.observed = true;
+    inventory.observed_through_tick = m_video_observation_tick;
+    if (m_video_registry.is_none()) return inventory;
+    auto* registry = m_video_registry->get();
+    registry->Observe(m_video_observation_tick);
+    inventory.peak_active_instances = registry->peak_active_instances;
+    inventory.decoders.reserve(registry->observed_runtimes.size());
+    for (const auto& entry : registry->observed_runtimes) inventory.decoders.push_back(entry.observation);
+    return inventory;
 }
 
 bool TextureCache::UploadFontAtlasRegion(ref<TextureAllocation> texture, const rstd::uint8_t* atlas,

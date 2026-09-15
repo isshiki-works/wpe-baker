@@ -2,12 +2,14 @@ module;
 
 #include <algorithm>
 #include <cmath>
+#include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
 import eigen;
 import owe.scene_audio_response;
 import rstd;
 import rstd.cppstd;
+import rstd.log;
 import wescene.scene;
 import wescene.pkg.spec_names;
 import wescene.utils;
@@ -318,11 +320,37 @@ bool UniformSceneState::SetNodeParallaxDepth(const SceneNode& node, array<float,
 bool UniformSceneState::ApplyObjectParallaxDepth(i32 object_id, const Json& property) {
     const auto&     value = SceneUserPropertyPayload(property);
     array<float, 2> depth {};
-    if (owe::GetJsonValue(value, depth)) return SetObjectParallaxDepth(object_id, depth);
-
-    auto scalar = UserScalar(property);
-    if (scalar.is_none()) return false;
-    return SetObjectParallaxDepth(object_id, { *scalar, *scalar });
+    bool valid = false;
+    if (value.is_number() || value.is_boolean()) {
+        auto scalar = UserScalar(property);
+        if (scalar.is_some()) {
+            depth = { *scalar, *scalar };
+            valid = true;
+        }
+    } else if (auto string = value.as_str(); string.is_some()) {
+        // SceneScript Vec2(string) consumes X/Y, including a color property's
+        // three-component string. Do not route that through fixed-array JSON
+        // parsing or mistake its first component for a scalar broadcast.
+        auto text = rstd::cppstd::to_string(*string);
+        const auto last = text.find_last_not_of(" \t\r\n\f\v");
+        if (last != std::string::npos) text.resize(last + 1);
+        std::istringstream components(std::move(text));
+        if (components >> depth[usize()]) {
+            if (components.eof()) {
+                depth[usize(1)] = depth[usize()];
+                valid = true;
+            } else {
+                valid = bool(components >> depth[usize(1)]);
+            }
+        }
+    } else if (auto values = value.as_array(); values.is_some() && (*values)->len() == usize(2)) {
+        valid = owe::GetJsonValue(value, depth);
+    }
+    if (! valid || ! std::isfinite(depth[usize()]) || ! std::isfinite(depth[usize(1)])) {
+        rstd_error("invalid parallaxDepth user property for layer {}: expected a finite scalar or Vec2-compatible value", object_id);
+        return false;
+    }
+    return SetObjectParallaxDepth(object_id, depth);
 }
 
 auto UniformSceneState::NodeParallaxDepth(const SceneNode& node) const -> Option<array<float, 2>> {
@@ -338,6 +366,32 @@ auto UniformSceneState::NodeParallaxDepth(const SceneNode& node) const -> Option
     return state.is_some() ? Some(array<float, 2> { (**state)->parallax.depth[0],
                                                     (**state)->parallax.depth[1] })
                            : None();
+}
+
+auto UniformSceneState::EffectiveParallax(const SceneNode& node) const
+    -> Option<UniformEffectiveParallax> {
+    const auto* state = FindNodeState(rstd::addressof(node));
+    if (state == nullptr) return None();
+
+    // Reuse the renderer's canonical source selection and ancestor traversal;
+    // NodeParallaxDepth intentionally reports only the node's own object map.
+    const auto* source = LogicalParallaxState(*state);
+    if (source->parallax.authored) {
+        const auto depth = array<float, 2> { source->parallax.depth[0], source->parallax.depth[1] };
+        if (! rstd::f32(depth[usize()]).is_finite() ||
+            ! rstd::f32(depth[usize(1)]).is_finite())
+            return None();
+        return Some(UniformEffectiveParallax {
+            .depth = depth,
+            .source_object_id = source->object_id,
+        });
+    }
+    if (! m_orthographic_implicit_parallax) return None();
+    return Some(UniformEffectiveParallax {
+        .depth = { wpscene::kImplicitOrthographicParallaxDepth[0],
+                   wpscene::kImplicitOrthographicParallaxDepth[1] },
+        .source_object_id = source->object_id,
+    });
 }
 
 auto UniformSceneState::FindNodeState(const SceneNode* node) const -> const UniformNodeState* {
@@ -698,7 +752,7 @@ auto FrameUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
 
     writer.Write(Output::Time, static_cast<float>(frame->elapsed.to_primitive()));
     writer.Write(Output::FrameTime, static_cast<float>(frame->delta.to_primitive()));
-    writer.Write(Output::DayTime, 0.0f);
+    writer.Write(Output::DayTime, inputs.time_of_day);
     writer.Write(Output::PointerPosition, inputs.pointer);
     writer.Write(Output::PointerPositionLast, inputs.pointer_last);
     if (writer.Wants(Output::TexelSize) || writer.Wants(Output::TexelSizeHalf) ||

@@ -23,7 +23,22 @@ inline void ReadPuppetAnimationLayers(const owe::Json&                          
         owe::GetJsonValue(jLayer, "animation", layer.id);
         owe::GetJsonValue(jLayer, "blend", layer.blend);
         owe::GetJsonValue(jLayer, "rate", layer.rate);
-        owe::GetJsonValue(jLayer, "visible", layer.visible, false);
+        if (auto visible = jLayer.get("visible"_str); visible.is_some()) {
+            layer.visible_binding = Some((*visible)->clone());
+            if ((*visible)->is_boolean()) {
+                layer.visible = *(*visible)->as_bool();
+            } else if ((*visible)->is_object()) {
+                if (auto value = (*visible)->get("value"_str); value.is_some()) {
+                    if ((*value)->is_boolean()) {
+                        layer.visible = *(*value)->as_bool();
+                    } else if (auto numeric = (*value)->as_f64(); numeric.is_some()) {
+                        layer.visible = numeric->to_primitive() != 0.0;
+                    }
+                }
+                layer.visible_can_change = (*visible)->get("script"_str).is_some() ||
+                                           (*visible)->get("user"_str).is_some();
+            }
+        }
         owe::GetJsonValue(jLayer, "id", layer.layer_id, false);
         std::string name;
         owe::GetJsonValue(jLayer, "name", name, false);

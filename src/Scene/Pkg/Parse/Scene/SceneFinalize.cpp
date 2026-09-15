@@ -86,29 +86,69 @@ bool RegisterParticleTrailUniformSource(Scene& scene, const Arc<SceneNode>& node
     return true;
 }
 
+Option<Arc<UniformCameraResolver>> RuntimeCameraResolver(Scene& scene) {
+    auto active = scene.ActiveCameraHandle();
+    if (active.is_none()) return None();
+    auto resolver = Arc<UniformCameraResolver>::make((*active).clone());
+    auto names = scene.CameraNames();
+    for (usize i {}; i < names.len(); ++i) {
+        const auto& name = names[i];
+        auto camera = scene.CameraHandle(name.as_str());
+        if (camera.is_some()) resolver->Add(name.clone(), rstd::move(*camera));
+    }
+    return Some(rstd::move(resolver));
+}
+
+Option<Arc<UniformCameraResolver>> FinalizeRuntimeLayerSources(SceneParseContext& context,
+                                                               usize text_start,
+                                                               usize uniform_start,
+                                                               usize trail_start) {
+    auto& scene = *context.scene;
+    auto resolver = RuntimeCameraResolver(scene);
+    if (resolver.is_none()) return None();
+    auto active    = scene.ActiveCameraHandle();
+    auto registrar = dyn<UniformSourceRegistrar>::from_ref(scene);
+    auto writer    = dyn<UniformAttachmentWriter>::from_ref(scene);
+    auto camera_for = [&](const SceneNode& node) -> Option<Arc<SceneCamera>> {
+        if (! node.Camera().empty())
+            return scene.CameraHandle(rstd::cppstd::as_str(node.Camera()).unwrap());
+        if (node.Perspective()) return scene.CameraHandle("global_perspective"_str);
+        return Some((*active).clone());
+    };
+    for (usize i = text_start; i < context.text_uniform_configs.len(); ++i) {
+        auto& draft = context.text_uniform_configs[i];
+        auto node_id = scene.ResourceIndex().nodeId(*draft.node);
+        if (node_id.is_none()) continue;
+        auto state               = std::make_shared<text::TextUniformState>(draft.node.clone());
+        state->camera            = camera_for(*draft.node);
+        state->active_camera     = Some((*active).clone());
+        state->effect_projection = draft.effect_projection;
+        const auto source = registrar->Register(
+            Box<dyn<UniformSource>>::make(text::TextUniformSource { rstd::move(state) }));
+        (void)writer->AttachNode(*node_id, source, i32());
+    }
+    for (usize i = uniform_start; i < context.uniform_configs.len(); ++i) {
+        auto& entry = context.uniform_configs[i];
+        if (entry.config.object_id != i32() &&
+            context.ride_parent_parallax_ids.contains(entry.config.object_id))
+            entry.config.ride_parent_parallax = true;
+        (void)RegisterUniformNodeSources(
+            scene, context.uniform_state, *resolver, entry.node, entry.config);
+    }
+    for (usize i = trail_start; i < context.particle_trail_uniform_configs.len(); ++i)
+        (void)RegisterParticleTrailUniformSource(
+            scene,
+            context.particle_trail_uniform_configs[i].node,
+            context.particle_trail_uniform_configs[i].uniform_state);
+    return resolver;
+}
+
 void FinalizeUniformSources(SceneParseContext& context) {
     auto& scene = *context.scene;
     scene.RebuildResourceIndex();
 
     auto active_camera = scene.ActiveCameraHandle();
     if (active_camera.is_none()) return;
-    auto camera_for = [&](const SceneNode& node) -> Option<Arc<SceneCamera>> {
-        if (! node.Camera().empty()) {
-            return scene.CameraHandle(rstd::cppstd::as_str(node.Camera()).unwrap());
-        }
-        if (node.Perspective()) {
-            return scene.CameraHandle("global_perspective"_str);
-        }
-        return Some((*active_camera).clone());
-    };
-    auto camera_resolver = Arc<UniformCameraResolver>::make((*active_camera).clone());
-    auto camera_names    = scene.CameraNames();
-    camera_resolver->Reserve(camera_names.len());
-    for (usize index {}; index < camera_names.len(); ++index) {
-        const auto& name   = camera_names[index];
-        auto        camera = scene.CameraHandle(name.as_str());
-        if (camera.is_some()) camera_resolver->Add(name.clone(), rstd::move(*camera));
-    }
 
     auto ortho = scene.Ortho();
     context.uniform_state->SetOrtho(static_cast<float>(ortho[usize()].to_primitive()),
@@ -171,30 +211,8 @@ void FinalizeUniformSources(SceneParseContext& context) {
         .sources  = rstd::move(lighting_sources),
     });
 
-    for (auto& draft : context.text_uniform_configs) {
-        auto node_id = scene.ResourceIndex().nodeId(*draft.node);
-        if (node_id.is_none()) continue;
-        auto state               = std::make_shared<text::TextUniformState>(draft.node.clone());
-        state->camera            = camera_for(*draft.node);
-        state->active_camera     = Some((*active_camera).clone());
-        state->effect_projection = draft.effect_projection;
-        const auto source        = registrar->Register(
-            Box<dyn<UniformSource>>::make(text::TextUniformSource { rstd::move(state) }));
-        (void)writer->AttachNode(*node_id, source, i32());
-    }
-
-    for (auto& entry : context.uniform_configs) {
-        if (entry.config.object_id != i32() &&
-            context.ride_parent_parallax_ids.contains(entry.config.object_id)) {
-            entry.config.ride_parent_parallax = true;
-        }
-        (void)RegisterUniformNodeSources(
-            scene, context.uniform_state, camera_resolver, entry.node, entry.config);
-    }
-
-    for (auto& draft : context.particle_trail_uniform_configs) {
-        (void)RegisterParticleTrailUniformSource(scene, draft.node, draft.uniform_state);
-    }
+    auto camera_resolver = FinalizeRuntimeLayerSources(context, usize(), usize(), usize());
+    if (camera_resolver.is_none()) return;
 
     HashMap<PuppetLayer*, UniformSourceId> puppet_sources;
     context.puppet_layers->by_node.iter().for_each([&](auto entry) {
@@ -241,7 +259,7 @@ void FinalizeUniformSources(SceneParseContext& context) {
                  ortho_h              = context.ortho_h,
                  next_object_id       = context.next_synthetic_object_id,
                  uniform_state        = context.uniform_state.clone(),
-                 camera_resolver      = camera_resolver.clone()](
+                 camera_resolver      = (*camera_resolver).clone()](
                     SceneNode*                  owner,
                     script::LayerAssetReference request) mutable -> Option<Arc<SceneNode>> {
                     SceneNode* parent = owner && owner->Parent()
@@ -445,9 +463,25 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
                 if (node.is_none()) rstd_error("layer configuration is unsupported or unavailable");
                 return node;
             }));
+        // Sprite metadata must be bound before script init reads ITextureAnimation.
+        context.scene->RebuildResourceIndex();
         runtime.SetSceneRoot(context.scene->RootMut().as_raw_ptr());
         runtime.ClearLayerFactory();
         runtime.ClearLayerConfigFactory();
+        auto* scene_ptr = context.scene.get();
+        runtime.SetLayerConfigFactory(script::JsRuntime::LayerConfigFactory::make(
+            [scene_ptr](SceneNode* owner, Json config) -> Option<Arc<SceneNode>> {
+                auto context = scene_ptr->ExtensionMut<SceneParseContext>();
+                if (context.is_none()) return None();
+                const auto text_start    = (**context).text_uniform_configs.len();
+                const auto uniform_start = (**context).uniform_configs.len();
+                const auto trail_start   = (**context).particle_trail_uniform_configs.len();
+                auto node = InstantiateLayerConfiguration(**context, owner, config);
+                if (node.is_some())
+                    (void)FinalizeRuntimeLayerSources(**context, text_start, uniform_start, trail_start);
+                return node;
+            }));
+        context.installed_script_scene = (*context.script_scene).get();
         owe::script::InstallScriptScene(*context.scene,
                                         context.script_scene.take().unwrap_unchecked());
     }

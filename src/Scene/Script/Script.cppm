@@ -6,6 +6,7 @@ import wescene.core;
 import wescene.json;
 import rstd;
 import rstd.cppstd;
+import wescene.pkg.puppet;
 import wescene.scene;
 
 export namespace owe::script
@@ -70,7 +71,7 @@ enum class FieldKind
 // the audio-response cluster (and the parallax cluster) actually read.
 struct FrameInputs {
     float                frametime { 0.0f };   // seconds since last frame
-    float                runtime { 0.0f };     // seconds since wallpaper start
+    double               runtime { 0.0 };     // seconds since wallpaper start
     float                time_of_day { 0.0f }; // 0..1, 0=midnight, 0.5=noon
     float                canvas_w { 1920.0f };
     float                canvas_h { 1080.0f };
@@ -131,6 +132,7 @@ class FieldScript;
 enum class ScriptPropertyObjectKind
 {
     Layer,
+    AnimationLayer,
     Effect,
     Material,
 };
@@ -140,8 +142,11 @@ struct ScriptBindingContext {
     ScriptPropertyObjectKind                 object_kind { ScriptPropertyObjectKind::Layer };
     String                                   property;
     Option<Arc<owe::SceneAnimationPlayback>> animation;
+    Option<Arc<owe::PuppetLayer>>            puppet_layer;
+    rstd::int32_t                            puppet_animation_layer_id { 0 };
     Option<owe::SceneImageEffectRef>         effect;
     owe::SceneMaterial*                      material { nullptr };
+    bool                                     capture_init_return { false };
 
     ScriptBindingContext() = default;
     ScriptBindingContext(owe::SceneNode* value): layer(value) {}
@@ -149,6 +154,9 @@ struct ScriptBindingContext {
 
     static auto ForLayer(owe::SceneNode*, ref<str>,
                          Option<Arc<owe::SceneAnimationPlayback>> = None()) -> ScriptBindingContext;
+    static auto ForAnimationLayer(owe::SceneNode*, Arc<owe::PuppetLayer>, rstd::int32_t,
+                                  ref<str>,
+                                  Arc<owe::SceneAnimationPlayback>) -> ScriptBindingContext;
     static auto ForEffect(owe::SceneNode*, owe::SceneImageEffectRef, ref<str>,
                           Option<Arc<owe::SceneAnimationPlayback>> = None())
         -> ScriptBindingContext;
@@ -219,7 +227,8 @@ public:
 
     // Drive every alive FieldScript once. Invokes their cached `update`
     // export and stores the coerced return into FieldScript::last_value().
-    // Exceptions are caught and logged once per script_sha.
+    // An update exception is recorded against its binding, preserves the last
+    // successful value, and prevents only that binding's later update calls.
     void TickAll(slice<owe::SceneAnimationEventDispatch> animation_events = {});
 
     // Walk every live FieldScript created by this runtime. Caller-provided
@@ -234,6 +243,7 @@ public:
     // text writes from scripts bound to non-text fields (e.g. clock
     // scripts attached to `visible`).
     void RegisterTextSetter(owe::SceneNode* node, std::function<void(std::string_view)> setter);
+    void RegisterTextGetter(owe::SceneNode* node, std::function<std::string()> getter);
     void RegisterTextAlignSetters(owe::SceneNode* node, std::string horizontal,
                                   std::string vertical, double point_size,
                                   std::function<void(std::string_view)> set_horizontal,

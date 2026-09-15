@@ -24,14 +24,23 @@ sources = [
 
 [usage]
 public-include-directories = ["third_party", "src", "src/Core"]
-public-definitions = ["FT_SIZEOF_LONG=8"]
 options = [
   "-Wextra",
   "-Wno-missing-field-initializers",
   "-Wno-gnu-zero-variadic-macro-arguments",
 ]
 threads = true
+
+[[when]]
+condition = 'target.family == "unix"'
+[when.usage]
+public-definitions = ["FT_SIZEOF_LONG=8"]
 system-libraries = ["dl"]
+
+[[when]]
+condition = 'target.os == "windows"'
+[when.usage]
+public-definitions = ["FT_SIZEOF_LONG=4", "NOMINMAX", "WIN32_LEAN_AND_MEAN"]
 
 [dependencies.rstd-std]
 workspace = true

@@ -1,7 +1,13 @@
 #include <rstd/test/gtest.hpp>
 
+#include <bit>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
 import eigen;
 import rstd.cppstd;
+import wescene.core;
 import wescene.fs;
 import wescene.pkg_fs;
 import wescene.pkg.parse;
@@ -14,6 +20,239 @@ using rstd::sync::Arc;
 
 namespace
 {
+
+void AppendU32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
+    for (unsigned shift = 0; shift < 32; shift += 8)
+        bytes.push_back(static_cast<std::uint8_t>(value >> shift));
+}
+
+void AppendU16(std::vector<std::uint8_t>& bytes, std::uint16_t value) {
+    bytes.push_back(static_cast<std::uint8_t>(value));
+    bytes.push_back(static_cast<std::uint8_t>(value >> 8));
+}
+
+void AppendFloat(std::vector<std::uint8_t>& bytes, float value) {
+    AppendU32(bytes, std::bit_cast<std::uint32_t>(value));
+}
+
+void AppendString(std::vector<std::uint8_t>& bytes, std::string_view text) {
+    bytes.insert(bytes.end(), text.begin(), text.end());
+    bytes.push_back(0);
+}
+
+std::vector<std::uint8_t> MdlPrefix(std::uint32_t meshes = 0) {
+    std::vector<std::uint8_t> bytes;
+    AppendString(bytes, "MDLV0023");
+    AppendU32(bytes, 0);
+    AppendU32(bytes, 1);
+    AppendU32(bytes, meshes);
+    return bytes;
+}
+
+std::size_t BeginMdlBlock(std::vector<std::uint8_t>& bytes, std::string_view tag) {
+    AppendString(bytes, tag);
+    auto offset = bytes.size();
+    AppendU32(bytes, 0);
+    return offset;
+}
+
+void FinishMdlBlock(std::vector<std::uint8_t>& bytes, std::size_t end_field) {
+    auto end = static_cast<std::uint32_t>(bytes.size());
+    for (unsigned i = 0; i < 4; ++i)
+        bytes[end_field + i] = static_cast<std::uint8_t>(end >> (i * 8));
+}
+
+void AppendEmptyMdls(std::vector<std::uint8_t>& bytes, std::uint16_t extras = 0) {
+    auto end_field = BeginMdlBlock(bytes, "MDLS0004");
+    AppendU16(bytes, 0); // bones
+    AppendU16(bytes, 0); // padding
+    AppendU16(bytes, extras);
+    bytes.insert(bytes.end(), 12, 0); // header fields and three absent metadata arrays
+    FinishMdlBlock(bytes, end_field);
+}
+
+void AppendAffine(std::vector<std::uint8_t>& bytes, float x, float y) {
+    for (float value : { 1.0f,
+                         0.0f,
+                         0.0f,
+                         0.0f,
+                         0.0f,
+                         1.0f,
+                         0.0f,
+                         0.0f,
+                         0.0f,
+                         0.0f,
+                         1.0f,
+                         0.0f,
+                         x,
+                         y,
+                         0.0f,
+                         1.0f })
+        AppendFloat(bytes, value);
+}
+
+void AppendBone(std::vector<std::uint8_t>& bytes, std::uint32_t parent, float x, float y) {
+    AppendString(bytes, "");
+    AppendU32(bytes, 3); // IK chain bone
+    AppendU32(bytes, parent);
+    AppendU32(bytes, 64);
+    AppendAffine(bytes, x, y);
+    AppendString(bytes, "{}");
+}
+
+void AppendBoneFrames(std::vector<std::uint8_t>& bytes, float x, float y) {
+    for (unsigned frame = 0; frame < 2; ++frame) {
+        AppendFloat(bytes, x);
+        AppendFloat(bytes, y);
+        AppendFloat(bytes, 0.0f);
+        for (unsigned i = 0; i < 3; ++i) AppendFloat(bytes, 0.0f);
+        for (unsigned i = 0; i < 3; ++i) AppendFloat(bytes, 1.0f);
+    }
+}
+
+std::vector<std::uint8_t> MdlWithIkRig(float end_segment_length = 3.0f) {
+    auto bytes    = MdlPrefix();
+    auto mdls_end = BeginMdlBlock(bytes, "MDLS0004");
+    AppendU16(bytes, 3);
+    AppendU16(bytes, 0);
+    AppendBone(bytes, owe::Puppet::NO_PARENT, 0.0f, 0.0f);
+    AppendBone(bytes, 0, 2.0f, 0.0f);
+    AppendBone(bytes, 1, 3.0f, 0.0f);
+
+    AppendU16(bytes, 2); // one paired-controller set
+    bytes.push_back(0);
+    AppendU32(bytes, 2);
+    AppendU32(bytes, 1);
+    AppendAffine(bytes, 0.0f, 4.0f);
+    bytes.push_back(0);
+    AppendU32(bytes, 2);
+    AppendU32(bytes, 0);
+    AppendAffine(bytes, 5.0f, 0.0f);
+
+    bytes.push_back(0);
+    AppendU32(bytes, 0);
+    AppendU16(bytes, 3);
+    AppendFloat(bytes, 0.0f);
+    AppendFloat(bytes, 2.0f);
+    AppendFloat(bytes, end_segment_length);
+    AppendU16(bytes, 1);
+    AppendU32(bytes, 1);
+    AppendFloat(bytes, 1.0f);
+    AppendFloat(bytes, 0.0f);
+    AppendFloat(bytes, 0.0f);
+    AppendU16(bytes, 1);
+    AppendU32(bytes, 2);
+    AppendFloat(bytes, 1.0f);
+    AppendFloat(bytes, 0.0f);
+    AppendFloat(bytes, 0.0f);
+    AppendU16(bytes, 0);
+
+    AppendU16(bytes, 1);
+    AppendU32(bytes, 0);
+    AppendU32(bytes, 1);
+    AppendU32(bytes, 1);
+    AppendU16(bytes, 1);
+    AppendU32(bytes, 0);
+    AppendU16(bytes, 1);
+    AppendU32(bytes, 2);
+    AppendU32(bytes, 1);
+    AppendFloat(bytes, 5.0f);
+    AppendU32(bytes, 0);
+    AppendU16(bytes, 3);
+    AppendU32(bytes, 0);
+    AppendU32(bytes, 1);
+    AppendU32(bytes, 2);
+    bytes.insert(bytes.end(), 3, 0); // absent metadata trailer tables
+    FinishMdlBlock(bytes, mdls_end);
+
+    auto mdla_end = BeginMdlBlock(bytes, "MDLA0003");
+    AppendU32(bytes, 1);
+    AppendU32(bytes, 1);
+    AppendU32(bytes, 0);
+    AppendString(bytes, "clip");
+    AppendString(bytes, "loop");
+    AppendFloat(bytes, 1.0f);
+    AppendU32(bytes, 1); // length: two samples
+    AppendU32(bytes, 0);
+    AppendU32(bytes, 3);
+    for (float x : { 0.0f, 2.0f, 3.0f }) {
+        AppendU32(bytes, 0);
+        AppendU32(bytes, 72);
+        AppendBoneFrames(bytes, x, 0.0f);
+    }
+    AppendU32(bytes, 0); // trans_flag
+    AppendU32(bytes, 72);
+    AppendBoneFrames(bytes, 0.0f, 4.0f);
+    AppendU32(bytes, 0); // next track separator
+    AppendU32(bytes, 72);
+    AppendBoneFrames(bytes, 5.0f, 0.0f);
+    AppendU32(bytes, 0); // controller-track trailer
+    bytes.push_back(0);  // no per-bone blend curves
+    AppendU32(bytes, 0); // no animation events
+    FinishMdlBlock(bytes, mdla_end);
+    return bytes;
+}
+
+std::vector<std::uint8_t> MdlWithPlayMode(std::string_view mode, bool terminated) {
+    auto bytes = MdlPrefix();
+    AppendEmptyMdls(bytes);
+    auto end_field = BeginMdlBlock(bytes, "MDLA0001");
+    AppendU32(bytes, 1); // animations
+    AppendU32(bytes, 1); // id
+    AppendU32(bytes, 0);
+    AppendString(bytes, "clip");
+    bytes.insert(bytes.end(), mode.begin(), mode.end());
+    if (terminated) bytes.push_back(0);
+    FinishMdlBlock(bytes, end_field);
+    if (! terminated) bytes.push_back(0); // must not be consumed beyond MDLA's boundary
+    return bytes;
+}
+
+bool ParseMdlBytes(const std::vector<std::uint8_t>& bytes, owe::OfflineExecutionContext& context,
+                   owe::Mdl* parsed_mdl = nullptr) {
+    static unsigned serial = 0;
+    auto root = std::filesystem::temp_directory_path() /
+                ("owe-mdl-parser-errors-" + std::to_string(rstd::process::id().to_primitive()) +
+                 "-" + std::to_string(++serial));
+    if (! std::filesystem::create_directory(root)) {
+        ADD_FAILURE() << "Could not create a new MDL fixture directory";
+        return false;
+    }
+    auto file = root / "fixture.mdl";
+    {
+        std::ofstream output(file, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+        EXPECT_TRUE(output.good());
+    }
+    bool parsed = false;
+    {
+        auto physical = owe::fs::make_physical_fs(owe::fs::ToPath(root.string()));
+        if (physical.is_err()) {
+            ADD_FAILURE() << "Could not mount the MDL fixture directory";
+        } else {
+            owe::fs::VFS vfs;
+            auto mounted = vfs.mount("/assets"_str, rstd::move(physical).unwrap_unchecked());
+            EXPECT_TRUE(mounted.is_ok());
+            if (mounted.is_ok()) {
+                owe::OfflineExecutionScope scope(context);
+                owe::Mdl                   local_mdl;
+                auto&                      mdl = parsed_mdl == nullptr ? local_mdl : *parsed_mdl;
+                parsed                         = owe::MdlParser::Parse("fixture.mdl"_str, vfs, mdl);
+            }
+        }
+    }
+    std::filesystem::remove(file);
+    std::filesystem::remove(root);
+    return parsed;
+}
+
+bool HasDiagnostic(const owe::OfflineExecutionContext& context, std::string_view text) {
+    return std::any_of(
+        context.diagnostics.begin(), context.diagnostics.end(), [&](const auto& message) {
+            return message.find(text) != std::string::npos;
+        });
+}
 
 std::uint32_t MaxMeshIndex(const owe::Mdl::Mesh& mesh) {
     std::uint32_t max_index = 0;
@@ -38,6 +277,134 @@ std::uint32_t CountUvSeamTriangles(const owe::Mdl::Mesh& mesh) {
 }
 
 } // namespace
+
+TEST(MdlParser, AcceptsKnownEmptyMdlsMetadata) {
+    auto bytes = MdlPrefix();
+    AppendEmptyMdls(bytes);
+    owe::OfflineExecutionContext context;
+    EXPECT_TRUE(ParseMdlBytes(bytes, context));
+    EXPECT_FALSE(context.failed);
+}
+
+TEST(MdlParser, DistinguishesMissingFileFromParseFailure) {
+    owe::fs::VFS vfs;
+    owe::Mdl     mdl;
+    bool         missing = false;
+    EXPECT_FALSE(owe::MdlParser::Parse("missing-puppet.mdl"_str, vfs, mdl, &missing));
+    EXPECT_TRUE(missing);
+}
+
+TEST(MdlParser, RejectsTruncatedMdlsIkControllerTable) {
+    auto bytes = MdlPrefix();
+    AppendEmptyMdls(bytes, 8);
+    owe::OfflineExecutionContext context;
+    EXPECT_FALSE(ParseMdlBytes(bytes, context));
+    EXPECT_TRUE(context.failed);
+    EXPECT_TRUE(HasDiagnostic(context, "fixture.mdl"));
+    EXPECT_TRUE(HasDiagnostic(context, "truncated MDLS IK controller table"));
+}
+
+TEST(MdlParser, ParsesSupportedIkRigAndControllerTracks) {
+    auto                         bytes = MdlWithIkRig();
+    owe::OfflineExecutionContext context;
+    owe::Mdl                     mdl;
+    EXPECT_TRUE(ParseMdlBytes(bytes, context, &mdl));
+    EXPECT_FALSE(context.failed);
+
+    ASSERT_TRUE(mdl.puppet.is_some());
+    const auto& puppet = **mdl.puppet;
+    ASSERT_EQ(puppet.ik_controllers.len(), usize(2));
+    EXPECT_EQ(puppet.ik_controllers[usize(0)].bone_index, 2u);
+    EXPECT_EQ(puppet.ik_controllers[usize(0)].type, 1u);
+    EXPECT_FLOAT_EQ(puppet.ik_controllers[usize(0)].bind_xform.translation().y(), 4.0f);
+    EXPECT_EQ(puppet.ik_controllers[usize(1)].bone_index, 2u);
+    EXPECT_EQ(puppet.ik_controllers[usize(1)].type, 0u);
+    EXPECT_FLOAT_EQ(puppet.ik_controllers[usize(1)].bind_xform.translation().x(), 5.0f);
+
+    ASSERT_EQ(puppet.ik_nodes.len(), usize(3));
+    EXPECT_FLOAT_EQ(puppet.ik_nodes[usize(1)].length, 2.0f);
+    EXPECT_FLOAT_EQ(puppet.ik_nodes[usize(2)].length, 3.0f);
+    ASSERT_EQ(puppet.ik_nodes[usize(0)].children.len(), usize(1));
+    EXPECT_EQ(puppet.ik_nodes[usize(0)].children[usize()].bone_index, 1u);
+    ASSERT_EQ(puppet.ik_nodes[usize(1)].children.len(), usize(1));
+    EXPECT_EQ(puppet.ik_nodes[usize(1)].children[usize()].bone_index, 2u);
+
+    ASSERT_EQ(puppet.ik_chains.len(), usize(1));
+    const auto& chain = puppet.ik_chains[usize()];
+    EXPECT_EQ(chain.start_bone, 0u);
+    EXPECT_EQ(chain.target_controller_index, 1u);
+    EXPECT_EQ(chain.end_bone, 2u);
+    EXPECT_FLOAT_EQ(chain.length, 5.0f);
+    ASSERT_EQ(chain.bones.len(), usize(3));
+    EXPECT_EQ(chain.bones[usize(0)], 0u);
+    EXPECT_EQ(chain.bones[usize(1)], 1u);
+    EXPECT_EQ(chain.bones[usize(2)], 2u);
+
+    ASSERT_EQ(puppet.anims.len(), usize(1));
+    const auto& animation = puppet.anims[usize()];
+    EXPECT_TRUE(animation.trans.is_none());
+    ASSERT_EQ(animation.controller_tracks.len(), usize(2));
+    ASSERT_EQ(animation.controller_tracks[usize(0)].frames.len(), usize(2));
+    EXPECT_FLOAT_EQ(animation.controller_tracks[usize(0)].frames[usize()].position.y(), 4.0f);
+    ASSERT_EQ(animation.controller_tracks[usize(1)].frames.len(), usize(2));
+    EXPECT_FLOAT_EQ(animation.controller_tracks[usize(1)].frames[usize()].position.x(), 5.0f);
+}
+
+TEST(MdlParser, RejectsNonFiniteIkBoneLength) {
+    auto                         bytes = MdlWithIkRig(std::numeric_limits<float>::quiet_NaN());
+    owe::OfflineExecutionContext context;
+    EXPECT_FALSE(ParseMdlBytes(bytes, context));
+    EXPECT_TRUE(context.failed);
+    EXPECT_TRUE(HasDiagnostic(context, "invalid MDLS IK bone length"));
+}
+
+TEST(MdlParser, RejectsInvalidUtf8MaterialName) {
+    auto bytes = MdlPrefix(1);
+    bytes.insert(bytes.end(), { 0xff, 0 });
+    owe::OfflineExecutionContext context;
+    EXPECT_FALSE(ParseMdlBytes(bytes, context));
+    EXPECT_TRUE(context.failed);
+    EXPECT_TRUE(HasDiagnostic(context, "invalid UTF-8 in material name"));
+}
+
+TEST(MdlParser, BoundsBoneNameToMdlsBlock) {
+    auto bytes     = MdlPrefix();
+    auto end_field = BeginMdlBlock(bytes, "MDLS0004");
+    AppendU16(bytes, 1);
+    AppendU16(bytes, 0);
+    bytes.insert(bytes.end(), { 'b', 'o', 'n', 'e' });
+    FinishMdlBlock(bytes, end_field);
+    bytes.push_back(0); // outside the declared MDLS block
+    owe::OfflineExecutionContext context;
+    EXPECT_FALSE(ParseMdlBytes(bytes, context));
+    EXPECT_TRUE(context.failed);
+    EXPECT_TRUE(HasDiagnostic(context, "unterminated bone name"));
+    EXPECT_TRUE(HasDiagnostic(context, "offset=38, boundary=42"));
+}
+
+TEST(MdlParser, PropagatesInvalidUtf8PlayMode) {
+    auto                         bytes = MdlWithPlayMode(std::string_view("\xff", 1), true);
+    owe::OfflineExecutionContext context;
+    EXPECT_FALSE(ParseMdlBytes(bytes, context));
+    EXPECT_TRUE(context.failed);
+    EXPECT_TRUE(HasDiagnostic(context, "invalid UTF-8 in animation play_mode"));
+}
+
+TEST(MdlParser, BoundsPlayModeToMdlaBlock) {
+    auto                         bytes = MdlWithPlayMode("loop", false);
+    owe::OfflineExecutionContext context;
+    EXPECT_FALSE(ParseMdlBytes(bytes, context));
+    EXPECT_TRUE(context.failed);
+    EXPECT_TRUE(HasDiagnostic(context, "unterminated animation play_mode"));
+}
+
+TEST(MdlParser, RejectsUnsupportedPlayModeWithoutAssertion) {
+    auto                         bytes = MdlWithPlayMode("unknown", true);
+    owe::OfflineExecutionContext context;
+    EXPECT_FALSE(ParseMdlBytes(bytes, context));
+    EXPECT_TRUE(context.failed);
+    EXPECT_TRUE(HasDiagnostic(context, "unsupported animation play_mode"));
+}
 
 TEST(Puppet, ArcOwnedLayerExposesBorrowedTransforms) {
     auto              puppet = Arc<owe::Puppet>::make();

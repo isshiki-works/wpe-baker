@@ -35,6 +35,11 @@ bool FinPass::setResultRequest(rstd::Option<TextureRequest> request) {
     return SetTextureRequestIfChanged(m_desc.result_request, std::move(request));
 }
 
+void FinPass::setGraphSource(std::string name, rstd::Option<resource::TextureUseHandle> use) {
+    m_desc.result = std::move(name);
+    m_desc.graph_result_use = use;
+}
+
 void FinPass::resetResourceUses() {
     m_desc.result_use   = rstd::None();
     m_desc.external_use = rstd::None();
@@ -42,7 +47,10 @@ void FinPass::resetResourceUses() {
 
 void FinPass::declareResources(ResourceDeclarationContext& context) {
     resetResourceUses();
-    if (m_desc.result_request.is_some()) {
+    if (m_desc.graph_result_use.is_some()) {
+        // Bind the graph version itself, not a second allocation by logical name.
+        m_desc.result_use = m_desc.graph_result_use;
+    } else if (m_desc.result_request.is_some()) {
         m_desc.result_use = rstd::Some(
             context.AddTexture(m_desc.result_request->clone(), resource::ResourceAccess::Read));
     }

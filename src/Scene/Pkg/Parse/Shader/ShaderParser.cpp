@@ -38,6 +38,44 @@ struct DeclMatch {
     ref<str>    array; // "[N]" or empty
 };
 
+inline int VectorDimension(ref<str> type) {
+    if (type == "vec2"_str || type == "ivec2"_str || type == "uvec2"_str || type == "bvec2"_str ||
+        type == "float2"_str || type == "int2"_str || type == "uint2"_str || type == "bool2"_str)
+        return 2;
+    if (type == "vec3"_str || type == "ivec3"_str || type == "uvec3"_str || type == "bvec3"_str ||
+        type == "float3"_str || type == "int3"_str || type == "uint3"_str || type == "bool3"_str)
+        return 3;
+    if (type == "vec4"_str || type == "ivec4"_str || type == "uvec4"_str || type == "bvec4"_str ||
+        type == "float4"_str || type == "int4"_str || type == "uint4"_str || type == "bool4"_str)
+        return 4;
+    return 0;
+}
+
+inline bool IsValidVectorSwizzle(ref<str> swizzle, int dimension) {
+    if (dimension == 0 || swizzle.is_empty() || swizzle.size() > rstd::usize(dimension)) return false;
+    enum class Family { None, XYZW, RGBA } family { Family::None };
+    for (auto byte : swizzle) {
+        const char c = static_cast<char>(byte.to_primitive());
+        int index = -1;
+        Family current = Family::None;
+        switch (c) {
+        case 'x': index = 0; current = Family::XYZW; break;
+        case 'y': index = 1; current = Family::XYZW; break;
+        case 'z': index = 2; current = Family::XYZW; break;
+        case 'w': index = 3; current = Family::XYZW; break;
+        case 'r': index = 0; current = Family::RGBA; break;
+        case 'g': index = 1; current = Family::RGBA; break;
+        case 'b': index = 2; current = Family::RGBA; break;
+        case 'a': index = 3; current = Family::RGBA; break;
+        default: return false;
+        }
+        if (family != Family::None && family != current) return false;
+        if (index >= dimension) return false;
+        family = current;
+    }
+    return true;
+}
+
 // Try to match `[ws]<storage_kw> <type> <name>[opt-array][ws];` on the line
 // starting at `line_start`. Anchored — leading non-whitespace fails it.
 inline Option<DeclMatch> TryParseDeclLine(ref<str> src, usize line_start,
@@ -63,6 +101,17 @@ inline Option<DeclMatch> TryParseDeclLine(ref<str> src, usize line_start,
     c.SkipHSpace();
     auto array = c.ReadArraySuffix();
     c.SkipHSpace();
+    const bool is_io = kw == "attribute"_str || kw == "varying"_str || kw == "in"_str || kw == "out"_str;
+    // Some workshop fragment shaders use an invalid declaration-like swizzle,
+    // e.g. `varying vec4 v_Size.xy;`. Preserve the actual vector identifier
+    // and type for the generated stage interface, but accept only one complete
+    // same-family swizzle on a non-array IO declaration. Uniforms and arbitrary
+    // member/call/index expressions remain strict failures.
+    if (is_io && array.is_none() && c.MatchChar('.')) {
+        auto swizzle = c.ReadIdent();
+        if (! swizzle || ! IsValidVectorSwizzle(*swizzle, VectorDimension(tn->type))) return None();
+        c.SkipHSpace();
+    }
     if (! c.MatchChar(';')) return None();
 
     DeclMatch m;
@@ -400,6 +449,73 @@ inline shader_lex::Token NextShaderToken(shader_lex::Lexer& lx) {
 inline bool PunctIs(shader_lex::Token token, char c) {
     return token.kind == shader_lex::TokenKind::Punct && token.text.size() == rstd::usize(1) &&
            static_cast<char>(token.text[rstd::usize()].to_primitive()) == c;
+}
+
+inline bool IsFunctionQualifier(ref<str> token) {
+    return token == "static"_str || token == "inline"_str || token == "extern"_str ||
+           token == "precise"_str || token == "row_major"_str || token == "column_major"_str;
+}
+
+// glslang rejects a non-void function with an empty body even if an inactive
+// preprocessor branch left it behind. Remove only an otherwise-unreferenced,
+// top-level definition; active empty functions still reach glslang's error.
+inline std::string StripUnusedEmptyNonVoidFunctions(std::string src) {
+    auto source = rstd::cppstd::as_str(src).unwrap();
+    shader_lex::Lexer lexer(source);
+    std::vector<shader_lex::Token> tokens;
+    for (;;) {
+        auto token = NextShaderToken(lexer);
+        if (token.kind == shader_lex::TokenKind::Eof) break;
+        tokens.push_back(token);
+    }
+
+    std::vector<std::pair<std::size_t, std::size_t>> removals;
+    int                                              brace_depth {};
+    for (std::size_t i = 0; i < tokens.size(); ++i) {
+        const auto& token = tokens[i];
+        if (PunctIs(token, '{')) {
+            ++brace_depth;
+            continue;
+        }
+        if (PunctIs(token, '}')) {
+            if (brace_depth > 0) --brace_depth;
+            continue;
+        }
+        if (brace_depth != 0 || token.kind != shader_lex::TokenKind::Ident || token.text == "void"_str ||
+            (i > 0 && tokens[i - 1].kind == shader_lex::TokenKind::Ident &&
+             IsFunctionQualifier(tokens[i - 1].text)) ||
+            i + 2 >= tokens.size() || tokens[i + 1].kind != shader_lex::TokenKind::Ident ||
+            ! PunctIs(tokens[i + 2], '('))
+            continue;
+
+        std::size_t close_paren = i + 2;
+        int         paren_depth = 0;
+        for (; close_paren < tokens.size(); ++close_paren) {
+            if (PunctIs(tokens[close_paren], '(')) ++paren_depth;
+            if (PunctIs(tokens[close_paren], ')') && --paren_depth == 0) break;
+        }
+        if (close_paren + 2 >= tokens.size() || ! PunctIs(tokens[close_paren], ')') ||
+            ! PunctIs(tokens[close_paren + 1], '{') || ! PunctIs(tokens[close_paren + 2], '}'))
+            continue;
+
+        const auto name = tokens[i + 1].text;
+        const auto definitions = std::count_if(tokens.begin(), tokens.end(), [name](const auto& candidate) {
+            return candidate.kind == shader_lex::TokenKind::Ident && candidate.text == name;
+        });
+        if (definitions != 1) continue;
+
+        removals.emplace_back(tokens[i].offset.to_primitive(),
+                              (tokens[close_paren + 2].offset + tokens[close_paren + 2].text.size())
+                                  .to_primitive());
+        i = close_paren + 2;
+    }
+
+    for (const auto& [begin, end] : removals) {
+        for (std::size_t i = begin; i < end; ++i) {
+            if (src[i] != '\n' && src[i] != '\r') src[i] = ' ';
+        }
+    }
+    return src;
 }
 
 // Legacy WE shaders sometimes address audio float arrays as std140 vec4 groups.
@@ -798,12 +914,14 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
     // the prologue turn GLSL types/intrinsics into HLSL equivalents.
     vulkan::SourceLang lang = vulkan::SourceLang::Hlsl;
     std::string        src;
-    if (! vulkan::Preprocess(with_prologue, type, lang, src)) {
+    const bool         preprocessed = vulkan::Preprocess(with_prologue, type, lang, src);
+    if (! preprocessed) {
         // Fall through: subsequent compile will fail loudly with the same
         // diagnostics. Keep with_prologue so the failing path matches what
         // a developer would see if they bypassed the preprocess step.
         src = std::move(with_prologue);
     }
+    if (preprocessed) src = StripUnusedEmptyNonVoidFunctions(std::move(src));
     auto source = rstd::cppstd::as_str(src).unwrap();
 
     // GS source uses `in`/`out` storage classes; VS/FS use `attribute`/`varying`.

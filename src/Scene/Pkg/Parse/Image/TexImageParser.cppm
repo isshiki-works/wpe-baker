@@ -94,6 +94,8 @@ struct TexFormatVersion {
 auto ParseImages(ref<dyn<IImageParser>> parser, slice<String> names, usize max_workers = usize(4))
     -> Vec<Result<Arc<Image>, ImageParseError>>;
 
+auto ProbeVideoDuration(fs::VFS&, ref<str>) -> Option<f64>;
+
 class TexImageParser {
 public:
     TexImageParser(fs::VFS* vfs): m_vfs(vfs) {}

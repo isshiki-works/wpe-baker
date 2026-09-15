@@ -24,6 +24,7 @@ struct UniformTex {
         }
     };
     String               material; // unique key for material override
+    i32                  slot {};
     String               label;    // editor display name
     String               default_; // default texture path or `_rt_*`
     String               mode;     // opacitymask / rgbmask / flowmask
@@ -33,7 +34,7 @@ struct UniformTex {
     bool                 requireany { false };
     HashMap<String, i32> require;
 
-    // Corpus-observed extras (parsed, not yet consumed).
+    // Corpus-observed editor metadata.
     bool   hidden { false };
     bool   nonremovable { false };
     String group;
@@ -52,6 +53,7 @@ struct UniformTex {
         for (const auto& component : components) cloned_components.push(component.clone());
         return {
             .material          = material.clone(),
+            .slot              = slot,
             .label             = label.clone(),
             .default_          = default_.clone(),
             .mode              = mode.clone(),

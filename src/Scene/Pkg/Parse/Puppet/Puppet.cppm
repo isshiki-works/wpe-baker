@@ -3,6 +3,7 @@ module;
 export module wescene.pkg.puppet;
 import eigen;
 import wescene.core;
+import wescene.json;
 import wescene.scene;
 import rstd;
 
@@ -155,6 +156,9 @@ public:
         String         name;
 
         Vec<BoneTrack> bone_tracks;
+        // MDLS IK controller animation, dense in ik_controllers order.
+        // Each track uses the same fps/length interpolation as bone_tracks.
+        Vec<BoneTrack> controller_tracks;
 
         // mdla>=3 trans block (presence gated by trans_flag).
         Option<AnimTrans> trans;
@@ -182,45 +186,35 @@ public:
         InterpolationInfo getInterpolationInfo(double* cur_time) const;
     };
 
-    // MDLS v3 IK chain configuration. Schema derived from a single corpus
-    // sample (hexpat MDLSBlock extras_flag==2 path); fields kept raw.
-    struct BoneDir {
-        uint32_t        bone_id;
-        array<float, 3> dir;
+    struct IkController {
+        uint32_t        bone_index { 0 };
+        uint32_t        type { 0 }; // 0=target, 1=orientation/pole controller.
+        Eigen::Affine3f bind_xform { Eigen::Affine3f::Identity() };
     };
-    struct ChainBoneDir {
-        uint16_t        chain_id;
-        uint32_t        bone_id;
-        array<float, 3> dir;
+    struct IkChild {
+        uint32_t bone_index { 0 };
+        // Unit child-edge direction after the parent's bind-space linear transform.
+        Eigen::Vector3f bind_direction { 0.0f, 0.0f, 0.0f };
     };
-    struct BoneCond {
-        uint16_t cnt;
-        uint32_t id;
-        uint32_t child;
-        uint32_t val;
+    struct IkNode {
+        float        length { 0.0f };
+        Vec<IkChild> children;
     };
-    struct IkConfig {
-        Eigen::Matrix4f           chain_a_target { Eigen::Matrix4f::Identity() };
-        uint8_t                   ik_version { 0 };
-        array<uint32_t, 2>        ik_header {};
-        Eigen::Matrix4f           chain_b_target { Eigen::Matrix4f::Identity() };
-        array<uint8_t, 7>         ik_flags {};
-        array<Eigen::Vector3f, 6> pole_targets {};
-        Vec<BoneDir>              rest_rotations;
-        Vec<ChainBoneDir>         ik_targets;
-        Option<BoneDir>           ik_target_root;
-        BoneCond                  ik_constraint {};
-        array<Vec<uint32_t>, 2>   ik_bone_lists;
-        uint32_t                  ik_chain_count { 0 };
-        array<float, 2>           ik_chain_length {};
-        Vec<uint32_t>             ik_chain_bones;
+    struct IkChain {
+        uint32_t      start_bone { 0 };
+        uint32_t      target_controller_index { 0 };
+        uint32_t      end_bone { 0 };
+        float         length { 0.0f };
+        Vec<uint32_t> bones;
     };
 
 public:
-    Vec<Bone>        bones;
-    Vec<Animation>   anims;
-    Vec<Attachment>  attachments;
-    Option<IkConfig> ik_config;
+    Vec<Bone>         bones;
+    Vec<Animation>    anims;
+    Vec<Attachment>   attachments;
+    Vec<IkController> ik_controllers;
+    Vec<IkNode>       ik_nodes;
+    Vec<IkChain>      ik_chains;
 
     // MDLV21 puppets store bones as world-anchored (each `local_bind.t` is
     // a puppet-local position, not parent-relative) and sprite vertices live
@@ -252,6 +246,11 @@ public:
         bool          visible { true };
         double        cur_time { 0.0f };
 
+        // Preserve the authored animationlayers[].visible object so the scene
+        // parser can wire its script to this exact puppet animation layer.
+        Option<Json> visible_binding;
+        bool         visible_can_change { false };
+
         // Schema-only absorption (renderer reads only id/rate/blend/visible).
         rstd::int32_t layer_id { 0 };     // animationlayers[].id (was unread)
         String        name;               // animationlayers[].name (was unread)
@@ -270,6 +269,12 @@ public:
     Option<Eigen::Affine3f> boneTransform(uint32_t index, double time) noexcept;
     Option<Eigen::Affine3f> attachmentTransform(usize index, double time) noexcept;
     auto AnimationPlaybacks() const noexcept -> slice<Arc<SceneAnimationPlayback>>;
+    auto AnimationPlayback(rstd::int32_t layer_id) const noexcept
+        -> Option<Arc<SceneAnimationPlayback>>;
+    auto AnimationLayerVisible(rstd::int32_t layer_id) const noexcept -> Option<bool>;
+    bool SetAnimationLayerVisible(rstd::int32_t layer_id, bool visible) noexcept;
+    auto AnimationLayerBlend(rstd::int32_t layer_id) const noexcept -> Option<double>;
+    bool SetAnimationLayerBlend(rstd::int32_t layer_id, double blend) noexcept;
     auto TextureChannelBlendMap(double time) noexcept -> slice<float>;
 
     void updateInterpolation(double time) noexcept;

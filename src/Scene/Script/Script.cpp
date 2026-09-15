@@ -1,5 +1,7 @@
 module;
 
+#include <cmath>
+#include <limits>
 #include <rstd/macro.hpp>
 #include <rstd/enum.hpp>
 #include "quickjs.h"
@@ -11,6 +13,7 @@ import rstd;
 import rstd.log;
 import rstd.cppstd;
 import wescene.types;
+import wescene.pkg.puppet;
 import wescene.scene;
 
 using namespace rstd::prelude;
@@ -436,6 +439,8 @@ struct DeferredCb {
     uint32_t     handle;
     double       fire_at;    // engine.runtime seconds when due
     double       interval_s; // for setInterval; 0 for setTimeout
+    double       scheduled_at;
+    uint64_t     occurrence { 1 };
     JSValue      fn;         // owned
     FieldScript* owner { nullptr };
     bool         repeating;
@@ -448,6 +453,7 @@ struct AudioBufferSlot {
 };
 
 struct EngineHostState {
+    OfflineExecutionContext* offline { nullptr };
     FrameInputs                     inputs;
     MediaStatus                     media;
     bool                            media_initialized { false };
@@ -480,15 +486,18 @@ struct EngineHostState {
     // Set around every init/update/cursor invocation so host callbacks can
     // resolve the owning field binding.
     FieldScript*                             active_field_script { nullptr };
+    owe::SceneNode*                           loading_node { nullptr };
+    std::string                              loading_binding;
     Option<Arc<owe::SceneAnimationPlayback>> active_animation;
     Vec<String>                              pending_registered_assets;
     Option<JsRuntime::LayerFactory>          layer_factory;
     Option<JsRuntime::LayerConfigFactory>    layer_config_factory;
-    // SceneNode -> text-content setter. Populated by text layers in the
-    // parser; consulted by NodeSetText so `thisLayer.text = "..."` reaches
-    // TextLayouter::SetText. Missing entry means the layer is not text-
-    // capable; writes silently no-op.
-    std::unordered_map<owe::SceneNode*, std::function<void(std::string_view)>> text_setters;
+    struct TextHooks {
+        std::function<void(std::string_view)> setter;
+        std::function<std::string()>           getter;
+    };
+    // Text layers register both closures against their existing layouter state.
+    std::unordered_map<owe::SceneNode*, TextHooks> text_hooks;
     struct TextAlignHooks {
         std::string                           horizontal { "center" };
         std::string                           vertical { "center" };
@@ -512,6 +521,7 @@ struct EngineHostState {
     };
     HashMap<owe::SceneNode*, ImageAlignmentHook> image_alignment_hooks;
     HashMap<owe::SceneNode*, Json>               initial_layer_configs;
+    std::vector<owe::SceneNode*>                  public_layers;
     JsRuntime::BoneIndexResolver                 bone_index_resolver;
     JsRuntime::BoneTransformResolver             bone_transform_resolver;
     owe::SceneNode*                              scene_root { nullptr };
@@ -551,7 +561,11 @@ struct FieldScript::Impl {
     JSValue          update_fn { JS_UNDEFINED };
     JSValue          animation_event_fn { JS_UNDEFINED };
     bool             update_takes_arg { false };
+    bool             update_faulted { false };
+    bool             module_faulted { false };
     bool             init_done { false };
+    bool             capture_init_return { false };
+    std::uint64_t    binding_id { 0 };
     std::uint64_t    initialization_order { 0 };
     JSValue          current_value {
         JS_UNDEFINED
@@ -582,6 +596,19 @@ auto ScriptBindingContext::ForLayer(owe::SceneNode* layer, ref<str> property,
     ScriptBindingContext context(layer);
     context.property  = String::make(property);
     context.animation = rstd::move(animation);
+    return context;
+}
+
+auto ScriptBindingContext::ForAnimationLayer(owe::SceneNode* layer,
+                                              Arc<owe::PuppetLayer> puppet_layer,
+                                              rstd::int32_t animation_layer_id, ref<str> property,
+                                              Arc<owe::SceneAnimationPlayback> animation)
+    -> ScriptBindingContext {
+    auto context                      = ForLayer(layer, property, Some(rstd::move(animation)));
+    context.object_kind               = ScriptPropertyObjectKind::AnimationLayer;
+    context.puppet_layer              = Some(rstd::move(puppet_layer));
+    context.puppet_animation_layer_id = animation_layer_id;
+    context.capture_init_return       = true;
     return context;
 }
 
@@ -633,39 +660,118 @@ struct JsRuntime::Impl {
     std::unordered_map<std::string, JSValue>  ns_by_sha;
     std::uint64_t                             next_module_serial { 0 };
     std::vector<std::unique_ptr<FieldScript>> scripts;
-    // Set of error-logged shas to log once.
+    // Non-update failures retain the existing once-per-source logging policy.
+    // Update failures are isolated per binding instead.
     std::unordered_set<std::string> errored;
     // Scene root for `thisScene`. Wrapped lazily; freed in dtor.
     owe::SceneNode* scene_root { nullptr };
     JSValue         wrapped_scene { JS_UNDEFINED };
 
-    void LogError(JSContext* c, std::string_view sha, const char* what) {
-        if (errored.contains(std::string(sha))) return;
-        errored.insert(std::string(sha));
+    void LogError(JSContext* c, std::string_view sha, const char* what,
+                  FieldScript* isolated_fault = nullptr, const char* phase = "update") {
+        const bool isolated = isolated_fault != nullptr && isolated_fault->m_impl != nullptr;
+        if (! isolated) {
+            if (errored.contains(std::string(sha))) return;
+            errored.insert(std::string(sha));
+        }
         JSValue     exc = JS_GetException(c);
         const char* msg = JS_ToCString(c, exc);
-        rstd_error("script[{}] {}: {}",
-                   sha,
-                   std::string_view(what),
-                   std::string_view(msg ? msg : "<no message>"));
+        std::string message = msg ? msg : "<no message>";
         if (msg) JS_FreeCString(c, msg);
-        JSValue stack = JS_GetPropertyStr(c, exc, "stack");
+        std::string stack_text;
+        JSValue    stack = JS_GetPropertyStr(c, exc, "stack");
         if (! JS_IsUndefined(stack) && ! JS_IsNull(stack)) {
             const char* stack_msg = JS_ToCString(c, stack);
-            if (stack_msg && stack_msg[0] != '\0') {
-                rstd_error("script[{}] stack:\n{}", sha, std::string_view(stack_msg));
-            }
+            if (stack_msg && stack_msg[0] != '\0') stack_text = stack_msg;
             if (stack_msg) JS_FreeCString(c, stack_msg);
         }
         JS_FreeValue(c, stack);
         JS_FreeValue(c, exc);
+
+        const std::string summary =
+            "script[" + std::string(sha) + "] " + what + ": " + message;
+        if (isolated) {
+            auto* script = isolated_fault->m_impl.get();
+            if (std::string_view(phase) == "update") script->update_faulted = true;
+            std::int32_t owner_id  = -1;
+            if (script->node != nullptr) {
+                auto identity = script->node->GeneratorIdentity();
+                if (identity.is_none()) identity = script->node->WallpaperIdentity();
+                if (identity.is_some()) owner_id = identity->value.to_primitive();
+            }
+            if (host.offline != nullptr && owner_id >= 0) {
+                host.offline->source_script_errors.push_back(OfflineSourceScriptError {
+                    .binding_id     = script->binding_id,
+                    .owner_layer_id = owner_id,
+                    .owner_name     =
+                        script->node != nullptr ? script->node->Name() : std::string(),
+                    .property = rstd::cppstd::to_string(script->property.as_str()),
+                    .phase      = phase,
+                    .script_sha = std::string(sha),
+                    .message    = message,
+                    .stack      = stack_text,
+                });
+                host.offline->diagnose(summary);
+                rstd_warn("{}", std::string_view(summary));
+                if (! stack_text.empty())
+                    rstd_warn("script[{}] stack:\n{}", sha, std::string_view(stack_text));
+                return;
+            }
+        }
+
+        if (host.offline) host.offline->diagnose(summary, true);
+        rstd_error("{}", std::string_view(summary));
+        if (! stack_text.empty())
+            rstd_error("script[{}] stack:\n{}", sha, std::string_view(stack_text));
     }
 };
+
+void AppendPublicLayer(EngineHostState& host, owe::SceneNode* node) {
+    if (node && std::find(host.public_layers.begin(), host.public_layers.end(), node) ==
+                    host.public_layers.end())
+        host.public_layers.push_back(node);
+}
+
+void RemovePublicLayer(EngineHostState& host, owe::SceneNode* node) {
+    host.public_layers.erase(
+        std::remove(host.public_layers.begin(), host.public_layers.end(), node),
+        host.public_layers.end());
+}
+
+bool SceneTreeContains(const owe::SceneNode* root, const owe::SceneNode* needle) {
+    if (root == nullptr || needle == nullptr) return false;
+    if (root == needle) return true;
+    for (const auto& child : root->GetChildren())
+        if (SceneTreeContains(child.as_ptr(), needle)) return true;
+    return false;
+}
 
 // --- engine.* getters --------------------------------------------------------
 
 namespace
 {
+
+std::int32_t DependencyLayerId(const owe::SceneNode* node) {
+    for (; node != nullptr; node = node->Parent()) {
+        auto identity = node->GeneratorIdentity();
+        if (identity.is_none()) identity = node->WallpaperIdentity();
+        if (identity.is_some()) return identity->value.to_primitive();
+    }
+    return -1;
+}
+
+void TraceDependency(JSContext* ctx, std::string_view operation, std::string_view property,
+                     const owe::SceneNode* target = nullptr) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (host == nullptr || host->offline == nullptr || !host->offline->trace_scene) return;
+    auto* script = host->active_field_script ? host->active_field_script->m_impl.get() : nullptr;
+    auto* owner = script ? script->node : host->loading_node;
+    if (owner == nullptr) return;
+    host->offline->trace({ DependencyLayerId(owner), DependencyLayerId(target),
+        std::string(operation), std::string(property),
+        script ? rstd::cppstd::to_string(script->property.as_str()) : host->loading_binding,
+        script == nullptr || !script->init_done });
+}
 
 JSValue MakeVec2Value(JSContext* ctx, double x, double y) {
     JSValue global = JS_GetGlobalObject(ctx);
@@ -688,14 +794,17 @@ JSValue MakeVec2Value(JSContext* ctx, double x, double y) {
 
 JSValue EngineGetterFrametime(JSContext* ctx, JSValueConst /*this_val*/, int /*argc*/,
                               JSValueConst* /*argv*/) {
+    TraceDependency(ctx, "time", "frametime");
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     return JS_NewFloat64(ctx, host->inputs.frametime);
 }
 JSValue EngineGetterRuntime(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    TraceDependency(ctx, "time", "runtime");
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     return JS_NewFloat64(ctx, host->inputs.runtime);
 }
 JSValue EngineGetterTimeOfDay(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    TraceDependency(ctx, "input", "wall_clock");
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     return JS_NewFloat64(ctx, host->inputs.time_of_day);
 }
@@ -757,6 +866,7 @@ void RefreshAudioBuffer(JSContext* ctx, const FrameInputs& inputs, const AudioBu
 // engine.registerAudioBuffers(resolution) → { left, right, average, buffer }
 JSValue EngineRegisterAudioBuffers(JSContext* ctx, JSValueConst /*this_val*/, int argc,
                                    JSValueConst* argv) {
+    TraceDependency(ctx, "input", "audio");
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (host->audio_response_demand.is_some() && host->audio_response_lease.is_none()) {
         host->audio_response_lease = Some((*host->audio_response_demand)->Acquire());
@@ -817,6 +927,7 @@ JSValue EngineSetTimerImpl(JSContext* ctx, int argc, JSValueConst* argv, bool re
         .handle     = h,
         .fire_at    = host->inputs.runtime + interval_s,
         .interval_s = interval_s,
+        .scheduled_at = host->inputs.runtime,
         .fn         = JS_DupValue(ctx, argv[0]),
         .owner      = host->active_field_script,
         .repeating  = repeating,
@@ -1089,6 +1200,8 @@ void InvokeEventCallback(JSContext* ctx, JSValue ns, const char* name, JSValue e
                          JsRuntime::Impl* rt, std::string_view sha) {
     JSValue fn = JS_GetPropertyStr(ctx, ns, name);
     if (JS_IsFunction(ctx, fn)) {
+        if (std::string_view(name).starts_with("cursor")) TraceDependency(ctx, "input", "pointer");
+        else if (std::string_view(name).starts_with("media")) TraceDependency(ctx, "input", "media");
         JSValue arg = JS_DupValue(ctx, ev);
         JSValue r   = JS_Call(ctx, fn, JS_UNDEFINED, 1, &arg);
         JS_FreeValue(ctx, arg);
@@ -1102,15 +1215,23 @@ void InvokeEventCallback(JSContext* ctx, JSValue ns, const char* name, JSValue e
     JS_FreeValue(ctx, fn);
 }
 
-// Fire any deferred callbacks whose fire_at has passed. Called by TickAll
-// before the script update loop. Repeating callbacks reschedule against
-// their previous fire_at so steady-state drift is bounded.
+// A deadline and a frame time can round to adjacent doubles (0.1 * 3 vs
+// 36 / 120). Allow only a few arithmetic rounding units, not a frame of slack.
+bool TimerDue(double deadline, double now) {
+    if (deadline <= now) return true;
+    if (!std::isfinite(deadline) || !std::isfinite(now)) return false;
+    const double scale = std::max(1.0, std::max(std::abs(deadline), std::abs(now)));
+    return deadline - now <= 4.0 * std::numeric_limits<double>::epsilon() * scale;
+}
+
+// Fire deferred callbacks before the script update loop. Repeating deadlines
+// are derived from their original schedule to avoid cumulative addition drift.
 void SweepDeferred(JSContext* ctx, EngineHostState* host) {
     const double now = host->inputs.runtime;
     // Iterate by index; callbacks may push_back new entries.
     for (size_t i = 0; i < host->deferred.size(); ++i) {
         if (host->deferred[i].dead) continue;
-        while (! host->deferred[i].dead && host->deferred[i].fire_at <= now) {
+        while (! host->deferred[i].dead && TimerDue(host->deferred[i].fire_at, now)) {
             auto* previous = host->active_field_script;
             auto* owner    = host->deferred[i].owner;
             if (owner != nullptr && owner->m_impl->alive) {
@@ -1125,6 +1246,8 @@ void SweepDeferred(JSContext* ctx, EngineHostState* host) {
                 JSValue     exc = JS_GetException(ctx);
                 const char* msg = JS_ToCString(ctx, exc);
                 rstd_error("script timer callback threw: {}", msg ? msg : "<no message>");
+                if (host->offline) host->offline->diagnose(
+                    std::string("script timer callback: ") + (msg ? msg : "<no message>"), true);
                 if (msg) JS_FreeCString(ctx, msg);
                 JS_FreeValue(ctx, exc);
                 host->deferred[i].dead = true;
@@ -1135,12 +1258,14 @@ void SweepDeferred(JSContext* ctx, EngineHostState* host) {
                 host->deferred[i].dead = true;
                 break;
             }
-            host->deferred[i].fire_at += host->deferred[i].interval_s;
             // Guard against zero-interval intervals starving the loop.
             if (host->deferred[i].interval_s <= 0.0) {
                 host->deferred[i].dead = true;
                 break;
             }
+            auto& timer = host->deferred[i];
+            ++timer.occurrence;
+            timer.fire_at = timer.scheduled_at + static_cast<double>(timer.occurrence) * timer.interval_s;
         }
     }
     // Compact dead entries.
@@ -1500,6 +1625,7 @@ globalThis.__wwSerializeLayerConfig = function(config) {
 // sensible defaults; writes are silently accepted. getTransformMatrix returns
 // a shaped value so matrix accesses don't TypeError.
 function __wwCreateNodeStub() {
+    if (globalThis.__wwOfflineUnsupported) globalThis.__wwOfflineUnsupported('unbound scene layer');
     const props = {
         origin:         new Vec3(0, 0, 0),
         scale:          new Vec3(1, 1, 1),
@@ -1518,6 +1644,8 @@ function __wwCreateNodeStub() {
     const identity = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
     const handler = {
         get(target, key) {
+            if (globalThis.__wwOfflineUnsupported && typeof key === 'string')
+                globalThis.__wwOfflineUnsupported('unbound scene layer.' + key);
             if (key === 'getParent')           return () => undefined;
             if (key === 'getTransformMatrix')  return () => ({ m: identity.slice() });
             if (key === 'getChildren')         return () => [];
@@ -1539,10 +1667,12 @@ function __wwCreateNodeStub() {
 }
 
 function __wwCreateEffectStub() {
+    if (globalThis.__wwOfflineUnsupported) globalThis.__wwOfflineUnsupported('unbound effect');
     return { visible: true };
 }
 
 function __wwCreateTexAnimStub() {
+    if (globalThis.__wwOfflineUnsupported) globalThis.__wwOfflineUnsupported('unbound texture animation');
     let frame = 0, playing = false;
     return {
         play()     { playing = true;  },
@@ -1555,6 +1685,7 @@ function __wwCreateTexAnimStub() {
 }
 
 function __wwCreateVideoTextureStub() {
+    if (globalThis.__wwOfflineUnsupported) globalThis.__wwOfflineUnsupported('unbound video texture');
     let current = 0, playing = false;
     return {
         duration: 0,
@@ -1575,6 +1706,7 @@ function __wwCreateVideoTextureStub() {
 // Sprite-image / puppet-bone animation handle. Scripts commonly adjust
 // playback rate and manually drive the current frame from init/update.
 function __wwCreateAnimationStub() {
+    if (globalThis.__wwOfflineUnsupported) globalThis.__wwOfflineUnsupported('unbound animation');
     let frame = 0, playing = false;
     const o = {
         rate: 1,
@@ -1830,6 +1962,7 @@ JSModuleDef* BuiltinModuleLoader(JSContext* ctx, const char* module_name, void*)
 // finalizer is a no-op (we don't dereference on free, just drop the ref).
 
 static JSClassID s_layer_class_id             = 0;
+static JSClassID s_animation_layer_class_id   = 0;
 static JSClassID s_effect_class_id            = 0;
 static JSClassID s_material_class_id          = 0;
 static JSClassID s_particle_instance_class_id = 0;
@@ -1839,6 +1972,11 @@ struct LayerHandle {
     owe::SceneNode*  node { nullptr };
     std::string      name;
     bool             property_object { false };
+};
+
+struct AnimationLayerHandle {
+    Arc<owe::PuppetLayer> layer;
+    rstd::int32_t         layer_id { 0 };
 };
 
 owe::SceneNode* ResolveLayerNode(LayerHandle* h) {
@@ -1855,6 +1993,16 @@ void LayerFinalizer(JSRuntime*, JSValue v) {
 JSClassDef s_layer_class_def {
     .class_name = "WWLayer",
     .finalizer  = LayerFinalizer,
+};
+
+void AnimationLayerFinalizer(JSRuntime*, JSValue value) {
+    delete static_cast<AnimationLayerHandle*>(
+        JS_GetOpaque(value, s_animation_layer_class_id));
+}
+
+JSClassDef s_animation_layer_class_def {
+    .class_name = "WWAnimationLayer",
+    .finalizer  = AnimationLayerFinalizer,
 };
 
 struct EffectHandle {
@@ -1913,6 +2061,55 @@ JSValue WrapLayerNode(JSContext* ctx, owe::SceneNode* node, bool property_object
     JS_SetOpaque(
         obj, new LayerHandle { .host = host, .node = node, .property_object = property_object });
     return obj;
+}
+
+JSValue WrapAnimationLayer(JSContext* ctx, Arc<owe::PuppetLayer> layer,
+                           rstd::int32_t layer_id) {
+    JSValue object = JS_NewObjectClass(ctx, s_animation_layer_class_id);
+    if (JS_IsException(object)) return object;
+    JS_SetOpaque(object,
+                 new AnimationLayerHandle { .layer = rstd::move(layer), .layer_id = layer_id });
+    return object;
+}
+
+AnimationLayerHandle* GetAnimationLayerHandle(JSValueConst value) {
+    return static_cast<AnimationLayerHandle*>(
+        JS_GetOpaque(value, s_animation_layer_class_id));
+}
+
+JSValue AnimationLayerGetVisible(JSContext* ctx, JSValueConst value) {
+    auto* handle = GetAnimationLayerHandle(value);
+    if (handle != nullptr) {
+        auto visible = handle->layer->AnimationLayerVisible(handle->layer_id);
+        if (visible.is_some()) return JS_NewBool(ctx, *visible);
+    }
+    return JS_ThrowReferenceError(ctx, "puppet animation layer is unavailable");
+}
+
+JSValue AnimationLayerSetVisible(JSContext* ctx, JSValueConst value, JSValueConst next) {
+    auto* handle = GetAnimationLayerHandle(value);
+    if (handle == nullptr ||
+        ! handle->layer->SetAnimationLayerVisible(handle->layer_id, JS_ToBool(ctx, next) != 0))
+        return JS_ThrowReferenceError(ctx, "puppet animation layer is unavailable");
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationLayerGetBlend(JSContext* ctx, JSValueConst value) {
+    auto* handle = GetAnimationLayerHandle(value);
+    if (handle != nullptr) {
+        auto blend = handle->layer->AnimationLayerBlend(handle->layer_id);
+        if (blend.is_some()) return JS_NewFloat64(ctx, *blend);
+    }
+    return JS_ThrowReferenceError(ctx, "puppet animation layer is unavailable");
+}
+
+JSValue AnimationLayerSetBlend(JSContext* ctx, JSValueConst value, JSValueConst next) {
+    double blend {};
+    auto*  handle = GetAnimationLayerHandle(value);
+    if (JS_ToFloat64(ctx, &blend, next) != 0 || handle == nullptr ||
+        ! handle->layer->SetAnimationLayerBlend(handle->layer_id, blend))
+        return JS_ThrowTypeError(ctx, "invalid puppet animation layer blend");
+    return JS_UNDEFINED;
 }
 
 JSValue WrapLayerName(JSContext* ctx, std::string name) {
@@ -2060,6 +2257,7 @@ int MaterialSetProperty(JSContext* ctx, JSValueConst obj, JSAtom atom, JSValueCo
 // --- property accessors -----------------------------------------------------
 
 JSValue NodeGetOrigin(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "origin", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return MakeVec3(ctx, 0, 0, 0);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2074,6 +2272,7 @@ JSValue NodeGetOrigin(JSContext* ctx, JSValueConst this_val) {
     return MakeVec3(ctx, v.x(), v.y(), v.z());
 }
 JSValue NodeSetOrigin(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "origin", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
@@ -2090,12 +2289,14 @@ JSValue NodeSetOrigin(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     return JS_UNDEFINED;
 }
 JSValue NodeGetScale(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "scale", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return MakeVec3(ctx, 1, 1, 1);
     auto v = n->Scale();
     return MakeVec3(ctx, v.x(), v.y(), v.z());
 }
 JSValue NodeSetScale(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "scale", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
@@ -2107,12 +2308,14 @@ JSValue NodeSetScale(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
 constexpr double kRadToDeg = 180.0 / rstd::f64::consts::PI.to_primitive();
 constexpr double kDegToRad = rstd::f64::consts::PI.to_primitive() / 180.0;
 JSValue          NodeGetAngles(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "angles", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return MakeVec3(ctx, 0, 0, 0);
     auto v = n->Rotation();
     return MakeVec3(ctx, v.x() * kRadToDeg, v.y() * kRadToDeg, v.z() * kRadToDeg);
 }
 JSValue NodeSetAngles(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "angles", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
@@ -2122,6 +2325,7 @@ JSValue NodeSetAngles(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
 }
 
 JSValue NodeGetParallaxDepth(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "parallaxDepth", GetLayerNode(this_val));
     auto* node = GetLayerNode(this_val);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (node == nullptr || host == nullptr || host->node_parallax_depth_getter.is_none())
@@ -2132,6 +2336,7 @@ JSValue NodeGetParallaxDepth(JSContext* ctx, JSValueConst this_val) {
 }
 
 JSValue NodeSetParallaxDepth(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    TraceDependency(ctx, "write", "parallaxDepth", GetLayerNode(this_val));
     auto* node = GetLayerNode(this_val);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (node == nullptr || host == nullptr || host->node_parallax_depth_setter.is_none())
@@ -2145,6 +2350,7 @@ JSValue NodeSetParallaxDepth(JSContext* ctx, JSValueConst this_val, JSValueConst
 
 // Stubs — properties scripts read but writing them would force RG rebuild.
 JSValue NodeGetSize(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "size", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return MakeVec3(ctx, 100, 100, 0);
     const auto& s = n->Size();
@@ -2154,10 +2360,12 @@ JSValue NodeGetSize(JSContext* ctx, JSValueConst this_val) {
     return MakeVec3(ctx, s.x(), s.y(), 0);
 }
 JSValue NodeGetVisible(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "visible", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     return JS_NewBool(ctx, n ? n->Visible() : true);
 }
 JSValue NodeSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "visible", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     const bool visible = JS_ToBool(ctx, val) != 0;
@@ -2169,10 +2377,12 @@ JSValue NodeSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val) 
     return JS_UNDEFINED;
 }
 JSValue NodeGetAlpha(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "alpha", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     return JS_NewFloat64(ctx, n ? n->UserAlpha() : 1.0);
 }
 JSValue NodeSetAlpha(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "alpha", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     double a = 1.0;
@@ -2181,10 +2391,12 @@ JSValue NodeSetAlpha(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     return JS_UNDEFINED;
 }
 JSValue NodeGetBrightness(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "brightness", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     return JS_NewFloat64(ctx, n ? n->Brightness() : 1.0);
 }
 JSValue NodeSetBrightness(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "brightness", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     double b = 1.0;
@@ -2193,12 +2405,14 @@ JSValue NodeSetBrightness(JSContext* ctx, JSValueConst this_val, JSValueConst va
     return JS_UNDEFINED;
 }
 JSValue NodeGetColor(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "color", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return MakeVec3(ctx, 1, 1, 1);
     const auto& c = n->Color();
     return MakeVec3(ctx, c.x(), c.y(), c.z());
 }
 JSValue NodeSetColor(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "color", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
@@ -2207,10 +2421,12 @@ JSValue NodeSetColor(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     return JS_UNDEFINED;
 }
 JSValue NodeGetVolume(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "volume", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     return JS_NewFloat64(ctx, n ? n->Volume() : 1.0);
 }
 JSValue NodeSetVolume(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "volume", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     double volume { 1.0 };
@@ -2279,15 +2495,18 @@ JSValue NodeGetParticleInstance(JSContext* ctx, JSValueConst this_val) {
     return WrapParticleInstance(ctx, node);
 }
 JSValue NodeGetPerspective(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "perspective", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     return JS_NewBool(ctx, n ? n->Perspective() : false);
 }
 JSValue NodeSetPerspective(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "perspective", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (n) n->SetPerspective(JS_ToBool(ctx, val) != 0);
     return JS_UNDEFINED;
 }
 JSValue NodeGetAlignment(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "alignment", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_NewString(ctx, "center");
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2298,6 +2517,7 @@ JSValue NodeGetAlignment(JSContext* ctx, JSValueConst this_val) {
         ctx, reinterpret_cast<const char*>(alignment.data()), alignment.len().to_primitive());
 }
 JSValue NodeSetAlignment(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "alignment", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2311,6 +2531,7 @@ JSValue NodeSetAlignment(JSContext* ctx, JSValueConst this_val, JSValueConst val
     return JS_UNDEFINED;
 }
 JSValue NodeGetVAlign(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "vAlign", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_NewString(ctx, "center");
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2319,6 +2540,7 @@ JSValue NodeGetVAlign(JSContext* ctx, JSValueConst this_val) {
         ctx, it == host->text_align_hooks.end() ? "center" : it->second.vertical.c_str());
 }
 JSValue NodeGetHAlign(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "hAlign", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_NewString(ctx, "center");
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2327,6 +2549,7 @@ JSValue NodeGetHAlign(JSContext* ctx, JSValueConst this_val) {
         ctx, it == host->text_align_hooks.end() ? "center" : it->second.horizontal.c_str());
 }
 JSValue NodeSetVAlign(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "vAlign", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2340,6 +2563,7 @@ JSValue NodeSetVAlign(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     return JS_UNDEFINED;
 }
 JSValue NodeSetHAlign(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "hAlign", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2354,23 +2578,30 @@ JSValue NodeSetHAlign(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
 }
 JSValue NodeSetIgnore(JSContext*, JSValueConst, JSValueConst) { return JS_UNDEFINED; }
 
-// `text` is the only string-valued property on WWLayer. Most scripts only
-// write it (clock / date / locale formatters); GetText therefore returns
-// an empty string rather than tracking last-applied text state.
-JSValue NodeGetText(JSContext* ctx, JSValueConst) { return JS_NewString(ctx, ""); }
+JSValue NodeGetText(JSContext* ctx, JSValueConst this_val) {
+    auto* node = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "text", node);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (! host || ! node) return JS_NewString(ctx, "");
+    auto it = host->text_hooks.find(node);
+    if (it == host->text_hooks.end() || ! it->second.getter) return JS_NewString(ctx, "");
+    auto text = it->second.getter();
+    return JS_NewStringLen(ctx, text.data(), text.size());
+}
 JSValue NodeSetText(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    auto  it   = host->text_setters.find(n);
-    if (it == host->text_setters.end()) return JS_UNDEFINED;
+    auto  it   = host->text_hooks.find(n);
+    if (it == host->text_hooks.end() || ! it->second.setter) return JS_UNDEFINED;
     const char* s = JS_ToCString(ctx, val);
     if (s == nullptr) return JS_UNDEFINED;
-    it->second(std::string_view(s));
+    it->second.setter(std::string_view(s));
     JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
 }
 JSValue NodeGetPointSize(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "pointSize", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_NewFloat64(ctx, 1.0);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2383,6 +2614,7 @@ JSValue NodeGetPointSize(JSContext* ctx, JSValueConst this_val) {
     return JS_NewFloat64(ctx, mesh == nullptr ? 1.0 : mesh->PointSize().to_primitive());
 }
 JSValue NodeSetPointSize(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "pointSize", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2398,12 +2630,14 @@ JSValue NodeSetPointSize(JSContext* ctx, JSValueConst this_val, JSValueConst val
 // --- methods ----------------------------------------------------------------
 
 JSValue NodeGetParent(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "read", "parent", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (n && n->Parent()) return WrapLayerNode(ctx, n->Parent());
     return JS_UNDEFINED;
 }
 
 JSValue NodeGetTransformMatrix(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "read", "transformMatrix", GetLayerNode(this_val));
     auto*   n   = GetLayerNode(this_val);
     JSValue m   = JS_NewArray(ctx);
     JSValue obj = JS_NewObject(ctx);
@@ -2456,6 +2690,7 @@ JSValue MakeBoneTransform(JSContext* ctx, const Eigen::Vector3f& translation) {
 }
 
 JSValue NodeGetBoneIndex(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    TraceDependency(ctx, "read", "boneIndex", GetLayerNode(this_val));
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* n    = GetLayerNode(this_val);
     if (! n || argc < 1 || ! host->bone_index_resolver) return JS_NewInt32(ctx, 0);
@@ -2467,6 +2702,7 @@ JSValue NodeGetBoneIndex(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 }
 
 JSValue NodeGetBoneTransform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    TraceDependency(ctx, "read", "boneTransform", GetLayerNode(this_val));
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* n    = GetLayerNode(this_val);
     if (! n || argc < 1 || ! host->bone_transform_resolver)
@@ -2483,6 +2719,7 @@ JSValue NodeGetBoneTransform(JSContext* ctx, JSValueConst this_val, int argc, JS
 }
 
 JSValue NodeGetChildren(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "read", "children", GetLayerNode(this_val));
     auto*   n   = GetLayerNode(this_val);
     JSValue arr = JS_NewArray(ctx);
     if (! n) return arr;
@@ -2495,6 +2732,7 @@ JSValue NodeGetChildren(JSContext* ctx, JSValueConst this_val, int, JSValueConst
 }
 
 JSValue NodeGetNameValue(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "nameValue", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_NewString(ctx, "");
     return JS_NewStringLen(ctx, n->Name().data(), n->Name().size());
@@ -2507,16 +2745,30 @@ JSValue NodeGetName(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
 JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* n    = GetLayerNode(this_val);
-    if (! n || argc < 1) return JS_DupValue(ctx, host->default_layer);
+    if (argc < 1) return JS_DupValue(ctx, host->default_layer);
+    if (JS_IsNumber(argv[0])) {
+        TraceDependency(ctx, "query", "layer_numeric_index");
+        int32_t index {};
+        if (JS_ToInt32(ctx, &index, argv[0]) != 0 || index < 0 ||
+            static_cast<size_t>(index) >= host->public_layers.size())
+            return JS_NULL;
+        auto* hit = host->public_layers[static_cast<size_t>(index)];
+        TraceDependency(ctx, "lookup", std::to_string(index), hit);
+        return WrapLayerNode(ctx, hit);
+    }
     const char* name = JS_ToCString(ctx, argv[0]);
     if (! name) return JS_DupValue(ctx, host->default_layer);
     std::string     layer_name { name };
-    owe::SceneNode* hit = n->FindByName(layer_name);
+    owe::SceneNode* hit = n ? n->FindByName(layer_name) : nullptr;
+    TraceDependency(ctx, "lookup", layer_name, hit);
     JS_FreeCString(ctx, name);
-    return hit ? WrapLayerNode(ctx, hit) : WrapLayerName(ctx, std::move(layer_name));
+    if (hit) return WrapLayerNode(ctx, hit);
+    if (host && host->scene_root) return JS_NULL;
+    return WrapLayerName(ctx, std::move(layer_name));
 }
 
 JSValue NodeGetEffect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    TraceDependency(ctx, "read", "effect", GetLayerNode(this_val));
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* n    = GetLayerNode(this_val);
     if (! host || ! host->scene || ! n || argc < 1) return WrapEffect(ctx, None());
@@ -2535,6 +2787,7 @@ JSValue NodeGetEffect(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
 }
 
 JSValue NodeGetEffectCount(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "read", "effectCount", GetLayerNode(this_val));
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* node = GetLayerNode(this_val);
     if (! host || ! host->scene || ! node) return JS_NewInt32(ctx, 0);
@@ -2560,43 +2813,29 @@ JSValue EffectGetMaterial(JSContext* ctx, JSValueConst this_val, int argc, JSVal
     return WrapMaterial(ctx, handle->host->scene->ImageEffectMaterial(*handle->ref, usize(index)));
 }
 
-bool TreeContains(owe::SceneNode* root, owe::SceneNode* needle) {
-    if (! root || ! needle) return false;
-    if (root == needle) return true;
-    for (const auto& child : root->GetChildren()) {
-        if (TreeContains(child.as_ptr(), needle)) return true;
-    }
-    return false;
-}
-
-JSValue NodeSceneLayerListIncludes(JSContext* ctx, JSValueConst this_val, int argc,
+JSValue NodeSceneLayerListIncludes(JSContext* ctx, JSValueConst, int argc,
                                    JSValueConst* argv) {
     if (argc < 1) return JS_NewBool(ctx, false);
-    JSValue root_val = JS_GetPropertyStr(ctx, this_val, "__wwRoot");
-    auto*   root     = GetLayerNode(root_val);
-    auto*   needle   = GetLayerNode(argv[0]);
-    bool    found    = TreeContains(root, needle);
-    JS_FreeValue(ctx, root_val);
+    auto* host   = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto* needle = GetLayerNode(argv[0]);
+    bool  found  = host && std::find(host->public_layers.begin(), host->public_layers.end(), needle) !=
+                              host->public_layers.end();
     return JS_NewBool(ctx, found);
 }
 
 JSValue NodeSceneEnumerateLayers(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "query", "layer_enumeration");
     JSValue arr = JS_NewArray(ctx);
-    auto*   n   = GetLayerNode(this_val);
-    if (! n) return arr;
-
-    uint32_t i      = 0;
-    auto     append = [&](auto& self, owe::SceneNode* node) -> void {
-        if (! node) return;
-        JS_DefinePropertyValueUint32(ctx, arr, i++, WrapLayerNode(ctx, node), JS_PROP_C_W_E);
-        for (const auto& child : node->GetChildren()) {
-            self(self, child.as_ptr());
-        }
-    };
-    for (const auto& child : n->GetChildren()) {
-        append(append, child.as_ptr());
-    }
-    JS_DefinePropertyValueStr(ctx, arr, "__wwRoot", WrapLayerNode(ctx, n), JS_PROP_C_W_E);
+    auto*   host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (! host) return arr;
+    for (size_t i = 0; i < host->public_layers.size(); ++i)
+        JS_DefinePropertyValueUint32(ctx,
+                                     arr,
+                                     static_cast<uint32_t>(i),
+                                     WrapLayerNode(ctx, host->public_layers[i]),
+                                     JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(
+        ctx, arr, "__wwRoot", JS_DupValue(ctx, this_val), JS_PROP_C_W_E);
     JS_DefinePropertyValueStr(ctx,
                               arr,
                               "includes",
@@ -2605,10 +2844,39 @@ JSValue NodeSceneEnumerateLayers(JSContext* ctx, JSValueConst this_val, int, JSV
     return arr;
 }
 
-JSValue NodeSceneGetInitialLayerConfig(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+JSValue NodeSceneGetLayerCount(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    TraceDependency(ctx, "query", "layer_count");
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    return JS_NewInt64(ctx, host ? static_cast<int64_t>(host->public_layers.size()) : 0);
+}
+
+owe::SceneNode* ResolveSceneLayerArgument(JSContext* ctx, JSValueConst this_val,
+                                          JSValueConst value) {
+    if (auto* node = GetLayerNode(value)) return node;
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (host == nullptr) return nullptr;
+    if (JS_IsNumber(value)) {
+        TraceDependency(ctx, "query", "layer_numeric_index");
+        int32_t index {};
+        if (JS_ToInt32(ctx, &index, value) != 0 || index < 0 ||
+            static_cast<size_t>(index) >= host->public_layers.size())
+            return nullptr;
+        return host->public_layers[static_cast<size_t>(index)];
+    }
+    auto* root = GetLayerNode(this_val);
+    if (root == nullptr) return nullptr;
+    const char* name = JS_ToCString(ctx, value);
+    if (name == nullptr) return nullptr;
+    auto* node = root->FindByName(name);
+    JS_FreeCString(ctx, name);
+    return node;
+}
+
+JSValue NodeSceneGetInitialLayerConfig(JSContext* ctx, JSValueConst this_val, int argc,
+                                       JSValueConst* argv) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (! host || argc < 1) return JS_NewObject(ctx);
-    auto* node = GetLayerNode(argv[0]);
+    auto* node = ResolveSceneLayerArgument(ctx, this_val, argv[0]);
     if (! node) return JS_NewObject(ctx);
     auto config = host->initial_layer_configs.get(node);
     if (config.is_some()) return JsonToJs(ctx, **config);
@@ -2679,6 +2947,16 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* fs   = host->active_field_script;
     if (! fs) return JS_ThrowReferenceError(ctx, "createLayer requires an active field script");
+    struct RestoreCallerContext {
+        JSContext*       ctx;
+        EngineHostState* host;
+        FieldScript*     caller;
+        ~RestoreCallerContext() {
+            if (! caller || ! caller->m_impl) return;
+            BindFieldScriptContext(ctx, *caller->m_impl, host->default_layer);
+            host->active_field_script = caller;
+        }
+    } restore { ctx, host, fs };
 
     owe::SceneNode* node = nullptr;
     if (argc > 0 && ! JS_IsObject(argv[0])) {
@@ -2736,9 +3014,16 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
         }
     }
     if (! node) return JS_ThrowReferenceError(ctx, "createLayer asset is unavailable");
+    AppendPublicLayer(*host, node);
+    TraceDependency(ctx, "create", "layer", node);
+    if (auto* creator = fs->m_impl->node; creator != nullptr) {
+        auto identity = creator->GeneratorIdentity();
+        node->SetGeneratorIdentity(identity.is_some() ? identity : creator->WallpaperIdentity());
+    }
+    const bool configuration = argc > 0 && JS_IsObject(argv[0]);
     if (host->scene)
-        (void)host->scene->SetNodeVisible(*node, true);
-    else
+        (void)host->scene->SetNodeVisible(*node, ! configuration || node->Visible());
+    else if (! configuration)
         node->SetVisible(true);
     node->Play();
     if (argc > 0 && JS_IsObject(argv[0])) {
@@ -2749,58 +3034,79 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
     return WrapLayerNode(ctx, node);
 }
 
-JSValue NodeSceneDestroyLayer(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_UNDEFINED;
-    if (auto* n = GetLayerNode(argv[0])) {
-        auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-        if (host && host->scene)
-            (void)host->scene->SetNodeVisible(*n, false);
-        else
-            n->SetVisible(false);
-        n->Stop();
-        auto* fs = host ? host->active_field_script : nullptr;
-        if (fs) {
-            auto key_it = fs->m_impl->clone_asset_keys.find(n);
-            if (key_it != fs->m_impl->clone_asset_keys.end()) {
-                auto& queue = fs->m_impl->asset_clone_queues[key_it->second];
-                if (std::find(queue.begin(), queue.end(), n) == queue.end()) queue.push_back(n);
-            }
+JSValue NodeSceneDestroyLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NewBool(ctx, false);
+    auto* n = ResolveSceneLayerArgument(ctx, this_val, argv[0]);
+    if (n == nullptr) return JS_NewBool(ctx, false);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (host && host->scene)
+        (void)host->scene->SetNodeVisible(*n, false);
+    else
+        n->SetVisible(false);
+    n->Stop();
+    if (host) RemovePublicLayer(*host, n);
+    auto* fs = host ? host->active_field_script : nullptr;
+    if (fs) {
+        auto key_it = fs->m_impl->clone_asset_keys.find(n);
+        if (key_it != fs->m_impl->clone_asset_keys.end()) {
+            auto& queue = fs->m_impl->asset_clone_queues[key_it->second];
+            if (std::find(queue.begin(), queue.end(), n) == queue.end()) queue.push_back(n);
         }
     }
-    return JS_UNDEFINED;
-}
-
-owe::SceneNode* ResolveSceneLayerArgument(JSContext* ctx, JSValueConst this_val,
-                                          JSValueConst value) {
-    if (auto* node = GetLayerNode(value)) return node;
-    auto* root = GetLayerNode(this_val);
-    if (root == nullptr) return nullptr;
-    const char* name = JS_ToCString(ctx, value);
-    if (name == nullptr) return nullptr;
-    auto* node = root->FindByName(name);
-    JS_FreeCString(ctx, name);
-    return node;
+    return JS_NewBool(ctx, true);
 }
 
 JSValue NodeSceneGetLayerIndex(JSContext* ctx, JSValueConst this_val, int argc,
                                JSValueConst* argv) {
+    TraceDependency(ctx, "query", "layer_index");
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (host == nullptr || host->scene == nullptr || argc < 1) return JS_NewInt32(ctx, -1);
+    if (host == nullptr || argc < 1) return JS_NewInt32(ctx, -1);
     auto* node = ResolveSceneLayerArgument(ctx, this_val, argv[0]);
     if (node == nullptr) return JS_NewInt32(ctx, -1);
-    auto index = host->scene->LayerIndex(*node);
-    if (index.is_none()) return JS_NewInt32(ctx, -1);
-    return JS_NewInt64(ctx, static_cast<int64_t>(index->to_primitive()));
+    auto it = std::find(host->public_layers.begin(), host->public_layers.end(), node);
+    if (it == host->public_layers.end()) return JS_NewInt32(ctx, -1);
+    return JS_NewInt64(ctx, static_cast<int64_t>(std::distance(host->public_layers.begin(), it)));
 }
 
 JSValue NodeSceneSortLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    TraceDependency(ctx, "query", "layer_order");
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (host == nullptr || host->scene == nullptr || argc < 2) return JS_UNDEFINED;
+    if (host == nullptr || host->scene == nullptr || argc < 2) return JS_NewBool(ctx, false);
     auto*   node = ResolveSceneLayerArgument(ctx, this_val, argv[0]);
     int64_t index {};
-    if (node == nullptr || JS_ToInt64(ctx, &index, argv[1]) != 0 || index < 0) return JS_UNDEFINED;
-    (void)host->scene->SortLayer(*node, usize(static_cast<std::size_t>(index)));
-    return JS_UNDEFINED;
+    if (node == nullptr || JS_ToInt64(ctx, &index, argv[1]) != 0 || index < 0)
+        return JS_NewBool(ctx, false);
+    const auto target_index = static_cast<size_t>(index);
+    auto current = std::find(host->public_layers.begin(), host->public_layers.end(), node);
+    if (target_index >= host->public_layers.size() || current == host->public_layers.end())
+        return JS_NewBool(ctx, false);
+
+    auto reordered = host->public_layers;
+    const auto current_index =
+        static_cast<size_t>(std::distance(host->public_layers.begin(), current));
+    auto moving = reordered[current_index];
+    reordered.erase(reordered.begin() + current_index);
+    reordered.insert(reordered.begin() + target_index, moving);
+
+    auto* parent = node->Parent();
+    if (parent != nullptr) {
+        std::vector<owe::SceneNode*> before;
+        std::vector<owe::SceneNode*> after;
+        for (auto* layer : host->public_layers)
+            if (layer->Parent() == parent) before.push_back(layer);
+        for (auto* layer : reordered)
+            if (layer->Parent() == parent) after.push_back(layer);
+        if (before != after) {
+            auto position = std::find(after.begin(), after.end(), node);
+            auto next = position + 1;
+            auto sibling = next != after.end() ? *next : *(position - 1);
+            auto sibling_index = parent->ChildIndex(*sibling);
+            if (sibling_index.is_none() || ! host->scene->SortLayer(*node, *sibling_index))
+                return JS_NewBool(ctx, false);
+        }
+    }
+    host->public_layers = rstd::move(reordered);
+    return JS_NewBool(ctx, true);
 }
 
 JSValue NodePlay(JSContext*, JSValueConst this_val, int, JSValueConst*) {
@@ -2836,48 +3142,123 @@ inline owe::SceneNode* GetTexAnimNode(JSValueConst v) {
     return static_cast<owe::SceneNode*>(JS_GetOpaque(v, s_texanim_class_id));
 }
 
-JSValue TexAnimPlay(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+JSValue TexAnimPlay(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "write", "textureAnimation", GetTexAnimNode(this_val));
     if (auto* n = GetTexAnimNode(this_val)) {
+        if (auto* registry = n->TextureAnimationRegistry()) {
+            registry->Play(*n);
+            return JS_UNDEFINED;
+        }
         auto& a         = n->TexAnim();
         a.current_frame = -1;
         a.playing       = true;
     }
     return JS_UNDEFINED;
 }
-JSValue TexAnimStop(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    if (auto* n = GetTexAnimNode(this_val)) n->TexAnim().playing = false;
+JSValue TexAnimStop(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "write", "textureAnimation", GetTexAnimNode(this_val));
+    if (auto* n = GetTexAnimNode(this_val)) {
+        if (auto* registry = n->TextureAnimationRegistry()) {
+            registry->Stop(*n);
+            return JS_UNDEFINED;
+        }
+        auto& a         = n->TexAnim();
+        a.current_frame = 0;
+        a.playing       = false;
+    }
     return JS_UNDEFINED;
 }
-JSValue TexAnimPause(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    if (auto* n = GetTexAnimNode(this_val)) n->TexAnim().playing = false;
+JSValue TexAnimPause(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "write", "textureAnimation", GetTexAnimNode(this_val));
+    if (auto* n = GetTexAnimNode(this_val)) {
+        if (auto* registry = n->TextureAnimationRegistry()) {
+            registry->Pause(*n);
+            return JS_UNDEFINED;
+        }
+        n->TexAnim().playing = false;
+    }
     return JS_UNDEFINED;
 }
 JSValue TexAnimSetFrame(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    TraceDependency(ctx, "write", "textureAnimation", GetTexAnimNode(this_val));
     if (argc < 1) return JS_UNDEFINED;
     auto* n = GetTexAnimNode(this_val);
     if (! n) return JS_UNDEFINED;
     int32_t f = 0;
     JS_ToInt32(ctx, &f, argv[0]);
     if (f < 0) f = 0;
+    if (auto* registry = n->TextureAnimationRegistry()) {
+        registry->SetFrame(*n, owe::usize(static_cast<std::size_t>(f)));
+        return JS_UNDEFINED;
+    }
     n->TexAnim().current_frame = f;
     n->TexAnim().playing       = false;
     return JS_UNDEFINED;
 }
 JSValue TexAnimGetFrame(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "read", "textureAnimation", GetTexAnimNode(this_val));
     auto* n = GetTexAnimNode(this_val);
     if (! n) return JS_NewInt32(ctx, 0);
+    if (auto* registry = n->TextureAnimationRegistry())
+        return JS_NewInt32(ctx, static_cast<int32_t>(registry->CurrentFrame(*n).to_primitive()));
     const int f = n->TexAnim().current_frame;
     return JS_NewInt32(ctx, f < 0 ? 0 : f);
 }
 JSValue TexAnimIsPlaying(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "read", "textureAnimation", GetTexAnimNode(this_val));
     auto* n = GetTexAnimNode(this_val);
-    return JS_NewBool(ctx, n ? n->TexAnim().playing : false);
+    if (! n) return JS_NewBool(ctx, false);
+    if (auto* registry = n->TextureAnimationRegistry()) return JS_NewBool(ctx, registry->IsPlaying(*n));
+    return JS_NewBool(ctx, n->TexAnim().playing);
+}
+JSValue TexAnimGetFrameCount(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "textureAnimation", GetTexAnimNode(this_val));
+    auto* n = GetTexAnimNode(this_val);
+    auto* registry = n != nullptr ? n->TextureAnimationRegistry() : nullptr;
+    return registry != nullptr
+               ? JS_NewInt32(ctx, static_cast<int32_t>(registry->FrameCount(*n).to_primitive()))
+               : JS_UNDEFINED;
+}
+JSValue TexAnimGetDuration(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "textureAnimation", GetTexAnimNode(this_val));
+    auto* n = GetTexAnimNode(this_val);
+    auto* registry = n != nullptr ? n->TextureAnimationRegistry() : nullptr;
+    return registry != nullptr ? JS_NewFloat64(ctx, registry->Duration(*n).to_primitive()) : JS_UNDEFINED;
+}
+JSValue TexAnimGetRate(JSContext* ctx, JSValueConst this_val) {
+    TraceDependency(ctx, "read", "textureAnimation", GetTexAnimNode(this_val));
+    auto* n = GetTexAnimNode(this_val);
+    auto* registry = n != nullptr ? n->TextureAnimationRegistry() : nullptr;
+    return registry != nullptr ? JS_NewFloat64(ctx, registry->Rate(*n).to_primitive()) : JS_UNDEFINED;
+}
+JSValue TexAnimSetRate(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    TraceDependency(ctx, "write", "textureAnimation", GetTexAnimNode(this_val));
+    double rate = 1.0;
+    if (JS_ToFloat64(ctx, &rate, value) != 0) return JS_UNDEFINED;
+    if (auto* n = GetTexAnimNode(this_val)) {
+        if (auto* registry = n->TextureAnimationRegistry()) registry->SetRate(*n, f64(rate));
+    }
+    return JS_UNDEFINED;
+}
+JSValue TexAnimJoin(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "write", "textureAnimation", GetTexAnimNode(this_val));
+    if (auto* n = GetTexAnimNode(this_val)) {
+        if (auto* registry = n->TextureAnimationRegistry()) {
+            registry->Join(*n);
+            return JS_UNDEFINED;
+        }
+    }
+    return JS_ThrowTypeError(ctx, "texture animation is not bound");
 }
 
 const JSCFunctionListEntry s_texanim_proto_funcs[] = {
+    JS_CGETSET_DEF("frameCount", TexAnimGetFrameCount, NodeSetIgnore),
+    JS_CGETSET_DEF("duration", TexAnimGetDuration, NodeSetIgnore),
+    JS_CGETSET_DEF("rate", TexAnimGetRate, TexAnimSetRate),
     JS_CFUNC_DEF("play", 0, TexAnimPlay),         JS_CFUNC_DEF("stop", 0, TexAnimStop),
     JS_CFUNC_DEF("pause", 0, TexAnimPause),       JS_CFUNC_DEF("setFrame", 1, TexAnimSetFrame),
     JS_CFUNC_DEF("getFrame", 0, TexAnimGetFrame), JS_CFUNC_DEF("isPlaying", 0, TexAnimIsPlaying),
+    JS_CFUNC_DEF("join", 0, TexAnimJoin),
 };
 
 void InitTexAnimClass(JSContext* ctx, JSRuntime* rt) {
@@ -2892,6 +3273,7 @@ void InitTexAnimClass(JSContext* ctx, JSRuntime* rt) {
 }
 
 JSValue NodeGetTextureAnimation(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "read", "textureAnimation", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) {
         // Unbound (default) layer — fall back to the JS-side stub so reads
@@ -2922,6 +3304,7 @@ static JSClassID s_animation_class_id = 0;
 
 struct AnimationHandle {
     Arc<owe::SceneAnimationPlayback> playback;
+    owe::SceneNode* node { nullptr };
 };
 
 void AnimationFinalizer(JSRuntime*, JSValue value) {
@@ -2936,6 +3319,11 @@ JSClassDef s_animation_class_def {
 owe::SceneAnimationPlayback* GetAnimationPlayback(JSValueConst value) {
     auto* handle = static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
     return handle != nullptr ? handle->playback.as_ptr().as_raw_ptr() : nullptr;
+}
+
+owe::SceneNode* GetAnimationNode(JSValueConst value) {
+    auto* handle = static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
+    return handle != nullptr ? handle->node : nullptr;
 }
 
 JSValue AnimationGetFps(JSContext* ctx, JSValueConst value) {
@@ -2966,6 +3354,7 @@ JSValue AnimationGetRate(JSContext* ctx, JSValueConst value) {
 }
 
 JSValue AnimationSetRate(JSContext* ctx, JSValueConst value, JSValueConst next) {
+    TraceDependency(ctx, "write", "animation", GetAnimationNode(value));
     double rate = 1.0;
     if (JS_ToFloat64(ctx, &rate, next) == 0) {
         if (auto* playback = GetAnimationPlayback(value))
@@ -2974,22 +3363,26 @@ JSValue AnimationSetRate(JSContext* ctx, JSValueConst value, JSValueConst next) 
     return JS_UNDEFINED;
 }
 
-JSValue AnimationPlay(JSContext*, JSValueConst value, int, JSValueConst*) {
+JSValue AnimationPlay(JSContext* ctx, JSValueConst value, int, JSValueConst*) {
+    TraceDependency(ctx, "write", "animation", GetAnimationNode(value));
     if (auto* playback = GetAnimationPlayback(value)) playback->Play();
     return JS_UNDEFINED;
 }
 
-JSValue AnimationStop(JSContext*, JSValueConst value, int, JSValueConst*) {
+JSValue AnimationStop(JSContext* ctx, JSValueConst value, int, JSValueConst*) {
+    TraceDependency(ctx, "write", "animation", GetAnimationNode(value));
     if (auto* playback = GetAnimationPlayback(value)) playback->Stop();
     return JS_UNDEFINED;
 }
 
-JSValue AnimationPause(JSContext*, JSValueConst value, int, JSValueConst*) {
+JSValue AnimationPause(JSContext* ctx, JSValueConst value, int, JSValueConst*) {
+    TraceDependency(ctx, "write", "animation", GetAnimationNode(value));
     if (auto* playback = GetAnimationPlayback(value)) playback->Pause();
     return JS_UNDEFINED;
 }
 
 JSValue AnimationSetFrame(JSContext* ctx, JSValueConst value, int argc, JSValueConst* argv) {
+    TraceDependency(ctx, "write", "animation", GetAnimationNode(value));
     if (argc < 1) return JS_UNDEFINED;
     int32_t frame {};
     if (JS_ToInt32(ctx, &frame, argv[0]) == 0) {
@@ -3056,35 +3449,50 @@ auto ActivePropertyAnimation(JSContext* ctx, int argc, JSValueConst* argv)
     return playback;
 }
 
-JSValue WrapAnimation(JSContext* ctx, Option<Arc<owe::SceneAnimationPlayback>> playback) {
+JSValue WrapAnimation(JSContext* ctx, Option<Arc<owe::SceneAnimationPlayback>> playback,
+                      owe::SceneNode* node) {
     if (playback.is_none()) return MakeAnimationStub(ctx);
     JSValue object = JS_NewObjectClass(ctx, s_animation_class_id);
     if (JS_IsException(object)) return object;
-    JS_SetOpaque(object, new AnimationHandle { .playback = rstd::move(*playback) });
+    JS_SetOpaque(object, new AnimationHandle { .playback = rstd::move(*playback), .node = node });
     return object;
 }
 
 JSValue PropertyObjectGetAnimation(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    return WrapAnimation(ctx, ActivePropertyAnimation(ctx, argc, argv));
+    auto playback = ActivePropertyAnimation(ctx, argc, argv);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto* script = host && host->active_field_script ? host->active_field_script->m_impl.get() : nullptr;
+    auto* node = script ? script->node : host ? host->loading_node : nullptr;
+    return playback.is_some() ? WrapAnimation(ctx, rstd::move(playback), node) : JS_UNDEFINED;
 }
 
 JSValue NodeGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    TraceDependency(ctx, "read", "animation", GetLayerNode(this_val));
     auto* handle = GetLayerHandle(this_val);
-    if (handle == nullptr) return MakeAnimationStub(ctx);
+    if (handle == nullptr) return JS_UNDEFINED;
     if (handle->property_object)
-        return WrapAnimation(ctx, ActivePropertyAnimation(ctx, argc, argv));
+        return PropertyObjectGetAnimation(ctx, this_val, argc, argv);
 
     auto* node = ResolveLayerNode(handle);
-    if (node == nullptr || argc == 0 || JS_IsUndefined(argv[0]) || JS_IsNull(argv[0]))
-        return MakeAnimationStub(ctx);
+    if (node == nullptr) return JS_UNDEFINED;
+    if (argc == 0 || JS_IsUndefined(argv[0]) || JS_IsNull(argv[0])) {
+        auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+        if (host == nullptr || host->active_field_script == nullptr) return JS_UNDEFINED;
+        auto* script = host->active_field_script->m_impl.get();
+        if (script == nullptr) return JS_UNDEFINED;
+        auto playback = node->FieldAnimation(script->property.as_str());
+        return playback.is_some() ? WrapAnimation(ctx, rstd::move(playback), node) : JS_UNDEFINED;
+    }
     const char* name = JS_ToCString(ctx, argv[0]);
     if (name == nullptr || *name == '\0') {
         if (name != nullptr) JS_FreeCString(ctx, name);
-        return MakeAnimationStub(ctx);
+        return JS_UNDEFINED;
     }
-    auto playback = node->NamedAnimation(rstd::cppstd::as_str(name).unwrap());
+    auto key = rstd::cppstd::as_str(name).unwrap();
+    auto playback = node->FieldAnimation(key);
+    if (playback.is_none()) playback = node->NamedAnimation(key);
     JS_FreeCString(ctx, name);
-    return WrapAnimation(ctx, rstd::move(playback));
+    return playback.is_some() ? WrapAnimation(ctx, rstd::move(playback), node) : JS_UNDEFINED;
 }
 
 static JSClassID s_video_texture_class_id = 0;
@@ -3193,15 +3601,16 @@ void InitVideoTextureClass(JSContext* ctx, JSRuntime* rt) {
 }
 
 JSValue NodeGetVideoTexture(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    TraceDependency(ctx, "read", "videoTexture", GetLayerNode(this_val));
     auto* node     = GetLayerNode(this_val);
     auto  playback = node != nullptr ? node->VideoControlHandle() : None<Arc<VideoPlaybackState>>();
     if (playback.is_none()) {
-        JSValue global  = JS_GetGlobalObject(ctx);
-        JSValue factory = JS_GetPropertyStr(ctx, global, "__wwCreateVideoTextureStub");
-        JSValue result  = JS_Call(ctx, factory, JS_UNDEFINED, 0, nullptr);
-        JS_FreeValue(ctx, factory);
-        JS_FreeValue(ctx, global);
-        return result;
+        // The API belongs to image layers.  A still image has no video
+        // resource and reports null; containers and other layer kinds do
+        // not expose a usable video-texture operation.
+        if (node == nullptr || ! node->HasMaterial())
+            return JS_ThrowTypeError(ctx, "getVideoTexture is only available on image layers");
+        return JS_NULL;
     }
     JSValue object = JS_NewObjectClass(ctx, s_video_texture_class_id);
     if (JS_IsException(object)) return object;
@@ -3234,6 +3643,7 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CFUNC_DEF("getChildren", 0, NodeGetChildren),
     JS_CFUNC_DEF("getName", 0, NodeGetName),
     JS_CFUNC_DEF("getLayer", 1, NodeGetLayer),
+    JS_CFUNC_DEF("getLayerCount", 0, NodeSceneGetLayerCount),
     JS_CFUNC_DEF("getEffect", 1, NodeGetEffect),
     JS_CFUNC_DEF("getEffectCount", 0, NodeGetEffectCount),
     JS_CFUNC_DEF("enumerateLayers", 0, NodeSceneEnumerateLayers),
@@ -3255,6 +3665,24 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CFUNC_DEF("pause", 0, NodePause),
     JS_CFUNC_DEF("isPlaying", 0, NodeIsPlaying),
 };
+
+const JSCFunctionListEntry s_animation_layer_proto_funcs[] = {
+    JS_CGETSET_DEF("visible", AnimationLayerGetVisible, AnimationLayerSetVisible),
+    JS_CGETSET_DEF("blend", AnimationLayerGetBlend, AnimationLayerSetBlend),
+    JS_CFUNC_DEF("getAnimation", 1, PropertyObjectGetAnimation),
+};
+
+void InitAnimationLayerClass(JSContext* ctx, JSRuntime* rt) {
+    if (s_animation_layer_class_id == 0) JS_NewClassID(rt, &s_animation_layer_class_id);
+    JS_NewClass(rt, s_animation_layer_class_id, &s_animation_layer_class_def);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(
+        ctx,
+        proto,
+        s_animation_layer_proto_funcs,
+        sizeof(s_animation_layer_proto_funcs) / sizeof(s_animation_layer_proto_funcs[0]));
+    JS_SetClassProto(ctx, s_animation_layer_class_id, proto);
+}
 
 void InitLayerClass(JSContext* ctx, JSRuntime* rt) {
     if (s_layer_class_id == 0) JS_NewClassID(rt, &s_layer_class_id);
@@ -3422,7 +3850,128 @@ JSValue MakeMediaThumbnailEvent(JSContext* ctx, const MediaStatus& status) {
 
 // --- JsRuntime methods ------------------------------------------------------
 
+namespace {
+
+JSValue OfflineNow(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    TraceDependency(ctx, "input", "wall_clock");
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    // Match Date's TimeClip integer-millisecond representation, including
+    // epochs before 1970. performance.now() remains a fractional clock.
+    return JS_NewFloat64(ctx, std::trunc(host->offline->epoch_ms + host->offline->elapsed * 1000.0));
+}
+
+JSValue OfflinePerformanceNow(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    return JS_NewFloat64(ctx, host->offline->elapsed * 1000.0);
+}
+
+JSValue OfflineRandom(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    TraceDependency(ctx, "random", "Math.random");
+    // Exact 53 random bits mapped into [0,1), sharing the job's seeded engine
+    // with particles. std::uniform_real_distribution may include endpoint 1.
+    const uint64_t hi = uint64_t(Random::engine()() >> 5);
+    const uint64_t lo = uint64_t(Random::engine()() >> 6);
+    return JS_NewFloat64(ctx, double((hi << 26) | lo) / 9007199254740992.0);
+}
+
+JSValue OfflineUnsupported(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    const char* name = argc ? JS_ToCString(ctx, argv[0]) : nullptr;
+    const std::string message = std::string("Unsupported offline API: ") + (name ? name : "unknown");
+    host->offline->diagnose(message, true);
+    if (name) JS_FreeCString(ctx, name);
+    return JS_ThrowTypeError(ctx, "%s", message.c_str());
+}
+
+void InstallOfflineGlobals(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "__wwOfflineNow", JS_NewCFunction(ctx, OfflineNow, "offlineNow", 0));
+    JS_SetPropertyStr(ctx, global, "__wwOfflinePerformanceNow",
+        JS_NewCFunction(ctx, OfflinePerformanceNow, "offlinePerformanceNow", 0));
+    JS_SetPropertyStr(ctx, global, "__wwOfflineUnsupported",
+        JS_NewCFunction(ctx, OfflineUnsupported, "offlineUnsupported", 1));
+    JS_SetPropertyStr(ctx, global, "__wwOfflineInputRead", JS_NewCFunction(ctx,
+        [](JSContext* context, JSValueConst, int, JSValueConst*) -> JSValue {
+            TraceDependency(context, "input", "pointer"); return JS_UNDEFINED;
+        }, "offlineInputRead", 0));
+    JSValue math = JS_GetPropertyStr(ctx, global, "Math");
+    JS_SetPropertyStr(ctx, math, "random", JS_NewCFunction(ctx, OfflineRandom, "random", 0));
+    JS_FreeValue(ctx, math);
+    JS_FreeValue(ctx, global);
+    // Calendar and local getters use UTC. Ambiguous local strings and locale
+    // formatting fail explicitly instead of silently consulting the host OS.
+    constexpr const char* source = R"JS(
+(() => {
+  const NativeDate = globalThis.Date;
+  const inputRead = globalThis.__wwOfflineInputRead;
+  globalThis.input = new Proxy(globalThis.input, {get(target, key, receiver) {
+    inputRead(); return Reflect.get(target, key, receiver);
+  }});
+  const now = globalThis.__wwOfflineNow;
+  const unsupported = globalThis.__wwOfflineUnsupported;
+  function checkString(v) {
+    if (typeof v === 'string' && !/^\d{4}-\d{2}-\d{2}$/.test(v) &&
+        !/(?:Z|[+-]\d{2}:?\d{2}|GMT|UTC)$/i.test(v))
+      unsupported('Date parsing without an explicit UTC offset');
+    return v;
+  }
+  function OfflineDate(...args) {
+    if (!new.target) return new NativeDate(now()).toUTCString();
+    if (args.length === 0) return new NativeDate(now());
+    if (args.length === 1) return new NativeDate(checkString(args[0]));
+    return new NativeDate(NativeDate.UTC(...args));
+  }
+  OfflineDate.prototype = NativeDate.prototype;
+  Object.defineProperty(OfflineDate.prototype, 'constructor', {value: OfflineDate});
+  OfflineDate.now = now;
+  OfflineDate.UTC = NativeDate.UTC;
+  OfflineDate.parse = v => NativeDate.parse(checkString(String(v)));
+  for (const name of ['FullYear','Month','Date','Day','Hours','Minutes','Seconds','Milliseconds']) {
+    NativeDate.prototype['get' + name] = NativeDate.prototype['getUTC' + name];
+    if (NativeDate.prototype['setUTC' + name])
+      NativeDate.prototype['set' + name] = NativeDate.prototype['setUTC' + name];
+  }
+  NativeDate.prototype.getYear = function() { return this.getUTCFullYear() - 1900; };
+  NativeDate.prototype.setYear = function(y) {
+    y = Number(y); return this.setUTCFullYear(y >= 0 && y <= 99 ? y + 1900 : y);
+  };
+  NativeDate.prototype.getTimezoneOffset = () => 0;
+  NativeDate.prototype.toString = NativeDate.prototype.toUTCString;
+  NativeDate.prototype.toDateString = NativeDate.prototype.toUTCString;
+  NativeDate.prototype.toTimeString = NativeDate.prototype.toUTCString;
+  for (const name of ['toLocaleString','toLocaleDateString','toLocaleTimeString'])
+    NativeDate.prototype[name] = () => unsupported('Date.' + name);
+  globalThis.Date = OfflineDate;
+  globalThis.performance = { now: globalThis.__wwOfflinePerformanceNow, timeOrigin: now() };
+  globalThis.engine = new Proxy(globalThis.engine, {
+    get(target, key, receiver) {
+      if (typeof key === 'string' && !(key in target)) unsupported('engine.' + key);
+      return Reflect.get(target, key, receiver);
+    }
+  });
+  for (const name of ['fetch','XMLHttpRequest','WebSocket','Worker'])
+    globalThis[name] = function() { return unsupported(name); };
+})();
+)JS";
+    JSValue result = JS_Eval(ctx, source, std::strlen(source), "<offline-clock>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(result)) {
+        auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+        host->offline->diagnose("Offline JavaScript clock bootstrap failed", true);
+        JSValue exception = JS_GetException(ctx);
+        JS_FreeValue(ctx, exception);
+    }
+    JS_FreeValue(ctx, result);
+}
+
+} // namespace
+
 JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
+    m_impl->host.offline = active_offline_execution;
+    if (m_impl->host.offline) {
+        double seconds = std::fmod(m_impl->host.offline->epoch_ms / 1000.0, 86400.0);
+        if (seconds < 0.0) seconds += 86400.0;
+        m_impl->host.inputs.time_of_day = static_cast<float>(seconds / 86400.0);
+    }
     m_impl->rt  = JS_NewRuntime();
     m_impl->ctx = JS_NewContext(m_impl->rt);
     if (! m_impl->rt || ! m_impl->ctx) {
@@ -3444,6 +3993,7 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
     JS_SetModuleLoaderFunc(
         m_impl->rt, /*normalize=*/nullptr, BuiltinModuleLoader, /*opaque=*/nullptr);
     InitLayerClass(m_impl->ctx, m_impl->rt);
+    InitAnimationLayerClass(m_impl->ctx, m_impl->rt);
     InitParticleInstanceClass(m_impl->ctx, m_impl->rt);
     InitEffectClass(m_impl->ctx, m_impl->rt);
     InitMaterialClass(m_impl->ctx, m_impl->rt);
@@ -3451,6 +4001,7 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
     InitAnimationClass(m_impl->ctx, m_impl->rt);
     InitVideoTextureClass(m_impl->ctx, m_impl->rt);
     InstallEngineGlobal(m_impl->ctx);
+    if (m_impl->host.offline) InstallOfflineGlobals(m_impl->ctx);
     // Bootstrap created stub `thisLayer` / `thisScene` on globalThis.
     // Capture them now so per-script binding can fall back to the stub
     // when no SceneNode is provided.
@@ -3461,7 +4012,9 @@ JsRuntime::~JsRuntime() {
     if (! m_impl) return;
     // Drop FieldScripts before tearing down the runtime so their JSValues
     // go through JS_FreeValue while the context is still alive.
-    for (auto& fs : m_impl->scripts) {
+    const auto script_count = m_impl->scripts.size();
+    for (size_t script_index = 0; script_index < script_count; ++script_index) {
+        auto& fs = m_impl->scripts[script_index];
         if (fs && fs->m_impl) {
             JS_FreeValue(m_impl->ctx, fs->m_impl->update_fn);
             JS_FreeValue(m_impl->ctx, fs->m_impl->animation_event_fn);
@@ -3530,13 +4083,15 @@ void JsRuntime::SetUserProperty(std::string_view key, const Json& property) {
     JSValue changed = JS_NewObject(ctx);
     JS_DefinePropertyValueStr(
         ctx, changed, key_str.c_str(), UserPropertyValueToJs(ctx, property), JS_PROP_C_W_E);
-    for (auto& fs : m_impl->scripts) {
-        auto* I = fs->m_impl.get();
+    const auto property_script_count = m_impl->scripts.size();
+    for (size_t script_index = 0; script_index < property_script_count; ++script_index) {
+        auto* fs = m_impl->scripts[script_index].get();
+        auto* I  = fs->m_impl.get();
         if (! I->alive) continue;
         JSValue fn = JS_GetPropertyStr(ctx, I->module_ns, "applyUserProperties");
         if (JS_IsFunction(ctx, fn)) {
             BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
-            m_impl->host.active_field_script = fs.get();
+            m_impl->host.active_field_script = fs;
             JSValue arg                      = JS_DupValue(ctx, changed);
             JSValue r                        = JS_Call(ctx, fn, JS_UNDEFINED, 1, &arg);
             JS_FreeValue(ctx, arg);
@@ -3570,11 +4125,13 @@ void JsRuntime::SetMediaStatus(const MediaStatus& status) {
         first || prev.art_url != status.art_url || prev.previous_art_url != status.previous_art_url;
     if (! playback_changed && ! properties_changed && ! thumbnail_changed) return;
 
-    for (auto& fs : m_impl->scripts) {
-        auto* I = fs->m_impl.get();
+    const auto media_script_count = m_impl->scripts.size();
+    for (size_t script_index = 0; script_index < media_script_count; ++script_index) {
+        auto* fs = m_impl->scripts[script_index].get();
+        auto* I  = fs->m_impl.get();
         if (! I->alive) continue;
         BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
-        m_impl->host.active_field_script = fs.get();
+        m_impl->host.active_field_script = fs;
         if (playback_changed) {
             JSValue ev = MakeMediaPlaybackEvent(ctx, status);
             InvokeEventCallback(
@@ -3626,11 +4183,18 @@ void JsRuntime::SetInitializationOrder(FieldScript& script, std::uint64_t order)
 void JsRuntime::RegisterInitialLayerConfig(owe::SceneNode* node, Json config) {
     if (! m_impl || node == nullptr) return;
     (void)m_impl->host.initial_layer_configs.insert(node, rstd::move(config));
+    AppendPublicLayer(m_impl->host, node);
 }
 
 void JsRuntime::SetSceneRoot(owe::SceneNode* root) {
     if (! m_impl || ! m_impl->ctx) return;
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
+    if (m_impl->host.scene_root != root)
+        m_impl->host.public_layers.erase(
+            std::remove_if(m_impl->host.public_layers.begin(),
+                           m_impl->host.public_layers.end(),
+                           [root](auto* node) { return ! SceneTreeContains(root, node); }),
+            m_impl->host.public_layers.end());
     m_impl->scene_root      = root;
     m_impl->host.scene_root = root;
     m_impl->wrapped_scene   = root ? WrapLayerNode(m_impl->ctx, root) : JS_UNDEFINED;
@@ -3664,12 +4228,14 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
         ev_shared = MakeCursorEvent(ctx, cursor, button);
         return ev_shared;
     };
-    for (auto& fs : m_impl->scripts) {
-        auto* I = fs->m_impl.get();
+    const auto cursor_script_count = m_impl->scripts.size();
+    for (size_t script_index = 0; script_index < cursor_script_count; ++script_index) {
+        auto* fs = m_impl->scripts[script_index].get();
+        auto* I  = fs->m_impl.get();
         if (! I->alive || ! I->node) continue;
         const bool now_inside = in_window && HitTestNode(I->node, cursor);
         BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
-        m_impl->host.active_field_script = fs.get();
+        m_impl->host.active_field_script = fs;
         if (now_inside != I->cursor_inside) {
             InvokeEventCallback(ctx,
                                 I->module_ns,
@@ -3706,12 +4272,14 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
 
     for (const auto& dispatch : animation_events) {
         if (dispatch.node == nullptr) continue;
-        for (auto& fs : m_impl->scripts) {
-            auto* I = fs->m_impl.get();
+        const auto animation_script_count = m_impl->scripts.size();
+        for (size_t script_index = 0; script_index < animation_script_count; ++script_index) {
+            auto* fs = m_impl->scripts[script_index].get();
+            auto* I  = fs->m_impl.get();
             if (! I->alive || I->node != dispatch.node || JS_IsUndefined(I->animation_event_fn))
                 continue;
             BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
-            m_impl->host.active_field_script = fs.get();
+            m_impl->host.active_field_script = fs;
             JSValue args[2]                  = { MakeAnimationEvent(ctx, dispatch.event),
                                                  JS_DupValue(ctx, I->current_value) };
             JSValue ret = JS_Call(ctx, I->animation_event_fn, JS_UNDEFINED, 2, args);
@@ -3736,14 +4304,15 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
     }
     m_impl->host.active_field_script = nullptr;
 
-    for (auto& fs : m_impl->scripts) {
-        auto* I = fs->m_impl.get();
-        if (! I->alive) continue;
+    for (size_t script_index = 0; script_index < m_impl->scripts.size(); ++script_index) {
+        auto* fs = m_impl->scripts[script_index].get();
+        auto* I  = fs->m_impl.get();
+        if (! I->alive || I->update_faulted) continue;
         if (JS_IsUndefined(I->update_fn)) continue;
         // Swap `thisLayer` to this script's bound node before update. When
         // unbound, restore the original stub captured at bootstrap.
         BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
-        m_impl->host.active_field_script = fs.get();
+        m_impl->host.active_field_script = fs;
         JSValue ret;
         if (I->update_takes_arg) {
             JSValue args[1] = { JS_DupValue(ctx, I->current_value) };
@@ -3753,7 +4322,7 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
             ret = JS_Call(ctx, I->update_fn, JS_UNDEFINED, 0, nullptr);
         }
         if (JS_IsException(ret)) {
-            m_impl->LogError(ctx, I->sha, "update threw");
+            m_impl->LogError(ctx, I->sha, "update threw", fs);
             JS_FreeValue(ctx, ret);
             continue;
         }
@@ -3777,7 +4346,12 @@ void JsRuntime::ForEachScript(EachFn fn, void* user) {
 void JsRuntime::RegisterTextSetter(owe::SceneNode*                       node,
                                    std::function<void(std::string_view)> setter) {
     if (node == nullptr) return;
-    m_impl->host.text_setters[node] = std::move(setter);
+    m_impl->host.text_hooks[node].setter = std::move(setter);
+}
+
+void JsRuntime::RegisterTextGetter(owe::SceneNode* node, std::function<std::string()> getter) {
+    if (node == nullptr) return;
+    m_impl->host.text_hooks[node].getter = std::move(getter);
 }
 
 void JsRuntime::RegisterTextAlignSetters(owe::SceneNode* node, std::string horizontal,
@@ -3874,7 +4448,17 @@ void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs) {
     JSValue arg                  = JS_DupValue(ctx, I->current_value);
     JSValue r                    = JS_Call(ctx, I->init_fn, JS_UNDEFINED, 1, &arg);
     JS_FreeValue(ctx, arg);
-    if (JS_IsException(r)) rt->LogError(ctx, I->sha, "init threw");
+    if (JS_IsException(r)) {
+        rt->LogError(ctx, I->sha, "init threw", fs, "init");
+    } else if (I->capture_init_return) {
+        auto value = CoerceReturn(ctx, r, I->kind);
+        if (! std::holds_alternative<std::monostate>(value)) {
+            JSValue next_value = ScriptValueToJs(ctx, value);
+            JS_FreeValue(ctx, I->current_value);
+            I->current_value = next_value;
+            I->last_value    = rstd::move(value);
+        }
+    }
     JS_FreeValue(ctx, r);
     rt->host.active_field_script = nullptr;
     I->init_done                 = true;
@@ -3916,6 +4500,16 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
                                         const Json& initial_value, ScriptBindingContext context) {
     JSContext* ctx = m_impl->ctx;
     if (! ctx) return nullptr;
+    struct LoadingScope {
+        EngineHostState& host;
+        owe::SceneNode* previous;
+        std::string previous_binding;
+        ~LoadingScope() { host.loading_node = previous; host.loading_binding = std::move(previous_binding); }
+    } loading { m_impl->host, m_impl->host.loading_node, m_impl->host.loading_binding };
+    m_impl->host.loading_node = context.layer;
+    m_impl->host.loading_binding = rstd::cppstd::to_string(context.property.as_str());
+    if (m_impl->host.offline) m_impl->host.offline->diagnose(
+        "Scene scripts execute once per simulated frame; frame-count-based scripts can change behavior when FPS changes");
     m_impl->host.pending_registered_assets.clear();
 
     auto*   node          = context.layer;
@@ -3923,6 +4517,13 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
     JSValue wrapped_object { JS_UNDEFINED };
     switch (context.object_kind) {
     case ScriptPropertyObjectKind::Layer: wrapped_object = WrapLayerNode(ctx, node, true); break;
+    case ScriptPropertyObjectKind::AnimationLayer:
+        if (context.puppet_layer.is_some()) {
+            wrapped_object = WrapAnimationLayer(ctx,
+                                                rstd::move(*context.puppet_layer),
+                                                context.puppet_animation_layer_id);
+        }
+        break;
     case ScriptPropertyObjectKind::Effect:
         wrapped_object = WrapEffect(ctx, rstd::move(context.effect));
         break;
@@ -3948,6 +4549,29 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
     auto          sha_str = std::string(script_sha);
     std::uint64_t uniq    = m_impl->next_module_serial++;
     std::string   fname   = "scripts/" + sha_str + "-" + std::to_string(uniq) + ".js";
+    auto report_load_fault = [&](const char* what, const char* phase) -> FieldScript* {
+        auto fault    = std::make_unique<FieldScript>();
+        auto* I       = fault->m_impl.get();
+        I->rt         = m_impl.get();
+        I->ctx        = ctx;
+        I->sha        = sha_str;
+        I->binding_id = uniq;
+        I->kind       = (field_kind_in == FieldKind::Unknown) ? FieldKind::Scalar : field_kind_in;
+        I->node       = node;
+        I->property   = context.property.clone();
+        I->wrapped_layer  = wrapped_layer;
+        I->wrapped_object = wrapped_object;
+        I->registered_assets = rstd::move(m_impl->host.pending_registered_assets);
+        I->init_done        = true;
+        I->update_faulted   = true;
+        I->module_faulted   = true;
+        auto* raw = fault.get();
+        m_impl->LogError(ctx, script_sha, what, raw, phase);
+        I->current_value = CoerceInitialValue(ctx, initial_value, I->kind);
+        I->last_value = CoerceReturn(ctx, I->current_value, I->kind);
+        m_impl->scripts.push_back(rstd::move(fault));
+        return raw;
+    };
     {
         JSValue compiled = JS_Eval(ctx,
                                    source.data(),
@@ -3955,22 +4579,18 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
                                    fname.c_str(),
                                    JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
         if (JS_IsException(compiled)) {
-            m_impl->LogError(ctx, script_sha, "compile failed");
+            auto* fault = report_load_fault("compile failed", "compile");
             JS_FreeValue(ctx, compiled);
-            if (! JS_IsUndefined(wrapped_layer)) JS_FreeValue(ctx, wrapped_layer);
-            if (! JS_IsUndefined(wrapped_object)) JS_FreeValue(ctx, wrapped_object);
             m_impl->host.active_animation = None();
-            return nullptr;
+            return fault;
         }
         JSModuleDef* m  = static_cast<JSModuleDef*>(JS_VALUE_GET_PTR(compiled));
         JSValue      ev = AwaitModuleEvaluation(ctx, JS_EvalFunction(ctx, compiled));
         if (JS_IsException(ev)) {
-            m_impl->LogError(ctx, script_sha, "module eval failed");
+            auto* fault = report_load_fault("module eval failed", "module");
             JS_FreeValue(ctx, ev);
-            if (! JS_IsUndefined(wrapped_layer)) JS_FreeValue(ctx, wrapped_layer);
-            if (! JS_IsUndefined(wrapped_object)) JS_FreeValue(ctx, wrapped_object);
             m_impl->host.active_animation = None();
-            return nullptr;
+            return fault;
         }
         JS_FreeValue(ctx, ev);
         ns = JS_GetModuleNamespace(ctx, m);
@@ -3983,11 +4603,13 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
     I->rt             = m_impl.get();
     I->ctx            = ctx;
     I->sha            = sha_str;
+    I->binding_id     = uniq;
     I->kind           = (field_kind_in == FieldKind::Unknown) ? FieldKind::Scalar : field_kind_in;
     I->module_ns      = ns; // owns one ref now
     I->node           = node;
     I->property       = rstd::move(context.property);
     I->animation      = rstd::move(context.animation);
+    I->capture_init_return = context.capture_init_return;
     I->wrapped_layer  = wrapped_layer;
     I->wrapped_object = wrapped_object;
     I->registered_assets = rstd::move(m_impl->host.pending_registered_assets);
@@ -4073,7 +4695,13 @@ ScriptScene::ScriptScene(Option<Arc<AudioResponseDemand>> demand)
 ScriptScene::~ScriptScene() = default;
 
 JsRuntime& ScriptScene::runtime() noexcept { return m_impl->rt; }
-void       ScriptScene::AddActuator(Actuator a) { m_impl->actuators.push_back(a); }
+void ScriptScene::AddActuator(Actuator a) {
+    if (a.script && a.apply && a.script->m_impl->module_faulted) {
+        a.apply(a.script->last_value());
+        return;
+    }
+    m_impl->actuators.push_back(a);
+}
 // Empty = no scripts AND no actuators. Visibility-bound side-effect-only
 // scripts (audio bar fanout) don't register an actuator but still need
 // their TickAll to run, so emptiness must also consult the runtime.

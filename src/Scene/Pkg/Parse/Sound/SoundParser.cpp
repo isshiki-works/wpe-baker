@@ -36,6 +36,7 @@ struct SoundState {
     Atomic<f32>  volume { f32(1.0f) };
     Atomic<u32>  play_seq {};
     Atomic<u32>  stop_seq {};
+    bool         disabled { false };
 };
 
 class SoundControl final {
@@ -43,15 +44,21 @@ public:
     explicit SoundControl(Arc<SoundState> state): m_state(rstd::move(state)) {}
 
     void Play() {
+        if (m_state->disabled) return;
         m_state->playing.store(true, Ordering::Release);
         m_state->play_seq.fetch_add(u32(1), Ordering::AcqRel);
     }
     void Stop() {
+        if (m_state->disabled) return;
         m_state->playing.store(false, Ordering::Release);
         m_state->stop_seq.fetch_add(u32(1), Ordering::AcqRel);
     }
-    void Pause() { m_state->playing.store(false, Ordering::Release); }
-    bool IsPlaying() const { return m_state->playing.load(Ordering::Acquire); }
+    void Pause() {
+        if (! m_state->disabled) m_state->playing.store(false, Ordering::Release);
+    }
+    bool IsPlaying() const {
+        return ! m_state->disabled && m_state->playing.load(Ordering::Acquire);
+    }
     void SetVolume(float volume) {
         m_state->volume.store(f32(volume).clamp(f32(), f32(1.0f)), Ordering::Release);
     }
@@ -83,20 +90,36 @@ public:
         SyncControl();
         if (m_dead) return u64();
         if (! m_state->playing.load(Ordering::Acquire)) return u64();
-
-        if (! m_curActive) {
-            Switch();
-        }
-
-        u64 frameReads = m_curActive ? m_curActive->next_pcm(pData, frameCount) : u64();
-        if (frameReads == u64() && ! m_dead) {
-            m_curActive.reset();
-            if (m_config.mode == PlaybackMode::Single) {
-                m_state->playing.store(false, Ordering::Release);
-                return u64();
+        u64 frameReads {};
+        size_t empty_sources = 0;
+        while (frameReads < u64(frameCount.to_primitive()) && !m_dead) {
+            if (!m_curActive) Switch();
+            if (!m_curActive) break;
+            const auto remaining = u32(frameCount.to_primitive() - frameReads.to_primitive());
+            auto* output = static_cast<float*>(pData) + frameReads.to_primitive() * m_desc.channels.to_primitive();
+            const auto count = m_curActive->next_pcm(output, remaining);
+            if (auto failure = m_curActive->error(); failure.is_some()) {
+                Fail(rstd::cppstd::to_string(*failure));
+                break;
             }
-            Switch();
-            frameReads = m_curActive ? m_curActive->next_pcm(pData, frameCount) : u64();
+            if (count > u64(remaining.to_primitive())) {
+                Fail("sound decoder returned more sample frames than requested");
+                break;
+            }
+            frameReads += count;
+            if (count == u64()) ++empty_sources;
+            else empty_sources = 0;
+            if (count < u64(remaining.to_primitive())) {
+                m_curActive.reset();
+                if (m_config.mode == PlaybackMode::Single) {
+                    m_state->playing.store(false, Ordering::Release);
+                    break;
+                }
+                if (empty_sources > m_soundPaths.size()) {
+                    Fail("sound playlist produced no decoded sample frames");
+                    break;
+                }
+            }
         }
         UpdateAudioAverage(pData, frameReads);
         {
@@ -111,6 +134,9 @@ public:
         return frameReads;
     };
     void pass_desc(const Desc& d) override { m_desc = d; }
+    auto error() const -> Option<ref<str>> override {
+        return m_error.is_empty() ? None() : Some(m_error.as_str());
+    }
 
     // Walk paths until one opens. If all fail, disable the stream so the
     // audio callback stops re-trying every tick (which spammed FFmpeg's
@@ -119,7 +145,7 @@ public:
         m_curActive.reset();
         const auto n = rstd::as_cast<u32>(usize(m_soundPaths.size()));
         if (n == u32()) {
-            m_dead = true;
+            Fail("sound layer has no audio asset paths");
             return;
         }
         const u32 base = SelectStartIndex(n);
@@ -137,7 +163,7 @@ public:
         }
         m_dead = true;
         m_state->playing.store(false, Ordering::Release);
-        rstd::log::warn("SoundStream: all {} sound path(s) failed to open; disabling stream", n);
+        Fail("all sound-layer audio assets failed to open");
     }
     u32 SelectStartIndex(u32 n) {
         if (n == u32()) return u32();
@@ -153,18 +179,27 @@ public:
     }
 
 private:
+    void Fail(std::string message) {
+        m_dead = true;
+        m_error = String::make(rstd::cppstd::as_str(message).unwrap());
+        if (active_offline_execution) active_offline_execution->diagnose("sound layer: " + message, true);
+        rstd::log::error("SoundStream: {}", m_error);
+    }
+
     void SyncControl() {
         const u32 stop_seq = m_state->stop_seq.load(Ordering::Acquire);
         if (stop_seq != m_seenStopSeq) {
             m_seenStopSeq = stop_seq;
             m_curActive.reset();
             m_dead = false;
+            m_error.clear();
         }
         const u32 play_seq = m_state->play_seq.load(Ordering::Acquire);
         if (play_seq != m_seenPlaySeq) {
             m_seenPlaySeq = play_seq;
             m_curActive.reset();
             m_dead = false;
+            m_error.clear();
         }
     }
 
@@ -199,6 +234,7 @@ private:
     u32             m_seenPlaySeq {};
     u32             m_seenStopSeq {};
     bool            m_dead { false };
+    String          m_error;
 
     const std::vector<std::string>              m_soundPaths;
     std::unique_ptr<wavsen::audio::SoundStream> m_curActive;
@@ -218,11 +254,14 @@ Arc<dyn<SceneSoundControl>> SoundParser::Parse(const wpscene::SoundObject& obj, 
     // The node's sound control is attached after its visibility is applied, so
     // a layer that starts hidden has to be silenced here or it would play until
     // something toggles it.
-    state->playing.store(obj.visible && ! obj.startsilent, Ordering::Release);
+    state->disabled = obj.sound.empty();
+    state->playing.store(! state->disabled && obj.visible && ! obj.startsilent, Ordering::Release);
     state->volume.store(config.volume, Ordering::Release);
     auto control = Arc<dyn<SceneSoundControl>>::make(SoundControl(state.clone()));
-    auto ss      = std::make_unique<SoundStream>(
-        obj.sound, vfs, config, rstd::move(state), rstd::move(audio_average));
-    sm.mount(std::move(ss));
+    if (! state->disabled) {
+        auto ss = std::make_unique<SoundStream>(
+            obj.sound, vfs, config, rstd::move(state), rstd::move(audio_average));
+        sm.mount(std::move(ss));
+    }
     return control;
 }

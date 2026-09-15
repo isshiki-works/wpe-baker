@@ -42,6 +42,11 @@ struct TextureNodeState {
     usize                      version { 0 };
 };
 
+struct WrittenTextureState {
+    TextureNodeState texture;
+    NodeHandle       writer;
+};
+
 struct PassNodeState {
     NodeHandle     handle;
     PassHandle     pass;
@@ -85,6 +90,11 @@ public:
     auto getPass(PassHandle) const -> rstd::Option<const Pass&>;
     auto passState(NodeHandle) const -> rstd::Option<PassNodeState>;
     auto textureState(TextureNodeRef) const -> rstd::Option<TextureNodeState>;
+    // Versions include any graph-created virtual initial value. Only real
+    // writers are eligible; an omitted version selects the latest real write.
+    auto writtenTexture(ref<str> key, Option<usize> version = None()) const
+        -> Option<WrittenTextureState>;
+    auto writtenTexture(NodeHandle writer) const -> Option<WrittenTextureState>;
     auto readTexture(NodeHandle pass_node, TextureNodeRef texture) -> bool;
 
     auto topologicalOrder() const

@@ -133,17 +133,17 @@ bool SameUniformBlockLayout(const ShaderReflected::Block&  reflected,
     return true;
 }
 
-// Spill a payload to /tmp/<sha1> for post-mortem inspection. Returns the
+// Spill a payload to the system temp directory for post-mortem inspection. Returns the
 // written path so callers can mention it in the error message.
 std::string logToTmpfileWithSha1(std::span<const char> in) {
     std::string           name   = utils::genSha1(in);
     std::filesystem::path fspath = std::filesystem::temp_directory_path() / name;
-    std::string           path   = fspath.native();
-    auto*                 file   = std::fopen(path.c_str(), "wb");
+    const auto            utf8   = fspath.generic_u8string();
+    std::string           path(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+    std::ofstream         file(fspath, std::ios::binary | std::ios::trunc);
     if (! file) return path;
-    std::fwrite(in.data(), 1, in.size(), file);
-    std::fputc('\n', file);
-    std::fclose(file);
+    file.write(in.data(), static_cast<std::streamsize>(in.size()));
+    file.put('\n');
     return path;
 }
 

@@ -83,8 +83,21 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
     }
 
     auto finalize_span = SceneLoadSpan(options.load_bench, &SceneLoadProbeIds::parse_finalize);
-    return Ok(ParsedScene {
-        .scene         = FinalizeScene(context),
-        .runtime_input = rstd::move(runtime_input),
-    });
+    const bool retain_context = context.script_scene.is_some();
+    auto       scene          = FinalizeScene(context);
+    if (retain_context) {
+        if (context.user_properties.is_some()) {
+            auto properties = Box<rstd::json::Map>::make();
+            (*context.user_properties)->iter().for_each([&](auto entry) {
+                auto [key, value] = entry;
+                properties->insert(key->clone(), value->clone());
+            });
+            context.owned_user_properties = Some(rstd::move(properties));
+            context.user_properties = Some(ref<rstd::json::Map>::from_raw_parts(
+                (*context.owned_user_properties).get()));
+        }
+        context.scene.Borrow(*scene);
+        scene->InstallExtension(Box<SceneParseContext>::make(rstd::move(context)));
+    }
+    return Ok(ParsedScene { .scene = rstd::move(scene), .runtime_input = rstd::move(runtime_input) });
 }

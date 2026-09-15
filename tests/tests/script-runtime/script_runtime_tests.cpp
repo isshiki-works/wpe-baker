@@ -8,6 +8,7 @@ import wescene.pkg.parse;
 import wescene.types;
 import wescene.scene;
 import wescene.script;
+import wescene.core;
 import wescene.testing.json_builder;
 
 using namespace owe::script;
@@ -94,6 +95,62 @@ struct SoundControlProbe {
 };
 
 } // namespace
+
+TEST(OfflineClock, DateNowMatchesDateTimeClipAtFractionalFrameTimes) {
+    owe::OfflineExecutionContext clock;
+    owe::OfflineExecutionScope scope(clock);
+    JsRuntime rt;
+    auto* probe = MakeProbe(rt, "test/offline_date_integer", R"JS(
+        export function update() {
+            const now = Date.now();
+            if (!Number.isInteger(now) || now !== new Date().getTime())
+                throw new Error('Date.now disagrees with Date TimeClip');
+            if (new Date().getTimezoneOffset() !== 0)
+                throw new Error('Offline Date leaked the host timezone');
+            return now;
+        }
+    )JS");
+    ASSERT_NE(probe, nullptr);
+    clock.elapsed = 1.0 / 120.0;
+    rt.TickAll();
+    EXPECT_FALSE(clock.failed);
+    EXPECT_EQ(LastScalar(probe), 946684800008.0);
+    clock.epoch_ms = -1000.5;
+    rt.TickAll();
+    EXPECT_FALSE(clock.failed);
+    EXPECT_EQ(LastScalar(probe), -992.0);
+}
+
+TEST(OfflineClock, HundredMillisecondIntervalFiresThirdTimeAtFrame36Of120Fps) {
+    // IEngine documents delay in milliseconds; EngineSetTimerImpl divides by
+    // 1000. https://docs.wallpaperengine.io/en/scene/scenescript/reference/class/IEngine.html
+    owe::OfflineExecutionContext clock;
+    owe::OfflineExecutionScope scope(clock);
+    JsRuntime rt;
+    auto* probe = MakeProbe(rt, "test/offline_interval_boundary", R"JS(
+        let count = 0;
+        engine.setInterval(() => { ++count; }, 100);
+        export function update() { return count; }
+    )JS");
+    ASSERT_NE(probe, nullptr);
+    auto tick_frame = [&](unsigned frame) {
+        FrameInputs inputs;
+        inputs.runtime = static_cast<double>(frame) / 120.0;
+        inputs.frametime = 1.0f / 120.0f;
+        clock.elapsed = inputs.runtime;
+        rt.SetFrameInputs(inputs); // Preserve double; legacy Tick() casts to float.
+        rt.TickAll();
+    };
+    for (unsigned frame = 0; frame <= 35; ++frame) tick_frame(frame);
+    EXPECT_EQ(LastScalar(probe), 2.0);
+    tick_frame(36);
+    EXPECT_EQ(LastScalar(probe), 3.0);
+    for (unsigned frame = 37; frame <= 1200; ++frame) {
+        tick_frame(frame);
+        EXPECT_EQ(LastScalar(probe), static_cast<double>(frame / 12));
+    }
+    EXPECT_FALSE(clock.failed);
+}
 
 TEST(ScriptInitialization, UsesSceneOwnerOrderInsteadOfRegistrationOrder) {
     auto root = Arc<owe::SceneNode>::make();
@@ -1248,6 +1305,79 @@ TEST(ScriptTexAnim, PauseFreezesAtCurrent) {
     EXPECT_EQ(node.TexAnim().current_frame, -1); // pause keeps auto cursor
 }
 
+TEST(ScriptTexAnim, ReadsAndControlsBoundSpriteAnimation) {
+    owe::Scene scene;
+    auto       node = rstd::sync::Arc<owe::SceneNode>::make();
+    node->SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = rstd::i32(711) }));
+    auto       mesh = std::make_shared<owe::SceneMesh>();
+    owe::SceneMaterial material;
+    material.textures.push_back("tex/script-sprite");
+    mesh->AddMaterial(rstd::move(material));
+    mesh->Submeshes().push_back(owe::SceneMesh::Submesh { .material_slot = rstd::u32() });
+    node->AddMesh(mesh);
+    scene.RootMut()->AppendChild(node.clone());
+    owe::SceneTexture texture { .url = "tex/script-sprite", .isSprite = true };
+    texture.spriteAnim.AppendFrame(owe::SpriteFrame { .frametime = 0.1f });
+    texture.spriteAnim.AppendFrame(owe::SpriteFrame { .frametime = 0.2f });
+    texture.spriteAnim.AppendFrame(owe::SpriteFrame { .frametime = 0.3f });
+    scene.RegisterTexture(String::make("tex/script-sprite"_str), rstd::move(texture));
+    scene.RebuildResourceIndex();
+
+    owe::OfflineExecutionContext offline;
+    offline.trace_scene = true;
+    owe::OfflineExecutionScope scope(offline);
+    JsRuntime   rt;
+    FrameInputs fi {};
+    rt.SetFrameInputs(fi);
+    auto* fs = rt.MakeFieldScript(
+        R"JS(
+            let anim;
+            let initMetadata = false;
+            export function init() {
+                anim = thisLayer.getTextureAnimation();
+                initMetadata = anim.frameCount === 3 && Math.abs(anim.duration - 0.6) < 0.001 &&
+                    anim.rate === 1;
+            }
+            export function update() {
+                anim.rate = 2;
+                anim.pause();
+                return (initMetadata ? 1 : -1) * 1000000 + anim.frameCount * 10000 +
+                    anim.duration * 1000 + anim.rate * 100 +
+                    anim.getFrame() * 10 + (anim.isPlaying() ? 1 : 0);
+            }
+        )JS",
+        "test/texanim_bound_sprite",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        node.as_ptr());
+    ASSERT_NE(fs, nullptr);
+
+    rt.SetSceneRoot(scene.RootMut().as_raw_ptr());
+    rt.TickAll();
+    EXPECT_NEAR(std::get<ScalarValue>(fs->last_value()).v, 1'030'800.0, 0.01);
+    auto* animations = node->TextureAnimationRegistry();
+    ASSERT_NE(animations, nullptr);
+    EXPECT_FALSE(animations->IsPlaying(*node));
+    EXPECT_EQ(animations->Rate(*node), rstd::f64(2));
+    EXPECT_TRUE(std::any_of(offline.dependencies.begin(),
+                            offline.dependencies.end(),
+                            [](const owe::OfflineDependency& dependency) {
+                                return dependency.owner == 711 && dependency.target == 711 &&
+                                       dependency.operation == "read" &&
+                                       dependency.property == "textureAnimation" &&
+                                       !dependency.initialization;
+                            }));
+    EXPECT_TRUE(std::any_of(offline.dependencies.begin(),
+                            offline.dependencies.end(),
+                            [](const owe::OfflineDependency& dependency) {
+                                return dependency.owner == 711 && dependency.target == 711 &&
+                                       dependency.operation == "write" &&
+                                       dependency.property == "textureAnimation" &&
+                                       !dependency.initialization;
+                            }));
+}
+
 TEST(ScriptTexAnim, UnboundLayerFallsBackToJsStub) {
     // No node bound — getTextureAnimation() returns the JS-side stub from
     // the bootstrap, which silently accepts setFrame / play / etc.
@@ -1307,6 +1437,71 @@ TEST(ScriptVideoTexture, ControlsStableNativePlaybackState) {
     EXPECT_EQ(LastScalar(fs), 14.0);
 }
 
+TEST(ScriptVideoTexture, StillImageIsNullAndContainerIsOrdinaryTypeError) {
+    owe::OfflineExecutionContext offline;
+    offline.trace_scene = true;
+    owe::OfflineExecutionScope   scope(offline);
+    auto still = Arc<owe::SceneNode>::make();
+    still->SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = rstd::i32(713) }));
+    auto mesh = std::make_shared<owe::SceneMesh>();
+    mesh->AddMaterial(owe::SceneMaterial {});
+    mesh->Submeshes().push_back(owe::SceneMesh::Submesh { .material_slot = rstd::u32() });
+    still->AddMesh(std::move(mesh));
+
+    JsRuntime still_runtime;
+    auto* still_script = still_runtime.MakeFieldScript(
+        "const video = thisLayer.getVideoTexture(); export function update() { return video === null ? 1 : 0; }",
+        "test/video_texture_still_image",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        still.as_ptr());
+    ASSERT_NE(still_script, nullptr);
+    auto* unguarded_still_script = still_runtime.MakeFieldScript(
+        "export function init() { thisLayer.getVideoTexture().stop(); } export function update() { return 2; }",
+        "test/video_texture_still_image_unguarded",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        still.as_ptr());
+    ASSERT_NE(unguarded_still_script, nullptr);
+    auto root = Arc<owe::SceneNode>::make();
+    root->AppendChild(still.clone());
+    still_runtime.SetSceneRoot(root.as_ptr());
+    still_runtime.TickAll();
+    EXPECT_EQ(LastScalar(still_script), 1.0);
+    EXPECT_FALSE(offline.failed);
+    ASSERT_EQ(offline.source_script_errors.size(), 1u);
+    EXPECT_EQ(offline.source_script_errors.front().phase, "init");
+    EXPECT_NE(offline.source_script_errors.front().message.find("null"), std::string::npos);
+    EXPECT_TRUE(std::any_of(offline.dependencies.begin(),
+                            offline.dependencies.end(),
+                            [](const owe::OfflineDependency& dependency) {
+                                return dependency.owner == 713 && dependency.target == 713 &&
+                                       dependency.operation == "read" &&
+                                       dependency.property == "videoTexture";
+                            }));
+
+    owe::OfflineExecutionContext container_offline;
+    owe::OfflineExecutionScope   container_scope(container_offline);
+    JsRuntime                     container_runtime;
+    owe::SceneNode                container;
+    container.SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = rstd::i32(714) }));
+    auto* container_script = container_runtime.MakeFieldScript(
+        "thisLayer.getVideoTexture();",
+        "test/video_texture_container",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        &container);
+    ASSERT_NE(container_script, nullptr);
+    EXPECT_FALSE(container_offline.failed);
+    ASSERT_EQ(container_offline.source_script_errors.size(), 1u);
+    EXPECT_EQ(container_offline.source_script_errors.front().phase, "module");
+    EXPECT_NE(container_offline.source_script_errors.front().message.find("TypeError"),
+              std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // localStorage
 
@@ -1316,7 +1511,8 @@ std::string MakeTmpLsPath(const char* tag) {
     auto p = std::filesystem::temp_directory_path() / (std::string("owe_ls_") + tag + ".json");
     std::error_code ec;
     std::filesystem::remove(p, ec);
-    return p.native();
+    const auto utf8 = p.u8string();
+    return std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
 }
 } // namespace
 
@@ -1499,12 +1695,10 @@ TEST(ScriptLayerLookup, MissingLayerHandleResolvesLater) {
     JsRuntime   rt;
     FrameInputs fi {};
     rt.SetFrameInputs(fi);
-    rt.SetSceneRoot(root.as_ptr());
     auto* fs = rt.MakeFieldScript(
         R"JS(
-            let late;
+            let late = thisLayer.getLayer("late-sound");
             export function init() {
-                late = thisScene.getLayer("late-sound");
                 late.stop();
             }
             export function applyUserProperties(changed) {
@@ -1522,6 +1716,7 @@ TEST(ScriptLayerLookup, MissingLayerHandleResolvesLater) {
     auto late = rstd::sync::Arc<owe::SceneNode>::make(
         Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "late-sound");
     root->AppendChild(late.clone());
+    rt.SetSceneRoot(root.as_ptr());
     rt.SetUserProperty("go", rstd::json::from_str(R"({"type":"bool","value":true})"_str).unwrap());
     rt.TickAll();
     EXPECT_EQ(std::get<ScalarValue>(fs->last_value()).v, 1.0);
@@ -1654,7 +1849,7 @@ TEST(ScriptLayerLookup, EffectIndexAndMaterialWritesUseSceneMaterialOwner) {
     EXPECT_FLOAT_EQ(channel_mask->second[usize(3)], 0.75f);
 }
 
-TEST(ScriptLayerLookup, MissingLayerKeepsDefaultTransformShape) {
+TEST(ScriptLayerLookup, MissingLayerReturnsNullAfterSceneRootIsReady) {
     auto root = rstd::sync::Arc<owe::SceneNode>::make();
 
     JsRuntime   rt;
@@ -1663,12 +1858,12 @@ TEST(ScriptLayerLookup, MissingLayerKeepsDefaultTransformShape) {
     rt.SetSceneRoot(root.as_ptr());
     auto* fs = rt.MakeFieldScript(
         R"JS(
-            let resolved = -1;
+            let result = -1;
             export function init() {
-                const late = thisScene.getLayer("late-sound");
-                resolved = late.scale.x + late.origin.x + late.angles.x;
+                const missing = thisScene.getLayer("__definitely_missing_layer__");
+                result = missing === null && typeof missing === 'object' && !Boolean(missing) ? 1 : -1;
             }
-            export function update() { return resolved; }
+            export function update() { return result; }
         )JS",
         "test/lazy_layer_default_transform",
         FieldKind::Scalar,
@@ -2129,6 +2324,8 @@ TEST(ScriptScene, CreatedLayersCanBeSortedBeforeAnExistingLayer) {
     Vec<Arc<owe::SceneNode>> created;
     JsRuntime                rt;
     rt.SetScene(&scene);
+    rt.RegisterInitialLayerConfig(ring.as_ptr(), rstd::json::from_str(R"({})"_str).unwrap());
+    rt.RegisterInitialLayerConfig(body.as_ptr(), rstd::json::from_str(R"({})"_str).unwrap());
     rt.SetLayerFactory(JsRuntime::LayerFactory::make(
         [&scene, &created](owe::SceneNode*, LayerAssetReference) -> Option<Arc<owe::SceneNode>> {
             auto node = Arc<owe::SceneNode>::make();
@@ -2172,6 +2369,137 @@ TEST(ScriptScene, CreatedLayersCanBeSortedBeforeAnExistingLayer) {
     EXPECT_EQ(children[usize(3)].as_ptr(), body.as_ptr());
     EXPECT_DOUBLE_EQ(LastScalar(fs), 1023.0);
     EXPECT_TRUE(scene.ConsumeRenderGraphDirty());
+}
+
+TEST(ScriptScene, PublicLayerQueriesUseAuthoredOrderAndTrackRuntimeLayers) {
+    owe::Scene scene;
+    auto       a = Arc<owe::SceneNode>::make(
+        Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "A");
+    auto one = Arc<owe::SceneNode>::make(
+        Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "1");
+    auto c = Arc<owe::SceneNode>::make(
+        Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "C");
+    auto hidden = Arc<owe::SceneNode>::make(
+        Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "D");
+    auto reporter = Arc<owe::SceneNode>::make(
+        Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "reporter");
+    auto internal = Arc<owe::SceneNode>::make(
+        Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "internal");
+    a->AppendChild(c.clone());
+    hidden->SetVisible(false);
+    a->SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = rstd::i32(37) }));
+    one->SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = rstd::i32(9) }));
+    reporter->SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = rstd::i32(13) }));
+    scene.AttachRuntimeNode(*scene.RootMut(), a.clone());
+    scene.AttachRuntimeNode(*scene.RootMut(), one.clone());
+    scene.AttachRuntimeNode(*scene.RootMut(), hidden.clone());
+    scene.AttachRuntimeNode(*scene.RootMut(), reporter.clone());
+    scene.AttachRuntimeNode(*scene.RootMut(), internal.clone());
+
+    owe::OfflineExecutionContext offline;
+    offline.trace_scene = true;
+    owe::OfflineExecutionScope scope(offline);
+    JsRuntime                   rt;
+    rt.SetScene(&scene);
+    rt.RegisterInitialLayerConfig(
+        a.as_ptr(), rstd::json::from_str(R"({"name":"A"})"_str).unwrap());
+    rt.RegisterInitialLayerConfig(one.as_ptr(), rstd::json::from_str(R"({})"_str).unwrap());
+    rt.RegisterInitialLayerConfig(c.as_ptr(), rstd::json::from_str(R"({})"_str).unwrap());
+    rt.RegisterInitialLayerConfig(hidden.as_ptr(), rstd::json::from_str(R"({})"_str).unwrap());
+    rt.RegisterInitialLayerConfig(reporter.as_ptr(), rstd::json::from_str(R"({})"_str).unwrap());
+    rt.SetLayerConfigFactory(JsRuntime::LayerConfigFactory::make(
+        [&scene](owe::SceneNode*, owe::Json config) -> Option<Arc<owe::SceneNode>> {
+            auto node = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
+                                                   Eigen::Vector3f::Ones(),
+                                                   Eigen::Vector3f::Zero(),
+                                                   "Dynamic");
+            bool visible = true;
+            owe::GetJsonValue(config, "visible", visible, false);
+            node->SetVisible(visible);
+            scene.AttachRuntimeNode(*scene.RootMut(), node.clone());
+            return Some(rstd::move(node));
+        }));
+    auto* fs = rt.MakeFieldScript(
+        R"JS(
+            let result = -1;
+            export function init() {
+                const initial = thisScene.getLayerCount() === 5 &&
+                    thisScene.enumerateLayers().map(x => x.name).join(',') === 'A,1,C,D,reporter' &&
+                    thisScene.getLayer(1).name === '1' && thisScene.getLayer('1').name === '1' &&
+                    thisScene.getInitialLayerConfig(0).name === 'A' &&
+                    thisScene.getLayerIndex(thisScene.getLayer('C')) === 2 &&
+                    thisScene.getLayer(-1) === null && thisScene.getLayer(8) === null &&
+                    thisScene.getLayer(0.5).name === 'A' && thisScene.getLayer(NaN).name === 'A';
+                const sortedResult = thisScene.sortLayer('1', 2);
+                const sorted = thisScene.enumerateLayers().map(x => x.name).join(',') ===
+                    'A,C,1,D,reporter';
+                const typedLookup = thisScene.getLayerIndex(1) === 1 &&
+                    thisScene.getLayerIndex('1') === 2;
+                const numericSort = thisScene.sortLayer(1, 1) === true;
+                const dynamic = thisScene.createLayer({ name: 'Dynamic', visible: false });
+                const appended = thisScene.getLayerCount() === 6 &&
+                    thisScene.getLayerIndex(dynamic) === 5 && dynamic.visible === false;
+                const destroyed = thisScene.destroyLayer(dynamic) === true;
+                const removed = thisScene.getLayerCount() === 5 &&
+                    thisScene.getLayerIndex(dynamic) === -1 && thisScene.destroyLayer(5) === false;
+                const replacement = thisScene.createLayer({ name: 'Dynamic' });
+                result = initial && sortedResult === true && sorted && typedLookup && numericSort && appended && destroyed && removed &&
+                    thisScene.getLayerCount() === 6 && thisScene.getLayerIndex(replacement) === 5 ? 1 : -1;
+            }
+            export function update() { return result; }
+        )JS",
+        "test/public_layer_queries",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        reporter.as_ptr());
+    ASSERT_NE(fs, nullptr);
+
+    rt.SetSceneRoot(scene.RootMut().as_raw_ptr());
+    rt.ClearLayerConfigFactory();
+    rt.TickAll();
+
+    EXPECT_DOUBLE_EQ(LastScalar(fs), 1.0);
+    const auto& children = scene.Root()->GetChildren();
+    ASSERT_EQ(children[usize()].as_ptr(), a.as_ptr());
+    ASSERT_EQ(children[usize(1)].as_ptr(), one.as_ptr());
+    ASSERT_EQ(children[usize(2)].as_ptr(), hidden.as_ptr());
+    ASSERT_EQ(children[usize(3)].as_ptr(), reporter.as_ptr());
+    EXPECT_FALSE(hidden->Visible());
+    EXPECT_TRUE(std::any_of(offline.dependencies.begin(),
+                            offline.dependencies.end(),
+                            [](const owe::OfflineDependency& dependency) {
+                                return dependency.owner == 13 && dependency.target == 9 &&
+                                       dependency.operation == "lookup" &&
+                                       dependency.property == "1";
+                            }));
+    EXPECT_TRUE(std::any_of(offline.dependencies.begin(),
+                            offline.dependencies.end(),
+                            [](const owe::OfflineDependency& dependency) {
+                                return dependency.owner == 13 && dependency.target == 37 &&
+                                       dependency.operation == "lookup" &&
+                                       dependency.property == "0";
+                            }));
+    auto has_query = [&offline](const char* property) {
+        return std::any_of(offline.dependencies.begin(),
+                           offline.dependencies.end(),
+                           [property](const owe::OfflineDependency& dependency) {
+                               return dependency.operation == "query" &&
+                                      dependency.property == property;
+                           });
+    };
+    EXPECT_TRUE(has_query("layer_numeric_index"));
+    EXPECT_TRUE(has_query("layer_count"));
+    EXPECT_TRUE(has_query("layer_enumeration"));
+    EXPECT_TRUE(has_query("layer_index"));
+    EXPECT_TRUE(has_query("layer_order"));
+    EXPECT_FALSE(std::any_of(offline.dependencies.begin(),
+                             offline.dependencies.end(),
+                             [](const owe::OfflineDependency& dependency) {
+                                 return dependency.operation == "query" &&
+                                        dependency.property == "layer_numeric_index" &&
+                                        dependency.target == 9;
+                             }));
 }
 
 TEST(ScriptScene, RegisteredAssetFactoryCreatesAndReusesDestroyedLayer) {
@@ -2734,7 +3062,7 @@ TEST(ScriptAnimation, SeparatesLayerAndCurrentPropertyLookup) {
             const propertyAnimation = thisObject.getAnimation();
             const layerAnimation = thisLayer.getAnimation("layer-track");
             export function update() {
-                return thisObject !== thisLayer && propertyAnimation.frameCount === 1 &&
+                return thisObject !== thisLayer && propertyAnimation === undefined &&
                     layerAnimation.frameCount === 24 ? 1 : 0;
             }
         )JS",
@@ -2778,6 +3106,159 @@ TEST(ScriptAnimation, SeparatesLayerAndCurrentPropertyLookup) {
     EXPECT_EQ(LastScalar(unanimated), 1.0);
     EXPECT_EQ(LastScalar(material_property), 1.0);
     EXPECT_EQ(LastScalar(scene_property), 1.0);
+}
+
+TEST(ScriptAnimation, TracesCachedPlaybackControlsAndInitialization) {
+    for (const char* operation : { "play()", "pause()", "stop()", "setFrame(4)", "rate = 2" }) {
+        owe::OfflineExecutionContext offline;
+        offline.trace_scene = true;
+        owe::OfflineExecutionScope scope(offline);
+        owe::SceneNode layer;
+        layer.SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = i32(711) }));
+        auto clip = Arc<owe::SceneAnimationClip>::make(owe::SceneAnimationClipSpec {
+            .name = String::make("controlled"_str), .mode = String::make("loop"_str),
+            .fps = 6.0f, .end = i32(12),
+        });
+        auto playback = Arc<owe::SceneAnimationPlayback>::make(rstd::move(clip));
+        JsRuntime rt;
+        std::string code = "let animation; let ticks = 0; export function init(value) { "
+                           "animation = thisObject.getAnimation(); animation.";
+        code += operation;
+        code += "; return value; } export function update(value) { if (ticks++ > 0) { animation.";
+        code += operation;
+        code += "; } return value; }";
+        auto* script = rt.MakeFieldScript(
+            code, "test/animation_control_trace", FieldKind::Scalar,
+            owe::MakeObject(), owe::IntoJson(0),
+            ScriptBindingContext::ForLayer(&layer, "origin"_str, Some(playback.clone())));
+        ASSERT_NE(script, nullptr);
+        auto has_write = [&](bool initialization) {
+            return std::any_of(offline.dependencies.begin(), offline.dependencies.end(),
+                               [initialization](const owe::OfflineDependency& dependency) {
+                                   return dependency.owner == 711 && dependency.target == 711 &&
+                                          dependency.operation == "write" &&
+                                          dependency.property == "animation" &&
+                                          dependency.initialization == initialization;
+                               });
+        };
+        rt.SetSceneRoot(&layer); // Runs the deferred init before the first update.
+        rt.TickAll();
+        EXPECT_TRUE(has_write(true));
+        EXPECT_FALSE(has_write(false));
+        if (std::string_view(operation) == "setFrame(4)") {
+            EXPECT_EQ(playback->Frame(), i32(4));
+        }
+        rt.TickAll();
+        EXPECT_TRUE(has_write(false));
+        EXPECT_FALSE(offline.failed);
+    }
+}
+
+TEST(ScriptAnimation, LayerLookupUsesTargetFieldAndCallingBinding) {
+    owe::OfflineExecutionContext offline;
+    offline.trace_scene = true;
+    owe::OfflineExecutionScope   scope(offline);
+    auto target = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
+                                            Eigen::Vector3f::Ones(),
+                                            Eigen::Vector3f::Zero(),
+                                            "TimelineWhite");
+    auto reporter = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
+                                               Eigen::Vector3f::Ones(),
+                                               Eigen::Vector3f::Zero(),
+                                               "Reporter");
+    target->SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = i32(712) }));
+    reporter->SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = i32(713) }));
+    auto alpha_clip = Arc<owe::SceneAnimationClip>::make(owe::SceneAnimationClipSpec {
+        .name = String::make("namedAlpha"_str), .fps = 1.0f, .end = i32(90),
+    });
+    auto origin_clip = Arc<owe::SceneAnimationClip>::make(owe::SceneAnimationClipSpec {
+        .name = String::make("namedMove"_str), .fps = 1.0f, .end = i32(2),
+    });
+    auto alpha  = Arc<owe::SceneAnimationPlayback>::make(rstd::move(alpha_clip));
+    auto origin = Arc<owe::SceneAnimationPlayback>::make(rstd::move(origin_clip));
+    target->BindFieldAnimation(String::make("alpha"_str), alpha.clone());
+    target->BindFieldAnimation(String::make("origin"_str), origin.clone());
+
+    auto root = Arc<owe::SceneNode>::make();
+    root->AppendChild(target.clone());
+    root->AppendChild(reporter.clone());
+    JsRuntime rt;
+    auto* alpha_script = rt.MakeFieldScript(
+        R"JS(export function update() {
+            const layer = thisLayer.getAnimation();
+            const object = thisObject.getAnimation();
+            const byAlpha = thisLayer.getAnimation('alpha');
+            const byOrigin = thisLayer.getAnimation('origin');
+            return layer && object && byAlpha && byOrigin &&
+                layer.duration === 90 && object.duration === 90 &&
+                byAlpha.duration === 90 && byOrigin.duration === 2 &&
+                thisLayer.getAnimation('Move') === undefined &&
+                thisLayer.getAnimation('definitely-missing') === undefined ? 1 : 0;
+        })JS",
+        "test/animation_layer_alpha",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        ScriptBindingContext::ForLayer(target.as_ptr(), "alpha"_str, Some(alpha.clone())));
+    auto* origin_script = rt.MakeFieldScript(
+        R"JS(export function update() {
+            return thisLayer.getAnimation().duration === 2 &&
+                thisObject.getAnimation().duration === 2 &&
+                thisLayer.getAnimation('alpha').duration === 90 &&
+                thisLayer.getAnimation('origin').duration === 2 ? 1 : 0;
+        })JS",
+        "test/animation_layer_origin",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        ScriptBindingContext::ForLayer(target.as_ptr(), "origin"_str, Some(origin.clone())));
+    auto* cross_owner_alpha = rt.MakeFieldScript(
+        R"JS(let animation;
+        export function init() {
+            animation = thisScene.getLayer('TimelineWhite').getAnimation('alpha');
+        }
+        export function update() {
+            animation.play();
+            const target = thisScene.getLayer('TimelineWhite');
+            return thisLayer.getAnimation() === undefined &&
+                target.getAnimation().duration === 90 ? 1 : 0;
+        })JS",
+        "test/animation_layer_cross_owner_alpha",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        ScriptBindingContext::ForLayer(reporter.as_ptr(), "alpha"_str));
+    auto* reporter_script = rt.MakeFieldScript(
+        R"JS(export function update() {
+            const target = thisScene.getLayer('TimelineWhite');
+            return thisLayer.getAnimation() === undefined &&
+                thisObject.getAnimation() === undefined &&
+                thisLayer.getAnimation('alpha') === undefined &&
+                target.getAnimation() === undefined ? 1 : 0;
+        })JS",
+        "test/animation_layer_cross_owner_text",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        ScriptBindingContext::ForLayer(reporter.as_ptr(), "text"_str));
+    ASSERT_NE(alpha_script, nullptr);
+    ASSERT_NE(origin_script, nullptr);
+    ASSERT_NE(cross_owner_alpha, nullptr);
+    ASSERT_NE(reporter_script, nullptr);
+    rt.SetSceneRoot(root.as_ptr());
+    rt.TickAll();
+    EXPECT_EQ(LastScalar(alpha_script), 1.0);
+    EXPECT_EQ(LastScalar(origin_script), 1.0);
+    EXPECT_EQ(LastScalar(cross_owner_alpha), 1.0);
+    EXPECT_EQ(LastScalar(reporter_script), 1.0);
+    EXPECT_TRUE(std::any_of(offline.dependencies.begin(), offline.dependencies.end(),
+                            [](const owe::OfflineDependency& dependency) {
+                                return dependency.owner == 713 && dependency.target == 712 &&
+                                       dependency.operation == "write" &&
+                                       dependency.property == "animation" &&
+                                       !dependency.initialization;
+                            }));
+    EXPECT_FALSE(offline.failed);
 }
 
 TEST(ScriptAnimation, TimerKeepsCurrentPropertyAnimation) {

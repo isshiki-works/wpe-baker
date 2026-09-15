@@ -1,6 +1,10 @@
 module;
 
+#ifdef _WIN32
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 #include <cerrno>
 
 // Macros only — VVK_CHECK family.
@@ -30,6 +34,15 @@ using namespace rstd::prelude;
 
 export namespace owe
 {
+
+inline void CloseExternalFileDescriptor(int fd) {
+    if (fd < 0) return;
+#ifdef _WIN32
+    ::_close(fd);
+#else
+    ::close(fd);
+#endif
+}
 
 // ---------- ExSwapchain (formerly Swapchain/ExSwapchain.hpp) ----------
 
@@ -362,7 +375,7 @@ FrameSurfaceCompletionCapability::operator=(FrameSurfaceCompletionCapability&& o
 
 inline FrameSurfaceCompletionResult FrameSurfaceCompletionCapability::Submit(int producer_sync_fd) {
     if (! valid()) {
-        if (producer_sync_fd >= 0) ::close(producer_sync_fd);
+        CloseExternalFileDescriptor(producer_sync_fd);
         return {};
     }
     auto owner    = std::move(m_owner);
@@ -616,6 +629,31 @@ struct TextureKey {
     static TexHash HashValue(const TextureKey&);
 };
 
+struct VideoDecoderObservation {
+    std::string resource_key;
+    std::uint64_t instance_id { 0 };
+    std::string codec;
+    std::optional<std::uint32_t> coded_width;
+    std::optional<std::uint32_t> coded_height;
+    std::string pixel_format;
+    std::optional<std::int32_t> fps_num;
+    std::optional<std::int32_t> fps_den;
+    std::string fps_source;
+    std::string decoder_kind;
+    bool metadata_unknown { true };
+    bool active { false };
+    std::uint64_t opened_at_tick { 0 };
+    std::uint64_t last_observed_active_tick { 0 };
+    std::optional<std::uint64_t> first_observed_inactive_tick;
+};
+
+struct VideoDecoderInventory {
+    bool observed { false };
+    std::uint64_t observed_through_tick { 0 };
+    std::uint64_t peak_active_instances { 0 };
+    std::vector<VideoDecoderObservation> decoders;
+};
+
 class TextureCache : NoCopy, NoMove {
 public:
     struct VideoRegistry;
@@ -642,6 +680,7 @@ public:
      * convert NV12→RGBA on the CPU, and upload to the slot's stable
      * VkImage. No-op if no video textures are registered. */
     void PumpVideoTextures(double dt_seconds);
+    VideoDecoderInventory ObserveVideoDecoders();
 
     /* vkCmdCopyBufferToImage a sub-rect of `atlas` into the supplied texture. */
     bool UploadFontAtlasRegion(ref<TextureAllocation> texture, const rstd::uint8_t* atlas,
@@ -665,6 +704,7 @@ private:
     const Device&      m_device;
     VideoDecodeOptions m_video_decode_options;
     u64                m_next_image_generation { 1 };
+    std::uint64_t      m_video_observation_tick { 0 };
 
     /* Opaque pImpl for the active video-tex set. Defined inside
      * TextureCache.cpp to keep wavsen.video out of the public
@@ -1208,7 +1248,7 @@ public:
 
     ~LocalExSwapchain() override {
         int fd = m_last_sync_fd.exchange(-1, std::memory_order_acq_rel);
-        if (fd >= 0) ::close(fd);
+        CloseExternalFileDescriptor(fd);
     }
 
     ::owe::FrameSurfaceAcquireResult acquireRenderTarget() override {
@@ -1285,12 +1325,12 @@ private:
     ::owe::FrameSurfaceCompletionResult CompleteRendered(::owe::FrameSurfaceIdentity identity,
                                                          int acquire_sync_fd) override {
         if (! m_surface_pending) {
-            if (acquire_sync_fd >= 0) ::close(acquire_sync_fd);
+            CloseExternalFileDescriptor(acquire_sync_fd);
             return { .status   = ::owe::FrameSurfaceCompletionStatus::NotPending,
                      .identity = identity };
         }
         if (identity != m_pending_identity) {
-            if (acquire_sync_fd >= 0) ::close(acquire_sync_fd);
+            CloseExternalFileDescriptor(acquire_sync_fd);
             return { .status   = ::owe::FrameSurfaceCompletionStatus::StaleIdentity,
                      .identity = identity };
         }
@@ -1298,7 +1338,7 @@ private:
         m_pending_identity = {};
         if (acquire_sync_fd >= 0) {
             int old = m_last_sync_fd.exchange(acquire_sync_fd, std::memory_order_acq_rel);
-            if (old >= 0) ::close(old);
+            CloseExternalFileDescriptor(old);
         }
         this->renderFrame();
         return { .status = ::owe::FrameSurfaceCompletionStatus::Submitted, .identity = identity };

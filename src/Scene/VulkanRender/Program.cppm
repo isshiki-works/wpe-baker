@@ -257,7 +257,8 @@ struct RenderProgram {
         return true;
     }
 
-    void injectFramePasses(PrePass& prepass, FinPass& finpass) {
+    bool injectFramePasses(PrePass& prepass, FinPass& finpass,
+                           Option<rg::NodeHandle> capture_after = None()) {
         prepass.resetResourceUses();
         finpass.resetResourceUses();
         frame_prepass =
@@ -278,8 +279,7 @@ struct RenderProgram {
                     .frame_index = rstd::usize(),
                 },
         });
-        for (auto& record : pass_records) combined.push(rstd::move(record));
-        combined.push(PreparedPassRecord {
+        auto final_record = PreparedPassRecord {
             .kind      = PreparedPassKind::Frame,
             .pass_name = String::make("frame/fin"_str),
             .pass =
@@ -287,8 +287,32 @@ struct RenderProgram {
                     .kind        = PreparedPassKind::Frame,
                     .frame_index = rstd::usize(1),
                 },
-        });
+        };
+        bool captured { false };
+        for (auto& record : pass_records) {
+            const auto node = record.graph_node;
+            combined.push(rstd::move(record));
+            if (capture_after.is_some() && node.is_some() && *node == *capture_after) {
+                // Copy while this precise graph version is still live, before
+                // any later pass may overwrite/reuse its physical allocation.
+                combined.push(rstd::move(final_record));
+                captured = true;
+            }
+        }
+        if (capture_after.is_none()) combined.push(rstd::move(final_record));
+        if (capture_after.is_some() && ! captured) return false;
         pass_records = rstd::move(combined);
+        return true;
+    }
+
+    std::uint32_t compiledScenePassCount() const {
+        std::uint32_t count { 0 };
+        for (const auto& record : pass_records) {
+            if (record.kind != PreparedPassKind::Graph) continue;
+            auto pass = resolve(record);
+            if (pass.is_some() && pass->prepared()) ++count;
+        }
+        return count;
     }
 
     std::vector<PreparedPassDiagnostic> diagnostics() const {
@@ -514,7 +538,11 @@ struct RenderProgram {
                            ToPassInvalidationFlags(PassInvalidation::Resources) |
                                ToPassInvalidationFlags(PassInvalidation::Framebuffer));
         }
-        if (finpass.setResultRequest(rstd::Some(MakeRenderTargetTextureRequest(key, rt)))) {
+        auto final_target = scene.RenderTarget(as_str(finpass.resultName()).unwrap());
+        auto final_request = final_target.is_some()
+            ? Some(MakeRenderTargetTextureRequest(finpass.resultName(), **final_target))
+            : None<TextureRequest>();
+        if (finpass.setResultRequest(rstd::move(final_request))) {
             invalidatePass(finpass_handle, ToPassInvalidationFlags(PassInvalidation::Resources));
         }
     }

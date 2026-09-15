@@ -4,7 +4,7 @@ module;
 #include "vvk/macros.hpp"
 
 #include <cerrno>
-#include <unistd.h>
+#include <cmath>
 #include <vulkan/vulkan.h>
 
 module wescene.vulkan_render;
@@ -64,20 +64,12 @@ constexpr rstd::array<Extension, 4> base_inst_exts {
     Extension { false, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME },
     Extension { false, VK_KHR_EXTERNAL_FENCE_CAPABILITIES_EXTENSION_NAME },
 };
-constexpr rstd::array<Extension, 8> base_device_exts {
+constexpr rstd::array<Extension, 5> base_device_exts {
     Extension { false, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME },
     Extension { false, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME },
     Extension { false, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME },
-    Extension { true, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME },
-    Extension { true, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME },
     Extension { true, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME },
     Extension { false, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME },
-    // Optional. When present we can report the picked physical device's
-    // DRM render-node major/minor via `getDrmRenderNode()` so the
-    // waywallen daemon can match it against each connected display's
-    // GPU. When absent the accessor returns false and callers report
-    // (0, 0); the daemon then conservatively assumes cross-GPU.
-    Extension { false, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME },
 };
 
 void AppendVideoDeviceExtensions(std::vector<Extension>& device_exts) {
@@ -100,6 +92,208 @@ void ReleaseCompletedRetiredResources(Device& device, RenderingResources& rr) {
     rr.resources.Collect(memory.as_mut_ref());
 }
 
+namespace {
+
+constexpr std::uint32_t timestamp_query_count = 3;
+
+constexpr std::uint64_t TimestampDelta(std::uint64_t begin, std::uint64_t end,
+                                      std::uint32_t valid_bits) noexcept {
+    const auto mask = valid_bits == 64 ? std::numeric_limits<std::uint64_t>::max()
+                                      : (std::uint64_t(1) << valid_bits) - 1;
+    return (end - begin) & mask;
+}
+static_assert(TimestampDelta((std::uint64_t(1) << 36) - 3, 2, 36) == 5);
+static_assert(TimestampDelta(std::numeric_limits<std::uint64_t>::max() - 2, 2, 64) == 5);
+
+class TimestampQueryPool {
+public:
+    TimestampQueryPool() = default;
+    TimestampQueryPool(const TimestampQueryPool&) = delete;
+    TimestampQueryPool& operator=(const TimestampQueryPool&) = delete;
+    ~TimestampQueryPool() { reset(); }
+
+    VkResult create(const vvk::Device& device) noexcept {
+        reset();
+        const VkQueryPoolCreateInfo info {
+            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            .queryType = VK_QUERY_TYPE_TIMESTAMP,
+            .queryCount = timestamp_query_count,
+        };
+        VkQueryPool pool = VK_NULL_HANDLE;
+        const auto result = device.Dispatch().vkCreateQueryPool(*device, &info, nullptr, &pool);
+        if (result == VK_SUCCESS) {
+            m_pool = pool;
+            m_device = *device;
+            m_dispatch = &device.Dispatch();
+        }
+        return result;
+    }
+
+    void reset() noexcept {
+        if (m_pool != VK_NULL_HANDLE) {
+            // Only failure cleanup may need this wait. Normal frames use the
+            // existing fence; their queries never introduce another GPU wait.
+            if (m_in_flight) (void)m_dispatch->vkDeviceWaitIdle(m_device);
+            m_dispatch->vkDestroyQueryPool(m_device, m_pool, nullptr);
+        }
+        m_pool = VK_NULL_HANDLE;
+        m_device = VK_NULL_HANDLE;
+        m_dispatch = nullptr;
+        m_in_flight = false;
+    }
+
+    VkQueryPool get() const noexcept { return m_pool; }
+    explicit operator bool() const noexcept { return m_pool != VK_NULL_HANDLE; }
+    void submitted() noexcept { m_in_flight = m_pool != VK_NULL_HANDLE; }
+    void completed() noexcept { m_in_flight = false; }
+
+private:
+    VkQueryPool m_pool { VK_NULL_HANDLE };
+    VkDevice m_device { VK_NULL_HANDLE };
+    const vvk::DeviceDispatch* m_dispatch { nullptr };
+    bool m_in_flight { false };
+};
+
+struct CaptureBinding {
+    std::string render_target;
+    std::string producer_pass;
+    std::uint64_t texture_version { 0 };
+    owe::resource::TextureUseHandle texture_use;
+    owe::rg::NodeHandle writer;
+};
+
+std::string ValidateCaptureSelector(const owe::RenderCaptureTarget& selector) {
+    if (selector.texture_version < -1 || selector.owner_layer_id < -1 ||
+        selector.authored_effect_id < -1 || selector.effect_ordinal < -1)
+        return "capture selector IDs and texture version must be nonnegative or -1";
+    if (selector.effect_terminal) {
+        if (!selector.runtime_render_target.empty() || !selector.local_fbo.empty() ||
+            selector.owner_layer_id < 0 ||
+            (selector.authored_effect_id < 0 && selector.effect_ordinal < 0) ||
+            selector.texture_version != -1)
+            return "terminal capture requires owner_layer_id, an effect ID or ordinal, and no local FBO/version";
+    } else if (!selector.runtime_render_target.empty()) {
+        if (selector.owner_layer_id != -1 || selector.authored_effect_id != -1 ||
+            selector.effect_ordinal != -1 || !selector.local_fbo.empty())
+            return "capture requires either a runtime target or an authored effect selector";
+    } else if (selector.owner_layer_id < 0 || selector.local_fbo.empty() ||
+               (selector.authored_effect_id < 0 && selector.effect_ordinal < 0)) {
+        return "capture requires owner_layer_id, local_fbo and an effect ID or ordinal";
+    }
+    return {};
+}
+
+std::optional<CaptureBinding> ResolveCaptureBinding(
+    owe::Scene& scene, owe::rg::RenderGraph& graph, const owe::RenderCaptureTarget& selector,
+    std::string& error) {
+    std::string key = selector.runtime_render_target;
+    if (key.empty()) {
+        Option<const owe::SceneImageEffect&> selected_effect;
+        bool effect_found { false };
+        if (!selector.effect_terminal && rstd::cppstd::as_str(selector.local_fbo).is_err()) {
+            error = "capture local FBO name is not valid UTF-8";
+            return std::nullopt;
+        }
+        for (auto* node : scene.ResourceIndex().Nodes()) {
+            if (node == nullptr) continue;
+            const auto owner = node->WallpaperIdentity();
+            if (owner.is_none() || owner->value.to_primitive() != selector.owner_layer_id ||
+                !node->HasLayer() || !node->Layer()) continue;
+            const auto& layer = node->Layer();
+            for (usize index {}; index < layer->EffectCount(); ++index) {
+                const auto& effect = layer->GetEffect(index);
+                if (!effect ||
+                    (selector.authored_effect_id >= 0 &&
+                     effect->authored_id != selector.authored_effect_id) ||
+                    (selector.effect_ordinal >= 0 &&
+                     effect->authored_ordinal != selector.effect_ordinal)) continue;
+                if (effect_found) {
+                    error = "capture effect selector is ambiguous";
+                    return std::nullopt;
+                }
+                effect_found = true;
+                if (selector.effect_terminal) selected_effect = Some<const owe::SceneImageEffect&>(*effect);
+                else key = rstd::cppstd::to_string(
+                    scene.EffectResourceKey(effect->id,
+                                            rstd::cppstd::as_str(selector.local_fbo).unwrap()).as_str());
+            }
+        }
+        if (selector.effect_terminal && selected_effect.is_some()) {
+            if (selected_effect->nodes.empty() ||
+                selected_effect->nodes.back().output.kind != owe::SceneEffectTargetKind::LayerNext ||
+                selected_effect->nodes.back().graph_pass_index.is_none()) {
+                error = "terminal capture effect does not end in a graph-backed LayerNext pass";
+                return std::nullopt;
+            }
+            const auto writer = owe::rg::NodeHandle {
+                .index = usize(selected_effect->nodes.back().graph_pass_index->to_primitive())
+            };
+            auto written = graph.writtenTexture(writer);
+            if (written.is_none()) {
+                error = "terminal capture effect has no unique graph texture writer";
+                return std::nullopt;
+            }
+            auto producer = graph.passState(written->writer);
+            if (producer.is_none()) {
+                error = "terminal capture graph writer is unavailable";
+                return std::nullopt;
+            }
+            const auto terminal_name = written->texture.desc.key.as_str();
+            auto target = scene.RenderTarget(terminal_name);
+            if (target.is_none() || (**target).kind != owe::SceneRenderTargetKind::Color) {
+                error = "terminal capture graph writer does not produce an RGBA8 color target";
+                return std::nullopt;
+            }
+            return CaptureBinding {
+                .render_target = rstd::cppstd::to_string(written->texture.desc.key.as_str()),
+                .producer_pass = rstd::cppstd::to_string(producer->name.as_str()),
+                .texture_version = written->texture.version.to_primitive(),
+                .texture_use = written->texture.use,
+                .writer = written->writer,
+            };
+        }
+        if (key.empty()) {
+            error = "capture owner/effect was not found in the parsed scene";
+            return std::nullopt;
+        }
+    }
+    auto name = rstd::cppstd::as_str(key);
+    if (name.is_err()) {
+        error = "capture runtime target is not valid UTF-8";
+        return std::nullopt;
+    }
+    auto target = scene.RenderTarget(*name);
+    if (target.is_none()) {
+        error = "capture render target is not registered: " + key;
+        return std::nullopt;
+    }
+    if ((**target).kind != owe::SceneRenderTargetKind::Color) {
+        error = "capture currently supports RGBA8 color render targets only: " + key;
+        return std::nullopt;
+    }
+    auto version = selector.texture_version >= 0
+        ? Some(usize(static_cast<std::size_t>(selector.texture_version))) : None<usize>();
+    auto written = graph.writtenTexture(*name, version);
+    if (written.is_none()) {
+        error = "capture target has no real graph writer for the requested version: " + key;
+        return std::nullopt;
+    }
+    auto producer = graph.passState(written->writer);
+    if (producer.is_none()) {
+        error = "capture graph writer is unavailable: " + key;
+        return std::nullopt;
+    }
+    return CaptureBinding {
+        .render_target = std::move(key),
+        .producer_pass = rstd::cppstd::to_string(producer->name.as_str()),
+        .texture_version = written->texture.version.to_primitive(),
+        .texture_use = written->texture.use,
+        .writer = written->writer,
+    };
+}
+
+} // namespace
+
 struct VulkanRender::Impl {
     Impl()  = default;
     ~Impl() = default;
@@ -108,6 +302,9 @@ struct VulkanRender::Impl {
     void destroy();
 
     void drawFrame(Scene&);
+    CpuFrameResult drawFrameCpu(Scene&);
+    bool initCpuReadback(const RenderInitInfo&);
+    void initGpuTiming(const RenderInitInfo&);
 
     bool CreateRenderingResource(RenderingResources&);
     void DestroyRenderingResource(RenderingResources&);
@@ -135,6 +332,7 @@ struct VulkanRender::Impl {
                              PassInvalidationFlags);
     std::vector<PreparedPassDiagnostic> preparedPassDiagnostics() const;
     void                                UpdateCameraFillMode(Scene&, owe::FillMode);
+    bool ApplyOrthographicCaptureViewport(Scene&, std::string& error);
 
     bool                      initRes();
     rstd::Option<std::size_t> acquireUploadCommandSlot(RenderingResources&);
@@ -163,6 +361,25 @@ struct VulkanRender::Impl {
 
     bool m_with_surface { false };
     bool m_inited { false };
+    bool m_cpu_readback { false };
+    bool m_cpu_failed { false };
+    VkFormat m_cpu_format { VK_FORMAT_R8G8B8A8_UNORM };
+    std::uint64_t m_readback_timeout_ns { vk_wait_time };
+    std::uint64_t m_cpu_frame_index { 0 };
+    VmaImageParameters m_cpu_image;
+    VmaBufferParameters m_cpu_staging;
+    std::optional<RenderCaptureTarget> m_capture_target;
+    std::optional<OrthographicCaptureViewport> m_orthographic_capture_viewport;
+    bool m_orthographic_capture_viewport_rejected { false };
+    std::optional<CaptureBinding> m_capture_binding;
+    std::string m_capture_error;
+    TimestampQueryPool m_timestamp_queries;
+    bool m_gpu_timing_requested { false };
+    bool m_gpu_timing_supported { false };
+    std::uint32_t m_timestamp_valid_bits { 0 };
+    std::optional<double> m_timestamp_period_ns;
+    VkResult m_gpu_timing_error_code { VK_SUCCESS };
+    std::string m_gpu_timing_message;
 
     // MSAA sample count for the screen RT only. 1bit = disabled.
     // Resolved against device's framebufferColorSampleCounts in init().
@@ -309,6 +526,9 @@ bool VulkanRender::init(RenderInitInfo info, SceneLoadBenchRecorderView load_ben
 }
 void VulkanRender::destroy() { pImpl->destroy(); }
 void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
+owe::CpuFrameResult VulkanRender::drawFrameCpu(Scene& scene) {
+    return pImpl->drawFrameCpu(scene);
+}
 void VulkanRender::clearLastRenderGraph(RenderGraphResourceRetention retention) {
     pImpl->clearLastRenderGraph(retention);
 };
@@ -381,9 +601,55 @@ owe::ExSwapchain* VulkanRender::exSwapchain() const { return pImpl->m_ex_swapcha
 bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView load_bench) {
     if (m_inited) return true;
 
+    m_cpu_readback = info.output_mode == RenderOutputMode::CpuReadback;
+    m_prepass->setTransparentBackground(info.layer_selection.enabled &&
+                                        info.layer_selection.transparent_background);
+    if (info.orthographic_capture_viewport.has_value()) {
+        const auto& viewport = *info.orthographic_capture_viewport;
+        if (!m_cpu_readback || !std::isfinite(viewport.center_x) ||
+            !std::isfinite(viewport.center_y) || !std::isfinite(viewport.width) ||
+            !std::isfinite(viewport.height) || viewport.width <= 0.0 || viewport.height <= 0.0) {
+            rstd_error("orthographic capture viewport requires CpuReadback and finite positive width/height");
+            return false;
+        }
+        m_orthographic_capture_viewport = viewport;
+    }
+    if (info.capture_target.has_value()) {
+        m_capture_error = ValidateCaptureSelector(*info.capture_target);
+        if (!m_cpu_readback || !m_capture_error.empty()) {
+            rstd_error("invalid CPU capture selector: {}", !m_cpu_readback
+                ? "graph capture requires CpuReadback mode" : m_capture_error);
+            return false;
+        }
+        m_capture_target = std::move(info.capture_target);
+    }
+    if (m_cpu_readback) {
+        info.offscreen = true;
+        info.video_hwdec = "none";
+        if (info.ex_swapchain_factory || info.width == 0 || info.height == 0 ||
+            info.cpu_format != VK_FORMAT_R8G8B8A8_UNORM || info.readback_timeout_ns == 0) {
+            rstd_error("CPU readback requires nonzero dimensions/timeout, RGBA8, and no external swapchain");
+            return false;
+        }
+        const std::uint64_t bytes = std::uint64_t(info.width) * info.height * 4;
+        if (bytes > info.max_readback_bytes || bytes > std::numeric_limits<std::size_t>::max()) {
+            rstd_error("CPU readback frame ({} bytes) exceeds configured budget ({})",
+                       bytes, info.max_readback_bytes);
+            return false;
+        }
+        m_cpu_format = info.cpu_format;
+        m_readback_timeout_ns = info.readback_timeout_ns;
+    }
+#ifdef _WIN32
+    if (! m_cpu_readback) {
+        rstd_error("this Windows renderer requires CpuReadback output mode");
+        return false;
+    }
+#endif
+
     m_redraw_cb = info.redraw_callback;
     VkExtent2D extent { info.width, info.height };
-    if (extent.width * extent.height < 500 * 500) {
+    if (! m_cpu_readback && extent.width * extent.height < 500 * 500) {
         rstd_error("too small swapchain image size: {}x{}", extent.width, extent.height);
     } else {
         rstd_info("set swapchain image size: {}x{}", extent.width, extent.height);
@@ -391,7 +657,14 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
 
     std::vector<Extension> inst_exts;
     std::vector<Extension> device_exts;
-    for (const auto& extension : base_inst_exts) inst_exts.push_back(extension);
+    if (m_cpu_readback) {
+        inst_exts.push_back({ true, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME });
+    } else {
+        for (const auto& extension : base_inst_exts) inst_exts.push_back(extension);
+        device_exts.push_back({ true, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME });
+        device_exts.push_back({ true, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME });
+        device_exts.push_back({ false, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME });
+    }
     for (const auto& extension : base_device_exts) device_exts.push_back(extension);
     if (info.video_hwdec != "none") {
         AppendVideoDeviceExtensions(device_exts);
@@ -405,7 +678,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
                            return Extension { true, s.c_str() };
                        });
         device_exts.push_back({ true, VK_KHR_SWAPCHAIN_EXTENSION_NAME });
-    } else {
+    } else if (! m_cpu_readback) {
         // Iteration 1a: offscreen FDs are real Linux DMA-BUFs so they can be
         // imported by arbitrary external consumers. These extensions are
         // strictly required on the offscreen path; if a driver lacks them
@@ -488,7 +761,9 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
             "msaa requested={} actual={}", requested, static_cast<std::uint32_t>(m_msaa_samples));
     }
 
-    if (info.offscreen) {
+    if (m_cpu_readback) {
+        if (! initCpuReadback(info)) return false;
+    } else if (info.offscreen) {
         auto swapchain_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::vulkan_swapchain);
         if (info.ex_swapchain_factory) {
             RenderInitInfo::ExSwapchainHandles h {
@@ -519,6 +794,9 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
         if (! initRes()) return false;
     }
 
+    // Allocate last: no later initialization failure can strand query objects.
+    // Timestamp failure is diagnostic only; ordinary rendering remains usable.
+    initGpuTiming(info);
     m_inited = true;
     return m_inited;
 }
@@ -543,16 +821,115 @@ bool VulkanRender::Impl::initRes() {
     return true;
 }
 
+bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
+    const auto extent = m_device->out_extent();
+    if (extent.width > m_device->limits().maxImageDimension2D ||
+        extent.height > m_device->limits().maxImageDimension2D) {
+        rstd_error("CPU output extent exceeds maxImageDimension2D");
+        return false;
+    }
+    const auto features = m_device->gpu().GetFormatProperties(info.cpu_format).optimalTilingFeatures;
+    constexpr VkFormatFeatureFlags required = VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                               VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                               VK_FORMAT_FEATURE_BLIT_DST_BIT;
+    if ((features & required) != required) {
+        rstd_error("CPU output format does not support image transfers and blits");
+        return false;
+    }
+    VkImageCreateInfo image_info {
+        .sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType     = VK_IMAGE_TYPE_2D,
+        .format        = info.cpu_format,
+        .extent        = { extent.width, extent.height, 1 },
+        .mipLevels     = 1,
+        .arrayLayers   = 1,
+        .samples       = VK_SAMPLE_COUNT_1_BIT,
+        .tiling        = VK_IMAGE_TILING_OPTIMAL,
+        .usage         = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .sharingMode   = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    VmaAllocationCreateInfo image_allocation {};
+    image_allocation.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VVK_CHECK_BOOL_RE(vvk::CreateImage(m_device->vma_allocator(), image_info,
+                                       image_allocation, m_cpu_image.handle));
+    m_cpu_image.extent = image_info.extent;
+    m_cpu_image.generation = u64(1);
+
+    // A transfer-only output image needs neither an image view nor a sampler.
+    // bufferRowLength=0 in the copy gives width*4 bytes per row on every device.
+    m_cpu_staging.req_size = std::uint64_t(extent.width) * extent.height * 4;
+    VkBufferCreateInfo buffer_info {
+        .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size        = m_cpu_staging.req_size,
+        .usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    VmaAllocationCreateInfo buffer_allocation {};
+    buffer_allocation.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
+    buffer_allocation.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    buffer_allocation.preferredFlags = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    VVK_CHECK_BOOL_RE(vvk::CreateBuffer(m_device->vma_allocator(), buffer_info,
+                                        buffer_allocation, m_cpu_staging.handle));
+    return true;
+}
+
+void VulkanRender::Impl::initGpuTiming(const RenderInitInfo& info) {
+    m_gpu_timing_requested = info.gpu_timing;
+    if (!m_gpu_timing_requested) return;
+    auto unsupported = [&](const char* message) {
+        m_gpu_timing_error_code = VK_ERROR_FEATURE_NOT_PRESENT;
+        m_gpu_timing_message = message;
+    };
+    if (!m_cpu_readback) {
+        unsupported("GPU timing requires CpuReadback mode");
+        return;
+    }
+    const auto family = m_device->graphics_queue().family_index;
+    const auto properties = m_device->gpu().GetQueueFamilyProperties();
+    if (usize(family) >= properties.len()) {
+        unsupported("graphics queue family properties are unavailable for GPU timing");
+        return;
+    }
+    m_timestamp_valid_bits = properties[usize(family)].timestampValidBits;
+    if (m_timestamp_valid_bits == 0 || m_timestamp_valid_bits > 64) {
+        unsupported("graphics queue does not support usable timestamps");
+        return;
+    }
+    const double period = m_device->limits().timestampPeriod;
+    if (!(period > 0.0) || !std::isfinite(period)) {
+        unsupported("GPU timestamp period is not finite and positive");
+        return;
+    }
+    m_timestamp_period_ns = period;
+    const auto& dispatch = m_device->handle().Dispatch();
+    if (!dispatch.vkCreateQueryPool || !dispatch.vkDestroyQueryPool ||
+        !dispatch.vkGetQueryPoolResults || !dispatch.vkCmdResetQueryPool ||
+        !dispatch.vkCmdWriteTimestamp || !dispatch.vkDeviceWaitIdle) {
+        unsupported("required GPU timestamp query entry points are unavailable");
+        return;
+    }
+    m_gpu_timing_supported = true;
+    m_gpu_timing_error_code = m_timestamp_queries.create(m_device->handle());
+    if (m_gpu_timing_error_code != VK_SUCCESS) {
+        m_gpu_timing_message = "create GPU timestamp query pool failed";
+    }
+}
+
 void VulkanRender::Impl::destroy() {
     if (! m_inited) return;
     if (m_device->handle()) {
         VVK_CHECK(m_device->handle().WaitIdle());
+        m_timestamp_queries.completed();
+        m_timestamp_queries.reset();
 
         // res
         m_program.destroyPasses(*m_device);
         ReleaseCompletedRetiredResources(*m_device, m_rendering_resources);
         m_program.clear();
         m_rendering_resources.resources.Reset();
+        m_cpu_staging.handle = vvk::VmaBuffer {};
+        m_cpu_image.handle = vvk::VmaImage {};
 
         m_device->Destroy();
     }
@@ -601,10 +978,9 @@ bool VulkanRender::Impl::CreateRenderingResource(RenderingResources& rr) {
 
     // Exportable SYNC_FD semaphore used by the waywallen-renderer host
     // to ship a dma_fence sync_file to display clients on each
-    // FrameReady event. Created in both offscreen and surface modes —
-    // only the offscreen drawFrame path currently signals it, but
-    // having it always present keeps the lifetime simple.
-    {
+    // FrameReady event. CPU readback uses its submission fence and never
+    // creates an exportable semaphore.
+    if (! m_cpu_readback) {
         VkExportSemaphoreCreateInfo export_info {
             .sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
             .pNext       = nullptr,
@@ -681,6 +1057,10 @@ bool VulkanRender::Impl::waitForPreparedUploads(RenderingResources& rr) {
 
 void VulkanRender::Impl::drawFrame(Scene& scene) {
     if (! (m_inited && m_program.loaded)) return;
+    if (m_cpu_readback) {
+        rstd_error("CPU output requires drawFrameCpu to consume each completed frame");
+        return;
+    }
 
     if (m_instance.offscreen()) {
         drawFrameOffscreen(scene);
@@ -689,6 +1069,249 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
     }
 
     if (m_redraw_cb) m_redraw_cb();
+}
+
+owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene) {
+    CpuFrameResult frame;
+    frame.gpu_timing_requested = m_gpu_timing_requested;
+    frame.gpu_timing_supported = m_gpu_timing_supported;
+    frame.timestamp_valid_bits = m_timestamp_valid_bits;
+    frame.timestamp_period_ns = m_timestamp_period_ns;
+    frame.gpu_timing_error_code = m_gpu_timing_error_code;
+    frame.gpu_timing_message = m_gpu_timing_message;
+    frame.frame_index = m_cpu_frame_index;
+    if (! m_cpu_readback) {
+        frame.status = CpuFrameStatus::InvalidMode;
+        frame.message = "renderer was not initialized for CPU readback";
+        return frame;
+    }
+    if (m_cpu_failed) {
+        frame.status = CpuFrameStatus::RenderError;
+        frame.message = "CPU renderer failed previously; create a new renderer before retrying";
+        return frame;
+    }
+    if (!m_capture_error.empty()) {
+        frame.status = CpuFrameStatus::RenderError;
+        frame.error_code = VK_ERROR_INITIALIZATION_FAILED;
+        frame.message = m_capture_error;
+        return frame;
+    }
+    std::string capture_viewport_error;
+    if (!ApplyOrthographicCaptureViewport(scene, capture_viewport_error)) {
+        frame.status = CpuFrameStatus::RenderError;
+        frame.error_code = VK_ERROR_INITIALIZATION_FAILED;
+        frame.message = std::move(capture_viewport_error);
+        return frame;
+    }
+    if (! m_inited || ! m_program.loaded || ! m_finpass->prepared()) {
+        frame.message = "render graph or final pass is not ready";
+        return frame;
+    }
+    auto fail = [&](VkResult result, std::string operation) -> CpuFrameResult {
+        m_cpu_failed = true;
+        frame.status = result == VK_TIMEOUT ? CpuFrameStatus::Timeout :
+                       result == VK_ERROR_DEVICE_LOST ? CpuFrameStatus::DeviceLost :
+                                                       CpuFrameStatus::RenderError;
+        frame.error_code = result;
+        frame.message = std::move(operation);
+        frame.pixels.clear();
+        frame.gpu_total_ms.reset();
+        frame.gpu_draw_ms.reset();
+        return std::move(frame);
+    };
+
+    const auto extent = m_device->out_extent();
+    if (extent.width != m_cpu_image.extent.width || extent.height != m_cpu_image.extent.height) {
+        return fail(VK_ERROR_INITIALIZATION_FAILED, "CPU output extent changed; create a new renderer");
+    }
+    if (m_cpu_frame_index == std::numeric_limits<std::uint64_t>::max()) {
+        return fail(VK_ERROR_TOO_MANY_OBJECTS, "CPU frame serial overflow");
+    }
+    frame.width = extent.width;
+    frame.height = extent.height;
+    frame.row_pitch = extent.width * 4;
+    frame.format = m_cpu_format;
+    frame.compiled_scene_passes = m_program.compiledScenePassCount();
+    if (m_capture_binding.has_value()) {
+        frame.source_render_target = m_capture_binding->render_target;
+        frame.source_pass = m_capture_binding->producer_pass;
+        frame.source_texture_version = m_capture_binding->texture_version;
+        auto name = rstd::cppstd::as_str(frame.source_render_target).unwrap();
+        auto source = scene.RenderTarget(name);
+        if (source.is_none()) return fail(VK_ERROR_INITIALIZATION_FAILED,
+                                          "captured render target disappeared");
+        frame.source_width = static_cast<std::uint32_t>((**source).PhysicalWidth().to_primitive());
+        frame.source_height = static_cast<std::uint32_t>((**source).PhysicalHeight().to_primitive());
+        if (m_capture_target->exact_extent &&
+            (frame.source_width != extent.width || frame.source_height != extent.height)) {
+            return fail(VK_ERROR_INITIALIZATION_FAILED,
+                        "exact capture extent requires output " + std::to_string(frame.source_width) +
+                            "x" + std::to_string(frame.source_height) +
+                            "; selected source differs from the configured CPU output");
+        }
+    }
+    try {
+        frame.pixels.resize(static_cast<std::size_t>(m_cpu_staging.req_size));
+    } catch (const std::bad_alloc&) {
+        return fail(VK_ERROR_OUT_OF_HOST_MEMORY, "allocate CPU frame pixels");
+    }
+
+    auto& rr = m_rendering_resources;
+    auto pending_upload = rr.resources.PendingUpload();
+    if (pending_upload.is_some()) {
+        const auto result = rr.sem_upload.Wait(pending_upload->value.to_primitive(),
+                                                m_readback_timeout_ns);
+        if (result != VK_SUCCESS) return fail(result, "wait for texture uploads");
+        rr.resources.CompleteUploadsThrough(pending_upload->value);
+    }
+    m_pending_load_bench = {};
+
+    const auto queue_family = m_device->graphics_queue().family_index;
+    owe::FrameSurfaceLease surface {
+        .identity = { .owner_generation = u64(1), .image_index = u32(0),
+                      .acquire_serial = u64(m_cpu_frame_index + 1) },
+        .reuse = { .kind = owe::FrameSurfaceReuseKind::QueueOrdered },
+        .image = ToImageParameters(m_cpu_image),
+        .format = m_cpu_format,
+        .initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .initial_queue_family = queue_family,
+        .acquire = { .kind = owe::FrameSurfaceAcquireKind::QueueOrdered },
+        .final_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .final_queue_family = queue_family,
+        .discard_content = true,
+    };
+    auto external_preparer =
+        rstd::dyn<resource_registry::ExternalResourcePreparer>::from_ref(rr.resources);
+    if (! m_finpass->setFrameSurface(surface, external_preparer.as_mut_ref(),
+                                     m_device->capabilities(), queue_family)) {
+        return fail(VK_ERROR_INITIALIZATION_FAILED, "prepare CPU output image");
+    }
+    auto texture_frames = rstd::dyn<SceneTextureAnimationView>::from_ref(scene);
+    if (! m_program.update(scene.Runtime().Frame(), extent, texture_frames.as_ref(), rr)) {
+        return fail(VK_ERROR_INITIALIZATION_FAILED, "update render program");
+    }
+    auto result = rr.command.Reset();
+    if (result != VK_SUCCESS) return fail(result, "reset CPU frame command buffer");
+    result = rr.command.Begin(VkCommandBufferBeginInfo {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    });
+    if (result != VK_SUCCESS) return fail(result, "begin CPU frame command buffer");
+
+    if (m_timestamp_queries) {
+        rr.command.ResetQueryPool(m_timestamp_queries.get(), 0, timestamp_query_count);
+        rr.command.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestamp_queries.get(), 0);
+    }
+    RecordedBufferUploads recorded_uploads;
+    if (! m_program.record(rr, recorded_uploads)) {
+        (void)rr.command.End();
+        return fail(VK_ERROR_INITIALIZATION_FAILED, "record render program");
+    }
+    if (m_timestamp_queries)
+        rr.command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestamp_queries.get(), 1);
+    // FinPass writes this ordinary image. Make those transfer writes visible
+    // to the copy, then make staging writes visible to the host after the fence.
+    VkImageMemoryBarrier to_readback {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = *m_cpu_image.handle,
+        .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+    };
+    rr.command.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                0, to_readback);
+    VkBufferImageCopy region {
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .imageOffset = { 0, 0, 0 },
+        .imageExtent = { extent.width, extent.height, 1 },
+    };
+    rr.command.CopyImageToBuffer(*m_cpu_image.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                  *m_cpu_staging.handle, region);
+    if (m_timestamp_queries)
+        rr.command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestamp_queries.get(), 2);
+    VkBufferMemoryBarrier to_host {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = *m_cpu_staging.handle,
+        .offset = 0,
+        .size = m_cpu_staging.req_size,
+    };
+    rr.command.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                                0, to_host);
+    result = rr.command.End();
+    if (result != VK_SUCCESS) return fail(result, "end CPU frame command buffer");
+    result = rr.fence_frame.Reset();
+    if (result != VK_SUCCESS) return fail(result, "reset CPU frame fence");
+    VkSubmitInfo submit {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = rr.command.address(),
+    };
+    m_timestamp_queries.submitted();
+    result = m_device->graphics_queue().handle.Submit(submit, *rr.fence_frame);
+    if (result != VK_SUCCESS) return fail(result, "submit CPU frame");
+    auto completion = rr.resources.BeginSubmission(rstd::move(recorded_uploads));
+    result = rr.fence_frame.Wait(m_readback_timeout_ns);
+    // Do not reset/reuse buffers after a timeout: the submission can still be
+    // in flight. The failed renderer retains its resources until destruction.
+    if (result != VK_SUCCESS) return fail(result, "wait for CPU frame fence");
+    m_timestamp_queries.completed();
+    if (m_timestamp_queries) {
+        struct QueryValue { std::uint64_t ticks; std::uint64_t available; };
+        std::array<QueryValue, timestamp_query_count> queries {};
+        const auto query_result = m_device->handle().Dispatch().vkGetQueryPoolResults(
+            *m_device->handle(), m_timestamp_queries.get(), 0, timestamp_query_count,
+            sizeof(queries), queries.data(), sizeof(QueryValue),
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+        frame.gpu_timing_error_code = query_result;
+        if (query_result == VK_ERROR_DEVICE_LOST)
+            return fail(query_result, "read GPU timestamp queries");
+        if (query_result != VK_SUCCESS) {
+            frame.gpu_timing_message = "GPU timestamp query results are unavailable after the frame fence";
+        } else if (!queries[0].available || !queries[1].available || !queries[2].available) {
+            frame.gpu_timing_error_code = VK_NOT_READY;
+            frame.gpu_timing_message = "GPU timestamp query availability is incomplete after the frame fence";
+        } else {
+            const double milliseconds_per_tick = *m_timestamp_period_ns / 1'000'000.0;
+            // Modulo subtraction handles a counter wrap. As with Vulkan
+            // timestamp intervals generally, the span must be shorter than
+            // one complete timestamp counter period.
+            frame.gpu_total_ms = TimestampDelta(queries[0].ticks, queries[2].ticks,
+                                                m_timestamp_valid_bits) * milliseconds_per_tick;
+            frame.gpu_draw_ms = TimestampDelta(queries[0].ticks, queries[1].ticks,
+                                               m_timestamp_valid_bits) * milliseconds_per_tick;
+        }
+    }
+    if (! completion.Valid() || rr.resources.CompleteSubmission(completion).is_none()) {
+        return fail(VK_ERROR_INITIALIZATION_FAILED, "track CPU frame resource completion");
+    }
+    ReleaseCompletedRetiredResources(*m_device, rr);
+
+    void* mapped = nullptr;
+    result = m_cpu_staging.handle.MapMemory(&mapped);
+    if (result != VK_SUCCESS) return fail(result, "map CPU staging buffer");
+    result = vmaInvalidateAllocation(m_device->vma_allocator(),
+                                      m_cpu_staging.handle.Allocation(), 0, VK_WHOLE_SIZE);
+    if (result != VK_SUCCESS) {
+        m_cpu_staging.handle.UnMapMemory();
+        return fail(result, "invalidate CPU staging buffer");
+    }
+    std::memcpy(frame.pixels.data(), mapped, frame.pixels.size());
+    m_cpu_staging.handle.UnMapMemory();
+    frame.video_decoders = rr.resources.ObserveVideoDecoders();
+    frame.status = CpuFrameStatus::Completed;
+    ++m_cpu_frame_index;
+    return frame;
 }
 
 void VulkanRender::Impl::drawFrameSwapchain(Scene& scene) {
@@ -997,6 +1620,12 @@ void VulkanRender::Impl::UpdateCameraFillMode(owe::Scene& scene, owe::FillMode f
     if (global.is_none() || perspective.is_none()) return;
     auto& gCam    = **global;
     auto& gPerCam = **perspective;
+    if (m_orthographic_capture_viewport.has_value()) {
+        std::string error;
+        if (!ApplyOrthographicCaptureViewport(scene, error)) return;
+        scene.CaptureCameraPathViewports();
+        return;
+    }
     // assum cam
     switch (fillmode) {
     case FillMode::STRETCH:
@@ -1038,6 +1667,39 @@ void VulkanRender::Impl::UpdateCameraFillMode(owe::Scene& scene, owe::FillMode f
     gPerCam.Update();
     scene.UpdateLinkedCamera("global"_str);
     scene.CaptureCameraPathViewports();
+}
+
+bool VulkanRender::Impl::ApplyOrthographicCaptureViewport(Scene& scene, std::string& error) {
+    if (!m_orthographic_capture_viewport.has_value()) return true;
+
+    auto active = scene.ActiveCamera();
+    auto global = scene.CameraMut("global"_str);
+    if (active.is_none() || global.is_none() || (*active)->IsPerspective() ||
+        (*active).as_raw_ptr() != (*global).as_raw_ptr()) {
+        error = "orthographic capture viewport rejected: the primary active camera is not orthographic global";
+    } else {
+        auto camera_node = (**global).GetAttachedNode();
+        if (camera_node.is_none()) {
+            error = "orthographic capture viewport rejected: global camera has no attached node";
+        } else {
+            const auto& viewport = *m_orthographic_capture_viewport;
+            auto position = (*camera_node)->Translate();
+            position.x() = static_cast<float>(viewport.center_x);
+            position.y() = static_cast<float>(viewport.center_y);
+            (*camera_node)->SetTranslate(position);
+            (**global).SetWidth(viewport.width);
+            (**global).SetHeight(viewport.height);
+            (**global).Update();
+            scene.UpdateLinkedCamera("global"_str);
+            return true;
+        }
+    }
+
+    if (!m_orthographic_capture_viewport_rejected) {
+        rstd_error("{}", error);
+        m_orthographic_capture_viewport_rejected = true;
+    }
+    return false;
 }
 
 void VulkanRender::Impl::clearLastRenderGraph(RenderGraphResourceRetention retention) {
@@ -1112,6 +1774,8 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
     m_pending_load_bench = load_bench;
     auto compile_span    = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_graph_compile);
     m_program.loaded     = false;
+    m_capture_binding.reset();
+    m_capture_error.clear();
 
     {
         auto program_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_program_build);
@@ -1119,7 +1783,26 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
             rstd_error("compile render graph failed: dependency cycle");
             return;
         }
-        m_program.injectFramePasses(*m_prepass, *m_finpass);
+        Option<rg::NodeHandle> capture_after;
+        if (m_capture_target.has_value()) {
+            m_capture_binding = ResolveCaptureBinding(scene, rg, *m_capture_target, m_capture_error);
+            if (!m_capture_binding.has_value()) {
+                rstd_error("capture selection failed: {}", m_capture_error);
+                m_program.clear();
+                return;
+            }
+            m_finpass->setGraphSource(m_capture_binding->render_target,
+                                       Some(m_capture_binding->texture_use));
+            capture_after = Some(m_capture_binding->writer);
+        } else {
+            m_finpass->setGraphSource(rstd::cppstd::to_string(owe::SpecTex_Default), None());
+        }
+        if (!m_program.injectFramePasses(*m_prepass, *m_finpass, capture_after)) {
+            m_capture_error = "capture writer is absent from the compiled pass order";
+            rstd_error("{}", m_capture_error);
+            m_program.clear();
+            return;
+        }
     }
 
     {

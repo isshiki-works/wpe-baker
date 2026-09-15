@@ -495,6 +495,7 @@ public:
         m_controlpoints[index].angle_track = Some(rstd::move(track));
     }
     void SetOwnerNode(SceneNode* node) noexcept { m_owner_node = node; }
+    void TraceExternalInput(ref<str> property) const;
     void SetPlaybackState(Arc<ParticlePlaybackState> state) {
         m_playback_state = Some(rstd::move(state));
     }

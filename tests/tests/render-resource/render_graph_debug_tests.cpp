@@ -1,3 +1,5 @@
+#include <string_view>
+
 #include <rstd/test/gtest.hpp>
 
 import rstd;
@@ -116,7 +118,10 @@ TEST(RenderGraphDebug, GraphvizIncludesResourceRefsAndAccessLabels) {
                              });
 
     auto path = std::filesystem::temp_directory_path() / "owe-render-graph-debug-test.dot";
-    graph.ToGraphviz(rstd::cppstd::as_str(path.native()).unwrap());
+    auto utf8_path = path.u8string();
+    auto path_str = std::string_view(reinterpret_cast<const char*>(utf8_path.data()),
+                                     utf8_path.size());
+    graph.ToGraphviz(rstd::cppstd::as_str(path_str).unwrap());
 
     auto dot = ReadFile(path);
     EXPECT_NE(dot.find("ref=n"), std::string::npos);

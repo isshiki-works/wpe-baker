@@ -524,6 +524,9 @@ void ParseModelObjImpl(SceneParseContext& context, wpscene::ModelObject& model_o
     SetUniformConfig(context, node, rstd::move(svData));
     AssignNodeFieldAnimations(context, *node.as_ptr(), model_obj.field_bindings);
     WireFieldScripts(context, node, model_obj.field_bindings);
+    if (model_puppet_layer.is_some())
+        WirePuppetAnimationLayerScripts(
+            context, node, *model_puppet_layer, model_obj.puppet_layers);
     if (model_obj.skin == u32()) {
         (void)context.dynamic_model_prototypes.insert(
             String::make(rstd::cppstd::as_str(model_obj.model).unwrap()), node.clone());
@@ -653,6 +656,7 @@ void ParseContainerObj(SceneParseContext& context, const wpscene::ContainerObjec
                                       Vector3f(obj.angles.data()),
                                       obj.name);
     node->ID() = i32(obj.id);
+    (void)context.scene->RegisterNode(*node, Some(WallpaperLayerId { .value = obj.id }));
     if (obj.parallax.authored || obj.disable_propagation ||
         ! wpscene::IsZeroParallaxDepth(obj.parallax.depth)) {
         ApplyParallaxUniformConfig(context, node, obj.parallax, obj.id, ! obj.disable_propagation);

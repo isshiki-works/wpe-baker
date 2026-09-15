@@ -169,6 +169,7 @@ void HandleUniformLine(ShaderInfo* info, std::span<const ShaderTexInfo> texinfos
         } else {
             rstd_error("invalid shader texture index: {}", name);
         }
+        wput.slot = index;
         if (! wput.default_.is_empty()) {
             info->defTexs.push_back({ index, rstd::cppstd::to_string(wput.default_.as_str()) });
         }

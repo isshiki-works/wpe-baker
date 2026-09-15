@@ -36,9 +36,120 @@ struct VulkanSurfaceInfo {
     std::vector<std::string>                           instanceExts;
 };
 
+enum class RenderOutputMode
+{
+    Legacy,
+    CpuReadback,
+};
+
+enum class CpuFrameStatus
+{
+    Completed,
+    NotReady,
+    InvalidMode,
+    RenderError,
+    Timeout,
+    DeviceLost,
+};
+
+// Owns a completed frame. Rows are tightly packed, in Vulkan image row order;
+// format describes the bytes (initially RGBA8 UNORM). No view outlives a map.
+struct CpuFrameResult {
+    CpuFrameStatus           status { CpuFrameStatus::NotReady };
+    std::uint32_t            width { 0 };
+    std::uint32_t            height { 0 };
+    std::uint32_t            row_pitch { 0 };
+    VkFormat                 format { VK_FORMAT_UNDEFINED };
+    std::uint64_t            frame_index { 0 };
+    // Populated for a selected graph capture; output dimensions remain above.
+    std::string              source_render_target;
+    std::string              source_pass;
+    std::uint64_t            source_texture_version { 0 };
+    std::uint32_t            source_width { 0 };
+    std::uint32_t            source_height { 0 };
+    // Prepared Graph passes, including scene copies; excludes frame/pre,
+    // FinPass and CPU readback. This is not a count of individual VkDraw calls.
+    std::uint32_t            compiled_scene_passes { 0 };
+    vulkan::VideoDecoderInventory video_decoders;
+    // Optional GPU batch span for offline strategy estimates: recorded
+    // program (including FinPass) through readback copy completion, preserving
+    // their actual overlap. CPU work and I/O are excluded.
+    std::optional<double>    gpu_total_ms;
+    // Same start as gpu_total_ms, ending after the recorded program
+    // (including FinPass), before the CPU readback barrier and copy.
+    std::optional<double>    gpu_draw_ms;
+    bool                     gpu_timing_requested { false };
+    bool                     gpu_timing_supported { false };
+    std::uint32_t            timestamp_valid_bits { 0 };
+    std::optional<double>    timestamp_period_ns;
+    // Support is checked only when requested. Allocation/read failures keep
+    // the measurement null and report their own status, without fake zeros.
+    VkResult                 gpu_timing_error_code { VK_SUCCESS };
+    std::string              gpu_timing_message;
+    std::vector<std::uint8_t> pixels;
+    VkResult                 error_code { VK_SUCCESS };
+    std::string              message;
+
+    bool completed() const noexcept { return status == CpuFrameStatus::Completed; }
+};
+
+struct RenderCaptureTarget {
+    // Select either an effect-local FBO by author identity, or a complete
+    // runtime RT name. When both author ID and ordinal are supplied they must
+    // identify the same effect. Ordinals refer to the original effects[] array.
+    std::int32_t owner_layer_id { -1 };
+    std::int32_t authored_effect_id { -1 };
+    std::int32_t effect_ordinal { -1 };
+    std::string local_fbo;
+    std::string runtime_render_target;
+    // Exact RenderGraph logical texture version; -1 selects the latest real
+    // writer. Virtual initial values may consume version 0 and cannot be captured.
+    std::int32_t texture_version { -1 };
+    // Select the last pass of an authored effect only when it writes directly
+    // to LayerNext. This is a graph provenance selector, not a target name.
+    bool effect_terminal { false };
+    // Refuse FinPass scaling: the offline output extent must equal the source.
+    bool exact_extent { false };
+};
+
+struct RenderLayerSelection {
+    bool enabled { false };
+    std::vector<std::int32_t> include_layers;
+    bool transparent_background { false };
+    bool include_postprocessing { true };
+
+    bool contains(std::int32_t id) const {
+        return !enabled || id < 0 ||
+            std::find(include_layers.begin(), include_layers.end(), id) != include_layers.end();
+    }
+};
+
+// Offline-only primary orthographic camera override.  Coordinates are in the
+// authored scene plane: the parser's normal global camera is centered at
+// (orthographic_width / 2, orthographic_height / 2), so positive X/Y map
+// directly to authored right/up world coordinates.  Width/height describe the
+// world-space window, independently of RenderInitInfo's output pixel extent.
+struct OrthographicCaptureViewport {
+    double center_x { 0.0 };
+    double center_y { 0.0 };
+    double width { 0.0 };
+    double height { 0.0 };
+};
+
 struct RenderInitInfo {
     bool enable_valid_layer { false };
     bool offscreen { false };
+
+    // CpuReadback always creates a device without a window/surface or external
+    // memory handles. The budget is configurable per job, not an image-size cap.
+    RenderOutputMode output_mode { RenderOutputMode::Legacy };
+    VkFormat         cpu_format { VK_FORMAT_R8G8B8A8_UNORM };
+    std::uint64_t    max_readback_bytes { 256ull * 1024 * 1024 };
+    std::uint64_t    readback_timeout_ns { 10'000'000'000ull };
+    bool             gpu_timing { false };
+    std::optional<RenderCaptureTarget> capture_target;
+    std::optional<OrthographicCaptureViewport> orthographic_capture_viewport;
+    RenderLayerSelection layer_selection;
 
     std::span<const rstd::uint8_t> uuid;
     TexTiling                      offscreen_tiling { TexTiling::OPTIMAL };
@@ -75,7 +186,7 @@ struct RenderInitInfo {
 };
 
 Box<rg::RenderGraph> sceneToRenderGraph(Scene&);
-Box<rg::RenderGraph> sceneToRenderGraph(Scene&, const RenderSceneSnapshot&);
+Box<rg::RenderGraph> sceneToRenderGraph(Scene&, const RenderSceneSnapshot&, const RenderLayerSelection* = nullptr);
 
 namespace vulkan
 {
@@ -98,6 +209,10 @@ public:
     void destroy();
 
     void drawFrame(Scene&);
+
+    // Synchronous backpressure: one submission, one fenced readback, no drops.
+    // A timeout/device error poisons this renderer; destroy it before retrying.
+    CpuFrameResult drawFrameCpu(Scene&);
 
     void clearLastRenderGraph(
         RenderGraphResourceRetention retention = RenderGraphResourceRetention::KeepSceneTextures);

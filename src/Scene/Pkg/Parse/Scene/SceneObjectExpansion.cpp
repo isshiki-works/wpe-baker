@@ -245,8 +245,10 @@ bool PrepareSceneObject(T& object, Option<ref<rstd::json::Map>> user_properties,
     constexpr bool keep_text  = same<T, wpscene::TextObject>;
     if constexpr (! same<T, wpscene::ImageObject>) {
         constexpr bool keep_user_visibility = ! same<T, wpscene::SoundObject>;
+        constexpr bool keep_hidden_sound    = same<T, wpscene::SoundObject>;
         if (! object.visible && ! linked && ! keep_text &&
-            ! (keep_user_visibility && (user_bound || visible_script)))
+            ! (keep_user_visibility && (user_bound || visible_script)) &&
+            ! (keep_hidden_sound && force_invisible))
             return false;
         if (linked) object.visible = true;
     }

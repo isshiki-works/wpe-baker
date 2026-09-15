@@ -571,11 +571,22 @@ TEST(SceneTextureAnimation, AdvancesOncePerRuntimeFrame) {
     ASSERT_TRUE(first_query.is_some());
     ASSERT_TRUE(second_query.is_some());
     ASSERT_TRUE(shared_query.is_some());
-    EXPECT_FLOAT_EQ(first_query->translation[rstd::usize()], 0.5f);
-    EXPECT_EQ(first_query->image_slot, rstd::usize(1));
+    EXPECT_FLOAT_EQ(first_query->translation[rstd::usize()], 0.0f);
+    EXPECT_EQ(first_query->image_slot, rstd::usize());
     EXPECT_EQ(first_query->translation, second_query->translation);
     EXPECT_EQ(first_query->translation, shared_query->translation);
     EXPECT_EQ(first_query->revision, shared_query->revision);
+
+    const double first_frame_remainder = static_cast<double>(0.1f) - 0.01;
+    scene.Runtime().Advance(rstd::f64(first_frame_remainder));
+    auto advanced        = scene.TextureFrame(*draw_id, rstd::usize());
+    auto advanced_shared = scene.TextureFrame(*second_draw_id, rstd::usize());
+    ASSERT_TRUE(advanced.is_some());
+    ASSERT_TRUE(advanced_shared.is_some());
+    EXPECT_FLOAT_EQ(advanced->translation[rstd::usize()], 0.5f);
+    EXPECT_EQ(advanced->image_slot, rstd::usize(1));
+    EXPECT_EQ(advanced->translation, advanced_shared->translation);
+    EXPECT_EQ(advanced->revision, advanced_shared->revision);
 
     scene.RebuildResourceIndex();
     auto rebuilt_node_id = scene.ResourceIndex().nodeId(*node.as_ptr());
@@ -590,7 +601,7 @@ TEST(SceneTextureAnimation, AdvancesOncePerRuntimeFrame) {
     auto rebuilt = scene.TextureFrame(*rebuilt_draw_id, rstd::usize());
     ASSERT_TRUE(rebuilt.is_some());
     EXPECT_FLOAT_EQ(rebuilt->translation[rstd::usize()], 0.5f);
-    EXPECT_EQ(rebuilt->revision, first_query->revision);
+    EXPECT_EQ(rebuilt->revision, advanced->revision);
 
     node->TexAnim().playing = false;
     scene.Runtime().Advance(rstd::f64(0.11));
@@ -600,6 +611,133 @@ TEST(SceneTextureAnimation, AdvancesOncePerRuntimeFrame) {
     ASSERT_TRUE(playing.is_some());
     EXPECT_FLOAT_EQ(paused->translation[rstd::usize()], 0.5f);
     EXPECT_FLOAT_EQ(playing->translation[rstd::usize()], 0.0f);
+}
+
+TEST(SceneTextureAnimation, PrivateControlsUseRealMetadataAndCanRejoinSharedPlayback) {
+    owe::Scene scene;
+    auto       node = rstd::sync::Arc<owe::SceneNode>::make();
+    auto       mesh = MakeSingleSubmesh("sprite-private");
+    mesh->MaterialSlots()[0]->textures.push_back("tex/private");
+    node->AddMesh(mesh);
+    scene.RootMut()->AppendChild(node.clone());
+    auto peer = rstd::sync::Arc<owe::SceneNode>::make();
+    auto peer_mesh = MakeSingleSubmesh("sprite-peer");
+    peer_mesh->MaterialSlots()[0]->textures.push_back("tex/private");
+    peer->AddMesh(peer_mesh);
+    scene.RootMut()->AppendChild(peer.clone());
+
+    owe::SceneTexture texture { .url = "tex/private", .isSprite = true };
+    texture.spriteAnim.AppendFrame(owe::SpriteFrame { .imageId = 0, .frametime = 0.1f, .x = 0.0f });
+    texture.spriteAnim.AppendFrame(owe::SpriteFrame { .imageId = 1, .frametime = 0.2f, .x = 0.25f });
+    texture.spriteAnim.AppendFrame(owe::SpriteFrame { .imageId = 2, .frametime = 0.3f, .x = 0.75f });
+    scene.RegisterTexture(String::make("tex/private"_str), rstd::move(texture));
+    scene.RebuildResourceIndex();
+
+    auto node_id = scene.ResourceIndex().nodeId(*node.as_ptr());
+    auto peer_id = scene.ResourceIndex().nodeId(*peer.as_ptr());
+    ASSERT_TRUE(node_id.is_some());
+    ASSERT_TRUE(peer_id.is_some());
+    auto draw_id = scene.ResourceIndex().drawItemFor(*node_id, rstd::u32());
+    auto peer_draw = scene.ResourceIndex().drawItemFor(*peer_id, rstd::u32());
+    ASSERT_TRUE(draw_id.is_some());
+    ASSERT_TRUE(peer_draw.is_some());
+    auto* animations = node->TextureAnimationRegistry();
+    ASSERT_NE(animations, nullptr);
+    EXPECT_EQ(animations->FrameCount(*node), rstd::usize(3));
+    EXPECT_NEAR(animations->Duration(*node).to_primitive(), 0.6, 1e-5);
+    EXPECT_EQ(animations->Rate(*node), rstd::f64(1));
+
+    const auto first_duration = rstd::f64(static_cast<double>(0.1f));
+    scene.Runtime().Advance(first_duration);
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize(1));
+    animations->Pause(*node);
+    animations->SetRate(*node, rstd::f64(2));
+    animations->Play(*node);
+    scene.Runtime().Advance(first_duration);
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize(2));
+    EXPECT_EQ(animations->CurrentFrame(*peer), rstd::usize(1));
+    EXPECT_EQ(animations->Rate(*node), rstd::f64(2));
+
+    animations->Stop(*node);
+    EXPECT_FALSE(animations->IsPlaying(*node));
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize());
+    EXPECT_EQ(animations->Rate(*node), rstd::f64(1));
+    scene.Runtime().Advance(rstd::f64(0.2));
+    auto stopped = scene.TextureFrame(*draw_id, rstd::usize());
+    ASSERT_TRUE(stopped.is_some());
+    EXPECT_FLOAT_EQ(stopped->translation[rstd::usize()], 0.0f);
+
+    animations->SetFrame(*node, rstd::usize(2));
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize(2));
+    animations->Play(*node);
+    const auto half_last_frame = rstd::f64(static_cast<double>(0.15f));
+    scene.Runtime().Advance(half_last_frame);
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize(2));
+    scene.Runtime().Advance(half_last_frame);
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize());
+    animations->Join(*node);
+    EXPECT_EQ(animations->CurrentFrame(*node), animations->CurrentFrame(*peer));
+    EXPECT_EQ(animations->Rate(*node), rstd::f64(1));
+
+    node->TexAnim().current_frame = 2;
+    node->TexAnim().playing       = false;
+    animations->SetRate(*node, rstd::f64(2));
+    EXPECT_FALSE(animations->IsPlaying(*node));
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize(2));
+}
+
+TEST(SceneTextureAnimation, PrivateRateUsesOneFramePerTickAndSupportsSignedSpeed) {
+    owe::Scene scene;
+    auto       node = rstd::sync::Arc<owe::SceneNode>::make();
+    auto       mesh = MakeSingleSubmesh("sprite-rate");
+    mesh->MaterialSlots()[0]->textures.push_back("tex/rate");
+    node->AddMesh(mesh);
+    scene.RootMut()->AppendChild(node.clone());
+    auto peer = rstd::sync::Arc<owe::SceneNode>::make();
+    auto peer_mesh = MakeSingleSubmesh("sprite-rate-peer");
+    peer_mesh->MaterialSlots()[0]->textures.push_back("tex/rate");
+    peer->AddMesh(peer_mesh);
+    scene.RootMut()->AppendChild(peer.clone());
+
+    owe::SceneTexture texture { .url = "tex/rate", .isSprite = true };
+    for (std::int32_t frame = 0; frame < 7; ++frame)
+        texture.spriteAnim.AppendFrame(owe::SpriteFrame { .imageId = frame, .frametime = 0.1f });
+    scene.RegisterTexture(String::make("tex/rate"_str), rstd::move(texture));
+    scene.RebuildResourceIndex();
+    auto* animations = node->TextureAnimationRegistry();
+    ASSERT_NE(animations, nullptr);
+
+    animations->SetFrame(*node, rstd::usize());
+    EXPECT_TRUE(animations->IsPlaying(*node));
+    animations->SetRate(*node, rstd::f64(2));
+    const auto tick = rstd::f64(static_cast<double>(0.1f));
+    for (int tick_index = 0; tick_index < 30; ++tick_index) scene.Runtime().Advance(tick);
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize(2));
+
+    animations->SetRate(*node, rstd::f64(10));
+    for (int tick_index = 0; tick_index < 60; ++tick_index) scene.Runtime().Advance(tick);
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize(6));
+
+    animations->SetRate(*node, rstd::f64());
+    for (int tick_index = 0; tick_index < 20; ++tick_index) scene.Runtime().Advance(tick);
+    EXPECT_TRUE(animations->IsPlaying(*node));
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize(6));
+
+    animations->SetRate(*node, rstd::f64(-1));
+    scene.Runtime().Advance(tick);
+    scene.Runtime().Advance(tick);
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize(4));
+    animations->Stop(*node);
+    EXPECT_FALSE(animations->IsPlaying(*node));
+    EXPECT_EQ(animations->CurrentFrame(*node), rstd::usize());
+    EXPECT_EQ(animations->Rate(*node), rstd::f64(1));
+
+    animations->Play(*node);
+    animations->SetRate(*node, rstd::f64(10));
+    animations->Join(*node);
+    EXPECT_EQ(animations->CurrentFrame(*node), animations->CurrentFrame(*peer));
+    EXPECT_TRUE(animations->IsPlaying(*node));
+    EXPECT_EQ(animations->Rate(*node), rstd::f64(10));
 }
 
 TEST(SceneTextures, EnsureTextureDescriptorRegistersImportedTexture) {

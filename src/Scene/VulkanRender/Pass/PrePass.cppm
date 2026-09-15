@@ -17,6 +17,7 @@ public:
     struct Desc {
         // in
         std::string_view result { rstd::cppstd::as_string_view(SpecTex_Default) };
+        bool transparent_background { false };
         rstd::Option<resource::TextureUseHandle> result_use;
         rstd::Option<resource::TextureUseHandle> result_msaa_use;
         rstd::Option<TextureRequest>             result_request;
@@ -36,6 +37,7 @@ public:
 
     bool             setResultRequest(rstd::Option<TextureRequest>,
                                       rstd::Option<TextureRequest> msaa_request = rstd::None());
+    void             setTransparentBackground(bool enabled);
     void             resetResourceUses();
     void             declareResources(ResourceDeclarationContext&) override;
     PassResourceUses resourceUses() const override;

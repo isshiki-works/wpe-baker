@@ -1,6 +1,9 @@
 module;
 
 #include <rstd/macro.hpp>
+#include "TwoBoneIk.hpp"
+
+#include <string>
 
 module wescene.pkg.puppet;
 import eigen;
@@ -14,6 +17,12 @@ using namespace Eigen;
 using namespace rstd::prelude;
 using namespace rstd::literals;
 using rstd::sync::Arc;
+
+static void DiagnosePuppetIk(const char* reason) {
+    if (active_offline_execution != nullptr)
+        active_offline_execution->diagnose("puppet IK runtime failed: " + std::string(reason),
+                                           true);
+}
 
 static double SampleBoneCurve(const Vec<Puppet::BoneFrameCurve>& curves, usize bone_index,
                               const Puppet::Animation::InterpolationInfo& info) {
@@ -86,7 +95,7 @@ struct BindLinear {
 };
 
 static Quaterniond ToQuaternion(Vector3f euler) {
-    const array<Vector3d, 3> axis { Vector3d::UnitX(), Vector3d::UnitY(), Vector3d::UnitZ() };
+    const rstd::array<Vector3d, 3> axis { Vector3d::UnitX(), Vector3d::UnitY(), Vector3d::UnitZ() };
     return AngleAxis<double>(euler.z(), axis[usize(2)]) *
            AngleAxis<double>(euler.y(), axis[usize(1)]) *
            AngleAxis<double>(euler.x(), axis[usize(0)]);
@@ -279,6 +288,148 @@ slice<Eigen::Affine3f> Puppet::genFrame(PuppetLayer& puppet_layer, double time) 
         affine = parent * affine;
     }
 
+    struct ControllerSample {
+        Vector3f position;
+        bool     valid { true };
+        bool     active { false };
+    };
+    auto sample_controller_position = [&](usize controller_index) {
+        const auto&              controller = ik_controllers[controller_index];
+        const Puppet::BoneFrame* replace_base_frame { nullptr };
+        ControllerSample         sample { .position = controller.bind_xform.translation() };
+        for (const auto& layer : puppet_layer.m_layers) {
+            if (layer.anim == nullptr || ! layer.anim_layer.visible) continue;
+            const double blend = std::max(0.0, layer.anim_layer.blend);
+            if (blend <= 0.0) continue;
+            sample.active = true;
+            if (controller_index >= layer.anim->controller_tracks.len()) {
+                sample.valid = false;
+                return sample;
+            }
+            const auto& track = layer.anim->controller_tracks[controller_index];
+            const auto& info  = layer.interp_info;
+            if (track.frames.is_empty() || info.frame_a >= track.frames.len() ||
+                info.frame_b >= track.frames.len()) {
+                sample.valid = false;
+                return sample;
+            }
+            if (! layer.anim_layer.additive && replace_base_frame == nullptr)
+                replace_base_frame = std::addressof(track.frames[usize()]);
+        }
+
+        if (! sample.active) return sample;
+        if (replace_base_frame != nullptr) sample.position = replace_base_frame->position;
+        for (const auto& layer : puppet_layer.m_layers) {
+            if (layer.anim == nullptr || ! layer.anim_layer.visible) continue;
+            const double blend = std::max(0.0, layer.anim_layer.blend);
+            if (blend <= 0.0) continue;
+            const auto& track = layer.anim->controller_tracks[controller_index];
+            const auto& info  = layer.interp_info;
+            const auto& base  = track.frames[usize()].position;
+            const auto& a     = track.frames[info.frame_a].position;
+            const auto& b     = track.frames[info.frame_b].position;
+            sample.position +=
+                static_cast<float>(blend) * ((a - base) * static_cast<float>(1.0 - info.t) +
+                                             (b - base) * static_cast<float>(info.t));
+        }
+        sample.valid = sample.position.allFinite();
+        return sample;
+    };
+
+    auto is_descendant = [&](usize bone_index, usize ancestor) {
+        for (usize remaining = bones.len(); remaining > usize(); --remaining) {
+            if (bone_index == ancestor) return true;
+            const uint32_t parent = bones[bone_index].anim_parent;
+            if (parent == NO_PARENT || usize(parent) >= bones.len()) return false;
+            bone_index = usize(parent);
+        }
+        return false;
+    };
+    auto rotate_subtree = [&](usize root, const Vector3f& pivot, const Quaternionf& rotation) {
+        Affine3f correction = Affine3f::Identity();
+        correction.translate(pivot);
+        correction.rotate(rotation);
+        correction.translate(-pivot);
+        for (usize i {}; i < m_final_affines.len(); ++i) {
+            if (is_descendant(i, root)) m_final_affines[i] = correction * m_final_affines[i];
+        }
+    };
+
+    for (const auto& chain : ik_chains) {
+        if (chain.bones.len() != usize(3) ||
+            usize(chain.target_controller_index) >= ik_controllers.len()) {
+            DiagnosePuppetIk("invalid three-node chain schema");
+            continue;
+        }
+        const usize start_index(chain.bones[usize()]);
+        const usize joint_index(chain.bones[usize(1)]);
+        const usize end_index(chain.bones[usize(2)]);
+        if (start_index >= bones.len() || joint_index >= bones.len() || end_index >= bones.len() ||
+            joint_index >= ik_nodes.len() || end_index >= ik_nodes.len() ||
+            bones[joint_index].anim_parent != start_index.to_primitive() ||
+            bones[end_index].anim_parent != joint_index.to_primitive()) {
+            DiagnosePuppetIk("invalid chain hierarchy");
+            continue;
+        }
+
+        const usize target_index(chain.target_controller_index);
+        const auto& target_controller = ik_controllers[target_index];
+        if (target_controller.type != 0 || usize(target_controller.bone_index) != end_index) {
+            DiagnosePuppetIk("invalid target controller");
+            continue;
+        }
+
+        usize pole_index {};
+        bool  has_pole = false;
+        for (usize i {}; i < ik_controllers.len(); ++i) {
+            if (ik_controllers[i].type == 1 &&
+                ik_controllers[i].bone_index == target_controller.bone_index) {
+                pole_index = i;
+                has_pole   = true;
+                break;
+            }
+        }
+        if (! has_pole || ik_nodes[joint_index].length <= 0.0f ||
+            ik_nodes[end_index].length <= 0.0f || ! std::isfinite(ik_nodes[joint_index].length) ||
+            ! std::isfinite(ik_nodes[end_index].length)) {
+            DiagnosePuppetIk("missing pole controller or invalid bind length");
+            continue;
+        }
+
+        // Controller positions are absolute model-space replacement poses. The paired type-1
+        // controller is a pole point, so all solver inputs share this post-animation world space.
+        const Vector3f start  = m_final_affines[start_index].translation();
+        const Vector3f joint  = m_final_affines[joint_index].translation();
+        const Vector3f end    = m_final_affines[end_index].translation();
+        const auto     target = sample_controller_position(target_index);
+        if (! target.active) continue;
+        const auto pole = sample_controller_position(pole_index);
+        if (! target.valid || ! pole.valid || ! pole.active) {
+            DiagnosePuppetIk("invalid animated controller track");
+            continue;
+        }
+        // IkNode lengths describe the bind pose. Preserve parent/animation scaling by solving with
+        // the current world-space segment lengths after the positive metadata guard above.
+        const float upper_length = (joint - start).norm();
+        const float lower_length = (end - joint).norm();
+        const auto  solution     = puppet_ik::SolveTwoBone(start,
+                                                           joint,
+                                                           end,
+                                                           target.position,
+                                                           upper_length,
+                                                           lower_length,
+                                                           std::addressof(pole.position));
+        if (! solution.valid) {
+            DiagnosePuppetIk("non-finite or degenerate animated pose");
+            continue;
+        }
+
+        rotate_subtree(start_index, start, solution.start_rotation);
+        rotate_subtree(joint_index, solution.joint, solution.joint_rotation);
+        if (active_offline_execution != nullptr)
+            ++active_offline_execution->runtime_ik_chain_solves;
+    }
+
     for (usize i {}; i < m_final_affines.len(); ++i) {
         m_final_affines[i] *= bones[i].inv_bind.matrix();
     }
@@ -357,6 +508,9 @@ auto PuppetLayer::AnimationLayer::Clone() const -> AnimationLayer {
         .blend     = blend,
         .visible   = visible,
         .cur_time  = cur_time,
+        .visible_binding =
+            visible_binding.is_some() ? Some(visible_binding->clone()) : None(),
+        .visible_can_change = visible_can_change,
         .layer_id  = layer_id,
         .name      = name.clone(),
         .additive  = additive,
@@ -403,7 +557,7 @@ void PuppetLayer::prepared(slice<AnimationLayer> alayers) {
     };
     for (usize i {}; i < alayers.len(); ++i) {
         const auto& layer = alayers[i];
-        if (! layer.visible || ! exists(layer)) continue;
+        if ((! layer.visible && ! layer.visible_can_change) || ! exists(layer)) continue;
         if (layer.additive) {
             if (! has_replace && additive_base == nullptr && layer.blend > 0.0) {
                 additive_base = std::addressof(layer);
@@ -425,7 +579,7 @@ void PuppetLayer::prepared(slice<AnimationLayer> alayers) {
                 break;
             }
         }
-        const bool ok = matched != nullptr && layer.visible;
+        const bool ok = matched != nullptr && (layer.visible || layer.visible_can_change);
 
         if (ok && rstd::addressof(layer) == additive_base) {
             // Additive-only stacks still need one absolute frame[0]
@@ -495,6 +649,47 @@ Option<Eigen::Affine3f> PuppetLayer::attachmentTransform(usize index, double tim
 
 auto PuppetLayer::AnimationPlaybacks() const noexcept -> slice<Arc<SceneAnimationPlayback>> {
     return m_playbacks.as_slice();
+}
+
+auto PuppetLayer::AnimationPlayback(rstd::int32_t layer_id) const noexcept
+    -> Option<Arc<SceneAnimationPlayback>> {
+    for (const auto& layer : m_layers) {
+        if (layer.anim_layer.layer_id == layer_id && layer.playback.is_some())
+            return Some((*layer.playback).clone());
+    }
+    return None();
+}
+
+auto PuppetLayer::AnimationLayerVisible(rstd::int32_t layer_id) const noexcept -> Option<bool> {
+    for (const auto& layer : m_layers) {
+        if (layer.anim_layer.layer_id == layer_id) return Some(bool(layer.anim_layer.visible));
+    }
+    return None();
+}
+
+bool PuppetLayer::SetAnimationLayerVisible(rstd::int32_t layer_id, bool visible) noexcept {
+    for (auto& layer : m_layers) {
+        if (layer.anim_layer.layer_id != layer_id) continue;
+        layer.anim_layer.visible = visible;
+        return true;
+    }
+    return false;
+}
+
+auto PuppetLayer::AnimationLayerBlend(rstd::int32_t layer_id) const noexcept -> Option<double> {
+    for (const auto& layer : m_layers) {
+        if (layer.anim_layer.layer_id == layer_id) return Some(double(layer.anim_layer.blend));
+    }
+    return None();
+}
+
+bool PuppetLayer::SetAnimationLayerBlend(rstd::int32_t layer_id, double blend) noexcept {
+    for (auto& layer : m_layers) {
+        if (layer.anim_layer.layer_id != layer_id) continue;
+        layer.anim_layer.blend = blend;
+        return true;
+    }
+    return false;
 }
 
 auto PuppetLayer::TextureChannelBlendMap(double time) noexcept -> slice<float> {

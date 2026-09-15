@@ -1,4 +1,5 @@
 module;
+#include <new>
 
 module wescene.timer;
 import wescene.core;

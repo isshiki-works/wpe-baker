@@ -16,6 +16,8 @@ members = [
   "waywallen/WebRenderer",
   "waywallen/plugins/org.waywallen.open-wallpaper-engine",
   "tests",
+  "tests/offline-vulkan",
+  "tools/SceneBake",
 ]
 default-members = ["viewer/SceneViewer", "viewer/WebViewer"]
 

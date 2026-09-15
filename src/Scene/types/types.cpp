@@ -1,7 +1,14 @@
 module;
 
 #include <cstdio>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 module wescene.types;
 import rstd.cppstd;
@@ -58,18 +65,38 @@ DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& o) noexcept {
     return *this;
 }
 bool DynamicLibrary::Open(const char* filename) {
+    Close();
+#ifdef _WIN32
+    if (filename == nullptr || filename[0] == '\0') return false;
+    int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, filename, -1, nullptr, 0);
+    if (size <= 0) return false;
+    std::wstring wide(static_cast<std::size_t>(size), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, filename, -1, wide.data(), size) != size)
+        return false;
+    handle = reinterpret_cast<void*>(LoadLibraryExW(wide.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS));
+#else
     handle = dlopen(filename, RTLD_NOW);
+#endif
     return IsOpen();
 }
 bool DynamicLibrary::IsOpen() const { return handle != nullptr; }
 void DynamicLibrary::Close() {
     if (IsOpen()) {
+#ifdef _WIN32
+        FreeLibrary(reinterpret_cast<HMODULE>(handle));
+#else
         dlclose(handle);
+#endif
         handle = nullptr;
     }
 }
 void* DynamicLibrary::GetSymbolAddr(const char* name) const {
+#ifdef _WIN32
+    if (handle == nullptr || name == nullptr) return nullptr;
+    return reinterpret_cast<void*>(GetProcAddress(reinterpret_cast<HMODULE>(handle), name));
+#else
     return reinterpret_cast<void*>(dlsym(handle, name));
+#endif
 }
 
 } // namespace utils

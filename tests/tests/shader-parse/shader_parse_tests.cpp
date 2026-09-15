@@ -36,6 +36,30 @@ ShaderInfo Parse(const std::string& src, std::size_t n_tex_slots = 8) {
     return info;
 }
 
+owe::CompileSceneShaderVariantResult CompileEmptyFunctionFragment(std::string fragment,
+                                                                  std::string id,
+                                                                  std::string shadow_mask) {
+    owe::SceneShaderVariantDesc desc;
+    desc.scene_id                  = id;
+    desc.shader_name               = id;
+    desc.input_combos["SHADOWMASK"] = std::move(shadow_mask);
+    desc.stages.push_back(owe::SceneShaderVariantStage {
+        .stage      = owe::ShaderType::VERTEX,
+        .source_key = "/assets/shaders/" + id + ".vert",
+        .source     = R"(
+attribute vec3 a_Position;
+void main() { gl_Position = vec4(a_Position, 1.0); }
+)",
+    });
+    desc.stages.push_back(owe::SceneShaderVariantStage {
+        .stage      = owe::ShaderType::FRAGMENT,
+        .source_key = "/assets/shaders/" + id + ".frag",
+        .source     = std::move(fragment),
+    });
+    owe::fs::VFS vfs;
+    return owe::ShaderParser::CompileSceneShaderVariant(desc, vfs);
+}
+
 } // namespace
 
 // --- annotation collection: unconditional ----------------------------------
@@ -295,6 +319,141 @@ void main() {
 
     ASSERT_TRUE(result.ok) << result.error;
     ASSERT_TRUE(result.shader);
+}
+
+TEST(ShaderParser, CompileSceneShaderVariantStripsInactiveEmptyNonVoidFunction) {
+    const auto result = CompileEmptyFunctionFragment(
+        R"(
+#if SHADOWMASK
+float3 ShadowMask(float2 uv) { return float3(uv, 1.0); }
+#else
+float3 ShadowMask(float2 uv) {
+}
+#endif
+void main() { gl_FragColor = vec4(1.0); }
+)",
+        "inactive-empty-function-test",
+        "0");
+
+    ASSERT_TRUE(result.ok) << result.error;
+}
+
+TEST(ShaderParser, CompileSceneShaderVariantKeepsEnabledNonVoidFunction) {
+    const auto result = CompileEmptyFunctionFragment(
+        R"(
+#if SHADOWMASK
+float3 ShadowMask(float2 uv) { return float3(uv, 1.0); }
+#else
+float3 ShadowMask(float2 uv) {
+}
+#endif
+void main() { gl_FragColor = vec4(ShadowMask(float2(0.5, 0.5)), 1.0); }
+)",
+        "enabled-nonvoid-function-test",
+        "1");
+
+    ASSERT_TRUE(result.ok) << result.error;
+}
+
+TEST(ShaderParser, CompileSceneShaderVariantRejectsActiveEmptyNonVoidFunction) {
+    const auto result = CompileEmptyFunctionFragment(
+        R"(
+float3 ShadowMask(float2 uv) {
+}
+void main() { gl_FragColor = vec4(ShadowMask(float2(0.5, 0.5)), 1.0); }
+)",
+        "active-empty-function-test",
+        "0");
+
+    EXPECT_FALSE(result.ok);
+}
+
+TEST(ShaderParser, CompileSceneShaderVariantRejectsStaticEmptyNonVoidFunction) {
+    const auto result = CompileEmptyFunctionFragment(
+        R"(
+static float3 EmptyShadowMask(float2 uv) {
+}
+void main() { gl_FragColor = vec4(1.0); }
+)",
+        "static-empty-function-test",
+        "0");
+
+    EXPECT_FALSE(result.ok);
+}
+
+TEST(ShaderParser, CompileSceneShaderVariantAcceptsBoundedIoDeclarationSwizzle) {
+    owe::SceneShaderVariantDesc desc;
+    desc.scene_id    = "io-declaration-swizzle-test";
+    desc.shader_name = "io-declaration-swizzle-test";
+    desc.stages.push_back(owe::SceneShaderVariantStage {
+        .stage      = owe::ShaderType::VERTEX,
+        .source_key = "/assets/shaders/io-declaration-swizzle-test.vert",
+        .source     = R"(
+attribute vec3 a_Position;
+varying vec4 v_Size;
+void main() {
+    v_Size = vec4(a_Position.xy, 0.25, 0.75);
+    gl_Position = vec4(a_Position, 1.0);
+}
+)",
+    });
+    desc.stages.push_back(owe::SceneShaderVariantStage {
+        .stage      = owe::ShaderType::FRAGMENT,
+        .source_key = "/assets/shaders/io-declaration-swizzle-test.frag",
+        .source     = R"(
+varying vec4 v_Size.xy;
+void main() {
+    gl_FragColor = vec4(v_Size.xy, v_Size.zw);
+}
+)",
+    });
+
+    owe::fs::VFS vfs;
+    const auto   result = owe::ShaderParser::CompileSceneShaderVariant(desc, vfs);
+
+    ASSERT_TRUE(result.ok) << result.error;
+    ASSERT_TRUE(result.shader);
+    ASSERT_EQ(result.shader->codes.size(), 2u);
+}
+
+TEST(ShaderParser, CompileSceneShaderVariantRejectsInvalidIoDeclarationSwizzleAndUniformSwizzle) {
+    const auto compile_fragment = [](std::string fragment, std::string id) {
+        owe::SceneShaderVariantDesc desc;
+        desc.scene_id    = id;
+        desc.shader_name = id;
+        desc.stages.push_back(owe::SceneShaderVariantStage {
+            .stage      = owe::ShaderType::VERTEX,
+            .source_key = "/assets/shaders/" + id + ".vert",
+            .source     = R"(
+attribute vec3 a_Position;
+varying vec4 v_Size;
+void main() {
+    v_Size = vec4(a_Position.xy, 0.0, 1.0);
+    gl_Position = vec4(a_Position, 1.0);
+}
+)",
+        });
+        desc.stages.push_back(owe::SceneShaderVariantStage {
+            .stage      = owe::ShaderType::FRAGMENT,
+            .source_key = "/assets/shaders/" + id + ".frag",
+            .source     = std::move(fragment),
+        });
+        owe::fs::VFS vfs;
+        return owe::ShaderParser::CompileSceneShaderVariant(desc, vfs);
+    };
+
+    const auto chain = compile_fragment(R"(
+varying vec4 v_Size.xy.z;
+void main() { gl_FragColor = v_Size; }
+)", "io-declaration-swizzle-chain-reject-test");
+    EXPECT_FALSE(chain.ok);
+
+    const auto uniform = compile_fragment(R"(
+varying vec4 v_Size;
+uniform vec4 u_Color.xy;
+void main() { gl_FragColor = v_Size + u_Color; }
+)", "io-declaration-swizzle-uniform-reject-test");
+    EXPECT_FALSE(uniform.ok);
 }
 
 TEST(ShaderParser, PreShaderHeaderFlattensPackedAudioSpectrumAccess) {
@@ -1162,11 +1321,14 @@ void main() {
 
     const auto shader_cache = root / desc.scene_id / "spvs03";
     ASSERT_TRUE(std::filesystem::is_directory(shader_cache));
-    const auto files = std::filesystem::directory_iterator(shader_cache);
-    ASSERT_NE(files, std::filesystem::directory_iterator {});
-    const auto artifact_path = files->path();
+    std::filesystem::path artifact_path;
+    {
+        const auto files = std::filesystem::directory_iterator(shader_cache);
+        ASSERT_NE(files, std::filesystem::directory_iterator {});
+        artifact_path = files->path();
+    }
     EXPECT_EQ(artifact_path.extension(), ".spvs");
-    EXPECT_GT(files->file_size(), 112u);
+    EXPECT_GT(std::filesystem::file_size(artifact_path), 112u);
     EXPECT_EQ(std::distance(std::filesystem::directory_iterator(shader_cache),
                             std::filesystem::directory_iterator {}),
               1);

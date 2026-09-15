@@ -23,6 +23,7 @@ import wescene.json;
 import wescene.pkg.parse;
 import wescene.pkg.scene_obj;
 import wescene.scene;
+import wescene.script;
 import wescene.testing.scene_parse_probe;
 import wescene.types;
 
@@ -269,7 +270,83 @@ TEST(SceneObjectExpansion, PreservesHiddenSourceReferencedByContainer) {
     EXPECT_TRUE(objects[rstd::usize(1)].is_Container());
 }
 
-TEST(SceneObjectExpansion, ShapeOwnsItsWallpaperLayerIdentity) {
+TEST(SceneObjectExpansion, PreservesSoundHiddenByUserBoundParent) {
+    auto document = owe::wpscene::ParseSceneDocumentJson(
+        R"JSON({
+            "camera": {},
+            "general": {},
+            "objects": [
+                {"id": 13, "name": "Reporter", "visible": {
+                    "value": true,
+                    "script": "export function update() { return thisScene.getLayerCount() === 3 && thisScene.getLayer(0).name === 'Reporter' && thisScene.getLayer(1).name === 'SoundParent' && thisScene.getLayer(2).name === 'SilentChild' && thisScene.getLayerIndex('SilentChild') === 2; }"
+                }},
+                {"id": 41, "name": "SoundParent",
+                 "visible": {"user": "show_parent", "value": false}},
+                {"id": 42, "name": "SilentChild", "parent": 41,
+                 "sound": ["sounds/silence.wav"], "startsilent": true, "visible": true}
+            ]
+        })JSON",
+        owe::wpscene::kSceneVersionUnknown);
+    ASSERT_TRUE(document.is_some());
+
+    auto parse = [&](bool show_parent) {
+        auto properties = owe::ParseJson(show_parent ? R"({"show_parent":{"value":true}})"
+                                                       : R"({"show_parent":{"value":false}})");
+        EXPECT_TRUE(properties.is_ok());
+        auto property_json   = properties.unwrap();
+        auto user_properties = property_json.as_object();
+        EXPECT_TRUE(user_properties.is_some());
+
+        owe::fs::VFS                vfs;
+        wavsen::audio::SoundManager sound_manager;
+        owe::SceneParser            parser;
+        return parser.Parse(
+            "hidden-sound-parent"_str,
+            rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
+            rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
+            rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)),
+            owe::SceneParseOptions { .user_properties = rstd::Some(*user_properties) });
+    };
+
+    auto hidden = parse(false);
+    ASSERT_TRUE(hidden.is_ok());
+    auto hidden_scene = rstd::move(hidden).unwrap();
+    owe::script::TickSceneScripts(*hidden_scene.scene, owe::script::FrameInputs {});
+    auto* reporter     = hidden_scene.scene->RootMut()->FindByName("Reporter");
+    auto* parent       = hidden_scene.scene->RootMut()->FindByName("SoundParent");
+    auto* sound        = hidden_scene.scene->RootMut()->FindByName("SilentChild");
+    ASSERT_NE(reporter, nullptr);
+    ASSERT_NE(parent, nullptr);
+    ASSERT_NE(sound, nullptr);
+    EXPECT_TRUE(reporter->Visible());
+    EXPECT_FALSE(parent->Visible());
+    EXPECT_FALSE(sound->Visible());
+    EXPECT_TRUE(sound->SoundControl().is_some());
+    EXPECT_FALSE(sound->IsPlaying());
+
+    auto* root              = hidden_scene.scene->RootMut().as_raw_ptr();
+    auto reporter_index     = root->ChildIndex(*reporter);
+    auto parent_index       = root->ChildIndex(*parent);
+    auto sound_child_index  = parent->ChildIndex(*sound);
+    ASSERT_EQ(reporter->Parent(), root);
+    ASSERT_EQ(parent->Parent(), root);
+    ASSERT_EQ(sound->Parent(), parent);
+    ASSERT_TRUE(reporter_index.is_some());
+    ASSERT_TRUE(parent_index.is_some());
+    ASSERT_TRUE(sound_child_index.is_some());
+    EXPECT_LT(*reporter_index, *parent_index);
+    EXPECT_EQ(*sound_child_index, rstd::usize());
+
+    auto visible = parse(true);
+    ASSERT_TRUE(visible.is_ok());
+    auto visible_scene = rstd::move(visible).unwrap();
+    auto* visible_sound = visible_scene.scene->RootMut()->FindByName("SilentChild");
+    ASSERT_NE(visible_sound, nullptr);
+    EXPECT_TRUE(visible_sound->Visible());
+    EXPECT_TRUE(visible_sound->SoundControl().is_some());
+}
+
+TEST(SceneObjectExpansion, ShapeOwnsIdentityAndBuildsAnnotatedTextureFormatCombos) {
     auto document = owe::wpscene::ParseSceneDocumentJson(
         R"JSON({
             "camera": {},
@@ -285,13 +362,24 @@ TEST(SceneObjectExpansion, ShapeOwnsItsWallpaperLayerIdentity) {
                     "file": "effects/lightshafts/effect.json",
                     "visible": true,
                     "passes": [{
-                        "combos": {"DIRECTDRAW": 1, "RAYMODE": 1},
+                        "combos": {"DIRECTDRAW": 1, "RAYMODE": 1, "RENDERING": 1},
+                        "textures": [
+                            "gradient/gradient_toon",
+                            "gradient/gradient_toon",
+                            "particle/beam/beam_0"
+                        ],
                         "constantshadervalues": {
                             "point0": "-1.0 -1.0",
                             "point1": "-1.0 1.0",
                             "point2": "1.0 1.0",
                             "point3": "1.0 -1.0"
                         }
+                    }]
+                }, {
+                    "file": "effects/refraction/effect.json",
+                    "visible": true,
+                    "passes": [{}, {
+                        "textures": [null, "gradient/gradient_toon"]
                     }]
                 }]
             }]
@@ -304,9 +392,13 @@ TEST(SceneObjectExpansion, ShapeOwnsItsWallpaperLayerIdentity) {
     auto effect_assets = owe::fs::make_physical_fs(
         owe::fs::ToPath(std::string(WAYWALLEN_ASSETS_DIR) + "/effects/lightshafts"));
     ASSERT_TRUE(effect_assets.is_ok());
+    auto refraction_assets = owe::fs::make_physical_fs(
+        owe::fs::ToPath(std::string(WAYWALLEN_ASSETS_DIR) + "/effects/refraction"));
+    ASSERT_TRUE(refraction_assets.is_ok());
     owe::fs::VFS vfs;
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(assets).unwrap_unchecked()).is_ok());
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(effect_assets).unwrap_unchecked()).is_ok());
+    ASSERT_TRUE(vfs.mount("/assets"_str, std::move(refraction_assets).unwrap_unchecked()).is_ok());
 
     wavsen::audio::SoundManager sound_manager;
     owe::SceneParser            parser;
@@ -322,6 +414,24 @@ TEST(SceneObjectExpansion, ShapeOwnsItsWallpaperLayerIdentity) {
     ASSERT_NE(shape, nullptr);
     ASSERT_TRUE(shape->WallpaperIdentity().is_some());
     EXPECT_EQ(shape->WallpaperIdentity()->value, rstd::i32(42));
+
+    auto effect = scene.scene->FindNodeImageEffect(*shape, rstd::usize());
+    ASSERT_TRUE(effect.is_some());
+    auto* material = scene.scene->ImageEffectMaterial(*effect, rstd::usize());
+    ASSERT_NE(material, nullptr);
+    ASSERT_TRUE(material->customShader.variant.is_some());
+    const auto& combos = material->customShader.variant->input_combos;
+    EXPECT_EQ(combos.at("TEX0FORMAT"), "FORMAT_R8");
+    EXPECT_EQ(combos.count("TEX1FORMAT"), 0u);
+    EXPECT_EQ(combos.at("TEX2FORMAT"), "FORMAT_RG88");
+
+    auto refraction = scene.scene->FindNodeImageEffect(*shape, rstd::usize(1));
+    ASSERT_TRUE(refraction.is_some());
+    auto* refraction_material = scene.scene->ImageEffectMaterial(*refraction, rstd::usize(1));
+    ASSERT_NE(refraction_material, nullptr);
+    ASSERT_TRUE(refraction_material->customShader.variant.is_some());
+    EXPECT_EQ(refraction_material->customShader.variant->input_combos.at("TEX1FORMAT"),
+              "FORMAT_R8");
 }
 
 TEST(ImageColorBlendParsing, LinearDodgeUsesAdditiveAttachmentOwner) {

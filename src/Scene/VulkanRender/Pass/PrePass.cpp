@@ -16,6 +16,12 @@ using rstd::cppstd::as_str;
 PrePass::PrePass(Desc&& desc): m_desc(std::move(desc)) {}
 PrePass::~PrePass() {}
 
+void PrePass::setTransparentBackground(bool enabled) {
+    if (m_desc.transparent_background == enabled) return;
+    m_desc.transparent_background = enabled;
+    setPrepared(false);
+}
+
 bool PrePass::setResultRequest(rstd::Option<TextureRequest> request,
                                rstd::Option<TextureRequest> msaa_request) {
     bool changed = SetTextureRequestIfChanged(m_desc.result_request, std::move(request));
@@ -165,10 +171,16 @@ void PrePass::prepare(Scene& scene, const Device& device, PassPrepareContext& co
         }
     }
     {
-        auto sc            = scene.ClearColor();
-        m_desc.clear_value = VkClearValue {
-            .color = { .float32 = { sc[usize()], sc[usize(1)], sc[usize(2)], 1.0f } }
-        };
+        // Empty selections and particle-only graphs may have no shader pass
+        // to replace this initial clear. They still need transparent coverage.
+        if (m_desc.transparent_background) {
+            m_desc.clear_value = VkClearValue { .color = { .float32 = { 0.f, 0.f, 0.f, 0.f } } };
+        } else {
+            auto sc = scene.ClearColor();
+            m_desc.clear_value = VkClearValue {
+                .color = { .float32 = { sc[usize()], sc[usize(1)], sc[usize(2)], 1.0f } }
+            };
+        }
     }
     setPrepared();
 }

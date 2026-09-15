@@ -1,6 +1,7 @@
 module;
 
 #include <rstd/macro.hpp>
+#include <filesystem>
 
 module wescene.pkg.parse;
 import :scene_context;
@@ -284,18 +285,21 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
 
     text::FontCache::ResolvedBlob resolved;
     // `systemfont_<family>` is WE's alias for a host system font — never exists
-    // in the pkg, so skip the VFS round-trip and let fontconfig resolve it.
+    // in the pkg, so skip the VFS round-trip and use the platform resolver.
     // Some scenes write it with a leading dir (e.g. `fonts/systemfont_arial`),
     // so match on the basename.
-    const bool is_systemfont =
-        std::filesystem::path(font_name).filename().native().starts_with("systemfont_");
+    auto path_utf8 = [](const std::filesystem::path& path) {
+        auto value = path.generic_u8string();
+        return std::string(reinterpret_cast<const char*>(value.data()), value.size());
+    };
+    const auto font_path = std::filesystem::u8path(font_name);
+    const bool is_systemfont = path_utf8(font_path.filename()).starts_with("systemfont_");
     std::string font_source_key;
     if (! font_name.empty() && ! is_systemfont) {
         // scene.json's `font` is a pkg-relative path, e.g. `fonts/2.ttf` or
         // `fonts/workshop/<id>/X.otf`. The pkg mounts at /assets so the full
         // VFS path is /assets/<font_name>.
-        std::string vfs_path =
-            (std::filesystem::path("/assets") / font_name).lexically_normal().native();
+        std::string vfs_path = path_utf8((std::filesystem::path("/assets") / font_path).lexically_normal());
         font_source_key = vfs_path;
         auto key        = rstd::cppstd::as_str(font_source_key).unwrap();
         if (auto cached = context.font_sources.get(key); cached.is_some()) {
@@ -521,6 +525,11 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
         *layer_node,
         obj.id >= i32() ? Some(WallpaperLayerId { .value = obj.id }) : None<WallpaperLayerId>());
     scene.RegisterNode(*sp_node);
+    // Offscreen text effects belong to the authored text for group capture;
+    // leave their node/resource identity independent of the authored layer.
+    if (!direct_text && layer_node->WallpaperIdentity().is_some()) {
+        sp_node->SetGeneratorIdentity(layer_node->WallpaperIdentity());
+    }
     std::shared_ptr<TextRuntimeTargets> runtime_targets;
     std::string                         link_output;
     if (direct_text) {
@@ -726,34 +735,10 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
                     });
                 }
 
-                for (const auto& cmd : wpeffobj.commands) {
-                    if (cmd.command != "copy") {
-                        rstd_error("Unknown effect command: {}", cmd.command);
-                        continue;
-                    }
-                    auto target = render_targets.get(as_str(cmd.target).unwrap());
-                    auto source = render_targets.get(as_str(cmd.source).unwrap());
-                    if (target.is_none() || source.is_none()) {
-                        rstd_error(
-                            "Unknown effect command dst or src: {} {}", cmd.target, cmd.source);
-                        continue;
-                    }
-                    auto command_target = cmd.target == "previous"
-                                              ? SceneEffectTarget::LayerNext()
-                                              : SceneEffectTarget::Named(
-                                                    rstd::cppstd::to_string((**target).as_str()));
-                    auto command_source = cmd.source == "previous"
-                                              ? SceneEffectTarget::LayerPrevious()
-                                              : SceneEffectTarget::Named(
-                                                    rstd::cppstd::to_string((**source).as_str()));
-                    effect->commands.push_back({ .cmd      = SceneImageEffect::CmdType::Copy,
-                                                 .dst      = std::move(command_target),
-                                                 .src      = std::move(command_source),
-                                                 .afterpos = cmd.afterpos });
-                }
-
-                bool effect_ok = true;
-                for (std::size_t i_mat = 0; i_mat < wpeffobj.materials.size(); ++i_mat) {
+                bool effect_ok = AppendEffectCommands(wpeffobj, render_targets, *effect);
+                for (std::size_t i_mat = 0;
+                     effect_ok && i_mat < wpeffobj.materials.size();
+                     ++i_mat) {
                     wpscene::Material         wpmat = wpeffobj.materials.at(i_mat).clone();
                     SceneEffectTarget         matOutRT { SceneEffectTarget::LayerNext() };
                     Option<wpscene::Material> user_texture_fallback;
@@ -1085,6 +1070,8 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
         layouter->SetText(s);
         update_text_layout(layouter->Metrics());
     };
+    EnsureScriptScene(context).runtime().RegisterTextGetter(
+        layer_node.as_ptr(), [current_text] { return *current_text; });
     if (has_text_user) {
         context.scene->RegisterUserTextBinding(
             String::make(as_str(obj.text_user.name).unwrap()),

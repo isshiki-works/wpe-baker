@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include <rstd/test/gtest.hpp>
 
 import rstd;
@@ -293,7 +295,9 @@ TEST(PkgFs, ResolvesAuthoredParentPathsInsideAssetRoot) {
     ASSERT_TRUE(vfs.mount("/assets"_str, pkg->mount_handle()).is_ok());
     auto asset = owe::fs::ResolveAssetPath("../海景画/particles/snow.json");
     ASSERT_TRUE(asset.is_ok());
-    EXPECT_EQ(owe::fs::ToStdString(asset->as_path()), "/assets/海景画/particles/snow.json");
+    auto asset_path = owe::fs::ToStdString(asset->as_path());
+    std::replace(asset_path.begin(), asset_path.end(), '\\', '/');
+    EXPECT_EQ(asset_path, "/assets/海景画/particles/snow.json");
 
     auto source = vfs.open_read(asset->as_path());
     ASSERT_TRUE(source.is_ok());

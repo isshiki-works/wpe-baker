@@ -110,6 +110,7 @@ public:
     float                    brightness { 1.0f };
     bool                     fullscreen { false };
     bool                     composite_layer { false };
+    bool                     autosize { false };
     bool                     nopadding { false };
     bool                     visible { true };
     std::string              image;

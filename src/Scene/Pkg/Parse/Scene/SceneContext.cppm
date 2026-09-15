@@ -77,6 +77,8 @@ void RegisterLayerPreviousBindings(Scene&, SceneMaterial&, const wpscene::Materi
                                    ref<str> composite_target);
 void ApplyTextureBinds(wpscene::Material&, std::span<const wpscene::MaterialPassBindItem>,
                        const EffectRenderTargets&);
+bool AppendEffectCommands(const wpscene::ImageEffect&, const EffectRenderTargets&,
+                          SceneImageEffect&);
 void LoadConstvalue(SceneParseContext&, SceneMaterial&, const wpscene::Material&, const ShaderInfo&,
                     SceneShaderValueAnimationMap* = nullptr);
 
@@ -100,19 +102,32 @@ struct ParticleTrailUniformConfigDraft {
 
 class ParseSceneHandle {
 public:
-    ParseSceneHandle(): m_scene(Box<Scene>::make()) {}
+    ParseSceneHandle(): m_scene(Some(Box<Scene>::make())) {}
+    ParseSceneHandle(ParseSceneHandle&&) noexcept            = default;
+    ParseSceneHandle& operator=(ParseSceneHandle&&) noexcept = default;
+    ParseSceneHandle(const ParseSceneHandle&)                = delete;
+    ParseSceneHandle& operator=(const ParseSceneHandle&)     = delete;
 
-    Scene*       get() noexcept { return m_scene.get(); }
-    const Scene* get() const noexcept { return m_scene.as_ptr().as_raw_ptr(); }
-    Scene*       operator->() noexcept { return m_scene.get(); }
-    const Scene* operator->() const noexcept { return m_scene.as_ptr().as_raw_ptr(); }
-    Scene&       operator*() noexcept { return *m_scene; }
-    const Scene& operator*() const noexcept { return *m_scene; }
+    Scene* get() noexcept {
+        return m_borrowed ? m_borrowed : (m_scene.is_some() ? (*m_scene).get() : nullptr);
+    }
+    const Scene* get() const noexcept {
+        return m_borrowed ? m_borrowed : (m_scene.is_some() ? (*m_scene).as_ptr().as_raw_ptr() : nullptr);
+    }
+    Scene*       operator->() noexcept { return get(); }
+    const Scene* operator->() const noexcept { return get(); }
+    Scene&       operator*() noexcept { return *get(); }
+    const Scene& operator*() const noexcept { return *get(); }
 
-    auto Take() -> Box<Scene> { return rstd::move(m_scene); }
+    auto Take() -> Box<Scene> {
+        m_borrowed = nullptr;
+        return rstd::move(m_scene.take().unwrap_unchecked());
+    }
+    void Borrow(Scene& scene) noexcept { m_borrowed = rstd::addressof(scene); }
 
 private:
-    Box<Scene> m_scene;
+    Option<Box<Scene>> m_scene;
+    Scene*             m_borrowed { nullptr };
 };
 
 struct SceneParseContext {
@@ -124,6 +139,7 @@ struct SceneParseContext {
     wpscene::SceneVersion                          pkg_version { wpscene::kSceneVersionUnknown };
     fs::VFS*                                       vfs { nullptr };
     Option<ref<rstd::json::Map>>                   user_properties;
+    Option<Box<rstd::json::Map>>                   owned_user_properties;
     Arc<ShaderCache>                               shader_cache { Arc<ShaderCache>::make() };
     HashMap<String, text::FontCache::ResolvedBlob> font_sources;
 
@@ -135,6 +151,7 @@ struct SceneParseContext {
     Option<Arc<SceneNode>> global_perspective_camera_node;
 
     Option<Box<owe::script::ScriptScene>> script_scene;
+    owe::script::ScriptScene*             installed_script_scene { nullptr };
     using ImageAlignmentSetter = Arc<dyn<FnMut<void(SceneNode*, ref<str>)>>>;
     struct ImageAlignmentBinding {
         SceneNode*           node { nullptr };
@@ -200,6 +217,7 @@ void ApplyParallaxUniformConfig(SceneParseContext&, const Arc<SceneNode>&,
                                 bool propagate_to_children = true);
 auto FindUniformConfig(const SceneParseContext&, const SceneNode&) -> const UniformNodeConfigDraft*;
 void RegisterNodeRef(SceneParseContext&, i32, SceneParseContext::NodeRef);
+auto ResolveImageAssetSize(SceneParseContext&, ref<str>) -> Option<array<float, 2>>;
 
 bool SceneWritesLayerText(slice<SceneObjectVar>);
 bool SceneHasScripts(slice<SceneObjectVar>);
@@ -223,6 +241,9 @@ auto ScriptValueAsVec3(const script::ScriptValue&, const Eigen::Vector3f&)
 void WireFieldScripts(SceneParseContext&, const Arc<SceneNode>&, const wpscene::FieldBindings&,
                       std::function<void(const script::ScriptValue&)> = {},
                       std::function<void(const script::ScriptValue&)> = {});
+void WirePuppetAnimationLayerScripts(SceneParseContext&, const Arc<SceneNode>&,
+                                     const Arc<PuppetLayer>&,
+                                     std::span<PuppetLayer::AnimationLayer>);
 void WireImageEffectVisibilityScript(SceneParseContext&, SceneNode*, const wpscene::ImageEffect&,
                                      SceneEffectId);
 void WireCameraShakeScripts(SceneParseContext&, const wpscene::FieldBindings&);
