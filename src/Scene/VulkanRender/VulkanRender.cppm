@@ -214,6 +214,12 @@ public:
     // A timeout/device error poisons this renderer; destroy it before retrying.
     CpuFrameResult drawFrameCpu(Scene&);
 
+    // Hand a consumed frame's pixel buffer back so the next drawFrameCpu
+    // reuses its allocation. Without this every frame allocates and
+    // zero-fills a full frame before the readback copy overwrites it.
+    // Optional: skipping it only costs the allocation.
+    void recycleCpuPixels(std::vector<std::uint8_t>&&);
+
     void clearLastRenderGraph(
         RenderGraphResourceRetention retention = RenderGraphResourceRetention::KeepSceneTextures);
     void configureRenderTargets(Scene&);

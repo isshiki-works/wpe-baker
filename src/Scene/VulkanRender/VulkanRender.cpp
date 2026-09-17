@@ -303,6 +303,7 @@ struct VulkanRender::Impl {
 
     void drawFrame(Scene&);
     CpuFrameResult drawFrameCpu(Scene&);
+    void recycleCpuPixels(std::vector<std::uint8_t>&&);
     bool initCpuReadback(const RenderInitInfo&);
     void initGpuTiming(const RenderInitInfo&);
 
@@ -366,6 +367,9 @@ struct VulkanRender::Impl {
     VkFormat m_cpu_format { VK_FORMAT_R8G8B8A8_UNORM };
     std::uint64_t m_readback_timeout_ns { vk_wait_time };
     std::uint64_t m_cpu_frame_index { 0 };
+    // Pixel buffer handed back by the previous frame's consumer; reused as-is
+    // so the per-frame resize neither allocates nor zero-fills.
+    std::vector<std::uint8_t> m_cpu_pixels_pool;
     VmaImageParameters m_cpu_image;
     VmaBufferParameters m_cpu_staging;
     std::optional<RenderCaptureTarget> m_capture_target;
@@ -528,6 +532,9 @@ void VulkanRender::destroy() { pImpl->destroy(); }
 void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
 owe::CpuFrameResult VulkanRender::drawFrameCpu(Scene& scene) {
     return pImpl->drawFrameCpu(scene);
+}
+void VulkanRender::recycleCpuPixels(std::vector<std::uint8_t>&& buffer) {
+    pImpl->recycleCpuPixels(rstd::move(buffer));
 }
 void VulkanRender::clearLastRenderGraph(RenderGraphResourceRetention retention) {
     pImpl->clearLastRenderGraph(retention);
@@ -1150,6 +1157,9 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene) {
                             "; selected source differs from the configured CPU output");
         }
     }
+    // Take the recycled buffer: when it already holds a full frame the resize
+    // below is a no-op, so no allocation and no zero fill precede the copy.
+    frame.pixels = rstd::move(m_cpu_pixels_pool);
     try {
         frame.pixels.resize(static_cast<std::size_t>(m_cpu_staging.req_size));
     } catch (const std::bad_alloc&) {
@@ -1312,6 +1322,10 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene) {
     frame.status = CpuFrameStatus::Completed;
     ++m_cpu_frame_index;
     return frame;
+}
+
+void VulkanRender::Impl::recycleCpuPixels(std::vector<std::uint8_t>&& buffer) {
+    if (buffer.capacity() >= m_cpu_pixels_pool.capacity()) m_cpu_pixels_pool = rstd::move(buffer);
 }
 
 void VulkanRender::Impl::drawFrameSwapchain(Scene& scene) {

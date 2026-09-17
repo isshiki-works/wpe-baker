@@ -690,6 +690,10 @@ void SceneRenderController::onDraw() {
                        : rstd::bench::probe::SpanGuard {};
         if (offline) {
             if (m_main.offlineContext().failed) return;
+            /* The consumer is done with last frame's pixels by now; give the
+             * allocation back so this frame's readback reuses it instead of
+             * zero-filling a fresh full-frame buffer. */
+            m_render->recycleCpuPixels(rstd::move(m_cpu_frame.pixels));
             m_cpu_frame = m_render->drawFrameCpu(*m_scene);
             m_cpu_frame.frame_index = m_step_index;
             if (!m_cpu_frame.completed()) return;
