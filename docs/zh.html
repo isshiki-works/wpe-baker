@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Periodica：确定性动画烘焙引擎。把 Wallpaper Engine 壁纸的周期动画解成一段无缝循环视频，官方播放器实测 GPU 功耗最高降 96%。第一个应用：WPE Baker。">
+<meta name="description" content="Periodica：面向 Wallpaper Engine 的确定性动画烘焙引擎。将场景的周期性动画烘焙为一段无缝循环视频，在官方播放器中实测 GPU 功耗最高降低 96%。首个应用：WPE Baker。">
 <link rel="icon" href="data:,">
 <link rel="alternate" hreflang="en" href="index.html">
 <link rel="alternate" hreflang="zh" href="zh.html">
@@ -16,55 +16,55 @@
 <div class="wrap">
 <nav>
   <div class="logo">PERIODICA<small>WPE BAKER · 1.0.1</small></div>
-  <div class="links"><a href="#loop">循环</a><a href="#numbers">实测</a><a href="#refresh">刷新率</a><a href="#gui">工具</a><a href="#astra">与 Astra 共建</a><a href="#roadmap">路线图</a></div>
+  <div class="links"><a href="#loop">循环</a><a href="#numbers">实测数据</a><a href="#refresh">刷新率</a><a href="#gui">工具</a><a href="#astra">Astra</a><a href="#roadmap">路线图</a></div>
   <div class="lang"><a href="index.html" onclick="try{localStorage.setItem('lang','en')}catch(e){}">EN</a><a href="zh.html" aria-current="page" onclick="try{localStorage.setItem('lang','zh')}catch(e){}">中文</a></div>
 </nav>
 
 <div class="hero">
   <div>
     <div class="eyebrow">确定性动画烘焙引擎</div>
-    <h1>壁纸永远在重复渲染。<br><span>烘一次就够。</span></h1>
-    <p class="lead">Periodica 把一张 Wallpaper Engine 壁纸的全部动画写成数学，微调周期，让整个场景闭合成一段循环，再当视频播放。画面一模一样，GPU 负载和功耗最多能降 96%，插电和用电池都一样。第一个应用是 WPE Baker，面向 Wallpaper Engine。</p>
+    <h1>你的壁纸一直在实时渲染。<br><span>其实，烘焙一次就够了。</span></h1>
+    <p class="lead">Periodica 会为 Wallpaper Engine 场景中的全部动画建立数学模型，并重新调整各动画的周期，直到整个场景首尾闭合成一个完整循环，然后以视频形式播放。视觉效果保持不变；无论插电还是使用电池，GPU 负载和功耗最高可降低 96%。它的第一个实际应用是面向 Wallpaper Engine 的 WPE Baker。</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/latest">下载 Windows 版</a>
-      <a class="btn ghost" href="#numbers">看实测数据</a>
+      <a class="btn ghost" href="#numbers">查看实测数据</a>
     </div>
-    <div class="fine" style="margin-top:12px">开源 · 免安装 · 运行时不调用任何模型</div>
+    <div class="fine" style="margin-top:12px">开源 · 便携版 · 运行时不调用任何模型</div>
   </div>
   <div class="screen">
-    <video src="site/hero-landscape.mp4" autoplay muted loop playsinline aria-label="烘好的壁纸成品，作为 50 秒无缝循环播放"></video>
-    <div class="bar"><span>正在播放的就是烘好的成品 · Lost Landscape 3（northway，32.9 万订阅）<br><span class="tag">原作每帧要画 37 个图层、11 套粒子、71 个着色器通道 · 成品是一段过了接缝校验的 50 秒 60 fps 循环，这里播放的是一个 3.4 MB 的文件</span></span><b>−57%</b></div>
+    <video src="site/hero-landscape.mp4" autoplay muted loop playsinline aria-label="示例成品：烘焙后的 50 秒无缝循环"></video>
+    <div class="bar"><span>示例成品 · 烘焙后的循环输出 · Lost Landscape 3（northway，32.9 万订阅者）<br><span class="tag">原版：37 个图层、11 个粒子系统、每帧执行 71 次着色器 Pass · 烘焙后：一个经过接缝检查的 50 秒、60 fps 循环，此处播放的文件仅 3.4 MB</span></span><b>−57%</b></div>
   </div>
 </div>
 
 <div class="strip">
-  <div><div class="n">113</div><div class="l">张壁纸在官方播放器里实测</div></div>
-  <div><div class="n">最高 −96%</div><div class="l">烘好后的 GPU 负载和功耗</div></div>
-  <div><div class="n">−76%</div><div class="l">核显功耗去极值平均，7 个实测成品</div></div>
-  <div><div class="n">1,400+</div><div class="l">发布版自动检查项</div></div>
-  <div><div class="n">0</div><div class="l">运行时模型调用</div></div>
+  <div><div class="n">113</div><div class="l">在 Wallpaper Engine 官方播放器中实测的壁纸数量</div></div>
+  <div><div class="n">最高 −96%</div><div class="l">烘焙场景的 GPU 负载与功耗降幅</div></div>
+  <div><div class="n">3.9 W</div><div class="l">亚托莉在 165 Hz 下的 iGPU 功耗，原版为 26.0 W</div></div>
+  <div><div class="n">1,400+</div><div class="l">发布版本中的自动化检查数量</div></div>
+  <div><div class="n">0</div><div class="l">运行时模型调用次数</div></div>
 </div>
 
 <section id="loop">
   <div class="eyebrow">循环</div>
-  <h2>循环是从数学上解出来的，所以一定闭合。</h2>
-  <p class="sub">帧比对工具只能猜视频哪里可能在重复。Periodica 直接读产生动画的方程：着色器时间、动画轨道、粒子周期、视频时基，把它们调到同一个公共周期上。拖一下分割线，比较上面这段 50 秒循环的第一帧和最后一帧。</p>
+  <h2>从数学上直接求解，因此它从构造上就是闭合的。</h2>
+  <p class="sub">普通的帧对比工具只能猜测视频大概会在哪里重复。Periodica 则直接读取产生运动的数学方程，包括着色器时间、动画轨道、粒子循环以及视频时间基准，并重新调整它们，使所有内容共享同一个公共周期。拖动分隔线，可以比较上方 50 秒循环的第一帧和最后一帧。</p>
   <div class="cmp" id="cmp">
-    <img src="site/land-last.jpg" alt="循环的最后一帧">
-    <img class="top" id="cmpTop" src="site/land-first.jpg" alt="循环的第一帧">
+    <img src="site/land-last.jpg" alt="烘焙循环的最后一帧">
+    <img class="top" id="cmpTop" src="site/land-first.jpg" alt="烘焙循环的第一帧">
     <div class="div" id="cmpDiv"></div>
     <span class="lab l">第 1 帧</span><span class="lab r">第 3,000 帧</span>
-    <input type="range" id="cmpRange" min="0" max="100" value="50" aria-label="比较第一帧和最后一帧">
+    <input type="range" id="cmpRange" min="0" max="100" value="50" aria-label="比较第一帧与最后一帧">
   </div>
-  <div class="trace" aria-label="功耗曲线，原作对比成品，A/B/B/A">
-    <div class="hdr"><span>RAPL PP1 · 核显 · W · 虹夏（3650475846）</span><span>A / B / B / A · 每段 45 秒 · Arc B390</span></div>
-    <svg viewBox="0 0 560 300" role="img" aria-label="原作稳定在 22 瓦上下；烘好的成品稳定在 2 瓦上下">
+  <div class="trace" aria-label="功耗曲线，原始场景与烘焙输出，A/B/B/A 测试">
+    <div class="hdr"><span>RAPL PP1 · iGPU 功耗轨 · W · 虹夏（3650475846）</span><span>A / B / B / A · 每段采样 45 秒 · Arc B390</span></div>
+    <svg viewBox="0 0 560 300" role="img" aria-label="原始场景的功耗始终接近 22 W；烘焙后的输出始终接近 2 W">
       <rect class="band" x="40" y="14" width="120" height="250"></rect>
       <rect class="band" x="300" y="14" width="120" height="250"></rect>
-      <text class="bandl" x="100" y="28">A · 原作</text>
-      <text class="bandl" x="230" y="28">B · 成品</text>
-      <text class="bandl" x="360" y="28">B · 成品</text>
-      <text class="bandl" x="490" y="28">A · 原作</text>
+      <text class="bandl" x="100" y="28">A · 原始场景</text>
+      <text class="bandl" x="230" y="28">B · 烘焙输出</text>
+      <text class="bandl" x="360" y="28">B · 烘焙输出</text>
+      <text class="bandl" x="490" y="28">A · 原始场景</text>
       <line class="ax" x1="40" y1="264" x2="560" y2="264"></line>
       <line class="ax" x1="40" y1="14" x2="40" y2="264"></line>
       <text class="axl" x="6" y="52">25</text><line class="ax" x1="36" y1="48" x2="40" y2="48"></line>
@@ -77,166 +77,166 @@
       <text class="axl" x="164" y="66">22.5 W</text>
       <text class="axl" x="244" y="238" style="fill:#0e7f6d">1.86 W · −92%</text>
     </svg>
-    <div class="legend"><span><i style="background:var(--trace)"></i>原作</span><span><i style="background:var(--signal)"></i>烘好的成品</span></div>
+    <div class="legend"><span><i style="background:var(--trace)"></i>原始场景</span><span><i style="background:var(--signal)"></i>烘焙输出</span></div>
   </div>
 </section>
 
 <section id="period">
-  <div class="eyebrow">难点</div>
-  <h2>大多数场景根本没有周期。Periodica 给它造一个。</h2>
-  <p class="sub">一个 7.3 秒的波浪、一个 11.1 秒的摇摆、一个 4.6 秒的粒子循环和一段 20 秒的视频，永远不会再对齐一次；硬录屏要几个小时才能重复，接缝照样看得见。Periodica 先解出每个分量各自的周期，再把速度微调不到百分之一，让它们凑成同一个循环：一个作者从没写过的周期。</p>
+  <div class="eyebrow">真正困难的部分</div>
+  <h2>大多数场景其实根本没有周期。Periodica 会给它造出一个周期。</h2>
+  <p class="sub">假设一个波浪动画的周期是 7.3 秒，一个摆动是 11.1 秒，一个粒子循环是 4.6 秒，一段视频又是 20 秒，那么它们实际上永远不会再次同时对齐。直接录制视频的话，可能要录上几个小时才能接近重复，而且最后依然会出现明显切口。Periodica 会分别求出每个组件自身的周期，然后只对它们的播放速度做不到 1% 的微调，让所有组件最终共享一个公共循环周期。也就是说，它会创造出一个原作者从未实际制作过的统一周期。</p>
   <div class="rows">
-    <div class="row"><div class="k">预算</div><h3>用可见改动做预算</h3><p>三档限定每个分量最多能调多少：效率 5%、平衡 3%、质量只取还能闭合的最小改动。百合的 100 个周期分量并成一段 180.4 秒的循环；虹夏的 20 个并成 44 秒；绫波丽整个场景以 4.68% 的总调速在 56.2 秒闭合。</p></div>
-    <div class="row"><div class="k">护栏</div><h3>保证看不出来的几条规则</h3><p>最慢的可见分量每个循环至少转满三圈；可见漂移低于 0.2 px/s；摇摆只改频率，不改轨迹。每一项调速都按分量设了上限，并写进报告。规则满足不了，那一层就保留实时，报告会点名是哪一层。</p></div>
-    <div class="row"><div class="k">证明</div><h3>接缝拿原作自己的运动来校验</h3><p>每个成品都会多渲染到循环点之后，和原作的下一帧逐块比对，过了才算数。这证明循环确实闭合；逐分量的预算则限定了整段循环里任何运动偏离原作的幅度。</p></div>
+    <div class="row"><div class="k">BUDGET</div><h3>限制的是"可见变化预算"</h3><p>三个预设限制了任意组件允许被重新定时的最大幅度：效率（Efficiency）5%，平衡（Balanced）3%，质量（Quality）采用仍然能够闭合循环的最小改动。百合场景中的 100 个周期性组件最终被协调为一个 180.4 秒的统一循环；虹夏的 20 个组件被协调到 44 秒；绫波丽的场景则以总计 4.68% 的重新定时幅度，在 56.2 秒处实现完整闭合。</p></div>
+    <div class="row"><div class="k">GUARDS</div><h3>用一套规则，让这些调整看不出来</h3><p>最慢的可见组件在每个循环中至少会完整运行三次；可见漂移始终保持在 0.2 像素/秒以内；摆动类动画只调整频率，绝不改变运动路径。每一个组件的重新定时幅度都有单独上限，并且会全部记录在报告中。如果这些规则无法满足，对应图层就会继续保持实时运行，报告也会明确指出究竟是哪一层。</p></div>
+    <div class="row"><div class="k">PROOF</div><h3>接缝会根据原始场景自身的运动进行验证</h3><p>每个输出都会额外渲染到循环点之后，然后逐个区块与原始场景的下一帧进行比较。只有比较通过，输出才会被接受。这可以证明循环确实能够闭合；与此同时，每个组件各自的调整预算又限制了它在整个循环过程中相对于原始运动可能产生的偏移。</p></div>
   </div>
 </section>
 
 <section id="gui">
-  <div class="eyebrow">工具</div>
-  <h2>拖进来，看一行结论。</h2>
-  <p class="sub">两个选项，一行结论。动画精度管运动最多能调多少，交互处理管鼠标和音频这类靠输入驱动的东西怎么办。其它都收在"高级"里。</p>
+  <div class="eyebrow">工具本身</div>
+  <h2>把场景拖进去。最后看一行结果。</h2>
+  <p class="sub">两个主要控制项，加一个最终判定。"动画精度（Animation precision）"决定任何动画允许重新定时到什么程度；"交互处理（Interaction）"决定由输入驱动的内容如何处理。其他所有设置都放在"高级"里。</p>
   <div class="tool">
     <div class="steps">
-      <div><b>01</b><h3>把壁纸文件夹拖进窗口</h3><p>来自 <span class="mono">steamapps\workshop\content\431960</span>。输出目录就是 Wallpaper Engine 自己的项目文件夹，烘好直接出现在它的列表里。</p></div>
-      <div><b>02</b><h3>动画精度 · 交互处理</h3><p>质量、平衡、效率是可见改动的预算，默认质量；严的档位闭合不了会自动降一档，结论行会写明实际用的是哪一档。保留、固定视角、关闭决定鼠标和音频怎么处理。时钟、日期、媒体文字永远保留实时。</p></div>
-      <div><b>03</b><h3>看结论</h3><p>四种固定状态之一。"本次未包含"列出这次没烘进去的东西。你选的设置闭合不了、换一组能闭合，报告会把那组做成一个按钮。</p></div>
+      <div><b>01</b><h3>把壁纸文件夹拖进去</h3><p>文件夹位于 <span class="mono">steamapps\workshop\content\431960</span>。输出目录会直接使用 Wallpaper Engine 自己的项目文件夹，因此生成结果会自动出现在 Wallpaper Engine 的壁纸列表中。</p></div>
+      <div><b>02</b><h3>动画精度 · 交互处理</h3><p>质量、平衡和效率分别代表允许发生的可见变化预算。默认使用质量；如果在最严格的预算下无法闭合循环，程序会自动降低一个等级，最终判定会明确告诉你实际使用的是哪个等级。交互处理则有保留、固定视角和关闭三种，决定鼠标与音频驱动的效果应当如何处理。时钟、日期以及媒体文本无论选择哪一种模式，都会始终保持实时运行。</p></div>
+      <div><b>03</b><h3>看最终判定</h3><p>程序只会给出四种固定状态之一。"本次未包含"会准确列出哪些内容没有被纳入烘焙。如果当前的设置组合无法闭合，而另一组设置能够成功，报告会给出一个可以单击直接应用的建议。</p></div>
     </div>
-    <figure class="shot"><img src="site/gui-zh.png" alt="WPE Baker 1.0.1 窗口：Alone（3448877775）按质量精度、固定视角分析，结论为可以生成，鼠标视差未包含" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker 1.0.1 · Alone（3448877775），默认设置：质量精度，固定视角。</figcaption></figure>
+    <figure class="shot"><img src="site/gui-zh.png" alt="WPE Baker 1.0.1 窗口：Alone（3448877775）以质量精度和固定视角完成分析；判定结果为可以生成；鼠标视差没有被纳入烘焙" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker 1.0.1 · Alone（3448877775），默认设置：质量精度、固定视角。</figcaption></figure>
   </div>
 </section>
 
 <section id="numbers">
-  <div class="eyebrow">实测</div>
-  <h2>这里每个数字都是从功耗计数器上读下来的。</h2>
-  <p class="sub">Intel Arc B390 笔记本，官方 Wallpaper Engine，A/B/B/A，60 fps，RAPL 核显。原作对比它的烘焙成品。</p>
+  <div class="eyebrow">实测数据</div>
+  <h2>这里的每一个数字，都直接来自功耗计数器。</h2>
+  <p class="sub">测试平台为搭载 Intel Arc B390 的笔记本电脑，使用官方 Wallpaper Engine，以 60 fps 进行 A/B/B/A 测试，并读取 RAPL iGPU 功耗轨。对比对象为原始场景与其对应的烘焙输出。</p>
   <div class="gal">
-    <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 壁纸预览"><figcaption><b>−57%</b>Lost Landscape 3<small>3713073223 · 32.9 万订阅 · 效果前缀</small></figcaption></figure>
-    <figure><img src="site/thumb-3448877775.jpg" alt="Alone 壁纸预览"><figcaption><b>−82%</b>Alone<small>3448877775 · 66.5 万订阅 · 状态拆分</small></figcaption></figure>
-    <figure><img src="site/thumb-3650475846.jpg" alt="虹夏壁纸预览"><figcaption><b>−92%</b>虹夏<small>3650475846 · 10.9 万订阅 · 整幅</small></figcaption></figure>
-    <figure><img src="site/thumb-3426865175.jpg" alt="芙莉莲壁纸预览"><figcaption><b>−65%</b>芙莉莲<small>3426865175 · 64.2 万订阅 · 固定视角 + 分层</small></figcaption></figure>
-    <figure><img src="site/thumb-3669681034.jpg" alt="亚托莉壁纸预览"><figcaption><b>−90%</b>亚托莉<small>3669681034 · 19.5 万订阅 · 效果前缀</small></figcaption></figure>
-    <figure><img src="site/thumb-3685247684.jpg" alt="奥特曼雷欧壁纸预览"><figcaption><b>−73%</b>奥特曼雷欧<small>3685247684 · 效果前缀 + 实时</small></figcaption></figure>
+    <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 壁纸预览"><figcaption><b>−57%</b>Lost Landscape 3<small>3713073223 · 32.9 万订阅者 · 效果前缀</small></figcaption></figure>
+    <figure><img src="site/thumb-3448877775.jpg" alt="Alone 壁纸预览"><figcaption><b>−82%</b>Alone<small>3448877775 · 66.5 万订阅者 · 状态拆分</small></figcaption></figure>
+    <figure><img src="site/thumb-3650475846.jpg" alt="虹夏壁纸预览"><figcaption><b>−92%</b>虹夏<small>3650475846 · 10.9 万订阅者 · 整帧</small></figcaption></figure>
+    <figure><img src="site/thumb-3426865175.jpg" alt="芙莉莲壁纸预览"><figcaption><b>−65%</b>芙莉莲<small>3426865175 · 64.2 万订阅者 · 固定视角 + 图层</small></figcaption></figure>
+    <figure><img src="site/thumb-3669681034.jpg" alt="亚托莉壁纸预览"><figcaption><b>−90%</b>亚托莉<small>3669681034 · 19.5 万订阅者 · 效果前缀</small></figcaption></figure>
+    <figure><img src="site/thumb-3685247684.jpg" alt="奥特曼雷欧壁纸预览"><figcaption><b>−73%</b>奥特曼雷欧<small>3685247684 · 效果前缀 + 实时图层</small></figcaption></figure>
   </div>
   <div class="tablewrap">
   <table>
-    <thead><tr><th>壁纸</th><th>原作</th><th>成品</th><th style="text-align:right">变化</th><th>路线</th></tr></thead>
+    <thead><tr><th>壁纸</th><th>原始功耗</th><th>烘焙后</th><th style="text-align:right">变化</th><th>处理路线</th></tr></thead>
     <tbody>
-      <tr><td>虹夏（孤独摇滚！）<span class="id">3650475846</span></td><td class="num"><span class="tbar o" style="width:112px"></span> 22.51 W</td><td class="num"><span class="tbar" style="width:9px"></span> 1.86 W</td><td class="delta">−91.7%</td><td>整幅</td></tr>
-      <tr><td>Alone（昼夜场景）<span class="id">3448877775</span></td><td class="num"><span class="tbar o" style="width:28px"></span> 5.66 W</td><td class="num"><span class="tbar" style="width:5px"></span> 1.05 W</td><td class="delta">−81.5%</td><td>状态拆分 + 分层</td></tr>
-      <tr><td>亚托莉 · My Dear Moments<span class="id">3669681034</span></td><td class="num"><span class="tbar o" style="width:42px"></span> 8.45 W</td><td class="num"><span class="tbar" style="width:4px"></span> 0.81 W</td><td class="delta">−90.4%</td><td>效果前缀</td></tr>
+      <tr><td>虹夏（孤独摇滚！）<span class="id">3650475846</span></td><td class="num"><span class="tbar o" style="width:112px"></span> 22.51 W</td><td class="num"><span class="tbar" style="width:9px"></span> 1.86 W</td><td class="delta">−91.7%</td><td>整帧（whole frame）</td></tr>
+      <tr><td>Alone（日/夜场景）<span class="id">3448877775</span></td><td class="num"><span class="tbar o" style="width:28px"></span> 5.66 W</td><td class="num"><span class="tbar" style="width:5px"></span> 1.05 W</td><td class="delta">−81.5%</td><td>状态拆分 + 图层</td></tr>
+      <tr><td>亚托莉 · My Dear Moments<span class="id">3669681034</span></td><td class="num"><span class="tbar o" style="width:42px"></span> 8.45 W</td><td class="num"><span class="tbar" style="width:4px"></span> 0.81 W</td><td class="delta">−90.4%</td><td>效果前缀（effect prefix）</td></tr>
       <tr><td>奥特曼雷欧<span class="id">3685247684</span></td><td class="num"><span class="tbar o" style="width:46px"></span> 9.13 W</td><td class="num"><span class="tbar" style="width:12px"></span> 2.46 W</td><td class="delta">−73.0%</td><td>效果前缀 + 实时图层</td></tr>
-      <tr><td>百合<span class="id">3572877776</span></td><td class="num"><span class="tbar o" style="width:12px"></span> 2.38 W</td><td class="num"><span class="tbar" style="width:4px"></span> 0.71 W</td><td class="delta">−70.3%</td><td>整幅</td></tr>
-      <tr><td>芙莉莲 · 花之塔<span class="id">3426865175</span></td><td class="num"><span class="tbar o" style="width:50px"></span> 10.09 W</td><td class="num"><span class="tbar" style="width:17px"></span> 3.50 W</td><td class="delta">−65.3%</td><td>固定视角 + 分层</td></tr>
+      <tr><td>百合<span class="id">3572877776</span></td><td class="num"><span class="tbar o" style="width:12px"></span> 2.38 W</td><td class="num"><span class="tbar" style="width:4px"></span> 0.71 W</td><td class="delta">−70.3%</td><td>整帧</td></tr>
+      <tr><td>芙莉莲 · Pagoda of flowers<span class="id">3426865175</span></td><td class="num"><span class="tbar o" style="width:50px"></span> 10.09 W</td><td class="num"><span class="tbar" style="width:17px"></span> 3.50 W</td><td class="delta">−65.3%</td><td>固定视角 + 图层</td></tr>
       <tr><td>Lost Landscape 3<span class="id">3713073223</span></td><td class="num"><span class="tbar o" style="width:40px"></span> 8.11 W</td><td class="num"><span class="tbar" style="width:17px"></span> 3.48 W</td><td class="delta">−57.1%</td><td>效果前缀</td></tr>
-      <tr><td>绫波丽<span class="id">3258032485</span></td><td class="num"><span class="tbar o" style="width:11px"></span> 2.29 W</td><td class="num"><span class="tbar" style="width:1px"></span> 0.19 W</td><td class="delta">−91.8%</td><td>整幅</td></tr>
+      <tr><td>绫波丽<span class="id">3258032485</span></td><td class="num"><span class="tbar o" style="width:11px"></span> 2.29 W</td><td class="num"><span class="tbar" style="width:1px"></span> 0.19 W</td><td class="delta">−91.8%</td><td>整帧</td></tr>
     </tbody>
   </table>
   </div>
-  <div class="note">120 fps 下原作差不多翻倍（亚托莉 8.45 → 16.25 W，绫波丽 2.29 → 7.77 W），成品还停在 1 W 上下（1.51 W 和 0.31 W）：刷新率等于白送。每个实测成品的逐案表格，包括没省下来的那些，都在 README 里。壁纸作品版权归 Steam 创意工坊作者所有，这里只是用来演示工具。</div>
+  <div class="note">在 120 fps 下，原始场景的功耗大致会翻倍（亚托莉从 8.45 W 上升到 16.25 W，绫波丽从 2.29 W 上升到 7.77 W），而烘焙输出仍然维持在约 1 W（分别为 1.51 W 和 0.31 W）：刷新率带来的额外功耗几乎消失了。每一个实测输出的独立数据表，包括那些最终没有节省功耗的案例，都随 README 一起提供。页面展示的壁纸美术作品归各自的 Steam Workshop 作者所有，此处仅用于演示该工具。</div>
 </section>
 
 <section id="refresh">
   <div class="eyebrow">刷新率</div>
-  <h2>壁纸开到面板最高刷新率，风扇照样不转。</h2>
-  <p class="sub">重型场景开到 120 fps，GPU 开销差不多是 60 fps 的两倍。整幅烘焙几乎不受影响：活都是解码器在干，3D 引擎闲着，刷新率在这些成品上就不再花电了。这个项目就是从一台核显笔记本开始的：那张壁纸它跑得动，只是从来没安静过。</p>
+  <h2>直接按显示器的完整刷新率运行。风扇也可以继续安静。</h2>
+  <p class="sub">一个负载很重的场景，在 120 fps 下给 GPU 带来的开销大约是 60 fps 的两倍。但一个完成整帧烘焙的输出几乎感觉不到这种变化：视频解码器负责主要工作，3D 引擎基本处于空闲状态。因此在这些输出中，提高刷新率几乎不会继续增加功耗。这个项目最初就是在一台使用 iGPU 的笔记本电脑上开始的。那台机器其实能跑这些场景，只是从来没办法安静地跑。</p>
   <div class="tablewrap">
   <table>
-    <thead><tr><th>壁纸</th><th>原作 60 → 120 fps</th><th>成品 60 → 120 fps</th><th style="text-align:right">成品 120 对原作 60</th><th>封装功耗，120 fps</th></tr></thead>
+    <thead><tr><th>壁纸</th><th>原版 60 → 120 fps</th><th>烘焙版 60 → 120 fps</th><th style="text-align:right">烘焙版 120 fps 相比原版 60 fps</th><th>120 fps CPU Package 功耗</th></tr></thead>
     <tbody>
       <tr><td>亚托莉<span class="id">3669681034 · 效果前缀</span></td><td class="num">8.45 → 16.25 W</td><td class="num">0.81 → 1.51 W</td><td class="delta">−82%</td><td class="num">30.3 → 12.2 W（−60%）</td></tr>
-      <tr><td>绫波丽<span class="id">3258032485 · 整幅</span></td><td class="num">2.29 → 7.77 W</td><td class="num">0.19 → 0.31 W</td><td class="delta">−86%</td><td class="num">19.6 → 10.9 W（−45%）</td></tr>
-      <tr><td>百合<span class="id">3572877776 · 整幅</span></td><td class="num">2.38 → 6.70 W</td><td class="num">0.71 → 1.35 W</td><td class="delta">−43%</td><td class="num">19.7 → 12.3 W（−38%）</td></tr>
+      <tr><td>绫波丽<span class="id">3258032485 · 整帧</span></td><td class="num">2.29 → 7.77 W</td><td class="num">0.19 → 0.31 W</td><td class="delta">−86%</td><td class="num">19.6 → 10.9 W（−45%）</td></tr>
+      <tr><td>百合<span class="id">3572877776 · 整帧</span></td><td class="num">2.38 → 6.70 W</td><td class="num">0.71 → 1.35 W</td><td class="delta">−43%</td><td class="num">19.7 → 12.3 W（−38%）</td></tr>
       <tr><td>奥特曼雷欧<span class="id">3685247684 · 效果前缀 + 实时图层</span></td><td class="num">9.13 → 17.29 W</td><td class="num">2.46 → 8.80 W</td><td class="delta">−4%</td><td class="num">30.1 → 20.6 W（−31%）</td></tr>
     </tbody>
   </table>
   </div>
   <div class="tablewrap">
   <table>
-    <thead><tr><th>亚托莉，面板拉满 165 Hz</th><th>原作</th><th>成品</th><th style="text-align:right">变化</th></tr></thead>
+    <thead><tr><th>亚托莉在显示器完整 165 Hz 下</th><th>原始</th><th>烘焙后</th><th style="text-align:right">变化</th></tr></thead>
     <tbody>
-      <tr><td>核显</td><td class="num">26.03 W</td><td class="num">3.95 W</td><td class="delta">−84.8%</td></tr>
-      <tr><td>CPU 封装</td><td class="num">41.44 W</td><td class="num">15.36 W</td><td class="delta">−62.9%</td></tr>
-      <tr><td>3D 引擎占用</td><td class="num">86.9%</td><td class="num">29.2%</td><td class="delta">解码器占 21.8%</td></tr>
+      <tr><td>iGPU 功耗轨</td><td class="num">26.03 W</td><td class="num">3.95 W</td><td class="delta">−84.8%</td></tr>
+      <tr><td>CPU Package</td><td class="num">41.44 W</td><td class="num">15.36 W</td><td class="delta">−62.9%</td></tr>
+      <tr><td>3D 引擎忙碌率</td><td class="num">86.9%</td><td class="num">29.2%</td><td class="delta">其中解码器占 21.8%</td></tr>
     </tbody>
   </table>
   </div>
-  <div class="note">核显和 CPU 封装功耗，官方播放器，屏幕分辨率成品（3072×1920），A/B/B/A，运行全程面板确认在 165 Hz。帧率翻倍，原作也翻倍；整幅成品还停在 1 W 上下，封装功耗跟着降 31–63%。雷欧保留了实时图层，120 fps 下往上涨的就是它们。</div>
+  <div class="note">测试项目包括 iGPU 功耗轨和 CPU Package，使用官方播放器、屏幕原生分辨率输出（3072×1920）、A/B/B/A 测试方式，并确认测试过程中显示器实际运行在 165 Hz。原始场景的帧率翻倍时，功耗也基本跟着翻倍；整帧烘焙输出则仍然保持在约 1 W，与此同时 CPU Package 功耗下降 31% 至 63%。奥特曼雷欧保留了实时图层，这些实时图层正是它在 120 fps 下功耗继续上升的原因。</div>
 </section>
 
 <section id="what">
-  <div class="eyebrow">什么算动画</div>
-  <h2>确定的运动烘进视频。输入还是交给输入。</h2>
+  <div class="eyebrow">什么算"动画"</div>
+  <h2>确定性的运动会被烘焙。输入仍然是输入。</h2>
   <div class="two">
     <div>
-      <h3>烘进循环</h3>
+      <h3>烘焙进循环中的内容</h3>
       <ul>
-        <li>周期可证明的着色器动画：波浪、摇摆、脉动、滚动</li>
+        <li>具有可证明周期的着色器动画，例如波浪、摆动、脉冲、滚动</li>
         <li>动画轨道、精灵图、粒子循环</li>
-        <li>内嵌视频循环和它的时基</li>
-        <li>静态美术，全分辨率</li>
+        <li>嵌入式视频循环及其时间基准</li>
+        <li>静态美术资源，以完整分辨率保留</li>
       </ul>
     </div>
     <div>
-      <h3>当输入处理<span class="tag">交互处理：保留 · 固定视角 · 关闭</span></h3>
+      <h3>作为输入处理的内容<span class="tag">交互处理：保留 · 固定视角 · 关闭</span></h3>
       <ul>
-        <li>鼠标视差和指针效果</li>
-        <li>音频响应图层和频谱</li>
+        <li>鼠标视差与指针效果</li>
+        <li>音频响应图层与频谱</li>
         <li>时钟、日期、昼夜切换</li>
         <li>交互面板和自定义脚本</li>
       </ul>
-      <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">默认固定视角。时钟、日期、媒体文字任何模式下都保留实时。保留：实验性，可能增加 GPU 占用。</p>
+      <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">默认模式：固定视角。时钟、日期和媒体文本在任何模式下都会继续实时运行。保留：实验性，可能增加 GPU 占用。</p>
     </div>
   </div>
 </section>
 
 <section id="astra">
-  <div class="eyebrow">与 GPT-6 Astra 共建</div>
-  <h2>一个 AI 为 Astra Challenge 写出来的系统级工具。</h2>
+  <div class="eyebrow">使用 GPT-6 Astra 构建</div>
+  <h2>一个由 AI 为 Astra Challenge 构建的系统级工具。</h2>
   <div class="spec">
     <div>
-      <p>Wallpaper Engine 的场景格式没有任何文档。要离线逐帧精确地渲染它，就得对付几百种着色器变体、粒子系统、脚本控制器和视频图层。</p>
-      <p>GPT-6 Astra 写出了面向 Wallpaper Engine 场景的多线程 Vulkan 离线渲染器、解析式周期求解器、图层分配器、带硬解校验的编码流水线，还有整套功耗测量台。然后把流水线做快：一个 25,599 帧的场景从 2,566 秒压到 214 秒，78 张壁纸的整个库在一个 GPU 槽位上一下午烘完。</p>
+      <p>Wallpaper Engine 的场景格式没有公开文档。想要在离线环境中做到逐帧完全一致地渲染，就必须处理数百种着色器变体、粒子系统、脚本控制器和视频图层。</p>
+      <p>GPT-6 Astra 构建了一个用于 Wallpaper Engine 场景的多线程 Vulkan 离线渲染器、解析式周期求解器、图层分配器、带硬件解码校验的编码流水线，以及功耗测量系统。随后，它又进一步优化了整个流水线的性能：一个包含 25,599 帧的场景，烘焙时间从 2,566 秒缩短到了 214 秒；完整的 78 个场景库可以在单个 GPU 任务槽位上，于一个下午内全部完成烘焙。</p>
     </div>
     <div class="kvs">
-      <div><span>引擎</span><span>Periodica · 确定性动画烘焙</span></div>
-      <div><span>求解器</span><span>解析式，逐分量，公共周期调速</span></div>
-      <div><span>渲染器</span><span>Vulkan 离线，多线程，逐帧精确</span></div>
-      <div><span>编码器</span><span>H.264 / HEVC，硬解校验</span></div>
-      <div><span>测量</span><span>官方播放器，RAPL，A/B/B/A</span></div>
-      <div><span>代码</span><span>约 29,000 行 C# · 14,000 行测试 · 1,400+ 检查</span></div>
-      <div><span>提速</span><span>25,599 帧场景 12 倍 · 671 帧场景 7 倍</span></div>
-      <div><span>运行时 AI</span><span>无</span></div>
+      <div><span>engine</span><span>Periodica · 确定性动画烘焙</span></div>
+      <div><span>solver</span><span>解析式求解；逐组件计算；通过公共周期进行重新定时</span></div>
+      <div><span>renderer</span><span>Vulkan 离线渲染 · 多线程 · 精确到帧</span></div>
+      <div><span>encoder</span><span>H.264 / HEVC · 已验证硬件解码</span></div>
+      <div><span>measurement</span><span>官方播放器 · RAPL · A/B/B/A</span></div>
+      <div><span>code</span><span>约 29,000 行 C# · 14,000 行测试代码 · 1,400+ 项检查</span></div>
+      <div><span>speed-up</span><span>25,599 帧场景提速 12× · 671 帧场景提速 7×</span></div>
+      <div><span>runtime AI</span><span>无</span></div>
     </div>
   </div>
 </section>
 
 <section id="roadmap">
-  <div class="eyebrow">Periodica 的下一站</div>
-  <h2>凡是会循环的屏幕，都是它的目标。</h2>
+  <div class="eyebrow">Periodica 接下来会走向哪里</div>
+  <h2>任何会循环播放的屏幕，都是潜在目标。</h2>
   <div class="road">
-    <div class="now"><div class="when">1.0.1 · 当前</div><h3>Wallpaper Engine，Windows</h3><p>质量精度自动降档、固定视角、最多四个视频组、经过验证的一键建议、昼夜状态拆分。</p></div>
-    <div><div class="when">下一步</div><h3>直通控制器</h3><p>把烘好的视频当作一层放回原场景，指针和音频效果照常在它上面跑，各花各的钱。</p></div>
-    <div class="big"><div class="when">重头戏</div><h3>时间重建</h3><p>用几分之一的分辨率加亚像素抖动来烘，播放时用离线解出的运动矢量重建。输入质量比游戏里的 DLSS 还好，解码开销只有几分之一。</p></div>
-    <div><div class="when">更远</div><h3>任何会循环的画面</h3><p>手机动态壁纸、锁屏、展示机、直播背景。Wallpaper Engine 只是 Periodica 落地的第一块屏幕。</p></div>
+    <div class="now"><div class="when">1.0.1 · 当前版本</div><h3>Wallpaper Engine，Windows</h3><p>质量精度，并支持自动降低精度等级；固定视角；最多四组视频；经过验证的一键建议；昼夜状态拆分。</p></div>
+    <div><div class="when">NEXT</div><h3>透传控制器（Passthrough controller）</h3><p>将烘焙后的视频作为一个图层放回原始场景内部，这样鼠标指针效果和音频响应效果仍然可以继续覆盖在它上面运行，并只承担这些实时效果自身的计算成本。</p></div>
+    <div class="big"><div class="when">THE BIG ONE</div><h3>时域重建（Temporal reconstruction）</h3><p>以原分辨率的一部分进行烘焙，并加入亚像素抖动；播放时，再利用离线求出的运动矢量对画面进行重建。这样得到的输入信息比游戏中的 DLSS 所能获得的更好，而播放端只需要承担一小部分视频解码开销。</p></div>
+    <div><div class="when">BEYOND</div><h3>任何会循环播放的显示表面</h3><p>手机动态壁纸、锁屏、信息亭、直播背景。Wallpaper Engine 只是 Periodica 首先进入的屏幕。</p></div>
   </div>
 </section>
 
 <section id="faq">
-  <div class="eyebrow">常见问题</div>
-  <h2>几句话说清。</h2>
+  <div class="eyebrow">FAQ</div>
+  <h2>简短回答。</h2>
   <div class="faq">
-    <details><summary>最直接的好处是什么？</summary><p>你喜欢的壁纸开最高刷新率、最高画质，风扇不转。这就是做它的全部理由。</p></details>
-    <details><summary>每张壁纸都能省？</summary><p>轻量场景本来就没什么可省的，它会在渲染前直接告诉你。重型、以周期动画为主的场景才是 46–96% 省电的来源；重交互的场景会把确定性的部分烘掉，剩下的当输入处理。</p></details>
-    <details><summary>循环和原作看起来一样吗？</summary><p>可见改动的预算由你定：效率、平衡或质量；报告会逐项列出每个被调速的分量和精确的百分比。接缝在接受成品之前会拿原作自己的运动来校验。</p></details>
-    <details><summary>需要什么？</summary><p>Windows、Wallpaper Engine，加一块能做离线渲染的 GPU。便携版免安装、不需要 Python。烘一张常见场景几分钟；播放只需要硬件视频解码。</p></details>
-    <details><summary>开源吗？</summary><p>开源。工具层 MIT，渲染器 GPL v2；完整源码、第三方声明和构建记录都在仓库里。</p></details>
+    <details><summary>我最直接能得到什么？</summary><p>你喜欢的壁纸以显示器的完整刷新率和完整画质运行，而风扇保持安静。这就是这个工具存在的全部理由。</p></details>
+    <details><summary>它能让每一张壁纸都更省资源吗？</summary><p>轻量场景本身没有多少可节省的空间，工具会在渲染之前直接说明。功耗较高、以周期性动画为主的场景才是 46–96% 降幅的来源；以交互为主的场景则会烘焙其中确定性的核心部分，其余内容作为输入处理。</p></details>
+    <details><summary>烘焙后的循环看起来会和原始壁纸不一样吗？</summary><p>可见变化预算由你选择：效率、平衡或质量。报告会逐项列出每一个被重新定时的组件及其精确百分比。接缝会根据原始场景自身的运动进行验证，通过之后输出才会被接受。</p></details>
+    <details><summary>我需要准备什么？</summary><p>Windows、Wallpaper Engine，以及一块用于离线渲染的 GPU。便携版没有安装程序，也不需要 Python。烘焙一个典型场景需要几分钟；播放只需要硬件视频解码。</p></details>
+    <details><summary>它是开源的吗？</summary><p>是。工具层采用 MIT 许可，渲染器采用 GPL v2；完整源码、第三方声明与构建记录都在仓库中。</p></details>
   </div>
 </section>
 
 <footer>
-  <div>Periodica · 第一个应用：WPE Baker 1.0.1 · 为 GPT-6 Astra Challenge 而做，2026</div>
-  <div>页面里的壁纸作品版权归 Steam 创意工坊作者所有</div>
+  <div>Periodica · 首个应用：WPE Baker 1.0.1 · 为 GPT-6 Astra Challenge 构建，2026</div>
+  <div>页面中展示的壁纸美术作品归各自的 Steam Workshop 作者所有</div>
 </footer>
 </div>
 
