@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>WpeBaker</AssemblyName>
+    <RootNamespace>Baker.App</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="../Baker.Core/Baker.Core.csproj" /></ItemGroup>
+</Project>

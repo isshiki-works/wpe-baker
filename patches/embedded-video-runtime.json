@@ -1,0 +1,7 @@
+{
+  "kind": "TextureCache source subset including Windows adaptation and offline video sampling",
+  "engine_base": "b866e8e711fdd7762385b23601affa1ea5539e3b",
+  "patch_sha256": "4d116b59479e8043f64691574003aa6d40e34efb50ab6215a928b128aa04f01b",
+  "verification": "Applied to pristine git-show source; current file matches after LF normalization",
+  "proof": "artifacts/embedded-video-time-1788780947285917600/report.json"
+}

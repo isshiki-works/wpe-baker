@@ -1,0 +1,16 @@
+# Locally built tools and dependencies are pinned by scripts, not redistributed here.
+.tools/
+.deps/
+.dotnet/
+build/
+dist/
+**/bin/
+**/obj/
+**/__pycache__/
+*.pyc
+# Workshop excerpts and generated masters stay private. Public fixtures live in tests/.
+artifacts/
+work/
+checkpoint/
+# 从 .xz 解压出来的本地补丁副本
+scripts/dependency-patches/rstd.patch

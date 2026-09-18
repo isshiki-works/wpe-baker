@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "ffmpeg": {
+    "tag": "n8.1.2",
+    "revision": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+    "url": "https://codeload.github.com/FFmpeg/FFmpeg/zip/38b88335f99e76ed89ff3c93f877fdefce736c13",
+    "archive": ".tools/downloads/ffmpeg-lgpl21-source.zip",
+    "sha256": "c3453fbfc7ca25423f4984a83ceda01949d458a8bc04f9d68fab7c392f75b3ab"
+  },
+  "x264": {
+    "url": "https://code.videolan.org/videolan/x264.git",
+    "revision": "b35605ace3ddf7c1a5d67a2eb553f034aef41d55",
+    "version_master_revision": "0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee",
+    "commit_epoch": 1749399863,
+    "archive": ".tools/downloads/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.zip",
+    "sha256": "9da15db1c72104550f682964b1f3ef6cf9dab4a4af0906baf29ca1e5a448f59a",
+    "bundle": ".tools/downloads/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.bundle",
+    "bundle_sha256": "aab9d3c14b5001a3aa20dc797b6eda811d0815ba36bdd080c3e05432ade505d9",
+    "patch": ".deps/ffmpeg-encoder-gpl2/patches/x264.patch",
+    "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "license": "GPL-2.0-or-later",
+    "license_evidence": "COPYING and x264.h copyright header"
+  },
+  "x265": {
+    "version": "4.2",
+    "version_string": "4.2+1-e444744",
+    "url": "https://download.videolan.org/pub/videolan/x265/x265_4.2.tar.gz",
+    "archive": ".tools/downloads/x265_4.2.tar.gz",
+    "sha256": "40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210",
+    "upstream_digest_url": "https://get.videolan.org/x265/x265_4.2.tar.gz",
+    "upstream_digest_verified": true,
+    "license": "GPL-2.0-or-later",
+    "license_evidence": "COPYING and source/x265.h copyright header"
+  }
+}

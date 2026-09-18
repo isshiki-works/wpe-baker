@@ -1,0 +1,138 @@
+[
+  {
+    "name": "ninja",
+    "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip",
+    "sha256": "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65",
+    "path": ".tools\\ninja"
+  },
+  {
+    "name": "lito",
+    "url": "https://github.com/litocpp/lito/releases/download/v0.7.1/lito-v0.7.1-windows-x86_64.zip",
+    "sha256": "42b199a9fa5a9d792da3df7bd97a497b533f843c1fd2eb5d19022a525517eb34",
+    "path": ".tools\\lito"
+  },
+  {
+    "name": "vvk",
+    "url": "https://codeload.github.com/litocpp/vvk/zip/f53d60cc70938d0485802750deeb15d18ba033ea",
+    "sha256": "5cf53022f76e3bcf7d6f243fcc46bf73a9ca544322a4e1694688ca4f3e0984e9",
+    "path": ".deps\\vvk",
+    "repository": "https://github.com/litocpp/vvk",
+    "revision": "f53d60cc70938d0485802750deeb15d18ba033ea"
+  },
+  {
+    "name": "rstd",
+    "url": "https://codeload.github.com/litocpp/rstd/zip/456fec5cc2b87acdb56800e298b5712ea69cdd47",
+    "sha256": "7ae141af646fd29a52caa5fd78dd2372163edf8b93520605390a0d4df2ab37d6",
+    "path": ".deps\\rstd",
+    "repository": "https://github.com/litocpp/rstd",
+    "revision": "456fec5cc2b87acdb56800e298b5712ea69cdd47"
+  },
+  {
+    "name": "wavsen",
+    "url": "https://codeload.github.com/hypengw/wavsen/zip/77dfd33d07112c05df4682e08b98e19153ebe3ab",
+    "sha256": "9a995b26031edb0315de6767cb7eed0ee5b2fa2e34fe4bd71717b7d061e43d9a",
+    "path": ".deps\\wavsen",
+    "repository": "https://github.com/hypengw/wavsen",
+    "revision": "77dfd33d07112c05df4682e08b98e19153ebe3ab"
+  },
+  {
+    "name": "spirv-reflect",
+    "url": "https://codeload.github.com/hypengw/SPIRV-Reflect/zip/355785128c1b6ba808e3a7d0e344814fe6cff502",
+    "sha256": "5c1e3e81802518e60679247907e6253510ae6d3721ccf2a12aebc4ca29afaa6c",
+    "path": ".deps\\spirv-reflect",
+    "repository": "https://github.com/hypengw/SPIRV-Reflect",
+    "revision": "355785128c1b6ba808e3a7d0e344814fe6cff502"
+  },
+  {
+    "name": "quickjs",
+    "url": "https://codeload.github.com/quickjs-ng/quickjs/zip/3c051980ab7e783dfbfb1c70c014ce5e05ecf24c",
+    "sha256": "51ca3e61f1f01439863c91e693fdc7c295c3f16ad6ab353a337daf09fb7cc3be",
+    "path": ".deps\\quickjs",
+    "repository": "https://github.com/quickjs-ng/quickjs",
+    "revision": "3c051980ab7e783dfbfb1c70c014ce5e05ecf24c"
+  },
+  {
+    "name": "vma",
+    "url": "https://codeload.github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/zip/3aa921224c154a0d2c43912bc88e1c42ce1f7607",
+    "sha256": "eee11af6aa851cd64ad1be97ab125aa663516791240606b29ace4f7a9752491a",
+    "path": ".deps\\vma",
+    "repository": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
+    "revision": "3aa921224c154a0d2c43912bc88e1c42ce1f7607"
+  },
+  {
+    "name": "lz4",
+    "url": "https://codeload.github.com/lz4/lz4/zip/v1.10.0",
+    "sha256": "3224b4c80f351f194984526ef396f6079bd6332dd9825c72ac0d7a37b3cdc565",
+    "path": ".deps\\lz4",
+    "repository": "https://github.com/lz4/lz4",
+    "revision": "v1.10.0"
+  },
+  {
+    "name": "glslang",
+    "url": "https://codeload.github.com/KhronosGroup/glslang/zip/275822a6261ee689aadb1da5f09a0ec2f058685c",
+    "sha256": "2b63189efad0348d88d410a5e12ec550a612e0b6ceef64624b8f45491269fb9c",
+    "path": ".deps\\glslang",
+    "repository": "https://github.com/KhronosGroup/glslang",
+    "revision": "275822a6261ee689aadb1da5f09a0ec2f058685c"
+  },
+  {
+    "name": "vulkan-headers",
+    "url": "https://codeload.github.com/KhronosGroup/Vulkan-Headers/zip/v1.4.321",
+    "sha256": "cace1d5832fc00287c9b10b27577c41033b2c86434e884eef5c8dcea098d5118",
+    "path": ".deps\\vulkan-headers",
+    "repository": "https://github.com/KhronosGroup/Vulkan-Headers",
+    "revision": "v1.4.321"
+  },
+  {
+    "name": "freetype",
+    "url": "https://codeload.github.com/freetype/freetype/zip/VER-2-14-1",
+    "sha256": "9ca6e4df3e5e2ccc4839ba55501e9168dbad7b32ef3b970cb681fd89479c75a3",
+    "path": ".deps\\freetype",
+    "repository": "https://github.com/freetype/freetype",
+    "revision": "VER-2-14-1"
+  },
+  {
+    "name": "cmake",
+    "url": "https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3-windows-x86_64.zip",
+    "sha256": "4d52ebab7193a698651639ed80d8d04fd903358843572cf44c7fd234cb7c26ab",
+    "path": ".tools\\cmake"
+  },
+  {
+    "name": "llvm-mingw",
+    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260826/llvm-mingw-20260826-ucrt-x86_64.zip",
+    "sha256": "ae601f4e0f72bbdf441ad2df8bb16f037e2e9251559ea6b37b4057aef39c06c3",
+    "path": ".tools\\llvm-mingw"
+  },
+  {
+    "name": "vulkan-loader",
+    "url": "https://codeload.github.com/KhronosGroup/Vulkan-Loader/zip/v1.4.321",
+    "sha256": "73f7e87421bf0eed324ffabd2c1665851835ed9aa053b8881d2e2c735aef4420",
+    "path": ".deps\\vulkan-loader"
+  },
+  {
+    "name": "eigen",
+    "url": "https://gitlab.com/libeigen/eigen/-/archive/bc3b39870ecb690a623a3f49149a358b95c5781d/eigen-bc3b39870ecb690a623a3f49149a358b95c5781d.zip",
+    "sha256": "f0209070eb3a00ad0fe5d1cc4ccdac9c0b41e95ef7062f356fd01b7b2208630c",
+    "path": ".deps\\eigen"
+  },
+  {
+    "name": "ffmpeg",
+    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip",
+    "sha256": "96eca80835f4000c43df261e70a8546a4b0f63fdf2c658f351e4f392483b0dfe",
+    "path": ".deps\\ffmpeg"
+  },
+  {
+    "name": "pkgconf",
+    "url": "https://github.com/pkgconf/pkgconf/releases/download/pkgconf-3.0.7/pkgconf-x64-3.0.7.msi",
+    "sha256": "7a316dba4a4498ea952b746c82deed41c597657095a0f776b75654191b45ae44",
+    "path": ".tools/pkgconf",
+    "extraction": "read-only MSI database and cabinet extraction; no installation"
+  },
+  {
+    "name": "llvm-mingw-22",
+    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip",
+    "sha256": "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35",
+    "path": ".tools/llvm-mingw-22",
+    "version": "Clang 22.1.8 / UCRT / x86_64-w64-windows-gnu"
+  }
+]

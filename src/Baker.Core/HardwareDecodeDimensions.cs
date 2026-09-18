@@ -1,0 +1,383 @@
+using System.Globalization;
+using System.Text.Json.Nodes;
+
+namespace Baker.Core;
+
+/// <summary>
+/// 播放版视频的硬件解码尺寸预检。所有数字集中在 <see cref="H264"/> / <see cref="Hevc"/> 两行表里并注明出处；
+/// 规划只做两件事：过小（或奇数）时把编码画布居中补边到下限，回放按原矩形取样，显示不变；
+/// 补边后仍越过上限就列出越限项，由调用方在编码之前干净拒绝。编码后的 D3D11VA 实测照旧执行，预检不替代它。
+/// <para>
+/// 另外收着"目标播放机"这一侧的数字（<see cref="IntegratedH264"/> / <see cref="IntegratedHevc"/> 与
+/// <see cref="ClassifyAdapter"/>）：烘焙机上的 D3D11VA 实测只代表烘焙机自己的显卡，播放机常常是核显。
+/// 这部分只产生提示文案与结果字段，不参与任何判定，也不改变任何判据的强度。
+/// </para>
+/// </summary>
+public static class HardwareDecodeDimensions
+{
+    public const string PassStatus = "pass";
+    public const string PaddedStatus = "padded";
+    public const string RejectedStatus = "rejected";
+
+    /// <summary>一种编解码的尺寸限制。宏块两项只用于 H.264 的编码器选择（超出即改用 HEVC），不直接产生拒绝。</summary>
+    public sealed record Limits(string Codec, string DisplayName, uint MinimumWidth, uint MinimumHeight,
+        uint MaximumWidth, uint MaximumHeight, ulong? MaximumLumaSamples, ulong? MaximumMacroblocks,
+        ulong? MaximumMacroblocksPerSecond, string BasisZh, string BasisEn, string[] Sources);
+
+    /// <summary>4:2:0 色度二次采样要求编码宽高为偶数（FFmpeg yuv420p 与 ITU-T H.264/H.265 的 4:2:0 定义）。</summary>
+    public const uint ChromaAlignment = 2;
+
+    // 取最严者：公开文档里各厂商下限取最大、上限取最小；本机实测比公开值更严的，按实测收紧并写明。
+    public static readonly Limits H264 = new("h264", "H.264",
+        MinimumWidth: 48, MinimumHeight: 64, MaximumWidth: 4096, MaximumHeight: 4096,
+        MaximumLumaSamples: null, MaximumMacroblocks: 36864, MaximumMacroblocksPerSecond: 2073600,
+        BasisZh: "NVDEC/Microsoft H.264 最小 48×48，本机 NVIDIA D3D11VA 实测高 48 失败故取 64；NVDEC/Intel H.264 最大 4096×4096",
+        BasisEn: "NVDEC/Microsoft H.264 minimum 48×48, height raised to 64 after NVIDIA D3D11VA failed at 48 here; NVDEC/Intel H.264 maximum 4096×4096",
+        Sources: [
+            "NVIDIA Video Codec SDK 13.0, NVDEC Video Decoder API Programming Guide, decoder capability table: H.264 minimum 48x16; maximum 4096x4096 (Maxwell to Ada), 8192x8192 on Blackwell. https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/nvdec-video-decoder-api-prog-guide/index.html",
+            "Microsoft Learn, Media Foundation H.264 Video Decoder, Format Constraints: minimum resolution 48x48, maximum 4096x2304 (DXVA guaranteed only to 1920x1088). https://learn.microsoft.com/windows/win32/medfound/h-264-video-decoder",
+            "Intel media-driver docs/media_features.md: AVC hardware decode 4k (defined there as 4096x4096) on every listed platform. https://github.com/intel/media-driver/blob/master/docs/media_features.md",
+            "ITU-T H.264 Table A-1 / FFmpeg libavcodec/h264_levels.c, level 5.2: MaxFS 36864 macroblocks, MaxMBPS 2073600 (existing encoder-selection rule).",
+            "Local D3D11VA probe 2026-09-17 (same ffmpeg arguments as NativeRenderRunner.Hardware): NVIDIA GeForce RTX 5090 D v2 failed 3840x6, 3840x48, 4096x48, 48x48, 32x64 and passed 3840x50, 48x64, 64x58; AMD Radeon integrated graphics passed every size down to 16x16.",
+            "AMD AMF Video Decode API documents no numeric resolution range; no stricter public AMD figure was found."]);
+
+    public static readonly Limits Hevc = new("hevc", "HEVC",
+        MinimumWidth: 144, MinimumHeight: 144, MaximumWidth: 8192, MaximumHeight: 8192,
+        MaximumLumaSamples: 35651584, MaximumMacroblocks: null, MaximumMacroblocksPerSecond: null,
+        BasisZh: "NVDEC HEVC 最小 144×144、最大 8192×8192；H.265 Level 6.2 最大亮度样本 35651584",
+        BasisEn: "NVDEC HEVC minimum 144×144, maximum 8192×8192; H.265 Level 6.2 maximum luma picture size 35651584",
+        Sources: [
+            "NVIDIA Video Codec SDK 13.0, NVDEC Video Decoder API Programming Guide, decoder capability table: HEVC minimum 144x144; maximum 8192x8192 from Pascal (GP10x) through Blackwell. https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/nvdec-video-decoder-api-prog-guide/index.html",
+            "Microsoft Learn, Media Foundation H.265/HEVC Video Decoder, Format Constraints: minimum resolution 48x48. https://learn.microsoft.com/windows/win32/medfound/h-265---hevc-video-decoder",
+            "Intel media-driver docs/media_features.md: HEVC 8-bit hardware decode 8k on SKL/KBL/ICL/TGL (16k only on newer platforms). https://github.com/intel/media-driver/blob/master/docs/media_features.md",
+            "ITU-T H.265 Table A.8: MaxLumaPs 35651584 for levels 6, 6.1 and 6.2.",
+            "Local D3D11VA probe 2026-09-17: NVIDIA GeForce RTX 5090 D v2 failed 128x128 and 8192x64, passed 144x144, 144x136, 136x144, 8192x144 and 8192x3160; both NVIDIA and AMD Radeon integrated graphics failed 10216x3160 and passed 8192x3160."]);
+
+    public static Limits For(string softwareEncoder) => softwareEncoder == "libx265" ? Hevc : H264;
+
+    public sealed record Violation(string Measure, ulong Actual, ulong Limit);
+
+    // ---------------------------------------------------------------------------------------
+    // 目标播放机一侧。硬解只能在真正跑它的那台机器上验，烘焙机（常是独显）验过不等于播放机（常是核显）能放。
+    // 下面这些数字只用来写提示文案与结果字段，一条判据都不参与。
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>硬解实测的适用范围：只在烘焙机上验证过。</summary>
+    public const string BakingMachineOnlyCaveat = "verified_on_baking_machine_only";
+
+    /// <summary>提示种类：码流尺寸越过常见核显的硬解上限。</summary>
+    public const string IntegratedCeilingHintKind = "beyond_common_integrated_decode_ceiling";
+
+    public const string IntegratedAdapter = "integrated";
+    public const string DiscreteAdapter = "discrete";
+    public const string UnknownAdapterClass = "unknown";
+
+    /// <summary>PCI-SIG 厂商号到厂商名，只作结果里的可读标签；不认识的按 0x 十六进制原样写出。</summary>
+    public static string VendorName(uint vendorId) => vendorId switch
+    {
+        0x1002 or 0x1022 => "AMD",
+        0x10de => "NVIDIA",
+        0x8086 => "Intel",
+        0x1414 => "Microsoft",
+        0x13b5 => "ARM",
+        0x5143 => "Qualcomm",
+        _ => "0x" + vendorId.ToString("x4", CultureInfo.InvariantCulture),
+    };
+
+    /// <summary>
+    /// 核显与独显的分界：DXGI 的 DXGI_ADAPTER_DESC1 没有这一位，只能按专用显存量分。核显的 DedicatedVideoMemory
+    /// 是从系统内存里划的一小块（Intel 核显常见 128 MiB，AMD APU 常见 512 MiB），独显是整块板载显存，
+    /// 取 1 GiB 为界两边都留足余量。
+    /// </summary>
+    public const ulong IntegratedDedicatedMemoryCeilingBytes = 1UL << 30;
+
+    /// <summary>
+    /// 按厂商号与显存量判断是核显还是独显。NVIDIA 在 Windows 桌面上没有核显产品，显存再小也按独显算：
+    /// 宁可把独显算成独显（提示更强），也不能把独显误报成"核显已经验证过"。
+    /// </summary>
+    public static string ClassifyAdapter(uint vendorId, ulong dedicatedVideoMemoryBytes, ulong sharedSystemMemoryBytes) =>
+        vendorId == 0x10de || dedicatedVideoMemoryBytes >= IntegratedDedicatedMemoryCeilingBytes ? DiscreteAdapter :
+        dedicatedVideoMemoryBytes > 0 || sharedSystemMemoryBytes > 0 ? IntegratedAdapter : UnknownAdapterClass;
+
+    /// <summary>常见核显的硬解上限。比 <see cref="Limits"/> 保守，只用于提示，不产生拒绝。</summary>
+    public sealed record IntegratedCeiling(string Codec, string DisplayName, uint MaximumWidth, uint MaximumHeight,
+        ulong MaximumLumaSamples, string BasisZh, string BasisEn, string[] Sources);
+
+    public static readonly IntegratedCeiling IntegratedH264 = new("h264", "H.264",
+        MaximumWidth: 4096, MaximumHeight: 4096, MaximumLumaSamples: 4096UL * 4096,
+        BasisZh: "Intel 核显 AVC 硬解上限 4096×4096，Microsoft Media Foundation H.264 解码器上限 4096×2304；独显要宽得多（NVIDIA Blackwell 到 8192×8192），所以在独显上过了不代表核显能过",
+        BasisEn: "Intel integrated AVC decode tops out at 4096×4096 and the Media Foundation H.264 decoder at 4096×2304, while discrete parts go much wider (NVIDIA Blackwell to 8192×8192), so passing on a discrete GPU says nothing about an integrated one",
+        Sources: [
+            "Intel media-driver docs/media_features.md: AVC hardware decode 4k (defined there as 4096x4096) on every listed platform. https://github.com/intel/media-driver/blob/master/docs/media_features.md",
+            "Microsoft Learn, Media Foundation H.264 Video Decoder, Format Constraints: maximum 4096x2304, DXVA guaranteed only to 1920x1088. https://learn.microsoft.com/windows/win32/medfound/h-264-video-decoder",
+            "NVIDIA Video Codec SDK 13.0 NVDEC capability table: H.264 up to 4096x4096 (Maxwell to Ada) and 8192x8192 on Blackwell, i.e. discrete parts exceed the integrated ceiling. https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/nvdec-video-decoder-api-prog-guide/index.html"]);
+
+    public static readonly IntegratedCeiling IntegratedHevc = new("hevc", "HEVC",
+        MaximumWidth: 8192, MaximumHeight: 4320, MaximumLumaSamples: 7680UL * 4320,
+        BasisZh: "Intel 核显 HEVC 8-bit 硬解在 SKL–TGL 上是 8k，厂商宣传的 8K 指 7680×4320；本机 AMD 核显只实测到 8192×3160。故宽取 8192、高取 4320、亮度样本数取 8K UHD 的 33177600，三者任一越过就提示",
+        BasisEn: "Intel integrated HEVC 8-bit decode is listed as 8k on SKL-TGL and the advertised 8K means 7680×4320; the AMD integrated adapter here was only measured to 8192×3160. The ceiling is therefore width 8192, height 4320 and 33177600 luma samples (8K UHD), and exceeding any of the three raises the hint",
+        Sources: [
+            "Intel media-driver docs/media_features.md: HEVC 8-bit hardware decode 8k on SKL/KBL/ICL/TGL (16k only on newer platforms). https://github.com/intel/media-driver/blob/master/docs/media_features.md",
+            "ITU-T H.265 Table A.8: MaxLumaPs 35651584 for levels 6, 6.1 and 6.2; 8K UHD 7680x4320 is 33177600 luma samples.",
+            "AMD AMF Video Decode API documents no numeric resolution range; local D3D11VA probe 2026-09-17 measured AMD Radeon integrated graphics passing 8192x3160 and failing 10216x3160."]);
+
+    /// <summary>按 ffprobe 的 codec_name 取常见核显上限；不是 H.264/HEVC 就没有可提示的数字。</summary>
+    public static IntegratedCeiling? CeilingFor(string? codecName) => (codecName ?? "").ToLowerInvariant() switch
+    {
+        "h264" or "avc" or "avc1" or "h.264" => IntegratedH264,
+        "hevc" or "h265" or "h.265" or "hev1" or "hvc1" => IntegratedHevc,
+        _ => null,
+    };
+
+    /// <summary>一条目标播放机提示：这段码流的尺寸越过了常见核显的硬解上限。</summary>
+    public sealed record TargetHint(IntegratedCeiling Ceiling, uint Width, uint Height, IReadOnlyList<Violation> Exceeded)
+    {
+        public JsonObject ToJson() => new()
+        {
+            ["kind"] = IntegratedCeilingHintKind,
+            ["codec"] = Ceiling.Codec,
+            ["bitstream_extent"] = new JsonArray(Width, Height),
+            ["common_integrated_ceiling"] = new JsonObject
+            {
+                ["maximum_width"] = Ceiling.MaximumWidth,
+                ["maximum_height"] = Ceiling.MaximumHeight,
+                ["maximum_luma_samples"] = Ceiling.MaximumLumaSamples,
+                ["sources"] = new JsonArray(Ceiling.Sources.Select(source => (JsonNode?)JsonValue.Create(source)).ToArray()),
+            },
+            ["exceeded"] = new JsonArray(Exceeded.Select(violation => (JsonNode?)new JsonObject
+            {
+                ["measure"] = violation.Measure, ["actual"] = violation.Actual, ["limit"] = violation.Limit,
+            }).ToArray()),
+            ["scope"] = "Advisory only, from published integrated-GPU decode ceilings. It is vendor-agnostic, changes no acceptance criterion and does not replace running the probe on the playback machine.",
+        };
+
+        public string ExceededText(string language) => HardwareDecodeDimensions.ViolationText(Exceeded, language);
+        public string CeilingText() => Extent(Ceiling.MaximumWidth, Ceiling.MaximumHeight);
+    }
+
+    /// <summary>码流尺寸对常见核显上限的提示；没有越限（或不是认识的编解码）返回 null。</summary>
+    public static TargetHint? HintFor(string? codecName, uint width, uint height)
+    {
+        if (CeilingFor(codecName) is not { } ceiling || width == 0 || height == 0) return null;
+        var exceeded = new List<Violation>();
+        if (width > ceiling.MaximumWidth) exceeded.Add(new("width", width, ceiling.MaximumWidth));
+        if (height > ceiling.MaximumHeight) exceeded.Add(new("height", height, ceiling.MaximumHeight));
+        ulong luma = (ulong)width * height;
+        if (luma > ceiling.MaximumLumaSamples) exceeded.Add(new("luma_samples", luma, ceiling.MaximumLumaSamples));
+        return exceeded.Count == 0 ? null : new TargetHint(ceiling, width, height, exceeded);
+    }
+
+    /// <summary>越限项列成一句，中英各一套。</summary>
+    public static string ViolationText(IEnumerable<Violation> violations, string language) =>
+        string.Join(NormalizedChinese(language) ? "、" : ", ", violations.Select(violation => NormalizedChinese(language)
+            ? violation.Measure switch { "width" => "宽", "height" => "高", _ => "亮度样本数" } +
+              $" {violation.Actual.ToString(CultureInfo.InvariantCulture)} > {violation.Limit.ToString(CultureInfo.InvariantCulture)}"
+            : violation.Measure switch { "width" => "width", "height" => "height", _ => "luma samples" } +
+              $" {violation.Actual.ToString(CultureInfo.InvariantCulture)} > {violation.Limit.ToString(CultureInfo.InvariantCulture)}"));
+
+    private static bool NormalizedChinese(string language) => Messages.NormalizeLanguage(language) == Messages.Chinese;
+
+    /// <summary>一次预检的结果。Content 是每半幅的逻辑内容，Padded 是每半幅补边后的画布，Stored 是实际编码尺寸。</summary>
+    public sealed record Plan(string Status, string SoftwareEncoder, bool PackedAlpha, uint ContentWidth, uint ContentHeight,
+        uint PaddedWidth, uint PaddedHeight, uint OffsetX, uint OffsetY, IReadOnlyList<Violation> Violations)
+    {
+        public Limits Limits => For(SoftwareEncoder);
+        public uint StoredWidth => checked(PaddedWidth * (PackedAlpha ? 2u : 1u));
+        public uint StoredHeight => PaddedHeight;
+        public bool Padded => PaddedWidth != ContentWidth || PaddedHeight != ContentHeight;
+        public bool Rejected => Status == RejectedStatus;
+
+        public JsonObject ToJson() => new()
+        {
+            ["status"] = Status,
+            ["codec"] = Limits.Codec,
+            ["software_encoder"] = SoftwareEncoder,
+            ["pixel_packing"] = PackedAlpha ? "rgba_side_by_side" : "rgb",
+            ["content_extent"] = new JsonArray(ContentWidth, ContentHeight),
+            ["padded_extent"] = new JsonArray(PaddedWidth, PaddedHeight),
+            ["encoded_extent"] = new JsonArray(StoredWidth, StoredHeight),
+            ["padding"] = !Padded ? null : new JsonObject
+            {
+                ["left"] = OffsetX, ["top"] = OffsetY,
+                ["right"] = PaddedWidth - ContentWidth - OffsetX, ["bottom"] = PaddedHeight - ContentHeight - OffsetY,
+                ["applies_to"] = PackedAlpha ? "each half of the side-by-side RGB/alpha frame" : "the RGB frame",
+                ["fill"] = "transparent black (RGB 0, alpha 0)",
+                ["playback_sampling"] = "UV is remapped to the original content rectangle and clamped half a texel inside it, so the displayed rectangle does not change.",
+            },
+            ["limits"] = new JsonObject
+            {
+                ["codec"] = Limits.Codec, ["minimum_width"] = Limits.MinimumWidth, ["minimum_height"] = Limits.MinimumHeight,
+                ["maximum_width"] = Limits.MaximumWidth, ["maximum_height"] = Limits.MaximumHeight,
+                ["maximum_luma_samples"] = Limits.MaximumLumaSamples, ["alignment"] = ChromaAlignment,
+                ["sources"] = new JsonArray(Limits.Sources.Select(source => (JsonNode?)JsonValue.Create(source)).ToArray()),
+            },
+            ["violations"] = new JsonArray(Violations.Select(violation => (JsonNode?)new JsonObject
+            {
+                ["measure"] = violation.Measure, ["actual"] = violation.Actual, ["limit"] = violation.Limit,
+            }).ToArray()),
+            ["scope"] = "Dimension preflight from published decoder limits and local D3D11VA measurements, applied before encoding. It does not replace the actual hardware decode probe of the encoded file.",
+        };
+
+        public string ViolationText(string language) => HardwareDecodeDimensions.ViolationText(Violations, language);
+
+        public string PackingText(string language) => Messages.NormalizeLanguage(language) == Messages.Chinese
+            ? Limits.DisplayName + (PackedAlpha ? "，透明通道左右并排" : "，不透明 RGB")
+            : Limits.DisplayName + (PackedAlpha ? ", alpha packed side by side" : ", opaque RGB");
+    }
+
+    public static string Extent(uint width, uint height) =>
+        width.ToString(CultureInfo.InvariantCulture) + "×" + height.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// 规划一段播放版视频的编码画布。<paramref name="contentWidth"/> 是每半幅（不透明时即整幅）的内容宽度。
+    /// 编码器按补边后的实际编码尺寸选择；补边只增不减，编码器最多从 H.264 切到 HEVC 一次。
+    /// </summary>
+    public static Plan Evaluate(uint contentWidth, uint contentHeight, bool packedAlpha, uint fpsNumerator, uint fpsDenominator)
+    {
+        if (contentWidth == 0 || contentHeight == 0) throw new ArgumentException("Hardware decode preflight requires a positive content extent.");
+        if (fpsNumerator == 0 || fpsDenominator == 0) throw new ArgumentException("Hardware decode preflight requires a positive rational frame rate.");
+        uint halves = packedAlpha ? 2u : 1u;
+        (uint width, uint offsetX) = Grow(contentWidth, contentWidth);
+        (uint height, uint offsetY) = Grow(contentHeight, contentHeight);
+        string encoder = PlaybackEncodeProfile.SelectPlaybackEncoder(checked(width * halves), height, fpsNumerator, fpsDenominator);
+        for (int pass = 0; ; ++pass)
+        {
+            Limits limits = For(encoder);
+            (width, offsetX) = Grow(contentWidth, (limits.MinimumWidth + halves - 1) / halves);
+            (height, offsetY) = Grow(contentHeight, limits.MinimumHeight);
+            string next = PlaybackEncodeProfile.SelectPlaybackEncoder(checked(width * halves), height, fpsNumerator, fpsDenominator);
+            if (next == encoder) break;
+            if (pass >= 2) throw new InvalidOperationException("Hardware decode preflight did not converge on one encoder.");
+            encoder = next;
+        }
+        Limits chosen = For(encoder);
+        uint storedWidth = checked(width * halves);
+        var violations = new List<Violation>();
+        if (storedWidth > chosen.MaximumWidth) violations.Add(new("width", storedWidth, chosen.MaximumWidth));
+        if (height > chosen.MaximumHeight) violations.Add(new("height", height, chosen.MaximumHeight));
+        ulong luma = (ulong)storedWidth * height;
+        if (chosen.MaximumLumaSamples is ulong maximumLuma && luma > maximumLuma) violations.Add(new("luma_samples", luma, maximumLuma));
+        string status = violations.Count > 0 ? RejectedStatus : width != contentWidth || height != contentHeight ? PaddedStatus : PassStatus;
+        return new(status, encoder, packedAlpha, contentWidth, contentHeight, width, height, offsetX, offsetY, violations);
+    }
+
+    /// <summary>
+    /// 把一边从 <paramref name="content"/> 补到不小于 <paramref name="minimum"/>：两侧对称、偏移取偶数，
+    /// 这样 4:2:0 色度块不跨内容边界，且上下或左右翻转取样时内容矩形的 UV 不变。奇数内容多出的 1 像素补在末端。
+    /// </summary>
+    public static (uint Size, uint Offset) Grow(uint content, uint minimum)
+    {
+        ulong needed = minimum > content ? minimum - content : 0;
+        ulong offset = (needed + 1) / 2;
+        offset += offset % 2;
+        ulong size = content + 2 * offset;
+        size += size % ChromaAlignment;
+        if (size > uint.MaxValue) throw new OverflowException("Padded dimension exceeds the supported range.");
+        return ((uint)size, (uint)offset);
+    }
+
+    /// <summary>
+    /// 硬件解码下限对裁剪区的要求：在捕获范围内对称扩大裁剪区（只会多带进透明/已渲染像素，图层几何随裁剪区同步），
+    /// 捕获本身不够大时保留原区，由预检记录越限。
+    /// </summary>
+    public static CacheRegion GrowRegion(CacheRegion region, bool packedAlpha, uint fpsNumerator, uint fpsDenominator)
+    {
+        region.Validate();
+        Plan plan = Evaluate((uint)region.Width, (uint)region.Height, packedAlpha, fpsNumerator, fpsDenominator);
+        if (!plan.Padded) return region;
+        (int x, int width) = Expand(region.X, region.Width, (int)plan.PaddedWidth, region.CaptureWidth);
+        (int y, int height) = Expand(region.Y, region.Height, (int)plan.PaddedHeight, region.CaptureHeight);
+        var grown = region with { X = x, Y = y, Width = width, Height = height };
+        grown.Validate();
+        return grown;
+    }
+
+    private static (int Start, int Size) Expand(int start, int size, int target, int capture)
+    {
+        if (target <= size || capture < target) return (start, size);
+        int extra = target - size;
+        int begin = start - extra / 2;
+        begin -= begin & 1;
+        begin = Math.Clamp(begin, 0, capture - target);
+        begin -= begin & 1;
+        if (begin < 0 || begin + target > capture) return (start, size);
+        return (begin, target);
+    }
+
+    /// <summary>
+    /// analyze 阶段按源纹理的图像尺寸预估特效前缀缓存的编码尺寸。透明与否要到烘焙时看首帧才知道，所以两种打包都算；
+    /// 只有越限（不论透明与否，或仅在透明时）才写 unresolved 提示，补边只作记录。
+    /// </summary>
+    internal static JsonArray PredictEffectPrefixCaches(JsonObject report, ProjectSource source, string? assets,
+        HybridAnalyzeRequest request, JsonObject projection)
+    {
+        var predictions = new JsonArray();
+        static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+        var names = new Dictionary<int, string?>();
+        foreach (JsonObject item in (report["layers"] as JsonArray ?? []).OfType<JsonObject>())
+            if (item["id"] is JsonValue id && id.TryGetValue(out int layerId)) names.TryAdd(layerId, Text(item["name"]));
+        foreach (JsonObject cache in (report["effect_prefix_caches"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            if (cache["owner_layer_id"] is not JsonValue ownerValue || !ownerValue.TryGetValue(out int owner)) continue;
+            string layer = $"L{owner.ToString(CultureInfo.InvariantCulture)} \"{Messages.EscapeName(names.GetValueOrDefault(owner))}\"";
+            var entry = new JsonObject { ["owner_layer_id"] = owner, ["source_image"] = cache["source_image"]?.DeepClone(),
+                ["basis"] = "Source texture image extent with the bake's own fit rule; the bake re-plans from the actual capture extent before encoding." };
+            var unresolved = new JsonArray();
+            entry["unresolved"] = unresolved;
+            predictions.Add(entry);
+            try
+            {
+                // 缓存能进 plan 就已过 ValidateSource：单个 genericimage 通道、单张非帧缓冲纹理。这里仍逐级判空，读不到只记 not_predicted。
+                if (Text(cache["source_image"]) is not string image || Text(source.ReadJson(image)["material"]) is not string materialResource ||
+                    source.ReadJson(materialResource)["passes"] is not JsonArray { Count: > 0 } passes ||
+                    passes[0]?["textures"] is not JsonArray { Count: > 0 } textures || Text(textures[0]) is not string texture)
+                {
+                    entry["status"] = "not_predicted"; entry["reason"] = "The cache owner's model, material or base texture could not be read."; continue;
+                }
+                JsonObject model = source.ReadJson(image);
+                string resource = "materials/" + texture + ".tex";
+                if (!TextureContainer.TryReadImageExtent(source, assets, resource, out uint sourceWidth, out uint sourceHeight, out string reason))
+                {
+                    entry["status"] = "not_predicted"; entry["reason"] = reason; continue;
+                }
+                bool puppet = model.ContainsKey("puppet");
+                (uint encodeWidth, uint encodeHeight) = puppet
+                    ? EffectPrefixBakeService.FitAtlas(sourceWidth, sourceHeight, request.Width, request.Height,
+                        projection["visible_width"]?.GetValue<double>() ?? 0, projection["visible_height"]?.GetValue<double>() ?? 0)
+                    : EffectPrefixBakeService.Fit(sourceWidth, sourceHeight, request.Width, request.Height);
+                Plan opaque = Evaluate(encodeWidth, encodeHeight, false, request.FpsNumerator, request.FpsDenominator);
+                Plan transparent = Evaluate(encodeWidth, encodeHeight, true, request.FpsNumerator, request.FpsDenominator);
+                entry["texture"] = resource;
+                entry["predicted_source_extent"] = new JsonArray(sourceWidth, sourceHeight);
+                entry["sampling_basis"] = puppet ? "source_atlas_at_projected_canvas_density" : "source_image_fits_output";
+                entry["opaque"] = opaque.ToJson();
+                entry["transparent"] = transparent.ToJson();
+                string sourceExtent = Extent(sourceWidth, sourceHeight);
+                if (opaque.Rejected)
+                {
+                    entry["status"] = "predicted_rejected";
+                    unresolved.Add(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner,
+                        ["detail"] = Messages.EmitBilingual("unresolved.hardware_decode_dimensions_predicted",
+                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(Messages.Chinese), opaque.ViolationText(Messages.Chinese), opaque.Limits.BasisZh],
+                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(Messages.English), opaque.ViolationText(Messages.English), opaque.Limits.BasisEn]) });
+                }
+                else if (transparent.Rejected)
+                {
+                    entry["status"] = "predicted_rejected_if_transparent";
+                    unresolved.Add(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner,
+                        ["detail"] = Messages.EmitBilingual("unresolved.hardware_decode_dimensions_if_transparent",
+                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(Messages.Chinese), transparent.ViolationText(Messages.Chinese), transparent.Limits.BasisZh, Extent(opaque.StoredWidth, opaque.StoredHeight)],
+                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(Messages.English), transparent.ViolationText(Messages.English), transparent.Limits.BasisEn, Extent(opaque.StoredWidth, opaque.StoredHeight)]) });
+                }
+                else entry["status"] = opaque.Padded || transparent.Padded ? "predicted_padding" : "predicted_pass";
+            }
+            catch (Exception error) when (error is InvalidDataException or IOException or System.Text.Json.JsonException or
+                InvalidOperationException or FormatException or ArgumentException or UnauthorizedAccessException)
+            {
+                entry["status"] = "not_predicted";
+                entry["reason"] = error.Message;
+            }
+        }
+        return predictions;
+    }
+}

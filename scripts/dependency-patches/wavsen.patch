@@ -1,0 +1,1403 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -10,17 +10,22 @@
+ # against an FFmpeg compiled without --enable-vaapi.
+ pkg_check_modules(WAVSEN_LIBVA                IMPORTED_TARGET libva libva-drm)
+ 
+-set(WAVSEN_AUDIO_BACKEND "pulse" CACHE STRING
+-    "Audio backend for wavsen::audio (pulse|pipewire)")
+-set_property(CACHE WAVSEN_AUDIO_BACKEND PROPERTY STRINGS pulse pipewire)
++if(WIN32)
++    set(_wavsen_default_audio_backend "offline")
++else()
++    set(_wavsen_default_audio_backend "pulse")
++endif()
++set(WAVSEN_AUDIO_BACKEND "${_wavsen_default_audio_backend}" CACHE STRING
++    "Audio backend for wavsen::audio (pulse|pipewire|offline)")
++set_property(CACHE WAVSEN_AUDIO_BACKEND PROPERTY STRINGS pulse pipewire offline)
+ 
+ if(WAVSEN_AUDIO_BACKEND STREQUAL "pulse")
+     pkg_check_modules(WAVSEN_LIBPULSE REQUIRED libpulse>=14.0)
+ elseif(WAVSEN_AUDIO_BACKEND STREQUAL "pipewire")
+     pkg_check_modules(WAVSEN_LIBPIPEWIRE REQUIRED libpipewire-0.3)
+-else()
++elseif(NOT WAVSEN_AUDIO_BACKEND STREQUAL "offline")
+     message(FATAL_ERROR
+-        "WAVSEN_AUDIO_BACKEND='${WAVSEN_AUDIO_BACKEND}' is not one of: pulse pipewire")
++        "WAVSEN_AUDIO_BACKEND='${WAVSEN_AUDIO_BACKEND}' is not one of: pulse pipewire offline")
+ endif()
+ 
+ if(NOT TARGET vvk::vvk)
+@@ -35,7 +40,7 @@
+ add_subdirectory(src/ffi/ffmpeg)
+ if(WAVSEN_AUDIO_BACKEND STREQUAL "pulse")
+     add_subdirectory(src/ffi/pulse)
+-else()
++elseif(WAVSEN_AUDIO_BACKEND STREQUAL "pipewire")
+     add_subdirectory(src/ffi/pipewire)
+ endif()
+ 
+@@ -131,12 +136,19 @@
+         src/audio/capture.cpp
+     )
+     set(_wavsen_audio_backend_target wavsen::ffi::pulse)
+-else()
++elseif(WAVSEN_AUDIO_BACKEND STREQUAL "pipewire")
+     target_sources(wavsen_audio PRIVATE
+         src/audio/audio_device_pipewire.cpp
+         src/audio/audio_capture_pipewire.cpp
+     )
+     set(_wavsen_audio_backend_target wavsen::ffi::pipewire)
++else()
++    target_sources(wavsen_audio PRIVATE
++        src/audio/audio_device_unavailable.cpp
++        src/audio/audio_capture_unavailable.cpp
++    )
++    target_compile_definitions(wavsen_audio PUBLIC WAVSEN_OFFLINE_AUDIO=1)
++    set(_wavsen_audio_backend_target "")
+ endif()
+ 
+ target_link_libraries(wavsen_audio
+@@ -153,6 +165,10 @@
+ option(WAVSEN_BUILD_TESTS "Build wavsen test executables" OFF)
+ if(WAVSEN_BUILD_TESTS)
+     enable_testing()
++    add_executable(wavsen_offline_audio_tests tests/offline_audio_tests.cpp)
++    target_compile_features(wavsen_offline_audio_tests PRIVATE cxx_std_20)
++    target_link_libraries(wavsen_offline_audio_tests PRIVATE wavsen::audio)
++    add_test(NAME wavsen_offline_audio_tests COMMAND wavsen_offline_audio_tests)
+     add_executable(wavsen_audio_capture_window_tests
+         tests/audio_capture_window_tests.cpp
+     )
+--- a/lito.toml
++++ b/lito.toml
+@@ -1,14 +1,39 @@
+ [package]
+ name = "wavsen"
+ version = "0.1.0"
++# This vendored Lito target is the Windows offline build. CMake retains the
++# Linux PulseAudio/PipeWire configurations alongside its offline backend.
++target = { os = "windows" }
+ 
+ [lib]
+ name = "wavsen"
+ module = "wavsen"
+ archive = "wavsen"
++source-groups = ["portable", "offline-audio"]
++
++[source-groups.portable]
++sources = [
++  "src/lib.cppm",
++  "src/decode/mod.cppm", "src/decode/mod.cpp",
++  "src/video/mod.cppm", "src/video/presenter.cppm",
++  "src/video/vk_device.cppm", "src/video/vk_device.cpp",
++  "src/video/video_decoder.cppm", "src/video/video_decoder.cpp",
++  "src/video/yuv_to_rgba.cppm", "src/video/yuv_to_rgba.cpp",
++  "src/ffi/ffmpeg/mod.cppm", "src/ffi/ffmpeg/avutil.cppm",
++  "src/ffi/ffmpeg/avformat.cppm", "src/ffi/ffmpeg/avcodec.cppm",
++  "src/ffi/ffmpeg/swscale.cppm", "src/ffi/ffmpeg/swresample.cppm",
++  "src/audio/mod.cppm", "src/audio/byte_stream.cppm", "src/audio/core.cppm",
++  "src/audio/mixer.cppm", "src/audio/mixer.cpp",
++  "src/audio/file.cppm", "src/audio/file.cpp",
++  "src/audio/av_sync.cppm", "src/audio/av_sync.cpp",
++  "src/audio/capture.cppm", "src/audio/capture_window.cppm", "src/audio/gain.cppm",
++]
++
++[source-groups.offline-audio]
++sources = ["src/audio/audio_device_unavailable.cpp", "src/audio/audio_capture_unavailable.cpp"]
+ 
+ [usage]
+-public-definitions = ["WAVSEN_HAS_VAAPI=1"]
++public-definitions = ["WAVSEN_OFFLINE_AUDIO=1"]
+ 
+ [dependencies.rstd-core]
+ git = "https://github.com/litocpp/rstd.git"
+@@ -23,10 +48,6 @@
+ visibility = "public"
+ 
+ [dependencies.rstd-log]
+-git = "https://github.com/litocpp/rstd.git"
+-visibility = "private"
+-
+-[dependencies.rstd-dlopn]
+ git = "https://github.com/litocpp/rstd.git"
+ visibility = "private"
+ 
+@@ -59,20 +80,6 @@
+ version = ">= 3"
+ visibility = "public"
+ 
+-[external-dependencies.pkg-config.libva]
+-module = "libva"
+-visibility = "public"
+-
+-[external-dependencies.pkg-config.libva-drm]
+-module = "libva-drm"
+-visibility = "public"
+-
+-[external-dependencies.pkg-config.libpulse]
+-module = "libpulse"
+-version = ">= 14.0"
+-usage = "compile"
+-visibility = "private"
+-
+ [external-sources.wavsen-shader]
+ path = "shaders"
+ 
+--- a/shaders/nv12_to_rgba.comp
++++ b/shaders/nv12_to_rgba.comp
+@@ -21,7 +21,7 @@
+ 
+ layout(push_constant) uniform PC {
+     uvec2 dst_size;       // 8 bytes
+-    uvec2 _pad0;          // align mat rows to 16-byte boundary
++    uvec2 software_src_size; // shared upload extent; zero for hardware frame views
+     vec4  m_r;            // {y, cb, cr, _} scaling Y/Cb/Cr → R
+     vec4  m_g;            // {y, cb, cr, _} → G
+     vec4  m_b;            // {y, cb, cr, _} → B
+@@ -33,8 +33,22 @@
+     if (px.x >= pc.dst_size.x || px.y >= pc.dst_size.y) return;
+ 
+     vec2 uv = (vec2(px) + 0.5) / vec2(pc.dst_size);
+-    float Y  = texture(y_tex,  uv).r;
+-    vec2  CC = texture(uv_tex, uv).rg;
++    float Y;
++    vec2 CC;
++    if (pc.software_src_size.x != 0u) {
++        // Software frames occupy the upper-left part of shared max-size images.
++        // Normalize by the allocation, then clamp chroma filtering to this frame
++        // so smaller videos cannot sample padding left by another video.
++        uv = (vec2(px) + 0.5) / vec2(pc.software_src_size);
++        vec2 chroma_size = vec2(pc.software_src_size) * 0.5;
++        vec2 chroma_min = vec2(0.5) / chroma_size;
++        vec2 chroma_max = (vec2(pc.dst_size) * 0.5 - 0.5) / chroma_size;
++        Y = texture(y_tex, uv).r;
++        CC = texture(uv_tex, clamp(uv, chroma_min, chroma_max)).rg;
++    } else {
++        Y = texture(y_tex, uv).r;
++        CC = texture(uv_tex, uv).rg;
++    }
+ 
+     vec3 ycbcr = vec3(Y, CC.r, CC.g) + pc.offset.xyz;
+     vec3 rgb   = vec3(dot(ycbcr, pc.m_r.xyz),
+--- /dev/null
++++ b/src/audio/audio_capture_unavailable.cpp
+@@ -0,0 +1,21 @@
++module wavsen.audio.capture;
++
++import rstd;
++import rstd.log;
++
++using namespace rstd::prelude;
++
++namespace wavsen::audio {
++
++class AudioCapture::Impl {};
++AudioCapture::AudioCapture(): impl_(Box<Impl>::make()) {}
++AudioCapture::~AudioCapture() = default;
++bool AudioCapture::init() {
++    rstd::log::error("wavsen::audio: live system capture is unavailable in this offline build; supply a PCM snapshot");
++    return false;
++}
++void AudioCapture::uninit() {}
++bool AudioCapture::is_inited() const { return false; }
++bool AudioCapture::snapshot(AudioPcmWindow& out) { out.clear(); return false; }
++
++} // namespace wavsen::audio
+--- /dev/null
++++ b/src/audio/audio_device_unavailable.cpp
+@@ -0,0 +1,46 @@
++module wavsen.audio;
++
++import rstd;
++import rstd.log;
++import rstd.cppstd;
++import :core;
++
++using namespace rstd::prelude;
++using namespace rstd::literals;
++
++namespace wavsen::audio {
++
++// A linkable, explicit unsupported-device boundary for portable offline builds.
++// Actual audio processing lives in SoundManager::mix_pcm/StreamDecoder. This
++// implementation never claims that a physical device is ready or has played PCM.
++class AudioDevice::Impl {
++public:
++    AudioDeviceEventSink sink;
++    AudioDeviceState state { AudioDeviceState::Idle };
++    u64 generation;
++
++    bool unavailable() {
++        state = AudioDeviceState::Failed;
++        auto message = String::make("system audio playback is unavailable in this offline build; use the synchronous PCM mixer"_str);
++        rstd::log::error("wavsen::audio: {}", message);
++        if (sink) sink(AudioDeviceEvent { generation, state, rstd::move(message) });
++        return false;
++    }
++};
++
++AudioDevice::AudioDevice(): impl_(Box<Impl>::make()) {}
++AudioDevice::~AudioDevice() = default;
++void AudioDevice::set_event_sink(AudioDeviceEventSink sink) { impl_->sink = rstd::move(sink); }
++bool AudioDevice::apply(AudioDeviceDesiredState desired) {
++    impl_->generation = desired.generation;
++    return impl_->unavailable();
++}
++bool AudioDevice::mount(std::unique_ptr<IPullChannel>, u64) { return impl_->unavailable(); }
++bool AudioDevice::unmount_all(u64) { return false; }
++void AudioDevice::shutdown() { impl_->state = AudioDeviceState::Stopped; }
++void AudioDevice::wait_stopped() {}
++AudioDeviceState AudioDevice::state() const { return impl_->state; }
++DeviceDesc AudioDevice::desc() const { return {}; }
++auto AudioDevice::stream_position_frames() const -> u64 { return u64(); }
++
++} // namespace wavsen::audio
+--- a/src/audio/av_sync.cpp
++++ b/src/audio/av_sync.cpp
+@@ -103,13 +103,14 @@
+ 
+     ~Impl() {
+         // The audio callback borrows decoder_ptr, so it must stop before the decoder is destroyed.
+-        device.shutdown();
+-        device.wait_stopped();
++        if (device) { device->shutdown(); device->wait_stopped(); }
++        pending_channel.reset();
+         decoder_ptr     = nullptr;
+         decoder_storage = None();
+     }
+ 
+-    AudioDevice                device;
++    std::unique_ptr<AudioDevice> device;
++    std::unique_ptr<IPullChannel> pending_channel;
+     AudioDeviceDesiredState    desired;
+     u64                        stream_revision;
+     StreamDecoder*             decoder_ptr = nullptr;
+@@ -146,10 +147,6 @@
+         .channels    = u32(2),
+         .sample_rate = u32(48000),
+     };
+-    if (open_device && ! p->open_device()) {
+-        return Err(AvPlayerError { String::make("audio device init failed"_str) });
+-    }
+-
+     p->impl_->decoder_storage.insert(Box<StreamDecoder>::make());
+     if (! p->impl_->decoder_storage->get()->open(rstd::move(src), desc)) {
+         return Err(AvPlayerError { String::make("audio decoder open failed"_str) });
+@@ -162,7 +159,7 @@
+                     p->impl_->decoder_ptr->channels(),
+                     p->impl_->decoder_ptr->sample_rate());
+ 
+-    auto* dev     = &p->impl_->device;
++    auto* owner   = p->impl_.get();
+     auto  channel = std::make_unique<AvPullChannel>(p->impl_->decoder_ptr,
+                                                     &p->impl_->pts_at_anchor,
+                                                     &p->impl_->device_pos_at_anchor,
+@@ -172,11 +169,12 @@
+                                                     &p->impl_->desired_rate_revision,
+                                                     &p->impl_->applied_rate_revision,
+                                                     &p->impl_->rate_at_anchor,
+-                                                    Box<dyn<FnMut<u64()>>>::make([dev]() {
+-                                                       return dev->stream_position_frames();
++                                                    Box<dyn<FnMut<u64()>>>::make([owner]() {
++                                                       return owner->device ? owner->device->stream_position_frames() : u64();
+                                                     }));
+-    if (! p->impl_->device.mount(rstd::move(channel), p->impl_->stream_revision)) {
+-        return Err(AvPlayerError { String::make("audio device stream mount failed"_str) });
++    p->impl_->pending_channel = rstd::move(channel);
++    if (open_device && ! p->open_device()) {
++        return Err(AvPlayerError { String::make("audio device initialization or stream mount failed"_str) });
+     }
+ 
+     return Ok(rstd::move(p));
+@@ -184,9 +182,15 @@
+ 
+ bool AvPlayer::open_device() {
+     if (impl_->desired.active) return true;
++    if (!impl_->device) impl_->device = std::make_unique<AudioDevice>();
++    if (impl_->pending_channel && !impl_->device->mount(rstd::move(impl_->pending_channel), impl_->stream_revision))
++        return false;
+     ++impl_->desired.generation;
+     impl_->desired.active = true;
+-    if (! impl_->device.apply(impl_->desired.clone())) return false;
++    if (! impl_->device->apply(impl_->desired.clone())) {
++        impl_->desired.active = false;
++        return false;
++    }
+     impl_->anchored.store(false, rstd::sync::atomic::Ordering::Release);
+     impl_->needs_reanchor.store(true, rstd::sync::atomic::Ordering::Release);
+     impl_->device_pos_at_anchor.store(u64(), rstd::sync::atomic::Ordering::Relaxed);
+@@ -197,7 +201,7 @@
+     if (! impl_->desired.active) return;
+     ++impl_->desired.generation;
+     impl_->desired.active = false;
+-    (void)impl_->device.apply(impl_->desired.clone());
++    (void)impl_->device->apply(impl_->desired.clone());
+     impl_->anchored.store(false, rstd::sync::atomic::Ordering::Release);
+     impl_->needs_reanchor.store(true, rstd::sync::atomic::Ordering::Release);
+     impl_->device_pos_at_anchor.store(u64(), rstd::sync::atomic::Ordering::Relaxed);
+@@ -208,13 +212,13 @@
+ void AvPlayer::play() {
+     impl_->paused.store(false, rstd::sync::atomic::Ordering::Relaxed);
+     impl_->desired.playing = true;
+-    if (impl_->desired.active) (void)impl_->device.apply(impl_->desired.clone());
++    if (impl_->desired.active) (void)impl_->device->apply(impl_->desired.clone());
+ }
+ 
+ void AvPlayer::pause() {
+     impl_->paused.store(true, rstd::sync::atomic::Ordering::Relaxed);
+     impl_->desired.playing = false;
+-    if (impl_->desired.active) (void)impl_->device.apply(impl_->desired.clone());
++    if (impl_->desired.active) (void)impl_->device->apply(impl_->desired.clone());
+ }
+ 
+ bool AvPlayer::is_paused() const {
+@@ -226,7 +230,7 @@
+ void AvPlayer::seek_to(f64 seconds) {
+     const bool was_playing = ! is_paused();
+     impl_->desired.playing = false;
+-    if (impl_->desired.active) (void)impl_->device.apply(impl_->desired.clone());
++    if (impl_->desired.active) (void)impl_->device->apply(impl_->desired.clone());
+     if (impl_->decoder_ptr) {
+         impl_->decoder_ptr->seek_to(seconds);
+     }
+@@ -235,7 +239,7 @@
+     impl_->device_pos_at_anchor.store(u64(), rstd::sync::atomic::Ordering::Relaxed);
+     if (was_playing) {
+         impl_->desired.playing = true;
+-        if (impl_->desired.active) (void)impl_->device.apply(impl_->desired.clone());
++        if (impl_->desired.active) (void)impl_->device->apply(impl_->desired.clone());
+     }
+ }
+ 
+@@ -254,15 +258,15 @@
+ }
+ 
+ auto AvPlayer::current_time_seconds() const -> f64 {
+-    if (impl_->device.state() != AudioDeviceState::ReadyPlaying) {
++    if (!impl_->device || impl_->device->state() != AudioDeviceState::ReadyPlaying) {
+         return f64::NAN_;
+     }
+     if (! impl_->anchored.load(rstd::sync::atomic::Ordering::Acquire)) {
+         return f64::NAN_;
+     }
+-    const auto sr = impl_->device.desc().sample_rate;
++    const auto sr = impl_->device->desc().sample_rate;
+     if (sr == u32()) return f64::NAN_;
+-    const auto played = impl_->device.stream_position_frames();
++    const auto played = impl_->device->stream_position_frames();
+     const auto base   = impl_->device_pos_at_anchor.load(rstd::sync::atomic::Ordering::Relaxed);
+     const auto pts0   = impl_->pts_at_anchor.load(rstd::sync::atomic::Ordering::Relaxed);
+     const auto rate   = impl_->rate_at_anchor.load(rstd::sync::atomic::Ordering::Relaxed);
+@@ -275,11 +279,11 @@
+ 
+ void AvPlayer::set_volume(f32 value) {
+     impl_->desired.volume = value;
+-    if (impl_->desired.active) (void)impl_->device.apply(impl_->desired.clone());
++    if (impl_->desired.active) (void)impl_->device->apply(impl_->desired.clone());
+ }
+ void AvPlayer::set_muted(bool m) {
+     impl_->desired.muted = m;
+-    if (impl_->desired.active) (void)impl_->device.apply(impl_->desired.clone());
++    if (impl_->desired.active) (void)impl_->device->apply(impl_->desired.clone());
+ }
+ auto AvPlayer::volume_scale() const -> f32 { return impl_->desired.volume_scale; }
+ void AvPlayer::set_volume_scale(f32 value) { set_volume_scale(value, u32()); }
+@@ -287,7 +291,7 @@
+     impl_->desired.volume_scale = value;
+     ++impl_->desired.volume_scale_revision;
+     impl_->desired.volume_scale_fade_ms = fade_ms;
+-    if (impl_->desired.active) (void)impl_->device.apply(impl_->desired.clone());
++    if (impl_->desired.active) (void)impl_->device->apply(impl_->desired.clone());
+ }
+ 
+ bool AvPlayer::is_eof() const { return impl_->decoder_ptr && impl_->decoder_ptr->is_eof(); }
+--- a/src/audio/file.cpp
++++ b/src/audio/file.cpp
+@@ -24,7 +24,7 @@
+     auto  bytes  = rstd::mut_ref<rstd::byte[]>::from_raw_parts(reinterpret_cast<rstd::byte*>(buf),
+                                                                rstd::usize(sz));
+     auto  r      = (*source)->read(rstd::as_u8_slice_mut(bytes));
+-    if (r.is_err()) return AVERROR_EOF;
++    if (r.is_err()) return AVERROR(EIO);
+     auto n = rstd::move(r).unwrap();
+     if (n == rstd::usize()) return AVERROR_EOF;
+     return static_cast<int>(n.to_primitive());
+@@ -160,6 +160,7 @@
+ 
+     auto next_pcm(void* dst, u32 frames) -> u64 {
+         if (cctx_ == nullptr || swr_ == nullptr) return u64();
++        if (!error_.is_empty()) return u64();
+ 
+         auto*      out      = static_cast<rstd::uint8_t*>(dst);
+         const auto bps      = usize(sizeof(float)) * usize(target_.channels.to_primitive());
+@@ -181,7 +182,23 @@
+ 
+             // Need a fresh decoded frame.
+             if (! pull_decoded_frame()) {
+-                if (eof_) break;
++                if (!error_.is_empty()) break;
++                if (eof_) {
++                    if (!resampler_drained_) {
++                        resampler_drained_ = true;
++                        const int capacity = swr_get_out_samples(swr_, 0);
++                        if (capacity > 0) {
++                            pending_buf_.resize(usize(capacity) * bps, 0u);
++                            auto* out_ptr = pending_buf_.data();
++                            const int converted = swr_convert(swr_, &out_ptr, capacity, nullptr, 0);
++                            if (converted < 0) { fail("swr_convert(flush)", converted); break; }
++                            pending_offset_ = u32();
++                            pending_frames_ = u32(converted);
++                            if (converted > 0) continue;
++                        }
++                    }
++                    break;
++                }
+                 continue; // try again (decode may still be priming)
+             }
+ 
+@@ -201,8 +218,8 @@
+                             const_cast<const rstd::uint8_t**>(frame_->extended_data),
+                             frame_->nb_samples);
+             if (converted < 0) {
+-                rstd::log::warn("wavsen::audio: swr_convert error");
+-                continue;
++                fail("swr_convert", converted);
++                break;
+             }
+             pending_offset_ = u32();
+             pending_frames_ = u32(converted);
+@@ -226,17 +243,27 @@
+         pending_offset_   = u32();
+         pending_frames_   = u32();
+         eof_              = false;
++        resampler_drained_ = false;
++        error_.clear();
+         last_pts_seconds_ = seconds;
+         return true;
+     }
+ 
+     auto current_pts_seconds() const -> f64 { return last_pts_seconds_; }
+     bool is_eof() const { return eof_; }
++    auto error() const -> Option<ref<str>> { return error_.is_empty() ? None() : Some(error_.as_str()); }
+ 
+     auto sample_rate() const -> u32 { return cctx_ ? u32(cctx_->sample_rate) : u32(); }
+     auto channels() const -> u32 { return cctx_ ? u32(cctx_->ch_layout.nb_channels) : u32(); }
+ 
+ private:
++    void fail(const char* operation, int rc) {
++        char message[AV_ERROR_MAX_STRING_SIZE] {};
++        av_strerror(rc, message, sizeof(message));
++        error_ = rstd::format("{}: {}", operation, message);
++        rstd::log::error("wavsen::audio: {}", error_);
++    }
++
+     bool pull_decoded_frame() {
+         for (;;) {
+             int rc = avcodec_receive_frame(cctx_, frame_);
+@@ -260,23 +287,23 @@
+                     continue;
+                 }
+                 if (rc < 0) {
+-                    rstd::log::warn("wavsen::audio: av_read_frame error");
+-                    eof_ = true;
++                    fail("av_read_frame", rc);
+                     return false;
+                 }
+                 if (pkt_->stream_index != stream_idx_) {
+                     av_packet_unref(pkt_);
+                     continue;
+                 }
+-                avcodec_send_packet(cctx_, pkt_);
++                const int sent = avcodec_send_packet(cctx_, pkt_);
+                 av_packet_unref(pkt_);
++                if (sent < 0) { fail("avcodec_send_packet", sent); return false; }
+                 continue;
+             }
+             if (rc == AVERROR_EOF) {
+                 eof_ = true;
+                 return false;
+             }
+-            rstd::log::warn("wavsen::audio: avcodec_receive_frame error");
++            fail("avcodec_receive_frame", rc);
+             return false;
+         }
+     }
+@@ -353,6 +380,8 @@
+         eof_              = false;
+         last_pts_seconds_ = f64();
+         playback_rate_    = f64(1.0);
++        resampler_drained_ = false;
++        error_.clear();
+     }
+ 
+     Option<ByteStream> src_;
+@@ -371,6 +400,8 @@
+     u32                pending_offset_;
+     u32                pending_frames_;
+     bool               eof_ {};
++    bool               resampler_drained_ {};
++    String             error_;
+     f64                last_pts_seconds_;
+     f64                playback_rate_ { 1.0 };
+ };
+@@ -395,6 +426,7 @@
+ bool StreamDecoder::seek_to(f64 seconds) { return impl_->seek_to(seconds); }
+ auto StreamDecoder::current_pts_seconds() const -> f64 { return impl_->current_pts_seconds(); }
+ bool StreamDecoder::is_eof() const { return impl_->is_eof(); }
++auto StreamDecoder::error() const -> Option<ref<str>> { return impl_->error(); }
+ auto StreamDecoder::sample_rate() const -> u32 { return impl_->sample_rate(); }
+ auto StreamDecoder::channels() const -> u32 { return impl_->channels(); }
+ 
+@@ -409,6 +441,7 @@
+ 
+     auto next_pcm(void* dst, u32 frames) -> u64 override { return dec_.next_pcm(dst, frames); }
+     void pass_desc(const Desc& d) override { dec_.retarget({ d.channels, d.sample_rate }); }
++    auto error() const -> Option<ref<str>> override { return dec_.error(); }
+ 
+ private:
+     StreamDecoder dec_;
+--- a/src/audio/file.cppm
++++ b/src/audio/file.cppm
+@@ -55,6 +55,7 @@
+ 
+     // True once av_read_frame returned AVERROR_EOF (latched).
+     auto is_eof() const -> bool;
++    auto error() const -> Option<ref<str>>;
+ 
+     // Source stream characteristics. Both return 0 before a successful open.
+     auto sample_rate() const -> u32;
+--- a/src/audio/mixer.cpp
++++ b/src/audio/mixer.cpp
+@@ -2,10 +2,13 @@
+ 
+ import rstd.cppstd;
+ import rstd;
++import rstd.log;
++import wavsen.audio.gain;
+ import :core;
+ import :mixer;
+ 
+ using namespace rstd::prelude;
++using namespace rstd::literals;
+ 
+ namespace wavsen::audio
+ {
+@@ -32,8 +35,8 @@
+     explicit Impl(AudioClientIdentity identity_): identity(rstd::move(identity_)) {}
+ 
+     void apply(u32 fade_ms = u32()) {
+-        if (! activated || shutting_down) return;
+-        (void)device.apply(AudioDeviceDesiredState {
++        if (! activated || shutting_down || !device) return;
++        (void)device->apply(AudioDeviceDesiredState {
+             .generation            = generation,
+             .active                = ! muted,
+             .playing               = playing,
+@@ -46,7 +49,14 @@
+         });
+     }
+ 
+-    AudioDevice         device;
++    // Creating the PulseAudio backend itself starts a thread. Keep it absent
++    // until the host explicitly activates device playback.
++    std::unique_ptr<AudioDevice> device;
++    std::vector<std::unique_ptr<SoundStream>> pending_streams;
++    std::vector<float> scratch;
++    SoundStream::Desc offline_desc { u32(2), u32(48000) };
++    detail::VolumeScaleRamp offline_gain;
++    bool offline {};
+     AudioClientIdentity identity;
+     AudioDeviceState    observed_state { AudioDeviceState::Idle };
+     u64                 generation;
+@@ -66,18 +76,84 @@
+ 
+ void SoundManager::mount(std::unique_ptr<SoundStream> ss) {
+     if (! ss) return;
+-    (void)impl_->device.mount(std::make_unique<StreamPullChannel>(rstd::move(ss)),
+-                              impl_->stream_revision);
++    if (impl_->offline) ss->pass_desc(impl_->offline_desc);
++    if (!impl_->device) {
++        impl_->pending_streams.push_back(rstd::move(ss));
++        return;
++    }
++    if (!impl_->device->mount(std::make_unique<StreamPullChannel>(rstd::move(ss)),
++                             impl_->stream_revision))
++        impl_->observed_state = AudioDeviceState::Failed;
+ }
+ 
+ void SoundManager::unmount_all() {
+     ++impl_->stream_revision;
+-    (void)impl_->device.unmount_all(impl_->stream_revision);
++    impl_->pending_streams.clear();
++    if (impl_->device) (void)impl_->device->unmount_all(impl_->stream_revision);
++}
++
++auto SoundManager::configure_offline(SoundStream::Desc desc) -> Result<empty, String> {
++    if (impl_->activated || impl_->device || impl_->shutting_down)
++        return Err(String::make("offline mixer requires an inactive SoundManager"_str));
++    if (desc.channels == u32() || desc.sample_rate == u32())
++        return Err(String::make("offline mixer requires a nonzero sample rate and channel count"_str));
++    impl_->offline = true;
++    impl_->offline_desc = desc;
++    impl_->offline_gain.redirect(impl_->volume_scale, desc.sample_rate, u32());
++    for (auto& stream : impl_->pending_streams) stream->pass_desc(desc);
++    return Ok(empty {});
++}
++
++auto SoundManager::mix_pcm(mut_ref<float[]> output) -> Result<u64, String> {
++    if (!impl_->offline || impl_->shutting_down)
++        return Err(String::make("offline mixer has not been configured or has been stopped"_str));
++    const auto channels = usize(impl_->offline_desc.channels.to_primitive());
++    if (output.len() % channels != usize())
++        return Err(String::make("offline mixer buffer is not an integral number of sample frames"_str));
++    const auto frames = output.len() / channels;
++    if (frames > usize(u32::MAX.to_primitive()))
++        return Err(String::make("offline mixer pull exceeds the stream frame-count range"_str));
++    for (auto& sample : output) sample = 0.0f;
++    if (frames == usize()) return Ok(u64());
++    if (!impl_->playing) return Ok(u64(frames.to_primitive()));
++
++    impl_->scratch.resize(output.len().to_primitive());
++    for (auto& stream : impl_->pending_streams) {
++        std::fill(impl_->scratch.begin(), impl_->scratch.end(), 0.0f);
++        const auto produced = stream->next_pcm(impl_->scratch.data(), u32(frames.to_primitive()));
++        if (auto error = stream->error(); error.is_some())
++            return Err(String::make(*error));
++        if (produced > u64(frames.to_primitive()))
++            return Err(String::make("PCM source returned more frames than requested"_str));
++        const auto count = usize(produced.to_primitive()) * channels;
++        for (usize index {}; index < count; ++index) {
++            const float sample = impl_->scratch[index.to_primitive()];
++            if (!std::isfinite(sample))
++                return Err(String::make("PCM source returned a non-finite sample"_str));
++            output[index] += sample;
++        }
++    }
++    // Muting affects output gain, not the deterministic decoding clock.
++    impl_->offline_gain.apply(output, impl_->offline_desc.channels,
++                              impl_->muted ? f32() : impl_->volume);
++    return Ok(u64(frames.to_primitive()));
+ }
+ 
+ void SoundManager::activate(AudioDeviceEventSink sink) {
+     if (impl_->activated || impl_->shutting_down) return;
+-    impl_->device.set_event_sink(rstd::move(sink));
++    if (impl_->offline) {
++        impl_->observed_state = AudioDeviceState::Failed;
++        if (sink) sink(AudioDeviceEvent { impl_->generation, AudioDeviceState::Failed,
++            String::make("system device activation is unavailable in offline mixer mode"_str) });
++        return;
++    }
++    impl_->device = std::make_unique<AudioDevice>();
++    impl_->device->set_event_sink(rstd::move(sink));
++    for (auto& stream : impl_->pending_streams)
++        if (!impl_->device->mount(std::make_unique<StreamPullChannel>(rstd::move(stream)),
++                                  impl_->stream_revision))
++            impl_->observed_state = AudioDeviceState::Failed;
++    impl_->pending_streams.clear();
+     impl_->activated = true;
+     ++impl_->generation;
+     impl_->apply();
+@@ -91,7 +167,8 @@
+ void SoundManager::shutdown() {
+     if (impl_->shutting_down) return;
+     impl_->shutting_down = true;
+-    impl_->device.shutdown();
++    if (impl_->device) impl_->device->shutdown();
++    impl_->pending_streams.clear();
+ }
+ 
+ bool SoundManager::set_identity(AudioClientIdentity identity) {
+@@ -127,6 +204,8 @@
+ void SoundManager::set_volume_scale(f32 value, u32 fade_ms) {
+     impl_->volume_scale = value;
+     ++impl_->volume_scale_revision;
++    if (impl_->offline)
++        impl_->offline_gain.redirect(value, impl_->offline_desc.sample_rate, fade_ms);
+     impl_->apply(fade_ms);
+ }
+ 
+--- a/src/audio/mixer.cppm
++++ b/src/audio/mixer.cppm
+@@ -25,6 +25,7 @@
+ 
+     virtual auto next_pcm(void* dst, u32 frames) -> u64 = 0;
+     virtual void pass_desc(const Desc&)                 = 0;
++    virtual auto error() const -> Option<ref<str>> { return None(); }
+ 
+     // 3D-audio hooks — no-op in 0.1; spatial backend will override these in
+     // a future iteration. Coordinates are listener-relative (right-handed,
+@@ -44,6 +45,13 @@
+ 
+     void mount(std::unique_ptr<SoundStream>);
+     void unmount_all();
++
++    // Synchronous PCM output for an offline renderer. This is a mixer, not an
++    // AudioDevice: it never opens a system backend and is_inited() stays false.
++    // Call before activate(). Each pull consumes exactly the requested duration;
++    // paused/ended sources contribute silence while other sources continue.
++    auto configure_offline(SoundStream::Desc) -> Result<empty, String>;
++    auto mix_pcm(mut_ref<float[]> interleaved) -> Result<u64, String>;
+ 
+     void activate(AudioDeviceEventSink);
+     void on_device_event(AudioDeviceEvent);
+--- a/src/ffi/ffmpeg/avcodec.cppm
++++ b/src/ffi/ffmpeg/avcodec.cppm
+@@ -1,6 +1,7 @@
+ module;
+ 
+ #include <cerrno>
++#include <cstdlib>
+ #include <vulkan/vulkan.h>
+ 
+ extern "C" {
+@@ -92,6 +93,24 @@
+     return av_hwframe_ctx_init(frames_ref);
+ }
+ 
++/* Software decoding runs on the caller's thread by default, which makes a
++ * synchronous per-frame pull of a 4K H.264 stream cost the whole frame budget.
++ * libavcodec's frame/slice threading is bit-exact for the codecs we decode, so
++ * it can be enabled unconditionally for the pure-sw path.
++ *
++ * WAVSEN_VIDEO_DECODE_THREADS overrides the worker count:
++ *   unset / 0 / invalid -> automatic (libavcodec picks by cpu count)
++ *   1                   -> single-threaded, the pre-2026-09 behaviour
++ *   n                   -> n workers (clamped to 64) */
++int decode_thread_count_from_env() {
++    const char* raw = std::getenv("WAVSEN_VIDEO_DECODE_THREADS");
++    if (! raw || ! raw[0]) return 0;
++    char* end   = nullptr;
++    long  value = std::strtol(raw, &end, 10);
++    if (end == raw || value < 0 || value > 64) return 0;
++    return static_cast<int>(value);
++}
++
+ } // namespace _wv_avcodec
+ 
+ export {
+@@ -118,6 +137,15 @@
+         return _wv_avcodec::prepare_vulkan_decode_frames(frames_ref);
+     }
+ 
++    /* Request frame+slice threading on a software decoder before
++     * avcodec_open2. FF_THREAD_* are macros and cannot cross the module
++     * boundary, so the request is wrapped here. */
++    inline void avcodec_request_sw_threads(AVCodecContext* cctx) {
++        if (! cctx) return;
++        cctx->thread_count = _wv_avcodec::decode_thread_count_from_env();
++        cctx->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
++    }
++
+     using ::av_packet_alloc;
+     using ::av_packet_free;
+     using ::av_packet_unref;
+--- a/src/ffi/ffmpeg/avutil.cppm
++++ b/src/ffi/ffmpeg/avutil.cppm
+@@ -31,6 +31,9 @@
+ inline constexpr int64_t k_AV_NOPTS_VALUE           = AV_NOPTS_VALUE;
+ inline constexpr int     k_AVERROR_EOF              = AVERROR_EOF;
+ inline constexpr int     k_EAGAIN                   = EAGAIN;
++inline constexpr int     k_EIO                      = EIO;
++inline constexpr auto    k_AV_PIX_FMT_FLAG_RGB      = AV_PIX_FMT_FLAG_RGB;
++inline constexpr auto    k_AV_PIX_FMT_FLAG_PAL      = AV_PIX_FMT_FLAG_PAL;
+ // AV_PIX_FMT_P010 / P016 are AV_PIX_FMT_NE-style endian-alias macros
+ // (NOT enumerators), so they must be captured + #undef'd like ints.
+ inline constexpr AVPixelFormat k_AV_PIX_FMT_P010 = AV_PIX_FMT_P010;
+@@ -43,6 +46,9 @@
+ #undef AVERROR_EOF
+ #undef AVERROR
+ #undef EAGAIN
++#undef EIO
++#undef AV_PIX_FMT_FLAG_RGB
++#undef AV_PIX_FMT_FLAG_PAL
+ #undef AV_PIX_FMT_P010
+ #undef AV_PIX_FMT_P016
+ 
+@@ -54,6 +60,9 @@
+     inline constexpr int64_t AV_NOPTS_VALUE           = _wv_avutil::k_AV_NOPTS_VALUE;
+     inline constexpr int     AVERROR_EOF              = _wv_avutil::k_AVERROR_EOF;
+     inline constexpr int     EAGAIN                   = _wv_avutil::k_EAGAIN;
++    inline constexpr int     EIO                      = _wv_avutil::k_EIO;
++    inline constexpr auto    AV_PIX_FMT_FLAG_RGB      = _wv_avutil::k_AV_PIX_FMT_FLAG_RGB;
++    inline constexpr auto    AV_PIX_FMT_FLAG_PAL      = _wv_avutil::k_AV_PIX_FMT_FLAG_PAL;
+     inline constexpr AVPixelFormat AV_PIX_FMT_P010    = _wv_avutil::k_AV_PIX_FMT_P010;
+     inline constexpr AVPixelFormat AV_PIX_FMT_P016    = _wv_avutil::k_AV_PIX_FMT_P016;
+     inline constexpr int           AVERROR(int e) noexcept { return -e; }
+@@ -102,9 +111,7 @@
+     using ::AV_PIX_FMT_RGBA;
+     using ::AV_PIX_FMT_VULKAN;
+     using ::AV_PIX_FMT_YUV420P;
+-#if defined(WAVSEN_HAS_VAAPI)
+     using ::AV_PIX_FMT_VAAPI;
+-#endif
+     using ::AV_PIX_FMT_DRM_PRIME;
+ 
+     using ::AVCOL_RANGE_JPEG;
+@@ -113,13 +120,13 @@
+     using ::AVCOL_SPC_BT2020_NCL;
+     using ::AVCOL_SPC_BT470BG;
+     using ::AVCOL_SPC_BT709;
++    using ::AVCOL_SPC_FCC;
+     using ::AVCOL_SPC_SMPTE170M;
++    using ::AVCOL_SPC_SMPTE240M;
+ 
+     using ::AV_HWDEVICE_TYPE_DRM;
+     using ::AV_HWDEVICE_TYPE_VULKAN;
+-#if defined(WAVSEN_HAS_VAAPI)
+     using ::AV_HWDEVICE_TYPE_VAAPI;
+-#endif
+ 
+     using ::AV_HWFRAME_MAP_DIRECT;
+     using ::AV_HWFRAME_MAP_OVERWRITE;
+--- a/src/ffi/ffmpeg/swscale.cppm
++++ b/src/ffi/ffmpeg/swscale.cppm
+@@ -5,6 +5,17 @@
+ }
+ 
+ export module wavsen.ffi.ffmpeg:swscale;
++
++constexpr auto M_SWS_CS_ITU709    = SWS_CS_ITU709;
++constexpr auto M_SWS_CS_ITU601    = SWS_CS_ITU601;
++constexpr auto M_SWS_CS_BT2020    = SWS_CS_BT2020;
++constexpr auto M_SWS_CS_FCC       = SWS_CS_FCC;
++constexpr auto M_SWS_CS_SMPTE240M = SWS_CS_SMPTE240M;
++#undef SWS_CS_ITU709
++#undef SWS_CS_ITU601
++#undef SWS_CS_BT2020
++#undef SWS_CS_FCC
++#undef SWS_CS_SMPTE240M
+ 
+ #if LIBSWSCALE_VERSION_MAJOR < 9
+ constexpr auto M_SWS_FAST_BILINEAR = SWS_FAST_BILINEAR;
+@@ -24,7 +35,16 @@
+ 
+     using ::sws_freeContext;
+     using ::sws_getContext;
++    using ::sws_getCoefficients;
++    using ::sws_getColorspaceDetails;
++    using ::sws_setColorspaceDetails;
+     using ::sws_scale;
++
++    constexpr auto SWS_CS_ITU709    = M_SWS_CS_ITU709;
++    constexpr auto SWS_CS_ITU601    = M_SWS_CS_ITU601;
++    constexpr auto SWS_CS_BT2020    = M_SWS_CS_BT2020;
++    constexpr auto SWS_CS_FCC       = M_SWS_CS_FCC;
++    constexpr auto SWS_CS_SMPTE240M = M_SWS_CS_SMPTE240M;
+ 
+ #if LIBSWSCALE_VERSION_MAJOR < 9
+     constexpr auto SWS_FAST_BILINEAR = M_SWS_FAST_BILINEAR;
+--- a/src/video/video_decoder.cpp
++++ b/src/video/video_decoder.cpp
+@@ -482,6 +482,10 @@
+     AVPixelFormat sws_src_fmt { AV_PIX_FMT_NONE };
+     int           sws_src_w { 0 };
+     int           sws_src_h { 0 };
++    int           sws_src_colorspace { -1 };
++    int           sws_src_color_range { -1 };
++    u32           sws_out_colorspace {};
++    u32           sws_out_color_range {};
+     int           video_idx { -1 };
+     AVRational    stream_tb { 0, 1 };
+     u64           decoder_generation;
+@@ -508,9 +512,26 @@
+ namespace
+ {
+ 
+-bool ensure_sws(VideoDecoder::State& st, int src_w, int src_h, AVPixelFormat src_fmt, u32 target_w,
+-                u32 target_h) {
+-    if (st.sws && st.sws_src_w == src_w && st.sws_src_h == src_h && st.sws_src_fmt == src_fmt) {
++int sws_source_matrix(int colorspace) {
++    switch (colorspace) {
++    case AVCOL_SPC_BT470BG:
++    case AVCOL_SPC_SMPTE170M: return SWS_CS_ITU601;
++    case AVCOL_SPC_BT2020_NCL:
++    case AVCOL_SPC_BT2020_CL: return SWS_CS_BT2020;
++    case AVCOL_SPC_FCC: return SWS_CS_FCC;
++    case AVCOL_SPC_SMPTE240M: return SWS_CS_SMPTE240M;
++    default: return SWS_CS_ITU709;
++    }
++}
++
++bool ensure_sws(VideoDecoder::State& st, const AVFrame& source, u32 target_w,
++                u32 target_h, Error* err) {
++    const int src_w = source.width;
++    const int src_h = source.height;
++    const auto src_fmt = static_cast<AVPixelFormat>(source.format);
++    if (st.sws && st.sws_src_w == src_w && st.sws_src_h == src_h &&
++        st.sws_src_fmt == src_fmt && st.sws_src_colorspace == source.colorspace &&
++        st.sws_src_color_range == source.color_range) {
+         return true;
+     }
+     /* Always emit NV12 — that's what YuvToRgba consumes. */
+@@ -524,10 +545,52 @@
+                                 nullptr,
+                                 nullptr,
+                                 nullptr));
+-    if (! st.sws) return false;
++    if (! st.sws) {
++        return fail(err,
++                    rstd::format("sws_getContext failed (src={})", av_get_pix_fmt_name(src_fmt)));
++    }
++
++    /* The fresh context knows format-implied ranges (RGB, YUVJ, gray).
++     * Explicit YUV frame metadata overrides that default. RGB/palette
++     * components always use their full code range in swscale. */
++    int* default_source_coefficients = nullptr;
++    int* default_target_coefficients = nullptr;
++    int source_range = 0, default_target_range = 0;
++    int brightness = 0, contrast = 0, saturation = 0;
++    int rc = sws_getColorspaceDetails(st.sws.get(), &default_source_coefficients,
++                                      &source_range, &default_target_coefficients,
++                                      &default_target_range, &brightness, &contrast, &saturation);
++    if (rc < 0) {
++        st.sws.reset();
++        return fail(err, rstd::format("sws_getColorspaceDetails: {}", av_err_str(rc).as_str()));
++    }
++    const auto* desc = av_pix_fmt_desc_get(src_fmt);
++    const bool rgb = desc && (desc->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_PAL));
++    if (rgb || source.color_range == AVCOL_RANGE_JPEG) source_range = 1;
++    else if (source.color_range == AVCOL_RANGE_MPEG) source_range = 0;
++
++    /* Preserve supported YUV matrices and range; RGB becomes BT.709 NV12.
++     * Unsupported/unspecified matrix IDs retain the existing BT.709 fallback.
++     * Output metadata describes this conversion, never the original RGB frame. */
++    const u32 output_colorspace = rgb ? u32() : map_colorspace(source.colorspace);
++    const int target_matrix = output_colorspace == u32(1) ? SWS_CS_ITU601 :
++                              output_colorspace == u32(2) ? SWS_CS_BT2020 : SWS_CS_ITU709;
++    const int source_matrix = rgb ? SWS_CS_ITU709 : sws_source_matrix(source.colorspace);
++    const int target_range = source_range;
++    rc = sws_setColorspaceDetails(st.sws.get(), sws_getCoefficients(source_matrix),
++                                  source_range, sws_getCoefficients(target_matrix),
++                                  target_range, 0, 1 << 16, 1 << 16);
++    if (rc < 0) {
++        st.sws.reset();
++        return fail(err, rstd::format("sws_setColorspaceDetails: {}", av_err_str(rc).as_str()));
++    }
+     st.sws_src_w   = src_w;
+     st.sws_src_h   = src_h;
+     st.sws_src_fmt = src_fmt;
++    st.sws_src_colorspace = source.colorspace;
++    st.sws_src_color_range = source.color_range;
++    st.sws_out_colorspace = output_colorspace;
++    st.sws_out_color_range = target_range == 1 ? u32(1) : u32();
+     return true;
+ }
+ 
+@@ -931,12 +994,22 @@
+         }
+ #endif
+     } else {
++        /* Pure software path: let libavcodec spread the decode over worker
++         * threads instead of blocking the caller for a whole frame. The
++         * worker count comes from WAVSEN_VIDEO_DECODE_THREADS (unset =
++         * automatic, 1 = the previous single-threaded behaviour). */
++        avcodec_request_sw_threads(self->state_->cctx.get());
+         rstd::log::info("VideoDecoder: sw decode for codec {}.", avcodec_get_name(par->codec_id));
+     }
+ 
+     if (int rc = avcodec_open2(self->state_->cctx.get(), dec, nullptr); rc < 0) {
+         fail(err, rstd::format("avcodec_open2: {}", av_err_str(rc).as_str()));
+         return None();
++    }
++    if (! self->state_->hwd) {
++        rstd::log::info("VideoDecoder: sw decode threads={} type={}.",
++                        self->state_->cctx->thread_count,
++                        self->state_->cctx->active_thread_type);
+     }
+ 
+     self->state_->pkt.reset(av_packet_alloc());
+@@ -1214,6 +1287,8 @@
+                  * pixel data only). */
+                 st.sw_frame->pts                   = feed->pts;
+                 st.sw_frame->best_effort_timestamp = feed->best_effort_timestamp;
++                st.sw_frame->colorspace            = feed->colorspace;
++                st.sw_frame->color_range           = feed->color_range;
+                 feed                               = st.sw_frame.get();
+             }
+ 
+@@ -1224,9 +1299,7 @@
+                 fail(err, "decoded frame has invalid dimensions/format"_str);
+                 return -1;
+             }
+-            if (! ensure_sws(st, src_w, src_h, src_fmt, target_width_, target_height_)) {
+-                fail(err,
+-                     rstd::format("sws_getContext failed (src={})", av_get_pix_fmt_name(src_fmt)));
++            if (! ensure_sws(st, *feed, target_width_, target_height_, err)) {
+                 return -1;
+             }
+             rstd::uint8_t* y_dst         = out.data.data();
+@@ -1251,8 +1324,8 @@
+             out.pts_seconds = pts == AV_NOPTS_VALUE
+                                   ? f64(-1.0)
+                                   : f64(static_cast<double>(pts) * ffi::av_q2d(st.stream_tb));
+-            out.colorspace  = map_colorspace(feed->colorspace);
+-            out.color_range = map_range(feed->color_range);
++            out.colorspace  = st.sws_out_colorspace;
++            out.color_range = st.sws_out_color_range;
+             av_frame_unref(st.src_frame.get());
+             if (st.sw_frame) av_frame_unref(st.sw_frame.get());
+             return looped ? 2 : 0;
+@@ -1395,14 +1468,55 @@
+     return Ok(empty {});
+ }
+ 
++auto VideoDecoder::stream_metadata() const -> VideoStreamMetadata {
++    const State& state = *state_;
++    const auto* stream = state.fmt->streams[state.video_idx];
++    const auto* parameters = stream->codecpar;
++    VideoStreamMetadata result;
++    if (parameters->codec_id != AV_CODEC_ID_NONE)
++        result.codec = rstd::format("{}", avcodec_get_name(parameters->codec_id));
++    if (parameters->width > 0) result.coded_width = Some(u32(static_cast<rstd::uint32_t>(parameters->width)));
++    if (parameters->height > 0) result.coded_height = Some(u32(static_cast<rstd::uint32_t>(parameters->height)));
++    if (parameters->format >= 0) {
++        const char* pixel_format = av_get_pix_fmt_name(static_cast<AVPixelFormat>(parameters->format));
++        if (pixel_format != nullptr) result.pixel_format = rstd::format("{}", pixel_format);
++    }
++    // A declared/average stream rate is not a proof of constant frame spacing.
++    // Preserve the rational and its provenance; never substitute the capture FPS.
++    AVRational rate = stream->avg_frame_rate;
++    if (rate.num > 0 && rate.den > 0) result.fps_source = String::make("avg_frame_rate"_str);
++    else {
++        rate = stream->r_frame_rate;
++        if (rate.num > 0 && rate.den > 0) result.fps_source = String::make("r_frame_rate"_str);
++    }
++    if (rate.num > 0 && rate.den > 0) {
++        result.fps_num = Some(i32(rate.num));
++        result.fps_den = Some(i32(rate.den));
++    }
++    if (stream->duration > 0 && stream->duration != AV_NOPTS_VALUE &&
++        stream->time_base.num > 0 && stream->time_base.den > 0) {
++        result.duration_ticks = Some(rstd::int64_t(stream->duration));
++        result.time_base_num  = Some(i32(stream->time_base.num));
++        result.time_base_den  = Some(i32(stream->time_base.den));
++    }
++    if (stream->nb_frames > 0)
++        result.frame_count = Some(u64(static_cast<rstd::uint64_t>(stream->nb_frames)));
++    return result;
++}
++
+ auto VideoDecoder::duration() const -> Option<f64> {
+     const State& st = *state_;
++    // Video stream ticks retain sub-microsecond frame boundaries. The format
++    // duration is rounded to AV_TIME_BASE and may also include a longer audio
++    // stream, so use it only when the video stream has no duration metadata.
++    const auto* stream = st.fmt->streams[st.video_idx];
++    if (stream->duration > 0 && stream->duration != AV_NOPTS_VALUE) {
++        return Some(f64(static_cast<double>(stream->duration) * ffi::av_q2d(stream->time_base)));
++    }
+     if (st.fmt->duration > 0) {
+         return Some(f64(static_cast<double>(st.fmt->duration) / AV_TIME_BASE));
+     }
+-    const auto* stream = st.fmt->streams[st.video_idx];
+-    if (stream->duration <= 0) return None();
+-    return Some(f64(static_cast<double>(stream->duration) * ffi::av_q2d(stream->time_base)));
++    return None();
+ }
+ 
+ } // namespace wavsen::video
+--- a/src/video/video_decoder.cppm
++++ b/src/video/video_decoder.cppm
+@@ -21,6 +21,22 @@
+ struct ProbeResult {
+     u32 width;
+     u32 height;
++};
++
++// Metadata of the selected encoded stream, before output scaling or NV12 conversion.
++struct VideoStreamMetadata {
++    String      codec;
++    Option<u32> coded_width;
++    Option<u32> coded_height;
++    String      pixel_format;
++    Option<i32> fps_num;
++    Option<i32> fps_den;
++    String      fps_source;
++    // Native stream duration. Keep the rational form; duration() is a display value.
++    Option<rstd::int64_t> duration_ticks;
++    Option<i32>           time_base_num;
++    Option<i32>           time_base_den;
++    Option<u64>           frame_count;
+ };
+ 
+ enum class NextFrame
+@@ -296,6 +312,7 @@
+     auto next_drm_frame() -> Result<DrmFramePull, Error>;
+     auto seek(f64 seconds) -> Result<empty, Error>;
+     auto duration() const -> Option<f64>;
++    auto stream_metadata() const -> VideoStreamMetadata;
+ 
+     FrameKind kind() const { return kind_; }
+     bool      using_vk_frames() const { return kind_ == FrameKind::VulkanShared; }
+--- a/src/video/vk_device.cpp
++++ b/src/video/vk_device.cpp
+@@ -61,6 +61,10 @@
+ }
+ 
+ auto Producer::from_external(ExternalDeviceInfo info) -> Result<Box<Producer>, Error> {
++#if defined(_WIN32)
++    if (info.drm_render_fd >= 0 || info.drm_render_major != u32() || info.drm_render_minor != u32())
++        return Err(Error { "Producer::from_external: DRM file descriptors are unavailable on Windows"_str });
++#endif
+     if (! info.instance || ! info.physical_device || ! info.device || ! info.queue) {
+         return Err(Error { "Producer::from_external: missing handle(s)"_str });
+     }
+@@ -102,7 +106,9 @@
+         }
+     }
+     if (info.drm_render_fd >= 0) {
++#if !defined(_WIN32)
+         self->drm_render_file_ = rstd::fs::File::from_raw_fd(info.drm_render_fd);
++#endif
+     }
+     self->drm_render_major_ = info.drm_render_major;
+     self->drm_render_minor_ = info.drm_render_minor;
+@@ -110,6 +116,9 @@
+ }
+ 
+ auto Producer::drm_render_node() const -> Option<String> {
++#if defined(_WIN32)
++    return None();
++#else
+     if (drm_render_major_ == u32() && drm_render_minor_ == u32()) return None();
+ 
+     auto node     = rstd::format("/dev/dri/renderD{}", drm_render_minor_);
+@@ -121,10 +130,15 @@
+         return None();
+     }
+     return Some(rstd::move(node));
++#endif
+ }
+ 
+ Option<Box<Producer>> Producer::build_(u32 width, u32 height, Option<ref<str>> render_node,
+                                        Error* err) {
++#if defined(_WIN32)
++    fail(err, "DMA-BUF producer creation is unavailable on Windows; use from_external for local Vulkan decoding"_str);
++    return None();
++#else
+     if (width == u32() || height == u32()) {
+         fail(err, "Producer: width/height must be non-zero"_str);
+         return None();
+@@ -452,6 +466,7 @@
+     }
+ 
+     return Some(rstd::move(self));
++#endif
+ }
+ 
+ auto Producer::upload_into(VkImage target, u32 target_width, u32 target_height,
+@@ -464,6 +479,10 @@
+ 
+ int Producer::upload_into_(VkImage target, u32 target_width, u32 target_height,
+                            const rstd::uint8_t* data, usize size, Error* err) {
++#if defined(_WIN32)
++    fail(err, "DMA-BUF/sync-fd upload is unavailable on Windows"_str);
++    return -1;
++#else
+     if (target == VK_NULL_HANDLE) {
+         fail(err, "upload_into: target VkImage is null"_str);
+         return -1;
+@@ -565,6 +584,7 @@
+         return -1;
+     }
+     return sync_fd;
++#endif
+ }
+ 
+ } // namespace wavsen::video
+--- a/src/video/vk_device.cppm
++++ b/src/video/vk_device.cppm
+@@ -94,7 +94,13 @@
+     auto                 drm_render_node() const -> Option<String>;
+     const rstd::uint8_t* device_uuid() const { return have_uuid_ ? device_uuid_ : nullptr; }
+     const rstd::uint8_t* driver_uuid() const { return have_uuid_ ? driver_uuid_ : nullptr; }
+-    int                  drm_render_fd() const { return drm_render_file_.as_raw_fd(); }
++    int drm_render_fd() const {
++#if defined(_WIN32)
++        return -1;
++#else
++        return drm_render_file_.as_raw_fd();
++#endif
++    }
+     u32                  width() const { return width_; }
+     u32                  height() const { return height_; }
+ 
+--- a/src/video/yuv_to_rgba.cpp
++++ b/src/video/yuv_to_rgba.cpp
+@@ -22,7 +22,8 @@
+ struct alignas(16) ShaderPushConstants {
+     rstd::uint32_t dst_w;
+     rstd::uint32_t dst_h;
+-    rstd::uint32_t _pad0[2];
++    rstd::uint32_t software_src_w;
++    rstd::uint32_t software_src_h;
+     float          m_r[4];
+     float          m_g[4];
+     float          m_b[4];
+@@ -529,6 +530,9 @@
+ 
+ auto create_drm_import(const vvk::Device& device, const vvk::PhysicalDevice& phys,
+                        const DrmFrameLease& frame) -> Result<Box<DrmImportEntry>, Error> {
++#if defined(_WIN32)
++    return Err(Error { "DRM_PRIME/DMA-BUF import is unavailable on Windows; use software or shared Vulkan frames"_str });
++#else
+     const auto& drm = frame.view();
+     if (drm.object_count == u32() || drm.layer_count == u32()) {
+         return Err(Error { "submit_drm_prime: empty DRM_PRIME descriptor"_str });
+@@ -738,6 +742,7 @@
+         return Err(Error { vk_error("vkCreateImageView(DRM UV)"_str, result) });
+     }
+     return Ok(rstd::move(entry));
++#endif
+ }
+ 
+ } // namespace
+@@ -790,10 +795,6 @@
+     const auto queue_family_raw = queue_family.to_primitive();
+     const auto max_w_raw        = max_w.to_primitive();
+     const auto max_h_raw        = max_h.to_primitive();
+-
+-    if (! device_dispatch_.vkGetSemaphoreFdKHR) {
+-        return fail(err, "vkGetSemaphoreFdKHR missing"_str);
+-    }
+ 
+     // ----- Sampler (linear, clamp-to-edge) -----
+     {
+@@ -979,15 +980,6 @@
+         if (VkResult r = device_.CreateFence(fci, software_fence_); r != VK_SUCCESS)
+             return fail(err, vk_error("vkCreateFence"_str, r));
+ 
+-        VkExportSemaphoreCreateInfo es {};
+-        es.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+-        es.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+-        VkSemaphoreCreateInfo sci {};
+-        sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+-        sci.pNext = &es;
+-        if (VkResult r = device_.CreateSemaphore(sci, software_export_semaphore_); r != VK_SUCCESS)
+-            return fail(err, vk_error("vkCreateSemaphore(signal)"_str, r));
+-
+         const auto generation = next_completion_generation();
+         auto       timeline   = vvk::TimelineSemaphoreGeneration::Create(
+             *device_,
+@@ -1062,6 +1054,25 @@
+         fail(err, "convert_nv12: nv12_size mismatch (expected NV12 layout)"_str);
+         return -1;
+     }
++    // Local sampling requires no exported handle. Allocate the Linux bridge
++    // semaphore only when a caller actually asks for a sync-fd handoff.
++    if (target_exports_sync_fd(target) && !software_export_semaphore_) {
++        if (!device_dispatch_.vkGetSemaphoreFdKHR) {
++            fail(err, "convert_nv12: sync-fd export is unavailable on this device"_str);
++            return -1;
++        }
++        VkExportSemaphoreCreateInfo export_info {};
++        export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
++        export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
++        VkSemaphoreCreateInfo semaphore_info {};
++        semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
++        semaphore_info.pNext = &export_info;
++        if (const auto result = device_.CreateSemaphore(semaphore_info, software_export_semaphore_);
++            result != VK_SUCCESS) {
++            fail(err, vk_error("vkCreateSemaphore(software export)"_str, result));
++            return -1;
++        }
++    }
+ 
+     /* Software upload reuses one mapped staging allocation and command context. */
+     if (software_fence_pending_) {
+@@ -1207,6 +1218,8 @@
+     ShaderPushConstants pc {};
+     pc.dst_w = dst_w;
+     pc.dst_h = dst_h;
++    pc.software_src_w = max_w_.to_primitive();
++    pc.software_src_h = max_h_.to_primitive();
+     for (int i = 0; i < 3; ++i) {
+         pc.m_r[i]    = cm.m_r[i];
+         pc.m_g[i]    = cm.m_g[i];
+@@ -1227,7 +1240,8 @@
+ 
+     auto next_completion_value = completion_value_ + u64(1);
+     if (next_completion_value == u64()) ++next_completion_value;
+-    VkSemaphore signal_sems[2] = { (*completion_timeline_)->handle(), *software_export_semaphore_ };
++    VkSemaphore signal_sems[2] = { (*completion_timeline_)->handle(),
++        target_exports_sync_fd(target) ? *software_export_semaphore_ : VK_NULL_HANDLE };
+     rstd::uint64_t                signal_vals[2] = { next_completion_value.to_primitive(), 0 };
+     const auto                    signal_count   = target_exports_sync_fd(target) ? 2u : 1u;
+     VkTimelineSemaphoreSubmitInfo timeline_info {};
+@@ -1767,6 +1781,8 @@
+     if (! context) return Ok(None());
+ 
+     if (target_exports_sync_fd(destination.kind) && ! context->export_semaphore) {
++        if (!device_dispatch_.vkGetSemaphoreFdKHR)
++            return Err(Error { "reserve: sync-fd export is unavailable on this device"_str });
+         VkExportSemaphoreCreateInfo export_info {};
+         export_info.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+         export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+--- /dev/null
++++ b/tests/offline_audio_tests.cpp
+@@ -0,0 +1,63 @@
++import rstd;
++import rstd.cppstd;
++import wavsen.audio;
++
++using namespace rstd::prelude;
++using namespace rstd::literals;
++
++namespace {
++class ConstantSource final : public wavsen::audio::SoundStream {
++public:
++    explicit ConstantSource(float value): value_(value) {}
++    auto next_pcm(void* dst, u32 frames) -> u64 override {
++        auto* samples = static_cast<float*>(dst);
++        for (u32 index {}; index < frames * channels_; ++index)
++            samples[index.to_primitive()] = value_;
++        consumed += u64(frames.to_primitive());
++        return u64(frames.to_primitive());
++    }
++    void pass_desc(const Desc& desc) override { channels_ = desc.channels; }
++    auto error() const -> Option<ref<str>> override {
++        return fail ? Some("synthetic decode failure"_str) : None();
++    }
++    u64 consumed;
++    bool fail {};
++private:
++    float value_;
++    u32 channels_;
++};
++}
++
++int main() {
++    wavsen::audio::SoundManager mixer;
++    auto first = std::make_unique<ConstantSource>(0.25f);
++    auto* observed = first.get();
++    mixer.mount(rstd::move(first)); // Mount before choosing an output creates no device.
++    if (mixer.is_inited()) return 1;
++    if (mixer.configure_offline({u32(2), u32(48000)}).is_err()) return 2;
++    mixer.mount(std::make_unique<ConstantSource>(0.125f));
++    rstd::array<float, 256> samples {};
++    auto silence = mixer.mix_pcm(samples.as_mut_slice());
++    if (silence.is_err() || observed->consumed != u64()) return 3;
++    mixer.play();
++    auto mixed = mixer.mix_pcm(samples.as_mut_slice());
++    if (mixed.is_err() || *mixed != u64(128)) return 4;
++    for (float sample : samples) if (sample != 0.375f) return 5;
++    mixer.set_muted(true);
++    if (mixer.mix_pcm(samples.as_mut_slice()).is_err()) return 6;
++    if (observed->consumed != u64(256)) return 7;
++    for (float sample : samples) if (sample != 0.0f) return 8;
++    mixer.pause();
++    if (mixer.mix_pcm(samples.as_mut_slice()).is_err() || observed->consumed != u64(256)) return 9;
++    mixer.play();
++    observed->fail = true;
++    if (mixer.mix_pcm(samples.as_mut_slice()).is_ok()) return 10;
++    if (mixer.is_inited()) return 11;
++    mixer.unmount_all();
++    if (mixer.mix_pcm(samples.as_mut_slice()).is_err()) return 12;
++    rstd::array<float, 3> incomplete {};
++    if (mixer.mix_pcm(incomplete.as_mut_slice()).is_ok()) return 13;
++    mixer.shutdown();
++    if (mixer.mix_pcm(samples.as_mut_slice()).is_ok()) return 14;
++    return 0;
++}

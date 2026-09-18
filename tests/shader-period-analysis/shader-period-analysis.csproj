@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/Baker.Core/CommonLoopSolver.cs" Link="CommonLoopSolver.cs" />
+    <Compile Include="../../src/Baker.Core/ProjectSource.cs" Link="ProjectSource.cs" />
+    <Compile Include="../../src/Baker.Core/SceneAnalysis.cs" Link="SceneAnalysis.cs" />
+    <Compile Include="../../src/Baker.Core/ShaderPeriodAnalysis.cs" Link="ShaderPeriodAnalysis.cs" />
+  </ItemGroup>
+</Project>

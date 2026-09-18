@@ -1,0 +1,33 @@
+{
+  "camera": {
+    "center": "0 0 0",
+    "eye": "0 0 1",
+    "up": "0 1 0"
+  },
+  "general": {
+    "clearcolor": "0.125 0.25 0.5",
+    "clearenabled": true,
+    "orthogonalprojection": {
+      "width": 256,
+      "height": 128
+    },
+    "cameraparallax": false,
+    "camerashake": false,
+    "bloom": false,
+    "ambientcolor": "1 1 1",
+    "skylightcolor": "1 1 1"
+  },
+  "objects": [
+    {
+      "id": 1,
+      "name": "asymmetric-clock-probe",
+      "image": "models/probe.json",
+      "origin": "128 64 0",
+      "angles": "0 0 0",
+      "scale": "1 1 1",
+      "size": "256 128",
+      "visible": true,
+      "alpha": 1.0
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "version": "2.5.1",
+  "file": "PresentMon-2.5.1-x64.exe",
+  "url": "https://github.com/GameTechDev/PresentMon/releases/download/v2.5.1/PresentMon-2.5.1-x64.exe",
+  "sha256": "9bec3083069f58f911e6a512f4806db51a27bd096103087bc1d05ef54c80a191",
+  "source": "https://github.com/GameTechDev/PresentMon/tree/v2.5.1",
+  "license_url": "https://raw.githubusercontent.com/GameTechDev/PresentMon/v2.5.1/LICENSE.txt",
+  "third_party_notices_url": "https://raw.githubusercontent.com/GameTechDev/PresentMon/v2.5.1/THIRD_PARTY.txt",
+  "purpose": "Official Wallpaper Engine presentation measurement; standalone console, no installation"
+}

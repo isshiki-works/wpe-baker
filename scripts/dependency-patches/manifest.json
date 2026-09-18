@@ -1,0 +1,866 @@
+{
+  "schema": "wpe-native-dependency-patches-v1",
+  "dependencies": [
+    {
+      "dependency": "rstd",
+      "patch": "scripts/dependency-patches/rstd.patch",
+      "sha256": "c0afa59c0989e305a84ab4c803649a275507aed580cf72343f9e9d7de46d6b5b",
+      "files": [
+        {
+          "path": "src/core/src/convert.cppm",
+          "before_sha256": "4203ae81179a8d3a960e178c14205add9d83d3753f1b7e57a32ef11de0ab1f92",
+          "after_sha256": "1ab65e592e7156afca6b8efd38c8b13d5b9ea5711d239b1b37fa110c6ebc1a61"
+        },
+        {
+          "path": "src/json/src/parser.cppm",
+          "before_sha256": "723fe942facbafdee72619c1abe50ebd017a890558b3c7d5a07d2009f296c4a3",
+          "after_sha256": "881cef1f780ff8d54a8618723f33435a8f6aacfdfec26b0a7a529c2f3893fba9"
+        },
+        {
+          "path": "src/json/src/reader.cpp",
+          "before_sha256": "16957c35d04d2fbe340a4251feec8815c3155653ff380f83d96f58fbb3b74217",
+          "after_sha256": "23d3efc89bcd7bfd91ccce03a5d23c2f974c0d4d1c49061f5c9377c01438db90"
+        },
+        {
+          "path": "tests/build/debug/lito-cache/environments/aa7e24e797d851c9.json",
+          "before_sha256": null,
+          "after_sha256": "36609b95a4b7d7ee93e8700abe82f3063c5da61b1b15d8b2a4b9f95e06fd2e55"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-alloc/lib/rstd-alloc/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "3ffc6b0b40f0709c2099442da31f5622901a2e04dae24fb48524d144c02a625c"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-argparse/lib/rstd-argparse/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "93ea7a69d8e35812369243144388812fe26b2e0e4f5abdb5bbac85812bf8b18c"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-basic/lib/rstd-basic/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "dad970d8048cb9426648176a3ec953b8740b59c4f2f3a1b64604b5ce12667e87"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-bench/lib/rstd-bench/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "d77f40b8195dcd7c82346e80c76b8e4e94fb872e177cd5a8a2e521e0dc3186ab"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-core/lib/rstd-core/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "5092e65c379b7c6f5e63fdb8988726fe35b17de1ae739c25f3d918954c72e86d"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-cppstd/lib/rstd-cppstd/cppstd.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "16d9e32bca8eaa350f4ea2419480a632e90ec1769e2d837099766953b29c8917"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-cppstd/lib/rstd-cppstd/iter.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "a7bb53261dae806d82b04a93f3f1b67b91e03dc1bc9b62766b6e9e6b3c68429e"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-cppstd/lib/rstd-cppstd/rstd.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "9f60dcb8241958d682f14569e241386127a705b3c76909f7ff9a626e8304279c"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-json/lib/rstd-json/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "b12c794da54a828f5522d62418f0d49767a785c2b0f9e6756ba6854536a25c1e"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-log/lib/rstd-log/env_logger.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "e5d97bb6612fcf1dd861cf62ed53e06816ccc247e3651b041e22d7eedbaadc45"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-log/lib/rstd-log/level.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "b5687fda49d269a82608859630129799176f05e0605c8e8308eb0675539a4567"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-log/lib/rstd-log/logger.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "0d6908a923273452ae5ba37c8c761dc9c323f94107a4ca591d239aba3a13617d"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-log/lib/rstd-log/macros.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "2b925a56a7ea40932d459371a28767694b94f9f586a83fbac6f84e8a53206825"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-log/lib/rstd-log/mod.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "5642cc5a613d0a6ff0c21e03ab78e20dd0f49d38394a5888c27554a1c26b4d09"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-log/lib/rstd-log/record.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "b3f46521527caaa9069bde4e80518b6b499e5cb96e8a304346902b513efd572f"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-parse/lib/rstd-parse/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "3478f5d672acadcf94fa3a814f274467687dd18e647dfb4ab65e8e9cb325be2b"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-runtime/lib/rstd-runtime/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "12dc3dedf0bebb0685ce4bd744c2076887aa1e48e2bea96f8e2a834eaccecfd1"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-serde/lib/rstd-serde/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "028d202100e27f4939963becb853f89babea1a6d800428c0ab52f33fc8be2f32"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-std/lib/rstd-std/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "4b90ff74e11c950729c20fd50885fe110c4dc484f4342960b412f357f81b5fe4"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-test/lib/rstd-test/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "13bb9f6db079aabf847d4fd35ae1534d71e849dfef47294835ab914db8f2b0cd"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test-attachment/rstd-tests@test-attach@rstd-std@rstd-std/async/io_backend.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "8d2207194cb1c0e09f65a5ef4a23d2111bc6787b4149ab6194e89c93a21d1810"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/alloc/arena.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "fb48e680174cc6599b9ab3082ff429d587423c871c9c59751439a456fc0d4001"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/alloc/boxed.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "a990d19622ea71697d13f56451e75c10981ad6bdee47e0d5c595826a60078260"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/alloc/rc.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "ea7af0244d257377957b00d3452bb08fab4145972d95920f4ef413429394aeed"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/alloc/shared_arena.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "d8e402686701030611b5e228eba121dfbb3b99e38e8618943444955c56272e19"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/alloc/str.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "85835419ee1f50d76df2f274944a9654b05ae60efb860cd8322a36403a0c7fcf"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/alloc/string.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "4627568a1f0c5d9391a6471cde92e015befabffa7004c5fd6d5dc9bd3f7d34fc"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/alloc/sync.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "7573ffcb90d0beca2a33b5d4b6e32a4af876d2a16aae0a940c4715285b334d12"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/alloc/vec.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "8e06f3f046bc2cb21ef7daf80dea2fb39c5e3aeecf2824be2860efcedb0d8082"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/alloc/virtual_memory.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "87605f1e88317824b90ef7acccf048216c04b50054fc82550eb1b1789402bac0"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/any.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "0830005b9550e1ae120f398a64e6cc8eed69f212728b1dacc662df42df9ab0f7"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/any_module_check.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "a74e65000ae15d0f887e5d66b65dcdecb70f711cd1cc44957d1ad5721472774b"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/argparse/definition.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "d9aa86f2e0e4b6e0f3efe873f9f70b6142a60de283149c5bac54c37c184e3f00"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/argparse/errors.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "dee035270ca6ce7a30ddd43f23d0b9d6c530b48f6886bf9d12029d0763796d79"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/argparse/global.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "44505d9cdaf45543efa3b28276a083327554aade706b869062b2f26003daf8f1"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/argparse/help.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "d7dbfb32111b3aeea1783c89df0c7451a300c79e0ea3080edbbd6fcf6136847b"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/argparse/lifecycle.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "2041aedcc728ea533825db0d6a6623390d942b7493020956340d98b8ec98a182"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/argparse/parsing.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "cafc40c500edf1b2f0bacb46b42d6d7d078eb1322ea28d93ce0df8b1b1eee2f4"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/argparse/relations.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "c6e398ad4dbc775544d9b2199bf5b595de68c66ae8da85189f2b100046790d04"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/argparse/subcommands.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "e7793580041116f7ee645bfb57e1504d668008f2f95c69a71b72cda5e09d6a0f"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/argparse/values.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "56ec740227beefb503942351ba1e16991d2a7fbdfa54f7f568a96672a0d79cf3"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/array.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "993c45a6ea85ec7babed93638ee2113c07d3a30fb295a4b1e364b6cb172c84b1"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/async.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "e3d43339daab058b17129f40f2e4f38f2f054586ceea58207173abef4c330906"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/async/abort_on_drop.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "6a879cc5e52a55c3e4d228181e35bb2fb68b1ae0c83758fbdcada9fdb66dfba4"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/async/concurrency.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "243bb1186ee1ace3c1c8a7a5fa7df31871fec6225b8e4361b5e9d93f4477cf9e"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/async/facility.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "a78ccc475a8fbd4869e8879a8b6b99b96ed80cf171918131c391487d86f7308d"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/async/frame.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "b63ee8f10fa52797fd7191fa400cd1a52f8d7f0059ce6b05f55b0665dc8e0c9e"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/async/lifecycle.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "58cf992859876d81f29029697aba37fb6681f8745131faeb226261cc7852dada"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/async/poll.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "09db092f52a2cbbdea46a357d10b902fbfb3eef12710b530e54771f0f2f1b0d8"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/async/runtime.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "bd15ccbcfe253c34f42a7a1906a16922bcbfdeb6d25e4de3203ce8ee9632001d"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/async/spawn_blocking.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "27bae9d13d2d005798d832b3e71d0c645cb563cebcec60e31323e9c440b62d07"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/atomic.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "618316772a871241793e147d0f02f2f2126bdf97da9e30cefeef5a0b47822be8"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/bench.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "21c1886f6133879f8cbd4a2e4eb5aadace941f5133753397ccf05d1f4241297b"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/bytes.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "a55e4c3545c7fec6795f8949a272af52ea225cc9bd577e40b88560e0c9a3ebc8"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/char.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "cf40df7903b3464452daa0f2116df9de60edd5ea617bafb3195b2be95884459c"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/clone.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "1d3202f1ad07d8a8120e8e56b9c92c4cf3a9a5145e8529e871da1675441da588"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/clone_tuple.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "e4aca87417487479af2fae962d7c1099ec13b48a5bc4cecf27b1554e91aa94d3"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/collections/btree_map.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "b46b1f14645b3dfe35023a40c8e3afbf38b9090c7f6988db1dc3e20ac9039ff8"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/collections/btree_set.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "7353aa33550371de2d529aeac237e23fcbcf1bd558b043e5b4146d3dce3be0b9"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/collections/hash_map.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "d51d725e5415b4ccccaae8e90daf546ed6f18a2519a7b63f46a76f796670b7b6"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/collections/hash_set.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "63a6706c3a68e0e969be8747398c5bd0aea73a40936495fae244b98a1892e482"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/compile.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "6b62e6fbe83a00697feb65587158ce694df90a654e4c1ffd7d12134e66778f26"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/convert.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "f8a5e5c6e36c12c6fb9567f8ab0c2b4b3a2a04cf8e7a6eb71485d9529097d9cd"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/cppstd/iter.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "0994b41810f68ac882b95e0ef7839bf7170e7966ffbbfa3d36b7942e71aecd22"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/cppstd/module_check.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "01796e9a6645669b5de3a523de8c8a3aa1333b24f9b8575554d9d092d5bd1c0d"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/deref.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "ab56b32d88ed8d41d8ddc4ca4c30708a7dcfae3fa626fce52344557747bb7715"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/enum.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "c996c097705aa2d916997766c33c90ff9a0318e5bcabddb4df64c8fb480b6beb"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/env.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "8711577dfa8331bc8cb721c675aa072c42e523cd26f357db4019cdfedcfb3199"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/error.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "0092ce632e682ddf7532d9d70351195804b657c1b20bc4e992bf6c2fb2f8b1e6"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/error_module_check.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "2945b6bfd8b18ffecc47393db905b4c834b2c89a313732c740fe17f731629128"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/ffi/c_str.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "4b58b8d155f7d9945925094cc4a5aeb30ba1321e43d9460b1a3f55f86ed11978"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/ffi/os_str.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "e2e267dbdcb4f0d35030e42a7990ca00ddbca6ee5351e69a0a8338274a3b8501"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/floats.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "2749f06b6a1c3282f5007b84d706aac75bef24a8b2688f19d2f41bd28e2c422a"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/fmt.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "cc203369a8905765c27ab5ccf473599b1d3400e9a2f48da80349c58efb6e6595"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/fs.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "329f80a2cf5ff51eefcbe804c75de89d0b97f5854e51a38d39aebfe8d152e3c6"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/fs_windows.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "f6f4be7c95bd19db5bde95c5e52490a1fe0156695c4ba5ff93cb602b3370149c"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/hint.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "dd28e72ce9928b2866e5c7afbe7461f5adddf21600a2d884c1871dab7ab43206"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/ints.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "7b24120d9c84a5f827354d4a53ea8c18e6bfb0e389aa16bde83de036bda5e75b"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/io.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "bd2df7be2792ed6680d67705a12af4155e81208c5ed494b70575d0a329decb0a"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/iter/iterator.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "947100ebe641aacbdb3cb738e211617556ec4e8eb9f656ac6cd125aacf980356"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/json/module.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "ff69d6c97b06826298a3fe6b2ab99d7abca3c6c26446ecf87e5ab3382c20207e"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/json/number.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "c5bdf8b3c43b9772f0883aa2c67891678af134aecf9a893b2ea0097518bcc09a"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/json/parser.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "ea792252d338e8c89abdcfaeb9c35d400c25d9676f718fcb8e133908b8191ef7"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/json/serialize.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "c303ca348732c76d57b8176eb88c4410bd155823a1b026e4f5ddae133e7366b3"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/json/typed.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "1a511d381bfeee0d13cf973d41138e03e81e62c0473a9cdc7327059abf803686"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/json/value.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "83268cef46f499d84eb774bff78c61eb2252a4864de1ea85eb24b3d5c8c2a054"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/log.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "6ae1c62c1232f22126fdbdee939cfbad12e9fb8ef081b0d8e0c3d3fe4210d6e4"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/log_module_check.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "6395ff1bf00f2253ae64e5c5573faeab0effa8072445b79752ec96288af4c3e4"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/net.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "41bd35517e8c7aba3782d5d0f8df9d297cac954246428aa714d2e0c11fc56d29"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/net_completion.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "c10c9c04bc3e632450119dd68268fb32980b59746b052e2759054a27ae58e6e6"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/noexcept_module_check.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "a1b6474bea3f004bf0b874cb562d36cb65875718897ae899cabbecbe01f0ddc1"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/noexcept_module_check.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "1c6708c2a84597a717d3b763d49be323b7ecb9a940ee24abbf59939da6793c27"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/num/nonzero.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "e6d89fea78e02c5f697a9bbf537863d1f52aac1ec58b5e6627bbdb5c2cbe9f73"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/option.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "4ac66b853f8965af2cf5b1602720508a70b2af1f3ba1c444e97f464db37c136a"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/os_fd.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "8c56203d6329a4c50243eb2cdbbeaf3f4abe3ae62e06bfd61c221bd6fa741d73"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/parse.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "68ec316e24bf4449267fc1a4e5584c81c1973dfb1ff5542ed37b8b7e9ec97695"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/path.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "c08273c47d329ca352c854963f7190ccc7749cf4a7f9cbd4ce5c63d95f404f51"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/prelude.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "8bcd1964024bdde921499dc41c1f7a12da648dfff47caf289978f66702ee0c7d"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/process.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "b4b944981c4cd6c081e09217a405745d87f90d8d17c624c8ff9d7e814a1f1454"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/process_windows.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "5fe98a82a5c6a986128bf48def01e5178656fbc0b12a353a6ac1406aa482a83b"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/regex.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "ae20e7f3979156533f4c0b331f2a5ab0d790ede3b785c777d0601cf66777b73e"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/result.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "1d2a93cb6ca1a9acbc6307c1651fe2d0398bf6eb623106701a527be6ebd62d0f"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/serde.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "ce984ed56ca8f88835828e81c53b996b91ce4fa6c985110b57fd243a6c116622"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/serde_cross_format.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "fcc2b9a5bb70f27fed8a8d6d5adc620b4dcaefc78a6f015c6f00b3d27f99f8d0"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/serde_fixture.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "81ab6f20c1fd22dda4b05e8a5f0e36b59c226a935d47d8d11a9382cbd42ae58a"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/slice.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "82eabfc7e6b172807610aad09e5f8d3eeeef27e1980cc6926de63251d438061b"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/source_location.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "8c05a565e458e180b5ba28b18d058f2ffe9b2c60b7f6b01ced6d5a1b2d8b8bfc"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/source_location_module_check.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "d58a3ebb1522d9f09e8165afbaedee0b18f7d5aff3de9238129b77100e8e110f"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/str.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "df23859b006ca3cf9965d96bd2ce93d2c1f8e160b180fedf04017a14a6417e3f"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/str_literal_cross_tu.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "387eb3a35785c42ee8c71cb7288008a33d9453ab48088b33bbdc783a76099201"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/str_literal_cross_tu_provider.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "5f0606dd6bd3a6baac33a405d730c91926d7ceae175dd74be763de466377f9e3"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/sync/condvar.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "0cf686a33fced20b1fd43db0b97671bc51b6cec5752f8391cc45330a722a9002"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/sync/lazy_lock.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "f476acfcee84b910b43facdfabea60814f6b282abcb7ce922ff5355fd044e238"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/sync/mpsc.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "035593a5eea50a03c8cdfca7288c4879332b865dc2a49c94c936d2ac10e2b3aa"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/sync/mutex.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "85852c0e6bded6066361937709e6be34e7a935d151a6626776bd6dd1f0572f07"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/sync/once.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "42ed7d64ef75a7fbef616f8dd5cdfd2147b825dd2817fc17ff324c40e20db4b3"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/sync/once_lock.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "59982b01f0c053af8331600762a387cc8807d6fa43b043b1792f97ba7ef27b3b"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/sys/sync/condvar/pthread.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "8bb14f0f52012226a8611c8a6822d4276bb8672d6da5b45cfe0429696943cd95"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/sys/sync/mutex/futex.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "ea4165a56221cd19f9e3050ac3b9edc819139742f189b2da9589344154436195"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/sys/sync/mutex/pthread.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "139b4efb276158e2844d2c9d37e688406e7bb2818bc5ab6b0022b67458a4c2e7"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/tenon_main.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "fb21746419459d6f05f9a01bcc276cdc3de56aca548094f7b4f73988820564da"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/test_macro.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "a291a3ad3868a2e388a2c89ebfa0a3d054696cc9d9bce4d9b104cdad67dccbcf"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/thread.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "4f51fa87aafe93ac7787b56fec404fcc588649e249a711c7a3738463210b6d86"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/thread/blocking_task_group.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "9dd92d6f2f59b49ccbca0e8e97c159d69bff59defbb34e6e2eda86d3ec3afafa"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/thread/blocking_task_set.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "64e201c14d7b6b3804a123d92d1415daf5956deb7f6930f4504bb1919a0888ba"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/thread/thread.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "7062456a76dd9b4352720109c96507aff55dd4631ba33da7c41dc605fff04b3e"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/thread/thread_pool.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "585530cf812d69f9b2bb37ab5c9a55ca51e1313e7e48857c1a2a2b0d9f2e062f"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/time.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "5beb7072df26a3c2cd6555678e87c933e4dd086cb02ece8feea06e9de7603564"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/toml/module.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "b4415aea64fbe1c2b5cdaf593b17b98606604a9df5cbf43ff6b146657553e9a2"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/toml/parser.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "d6675c5b1ac07f6ec59c2d3d65f7a0fb8a135086ce39d99e88f2792f8102b655"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/toml/serialize.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "a67ec613a232dbc8270637a36d1e1d975a7a590bb39263b39710fd960c65d9bc"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/trait.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "f067b9cc7016a6908b6525087783ed898a22a160187574428a2bd7408bb5cc6a"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/try.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "31e1bc4c0c7f7fef6095f487176ae207023bb380ad81a338ab30e0940d657473"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/try_async.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "c9913ec1e2033a70b96663ec2ef7aa162ae9e0b8641a4d221c3c7b2b4f746633"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/try_coroutine.cpp.json",
+          "before_sha256": null,
+          "after_sha256": "a4ca923c6d5a240b8fff159e9717a7d1b1e96e71362e49b577d66f7e3b551936"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-tests/test/rstd-tests/try_module_check.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "2713fdb1cfea57ecbeb0123c46dddcfd31cdb6edb9750ce8577206ceedb6615f"
+        },
+        {
+          "path": "tests/build/debug/lito-scan-cache/rstd-toml/lib/rstd-toml/src/lib.cppm.json",
+          "before_sha256": null,
+          "after_sha256": "53493e9237b52c4d5c2493c2266ad42ae4980474ddb3d802bcfac0972f36ff86"
+        },
+        {
+          "path": "tests/lito.lock",
+          "before_sha256": null,
+          "after_sha256": "92b9466615643d93221786cda8e32fcd093baae5eff6718b45f3b3aa928437a1"
+        },
+        {
+          "path": "tests/main/json/parser.cpp",
+          "before_sha256": "a5feb35cfd23e1c2841fab97f887ba1c108eb3dd198401f600fbcfd79fc635ff",
+          "after_sha256": "8d960d080a30db5aff2dfd1e0e04fe95ec5cac73753de6a5b52f902250f27a6d"
+        }
+      ]
+    },
+    {
+      "dependency": "vvk",
+      "patch": "scripts/dependency-patches/vvk.patch",
+      "sha256": "46c73dde06d6cb8db68a9ab6aaeb0892acd9f4ef9fb751c515801604f83d00ea",
+      "files": [
+        {
+          "path": "src/dispatch.cppm",
+          "before_sha256": "aa62766074be83306bf8ceeca21bdc432d76a81ec6de5be7d106fa3d97d46c95",
+          "after_sha256": "01059b76d428c7e2edff45ed96c85616776895288cbb8f2a4d7e82ca5439ce60"
+        },
+        {
+          "path": "src/ffi/vma/mod.cppm",
+          "before_sha256": "0740cd5bd33b64bd061346a942e85d7d6675132685031b0a89c35ca5961b5904",
+          "after_sha256": "09823df08e61a530c0becbc7a92d5bb8a3cbc6e75ca8bde584383676d038d77a"
+        },
+        {
+          "path": "src/ffi/vulkan/functions.cppm",
+          "before_sha256": "4581818ff7e9cec6b1e11c34f69c24ed5105cb49f7ceb69c163bea2f7f2bde79",
+          "after_sha256": "b0de19cafa8aa101789527a6e13dec6ff304d076e9ae228f21748753fd6191c4"
+        },
+        {
+          "path": "src/ffi/vulkan/types.cppm",
+          "before_sha256": "9e041e761c5b468a7d235c6fd748b4cc2e3fd0422244a38ab27074b73af114c6",
+          "after_sha256": "4546dd6b7e49e24a937e4d9f47cf3e00e7556f716c6a55f48a415ba96db7442a"
+        },
+        {
+          "path": "src/lib.cpp",
+          "before_sha256": "76a9069a7763724b165b5ebfb5bb9963db3d9f528e6f5c6da4f44534fba7706a",
+          "after_sha256": "a14cb292ab8775f899f5a23df557dacb39e84b5c25e6eb27542fd68a88b37e24"
+        },
+        {
+          "path": "src/objects.cppm",
+          "before_sha256": "0f3f2674d21af792485ea6db9649b42cf5da92c6b0b454bc2b46d2535566bb88",
+          "after_sha256": "811513e3d7e91e359b1fe0e06666908783c3a33e85f647c93a8fb71e68724c11"
+        }
+      ]
+    },
+    {
+      "dependency": "wavsen",
+      "patch": "scripts/dependency-patches/wavsen.patch",
+      "sha256": "7c7cb79b586b42fa3e5cbf06cad24cffedfeb6063399871135f7550096e41b21",
+      "files": [
+        {
+          "path": "CMakeLists.txt",
+          "before_sha256": "c5fa129521c3fffa46199db04e506ddb3f68061651c56b7e11a50cc0b9611e6a",
+          "after_sha256": "0d81edec59f0aec2de70a88a7464fbeb835930c207fb7700355edc274b64df3f"
+        },
+        {
+          "path": "lito.toml",
+          "before_sha256": "7c3a25613b433e6b2d69802d8ea0a676579c0ad6bd1b3032fac37d0d42af5f9f",
+          "after_sha256": "dc2f87e8ebb2fd3512049a858edea9fa2a5eab92bc0afbd790c8badcbe997f69"
+        },
+        {
+          "path": "shaders/nv12_to_rgba.comp",
+          "before_sha256": "d5def0d6366253374e618cd66ee6fc60e767e270ef17a92fa42c4c7e676f6468",
+          "after_sha256": "4c6d916c771866f461f1fd243ef945e00e374c71d2f7f58a56b9bcb9b195e3c0"
+        },
+        {
+          "path": "src/audio/audio_capture_unavailable.cpp",
+          "before_sha256": null,
+          "after_sha256": "39c6128936fb5caee80e81cd8d1d750150955bab1ae7ac7335c981c46205fe45"
+        },
+        {
+          "path": "src/audio/audio_device_unavailable.cpp",
+          "before_sha256": null,
+          "after_sha256": "6b05769dfe29792a9c5804d74fd3de60b0b5a81541262d917cf9d428127287dc"
+        },
+        {
+          "path": "src/audio/av_sync.cpp",
+          "before_sha256": "b5e0801286a165658e0a38c59eaede85a3ec154d9c9412fd63a4608269ae57f6",
+          "after_sha256": "c771c041d7c0994f8d9f9f6a4271a66f059f9d097bbf33a055ad28d843abc2ea"
+        },
+        {
+          "path": "src/audio/file.cpp",
+          "before_sha256": "049334237182cdd502bc61541da8f2c0244e47d178737c044b0c4a8cf99290fa",
+          "after_sha256": "a9d542006f28dd5e45e2c233b21620a3a7c85e7d05dfca23eb9bfb619f67e906"
+        },
+        {
+          "path": "src/audio/file.cppm",
+          "before_sha256": "b0be001e159aa585b62a55a2eda34ba4fc2b62fa8cef0fa6d1dbf2463eec9640",
+          "after_sha256": "740fe7e817f08e16e87b32df7e4ad8e795c62f8530b42b8a74db354d106e2549"
+        },
+        {
+          "path": "src/audio/mixer.cpp",
+          "before_sha256": "0c3577819418f299c93833ce7e1e70067748da807f21bcc8b4d20a16b22a49c0",
+          "after_sha256": "f56b52363ec4cbfc5ce0a492d2d12b10afc2f71ee3c36eb3b136039b87b1d8fb"
+        },
+        {
+          "path": "src/audio/mixer.cppm",
+          "before_sha256": "3b1dcfa27e9b668c3ce5c29a3cb27b378541028b802962c4d5bdfb3d317dcab0",
+          "after_sha256": "3a42d3fe6cfddb76da5e3fd9733dbbbc539d3ffe8170a7de86148ceeceeaf223"
+        },
+        {
+          "path": "src/ffi/ffmpeg/avcodec.cppm",
+          "before_sha256": "b506915faa534e4ac08a5556c9b9dcccf62029cc169938680b4f2c521bf33a9e",
+          "after_sha256": "742a2ae8e88f12a3dece78233c74a0f0ec21fd5989ba9234015bcf68659f1509"
+        },
+        {
+          "path": "src/ffi/ffmpeg/avutil.cppm",
+          "before_sha256": "b0fcbc5bc20af556cf1750b754383a591c03b584210f797756d99203195aeecf",
+          "after_sha256": "a96de33c2b9d1961cd43ebf03283e55b9ac6f00d7ded741c5358f918434b3745"
+        },
+        {
+          "path": "src/ffi/ffmpeg/swscale.cppm",
+          "before_sha256": "dc9ce45c926dcaf3250e38d9ca4289e3fcd39ca8112551ed3cf25ad031317dd3",
+          "after_sha256": "900fd6fcf41447765f437fd4d5a5371f8b4eb3cb1980aa02ad4d6087f9f8ee63"
+        },
+        {
+          "path": "src/video/video_decoder.cpp",
+          "before_sha256": "a3ddcdf8508a66af4ee10b488daf5407ef9205bcc6eb131c9930b647ffa12020",
+          "after_sha256": "86db39035cdbf76f5f1be66803237eb1d448c4cf9ea30524ca6dced2402cc1aa"
+        },
+        {
+          "path": "src/video/video_decoder.cppm",
+          "before_sha256": "66decbc0a4b76503fa86cf213dabba6d877b330e76c8be856f7ac8f3c8493c4d",
+          "after_sha256": "1866c2525b78081f907c32a7bc95ac3567688a0225613492b76cf0823309c1d6"
+        },
+        {
+          "path": "src/video/vk_device.cpp",
+          "before_sha256": "baf15c4e06ac73d65e60371fca39959e51ae97aa1a94b8d6dbcfaac80ba05850",
+          "after_sha256": "1fe521e43b7cbc5903f7a0968cd13147ed4ac0143f0150b0368e6f3de6d13136"
+        },
+        {
+          "path": "src/video/vk_device.cppm",
+          "before_sha256": "d9e64ef9e7ae611d4fc4b71db53aaa06dabd51e00d57f7a75ef48a81cd3f13e5",
+          "after_sha256": "1f2872e328e85f9570bf1374f61a63f0149e72878eef4dc652d93b47cee99e7f"
+        },
+        {
+          "path": "src/video/yuv_to_rgba.cpp",
+          "before_sha256": "b17cb2603e793907df1db3cbba3aad52987457dda002485088fda590d03abdd7",
+          "after_sha256": "1fa7f7e6309dccb52884a4e268be9b43476f203a65efc7c701faffdaa8bc83ae"
+        },
+        {
+          "path": "tests/offline_audio_tests.cpp",
+          "before_sha256": null,
+          "after_sha256": "3e06fec7eb68e3ad17e75840ad37a8eea0fdf60dddb25a6d80ab690a1ad3baa8"
+        }
+      ]
+    }
+  ]
+}

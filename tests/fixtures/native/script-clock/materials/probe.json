@@ -1,0 +1,14 @@
+{
+  "passes": [
+    {
+      "shader": "probe",
+      "textures": [
+        "probe-white"
+      ],
+      "blending": "normal",
+      "cullmode": "nocull",
+      "depthtest": "disabled",
+      "depthwrite": "disabled"
+    }
+  ]
+}

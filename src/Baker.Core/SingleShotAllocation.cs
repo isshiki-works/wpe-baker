@@ -1,0 +1,85 @@
+using System.Text.Json.Nodes;
+
+namespace Baker.Core;
+
+/// 两条结构/证据判据，与任何单张壁纸无关。
+/// 规则一：一次性动画轨不得进入循环视频组。
+/// 规则二：唯一视频组被不可搬动的实时绘制挡在后面时，full_frame 布局不可达。
+internal static class SingleShotAllocation
+{
+    internal const string LiveReason = "single_shot_animation";
+    internal const string PrecedingRootsField = "preceding_visible_live_roots";
+
+    private static string? Text(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+
+    private static bool? Flag(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue(out bool flag) ? flag : null;
+
+    private static int? Number(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue(out int id) ? id : null;
+
+    /// 运行时证据里 confidence=high、looping=false、playback_mode=single 的 authored 轨，其所属层
+    /// 在分配阶段判为实时：循环视频每个周期都会把只播一次的动画重播一遍，而原作在 t>duration 之后
+    /// 不再跳变，两者画面不一致。视频轨有自己的循环与时长判据，不走这条规则；confidence 不是 high
+    /// 时证据不足，维持既有的 loop.unresolved 路径，不提前下结论。
+    internal static IEnumerable<int> LiveOwners(JsonObject runtime) =>
+        (runtime["runtime_animation_periods"]?.AsArray() ?? []).OfType<JsonObject>()
+            .Where(track => !string.Equals(Text(track["mechanism"]), "video", StringComparison.OrdinalIgnoreCase) &&
+                Flag(track["looping"]) == false &&
+                string.Equals(Text(track["playback_mode"]), "single", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(Text(track["confidence"]), "high", StringComparison.OrdinalIgnoreCase))
+            .Select(track => Number(track["source_owner_layer_id"])).OfType<int>();
+
+    /// 唯一视频组不承担场景清屏、且决定这一点的那批前置可见绘制 live 根没有一个属于可提前景集合
+    /// （occlusion_tradeoff.promoted_roots）时，返回这批阻挡根；否则返回空，表示这不是不可达情形。
+    internal static int[] UnreachableBlockingRoots(JsonObject plan)
+    {
+        if (plan["video_groups"]?.AsArray() is not JsonArray groups || groups.Count != 1 ||
+            groups[0] is not JsonObject group || Flag(group["include_scene_clear"]) != false) return [];
+        int[] blocking = (group[PrecedingRootsField]?.AsArray() ?? []).Select(node => Number(node)).OfType<int>().ToArray();
+        if (blocking.Length == 0) return [];
+        var movable = (plan["occlusion_tradeoff"]?["promoted_roots"]?.AsArray() ?? []).OfType<JsonObject>()
+            .Select(entry => Number(entry["root_id"])).OfType<int>().ToHashSet();
+        return blocking.Any(movable.Contains) ? [] : blocking;
+    }
+
+    /// 陈述哪些实时绘制挡在视频组之前、为什么搬不走，并给出这个场景真正可执行的解锁路径：
+    /// 反事实实测里这一形态 4/4 都能靠关掉挡路的可取舍元素进整幅，所以不再说"改设置也没用"。
+    internal static string UnreachableReason(JsonObject plan, int[] blocking)
+    {
+        var layers = (plan["layers"]?.AsArray() ?? []).OfType<JsonObject>().ToArray();
+        string Describe(int root)
+        {
+            var owned = layers.Where(layer => Number(layer["allocation_root"] ?? layer["root"]) == root).ToArray();
+            string name = owned.Where(layer => Flag(layer["visible"]) == true && Flag(layer["drawable"]) == true)
+                .Select(layer => Text(layer["name"])).FirstOrDefault(text => !string.IsNullOrWhiteSpace(text))
+                ?? Text(owned.FirstOrDefault()?["name"]) ?? root.ToString();
+            string[] reasons = owned.SelectMany(layer => (layer["reasons"]?.AsArray() ?? []).Select(node => Text(node)))
+                .OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
+            return reasons.Length == 0 ? name : $"{name} ({string.Join(", ", reasons)})";
+        }
+        // 文案入 Messages 表（key: blocker.fullframe_unreachable），legacy 英文逐字不变，中文与新英文在 blockers_localized 里给出。
+        string listed = string.Join("; ", blocking.Select(Describe));
+        var (zh, en) = UnlockPath(layers, blocking);
+        return Messages.EmitBilingual("blocker.fullframe_unreachable", [listed, zh], [listed, en]);
+    }
+
+    /// 挡路的这批根里哪些是可取舍元素、怎么关（中英各一句）。全是视差时只要固定视角，不必排除图层。
+    private static (string Zh, string En) UnlockPath(JsonObject[] layers, int[] blocking)
+    {
+        var owned = layers.Where(layer => Number(layer["allocation_root"] ?? layer["root"]) is int root && blocking.Contains(root)).ToArray();
+        string[] kinds = [.. owned.Where(layer => Text(layer["tradeoff_class"]) == TradeoffOptions.Tradeoff)
+            .SelectMany(layer => (layer["tradeoff_kinds"]?.AsArray() ?? []).Select(node => Text(node)).OfType<string>())
+            .Distinct(StringComparer.Ordinal)];
+        bool parallax = kinds.Contains("parallax", StringComparer.Ordinal);
+        bool parallaxOnly = parallax && kinds.Length == 1;
+        string ids = string.Join(",", blocking.Order());
+        string command = parallaxOnly ? "--view-mode fixed_view"
+            : string.Join(" ", new[] { "--exclude-layers " + ids, parallax ? "--view-mode fixed_view" : null }.OfType<string>());
+        if (kinds.Length == 0)
+            return ($"用 {command} 关掉它们后重新分析", $"turn them off with {command} and analyze again");
+        return ($"关掉{TradeoffOptions.KindList(kinds, Messages.Chinese)}：{command}",
+            $"turn off {TradeoffOptions.KindList(kinds, Messages.English)}: {command}");
+    }
+}

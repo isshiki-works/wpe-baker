@@ -1,0 +1,166 @@
+--- a/src/dispatch.cppm
++++ b/src/dispatch.cppm
+@@ -86,6 +86,7 @@
+     PFN_vkCmdPushDescriptorSetKHR                vkCmdPushDescriptorSetKHR {};
+     PFN_vkCmdPushDescriptorSetWithTemplateKHR    vkCmdPushDescriptorSetWithTemplateKHR {};
+     PFN_vkCmdResolveImage                        vkCmdResolveImage {};
++    PFN_vkCmdResetQueryPool                      vkCmdResetQueryPool {};
+     PFN_vkCmdSetBlendConstants                   vkCmdSetBlendConstants {};
+     PFN_vkCmdSetDepthBias                        vkCmdSetDepthBias {};
+     PFN_vkCmdSetDepthBounds                      vkCmdSetDepthBounds {};
+@@ -97,6 +98,7 @@
+     PFN_vkCmdSetStencilWriteMask                 vkCmdSetStencilWriteMask {};
+     PFN_vkCmdSetViewport                         vkCmdSetViewport {};
+     PFN_vkCmdWaitEvents                          vkCmdWaitEvents {};
++    PFN_vkCmdWriteTimestamp                      vkCmdWriteTimestamp {};
+     PFN_vkCreateBuffer                           vkCreateBuffer {};
+     PFN_vkCreateBufferView                       vkCreateBufferView {};
+     PFN_vkCreateCommandPool                      vkCreateCommandPool {};
+--- a/src/ffi/vma/mod.cppm
++++ b/src/ffi/vma/mod.cppm
+@@ -1,42 +1,45 @@
+-module;
+-
+-#include <vulkan/vulkan.h>
+-
+-#define VMA_VULKAN_HEADERS_ALREADY_INCLUDED 1
+-#include <vk_mem_alloc.h>
+-
+-export module vvk:ffi.vma;
+-
+-export import :ffi.vulkan;
+-
+-export using ::VMA_MEMORY_USAGE_CPU_ONLY;
+-export using ::VMA_MEMORY_USAGE_GPU_ONLY;
+-
+-export using ::VmaAllocation;
+-export using ::VmaAllocationCreateInfo;
+-export using ::VmaAllocationInfo;
+-export using ::VmaAllocator;
+-export using ::VmaAllocatorCreateInfo;
+-export using ::VmaBudget;
+-export using ::VmaMemoryUsage;
+-export using ::VmaVirtualAllocation;
+-export using ::VmaVirtualAllocationCreateInfo;
+-export using ::VmaVirtualBlock;
+-export using ::VmaVirtualBlockCreateInfo;
+-
+-export using ::vmaClearVirtualBlock;
+-export using ::vmaCreateAllocator;
+-export using ::vmaCreateBuffer;
+-export using ::vmaCreateImage;
+-export using ::vmaCreateVirtualBlock;
+-export using ::vmaDestroyAllocator;
+-export using ::vmaDestroyBuffer;
+-export using ::vmaDestroyImage;
+-export using ::vmaDestroyVirtualBlock;
+-export using ::vmaFlushAllocation;
+-export using ::vmaGetHeapBudgets;
+-export using ::vmaIsVirtualBlockEmpty;
+-export using ::vmaMapMemory;
+-export using ::vmaUnmapMemory;
+-export using ::vmaVirtualAllocate;
+-export using ::vmaVirtualFree;
++module;
++
++#include <vulkan/vulkan.h>
++
++#define VMA_VULKAN_HEADERS_ALREADY_INCLUDED 1
++#include <vk_mem_alloc.h>
++
++export module vvk:ffi.vma;
++
++export import :ffi.vulkan;
++
++export using ::VMA_MEMORY_USAGE_CPU_ONLY;
++export using ::VMA_MEMORY_USAGE_CPU_TO_GPU;
++export using ::VMA_MEMORY_USAGE_GPU_ONLY;
++export using ::VMA_MEMORY_USAGE_GPU_TO_CPU;
++
++export using ::VmaAllocation;
++export using ::VmaAllocationCreateInfo;
++export using ::VmaAllocationInfo;
++export using ::VmaAllocator;
++export using ::VmaAllocatorCreateInfo;
++export using ::VmaBudget;
++export using ::VmaMemoryUsage;
++export using ::VmaVirtualAllocation;
++export using ::VmaVirtualAllocationCreateInfo;
++export using ::VmaVirtualBlock;
++export using ::VmaVirtualBlockCreateInfo;
++
++export using ::vmaClearVirtualBlock;
++export using ::vmaCreateAllocator;
++export using ::vmaCreateBuffer;
++export using ::vmaCreateImage;
++export using ::vmaCreateVirtualBlock;
++export using ::vmaDestroyAllocator;
++export using ::vmaDestroyBuffer;
++export using ::vmaDestroyImage;
++export using ::vmaDestroyVirtualBlock;
++export using ::vmaFlushAllocation;
++export using ::vmaGetHeapBudgets;
++export using ::vmaIsVirtualBlockEmpty;
++export using ::vmaInvalidateAllocation;
++export using ::vmaMapMemory;
++export using ::vmaUnmapMemory;
++export using ::vmaVirtualAllocate;
++export using ::vmaVirtualFree;
+--- a/src/ffi/vulkan/functions.cppm
++++ b/src/ffi/vulkan/functions.cppm
+@@ -122,6 +122,7 @@
+     using ::PFN_vkCmdPushDescriptorSetKHR;
+     using ::PFN_vkCmdPushDescriptorSetWithTemplateKHR;
+     using ::PFN_vkCmdResolveImage;
++    using ::PFN_vkCmdResetQueryPool;
+     using ::PFN_vkCmdSetBlendConstants;
+     using ::PFN_vkCmdSetDepthBias;
+     using ::PFN_vkCmdSetDepthBounds;
+@@ -133,6 +134,7 @@
+     using ::PFN_vkCmdSetStencilWriteMask;
+     using ::PFN_vkCmdSetViewport;
+     using ::PFN_vkCmdWaitEvents;
++    using ::PFN_vkCmdWriteTimestamp;
+     using ::PFN_vkCreateBuffer;
+     using ::PFN_vkCreateBufferView;
+     using ::PFN_vkCreateCommandPool;
+--- a/src/ffi/vulkan/types.cppm
++++ b/src/ffi/vulkan/types.cppm
+@@ -169,6 +169,7 @@
+     using ::VkPipelineRasterizationStateCreateInfo;
+     using ::VkPipelineShaderStageCreateInfo;
+     using ::VkPipelineStageFlags;
++    using ::VkPipelineStageFlagBits;
+     using ::VkPipelineStageFlags2;
+     using ::VkPipelineVertexInputStateCreateInfo;
+     using ::VkPipelineViewportStateCreateInfo;
+--- a/src/lib.cpp
++++ b/src/lib.cpp
+@@ -109,6 +109,8 @@
+     X(vkCmdWaitEvents);
+     X(vkCmdSetLineWidth);
+     X(vkCmdResolveImage);
++    X(vkCmdResetQueryPool);
++    X(vkCmdWriteTimestamp);
+     X(vkCreateBuffer);
+     X(vkCreateBufferView);
+     X(vkCreateCommandPool);
+--- a/src/objects.cppm
++++ b/src/objects.cppm
+@@ -275,6 +275,16 @@
+ 
+     void EndQuery(VkQueryPool query_pool, rstd::uint32_t query) const noexcept {
+         dld->vkCmdEndQuery(handle, query_pool, query);
++    }
++
++    void ResetQueryPool(VkQueryPool query_pool, rstd::uint32_t first_query,
++                        rstd::uint32_t query_count) const noexcept {
++        dld->vkCmdResetQueryPool(handle, query_pool, first_query, query_count);
++    }
++
++    void WriteTimestamp(VkPipelineStageFlagBits stage, VkQueryPool query_pool,
++                        rstd::uint32_t query) const noexcept {
++        dld->vkCmdWriteTimestamp(handle, stage, query_pool, query);
+     }
+ 
+     void BindDescriptorSets(VkPipelineBindPoint bind_point, VkPipelineLayout layout,

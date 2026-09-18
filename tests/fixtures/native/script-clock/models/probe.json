@@ -1,0 +1,6 @@
+{
+  "material": "materials/probe.json",
+  "width": 256,
+  "height": 128,
+  "autosize": false
+}

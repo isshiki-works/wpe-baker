@@ -1,0 +1,92 @@
+{
+  "archives": [
+    {
+      "name": "ninja",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip",
+      "sha256": "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65",
+      "path": ".tools\\ninja"
+    },
+    {
+      "name": "cmake",
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3-windows-x86_64.zip",
+      "sha256": "4d52ebab7193a698651639ed80d8d04fd903358843572cf44c7fd234cb7c26ab",
+      "path": ".tools\\cmake"
+    },
+    {
+      "name": "pkgconf",
+      "url": "https://github.com/pkgconf/pkgconf/releases/download/pkgconf-3.0.7/pkgconf-x64-3.0.7.msi",
+      "sha256": "7a316dba4a4498ea952b746c82deed41c597657095a0f776b75654191b45ae44",
+      "path": ".tools/pkgconf",
+      "extraction": "read-only MSI database and cabinet extraction; no installation"
+    },
+    {
+      "name": "llvm-mingw-22",
+      "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip",
+      "sha256": "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35",
+      "path": ".tools/llvm-mingw-22",
+      "version": "Clang 22.1.8 / UCRT / x86_64-w64-windows-gnu"
+    },
+    {
+      "name": "make-msys",
+      "url": "https://repo.msys2.org/msys/x86_64/make-4.4.1-3-x86_64.pkg.tar.zst",
+      "sha256": "af0bdba17f06fe037f0194069adaa31a8fe45f1a11381501896aea1fae37bd5d",
+      "upstream_digest_verified": true,
+      "path": ".tools/ffmpeg-build"
+    },
+    {
+      "name": "nasm",
+      "url": "https://www.nasm.us/pub/nasm/releasebuilds/3.02/win64/nasm-3.02-win64.zip",
+      "sha256": "161d0bfaff53c2f9e9f3e69fd0672323ebabafd1268976a5cec11be92a19aee7",
+      "upstream_digest_verified": false,
+      "path": ".tools/nasm"
+    }
+  ],
+  "git_for_windows": "git version 2.52.0.windows.1",
+  "actual_tool_files": [
+    {
+      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\llvm-mingw-22\\bin\\clang.exe",
+      "sha256": "a8b7a614eeadd9105f814be3701a7f312cda4cea51751b75b408c16100c94e85"
+    },
+    {
+      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\llvm-mingw-22\\bin\\ld.lld.exe",
+      "sha256": "ebc594a240cd325f1ea8b865ee88da0d004e94ea31eb1fc3f7f8f0ff8d93f58f"
+    },
+    {
+      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\nasm\\nasm.exe",
+      "sha256": "04ec2385879f7e1c45dbe76c4020970555de48eeb97c23f59620ede061328f51"
+    },
+    {
+      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\ffmpeg-build\\usr\\bin\\make.exe",
+      "sha256": "91b7e155590d59db22e5eb0a3ffeec6350149f70f9ed2c242d133e584eb72fee"
+    },
+    {
+      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\cmake\\bin\\cmake.exe",
+      "sha256": "ab8247ca4554871e5d75c0ee118ee8663727bd6fdf37ad76b17e9cc8d5f286a8"
+    },
+    {
+      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\ninja\\ninja.exe",
+      "sha256": "e52a7ad9538d9618c67a0bd777964e2eec8a30f68b810a2f6adce1f2daf847b8"
+    },
+    {
+      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\llvm-mingw-22\\x86_64-w64-mingw32\\lib\\libc++.a",
+      "sha256": "a563f5a45aab4d3fd9f1a86f84e228f8c3463fe269fcd6bd9522a62b473c29dc"
+    },
+    {
+      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\llvm-mingw-22\\x86_64-w64-mingw32\\lib\\libunwind.a",
+      "sha256": "e3323763cfd160c1f14998ae2da92ddde9f17f9c337282597ba1ef4074882935"
+    },
+    {
+      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\pkgconf\\bin\\pkgconf.exe",
+      "sha256": "1ff3306d492ad9e2fdb677c5e01eb86408cbea374811ed686b8ef970577d66b9"
+    },
+    {
+      "file": "C:\\Program Files\\Git\\bin\\bash.exe",
+      "sha256": "c79fa1cd106bd3e2321f87e580930142ba9309d17b968fa5e3e71dedbbdc36aa"
+    },
+    {
+      "file": "C:\\Program Files\\Git\\usr\\bin\\msys-2.0.dll",
+      "sha256": "b41bfda735cd7686ab4c2b56b4cc6a6fc6c33992b1739626be94d7ae1e8eed0b"
+    }
+  ],
+  "shell_requirement": "Git for Windows supplies Bash, MSYS runtime and standard POSIX build utilities; no WSL is used."
+}

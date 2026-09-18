@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Periodica: deterministic animation baking for Wallpaper Engine. WPE Baker bakes a scene's periodic animation into one seamless video — up to 96% less GPU power, measured in the official player.">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<title>Periodica</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --paper:#f4f6f8;--paper2:#ffffff;--rule:#d5dbe2;--rule2:#e6eaef;
+  --ink:#171c23;--ink2:#3b4653;--dim:#7a8593;
+  --signal:#0e7f6d;--signal2:#0a6357;--trace:#5b6875;--mark:#c9741a;
+  --display:"Bricolage Grotesque","Instrument Sans",system-ui,sans-serif;
+  --body:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1140px;margin:0 auto;padding-inline:20px}
+a{color:var(--signal2)}
+a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--mark);outline-offset:3px}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--signal)}
+.mono{font-family:var(--mono)}
+img,video{max-width:100%}
+nav{display:flex;justify-content:space-between;align-items:center;padding-block:16px;border-bottom:1px solid var(--rule)}
+.logo{font-family:var(--display);font-weight:800;font-size:19px;letter-spacing:.02em}
+.logo small{font-family:var(--mono);font-weight:400;font-size:11px;color:var(--dim);margin-left:10px;letter-spacing:.08em}
+nav .links{display:flex;gap:22px;font-size:14px}
+nav .links a{color:var(--ink2);text-decoration:none}
+/* hero */
+.hero{display:grid;grid-template-columns:.9fr 1.1fr;gap:40px;align-items:center;padding-block:48px 36px}
+.hero h1{font-size:clamp(34px,4.4vw,54px);font-weight:800;line-height:1.02;letter-spacing:-.03em;margin-top:14px}
+.hero h1 span{color:var(--signal)}
+.hero p.lead{font-size:17px;color:var(--ink2);max-width:34em;margin:18px 0 0}
+.cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px;align-items:center}
+.btn{display:inline-block;padding:12px 20px;border-radius:4px;font-family:var(--display);font-weight:700;font-size:15px;text-decoration:none}
+.btn.primary{background:var(--ink);color:var(--paper2)}
+.btn.ghost{border:1px solid var(--rule);color:var(--ink);background:var(--paper2)}
+.fine{font-family:var(--mono);font-size:12px;color:var(--dim)}
+.screen{background:var(--paper2);border:1px solid var(--rule);border-radius:6px;overflow:hidden}
+.screen video{display:block;width:100%;aspect-ratio:16/9;background:#111}
+.screen .bar{display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 14px;font-family:var(--mono);font-size:11px;color:var(--ink2);border-top:1px solid var(--rule2);align-items:center}
+.screen .bar b{font-family:var(--display);font-size:22px;color:var(--signal);font-weight:800;letter-spacing:-.02em}
+.screen .bar .tag{color:var(--dim)}
+/* strip */
+.strip{display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.strip div{padding:18px 16px 18px 0;border-right:1px solid var(--rule);margin-right:16px}
+.strip div:last-child{border-right:0}
+.strip .n{font-family:var(--display);font-size:30px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.strip .l{font-size:13px;color:var(--ink2);margin-top:2px}
+section{padding-block:64px;border-bottom:1px solid var(--rule)}
+section h2{font-size:clamp(26px,3.2vw,38px);font-weight:700;margin-top:8px;max-width:20em}
+section p.sub{color:var(--ink2);font-size:17px;max-width:40em;margin:14px 0 0}
+/* trace */
+.trace{background:var(--paper2);border:1px solid var(--rule);border-radius:6px;padding:18px 18px 14px;margin-top:28px}
+.trace .hdr{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:.04em;margin-bottom:8px}
+.trace svg{width:100%;height:auto;display:block}
+.trace .legend{display:flex;gap:18px;font-family:var(--mono);font-size:11px;color:var(--ink2);margin-top:8px}
+.legend i{display:inline-block;width:18px;height:2px;vertical-align:middle;margin-right:6px}
+.tr-o{stroke:var(--trace);stroke-width:1.6;fill:none}
+.tr-b{stroke:var(--signal);stroke-width:2;fill:none;stroke-dasharray:1400;stroke-dashoffset:1400;animation:draw 2.2s .3s ease-out forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+@media (prefers-reduced-motion:reduce){.tr-b{animation:none;stroke-dashoffset:0}}
+.ax{stroke:var(--rule);stroke-width:1}
+.axl{font-family:var(--mono);font-size:10px;fill:var(--dim)}
+.band{fill:var(--rule2)}
+.bandl{font-family:var(--mono);font-size:10px;fill:var(--ink2);text-anchor:middle}
+/* compare slider */
+.cmp{position:relative;margin-top:28px;border:1px solid var(--rule);border-radius:6px;overflow:hidden;background:#111;aspect-ratio:16/9;max-width:100%}
+.cmp img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.cmp .top{clip-path:inset(0 50% 0 0)}
+.cmp .div{position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--paper2);box-shadow:0 0 0 1px rgba(0,0,0,.25);pointer-events:none}
+.cmp .div::after{content:"⇆";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:38px;height:38px;border-radius:50%;background:var(--paper2);color:var(--ink);font-family:var(--mono);font-size:15px;display:grid;place-items:center;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.cmp input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:ew-resize}
+.cmp .lab{position:absolute;top:12px;font-family:var(--mono);font-size:11px;color:#fff;background:rgba(0,0,0,.55);padding:4px 8px;border-radius:3px;pointer-events:none}
+.cmp .lab.l{left:12px}.cmp .lab.r{right:12px}
+/* gui mock */
+.gui{margin-top:28px;background:var(--paper2);border:1px solid var(--rule);border-radius:8px;overflow:hidden;box-shadow:0 20px 50px -30px rgba(23,28,35,.35)}
+.gui .title{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:12px;color:var(--ink2)}
+.gui .title .dots i{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--rule);margin-right:6px}
+.gui .title button{font:inherit;font-size:11px;border:1px solid var(--rule);background:var(--paper);border-radius:3px;padding:3px 8px;cursor:pointer;color:var(--ink2)}
+.gui .body{display:grid;grid-template-columns:300px 1fr;min-height:360px}
+.gui .left{border-right:1px solid var(--rule);padding:16px;display:grid;gap:14px;align-content:start;font-size:13px}
+.gui .field label{display:block;font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+.gui .box{border:1px solid var(--rule);border-radius:4px;padding:8px 10px;font-family:var(--mono);font-size:12px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gui .seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.gui .seg span{padding:7px 0;text-align:center;font-size:12px;color:var(--ink2)}
+.gui .seg span.on{background:var(--ink);color:var(--paper2)}
+.gui .chk{display:flex;gap:8px;align-items:center;color:var(--ink2);font-size:12px}
+.gui .chk i{width:14px;height:14px;border:1px solid var(--rule);border-radius:3px;display:inline-block}
+.gui .chk small{color:var(--dim)}
+.gui .go{margin-top:6px;background:var(--ink);color:var(--paper2);text-align:center;padding:10px;border-radius:4px;font-family:var(--display);font-weight:700}
+.gui .right{padding:22px 24px}
+.gui .verdict{font-family:var(--display);font-size:30px;font-weight:800;letter-spacing:-.02em;color:var(--signal2)}
+.gui .next{color:var(--ink2);margin-top:4px;font-size:14px}
+.gui details{margin-top:18px;border-top:1px solid var(--rule)}
+.gui summary{cursor:default;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);padding:10px 0}
+.gui .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;font-size:13px}
+.gui .kv span:nth-child(odd){color:var(--dim);font-family:var(--mono);font-size:12px}
+.gui .kv span:nth-child(even){font-variant-numeric:tabular-nums}
+.gui .card{margin-top:18px;border:1px solid var(--rule);border-radius:4px;padding:12px 14px;font-size:13px}
+.gui .card h4{margin:0 0 8px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:500}
+.gui .card ul{margin:0;padding-left:16px;color:var(--ink2);display:grid;gap:4px}
+/* table */
+table{width:100%;border-collapse:collapse;margin-top:28px;font-size:14px}
+th{font-family:var(--mono);font-weight:500;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);text-align:left;padding:10px 12px 10px 0;border-bottom:1px solid var(--rule)}
+td{padding:11px 12px 11px 0;border-bottom:1px solid var(--rule2);vertical-align:middle;font-variant-numeric:tabular-nums}
+td.num{font-family:var(--mono);text-align:right;white-space:nowrap}
+td .id{font-family:var(--mono);font-size:11px;color:var(--dim);display:block}
+td.delta{font-family:var(--mono);color:var(--signal2);font-weight:500;text-align:right;white-space:nowrap}
+.tbar{display:inline-block;height:8px;background:var(--signal);border-radius:1px;vertical-align:middle}
+.tbar.o{background:var(--trace)}
+.tablewrap{overflow-x:auto}
+.note{font-family:var(--mono);font-size:12px;color:var(--dim);margin-top:14px}
+/* gallery */
+.gal{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-top:28px}
+.gal figure{margin:0;background:var(--paper2);border:1px solid var(--rule);border-radius:6px;overflow:hidden}
+.gal img{display:block;width:100%;aspect-ratio:1;object-fit:cover}
+.gal figcaption{padding:10px 12px;font-size:12px;color:var(--ink2)}
+.gal figcaption b{display:block;font-family:var(--display);font-size:20px;color:var(--signal2);letter-spacing:-.02em}
+.gal figcaption small{display:block;font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:2px}
+/* two col */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:32px}
+.two h3{font-size:18px;font-weight:700;margin-bottom:10px}
+.two ul{margin:0;padding-left:18px;color:var(--ink2);font-size:15px;display:grid;gap:8px}
+.tag{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:3px 7px;border:1px solid var(--rule);border-radius:3px;margin-left:8px;vertical-align:middle}
+.tag.exp{color:var(--mark);border-color:#e8c9a3}
+/* spec */
+.spec{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;margin-top:32px;align-items:start}
+.spec p{color:var(--ink2);font-size:16px;margin:0 0 12px}
+.kvs{border-top:1px solid var(--rule)}
+.kvs div{display:grid;grid-template-columns:1fr 1.3fr;gap:12px;padding-block:10px;border-bottom:1px solid var(--rule2);font-size:14px}
+.kvs div span:first-child{font-family:var(--mono);font-size:12px;color:var(--dim);padding-top:2px}
+.kvs div span:last-child{font-variant-numeric:tabular-nums}
+/* roadmap */
+.road{display:grid;grid-template-columns:repeat(4,1fr);gap:22px;margin-top:32px}
+.road div{border-top:2px solid var(--rule);padding-top:12px}
+.road div.now{border-top-color:var(--signal)}
+.road div.big{border-top-color:var(--mark)}
+.road .when{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:.1em}
+.road h3{font-size:17px;font-weight:700;margin-top:6px}
+.road p{color:var(--ink2);font-size:14px;margin:8px 0 0}
+/* faq */
+.faq{margin-top:28px;border-top:1px solid var(--rule)}
+.faq details{border-bottom:1px solid var(--rule)}
+.faq summary{cursor:pointer;padding:16px 0;font-family:var(--display);font-weight:700;font-size:17px;list-style:none;display:flex;justify-content:space-between}
+.faq summary::after{content:"+";font-family:var(--mono);color:var(--dim)}
+.faq details[open] summary::after{content:"–"}
+.faq details p{margin:0;padding:0 0 18px;color:var(--ink2);font-size:15px;max-width:44em}
+footer{padding-block:26px;font-family:var(--mono);font-size:12px;color:var(--dim);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+@media (max-width:900px){
+  .hero{grid-template-columns:1fr;padding-block:32px 24px}
+  .strip{grid-template-columns:repeat(2,1fr)}
+  .strip div:nth-child(2n){border-right:0}
+  .gui .body{grid-template-columns:1fr}
+  .gui .left{border-right:0;border-bottom:1px solid var(--rule)}
+  .gal{grid-template-columns:repeat(2,1fr)}
+  .two,.spec,.road{grid-template-columns:1fr}
+  nav .links{display:none}
+}
+</style>
+
+<div class="wrap">
+<nav>
+  <div class="logo">PERIODICA<small>WPE BAKER · 1.0</small></div>
+  <div class="links"><a href="#loop">The loop</a><a href="#numbers">Numbers</a><a href="#refresh">Refresh rate</a><a href="#gui">The tool</a><a href="#astra">Built with Astra</a><a href="#roadmap">Roadmap</a></div>
+</nav>
+
+<div class="hero">
+  <div>
+    <div class="eyebrow">Deterministic animation baking</div>
+    <h1>Your wallpaper renders forever.<br><span>Bake it once.</span></h1>
+    <p class="lead">WPE Baker is the first product built on Periodica. It models a Wallpaper Engine scene's entire animation math and retunes its periods until the whole scene closes into one baked video. Same look; deterministic effects baked, interactive ones kept live or left out. Up to 96% less GPU load and power, even on battery.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/latest">Download for Windows</a>
+      <a class="btn ghost" href="#numbers">Read the measurements</a>
+    </div>
+    <div class="fine" style="margin-top:12px">open source · portable · no model calls at runtime</div>
+  </div>
+  <div class="screen">
+    <video src="site/hero-landscape.mp4" autoplay muted loop playsinline aria-label="Baked wallpaper output playing as a seamless 50-second loop"></video>
+    <div class="bar"><span>THIS IS THE BAKED OUTPUT, LOOPING · Lost Landscape 3 (northway, 329k subscribers)<br><span class="tag">original: 37 layers, 11 particle systems, 71 shader passes every frame · baked: one seam-checked 50 s loop at 60 fps, playing here as a 3.4 MB file</span></span><b>−57%</b></div>
+  </div>
+</div>
+
+<div class="strip">
+  <div><div class="n">113</div><div class="l">wallpapers measured in the official player</div></div>
+  <div><div class="n">up to −96%</div><div class="l">GPU load and power on baked scenes</div></div>
+  <div><div class="n">−76%</div><div class="l">trimmed mean, iGPU rail, 7 measured outputs</div></div>
+  <div><div class="n">1,400+</div><div class="l">automated checks in the release build</div></div>
+  <div><div class="n">0</div><div class="l">model calls at runtime</div></div>
+</div>
+
+<section id="loop">
+  <div class="eyebrow">The loop</div>
+  <h2>Solved from the math, so it closes by construction.</h2>
+  <p class="sub">A frame-comparison tool guesses where a video might repeat. Periodica reads the equations that produce the motion — shader time, animation tracks, particle cycles, video timebases — and retunes them into one common period. Drag the divider: the first frame and the last frame of the 50-second loop above.</p>
+  <div class="cmp" id="cmp">
+    <img src="site/land-last.jpg" alt="Last frame of the baked loop">
+    <img class="top" id="cmpTop" src="site/land-first.jpg" alt="First frame of the baked loop">
+    <div class="div" id="cmpDiv"></div>
+    <span class="lab l">frame 1</span><span class="lab r">frame 3,000</span>
+    <input type="range" id="cmpRange" min="0" max="100" value="50" aria-label="Compare first and last frame">
+  </div>
+  <div class="trace" aria-label="Power trace, original vs baked, A/B/B/A run">
+    <div class="hdr"><span>RAPL PP1 · iGPU rail · W · Nijika (3650475846)</span><span>A / B / B / A · 45 s samples · Arc B390</span></div>
+    <svg viewBox="0 0 560 300" role="img" aria-label="Original stays near 22 watts; baked output stays near 2 watts">
+      <rect class="band" x="40" y="14" width="120" height="250"></rect>
+      <rect class="band" x="300" y="14" width="120" height="250"></rect>
+      <text class="bandl" x="100" y="28">A · original</text>
+      <text class="bandl" x="230" y="28">B · baked</text>
+      <text class="bandl" x="360" y="28">B · baked</text>
+      <text class="bandl" x="490" y="28">A · original</text>
+      <line class="ax" x1="40" y1="264" x2="560" y2="264"></line>
+      <line class="ax" x1="40" y1="14" x2="40" y2="264"></line>
+      <text class="axl" x="6" y="52">25</text><line class="ax" x1="36" y1="48" x2="40" y2="48"></line>
+      <text class="axl" x="6" y="140">12.5</text><line class="ax" x1="36" y1="136" x2="40" y2="136"></line>
+      <text class="axl" x="12" y="268">0</text>
+      <text class="axl" x="40" y="286">0 s</text><text class="axl" x="270" y="286">90 s</text><text class="axl" x="518" y="286">180 s</text>
+      <path class="tr-o" d="M40,72 L52,70 L64,74 L76,69 L88,73 L100,71 L112,75 L124,70 L136,72 L148,69 L160,73 L168,120 L176,205 L184,240 L188,244"></path>
+      <path class="tr-o" d="M420,246 L424,232 L430,170 L436,96 L442,73 L452,70 L464,73 L476,70 L488,74 L500,71 L512,72 L524,69 L536,73 L548,71 L556,72"></path>
+      <path class="tr-b" d="M188,244 L200,246 L212,244 L224,247 L236,245 L248,246 L260,244 L272,247 L284,245 L296,246 L308,245 L320,247 L332,244 L344,246 L356,245 L368,247 L380,244 L392,246 L404,245 L416,247 L420,246"></path>
+      <text class="axl" x="164" y="66">22.5 W</text>
+      <text class="axl" x="244" y="238" style="fill:#0e7f6d">1.86 W · −92%</text>
+    </svg>
+    <div class="legend"><span><i style="background:var(--trace)"></i>Original scene</span><span><i style="background:var(--signal)"></i>Baked output</span></div>
+  </div>
+</section>
+
+<section id="period">
+  <div class="eyebrow">The hard part</div>
+  <h2>Most scenes have no period. Periodica makes one.</h2>
+  <p class="sub">A wave at 7.3 s, a sway at 11.1 s, a particle cycle at 4.6 s and a video at 20 s never line up again; a naive recording would need hours to repeat and would still show a cut. Periodica solves each component's own period, then retunes their speeds by a fraction of a percent so they share one common loop — a period the artist never authored.</p>
+  <div class="rows">
+    <div class="row"><div class="k">BUDGET</div><h3>A visible-change budget, not a tolerance</h3><p>Three presets cap how far any component may be retuned: Efficiency 5%, Balanced 3%, Quality the smallest change that still closes. Yuri's 100 periodic components were reconciled into one 180.4 s loop; Nijika's 20 into 44 s; Ayanami Rei's scene closes in 56.2 s with a total retime of 4.68%.</p></div>
+    <div class="row"><div class="k">GUARDS</div><h3>Rules that keep it invisible</h3><p>The slowest visible component completes at least three cycles per loop; visible drift stays under 0.2 px/s; sways are retuned in frequency only, never in path. Every retune is bounded per component and listed in the report. If the rules cannot be met, the layer stays live and the report says which one.</p></div>
+    <div class="row"><div class="k">PROOF</div><h3>Seams verified against the original's own motion</h3><p>Every output is rendered past its loop point and compared tile by tile with the original's next frame before it is accepted; that proves the loop closes, and the per-component budget bounds how far any motion drifts from the original over the whole loop.</p></div>
+  </div>
+</section>
+
+<section id="gui">
+  <div class="eyebrow">The tool</div>
+  <h2>Drag a scene in. Read one line.</h2>
+  <p class="sub">The verdict is one of four fixed states. Numbers, routes and reasons live under Details; a card lists anything the bake left out.</p>
+  <div class="gui" id="gui">
+    <div class="title"><span class="dots"><i></i><i></i><i></i></span><span>WPE Baker</span><button type="button" id="langBtn">中文</button></div>
+    <div class="body">
+      <div class="left">
+        <div class="field"><label data-i="src">Scene</label><div class="box">D:\Steam\workshop\431960\3258032485\scene.pkg</div></div>
+        <div class="field"><label data-i="preset">Preset</label><div class="seg"><span data-i="p1">Efficiency</span><span class="on" data-i="p2">Balanced</span><span data-i="p3">Quality</span></div></div>
+        <div class="field"><label data-i="out">Output</label><div class="box">3200 × 1800 · 60 fps · auto</div></div>
+        <div class="chk"><i></i><span data-i="keep">Keep live elements <small>(experimental: may increase GPU load)</small></span></div>
+        <div class="go" data-i="go">Generate</div>
+      </div>
+      <div class="right">
+        <div class="verdict" data-i="v">Ready to generate</div>
+        <div class="next" data-i="n">Click Generate to start.</div>
+        <details open>
+          <summary data-i="d">Details</summary>
+          <div class="kv">
+            <span data-i="k1">Loop</span><span data-i="v1">56.2 s · 3,372 frames @ 60 fps · retime 4.68%</span>
+            <span data-i="k2">Video groups</span><span data-i="v2">1 opaque full-frame video, 0 live layers</span>
+            <span data-i="k3">Original power</span><span data-i="v3">2.29 W on the iGPU rail (measured 30 s in the official player)</span>
+            <span data-i="k4">Seam check</span><span data-i="v4">encoded seams passed</span>
+          </div>
+        </details>
+        <div class="card"><h4 data-i="c">Not included in this bake</h4><ul><li data-i="c1">Mouse parallax (fixed view)</li><li data-i="c2">Audio-reactive lighting</li></ul></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="numbers">
+  <div class="eyebrow">Measurements</div>
+  <h2>Every number here was read off a power counter.</h2>
+  <p class="sub">Intel Arc B390 laptop, official Wallpaper Engine, A/B/B/A runs at 60 fps, RAPL iGPU rail. Original scene against its baked output.</p>
+  <div class="gal">
+    <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 wallpaper preview"><figcaption><b>−57%</b>Lost Landscape 3<small>3713073223 · 329k subs · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3448877775.jpg" alt="Alone wallpaper preview"><figcaption><b>−82%</b>Alone<small>3448877775 · 665k subs · state split</small></figcaption></figure>
+    <figure><img src="site/thumb-3650475846.jpg" alt="Nijika wallpaper preview"><figcaption><b>−92%</b>Nijika<small>3650475846 · 109k subs · whole frame</small></figcaption></figure>
+    <figure><img src="site/thumb-3426865175.jpg" alt="Frieren wallpaper preview"><figcaption><b>−65%</b>Frieren<small>3426865175 · 642k subs · fixed view + layers</small></figcaption></figure>
+    <figure><img src="site/thumb-3669681034.jpg" alt="Atri wallpaper preview"><figcaption><b>−90%</b>Atri<small>3669681034 · 195k subs · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3685247684.jpg" alt="Ultraman Leo wallpaper preview"><figcaption><b>−73%</b>Ultraman Leo<small>3685247684 · effect prefix + live</small></figcaption></figure>
+  </div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Wallpaper</th><th>Original</th><th>Baked</th><th style="text-align:right">Change</th><th>Route</th></tr></thead>
+    <tbody>
+      <tr><td>Nijika (Bocchi the Rock!)<span class="id">3650475846</span></td><td class="num"><span class="tbar o" style="width:112px"></span> 22.51 W</td><td class="num"><span class="tbar" style="width:9px"></span> 1.86 W</td><td class="delta">−91.7%</td><td>whole frame</td></tr>
+      <tr><td>Alone (day/night scene)<span class="id">3448877775</span></td><td class="num"><span class="tbar o" style="width:28px"></span> 5.66 W</td><td class="num"><span class="tbar" style="width:5px"></span> 1.05 W</td><td class="delta">−81.5%</td><td>state split + layers</td></tr>
+      <tr><td>Atri — My Dear Moments<span class="id">3669681034</span></td><td class="num"><span class="tbar o" style="width:42px"></span> 8.45 W</td><td class="num"><span class="tbar" style="width:4px"></span> 0.81 W</td><td class="delta">−90.4%</td><td>effect prefix</td></tr>
+      <tr><td>Ultraman Leo<span class="id">3685247684</span></td><td class="num"><span class="tbar o" style="width:46px"></span> 9.13 W</td><td class="num"><span class="tbar" style="width:12px"></span> 2.46 W</td><td class="delta">−73.0%</td><td>effect prefix + live layers</td></tr>
+      <tr><td>Yuri<span class="id">3572877776</span></td><td class="num"><span class="tbar o" style="width:12px"></span> 2.38 W</td><td class="num"><span class="tbar" style="width:4px"></span> 0.71 W</td><td class="delta">−70.3%</td><td>whole frame</td></tr>
+      <tr><td>Frieren — Pagoda of flowers<span class="id">3426865175</span></td><td class="num"><span class="tbar o" style="width:50px"></span> 10.09 W</td><td class="num"><span class="tbar" style="width:17px"></span> 3.50 W</td><td class="delta">−65.3%</td><td>fixed view + layers</td></tr>
+      <tr><td>Lost Landscape 3<span class="id">3713073223</span></td><td class="num"><span class="tbar o" style="width:40px"></span> 8.11 W</td><td class="num"><span class="tbar" style="width:17px"></span> 3.48 W</td><td class="delta">−57.1%</td><td>effect prefix</td></tr>
+      <tr><td>Ayanami Rei<span class="id">3258032485</span></td><td class="num"><span class="tbar o" style="width:11px"></span> 2.29 W</td><td class="num"><span class="tbar" style="width:1px"></span> 0.19 W</td><td class="delta">−91.8%</td><td>whole frame</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">At 120 fps the originals roughly double (Atri 8.45 → 16.25 W, Ayanami Rei 2.29 → 7.77 W) while the baked outputs stay near 1 W (1.51 W and 0.31 W): the refresh rate becomes free. Per-title tables for every measured output, including the ones that did not save, ship in the README. Wallpaper artwork belongs to its Steam Workshop authors and is shown to demonstrate the tool.</div>
+</section>
+
+<section id="refresh">
+  <div class="eyebrow">Refresh rate</div>
+  <h2>Run it at your panel's full refresh rate. Keep the fans off.</h2>
+  <p class="sub">A heavy scene costs the GPU roughly twice as much at 120 fps as at 60. A whole-frame bake barely notices: the decoder does the work and the 3D engine idles, so on those outputs the refresh rate stops costing power. This project started on an iGPU laptop that could run the scene, just never quietly.</p>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Wallpaper</th><th>Original 60 → 120 fps</th><th>Baked 60 → 120 fps</th><th style="text-align:right">Baked at 120 vs original at 60</th><th>Package power, 120 fps</th></tr></thead>
+    <tbody>
+      <tr><td>Atri<span class="id">3669681034 · effect prefix</span></td><td class="num">8.45 → 16.25 W</td><td class="num">0.81 → 1.51 W</td><td class="delta">−82%</td><td class="num">30.3 → 12.2 W (−60%)</td></tr>
+      <tr><td>Ayanami Rei<span class="id">3258032485 · whole frame</span></td><td class="num">2.29 → 7.77 W</td><td class="num">0.19 → 0.31 W</td><td class="delta">−86%</td><td class="num">19.6 → 10.9 W (−45%)</td></tr>
+      <tr><td>Yuri<span class="id">3572877776 · whole frame</span></td><td class="num">2.38 → 6.70 W</td><td class="num">0.71 → 1.35 W</td><td class="delta">−43%</td><td class="num">19.7 → 12.3 W (−38%)</td></tr>
+      <tr><td>Ultraman Leo<span class="id">3685247684 · effect prefix + live layers</span></td><td class="num">9.13 → 17.29 W</td><td class="num">2.46 → 8.80 W</td><td class="delta">−4%</td><td class="num">30.1 → 20.6 W (−31%)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Atri at the panel's full 165 Hz</th><th>Original</th><th>Baked</th><th style="text-align:right">Change</th></tr></thead>
+    <tbody>
+      <tr><td>iGPU rail</td><td class="num">26.03 W</td><td class="num">3.95 W</td><td class="delta">−84.8%</td></tr>
+      <tr><td>CPU package</td><td class="num">41.44 W</td><td class="num">15.36 W</td><td class="delta">−62.9%</td></tr>
+      <tr><td>3D engine busy</td><td class="num">86.9%</td><td class="num">29.2%</td><td class="delta">decoder takes 21.8%</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">iGPU rail and CPU package, official player, screen-resolution outputs (3072×1920), A/B/B/A, panel confirmed at 165 Hz during the run. Doubling the frame rate doubles the original; whole-frame outputs stay near one watt, and package power drops 31–63% with them. Leo keeps its live layers, which is what climbs at 120 fps.</div>
+</section>
+
+<section id="what">
+  <div class="eyebrow">What counts as animation</div>
+  <h2>Deterministic motion is baked. Input stays input.</h2>
+  <div class="two">
+    <div>
+      <h3>Baked into the loop</h3>
+      <ul>
+        <li>Shader animation with a provable period — waves, sways, pulses, scrolls</li>
+        <li>Animation tracks, sprite sheets, particle cycles</li>
+        <li>Embedded video loops and their timebases</li>
+        <li>Static art, at full resolution</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Treated as input<span class="tag exp">keep live · experimental</span></h3>
+      <ul>
+        <li>Mouse parallax and pointer effects</li>
+        <li>Audio-reactive layers and spectrums</li>
+        <li>Clocks, dates, day/night switching</li>
+        <li>Interactive panels and customization scripts</li>
+      </ul>
+      <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">Default: the baked scene only. Keep live elements: experimental, may increase GPU load.</p>
+    </div>
+  </div>
+</section>
+
+<section id="astra">
+  <div class="eyebrow">Built with GPT-6 Astra</div>
+  <h2>A systems tool an AI built for the Astra Challenge.</h2>
+  <div class="spec">
+    <div>
+      <p>Wallpaper Engine's scene format is undocumented. Rendering it frame-exact offline means handling hundreds of shader variants, particle systems, script controllers and video layers.</p>
+      <p>GPT-6 Astra built a multi-threaded Vulkan offline renderer for Wallpaper Engine scenes, the analytic period solver, the layer allocator, the encoder pipeline with hardware-decode checks and the power-measurement rig. Then it made the pipeline fast: a 25,599-frame scene went from 2,566 s to 214 s, and the full 78-scene library bakes in one afternoon on a single GPU slot.</p>
+    </div>
+    <div class="kvs">
+      <div><span>engine</span><span>Periodica · deterministic animation baking</span></div>
+      <div><span>solver</span><span>analytic, per component, common-period retiming</span></div>
+      <div><span>renderer</span><span>Vulkan offline, multi-threaded, frame-exact</span></div>
+      <div><span>encoder</span><span>H.264 / HEVC, hardware-decode verified</span></div>
+      <div><span>measurement</span><span>official player, RAPL, A/B/B/A</span></div>
+      <div><span>code</span><span>~29,000 lines C# · 14,000 lines tests · 1,400+ checks</span></div>
+      <div><span>speed-up</span><span>12× on a 25,599-frame scene · 7× on a 671-frame scene</span></div>
+      <div><span>runtime AI</span><span>none</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="eyebrow">Where Periodica goes</div>
+  <h2>Every screen that loops is a candidate.</h2>
+  <div class="road">
+    <div class="now"><div class="when">1.0 · NOW</div><h3>Wallpaper Engine, Windows</h3><p>Measured pre-bake, three presets, tradeoff list, day/night state splitting.</p></div>
+    <div><div class="when">NEXT</div><h3>Max-saving defaults</h3><p>Fixed view, tradeoffs applied and at most four video groups by default; live elements as an experimental option.</p></div>
+    <div class="big"><div class="when">THE BIG ONE</div><h3>Temporal reconstruction</h3><p>Bake at a fraction of the resolution with sub-pixel jitter; reconstruct at playback from motion vectors solved offline. Better inputs than DLSS gets in a game, at a fraction of the decode.</p></div>
+    <div><div class="when">BEYOND</div><h3>Any looping surface</h3><p>Phone live wallpapers, lock screens, kiosks, stream backdrops. Wallpaper Engine is the first screen Periodica runs on.</p></div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="eyebrow">FAQ</div>
+  <h2>Short answers.</h2>
+  <div class="faq">
+    <details open><summary>What is the simplest thing I get?</summary><p>Your favorite wallpaper at full refresh rate and full quality, and the fans stay off. That is the whole reason this exists.</p></details>
+    <details><summary>Will it make every wallpaper cheaper?</summary><p>Light scenes have nothing to save, and it says so before rendering. Heavy, mostly periodic scenes are where the 46–96% savings come from; interaction-heavy scenes get their deterministic core baked and the rest treated as input.</p></details>
+    <details><summary>Does the loop look different from the original?</summary><p>You choose the visible-change budget — efficiency, balanced or quality — and the report lists every retimed component with its exact percentage. Seams are validated against the original's own motion before an output is accepted.</p></details>
+    <details><summary>What do I need?</summary><p>Windows, Wallpaper Engine, and a GPU for the offline render. The portable build has no installer and no Python. Baking a typical scene takes minutes; playback needs only hardware video decode.</p></details>
+    <details><summary>Is it open source?</summary><p>Yes. Tooling under MIT, the renderer under GPL v2; full source, third-party notices and build records are in the repository.</p></details>
+  </div>
+</section>
+
+<footer>
+  <div>Periodica · first product: WPE Baker 1.0 · built for the GPT-6 Astra Challenge, 2026</div>
+  <div>Wallpaper artwork shown belongs to its Steam Workshop authors</div>
+</footer>
+</div>
+
+<script>
+(function(){
+  var r=document.getElementById('cmpRange'),t=document.getElementById('cmpTop'),d=document.getElementById('cmpDiv');
+  function set(v){t.style.clipPath='inset(0 '+(100-v)+'% 0 0)';d.style.left=v+'%';}
+  r.addEventListener('input',function(){set(+r.value)});set(50);
+  var zh={src:'来源',preset:'预设',p1:'效率',p2:'平衡',p3:'质量',out:'输出',keep:'保留实时元素 <small>（实验性：可能增加 GPU 占用）</small>',go:'生成',v:'可以生成',n:'点击"生成"开始。',d:'详情',k1:'循环',v1:'56.2 s · 3,372 帧 @ 60 fps · 调速 4.68%',k2:'视频组',v2:'1 个整幅不透明视频，0 个实时图层',k3:'原作功耗',v3:'核显域 2.29 W（官方播放器实测 30 s）',k4:'接缝校验',v4:'编码后接缝通过',c:'本次未包含',c1:'鼠标视差（固定视角）',c2:'音频响应灯光'};
+  var en={};document.querySelectorAll('#gui [data-i]').forEach(function(el){en[el.getAttribute('data-i')]=el.innerHTML});
+  var isZh=false,b=document.getElementById('langBtn');
+  b.addEventListener('click',function(){isZh=!isZh;var m=isZh?zh:en;document.querySelectorAll('#gui [data-i]').forEach(function(el){var k=el.getAttribute('data-i');if(m[k]!==undefined)el.innerHTML=m[k]});b.textContent=isZh?'English':'中文'});
+})();
+</script>
+</body>
+</html>
