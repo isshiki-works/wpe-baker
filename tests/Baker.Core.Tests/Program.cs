@@ -14,6 +14,7 @@ void Check(bool condition, string name)
     passed.Add(name);
 }
 MessagesChecks.Run(Check);
+await PresetCascadeChecks.RunAsync(Check, root);
 SourceDiagnosisChecks.Run(Check, root);
 NarrativePolishChecks.Run(Check);
 PlaybackEncodeProfileChecks.Run(Check);
@@ -305,7 +306,7 @@ await File.WriteAllTextAsync(groupingTrace, new JsonObject {
         ["effective_parallax_depth"] = new JsonArray(0, 0),
         ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false,
             ["textures"] = obj["id"]!.GetValue<int>() == 901 ? new JsonArray("_rt_default") : new JsonArray() }) }).ToArray()) }.ToJsonString());
-var groupingPlan = await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+var groupingPlan = await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
     new(2, groupingSource, root, Path.Combine(root, "grouping-analysis"), 64, 32,
         RuntimeTraceFile: groupingTrace));
 var grouped = groupingPlan["video_groups"]!.AsArray();
@@ -398,7 +399,7 @@ async Task<JsonObject> PlanSubtrees(string name, JsonArray objects, int[]? retai
             ["visible"] = obj["visible"]?.DeepClone() ?? JsonValue.Create(true), ["has_mesh"] = obj.ContainsKey("text"),
             ["effective_parallax_depth"] = new JsonArray(0, 0),
             ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false }) }).ToArray()) }.ToJsonString());
-    return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+    return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
         new(2, subtreeSource, root, Path.Combine(root, name), 64, 32, RuntimeTraceFile: tracePath,
             RetainLiveRootIds: retained, LiveOverlayPlacement: placement, VideoLayout: layout));
 }
@@ -631,7 +632,7 @@ await File.WriteAllTextAsync(linkedCompositeTrace, new JsonObject {
         new JsonObject { ["id"] = 1302, ["owner"] = 1302, ["visible"] = true, ["has_mesh"] = true,
             ["effective_parallax_depth"] = new JsonArray(0, 0), ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false,
                 ["textures"] = new JsonArray("_rt_link_1300", "_rt_link_1301", "_rt_link_missing", "_rt_link_9999") }) }) }.ToJsonString());
-var linkedCompositePlan = await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+var linkedCompositePlan = await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
     new(2, subtreeSource, root, Path.Combine(root, "linked-composite"), 64, 32, RuntimeTraceFile: linkedCompositeTrace));
 var linkedCompositeRuntime = JsonNode.Parse(await File.ReadAllTextAsync(linkedCompositePlan["runtime_evidence"]!.GetValue<string>()))!.AsObject();
 var linkedCompositeDependencies = linkedCompositeRuntime["runtime_dependencies"]!.AsArray()
@@ -759,7 +760,7 @@ async Task<JsonObject> PlanGroupingVariantAsync(string script, JsonArray? extraD
     JsonObject traceVariant = JsonNode.Parse(await File.ReadAllTextAsync(groupingTrace))!.AsObject();
     traceVariant["runtime_dependencies"] = extraDependencies ?? new JsonArray();
     await File.WriteAllTextAsync(groupingTrace, traceVariant.ToJsonString());
-    return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+    return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
         new(2, groupingSource, root, Path.Combine(root, "grouping-variant-" + Guid.NewGuid().ToString("N")), 64, 32,
             RuntimeTraceFile: groupingTrace));
 }
@@ -833,7 +834,7 @@ await File.WriteAllTextAsync(overlayTrace, new JsonObject {
         ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false,
             ["textures"] = obj["id"]!.GetValue<int>() == 1003 ? new JsonArray("_rt_default") : new JsonArray() }) }).ToArray()) }.ToJsonString());
 async Task<JsonObject> AnalyzeOverlayAsync(string placement, string textEffects = "preserve") => await new HybridScenePlanner(
-    new("not-started", "not-started", "not-started", [])).AnalyzeAsync(new(2, overlaySource, root,
+    new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(new(2, overlaySource, root,
         Path.Combine(root, $"overlay-{placement}-{textEffects}"), 64, 32, RuntimeTraceFile: overlayTrace,
         LiveOverlayPlacement: placement, LiveTextEffects: textEffects));
 JsonObject preservedOverlay = await AnalyzeOverlayAsync("preserve");
@@ -960,9 +961,9 @@ await File.WriteAllTextAsync(parallaxTrace, new JsonObject {
             ["active_uniforms"]=id==1100 ? new JsonArray("g_ParallaxPosition") : new JsonArray() }) }).ToArray())
 }.ToJsonString());
 var parallaxPlanner = new HybridScenePlanner(new("not-started","not-started","not-started",[]));
-JsonObject liveParallax = await parallaxPlanner.AnalyzeAsync(new(2,parallaxSource,root,Path.Combine(root,"shader-parallax-live"),64,32,
+JsonObject liveParallax = await parallaxPlanner.AnalyzeSingleAsync(new(2,parallaxSource,root,Path.Combine(root,"shader-parallax-live"),64,32,
     RuntimeTraceFile:parallaxTrace));
-JsonObject fixedParallax = await parallaxPlanner.AnalyzeAsync(new(2,parallaxSource,root,Path.Combine(root,"shader-parallax-fixed"),64,32,
+JsonObject fixedParallax = await parallaxPlanner.AnalyzeSingleAsync(new(2,parallaxSource,root,Path.Combine(root,"shader-parallax-fixed"),64,32,
     RuntimeTraceFile:parallaxTrace,ViewMode:"fixed_view"));
 Check(liveParallax["live_layer_ids"]!.AsArray().Any(n=>n!.GetValue<int>()==1100) &&
     !fixedParallax["live_layer_ids"]!.AsArray().Any(n=>n!.GetValue<int>()==1100),

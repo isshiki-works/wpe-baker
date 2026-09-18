@@ -40,9 +40,9 @@ public partial class MainWindow : Window
     private OutputFrameRate.Choice? autoFrameRate;
     private JsonArray? layerList;
     private readonly HashSet<int> excludedLayerIds = [];
-    // 取舍卡片上勾着的项；每次新的分析结果出来都按"最有希望的那一档"重置，用户自己改过就以他的勾选为准。
-    private readonly HashSet<string> selectedTurnOffKinds = new(StringComparer.Ordinal);
-    private bool turnOffKindsChosen;
+    // 高级区的显式修改与两轴选择分开记录；缓存跨重新分析复用。
+    private bool advancedSettingsEdited;
+    private readonly string analysisCacheDirectory = Path.Combine(Path.GetTempPath(), "WpeBaker", "analysis-" + Guid.NewGuid().ToString("N"), "cache");
     private readonly Dictionary<FrameworkElement, string> bilingualToolTips = [];
     private readonly string officialPreviewName = "WPE Baker Preview " + Guid.NewGuid().ToString("N");
     private string? officialPreviewExecutable;
@@ -233,6 +233,8 @@ public partial class MainWindow : Window
         if (!initialized || suppressSettingsChanges) return;
         ++settingsRevision;
         if (sender == OutputBox || sender == TargetBox) { RefreshControls(); return; }
+        if (sender is FrameworkElement control && control != CompatibilityBox && control.IsDescendantOf(AdvancedExpander) &&
+            (control != GpuBox || control.IsKeyboardFocusWithin)) advancedSettingsEdited = true;
         if (sender != AudioEffectsBox) audioEffectsChoiceKnown = false;
         analysisCancellation?.Cancel(); hybridPlan = null;
         UpdatePlanSummary(); RefreshControls();
@@ -258,10 +260,12 @@ public partial class MainWindow : Window
     {
         if (!TryFrameSize(out uint width, out uint height))
             throw new InvalidDataException("Frame width and height must both be positive integers, or both empty to use the scene canvas size.");
+        // 剩余实时图层置顶与简化文字效果两个开关已从界面移除：置顶固定为开（--live-overlays foreground），
+        // 简化文字效果固定为原默认值（关，即 preserve）。
         return new(width, height, FpsBox.Text.Trim(),
-            (GpuBox.SelectedItem as VulkanDeviceInfo)?.DeviceUuid, RetimeBox.IsChecked == true, FixedViewBox.IsChecked == true,
-            LayeredVideoBox.IsChecked == true, ForegroundLiveBox.IsChecked == true, SimpleTextEffectsBox.IsChecked == true,
-            AudioEffectsBox.IsChecked == true, SelectedLoopPreference());
+            (GpuBox.SelectedItem as VulkanDeviceInfo)?.DeviceUuid, RetimeBox.IsChecked == true, SelectedInteraction() != "keep",
+            LayeredVideoBox.IsChecked == true, true, false,
+            AudioEffectsBox.IsChecked == true, SelectedLoopPreference(), SelectedInteraction(), CompatibilityBox.IsChecked == true);
     }
 
     // 档位下拉按顺序对应 efficiency / balanced / quality，默认平衡。
@@ -269,6 +273,7 @@ public partial class MainWindow : Window
     {
         0 => RetimeProfile.Efficiency, 2 => RetimeProfile.Quality, _ => RetimeProfile.Balanced
     };
+    private string SelectedInteraction() => InteractionBox.SelectedIndex switch { 0 => "keep", 2 => "off", _ => "fixed" };
 
     // 循环取向跟着档位走：效率＝周期最短，质量＝调速最少，平衡居中。界面上不再单独给这个选项。
     private string SelectedLoopPreference() => PresetBox.SelectedIndex switch
@@ -289,31 +294,44 @@ public partial class MainWindow : Window
         double.TryParse(RetimeBudgetBox.Text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double percent) &&
         double.IsFinite(percent) && percent >= 0 && percent <= RetimeProfile.MaximumBudgetPercent ? percent : null;
 
-    /// <summary>档位换了：高级区的调速预算跟着换成该档的值，用户自己填过的（与上一档的值不同）保持不动。</summary>
+    /// <summary>切换动画精度只更新跟随档位的预算，不改变交互或其它高级参数。</summary>
     private void PresetChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!initialized) return;
-        if (RetimeBudgetBox.Text.Trim() == presetBudgetText)
+        if (!initialized || suppressSettingsChanges) return;
+        bool follows = RetimeBudgetFollowsPreset;
+        suppressSettingsChanges = true;
+        try
         {
-            suppressSettingsChanges = true;
-            RetimeBudgetBox.Text = PresetBudgetText();
-            suppressSettingsChanges = false;
+            if (follows) RetimeBudgetBox.Text = PresetBudgetText();
         }
+        finally { suppressSettingsChanges = false; }
         presetBudgetText = PresetBudgetText();
         SettingsChanged(sender, e);
     }
 
     private void RetimeBudgetEdited(object sender, RoutedEventArgs e) => SettingsChanged(sender, e);
 
-    /// <summary>三个选择各是什么意思，以及高级区那格"跟着选择走 / 按你填的"标记；每次设置变化都刷一遍。</summary>
+    /// <summary>高级区（画面取舍 + 循环周期调节）是不是还停在当前档位的默认值上。</summary>
+    private bool AdvancedIsCustom() =>
+        advancedSettingsEdited || LayeredVideoBox.IsChecked == true || AudioEffectsBox.IsChecked == true ||
+        excludedLayerIds.Count > 0 || analysisPreviewOverrides.Count > 0 ||
+        RetimeBox.IsChecked != true || SwayRetimeBox.IsChecked != SwayRetimeOptions.OnByDefault ||
+        !RetimeBudgetFollowsPreset;
+
+    /// <summary>档位说明：高级区被改动过就显示"自定义"（只读标签，不新增第四档），否则按档位显示原来的说明。</summary>
     private void UpdatePresetNote()
     {
-        PresetNote.Text = PresetBox.SelectedIndex switch
+        bool custom = hybridPlan?["custom_settings"]?.GetValue<bool>() ?? AdvancedIsCustom();
+        PresetNote.Text = custom ? L("自定义（高级设置已修改）", "Custom (advanced settings changed)") : PresetBox.SelectedIndex switch
         {
             0 => L("速度优先，画面差异较大。", "Speed first; larger visual difference."),
             2 => L("画面差异最小，耗时更长、文件更大。", "Smallest visual difference; longer runtime and larger file."),
-            _ => L("默认：速度与画面差异平衡。", "Default: balanced speed and visual difference.")
+            _ => L("速度与画面差异平衡。", "Balanced speed and visual difference.")
         };
+        InteractionNote.Text = SelectedInteraction() switch {
+            "keep" => L("鼠标效果照旧", "Mouse effects unchanged"),
+            "off" => L("关闭输入效果", "Disables input-driven effects"),
+            _ => L("视角保持固定", "View stays fixed") };
         RetimeBudgetOrigin.Text = RetimeBudgetFollowsPreset
             ? L("取自档位", "from the selected profile")
             : RetimeBudgetOverride() is null ? L("无效值，范围 0 到 5", "invalid value, range 0 to 5")
@@ -406,9 +424,10 @@ public partial class MainWindow : Window
                 HeightBox.Text = preset.Settings.Height == 0 ? "" : preset.Settings.Height.ToString(CultureInfo.InvariantCulture);
                 FpsBox.Text = preset.Settings.Fps;
                 GpuBox.SelectedItem = gpu;
-                RetimeBox.IsChecked = preset.Settings.Retime; FixedViewBox.IsChecked = preset.Settings.FixedView;
-                LayeredVideoBox.IsChecked = preset.Settings.LayeredVideo; ForegroundLiveBox.IsChecked = preset.Settings.ForegroundLive;
-                SimpleTextEffectsBox.IsChecked = preset.Settings.SimpleTextEffects; AudioEffectsBox.IsChecked = preset.Settings.AudioEffects;
+                RetimeBox.IsChecked = preset.Settings.Retime; InteractionBox.SelectedIndex = preset.Settings.Interaction switch { "keep" => 0, "off" => 2, _ => 1 }; CompatibilityBox.IsChecked = preset.Settings.Compatibility;
+                // 剩余实时图层置顶／简化文字效果两项界面已移除，方案里的旧值不再回填控件（分析时固定传 foreground/preserve）。
+                LayeredVideoBox.IsChecked = preset.Settings.LayeredVideo;
+                AudioEffectsBox.IsChecked = preset.Settings.AudioEffects;
                 // 方案文件里的 loop_preference 就是档位（两者一一对应）；调速预算回到该档的值。
                 PresetBox.SelectedIndex = preset.Settings.LoopPreference switch { "performance" => 0, "quality" => 2, _ => 1 };
                 presetBudgetText = PresetBudgetText();
@@ -448,11 +467,12 @@ public partial class MainWindow : Window
             // 属性底值是用户在 Wallpaper Engine 里的设置，面板里的改动覆盖在上；来源记录写进 plan。
             var (properties, propertiesOrigin) = AppJsonPresentation.MergeWpeProperties(sourceWpeProperties, sourcePropertyDefinitions, analysisPreviewOverrides);
             var request = new HybridAnalyzeRequest(2, source, assets, output, width, height, numerator, denominator,
-                properties, FixedViewBox.IsChecked == true ? "fixed_view" : "preserve", RetimeBox.IsChecked == true ? 2 : 0,
+                properties, SelectedInteraction() != "keep" ? "fixed_view" : "preserve", RetimeBox.IsChecked == true ? 2 : 0,
                 AllowLocalSeamRepair: false, DeviceUuid: gpu?.DeviceUuid,
                 VideoLayout: LayeredVideoBox.IsChecked == true ? "layered" : "full_frame",
-                LiveOverlayPlacement: ForegroundLiveBox.IsChecked == true ? "foreground" : "preserve",
-                LiveTextEffects: SimpleTextEffectsBox.IsChecked == true ? "simple" : "preserve",
+                // 剩余实时图层置顶界面已移除，始终传 foreground；简化文字效果固定为原默认值（preserve）。
+                LiveOverlayPlacement: "foreground",
+                LiveTextEffects: "preserve",
                 AudioEffects: AudioEffectsBox.IsChecked == true ? "omit" : "preserve",
                 ExcludedLayerIds: excludedLayerIds.Count == 0 ? null : excludedLayerIds.Order().ToArray(),
                 LoopPreference: SelectedLoopPreference(),
@@ -465,6 +485,9 @@ public partial class MainWindow : Window
                 RetimeBudgetPercent: RetimeBudgetOverride(),
                 // 摆动改频三档都开（设计 §3），高级区的勾选框默认勾上，取消勾选才关；与 CLI 的 --sway-retime 默认一致。
                 SwayRetime: SwayRetimeBox.IsChecked == true);
+            request = AppJsonPresentation.ConfigureAnalysis(request, SelectedPreset(), SelectedInteraction(),
+                CompatibilityBox.IsChecked == true, AdvancedIsCustom(), LayeredVideoBox.IsChecked == true) with
+                { AnalysisCacheDirectory = analysisCacheDirectory };
             // 分析前先量一遍原来这张现在费多少电（默认开）：读数写进 plan 的 source_power，结论第一行按实测分档；
             // 量不了的机器跳过并把原因记进 plan，分析照常进行。
             JsonObject? sourcePower = MeasureSourceBox.IsChecked == true
@@ -480,7 +503,7 @@ public partial class MainWindow : Window
                 hybridPlan = found;
                 audioEffectsChoiceKnown = AppJsonPresentation.HasAudioEffectsChoice(found);
                 // 新结果出来了，勾选回到推荐的那一档。
-                turnOffKindsChosen = false;
+
                 UpdatePlanSummary(); BuildPropertyEditors(); RefreshControls();
                 StatusText.Text = found["blockers"] is JsonArray { Count: > 0 }
                     ? L("分析完成：不可生成，原因见结论区。", "Analysis complete: cannot generate; see the verdict above.")
@@ -502,25 +525,48 @@ public partial class MainWindow : Window
         if (hybridPlan?["layers"] is JsonArray analyzedLayers) layerList = analyzedLayers.DeepClone().AsArray();
         BuildLayerList();
         UpdateOutputSummary();
-        VerdictLine.Text = hybridPlan is null
-            ? L("未评估", "Not evaluated")
-            : PlainLanguage.Verdict(hybridPlan, english);
-        NumbersLine.Text = hybridPlan is null
-            ? L("选择壁纸后执行分析", "Select a wallpaper, then run analysis")
+        bool analyzed = hybridPlan is not null;
+        // 新手三行提示只在还没分析时显示，分析完就让位给结论。
+        GettingStartedHint.Visibility = analyzed ? Visibility.Collapsed : Visibility.Visible;
+        VerdictLine.Visibility = analyzed ? Visibility.Visible : Visibility.Collapsed;
+        VerdictLine.Text = analyzed ? PlainLanguage.Verdict(hybridPlan, english) : "";
+        // 无法生成时第二行只放第一条阻塞原因的第一句，不放整段；其余三态沿用下一步动作提示。
+        NumbersLine.Text = !analyzed ? ""
+            : PlainLanguage.CannotGenerate(hybridPlan) ? FirstBlockerSentence()
             : PlainLanguage.NextAction(hybridPlan, english);
         NumbersLine.Visibility = NumbersLine.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        DetailsExpander.Visibility = hybridPlan is null ? Visibility.Collapsed : Visibility.Visible;
-        // 依据（功耗读数、路线、拒绝原因）与数字都不进结论前两行，作为"详情"面板的第一段。
-        PlanSummary.Text = string.Join("\n", new[] {
-            PlainLanguage.Basis(hybridPlan, english), PlainLanguage.Numbers(hybridPlan, english),
-            AppJsonPresentation.RouteSummary(hybridPlan, english) }.Where(part => part.Length > 0));
-        LiveFeatures.Text = AppJsonPresentation.PlanNotes(hybridPlan, english);
-        LiveFeatures.Visibility = LiveFeatures.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        ProfileLine.Text = AppJsonPresentation.ProfileSummary(hybridPlan, english);
-        ProfileLine.Visibility = ProfileLine.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        BuildTradeoffList();
+        if (AppJsonPresentation.SuggestedSettings(hybridPlan) is not null)
+            NumbersLine.Text = hybridPlan!["suggested_change"]?[english ? "en" : "zh"]?.GetValue<string>() ?? NumbersLine.Text;
+        NumbersLine.Visibility = NumbersLine.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        SuggestionButton.Visibility = AppJsonPresentation.SuggestedSettings(hybridPlan) is null ? Visibility.Collapsed : Visibility.Visible;
+        PresetAppliedLine.Text = PlainLanguage.PresetAppliedLine(hybridPlan, SelectedPreset(), english);
+        PresetAppliedLine.Visibility = PresetAppliedLine.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        DetailsExpander.Visibility = analyzed ? Visibility.Visible : Visibility.Collapsed;
+        BuildNumbersTable();
         BuildTurnOffCard();
         UpdatePresetNote();
+    }
+
+    /// <summary>第一条阻塞原因的第一句（到第一个句号为止），没有阻塞原因文本时退回下一步动作提示。</summary>
+    private string FirstBlockerSentence()
+    {
+        if (hybridPlan?["video_dominant"]?["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
+            return L("原作已是视频，转换后不会减少渲染工作。", "The original is already a video; conversion will not reduce rendering work.");
+        string[] blockers = AppJsonPresentation.BlockerLines(hybridPlan, english);
+        if (blockers.Length == 0) return PlainLanguage.NextAction(hybridPlan, english);
+        string text = blockers[0];
+        int index = text.IndexOf(english ? '.' : '。');
+        return index < 0 ? text : text[..(index + 1)];
+    }
+
+    /// <summary>折叠的"技术细节"面板：纯数字表，一行一个"名称：值"，不解释、不写段落。</summary>
+    private void BuildNumbersTable()
+    {
+        NumbersTable.Children.Clear();
+        foreach (var (label, value) in AppJsonPresentation.NumberRows(hybridPlan, english))
+            NumbersTable.Children.Add(new TextBlock {
+                Text = label + (english ? ": " : "：") + value, FontSize = 12,
+                Foreground = (System.Windows.Media.Brush)FindResource("Ink"), Margin = new Thickness(0, 0, 0, 4) });
     }
 
     /// <summary>输出那一行：帧率与画面大小；没自己填尺寸时写"自动"，分析完就把实际出片尺寸摆上去。</summary>
@@ -545,150 +591,40 @@ public partial class MainWindow : Window
     private void ToggleOutputEditor(object sender, RoutedEventArgs e) =>
         OutputEditor.Visibility = OutputEditor.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
 
-    /// <summary>
-    /// 取舍卡片：一项一个勾选框，写清楚关掉它画面上会少什么。只列这张壁纸上真有、且关得掉的东西；
-    /// 默认勾上"最有希望的那一档"。画面本身就是实时特效画出来的那类壁纸不出卡片，只留第一行结论。
-    /// </summary>
     private void BuildTurnOffCard()
     {
         TurnOffList.Children.Clear();
-        var items = PlainLanguage.TurnOffItems(hybridPlan, english);
-        TurnOffCard.Visibility = items.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        if (items.Length == 0)
-        {
-            selectedTurnOffKinds.Clear();
-            UpdateTurnOffNote();
-            return;
-        }
-        if (!turnOffKindsChosen)
-        {
-            selectedTurnOffKinds.Clear();
-            foreach (var item in items.Where(item => item.Recommended)) selectedTurnOffKinds.Add(item.Kind);
-        }
-        foreach (var item in items)
-        {
-            var text = new StackPanel();
-            text.Children.Add(new TextBlock { Text = L("禁用 ", "Disable ") + item.Label,
-                TextWrapping = TextWrapping.Wrap, FontWeight = FontWeights.Normal });
-            text.Children.Add(new TextBlock { Text = item.Consequence, FontSize = 11, TextWrapping = TextWrapping.Wrap,
-                Foreground = (System.Windows.Media.Brush)FindResource("Hint"), Margin = new Thickness(0, 2, 0, 0) });
-            var box = new CheckBox { IsChecked = selectedTurnOffKinds.Contains(item.Kind), Content = text,
-                Padding = new Thickness(6, 0, 0, 0), Margin = new Thickness(0, 0, 8, 10) };
-            string kind = item.Kind;
-            box.Checked += (_, _) => ToggleTurnOff(kind, true);
-            box.Unchecked += (_, _) => ToggleTurnOff(kind, false);
-            TurnOffList.Children.Add(box);
-        }
-        UpdateTurnOffNote();
+        string[] lines = PlainLanguage.AppliedChangeLines(hybridPlan, english);
+        TurnOffCard.Visibility = lines.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        foreach (string line in lines)
+            TurnOffList.Children.Add(new TextBlock { Text = line, TextWrapping = TextWrapping.Wrap,
+                FontSize = 12, Margin = new Thickness(0, 0, 0, 6) });
     }
 
-    private void ToggleTurnOff(string kind, bool off)
+    private void ApplySuggestionClicked(object sender, RoutedEventArgs e)
     {
-        if (!(off ? selectedTurnOffKinds.Add(kind) : selectedTurnOffKinds.Remove(kind))) return;
-        turnOffKindsChosen = true;
-        UpdateTurnOffNote();
-    }
-
-    /// <summary>卡片底部那行小字与两个按钮：跟着勾选走，勾什么就按哪套方案算还剩多少实时效果。</summary>
-    private void UpdateTurnOffNote()
-    {
-        var option = CurrentTurnOffOption();
-        ResidualNote.Text = PlainLanguage.ResidualNote(option, english);
-        ApplyTurnOffButton.IsEnabled = option is not null && !analyzing && !presetBusy;
-        CopyForDeveloperButton.IsEnabled = option is not null;
-    }
-
-    private AppJsonPresentation.AppTradeoffOption? CurrentTurnOffOption() =>
-        PlainLanguage.Match(AppJsonPresentation.TradeoffOptionViews(hybridPlan, english), selectedTurnOffKinds);
-
-    private void ApplyTurnOffClicked(object sender, RoutedEventArgs e)
-    {
-        if (CurrentTurnOffOption() is { } option) ApplyTradeoffOption(option);
-    }
-
-    /// <summary>把当前这套方案的命令行和技术说明一起复制走，方便贴给开发者。</summary>
-    private void CopyForDeveloperClicked(object sender, RoutedEventArgs e)
-    {
-        if (CurrentTurnOffOption() is not { } option) return;
-        string text = string.Join(Environment.NewLine, new[] { option.Title }.Concat(option.Lines)
-            .Concat(option.Command.Length == 0 ? [] : new[] { option.Command }).Where(line => line.Length > 0));
-        CopyTradeoffCommand(text);
-    }
-
-    /// <summary>
-    /// 结论下方的取舍清单：每个方案一块，块里按"要关什么 → 怎么关（属性优先、命令行其次）→ 连带关掉什么 →
-    /// 关掉后的路线与残留实时层 → 保留实时不省电"排，再给"按此方案重新分析"和"复制命令行"两个按钮。
-    /// 主体类壁纸（关掉就没有内容）只显示那句拒绝说明，不出清单。
-    /// </summary>
-    private void BuildTradeoffList()
-    {
-        TradeoffList.Children.Clear();
-        TradeoffHeader.Text = AppJsonPresentation.TradeoffHeader(hybridPlan, english);
-        TradeoffHeader.Visibility = TradeoffHeader.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        var options = AppJsonPresentation.TradeoffOptionViews(hybridPlan, english);
-        TradeoffList.Visibility = options.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        foreach (var option in options)
-        {
-            var body = new StackPanel();
-            body.Children.Add(new TextBlock { Text = option.Title, FontWeight = FontWeights.SemiBold,
-                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
-            foreach (string line in option.Lines)
-                body.Children.Add(new TextBlock { Text = line, FontSize = 12, TextWrapping = TextWrapping.Wrap,
-                    Foreground = (System.Windows.Media.Brush)FindResource("Muted"), Margin = new Thickness(0, 0, 0, 3) });
-            var buttons = new WrapPanel { Margin = new Thickness(0, 7, 0, 0) };
-            var reanalyze = new Button { Content = L("按此方案重新分析", "Re-analyze with this option"), Padding = new Thickness(10, 6, 10, 6),
-                Margin = new Thickness(0, 0, 6, 0) };
-            reanalyze.Click += (_, _) => ApplyTradeoffOption(option);
-            buttons.Children.Add(reanalyze);
-            if (option.Command.Length > 0)
-            {
-                var copy = new Button { Content = L("复制命令行", "Copy command line"), Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0) };
-                copy.Click += (_, _) => CopyTradeoffCommand(option.Command);
-                buttons.Children.Add(copy);
-            }
-            body.Children.Add(buttons);
-            TradeoffList.Children.Add(new Border {
-                BorderBrush = (System.Windows.Media.Brush)FindResource("Line"), BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(7), Padding = new Thickness(11), Margin = new Thickness(0, 0, 0, 8), Child = body });
-        }
-    }
-
-    /// <summary>把一个取舍方案填进当前设置（属性关闭值、排除图层、固定视角）并立刻重新分析。</summary>
-    private void ApplyTradeoffOption(AppJsonPresentation.AppTradeoffOption option)
-    {
-        if (analyzing || presetBusy)
-        {
-            StatusText.Text = L("上一次分析未结束，操作已忽略。", "The previous analysis has not finished; the request was ignored.");
-            return;
-        }
+        if (analyzing || presetBusy || AppJsonPresentation.SuggestedSettings(hybridPlan) is not JsonObject settings) return;
+        bool follows = RetimeBudgetFollowsPreset;
         suppressSettingsChanges = true;
         try
         {
-            foreach (var (key, offValue) in option.Properties) analysisPreviewOverrides[key] = offValue?.DeepClone();
-            foreach (int id in option.ExcludeLayers) excludedLayerIds.Add(id);
-            if (option.FixedView) FixedViewBox.IsChecked = true;
+            CompatibilityBox.IsChecked = false;
+            if (settings["preset"]?.GetValue<string>() is string preset)
+                PresetBox.SelectedIndex = preset switch { "efficiency" => 0, "balanced" => 1, _ => 2 };
+            if (settings["interaction"]?.GetValue<string>() is string interaction)
+                InteractionBox.SelectedIndex = interaction switch { "keep" => 0, "off" => 2, _ => 1 };
+            if (follows) RetimeBudgetBox.Text = PresetBudgetText();
+            presetBudgetText = PresetBudgetText();
         }
         finally { suppressSettingsChanges = false; }
-        ++settingsRevision;
-        analysisCancellation?.Cancel(); hybridPlan = null;
-        BuildPropertyEditors();
-        UpdatePlanSummary(); RefreshControls();
+        SettingsChanged(this, new RoutedEventArgs());
         AnalyzeClicked(this, new RoutedEventArgs());
     }
-
-    private void CopyTradeoffCommand(string command)
-    {
-        try
-        {
-            Clipboard.SetText(command);
-            StatusText.Text = L("已复制到剪贴板。", "Copied to clipboard.");
-        }
-        catch (Exception error) { StatusText.Text = L("复制失败：", "Copy failed: ") + error.Message; }
-    }
-
     private void RefreshControls()
     {
         if (!initialized) return;
+        PresetBox.IsEnabled = InteractionBox.IsEnabled = CompatibilityBox.IsChecked != true && !analyzing && !presetBusy;
+        SuggestionButton.IsEnabled = !analyzing && !presetBusy;
         bool sourceValid = AppEnvironment.SourceExists(SourceBox.Text.Trim());
         bool assetsValid = AppEnvironment.AssetsValid(AssetsBox.Text.Trim());
         bool outputValid = AppEnvironment.OutputValid(OutputBox.Text.Trim(), SourceBox.Text.Trim());
@@ -1512,9 +1448,18 @@ public partial class MainWindow : Window
                 ?? throw new InvalidDataException("Layout QA plan is not a JSON object.");
             if (!string.Equals(plan["source"]?.GetValue<string>(), source, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Layout QA plan belongs to a different wallpaper source.");
+            suppressSettingsChanges = true;
+            try
+            {
+                PresetBox.SelectedIndex = plan["preset_requested"]?.GetValue<string>() switch { "efficiency" => 0, "balanced" => 1, _ => 2 };
+                InteractionBox.SelectedIndex = plan["interaction_requested"]?.GetValue<string>() switch { "keep" => 0, "off" => 2, _ => 1 };
+                presetBudgetText = PresetBudgetText();
+                RetimeBudgetBox.Text = presetBudgetText;
+            }
+            finally { suppressSettingsChanges = false; }
             hybridPlan = plan;
             audioEffectsChoiceKnown = AppJsonPresentation.HasAudioEffectsChoice(plan);
-            turnOffKindsChosen = false;
+
             UpdatePlanSummary();
             BuildPropertyEditors();
         }

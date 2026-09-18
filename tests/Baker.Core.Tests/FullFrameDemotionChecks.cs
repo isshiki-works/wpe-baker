@@ -187,7 +187,7 @@ internal static class FullFrameDemotionChecks
                 ["materials"] = new JsonArray(new JsonObject {
                     ["uses_audio_spectrum"] = layer["id"]!.GetValue<int>() == Spectrum,
                     ["textures"] = new JsonArray() }) }).ToArray()) }.ToJsonString());
-        return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+        return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
             new(2, directory, root, Path.Combine(root, "demotion-analysis-" + name), 64, 32,
                 RuntimeTraceFile: trace, VideoLayout: layout));
     }

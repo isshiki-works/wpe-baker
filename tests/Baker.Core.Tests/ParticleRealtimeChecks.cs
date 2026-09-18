@@ -57,7 +57,7 @@ internal static class ParticleRealtimeChecks
             }).ToArray()) }.ToJsonString());
 
         async Task<JsonObject> PlanAsync(string name) =>
-            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, sourceDirectory, root, Path.Combine(root, name), 64, 32,
                     RuntimeTraceFile: tracePath, VideoLayout: "layered"));
         static JsonObject Layer(JsonObject plan, int id) => plan["layers"]!.AsArray().OfType<JsonObject>()

@@ -91,7 +91,7 @@ conditions hold.
   motion may change; the loop length is what the solver returns.** A scene
   usually has many periods that close, and the shorter the period, the more
   the tempo of its components has to be adjusted. `--preset
-  efficiency|balanced|quality` (balanced by default) sets that budget:
+  efficiency|balanced|quality` (quality by default since 1.0.1, stepping down to balanced and then efficiency when the stricter budget does not close) sets that budget:
   efficiency allows up to 5% on any visible component and takes the shortest
   loop inside it, balanced allows 3%, quality solves for the smallest change
   instead of a percentage. The length caps (600 / 600 / 1200 s) are a
@@ -245,6 +245,39 @@ conditions hold.
   for Windows; offline decode/render uses software decode and readback for
   measurement purposes, which is not the same performance profile as the
   official WPE player.
+
+## What changed in 1.0.1 (2026-09-18)
+
+- **Two independent controls replace the single preset.** Animation
+  precision (efficiency 5% / balanced 3% / quality: smallest change) only
+  bounds retiming; it defaults to quality, steps down to balanced and then
+  efficiency when the stricter budget does not close, and the verdict names
+  the one applied (`preset_applied`). Interaction (keep / fixed view / off)
+  only decides what input-driven content does; it defaults to fixed view, and
+  off additionally drops pointer effects and sampled, costly full-screen
+  audio effects. Clocks, dates, media text, FPS counters and background music
+  always stay live.
+- **No silent fallback.** Settings that do not close are reported as such.
+  Only when another pair of settings has actually been solved does the plan
+  carry `suggested_change` (one sentence in both languages, the settings,
+  `verified`, the plan path); the GUI applies it with one click.
+  Sub-allocations verified inside the same analysis are adopted directly
+  (Alone bakes as 4 groups at the defaults).
+- **At most four video groups in a layered layout** (2–4 groups save; 6
+  groups reversed at +106% on the iGPU rail, 9 at +10.9% on package). Live
+  widgets are hoisted to the foreground by default (`--live-overlays
+  foreground`).
+- **Analysis cache:** re-analyzing the same output directory with different
+  settings reuses scene loading and period solving (3426865175 at 4K: 4.98 s
+  → 0.95 s).
+- **Pre-bake power measurement of the original is off by default**
+  (`--measure-source`; an optional checkbox in the GUI, about 60 s).
+- **GUI:** four fixed verdict texts; Technical details collapses to a table
+  of numbers; a "Not included in this bake" card lists only what was
+  actually left out; edits in Advanced show as "Custom"; the Compatibility
+  mode checkbox equals `--keep-live on` and reproduces the 1.0 analysis path
+  byte for byte.
+- 1,432 automated checks.
 
 ## What changed after RC8
 
@@ -408,7 +441,7 @@ nothing is special-cased for an individual wallpaper.
 
 Four wallpapers reach `candidate_generated`, all produced by the RC6
 package's own CLI. Three ran on an Intel Arc B390 laptop; Amiya ran on an
-RTX 5090 D v2. The RC8 code re-ran analyze **and** bake for all four on the
+RTX 5090. The RC8 code re-ran analyze **and** bake for all four on the
 5090: route, group count, per-group flags, candidate count, selected period
 length, start frame and `loop_validation` match RC6 field for field
 (`reports-20260916/regress-rc8-round2.md`). **Power was not re-measured** —
@@ -643,8 +676,9 @@ Two things have to be read alongside that:
 - **Do not expect retain-live or layered outputs to save power in this
   release.** Whether an output saves depends on how much of the original's
   drawing work moves into video, not on the route name; when most layers stay
-  live, the bake adds a decoder and removes little. The next release refuses
-  plans with too many video groups and suggests the fixed view instead (2–4
+  live, the bake adds a decoder and removes little. Since 1.0.1 the default path allows at most four video groups in a
+  layered layout, and when your settings fail it only reports a change that
+  has been solved (2–4
   groups saved; 6 groups already reversed at +106% on the iGPU rail, 9 groups
   at +10.9% on package).
 
@@ -652,7 +686,7 @@ The table below lists the measured outputs that can be quoted today.
 
 ### How long a bake takes
 
-Measured on the development desktop (Ryzen 7 9800X3D, RTX 5090 D v2), one
+Measured on the development desktop (Ryzen 7 9800X3D, RTX 5090), one
 bake at a time, with outputs byte-identical to the slower path:
 
 | Case | Before | Now |
@@ -785,7 +819,7 @@ quoted anywhere.
 - Two dependency-license items and two measurement gaps are open; they are
   listed under **Known issues** below.
 - Analysis and baking are exercised on two GPUs: an Intel Arc B390
-  integrated GPU and an RTX 5090 D v2. Analysis results match field for
+  integrated GPU and an RTX 5090. Analysis results match field for
   field across both. Power has only ever been measured on the Arc B390, but
   on all four outputs, at 60 and 120 fps: three of them save power and DJGun
   does not — see **About power**. Other GPU
@@ -878,7 +912,7 @@ quoted anywhere.
   naming a layer that has to run live (a particle system, a main animation
   with no period) in `--exclude-layers` leaves it out of the exclusion set
   echoed in the plan. The CLI neither errors nor warns, and the refusal reason
-  does not change. The next release will turn this into an error.
+  does not change. A later release will turn this into an error.
 - **The hardware-decode check only covers the baking machine**: the short
   decode check for each finished video is run on whichever machine baked it.
   `verified_on` lists each adapter's vendor and integrated/discrete class, and
@@ -944,8 +978,13 @@ in the downloaded archive's properties before extracting it.
    That is a gap in the tool, not a verdict on the wallpaper; `bake` refuses
    the report. Exit codes in full: 0 plan written, 1 not a Scene wallpaper or
    analysis failed, 3 preset package, 4 tool limitation, 130 cancelled.
-3. Pick a preset — efficiency, balanced (default) or quality — and click
-   Analyze. Resolution and frame rate are worked out for you and shown before
+3. Set the two controls — Animation precision (efficiency / balanced /
+   quality, quality by default) and Interaction (keep / fixed view / off,
+   fixed view by default) — and click Analyze. Precision only bounds
+   retiming and steps down automatically when the stricter budget does not
+   close; the verdict says which one was applied. Interaction only decides
+   what input-driven content does; clocks, dates and media text always stay
+   live. Resolution and frame rate are worked out for you and shown before
    the run: **the frame rate is the lower of your Wallpaper Engine frame-rate
    setting and your screen's refresh rate**, replacing the old fixed default
    of 120, because at native resolution a 120 fps video costs an integrated
@@ -965,11 +1004,11 @@ in the downloaded archive's properties before extracting it.
    Use `--lang zh|en` to choose the language of that verdict.
 5. If there's an occlusion conflict, either resolve it explicitly (move a
    layer to foreground, simplify an effect, or copy the `--retain-live`
-   command from the message) or adjust scene properties and re-analyze. If
-   full-frame is blocked by live elements you would be willing to give up,
-   the report lists the smallest set of trades that reaches a full-frame
-   video, what each one costs you, and what is still live afterwards; you
-   apply it with `--exclude-layers`. Nothing is changed silently.
+   command from the message) or adjust scene properties and re-analyze. The "Not included in this bake" list names every input-driven element
+   the chosen Interaction setting left out. If your settings do not close but
+   another pair of Animation precision / Interaction settings has been solved
+   in the same run, the plan carries `suggested_change` and the GUI offers it
+   as a one-click re-analysis. Nothing is applied without that click.
 6. If the plan says the scene is a video shell, baking it would produce the
    same machine you already have. Re-run analyze with `--video-shell allow`
    if you want it anyway — for a fixed-length loop or a repack, not for
@@ -1002,10 +1041,21 @@ wpe-baker measure-official REQUEST.json
 Analyze options that change what goes into the plan:
 
 - `--preset efficiency|balanced|quality` — how much the motion may change
-  (5% / 3% / smallest), balanced by default. Advanced overrides: `--retime-budget
+  (5% / 3% / smallest), quality by default since 1.0.1; when the stricter
+  budget does not close the solver steps down to balanced and then
+  efficiency, and `preset_applied` in the plan names the one used. Advanced overrides: `--retime-budget
   PERCENT` (0..5) and `--loop-max-seconds`. The older `--loop-preference`,
   `--max-retime` and `--loop-length-max` names are accepted for one release as
   aliases and print a rename notice.
+- `--interaction keep|fixed|off` — what input-driven content does: keep it
+  live, fix the view (default), or also drop pointer effects and sampled,
+  costly full-screen audio effects. Clocks, dates and media text stay live in
+  every mode.
+- `--keep-live on|off` — `on` runs the 1.0 analysis path unchanged (balanced,
+  view preserved, no suggestions, no new plan fields); this is the GUI's
+  Compatibility mode. Cannot be combined with `--interaction`.
+- `--measure-source on|off` — measure the original's power in the official
+  player before analysis; off by default.
 - `--sway-retime on|off` — sway retime is **on by default** under all three
   presets, because the preset's look budget is exactly what governs it. Pass
   `--sway-retime off` (or clear "Sway retime" in the GUI's advanced section)

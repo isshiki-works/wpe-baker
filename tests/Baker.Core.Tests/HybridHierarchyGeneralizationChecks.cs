@@ -51,7 +51,7 @@ internal static class HybridHierarchyGeneralizationChecks
                 ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false, ["textures"] = new JsonArray() })
             }).ToArray()) }.ToJsonString());
 
-        var plan = await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+        var plan = await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
             new(2, sourceDirectory, root, Path.Combine(root, "hierarchy-generalization-analysis"), 64, 32,
                 RuntimeTraceFile: tracePath, VideoLayout: "layered"));
         var layers = plan["layers"]!.AsArray().OfType<JsonObject>().ToDictionary(layer => layer["id"]!.GetValue<int>());
@@ -76,7 +76,7 @@ internal static class HybridHierarchyGeneralizationChecks
         bool unknownFaultRejected = false;
         try
         {
-            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, sourceDirectory, root, Path.Combine(root, "unknown-script-fault-analysis"), 64, 32,
                     RuntimeTraceFile: unknownFaultTracePath, VideoLayout: "layered"));
         }
@@ -153,7 +153,7 @@ internal static class HybridHierarchyGeneralizationChecks
                 runtime["source_script_errors"] = new JsonArray();
             }
             await File.WriteAllTextAsync(runtimePath, runtime.ToJsonString());
-            return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+            return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, directory, root, Path.Combine(root, name + "-analysis"), 64, 32,
                     RuntimeTraceFile: runtimePath, VideoLayout: "layered"));
         }

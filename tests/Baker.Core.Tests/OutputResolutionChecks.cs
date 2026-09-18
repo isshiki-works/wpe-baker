@@ -110,7 +110,7 @@ internal static class OutputResolutionChecks
         bool halfRejected = false;
         try
         {
-            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, Path.Combine(root, "missing-source"), root, Path.Combine(root, "half-size"), 0, 1080));
         }
         catch (InvalidDataException) { halfRejected = true; }
@@ -153,7 +153,7 @@ internal static class OutputResolutionChecks
                 ["effective_parallax_depth"] = new JsonArray(0, 0),
                 ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false, ["textures"] = new JsonArray() }) }) }.ToJsonString());
         async Task<JsonObject> AnalyzeAsync(string name, uint width, uint height) =>
-            await new HybridScenePlanner(new("not-started", "not-started", "not-started", []), Screen(96, 16)).AnalyzeAsync(
+            await new HybridScenePlanner(new("not-started", "not-started", "not-started", []), Screen(96, 16)).AnalyzeSingleAsync(
                 new(2, source, root, Path.Combine(root, name), width, height, RuntimeTraceFile: trace));
         JsonObject planned = await AnalyzeAsync("canvas-resolution-default", 0, 0);
         check(planned["settings"]!["width"]!.GetValue<uint>() == 96 && planned["settings"]!["height"]!.GetValue<uint>() == 24 &&

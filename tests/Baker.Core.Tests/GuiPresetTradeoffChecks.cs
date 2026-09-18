@@ -9,6 +9,45 @@ internal static class GuiPresetTradeoffChecks
     {
         ProfileLine(check);
         Listing(check);
+        TwoAxes(check);
+    }
+
+    private static void TwoAxes(Action<bool, string> check)
+    {
+        var original = new HybridAnalyzeRequest(2, "s", "a", "o", SwayRetime: true);
+        var fixedQuality = AppJsonPresentation.ConfigureAnalysis(original, "quality", "fixed", false, false, false);
+        var offEfficiency = AppJsonPresentation.ConfigureAnalysis(original, "efficiency", "off", false, false, false);
+        check(fixedQuality is { Preset: "quality", Interaction: "fixed", ViewMode: "fixed_view", CustomSettings: false, KeepLive: false } &&
+            offEfficiency is { Preset: "efficiency", Interaction: "off", CustomSettings: false } &&
+            fixedQuality.UserProperties is null && offEfficiency.ExcludedLayerIds is null,
+            "GUI axes map independently to Core without implicitly excluding content or marking custom");
+        var legacy = AppJsonPresentation.ConfigureAnalysis(original, "efficiency", "off", true, false, false);
+        check(legacy is { KeepLive: true, Preset: "balanced", LoopPreference: "balanced", ViewMode: "preserve", Interaction: null, LiveOverlayPlacement: "preserve" },
+            "GUI compatibility ignores both axes and restores the CLI legacy defaults");
+        check(AppJsonPresentation.ConfigureAnalysis(original, "quality", "fixed", false, true, true) is { CustomSettings: true, LayoutExplicit: true },
+            "GUI advanced overrides are recorded separately from the preset");
+        var plan = new JsonObject { ["preset_applied"] = "balanced", ["applied_tradeoffs"] = new JsonObject {
+            ["turn_off_kinds"] = new JsonArray("parallax", "parallax"), ["daytime_state"] = "morning" },
+            ["live_overlays_hoisted"] = new JsonArray(new JsonObject(), new JsonObject()) };
+        check(PlainLanguage.PresetAppliedLine(plan, "balanced", false) == "" &&
+            PlainLanguage.PresetAppliedLine(plan, "quality", false) == "已按平衡生成方案（质量不可行）" &&
+            PlainLanguage.PresetAppliedLine(plan, "quality", true).Contains("Quality unavailable"),
+            "GUI downgrade line is bilingual and hidden when requested and applied presets match");
+        check(PlainLanguage.AppliedChangeLines(plan, false).Length == 3 &&
+            PlainLanguage.AppliedChangeLines(plan, false).Any(line => line.Contains("2 个小组件")) &&
+            PlainLanguage.AppliedChangeLines(plan, true).Any(line => line.Contains("morning")) &&
+            PlainLanguage.AppliedChangeLines(new JsonObject(), false).Length == 0,
+            "GUI applied card deduplicates kinds, names the state and hoisted count, and hides empty content");
+        plan["suggested_change"] = new JsonObject { ["verified"] = true,
+            ["settings"] = new JsonObject { ["interaction"] = "off", ["preset"] = "balanced" } };
+        JsonObject? settings = AppJsonPresentation.SuggestedSettings(plan);
+        check(settings?["interaction"]?.GetValue<string>() == "off" && settings["preset"]?.GetValue<string>() == "balanced",
+            "GUI one-click suggestion exposes both verified axis settings");
+        plan["suggested_change"]!["verified"] = false;
+        check(AppJsonPresentation.SuggestedSettings(plan) is null, "GUI never applies an unverified suggestion");
+        plan["suggested_change"]!["verified"] = true;
+        plan["suggested_change"]!["settings"]!["interaction"] = "invalid";
+        check(AppJsonPresentation.SuggestedSettings(plan) is null, "GUI refuses unsupported suggested axis values");
     }
 
     /// 结论区一行：档位、观感预算（带手动标记）、相位差（圈）、循环长度。

@@ -230,7 +230,7 @@ internal static class TradeoffOptionsChecks
                 ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false,
                     ["uses_system_media_thumbnail"] = false, ["active_uniforms"] = new JsonArray("g_ModelViewProjectionMatrix"),
                     ["textures"] = new JsonArray() }) })]) }.ToJsonString());
-        var plan = await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+        var plan = await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
             new(2, sourceDirectory, root, Path.Combine(root, "tradeoff-plan"), 64, 32, RuntimeTraceFile: tracePath));
         JsonObject Layer(int id) => plan["layers"]!.AsArray().OfType<JsonObject>()
             .Single(layer => layer["id"]!.GetValue<int>() == id);

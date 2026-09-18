@@ -82,7 +82,7 @@ try
     }
     if (args.Length < 2) throw new ArgumentException("Source path is required.");
     string[] allowed = args[0] switch {
-        "analyze" => ["--assets", "--out", "--tools", "--properties", "--properties-source", "--width", "--height", "--fps", "--fps-den", "--view-mode", "--video-layout", "--live-overlays", "--text-effects", "--audio-effects", "--exclude-layers", "--preset", "--retime-budget", "--max-retime", "--loop-preference", "--video-shell", "--sway-retime", "--loop-max-seconds", "--loop-length-max", "--local-seam-repair", "--trace", "--retain-live", "--device", "--lang", "--measure-source", "--wallpaper-engine", "--present-mon", "--daytime-split"],
+        "analyze" => ["--assets", "--out", "--tools", "--properties", "--properties-source", "--width", "--height", "--fps", "--fps-den", "--view-mode", "--video-layout", "--live-overlays", "--text-effects", "--audio-effects", "--exclude-layers", "--preset", "--retime-budget", "--max-retime", "--loop-preference", "--video-shell", "--sway-retime", "--loop-max-seconds", "--loop-length-max", "--local-seam-repair", "--trace", "--retain-live", "--device", "--lang", "--measure-source", "--wallpaper-engine", "--present-mon", "--daytime-split", "--keep-live", "--interaction"],
         "inspect" => ["--assets", "--out"],
         "decode-check" => ["--tools", "--out"],
         "extract" => ["--out"], "bake" => ["--tools", "--out", "--encoder", "--encode-slots", "--group-parallel", "--keep-intermediates", "--lang"], "render" or "validate" => ["--tools"],
@@ -132,9 +132,19 @@ try
             OutputFrameRate.PrimaryDisplayRefreshHz);
         // 档位给观感改动预算与长度上限兜底；--retime-budget / --loop-max-seconds 是高级覆盖，旧名 --max-retime 由这里统一读，提示改名。
         RetimeProfile.Arguments retimeArguments = RetimeProfile.ReadArguments(options, Console.Error.WriteLine);
+        string keepLive = options.GetValueOrDefault("--keep-live", "off");
+        if (keepLive is not ("on" or "off")) throw new ArgumentException("--keep-live must be on or off.");
+        string interaction = options.GetValueOrDefault("--interaction",
+            options.TryGetValue("--view-mode", out string? explicitView) ? explicitView == "preserve" ? "keep" : "fixed" : "fixed");
+        if (interaction is not ("keep" or "fixed" or "off")) throw new ArgumentException("--interaction must be keep, fixed, or off.");
+        if (keepLive == "on" && options.ContainsKey("--interaction")) throw new ArgumentException("--keep-live on uses legacy settings; omit --interaction.");
+        if (options.TryGetValue("--view-mode", out string? selectedView) && options.ContainsKey("--interaction") &&
+            (selectedView == "preserve") != (interaction == "keep")) throw new ArgumentException("--view-mode conflicts with --interaction.");
+        if (keepLive == "off" && !options.ContainsKey("--preset") && !options.ContainsKey("--loop-preference"))
+            retimeArguments = retimeArguments with { Preset = "quality" };
         if (options.TryGetValue("--local-seam-repair", out string? repairText) && bool.Parse(repairText))
             throw new ArgumentException("--local-seam-repair true is no longer supported; source-period encodings are never repaired.");
-        string liveOverlayPlacement = options.GetValueOrDefault("--live-overlays", "preserve");
+        string liveOverlayPlacement = options.GetValueOrDefault("--live-overlays", keepLive == "on" ? "preserve" : "foreground");
         if (liveOverlayPlacement is not ("preserve" or "foreground"))
             throw new ArgumentException("--live-overlays must be preserve or foreground.");
         string liveTextEffects = options.GetValueOrDefault("--text-effects", "preserve");
@@ -192,11 +202,13 @@ try
             FrameRateOrigin: frameRate.ToJson(),
             Preset: retimeArguments.Preset,
             RetimeBudgetPercent: retimeArguments.BudgetPercent,
-            DaytimeSplit: daytimeSplit == "on");
+            DaytimeSplit: daytimeSplit == "on", KeepLive: keepLive == "on",
+            CustomSettings: PresetCascade.IsCustom(options.Keys), Interaction: keepLive == "on" ? null : interaction,
+            LayoutExplicit: options.ContainsKey("--video-layout"));
         var progress = new Progress<RenderProgress>(p => Console.Error.WriteLine(JsonSerializer.Serialize(p, jsonOptions)));
         // 分析前先实测原作功耗：在官方 Wallpaper Engine 里播原作、等稳定、采样、还原，读数写进 plan 的 source_power，
         // 结论第一行按实测分档。命令行默认 off（界面默认开），测不了的平台跳过并说明，绝不因此让分析失败。
-        string measureSource = options.GetValueOrDefault("--measure-source", "off");
+        string measureSource = options.GetValueOrDefault("--measure-source", PresetCascade.MeasureSourceByDefault ? "on" : "off");
         if (measureSource is not ("on" or "off")) throw new ArgumentException("--measure-source must be on or off.");
         JsonObject? sourcePower = null;
         if (measureSource == "on")
@@ -239,13 +251,13 @@ try
         }
         // 状态拆分识别成功：每个状态按"只有这套图层可见"再规划一次，子 plan 落在 <out>.state-<名字>.json，
         // 母 plan 的 daytime_split.states[] 记下各状态的 plan 路径、结论 key、阻断数、实时层数与视频组数。
-        if (analyzeExitCode == 0 && report["daytime_split"] is JsonObject split && split["status"]?.GetValue<string>() == "recognized")
+        if (analyzeExitCode == 0 && request.DaytimeSplit && report["daytime_split"] is JsonObject split && split["status"]?.GetValue<string>() == "recognized")
         {
             foreach (JsonObject state in split["states"]!.AsArray().OfType<JsonObject>())
             {
                 string stateName = state["name"]!.GetValue<string>();
                 string stateDirectory = Path.Combine(analysisDirectory, "state-" + stateName);
-                JsonObject statePlan = await new HybridScenePlanner(tools).AnalyzeAsync(
+                JsonObject statePlan = await new HybridScenePlanner(tools).AnalyzeSingleAsync(
                     request with { OutputDirectory = stateDirectory, DaytimeState = stateName }, progress, cancellation.Token);
                 string statePlanPath = options.TryGetValue("--out", out var planOut) ? planOut + ".state-" + stateName + ".json"
                     : Path.Combine(stateDirectory, "plan.json");
@@ -265,7 +277,7 @@ try
         string text = JsonSerializer.Serialize(report, jsonOptions);
         if (options.TryGetValue("--out", out var output))
         {
-            await using var file = new FileStream(output, FileMode.CreateNew, FileAccess.Write);
+            await using var file = new FileStream(output, keepLive == "on" ? FileMode.CreateNew : FileMode.Create, FileAccess.Write);
             await JsonSerializer.SerializeAsync(file, report, jsonOptions, cancellation.Token);
         }
         Console.WriteLine(text);

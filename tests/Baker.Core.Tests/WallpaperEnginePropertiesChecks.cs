@@ -170,7 +170,7 @@ internal static class WallpaperEnginePropertiesChecks
                 ["effective_parallax_depth"] = new JsonArray(0, 0),
                 ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false, ["textures"] = new JsonArray() }) }) }.ToJsonString());
         async Task<JsonObject> PlanAsync(string name, JsonObject? properties, JsonObject? propertiesOrigin) =>
-            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, traceSource, root, Path.Combine(root, name), 64, 32, UserProperties: properties,
                     RuntimeTraceFile: tracePath, VideoLayout: "layered", PropertiesOrigin: propertiesOrigin));
         JsonObject withWpe = await PlanAsync("wpe-props-plan-wpe", merged, origin);

@@ -112,7 +112,7 @@ internal static class DaytimeSplitChecks
                 ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray(),
                 ["runtime_animation_periods"] = new JsonArray(),
                 ["runtime_layers"] = RuntimeLayers(sceneObjects) }.ToJsonString());
-            return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+            return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, sourceDirectory, root, Path.Combine(root, "daytime-" + name), 64, 32,
                     RuntimeTraceFile: tracePath, DaytimeSplit: split, DaytimeState: state));
         }

@@ -9,6 +9,29 @@ internal sealed record AppPropertyDefinition(string Key, JsonObject Definition);
 /// <summary>Pure JSON projection used by the WPF layer and by file-backed wiring checks.</summary>
 internal static class AppJsonPresentation
 {
+    public static HybridAnalyzeRequest ConfigureAnalysis(HybridAnalyzeRequest request, string preset, string interaction,
+        bool compatibility, bool custom, bool layoutExplicit) => request with
+    {
+        Preset = compatibility ? RetimeProfile.Balanced : preset,
+        LoopPreference = RetimeProfile.LoopPreferenceForPreset(compatibility ? RetimeProfile.Balanced : preset),
+        Interaction = compatibility ? null : interaction,
+        ViewMode = compatibility || interaction == "keep" ? "preserve" : "fixed_view",
+        LiveOverlayPlacement = compatibility ? "preserve" : "foreground",
+        KeepLive = compatibility, CustomSettings = custom, LayoutExplicit = layoutExplicit
+    };
+
+    public static JsonObject? SuggestedSettings(JsonObject? plan)
+    {
+        if (plan?["suggested_change"]?["verified"]?.GetValue<bool>() != true ||
+            plan["suggested_change"]?["settings"] is not JsonObject settings || settings.Count == 0) return null;
+        foreach (var (key, value) in settings)
+        {
+            if (value is not JsonValue scalar || !scalar.TryGetValue<string>(out var text)) return null;
+            if (key == "preset" ? !RetimeProfile.IsKnownPreset(text) : key != "interaction" || text is not ("keep" or "fixed" or "off")) return null;
+        }
+        return settings.DeepClone().AsObject();
+    }
+
     public static string? CandidateProjectPath(JsonObject result) =>
         result["project_path"]?.GetValue<string>();
 
@@ -538,6 +561,47 @@ internal static class AppJsonPresentation
         string scriptErrorsAdvice = scriptErrors.Length == 0 ? "" : " · " + scriptErrors;
         return (timingAdvice + conflictAdvice + promotedAdvice + simplifiedAdvice + audioEffectsAdvice +
             scriptErrorsAdvice + blockers).TrimStart(' ', '·', ';', '；').Trim();
+    }
+
+    /// <summary>
+    /// 折叠的"技术细节"面板：纯数字表，一行一对（名称, 值），不组句子、不写段落。
+    /// 循环长度、总调速、视频组数、实时图层数、输出分辨率与帧率原样取自 plan；原作功耗只在实测过时才出这一行。
+    /// </summary>
+    public static (string Label, string Value)[] NumberRows(JsonObject? plan, bool english)
+    {
+        if (plan is null) return [];
+        var rows = new List<(string, string)>();
+        JsonObject? candidate = plan["loop"]?["candidates"]?.AsArray().OfType<JsonObject>().FirstOrDefault();
+        double numerator = Number(plan["settings"]?["fps_numerator"]) ?? 0;
+        double denominator = Number(plan["settings"]?["fps_denominator"]) ?? 0;
+        double fps = denominator > 0 ? numerator / denominator : 0;
+        string fpsText = fps <= 0 ? "" : (denominator == 1 ? fps.ToString("0", CultureInfo.InvariantCulture)
+            : fps.ToString("0.##", CultureInfo.InvariantCulture)) + " fps";
+        if (Number(candidate?["seconds"]) is double seconds && seconds > 0)
+        {
+            double? frames = Number(candidate?["frames"]);
+            string value = seconds.ToString("0.###", CultureInfo.InvariantCulture) + (english ? " s" : " 秒");
+            if (frames is > 0)
+                value += " / " + frames.Value.ToString("0", CultureInfo.InvariantCulture) + (english ? " frames" : " 帧") +
+                    (fpsText.Length > 0 ? " @" + fpsText : "");
+            rows.Add((english ? "Loop length" : "循环长度", value));
+        }
+        if (Number(candidate?["total_retime_cost_percent"]) is double retime)
+            rows.Add((english ? "Total retime" : "总调速", retime.ToString("0.###", CultureInfo.InvariantCulture) + "%"));
+        int groups = plan["route"]?.GetValue<string>() == "effect_prefix"
+            ? plan["effect_prefix_caches"]?.AsArray().Count ?? 0
+            : plan["video_groups"]?.AsArray().Count ?? 0;
+        rows.Add((english ? "Video groups" : "视频组数", groups.ToString(CultureInfo.InvariantCulture)));
+        rows.Add((english ? "Live layers" : "实时图层数", (plan["live_layer_ids"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
+        double width = Number(plan["output_resolution"]?["width"]) ?? 0, height = Number(plan["output_resolution"]?["height"]) ?? 0;
+        if (width > 0 && height > 0)
+            rows.Add((english ? "Output resolution and frame rate" : "输出分辨率与帧率",
+                width.ToString("0", CultureInfo.InvariantCulture) + "×" + height.ToString("0", CultureInfo.InvariantCulture) +
+                (fpsText.Length > 0 ? " @" + fpsText : "")));
+        if (plan["source_power"] is JsonObject power && power["status"]?.GetValue<string>() == "measured" &&
+            SourcePowerVerdict.Watts(power) is double watts)
+            rows.Add((english ? "Original power" : "原作功耗", watts.ToString("0.##", CultureInfo.InvariantCulture) + " W"));
+        return [.. rows];
     }
 
     /// <summary>取舍清单的抬头：有方案时是"有 N 个方案…"，主体类壁纸是那句拒绝说明，其余为空串。</summary>

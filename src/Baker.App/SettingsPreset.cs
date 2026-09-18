@@ -69,14 +69,16 @@ internal sealed record SettingsPreset(string SourceSha256, PresetSettings Settin
 }
 
 internal sealed record PresetSettings(uint Width, uint Height, string Fps, string? DeviceUuid, bool Retime, bool FixedView,
-    bool LayeredVideo, bool ForegroundLive, bool SimpleTextEffects, bool AudioEffects, string LoopPreference = "balanced")
+    bool LayeredVideo, bool ForegroundLive, bool SimpleTextEffects, bool AudioEffects, string LoopPreference = "balanced",
+    string Interaction = "fixed", bool Compatibility = false)
 {
     public JsonObject ToJson() => new()
     {
         ["width"] = Width, ["height"] = Height, ["fps"] = Fps, ["device_uuid"] = DeviceUuid,
         ["retime"] = Retime, ["fixed_view"] = FixedView, ["layered_video"] = LayeredVideo,
         ["foreground_live"] = ForegroundLive, ["simple_text_effects"] = SimpleTextEffects,
-        ["audio_effects"] = AudioEffects, ["loop_preference"] = LoopPreference
+        ["audio_effects"] = AudioEffects, ["loop_preference"] = LoopPreference,
+        ["interaction"] = Interaction, ["compatibility"] = Compatibility
     };
 
     public static PresetSettings Parse(JsonObject settings)
@@ -95,9 +97,13 @@ internal sealed record PresetSettings(uint Width, uint Height, string Fps, strin
         string loopPreference = settings.ContainsKey("loop_preference") ? RequiredString(settings, "loop_preference") : "balanced";
         if (loopPreference is not ("performance" or "balanced" or "quality"))
             throw new InvalidDataException("Preset loop_preference is invalid.");
+        string interaction = settings.ContainsKey("interaction") ? RequiredString(settings, "interaction")
+            : RequiredBool(settings, "fixed_view") ? "fixed" : "keep";
+        if (interaction is not ("keep" or "fixed" or "off")) throw new InvalidDataException("Preset interaction is invalid.");
         return new(width, height, fps, device, RequiredBool(settings, "retime"), RequiredBool(settings, "fixed_view"),
             RequiredBool(settings, "layered_video"), RequiredBool(settings, "foreground_live"), RequiredBool(settings, "simple_text_effects"),
-            RequiredBool(settings, "audio_effects"), loopPreference);
+            RequiredBool(settings, "audio_effects"), loopPreference, interaction,
+            settings.ContainsKey("compatibility") && RequiredBool(settings, "compatibility"));
     }
 
     private static uint DimensionUInt(JsonObject objectValue, string key) => objectValue[key] is JsonValue value &&

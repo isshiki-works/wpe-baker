@@ -26,7 +26,7 @@ internal static class VideoDominanceChecks
         string partialTrace = WriteTrace(root, "video-shell-partial-trace.json", partialSource, RuntimeLayers(effect: false), VideoPeriods());
 
         async Task<JsonObject> PlanAsync(string name, string source, string trace, string videoShell = VideoDominance.RejectChoice) =>
-            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, source, root, Path.Combine(root, name), 64, 32, RuntimeTraceFile: trace, VideoShell: videoShell));
         static string Status(JsonObject plan) => plan["video_dominant"]!["status"]!.GetValue<string>();
         static string Evidence(JsonObject plan) => string.Join(" | ",

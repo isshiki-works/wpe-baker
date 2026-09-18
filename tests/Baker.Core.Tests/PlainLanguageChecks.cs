@@ -98,7 +98,9 @@ internal static class PlainLanguageChecks
             foreach (Match match in Localized.Matches(File.ReadAllText(file)))
                 for (int group = 1; group <= 2; ++group)
                     found.Add((Path.GetFileName(file), match.Groups[group].Value));
-        foreach (string key in PlainLanguage.GuiMessageKeys)
+        foreach (string key in PlainLanguage.GuiMessageKeys.Concat(new[] {
+            "preset.generated", "preset.omitted", "preset.experimental", "preset.daytime", "preset.too_many_video_groups",
+            "interaction.suggest_fixed", "interaction.suggest_off" }))
             foreach (string language in new[] { Messages.Chinese, Messages.English })
                 found.Add(("Messages:" + key, Messages.Get(key, language)));
         return [.. found];
@@ -210,6 +212,14 @@ internal static class PlainLanguageChecks
             PlainLanguage.Verdict(tradeoff, true).StartsWith("Ready to generate (", StringComparison.Ordinal) &&
             PlainLanguage.NextAction(tradeoff, false) == "先在下方禁用列出的项目，然后重新分析",
             "tool register: a plan with tradeoff options reports the item count and one action");
+        var applied = bakeable.DeepClone().AsObject();
+        applied["preset_applied"] = "quality";
+        applied[TradeoffOptions.Field] = tradeoff[TradeoffOptions.Field]!.DeepClone();
+        check(PlainLanguage.Verdict(applied, false) == "可以生成" && PlainLanguage.NextAction(applied, true) == "Use Generate to start",
+            "integrated GUI does not mistake optional tradeoffs for unapplied requirements");
+        applied["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.loop_unresolved" });
+        applied["preset_applied"] = "none";
+        check(PlainLanguage.Verdict(applied, false) == "无法生成", "integrated GUI does not promote a rejected plan because tradeoff options exist");
 
         // 主体类：整张画面就是那个实时效果画出来的。
         var subject = Plan(Layer(10, null, "指针着色器", live: true, ["active_shader_pointer_input"]));

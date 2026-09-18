@@ -5,177 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="Periodica: deterministic animation baking for Wallpaper Engine. WPE Baker bakes a scene's periodic animation into one seamless video — up to 96% less GPU power, measured in the official player.">
 <link rel="icon" href="data:,">
+<link rel="alternate" hreflang="zh" href="zh.html">
+<link rel="alternate" hreflang="en" href="index.html">
+<title>Periodica</title>
+<script>try{if(!localStorage.getItem("lang")&&/^zh/i.test(navigator.language||"")&&!location.hash)location.replace("zh.html")}catch(e){}</script>
 </head>
 <body>
-<title>Periodica</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
-<style>
-:root{
-  --paper:#f4f6f8;--paper2:#ffffff;--rule:#d5dbe2;--rule2:#e6eaef;
-  --ink:#171c23;--ink2:#3b4653;--dim:#7a8593;
-  --signal:#0e7f6d;--signal2:#0a6357;--trace:#5b6875;--mark:#c9741a;
-  --display:"Bricolage Grotesque","Instrument Sans",system-ui,sans-serif;
-  --body:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1140px;margin:0 auto;padding-inline:20px}
-a{color:var(--signal2)}
-a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--mark);outline-offset:3px}
-h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;letter-spacing:-.01em}
-.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--signal)}
-.mono{font-family:var(--mono)}
-img,video{max-width:100%}
-nav{display:flex;justify-content:space-between;align-items:center;padding-block:16px;border-bottom:1px solid var(--rule)}
-.logo{font-family:var(--display);font-weight:800;font-size:19px;letter-spacing:.02em}
-.logo small{font-family:var(--mono);font-weight:400;font-size:11px;color:var(--dim);margin-left:10px;letter-spacing:.08em}
-nav .links{display:flex;gap:22px;font-size:14px}
-nav .links a{color:var(--ink2);text-decoration:none}
-/* hero */
-.hero{display:grid;grid-template-columns:.9fr 1.1fr;gap:40px;align-items:center;padding-block:48px 36px}
-.hero h1{font-size:clamp(34px,4.4vw,54px);font-weight:800;line-height:1.02;letter-spacing:-.03em;margin-top:14px}
-.hero h1 span{color:var(--signal)}
-.hero p.lead{font-size:17px;color:var(--ink2);max-width:34em;margin:18px 0 0}
-.cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px;align-items:center}
-.btn{display:inline-block;padding:12px 20px;border-radius:4px;font-family:var(--display);font-weight:700;font-size:15px;text-decoration:none}
-.btn.primary{background:var(--ink);color:var(--paper2)}
-.btn.ghost{border:1px solid var(--rule);color:var(--ink);background:var(--paper2)}
-.fine{font-family:var(--mono);font-size:12px;color:var(--dim)}
-.screen{background:var(--paper2);border:1px solid var(--rule);border-radius:6px;overflow:hidden}
-.screen video{display:block;width:100%;aspect-ratio:16/9;background:#111}
-.screen .bar{display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 14px;font-family:var(--mono);font-size:11px;color:var(--ink2);border-top:1px solid var(--rule2);align-items:center}
-.screen .bar b{font-family:var(--display);font-size:22px;color:var(--signal);font-weight:800;letter-spacing:-.02em}
-.screen .bar .tag{color:var(--dim)}
-/* strip */
-.strip{display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
-.strip div{padding:18px 16px 18px 0;border-right:1px solid var(--rule);margin-right:16px}
-.strip div:last-child{border-right:0}
-.strip .n{font-family:var(--display);font-size:30px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-.strip .l{font-size:13px;color:var(--ink2);margin-top:2px}
-section{padding-block:64px;border-bottom:1px solid var(--rule)}
-section h2{font-size:clamp(26px,3.2vw,38px);font-weight:700;margin-top:8px;max-width:20em}
-section p.sub{color:var(--ink2);font-size:17px;max-width:40em;margin:14px 0 0}
-/* trace */
-.trace{background:var(--paper2);border:1px solid var(--rule);border-radius:6px;padding:18px 18px 14px;margin-top:28px}
-.trace .hdr{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:.04em;margin-bottom:8px}
-.trace svg{width:100%;height:auto;display:block}
-.trace .legend{display:flex;gap:18px;font-family:var(--mono);font-size:11px;color:var(--ink2);margin-top:8px}
-.legend i{display:inline-block;width:18px;height:2px;vertical-align:middle;margin-right:6px}
-.tr-o{stroke:var(--trace);stroke-width:1.6;fill:none}
-.tr-b{stroke:var(--signal);stroke-width:2;fill:none;stroke-dasharray:1400;stroke-dashoffset:1400;animation:draw 2.2s .3s ease-out forwards}
-@keyframes draw{to{stroke-dashoffset:0}}
-@media (prefers-reduced-motion:reduce){.tr-b{animation:none;stroke-dashoffset:0}}
-.ax{stroke:var(--rule);stroke-width:1}
-.axl{font-family:var(--mono);font-size:10px;fill:var(--dim)}
-.band{fill:var(--rule2)}
-.bandl{font-family:var(--mono);font-size:10px;fill:var(--ink2);text-anchor:middle}
-/* compare slider */
-.cmp{position:relative;margin-top:28px;border:1px solid var(--rule);border-radius:6px;overflow:hidden;background:#111;aspect-ratio:16/9;max-width:100%}
-.cmp img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
-.cmp .top{clip-path:inset(0 50% 0 0)}
-.cmp .div{position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--paper2);box-shadow:0 0 0 1px rgba(0,0,0,.25);pointer-events:none}
-.cmp .div::after{content:"⇆";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:38px;height:38px;border-radius:50%;background:var(--paper2);color:var(--ink);font-family:var(--mono);font-size:15px;display:grid;place-items:center;box-shadow:0 1px 4px rgba(0,0,0,.3)}
-.cmp input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:ew-resize}
-.cmp .lab{position:absolute;top:12px;font-family:var(--mono);font-size:11px;color:#fff;background:rgba(0,0,0,.55);padding:4px 8px;border-radius:3px;pointer-events:none}
-.cmp .lab.l{left:12px}.cmp .lab.r{right:12px}
-/* gui mock */
-.gui{margin-top:28px;background:var(--paper2);border:1px solid var(--rule);border-radius:8px;overflow:hidden;box-shadow:0 20px 50px -30px rgba(23,28,35,.35)}
-.gui .title{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:12px;color:var(--ink2)}
-.gui .title .dots i{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--rule);margin-right:6px}
-.gui .title button{font:inherit;font-size:11px;border:1px solid var(--rule);background:var(--paper);border-radius:3px;padding:3px 8px;cursor:pointer;color:var(--ink2)}
-.gui .body{display:grid;grid-template-columns:300px 1fr;min-height:360px}
-.gui .left{border-right:1px solid var(--rule);padding:16px;display:grid;gap:14px;align-content:start;font-size:13px}
-.gui .field label{display:block;font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
-.gui .box{border:1px solid var(--rule);border-radius:4px;padding:8px 10px;font-family:var(--mono);font-size:12px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.gui .seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
-.gui .seg span{padding:7px 0;text-align:center;font-size:12px;color:var(--ink2)}
-.gui .seg span.on{background:var(--ink);color:var(--paper2)}
-.gui .chk{display:flex;gap:8px;align-items:center;color:var(--ink2);font-size:12px}
-.gui .chk i{width:14px;height:14px;border:1px solid var(--rule);border-radius:3px;display:inline-block}
-.gui .chk small{color:var(--dim)}
-.gui .go{margin-top:6px;background:var(--ink);color:var(--paper2);text-align:center;padding:10px;border-radius:4px;font-family:var(--display);font-weight:700}
-.gui .right{padding:22px 24px}
-.gui .verdict{font-family:var(--display);font-size:30px;font-weight:800;letter-spacing:-.02em;color:var(--signal2)}
-.gui .next{color:var(--ink2);margin-top:4px;font-size:14px}
-.gui details{margin-top:18px;border-top:1px solid var(--rule)}
-.gui summary{cursor:default;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);padding:10px 0}
-.gui .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;font-size:13px}
-.gui .kv span:nth-child(odd){color:var(--dim);font-family:var(--mono);font-size:12px}
-.gui .kv span:nth-child(even){font-variant-numeric:tabular-nums}
-.gui .card{margin-top:18px;border:1px solid var(--rule);border-radius:4px;padding:12px 14px;font-size:13px}
-.gui .card h4{margin:0 0 8px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:500}
-.gui .card ul{margin:0;padding-left:16px;color:var(--ink2);display:grid;gap:4px}
-/* table */
-table{width:100%;border-collapse:collapse;margin-top:28px;font-size:14px}
-th{font-family:var(--mono);font-weight:500;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);text-align:left;padding:10px 12px 10px 0;border-bottom:1px solid var(--rule)}
-td{padding:11px 12px 11px 0;border-bottom:1px solid var(--rule2);vertical-align:middle;font-variant-numeric:tabular-nums}
-td.num{font-family:var(--mono);text-align:right;white-space:nowrap}
-td .id{font-family:var(--mono);font-size:11px;color:var(--dim);display:block}
-td.delta{font-family:var(--mono);color:var(--signal2);font-weight:500;text-align:right;white-space:nowrap}
-.tbar{display:inline-block;height:8px;background:var(--signal);border-radius:1px;vertical-align:middle}
-.tbar.o{background:var(--trace)}
-.tablewrap{overflow-x:auto}
-.note{font-family:var(--mono);font-size:12px;color:var(--dim);margin-top:14px}
-/* gallery */
-.gal{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-top:28px}
-.gal figure{margin:0;background:var(--paper2);border:1px solid var(--rule);border-radius:6px;overflow:hidden}
-.gal img{display:block;width:100%;aspect-ratio:1;object-fit:cover}
-.gal figcaption{padding:10px 12px;font-size:12px;color:var(--ink2)}
-.gal figcaption b{display:block;font-family:var(--display);font-size:20px;color:var(--signal2);letter-spacing:-.02em}
-.gal figcaption small{display:block;font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:2px}
-/* two col */
-.two{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:32px}
-.two h3{font-size:18px;font-weight:700;margin-bottom:10px}
-.two ul{margin:0;padding-left:18px;color:var(--ink2);font-size:15px;display:grid;gap:8px}
-.tag{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:3px 7px;border:1px solid var(--rule);border-radius:3px;margin-left:8px;vertical-align:middle}
-.tag.exp{color:var(--mark);border-color:#e8c9a3}
-/* spec */
-.spec{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;margin-top:32px;align-items:start}
-.spec p{color:var(--ink2);font-size:16px;margin:0 0 12px}
-.kvs{border-top:1px solid var(--rule)}
-.kvs div{display:grid;grid-template-columns:1fr 1.3fr;gap:12px;padding-block:10px;border-bottom:1px solid var(--rule2);font-size:14px}
-.kvs div span:first-child{font-family:var(--mono);font-size:12px;color:var(--dim);padding-top:2px}
-.kvs div span:last-child{font-variant-numeric:tabular-nums}
-/* roadmap */
-.road{display:grid;grid-template-columns:repeat(4,1fr);gap:22px;margin-top:32px}
-.road div{border-top:2px solid var(--rule);padding-top:12px}
-.road div.now{border-top-color:var(--signal)}
-.road div.big{border-top-color:var(--mark)}
-.road .when{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:.1em}
-.road h3{font-size:17px;font-weight:700;margin-top:6px}
-.road p{color:var(--ink2);font-size:14px;margin:8px 0 0}
-/* faq */
-.faq{margin-top:28px;border-top:1px solid var(--rule)}
-.faq details{border-bottom:1px solid var(--rule)}
-.faq summary{cursor:pointer;padding:16px 0;font-family:var(--display);font-weight:700;font-size:17px;list-style:none;display:flex;justify-content:space-between}
-.faq summary::after{content:"+";font-family:var(--mono);color:var(--dim)}
-.faq details[open] summary::after{content:"–"}
-.faq details p{margin:0;padding:0 0 18px;color:var(--ink2);font-size:15px;max-width:44em}
-footer{padding-block:26px;font-family:var(--mono);font-size:12px;color:var(--dim);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
-@media (max-width:900px){
-  .hero{grid-template-columns:1fr;padding-block:32px 24px}
-  .strip{grid-template-columns:repeat(2,1fr)}
-  .strip div:nth-child(2n){border-right:0}
-  .gui .body{grid-template-columns:1fr}
-  .gui .left{border-right:0;border-bottom:1px solid var(--rule)}
-  .gal{grid-template-columns:repeat(2,1fr)}
-  .two,.spec,.road{grid-template-columns:1fr}
-  nav .links{display:none}
-}
-</style>
+<link rel="stylesheet" href="site/style.css">
 
 <div class="wrap">
 <nav>
-  <div class="logo">PERIODICA<small>WPE BAKER · 1.0</small></div>
+  <div class="logo">PERIODICA<small>WPE BAKER · 1.0.1</small></div>
   <div class="links"><a href="#loop">The loop</a><a href="#numbers">Numbers</a><a href="#refresh">Refresh rate</a><a href="#gui">The tool</a><a href="#astra">Built with Astra</a><a href="#roadmap">Roadmap</a></div>
+  <div class="lang"><a href="index.html" aria-current="page" onclick="try{localStorage.setItem('lang','en')}catch(e){}">EN</a><a href="zh.html" onclick="try{localStorage.setItem('lang','zh')}catch(e){}">中文</a></div>
 </nav>
 
 <div class="hero">
   <div>
-    <div class="eyebrow">Deterministic animation baking</div>
+    <div class="eyebrow">Deterministic animation baking engine</div>
     <h1>Your wallpaper renders forever.<br><span>Bake it once.</span></h1>
-    <p class="lead">WPE Baker is the first product built on Periodica. It models a Wallpaper Engine scene's entire animation math and retunes its periods until the whole scene closes into one baked video. Same look; deterministic effects baked, interactive ones kept live or left out. Up to 96% less GPU load and power, even on battery.</p>
+    <p class="lead">Periodica models a Wallpaper Engine scene’s entire animation math, retunes its periods until the whole scene closes into one loop, and plays it back as video. Same look; up to 96% less GPU load and power, plugged in or on battery. Its first application is WPE Baker, for Wallpaper Engine.</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/latest">Download for Windows</a>
       <a class="btn ghost" href="#numbers">Read the measurements</a>
@@ -246,32 +96,14 @@ footer{padding-block:26px;font-family:var(--mono);font-size:12px;color:var(--dim
 <section id="gui">
   <div class="eyebrow">The tool</div>
   <h2>Drag a scene in. Read one line.</h2>
-  <p class="sub">The verdict is one of four fixed states. Numbers, routes and reasons live under Details; a card lists anything the bake left out.</p>
-  <div class="gui" id="gui">
-    <div class="title"><span class="dots"><i></i><i></i><i></i></span><span>WPE Baker</span><button type="button" id="langBtn">中文</button></div>
-    <div class="body">
-      <div class="left">
-        <div class="field"><label data-i="src">Scene</label><div class="box">D:\Steam\workshop\431960\3258032485\scene.pkg</div></div>
-        <div class="field"><label data-i="preset">Preset</label><div class="seg"><span data-i="p1">Efficiency</span><span class="on" data-i="p2">Balanced</span><span data-i="p3">Quality</span></div></div>
-        <div class="field"><label data-i="out">Output</label><div class="box">3200 × 1800 · 60 fps · auto</div></div>
-        <div class="chk"><i></i><span data-i="keep">Keep live elements <small>(experimental: may increase GPU load)</small></span></div>
-        <div class="go" data-i="go">Generate</div>
-      </div>
-      <div class="right">
-        <div class="verdict" data-i="v">Ready to generate</div>
-        <div class="next" data-i="n">Click Generate to start.</div>
-        <details open>
-          <summary data-i="d">Details</summary>
-          <div class="kv">
-            <span data-i="k1">Loop</span><span data-i="v1">56.2 s · 3,372 frames @ 60 fps · retime 4.68%</span>
-            <span data-i="k2">Video groups</span><span data-i="v2">1 opaque full-frame video, 0 live layers</span>
-            <span data-i="k3">Original power</span><span data-i="v3">2.29 W on the iGPU rail (measured 30 s in the official player)</span>
-            <span data-i="k4">Seam check</span><span data-i="v4">encoded seams passed</span>
-          </div>
-        </details>
-        <div class="card"><h4 data-i="c">Not included in this bake</h4><ul><li data-i="c1">Mouse parallax (fixed view)</li><li data-i="c2">Audio-reactive lighting</li></ul></div>
-      </div>
+  <p class="sub">Two controls and one verdict. Animation precision bounds how far any motion may be retimed; Interaction decides what input-driven content does. Everything else lives under Advanced.</p>
+  <div class="tool">
+    <div class="steps">
+      <div><b>01</b><h3>Drop the wallpaper folder in</h3><p>From <span class="mono">steamapps\workshop\content\431960</span>. The output directory is Wallpaper Engine's own project folder, so the result appears in its list.</p></div>
+      <div><b>02</b><h3>Animation precision · Interaction</h3><p>Quality, balanced or efficiency is the visible-change budget; quality is the default, it steps down on its own when the stricter budget does not close, and the verdict says which one applied. Keep, fixed view or off is what mouse and audio do. Clocks, dates and media text always stay live.</p></div>
+      <div><b>03</b><h3>Read the verdict</h3><p>One of four fixed states. "Not included in this bake" lists exactly what was left out. If your settings do not close but another pair does, the report offers it as a single click.</p></div>
     </div>
+    <figure class="shot"><img src="site/gui-en.png" alt="WPE Baker 1.0.1 window: Alone (3448877775) analyzed at quality precision with fixed view; verdict Ready to generate; mouse parallax not included" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker 1.0.1 · Alone (3448877775) at the defaults: quality precision, fixed view.</figcaption></figure>
   </div>
 </section>
 
@@ -347,14 +179,14 @@ footer{padding-block:26px;font-family:var(--mono);font-size:12px;color:var(--dim
       </ul>
     </div>
     <div>
-      <h3>Treated as input<span class="tag exp">keep live · experimental</span></h3>
+      <h3>Treated as input<span class="tag">Interaction: keep · fixed view · off</span></h3>
       <ul>
         <li>Mouse parallax and pointer effects</li>
         <li>Audio-reactive layers and spectrums</li>
         <li>Clocks, dates, day/night switching</li>
         <li>Interactive panels and customization scripts</li>
       </ul>
-      <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">Default: the baked scene only. Keep live elements: experimental, may increase GPU load.</p>
+      <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">Default: fixed view. Clocks, dates and media text stay live in every mode. Keep: experimental, may increase GPU load.</p>
     </div>
   </div>
 </section>
@@ -384,8 +216,8 @@ footer{padding-block:26px;font-family:var(--mono);font-size:12px;color:var(--dim
   <div class="eyebrow">Where Periodica goes</div>
   <h2>Every screen that loops is a candidate.</h2>
   <div class="road">
-    <div class="now"><div class="when">1.0 · NOW</div><h3>Wallpaper Engine, Windows</h3><p>Measured pre-bake, three presets, tradeoff list, day/night state splitting.</p></div>
-    <div><div class="when">NEXT</div><h3>Max-saving defaults</h3><p>Fixed view, tradeoffs applied and at most four video groups by default; live elements as an experimental option.</p></div>
+    <div class="now"><div class="when">1.0.1 · NOW</div><h3>Wallpaper Engine, Windows</h3><p>Quality precision with automatic step-down, fixed view, at most four video groups, verified one-click suggestions, day/night state splitting.</p></div>
+    <div><div class="when">NEXT</div><h3>Passthrough controller</h3><p>The baked video as a layer inside the original scene, so pointer and audio effects keep running on top of it at their own cost.</p></div>
     <div class="big"><div class="when">THE BIG ONE</div><h3>Temporal reconstruction</h3><p>Bake at a fraction of the resolution with sub-pixel jitter; reconstruct at playback from motion vectors solved offline. Better inputs than DLSS gets in a game, at a fraction of the decode.</p></div>
     <div><div class="when">BEYOND</div><h3>Any looping surface</h3><p>Phone live wallpapers, lock screens, kiosks, stream backdrops. Wallpaper Engine is the first screen Periodica runs on.</p></div>
   </div>
@@ -395,7 +227,7 @@ footer{padding-block:26px;font-family:var(--mono);font-size:12px;color:var(--dim
   <div class="eyebrow">FAQ</div>
   <h2>Short answers.</h2>
   <div class="faq">
-    <details open><summary>What is the simplest thing I get?</summary><p>Your favorite wallpaper at full refresh rate and full quality, and the fans stay off. That is the whole reason this exists.</p></details>
+    <details><summary>What is the simplest thing I get?</summary><p>Your favorite wallpaper at full refresh rate and full quality, and the fans stay off. That is the whole reason this exists.</p></details>
     <details><summary>Will it make every wallpaper cheaper?</summary><p>Light scenes have nothing to save, and it says so before rendering. Heavy, mostly periodic scenes are where the 46–96% savings come from; interaction-heavy scenes get their deterministic core baked and the rest treated as input.</p></details>
     <details><summary>Does the loop look different from the original?</summary><p>You choose the visible-change budget — efficiency, balanced or quality — and the report lists every retimed component with its exact percentage. Seams are validated against the original's own motion before an output is accepted.</p></details>
     <details><summary>What do I need?</summary><p>Windows, Wallpaper Engine, and a GPU for the offline render. The portable build has no installer and no Python. Baking a typical scene takes minutes; playback needs only hardware video decode.</p></details>
@@ -404,7 +236,7 @@ footer{padding-block:26px;font-family:var(--mono);font-size:12px;color:var(--dim
 </section>
 
 <footer>
-  <div>Periodica · first product: WPE Baker 1.0 · built for the GPT-6 Astra Challenge, 2026</div>
+  <div>Periodica · first application: WPE Baker 1.0.1 · built for the GPT-6 Astra Challenge, 2026</div>
   <div>Wallpaper artwork shown belongs to its Steam Workshop authors</div>
 </footer>
 </div>
@@ -414,10 +246,6 @@ footer{padding-block:26px;font-family:var(--mono);font-size:12px;color:var(--dim
   var r=document.getElementById('cmpRange'),t=document.getElementById('cmpTop'),d=document.getElementById('cmpDiv');
   function set(v){t.style.clipPath='inset(0 '+(100-v)+'% 0 0)';d.style.left=v+'%';}
   r.addEventListener('input',function(){set(+r.value)});set(50);
-  var zh={src:'来源',preset:'预设',p1:'效率',p2:'平衡',p3:'质量',out:'输出',keep:'保留实时元素 <small>（实验性：可能增加 GPU 占用）</small>',go:'生成',v:'可以生成',n:'点击"生成"开始。',d:'详情',k1:'循环',v1:'56.2 s · 3,372 帧 @ 60 fps · 调速 4.68%',k2:'视频组',v2:'1 个整幅不透明视频，0 个实时图层',k3:'原作功耗',v3:'核显域 2.29 W（官方播放器实测 30 s）',k4:'接缝校验',v4:'编码后接缝通过',c:'本次未包含',c1:'鼠标视差（固定视角）',c2:'音频响应灯光'};
-  var en={};document.querySelectorAll('#gui [data-i]').forEach(function(el){en[el.getAttribute('data-i')]=el.innerHTML});
-  var isZh=false,b=document.getElementById('langBtn');
-  b.addEventListener('click',function(){isZh=!isZh;var m=isZh?zh:en;document.querySelectorAll('#gui [data-i]').forEach(function(el){var k=el.getAttribute('data-i');if(m[k]!==undefined)el.innerHTML=m[k]});b.textContent=isZh?'English':'中文'});
 })();
 </script>
 </body>

@@ -40,7 +40,7 @@ internal static class OverlayExclusionChecks
             }).ToArray()) }.ToJsonString());
 
         async Task<JsonObject> PlanAsync(string name, int[]? excluded) =>
-            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+            await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, sourceDirectory, root, Path.Combine(root, name), 64, 32,
                     RuntimeTraceFile: tracePath, VideoLayout: "layered",
                     ExcludedLayerIds: excluded));

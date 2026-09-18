@@ -161,7 +161,30 @@ internal static class PlainLanguage
 
     /// <summary>有没有可勾的取舍卡片：只有"关掉几样就能整张录成视频"的清单才出卡片，主体类不出。</summary>
     public static bool HasTurnOffCard(JsonObject? plan) =>
-        plan?[TradeoffOptions.Field]?["status"]?.GetValue<string>() == "available";
+        plan?.ContainsKey("preset_applied") != true && plan?[TradeoffOptions.Field]?["status"]?.GetValue<string>() == "available";
+
+    /// <summary>这次分析烘不了：结论第一行会是"无法生成"。界面用它决定结论第二行放哪句话。</summary>
+    public static bool CannotGenerate(JsonObject? plan) => plan is not null && CannotBakeReason(plan, false) is not null;
+
+    /// <summary>plan 里如果写了这次实际按哪个档位出的方案（quality / balanced / efficiency / custom），结论区多出的一行；没有这个字段就不显示。</summary>
+    public static string PresetAppliedLine(JsonObject? plan, string requested, bool english)
+    {
+        string? applied = plan?["preset_applied"]?.GetValue<string>();
+        if (applied is null || applied == requested || !RetimeProfile.IsKnownPreset(applied)) return "";
+        string name = AppJsonPresentation.PresetLabel(applied, english), selected = AppJsonPresentation.PresetLabel(requested, english);
+        return L(english, $"已按{name}生成方案（{selected}不可行）", $"Prepared with {name} ({selected} unavailable)");
+    }
+
+    public static string[] AppliedChangeLines(JsonObject? plan, bool english)
+    {
+        var lines = (plan?["applied_tradeoffs"]?["turn_off_kinds"] as JsonArray ?? [])
+            .Select(k => k?.GetValue<string>()).OfType<string>().Distinct().Select(k => KindLabel(k, english)).ToList();
+        if (plan?["applied_tradeoffs"]?["daytime_state"]?.GetValue<string>() is string state)
+            lines.Add(L(english, $"按 {state} 时段生成", $"Generated for the {state} time of day"));
+        if (plan?["live_overlays_hoisted"] is JsonArray { Count: > 0 } overlays)
+            lines.Add(L(english, $"已将 {overlays.Count} 个小组件置顶", $"Moved {overlays.Count} widgets to the foreground"));
+        return lines.ToArray();
+    }
 
     // ---------------------------------------------------------------------------------------
     // 第二行：数字

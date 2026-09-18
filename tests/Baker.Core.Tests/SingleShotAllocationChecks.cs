@@ -48,7 +48,7 @@ internal static class SingleShotAllocationChecks
                 ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray(),
                 ["runtime_animation_periods"] = periods.DeepClone(),
                 ["runtime_layers"] = RuntimeLayers(sceneObjects) }.ToJsonString());
-            return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeAsync(
+            return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, sourceDirectory, root, Path.Combine(root, "single-shot-" + name), 64, 32,
                     RuntimeTraceFile: tracePath, VideoLayout: layout));
         }
@@ -148,7 +148,7 @@ internal static class SingleShotAllocationChecks
                     ["textures"] = new JsonArray(obj["id"]!.GetValue<int>() == 40 ? "_rt_FullFrameBuffer" : "background") })
             }).ToArray()) }.ToJsonString());
         JsonObject unreachable = await new HybridScenePlanner(new("not-started", "not-started", "not-started", []))
-            .AnalyzeAsync(new(2, sourceDirectory, root, Path.Combine(root, "single-shot-unreachable"), 64, 32,
+            .AnalyzeSingleAsync(new(2, sourceDirectory, root, Path.Combine(root, "single-shot-unreachable"), 64, 32,
                 RuntimeTraceFile: blockedTrace));
         var unreachableGroup = unreachable["video_groups"]!.AsArray().OfType<JsonObject>().Single();
         string unreachableReason = unreachable["video_layout_admission"]!["reason"]!.GetValue<string>();

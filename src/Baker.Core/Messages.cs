@@ -46,6 +46,13 @@ public static class Messages
     // ---------------------------------------------------------------------------------------
     private static readonly Dictionary<string, Entry> Table = new(StringComparer.Ordinal)
     {
+        ["preset.generated"] = new(Zh: "可以生成", En: "Ready to generate"),
+        ["preset.omitted"] = new(Zh: "本次未包含：{0}", En: "Not included: {0}"),
+        ["preset.experimental"] = new(Zh: "已启用保留实时元素（实验性：可能增加 GPU 占用）", En: "Live elements retained (experimental: may increase GPU usage)"),
+        ["preset.daytime"] = new(Zh: "按 {0} 时段生成", En: "Generated for the {0} time of day"),
+        ["preset.too_many_video_groups"] = new(Zh: "当前设置需要的视频数量超过 {0}，无法生成。", En: "The current settings require more than {0} videos and cannot be generated."),
+        ["interaction.suggest_fixed"] = new(Zh: "固定视角后可以生成。", En: "A fixed view allows generation."),
+        ["interaction.suggest_off"] = new(Zh: "关闭输入驱动效果后可以生成。", En: "Disabling input-driven effects allows generation."),
         // ---- blockers ----
         ["blocker.missing_script_fault_evidence"] = new(
             Zh: "未评估：运行时观测早于源脚本错误元数据，脚本报错判据不可用。请用当前版本的渲染器重新分析。",

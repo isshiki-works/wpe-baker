@@ -32,7 +32,12 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     // feat/daytime-split：昼夜/时段壁纸的状态拆分（默认关，关闭时 plan 逐字不变）。DaytimeState 给定时按该状态规划：
     // 选择器脚本不再算实时控制器，它切换的受控层里不属于该状态的按剔除处理、属于该状态的视为可见。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool DaytimeSplit = false,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DaytimeState = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DaytimeState = null,
+    [property: JsonIgnore] bool KeepLive = false,
+    [property: JsonIgnore] bool CustomSettings = false,
+    [property: JsonIgnore] string? AnalysisCacheDirectory = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Interaction = null,
+    [property: JsonIgnore] bool LayoutExplicit = false);
 
 /// <summary>Plans video replacement from source hierarchy and observed input dependencies.</summary>
 /// <param name="display">未指定宽高时用来铺满的屏幕尺寸；省略时读本机主显示器物理分辨率，测试可注入固定值。</param>
@@ -106,10 +111,16 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         int[] bakedLayerIds, HybridAnalyzeRequest request, JsonObject projection, JsonArray? videoGroups)
     {
         RetimeProfile profile = RetimeProfile.Resolve(request);
-        JsonObject Solve(double? ceilingOverride) => HybridLoopService.Analyze(scene(), source, assets, runtime, bakedLayerIds,
-            request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
-            SwayRetimeOptionsOf(request, projection, videoGroups, ceilingOverride),
-            LoopLengthMaximumOf(request, videoGroups, ceilingOverride), EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride));
+        JsonObject Solve(double? ceilingOverride)
+        {
+            JsonObject input = scene();
+            string key = "loop-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
+                request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.SwayRetime, request.LoopPreference, ceilingOverride);
+            return AnalysisCache.Get(request.AnalysisCacheDirectory, key, () => HybridLoopService.Analyze(input, source, assets, runtime, bakedLayerIds,
+                request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
+                SwayRetimeOptionsOf(request, projection, videoGroups, ceilingOverride),
+                LoopLengthMaximumOf(request, videoGroups, ceilingOverride), EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride)));
+        }
         JsonObject atPreset = Solve(null);
         // 判定用的是这一案的生效上限（含内嵌视频 2 GiB 收紧），不是档位名义上限：4K 不透明组的生效上限只有 558 s，
         // 两个上限解出来是同一次求解，再跑一遍纯属白跑，还会写出"600 s 那侧循环更短所以胜出"的误导记录。
@@ -188,6 +199,11 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     }
 
     public async Task<JsonObject> AnalyzeAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
+        CancellationToken cancellationToken = default) => request.KeepLive
+        ? await AnalyzeSingleAsync(request, progress, cancellationToken)
+        : await PresetCascade.AnalyzeAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, progress, token), cancellationToken, tools);
+
+    public async Task<JsonObject> AnalyzeSingleAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         if (request.SchemaVersion != 2 || (request.Width == 0) != (request.Height == 0) || !OutputResolution.IsKnownSource(request.ResolutionSource) ||
@@ -209,8 +225,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         using var source = new ProjectSource(request.Source);
         if (source.Kind != "scene") throw new InvalidDataException("Hybrid scene planning requires a Scene project.");
         string sourceHash = await source.SourceHashAsync(cancellationToken);
-        var scene = source.ReadJson(source.SceneResource);
-        var project = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
+        if (request.AnalysisCacheDirectory is string cacheDirectory)
+            request = request with { AnalysisCacheDirectory = Path.Combine(cacheDirectory, sourceHash) };
+        var scene = AnalysisCache.Get(request.AnalysisCacheDirectory, "scene", () => source.ReadJson(source.SceneResource));
+        var project = AnalysisCache.Get(request.AnalysisCacheDirectory, "project", () => source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject());
         var properties = SnapshotProperties(project, request.UserProperties);
         // 未指定宽高时按场景画布铺满本机屏幕取尺寸；之后的探测、投影、plan.settings 与 bake 全部用这里定下的尺寸。
         OutputResolution.Choice resolution = OutputResolution.Choose(scene, properties, request.Width, request.Height,
@@ -242,12 +260,18 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 new JsonObject { ["frame"] = 36, ["mouse_buttons_down"] = 0 });
             string probeOutput = Path.Combine(output, directory);
             JsonObject observed = new();
+            string key = "runtime-" + AnalysisCache.Key(source.SourcePath, scene, properties, request.Assets, tools,
+                File.Exists(tools.Renderer) ? File.GetLastWriteTimeUtc(tools.Renderer).Ticks : 0,
+                probeWidth, probeHeight, request.FpsNumerator, request.FpsDenominator, request.DeviceUuid, directory, request.Interaction is not null);
+            if (AnalysisCache.Read(request.AnalysisCacheDirectory, key) is JsonObject cached) return cached;
             try
             {
                 var raw = await new NativeRenderRunner(tools).RenderRawAsync(new(renderSource, request.Assets,
                     probeOutput, probeWidth, probeHeight, request.FpsNumerator, request.FpsDenominator,
-                    48, Seed: 17, InputTimeline: events, UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true), cancellationToken);
+                    48, Seed: 17, InputTimeline: events, UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true,
+                    GpuTiming: request.Interaction is not null), cancellationToken);
                 observed = raw["native_result"]!.DeepClone().AsObject();
+                AnalysisCache.Write(request.AnalysisCacheDirectory, key, observed);
                 return observed;
             }
             // 渲染器读不了某个素材文件时观测根本起不来：这是工具局限，不是壁纸不适用，交给调用方给出结构化结论。
@@ -792,6 +816,11 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             int owner = cache["owner_layer_id"]!.GetValue<int>(), terminal = cache["terminal_effect_id"]!.GetValue<int>();
             string key = owner.ToString(CultureInfo.InvariantCulture) + ":" + terminal.ToString(CultureInfo.InvariantCulture);
             if (captureProbes.TryGetValue(key, out JsonObject? known)) return known;
+            string persistentKey = "capture-" + AnalysisCache.Key(source.SourcePath, properties, request.Assets, tools,
+                File.Exists(tools.Renderer) ? File.GetLastWriteTimeUtc(tools.Renderer).Ticks : 0,
+                request.FpsNumerator, request.FpsDenominator, request.DeviceUuid, key);
+            if (AnalysisCache.Read(request.AnalysisCacheDirectory, persistentKey) is JsonObject cachedProbe)
+                return captureProbes[key] = cachedProbe;
             string? name = EffectPrefixCaptureTarget.LayerName(scene, owner);
             string probeOutput = Path.Combine(output, $"effect-prefix-capture-probe-{owner}-{terminal}");
             JsonObject observed = new(), verdict;
@@ -816,6 +845,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             }
             verdict["probe_output"] = probeOutput;
             captureProbes[key] = verdict;
+            if (verdict["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.ProbeFailedStatus)
+                AnalysisCache.Write(request.AnalysisCacheDirectory, persistentKey, verdict);
             return verdict;
         }
         async Task<JsonArray> PrefixCachesAsync()
@@ -1201,7 +1232,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             "Keeping unresolved effects and particles live, then checking one smaller bake allocation."));
         try
         {
-            JsonObject replanned = await AnalyzeAsync(request with {
+            JsonObject replanned = await AnalyzeSingleAsync(request with {
                 OutputDirectory = analysisOutput, RuntimeTraceFile = null, RetainLiveRootIds = retained }, progress, cancellationToken);
             var replannedLoop = replanned["loop"]!.AsObject();
             // 留下的未解析项全部可由残差掩盖时也算找到：bake 会走残差掩盖路线（例如留实时水面之后剩下的平稳随机雨）。

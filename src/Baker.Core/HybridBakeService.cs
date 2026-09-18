@@ -334,7 +334,7 @@ public sealed class HybridBakeService(NativeTools tools)
             evidence["analysis_plan_path"] = Path.Combine(analysisOutput, "plan.json");
             progress?.Report(new("retaining_nonlooping_layers", 0,
                 "Keeping unresolved effects and particles live, then checking one smaller bake allocation."));
-            JsonObject replanned = await new HybridScenePlanner(tools).AnalyzeAsync(settings with {
+            JsonObject replanned = await new HybridScenePlanner(tools).AnalyzeSingleAsync(settings with {
                 Source = source.SourcePath, OutputDirectory = analysisOutput, RuntimeTraceFile = null,
                 RetainLiveRootIds = proposal["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()).ToArray()
                 }, progress, cancellationToken);
@@ -458,7 +458,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 string refreshOutput = output + ".analysis-refresh";
                 progress?.Report(new("refreshing_script_fault_evidence", 0,
                     "Refreshing an older plan with current source script fault evidence."));
-                plan = await new HybridScenePlanner(tools).AnalyzeAsync(settings with {
+                plan = await new HybridScenePlanner(tools).AnalyzeSingleAsync(settings with {
                     Source = source.SourcePath, OutputDirectory = refreshOutput, RuntimeTraceFile = null
                     }, progress, cancellationToken);
                 HybridPlanFormat.Validate(plan);
