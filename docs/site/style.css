@@ -12,6 +12,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);f
 a{color:var(--signal2)}
 a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--mark);outline-offset:3px}
 h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+:lang(zh-CN) h1,:lang(zh-CN) h2,:lang(zh-CN) h3{text-wrap:normal}
 .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--signal)}
 .mono{font-family:var(--mono)}
 img,video{max-width:100%}

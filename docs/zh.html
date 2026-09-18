@@ -83,7 +83,7 @@
 
 <section id="period">
   <div class="eyebrow">真正困难的部分</div>
-  <h2>大多数场景其实根本没有周期。但 Periodica 能解决它。</h2>
+  <h2>大多数场景其实根本没有周期。<br>但 Periodica 能解决它。</h2>
   <p class="sub">假设一个波浪动画的周期是 7.3 秒，一个摆动是 11.1 秒，一个粒子循环是 4.6 秒，一段视频又是 20 秒，它们几乎不可能再次同时回到起点。直接录制视频的话，可能要录上几个小时才能接近重复，而且最后依然会出现明显切口。Periodica 会分别求出每个组件自身的周期，然后只对它们的播放速度做不到 1% 的微调，让所有组件最终共享一个公共循环周期。也就是说，它会创造出一个原作者从未实际制作过的统一周期。</p>
   <div class="rows">
     <div class="row"><div class="k">预算</div><h3>限制"可见变化预算"</h3><p>三个预设限制了任意组件允许被重新定时的最大幅度：效率（Efficiency）5%，平衡（Balanced）3%，质量（Quality）采用仍然能够闭合循环的最小改动。百合场景中的 100 个周期性组件最终被协调为一个 180.4 秒的统一循环；虹夏的 20 个组件被协调到 44 秒；绫波丽的场景则以总计 4.68% 的重新定时幅度，在 56.2 秒处实现完整闭合。</p></div>
@@ -95,7 +95,7 @@
 <section id="gui">
   <div class="eyebrow">工具本身</div>
   <h2>拖入场景，得到结果。</h2>
-  <p class="sub">两个主要控制项，加一个最终判定。"动画精度（Animation precision）"决定任何动画允许重新定时到什么程度；"交互处理（Interaction）"决定由输入驱动的内容如何处理。进阶选项在"高级"中，供高级用户使用。</p>
+  <p class="sub">两个主要控制项，加一个最终判定。"动画精度（Animation precision）"决定任何动画允许重新定时到什么程度；"交互处理（Interaction）"决定由输入驱动的内容如何处理。进阶选项在"高级"中，供专业用户使用。</p>
   <div class="tool">
     <div class="steps">
       <div><b>01</b><h3>把壁纸文件夹拖进去</h3><p>文件夹位于 <span class="mono">steamapps\workshop\content\431960</span>。输出目录会直接使用 Wallpaper Engine 自己的项目文件夹，因此生成结果会自动出现在 Wallpaper Engine 的壁纸列表中。</p></div>
@@ -108,7 +108,7 @@
 
 <section id="numbers">
   <div class="eyebrow">实测数据</div>
-  <h2>这里的所有数据，都来自实际测量。</h2>
+  <h2>所有数据都来自实际测量。</h2>
   <p class="sub">测试平台为搭载 Intel Arc B390 的笔记本电脑，使用官方 Wallpaper Engine，以 60 fps 进行 A/B/B/A 测试，并读取 RAPL iGPU 功耗轨。对比对象为原始场景与其对应的烘焙输出。</p>
   <div class="gal">
     <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 壁纸预览"><figcaption><b>−57%</b>Lost Landscape 3<small>3713073223 · 32.9 万订阅者 · 效果前缀</small></figcaption></figure>
@@ -138,7 +138,7 @@
 
 <section id="refresh">
   <div class="eyebrow">刷新率</div>
-  <h2>哪怕拉满刷新率，风扇照样不转。</h2>
+  <h2>即便高刷拉满，风扇照样不转。</h2>
   <p class="sub">一个重型壁纸在 120 fps 下，给 GPU 带来的开销大约是 60 fps 的两倍，但一个完整烘焙的输出几乎感觉不到这种变化：视频解码器负责主要工作，3D 引擎基本处于空闲状态。这个项目最初就是在一台使用 iGPU 的笔记本电脑上开始的。</p>
   <div class="tablewrap">
   <table>
@@ -192,7 +192,7 @@
 
 <section id="astra">
   <div class="eyebrow">使用 GPT-6 Astra 构建</div>
-  <h2>一个由 AI 为 Astra Challenge 构建的系统级工具。</h2>
+  <h2>一个由最前沿 AI 为 Astra Challenge 构建的系统级工具。</h2>
   <div class="spec">
     <div>
       <p>Wallpaper Engine 的场景格式没有公开文档。想要在离线环境中做到逐帧完全一致地渲染，就必须处理数百种着色器变体、粒子系统、脚本控制器和视频图层。</p>
