@@ -100,14 +100,14 @@ internal static class RetimeBudgetChecks
         RetimeProfile quality = RetimeProfile.Resolve(RetimeProfile.Quality, null, null, 2);
         check(efficiency is { BudgetPercent: 5, CommonRetimePercent: 5, LoopMaximumSeconds: 600 } &&
             balanced is { BudgetPercent: 3, CommonRetimePercent: 3, LoopMaximumSeconds: 600 } &&
-            quality is { BudgetPercent: null, CommonRetimePercent: 2, LoopMaximumSeconds: 1200 } &&
+            quality is { BudgetPercent: null, CommonRetimePercent: 2, LoopMaximumSeconds: 600 } &&
             new[] { efficiency, balanced, quality }.All(profile =>
                 profile.BudgetSource == RetimeProfile.FromPreset && profile.LoopMaximumSource == RetimeProfile.FromPreset),
-            "retime preset: efficiency is 5% / 600 s, balanced 3% / 600 s, quality unbounded change / 1200 s, all sourced from the preset");
+            "retime preset: all presets default to 600 s; their retiming budgets remain independent");
         check(RetimeProfile.Resolve(RetimeProfile.Balanced, 1.5, 900, 2) is
                 { BudgetPercent: 1.5, CommonRetimePercent: 1.5, LoopMaximumSeconds: 900, BudgetSource: RetimeProfile.FromOverride,
                   LoopMaximumSource: RetimeProfile.FromOverride } &&
-            RetimeProfile.Resolve(RetimeProfile.Quality, 4, null, 2) is { BudgetPercent: 4, CommonRetimePercent: 4, LoopMaximumSeconds: 1200 },
+            RetimeProfile.Resolve(RetimeProfile.Quality, 4, null, 2) is { BudgetPercent: 4, CommonRetimePercent: 4, LoopMaximumSeconds: 600 },
             "retime preset: an override beats the preset for both the budget and the length maximum, and is recorded as an override");
         // 没选档（旧 plan、旧接口）：不设预算、600 s 上限、通用预算沿用 MaximumRetimePercent，本次改动之前的行为逐项不变。
         check(RetimeProfile.Resolve(null, null, null, 2) is

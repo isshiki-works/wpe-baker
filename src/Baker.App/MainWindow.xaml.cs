@@ -510,7 +510,7 @@ public partial class MainWindow : Window
                     : L("分析完成：可生成。", "Analysis complete: ready to generate.");
             }
         }
-        catch (OperationCanceledException) { StatusText.Text = L("来源已变更，上一次分析已取消。", "Source changed; the previous analysis was cancelled."); }
+        catch (OperationCanceledException) { StatusText.Text = L("分析已取消。", "Analysis cancelled."); }
         catch (Exception error) { StatusText.Text = L("分析失败：", "Analysis failed: ") + error.Message; }
         finally { analyzing = false; RefreshControls(); }
     }
@@ -655,7 +655,7 @@ public partial class MainWindow : Window
         ValidationText.Foreground = GenerateButton.IsEnabled ? StateBrushes.Muted : StateBrushes.Bad;
         var selected = QueueList.SelectedItem as JobItem;
         LoadResultButton.IsEnabled = !processing && tools is not null;
-        CancelButton.IsEnabled = selected?.State == "queued" || (selected is not null && selected == activeJob);
+        CancelButton.IsEnabled = analyzing || selected?.State == "queued" || (selected is not null && selected == activeJob);
         RetryButton.IsEnabled = selected is not null && selected.State is "completed" or "cancelled" or "failed";
         ResultButton.IsEnabled = selected is not null && Directory.Exists(selected.Request.OutputDirectory);
         ErrorButton.IsEnabled = selected?.ErrorPath is string error && File.Exists(error);
@@ -900,6 +900,7 @@ public partial class MainWindow : Window
 
     private void CancelClicked(object sender, RoutedEventArgs e)
     {
+        if (analyzing && (activeJob is null || QueueList.SelectedItem != activeJob)) { analysisCancellation?.Cancel(); return; }
         if (QueueList.SelectedItem is not JobItem job) return;
         if (job == activeJob) { runCancellation?.Cancel(); job.Detail = L("正在停止…", "Stopping…"); }
         else if (job.State == "queued") { job.State = "cancelled"; job.Translate(english); }

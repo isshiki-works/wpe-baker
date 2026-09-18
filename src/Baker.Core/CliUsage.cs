@@ -42,7 +42,7 @@ public static class CliUsage
                 "  [--exclude-layers 12,34]  the only switch that really turns an element off; it omits each listed",
                 "    layer with its whole subtree, exactly as if switched off in the source. See tradeoff_options",
                 "    in the plan for which elements can be traded away and what disappears with them",
-                "  [--preset efficiency|balanced|quality (default quality)]",
+                "  [--preset efficiency|balanced|quality (default balanced)]",
                 "    Automatic fallback: quality -> balanced -> efficiency; layered layouts allow up to 4 videos.",
                 "    Presets change retiming only; interaction is independent. Failed settings may return a verified suggested_change.",
                 "  [--measure-source on|off (default off)]",

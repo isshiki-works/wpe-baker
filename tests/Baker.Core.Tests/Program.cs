@@ -224,21 +224,12 @@ using (var source = new ProjectSource(noLoopSource))
     fallbackPlan["video_groups"]![0]!["layer_ids"] = new JsonArray(1, 2);
     fallbackPlan["loop"]!["unresolved"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 1 });
     string fallbackOutput = Path.Combine(root, "fallback-missing-renderer");
-    bool originalFailureRetained = false;
-    try
-    {
-        await new HybridBakeService(new("not-started", "not-started", "not-started", []))
-            .BakeAsync(new(2, fallbackPlan, fallbackOutput));
-    }
-    catch (FileNotFoundException)
-    {
-        var saved = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(fallbackOutput, "bake.json")))!;
-        var before = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(fallbackOutput, "before-loop-allocation.json")))!;
-        originalFailureRetained = saved["status"]!.GetValue<string>() == "failed" &&
-            saved["loop_allocation_fallback"]!["error_type"]!.GetValue<string>() == "FileNotFoundException" &&
-            before["status"]!.GetValue<string>() == "candidate_rejected_no_loop";
-    }
-    Check(originalFailureRetained, "fallback updates its existing report without masking the original error or replacing the initial evidence");
+    JsonObject stoppedBake = await new HybridBakeService(new("not-started", "not-started", "not-started", []))
+        .BakeAsync(new(2, fallbackPlan, fallbackOutput));
+    Check(stoppedBake["status"]!.GetValue<string>() == "candidate_rejected_no_loop" &&
+        !File.Exists(Path.Combine(fallbackOutput, "before-loop-allocation.json")) &&
+        !Directory.Exists(Path.Combine(fallbackOutput, "loop-allocation-analysis")),
+        "a rejected bake returns its original reason without launching a renderer or a second allocation attempt");
 }
 string outside = MakePkg("offset", [("scene.json", scene)], int.MaxValue);
 Reject(() => { using var _ = new ProjectSource(outside); }, "out-of-bounds payload rejected");

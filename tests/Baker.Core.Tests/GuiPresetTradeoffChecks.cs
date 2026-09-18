@@ -33,11 +33,13 @@ internal static class GuiPresetTradeoffChecks
             PlainLanguage.PresetAppliedLine(plan, "quality", false) == "已按平衡生成方案（质量不可行）" &&
             PlainLanguage.PresetAppliedLine(plan, "quality", true).Contains("Quality unavailable"),
             "GUI downgrade line is bilingual and hidden when requested and applied presets match");
-        check(PlainLanguage.AppliedChangeLines(plan, false).Length == 3 &&
-            PlainLanguage.AppliedChangeLines(plan, false).Any(line => line.Contains("2 个小组件")) &&
+        check(PlainLanguage.AppliedChangeLines(plan, false).Length == 2 &&
+            !PlainLanguage.AppliedChangeLines(plan, false).Any(line => line.Contains("小组件")) &&
             PlainLanguage.AppliedChangeLines(plan, true).Any(line => line.Contains("morning")) &&
             PlainLanguage.AppliedChangeLines(new JsonObject(), false).Length == 0,
-            "GUI applied card deduplicates kinds, names the state and hoisted count, and hides empty content");
+            "GUI omitted card contains only omitted content and fixed state, not retained widgets");
+        check(AppJsonPresentation.NumberRows(plan, false).Any(row => row.Label == "置顶小组件数" && row.Value == "2"),
+            "retained foreground widgets are counted in technical details");
         plan["suggested_change"] = new JsonObject { ["verified"] = true,
             ["settings"] = new JsonObject { ["interaction"] = "off", ["preset"] = "balanced" } };
         JsonObject? settings = AppJsonPresentation.SuggestedSettings(plan);

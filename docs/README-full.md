@@ -91,7 +91,7 @@ conditions hold.
   motion may change; the loop length is what the solver returns.** A scene
   usually has many periods that close, and the shorter the period, the more
   the tempo of its components has to be adjusted. `--preset
-  efficiency|balanced|quality` (quality by default since 1.0.1, stepping down to balanced and then efficiency when the stricter budget does not close) sets that budget:
+  efficiency|balanced|quality` (balanced by default; quality can be selected explicitly and is capped at 600 s) sets that budget:
   efficiency allows up to 5% on any visible component and takes the shortest
   loop inside it, balanced allows 3%, quality solves for the smallest change
   instead of a percentage. The length caps (600 / 600 / 1200 s) are a
@@ -246,13 +246,13 @@ conditions hold.
   measurement purposes, which is not the same performance profile as the
   official WPE player.
 
-## What changed in 1.0.1 (2026-09-18)
+## What changed in 1.0.1 and 1.0.2 (2026-09-18)
 
 - **Two independent controls replace the single preset.** Animation
   precision (efficiency 5% / balanced 3% / quality: smallest change) only
-  bounds retiming; it defaults to quality, steps down to balanced and then
-  efficiency when the stricter budget does not close, and the verdict names
-  the one applied (`preset_applied`). Interaction (keep / fixed view / off)
+  bounds retiming; balanced is the default, quality can be selected
+  explicitly and is capped at 600 s, and the verdict names the budget
+  applied (`preset_applied`). Interaction (keep / fixed view / off)
   only decides what input-driven content does; it defaults to fixed view, and
   off additionally drops pointer effects and sampled, costly full-screen
   audio effects. Clocks, dates, media text, FPS counters and background music
@@ -277,7 +277,14 @@ conditions hold.
   actually left out; edits in Advanced show as "Custom"; the Compatibility
   mode checkbox equals `--keep-live on` and reproduces the 1.0 analysis path
   byte for byte.
-- 1,432 automated checks.
+- **1.0.2: analysis and bake share one admission check.** The
+  loop-allocation verdict (particle stationarity, residual masking) now runs
+  during analysis, so subtrees that must stay live are decided before the
+  report says Ready to generate. A bake that fails is reported as failed;
+  nothing is re-rendered automatically, and Retry stays available.
+  Candidates are ordered shortest first. Amiya (3486806915) at 1080p,
+  balanced: 8 min 44 s on an RTX 5090, seams passed.
+- 1,437 automated checks.
 
 ## What changed after RC8
 
@@ -979,10 +986,9 @@ in the downloaded archive's properties before extracting it.
    the report. Exit codes in full: 0 plan written, 1 not a Scene wallpaper or
    analysis failed, 3 preset package, 4 tool limitation, 130 cancelled.
 3. Set the two controls — Animation precision (efficiency / balanced /
-   quality, quality by default) and Interaction (keep / fixed view / off,
+   quality, balanced by default) and Interaction (keep / fixed view / off,
    fixed view by default) — and click Analyze. Precision only bounds
-   retiming and steps down automatically when the stricter budget does not
-   close; the verdict says which one was applied. Interaction only decides
+   retiming; the verdict names the budget applied. Interaction only decides
    what input-driven content does; clocks, dates and media text always stay
    live. Resolution and frame rate are worked out for you and shown before
    the run: **the frame rate is the lower of your Wallpaper Engine frame-rate
@@ -1041,9 +1047,8 @@ wpe-baker measure-official REQUEST.json
 Analyze options that change what goes into the plan:
 
 - `--preset efficiency|balanced|quality` — how much the motion may change
-  (5% / 3% / smallest), quality by default since 1.0.1; when the stricter
-  budget does not close the solver steps down to balanced and then
-  efficiency, and `preset_applied` in the plan names the one used. Advanced overrides: `--retime-budget
+  (5% / 3% / smallest), balanced by default; quality is capped at 600 s,
+  and `preset_applied` in the plan names the budget used. Advanced overrides: `--retime-budget
   PERCENT` (0..5) and `--loop-max-seconds`. The older `--loop-preference`,
   `--max-retime` and `--loop-length-max` names are accepted for one release as
   aliases and print a rename notice.

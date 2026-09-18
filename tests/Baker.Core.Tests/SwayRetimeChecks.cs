@@ -349,11 +349,13 @@ internal static class SwayRetimeChecks
 
         // feat/retime-budget：质量档在档位上限（1200 s，1080p60 被内嵌视频 2 GiB 收到 1175 s）与 600 s 下各求一次，
         // 取可见摆动改动更小的那次，并把两次读数记进 quality_ceiling_used。其余档位只求一次，记录不出现。
-        JsonObject ForProfile(string preset) => HybridScenePlanner.AnalyzeLoopForProfile(() => scene.DeepClone().AsObject(),
+        JsonObject ForProfile(string preset, double? maximum = null) => HybridScenePlanner.AnalyzeLoopForProfile(() => scene.DeepClone().AsObject(),
             source, null, new JsonObject(), [1, 2],
-            new HybridAnalyzeRequest(2, "s", "a", "o", 1920, 1080, 60, 1, SwayRetime: true, Preset: preset),
+            new HybridAnalyzeRequest(2, "s", "a", "o", 1920, 1080, 60, 1, SwayRetime: true, Preset: preset, LoopLengthMaximumSeconds: maximum),
             new JsonObject(), null);
-        JsonObject quality = ForProfile(RetimeProfile.Quality), balancedLoop = ForProfile(RetimeProfile.Balanced);
+        JsonObject quality = ForProfile(RetimeProfile.Quality, 1200), balancedLoop = ForProfile(RetimeProfile.Balanced);
+        check(ForProfile(RetimeProfile.Quality)["quality_ceiling_used"] is null,
+            "default quality uses the 600-second ceiling without an unnecessary second solve");
         JsonObject used = quality["quality_ceiling_used"]!.AsObject();
         JsonObject[] tried = used["tried"]!.AsArray().OfType<JsonObject>().ToArray();
         double Visible(JsonObject entry) => entry["max_change_visible_percent"]?.GetValue<double>() ?? double.PositiveInfinity;

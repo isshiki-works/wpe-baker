@@ -181,8 +181,6 @@ internal static class PlainLanguage
             .Select(k => k?.GetValue<string>()).OfType<string>().Distinct().Select(k => KindLabel(k, english)).ToList();
         if (plan?["applied_tradeoffs"]?["daytime_state"]?.GetValue<string>() is string state)
             lines.Add(L(english, $"按 {state} 时段生成", $"Generated for the {state} time of day"));
-        if (plan?["live_overlays_hoisted"] is JsonArray { Count: > 0 } overlays)
-            lines.Add(L(english, $"已将 {overlays.Count} 个小组件置顶", $"Moved {overlays.Count} widgets to the foreground"));
         return lines.ToArray();
     }
 

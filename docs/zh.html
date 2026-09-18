@@ -15,7 +15,7 @@
 
 <div class="wrap">
 <nav>
-  <div class="logo">PERIODICA<small>WPE BAKER · 1.0.1</small></div>
+  <div class="logo">PERIODICA<small>WPE BAKER · 1.0.2</small></div>
   <div class="links"><a href="#loop">循环</a><a href="#numbers">实测数据</a><a href="#refresh">刷新率</a><a href="#gui">工具</a><a href="#astra">Astra</a><a href="#roadmap">路线图</a></div>
   <div class="lang"><a href="index.html" onclick="try{localStorage.setItem('lang','en')}catch(e){}">EN</a><a href="zh.html" aria-current="page" onclick="try{localStorage.setItem('lang','zh')}catch(e){}">中文</a></div>
 </nav>
@@ -102,7 +102,7 @@
       <div><b>02</b><h3>动画精度 · 交互处理</h3><p>质量、平衡和效率代表可见变化的预算，默认使用质量。如果当前预算下无法闭合循环，程序会自动降低等级重试，并最终告知使用的方案。交互处理则有保留、固定视角和关闭三种，决定鼠标与音频驱动的效果如何处理。时钟、日期以及媒体文本在任何模式下都保持实时运行。</p></div>
       <div><b>03</b><h3>看最终判定</h3><p>程序只会给出四种固定状态之一。"本次未包含"会列出哪些内容没有被纳入烘焙。如果当前的设置组合无法闭合，而另一组设置能够成功，报告会给出一个可以单击直接应用的建议。</p></div>
     </div>
-    <figure class="shot"><img src="site/gui-zh.png" alt="WPE Baker 1.0.1 窗口：Alone（3448877775）以质量精度和固定视角完成分析；判定结果为可以生成；鼠标视差没有被纳入烘焙" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker 1.0.1 · Alone（3448877775），默认设置：质量精度、固定视角。</figcaption></figure>
+    <figure class="shot"><img src="site/gui-zh.png" alt="WPE Baker 1.0.2 窗口：Alone（3448877775）以质量精度和固定视角完成分析；判定结果为可以生成；鼠标视差没有被纳入烘焙" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker 1.0.2 · Alone（3448877775），默认设置：质量精度、固定视角。</figcaption></figure>
   </div>
 </section>
 
@@ -215,7 +215,7 @@
   <div class="eyebrow">Periodica 接下来会走向哪里</div>
   <h2>任何会循环播放的屏幕，都是潜在目标。</h2>
   <div class="road">
-    <div class="now"><div class="when">1.0.1 · 当前版本</div><h3>Wallpaper Engine，Windows</h3><p>质量精度，并支持自动降低精度等级；固定视角；最多四组视频；经过验证的一键建议；昼夜状态拆分。</p></div>
+    <div class="now"><div class="when">1.0.2 · 当前版本</div><h3>Wallpaper Engine，Windows</h3><p>质量精度，并支持自动降低精度等级；固定视角；最多四组视频；经过验证的一键建议；昼夜状态拆分。</p></div>
     <div><div class="when">NEXT</div><h3>透传控制器（Passthrough controller）</h3><p>将烘焙后的视频作为一个图层放回原始场景内部，这样鼠标指针效果和音频响应效果仍然可以继续覆盖在它上面运行，并只承担这些实时效果自身的计算成本。</p></div>
     <div class="big"><div class="when">THE BIG ONE</div><h3>时域重建（Temporal reconstruction）</h3><p>以原分辨率的一部分进行烘焙，并加入亚像素抖动；播放时，再利用离线求出的运动矢量对画面进行重建。这样得到的输入信息比游戏中的 DLSS 所能获得的更好，而播放端只需要承担一小部分视频解码开销。</p></div>
     <div><div class="when">BEYOND</div><h3>任何会循环播放的显示表面</h3><p>手机动态壁纸、锁屏、信息亭、直播背景。Wallpaper Engine 只是 Periodica 首先进入的屏幕。</p></div>
@@ -235,7 +235,7 @@
 </section>
 
 <footer>
-  <div>Periodica · 首个应用：WPE Baker 1.0.1 · 为 GPT-6 Astra Challenge 构建，2026</div>
+  <div>Periodica · 首个应用：WPE Baker 1.0.2 · 为 GPT-6 Astra Challenge 构建，2026</div>
   <div>页面中展示的壁纸美术作品归各自的 Steam Workshop 作者所有</div>
 </footer>
 </div>

@@ -46,6 +46,7 @@ public static class Messages
     // ---------------------------------------------------------------------------------------
     private static readonly Dictionary<string, Entry> Table = new(StringComparer.Ordinal)
     {
+        ["blocker.bake_allocation"] = new(Zh: "当前分配包含必须保持实时的内容，需重新分配。", En: "The current allocation contains content that must remain live; reallocation is required.", Legacy: "Bake allocation rejected: {0}"),
         ["preset.generated"] = new(Zh: "可以生成", En: "Ready to generate"),
         ["preset.omitted"] = new(Zh: "本次未包含：{0}", En: "Not included: {0}"),
         ["preset.experimental"] = new(Zh: "已启用保留实时元素（实验性：可能增加 GPU 占用）", En: "Live elements retained (experimental: may increase GPU usage)"),

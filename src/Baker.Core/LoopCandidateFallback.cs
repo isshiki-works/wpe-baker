@@ -14,6 +14,15 @@ public static class LoopCandidateFallback
     /// <summary>最多尝试的解析候选个数（含第一个）。</summary>
     public const int MaximumAttempts = 3;
 
+    /// <summary>Reorders already-admitted candidates only; budgets and solver equations remain unchanged.</summary>
+    public static void PrioritizeShortest(JsonArray candidates)
+    {
+        JsonNode[] ordered = candidates.Select(node => node ?? throw new InvalidDataException("Loop candidate is null."))
+            .OrderBy(node => node["frames"]!.GetValue<ulong>()).ToArray();
+        candidates.Clear();
+        foreach (JsonNode candidate in ordered) candidates.Add(candidate);
+    }
+
     /// <summary>第 attemptIndex 次（从 0 数）失败后还能不能换下一个候选。</summary>
     public static bool CanRetry(int attemptIndex, int candidateCount) =>
         attemptIndex >= 0 && attemptIndex + 1 < MaximumAttempts && attemptIndex + 1 < candidateCount;

@@ -101,8 +101,8 @@
                             <TextBlock Style="{StaticResource Group}" Tag="动画精度|Animation precision"/>
                             <ComboBox x:Name="PresetBox" SelectionChanged="PresetChanged" Margin="0,0,0,6">
                                 <ComboBoxItem Tag="效率|Efficiency"/>
-                                <ComboBoxItem Tag="平衡|Balanced"/>
-                                <ComboBoxItem Tag="质量|Quality" IsSelected="True"/>
+                                <ComboBoxItem Tag="平衡|Balanced" IsSelected="True"/>
+                                <ComboBoxItem Tag="质量|Quality"/>
                             </ComboBox>
                             <TextBlock x:Name="PresetNote" Style="{StaticResource Note}" Margin="0,0,0,8"/>
                             <TextBlock Style="{StaticResource Group}" Tag="交互处理|Interaction"/>

@@ -162,6 +162,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     internal static void AnnotateLoopCandidates(JsonObject loop)
     {
         if (loop["candidates"] is not JsonArray items) return;
+        LoopCandidateFallback.PrioritizeShortest(items);
         for (int index = 0; index < items.Count; ++index)
             if (items[index] is JsonObject candidate) candidate["rank"] = index + 1;
         loop["selected_candidate_index"] = items.Count == 0 ? null : JsonValue.Create(0);

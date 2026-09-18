@@ -593,6 +593,8 @@ internal static class AppJsonPresentation
             : plan["video_groups"]?.AsArray().Count ?? 0;
         rows.Add((english ? "Video groups" : "视频组数", groups.ToString(CultureInfo.InvariantCulture)));
         rows.Add((english ? "Live layers" : "实时图层数", (plan["live_layer_ids"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
+        if (plan["live_overlays_hoisted"] is JsonArray { Count: > 0 } overlays)
+            rows.Add((english ? "Foreground widgets" : "置顶小组件数", overlays.Count.ToString(CultureInfo.InvariantCulture)));
         double width = Number(plan["output_resolution"]?["width"]) ?? 0, height = Number(plan["output_resolution"]?["height"]) ?? 0;
         if (width > 0 && height > 0)
             rows.Add((english ? "Output resolution and frame rate" : "输出分辨率与帧率",

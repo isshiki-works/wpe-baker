@@ -140,8 +140,6 @@ try
         if (keepLive == "on" && options.ContainsKey("--interaction")) throw new ArgumentException("--keep-live on uses legacy settings; omit --interaction.");
         if (options.TryGetValue("--view-mode", out string? selectedView) && options.ContainsKey("--interaction") &&
             (selectedView == "preserve") != (interaction == "keep")) throw new ArgumentException("--view-mode conflicts with --interaction.");
-        if (keepLive == "off" && !options.ContainsKey("--preset") && !options.ContainsKey("--loop-preference"))
-            retimeArguments = retimeArguments with { Preset = "quality" };
         if (options.TryGetValue("--local-seam-repair", out string? repairText) && bool.Parse(repairText))
             throw new ArgumentException("--local-seam-repair true is no longer supported; source-period encodings are never repaired.");
         string liveOverlayPlacement = options.GetValueOrDefault("--live-overlays", keepLive == "on" ? "preserve" : "foreground");

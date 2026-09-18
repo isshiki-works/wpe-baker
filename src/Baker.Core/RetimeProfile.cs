@@ -10,7 +10,7 @@ namespace Baker.Core;
 /// - 效率 5%：相对 3% 中位再缩 1.25 倍，单槽 9.7 → 7.4 h；只有 13 案真能吃到 4% 以上。
 /// - 平衡 3%：第一条能对全部 27 案兑现的线（最难的 3516174947 在 600 s 内的最小可见改动就是 2.71%）。
 /// - 质量：不设百分比门槛，求解器按"可见项改动最小"取解（规则 v2 的原目标）。
-/// - 长度上限 600 / 600 / 1200 s：原设计的 60 s、300 s 作废——L 只能取 base 周期的整数倍，19 案的 P 本身就 50–180 s，
+/// - v1.0.2 三档默认长度上限统一为 600 s；L 只能取 base 周期的整数倍，19 案的 P 本身就 50–180 s，
 ///   60 s 上限下 27 案只有 1 案有解。
 /// 圈数下限（最慢可见项 ≥ 3 圈且 L ≥ 60 s）与速度偏差两道闸不是档位旋钮，写在 <see cref="SwayRecurrenceSolver"/> 里，三档相同。
 /// </summary>
@@ -91,7 +91,7 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
     {
         Efficiency => 600,
         Balanced => 600,
-        Quality => 1200,
+        Quality => 600,
         _ => throw new InvalidDataException("A preset must be efficiency, balanced, or quality.")
     };
 

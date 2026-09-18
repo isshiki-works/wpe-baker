@@ -417,6 +417,15 @@ public static class ResidualMasking
     /// 对 plan.loop.unresolved 的每一项判定"残差可掩盖"或"不可掩盖"。
     /// <paramref name="readResource"/> 读取工程内的 JSON 资源（粒子预设等），读不到返回 null。
     /// </summary>
+    public static JsonObject ClassifyBakeAllocation(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
+    {
+        var input = plan.DeepClone().AsObject();
+        if (input["loop"] is JsonObject loop && loop["unresolved"] is JsonArray unresolved)
+            loop["unresolved"] = new JsonArray(unresolved.OfType<JsonObject>()
+                .Where(item => item["kind"]?.GetValue<string>() != AllocationFallbackKind).Select(item => item.DeepClone()).ToArray());
+        return Classify(input, scene, readResource);
+    }
+
     public static JsonObject Classify(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
     {
         ArgumentNullException.ThrowIfNull(plan);

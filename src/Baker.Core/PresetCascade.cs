@@ -22,11 +22,13 @@ public static class PresetCascade
 
     internal static async Task<JsonObject> AdoptAllocationAsync(JsonObject plan, CancellationToken token)
     {
+        ApplyBakeAdmission(plan);
         if (Accepted(plan) || plan["loop_allocation_fallback"]?["status"]?.GetValue<string>() != "candidate_found" ||
             plan["analysis_directory"]?.GetValue<string>() is not string directory) return plan;
         string path = Path.Combine(directory, "loop-allocation-analysis", "plan.json");
         if (!File.Exists(path)) return plan;
         JsonObject child = JsonNode.Parse(await File.ReadAllTextAsync(path, token))!.AsObject();
+        ApplyBakeAdmission(child);
         if (!Accepted(child) || !JsonNode.DeepEquals(child["source_sha256"], plan["source_sha256"])) return plan;
         child["allocation_adopted"] = new JsonObject { ["plan_path"] = path,
             ["retain_live_root_ids"] = child["settings"]?["retain_live_root_ids"]?.DeepClone(),
@@ -34,10 +36,25 @@ public static class PresetCascade
         return child;
     }
 
+    private static void ApplyBakeAdmission(JsonObject plan)
+    {
+        if (plan["kind"]?.GetValue<string>() != "hybrid_video" || plan["route"]?.GetValue<string>() != "whole_layer") return;
+        using var source = new ProjectSource(plan["source"]!.GetValue<string>());
+        JsonObject classification = ResidualMasking.ClassifyBakeAllocation(plan, source.ReadJson(source.SceneResource),
+            ResidualMasking.ResourceReader(source, plan["settings"]?["assets"]?.GetValue<string>()));
+        plan["loop"]!["residual_masking"] = classification;
+        if (classification["status"]?.GetValue<string>() is "no_residual" or "residual_maskable") return;
+        string reason = classification["reason_en"]?.GetValue<string>() ?? classification["reason"]?.GetValue<string>() ?? "Unresolved content must remain live.";
+        plan["blockers"]!.AsArray().Add(Messages.Emit("blocker.bake_allocation", reason));
+        plan["status"] = "requires_resolution";
+        plan["suitability"] = HybridScenePlanner.Suitability(plan);
+        PlanNarrative.Attach(plan);
+    }
+
     internal static async Task<JsonObject> AnalyzeAsync(HybridAnalyzeRequest request,
         Func<HybridAnalyzeRequest, CancellationToken, Task<JsonObject>> analyze, CancellationToken token, NativeTools? tools = null)
     {
-        string requested = request.Preset ?? "quality", interaction = request.Interaction ?? "fixed";
+        string requested = request.Preset ?? "balanced", interaction = request.Interaction ?? "fixed";
         string[] tiers = ["quality", "balanced", "efficiency"];
         int start = Array.IndexOf(tiers, requested);
         if (start < 0 || interaction is not ("keep" or "fixed" or "off")) throw new InvalidDataException("Invalid preset or interaction policy.");

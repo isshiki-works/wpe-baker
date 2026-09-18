@@ -301,76 +301,7 @@ public sealed class HybridBakeService(NativeTools tools)
         timing.SetDevice(request.DeviceUuid ?? request.Plan["settings"]?["device_uuid"]?.GetValue<string>());
         if (request.Plan["route"]?.GetValue<string>() == "effect_prefix")
             return await BakeEffectPrefixesAsync(request, progress, timing, cancellationToken);
-        JsonObject initial = await BakeOnceAsync(request, progress, timing, cancellationToken);
-        if (request.ProbeFrames > 0 || initial["status"]?.GetValue<string>() is not
-            ("candidate_rejected_no_loop" or "candidate_rejected_seam")) return initial;
-        var plan = initial["plan"]!.AsObject();
-        using var source = new ProjectSource(plan["source"]!.GetValue<string>());
-        JsonObject? proposal = HybridLoopAllocation.Propose(plan, source.ReadJson(source.SceneResource));
-        if (proposal is null) return initial;
-
-        string output = Path.GetFullPath(request.OutputDirectory);
-        string initialPath = Path.Combine(output, "before-loop-allocation.json");
-        await VideoSceneBuilder.WriteJsonAsync(initialPath, initial, cancellationToken);
-        var evidence = proposal.DeepClone().AsObject();
-        evidence["initial_status"] = initial["status"]!.DeepClone();
-        evidence["initial_report_path"] = initialPath;
-        evidence["status"] = "replanning";
-        initial["loop_allocation_fallback"] = evidence;
-        string reportPath = Path.Combine(output, "bake.json");
-        // 回退要跑几十分钟，期间硬超时或硬杀留在磁盘上的必须是"未完成"，不能是回退前那份
-        // candidate_rejected_no_loop（它会被当成最终结论，把 40 分钟的工作量记成 0.31 秒）。
-        // 回退前的原状态仍在 evidence.initial_status 与 before-loop-allocation.json 里。
-        var replanning = initial.DeepClone().AsObject();
-        MarkInProgress(replanning, candidateAttempt: 0, stage: "loop_allocation_replanning");
-        await File.WriteAllTextAsync(reportPath, replanning.ToJsonString(JsonOptions), cancellationToken);
-        try
-        {
-            if (await source.SourceHashAsync(cancellationToken) != plan["source_sha256"]!.GetValue<string>())
-                throw new IOException("Source changed before loop allocation fallback.");
-            var settings = plan["settings"]!.Deserialize<HybridAnalyzeRequest>(JsonOptions)
-                ?? throw new InvalidDataException("Invalid loop fallback settings.");
-            string analysisOutput = Path.Combine(output, "loop-allocation-analysis");
-            evidence["analysis_plan_path"] = Path.Combine(analysisOutput, "plan.json");
-            progress?.Report(new("retaining_nonlooping_layers", 0,
-                "Keeping unresolved effects and particles live, then checking one smaller bake allocation."));
-            JsonObject replanned = await new HybridScenePlanner(tools).AnalyzeSingleAsync(settings with {
-                Source = source.SourcePath, OutputDirectory = analysisOutput, RuntimeTraceFile = null,
-                RetainLiveRootIds = proposal["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()).ToArray()
-                }, progress, cancellationToken);
-            if (replanned["source_sha256"]!.GetValue<string>() != plan["source_sha256"]!.GetValue<string>())
-                throw new IOException("Source changed during loop allocation fallback.");
-            if (replanned["blockers"] is JsonArray { Count: > 0 })
-            {
-                evidence["status"] = "requires_resolution";
-                evidence["blockers"] = replanned["blockers"]!.DeepClone();
-                timing.Stamp(initial);
-                await File.WriteAllTextAsync(reportPath, initial.ToJsonString(JsonOptions), cancellationToken);
-                return initial;
-            }
-            // One retry through all normal composition and loop checks; never recurse the fallback.
-            var retry = request with { Plan = replanned, OutputDirectory = Path.Combine(output, "loop-allocation-candidate") };
-            JsonObject result = replanned["route"]?.GetValue<string>() == "effect_prefix"
-                ? await BakeEffectPrefixesAsync(retry, progress, timing, cancellationToken)
-                : await BakeOnceAsync(retry, progress, timing, cancellationToken);
-            evidence["status"] = result["status"]!.DeepClone();
-            result["loop_allocation_fallback"] = evidence.DeepClone();
-            timing.Stamp(result);
-            await File.WriteAllTextAsync(reportPath, result.ToJsonString(JsonOptions), cancellationToken);
-            if (request.ProjectDirectory is not null && StaticOnlyBake.Finished(result["status"]?.GetValue<string>()))
-                await File.WriteAllTextAsync(Path.Combine(request.ProjectDirectory, "bake.json"), result.ToJsonString(JsonOptions), cancellationToken);
-            return result;
-        }
-        catch (Exception error)
-        {
-            initial["status"] = cancellationToken.IsCancellationRequested ? "cancelled" : "failed";
-            evidence["status"] = initial["status"]!.DeepClone();
-            evidence["error_type"] = error.GetType().Name;
-            evidence["error"] = error.Message;
-            timing.Stamp(initial);
-            await File.WriteAllTextAsync(reportPath, initial.ToJsonString(JsonOptions), CancellationToken.None);
-            throw;
-        }
+        return await BakeOnceAsync(request, progress, timing, cancellationToken);
     }
 
     private async Task<JsonObject> BakeEffectPrefixesAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
@@ -514,7 +445,7 @@ public sealed class HybridBakeService(NativeTools tools)
             if (unresolved is not { Count: > 0 }) return null;
             // 解析候选成立但留着未解析分量：逐条判定残差能不能被固定窗口的接缝淡化掩盖。
             // 判据在 ResidualMasking 里，拒绝要说清是哪一层、哪个机制、缺什么证明。
-            JsonObject classification = ResidualMasking.Classify(plan, source.ReadJson(source.SceneResource),
+            JsonObject classification = ResidualMasking.ClassifyBakeAllocation(plan, source.ReadJson(source.SceneResource),
                 ResidualMasking.ResourceReader(source, settings.Assets));
             plan["loop"]!["residual_masking"] = classification.DeepClone();
             if (classification["status"]?.GetValue<string>() != "residual_maskable")
@@ -758,14 +689,17 @@ public sealed class HybridBakeService(NativeTools tools)
             // 解析候选重跑主渲染与校验，最多 LoopCandidateFallback.MaximumAttempts 个；每次的候选与接缝读数都记进
             // loop_candidate_attempts。周期仍全部来自解析，这里只是在解析给出的候选表里往下走，不搜周期、不放宽阈值。
             JsonArray loopCandidates = plan["loop"]?["candidates"] as JsonArray ?? new JsonArray();
-            bool candidateFallbackEnabled = residualMasking is null && request.ProbeFrames == 0 && loopCandidates.Count > 0;
+            // New analyses settle allocation before baking. A formal rejection never starts another full render.
+            bool candidateFallbackEnabled = false;
+            report["full_render_attempt_limit"] = request.ProbeFrames == 0 ? 1 : 0;
+            report["automatic_full_render_retries"] = false;
             var candidateAttempts = new JsonArray();
             int selectedCandidateAttempt = 0;
             if (candidateFallbackEnabled) report["loop_candidate_attempts"] = candidateAttempts;
             // 残差掩盖路线的起点回退（与上面的候选回退互斥：一个只在源周期路线、一个只在残差路线）：全分辨率第一层在某个起点上
             // 被拒时，按起点搜索的排序依次换下一个候选起点，重渲所有组再测，最多 ResidualMasking.MaximumStartAttempts 个；
             // 每次的起点与各组 max_k / 整幅记进 loop_start_attempts。周期与阈值都不变，只换相位。
-            bool startFallbackEnabled = residualMasking is not null && request.ProbeFrames == 0;
+            bool startFallbackEnabled = false;
             var startAttempts = new JsonArray();
             JsonObject[] startOrder = [];
             if (startFallbackEnabled) report["loop_start_attempts"] = startAttempts;
@@ -1118,7 +1052,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 startOrder.ElementAtOrDefault(candidateAttempt), roundResiduals));
                             if (firstLayer) report["selected_loop_start"] = ResidualStartFallback.Selected(candidateAttempt, startFrame);
                         }
-                        if (!firstLayer && ResidualStartFallback.Next(candidateAttempt, false, startOrder.Length) == ResidualStartStep.RetryNextStart)
+                        if (startFallbackEnabled && !firstLayer && ResidualStartFallback.Next(candidateAttempt, false, startOrder.Length) == ResidualStartStep.RetryNextStart)
                         {
                             // 跳出组循环；每组的 finally 先清 master 中间文件，轮次末尾再删整个组目录，下一轮换起点重渲。
                             report["groups"]!.AsArray().Add(new JsonObject {

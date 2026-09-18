@@ -121,15 +121,15 @@ internal static class PresetCascadeChecks
             RuntimeTraceFile: trace);
         JsonObject result = await planner.AnalyzeAsync(request);
         HybridPlanFormat.Validate(result);
-        check(result["preset_applied"]!.GetValue<string>() == "quality" &&
+        check(result["preset_applied"]!.GetValue<string>() == "balanced" &&
             result["settings"]!["live_overlay_placement"]!.GetValue<string>() == "foreground",
-            "Core default entry point runs the quality cascade and produces a valid real plan");
+            "Core default entry point starts at balanced and produces a valid real plan");
         string[] caches = Directory.GetFiles(Path.Combine(request.OutputDirectory, "cache"), "loop-*.json", SearchOption.AllDirectories);
         var modified = caches.Select(File.GetLastWriteTimeUtc).ToArray();
-        JsonObject repeat = await planner.AnalyzeAsync(request with { CustomSettings = true, VideoLayout = "layered", Preset = "quality", LoopPreference = "quality" });
+        JsonObject repeat = await planner.AnalyzeAsync(request with { CustomSettings = true, VideoLayout = "layered", Preset = "balanced", LoopPreference = "balanced" });
         check(caches.Length > 0 && caches.Select(File.GetLastWriteTimeUtc).SequenceEqual(modified) &&
             Directory.GetFiles(Path.Combine(request.OutputDirectory, "cache"), "loop-*.json", SearchOption.AllDirectories).Length == caches.Length &&
-            repeat["preset_applied"]!.GetValue<string>() == "quality" && repeat["custom_settings"]!.GetValue<bool>(),
+            repeat["preset_applied"]!.GetValue<string>() == "balanced" && repeat["custom_settings"]!.GetValue<bool>(),
             "a layout edit reuses persistent period evidence and can reuse the same analysis directory");
         var legacyRequest = request with { OutputDirectory = Path.Combine(root, "preset-legacy"), Preset = "balanced", KeepLive = true };
         JsonObject legacy = await planner.AnalyzeAsync(legacyRequest);

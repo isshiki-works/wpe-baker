@@ -96,18 +96,9 @@ internal static class EffectPrefixProfileChecks
 
         // 质量档双上限：档位上限 1200 s 被内嵌视频 2 GiB 在 1080p60 下收到 1175 s，与 600 s 各求一次并取可见改动更小者；
         // 其余档位只求一次，记录不出现。
-        JsonObject used = quality["quality_ceiling_used"]!.AsObject();
-        JsonObject[] tried = used["tried"]!.AsArray().OfType<JsonObject>().ToArray();
-        static double Reading(JsonObject entry) => entry["max_change_visible_percent"]?.GetValue<double>() ?? double.PositiveInfinity;
-        bool usePreset = used["source"]!.GetValue<string>() == "preset";
-        check(tried.Length == 2 && tried[0]["source"]!.GetValue<string>() == "preset" &&
-            tried[1]["source"]!.GetValue<string>() == "quality_comparison" &&
-            Math.Abs(tried[0]["ceiling_seconds"]!.GetValue<double>() - 1175) < 1 &&
-            tried[1]["ceiling_seconds"]!.GetValue<double>() == 600 &&
-            used["seconds"]!.GetValue<double>() == quality["maximum_seconds"]!.GetValue<double>() &&
-            Reading(tried[usePreset ? 0 : 1]) <= Reading(tried[usePreset ? 1 : 0]) &&
-            efficiency["quality_ceiling_used"] is null && balanced["quality_ceiling_used"] is null,
-            "effect prefix profile: the quality preset solves the prefix under both ceilings, keeps the smaller visible change and records both readings");
+        check(new[] { efficiency, balanced, quality }.All(loop => loop["quality_ceiling_used"] is null &&
+            loop["maximum_seconds"]!.GetValue<double>() <= 600),
+            "effect prefix profile: every preset defaults to at most 600 seconds and avoids duplicate ceiling solves");
 
         // 缓存记录带档位溯源：单看一条 effect_prefix_caches 就能知道这个前缀循环是哪一档、什么预算下求出来的。
         string?[] presets = [RetimeProfile.Efficiency, RetimeProfile.Balanced, RetimeProfile.Quality, null];
@@ -130,7 +121,7 @@ internal static class EffectPrefixProfileChecks
             profiles[1]["retime_profile"]!["retime_budget_percent"]!.GetValue<double>() == 3 &&
             profiles[2]["retime_profile"]!["preset"]!.GetValue<string>() == RetimeProfile.Quality &&
             profiles[2]["retime_profile"]!["retime_budget_percent"] is null &&
-            profiles[2]["loop"]!["quality_ceiling_used"] is JsonObject &&
+            profiles[2]["loop"]!["quality_ceiling_used"] is null &&
             profiles[3]["retime_profile"]!["preset"] is null &&
             profiles[3]["retime_profile"]!["loop_max_seconds"]!.GetValue<double>() == RetimeProfile.DefaultLoopMaximumSeconds &&
             profiles[3]["loop"]!["quality_ceiling_used"] is null,
