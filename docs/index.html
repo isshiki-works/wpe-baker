@@ -25,7 +25,7 @@
   <div>
     <div class="eyebrow">Deterministic animation baking engine</div>
     <h1>Your wallpaper renders forever.<br><span>Bake it once.</span></h1>
-    <p class="lead">Periodica models a Wallpaper Engine scene’s entire animation math, retunes its periods until the whole scene closes into one loop, and plays it back as video. Same look; up to 96% less GPU load and power, plugged in or on battery. Its first application is WPE Baker, for Wallpaper Engine.</p>
+    <p class="lead">Periodica models a Wallpaper Engine scene’s entire animation math, retunes its periods until the whole scene closes into one loop, and plays it back as video. Nearly the same look; up to 96% less GPU load and power, plugged in or on battery. Its first application is WPE Baker, for Wallpaper Engine.</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/latest">Download for Windows</a>
       <a class="btn ghost" href="#numbers">Read the measurements</a>
@@ -48,7 +48,7 @@
 
 <section id="loop">
   <div class="eyebrow">The loop</div>
-  <h2>Solved from the math, so it closes by construction.</h2>
+  <h2>Solved from the math, so it always closes.</h2>
   <p class="sub">A frame-comparison tool guesses where a video might repeat. Periodica reads the equations that produce the motion — shader time, animation tracks, particle cycles, video timebases — and retunes them into one common period. Drag the divider: the first frame and the last frame of the 50-second loop above.</p>
   <div class="cmp" id="cmp">
     <img src="site/land-last.jpg" alt="Last frame of the baked loop">
@@ -85,23 +85,23 @@
 <section id="period">
   <div class="eyebrow">The hard part</div>
   <h2>Most scenes have no period. Periodica makes one.</h2>
-  <p class="sub">A wave at 7.3 s, a sway at 11.1 s, a particle cycle at 4.6 s and a video at 20 s never line up again; a naive recording would need hours to repeat and would still show a cut. Periodica solves each component's own period, then retunes their speeds by a fraction of a percent so they share one common loop — a period the artist never authored.</p>
+  <p class="sub">A wave at 7.3 s, a sway at 11.1 s, a particle cycle at 4.6 s and a video at 20 s almost never return to the same phase together; a naive recording would need hours to repeat and would still show a cut. Periodica solves each component's own period, then retunes their speeds by a fraction of a percent so they share one common loop — a period the artist never authored.</p>
   <div class="rows">
-    <div class="row"><div class="k">BUDGET</div><h3>A visible-change budget, not a tolerance</h3><p>Three presets cap how far any component may be retuned: Efficiency 5%, Balanced 3%, Quality the smallest change that still closes. Yuri's 100 periodic components were reconciled into one 180.4 s loop; Nijika's 20 into 44 s; Ayanami Rei's scene closes in 56.2 s with a total retime of 4.68%.</p></div>
-    <div class="row"><div class="k">GUARDS</div><h3>Rules that keep it invisible</h3><p>The slowest visible component completes at least three cycles per loop; visible drift stays under 0.2 px/s; sways are retuned in frequency only, never in path. Every retune is bounded per component and listed in the report. If the rules cannot be met, the layer stays live and the report says which one.</p></div>
-    <div class="row"><div class="k">PROOF</div><h3>Seams verified against the original's own motion</h3><p>Every output is rendered past its loop point and compared tile by tile with the original's next frame before it is accepted; that proves the loop closes, and the per-component budget bounds how far any motion drifts from the original over the whole loop.</p></div>
+    <div class="row"><div class="k">BUDGET</div><h3>A visible-change budget</h3><p>Three presets cap how far any component may be retuned: Efficiency 5%, Balanced 3%, Quality the smallest change that still closes. Yuri's 100 periodic components were reconciled into one 180.4 s loop; Nijika's 20 into 44 s; Ayanami Rei's scene closes in 56.2 s with a total retime of 4.68%.</p></div>
+    <div class="row"><div class="k">GUARDS</div><h3>Rules that keep the changes nearly invisible</h3><p>The slowest visible component completes at least three cycles per loop; visible drift stays under 0.2 px/s; sways are retuned in frequency only, never in path. Every retune is bounded per component and listed in the report. If the rules cannot be met, the layer stays live and the report says which one.</p></div>
+    <div class="row"><div class="k">PROOF</div><h3>Every seam verified frame by frame against the original</h3><p>Every output is rendered past its loop point and compared tile by tile with the original's next frame before it is accepted; that proves the loop closes, and the per-component budget bounds how far any motion drifts from the original over the whole loop.</p></div>
   </div>
 </section>
 
 <section id="gui">
   <div class="eyebrow">The tool</div>
-  <h2>Drag a scene in. Read one line.</h2>
-  <p class="sub">Two controls and one verdict. Animation precision bounds how far any motion may be retimed; Interaction decides what input-driven content does. Everything else lives under Advanced.</p>
+  <h2>Drop a scene in, get a verdict.</h2>
+  <p class="sub">Two controls and one verdict. Animation precision bounds how far any motion may be retimed; Interaction decides what input-driven content does. Advanced holds the options for power users.</p>
   <div class="tool">
     <div class="steps">
       <div><b>01</b><h3>Drop the wallpaper folder in</h3><p>From <span class="mono">steamapps\workshop\content\431960</span>. The output directory is Wallpaper Engine's own project folder, so the result appears in its list.</p></div>
-      <div><b>02</b><h3>Animation precision · Interaction</h3><p>Quality, balanced or efficiency is the visible-change budget; quality is the default, it steps down on its own when the stricter budget does not close, and the verdict says which one applied. Keep, fixed view or off is what mouse and audio do. Clocks, dates and media text always stay live.</p></div>
-      <div><b>03</b><h3>Read the verdict</h3><p>One of four fixed states. "Not included in this bake" lists exactly what was left out. If your settings do not close but another pair does, the report offers it as a single click.</p></div>
+      <div><b>02</b><h3>Animation precision · Interaction</h3><p>Quality, balanced and efficiency are the visible-change budget; quality is the default. If the loop does not close inside the current budget, the solver steps down a level and retries, and the verdict says which one it used. Keep, fixed view or off is what mouse and audio do. Clocks, dates and media text stay live in every mode.</p></div>
+      <div><b>03</b><h3>Read the verdict</h3><p>One of four fixed states. "Not included in this bake" lists what was left out. If your settings do not close but another pair does, the report offers it as a single click.</p></div>
     </div>
     <figure class="shot"><img src="site/gui-en.png" alt="WPE Baker 1.0.1 window: Alone (3448877775) analyzed at quality precision with fixed view; verdict Ready to generate; mouse parallax not included" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker 1.0.1 · Alone (3448877775) at the defaults: quality precision, fixed view.</figcaption></figure>
   </div>
@@ -109,7 +109,7 @@
 
 <section id="numbers">
   <div class="eyebrow">Measurements</div>
-  <h2>Every number here was read off a power counter.</h2>
+  <h2>Every number here comes from a real measurement.</h2>
   <p class="sub">Intel Arc B390 laptop, official Wallpaper Engine, A/B/B/A runs at 60 fps, RAPL iGPU rail. Original scene against its baked output.</p>
   <div class="gal">
     <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 wallpaper preview"><figcaption><b>−57%</b>Lost Landscape 3<small>3713073223 · 329k subs · effect prefix</small></figcaption></figure>
@@ -139,8 +139,8 @@
 
 <section id="refresh">
   <div class="eyebrow">Refresh rate</div>
-  <h2>Run it at your panel's full refresh rate. Keep the fans off.</h2>
-  <p class="sub">A heavy scene costs the GPU roughly twice as much at 120 fps as at 60. A whole-frame bake barely notices: the decoder does the work and the 3D engine idles, so on those outputs the refresh rate stops costing power. This project started on an iGPU laptop.</p>
+  <h2>Max out the refresh rate. The fans still stay off.</h2>
+  <p class="sub">A heavy wallpaper costs the GPU roughly twice as much at 120 fps as at 60; a fully baked output barely notices: the decoder does the work and the 3D engine idles. This project started on an iGPU laptop.</p>
   <div class="tablewrap">
   <table>
     <thead><tr><th>Wallpaper</th><th>Original 60 → 120 fps</th><th>Baked 60 → 120 fps</th><th style="text-align:right">Baked at 120 vs original at 60</th><th>Package power, 120 fps</th></tr></thead>
@@ -227,7 +227,7 @@
   <div class="eyebrow">FAQ</div>
   <h2>Short answers.</h2>
   <div class="faq">
-    <details><summary>What is the simplest thing I get?</summary><p>Your favorite wallpaper at full refresh rate and full quality, and the fans stay off. That is the whole reason this exists.</p></details>
+    <details><summary>What is the simplest thing I get?</summary><p>Your favorite wallpaper at its highest refresh rate and quality, and the fans stay off. That is the whole reason this exists.</p></details>
     <details><summary>Will it make every wallpaper cheaper?</summary><p>Light scenes have nothing to save, and it says so before rendering. Heavy, mostly periodic scenes are where the 46–96% savings come from; interaction-heavy scenes get their deterministic core baked and the rest treated as input.</p></details>
     <details><summary>Does the loop look different from the original?</summary><p>You choose the visible-change budget — efficiency, balanced or quality — and the report lists every retimed component with its exact percentage. Seams are validated against the original's own motion before an output is accepted.</p></details>
     <details><summary>What do I need?</summary><p>Windows, Wallpaper Engine, and a GPU for the offline render. The portable build has no installer and no Python. Baking a typical scene takes minutes; playback needs only hardware video decode.</p></details>
