@@ -301,7 +301,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.stride = (p.output_width + 3u) & ~3u;
     p.directory = std::filesystem::u8path(path).parent_path();
     p.output_path = path;
-    if (!p.capture.encoded_frames || p.capture.retain_frames.size() > 8 ||
+    if (!p.capture.encoded_frames || p.capture.retain_frames.size() > 32 ||
         !std::is_sorted(p.capture.retain_frames.begin(), p.capture.retain_frames.end()) ||
         std::adjacent_find(p.capture.retain_frames.begin(), p.capture.retain_frames.end()) != p.capture.retain_frames.end())
         throw std::runtime_error("Invalid GPU capture frame selection");
