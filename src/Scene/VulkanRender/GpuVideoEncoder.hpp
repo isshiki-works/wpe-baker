@@ -31,8 +31,10 @@ public:
     ~GpuVideoEncoder();
     GpuVideoEncoder(const GpuVideoEncoder&) = delete;
     GpuVideoEncoder& operator=(const GpuVideoEncoder&) = delete;
-    // Input arrives and leaves in TRANSFER_SRC_OPTIMAL after its render fence.
-    void encode(VkImage rgba, std::uint64_t index);
+    // Input arrives and leaves in TRANSFER_SRC_OPTIMAL. Asynchronous input must
+    // have its render submission ordered before conversion on this graphics queue.
+    void encode(VkImage rgba, std::uint64_t index, bool asynchronous = false);
+    void waitConversion();
     void finish();
     std::string captureMetadata() const;
     std::uint64_t readbackFrames() const;

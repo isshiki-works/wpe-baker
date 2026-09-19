@@ -677,7 +677,7 @@ int Render(const fs::path& job_path) {
                     !pixels.pixels.empty() || pixels.gpu_total_ms || pixels.gpu_draw_ms)
                     throw std::runtime_error("skipped draw violates simulation-only contract");
             } else if (!offline.drawsFrame(frame) || step_status != owe::OfflineStepStatus::Drawn ||
-                !pixels.completed() || pixels.frame_index != frame || pixels.width != output_width ||
+                (!pixels.completed() && !(job.gpu_encode && pixels.submitted())) || pixels.frame_index != frame || pixels.width != output_width ||
                 pixels.height != output_height || pixels.row_pitch != output_width * 4 ||
                 pixels.pixels.size() != (read_pixels ? uint64_t(output_width) * output_height * 4 : 0)) {
                 throw std::runtime_error("completed frame violates shape/index contract");
@@ -711,6 +711,7 @@ int Render(const fs::path& job_path) {
             index << "{\"frame\":" << (frame - job.warmup) << ",\"simulation_frame\":" << frame
                   << ",\"pts_num\":" << (frame - job.warmup) * job.fps_den << ",\"pts_den\":" << job.fps_num
                   << ",\"step_ms\":" << step_ms
+                  << ",\"gpu_work_pending\":" << (pixels.submitted() ? "true" : "false")
                   << ",\"gpu_total_ms\":" << OptionalReal(pixels.gpu_total_ms)
                   << ",\"gpu_draw_ms\":" << OptionalReal(pixels.gpu_draw_ms)
                   << ",\"cpu_prepare_ms\":" << OptionalReal(pixels.cpu_prepare_ms)

@@ -676,6 +676,14 @@ void SceneRenderController::onDraw() {
                     vulkan::RenderGraphResourceRetention::KeepSceneTextures, false, load_bench);
             }
         }
+        // CPU scripts/audio for the next frame may run while the previous GPU
+        // frame is in flight. Drain before any mesh/material/texture mutation.
+        if (offline) {
+            if (const auto error = m_render->finishPendingFrame(); !error.empty()) {
+                invalidateOfflineFrame(m_step_index, error);
+                return;
+            }
+        }
         m_scene->Runtime().BeforeRender();
         refreshPreparedRenderTargetDirtyEvents();
         refreshPreparedMeshDirtyEvents();
@@ -708,7 +716,7 @@ void SceneRenderController::onDraw() {
             if (m_main.offlineContext().failed) return;
             m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_main.readsOfflineFrame(m_step_index));
             m_cpu_frame.frame_index = m_step_index;
-            if (!m_cpu_frame.completed()) return;
+            if (!m_cpu_frame.completed() && !m_cpu_frame.submitted()) return;
             const auto check_started = m_cpu_frame.gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             if (const auto pass = m_render->firstUnpreparedPass()) {
                 const std::string message = "Offline frame omitted an unprepared render pass: " + *pass;
@@ -781,7 +789,7 @@ bool SceneRenderController::stepOffline(uint64_t index, double dt, const Offline
     const double scaled_dt = dt * m_speed.to_primitive();
     m_scene->Runtime().PrepareOfflineFrame(u64(index), f64(m_main.offlineContext().elapsed), f64(scaled_dt));
     onDraw();
-    return m_cpu_frame.completed() || m_offline_step_status == OfflineStepStatus::DrawSkipped;
+    return m_cpu_frame.completed() || m_cpu_frame.submitted() || m_offline_step_status == OfflineStepStatus::DrawSkipped;
 }
 
 void SceneRenderController::on(RenderMsg::SetFillMode_payload&& m) {

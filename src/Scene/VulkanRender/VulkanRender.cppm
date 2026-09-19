@@ -45,6 +45,7 @@ enum class RenderOutputMode
 enum class CpuFrameStatus
 {
     Completed,
+    Submitted,
     NotReady,
     InvalidMode,
     RenderError,
@@ -98,6 +99,7 @@ struct CpuFrameResult {
     std::string              message;
 
     bool completed() const noexcept { return status == CpuFrameStatus::Completed; }
+    bool submitted() const noexcept { return status == CpuFrameStatus::Submitted; }
 };
 
 struct RenderCaptureTarget {
@@ -272,6 +274,8 @@ public:
                              PassInvalidationFlags);
     std::vector<PreparedPassDiagnostic> preparedPassDiagnostics() const;
     std::optional<std::string> firstUnpreparedPass() const;
+    // Finish queued GPU work before mutating resources it may still reference.
+    std::string finishPendingFrame();
     // Free buffer generations no longer referenced by prepared work.
     void evictUnusedMeshes();
     void UpdateCameraFillMode(Scene&, owe::FillMode);

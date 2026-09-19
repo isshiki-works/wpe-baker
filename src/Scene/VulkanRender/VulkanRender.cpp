@@ -308,6 +308,7 @@ struct VulkanRender::Impl {
 
     void drawFrame(Scene&);
     CpuFrameResult drawFrameCpu(Scene&, bool read_pixels);
+    std::string finishPendingFrame();
     void recycleCpuPixels(std::vector<std::uint8_t>&&);
     bool initCpuReadback(const RenderInitInfo&);
     bool initSamplePipeline();
@@ -389,6 +390,8 @@ struct VulkanRender::Impl {
     vvk::PipelineLayout m_sample_layout;
     vvk::Pipeline m_sample_pipeline;
     std::unique_ptr<GpuVideoEncoder> m_gpu_encoder;
+    owe::resource::CompletionToken m_pending_cpu_submission;
+    bool m_gpu_pipeline { false };
     std::optional<GpuEncodeOptions> m_encode_options;
     std::optional<RenderCaptureTarget> m_capture_target;
     std::optional<OrthographicCaptureViewport> m_orthographic_capture_viewport;
@@ -615,6 +618,7 @@ std::vector<PreparedPassDiagnostic> VulkanRender::preparedPassDiagnostics() cons
 std::optional<std::string> VulkanRender::firstUnpreparedPass() const {
     return pImpl->m_program.firstUnpreparedPass();
 }
+std::string VulkanRender::finishPendingFrame() { return pImpl->finishPendingFrame(); }
 void VulkanRender::evictUnusedMeshes() {
     if (pImpl->m_inited) pImpl->m_rendering_resources.resources.EvictUnusedBuffers();
 };
@@ -639,6 +643,9 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
     m_effect_render_scale = info.effect_render_scale;
 
     m_cpu_readback = info.output_mode == RenderOutputMode::CpuReadback;
+    const char* pipeline = std::getenv("WPE_RENDER_GPU_PIPELINE");
+    m_gpu_pipeline = info.gpu_encode.has_value() && !info.gpu_timing &&
+        pipeline && std::string_view(pipeline) == "1";
     m_prepass->setTransparentBackground(info.layer_selection.enabled &&
                                         info.layer_selection.transparent_background);
     if (info.orthographic_capture_viewport.has_value()) {
@@ -1268,6 +1275,26 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
     if (m_redraw_cb) m_redraw_cb();
 }
 
+std::string VulkanRender::Impl::finishPendingFrame() {
+    if (!m_pending_cpu_submission.Valid()) return {};
+    try {
+        if (m_gpu_encoder) m_gpu_encoder->waitConversion();
+        auto& rr = m_rendering_resources;
+        const auto result = rr.fence_frame.Wait(m_readback_timeout_ns);
+        if (result != VK_SUCCESS)
+            throw std::runtime_error("wait queued render frame: VkResult=" + std::to_string(result));
+        if (rr.resources.CompleteSubmission(m_pending_cpu_submission).is_none())
+            throw std::runtime_error("queued render resource completion was unavailable");
+        m_pending_cpu_submission = {};
+        m_timestamp_queries.completed();
+        ReleaseCompletedRetiredResources(*m_device, rr);
+        return {};
+    } catch (const std::exception& error) {
+        m_cpu_failed = true;
+        return error.what();
+    }
+}
+
 owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pixels) {
     const auto cpu_started = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (m_gpu_encoder) read_pixels = false;
@@ -1318,6 +1345,9 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         frame.gpu_draw_ms.reset();
         return std::move(frame);
     };
+
+    if (const auto error = finishPendingFrame(); !error.empty())
+        return fail(VK_ERROR_INITIALIZATION_FAILED, error);
 
     const auto extent = m_device->out_extent();
     if (extent.width != m_cpu_image.extent.width || extent.height != m_cpu_image.extent.height) {
@@ -1528,16 +1558,19 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     result = m_device->graphics_queue().handle.Submit(submit, *rr.fence_frame);
     if (result != VK_SUCCESS) return fail(result, "submit CPU frame");
     auto completion = rr.resources.BeginSubmission(rstd::move(recorded_uploads));
+    if (!completion.Valid()) return fail(VK_ERROR_INITIALIZATION_FAILED, "track submitted frame resources");
+    const bool defer_completion = m_gpu_pipeline && m_gpu_encoder;
+    if (defer_completion) m_pending_cpu_submission = completion;
     const auto cpu_submitted = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (m_gpu_timing_requested)
         frame.cpu_prepare_ms = std::chrono::duration<double,std::milli>(cpu_submitted-cpu_started).count();
-    result = rr.fence_frame.Wait(m_readback_timeout_ns);
+    if (!defer_completion) result = rr.fence_frame.Wait(m_readback_timeout_ns);
     if (m_gpu_timing_requested)
         frame.cpu_render_wait_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpu_submitted).count();
     // Do not reset/reuse buffers after a timeout: the submission can still be
     // in flight. The failed renderer retains its resources until destruction.
     if (result != VK_SUCCESS) return fail(result, "wait for CPU frame fence");
-    m_timestamp_queries.completed();
+    if (!defer_completion) m_timestamp_queries.completed();
     if (m_timestamp_queries) {
         struct QueryValue { std::uint64_t ticks; std::uint64_t available; };
         std::array<QueryValue, timestamp_query_count> queries {};
@@ -1564,19 +1597,21 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
                                                m_timestamp_valid_bits) * milliseconds_per_tick;
         }
     }
-    if (! completion.Valid() || rr.resources.CompleteSubmission(completion).is_none()) {
+    if (!defer_completion && rr.resources.CompleteSubmission(completion).is_none()) {
         return fail(VK_ERROR_INITIALIZATION_FAILED, "track CPU frame resource completion");
     }
-    ReleaseCompletedRetiredResources(*m_device, rr);
+    if (!defer_completion) ReleaseCompletedRetiredResources(*m_device, rr);
 
     if (m_gpu_encoder && m_cpu_frame_index >= m_encode_options->first_frame) {
         const auto encode_started = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         const auto index = m_cpu_frame_index - m_encode_options->first_frame;
         if (index < m_encode_options->frames) {
             try {
-                m_gpu_encoder->encode(*m_cpu_image.handle, index);
+                m_gpu_encoder->encode(*m_cpu_image.handle, index, defer_completion);
                 if (index + 1 == m_encode_options->frames) {
                     m_gpu_encoder->finish();
+                    if (const auto error = finishPendingFrame(); !error.empty())
+                        return fail(VK_ERROR_INITIALIZATION_FAILED, error);
                     frame.gpu_capture_metadata = m_gpu_encoder->captureMetadata();
                     frame.gpu_readback_frames = m_gpu_encoder->readbackFrames();
                 }
@@ -1637,7 +1672,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         m_cpu_staging.handle.UnMapMemory();
     }
     frame.video_decoders = rr.resources.ObserveVideoDecoders();
-    frame.status = CpuFrameStatus::Completed;
+    frame.status = m_pending_cpu_submission.Valid() ? CpuFrameStatus::Submitted : CpuFrameStatus::Completed;
     ++m_cpu_frame_index;
     return frame;
 }

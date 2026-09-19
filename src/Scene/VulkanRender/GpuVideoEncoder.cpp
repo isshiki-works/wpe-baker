@@ -80,6 +80,7 @@ struct GpuVideoEncoder::Impl {
     std::uint64_t readbacks {}, retained_count {};
     PFN_vkCmdPushDescriptorSetKHR push_descriptors {};
     bool finished {};
+    bool conversion_pending {};
 
     ~Impl() {
         // On cancellation/error, queued codec work must finish before its resources/device disappear.
@@ -216,7 +217,14 @@ struct GpuVideoEncoder::Impl {
         Vk(vkBindBufferMemory(device, buffer, allocation, 0), "bind GPU capture buffer");
     }
 
+    void waitConversion() {
+        if (!conversion_pending) return;
+        Vk(vkWaitForFences(device, 1, &fence, VK_TRUE, timeout_ns), "wait before reusing GPU conversion resources");
+        conversion_pending = false;
+    }
+
     void beginCapture() {
+        waitConversion();
         Vk(vkResetCommandBuffer(command, 0), "reset capture command");
         VkCommandBufferBeginInfo begin { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
@@ -531,9 +539,12 @@ void main() {
 
 GpuVideoEncoder::~GpuVideoEncoder() = default;
 
-void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
+void GpuVideoEncoder::waitConversion() { impl->waitConversion(); }
+
+void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronous) {
     auto& p = *impl;
     if (p.finished) throw std::runtime_error("GPU encoder already finished");
+    p.waitConversion();
     const auto fade=p.capture.crossfade_frames;
     if (index>=p.capture.encoded_frames+fade) { p.retain(rgba,index); return; }
     const bool cache_head=fade && index<fade;
@@ -673,10 +684,11 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
         const auto submitted = vkQueueSubmit(p.queue, 1, &submit, p.fence);
         vk->unlock_queue(hw, p.family, 0);
         Vk(submitted, "submit GPU conversion");
+        p.conversion_pending = true;
         vkframe->sem_value[0] = after;
         vkframe->layout[0] = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         vkframe->access[0] = VK_ACCESS_TRANSFER_WRITE_BIT;
-        Vk(vkWaitForFences(p.device, 1, &p.fence, VK_TRUE, timeout_ns), "wait GPU conversion");
+        if (!asynchronous) p.waitConversion();
     } catch (...) {
         vkframes->unlock_frame(frames, vkframe);
         vkDeviceWaitIdle(p.device);
