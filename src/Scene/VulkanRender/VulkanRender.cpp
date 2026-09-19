@@ -1301,7 +1301,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     const auto cpu_started = m_cpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (m_gpu_encoder) read_pixels = false;
     CpuFrameResult frame;
-    frame.gpu_scene_overlap = m_gpu_pipeline;
+    frame.gpu_scene_overlap = m_gpu_pipeline && (m_gpu_encoder || m_sample_coverage_enabled);
     frame.gpu_timing_requested = m_gpu_timing_requested;
     frame.gpu_timing_supported = m_gpu_timing_supported;
     frame.timestamp_valid_bits = m_timestamp_valid_bits;
@@ -1564,7 +1564,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     if (!completion.Valid()) return fail(VK_ERROR_INITIALIZATION_FAILED, "track submitted frame resources");
     // Sparse-search frames still draw and reduce coverage. Only the frames
     // that return pixels or the final coverage result need completion here.
-    const bool defer_completion = m_gpu_pipeline && !read_pixels && !coverage_last &&
+    const bool defer_completion = frame.gpu_scene_overlap && !read_pixels && !coverage_last &&
         (m_gpu_encoder || m_cpu_frame_index < m_sample_coverage_start + m_sample_coverage_frames);
     if (defer_completion) m_pending_cpu_submission = completion;
     const auto cpu_submitted = m_cpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
