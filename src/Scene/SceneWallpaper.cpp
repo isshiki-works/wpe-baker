@@ -621,6 +621,7 @@ void SceneRenderController::onDraw() {
     const bool offline = m_main.offline();
     const bool profile = offline && m_main.profileOfflineFrame();
     const auto scene_started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    std::optional<double> script_ms;
     const double delta = offline ? m_step_dt : frame_timer.TargetFrameTime();
     if (!offline) frame_timer.FrameBegin();
     if (m_rg.is_some()) {
@@ -671,7 +672,9 @@ void SceneRenderController::onDraw() {
             (void)m_scene_audio_response.advance(fi.frametime, fi.audio);
             if (m_uniform_input) m_uniform_input->SetAudioSpectrum(fi.audio);
             m_scene->TickNodeFieldAnimations();
+            const auto script_started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             owe::script::TickSceneScripts(*m_scene, fi);
+            if (profile) script_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-script_started).count();
             m_scene->TickCameraPaths();
             m_scene->TickMaterialShaderAnimations();
             m_scene->TickTransformUpdaters();
@@ -723,6 +726,7 @@ void SceneRenderController::onDraw() {
             m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_main.readsOfflineFrame(m_step_index));
             if (profile) {
                 m_cpu_frame.cpu_scene_ms = std::chrono::duration<double,std::milli>(scene_finished-scene_started).count();
+                m_cpu_frame.cpu_script_ms = script_ms;
                 m_cpu_frame.cpu_resources_ms = std::chrono::duration<double,std::milli>(resources_finished-scene_finished).count();
             }
             m_cpu_frame.frame_index = m_step_index;
