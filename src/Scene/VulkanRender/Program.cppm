@@ -484,6 +484,14 @@ struct RenderProgram {
                            rstd::as_cast<i32>(max_framebuffer_extent.height));
             const bool eligible = rt.effect_scale_eligible && !(rt.bind.enable && rt.bind.screen);
             double allocation_scale = effect_render_scale;
+            if (match_effect_resolution && report_effect_scale && eligible && effect_target_count < 3) {
+                auto* owner = rt.effect_scale_owner.is_some() ? scene.ResourceIndex().node(*rt.effect_scale_owner) : nullptr;
+                auto camera = scene.CameraMut("global"_str);
+                rstd_info("adaptive eligibility {}: owner={} static={} point={} perspective={} reflected={} camera={} camera_perspective={}",
+                          names[index].as_str(), owner != nullptr, rt.effect_scale_static_transform,
+                          rt.sample.minFilter == TextureFilter::NEAREST, owner && owner->Perspective(),
+                          owner && owner->Reflected(), camera.is_some(), camera.is_some() && (**camera).IsPerspective());
+            }
             if (match_effect_resolution && eligible && rt.effect_scale_static_transform &&
                 rt.effect_scale_owner.is_some() && rt.sample.minFilter != TextureFilter::NEAREST) {
                 auto* node = scene.ResourceIndex().node(*rt.effect_scale_owner);
