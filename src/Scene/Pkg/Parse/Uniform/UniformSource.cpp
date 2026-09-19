@@ -624,7 +624,8 @@ auto TransformUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
             Affine3d(Translation3d(Vector3d(offset.x() * scale, offset.y() * scale, 0.0))).matrix();
     }
 
-    writer.Write(Output::ViewProjection, ShaderValue::fromMatrix(view_projection));
+    if (writer.Wants(Output::ViewProjection))
+        writer.Write(Output::ViewProjection, ShaderValue::fromMatrix(view_projection));
     if (m_node->eye_position_override.is_some()) {
         writer.Write(Output::EyePosition, *m_node->eye_position_override);
     } else if (m_node->use_camera_eye_position || camera.IsPerspective()) {
@@ -705,8 +706,10 @@ auto TransformUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
                     effect_model = parallax_model * effect_model;
                 }
             }
-            writer.Write(Output::LayerModel, ShaderValue::fromMatrix(layer_model));
-            writer.Write(Output::EffectModel, ShaderValue::fromMatrix(effect_model));
+            if (writer.Wants(Output::LayerModel))
+                writer.Write(Output::LayerModel, ShaderValue::fromMatrix(layer_model));
+            if (writer.Wants(Output::EffectModel))
+                writer.Write(Output::EffectModel, ShaderValue::fromMatrix(effect_model));
             if (req_emvp || req_emvpi) {
                 const Matrix4d effect_view =
                     active_camera_ref->GetViewProjectionMatrix(render_view);

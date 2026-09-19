@@ -620,7 +620,7 @@ auto UniformBufferBinding::Update(ref<dyn<UniformBufferFrameContext>>         fr
     }
     if (! changed) return Ok(empty {});
 
-    m_data = m_base_data.clone();
+    rstd::slice_::copy_from_slice(m_data.as_mut_slice().as_mut_ref(), m_base_data.as_slice());
     usize source_index {};
     for (auto& bound : m_sources) {
         detail::SourceValueWriter writer_impl(*this, bound);
