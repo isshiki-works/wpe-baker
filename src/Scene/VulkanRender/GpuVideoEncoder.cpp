@@ -333,7 +333,7 @@ uvec2 chroma(vec3 p) { return uvec2(byteValue(128.0+224.0*dot(p,vec3(-0.114572,-
                                       byteValue(128.0+224.0*dot(p,vec3(0.5,-0.454153,-0.045847)))); }
 void main() {
     uint x = gl_GlobalInvocationID.x*4u, y = gl_GlobalInvocationID.y;
-    bool active = x < dims.stride && y < dims.height;
+    bool insideImage = x < dims.stride && y < dims.height;
     if ((dims.flags&1u)!=0u) {
         if (gl_LocalInvocationIndex==0u) {
             blockStats[0]=dims.width; blockStats[1]=dims.height; blockStats[2]=0u; blockStats[3]=0u;
@@ -341,7 +341,7 @@ void main() {
             compareFirst = atomicOr(stats.data[6],0u)==0u ? 1u : 0u;
         }
         barrier();
-        if (active && x < dims.width) {
+        if (insideImage && x < dims.width) {
             uint lo=dims.width, hi=0u, minA=255u, maxA=0u, different=0u, content=0u;
             for (uint k=0u; k<4u && x+k<dims.width; ++k) {
                 uvec4 p=uvec4(imageLoad(sourceImage,ivec2(x+k,y))*255.0+0.5);
@@ -368,7 +368,7 @@ void main() {
             }
         }
     }
-    if (!active) return;
+    if (!insideImage) return;
     uvec4 Y = uvec4(byteValue(luma(rgb(x,y))),byteValue(luma(rgb(x+1u,y))),
                    byteValue(luma(rgb(x+2u,y))),byteValue(luma(rgb(x+3u,y))));
     outputData.words[(y*dims.stride+x)/4u] = Y.x | (Y.y<<8u) | (Y.z<<16u) | (Y.w<<24u);
