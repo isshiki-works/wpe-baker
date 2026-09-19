@@ -162,6 +162,7 @@ sources = [
   "src/Scene/VulkanRender/UniformBuffer.cpp",
   "src/Scene/VulkanRender/VulkanRender.cppm",
   "src/Scene/VulkanRender/VulkanRender.cpp",
+  "src/Scene/VulkanRender/GpuVideoEncoder.cpp",
 ]
 
 [usage]

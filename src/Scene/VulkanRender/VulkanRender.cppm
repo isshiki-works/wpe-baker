@@ -137,6 +137,15 @@ struct OrthographicCaptureViewport {
     double height { 0.0 };
 };
 
+struct GpuEncodeOptions {
+    std::string path;
+    std::string codec { "h264_vulkan" };
+    bool packed_alpha { false };
+    int qp { 18 };
+    std::uint32_t fps_num { 30 }, fps_den { 1 };
+    std::uint64_t first_frame { 0 }, frames { 0 };
+};
+
 struct RenderInitInfo {
     bool enable_valid_layer { false };
     bool offscreen { false };
@@ -151,6 +160,7 @@ struct RenderInitInfo {
     // Optional box-averaged RGBA readback. Rendering keeps the original output extent.
     std::uint32_t    sample_width { 0 };
     std::uint32_t    sample_height { 0 };
+    std::optional<GpuEncodeOptions> gpu_encode;
     std::optional<RenderCaptureTarget> capture_target;
     std::optional<OrthographicCaptureViewport> orthographic_capture_viewport;
     RenderLayerSelection layer_selection;

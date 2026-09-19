@@ -7,6 +7,7 @@ module;
 #include <cmath>
 #include <cstdlib>
 #include <vulkan/vulkan.h>
+#include "GpuVideoEncoder.hpp"
 
 module wescene.vulkan_render;
 import wescene.core;
@@ -382,6 +383,8 @@ struct VulkanRender::Impl {
     vvk::DescriptorSetLayout m_sample_descriptors;
     vvk::PipelineLayout m_sample_layout;
     vvk::Pipeline m_sample_pipeline;
+    std::unique_ptr<GpuVideoEncoder> m_gpu_encoder;
+    std::optional<GpuEncodeOptions> m_encode_options;
     std::optional<RenderCaptureTarget> m_capture_target;
     std::optional<OrthographicCaptureViewport> m_orthographic_capture_viewport;
     bool m_orthographic_capture_viewport_rejected { false };
@@ -683,6 +686,15 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
         device_exts.push_back({ false, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME });
     }
     for (const auto& extension : base_device_exts) device_exts.push_back(extension);
+    if (info.gpu_encode) {
+        device_exts.push_back({ true, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME });
+        device_exts.push_back({ true, VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME });
+        device_exts.push_back({ true, VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME });
+        device_exts.push_back({ true, info.gpu_encode->codec == "hevc_vulkan"
+            ? VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME : VK_KHR_VIDEO_ENCODE_H264_EXTENSION_NAME });
+        device_exts.push_back({ true, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME });
+        device_exts.push_back({ true, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME });
+    }
     if (info.video_hwdec != "none") {
         AppendVideoDeviceExtensions(device_exts);
     }
@@ -716,7 +728,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
     }
 
     const auto instance_api_version =
-        info.video_hwdec == "none" ? WP_VULKAN_VERSION : VK_API_VERSION_1_3;
+        info.video_hwdec == "none" && !info.gpu_encode ? WP_VULKAN_VERSION : VK_API_VERSION_1_3;
     {
         auto instance_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::vulkan_instance);
         if (! Instance::Create(m_instance, inst_exts, inst_layers, instance_api_version)) {
@@ -839,6 +851,7 @@ bool VulkanRender::Impl::initRes() {
 }
 
 bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
+    m_encode_options = info.gpu_encode;
     const auto extent = m_device->out_extent();
     if ((info.sample_width == 0) != (info.sample_height == 0) ||
         info.sample_width > extent.width || info.sample_height > extent.height) {
@@ -881,7 +894,7 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
         .samples       = VK_SAMPLE_COUNT_1_BIT,
         .tiling        = VK_IMAGE_TILING_OPTIMAL,
         .usage         = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                         (m_gpu_samples ? VK_IMAGE_USAGE_STORAGE_BIT : 0u),
+                         (m_gpu_samples || m_encode_options ? VK_IMAGE_USAGE_STORAGE_BIT : 0u),
         .sharingMode   = VK_SHARING_MODE_EXCLUSIVE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
@@ -891,6 +904,22 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
                                        image_allocation, m_cpu_image.handle));
     m_cpu_image.extent = image_info.extent;
     m_cpu_image.generation = u64(1);
+
+    if (m_encode_options) {
+        if (m_sample_readback || !(features & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) return false;
+        const auto& encode = *m_encode_options;
+        try {
+            m_gpu_encoder = std::make_unique<GpuVideoEncoder>(m_device->instance_handle(), *m_device->gpu(),
+                *m_device->handle(), m_device->graphics_queue().family_index,
+                m_device->enabled_instance_extensions(), m_device->enabled_device_extensions(),
+                extent.width, extent.height, encode.packed_alpha, encode.fps_num, encode.fps_den,
+                encode.qp, encode.codec, encode.path);
+        } catch (const std::exception& error) {
+            rstd_error("GPU encode initialization: {}", error.what());
+            return false;
+        }
+        return true;
+    }
 
     // GPU sampling writes compact packed RGBA words directly to the readback buffer.
     // Unsupported devices keep the full copy and average from the mapped pixels.
@@ -1016,6 +1045,7 @@ void VulkanRender::Impl::destroy() {
         ReleaseCompletedRetiredResources(*m_device, m_rendering_resources);
         m_program.clear();
         m_rendering_resources.resources.Reset();
+        m_gpu_encoder.reset();
         m_sample_pipeline = vvk::Pipeline {};
         m_sample_layout = vvk::PipelineLayout {};
         m_sample_descriptors = vvk::DescriptorSetLayout {};
@@ -1165,6 +1195,7 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
 }
 
 owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pixels) {
+    if (m_gpu_encoder) read_pixels = false;
     CpuFrameResult frame;
     frame.gpu_timing_requested = m_gpu_timing_requested;
     frame.gpu_timing_supported = m_gpu_timing_supported;
@@ -1371,7 +1402,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         .offset = 0,
         .size = m_cpu_staging.req_size,
     };
-    rr.command.PipelineBarrier(compact_readback ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
+    if (read_pixels) rr.command.PipelineBarrier(compact_readback ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
                                 VK_PIPELINE_STAGE_HOST_BIT,
                                 0, to_host);
     result = rr.command.End();
@@ -1422,6 +1453,18 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         return fail(VK_ERROR_INITIALIZATION_FAILED, "track CPU frame resource completion");
     }
     ReleaseCompletedRetiredResources(*m_device, rr);
+
+    if (m_gpu_encoder && m_cpu_frame_index >= m_encode_options->first_frame) {
+        const auto index = m_cpu_frame_index - m_encode_options->first_frame;
+        if (index < m_encode_options->frames) {
+            try {
+                m_gpu_encoder->encode(*m_cpu_image.handle, index);
+                if (index + 1 == m_encode_options->frames) m_gpu_encoder->finish();
+            } catch (const std::exception& error) {
+                return fail(VK_ERROR_INITIALIZATION_FAILED, error.what());
+            }
+        }
+    }
 
     if (read_pixels) {
         void* mapped = nullptr;

@@ -162,6 +162,7 @@ struct Job {
     uint64_t frames{}, warmup{}, seed{}, readback_budget{};
     uint64_t output_stride { 1 };
     std::optional<uint64_t> output_phase;
+    std::optional<owe::GpuEncodeOptions> gpu_encode;
     double epoch_ms{};
     bool raw_stdout{}, validation{}, gpu_timing{}, trace_scene{};
     owe::OfflineFrameInput input;
@@ -254,6 +255,21 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     job.epoch_ms = Number(json, "epoch_ms", 946684800000.0);
     job.readback_budget = Uint(json, "max_readback_bytes", 256ull * 1024 * 1024);
     job.raw_stdout = Bool(json, "raw_stdout", false);
+    if (auto* encode = Field(json, "gpu_encode")) {
+        owe::GpuEncodeOptions options;
+        options.path = Utf8(job.output / "gpu-video.mp4.partial");
+        options.codec = String(*encode, "codec", "h264_vulkan");
+        options.packed_alpha = Bool(*encode, "packed_alpha", false);
+        auto qp = Uint(*encode, "qp", 18);
+        if (qp > 51 || job.sample_width || job.raw_stdout || job.output_stride != 1 || job.output_phase ||
+            (job.width & 1) || (job.height & 1) ||
+            (options.codec != "h264_vulkan" && options.codec != "hevc_vulkan"))
+            throw std::runtime_error("GPU encoding requires even full frames, Vulkan H.264/HEVC and QP 0..51");
+        options.qp = static_cast<int>(qp);
+        options.fps_num = job.fps_num; options.fps_den = job.fps_den;
+        options.first_frame = job.warmup; options.frames = job.frames;
+        job.gpu_encode = std::move(options);
+    }
     job.validation = Bool(json, "vulkan_validation", false);
     job.gpu_timing = Bool(json, "gpu_timing", false);
     job.trace_scene = Bool(json, "trace_scene", false);
@@ -416,6 +432,10 @@ int Render(const fs::path& job_path) {
             << ",\"readback_width\":" << wallpaper.readback().width
             << ",\"readback_height\":" << wallpaper.readback().height
             << ",\"gpu_sampled\":" << (wallpaper.readback().gpu_sampled ? "true" : "false")
+            << ",\"gpu_encoded\":" << (job.gpu_encode ? "true" : "false")
+            << ",\"readback_frames\":" << (job.gpu_encode ? 0 : written)
+            << ",\"gpu_encoder\":" << (job.gpu_encode ? Quote(job.gpu_encode->codec) : "null")
+            << ",\"gpu_packed_alpha\":" << (job.gpu_encode && job.gpu_encode->packed_alpha ? "true" : "false")
             << ",\"warmup_frames\":" << job.warmup << ",\"pixel_format\":\"rgba8\""
             << ",\"renderer_error_count\":" << logger.errors.load();
         const auto& source_script_errors = wallpaper.offlineSourceScriptErrors();
@@ -546,6 +566,7 @@ int Render(const fs::path& job_path) {
         info.gpu_timing = job.gpu_timing;
         info.sample_width = job.sample_width;
         info.sample_height = job.sample_height;
+        info.gpu_encode = job.gpu_encode;
         owe::OfflineOptions offline;
         offline.seed = job.seed;
         offline.epoch_ms = job.epoch_ms;
@@ -554,7 +575,7 @@ int Render(const fs::path& job_path) {
         offline.trace_scene = job.trace_scene;
         offline.readback_stride = job.output_stride;
         offline.readback_phase = job.output_phase;
-        if (Field(json, "output_frame_stride")) offline.readback_start = job.warmup;
+        if (Field(json, "output_frame_stride") || job.gpu_encode) offline.readback_start = job.warmup;
         offline.video_rate_overrides = job.video_rate_overrides;
         if (!wallpaper.initOffline(std::move(config), std::move(info), offline))
             throw std::runtime_error(wallpaper.offlineError());
@@ -568,7 +589,7 @@ int Render(const fs::path& job_path) {
 #ifdef _WIN32
             if (_setmode(_fileno(stdout), _O_BINARY) < 0) throw std::runtime_error("cannot set binary stdout");
 #endif
-        } else {
+        } else if (!job.gpu_encode) {
             raw.open(job.output / "frames.rgba.partial", std::ios::binary);
             if (!raw) throw std::runtime_error("cannot create raw frame stream");
         }
@@ -583,7 +604,7 @@ int Render(const fs::path& job_path) {
             const double step_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frame_start).count();
             RequireNoLoggedErrors();
             const auto& pixels = wallpaper.readback();
-            const bool read_pixels = offline.readsFrame(frame);
+            const bool read_pixels = !job.gpu_encode && offline.readsFrame(frame);
             const uint32_t output_width = job.sample_width ? job.sample_width : job.width;
             const uint32_t output_height = job.sample_height ? job.sample_height : job.height;
             if (!pixels.completed() || pixels.frame_index != frame || pixels.width != output_width ||
@@ -603,11 +624,11 @@ int Render(const fs::path& job_path) {
             audio.write(reinterpret_cast<const char*>(pcm.samples.data()), static_cast<std::streamsize>(pcm.samples.size() * sizeof(float)));
             if (!audio) throw std::runtime_error("audio stream write failed");
             audio_written += pcm.frame_count;
-            if (!read_pixels) continue;
+            if (!read_pixels && !job.gpu_encode) continue;
             if (job.raw_stdout) {
                 if (std::fwrite(pixels.pixels.data(), 1, pixels.pixels.size(), stdout) != pixels.pixels.size())
                     throw std::runtime_error("frame consumer closed or failed");
-            } else {
+            } else if (!job.gpu_encode) {
                 raw.write(reinterpret_cast<const char*>(pixels.pixels.data()), static_cast<std::streamsize>(pixels.pixels.size()));
                 if (!raw) throw std::runtime_error("raw frame write failed");
             }
@@ -634,12 +655,13 @@ int Render(const fs::path& job_path) {
         fs::rename(job.output / "audio.f32le.partial", job.output / "audio.f32le");
         if (job.raw_stdout) {
             if (std::fflush(stdout) != 0) throw std::runtime_error("frame consumer flush failed");
-        } else {
+        } else if (!job.gpu_encode) {
             raw.flush();
             if (!raw) throw std::runtime_error("raw frame flush failed");
             raw.close();
             fs::rename(job.output / "frames.rgba.partial", job.output / "frames.rgba");
         }
+        if (job.gpu_encode) fs::rename(job.output / "gpu-video.mp4.partial", job.output / "gpu-video.mp4");
         result("complete");
         return 0;
     } catch (const std::exception& error) {
@@ -678,7 +700,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

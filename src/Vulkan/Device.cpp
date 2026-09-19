@@ -152,6 +152,11 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR,
         .pNext = nullptr,
     };
+    VkPhysicalDeviceVideoMaintenance1FeaturesKHR supported_video_maintenance {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_MAINTENANCE_1_FEATURES_KHR,
+    };
+    const bool encode_requested = exists(tested_exts, VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME);
+    if (encode_requested) supported_sync2.pNext = &supported_video_maintenance;
     VkPhysicalDeviceSamplerYcbcrConversionFeatures supported_ycbcr {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
         .pNext = &supported_sync2,
@@ -162,6 +167,10 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
         .pNext = &supported_timeline,
     };
     device.m_gpu.GetFeatures2KHR(supported2);
+    if (encode_requested && !supported_video_maintenance.videoMaintenance1) {
+        rstd_error("GPU encoding requires the videoMaintenance1 feature");
+        return false;
+    }
     if (! supported_timeline.timelineSemaphore) {
         rstd_error("required vulkan feature timelineSemaphore is not supported");
         return false;
@@ -198,6 +207,11 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
         .pNext            = nullptr,
         .synchronization2 = enable_sync2 ? VK_TRUE : VK_FALSE,
     };
+    VkPhysicalDeviceVideoMaintenance1FeaturesKHR enabled_video_maintenance {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_MAINTENANCE_1_FEATURES_KHR,
+        .videoMaintenance1 = encode_requested ? VK_TRUE : VK_FALSE,
+    };
+    if (encode_requested) enabled_sync2.pNext = &enabled_video_maintenance;
     VkPhysicalDeviceSamplerYcbcrConversionFeatures enabled_ycbcr {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
         .pNext = enable_sync2 ? &enabled_sync2 : nullptr,
