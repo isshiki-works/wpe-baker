@@ -51,6 +51,8 @@ struct GpuVideoEncoder::Impl {
     VkDescriptorSetLayout descriptors {};
     VkPipelineLayout layout {};
     VkPipeline pipeline {};
+    VkImage source_image {};
+    VkImageView source_view {};
     PFN_vkCmdPushDescriptorSetKHR push_descriptors {};
     bool finished {};
 
@@ -64,6 +66,7 @@ struct GpuVideoEncoder::Impl {
         av_buffer_unref(&hardware);
         if (mux) { if (mux->pb) avio_closep(&mux->pb); avformat_free_context(mux); }
         if (pipeline) vkDestroyPipeline(device, pipeline, nullptr);
+        if (source_view) vkDestroyImageView(device, source_view, nullptr);
         if (layout) vkDestroyPipelineLayout(device, layout, nullptr);
         if (descriptors) vkDestroyDescriptorSetLayout(device, descriptors, nullptr);
         if (shader) vkDestroyShaderModule(device, shader, nullptr);
@@ -78,6 +81,9 @@ struct GpuVideoEncoder::Impl {
             int result = avcodec_receive_packet(codec, packet);
             if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) return;
             Av(result, "receive Vulkan encoded packet");
+            // Native Vulkan encoders may omit the last packet's duration.
+            // Every submitted frame occupies exactly one rational time-base tick.
+            if (!packet->duration) packet->duration = 1;
             av_packet_rescale_ts(packet, codec->time_base, stream->time_base);
             packet->stream_index = stream->index;
             Av(av_interleaved_write_frame(mux, packet), "mux Vulkan encoded packet");
@@ -160,6 +166,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.stream = avformat_new_stream(p.mux, nullptr);
     if (!p.stream) throw std::bad_alloc();
     p.stream->time_base = p.codec->time_base;
+    p.stream->avg_frame_rate = p.codec->framerate;
     Av(avcodec_parameters_from_context(p.stream->codecpar, p.codec), "copy GPU codec parameters");
     Av(avio_open(&p.mux->pb, path.c_str(), AVIO_FLAG_WRITE), "open GPU video output");
     Av(avformat_write_header(p.mux, nullptr), "write GPU video header");
@@ -254,11 +261,15 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
     // FFmpeg allocates shared graphics/encode images with CONCURRENT ownership.
     if (vkframe->img[1] || vkframe->queue_family[0] != VK_QUEUE_FAMILY_IGNORED)
         throw std::runtime_error("GPU encoder surface requires concurrent multiplane NV12");
-    VkImageView view {};
-    VkImageViewCreateInfo view_info { .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .image = rgba, .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
-        .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 } };
-    Vk(vkCreateImageView(p.device, &view_info, nullptr, &view), "view rendered RGBA image");
+    if (rgba != p.source_image) {
+        if (p.source_view) vkDestroyImageView(p.device, p.source_view, nullptr);
+        p.source_view = VK_NULL_HANDLE;
+        VkImageViewCreateInfo view_info { .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = rgba, .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
+            .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 } };
+        Vk(vkCreateImageView(p.device, &view_info, nullptr, &p.source_view), "view rendered RGBA image");
+        p.source_image = rgba;
+    }
     vkframes->lock_frame(frames, vkframe);
     try {
         Vk(vkResetCommandBuffer(p.command, 0), "reset GPU conversion command");
@@ -274,7 +285,7 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
         vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &source);
         vkCmdBindPipeline(p.command, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
-        VkDescriptorImageInfo image { .imageView = view, .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
+        VkDescriptorImageInfo image { .imageView = p.source_view, .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
         VkDescriptorBufferInfo buffer { .buffer = p.nv12, .offset = 0, .range = VK_WHOLE_SIZE };
         std::array<VkWriteDescriptorSet, 2> writes {{
             { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 0, .descriptorCount = 1,
@@ -333,12 +344,11 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
     } catch (...) {
         vkframes->unlock_frame(frames, vkframe);
         vkDeviceWaitIdle(p.device);
-        vkDestroyImageView(p.device, view, nullptr);
         throw;
     }
     vkframes->unlock_frame(frames, vkframe);
-    vkDestroyImageView(p.device, view, nullptr);
     p.frame->pts = static_cast<std::int64_t>(index);
+    p.frame->duration = 1;
     p.frame->color_range = p.codec->color_range; p.frame->colorspace = p.codec->colorspace;
     p.frame->color_primaries = p.codec->color_primaries; p.frame->color_trc = p.codec->color_trc;
     Av(avcodec_send_frame(p.codec, p.frame), "submit Vulkan encode frame");
