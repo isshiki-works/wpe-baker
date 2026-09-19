@@ -268,6 +268,22 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
         options.qp = static_cast<int>(qp);
         options.fps_num = job.fps_num; options.fps_den = job.fps_den;
         options.first_frame = job.warmup; options.frames = job.frames;
+        options.encoded_frames = Uint(*encode, "encoded_frames", job.frames);
+        if (!options.encoded_frames || options.encoded_frames > job.frames)
+            throw std::runtime_error("GPU encoded_frames must be a positive frame prefix");
+        options.collect_bounds = Bool(*encode, "collect_bounds", false);
+        options.bounds_include_rgb = Bool(*encode, "bounds_include_rgb", false);
+        if (auto* retained = Field(*encode, "retain_frames")) {
+            auto array = retained->as_array();
+            if (array.is_none()) throw std::runtime_error("GPU retain_frames must be an array");
+            for (const auto& item : **array) {
+                auto index = item.as_u64();
+                if (index.is_none() || index->to_primitive() >= job.frames || options.retain_frames.size() >= 8 ||
+                    (!options.retain_frames.empty() && index->to_primitive() <= options.retain_frames.back()))
+                    throw std::runtime_error("GPU retained frames must be up to eight increasing indices inside the render");
+                options.retain_frames.push_back(index->to_primitive());
+            }
+        }
         job.gpu_encode = std::move(options);
     }
     job.validation = Bool(json, "vulkan_validation", false);
@@ -433,7 +449,9 @@ int Render(const fs::path& job_path) {
             << ",\"readback_height\":" << wallpaper.readback().height
             << ",\"gpu_sampled\":" << (wallpaper.readback().gpu_sampled ? "true" : "false")
             << ",\"gpu_encoded\":" << (job.gpu_encode ? "true" : "false")
-            << ",\"readback_frames\":" << (job.gpu_encode ? 0 : written)
+            << ",\"readback_frames\":" << (job.gpu_encode ? wallpaper.readback().gpu_readback_frames : written)
+            << ",\"gpu_capture\":" << (wallpaper.readback().gpu_capture_metadata.empty() ? "null" : wallpaper.readback().gpu_capture_metadata)
+            << ",\"gpu_encoded_frames\":" << (job.gpu_encode ? std::to_string(job.gpu_encode->encoded_frames) : "null")
             << ",\"gpu_encoder\":" << (job.gpu_encode ? Quote(job.gpu_encode->codec) : "null")
             << ",\"gpu_packed_alpha\":" << (job.gpu_encode && job.gpu_encode->packed_alpha ? "true" : "false")
             << ",\"warmup_frames\":" << job.warmup << ",\"pixel_format\":\"rgba8\""
@@ -700,7 +718,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

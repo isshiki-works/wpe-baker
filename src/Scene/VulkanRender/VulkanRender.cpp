@@ -913,7 +913,9 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
                 *m_device->handle(), m_device->graphics_queue().family_index,
                 m_device->enabled_instance_extensions(), m_device->enabled_device_extensions(),
                 extent.width, extent.height, encode.packed_alpha, encode.fps_num, encode.fps_den,
-                encode.qp, encode.codec, encode.path);
+                encode.qp, encode.codec, encode.path,
+                GpuCaptureOptions { encode.collect_bounds, encode.bounds_include_rgb,
+                    encode.encoded_frames ? encode.encoded_frames : encode.frames, encode.retain_frames });
         } catch (const std::exception& error) {
             rstd_error("GPU encode initialization: {}", error.what());
             return false;
@@ -1459,7 +1461,14 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         if (index < m_encode_options->frames) {
             try {
                 m_gpu_encoder->encode(*m_cpu_image.handle, index);
-                if (index + 1 == m_encode_options->frames) m_gpu_encoder->finish();
+                if (index + 1 == m_encode_options->frames) {
+                    m_gpu_encoder->finish();
+                    frame.gpu_capture_metadata = m_gpu_encoder->captureMetadata();
+                    frame.gpu_readback_frames = m_encode_options->retain_frames.size();
+                    if (m_encode_options->collect_bounds &&
+                        (m_encode_options->retain_frames.empty() || m_encode_options->retain_frames.front() != 0))
+                        ++frame.gpu_readback_frames;
+                }
             } catch (const std::exception& error) {
                 return fail(VK_ERROR_INITIALIZATION_FAILED, error.what());
             }

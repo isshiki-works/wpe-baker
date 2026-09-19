@@ -5,8 +5,15 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace owe {
+
+struct GpuCaptureOptions {
+    bool collect_bounds { false }, bounds_include_rgb { false };
+    std::uint64_t encoded_frames { UINT64_MAX };
+    std::vector<std::uint64_t> retain_frames;
+};
 
 // Owns the codec and conversion resources, never the renderer's Vulkan device.
 // Frames remain on that device; only compressed packets are mapped by FFmpeg.
@@ -17,13 +24,14 @@ public:
                     std::span<const std::string> device_extensions,
                     std::uint32_t width, std::uint32_t height, bool packed_alpha,
                     std::uint32_t fps_num, std::uint32_t fps_den, int qp,
-                    const std::string& codec, const std::string& path);
+                    const std::string& codec, const std::string& path, GpuCaptureOptions capture = {});
     ~GpuVideoEncoder();
     GpuVideoEncoder(const GpuVideoEncoder&) = delete;
     GpuVideoEncoder& operator=(const GpuVideoEncoder&) = delete;
     // Input arrives and leaves in TRANSFER_SRC_OPTIMAL after its render fence.
     void encode(VkImage rgba, std::uint64_t index);
     void finish();
+    std::string captureMetadata() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

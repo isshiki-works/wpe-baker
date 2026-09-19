@@ -88,6 +88,8 @@ struct CpuFrameResult {
     std::string              gpu_timing_message;
     std::vector<std::uint8_t> pixels;
     bool                     gpu_sampled { false };
+    std::uint64_t            gpu_readback_frames { 0 };
+    std::string              gpu_capture_metadata;
     VkResult                 error_code { VK_SUCCESS };
     std::string              message;
 
@@ -144,6 +146,9 @@ struct GpuEncodeOptions {
     int qp { 18 };
     std::uint32_t fps_num { 30 }, fps_den { 1 };
     std::uint64_t first_frame { 0 }, frames { 0 };
+    std::uint64_t encoded_frames { 0 };
+    bool collect_bounds { false }, bounds_include_rgb { false };
+    std::vector<std::uint64_t> retain_frames;
 };
 
 struct RenderInitInfo {
