@@ -511,7 +511,7 @@ struct RenderProgram {
                         allocation_scale = std::min(1.0, stretch);
                     if (report_effect_scale && effect_target_count < 3)
                         rstd_info("adaptive effect {}: layer {}x{}, viewport {}x{}, camera {}x{}, texel_stretch={}",
-                                  names[index].as_str(), node->Size().x(), node->Size().y(),
+                                  names[index].as_str(), static_cast<double>(node->Size().x()), static_cast<double>(node->Size().y()),
                                   extent.width, extent.height, (**camera).Width(), (**camera).Height(), stretch);
                 }
             }
