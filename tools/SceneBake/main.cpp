@@ -470,7 +470,7 @@ int Render(const fs::path& job_path) {
             << ",\"device_uuid\":" << (gpu_hex.empty() ? "null" : Quote(gpu_hex))
             << ",\"source\":" << Quote(Utf8(job.source))
             << ",\"width\":" << job.width << ",\"height\":" << job.height
-            << ",\"effect_render_scale\":" << job.effect_render_scale
+            << ",\"effect_render_scale\":" << OptionalReal(job.effect_render_scale)
             << ",\"fps_num\":" << job.fps_num << ",\"fps_den\":" << job.fps_den
             << ",\"requested_frames\":" << job.frames << ",\"written_frames\":" << written
             << ",\"output_frame_stride\":" << job.output_stride
