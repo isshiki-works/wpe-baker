@@ -110,13 +110,15 @@ struct GpuVideoEncoder::Impl {
         if (loop_head_memory) vkFreeMemory(device, loop_head_memory, nullptr);
     }
 
-    void openMux(const std::string& path, AVFormatContext*& context, AVStream*& track) {
+    void openMux(const std::string& path, AVFormatContext*& context, AVStream*& track,
+                 const AVCodecParameters* compressed_parameters = nullptr) {
         Av(avformat_alloc_output_context2(&context, nullptr, "mp4", path.c_str()), "create GPU video muxer");
         track = avformat_new_stream(context, nullptr);
         if (!track) throw std::bad_alloc();
         track->time_base = codec->time_base;
         track->avg_frame_rate = codec->framerate;
-        Av(avcodec_parameters_from_context(track->codecpar, codec), "copy GPU codec parameters");
+        Av(compressed_parameters ? avcodec_parameters_copy(track->codecpar,compressed_parameters)
+                                : avcodec_parameters_from_context(track->codecpar,codec), "copy GPU codec parameters");
         Av(avio_open(&context->pb, path.c_str(), AVIO_FLAG_WRITE), "open GPU video output");
         AVDictionary* options = nullptr;
         av_dict_set_int(&options, "movie_timescale", codec->framerate.num, 0);
@@ -150,7 +152,6 @@ struct GpuVideoEncoder::Impl {
         // Both segments came from this codec. Each starts with a forced IDR and
         // uses the same SPS/PPS; restore head+body without decoding or encoding.
         avformat_free_context(mux); mux = nullptr; stream = nullptr;
-        openMux(output_path, mux, stream);
         std::uint64_t copied = 0;
         for (const auto& path : {head_path,body_path}) {
             AVFormatContext* input = nullptr;
@@ -158,6 +159,10 @@ struct GpuVideoEncoder::Impl {
             try {
                 if (input->nb_streams != 1 || input->streams[0]->codecpar->codec_id != codec->codec_id)
                     throw std::runtime_error("Unexpected GPU loop segment stream");
+                // MP4 demux packets are length-prefixed AVC/HEVC, unlike the
+                // encoder's Annex-B packets. Carry the demuxer's codec data so
+                // the muxer does not interpret those lengths as start codes.
+                if (!mux) openMux(output_path,mux,stream,input->streams[0]->codecpar);
                 const auto expected = path==head_path ? capture.crossfade_frames : capture.encoded_frames-capture.crossfade_frames;
                 std::uint64_t segment_frames = 0;
                 int result;
@@ -181,9 +186,7 @@ struct GpuVideoEncoder::Impl {
         if (copied != capture.encoded_frames) throw std::runtime_error("GPU loop frame count changed during assembly");
         Av(av_write_trailer(mux),"finish assembled GPU loop");
         Av(avio_closep(&mux->pb),"close assembled GPU loop");
-        // These two compressed intermediates were created in this new job directory.
-        std::filesystem::remove(std::filesystem::u8path(body_path));
-        std::filesystem::remove(std::filesystem::u8path(head_path));
+        // The caller removes these job-local segments after validating the final video.
     }
 
     VkDeviceMemory allocate(const VkMemoryRequirements& requirements, VkMemoryPropertyFlags flags) {
