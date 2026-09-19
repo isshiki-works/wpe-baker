@@ -1408,7 +1408,7 @@ globalThis.createScriptProperties = function () {
                    'SpaceToTimeDelimiter','SpaceToDateDelimiter','Value']) {
     builder['add' + k] = adder(k);
   }
-  // .finish() returns an object with live property getters. Property reads:
+  // .finish() returns a Proxy. Property reads:
   //   - scriptProperties.<name> : look up in _hostValues (filled by C++),
   //                               else default value from descriptor.
   //   When _hostValues[name] is a {user, value} pair, resolve at access
@@ -1470,12 +1470,9 @@ globalThis.createScriptProperties = function () {
           enumerable: true,
           configurable: true,
           get() {
-            if (!Object.prototype.hasOwnProperty.call(_hostValues, d.name)) return d.value;
-            const host = _hostValues[d.name];
-            // Scalar values need no wrapper resolution or color conversion.
-            // Read live on every access so user-property changes still apply.
-            const value = host !== null && typeof host === 'object' ? unwrapUserProp(host) : host;
-            return d.kind === 'Color' ? coerceDescriptorValue(d, value) : value;
+            if (Object.prototype.hasOwnProperty.call(_hostValues, d.name))
+              return coerceDescriptorValue(d, unwrapUserProp(_hostValues[d.name]));
+            return d.value;
           },
         });
       }
