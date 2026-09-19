@@ -861,7 +861,7 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
     const char* gpu_samples = std::getenv("WPE_RENDER_GPU_SAMPLES");
     m_gpu_samples = m_sample_readback && (!gpu_samples || std::string_view(gpu_samples) != "0") &&
         (features & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) &&
-        (queue_properties[m_device->graphics_queue().family_index].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
+        (queue_properties[usize(m_device->graphics_queue().family_index)].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
         sample_bytes <= m_device->limits().maxStorageBufferRange &&
         cell_pixels * 255 + cell_pixels / 2 <= std::numeric_limits<std::uint32_t>::max();
     constexpr VkFormatFeatureFlags required = VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
