@@ -85,6 +85,7 @@ struct GpuVideoEncoder::Impl {
     bool conversion_pending {};
     bool profile { std::getenv("WPE_RENDER_CPU_PROFILE") != nullptr };
     double surface_ms {}, conversion_submit_ms {}, codec_send_ms {}, codec_receive_ms {};
+    std::int64_t quality_level {}, async_depth {};
 
     ~Impl() {
         // On cancellation/error, queued codec work must finish before its resources/device disappear.
@@ -370,6 +371,12 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.codec->hw_frames_ctx = av_buffer_ref(p.frames);
     p.codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     Av(av_opt_set_int(p.codec->priv_data, "qp", qp, 0), "set Vulkan encoder QP");
+    if (const auto* value = std::getenv("WPE_RENDER_ENCODER_QUALITY"))
+        Av(av_opt_set(p.codec->priv_data, "quality", value, 0), "set Vulkan encoder quality level");
+    if (const auto* value = std::getenv("WPE_RENDER_ENCODER_DEPTH"))
+        Av(av_opt_set(p.codec->priv_data, "async_depth", value, 0), "set Vulkan encoder depth");
+    Av(av_opt_get_int(p.codec->priv_data, "quality", 0, &p.quality_level), "read Vulkan encoder quality level");
+    Av(av_opt_get_int(p.codec->priv_data, "async_depth", 0, &p.async_depth), "read Vulkan encoder depth");
     Av(avcodec_open2(p.codec, encoder, nullptr), "open Vulkan encoder");
     if (p.capture.crossfade_frames) {
         p.body_path=path+".body.mp4"; p.head_path=path+".head.mp4";
@@ -765,7 +772,8 @@ std::string GpuVideoEncoder::captureMetadata() const {
     const auto& p = *impl;
     std::ostringstream out;
     out << "{\"readback_frames\":" << p.readbacks
-        << ",\"encoded_packets\":" << p.encoded_packets;
+        << ",\"encoded_packets\":" << p.encoded_packets
+        << ",\"quality_level\":" << p.quality_level << ",\"async_depth\":" << p.async_depth;
     if (p.profile) out << ",\"host_profile_ms\":{\"surface\":" << p.surface_ms
         << ",\"conversion_submit\":" << p.conversion_submit_ms << ",\"codec_send\":" << p.codec_send_ms
         << ",\"codec_receive\":" << p.codec_receive_ms << '}';
