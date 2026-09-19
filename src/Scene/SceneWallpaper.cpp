@@ -822,6 +822,7 @@ void SceneRenderController::rebuildRenderGraph(vulkan::RenderGraphResourceRetent
     if (! m_scene || ! renderInited()) return;
     if (m_rg.is_some()) m_render->clearLastRenderGraph(retention);
     if (evict_meshes) m_render->evictUnusedMeshes();
+    m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
     m_render->configureRenderTargets(*m_scene);
     {
         auto snapshot_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_snapshot);
@@ -835,7 +836,6 @@ void SceneRenderController::rebuildRenderGraph(vulkan::RenderGraphResourceRetent
 
     if (m_main.isGenGraphviz()) (*m_rg)->ToGraphviz("graph.dot"_str);
     m_render->compileRenderGraph(*m_scene, **m_rg, m_render_scene, load_bench);
-    m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
     consumeDirtyEventsCoveredByGraphRebuild();
     (void)m_scene->ConsumeRenderGraphDirty();
 }

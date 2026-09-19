@@ -509,6 +509,10 @@ struct RenderProgram {
                     const double stretch = std::sqrt(0.5 * (sum + std::sqrt(std::max(0.0, sum*sum - 4*determinant*determinant))));
                     if (std::isfinite(stretch) && stretch > 0.0)
                         allocation_scale = std::min(1.0, stretch);
+                    if (report_effect_scale && effect_target_count < 3)
+                        rstd_info("adaptive effect {}: layer {}x{}, viewport {}x{}, camera {}x{}, texel_stretch={}",
+                                  names[index].as_str(), node->Size().x(), node->Size().y(),
+                                  extent.width, extent.height, (**camera).Width(), (**camera).Height(), stretch);
                 }
             }
             rt.effect_scale_applied = eligible && allocation_scale < 1.0;
