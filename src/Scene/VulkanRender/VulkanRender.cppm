@@ -149,6 +149,8 @@ struct GpuEncodeOptions {
     std::uint64_t encoded_frames { 0 };
     bool collect_bounds { false }, bounds_include_rgb { false };
     std::vector<std::uint64_t> retain_frames;
+    std::uint32_t crossfade_frames { 0 };
+    std::uint32_t crop_x { 0 }, crop_y { 0 }, crop_width { 0 }, crop_height { 0 };
 };
 
 struct RenderInitInfo {

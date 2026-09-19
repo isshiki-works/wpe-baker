@@ -14,6 +14,7 @@ extern "C" {
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_vulkan.h>
 #include <libavutil/opt.h>
+#include <libavutil/mathematics.h>
 }
 
 import wescene.shader_compile;
@@ -39,16 +40,23 @@ struct GpuVideoEncoder::Impl {
     VkDevice device {};
     VkPhysicalDevice gpu {};
     VkQueue queue {};
-    std::uint32_t family {}, width {}, height {}, output_width {}, stride {};
+    std::uint32_t family {}, width {}, height {}, output_width {}, output_height {}, stride {}, color_width {};
     AVBufferRef *hardware {}, *frames {};
     AVCodecContext* codec {};
     AVFormatContext* mux {};
     AVStream* stream {};
+    AVFormatContext* head_mux {};
+    AVStream* head_stream {};
+    std::string output_path, body_path, head_path;
+    std::uint64_t encoded_packets {}, observed_frames {};
     AVFrame* frame {};
     AVPacket* packet {};
     std::vector<const char*> instance_extensions, device_extensions;
     VkBuffer nv12 {};
     VkDeviceMemory memory {};
+    VkBuffer loop_head {};
+    VkDeviceMemory loop_head_memory {};
+    VkDeviceSize loop_head_stride {};
     VkCommandPool pool {};
     VkCommandBuffer command {};
     VkFence fence {};
@@ -80,6 +88,7 @@ struct GpuVideoEncoder::Impl {
         av_buffer_unref(&frames);
         av_buffer_unref(&hardware);
         if (mux) { if (mux->pb) avio_closep(&mux->pb); avformat_free_context(mux); }
+        if (head_mux) { if (head_mux->pb) avio_closep(&head_mux->pb); avformat_free_context(head_mux); }
         if (pipeline) vkDestroyPipeline(device, pipeline, nullptr);
         if (source_view) vkDestroyImageView(device, source_view, nullptr);
         if (first_view) vkDestroyImageView(device, first_view, nullptr);
@@ -97,6 +106,24 @@ struct GpuVideoEncoder::Impl {
         if (pool) vkDestroyCommandPool(device, pool, nullptr);
         if (nv12) vkDestroyBuffer(device, nv12, nullptr);
         if (memory) vkFreeMemory(device, memory, nullptr);
+        if (loop_head) vkDestroyBuffer(device, loop_head, nullptr);
+        if (loop_head_memory) vkFreeMemory(device, loop_head_memory, nullptr);
+    }
+
+    void openMux(const std::string& path, AVFormatContext*& context, AVStream*& track) {
+        Av(avformat_alloc_output_context2(&context, nullptr, "mp4", path.c_str()), "create GPU video muxer");
+        track = avformat_new_stream(context, nullptr);
+        if (!track) throw std::bad_alloc();
+        track->time_base = codec->time_base;
+        track->avg_frame_rate = codec->framerate;
+        Av(avcodec_parameters_from_context(track->codecpar, codec), "copy GPU codec parameters");
+        Av(avio_open(&context->pb, path.c_str(), AVIO_FLAG_WRITE), "open GPU video output");
+        AVDictionary* options = nullptr;
+        av_dict_set_int(&options, "movie_timescale", codec->framerate.num, 0);
+        av_dict_set_int(&options, "video_track_timescale", codec->framerate.num, 0);
+        int result = avformat_write_header(context, &options);
+        av_dict_free(&options);
+        Av(result, "write GPU video header");
     }
 
     void packets() {
@@ -107,11 +134,56 @@ struct GpuVideoEncoder::Impl {
             // Native Vulkan encoders may omit the last packet's duration.
             // Every submitted frame occupies exactly one rational time-base tick.
             if (!packet->duration) packet->duration = 1;
-            av_packet_rescale_ts(packet, codec->time_base, stream->time_base);
-            packet->stream_index = stream->index;
-            Av(av_interleaved_write_frame(mux, packet), "mux Vulkan encoded packet");
+            const auto body_frames = static_cast<std::int64_t>(capture.encoded_frames-capture.crossfade_frames);
+            bool head = head_mux && packet->pts >= body_frames;
+            auto* track = head ? head_stream : stream;
+            if (head) { packet->pts -= body_frames; packet->dts -= body_frames; }
+            av_packet_rescale_ts(packet, codec->time_base, track->time_base);
+            packet->stream_index = track->index;
+            Av(av_interleaved_write_frame(head ? head_mux : mux, packet), "mux Vulkan encoded packet");
             av_packet_unref(packet);
+            ++encoded_packets;
         }
+    }
+
+    void assembleLoop() {
+        // Both segments came from this codec. Each starts with a forced IDR and
+        // uses the same SPS/PPS; restore head+body without decoding or encoding.
+        avformat_free_context(mux); mux = nullptr; stream = nullptr;
+        openMux(output_path, mux, stream);
+        std::uint64_t copied = 0;
+        for (const auto& path : {head_path,body_path}) {
+            AVFormatContext* input = nullptr;
+            Av(avformat_open_input(&input,path.c_str(),nullptr,nullptr),"open GPU loop segment");
+            try {
+                if (input->nb_streams != 1 || input->streams[0]->codecpar->codec_id != codec->codec_id)
+                    throw std::runtime_error("Unexpected GPU loop segment stream");
+                const auto expected = path==head_path ? capture.crossfade_frames : capture.encoded_frames-capture.crossfade_frames;
+                std::uint64_t segment_frames = 0;
+                int result;
+                while ((result=av_read_frame(input,packet)) >= 0) {
+                    if (packet->stream_index != 0 || segment_frames >= expected ||
+                        (segment_frames==0 && !(packet->flags & AV_PKT_FLAG_KEY)))
+                        throw std::runtime_error("GPU loop segment is not an independently decodable frame sequence");
+                    // A single known CFR video stream, no B frames. Rebuild its
+                    // timeline from the packet sequence, retaining the exact rational interval.
+                    packet->pts = packet->dts = av_rescale_q(static_cast<std::int64_t>(copied),codec->time_base,stream->time_base);
+                    packet->duration = av_rescale_q(1,codec->time_base,stream->time_base);
+                    packet->stream_index=stream->index; packet->pos=-1;
+                    Av(av_interleaved_write_frame(mux,packet),"remux GPU loop packet");
+                    av_packet_unref(packet); ++segment_frames; ++copied;
+                }
+                if (result != AVERROR_EOF) Av(result,"read GPU loop segment");
+                if (segment_frames != expected) throw std::runtime_error("Incomplete GPU loop segment");
+            } catch (...) { avformat_close_input(&input); throw; }
+            avformat_close_input(&input);
+        }
+        if (copied != capture.encoded_frames) throw std::runtime_error("GPU loop frame count changed during assembly");
+        Av(av_write_trailer(mux),"finish assembled GPU loop");
+        Av(avio_closep(&mux->pb),"close assembled GPU loop");
+        // These two compressed intermediates were created in this new job directory.
+        std::filesystem::remove(std::filesystem::u8path(body_path));
+        std::filesystem::remove(std::filesystem::u8path(head_path));
     }
 
     VkDeviceMemory allocate(const VkMemoryRequirements& requirements, VkMemoryPropertyFlags flags) {
@@ -197,10 +269,18 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     const std::string& codec_name, const std::string& path, GpuCaptureOptions capture) : impl(std::make_unique<Impl>()) {
     auto& p = *impl;
     p.device = device; p.gpu = gpu; p.family = graphics_family;
-    p.width = width; p.height = height; p.output_width = width * (packed_alpha ? 2 : 1);
-    p.stride = (p.output_width + 3u) & ~3u;
+    p.width = width; p.height = height;
     p.capture = std::move(capture);
+    p.color_width = p.capture.crop_width ? p.capture.crop_width : width;
+    p.output_height = p.capture.crop_height ? p.capture.crop_height : height;
+    if (!p.color_width || !p.output_height || ((p.capture.crop_x|p.capture.crop_y|p.color_width|p.output_height)&1u) ||
+        std::uint64_t(p.capture.crop_x)+p.color_width>width || std::uint64_t(p.capture.crop_y)+p.output_height>height ||
+        p.capture.crossfade_frames>=p.capture.encoded_frames || p.capture.crossfade_frames>UINT32_MAX/255u-1u)
+        throw std::runtime_error("GPU crop or loop crossfade lies outside its captured interval");
+    p.output_width = p.color_width * (packed_alpha ? 2 : 1);
+    p.stride = (p.output_width + 3u) & ~3u;
     p.directory = std::filesystem::u8path(path).parent_path();
+    p.output_path = path;
     if (!p.capture.encoded_frames || p.capture.retain_frames.size() > 8 ||
         !std::is_sorted(p.capture.retain_frames.begin(), p.capture.retain_frames.end()) ||
         std::adjacent_find(p.capture.retain_frames.begin(), p.capture.retain_frames.end()) != p.capture.retain_frames.end())
@@ -246,7 +326,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     if (!p.frames) throw std::bad_alloc();
     auto* frames = reinterpret_cast<AVHWFramesContext*>(p.frames->data);
     frames->format = AV_PIX_FMT_VULKAN; frames->sw_format = AV_PIX_FMT_NV12;
-    frames->width = static_cast<int>(p.output_width); frames->height = static_cast<int>(height);
+    frames->width = static_cast<int>(p.output_width); frames->height = static_cast<int>(p.output_height);
     auto* vkframes = reinterpret_cast<AVVulkanFramesContext*>(frames->hwctx);
     vkframes->usage = static_cast<VkImageUsageFlagBits>(VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     Av(av_hwframe_ctx_init(p.frames), "allocate Vulkan encoder frame pool");
@@ -256,7 +336,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     if (!encoder) throw std::runtime_error("Vulkan encoder is absent from libavcodec");
     p.codec = avcodec_alloc_context3(encoder);
     if (!p.codec) throw std::bad_alloc();
-    p.codec->width = static_cast<int>(p.output_width); p.codec->height = static_cast<int>(height);
+    p.codec->width = static_cast<int>(p.output_width); p.codec->height = static_cast<int>(p.output_height);
     p.codec->pix_fmt = AV_PIX_FMT_VULKAN; p.codec->sw_pix_fmt = AV_PIX_FMT_NV12;
     p.codec->time_base = { static_cast<int>(fps_den), static_cast<int>(fps_num) };
     p.codec->framerate = { static_cast<int>(fps_num), static_cast<int>(fps_den) };
@@ -267,23 +347,24 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     Av(av_opt_set_int(p.codec->priv_data, "qp", qp, 0), "set Vulkan encoder QP");
     Av(avcodec_open2(p.codec, encoder, nullptr), "open Vulkan encoder");
-    Av(avformat_alloc_output_context2(&p.mux, nullptr, "mp4", path.c_str()), "create GPU video muxer");
-    p.stream = avformat_new_stream(p.mux, nullptr);
-    if (!p.stream) throw std::bad_alloc();
-    p.stream->time_base = p.codec->time_base;
-    p.stream->avg_frame_rate = p.codec->framerate;
-    Av(avcodec_parameters_from_context(p.stream->codecpar, p.codec), "copy GPU codec parameters");
-    Av(avio_open(&p.mux->pb, path.c_str(), AVIO_FLAG_WRITE), "open GPU video output");
-    AVDictionary* mux_options = nullptr;
-    av_dict_set_int(&mux_options, "movie_timescale", fps_num, 0);
-    av_dict_set_int(&mux_options, "video_track_timescale", fps_num, 0);
-    int header_result = avformat_write_header(p.mux, &mux_options);
-    av_dict_free(&mux_options);
-    Av(header_result, "write GPU video header");
+    if (p.capture.crossfade_frames) {
+        p.body_path=path+".body.mp4"; p.head_path=path+".head.mp4";
+        p.openMux(p.body_path,p.mux,p.stream);
+        p.openMux(p.head_path,p.head_mux,p.head_stream);
+        VkPhysicalDeviceProperties properties;
+        vkGetPhysicalDeviceProperties(gpu,&properties);
+        const auto frame_bytes=std::uint64_t(p.color_width)*p.output_height*4;
+        if (frame_bytes>properties.limits.maxStorageBufferRange)
+            throw std::runtime_error("GPU loop reference exceeds the storage-buffer range");
+        const auto alignment=std::max<VkDeviceSize>(4,properties.limits.minStorageBufferOffsetAlignment);
+        p.loop_head_stride=(frame_bytes+alignment-1)/alignment*alignment;
+        p.makeBuffer(p.loop_head_stride*p.capture.crossfade_frames,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,p.loop_head,p.loop_head_memory);
+    } else p.openMux(path,p.mux,p.stream);
     p.frame = av_frame_alloc(); p.packet = av_packet_alloc();
     if (!p.frame || !p.packet) throw std::bad_alloc();
 
-    p.makeBuffer(std::uint64_t(p.stride) * height * 3 / 2,
+    p.makeBuffer(std::uint64_t(p.stride) * p.output_height * 3 / 2,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, p.nv12, p.memory);
     if (p.capture.collect_bounds || !p.capture.retain_frames.empty()) {
@@ -320,12 +401,24 @@ layout(binding=0, rgba8) readonly uniform image2D sourceImage;
 layout(binding=1, std430) writeonly buffer Output { uint words[]; } outputData;
 layout(binding=2, rgba8) readonly uniform image2D firstImage;
 layout(binding=3, std430) buffer Statistics { uint data[8]; } stats;
-layout(push_constant) uniform Dimensions { uint width; uint height; uint outputWidth; uint stride; uint flags; } dims;
+layout(binding=4, std430) buffer LoopHead { uint rgba[]; } loopHead;
+layout(push_constant) uniform Dimensions {
+    uint width; uint height; uint colorWidth; uint outputHeight; uint outputWidth; uint stride;
+    uint cropX; uint cropY; uint flags; uint blendNumerator; uint blendDenominator;
+} dims;
 shared uint blockStats[8];
 shared uint compareFirst;
 vec3 rgb(uint x, uint y) {
-    vec4 p = imageLoad(sourceImage, ivec2(min(x, dims.outputWidth-1u) % dims.width, min(y, dims.height-1u)));
-    return x < dims.width ? p.rgb : vec3(p.a);
+    uvec2 q=uvec2(min(x,dims.outputWidth-1u)%dims.colorWidth,min(y,dims.outputHeight-1u));
+    vec4 p=imageLoad(sourceImage,ivec2(q+uvec2(dims.cropX,dims.cropY)));
+    if ((dims.flags&8u)!=0u) {
+        uint stored=loopHead.rgba[q.y*dims.colorWidth+q.x];
+        uvec4 head=uvec4(stored&255u,(stored>>8u)&255u,(stored>>16u)&255u,stored>>24u);
+        uvec4 tail=uvec4(p*255.0+0.5);
+        // Same per-channel truncation as the lossless RGB/alpha blend, before chroma conversion.
+        p=vec4((head*(dims.blendDenominator-dims.blendNumerator)+tail*dims.blendNumerator)/dims.blendDenominator)/255.0;
+    }
+    return x < dims.colorWidth ? p.rgb : vec3(p.a);
 }
 uint byteValue(float x) { return uint(clamp(round(x),0.0,255.0)); }
 float luma(vec3 p) { return 16.0 + 219.0 * dot(p,vec3(0.2126,0.7152,0.0722)); }
@@ -333,7 +426,13 @@ uvec2 chroma(vec3 p) { return uvec2(byteValue(128.0+224.0*dot(p,vec3(-0.114572,-
                                       byteValue(128.0+224.0*dot(p,vec3(0.5,-0.454153,-0.045847)))); }
 void main() {
     uint x = gl_GlobalInvocationID.x*4u, y = gl_GlobalInvocationID.y;
-    bool insideImage = x < dims.stride && y < dims.height;
+    bool insideImage = x < dims.stride && y < dims.outputHeight;
+    if ((dims.flags&4u)!=0u && y<dims.outputHeight) {
+        for (uint k=0u;k<4u && x+k<dims.colorWidth;++k) {
+            uvec4 p=uvec4(imageLoad(sourceImage,ivec2(x+k+dims.cropX,y+dims.cropY))*255.0+0.5);
+            loopHead.rgba[y*dims.colorWidth+x+k]=p.r|(p.g<<8u)|(p.b<<16u)|(p.a<<24u);
+        }
+    }
     if ((dims.flags&1u)!=0u) {
         if (gl_LocalInvocationIndex==0u) {
             blockStats[0]=dims.width; blockStats[1]=dims.height; blockStats[2]=0u; blockStats[3]=0u;
@@ -341,7 +440,7 @@ void main() {
             compareFirst = atomicOr(stats.data[6],0u)==0u ? 1u : 0u;
         }
         barrier();
-        if (insideImage && x < dims.width) {
+        if (y<dims.height && x<dims.width) {
             uint lo=dims.width, hi=0u, minA=255u, maxA=0u, different=0u, content=0u;
             for (uint k=0u; k<4u && x+k<dims.width; ++k) {
                 uvec4 p=uvec4(imageLoad(sourceImage,ivec2(x+k,y))*255.0+0.5);
@@ -375,7 +474,7 @@ void main() {
     if ((y&1u)==0u) {
         uvec2 a = chroma((rgb(x,y)+rgb(x+1u,y)+rgb(x,y+1u)+rgb(x+1u,y+1u))*0.25);
         uvec2 b = chroma((rgb(x+2u,y)+rgb(x+3u,y)+rgb(x+2u,y+1u)+rgb(x+3u,y+1u))*0.25);
-        outputData.words[(dims.height*dims.stride+y/2u*dims.stride+x)/4u] = a.x | (a.y<<8u) | (b.x<<16u) | (b.y<<24u);
+        outputData.words[(dims.outputHeight*dims.stride+y/2u*dims.stride+x)/4u] = a.x | (a.y<<8u) | (b.x<<16u) | (b.y<<24u);
     }
 }
 )glsl", "main" };
@@ -386,15 +485,16 @@ void main() {
     VkShaderModuleCreateInfo shader { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .codeSize = words.size() * sizeof(unsigned int), .pCode = words.data() };
     Vk(vkCreateShaderModule(device, &shader, nullptr, &p.shader), "create GPU conversion shader");
-    const std::array<VkDescriptorSetLayoutBinding, 4> bindings {{
+    const std::array<VkDescriptorSetLayoutBinding, 5> bindings {{
         {0,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
         {1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
         {2,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
-        {3,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr} }};
+        {3,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
+        {4,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr} }};
     VkDescriptorSetLayoutCreateInfo descriptors { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, .bindingCount = 4, .pBindings = bindings.data() };
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, .bindingCount = 5, .pBindings = bindings.data() };
     Vk(vkCreateDescriptorSetLayout(device, &descriptors, nullptr, &p.descriptors), "create GPU conversion descriptors");
-    VkPushConstantRange constants { VK_SHADER_STAGE_COMPUTE_BIT, 0, 20 };
+    VkPushConstantRange constants { VK_SHADER_STAGE_COMPUTE_BIT, 0, 44 };
     VkPipelineLayoutCreateInfo layout { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1, .pSetLayouts = &p.descriptors, .pushConstantRangeCount = 1, .pPushConstantRanges = &constants };
     Vk(vkCreatePipelineLayout(device, &layout, nullptr, &p.layout), "create GPU conversion layout");
@@ -417,7 +517,12 @@ GpuVideoEncoder::~GpuVideoEncoder() = default;
 void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
     auto& p = *impl;
     if (p.finished) throw std::runtime_error("GPU encoder already finished");
-    if (index >= p.capture.encoded_frames) { p.retain(rgba, index); return; }
+    const auto fade=p.capture.crossfade_frames;
+    if (index>=p.capture.encoded_frames+fade) { p.retain(rgba,index); return; }
+    const bool cache_head=fade && index<fade;
+    const bool blend_head=fade && index>=p.capture.encoded_frames;
+    const auto head_index=blend_head ? index-p.capture.encoded_frames : cache_head ? index : 0;
+    ++p.observed_frames;
     av_frame_unref(p.frame);
     Av(av_hwframe_get_buffer(p.frames, p.frame, 0), "get GPU encoder surface");
     auto* vkframe = reinterpret_cast<AVVkFrame*>(p.frame->data[0]);
@@ -441,6 +546,15 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
         VkCommandBufferBeginInfo begin { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
         Vk(vkBeginCommandBuffer(p.command, &begin), "begin GPU conversion command");
+        if (blend_head) {
+            VkBufferMemoryBarrier head_ready { .sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                .srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT,
+                .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+                .buffer=p.loop_head,.offset=head_index*p.loop_head_stride,
+                .size=std::uint64_t(p.color_width)*p.output_height*4 };
+            vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,0,nullptr,1,&head_ready,0,nullptr);
+        }
         if (p.capture.collect_bounds) {
             if (index == 0) {
                 vkCmdUpdateBuffer(p.command, p.statistics, 0, sizeof(p.bounds), p.bounds.data());
@@ -478,7 +592,10 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
         VkDescriptorBufferInfo buffer { .buffer = p.nv12, .offset = 0, .range = VK_WHOLE_SIZE };
         VkDescriptorImageInfo first { .imageView=p.first_view ? p.first_view : p.source_view, .imageLayout=VK_IMAGE_LAYOUT_GENERAL };
         VkDescriptorBufferInfo stats { .buffer=p.statistics ? p.statistics : p.nv12, .offset=0, .range=32 };
-        std::array<VkWriteDescriptorSet, 4> writes {{
+        VkDescriptorBufferInfo loop { .buffer=p.loop_head ? p.loop_head : p.nv12,
+            .offset=p.loop_head ? head_index*p.loop_head_stride : 0,
+            .range=p.loop_head ? std::uint64_t(p.color_width)*p.output_height*4 : 32 };
+        std::array<VkWriteDescriptorSet, 5> writes {{
             { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 0, .descriptorCount = 1,
               .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &image },
             { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 1, .descriptorCount = 1,
@@ -486,12 +603,18 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
             { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 2, .descriptorCount = 1,
               .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &first },
             { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 3, .descriptorCount = 1,
-              .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &stats } }};
-        p.push_descriptors(p.command, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, 4, writes.data());
-        std::array<std::uint32_t, 5> dimensions { p.width, p.height, p.output_width, p.stride,
-            p.capture.collect_bounds ? (p.capture.bounds_include_rgb ? 3u : 1u) : 0u };
+              .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &stats },
+            { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=4,.descriptorCount=1,
+              .descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&loop } }};
+        p.push_descriptors(p.command, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, 5, writes.data());
+        std::uint32_t flags=(p.capture.collect_bounds ? (p.capture.bounds_include_rgb ? 3u : 1u) : 0u) |
+            (cache_head ? 4u : 0u) | (blend_head ? 8u : 0u);
+        std::array<std::uint32_t, 11> dimensions { p.width,p.height,p.color_width,p.output_height,p.output_width,p.stride,
+            p.capture.crop_x,p.capture.crop_y,flags,blend_head ? fade-static_cast<std::uint32_t>(head_index) : 0u,fade+1 };
         vkCmdPushConstants(p.command, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(dimensions), dimensions.data());
-        vkCmdDispatch(p.command, (p.stride / 4 + 7) / 8, (p.height + 7) / 8, 1);
+        const auto scan_width=p.capture.collect_bounds ? std::max(p.stride,p.width) : p.stride;
+        const auto scan_height=p.capture.collect_bounds ? p.height : p.output_height;
+        vkCmdDispatch(p.command, (scan_width + 31) / 32, (scan_height + 7) / 8, 1);
         VkBufferMemoryBarrier ready { .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
             .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -506,11 +629,11 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
         vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &target);
         std::array<VkBufferImageCopy, 2> copies {{
-            { .bufferOffset = 0, .bufferRowLength = p.stride, .bufferImageHeight = p.height,
-              .imageSubresource = { VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1 }, .imageExtent = { p.output_width, p.height, 1 } },
-            { .bufferOffset = std::uint64_t(p.stride) * p.height, .bufferRowLength = p.stride / 2,
-              .bufferImageHeight = p.height / 2, .imageSubresource = { VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1 },
-              .imageExtent = { p.output_width / 2, p.height / 2, 1 } } }};
+            { .bufferOffset = 0, .bufferRowLength = p.stride, .bufferImageHeight = p.output_height,
+              .imageSubresource = { VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1 }, .imageExtent = { p.output_width, p.output_height, 1 } },
+            { .bufferOffset = std::uint64_t(p.stride) * p.output_height, .bufferRowLength = p.stride / 2,
+              .bufferImageHeight = p.output_height / 2, .imageSubresource = { VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1 },
+              .imageExtent = { p.output_width / 2, p.output_height / 2, 1 } } }};
         vkCmdCopyBufferToImage(p.command, p.nv12, vkframe->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies.data());
         source.srcAccessMask = VK_ACCESS_SHADER_READ_BIT; source.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         source.oldLayout = VK_IMAGE_LAYOUT_GENERAL; source.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -543,7 +666,9 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
         throw;
     }
     vkframes->unlock_frame(frames, vkframe);
-    p.frame->pts = static_cast<std::int64_t>(index);
+    if (cache_head) { p.retain(rgba,index); return; }
+    p.frame->pts = static_cast<std::int64_t>(index-fade);
+    if (blend_head && head_index==0) p.frame->pict_type=AV_PICTURE_TYPE_I;
     p.frame->duration = 1;
     p.frame->color_range = p.codec->color_range; p.frame->colorspace = p.codec->colorspace;
     p.frame->color_primaries = p.codec->color_primaries; p.frame->color_trc = p.codec->color_trc;
@@ -557,8 +682,14 @@ void GpuVideoEncoder::finish() {
     if (p.finished) return;
     Av(avcodec_send_frame(p.codec, nullptr), "flush Vulkan encoder");
     p.packets();
+    if (p.encoded_packets != p.capture.encoded_frames) throw std::runtime_error("Incomplete GPU encoded frame sequence");
     Av(av_write_trailer(p.mux), "finish GPU video");
     Av(avio_closep(&p.mux->pb), "close GPU video");
+    if (p.head_mux) {
+        Av(av_write_trailer(p.head_mux),"finish GPU loop head");
+        Av(avio_closep(&p.head_mux->pb),"close GPU loop head");
+        p.assembleLoop();
+    }
     if (p.retained.is_open()) {
         p.retained.flush();
         if (!p.retained || p.retained_count != p.capture.retain_frames.size())
@@ -584,6 +715,13 @@ std::string GpuVideoEncoder::captureMetadata() const {
     const auto& p = *impl;
     std::ostringstream out;
     out << "{\"readback_frames\":" << p.readbacks;
+    out << ",\"crop\":{\"capture_width\":" << p.width << ",\"capture_height\":" << p.height
+        << ",\"x\":" << p.capture.crop_x << ",\"y\":" << p.capture.crop_y
+        << ",\"width\":" << p.color_width << ",\"height\":" << p.output_height << '}';
+    if (p.capture.crossfade_frames)
+        out << ",\"loop_crossfade\":{\"status\":\"applied\",\"crossfade_frames\":" << p.capture.crossfade_frames
+            << ",\"loop_frames\":" << p.capture.encoded_frames
+            << ",\"method\":\"GPU integer RGBA blend; independent head/body GOPs restored by packet-only remux.\"}";
     if (p.capture.collect_bounds) {
         bool content=p.bounds[7]!=0;
         out << ",\"alpha_bounds\":{\"has_content\":" << (content ? "true" : "false")
@@ -592,8 +730,9 @@ std::string GpuVideoEncoder::captureMetadata() const {
             << ",\"minimum_alpha\":" << p.bounds[4] << ",\"maximum_alpha\":" << p.bounds[5]
             << ",\"includes_rgb\":" << (p.capture.bounds_include_rgb ? "true" : "false")
             << ",\"pixel_identical_in_generated_interval\":" << (p.bounds[6] ? "false" : "true")
-            << ",\"first_frame_rgba_path\":\"first-frame.rgba\",\"basis\":\"GPU reduction over every encoded native RGBA frame.\","
-               "\"pixel_identity_scope\":\"Every encoded frame compared against the first frame on the GPU; excludes unencoded continuation frames.\"}";
+            << ",\"observed_frames\":" << p.observed_frames
+            << ",\"first_frame_rgba_path\":\"first-frame.rgba\",\"basis\":\"GPU reduction over all source frames used by this output, including crossfade continuation when requested.\","
+               "\"pixel_identity_scope\":\"Source RGBA compared against the first frame on the GPU; ordinary unencoded continuation is excluded.\"}";
     }
     if (!p.capture.retain_frames.empty()) {
         out << ",\"retained_frames\":{\"path\":\"retained-frames.rgba\",\"format\":\"rgba\",\"width\":" << p.width

@@ -271,6 +271,18 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
         options.encoded_frames = Uint(*encode, "encoded_frames", job.frames);
         if (!options.encoded_frames || options.encoded_frames > job.frames)
             throw std::runtime_error("GPU encoded_frames must be a positive frame prefix");
+        const auto crossfade=Uint(*encode,"crossfade_frames",0);
+        if (crossfade>UINT32_MAX || crossfade>=options.encoded_frames ||
+            (crossfade && options.encoded_frames!=job.frames-crossfade))
+            throw std::runtime_error("GPU crossfade requires a loop plus exactly one continuation window");
+        options.crossfade_frames=static_cast<uint32_t>(crossfade);
+        const auto crop_x=Uint(*encode,"crop_x",0), crop_y=Uint(*encode,"crop_y",0);
+        const auto crop_width=Uint(*encode,"crop_width",job.width), crop_height=Uint(*encode,"crop_height",job.height);
+        if (!crop_width || !crop_height || crop_x>job.width || crop_y>job.height ||
+            crop_width>job.width-crop_x || crop_height>job.height-crop_y || ((crop_x|crop_y|crop_width|crop_height)&1u))
+            throw std::runtime_error("GPU crop must fit the capture at even coordinates and dimensions");
+        options.crop_x=static_cast<uint32_t>(crop_x); options.crop_y=static_cast<uint32_t>(crop_y);
+        options.crop_width=static_cast<uint32_t>(crop_width); options.crop_height=static_cast<uint32_t>(crop_height);
         options.collect_bounds = Bool(*encode, "collect_bounds", false);
         options.bounds_include_rgb = Bool(*encode, "bounds_include_rgb", false);
         if (auto* retained = Field(*encode, "retain_frames")) {
@@ -718,7 +730,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

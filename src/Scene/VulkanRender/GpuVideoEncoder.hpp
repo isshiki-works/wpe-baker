@@ -13,6 +13,8 @@ struct GpuCaptureOptions {
     bool collect_bounds { false }, bounds_include_rgb { false };
     std::uint64_t encoded_frames { UINT64_MAX };
     std::vector<std::uint64_t> retain_frames;
+    std::uint32_t crossfade_frames { 0 };
+    std::uint32_t crop_x { 0 }, crop_y { 0 }, crop_width { 0 }, crop_height { 0 };
 };
 
 // Owns the codec and conversion resources, never the renderer's Vulkan device.
