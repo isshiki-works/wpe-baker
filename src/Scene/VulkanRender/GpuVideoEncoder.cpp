@@ -83,6 +83,9 @@ struct GpuVideoEncoder::Impl {
     PFN_vkCmdPushDescriptorSetKHR push_descriptors {};
     bool finished {};
     bool conversion_pending {};
+    bool encode_pending {};
+    bool defer_codec { !std::getenv("WPE_RENDER_DEFER_CODEC") ||
+        std::string_view(std::getenv("WPE_RENDER_DEFER_CODEC")) != "0" };
     bool profile { std::getenv("WPE_RENDER_CPU_PROFILE") != nullptr };
     double surface_ms {}, conversion_submit_ms {}, codec_send_ms {}, codec_receive_ms {};
 
@@ -225,6 +228,19 @@ struct GpuVideoEncoder::Impl {
         if (!conversion_pending) return;
         Vk(vkWaitForFences(device, 1, &fence, VK_TRUE, timeout_ns), "wait before reusing GPU conversion resources");
         conversion_pending = false;
+    }
+
+    void submitPendingFrame() {
+        if (!encode_pending) return;
+        const auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        Av(avcodec_send_frame(codec, frame), "submit Vulkan encode frame");
+        const auto sent = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        packets();
+        if (profile) {
+            codec_send_ms += std::chrono::duration<double,std::milli>(sent-start).count();
+            codec_receive_ms += std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-sent).count();
+        }
+        encode_pending = false;
     }
 
     void beginCapture() {
@@ -543,12 +559,19 @@ void main() {
 
 GpuVideoEncoder::~GpuVideoEncoder() = default;
 
-void GpuVideoEncoder::waitConversion() { impl->waitConversion(); }
+void GpuVideoEncoder::waitConversion() {
+    impl->waitConversion();
+    // The caller has advanced the next scene on the CPU while this frame was
+    // rendered/converted. FFmpeg can now submit it without hiding that wait
+    // inside avcodec_send_frame on the render thread.
+    impl->submitPendingFrame();
+}
 
 void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronous) {
     auto& p = *impl;
     if (p.finished) throw std::runtime_error("GPU encoder already finished");
     p.waitConversion();
+    p.submitPendingFrame(); // Drain before recycling the single held AVFrame.
     const auto fade=p.capture.crossfade_frames;
     if (index>=p.capture.encoded_frames+fade) { p.retain(rgba,index); return; }
     const bool cache_head=fade && index<fade;
@@ -714,16 +737,16 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
     p.frame->duration = 1;
     p.frame->color_range = p.codec->color_range; p.frame->colorspace = p.codec->colorspace;
     p.frame->color_primaries = p.codec->color_primaries; p.frame->color_trc = p.codec->color_trc;
-    Av(avcodec_send_frame(p.codec, p.frame), "submit Vulkan encode frame");
-    span(p.codec_send_ms);
-    p.packets();
-    span(p.codec_receive_ms);
+    p.encode_pending = true;
+    if (!asynchronous || !p.defer_codec) p.submitPendingFrame();
     p.retain(rgba, index);
 }
 
 void GpuVideoEncoder::finish() {
     auto& p = *impl;
     if (p.finished) return;
+    p.waitConversion();
+    p.submitPendingFrame();
     Av(avcodec_send_frame(p.codec, nullptr), "flush Vulkan encoder");
     p.packets();
     if (p.encoded_packets != p.capture.encoded_frames) throw std::runtime_error("Incomplete GPU encoded frame sequence");
@@ -765,7 +788,8 @@ std::string GpuVideoEncoder::captureMetadata() const {
     const auto& p = *impl;
     std::ostringstream out;
     out << "{\"readback_frames\":" << p.readbacks
-        << ",\"encoded_packets\":" << p.encoded_packets;
+        << ",\"encoded_packets\":" << p.encoded_packets
+        << ",\"codec_submit_deferred\":" << (p.defer_codec ? "true" : "false");
     if (p.profile) out << ",\"host_profile_ms\":{\"surface\":" << p.surface_ms
         << ",\"conversion_submit\":" << p.conversion_submit_ms << ",\"codec_send\":" << p.codec_send_ms
         << ",\"codec_receive\":" << p.codec_receive_ms << '}';
