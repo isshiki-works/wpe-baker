@@ -150,6 +150,9 @@ struct TextureRequest {
     Option<TextureDefinition>   definition;
     TextureLifetimeClass        lifetime { TextureLifetimeClass::Retained };
     TextureContentFlags         content { TextureContentFlag(TextureContent::SourceDefined) };
+    // Downsampled image-effect allocations retain authored texture-size shader semantics.
+    // Imported images/videos keep their existing source/padded/sample metadata path.
+    Option<rstd::array<float, 2>> logical_shader_extent;
 
     auto clone() const -> TextureRequest {
         return TextureRequest {
@@ -159,6 +162,7 @@ struct TextureRequest {
             .definition = definition,
             .lifetime   = lifetime,
             .content    = content,
+            .logical_shader_extent = logical_shader_extent,
         };
     }
 };
@@ -182,7 +186,7 @@ struct TextureBindingRequest {
 inline bool SameTextureRequest(const TextureRequest& lhs, const TextureRequest& rhs) {
     return lhs.kind == rhs.kind && lhs.name == rhs.name.as_str() && lhs.source == rhs.source &&
            lhs.definition == rhs.definition && lhs.lifetime == rhs.lifetime &&
-           lhs.content == rhs.content;
+           lhs.content == rhs.content && lhs.logical_shader_extent == rhs.logical_shader_extent;
 }
 
 inline bool SameTextureRequest(const Option<TextureRequest>& lhs,

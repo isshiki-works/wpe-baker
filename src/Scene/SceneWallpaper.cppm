@@ -80,13 +80,19 @@ struct OfflineOptions {
     uint64_t readback_start { 0 };
     uint64_t readback_stride { 1 };
     std::optional<uint64_t> readback_phase;
+    bool draw_selected_frames_only { false };
     bool readsFrame(uint64_t index) const {
         if (index < readback_start || readback_stride == 0) return false;
         const uint64_t phase = (index - readback_start) % readback_stride;
         return phase == 0 || (readback_phase && phase == *readback_phase);
     }
+    bool drawsFrame(uint64_t index) const {
+        return !draw_selected_frames_only || index < readback_start || readsFrame(index);
+    }
     std::vector<OfflineVideoPlaybackRateOverride> video_rate_overrides;
 };
+
+enum class OfflineStepStatus { NotReady, Drawn, DrawSkipped, Failed };
 
 struct OfflineFrameInput {
     double cursor_x { 0.5 };
@@ -120,6 +126,7 @@ public:
     bool initOffline(SceneWallpaperConfig, RenderInitInfo, OfflineOptions = {});
     bool step(uint64_t frame_index, double dt, const OfflineFrameInput& = {});
     const CpuFrameResult& readback() const;
+    OfflineStepStatus offlineStepStatus() const;
     const OfflineAudioFrame& audioReadback() const;
     std::string offlineError() const;
     std::vector<std::string> offlineDiagnostics() const;

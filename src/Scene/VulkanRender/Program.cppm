@@ -423,8 +423,12 @@ struct RenderProgram {
 
     void finalizeRenderTargetSizes(owe::Scene& scene, VkExtent2D extent,
                                    VkExtent2D            max_framebuffer_extent,
-                                   VkSampleCountFlagBits msaa_samples) {
+                                   VkSampleCountFlagBits msaa_samples,
+                                   double effect_render_scale = 1.0,
+                                   bool report_effect_scale = false) {
         auto names = scene.RenderTargetNames();
+        std::size_t effect_target_count = 0, scaled_target_count = 0;
+        std::uint64_t logical_pixels = 0, physical_pixels = 0;
         for (usize index {}; index < names.len(); ++index) {
             auto target = scene.RenderTargetMut(names[index].as_str());
             if (target.is_none()) continue;
@@ -457,19 +461,28 @@ struct RenderProgram {
                 rstd_error("wrong size for render target: {}", names[index].as_str());
             }
 
-            const auto physical_width =
+            auto physical_width =
                 std::clamp(std::max(rt.width, i32(1)),
                            i32(1),
                            rstd::as_cast<i32>(max_framebuffer_extent.width));
-            const auto physical_height =
+            auto physical_height =
                 std::clamp(std::max(rt.height, i32(1)),
                            i32(1),
                            rstd::as_cast<i32>(max_framebuffer_extent.height));
+            const bool eligible = rt.effect_scale_eligible && !(rt.bind.enable && rt.bind.screen);
+            rt.effect_scale_applied = eligible && effect_render_scale < 1.0;
+            if (rt.effect_scale_applied) {
+                // Scale the existing bounded allocation, never the authored camera/layout size.
+                physical_width = rstd::as_cast<i32>(std::max(
+                    1.0, std::round(rstd::as_cast<double>(physical_width) * effect_render_scale)));
+                physical_height = rstd::as_cast<i32>(std::max(
+                    1.0, std::round(rstd::as_cast<double>(physical_height) * effect_render_scale)));
+            }
             const bool physical_size_changed =
                 rt.physical_width != physical_width || rt.physical_height != physical_height;
             rt.physical_width  = physical_width;
             rt.physical_height = physical_height;
-            if (physical_size_changed &&
+            if (physical_size_changed && !rt.effect_scale_applied &&
                 (rt.physical_width != rt.width || rt.physical_height != rt.height)) {
                 rstd_warn("clamp render target {} from {}x{} to {}x{}",
                           names[index].as_str(),
@@ -477,6 +490,19 @@ struct RenderProgram {
                           rt.height,
                           rt.physical_width,
                           rt.physical_height);
+            }
+            if (eligible) {
+                ++effect_target_count;
+                if (rt.effect_scale_applied) ++scaled_target_count;
+                logical_pixels += rstd::as_cast<std::uint64_t>(std::max(rt.width, i32(1))) *
+                                  rstd::as_cast<std::uint64_t>(std::max(rt.height, i32(1)));
+                physical_pixels += rstd::as_cast<std::uint64_t>(rt.physical_width) *
+                                   rstd::as_cast<std::uint64_t>(rt.physical_height);
+                if (report_effect_scale && effect_target_count <= 3) {
+                    rstd_info("effect render target {}: logical {}x{}, physical {}x{}",
+                              names[index].as_str(), rt.width, rt.height,
+                              rt.physical_width, rt.physical_height);
+                }
             }
 
             if (rt.has_mipmap) {
@@ -486,6 +512,11 @@ struct RenderProgram {
                                  std::min(rt.physical_width, rt.physical_height)))))) -
                     2u;
             }
+        }
+        if (report_effect_scale) {
+            rstd_info("effect_render_scale requested={} eligible_targets={} scaled_targets={} logical_pixels={} physical_pixels={}",
+                      effect_render_scale, effect_target_count, scaled_target_count,
+                      logical_pixels, physical_pixels);
         }
         if (msaa_samples != VK_SAMPLE_COUNT_1_BIT) {
             auto target = scene.RenderTargetMut(owe::SpecTex_Default);

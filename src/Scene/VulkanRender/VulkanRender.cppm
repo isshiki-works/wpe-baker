@@ -166,6 +166,8 @@ struct RenderInitInfo {
     std::uint64_t    max_readback_bytes { 256ull * 1024 * 1024 };
     std::uint64_t    readback_timeout_ns { 10'000'000'000ull };
     bool             gpu_timing { false };
+    // Scale only explicitly eligible image-effect allocations, preserving authored layout.
+    double           effect_render_scale { 1.0 };
     // Optional box-averaged RGBA readback. Rendering keeps the original output extent.
     std::uint32_t    sample_width { 0 };
     std::uint32_t    sample_height { 0 };

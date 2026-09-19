@@ -396,6 +396,8 @@ struct VulkanRender::Impl {
     std::string m_capture_error;
     TimestampQueryPool m_timestamp_queries;
     bool m_gpu_timing_requested { false };
+    double m_effect_render_scale { 1.0 };
+    bool m_effect_render_scale_reported { false };
     bool m_gpu_timing_supported { false };
     std::uint32_t m_timestamp_valid_bits { 0 };
     std::optional<double> m_timestamp_period_ns;
@@ -624,6 +626,13 @@ owe::ExSwapchain* VulkanRender::exSwapchain() const { return pImpl->m_ex_swapcha
 
 bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView load_bench) {
     if (m_inited) return true;
+
+    if (!std::isfinite(info.effect_render_scale) || info.effect_render_scale <= 0.0 ||
+        info.effect_render_scale > 1.0) {
+        rstd_error("effect_render_scale must be finite and in (0, 1]");
+        return false;
+    }
+    m_effect_render_scale = info.effect_render_scale;
 
     m_cpu_readback = info.output_mode == RenderOutputMode::CpuReadback;
     m_prepass->setTransparentBackground(info.layer_selection.enabled &&
@@ -2034,7 +2043,9 @@ void VulkanRender::Impl::configureRenderTargets(Scene& scene) {
         std::min(limits.maxImageDimension2D, limits.maxFramebufferHeight),
     };
     m_program.finalizeRenderTargetSizes(
-        scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples);
+        scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples,
+        m_effect_render_scale, !m_effect_render_scale_reported);
+    if (!scene.RenderTargetNames().is_empty()) m_effect_render_scale_reported = true;
 }
 
 void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {

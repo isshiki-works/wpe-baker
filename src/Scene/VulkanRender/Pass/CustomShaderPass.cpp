@@ -610,6 +610,7 @@ auto CustomShaderPass::createUniformBufferUpdates(ref<dyn<UniformBindingPrepareC
         Vec<PreparedUniformTextureMetadata>::with_capacity(usize(m_desc.texture_bindings.size()));
     for (std::size_t index = 0; index < m_desc.texture_bindings.size(); ++index) {
         PreparedUniformTextureMetadata metadata;
+        bool                           has_logical_shader_extent = false;
         const auto&                    binding = m_desc.texture_bindings[index];
         if (binding.use.is_some()) {
             auto prepared = resources.Resolve(*binding.use);
@@ -624,12 +625,20 @@ auto CustomShaderPass::createUniformBufferUpdates(ref<dyn<UniformBindingPrepareC
             metadata.source_extent = { static_cast<float>(image.extent.width),
                                        static_cast<float>(image.extent.height) };
             metadata.sample_extent = metadata.source_extent;
+            if (const auto& logical_extent = (**prepared).request.logical_shader_extent;
+                logical_extent.is_some()) {
+                // Allocation/viewport stay physical; authored pixel-based shader effects
+                // must not grow their UV displacement when the allocation is downsampled.
+                metadata.source_extent = *logical_extent;
+                metadata.sample_extent = *logical_extent;
+                has_logical_shader_extent = true;
+            }
             metadata.has_mipmap    = (**prepared).request.kind == TextureRequestKind::RenderTarget;
             metadata.mipmap_level  = static_cast<float>(image.mipmap_level);
             metadata.revision      = (**prepared).physical_generation ^ image.generation;
             if (metadata.revision == u64()) metadata.revision = u64(1);
         }
-        if (index < draw->material->texture_metadata.size()) {
+        if (!has_logical_shader_extent && index < draw->material->texture_metadata.size()) {
             const auto& authored = draw->material->texture_metadata[index];
             if (authored.has_extent) {
                 metadata.available     = true;

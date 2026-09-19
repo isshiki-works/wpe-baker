@@ -597,6 +597,8 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
     SetUniformConfig(context, spImgNode, rstd::move(svData));
     if (hasEffect) {
         auto&       scene    = *context.scene;
+        const bool scale_image_effect_targets =
+            ! wpimgobj.fullscreen && ! isPassthrough && ! wpimgobj.composite_layer;
         std::string nodeAddr = rstd::cppstd::to_string(
             scene.NodeResourceKey(image_node_id, "layer_camera"_str).as_str());
         const auto effect_extent =
@@ -664,6 +666,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
             SceneRenderTarget target {
                 .width                = effect_extent[usize()],
                 .height               = effect_extent[usize(1)],
+                .effect_scale_eligible = scale_image_effect_targets,
                 .allowReuse           = true,
                 .force_clear          = ! wpimgobj.fullscreen && ! wpimgobj.composite_layer,
                 .clear_on_first_write = true,
@@ -754,9 +757,10 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                         }();
                         scene.RegisterRenderTarget(
                             String::make(as_str(rtname).unwrap()),
-                            SceneRenderTarget { .width      = fbo_size[usize()],
-                                                .height     = fbo_size[usize(1)],
-                                                .allowReuse = ! wpfbo.unique });
+                            SceneRenderTarget { .width                 = fbo_size[usize()],
+                                                .height                = fbo_size[usize(1)],
+                                                .effect_scale_eligible = scale_image_effect_targets,
+                                                .allowReuse            = ! wpfbo.unique });
                     }
                     (void)render_targets.insert(String::make(as_str(wpfbo.name).unwrap()),
                                                 String::make(as_str(rtname).unwrap()));

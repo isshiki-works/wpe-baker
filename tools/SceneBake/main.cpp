@@ -165,7 +165,9 @@ struct Job {
     std::optional<uint64_t> output_phase;
     std::optional<owe::GpuEncodeOptions> gpu_encode;
     double epoch_ms{};
+    double effect_render_scale { 1.0 };
     bool raw_stdout{}, validation{}, gpu_timing{}, trace_scene{};
+    bool draw_selected_frames_only { false };
     owe::OfflineFrameInput input;
     std::vector<std::pair<uint64_t, PointerInput>> input_timeline;
     std::optional<owe::RenderCaptureTarget> capture_target;
@@ -240,6 +242,9 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     };
     job.width = narrow("width", 640, std::numeric_limits<uint16_t>::max());
     job.height = narrow("height", 360, std::numeric_limits<uint16_t>::max());
+    job.effect_render_scale = Number(json, "effect_render_scale", 1.0);
+    if (job.effect_render_scale <= 0.0 || job.effect_render_scale > 1.0)
+        throw std::runtime_error("effect_render_scale must be in (0, 1]");
     if (Field(json, "output_sample_width")) job.sample_width = narrow("output_sample_width", 0, job.width);
     if (Field(json, "output_sample_height")) job.sample_height = narrow("output_sample_height", 0, job.height);
     if ((job.sample_width == 0) != (job.sample_height == 0))
@@ -307,6 +312,7 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     job.validation = Bool(json, "vulkan_validation", false);
     job.gpu_timing = Bool(json, "gpu_timing", false);
     job.trace_scene = Bool(json, "trace_scene", false);
+    job.draw_selected_frames_only = Bool(json, "draw_selected_frames_only", false);
     if (auto* overrides = Field(json, "offline_video_rate_overrides")) {
         auto array = overrides->as_array();
         if (array.is_none())
@@ -427,6 +433,9 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
             throw std::runtime_error("orthographic_capture_viewport width and height must be positive");
         job.orthographic_capture_viewport = parsed;
     }
+    if (job.draw_selected_frames_only && (job.collect_sampling_coverage || job.gpu_encode || job.capture_target ||
+        job.orthographic_capture_viewport || job.layer_selection.enabled))
+        throw std::runtime_error("draw_selected_frames_only cannot be combined with full coverage, GPU encoding or capture selection");
     return job;
 }
 
@@ -443,6 +452,8 @@ int Render(const fs::path& job_path) {
     WriteText(job.output / "request.json", text);
     uint64_t written = 0;
     uint64_t audio_written = 0;
+    uint64_t simulated_frames = 0, drawn_frames = 0, skipped_draw_frames = 0, readback_frames = 0;
+    bool gpu_sampled = false;
     const auto start = std::chrono::steady_clock::now();
     owe::SceneWallpaper wallpaper;
     auto result = [&](std::string_view status, std::string_view error = {}) {
@@ -459,16 +470,24 @@ int Render(const fs::path& job_path) {
             << ",\"device_uuid\":" << (gpu_hex.empty() ? "null" : Quote(gpu_hex))
             << ",\"source\":" << Quote(Utf8(job.source))
             << ",\"width\":" << job.width << ",\"height\":" << job.height
+            << ",\"effect_render_scale\":" << job.effect_render_scale
             << ",\"fps_num\":" << job.fps_num << ",\"fps_den\":" << job.fps_den
             << ",\"requested_frames\":" << job.frames << ",\"written_frames\":" << written
             << ",\"output_frame_stride\":" << job.output_stride
+            << ",\"draw_selected_frames_only\":" << (job.draw_selected_frames_only ? "true" : "false")
+            << ",\"simulated_frames\":" << simulated_frames
+            << ",\"drawn_frames\":" << drawn_frames
+            << ",\"skipped_draw_frames\":" << skipped_draw_frames
+            << ",\"frame_counts_include_warmup\":true"
+            << ",\"last_step_draw_skipped\":" << (wallpaper.offlineStepStatus() == owe::OfflineStepStatus::DrawSkipped ? "true" : "false")
             << ",\"output_frame_phase\":" << (job.output_phase ? std::to_string(*job.output_phase) : "null")
-            << ",\"readback_width\":" << wallpaper.readback().width
-            << ",\"readback_height\":" << wallpaper.readback().height
-            << ",\"gpu_sampled\":" << (wallpaper.readback().gpu_sampled ? "true" : "false")
+            << ",\"readback_width\":" << (job.sample_width ? job.sample_width : job.width)
+            << ",\"readback_height\":" << (job.sample_height ? job.sample_height : job.height)
+            << ",\"gpu_sampled\":" << (gpu_sampled ? "true" : "false")
             << ",\"sampling_coverage\":" << (wallpaper.readback().sampling_coverage.empty() ? "null" : wallpaper.readback().sampling_coverage)
             << ",\"gpu_encoded\":" << (job.gpu_encode ? "true" : "false")
             << ",\"readback_frames\":" << (job.gpu_encode ? wallpaper.readback().gpu_readback_frames : written)
+            << ",\"total_readback_frames\":" << (job.gpu_encode ? wallpaper.readback().gpu_readback_frames : readback_frames)
             << ",\"gpu_capture\":" << (wallpaper.readback().gpu_capture_metadata.empty() ? "null" : wallpaper.readback().gpu_capture_metadata)
             << ",\"gpu_encoded_frames\":" << (job.gpu_encode ? std::to_string(job.gpu_encode->encoded_frames) : "null")
             << ",\"gpu_encoder\":" << (job.gpu_encode ? Quote(job.gpu_encode->codec) : "null")
@@ -531,7 +550,7 @@ int Render(const fs::path& job_path) {
             << ",\"opened_instances\":" << (video_inventory.observed ? std::to_string(video_inventory.decoders.size()) : "null")
             << ",\"peak_active_instances\":" << (video_inventory.observed ? std::to_string(video_inventory.peak_active_instances) : "null")
             << ",\"scope\":\"Cumulative union of successful decoder opens during this texture-cache lifetime, including expired instances. Shared texture allocations count once; distinct opens of the same resource count separately. Active means the decoder allocation is alive, including paused instances. Peak is sampled at every successful allocation and texture pump; lifecycle ticks are observations, not media frames or exact destruction times. Encoded dimensions and pixel format come from codec parameters before output scaling. Stream FPS metadata does not prove constant frame spacing. Decoder kind describes this renderer; offline capture defaults to software decoding and does not verify official-player hardware decode. Unobserved later resources and failed open attempts are not fabricated as successful instances.\"}"
-            << ",\"gpu_timing\":{\"requested\":" << (wallpaper.readback().gpu_timing_requested ? "true" : "false")
+            << ",\"gpu_timing\":{\"requested\":" << (job.gpu_timing ? "true" : "false")
             << ",\"supported\":" << (wallpaper.readback().gpu_timing_supported ? "true" : "false")
             << ",\"total_ms\":" << OptionalReal(wallpaper.readback().gpu_total_ms)
             << ",\"draw_ms\":" << OptionalReal(wallpaper.readback().gpu_draw_ms)
@@ -594,6 +613,7 @@ int Render(const fs::path& job_path) {
         owe::RenderInitInfo info;
         info.width = static_cast<uint16_t>(job.width);
         info.height = static_cast<uint16_t>(job.height);
+        info.effect_render_scale = job.effect_render_scale;
         info.max_readback_bytes = job.readback_budget;
         info.enable_valid_layer = job.validation;
         info.capture_target = job.capture_target;
@@ -615,7 +635,9 @@ int Render(const fs::path& job_path) {
         offline.trace_scene = job.trace_scene;
         offline.readback_stride = job.output_stride;
         offline.readback_phase = job.output_phase;
-        if (Field(json, "output_frame_stride") || job.gpu_encode || job.collect_sampling_coverage) offline.readback_start = job.warmup;
+        offline.draw_selected_frames_only = job.draw_selected_frames_only;
+        if (Field(json, "output_frame_stride") || job.gpu_encode || job.collect_sampling_coverage || job.draw_selected_frames_only)
+            offline.readback_start = job.warmup;
         offline.video_rate_overrides = job.video_rate_overrides;
         if (!wallpaper.initOffline(std::move(config), std::move(info), offline))
             throw std::runtime_error(wallpaper.offlineError());
@@ -647,10 +669,19 @@ int Render(const fs::path& job_path) {
             const bool read_pixels = !job.gpu_encode && offline.readsFrame(frame);
             const uint32_t output_width = job.sample_width ? job.sample_width : job.width;
             const uint32_t output_height = job.sample_height ? job.sample_height : job.height;
-            if (!pixels.completed() || pixels.frame_index != frame || pixels.width != output_width ||
+            const auto step_status = wallpaper.offlineStepStatus();
+            const bool draw_skipped = step_status == owe::OfflineStepStatus::DrawSkipped;
+            if (draw_skipped) {
+                if (offline.drawsFrame(frame) || read_pixels || pixels.completed() ||
+                    pixels.frame_index != frame || pixels.width || pixels.height || pixels.row_pitch ||
+                    !pixels.pixels.empty() || pixels.gpu_total_ms || pixels.gpu_draw_ms)
+                    throw std::runtime_error("skipped draw violates simulation-only contract");
+            } else if (!offline.drawsFrame(frame) || step_status != owe::OfflineStepStatus::Drawn ||
+                !pixels.completed() || pixels.frame_index != frame || pixels.width != output_width ||
                 pixels.height != output_height || pixels.row_pitch != output_width * 4 ||
-                pixels.pixels.size() != (read_pixels ? uint64_t(output_width) * output_height * 4 : 0))
+                pixels.pixels.size() != (read_pixels ? uint64_t(output_width) * output_height * 4 : 0)) {
                 throw std::runtime_error("completed frame violates shape/index contract");
+            }
             const auto& pcm = wallpaper.audioReadback();
             const auto expected_audio_start = AudioBoundary(frame, job.fps_num, job.fps_den);
             const auto expected_audio_end = AudioBoundary(frame + 1, job.fps_num, job.fps_den);
@@ -660,6 +691,11 @@ int Render(const fs::path& job_path) {
                 !std::all_of(pcm.samples.begin(), pcm.samples.end(), [](float value) { return std::isfinite(value); }))
                 throw std::runtime_error("authored audio violates PCM contract");
             next_audio_sample = pcm.sample_start + pcm.frame_count;
+            ++simulated_frames;
+            gpu_sampled = gpu_sampled || pixels.gpu_sampled;
+            if (draw_skipped) ++skipped_draw_frames;
+            else ++drawn_frames;
+            if (!pixels.pixels.empty()) ++readback_frames;
             if (frame < job.warmup) continue;
             audio.write(reinterpret_cast<const char*>(pcm.samples.data()), static_cast<std::streamsize>(pcm.samples.size() * sizeof(float)));
             if (!audio) throw std::runtime_error("audio stream write failed");
@@ -740,7 +776,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,selected-draw-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

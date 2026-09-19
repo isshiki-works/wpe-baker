@@ -10,10 +10,32 @@ import wescene.scene;
 import wescene.types;
 import wescene.vulkan;
 import wescene.vulkan_render;
+import wescene.scene_wallpaper;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
 using rstd::sync::Arc;
+
+TEST(OfflineFrameSelection, DrawSkippingKeepsEveryWarmupAndSelectedFrame) {
+    owe::OfflineOptions options;
+    options.readback_start = 300;
+    options.readback_stride = 32;
+    EXPECT_TRUE(options.drawsFrame(301)); // Default behavior still draws unread frames.
+    options.draw_selected_frames_only = true;
+    uint64_t drawn = 0, read = 0;
+    for (uint64_t index = 0; index < 780; ++index) {
+        if (index < 300) EXPECT_TRUE(options.drawsFrame(index));
+        drawn += options.drawsFrame(index);
+        read += options.readsFrame(index);
+    }
+    EXPECT_EQ(drawn, 315u);
+    EXPECT_EQ(read, 15u);
+    EXPECT_FALSE(options.drawsFrame(301));
+    EXPECT_TRUE(options.drawsFrame(332));
+    options.readback_phase = 16;
+    EXPECT_TRUE(options.drawsFrame(316));
+    EXPECT_FALSE(options.drawsFrame(317));
+}
 
 namespace uniform_test
 {
@@ -1168,6 +1190,79 @@ TEST(TextureRequest, BuildsRenderTargetCacheKey) {
     auto no_mip = owe::vulkan::MakeRenderTargetNoMipTextureRequest("_rt_default", rt);
     ASSERT_TRUE(no_mip.definition.is_some());
     EXPECT_EQ(no_mip.definition->mip_levels, rstd::u32(1));
+}
+
+TEST(RenderTargetPhysicalExtent, ScalesOnlyOptedInImageEffects) {
+    EXPECT_DOUBLE_EQ(owe::RenderInitInfo {}.effect_render_scale, 1.0);
+    owe::Scene scene;
+    scene.RegisterRenderTarget(String::make("_rt_effect"_str), owe::SceneRenderTarget {
+        .width = i32(1921), .height = i32(1081), .effect_scale_eligible = true,
+        .allowReuse = false,
+    });
+    scene.RegisterRenderTarget(String::make("_rt_ordinary"_str), owe::SceneRenderTarget {
+        .width = i32(1921), .height = i32(1081), .allowReuse = true,
+    });
+    scene.RegisterRenderTarget(String::make("_rt_screen"_str), owe::SceneRenderTarget {
+        .effect_scale_eligible = true,
+        .bind = { .enable = true, .screen = true, .scale = 0.5 },
+    });
+    scene.RegisterRenderTarget(String::make("_rt_tiny"_str), owe::SceneRenderTarget {
+        .width = i32(1), .height = i32(1), .effect_scale_eligible = true,
+    });
+    owe::vulkan::RenderProgram program;
+    const VkExtent2D output { 1920, 1080 }, limit { 16384, 16384 };
+    program.finalizeRenderTargetSizes(scene, output, limit, VK_SAMPLE_COUNT_1_BIT);
+    auto effect = scene.RenderTarget("_rt_effect"_str).unwrap();
+    EXPECT_EQ(effect->PhysicalWidth(), i32(1921));
+    EXPECT_EQ(effect->PhysicalHeight(), i32(1081));
+    EXPECT_FALSE(effect->effect_scale_applied);
+    EXPECT_TRUE(owe::vulkan::MakeRenderTargetTextureRequest("_rt_effect", *effect).logical_shader_extent.is_none());
+
+    program.finalizeRenderTargetSizes(scene, output, limit, VK_SAMPLE_COUNT_1_BIT, 0.5);
+    EXPECT_EQ(effect->width, i32(1921));
+    EXPECT_EQ(effect->height, i32(1081));
+    EXPECT_EQ(effect->PhysicalWidth(), i32(961));
+    EXPECT_EQ(effect->PhysicalHeight(), i32(541));
+    EXPECT_TRUE(effect->effect_scale_applied);
+    auto ordinary = scene.RenderTarget("_rt_ordinary"_str).unwrap();
+    EXPECT_EQ(ordinary->PhysicalWidth(), i32(1921));
+    EXPECT_EQ(ordinary->PhysicalHeight(), i32(1081));
+    EXPECT_TRUE(owe::vulkan::MakeRenderTargetTextureRequest("_rt_ordinary", *ordinary).logical_shader_extent.is_none());
+    EXPECT_TRUE(owe::vulkan::MakeImportedTextureRequest("texture.png").logical_shader_extent.is_none());
+    auto screen = scene.RenderTarget("_rt_screen"_str).unwrap();
+    EXPECT_EQ(screen->width, i32(960));
+    EXPECT_EQ(screen->PhysicalWidth(), i32(960));
+    EXPECT_EQ(screen->PhysicalHeight(), i32(540));
+    EXPECT_FALSE(screen->effect_scale_applied);
+    auto tiny = scene.RenderTarget("_rt_tiny"_str).unwrap();
+    EXPECT_EQ(tiny->PhysicalWidth(), i32(1));
+    EXPECT_EQ(tiny->PhysicalHeight(), i32(1));
+
+    auto request = owe::vulkan::MakeRenderTargetTextureRequest("_rt_effect", *effect);
+    EXPECT_EQ(request.definition->width, i32(961));
+    EXPECT_EQ(request.definition->height, i32(541));
+    ASSERT_TRUE(request.logical_shader_extent.is_some());
+    EXPECT_EQ(*request.logical_shader_extent, (rstd::array<float, 2> { 1921.0f, 1081.0f }));
+    auto cloned = request.clone();
+    ASSERT_TRUE(cloned.logical_shader_extent.is_some());
+    EXPECT_EQ(*cloned.logical_shader_extent, (rstd::array<float, 2> { 1921.0f, 1081.0f }));
+    EXPECT_TRUE(owe::vulkan::SameTextureRequest(request, cloned));
+    cloned.logical_shader_extent = Some(rstd::array<float, 2> { 1920.0f, 1081.0f });
+    EXPECT_FALSE(owe::vulkan::SameTextureRequest(request, cloned));
+    cloned.logical_shader_extent = None<rstd::array<float, 2>>();
+    EXPECT_FALSE(owe::vulkan::SameTextureRequest(request, cloned));
+    auto no_mip = owe::vulkan::MakeRenderTargetNoMipTextureRequest("_rt_effect", *effect);
+    ASSERT_TRUE(no_mip.logical_shader_extent.is_some());
+    EXPECT_EQ(*no_mip.logical_shader_extent, (rstd::array<float, 2> { 1921.0f, 1081.0f }));
+    EXPECT_EQ(no_mip.definition->width, i32(961));
+
+    // Reconfiguration must always scale from the logical size, never compound the scale.
+    program.finalizeRenderTargetSizes(scene, output, limit, VK_SAMPLE_COUNT_1_BIT, 0.5);
+    EXPECT_EQ(effect->PhysicalWidth(), i32(961));
+    program.finalizeRenderTargetSizes(scene, output, limit, VK_SAMPLE_COUNT_1_BIT, 1.0);
+    EXPECT_EQ(effect->PhysicalWidth(), i32(1921));
+    EXPECT_FALSE(effect->effect_scale_applied);
+    EXPECT_TRUE(owe::vulkan::MakeRenderTargetTextureRequest("_rt_effect", *effect).logical_shader_extent.is_none());
 }
 
 TEST(TextureRequest, DetectsRequestChanges) {

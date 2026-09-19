@@ -234,6 +234,10 @@ inline TextureRequest MakeRenderTargetTextureRequest(std::string_view         na
         .lifetime =
             rt.allowReuse ? TextureLifetimeClass::FrameLocal : TextureLifetimeClass::Retained,
         .content = content,
+        .logical_shader_extent = rt.effect_scale_applied
+            ? Some(rstd::array<float, 2> { rstd::as_cast<float>(rt.width),
+                                           rstd::as_cast<float>(rt.height) })
+            : None<rstd::array<float, 2>>(),
     };
 }
 
@@ -250,6 +254,10 @@ inline TextureRequest MakeRenderTargetNoMipTextureRequest(std::string_view      
         .lifetime =
             rt.allowReuse ? TextureLifetimeClass::FrameLocal : TextureLifetimeClass::Retained,
         .content = content,
+        .logical_shader_extent = rt.effect_scale_applied
+            ? Some(rstd::array<float, 2> { rstd::as_cast<float>(rt.width),
+                                           rstd::as_cast<float>(rt.height) })
+            : None<rstd::array<float, 2>>(),
     };
 }
 

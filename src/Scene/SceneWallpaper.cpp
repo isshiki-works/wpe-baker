@@ -241,6 +241,7 @@ public:
     bool offline() const { return m_offline; }
     const OfflineExecutionContext& offlineContext() const { return m_offline_context; }
     bool readsOfflineFrame(uint64_t index) const { return m_offline_options.readsFrame(index); }
+    bool drawsOfflineFrame(uint64_t index) const { return m_offline_options.drawsFrame(index); }
     std::string offlineError() const { return m_offline_error; }
     std::string offlineVideoRateOverrides() const {
         std::string out { "[" };
@@ -373,10 +374,12 @@ public:
     }
     bool stepOffline(uint64_t, double, const OfflineFrameInput&);
     const CpuFrameResult& readback() const { return m_cpu_frame; }
+    OfflineStepStatus offlineStepStatus() const { return m_offline_step_status; }
     std::string describeOfflineScene() const;
     std::string animationPeriods() const { return m_scene ? DescribeOfflineAnimationPeriods(*m_scene) : "[]"; }
     std::string describeOfflineProjection() const;
     void invalidateOfflineFrame(uint64_t index, std::string message) {
+        m_offline_step_status = OfflineStepStatus::Failed;
         m_cpu_frame = CpuFrameResult {};
         m_cpu_frame.status = CpuFrameStatus::RenderError;
         m_cpu_frame.frame_index = index;
@@ -467,6 +470,7 @@ private:
     scene_audio::ResponseProcessor      m_scene_audio_response;
     bool                                m_first_frame_ok { false };
     CpuFrameResult                      m_cpu_frame;
+    OfflineStepStatus                   m_offline_step_status { OfflineStepStatus::NotReady };
     double                              m_step_dt { 0.0 };
     uint64_t                            m_step_index { 0 };
 
@@ -686,6 +690,16 @@ void SceneRenderController::onDraw() {
         m_render->pumpFontAtlases(*m_scene);
 
         (void)first_frame_prepare_span.finish();
+        if (offline && !m_main.drawsOfflineFrame(m_step_index)) {
+            if (m_main.offlineContext().failed) return;
+            // All simulation and texture pumps above still run; no draw completion or
+            // GPU timing is fabricated for this explicitly simulated-only step.
+            m_cpu_frame.frame_index = m_step_index;
+            m_offline_step_status = OfflineStepStatus::DrawSkipped;
+            m_scene->Runtime().AdvanceOffline(f64(delta * m_speed.to_primitive()),
+                f64(m_main.offlineFrameTime(m_step_index + 1) * m_speed.to_primitive()));
+            return;
+        }
         auto first_draw_span =
             first_draw ? SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_first_draw)
                        : rstd::bench::probe::SpanGuard {};
@@ -701,6 +715,7 @@ void SceneRenderController::onDraw() {
                 invalidateOfflineFrame(m_step_index, message);
                 return;
             }
+            m_offline_step_status = OfflineStepStatus::Drawn;
         } else m_render->drawFrame(*m_scene);
         (void)first_draw_span.finish();
         (void)first_frame_span.finish();
@@ -737,6 +752,7 @@ bool SceneRenderController::stepOffline(uint64_t index, double dt, const Offline
      * allocation instead of zero-filling a fresh full-frame buffer. */
     m_render->recycleCpuPixels(rstd::move(m_cpu_frame.pixels));
     m_cpu_frame = CpuFrameResult {};
+    m_offline_step_status = OfflineStepStatus::NotReady;
     if (!hasScene()) return false;
     m_step_dt = dt;
     m_step_index = index;
@@ -762,7 +778,7 @@ bool SceneRenderController::stepOffline(uint64_t index, double dt, const Offline
     const double scaled_dt = dt * m_speed.to_primitive();
     m_scene->Runtime().PrepareOfflineFrame(u64(index), f64(m_main.offlineContext().elapsed), f64(scaled_dt));
     onDraw();
-    return m_cpu_frame.completed();
+    return m_cpu_frame.completed() || m_offline_step_status == OfflineStepStatus::DrawSkipped;
 }
 
 void SceneRenderController::on(RenderMsg::SetFillMode_payload&& m) {
@@ -1642,6 +1658,11 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
         m_offline_error = "Offline rational FPS requires a nonzero numerator and denominator";
         return false;
     }
+    if (options.draw_selected_frames_only && (info.collect_sampling_coverage || info.gpu_encode || info.capture_target ||
+        info.orthographic_capture_viewport || info.layer_selection.enabled)) {
+        m_offline_error = "draw_selected_frames_only cannot be combined with full coverage, GPU encoding or capture selection";
+        return false;
+    }
     m_offline_options = options;
     m_offline_layers = info.layer_selection;
     m_offline_context.epoch_ms = options.epoch_ms;
@@ -1649,6 +1670,9 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
     std::seed_seq seed { uint32_t(options.seed), uint32_t(options.seed >> 32) };
     m_offline_context.random.seed(seed);
     OfflineExecutionScope scope(m_offline_context);
+    if (options.draw_selected_frames_only) {
+        m_offline_context.diagnose("Experimental draw_selected_frames_only requires paired keyframe validation; scenes with render feedback/history are not generally safe", false);
+    }
     auto audio_configured = m_sound_manager->configure_offline({ u32(2), u32(48000) });
     if (audio_configured.is_err()) {
         m_offline_error = rstd::cppstd::to_string(audio_configured.unwrap_err().as_str());
@@ -1788,6 +1812,10 @@ bool SceneWallpaper::step(uint64_t index, double dt, const OfflineFrameInput& in
 
 const CpuFrameResult& SceneWallpaper::readback() const {
     return m_runtime->renderController()->readback();
+}
+
+OfflineStepStatus SceneWallpaper::offlineStepStatus() const {
+    return m_runtime->renderController()->offlineStepStatus();
 }
 
 const OfflineAudioFrame& SceneWallpaper::audioReadback() const { return m_runtime->audioReadback(); }

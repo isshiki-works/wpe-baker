@@ -218,6 +218,9 @@ struct SceneRenderTarget {
     // Keep authored layout dimensions separate from backend-limited allocation dimensions.
     i32                   physical_width {};
     i32                   physical_height {};
+    // Only explicitly opted-in image effect targets may reduce their allocation extent.
+    bool                  effect_scale_eligible { false };
+    bool                  effect_scale_applied { false };
     bool                  allowReuse { false };
     bool                  withDepth { false };
     SceneRenderTargetKind kind { SceneRenderTargetKind::Color };
