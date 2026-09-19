@@ -9,9 +9,6 @@
 #include <vector>
 #include <chrono>
 #include <cstdlib>
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -39,15 +36,6 @@ void Vk(VkResult result, const char* operation) {
         throw std::runtime_error(std::string(operation) + ": VkResult=" + std::to_string(result));
 }
 constexpr std::uint64_t timeout_ns = 30'000'000'000ull;
-#ifdef _WIN32
-double ThreadCpuMilliseconds() {
-    FILETIME created, exited, kernel, user;
-    if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user))
-        throw std::runtime_error("read encoder thread CPU time");
-    const auto ticks = [](FILETIME t) { return (std::uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
-    return (ticks(kernel) + ticks(user)) / 10000.0;
-}
-#endif
 }
 
 struct GpuVideoEncoder::Impl {
@@ -97,7 +85,6 @@ struct GpuVideoEncoder::Impl {
     bool conversion_pending {};
     bool profile { std::getenv("WPE_RENDER_CPU_PROFILE") != nullptr };
     double surface_ms {}, conversion_submit_ms {}, codec_send_ms {}, codec_receive_ms {};
-    double codec_send_cpu_ms {};
 
     ~Impl() {
         // On cancellation/error, queued codec work must finish before its resources/device disappear.
@@ -727,13 +714,7 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
     p.frame->duration = 1;
     p.frame->color_range = p.codec->color_range; p.frame->colorspace = p.codec->colorspace;
     p.frame->color_primaries = p.codec->color_primaries; p.frame->color_trc = p.codec->color_trc;
-#ifdef _WIN32
-    const double cpu_started = p.profile ? ThreadCpuMilliseconds() : 0.0;
-#endif
     Av(avcodec_send_frame(p.codec, p.frame), "submit Vulkan encode frame");
-#ifdef _WIN32
-    if (p.profile) p.codec_send_cpu_ms += ThreadCpuMilliseconds() - cpu_started;
-#endif
     span(p.codec_send_ms);
     p.packets();
     span(p.codec_receive_ms);
@@ -787,11 +768,7 @@ std::string GpuVideoEncoder::captureMetadata() const {
         << ",\"encoded_packets\":" << p.encoded_packets;
     if (p.profile) out << ",\"host_profile_ms\":{\"surface\":" << p.surface_ms
         << ",\"conversion_submit\":" << p.conversion_submit_ms << ",\"codec_send\":" << p.codec_send_ms
-        << ",\"codec_receive\":" << p.codec_receive_ms
-#ifdef _WIN32
-        << ",\"codec_send_thread_cpu\":" << p.codec_send_cpu_ms
-#endif
-        << '}';
+        << ",\"codec_receive\":" << p.codec_receive_ms << '}';
     if (p.capture.retain_loop_window)
         out << ",\"loop_window\":{\"path\":\"loop-window.rgba\",\"format\":\"rgba\",\"width\":" << p.width
             << ",\"height\":" << p.height << ",\"crossfade_frames\":" << p.capture.crossfade_frames
