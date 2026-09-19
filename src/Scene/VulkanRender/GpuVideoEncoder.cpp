@@ -69,6 +69,8 @@ struct GpuVideoEncoder::Impl {
     GpuCaptureOptions capture;
     std::filesystem::path directory;
     std::ofstream retained;
+    std::ofstream loop_window;
+    std::uint64_t loop_window_count {};
     VkBuffer statistics {}, readback {};
     VkDeviceMemory statistics_memory {}, readback_memory {}, first_memory {};
     VkImage first_image {};
@@ -243,7 +245,9 @@ struct GpuVideoEncoder::Impl {
     void retain(VkImage rgba, std::uint64_t index) {
         bool first = capture.collect_bounds && index == 0;
         bool keep = std::binary_search(capture.retain_frames.begin(), capture.retain_frames.end(), index);
-        if (!first && !keep) return;
+        bool window=capture.retain_loop_window && (index<capture.crossfade_frames ||
+            (index>=capture.encoded_frames && index-capture.encoded_frames<capture.crossfade_frames));
+        if (!first && !keep && !window) return;
         beginCapture();
         VkBufferImageCopy copy { .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
             .imageExtent = { width, height, 1 } };
@@ -260,6 +264,11 @@ struct GpuVideoEncoder::Impl {
             retained.write(static_cast<const char*>(mapped), bytes);
             if (!retained) throw std::runtime_error("write retained GPU reference frame");
             ++retained_count;
+        }
+        if (window) {
+            loop_window.write(static_cast<const char*>(mapped),bytes);
+            if (!loop_window) throw std::runtime_error("write original GPU loop window");
+            ++loop_window_count;
         }
         ++readbacks;
     }
@@ -370,7 +379,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.makeBuffer(std::uint64_t(p.stride) * p.output_height * 3 / 2,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, p.nv12, p.memory);
-    if (p.capture.collect_bounds || !p.capture.retain_frames.empty()) {
+    if (p.capture.collect_bounds || !p.capture.retain_frames.empty() || p.capture.retain_loop_window) {
         p.makeBuffer(std::max<std::uint64_t>(32, std::uint64_t(width) * height * 4), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, p.readback, p.readback_memory);
         Vk(vkMapMemory(device, p.readback_memory, 0, VK_WHOLE_SIZE, 0, &p.mapped), "map selected-frame readback");
@@ -378,6 +387,11 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     if (!p.capture.retain_frames.empty()) {
         p.retained.open(p.directory / "retained-frames.rgba", std::ios::binary);
         if (!p.retained) throw std::runtime_error("open retained GPU frames");
+    }
+    if (p.capture.retain_loop_window) {
+        if (!p.capture.crossfade_frames) throw std::runtime_error("Original loop windows require a crossfade");
+        p.loop_window.open(p.directory/"loop-window.rgba",std::ios::binary);
+        if (!p.loop_window) throw std::runtime_error("open original GPU loop window");
     }
     if (p.capture.collect_bounds) {
         p.makeBuffer(32, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -699,6 +713,12 @@ void GpuVideoEncoder::finish() {
             throw std::runtime_error("Retained GPU frame sequence is incomplete");
         p.retained.close();
     }
+    if (p.loop_window.is_open()) {
+        p.loop_window.flush();
+        if (!p.loop_window || p.loop_window_count!=std::uint64_t(p.capture.crossfade_frames)*2)
+            throw std::runtime_error("Original GPU loop window is incomplete");
+        p.loop_window.close();
+    }
     if (p.capture.collect_bounds) {
         p.beginCapture();
         VkBufferMemoryBarrier ready { .sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -718,6 +738,10 @@ std::string GpuVideoEncoder::captureMetadata() const {
     const auto& p = *impl;
     std::ostringstream out;
     out << "{\"readback_frames\":" << p.readbacks;
+    if (p.capture.retain_loop_window)
+        out << ",\"loop_window\":{\"path\":\"loop-window.rgba\",\"format\":\"rgba\",\"width\":" << p.width
+            << ",\"height\":" << p.height << ",\"crossfade_frames\":" << p.capture.crossfade_frames
+            << ",\"loop_frames\":" << p.capture.encoded_frames << ",\"frame_count\":" << p.loop_window_count << '}';
     out << ",\"crop\":{\"capture_width\":" << p.width << ",\"capture_height\":" << p.height
         << ",\"x\":" << p.capture.crop_x << ",\"y\":" << p.capture.crop_y
         << ",\"width\":" << p.color_width << ",\"height\":" << p.output_height << '}';
@@ -747,4 +771,6 @@ std::string GpuVideoEncoder::captureMetadata() const {
     out << '}';
     return out.str();
 }
+
+std::uint64_t GpuVideoEncoder::readbackFrames() const { return impl->readbacks; }
 }

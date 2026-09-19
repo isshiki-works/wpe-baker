@@ -924,7 +924,8 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
                 encode.qp, encode.codec, encode.path,
                 GpuCaptureOptions { encode.collect_bounds, encode.bounds_include_rgb,
                     encode.encoded_frames ? encode.encoded_frames : encode.frames, encode.retain_frames,
-                    encode.crossfade_frames, encode.crop_x, encode.crop_y, encode.crop_width, encode.crop_height });
+                    encode.crossfade_frames, encode.crop_x, encode.crop_y, encode.crop_width, encode.crop_height,
+                    encode.retain_loop_window });
         } catch (const std::exception& error) {
             rstd_error("GPU encode initialization: {}", error.what());
             return false;
@@ -1557,10 +1558,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
                 if (index + 1 == m_encode_options->frames) {
                     m_gpu_encoder->finish();
                     frame.gpu_capture_metadata = m_gpu_encoder->captureMetadata();
-                    frame.gpu_readback_frames = m_encode_options->retain_frames.size();
-                    if (m_encode_options->collect_bounds &&
-                        (m_encode_options->retain_frames.empty() || m_encode_options->retain_frames.front() != 0))
-                        ++frame.gpu_readback_frames;
+                    frame.gpu_readback_frames = m_gpu_encoder->readbackFrames();
                 }
             } catch (const std::exception& error) {
                 return fail(VK_ERROR_INITIALIZATION_FAILED, error.what());

@@ -152,6 +152,7 @@ struct GpuEncodeOptions {
     std::vector<std::uint64_t> retain_frames;
     std::uint32_t crossfade_frames { 0 };
     std::uint32_t crop_x { 0 }, crop_y { 0 }, crop_width { 0 }, crop_height { 0 };
+    bool retain_loop_window { false };
 };
 
 struct RenderInitInfo {

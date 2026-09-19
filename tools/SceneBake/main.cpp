@@ -280,6 +280,8 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
             (crossfade && options.encoded_frames!=job.frames-crossfade))
             throw std::runtime_error("GPU crossfade requires a loop plus exactly one continuation window");
         options.crossfade_frames=static_cast<uint32_t>(crossfade);
+        options.retain_loop_window=Bool(*encode,"retain_loop_window",false);
+        if (options.retain_loop_window && !crossfade) throw std::runtime_error("Loop window retention requires a crossfade");
         const auto crop_x=Uint(*encode,"crop_x",0), crop_y=Uint(*encode,"crop_y",0);
         const auto crop_width=Uint(*encode,"crop_width",job.width), crop_height=Uint(*encode,"crop_height",job.height);
         if (!crop_width || !crop_height || crop_x>job.width || crop_y>job.height ||

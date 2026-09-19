@@ -15,6 +15,7 @@ struct GpuCaptureOptions {
     std::vector<std::uint64_t> retain_frames;
     std::uint32_t crossfade_frames { 0 };
     std::uint32_t crop_x { 0 }, crop_y { 0 }, crop_width { 0 }, crop_height { 0 };
+    bool retain_loop_window { false };
 };
 
 // Owns the codec and conversion resources, never the renderer's Vulkan device.
@@ -34,6 +35,7 @@ public:
     void encode(VkImage rgba, std::uint64_t index);
     void finish();
     std::string captureMetadata() const;
+    std::uint64_t readbackFrames() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
