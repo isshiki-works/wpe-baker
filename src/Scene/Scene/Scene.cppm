@@ -221,6 +221,8 @@ struct SceneRenderTarget {
     // Only explicitly opted-in image effect targets may reduce their allocation extent.
     bool                  effect_scale_eligible { false };
     bool                  effect_scale_applied { false };
+    Option<SceneNodeId>    effect_scale_owner;
+    bool                  effect_scale_static_transform { true };
     bool                  allowReuse { false };
     bool                  withDepth { false };
     SceneRenderTargetKind kind { SceneRenderTargetKind::Color };

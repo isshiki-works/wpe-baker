@@ -166,6 +166,7 @@ struct Job {
     std::optional<owe::GpuEncodeOptions> gpu_encode;
     double epoch_ms{};
     double effect_render_scale { 1.0 };
+    bool match_effect_resolution { false };
     bool raw_stdout{}, validation{}, gpu_timing{}, trace_scene{};
     bool draw_selected_frames_only { false };
     bool write_audio { true };
@@ -244,6 +245,9 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     job.width = narrow("width", 640, std::numeric_limits<uint16_t>::max());
     job.height = narrow("height", 360, std::numeric_limits<uint16_t>::max());
     job.effect_render_scale = Number(json, "effect_render_scale", 1.0);
+    job.match_effect_resolution = Bool(json, "match_effect_resolution", false);
+    if (job.match_effect_resolution && job.effect_render_scale != 1.0)
+        throw std::runtime_error("match_effect_resolution cannot be combined with effect_render_scale");
     if (job.effect_render_scale <= 0.0 || job.effect_render_scale > 1.0)
         throw std::runtime_error("effect_render_scale must be in (0, 1]");
     if (Field(json, "output_sample_width")) job.sample_width = narrow("output_sample_width", 0, job.width);
@@ -473,6 +477,7 @@ int Render(const fs::path& job_path) {
             << ",\"source\":" << Quote(Utf8(job.source))
             << ",\"width\":" << job.width << ",\"height\":" << job.height
             << ",\"effect_render_scale\":" << OptionalReal(job.effect_render_scale)
+            << ",\"match_effect_resolution\":" << (job.match_effect_resolution ? "true" : "false")
             << ",\"fps_num\":" << job.fps_num << ",\"fps_den\":" << job.fps_den
             << ",\"requested_frames\":" << job.frames << ",\"written_frames\":" << written
             << ",\"output_frame_stride\":" << job.output_stride
@@ -618,6 +623,7 @@ int Render(const fs::path& job_path) {
         info.width = static_cast<uint16_t>(job.width);
         info.height = static_cast<uint16_t>(job.height);
         info.effect_render_scale = job.effect_render_scale;
+        info.match_effect_resolution = job.match_effect_resolution;
         info.max_readback_bytes = job.readback_budget;
         info.enable_valid_layer = job.validation;
         info.capture_target = job.capture_target;
@@ -794,7 +800,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,selected-draw-v1,gpu-scene-overlap-v1,gpu-quality-samples-v1,gpu-search-overlap-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,selected-draw-v1,gpu-scene-overlap-v1,gpu-quality-samples-v1,gpu-search-overlap-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

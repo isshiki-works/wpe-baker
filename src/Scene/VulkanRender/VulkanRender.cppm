@@ -175,6 +175,7 @@ struct RenderInitInfo {
     bool             gpu_timing { false };
     // Scale only explicitly eligible image-effect allocations, preserving authored layout.
     double           effect_render_scale { 1.0 };
+    bool             match_effect_resolution { false };
     // Optional box-averaged RGBA readback. Rendering keeps the original output extent.
     std::uint32_t    sample_width { 0 };
     std::uint32_t    sample_height { 0 };

@@ -599,6 +599,10 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
         auto&       scene    = *context.scene;
         const bool scale_image_effect_targets =
             ! wpimgobj.fullscreen && ! isPassthrough && ! wpimgobj.composite_layer;
+        const bool static_effect_transform =
+            !wpimgobj.field_bindings.HasScript("scale"_str) &&
+            !wpimgobj.field_bindings.HasScript("angles"_str) &&
+            !wpimgobj.field_bindings.HasScript("size"_str);
         std::string nodeAddr = rstd::cppstd::to_string(
             scene.NodeResourceKey(image_node_id, "layer_camera"_str).as_str());
         const auto effect_extent =
@@ -667,6 +671,8 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                 .width                = effect_extent[usize()],
                 .height               = effect_extent[usize(1)],
                 .effect_scale_eligible = scale_image_effect_targets,
+                .effect_scale_owner = Some(image_node_id),
+                .effect_scale_static_transform = static_effect_transform,
                 .allowReuse           = true,
                 .force_clear          = ! wpimgobj.fullscreen && ! wpimgobj.composite_layer,
                 .clear_on_first_write = true,
@@ -760,6 +766,8 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                             SceneRenderTarget { .width                 = fbo_size[usize()],
                                                 .height                = fbo_size[usize(1)],
                                                 .effect_scale_eligible = scale_image_effect_targets,
+                                                .effect_scale_owner = Some(image_node_id),
+                                                .effect_scale_static_transform = static_effect_transform,
                                                 .allowReuse            = ! wpfbo.unique });
                     }
                     (void)render_targets.insert(String::make(as_str(wpfbo.name).unwrap()),

@@ -1265,6 +1265,43 @@ TEST(RenderTargetPhysicalExtent, ScalesOnlyOptedInImageEffects) {
     EXPECT_TRUE(owe::vulkan::MakeRenderTargetTextureRequest("_rt_effect", *effect).logical_shader_extent.is_none());
 }
 
+TEST(RenderTargetPhysicalExtent, MatchesLayerProjectionWithoutShrinkingAlreadySmallFbos) {
+    owe::Scene scene;
+    auto camera = Arc<owe::SceneCamera>::make(owe::SceneCamera::MakeOrthographic(1920, 1080, -1, 1));
+    scene.RegisterCamera(String::make("global"_str), camera.clone());
+    auto node = Arc<owe::SceneNode>::make();
+    node->SetSize({4818, 3365});
+    scene.RootMut()->AppendChild(node.clone());
+    scene.RebuildResourceIndex();
+    const auto owner = scene.ResourceIndex().nodeId(*node.as_ptr());
+    ASSERT_TRUE(owner.is_some());
+    scene.RegisterRenderTarget(String::make("_rt_full"_str), owe::SceneRenderTarget {
+        .width = i32(4818), .height = i32(3365), .effect_scale_eligible = true,
+        .effect_scale_owner = owner,
+    });
+    scene.RegisterRenderTarget(String::make("_rt_small"_str), owe::SceneRenderTarget {
+        .width = i32(512), .height = i32(256), .effect_scale_eligible = true,
+        .effect_scale_owner = owner,
+    });
+    owe::vulkan::RenderProgram program;
+    const VkExtent2D output {960, 540}, limit {16384, 16384};
+    program.finalizeRenderTargetSizes(scene, output, limit, VK_SAMPLE_COUNT_1_BIT, 1, false, true);
+    auto full = scene.RenderTarget("_rt_full"_str).unwrap();
+    auto small = scene.RenderTarget("_rt_small"_str).unwrap();
+    EXPECT_EQ(full->PhysicalWidth(), i32(2409));
+    EXPECT_EQ(full->PhysicalHeight(), i32(1683));
+    EXPECT_EQ(small->PhysicalWidth(), i32(512));
+    EXPECT_EQ(small->PhysicalHeight(), i32(256));
+    node->SetScale({0.5f, 0.5f, 1});
+    program.finalizeRenderTargetSizes(scene, output, limit, VK_SAMPLE_COUNT_1_BIT, 1, false, true);
+    EXPECT_EQ(full->PhysicalWidth(), i32(1205));
+    EXPECT_EQ(full->PhysicalHeight(), i32(842));
+    node->SetPerspective(true);
+    program.finalizeRenderTargetSizes(scene, output, limit, VK_SAMPLE_COUNT_1_BIT, 1, false, true);
+    EXPECT_EQ(full->PhysicalWidth(), i32(4818));
+    EXPECT_EQ(full->PhysicalHeight(), i32(3365));
+}
+
 TEST(TextureRequest, DetectsRequestChanges) {
     owe::SceneRenderTarget rt {
         .width        = i32(256),

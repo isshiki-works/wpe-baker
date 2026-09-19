@@ -402,6 +402,7 @@ struct VulkanRender::Impl {
     bool m_gpu_timing_requested { false };
     bool m_cpu_timing_requested { false };
     double m_effect_render_scale { 1.0 };
+    bool m_match_effect_resolution { false };
     bool m_effect_render_scale_reported { false };
     bool m_gpu_timing_supported { false };
     std::uint32_t m_timestamp_valid_bits { 0 };
@@ -642,6 +643,11 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
         return false;
     }
     m_effect_render_scale = info.effect_render_scale;
+    if (info.match_effect_resolution && (info.effect_render_scale != 1.0 || info.capture_target)) {
+        rstd_error("adaptive effect resolution requires scale 1 and a whole-scene capture");
+        return false;
+    }
+    m_match_effect_resolution = info.match_effect_resolution;
 
     m_cpu_readback = info.output_mode == RenderOutputMode::CpuReadback;
     m_cpu_timing_requested = info.gpu_timing || std::getenv("WPE_RENDER_CPU_PROFILE") != nullptr;
@@ -2098,7 +2104,7 @@ void VulkanRender::Impl::configureRenderTargets(Scene& scene) {
     };
     m_program.finalizeRenderTargetSizes(
         scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples,
-        m_effect_render_scale, !m_effect_render_scale_reported);
+        m_effect_render_scale, !m_effect_render_scale_reported, m_match_effect_resolution);
     if (!scene.RenderTargetNames().is_empty()) m_effect_render_scale_reported = true;
 }
 

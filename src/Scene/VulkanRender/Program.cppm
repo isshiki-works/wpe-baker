@@ -12,6 +12,7 @@ import wescene.load_bench;
 import wescene.resource_registry;
 import wescene.vulkan;
 import wescene.scene;
+import eigen;
 import wescene.spec_names;
 import wescene.rgraph;
 import :vulkan_pass;
@@ -434,7 +435,8 @@ struct RenderProgram {
                                    VkExtent2D            max_framebuffer_extent,
                                    VkSampleCountFlagBits msaa_samples,
                                    double effect_render_scale = 1.0,
-                                   bool report_effect_scale = false) {
+                                   bool report_effect_scale = false,
+                                   bool match_effect_resolution = false) {
         auto names = scene.RenderTargetNames();
         std::size_t effect_target_count = 0, scaled_target_count = 0;
         std::uint64_t logical_pixels = 0, physical_pixels = 0;
@@ -479,13 +481,44 @@ struct RenderProgram {
                            i32(1),
                            rstd::as_cast<i32>(max_framebuffer_extent.height));
             const bool eligible = rt.effect_scale_eligible && !(rt.bind.enable && rt.bind.screen);
-            rt.effect_scale_applied = eligible && effect_render_scale < 1.0;
+            double allocation_scale = effect_render_scale;
+            if (match_effect_resolution && eligible && rt.effect_scale_static_transform &&
+                rt.effect_scale_owner.is_some() && rt.sample.minFilter != TextureFilter::NEAREST) {
+                auto* node = scene.ResourceIndex().node(*rt.effect_scale_owner);
+                auto camera = scene.CameraMut("global"_str);
+                bool fixed_transform = node != nullptr && !node->Perspective() && !node->Reflected();
+                for (auto* parent = node; parent != nullptr; parent = parent->Parent()) {
+                    fixed_transform = fixed_transform && parent->FieldAnimation("scale"_str).is_none() &&
+                        parent->FieldAnimation("angles"_str).is_none();
+                }
+                if (fixed_transform && camera.is_some() && !(**camera).IsPerspective()) {
+                    node->UpdateTrans();
+                    const Eigen::Matrix4d projection = (**camera).GetViewProjectionMatrix() * node->ModelTrans();
+                    // Largest screen-space stretch per original texel. Each FBO is capped
+                    // independently: an authored half-size/fit FBO already below the cap stays unchanged.
+                    const double x = node->Size().x() / rstd::as_cast<double>(physical_width);
+                    const double y = node->Size().y() / rstd::as_cast<double>(physical_height);
+                    const double a = projection(0, 0) * extent.width * 0.5 * x;
+                    const double b = projection(0, 1) * extent.width * 0.5 * y;
+                    const double c = projection(1, 0) * extent.height * 0.5 * x;
+                    const double d = projection(1, 1) * extent.height * 0.5 * y;
+                    const double sum = a*a + b*b + c*c + d*d;
+                    const double determinant = a*d - b*c;
+                    const double stretch = std::sqrt(0.5 * (sum + std::sqrt(std::max(0.0, sum*sum - 4*determinant*determinant))));
+                    if (std::isfinite(stretch) && stretch > 0.0)
+                        allocation_scale = std::min(1.0, stretch);
+                }
+            }
+            rt.effect_scale_applied = eligible && allocation_scale < 1.0;
             if (rt.effect_scale_applied) {
                 // Scale the existing bounded allocation, never the authored camera/layout size.
+                const auto quantize = [match_effect_resolution](double size) {
+                    return match_effect_resolution ? std::ceil(size) : std::round(size);
+                };
                 physical_width = rstd::as_cast<i32>(std::max(
-                    1.0, std::round(rstd::as_cast<double>(physical_width) * effect_render_scale)));
+                    1.0, quantize(rstd::as_cast<double>(physical_width) * allocation_scale)));
                 physical_height = rstd::as_cast<i32>(std::max(
-                    1.0, std::round(rstd::as_cast<double>(physical_height) * effect_render_scale)));
+                    1.0, quantize(rstd::as_cast<double>(physical_height) * allocation_scale)));
             }
             const bool physical_size_changed =
                 rt.physical_width != physical_width || rt.physical_height != physical_height;
