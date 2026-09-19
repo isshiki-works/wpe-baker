@@ -1,6 +1,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 
 import rstd;
 import rstd.cppstd;
@@ -12,12 +14,92 @@ import wescene.resource_registry;
 import wescene.rgraph;
 import wescene.vulkan;
 import wescene.vulkan_render;
+import wescene.scene_wallpaper;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
 using namespace owe::vulkan;
 
 namespace {
+
+// Diagnostic runner using the public session API, not a new production job contract.
+bool RunPropertyReplay(const char* path) {
+    try {
+        std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
+        const std::string text(std::istreambuf_iterator<char>(input), {});
+        auto parsed = owe::ParseJson(text);
+        if (parsed.is_err()) throw std::runtime_error("invalid replay JSON");
+        auto job = parsed.unwrap();
+        auto field = [&](const char* name) -> const owe::Json& {
+            auto value = job.get(rstd::cppstd::as_str(name).unwrap());
+            if (value.is_none()) throw std::runtime_error(std::string("missing replay field: ") + name);
+            return **value;
+        };
+        auto string_field = [&](const char* name) {
+            std::string value;
+            if (!owe::GetJsonValue(field(name), value)) throw std::runtime_error(name);
+            return value;
+        };
+        const auto output = std::filesystem::u8path(string_field("output_dir"));
+        if (std::filesystem::exists(output)) throw std::runtime_error("replay output already exists");
+        std::filesystem::create_directories(output);
+        owe::SceneWallpaperConfig config;
+        config.source_pkg_path = string_field("source");
+        config.assets_dir = string_field("assets");
+        config.cache_dir = (output / "cache").string();
+        config.fps = 30;
+        auto properties = field("user_properties").as_object();
+        if (properties.is_none()) throw std::runtime_error("properties must be an object");
+        (*properties)->iter().for_each([&](auto entry) {
+            auto [key, value] = entry;
+            config.user_properties.insert(key->clone(), value->clone());
+        });
+        owe::RenderInitInfo info;
+        info.output_mode = owe::RenderOutputMode::CpuReadback;
+        info.width = 640;
+        info.height = 360;
+        owe::OfflineOptions options;
+        options.seed = 17;
+        options.fps_num = 30;
+        options.fps_den = 1;
+        options.trace_scene = true;
+        owe::SceneWallpaper wallpaper;
+        if (!wallpaper.initOffline(std::move(config), std::move(info), options))
+            throw std::runtime_error(wallpaper.offlineError());
+        auto events = field("events").as_array();
+        if (events.is_none()) throw std::runtime_error("events must be an array");
+        if ((*events)->len() != usize(6)) throw std::runtime_error("replay requires six bounded property events");
+        std::ofstream raw(output / "frames.rgba", std::ios::binary);
+        owe::OfflineFrameInput pointer;
+        pointer.cursor_x = pointer.cursor_y = 0.5;
+        pointer.cursor_in_window = true;
+        for (uint64_t frame = 0; frame < 144; ++frame) {
+            if (frame % 24 == 0) {
+                const auto& event = (**events)[usize(frame / 24)];
+                auto changes = event.as_object();
+                if (changes.is_none()) throw std::runtime_error("event must be an object");
+                (*changes)->iter().for_each([&](auto entry) {
+                    auto [key, value] = entry;
+                    wallpaper.setUserPropertyJson(rstd::cppstd::to_string(key->as_str()), value->clone());
+                });
+            }
+            if (!wallpaper.step(frame, 1.0 / 30, pointer)) throw std::runtime_error(wallpaper.offlineError());
+            const auto& pixels = wallpaper.readback();
+            if (!pixels.completed() || pixels.width != 640 || pixels.height != 360 || pixels.row_pitch != 640*4)
+                throw std::runtime_error("unexpected replay frame");
+            raw.write(reinterpret_cast<const char*>(pixels.pixels.data()), pixels.pixels.size());
+            if (frame % 24 == 0 || frame % 24 == 23)
+                std::ofstream(output / (std::to_string(frame) + ".scene.json")) << wallpaper.offlineSceneDescription();
+        }
+        if (!raw) throw std::runtime_error("write replay frames failed");
+        std::printf("PASS: one session, 144 frames, six property events; source_script_errors=%zu\n",
+                    wallpaper.offlineSourceScriptErrors().size());
+        return true;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "FAIL: property replay: %s\n", error.what());
+        return false;
+    }
+}
 
 unsigned Pattern(unsigned x, unsigned y, unsigned channel, unsigned frame) {
     return (x * 29 + y * 17 + channel * 41 + frame * 13) % 256;
@@ -558,6 +640,8 @@ bool RunCapture(int version, bool authored_selector, bool invalid_selector, bool
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::strcmp(argv[1], "--property-replay") == 0)
+        return RunPropertyReplay(argv[2]) ? 0 : 1;
     if (argc == 2 && std::strcmp(argv[1], "--animation-layer-binding") == 0)
         return RunAnimationLayerBinding() ? 0 : 1;
     const bool validation = argc == 2 && std::strcmp(argv[1], "--validation") == 0;
