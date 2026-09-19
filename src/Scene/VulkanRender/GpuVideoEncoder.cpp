@@ -503,7 +503,8 @@ void main() {
             }
         }
     }
-    if (!insideImage) return;
+    // Initial loop-head frames are only cached; they are encoded after blending.
+    if (!insideImage || (dims.flags&4u)!=0u) return;
     uvec4 Y = uvec4(byteValue(luma(rgb(x,y))),byteValue(luma(rgb(x+1u,y))),
                    byteValue(luma(rgb(x+2u,y))),byteValue(luma(rgb(x+3u,y))));
     outputData.words[(y*dims.stride+x)/4u] = Y.x | (Y.y<<8u) | (Y.z<<16u) | (Y.w<<24u);
@@ -681,7 +682,8 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
             { .bufferOffset = std::uint64_t(p.stride) * p.output_height, .bufferRowLength = p.stride / 2,
               .bufferImageHeight = p.output_height / 2, .imageSubresource = { VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1 },
               .imageExtent = { p.output_width / 2, p.output_height / 2, 1 } } }};
-        vkCmdCopyBufferToImage(p.command, p.nv12, vkframe->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies.data());
+        if (!cache_head)
+            vkCmdCopyBufferToImage(p.command, p.nv12, vkframe->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies.data());
         source.srcAccessMask = VK_ACCESS_SHADER_READ_BIT; source.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         source.oldLayout = VK_IMAGE_LAYOUT_GENERAL; source.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
