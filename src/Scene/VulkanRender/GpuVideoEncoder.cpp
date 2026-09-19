@@ -101,7 +101,8 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.device = device; p.gpu = gpu; p.family = graphics_family;
     p.width = width; p.height = height; p.output_width = width * (packed_alpha ? 2 : 1);
     p.stride = (p.output_width + 3u) & ~3u;
-    if (!width || !height || (width & 1) || (height & 1) || !fps_num || !fps_den || qp < 0 || qp > 51 ||
+    if (!width || !height || (width & 1) || (height & 1) || !fps_num || !fps_den ||
+        fps_num > INT32_MAX || fps_den > INT32_MAX || qp < 0 || qp > 51 ||
         (codec_name != "h264_vulkan" && codec_name != "hevc_vulkan"))
         throw std::runtime_error("GPU encoding requires even dimensions, a rational FPS and Vulkan H.264/HEVC");
     vkGetDeviceQueue(device, graphics_family, 0, &p.queue);
@@ -169,7 +170,12 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.stream->avg_frame_rate = p.codec->framerate;
     Av(avcodec_parameters_from_context(p.stream->codecpar, p.codec), "copy GPU codec parameters");
     Av(avio_open(&p.mux->pb, path.c_str(), AVIO_FLAG_WRITE), "open GPU video output");
-    Av(avformat_write_header(p.mux, nullptr), "write GPU video header");
+    AVDictionary* mux_options = nullptr;
+    av_dict_set_int(&mux_options, "movie_timescale", fps_num, 0);
+    av_dict_set_int(&mux_options, "video_track_timescale", fps_num, 0);
+    int header_result = avformat_write_header(p.mux, &mux_options);
+    av_dict_free(&mux_options);
+    Av(header_result, "write GPU video header");
     p.frame = av_frame_alloc(); p.packet = av_packet_alloc();
     if (!p.frame || !p.packet) throw std::bad_alloc();
 
