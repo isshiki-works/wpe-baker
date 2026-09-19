@@ -168,6 +168,7 @@ struct Job {
     double effect_render_scale { 1.0 };
     bool raw_stdout{}, validation{}, gpu_timing{}, trace_scene{};
     bool draw_selected_frames_only { false };
+    bool write_audio { true };
     owe::OfflineFrameInput input;
     std::vector<std::pair<uint64_t, PointerInput>> input_timeline;
     std::optional<owe::RenderCaptureTarget> capture_target;
@@ -312,6 +313,7 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     job.validation = Bool(json, "vulkan_validation", false);
     job.gpu_timing = Bool(json, "gpu_timing", false);
     job.trace_scene = Bool(json, "trace_scene", false);
+    job.write_audio = Bool(json, "write_audio", true);
     job.draw_selected_frames_only = Bool(json, "draw_selected_frames_only", false);
     if (auto* overrides = Field(json, "offline_video_rate_overrides")) {
         auto array = overrides->as_array();
@@ -451,7 +453,7 @@ int Render(const fs::path& job_path) {
     if (!fs::create_directory(job.output)) throw std::runtime_error("cannot create output_dir");
     WriteText(job.output / "request.json", text);
     uint64_t written = 0;
-    uint64_t audio_written = 0;
+    uint64_t audio_processed = 0;
     uint64_t simulated_frames = 0, drawn_frames = 0, skipped_draw_frames = 0, readback_frames = 0;
     bool gpu_sampled = false;
     const auto start = std::chrono::steady_clock::now();
@@ -559,7 +561,8 @@ int Render(const fs::path& job_path) {
             << ",\"timestamp_period_ns\":" << OptionalReal(wallpaper.readback().timestamp_period_ns)
             << ",\"error_code\":" << static_cast<int32_t>(wallpaper.readback().gpu_timing_error_code)
             << ",\"message\":" << Quote(wallpaper.readback().gpu_timing_message) << '}'
-            << ",\"audio_sample_frames\":" << audio_written << ",\"audio_sample_rate\":48000,\"audio_channels\":2"
+            << ",\"audio_sample_frames\":" << audio_processed << ",\"audio_sample_rate\":48000,\"audio_channels\":2"
+            << ",\"audio_output_requested\":" << (job.write_audio ? "true" : "false")
             << ",\"capture_target\":" << (Field(json, "capture_target") ? owe::Dump(*Field(json, "capture_target")) : "null")
             << ",\"orthographic_capture_viewport\":" << (Field(json, "orthographic_capture_viewport") ? owe::Dump(*Field(json, "orthographic_capture_viewport")) : "null")
             << ",\"layer_selection\":" << (Field(json, "layer_selection") ? owe::Dump(*Field(json, "layer_selection")) : "null")
@@ -645,9 +648,10 @@ int Render(const fs::path& job_path) {
         RequireNoLoggedErrors();
 
         std::ofstream raw, index(job.output / "frames.jsonl", std::ios::binary);
-        std::ofstream audio(job.output / "audio.f32le.partial", std::ios::binary);
+        std::ofstream audio;
+        if (job.write_audio) audio.open(job.output / "audio.f32le.partial", std::ios::binary);
         if (!index) throw std::runtime_error("cannot create frame index");
-        if (!audio) throw std::runtime_error("cannot create audio stream");
+        if (job.write_audio && !audio) throw std::runtime_error("cannot create audio stream");
         if (job.raw_stdout) {
 #ifdef _WIN32
             if (_setmode(_fileno(stdout), _O_BINARY) < 0) throw std::runtime_error("cannot set binary stdout");
@@ -698,9 +702,11 @@ int Render(const fs::path& job_path) {
             else ++drawn_frames;
             if (!pixels.pixels.empty()) ++readback_frames;
             if (frame < job.warmup) continue;
-            audio.write(reinterpret_cast<const char*>(pcm.samples.data()), static_cast<std::streamsize>(pcm.samples.size() * sizeof(float)));
-            if (!audio) throw std::runtime_error("audio stream write failed");
-            audio_written += pcm.frame_count;
+            if (job.write_audio) {
+                audio.write(reinterpret_cast<const char*>(pcm.samples.data()), static_cast<std::streamsize>(pcm.samples.size() * sizeof(float)));
+                if (!audio) throw std::runtime_error("audio stream write failed");
+            }
+            audio_processed += pcm.frame_count;
             if (!read_pixels && !job.gpu_encode) continue;
             if (job.raw_stdout) {
                 if (std::fwrite(pixels.pixels.data(), 1, pixels.pixels.size(), stdout) != pixels.pixels.size())
@@ -730,15 +736,17 @@ int Render(const fs::path& job_path) {
             if (written == 1 || written % 120 == 0 || written == job.frames)
                 std::cerr << "wpe-render: " << written << '/' << job.frames << " frames\n";
         }
-        if (audio_written != AudioBoundary(job.warmup + job.frames, job.fps_num, job.fps_den) -
+        if (audio_processed != AudioBoundary(job.warmup + job.frames, job.fps_num, job.fps_den) -
                              AudioBoundary(job.warmup, job.fps_num, job.fps_den))
             throw std::runtime_error("final audio duration does not match video timeline");
         index.flush();
         if (!index) throw std::runtime_error("frame index flush failed");
-        audio.flush();
-        if (!audio) throw std::runtime_error("audio stream flush failed");
-        audio.close();
-        fs::rename(job.output / "audio.f32le.partial", job.output / "audio.f32le");
+        if (job.write_audio) {
+            audio.flush();
+            if (!audio) throw std::runtime_error("audio stream flush failed");
+            audio.close();
+            fs::rename(job.output / "audio.f32le.partial", job.output / "audio.f32le");
+        }
         if (job.raw_stdout) {
             if (std::fflush(stdout) != 0) throw std::runtime_error("frame consumer flush failed");
         } else if (!job.gpu_encode) {
