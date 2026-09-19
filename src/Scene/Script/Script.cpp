@@ -1,6 +1,9 @@
 module;
 
 #include <cmath>
+#include <chrono>
+#include <cstdlib>
+#include <cstdio>
 #include <limits>
 #include <rstd/macro.hpp>
 #include <rstd/enum.hpp>
@@ -31,6 +34,8 @@ namespace owe::script
 
 namespace
 {
+
+const bool profile_scripts = std::getenv("WPE_RENDER_SCRIPT_PROFILE") != nullptr;
 
 FieldKind GuessFieldKind(std::string_view field) {
     // Visible/enabled-style fields: bool. Several scripts return numbers
@@ -561,6 +566,8 @@ struct FieldScript::Impl {
     JSValue          update_fn { JS_UNDEFINED };
     JSValue          animation_event_fn { JS_UNDEFINED };
     bool             update_takes_arg { false };
+    double           update_profile_ms {};
+    uint64_t         update_profile_count {};
     bool             update_faulted { false };
     bool             module_faulted { false };
     bool             init_done { false };
@@ -4017,6 +4024,9 @@ JsRuntime::~JsRuntime() {
     for (size_t script_index = 0; script_index < script_count; ++script_index) {
         auto& fs = m_impl->scripts[script_index];
         if (fs && fs->m_impl) {
+            if (profile_scripts && fs->m_impl->update_profile_count)
+                std::fprintf(stderr, "script-profile update %s %llu %.6f\n", fs->m_impl->sha.c_str(),
+                    static_cast<unsigned long long>(fs->m_impl->update_profile_count), fs->m_impl->update_profile_ms);
             JS_FreeValue(m_impl->ctx, fs->m_impl->update_fn);
             JS_FreeValue(m_impl->ctx, fs->m_impl->animation_event_fn);
             JS_FreeValue(m_impl->ctx, fs->m_impl->init_fn);
@@ -4310,6 +4320,7 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
         auto* I  = fs->m_impl.get();
         if (! I->alive || I->update_faulted) continue;
         if (JS_IsUndefined(I->update_fn)) continue;
+        const auto update_started = profile_scripts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         // Swap `thisLayer` to this script's bound node before update. When
         // unbound, restore the original stub captured at bootstrap.
         BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
@@ -4336,6 +4347,10 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
             I->current_value = next_value;
         }
         JS_FreeValue(ctx, ret);
+        if (profile_scripts) {
+            I->update_profile_ms += std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-update_started).count();
+            ++I->update_profile_count;
+        }
     }
     m_impl->host.active_field_script = nullptr;
 }
@@ -4696,13 +4711,17 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
 struct ScriptScene::Impl {
     JsRuntime             rt;
     std::vector<Actuator> actuators;
+    double input_ms {}, tick_ms {}, apply_ms {};
 };
 
 ScriptScene::ScriptScene(Option<Arc<AudioResponseDemand>> demand)
     : m_impl(std::make_unique<Impl>()) {
     m_impl->rt.SetAudioResponseDemand(rstd::move(demand));
 }
-ScriptScene::~ScriptScene() = default;
+ScriptScene::~ScriptScene() {
+    if (profile_scripts) std::fprintf(stderr, "script-profile totals input=%.6f tick=%.6f apply=%.6f\n",
+        m_impl->input_ms, m_impl->tick_ms, m_impl->apply_ms);
+}
 
 JsRuntime& ScriptScene::runtime() noexcept { return m_impl->rt; }
 void ScriptScene::AddActuator(Actuator a) {
@@ -4835,11 +4854,19 @@ std::function<void(const ScriptValue&)> MakeNodeColorApply(rstd::sync::Arc<owe::
 
 void ScriptScene::Tick(const FrameInputs&                      fi,
                        slice<owe::SceneAnimationEventDispatch> animation_events) {
+    const auto start = profile_scripts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     m_impl->rt.SetFrameInputs(fi);
+    const auto input = profile_scripts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     m_impl->rt.TickAll(animation_events);
+    const auto tick = profile_scripts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     for (const auto& a : m_impl->actuators) {
         if (! a.script || ! a.apply) continue;
         a.apply(a.script->last_value());
+    }
+    if (profile_scripts) {
+        m_impl->input_ms += std::chrono::duration<double,std::milli>(input-start).count();
+        m_impl->tick_ms += std::chrono::duration<double,std::milli>(tick-input).count();
+        m_impl->apply_ms += std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-tick).count();
     }
 }
 
