@@ -737,7 +737,8 @@ void GpuVideoEncoder::finish() {
 std::string GpuVideoEncoder::captureMetadata() const {
     const auto& p = *impl;
     std::ostringstream out;
-    out << "{\"readback_frames\":" << p.readbacks;
+    out << "{\"readback_frames\":" << p.readbacks
+        << ",\"encoded_packets\":" << p.encoded_packets;
     if (p.capture.retain_loop_window)
         out << ",\"loop_window\":{\"path\":\"loop-window.rgba\",\"format\":\"rgba\",\"width\":" << p.width
             << ",\"height\":" << p.height << ",\"crossfade_frames\":" << p.capture.crossfade_frames
