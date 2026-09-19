@@ -1270,6 +1270,7 @@ TEST(RenderTargetPhysicalExtent, MatchesLayerProjectionWithoutShrinkingAlreadySm
     auto camera = Arc<owe::SceneCamera>::make(owe::SceneCamera::MakeOrthographic(1920, 1080, -1, 1));
     scene.RegisterCamera(String::make("global"_str), camera.clone());
     auto node = Arc<owe::SceneNode>::make();
+    node->SetReflected(true); // Authored image default; relevant only when planar reflection is enabled.
     node->SetSize({4818, 3365});
     scene.RootMut()->AppendChild(node.clone());
     scene.RebuildResourceIndex();

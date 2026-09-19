@@ -496,7 +496,8 @@ struct RenderProgram {
                 rt.effect_scale_owner.is_some() && rt.sample.minFilter != TextureFilter::NEAREST) {
                 auto* node = scene.ResourceIndex().node(*rt.effect_scale_owner);
                 auto camera = scene.CameraMut("global"_str);
-                bool fixed_transform = node != nullptr && !node->Perspective() && !node->Reflected();
+                bool fixed_transform = node != nullptr && !node->Perspective() &&
+                    !(node->Reflected() && scene.PlanarReflectionEnabled());
                 for (auto* parent = node; parent != nullptr; parent = parent->Parent()) {
                     fixed_transform = fixed_transform && parent->FieldAnimation("scale"_str).is_none() &&
                         parent->FieldAnimation("angles"_str).is_none();
