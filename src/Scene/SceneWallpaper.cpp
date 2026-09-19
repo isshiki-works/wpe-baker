@@ -2,6 +2,7 @@ module;
 
 #include <random>
 #include <chrono>
+#include <cstdlib>
 #include <rstd/enum.hpp>
 
 module wescene.scene_wallpaper;
@@ -688,6 +689,7 @@ void SceneRenderController::onDraw() {
                 return;
             }
         }
+        const auto pending_finished = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (m_scene->ConsumeRenderGraphDirty()) {
             rebuildRenderGraph(
                 vulkan::RenderGraphResourceRetention::KeepSceneTextures, false, load_bench);
@@ -727,18 +729,19 @@ void SceneRenderController::onDraw() {
             if (profile) {
                 m_cpu_frame.cpu_scene_ms = std::chrono::duration<double,std::milli>(scene_finished-scene_started).count();
                 m_cpu_frame.cpu_script_ms = script_ms;
-                m_cpu_frame.cpu_resources_ms = std::chrono::duration<double,std::milli>(resources_finished-scene_finished).count();
+                m_cpu_frame.cpu_pending_wait_ms = std::chrono::duration<double,std::milli>(pending_finished-scene_finished).count();
+                m_cpu_frame.cpu_resources_ms = std::chrono::duration<double,std::milli>(resources_finished-pending_finished).count();
             }
             m_cpu_frame.frame_index = m_step_index;
             if (!m_cpu_frame.completed() && !m_cpu_frame.submitted()) return;
-            const auto check_started = m_cpu_frame.gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+            const auto check_started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             if (const auto pass = m_render->firstUnpreparedPass()) {
                 const std::string message = "Offline frame omitted an unprepared render pass: " + *pass;
                 if (active_offline_execution) active_offline_execution->diagnose(message, true);
                 invalidateOfflineFrame(m_step_index, message);
                 return;
             }
-            if (m_cpu_frame.gpu_timing_requested)
+            if (profile)
                 m_cpu_frame.cpu_pass_check_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-check_started).count();
             m_offline_step_status = OfflineStepStatus::Drawn;
         } else m_render->drawFrame(*m_scene);
@@ -1689,7 +1692,7 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
         return false;
     }
     m_offline_options = options;
-    m_offline_profile = info.gpu_timing;
+    m_offline_profile = info.gpu_timing || std::getenv("WPE_RENDER_CPU_PROFILE") != nullptr;
     m_offline_layers = info.layer_selection;
     m_offline_context.epoch_ms = options.epoch_ms;
     m_offline_context.trace_scene = options.trace_scene;

@@ -400,6 +400,7 @@ struct VulkanRender::Impl {
     std::string m_capture_error;
     TimestampQueryPool m_timestamp_queries;
     bool m_gpu_timing_requested { false };
+    bool m_cpu_timing_requested { false };
     double m_effect_render_scale { 1.0 };
     bool m_effect_render_scale_reported { false };
     bool m_gpu_timing_supported { false };
@@ -643,6 +644,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
     m_effect_render_scale = info.effect_render_scale;
 
     m_cpu_readback = info.output_mode == RenderOutputMode::CpuReadback;
+    m_cpu_timing_requested = info.gpu_timing || std::getenv("WPE_RENDER_CPU_PROFILE") != nullptr;
     const char* pipeline = std::getenv("WPE_RENDER_GPU_PIPELINE");
     m_gpu_pipeline = m_cpu_readback && (info.gpu_encode || info.collect_sampling_coverage) && !info.gpu_timing &&
         (!pipeline || std::string_view(pipeline) != "0");
@@ -1296,7 +1298,7 @@ std::string VulkanRender::Impl::finishPendingFrame() {
 }
 
 owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pixels) {
-    const auto cpu_started = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    const auto cpu_started = m_cpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (m_gpu_encoder) read_pixels = false;
     CpuFrameResult frame;
     frame.gpu_scene_overlap = m_gpu_pipeline;
@@ -1565,11 +1567,11 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     const bool defer_completion = m_gpu_pipeline && !read_pixels && !coverage_last &&
         (m_gpu_encoder || m_cpu_frame_index < m_sample_coverage_start + m_sample_coverage_frames);
     if (defer_completion) m_pending_cpu_submission = completion;
-    const auto cpu_submitted = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    if (m_gpu_timing_requested)
+    const auto cpu_submitted = m_cpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (m_cpu_timing_requested)
         frame.cpu_prepare_ms = std::chrono::duration<double,std::milli>(cpu_submitted-cpu_started).count();
     if (!defer_completion) result = rr.fence_frame.Wait(m_readback_timeout_ns);
-    if (m_gpu_timing_requested)
+    if (m_cpu_timing_requested)
         frame.cpu_render_wait_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpu_submitted).count();
     // Do not reset/reuse buffers after a timeout: the submission can still be
     // in flight. The failed renderer retains its resources until destruction.
@@ -1607,7 +1609,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     if (!defer_completion) ReleaseCompletedRetiredResources(*m_device, rr);
 
     if (m_gpu_encoder && m_cpu_frame_index >= m_encode_options->first_frame) {
-        const auto encode_started = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        const auto encode_started = m_cpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         const auto index = m_cpu_frame_index - m_encode_options->first_frame;
         if (index < m_encode_options->frames) {
             try {
@@ -1623,7 +1625,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
                 return fail(VK_ERROR_INITIALIZATION_FAILED, error.what());
             }
         }
-        if (m_gpu_timing_requested)
+        if (m_cpu_timing_requested)
             frame.cpu_encode_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-encode_started).count();
     }
 
