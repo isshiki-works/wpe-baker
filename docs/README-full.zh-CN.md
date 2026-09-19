@@ -409,8 +409,6 @@ P/步长 个，每个比较的是 (s, s+P)，全部落在前 2P 帧里，更宽�
 
 ## 已知问题
 
-- **依赖许可未确认（vvk）**：渲染器静态链接的 Vulkan 绑定库 vvk（`litocpp/vvk`，锁定提交 `f53d60c`）在上游仓库没有任何许可声明，我们已联系作者确认许可，尚未得到答复。在此之前，本包中与 vvk 相关的部分没有明确的再分发授权；如作者提出要求，我们会立即下架或替换。vvk 的完整源码与我们的补丁都在源码包 `.deps\vvk\`、`scripts\dependency-patches\vvk.patch` 里，便于第三方自行核查与替换。
-- **wavsen 锁定版本早于上游加入许可文件**：我们锁定的 wavsen（`hypengw/wavsen`）是 `77dfd33`（2026-08-31），上游在 `5a0ddb9`（2026-09-08）才加入 `LICENSE-MIT` / `LICENSE-APACHE`，锁定版的这两个文件上游返回 404（已联网核对）。包内附的 `licenses\wavsen.LICENSE-MIT`、`wavsen.LICENSE-APACHE` 取自 `5a0ddb9`，代表**上游当前**的许可意图（MIT OR Apache-2.0），不是锁定版本自带的文件。处置路径：把锁定版升到 `5a0ddb9` 或更新后重捕补丁、重建渲染器并重跑回归；或取得作者书面确认 `77dfd33` 同样适用该许可。在其中一条落实之前，这一项按未决处理。
 - **无 AVX2 的机器上，读端帧扫描没有性能数据**：扫描只在 9800X3D（AVX2 / AVX-512）上实测过；不支持 AVX2 的 CPU 会走标量回退路径，该路径的逻辑有单测覆盖（行宽小于 8 像素的尺寸走的就是它），但**性能未测**，耗时可能明显高于本文给出的数字。
 - **保留实时与分层成品通常比原作更费**（实测 8 案里 5 案，封装 +8% ~ +23%）：实时层的开销原样保留，又多了一路视频解码。1.0.1 起默认路径的分层布局最多 4 个视频组；超过就按替代设置实算，通过才建议。
 - **实验性：时段壁纸状态拆分**（`--daytime-split on`，仅命令行，默认关闭）。时钟脚本只切换图层可见性的场景，会按时段拆成若干状态，每个状态单独分析、单独烘焙，原脚本保留。试过的三案里两案识别成功；剩余实时层仍决定该状态能否变成整幅视频。开关关闭时 plan 与上一版逐字节相同。
@@ -468,5 +466,5 @@ python scripts/package-source.py --native-build-dir build/native-speed22 --outpu
 - **原生渲染器：GPL v2。** `renderer/wpe-render.exe` 是 open-wallpaper-engine（上游提交 `b866e8e711fdd7762385b23601affa1ea5539e3b`）的 Windows 移植，许可文本随包附在 `licenses/open-wallpaper-engine.LICENSE`；它用的 FFmpeg 解码 DLL 按 LGPL 2.1 构建（声明在 `licenses/renderer-codecs/`）。
 - **打包的编码器：GPL v2。** `encoder/ffmpeg.exe`、`ffprobe.exe` 及其 DLL 是带 x264 与 x265 构建的 FFmpeg 8.1.2，声明在 `encoder/licenses/`。
 - **对应源码。** 每次发布都在便携包旁边同时提供 `WpeBaker-source.zip`，内含修改后的渲染器源码及 `patches/`、`scripts/dependency-patches/` 两处补丁、渲染器依赖、两套 FFmpeg 构建所用的完整 FFmpeg / dav1d / x264 / x265 源码、构建脚本与输入 lock、`REBUILD.md`，以及各组件原始许可文本。两个压缩包的 `build-records/` 记录的是同一个渲染器 SHA-256，可以据此核对源码与二进制对应。如果拿到的便携包没有附带源码包，请向下载来源索取。
-- **待确认：vvk 与 wavsen。** vvk（litocpp/vvk，锁定 `f53d60c`）上游至今没有任何许可声明；wavsen（hypengw/wavsen）锁定的 `77dfd33` 早于上游加入许可文件的 `5a0ddb9`，包内附的是 `5a0ddb9` 的 MIT / Apache-2.0 文本。两者都在向上游作者确认，详见「已知问题」；在确认到位之前，转发本构建时请把这两项当作未决事项。逐组件的版本、许可、来源、是否修改与补丁位置见 `THIRD-PARTY-NOTICES.md`。
+- **vvk 与 wavsen：MIT OR Apache-2.0，作者已确认。**两者的锁定版本（vvk `f53d60c`、wavsen `77dfd33`）都早于上游加入许可文件的提交。作者 hypengw 于 2026-09-18 给 vvk 加入 MIT OR Apache-2.0 并确认适用于此前的提交（https://github.com/litocpp/vvk/issues/3），同时确认 wavsen `77dfd33` 适用同一许可（https://github.com/hypengw/wavsen/issues/5）。许可文本随包在 `licenses\` 下。感谢 hypengw 的及时答复。逐组件的版本、许可、来源、是否修改与补丁位置见 `THIRD-PARTY-NOTICES.md`。
 - 其余随包组件（.NET 运行时、LLVM-MinGW 运行时 DLL、PresentMon）沿用各自许可，许可文本在 `licenses/` 下。

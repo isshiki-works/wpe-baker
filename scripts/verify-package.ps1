@@ -194,7 +194,7 @@ Add-Row '便携包' '源码说明与基础许可' (($missingPortable.Count -eq 0
 $staticLicenses = @('freetype.FTL.TXT', 'freetype.LICENSE.TXT', 'glslang.LICENSE.txt', 'lz4.lib.LICENSE',
     'quickjs-ng.LICENSE', 'vma.LICENSE.txt', 'spirv-reflect.LICENSE', 'eigen.COPYING.MPL2',
     'vulkan-headers.LICENSE.md', 'vulkan-loader.LICENSE.txt', 'rstd.LICENSE-MIT', 'rstd.LICENSE-APACHE',
-    'wavsen.LICENSE-MIT', 'wavsen.LICENSE-APACHE')
+    'wavsen.LICENSE-MIT', 'wavsen.LICENSE-APACHE', 'vvk.LICENSE-MIT', 'vvk.LICENSE-APACHE')
 $missingStatic = $staticLicenses | Where-Object { -not (Test-Path (Join-Path $bundle "licenses\$_")) }
 Add-Row '便携包' '静态依赖许可文本' (($missingStatic.Count -eq 0) ? 'PASS' : 'FAIL') ($missingStatic.Count -eq 0 ? "$($staticLicenses.Count) 份都在" : "缺 $($missingStatic.Count) 份：$($missingStatic -join ', ')")
 

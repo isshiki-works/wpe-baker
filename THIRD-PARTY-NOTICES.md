@@ -32,8 +32,8 @@ GPL v2 第 3 条要求二进制与对应完整源码一起提供 —— 两个 z
 | Vulkan-Headers | `v1.4.321` | Apache-2.0 OR MIT | https://github.com/KhronosGroup/Vulkan-Headers | 否 | — | `vulkan-headers.LICENSE.md` + `vulkan-headers.Apache-2.0.txt` + `vulkan-headers.MIT.txt` |
 | Vulkan-Loader | `v1.4.321` | Apache-2.0 | https://github.com/KhronosGroup/Vulkan-Loader | 否 | — | `vulkan-loader.LICENSE.txt` |
 | rstd | `456fec5cc2b87acdb56800e298b5712ea69cdd47` | MIT OR Apache-2.0 | https://github.com/litocpp/rstd | **是** | `scripts\dependency-patches\rstd.patch`（manifest 记 143 个文件，其中 138 个是误捕获的 lito 构建缓存，真实源码改动 5 个文件） | `rstd.LICENSE-MIT` + `rstd.LICENSE-APACHE` |
-| wavsen | `77dfd33d07112c05df4682e08b98e19153ebe3ab` | MIT OR Apache-2.0（上游 2026-09-08 在 `5a0ddb9` 才加入许可文件） | https://github.com/hypengw/wavsen | **是** | `scripts\dependency-patches\wavsen.patch`（18 个文件）；多线程解码追加改动见 `patches\renderer-mt\parent-perf-video-decode-threads.patch` | `wavsen.LICENSE-MIT` + `wavsen.LICENSE-APACHE`（取自 `5a0ddb9`，见下方说明） |
-| vvk | `f53d60cc70938d0485802750deeb15d18ba033ea` | **未声明，见第 5 节** | https://github.com/litocpp/vvk | **是** | `scripts\dependency-patches\vvk.patch`（6 个文件） | 无 |
+| wavsen | `77dfd33d07112c05df4682e08b98e19153ebe3ab` | MIT OR Apache-2.0（作者 2026-09-18 确认同样适用于锁定的 `77dfd33`：https://github.com/hypengw/wavsen/issues/5） | https://github.com/hypengw/wavsen | **是** | `scripts\dependency-patches\wavsen.patch`（18 个文件）；多线程解码追加改动见 `patches\renderer-mt\parent-perf-video-decode-threads.patch` | `wavsen.LICENSE-MIT` + `wavsen.LICENSE-APACHE`（取自 `5a0ddb9`，见下方说明） |
+| vvk | `f53d60cc70938d0485802750deeb15d18ba033ea` | MIT OR Apache-2.0（作者 2026-09-18 在 `220116d` 加入许可文件，并确认适用于此前所有提交：https://github.com/litocpp/vvk/issues/3） | https://github.com/litocpp/vvk | **是** | `scripts\dependency-patches\vvk.patch`（6 个文件） | `vvk.LICENSE-MIT` + `vvk.LICENSE-APACHE` |
 
 FreeType 选 FTL 时上游要求在文档里致谢，发布文档与便携包 README 的 License 节须包含：
 
@@ -45,17 +45,12 @@ Eigen 是 MPL-2.0，MPL 第 3.2 条要求告知源码获取方式：Eigen 完整
 （SHA256 `f0209070eb3a00ad0fe5d1cc4ccdac9c0b41e95ef7062f356fd01b7b2208630c`，见
 `scripts\native-inputs.lock.json`）。我们没有修改 Eigen。
 
-### wavsen 锁定版本与许可文本的时间差（必须照这个口径写）
+### wavsen 与 vvk 锁定版本的许可（已确认）
 
-我们锁定的 `77dfd33`（2026-08-31）早于上游加入许可文件的 `5a0ddb9`（2026-09-08），
-本地快照里**没有**许可文件，已联网核对：`77dfd33` 的 `LICENSE-MIT` 返回 404。
-附带的 `wavsen.LICENSE-MIT` / `wavsen.LICENSE-APACHE` 取自 `5a0ddb9`，代表**上游当前**
-的许可意图，不是锁定版本自带的文件。两条处置路径（发布前至少做一条）：
-
-1. **首选**：把锁定版本升到 `5a0ddb9` 或更新，重捕 `wavsen.patch`、重建渲染器并重跑回归；
-   这样许可文本与源码版本一致，本节的说明可以删掉。
-2. 次选：请作者（hypengw）书面确认 `77dfd33` 同样适用 MIT OR Apache-2.0，把确认件
-   随包提供，并保留本节说明。
+两者的锁定版本（wavsen `77dfd33`、vvk `f53d60c`）都早于上游加入许可文件的提交。作者 hypengw
+在 2026-09-18 书面确认：wavsen 的 MIT OR Apache-2.0 适用于 `77dfd33`（https://github.com/hypengw/wavsen/issues/5）；
+vvk 在 `220116d` 加入 MIT OR Apache-2.0，并说明同样适用于此前的提交（https://github.com/litocpp/vvk/issues/3）。
+随包的 `wavsen.LICENSE-*` 取自 `5a0ddb9`，`vvk.LICENSE-*` 取自 `220116d`。
 
 ## 3. 渲染器附带的解码运行库（LGPL 2.1，动态链接）
 
@@ -85,32 +80,12 @@ Eigen 是 MPL-2.0，MPL 第 3.2 条要求告知源码获取方式：Eigen 完整
 许可文本：`encoder\licenses\{ffmpeg,x264,x265,llvm,mingw}\`（RC8 已在位）、
 `licenses\llvm-mingw.LICENSE.txt`。源码在源码包 `.deps\ffmpeg-encoder-gpl2\sources\`。
 
-## 5. vvk：许可待作者确认（发布阻断项）
+## 5. vvk：许可已确认
 
-- 上游 `litocpp/vvk` 在锁定版 `f53d60c` 与当前 HEAD 都**没有任何许可声明**：
-  根目录无 `LICENSE*`，`lito.toml` 无 license 字段，GitHub API 的 `license` 字段为 `null`
-  （2026-09-18 联网核对，上游最后 push 2026-09-17）。
-- 没有许可声明意味着默认「保留所有权利」，我们**没有再分发授权**；vvk 的代码被静态链接进
-  `wpe-render.exe`，我们还打了 6 个文件的补丁。
-- 处置：发布前请作者给出明确许可（MIT / Apache-2.0 等），或确认允许按引擎 GPL v2 再分发。
-  拿不到确认就只能在「已知问题」里如实披露，并准备在作者要求时下架。
-
-发布包「已知问题」建议措辞（中文）：
-
-> **依赖许可未确认**：渲染器静态链接的 Vulkan 绑定库 vvk（`litocpp/vvk`，锁定提交
-> `f53d60c`）在上游仓库没有任何许可声明，我们已联系作者确认许可，尚未得到答复。在此之前，
-> 本包中与 vvk 相关的部分没有明确的再分发授权；如作者提出要求，我们会立即下架或替换。
-> vvk 的完整源码与我们的补丁都在源码包 `.deps\vvk\`、
-> `scripts\dependency-patches\vvk.patch` 里，便于第三方自行核查与替换。
-
-英文版：
-
-> **Unconfirmed dependency license**: vvk (`litocpp/vvk`, pinned commit `f53d60c`), the Vulkan
-> binding library statically linked into the renderer, carries no license statement upstream.
-> We have asked the author to clarify and have not received an answer. Until then the vvk
-> portion of this package has no explicit redistribution grant; we will take it down or replace
-> it at the author's request. vvk's complete source and our patch are included in the source
-> archive (`.deps\vvk`, `scripts\dependency-patches\vvk.patch`).
+vvk（`litocpp/vvk`）原先没有许可文件。作者 hypengw 于 2026-09-18 在 `220116d` 加入
+MIT OR Apache-2.0 双许可，并确认适用于此前的所有提交，包括我们锁定的 `f53d60c`（https://github.com/litocpp/vvk/issues/3）。
+许可文本随包提供：`licenses\vvk.LICENSE-MIT`、`licenses\vvk.LICENSE-APACHE`。
+vvk 的完整源码与我们的补丁在源码包 `.deps\vvk\`、`scripts\dependency-patches\vvk.patch`。
 
 ## 6. 其他随包程序
 
@@ -147,6 +122,8 @@ GPL-2.0-only 的引擎静态链接 Apache-2.0-only 的组件（SPIRV-Reflect、V
 | rstd-LICENSE-APACHE | `cfc7749b96f63bd3` |
 | wavsen-LICENSE-MIT | `2d1edaf74e77c63e` |
 | wavsen-LICENSE-APACHE | `cfc7749b96f63bd3` |
+| vvk-LICENSE-MIT | `2d1edaf74e77c63e` |
+| vvk-LICENSE-APACHE | `cfc7749b96f63bd3` |
 | ffmpeg-COPYING.LGPLv2.1 | `246041b6ecf9bc32` |
 | ffmpeg-COPYING.GPLv2 | `8177f97513213526` |
 | dav1d-COPYING | `dd92c3c2247c5651` |

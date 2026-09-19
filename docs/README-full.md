@@ -875,23 +875,6 @@ quoted anywhere.
 
 ## Known issues
 
-- **Unconfirmed dependency license (vvk)**: vvk (`litocpp/vvk`, pinned commit
-  `f53d60c`), the Vulkan binding library statically linked into the renderer,
-  carries no license statement upstream. We have asked the author to clarify
-  and have not received an answer. Until then the vvk portion of this package
-  has no explicit redistribution grant; we will take it down or replace it at
-  the author's request. vvk's complete source and our patch are included in
-  the source archive (`.deps\vvk`, `scripts\dependency-patches\vvk.patch`).
-- **wavsen's pinned revision predates its license files**: we pin wavsen
-  (`hypengw/wavsen`) at `77dfd33` (2026-08-31); upstream only added
-  `LICENSE-MIT` and `LICENSE-APACHE` in `5a0ddb9` (2026-09-08), and both files
-  return 404 at the pinned revision (verified online). The bundled
-  `licenses\wavsen.LICENSE-MIT` and `wavsen.LICENSE-APACHE` are taken from
-  `5a0ddb9` and represent upstream's *current* intent (MIT OR Apache-2.0), not
-  files shipped with the pinned revision. Resolution: move the pin to
-  `5a0ddb9` or later, re-capture the patch and rebuild the renderer, or obtain
-  the author's written confirmation that `77dfd33` carries the same terms.
-  Until one of those lands, treat this as unresolved.
 - **No performance data for read-back frame scanning without AVX2**: scanning
   was only measured on a 9800X3D (AVX2 / AVX-512). CPUs without AVX2 take the
   scalar fallback path, which is covered by unit tests (row widths under 8
@@ -1204,12 +1187,13 @@ are never part of the public source package.
   license texts. `build-records/` in both archives name the same renderer
   SHA-256, so you can check that the source matches the binary. If you got a
   portable zip without its source zip, ask for it where you downloaded it.
-- **Unconfirmed: vvk and wavsen.** vvk (litocpp/vvk, pinned `f53d60c`) still
-  carries no license statement upstream; wavsen (hypengw/wavsen) is pinned at
-  `77dfd33`, which predates the `5a0ddb9` commit that added its license files,
-  so the bundled MIT / Apache-2.0 texts come from `5a0ddb9`. Both are being
-  confirmed with their authors — see **Known issues**. If you redistribute
-  this build, treat those two as unresolved until that confirmation arrives.
+- **vvk and wavsen: MIT OR Apache-2.0, confirmed by the author.** Both pinned
+  revisions (vvk `f53d60c`, wavsen `77dfd33`) predate the commits that added
+  their license files. On 2026-09-18 the author, hypengw, added MIT OR
+  Apache-2.0 to vvk and confirmed it covers earlier commits
+  (https://github.com/litocpp/vvk/issues/3), and confirmed the same terms for wavsen
+  `77dfd33` (https://github.com/hypengw/wavsen/issues/5). The license texts ship in
+  `licenses\`. Thanks to hypengw for the quick answer.
   Per-component versions, licenses, origins, modifications and patch locations
   are listed in `THIRD-PARTY-NOTICES.md`.
 - Other bundled components (.NET runtime, LLVM-MinGW runtime DLLs, PresentMon)

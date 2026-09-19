@@ -19,7 +19,8 @@ provenance_spec.loader.exec_module(provenance)
 # Statically linked renderer dependencies: their licenses require the notice to ship with the
 # binary. The authoritative copy is the one that took part in the build, under .deps; the
 # licenses-extra/ copies (downloaded from each upstream at the pinned revision) are the
-# fallback, and the only source for wavsen, whose pinned revision predates its license files.
+# fallback, and the only source for wavsen and vvk, whose pinned revisions predate their license files
+# (the author confirmed on 2026-09-18 that the terms cover those revisions).
 STATIC_LICENSES = {
     "freetype.LICENSE.TXT": ".deps/freetype/LICENSE.TXT",
     "freetype.FTL.TXT": ".deps/freetype/docs/FTL.TXT",
@@ -39,6 +40,8 @@ STATIC_LICENSES = {
     "rstd.LICENSE-APACHE": ".deps/rstd/LICENSE-APACHE",
     "wavsen.LICENSE-MIT": None,
     "wavsen.LICENSE-APACHE": None,
+    "vvk.LICENSE-MIT": None,
+    "vvk.LICENSE-APACHE": None,
 }
 
 
