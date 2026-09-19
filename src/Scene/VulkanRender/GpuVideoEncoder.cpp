@@ -7,6 +7,8 @@
 #include <cstring>
 #include <stdexcept>
 #include <vector>
+#include <chrono>
+#include <cstdlib>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -81,6 +83,8 @@ struct GpuVideoEncoder::Impl {
     PFN_vkCmdPushDescriptorSetKHR push_descriptors {};
     bool finished {};
     bool conversion_pending {};
+    bool profile { std::getenv("WPE_RENDER_CPU_PROFILE") != nullptr };
+    double surface_ms {}, conversion_submit_ms {}, codec_send_ms {}, codec_receive_ms {};
 
     ~Impl() {
         // On cancellation/error, queued codec work must finish before its resources/device disappear.
@@ -551,8 +555,16 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
     const bool blend_head=fade && index>=p.capture.encoded_frames;
     const auto head_index=blend_head ? index-p.capture.encoded_frames : cache_head ? index : 0;
     ++p.observed_frames;
+    auto mark = p.profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    auto span = [&](double& total) {
+        if (!p.profile) return;
+        const auto now = std::chrono::steady_clock::now();
+        total += std::chrono::duration<double,std::milli>(now-mark).count();
+        mark = now;
+    };
     av_frame_unref(p.frame);
     Av(av_hwframe_get_buffer(p.frames, p.frame, 0), "get GPU encoder surface");
+    span(p.surface_ms);
     auto* vkframe = reinterpret_cast<AVVkFrame*>(p.frame->data[0]);
     auto* frames = reinterpret_cast<AVHWFramesContext*>(p.frames->data);
     auto* vkframes = reinterpret_cast<AVVulkanFramesContext*>(frames->hwctx);
@@ -695,6 +707,7 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
         throw;
     }
     vkframes->unlock_frame(frames, vkframe);
+    span(p.conversion_submit_ms);
     if (cache_head) { p.retain(rgba,index); return; }
     p.frame->pts = static_cast<std::int64_t>(index-fade);
     if (blend_head && head_index==0) p.frame->pict_type=AV_PICTURE_TYPE_I;
@@ -702,7 +715,9 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
     p.frame->color_range = p.codec->color_range; p.frame->colorspace = p.codec->colorspace;
     p.frame->color_primaries = p.codec->color_primaries; p.frame->color_trc = p.codec->color_trc;
     Av(avcodec_send_frame(p.codec, p.frame), "submit Vulkan encode frame");
+    span(p.codec_send_ms);
     p.packets();
+    span(p.codec_receive_ms);
     p.retain(rgba, index);
 }
 
@@ -751,6 +766,9 @@ std::string GpuVideoEncoder::captureMetadata() const {
     std::ostringstream out;
     out << "{\"readback_frames\":" << p.readbacks
         << ",\"encoded_packets\":" << p.encoded_packets;
+    if (p.profile) out << ",\"host_profile_ms\":{\"surface\":" << p.surface_ms
+        << ",\"conversion_submit\":" << p.conversion_submit_ms << ",\"codec_send\":" << p.codec_send_ms
+        << ",\"codec_receive\":" << p.codec_receive_ms << '}';
     if (p.capture.retain_loop_window)
         out << ",\"loop_window\":{\"path\":\"loop-window.rgba\",\"format\":\"rgba\",\"width\":" << p.width
             << ",\"height\":" << p.height << ",\"crossfade_frames\":" << p.capture.crossfade_frames
