@@ -583,6 +583,7 @@ struct FieldScript::Impl {
     // Per-script cursor-inside-bbox state used to edge-detect
     // cursorEnter / cursorLeave between frames.
     bool                                                          cursor_inside { false };
+    bool                                                          has_cursor_exports { false };
     Option<Arc<owe::SceneAnimationPlayback>>                      animation;
     std::unordered_map<std::string, std::vector<owe::SceneNode*>> asset_clone_queues;
     std::unordered_map<owe::SceneNode*, std::string>              clone_asset_keys;
@@ -4232,7 +4233,7 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
     for (size_t script_index = 0; script_index < cursor_script_count; ++script_index) {
         auto* fs = m_impl->scripts[script_index].get();
         auto* I  = fs->m_impl.get();
-        if (! I->alive || ! I->node) continue;
+        if (! I->alive || ! I->node || ! I->has_cursor_exports) continue;
         const bool now_inside = in_window && HitTestNode(I->node, cursor);
         BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
         m_impl->host.active_field_script = fs;
@@ -4659,6 +4660,15 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
     } else {
         JS_FreeValue(ctx, update_fn);
         I->update_fn = JS_UNDEFINED;
+    }
+    // Module export names cannot change, but exported bindings can. Skip the
+    // entire hit-test/event path only when no cursor export exists; keep live
+    // lookup for callbacks assigned or replaced by update().
+    for (const char* name : { "cursorEnter", "cursorLeave", "cursorMove",
+                              "cursorDown", "cursorClick", "cursorUp" }) {
+        const auto atom = JS_NewAtom(ctx, name);
+        I->has_cursor_exports = I->has_cursor_exports || JS_HasProperty(ctx, ns, atom) != 0;
+        JS_FreeAtom(ctx, atom);
     }
     // Cache `animationEvent` the same way; timeline markers dispatch into it.
     JSValue animation_event_fn = JS_GetPropertyStr(ctx, ns, "animationEvent");

@@ -1001,6 +1001,33 @@ TEST(ScriptCursor, EnterLeaveAndMove) {
     EXPECT_EQ(std::get<ScalarValue>(fs->last_value()).v, 1'001'002);
 }
 
+TEST(ScriptCursor, InitiallyUndefinedExportRemainsLive) {
+    owe::SceneNode node;
+    node.SetTranslate({ 500.0f, 500.0f, 0.0f });
+    node.SetSize({ 200.0f, 200.0f });
+    JsRuntime rt;
+    auto fi = MakeFi();
+    fi.cursor_in_window = true;
+    fi.cursor_x = 500.0f / 1920.0f;
+    fi.cursor_y = 500.0f / 1080.0f;
+    rt.SetFrameInputs(fi);
+    auto* fs = rt.MakeFieldScript(
+        R"JS(
+            let moves = 0;
+            export let cursorMove;
+            export function update() {
+                cursorMove = () => { moves++; };
+                return moves;
+            }
+        )JS", "test/cursor_live_export", FieldKind::Scalar,
+        owe::MakeObject(), owe::IntoJson(0), &node);
+    ASSERT_NE(fs, nullptr);
+    rt.TickAll();
+    EXPECT_EQ(std::get<ScalarValue>(fs->last_value()).v, 0.0);
+    rt.TickAll();
+    EXPECT_EQ(std::get<ScalarValue>(fs->last_value()).v, 1.0);
+}
+
 TEST(ScriptCursor, ClickAndDownUpInside) {
     owe::SceneNode node;
     node.SetTranslate({ 500.0f, 500.0f, 0.0f });
