@@ -645,7 +645,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
     m_cpu_readback = info.output_mode == RenderOutputMode::CpuReadback;
     const char* pipeline = std::getenv("WPE_RENDER_GPU_PIPELINE");
     m_gpu_pipeline = info.gpu_encode.has_value() && !info.gpu_timing &&
-        pipeline && std::string_view(pipeline) == "1";
+        (!pipeline || std::string_view(pipeline) != "0");
     m_prepass->setTransparentBackground(info.layer_selection.enabled &&
                                         info.layer_selection.transparent_background);
     if (info.orthographic_capture_viewport.has_value()) {
@@ -1299,6 +1299,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     const auto cpu_started = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (m_gpu_encoder) read_pixels = false;
     CpuFrameResult frame;
+    frame.gpu_scene_overlap = m_gpu_pipeline;
     frame.gpu_timing_requested = m_gpu_timing_requested;
     frame.gpu_timing_supported = m_gpu_timing_supported;
     frame.timestamp_valid_bits = m_timestamp_valid_bits;

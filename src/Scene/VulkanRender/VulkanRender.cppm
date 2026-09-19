@@ -53,8 +53,8 @@ enum class CpuFrameStatus
     DeviceLost,
 };
 
-// Owns a completed frame. Rows are tightly packed, in Vulkan image row order;
-// format describes the bytes (initially RGBA8 UNORM). No view outlives a map.
+// Owns completed pixels or an explicit GPU submission receipt. Submitted frames
+// contain no CPU pixels or completed GPU timing. No pixel view outlives a map.
 struct CpuFrameResult {
     // Optional host-side spans, only measured with gpu_timing. These are wall
     // times, not GPU timestamps, and distinguish preparation from waits.
@@ -92,6 +92,7 @@ struct CpuFrameResult {
     std::string              gpu_timing_message;
     std::vector<std::uint8_t> pixels;
     bool                     gpu_sampled { false };
+    bool                     gpu_scene_overlap { false };
     std::uint64_t            gpu_readback_frames { 0 };
     std::string              gpu_capture_metadata;
     std::string              sampling_coverage;

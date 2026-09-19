@@ -486,6 +486,7 @@ int Render(const fs::path& job_path) {
             << ",\"gpu_sampled\":" << (gpu_sampled ? "true" : "false")
             << ",\"sampling_coverage\":" << (wallpaper.readback().sampling_coverage.empty() ? "null" : wallpaper.readback().sampling_coverage)
             << ",\"gpu_encoded\":" << (job.gpu_encode ? "true" : "false")
+            << ",\"gpu_scene_overlap\":" << (wallpaper.readback().gpu_scene_overlap ? "true" : "false")
             << ",\"readback_frames\":" << (job.gpu_encode ? wallpaper.readback().gpu_readback_frames : written)
             << ",\"total_readback_frames\":" << (job.gpu_encode ? wallpaper.readback().gpu_readback_frames : readback_frames)
             << ",\"gpu_capture\":" << (wallpaper.readback().gpu_capture_metadata.empty() ? "null" : wallpaper.readback().gpu_capture_metadata)
@@ -781,7 +782,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,selected-draw-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,selected-draw-v1,gpu-scene-overlap-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));
