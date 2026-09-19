@@ -159,6 +159,7 @@ struct Job {
     fs::path source, assets, cache, output;
     uint32_t width{}, height{}, fps_num{}, fps_den{};
     uint32_t sample_width{}, sample_height{};
+    bool collect_sampling_coverage { false };
     uint64_t frames{}, warmup{}, seed{}, readback_budget{};
     uint64_t output_stride { 1 };
     std::optional<uint64_t> output_phase;
@@ -243,6 +244,9 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     if (Field(json, "output_sample_height")) job.sample_height = narrow("output_sample_height", 0, job.height);
     if ((job.sample_width == 0) != (job.sample_height == 0))
         throw std::runtime_error("sample readback requires both output dimensions");
+    job.collect_sampling_coverage=Bool(json,"collect_sampling_coverage",false);
+    if (job.collect_sampling_coverage && !job.sample_width)
+        throw std::runtime_error("sampling coverage requires sampled output dimensions");
     job.fps_num = narrow("fps_num", 60, std::numeric_limits<uint32_t>::max());
     job.fps_den = narrow("fps_den", 1, std::numeric_limits<uint32_t>::max());
     job.frames = Uint(json, "frames", 120);
@@ -460,6 +464,7 @@ int Render(const fs::path& job_path) {
             << ",\"readback_width\":" << wallpaper.readback().width
             << ",\"readback_height\":" << wallpaper.readback().height
             << ",\"gpu_sampled\":" << (wallpaper.readback().gpu_sampled ? "true" : "false")
+            << ",\"sampling_coverage\":" << (wallpaper.readback().sampling_coverage.empty() ? "null" : wallpaper.readback().sampling_coverage)
             << ",\"gpu_encoded\":" << (job.gpu_encode ? "true" : "false")
             << ",\"readback_frames\":" << (job.gpu_encode ? wallpaper.readback().gpu_readback_frames : written)
             << ",\"gpu_capture\":" << (wallpaper.readback().gpu_capture_metadata.empty() ? "null" : wallpaper.readback().gpu_capture_metadata)
@@ -596,6 +601,9 @@ int Render(const fs::path& job_path) {
         info.gpu_timing = job.gpu_timing;
         info.sample_width = job.sample_width;
         info.sample_height = job.sample_height;
+        info.collect_sampling_coverage=job.collect_sampling_coverage;
+        info.sampling_coverage_start=job.warmup;
+        info.sampling_coverage_frames=job.frames;
         info.gpu_encode = job.gpu_encode;
         owe::OfflineOptions offline;
         offline.seed = job.seed;
@@ -605,7 +613,7 @@ int Render(const fs::path& job_path) {
         offline.trace_scene = job.trace_scene;
         offline.readback_stride = job.output_stride;
         offline.readback_phase = job.output_phase;
-        if (Field(json, "output_frame_stride") || job.gpu_encode) offline.readback_start = job.warmup;
+        if (Field(json, "output_frame_stride") || job.gpu_encode || job.collect_sampling_coverage) offline.readback_start = job.warmup;
         offline.video_rate_overrides = job.video_rate_overrides;
         if (!wallpaper.initOffline(std::move(config), std::move(info), offline))
             throw std::runtime_error(wallpaper.offlineError());
@@ -730,7 +738,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

@@ -6,6 +6,7 @@ module;
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <sstream>
 #include <vulkan/vulkan.h>
 #include "GpuVideoEncoder.hpp"
 
@@ -378,6 +379,9 @@ struct VulkanRender::Impl {
     VmaBufferParameters m_cpu_staging;
     std::uint32_t m_readback_width { 0 }, m_readback_height { 0 };
     bool m_sample_readback { false }, m_gpu_samples { false };
+    bool m_sample_coverage_enabled { false };
+    std::uint64_t m_sample_coverage_start {}, m_sample_coverage_frames {}, m_sample_coverage_observed {};
+    VmaBufferParameters m_sample_coverage;
     vvk::ImageView m_sample_view;
     vvk::ShaderModule m_sample_shader;
     vvk::DescriptorSetLayout m_sample_descriptors;
@@ -877,6 +881,10 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
         (queue_properties[usize(m_device->graphics_queue().family_index)].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
         sample_bytes <= m_device->limits().maxStorageBufferRange &&
         cell_pixels * 255 + cell_pixels / 2 <= std::numeric_limits<std::uint32_t>::max();
+    m_sample_coverage_enabled = info.collect_sampling_coverage && m_gpu_samples && info.sampling_coverage_frames != 0;
+    m_sample_coverage_start = info.sampling_coverage_start;
+    m_sample_coverage_frames = info.sampling_coverage_frames;
+    m_sample_coverage_observed = 0;
     constexpr VkFormatFeatureFlags required = VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                                                VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
                                                VK_FORMAT_FEATURE_BLIT_DST_BIT;
@@ -927,10 +935,12 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
     // GPU sampling writes compact packed RGBA words directly to the readback buffer.
     // Unsupported devices keep the full copy and average from the mapped pixels.
     m_cpu_staging.req_size = m_gpu_samples ? sample_bytes : std::uint64_t(extent.width) * extent.height * 4;
+    if (m_sample_coverage_enabled) m_cpu_staging.req_size += 32;
     VkBufferCreateInfo buffer_info {
         .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size        = m_cpu_staging.req_size,
-        .usage       = m_gpu_samples ? VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .usage       = m_gpu_samples ? VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            (m_sample_coverage_enabled ? VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0u) : VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
     VmaAllocationCreateInfo buffer_allocation {};
@@ -939,6 +949,13 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
     buffer_allocation.preferredFlags = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
     VVK_CHECK_BOOL_RE(vvk::CreateBuffer(m_device->vma_allocator(), buffer_info,
                                         buffer_allocation, m_cpu_staging.handle));
+    if (m_sample_coverage_enabled) {
+        buffer_info.size = m_sample_coverage.req_size = 32;
+        buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo statistics_allocation {};
+        statistics_allocation.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+        VVK_CHECK_BOOL_RE(vvk::CreateBuffer(m_device->vma_allocator(),buffer_info,statistics_allocation,m_sample_coverage.handle));
+    }
     return !m_gpu_samples || initSamplePipeline();
 }
 
@@ -947,16 +964,54 @@ bool VulkanRender::Impl::initSamplePipeline() {
 layout(local_size_x=8, local_size_y=8) in;
 layout(binding=0, rgba8) readonly uniform image2D sourceImage;
 layout(binding=1, std430) writeonly buffer Output { uint rgba[]; } samples;
-layout(push_constant) uniform Dimensions { uvec2 sourceSize; uvec2 targetSize; } dims;
+layout(binding=2, std430) buffer Coverage { uint data[8]; } coverage;
+layout(push_constant) uniform Dimensions { uvec2 sourceSize; uvec2 targetSize; uint flags; } dims;
+shared uint groupBounds[8];
 void main() {
     uvec2 p = gl_GlobalInvocationID.xy;
-    if (any(greaterThanEqual(p, dims.targetSize))) return;
+    bool inGrid=all(lessThan(p,dims.targetSize));
+    bool collect=(dims.flags&2u)!=0u;
+    if (collect) {
+        if (gl_LocalInvocationIndex==0u) {
+            groupBounds[0]=dims.sourceSize.x; groupBounds[1]=dims.sourceSize.y;
+            groupBounds[2]=0u; groupBounds[3]=0u; groupBounds[4]=255u; groupBounds[5]=0u;
+            groupBounds[6]=0u; groupBounds[7]=0u;
+        }
+        barrier();
+    }
     uvec2 first = p * dims.sourceSize / dims.targetSize;
     uvec2 last = max(first + 1u, (p + 1u) * dims.sourceSize / dims.targetSize);
     uvec4 total = uvec4(0);
+    uvec4 box=uvec4(dims.sourceSize,0u,0u);
+    uint minA=255u,maxA=0u,content=0u;
+    if (inGrid)
     for (uint y = first.y; y < last.y; ++y)
-        for (uint x = first.x; x < last.x; ++x)
-            total += uvec4(imageLoad(sourceImage, ivec2(x,y)) * 255.0 + 0.5);
+        for (uint x = first.x; x < last.x; ++x) {
+            uvec4 value=uvec4(imageLoad(sourceImage,ivec2(x,y))*255.0+0.5);
+            if ((dims.flags&1u)!=0u) total+=value;
+            if (collect) {
+                minA=min(minA,value.a); maxA=max(maxA,value.a);
+                if (any(notEqual(value,uvec4(0)))) {
+                    box.xy=min(box.xy,uvec2(x,y)); box.zw=max(box.zw,uvec2(x,y)); content=1u;
+                }
+            }
+        }
+    if (collect) {
+        atomicMin(groupBounds[4],minA); atomicMax(groupBounds[5],maxA);
+        if (content!=0u) {
+            atomicMin(groupBounds[0],box.x); atomicMin(groupBounds[1],box.y);
+            atomicMax(groupBounds[2],box.z); atomicMax(groupBounds[3],box.w); atomicOr(groupBounds[7],1u);
+        }
+        barrier();
+        if (gl_LocalInvocationIndex==0u) {
+            atomicMin(coverage.data[4],groupBounds[4]); atomicMax(coverage.data[5],groupBounds[5]);
+            if (groupBounds[7]!=0u) {
+                atomicMin(coverage.data[0],groupBounds[0]); atomicMin(coverage.data[1],groupBounds[1]);
+                atomicMax(coverage.data[2],groupBounds[2]); atomicMax(coverage.data[3],groupBounds[3]); atomicOr(coverage.data[7],1u);
+            }
+        }
+    }
+    if (!inGrid || (dims.flags&1u)==0u) return;
     uint n = (last.x-first.x) * (last.y-first.y);
     uvec4 mean = (total + n/2u) / n;
     samples.rgba[p.y*dims.targetSize.x+p.x] = mean.r | (mean.g<<8u) | (mean.b<<16u) | (mean.a<<24u);
@@ -973,15 +1028,16 @@ void main() {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = *m_cpu_image.handle,
         .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = m_cpu_format,
         .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 } }, m_sample_view));
-    const std::array<VkDescriptorSetLayoutBinding, 2> bindings {{
+    const std::array<VkDescriptorSetLayoutBinding, 3> bindings {{
         { 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
-        { 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr } }};
+        { 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
+        { 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr } }};
     VVK_CHECK_BOOL_RE(device.CreateDescriptorSetLayout(VkDescriptorSetLayoutCreateInfo {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR,
-        .bindingCount = 2, .pBindings = bindings.data() }, m_sample_descriptors));
+        .bindingCount = 3, .pBindings = bindings.data() }, m_sample_descriptors));
     const VkDescriptorSetLayout descriptors = *m_sample_descriptors;
-    const VkPushConstantRange constants { VK_SHADER_STAGE_COMPUTE_BIT, 0, 4 * sizeof(std::uint32_t) };
+    const VkPushConstantRange constants { VK_SHADER_STAGE_COMPUTE_BIT, 0, 5 * sizeof(std::uint32_t) };
     VVK_CHECK_BOOL_RE(device.CreatePipelineLayout(VkPipelineLayoutCreateInfo {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1, .pSetLayouts = &descriptors,
@@ -1055,6 +1111,7 @@ void VulkanRender::Impl::destroy() {
         m_sample_shader = vvk::ShaderModule {};
         m_sample_view = vvk::ImageView {};
         m_cpu_staging.handle = vvk::VmaBuffer {};
+        m_sample_coverage.handle = vvk::VmaBuffer {};
         m_cpu_image.handle = vvk::VmaImage {};
 
         m_device->Destroy();
@@ -1344,7 +1401,10 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         rr.command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestamp_queries.get(), 1);
     // FinPass writes this ordinary image. Make those transfer writes visible
     // to the copy, then make staging writes visible to the host after the fence.
-    const bool compact_readback = read_pixels && m_gpu_samples;
+    const bool coverage_frame=m_sample_coverage_enabled && m_cpu_frame_index>=m_sample_coverage_start &&
+        m_cpu_frame_index-m_sample_coverage_start<m_sample_coverage_frames;
+    const bool coverage_last=coverage_frame && m_cpu_frame_index-m_sample_coverage_start+1==m_sample_coverage_frames;
+    const bool compact_readback=m_gpu_samples && (read_pixels || coverage_frame);
     VkImageMemoryBarrier to_readback {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1370,6 +1430,20 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     // Simulation, draw calls and resource completion still run on every frame.
     // Sparse sampling skips only the device-to-host copy and CPU pixel materialization.
     if (compact_readback) {
+        if (coverage_frame) {
+            const bool first_coverage=m_cpu_frame_index==m_sample_coverage_start;
+            if (first_coverage) {
+                const std::array<std::uint32_t,8> empty {extent.width,extent.height,0,0,255,0,0,0};
+                m_device->handle().Dispatch().vkCmdUpdateBuffer(*rr.command,*m_sample_coverage.handle,0,sizeof(empty),empty.data());
+            }
+            VkBufferMemoryBarrier ready { .sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                .srcAccessMask=first_coverage ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_SHADER_WRITE_BIT,
+                .dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,
+                .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+                .buffer=*m_sample_coverage.handle,.offset=0,.size=32 };
+            rr.command.PipelineBarrier(first_coverage ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,ready);
+        }
         rr.command.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *m_sample_pipeline);
         const VkDescriptorImageInfo image { .imageView = *m_sample_view, .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
         const VkDescriptorBufferInfo buffer { .buffer = *m_cpu_staging.handle, .offset = 0, .range = m_cpu_staging.req_size };
@@ -1381,7 +1455,13 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
             .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &buffer };
         rr.command.PushDescriptorSetKHR(VK_PIPELINE_BIND_POINT_COMPUTE, *m_sample_layout, 0, image_write);
         rr.command.PushDescriptorSetKHR(VK_PIPELINE_BIND_POINT_COMPUTE, *m_sample_layout, 0, buffer_write);
-        const std::array<std::uint32_t, 4> dimensions { extent.width, extent.height, m_readback_width, m_readback_height };
+        const VkDescriptorBufferInfo coverage_buffer { .buffer=m_sample_coverage_enabled ? *m_sample_coverage.handle : *m_cpu_staging.handle,
+            .offset=0,.range=m_sample_coverage_enabled ? 32 : m_cpu_staging.req_size };
+        const VkWriteDescriptorSet coverage_write { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=2,
+            .descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&coverage_buffer };
+        rr.command.PushDescriptorSetKHR(VK_PIPELINE_BIND_POINT_COMPUTE,*m_sample_layout,0,coverage_write);
+        const std::array<std::uint32_t, 5> dimensions { extent.width, extent.height, m_readback_width, m_readback_height,
+            (read_pixels ? 1u : 0u)|(coverage_frame ? 2u : 0u) };
         rr.command.PushConstants(*m_sample_layout, VK_SHADER_STAGE_COMPUTE_BIT, dimensions);
         rr.command.Dispatch((m_readback_width + 7) / 8, (m_readback_height + 7) / 8, 1);
         // Preserve FinPass's existing end-of-frame image layout contract.
@@ -1393,11 +1473,21 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     } else if (read_pixels)
         rr.command.CopyImageToBuffer(*m_cpu_image.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                       *m_cpu_staging.handle, region);
+    if (coverage_last) {
+        VkBufferMemoryBarrier ready { .sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT,.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT,
+            .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+            .buffer=*m_sample_coverage.handle,.offset=0,.size=32 };
+        rr.command.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,ready);
+        const VkBufferCopy copy { .srcOffset=0,.dstOffset=m_cpu_staging.req_size-32,.size=32 };
+        m_device->handle().Dispatch().vkCmdCopyBuffer(*rr.command,*m_sample_coverage.handle,*m_cpu_staging.handle,1,&copy);
+    }
     if (m_timestamp_queries)
         rr.command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestamp_queries.get(), 2);
     VkBufferMemoryBarrier to_host {
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-        .srcAccessMask = compact_readback ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT,
+        .srcAccessMask = (compact_readback ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT) |
+            (coverage_last ? VK_ACCESS_TRANSFER_WRITE_BIT : 0u),
         .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -1405,7 +1495,9 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         .offset = 0,
         .size = m_cpu_staging.req_size,
     };
-    if (read_pixels) rr.command.PipelineBarrier(compact_readback ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
+    if (read_pixels || coverage_last) rr.command.PipelineBarrier(
+                                (compact_readback ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT) |
+                                    (coverage_last ? VK_PIPELINE_STAGE_TRANSFER_BIT : 0u),
                                 VK_PIPELINE_STAGE_HOST_BIT,
                                 0, to_host);
     result = rr.command.End();
@@ -1476,7 +1568,8 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         }
     }
 
-    if (read_pixels) {
+    if (coverage_frame) ++m_sample_coverage_observed;
+    if (read_pixels || coverage_last) {
         void* mapped = nullptr;
         result = m_cpu_staging.handle.MapMemory(&mapped);
         if (result != VK_SUCCESS) return fail(result, "map CPU staging buffer");
@@ -1486,7 +1579,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
             m_cpu_staging.handle.UnMapMemory();
             return fail(result, "invalidate CPU staging buffer");
         }
-        if (m_sample_readback && !m_gpu_samples) {
+        if (read_pixels && m_sample_readback && !m_gpu_samples) {
             // Same integer box mean as the GPU kernel and Baker's existing CPU sampler.
             // This also covers devices without storage-image/compute support.
             const auto* rgba = static_cast<const std::uint8_t*>(mapped);
@@ -1506,7 +1599,21 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
                         frame.pixels[(sy * m_readback_width + sx) * 4 + channel] =
                             static_cast<std::uint8_t>((sum[channel] + count / 2) / count);
                 }
-        } else std::memcpy(frame.pixels.data(), mapped, frame.pixels.size());
+        } else if (read_pixels) std::memcpy(frame.pixels.data(), mapped, frame.pixels.size());
+        if (coverage_last) {
+            std::array<std::uint32_t,8> bounds;
+            std::memcpy(bounds.data(),static_cast<const std::uint8_t*>(mapped)+m_cpu_staging.req_size-32,32);
+            const bool content=bounds[7]!=0;
+            std::ostringstream report;
+            report << "{\"status\":\"complete\",\"first_simulation_frame\":" << m_sample_coverage_start
+                << ",\"frames\":" << m_sample_coverage_observed << ",\"capture_width\":" << extent.width
+                << ",\"capture_height\":" << extent.height << ",\"includes_rgb\":true,\"has_content\":" << (content ? "true" : "false")
+                << ",\"x\":" << (content ? bounds[0] : 0) << ",\"y\":" << (content ? bounds[1] : 0)
+                << ",\"width\":" << (content ? bounds[2]-bounds[0]+1 : 0) << ",\"height\":" << (content ? bounds[3]-bounds[1]+1 : 0)
+                << ",\"minimum_alpha\":" << bounds[4] << ",\"maximum_alpha\":" << bounds[5]
+                << ",\"basis\":\"Every full-resolution output frame reduced on GPU, including frames not selected for sampling.\"}";
+            frame.sampling_coverage=report.str();
+        }
         m_cpu_staging.handle.UnMapMemory();
     }
     frame.video_decoders = rr.resources.ObserveVideoDecoders();

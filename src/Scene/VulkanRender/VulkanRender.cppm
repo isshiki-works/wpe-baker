@@ -90,6 +90,7 @@ struct CpuFrameResult {
     bool                     gpu_sampled { false };
     std::uint64_t            gpu_readback_frames { 0 };
     std::string              gpu_capture_metadata;
+    std::string              sampling_coverage;
     VkResult                 error_code { VK_SUCCESS };
     std::string              message;
 
@@ -167,6 +168,8 @@ struct RenderInitInfo {
     // Optional box-averaged RGBA readback. Rendering keeps the original output extent.
     std::uint32_t    sample_width { 0 };
     std::uint32_t    sample_height { 0 };
+    bool             collect_sampling_coverage { false };
+    std::uint64_t    sampling_coverage_start { 0 }, sampling_coverage_frames { 0 };
     std::optional<GpuEncodeOptions> gpu_encode;
     std::optional<RenderCaptureTarget> capture_target;
     std::optional<OrthographicCaptureViewport> orthographic_capture_viewport;
