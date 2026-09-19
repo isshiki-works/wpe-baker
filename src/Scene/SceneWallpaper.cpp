@@ -240,6 +240,7 @@ public:
     bool initOffline(SceneWallpaperConfig, RenderInitInfo, OfflineOptions);
     bool step(uint64_t, double, const OfflineFrameInput&);
     bool offline() const { return m_offline; }
+    bool profileOfflineFrame() const { return m_offline_profile; }
     const OfflineExecutionContext& offlineContext() const { return m_offline_context; }
     bool readsOfflineFrame(uint64_t index) const { return m_offline_options.readsFrame(index); }
     bool drawsOfflineFrame(uint64_t index) const { return m_offline_options.drawsFrame(index); }
@@ -320,6 +321,7 @@ private:
     std::string m_offline_error;
     OfflineAudioFrame m_audio_frame;
     OfflineOptions m_offline_options;
+    bool m_offline_profile { false };
     RenderLayerSelection m_offline_layers;
 
     SceneWallpaperConfig               m_config;
@@ -617,6 +619,8 @@ void SceneRenderController::on(RenderMsg::Stop_payload&& m) {
 
 void SceneRenderController::onDraw() {
     const bool offline = m_main.offline();
+    const bool profile = offline && m_main.profileOfflineFrame();
+    const auto scene_started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const double delta = offline ? m_step_dt : frame_timer.TargetFrameTime();
     if (!offline) frame_timer.FrameBegin();
     if (m_rg.is_some()) {
@@ -671,11 +675,8 @@ void SceneRenderController::onDraw() {
             m_scene->TickCameraPaths();
             m_scene->TickMaterialShaderAnimations();
             m_scene->TickTransformUpdaters();
-            if (m_scene->ConsumeRenderGraphDirty()) {
-                rebuildRenderGraph(
-                    vulkan::RenderGraphResourceRetention::KeepSceneTextures, false, load_bench);
-            }
         }
+        const auto scene_finished = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         // CPU scripts/audio for the next frame may run while the previous GPU
         // frame is in flight. Drain before any mesh/material/texture mutation.
         if (offline) {
@@ -683,6 +684,10 @@ void SceneRenderController::onDraw() {
                 invalidateOfflineFrame(m_step_index, error);
                 return;
             }
+        }
+        if (m_scene->ConsumeRenderGraphDirty()) {
+            rebuildRenderGraph(
+                vulkan::RenderGraphResourceRetention::KeepSceneTextures, false, load_bench);
         }
         m_scene->Runtime().BeforeRender();
         refreshPreparedRenderTargetDirtyEvents();
@@ -697,6 +702,7 @@ void SceneRenderController::onDraw() {
          * TickSceneScripts (which calls FontFace::Populate) and before
          * drawFrame so newly-rasterised glyphs are visible the same frame. */
         m_render->pumpFontAtlases(*m_scene);
+        const auto resources_finished = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
         (void)first_frame_prepare_span.finish();
         if (offline && !m_main.drawsOfflineFrame(m_step_index)) {
@@ -715,6 +721,10 @@ void SceneRenderController::onDraw() {
         if (offline) {
             if (m_main.offlineContext().failed) return;
             m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_main.readsOfflineFrame(m_step_index));
+            if (profile) {
+                m_cpu_frame.cpu_scene_ms = std::chrono::duration<double,std::milli>(scene_finished-scene_started).count();
+                m_cpu_frame.cpu_resources_ms = std::chrono::duration<double,std::milli>(resources_finished-scene_finished).count();
+            }
             m_cpu_frame.frame_index = m_step_index;
             if (!m_cpu_frame.completed() && !m_cpu_frame.submitted()) return;
             const auto check_started = m_cpu_frame.gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -1675,6 +1685,7 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
         return false;
     }
     m_offline_options = options;
+    m_offline_profile = info.gpu_timing;
     m_offline_layers = info.layer_selection;
     m_offline_context.epoch_ms = options.epoch_ms;
     m_offline_context.trace_scene = options.trace_scene;

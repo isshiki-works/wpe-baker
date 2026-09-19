@@ -59,6 +59,7 @@ struct CpuFrameResult {
     // Optional host-side spans, only measured with gpu_timing. These are wall
     // times, not GPU timestamps, and distinguish preparation from waits.
     std::optional<double>    cpu_prepare_ms, cpu_render_wait_ms, cpu_encode_ms, cpu_pass_check_ms;
+    std::optional<double>    cpu_scene_ms, cpu_resources_ms;
     CpuFrameStatus           status { CpuFrameStatus::NotReady };
     std::uint32_t            width { 0 };
     std::uint32_t            height { 0 };
