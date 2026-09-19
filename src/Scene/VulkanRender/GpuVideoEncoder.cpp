@@ -80,7 +80,6 @@ struct GpuVideoEncoder::Impl {
     std::uint64_t readbacks {}, retained_count {};
     PFN_vkCmdPushDescriptorSetKHR push_descriptors {};
     bool finished {};
-    bool conversion_pending {};
 
     ~Impl() {
         // On cancellation/error, queued codec work must finish before its resources/device disappear.
@@ -217,14 +216,7 @@ struct GpuVideoEncoder::Impl {
         Vk(vkBindBufferMemory(device, buffer, allocation, 0), "bind GPU capture buffer");
     }
 
-    void waitConversion() {
-        if (!conversion_pending) return;
-        Vk(vkWaitForFences(device, 1, &fence, VK_TRUE, timeout_ns), "wait before reusing GPU conversion resources");
-        conversion_pending = false;
-    }
-
     void beginCapture() {
-        waitConversion();
         Vk(vkResetCommandBuffer(command, 0), "reset capture command");
         VkCommandBufferBeginInfo begin { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
@@ -366,7 +358,6 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.codec->hw_frames_ctx = av_buffer_ref(p.frames);
     p.codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     Av(av_opt_set_int(p.codec->priv_data, "qp", qp, 0), "set Vulkan encoder QP");
-    Av(av_opt_set_int(p.codec->priv_data, "async_depth", 4, 0), "set Vulkan encoder queue depth");
     Av(avcodec_open2(p.codec, encoder, nullptr), "open Vulkan encoder");
     if (p.capture.crossfade_frames) {
         p.body_path=path+".body.mp4"; p.head_path=path+".head.mp4";
@@ -543,9 +534,6 @@ GpuVideoEncoder::~GpuVideoEncoder() = default;
 void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
     auto& p = *impl;
     if (p.finished) throw std::runtime_error("GPU encoder already finished");
-    // The next draw shares this graphics queue. By the time it completes the
-    // previous conversion is normally done; only resource reuse needs a host wait.
-    p.waitConversion();
     const auto fade=p.capture.crossfade_frames;
     if (index>=p.capture.encoded_frames+fade) { p.retain(rgba,index); return; }
     const bool cache_head=fade && index<fade;
@@ -685,12 +673,10 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index) {
         const auto submitted = vkQueueSubmit(p.queue, 1, &submit, p.fence);
         vk->unlock_queue(hw, p.family, 0);
         Vk(submitted, "submit GPU conversion");
-        p.conversion_pending = true;
         vkframe->sem_value[0] = after;
         vkframe->layout[0] = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         vkframe->access[0] = VK_ACCESS_TRANSFER_WRITE_BIT;
-        // Publish the timeline dependency to FFmpeg immediately. Its video queue
-        // waits on this value, allowing CPU scene work and encoding to overlap.
+        Vk(vkWaitForFences(p.device, 1, &p.fence, VK_TRUE, timeout_ns), "wait GPU conversion");
     } catch (...) {
         vkframes->unlock_frame(frames, vkframe);
         vkDeviceWaitIdle(p.device);
