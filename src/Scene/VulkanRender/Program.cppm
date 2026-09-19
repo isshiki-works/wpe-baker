@@ -437,6 +437,8 @@ struct RenderProgram {
                                    double effect_render_scale = 1.0,
                                    bool report_effect_scale = false,
                                    bool match_effect_resolution = false) {
+        // Initial target sizing precedes the render snapshot that normally builds this index.
+        if (match_effect_resolution) scene.RebuildResourceIndex();
         auto names = scene.RenderTargetNames();
         std::size_t effect_target_count = 0, scaled_target_count = 0;
         std::uint64_t logical_pixels = 0, physical_pixels = 0;
@@ -556,8 +558,8 @@ struct RenderProgram {
             }
         }
         if (report_effect_scale) {
-            rstd_info("effect_render_scale requested={} eligible_targets={} scaled_targets={} logical_pixels={} physical_pixels={}",
-                      effect_render_scale, effect_target_count, scaled_target_count,
+            rstd_info("effect_render_scale requested={} match_output={} eligible_targets={} scaled_targets={} logical_pixels={} physical_pixels={}",
+                      effect_render_scale, match_effect_resolution, effect_target_count, scaled_target_count,
                       logical_pixels, physical_pixels);
         }
         if (msaa_samples != VK_SAMPLE_COUNT_1_BIT) {
