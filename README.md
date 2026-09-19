@@ -1,10 +1,12 @@
 # WPE Baker
 
+English ｜ [简体中文](README.zh-CN.md)
+
 **Deterministic animation baking for Wallpaper Engine.** The first product built on Periodica.
 
 Your wallpaper renders the same frames forever. WPE Baker models a scene's animation math — shader time, animation tracks, particle cycles, video timebases — retunes the periods within a visible-change budget until the whole scene closes into one loop, and pre-renders the deterministic part into a single video. The output is a standalone Wallpaper Engine project: same look, decoded for almost nothing, no model calls at runtime, no Python.
 
-Website: **https://isshiki-works.github.io/wpe-baker/** · Download: **[Releases](https://github.com/isshiki-works/wpe-baker/releases/latest)** · 中文详细说明：[README.zh-CN.md](docs/README-full.zh-CN.md)
+Website: **https://isshiki-works.github.io/wpe-baker/** · Download: **[Releases](https://github.com/isshiki-works/wpe-baker/releases/latest)** · 中文：[README.zh-CN.md](README.zh-CN.md)
 
 ## Measured
 
@@ -21,13 +23,19 @@ Official Wallpaper Engine player, Intel Arc B390 laptop, A/B/B/A runs, RAPL iGPU
 | Frieren (3426865175) | 10.09 W | 3.50 W | −65.3% |
 | Lost Landscape 3 (3713073223) | 8.11 W | 3.48 W | −57.1% |
 
-At the panel's full refresh rate the gap widens: Atri at 165 Hz draws 26.0 W as the original and 3.9 W baked (package 41.4 W → 15.4 W). Per-title tables for every measured output, including the ones that did not save, are in [the full documentation](docs/README-full.md).
+At the panel's full refresh rate the gap widens: Atri at 165 Hz draws 26.0 W as the original and 3.9 W baked (package 41.4 W → 15.4 W). Per-title tables for every measured output, including the ones that did not save, are in the [technical notes](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.md).
 
 ## Quick start
 
-1. Download `WpeBaker-1.0-win-x64.zip` from Releases and unzip it. No installer.
-2. Run `WpeBaker\WpeBaker.exe`, drag a Scene wallpaper folder from `steamapps\workshop\content\431960\` into the window, choose a preset, click Analyze.
-3. Read the one-line verdict, click Generate, then apply the output from the Wallpaper Engine project list.
+1. Download `WpeBaker-1.0.2-win-x64.zip` from [Releases](https://github.com/isshiki-works/wpe-baker/releases/latest) and unzip the **whole** archive into a folder you can write to (not `C:\Program Files`). No installer.
+2. Run `WpeBaker\WpeBaker.exe`. If Windows SmartScreen appears, choose More info → Run anyway; the build is not code-signed.
+3. Drag a Scene wallpaper folder from `steamapps\workshop\content\431960\` into the window and click Analyze.
+4. Read the verdict and click Start generating. The output appears in Wallpaper Engine's own list.
+
+Two controls:
+
+- **Animation precision**: efficiency (5 %), balanced (3 %, default) or quality (smallest change that closes). If a stricter level does not close, it steps down one level and the verdict names the one used.
+- **Interaction**: keep, fixed view (default) or off; decides what mouse- and audio-driven effects do. Clocks, dates and media text stay live in every mode.
 
 Command line:
 
@@ -43,13 +51,17 @@ wpe-baker.exe bake plan.json --out <output-dir>
 - **Bake** — everything deterministic becomes one video; the output is rendered past its loop point and checked tile by tile against the original's next frame before it is accepted.
 - **Input stays input** — mouse parallax, audio-reactive effects, clocks and interactive panels are treated as input: kept live, fixed, or left out, and always listed before generation.
 
+## Feedback
+
+Issues are welcome in English or Chinese. Attach `plan.json` and `bake.json` from the output folder, your GPU and the Workshop id; that is usually enough to find the cause.
+
 ## Requirements
 
 Windows 10/11, Wallpaper Engine, a GPU for the offline render (any modern iGPU works; a discrete GPU is faster). Playback needs only hardware video decode.
 
 ## Building from source
 
-Full source, third-party notices and build records are in `WpeBaker-1.0-source.zip` on the release page. On GitHub, `scripts/dependency-patches/rstd.patch` is stored as `rstd.patch.xz` (GitHub's 100 MB limit); `scripts/apply-dependency-patches.py` unpacks it automatically. See `REBUILD.md` in the source archive.
+Full source, third-party notices and build records are in `WpeBaker-1.0.2-source.zip` on the release page. On GitHub, `scripts/dependency-patches/rstd.patch` is stored as `rstd.patch.xz` (GitHub's 100 MB limit); `scripts/apply-dependency-patches.py` unpacks it automatically. See `REBUILD.md` in the source archive.
 
 ## Licenses
 
@@ -60,4 +72,5 @@ Tooling: MIT. Offline renderer: GPL-2.0 (derived from open-wallpaper-engine). Th
 Built for the GPT-6 Astra Challenge.
 
 - **GPT-6 Astra (OpenAI Codex)** — the period solver, the Vulkan offline renderer for Wallpaper Engine scenes, the layer allocator, the encoder pipeline with hardware-decode checks, the power-measurement rig, and the 1.0.2 admission check and preset cascade.
+- **hypengw** — vvk, wavsen and rstd, the libraries under the renderer.
 - **isshiki** — direction, product decisions, hardware, testing.

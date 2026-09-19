@@ -1,6 +1,8 @@
-# WPE Baker
+# WPE Baker 技术记录
 
-中文（本文） ｜ [English](README.md)
+中文（本文） ｜ [English](technical-notes.md)
+
+> 这是开发过程中的技术记录，面向想了解实现细节与逐案数据的开发者。使用说明请看[首页 README](../README.zh-CN.md)。
 
 Windows 离线 Scene 壁纸烘焙器。1.0 只面向**重型** Scene 壁纸：渲染负担确实重、且有大量可预计算内容；已经很省的、或者主要靠实时交互的作品按设计跳过。这个目标窄，但并不罕见：本机 113 案全部按原作实测，61 案（54%）核显域功耗 ≥3 W，31 案不到 1 W。C# / WPF 界面和命令行共用一条流程：分析 Scene、生成视频、保留必要实时层，产出独立 Wallpaper Engine 项目。普通用户无需 Python、编译环境或云服务。
 

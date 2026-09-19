@@ -1,6 +1,8 @@
-# WPE Baker
+# WPE Baker — technical notes
 
-English (this page) | [中文](README.zh-CN.md)
+English (this page) | [中文](technical-notes.zh-CN.md)
+
+> Development notes with implementation details and per-title measurements. For usage, see the [README](../README.md).
 
 Offline Scene-wallpaper baker for Wallpaper Engine on Windows.
 
