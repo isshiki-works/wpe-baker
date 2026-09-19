@@ -152,6 +152,7 @@ inline VkShaderStageFlagBits ToVkType(owe::ShaderType s) {
     case ShaderType::VERTEX: return VK_SHADER_STAGE_VERTEX_BIT;
     case ShaderType::FRAGMENT: return VK_SHADER_STAGE_FRAGMENT_BIT;
     case ShaderType::GEOMETRY: return VK_SHADER_STAGE_GEOMETRY_BIT;
+    case ShaderType::COMPUTE: return VK_SHADER_STAGE_COMPUTE_BIT;
     }
     rstd_assert(false);
     return VK_SHADER_STAGE_VERTEX_BIT;
@@ -164,6 +165,7 @@ inline VkShaderStageFlagBits ToVkType(SpvReflectShaderStageFlagBits s) {
     case SPV_REFLECT_SHADER_STAGE_VERTEX_BIT: return VK_SHADER_STAGE_VERTEX_BIT;
     case SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT: return VK_SHADER_STAGE_FRAGMENT_BIT;
     case SPV_REFLECT_SHADER_STAGE_GEOMETRY_BIT: return VK_SHADER_STAGE_GEOMETRY_BIT;
+    case SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT: return VK_SHADER_STAGE_COMPUTE_BIT;
     default: rstd_assert(false); return VK_SHADER_STAGE_VERTEX_BIT;
     }
 }
@@ -173,6 +175,7 @@ inline owe::ShaderType FromSpvStage(SpvReflectShaderStageFlagBits s) {
     case SPV_REFLECT_SHADER_STAGE_VERTEX_BIT: return ShaderType::VERTEX;
     case SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT: return ShaderType::FRAGMENT;
     case SPV_REFLECT_SHADER_STAGE_GEOMETRY_BIT: return ShaderType::GEOMETRY;
+    case SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT: return ShaderType::COMPUTE;
     default: rstd_assert(false); return ShaderType::VERTEX;
     }
 }
@@ -193,6 +196,7 @@ inline EShLanguage ToEShLanguage(owe::ShaderType s) {
     case ShaderType::VERTEX: return EShLangVertex;
     case ShaderType::FRAGMENT: return EShLangFragment;
     case ShaderType::GEOMETRY: return EShLangGeometry;
+    case ShaderType::COMPUTE: return EShLangCompute;
     }
     rstd_assert(false);
     return EShLangVertex;
@@ -226,6 +230,7 @@ inline const char* DefaultEntryName(SourceLang lang, owe::ShaderType s) {
     case ShaderType::VERTEX: return "main_vs";
     case ShaderType::FRAGMENT: return "main_ps";
     case ShaderType::GEOMETRY: return "main_gs";
+    case ShaderType::COMPUTE: return "main_cs";
     }
     return "main";
 }

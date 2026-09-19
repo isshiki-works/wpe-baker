@@ -93,7 +93,8 @@ enum class ShaderType
 {
     VERTEX,
     GEOMETRY,
-    FRAGMENT
+    FRAGMENT,
+    COMPUTE
 };
 
 enum class ShaderScalarKind

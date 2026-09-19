@@ -158,6 +158,7 @@ struct PointerInput {
 struct Job {
     fs::path source, assets, cache, output;
     uint32_t width{}, height{}, fps_num{}, fps_den{};
+    uint32_t sample_width{}, sample_height{};
     uint64_t frames{}, warmup{}, seed{}, readback_budget{};
     uint64_t output_stride { 1 };
     std::optional<uint64_t> output_phase;
@@ -237,6 +238,10 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     };
     job.width = narrow("width", 640, std::numeric_limits<uint16_t>::max());
     job.height = narrow("height", 360, std::numeric_limits<uint16_t>::max());
+    if (Field(json, "output_sample_width")) job.sample_width = narrow("output_sample_width", 0, job.width);
+    if (Field(json, "output_sample_height")) job.sample_height = narrow("output_sample_height", 0, job.height);
+    if ((job.sample_width == 0) != (job.sample_height == 0))
+        throw std::runtime_error("sample readback requires both output dimensions");
     job.fps_num = narrow("fps_num", 60, std::numeric_limits<uint32_t>::max());
     job.fps_den = narrow("fps_den", 1, std::numeric_limits<uint32_t>::max());
     job.frames = Uint(json, "frames", 120);
@@ -408,6 +413,9 @@ int Render(const fs::path& job_path) {
             << ",\"requested_frames\":" << job.frames << ",\"written_frames\":" << written
             << ",\"output_frame_stride\":" << job.output_stride
             << ",\"output_frame_phase\":" << (job.output_phase ? std::to_string(*job.output_phase) : "null")
+            << ",\"readback_width\":" << wallpaper.readback().width
+            << ",\"readback_height\":" << wallpaper.readback().height
+            << ",\"gpu_sampled\":" << (wallpaper.readback().gpu_sampled ? "true" : "false")
             << ",\"warmup_frames\":" << job.warmup << ",\"pixel_format\":\"rgba8\""
             << ",\"renderer_error_count\":" << logger.errors.load();
         const auto& source_script_errors = wallpaper.offlineSourceScriptErrors();
@@ -536,6 +544,8 @@ int Render(const fs::path& job_path) {
         info.layer_selection = job.layer_selection;
         info.uuid = job.device_uuid;
         info.gpu_timing = job.gpu_timing;
+        info.sample_width = job.sample_width;
+        info.sample_height = job.sample_height;
         owe::OfflineOptions offline;
         offline.seed = job.seed;
         offline.epoch_ms = job.epoch_ms;
@@ -574,9 +584,11 @@ int Render(const fs::path& job_path) {
             RequireNoLoggedErrors();
             const auto& pixels = wallpaper.readback();
             const bool read_pixels = offline.readsFrame(frame);
-            if (!pixels.completed() || pixels.frame_index != frame || pixels.width != job.width ||
-                pixels.height != job.height || pixels.row_pitch != job.width * 4 ||
-                pixels.pixels.size() != (read_pixels ? uint64_t(job.width) * job.height * 4 : 0))
+            const uint32_t output_width = job.sample_width ? job.sample_width : job.width;
+            const uint32_t output_height = job.sample_height ? job.sample_height : job.height;
+            if (!pixels.completed() || pixels.frame_index != frame || pixels.width != output_width ||
+                pixels.height != output_height || pixels.row_pitch != output_width * 4 ||
+                pixels.pixels.size() != (read_pixels ? uint64_t(output_width) * output_height * 4 : 0))
                 throw std::runtime_error("completed frame violates shape/index contract");
             const auto& pcm = wallpaper.audioReadback();
             const auto expected_audio_start = AudioBoundary(frame, job.fps_num, job.fps_den);
@@ -666,7 +678,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

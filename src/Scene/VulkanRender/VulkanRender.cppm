@@ -87,6 +87,7 @@ struct CpuFrameResult {
     VkResult                 gpu_timing_error_code { VK_SUCCESS };
     std::string              gpu_timing_message;
     std::vector<std::uint8_t> pixels;
+    bool                     gpu_sampled { false };
     VkResult                 error_code { VK_SUCCESS };
     std::string              message;
 
@@ -147,6 +148,9 @@ struct RenderInitInfo {
     std::uint64_t    max_readback_bytes { 256ull * 1024 * 1024 };
     std::uint64_t    readback_timeout_ns { 10'000'000'000ull };
     bool             gpu_timing { false };
+    // Optional box-averaged RGBA readback. Rendering keeps the original output extent.
+    std::uint32_t    sample_width { 0 };
+    std::uint32_t    sample_height { 0 };
     std::optional<RenderCaptureTarget> capture_target;
     std::optional<OrthographicCaptureViewport> orthographic_capture_viewport;
     RenderLayerSelection layer_selection;
