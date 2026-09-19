@@ -678,7 +678,7 @@ int Render(const fs::path& job_path) {
                     !pixels.pixels.empty() || pixels.gpu_total_ms || pixels.gpu_draw_ms)
                     throw std::runtime_error("skipped draw violates simulation-only contract");
             } else if (!offline.drawsFrame(frame) || step_status != owe::OfflineStepStatus::Drawn ||
-                (!pixels.completed() && !(job.gpu_encode && pixels.submitted())) || pixels.frame_index != frame || pixels.width != output_width ||
+                (!pixels.completed() && !(!read_pixels && frame + 1 < job.warmup + job.frames && pixels.submitted())) || pixels.frame_index != frame || pixels.width != output_width ||
                 pixels.height != output_height || pixels.row_pitch != output_width * 4 ||
                 pixels.pixels.size() != (read_pixels ? uint64_t(output_width) * output_height * 4 : 0)) {
                 throw std::runtime_error("completed frame violates shape/index contract");
@@ -785,7 +785,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,selected-draw-v1,gpu-scene-overlap-v1,gpu-quality-samples-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,selected-draw-v1,gpu-scene-overlap-v1,gpu-quality-samples-v1,gpu-search-overlap-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

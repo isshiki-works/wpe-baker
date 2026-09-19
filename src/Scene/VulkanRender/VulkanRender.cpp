@@ -644,7 +644,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
 
     m_cpu_readback = info.output_mode == RenderOutputMode::CpuReadback;
     const char* pipeline = std::getenv("WPE_RENDER_GPU_PIPELINE");
-    m_gpu_pipeline = info.gpu_encode.has_value() && !info.gpu_timing &&
+    m_gpu_pipeline = m_cpu_readback && (info.gpu_encode || info.collect_sampling_coverage) && !info.gpu_timing &&
         (!pipeline || std::string_view(pipeline) != "0");
     m_prepass->setTransparentBackground(info.layer_selection.enabled &&
                                         info.layer_selection.transparent_background);
@@ -1560,7 +1560,10 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     if (result != VK_SUCCESS) return fail(result, "submit CPU frame");
     auto completion = rr.resources.BeginSubmission(rstd::move(recorded_uploads));
     if (!completion.Valid()) return fail(VK_ERROR_INITIALIZATION_FAILED, "track submitted frame resources");
-    const bool defer_completion = m_gpu_pipeline && m_gpu_encoder;
+    // Sparse-search frames still draw and reduce coverage. Only the frames
+    // that return pixels or the final coverage result need completion here.
+    const bool defer_completion = m_gpu_pipeline && !read_pixels && !coverage_last &&
+        (m_gpu_encoder || m_cpu_frame_index < m_sample_coverage_start + m_sample_coverage_frames);
     if (defer_completion) m_pending_cpu_submission = completion;
     const auto cpu_submitted = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (m_gpu_timing_requested)
