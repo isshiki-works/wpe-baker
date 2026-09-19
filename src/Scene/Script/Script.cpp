@@ -1474,7 +1474,7 @@ globalThis.createScriptProperties = function () {
             const host = _hostValues[d.name];
             // Scalar values need no wrapper resolution or color conversion.
             // Read live on every access so user-property changes still apply.
-            const value = host === null ? undefined : typeof host === 'object' ? unwrapUserProp(host) : host;
+            const value = host !== null && typeof host === 'object' ? unwrapUserProp(host) : host;
             return d.kind === 'Color' ? coerceDescriptorValue(d, value) : value;
           },
         });
