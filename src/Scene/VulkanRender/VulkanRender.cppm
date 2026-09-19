@@ -271,6 +271,7 @@ public:
     void refreshPreparedMesh(Scene&, const RenderSceneSnapshot&, SceneMeshId,
                              PassInvalidationFlags);
     std::vector<PreparedPassDiagnostic> preparedPassDiagnostics() const;
+    std::optional<std::string> firstUnpreparedPass() const;
     // Free buffer generations no longer referenced by prepared work.
     void evictUnusedMeshes();
     void UpdateCameraFillMode(Scene&, owe::FillMode);

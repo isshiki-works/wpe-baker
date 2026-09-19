@@ -612,6 +612,9 @@ void VulkanRender::refreshPreparedMesh(Scene& scene, const RenderSceneSnapshot& 
 std::vector<PreparedPassDiagnostic> VulkanRender::preparedPassDiagnostics() const {
     return pImpl->preparedPassDiagnostics();
 }
+std::optional<std::string> VulkanRender::firstUnpreparedPass() const {
+    return pImpl->m_program.firstUnpreparedPass();
+}
 void VulkanRender::evictUnusedMeshes() {
     if (pImpl->m_inited) pImpl->m_rendering_resources.resources.EvictUnusedBuffers();
 };

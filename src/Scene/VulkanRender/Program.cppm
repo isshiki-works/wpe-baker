@@ -315,6 +315,15 @@ struct RenderProgram {
         return count;
     }
 
+    std::optional<std::string> firstUnpreparedPass() const {
+        for (const auto& record : pass_records) {
+            auto pass = resolve(record);
+            if (!pass || !pass->prepared())
+                return rstd::cppstd::to_string(record.pass_name.as_str());
+        }
+        return std::nullopt;
+    }
+
     std::vector<PreparedPassDiagnostic> diagnostics() const {
         std::vector<PreparedPassDiagnostic> out;
         out.reserve(pass_records.len().to_primitive());

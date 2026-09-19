@@ -710,9 +710,8 @@ void SceneRenderController::onDraw() {
             m_cpu_frame.frame_index = m_step_index;
             if (!m_cpu_frame.completed()) return;
             const auto check_started = m_cpu_frame.gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-            for (const auto& pass : m_render->preparedPassDiagnostics()) {
-                if (pass.prepared) continue;
-                const std::string message = "Offline frame omitted an unprepared render pass: " + pass.pass_name;
+            if (const auto pass = m_render->firstUnpreparedPass()) {
+                const std::string message = "Offline frame omitted an unprepared render pass: " + *pass;
                 if (active_offline_execution) active_offline_execution->diagnose(message, true);
                 invalidateOfflineFrame(m_step_index, message);
                 return;
