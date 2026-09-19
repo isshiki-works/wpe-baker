@@ -1434,7 +1434,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
             const bool first_coverage=m_cpu_frame_index==m_sample_coverage_start;
             if (first_coverage) {
                 const std::array<std::uint32_t,8> empty {extent.width,extent.height,0,0,255,0,0,0};
-                m_device->handle().Dispatch().vkCmdUpdateBuffer(*rr.command,*m_sample_coverage.handle,0,sizeof(empty),empty.data());
+                vkCmdUpdateBuffer(*rr.command,*m_sample_coverage.handle,0,sizeof(empty),empty.data());
             }
             VkBufferMemoryBarrier ready { .sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
                 .srcAccessMask=first_coverage ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_SHADER_WRITE_BIT,
