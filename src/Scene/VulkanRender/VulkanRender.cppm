@@ -212,7 +212,7 @@ public:
 
     // Synchronous backpressure: one submission, one fenced readback, no drops.
     // A timeout/device error poisons this renderer; destroy it before retrying.
-    CpuFrameResult drawFrameCpu(Scene&);
+    CpuFrameResult drawFrameCpu(Scene&, bool read_pixels = true);
 
     // Hand a consumed frame's pixel buffer back so the next drawFrameCpu
     // reuses its allocation. Without this every frame allocates and

@@ -159,6 +159,8 @@ struct Job {
     fs::path source, assets, cache, output;
     uint32_t width{}, height{}, fps_num{}, fps_den{};
     uint64_t frames{}, warmup{}, seed{}, readback_budget{};
+    uint64_t output_stride { 1 };
+    std::optional<uint64_t> output_phase;
     double epoch_ms{};
     bool raw_stdout{}, validation{}, gpu_timing{}, trace_scene{};
     owe::OfflineFrameInput input;
@@ -239,6 +241,10 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     job.fps_den = narrow("fps_den", 1, std::numeric_limits<uint32_t>::max());
     job.frames = Uint(json, "frames", 120);
     job.warmup = Uint(json, "warmup_frames", 0);
+    job.output_stride = Uint(json, "output_frame_stride", 1);
+    if (Field(json, "output_frame_phase")) job.output_phase = Uint(json, "output_frame_phase", 0);
+    if (job.output_stride == 0 || (job.output_phase && *job.output_phase >= job.output_stride))
+        throw std::runtime_error("invalid output frame stride or phase");
     job.seed = Uint(json, "seed", 0);
     job.epoch_ms = Number(json, "epoch_ms", 946684800000.0);
     job.readback_budget = Uint(json, "max_readback_bytes", 256ull * 1024 * 1024);
@@ -400,6 +406,8 @@ int Render(const fs::path& job_path) {
             << ",\"width\":" << job.width << ",\"height\":" << job.height
             << ",\"fps_num\":" << job.fps_num << ",\"fps_den\":" << job.fps_den
             << ",\"requested_frames\":" << job.frames << ",\"written_frames\":" << written
+            << ",\"output_frame_stride\":" << job.output_stride
+            << ",\"output_frame_phase\":" << (job.output_phase ? std::to_string(*job.output_phase) : "null")
             << ",\"warmup_frames\":" << job.warmup << ",\"pixel_format\":\"rgba8\""
             << ",\"renderer_error_count\":" << logger.errors.load();
         const auto& source_script_errors = wallpaper.offlineSourceScriptErrors();
@@ -534,6 +542,9 @@ int Render(const fs::path& job_path) {
         offline.fps_num = job.fps_num;
         offline.fps_den = job.fps_den;
         offline.trace_scene = job.trace_scene;
+        offline.readback_stride = job.output_stride;
+        offline.readback_phase = job.output_phase;
+        if (Field(json, "output_frame_stride")) offline.readback_start = job.warmup;
         offline.video_rate_overrides = job.video_rate_overrides;
         if (!wallpaper.initOffline(std::move(config), std::move(info), offline))
             throw std::runtime_error(wallpaper.offlineError());
@@ -562,9 +573,10 @@ int Render(const fs::path& job_path) {
             const double step_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frame_start).count();
             RequireNoLoggedErrors();
             const auto& pixels = wallpaper.readback();
+            const bool read_pixels = offline.readsFrame(frame);
             if (!pixels.completed() || pixels.frame_index != frame || pixels.width != job.width ||
                 pixels.height != job.height || pixels.row_pitch != job.width * 4 ||
-                pixels.pixels.size() != uint64_t(job.width) * job.height * 4)
+                pixels.pixels.size() != (read_pixels ? uint64_t(job.width) * job.height * 4 : 0))
                 throw std::runtime_error("completed frame violates shape/index contract");
             const auto& pcm = wallpaper.audioReadback();
             const auto expected_audio_start = AudioBoundary(frame, job.fps_num, job.fps_den);
@@ -579,6 +591,7 @@ int Render(const fs::path& job_path) {
             audio.write(reinterpret_cast<const char*>(pcm.samples.data()), static_cast<std::streamsize>(pcm.samples.size() * sizeof(float)));
             if (!audio) throw std::runtime_error("audio stream write failed");
             audio_written += pcm.frame_count;
+            if (!read_pixels) continue;
             if (job.raw_stdout) {
                 if (std::fwrite(pixels.pixels.data(), 1, pixels.pixels.size(), stdout) != pixels.pixels.size())
                     throw std::runtime_error("frame consumer closed or failed");
@@ -586,8 +599,8 @@ int Render(const fs::path& job_path) {
                 raw.write(reinterpret_cast<const char*>(pixels.pixels.data()), static_cast<std::streamsize>(pixels.pixels.size()));
                 if (!raw) throw std::runtime_error("raw frame write failed");
             }
-            index << "{\"frame\":" << written << ",\"simulation_frame\":" << frame
-                  << ",\"pts_num\":" << written * job.fps_den << ",\"pts_den\":" << job.fps_num
+            index << "{\"frame\":" << (frame - job.warmup) << ",\"simulation_frame\":" << frame
+                  << ",\"pts_num\":" << (frame - job.warmup) * job.fps_den << ",\"pts_den\":" << job.fps_num
                   << ",\"step_ms\":" << step_ms
                   << ",\"gpu_total_ms\":" << OptionalReal(pixels.gpu_total_ms)
                   << ",\"gpu_draw_ms\":" << OptionalReal(pixels.gpu_draw_ms)
@@ -652,7 +665,8 @@ int main(int argc, char** argv) {
     try {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
-            std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST << '\n';
+            std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
+                      << " features=sparse-readback-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

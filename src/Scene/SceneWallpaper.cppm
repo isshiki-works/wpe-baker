@@ -77,6 +77,14 @@ struct OfflineOptions {
     uint32_t fps_num { 0 }; // both zero: use step(dt); otherwise exact rational FPS
     uint32_t fps_den { 0 };
     bool trace_scene { false };
+    uint64_t readback_start { 0 };
+    uint64_t readback_stride { 1 };
+    std::optional<uint64_t> readback_phase;
+    bool readsFrame(uint64_t index) const {
+        if (index < readback_start || readback_stride == 0) return false;
+        const uint64_t phase = (index - readback_start) % readback_stride;
+        return phase == 0 || (readback_phase && phase == *readback_phase);
+    }
     std::vector<OfflineVideoPlaybackRateOverride> video_rate_overrides;
 };
 

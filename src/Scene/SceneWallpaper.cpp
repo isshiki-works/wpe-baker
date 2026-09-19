@@ -240,6 +240,7 @@ public:
     bool step(uint64_t, double, const OfflineFrameInput&);
     bool offline() const { return m_offline; }
     const OfflineExecutionContext& offlineContext() const { return m_offline_context; }
+    bool readsOfflineFrame(uint64_t index) const { return m_offline_options.readsFrame(index); }
     std::string offlineError() const { return m_offline_error; }
     std::string offlineVideoRateOverrides() const {
         std::string out { "[" };
@@ -690,7 +691,7 @@ void SceneRenderController::onDraw() {
                        : rstd::bench::probe::SpanGuard {};
         if (offline) {
             if (m_main.offlineContext().failed) return;
-            m_cpu_frame = m_render->drawFrameCpu(*m_scene);
+            m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_main.readsOfflineFrame(m_step_index));
             m_cpu_frame.frame_index = m_step_index;
             if (!m_cpu_frame.completed()) return;
             for (const auto& pass : m_render->preparedPassDiagnostics()) {
@@ -1628,6 +1629,11 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
                                          OfflineOptions options) {
     if (m_inited || m_offline) { m_offline_error = "Offline mode requires a fresh SceneWallpaper"; return false; }
     m_offline = true;
+    if (options.readback_stride == 0 ||
+        (options.readback_phase && *options.readback_phase >= options.readback_stride)) {
+        m_offline_error = "Invalid offline readback stride or phase";
+        return false;
+    }
     if (!std::isfinite(options.epoch_ms) || !std::isfinite(config.speed) || config.speed <= 0.0f) {
         m_offline_error = "Invalid offline epoch or playback speed";
         return false;

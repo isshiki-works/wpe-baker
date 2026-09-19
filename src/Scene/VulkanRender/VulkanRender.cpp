@@ -302,7 +302,7 @@ struct VulkanRender::Impl {
     void destroy();
 
     void drawFrame(Scene&);
-    CpuFrameResult drawFrameCpu(Scene&);
+    CpuFrameResult drawFrameCpu(Scene&, bool read_pixels);
     void recycleCpuPixels(std::vector<std::uint8_t>&&);
     bool initCpuReadback(const RenderInitInfo&);
     void initGpuTiming(const RenderInitInfo&);
@@ -530,8 +530,8 @@ bool VulkanRender::init(RenderInitInfo info, SceneLoadBenchRecorderView load_ben
 }
 void VulkanRender::destroy() { pImpl->destroy(); }
 void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
-owe::CpuFrameResult VulkanRender::drawFrameCpu(Scene& scene) {
-    return pImpl->drawFrameCpu(scene);
+owe::CpuFrameResult VulkanRender::drawFrameCpu(Scene& scene, bool read_pixels) {
+    return pImpl->drawFrameCpu(scene, read_pixels);
 }
 void VulkanRender::recycleCpuPixels(std::vector<std::uint8_t>&& buffer) {
     pImpl->recycleCpuPixels(rstd::move(buffer));
@@ -1078,7 +1078,7 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
     if (m_redraw_cb) m_redraw_cb();
 }
 
-owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene) {
+owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pixels) {
     CpuFrameResult frame;
     frame.gpu_timing_requested = m_gpu_timing_requested;
     frame.gpu_timing_supported = m_gpu_timing_supported;
@@ -1159,11 +1159,13 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene) {
     }
     // Take the recycled buffer: when it already holds a full frame the resize
     // below is a no-op, so no allocation and no zero fill precede the copy.
-    frame.pixels = rstd::move(m_cpu_pixels_pool);
-    try {
-        frame.pixels.resize(static_cast<std::size_t>(m_cpu_staging.req_size));
-    } catch (const std::bad_alloc&) {
-        return fail(VK_ERROR_OUT_OF_HOST_MEMORY, "allocate CPU frame pixels");
+    if (read_pixels) {
+        frame.pixels = rstd::move(m_cpu_pixels_pool);
+        try {
+            frame.pixels.resize(static_cast<std::size_t>(m_cpu_staging.req_size));
+        } catch (const std::bad_alloc&) {
+            return fail(VK_ERROR_OUT_OF_HOST_MEMORY, "allocate CPU frame pixels");
+        }
     }
 
     auto& rr = m_rendering_resources;
@@ -1242,8 +1244,11 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene) {
         .imageOffset = { 0, 0, 0 },
         .imageExtent = { extent.width, extent.height, 1 },
     };
-    rr.command.CopyImageToBuffer(*m_cpu_image.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                  *m_cpu_staging.handle, region);
+    // Simulation, draw calls and resource completion still run on every frame.
+    // Sparse sampling skips only the device-to-host copy and CPU pixel materialization.
+    if (read_pixels)
+        rr.command.CopyImageToBuffer(*m_cpu_image.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                      *m_cpu_staging.handle, region);
     if (m_timestamp_queries)
         rr.command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestamp_queries.get(), 2);
     VkBufferMemoryBarrier to_host {
@@ -1307,17 +1312,19 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene) {
     }
     ReleaseCompletedRetiredResources(*m_device, rr);
 
-    void* mapped = nullptr;
-    result = m_cpu_staging.handle.MapMemory(&mapped);
-    if (result != VK_SUCCESS) return fail(result, "map CPU staging buffer");
-    result = vmaInvalidateAllocation(m_device->vma_allocator(),
-                                      m_cpu_staging.handle.Allocation(), 0, VK_WHOLE_SIZE);
-    if (result != VK_SUCCESS) {
+    if (read_pixels) {
+        void* mapped = nullptr;
+        result = m_cpu_staging.handle.MapMemory(&mapped);
+        if (result != VK_SUCCESS) return fail(result, "map CPU staging buffer");
+        result = vmaInvalidateAllocation(m_device->vma_allocator(),
+                                          m_cpu_staging.handle.Allocation(), 0, VK_WHOLE_SIZE);
+        if (result != VK_SUCCESS) {
+            m_cpu_staging.handle.UnMapMemory();
+            return fail(result, "invalidate CPU staging buffer");
+        }
+        std::memcpy(frame.pixels.data(), mapped, frame.pixels.size());
         m_cpu_staging.handle.UnMapMemory();
-        return fail(result, "invalidate CPU staging buffer");
     }
-    std::memcpy(frame.pixels.data(), mapped, frame.pixels.size());
-    m_cpu_staging.handle.UnMapMemory();
     frame.video_decoders = rr.resources.ObserveVideoDecoders();
     frame.status = CpuFrameStatus::Completed;
     ++m_cpu_frame_index;
