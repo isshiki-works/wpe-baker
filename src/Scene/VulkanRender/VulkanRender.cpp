@@ -4,6 +4,7 @@ module;
 #include "vvk/macros.hpp"
 
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
@@ -1265,6 +1266,7 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
 }
 
 owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pixels) {
+    const auto cpu_started = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (m_gpu_encoder) read_pixels = false;
     CpuFrameResult frame;
     frame.gpu_timing_requested = m_gpu_timing_requested;
@@ -1523,7 +1525,12 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     result = m_device->graphics_queue().handle.Submit(submit, *rr.fence_frame);
     if (result != VK_SUCCESS) return fail(result, "submit CPU frame");
     auto completion = rr.resources.BeginSubmission(rstd::move(recorded_uploads));
+    const auto cpu_submitted = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (m_gpu_timing_requested)
+        frame.cpu_prepare_ms = std::chrono::duration<double,std::milli>(cpu_submitted-cpu_started).count();
     result = rr.fence_frame.Wait(m_readback_timeout_ns);
+    if (m_gpu_timing_requested)
+        frame.cpu_render_wait_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpu_submitted).count();
     // Do not reset/reuse buffers after a timeout: the submission can still be
     // in flight. The failed renderer retains its resources until destruction.
     if (result != VK_SUCCESS) return fail(result, "wait for CPU frame fence");
@@ -1560,6 +1567,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     ReleaseCompletedRetiredResources(*m_device, rr);
 
     if (m_gpu_encoder && m_cpu_frame_index >= m_encode_options->first_frame) {
+        const auto encode_started = m_gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         const auto index = m_cpu_frame_index - m_encode_options->first_frame;
         if (index < m_encode_options->frames) {
             try {
@@ -1573,6 +1581,8 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
                 return fail(VK_ERROR_INITIALIZATION_FAILED, error.what());
             }
         }
+        if (m_gpu_timing_requested)
+            frame.cpu_encode_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-encode_started).count();
     }
 
     if (coverage_frame) ++m_sample_coverage_observed;

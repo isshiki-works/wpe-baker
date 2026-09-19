@@ -1,6 +1,7 @@
 module;
 
 #include <random>
+#include <chrono>
 #include <rstd/enum.hpp>
 
 module wescene.scene_wallpaper;
@@ -708,6 +709,7 @@ void SceneRenderController::onDraw() {
             m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_main.readsOfflineFrame(m_step_index));
             m_cpu_frame.frame_index = m_step_index;
             if (!m_cpu_frame.completed()) return;
+            const auto check_started = m_cpu_frame.gpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             for (const auto& pass : m_render->preparedPassDiagnostics()) {
                 if (pass.prepared) continue;
                 const std::string message = "Offline frame omitted an unprepared render pass: " + pass.pass_name;
@@ -715,6 +717,8 @@ void SceneRenderController::onDraw() {
                 invalidateOfflineFrame(m_step_index, message);
                 return;
             }
+            if (m_cpu_frame.gpu_timing_requested)
+                m_cpu_frame.cpu_pass_check_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-check_started).count();
             m_offline_step_status = OfflineStepStatus::Drawn;
         } else m_render->drawFrame(*m_scene);
         (void)first_draw_span.finish();

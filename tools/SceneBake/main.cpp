@@ -713,6 +713,10 @@ int Render(const fs::path& job_path) {
                   << ",\"step_ms\":" << step_ms
                   << ",\"gpu_total_ms\":" << OptionalReal(pixels.gpu_total_ms)
                   << ",\"gpu_draw_ms\":" << OptionalReal(pixels.gpu_draw_ms)
+                  << ",\"cpu_prepare_ms\":" << OptionalReal(pixels.cpu_prepare_ms)
+                  << ",\"cpu_render_wait_ms\":" << OptionalReal(pixels.cpu_render_wait_ms)
+                  << ",\"cpu_encode_ms\":" << OptionalReal(pixels.cpu_encode_ms)
+                  << ",\"cpu_pass_check_ms\":" << OptionalReal(pixels.cpu_pass_check_ms)
                   << ",\"render_ms\":" << std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frame_start).count()
                   << "}\n";
             if (!index) throw std::runtime_error("frame index write failed");
