@@ -671,7 +671,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                 .width                = effect_extent[usize()],
                 .height               = effect_extent[usize(1)],
                 .effect_scale_eligible = scale_image_effect_targets,
-                .effect_scale_owner = Some(image_node_id),
+                .effect_scale_owner = Some(SceneNodeId(image_node_id)),
                 .effect_scale_static_transform = static_effect_transform,
                 .allowReuse           = true,
                 .force_clear          = ! wpimgobj.fullscreen && ! wpimgobj.composite_layer,
@@ -766,7 +766,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                             SceneRenderTarget { .width                 = fbo_size[usize()],
                                                 .height                = fbo_size[usize(1)],
                                                 .effect_scale_eligible = scale_image_effect_targets,
-                                                .effect_scale_owner = Some(image_node_id),
+                                                .effect_scale_owner = Some(SceneNodeId(image_node_id)),
                                                 .effect_scale_static_transform = static_effect_transform,
                                                 .allowReuse            = ! wpfbo.unique });
                     }
