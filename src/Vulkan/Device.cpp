@@ -2,6 +2,7 @@ module;
 
 #include <rstd/macro.hpp>
 #include <type_traits>
+#include <vulkan/vulkan.h>
 
 #include "vvk/macros.hpp"
 
