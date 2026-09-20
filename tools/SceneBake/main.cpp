@@ -276,9 +276,8 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
         options.packed_alpha = Bool(*encode, "packed_alpha", false);
         auto qp = Uint(*encode, "qp", 18);
         if (qp > 51 || job.sample_width || job.raw_stdout || job.output_stride != 1 || job.output_phase ||
-            (job.width & 1) || (job.height & 1) ||
             (options.codec != "h264_vulkan" && options.codec != "hevc_vulkan"))
-            throw std::runtime_error("GPU encoding requires even full frames, Vulkan H.264/HEVC and QP 0..51");
+            throw std::runtime_error("GPU encoding requires full frames, Vulkan H.264/HEVC and QP 0..51");
         options.qp = static_cast<int>(qp);
         options.fps_num = job.fps_num; options.fps_den = job.fps_den;
         options.first_frame = job.warmup; options.frames = job.frames;
@@ -295,10 +294,19 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
         const auto crop_x=Uint(*encode,"crop_x",0), crop_y=Uint(*encode,"crop_y",0);
         const auto crop_width=Uint(*encode,"crop_width",job.width), crop_height=Uint(*encode,"crop_height",job.height);
         if (!crop_width || !crop_height || crop_x>job.width || crop_y>job.height ||
-            crop_width>job.width-crop_x || crop_height>job.height-crop_y || ((crop_x|crop_y|crop_width|crop_height)&1u))
-            throw std::runtime_error("GPU crop must fit the capture at even coordinates and dimensions");
+            crop_width>job.width-crop_x || crop_height>job.height-crop_y)
+            throw std::runtime_error("GPU crop must fit the capture");
+        const auto resize_width=Uint(*encode,"resize_width",0), resize_height=Uint(*encode,"resize_height",0);
+        if ((resize_width==0)!=(resize_height==0) || resize_width>crop_width || resize_height>crop_height ||
+            ((resize_width|resize_height)&1u))
+            throw std::runtime_error("GPU resize requires paired even dimensions no larger than the crop");
+        const bool resize=resize_width && (resize_width!=crop_width || resize_height!=crop_height);
+        if (!resize && ((crop_x|crop_y|crop_width|crop_height)&1u))
+            throw std::runtime_error("GPU encoding without resize requires even crop dimensions and coordinates");
+        if (resize && crossfade) throw std::runtime_error("GPU resize cannot be combined with loop crossfade");
         options.crop_x=static_cast<uint32_t>(crop_x); options.crop_y=static_cast<uint32_t>(crop_y);
         options.crop_width=static_cast<uint32_t>(crop_width); options.crop_height=static_cast<uint32_t>(crop_height);
+        options.resize_width=static_cast<uint32_t>(resize_width); options.resize_height=static_cast<uint32_t>(resize_height);
         options.collect_bounds = Bool(*encode, "collect_bounds", false);
         options.bounds_include_rgb = Bool(*encode, "bounds_include_rgb", false);
         if (auto* retained = Field(*encode, "retain_frames")) {
@@ -800,7 +808,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,selected-draw-v1,gpu-scene-overlap-v1,gpu-quality-samples-v1,gpu-search-overlap-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,selected-draw-v1,gpu-scene-overlap-v1,gpu-quality-samples-v1,gpu-search-overlap-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

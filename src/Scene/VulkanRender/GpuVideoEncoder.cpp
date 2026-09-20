@@ -68,6 +68,12 @@ struct GpuVideoEncoder::Impl {
     VkPipeline pipeline {};
     VkImage source_image {};
     VkImageView source_view {};
+    VkShaderModule resize_shader {};
+    VkPipeline resize_pipeline {};
+    VkImage horizontal_image {}, resized_image {};
+    VkImageView horizontal_view {}, resized_view {};
+    VkDeviceMemory horizontal_memory {}, resized_memory {};
+    bool resizing {};
     GpuCaptureOptions capture;
     std::filesystem::path directory;
     std::ofstream retained;
@@ -98,6 +104,14 @@ struct GpuVideoEncoder::Impl {
         if (mux) { if (mux->pb) avio_closep(&mux->pb); avformat_free_context(mux); }
         if (head_mux) { if (head_mux->pb) avio_closep(&head_mux->pb); avformat_free_context(head_mux); }
         if (pipeline) vkDestroyPipeline(device, pipeline, nullptr);
+        if (resize_pipeline) vkDestroyPipeline(device, resize_pipeline, nullptr);
+        if (resize_shader) vkDestroyShaderModule(device, resize_shader, nullptr);
+        if (horizontal_view) vkDestroyImageView(device, horizontal_view, nullptr);
+        if (horizontal_image) vkDestroyImage(device, horizontal_image, nullptr);
+        if (horizontal_memory) vkFreeMemory(device, horizontal_memory, nullptr);
+        if (resized_view) vkDestroyImageView(device, resized_view, nullptr);
+        if (resized_image) vkDestroyImage(device, resized_image, nullptr);
+        if (resized_memory) vkFreeMemory(device, resized_memory, nullptr);
         if (source_view) vkDestroyImageView(device, source_view, nullptr);
         if (first_view) vkDestroyImageView(device, first_view, nullptr);
         if (first_image) vkDestroyImage(device, first_image, nullptr);
@@ -222,6 +236,27 @@ struct GpuVideoEncoder::Impl {
         Vk(vkBindBufferMemory(device, buffer, allocation, 0), "bind GPU capture buffer");
     }
 
+    void makeResizeImage(std::uint32_t image_width, std::uint32_t image_height, VkFormat format,
+                         VkImage& image, VkImageView& view, VkDeviceMemory& allocation) {
+        VkFormatProperties properties;
+        vkGetPhysicalDeviceFormatProperties(gpu, format, &properties);
+        if (!(properties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT))
+            throw std::runtime_error("GPU Lanczos resize requires storage images in RGBA32F and RGBA8");
+        VkImageCreateInfo info { .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
+            .format = format, .extent = {image_width,image_height,1}, .mipLevels = 1, .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_STORAGE_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE };
+        Vk(vkCreateImage(device, &info, nullptr, &image), "create GPU resize image");
+        VkMemoryRequirements requirements;
+        vkGetImageMemoryRequirements(device, image, &requirements);
+        allocation = allocate(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        Vk(vkBindImageMemory(device, image, allocation, 0), "bind GPU resize image");
+        VkImageViewCreateInfo view_info { .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = format,
+            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1} };
+        Vk(vkCreateImageView(device, &view_info, nullptr, &view), "view GPU resize image");
+    }
+
     void waitConversion() {
         if (!conversion_pending) return;
         Vk(vkWaitForFences(device, 1, &fence, VK_TRUE, timeout_ns), "wait before reusing GPU conversion resources");
@@ -296,12 +331,27 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.device = device; p.gpu = gpu; p.family = graphics_family;
     p.width = width; p.height = height;
     p.capture = std::move(capture);
-    p.color_width = p.capture.crop_width ? p.capture.crop_width : width;
-    p.output_height = p.capture.crop_height ? p.capture.crop_height : height;
-    if (!p.color_width || !p.output_height || ((p.capture.crop_x|p.capture.crop_y|p.color_width|p.output_height)&1u) ||
-        std::uint64_t(p.capture.crop_x)+p.color_width>width || std::uint64_t(p.capture.crop_y)+p.output_height>height ||
+    p.capture.crop_width = p.capture.crop_width ? p.capture.crop_width : width;
+    p.capture.crop_height = p.capture.crop_height ? p.capture.crop_height : height;
+    if (!p.capture.crop_width || !p.capture.crop_height ||
+        std::uint64_t(p.capture.crop_x)+p.capture.crop_width>width ||
+        std::uint64_t(p.capture.crop_y)+p.capture.crop_height>height ||
         p.capture.crossfade_frames>=p.capture.encoded_frames || p.capture.crossfade_frames>UINT32_MAX/255u-1u)
         throw std::runtime_error("GPU crop or loop crossfade lies outside its captured interval");
+    if ((p.capture.resize_width==0)!=(p.capture.resize_height==0) ||
+        p.capture.resize_width>p.capture.crop_width || p.capture.resize_height>p.capture.crop_height ||
+        ((p.capture.resize_width|p.capture.resize_height)&1u))
+        throw std::runtime_error("GPU resize requires paired even dimensions no larger than the crop");
+    p.resizing = p.capture.resize_width &&
+        (p.capture.resize_width!=p.capture.crop_width || p.capture.resize_height!=p.capture.crop_height);
+    if (!p.resizing && ((p.capture.crop_x|p.capture.crop_y|p.capture.crop_width|p.capture.crop_height)&1u))
+        throw std::runtime_error("GPU encoding without resize requires even crop coordinates and dimensions");
+    if (p.resizing && p.capture.crossfade_frames)
+        throw std::runtime_error("GPU resize cannot be combined with loop crossfade");
+    p.color_width = p.resizing ? p.capture.resize_width : p.capture.crop_width;
+    p.output_height = p.resizing ? p.capture.resize_height : p.capture.crop_height;
+    if (p.color_width>std::uint32_t(INT32_MAX)/(packed_alpha ? 2u : 1u) || p.output_height>INT32_MAX)
+        throw std::runtime_error("GPU encoder dimensions exceed the codec range");
     p.output_width = p.color_width * (packed_alpha ? 2 : 1);
     p.stride = (p.output_width + 3u) & ~3u;
     p.directory = std::filesystem::u8path(path).parent_path();
@@ -310,10 +360,10 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
         !std::is_sorted(p.capture.retain_frames.begin(), p.capture.retain_frames.end()) ||
         std::adjacent_find(p.capture.retain_frames.begin(), p.capture.retain_frames.end()) != p.capture.retain_frames.end())
         throw std::runtime_error("Invalid GPU capture frame selection");
-    if (!width || !height || (width & 1) || (height & 1) || !fps_num || !fps_den ||
+    if (!width || !height || !fps_num || !fps_den ||
         fps_num > INT32_MAX || fps_den > INT32_MAX || qp < 0 || qp > 51 ||
         (codec_name != "h264_vulkan" && codec_name != "hevc_vulkan"))
-        throw std::runtime_error("GPU encoding requires even dimensions, a rational FPS and Vulkan H.264/HEVC");
+        throw std::runtime_error("GPU encoding requires positive capture dimensions, a rational FPS and Vulkan H.264/HEVC");
     vkGetDeviceQueue(device, graphics_family, 0, &p.queue);
     p.push_descriptors = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR"));
     if (!p.push_descriptors) throw std::runtime_error("GPU conversion requires push descriptors");
@@ -395,7 +445,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.frame = av_frame_alloc(); p.packet = av_packet_alloc();
     if (!p.frame || !p.packet) throw std::bad_alloc();
 
-    p.makeBuffer(std::uint64_t(p.stride) * p.output_height * 3 / 2,
+    p.makeBuffer(std::max<std::uint64_t>(32,std::uint64_t(p.stride) * p.output_height * 3 / 2),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, p.nv12, p.memory);
     if (p.capture.collect_bounds || !p.capture.retain_frames.empty() || p.capture.retain_loop_window) {
@@ -430,6 +480,12 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
             .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1} };
         Vk(vkCreateImageView(device, &view, nullptr, &p.first_view), "view GPU first-frame reference");
     }
+    if (p.resizing) {
+        p.makeResizeImage(p.color_width,p.capture.crop_height,VK_FORMAT_R32G32B32A32_SFLOAT,
+            p.horizontal_image,p.horizontal_view,p.horizontal_memory);
+        p.makeResizeImage(p.color_width,p.output_height,VK_FORMAT_R8G8B8A8_UNORM,
+            p.resized_image,p.resized_view,p.resized_memory);
+    }
 
     const ShaderCompUnit unit { ShaderType::COMPUTE, R"glsl(#version 450
 layout(local_size_x=8, local_size_y=8) in;
@@ -438,6 +494,7 @@ layout(binding=1, std430) writeonly buffer Output { uint words[]; } outputData;
 layout(binding=2, rgba8) readonly uniform image2D firstImage;
 layout(binding=3, std430) buffer Statistics { uint data[8]; } stats;
 layout(binding=4, std430) buffer LoopHead { uint rgba[]; } loopHead;
+layout(binding=6, rgba8) readonly uniform image2D resizedImage;
 layout(push_constant) uniform Dimensions {
     uint width; uint height; uint colorWidth; uint outputHeight; uint outputWidth; uint stride;
     uint cropX; uint cropY; uint flags; uint blendNumerator; uint blendDenominator;
@@ -446,7 +503,8 @@ shared uint blockStats[8];
 shared uint compareFirst;
 vec3 rgb(uint x, uint y) {
     uvec2 q=uvec2(min(x,dims.outputWidth-1u)%dims.colorWidth,min(y,dims.outputHeight-1u));
-    vec4 p=imageLoad(sourceImage,ivec2(q+uvec2(dims.cropX,dims.cropY)));
+    vec4 p=(dims.flags&16u)!=0u ? imageLoad(resizedImage,ivec2(q)) :
+        imageLoad(sourceImage,ivec2(q+uvec2(dims.cropX,dims.cropY)));
     if ((dims.flags&8u)!=0u) {
         uint stored=loopHead.rgba[q.y*dims.colorWidth+q.x];
         uvec4 head=uvec4(stored&255u,(stored>>8u)&255u,(stored>>16u)&255u,stored>>24u);
@@ -522,14 +580,16 @@ void main() {
     VkShaderModuleCreateInfo shader { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .codeSize = words.size() * sizeof(unsigned int), .pCode = words.data() };
     Vk(vkCreateShaderModule(device, &shader, nullptr, &p.shader), "create GPU conversion shader");
-    const std::array<VkDescriptorSetLayoutBinding, 5> bindings {{
+    const std::array<VkDescriptorSetLayoutBinding, 7> bindings {{
         {0,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
         {1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
         {2,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
         {3,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
-        {4,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr} }};
+        {4,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
+        {5,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
+        {6,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr} }};
     VkDescriptorSetLayoutCreateInfo descriptors { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, .bindingCount = 5, .pBindings = bindings.data() };
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, .bindingCount = 7, .pBindings = bindings.data() };
     Vk(vkCreateDescriptorSetLayout(device, &descriptors, nullptr, &p.descriptors), "create GPU conversion descriptors");
     VkPushConstantRange constants { VK_SHADER_STAGE_COMPUTE_BIT, 0, 44 };
     VkPipelineLayoutCreateInfo layout { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -539,6 +599,67 @@ void main() {
         .stage = { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                    .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = p.shader, .pName = "main" }, .layout = p.layout };
     Vk(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &p.pipeline), "create GPU conversion pipeline");
+    if (p.resizing) {
+        // Pixel-center mapping and scale-widened sinc/sinc support match a
+        // separable Lanczos3 downsample. Keep negative lobes through the float
+        // horizontal pass; clamp/quantize only after filtering both axes.
+        const ShaderCompUnit resize_unit { ShaderType::COMPUTE, R"glsl(#version 450
+layout(local_size_x=8, local_size_y=8) in;
+layout(binding=0, rgba8) readonly uniform image2D sourceImage;
+layout(binding=5, rgba32f) uniform image2D horizontalImage;
+layout(binding=6, rgba8) writeonly uniform image2D resizedImage;
+layout(push_constant) uniform Resize {
+    uint cropX; uint cropY; uint cropWidth; uint cropHeight;
+    uint width; uint height; uint vertical;
+} dims;
+float lanczos3(float distance) {
+    float x=abs(distance);
+    if (x<0.000001) return 1.0;
+    if (x>=3.0) return 0.0;
+    float angle=3.14159265358979323846*x;
+    return sin(angle)*sin(angle/3.0)/(angle*angle/3.0);
+}
+void main() {
+    uvec2 q=gl_GlobalInvocationID.xy;
+    bool vertical=dims.vertical!=0u;
+    if (q.x>=dims.width || q.y>=(vertical ? dims.height : dims.cropHeight)) return;
+    uint sourceSize=vertical ? dims.cropHeight : dims.cropWidth;
+    uint targetSize=vertical ? dims.height : dims.width;
+    vec4 value;
+    if (sourceSize==targetSize) {
+        value=vertical ? imageLoad(horizontalImage,ivec2(q)) :
+            imageLoad(sourceImage,ivec2(q+uvec2(dims.cropX,dims.cropY)));
+    } else {
+        float scale=float(sourceSize)/float(targetSize);
+        float center=(float(vertical ? q.y : q.x)+0.5)*scale-0.5;
+        float support=3.0*scale;
+        vec4 sum=vec4(0.0);
+        float weights=0.0;
+        int last=int(floor(center+support));
+        for (int tap=int(ceil(center-support));tap<=last;++tap) {
+            float weight=lanczos3((float(tap)-center)/scale);
+            int sampleIndex=clamp(tap,0,int(sourceSize)-1);
+            vec4 sampleValue=vertical ? imageLoad(horizontalImage,ivec2(q.x,sampleIndex)) :
+                imageLoad(sourceImage,ivec2(sampleIndex+int(dims.cropX),int(q.y+dims.cropY)));
+            sum+=sampleValue*weight;
+            weights+=weight;
+        }
+        value=sum/weights;
+    }
+    if (vertical) imageStore(resizedImage,ivec2(q),floor(clamp(value,0.0,1.0)*255.0+0.5)/255.0);
+    else imageStore(horizontalImage,ivec2(q),value);
+}
+)glsl", "main" };
+        std::vector<Uni_ShaderSpv> resize_code;
+        if (!CompileAndLinkShaderUnits(std::span(&resize_unit,1),ShaderCompOpt {},resize_code) || resize_code.size()!=1)
+            throw std::runtime_error("compile GPU Lanczos3 resize");
+        const auto& resize_words=resize_code.front()->spirv;
+        VkShaderModuleCreateInfo resize_shader { .sType=VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize=resize_words.size()*sizeof(unsigned int), .pCode=resize_words.data() };
+        Vk(vkCreateShaderModule(device,&resize_shader,nullptr,&p.resize_shader),"create GPU resize shader");
+        pipeline.stage.module=p.resize_shader;
+        Vk(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pipeline,nullptr,&p.resize_pipeline),"create GPU resize pipeline");
+    }
     VkCommandPoolCreateInfo pool { .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = graphics_family };
     Vk(vkCreateCommandPool(device, &pool, nullptr, &p.pool), "create GPU conversion command pool");
@@ -635,7 +756,6 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
             .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 } };
         vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &source);
-        vkCmdBindPipeline(p.command, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
         VkDescriptorImageInfo image { .imageView = p.source_view, .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
         VkDescriptorBufferInfo buffer { .buffer = p.nv12, .offset = 0, .range = VK_WHOLE_SIZE };
         VkDescriptorImageInfo first { .imageView=p.first_view ? p.first_view : p.source_view, .imageLayout=VK_IMAGE_LAYOUT_GENERAL };
@@ -643,7 +763,10 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
         VkDescriptorBufferInfo loop { .buffer=p.loop_head ? p.loop_head : p.nv12,
             .offset=p.loop_head ? head_index*p.loop_head_stride : 0,
             .range=p.loop_head ? std::uint64_t(p.color_width)*p.output_height*4 : 32 };
-        std::array<VkWriteDescriptorSet, 5> writes {{
+        VkDescriptorImageInfo horizontal { .imageView=p.horizontal_view, .imageLayout=VK_IMAGE_LAYOUT_GENERAL };
+        VkDescriptorImageInfo resized { .imageView=p.resized_view ? p.resized_view : p.source_view,
+            .imageLayout=VK_IMAGE_LAYOUT_GENERAL };
+        std::array<VkWriteDescriptorSet, 7> writes {{
             { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 0, .descriptorCount = 1,
               .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &image },
             { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 1, .descriptorCount = 1,
@@ -653,10 +776,47 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
             { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 3, .descriptorCount = 1,
               .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &stats },
             { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=4,.descriptorCount=1,
-              .descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&loop } }};
-        p.push_descriptors(p.command, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, 5, writes.data());
+              .descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&loop },
+            { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=6,.descriptorCount=1,
+              .descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,.pImageInfo=&resized },
+            { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=5,.descriptorCount=1,
+              .descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,.pImageInfo=&horizontal } }};
+        p.push_descriptors(p.command, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, p.resizing ? 7 : 6, writes.data());
+        if (p.resizing) {
+            std::array<VkImageMemoryBarrier,2> scratch;
+            for (std::size_t i=0;i<scratch.size();++i) {
+                scratch[i] = { .sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .srcAccessMask=index==0 ? VkAccessFlags(0) : VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,
+                    .dstAccessMask=VK_ACCESS_SHADER_WRITE_BIT,
+                    .oldLayout=index==0 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+                    .newLayout=VK_IMAGE_LAYOUT_GENERAL, .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED, .image=i==0 ? p.horizontal_image : p.resized_image,
+                    .subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1} };
+            }
+            vkCmdPipelineBarrier(p.command,index==0 ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,0,nullptr,0,nullptr,2,scratch.data());
+            vkCmdBindPipeline(p.command,VK_PIPELINE_BIND_POINT_COMPUTE,p.resize_pipeline);
+            std::array<std::uint32_t,7> resize_dimensions { p.capture.crop_x,p.capture.crop_y,
+                p.capture.crop_width,p.capture.crop_height,p.color_width,p.output_height,0 };
+            vkCmdPushConstants(p.command,p.layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(resize_dimensions),resize_dimensions.data());
+            vkCmdDispatch(p.command,(p.color_width+7)/8,(p.capture.crop_height+7)/8,1);
+            scratch[0].srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+            scratch[0].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+            scratch[0].oldLayout=VK_IMAGE_LAYOUT_GENERAL;
+            vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,0,nullptr,0,nullptr,1,&scratch[0]);
+            resize_dimensions[6]=1;
+            vkCmdPushConstants(p.command,p.layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(resize_dimensions),resize_dimensions.data());
+            vkCmdDispatch(p.command,(p.color_width+7)/8,(p.output_height+7)/8,1);
+            scratch[1].srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+            scratch[1].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+            scratch[1].oldLayout=VK_IMAGE_LAYOUT_GENERAL;
+            vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,0,nullptr,0,nullptr,1,&scratch[1]);
+        }
+        vkCmdBindPipeline(p.command,VK_PIPELINE_BIND_POINT_COMPUTE,p.pipeline);
         std::uint32_t flags=(p.capture.collect_bounds ? (p.capture.bounds_include_rgb ? 3u : 1u) : 0u) |
-            (cache_head ? 4u : 0u) | (blend_head ? 8u : 0u);
+            (cache_head ? 4u : 0u) | (blend_head ? 8u : 0u) | (p.resizing ? 16u : 0u);
         std::array<std::uint32_t, 11> dimensions { p.width,p.height,p.color_width,p.output_height,p.output_width,p.stride,
             p.capture.crop_x,p.capture.crop_y,flags,blend_head ? fade-static_cast<std::uint32_t>(head_index) : 0u,fade+1 };
         vkCmdPushConstants(p.command, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(dimensions), dimensions.data());
@@ -785,7 +945,10 @@ std::string GpuVideoEncoder::captureMetadata() const {
             << ",\"loop_frames\":" << p.capture.encoded_frames << ",\"frame_count\":" << p.loop_window_count << '}';
     out << ",\"crop\":{\"capture_width\":" << p.width << ",\"capture_height\":" << p.height
         << ",\"x\":" << p.capture.crop_x << ",\"y\":" << p.capture.crop_y
-        << ",\"width\":" << p.color_width << ",\"height\":" << p.output_height << '}';
+        << ",\"width\":" << p.capture.crop_width << ",\"height\":" << p.capture.crop_height << '}';
+    if (p.resizing)
+        out << ",\"resize\":{\"width\":" << p.color_width << ",\"height\":" << p.output_height
+            << ",\"filter\":\"lanczos3\"}";
     if (p.capture.crossfade_frames)
         out << ",\"loop_crossfade\":{\"status\":\"applied\",\"crossfade_frames\":" << p.capture.crossfade_frames
             << ",\"loop_frames\":" << p.capture.encoded_frames

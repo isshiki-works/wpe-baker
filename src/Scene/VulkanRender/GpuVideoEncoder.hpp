@@ -16,6 +16,8 @@ struct GpuCaptureOptions {
     std::uint32_t crossfade_frames { 0 };
     std::uint32_t crop_x { 0 }, crop_y { 0 }, crop_width { 0 }, crop_height { 0 };
     bool retain_loop_window { false };
+    // Zero keeps the crop size; otherwise Lanczos3 resize precedes alpha packing.
+    std::uint32_t resize_width { 0 }, resize_height { 0 };
 };
 
 // Owns the codec and conversion resources, never the renderer's Vulkan device.
