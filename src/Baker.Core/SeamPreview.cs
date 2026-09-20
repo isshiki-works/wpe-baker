@@ -24,8 +24,8 @@ public sealed record SeamPreviewPlan(string VideoPath, string OutputPath, string
 
 /// <summary>
 /// 接缝预览：循环末尾 N 帧接开头 N 帧，先原速一遍、再 0.25 倍速一遍，顶部标签条写帧号，
-/// 末尾段红底、开头段绿底，颜色切换的那一刻就是接缝。每个视频组的接缝校验一结束（通过、被拒
-/// 两种结局都算）就导出到组目录下的 <c>seam-preview.mp4</c>。
+/// 末尾段红底、开头段绿底，颜色切换的那一刻就是接缝。拒绝时自动导出；成功任务仅在显式
+/// 请求诊断时导出到组目录下的 <c>seam-preview.mp4</c>。
 /// <para>
 /// 只按时间段 seek 解码这 2N 帧：尾段输入 -ss 到第 P-N-M 帧、-t 只读 M+N+2 帧，开头段 -t 只读 N+2 帧，
 /// 绝不整片解码，也不把 master 读进内存。导出失败只记 warning，不改变烘焙结论。
@@ -58,8 +58,9 @@ public static class SeamPreview
     /// 这个组要不要导出预览：只要接缝校验给出了状态（通过或被拒）就导出；
     /// 探针渲染没有做接缝校验，静态贴图没有接缝，这两种不导。
     /// </summary>
-    public static bool ShouldExport(bool probe, bool isStatic, [NotNullWhen(true)] JsonObject? seam) =>
-        !probe && !isStatic && seam?["status"] is JsonValue status && status.TryGetValue(out string? text) && !string.IsNullOrEmpty(text);
+    public static bool ShouldExport(bool probe, bool isStatic, [NotNullWhen(true)] JsonObject? seam, bool includePassed = false) =>
+        !probe && !isStatic && seam?["status"] is JsonValue status && status.TryGetValue(out string? text) &&
+        !string.IsNullOrEmpty(text) && (text != "observed_seam_pass" || includePassed);
 
     /// <summary>接缝校验状态归成两种结局。原作自身的切口不再单列：它在参照步进 f[P] − f[P−1] 里，闭合就通过。</summary>
     public static string Outcome(string? seamStatus) => seamStatus == "observed_seam_pass" ? PassedOutcome : RejectedOutcome;

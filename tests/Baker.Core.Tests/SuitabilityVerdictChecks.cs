@@ -45,6 +45,22 @@ internal static class SuitabilityVerdictChecks
             Text(s1, "reason_en").Length > 0 && Text(s1, "reason_zh").Length > 0,
             "an empty video group set is ruled not_suitable with rule nothing_to_bake");
 
+        JsonObject exhaustedAllocation = Plan(groups: 2, totalLayers: 5, videoLayers: 2,
+            loop: Loop(unresolved: 1), blockers: ["A live controller must be retained."]);
+        exhaustedAllocation["loop_allocation_fallback"] = new JsonObject {
+            ["status"] = "still_unavailable", ["replanned_video_group_count"] = 0,
+            ["replanned_effect_prefix_cache_count"] = 0 };
+        exhaustedAllocation["suitability"] = Verdict(exhaustedAllocation);
+        check(Text(exhaustedAllocation["suitability"]!.AsObject(), "rule") == "no_independent_content_after_reallocation" &&
+            PlanNarrative.Summarize(exhaustedAllocation)["zh"]!.GetValue<string>().StartsWith("当前不适合生成", StringComparison.Ordinal),
+            "an already-exhausted allocation is not presented as another choice for the user to resolve");
+        exhaustedAllocation["loop_allocation_fallback"]!.AsObject().Remove("replanned_video_group_count");
+        check(Text(Verdict(exhaustedAllocation), "rule") != "no_independent_content_after_reallocation",
+            "missing fallback group evidence is not treated as zero");
+        exhaustedAllocation["loop_allocation_fallback"]!["replanned_video_group_count"] = 1;
+        check(Text(Verdict(exhaustedAllocation), "rule") != "no_independent_content_after_reallocation",
+            "an unresolved but nonempty smaller allocation is not declared empty");
+
         // --- S2：可烘集合非空但集合上没有任何已证明的时间机制 ---
         JsonObject stillImage = Plan(groups: 1, totalLayers: 130, videoLayers: 8,
             loop: Loop(reason: Reason("NoTemporalMechanism", periodCount: 0)));

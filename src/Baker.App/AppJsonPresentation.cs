@@ -510,13 +510,13 @@ internal static class AppJsonPresentation
     public static string RouteSummary(JsonObject? plan, bool english)
     {
         if (plan is null) return "";
-        int groups = plan["video_groups"]?.AsArray().Count ?? 0, live = plan["live_layer_ids"]?.AsArray().Count ?? 0;
+        int groups = PresetCascade.GroupCount(plan), statics = PresetCascade.StaticGroupCount(plan), live = plan["live_layer_ids"]?.AsArray().Count ?? 0;
         int prefixCaches = plan["effect_prefix_caches"]?.AsArray().Count ?? 0;
         return plan["route"]?.GetValue<string>() == "effect_prefix"
             ? english ? $"{prefixCaches} effect-prefix caches · {live} live objects"
                 : $"特效前缀缓存 {prefixCaches} 组 · 实时对象 {live} 个"
-            : english ? $"{groups} video groups · {live} live objects"
-                : $"视频组 {groups} 个 · 实时对象 {live} 个";
+            : english ? $"{groups} video groups · {statics} static caches · {live} live objects"
+                : $"视频组 {groups} 个 · 静态缓存 {statics} 组 · 实时对象 {live} 个";
     }
 
     /// <summary>
@@ -588,10 +588,10 @@ internal static class AppJsonPresentation
         }
         if (Number(candidate?["total_retime_cost_percent"]) is double retime)
             rows.Add((english ? "Total retime" : "总调速", retime.ToString("0.###", CultureInfo.InvariantCulture) + "%"));
-        int groups = plan["route"]?.GetValue<string>() == "effect_prefix"
-            ? plan["effect_prefix_caches"]?.AsArray().Count ?? 0
-            : plan["video_groups"]?.AsArray().Count ?? 0;
+        int groups = PresetCascade.GroupCount(plan), statics = PresetCascade.StaticGroupCount(plan);
         rows.Add((english ? "Video groups" : "视频组数", groups.ToString(CultureInfo.InvariantCulture)));
+        if (plan["route"]?.GetValue<string>() == "whole_layer")
+            rows.Add((english ? "Static caches" : "静态缓存", statics.ToString(CultureInfo.InvariantCulture)));
         rows.Add((english ? "Live layers" : "实时图层数", (plan["live_layer_ids"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
         if (plan["live_overlays_hoisted"] is JsonArray { Count: > 0 } overlays)
             rows.Add((english ? "Foreground widgets" : "置顶小组件数", overlays.Count.ToString(CultureInfo.InvariantCulture)));
@@ -609,7 +609,7 @@ internal static class AppJsonPresentation
     /// <summary>取舍清单的抬头：有方案时是"有 N 个方案…"，主体类壁纸是那句拒绝说明，其余为空串。</summary>
     public static string TradeoffHeader(JsonObject? plan, bool english) =>
         plan?[TradeoffOptions.Field] is JsonObject record &&
-        record["status"]?.GetValue<string>() is "available" or "subject_only"
+        record["status"]?.GetValue<string>() is "available" or "subject_only" or "dependency_blocked"
             ? (english ? record[Messages.English] : record[Messages.Chinese])?.GetValue<string>() ?? "" : "";
 
     /// <summary>

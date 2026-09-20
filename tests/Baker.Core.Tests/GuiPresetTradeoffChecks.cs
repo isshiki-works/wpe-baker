@@ -40,6 +40,13 @@ internal static class GuiPresetTradeoffChecks
             "GUI omitted card contains only omitted content and fixed state, not retained widgets");
         check(AppJsonPresentation.NumberRows(plan, false).Any(row => row.Label == "置顶小组件数" && row.Value == "2"),
             "retained foreground widgets are counted in technical details");
+        plan["video_groups"] = new JsonArray(new JsonObject { ["id"] = "video", ["static_verified"] = false },
+            new JsonObject { ["id"] = "static", ["static_verified"] = true,
+                ["static_verification"] = new JsonObject { ["basis"] = "source_and_runtime_static_proof" } });
+        plan["route"] = "whole_layer";
+        check(AppJsonPresentation.RouteSummary(plan, true).Contains("1 video groups · 1 static caches", StringComparison.Ordinal) &&
+            AppJsonPresentation.NumberRows(plan, false).Any(row => row.Label == "静态缓存" && row.Value == "1"),
+            "the details distinguish decoder videos from verified static caches");
         plan["suggested_change"] = new JsonObject { ["verified"] = true,
             ["settings"] = new JsonObject { ["interaction"] = "off", ["preset"] = "balanced" } };
         JsonObject? settings = AppJsonPresentation.SuggestedSettings(plan);
@@ -153,8 +160,8 @@ internal static class GuiPresetTradeoffChecks
         subject["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.no_input_independent_group" });
         TradeoffOptions.Attach(subject);
         check(AppJsonPresentation.TradeoffOptionViews(subject, false).Length == 0 &&
-            AppJsonPresentation.TradeoffHeader(subject, false).Contains("只能实时"),
-            "gui tradeoff list: a subject-class wallpaper shows the refusal text and no blocks");
+            AppJsonPresentation.TradeoffHeader(subject, false).Contains("尚未确认"),
+            "gui tradeoff list: dependency blockage shows the bounded conclusion and no speculative options");
 
         // 分段拼回去就是 CLI 的那一段话，两处永远同一份文案。
         var option = plan[TradeoffOptions.Field]!["options"]!.AsArray().OfType<JsonObject>().First();

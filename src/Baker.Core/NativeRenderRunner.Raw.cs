@@ -41,6 +41,10 @@ public sealed partial class NativeRenderRunner
         await WriteJsonAsync(manifestPath, manifest, cancellationToken);
         try
         {
+            if (request.CaptureTarget?.ForceVisibleOwner == true &&
+                !(await RunTextAsync(tools.Renderer, ["--version"], Path.Combine(output, "renderer-version.stderr.log"), cancellationToken))
+                    .Contains("capture-force-visible-owner-v1", StringComparison.Ordinal))
+                throw new InvalidDataException("Renderer does not support capturing a visibility-controlled effect owner.");
             string native = Path.Combine(output, "native");
             var job = new JsonObject { ["schema_version"] = 1, ["source"] = source.SourcePath, ["assets"] = Path.GetFullPath(request.Assets),
                 ["output_dir"] = native, ["width"] = request.Width, ["height"] = request.Height,

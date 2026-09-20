@@ -253,6 +253,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         progress?.Report(new("analyzing", null, "Observing real script inputs, object accesses and scene hierarchy."));
         async Task<JsonObject> ObserveAsync(string renderSource, string directory)
         {
+            JsonObject? daytimeScene = request.DaytimeSplit && request.DaytimeState is string state
+                ? DaytimeSplit.PrepareVideoObservation(scene, properties, state) : null;
             uint probeWidth = Math.Min(512, request.Width);
             uint probeHeight = Math.Max(2, (uint)Math.Round((double)request.Height * probeWidth / request.Width));
             var events = new JsonArray(
@@ -261,12 +263,26 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 new JsonObject { ["frame"] = 36, ["mouse_buttons_down"] = 0 });
             string probeOutput = Path.Combine(output, directory);
             JsonObject observed = new();
-            string key = "runtime-" + AnalysisCache.Key(source.SourcePath, scene, properties, request.Assets, tools,
+            // 缓存按实际观测场景区分状态，不能让每个状态重用原作在当前时钟下的同一份视频元数据。
+            string key = "runtime-" + AnalysisCache.Key(source.SourcePath, daytimeScene ?? scene, properties, request.Assets, tools,
                 File.Exists(tools.Renderer) ? File.GetLastWriteTimeUtc(tools.Renderer).Ticks : 0,
                 probeWidth, probeHeight, request.FpsNumerator, request.FpsDenominator, request.DeviceUuid, directory, request.Interaction is not null);
             if (AnalysisCache.Read(request.AnalysisCacheDirectory, key) is JsonObject cached) return cached;
             try
             {
+                if (daytimeScene is not null)
+                {
+                    // renderSource 不是原作时已经是本次分析创建的音频选择副本，直接复用。
+                    if (renderSource.Equals(source.SourcePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        renderSource = Path.Combine(output, directory + "-daytime-source");
+                        await source.ExtractAsync(renderSource, cancellationToken);
+                    }
+                    await File.WriteAllTextAsync(ProjectSource.ContainedPath(renderSource, source.SceneResource), daytimeScene.ToJsonString(), cancellationToken);
+                    var observedProject = project.DeepClone().AsObject();
+                    observedProject["file"] = source.SceneResource;
+                    await File.WriteAllTextAsync(Path.Combine(renderSource, "project.json"), observedProject.ToJsonString(), cancellationToken);
+                }
                 var raw = await new NativeRenderRunner(tools).RenderRawAsync(new(renderSource, request.Assets,
                     probeOutput, probeWidth, probeHeight, request.FpsNumerator, request.FpsDenominator,
                     48, Seed: 17, InputTimeline: events, UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true,
@@ -356,6 +372,12 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 选择器对受控层的可见性写不再把目标连坐成实时：这就是状态拆分要摘掉的那条链。
         bool DaytimeVisibilityWrite(JsonObject dependency) => daytimeSelector is int selector &&
             Int(dependency["owner"]) == selector && dependency["property"]?.GetValue<string>() == "visible" &&
+            Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
+        // 完整匹配的视频选择器在所选状态里已冻结。只摘掉该 visible 脚本原有的视频读取，
+        // 不能因选择器所在图层还承担实时后处理，就把受控视频重新连坐为实时。
+        bool FrozenDaytimeVideoRead(JsonObject dependency) => daytimeSelector is int selector && daytime!.ControlsVideoPlayback &&
+            Int(dependency["owner"]) == selector && dependency["binding"]?.GetValue<string>() == "visible" &&
+            dependency["operation"]?.GetValue<string>() == "read" && dependency["property"]?.GetValue<string>() == "videoTexture" &&
             Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
         bool scriptErrorEvidenceAvailable = trace["source_script_error_count"] is not null || trace["source_script_errors"] is not null;
         int? scriptErrorCount = null;
@@ -456,6 +478,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             int before = live.Count;
             foreach (var dependency in dependencies.OfType<JsonObject>())
             {
+                if (FrozenDaytimeVideoRead(dependency)) continue;
                 int owner = dependency["owner"]!.GetValue<int>(), target = dependency["target"]!.GetValue<int>();
                 string operation = dependency["operation"]!.GetValue<string>();
                 bool initialization = dependency["initialization"]?.GetValue<bool>() == true;
@@ -558,6 +581,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             int before = liveRoots.Count;
             foreach (var dependency in dependencies.OfType<JsonObject>())
             {
+                if (FrozenDaytimeVideoRead(dependency)) continue;
                 int owner = dependency["owner"]!.GetValue<int>(), target = dependency["target"]!.GetValue<int>();
                 bool ownerLive = allocationOf.TryGetValue(owner, out int ownerUnit) && liveRoots.Contains(ownerUnit);
                 bool targetLive = allocationOf.TryGetValue(target, out int targetUnit) && liveRoots.Contains(targetUnit);
@@ -676,10 +700,12 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         int lastBakedDraw = Array.FindLastIndex(roots, root => !liveRoots.Contains(root) &&
             sourceOrder.Any(id => allocationOf[id] == root && MayBeVisible(id) && Contributes(id)));
         // ponytail: explicit foreground placement only supports independent text/particle trees.
+        // A nested overlay cannot cross any external drawable tree, including another live tree:
+        // retaining its author parent would pull it back inside that parent's DFS position.
         // Image/model trees and framebuffer effects keep their order and can still block full-frame mode.
         int[] overlayRoots = roots.Take(Math.Max(0, lastBakedDraw)).Where(root => liveRoots.Contains(root) &&
             (rootOf[root] == root || !roots.Skip(Array.IndexOf(roots, root) + 1).Any(later =>
-                rootOf[later] != rootOf[root] && !liveRoots.Contains(later) &&
+                rootOf[later] != rootOf[root] &&
                 sourceOrder.Any(id => allocationOf[id] == later && MayBeVisible(id) && Contributes(id)))) &&
             sourceOrder.Any(id => allocationOf[id] == root && MayBeVisible(id) && Contributes(id)) &&
             !dependencies.OfType<JsonObject>().Any(d => d["operation"]?.GetValue<string>() is "read" or "write" &&
@@ -741,7 +767,15 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             bool visibleDrawing = MayBeVisible(root) && descendants.Any(id => MayBeVisible(id) && Contributes(id));
             if (!visibleDrawing)
             {
-                if (liveRoots.Contains(root)) rootSequence.Add(new JsonObject { ["live_root"] = root });
+                // A hidden leaf sharing the pending video's parent cannot introduce
+                // another drawable subtree. Keep its controller without splitting
+                // adjacent videos; other ancestors still require a flush for DFS order.
+                if (liveRoots.Contains(root))
+                {
+                    if (current.Count > 0 && (ParentOf(current[0]) != ParentOf(root) ||
+                        sourceOrder.Any(id => Int(objects[id]["parent"]) == root))) Flush();
+                    rootSequence.Add(new JsonObject { ["live_root"] = root });
+                }
                 continue;
             }
             if (liveRoots.Contains(root))
@@ -799,6 +833,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         {
             var copy = scene.DeepClone().AsObject();
             FreezeTemporalProperties(copy, properties);
+            DaytimeSplit.ApplyState(copy, daytime, daytimeState, forAnalysis: true);
             return copy;
         }
         var loop = AnalyzeLoopForProfile(LoopScene, source, request.Assets, trace,
@@ -815,7 +850,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // 离线 trace 是开发者输入，没有渲染器可问；bake 的元数据探测会做同一裁定。
             if (request.RuntimeTraceFile is not null) return null;
             int owner = cache["owner_layer_id"]!.GetValue<int>(), terminal = cache["terminal_effect_id"]!.GetValue<int>();
+            bool forceVisibleOwner = cache["preserve_external_visibility"]?.GetValue<bool>() == true;
             string key = owner.ToString(CultureInfo.InvariantCulture) + ":" + terminal.ToString(CultureInfo.InvariantCulture);
+            if (forceVisibleOwner) key += ":visible-control";
             if (captureProbes.TryGetValue(key, out JsonObject? known)) return known;
             string persistentKey = "capture-" + AnalysisCache.Key(source.SourcePath, properties, request.Assets, tools,
                 File.Exists(tools.Renderer) ? File.GetLastWriteTimeUtc(tools.Renderer).Ticks : 0,
@@ -823,14 +860,15 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             if (AnalysisCache.Read(request.AnalysisCacheDirectory, persistentKey) is JsonObject cachedProbe)
                 return captureProbes[key] = cachedProbe;
             string? name = EffectPrefixCaptureTarget.LayerName(scene, owner);
-            string probeOutput = Path.Combine(output, $"effect-prefix-capture-probe-{owner}-{terminal}");
+            string probeOutput = Path.Combine(output, $"effect-prefix-capture-probe-{owner}-{terminal}" + (forceVisibleOwner ? "-visible" : ""));
             JsonObject observed = new(), verdict;
             try
             {
                 // 与 bake 的元数据探测同一个捕获选择：原始源、快照属性、1 帧，只看渲染器实际从哪个目标取帧。
                 var raw = await new NativeRenderRunner(tools).RenderRawAsync(new(source.SourcePath, request.Assets, probeOutput, 64, 64,
                     request.FpsNumerator, request.FpsDenominator, 1, Seed: 17,
-                    CaptureTarget: new RenderCaptureSelection(owner, terminal, EffectTerminal: true, ExactExtent: false),
+                    CaptureTarget: new RenderCaptureSelection(owner, terminal, EffectTerminal: true, ExactExtent: false,
+                        ForceVisibleOwner: forceVisibleOwner ? true : null),
                     UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true), cancellationToken);
                 observed = raw["native_result"]!.AsObject();
                 verdict = EffectPrefixCaptureTarget.Evaluate(observed, owner, terminal, name);
@@ -1110,6 +1148,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 {
                     var copy = scene.DeepClone().AsObject();
                     FreezeTemporalProperties(copy, properties);
+                    DaytimeSplit.ApplyState(copy, daytime, daytimeState, forAnalysis: true);
                     return copy;
                 }
                 demotedPlan["loop"] = AnalyzeLoopForProfile(DemotedLoopScene, source, request.Assets, trace,
@@ -1181,6 +1220,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 不改 route、不改分组，免得新加的 blocker 反过来把计划改道。
         JsonObject videoDominance = VideoDominance.Evaluate(report, trace, request.VideoShell);
         report["video_dominant"] = videoDominance;
+        report[BakeValueAssessment.Field] = BakeValueAssessment.Evaluate(report, trace, source, request.Assets);
         if (videoDominance["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
         {
             var shellBlockers = report["blockers"]!.AsArray();
@@ -1193,6 +1233,18 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         if (report["effect_prefix_caches"] is JsonArray { Count: > 0 })
             report["effect_prefix_hardware_decode_preflight"] = HardwareDecodeDimensions.PredictEffectPrefixCaches(report, source,
                 request.Assets, request, report["projection"] as JsonObject ?? projection);
+        // These queries are already present in the analysis trace. Use the exporter's
+        // existing assembly rule before promising a whole-layer bake, without rendering again.
+        if (!effectPrefixRoute && dependencies.OfType<JsonObject>().Any(item =>
+                item["operation"]?.GetValue<string>() == "query" &&
+                item["property"]?.GetValue<string>()?.StartsWith("layer_", StringComparison.Ordinal) == true) &&
+            CompositionHierarchyConflict(report, objects, dependencies) is string publicQueryConflict)
+        {
+            report["blockers"]!.AsArray().Add(publicQueryConflict);
+            report["whole_layer"]!["blockers"]!.AsArray().Add(publicQueryConflict);
+            report["whole_layer"]!["status"] = "unavailable";
+            report["status"] = "requires_resolution";
+        }
         report["suitability"] = Suitability(report);
         // 属性来源紧跟在 snapshot_properties 后面：没有来源记录的请求（测试、内部重分析）plan 不变。
         if (request.PropertiesOrigin is JsonObject propertiesOrigin) AttachPropertiesSource(report, propertiesOrigin);
@@ -1254,6 +1306,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             evidence["replanned_whole_layer_status"] = replanned["whole_layer"]?["status"]?.DeepClone();
             evidence["replanned_loop_status"] = replannedLoop["status"]!.DeepClone();
             evidence["replanned_candidate_count"] = replannedLoop["candidates"]!.AsArray().Count;
+            evidence["replanned_video_group_count"] = (replanned["video_groups"] as JsonArray)?.Count;
+            evidence["replanned_effect_prefix_cache_count"] = (replanned["effect_prefix_caches"] as JsonArray)?.Count;
             evidence["replanned_blockers"] = replanned["blockers"]!.DeepClone();
             evidence["replanned_unresolved"] = replannedLoop["unresolved"]!.DeepClone();
             // 重查只被全幅布局挡住时，把冲突给出的保留做法按完整 --retain-live 列表记下来，结论行才能给出照做就能用的参数。
@@ -1407,6 +1461,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             var scene = source.ReadJson(source.SceneResource);
             ApplyAudioEffectChoice(scene, plan);
             FreezeTemporalProperties(scene, plan["snapshot_properties"]!.AsObject());
+            DaytimeSplit.ApplyState(scene, plan, forAnalysis: true);
             return scene;
         }
         plan["loop"] = AnalyzeLoopForProfile(LoopScene, source, settings.Assets, runtime,
@@ -1648,16 +1703,17 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         return PlanNarrative.FullFrameConflict(groups, names, FullFrameDemotion.ConflictOptions(plan), leading);
     }
 
-    internal static string? CompositionHierarchyConflict(JsonObject plan)
+    internal static string? CompositionHierarchyConflict(JsonObject plan,
+        IReadOnlyDictionary<int, JsonObject>? sourceObjects = null, JsonArray? dependencies = null)
     {
         HybridPlanFormat.Validate(plan);
         if (plan["layers"] is not JsonArray layers || !layers.OfType<JsonObject>().Any(layer => layer.ContainsKey("allocation_root"))) return null;
-        var objects = layers.OfType<JsonObject>().ToDictionary(Id, layer => new JsonObject {
+        var objects = sourceObjects ?? layers.OfType<JsonObject>().ToDictionary(Id, layer => new JsonObject {
             ["id"] = layer["id"]!.DeepClone(), ["parent"] = layer["parent"]?.DeepClone() });
         int nextId = checked(objects.Keys.Max() + 1);
         var replacements = plan["video_groups"]!.AsArray().OfType<JsonObject>().ToDictionary(
             group => group["id"]!.GetValue<string>(), group => new JsonObject { ["id"] = nextId++, ["parent"] = group["parent_id"]?.DeepClone() });
-        try { _ = HybridBakeService.AssembleObjects(objects, plan, replacements, new JsonArray()); return null; }
+        try { _ = HybridBakeService.AssembleAllocationObjects(objects, plan, replacements, dependencies ?? new JsonArray()); return null; }
         catch (InvalidDataException error) { return error.Message; }
     }
 

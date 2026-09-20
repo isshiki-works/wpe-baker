@@ -4,18 +4,18 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// <summary>
-/// 视频外壳判据：判定"这份计划烘出来和原作在结构上是同一回事"。六条全部成立才算视频外壳——
+/// 视频外壳判据：结构相同且已知源视频尺寸、帧率均无缩减空间时才拒绝。
 /// 整层路线、周期分量全部来自 video 轨、没有未解析的时间机制、候选不需要调速、那段视频由唯一一层
-/// 不透明整幅图层承载、被烘图层不含任何特效通道。任何一条不成立就说明存在可以被转进视频的逐帧计算，
-/// 计划照常放行。
-/// 六条全部是对计划与运行时观察里结构字段的布尔读取：不测量、不估算、不比阈值，也不写任何功耗结论。
+/// 不透明整幅图层承载、被烘图层不含任何特效通道。任何一条不成立都不足以判为无工作量缩减，
+/// 不在此追加拒绝理由。
+/// 缺少源解码元数据时不拒绝；元数据比较不构成任何设备上的功耗结论。
 /// </summary>
 public static class VideoDominance
 {
     /// <summary>判定成立：被烘内容与原作结构同构。</summary>
     public const string ShellStatus = "video_shell";
 
-    /// <summary>判定不成立：有逐帧计算可以被转进视频。</summary>
+    /// <summary>未证明结构与视频解码工作量都不会缩减；包含证据未知。</summary>
     public const string NotShellStatus = "not_video_shell";
 
     /// <summary>判定成立但用户显式覆盖，证据原样留在计划里。</summary>
@@ -32,22 +32,20 @@ public static class VideoDominance
 
     /// <summary>判成视频外壳时追加进 plan.blockers 的那一条。</summary>
     public const string Blocker =
-        "Baking cannot change how this wallpaper runs: every periodic component in this plan comes from one video track, " +
-        "the baked layers carry no effect passes, and the result plays the same one video decode plus one full-screen blit " +
-        "as the source. Nothing per-frame moves into the video. Bake it anyway with --video-shell allow if you want the " +
-        "fixed loop or the repackaging for another reason.";
+        "No workload reduction was identified: the plan preserves one video decode and one full-screen draw, " +
+        "has no effect passes to cache, and does not reduce the source video's encoded pixel count or frame rate. " +
+        "This is not a power measurement. Use --video-shell allow to generate a fixed loop or repackage it.";
 
     /// <summary>同一条的中文原文；界面与命令行直接显示这一句，不翻译上面的英文。</summary>
     public const string BlockerZh =
-        "烘焙改变不了这张壁纸的运行方式：计划里所有周期分量都来自同一段视频轨，被烘图层没有任何特效通道，" +
-        "成品和原作一样是「一次视频解码 + 一次全屏贴图」，没有任何逐帧计算被转进视频。" +
-        "若只是想要定长循环或者重新打包，用 --video-shell allow 显式覆盖。";
+        "未识别到工作量缩减：方案仍需一次视频解码与一次全屏绘制，没有可缓存的特效，" +
+        "也未降低源视频的编码像素数或帧率。此结论不是功耗实测；需要定长循环或重新打包时可用 --video-shell allow 显式覆盖。";
 
     private const string ScopeEn =
-        "Structural identity between the source and the bake, read from the plan and the runtime observation alone. " +
-        "No measurement, no estimate, no threshold.";
+        "Structure and source encoded dimensions/frame rate from this runtime observation. " +
+        "Missing metadata never proves low value; this is not a hardware or power measurement.";
 
-    private const string ScopeZh = "只读计划与运行时观察的结构字段，判的是「成品与原作同构」这一件事；不测量、不估算、不设阈值。";
+    private const string ScopeZh = "比较结构与本次观察到的源视频编码尺寸、帧率；元数据缺失不代表低价值，结果不代表硬件或功耗实测。";
 
     private const string OverrideReasonEn =
         "This plan is a video shell; baking was allowed explicitly with --video-shell allow and the evidence stays in the plan.";
@@ -76,9 +74,60 @@ public static class VideoDominance
             return Record(EffectPrefixStatus, choice, evidence, EffectPrefixReasonEn, EffectPrefixReasonZh);
         var failure = Disqualify(plan, runtime, evidence);
         if (failure is not null) return Record(NotShellStatus, choice, evidence, failure.Value.En, failure.Value.Zh);
-        return choice == AllowChoice
+        JsonObject decodeWork = DecodeWork(plan, runtime);
+        string decodeStatus = decodeWork["status"]!.GetValue<string>();
+        JsonObject result = decodeStatus != "not_reduced"
+            ? Record(NotShellStatus, choice, evidence,
+                decodeStatus == "potential_gain" ? "Source video dimensions or frame rate can be reduced; decoding savings remain to be verified."
+                    : "Source decoding metadata is incomplete or not directly comparable with the output; the absence of decoding savings has not been established.",
+                decodeStatus == "potential_gain" ? "源视频尺寸或帧率可降低，解码收益仍待验证。" : "源视频解码元数据不完整或不能与输出直接比较，尚未证明没有解码收益。")
+            : choice == AllowChoice
             ? Record(OverrideStatus, choice, evidence, OverrideReasonEn, OverrideReasonZh)
             : Record(ShellStatus, choice, evidence, Blocker, BlockerZh);
+        result["decode_work"] = decodeWork;
+        return result;
+    }
+
+    private static JsonObject DecodeWork(JsonObject plan, JsonObject runtime)
+    {
+        var result = new JsonObject { ["status"] = "unknown" };
+        JsonObject workload = HybridVideoWorkload.Summarize(runtime);
+        if (!HybridVideoWorkload.Complete(workload)) return result;
+        int? owner = HybridScenePlanner.Int(plan["loop"]?["content_cadence"]?["clips"]?[0]?["owner_layer_id"]);
+        var textures = (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(layer => HybridScenePlanner.Int(layer["owner"]) == owner)
+            .SelectMany(layer => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>())
+            .Where(material => material["role"]?.GetValue<string>() == "source")
+            .SelectMany(material => (material["textures"] as JsonArray ?? []).Select(value => value?.GetValue<string>()))
+            .OfType<string>().Where(name => name.Length > 0).ToHashSet(StringComparer.Ordinal);
+        JsonObject[] streams = (runtime["runtime_video_decoders"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(stream => textures.Contains(stream["resource_key"]!.GetValue<string>())).ToArray();
+        if (streams.Length != 1) return result;
+        double sourceWidth = BakeValueAssessment.Number(streams[0]["coded_width"]);
+        double sourceHeight = BakeValueAssessment.Number(streams[0]["coded_height"]);
+        double sourceFps = BakeValueAssessment.Number(streams[0]["fps_num"]) / BakeValueAssessment.Number(streams[0]["fps_den"]);
+        double width = BakeValueAssessment.Number(plan["output_resolution"]?["width"] ?? plan["settings"]?["width"]);
+        double height = BakeValueAssessment.Number(plan["output_resolution"]?["height"] ?? plan["settings"]?["height"]);
+        double numerator = BakeValueAssessment.Number(plan["settings"]?["fps_numerator"]);
+        double denominator = BakeValueAssessment.Number(plan["settings"]?["fps_denominator"]);
+        double fps = numerator / denominator;
+        if (!double.IsFinite(width * height * fps) || width <= 0 || height <= 0 || fps <= 0) return result;
+        result["source"] = streams[0].DeepClone();
+        result["output_width"] = width; result["output_height"] = height; result["output_fps"] = fps;
+        string? codec = plan["encoding"]?["codec"]?.GetValue<string>();
+        if (codec == "auto_h264_hevc")
+        {
+            if (new[] { width, height, numerator, denominator }.Any(value =>
+                !double.IsFinite(value) || value < 1 || value > uint.MaxValue || value != Math.Truncate(value))) return result;
+            codec = PlaybackEncodeProfile.SelectPlaybackEncoder((uint)width, (uint)height, (uint)numerator, (uint)denominator) == "libx264"
+                ? "h264" : "hevc";
+        }
+        string? pixelFormat = plan["encoding"]?["pixel_format"]?.GetValue<string>();
+        result["output_codec"] = codec; result["output_pixel_format"] = pixelFormat;
+        if (codec is not ("h264" or "hevc") || codec != streams[0]["codec"]?.GetValue<string>() ||
+            string.IsNullOrWhiteSpace(pixelFormat) || pixelFormat != streams[0]["pixel_format"]?.GetValue<string>()) return result;
+        result["status"] = width * height < sourceWidth * sourceHeight || fps < sourceFps ? "potential_gain" : "not_reduced";
+        return result;
     }
 
     private static JsonObject Record(string status, string choice, JsonArray evidence, string reasonEnglish, string reasonChinese) =>

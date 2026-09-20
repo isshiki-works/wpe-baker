@@ -31,6 +31,10 @@ public partial class MainWindow : Window
     private int settingsRevision;
     private CancellationTokenSource? analysisCancellation, runCancellation;
     private JobItem? activeJob;
+    private readonly System.Diagnostics.Stopwatch runElapsed = new();
+    private readonly System.Windows.Threading.DispatcherTimer progressTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private RenderProgress? latestProgress;
+    private TimeSpan latestProgressAt;
     private Task queueRun = Task.CompletedTask;
     private JsonObject analysisPreviewOverrides = new();
     private JsonObject sourcePropertyDefinitions = new();
@@ -52,6 +56,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        progressTimer.Tick += (_, _) => RefreshProgressTiming();
         QueueList.ItemsSource = jobs;
         OutputBox.Text = defaultOutputDirectory;
         // 高级区的调速预算开局显示默认档（平衡）的值，用户改过才算覆盖。
@@ -232,7 +237,8 @@ public partial class MainWindow : Window
     {
         if (!initialized || suppressSettingsChanges) return;
         ++settingsRevision;
-        if (sender == OutputBox || sender == TargetBox) { RefreshControls(); return; }
+        if (sender == OutputBox || sender == TargetBox || sender == EncoderBox || sender == MatchEffectResolutionBox)
+        { RefreshControls(); return; }
         if (sender is FrameworkElement control && control != CompatibilityBox && control.IsDescendantOf(AdvancedExpander) &&
             (control != GpuBox || control.IsKeyboardFocusWithin)) advancedSettingsEdited = true;
         if (sender != AudioEffectsBox) audioEffectsChoiceKnown = false;
@@ -242,7 +248,7 @@ public partial class MainWindow : Window
     private void FpsEdited(object sender, KeyEventArgs e) => SettingsChanged(sender, e);
     private void QueueSelectionChanged(object sender, SelectionChangedEventArgs e) { if (initialized) BuildPropertyEditors(); RefreshControls(); }
 
-    /// <summary>下拉里选中的播放版编码档位；只影响播放版，无损母版永远是软件编码。</summary>
+    /// <summary>播放版编码路径；支持的 Vulkan 路径直接生成视频。</summary>
     private string SelectedPlaybackEncoder() =>
         PlaybackEncoderSelection.Normalize((EncoderBox.SelectedItem as ComboBoxItem)?.Content as string);
 
@@ -265,7 +271,8 @@ public partial class MainWindow : Window
         return new(width, height, FpsBox.Text.Trim(),
             (GpuBox.SelectedItem as VulkanDeviceInfo)?.DeviceUuid, RetimeBox.IsChecked == true, SelectedInteraction() != "keep",
             LayeredVideoBox.IsChecked == true, true, false,
-            AudioEffectsBox.IsChecked == true, SelectedLoopPreference(), SelectedInteraction(), CompatibilityBox.IsChecked == true);
+            AudioEffectsBox.IsChecked == true, SelectedLoopPreference(), SelectedInteraction(), CompatibilityBox.IsChecked == true,
+            SelectedPlaybackEncoder(), MatchEffectResolutionBox.IsChecked == true);
     }
 
     // 档位下拉按顺序对应 efficiency / balanced / quality，默认平衡。
@@ -428,6 +435,9 @@ public partial class MainWindow : Window
                 // 剩余实时图层置顶／简化文字效果两项界面已移除，方案里的旧值不再回填控件（分析时固定传 foreground/preserve）。
                 LayeredVideoBox.IsChecked = preset.Settings.LayeredVideo;
                 AudioEffectsBox.IsChecked = preset.Settings.AudioEffects;
+                EncoderBox.SelectedItem = EncoderBox.Items.OfType<ComboBoxItem>()
+                    .First(item => (string)item.Content == preset.Settings.PlaybackEncoder);
+                MatchEffectResolutionBox.IsChecked = preset.Settings.MatchEffectResolution;
                 // 方案文件里的 loop_preference 就是档位（两者一一对应）；调速预算回到该档的值。
                 PresetBox.SelectedIndex = preset.Settings.LoopPreference switch { "performance" => 0, "quality" => 2, _ => 1 };
                 presetBudgetText = PresetBudgetText();
@@ -632,12 +642,13 @@ public partial class MainWindow : Window
         bool gpuValid = GpuBox.SelectedItem is VulkanDeviceInfo;
         string hybridBlockers = string.Join("; ", AppJsonPresentation.BlockerLines(hybridPlan, english));
         bool hybridBlocked = hybridPlan?["status"]?.GetValue<string>() == "requires_resolution" || hybridBlockers.Length > 0;
+        bool effectResolutionBlocked = MatchEffectResolutionBox.IsChecked == true && hybridPlan?["route"]?.GetValue<string>() == "effect_prefix";
         // 分析同样硬依赖生成工具（:429 会直接抛），所以工具缺失时按钮就不该可点——生成按钮本来就有这一条。
         AnalyzeButton.IsEnabled = sourceValid && assetsValid && tools is not null && !analyzing && !presetBusy;
         SavePresetButton.IsEnabled = sourceValid && fpsValid && TryFrameSize(out _, out _) && !analyzing && !processing && !presetBusy;
         LoadPresetButton.IsEnabled = sourceValid && !analyzing && !processing && !presetBusy && QueueList.SelectedItem is null;
         GenerateButton.IsEnabled = hybridPlan is not null && sourceValid && outputValid && fpsValid && assetsValid &&
-            !hybridBlocked && tools is not null && gpuValid && !analyzing;
+            !hybridBlocked && !effectResolutionBlocked && tools is not null && gpuValid && !analyzing;
         // 工具缺失排在最前（fix/release-blockers）：它挡住分析与生成两条路，开窗时就该说清楚，而且用的是
         // 它自己的错误文本，不会被后写的 GPU 或源属性错误顶掉。文案按「界面说人话」那版，别回到术语。
         ValidationText.Text = tools is null ? L("生成工具未就绪：", "Generation tools not ready: ") +
@@ -648,6 +659,7 @@ public partial class MainWindow : Window
             !fpsValid ? L("帧率无效：取值范围 1 到 1000 fps。", "Invalid frame rate: range 1 to 1000 fps.") :
             !gpuValid ? L("未找到可用的 Vulkan 设备。", "No usable Vulkan device found.") + (setupError.Length > 0 ? " " + setupError : "") :
             hybridPlan is null ? L("未评估：生成前需执行分析。", "Not evaluated: run analysis before generating.") :
+            effectResolutionBlocked ? L("当前方案仅捕获部分特效，需要保留原作特效分辨率。", "This capture uses only part of an effect chain and requires the original effect resolution.") :
             // 具体是哪条挡住了，结论区已经用人话写了，这里不再把 blocker 原文堆到状态行上。
             hybridBlocked ? L("不可生成：原因见结论区。", "Cannot generate: the reason is stated in the verdict above.") :
             L("将在输出目录生成新壁纸。", "A new wallpaper will be generated in the output directory.");
@@ -732,7 +744,9 @@ public partial class MainWindow : Window
             request = new HybridBakeRequest(2, savedPlan, output,
                 kind == "hybrid_video_probe" ? report["frames"]!.GetValue<ulong>() : 0, settings["device_uuid"]?.GetValue<string>(),
                 // 重放一份已保存的结果时沿用它当时请求的播放版编码档位。
-                PlaybackEncoder: report["playback_encoder"]?["requested"]?.GetValue<string>());
+                PlaybackEncoder: report["playback_encoder"]?["requested"]?.GetValue<string>(),
+                EffectRenderScale: report["effect_render_scale"]?.GetValue<double>() ?? 1.0,
+                MatchEffectResolution: report["match_effect_resolution"]?.GetValue<bool>() ?? false);
             if (string.IsNullOrWhiteSpace(request.Plan["source"]?.GetValue<string>()) ||
                 !string.Equals(request.Plan["source_sha256"]?.GetValue<string>(), report["source_sha256"]?.GetValue<string>(), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The saved source identity or generation request is invalid.");
@@ -774,7 +788,7 @@ public partial class MainWindow : Window
             string output = AppEnvironment.NewWorkDirectory(source, OutputBox.Text.Trim());
             var hybrid = new HybridBakeRequest(2, hybridPlan.DeepClone().AsObject(), output, 0, gpu!.DeviceUuid,
                 ProjectDirectory: AppEnvironment.NewOutput(OutputBox.Text.Trim(), source),
-                PlaybackEncoder: SelectedPlaybackEncoder());
+                PlaybackEncoder: SelectedPlaybackEncoder(), MatchEffectResolution: MatchEffectResolutionBox.IsChecked == true);
             Enqueue(new JobItem(hybrid, tools, gpu.Name, sourcePropertyDefinitions));
             queueRun = ProcessQueueAsync();
             await queueRun;
@@ -802,6 +816,7 @@ public partial class MainWindow : Window
                 runCancellation?.Dispose();
                 runCancellation = new CancellationTokenSource();
                 job.State = "running";
+                StartProgressTiming();
                 job.Translate(english);
                 RunProgress.IsIndeterminate = true;
                 RefreshControls();
@@ -863,6 +878,7 @@ public partial class MainWindow : Window
                 }
                 finally
                 {
+                    StopProgressTiming();
                     job.Translate(english);
                     RunProgress.IsIndeterminate = false;
                     RunProgress.Value = job.State == "completed" ? 1 : 0;
@@ -881,8 +897,12 @@ public partial class MainWindow : Window
 
     private IProgress<RenderProgress> MakeProgress(JobItem job) => new Progress<RenderProgress>(value =>
     {
-        if (activeJob != job) return;
-        RunProgress.IsIndeterminate = value.Fraction is null || value.Stage == "official_sampling";
+        if (activeJob != job || runCancellation?.IsCancellationRequested == true) return;
+        latestProgress = value;
+        latestProgressAt = runElapsed.Elapsed;
+        RefreshProgressTiming();
+        // Fractions from group selection and checks are not whole-job completion percentages.
+        RunProgress.IsIndeterminate = value.Fraction is null || value.Stage != "rendering";
         RunProgress.Value = value.Fraction is double amount ? Math.Clamp(amount, 0, 1) : 0;
         string message = value.Stage switch {
             "preflight" => L("正在校验文件与工具…", "Verifying files and tools…"),
@@ -892,17 +912,49 @@ public partial class MainWindow : Window
                 : L("正在通过 Wallpaper Engine 对比原作与成品…", "Comparing the original and the result through Wallpaper Engine…"),
             "official_sampling" => L("正在实测 Wallpaper Engine 功耗…", "Measuring Wallpaper Engine power draw…"),
             "completed" => L("阶段完成…", "Stage complete…"),
+            "finishing_encode" => L("正在完成视频编码…", "Finishing video encoding…"),
             "rendering" => value.Message.EndsWith(" frames", StringComparison.Ordinal)
-                ? value.Message.Replace(" frames", L(" 帧", " frames")) : L("正在渲染与编码…", "Rendering and encoding…"), _ => value.Message };
+                ? L("正在渲染：", "Rendering: ") + value.Message.Replace(" frames", L(" 帧", " frames"))
+                : L("正在准备渲染与预热…", "Preparing the render and warmup…"),
+            _ => StageTiming.ExclusiveStages.Contains(value.Stage) ? StageTiming.StageLabel(value.Stage, english) + "…" : value.Message };
         job.Detail = message;
         StatusText.Text = job.Title + " · " + message;
     });
+
+    private void StartProgressTiming()
+    {
+        latestProgress = null;
+        runElapsed.Restart();
+        progressTimer.Start();
+        RefreshProgressTiming();
+    }
+
+    private void StopProgressTiming()
+    {
+        progressTimer.Stop(); runElapsed.Stop(); latestProgress = null;
+        RunTimingText.Text = "";
+    }
+
+    private void RefreshProgressTiming()
+    {
+        // A stalled renderer must not keep presenting an old estimate as a live countdown.
+        var value = latestProgress is not null && runElapsed.Elapsed - latestProgressAt > TimeSpan.FromSeconds(5)
+            ? latestProgress with { StageRemainingSeconds = null } : latestProgress;
+        if (runCancellation?.IsCancellationRequested == true) value = null;
+        RunTimingText.Text = ProgressPresentation.Timing(value, runElapsed.Elapsed.TotalSeconds, english);
+    }
 
     private void CancelClicked(object sender, RoutedEventArgs e)
     {
         if (analyzing && (activeJob is null || QueueList.SelectedItem != activeJob)) { analysisCancellation?.Cancel(); return; }
         if (QueueList.SelectedItem is not JobItem job) return;
-        if (job == activeJob) { runCancellation?.Cancel(); job.Detail = L("正在停止…", "Stopping…"); }
+        if (job == activeJob)
+        {
+            runCancellation?.Cancel(); job.Detail = L("正在停止…", "Stopping…");
+            StatusText.Text = job.Title + " · " + job.Detail;
+            RunProgress.IsIndeterminate = true;
+            RefreshProgressTiming();
+        }
         else if (job.State == "queued") { job.State = "cancelled"; job.Translate(english); }
         RefreshControls();
     }
@@ -1357,6 +1409,7 @@ public partial class MainWindow : Window
         if (processing) return;
         processing = true; activeJob = job;
         runCancellation?.Dispose(); runCancellation = new CancellationTokenSource();
+        StartProgressTiming();
         if (job is not null) { job.State = state; job.Translate(english); job.Detail = ""; }
         RunProgress.IsIndeterminate = true; RefreshControls();
         try
@@ -1376,6 +1429,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            StopProgressTiming();
             if (job is not null) { job.State = "completed"; job.Translate(english); }
             activeJob = null; processing = false;
             RunProgress.IsIndeterminate = false; RunProgress.Value = 0; RefreshControls();

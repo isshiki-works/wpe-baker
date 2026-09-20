@@ -250,7 +250,7 @@ public sealed partial class NativeRenderRunner
                 process.StandardError.BaseStream.CopyToAsync(stderr, CancellationToken.None), process.WaitForExitAsync(token));
             return process.ExitCode;
         }
-        finally { Stop(process); }
+        finally { await StopAndWaitAsync(process); }
     }
 
     private static List<JsonObject> EnumerateDecodeAdapters(JsonArray skippedSoftware)

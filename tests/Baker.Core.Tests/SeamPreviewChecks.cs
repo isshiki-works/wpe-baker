@@ -10,10 +10,13 @@ internal static class SeamPreviewChecks
 {
     internal static async Task RunAsync(Action<bool, string> check)
     {
-        // ---- 两种结局都导出 ----
+        // ---- 默认仅拒绝导出；显式诊断也导出成功任务 ----
         string[] statuses = ["observed_seam_pass", "observed_seam_fail"];
-        check(statuses.All(status => SeamPreview.ShouldExport(false, false, new JsonObject { ["status"] = status })),
-            "seam preview: passed and rejected seams both qualify for export");
+        check(statuses.All(status => SeamPreview.ShouldExport(false, false, new JsonObject { ["status"] = status }, includePassed: true)),
+            "seam preview: explicitly requested diagnostics include passed and rejected seams");
+        check(!SeamPreview.ShouldExport(false, false, new JsonObject { ["status"] = "observed_seam_pass" }) &&
+            SeamPreview.ShouldExport(false, false, new JsonObject { ["status"] = "observed_seam_fail" }),
+            "seam preview: normal success does not generate an unused diagnostic video");
         check(!SeamPreview.ShouldExport(true, false, new JsonObject { ["status"] = "observed_seam_pass" }) &&
             !SeamPreview.ShouldExport(false, true, new JsonObject { ["status"] = "observed_seam_pass" }) &&
             !SeamPreview.ShouldExport(false, false, null),

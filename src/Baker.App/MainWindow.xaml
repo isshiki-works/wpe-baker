@@ -203,10 +203,14 @@
                                         <ComboBox x:Name="GpuBox" Grid.Column="1" DisplayMemberPath="Name" SelectionChanged="SettingsChanged"/>
                                         <TextBlock Grid.Row="2" Style="{StaticResource Label}" Tag="播放版编码器|Playback encoder"/>
                                         <ComboBox x:Name="EncoderBox" Grid.Row="2" Grid.Column="1" SelectionChanged="SettingsChanged"
-                                            ToolTip="仅影响桌面播放版本；母版始终使用软件编码。所选编码器本机不可用时回退为软件编码。‖Affects the desktop playback copy only; the master is always software-encoded, and an unavailable encoder falls back to software.">
-                                            <ComboBoxItem Content="software" IsSelected="True"/><ComboBoxItem Content="auto"/><ComboBoxItem Content="mf"/><ComboBoxItem Content="nvenc"/><ComboBoxItem Content="qsv"/><ComboBoxItem Content="amf"/>
+                                            ToolTip="vulkan 可在支持的显卡上直接生成视频，减少生成等待；不可用时使用软件路径。‖Vulkan can generate video directly on supported GPUs to reduce generation time; unavailable paths use software.">
+                                            <ComboBoxItem Content="software" IsSelected="True"/><ComboBoxItem Content="auto"/><ComboBoxItem Content="vulkan"/><ComboBoxItem Content="mf"/><ComboBoxItem Content="nvenc"/><ComboBoxItem Content="qsv"/><ComboBoxItem Content="amf"/>
                                         </ComboBox>
                                     </Grid>
+                                    <CheckBox x:Name="MatchEffectResolutionBox" Checked="SettingsChanged" Unchecked="SettingsChanged" Margin="0,0,0,8"
+                                        ToolTip="按输出尺寸和图层实际大小调整特效纹理；关闭时保留原作分辨率。‖Adjust effect textures to the output and actual layer dimensions; leave off to keep the original resolution.">
+                                        <TextBlock Tag="内部特效分辨率匹配输出|Match internal effect resolution to output"/>
+                                    </CheckBox>
                                     <Expander x:Name="LayersExpander" Tag="图层清单|Layer list" Header="图层清单" Margin="0,4,0,0" IsEnabled="False" FontSize="12">
                                         <StackPanel Margin="0,8,0,0" TextElement.FontWeight="Normal">
                                             <TextBlock Style="{StaticResource Note}" Margin="0,0,0,8"
@@ -285,6 +289,7 @@
         <StackPanel Grid.Row="3" Margin="0,16,0,0">
             <ProgressBar x:Name="RunProgress" Height="4" Maximum="1" BorderThickness="0" Foreground="{StaticResource Accent}" Background="#E0E6F0"/>
             <TextBlock x:Name="StatusText" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,8,0,0"/>
+            <TextBlock x:Name="RunTimingText" Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap"/>
         </StackPanel>
     </Grid>
 </Window>

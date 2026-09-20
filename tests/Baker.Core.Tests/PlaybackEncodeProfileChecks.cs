@@ -301,7 +301,7 @@ internal static class PlaybackEncodeProfileChecks
 
         check(PlaybackQualityGate.MetricArguments("psnr", "cache.partial.mp4", "preview.mp4", "[0:v]null[packed]", [0ul])
                 .SequenceEqual(["-hide_banner", "-nostdin", "-i", "cache.partial.mp4", "-i", "preview.mp4", "-filter_complex",
-                    PlaybackQualityGate.CompareGraph("[0:v]null[packed]", [0ul], "psnr"), "-f", "null", "-"]),
+                    PlaybackQualityGate.CompareGraph("[0:v]null[packed]", [0ul], "psnr"), "-c:v", "rawvideo", "-f", "null", "-"]),
             "the gate measures the product against the master and discards the decoded output");
 
         var accepted = PlaybackQualityGate.Summarize([0ul, 9ul], 0.9948, 0.98, 0.9950, 45.2, 0,

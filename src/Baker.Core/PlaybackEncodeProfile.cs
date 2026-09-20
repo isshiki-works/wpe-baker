@@ -32,6 +32,8 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
     internal static string HardwareEncoder(string softwareEncoder, string kind) => (softwareEncoder, kind) switch
     {
         (_, PlaybackEncoderSelection.Software) => softwareEncoder,
+        ("libx265", PlaybackEncoderSelection.Vulkan) => "hevc_vulkan",
+        ("libx264", PlaybackEncoderSelection.Vulkan) => "h264_vulkan",
         ("libx265", PlaybackEncoderSelection.Mf) => "hevc_mf",
         ("libx264", PlaybackEncoderSelection.Mf) => "h264_mf",
         ("libx265", PlaybackEncoderSelection.Nvenc) => "hevc_nvenc",
@@ -66,7 +68,7 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
     internal static PlaybackEncodeProfile Create(uint width, uint height, uint numerator, uint denominator, bool losslessTest,
         string kind = PlaybackEncoderSelection.Software)
     {
-        // 无损 master 永远是软件 RGB 编码：接缝改写与逐帧校验都依赖它逐位可复现。
+        // 需要无损 master 的路径使用软件 RGB 编码；直编路径保留必要原帧做检查。
         // 档位取 ultrafast 而不是 veryfast：crf 0 下两者都走 x264 的无损路径，解码像素逐位相同，
         // 只是 ultrafast 换成 CAVLC 并关掉去块，把 master 这一路的 CPU 砍掉一大截——编码约 1/4，
         // 解码约 1/2.6（master 在一次烘焙里要被整片解码 2~3 次，省的是两头）。代价是 master 大约 +19% 字节，

@@ -27,7 +27,7 @@ internal static class VideoDominanceChecks
 
         async Task<JsonObject> PlanAsync(string name, string source, string trace, string videoShell = VideoDominance.RejectChoice) =>
             await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
-                new(2, source, root, Path.Combine(root, name), 64, 32, RuntimeTraceFile: trace, VideoShell: videoShell));
+                new(2, source, root, Path.Combine(root, name), 64, 32, FpsNumerator: 30, RuntimeTraceFile: trace, VideoShell: videoShell));
         static string Status(JsonObject plan) => plan["video_dominant"]!["status"]!.GetValue<string>();
         static string Evidence(JsonObject plan) => string.Join(" | ",
             plan["video_dominant"]!["evidence"]!.AsArray().Select(item => item!.GetValue<string>()));
@@ -79,6 +79,64 @@ internal static class VideoDominanceChecks
             "a clip that does not cover the centred canvas is not a video shell");
 
         JsonObject runtime = JsonNode.Parse(await File.ReadAllTextAsync(shellTrace))!.AsObject();
+        JsonObject reduced = allowed.DeepClone().AsObject();
+        reduced["output_resolution"]!["width"] = 1920; reduced["output_resolution"]!["height"] = 1080;
+        reduced["settings"]!["fps_numerator"] = 60;
+        JsonObject highResolution = runtime.DeepClone().AsObject();
+        highResolution["runtime_video_decoders"]![0]!["coded_width"] = 2560.0;
+        highResolution["runtime_video_decoders"]![0]!["coded_height"] = 1440.0;
+        highResolution["runtime_video_decoders"]![0]!["fps_num"] = 60.0;
+        reduced["video_dominant"] = VideoDominance.Evaluate(reduced, highResolution, VideoDominance.RejectChoice);
+        check(Status(reduced) == VideoDominance.NotShellStatus &&
+            reduced["video_dominant"]!["decode_work"]!["status"]!.GetValue<string>() == "potential_gain",
+            "1440p60 source video to 1080p60 can reduce decoding work despite identical draw counts");
+        JsonObject lowerFps = allowed.DeepClone().AsObject();
+        lowerFps["settings"]!["fps_numerator"] = 15;
+        check(VideoDominance.Evaluate(lowerFps, runtime, VideoDominance.RejectChoice)["status"]!.GetValue<string>() == VideoDominance.NotShellStatus,
+            "reducing source video frame rate is not rejected as unchanged work");
+        JsonObject unknownDecoder = runtime.DeepClone().AsObject();
+        unknownDecoder.Remove("runtime_video_decoders");
+        JsonObject unknownVerdict = VideoDominance.Evaluate(allowed, unknownDecoder, VideoDominance.RejectChoice);
+        check(unknownVerdict["status"]!.GetValue<string>() == VideoDominance.NotShellStatus &&
+            unknownVerdict["decode_work"]!["status"]!.GetValue<string>() == "unknown",
+            "older traces without source decoder metadata cannot establish a lack of savings");
+        JsonObject incompleteDecoder = runtime.DeepClone().AsObject();
+        incompleteDecoder["runtime_video_decoders"]![0]!["coded_width"] = null;
+        check(VideoDominance.Evaluate(allowed, incompleteDecoder, VideoDominance.RejectChoice)["decode_work"]!["status"]!.GetValue<string>() == "unknown",
+            "missing encoded dimensions are unknown rather than zero-sized video work");
+        foreach (var (field, value) in new[] { ("codec", "hevc"), ("pixel_format", "yuv420p10le") })
+        {
+            JsonObject differentFormat = runtime.DeepClone().AsObject();
+            differentFormat["runtime_video_decoders"]![0]![field] = value;
+            check(VideoDominance.Evaluate(allowed, differentFormat, VideoDominance.RejectChoice)["decode_work"]!["status"]!.GetValue<string>() == "unknown",
+                "decoder work is unknown when source and output differ in " + field);
+        }
+        check(VideoDominance.Evaluate(JsonNode.Parse(allowed.ToJsonString())!.AsObject(), runtime, VideoDominance.AllowChoice)["status"]!.GetValue<string>() ==
+            VideoDominance.Evaluate(allowed, runtime, VideoDominance.AllowChoice)["status"]!.GetValue<string>(),
+            "in-memory uint output extents and their parsed JSON equivalent give the same decoder-work verdict");
+        using (var source = new ProjectSource(clipSource))
+        {
+            check(BakeValueAssessment.Evaluate(reduced, highResolution, source, root)["status"]!.GetValue<string>() == "potential_gain",
+                "video decode reduction is retained by the device-independent benefit assessment");
+            JsonObject still = allowed.DeepClone().AsObject();
+            still.Remove("video_dominant");
+            still["loop"]!["source_static"] = true;
+            check(BakeValueAssessment.Evaluate(still, runtime, source, root)["status"]!.GetValue<string>() == "low_value",
+                "one unchanged plain still texture has low identified benefit");
+            still["output_resolution"]!["width"] = 32; still["output_resolution"]!["height"] = 16;
+            check(BakeValueAssessment.Evaluate(still, runtime, source, root)["status"]!.GetValue<string>() == "potential_gain",
+                "a still texture larger than output retains potential residency or sampling benefit");
+            JsonObject effectRuntime = runtime.DeepClone().AsObject();
+            effectRuntime["runtime_layers"] = RuntimeLayers(effect: true);
+            check(BakeValueAssessment.Evaluate(still, effectRuntime, source, root)["rule"]!.GetValue<string>() == "cached_effect_passes",
+                "still output can remove repeated effect work");
+            still["loop"]!["candidates"]!.AsArray().Clear();
+            check(BakeValueAssessment.Evaluate(still, runtime, source, root)["status"]!.GetValue<string>() == "unknown",
+                "no working candidate is not a low-value conclusion");
+            reduced["blockers"] = new JsonArray("An unrelated capture limitation.");
+            check(BakeValueAssessment.Evaluate(reduced, highResolution, source, root)["status"]!.GetValue<string>() == "unknown",
+                "an unresolved plan is not classified by its attempted optimization");
+        }
         static JsonObject Loop(JsonObject plan) => plan["loop"]!.AsObject();
         JsonObject prefixRoute = shell.DeepClone().AsObject();
         prefixRoute["route"] = "effect_prefix";
@@ -150,6 +208,8 @@ internal static class VideoDominanceChecks
     private static void WriteScene(string directory, JsonArray objects)
     {
         Directory.CreateDirectory(directory);
+        Directory.CreateDirectory(Path.Combine(directory, "materials"));
+        TextureContainer.WriteRgbaAsync(Path.Combine(directory, "materials", "clip.tex"), 64, 32, new byte[64 * 32 * 4]).GetAwaiter().GetResult();
         File.WriteAllText(Path.Combine(directory, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
         File.WriteAllText(Path.Combine(directory, "scene.json"), new JsonObject {
             ["general"] = new JsonObject { ["orthogonalprojection"] = new JsonObject { ["width"] = 64, ["height"] = 32 },
@@ -186,7 +246,7 @@ internal static class VideoDominanceChecks
     {
         var materials = new JsonArray(new JsonObject { ["shader"] = "genericimage4", ["role"] = "source",
             ["uses_audio_spectrum"] = false, ["uses_system_media_thumbnail"] = false,
-            ["active_uniforms"] = new JsonArray(), ["textures"] = new JsonArray() });
+            ["active_uniforms"] = new JsonArray(), ["textures"] = new JsonArray("clip") });
         if (effect) materials.Add(new JsonObject { ["shader"] = "filmgrain", ["role"] = "effect",
             ["uses_audio_spectrum"] = false, ["uses_system_media_thumbnail"] = false,
             ["active_uniforms"] = new JsonArray(), ["textures"] = new JsonArray() });
@@ -212,6 +272,10 @@ internal static class VideoDominanceChecks
             ["source"] = Path.Combine(source, "scene.json"), ["status"] = "complete",
             ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray(),
             ["runtime_dependencies"] = new JsonArray(),
+            ["runtime_video_decoder_observation"] = new JsonObject { ["status"] = "observed", ["opened_instances"] = 1 },
+            ["runtime_video_decoders"] = new JsonArray(new JsonObject { ["instance_id"] = 1, ["resource_key"] = "clip",
+                ["codec"] = "h264", ["coded_width"] = 64, ["coded_height"] = 32, ["pixel_format"] = "yuv420p",
+                ["fps_num"] = 30, ["fps_den"] = 1, ["metadata_unknown"] = false }),
             ["runtime_animation_periods"] = periods,
             ["runtime_layers"] = layers }.ToJsonString());
         return path;

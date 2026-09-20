@@ -140,7 +140,7 @@ internal static class ReferenceSeamChecks
         MethodInfo method = typeof(NativeRenderRunner).GetMethod("CopyFrameStreamAsync", BindingFlags.Static | BindingFlags.NonPublic)!;
         using var source = new MemoryStream(stream, writable: false);
         using var destination = new MemoryStream();
-        var task = (Task)method.Invoke(null, [source, destination, request, output, null, CancellationToken.None])!;
+        var task = (Task)method.Invoke(null, [source, destination, request, output, null, CancellationToken.None, false])!;
         await task;
         object summary = task.GetType().GetProperty("Result")!.GetValue(task)!;
         var bounds = (JsonObject)summary.GetType().GetProperty("Bounds")!.GetValue(summary)!;

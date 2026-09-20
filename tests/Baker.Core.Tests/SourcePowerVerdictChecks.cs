@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 using Baker.Core;
 
 /// <summary>
-/// fix/verdict-flow：烘前实测原作功耗的分档、结论第一行的前置、"只剩一张静态图"的状态，
+/// 原作功耗只记录本机事实、结论第一行的前置、静态产物的状态，
 /// 以及烘完原作 vs 成品的 A/B 比较。
 /// </summary>
 internal static class SourcePowerVerdictChecks
@@ -41,16 +41,13 @@ internal static class SourcePowerVerdictChecks
     {
         ArgumentNullException.ThrowIfNull(check);
 
-        // ---- ① 四档分界：实测事实（abba-heavy-rc11.md）定在 1 W 与 3 W ----
-        check(Classify(0.55) == SourcePowerVerdict.NotWorth, "source power: under 1 W is not worth baking");
-        check(Classify(0.999) == SourcePowerVerdict.NotWorth && Classify(1) == SourcePowerVerdict.Limited,
-            "source power: the light threshold is exactly 1 W");
-        check(Classify(2.53) == SourcePowerVerdict.Limited, "source power: 1-3 W can be baked but saves little");
-        check(Classify(8.1) == SourcePowerVerdict.Worth, "source power: 3 W and up on the whole-layer route is worth baking");
-        check(Classify(8.1, route: "effect_prefix") == SourcePowerVerdict.RouteLimited &&
-            Classify(8.1, layout: "layered") == SourcePowerVerdict.RouteLimited &&
-            Classify(8.1, retain: [26]) == SourcePowerVerdict.RouteLimited,
-            "source power: the effect-prefix, layered and retain-live routes are limited even above 3 W");
+        // Source-only watts, including the old boundaries, never predict generation benefit.
+        check(new[] { 0.55, 0.999, 1, 2.53, 3, 8.1 }.All(watts => Classify(watts) == SourcePowerVerdict.Observed),
+            "source power: all valid local readings remain observations, without a 1 W or 3 W benefit boundary");
+        check(Classify(8.1, route: "effect_prefix") == SourcePowerVerdict.Observed &&
+            Classify(8.1, layout: "layered") == SourcePowerVerdict.Observed &&
+            Classify(8.1, retain: [26]) == SourcePowerVerdict.Observed,
+            "source power: route names do not turn source-only readings into predicted savings");
         check(Classify(null) == SourcePowerVerdict.Unavailable, "source power: a machine without the graphics domain gives no recommendation");
         check(SourcePowerVerdict.Classify(Plan()) is null, "source power: a wallpaper that was never measured gets no verdict line");
 
@@ -60,22 +57,27 @@ internal static class SourcePowerVerdictChecks
         SourcePowerVerdict.Apply(plan, power);
         string first = plan["summary"]!["zh"]!.GetValue<string>();
         SourcePowerVerdict.Apply(plan, power);
-        check(first.StartsWith(Messages.Get(SourcePowerVerdict.NotWorth, Messages.Chinese), StringComparison.Ordinal) &&
+        check(first.StartsWith(Messages.Get(SourcePowerVerdict.Observed, Messages.Chinese), StringComparison.Ordinal) &&
             first.EndsWith("可以烘：找到 5.0 秒循环。", StringComparison.Ordinal) &&
             plan["summary"]!["zh"]!.GetValue<string>() == first &&
-            plan["summary"]!["source_power_key"]!.GetValue<string>() == SourcePowerVerdict.NotWorth,
+            plan["summary"]!["source_power_key"]!.GetValue<string>() == SourcePowerVerdict.Observed,
             "source power: the verdict leads the summary line and is prefixed only once");
         JsonObject routeLimited = Plan(route: "effect_prefix");
         SourcePowerVerdict.Apply(routeLimited, SourcePowerVerdict.FromSample(Sample(8.1)));
-        check(routeLimited["summary"]!["tradeoff_first"]!.GetValue<bool>() &&
+        check(!routeLimited["summary"]!["tradeoff_first"]!.GetValue<bool>() &&
             !plan["summary"]!["tradeoff_first"]!.GetValue<bool>(),
-            "source power: only the limited-route verdict pushes the tradeoff card up");
+            "source power: local watts do not reorder the tradeoff card");
+        check(power["worth_baking"] is null && power["threshold_watts"] is null &&
+            power["verdict"]!["worth_baking"] is null &&
+            power["sampler_verdict"]!["worth_baking"]!.GetValue<bool>() == false &&
+            power["measurement_scope"]!.GetValue<string>() == "this_device_only",
+            "source power: old sampler verdict is retained as history, not reused as an active benefit verdict");
         check(plan[SourcePowerVerdict.Field]!["measured_watts"]!.GetValue<double>() == 0.55 &&
             plan[SourcePowerVerdict.Field]!["report_path"]!.GetValue<string>() == @"D:\sample\report.json" &&
             SourcePowerVerdict.Skipped("no Wallpaper Engine")["status"]!.GetValue<string>() == "skipped",
             "source power: the reading and its report path are kept in the plan, and a skipped measurement says why");
 
-        // ---- ③ 1 帧、0 个视频层的结果不是成品 ----
+        // ---- ③ 单帧静态输出也是完成的产物，不能据此判断有无收益 ----
         JsonObject staticBake = new() { ["frames"] = 1, ["video_layers"] = 0, ["static_layers"] = 1 };
         JsonObject videoBake = new() { ["frames"] = 2256, ["video_layers"] = 1, ["static_layers"] = 0 };
         JsonObject mixedBake = new() { ["frames"] = 1, ["video_layers"] = 1, ["static_layers"] = 1 };

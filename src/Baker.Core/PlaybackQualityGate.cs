@@ -72,7 +72,36 @@ public static partial class PlaybackQualityGate
     public static string[] MetricArguments(string metric, string product, string master, string encodeFilter,
         IReadOnlyList<ulong> frames) =>
         ["-hide_banner", "-nostdin", "-i", product, "-i", master,
-            "-filter_complex", CompareGraph(encodeFilter, frames, metric), "-f", "null", "-"];
+            "-filter_complex", CompareGraph(encodeFilter, frames, metric), "-c:v", "rawvideo", "-f", "null", "-"];
+
+    /// <summary>Decode and convert each input once for both metrics; split only the selected frames.</summary>
+    public static string[] MetricsArguments(string product, string master, string encodeFilter,
+        IReadOnlyList<ulong> frames)
+    {
+        string graph = $"{MasterBranch(encodeFilter, frames)};[0:v]{SelectExpression(frames)}[{ProductLabel}];" +
+            $"[{ProductLabel}]split=2[gateps][gatepp];[{MasterLabel}]split=2[gatems][gatemp];" +
+            "[gateps][gatems]ssim[gatessim];[gatepp][gatemp]psnr[gatepsnr]";
+        // The packaged FFmpeg omits wrapped_avframe, the null muxer's default encoder.
+        return ["-hide_banner", "-nostdin", "-nostats", "-i", product, "-i", master,
+            "-filter_complex", graph, "-map", "[gatessim]", "-map", "[gatepsnr]",
+            "-an", "-c:v", "rawvideo", "-f", "null", "-"];
+    }
+
+    // Seek both videos to the same short rational-time window instead of decoding
+    // the whole loop merely to discard every frame except the quality samples.
+    internal static string[] SampleMetricArguments(string product, string master, string encodeFilter,
+        ulong frame, uint numerator, uint denominator)
+    {
+        var productInput = ExactFrameRange.Build(product, frame, 1, numerator, denominator);
+        var masterInput = ExactFrameRange.Build(master, frame, 1, numerator, denominator);
+        string reference = encodeFilter.Replace("[0:v]", $"[1:v]{masterInput.Filter},", StringComparison.Ordinal)
+            .Replace("[packed]", "[samplemaster]", StringComparison.Ordinal);
+        string graph = reference + $";[0:v]{productInput.Filter}[sampleproduct];" +
+            "[sampleproduct]split=2[ps][pp];[samplemaster]split=2[ms][mp];[ps][ms]ssim[ss];[pp][mp]psnr[psnr]";
+        return ["-hide_banner", "-nostdin", "-nostats", "-threads", "2", .. productInput.Arguments,
+            "-threads", "2", .. masterInput.Arguments, "-filter_complex_threads", "1", "-filter_complex", graph,
+            "-map", "[ss]", "-map", "[psnr]", "-frames:v:0", "1", "-frames:v:1", "1", "-an", "-c:v", "rawvideo", "-f", "null", "-"];
+    }
 
     [GeneratedRegex(@"\bAll:\s*(?<value>[0-9]+(?:\.[0-9]+)?)")]
     private static partial Regex SsimAll();
@@ -107,6 +136,7 @@ public static partial class PlaybackQualityGate
     public const string ActionAccepted = "accepted";
     public const string ActionEscalated = "escalated";
     public const string ActionFellBack = "fell_back_to_software";
+    public const string ActionRejected = "rejected";
 
     /// <summary>
     /// 汇总 bake.json 的 playback_quality_gate 段：指标、抽样帧、参照与阈值、实测值、升档次数与最终动作。
@@ -125,7 +155,7 @@ public static partial class PlaybackQualityGate
         ["measured_psnr"] = psnr is null || double.IsInfinity(psnr.Value) ? null : Math.Round(psnr.Value, 3),
         ["measured_psnr_infinite"] = psnr is not null && double.IsInfinity(psnr.Value),
         ["quality_step"] = qualityStep,
-        ["passed"] = action != ActionFellBack,
+        ["passed"] = action != ActionFellBack && action != ActionRejected,
         ["action"] = action,
         ["note"] = note,
     };

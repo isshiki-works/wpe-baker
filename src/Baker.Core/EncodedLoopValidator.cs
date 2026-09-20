@@ -88,10 +88,11 @@ public static class EncodedLoopValidator
     {
         ArgumentNullException.ThrowIfNull(renderManifest);
         ArgumentNullException.ThrowIfNull(wrapRgba);
-        // 直编只做不透明组：透明成品的左右并排 alpha 在这条路线上不存在。
+        bool gpu = renderManifest["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
+        string packing = renderManifest["pixel_packing"]?.GetValue<string>() ?? "";
         if (renderManifest["status"]?.GetValue<string>() != "completed" || renderManifest["lossless_test_encoding"]?.GetValue<bool>() != false ||
-            renderManifest["pixel_packing"]?.GetValue<string>() != "rgb" || packedAlpha)
-            throw new InvalidDataException("直编接缝参照需要完成的不透明直编渲染，没有左右并排的 alpha。");
+            packing != (packedAlpha ? "rgba_side_by_side" : "rgb") || (packedAlpha && !gpu))
+            throw new InvalidDataException("Direct loop references require a completed render with matching pixel packing.");
         JsonObject request = renderManifest["request"]!.AsObject();
         int captureWidth = request["width"]!.GetValue<int>(), captureHeight = request["height"]!.GetValue<int>();
         crop.Validate();
@@ -101,10 +102,21 @@ public static class EncodedLoopValidator
             throw new InvalidDataException("直编接缝参照的裁剪区或周期与这次渲染不一致。");
         byte[] Layout(ReadOnlySpan<byte> rgba) => LoopClosureCheck.EncodedLayout(rgba, captureWidth, captureHeight,
             crop.X, crop.Y, crop.Width, crop.Height, packedAlpha);
-        byte[] first = Layout(await LoopClosureCheck.ReadRetainedFrameAsync(renderManifest, 0, cancellationToken));
+        byte[] firstRgba = await LoopClosureCheck.ReadRetainedFrameAsync(renderManifest, 0, cancellationToken);
+        uint crossfade = gpu ? renderManifest["loop_crossfade"]?["crossfade_frames"]?.GetValue<uint>() ?? 0 : 0;
+        if (crossfade > 0)
+        {
+            if (crossfade >= loopFrames || renderManifest["loop_crossfade"]?["status"]?.GetValue<string>() != "applied")
+                throw new InvalidDataException("GPU loop crossfade reference is invalid.");
+            for (int i = 0; i < firstRgba.Length; i++)
+                firstRgba[i] = (byte)(((ulong)firstRgba[i] + (ulong)crossfade * wrapRgba[i]) / (crossfade + 1UL));
+        }
+        byte[] first = Layout(firstRgba);
         byte[] last = Layout(await LoopClosureCheck.ReadRetainedFrameAsync(renderManifest, loopFrames - 1, cancellationToken));
-        return new(first, last, Layout(wrapRgba), crop.Width * (packedAlpha ? 2 : 1), crop.Height, 0, closure,
-            "m[0], m[P-1], f[P]: renderer RGBA frames retained before encoding, cropped like the playback encode; no lossless master was written.");
+        return new(first, last, Layout(wrapRgba), crop.Width * (packedAlpha ? 2 : 1), crop.Height, crossfade, closure,
+            crossfade > 0
+                ? "m[0] reconstructed with the GPU integer crossfade from retained f[0] and f[P]; m[P-1] and f[P] retained before encoding; all cropped like playback."
+                : "m[0], m[P-1], f[P]: renderer RGBA frames retained before encoding, cropped like the playback encode; no lossless master was written.");
     }
 
     /// <summary>
@@ -114,18 +126,11 @@ public static class EncodedLoopValidator
     public static async Task<LoopReference> FromScaledRenderAsync(NativeTools tools, JsonObject renderManifest, int encodeWidth,
         int encodeHeight, bool packedAlpha, ulong loopFrames, JsonObject closure, CancellationToken cancellationToken = default)
     {
-        JsonObject retained = renderManifest["retained_frames"] as JsonObject
-            ?? throw new InvalidDataException("渲染清单没有 retained_frames。");
-        string path = retained["path"]!.GetValue<string>();
-        int width = retained["width"]!.GetValue<int>(), height = retained["height"]!.GetValue<int>();
-        ulong[] indices = retained["frame_indices"]!.AsArray().Select(node => node!.GetValue<ulong>()).ToArray();
-        if (!indices.SequenceEqual(LoopClosureCheck.ReferenceFrameIndices(loopFrames)) || loopFrames < 2 || encodeWidth <= 0 || encodeHeight <= 0)
-            throw new InvalidDataException("留下的原帧不是第 0、P−1、P 帧。");
+        (ulong[] indices, byte[] scaled) = await ScaleRetainedFramesAsync(tools, renderManifest, encodeWidth, encodeHeight,
+            null, cancellationToken);
+        if (loopFrames < 2 || !LoopClosureCheck.ReferenceFrameIndices(loopFrames).All(indices.Contains))
+            throw new InvalidDataException("留下的原帧没有覆盖第 0、P−1、P 帧。");
         int scaledBytes = checked(encodeWidth * encodeHeight * 4);
-        byte[] scaled = await EncodedQualityValidator.RunFfmpegBytesAsync(tools, ["-hide_banner", "-nostdin", "-v", "error",
-            "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", $"{width}x{height}", "-framerate", "1", "-i", path,
-            "-vf", $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba", "-frames:v", indices.Length.ToString(CultureInfo.InvariantCulture),
-            "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"], checked((long)scaledBytes * indices.Length), cancellationToken);
         byte[] Layout(ulong index)
         {
             int position = Array.IndexOf(indices, index);
@@ -136,11 +141,41 @@ public static class EncodedLoopValidator
             "m[0], m[P-1], f[P]: renderer RGBA frames scaled with the encoder's own lanczos step to the encoded content size.");
     }
 
-    public static async Task<JsonObject> ValidateAsync(string videoFile, NativeTools tools, ulong loopFrames, uint fpsNumerator,
+    internal static async Task<(ulong[] Indices, byte[] Rgba)> ScaleRetainedFramesAsync(NativeTools tools,
+        JsonObject renderManifest, int encodeWidth, int encodeHeight, CacheRegion? crop, CancellationToken cancellationToken)
+    {
+        JsonObject retained = renderManifest["retained_frames"] as JsonObject
+            ?? throw new InvalidDataException("渲染清单没有 retained_frames。");
+        string path = retained["path"]!.GetValue<string>();
+        int width = retained["width"]!.GetValue<int>(), height = retained["height"]!.GetValue<int>();
+        ulong[] indices = retained["frame_indices"]!.AsArray().Select(node => node!.GetValue<ulong>()).ToArray();
+        if (indices.Length == 0 || encodeWidth <= 0 || encodeHeight <= 0)
+            throw new InvalidDataException("Retained frame indices and positive scaled dimensions are required.");
+        int scaledBytes = checked(encodeWidth * encodeHeight * 4);
+        string cropFilter = crop is null ? "" : $"crop={crop.Width}:{crop.Height}:{crop.X}:{crop.Y},";
+        byte[] scaled = await EncodedQualityValidator.RunFfmpegBytesAsync(tools, ["-hide_banner", "-nostdin", "-v", "error",
+            "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", $"{width}x{height}", "-framerate", "1", "-i", path,
+            "-vf", $"{cropFilter}scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba", "-frames:v", indices.Length.ToString(CultureInfo.InvariantCulture),
+            "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"], checked((long)scaledBytes * indices.Length), cancellationToken);
+        return (indices, scaled);
+    }
+
+    public static Task<JsonObject> ValidateAsync(string videoFile, NativeTools tools, ulong loopFrames, uint fpsNumerator,
         uint fpsDenominator, bool packedAlpha, LoopReference reference, EncodedContentRegion? content = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(reference);
+        return ValidateAsync(videoFile, tools, loopFrames, fpsNumerator, fpsDenominator, packedAlpha,
+            reference.Closure, reference.Width, reference.Height, content, cancellationToken, reference);
+    }
+
+    // The verdict needs closure and stream metadata. Original/decoded pixel
+    // comparisons are optional diagnostics, requested by the overload above.
+    public static async Task<JsonObject> ValidateAsync(string videoFile, NativeTools tools, ulong loopFrames, uint fpsNumerator,
+        uint fpsDenominator, bool packedAlpha, JsonObject closure, int referenceWidth, int referenceHeight,
+        EncodedContentRegion? content = null, CancellationToken cancellationToken = default, LoopReference? reference = null)
+    {
+        ArgumentNullException.ThrowIfNull(closure);
         if (!File.Exists(videoFile)) throw new FileNotFoundException("Encoded video is missing.", videoFile);
         foreach (string executable in new[] { tools.Ffmpeg, tools.Ffprobe }) if (!File.Exists(executable)) throw new FileNotFoundException("Required native tool is missing.", executable);
         if (loopFrames < 2 || fpsNumerator == 0 || fpsDenominator == 0) throw new ArgumentException("Loop frames and FPS must be positive.");
@@ -152,35 +187,40 @@ public static class EncodedLoopValidator
             await FrameCountAsync(videoFile, tools, stream, loopFrames, cancellationToken);
         bool framesMatch = decoded == loopFrames;
         bool fpsMatch = SameRate(actualNum, actualDen, fpsNumerator, fpsDenominator);
-        bool closed = LoopClosureCheck.Allows(reference.Closure);
+        bool closed = LoopClosureCheck.Allows(closure);
         ulong last = Math.Min(decoded, loopFrames);
         if (last < 2) throw new InvalidDataException("Encoded video has fewer than two decodable frames.");
         int halves = packedAlpha ? 2 : 1;
         if (content is not null && (width != checked(content.PaddedWidth * halves) || height != content.PaddedHeight))
             throw new InvalidDataException("Encoded video dimensions differ from the declared padded canvas.");
-        byte[] Measure(byte[] frame) => content is null ? frame : content.Extract(frame, halves);
-        List<byte[]> head = await EncodedQualityValidator.DecodeExactFramesAsync(videoFile, tools, 0, 2, width, height,
-            actualNum, actualDen, null, cancellationToken);
-        List<byte[]> tail = await EncodedQualityValidator.DecodeExactFramesAsync(videoFile, tools, last - 2, 2, width, height,
-            actualNum, actualDen, null, cancellationToken);
-        byte[] enc0 = Measure(head[0]), enc1 = Measure(head[1]), encBefore = Measure(tail[0]), encLast = Measure(tail[1]);
         int measuredWidth = content is null ? width : content.Width * halves, measuredHeight = content?.Height ?? height;
-        if (reference.Width != measuredWidth || reference.Height != measuredHeight ||
-            new[] { reference.First, reference.Last, reference.Wrap }.Any(frame => frame.Length != enc0.Length))
-            throw new InvalidDataException("接缝参照帧与成品的测量布局不一致。");
+        if (referenceWidth != measuredWidth || referenceHeight != measuredHeight)
+            throw new InvalidDataException("接缝参照布局与成品不一致。");
+        JsonObject? rgb = null, alpha = null;
+        if (reference is not null)
+        {
+            byte[] Measure(byte[] frame) => content is null ? frame : content.Extract(frame, halves);
+            List<byte[]> head = await EncodedQualityValidator.DecodeExactFramesAsync(videoFile, tools, 0, 2, width, height,
+                actualNum, actualDen, null, cancellationToken);
+            List<byte[]> tail = await EncodedQualityValidator.DecodeExactFramesAsync(videoFile, tools, last - 2, 2, width, height,
+                actualNum, actualDen, null, cancellationToken);
+            byte[] enc0 = Measure(head[0]), enc1 = Measure(head[1]), encBefore = Measure(tail[0]), encLast = Measure(tail[1]);
+            if (new[] { reference.First, reference.Last, reference.Wrap }.Any(frame => frame.Length != enc0.Length))
+                throw new InvalidDataException("接缝参照帧与成品的测量布局不一致。");
 
-        int planeWidth = measuredWidth / halves;
-        byte[] rgbMask = packedAlpha
-            ? LoopClosureCheck.AlphaMask([Half(reference.First, planeWidth, measuredHeight, 1), Half(reference.Last, planeWidth, measuredHeight, 1),
-                Half(reference.Wrap, planeWidth, measuredHeight, 1)], 3, 0)
-            : [];
-        JsonObject Plane(int half, byte[] mask) => SeamPlane(
-            Half(enc0, planeWidth, measuredHeight, half, halves), Half(enc1, planeWidth, measuredHeight, half, halves),
-            Half(encBefore, planeWidth, measuredHeight, half, halves), Half(encLast, planeWidth, measuredHeight, half, halves),
-            Half(reference.First, planeWidth, measuredHeight, half, halves), Half(reference.Last, planeWidth, measuredHeight, half, halves),
-            Half(reference.Wrap, planeWidth, measuredHeight, half, halves), planeWidth, measuredHeight, mask);
-        JsonObject rgb = Plane(0, rgbMask);
-        JsonObject? alpha = packedAlpha ? Plane(1, []) : null;
+            int planeWidth = measuredWidth / halves;
+            byte[] rgbMask = packedAlpha
+                ? LoopClosureCheck.AlphaMask([Half(reference.First, planeWidth, measuredHeight, 1), Half(reference.Last, planeWidth, measuredHeight, 1),
+                    Half(reference.Wrap, planeWidth, measuredHeight, 1)], 3, 0)
+                : [];
+            JsonObject Plane(int half, byte[] mask) => SeamPlane(
+                Half(enc0, planeWidth, measuredHeight, half, halves), Half(enc1, planeWidth, measuredHeight, half, halves),
+                Half(encBefore, planeWidth, measuredHeight, half, halves), Half(encLast, planeWidth, measuredHeight, half, halves),
+                Half(reference.First, planeWidth, measuredHeight, half, halves), Half(reference.Last, planeWidth, measuredHeight, half, halves),
+                Half(reference.Wrap, planeWidth, measuredHeight, half, halves), planeWidth, measuredHeight, mask);
+            rgb = Plane(0, rgbMask);
+            alpha = packedAlpha ? Plane(1, []) : null;
+        }
 
         var failures = new JsonArray();
         if (!closed) failures.Add("loop_not_closed");
@@ -193,7 +233,7 @@ public static class EncodedLoopValidator
             ["status"] = pass ? "observed_seam_pass" : "observed_seam_fail",
             ["criterion"] = "reference_seam",
             ["failures"] = failures,
-            ["scope"] = "Verdict: loop closure (judged before encoding on renderer frames), frame count (container header, confirmed by decoding whenever it disagrees) and frame rate. The seam difference map against the original's own step and the encoding noise are recorded, not judged: the identity (enc[0]-enc[P-1]) - (f[P]-m[P-1]) = (m[0]-f[P]) + (e[0]-e[P-1]) leaves nothing else to judge.",
+            ["scope"] = "Verdict: loop closure (judged before encoding on renderer frames), frame count (container header, confirmed by decoding whenever it disagrees) and frame rate. Original/encoded seam differences and encoding noise are optional diagnostics and do not affect this verdict.",
             ["automatic_visual_certification"] = false,
             ["video_file"] = Path.GetFullPath(videoFile),
             ["packed_alpha"] = packedAlpha,
@@ -210,8 +250,8 @@ public static class EncodedLoopValidator
                 ["frames"] = loopFrames, ["fps_numerator"] = fpsNumerator, ["fps_denominator"] = fpsDenominator,
                 ["frame_count_matches"] = framesMatch, ["frame_rate_matches"] = fpsMatch
             },
-            ["loop_closure"] = reference.Closure.DeepClone(),
-            ["reference_seam"] = new JsonObject
+            ["loop_closure"] = closure.DeepClone(),
+            ["reference_seam"] = reference is null ? new JsonObject { ["status"] = "not_requested" } : new JsonObject
             {
                 ["loop_frames"] = loopFrames,
                 ["crossfade_frames"] = reference.CrossfadeFrames,
@@ -247,12 +287,9 @@ public static class EncodedLoopValidator
     }
 
     /// <summary>
-    /// 成品帧数：先读容器头声明的 nb_frames，不解码。成品是本工具自己编出来的，encode_playback 编完就已经
-    /// 用 ffprobe -count_frames 全解码核过一次帧数、时长与帧率（NativeRenderRunner.Crop.cs），所以这里再全解码
-    /// 一遍是对同一个文件的第三次。容器头给不出帧数，或它与期望帧数不一致时，才回退 -count_frames 确认，
-    /// 并把回退原因写进报告——不拿容器头的一句话去拒一个成品。
+    /// 本工具成功写出的成品先核容器帧数；缺失或不一致时才解码确认，并保留实际计数来源。
     /// </summary>
-    private static async Task<(ulong Count, string Source, string? FallbackReason)> FrameCountAsync(string videoFile,
+    internal static async Task<(ulong Count, string Source, string? FallbackReason)> FrameCountAsync(string videoFile,
         NativeTools tools, JsonObject stream, ulong loopFrames, CancellationToken token)
     {
         if (!EncodedQualityValidator.TryContainerFrameCount(stream, out ulong declared))

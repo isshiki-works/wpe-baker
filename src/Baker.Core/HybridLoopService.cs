@@ -28,6 +28,17 @@ public static class HybridLoopService
         var shader = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, bakedLayerIds, ceilingSeconds);
         var unresolved = new JsonArray(shader.Unresolved.Select(UnresolvedJson).ToArray());
         AddRuntimeMaterialTemporalUnresolved(runtime, bakedLayerIds, unresolved, shader.RuledMaterials);
+        // A model/shader period does not also prove the state advanced by an authored script.
+        // Keep the observed owner so allocation fallback can retain that subtree live.
+        foreach (var dependency in (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(item => item["operation"]?.GetValue<string>() == "time" &&
+                item["initialization"]?.GetValue<bool>() != true &&
+                HybridScenePlanner.Int(item["owner"]) is int owner && bakedLayerIds.Contains(owner))
+            .DistinctBy(item => (HybridScenePlanner.Int(item["owner"]), item["binding"]?.GetValue<string>())))
+            unresolved.Add(new JsonObject {
+                ["kind"] = "script_time", ["owner_layer_id"] = dependency["owner"]!.DeepClone(),
+                ["binding"] = dependency["binding"]?.DeepClone(), ["clock"] = dependency["property"]?.DeepClone(),
+                ["detail"] = Messages.Emit("unresolved.script_time") });
         var patches = new List<Patch>();
         foreach (var item in shader.Components)
         {
@@ -82,9 +93,9 @@ public static class HybridLoopService
         {
             // 没有任何已建模的时间机制时只剩两种结局：证明这一帧是静态的，或者说清楚为什么证明不了。
             // 旧实现在证明不了时一个字都不写，plan 里就出现零候选零理由的 unavailable（沉默拒绝）。
-            string? obstacle = SourceStaticObstacle(scene, source, assetsDirectory, runtime, bakedLayerIds);
+            JsonObject? obstacle = SourceStaticObstacle(scene, source, assetsDirectory, runtime, bakedLayerIds);
             sourceStatic = obstacle is null;
-            if (obstacle is not null) unresolved.Add(new JsonObject { ["kind"] = "source_static", ["detail"] = obstacle });
+            if (obstacle is not null) unresolved.Add(obstacle);
         }
         if (sourceStatic)
             candidates.Add(new JsonObject { ["frames"] = 1UL, ["seconds"] = (double)fpsDenominator / fpsNumerator,
@@ -152,7 +163,7 @@ public static class HybridLoopService
         JsonObject? swayRecord = swayRetime is null ? null : ApplySwayRetime(shader.Unresolved, unresolved, candidates,
             locked.Length == 0, fpsNumerator, fpsDenominator, swayRetime, spriteTables);
         // 没有任何周期分量（求解器与摆动改频都没给出候选），而未解析项全部是满足平稳随机判据、可交叉淡化的粒子：
-        // 粒子本身定不出循环长度，取明确的默认长度 min(60 秒, 上限)，接缝交给残差掩盖的交叉淡化。
+        // 粒子本身定不出循环长度，从 min(60 秒, 上限) 起，必要时在上限内延长到最长寿命之后；接缝由残差交叉淡化处理。
         // 有周期分量时长度由上面的求解器按这些周期的公共闭合给出，这里不插手；位移类等不可掩盖的未解析项不是粒子，不满足前提。
         JsonObject? particleDefault = candidates.Count == 0 && locked.Length == 0
             ? StationaryParticleDefaultLoop(unresolved, candidates, fpsNumerator, fpsDenominator, ceiling)
@@ -195,12 +206,12 @@ public static class HybridLoopService
         return report;
     }
 
-    /// <summary>粒子默认循环长度（秒）：没有周期分量可定长时取 min(这个值, 循环时长上限)。</summary>
+    /// <summary>粒子默认循环长度（秒）：长寿命粒子可在循环上限内延长到寿命之后。</summary>
     public const long StationaryParticleDefaultLoopSeconds = 60;
 
     /// <summary>
-    /// 未解析项全部是平稳随机粒子（particle_stationarity.stationary 为真、预热与寿命可读）时，追加一个 min(60 秒, 上限) 的候选，
-    /// 帧数向下取整到输出帧网格；返回写进 loop.loop_length_default 的记录。前提不成立（有别的未解析项）时返回 null、什么都不加。
+    /// 未解析项全部是平稳随机粒子（particle_stationarity.stationary 为真、预热与寿命可读）时，从 min(60 秒, 上限) 起选候选，
+    /// 必要时延长到最长寿命之后的首个输出帧，但不超过上限。返回 loop.loop_length_default 记录；有其它未解析项时不追加候选。
     /// 交叉淡化替换要求接缝两侧不共享粒子（循环长度 &gt; 粒子最长寿命，见 design-particle-crossfade §2.3），不满足时不加候选、记原因。
     /// </summary>
     private static JsonObject? StationaryParticleDefaultLoop(JsonArray unresolved, JsonArray candidates, uint fpsNumerator,
@@ -226,13 +237,18 @@ public static class HybridLoopService
         if ((Int128)ceiling.Numerator * target.Denominator < (Int128)target.Numerator * ceiling.Denominator) target = ceiling;
         UInt128 frames = (UInt128)target.Numerator * fpsNumerator / ((UInt128)target.Denominator * fpsDenominator);
         if (frames == 0 || frames > ulong.MaxValue) return null;
+        UInt128 ceilingFrames = (UInt128)ceiling.Numerator * fpsNumerator / ((UInt128)ceiling.Denominator * fpsDenominator);
+        double lifetimeFrames = Math.Floor(longestLifetime * fpsNumerator / fpsDenominator) + 1;
+        if (double.IsFinite(lifetimeFrames) && lifetimeFrames <= (double)UInt128.Min(ceilingFrames, ulong.MaxValue))
+            frames = UInt128.Max(frames, (UInt128)lifetimeFrames);
         double seconds = (double)frames * fpsDenominator / fpsNumerator;
         var record = new JsonObject {
             ["kind"] = "stationary_particle_default", ["default_seconds"] = StationaryParticleDefaultLoopSeconds,
             ["loop_length_maximum_seconds"] = ceiling.ToSeconds(), ["frames"] = (ulong)frames, ["seconds"] = seconds,
             ["particle_layer_ids"] = layerIds, ["max_particle_lifetime_seconds"] = longestLifetime, ["max_warmup_seconds"] = longestWarmup,
             ["basis"] = "No periodic component constrains the capture and every unresolved mechanism is a stationary-random particle system " +
-                "whose seam is crossfaded, so the loop length is min(60 s, loop length maximum) rounded down to the output frame grid."
+                "whose seam is crossfaded. Start at min(60 s, loop length maximum) on the output frame grid; " +
+                "extend past the longest particle lifetime when this fits within the loop length maximum."
         };
         string secondsText = seconds.ToString("0.###", CultureInfo.InvariantCulture);
         if (seconds <= longestLifetime)
@@ -471,63 +487,65 @@ public static class HybridLoopService
     }
 
     /// <summary>
-    /// 返回 null 表示这次捕获可由源与运行时证据证明为一张静态图；否则返回一句可追溯的理由。
+    /// 返回 null 表示这次捕获可由源与运行时证据证明为一张静态图；否则保留理由和可定位的所有者，供重新分配使用。
     /// 旧版返回 bool，判否时不留任何记录，是 plan 里"零候选零理由 unavailable"的直接来源。
     /// </summary>
-    private static string? SourceStaticObstacle(JsonObject scene, ProjectSource source, string? assetsDirectory,
+    private static JsonObject? SourceStaticObstacle(JsonObject scene, ProjectSource source, string? assetsDirectory,
         JsonObject runtime, IReadOnlyCollection<int> bakedLayerIds)
     {
+        static JsonObject Obstacle(string detail, int? owner = null) => new() {
+            ["kind"] = "source_static", ["detail"] = detail, ["owner_layer_id"] = owner };
         if (runtime["status"] is not JsonValue status || !status.TryGetValue<string>(out string? state) || state != "complete" || runtime["runtime_layers"] is not JsonArray layers ||
             runtime["runtime_dependencies"] is not JsonArray dependencies || runtime["runtime_animation_periods"] is not JsonArray periods)
-            return "Runtime observation is incomplete, so a static capture cannot be proven.";
+            return Obstacle("Runtime observation is incomplete, so a static capture cannot be proven.");
         var selected = new HashSet<int>(bakedLayerIds);
-        if (selected.Count == 0) return "No layer is allocated to video, so there is nothing to capture.";
-        if (scene["objects"] is not JsonArray objects) return "The source scene lists no objects.";
+        if (selected.Count == 0) return Obstacle("No layer is allocated to video, so there is nothing to capture.");
+        if (scene["objects"] is not JsonArray objects) return Obstacle("The source scene lists no objects.");
         bool noLights = !SceneAnalyzer.Walk(scene).OfType<JsonObject>().Any(node => node.ContainsKey("light"));
         var owners = new Dictionary<int, JsonObject>();
         foreach (JsonNode? node in objects)
         {
             if (node is not JsonObject owner || owner["id"] is not JsonValue idValue || !idValue.TryGetValue<int>(out int id) || !owners.TryAdd(id, owner))
-                return "The source scene has an object without a unique integer id.";
+                return Obstacle("The source scene has an object without a unique integer id.");
         }
         string Describe(int id) => owners.TryGetValue(id, out JsonObject? owner) && owner["name"] is JsonValue name &&
             name.TryGetValue<string>(out string? text) && !string.IsNullOrWhiteSpace(text) ? $"layer {id} \"{text}\"" : $"layer {id}";
         foreach (int id in selected)
-            if (!owners.ContainsKey(id)) return $"Baked {Describe(id)} is absent from the source scene.";
+            if (!owners.ContainsKey(id)) return Obstacle($"Baked {Describe(id)} is absent from the source scene.");
         foreach (int id in selected)
             if (DynamicSourceMechanism(owners[id]) is string mechanism)
-                return $"Baked {Describe(id)} contains {mechanism}; no analytic period was established for it either, so neither a loop nor a still image can be proven.";
+                return Obstacle($"Baked {Describe(id)} contains {mechanism}; no analytic period was established for it either, so neither a loop nor a still image can be proven.", id);
         foreach (JsonNode? node in periods)
         {
             if (node is not JsonObject period || period["source_owner_layer_id"] is not JsonValue owner ||
                 !owner.TryGetValue<int>(out int id) || period["mechanism"] is not JsonValue)
-                return "A runtime animation period entry is malformed, so the observation cannot establish a still image.";
-            if (selected.Contains(id)) return $"Runtime observation recorded an animation period on baked {Describe(id)}.";
+                return Obstacle("A runtime animation period entry is malformed, so the observation cannot establish a still image.");
+            if (selected.Contains(id)) return Obstacle($"Runtime observation recorded an animation period on baked {Describe(id)}.", id);
         }
         foreach (JsonNode? node in dependencies)
         {
             if (node is not JsonObject dependency || dependency["owner"] is not JsonValue owner || dependency["target"] is not JsonValue target ||
                 !owner.TryGetValue<int>(out int ownerId) || !target.TryGetValue<int>(out int targetId))
-                return "A runtime dependency entry is malformed, so the observation cannot establish a still image.";
+                return Obstacle("A runtime dependency entry is malformed, so the observation cannot establish a still image.");
             if (!selected.Contains(ownerId) && !selected.Contains(targetId)) continue;
             if (dependency["operation"] is not JsonValue operation || !operation.TryGetValue<string>(out string? name) || name != "write" ||
                 dependency["initialization"] is not JsonValue initialization || !initialization.TryGetValue<bool>(out bool initial) || !initial)
-                return $"Baked {Describe(selected.Contains(ownerId) ? ownerId : targetId)} takes part in a runtime dependency that is not an initialization write.";
+                return Obstacle($"Baked {Describe(selected.Contains(ownerId) ? ownerId : targetId)} takes part in a runtime dependency that is not an initialization write.", selected.Contains(ownerId) ? ownerId : targetId);
         }
         foreach (int id in selected)
         {
             JsonObject[] observed = layers.OfType<JsonObject>().Where(layer =>
                 layer["owner"] is JsonValue owner && owner.TryGetValue<int>(out int observedOwner) && observedOwner == id).ToArray();
-            if (observed.Length == 0) return $"Runtime observation recorded no rendered layer for baked {Describe(id)}.";
+            if (observed.Length == 0) return Obstacle($"Runtime observation recorded no rendered layer for baked {Describe(id)}.", id);
             foreach (JsonObject layer in observed)
             {
                 if (layer["has_mesh"] is not JsonValue mesh || !mesh.TryGetValue<bool>(out _) || layer["materials"] is not JsonArray materials)
-                    return $"Runtime observation of baked {Describe(id)} omits its mesh flag or material list.";
+                    return Obstacle($"Runtime observation of baked {Describe(id)} omits its mesh flag or material list.", id);
                 foreach (JsonNode? node in materials)
                 {
-                    if (node is not JsonObject material) return $"Runtime observation of baked {Describe(id)} has a malformed material entry.";
+                    if (node is not JsonObject material) return Obstacle($"Runtime observation of baked {Describe(id)} has a malformed material entry.", id);
                     if (MaterialStaticObstacle(material, source, assetsDirectory, noLights) is string reason)
-                        return $"Baked {Describe(id)}: {reason}.";
+                        return Obstacle($"Baked {Describe(id)}: {reason}.", id);
                 }
             }
         }

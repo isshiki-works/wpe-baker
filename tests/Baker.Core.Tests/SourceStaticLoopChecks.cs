@@ -41,8 +41,20 @@ internal static class SourceStaticLoopChecks
             "unknown active uniforms do not become static by omission");
         check(!Analyze(Scene(), Runtime("video"))["source_static"]!.GetValue<bool>(),
             "embedded video texture remains non-static even without a period trace");
-        check(!Analyze(Scene(new JsonObject { ["id"] = 1, ["script"] = "export function update() {}" }), Runtime())["source_static"]!.GetValue<bool>(),
-            "source scripts remain non-static without observed writes");
+        JsonObject scriptedScene = Scene(new JsonObject { ["id"] = 1, ["script"] = "export function update() {}" });
+        JsonObject scripted = Analyze(scriptedScene, Runtime());
+        check(!scripted["source_static"]!.GetValue<bool>() &&
+            scripted["unresolved"]!.AsArray().OfType<JsonObject>().Any(item =>
+                item["kind"]?.GetValue<string>() == "source_static" && item["owner_layer_id"]?.GetValue<int>() == 1),
+            "unproven script state stays non-static and identifies its owner for partial allocation");
+        scriptedScene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 2, ["image"] = "models/genericimage.json" });
+        JsonObject allocation = HybridLoopAllocation.Explain(new JsonObject {
+            ["settings"] = new JsonObject(), ["loop"] = scripted.DeepClone(),
+            ["video_groups"] = new JsonArray(new JsonObject { ["layer_ids"] = new JsonArray(1, 2) }) }, scriptedScene);
+        check(allocation["status"]?.GetValue<string>() == "proposed" &&
+            allocation["retain_live_root_ids"]!.AsArray().Select(x => x!.GetValue<int>()).SequenceEqual([1]) &&
+            allocation["remaining_baked_layer_ids"]!.AsArray().Select(x => x!.GetValue<int>()).SequenceEqual([2]),
+            "one unproven controller no longer prevents trying an independent static layer");
 
         JsonObject sourceClock = Runtime();
         JsonObject sourceMaterial = sourceClock["runtime_layers"]![0]!["materials"]![0]!.AsObject();

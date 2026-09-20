@@ -268,8 +268,13 @@ internal static class ParticleStationarityChecks
         // ---- C1 发射器 ----
         check(Codes(Verdict(Load("3151551777", 799))).Contains("C1 emitter_burst"),
             "C1 反例：3151551777 层 799 的 instantaneous 20 是爆发发射，不放行");
-        check(Only(Verdict(Load("3516174947", 171)), "C1 emitter_rate_default_unverified"),
-            "C1 反例：3516174947 Rocks 171 的发射器没写 rate，缺省值未核，只因这一条不放行");
+        var defaultRate = Load("3516174947", 171);
+        var explicitRate = Mutate(defaultRate, (_, definition, _) => {
+            foreach (JsonObject emitter in definition["emitter"]!.AsArray().OfType<JsonObject>())
+                emitter["rate"] ??= 5.0;
+        });
+        check(Stationary(Verdict(defaultRate)) && JsonNode.DeepEquals(Verdict(defaultRate), Verdict(explicitRate)),
+            "C1：省略 rate 与原生显式默认 5 的判定、封顶和预热结果相同");
         check(Codes(Verdict(Load("3151551777", 37))).Contains("C1 emitter_audio_input"),
             "C1 反例：audioprocessingmode 非零的发射器是外部输入，不放行");
         check(Only(Verdict(Mutate(droplets, (_, definition, _) => {
@@ -353,9 +358,13 @@ internal static class ParticleStationarityChecks
         // ---- C9 渲染器与精灵帧 ----
         check(NoCondition(rainVerdict, "C9") && NoCondition(dropletsVerdict, "C9"), "C9 正例：spritetrail + randomframe 放行");
         check(Codes(trails).Contains("C9 renderer_kind"), "C9 反例：rope 渲染器不放行");
-        // 793 的 visible 挂着脚本（C8），去掉这个绑定后只剩 renderer 缺省这一条。
-        check(Only(Verdict(Mutate(Load("3151551777", 793), (obj, _, _) => obj.Remove("visible"))), "C9 renderer_default_unverified"),
-            "C9 反例：Light shafts 1 793 没写 renderer，缺省值未核，只因这一条不放行");
+        var defaultRenderer = Mutate(Load("3151551777", 793), (obj, _, _) => obj.Remove("visible"));
+        var explicitRenderer = Mutate(defaultRenderer, (_, definition, _) =>
+            definition["renderer"] = new JsonArray(new JsonObject { ["name"] = "sprite" }));
+        check(Stationary(Verdict(defaultRenderer)) && JsonNode.DeepEquals(Verdict(defaultRenderer), Verdict(explicitRenderer)),
+            "C9：省略 renderer 与原生默认 sprite 的判定相同");
+        check(Codes(Verdict(Mutate(defaultRenderer, (_, definition, _) => definition["renderer"] = "sprite")))
+            .Contains("C9 renderer_definition_invalid"), "C9：畸形 renderer 字段不当作缺省值");
         check(Only(Verdict(Mutate(droplets, (_, definition, _) => definition["animationmode"] = "once")), "C9 animation_mode_unverified"),
             "C9 反例：未核过的 animationmode 写法不放行");
 
@@ -453,12 +462,15 @@ internal static class ParticleStationarityChecks
             CandidateFrames(sprite).SequenceEqual([3600UL]),
             "默认长度受 --loop-length-max 约束（45.5 秒上限取 2730 帧），向下取整到输出帧网格（59.94 fps 取 3596 帧），带精灵轨道的平稳粒子同样适用");
 
-        JsonObject longLived = Analyze([Mutate(droplets, (_, definition, _) =>
-            definition["initializer"]!.AsArray().OfType<JsonObject>().Single(item => item["name"]!.GetValue<string>() == "lifetimerandom")["max"] = 40)]);
-        check(CandidateFrames(longLived).Length == 0 && longLived["loop_length_default"]!["status"]!.GetValue<string>() == "particle_lifetime_not_shorter_than_loop" &&
-            longLived["loop_length_default"]!["reason_zh"]!.GetValue<string>().Contains("62.016 s", StringComparison.Ordinal) &&
-            longLived["no_candidate_reason"]!["kind"]!.GetValue<string>() == "NoTemporalMechanism",
-            "粒子最长寿命（40 s × 寿命覆盖 2 / rate 覆盖 1.29 = 62.016 s）不短于默认长度时不取默认值：接缝两侧会共享粒子，交叉淡化替换的前提不成立");
+        var longParticle = Mutate(droplets, (_, definition, _) =>
+            definition["initializer"]!.AsArray().OfType<JsonObject>().Single(item => item["name"]!.GetValue<string>() == "lifetimerandom")["max"] = 40);
+        JsonObject longLived = Analyze([longParticle]);
+        JsonObject longCapped = Analyze([longParticle], loopLengthMaximum: 60);
+        check(CandidateFrames(longLived).SequenceEqual([3721UL]) &&
+            longLived["loop_length_default"]!["status"]!.GetValue<string>() == "applied" &&
+            CandidateFrames(longCapped).Length == 0 && longCapped["loop_length_default"]!["status"]!.GetValue<string>() == "particle_lifetime_not_shorter_than_loop" &&
+            longCapped["loop_length_default"]!["reason_zh"]!.GetValue<string>().Contains("62.016 s", StringComparison.Ordinal),
+            "长寿命平稳粒子延长到寿命之后的首帧（62.016 s → 3721 帧），显式 60 秒上限仍拒绝，不放松交叉淡化前提");
         check(CandidateFrames(mixed).Length == 0 && mixed["loop_length_default"] is null,
             "未解析项里还有不满足判据的粒子（跟鼠标的 560）时不取默认长度");
         JsonObject Track(int owner, double seconds, string confidence) => new() { ["source_owner_layer_id"] = owner, ["mechanism"] = "authored_track",

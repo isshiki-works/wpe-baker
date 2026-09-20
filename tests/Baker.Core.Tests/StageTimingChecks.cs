@@ -70,6 +70,18 @@ internal static class StageTimingChecks
         check(StageTiming.Summary(report, english: true)!.StartsWith("Stage timing (s): total ", StringComparison.Ordinal),
             "英文界面给出同一行的英文版本");
         check(StageTiming.Summary(new JsonObject { ["status"] = "failed" }) is null, "没有 stage_timing 的旧报告不生成汇总行");
+        var overlapped = new JsonObject { ["stage_timing"] = new JsonObject {
+            ["total_seconds"] = 10.0, ["stages"] = new JsonObject { [StageTiming.MasterRender] = 10.0 },
+            ["master_render_breakdown"] = new JsonObject { [StageTiming.EncodeMaster] = 3.0 } } };
+        string overlappedSummary = StageTiming.Summary(overlapped)!;
+        check(overlappedSummary.Contains("编码未单独计时", StringComparison.Ordinal) &&
+            overlappedSummary.Contains("管道写入等待 3.0 秒（与渲染重叠）", StringComparison.Ordinal) &&
+            !overlappedSummary.Contains("30.0%", StringComparison.Ordinal),
+            "重叠管道写入等待不是编码总耗时或独立阶段占比");
+        var inlineGroup = new JsonObject { ["playback_encode"] = new JsonObject {
+            ["encoder_used"] = "software", ["encode_seconds"] = null } };
+        check(PlaybackEncoderSelection.Summarize("vulkan", [inlineGroup])["encode_seconds_total"] is null,
+            "没有独立计时的管道编码不能汇总成零秒");
 
         var empty = new StageTiming();
         JsonObject emptyJson = empty.ToJson(0);

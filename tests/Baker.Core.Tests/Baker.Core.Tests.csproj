@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/Baker.Core/Baker.Core.csproj" /></ItemGroup>
   <ItemGroup><Compile Include="../../src/Baker.App/AppJsonPresentation.cs" Link="AppJsonPresentation.cs" />
-    <Compile Include="../../src/Baker.App/PlainLanguage.cs" Link="PlainLanguage.cs" /></ItemGroup>
+    <Compile Include="../../src/Baker.App/PlainLanguage.cs" Link="PlainLanguage.cs" />
+    <Compile Include="../../src/Baker.App/ProgressPresentation.cs" Link="ProgressPresentation.cs" /></ItemGroup>
 </Project>

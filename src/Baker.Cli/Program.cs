@@ -85,7 +85,7 @@ try
         "analyze" => ["--assets", "--out", "--tools", "--properties", "--properties-source", "--width", "--height", "--fps", "--fps-den", "--view-mode", "--video-layout", "--live-overlays", "--text-effects", "--audio-effects", "--exclude-layers", "--preset", "--retime-budget", "--max-retime", "--loop-preference", "--video-shell", "--sway-retime", "--loop-max-seconds", "--loop-length-max", "--local-seam-repair", "--trace", "--retain-live", "--device", "--lang", "--measure-source", "--wallpaper-engine", "--present-mon", "--daytime-split", "--keep-live", "--interaction"],
         "inspect" => ["--assets", "--out"],
         "decode-check" => ["--tools", "--out"],
-        "extract" => ["--out"], "bake" => ["--tools", "--out", "--encoder", "--encode-slots", "--group-parallel", "--keep-intermediates", "--lang"], "render" or "validate" => ["--tools"],
+        "extract" => ["--out"], "bake" => ["--tools", "--out", "--encoder", "--encode-slots", "--group-parallel", "--keep-intermediates", "--effect-render-scale", "--effect-resolution", "--lang"], "render" or "validate" => ["--tools"],
         "measure-official" or "targets" or "export" => [],
         "apply" or "rollback" => ["--wallpaper-engine"],
         "pack-video" or "pack-rgba" => ["--width", "--height", "--out"], _ => [] };
@@ -333,10 +333,25 @@ try
         if (input["schema_version"]?.GetValue<int>() != 2 || input["plan"]?["kind"]?.GetValue<string>() != "hybrid_video")
             throw new InvalidDataException("A version 2 Scene bake request with a supported plan is required. Legacy effect-cache and media plans were removed; analyze the Scene source again.");
         HybridPlanFormat.Validate(input["plan"]!.AsObject());
-        // 播放版编码档位；无损 master 始终是软件编码，这里只影响播放版。
+        // 播放版编码路径；支持的 Vulkan 路径直接生成成品，无需无损 master。
         if (options.TryGetValue("--encoder", out string? encoderChoice))
         {
             input["playback_encoder"] = PlaybackEncoderSelection.Normalize(encoderChoice);
+            text = input.ToJsonString();
+        }
+        if (options.TryGetValue("--effect-resolution", out string? effectResolution))
+        {
+            if (effectResolution is not ("original" or "output"))
+                throw new ArgumentException("--effect-resolution must be original or output.");
+            input["match_effect_resolution"] = effectResolution == "output";
+            text = input.ToJsonString();
+        }
+        if (options.TryGetValue("--effect-render-scale", out string? scaleChoice))
+        {
+            if (!double.TryParse(scaleChoice, NumberStyles.Float, CultureInfo.InvariantCulture, out double scale) ||
+                !double.IsFinite(scale) || scale is <= 0 or > 1)
+                throw new ArgumentException("--effect-render-scale must be in (0, 1]; default 1 preserves the original effect resolution.");
+            input["effect_render_scale"] = scale;
             text = input.ToJsonString();
         }
         // 成品编码的跨进程槽位配额：0（默认）不限。多槽并行跑批时用它压住 ffmpeg 抢核，渲染阶段不受限制。

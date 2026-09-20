@@ -23,6 +23,24 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         EffectPrefixCache.ValidateSource(source, scene, scene, owner, prefix);
     }
 
+    internal static async Task<JsonArray> PrepareCaptureSourceAsync(string captureProject, ProjectSource source,
+        string? assets, JsonObject pristine, JsonObject snapshot, JsonObject loop, CancellationToken cancellationToken)
+    {
+        JsonObject scene = pristine.DeepClone().AsObject();
+        HybridScenePlanner.FreezeTemporalProperties(scene, snapshot);
+        HybridLoopService.ApplyPatches(scene, loop);
+        await source.ExtractAsync(captureProject, cancellationToken);
+        await File.WriteAllTextAsync(ProjectSource.ContainedPath(captureProject, source.SceneResource), scene.ToJsonString(), cancellationToken);
+        // The loop includes the retimed sway coefficients, not just the scene's speed constants.
+        // Keep these overrides in the capture copy: the candidate's retained suffix and the
+        // pristine composition reference must continue to use the authored shaders.
+        JsonArray patches = await ShaderTextPatch.WriteSwayRetimeAsync(captureProject, source, assets, loop, cancellationToken);
+        JsonObject metadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
+        HybridBakeService.ApplyPropertySnapshot(metadata, snapshot); metadata["file"] = source.SceneResource;
+        await File.WriteAllTextAsync(Path.Combine(captureProject, "project.json"), metadata.ToJsonString(), cancellationToken);
+        return patches;
+    }
+
     internal async Task<JsonObject> BakeAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
         StageTiming timing, CancellationToken cancellationToken = default)
     {
@@ -74,36 +92,42 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         async Task Save()
         {
             timing.Stamp(result);
+            result["playback_encoder"] = PlaybackEncoderSelection.Summarize(request.PlaybackEncoder,
+                result["groups"]!.AsArray().OfType<JsonObject>());
             await File.WriteAllTextAsync(reportPath, result.ToJsonString(JsonOptions), CancellationToken.None);
         }
         await Save();
         try
         {
             var runner = new NativeRenderRunner(tools);
+            (string playbackKind, string? playbackFallback) =
+                await runner.ResolvePlaybackEncoderAsync(request.PlaybackEncoder, output, cancellationToken);
             foreach (JsonObject cache in caches.OfType<JsonObject>())
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int owner = cache["owner_layer_id"]!.GetValue<int>(), prefix = cache["prefix_effect_count"]!.GetValue<int>();
-                var captureScene = pristine.DeepClone().AsObject();
-                HybridScenePlanner.FreezeTemporalProperties(captureScene, snapshot);
                 JsonObject loop = EffectPrefixPlanner.AnalyzePrefix(pristine, source, settings.Assets, runtime, snapshot,
                     owner, prefix, settings, projection);
                 if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 })
                     throw new InvalidDataException($"Effect-prefix owner {owner} has no complete source-derived period.");
                 ulong frames = loop["candidates"]!.AsArray()[0]!["frames"]!.GetValue<ulong>();
-                HybridLoopService.ApplyPatches(captureScene, loop);
                 string cacheOutput = Path.Combine(output, "prefix-" + owner);
                 string captureProject = Path.Combine(cacheOutput, "capture-source");
-                JsonObject metadata;
+                JsonArray swayPatches;
                 using (timing.Measure(StageTiming.SourceCapture))
+                    swayPatches = await PrepareCaptureSourceAsync(captureProject, source, settings.Assets,
+                        pristine, snapshot, loop, cancellationToken);
+                if (swayPatches.Count > 0)
                 {
-                    await source.ExtractAsync(captureProject, cancellationToken);
-                    await File.WriteAllTextAsync(ProjectSource.ContainedPath(captureProject, source.SceneResource), captureScene.ToJsonString(), cancellationToken);
-                    metadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
-                    HybridBakeService.ApplyPropertySnapshot(metadata, snapshot); metadata["file"] = source.SceneResource;
-                    await File.WriteAllTextAsync(Path.Combine(captureProject, "project.json"), metadata.ToJsonString(), cancellationToken);
+                    JsonArray recorded = (result["sway_shader_patches"] ??= new JsonArray()).AsArray();
+                    foreach (JsonObject patch in swayPatches.OfType<JsonObject>())
+                    {
+                        patch["owner_layer_id"] = owner;
+                        recorded.Add(patch.DeepClone());
+                    }
                 }
-                var target = new RenderCaptureSelection(owner, cache["terminal_effect_id"]!.GetValue<int>(), EffectTerminal: true, ExactExtent: true);
+                var target = new RenderCaptureSelection(owner, cache["terminal_effect_id"]!.GetValue<int>(), EffectTerminal: true,
+                    ExactExtent: true, ForceVisibleOwner: cache["preserve_external_visibility"]?.GetValue<bool>() == true ? true : null);
                 JsonObject probe;
                 using (timing.Measure(StageTiming.MasterRender))
                 probe = await runner.RenderRawAsync(new(captureProject, settings.Assets, Path.Combine(cacheOutput, "metadata"), 64, 64,
@@ -129,6 +153,23 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 if (probePixels.Length != 64 * 64 * 4) throw new InvalidDataException("The terminal metadata probe has an unexpected pixel count.");
                 bool packedAlpha = false;
                 for (int pixel = 3; pixel < probePixels.Length; pixel += 4) packedAlpha |= probePixels[pixel] != byte.MaxValue;
+                if (!packedAlpha && (sourceWidth != 64 || sourceHeight != 64))
+                {
+                    // A reduced probe can miss a thin transparent edge. Decide RGB versus
+                    // packed alpha on one native-size frame before starting the full capture.
+                    JsonObject opacityProbe;
+                    using (timing.Measure(StageTiming.MasterRender))
+                    opacityProbe = await runner.RenderRawAsync(new(captureProject, settings.Assets,
+                        Path.Combine(cacheOutput, "opacity"), sourceWidth, sourceHeight,
+                        settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target,
+                        UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid), cancellationToken);
+                    string opacityPath = opacityProbe["rgba_path"]!.GetValue<string>();
+                    byte[] opacityPixels = await File.ReadAllBytesAsync(opacityPath, cancellationToken);
+                    for (int pixel = 3; pixel < opacityPixels.Length; pixel += 4)
+                        if (opacityPixels[pixel] != byte.MaxValue) { packedAlpha = true; break; }
+                    if (!request.KeepIntermediates)
+                        TemporaryCaptureFiles.Delete(result, Path.GetDirectoryName(opacityPath)!, Path.GetFileName(opacityPath));
+                }
                 bool puppetAtlas = source.ReadJson(cache["source_image"]!.GetValue<string>()).ContainsKey("puppet");
                 (uint encodeWidth, uint encodeHeight) = puppetAtlas
                     ? FitAtlas(sourceWidth, sourceHeight, settings, plan)
@@ -162,25 +203,51 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         (int)encodeWidth, (int)encodeHeight)
                     : null;
                 JsonObject rendered;
+                string renderOutput = Path.Combine(cacheOutput, "encoded");
+                string? encoderFallback = playbackFallback;
+                var softwareRender = new RenderRequest(captureProject, settings.Assets, renderOutput, sourceWidth, sourceHeight,
+                    settings.FpsNumerator, settings.FpsDenominator, checked(frames + 1), Seed: 17, CaptureTarget: target, UserProperties: snapshot,
+                    EncodedFrames: frames, RetainFrames: LoopClosureCheck.ReferenceFrameIndices(frames),
+                    DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true, RequireOpaquePixels: !packedAlpha,
+                    PixelPacking: packedAlpha ? "rgba_side_by_side" : "rgb", EncodeWidth: encodeWidth, EncodeHeight: encodeHeight,
+                    OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(loop, new HashSet<int> { owner }),
+                    EncodePadding: paddedContent is null ? null
+                        : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY));
+                RenderRequest renderRequest = softwareRender;
+                if (playbackKind == PlaybackEncoderSelection.Vulkan && paddedContent is null)
+                {
+                    bool resize = encodeWidth != sourceWidth || encodeHeight != sourceHeight;
+                    string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
+                        storedWidth, storedHeight, settings.FpsNumerator, settings.FpsDenominator), PlaybackEncoderSelection.Vulkan);
+                    renderRequest = softwareRender with { GpuEncoding = new(codec, Qp: 12, RetainQualitySamples: true),
+                        RequireOpaquePixels = false, CollectAlphaBounds = !packedAlpha,
+                        EncodeWidth = resize ? encodeWidth : null, EncodeHeight = resize ? encodeHeight : null };
+                }
+                else if (PlaybackEncoderSelection.Normalize(request.PlaybackEncoder) != PlaybackEncoderSelection.Software)
+                    encoderFallback ??= paddedContent is not null
+                        ? "GPU prefix encoding does not support decoder padding yet; using the existing software path."
+                        : "This effect-prefix path supports software or same-device Vulkan encoding.";
                 try
                 {
                     // 与分组源周期路线一样多渲 1 帧：编码只取前 P 帧，第 0、P−1、P 帧原帧留作闭合检查与接缝参照。
                     // 编码尺寸（Fit/FitAtlas）只由捕获范围与投影决定，与帧数无关。
                     using (timing.Measure(StageTiming.MasterRender))
-                    rendered = await runner.RenderAsync(new(captureProject, settings.Assets, Path.Combine(cacheOutput, "encoded"), sourceWidth, sourceHeight,
-                        settings.FpsNumerator, settings.FpsDenominator, checked(frames + 1), Seed: 17, CaptureTarget: target, UserProperties: snapshot,
-                        EncodedFrames: frames, RetainFrames: LoopClosureCheck.ReferenceFrameIndices(frames),
-                        DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true, RequireOpaquePixels: !packedAlpha,
-                        PixelPacking: packedAlpha ? "rgba_side_by_side" : "rgb",
-                        EncodeWidth: encodeWidth, EncodeHeight: encodeHeight,
-                        OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(loop, new HashSet<int> { owner }),
-                        EncodePadding: paddedContent is null ? null
-                            : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY)), progress, cancellationToken);
+                    {
+                        try { rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken); }
+                        catch (IOException error) when (renderRequest.GpuEncoding is not null && !cancellationToken.IsCancellationRequested &&
+                            (error.Message.Contains("GPU encode initialization", StringComparison.Ordinal) ||
+                             error.Message.Contains("required vulkan device extension", StringComparison.Ordinal)))
+                        {
+                            encoderFallback = error.Message;
+                            renderOutput = Path.Combine(cacheOutput, "encoded-software");
+                            rendered = await runner.RenderAsync(softwareRender with { OutputDirectory = renderOutput }, progress, cancellationToken);
+                        }
+                    }
                 }
                 catch (Exception error) when (!packedAlpha && !cancellationToken.IsCancellationRequested &&
                                               NativeRenderRunner.OpaquePixelEvidence(error) is { } nonOpaque)
                 {
-                    // 低分辨率预探测判成不透明、全分辨率捕获却读到 alpha<255：按拒绝收尾并点名层与 alpha，不再当崩溃抛出。
+                    // 首帧不透明不代表完整动画始终不透明；后续帧变化仍按拒绝收尾，不丢弃透明度。
                     (JsonObject group, string reason) = OpaqueCaptureRejection(pristine, owner, cache["terminal_effect_id"]!.GetValue<int>(),
                         frames, sourceWidth, sourceHeight, loop, nonOpaque);
                     result["groups"]!.AsArray().Add(group);
@@ -190,6 +257,12 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     await Save(); return result;
                 }
                 timing.AddMasterBreakdown(rendered);
+                bool gpuDirect = rendered["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
+                var encodeInfo = new JsonObject { ["encoder_used"] = gpuDirect ? "vulkan" : "software",
+                    ["encoder_fallback_reason"] = encoderFallback, ["encode_seconds"] = null,
+                    ["readback_frames"] = rendered["readback_frames"]?.DeepClone(),
+                    ["readback_bytes"] = rendered["readback_bytes"]?.DeepClone(),
+                    ["gpu_resize"] = rendered["gpu_resize"]?.DeepClone() };
                 JsonObject fullRuntime = rendered["native_result"]?.AsObject()
                     ?? throw new InvalidDataException("The complete prefix capture omitted its runtime evidence.");
                 JsonArray fullProposals = EffectPrefixPlanner.Propose(pristine, source, settings.Assets, fullRuntime, snapshot,
@@ -197,62 +270,100 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 if (!fullProposals.OfType<JsonObject>().Any(value => value["owner_layer_id"]?.GetValue<int>() == owner &&
                     value["prefix_effect_count"]?.GetValue<int>() >= prefix))
                     throw new InvalidDataException($"The complete capture found a late dependency in effect-prefix owner {owner}; no cache was applied.");
-                string video = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(cacheOutput, "encoded", "preview.mp4");
+                string video = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
                 JsonObject seam;
+                JsonObject? gpuQuality = null;
                 using (timing.Measure(StageTiming.SeamCheck))
                 {
                     try
                     {
                         byte[] firstFrame = await LoopClosureCheck.ReadRetainedFrameAsync(rendered, 0, cancellationToken);
                         byte[] wrapFrame = await LoopClosureCheck.ReadRetainedFrameAsync(rendered, frames, cancellationToken);
+                        if (gpuDirect && !packedAlpha)
+                        {
+                            JsonObject bounds = rendered["alpha_bounds"]!.AsObject();
+                            if (bounds["observed_frames"]?.GetValue<ulong>() != frames)
+                                throw new InvalidDataException("GPU opacity evidence does not cover every encoded source frame.");
+                            int minimum = bounds["minimum_alpha"]!.GetValue<int>();
+                            // The ordinary unencoded P frame is retained but not GPU-reduced.
+                            for (int pixel = 3; pixel < wrapFrame.Length; pixel += 4) minimum = Math.Min(minimum, wrapFrame[pixel]);
+                            rendered["opaque_pixels"] = new JsonObject { ["requested"] = true, ["verified"] = minimum == 255,
+                                ["checked_frames"] = frames + 1, ["checked_pixels"] = checked((ulong)sourceWidth * sourceHeight * (frames + 1)),
+                                ["minimum_alpha"] = minimum,
+                                ["basis"] = "Native-size GPU alpha reduction on all encoded source frames, plus the retained original P frame." };
+                        }
                         JsonObject closure = LoopClosureCheck.Evaluate(firstFrame, wrapFrame,
                             (int)sourceWidth, (int)sourceHeight, withAlpha: packedAlpha, frames, judged: true);
-                        LoopReference reference = await EncodedLoopValidator.FromScaledRenderAsync(tools, rendered, (int)encodeWidth,
-                            (int)encodeHeight, packedAlpha, frames, closure, cancellationToken);
-                        seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator, settings.FpsDenominator,
-                            packedAlpha, reference, paddedContent, cancellationToken);
+                        if (!request.KeepIntermediates && LoopClosureCheck.Allows(closure))
+                            seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator,
+                                settings.FpsDenominator, packedAlpha, closure, (int)encodeWidth * (packedAlpha ? 2 : 1),
+                                (int)encodeHeight, paddedContent, cancellationToken);
+                        else
+                        {
+                            LoopReference reference = await EncodedLoopValidator.FromScaledRenderAsync(tools, rendered, (int)encodeWidth,
+                                (int)encodeHeight, packedAlpha, frames, closure, cancellationToken);
+                            seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator, settings.FpsDenominator,
+                                packedAlpha, reference, paddedContent, cancellationToken);
+                        }
+                        if (gpuDirect && seam["status"]?.GetValue<string>() == "observed_seam_pass")
+                        {
+                            string qualityOutput = Path.Combine(cacheOutput, "quality");
+                            Directory.CreateDirectory(qualityOutput);
+                            gpuQuality = await runner.GpuPlaybackQualityAsync(rendered, video,
+                                new((int)sourceWidth, (int)sourceHeight, 0, 0, (int)sourceWidth, (int)sourceHeight),
+                                packedAlpha, qualityOutput, cancellationToken);
+                        }
                     }
                     finally
                     {
                         // 原帧只为这一次校验存在；缓存目录会随候选保留，不能把几帧原始 RGBA 留在里面。
-                        TemporaryCaptureFiles.Delete(result, Path.Combine(cacheOutput, "encoded"), NativeRenderRunner.RetainedFramesFile);
+                        if (!request.KeepIntermediates)
+                            foreach (string path in new[] { rendered["retained_frames"]?["path"]?.GetValue<string>(),
+                                rendered["alpha_bounds"]?["first_frame_rgba_path"]?.GetValue<string>() }.OfType<string>())
+                                TemporaryCaptureFiles.Delete(result, Path.GetDirectoryName(path)!, Path.GetFileName(path));
                     }
                 }
-                // 接缝校验一有结局就导出预览，通过与被拒都导；失败只记 warning，不改变后面的判定。
-                JsonObject seamPreview;
-                progress?.Report(new("exporting_seam_preview", 0,
-                    Messages.Get("progress.exporting_seam_preview", Messages.DefaultLanguage(),
-                        SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
-                using (timing.Measure(StageTiming.SeamCheck))
-                seamPreview = await SeamPreview.ExportOrWarnAsync(result, "effect-prefix-" + owner,
-                    SeamPreview.Outcome(seam["status"]?.GetValue<string>()),
-                    token => runner.ExportSeamPreviewAsync(video, Path.Combine(cacheOutput, SeamPreview.FileName), frames,
-                        settings.FpsNumerator, settings.FpsDenominator, "encoded_video", token), cancellationToken);
-                JsonObject hardware;
-                using (timing.Measure(StageTiming.HardwareDecodeCheck))
-                hardware = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(cacheOutput, "hardware-decode"), Math.Min(frames, 5), cancellationToken);
+                JsonObject? seamPreview = null;
+                if (SeamPreview.ShouldExport(false, false, seam, request.KeepIntermediates))
+                {
+                    progress?.Report(new("exporting_seam_preview", 0,
+                        Messages.Get("progress.exporting_seam_preview", Messages.DefaultLanguage(),
+                            SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
+                    using (timing.Measure(StageTiming.SeamCheck))
+                    seamPreview = await SeamPreview.ExportOrWarnAsync(result, "effect-prefix-" + owner,
+                        SeamPreview.Outcome(seam["status"]?.GetValue<string>()),
+                        token => runner.ExportSeamPreviewAsync(video, Path.Combine(cacheOutput, SeamPreview.FileName), frames,
+                            settings.FpsNumerator, settings.FpsDenominator, "encoded_video", token), cancellationToken);
+                }
                 JsonObject? opaque = rendered["opaque_pixels"] as JsonObject;
                 // 不透明扫描覆盖渲染器交出的每一帧，包括只作参照、不进编码的第 P 帧。
                 bool opaquePass = packedAlpha || opaque?["requested"]?.GetValue<bool>() == true && opaque["verified"]?.GetValue<bool>() == true &&
                     opaque["checked_frames"]?.GetValue<ulong>() == frames + 1 && opaque["checked_pixels"]?.GetValue<ulong>() ==
                     checked((ulong)sourceWidth * sourceHeight * (frames + 1)) && opaque["minimum_alpha"]?.GetValue<int>() == 255;
-                if (seam["status"]?.GetValue<string>() != "observed_seam_pass" || hardware["all_adapters_passed"]?.GetValue<bool>() != true || !opaquePass)
+                bool seamPassed = seam["status"]?.GetValue<string>() == "observed_seam_pass";
+                JsonObject hardware = new() { ["status"] = "not_performed" };
+                if (seamPassed && gpuQuality?["passed"]?.GetValue<bool>() != false && opaquePass)
+                    using (timing.Measure(StageTiming.HardwareDecodeCheck))
+                        hardware = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(cacheOutput, "hardware-decode"), Math.Min(frames, 5), cancellationToken);
+                string? rejection = !seamPassed ? "seam" : gpuQuality?["passed"]?.GetValue<bool>() == false ? "quality" :
+                    !opaquePass ? "opaque_capture" : hardware["all_adapters_passed"]?.GetValue<bool>() != true ? "hardware_decode" : null;
+                if (rejection is not null)
                 {
                     var rejectedGroup = new JsonObject { ["id"] = "effect-prefix-" + owner,
-                        ["status"] = seam["status"]?.GetValue<string>() != "observed_seam_pass" ? "rejected_seam" :
-                            hardware["all_adapters_passed"]?.GetValue<bool>() != true ? "rejected_hardware_decode" : "rejected_opaque_capture",
+                        ["status"] = "rejected_" + rejection,
                         ["owner_layer_id"] = owner, ["frames"] = frames, ["source_extent"] = new JsonArray(sourceWidth, sourceHeight),
                         ["encoded_extent"] = new JsonArray(storedWidth, storedHeight), ["packed_alpha"] = packedAlpha, ["video_path"] = video, ["period"] = loop,
                         ["capture_target"] = captureTarget, ["hardware_decode_preflight"] = decodePlan.ToJson(),
-                        ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone() };
+                        ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone(),
+                        ["playback_encode"] = encodeInfo, ["playback_quality_gate"] = gpuQuality, ["video_bytes"] = new FileInfo(video).Length };
                     SeamPreview.Attach(rejectedGroup, seamPreview);
                     result["groups"]!.AsArray().Add(rejectedGroup);
-                    result["status"] = seam["status"]?.GetValue<string>() != "observed_seam_pass" ? "candidate_rejected_seam" :
-                        hardware["all_adapters_passed"]?.GetValue<bool>() != true ? "candidate_rejected_hardware_decode" : "candidate_rejected_opaque_capture";
+                    result["status"] = "candidate_rejected_" + rejection;
                     bool seamRejected = seam["status"]?.GetValue<string>() != "observed_seam_pass";
                     result["reason"] = seamRejected
                         ? Messages.Get("bake.effect_prefix_seam_rejected", Messages.English, EncodedLoopValidator.RejectionDetail(seam, Messages.English))
-                        : hardware["all_adapters_passed"]?.GetValue<bool>() != true ? "The source-period prefix encoding did not pass the actual hardware decode check."
+                        : rejection == "quality" ? "GPU prefix encoding did not meet the existing playback quality threshold against CPU Lanczos."
+                        : rejection == "hardware_decode" ? "The source-period prefix encoding did not pass the actual hardware decode check."
                         : "The full terminal capture did not prove opaque pixels for every encoded source frame.";
                     if (seamRejected)
                         result["reason_localized"] = new JsonObject { ["key"] = "bake.effect_prefix_seam_rejected",
@@ -269,7 +380,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     ["sampling_basis"] = puppetAtlas ? "source_atlas_at_projected_canvas_density" : "source_image_fits_output",
                     ["packed_alpha"] = packedAlpha, ["video_path"] = video, ["period"] = loop, ["capture_target"] = captureTarget,
                     ["hardware_decode_preflight"] = decodePlan.ToJson(),
-                    ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone() };
+                    ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone(),
+                    ["playback_encode"] = encodeInfo, ["playback_quality_gate"] = gpuQuality, ["video_bytes"] = new FileInfo(video).Length };
                 SeamPreview.Attach(encodedGroup, seamPreview);
                 result["groups"]!.AsArray().Add(encodedGroup);
             }
@@ -332,8 +444,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         var group = new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "rejected_opaque_capture",
             ["owner_layer_id"] = owner, ["terminal_effect_id"] = terminalEffectId, ["frames"] = frames,
             ["source_extent"] = new JsonArray(sourceWidth, sourceHeight), ["packed_alpha"] = false,
-            ["probe_opacity"] = new JsonObject { ["width"] = 64, ["height"] = 64, ["minimum_alpha"] = 255,
-                ["basis"] = "The one-frame 64x64 terminal metadata probe had no pixel below alpha 255, so an opaque RGB encoding was planned." },
+            ["probe_opacity"] = new JsonObject { ["width"] = sourceWidth, ["height"] = sourceHeight, ["minimum_alpha"] = 255,
+                ["basis"] = "The native-size first-frame opacity probe had no pixel below alpha 255; later frames are still checked during capture." },
             ["period"] = loop.DeepClone(), ["opaque_pixels"] = evidence.DeepClone() };
         return (group, reason);
     }

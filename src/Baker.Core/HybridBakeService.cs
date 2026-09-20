@@ -5,15 +5,16 @@ namespace Baker.Core;
 
 public sealed record HybridBakeRequest(int SchemaVersion, JsonObject Plan, string OutputDirectory,
     ulong ProbeFrames = 0, string? DeviceUuid = null, string? ProjectDirectory = null,
-    // 播放版编码档位：software（默认）/ nvenc / qsv / amf / auto。无损 master 不受影响。
+    // 播放版编码档位：software（默认）/ vulkan / nvenc / qsv / amf / auto；Vulkan 可直接生成成品。
     string? PlaybackEncoder = null,
     // 成品编码的跨进程槽位配额：0 = 不限。多槽并行跑批时用它压住 ffmpeg 抢核，渲染不受限制。
     int EncodeSlots = 0,
     // 单案内同时在飞的组主渲染数：1 = 与逐组串行完全一致。组的判定、编码与写入始终按组序串行。
     int GroupParallel = 1,
     // 开发用：保留中间产物（capture-source、各组 master、合成探针与参照、分析刷新目录）。
-    // 默认 false —— 正常结束、拒绝与失败都会删掉它们，只留成品工程、bake.json、接缝预览与日志。
-    bool KeepIntermediates = false);
+    // 默认 false —— 正常结束、拒绝与失败都会删掉它们，只留成品工程、bake.json、失败诊断与日志。
+    // 开启时还记录编码接缝差分并导出成功任务的接缝预览。
+    bool KeepIntermediates = false, double EffectRenderScale = 1.0, bool MatchEffectResolution = false);
 
 /// <summary>Replaces rendered scene groups with videos and retains the original live hierarchies.</summary>
 /// <summary>1 帧、0 个视频层的结果：烘完等于一张静态图加全部实时，不省电，所以不算成品（fix/verdict-flow）。</summary>
@@ -154,6 +155,19 @@ public sealed class HybridBakeService(NativeTools tools)
     }
 
     internal static JsonArray AssembleObjects(IReadOnlyDictionary<int, JsonObject> originalObjects, JsonObject plan,
+        IReadOnlyDictionary<string, JsonObject> replacements, JsonArray dependencies)
+    {
+        if (DaytimeSplit.PrepareDynamicExport(originalObjects, plan, dependencies) is { } daytime)
+        {
+            JsonArray dynamicObjects = DaytimeSplit.AssembleDynamic(originalObjects, daytime, replacements);
+            GuardPublicLayerQueries(originalObjects.Values, dynamicObjects.OfType<JsonObject>(), dependencies);
+            return dynamicObjects;
+        }
+        return AssembleAllocationObjects(originalObjects, plan, replacements, dependencies);
+    }
+
+    // 纯分配/层级装配也供只有 id/parent 的几何骨架检查使用；真实成品仍从 AssembleObjects 做完整昼夜重验。
+    internal static JsonArray AssembleAllocationObjects(IReadOnlyDictionary<int, JsonObject> originalObjects, JsonObject plan,
         IReadOnlyDictionary<string, JsonObject> replacements, JsonArray dependencies)
     {
         var layerInfo = plan["layers"]!.AsArray().OfType<JsonObject>().ToDictionary(HybridScenePlanner.Id);
@@ -297,7 +311,14 @@ public sealed class HybridBakeService(NativeTools tools)
     private async Task<JsonObject> BakeRunAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
         CancellationToken cancellationToken)
     {
-        var timing = new StageTiming();
+        var timing = new StageTiming(progress);
+        if (!double.IsFinite(request.EffectRenderScale) || request.EffectRenderScale is <= 0 or > 1)
+            throw new ArgumentException("EffectRenderScale must be finite and in (0, 1].");
+        if (request.MatchEffectResolution && request.EffectRenderScale != 1.0)
+            throw new ArgumentException("Adaptive effect resolution cannot be combined with EffectRenderScale other than 1.");
+        if ((request.EffectRenderScale != 1.0 || request.MatchEffectResolution) && request.Plan["route"]?.GetValue<string>() == "effect_prefix")
+            throw new ArgumentException("Internal effect resolution changes currently apply to whole-layer baking; effect-prefix captures require the original resolution.");
+        progress?.Report(new("preflight", null, "Verifying the generation plan and source files."));
         timing.SetDevice(request.DeviceUuid ?? request.Plan["settings"]?["device_uuid"]?.GetValue<string>());
         if (request.Plan["route"]?.GetValue<string>() == "effect_prefix")
             return await BakeEffectPrefixesAsync(request, progress, timing, cancellationToken);
@@ -417,6 +438,7 @@ public sealed class HybridBakeService(NativeTools tools)
             var rejected = new JsonObject { ["schema_version"] = 2, ["artifact_kind"] = "hybrid_video_candidate",
                 ["status"] = status, ["source_sha256"] = sourceHash,
                 ["source_digest_scope"] = ProjectSource.DigestScope, ["plan"] = plan.DeepClone(),
+                ["effect_render_scale"] = request.EffectRenderScale, ["match_effect_resolution"] = request.MatchEffectResolution,
                 ["reason"] = residual?["reason"]?.GetValue<string>() ?? (unresolved is { Count: > 0 }
                     ? "The analytic loop parse left unresolved temporal components. No video was cut or project generated."
                     : "No analytic loop candidate was found. No video was cut or project generated."),
@@ -481,6 +503,7 @@ public sealed class HybridBakeService(NativeTools tools)
             {
                 ["schema_version"] = 2, ["artifact_kind"] = "hybrid_video_candidate", ["status"] = BakeDiskBudget.RejectedBakeStatus,
                 ["source_sha256"] = sourceHash, ["source_digest_scope"] = ProjectSource.DigestScope, ["plan"] = plan,
+                ["effect_render_scale"] = request.EffectRenderScale, ["match_effect_resolution"] = request.MatchEffectResolution,
                 ["reason"] = diskRejection["reason"]?.DeepClone(),
                 ["reason_localized"] = diskRejection["reason_localized"]?.DeepClone(),
                 ["disk_budget"] = diskRejection,
@@ -517,6 +540,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     ["status"] = scriptErrorsRejected ? CandidateScriptErrorGate.RejectedBakeStatus : "candidate_rejected_composition",
                     ["source_sha256"] = sourceHash,
                     ["source_digest_scope"] = ProjectSource.DigestScope, ["plan"] = plan,
+                    ["effect_render_scale"] = request.EffectRenderScale, ["match_effect_resolution"] = request.MatchEffectResolution,
                     ["reason"] = compositionValidation["reason"]?.DeepClone(),
                     ["metrics"] = compositionValidation["metrics"]?.DeepClone(),
                     ["composition_validation"] = compositionValidation,
@@ -555,6 +579,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 {
                     ["schema_version"] = 2, ["artifact_kind"] = "hybrid_video_candidate", ["status"] = EmbeddedVideoBudget.RejectedBakeStatus,
                     ["source_sha256"] = sourceHash, ["source_digest_scope"] = ProjectSource.DigestScope, ["plan"] = plan,
+                    ["effect_render_scale"] = request.EffectRenderScale, ["match_effect_resolution"] = request.MatchEffectResolution,
                     ["reason"] = embeddedVideoEstimate["reason"]?.DeepClone(),
                     ["reason_localized"] = embeddedVideoEstimate["reason_localized"]?.DeepClone(),
                     ["composition_validation"] = compositionValidation, ["embedded_video_estimate"] = embeddedVideoEstimate,
@@ -587,6 +612,8 @@ public sealed class HybridBakeService(NativeTools tools)
             ["source_start_frame"] = 0,
             // 这两项记下本次实际生效的并行设置，事后核对每案耗时时不用再翻命令行。
             ["encode_slots"] = request.EncodeSlots, ["group_parallel"] = groupParallel,
+            ["effect_render_scale"] = request.EffectRenderScale,
+            ["match_effect_resolution"] = request.MatchEffectResolution,
             ["seam_policy"] = residualMasking is null ? "source_period_no_repair" : ResidualMasking.SeamPolicy };
         if (residualMasking is not null)
         {
@@ -629,11 +656,12 @@ public sealed class HybridBakeService(NativeTools tools)
             var initialRuntime = JsonNode.Parse(await File.ReadAllTextAsync(plan["runtime_evidence"]!.GetValue<string>(), cancellationToken))!.AsObject();
             var runtimeDependencies = initialRuntime["runtime_dependencies"]?.AsArray()
                 ?? throw new InvalidDataException("Runtime dependencies are missing.");
+            DaytimeSplit.DynamicExport? daytimeExport = DaytimeSplit.PrepareDynamicExport(originalObjects, plan, runtimeDependencies);
             var finalDependencies = MergeRuntimeDependencies(runtimeDependencies, new JsonArray());
             string captureProject = Path.Combine(output, "capture-source");
             using (timing.Measure(StageTiming.SourceCapture)) await source.ExtractAsync(captureProject, cancellationToken);
             var snapshot = plan["snapshot_properties"]!.DeepClone().AsObject();
-            async Task RebuildCaptureSourceAsync()
+            async Task PrepareCaptureSourceAsync()
             {
                 var captureScene = original.DeepClone().AsObject();
                 HybridScenePlanner.FreezeTemporalProperties(captureScene, snapshot);
@@ -658,7 +686,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 metadata["file"] = source.SceneResource;
                 await File.WriteAllTextAsync(Path.Combine(captureProject, "project.json"), metadata.ToJsonString(), cancellationToken);
             }
-            using (timing.Measure(StageTiming.SourceCapture)) await RebuildCaptureSourceAsync();
+            using (timing.Measure(StageTiming.SourceCapture)) await PrepareCaptureSourceAsync();
             string project = Path.Combine(output, "project");
             using (timing.Measure(StageTiming.SourceCapture)) await source.ExtractAsync(project, cancellationToken);
             var scene = original.DeepClone().AsObject();
@@ -684,25 +712,13 @@ public sealed class HybridBakeService(NativeTools tools)
                 report["particle_warmup_seconds"] = residualMasking["max_warmup_seconds"]?.DeepClone();
             }
             JsonObject? startSearch = null;
+            var groupStartSearches = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
             var runner = new NativeRenderRunner(tools);
-            // 源周期路线（无残差掩盖、非探针）在编码后接缝校验失败时，按 plan.loop.candidates 的现有顺序换下一个
-            // 解析候选重跑主渲染与校验，最多 LoopCandidateFallback.MaximumAttempts 个；每次的候选与接缝读数都记进
-            // loop_candidate_attempts。周期仍全部来自解析，这里只是在解析给出的候选表里往下走，不搜周期、不放宽阈值。
             JsonArray loopCandidates = plan["loop"]?["candidates"] as JsonArray ?? new JsonArray();
-            // New analyses settle allocation before baking. A formal rejection never starts another full render.
-            bool candidateFallbackEnabled = false;
             report["full_render_attempt_limit"] = request.ProbeFrames == 0 ? 1 : 0;
             report["automatic_full_render_retries"] = false;
-            var candidateAttempts = new JsonArray();
-            int selectedCandidateAttempt = 0;
-            if (candidateFallbackEnabled) report["loop_candidate_attempts"] = candidateAttempts;
-            // 残差掩盖路线的起点回退（与上面的候选回退互斥：一个只在源周期路线、一个只在残差路线）：全分辨率第一层在某个起点上
-            // 被拒时，按起点搜索的排序依次换下一个候选起点，重渲所有组再测，最多 ResidualMasking.MaximumStartAttempts 个；
-            // 每次的起点与各组 max_k / 整幅记进 loop_start_attempts。周期与阈值都不变，只换相位。
-            bool startFallbackEnabled = false;
             var startAttempts = new JsonArray();
             JsonObject[] startOrder = [];
-            if (startFallbackEnabled) report["loop_start_attempts"] = startAttempts;
             // 含可掩盖残差层的组：它们的 master 多渲一个淡化窗口、各自测第一层并淡化；其余组照常渲 P 帧，相位同样是 warmup + S。
             // 布局门保证每个残差层都在某个组里，所以残差路线下这个列表非空。
             int[] residualGroupIndexes = residualMasking is null ? [] : ResidualMasking.ResidualGroupIndexes(plan, residualMasking);
@@ -718,40 +734,53 @@ public sealed class HybridBakeService(NativeTools tools)
                 return (group["layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).ToArray(),
                     group["include_scene_clear"]?.GetValue<bool>() == true, viewport.Width, viewport.Height, pixelWidth, pixelHeight);
             }
-            // 起点只在第一个含残差层的组上搜一次，起点共享给所有组：各组相位一致，组间确定性分量的相位关系与原作相同。
+            // 每个残差组都参与低分辨率起点评分，联合挑一个起点共享给所有组，保持原作的组间相位关系。
             // 放在任何组渲染之前，排在它前面的组也用同一个起点。
             async Task SearchSharedLoopStartAsync()
             {
-                JsonObject searchGroup = groups[residualGroupIndexes[0]];
-                string searchId = searchGroup["id"]!.GetValue<string>();
-                var capture = GroupCapture(searchGroup);
-                if (capture.PixelWidth > 8192 || capture.PixelHeight > 8192)
-                    throw new InvalidDataException("The requested parallax overscan exceeds the supported texture dimensions.");
-                if (searchId != Path.GetFileName(searchId)) throw new InvalidDataException("Video group IDs must be single path components.");
                 // 采样步长取 gcd(P, 16)：周期不是 16 的倍数时步长缩小、候选变多，不再因对齐问题抛异常。
                 uint sampleStride = ResidualMasking.StartSearchStride(frames);
                 // 起点搜索与 master 用同一个预热基准（精灵整周期预热 + 粒子预热），样本第 s 帧就是 master 起点取 s 时的第 0 帧。
                 ulong searchWarmupFrames = LoopWarmup.BaseFrames(LoopWarmup.CandidateSourcePeriodWarmupFrames(loopCandidates), frames, warmupFrames);
                 // 搜索窗固定 2 个周期：候选起点只有 P/stride 个，每个比较 (s, s+P)，全部落在前 2P 帧里，
                 // 更宽的窗口不会引入新候选。透明组用带覆盖度的样本，两半分别算。
-                progress?.Report(new("searching_loop_start", 0,
-                    $"在锁定的解析周期内按接缝残差挑选起点帧（组 {searchId}，预热 {searchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {ResidualMasking.SearchWindowPeriods} 个周期）。"));
+                var searches = new List<(JsonObject Search, IReadOnlyList<ResidualStartCandidate> Candidates)>();
                 using (timing.Measure(StageTiming.LoopStartSearch))
-                startSearch = await runner.SearchLoopStartAsync(new(captureProject, settings.Assets,
-                    ProjectSource.ContainedPath(output, $"{searchId}.start-search"), capture.PixelWidth, capture.PixelHeight,
-                    settings.FpsNumerator, settings.FpsDenominator, checked(frames * (ulong)ResidualMasking.SearchWindowPeriods), WarmupFrames: searchWarmupFrames,
-                    Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side",
-                    DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid,
-                    Input: new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
-                    OrthographicCaptureViewport: new(centerX, centerY, capture.Width, capture.Height),
-                    LayerSelection: new(capture.Layers, TransparentBackground: !capture.SceneClear, IncludePostprocessing: false),
-                    FrameSampleStride: sampleStride,
-                    FrameSampleWidth: ResidualMasking.StartSearchSampleWidth,
-                    FrameSamplesOnly: true,
-                    FrameSampleIncludeAlpha: !capture.SceneClear,
-                    OfflineVideoRateOverrides: SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet())),
-                    frames, crossfadeFrames, progress, cancellationToken);
-                startSearch["group_id"] = searchId;
+                {
+                    foreach (int groupIndex in residualGroupIndexes)
+                    {
+                        JsonObject searchGroup = groups[groupIndex];
+                        string searchId = searchGroup["id"]!.GetValue<string>();
+                        var capture = GroupCapture(searchGroup);
+                        if (capture.PixelWidth > 8192 || capture.PixelHeight > 8192)
+                            throw new InvalidDataException("The requested parallax overscan exceeds the supported texture dimensions.");
+                        if (searchId != Path.GetFileName(searchId)) throw new InvalidDataException("Video group IDs must be single path components.");
+                        progress?.Report(new("searching_loop_start", 0,
+                            $"在锁定的解析周期内按接缝残差挑选起点帧（组 {searchId}，预热 {searchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {ResidualMasking.SearchWindowPeriods} 个周期）。"));
+                        var scores = new List<ResidualStartCandidate>();
+                        JsonObject search = await runner.SearchLoopStartAsync(new(captureProject, settings.Assets,
+                            ProjectSource.ContainedPath(output, $"{searchId}.start-search"), capture.PixelWidth, capture.PixelHeight,
+                            settings.FpsNumerator, settings.FpsDenominator, checked(frames * (ulong)ResidualMasking.SearchWindowPeriods), WarmupFrames: searchWarmupFrames,
+                            Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side",
+                            DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid,
+                            Input: new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
+                            OrthographicCaptureViewport: new(centerX, centerY, capture.Width, capture.Height),
+                            LayerSelection: new(capture.Layers, TransparentBackground: !capture.SceneClear, IncludePostprocessing: false),
+                            FrameSampleStride: sampleStride,
+                            FrameSampleWidth: ResidualMasking.StartSearchSampleWidth,
+                            FrameSamplesOnly: true,
+                            EffectRenderScale: request.EffectRenderScale,
+                            MatchEffectResolution: request.MatchEffectResolution,
+                            CollectSamplingCoverage: PlaybackEncoderSelection.Normalize(request.PlaybackEncoder) == PlaybackEncoderSelection.Vulkan,
+                            FrameSampleIncludeAlpha: !capture.SceneClear,
+                            OfflineVideoRateOverrides: SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet())),
+                            frames, crossfadeFrames, progress, cancellationToken, residualGroupIndexes.Length > 1 ? scores : null);
+                        search["group_id"] = searchId;
+                        groupStartSearches.Add(searchId, search);
+                        searches.Add((search, scores));
+                    }
+                    startSearch = NativeRenderRunner.CombineLoopStartSearches(searches);
+                }
                 startFrame = startSearch["selected_start_frame"]!.GetValue<ulong>();
                 startOrder = ResidualStartFallback.Order(startSearch);
                 report["loop_start_search"] = startSearch.DeepClone();
@@ -777,7 +806,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 await runner.ResolvePlaybackEncoderAsync(request.PlaybackEncoder, output, cancellationToken);
             // 一个组的主渲染请求。只依赖本轮固定的量（frames、startFrame、候选表），所以可以提前给后面的组用；
             // 换轮次时登记表会先排空，下一轮按新的量重造。
-            RenderRequest MasterRenderRequest(int index)
+            RenderRequest MasterRenderRequest(int index, bool allowGpu = true, JsonObject? coverage = null)
             {
                 var group = groups[index];
                 string groupId = group["id"]!.GetValue<string>();
@@ -789,12 +818,15 @@ public sealed class HybridBakeService(NativeTools tools)
                 // 直编组不写无损 master：渲染器出帧直接进播放档编码器，成品就是这一遍的产物。
                 // 判定与组循环里的 directPlayback 走同一个函数，提前启动的渲染与轮到它时的处理口径一致。
                 bool direct = AllowsDirectPlayback(capture.SceneClear, framing.Residual, request.ProbeFrames);
-                return new(captureProject, settings.Assets, Path.Combine(ProjectSource.ContainedPath(output, groupId), "master"),
+                var render = new RenderRequest(captureProject, settings.Assets, Path.Combine(ProjectSource.ContainedPath(output, groupId), "master"),
                     capture.PixelWidth, capture.PixelHeight, settings.FpsNumerator, settings.FpsDenominator,
                     framing.RenderedFrames, WarmupFrames: framing.MasterWarmupFrames,
                     Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side",
-                    LosslessTest: !direct, PlaybackEncoderKind: direct ? playbackKind : null,
+                    LosslessTest: !direct, PlaybackEncoderKind: direct ?
+                        playbackKind == PlaybackEncoderSelection.Vulkan ? PlaybackEncoderSelection.Software : playbackKind : null,
                     DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, CollectAlphaBounds: true, BoundsIncludeRgb: true,
+                    EffectRenderScale: request.EffectRenderScale,
+                    MatchEffectResolution: request.MatchEffectResolution,
                     Input: new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
                     OrthographicCaptureViewport: new(centerX, centerY, capture.Width, capture.Height),
                     LayerSelection: new(capture.Layers, TransparentBackground: !capture.SceneClear, IncludePostprocessing: false),
@@ -804,8 +836,28 @@ public sealed class HybridBakeService(NativeTools tools)
                         ? SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet()) : null,
                     EncodedFrames: framing.ClosureJudged ? frames : null,
                     RetainFrames: request.ProbeFrames == 0
-                        ? candidateFallbackEnabled ? SourceStartOffset.RetainedFrameIndices(frames) : LoopClosureCheck.ReferenceFrameIndices(frames)
+                        ? LoopClosureCheck.ReferenceFrameIndices(frames)
                         : null);
+                if (allowGpu && playbackKind == PlaybackEncoderSelection.Vulkan && request.ProbeFrames == 0 &&
+                    render.Width % 2 == 0 && render.Height % 2 == 0)
+                {
+                    (CacheRegion Crop, bool Packed)? known = capture.SceneClear
+                        ? (new CacheRegion((int)render.Width,(int)render.Height,0,0,(int)render.Width,(int)render.Height),false)
+                        : (groupStartSearches.TryGetValue(groupId, out JsonObject? groupSearch)
+                            ? NativeRenderRunner.SamplingCrop(groupSearch["sampling_coverage"] as JsonObject,render) : null)
+                            ?? NativeRenderRunner.SamplingCrop(coverage,render);
+                    if (known is { } layout)
+                    {
+                        string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
+                            (uint)layout.Crop.Width*(layout.Packed ? 2u : 1u),(uint)layout.Crop.Height,
+                            render.FpsNumerator,render.FpsDenominator),PlaybackEncoderSelection.Vulkan);
+                        render = render with { LosslessTest=false, PlaybackEncoderKind=null, ForceKeyFrameFrame=null,
+                            EncodedFrames=frames, PixelPacking=layout.Packed ? "rgba_side_by_side" : "rgb",
+                            GpuEncoding=new(codec,Qp:coverage is null ? 18 : 12,CrossfadeFrames:framing.Residual ? crossfadeFrames : 0,
+                                Crop:layout.Crop,RetainLoopWindow:framing.Residual,RetainQualitySamples:true) };
+                    }
+                }
+                return render;
             }
             // 异步方法：构造请求时抛出的异常留在任务里，等轮到这个组时才浮出来，不会打乱前面组的判定顺序。
             async Task<JsonObject> StartGroupRenderAsync(int index)
@@ -813,7 +865,56 @@ public sealed class HybridBakeService(NativeTools tools)
                 RenderRequest render = MasterRenderRequest(index);
                 if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
                     throw new IOException("A group master output must be new; existing files will not be cleaned.");
-                return await runner.RenderAsync(render, progress, groupRenderCancellation.Token);
+                JsonObject? coveragePass = null;
+                if (render.GpuEncoding is null && playbackKind == PlaybackEncoderSelection.Vulkan && request.ProbeFrames == 0 &&
+                    render.Width % 2 == 0 && render.Height % 2 == 0)
+                {
+                    // An unknown crop used to require a full RGBA lossless master
+                    // followed by decoding and encoding again. A GPU-only bounds
+                    // pass supplies the same all-frame crop before direct encoding.
+                    string boundsOutput = Path.Combine(Path.GetDirectoryName(render.OutputDirectory)!, "capture-bounds");
+                    var boundsRequest = render with { OutputDirectory=boundsOutput, GpuEncoding=null,
+                        LosslessTest=false, PlaybackEncoderKind=null, ForceKeyFrameFrame=null,
+                        CollectAlphaBounds=false, EncodedFrames=null, RetainFrames=null,
+                        FrameSamplesOnly=true, FrameSampleStride=checked((uint)render.Frames),
+                        FrameSampleWidth=64, FrameSampleIncludeAlpha=true, CollectSamplingCoverage=true };
+                    JsonObject measured = await runner.RenderAsync(boundsRequest, progress, groupRenderCancellation.Token);
+                    render = MasterRenderRequest(index, coverage:measured["sampling_coverage"] as JsonObject);
+                    coveragePass = new JsonObject { ["status"]=measured["sampling_coverage_status"]?.DeepClone(),
+                        ["manifest_path"]=Path.Combine(boundsOutput,"manifest.json"),
+                        ["frames"]=render.Frames, ["readback_frames"]=measured["readback_frames"]?.DeepClone(),
+                        ["renderer_wall_seconds"]=measured["native_result"]?["wall_seconds"]?.DeepClone() };
+                    if (measured["sampling_coverage"] is JsonObject emptyCoverage &&
+                        emptyCoverage["has_content"]?.GetValue<bool>() == false)
+                    {
+                        // Every full-resolution RGBA pixel was zero over the
+                        // complete interval. Reuse its full dependency trace and
+                        // take the existing empty-group path without encoding it.
+                        measured["alpha_bounds"] = emptyCoverage.DeepClone();
+                        measured["gpu_bounds_prepass"] = coveragePass;
+                        await File.WriteAllTextAsync(Path.Combine(boundsOutput,"manifest.json"),
+                            measured.ToJsonString(JsonOptions),groupRenderCancellation.Token);
+                        return measured;
+                    }
+                }
+                try
+                {
+                    JsonObject rendered = await runner.RenderAsync(render, progress, groupRenderCancellation.Token);
+                    rendered["gpu_bounds_prepass"] = coveragePass;
+                    return rendered;
+                }
+                catch (IOException error) when (render.GpuEncoding is not null && !groupRenderCancellation.IsCancellationRequested &&
+                    (error.Message.Contains("GPU encode initialization",StringComparison.Ordinal) ||
+                     error.Message.Contains("required vulkan device extension",StringComparison.Ordinal)))
+                {
+                    string parent=Path.GetDirectoryName(render.OutputDirectory)!;
+                    string failed=ProjectSource.ContainedPath(parent,"master.gpu-unavailable");
+                    Directory.Move(render.OutputDirectory,failed);
+                    JsonObject fallback=await runner.RenderAsync(MasterRenderRequest(index,allowGpu:false),progress,groupRenderCancellation.Token);
+                    fallback["gpu_pipeline_fallback_reason"]=error.Message;
+                    fallback["gpu_bounds_prepass"]=coveragePass;
+                    return fallback;
+                }
             }
             // 取这个组的主渲染，并按 groupParallel 把后面几组的渲染提前挂上去。
             Task<JsonObject> GroupRenderAsync(int index)
@@ -824,69 +925,6 @@ public sealed class HybridBakeService(NativeTools tools)
                     if (!groupRenders.ContainsKey(ahead)) groupRenders[ahead] = StartGroupRenderAsync(ahead);
                 return render;
             }
-            // 源周期路线的起点偏移（见 SourceStartOffset）：同一个候选第 0 帧是孤立起点异常帧时，整轮换起点 S = 1 重渲，
-            // 不消耗候选回退次数；换候选时起点回到 0，由新候选自己的原帧重新判。每个判过的记录都进 source_start_offset_checks。
-            bool startOffsetRetryPending = false;
-            var startOffsetChecks = new JsonArray();
-            for (int candidateAttempt = 0; ; ++candidateAttempt)
-            {
-            bool startOffsetRound = startOffsetRetryPending;
-            startOffsetRetryPending = false;
-            if (candidateAttempt > 0 || startOffsetRound)
-            {
-                // 换候选：把它换到候选表首位（所有读 candidates[0] 的地方随之一致），重建捕获场景与成品目录，
-                // 清空上一轮的组记录。上一轮的组输出目录已在下面删掉，磁盘峰值不叠加。
-                // 残差路线换的是起点：候选表与捕获场景不变，只换 startFrame。
-                // 起点偏移重试：候选与捕获场景都不变，startFrame 已在触发处设好，这里只清上一轮。
-                if (startOffsetRound)
-                {
-                    report["source_start_frame"] = checked(warmupFrames + startFrame);
-                    progress?.Report(new("retrying_source_start_offset", 0, Messages.Get("progress.retrying_source_start_offset",
-                        Messages.DefaultLanguage(), frames, startFrame)));
-                }
-                else if (candidateFallbackEnabled)
-                {
-                    LoopCandidateFallback.Promote(loopCandidates, candidateAttempt);
-                    frames = loopCandidates[0]!["frames"]!.GetValue<ulong>();
-                    report["frames"] = frames;
-                    report["plan"] = plan.DeepClone();
-                    startFrame = 0;
-                    report["source_start_frame"] = 0UL;
-                    report.Remove("source_start_offset");
-                    await RebuildCaptureSourceAsync();
-                }
-                else
-                {
-                    ulong rejectedStart = startFrame;
-                    startFrame = startOrder[candidateAttempt]["start_frame"]!.GetValue<ulong>();
-                    report["source_start_frame"] = checked(warmupFrames + startFrame);
-                    report["loop_start_phase_frame"] = startFrame;
-                    report.Remove("reason_localized");
-                    report.Remove("seam_residual");
-                    report.Remove("loop_crossfade");
-                    progress?.Report(new("retrying_next_loop_start", 0, Messages.Get("progress.retrying_next_loop_start",
-                        Messages.DefaultLanguage(), rejectedStart, candidateAttempt + 1, startFrame)));
-                }
-                if (Directory.Exists(project)) Directory.Delete(project, recursive: true);
-                await source.ExtractAsync(project, cancellationToken);
-                replacements.Clear();
-                staticLayers = 0;
-                nextId = checked(originalObjects.Keys.Max() + 1);
-                finalDependencies = MergeRuntimeDependencies(runtimeDependencies, new JsonArray());
-                fullCaptureScriptErrors.Clear();
-                fullCaptureScriptErrorKeys.Clear();
-                report["full_capture_source_script_error_count"] = 0;
-                report["groups"] = new JsonArray();
-                // 换候选/换起点前先把磁盘上的报告标成"未完成"并记下候选序号：这一轮要跑很久，
-                // 期间被硬超时或硬杀掉时留下的就是 in_progress，而不是上一轮写下的结论。
-                MarkInProgress(report, candidateAttempt, startOffsetRound ? "source_start_offset_retry"
-                    : candidateFallbackEnabled ? "loop_candidate_fallback" : "loop_start_fallback");
-                if (candidateFallbackEnabled && !startOffsetRound)
-                    progress?.Report(new("retrying_next_loop_candidate", 0,
-                        $"Analytic candidate #{candidateAttempt} ({frames} frames) after the previous candidate failed the encoded seam check."));
-                await Save();
-            }
-            bool retryNextCandidate = false, retryNextStart = false;
             // 这一轮各残差组的第一层读数，组成本次起点尝试的记录。
             var roundResiduals = new List<(string GroupId, JsonObject SeamResidual)>();
             if (residualMasking is not null && request.ProbeFrames == 0 && startSearch is null) await SearchSharedLoopStartAsync();
@@ -937,7 +975,10 @@ public sealed class HybridBakeService(NativeTools tools)
                     // 提前启动过就直接等它，master_render 只计真正等的那段墙钟，与后面的编码不重叠。
                     using (timing.Measure(StageTiming.MasterRender))
                     master = await GroupRenderAsync(i);
+                    masterPath = master["request"]!["output_directory"]!.GetValue<string>();
                     timing.AddMasterBreakdown(master);
+                    bool gpuDirect = master["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
+                    directPlayback |= gpuDirect;
                     JsonObject? lateDependencyValidation = null;
                     if (request.ProbeFrames == 0)
                     {
@@ -991,41 +1032,9 @@ public sealed class HybridBakeService(NativeTools tools)
                     if (master["alpha_bounds"]?["has_content"]?.GetValue<bool>() != true)
                     {
                         report["groups"]!.AsArray().Add(new JsonObject { ["id"] = id, ["status"] = "empty_in_generated_interval",
-                            ["source_layers"] = JsonSerializer.SerializeToNode(layers), ["late_dependency_validation"] = lateDependencyValidation });
+                            ["source_layers"] = JsonSerializer.SerializeToNode(layers), ["late_dependency_validation"] = lateDependencyValidation,
+                            ["gpu_bounds_prepass"] = master["gpu_bounds_prepass"]?.DeepClone() });
                         await Save(); continue;
-                    }
-                    // 起点异常判据：源周期路线、起点还是 0 时，编码之前先用原帧判。第 0 帧是孤立异常帧（闭合只因它失败）时，
-                    // 这一轮到此为止，整轮换起点 S = 1 重渲；闭合通过或不是孤立异常时照常往下走，由编码后的闭合检验裁决。
-                    if (candidateFallbackEnabled && closureJudgedGroup && startFrame == 0 && frames >= 3)
-                    {
-                        JsonObject startCheck;
-                        using (timing.Measure(StageTiming.SeamCheck))
-                        {
-                            byte[] f0 = await LoopClosureCheck.ReadRetainedFrameAsync(master, 0, cancellationToken);
-                            byte[] f1 = await LoopClosureCheck.ReadRetainedFrameAsync(master, 1, cancellationToken);
-                            byte[] f2 = await LoopClosureCheck.ReadRetainedFrameAsync(master, 2, cancellationToken);
-                            byte[] beforeWrap = await LoopClosureCheck.ReadRetainedFrameAsync(master, frames - 1, cancellationToken);
-                            byte[] wrap = await LoopClosureCheck.ReadRetainedFrameAsync(master, frames, cancellationToken);
-                            startCheck = SourceStartOffset.Evaluate(f0, f1, f2, beforeWrap, wrap, (int)pixelWidth, (int)pixelHeight,
-                                withAlpha: !includeSceneClear, frames);
-                        }
-                        // 闭合通过的组不记，bake.json 与改动前一致；闭合失败的组不论偏不偏移都记下读数。
-                        if (startCheck["status"]?.GetValue<string>() != SourceStartOffset.ClosedStatus)
-                        {
-                            startCheck["candidate_attempt"] = candidateAttempt;
-                            startCheck["group_id"] = id;
-                            startOffsetChecks.Add(startCheck.DeepClone());
-                            report["source_start_offset_checks"] = startOffsetChecks.DeepClone();
-                        }
-                        if (SourceStartOffset.RequiresOffset(startCheck))
-                        {
-                            // 跳出组循环；每组的 finally 先清 master 中间文件，轮次末尾再删整个组目录。
-                            startFrame = SourceStartOffset.OffsetFrames;
-                            report["source_start_offset"] = SourceStartOffset.Applied(id, startCheck, startFrame);
-                            startOffsetRetryPending = true;
-                            await Save();
-                            break;
-                        }
                     }
                     if (residualGroup)
                     {
@@ -1048,20 +1057,9 @@ public sealed class HybridBakeService(NativeTools tools)
                         // 本轮最后一个残差组测完（或任何一组被拒）时，这次起点尝试就有了结论。
                         if (!firstLayer || i == residualGroupIndexes[^1])
                         {
-                            startAttempts.Add(ResidualStartFallback.Attempt(candidateAttempt, startFrame,
-                                startOrder.ElementAtOrDefault(candidateAttempt), roundResiduals));
-                            if (firstLayer) report["selected_loop_start"] = ResidualStartFallback.Selected(candidateAttempt, startFrame);
-                        }
-                        if (startFallbackEnabled && !firstLayer && ResidualStartFallback.Next(candidateAttempt, false, startOrder.Length) == ResidualStartStep.RetryNextStart)
-                        {
-                            // 跳出组循环；每组的 finally 先清 master 中间文件，轮次末尾再删整个组目录，下一轮换起点重渲。
-                            report["groups"]!.AsArray().Add(new JsonObject {
-                                ["id"] = id, ["status"] = "rejected_seam_residual", ["storage"] = "video",
-                                ["source_layers"] = JsonSerializer.SerializeToNode(layers),
-                                ["seam_residual"] = wrap.DeepClone() });
-                            retryNextStart = true;
-                            await Save();
-                            break;
+                            startAttempts.Add(ResidualStartFallback.Attempt(0, startFrame,
+                                startOrder.FirstOrDefault(), roundResiduals));
+                            if (firstLayer) report["selected_loop_start"] = ResidualStartFallback.Selected(0, startFrame);
                         }
                         if (!firstLayer)
                         {
@@ -1075,7 +1073,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 residualPreview = await SeamPreview.ExportOrWarnAsync(report, id, SeamPreview.RejectedOutcome,
                                     token => runner.ExportSeamPreviewAsync(Path.Combine(masterPath, "preview.mp4"),
                                         Path.Combine(work, SeamPreview.FileName), frames, settings.FpsNumerator, settings.FpsDenominator,
-                                        "lossless_master_hard_cut", token), cancellationToken);
+                                        gpuDirect ? "gpu_candidate_after_crossfade" : "lossless_master_hard_cut", token), cancellationToken);
                             var rejectedResidualGroup = new JsonObject {
                                 ["id"] = id, ["status"] = "rejected_seam_residual", ["storage"] = "video",
                                 ["source_layers"] = JsonSerializer.SerializeToNode(layers),
@@ -1085,7 +1083,7 @@ public sealed class HybridBakeService(NativeTools tools)
                             report["groups"]!.AsArray().Add(rejectedResidualGroup);
                             report["status"] = "candidate_rejected_seam";
                             report["loop_validation"] = "residual_above_limits";
-                            // 候选起点都试过了：理由列出每个起点各组的 max_k 瓦片（带 k）与 Δ_0 整幅。
+                            // 选定起点被拒即停止；记录本次各组的残差，不启动整案重渲。
                             string residualReason = ResidualStartFallback.RejectionReason(startAttempts,
                                 startSearch?["candidate_count"]?.GetValue<int>() ?? startOrder.Length, crossfadeFrames);
                             report["reason"] = residualReason;
@@ -1097,14 +1095,25 @@ public sealed class HybridBakeService(NativeTools tools)
                         progress?.Report(new("applying_crossfade", (double)i / groups.Length,
                             "在接缝处做固定窗口的整帧交叉淡化。"));
                         using (timing.Measure(StageTiming.Crossfade))
-                            groupCrossfade = await runner.ApplyLoopCrossfadeAsync(masterPath, frames, crossfadeFrames, cancellationToken);
+                            groupCrossfade = gpuDirect ? master["loop_crossfade"]!.DeepClone().AsObject()
+                                : await runner.ApplyLoopCrossfadeAsync(masterPath, frames, crossfadeFrames, cancellationToken);
                         groupCrossfade["group_id"] = id;
                         // 顶层 loop_crossfade 记第一个残差组；每组自己的淡化记录（含自检）在组记录里。
                         if (report["loop_crossfade"] is null) report["loop_crossfade"] = groupCrossfade.DeepClone();
                         await Save();
                     }
-                    bool packedAlpha = !includeSceneClear && master["alpha_bounds"]?["minimum_alpha"]?.ToJsonString() != "255";
+                    bool packedAlpha = gpuDirect ? master["pixel_packing"]?.GetValue<string>() == "rgba_side_by_side"
+                        : !includeSceneClear && master["alpha_bounds"]?["minimum_alpha"]?.ToJsonString() != "255";
                     bool isStatic = master["alpha_bounds"]?["pixel_identical_in_generated_interval"]?.GetValue<bool>() == true;
+                    if (request.ProbeFrames == 0 && group["static_verified"]?.GetValue<bool>() == true &&
+                        group["static_verification"]?["basis"]?.GetValue<string>() == "source_and_runtime_static_proof" && !isStatic)
+                    {
+                        report["groups"]!.AsArray().Add(new JsonObject { ["id"] = id, ["status"] = "rejected_static_proof",
+                            ["source_layers"] = JsonSerializer.SerializeToNode(layers), ["late_dependency_validation"] = lateDependencyValidation });
+                        report["status"] = "candidate_rejected_static_proof";
+                        report["reason"] = "A group excluded from the dynamic-video budget changed during the full capture; no oversized video layout was exported.";
+                        await Save(); return report;
+                    }
                     if (settings.VideoLayout == "full_frame" && (packedAlpha || master["alpha_bounds"]?["minimum_alpha"]?.ToJsonString() != "255"))
                         throw new InvalidDataException("Full-frame output was not opaque. The candidate was stopped instead of switching to transparent video.");
                     JsonObject encoded;
@@ -1131,12 +1140,15 @@ public sealed class HybridBakeService(NativeTools tools)
                         // （它的编码墙钟与渲染重叠，已含在 master_render 里），也不占编码槽配额（它是随渲染帧率的持续负载，不是尖峰）。
                         if (directPlayback)
                             encoded = await runner.AdoptDirectPlaybackAsync(master, masterPath, Path.Combine(work, "encoded"),
-                                request.PlaybackEncoder ?? PlaybackEncoderSelection.Software, playbackKind, playbackFallbackReason,
+                                request.PlaybackEncoder ?? PlaybackEncoderSelection.Software,
+                                gpuDirect ? PlaybackEncoderSelection.Vulkan : master["request"]?["playback_encoder_kind"]?.GetValue<string>() ?? playbackKind,
+                                master["gpu_pipeline_fallback_reason"]?.GetValue<string>() ?? playbackFallbackReason,
                                 cancellationToken);
                         else
                         {
                             // master 路线照旧整片解码重编一遍。成品编码是整案的 CPU 峰值：按跨进程配额排队，
                             // 等槽位的时间单独计时，不混进 encode_playback。
+                            progress?.Report(new(StageTiming.EncodeSlotWait, null, "Waiting for an encoding slot."));
                             using var slot = await encodeSlots.AcquireAsync(cancellationToken);
                             timing.Add(StageTiming.EncodeSlotWait, slot.WaitSeconds);
                             using (timing.Measure(StageTiming.EncodePlayback))
@@ -1185,6 +1197,10 @@ public sealed class HybridBakeService(NativeTools tools)
                                     ["failures"] = LoopClosureCheck.Allows(closure) ? new JsonArray() : new JsonArray("loop_not_closed"),
                                     ["basis"] = "Every encoded RGBA frame was byte-identical in this interval; stored as one static texture. Frame P must still close onto frame 0.",
                                     ["loop_closure"] = closure };
+                            else if (!request.KeepIntermediates && LoopClosureCheck.Allows(closure))
+                                seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator,
+                                    settings.FpsDenominator, packedAlpha, closure, crop.Width * (packedAlpha ? 2 : 1), crop.Height,
+                                    cancellationToken: cancellationToken);
                             else
                                 // 直编组没有无损 master 可解：m[0]、m[P−1] 直接用渲染时留下的原帧（就是编码器第 0、P−1 帧的输入）。
                                 // master 是无损的，从它解出来的那两帧与原帧逐字节相同，所以判据读数与 master 路线一致。
@@ -1197,9 +1213,9 @@ public sealed class HybridBakeService(NativeTools tools)
                         }
                     }
                     else if (isStatic) seam = new JsonObject { ["status"] = "observed_seam_pass", ["basis"] = "Every captured RGBA frame was byte-identical in this probe interval; stored as one static texture." };
-                    // 接缝校验到此有了结局（通过或被拒），都导出预览；失败只记 warning。
+                    // 成功任务仅在显式保留诊断时导出；拒绝仍提供预览帮助定位。
                     JsonObject? seamPreview = null;
-                    if (SeamPreview.ShouldExport(request.ProbeFrames > 0, isStatic, seam))
+                    if (SeamPreview.ShouldExport(request.ProbeFrames > 0, isStatic, seam, request.KeepIntermediates))
                     {
                         progress?.Report(new("exporting_seam_preview", (double)i / groups.Length,
                             Messages.Get("progress.exporting_seam_preview", Messages.DefaultLanguage(),
@@ -1222,28 +1238,14 @@ public sealed class HybridBakeService(NativeTools tools)
                             ["hardware_decode"] = null };
                         SeamPreview.Attach(rejectedGroup, seamPreview);
                         report["groups"]!.AsArray().Add(rejectedGroup);
-                        if (candidateFallbackEnabled)
-                        {
-                            candidateAttempts.Add(LoopCandidateFallback.Attempt(candidateAttempt, loopCandidates[0]!.AsObject(),
-                                "rejected_seam", report["groups"]!.AsArray()));
-                            if (startFrame != 0) candidateAttempts[^1]!["source_start_frame"] = startFrame;
-                            if (LoopCandidateFallback.CanRetry(candidateAttempt, loopCandidates.Count))
-                            {
-                                // 跳出组循环；每组的 finally 先清 master 中间文件，候选循环尾再删整个组目录。
-                                retryNextCandidate = true;
-                                await Save();
-                                break;
-                            }
-                        }
                         report["status"] = "candidate_rejected_seam";
                         report["loop_validation"] = "encoded_seam_failed";
-                        string attempts = candidateFallbackEnabled ? " " + LoopCandidateFallback.Summary(candidateAttempts) : "";
                         string reasonEnglish = Messages.Get("bake.encoded_seam_rejected", Messages.English,
-                            EncodedLoopValidator.RejectionDetail(seam!, Messages.English)) + attempts;
+                            EncodedLoopValidator.RejectionDetail(seam!, Messages.English));
                         report["reason"] = reasonEnglish;
                         report["reason_localized"] = new JsonObject { ["key"] = "bake.encoded_seam_rejected",
                             ["zh"] = Messages.Get("bake.encoded_seam_rejected", Messages.Chinese,
-                                EncodedLoopValidator.RejectionDetail(seam!, Messages.Chinese)) + attempts,
+                                EncodedLoopValidator.RejectionDetail(seam!, Messages.Chinese)),
                             ["en"] = reasonEnglish, ["params"] = new JsonArray() };
                         if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                         await Save();
@@ -1265,6 +1267,8 @@ public sealed class HybridBakeService(NativeTools tools)
                         cancellationToken, packedAlpha, depthX, depthY, x, y, isStatic,
                         capturedColor: HybridScenePlanner.Int(group["parent_id"]) is not null);
                     HybridVideoProjection.AttachToParent(layer, group);
+                    if (daytimeExport is not null)
+                        daytimeExport.BindReplacement(layer, originalObjects[daytimeExport.ReplacementTargets[id]], isStatic);
                     replacements[id] = layer;
                     var encodedGroup = new JsonObject {
                         ["id"] = id, ["status"] = "encoded", ["storage"] = isStatic ? "static_rgba" : "video", ["source_layers"] = JsonSerializer.SerializeToNode(layers),
@@ -1276,9 +1280,10 @@ public sealed class HybridBakeService(NativeTools tools)
                         ["hardware_decode_preflight"] = encoded["hardware_decode_preflight"]?.DeepClone(),
                         ["hardware_decode"] = hardwareDecode,
                         ["video_bytes"] = new FileInfo(video).Length, ["source_render_passes"] = master["native_result"]?["compiled_scene_passes"]?.DeepClone(),
+                        ["gpu_bounds_prepass"] = master["gpu_bounds_prepass"]?.DeepClone(),
                         // 成品是渲染那一遍直接编出来的，还是从无损 master 裁切重编的。静态图层两条路线都只存一张 RGBA。
                         ["capture_mode"] = isStatic ? null
-                            : directPlayback ? NativeRenderRunner.DirectPlaybackCaptureMode : NativeRenderRunner.LosslessMasterCaptureMode,
+                            : gpuDirect ? "gpu_direct_playback" : directPlayback ? NativeRenderRunner.DirectPlaybackCaptureMode : NativeRenderRunner.LosslessMasterCaptureMode,
                         // 播放版编码的实际档位与耗时；静态图层没有这一段编码，保持为 null。
                         ["playback_encode"] = isStatic ? null : new JsonObject {
                             ["encoder"] = encoded["encoder"]?.DeepClone(),
@@ -1315,37 +1320,18 @@ public sealed class HybridBakeService(NativeTools tools)
                     catch when (groupFailed) { }
                 }
             }
-            if (!retryNextCandidate && !retryNextStart && !startOffsetRetryPending)
-            {
-                if (candidateFallbackEnabled)
-                {
-                    candidateAttempts.Add(LoopCandidateFallback.Attempt(candidateAttempt, loopCandidates[0]!.AsObject(),
-                        "encoded", report["groups"]!.AsArray()));
-                    if (startFrame != 0) candidateAttempts[^1]!["source_start_frame"] = startFrame;
-                }
-                selectedCandidateAttempt = candidateAttempt;
-                break;
-            }
-            // 先停掉提前启动、这一轮已经不要的渲染：渲染器还占着组目录时删不掉。
-            await ResetGroupRendersAsync();
-            // 清掉这一轮所有组的输出目录（master 的中间文件已由每组的 finally 删掉，这里连编码结果一起删），
-            // 下一轮从空目录开始，磁盘峰值不叠加。
-            foreach (JsonObject group in groups)
-            {
-                string groupDirectory = ProjectSource.ContainedPath(output, group["id"]!.GetValue<string>());
-                if (Directory.Exists(groupDirectory)) Directory.Delete(groupDirectory, recursive: true);
-            }
-            // 起点偏移重试的是同一个候选：抵消循环尾的 ++，候选序号不变。
-            if (startOffsetRetryPending) --candidateAttempt;
-            }
-            if (candidateFallbackEnabled)
-                report["selected_loop_candidate"] = LoopCandidateFallback.Selected(selectedCandidateAttempt, loopCandidates[0]!.AsObject());
             JsonArray finalObjects;
             using (timing.Measure(StageTiming.ProjectAssembly))
             {
             finalObjects = AssembleObjects(originalObjects, plan, replacements, finalDependencies);
             // 记下按"不绘制但带脚本"规则额外保留的根对象，事后核对用。
             report["retained_script_root_ids"] = JsonSerializer.SerializeToNode(ScriptRootIds(originalObjects, plan));
+            if (daytimeExport is not null)
+                report["daytime_dynamic_export"] = new JsonObject {
+                    ["status"] = "preserved", ["captured_state"] = daytimeExport.State.Name,
+                    ["replaced_source_layer_ids"] = JsonSerializer.SerializeToNode(daytimeExport.ReplacementTargets.Values),
+                    ["retained_original_state_layer_ids"] = JsonSerializer.SerializeToNode(daytimeExport.Detection.ControlledLayerIds.Except(daytimeExport.ReplacementTargets.Values)),
+                    ["adjustable_property_keys"] = JsonSerializer.SerializeToNode(daytimeExport.PropertyKeys) };
             scene["objects"] = finalObjects;
             HybridScenePlanner.ApplyTextEffectChoice(scene, plan);
             ApplyVisibilityFallbacks(scene, snapshot);
@@ -1357,14 +1343,18 @@ public sealed class HybridBakeService(NativeTools tools)
             if (metadata["general"]?["properties"] is JsonObject exportedProperties)
             {
                 // Display conditions hide controls without removing the values read by live scripts.
-                foreach (var property in exportedProperties.Select(p => p.Value).OfType<JsonObject>()) property["condition"] = "false";
+                HideFixedPropertyControls(exportedProperties, daytimeExport?.PropertyKeys);
                 string noticeKey = "wpebakersnapshotnotice";
                 while (exportedProperties.ContainsKey(noticeKey)) noticeKey += "0";
                 exportedProperties[noticeKey] = new JsonObject { ["type"] = "text", ["value"] = "", ["order"] = -1, ["index"] = -1,
-                    ["text"] = "画面设置已固定；在 WPE Baker 中改设置后重新生成。 / Settings are fixed; change them in WPE Baker and generate again." };
+                    ["text"] = daytimeExport is null
+                        ? "画面设置已固定；在 WPE Baker 中改设置后重新生成。 / Settings are fixed; change them in WPE Baker and generate again."
+                        : "昼夜和时段选择仍可调整；其他画面设置已固定。 / Daytime and manual selection remain adjustable; other visual settings are fixed." };
             }
             metadata["description"] = (metadata["description"]?.GetValue<string>() ?? "") +
-                "\nGenerated for the selected settings. Change omitted styles or baked visual settings in WPE Baker and generate again.";
+                (daytimeExport is null
+                    ? "\nGenerated for the selected settings. Change omitted styles or baked visual settings in WPE Baker and generate again."
+                    : "\nAutomatic daytime changes and manual selection are preserved. Unreplaced states retain their original videos; other visual settings use the selected snapshot.");
             await File.WriteAllTextAsync(Path.Combine(project, "project.json"), metadata.ToJsonString(), cancellationToken);
             }
             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
@@ -1460,7 +1450,8 @@ public sealed class HybridBakeService(NativeTools tools)
         string? selectedDevice = request.DeviceUuid ?? settings.DeviceUuid;
         progress?.Report(new("checking_composition", 0, "Generating a short candidate to check complete scene composition."));
         JsonObject probe = await BakeAsync(new(2, plan, probeOutput, HybridCompositionValidator.RequiredFrames,
-            selectedDevice), progress, cancellationToken);
+            selectedDevice, EffectRenderScale: request.EffectRenderScale,
+            MatchEffectResolution: request.MatchEffectResolution), progress, cancellationToken);
         return await ValidateProbeCompositionAsync(plan, probe, output, progress, cancellationToken);
     }
 
@@ -1485,13 +1476,23 @@ public sealed class HybridBakeService(NativeTools tools)
         string probeOutput = Path.GetDirectoryName(project)
             ?? throw new InvalidDataException("The short composition probe project path has no parent directory.");
         string captureSource = Path.Combine(probeOutput, "capture-source");
-        await CreateCompositionReferenceAsync(source, comparisonReference, plan["snapshot_properties"]!.AsObject(),
+        JsonObject comparisonProperties = plan["snapshot_properties"]!.DeepClone().AsObject();
+        if (plan["daytime_split"]?["controls_video_playback"]?.GetValue<bool>() == true && settings.DaytimeState is not null)
+        {
+            JsonObject referenceScene = source.ReadJson(source.SceneResource);
+            HybridScenePlanner.ApplyAudioEffectChoice(referenceScene, plan);
+            var runtime = JsonNode.Parse(await File.ReadAllTextAsync(plan["runtime_evidence"]!.GetValue<string>(), cancellationToken))!.AsObject();
+            var daytime = DaytimeSplit.PrepareDynamicExport(referenceScene["objects"]!.AsArray().OfType<JsonObject>()
+                .ToDictionary(HybridScenePlanner.Id), plan, runtime["runtime_dependencies"]!.AsArray())!;
+            comparisonProperties = daytime.ComparisonProperties(comparisonProperties);
+        }
+        await CreateCompositionReferenceAsync(source, comparisonReference, comparisonProperties,
             settings.ViewMode, plan, cancellationToken);
         var comparison = await new CandidateValidation(tools).ValidateAsync(new ValidationRequest(
             1, comparisonReference, project, settings.Assets, comparisonOutput, settings.Width, settings.Height,
             settings.FpsNumerator, settings.FpsDenominator, HybridCompositionValidator.RequiredFrames,
             WarmupFrames: 0, Seed: 17, DeviceUuid: settings.DeviceUuid,
-            UserProperties: plan["snapshot_properties"]!.DeepClone().AsObject(),
+            UserProperties: comparisonProperties,
             Input: input ?? new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
             InputTimeline: inputTimeline,
             TileSize: HybridCompositionValidator.RequiredTileSize, RetainRawFrames: false), progress, cancellationToken);
@@ -1504,6 +1505,8 @@ public sealed class HybridBakeService(NativeTools tools)
         validation["occlusion_tradeoff"] = plan["occlusion_tradeoff"]?.DeepClone();
         validation["text_effects_choice"] = plan["text_effects_choice"]?.DeepClone();
         validation["audio_effects_choice"] = plan["audio_effects_choice"]?.DeepClone();
+        if (plan["daytime_split"]?["controls_video_playback"]?.GetValue<bool>() == true)
+            validation["daytime_state_under_test"] = settings.DaytimeState;
         return validation;
     }
 
@@ -1540,6 +1543,13 @@ public sealed class HybridBakeService(NativeTools tools)
         if (project["general"]?["properties"] is not JsonObject properties) return;
         foreach (var (key, value) in snapshot)
             if (properties[key] is JsonObject property) property["value"] = value?.DeepClone();
+    }
+
+    internal static void HideFixedPropertyControls(JsonObject properties, IReadOnlyCollection<string>? adjustableKeys)
+    {
+        foreach (var (key, value) in properties)
+            if (value is JsonObject property && !(adjustableKeys?.Contains(key, StringComparer.Ordinal) ?? false))
+                property["condition"] = "false";
     }
 
     internal static JsonArray? SelectVideoRateOverrides(JsonObject loop, IReadOnlySet<int> groupLayerIds)

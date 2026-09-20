@@ -61,8 +61,13 @@ public sealed partial class NativeRenderRunner
         };
     }
 
+    internal static bool IsSampleFrame(RenderRequest request, ulong frame) => request.FrameSampleStride > 0 &&
+        (frame % request.FrameSampleStride == 0 || request.FrameSamplePhaseFrames is ulong phase &&
+         frame % request.FrameSampleStride == phase % request.FrameSampleStride);
+
     private static async Task<FrameStreamSummary> CopyFrameStreamAsync(Stream source, Stream destination,
-        RenderRequest request, string output, IProgress<RenderProgress>? progress, CancellationToken token)
+        RenderRequest request, string output, IProgress<RenderProgress>? progress, CancellationToken token,
+        bool sparseInput = false)
     {
         int width = checked((int)request.Width), height = checked((int)request.Height);
         var bounds = new FrameBounds(width, height);
@@ -93,31 +98,50 @@ public sealed partial class NativeRenderRunner
         byte[][] thumbnails = [new byte[thumbnailBytes], new byte[thumbnailBytes]];
         Task pending = Task.CompletedTask;
         long loopStarted = Stopwatch.GetTimestamp();
-        for (ulong frame = 0; frame < request.Frames; ++frame)
+        var estimate = new FrameProgressEstimate();
+        ulong framesRead = 0;
+        try
         {
-            int slot = (int)(frame & 1);
-            byte[] rgba = buffers[slot];
-            long readStarted = Stopwatch.GetTimestamp();
-            try { await source.ReadExactlyAsync(rgba, token); }
-            catch (EndOfStreamException e) { throw new InvalidDataException($"Renderer ended while reading frame {frame}/{request.Frames}.", e); }
-            finally { readSeconds += Stopwatch.GetElapsedTime(readStarted).TotalSeconds; }
-            long stallStarted = Stopwatch.GetTimestamp();
+            for (ulong frame = 0; frame < request.Frames; ++frame)
+            {
+                if (sparseInput && !IsSampleFrame(request, frame))
+                {
+                    token.ThrowIfCancellationRequested();
+                    continue;
+                }
+                int slot = (int)(framesRead++ & 1);
+                byte[] rgba = buffers[slot];
+                long readStarted = Stopwatch.GetTimestamp();
+                try { await source.ReadExactlyAsync(rgba, token); }
+                catch (EndOfStreamException e) { throw new InvalidDataException($"Renderer ended while reading frame {frame}/{request.Frames}.", e); }
+                finally { readSeconds += Stopwatch.GetElapsedTime(readStarted).TotalSeconds; }
+                long stallStarted = Stopwatch.GetTimestamp();
+                await pending;
+                stallSeconds += Stopwatch.GetElapsedTime(stallStarted).TotalSeconds;
+                pending = ProcessAndReportAsync(frame, rgba, thumbnails[slot]);
+            }
             await pending;
-            stallSeconds += Stopwatch.GetElapsedTime(stallStarted).TotalSeconds;
-            pending = ProcessFrameAsync(frame, rgba, thumbnails[slot]);
-            if (Environment.TickCount64 - lastReport > 500)
+        }
+        finally
+        {
+            // A failed/cancelled read must not leave the previous frame writing to disposed streams.
+            try { await pending; } catch { } // Preserve the original read/processing error.
+        }
+
+        async Task ProcessAndReportAsync(ulong frame, byte[] rgba, byte[] thumbnail)
+        {
+            await ProcessFrameAsync(frame, rgba, thumbnail);
+            if (frame == 0 || Environment.TickCount64 - lastReport > 500 || frame + 1 == request.Frames)
             {
                 TemporaryCaptureFiles.RequireFreeSpace(output);
-                progress?.Report(new("rendering", (double)(frame + 1) / request.Frames, $"{frame + 1} / {request.Frames} frames"));
+                progress?.Report(estimate.Update(frame + 1, request.Frames, Stopwatch.GetElapsedTime(loopStarted).TotalSeconds));
                 lastReport = Environment.TickCount64;
             }
         }
-        await pending;
 
         async Task ProcessFrameAsync(ulong frame, byte[] rgba, byte[] thumbnail)
         {
-            bool sampleThis = samples is not null && (frame % request.FrameSampleStride == 0 ||
-                request.FrameSamplePhaseFrames is ulong phase && frame % request.FrameSampleStride == phase % request.FrameSampleStride);
+            bool sampleThis = samples is not null && IsSampleFrame(request, frame);
             bool first = request.CollectAlphaBounds && firstFrame is null && frame < encoded;
             if (first) firstFrame = rgba.ToArray();
             byte[]? reference = firstFrame;
@@ -137,7 +161,7 @@ public sealed partial class NativeRenderRunner
                 if (frame >= encoded) return;
                 if (request.CollectAlphaBounds)
                 {
-                    if (!first && reference is not null)
+                    if (pixelIdentical && !first && reference is not null)
                     {
                         long identicalStarted = Stopwatch.GetTimestamp();
                         if (!rgba.AsSpan().SequenceEqual(reference)) pixelIdentical = false;

@@ -16,6 +16,9 @@ internal static class EffectPrefixProfileChecks
     private static readonly MethodInfo Propose = typeof(HybridLoopService).Assembly
         .GetType("Baker.Core.EffectPrefixPlanner")!
         .GetMethod("Propose", BindingFlags.Static | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo PrepareCaptureSource = typeof(HybridLoopService).Assembly
+        .GetType("Baker.Core.EffectPrefixBakeService")!
+        .GetMethod("PrepareCaptureSourceAsync", BindingFlags.Static | BindingFlags.NonPublic)!;
 
     internal static void Run(Action<bool, string> check, string root)
     {
@@ -77,6 +80,38 @@ internal static class EffectPrefixProfileChecks
         static double Visible(JsonObject loop) => Retime(loop)["max_change_visible_percent"]!.GetValue<double>();
         static ulong Frames(JsonObject loop) => Selected(loop)["frames"]!.GetValue<ulong>();
 
+        // The production prefix capture must apply the shader coefficients that made its
+        // selected period valid. A shared shader used by a retained suffix stays authored in
+        // the separately extracted candidate/reference; only the capture project is patched.
+        string captureDirectory = Path.Combine(root, "effect-prefix-retime-capture");
+        string candidateDirectory = Path.Combine(root, "effect-prefix-retime-candidate");
+        string referenceDirectory = Path.Combine(root, "effect-prefix-retime-reference");
+        source.ExtractAsync(candidateDirectory, CancellationToken.None).GetAwaiter().GetResult();
+        source.ExtractAsync(referenceDirectory, CancellationToken.None).GetAwaiter().GetResult();
+        JsonObject captureScene = Scene();
+        JsonObject suffix = captureScene["objects"]![0]!["effects"]![1]!.DeepClone().AsObject();
+        suffix["id"] = 13;
+        captureScene["objects"]![0]!["effects"]!.AsArray().Add(suffix);
+        string pristineScene = captureScene.ToJsonString();
+        JsonArray patches = ((Task<JsonArray>)PrepareCaptureSource.Invoke(null,
+            [captureDirectory, source, null, captureScene, new JsonObject(), balanced, CancellationToken.None])!).GetAwaiter().GetResult();
+        string capturedFrag = File.ReadAllText(Path.Combine(captureDirectory, "shaders/effects/foliagesway.frag"));
+        string capturedVert = File.ReadAllText(Path.Combine(captureDirectory, "shaders/effects/foliagesway.vert"));
+        JsonObject speed = Retime(balanced)["shaders"]![0]!["speeds"]![0]!.AsObject();
+        double[] expected = speed["coefficients_new"]!.AsArray().Select(value => value!.GetValue<double>()).ToArray();
+        check(patches.Count == 2 && patches.OfType<JsonObject>().All(patch =>
+                patch["statements_rewritten"]!.GetValue<int>() == 2 &&
+                patch["sha256"]!.GetValue<string>() == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    File.ReadAllBytes(patch["path"]!.GetValue<string>())))) &&
+            ShaderTextPatch.TryParseClockTerms(capturedFrag + "\n" + capturedVert, out ShaderTextPatch.ClockTerms captured) &&
+            captured.Sines.Evaluate(speed["speed"]!.GetValue<double>()).Concat(captured.CoSines.Evaluate(speed["speed"]!.GetValue<double>()))
+                .Zip(expected).All(pair => Math.Abs(pair.First - pair.Second) < 1e-13) &&
+            captureScene.ToJsonString() == pristineScene &&
+            new[] { sourceDirectory, candidateDirectory, referenceDirectory }.All(directory =>
+                File.ReadAllText(Path.Combine(directory, "shaders/effects/foliagesway.frag")) == SwayRetimeChecks.Fragment &&
+                File.ReadAllText(Path.Combine(directory, "shaders/effects/foliagesway.vert")) == SwayRetimeChecks.Vertex),
+            "effect prefix capture: both sway shader stages match the selected period with auditable hashes, while the source, retained suffix and pristine reference remain unmodified");
+
         // 预算生效：前缀里的摆动项本来会留在未解析项里，走统一入口后按档位预算改频闭合，
         // 可见项改动不超过档位给的百分比；预算更宽的档在同一候选集上只会给出不更长的 L。
         check(new[] { efficiency, balanced, quality }.All(loop =>
@@ -113,6 +148,25 @@ internal static class EffectPrefixProfileChecks
             balancedList[1]["prefix_effect_count"]!.GetValue<int>() == 1 && balancedList[1]["terminal_effect_id"]!.GetValue<int>() == 11 &&
             balancedList.All(cache => cache["owner_layer_id"]!.GetValue<int>() == 7 && cache["retime_profile"] is JsonObject),
             "effect prefix profile: one owner proposes every closed prefix from longest to shortest so a rejected capture target falls back a level");
+        JsonArray Controlled(string property, int caller = 99, string? hiddenPixelWrite = null) {
+            var trace = new JsonObject { ["runtime_dependencies"] = new JsonArray(new JsonObject {
+                ["owner"] = caller, ["target"] = 7, ["operation"] = "write", ["property"] = property, ["initialization"] = false }) };
+            var controlledScene = Scene();
+            controlledScene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 99, ["visible"] = new JsonObject {
+                ["script"] = "let target; export function init(){ target=thisScene.getLayer('leaf'); } export function update(value){ target.visible=engine.frametime>0; " + hiddenPixelWrite + " return value; }" } });
+            var caches = (JsonArray)Propose.Invoke(null,
+                [controlledScene, source, sourceDirectory, trace, new JsonObject(), Request(RetimeProfile.Balanced), new JsonObject()])!;
+            check(trace["runtime_dependencies"]!.AsArray().Count == 1, "prefix analysis does not erase the original controller trace");
+            return caches;
+        }
+        JsonArray visibilityCaches = Controlled("visible");
+        check(visibilityCaches.Count == balancedList.Length && visibilityCaches.OfType<JsonObject>().All(cache =>
+                cache["preserve_external_visibility"]?.GetValue<bool>() == true) &&
+            Controlled("alpha").Count == 0 && Controlled("origin").Count == 0 && Controlled("visible", 7).Count == 0,
+            "pure external visibility preserves periodic pixels, while pixel writes and owner scripts remain blocked, including late capture rechecks");
+        check(Controlled("visible", hiddenPixelWrite: "if(engine.runtime>1000) target.alpha=0;").Count == 0 &&
+            Controlled("visible", hiddenPixelWrite: "target['alpha']=0;").Count == 0,
+            "a visible-only short trace cannot authorize unobserved pixel writes or computed controller members");
         check(profiles.All(cache => cache["prefix_effect_count"]!.GetValue<int>() == 2 &&
                 cache["terminal_effect_id"]!.GetValue<int>() == 12 && cache["loop"] is JsonObject) &&
             profiles[0]["retime_profile"]!["preset"]!.GetValue<string>() == RetimeProfile.Efficiency &&

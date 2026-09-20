@@ -63,7 +63,21 @@ python scripts/package-ffmpeg-encoder-gpl2.py
 
 Encoder records use their own `encoder-inputs.lock.json` and `encoder-build-tools.lock.json`; they do not change the renderer's selected dependency inputs.
 
-## Multithreaded renderer shipped in RC11 (mt-r4b)
+## Current local build (2026-09-19)
+
+Development and packaging now run on the desktop at `D:/Periodica/wpe-baker`.
+The clean engine remains at `2866b4f`; no renderer implementation changed during migration.
+Use `build/native-local22` with `--jobs 1` while the desktop has single-channel 24 GB RAM.
+The locally built renderer is 13,606,400 bytes, SHA256
+`81E6B456AFAF701C61E3CC103CB58D51708DD4A7D1B468E6B219C032657F19BE`,
+source digest `8ffdb8f577306009bd368ddb384d1474f403215cccd507e1cb1386c7d2d06e27`.
+Its record is `build/native-local22/provenance/build-wpe-render.json`, with
+`verified-source-binding`. Both packaging commands require
+`--native-build-dir build/native-local22`; pass the current binary SHA to
+`verify-package.ps1 -ExpectedRenderer`. `patches/renderer-mt/sha256.txt` now records this build.
+The laptop sources and original 1.0.2 distribution are preserved.
+
+## Historical RC11 renderer record (mt-r4b; paths and hashes below describe the old build)
 
 RC11 ships the multithreaded-decode renderer build, not the RC8 renderer. Because it is GPL v2, the archive pair must carry the exact sources it was built from.
 

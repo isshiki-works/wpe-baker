@@ -12,7 +12,7 @@ internal static class NativeFrameSampleChecks
             MethodInfo method = typeof(NativeRenderRunner).GetMethod("CopyFrameStreamAsync",
                 BindingFlags.Static | BindingFlags.NonPublic)!;
             using var source = new MemoryStream(bytes, writable: false);
-            var task = (Task)method.Invoke(null, [source, destination, request, output, null, CancellationToken.None])!;
+            var task = (Task)method.Invoke(null, [source, destination, request, output, null, CancellationToken.None, false])!;
             await task;
             object summary = task.GetType().GetProperty("Result")!.GetValue(task)!;
             return (JsonObject)summary.GetType().GetProperty("Samples")!.GetValue(summary)!;
@@ -24,7 +24,7 @@ internal static class NativeFrameSampleChecks
             MethodInfo method = typeof(NativeRenderRunner).GetMethod("CopyFrameStreamAsync",
                 BindingFlags.Static | BindingFlags.NonPublic)!;
             using var source = new MemoryStream(bytes, writable: false);
-            var task = (Task)method.Invoke(null, [source, Stream.Null, request, output, null, CancellationToken.None])!;
+            var task = (Task)method.Invoke(null, [source, Stream.Null, request, output, null, CancellationToken.None, false])!;
             await task;
             object summary = task.GetType().GetProperty("Result")!.GetValue(task)!;
             return (JsonObject?)summary.GetType().GetProperty("OpaquePixels")!.GetValue(summary);

@@ -199,11 +199,11 @@ internal static class NarrativePolishChecks
         // ---- ④ bake --help 的 --encoder 说明按 --lang 出 ----
         string bakeEn = CliUsage.Sections("en")["bake"], bakeZh = CliUsage.Sections("zh")["bake"];
         check(bakeEn.Contains("wpe-baker bake PLAN.json --out NEW_DIRECTORY", StringComparison.Ordinal) &&
-            bakeEn.Contains("--encoder only changes the playback video", StringComparison.Ordinal) &&
+            bakeEn.Contains("Vulkan generates playback video directly", StringComparison.Ordinal) &&
             !Regex.IsMatch(bakeEn, @"\p{IsCJKUnifiedIdeographs}"),
             "bake --help in english has an english encoder note and no chinese");
         check(bakeZh.Contains("wpe-baker bake PLAN.json --out NEW_DIRECTORY", StringComparison.Ordinal) &&
-            bakeZh.Contains("--encoder 只改播放版视频", StringComparison.Ordinal) &&
+            bakeZh.Contains("vulkan 在支持的显卡上直接生成成品", StringComparison.Ordinal) &&
             bakeZh.Split(Environment.NewLine).All(line => line.StartsWith("wpe-baker", StringComparison.Ordinal) || line.StartsWith("  ", StringComparison.Ordinal)),
             "bake --help in chinese keeps the english usage skeleton and indents the chinese encoder note");
         check(CliUsage.HelpLanguage(["bake", "--help", "--lang", "en"], "zh") == "en" &&

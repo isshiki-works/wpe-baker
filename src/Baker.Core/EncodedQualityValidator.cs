@@ -108,7 +108,7 @@ public static partial class EncodedQualityValidator
         }
         finally
         {
-            Stop(process);
+            await NativeRenderRunner.StopAndWaitAsync(process);
             if (stderrLogPath is not null && !stderrSaved)
             {
                 string raw = await stderr;
@@ -164,7 +164,7 @@ public static partial class EncodedQualityValidator
                 throw new InvalidDataException($"ffmpeg produced {(extra ? "more than" : read.ToString(CultureInfo.InvariantCulture))} bytes; expected exactly {expectedBytes}.");
             return data;
         }
-        finally { Stop(process); }
+        finally { await NativeRenderRunner.StopAndWaitAsync(process); }
     }
 
     private static List<(ulong First, int Count)> ConsecutiveRuns(IReadOnlyList<ulong> indices)
@@ -247,7 +247,7 @@ public static partial class EncodedQualityValidator
         }
         return frame;
     }
-    internal static async Task<string> RunAsync(string exe, NativeTools tools, string[] args, CancellationToken token) { var info = StartInfo(exe, tools, args); using var p = new Process { StartInfo = info }; if (!p.Start()) throw new IOException("Could not start ffprobe."); using var r = token.Register(() => Stop(p)); Task<string> o = p.StandardOutput.ReadToEndAsync(token), e = p.StandardError.ReadToEndAsync(token); try { await Task.WhenAll(p.WaitForExitAsync(token), o, e); if (p.ExitCode != 0) throw new InvalidDataException($"ffprobe failed: {Trim(e.Result)}"); return o.Result; } finally { Stop(p); } }
+    internal static async Task<string> RunAsync(string exe, NativeTools tools, string[] args, CancellationToken token) { var info = StartInfo(exe, tools, args); using var p = new Process { StartInfo = info }; if (!p.Start()) throw new IOException("Could not start ffprobe."); using var r = token.Register(() => Stop(p)); Task<string> o = p.StandardOutput.ReadToEndAsync(token), e = p.StandardError.ReadToEndAsync(token); try { await Task.WhenAll(p.WaitForExitAsync(token), o, e); if (p.ExitCode != 0) throw new InvalidDataException($"ffprobe failed: {Trim(e.Result)}"); return o.Result; } finally { await NativeRenderRunner.StopAndWaitAsync(p); } }
     private static ProcessStartInfo StartInfo(string exe, NativeTools tools, IEnumerable<string> args) { var i = new ProcessStartInfo(Path.GetFullPath(exe)) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }; foreach (string a in args) i.ArgumentList.Add(a); i.Environment["PATH"] = string.Join(Path.PathSeparator, tools.RuntimeDirectories.Select(Path.GetFullPath)) + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"); return i; }
     private static void Stop(Process p) { try { if (!p.HasExited) p.Kill(true); } catch (InvalidOperationException) { } }
     private static string Trim(string s) => s.Length <= 2048 ? s.Trim() : s[..2048].Trim() + "…";

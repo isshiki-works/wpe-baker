@@ -20,7 +20,7 @@ internal static class OpaqueCaptureRejectionChecks
             using var source = new MemoryStream(frames, writable: false);
             try
             {
-                await (Task)method.Invoke(null, [source, Stream.Null, request, request.OutputDirectory, null, CancellationToken.None])!;
+                await (Task)method.Invoke(null, [source, Stream.Null, request, request.OutputDirectory, null, CancellationToken.None, false])!;
             }
             catch (Exception error) { return error; }
             throw new InvalidOperationException("A non-opaque frame stream was accepted.");
@@ -77,6 +77,7 @@ internal static class OpaqueCaptureRejectionChecks
         check(group["status"]?.GetValue<string>() == "rejected_opaque_capture" && group["id"]?.GetValue<string>() == "effect-prefix-23" &&
             group["owner_layer_id"]?.GetValue<int>() == 23 && group["terminal_effect_id"]?.GetValue<int>() == 356 &&
             group["packed_alpha"]?.GetValue<bool>() == false && group["probe_opacity"]?["minimum_alpha"]?.GetValue<int>() == 255 &&
+            group["probe_opacity"]?["width"]?.GetValue<uint>() == 5160 && group["probe_opacity"]?["height"]?.GetValue<uint>() == 2160 &&
             JsonNode.DeepEquals(group["opaque_pixels"], evidence) && !ReferenceEquals(group["opaque_pixels"], evidence) &&
             group["video_path"] is null,
             "opaque capture rejection records the probe verdict and the full-resolution evidence without a video path");

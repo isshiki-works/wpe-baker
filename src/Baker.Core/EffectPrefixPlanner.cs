@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Baker.Core;
 
@@ -21,6 +22,7 @@ internal static class EffectPrefixPlanner
         {
             if (!EligibleOwner(owner, source, runtime, out bool retainedPuppetAnimation)) continue;
             int ownerId = owner["id"]!.GetValue<int>();
+            if (!VisibilityControllersProven(originalScene, runtime, ownerId)) continue;
             JsonArray effects = owner["effects"]!.AsArray();
             var closed = new List<JsonObject>();
             for (int count = 1; count <= effects.Count; ++count)
@@ -31,7 +33,7 @@ internal static class EffectPrefixPlanner
                     ownerId, count, request, projection);
                 if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 } candidates ||
                     candidates[0]?["components"] is not JsonArray { Count: > 0 }) continue;
-                closed.Add(new JsonObject {
+                var cache = new JsonObject {
                     ["owner_layer_id"] = ownerId, ["prefix_effect_count"] = count,
                     ["terminal_effect_id"] = effect["id"]!.DeepClone(), ["source_image"] = owner["image"]!.DeepClone(),
                     ["loop"] = loop, ["fixed_user_properties"] = PrefixProperties(effects.Take(count), snapshotProperties),
@@ -41,7 +43,12 @@ internal static class EffectPrefixPlanner
                     ["retime_profile"] = profile.ToJson(),
                     ["retained_puppet_animation"] = retainedPuppetAnimation,
                     ["prefix_capture_scope"] = retainedPuppetAnimation ? "pre_puppet_authored_effect_terminal" : "flat_authored_effect_terminal"
-                });
+                };
+                if ((runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>().Any(dependency =>
+                    dependency["initialization"]?.GetValue<bool>() != true &&
+                    IsExternalVisibilityDependency(dependency, ownerId) && dependency["operation"]?.GetValue<string>() == "write"))
+                    cache["preserve_external_visibility"] = true;
+                closed.Add(cache);
             }
             // 同一层的可闭合前缀按长到短全部提出来：最长的那个仍是首选，但它的终端捕获点可能落在共用缓冲上
             // （调用方探测后拒绝），那时短一级的前缀还能用，整层不必因此退回实时。
@@ -71,6 +78,12 @@ internal static class EffectPrefixPlanner
         dropped.ExceptWith(kept);
         JsonObject analysisRuntime = runtime.DeepClone().AsObject();
         RemoveDroppedEffectMaterials(analysisRuntime, ownerId, dropped);
+        // These operations control whether the retained owner is shown, not the
+        // independently captured pixels. Keep the original trace for safety checks.
+        if (analysisRuntime["runtime_dependencies"] is JsonArray dependencies)
+            foreach (JsonNode? dependency in dependencies.ToArray())
+                if (dependency is JsonObject value && IsExternalVisibilityDependency(value, ownerId))
+                    dependencies.Remove(dependency);
         if (authoredOwner["animationlayers"] is JsonArray && analysisRuntime["runtime_animation_periods"] is JsonArray periods)
             foreach (JsonNode? period in periods.ToArray())
                 if (period is JsonObject value && HybridScenePlanner.Int(value["source_owner_layer_id"]) == ownerId &&
@@ -171,10 +184,55 @@ internal static class EffectPrefixPlanner
         return HasDynamic(withoutPuppetLayers);
     }
 
+    private static bool IsExternalVisibilityDependency(JsonObject dependency, int ownerId) =>
+        HybridScenePlanner.Int(dependency["owner"]) is int caller && caller >= 0 && caller != ownerId &&
+        HybridScenePlanner.Int(dependency["target"]) == ownerId &&
+        (dependency["operation"]?.GetValue<string>() == "lookup" ||
+         dependency["property"]?.GetValue<string>() == "visible" &&
+         dependency["operation"]?.GetValue<string>() is "read" or "write");
+
+    private static bool VisibilityControllersProven(JsonObject scene, JsonObject runtime, int ownerId)
+    {
+        // An observed lookup/visible write is not proof that a later callback cannot
+        // change pixels. Only admit a small, inspectable script subset; unknown
+        // syntax, computed members and other host APIs retain the existing guard.
+        var callers = (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(d => IsExternalVisibilityDependency(d, ownerId))
+            .Select(d => HybridScenePlanner.Int(d["owner"])!.Value).Distinct();
+        foreach (int caller in callers)
+        {
+            var controller = (scene["objects"] as JsonArray ?? []).OfType<JsonObject>()
+                .FirstOrDefault(node => HybridScenePlanner.Int(node["id"]) == caller);
+            if (controller is null) return false;
+            string[] scripts = SceneAnalyzer.Walk(controller).OfType<JsonObject>()
+                .Select(node => node["script"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
+                .OfType<string>().ToArray();
+            if (scripts.Length == 0 || scripts.Any(script => !VisibilityScriptProven(script))) return false;
+        }
+        return true;
+    }
+
+    private static bool VisibilityScriptProven(string script)
+    {
+        string code = Regex.Replace(script, @"//[^\r\n\u2028\u2029]*|/\*[\s\S]*?\*/|""(?:\\.|[^""\\])*""|'(?:\\.|[^'\\])*'", " ");
+        if (Regex.IsMatch(code, @"[^A-Za-z0-9_$\s.,;:(){}+\-*=!<>?%&|^~]") ||
+            Regex.IsMatch(code, @"\b(?:eval|Function|Proxy|Reflect|globalThis|window|import|with|delete|require|Object)\b")) return false;
+        var members = new HashSet<string>(StringComparer.Ordinal) { "visible", "getLayer", "frametime", "runtime",
+            "getHours", "getMinutes", "getSeconds", "now", "sin", "cos", "random", "floor", "ceil", "round", "min", "max", "abs", "PI" };
+        if (Regex.Matches(code, @"\.\s*([A-Za-z_$][A-Za-z0-9_$]*)").Any(match => !members.Contains(match.Groups[1].Value))) return false;
+        var calls = Regex.Matches(code, @"\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(")
+            .Select(match => match.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+        calls.UnionWith(["if", "while", "for", "switch", "catch", "return", "function", "Date", "Number", "Boolean", "Error", "setTimeout", "setInterval", "clearTimeout", "clearInterval"]);
+        return Regex.Matches(code, @"(?<![A-Za-z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)\s*\(")
+            .All(match => calls.Contains(match.Groups[1].Value));
+    }
+
     private static bool HasRuntimeInput(JsonObject runtime, int ownerId)
     {
         if (runtime["runtime_dependencies"] is JsonArray dependencies && dependencies.OfType<JsonObject>().Any(dependency =>
-            dependency["initialization"]?.GetValue<bool>() != true && (HybridScenePlanner.Int(dependency["owner"]) == ownerId || HybridScenePlanner.Int(dependency["target"]) == ownerId))) return true;
+            dependency["initialization"]?.GetValue<bool>() != true &&
+            (HybridScenePlanner.Int(dependency["owner"]) == ownerId || HybridScenePlanner.Int(dependency["target"]) == ownerId) &&
+            !IsExternalVisibilityDependency(dependency, ownerId))) return true;
         return runtime["runtime_layers"] is JsonArray layers && layers.OfType<JsonObject>().Where(layer => HybridScenePlanner.Int(layer["owner"]) == ownerId)
             .SelectMany(layer => layer["materials"]?.AsArray().OfType<JsonObject>() ?? []).Any(material =>
                 material["uses_audio_spectrum"]?.GetValue<bool>() == true || material["uses_system_media_thumbnail"]?.GetValue<bool>() == true ||

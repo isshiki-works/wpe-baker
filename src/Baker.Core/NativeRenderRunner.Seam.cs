@@ -56,7 +56,8 @@ public sealed partial class NativeRenderRunner
     /// 周期本身不因此改变，这里只决定相位。样本目录在算完之后立即删除。
     /// </summary>
     public async Task<JsonObject> SearchLoopStartAsync(RenderRequest sampleRequest, ulong periodFrames,
-        uint crossfadeFrames, IProgress<RenderProgress>? progress = null, CancellationToken cancellationToken = default)
+        uint crossfadeFrames, IProgress<RenderProgress>? progress = null, CancellationToken cancellationToken = default,
+        ICollection<ResidualStartCandidate>? scoredCandidates = null)
     {
         if (!sampleRequest.FrameSamplesOnly || sampleRequest.FrameSampleStride == 0)
             throw new ArgumentException("起点搜索必须使用只出样本的渲染请求并给出采样步长。");
@@ -78,9 +79,16 @@ public sealed partial class NativeRenderRunner
         ulong count;
         var scored = new List<ResidualStartCandidate>(perPeriod);
         string sampleDirectory = Path.GetFullPath(sampleRequest.OutputDirectory);
+        JsonObject? samplingCoverage = null;
         try
         {
             JsonObject manifest = await RenderAsync(sampleRequest, progress, cancellationToken);
+            samplingCoverage = manifest["sampling_coverage"]?.DeepClone().AsObject();
+            if (samplingCoverage is not null)
+            {
+                samplingCoverage["source_sha256"] = manifest["source_sha256"]!.DeepClone();
+                samplingCoverage["renderer_sha256"] = manifest["renderer_sha256"]!.DeepClone();
+            }
             JsonObject samples = manifest["frame_samples"]?.AsObject()
                 ?? throw new InvalidDataException("样本渲染没有产出帧样本清单。");
             string path = samples["path"]!.GetValue<string>();
@@ -109,14 +117,15 @@ public sealed partial class NativeRenderRunner
                     ? LoopSeamMetrics.PackedResidual(left, right, logicalWidth, height, tileSize).Combined(logicalWidth)
                     : LoopSeamMetrics.WrapResidual(left, right, width, height, tileSize);
             }
+            LoopWrapResidual? next = null;
             for (int candidate = 0; candidate < perPeriod; ++candidate)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                LoopWrapResidual wrap = await ResidualAsync(candidate, candidate + perPeriod);
+                LoopWrapResidual wrap = next ?? await ResidualAsync(candidate, candidate + perPeriod);
                 // Δ_stride 只有在 stride 落在淡化窗口 [0, C) 内、且样本够到 s+stride+P 时才属于第一层的量。
-                double? strideWorst = candidate + 1 + perPeriod < total && stride < crossfadeFrames
-                    ? (await ResidualAsync(candidate + 1, candidate + 1 + perPeriod)).WorstTileRgbMae : null;
-                scored.Add(new((ulong)candidate * stride, wrap.GlobalRgbMae, wrap.WorstTileRgbMae, strideWorst));
+                next = candidate + 1 + perPeriod < total && stride < crossfadeFrames
+                    ? await ResidualAsync(candidate + 1, candidate + 1 + perPeriod) : null;
+                scored.Add(new((ulong)candidate * stride, wrap.GlobalRgbMae, wrap.WorstTileRgbMae, next?.WorstTileRgbMae));
             }
         }
         finally
@@ -127,12 +136,17 @@ public sealed partial class NativeRenderRunner
             catch (UnauthorizedAccessException) { }
         }
         int withinGlobal = scored.Count(ResidualMasking.StartCandidateAdmitted);
+        // Joint selection needs every phase and its original precision, not the rounded
+        // handful of alternatives kept in the diagnostic report.
+        if (scoredCandidates is not null)
+            foreach (ResidualStartCandidate candidate in scored) scoredCandidates.Add(candidate);
         // 准入（整幅）在前、排序键在后；一个都没准入时仍给出最优候选，让全分辨率复核报出真实数值再拒。
         ResidualStartCandidate[] ordered = ResidualMasking.OrderStartCandidates(scored);
         ResidualStartCandidate best = ordered[0];
         ResidualStartCandidate unshifted = scored[0];
         return new JsonObject
         {
+            ["sampling_coverage"] = samplingCoverage,
             ["schema_version"] = 4,
             ["status"] = withinGlobal > 0 ? "selected_by_analytic_period_phase" : "selected_without_global_limit_candidate",
             ["pixel_packing"] = packed ? "rgba_side_by_side" : "rgb",
@@ -149,26 +163,76 @@ public sealed partial class NativeRenderRunner
             ["sample_tile_size"] = tileSize,
             ["sample_count"] = count,
             ["selected_start_frame"] = best.Start,
-            ["selected"] = Row(best),
-            ["unshifted"] = Row(unshifted),
-            ["best_alternatives"] = new JsonArray(ordered.Skip(1).Take(4).Select(x => (JsonNode)Row(x)).ToArray()),
+            ["selected"] = LoopStartRow(best),
+            ["unshifted"] = LoopStartRow(unshifted),
+            ["best_alternatives"] = new JsonArray(ordered.Skip(1).Take(4).Select(x => (JsonNode)LoopStartRow(x)).ToArray()),
             // 全分辨率第一层被拒时按这个顺序换起点重测（ResidualStartFallback），最多 MaximumStartAttempts 个。
             ["maximum_start_attempts"] = ResidualMasking.MaximumStartAttempts,
-            ["start_attempt_order"] = new JsonArray(ordered.Take(ResidualMasking.MaximumStartAttempts).Select(x => (JsonNode)Row(x)).ToArray()),
+            ["start_attempt_order"] = new JsonArray(ordered.Take(ResidualMasking.MaximumStartAttempts).Select(x => (JsonNode)LoopStartRow(x)).ToArray()),
             ["basis"] = "周期来自解析，起点只在该周期内的采样相位上选择。排序键是样本上能看到的第一层量 " +
                 "max(M(Δ_0), M(Δ_stride))，只用于排序；准入只看整幅 Δ_0 ≤ 2/255。这里都是降采样估计，" +
-                "第一层的判定在全分辨率 master 上对淡化窗口内每个 k 重做，被拒时按排序依次换下一个起点重测。"
-        };
-
-        static JsonObject Row(ResidualStartCandidate x) => new()
-        {
-            ["start_frame"] = x.Start,
-            ["sampled_global_rgb_mae_255"] = Math.Round(x.Global, 4),
-            ["sampled_worst_tile_rgb_mae_255"] = Math.Round(x.WorstTile, 4),
-            ["sampled_stride_worst_tile_rgb_mae_255"] = x.StrideWorstTile is double stride ? Math.Round(stride, 4) : null,
-            ["sampled_sort_key"] = Math.Round(x.SortKey, 4)
+                "第一层的判定在全分辨率 master 上对淡化窗口内每个 k 重做，被拒时停止本次生成，不自动整案重渲。"
         };
     }
+
+    internal static JsonObject CombineLoopStartSearches(
+        IReadOnlyList<(JsonObject Search, IReadOnlyList<ResidualStartCandidate> Candidates)> searches)
+    {
+        if (searches.Count == 0) throw new ArgumentException("A shared start needs at least one residual group.");
+        if (searches.Count == 1) return searches[0].Search;
+        var first = searches[0];
+        if (first.Candidates.Count == 0) throw new InvalidDataException("The shared phase grid is empty.");
+        foreach (var group in searches.Skip(1))
+        {
+            if (group.Candidates.Count != first.Candidates.Count ||
+                !group.Candidates.Select(candidate => candidate.Start).SequenceEqual(first.Candidates.Select(candidate => candidate.Start)) ||
+                new[] { "warmup_frames", "period_frames", "stride_frames", "crossfade_frames" }.Any(key =>
+                    !JsonNode.DeepEquals(group.Search[key], first.Search[key])))
+                throw new InvalidDataException("Residual groups must use the same phase grid, period and warmup.");
+        }
+        // max(global) <= limit iff every group meets the existing global admission rule.
+        // The tile maxima reuse the existing minimax ranking, keeping all groups at one phase.
+        ResidualStartCandidate[] combined = Enumerable.Range(0, first.Candidates.Count).Select(index =>
+            new ResidualStartCandidate(first.Candidates[index].Start,
+                searches.Max(group => group.Candidates[index].Global),
+                searches.Max(group => group.Candidates[index].WorstTile),
+                searches.Max(group => group.Candidates[index].StrideWorstTile))).ToArray();
+        ResidualStartCandidate[] ordered = ResidualMasking.OrderStartCandidates(combined);
+        int admitted = combined.Count(ResidualMasking.StartCandidateAdmitted);
+        JsonObject result = first.Search.DeepClone().AsObject();
+        foreach (string key in new[] { "group_id", "sampling_coverage", "pixel_packing", "sample_width", "sample_height", "sample_tile_size", "sample_count" })
+            result.Remove(key);
+        result["schema_version"] = 5;
+        result["selection_scope"] = "all_residual_groups";
+        result["status"] = admitted > 0 ? "selected_by_joint_analytic_period_phase" : "selected_without_joint_global_limit_candidate";
+        result["candidates_within_global_limit"] = admitted;
+        result["selected_start_frame"] = ordered[0].Start;
+        result["selected"] = LoopStartRow(ordered[0]);
+        result["unshifted"] = LoopStartRow(combined[0]);
+        result["best_alternatives"] = new JsonArray(ordered.Skip(1).Take(4).Select(x => (JsonNode)LoopStartRow(x)).ToArray());
+        result["maximum_start_attempts"] = 1;
+        result["start_attempt_order"] = new JsonArray(LoopStartRow(ordered[0]));
+        int selectedIndex = Array.FindIndex(combined, candidate => candidate.Start == ordered[0].Start);
+        result["groups"] = new JsonArray(searches.Select(group =>
+        {
+            JsonObject item = group.Search.DeepClone().AsObject();
+            item["at_shared_start"] = LoopStartRow(group.Candidates[selectedIndex]);
+            return (JsonNode)item;
+        }).ToArray());
+        result["basis"] = "所有残差组在相同预热、周期和采样相位上分别评分。逐相位取各组整幅、瓦片及下一采样瓦片残差的最大值，" +
+            "沿用整幅 ≤ 2/255 的准入和原瓦片排序；因此准入要求每个组都满足整幅限制，起点仍由所有组共享。" +
+            "降采样只用于选起点；全分辨率原质量门不变，拒绝后不自动整案重渲。";
+        return result;
+    }
+
+    private static JsonObject LoopStartRow(ResidualStartCandidate x) => new()
+    {
+        ["start_frame"] = x.Start,
+        ["sampled_global_rgb_mae_255"] = Math.Round(x.Global, 4),
+        ["sampled_worst_tile_rgb_mae_255"] = Math.Round(x.WorstTile, 4),
+        ["sampled_stride_worst_tile_rgb_mae_255"] = x.StrideWorstTile is double stride ? Math.Round(stride, 4) : null,
+        ["sampled_sort_key"] = Math.Round(x.SortKey, 4)
+    };
 
     /// <summary>
     /// 在全分辨率无损 master 上测残差掩盖的第一层：淡化窗口内每个 k∈[0,C) 的残差 Δ_k = f[P+k] − f[k]。
@@ -183,7 +247,9 @@ public sealed partial class NativeRenderRunner
         JsonObject manifest = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(master, "manifest.json"), cancellationToken))?.AsObject()
             ?? throw new InvalidDataException("master 清单无效。");
         string packing = manifest["pixel_packing"]?.GetValue<string>() ?? "";
-        if (manifest["status"]?.GetValue<string>() != "completed" || manifest["lossless_test_encoding"]?.GetValue<bool>() != true ||
+        JsonObject? gpuWindow = manifest["gpu_loop_window"] as JsonObject;
+        if (manifest["status"]?.GetValue<string>() != "completed" ||
+            (manifest["lossless_test_encoding"]?.GetValue<bool>() != true && gpuWindow is null) ||
             packing is not ("rgb" or "rgba_side_by_side"))
             throw new InvalidDataException("接缝残差测量需要一个完成的无损 master（不透明 RGB 或左右并排的预乘色 + 覆盖度）。");
         // 透明组 master 是 2W 宽：左半预乘色、右半覆盖度。两半分别算、RGB 半带掩码，第一层取两半里更大的读数。
@@ -198,12 +264,16 @@ public sealed partial class NativeRenderRunner
         if (crossfadeFrames >= loopFrames) throw new InvalidDataException("淡化窗口必须短于循环周期。");
         int window = checked((int)crossfadeFrames);
         string video = Path.Combine(master, "preview.mp4");
-        string pack = Path.Combine(master, "seam-frames.rgb");
-        if (File.Exists(pack)) File.Delete(pack);
+        string pack = gpuWindow?["path"]?.GetValue<string>() ?? Path.Combine(master, "seam-frames.rgb");
+        if (gpuWindow is null && File.Exists(pack)) File.Delete(pack);
         int frameBytes = checked(width * height * 3);
-        long expected = (long)frameBytes * 2 * window;
+        int storedFrameBytes = gpuWindow is null ? frameBytes : checked(halfWidth * height * 4);
+        long expected = (long)storedFrameBytes * 2 * window;
         // 帧包是 2C 帧 raw（4K 下 24 帧一侧约 1.2 GiB），与无损 master 同盘，落盘前按预期字节预检。
-        TemporaryCaptureFiles.RequireFreeSpace(pack, (ulong)expected);
+        if (gpuWindow is null) TemporaryCaptureFiles.RequireFreeSpace(pack, (ulong)expected);
+        else if (gpuWindow["width"]?.GetValue<int>() != halfWidth || gpuWindow["height"]?.GetValue<int>() != height ||
+            gpuWindow["crossfade_frames"]?.GetValue<uint>() != crossfadeFrames || gpuWindow["loop_frames"]?.GetValue<ulong>() != loopFrames)
+            throw new InvalidDataException("GPU original window does not match the residual measurement.");
         // 两个输入各自定位：f[0..C-1] 从第 0 帧起，f[P..P+C-1] 从第 P 帧起，都按帧号精确取（见 ExactFrameRange）。
         // 不要让一个输入从头解码到第 P 帧——那是整片解码，master 越长越慢。
         ExactFrameRange.FfmpegInput head = ExactFrameRange.Build(video, 0, crossfadeFrames, numerator, denominator);
@@ -212,11 +282,12 @@ public sealed partial class NativeRenderRunner
         try
         {
             // ffmpeg 失败、取消或磁盘告急时帧包已经开始写了，放在 try 里让 finally 一并清掉。
-            _ = await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", .. head.Arguments, .. wrapWindow.Arguments,
+            if (gpuWindow is null) _ = await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", .. head.Arguments, .. wrapWindow.Arguments,
                 "-filter_complex", filter, "-map", "[pair]", "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", pack],
                 Path.Combine(master, "seam-frames.stderr.log"), cancellationToken);
             if (new FileInfo(pack).Length != expected) throw new InvalidDataException("接缝帧包的长度与 master 尺寸不一致。");
             byte[] left = new byte[frameBytes], right = new byte[frameBytes];
+            byte[]? rgba = gpuWindow is null ? null : new byte[storedFrameBytes];
             await using var stream = new FileStream(pack, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, true);
 
             var residuals = new List<LoopWrapResidual>(window);
@@ -226,8 +297,18 @@ public sealed partial class NativeRenderRunner
             for (int k = 0; k < window; ++k)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await ReadFrameAsync(stream, left, k, frameBytes, cancellationToken);
-                await ReadFrameAsync(stream, right, window + k, frameBytes, cancellationToken);
+                if (rgba is null)
+                {
+                    await ReadFrameAsync(stream, left, k, frameBytes, cancellationToken);
+                    await ReadFrameAsync(stream, right, window + k, frameBytes, cancellationToken);
+                }
+                else
+                {
+                    await ReadFrameAsync(stream, rgba, k, storedFrameBytes, cancellationToken);
+                    left = LoopClosureCheck.EncodedLayout(rgba,halfWidth,height,0,0,halfWidth,height,packed);
+                    await ReadFrameAsync(stream, rgba, window+k, storedFrameBytes, cancellationToken);
+                    right = LoopClosureCheck.EncodedLayout(rgba,halfWidth,height,0,0,halfWidth,height,packed);
+                }
                 PackedWrapResidual? halves = packed
                     ? LoopSeamMetrics.PackedResidual(left, right, halfWidth, height, ResidualMasking.SeamTileSize) : null;
                 LoopWrapResidual residual = halves is not null ? halves.Combined(halfWidth)
@@ -302,9 +383,10 @@ public sealed partial class NativeRenderRunner
                 },
                 ["crossfade_self_check"] = new JsonObject
                 {
-                    ["status"] = firstLayer.Passed ? "performed_after_crossfade" : "not_performed",
-                    ["record"] = "loop_crossfade.step_self_check",
-                    ["basis"] = "原来的第二层改为淡化实现自检：对成品淡化段的每一步，实测相对原作参照步进多出的量不得超过由 Δ_k " +
+                    ["status"] = gpuWindow is not null ? "not_performed_gpu_path" : firstLayer.Passed ? "performed_after_crossfade" : "not_performed",
+                    ["record"] = gpuWindow is null ? "loop_crossfade.step_self_check" : "loop_crossfade.method",
+                    ["basis"] = gpuWindow is not null ? "GPU 路径按整数权重在编码前混合；此处核对原始残差，编码后的接缝另行核对，不将实现对照冒充逐片自检。" :
+                        "原来的第二层改为淡化实现自检：对成品淡化段的每一步，实测相对原作参照步进多出的量不得超过由 Δ_k " +
                         "推导的上界加 1/255 取整余量；超出是内部错误，直接抛出，不作为可调判据。"
                 },
                 ["basis"] = "全分辨率第一层：残差 Δ_k 本身的大小是残差掩盖唯一需要裁决的量。"
@@ -312,7 +394,8 @@ public sealed partial class NativeRenderRunner
         }
         finally
         {
-            try { File.Delete(pack); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            if (gpuWindow is null)
+                try { File.Delete(pack); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
     }
 
@@ -405,15 +488,14 @@ public sealed partial class NativeRenderRunner
                     Path.Combine(master, "crossfade-concat.stderr.log"), cancellationToken);
                 finished = partial;
             }
-            // 拼好的 master 是本进程刚写出的中间文件（头段本进程编码，尾段 stream copy，-fps_mode passthrough，每帧一个包），
-            // 随后每一帧都会被淡化自检、接缝校验与成品编码真实解码；这里只核容器里的包数、尺寸与精确时长，
-            // 用 -count_packets 读索引即可，不必把接近整个 master 再解码一遍（与 NativeRenderRunner.cs 的 master 自验同一口径）。
+            // 本进程刚完成重封装，只核容器帧数/尺寸/时基；异常才解码确认。
             string probeText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-threads", "4", "-select_streams", "v:0",
-                "-count_packets", "-show_entries", "stream=width,height,nb_read_packets,avg_frame_rate,time_base,duration_ts",
+                "-show_entries", "stream=width,height,nb_frames,avg_frame_rate,time_base,duration_ts",
                 "-of", "json", finished], Path.Combine(master, "crossfade.ffprobe.stderr.log"), cancellationToken);
             JsonObject stream = JsonNode.Parse(probeText)!["streams"]!.AsArray().Single()!.AsObject();
+            var count = await EncodedLoopValidator.FrameCountAsync(finished, tools, stream, loopFrames, cancellationToken);
             if (stream["width"]!.GetValue<uint>() != width || stream["height"]!.GetValue<uint>() != height ||
-                !ulong.TryParse(stream["nb_read_packets"]?.GetValue<string>(), out ulong faded) || faded != loopFrames)
+                count.Count != loopFrames)
                 throw new InvalidDataException("交叉淡化后的 master 没有给出请求的尺寸与帧数。");
             // 拼接是容器层操作，时间戳漂了不会报错，所以这里连时基和总时长一起核。
             ConfirmEncodedDuration(stream, loopFrames, numerator, denominator);
@@ -702,22 +784,23 @@ public sealed partial class NativeRenderRunner
             await using (var labelStream = new FileStream(labels, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16, true))
                 await SeamPreview.WriteLabelsAsync(plan, labelStream, cancellationToken);
             _ = await RunTextAsync(tools.Ffmpeg, SeamPreview.FfmpegArguments(plan), encodeLog, cancellationToken);
-            // 预览本身只有 10N 帧，数一遍帧确认长度与尺寸。
-            string verifyText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-select_streams", "v:0", "-count_frames",
-                "-show_entries", "stream=width,height,nb_read_frames", "-of", "json", partial], verifyLog, cancellationToken);
+            string verifyText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,nb_frames", "-of", "json", partial], verifyLog, cancellationToken);
             JsonObject encoded = JsonNode.Parse(verifyText)?["streams"]?.AsArray().OfType<JsonObject>().SingleOrDefault()
                 ?? throw new InvalidDataException("ffprobe 没有报告接缝预览的视频流。");
             int expectedHeight = plan.OutputHeight + plan.LabelHeight;
+            var previewCount = await EncodedLoopValidator.FrameCountAsync(partial, tools, encoded, (ulong)plan.OutputFrames, cancellationToken);
             if (encoded["width"]?.GetValue<int>() != plan.OutputWidth || encoded["height"]?.GetValue<int>() != expectedHeight ||
-                !int.TryParse(encoded["nb_read_frames"]?.GetValue<string>(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int counted) ||
-                counted != plan.OutputFrames)
+                previewCount.Count != (ulong)plan.OutputFrames)
                 throw new InvalidDataException($"接缝预览应为 {plan.OutputWidth}x{expectedHeight}、{plan.OutputFrames} 帧，" +
-                    $"实际 {encoded["width"]}x{encoded["height"]}、{encoded["nb_read_frames"]} 帧。");
+                    $"实际 {encoded["width"]}x{encoded["height"]}、{previewCount.Count} 帧。");
             File.Move(partial, output);
             ulong n = plan.WindowFrames;
             return new JsonObject
             {
                 ["status"] = "exported",
+                ["frame_count_source"] = previewCount.Source,
+                ["frame_count_fallback_reason"] = previewCount.FallbackReason,
                 ["path"] = output,
                 ["source_video"] = video,
                 ["source_kind"] = sourceKind,

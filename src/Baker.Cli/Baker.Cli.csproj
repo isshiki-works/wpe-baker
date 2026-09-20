@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>wpe-baker</AssemblyName>
+    <Version>1.1.0-preview.1</Version>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../Baker.Core/Baker.Core.csproj" /></ItemGroup>
 </Project>

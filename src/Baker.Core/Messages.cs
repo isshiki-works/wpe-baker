@@ -60,17 +60,16 @@ public static class Messages
             En: "Not evaluated: runtime observation predates source script fault metadata; the script fault criterion is unavailable. Analyze again with the current renderer.",
             Legacy: "Runtime observation predates source script fault metadata; analyze again with the current renderer."),
 
-        // feat/tradeoff-list：这两条是"主体类"拒绝。实测这 5 案把能关的实时元素全关掉也进不了整幅
-        //（整张画面就是那个实时效果画出来的），所以不再写"在壁纸自身设置里关掉该效果后重新分析"——
-        // 那是一条无效建议，只会让用户来回试。legacy 英文逐字不变。
+        // 无独立组只说明当前依赖分析没有可烘焙分组，不能据一项输入推断整幅画面主体或禁用结果。
+        // legacy 英文保持不变。
         ["blocker.no_input_independent_group"] = new(
-            Zh: "不可生成：全部可见内容由实时着色器生成（图层 {0}，{1} 类），依赖闭包后无输入无关分组，禁用后无剩余内容。",
-            En: "Cannot generate: all visible content is produced by a live shader (layer {0}, {1}); no input-independent group remains after dependency closure, and nothing remains once disabled.",
+            Zh: "当前无法生成：依赖分析后未找到不依赖实时输入、可生成的视频组。相关依赖包括：{0}。",
+            En: "Cannot generate with the current plan: dependency analysis found no video group independent of live input. Related dependencies include: {0}.",
             Legacy: "No input-independent visual group remains after dependency closure."),
 
         ["blocker.no_input_independent_group_generic"] = new(
-            Zh: "不可生成：依赖闭包后无输入无关分组，全部可见内容由鼠标视差、音频响应、时钟等实时输入驱动，禁用后无剩余内容。",
-            En: "Cannot generate: no input-independent group remains after dependency closure; all visible content is driven by pointer, audio or clock input, and nothing remains once disabled.",
+            Zh: "当前无法生成：依赖分析后未找到不依赖实时输入、可生成的视频组。",
+            En: "Cannot generate with the current plan: dependency analysis found no video group independent of live input.",
             Legacy: "No input-independent visual group remains after dependency closure."),
 
         // feat/sdr-closure 之后 hdr 标志本身不再是拒绝理由，下面这两条没有生产出口了；
@@ -390,6 +389,10 @@ public static class Messages
             En: "Playback of this animation is script-controlled, so the underlying animation duration is not a fixed period; full capture and seam validation remain required.",
             Legacy: "Script-controlled playback is not a fixed period inferred from the underlying animation duration; full capture and seam validation remain required."),
 
+        ["unresolved.script_time"] = new(
+            Zh: "该层的脚本在运行中读取时间，其状态周期尚未建模；模型动画或材质的周期不能证明脚本状态也会闭合。需保持该层实时，或另行求解脚本状态的循环。",
+            En: "This layer's script reads time during playback; a model or material period does not establish a loop for the script state. Keep the layer live or solve its script-state loop separately."),
+
         ["unresolved.playback_rate_unresolved"] = new(
             Zh: "运行时 playback_rate 无法确定精确的正周期。",
             En: "The runtime playback_rate cannot establish an exact positive period.",
@@ -445,9 +448,8 @@ public static class Messages
         // 特效前缀按不透明视频规划，但全分辨率捕获读到 alpha<255。{0}=图层 id {1}=层名 {2}=帧 {3}/{4}=坐标
         // {5}=该点 alpha {6}=该帧非不透明像素数 {7}=该帧最低 alpha。
         ["bake.effect_prefix_nonopaque_capture"] = new(
-            Zh: "不可生成：图层 {0}「{1}」的特效前缀按不透明视频规划（64×64 预探测全像素不透明），但全分辨率捕获在第 {2} 帧 ({3}, {4}) 读到 alpha={5}，该帧有 {6} 个像素非完全不透明（最低 alpha {7}）。成因通常是作者的图片或特效输出存在小面积半透明区域（例如沿边缘一至两行像素），低分辨率预探测不可见。不透明视频会丢弃该透明度，使这些像素与原壁纸不一致。已在编码前停止，未产出候选工程，原壁纸未改动。更换参数重新分析不改变该结论。",
-            En: "Cannot generate: layer {0} (\"{1}\") had its effect prefix planned as an opaque video (every pixel of the 64×64 pre-probe was opaque), but the full-resolution capture read alpha={5} at ({3}, {4}) in frame {2}, where {6} pixel(s) are not fully opaque (lowest alpha {7}). The usual cause is a small semi-transparent region in the author's image or effect output, such as one or two rows along an edge, invisible to a low-resolution probe. An opaque video would drop that transparency and make those pixels differ from the original. Stopped before encoding: no candidate project was created and the source wallpaper is unchanged. Re-analyzing with other options does not change this.",
-            Legacy: "Layer {0} (\"{1}\") had its effect prefix planned as an opaque video (every pixel of the 64×64 pre-probe was opaque), but the full-resolution capture read alpha={5} at ({3}, {4}) in frame {2}, and {6} pixel(s) in that frame are not fully opaque (lowest alpha {7}). This usually means the author's image or effect output has small semi-transparent areas, such as one or two rows along an edge, that a low-resolution probe cannot see. An opaque video would drop that transparency and make those pixels differ from the original, so generation stopped: no candidate project was created and the source wallpaper is untouched. This is not a settings problem and re-analyzing with other options will not change it; the wallpaper keeps running live as before."),
+            Zh: "不可生成：图层 {0}「{1}」的原尺寸首帧全像素不透明，但完整捕获在第 {2} 帧 ({3}, {4}) 读到 alpha={5}；该帧有 {6} 个像素非完全不透明（最低 alpha {7}）。首帧结论不能覆盖后续透明度变化，当前不透明编码会丢失这些信息，因此已中止本次生成；原壁纸未改动，相关内容保持实时。",
+            En: "Layer {0} (\"{1}\") was opaque in the native-size first frame, but full capture read alpha={5} at ({3}, {4}) in frame {2}, affecting {6} pixel(s) (lowest alpha {7}). The first frame did not establish opacity throughout the animation. RGB encoding would lose this transparency, so generation stopped; the source is unchanged and remains live."),
 
         // 合成比对里候选的脚本报错多于原作。{0}=候选报错条数 {1}=原作报错条数 {2}=前几条多出来的报错（已按语言拼好）。
         ["bake.candidate_script_errors"] = new(
@@ -689,8 +691,11 @@ public static class Messages
 
         // bake --help 里 --encoder 的说明：用法骨架与 analyze --help 一样是英文，只有这段说明按 --lang 出中文或英文。
         ["cli.bake_encoder_help"] = new(
-            Zh: "--encoder 只改播放版视频；无损 master 始终是软件编码。硬件档位不可用时回退\n软件，并在 bake.json 的 playback_encoder.fallback_reason 写明原因。",
-            En: "--encoder only changes the playback video; the lossless master is always software-encoded.\nWhen a hardware tier is unavailable it falls back to software and records why in\nbake.json playback_encoder.fallback_reason."),
+            Zh: "vulkan 在支持的显卡上直接生成成品，减少中间文件和重复编码。不可用的路径使用\n软件，并在 bake.json 中记录原因；画质不达标时停止，不自动重新生成。",
+            En: "Vulkan generates playback video directly on supported GPUs, reducing intermediate files\nand repeated encoding. Unavailable paths use software and record why in bake.json.\nInsufficient quality stops generation without automatically rebaking the scene."),
+        ["bake.gpu_quality_rejected"] = new(
+            Zh: "GPU 编码的代表帧画质未达到既有限值。候选视频和报告已保留；可手动改用软件编码重试，本次不会自动重新生成。",
+            En: "GPU encoding did not meet the existing sample quality limit. The candidate video and report are retained; retry manually with software encoding. This run will not automatically regenerate the scene."),
 
         ["cli.bake_parallel_help"] = new(
             Zh: "--encode-slots N 限制本机同时做成品编码的 wpe-baker 进程数（0 = 默认，不限）。渲染不受限制，\n只卡成品编码：多案并行时吃满 CPU 的就是这一路 ffmpeg。等槽位的时间单独记在\nstage_timing.stages.encode_slot_wait，不混进 encode_playback。\n--group-parallel N 让一个壁纸最多同时渲染 N 个视频组（1 = 默认，逐组渲染）。组的判定、编码与\n写入报告的顺序始终按组序串行，成品与默认设置逐字节相同；峰值磁盘与内存按 N 倍算。",
@@ -701,11 +706,10 @@ public static class Messages
             En: "--keep-intermediates true keeps the intermediate files: the capture-source copy, each group's lossless\nmaster, and the composition probe and reference. The default, false, deletes them when generation ends\n(including rejections and failures), leaving the generated project, bake.json, the seam preview and the\nlogs. Those intermediates dominate the disk peak (47 GB on one measured wallpaper); keep them only\nwhile investigating a rendering or encoding problem.",
             Legacy: "--keep-intermediates true keeps the intermediate files: the capture-source copy, each group's lossless\nmaster, and the composition probe and reference. The default, false, deletes them when the bake ends\n(including rejections and failures), leaving the generated project, bake.json, the seam preview and the\nlogs. Those intermediates are the bulk of the disk peak (47 GB on one measured wallpaper); keep them\nonly while investigating a rendering or encoding problem."),
 
-        // 保留实时路线把会动的全留实时、只烘 1 帧背景时的提醒（fix/verdict-flow）：
-        // 实测 FFH 那案这条路只出一张静态图，而分层视频能出 2256 帧含雨的成品。
+        // 单帧结果描述产物类型，不单独证明有无收益。
         ["summary.static_only_route"] = new(
-            Zh: "不建议生成：该方案仅产出单帧静态图，核显功耗无降低。分层视频布局可将动态部分一并录入。",
-            En: "Not recommended: this route yields a single still frame with no iGPU power reduction. A layered video layout can capture the moving part as well.",
+            Zh: "该方案产出单帧静态图；收益取决于省去的特效计算、绘制和纹理开销，需另行确认。",
+            En: "This route yields a still image; benefit depends on removed effects, drawing and texture costs and needs separate verification.",
             Legacy: "This way leaves only a still image and saves no power; making the picture in separate layers is what can capture the moving part."),
 
         // ---- 烘完实测省了多少电（fix/verdict-flow）：判定口径同 abba-heavy-rc11.md，降幅 >=30% 才算省电 ----
@@ -730,28 +734,30 @@ public static class Messages
             En: "Not evaluated: no iGPU power counter on this machine; the power reduction cannot be measured.",
             Legacy: "This machine cannot measure how much power it saves."),
 
-        // ---- 烘前实测原作功耗的分档判定（fix/verdict-flow）----
-        // 分档事实来自 2026-09-18 笔记本 A/B/B/A 实测（abba-heavy-rc11.md）：<1 W 的原作怎么烘都省不回来；
-        // 1-3 W 档没有一案进过省电判定；>=3 W 里只有整层整幅那几案给出 -70% 以上。
-        // 这几条会原样出现在界面结论第一行，禁用词扫描覆盖它们，所以不写读数、不写域名。
+        // 原作采样仅描述本机；旧分档键继续可读，但不继续传播跨设备收益结论。
+        ["source_power.observed"] = new(
+            Zh: "已记录本机原作功耗；这不能单独判断生成收益或其他设备的负载。",
+            En: "Source power recorded on this device; this alone does not establish baking savings or load on other hardware.",
+            Legacy: "Source power recorded on this device; this alone does not establish baking savings or load on other hardware."),
+
         ["source_power.not_worth"] = new(
-            Zh: "不建议生成：实测原作核显功耗处于最低档，预渲染无可回收功耗。",
-            En: "Not recommended: the original's measured iGPU power is in the lowest band; pre-rendering recovers no power.",
+            Zh: "旧报告记录了较低的本机原作功耗；生成收益尚未由此确认。",
+            En: "The older report records low source power on that device; this does not establish the benefit of generation.",
             Legacy: "Not worth baking: the original barely uses any power."),
 
         ["source_power.limited"] = new(
-            Zh: "可生成，功耗降幅有限：实测原作核显功耗处于低档。",
-            En: "Ready, with limited power reduction: the original's measured iGPU power is in a low band.",
+            Zh: "旧报告记录了本机原作功耗；实际功耗降幅仍需原作与生成结果对照。",
+            En: "The older report records local source power; power reduction still requires comparing the source and generated result.",
             Legacy: "It can be baked, but it will not save much: the original does not use much power to begin with."),
 
         ["source_power.worth"] = new(
-            Zh: "可生成：实测原作核显功耗处于高档，整幅循环视频可消除该部分功耗。",
-            En: "Ready: the original's measured iGPU power is in a high band, and a full-frame loop video removes it.",
+            Zh: "旧报告记录了较高的本机原作功耗；这不能单独证明生成后功耗会降低。",
+            En: "The older report records high source power on that device; this alone does not prove lower power after generation.",
             Legacy: "Worth baking: the original really does use power, and recording the whole picture takes that away."),
 
         ["source_power.route_limited"] = new(
-            Zh: "可生成，当前方案功耗降幅有限；禁用以下项后可生成整幅循环视频。",
-            En: "Ready, with limited power reduction on this route; disabling the items below allows a full-frame loop video instead.",
+            Zh: "当前方案保留部分实时计算；功耗降幅仍需原作与生成结果对照。",
+            En: "The current route retains some live work; power reduction still requires comparing the source and generated result.",
             Legacy: "It can be baked, but this way saves little power; turn the things below off and the whole picture can be recorded instead."),
 
         ["source_power.unavailable"] = new(
@@ -780,11 +786,10 @@ public static class Messages
             En: "Ready: the recordable content is static and needs 1 frame; no layer stays live.",
             Legacy: "Bakeable: the recordable part is a still image and needs a single frame; no layer needs to stay live."),
 
-        // 效果前缀路线的省电提醒：只有效果链前缀被烘成视频，图层本身还在实时跑。2026-09-18 的 5 个重型
-        // effect_prefix 案核显域只落在 +0.3% ~ −15%，只有被烘走的那段占工作量大头时才真省（雷欧 −73%）。
+        // 效果前缀只移除部分工作；具体收益不能从路线名推出。
         ["summary.effect_prefix_limited_saving"] = new(
-            Zh: "效果前缀路线功耗收益有限：仅当被预渲染的效果链占渲染负载主要部分时收益显著。",
-            En: "Effect-prefix route: limited power saving; a measurable reduction requires the pre-rendered segment to dominate the render load.",
+            Zh: "效果前缀路线保留其他实时计算；收益取决于被缓存效果的开销，需原作与生成结果对照。",
+            En: "Effect-prefix caching retains other live work; benefit depends on the cached effects' cost and requires comparing the source and generated result.",
             Legacy: "This route (effect prefix) saves little power unless the part baked away is the bulk of the work."),
 
         // feat/sway-retime：摆动改频成立时补在结论行后面。feat/retime-budget：观感按相位差排序（百分比只是求解参数），
@@ -867,6 +872,11 @@ public static class Messages
             Zh: "磁盘空间不足，未开始生成：中间产物峰值预估 {0} GiB，加 {1} GiB 余量，共需 {2} GiB；{3} 剩余 {4} GiB。请释放空间，或将输出位置改到其它磁盘（工作目录随输出位置）后重新生成。",
             En: "Not enough disk space; generation did not start: intermediate files peak at about {0} GiB plus a {1} GiB reserve, {2} GiB required in total; {4} GiB free on {3}. Free space, or select an output folder on another drive (the working directory follows the output folder), then generate again.",
             Legacy: "Not enough disk space, so this bake did not start: intermediate files are estimated to peak at about {0} GiB, plus a {1} GiB reserve, which needs {2} GiB in total; only {4} GiB is free on {3}. Free up space, or choose an output folder on another drive (the working directory follows the output folder) and generate again."),
+
+        ["summary.not_suitable_current"] = new(
+            Zh: "当前不适合生成：{0}",
+            En: "Currently unsuitable for baking: {0}",
+            Legacy: "Currently unsuitable for baking: {0}"),
 
         ["summary.blocked"] = new(
             Zh: "不可生成：{0}（阻断原因共 {1} 条，详见 plan.json 的 blockers_localized）",
@@ -1224,6 +1234,10 @@ public static class Messages
             En: "The image is drawn by the live effect itself ({0}); disabling it leaves no content, so there are no tradeoff options: live rendering only.",
             Legacy: "The image here is the live effect itself ({0}); turning it off would leave nothing on screen, so there is no tradeoff list: this one can only run live."),
 
+        ["tradeoff.dependency_blocked"] = new(
+            Zh: "当前依赖分析未找到可生成的视频组；尚未确认关闭相关效果后的结果。相关依赖：{0}。",
+            En: "Current dependency analysis found no video group; the result of disabling related effects has not been established. Related dependencies: {0}."),
+
         ["tradeoff.none_available"] = new(
             Zh: "无可取舍的实时元素：其余实时图层为技术性来源（透视相机、源脚本报错、运行时资源依赖）或随父层保持实时，均不可禁用。",
             En: "No tradeoff options: the remaining live layers are technical (perspective camera, source script error, runtime resource dependency) or live by parent inheritance, and cannot be disabled.",
@@ -1239,6 +1253,9 @@ public static class Messages
             Zh: "画面主体即实时效果本身，无可取舍元素。",
             En: "The image is the live effect itself; nothing can be traded away.",
             Legacy: "The image here is the live effect itself, so there is nothing to trade away."),
+        ["summary.tradeoff_dependency_blocked"] = new(
+            Zh: "当前没有已确认的设置取舍方案。",
+            En: "No settings tradeoff has been established for the current plan."),
     };
 
     /// <summary>legacy 英文原文 → key，只收无参数的条目；用于 plan 由旧版本生成、运行时登记缺失时反查。</summary>

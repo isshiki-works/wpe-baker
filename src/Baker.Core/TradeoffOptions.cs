@@ -84,8 +84,7 @@ public static class TradeoffOptions
     /// <summary>
     /// 按一层的全部实时理由定它的分类与子类型。分类优先级：技术类 &gt; 取舍类 &gt; 派生类
     /// （既有取舍机制又有技术机制的层，关掉取舍那一半也退不出实时，所以归技术类）。
-    /// <paramref name="subject"/> 为真表示这张壁纸依赖闭包后没有任何输入无关的画面，
-    /// 该层又是可画层：它就是画面主体，关掉等于没有内容。
+    /// <paramref name="subject"/> 仅供已有独立主体证据的调用方使用；无输入无关分组本身不构成这种证据。
     /// </summary>
     public static (string Class, string[] Kinds) Classify(IEnumerable<string> reasons, bool subject = false, bool suspectedOverlay = false)
     {
@@ -114,20 +113,7 @@ public static class TradeoffOptions
     public static void Attach(JsonObject plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        MarkSubjectLayers(plan);
         plan[Field] = Describe(plan);
-    }
-
-    /// <summary>
-    /// 依赖闭包之后没有任何输入无关的画面时，可画的取舍层就是画面主体：改标 subject，
-    /// 清单不再把它当可关项（关掉等于没有内容）。
-    /// </summary>
-    private static void MarkSubjectLayers(JsonObject plan)
-    {
-        if (!(plan["blockers_localized"] as JsonArray ?? []).OfType<JsonObject>().Select(item => Text(item["key"]))
-            .Any(key => key is "blocker.no_input_independent_group" or "blocker.no_input_independent_group_generic")) return;
-        foreach (var layer in (plan["layers"] as JsonArray ?? []).OfType<JsonObject>())
-            if (Text(layer["tradeoff_class"]) == Tradeoff && Flag(layer["drawable"]) == true) layer["tradeoff_class"] = Subject;
     }
 
     /// <summary>算出取舍清单。只读 plan，不改它。</summary>
@@ -138,24 +124,23 @@ public static class TradeoffOptions
             .Where(layer => Number(layer["id"]) is not null).ToDictionary(layer => (int)Number(layer["id"])!.Value);
         string[] blockerKeys = [.. (plan["blockers_localized"] as JsonArray ?? []).OfType<JsonObject>()
             .Select(item => Text(item["key"])).OfType<string>()];
-        bool subjectOnly = blockerKeys.Any(key => key is "blocker.no_input_independent_group" or "blocker.no_input_independent_group_generic");
+        bool dependencyBlocked = blockerKeys.Any(key => key is "blocker.no_input_independent_group" or "blocker.no_input_independent_group_generic");
         var record = new JsonObject {
             ["basis"] = "Read from this plan only: turning these off requires analyzing again; residual live layer counts are estimates.",
             ["retain_live_measured"] = "Keeping layers live measurably does not save power (laptop iGPU rail 11.63 -> 11.20 W, package +12% at 60 fps).",
             ["retain_live_note_zh"] = Messages.Get("tradeoff.retain_live_note", Messages.Chinese),
             ["retain_live_note_en"] = Messages.Get("tradeoff.retain_live_note", Messages.English) };
-        if (subjectOnly)
+        if (dependencyBlocked)
         {
-            // 主体类：整张画面就是那个实时效果画出来的，不给取舍清单。只点名画面主体本身那几种输入，
-            // 跟着父层实时的、技术性的都不列——那不是用户能理解的"画面是什么画出来的"。
+            // 只有当前依赖分析的结果，没有禁用效果后的反事实证据；列出相关机制，不推断整幅主体。
             string[] mechanisms = [.. KindOrder.Where(kind => layers.Values.Any(layer => Flag(layer["live"]) == true &&
                 Flag(layer["drawable"]) == true && Classification(layer) is Subject or Tradeoff &&
                 Kinds(layer).Contains(kind, StringComparer.Ordinal))).Take(3)];
-            record["status"] = "subject_only";
-            record["subject_kinds"] = new JsonArray([.. mechanisms.Select(kind => (JsonNode)JsonValue.Create(kind))]);
+            record["status"] = "dependency_blocked";
+            record["related_kinds"] = new JsonArray([.. mechanisms.Select(kind => (JsonNode)JsonValue.Create(kind))]);
             record["options"] = new JsonArray();
-            record["zh"] = Messages.Get("tradeoff.subject_only", Messages.Chinese, KindList(mechanisms, Messages.Chinese));
-            record["en"] = Messages.Get("tradeoff.subject_only", Messages.English, KindList(mechanisms, Messages.English));
+            record["zh"] = Messages.Get("tradeoff.dependency_blocked", Messages.Chinese, KindList(mechanisms, Messages.Chinese));
+            record["en"] = Messages.Get("tradeoff.dependency_blocked", Messages.English, KindList(mechanisms, Messages.English));
             return record;
         }
         string summaryKey = Text(plan["summary"]?["key"]) ?? "";
@@ -423,6 +408,9 @@ public static class TradeoffOptions
         if (status == "subject_only")
             return (Messages.Get("summary.tradeoff_subject_only", Messages.Chinese),
                 Messages.Get("summary.tradeoff_subject_only", Messages.English));
+        if (status == "dependency_blocked")
+            return (Messages.Get("summary.tradeoff_dependency_blocked", Messages.Chinese),
+                Messages.Get("summary.tradeoff_dependency_blocked", Messages.English));
         return null;
     }
 

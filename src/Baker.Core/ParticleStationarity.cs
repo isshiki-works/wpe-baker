@@ -13,7 +13,7 @@ namespace Baker.Core;
 /// </para>
 /// <para>
 /// 判据只从粒子定义、材质、场景对象与运行时依赖确定性读出，不看画面。说不清的一律判不满足：引擎缺省值未核的字段
-/// （rate、寿命、renderer、maxcount）、位含义未核的控制点 flags、频率与相位都退化的 oscillate、没有递归判定的子系统。
+/// （寿命、maxcount）、位含义未核的控制点 flags、频率与相位都退化的 oscillate、没有递归判定的子系统。
 /// 每条不满足都写进 failed_conditions，写明是哪一条、哪个节点、什么值。
 /// </para>
 /// <para>
@@ -29,6 +29,8 @@ namespace Baker.Core;
 /// </summary>
 internal static class ParticleStationarity
 {
+    // Native Emitter::rate and Particle::FromJson supply these defaults, including capped emission.
+    private const float DefaultEmitterRate = 5f;
     private static readonly HashSet<string> Emitters = new(StringComparer.Ordinal) { "sphererandom", "boxrandom" };
 
     private static readonly HashSet<string> Initializers = new(StringComparer.Ordinal)
@@ -203,10 +205,9 @@ internal static class ParticleStationarity
             JsonObject emitter = emitters[index];
             string node = $"emitter[{index}]";
             if (!Emitters.Contains(Name(emitter))) Fail("C1", "emitter_kind", node, emitter["name"]);
-            if (emitter["rate"] is null) Fail("C1", "emitter_rate_default_unverified", node + ".rate");
-            else if (!TryConstant(emitter["rate"], out double[] rate) || rate.Length != 1 || rate[0] <= 0)
+            if (!TryScalar(emitter["rate"], DefaultEmitterRate, out double rate) || rate <= 0)
                 Fail("C1", "emitter_rate_not_constant_positive", node + ".rate", emitter["rate"]);
-            else emissionRate += rate[0] * countScale;
+            else emissionRate += rate * countScale;
             if (emitter["instantaneous"] is JsonNode burst && !IsZero(burst)) Fail("C1", "emitter_burst", node + ".instantaneous", burst);
             if (emitter["duration"] is JsonNode duration && !IsZero(duration)) Fail("C1", "emitter_finite_duration", node + ".duration", duration);
             if (ParticleInputAnalysis.AudioDriven(emitter)) Fail("C1", "emitter_audio_input", node + ".audioprocessingmode", emitter["audioprocessingmode"]);
@@ -370,7 +371,12 @@ internal static class ParticleStationarity
 
         // ---- C9 渲染器与精灵帧 ----
         JsonObject[] renderers = Entries(definition["renderer"]);
-        if (renderers.Length == 0) Fail("C9", "renderer_default_unverified", "renderer", definition["renderer"]);
+        if (renderers.Length == 0)
+        {
+            if (!definition.ContainsKey("renderer") || definition["renderer"] is JsonArray { Count: 0 })
+                renderers = [new JsonObject { ["name"] = "sprite" }];
+            else Fail("C9", "renderer_definition_invalid", "renderer", definition["renderer"]);
+        }
         for (int index = 0; index < renderers.Length; ++index)
             if (!Renderers.Contains(Name(renderers[index]))) Fail("C9", "renderer_kind", $"renderer[{index}]", renderers[index]["name"]);
         if (definition["animationmode"] is JsonNode mode && !(mode is JsonValue modeValue && modeValue.TryGetValue(out string? modeText) &&
@@ -428,7 +434,7 @@ internal static class ParticleStationarity
         var sources = new List<ParticleCappedReplacement.Emitter>();
         for (int index = 0; index < emitters.Length; ++index)
         {
-            if (emitters[index]["rate"] is null || !TryAuthoredFloat(emitters[index]["rate"], 0f, out float rate)) return Unverified($"emitter[{index}].rate");
+            if (!TryAuthoredFloat(emitters[index]["rate"], DefaultEmitterRate, out float rate)) return Unverified($"emitter[{index}].rate");
             if (!TryAuthoredInteger(emitters[index]["flags"], 0, out long emitterFlags) || emitterFlags < 0 || emitterFlags > uint.MaxValue)
                 return Unverified($"emitter[{index}].flags");
             // SceneParticleObjectParser.LoadEmitter：rate *= count 覆盖（float × float）；Emitter::FlagEnum::one_per_frame 是第 1 位（值 2）。

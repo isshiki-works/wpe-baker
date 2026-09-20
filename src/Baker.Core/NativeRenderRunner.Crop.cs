@@ -54,6 +54,14 @@ public sealed partial class NativeRenderRunner
         string kind = PlaybackEncoderSelection.Normalize(requested);
         if (kind == PlaybackEncoderSelection.Software) return (PlaybackEncoderSelection.Software, null);
         Directory.CreateDirectory(logDirectory);
+        if (kind == PlaybackEncoderSelection.Vulkan)
+        {
+            string version = await RunTextAsync(tools.Renderer,["--version"],
+                Path.Combine(logDirectory,"gpu-renderer-capabilities.stderr.log"),cancellationToken);
+            return version.Contains("gpu-loop-encode-v1",StringComparison.Ordinal) &&
+                version.Contains("gpu-sampling-coverage-v1",StringComparison.Ordinal)
+                ? (kind,null) : (PlaybackEncoderSelection.Software,"Renderer does not support the complete GPU pipeline.");
+        }
         return PlaybackEncoderSelection.Resolve(kind, PlaybackEncoderSelection.ParseEncoders(
             await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-encoders"],
                 Path.Combine(logDirectory, "playback-encoders.stderr.log"), cancellationToken)));
@@ -62,30 +70,42 @@ public sealed partial class NativeRenderRunner
     /// <summary>
     /// 直编成品的接管：渲染时已按播放档把成品编好（<see cref="RenderRequest.PlaybackEncoderKind"/>），这里只把它移进成品目录，
     /// 并拼出与 <see cref="EncodeCroppedRgbaAsync"/> 同构的报告。裁剪区是不透明组的先验整幅；帧数、精确帧率、时长与
-    /// SHA256 已经由 <see cref="RenderAsync"/> 在同一个文件上用 <c>-count_frames</c> 校验过，不再整片重读一遍。
+    /// SHA256 已由 <see cref="RenderAsync"/> 在同一文件上核对；GPU路径复用原生包计数与容器帧数，异常才解码计数。
     /// </summary>
     public async Task<JsonObject> AdoptDirectPlaybackAsync(JsonObject render, string renderDirectory, string outputDirectory,
         string requestedEncoder, string encoderKind, string? encoderFallbackReason, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(render);
         renderDirectory = Path.GetFullPath(renderDirectory);
+        bool gpu = render["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
+        bool packed = render["pixel_packing"]?.GetValue<string>() == "rgba_side_by_side";
         if (render["status"]?.GetValue<string>() != "completed" || render["lossless_test_encoding"]?.GetValue<bool>() != false ||
-            render["pixel_packing"]?.GetValue<string>() != "rgb" ||
-            render["request"]?["playback_encoder_kind"]?.GetValue<string>() != encoderKind)
+            (!gpu && (packed || render["request"]?["playback_encoder_kind"]?.GetValue<string>() != encoderKind)) ||
+            (gpu && encoderKind != PlaybackEncoderSelection.Vulkan))
             throw new InvalidDataException("Direct playback adoption requires a completed opaque render encoded with the same playback kind.");
         // 不透明组的裁剪范围是先验的整幅：BoundsIncludeRgb 下 alpha 恒 255 让空像素判据只剩"RGBA 全零"，并集就是整张画布。
-        if (render["alpha_bounds"]?["minimum_alpha"]?.ToJsonString() != "255")
+        if (!packed && render["alpha_bounds"]?["minimum_alpha"]?.ToJsonString() != "255")
             throw new InvalidDataException("Direct playback requires every captured pixel to be opaque.");
         JsonObject request = render["request"]!.AsObject();
         int captureWidth = request["width"]!.GetValue<int>(), captureHeight = request["height"]!.GetValue<int>();
         uint numerator = request["fps_numerator"]!.GetValue<uint>(), denominator = request["fps_denominator"]!.GetValue<uint>();
-        var region = new CacheRegion(captureWidth, captureHeight, 0, 0, captureWidth, captureHeight);
+        var region = gpu && render["gpu_crop"] is JsonObject gpuCrop
+            ? System.Text.Json.JsonSerializer.Deserialize<CacheRegion>(gpuCrop.ToJsonString(),JsonOptions)!
+            : new CacheRegion(captureWidth, captureHeight, 0, 0, captureWidth, captureHeight);
         region.Validate();
+        if (gpu)
+        {
+            CacheRegion required = CacheRegion.FromAlphaBounds(render,padding:2);
+            if (region.CaptureWidth != captureWidth || region.CaptureHeight != captureHeight ||
+                region.X > required.X || region.Y > required.Y ||
+                region.X + region.Width < required.X + required.Width || region.Y + region.Height < required.Y + required.Height)
+                throw new InvalidDataException("The GPU crop does not contain the observed coverage and sampling halo.");
+        }
         // 整幅区扩不动（捕获本身就是上界），GrowRegion 会原样返回；这里只是把同一条判据走一遍，越限照旧只记录。
-        if (HardwareDecodeDimensions.GrowRegion(region, packedAlpha: false, numerator, denominator) != region)
+        if (HardwareDecodeDimensions.GrowRegion(region, packedAlpha: packed, numerator, denominator) != region)
             throw new InvalidDataException("A full-frame crop cannot be grown for the hardware decode minimum.");
         HardwareDecodeDimensions.Plan decodePlan = HardwareDecodeDimensions.Evaluate((uint)region.Width, (uint)region.Height,
-            packedAlpha: false, numerator, denominator);
+            packedAlpha: packed, numerator, denominator);
         ulong frames = EncodedFrameCount(render);
         string output = Path.GetFullPath(outputDirectory);
         ProjectSource.EnsureNoReparsePoints(output);
@@ -93,17 +113,17 @@ public sealed partial class NativeRenderRunner
         Directory.CreateDirectory(output);
         string video = Path.Combine(output, "cache.mp4");
         File.Move(Path.Combine(renderDirectory, "preview.mp4"), video);
-        var profile = PlaybackEncodeProfile.Create((uint)region.Width, (uint)region.Height, numerator, denominator,
+        var profile = PlaybackEncodeProfile.Create((uint)region.Width*(packed ? 2u : 1u), (uint)region.Height, numerator, denominator,
             losslessTest: false, encoderKind);
         var report = new JsonObject { ["schema_version"] = 1, ["status"] = "completed",
-            ["capture_mode"] = DirectPlaybackCaptureMode, ["master_sha256"] = null,
-            ["pixel_packing"] = "rgb", ["crop"] = System.Text.Json.JsonSerializer.SerializeToNode(region, JsonOptions),
+            ["capture_mode"] = gpu ? "gpu_direct_playback" : DirectPlaybackCaptureMode, ["master_sha256"] = null,
+            ["pixel_packing"] = packed ? "rgba_side_by_side" : "rgb", ["crop"] = System.Text.Json.JsonSerializer.SerializeToNode(region, JsonOptions),
             ["frames"] = frames, ["fps_num"] = numerator, ["fps_den"] = denominator, ["encoder"] = profile.Encoder,
             ["encoder_requested"] = PlaybackEncoderSelection.Normalize(requestedEncoder), ["encoder_used"] = encoderKind,
             ["encoder_fallback_reason"] = encoderFallbackReason,
             ["hardware_decode"] = "not_verified",
             ["hardware_decode_preflight"] = HardwareDecodePreflightReport(decodePlan, region, region),
-            ["decoded_area_fraction"] = 1d,
+            ["decoded_area_fraction"] = (double)region.Width*region.Height/(captureWidth*(double)captureHeight),
             ["encoder_arguments"] = render["encoder_command"]?["arguments"]?.DeepClone(),
             // 直编没有独立的编码阶段：x264 与渲染器同时在跑，秒数无法与 master 路线的 encode_playback 横比。
             ["encode_seconds"] = null,
@@ -112,6 +132,18 @@ public sealed partial class NativeRenderRunner
             ["video_sha256"] = render["video_sha256"]?.DeepClone(),
             ["encoded_stream"] = render["encoded_stream"]?.DeepClone(),
             ["validation_required"] = "Cropped-cache reinjection, encoded loop seam and official playback." };
+        if (gpu)
+        {
+            JsonObject quality = await GpuPlaybackQualityAsync(render, video, region, packed, output, cancellationToken);
+            report["playback_quality_gate"] = quality;
+            if (quality["passed"]?.GetValue<bool>() != true)
+            {
+                report["status"] = "quality_rejected";
+                report["reason"] = Messages.Emit("bake.gpu_quality_rejected");
+                await WriteJsonAsync(Path.Combine(output, "manifest.json"), report, cancellationToken);
+                throw new InvalidDataException(Messages.Emit("bake.gpu_quality_rejected"));
+            }
+        }
         await WriteJsonAsync(Path.Combine(output, "manifest.json"), report, cancellationToken);
         return report;
     }
@@ -167,7 +199,9 @@ public sealed partial class NativeRenderRunner
         // 只有请求了硬件档位才去问一次 ffmpeg 支持哪些编码器；软件档位保持原来的零额外进程。
         string encoderKind = PlaybackEncoderSelection.Software;
         string? encoderFallbackReason = null;
-        if (requestedEncoder != PlaybackEncoderSelection.Software)
+        if (requestedEncoder == PlaybackEncoderSelection.Vulkan)
+            encoderFallbackReason = "This group requires the lossless path; using the software playback encoder.";
+        else if (requestedEncoder != PlaybackEncoderSelection.Software)
             (encoderKind, encoderFallbackReason) = PlaybackEncoderSelection.Resolve(requestedEncoder,
                 PlaybackEncoderSelection.ParseEncoders(await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-encoders"],
                     Path.Combine(output, "encoders.stderr.log"), cancellationToken)));
@@ -231,28 +265,55 @@ public sealed partial class NativeRenderRunner
                 long encodeStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 _ = await RunTextAsync(tools.Ffmpeg, arguments, Path.Combine(output, $"encoder{suffix}.stderr.log"), cancellationToken);
                 report["encode_seconds"] = Math.Round(System.Diagnostics.Stopwatch.GetElapsedTime(encodeStart).TotalSeconds, 3);
-                string probeText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-threads", "4", "-select_streams", "v:0", "-count_frames", "-show_entries",
-                    "stream=codec_name,width,height,avg_frame_rate,nb_read_frames,duration,duration_ts,time_base,pix_fmt,color_space,color_range", "-of", "json", partial],
+                string probeText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-threads", "4", "-select_streams", "v:0", "-show_entries",
+                    "stream=codec_name,width,height,avg_frame_rate,nb_frames,duration,duration_ts,time_base,pix_fmt,color_space,color_range", "-of", "json", partial],
                     Path.Combine(output, $"ffprobe{suffix}.stderr.log"), cancellationToken);
                 probe = JsonNode.Parse(probeText)!.AsObject();
                 var stream = probe["streams"]!.AsArray().Single()!.AsObject();
+                var count = await EncodedLoopValidator.FrameCountAsync(partial, tools, stream, frames, cancellationToken);
+                report["frame_count_validation"] = new JsonObject {
+                    ["source"] = count.Source, ["full_decode_performed"] = count.Source == "full_decode", ["fallback_reason"] = count.FallbackReason };
                 string[] rate = stream["avg_frame_rate"]!.GetValue<string>().Split('/');
                 if (stream["width"]!.GetValue<int>() != encodedWidth || stream["height"]!.GetValue<int>() != region.Height ||
-                    !ulong.TryParse(stream["nb_read_frames"]?.GetValue<string>(), out ulong actualFrames) || actualFrames != frames ||
+                    count.Count != frames ||
                     rate.Length != 2 || !ulong.TryParse(rate[0], out var rn) || !ulong.TryParse(rate[1], out var rd) || rd == 0 ||
                     (UInt128)rn * denominator != (UInt128)rd * numerator)
                     throw new InvalidDataException("Cropped video violates dimensions, frame count or rational FPS.");
                 ConfirmEncodedDuration(stream, frames, numerator, denominator);
                 // 软件档位本身就是画质判据的参照，不自己跟自己比，也保持原来的零额外进程。
                 if (profile.Kind == PlaybackEncoderSelection.Software || gateFrames.Length == 0) break;
-                string ssimLog = Path.Combine(output, $"quality-ssim{suffix}.stderr.log");
-                await RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.MetricArguments("ssim", partial, inputPath, filter, gateFrames),
-                    ssimLog, cancellationToken);
-                double? ssim = PlaybackQualityGate.ParseSsim(await File.ReadAllTextAsync(ssimLog, cancellationToken));
-                string psnrLog = Path.Combine(output, $"quality-psnr{suffix}.stderr.log");
-                await RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.MetricArguments("psnr", partial, inputPath, filter, gateFrames),
-                    psnrLog, cancellationToken);
-                double? psnr = PlaybackQualityGate.ParsePsnr(await File.ReadAllTextAsync(psnrLog, cancellationToken));
+                string qualityLog = Path.Combine(output, $"quality{suffix}.stderr.log");
+                double? ssim, psnr;
+                // For short clips a single decode is cheaper than launching nine seeks.
+                // Long loops retain the same nine samples and metrics, using bounded reads.
+                bool sparseQuality = frames > 4096;
+                if (sparseQuality)
+                {
+                    double totalSsim = 0, totalNormalizedMse = 0;
+                    bool complete = true;
+                    foreach (ulong frame in gateFrames)
+                    {
+                        string sampleLog = Path.Combine(output, $"quality{suffix}-{frame}.stderr.log");
+                        await RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.SampleMetricArguments(partial, inputPath, filter,
+                            frame, numerator, denominator), sampleLog, cancellationToken);
+                        string metrics = await File.ReadAllTextAsync(sampleLog, cancellationToken);
+                        double? sampleSsim = PlaybackQualityGate.ParseSsim(metrics), samplePsnr = PlaybackQualityGate.ParsePsnr(metrics);
+                        if (sampleSsim is null || samplePsnr is null) { complete = false; break; }
+                        totalSsim += sampleSsim.Value;
+                        totalNormalizedMse += Math.Pow(10, -samplePsnr.Value / 10);
+                    }
+                    ssim = complete ? totalSsim / gateFrames.Length : null;
+                    psnr = complete ? -10 * Math.Log10(totalNormalizedMse / gateFrames.Length) : null;
+                }
+                else
+                {
+                    await RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.MetricsArguments(partial, inputPath, filter, gateFrames),
+                        qualityLog, cancellationToken);
+                    string metrics = await File.ReadAllTextAsync(qualityLog, cancellationToken);
+                    ssim = PlaybackQualityGate.ParseSsim(metrics);
+                    psnr = PlaybackQualityGate.ParsePsnr(metrics);
+                }
+                report["quality_decode_scope"] = sparseQuality ? "selected_frame_windows" : "short_clip_single_decode";
                 if (PlaybackQualityGate.Passes(ssim, gateReference, gateRatio))
                 {
                     qualityGate = PlaybackQualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,

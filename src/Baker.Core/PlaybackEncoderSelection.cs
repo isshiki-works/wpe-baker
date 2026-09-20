@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 namespace Baker.Core;
 
 /// <summary>
-/// 播放版视频的编码器档位选择与回退。无损 master 永远走软件编码，不受这里影响。
+/// 播放版视频的编码器档位选择与回退；Vulkan 路径可直接生成成品，其他路径按需保留软件无损 master。
 /// </summary>
 public static partial class PlaybackEncoderSelection
 {
@@ -14,9 +14,10 @@ public static partial class PlaybackEncoderSelection
     public const string Qsv = "qsv";
     public const string Amf = "amf";
     public const string Auto = "auto";
+    public const string Vulkan = "vulkan";
 
     /// <summary>CLI 与界面允许的取值，顺序即界面里的展示顺序。</summary>
-    public static readonly string[] Choices = [Software, Auto, Mf, Nvenc, Qsv, Amf];
+    public static readonly string[] Choices = [Software, Auto, Vulkan, Mf, Nvenc, Qsv, Amf];
 
     /// <summary>
     /// auto 的硬件优先顺序；本机同时存在多种时按这个顺序挑第一个可用的。
@@ -32,6 +33,7 @@ public static partial class PlaybackEncoderSelection
         Nvenc => ["hevc_nvenc", "h264_nvenc"],
         Qsv => ["hevc_qsv", "h264_qsv"],
         Amf => ["hevc_amf", "h264_amf"],
+        Vulkan => ["hevc_vulkan", "h264_vulkan"],
         _ => [],
     };
 
@@ -136,7 +138,8 @@ public static partial class PlaybackEncoderSelection
             ["used"] = used.Length == 1 ? used[0] : used.Length == 0 ? null : "mixed",
             ["fallback_reason"] = encoded.Select(pair => pair.Encode!["encoder_fallback_reason"]?.GetValue<string>())
                 .OfType<string>().FirstOrDefault(),
-            ["encode_seconds_total"] = Math.Round(encoded.Sum(pair => pair.Encode!["encode_seconds"]?.GetValue<double>() ?? 0), 3),
+            ["encode_seconds_total"] = encoded.Any(pair => pair.Encode!["encode_seconds"] is null)
+                ? null : JsonValue.Create(Math.Round(encoded.Sum(pair => pair.Encode!["encode_seconds"]!.GetValue<double>()), 3)),
             ["video_bytes_total"] = encoded.Sum(pair => pair.Group["video_bytes"]?.GetValue<long>() ?? 0),
         };
     }

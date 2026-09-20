@@ -208,9 +208,12 @@ public static class OfficialPerformanceSampler
         var collectors = new List<(string Name, Process Process, Task<Drained> Drain)>();
         var powerSamples = new JsonArray();
         var powerErrors = new JsonArray();
+        var workingSetSamples = new JsonArray();
+        var workingSetErrors = new JsonArray();
         var gpuIdentity = new JsonObject();
         using var powerStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task powerTask = PollPowerAsync(smi, request.NvidiaGpuUuid, gpuIdentity, powerSamples, powerErrors, powerStop.Token);
+        Task workingSetTask = PollWorkingSetAsync(target, workingSetSamples, workingSetErrors, powerStop.Token);
         var stopwatch = Stopwatch.StartNew();
         CpuRead beforeCpu = ReadCpu(target);
         try
@@ -256,6 +259,9 @@ public static class OfficialPerformanceSampler
             try { await powerTask.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None); }
             catch (OperationCanceledException) { }
             catch (TimeoutException) { powerErrors.Add("Power collector did not stop within ten seconds."); }
+            try { await workingSetTask.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None); }
+            catch (OperationCanceledException) { }
+            catch (TimeoutException) { workingSetErrors.Add("Working-set collector did not stop within ten seconds."); }
 
             JsonObject presentSummary = PresentSummary(presentCsv, request.TargetFps, request.SwapChainAddress,
                 request.ProcessId, request.TrackDisplay);
@@ -263,6 +269,8 @@ public static class OfficialPerformanceSampler
             presentSummary["display_tracking_enabled"] = request.TrackDisplay;
             presentSummary["collector"] = CollectorSummary(drained.GetValueOrDefault("presentmon"),
                 collectors.Any(item => item.Name == "presentmon"));
+            if (drained.TryGetValue("presentmon", out Drained? presentDrain))
+                ApplyTraceLoss(presentSummary, Decode(presentDrain.Stderr) + "\n" + Decode(presentDrain.Stdout));
             byte[] typeperfBytes = drained.TryGetValue("typeperf", out Drained? typeperfDrain) ? typeperfDrain.Stdout : [];
             JsonObject typeperfSummary = BuildTypeperfSummary(typeperfBytes, counters, gpu, memory, energy);
             typeperfSummary["collector"] = CollectorSummary(typeperfDrain,
@@ -279,6 +287,15 @@ public static class OfficialPerformanceSampler
                     .Where(value => value is >= 0 && double.IsFinite(value.Value)).Select(value => value!.Value).ToArray()),
                 ["samples"] = powerSamples, ["errors"] = powerErrors,
                 ["scope"] = "Total NVIDIA board telemetry, not wallpaper increment."
+            };
+            JsonObject workingSet = new()
+            {
+                ["status"] = workingSetErrors.Count > 0 ? "partial_report" :
+                    workingSetSamples.Count > 0 ? "sampled" : "not_measured",
+                ["bytes"] = Stats(workingSetSamples.OfType<JsonObject>().Select(item => Metric(item["working_set_bytes"]))
+                    .Where(value => value is >= 0 && double.IsFinite(value.Value)).Select(value => value!.Value).ToArray()),
+                ["samples"] = workingSetSamples, ["errors"] = workingSetErrors,
+                ["scope"] = "Target process WorkingSet64; this is process RAM, not GPU dedicated/shared memory."
             };
 
             JsonObject platformPower = typeperfSummary["platform_power"]?.DeepClone()?.AsObject() ??
@@ -299,7 +316,8 @@ public static class OfficialPerformanceSampler
                 ["playback"] = playback?.DeepClone(), ["display"] = DisplayMode(),
                 ["platform_power"] = platformPower, ["verdict"] = verdict,
                 ["presentmon"] = presentSummary, ["typeperf"] = typeperfSummary, ["cpu"] = cpu,
-                ["nvidia_board_power"] = power, ["errors"] = errors, ["incomplete_reasons"] = incomplete,
+                ["nvidia_board_power"] = power, ["working_set"] = workingSet,
+                ["errors"] = errors, ["incomplete_reasons"] = incomplete,
                 ["limitations"] = new JsonArray(metadata["scope"]!.DeepClone(), metadata["power_scope"]!.DeepClone(),
                     metadata["gpu_scope"]!.DeepClone(), "No CSV, counter samples, permission-denied read, or ambiguous swap chain is represented as zero or a pass.")
             };
@@ -711,7 +729,7 @@ public static class OfficialPerformanceSampler
         return match.Success ? match.Groups[1].Value : path;
     }
 
-    /// <summary>一句话给"值不值得烘"：原作本来就轻就直接劝退；测不到功耗的机器不给判断。</summary>
+    /// <summary>记录本机原作读数；不从原作功耗阈值推断生成收益。</summary>
     private static JsonObject Verdict(JsonObject power, double threshold)
     {
         string status = power["status"]?.GetValue<string>() ?? "not_measured";
@@ -720,7 +738,7 @@ public static class OfficialPerformanceSampler
             return new JsonObject
             {
                 ["status"] = status is "unsupported_platform" or "no_graphics_domain" ? "unsupported_platform" : "not_measured",
-                ["threshold_watts"] = threshold, ["metric"] = "platform_power.igpu_domain_watts.median",
+                ["threshold_watts"] = null, ["metric"] = "platform_power.igpu_domain_watts.median",
                 ["measured_watts"] = null, ["worth_baking"] = null,
                 ["text"] = status switch
                 {
@@ -731,17 +749,14 @@ public static class OfficialPerformanceSampler
                     _ => "Wallpaper power was not measured here, so no baking recommendation is given."
                 }
             };
-        bool worth = watts.Value >= threshold;
         return new JsonObject
         {
-            ["status"] = "measured", ["threshold_watts"] = threshold,
+            ["status"] = "measured", ["threshold_watts"] = null,
             ["metric"] = "platform_power.igpu_domain_watts.median", ["measured_watts"] = watts.Value,
-            ["measurement_method"] = power["igpu_domain_method"]?.DeepClone(), ["worth_baking"] = worth,
-            ["text"] = worth
-                ? string.Create(CultureInfo.InvariantCulture,
-                    $"The source draws {watts.Value:F2} W on the integrated-GPU domain (threshold {threshold:F2} W); baking can pay off.")
-                : string.Create(CultureInfo.InvariantCulture,
-                    $"The source draws only {watts.Value:F2} W on the integrated-GPU domain (threshold {threshold:F2} W); baking cannot save that back.")
+            ["measurement_method"] = power["igpu_domain_method"]?.DeepClone(), ["worth_baking"] = null,
+            ["measurement_scope"] = "this_device_only",
+            ["text"] = string.Create(CultureInfo.InvariantCulture,
+                $"The source draws {watts.Value:F2} W on this machine's integrated-GPU domain. This alone does not establish baking savings or load on other devices.")
         };
     }
 
@@ -753,12 +768,14 @@ public static class OfficialPerformanceSampler
         if (context == 0) return new JsonObject { ["status"] = "not_measured", ["error"] = "GetDC returned no device context." };
         try
         {
-            int refresh = GetDeviceCaps(context, 116), width = GetDeviceCaps(context, 8), height = GetDeviceCaps(context, 10);
+            // DESKTOPHORZRES/DESKTOPVERTRES report physical pixels; HORZRES/VERTRES
+            // were DPI-virtualized (the local 4K display appeared as 3072x1728 at 125%).
+            int refresh = GetDeviceCaps(context, 116), width = GetDeviceCaps(context, 118), height = GetDeviceCaps(context, 117);
             return new JsonObject
             {
                 ["status"] = refresh > 1 ? "read" : "not_measured",
                 ["refresh_hz"] = refresh > 1 ? refresh : null, ["width"] = width, ["height"] = height,
-                ["scope"] = "Primary display mode read at report time. Readings taken at different refresh rates are not comparable."
+                ["scope"] = "Primary display physical mode read at report time, not the test window or swapchain size. Readings taken at different refresh rates are not comparable."
             };
         }
         finally { _ = ReleaseDC(0, context); }
@@ -811,6 +828,17 @@ public static class OfficialPerformanceSampler
             ["valid_coverage_ratio"] = rows.Count == 0 ? null : (double)values.Count / rows.Count,
             ["counters"] = counterReports
         };
+    }
+
+    private static void ApplyTraceLoss(JsonObject summary, string diagnostics)
+    {
+        // PresentMon can exit successfully after losing events. Its surviving CSV
+        // cannot establish displayed cadence or a valid dropped-frame ratio.
+        if (!Regex.IsMatch(diagnostics, @"\b[1-9]\d* ETW (events|buffers) were lost\b", RegexOptions.IgnoreCase)) return;
+        summary["trace_event_loss"] = true;
+        summary["trace_loss_diagnostics"] = diagnostics.Trim();
+        summary["verified_target_fps"] = false;
+        if (summary["status"]?.GetValue<string>() == "sampled") summary["status"] = "incomplete_trace";
     }
 
     private static JsonObject PresentSummary(string path, double targetFps, string? selectedAddress,
@@ -1106,6 +1134,30 @@ public static class OfficialPerformanceSampler
             power["errors"] is JsonArray { Count: > 0 }))
             failures.Add("Pinned NVIDIA board-power telemetry was not measured.");
         return failures;
+    }
+
+    private static async Task PollWorkingSetAsync(Process process, JsonArray samples, JsonArray errors,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                process.Refresh();
+                if (process.HasExited) return;
+                samples.Add(new JsonObject
+                {
+                    ["time_utc"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0,
+                    ["working_set_bytes"] = process.WorkingSet64
+                });
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException or NotSupportedException)
+        {
+            errors.Add(new JsonObject { ["stage"] = "poll", ["error"] = error.ToString() });
+        }
     }
 
     private static async Task PollPowerAsync(string executable, string? requestedUuid, JsonObject identity,

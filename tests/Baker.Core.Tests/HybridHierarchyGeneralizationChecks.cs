@@ -123,7 +123,8 @@ internal static class HybridHierarchyGeneralizationChecks
             lateFaults.OfType<JsonObject>().All(error => error["rejection_reason"] is null),
             "a fault first seen in full capture rejects baked and ancestor owners while preserving raw external-live diagnostics");
 
-        async Task<JsonObject> PlanRuntimeParent(string name, bool describeParent, bool scriptFaultEvidence = true)
+        async Task<JsonObject> PlanRuntimeParent(string name, bool describeParent, bool scriptFaultEvidence = true,
+            bool hideAndBracketController = false, bool queryLayerCount = false)
         {
             string directory = Path.Combine(root, name + "-source");
             Directory.CreateDirectory(directory);
@@ -131,15 +132,23 @@ internal static class HybridHierarchyGeneralizationChecks
                 new JsonObject { ["id"] = 700, ["name"] = "static parent", ["origin"] = "8 4 0" },
                 new JsonObject { ["id"] = 701, ["parent"] = 700, ["image"] = "models/live.json" },
                 new JsonObject { ["id"] = 702, ["parent"] = 700, ["image"] = "models/baked.json" });
+            if (hideAndBracketController)
+            {
+                sourceObjects[1]!["visible"] = false;
+                sourceObjects[1]!["alpha"] = new JsonObject {
+                    ["value"] = 1, ["script"] = "export function update(value) { shared.tick = (shared.tick || 0) + 1; return input.cursorPosition.x; }" };
+                sourceObjects.Insert(1, new JsonObject { ["id"] = 703, ["parent"] = 700, ["image"] = "models/baked.json" });
+            }
             string scenePath = Path.Combine(directory, "scene.json");
             await File.WriteAllTextAsync(scenePath, new JsonObject {
                 ["general"] = new JsonObject { ["orthogonalprojection"] = new JsonObject { ["width"] = 64, ["height"] = 32 } },
                 ["objects"] = sourceObjects }.ToJsonString());
             JsonObject RuntimeLayer(int id, bool mesh) => new() {
-                ["id"] = id, ["owner"] = id, ["visible"] = true, ["has_mesh"] = mesh,
+                ["id"] = id, ["owner"] = id, ["visible"] = !(hideAndBracketController && id == 701), ["has_mesh"] = mesh,
                 ["effective_parallax_depth"] = new JsonArray(0, 0),
                 ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false, ["textures"] = new JsonArray() }) };
             var runtimeLayers = new JsonArray(RuntimeLayer(701, true), RuntimeLayer(702, true));
+            if (hideAndBracketController) runtimeLayers.Insert(0, RuntimeLayer(703, true));
             if (describeParent) runtimeLayers.Insert(0, RuntimeLayer(700, false));
             string runtimePath = Path.Combine(root, name + "-trace.json");
             var runtime = new JsonObject {
@@ -152,6 +161,10 @@ internal static class HybridHierarchyGeneralizationChecks
                 runtime["source_script_error_count"] = 0;
                 runtime["source_script_errors"] = new JsonArray();
             }
+            if (queryLayerCount)
+                runtime["runtime_dependencies"]!.AsArray().Add(new JsonObject {
+                    ["owner"] = 701, ["target"] = -1, ["operation"] = "query", ["property"] = "layer_count",
+                    ["binding"] = "alpha", ["initialization"] = true });
             await File.WriteAllTextAsync(runtimePath, runtime.ToJsonString());
             return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, directory, root, Path.Combine(root, name + "-analysis"), 64, 32,
@@ -160,8 +173,20 @@ internal static class HybridHierarchyGeneralizationChecks
         JsonObject describedParent = await PlanRuntimeParent("described-static-parent", true);
         JsonObject missingParent = await PlanRuntimeParent("missing-static-parent", false);
         JsonObject legacyFaultEvidence = await PlanRuntimeParent("legacy-script-fault-evidence", true, false);
+        JsonObject hiddenSibling = await PlanRuntimeParent("hidden-leaf-between-baked-siblings", true,
+            hideAndBracketController: true);
+        JsonObject publicQuery = await PlanRuntimeParent("retained-public-layer-count", true,
+            hideAndBracketController: true, queryLayerCount: true);
+        check(publicQuery["status"]?.GetValue<string>() == "requires_resolution" &&
+            publicQuery["blockers"]!.AsArray().Any(reason => reason!.GetValue<string>().Contains("public layer count", StringComparison.Ordinal)),
+            "analysis reports an observed retained layer-count conflict before rendering a bake");
         JsonObject Layer(JsonObject candidate, int id) => candidate["layers"]!.AsArray().OfType<JsonObject>()
             .Single(layer => layer["id"]!.GetValue<int>() == id);
+        check(hiddenSibling["video_groups"]!.AsArray().Count == 1 &&
+            hiddenSibling["video_groups"]![0]!["layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()).SequenceEqual([703, 702]) &&
+            Layer(hiddenSibling, 701)["live"]!.GetValue<bool>(),
+            "a hidden live leaf between baked siblings keeps its controller without splitting their video group: " +
+                hiddenSibling["video_groups"]!.ToJsonString());
         check(Layer(describedParent, 702)["allocation_root"]!.GetValue<int>() == 702 &&
             !Layer(describedParent, 702)["live"]!.GetValue<bool>() &&
             Layer(missingParent, 702)["allocation_root"]!.GetValue<int>() == 700 &&

@@ -31,6 +31,21 @@ internal static class HybridLoopGeneralizationChecks
             anonymous["fixed_frame_step"]!.GetValue<ulong>() == 3600,
             "an unnamed high-confidence authored track remains a fixed exact loop constraint");
 
+        var scriptClock = new JsonObject { ["owner"] = 1, ["operation"] = "time", ["property"] = "frametime",
+            ["binding"] = "origin", ["initialization"] = false };
+        JsonObject ScriptLoop() => HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) },
+            source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray(AnonymousTrack(3)),
+                ["runtime_dependencies"] = new JsonArray(scriptClock.DeepClone()) }, [1], 60, 1);
+        check(ScriptLoop()["unresolved"]!.AsArray().OfType<JsonObject>().Any(item =>
+                item["kind"]?.GetValue<string>() == "script_time" && item["owner_layer_id"]?.GetValue<int>() == 1),
+            "a three-second authored animation does not certify a script advancing the same layer's position with frametime");
+        scriptClock["initialization"] = true;
+        check(ScriptLoop()["unresolved"]!.AsArray().Count == 0,
+            "a one-time initialization clock read does not create an ongoing script-state loop constraint");
+        scriptClock["initialization"] = false; scriptClock["owner"] = 2;
+        check(ScriptLoop()["unresolved"]!.AsArray().Count == 0,
+            "a clock read in a retained live layer does not block a different baked layer's animation");
+
         JsonObject sprite60 = Analyze(Sprite(4.53), 60, 1);
         JsonObject sprite120 = Analyze(Sprite(4.53), 120, 1);
         check(sprite60["candidates"]!.AsArray().First()!["frames"]!.GetValue<ulong>() == 1359 &&

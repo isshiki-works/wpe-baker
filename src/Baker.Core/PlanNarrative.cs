@@ -14,20 +14,26 @@ public static class PlanNarrative
     public const string NotApplicable = "not_applicable";
     public const string Unknown = "unknown";
 
-    /// <summary>文案②：整幅画面都由实时输入驱动时，指出是哪一层、哪种输入。</summary>
+    /// <summary>无独立组时只描述依赖分析的结果，并列出相关证据；单层输入不能证明整幅画面的构成。</summary>
     public static string NoInputIndependentGroup(IReadOnlyDictionary<int, JsonObject> objects,
         IReadOnlyDictionary<int, HashSet<string>> reasons)
     {
         (string Reason, string Mechanism)[] known = [
+            ("wall_clock_api", "wall-clock"),
+            ("observed_wall_clock", "wall-clock"),
             ("active_shader_audio_spectrum", "audio-spectrum"),
             ("active_shader_pointer_input", "pointer-input"),
             ("active_shader_parallax_input", "parallax-input"),
             ("reads_current_framebuffer", "framebuffer-feedback")];
-        foreach (var (reason, mechanism) in known)
-            foreach (int id in reasons.Where(entry => entry.Value.Contains(reason)).Select(entry => entry.Key).Order())
-                return Messages.Emit("blocker.no_input_independent_group",
-                    "\"" + Messages.EscapeName(objects.GetValueOrDefault(id)?["name"]?.GetValue<string>()) + "\"", mechanism);
-        return Messages.Emit("blocker.no_input_independent_group_generic");
+        var evidence = new List<string>();
+        foreach (var (id, layerReasons) in reasons.OrderBy(entry => entry.Key))
+        {
+            string[] mechanisms = known.Where(item => layerReasons.Contains(item.Reason)).Select(item => item.Mechanism).Distinct().ToArray();
+            if (mechanisms.Length > 0)
+                evidence.Add("\"" + Messages.EscapeName(objects.GetValueOrDefault(id)?["name"]?.GetValue<string>()) + "\" (" + string.Join(", ", mechanisms) + ")");
+        }
+        return evidence.Count == 0 ? Messages.Emit("blocker.no_input_independent_group_generic")
+            : Messages.Emit("blocker.no_input_independent_group", string.Join("; ", evidence));
     }
 
     /// <summary>
@@ -155,7 +161,8 @@ public static class PlanNarrative
         report["summary"] = Summarize(report);
         // 取舍清单要读 blockers_localized 与 summary.key，所以排在它们之后；它只读 plan，不改任何判定。
         TradeoffOptions.Attach(report);
-        if (TradeoffOptions.SummarySentence(report) is { } tradeoff && report["summary"] is JsonObject line)
+        if (report["summary"] is JsonObject line && line["verdict"]?.GetValue<string>() != "not_suitable" &&
+            TradeoffOptions.SummarySentence(report) is { } tradeoff)
         {
             line["zh"] = line["zh"]?.GetValue<string>() + tradeoff.Zh;
             line["en"] = line["en"]?.GetValue<string>() + " " + tradeoff.En;
@@ -259,6 +266,10 @@ public static class PlanNarrative
 
     private static JsonObject Narrate(JsonObject report)
     {
+        if (report["suitability"] is JsonObject suitability &&
+            suitability["rule"]?.GetValue<string>() == "no_independent_content_after_reallocation")
+            return Bilingual(Blocked, "summary.not_suitable_current",
+                [suitability["reason_zh"]!.GetValue<string>()], [suitability["reason_en"]!.GetValue<string>()]);
         var blockers = report["blockers"] as JsonArray ?? [];
         if (blockers.Count > 0)
         {

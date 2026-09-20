@@ -4,6 +4,8 @@
 # core.autocrlf=true 的机器上 checkout 会把 LF 变 CRLF，哈希必然对不上，
 # 所以这些文件一律禁用行尾转换。
 *.patch -text
+# Unified-diff context keeps its required leading space on empty lines.
+engine/development-update.patch whitespace=-blank-at-eol
 patches/renderer-mt/sha256.txt -text
 patches/renderer-mt/README.md -text
 

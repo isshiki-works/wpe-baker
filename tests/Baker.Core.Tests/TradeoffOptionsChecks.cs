@@ -45,9 +45,9 @@ internal static class TradeoffOptionsChecks
         foreach (string key in new[] { "blocker.no_input_independent_group", "blocker.no_input_independent_group_generic" })
         {
             var entry = Messages.Find(key)!;
-            check(!entry.Zh.Contains("壁纸自身设置里关掉") && entry.Zh.Contains("禁用后无剩余内容"),
+            check(!entry.Zh.Contains("禁用后无剩余内容") && entry.Zh.Contains("未找到不依赖实时输入、可生成的视频组"),
                 "wording: " + key + " rejects cleanly in Chinese");
-            check(!entry.En.Contains("Unless you turn") && entry.En.Contains("nothing remains once disabled"),
+            check(!entry.En.Contains("nothing remains once disabled") && entry.En.Contains("dependency analysis found no video group independent of live input"),
                 "wording: " + key + " rejects cleanly in English");
             check(entry.LegacyTemplate == "No input-independent visual group remains after dependency closure.",
                 "wording: " + key + " keeps its legacy English verbatim");
@@ -151,15 +151,16 @@ internal static class TradeoffOptionsChecks
             clockOption["zh"]!.GetValue<string>().Contains("连带禁用：挂在这些图层下的"),
             "tradeoff list: children that were not asked for are reported as collateral");
 
-        // 主体类：依赖闭包后没有输入无关画面时不给清单，可画的取舍层改标 subject。
+        // 无独立组不足以证明主体只剩实时效果，不能把绘制层改标为 subject。
         var subject = Plan(Layer(10, null, "指针着色器", live: true, ["active_shader_pointer_input"]));
         subject["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.no_input_independent_group" });
         TradeoffOptions.Attach(subject);
-        check(subject[TradeoffOptions.Field]!["status"]!.GetValue<string>() == "subject_only" &&
+        check(subject[TradeoffOptions.Field]!["status"]!.GetValue<string>() == "dependency_blocked" &&
             subject[TradeoffOptions.Field]!["options"]!.AsArray().Count == 0 &&
-            subject["layers"]![0]!["tradeoff_class"]!.GetValue<string>() == TradeoffOptions.Subject &&
-            subject[TradeoffOptions.Field]!["zh"]!.GetValue<string>().Contains("只能实时"),
-            "tradeoff list: a subject-class wallpaper is refused instead of listed");
+            subject["layers"]![0]!["tradeoff_class"]!.GetValue<string>() == TradeoffOptions.Tradeoff &&
+            subject[TradeoffOptions.Field]!["zh"]!.GetValue<string>().Contains("尚未确认") &&
+            !subject[TradeoffOptions.Field]!["zh"]!.GetValue<string>().Contains("只能实时"),
+            "tradeoff list: dependency blockage does not prove all content is the live effect");
 
         // 已经能整幅的计划不需要清单；只剩技术类实时层的也没有可取舍元素。
         var done = Plan(Layer(10, null, "底", live: false, []));

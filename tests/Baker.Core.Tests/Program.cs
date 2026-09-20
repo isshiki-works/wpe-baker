@@ -3,6 +3,97 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Baker.Core;
 
+if (args is ["--release-readiness-checks", string readinessOutput])
+{
+    string directory = Path.GetFullPath(readinessOutput);
+    if (Directory.Exists(directory)) throw new IOException("Check output must be new.");
+    Directory.CreateDirectory(directory);
+    void AssertReady(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
+    EffectPrefixProfileChecks.Run(AssertReady, directory);
+    await PresetCascadeChecks.RunAsync(AssertReady, directory);
+    GuiPresetTradeoffChecks.Run(AssertReady);
+    SourcePowerVerdictChecks.Run(AssertReady);
+    await VideoDominanceChecks.RunAsync(AssertReady, directory);
+    PlainLanguageChecks.Run(AssertReady);
+    NarrativePolishChecks.Run(AssertReady);
+    OfficialTraceLossChecks.Run(AssertReady);
+    SharedLoopStartChecks.Run(AssertReady);
+    Console.WriteLine("Release readiness checks passed.");
+    return;
+}
+
+if (args is ["--particle-checks", string particleOutput])
+{
+    string directory = Path.GetFullPath(particleOutput);
+    if (Directory.Exists(directory)) throw new IOException("Particle check output must be new.");
+    Directory.CreateDirectory(directory);
+    ParticleStationarityChecks.Run((condition, message) => {
+        if (!condition) throw new InvalidOperationException(message);
+    }, directory);
+    Console.WriteLine("Particle stationarity and native default checks passed.");
+    return;
+}
+
+if (args is ["--native-scaled-composition", string scalePlan, string scaleOutput, string scaleValue, string scaleTools])
+{
+    var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+    var tools = JsonSerializer.Deserialize<NativeTools>(File.ReadAllText(scaleTools), options)!;
+    var plan = JsonNode.Parse(File.ReadAllText(scalePlan))!.AsObject();
+    double scale = double.Parse(scaleValue, System.Globalization.CultureInfo.InvariantCulture);
+    string output = Path.GetFullPath(scaleOutput);
+    using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+    var baker = new HybridBakeService(tools);
+    var probe = await baker.BakeAsync(new(2, plan, output + ".probe", HybridCompositionValidator.RequiredFrames,
+        KeepIntermediates: true, EffectRenderScale: scale), cancellationToken: timeout.Token);
+    var result = await baker.ValidateProbeCompositionAsync(plan, probe, output, cancellationToken: timeout.Token);
+    result["effect_render_scale"] = scale;
+    await File.WriteAllTextAsync(output + ".json", result.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine(result.ToJsonString());
+    if (result["status"]?.GetValue<string>() != "composition_pass")
+        throw new InvalidDataException("Scaled composition differs beyond the existing composition limits.");
+    return;
+}
+
+if (args is ["--daytime-checks", string daytimeOutput])
+{
+    string directory = Path.GetFullPath(daytimeOutput);
+    if (Directory.Exists(directory)) throw new IOException("Daytime check output must be new.");
+    Directory.CreateDirectory(directory);
+    void CheckDaytime(bool condition, string message) {
+        if (!condition) throw new InvalidOperationException(message);
+    }
+    await DaytimeSplitChecks.RunAsync(CheckDaytime, directory);
+    await TradeoffOptionsChecks.RunAsync(CheckDaytime, directory);
+    PlainLanguageChecks.Run(CheckDaytime);
+    GuiPresetTradeoffChecks.Run(CheckDaytime);
+    Console.WriteLine("Daytime selection, dynamic identity preservation and dependency explanations passed.");
+    return;
+}
+
+if (args is ["--native-gpu-encode", string gpuOutput])
+{
+    await NativeGpuEncodeChecks.RunAsync(gpuOutput);
+    return;
+}
+
+if (args is ["--native-sampling-coverage", string coverageOutput])
+{
+    await SparseReadbackChecks.RunCoverageAsync(coverageOutput);
+    return;
+}
+
+if (args is ["--native-sparse-readback", string sparseOutput])
+{
+    await SparseReadbackChecks.RunNativeAsync(sparseOutput);
+    return;
+}
+
+if (args is ["--native-progress-cancel", string nativeOutput])
+{
+    await ProgressCancellationChecks.RunNativeAsync(nativeOutput);
+    return;
+}
+
 // Real file-format roundtrips and adversarial input checks; no mocked I/O or renderer.
 string root = Path.GetFullPath(args.Length == 1 ? args[0] : Path.Combine(Path.GetTempPath(), "wpe-baker-core-" + Guid.NewGuid().ToString("N")));
 if (Directory.Exists(root)) throw new IOException("Test output must be new.");
@@ -24,6 +115,7 @@ EmbeddedVideoBudgetChecks.Run(Check);
 await OutputResolutionChecks.RunAsync(Check, root);
 await OutputFrameRateChecks.RunAsync(Check, root);
 StageTimingChecks.Run(Check);
+ProgressCancellationChecks.Run(Check);
 await EncodeSlotChecks.RunAsync(Check);
 await TemporaryCaptureChecks.RunAsync(Check, root);
 BakeDiskBudgetChecks.Run(Check, root);
@@ -993,4 +1085,3 @@ await ReferenceSeamChecks.RunAsync(Check, root);
 string serialized = JsonSerializer.Serialize(new { status = "passed", checks = passed.Count, passed, root }, new JsonSerializerOptions { WriteIndented = true });
 await File.WriteAllTextAsync(Path.Combine(root, "report.json"), serialized);
 Console.WriteLine(serialized);
-

@@ -142,9 +142,11 @@ Recreate x264's Git identity from the included bundle without replacing files:
     git -C .deps/ffmpeg-encoder-gpl2/sources/x264 fetch ../../../../.tools/downloads/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.bundle refs/heads/source-pin:refs/heads/source-pin refs/heads/master-pin:refs/remotes/origin/master
     git -C .deps/ffmpeg-encoder-gpl2/sources/x264 reset --mixed source-pin
 
-The distributed renderer is the multithreaded-decode build. Its two patches and
-their application order are in patches/renderer-mt/README.md; the produced
-binary must match the SHA256 in patches/renderer-mt/sha256.txt.
+The distributed renderer includes the current rendering and encoding changes.
+The authoritative source fingerprint and packaged binary SHA256 are in
+build-records/build-wpe-render.json. The files in patches/renderer-mt/ identify
+the historical decode-threading snapshot; do not reapply them or compare this
+later renderer to that snapshot's binary hash.
 
 Use the project-local tool versions in scripts/native-inputs.lock.json and
 scripts/encoder-build-tools.lock.json. See README.md, SOURCE.md and the two

@@ -48,6 +48,17 @@ internal static class HybridSuitability
 
         bool noCandidateAtAll = candidates == 0 && prefixCaches == 0 && !prefixRoute;
 
+        // The allocator has already tried keeping the unresolved controller live.
+        // If nothing independent remains, do not ask the user to repeat that choice.
+        if (noCandidateAtAll && !hdr && !perspective &&
+            plan["loop_allocation_fallback"] is JsonObject fallback && Text(fallback["status"]) == "still_unavailable" &&
+            fallback["replanned_video_group_count"] is JsonValue remainingGroups && remainingGroups.TryGetValue<int>(out int groupCount) && groupCount == 0 &&
+            fallback["replanned_effect_prefix_cache_count"] is JsonValue remainingCaches && remainingCaches.TryGetValue<int>(out int cacheCount) && cacheCount == 0)
+            return Build("not_suitable", "no_independent_content_after_reallocation",
+                "Keeping the controls and live interactions intact leaves no independently bakeable content with the current settings. " +
+                "Automatic reallocation was already tried; keep using the original wallpaper.",
+                "保留控制和实时交互后，当前设置下没有可独立烘焙的画面。已经尝试自动重新分配，建议继续使用原壁纸。", notes);
+
         // S1：依赖闭包之后连一个视频组都没有，没有任何东西可烘。
         if (noCandidateAtAll && groups == 0)
             return Build("not_suitable", "nothing_to_bake",

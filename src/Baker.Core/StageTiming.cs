@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// <summary>烘焙各阶段的墙钟计时。只记录真的跑过的阶段；没跑过的阶段写 null，不写 0。</summary>
-public sealed class StageTiming
+public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
 {
     public const string SourceCapture = "source_capture";
     public const string CompositionValidation = "composition_validation";
@@ -64,7 +64,11 @@ public sealed class StageTiming
     }
 
     /// <summary>用 using 包住一段代码，把它的墙钟累加到这个阶段。</summary>
-    public Scope Measure(string stage) => new(this, stage);
+    public Scope Measure(string stage)
+    {
+        progress?.Report(new(stage, null, StageLabel(stage, Messages.DefaultLanguage() == Messages.English)));
+        return new(this, stage);
+    }
 
     public readonly struct Scope : IDisposable
     {
@@ -138,7 +142,7 @@ public sealed class StageTiming
                 },
                 ["basis"] = "每一项都是本进程测得的墙钟秒。stages 的各项互斥，它们与 other 相加等于 total_seconds；" +
                     "没有发生过的阶段是 null，不是 0。master_render_breakdown 是 master_render 内部与渲染重叠的分量" +
-                    "（readback 是等渲染器交出帧的时间，encode_master 是等无损编码器吃下帧的背压时间，" +
+                    "（readback 是等渲染器交出帧的时间，encode_master 是等待编码管道接收帧的背压时间，" +
                     "renderer_wall_seconds 是渲染器自己在 result.json 里报的墙钟），它们不参与求和。"
             };
         }
@@ -154,6 +158,10 @@ public sealed class StageTiming
         (Other, "其他", "other")
     ];
 
+    public static string StageLabel(string stage, bool english) =>
+        Labels.FirstOrDefault(label => label.Key == stage) is var label && label.Key is not null
+            ? english ? label.English : label.Chinese : stage;
+
     private static double? Number(JsonNode? node) =>
         node is JsonValue value && value.TryGetValue(out double number) && double.IsFinite(number) ? number : null;
 
@@ -168,16 +176,23 @@ public sealed class StageTiming
         foreach (var (key, chinese, englishLabel) in Labels)
             if (Number(stages[key]) is double value && value > 0)
                 parts.Add($"{(english ? englishLabel : chinese)} {Fixed(value)}");
-        double encode = (Number(stages[EncodePlayback]) ?? 0) +
-            (Number(timing["master_render_breakdown"]?[EncodeMaster]) ?? 0);
-        string share = totalSeconds > 0 ? Fixed(encode / totalSeconds.Value * 100) : "0.0";
+        double? playbackEncode = Number(stages[EncodePlayback]);
+        double? masterEncode = Number(timing["master_render_breakdown"]?[EncodeMaster]);
+        string share = totalSeconds > 0 ? Fixed((playbackEncode ?? 0) / totalSeconds.Value * 100) : "0.0";
+        string encoding = playbackEncode is null
+            ? english ? "encoding not timed separately" : "编码未单独计时"
+            : english ? $"playback encoding {Fixed(playbackEncode.Value)}s ({share}%)"
+                : $"成品编码 {Fixed(playbackEncode.Value)} 秒（占 {share}%）";
+        if (masterEncode is double writeWait)
+            encoding += english ? $"; pipe write wait {Fixed(writeWait)}s (overlaps rendering)"
+                : $"；管道写入等待 {Fixed(writeWait)} 秒（与渲染重叠）";
         string fps = Number(timing["frames_per_second_render"]) is double rate ? Fixed(rate) : "-";
         string device = timing["device"]?.GetValue<string>() ?? timing["device_uuid"]?.GetValue<string>() ?? "unknown";
         ulong frames = timing["frames"] is JsonValue count && count.TryGetValue(out ulong value2) ? value2 : 0;
         return english
             ? $"Stage timing (s): total {Fixed(totalSeconds.Value)} · {string.Join(" · ", parts)} · " +
-              $"{frames} frames · {fps} rendered fps · encoding {Fixed(encode)}s ({share}%) · device {device}"
+              $"{frames} frames · {fps} rendered fps · {encoding} · device {device}"
             : $"分阶段耗时（秒）：总计 {Fixed(totalSeconds.Value)} · {string.Join(" · ", parts)} · " +
-              $"共 {frames} 帧 · 渲染 {fps} 帧/秒 · 编码 {Fixed(encode)} 秒（占 {share}%） · 设备 {device}";
+              $"共 {frames} 帧 · 渲染 {fps} 帧/秒 · {encoding} · 设备 {device}";
     }
 }

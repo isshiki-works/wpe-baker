@@ -12,7 +12,7 @@ namespace Baker.Core;
 ///   - 脚本挂在某层的 visible 绑定上，读 <c>new Date().getHours()</c>；
 ///   - 用字符串数组字面量声明几组图层名（<c>var nightLayers = ["night1", ...]</c>），运行时 <c>thisScene.getLayer</c> 取层；
 ///   - 分支形如 <c>if (hours &gt;= A &amp;&amp; hours &lt; B) { show(GROUP); }</c>，兜底 <c>else { show(GROUP); }</c>；
-///   - 对图层的属性写只有 <c>.visible =</c>，不调用播放类方法。
+///   - 对图层的属性写只有 <c>.visible =</c>；播放控制仅支持完整匹配的按索引切视频模板。
 /// 任何一条不满足就退回现有行为，原因写进 plan 的 daytime_split.fallback_reason。不按壁纸 id 特判。
 /// </summary>
 internal static class DaytimeSplit
@@ -30,13 +30,48 @@ internal static class DaytimeSplit
     private static readonly Regex PropertyWrite = new(@"\.\s*(\w+)\s*=(?!=)", Options);
     private static readonly Regex MethodCall = new(@"\.\s*(play|pause|stop|seek|setText|setTexture|setEffect)\s*\(", Options);
     private static readonly Regex LiveInput = new(@"\binput\s*[.\[]|\bregisterAudioBuffers\s*\(|\bfunction\s+(cursor|media)\w*\s*\(", Options);
+    // 先去掉注释及字符串以外的空白，再匹配整个模板。只允许选中项 play、其余 pause，
+    // 不能把 play/pause 从上面的通用拒绝规则中删掉，也不能只检查几个局部片段。
+    private static readonly Regex IndexedVideoSelector = new("""
+        \A (?:'use\x20strict'|"use\x20strict");?
+        (?:var|let|const)(?<layers>\w+)=(?<array>\[(?:"[^"\\]*"|'[^'\\]*')(?:,(?:"[^"\\]*"|'[^'\\]*'))*\]);
+        (?:var|let|const)(?<manual>\w+)=(?<manualDefault>false|true|\d{1,2});
+        (?:var|let|const)(?<enabled>\w+)=(?<enabledDefault>false|true);
+        (?:var|let|const)(?<defaults>\w+=\d{1,2}(?:,\w+=\d{1,2})*);
+        exportfunctioninit\(\)\{
+            \k<layers>=\k<layers>\.map\((?<mapper>\w+)=>thisScene\.getLayer\(\k<mapper>\)\);
+        \}
+        (?:var|let|const)(?<select>\w+)=function\((?<number>\w+)\)\{
+            \k<layers>\.forEach\(\((?<video>\w+),(?<index>\w+)\)=>\{
+                if\(\k<index>===\k<number>\)\{
+                    \k<video>\.getVideoTexture\(\)\.play\(\);\k<video>\.visible=true;
+                \}else\{
+                    \k<video>\.getVideoTexture\(\)\.pause\(\);\k<video>\.visible=false;
+                \}
+            \}\);
+        \};?
+        exportfunctionupdate\(\)\{
+            (?:var|let|const)(?<date>\w+)=newDate\(\);
+            (?:var|let|const)(?<hour>\w+)=\k<date>\.getHours\(\);
+            if\(\k<enabled>\)\{(?<branches>.+?)\}
+            if\(\k<manual>&&!\k<enabled>\)\{
+                for\(let(?<loop>\w+)=0;\k<loop><\k<layers>\.length;\k<loop>\+\+\)\{
+                    if\(\k<loop>==\k<manual>\)\k<select>\(\k<loop>\);
+                \}
+            \}
+        \}
+        exportfunctionapplyUserProperties\((?<properties>\w+)\)\{(?<bindings>.+)\}
+        \z
+        """, Options | RegexOptions.IgnorePatternWhitespace);
 
     /// <summary>一个状态：名字、覆盖的小时段（[起, 止) 可跨午夜拆成多段）、该状态下选择器置为可见的受控层。</summary>
     internal sealed record State(string Name, int[][] Hours, int[] VisibleLayerIds);
 
+    internal sealed record VideoSelection(string ModeProperty, string ManualProperty, string[] PropertyKeys, int[] LayerIds);
+
     /// <summary>识别结果：status=recognized 时 ControllerId、States、ControlledLayerIds 有效；否则 FallbackReason 说明退回原因。</summary>
     internal sealed record Detection(string Status, int? ControllerId, string? ControllerName, State[] States, int[] ControlledLayerIds,
-        string? FallbackReason, string? ThresholdSource)
+        string? FallbackReason, string? ThresholdSource, bool ControlsVideoPlayback = false, VideoSelection? Selection = null)
     {
         internal bool IsRecognized => Status == Recognized;
 
@@ -48,6 +83,11 @@ internal static class DaytimeSplit
             ["controller_layer_id"] = ControllerId,
             ["controller_name"] = ControllerName,
             ["threshold_source"] = ThresholdSource,
+            ["controls_video_playback"] = ControlsVideoPlayback,
+            ["video_selection"] = Selection is null ? null : new JsonObject {
+                ["mode_property"] = Selection.ModeProperty, ["manual_property"] = Selection.ManualProperty,
+                ["property_keys"] = JsonSerializer.SerializeToNode(Selection.PropertyKeys),
+                ["layer_ids"] = JsonSerializer.SerializeToNode(Selection.LayerIds) },
             ["controlled_layer_ids"] = JsonSerializer.SerializeToNode(ControlledLayerIds),
             ["states"] = new JsonArray(States.Select(state => (JsonNode)new JsonObject
             {
@@ -94,7 +134,7 @@ internal static class DaytimeSplit
     }
 
     private static Detection Analyze(int id, string? name, string code, IReadOnlyDictionary<int, JsonObject> objects, JsonArray? dependencies,
-        JsonObject? properties)
+        JsonObject? properties, bool controlsVideoPlayback = false)
     {
         // 选择器在观测里写过 visible 的目标：同名图层时 getLayer 取到的就是这一个。
         var writtenByController = (dependencies ?? []).OfType<JsonObject>()
@@ -103,7 +143,9 @@ internal static class DaytimeSplit
             .Select(d => HybridScenePlanner.Int(d["target"])).OfType<int>().ToHashSet();
         if (!HoursRead.IsMatch(code)) return Fallback("clock_value_not_hour_branches", id, name);
         if (LiveInput.IsMatch(code)) return Fallback("reads_other_live_input", id, name);
-        if (MethodCall.Match(code) is { Success: true } call) return Fallback("calls_playback_method:" + call.Groups[1].Value, id, name);
+        if (MethodCall.Match(code) is { Success: true } call)
+            return AnalyzeIndexedVideoSelector(id, name, code, objects, dependencies, properties)
+                ?? Fallback("calls_playback_method:" + call.Groups[1].Value, id, name);
         string[] writes = PropertyWrite.Matches(code).Select(m => m.Groups[1].Value).Distinct().ToArray();
         if (writes.Length == 0) return Fallback("writes_no_visibility", id, name);
         if (writes.Any(property => property != "visible")) return Fallback("writes_non_visibility:" + string.Join(",", writes.Where(p => p != "visible")), id, name);
@@ -192,29 +234,271 @@ internal static class DaytimeSplit
             if (index >= 0) states[index] = states[index] with { Hours = [.. states[index].Hours, [segment.Start, segment.End]] };
             else states.Add(new State(stateName, [[segment.Start, segment.End]], visible));
         }
-        if (states.Count < 2) return Fallback("single_state", id, name);
+        if (states.Count < 2 && !controlsVideoPlayback) return Fallback("single_state", id, name);
         int[] controlled = groupIds.Values.SelectMany(ids => ids).Distinct().OrderBy(layer => layer).ToArray();
         return new Detection(Recognized, id, name, states.ToArray(), controlled, null,
-            usedProperties ? "user_properties" : usedDefaults ? "script_defaults" : "literals");
+            usedProperties ? "user_properties" : usedDefaults ? "script_defaults" : "literals", controlsVideoPlayback);
+    }
+
+    private static Detection? AnalyzeIndexedVideoSelector(int id, string? name, string code,
+        IReadOnlyDictionary<int, JsonObject> objects, JsonArray? dependencies, JsonObject? properties)
+    {
+        string compact = Regex.Replace(code, "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|\\s+",
+            match => char.IsWhiteSpace(match.Value[0]) ? "" : match.Value);
+        Match template = IndexedVideoSelector.Match(compact);
+        if (!template.Success) return null;
+        Detection Reject(string reason) => Fallback(reason, id, name);
+        string Part(string key) => template.Groups[key].Value;
+        if (SceneAnalyzer.Walk(objects[id]).OfType<JsonObject>().Count(node => node.ContainsKey("script")) != 1)
+            return Reject("multiple_controller_scripts");
+        Match[] assignments = NumberAssignment.Matches(Part("defaults")).ToArray();
+        if (assignments.Select(match => match.Groups[1].Value).Distinct().Count() != assignments.Length)
+            return Reject("overlapping_selector_variables");
+        var defaults = assignments
+            .ToDictionary(match => match.Groups[1].Value, match => (JsonNode)JsonValue.Create(int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture))!);
+        if (defaults.ContainsKey(Part("manual")) || defaults.ContainsKey(Part("enabled")) || Part("manual") == Part("enabled"))
+            return Reject("overlapping_selector_variables");
+        defaults.Add(Part("manual"), JsonNode.Parse(Part("manualDefault"))!);
+        defaults.Add(Part("enabled"), JsonNode.Parse(Part("enabledDefault"))!);
+        string[] globals = [Part("layers"), Part("select"), .. defaults.Keys];
+        if (globals.Distinct(StringComparer.Ordinal).Count() != globals.Length ||
+            new[] { "date", "hour", "properties", "number", "video", "index", "loop", "mapper" }.Any(key => globals.Contains(Part(key))) ||
+            Part("date") == Part("hour") || Part("video") == Part("index") ||
+            Part("video") == Part("number") || Part("index") == Part("number"))
+            return Reject("overlapping_selector_variables");
+
+        string propertyParameter = Regex.Escape(Part("properties"));
+        var bindingPattern = new Regex("if\\(" + propertyParameter + @"\.hasOwnProperty\((?<quote>['""])(?<key>\w+)\k<quote>\)\)\{(?<variable>\w+)=" + propertyParameter + @"\.\k<key>;\}", Options);
+        Match[] bindings = bindingPattern.Matches(Part("bindings")).ToArray();
+        if (bindings.Sum(match => match.Length) != Part("bindings").Length || bindings.Length != defaults.Count ||
+            bindings.Select(match => match.Groups["variable"].Value).Distinct().Count() != defaults.Count ||
+            bindings.Any(match => !defaults.ContainsKey(match.Groups["variable"].Value)))
+            return Reject("unsupported_selector_properties");
+        bool usedProperties = false;
+        foreach (Match binding in bindings)
+            if (properties?[binding.Groups["key"].Value] is { } value)
+            {
+                defaults[binding.Groups["variable"].Value] = value;
+                usedProperties = true;
+            }
+        if (defaults[Part("enabled")] is not JsonValue enabledValue || !enabledValue.TryGetValue<bool>(out bool enabled))
+            return Reject("non_boolean_time_mode");
+
+        Match[] layerLiterals = StringLiteral.Matches(Part("array")).ToArray();
+        string[] stateNames = layerLiterals.Select(match => (match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value).ToLowerInvariant()).ToArray();
+        if (stateNames.Any(string.IsNullOrWhiteSpace) || stateNames.Distinct().Count() != stateNames.Length)
+            return Reject("ambiguous_video_state_names");
+        string Group(int index) => "video" + index.ToString(CultureInfo.InvariantCulture) + "Layers";
+        // 已完整验证的模板归一化到现有组解析器；这里只生成数据，不执行源脚本。
+        string normalized = "new Date().getHours(); layer.visible=true;\n" + string.Join("\n",
+            layerLiterals.Select((literal, index) => "var " + Group(index) + "=[" + literal.Value + "];").ToArray());
+        int? Integer(JsonNode value)
+        {
+            string text = value is JsonValue scalar && scalar.TryGetValue<string>(out string? textValue) ? textValue : value.ToJsonString();
+            return int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed) ? parsed : null;
+        }
+        if (!enabled)
+        {
+            JsonNode selection = defaults[Part("manual")];
+            if (Integer(selection) is not int selected || selected < 0 || selected >= layerLiterals.Length)
+                return Reject("unresolved_manual_selection");
+            // JS 的字符串 "0" 为真，数字 0 为假；假值下模板不会调用选择函数。
+            if (selected == 0 && selection.GetValueKind() != JsonValueKind.String)
+                return Reject("inactive_manual_selection");
+            normalized += $"if(h>=0&&h<24){{show({Group(selected)});}}";
+        }
+        else
+        {
+            string hour = Regex.Escape(Part("hour")), select = Regex.Escape(Part("select"));
+            string branch = @"if\(" + hour + @"(?<lowOp>>=?)(?<low>\w+)&&" + hour + @"(?<highOp><=?)(?<high>\w+)\)\{" + select + @"\((?<index>\d{1,2})\);\}";
+            Match chain = Regex.Match(Part("branches"), @"\A" + branch + "(?:else" + branch + @")*else\{" + select + @"\((?<fallback>\d{1,2})\);\}\z", Options);
+            if (!chain.Success) return Reject("unsupported_video_hour_branches");
+            int? Threshold(string token) => int.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out int literal) ? literal
+                : defaults.TryGetValue(token, out JsonNode? value) ? Integer(value) : null;
+            for (int i = 0; i < chain.Groups["index"].Captures.Count; ++i)
+            {
+                int index = int.Parse(chain.Groups["index"].Captures[i].Value, CultureInfo.InvariantCulture);
+                if (index >= layerLiterals.Length) return Reject("video_index_out_of_range");
+                if (Threshold(chain.Groups["low"].Captures[i].Value) is not int low ||
+                    Threshold(chain.Groups["high"].Captures[i].Value) is not int high || low is < 0 or > 24 || high is < 0 or > 24)
+                    return Reject("unresolved_video_hour_threshold");
+                if (chain.Groups["lowOp"].Captures[i].Value == ">") ++low;
+                if (chain.Groups["highOp"].Captures[i].Value == "<=") ++high;
+                normalized += $"{(i == 0 ? "" : "else ")}if(h>={low}&&h<{high}){{show({Group(index)});}}";
+            }
+            int fallback = int.Parse(chain.Groups["fallback"].Value, CultureInfo.InvariantCulture);
+            if (fallback >= layerLiterals.Length) return Reject("video_index_out_of_range");
+            normalized += $"else{{show({Group(fallback)});}}";
+        }
+        Detection result = Analyze(id, name, normalized, objects, dependencies, null, controlsVideoPlayback: true);
+        if (!result.IsRecognized) return result;
+        if (result.ControlledLayerIds.Length != layerLiterals.Length || result.ControlledLayerIds.Contains(id))
+            return Reject("repeated_or_self_video_target");
+        if (result.ControlledLayerIds.Any(target => objects[target]["visible"] is JsonObject visible &&
+            (visible.ContainsKey("script") || visible.ContainsKey("animation") || visible.ContainsKey("animations"))))
+            return Reject("controlled_visibility_has_script_or_animation");
+        var namesByGroup = Enumerable.Range(0, stateNames.Length).ToDictionary(index => StateName(Group(index)), index => stateNames[index]);
+        int[] indexedIds = layerLiterals.Select(literal => objects.Single(pair => result.ControlledLayerIds.Contains(pair.Key) &&
+            pair.Value["name"]?.GetValue<string>() == (literal.Groups[1].Success ? literal.Groups[1].Value : literal.Groups[2].Value)).Key).ToArray();
+        return result with {
+            States = result.States.Select(state => state with { Name = namesByGroup[state.Name] }).ToArray(),
+            ThresholdSource = usedProperties ? "user_properties" : "script_defaults",
+            Selection = new VideoSelection(
+                bindings.Single(binding => binding.Groups["variable"].Value == Part("enabled")).Groups["key"].Value,
+                bindings.Single(binding => binding.Groups["variable"].Value == Part("manual")).Groups["key"].Value,
+                bindings.Select(binding => binding.Groups["key"].Value).Distinct().ToArray(), indexedIds) };
+    }
+
+    internal sealed record DynamicExport(Detection Detection, State State, Dictionary<string, int> ReplacementTargets)
+    {
+        internal string[] PropertyKeys => Detection.Selection!.PropertyKeys;
+
+        internal JsonObject ComparisonProperties(JsonObject snapshot)
+        {
+            var properties = snapshot.DeepClone().AsObject();
+            properties[Detection.Selection!.ModeProperty] = false;
+            // 字符串 "0" 必须保持为真，才能在模板的手动分支选择第一项。
+            properties[Detection.Selection.ManualProperty] = Array.IndexOf(Detection.Selection.LayerIds, State.VisibleLayerIds.Single())
+                .ToString(CultureInfo.InvariantCulture);
+            return properties;
+        }
+
+        internal void BindReplacement(JsonObject replacement, JsonObject original, bool isStatic)
+        {
+            if (isStatic) throw new InvalidDataException("A dynamic daytime replacement must remain a playable video texture.");
+            if (HybridScenePlanner.Int(replacement["parent"]) != HybridScenePlanner.Int(original["parent"]))
+                throw new InvalidDataException("A dynamic daytime replacement must preserve its source parent.");
+            replacement["id"] = original["id"]!.DeepClone();
+            replacement["name"] = original["name"]!.DeepClone();
+            replacement["visible"] = original["visible"]?.DeepClone() ?? JsonValue.Create(true);
+        }
+    }
+
+    /// <summary>
+    /// 最小动态装配：每组只替换一个受控叶子视频，原 ID/名称/父级和其余原对象全部保留。
+    /// 控制脚本无需改写，未替换时段（包括手动第五项）继续使用源视频；不接受互斥图层混组。
+    /// </summary>
+    internal static DynamicExport? PrepareDynamicExport(IReadOnlyDictionary<int, JsonObject> objects, JsonObject plan, JsonArray dependencies)
+    {
+        if (plan["settings"]?["daytime_state"] is not JsonValue selected || !selected.TryGetValue<string>(out string? stateName) || stateName is null ||
+            plan["daytime_split"]?["controls_video_playback"]?.GetValue<bool>() != true) return null;
+        Detection detection = Detect(objects, dependencies, plan["snapshot_properties"] as JsonObject);
+        if (!detection.IsRecognized || !detection.ControlsVideoPlayback || detection.Selection is null ||
+            detection.StateNamed(stateName) is not State state || state.VisibleLayerIds.Length != 1)
+            throw new InvalidDataException("Dynamic daytime export requires one unambiguous selected video in a fully recognized selector.");
+        if ((plan["excluded_layer_ids"] as JsonArray)?.Count > 0 || (plan["omitted_snapshot_layer_ids"] as JsonArray)?.Count > 0 ||
+            plan["occlusion_tradeoff"]?["status"]?.GetValue<string>() == "applied")
+            throw new InvalidDataException("Dynamic daytime export cannot restore omitted layers or change the original draw order.");
+        var targets = new Dictionary<string, int>(StringComparer.Ordinal);
+        var seen = new HashSet<int>();
+        foreach (JsonObject group in (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            int[] ids = (group["layer_ids"] as JsonArray ?? []).Select(node => node!.GetValue<int>()).ToArray();
+            if (ids.Length != 1 || !state.VisibleLayerIds.Contains(ids[0]) || !seen.Add(ids[0]))
+                throw new InvalidDataException("Dynamic daytime export requires one selected controlled source per video group; mixed or repeated groups are not supported.");
+            int target = ids[0];
+            if (!objects.TryGetValue(target, out JsonObject? original) || original["image"] is null ||
+                objects.Values.Any(obj => HybridScenePlanner.Int(obj["parent"]) == target) ||
+                HybridScenePlanner.Int(group["parent_id"]) != HybridScenePlanner.Int(original["parent"]))
+                throw new InvalidDataException("Dynamic daytime export requires a leaf image layer with its original parent.");
+            if (SceneAnalyzer.Walk(original).OfType<JsonObject>().Any(node => node.ContainsKey("script") ||
+                !ReferenceEquals(node, original["visible"]) && PlanNarrative.BoundProperty(node) is { } property &&
+                detection.Selection.PropertyKeys.Contains(property.Name, StringComparer.Ordinal)))
+                throw new InvalidDataException("The replacement's drawing or scripts also depend on the preserved daytime controls.");
+            foreach (JsonObject dependency in dependencies.OfType<JsonObject>().Where(dependency => HybridScenePlanner.Int(dependency["target"]) == target &&
+                dependency["operation"]?.GetValue<string>() is "read" or "write"))
+            {
+                string? operation = dependency["operation"]?.GetValue<string>(), property = dependency["property"]?.GetValue<string>();
+                bool selectorAccess = HybridScenePlanner.Int(dependency["owner"]) == detection.ControllerId &&
+                    dependency["binding"]?.GetValue<string>() == "visible" &&
+                    (operation == "read" && property == "videoTexture" || operation == "write" && property == "visible");
+                bool captureInitialization = HybridScenePlanner.Int(dependency["owner"]) == target &&
+                    dependency["initialization"]?.GetValue<bool>() == true && operation == "read" && property == "videoTexture";
+                if (!selectorAccess && !captureInitialization)
+                    throw new InvalidDataException("Another script accesses the daytime replacement's source fields or resources.");
+            }
+            targets.Add(group["id"]!.GetValue<string>(), target);
+        }
+        if (targets.Count == 0) throw new InvalidDataException("Dynamic daytime export has no mapped video replacement.");
+        return new DynamicExport(detection, state, targets);
+    }
+
+    internal static JsonArray AssembleDynamic(IReadOnlyDictionary<int, JsonObject> originals, DynamicExport export,
+        IReadOnlyDictionary<string, JsonObject> replacements)
+    {
+        if (replacements.Count != export.ReplacementTargets.Count || export.ReplacementTargets.Keys.Any(key => !replacements.ContainsKey(key)))
+            throw new InvalidDataException("The dynamic daytime replacement map is incomplete.");
+        var bySource = export.ReplacementTargets.ToDictionary(pair => pair.Value, pair => replacements[pair.Key]);
+        var result = new JsonArray();
+        foreach (var (id, original) in originals)
+        {
+            JsonObject obj = bySource.TryGetValue(id, out JsonObject? replacement) ? replacement.DeepClone().AsObject() : original.DeepClone().AsObject();
+            if (replacement is not null)
+            {
+                if (obj["id"]?.GetValue<int>() != id || obj["name"]?.GetValue<string>() != original["name"]?.GetValue<string>() ||
+                    HybridScenePlanner.Int(obj["parent"]) != HybridScenePlanner.Int(original["parent"]))
+                    throw new InvalidDataException("The daytime replacement lost its source identity or parent.");
+                obj["visible"] = original["visible"]?.DeepClone() ?? JsonValue.Create(true);
+            }
+            result.Add(obj);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 视频解码器只为实际激活的层提供完整元数据。可静态证明的新模板先在观测副本上选择状态，
+    /// 旧模板或需要运行时消歧的同名层返回 null，继续原有观测路径，不猜目标也不增加探测次数。
+    /// </summary>
+    internal static JsonObject? PrepareVideoObservation(JsonObject scene, JsonObject properties, string stateName)
+    {
+        Detection detection = Detect(scene["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(obj => obj["id"]!.GetValue<int>()),
+            properties: properties);
+        if (!detection.IsRecognized || !detection.ControlsVideoPlayback || detection.StateNamed(stateName) is not State state) return null;
+        JsonObject copy = scene.DeepClone().AsObject();
+        HybridScenePlanner.FreezeTemporalProperties(copy, properties);
+        ApplyState(copy, detection, state);
+        return copy;
     }
 
     /// <summary>
     /// 录制副本按状态冻结：plan 带 daytime_state 时，选择器的 visible 绑定去掉脚本（录制时不再按真实时钟切层），
-    /// 该状态的受控层 visible 写死为 true；其余受控层已由 omitted 机制从录制副本删除。只动录制副本，成品工程另从源解包，原脚本保留。
+    /// 受控层 visible 按状态固定；视频模板保留仅启动/暂停当前图层的一次性初始化。
+    /// 只动录制副本；成品工程仍需单独处理源控制器与生成视频之间的播放控制关系。
     /// </summary>
-    internal static void ApplyState(JsonObject scene, JsonObject plan)
+    internal static void ApplyState(JsonObject scene, JsonObject plan, bool forAnalysis = false)
     {
         if (plan["settings"]?["daytime_state"] is not JsonValue stateValue || !stateValue.TryGetValue<string>(out string? stateName)) return;
         if (plan["daytime_split"] is not JsonObject split || split["status"]?.GetValue<string>() != Recognized) return;
         int controller = split["controller_layer_id"]!.GetValue<int>();
+        var controlled = (split["controlled_layer_ids"] as JsonArray ?? []).Select(node => node!.GetValue<int>()).ToHashSet();
+        bool playback = split["controls_video_playback"]?.GetValue<bool>() == true;
         var visible = (split["states"] as JsonArray ?? []).OfType<JsonObject>().FirstOrDefault(s => s["name"]?.GetValue<string>() == stateName)
             ?["visible_layer_ids"]?.AsArray().Select(n => n!.GetValue<int>()).ToHashSet()
             ?? throw new InvalidDataException("The plan's daytime state is not listed in its daytime_split section.");
+        ApplyState(scene, controller, controlled, visible, playback && !forAnalysis);
+    }
+
+    internal static void ApplyState(JsonObject scene, Detection? detection, State? state, bool forAnalysis = false)
+    {
+        if (detection?.IsRecognized != true || state is null) return;
+        ApplyState(scene, detection.ControllerId!.Value, detection.ControlledLayerIds.ToHashSet(), state.VisibleLayerIds.ToHashSet(),
+            detection.ControlsVideoPlayback && !forAnalysis);
+    }
+
+    private static void ApplyState(JsonObject scene, int controller, HashSet<int> controlled, HashSet<int> visible, bool playback)
+    {
+        // 分析视图不需要仅为启动捕获而生成的 init play/pause；保留它会被通用视频控制判据误当成动态控制。
+        // 源里其他播放脚本和运行时控制证据不变，仍由既有判据处理。
         foreach (JsonObject obj in scene["objects"]!.AsArray().OfType<JsonObject>())
         {
             int id = obj["id"]!.GetValue<int>();
             if (id == controller && obj["visible"] is JsonObject binding) binding.Remove("script");
-            if (visible.Contains(id)) obj["visible"] = true;
+            if (!controlled.Contains(id)) continue;
+            bool selected = visible.Contains(id);
+            obj["visible"] = playback ? new JsonObject {
+                ["value"] = selected,
+                ["script"] = "export function init() { thisLayer.getVideoTexture()." + (selected ? "play" : "pause") + "(); }"
+            } : JsonValue.Create(selected);
         }
     }
 

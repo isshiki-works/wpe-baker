@@ -226,9 +226,9 @@ internal static class PlainLanguageChecks
         subject["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.no_input_independent_group" });
         TradeoffOptions.Attach(subject);
         check(PlainLanguage.Verdict(subject, false) == "无法生成" && PlainLanguage.NextAction(subject, false) == "原因见\"详情\"" &&
-            PlainLanguage.Basis(subject, false).Contains("禁用后无剩余内容") &&
+            PlainLanguage.Basis(subject, false).Contains("结果尚未确认") &&
             !PlainLanguage.HasTurnOffCard(subject) && PlainLanguage.TurnOffItems(subject, false).Length == 0,
-            "plain language: a wallpaper that is its own live effect is refused with one sentence and no card");
+            "plain language: dependency blockage does not claim that disabling effects leaves no content");
 
         // 3D 镜头。
         var camera = Plan(Layer(10, null, "底", live: false, []));
@@ -248,20 +248,37 @@ internal static class PlainLanguageChecks
             PlainLanguage.Basis(noLoop, true).Contains("no loop period") && PlainLanguage.Verdict(noLoop, false) == "无法生成",
             "tool register: a missing loop period is named in the details");
 
-        // 原作本来就不费电：只有实测过才说这句。
+        // Old source-only power verdicts remain readable without inheriting their unsupported benefit inference.
         var cheap = Plan(Layer(10, null, "底", live: false, []));
         cheap["settings"]!["video_layout"] = "full_frame";
         TradeoffOptions.Attach(cheap);
         cheap["source_power"] = new JsonObject { ["verdict"] = new JsonObject {
             ["status"] = "measured", ["worth_baking"] = false } };
-        check(PlainLanguage.Verdict(cheap, false) == "可以生成，但不会省电" &&
-            PlainLanguage.Verdict(cheap, true) == "Ready to generate, but it will not save power" &&
-            PlainLanguage.Basis(cheap, false).Contains("低于 1 W"),
-            "tool register: a measured cheap original keeps the reading in the details and the state plain");
+        check(PlainLanguage.Verdict(cheap, false) == "可以生成" &&
+            PlainLanguage.Verdict(cheap, true) == "Ready to generate" &&
+            PlainLanguage.Basis(cheap, false).Contains("仅代表本机"),
+            "source-only power in older reports does not predict a lack of savings");
         cheap["source_power"] = new JsonObject { ["verdict"] = new JsonObject {
             ["status"] = "not_measured", ["worth_baking"] = null } };
         check(PlainLanguage.Verdict(cheap, false) == "可以生成",
             "plain language: without a measurement nothing is claimed about power");
+        cheap.Remove("source_power");
+        cheap["summary"]!["key"] = "summary.bakeable_static";
+        check(PlainLanguage.Verdict(cheap, false) == "可以生成" && PlainLanguage.Basis(cheap, false).Contains("尚待确认"),
+            "an older static result is not automatically described as having no savings");
+        foreach (var (status, zh, en) in new[] {
+            ("potential_gain", "可以生成，有潜在收益", "Ready to generate, potential benefit"),
+            ("low_value", "可以生成，预计收益较低", "Ready to generate, low expected benefit"),
+            ("unknown", "可以生成，收益待确认", "Ready to generate, benefit unconfirmed") })
+        {
+            cheap[BakeValueAssessment.Field] = new JsonObject { ["status"] = status, ["reason_zh"] = "已有元数据依据。", ["reason_en"] = "Recorded metadata evidence." };
+            check(PlainLanguage.Verdict(cheap, false) == zh && PlainLanguage.Verdict(cheap, true) == en &&
+                PlainLanguage.Basis(cheap, true) == "Recorded metadata evidence.",
+                "benefit assessment is displayed independently of static output: " + status);
+        }
+        cheap["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.loop_unresolved" });
+        check(PlainLanguage.Verdict(cheap, false) == "无法生成" && PlainLanguage.Basis(cheap, false).Contains("未找到循环周期"),
+            "a failed plan keeps its actual failure reason rather than becoming a low-value verdict");
     }
 
     private static void NumberLine(Action<bool, string> check)

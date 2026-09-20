@@ -40,6 +40,8 @@ param(
     [string]$StatusPath,
     # 系统可用内存下限（GB），低于此值立刻终止。
     [double]$MinimumFreeMemoryGB = 4,
+    # 允许正常分页：物理余量低时，只有剩余提交空间也低于同一下限才终止。
+    [switch]$AllowPaging,
     # 目标盘剩余空间下限（GB），低于此值立刻终止。
     [double]$MinimumFreeDiskGB = 100,
     # 要盯的磁盘，默认盯工作目录所在盘。
@@ -94,6 +96,14 @@ $errLogPath = $outLogPath + '.err.log'
 # 系统可用物理内存（字节）。用 CIM 而不是性能计数器：计数器名在中文系统上是本地化的。
 function Get-FreeMemoryBytes {
     [double](Get-CimInstance Win32_OperatingSystem -Property FreePhysicalMemory).FreePhysicalMemory * 1KB
+}
+
+function Get-FreeCommitBytes {
+    $memoryCounters = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -Property CommitLimit, CommittedBytes
+    if ($null -eq $memoryCounters.CommitLimit -or $null -eq $memoryCounters.CommittedBytes -or $memoryCounters.CommitLimit -le 0) {
+        throw '系统未返回有效的内存提交计数'
+    }
+    [math]::Max([double]0, [double]$memoryCounters.CommitLimit - [double]$memoryCounters.CommittedBytes)
 }
 
 function Get-FreeDiskBytes {
@@ -226,6 +236,7 @@ $status = @{
     working_directory       = $workingDirectory
     disk_root               = $diskRoot
     minimum_free_memory_gb  = $MinimumFreeMemoryGB
+    allow_paging            = $AllowPaging.IsPresent
     minimum_free_disk_gb    = $MinimumFreeDiskGB
     poll_seconds            = $PollSeconds
     timeout_minutes         = $TimeoutMinutes
@@ -268,6 +279,7 @@ $peakTreeWorkingSet = [double]0
 $pumps = @()
 # 采样失败时沿用上一次的值，所以这三个要先有初值。
 $freeMemory = $startFreeMemory
+$freeCommit = $null
 $freeDisk = $startFreeDisk
 $tree = [double]0
 $consecutiveSampleFailures = 0
@@ -290,7 +302,13 @@ try {
         # 沿用上一次的值继续盯，只累计连续失败次数；连续 $MaximumSampleFailures 次拿不到数，
         # 说明保护已经失效，按终止条件处理（抛给外层 catch，那里会杀掉整棵进程树）。
         $sampleFailure = $null
-        try { $freeMemory = Get-FreeMemoryBytes }
+        try {
+            $freeMemory = Get-FreeMemoryBytes
+            # 正常情况下不追加计数器查询；只有物理内存低时才判断分页余量。
+            if ($AllowPaging -and $freeMemory -lt $minimumMemoryBytes) { $freeCommit = Get-FreeCommitBytes }
+            else { $freeCommit = $null }
+            $status['free_commit_gb_now'] = if ($null -ne $freeCommit) { [math]::Round($freeCommit / 1GB, 2) } else { $null }
+        }
         catch { $sampleFailure = "可用内存采样失败：$($_.Exception.Message)" }
         try { $freeDisk = Get-FreeDiskBytes }
         catch { $sampleFailure = "$diskRoot 剩余空间采样失败：$($_.Exception.Message)" }
@@ -315,8 +333,10 @@ try {
         if ($freeMemory -lt $minimumFreeMemorySeen) { $minimumFreeMemorySeen = $freeMemory }
         if ($freeDisk -lt $minimumFreeDiskSeen) { $minimumFreeDiskSeen = $freeDisk }
         if ($tree -gt $peakTreeWorkingSet) { $peakTreeWorkingSet = $tree }
-        if ($freeMemory -lt $minimumMemoryBytes) {
-            $terminated = "系统可用内存降到 $([math]::Round($freeMemory / 1GB, 2)) GB，低于下限 $MinimumFreeMemoryGB GB"
+        if ($freeMemory -lt $minimumMemoryBytes -and
+            (-not $AllowPaging -or ($null -ne $freeCommit -and $freeCommit -lt $minimumMemoryBytes))) {
+            $terminated = "系统可用物理内存降到 $([math]::Round($freeMemory / 1GB, 2)) GB，低于下限 $MinimumFreeMemoryGB GB"
+            if ($AllowPaging) { $terminated += "，可用提交空间也仅剩 $([math]::Round($freeCommit / 1GB, 2)) GB" }
         }
         elseif ($freeDisk -lt $minimumDiskBytes) {
             $terminated = "$diskRoot 剩余空间降到 $([math]::Round($freeDisk / 1GB, 2)) GB，低于下限 $MinimumFreeDiskGB GB"

@@ -31,17 +31,15 @@ internal static class PlainLanguage
     {
         if (plan is null) return "";
         if (CannotBakeReason(plan, english) is not null) return L(english, "无法生成", "Cannot generate");
-        // 实测判为"原作本来功耗就低"时，整幅预渲染也换不回功耗，状态直接说明这一点。
-        if (SourcePowerVerdict.Classify(plan) == SourcePowerVerdict.NotWorth || SourceNotWorthBaking(plan))
-            return L(english, "可以生成，但不会省电", "Ready to generate, but it will not save power");
         if (HasTurnOffCard(plan))
         {
             string count = TurnOffCount(plan).ToString(CultureInfo.InvariantCulture);
             return L(english, $"可以生成（需先禁用 {count} 项）", $"Ready to generate ({count} items to disable first)");
         }
-        string? measured = SourcePowerVerdict.Classify(plan);
-        if (measured is SourcePowerVerdict.Limited or SourcePowerVerdict.RouteLimited || StaticResult(plan))
-            return L(english, "可以生成，但不会省电", "Ready to generate, but it will not save power");
+        string? value = plan[BakeValueAssessment.Field]?["status"]?.GetValue<string>();
+        if (value == "potential_gain") return L(english, "可以生成，有潜在收益", "Ready to generate, potential benefit");
+        if (value == "low_value") return L(english, "可以生成，预计收益较低", "Ready to generate, low expected benefit");
+        if (value == "unknown") return L(english, "可以生成，收益待确认", "Ready to generate, benefit unconfirmed");
         return L(english, "可以生成", "Ready to generate");
     }
 
@@ -71,29 +69,17 @@ internal static class PlainLanguage
     public static string Basis(JsonObject? plan, bool english)
     {
         if (plan is null) return "";
-        // 原作功耗实测（分析前测原作写进 plan 的 source_power）说它本来就不费电时，直接劝退。
-        string? power = SourcePowerVerdict.Classify(plan);
-        if (power == SourcePowerVerdict.NotWorth || SourceNotWorthBaking(plan))
-            return L(english, "不建议生成：原作核显功耗低于 1 W，预渲染无功耗收益。", "Not recommended: original iGPU power under 1 W; no saving from pre-rendering.");
         if (CannotBakeReason(plan, english) is string reason)
             return L(english, "不可生成：", "Cannot generate: ") + reason;
-        // 实测过、原作确实费电时，第一行按实测分三档说；没测过一律沿用原来的两句。
-        if (power == SourcePowerVerdict.Limited)
-            return L(english, "可生成，功耗收益有限：原作核显功耗低于 3 W。",
-                "Ready, limited saving: original iGPU power below 3 W.");
-        if (power == SourcePowerVerdict.RouteLimited)
-            return HasTurnOffCard(plan)
-                ? L(english, "可生成，当前方案功耗收益有限；禁用取舍方案中的项目后可整幅预渲染。",
-                    "Ready, limited saving on the current route; disabling the tradeoff items enables full-frame pre-rendering.")
-                : L(english, "可生成，当前方案功耗收益有限：仅部分图层进入视频图层。",
-                    "Ready, limited saving on the current route: only part of the frame becomes a video layer.");
-        // 保留实时那条路只烘出一张静态图时，先说它不省电，并把"拆成几层做"摆在前面。
+        if (plan[BakeValueAssessment.Field]?[english ? "reason_en" : "reason_zh"]?.GetValue<string>() is { Length: > 0 } valueReason)
+            return valueReason;
+        // 旧报告只有原作读数或静态状态时，保留其事实，不沿用旧的收益推断。
+        if (plan[SourcePowerVerdict.Field] is JsonObject)
+            return L(english, "原作功耗仅代表本机读数；实际收益需对照原作与生成结果。",
+                "Source power describes this device only; actual benefit requires comparing the source and generated result.");
         if (StaticResult(plan))
-            return L(english, "当前方案仅输出静态纹理，无功耗收益；改用分层预渲染。",
-                "Current route yields a static texture only, with no power saving; use layered pre-rendering instead.");
-        if (power == SourcePowerVerdict.Worth && !HasTurnOffCard(plan))
-            return L(english, "可生成。原作核显功耗高于 3 W，整幅预渲染可移除该负载。",
-                "Ready. Original iGPU power above 3 W; full-frame pre-rendering removes that load.");
+            return L(english, "当前方案输出静态图；收益取决于省去的特效计算、绘制和纹理开销，尚待确认。",
+                "The output is a still image; benefit depends on removed effects, drawing and texture costs and remains unconfirmed.");
         return HasTurnOffCard(plan)
             ? L(english, "可生成，需先禁用取舍方案中的项目。", "Ready after disabling the tradeoff items.")
             : L(english, "可生成。", "Ready.");
@@ -103,12 +89,6 @@ internal static class PlainLanguage
     private static bool StaticResult(JsonObject plan) =>
         plan["summary"]?["key"]?.GetValue<string>()?.StartsWith("summary.bakeable_static", StringComparison.Ordinal) == true;
 
-    /// <summary>原作功耗实测判定：只有实测过并判为"不值得"时才算数，没测过一律不显示这句。</summary>
-    private static bool SourceNotWorthBaking(JsonObject plan) =>
-        plan["source_power"]?["verdict"] is JsonObject verdict &&
-        verdict["status"]?.GetValue<string>() == "measured" &&
-        verdict["worth_baking"] is JsonValue worth && worth.TryGetValue(out bool value) && !value;
-
     /// <summary>
     /// 烘不了时那一句人话原因；能烘（含"关掉几样就能烘"）时返回 null。
     /// 判据全部来自 plan 已有的字段：取舍清单的 subject_only、suitability 的 rule、阻塞原因的 key、有没有循环。
@@ -116,6 +96,9 @@ internal static class PlainLanguage
     private static string? CannotBakeReason(JsonObject plan, bool english)
     {
         string tradeoff = plan[TradeoffOptions.Field]?["status"]?.GetValue<string>() ?? "";
+        if (tradeoff == "dependency_blocked")
+            return L(english, "当前方案还无法生成视频，关闭相关效果后的结果尚未确认。",
+                "a video cannot be generated yet; the result of disabling related effects is unverified.");
         // 主体类：整张画面就是那个实时效果画出来的，关掉就没有内容了。
         if (tradeoff == "subject_only")
             return L(english, "全部可见内容由实时效果生成，禁用后无剩余内容。",
@@ -132,8 +115,8 @@ internal static class PlainLanguage
             return L(english, "全部图层受鼠标、时钟或脚本驱动。",
                 "every layer is driven by the mouse, the clock or a script.");
         if (rule == "no_temporal_mechanism_in_video")
-            return L(english, "场景为静态画面，预渲染无功耗收益。",
-                "the scene never moves; pre-rendering gives no power saving.");
+            return L(english, "本次分析未找到动态内容；静态内容的优化收益尚未确认。",
+                "this analysis found no dynamic content; the benefit of optimizing still content is unconfirmed.");
         // 还有取舍方案可选时不算烘不了：第一行会说"关掉几样就能烘"。
         if (HasTurnOffCard(plan)) return null;
         if (rule == "fixed_period_exceeds_loop_ceiling" || keys.Any(key => key.StartsWith("blocker.loop", StringComparison.Ordinal)))
@@ -153,11 +136,10 @@ internal static class PlainLanguage
         (plan["effect_prefix_caches"] as JsonArray)?.Count > 0;
 
     /// <summary>
-    /// 取舍卡片要不要顶到结论正下方并默认展开：实测说原作费电、但当前这条做法省不下来时才顶，
-    /// 因为这时"关掉哪几样就能整张录成视频"才是用户真正要做的下一步。
+    /// 不根据原作功耗阈值改变取舍卡片的优先级。
     /// </summary>
     public static bool TradeoffFirst(JsonObject? plan) =>
-        plan is not null && HasTurnOffCard(plan) && SourcePowerVerdict.Classify(plan) == SourcePowerVerdict.RouteLimited;
+        false;
 
     /// <summary>有没有可勾的取舍卡片：只有"关掉几样就能整张录成视频"的清单才出卡片，主体类不出。</summary>
     public static bool HasTurnOffCard(JsonObject? plan) =>

@@ -16,24 +16,85 @@ public static class PresetCascade
         "--retain-live" or "--daytime-split" or "--trace");
     internal static bool Bakeable(JsonObject plan) =>
         plan["summary"]?["key"]?.GetValue<string>()?.StartsWith("summary.bakeable", StringComparison.Ordinal) == true;
-    internal static int GroupCount(JsonObject plan) => plan["route"]?.GetValue<string>() == "effect_prefix"
-        ? (plan["effect_prefix_caches"] as JsonArray)?.Count ?? 0 : (plan["video_groups"] as JsonArray)?.Count ?? 0;
+    public static int GroupCount(JsonObject plan) => plan["route"]?.GetValue<string>() == "effect_prefix"
+        ? (plan["effect_prefix_caches"] as JsonArray)?.Count ?? 0
+        : (plan["video_groups"] as JsonArray)?.OfType<JsonObject>().Count(group =>
+            !StaticVerified(group)) ?? 0;
+    public static int StaticGroupCount(JsonObject plan) => plan["route"]?.GetValue<string>() == "whole_layer"
+        ? (plan["video_groups"] as JsonArray)?.OfType<JsonObject>().Count(group =>
+            StaticVerified(group)) ?? 0 : 0;
+    private static bool StaticVerified(JsonObject group) => group["static_verified"]?.GetValue<bool>() == true &&
+        group["static_verification"]?["basis"]?.GetValue<string>() == "source_and_runtime_static_proof";
     internal static bool Accepted(JsonObject plan) => Bakeable(plan) && GroupCount(plan) <= MaxVideoGroups;
 
     internal static async Task<JsonObject> AdoptAllocationAsync(JsonObject plan, CancellationToken token)
     {
+        await VerifyStaticGroupBudgetAsync(plan, token);
         ApplyBakeAdmission(plan);
         if (Accepted(plan) || plan["loop_allocation_fallback"]?["status"]?.GetValue<string>() != "candidate_found" ||
             plan["analysis_directory"]?.GetValue<string>() is not string directory) return plan;
         string path = Path.Combine(directory, "loop-allocation-analysis", "plan.json");
         if (!File.Exists(path)) return plan;
         JsonObject child = JsonNode.Parse(await File.ReadAllTextAsync(path, token))!.AsObject();
+        await VerifyStaticGroupBudgetAsync(child, token);
         ApplyBakeAdmission(child);
         if (!Accepted(child) || !JsonNode.DeepEquals(child["source_sha256"], plan["source_sha256"])) return plan;
         child["allocation_adopted"] = new JsonObject { ["plan_path"] = path,
             ["retain_live_root_ids"] = child["settings"]?["retain_live_root_ids"]?.DeepClone(),
             ["basis"] = plan["loop_allocation_fallback"]?["resolution_basis"]?.DeepClone() };
         return child;
+    }
+
+    /// <summary>Only over-budget whole-layer plans receive this CPU-only source/runtime proof.  It is an admission estimate;
+    /// baking still captures the complete interval and rejects a claimed static group that changes.</summary>
+    private static async Task VerifyStaticGroupBudgetAsync(JsonObject plan, CancellationToken token)
+    {
+        if (!Bakeable(plan) || plan["route"]?.GetValue<string>() != "whole_layer" ||
+            plan["video_groups"] is not JsonArray { Count: > MaxVideoGroups } groups ||
+            plan["source"]?.GetValue<string>() is not string sourcePath ||
+            plan["runtime_evidence"]?.GetValue<string>() is not string runtimePath || !File.Exists(runtimePath)) return;
+        string sourceKey = plan["source_sha256"]?.GetValue<string>() ?? sourcePath;
+        if (plan["static_group_budget"] is JsonObject prior &&
+            prior["source"]?.GetValue<string>() == sourceKey && prior["runtime_evidence"]?.GetValue<string>() == runtimePath &&
+            prior["status"]?.GetValue<string>() == "verified") return;
+        foreach (JsonObject group in groups.OfType<JsonObject>())
+        {
+            group["static_verified"] = false;
+            group.Remove("static_verification");
+        }
+        try
+        {
+            JsonObject runtime = JsonNode.Parse(await File.ReadAllTextAsync(runtimePath, token))!.AsObject();
+            JsonObject settings = plan["settings"]?.AsObject() ?? new JsonObject();
+            uint fpsNumerator = settings["fps_numerator"]?.GetValue<uint>() ?? 120;
+            uint fpsDenominator = settings["fps_denominator"]?.GetValue<uint>() ?? 1;
+            string? assets = plan["assets"]?.GetValue<string>() ?? settings["assets"]?.GetValue<string>();
+            using var source = new ProjectSource(sourcePath);
+            JsonObject scene = source.ReadJson(source.SceneResource);
+            foreach (JsonObject group in groups.OfType<JsonObject>())
+            {
+                int[] layers = (group["layer_ids"] as JsonArray)?.Select(node => node!.GetValue<int>()).ToArray() ?? [];
+                if (layers.Length == 0) continue;
+                JsonObject proof = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, assets, runtime, layers,
+                    fpsNumerator, fpsDenominator);
+                if (proof["source_static"]?.GetValue<bool>() != true) continue;
+                group["static_verified"] = true;
+                group["static_verification"] = new JsonObject { ["basis"] = "source_and_runtime_static_proof",
+                    ["runtime_evidence"] = runtimePath, ["source"] = sourceKey };
+            }
+            plan["static_group_budget"] = new JsonObject { ["status"] = "verified", ["basis"] = "source_and_runtime_static_proof",
+                ["source"] = sourceKey, ["runtime_evidence"] = runtimePath };
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            foreach (JsonObject group in groups.OfType<JsonObject>())
+            {
+                group["static_verified"] = false;
+                group.Remove("static_verification");
+            }
+            plan["static_group_budget"] = new JsonObject { ["status"] = "unavailable", ["basis"] = "source_and_runtime_static_proof",
+                ["source"] = sourceKey, ["runtime_evidence"] = runtimePath, ["reason"] = error.Message };
+        }
     }
 
     private static void ApplyBakeAdmission(JsonObject plan)
