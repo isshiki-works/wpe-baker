@@ -941,7 +941,8 @@ TextureCache::CreateVideoTex(const Image&                                image,
     }
     runtime.decoder = rstd::Some(std::move(dec_r).unwrap());
     if (runtime.playback.is_some()) {
-        (*runtime.playback)->PublishTime(f64(), (*runtime.decoder)->duration());
+        (*runtime.playback)->PublishTime((*runtime.playback)->CurrentTime(),
+                                         (*runtime.decoder)->duration());
     }
     rstd_info("CreateVideoTex: {} hwdec={} decoder kind={}",
               image.key,
@@ -1044,20 +1045,25 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
             return;
         }
         const double now = active_offline_execution->elapsed;
-        auto control = s.playback.is_some() ? (*s.playback)->Snapshot() : VideoPlaybackSnapshot {};
         const bool first = !s.offline_clock_initialized;
+        auto control = s.playback.is_some() ? (*s.playback)->Snapshot() : VideoPlaybackSnapshot {};
         const bool seek_changed = control.seek_sequence != s.applied_seek_sequence;
-        double media_time = first ? control.seek_seconds.to_primitive() :
-            s.offline_anchor_media + (s.offline_control.playing ?
-                (now - s.offline_anchor_scene) * s.offline_control.rate.to_primitive() : 0.0);
-        if (seek_changed) media_time = control.seek_seconds.to_primitive();
-        if (first || seek_changed || control.playing != s.offline_control.playing ||
-            control.rate != s.offline_control.rate) {
-            s.offline_anchor_scene = now;
-            s.offline_anchor_media = media_time;
+        double media_time;
+        if (s.playback.is_some()) {
+            media_time = (*s.playback)->AdvanceOffline(f64(now)).to_primitive();
+        } else {
+            media_time = first ? control.seek_seconds.to_primitive() :
+                s.offline_anchor_media + (s.offline_control.playing ?
+                    (now - s.offline_anchor_scene) * s.offline_control.rate.to_primitive() : 0.0);
+            if (seek_changed) media_time = control.seek_seconds.to_primitive();
+            if (first || seek_changed || control.playing != s.offline_control.playing ||
+                control.rate != s.offline_control.rate) {
+                s.offline_anchor_scene = now;
+                s.offline_anchor_media = media_time;
+            }
+            s.offline_control = control;
         }
         s.offline_clock_initialized = true;
-        s.offline_control = control;
         s.applied_seek_sequence = control.seek_sequence;
         const auto duration = (*s.decoder)->duration();
         if (duration.is_none() || !duration->is_finite() || *duration <= f64() ||

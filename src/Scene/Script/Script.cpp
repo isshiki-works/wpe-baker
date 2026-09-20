@@ -3539,7 +3539,11 @@ JSValue VideoTextureSetRate(JSContext* ctx, JSValueConst this_val, JSValueConst 
     if (JS_ToFloat64(ctx, &rate, value) != 0) return JS_UNDEFINED;
     auto parsed_rate = f64(rate);
     if (parsed_rate.is_finite() && parsed_rate > f64()) {
-        if (auto* playback = GetVideoPlayback(this_val)) playback->SetRate(parsed_rate);
+        if (auto* playback = GetVideoPlayback(this_val)) {
+            if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+            playback->SetRate(parsed_rate);
+            if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        }
     }
     return JS_UNDEFINED;
 }
@@ -3548,17 +3552,29 @@ JSValue VideoTextureGetVolume(JSContext* ctx, JSValueConst) { return JS_NewFloat
 JSValue VideoTextureSetVolume(JSContext*, JSValueConst, JSValueConst) { return JS_UNDEFINED; }
 
 JSValue VideoTexturePlay(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    if (auto* playback = GetVideoPlayback(this_val)) playback->Play();
+    if (auto* playback = GetVideoPlayback(this_val)) {
+        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        playback->Play();
+        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+    }
     return JS_UNDEFINED;
 }
 
 JSValue VideoTextureStop(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    if (auto* playback = GetVideoPlayback(this_val)) playback->Stop();
+    if (auto* playback = GetVideoPlayback(this_val)) {
+        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        playback->Stop();
+        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+    }
     return JS_UNDEFINED;
 }
 
 JSValue VideoTexturePause(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    if (auto* playback = GetVideoPlayback(this_val)) playback->Pause();
+    if (auto* playback = GetVideoPlayback(this_val)) {
+        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        playback->Pause();
+        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+    }
     return JS_UNDEFINED;
 }
 
@@ -3569,13 +3585,26 @@ JSValue VideoTextureSetCurrentTime(JSContext* ctx, JSValueConst this_val, int ar
     if (JS_ToFloat64(ctx, &seconds, argv[0]) != 0) return JS_UNDEFINED;
     auto parsed_seconds = f64(seconds);
     if (parsed_seconds.is_finite() && parsed_seconds >= f64()) {
-        if (auto* playback = GetVideoPlayback(this_val)) playback->Seek(parsed_seconds);
+        if (auto* playback = GetVideoPlayback(this_val)) {
+            if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+            playback->Seek(parsed_seconds);
+            if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        }
     }
     return JS_UNDEFINED;
 }
 
 JSValue VideoTextureGetCurrentTime(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* playback = GetVideoPlayback(this_val);
+    if (playback != nullptr && active_offline_execution != nullptr) {
+        // Hidden textures have no decoder Pump. The script-visible clock still
+        // advances, while its published value is a phase within the video loop.
+        double current = playback->AdvanceOffline(f64(active_offline_execution->elapsed)).to_primitive();
+        auto duration = playback->Duration();
+        if (duration.is_some() && duration->is_finite() && *duration > f64())
+            current = std::fmod(current, duration->to_primitive());
+        return JS_NewFloat64(ctx, current);
+    }
     return JS_NewFloat64(ctx, playback != nullptr ? playback->CurrentTime().to_primitive() : 0.0);
 }
 

@@ -239,6 +239,25 @@ public:
         m_duration.store(duration.unwrap_or(rstd::f64(-1.0)),
                          rstd::sync::atomic::Ordering::Release);
     }
+    auto AdvanceOffline(rstd::f64 scene_time) -> rstd::f64 {
+        const auto control = Snapshot();
+        const bool first = !m_offline_clock_initialized;
+        const bool seek_changed = control.seek_sequence != m_offline_seek_sequence;
+        auto current = first ? control.seek_seconds :
+            m_offline_anchor_media + (m_offline_control.playing ?
+                (scene_time - m_offline_anchor_scene) * m_offline_control.rate : rstd::f64());
+        if (seek_changed) current = control.seek_seconds;
+        if (first || seek_changed || control.playing != m_offline_control.playing ||
+            control.rate != m_offline_control.rate) {
+            m_offline_anchor_scene = scene_time;
+            m_offline_anchor_media = current;
+        }
+        m_offline_clock_initialized = true;
+        m_offline_control = control;
+        m_offline_seek_sequence = control.seek_sequence;
+        m_current_time.store(current, rstd::sync::atomic::Ordering::Release);
+        return current;
+    }
     bool BeginDurationProbe() {
         return ! m_duration_probe_attempted.exchange(true, rstd::sync::atomic::Ordering::AcqRel);
     }
@@ -304,6 +323,11 @@ private:
     rstd::sync::atomic::Atomic<rstd::i32> m_time_base_num {};
     rstd::sync::atomic::Atomic<rstd::i32> m_time_base_den {};
     rstd::sync::atomic::Atomic<rstd::u64> m_frame_count {};
+    bool                    m_offline_clock_initialized { false };
+    rstd::f64               m_offline_anchor_scene {};
+    rstd::f64               m_offline_anchor_media {};
+    VideoPlaybackSnapshot   m_offline_control;
+    rstd::u64               m_offline_seek_sequence {};
 };
 
 enum class VertexType

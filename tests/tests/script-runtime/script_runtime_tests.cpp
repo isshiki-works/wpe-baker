@@ -1464,6 +1464,86 @@ TEST(ScriptVideoTexture, ControlsStableNativePlaybackState) {
     EXPECT_EQ(LastScalar(fs), 14.0);
 }
 
+TEST(ScriptVideoTexture, OfflineClockSurvivesRendererLifetime) {
+    auto playback = Arc<owe::VideoPlaybackState>::make();
+
+    EXPECT_EQ(playback->AdvanceOffline(f64(0.5)), f64());
+    EXPECT_EQ(playback->AdvanceOffline(f64(1.0)), f64(0.5));
+    // A replacement decoder observes the same scene-time clock rather than restarting at zero.
+    EXPECT_EQ(playback->AdvanceOffline(f64(1.5)), f64(1.0));
+
+    playback->Pause();
+    EXPECT_EQ(playback->AdvanceOffline(f64(2.0)), f64(1.5));
+    EXPECT_EQ(playback->AdvanceOffline(f64(2.5)), f64(1.5));
+    playback->SetRate(f64(2.0));
+    playback->Play();
+    EXPECT_EQ(playback->AdvanceOffline(f64(3.0)), f64(1.5));
+    EXPECT_EQ(playback->AdvanceOffline(f64(3.5)), f64(2.5));
+    playback->Seek(f64(0.25));
+    EXPECT_EQ(playback->AdvanceOffline(f64(4.0)), f64(0.25));
+}
+
+TEST(ScriptVideoTexture, HiddenOfflineControlsSyncClockAtMutation) {
+    owe::OfflineExecutionContext offline;
+    owe::OfflineExecutionScope   scope(offline);
+    owe::SceneNode               node;
+    auto                         playback = Arc<owe::VideoPlaybackState>::make();
+    node.SetVideoControl(playback.clone());
+    EXPECT_EQ(playback->AdvanceOffline(f64(0.5)), f64());
+
+    JsRuntime   rt;
+    FrameInputs fi {};
+    rt.SetFrameInputs(fi);
+    auto* fs = rt.MakeFieldScript(
+        R"JS(
+            const video = thisLayer.getVideoTexture();
+            let phase = 0;
+            export function update() {
+                if (phase++ === 0) video.pause();
+                else { video.rate = 2; video.play(); }
+                return 0;
+            }
+        )JS",
+        "test/video_texture_hidden_offline_controls",
+        FieldKind::Scalar,
+        owe::MakeObject(),
+        owe::IntoJson(0),
+        &node);
+    ASSERT_NE(fs, nullptr);
+
+    offline.elapsed = 1.0;
+    rt.TickAll();
+    EXPECT_EQ(playback->CurrentTime(), f64(0.5));
+    offline.elapsed = 2.0;
+    rt.TickAll();
+    EXPECT_EQ(playback->AdvanceOffline(f64(2.5)), f64(1.5));
+}
+
+TEST(ScriptVideoTexture, HiddenOfflineGetterAdvancesAndWrapsWithoutDecoder) {
+    owe::OfflineExecutionContext offline;
+    owe::OfflineExecutionScope scope(offline);
+    owe::SceneNode node;
+    auto playback = Arc<owe::VideoPlaybackState>::make();
+    node.SetVideoControl(playback.clone());
+    playback->PublishTime(f64(), Some(f64(3.0)));
+    EXPECT_EQ(playback->AdvanceOffline(f64(0.5)), f64());
+    JsRuntime rt;
+    FrameInputs fi {};
+    rt.SetFrameInputs(fi);
+    auto* fs = rt.MakeFieldScript(
+        R"JS(export function update() { return thisLayer.getVideoTexture().getCurrentTime(); })JS",
+        "test/video_texture_hidden_offline_getter", FieldKind::Scalar,
+        owe::MakeObject(), owe::IntoJson(0), &node);
+    ASSERT_NE(fs, nullptr);
+    offline.elapsed = 2.0;
+    rt.TickAll();
+    EXPECT_EQ(std::get<ScalarValue>(fs->last_value()).v, 1.5);
+    offline.elapsed = 4.0;
+    rt.TickAll();
+    EXPECT_EQ(std::get<ScalarValue>(fs->last_value()).v, 0.5);
+    EXPECT_EQ(playback->AdvanceOffline(f64(4.5)), f64(4.0));
+}
+
 TEST(ScriptVideoTexture, StillImageIsNullAndContainerIsOrdinaryTypeError) {
     owe::OfflineExecutionContext offline;
     offline.trace_scene = true;
