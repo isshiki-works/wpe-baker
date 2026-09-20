@@ -3078,7 +3078,15 @@ void ShaderParser::UpdateSceneShaderVariantDescFromCompiledUnits(
 
     std::vector<vulkan::Uni_ShaderSpv> spvs;
     vulkan::ShaderReflected            reflected;
-    if (! vulkan::GenReflect(codes, spvs, reflected)) return;
+    Set<std::string>                   active_uniforms;
+    if (! vulkan::GenReflect(codes, spvs, reflected, &active_uniforms)) return;
+    // Runtime dependency evidence must describe reads in the compiled shader,
+    // not unused declarations. This also runs after memory/disk cache hits;
+    // neither uniform layouts nor cached compilation metadata are changed.
+    for (auto& stage : desc.stages)
+        for (auto it = stage.uniforms.begin(); it != stage.uniforms.end();)
+            if (! active_uniforms.contains(it->first)) it = stage.uniforms.erase(it);
+            else ++it;
 
     desc.sampler_bindings.clear();
     constexpr std::string_view texture_prefix { "g_Texture" };

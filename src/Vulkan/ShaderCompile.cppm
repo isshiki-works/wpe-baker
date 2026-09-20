@@ -71,8 +71,10 @@ struct ShaderReflected {
     Map<std::string, Input> input_location_map;
 };
 
+// Optional dependency evidence is the union of accessed members across stages;
+// reflected block layouts still include every declared member.
 bool GenReflect(std::span<const std::vector<unsigned int>> codes, std::vector<Uni_ShaderSpv>& spvs,
-                ShaderReflected& ref);
+                ShaderReflected& ref, Set<std::string>* active_uniforms = nullptr);
 
 // ---------- ShaderComp.hpp ----------
 

@@ -27,6 +27,15 @@ using namespace owe::vulkan;
 namespace
 {
 
+void CollectActiveUniforms(const SpvReflectBlockVariable& block, Set<std::string>& names) {
+    for (uint32_t i = 0; i < block.member_count; ++i) {
+        const auto& member = block.members[i];
+        if (member.flags & SPV_REFLECT_VARIABLE_FLAGS_UNUSED) continue;
+        if (member.name != nullptr) names.insert(member.name);
+        CollectActiveUniforms(member, names);
+    }
+}
+
 struct GlslangProcessRuntime {
     GlslangProcessRuntime(): active(glslang::InitializeProcess()) { rstd_assert(active); }
     GlslangProcessRuntime(const GlslangProcessRuntime&) = delete;
@@ -238,8 +247,10 @@ inline const char* DefaultEntryName(SourceLang lang, owe::ShaderType s) {
 } // namespace
 
 bool owe::vulkan::GenReflect(std::span<const std::vector<unsigned>> codes,
-                             std::vector<Uni_ShaderSpv>& spvs, ShaderReflected& ref) {
+                             std::vector<Uni_ShaderSpv>& spvs, ShaderReflected& ref,
+                             Set<std::string>* active_uniforms) {
     spvs.clear();
+    if (active_uniforms != nullptr) active_uniforms->clear();
     Map<std::string, usize> uniform_block_indices;
     for (const auto& code : codes) {
         spv_reflect::ShaderModule spv_ref(code, SPV_REFLECT_MODULE_FLAG_NO_COPY);
@@ -266,6 +277,11 @@ bool owe::vulkan::GenReflect(std::span<const std::vector<unsigned>> codes,
 
         for (auto pb : bindings) {
             auto& b = *pb;
+            // Collect before merging a block seen in an earlier stage: a member
+            // unused by the vertex shader may still be read by the fragment shader.
+            if (active_uniforms != nullptr &&
+                b.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                CollectActiveUniforms(b.block, *active_uniforms);
             if (! b.accessed && b.descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
                 continue;
 

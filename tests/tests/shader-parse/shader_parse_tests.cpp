@@ -38,7 +38,8 @@ ShaderInfo Parse(const std::string& src, std::size_t n_tex_slots = 8) {
 
 owe::CompileSceneShaderVariantResult CompileEmptyFunctionFragment(std::string fragment,
                                                                   std::string id,
-                                                                  std::string shadow_mask) {
+                                                                  std::string shadow_mask,
+                                                                  owe::ShaderCache* cache = nullptr) {
     owe::SceneShaderVariantDesc desc;
     desc.scene_id                  = id;
     desc.shader_name               = id;
@@ -57,7 +58,7 @@ void main() { gl_Position = vec4(a_Position, 1.0); }
         .source     = std::move(fragment),
     });
     owe::fs::VFS vfs;
-    return owe::ShaderParser::CompileSceneShaderVariant(desc, vfs);
+    return owe::ShaderParser::CompileSceneShaderVariant(desc, vfs, {}, cache);
 }
 
 } // namespace
@@ -319,6 +320,35 @@ void main() {
 
     ASSERT_TRUE(result.ok) << result.error;
     ASSERT_TRUE(result.shader);
+}
+
+TEST(ShaderParser, RuntimeUniformEvidenceIgnoresUnusedClockAndAudioDeclarations) {
+    owe::ShaderCache cache;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const auto result = CompileEmptyFunctionFragment(R"(
+uniform float g_Time;
+uniform float g_Frametime;
+uniform float g_AudioSpectrum64Left[64];
+void main() { gl_FragColor = vec4(g_Frametime, 0.0, 0.0, 1.0); }
+)", "active-uniform-evidence", "0", &cache);
+        ASSERT_TRUE(result.ok) << result.error;
+        const auto& uniforms = result.variant.stages.back().uniforms;
+        EXPECT_TRUE(uniforms.contains("g_Frametime"));
+        EXPECT_FALSE(uniforms.contains("g_Time"));
+        EXPECT_FALSE(uniforms.contains("g_AudioSpectrum64Left"));
+    }
+}
+
+TEST(ShaderParser, RuntimeUniformEvidenceKeepsRealClockAndAudioReads) {
+    const auto result = CompileEmptyFunctionFragment(R"(
+uniform float g_Time;
+uniform float g_AudioSpectrum64Left[64];
+void main() { gl_FragColor = vec4(g_Time + g_AudioSpectrum64Left[3], 0.0, 0.0, 1.0); }
+)", "active-uniform-inputs", "0");
+    ASSERT_TRUE(result.ok) << result.error;
+    const auto& uniforms = result.variant.stages.back().uniforms;
+    EXPECT_TRUE(uniforms.contains("g_Time"));
+    EXPECT_TRUE(uniforms.contains("g_AudioSpectrum64Left"));
 }
 
 TEST(ShaderParser, CompileSceneShaderVariantStripsInactiveEmptyNonVoidFunction) {
