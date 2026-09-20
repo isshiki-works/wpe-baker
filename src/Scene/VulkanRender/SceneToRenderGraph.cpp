@@ -548,25 +548,33 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
 // is keyed by node pointer instead of WE layer id.
 static bool CollectEmitSkipSubtrees(SceneNode* node, Scene& scene, const BTreeSet<i32>& linked_ids,
                                     Set<const SceneNode*>& out_skip,
-                                    bool                   visibility_hidden_ancestor = false) {
+                                    i32                    force_visible_owner,
+                                    bool                   visibility_hidden_ancestor = false,
+                                    bool                   force_visible_ancestor = false) {
     const auto wallpaper   = node->WallpaperIdentity();
     const auto link_source = scene.ResolveLayerLinkSource(*node);
     const i32 layer_id = link_source.is_some() ? link_source->value
                                                : (wallpaper.is_some() ? wallpaper->value : i32(-1));
     const bool linked  = link_source.is_some() && linked_ids.contains(link_source->value);
+    const bool forced = (force_visible_ancestor && wallpaper.is_none()) ||
+        (wallpaper.is_some() && wallpaper->value == force_visible_owner);
+    // Refresh all nodes, including skipped ones, so a later ordinary graph
+    // cannot retain a previous capture-only alpha override.
+    node->SetCaptureForceVisibilityAlpha(forced);
     const bool visibility_hidden_self =
         (! node->Visible() || (layer_id >= i32() && scene.IsLayerVisibilityElidable(
                                                         WallpaperLayerId { .value = layer_id }))) &&
-        ! linked;
+        ! linked && ! forced;
     const bool visibility_hidden = visibility_hidden_ancestor || visibility_hidden_self;
 
     bool all_children_skippable = true;
     for (auto& c : node->GetChildren()) {
-        if (! CollectEmitSkipSubtrees(c.as_ptr(), scene, linked_ids, out_skip, visibility_hidden))
+        if (! CollectEmitSkipSubtrees(c.as_ptr(), scene, linked_ids, out_skip, force_visible_owner,
+                                      visibility_hidden, forced))
             all_children_skippable = false;
     }
     const bool self_skippable =
-        ! linked &&
+        ! linked && ! forced &&
         (visibility_hidden ||
          (layer_id >= i32() && scene.IsLayerElidable(WallpaperLayerId { .value = layer_id })));
     if (self_skippable && all_children_skippable) {
@@ -606,7 +614,8 @@ static void ConfigureNestedOutput(SceneNode* node, std::string_view output,
 static void EmitSceneNode(SceneNode* node, std::string_view inherited_output,
                           std::string_view inherited_camera, ExtraInfo& extra,
                           const Set<const SceneNode*>& emit_skip_subtrees,
-                          const BTreeSet<i32>&         linked_ids, std::int32_t inherited_owner = -1) {
+                          const BTreeSet<i32>&         linked_ids, i32 force_visible_owner,
+                          std::int32_t inherited_owner = -1) {
     if (node == nullptr || emit_skip_subtrees.count(node) != 0) return;
 
     auto&      scene       = *extra.scene;
@@ -618,15 +627,17 @@ static void EmitSceneNode(SceneNode* node, std::string_view inherited_output,
     const std::int32_t capture_owner = generator.is_some() ? generator->value.to_primitive() :
         (wallpaper.is_some() ? wallpaper->value.to_primitive() : inherited_owner);
     const bool selected = extra.selection == nullptr || extra.selection->contains(capture_owner);
-    const bool       elidable = !selected || scene.IsLayerElidable(WallpaperLayerId { .value = layer_id });
+    const bool forced = force_visible_owner >= i32() && capture_owner == force_visible_owner.to_primitive();
+    const bool       elidable = !forced &&
+        (!selected || scene.IsLayerElidable(WallpaperLayerId { .value = layer_id }));
     const bool       linked   = link_source.is_some() && linked_ids.contains(link_source->value);
     bool             emit     = true;
     std::string      link_output;
     std::string_view node_output = inherited_output;
 
-    if (! linked && ShouldSkipNoRuntimeEffect(node, scene)) emit = false;
+    if (! linked && ! forced && ShouldSkipNoRuntimeEffect(node, scene)) emit = false;
     if (elidable) {
-        if (! linked) {
+        if (! linked && ! forced) {
             emit = false;
         } else {
             auto* source_record = extra.render_scene->linkSource(*link_source);
@@ -661,7 +672,7 @@ static void EmitSceneNode(SceneNode* node, std::string_view inherited_output,
                           rstd::cppstd::as_string_view(*group_camera),
                           extra,
                           emit_skip_subtrees,
-                          linked_ids, capture_owner);
+                          linked_ids, force_visible_owner, capture_owner);
         }
         if (effect_layer != nullptr && effect_layer->HasRenderEffects()) {
             LoadGraphEffects(effect_layer, extra);
@@ -679,7 +690,7 @@ static void EmitSceneNode(SceneNode* node, std::string_view inherited_output,
                       inherited_camera,
                       extra,
                       emit_skip_subtrees,
-                      linked_ids, capture_owner);
+                      linked_ids, force_visible_owner, capture_owner);
     }
 }
 
@@ -780,20 +791,24 @@ static void EmitShadowPasses(ExtraInfo& extra) {
 
 Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
                                              const RenderSceneSnapshot& render_scene,
-                                             const RenderLayerSelection* selection) {
+                                             const RenderLayerSelection* selection,
+                                             const RenderCaptureTarget* capture_target) {
     auto      rgraph = Box<rg::RenderGraph>::make();
     ExtraInfo extra { .rgraph = rgraph.get(), .scene = &scene, .render_scene = &render_scene, .selection = selection };
 
     // The snapshot owns link-consumer discovery; graph build only consumes the
     // resulting source ids.
     const auto& linked_ids = render_scene.LinkedLayerIds();
+    const i32 force_visible_owner = capture_target != nullptr && capture_target->force_visible_owner
+                                        ? i32(capture_target->owner_layer_id) : i32(-1);
 
     // Skip subtrees the parser tagged as elidable (user-hidden, or no-effect
     // identity passthrough layers) when nothing in the subtree links anything.
     // Most corpora have ~25x more elidable layers than link-referenced ones;
     // the skip set lets the emit walk short-circuit without mutating the tree.
     Set<const SceneNode*> emit_skip_subtrees;
-    CollectEmitSkipSubtrees(scene.RootMut().as_raw_ptr(), scene, linked_ids, emit_skip_subtrees);
+    CollectEmitSkipSubtrees(scene.RootMut().as_raw_ptr(), scene, linked_ids, emit_skip_subtrees,
+                            force_visible_owner);
 
     EmitShadowPasses(extra);
 
@@ -806,7 +821,7 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
                   {},
                   extra,
                   emit_skip_subtrees,
-                  linked_ids);
+                  linked_ids, force_visible_owner);
 
     // Emit global post-process passes after the main scene-graph traversal.
     // Each step is either a CustomShaderPass (built on the synthetic node's

@@ -261,6 +261,9 @@ public:
     }
     const OfflineAudioFrame& audioReadback() const { return m_audio_frame; }
     const RenderLayerSelection& offlineLayers() const { return m_offline_layers; }
+    const RenderCaptureTarget* offlineCaptureTarget() const {
+        return m_offline_capture_target.has_value() ? &*m_offline_capture_target : nullptr;
+    }
     double offlineFrameTime(uint64_t index) const {
         return m_offline_options.fps_num ? static_cast<double>(static_cast<long double>(index) *
             m_offline_options.fps_den / m_offline_options.fps_num) : double(index) * m_offline_dt;
@@ -324,6 +327,7 @@ private:
     OfflineOptions m_offline_options;
     bool m_offline_profile { false };
     RenderLayerSelection m_offline_layers;
+    std::optional<RenderCaptureTarget> m_offline_capture_target;
 
     SceneWallpaperConfig               m_config;
     rstd::json::Map                    m_user_properties;
@@ -831,7 +835,8 @@ void SceneRenderController::rebuildRenderGraph(vulkan::RenderGraphResourceRetent
     {
         auto graph_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_graph_build);
         m_rg            = Some(sceneToRenderGraph(*m_scene, m_render_scene,
-            m_main.offline() ? &m_main.offlineLayers() : nullptr));
+            m_main.offline() ? &m_main.offlineLayers() : nullptr,
+            m_main.offline() ? m_main.offlineCaptureTarget() : nullptr));
     }
 
     if (m_main.isGenGraphviz()) (*m_rg)->ToGraphviz("graph.dot"_str);
@@ -1694,6 +1699,7 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
     m_offline_options = options;
     m_offline_profile = info.gpu_timing || std::getenv("WPE_RENDER_CPU_PROFILE") != nullptr;
     m_offline_layers = info.layer_selection;
+    m_offline_capture_target = info.capture_target;
     m_offline_context.epoch_ms = options.epoch_ms;
     m_offline_context.trace_scene = options.trace_scene;
     std::seed_seq seed { uint32_t(options.seed), uint32_t(options.seed >> 32) };

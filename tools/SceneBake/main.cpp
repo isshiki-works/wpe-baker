@@ -426,6 +426,7 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
         target.runtime_render_target = String(*capture, "runtime_render_target");
         target.effect_terminal = Bool(*capture, "effect_terminal", false);
         target.exact_extent = Bool(*capture, "exact_extent", false);
+        target.force_visible_owner = Bool(*capture, "force_visible_owner", false);
         job.capture_target = std::move(target);
     }
     if (auto* viewport = Field(json, "orthographic_capture_viewport")) {
@@ -808,7 +809,7 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,selected-draw-v1,gpu-scene-overlap-v1,gpu-quality-samples-v1,gpu-search-overlap-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,selected-draw-v1,gpu-scene-overlap-v1,gpu-quality-samples-v1,gpu-search-overlap-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));

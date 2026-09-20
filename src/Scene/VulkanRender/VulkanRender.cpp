@@ -171,6 +171,9 @@ std::string ValidateCaptureSelector(const owe::RenderCaptureTarget& selector) {
     if (selector.texture_version < -1 || selector.owner_layer_id < -1 ||
         selector.authored_effect_id < -1 || selector.effect_ordinal < -1)
         return "capture selector IDs and texture version must be nonnegative or -1";
+    if (selector.force_visible_owner && (selector.owner_layer_id < 0 ||
+        !selector.runtime_render_target.empty()))
+        return "force_visible_owner requires an authored owner capture selector";
     if (selector.effect_terminal) {
         if (!selector.runtime_render_target.empty() || !selector.local_fbo.empty() ||
             selector.owner_layer_id < 0 ||
@@ -204,6 +207,10 @@ std::optional<CaptureBinding> ResolveCaptureBinding(
             const auto owner = node->WallpaperIdentity();
             if (owner.is_none() || owner->value.to_primitive() != selector.owner_layer_id ||
                 !node->HasLayer() || !node->Layer()) continue;
+            if (selector.force_visible_owner && node->Parent() != scene.RootMut().as_raw_ptr()) {
+                error = "force_visible_owner requires a flat top-level owner";
+                return std::nullopt;
+            }
             const auto& layer = node->Layer();
             for (usize index {}; index < layer->EffectCount(); ++index) {
                 const auto& effect = layer->GetEffect(index);

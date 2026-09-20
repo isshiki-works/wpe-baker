@@ -1648,7 +1648,7 @@ public:
                (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden());
     }
     float EffectiveAlpha() const {
-        float alpha = ! m_visible && m_visibility_affects_alpha
+        float alpha = ! m_visible && m_visibility_affects_alpha && ! m_capture_force_visibility_alpha
                           ? 0.0f
                           : (m_alpha_overridden ? m_user_alpha : m_base_alpha);
         if (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden())
@@ -1657,6 +1657,7 @@ public:
     }
     bool  Visible() const { return m_visible; }
     float UserAlpha() const { return m_user_alpha; }
+    void SetCaptureForceVisibilityAlpha(bool value) { m_capture_force_visibility_alpha = value; }
     void  SetVisible(bool v) {
         // A sound layer is audible only while its layer is visible, which is
         // how scenes implement track selectors: the selector binds each sound
@@ -1910,6 +1911,7 @@ private:
 
     bool                                   m_visible { true };
     bool                                   m_visibility_affects_alpha { true };
+    bool                                   m_capture_force_visibility_alpha { false };
     SceneUserVisibilityBinding             m_visible_user_binding {};
     bool                                   m_visible_overridden { false };
     float                                  m_user_alpha { 1.0f };

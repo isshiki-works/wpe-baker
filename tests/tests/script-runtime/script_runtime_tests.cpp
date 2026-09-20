@@ -1544,6 +1544,19 @@ TEST(ScriptVideoTexture, HiddenOfflineGetterAdvancesAndWrapsWithoutDecoder) {
     EXPECT_EQ(playback->AdvanceOffline(f64(4.5)), f64(4.0));
 }
 
+TEST(SceneNodeVisibility, CaptureForcePreservesAuthoredAlpha) {
+    owe::SceneNode node;
+    node.SetUserAlpha(0.4f);
+    node.SetVisible(false);
+    EXPECT_EQ(node.EffectiveAlpha(), 0.0f);
+    node.SetCaptureForceVisibilityAlpha(true);
+    EXPECT_EQ(node.EffectiveAlpha(), 0.4f);
+    EXPECT_FALSE(node.Visible());
+    node.SetCaptureForceVisibilityAlpha(false);
+    EXPECT_EQ(node.EffectiveAlpha(), 0.0f);
+    EXPECT_EQ(node.UserAlpha(), 0.4f);
+}
+
 TEST(ScriptVideoTexture, StillImageIsNullAndContainerIsOrdinaryTypeError) {
     owe::OfflineExecutionContext offline;
     offline.trace_scene = true;

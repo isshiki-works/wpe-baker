@@ -121,6 +121,8 @@ struct RenderCaptureTarget {
     bool effect_terminal { false };
     // Refuse FinPass scaling: the offline output extent must equal the source.
     bool exact_extent { false };
+    // Capture-only graph override for an explicitly selected authored owner.
+    bool force_visible_owner { false };
 };
 
 struct RenderLayerSelection {
@@ -222,7 +224,8 @@ struct RenderInitInfo {
 };
 
 Box<rg::RenderGraph> sceneToRenderGraph(Scene&);
-Box<rg::RenderGraph> sceneToRenderGraph(Scene&, const RenderSceneSnapshot&, const RenderLayerSelection* = nullptr);
+Box<rg::RenderGraph> sceneToRenderGraph(Scene&, const RenderSceneSnapshot&, const RenderLayerSelection* = nullptr,
+                                        const RenderCaptureTarget* = nullptr);
 
 namespace vulkan
 {
