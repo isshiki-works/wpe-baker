@@ -1514,10 +1514,15 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         const VkWriteDescriptorSet coverage_write { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=2,
             .descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&coverage_buffer };
         rr.command.PushDescriptorSetKHR(VK_PIPELINE_BIND_POINT_COMPUTE,*m_sample_layout,0,coverage_write);
-        const std::array<std::uint32_t, 5> dimensions { extent.width, extent.height, m_readback_width, m_readback_height,
+        // Coverage-only frames need no thumbnail averages. Distribute their
+        // pixels across the full grid instead of serially scanning large cells
+        // in the few threads selected by a tiny thumbnail size.
+        const auto grid_width = read_pixels ? m_readback_width : extent.width;
+        const auto grid_height = read_pixels ? m_readback_height : extent.height;
+        const std::array<std::uint32_t, 5> dimensions { extent.width, extent.height, grid_width, grid_height,
             (read_pixels ? 1u : 0u)|(coverage_frame ? 2u : 0u) };
         rr.command.PushConstants(*m_sample_layout, VK_SHADER_STAGE_COMPUTE_BIT, dimensions);
-        rr.command.Dispatch((m_readback_width + 7) / 8, (m_readback_height + 7) / 8, 1);
+        rr.command.Dispatch((grid_width + 7) / 8, (grid_height + 7) / 8, 1);
         // Preserve FinPass's existing end-of-frame image layout contract.
         to_readback.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
         to_readback.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
