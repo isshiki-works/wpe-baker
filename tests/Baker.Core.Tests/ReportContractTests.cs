@@ -10,21 +10,23 @@ public class RenderJobContractTests
     private static readonly string Fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
 
     // 假渲染器：--version 报全部能力，真正渲染时退出 3。job 在启动渲染前就写好了，失败后照样能读。
-    private static NativeTools FakeTools(string dir)
+    private const string AllFeatures = "sparse-readback-v1,gpu-samples-v1,gpu-sampling-coverage-v1,gpu-encode-v1,gpu-capture-v1," +
+        "gpu-loop-encode-v1,gpu-encode-resize-v1,gpu-quality-samples-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,capture-force-visible-owner-v1";
+
+    private static NativeTools FakeTools(string dir, string features = AllFeatures)
     {
         string renderer = Path.Combine(dir, "fake-render.cmd");
-        File.WriteAllText(renderer, "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo wpe-render test features=sparse-readback-v1,gpu-samples-v1," +
-            "gpu-sampling-coverage-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-encode-resize-v1,gpu-quality-samples-v1," +
-            "effect-render-scale-v1,adaptive-effect-resolution-v1,capture-force-visible-owner-v1\r\n  exit /b 0\r\n)\r\nexit /b 3\r\n");
+        File.WriteAllText(renderer, "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo wpe-render test features=" + features +
+            "\r\n  exit /b 0\r\n)\r\nexit /b 3\r\n");
         string ffmpeg = Path.Combine(dir, "ffmpeg.exe"), ffprobe = Path.Combine(dir, "ffprobe.exe");
         File.WriteAllBytes(ffmpeg, []);
         File.WriteAllBytes(ffprobe, []);
         return new NativeTools(renderer, ffmpeg, ffprobe, []);
     }
 
-    private static async Task<string> JobAsync(string dir, RenderRequest request)
+    private static async Task<string> JobAsync(string dir, RenderRequest request, string features = AllFeatures)
     {
-        await Assert.ThrowsAnyAsync<IOException>(() => new NativeRenderRunner(FakeTools(dir)).RenderAsync(request));
+        await Assert.ThrowsAnyAsync<Exception>(() => new NativeRenderRunner(FakeTools(dir, features)).RenderAsync(request));
         string job = await File.ReadAllTextAsync(Path.Combine(request.OutputDirectory, "renderer-job.json"));
         string text = job.Replace(Path.GetFullPath(dir).Replace("\\", "\\\\"), "<DIR>").Replace(Fixture.Replace("\\", "\\\\"), "<FIXTURE>");
         await File.WriteAllTextAsync(Path.Combine(dir, Path.GetFileName(request.OutputDirectory) + ".job.json"), text);
@@ -55,6 +57,65 @@ public class RenderJobContractTests
             MatchEffectResolution: true, Input: new JsonObject { ["mouse"] = new JsonObject { ["x"] = 0.25 } });
         Assert.Equal(GpuResizeExpected, (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
     });
+
+    [Fact]
+    public async Task SampledCoverageJob() => await TestTemp.Run(async dir =>
+    {
+        var request = new RenderRequest(Fixture, Fixture, Path.Combine(dir, "sampled"), 256, 144, 60, 1, 120, WarmupFrames: 30,
+            FrameSamplesOnly: true, FrameSampleStride: 8, FrameSampleWidth: 64, FrameSamplePhaseFrames: 13, CollectSamplingCoverage: true);
+        Assert.Equal(SampledExpected, (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
+    });
+
+    [Fact]
+    public async Task SparseOnlyJob() => await TestTemp.Run(async dir =>
+    {
+        var request = new RenderRequest(Fixture, Fixture, Path.Combine(dir, "sparse"), 256, 144, 60, 1, 120,
+            FrameSamplesOnly: true, FrameSampleStride: 8, FrameSampleWidth: 64);
+        Assert.Equal(SparseExpected, (await JobAsync(dir, request, "sparse-readback-v1")).ReplaceLineEndings("\n"));
+    });
+
+    private const string SampledExpected = """
+        {
+          "schema_version": 1,
+          "source": "<FIXTURE>\\scene.json",
+          "assets": "<FIXTURE>",
+          "output_dir": "<DIR>\\sampled\\native",
+          "width": 256,
+          "height": 144,
+          "fps_num": 60,
+          "fps_den": 1,
+          "frames": 120,
+          "warmup_frames": 30,
+          "seed": 0,
+          "raw_stdout": true,
+          "write_audio": false,
+          "match_effect_resolution": false,
+          "output_frame_stride": 8,
+          "output_frame_phase": 5,
+          "output_sample_width": 64,
+          "output_sample_height": 36,
+          "collect_sampling_coverage": true
+        }
+        """;
+    private const string SparseExpected = """
+        {
+          "schema_version": 1,
+          "source": "<FIXTURE>\\scene.json",
+          "assets": "<FIXTURE>",
+          "output_dir": "<DIR>\\sparse\\native",
+          "width": 256,
+          "height": 144,
+          "fps_num": 60,
+          "fps_den": 1,
+          "frames": 120,
+          "warmup_frames": 0,
+          "seed": 0,
+          "raw_stdout": true,
+          "write_audio": false,
+          "match_effect_resolution": false,
+          "output_frame_stride": 8
+        }
+        """;
 
     // 期望值取自改动前（main f7b50705）的代码对同一请求写出的 renderer-job.json（D:/Periodica/runs/C1.4/jobs-gpu/old/）。
     private const string GpuLoopExpected = """
@@ -191,7 +252,9 @@ public class RenderResultContractTests
          "capture_source":{"render_target":"_rt_x","width":64},"readback_width":32,"readback_height":16,"gpu_sampled":true,
          "output_frame_stride":4,"output_frame_phase":1,"effect_render_scale":0.5,"match_effect_resolution":true,
          "gpu_encoded":true,"readback_frames":3,"gpu_encoder":"h264_vulkan","gpu_packed_alpha":false,
-         "gpu_capture":{"encoded_packets":12,"crop":{"x":2},"loop_crossfade":{"status":"applied","crossfade_frames":2.50}},
+         "gpu_capture":{"encoded_packets":12,"crop":{"x":2},"loop_crossfade":{"status":"applied","crossfade_frames":2.50},
+           "resize":{"filter":"lanczos3"},"loop_window":{"frame_count":4},"alpha_bounds":{"includes_rgb":true},"retained_frames":{"width":8}},
+         "orthographic_capture_viewport":{"center_x":1},"layer_selection":{"include_layers":[1]},
          "sampling_coverage":{"status":"complete","minimum_alpha":0.10},"runtime_layers":[],"runtime_dependencies":[],
          "runtime_video_rate_overrides":[{"owner_layer_id":3}],"future_field":{"nested":[1,2]}}
         """;
@@ -207,6 +270,9 @@ public class RenderResultContractTests
         Assert.Equal(12ul, r.GpuCapture?.EncodedPackets);
         Assert.Equal("applied", r.GpuCapture?.LoopCrossfade?["status"]?.GetValue<string>());
         Assert.Equal(2, r.GpuCapture?.Crop?["x"]?.GetValue<int>());
+        Assert.Equal(("lanczos3", 4, true, 8), (r.GpuCapture?.Resize?["filter"]?.GetValue<string>(), r.GpuCapture?.LoopWindow?["frame_count"]?.GetValue<int>(),
+            r.GpuCapture?.AlphaBounds?["includes_rgb"]?.GetValue<bool>(), r.GpuCapture?.RetainedFrames?["width"]?.GetValue<int>()));
+        Assert.Equal(("""{"center_x":1}""", """{"include_layers":[1]}"""), (r.OrthographicCaptureViewport?.ToJsonString(), r.LayerSelection?.ToJsonString()));
         Assert.NotNull(r.RuntimeLayers);
         Assert.NotNull(r.RuntimeDependencies);
         Assert.Single(r.RuntimeVideoRateOverrides!);
