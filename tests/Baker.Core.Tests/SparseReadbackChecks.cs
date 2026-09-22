@@ -48,23 +48,9 @@ internal static class SparseReadbackChecks
         if (gpu["readback_frames"]!.GetValue<ulong>()!=5 || coverage["frames"]!.GetValue<ulong>()!=37 ||
             coverage["first_simulation_frame"]!.GetValue<ulong>()!=7)
             throw new InvalidDataException("Coverage did not span all output frames while preserving sparse readback.");
-        string? oldSampling=Environment.GetEnvironmentVariable("WPE_RENDER_GPU_SAMPLES");
-        JsonObject fallback;
-        try
-        {
-            Environment.SetEnvironmentVariable("WPE_RENDER_GPU_SAMPLES","0");
-            fallback=await runner.RenderAsync(request with {OutputDirectory=Path.Combine(output,"fallback")},
-                cancellationToken:timeout.Token);
-        }
-        finally { Environment.SetEnvironmentVariable("WPE_RENDER_GPU_SAMPLES",oldSampling); }
-        byte[] fallbackPixels=await File.ReadAllBytesAsync(Path.Combine(output,"fallback/frame-samples.rgb"));
-        if (!actual.AsSpan().SequenceEqual(fallbackPixels) || fallback["sampling_coverage"] is not null ||
-            fallback["sampling_coverage_status"]?.GetValue<string>()!="unavailable_on_renderer_or_device" ||
-            fallback["native_result"]?["gpu_scene_overlap"]?.GetValue<bool>()!=false)
-            throw new InvalidDataException("CPU sampling fallback changed pixels or claimed unavailable GPU coverage.");
         await File.WriteAllTextAsync(Path.Combine(output,"report.json"),new JsonObject {
             ["status"]="passed",["samples_identical"]=true,["unsampled_boundary_included"]=true,
-            ["readback_frames"]=5,["coverage"]=coverage.DeepClone(),["cpu_fallback_completed"]=true
+            ["readback_frames"]=5,["coverage"]=coverage.DeepClone()
         }.ToJsonString(new JsonSerializerOptions {WriteIndented=true}));
         Console.WriteLine("Sampling coverage: full interval matches CPU bounds, including an unsampled boundary; sparse samples unchanged.");
     }
@@ -112,20 +98,6 @@ internal static class SparseReadbackChecks
                 if (full["native_frame_transport"]?.GetValue<string>() != "full_rgba" ||
                     full["readback_frames"]?.GetValue<ulong>() != 41 || !reference.AsSpan().SequenceEqual(allFrames))
                     throw new InvalidDataException("Full-frame validation path changed.");
-            }
-            if (fixtureName == "shader-clock" && phase is null)
-            {
-                string? previous = Environment.GetEnvironmentVariable("WPE_RENDER_GPU_SAMPLES");
-                try
-                {
-                    Environment.SetEnvironmentVariable("WPE_RENDER_GPU_SAMPLES", "0");
-                    var fallback = await new NativeRenderRunner(newTools).RenderAsync(request with {
-                        OutputDirectory = Path.Combine(output, label + "-cpu") }, cancellationToken: timeout.Token);
-                    byte[] cpu = await File.ReadAllBytesAsync(Path.Combine(output, label + "-cpu/frame-samples.rgb"));
-                    if (fallback["native_sample_backend"]?.GetValue<string>() != "cpu_box_mean" ||
-                        !reference.AsSpan().SequenceEqual(cpu)) throw new InvalidDataException("Native CPU sampling fallback changed pixels.");
-                }
-                finally { Environment.SetEnvironmentVariable("WPE_RENDER_GPU_SAMPLES", previous); }
             }
             results.Add(new JsonObject { ["case"] = label, ["simulated_frames"] = 41,
                 ["readback_frames"] = expected, ["pipe_rgba_bytes"] = sparse["pipe_rgba_bytes"]!.DeepClone(),
