@@ -1,11 +1,8 @@
 # 补丁文件要按字节做哈希核对：scripts/dependency-patches/manifest.json 里每份
-# patch 的 sha256（apply-dependency-patches.py 以二进制读），以及
-# patches/renderer-mt/sha256.txt 声明的两份补丁哈希（verify-package.ps1 核对）。
+# patch 的 sha256（apply-dependency-patches.py 以二进制读）。
 # core.autocrlf=true 的机器上 checkout 会把 LF 变 CRLF，哈希必然对不上，
 # 所以这些文件一律禁用行尾转换。
 *.patch -text
-patches/renderer-mt/sha256.txt -text
-patches/renderer-mt/README.md -text
 
 # 许可文本逐字节保持上游原样：THIRD-PARTY-NOTICES.md 第 8 节列了这些文件的
 # SHA256，行尾一旦被转换，用户就无法用那张表核对。
@@ -22,5 +19,5 @@ licenses-extra/** -text
 # verified 的绑定。正确做法写在 scripts/DISTRIBUTION-DEPENDENCIES.md：切分支只用
 # git fetch <bundle> <分支>:<分支> + git switch，不对 scripts/ 用 checkout -f /
 # reset --hard / stash / clean -x。
-# 上面三条规则只匹配 *.patch、patches/renderer-mt/ 与 licenses-extra/，
+# 上面两条规则只匹配 *.patch 与 licenses-extra/，
 # 都不触及这 7 个文件。
