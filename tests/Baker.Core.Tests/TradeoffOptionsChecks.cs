@@ -29,14 +29,14 @@ internal static class TradeoffOptionsChecks
         var overlay = TradeoffOptions.Classify(["observed_wall_clock"], suspectedOverlay: true);
         check(overlay.Kinds is ["clock", "overlay"], "tradeoff class: a suspected overlay adds the overlay kind");
         check(TradeoffOptions.ClassifyReason("not_a_reason") is null, "tradeoff class: unknown reasons are not tradeoffs");
-        check(TradeoffOptions.KindLabel("parallax", Messages.Chinese).Contains("视差") &&
-            TradeoffOptions.KindLabel("parallax", Messages.English).Contains("parallax"), "tradeoff class: kind labels are bilingual");
+        check(TradeoffOptions.KindLabel("parallax", MessageCatalog.Chinese).Contains("视差") &&
+            TradeoffOptions.KindLabel("parallax", MessageCatalog.English).Contains("parallax"), "tradeoff class: kind labels are bilingual");
     }
 
     /// 两处按实测改写的文案：不可达不再说"改设置也没用"，主体类不再说"去壁纸设置里关掉"。
     private static void Wording(Action<bool, string> check)
     {
-        var unreachable = Messages.Find("blocker.fullframe_unreachable")!;
+        var unreachable = MessageCatalog.Find("blocker.fullframe_unreachable")!;
         check(!unreachable.Zh.Contains("都不会改变这一点") && unreachable.Zh.Contains("可选方案：禁用前置的实时元素后生成整幅循环视频") &&
             !unreachable.En.Contains("no full-frame layout as authored") && unreachable.En.Contains("Options: disable the blocking live elements"),
             "wording: fullframe_unreachable now gives a way to unlock");
@@ -44,7 +44,7 @@ internal static class TradeoffOptionsChecks
             "wording: fullframe_unreachable keeps its legacy English verbatim");
         foreach (string key in new[] { "blocker.no_input_independent_group", "blocker.no_input_independent_group_generic" })
         {
-            var entry = Messages.Find(key)!;
+            var entry = MessageCatalog.Find(key)!;
             check(!entry.Zh.Contains("禁用后无剩余内容") && entry.Zh.Contains("未找到不依赖实时输入、可生成的视频组"),
                 "wording: " + key + " rejects cleanly in Chinese");
             check(!entry.En.Contains("nothing remains once disabled") && entry.En.Contains("dependency analysis found no video group independent of live input"),

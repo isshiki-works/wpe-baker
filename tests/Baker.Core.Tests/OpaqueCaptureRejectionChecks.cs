@@ -64,7 +64,7 @@ internal static class OpaqueCaptureRejectionChecks
             !ReferenceEquals(Evidence(failure), Evidence(failure)),
             "opaque evidence is found through wrapping exceptions, absent otherwise, and returned as a copy");
 
-        // 拒绝记录：纯函数，点名层、坐标与 alpha；中英理由走 Messages。
+        // 拒绝记录：纯函数，点名层、坐标与 alpha；中英理由走 MessageCatalog。
         Type service = typeof(NativeRenderRunner).Assembly.GetType("Baker.Core.EffectPrefixBakeService", throwOnError: true)!;
         MethodInfo rejection = service.GetMethod("OpaqueCaptureRejection", BindingFlags.Static | BindingFlags.NonPublic)!;
         (JsonObject Group, Message Reason) Reject(JsonObject scene, int owner) =>

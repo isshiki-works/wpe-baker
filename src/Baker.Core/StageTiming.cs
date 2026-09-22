@@ -66,7 +66,7 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
     /// <summary>用 using 包住一段代码，把它的墙钟累加到这个阶段。</summary>
     public Scope Measure(string stage)
     {
-        progress?.Report(new(stage, null, StageLabel(stage, Messages.DefaultLanguage() == Messages.English)));
+        progress?.Report(new(stage, null, StageLabel(stage, MessageCatalog.DefaultLanguage() == MessageCatalog.English)));
         return new(this, stage);
     }
 

@@ -30,7 +30,7 @@ public static class PlanNarrative
         {
             string[] mechanisms = known.Where(item => layerReasons.Contains(item.Reason)).Select(item => item.Mechanism).Distinct().ToArray();
             if (mechanisms.Length > 0)
-                evidence.Add("\"" + Messages.EscapeName(objects.GetValueOrDefault(id)?["name"]?.GetValue<string>()) + "\" (" + string.Join(", ", mechanisms) + ")");
+                evidence.Add("\"" + MessageCatalog.EscapeName(objects.GetValueOrDefault(id)?["name"]?.GetValue<string>()) + "\" (" + string.Join(", ", mechanisms) + ")");
         }
         return evidence.Count == 0 ? new Blocker(BlockerCode.NoInputIndependentGroupGeneric)
             : new Blocker(BlockerCode.NoInputIndependentGroup, [string.Join("; ", evidence)]);
@@ -52,15 +52,15 @@ public static class PlanNarrative
         string chinese = unprovenZh ?? unproven;
         if (binding is null)
             return new Blocker(BlockerCode.HdrRadianceOpen, [unproven], [chinese]);
-        string name = Messages.EscapeName(binding.Value.Name);
+        string name = MessageCatalog.EscapeName(binding.Value.Name);
         string label = project?["general"]?["properties"]?[binding.Value.Name]?["text"]?.GetValue<string>() is string text
-            && !string.IsNullOrWhiteSpace(text) ? "\"" + Messages.EscapeName(text) + " / " + name + "\"" : "\"" + name + "\"";
+            && !string.IsNullOrWhiteSpace(text) ? "\"" + MessageCatalog.EscapeName(text) + " / " + name + "\"" : "\"" + name + "\"";
         // 关闭值：无 condition 的绑定直接取属性值当 hdr，false 即关；带 condition 的绑定只在属性值等于
         // condition 时 hdr 为 true，给它任何别的值都是关。
         string offZh, offEn;
         if (binding.Value.Condition is string condition)
         {
-            string quotedCondition = "\"" + Messages.EscapeName(condition) + "\"";
+            string quotedCondition = "\"" + MessageCatalog.EscapeName(condition) + "\"";
             offZh = $"只要 \"{name}\" 不等于 {quotedCondition} 就是关，--properties 文件里给它另一个值";
             offEn = $"it is off whenever \"{name}\" is not {quotedCondition}; give it another value in the --properties file";
         }
@@ -99,7 +99,7 @@ public static class PlanNarrative
         int count = groups.Count, live = interleavedNames.Count;
         // legacy 专用中段：层名不截断，逐字复现历史输出。
         string legacySegment = live == 0 ? "" : " Interleaved realtime layers: " + string.Join(", ", interleavedNames) + ".";
-        string names = Messages.NameList(interleavedNames);
+        string names = MessageCatalog.NameList(interleavedNames);
         // 调用方给了本场景可执行的选项时走这一条：分类与双语仍来自文案表，选项由全幅降级的取证提供。
         if (options is { } choices)
         {
@@ -119,7 +119,7 @@ public static class PlanNarrative
             {
                 optionsKey = BlockerCode.FullframeSingleTransparentGroupOptions;
                 string[] leading = (leadingNames ?? []).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct().ToArray();
-                string leadingList = Messages.NameList(leading);
+                string leadingList = MessageCatalog.NameList(leading);
                 phraseZh = leading.Length == 0 ? "" : $"：它前面还有实时图层 {leadingList} 先画，视频若带上清屏就会把它们盖掉";
                 phraseEn = leading.Length == 0 ? "" : $": realtime layers {leadingList} draw before it, and a video carrying the scene clear would paint over them";
             }
@@ -178,8 +178,8 @@ public static class PlanNarrative
         if (report["summary"] is JsonObject staticLine &&
             staticLine["key"]?.GetValue<string>()?.StartsWith("summary.bakeable_static", StringComparison.Ordinal) == true)
         {
-            staticLine["zh"] = staticLine["zh"]?.GetValue<string>() + Messages.Get("summary.static_only_route", Messages.Chinese);
-            staticLine["en"] = staticLine["en"]?.GetValue<string>() + " " + Messages.Get("summary.static_only_route", Messages.English);
+            staticLine["zh"] = staticLine["zh"]?.GetValue<string>() + MessageCatalog.Get("summary.static_only_route", MessageCatalog.Chinese);
+            staticLine["en"] = staticLine["en"]?.GetValue<string>() + " " + MessageCatalog.Get("summary.static_only_route", MessageCatalog.English);
             staticLine["prefer_layered"] = true;
         }
         // 效果前缀路线的省电提醒：只把效果链前缀烘成视频、图层本身仍然实时跑，省电幅度和"被烘走的那段
@@ -188,8 +188,8 @@ public static class PlanNarrative
         if (report["route"]?.GetValue<string>() == "effect_prefix" && report["summary"] is JsonObject prefixLine &&
             prefixLine["key"]?.GetValue<string>()?.StartsWith("summary.bakeable", StringComparison.Ordinal) == true)
         {
-            prefixLine["zh"] = prefixLine["zh"]?.GetValue<string>() + Messages.Get("summary.effect_prefix_limited_saving", Messages.Chinese);
-            prefixLine["en"] = prefixLine["en"]?.GetValue<string>() + " " + Messages.Get("summary.effect_prefix_limited_saving", Messages.English);
+            prefixLine["zh"] = prefixLine["zh"]?.GetValue<string>() + MessageCatalog.Get("summary.effect_prefix_limited_saving", MessageCatalog.Chinese);
+            prefixLine["en"] = prefixLine["en"]?.GetValue<string>() + " " + MessageCatalog.Get("summary.effect_prefix_limited_saving", MessageCatalog.English);
         }
         StripTransient(report);
     }
@@ -260,13 +260,13 @@ public static class PlanNarrative
         {
             int differing = WallpaperEngineProperties.DifferingCount(report) ?? 0;
             return differing == 0 ? null
-                : (Messages.Get("summary.properties_from_wpe", Messages.Chinese, differing), Messages.Get("summary.properties_from_wpe", Messages.English, differing));
+                : (MessageCatalog.Get("summary.properties_from_wpe", MessageCatalog.Chinese, differing), MessageCatalog.Get("summary.properties_from_wpe", MessageCatalog.English, differing));
         }
         if (source != WallpaperEngineProperties.SourceUnavailable) return null;
         string reason = report["wpe_properties"]?["reason"] is JsonValue reasonValue && reasonValue.TryGetValue(out string? code) ? code : "";
-        string key = Messages.Find("properties.reason." + reason) is null ? "properties.reason.unknown" : "properties.reason." + reason;
-        return (Messages.Get("summary.properties_wpe_unavailable", Messages.Chinese, Messages.Get(key, Messages.Chinese)),
-            Messages.Get("summary.properties_wpe_unavailable", Messages.English, Messages.Get(key, Messages.English)));
+        string key = MessageCatalog.Find("properties.reason." + reason) is null ? "properties.reason.unknown" : "properties.reason." + reason;
+        return (MessageCatalog.Get("summary.properties_wpe_unavailable", MessageCatalog.Chinese, MessageCatalog.Get(key, MessageCatalog.Chinese)),
+            MessageCatalog.Get("summary.properties_wpe_unavailable", MessageCatalog.English, MessageCatalog.Get(key, MessageCatalog.English)));
     }
 
     /// <summary>"按场景画布铺满本机屏幕所需的 3200×1800 烘焙（画布 3840×2160，屏幕 2880×1800）。"一类的半句；plan 没有 output_resolution 时返回 null。</summary>
@@ -290,7 +290,7 @@ public static class PlanNarrative
             _ => canvas is not null && canvas != extent ? "summary.resolution_explicit_canvas" : "summary.resolution_explicit"
         };
         object?[] args = [extent, canvas, display];
-        return (Messages.Get(key, Messages.Chinese, args), Messages.Get(key, Messages.English, args));
+        return (MessageCatalog.Get(key, MessageCatalog.Chinese, args), MessageCatalog.Get(key, MessageCatalog.English, args));
         static string Extent(double width, double height) =>
             width.ToString("0.###", CultureInfo.InvariantCulture) + "×" + height.ToString("0.###", CultureInfo.InvariantCulture);
     }
@@ -316,7 +316,7 @@ public static class PlanNarrative
 
     private static JsonObject Bakeable_(JsonObject report, JsonObject candidate)
     {
-        string liveNames = Messages.NameList(LiveLayerNames(report));
+        string liveNames = MessageCatalog.NameList(LiveLayerNames(report));
         bool hasLive = liveNames.Length > 0;
         double frames = Number(candidate["frames"]) ?? 0;
         JsonObject summary;
@@ -334,25 +334,25 @@ public static class PlanNarrative
         // 摆动改频成立时结论行补一句改了多少、冻结了什么；开关关闭的计划没有这个字段，结论逐字不变。
         // 静止候选也补：护栏之后它只可能是摆动项全部是慢项、冻结后速度偏差都在上限内，冻结了什么得说出来。
         if (candidate["sway_retime"] is JsonObject swayRetime)
-            foreach (string language in new[] { Messages.Chinese, Messages.English })
+            foreach (string language in new[] { MessageCatalog.Chinese, MessageCatalog.English })
             {
-                summary[language] = summary[language]!.GetValue<string>() + (language == Messages.Chinese ? "" : " ") + SwayRetimeLine(swayRetime, language);
+                summary[language] = summary[language]!.GetValue<string>() + (language == MessageCatalog.Chinese ? "" : " ") + SwayRetimeLine(swayRetime, language);
             }
         // 循环长度不是任何周期定出来的（只有平稳随机粒子）：结论行说明按几秒循环、接缝靠交叉淡化。
         if (Text(candidate["loop_length_source"]) == "stationary_particle_default")
         {
             string length = (Number(candidate["seconds"]) ?? 0).ToString("0.###", CultureInfo.InvariantCulture);
-            foreach (string language in new[] { Messages.Chinese, Messages.English })
-                summary[language] = summary[language]!.GetValue<string>() + (language == Messages.Chinese ? "" : " ") +
-                    Messages.Get("summary.particle_default_loop", language, length);
+            foreach (string language in new[] { MessageCatalog.Chinese, MessageCatalog.English })
+                summary[language] = summary[language]!.GetValue<string>() + (language == MessageCatalog.Chinese ? "" : " ") +
+                    MessageCatalog.Get("summary.particle_default_loop", language, length);
         }
         // 循环长度上限被内嵌视频 2 GiB 收紧时说明"该分辨率下最长约 x 秒"。上限对所有周期分量共用，所以不论改频开关，
         // 只要选中的是整层循环候选就说；循环记录上没有时回退读改频记录（旧 plan 只在那里记）。
         if (ReferenceEquals(candidate.Parent, report["loop"]?["candidates"]) &&
             (report["loop"]?["embedded_video_limit"] ?? report["loop"]?["sway_retime"]?["embedded_video_limit"]) is JsonObject limitRecord)
-            foreach (string language in new[] { Messages.Chinese, Messages.English })
+            foreach (string language in new[] { MessageCatalog.Chinese, MessageCatalog.English })
                 if (EmbeddedVideoLimitLine(limitRecord, language) is string limit)
-                    summary[language] = summary[language]!.GetValue<string>() + (language == Messages.Chinese ? "" : " ") + limit;
+                    summary[language] = summary[language]!.GetValue<string>() + (language == MessageCatalog.Chinese ? "" : " ") + limit;
         return summary;
     }
 
@@ -362,7 +362,7 @@ public static class PlanNarrative
         if (limit?["applied"] is not JsonValue applied || !applied.TryGetValue(out bool yes) || !yes) return null;
         if (Number(limit["requested_loop_length_maximum_seconds"]) is not double requested || Number(limit["fit_seconds"]) is not double fit ||
             Number(limit["encoded_width"]) is not double width || Number(limit["encoded_height"]) is not double height) return null;
-        return Messages.Get("summary.embedded_video_limit", language, width.ToString("0", CultureInfo.InvariantCulture),
+        return MessageCatalog.Get("summary.embedded_video_limit", language, width.ToString("0", CultureInfo.InvariantCulture),
             height.ToString("0", CultureInfo.InvariantCulture), FramesPerSecond(new JsonObject { ["settings"] = new JsonObject {
                 ["fps_numerator"] = limit["fps_numerator"]?.DeepClone(), ["fps_denominator"] = limit["fps_denominator"]?.DeepClone() } }),
             fit.ToString("0", CultureInfo.InvariantCulture), requested.ToString("0.###", CultureInfo.InvariantCulture));
@@ -379,9 +379,9 @@ public static class PlanNarrative
         string seconds = Number(retime["seconds"]) is double length ? length.ToString("0.##", CultureInfo.InvariantCulture) : "?";
         // 预算是求解参数：质量档与旧 plan 没有预算，讲"按改动最小求解"。
         string budget = Number(retime["retime_budget_percent"]) is double percent
-            ? Messages.Get("summary.sway_budget", language, percent.ToString("0.###", CultureInfo.InvariantCulture))
-            : Messages.Get("summary.sway_budget_minimized", language);
-        return Messages.Get("summary.sway_retime", language, drift, cycles ?? "?", visible, budget, deviation ?? "?", frozen, seconds);
+            ? MessageCatalog.Get("summary.sway_budget", language, percent.ToString("0.###", CultureInfo.InvariantCulture))
+            : MessageCatalog.Get("summary.sway_budget_minimized", language);
+        return MessageCatalog.Get("summary.sway_retime", language, drift, cycles ?? "?", visible, budget, deviation ?? "?", frozen, seconds);
     }
 
     private static JsonObject Verdict(string verdict, string key, params object?[] args) => Bilingual(verdict, key, args, args);
@@ -389,7 +389,7 @@ public static class PlanNarrative
     /// <summary>中英各带一套参数：嵌进结论里的那半句本身就是分语言的。</summary>
     private static JsonObject Bilingual(string verdict, string key, object?[] chineseArgs, object?[] englishArgs) => new() {
         ["verdict"] = verdict, ["key"] = key,
-        ["zh"] = Messages.Get(key, Messages.Chinese, chineseArgs), ["en"] = Messages.Get(key, Messages.English, englishArgs) };
+        ["zh"] = MessageCatalog.Get(key, MessageCatalog.Chinese, chineseArgs), ["en"] = MessageCatalog.Get(key, MessageCatalog.English, englishArgs) };
 
     /// <summary>整幅候选优先，其次特效前缀候选。</summary>
     private static JsonObject? FirstCandidate(JsonObject report)
@@ -432,20 +432,20 @@ public static class PlanNarrative
         {
             string reasonKey = Text(report["loop"]?["no_candidate_reason"]?["kind"]) == nameof(CommonLoopNoCandidateKind.NoTemporalMechanism)
                 ? "summary.stationary_only_no_period_source" : "summary.stationary_only_no_candidate";
-            string listed = Messages.NameList(stationaryLayers);
+            string listed = MessageCatalog.NameList(stationaryLayers);
             return Bilingual(Unknown, "summary.loop_unresolved_stationary_only",
-                [stationaryLayers.Length, listed, Messages.Get(reasonKey, Messages.Chinese), nextZh],
-                [stationaryLayers.Length, listed, Messages.Get(reasonKey, Messages.English), nextEn]);
+                [stationaryLayers.Length, listed, MessageCatalog.Get(reasonKey, MessageCatalog.Chinese), nextZh],
+                [stationaryLayers.Length, listed, MessageCatalog.Get(reasonKey, MessageCatalog.English), nextEn]);
         }
         var (firstZh, firstEn) = DescribeUnresolved(mechanisms[0], LocalizedOf(report["loop"] as JsonObject, mechanisms[0]), names,
             Number(report["loop"]?["maximum_seconds"]));
         // 首条说明嵌在括号里，去掉它自带的句末标点。
         firstZh = firstZh.TrimEnd('。', ' ');
         firstEn = firstEn.TrimEnd('.', ' ');
-        object?[] note = [stationaryLayers.Length, Messages.NameList(stationaryLayers)];
-        string noteZh = stationaryLayers.Length == 0 ? "" : Messages.Get("summary.stationary_particles_note", Messages.Chinese, note);
-        string noteEn = stationaryLayers.Length == 0 ? "" : Messages.Get("summary.stationary_particles_note", Messages.English, note) + " ";
-        string LayerList(IEnumerable<int> ids) => Messages.NameList(ids.Select(id => names.GetValueOrDefault(id) ?? id.ToString(CultureInfo.InvariantCulture)));
+        object?[] note = [stationaryLayers.Length, MessageCatalog.NameList(stationaryLayers)];
+        string noteZh = stationaryLayers.Length == 0 ? "" : MessageCatalog.Get("summary.stationary_particles_note", MessageCatalog.Chinese, note);
+        string noteEn = stationaryLayers.Length == 0 ? "" : MessageCatalog.Get("summary.stationary_particles_note", MessageCatalog.English, note) + " ";
+        string LayerList(IEnumerable<int> ids) => MessageCatalog.NameList(ids.Select(id => names.GetValueOrDefault(id) ?? id.ToString(CultureInfo.InvariantCulture)));
         int[] retained = Ids(fallback?["retain_live_root_ids"]);
         if (status == "candidate_found" && retained.Length > 0)
         {
@@ -480,7 +480,7 @@ public static class PlanNarrative
             "not_applicable" => ("summary.next_not_applicable", Array.Empty<object?>()),
             "failed" => ("summary.next_failed", new object?[] { "loop_allocation_fallback" }),
             _ => ("summary.next_see_unresolved", new object?[] { "loop.unresolved_localized" }) };
-        return (Messages.Get(key, Messages.Chinese, args), Messages.Get(key, Messages.English, args));
+        return (MessageCatalog.Get(key, MessageCatalog.Chinese, args), MessageCatalog.Get(key, MessageCatalog.English, args));
     }
 
     private static int[] Ids(JsonNode? node) =>
@@ -498,7 +498,7 @@ public static class PlanNarrative
             return (Text(localized["zh"]) ?? detail, Text(localized["en"]) ?? detail);
         string kind = Text(item["kind"]) ?? "";
         string? owner = Number(item["owner_layer_id"]) is double id
-            ? "\"" + Messages.EscapeName(names.GetValueOrDefault((int)id) ?? ((int)id).ToString(CultureInfo.InvariantCulture)) + "\"" : null;
+            ? "\"" + MessageCatalog.EscapeName(names.GetValueOrDefault((int)id) ?? ((int)id).ToString(CultureInfo.InvariantCulture)) + "\"" : null;
         string effect = EffectName(Text(item["resource"]));
         string where = owner is null ? "" : effect.Length > 0 ? $"图层 {owner} 上的 {effect} 特效" : $"图层 {owner}";
         string zh = kind switch {
@@ -532,7 +532,7 @@ public static class PlanNarrative
     /// <summary>静止证明失败：理由点名了被烘图层（<see cref="StaticLayer"/>）就说出层名，否则给通用说明。</summary>
     private static string SourceStaticChinese(JsonObject? layer)
     {
-        string subject = Text(layer?["name"]) is string name ? $"被烘的图层 \"{Messages.EscapeName(name)}\" " : "有一个被烘的图层";
+        string subject = Text(layer?["name"]) is string name ? $"被烘的图层 \"{MessageCatalog.EscapeName(name)}\" " : "有一个被烘的图层";
         return layer?["particle"]?.GetValue<bool>() == true
             ? subject + "含有粒子系统，既证明不了循环也证明不了静止"
             : subject + "证明不了是静止画面";
@@ -548,7 +548,7 @@ public static class PlanNarrative
     {
         if (string.IsNullOrWhiteSpace(resource)) return "";
         string first = resource.Split([" + ", " / "], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? "";
-        return Messages.EscapeName(Path.GetFileNameWithoutExtension(first), 24);
+        return MessageCatalog.EscapeName(Path.GetFileNameWithoutExtension(first), 24);
     }
 
     private static Dictionary<int, string> LayerNames(JsonObject report)

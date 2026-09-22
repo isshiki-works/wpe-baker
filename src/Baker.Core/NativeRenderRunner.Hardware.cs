@@ -186,23 +186,23 @@ public sealed partial class NativeRenderRunner
         JsonObject[] passed = [.. adapters.Where(Passed)];
         var parts = new JsonArray();
         void Add(string key, object?[] chineseArgs, object?[] englishArgs) =>
-            parts.Add(Messages.Localized(key, chineseArgs, englishArgs));
+            parts.Add(MessageCatalog.Localized(key, chineseArgs, englishArgs));
 
         if (adapters.Length == 0) Add("hardware_decode.no_adapters_on_baking_machine", [], []);
         else if (passed.Length == 0)
         {
-            object?[] all = [Messages.NameList(adapters.Select(Name))];
+            object?[] all = [MessageCatalog.NameList(adapters.Select(Name))];
             Add("hardware_decode.none_passed_on_baking_machine", all, all);
         }
         else
         {
-            object?[] names = [Messages.NameList(passed.Select(Name))];
+            object?[] names = [MessageCatalog.NameList(passed.Select(Name))];
             Add("hardware_decode.verified_on_baking_machine", names, names);
         }
         // 烘焙机上一张核显都没有时提示更强：核显完全没被验证过，而播放机多半就是核显。
         if (adapters.Length > 0 && !adapters.Any(adapter => Class(adapter) == HardwareDecodeDimensions.IntegratedAdapter))
         {
-            object?[] discrete = [Messages.NameList(adapters.Select(Name))];
+            object?[] discrete = [MessageCatalog.NameList(adapters.Select(Name))];
             Add("hardware_decode.no_integrated_verified", discrete, discrete);
         }
 
@@ -214,16 +214,16 @@ public sealed partial class NativeRenderRunner
             hints.Add(hint.ToJson());
             string extent = HardwareDecodeDimensions.Extent(width, height);
             Add("hardware_decode.beyond_integrated_ceiling",
-                [hint.Ceiling.DisplayName, extent, hint.ExceededText(Messages.Chinese), hint.CeilingText(), hint.Ceiling.BasisZh],
-                [hint.Ceiling.DisplayName, extent, hint.ExceededText(Messages.English), hint.CeilingText(), hint.Ceiling.BasisEn]);
+                [hint.Ceiling.DisplayName, extent, hint.ExceededText(MessageCatalog.Chinese), hint.CeilingText(), hint.Ceiling.BasisZh],
+                [hint.Ceiling.DisplayName, extent, hint.ExceededText(MessageCatalog.English), hint.CeilingText(), hint.Ceiling.BasisEn]);
         }
         report["target_hints"] = hints;
         static string Text(JsonNode? part, string language) => part?[language]?.GetValue<string>() ?? "";
         report["conclusion"] = new JsonObject
         {
             // 中文句子自带句号，直接相接；英文按句子间空格相接。
-            ["zh"] = string.Concat(parts.Select(part => Text(part, Messages.Chinese))),
-            ["en"] = string.Join(" ", parts.Select(part => Text(part, Messages.English))),
+            ["zh"] = string.Concat(parts.Select(part => Text(part, MessageCatalog.Chinese))),
+            ["en"] = string.Join(" ", parts.Select(part => Text(part, MessageCatalog.English))),
             ["parts"] = parts,
         };
     }

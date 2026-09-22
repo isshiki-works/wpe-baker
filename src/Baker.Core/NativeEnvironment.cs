@@ -41,7 +41,7 @@ public static class NativeEnvironment
         }
         foreach (var (file, name) in new[] { (tools.Renderer, "setup.tool_renderer"), (tools.Ffmpeg, "setup.tool_ffmpeg"), (tools.Ffprobe, "setup.tool_ffprobe") })
             if (!File.Exists(file))
-                throw new Message("setup.tool_file_missing", [Messages.Get(name, Messages.English), file], [Messages.Get(name, Messages.Chinese), file])
+                throw new Message("setup.tool_file_missing", [MessageCatalog.Get(name, MessageCatalog.English), file], [MessageCatalog.Get(name, MessageCatalog.Chinese), file])
                     .Error(text => new FileNotFoundException(text, file));
         foreach (string directory in tools.RuntimeDirectories)
             if (!Directory.Exists(directory))

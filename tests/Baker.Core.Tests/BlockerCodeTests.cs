@@ -73,7 +73,7 @@ public class BlockerCatalogTests
     /// <summary>一个键的参数个数：中文、英文、v3 模板里用到的最大占位符 + 1（v3 专用的尾部参数也算）。</summary>
     internal static int Arity(string key)
     {
-        Messages.Entry entry = Messages.Find(key)!;
+        MessageCatalog.Entry entry = MessageCatalog.Find(key)!;
         int[] all = Indices(entry.Zh).Concat(Indices(entry.En)).Concat(Indices(entry.LegacyTemplate)).ToArray();
         return all.Length == 0 ? 0 : all.Max() + 1;
     }
@@ -84,7 +84,7 @@ public class BlockerCatalogTests
         foreach (BlockerCode code in Enum.GetValues<BlockerCode>())
         {
             string key = BlockerCodes.Key(code);
-            Messages.Entry? entry = Messages.Find(key);
+            MessageCatalog.Entry? entry = MessageCatalog.Find(key);
             Assert.True(entry is not null, $"{code} 缺文案键 {key}");
             Assert.False(string.IsNullOrWhiteSpace(entry!.Zh), $"{key} 中文模板为空");
             Assert.False(string.IsNullOrWhiteSpace(entry.En), $"{key} 英文模板为空");
@@ -101,7 +101,7 @@ public class BlockerCatalogTests
     public void EveryBlockerKeyInCatalogHasCode()
     {
         // 反方向：文案表里 blocker.* 键都要有编号，没有编号的就是死键。
-        string[] orphans = Messages.Keys.Where(key => key.StartsWith("blocker.", StringComparison.Ordinal) && BlockerCodes.FromKey(key) is null).ToArray();
+        string[] orphans = MessageCatalog.Keys.Where(key => key.StartsWith("blocker.", StringComparison.Ordinal) && BlockerCodes.FromKey(key) is null).ToArray();
         Assert.Empty(orphans);
     }
 

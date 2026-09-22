@@ -139,10 +139,10 @@ public sealed class WallpaperController(string executable)
         // WPE 没在运行时 ReadCurrentTargetsAsync 一律返回空，以前会被报成"这块屏幕不见了"，
         // 用户按着提示去查显示器也查不出问题；先把"没启动"和"屏幕没了"分开说。
         if (!NativeEnvironment.WallpaperRunning(Executable))
-            throw new InvalidDataException(Messages.RenderLegacy("apply.wallpaper_engine_not_running"));
+            throw new InvalidDataException(MessageCatalog.RenderLegacy("apply.wallpaper_engine_not_running"));
         var targets = await ReadCurrentTargetsAsync(cancellationToken);
         var target = targets.SingleOrDefault(t => t.Profile == request.Profile && t.Location == request.Location)
-            ?? throw new InvalidDataException(Messages.RenderLegacy("apply.location_missing", request.Location));
+            ?? throw new InvalidDataException(MessageCatalog.RenderLegacy("apply.location_missing", request.Location));
         string? playlist = PlaylistName(target.Assignment);
         var before = await ObserveAsync(request.Location, cancellationToken);
         string current = before.File;

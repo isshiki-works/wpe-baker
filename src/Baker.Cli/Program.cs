@@ -15,7 +15,7 @@ async Task<NativeTools> ReadTools(string path, CancellationToken token)
     return new(Resolve(value.Renderer), Resolve(value.Ffmpeg), Resolve(value.Ffprobe), value.RuntimeDirectories.Select(Resolve).ToArray());
 }
 // 界面语言：--lang 覆盖，默认跟随系统（zh-* → zh）。只影响文案，不影响任何判定。
-string language = Messages.DefaultLanguage();
+string language = MessageCatalog.DefaultLanguage();
 // 结论那一行是中文时，重定向到文件或管道必须是 UTF-8 无 BOM；直连控制台则保持控制台自己的代码页，
 // 否则 936 控制台会把 UTF-8 字节显示成乱码。stdout 的 JSON 始终是转义过的 ASCII，不受影响。
 if (Console.IsErrorRedirected || Console.IsOutputRedirected)
@@ -112,9 +112,9 @@ try
             if (rejection.Kind == SourceDiagnosis.PresetKind)
             {
                 Console.Error.WriteLine(JsonSerializer.Serialize(new { status = "not_applicable", kind = "preset",
-                    dependency = rejection.Dependency, message = rejection.Text(Messages.English) }, jsonOptions));
+                    dependency = rejection.Dependency, message = rejection.Text(MessageCatalog.English) }, jsonOptions));
                 // 以前这里只吐一段英文 JSON 就退出，中文用户连一句人话都看不到。
-                Console.Error.WriteLine(Messages.Get("summary.not_applicable", language, rejection.Text(language)));
+                Console.Error.WriteLine(MessageCatalog.Get("summary.not_applicable", language, rejection.Text(language)));
                 return 3;
             }
             throw rejection.Message.Error(text => new InvalidDataException(text));
@@ -226,7 +226,7 @@ try
             catch (Exception error) when (error is not OperationCanceledException)
             {
                 sourcePower = SourcePowerVerdict.Skipped(error.Message);
-                Console.Error.WriteLine(Messages.Get(SourcePowerVerdict.Unavailable, language));
+                Console.Error.WriteLine(MessageCatalog.Get(SourcePowerVerdict.Unavailable, language));
             }
         }
         JsonObject report;
@@ -322,7 +322,7 @@ try
         string text = await File.ReadAllTextAsync(args[1], cancellation.Token);
         JsonObject input = JsonNode.Parse(text)?.AsObject() ?? throw new InvalidDataException("Invalid bake plan or request.");
         if (input["kind"] is JsonValue inputKind && inputKind.TryGetValue(out string? kindText) && kindText == AnalysisToolLimitation.Kind)
-            throw new InvalidDataException(Messages.RenderLegacy("cli.bake_tool_limitation_report"));
+            throw new InvalidDataException(MessageCatalog.RenderLegacy("cli.bake_tool_limitation_report"));
         if (input["kind"] is not null)
         {
             if (!options.TryGetValue("--out", out string? output)) throw new ArgumentException("Baking a plan directly requires --out NEW_DIRECTORY.");
@@ -468,7 +468,7 @@ catch (Exception error)
     if (args.Length > 0 && args[0] == "analyze")
     {
         // 人话那一行按异常带着的文案（键 + 参数）出；没带文案的异常原样给英文消息。
-        Console.Error.WriteLine(Messages.Get("summary.failed", language, Message.Of(error)?.In(language) ?? error.Message));
+        Console.Error.WriteLine(MessageCatalog.Get("summary.failed", language, Message.Of(error)?.In(language) ?? error.Message));
     }
     return 1;
 }

@@ -121,7 +121,7 @@ internal static class ReferenceSeamChecks
             !HybridBakeService.AllowsDirectPlayback(false, true, 0),
             "直编判定：不透明 + 非残差 + 非探针才直编，其余仍走无损 master");
 
-        string zh = EncodedLoopValidator.RejectionDetail(seam, Messages.Chinese), en = EncodedLoopValidator.RejectionDetail(seam, Messages.English);
+        string zh = EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.Chinese), en = EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.English);
         check(zh.Contains("第 30 帧", StringComparison.Ordinal) && zh.Contains("1.0/255", StringComparison.Ordinal) &&
             !zh.Contains("alpha", StringComparison.Ordinal) && !en.Contains("alpha", StringComparison.Ordinal) &&
             zh.Contains("成品解码出 29 帧，应为 30 帧", StringComparison.Ordinal) &&

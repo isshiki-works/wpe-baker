@@ -531,7 +531,7 @@ internal static class SwayRetimeChecks
             readBack is { SwayRetime: true, LoopLengthMaximumSeconds: 3600 } &&
             defaults.Deserialize<HybridAnalyzeRequest>(jsonOptions) is { SwayRetime: false, LoopLengthMaximumSeconds: null },
             "sway retime settings: defaults are omitted from the plan settings, enabled values round-trip");
-        check(Messages.Find("summary.sway_retime") is not null && Messages.Find("sway_retime.no_multiple_within_maximum") is not null,
+        check(MessageCatalog.Find("summary.sway_retime") is not null && MessageCatalog.Find("sway_retime.no_multiple_within_maximum") is not null,
             "sway retime copy: the conclusion and rejection texts are in the bilingual message table");
 
         // 内嵌视频 2 GiB（fix/embedded-video-size）：循环长度上限被收紧时写进 plan，结论行与无解原因说明"该分辨率下最长约 x 秒"。

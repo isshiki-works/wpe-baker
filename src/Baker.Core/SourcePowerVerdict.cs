@@ -142,8 +142,8 @@ public static class SourcePowerVerdict
         string key = gain["key"]?.GetValue<string>() ?? "measured_gain.unavailable";
         double saved = gain["saved_percent"] is JsonValue value && value.TryGetValue(out double percent) ? percent : 0;
         return key == "measured_gain.saved"
-            ? Messages.Get(key, language, saved.ToString("0", System.Globalization.CultureInfo.InvariantCulture))
-            : Messages.Get(key, language);
+            ? MessageCatalog.Get(key, language, saved.ToString("0", System.Globalization.CultureInfo.InvariantCulture))
+            : MessageCatalog.Get(key, language);
     }
 
     /// <summary>
@@ -158,12 +158,12 @@ public static class SourcePowerVerdict
         if (Classify(plan) is not string key || plan["summary"] is not JsonObject summary) return;
         summary["source_power_key"] = key;
         summary["tradeoff_first"] = false;
-        foreach (string language in new[] { Messages.Chinese, Messages.English })
+        foreach (string language in new[] { MessageCatalog.Chinese, MessageCatalog.English })
         {
-            string line = Messages.Get(key, language);
+            string line = MessageCatalog.Get(key, language);
             string existing = summary[language]?.GetValue<string>() ?? "";
             summary[language] = existing.StartsWith(line, StringComparison.Ordinal)
-                ? existing : line + (language == Messages.Chinese ? "" : " ") + existing;
+                ? existing : line + (language == MessageCatalog.Chinese ? "" : " ") + existing;
         }
     }
 }

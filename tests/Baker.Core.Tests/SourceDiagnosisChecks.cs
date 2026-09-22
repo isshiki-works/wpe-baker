@@ -22,17 +22,17 @@ internal static class SourceDiagnosisChecks
         // ---- 路径根本不存在 ----
         var missing = SourceDiagnosis.Inspect(Path.Combine(home, "no-such-folder"));
         Check(missing is { Kind: "missing" }, "a path that does not exist is reported as missing");
-        Check(missing!.Text(Messages.Chinese).Contains("路径不存在", StringComparison.Ordinal) &&
-            missing.Text(Messages.Chinese).Contains("no-such-folder", StringComparison.Ordinal),
+        Check(missing!.Text(MessageCatalog.Chinese).Contains("路径不存在", StringComparison.Ordinal) &&
+            missing.Text(MessageCatalog.Chinese).Contains("no-such-folder", StringComparison.Ordinal),
             "the missing-path message is chinese and names the path");
-        Check(missing.Text(Messages.English).Contains("does not exist", StringComparison.Ordinal),
+        Check(missing.Text(MessageCatalog.English).Contains("does not exist", StringComparison.Ordinal),
             "the missing-path message has an english form");
 
         // ---- 空文件夹：以前一律报 "Wallpaper source does not exist."，用户明明选中了它 ----
         string empty = New("empty");
         var emptyResult = SourceDiagnosis.Inspect(empty);
         Check(emptyResult is { Kind: "empty_folder" }, "a folder with no wallpaper entry is reported separately from a missing path");
-        Check(emptyResult!.Text(Messages.Chinese).Contains("该文件夹不含壁纸", StringComparison.Ordinal),
+        Check(emptyResult!.Text(MessageCatalog.Chinese).Contains("该文件夹不含壁纸", StringComparison.Ordinal),
             "the empty-folder message says the folder holds no wallpaper instead of saying it does not exist");
 
         // ---- 拖进来一个不相干的文件 ----
@@ -40,7 +40,7 @@ internal static class SourceDiagnosisChecks
         File.WriteAllBytes(stray, [0, 1, 2]);
         var strayResult = SourceDiagnosis.Inspect(stray);
         Check(strayResult is { Kind: "not_wallpaper_file" }, "an unrelated file is rejected as not a wallpaper source");
-        Check(strayResult!.Text(Messages.Chinese).Contains("clip.mp4", StringComparison.Ordinal),
+        Check(strayResult!.Text(MessageCatalog.Chinese).Contains("clip.mp4", StringComparison.Ordinal),
             "the stray-file message names the file that was dropped");
 
         // ---- 视频壁纸 / 网页壁纸：各说各的，并点名 type 与内容文件 ----
@@ -55,7 +55,7 @@ internal static class SourceDiagnosisChecks
             Check(legacy.Contains("bakes Scene wallpapers only", StringComparison.Ordinal) &&
                 legacy.Contains("type=" + kind, StringComparison.Ordinal) && legacy.Contains(entry, StringComparison.Ordinal),
                 kind + " legacy english names the type and the content file");
-            string chinese = result.Text(Messages.Chinese);
+            string chinese = result.Text(MessageCatalog.Chinese);
             Check(chinese.Contains("内容是 " + entry, StringComparison.Ordinal) && !chinese.Contains("content is", StringComparison.Ordinal),
                 kind + " chinese text carries the content clause in chinese");
         }
@@ -64,7 +64,7 @@ internal static class SourceDiagnosisChecks
         string noFile = New("video-no-file");
         File.WriteAllText(Path.Combine(noFile, "project.json"), """{"type":"video"}""");
         var noFileResult = SourceDiagnosis.Inspect(noFile);
-        Check(noFileResult is { Kind: "video" } && !noFileResult.Text(Messages.Chinese).Contains("内容是", StringComparison.Ordinal) &&
+        Check(noFileResult is { Kind: "video" } && !noFileResult.Text(MessageCatalog.Chinese).Contains("内容是", StringComparison.Ordinal) &&
             !noFileResult.Message.Text.Contains("content is", StringComparison.Ordinal),
             "a video wallpaper without a file entry omits the content clause in both languages");
 
@@ -74,8 +74,8 @@ internal static class SourceDiagnosisChecks
         var presetResult = SourceDiagnosis.Inspect(preset);
         Check(presetResult is { Kind: SourceDiagnosis.PresetKind, Dependency: "3172471800" },
             "a preset package is classified apart from video and web and keeps its dependency");
-        Check(presetResult!.Text(Messages.Chinese).Contains(@"431960\3172471800", StringComparison.Ordinal) &&
-            presetResult.Text(Messages.English).Contains(@"431960\3172471800", StringComparison.Ordinal),
+        Check(presetResult!.Text(MessageCatalog.Chinese).Contains(@"431960\3172471800", StringComparison.Ordinal) &&
+            presetResult.Text(MessageCatalog.English).Contains(@"431960\3172471800", StringComparison.Ordinal),
             "both languages point at the wallpaper the preset depends on");
 
         // ---- 别的 type ----
@@ -130,17 +130,17 @@ internal static class SourceDiagnosisChecks
             // 界面显示前要能换成中文：Core 抛英文原文，异常带着键与参数，GUI 按它重新渲染。
             JsonObject localized = Message.Of(error)!.Localized();
             translated = localized["key"]?.GetValue<string>() == "setup.tool_file_missing" &&
-                localized[Messages.Chinese]?.GetValue<string>() is string zh &&
+                localized[MessageCatalog.Chinese]?.GetValue<string>() is string zh &&
                 zh.Contains("缺少随包的渲染器 wpe-render.exe", StringComparison.Ordinal) && zh.Contains(bare, StringComparison.Ordinal);
         }
         Check(named, "a missing bundled tool is reported by name and full path, not just 'Required tool is missing'");
         Check(translated, "the missing-tool error carries its message key, which renders chinese with the same tool name and path");
-        Check(Messages.Get("setup.tool_file_missing", Messages.Chinese, Messages.Get("setup.tool_renderer", Messages.Chinese), "X")
+        Check(MessageCatalog.Get("setup.tool_file_missing", MessageCatalog.Chinese, MessageCatalog.Get("setup.tool_renderer", MessageCatalog.Chinese), "X")
             .Contains("渲染器 wpe-render.exe", StringComparison.Ordinal),
             "the missing-tool message renders in chinese");
-        Check(Messages.Get("setup.tools_config_missing", Messages.Chinese).Contains("压缩包整体解压", StringComparison.Ordinal),
+        Check(MessageCatalog.Get("setup.tools_config_missing", MessageCatalog.Chinese).Contains("压缩包整体解压", StringComparison.Ordinal),
             "the missing tools.json message tells the user to extract the whole archive");
-        Check(Messages.Get("apply.wallpaper_engine_not_running", Messages.Chinese).Contains("Wallpaper Engine 未运行", StringComparison.Ordinal),
+        Check(MessageCatalog.Get("apply.wallpaper_engine_not_running", MessageCatalog.Chinese).Contains("Wallpaper Engine 未运行", StringComparison.Ordinal),
             "applying with Wallpaper Engine closed has its own chinese message");
 
         // ---- 临时目录清理：过期的删掉，新的留着（在测试自己的目录里跑，不动本机 %TEMP%）----

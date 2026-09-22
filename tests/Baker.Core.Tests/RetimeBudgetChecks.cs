@@ -288,7 +288,7 @@ internal static class RetimeBudgetChecks
             cyclesText == budget3.SlowestVisibleCycles!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) &&
             deviationText is not null && frozen == budget3.FrozenCount,
             "retime record: the plan carries the preset, the budget with its source, the phase drift and the slowest visible cycle count");
-        string zh = PlanNarrative.SwayRetimeLine(record, Messages.Chinese), en = PlanNarrative.SwayRetimeLine(record, Messages.English);
+        string zh = PlanNarrative.SwayRetimeLine(record, MessageCatalog.Chinese), en = PlanNarrative.SwayRetimeLine(record, MessageCatalog.English);
         check(zh.Contains($"单个循环内相位最大偏差 {driftText} 圈，最慢可见摆动项运行 {cyclesText} 圈", StringComparison.Ordinal) &&
             zh.Contains($"改频 {visibleText}%，预算 3%", StringComparison.Ordinal) &&
             en.Contains($"maximum phase drift {driftText} cycle per loop; slowest visible sway term runs {cyclesText} cycles", StringComparison.Ordinal) &&
@@ -297,8 +297,8 @@ internal static class RetimeBudgetChecks
         // 质量档与旧记录没有预算：结论行说"按改动最小求解"，不编一个百分比出来。
         JsonObject minimizedRecord = SwayRecurrenceSolver.ToJson(minimized, 600, 60, 1, RetimeProfile.Resolve(RetimeProfile.Quality, null, null, 2));
         check(minimizedRecord["retime_budget_percent"] is null &&
-            PlanNarrative.SwayRetimeLine(minimizedRecord, Messages.Chinese).Contains("按最小改动求解", StringComparison.Ordinal) &&
-            PlanNarrative.SwayRetimeLine(minimizedRecord, Messages.English).Contains("minimum-change solution", StringComparison.Ordinal),
+            PlanNarrative.SwayRetimeLine(minimizedRecord, MessageCatalog.Chinese).Contains("按最小改动求解", StringComparison.Ordinal) &&
+            PlanNarrative.SwayRetimeLine(minimizedRecord, MessageCatalog.English).Contains("minimum-change solution", StringComparison.Ordinal),
             "retime conclusion line: the quality preset reports that it solved for the smallest change instead of a budget");
     }
 }

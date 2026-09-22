@@ -246,8 +246,8 @@ public static class ResidualMasking
             {
                 ["owner_layer_id"] = layer["owner_layer_id"]?.DeepClone(), ["period_frames"] = period, ["loop_frames"] = frames,
                 ["fps_num"] = fpsNumerator, ["fps_den"] = fpsDenominator, ["locked_fps_num"] = lockedNumerator, ["locked_fps_den"] = lockedDenominator,
-                ["reason"] = Messages.Get("residual.particle_cycle_mismatch", Messages.Chinese, args),
-                ["reason_en"] = Messages.Get("residual.particle_cycle_mismatch", Messages.English, args)
+                ["reason"] = MessageCatalog.Get("residual.particle_cycle_mismatch", MessageCatalog.Chinese, args),
+                ["reason_en"] = MessageCatalog.Get("residual.particle_cycle_mismatch", MessageCatalog.English, args)
             };
         }
         return null;
@@ -339,7 +339,7 @@ public static class ResidualMasking
             string[] parts = residual.Take(maximum).Select(item =>
             {
                 string owner = Id(item["owner_layer_id"]) is int id ? id.ToString(CultureInfo.InvariantCulture) : "?";
-                string name = Text(item["layer_name"]) is { Length: > 0 } named ? " \"" + Messages.EscapeName(named) + "\"" : "";
+                string name = Text(item["layer_name"]) is { Length: > 0 } named ? " \"" + MessageCatalog.EscapeName(named) + "\"" : "";
                 string label = Text(item["classification"]) is { Length: > 0 } kind ? kind : Text(item["unresolved_kind"]);
                 return chinese ? $"图层 {owner}{name}（{label}）" : $"layer {owner}{name} ({label})";
             }).ToArray();
@@ -392,8 +392,8 @@ public static class ResidualMasking
             ["retain_live_basis"] = retain.Length == 0 ? null
                 : verified.Length > 0 ? "loop_allocation_fallback_candidate_found" : "unresolved_owner_author_roots_not_reanalyzed",
             ["reason"] = reason,
-            ["reason_zh"] = Messages.Get("blocker.residual_masking_layout", Messages.Chinese, zh),
-            ["reason_en"] = Messages.Get("blocker.residual_masking_layout", Messages.English, en)
+            ["reason_zh"] = MessageCatalog.Get("blocker.residual_masking_layout", MessageCatalog.Chinese, zh),
+            ["reason_en"] = MessageCatalog.Get("blocker.residual_masking_layout", MessageCatalog.English, en)
         };
     }
 
@@ -637,8 +637,8 @@ public static class ResidualMasking
         int? owner = Id(item["owner_layer_id"]);
         verdict["maskable"] = false;
         string layer = owner is int ownerId ? ownerId.ToString(CultureInfo.InvariantCulture) : "?";
-        verdict["reason"] = Messages.Get("residual.displacement_not_maskable", Messages.Chinese, layer, named);
-        verdict["reason_en"] = Messages.Get("residual.displacement_not_maskable", Messages.English, layer, named);
+        verdict["reason"] = MessageCatalog.Get("residual.displacement_not_maskable", MessageCatalog.Chinese, layer, named);
+        verdict["reason_en"] = MessageCatalog.Get("residual.displacement_not_maskable", MessageCatalog.English, layer, named);
         if (named != ShaderPeriodAnalysis.FoliageSwayMechanism) return verdict;
         JsonObject? pass = AuthoredPass(item, objects);
         double? strength = pass is null ? null : Scalar(pass, "strength");
@@ -672,8 +672,8 @@ public static class ResidualMasking
             stationarity["stationary"] is not JsonValue flag || !flag.TryGetValue(out bool stationary))
         {
             verdict["maskable"] = false;
-            verdict["reason"] = Messages.Get("residual.particle_verdict_missing", Messages.Chinese, layer);
-            verdict["reason_en"] = Messages.Get("residual.particle_verdict_missing", Messages.English, layer);
+            verdict["reason"] = MessageCatalog.Get("residual.particle_verdict_missing", MessageCatalog.Chinese, layer);
+            verdict["reason_en"] = MessageCatalog.Get("residual.particle_verdict_missing", MessageCatalog.English, layer);
             return verdict;
         }
         verdict["particle_stationarity"] = stationarity.DeepClone();
@@ -682,15 +682,15 @@ public static class ResidualMasking
             string codes = string.Join(", ", (stationarity["failed_conditions"] as JsonArray ?? []).OfType<JsonObject>()
                 .Select(failure => (Text(failure["condition"]) + " " + Text(failure["code"])).Trim()).Where(code => code.Length > 0).Distinct());
             verdict["maskable"] = false;
-            verdict["reason"] = Messages.Get("residual.particle_not_stationary", Messages.Chinese, layer, codes);
-            verdict["reason_en"] = Messages.Get("residual.particle_not_stationary", Messages.English, layer, codes);
+            verdict["reason"] = MessageCatalog.Get("residual.particle_not_stationary", MessageCatalog.Chinese, layer, codes);
+            verdict["reason_en"] = MessageCatalog.Get("residual.particle_not_stationary", MessageCatalog.English, layer, codes);
             return verdict;
         }
         if (Number(stationarity["warmup_seconds"]) is not double warmup || warmup < 0)
         {
             verdict["maskable"] = false;
-            verdict["reason"] = Messages.Get("residual.particle_warmup_missing", Messages.Chinese, layer);
-            verdict["reason_en"] = Messages.Get("residual.particle_warmup_missing", Messages.English, layer);
+            verdict["reason"] = MessageCatalog.Get("residual.particle_warmup_missing", MessageCatalog.Chinese, layer);
+            verdict["reason_en"] = MessageCatalog.Get("residual.particle_warmup_missing", MessageCatalog.English, layer);
             return verdict;
         }
         verdict["warmup_seconds"] = warmup;
@@ -700,13 +700,13 @@ public static class ResidualMasking
             // 封顶 + 确定寿命：周期平稳，只在循环长度是替换周期的整数倍时成立；bake 用 LockedCycleMismatch 核对选中的循环。
             string period = Id(cycle["period_frames"])?.ToString(CultureInfo.InvariantCulture) ?? "?";
             verdict["cyclostationary_lock"] = cycle.DeepClone();
-            verdict["proof"] = Messages.Get("residual.particle_cyclostationary_proof", Messages.Chinese, period);
-            verdict["proof_en"] = Messages.Get("residual.particle_cyclostationary_proof", Messages.English, period);
+            verdict["proof"] = MessageCatalog.Get("residual.particle_cyclostationary_proof", MessageCatalog.Chinese, period);
+            verdict["proof_en"] = MessageCatalog.Get("residual.particle_cyclostationary_proof", MessageCatalog.English, period);
         }
         else
         {
-            verdict["proof"] = Messages.Get("residual.particle_stationary_proof", Messages.Chinese);
-            verdict["proof_en"] = Messages.Get("residual.particle_stationary_proof", Messages.English);
+            verdict["proof"] = MessageCatalog.Get("residual.particle_stationary_proof", MessageCatalog.Chinese);
+            verdict["proof_en"] = MessageCatalog.Get("residual.particle_stationary_proof", MessageCatalog.English);
         }
         verdict["amplitude_basis"] = "first_layer_seam_residual_check";
         verdict["canvas_fraction_basis"] = definition is null

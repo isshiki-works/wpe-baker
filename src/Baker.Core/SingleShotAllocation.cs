@@ -59,7 +59,7 @@ internal static class SingleShotAllocation
                 .OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
             return reasons.Length == 0 ? name : $"{name} ({string.Join(", ", reasons)})";
         }
-        // 文案入 Messages 表（key: blocker.fullframe_unreachable），legacy 英文逐字不变，中文与新英文在 blockers_localized 里给出。
+        // 文案入 MessageCatalog 表（key: blocker.fullframe_unreachable），legacy 英文逐字不变，中文与新英文在 blockers_localized 里给出。
         string listed = string.Join("; ", blocking.Select(Describe));
         var (zh, en) = UnlockPath(layers, blocking);
         return new Blocker(BlockerCode.FullframeUnreachable, [listed, en], [listed, zh]);
@@ -79,7 +79,7 @@ internal static class SingleShotAllocation
             : string.Join(" ", new[] { "--exclude-layers " + ids, parallax ? "--view-mode fixed_view" : null }.OfType<string>());
         if (kinds.Length == 0)
             return ($"用 {command} 关掉它们后重新分析", $"turn them off with {command} and analyze again");
-        return ($"关掉{TradeoffOptions.KindList(kinds, Messages.Chinese)}：{command}",
-            $"turn off {TradeoffOptions.KindList(kinds, Messages.English)}: {command}");
+        return ($"关掉{TradeoffOptions.KindList(kinds, MessageCatalog.Chinese)}：{command}",
+            $"turn off {TradeoffOptions.KindList(kinds, MessageCatalog.English)}: {command}");
     }
 }

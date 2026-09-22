@@ -110,8 +110,8 @@ public static class SourceDiagnosis
         string kind = type?.ToLowerInvariant() ?? "";
         if (kind is "video" or "web")
         {
-            object?[] english = [type, file is null ? "" : Messages.Get("source.content_clause", Messages.English, file)];
-            object?[] chinese = [type, file is null ? "" : Messages.Get("source.content_clause", Messages.Chinese, file)];
+            object?[] english = [type, file is null ? "" : MessageCatalog.Get("source.content_clause", MessageCatalog.English, file)];
+            object?[] chinese = [type, file is null ? "" : MessageCatalog.Get("source.content_clause", MessageCatalog.Chinese, file)];
             return new Rejection(kind, kind == "video" ? "source.video_wallpaper" : "source.web_wallpaper", english, chinese);
         }
         return new Rejection("other_type", "source.not_scene_project", [type ?? "absent"], [type ?? "缺失"]);

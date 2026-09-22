@@ -175,14 +175,14 @@ internal static class AppJsonPresentation
     public static string PropertySourceNote(WallpaperEngineProperties.Resolution? resolution, bool english)
     {
         if (resolution is null || resolution.Source == WallpaperEngineProperties.SourceDefaults) return "";
-        string language = english ? Messages.English : Messages.Chinese;
+        string language = english ? MessageCatalog.English : MessageCatalog.Chinese;
         if (resolution.Source == WallpaperEngineProperties.SourceUnavailable)
         {
             string code = resolution.Record["reason"] is JsonValue value && value.TryGetValue(out string? text) ? text : "";
             // 认不出的原因码不再把内部字段名摆到界面上，只说"原因不明"，细节留给报告文件。
-            string reason = Messages.Find("properties.reason." + code) is null
+            string reason = MessageCatalog.Find("properties.reason." + code) is null
                 ? english ? "reason unknown" : "原因不明"
-                : Messages.Get("properties.reason." + code, language);
+                : MessageCatalog.Get("properties.reason." + code, language);
             return english
                 ? $"Could not read your Wallpaper Engine settings for this wallpaper ({reason}); starting from the wallpaper's own defaults."
                 : $"没读到你在 Wallpaper Engine 里给这张壁纸做的设置（{reason}），从壁纸自带的默认值开始。";
@@ -421,7 +421,7 @@ internal static class AppJsonPresentation
     }
 
     /// <summary>
-    /// 硬解实测只在烘焙机上做过，结论文案由 Baker.Core 的 Messages 生成、写在每组的 hardware_decode.conclusion 里。
+    /// 硬解实测只在烘焙机上做过，结论文案由 Baker.Core 的 MessageCatalog 生成、写在每组的 hardware_decode.conclusion 里。
     /// 同一台机器上各组的结论多半一模一样，去重后整段只说一次。
     /// </summary>
     private static string HardwareDecodeConclusions(JsonObject bake, bool english) =>
@@ -610,7 +610,7 @@ internal static class AppJsonPresentation
     public static string TradeoffHeader(JsonObject? plan, bool english) =>
         plan?[TradeoffOptions.Field] is JsonObject record &&
         record["status"]?.GetValue<string>() is "available" or "subject_only" or "dependency_blocked"
-            ? (english ? record[Messages.English] : record[Messages.Chinese])?.GetValue<string>() ?? "" : "";
+            ? (english ? record[MessageCatalog.English] : record[MessageCatalog.Chinese])?.GetValue<string>() ?? "" : "";
 
     /// <summary>
     /// 界面上一块取舍方案：标题（关掉什么）、按界面顺序排好的说明行、命令行写法，
@@ -632,7 +632,7 @@ internal static class AppJsonPresentation
     {
         if (plan?[TradeoffOptions.Field] is not JsonObject record ||
             record["status"]?.GetValue<string>() != "available") return [];
-        string language = english ? Messages.English : Messages.Chinese;
+        string language = english ? MessageCatalog.English : MessageCatalog.Chinese;
         string[] order = ["lead", "how", "alternative", "collateral", "route", "residual", "retain_live", "bake_caveat"];
         return [.. (record["options"] as JsonArray ?? []).OfType<JsonObject>().Select(option =>
         {

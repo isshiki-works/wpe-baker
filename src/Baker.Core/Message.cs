@@ -13,10 +13,10 @@ public sealed record Message(string Key, object?[] Args, object?[]? ZhArgs = nul
     public Message(string key) : this(key, []) { }
 
     /// <summary>v3 英文原文（写进 reason / detail / 异常消息）。</summary>
-    public string Text => Messages.RenderLegacy(Key, Args);
+    public string Text => MessageCatalog.RenderLegacy(Key, Args);
 
     /// <summary>{key, zh, en, params}，写进 *_localized 字段。</summary>
-    public JsonObject Localized() => Messages.Localized(Key, ZhArgs ?? Args, Args);
+    public JsonObject Localized() => MessageCatalog.Localized(Key, ZhArgs ?? Args, Args);
 
     /// <summary>写成 target[field]（英文原文）与 target[field + "_localized"]（{key, zh, en, params}）一对，返回 target。</summary>
     public JsonObject Write(JsonObject target, string field)
@@ -28,7 +28,7 @@ public sealed record Message(string Key, object?[] Args, object?[]? ZhArgs = nul
 
     /// <summary>按语言取这一句。</summary>
     public string In(string language) =>
-        Messages.Get(Key, language, Messages.NormalizeLanguage(language) == Messages.Chinese ? ZhArgs ?? Args : Args);
+        MessageCatalog.Get(Key, language, MessageCatalog.NormalizeLanguage(language) == MessageCatalog.Chinese ? ZhArgs ?? Args : Args);
 
     /// <summary>造一个带着这句话的异常：消息仍是英文原文，捕获方用 <see cref="Of"/> 取回键与参数，不拿异常文本反查。</summary>
     public TError Error<TError>(Func<string, TError> create) where TError : Exception

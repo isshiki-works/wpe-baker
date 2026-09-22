@@ -38,7 +38,7 @@ internal static class PlainLanguageChecks
     ];
 
     /// feat/tool-register：聊天口吻词表。工具的状态输出是陈述句 + 依据 + 动作，不劝、不聊、不打比方、不称呼用户。
-    /// 这一份比 <see cref="Banned"/> 管得宽：界面字符串之外，Messages.cs 里全部 Zh/En 文案也要过这一遍。
+    /// 这一份比 <see cref="Banned"/> 管得宽：界面字符串之外，MessageCatalog.cs 里全部 Zh/En 文案也要过这一遍。
     private static readonly (string Name, Regex Pattern)[] ChatRegister = [
         ("烘/烘焙", new Regex("烘")),
         ("关掉/关了", new Regex("关(掉|了)")),
@@ -65,15 +65,15 @@ internal static class PlainLanguageChecks
     private static string AppSources([CallerFilePath] string path = "") =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, "..", "..", "src", "Baker.App"));
 
-    /// Messages.cs 里 new(Zh: "…", En: "…") 的两个自然语言串；Legacy 的历史英文原文不在其中。
+    /// MessageCatalog.cs 里 new(Zh: "…", En: "…") 的两个自然语言串；Legacy 的历史英文原文不在其中。
     private static readonly Regex MessageText = new("\\b(Zh|En):\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
 
     private static string MessagesSource([CallerFilePath] string path = "") =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, "..", "..", "src", "Baker.Core", "Messages.cs"));
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, "..", "..", "src", "Baker.Core", "MessageCatalog.cs"));
 
     private static (string Source, string Text)[] MessageStrings() =>
         [.. MessageText.Matches(File.ReadAllText(MessagesSource()))
-            .Select(match => ("Messages.cs", match.Groups[2].Value))];
+            .Select(match => ("MessageCatalog.cs", match.Groups[2].Value))];
 
     /// 扫描到的每条用户可见字符串，带上它是从哪来的。
     private static (string Source, string Text)[] VisibleStrings()
@@ -101,8 +101,8 @@ internal static class PlainLanguageChecks
         foreach (string key in PlainLanguage.GuiMessageKeys.Concat(new[] {
             "preset.generated", "preset.omitted", "preset.experimental", "preset.daytime", "preset.too_many_video_groups",
             "interaction.suggest_fixed", "interaction.suggest_off" }))
-            foreach (string language in new[] { Messages.Chinese, Messages.English })
-                found.Add(("Messages:" + key, Messages.Get(key, language)));
+            foreach (string language in new[] { MessageCatalog.Chinese, MessageCatalog.English })
+                found.Add(("MessageCatalog:" + key, MessageCatalog.Get(key, language)));
         return [.. found];
     }
 
@@ -112,7 +112,7 @@ internal static class PlainLanguageChecks
         check(strings.Any(item => item.Source == "MainWindow.xaml") &&
             strings.Any(item => item.Source == "MainWindow.xaml.cs") &&
             strings.Any(item => item.Source == "PlainLanguage.cs") &&
-            strings.Any(item => item.Source.StartsWith("Messages:", StringComparison.Ordinal)) &&
+            strings.Any(item => item.Source.StartsWith("MessageCatalog:", StringComparison.Ordinal)) &&
             strings.Length > 200,
             "plain language: the scan covers the window markup, its code-behind, the plain-language texts and the GUI message entries");
         var hits = new List<string>();
@@ -128,13 +128,13 @@ internal static class PlainLanguageChecks
         check(Banned.Any(banned => banned.Pattern.IsMatch("源周期候选 120.5 秒，相位差 0.42 圈")),
             "plain language: the scan actually catches jargon");
 
-        // feat/tool-register：聊天口吻扫描。界面字符串 + Messages.cs 全部 Zh/En 文案。
+        // feat/tool-register：聊天口吻扫描。界面字符串 + MessageCatalog.cs 全部 Zh/En 文案。
         var everything = strings.Concat(MessageStrings()).ToArray();
         check(everything.Length > strings.Length + 300 &&
-            everything.Any(item => item.Source == "Messages.cs") &&
+            everything.Any(item => item.Source == "MessageCatalog.cs") &&
             everything.Any(item => item.Source == "MainWindow.xaml") &&
             everything.Any(item => item.Source == "PlainLanguage.cs"),
-            "tool register: the scan covers the markup, the plain-language texts and every Messages entry -> " + everything.Length);
+            "tool register: the scan covers the markup, the plain-language texts and every MessageCatalog entry -> " + everything.Length);
         var chatty = new List<string>();
         foreach (var (source, text) in everything)
         {

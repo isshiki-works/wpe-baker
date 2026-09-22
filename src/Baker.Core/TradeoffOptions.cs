@@ -107,7 +107,7 @@ public static class TradeoffOptions
     }
 
     /// <summary>子类型的用户标签（中英）。</summary>
-    public static string KindLabel(string kind, string language) => Messages.Get("tradeoff.kind." + kind, language);
+    public static string KindLabel(string kind, string language) => MessageCatalog.Get("tradeoff.kind." + kind, language);
 
     /// <summary>给 plan 挂上 <c>tradeoff_options</c>；plan 缺字段时挂一条 status 说明，不抛异常。</summary>
     public static void Attach(JsonObject plan)
@@ -128,8 +128,8 @@ public static class TradeoffOptions
         var record = new JsonObject {
             ["basis"] = "Read from this plan only: turning these off requires analyzing again; residual live layer counts are estimates.",
             ["retain_live_measured"] = "Keeping layers live measurably does not save power (laptop iGPU rail 11.63 -> 11.20 W, package +12% at 60 fps).",
-            ["retain_live_note_zh"] = Messages.Get("tradeoff.retain_live_note", Messages.Chinese),
-            ["retain_live_note_en"] = Messages.Get("tradeoff.retain_live_note", Messages.English) };
+            ["retain_live_note_zh"] = MessageCatalog.Get("tradeoff.retain_live_note", MessageCatalog.Chinese),
+            ["retain_live_note_en"] = MessageCatalog.Get("tradeoff.retain_live_note", MessageCatalog.English) };
         if (dependencyBlocked)
         {
             // 只有当前依赖分析的结果，没有禁用效果后的反事实证据；列出相关机制，不推断整幅主体。
@@ -139,8 +139,8 @@ public static class TradeoffOptions
             record["status"] = "dependency_blocked";
             record["related_kinds"] = new JsonArray([.. mechanisms.Select(kind => (JsonNode)JsonValue.Create(kind))]);
             record["options"] = new JsonArray();
-            record["zh"] = Messages.Get("tradeoff.dependency_blocked", Messages.Chinese, KindList(mechanisms, Messages.Chinese));
-            record["en"] = Messages.Get("tradeoff.dependency_blocked", Messages.English, KindList(mechanisms, Messages.English));
+            record["zh"] = MessageCatalog.Get("tradeoff.dependency_blocked", MessageCatalog.Chinese, KindList(mechanisms, MessageCatalog.Chinese));
+            record["en"] = MessageCatalog.Get("tradeoff.dependency_blocked", MessageCatalog.English, KindList(mechanisms, MessageCatalog.English));
             return record;
         }
         string summaryKey = Text(plan["summary"]?["key"]) ?? "";
@@ -158,8 +158,8 @@ public static class TradeoffOptions
         {
             record["status"] = "no_tradeoff_elements";
             record["options"] = new JsonArray();
-            record["zh"] = Messages.Get("tradeoff.none_available", Messages.Chinese);
-            record["en"] = Messages.Get("tradeoff.none_available", Messages.English);
+            record["zh"] = MessageCatalog.Get("tradeoff.none_available", MessageCatalog.Chinese);
+            record["en"] = MessageCatalog.Get("tradeoff.none_available", MessageCatalog.English);
             return record;
         }
         bool viewFixed = Text(plan["settings"]?["view_mode"]) == "fixed_view";
@@ -190,7 +190,7 @@ public static class TradeoffOptions
         for (int index = 0; index < ordered.Length; ++index)
         {
             ordered[index]["rank"] = index + 1;
-            foreach (string language in new[] { Messages.Chinese, Messages.English })
+            foreach (string language in new[] { MessageCatalog.Chinese, MessageCatalog.English })
                 ordered[index][language] = Narrate(ordered[index], index + 1, language);
         }
         record["status"] = ordered.Length > 0 ? "available" : "no_tradeoff_elements";
@@ -202,10 +202,10 @@ public static class TradeoffOptions
         if ((plan["loop"]?["candidates"] as JsonArray ?? []).Count == 0 &&
             Text(plan["loop"]?["no_candidate_reason"]?["kind"]) is not null) caveats.Add("tradeoff.caveat_no_loop");
         record["caveats"] = new JsonArray([.. caveats.Select(key => (JsonNode)JsonValue.Create(key))]);
-        record["zh"] = string.Join("", caveats.Select(key => Messages.Get(key, Messages.Chinese))
-            .Append(Messages.Get("tradeoff.header", Messages.Chinese, ordered.Length)));
-        record["en"] = string.Join(" ", caveats.Select(key => Messages.Get(key, Messages.English))
-            .Append(Messages.Get("tradeoff.header", Messages.English, ordered.Length)));
+        record["zh"] = string.Join("", caveats.Select(key => MessageCatalog.Get(key, MessageCatalog.Chinese))
+            .Append(MessageCatalog.Get("tradeoff.header", MessageCatalog.Chinese, ordered.Length)));
+        record["en"] = string.Join(" ", caveats.Select(key => MessageCatalog.Get(key, MessageCatalog.English))
+            .Append(MessageCatalog.Get("tradeoff.header", MessageCatalog.English, ordered.Length)));
         return record;
     }
 
@@ -291,7 +291,7 @@ public static class TradeoffOptions
 
     /// <summary>方案的一段话（中英各一版）。</summary>
     private static string Narrate(JsonObject option, int rank, string language) =>
-        string.Join(language == Messages.Chinese ? "" : " ", OptionLines(option, language, rank).Select(part => part.Text));
+        string.Join(language == MessageCatalog.Chinese ? "" : " ", OptionLines(option, language, rank).Select(part => part.Text));
 
     /// <summary>
     /// 方案说明的分段：每段带字段名（lead 要关什么 / how 怎么关 / alternative 更轻的替代 /
@@ -302,16 +302,16 @@ public static class TradeoffOptions
     public static (string Field, string Text)[] OptionLines(JsonObject option, string language, int? rank = null)
     {
         ArgumentNullException.ThrowIfNull(option);
-        language = Messages.NormalizeLanguage(language);
+        language = MessageCatalog.NormalizeLanguage(language);
         int index = rank ?? (int)(Number(option["rank"]) ?? 1);
         string[] kinds = [.. (option["turn_off_kinds"] as JsonArray ?? []).Select(Text).OfType<string>()];
         var parts = new List<(string Field, string Text)> {
-            ("lead", Messages.Get("tradeoff.option_lead", language, index, kinds.Length, KindList(kinds, language))) };
+            ("lead", MessageCatalog.Get("tradeoff.option_lead", language, index, kinds.Length, KindList(kinds, language))) };
         int residual = (int)(Number(option["estimated_residual_live_layers"]) ?? 0);
         string[] residualKinds = [.. (option["estimated_residual_kinds"] as JsonArray ?? []).Select(Text).OfType<string>()];
         parts.Add(("route", Flag(option["expected_full_frame"]) == true
-            ? Messages.Get("tradeoff.route_full_frame", language)
-            : Messages.Get("tradeoff.route_needs_check", language, residual)));
+            ? MessageCatalog.Get("tradeoff.route_full_frame", language)
+            : MessageCatalog.Get("tradeoff.route_needs_check", language, residual)));
         // 关法：能在 Wallpaper Engine 里关掉属性的先说属性，命令行写法始终给出。
         var properties = (option["properties"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
         if (properties.Length > 0)
@@ -324,29 +324,29 @@ public static class TradeoffOptions
             // 关闭值只在单个属性时写具体值；多个属性各有各的关法，说"逐个关掉"，不拿第一个的值以偏概全。
             string hint = properties.Length == 1
                 ? Text(properties[0]["off_hint_" + language]) ?? Text(properties[0]["off_hint_en"]) ?? ""
-                : Messages.Get("tradeoff.off_hint_each", language);
-            parts.Add(("how", Messages.Get(whole ? "tradeoff.how_property" : "tradeoff.how_property_partial", language,
-                Messages.NameList(properties.Select(entry => Label(entry, language))), hint)));
+                : MessageCatalog.Get("tradeoff.off_hint_each", language);
+            parts.Add(("how", MessageCatalog.Get(whole ? "tradeoff.how_property" : "tradeoff.how_property_partial", language,
+                MessageCatalog.NameList(properties.Select(entry => Label(entry, language))), hint)));
         }
-        else parts.Add(("how", Messages.Get("tradeoff.how_no_property", language)));
-        if (Text(option["command"]) is { Length: > 0 } command) parts.Add(("how", Messages.Get("tradeoff.how_command", language, command)));
+        else parts.Add(("how", MessageCatalog.Get("tradeoff.how_no_property", language)));
+        if (Text(option["command"]) is { Length: > 0 } command) parts.Add(("how", MessageCatalog.Get("tradeoff.how_command", language, command)));
         // 视差有更轻的一条：固定视角不删任何图层。实测两者对视差等价，但哪一案够用没逐案验过，所以只作提示。
-        if (Text(option["view_mode"]) == "fixed_view") parts.Add(("alternative", Messages.Get("tradeoff.parallax_alternative", language)));
+        if (Text(option["view_mode"]) == "fixed_view") parts.Add(("alternative", MessageCatalog.Get("tradeoff.parallax_alternative", language)));
         int collateral = (int)(Number(option["collateral_drawable_layers"]) ?? 0);
         string[] collateralKinds = [.. (option["collateral_kinds"] as JsonArray ?? []).Select(Text).OfType<string>()];
-        parts.Add(("collateral", collateral == 0 && collateralKinds.Length == 0 ? Messages.Get("tradeoff.collateral_none", language)
-            : collateral == 0 ? Messages.Get("tradeoff.collateral_kinds_only", language, KindList(collateralKinds, language))
-            : Messages.Get("tradeoff.collateral", language, collateral,
-                Messages.NameList((option["collateral_names"] as JsonArray ?? []).Select(Text))) +
-                (collateralKinds.Length == 0 ? "" : (language == Messages.Chinese ? "" : " ") +
-                    Messages.Get("tradeoff.collateral_kinds", language, KindList(collateralKinds, language)))));
+        parts.Add(("collateral", collateral == 0 && collateralKinds.Length == 0 ? MessageCatalog.Get("tradeoff.collateral_none", language)
+            : collateral == 0 ? MessageCatalog.Get("tradeoff.collateral_kinds_only", language, KindList(collateralKinds, language))
+            : MessageCatalog.Get("tradeoff.collateral", language, collateral,
+                MessageCatalog.NameList((option["collateral_names"] as JsonArray ?? []).Select(Text))) +
+                (collateralKinds.Length == 0 ? "" : (language == MessageCatalog.Chinese ? "" : " ") +
+                    MessageCatalog.Get("tradeoff.collateral_kinds", language, KindList(collateralKinds, language)))));
         // 残留的层全都不画画面（例如只剩 BGM 音轨）时不说"省电打折"，那会把音轨说成逐帧渲染。
         string residualKey = residual == 0 ? "tradeoff.residual_none"
             : Flag(option["expected_full_frame"]) == true ? "tradeoff.residual_non_drawable" : "tradeoff.residual";
-        parts.Add(("residual", Messages.Get(residualKey, language, residual, KindList(residualKinds, language))));
-        parts.Add(("retain_live", Messages.Get("tradeoff.retain_live_note", language)));
+        parts.Add(("residual", MessageCatalog.Get(residualKey, language, residual, KindList(residualKinds, language))));
+        parts.Add(("retain_live", MessageCatalog.Get("tradeoff.retain_live_note", language)));
         // 分析解锁不等于烘得出来：23 案真烘复验 0 通过，所以卡片底部收一句烘制阶段的免责。
-        parts.Add(("bake_caveat", Messages.Get("tradeoff.bake_stage_caveat", language)));
+        parts.Add(("bake_caveat", MessageCatalog.Get("tradeoff.bake_stage_caveat", language)));
         return [.. parts];
     }
 
@@ -362,7 +362,7 @@ public static class TradeoffOptions
     {
         ArgumentNullException.ThrowIfNull(kinds);
         string[] labels = [.. kinds.Select(kind => KindLabel(kind, language))];
-        return string.Join(language == Messages.Chinese ? "、" : ", ", labels);
+        return string.Join(language == MessageCatalog.Chinese ? "、" : ", ", labels);
     }
 
     private static string[] Kinds(JsonObject layer) =>
@@ -403,14 +403,14 @@ public static class TradeoffOptions
         string status = Text(record["status"]) ?? "";
         int count = (record["options"] as JsonArray)?.Count ?? 0;
         if (status == "available" && count > 0)
-            return (Messages.Get("summary.tradeoff_available", Messages.Chinese, count),
-                Messages.Get("summary.tradeoff_available", Messages.English, count));
+            return (MessageCatalog.Get("summary.tradeoff_available", MessageCatalog.Chinese, count),
+                MessageCatalog.Get("summary.tradeoff_available", MessageCatalog.English, count));
         if (status == "subject_only")
-            return (Messages.Get("summary.tradeoff_subject_only", Messages.Chinese),
-                Messages.Get("summary.tradeoff_subject_only", Messages.English));
+            return (MessageCatalog.Get("summary.tradeoff_subject_only", MessageCatalog.Chinese),
+                MessageCatalog.Get("summary.tradeoff_subject_only", MessageCatalog.English));
         if (status == "dependency_blocked")
-            return (Messages.Get("summary.tradeoff_dependency_blocked", Messages.Chinese),
-                Messages.Get("summary.tradeoff_dependency_blocked", Messages.English));
+            return (MessageCatalog.Get("summary.tradeoff_dependency_blocked", MessageCatalog.Chinese),
+                MessageCatalog.Get("summary.tradeoff_dependency_blocked", MessageCatalog.English));
         return null;
     }
 
@@ -419,7 +419,7 @@ public static class TradeoffOptions
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (plan[Field] is not JsonObject record) return [];
-        string normalized = Messages.NormalizeLanguage(language);
+        string normalized = MessageCatalog.NormalizeLanguage(language);
         var lines = new List<string>();
         if (Text(record[normalized]) is { Length: > 0 } header) lines.Add(header);
         foreach (var option in (record["options"] as JsonArray ?? []).OfType<JsonObject>())

@@ -1,7 +1,7 @@
 namespace Baker.Core;
 
 /// <summary>
-/// CLI 各子命令的用法段。骨架一律是英文（与 analyze --help 同一口径），只有个别说明走 <see cref="Messages"/>
+/// CLI 各子命令的用法段。骨架一律是英文（与 analyze --help 同一口径），只有个别说明走 <see cref="MessageCatalog"/>
 /// 按 --lang 出中文或英文；顶层帮助与 `&lt;命令&gt; --help` 都从这里取，两处永远同步。
 /// </summary>
 public static class CliUsage
@@ -10,13 +10,13 @@ public static class CliUsage
     public static Dictionary<string, string> Sections(string language)
     {
         string encoderNote = string.Join(Environment.NewLine,
-            Messages.Get("cli.bake_encoder_help", language).Split('\n').Select(line => "  " + line.TrimEnd('\r')));
+            MessageCatalog.Get("cli.bake_encoder_help", language).Split('\n').Select(line => "  " + line.TrimEnd('\r')));
         // 并行相关的两个开关同样按 --lang 出中文或英文，骨架保持英文。
         string parallelNote = string.Join(Environment.NewLine,
-            Messages.Get("cli.bake_parallel_help", language).Split('\n').Select(line => "  " + line.TrimEnd('\r')));
+            MessageCatalog.Get("cli.bake_parallel_help", language).Split('\n').Select(line => "  " + line.TrimEnd('\r')));
         // 中间产物保留开关同样按 --lang 出中文或英文，骨架保持英文。
         string keepNote = string.Join(Environment.NewLine,
-            Messages.Get("cli.bake_keep_intermediates_help", language).Split('\n').Select(line => "  " + line.TrimEnd('\r')));
+            MessageCatalog.Get("cli.bake_keep_intermediates_help", language).Split('\n').Select(line => "  " + line.TrimEnd('\r')));
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["analyze"] = string.Join(Environment.NewLine,

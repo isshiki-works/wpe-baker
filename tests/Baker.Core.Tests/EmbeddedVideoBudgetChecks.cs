@@ -50,11 +50,11 @@ internal static class EmbeddedVideoBudgetChecks
             record["encoded_width"]!.GetValue<uint>() == 3840 && record["fps_numerator"]!.GetValue<uint>() == 60 &&
             record["basis"]!.GetValue<string>().Contains("2,922,466,521", StringComparison.Ordinal),
             "embedded video limit: the plan record carries the requested and fitted seconds, the limit, the encoded size and its basis");
-        string zh = desktop.Sentence(Messages.Chinese), en = desktop.Sentence(Messages.English);
+        string zh = desktop.Sentence(MessageCatalog.Chinese), en = desktop.Sentence(MessageCatalog.English);
         check(zh == "按 Wallpaper Engine 内嵌视频上限 2 GiB 与参考码率估算，3840×2160 @60 fps 成品视频最长约 558 s；循环长度上限由 600 s 降至 558 s。" &&
             en.Contains("a 3840×2160 @60 fps video fits about 558 s, so the loop-length maximum was lowered from 600 s to 558 s", StringComparison.Ordinal) &&
-            !NarrativePolishChecks.Leaks(zh) && laptop.Sentence(Messages.Chinese) == "" &&
-            EmbeddedVideoBudget.LoopLengthLimit(600, 1920, 1080, false, 60000, 1001)!.Sentence(Messages.English) == "",
+            !NarrativePolishChecks.Leaks(zh) && laptop.Sentence(MessageCatalog.Chinese) == "" &&
+            EmbeddedVideoBudget.LoopLengthLimit(600, 1920, 1080, false, 60000, 1001)!.Sentence(MessageCatalog.English) == "",
             "embedded video limit: the sentence names the resolution, frame rate, longest and requested seconds, and is empty when nothing was lowered");
 
         // ---- 试编码外推 ----

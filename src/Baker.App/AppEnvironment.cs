@@ -7,7 +7,7 @@ namespace Baker.App;
 internal static class AppEnvironment
 {
     /// <summary>界面当前语言，由 MainWindow.SetLanguage 同步；导入与自检的报错按它出中文或英文。</summary>
-    public static string Language { get; set; } = Messages.DefaultLanguage();
+    public static string Language { get; set; } = MessageCatalog.DefaultLanguage();
 
     /// <summary>
     /// 自检随包工具。Core 抛的异常消息是英文原文（机器可读字段沿用英文），异常带着文案的键与参数，
