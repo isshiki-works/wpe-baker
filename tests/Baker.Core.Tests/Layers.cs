@@ -111,7 +111,7 @@ public class OutputFrameRateTests
     }
 }
 
-[Trait("Layer", "L0")]
+[Trait("Layer", "L1")]
 public class StageTimingTests
 {
     [Fact]
@@ -131,7 +131,7 @@ public class ProgressCancellationTests
     }
 }
 
-[Trait("Layer", "L0")]
+[Trait("Layer", "L1")]
 public class EncodeSlotTests
 {
     [Fact]
