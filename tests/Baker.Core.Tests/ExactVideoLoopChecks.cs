@@ -122,12 +122,12 @@ internal static class ExactVideoLoopChecks
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
         var applied = scoped![0]!.DeepClone().AsObject();
         applied["applied_control_count"] = 1;
-        var native = JsonNode.Parse(new JsonObject { ["runtime_video_rate_overrides"] = new JsonArray(applied) }.ToJsonString())!.AsObject();
+        var native = new JsonObject { ["runtime_video_rate_overrides"] = new JsonArray(applied) };
         var request = new RenderRequest("source", "assets", "output", 1, 1, 60, 1, 1, OfflineVideoRateOverrides: scoped);
-        confirm.Invoke(null, [request, native]);
+        confirm.Invoke(null, [request, RenderResult.Parse(native.ToJsonString())]);
         native["runtime_video_rate_overrides"]![0]!["rate_denominator"] = 99;
         bool rejected = false;
-        try { confirm.Invoke(null, [request, native]); }
+        try { confirm.Invoke(null, [request, RenderResult.Parse(native.ToJsonString())]); }
         catch (System.Reflection.TargetInvocationException error) when (error.InnerException is InvalidDataException) { rejected = true; }
         check(rejected, "native video rate evidence accepts integer JSON representations but rejects a different exact rate");
 

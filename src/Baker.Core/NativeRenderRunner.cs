@@ -253,23 +253,12 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         try
         {
             string renderDirectory = Path.Combine(output, "native");
-            var job = new JsonObject { ["schema_version"] = 1, ["source"] = source.SourcePath,
-                ["assets"] = Path.GetFullPath(request.Assets), ["output_dir"] = renderDirectory,
-                ["width"] = request.Width, ["height"] = request.Height, ["fps_num"] = request.FpsNumerator,
-                ["fps_den"] = request.FpsDenominator, ["frames"] = request.Frames, ["warmup_frames"] = request.WarmupFrames,
-                ["seed"] = request.Seed, ["raw_stdout"] = true, ["write_audio"] = request.IncludeAudio };
-            if (request.CaptureTarget is not null) job["capture_target"] = JsonSerializer.SerializeToNode(request.CaptureTarget, JsonOptions);
-            if (request.OrthographicCaptureViewport is not null) job["orthographic_capture_viewport"] = JsonSerializer.SerializeToNode(request.OrthographicCaptureViewport, JsonOptions);
-            if (request.LayerSelection is not null) job["layer_selection"] = JsonSerializer.SerializeToNode(request.LayerSelection, JsonOptions);
-            if (request.Input is not null) job["input"] = request.Input.DeepClone();
-            if (request.InputTimeline is not null) job["input_timeline"] = request.InputTimeline.DeepClone();
-            if (request.UserProperties is not null) job["user_properties"] = request.UserProperties.DeepClone();
-            if (request.OfflineVideoRateOverrides is not null) job["offline_video_rate_overrides"] = request.OfflineVideoRateOverrides.DeepClone();
-            if (request.DeviceUuid is not null) job["device_uuid"] = request.DeviceUuid;
-            if (request.GpuTiming) job["gpu_timing"] = true;
-            if (request.TraceScene) job["trace_scene"] = true;
-            if (request.EffectRenderScale != 1.0) job["effect_render_scale"] = request.EffectRenderScale;
-            job["match_effect_resolution"] = request.MatchEffectResolution;
+            RenderJob job = RenderJob.From(request, source.SourcePath, renderDirectory, rawStdout: true) with
+            {
+                WriteAudio = request.IncludeAudio,
+                EffectRenderScale = request.EffectRenderScale != 1.0 ? request.EffectRenderScale : null,
+                MatchEffectResolution = request.MatchEffectResolution
+            };
             // Only pure sample consumers may omit full frames. Bounds, opacity and retained-frame
             // checks still require their original complete input. Older renderers keep that path.
             bool sampleConsumer = request.FrameSamplesOnly && !request.CollectAlphaBounds && !request.RequireOpaquePixels &&
@@ -287,18 +276,16 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             RenderRequest streamRequest = request;
             if (sparseInput)
             {
-                job["output_frame_stride"] = request.FrameSampleStride;
-                if (request.FrameSamplePhaseFrames is ulong samplingPhase)
-                    job["output_frame_phase"] = samplingPhase % request.FrameSampleStride;
+                job = job with { OutputFrameStride = request.FrameSampleStride,
+                    OutputFramePhase = request.FrameSamplePhaseFrames % request.FrameSampleStride };
             }
             if (nativeSamples)
             {
                 uint sampleWidth = Math.Min(request.Width, request.FrameSampleWidth);
                 uint sampleHeight = (uint)Math.Max(1, Math.Round((double)request.Height * sampleWidth / request.Width));
-                job["output_sample_width"] = sampleWidth;
-                job["output_sample_height"] = sampleHeight;
-                if (request.CollectSamplingCoverage && rendererVersion.Contains("gpu-sampling-coverage-v1", StringComparison.Ordinal))
-                    job["collect_sampling_coverage"] = true;
+                job = job with { OutputSampleWidth = sampleWidth, OutputSampleHeight = sampleHeight,
+                    CollectSamplingCoverage = request.CollectSamplingCoverage &&
+                        rendererVersion.Contains("gpu-sampling-coverage-v1", StringComparison.Ordinal) ? true : null };
                 streamRequest = request with { Width = sampleWidth, Height = sampleHeight, FrameSampleWidth = sampleWidth };
             }
             manifest["native_frame_transport"] = nativeSamples ? "sampled_rgba" : sparseInput ? "sparse_rgba" : "full_rgba";
@@ -316,25 +303,16 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 if ((encoding.CrossfadeFrames != 0 || encoding.Crop is not null) &&
                     !rendererVersion.Contains("gpu-loop-encode-v1", StringComparison.Ordinal))
                     throw new InvalidDataException("Renderer does not support GPU crop and loop encoding.");
-                job["raw_stdout"] = false;
-                job["gpu_encode"] = new JsonObject { ["codec"] = encoding.Codec, ["qp"] = encoding.Qp,
-                    ["packed_alpha"] = request.PixelPacking == "rgba_side_by_side",
-                    ["encoded_frames"] = encodedFrames, ["collect_bounds"] = request.CollectAlphaBounds,
-                    ["bounds_include_rgb"] = request.BoundsIncludeRgb,
-                    ["retain_frames"] = JsonSerializer.SerializeToNode(request.RetainFrames ?? []),
-                    ["crossfade_frames"] = encoding.CrossfadeFrames,
-                    ["retain_loop_window"] = encoding.RetainLoopWindow,
-                    ["crop_x"] = encoding.Crop?.X ?? 0, ["crop_y"] = encoding.Crop?.Y ?? 0,
-                    ["crop_width"] = encoding.Crop?.Width ?? (int)request.Width,
-                    ["crop_height"] = encoding.Crop?.Height ?? (int)request.Height };
-                if (encodeSizeRequested)
-                {
-                    job["gpu_encode"]!["resize_width"] = encodeWidth;
-                    job["gpu_encode"]!["resize_height"] = encodeHeight;
-                }
+                job = job with { RawStdout = false, GpuEncode = new(encoding.Codec, encoding.Qp,
+                    PackedAlpha: request.PixelPacking == "rgba_side_by_side", EncodedFrames: encodedFrames,
+                    CollectBounds: request.CollectAlphaBounds, BoundsIncludeRgb: request.BoundsIncludeRgb,
+                    RetainFrames: request.RetainFrames ?? [], encoding.CrossfadeFrames, encoding.RetainLoopWindow,
+                    CropX: encoding.Crop?.X ?? 0, CropY: encoding.Crop?.Y ?? 0,
+                    CropWidth: encoding.Crop?.Width ?? (int)request.Width, CropHeight: encoding.Crop?.Height ?? (int)request.Height,
+                    ResizeWidth: encodeSizeRequested ? encodeWidth : null, ResizeHeight: encodeSizeRequested ? encodeHeight : null) };
             }
             string jobPath = Path.Combine(output, "renderer-job.json");
-            await WriteJsonAsync(jobPath, job, cancellationToken);
+            await WriteJsonAsync(jobPath, JsonSerializer.SerializeToNode(job, JsonOptions)!, cancellationToken);
             if (request.FrameSamplesOnly)
             {
                 using var sampleRenderer = new Process { StartInfo = StartInfo(tools.Renderer, ["render", "--job", jobPath]) };
@@ -369,13 +347,13 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 if (sampleRenderer.ExitCode != 0)
                     throw RendererFailure(Path.Combine(renderDirectory, "result.json"),
                         $"Renderer exited {sampleRenderer.ExitCode}; original stderr log is retained.");
-                JsonObject sampleNativeResult = JsonNode.Parse(await File.ReadAllTextAsync(
-                    Path.Combine(renderDirectory, "result.json"), cancellationToken))!.AsObject();
-                manifest["native_result"] = sampleNativeResult;
+                RenderResult sampleNativeResult = RenderResult.Parse(await File.ReadAllTextAsync(
+                    Path.Combine(renderDirectory, "result.json"), cancellationToken));
+                manifest["native_result"] = sampleNativeResult.Json;
                 ConfirmRenderOptions(request, sampleNativeResult);
                 if (request.CollectSamplingCoverage)
                 {
-                    if (sampleNativeResult["sampling_coverage"] is JsonObject coverage)
+                    if (sampleNativeResult.SamplingCoverage is JsonObject coverage)
                     {
                         if (coverage["status"]?.GetValue<string>() != "complete" || coverage["includes_rgb"]?.GetValue<bool>() != true ||
                             coverage["frames"]?.GetValue<ulong>() != request.Frames ||
@@ -397,33 +375,30 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 manifest["pipe_rgba_bytes"] = checked(expectedNativeFrames * streamRequest.Width * streamRequest.Height * 4);
                 if (nativeSamples)
                 {
-                    if (sampleNativeResult["readback_width"]?.GetValue<uint>() != streamRequest.Width ||
-                        sampleNativeResult["readback_height"]?.GetValue<uint>() != streamRequest.Height)
+                    if (sampleNativeResult.ReadbackWidth != streamRequest.Width || sampleNativeResult.ReadbackHeight != streamRequest.Height)
                         throw new InvalidDataException("Renderer did not confirm the native sample dimensions.");
-                    manifest["native_sample_backend"] = sampleNativeResult["gpu_sampled"]?.GetValue<bool>() == true ? "gpu_box_mean" : "cpu_box_mean";
+                    manifest["native_sample_backend"] = sampleNativeResult.GpuSampled == true ? "gpu_box_mean" : "cpu_box_mean";
                     if (captured.Samples is not null)
                     {
                         captured.Samples["source_width"] = request.Width;
                         captured.Samples["source_height"] = request.Height;
                     }
                 }
-                if (sparseInput && (sampleNativeResult["output_frame_stride"]?.GetValue<uint>() != request.FrameSampleStride ||
-                    !JsonNode.DeepEquals(sampleNativeResult["output_frame_phase"], job["output_frame_phase"])))
+                if (sparseInput && (sampleNativeResult.OutputFrameStride != request.FrameSampleStride ||
+                    sampleNativeResult.OutputFramePhase != job.OutputFramePhase))
                     throw new InvalidDataException("Renderer did not confirm the sparse frame selection.");
-                if (sampleNativeResult["status"]?.GetValue<string>() != "complete" ||
-                    sampleNativeResult["written_frames"]?.GetValue<ulong>() != expectedNativeFrames ||
-                    sampleNativeResult["renderer_error_count"]?.GetValue<ulong>() != 0)
+                if (!sampleNativeResult.Confirms(expectedNativeFrames))
                     throw new InvalidDataException("Renderer result did not confirm the requested frame sequence.");
                 if (request.DeviceUuid is not null && !string.Equals(request.DeviceUuid,
-                    sampleNativeResult["device_uuid"]?.GetValue<string>(), StringComparison.OrdinalIgnoreCase))
+                    sampleNativeResult.DeviceUuid, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("Renderer did not confirm the requested GPU UUID.");
                 if (request.CaptureTarget is not null &&
-                    string.IsNullOrWhiteSpace(sampleNativeResult["capture_source"]?["render_target"]?.GetValue<string>()))
+                    string.IsNullOrWhiteSpace(sampleNativeResult.CaptureSource?.RenderTarget))
                     throw new InvalidDataException("Renderer did not confirm the actual local capture target; an older or incompatible renderer may have ignored it.");
                 if (request.OrthographicCaptureViewport is not null && !JsonNode.DeepEquals(
-                    sampleNativeResult["orthographic_capture_viewport"], JsonSerializer.SerializeToNode(request.OrthographicCaptureViewport, JsonOptions)))
+                    sampleNativeResult.OrthographicCaptureViewport, JsonSerializer.SerializeToNode(request.OrthographicCaptureViewport, JsonOptions)))
                     throw new InvalidDataException("Renderer did not confirm the requested orthographic capture viewport.");
-                if (request.LayerSelection is not null && !JsonNode.DeepEquals(sampleNativeResult["layer_selection"],
+                if (request.LayerSelection is not null && !JsonNode.DeepEquals(sampleNativeResult.LayerSelection,
                     JsonSerializer.SerializeToNode(request.LayerSelection, JsonOptions)))
                     throw new InvalidDataException("Renderer did not confirm the requested layer selection.");
                 if (captured.Samples is null)
@@ -444,7 +419,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             if (request.GpuEncoding is not null)
             {
                 manifest["encoder_command"] = new JsonObject { ["executable"] = tools.Renderer,
-                    ["gpu_encode"] = job["gpu_encode"]!.DeepClone() };
+                    ["gpu_encode"] = JsonSerializer.SerializeToNode(job.GpuEncode, JsonOptions) };
                 progress?.Report(new("rendering", 0, "Rendering and encoding on the same GPU."));
                 var gpuProgress = new FrameProgressEstimate();
                 long gpuStarted = Stopwatch.GetTimestamp();
@@ -557,28 +532,26 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 }
                 finally { await Task.WhenAll(StopAndWaitAsync(renderer), StopAndWaitAsync(encoder)); }
             }
-            var nativeResult = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(renderDirectory, "result.json"), cancellationToken))!.AsObject();
-            if (nativeResult["status"]?.GetValue<string>() != "complete" || nativeResult["written_frames"]?.GetValue<ulong>() != request.Frames ||
-                nativeResult["renderer_error_count"]?.GetValue<ulong>() != 0)
+            RenderResult nativeResult = RenderResult.Parse(await File.ReadAllTextAsync(Path.Combine(renderDirectory, "result.json"), cancellationToken));
+            if (!nativeResult.Confirms(request.Frames))
                 throw new InvalidDataException("Renderer result did not confirm the requested frame sequence.");
-            manifest["native_result"] = nativeResult;
+            manifest["native_result"] = nativeResult.Json;
             ConfirmRenderOptions(request, nativeResult);
             ulong gpuReadbacks = (ulong)(request.RetainFrames?.Length ?? 0) +
                 (request.CollectAlphaBounds && request.RetainFrames?.Contains(0UL) != true ? 1UL : 0UL);
             if (request.GpuEncoding is { RetainLoopWindow: true } windowRequest)
                 gpuReadbacks = 2UL * windowRequest.CrossfadeFrames + (ulong)(request.RetainFrames?.Count(
                     index => index >= windowRequest.CrossfadeFrames && index < encodedFrames) ?? 0);
-            if (request.GpuEncoding is { } expectedGpu && (nativeResult["gpu_encoded"]?.GetValue<bool>() != true ||
-                nativeResult["readback_frames"]?.GetValue<ulong>() != gpuReadbacks ||
-                nativeResult["gpu_encoder"]?.GetValue<string>() != expectedGpu.Codec ||
-                nativeResult["gpu_packed_alpha"]?.GetValue<bool>() != (request.PixelPacking == "rgba_side_by_side")))
+            if (request.GpuEncoding is { } expectedGpu && (nativeResult.GpuEncoded != true ||
+                nativeResult.ReadbackFrames != gpuReadbacks || nativeResult.GpuEncoder != expectedGpu.Codec ||
+                nativeResult.GpuPackedAlpha != (request.PixelPacking == "rgba_side_by_side")))
                 throw new InvalidDataException("Renderer did not confirm the GPU encoding path.");
             if (request.GpuEncoding is not null)
             {
                 if (encodeSizeRequested && (encodeWidth != (uint)(request.GpuEncoding.Crop?.Width ?? (int)request.Width) ||
                     encodeHeight != (uint)(request.GpuEncoding.Crop?.Height ?? (int)request.Height)))
                 {
-                    JsonObject? resize = nativeResult["gpu_capture"]?["resize"] as JsonObject;
+                    JsonObject? resize = nativeResult.GpuCapture?.Resize;
                     if (resize is null || resize["width"]?.GetValue<uint>() != encodeWidth || resize["height"]?.GetValue<uint>() != encodeHeight ||
                         resize["filter"]?.GetValue<string>() != "lanczos3")
                         throw new InvalidDataException("Renderer did not confirm the requested Lanczos GPU resize.");
@@ -588,13 +561,13 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 {
                     CacheRegion expectedCrop = request.GpuEncoding.Crop ?? new((int)request.Width, (int)request.Height,
                         0, 0, (int)request.Width, (int)request.Height);
-                    if (!JsonNode.DeepEquals(nativeResult["gpu_capture"]?["crop"], JsonSerializer.SerializeToNode(expectedCrop, JsonOptions)))
+                    if (!JsonNode.DeepEquals(nativeResult.GpuCapture?.Crop, JsonSerializer.SerializeToNode(expectedCrop, JsonOptions)))
                         throw new InvalidDataException("Renderer did not confirm the GPU crop.");
-                    manifest["gpu_crop"] = nativeResult["gpu_capture"]!["crop"]!.DeepClone();
+                    manifest["gpu_crop"] = nativeResult.GpuCapture!.Crop!.DeepClone();
                 }
                 if (request.GpuEncoding.CrossfadeFrames > 0)
                 {
-                    var crossfade = nativeResult["gpu_capture"]?["loop_crossfade"]?.DeepClone().AsObject();
+                    var crossfade = nativeResult.GpuCapture?.LoopCrossfade?.DeepClone().AsObject();
                     if (crossfade?["status"]?.GetValue<string>() != "applied" ||
                         crossfade["crossfade_frames"]?.GetValue<uint>() != request.GpuEncoding.CrossfadeFrames ||
                         crossfade["loop_frames"]?.GetValue<ulong>() != encodedFrames)
@@ -603,7 +576,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 }
                 if (request.GpuEncoding.RetainLoopWindow)
                 {
-                    var window = nativeResult["gpu_capture"]?["loop_window"]?.DeepClone().AsObject()
+                    var window = nativeResult.GpuCapture?.LoopWindow?.DeepClone().AsObject()
                         ?? throw new InvalidDataException("Renderer omitted the original loop window.");
                     string path = Path.Combine(renderDirectory, "loop-window.rgba");
                     uint count = request.GpuEncoding.CrossfadeFrames;
@@ -619,7 +592,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 manifest["readback_bytes"] = gpuReadbacks * request.Width * request.Height * 4 + (request.CollectAlphaBounds ? 32UL : 0UL);
                 if (request.CollectAlphaBounds)
                 {
-                    var bounds = nativeResult["gpu_capture"]?["alpha_bounds"]?.DeepClone().AsObject()
+                    var bounds = nativeResult.GpuCapture?.AlphaBounds?.DeepClone().AsObject()
                         ?? throw new InvalidDataException("Renderer omitted GPU coverage statistics.");
                     if (bounds["includes_rgb"]?.GetValue<bool>() != request.BoundsIncludeRgb ||
                         bounds["pixel_identical_in_generated_interval"] is null)
@@ -632,7 +605,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 }
                 if (request.RetainFrames is { } retainedIndices)
                 {
-                    var retained = nativeResult["gpu_capture"]?["retained_frames"]?.DeepClone().AsObject()
+                    var retained = nativeResult.GpuCapture?.RetainedFrames?.DeepClone().AsObject()
                         ?? throw new InvalidDataException("Renderer omitted selected GPU reference frames.");
                     string path = Path.Combine(renderDirectory, RetainedFramesFile);
                     if (retained["width"]?.GetValue<uint>() != request.Width || retained["height"]?.GetValue<uint>() != request.Height ||
@@ -645,13 +618,13 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 }
             }
             ConfirmVideoRateOverrides(request, nativeResult);
-            if (request.DeviceUuid is not null && !string.Equals(request.DeviceUuid, nativeResult["device_uuid"]?.GetValue<string>(), StringComparison.OrdinalIgnoreCase))
+            if (request.DeviceUuid is not null && !string.Equals(request.DeviceUuid, nativeResult.DeviceUuid, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Renderer did not confirm the requested GPU UUID.");
-            if (request.CaptureTarget is not null && string.IsNullOrWhiteSpace(nativeResult["capture_source"]?["render_target"]?.GetValue<string>()))
+            if (request.CaptureTarget is not null && string.IsNullOrWhiteSpace(nativeResult.CaptureSource?.RenderTarget))
                 throw new InvalidDataException("Renderer did not confirm the actual local capture target; an older or incompatible renderer may have ignored it.");
-            if (request.OrthographicCaptureViewport is not null && !JsonNode.DeepEquals(nativeResult["orthographic_capture_viewport"], JsonSerializer.SerializeToNode(request.OrthographicCaptureViewport, JsonOptions)))
+            if (request.OrthographicCaptureViewport is not null && !JsonNode.DeepEquals(nativeResult.OrthographicCaptureViewport, JsonSerializer.SerializeToNode(request.OrthographicCaptureViewport, JsonOptions)))
                 throw new InvalidDataException("Renderer did not confirm the requested orthographic capture viewport.");
-            if (request.LayerSelection is not null && !JsonNode.DeepEquals(nativeResult["layer_selection"], JsonSerializer.SerializeToNode(request.LayerSelection, JsonOptions)))
+            if (request.LayerSelection is not null && !JsonNode.DeepEquals(nativeResult.LayerSelection, JsonSerializer.SerializeToNode(request.LayerSelection, JsonOptions)))
                 throw new InvalidDataException("Renderer did not confirm the requested layer selection.");
             string finalVideo = Path.Combine(output, "preview.mp4");
             if (request.IncludeAudio)
@@ -669,7 +642,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             // The input frame sequence and successful encoder exit are already known.
             // Check MP4 metadata; decode for counting only when its declaration is inconsistent.
             bool nativePacketCount = request.GpuEncoding is not null &&
-                nativeResult["gpu_capture"]?["encoded_packets"]?.GetValue<ulong>() == encodedFrames;
+                nativeResult.GpuCapture?.EncodedPackets == encodedFrames;
             string colorEntries = request.PlaybackEncoderKind is null && request.GpuEncoding is null ? "" : ",pix_fmt,color_space,color_range";
             string probeText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-threads", "4", "-select_streams", "v:0",
                 "-show_entries", $"stream=codec_name,width,height,avg_frame_rate,nb_frames,duration,duration_ts,time_base{colorEntries}", "-of", "json", finalVideo],
@@ -755,18 +728,18 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         return null;
     }
 
-    private static void ConfirmRenderOptions(RenderRequest request, JsonObject nativeResult)
+    private static void ConfirmRenderOptions(RenderRequest request, RenderResult nativeResult)
     {
-        if ((nativeResult["effect_render_scale"]?.GetValue<double>() ?? 1.0) != request.EffectRenderScale)
+        if ((nativeResult.EffectRenderScale ?? 1.0) != request.EffectRenderScale)
             throw new InvalidDataException("Renderer did not confirm the requested effect resolution scale.");
-        if ((nativeResult["match_effect_resolution"]?.GetValue<bool>() ?? false) != request.MatchEffectResolution)
+        if ((nativeResult.MatchEffectResolution ?? false) != request.MatchEffectResolution)
             throw new InvalidDataException("Renderer did not confirm the requested adaptive effect resolution.");
     }
 
-    private static void ConfirmVideoRateOverrides(RenderRequest request, JsonObject nativeResult)
+    private static void ConfirmVideoRateOverrides(RenderRequest request, RenderResult nativeResult)
     {
         if (request.OfflineVideoRateOverrides is null) return;
-        if (nativeResult["runtime_video_rate_overrides"] is not JsonArray applied || applied.Count != request.OfflineVideoRateOverrides.Count)
+        if (nativeResult.RuntimeVideoRateOverrides is not JsonArray applied || applied.Count != request.OfflineVideoRateOverrides.Count)
             throw new InvalidDataException("Renderer did not confirm the requested exact video rate overrides.");
         for (int i = 0; i < applied.Count; ++i)
         {
