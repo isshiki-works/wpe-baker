@@ -211,11 +211,14 @@ struct GpuVideoEncoder::Impl {
         // The caller removes these job-local segments after validating the final video.
     }
 
-    VkDeviceMemory allocate(const VkMemoryRequirements& requirements, VkMemoryPropertyFlags flags) {
+    // preferred: extra flags tried first (e.g. HOST_CACHED for readback); falls back to flags alone.
+    VkDeviceMemory allocate(const VkMemoryRequirements& requirements, VkMemoryPropertyFlags flags,
+                            VkMemoryPropertyFlags preferred = 0) {
         VkPhysicalDeviceMemoryProperties properties;
         vkGetPhysicalDeviceMemoryProperties(gpu, &properties);
+        for (const auto wanted : {flags | preferred, flags})
         for (std::uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
-            if (!(requirements.memoryTypeBits & (1u << i)) || (properties.memoryTypes[i].propertyFlags & flags) != flags) continue;
+            if (!(requirements.memoryTypeBits & (1u << i)) || (properties.memoryTypes[i].propertyFlags & wanted) != wanted) continue;
             VkMemoryAllocateInfo allocation { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
                 .allocationSize = requirements.size, .memoryTypeIndex = i };
             VkDeviceMemory value {};
@@ -226,13 +229,13 @@ struct GpuVideoEncoder::Impl {
     }
 
     void makeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags flags,
-                    VkBuffer& buffer, VkDeviceMemory& allocation) {
+                    VkBuffer& buffer, VkDeviceMemory& allocation, VkMemoryPropertyFlags preferred = 0) {
         VkBufferCreateInfo info { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
             .usage = usage, .sharingMode = VK_SHARING_MODE_EXCLUSIVE };
         Vk(vkCreateBuffer(device, &info, nullptr, &buffer), "create GPU capture buffer");
         VkMemoryRequirements requirements;
         vkGetBufferMemoryRequirements(device, buffer, &requirements);
-        allocation = allocate(requirements, flags);
+        allocation = allocate(requirements, flags, preferred);
         Vk(vkBindBufferMemory(device, buffer, allocation, 0), "bind GPU capture buffer");
     }
 
@@ -450,7 +453,8 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, p.nv12, p.memory);
     if (p.capture.collect_bounds || !p.capture.retain_frames.empty() || p.capture.retain_loop_window) {
         p.makeBuffer(std::max<std::uint64_t>(32, std::uint64_t(width) * height * 4), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, p.readback, p.readback_memory);
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, p.readback, p.readback_memory,
+            VK_MEMORY_PROPERTY_HOST_CACHED_BIT); // CPU reads of uncached memory ran at ~156 MB/s (8K retained frames)
         Vk(vkMapMemory(device, p.readback_memory, 0, VK_WHOLE_SIZE, 0, &p.mapped), "map selected-frame readback");
     }
     if (!p.capture.retain_frames.empty()) {
