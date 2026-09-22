@@ -166,42 +166,17 @@ public static class HybridLoopService
         JsonObject? particleDefault = candidates.Count == 0 && locked.Length == 0
             ? StationaryParticleDefaultLoop(unresolved, candidates, fpsNumerator, fpsDenominator, ceiling)
             : null;
-        var report = new JsonObject {
-            ["schema_version"] = 1, ["status"] = candidates.Count == 0 ? "no_analytic_candidate" : "analytic_candidate_requires_seam_validation",
-            ["fps_num"] = fpsNumerator, ["fps_den"] = fpsDenominator, ["retime_mode"] = singleVideoRetime ? "single_video_nearest_frame_retime" : retimeClips ? "clip_retime_after_locked_search" : "locked_clip_rates",
-            ["loop_preference"] = result.Preference.ToString().ToLowerInvariant(), ["retime_budget_percent"] = result.RetimeBudgetPercent, ["budget_relaxed"] = result.BudgetRelaxed,
-            ["fixed_frame_step"] = result.FixedFrameStep, ["maximum_seconds"] = ceilingSeconds,
-            ["no_candidate_reason"] = candidates.Count == 0 && result.NoCandidate is CommonLoopNoCandidate reason
-                ? new JsonObject {
-                    ["kind"] = reason.Kind.ToString(), ["ceiling_seconds"] = reason.CeilingSeconds,
-                    ["fixed_period_seconds"] = reason.FixedPeriodSeconds,
-                    ["shader_component_count"] = shader.Components.Count, ["runtime_period_count"] = animation.Count,
-                    ["particle_cycle_count"] = particleCycles.Length,
-                    ["runtime_clock_uniform_count"] = CountRuntimeClockUniforms(runtime, bakedLayerIds) }
+        return new LoopReport(fpsNumerator, fpsDenominator,
+            singleVideoRetime ? "single_video_nearest_frame_retime" : retimeClips ? "clip_retime_after_locked_search" : "locked_clip_rates",
+            result.Preference, result.RetimeBudgetPercent, result.BudgetRelaxed, result.FixedFrameStep, ceilingSeconds,
+            candidates.Count == 0 && result.NoCandidate is CommonLoopNoCandidate reason
+                ? new LoopNoCandidateReason(reason, shader.Components.Count, animation.Count, particleCycles.Length,
+                    CountRuntimeClockUniforms(runtime, bakedLayerIds))
                 : null,
-            ["candidates"] = candidates, ["unresolved"] = unresolved,
-            ["source_static"] = sourceStatic,
-            ["video_control_scope"] = videoControlScope.ToJson(),
-            ["content_cadence"] = new JsonObject
-            {
-                ["capture_frames_per_content_frame"] = contentStep,
-                ["basis"] = contentStep > 1
-                    ? "Every temporal mechanism here is a fixed-rate clip whose own frame rate divides the output rate, so the capture repeats each distinct content frame this many times. Seam checks read ordinary steps across one content frame instead of across duplicates."
-                    : "No proven clip cadence covers this capture, so every output frame is treated as a distinct content frame.",
-                ["clips"] = new JsonArray(animation.Where(x => x.IsVideo).Select(x => (JsonNode)new JsonObject
-                {
-                    ["component"] = x.LockedComponent.Id, ["owner_layer_id"] = x.OwnerLayerId, ["track_name"] = x.TrackName,
-                    ["clip_fps_numerator"] = x.ClipFrameRate?.Numerator, ["clip_fps_denominator"] = x.ClipFrameRate?.Denominator
-                }).ToArray())
-            },
-            ["evidence"] = new JsonArray(shader.Components.Select(x => (JsonNode)new JsonObject { ["component"] = x.Component.Id, ["detail"] = x.Evidence }).ToArray()),
-            ["visual_seam"] = "not_verified", ["encoded_loop"] = "not_verified"
-        };
-        if (swayRecord is not null) report["sway_retime"] = swayRecord;
-        if (particleDefault is not null) report["loop_length_default"] = particleDefault;
-        // 上限被内嵌视频 2 GiB 收紧时，与改频开关无关地在循环记录上写明（maximum_seconds 已是收紧后的值）；没收紧时 plan 不变。
-        if (loopLengthLimit is { Applied: true }) report["embedded_video_limit"] = loopLengthLimit.ToJson();
-        return report;
+            candidates, unresolved, sourceStatic, videoControlScope,
+            new LoopContentCadence(contentStep, animation.Where(x => x.IsVideo)
+                .Select(x => new LoopCadenceClip(x.LockedComponent.Id, x.OwnerLayerId, x.TrackName, x.ClipFrameRate)).ToArray()),
+            shader.Components, swayRecord, particleDefault, loopLengthLimit).ToJson();
     }
 
     /// <summary>粒子默认循环长度（秒）：长寿命粒子可在循环上限内延长到寿命之后。</summary>
