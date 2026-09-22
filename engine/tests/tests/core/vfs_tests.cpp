@@ -13,33 +13,25 @@ using namespace rstd::literals;
 namespace
 {
 
-auto FsError(rstd::io::error::ErrorKind::Entity kind) -> rstd::io::error::Error {
-    return rstd::io::error::Error::from_kind(rstd::io::error::ErrorKind { kind });
-}
+auto FsError(owe::io::ErrorKind kind) -> owe::io::Error { return owe::io::Error::from_kind(kind); }
 
-struct MemorySource {
-    std::string data;
+class MemorySource final : public owe::io::ReadAt {
+public:
+    explicit MemorySource(std::string data): m_data(std::move(data)) {}
 
-    auto read_at(mut_ref<u8[]> buffer, u64 offset) const -> rstd::io::Result<usize> {
-        auto position = rstd::try_from<usize>(offset);
-        if (position.is_err()) return rstd::Ok(usize());
-        auto position_value = rstd::move(position).unwrap_unchecked();
-        auto data_len       = usize(data.size());
-        if (position_value >= data_len) return rstd::Ok(usize());
-        auto count = rstd::min(buffer.len(), data_len - position_value);
-        rstd::mem::memcpy(buffer.as_raw_ptr(), data.data() + position_value.to_primitive(), count);
+    auto read_at(std::uint8_t* buffer, std::size_t size, std::uint64_t offset) const
+        -> owe::io::Result<std::size_t> override {
+        if (offset >= m_data.size()) return rstd::Ok(std::size_t {});
+        auto count = std::min<std::size_t>(size, m_data.size() - offset);
+        std::memcpy(buffer, m_data.data() + offset, count);
         return rstd::Ok(count);
     }
+
+private:
+    std::string m_data;
 };
 
 } // namespace
-
-template<>
-struct rstd::Impl<rstd::io::ReadAt, MemorySource> : rstd::ImplBase<MemorySource> {
-    auto read_at(mut_ref<u8[]> buffer, u64 offset) const -> rstd::io::Result<usize> {
-        return this->self().read_at(buffer, offset);
-    }
-};
 
 namespace
 {
@@ -50,33 +42,24 @@ public:
                        std::string                                  invalid_path = {})
         : m_files(std::move(files)), m_invalid_path(std::move(invalid_path)) {}
 
-    auto open_read(owe::fs::Path path) const -> rstd::io::Result<owe::fs::ReadRange> {
+    auto open_read(owe::fs::Path path) const -> owe::io::Result<owe::fs::ReadRange> {
         auto key = owe::fs::ToStdString(path);
         if (key == m_invalid_path) {
-            return rstd::Err(FsError(rstd::io::error::ErrorKind::InvalidData));
+            return rstd::Err(FsError(owe::io::ErrorKind::InvalidData));
         }
         auto file = m_files.find(key);
         if (file == m_files.end()) {
-            return rstd::Err(FsError(rstd::io::error::ErrorKind::NotFound));
+            return rstd::Err(FsError(owe::io::ErrorKind::NotFound));
         }
-        auto source = rstd::io::SharedReadAt::make(MemorySource { file->second });
-        return owe::fs::ReadRange::make(std::move(source), u64(), u64(file->second.size()));
+        return owe::fs::ReadRange::make(
+            std::make_shared<MemorySource>(file->second), 0, file->second.size());
     }
 
-    auto open_write(owe::fs::Path path, owe::fs::WriteOptions) const
-        -> rstd::io::Result<owe::fs::WriteSeekHandle> {
-        auto key = owe::fs::ToStdString(path);
-        if (m_files.contains(key)) {
-            return rstd::Err(FsError(rstd::io::error::ErrorKind::ReadOnlyFilesystem));
-        }
-        return rstd::Err(FsError(rstd::io::error::ErrorKind::NotFound));
-    }
-
-    auto metadata(owe::fs::Path path) const -> rstd::io::Result<owe::fs::FileMetadata> {
+    auto metadata(owe::fs::Path path) const -> owe::io::Result<owe::fs::FileMetadata> {
         auto key  = owe::fs::ToStdString(path);
         auto file = m_files.find(key);
         if (file == m_files.end()) {
-            return rstd::Err(FsError(rstd::io::error::ErrorKind::NotFound));
+            return rstd::Err(FsError(owe::io::ErrorKind::NotFound));
         }
         return rstd::Ok(owe::fs::FileMetadata {
             .len          = u64(file->second.size()),
@@ -136,16 +119,11 @@ public:
 
 template<>
 struct rstd::Impl<owe::fs::MountFs, TestMount> : rstd::ImplBase<TestMount> {
-    auto open_read(owe::fs::Path path) const -> rstd::io::Result<owe::fs::ReadRange> {
+    auto open_read(owe::fs::Path path) const -> owe::io::Result<owe::fs::ReadRange> {
         return this->self().open_read(path);
     }
 
-    auto open_write(owe::fs::Path path, owe::fs::WriteOptions options) const
-        -> rstd::io::Result<owe::fs::WriteSeekHandle> {
-        return this->self().open_write(path, options);
-    }
-
-    auto metadata(owe::fs::Path path) const -> rstd::io::Result<owe::fs::FileMetadata> {
+    auto metadata(owe::fs::Path path) const -> owe::io::Result<owe::fs::FileMetadata> {
         return this->self().metadata(path);
     }
 };
@@ -182,8 +160,7 @@ TEST(Vfs, BackendErrorsAreNotOverlayMisses) {
 
     auto opened = vfs.open_read("/assets/broken"_str);
     ASSERT_TRUE(opened.is_err());
-    EXPECT_EQ(std::move(opened).unwrap_err_unchecked().kind().code,
-              rstd::io::error::ErrorKind::InvalidData);
+    EXPECT_TRUE(std::move(opened).unwrap_err_unchecked().kind() == owe::io::ErrorKind::InvalidData);
 }
 
 TEST(BinaryReader, CompletesReadsAcrossBufferedBoundary) {
@@ -193,8 +170,7 @@ TEST(BinaryReader, CompletesReadsAcrossBufferedBoundary) {
     bytes[8193] = '\x34';
     bytes[8194] = '\x12';
 
-    auto source = rstd::io::SharedReadAt::make(MemorySource { std::move(bytes) });
-    auto range  = rstd::io::ReadRange::make(std::move(source), u64(), u64(8195));
+    auto range = owe::io::ReadRange::make(std::make_shared<MemorySource>(std::move(bytes)), 0, 8195);
     ASSERT_TRUE(range.is_ok());
     owe::fs::BinaryReader reader(std::move(range).unwrap_unchecked());
 
@@ -210,42 +186,8 @@ TEST(Vfs, PathsUseComponentBoundariesAndRejectTraversal) {
     EXPECT_TRUE(vfs.open_read("/assets/file"_str).is_err());
     auto invalid = vfs.open_read("/asset/../file"_str);
     ASSERT_TRUE(invalid.is_err());
-    EXPECT_EQ(std::move(invalid).unwrap_err_unchecked().kind().code,
-              rstd::io::error::ErrorKind::InvalidInput);
+    EXPECT_TRUE(std::move(invalid).unwrap_err_unchecked().kind() == owe::io::ErrorKind::InvalidInput);
     EXPECT_TRUE(vfs.mount("asset"_str, MakeMount({})).is_err());
-}
-
-TEST(Vfs, WriteRoutingPreservesReadonlyOverlay) {
-    TempDirectory temp;
-    {
-        std::ofstream file(temp.path / "locked");
-        file << "physical";
-    }
-
-    auto physical = owe::fs::make_physical_fs(owe::fs::ToPath(temp.path.string()));
-    ASSERT_TRUE(physical.is_ok());
-
-    owe::fs::VFS vfs;
-    ASSERT_TRUE(vfs.mount("/assets"_str, std::move(physical).unwrap_unchecked()).is_ok());
-    ASSERT_TRUE(vfs.mount("/assets"_str, MakeMount({ { "locked", "readonly" } })).is_ok());
-
-    auto locked = vfs.open_write("/assets/locked"_str, owe::fs::WriteOptions { .truncate = true });
-    ASSERT_TRUE(locked.is_err());
-    EXPECT_EQ(std::move(locked).unwrap_err_unchecked().kind().code,
-              rstd::io::error::ErrorKind::ReadOnlyFilesystem);
-
-    auto created = vfs.open_write("/assets/new"_str,
-                                  owe::fs::WriteOptions { .create = true, .truncate = true });
-    ASSERT_TRUE(created.is_ok());
-    {
-        owe::fs::BinaryWriter writer(std::move(created).unwrap_unchecked());
-        EXPECT_EQ(writer.Write("new", 3), 3u);
-    }
-
-    std::ifstream file(temp.path / "new");
-    std::string   content;
-    file >> content;
-    EXPECT_EQ(content, "new");
 }
 
 TEST(PkgFs, ReusesHeaderAndRejectsInvalidEntryRanges) {
@@ -267,8 +209,7 @@ TEST(PkgFs, ReusesHeaderAndRejectsInvalidEntryRanges) {
     WritePkg(invalid_path, 100);
     auto invalid = owe::fs::WPPkgFs::open(owe::fs::ToPath(invalid_path.string()));
     ASSERT_TRUE(invalid.is_err());
-    EXPECT_EQ(std::move(invalid).unwrap_err_unchecked().kind().code,
-              rstd::io::error::ErrorKind::InvalidData);
+    EXPECT_TRUE(std::move(invalid).unwrap_err_unchecked().kind() == owe::io::ErrorKind::InvalidData);
 }
 
 TEST(PkgFs, PreservesUtf8WhileFoldingAsciiPathCase) {

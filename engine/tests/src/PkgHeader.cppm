@@ -6,6 +6,9 @@
 
 module;
 
+// 与 types.cppm 同：先让全局对齐分配声明可见，避免 operator new 歧义。
+#include <new>
+
 export module wescene.testing.pkg_header;
 
 import rstd.cppstd;

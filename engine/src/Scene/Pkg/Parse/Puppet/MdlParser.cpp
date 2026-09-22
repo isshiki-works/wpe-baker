@@ -1190,7 +1190,7 @@ bool MdlParser::Parse(ref<str> path, fs::VFS& vfs, Mdl& mdl, bool* missing) {
     if (pfile.is_err()) {
         auto error = rstd::move(pfile).unwrap_err_unchecked();
         if (missing != nullptr) {
-            *missing = error.kind().code == rstd::io::error::ErrorKind::NotFound;
+            *missing = error.kind() == owe::io::ErrorKind::NotFound;
         }
         return false;
     }
