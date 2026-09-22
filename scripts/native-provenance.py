@@ -60,8 +60,8 @@ def snapshot(ffmpeg_root: pathlib.Path | None = None) -> dict:
     roots = [ROOT / "engine/src", ROOT / "engine/tools/SceneBake", ROOT / "engine/tests/offline-vulkan"]
     roots += [ROOT / ".deps" / name for name in SOURCE_DEPENDENCIES]
     roots += [ffmpeg_root / "include", ffmpeg_root / "lib"]
-    paths = {ROOT / "engine/CMakeLists.txt", ROOT / "engine/lito.toml", ROOT / "engine/lito.lock", ROOT / "engine/LICENSE"}
-    paths.update(ROOT / "scripts" / name for name in ["build-native-cmake.py", "build-native.py", "native-provenance.py", "native-inputs.lock.json"])
+    paths = {ROOT / "engine/CMakeLists.txt", ROOT / "engine/CMakePresets.json", ROOT / "engine/LICENSE"}
+    paths.update(ROOT / "scripts" / name for name in ["build-native-cmake.py", "native-provenance.py", "native-inputs.lock.json"])
     paths.update((ffmpeg_root / "bin").glob("*.dll"))
     if ffmpeg_root == pathlib.Path(os.path.abspath(ROOT / ".deps/ffmpeg-lgpl21/prefix")):
         paths.update(ROOT / "scripts" / name for name in ["distribution-inputs.lock.json", "fetch-ffmpeg-lgpl21-inputs.py", "build-ffmpeg-lgpl21.py"])
