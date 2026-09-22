@@ -493,6 +493,9 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
     context.shader_cache->ReleaseTransientEntries();
     context.scene->InstallExtension(Box<Arc<ShaderCache>>::make(context.shader_cache.clone()));
     FinalizeUniformSources(context);
+    // X3 M1：渲染图规划区域裁剪时读视差/抖动设置，录制时逐帧核对真实视差偏移。
+    context.scene->InstallExtension(
+        Box<Arc<UniformSceneState>>::make(context.uniform_state.clone()));
     return context.scene.Take();
 }
 

@@ -1308,6 +1308,18 @@ void CustomShaderPass::recordRenderScopeDraw(PassRecordContext& context) {
         cmd.SetViewport(0, m_desc.viewports.as_slice());
     }
     if (m_desc.scissors.is_empty()) {
+        if (m_desc.region_uv.is_some() && (! m_desc.region_guard || (*m_desc.region_guard)())) {
+            const auto& r     = *m_desc.region_uv;
+            auto        clamp = [](double value, uint32_t limit) {
+                return static_cast<uint32_t>(std::clamp(value, 0.0, static_cast<double>(limit)));
+            };
+            const uint32_t x0 = clamp(std::floor(r[0] * outext.width) - 1.0, outext.width);
+            const uint32_t y0 = clamp(std::floor(r[1] * outext.height) - 1.0, outext.height);
+            const uint32_t x1 = clamp(std::ceil(r[2] * outext.width) + 1.0, outext.width);
+            const uint32_t y1 = clamp(std::ceil(r[3] * outext.height) + 1.0, outext.height);
+            scissor = { { static_cast<int32_t>(x0), static_cast<int32_t>(y0) },
+                        { x1 > x0 ? x1 - x0 : 0u, y1 > y0 ? y1 - y0 : 0u } };
+        }
         cmd.SetScissor(0, scissor);
     } else {
         cmd.SetScissor(0, m_desc.scissors.as_slice());

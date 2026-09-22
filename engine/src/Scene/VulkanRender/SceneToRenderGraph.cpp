@@ -12,6 +12,8 @@ import wescene.vulkan;
 import wescene.scene;
 
 import wescene.rgraph;
+import wescene.pkg.parse;
+import wescene.fs;
 
 using namespace owe;
 using namespace rstd::literals;
@@ -80,6 +82,10 @@ struct ExtraInfo {
     Option<rg::TextureNodeRef> mip_framebuffer_history;
     const RenderSceneSnapshot* render_scene { nullptr };
     const RenderLayerSelection* selection { nullptr };
+    // X3 M1：效果 pass → （输出中需保留的 UV 矩形，逐帧 guard）
+    std::unordered_map<const SceneImageEffectNode*,
+                       std::pair<std::array<double, 4>, std::shared_ptr<const std::function<bool()>>>>
+        region_clip;
 };
 
 static Option<vulkan::TextureRequest> BuildGraphTextureRequest(ExtraInfo&       extra,
@@ -317,6 +323,474 @@ static void AddMaterialTextureReads(SceneMaterial& material, std::string_view pa
     }
 }
 
+// ---- X3 M1：按最终采样区域反推裁剪（逐位等价，只少算不会被采样的像素） ----
+//
+// 区域一律用图层合成 RT 的归一化 UV 表示（u 向右、v 与显存行同向）；执行时按各输出的
+// 实际像素尺寸换算成 scissor（CustomShaderPass::Record），半尺寸/自适应 FBO 自动适配。
+// 从最终合成往前：P_final = 最终 pass 在屏幕内片元的 UV（含视差/抖动包络）⊕ 最终效果位移；
+// 每个前级输出只需覆盖后级片元的采样区 ⊕ 后级位移，逐级膨胀。任何一步给不出上界就整层不裁。
+namespace region_clip
+{
+struct Rect {
+    double u0, v0, u1, v1;
+    Rect Grow(double du, double dv) const { return { u0 - du, v0 - dv, u1 + du, v1 + dv }; }
+};
+
+// 采样坐标相对本片元 UV 的最大偏移（UV 单位）。
+struct Displacement {
+    double du { 0.0 }, dv { 0.0 };
+};
+
+// 读取效果参数；记录用到的参数，运行时 guard 逐帧核对它们没被脚本/用户属性改动。
+struct ParamSnapshot {
+    SceneMaterial*     material;
+    std::string        name;
+    std::vector<float> values;
+};
+
+class EffectParams {
+public:
+    EffectParams(SceneMaterial& material, double aspect, double min_width, double min_height,
+                 std::vector<ParamSnapshot>& used)
+        : m_material(material), m_aspect(aspect), m_min_width(min_width),
+          m_min_height(min_height), m_used(used) {}
+
+    // 常量优先，其次着色器注解默认值；被动画驱动的参数视为未知。
+    Option<std::vector<float>> Get(const char* name) const {
+        auto& shader = m_material.customShader;
+        if (shader.valueAnimations.get(as_str(name).unwrap()).is_some()) return None();
+        const ShaderValue* value = nullptr;
+        if (auto it = shader.constValues.find(name); it != shader.constValues.end())
+            value = &it->second;
+        else if (shader.variant.is_some()) {
+            auto& defaults = shader.variant->default_uniforms;
+            if (auto it = defaults.find(name); it != defaults.end()) value = &it->second;
+        }
+        if (value == nullptr) return None();
+        std::vector<float> out;
+        for (usize i {}; i < value->size(); ++i) out.push_back((*value)[i]);
+        m_used.push_back(ParamSnapshot { &m_material, name, out });
+        return Some(rstd::move(out));
+    }
+    Option<double> Scalar(const char* name) const {
+        auto v = Get(name);
+        if (v.is_none() || v->empty() || ! std::isfinite((*v)[0])) return None();
+        return Some(static_cast<double>((*v)[0]));
+    }
+    int Combo(const char* name) const {
+        auto& variant = m_material.customShader.variant;
+        if (variant.is_none()) return -1;
+        auto it = variant->resolved_combos.find(name);
+        if (it == variant->resolved_combos.end()) return 0;
+        return std::atoi(it->second.c_str());
+    }
+    bool   HasVariant() const { return m_material.customShader.variant.is_some(); }
+    double Aspect() const { return m_aspect; }          // 输入宽/高
+    double MinWidth() const { return m_min_width; }     // 输入逻辑/物理宽的较小者（像素）
+    double MinHeight() const { return m_min_height; }
+
+private:
+    SceneMaterial&              m_material;
+    double                      m_aspect, m_min_width, m_min_height;
+    std::vector<ParamSnapshot>& m_used;
+};
+
+using BoundFn = Option<Displacement> (*)(const EffectParams&);
+
+// 逐像素效果：g_Texture0 只在 v_TexCoord.xy 采样（顶点着色器 v_TexCoord = a_TexCoord）。
+Option<Displacement> Pointwise(const EffectParams&) { return Some(Displacement {}); }
+
+// 内置 waterwaves（assets/effects/waterwaves）：texCoord += pow(|sin|, g_Exponent)
+//   ·[pow(|sin|, g_Exponent2)]·方向单位向量·g_Strength²·mask（UV 单位，mask ∈ [0,1]）。
+Option<Displacement> WaterWaves(const EffectParams& p) {
+    if (! p.HasVariant()) return None();
+    auto strength = p.Scalar("g_Strength"), exponent = p.Scalar("g_Exponent");
+    if (strength.is_none() || exponent.is_none() || *exponent <= 0.0) return None();
+    if (p.Combo("DUALWAVES") != 0) {
+        auto exponent2 = p.Scalar("g_Exponent2");
+        if (exponent2.is_none() || *exponent2 <= 0.0) return None();
+    }
+    const double d = *strength * *strength;
+    return Some(Displacement { d, d });
+}
+
+// 位移上界表：按着色器名 + 源码指纹（.vert 与 .frag 文件内容的 FNV-1a 64）查。指纹不符（工程自带
+// 改过的同名着色器、WPE 资源版本变化）就当未知。表外一律视为无界、整层不裁；不设"未知效果
+// 保守常数"——自定义着色器可以缩放/镜像/环绕采样，任何常数都证明不了。
+struct Rule {
+    std::string_view shader;
+    std::uint64_t    source_fnv;
+    BoundFn          bound;
+};
+constexpr Rule kDisplacementTable[] = {
+    { "effects/waterwaves", 1665525461160322644ull, WaterWaves },
+    { "effects/pulse", 4691102007919585790ull, Pointwise },
+};
+
+std::uint64_t Fnv1a(std::uint64_t h, std::string_view bytes) {
+    for (unsigned char c : bytes) h = (h ^ c) * 1099511628211ull;
+    return h;
+}
+
+Option<std::uint64_t> ShaderSourceFnv(Scene& scene, const std::string& shader) {
+    auto vfs = scene.ExtensionMut<fs::VFS>();
+    if (vfs.is_none()) return None();
+    std::uint64_t h = 14695981039346656037ull;
+    for (const char* ext : { ".vert", ".frag" }) {
+        auto content = fs::ReadFileContent(**vfs, "/assets/shaders/" + shader + ext);
+        if (content.is_err()) return None();
+        h = Fnv1a(h, *content);
+        h = Fnv1a(h, "\n");
+    }
+    return Some(h);
+}
+
+BoundFn FindRule(Scene& scene, const std::string& shader, std::uint64_t& fnv) {
+    auto hash = ShaderSourceFnv(scene, shader);
+    fnv       = hash.is_some() ? *hash : 0;
+    for (const auto& rule : kDisplacementTable)
+        if (rule.shader == shader && hash.is_some() && *hash == rule.source_fnv) return rule.bound;
+    return nullptr;
+}
+
+// 最终 pass 在屏幕（NDC 放大 grow_x/grow_y）内片元的 UV 包围盒。网格 UV 是位置的全局仿射函数时
+// （卡片），用凸包裁剪后反映射；否则退回全部顶点 UV 包围盒（三角形内插 UV 不出顶点包围盒）。
+Option<Rect> FinalSampledRegion(const SceneMesh& mesh, const Eigen::Matrix4d& mvp, double grow_x,
+                                double grow_y) {
+    std::vector<std::array<double, 4>> points; // ndc x, ndc y, u, v
+    for (const auto& submesh : mesh.Submeshes()) {
+        for (const auto& array : submesh.vertex_arrays) {
+            auto offsets = array.GetAttrOffsetMap();
+            auto pos     = offsets.find(std::string(as_string_view(WE_IN_POSITION)));
+            auto uv      = offsets.find(std::string(as_string_view(WE_IN_TEXCOORD)));
+            if (pos == offsets.end() || uv == offsets.end()) return None();
+            const float* data   = array.Data();
+            const usize  stride = array.OneSize();
+            if (data == nullptr) continue;
+            for (usize i {}; i < array.VertexCount(); ++i) {
+                const float*          vtx = data + (i * stride).to_primitive();
+                const float*          p   = vtx + pos->second.offset.to_primitive();
+                const float*          t   = vtx + uv->second.offset.to_primitive();
+                const Eigen::Vector4d clip =
+                    mvp * Eigen::Vector4d(p[0], p[1], p[2], 1.0);
+                if (std::abs(clip.w() - 1.0) > 1e-9) return None(); // 只接受正交
+                points.push_back({ clip.x(), clip.y(), t[0], t[1] });
+            }
+        }
+    }
+    if (points.size() < 3) return None();
+    for (const auto& q : points)
+        for (double c : q)
+            if (! std::isfinite(c)) return None();
+
+    auto bbox_all = [&]() {
+        Rect r { points[0][2], points[0][3], points[0][2], points[0][3] };
+        for (const auto& q : points)
+            r = { std::min(r.u0, q[2]), std::min(r.v0, q[3]), std::max(r.u1, q[2]),
+                  std::max(r.v1, q[3]) };
+        return r;
+    };
+    // 拟合 uv = A·[x y 1]；取面积最大的三点求解。
+    std::size_t i0 = 0, i1 = 1, i2 = 2;
+    double      best = 0.0;
+    for (std::size_t a = 0; a < points.size(); ++a)
+        for (std::size_t b = a + 1; b < points.size(); ++b)
+            for (std::size_t c = b + 1; c < points.size() && points.size() <= 64; ++c) {
+                const double area = std::abs((points[b][0] - points[a][0]) * (points[c][1] - points[a][1]) -
+                                             (points[c][0] - points[a][0]) * (points[b][1] - points[a][1]));
+                if (area > best) best = area, i0 = a, i1 = b, i2 = c;
+            }
+    if (! (best > 1e-12)) return Some(bbox_all());
+    Eigen::Matrix3d m;
+    m << points[i0][0], points[i0][1], 1.0, points[i1][0], points[i1][1], 1.0, points[i2][0],
+        points[i2][1], 1.0;
+    Eigen::Vector3d cu(points[i0][2], points[i1][2], points[i2][2]);
+    Eigen::Vector3d cv(points[i0][3], points[i1][3], points[i2][3]);
+    const Eigen::Vector3d au = m.fullPivLu().solve(cu), av = m.fullPivLu().solve(cv);
+    for (const auto& q : points) {
+        const double u = au.dot(Eigen::Vector3d(q[0], q[1], 1.0));
+        const double v = av.dot(Eigen::Vector3d(q[0], q[1], 1.0));
+        if (std::abs(u - q[2]) > 1e-6 || std::abs(v - q[3]) > 1e-6) return Some(bbox_all());
+    }
+    // 屏幕凸包（单调链）∩ 放大后的 NDC 矩形。
+    std::vector<std::array<double, 2>> pts;
+    for (const auto& q : points) pts.push_back({ q[0], q[1] });
+    std::sort(pts.begin(), pts.end());
+    pts.erase(std::unique(pts.begin(), pts.end()), pts.end());
+    auto cross = [](const auto& o, const auto& a, const auto& b) {
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    };
+    std::vector<std::array<double, 2>> hull(2 * pts.size());
+    std::size_t                        k = 0;
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        while (k >= 2 && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0) --k;
+        hull[k++] = pts[i];
+    }
+    for (std::size_t i = pts.size() - 1, t = k + 1; i > 0; --i) {
+        while (k >= t && cross(hull[k - 2], hull[k - 1], pts[i - 1]) <= 0) --k;
+        hull[k++] = pts[i - 1];
+    }
+    hull.resize(k > 0 ? k - 1 : 0);
+    const double lim[4] = { -1.0 - grow_x, -1.0 - grow_y, 1.0 + grow_x, 1.0 + grow_y };
+    for (int edge = 0; edge < 4 && ! hull.empty(); ++edge) {
+        const int    axis = edge % 2;
+        const bool   low  = edge < 2;
+        auto inside = [&](const auto& q) { return low ? q[axis] >= lim[edge] : q[axis] <= lim[edge]; };
+        std::vector<std::array<double, 2>> out;
+        for (std::size_t i = 0; i < hull.size(); ++i) {
+            const auto& a = hull[i];
+            const auto& b = hull[(i + 1) % hull.size()];
+            if (inside(a)) out.push_back(a);
+            if (inside(a) != inside(b)) {
+                const double t = (lim[edge] - a[axis]) / (b[axis] - a[axis]);
+                out.push_back({ a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]) });
+            }
+        }
+        hull = rstd::move(out);
+    }
+    if (hull.empty()) return Some(Rect { 0.0, 0.0, 0.0, 0.0 });
+    Rect r { 1e300, 1e300, -1e300, -1e300 };
+    for (const auto& q : hull) {
+        const double u = au.dot(Eigen::Vector3d(q[0], q[1], 1.0));
+        const double v = av.dot(Eigen::Vector3d(q[0], q[1], 1.0));
+        r = { std::min(r.u0, u), std::min(r.v0, v), std::max(r.u1, u), std::max(r.v1, v) };
+    }
+    return Some(r);
+}
+
+struct LayerPlan {
+    Option<std::array<double, 4>>                          source_region;
+    std::unordered_map<const SceneImageEffectNode*, std::array<double, 4>> effect_regions;
+    std::shared_ptr<const std::function<bool()>>           guard;
+};
+
+bool Near(const Eigen::Matrix4d& a, const Eigen::Matrix4d& b) { return a == b; }
+
+// 返回 None 即整层不裁；reason 写日志。
+Option<LayerPlan> PlanLayer(SceneNodeLayer& layer, Scene& scene, ExtraInfo& extra,
+                            std::string& reason) {
+    auto fail = [&](const char* why) {
+        reason = why;
+        return None<LayerPlan>();
+    };
+    if (extra.selection != nullptr &&
+        (extra.selection->enabled || extra.selection->transparent_background))
+        return fail("layer selection");
+    if (layer.FinalResolveEffect() || layer.PublishedEffect() || layer.VisibleResolveEffect())
+        return fail("resolve/published effect");
+    if (! layer.PrefillNodes().empty()) return fail("prefill nodes");
+    auto state_ext = scene.ExtensionMut<Arc<UniformSceneState>>();
+    if (state_ext.is_none()) return fail("no uniform state");
+    // 扩展由场景持有，生命周期覆盖渲染图；guard 里存裸指针以便 std::function 可拷贝。
+    UniformSceneState* uniform_state = (**state_ext).as_ptr();
+
+    const std::string composite(layer.CompositeTarget());
+    auto              composite_rt = scene.RenderTarget(as_str(composite).unwrap());
+    if (composite_rt.is_none()) return fail("no composite rt");
+    const auto& crt = **composite_rt;
+    if (crt.has_mipmap || crt.sample_count > 1 || crt.bind.enable || crt.preserve_on_write)
+        return fail("composite rt kind");
+    const double width  = rstd::as_cast<double>(crt.width);
+    const double height = rstd::as_cast<double>(crt.height);
+    const double min_w  = std::max(1.0, std::min(width, crt.physical_width > i32() ? rstd::as_cast<double>(crt.physical_width) : width));
+    const double min_h  = std::max(1.0, std::min(height, crt.physical_height > i32() ? rstd::as_cast<double>(crt.physical_height) : height));
+
+    // 依序收集效果 pass；v0 只接受单 pass、写合成 RT、g_Texture0 读合成 RT 的效果。
+    std::vector<SceneImageEffectNode*> nodes;
+    for (auto* eff : layer.ResolvedEffects()) {
+        if (eff == nullptr) continue;
+        if (! eff->commands.empty()) return fail("effect copy/swap commands");
+        for (auto& n : eff->nodes) nodes.push_back(&n);
+    }
+    if (nodes.empty()) return fail("no effect pass");
+    SceneImageEffectNode* final_node = nodes.back();
+    {
+        auto t = layer.ResolvedTarget(*final_node);
+        if (t.kind != SceneEffectTargetKind::Named || t.key != std::string(as_string_view(SpecTex_Default)))
+            return fail("final target not screen");
+    }
+    for (std::size_t i = 0; i + 1 < nodes.size(); ++i) {
+        if (ResolveEffectTarget(layer, layer.ResolvedTarget(*nodes[i])) != composite)
+            return fail("effect writes named fbo");
+    }
+
+    std::vector<ParamSnapshot> used_params;
+    std::vector<Displacement>  displacement;
+    for (auto* n : nodes) {
+        SceneNode* node = n->sceneNode.as_ptr();
+        if (node->Mesh() == nullptr || node->Mesh()->Submeshes().size() != 1 ||
+            node->Mesh()->Material() == nullptr)
+            return fail("effect mesh");
+        auto& material = *node->Mesh()->Material();
+        if (! material.customShader.shader) return fail("no shader");
+        if (material.textures.empty() || material.textures[0] != composite)
+            return fail("g_Texture0 not previous");
+        for (std::size_t s = 1; s < material.textures.size(); ++s) {
+            const auto& key = material.textures[s];
+            if (key == composite || (! key.empty() && IsSpecTex(as_str(key).unwrap())))
+                return fail("reads render target in extra slot");
+        }
+        std::uint64_t fnv  = 0;
+        auto          rule = FindRule(scene, material.customShader.shader->name, fnv);
+        if (rule == nullptr) {
+            reason = rstd::cppstd::to_string(rstd::format("unknown effect {} fnv={}",
+                                                            material.customShader.shader->name, fnv).as_str());
+            return None();
+        }
+        EffectParams params(material, width / height, min_w, min_h, used_params);
+        auto         bound = rule(params);
+        if (bound.is_none()) {
+            reason = "unbounded params " + material.customShader.shader->name;
+            return None();
+        }
+        displacement.push_back(*bound);
+    }
+
+    // 最终 pass：静态正交投影、非透视/反射、不在世界空间。
+    SceneNode* final_scene_node = final_node->sceneNode.as_ptr();
+    if (final_scene_node->Perspective() ||
+        (final_scene_node->Reflected() && scene.PlanarReflectionEnabled()))
+        return fail("perspective/reflected final");
+    for (auto* p = final_scene_node; p != nullptr; p = p->Parent())
+        if (p->Perspective() || (p->Reflected() && scene.PlanarReflectionEnabled()))
+            return fail("perspective/reflected parent");
+    if (! final_scene_node->Camera().empty() && final_scene_node->Camera() != "global")
+        return fail("final camera");
+    const auto* node_state = uniform_state->FindNodeState(final_scene_node);
+    if (node_state == nullptr || node_state->vertices_in_world_space)
+        return fail("final uniform state");
+    auto camera_ref = scene.CameraMut("global"_str);
+    if (camera_ref.is_none() || (**camera_ref).IsPerspective()) return fail("camera");
+    SceneCamera* camera = (*camera_ref).as_raw_ptr();
+    auto*        mesh   = final_scene_node->Mesh();
+    if (mesh == nullptr || mesh->Material() == nullptr) return fail("final mesh");
+    // 最终 pass 的顶点着色器若做蒙皮，网格位置随骨骼动画变，静态投影不成立。
+    if (mesh->Material()->customShader.variant.is_none()) return fail("final variant");
+    {
+        const auto& combos = mesh->Material()->customShader.variant->resolved_combos;
+        for (const auto& key : { "SKINNING", "BONECOUNT", "MORPHING" }) {
+            auto it = combos.find(key);
+            if (it != combos.end() && it->second != "0") return fail("skinned final mesh");
+        }
+    }
+
+    final_scene_node->UpdateTrans();
+    const Eigen::Matrix4d model = final_scene_node->ModelTrans() *
+                                  final_scene_node->GeometryTransform() * mesh->GeometryTransform();
+    const Eigen::Matrix4d view_projection = camera->GetViewProjectionMatrix();
+    std::vector<u64> mesh_generations;
+    for (const auto& sm : mesh->Submeshes())
+        for (const auto& va : sm.vertex_arrays) mesh_generations.push_back(va.DataGeneration());
+
+    // 视差包络：|shift| ≤ (|节点 − 相机| + 0.5·ortho·|mouse_influence|)·|depth|·amount（指针在 [0,1]）；
+    // 运行时直接用同一函数算本帧真实偏移核对，不依赖这里的推导。
+    const auto   ortho    = uniform_state->Ortho();
+    const auto   parallax = uniform_state->CameraParallax();
+    double       parallax_x = 0.0, parallax_y = 0.0;
+    if (parallax.enable) {
+        auto effective = uniform_state->EffectiveParallax(*final_scene_node);
+        if (effective.is_some()) {
+            const Eigen::Vector3d cam = camera->GetPosition();
+            const double dx = std::abs(model(0, 3) - cam.x()) + 0.5 * ortho[usize(0)] * std::abs(parallax.mouse_influence);
+            const double dy = std::abs(model(1, 3) - cam.y()) + 0.5 * ortho[usize(1)] * std::abs(parallax.mouse_influence);
+            parallax_x = dx * std::abs(effective->depth[usize(0)]) * std::abs(parallax.amount) * 1.01 + 1.0;
+            parallax_y = dy * std::abs(effective->depth[usize(1)]) * std::abs(parallax.amount) * 1.01 + 1.0;
+        }
+    }
+    // 抖动包络：ShakeOffset 各分量 ≤ 1.37·(1 + 7·grow)，再乘 amplitude·min(ortho)·0.01。
+    const auto shake   = uniform_state->CameraShake();
+    double     shake_w = 0.0;
+    if (shake.enable && shake.amplitude > 0.0f && shake.speed > 0.0f) {
+        const double r    = std::clamp(static_cast<double>(shake.roughness), 0.0, 2.0);
+        const double over = std::clamp(r - 1.0, 0.0, 1.0);
+        shake_w = 1.5 * (1.0 + 7.0 * over * over) * shake.amplitude *
+                  std::min(ortho[usize(0)], ortho[usize(1)]) * 0.01;
+    }
+    const double ex = parallax_x + shake_w, ey = parallax_y + shake_w;
+    const double grow_x = std::abs(view_projection(0, 0)) * ex + std::abs(view_projection(0, 1)) * ey;
+    const double grow_y = std::abs(view_projection(1, 0)) * ex + std::abs(view_projection(1, 1)) * ey;
+
+    auto final_region = FinalSampledRegion(*mesh, view_projection * model, grow_x, grow_y);
+    if (final_region.is_none()) return fail("final mesh region");
+
+    // 反推：P = 最终片元 UV ⊕ 最终位移；每级输出需覆盖 P（执行时再外扩 1 像素 + 取整），
+    // 该级片元的采样区 = P 外扩 2 像素 ⊕ 该级位移。
+    LayerPlan  plan;
+    const double margin_u = 2.0 / min_w, margin_v = 2.0 / min_h;
+    Rect         need     = final_region->Grow(displacement.back().du, displacement.back().dv);
+    for (std::size_t i = nodes.size() - 1; i-- > 0;) {
+        plan.effect_regions[nodes[i]] = { need.u0, need.v0, need.u1, need.v1 };
+        need = need.Grow(margin_u + displacement[i].du, margin_v + displacement[i].dv);
+    }
+    plan.source_region = Some(std::array<double, 4> { need.u0, need.v0, need.u1, need.v1 });
+
+    // 运行时 guard：本帧最终 pass 的模型/相机/网格/参数与规划时一致，且真实视差偏移在包络内。
+    const float parallax_amount = parallax.amount, parallax_influence = parallax.mouse_influence;
+    const bool  parallax_enable = parallax.enable;
+    auto        guard = std::make_shared<const std::function<bool()>>(
+        [=, used = rstd::move(used_params)]() -> bool {
+            final_scene_node->UpdateTrans();
+            const Eigen::Matrix4d now = final_scene_node->ModelTrans() *
+                                        final_scene_node->GeometryTransform() * mesh->GeometryTransform();
+            if (! Near(now, model)) return false;
+            if (! Near(camera->GetViewProjectionMatrix(), view_projection)) return false;
+            std::size_t g = 0;
+            for (const auto& sm : mesh->Submeshes())
+                for (const auto& va : sm.vertex_arrays)
+                    if (g >= mesh_generations.size() || va.DataGeneration() != mesh_generations[g++])
+                        return false;
+            if (g != mesh_generations.size()) return false;
+            const auto& cp = uniform_state->CameraParallax();
+            if (cp.enable != parallax_enable || cp.amount != parallax_amount ||
+                cp.mouse_influence != parallax_influence)
+                return false;
+            if (cp.enable) {
+                const auto* st = uniform_state->FindNodeState(final_scene_node);
+                if (st == nullptr) return false;
+                const auto off = uniform_state->ComputeParallaxOffset(*st, *camera, SceneRenderViewKind::Primary);
+                if (! (std::abs(off[usize(0)]) <= parallax_x && std::abs(off[usize(1)]) <= parallax_y))
+                    return false;
+            }
+            const auto& cs = uniform_state->CameraShake();
+            if (cs.enable != shake.enable || cs.amplitude != shake.amplitude ||
+                cs.roughness != shake.roughness || (cs.speed > 0.0f) != (shake.speed > 0.0f))
+                return false;
+            const auto o = uniform_state->Ortho();
+            if (o[usize(0)] != ortho[usize(0)] || o[usize(1)] != ortho[usize(1)]) return false;
+            for (const auto& p : used) {
+                auto& shader = p.material->customShader;
+                if (shader.valueAnimations.get(as_str(p.name).unwrap()).is_some()) return false;
+                const ShaderValue* value = nullptr;
+                if (auto it = shader.constValues.find(p.name); it != shader.constValues.end())
+                    value = &it->second;
+                else if (shader.variant.is_some()) {
+                    auto it = shader.variant->default_uniforms.find(p.name);
+                    if (it != shader.variant->default_uniforms.end()) value = &it->second;
+                }
+                if (value == nullptr || value->size() != usize(p.values.size())) return false;
+                for (usize i {}; i < value->size(); ++i)
+                    if ((*value)[i] != p.values[i.to_primitive()]) return false;
+            }
+            return true;
+        });
+    plan.guard = guard;
+
+    double full = 0.0, kept = 0.0;
+    auto   account = [&](const std::array<double, 4>& r) {
+        const double w = std::clamp(r[2], 0.0, 1.0) - std::clamp(r[0], 0.0, 1.0);
+        const double h = std::clamp(r[3], 0.0, 1.0) - std::clamp(r[1], 0.0, 1.0);
+        full += 1.0;
+        kept += std::max(0.0, w) * std::max(0.0, h);
+    };
+    account(*plan.source_region);
+    for (std::size_t i = 0; i + 1 < nodes.size(); ++i) account(plan.effect_regions[nodes[i]]);
+    rstd_info("region clip {}: passes={} final_uv=[{},{},{},{}] source_uv=[{},{},{},{}] clipped_fraction={} envelope_world=({},{})",
+              composite, full, final_region->u0, final_region->v0, final_region->u1,
+              final_region->v1, need.u0, need.v0, need.u1, need.v1, 1.0 - kept / full, ex, ey);
+    return Some(rstd::move(plan));
+}
+} // namespace region_clip
+
 static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, ExtraInfo& extra,
                                    bool                defer_effect = false,
                                    SceneRenderViewKind render_view  = SceneRenderViewKind::Primary,
@@ -404,6 +878,20 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
         }
     }
 
+    Option<std::array<double, 4>>                source_region;
+    std::shared_ptr<const std::function<bool()>> source_guard;
+    if (imgeff != nullptr && ! defer_effect && render_view == SceneRenderViewKind::Primary &&
+        imgeff->HasRenderEffects()) {
+        std::string reason;
+        if (auto plan = region_clip::PlanLayer(*imgeff, scene, extra, reason); plan.is_some()) {
+            source_region = plan->source_region;
+            source_guard  = plan->guard;
+            for (auto& [n, r] : plan->effect_regions) extra.region_clip[n] = { r, plan->guard };
+        } else {
+            rstd_info("region clip {}: skipped ({})", imgeff->CompositeTarget(), reason);
+        }
+    }
+
     const bool draw_source = imgeff == nullptr || imgeff->RequiresSourceDraw();
     for (std::size_t smi = 0; draw_source && smi < mesh->Submeshes().size(); smi++) {
         const auto& submesh       = mesh->Submeshes()[smi];
@@ -436,8 +924,19 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
              preserve_output = submesh.preserve_output,
              render_view,
              effect_node,
+             source_region = submesh.output_override.empty() ? source_region : None(),
+             source_guard,
              &scene,
              &extra](rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
+                if (effect_node != nullptr) {
+                    if (auto it = extra.region_clip.find(effect_node); it != extra.region_clip.end()) {
+                        pdesc.region_uv    = Some(it->second.first);
+                        pdesc.region_guard = it->second.second;
+                    }
+                } else if (source_region.is_some()) {
+                    pdesc.region_uv    = source_region;
+                    pdesc.region_guard = source_guard;
+                }
                 const auto& pass        = builder.workPassNode();
                 if (effect_node != nullptr)
                     effect_node->graph_pass_index = Some(u64(pass.handle.index.to_primitive()));
