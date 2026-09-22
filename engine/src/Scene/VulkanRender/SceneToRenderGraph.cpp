@@ -480,8 +480,9 @@ Option<Rect> FinalSampledRegion(const SceneMesh& mesh, const Eigen::Matrix4d& mv
             if (data == nullptr) continue;
             for (usize i {}; i < array.VertexCount(); ++i) {
                 const float*          vtx = data + (i * stride).to_primitive();
-                const float*          p   = vtx + pos->second.offset.to_primitive();
-                const float*          t   = vtx + uv->second.offset.to_primitive();
+                // GetAttrOffsetMap 的 offset 是字节，stride（OneSize）是 float 个数。
+                const float* p = vtx + pos->second.offset.to_primitive() / sizeof(float);
+                const float* t = vtx + uv->second.offset.to_primitive() / sizeof(float);
                 const Eigen::Vector4d clip =
                     mvp * Eigen::Vector4d(p[0], p[1], p[2], 1.0);
                 if (std::abs(clip.w() - 1.0) > 1e-9) return None(); // 只接受正交
