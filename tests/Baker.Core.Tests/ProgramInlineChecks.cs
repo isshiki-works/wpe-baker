@@ -3,143 +3,14 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Baker.Core;
 
-if (args is ["--release-readiness-checks", string readinessOutput])
+/// <summary>原 Program.cs 默认路径里的顶层内联检查（包格式、发布目标、混合规划分配与依赖守卫），C0.2 逐行原样搬入。</summary>
+internal static class ProgramInlineChecks
 {
-    string directory = Path.GetFullPath(readinessOutput);
-    if (Directory.Exists(directory)) throw new IOException("Check output must be new.");
-    Directory.CreateDirectory(directory);
-    void AssertReady(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
-    EffectPrefixProfileChecks.Run(AssertReady, directory);
-    await PresetCascadeChecks.RunAsync(AssertReady, directory);
-    GuiPresetTradeoffChecks.Run(AssertReady);
-    SourcePowerVerdictChecks.Run(AssertReady);
-    await VideoDominanceChecks.RunAsync(AssertReady, directory);
-    PlainLanguageChecks.Run(AssertReady);
-    NarrativePolishChecks.Run(AssertReady);
-    OfficialTraceLossChecks.Run(AssertReady);
-    SharedLoopStartChecks.Run(AssertReady);
-    Console.WriteLine("Release readiness checks passed.");
-    return;
-}
-
-if (args is ["--particle-checks", string particleOutput])
-{
-    string directory = Path.GetFullPath(particleOutput);
-    if (Directory.Exists(directory)) throw new IOException("Particle check output must be new.");
-    Directory.CreateDirectory(directory);
-    ParticleStationarityChecks.Run((condition, message) => {
-        if (!condition) throw new InvalidOperationException(message);
-    }, directory);
-    Console.WriteLine("Particle stationarity and native default checks passed.");
-    return;
-}
-
-if (args is ["--native-scaled-composition", string scalePlan, string scaleOutput, string scaleValue, string scaleTools])
-{
-    var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
-    var tools = JsonSerializer.Deserialize<NativeTools>(File.ReadAllText(scaleTools), options)!;
-    var plan = JsonNode.Parse(File.ReadAllText(scalePlan))!.AsObject();
-    double scale = double.Parse(scaleValue, System.Globalization.CultureInfo.InvariantCulture);
-    string output = Path.GetFullPath(scaleOutput);
-    using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-    var baker = new HybridBakeService(tools);
-    var probe = await baker.BakeAsync(new(2, plan, output + ".probe", HybridCompositionValidator.RequiredFrames,
-        KeepIntermediates: true, EffectRenderScale: scale), cancellationToken: timeout.Token);
-    var result = await baker.ValidateProbeCompositionAsync(plan, probe, output, cancellationToken: timeout.Token);
-    result["effect_render_scale"] = scale;
-    await File.WriteAllTextAsync(output + ".json", result.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-    Console.WriteLine(result.ToJsonString());
-    if (result["status"]?.GetValue<string>() != "composition_pass")
-        throw new InvalidDataException("Scaled composition differs beyond the existing composition limits.");
-    return;
-}
-
-if (args is ["--daytime-checks", string daytimeOutput])
-{
-    string directory = Path.GetFullPath(daytimeOutput);
-    if (Directory.Exists(directory)) throw new IOException("Daytime check output must be new.");
-    Directory.CreateDirectory(directory);
-    void CheckDaytime(bool condition, string message) {
-        if (!condition) throw new InvalidOperationException(message);
-    }
-    await DaytimeSplitChecks.RunAsync(CheckDaytime, directory);
-    await TradeoffOptionsChecks.RunAsync(CheckDaytime, directory);
-    PlainLanguageChecks.Run(CheckDaytime);
-    GuiPresetTradeoffChecks.Run(CheckDaytime);
-    Console.WriteLine("Daytime selection, dynamic identity preservation and dependency explanations passed.");
-    return;
-}
-
-if (args is ["--native-gpu-encode", string gpuOutput])
-{
-    await NativeGpuEncodeChecks.RunAsync(gpuOutput);
-    return;
-}
-
-if (args is ["--native-sampling-coverage", string coverageOutput])
-{
-    await SparseReadbackChecks.RunCoverageAsync(coverageOutput);
-    return;
-}
-
-if (args is ["--native-sparse-readback", string sparseOutput])
-{
-    await SparseReadbackChecks.RunNativeAsync(sparseOutput);
-    return;
-}
-
-if (args is ["--native-progress-cancel", string nativeOutput])
-{
-    await ProgressCancellationChecks.RunNativeAsync(nativeOutput);
-    return;
-}
-
-// Real file-format roundtrips and adversarial input checks; no mocked I/O or renderer.
-string root = Path.GetFullPath(args.Length == 1 ? args[0] : Path.Combine(Path.GetTempPath(), "wpe-baker-core-" + Guid.NewGuid().ToString("N")));
-if (Directory.Exists(root)) throw new IOException("Test output must be new.");
-Directory.CreateDirectory(root);
-var passed = new List<string>();
-void Check(bool condition, string name)
-{
-    if (!condition) throw new InvalidOperationException("FAILED: " + name);
-    passed.Add(name);
-}
-MessagesChecks.Run(Check);
-await PresetCascadeChecks.RunAsync(Check, root);
-SourceDiagnosisChecks.Run(Check, root);
-NarrativePolishChecks.Run(Check);
-PlaybackEncodeProfileChecks.Run(Check);
-HardwareDecodeDimensionsChecks.Run(Check);
-HardwareDecodeTargetChecks.Run(Check);
-EmbeddedVideoBudgetChecks.Run(Check);
-await OutputResolutionChecks.RunAsync(Check, root);
-await OutputFrameRateChecks.RunAsync(Check, root);
-StageTimingChecks.Run(Check);
-ProgressCancellationChecks.Run(Check);
-await EncodeSlotChecks.RunAsync(Check);
-await TemporaryCaptureChecks.RunAsync(Check, root);
-BakeDiskBudgetChecks.Run(Check, root);
-ReparsePointChecks.Run(Check, root);
-await SegmentedMasterRewriteChecks.RunAsync(Check, root);
-await SeamPreviewChecks.RunAsync(Check);
-await CandidateExportChecks.RunAsync(Check, root);
-await SingleShotAllocationChecks.RunAsync(Check, root);
-await DaytimeSplitChecks.RunAsync(Check, root);
-await TradeoffOptionsChecks.RunAsync(Check, root);
-GuiPresetTradeoffChecks.Run(Check);
-PlainLanguageChecks.Run(Check);
-SourcePowerVerdictChecks.Run(Check);
-await FullFrameDemotionChecks.RunAsync(Check, root);
-HybridCaptureViewportChecks.Run(Check);
-HybridLoopAllocationChecks.Run(Check);
-await SdrRadianceClosureChecks.RunAsync(Check, root);
-LoopPreferenceChecks.Run(Check);
-LoopCeilingChecks.Run(Check, root);
-EffectPrefixCaptureTargetChecks.Run(Check);
-await VideoDominanceChecks.RunAsync(Check, root);
-await ResidualLayoutGateChecks.RunAsync(Check, root);
-ScriptRootAssemblyChecks.Run(Check);
-await AnalysisToolLimitationChecks.RunAsync(Check, root);
+    internal static async Task RunAsync(Action<bool, string> check, string root)
+    {
+        var passed = new List<string>();
+        void Check(bool condition, string name) { check(condition, name); passed.Add(name); }
+// ---- 以下为 Program.cs 原文 ----
 string rendererFailureOutput = Path.Combine(root, "renderer-failure-summary");
 Directory.CreateDirectory(Path.Combine(rendererFailureOutput, "native"));
 string rendererFailureResult = Path.Combine(rendererFailureOutput, "native", "result.json");
@@ -1020,7 +891,6 @@ Check(LateDependencies(LateEvent(1702, 1702, "write", "origin"), LateEvent(1703,
     "full capture permits writes with both owner and target inside the group and preserves initialization-only read/write rules");
 Check(LateDependencies(LateEvent(1702, -1, "input", "wall_clock", initialization: true)).Count == 1,
     "initialization does not exempt an external input from the existing capture guard");
-HybridVideoWorkloadChecks.Run(Check);
 var fallbackScene = JsonNode.Parse("""{"objects":[{"id":1,"visible":{"user":"shown","value":false},"scale":{"user":"size","value":"0.5 0.5 0.5"}}]}""")!.AsObject();
 typeof(HybridBakeService).GetMethod("ApplyVisibilityFallbacks", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
     .Invoke(null, new object[] { fallbackScene, new JsonObject { ["shown"] = true, ["size"] = .7 } });
@@ -1051,37 +921,5 @@ JsonObject fixedParallax = await parallaxPlanner.AnalyzeSingleAsync(new(2,parall
 Check(liveParallax["live_layer_ids"]!.AsArray().Any(n=>n!.GetValue<int>()==1100) &&
     !fixedParallax["live_layer_ids"]!.AsArray().Any(n=>n!.GetValue<int>()==1100),
     "shader g_ParallaxPosition stays live even at zero model depth unless fixed view was explicitly selected");
-await HybridPlanFormatChecks.RunAsync(Check, root);
-ExactVideoLoopChecks.Run(Check, root);
-SpriteSeamPhaseChecks.Run(Check, root);
-LoopWarmupStackingChecks.Run(Check);
-SourceStartOffsetChecks.Run(Check);
-LoopFixChecks.Run(Check, root);
-SavedLoopApplyChecks.Run(Check);
-CanonicalRepeatNoiseChecks.Run(Check, root);
-SourceStaticLoopChecks.Run(Check, root);
-SuitabilityVerdictChecks.Run(Check, root);
-HybridLoopGeneralizationChecks.Run(Check, root);
-ShaderPeriodGeneralizationChecks.Run(Check, root);
-ShaderEffectivePassChecks.Run(Check, root);
-ShaderAdditionalPeriodChecks.Run(Check, root);
-WaterRippleSineClockChecks.Run(Check, root);
-ShaderSplitPeriodChecks.Run(Check, root);
-WaterFlowPeriodChecks.Run(Check, root);
-ResidualMaskingChecks.Run(Check);
-await SwayRetimeChecks.RunAsync(Check, root);
-RetimeBudgetChecks.Run(Check);
-EffectPrefixProfileChecks.Run(Check, root);
-await HybridHierarchyGeneralizationChecks.RunAsync(Check, root);
-await OverlayExclusionChecks.RunAsync(Check, root);
-await WallpaperEnginePropertiesChecks.RunAsync(Check, root);
-await ParticleRealtimeChecks.RunAsync(Check, root);
-ParticleStationarityChecks.Run(Check, root);
-await NativeFrameSampleChecks.RunAsync(Check, root);
-await OpaqueCaptureRejectionChecks.RunAsync(Check, root);
-FrameScanChecks.Run(Check);
-await ExactFrameRangeChecks.RunAsync(Check, root);
-await ReferenceSeamChecks.RunAsync(Check, root);
-string serialized = JsonSerializer.Serialize(new { status = "passed", checks = passed.Count, passed, root }, new JsonSerializerOptions { WriteIndented = true });
-await File.WriteAllTextAsync(Path.Combine(root, "report.json"), serialized);
-Console.WriteLine(serialized);
+    }
+}

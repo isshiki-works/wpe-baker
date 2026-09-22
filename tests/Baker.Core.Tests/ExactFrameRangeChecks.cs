@@ -207,25 +207,8 @@ internal static class ExactFrameRangeChecks
 
     private static int Bit(ulong frame, int bit) => ((frame >> bit) & 1) != 0 ? 255 : 0;
 
-    private static NativeTools? FindTools()
-    {
-        string? configuration = Environment.GetEnvironmentVariable("WPE_BAKER_TOOLS_JSON");
-        if (string.IsNullOrWhiteSpace(configuration))
-        {
-            for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
-            {
-                string candidate = Path.Combine(directory.FullName, "src", "Baker.Cli", "bin", "Release", "net10.0", "tools.json");
-                if (File.Exists(candidate)) { configuration = candidate; break; }
-            }
-        }
-        if (configuration is null || !File.Exists(configuration)) return null;
-        JsonObject json = JsonNode.Parse(File.ReadAllText(configuration))!.AsObject();
-        string rootDirectory = Path.GetDirectoryName(Path.GetFullPath(configuration))!;
-        string Resolve(string key) => Path.GetFullPath(json[key]!.GetValue<string>(), rootDirectory);
-        string ffmpeg = Resolve("ffmpeg"), ffprobe = Resolve("ffprobe");
-        return File.Exists(ffmpeg) && File.Exists(ffprobe)
-            ? new NativeTools(ffmpeg, ffmpeg, ffprobe, [Path.GetDirectoryName(ffmpeg)!]) : null;
-    }
+    private static NativeTools? FindTools() => LocalTools.Tools is { } tools
+        ? new NativeTools(tools.Ffmpeg, tools.Ffmpeg, tools.Ffprobe, [Path.GetDirectoryName(tools.Ffmpeg)!]) : null;
 
     /// <summary>
     /// 按渲染器 master 的无损参数编一段帧号视频：第 n 帧的第 b 列色块是 label(n) 的第 b 位。

@@ -466,22 +466,8 @@ internal static class ReferenceSeamChecks
             "-force_key_frames", "expr:eq(n,10)+eq(n,20)", "-sc_threshold", "0", "-c:v", "libx264", "-preset", "fast", "-crf", "16", "-pix_fmt", "yuv420p",
             "-fps_mode", "passthrough", "-enc_time_base", "1:60", "-video_track_timescale", "60", output]);
 
-    private static NativeTools? FindTools()
-    {
-        string? configuration = Environment.GetEnvironmentVariable("WPE_BAKER_TOOLS_JSON");
-        if (string.IsNullOrWhiteSpace(configuration))
-            for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
-            {
-                string candidate = Path.Combine(directory.FullName, "src", "Baker.Cli", "bin", "Release", "net10.0", "tools.json");
-                if (File.Exists(candidate)) { configuration = candidate; break; }
-            }
-        if (configuration is null || !File.Exists(configuration)) return null;
-        JsonObject json = JsonNode.Parse(File.ReadAllText(configuration))!.AsObject();
-        string rootDirectory = Path.GetDirectoryName(Path.GetFullPath(configuration))!;
-        string Resolve(string key) => Path.GetFullPath(json[key]!.GetValue<string>(), rootDirectory);
-        string ffmpeg = Resolve("ffmpeg"), ffprobe = Resolve("ffprobe");
-        return File.Exists(ffmpeg) && File.Exists(ffprobe) ? new NativeTools(ffmpeg, ffmpeg, ffprobe, [Path.GetDirectoryName(ffmpeg)!]) : null;
-    }
+    private static NativeTools? FindTools() => LocalTools.Tools is { } tools
+        ? new NativeTools(tools.Ffmpeg, tools.Ffmpeg, tools.Ffprobe, [Path.GetDirectoryName(tools.Ffmpeg)!]) : null;
 
     /// <summary>与产品的编码器一样从管道吃 rawvideo：stdout/stderr 先挂上异步读，再一次写完输入。</summary>
     private static async Task RunWithStdinAsync(string executable, IEnumerable<string> arguments, byte[] input)

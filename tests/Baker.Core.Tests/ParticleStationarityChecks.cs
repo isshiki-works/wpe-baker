@@ -13,11 +13,12 @@ internal static class ParticleStationarityChecks
 {
     private sealed record Fixture(JsonObject Object, JsonObject Definition, JsonObject Material);
 
+    internal static string SurveyPath => Path.Combine(Environment.GetEnvironmentVariable("WPE_PARTICLE_SURVEY") is { Length: > 0 } configured
+        ? configured : @"D:\WPE-particle-proto\survey", "survey.json");
+
     internal static void Run(Action<bool, string> check, string outputRoot)
     {
-        string surveyDirectory = Environment.GetEnvironmentVariable("WPE_PARTICLE_SURVEY") is { Length: > 0 } configured
-            ? configured : @"D:\WPE-particle-proto\survey";
-        string surveyPath = Path.Combine(surveyDirectory, "survey.json");
+        string surveyPath = SurveyPath, surveyDirectory = Path.GetDirectoryName(surveyPath)!;
         check(File.Exists(surveyPath), "粒子判据夹具：找到了普查数据 survey.json（WPE_PARTICLE_SURVEY 或 D:\\WPE-particle-proto\\survey）");
         var survey = JsonNode.Parse(File.ReadAllText(surveyPath))!.AsArray().OfType<JsonObject>()
             .SelectMany(item => item["particles"]!.AsArray().OfType<JsonObject>()

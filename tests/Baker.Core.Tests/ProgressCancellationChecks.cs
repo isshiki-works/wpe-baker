@@ -36,15 +36,11 @@ internal static class ProgressCancellationChecks
 
     internal static async Task RunNativeAsync(string output)
     {
-        string root = Directory.GetCurrentDirectory();
         output = Path.GetFullPath(output);
         if (Directory.Exists(output)) throw new IOException("Native check output must be new.");
         Directory.CreateDirectory(output);
-        var tools = new NativeTools(Path.Combine(root, "build/native-local22/bin/wpe-render.exe"),
-            Path.Combine(root, ".deps/ffmpeg-encoder-gpl2/portable/ffmpeg.exe"),
-            Path.Combine(root, ".deps/ffmpeg-encoder-gpl2/portable/ffprobe.exe"),
-            [Path.Combine(root, ".tools/llvm-mingw-22/bin"), Path.Combine(root, ".deps/ffmpeg-lgpl21/prefix/bin")]);
-        string fixture = Path.Combine(root, "tests/fixtures/native/shader-clock");
+        var tools = LocalTools.Tools!;
+        string fixture = LocalTools.Fixture("shader-clock");
         var request = new RenderRequest(fixture, fixture, "", 128, 96, 30, 1, 1_000_000, WarmupFrames: 17);
         using var source = new ProjectSource(fixture);
         string before = await source.SourceHashAsync();

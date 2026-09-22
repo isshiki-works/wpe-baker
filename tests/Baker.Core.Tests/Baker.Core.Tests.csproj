@@ -6,6 +6,11 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
   <ItemGroup><ProjectReference Include="../../src/Baker.Core/Baker.Core.csproj" /></ItemGroup>
   <ItemGroup><Compile Include="../../src/Baker.App/AppJsonPresentation.cs" Link="AppJsonPresentation.cs" />
     <Compile Include="../../src/Baker.App/PlainLanguage.cs" Link="PlainLanguage.cs" />

@@ -6,11 +6,10 @@ internal static class SparseReadbackChecks
 {
     internal static async Task RunCoverageAsync(string output)
     {
-        string root=Directory.GetCurrentDirectory();
         output=Path.GetFullPath(output);
         if (Directory.Exists(output)) throw new IOException("Coverage check output must be new.");
         Directory.CreateDirectory(output);
-        string original=Path.Combine(root,"tests/fixtures/native/shader-clock"), fixture=Path.Combine(output,"fixture");
+        string original=LocalTools.Fixture("shader-clock"), fixture=Path.Combine(output,"fixture");
         using var timeout=new CancellationTokenSource(TimeSpan.FromMinutes(2));
         using (var source=new ProjectSource(original)) await source.ExtractAsync(fixture,timeout.Token);
         await File.WriteAllTextAsync(Path.Combine(fixture,"shaders/probe.frag"), """
@@ -24,10 +23,7 @@ internal static class SparseReadbackChecks
                 gl_FragColor=vec4(1.0,0.3,0.1,1.0)*texSample2D(g_Texture0,p);
             }
             """);
-        string portable=Path.Combine(root,"dist/progress-preview-20260919/WpeBaker");
-        var tools=new NativeTools(Path.Combine(root,"build/native-local22/bin/wpe-render.exe"),
-            Path.Combine(portable,"encoder/ffmpeg.exe"),Path.Combine(portable,"encoder/ffprobe.exe"),
-            [Path.Combine(root,".tools/llvm-mingw-22/bin"),Path.Combine(root,".deps/ffmpeg-lgpl21/prefix/bin")]);
+        var tools=LocalTools.Tools!;
         var runner=new NativeRenderRunner(tools);
         var request=new RenderRequest(fixture,original,Path.Combine(output,"gpu"),128,96,30,1,37,
             WarmupFrames:7,Seed:17,FrameSamplesOnly:true,FrameSampleStride:8,FrameSampleWidth:31,
@@ -75,23 +71,20 @@ internal static class SparseReadbackChecks
 
     internal static async Task RunNativeAsync(string output)
     {
-        string root = Directory.GetCurrentDirectory();
         output = Path.GetFullPath(output);
         if (Directory.Exists(output)) throw new IOException("Sparse check output must be new.");
         Directory.CreateDirectory(output);
-        string portable = Path.Combine(root, "dist/progress-preview-20260919/WpeBaker");
-        NativeTools Tools(string rendererDirectory, string executable = "wpe-render.exe") => new(
-            Path.Combine(rendererDirectory, executable), Path.Combine(portable, "encoder/ffmpeg.exe"),
-            Path.Combine(portable, "encoder/ffprobe.exe"), [rendererDirectory,
-                Path.Combine(root, ".tools/llvm-mingw-22/bin"), Path.Combine(root, ".deps/ffmpeg-lgpl21/prefix/bin")]);
-        var oldTools = Tools(Path.Combine(portable, "renderer"));
-        var newTools = Tools(Path.Combine(root, "build/native-local22/bin"));
+        // 对照组是 tools.json 的 reference_renderer（旧版渲染器），新组是 renderer；编码器与运行库目录共用。
+        NativeTools Tools(string renderer) => LocalTools.Tools! with {
+            Renderer = renderer, RuntimeDirectories = [Path.GetDirectoryName(renderer)!, .. LocalTools.Tools!.RuntimeDirectories] };
+        var oldTools = Tools(LocalTools.ReferenceRenderer!);
+        var newTools = Tools(LocalTools.Tools!.Renderer);
         var results = new JsonArray();
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         foreach (string fixtureName in new[] { "shader-clock", "random-clock" })
         foreach (ulong? phase in new ulong?[] { null, 3 })
         {
-            string fixture = Path.Combine(root, "tests/fixtures/native", fixtureName);
+            string fixture = LocalTools.Fixture(fixtureName);
             string label = fixtureName + "-" + (phase?.ToString() ?? "zero");
             var request = new RenderRequest(fixture, fixture, "", 128, 96, 30, 1, 41,
                 WarmupFrames: 7, Seed: 17, FrameSampleStride: 8, FrameSampleWidth: 31,
