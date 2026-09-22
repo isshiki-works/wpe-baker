@@ -43,8 +43,8 @@ public static class CandidateScriptErrorGate
         var listed = added.GroupBy(Key, StringComparer.Ordinal)
             .Select(group => (Error: group.First(), Count: group.Count())).Take(ListedErrors).ToArray();
         string ListFor(string language) => listed.Length == 0
-            ? Messages.Get("bake.script_error_list_unavailable", language)
-            : string.Join(language == Messages.Chinese ? "；" : "; ", listed.Select(item => Item(item.Error, item.Count, language)));
+            ? MessageCatalog.Get("bake.script_error_list_unavailable", language)
+            : string.Join(language == MessageCatalog.Chinese ? "；" : "; ", listed.Select(item => Item(item.Error, item.Count, language)));
         result["status"] = RejectedValidationStatus;
         result["added_script_error_count"] = added.Length;
         result["listed_script_errors"] = new JsonArray(listed.Select(item =>
@@ -53,9 +53,9 @@ public static class CandidateScriptErrorGate
             error["occurrences"] = item.Count;
             return (JsonNode)error;
         }).ToArray());
-        string english = Messages.Get("bake.candidate_script_errors", Messages.English, candidate, source, ListFor(Messages.English));
+        string english = MessageCatalog.Get("bake.candidate_script_errors", MessageCatalog.English, candidate, source, ListFor(MessageCatalog.English));
         result["reason"] = english;
-        result["reason_zh"] = Messages.Get("bake.candidate_script_errors", Messages.Chinese, candidate, source, ListFor(Messages.Chinese));
+        result["reason_zh"] = MessageCatalog.Get("bake.candidate_script_errors", MessageCatalog.Chinese, candidate, source, ListFor(MessageCatalog.Chinese));
         result["reason_en"] = english;
         return result;
     }
@@ -90,8 +90,8 @@ public static class CandidateScriptErrorGate
     {
         string message = Text(error["message"]).ReplaceLineEndings(" ").Trim();
         if (message.Length > MaximumMessageLength) message = message[..MaximumMessageLength].TrimEnd() + "…";
-        return Messages.Get(occurrences > 1 ? "bake.script_error_item_repeated" : "bake.script_error_item", language,
-            Text(error["owner_layer_id"]), Messages.EscapeName(Text(error["owner_name"])), Text(error["property"]),
+        return MessageCatalog.Get(occurrences > 1 ? "bake.script_error_item_repeated" : "bake.script_error_item", language,
+            Text(error["owner_layer_id"]), MessageCatalog.EscapeName(Text(error["owner_name"])), Text(error["property"]),
             Text(error["phase"]), message, occurrences);
     }
 }

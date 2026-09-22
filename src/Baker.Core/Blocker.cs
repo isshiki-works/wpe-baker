@@ -4,7 +4,7 @@ namespace Baker.Core;
 
 /// <summary>
 /// 拒绝原因编号。每个编号对应文案表里的一个键（默认 "blocker." + 蛇形名，个别历史键见 <see cref="BlockerCodes.Key"/>）。
-/// 程序只按编号判断；文案只在写 plan 时由 <see cref="Messages"/> 渲染。
+/// 程序只按编号判断；文案只在写 plan 时由 <see cref="MessageCatalog"/> 渲染。
 /// </summary>
 public enum BlockerCode
 {
@@ -55,7 +55,7 @@ public sealed record Blocker(BlockerCode Code, object?[] Args, object?[]? ZhArgs
     public string Key => BlockerCodes.Key(Code);
 
     /// <summary>plan v3 的 blockers 字段写的英文原文（C3 切 plan v4 时随 Legacy 模板一起删）。</summary>
-    public string Text => Messages.RenderLegacy(Key, Args);
+    public string Text => MessageCatalog.RenderLegacy(Key, Args);
 
     /// <summary>
     /// 分析过程中放进 plan 的 blockers 数组的节点：{key, zh, en, params, text}。
@@ -63,7 +63,7 @@ public sealed record Blocker(BlockerCode Code, object?[] Args, object?[]? ZhArgs
     /// </summary>
     public JsonObject ToNode()
     {
-        JsonObject node = Messages.Localized(Key, ZhArgs ?? Args, Args);
+        JsonObject node = MessageCatalog.Localized(Key, ZhArgs ?? Args, Args);
         node["text"] = Text;
         return node;
     }

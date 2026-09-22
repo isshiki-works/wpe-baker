@@ -44,7 +44,7 @@ public static class EffectPrefixCaptureTarget
         result["capture_pass"] = nativeResult["capture_source"]?["pass"]?.DeepClone();
         result["layer_targets"] = new JsonArray(layerTargets.Select(item => (JsonNode?)JsonValue.Create(item)).ToArray());
         if (!owned)
-            new Message("effect_prefix.capture_not_layer_target", [Messages.EscapeName(layerName), ownerLayerId,
+            new Message("effect_prefix.capture_not_layer_target", [MessageCatalog.EscapeName(layerName), ownerLayerId,
                 terminalEffectId, target ?? "(none)", layerTargets.Length == 0 ? "(none)" : string.Join(", ", layerTargets)]).Write(result, "reason");
         return result;
     }
@@ -53,7 +53,7 @@ public static class EffectPrefixCaptureTarget
     public static JsonObject ProbeFailed(int ownerLayerId, int terminalEffectId, string? layerName, string error)
     {
         var result = Describe(ownerLayerId, terminalEffectId, layerName, ProbeFailedStatus);
-        new Message("effect_prefix.capture_probe_failed", [Messages.EscapeName(layerName), ownerLayerId, terminalEffectId, error]).Write(result, "reason");
+        new Message("effect_prefix.capture_probe_failed", [MessageCatalog.EscapeName(layerName), ownerLayerId, terminalEffectId, error]).Write(result, "reason");
         return result;
     }
 

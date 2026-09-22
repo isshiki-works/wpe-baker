@@ -1067,7 +1067,7 @@ public sealed class HybridBakeService(NativeTools tools)
                             // 预览写在组目录，finally 只删 master 里点名的中间文件。
                             JsonObject residualPreview;
                             progress?.Report(new("exporting_seam_preview", (double)i / groups.Length,
-                                Messages.Get("progress.exporting_seam_preview", Messages.DefaultLanguage(),
+                                MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
                                     SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
                             using (timing.Measure(StageTiming.SeamCheck))
                                 residualPreview = await SeamPreview.ExportOrWarnAsync(report, id, SeamPreview.RejectedOutcome,
@@ -1214,7 +1214,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     if (SeamPreview.ShouldExport(request.ProbeFrames > 0, isStatic, seam, request.KeepIntermediates))
                     {
                         progress?.Report(new("exporting_seam_preview", (double)i / groups.Length,
-                            Messages.Get("progress.exporting_seam_preview", Messages.DefaultLanguage(),
+                            MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
                                 SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
                         using (timing.Measure(StageTiming.SeamCheck))
                             seamPreview = await SeamPreview.ExportOrWarnAsync(report, id,
@@ -1236,12 +1236,12 @@ public sealed class HybridBakeService(NativeTools tools)
                         report["groups"]!.AsArray().Add(rejectedGroup);
                         report["status"] = "candidate_rejected_seam";
                         report["loop_validation"] = "encoded_seam_failed";
-                        string reasonEnglish = Messages.Get("bake.encoded_seam_rejected", Messages.English,
-                            EncodedLoopValidator.RejectionDetail(seam!, Messages.English));
+                        string reasonEnglish = MessageCatalog.Get("bake.encoded_seam_rejected", MessageCatalog.English,
+                            EncodedLoopValidator.RejectionDetail(seam!, MessageCatalog.English));
                         report["reason"] = reasonEnglish;
                         report["reason_localized"] = new JsonObject { ["key"] = "bake.encoded_seam_rejected",
-                            ["zh"] = Messages.Get("bake.encoded_seam_rejected", Messages.Chinese,
-                                EncodedLoopValidator.RejectionDetail(seam!, Messages.Chinese)),
+                            ["zh"] = MessageCatalog.Get("bake.encoded_seam_rejected", MessageCatalog.Chinese,
+                                EncodedLoopValidator.RejectionDetail(seam!, MessageCatalog.Chinese)),
                             ["en"] = reasonEnglish, ["params"] = new JsonArray() };
                         if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                         await Save();

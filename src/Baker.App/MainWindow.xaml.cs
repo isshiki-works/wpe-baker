@@ -79,7 +79,7 @@ public partial class MainWindow : Window
         catch (Exception error) { setupError = toolsError = error.Message; }
         initialized = true;
         // 默认界面语言跟随系统（与 CLI 的 --lang 默认值同一处逻辑），不再写死中文。
-        SetLanguage(Messages.DefaultLanguage() != Messages.Chinese);
+        SetLanguage(MessageCatalog.DefaultLanguage() != MessageCatalog.Chinese);
         StatusText.Text = L("未选择壁纸。选择壁纸后执行分析。", "No wallpaper selected. Select a wallpaper, then run analysis.");
     }
 
@@ -101,7 +101,7 @@ public partial class MainWindow : Window
     {
         english = useEnglish;
         // 导入与自检的报错由 Baker.Core 产出，跟着界面语言一起切。
-        AppEnvironment.Language = useEnglish ? Messages.English : Messages.Chinese;
+        AppEnvironment.Language = useEnglish ? MessageCatalog.English : MessageCatalog.Chinese;
         LanguageBox.SelectedIndex = useEnglish ? 1 : 0;
         void Translate(DependencyObject parent)
         {
@@ -1189,7 +1189,7 @@ public partial class MainWindow : Window
                 bake["measured_gain"] = gain.DeepClone();
                 await File.WriteAllTextAsync(job.GenerationReportPath, bake.ToJsonString(), token);
             }
-            return SourcePowerVerdict.GainLine(gain, english ? Messages.English : Messages.Chinese);
+            return SourcePowerVerdict.GainLine(gain, english ? MessageCatalog.English : MessageCatalog.Chinese);
         });
     }
 

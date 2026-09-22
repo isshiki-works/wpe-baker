@@ -253,13 +253,13 @@ public static class HybridLoopService
         {
             string lifetimeText = longestLifetime.ToString("0.###", CultureInfo.InvariantCulture);
             record["status"] = "particle_lifetime_not_shorter_than_loop";
-            record["reason_zh"] = Messages.Get("loop_length_default.particle_lifetime_too_long", Messages.Chinese, secondsText, lifetimeText);
-            record["reason_en"] = Messages.Get("loop_length_default.particle_lifetime_too_long", Messages.English, secondsText, lifetimeText);
+            record["reason_zh"] = MessageCatalog.Get("loop_length_default.particle_lifetime_too_long", MessageCatalog.Chinese, secondsText, lifetimeText);
+            record["reason_en"] = MessageCatalog.Get("loop_length_default.particle_lifetime_too_long", MessageCatalog.English, secondsText, lifetimeText);
             return record;
         }
         record["status"] = "applied";
-        record["summary_zh"] = Messages.Get("summary.particle_default_loop", Messages.Chinese, secondsText);
-        record["summary_en"] = Messages.Get("summary.particle_default_loop", Messages.English, secondsText);
+        record["summary_zh"] = MessageCatalog.Get("summary.particle_default_loop", MessageCatalog.Chinese, secondsText);
+        record["summary_en"] = MessageCatalog.Get("summary.particle_default_loop", MessageCatalog.English, secondsText);
         candidates.Add(new JsonObject { ["frames"] = (ulong)frames, ["seconds"] = seconds, ["total_retime_cost_percent"] = 0d,
             ["components"] = new JsonArray(), ["patches"] = new JsonArray(),
             ["loop_length_source"] = "stationary_particle_default" });
@@ -320,7 +320,7 @@ public static class HybridLoopService
             return new CommonLoopComponent(cycle.ComponentId, new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
         })];
 
-    /// <summary>粒子未解析项的 detail：锁定周期、平稳随机、不满足判据三种，文案走 Messages。</summary>
+    /// <summary>粒子未解析项的 detail：锁定周期、平稳随机、不满足判据三种，文案走 MessageCatalog。</summary>
     private static Message ParticleDetail(ParticleStationarity.Result verdict) => verdict.Stationary
         ? verdict.Lock is ParticleStationarity.CyclostationaryLock cycle
             ? new Message("unresolved.particle_cyclostationary_locked", [cycle.PeriodFrames.ToString(CultureInfo.InvariantCulture),
@@ -381,8 +381,8 @@ public static class HybridLoopService
             string layers = string.Join(", ", unknownAmplitude.Select(id => id.ToString(CultureInfo.InvariantCulture)));
             record["status"] = "amplitude_unknown";
             record["amplitude_unknown_layer_ids"] = new JsonArray(unknownAmplitude.Select(id => (JsonNode)JsonValue.Create(id)).ToArray());
-            record["reason_zh"] = Messages.Get("sway_retime.amplitude_unknown", Messages.Chinese, layers);
-            record["reason_en"] = Messages.Get("sway_retime.amplitude_unknown", Messages.English, layers);
+            record["reason_zh"] = MessageCatalog.Get("sway_retime.amplitude_unknown", MessageCatalog.Chinese, layers);
+            record["reason_en"] = MessageCatalog.Get("sway_retime.amplitude_unknown", MessageCatalog.English, layers);
             return record;
         }
         bool synthesized = false;
@@ -433,11 +433,11 @@ public static class HybridLoopService
                 ? (options.BudgetPercent ?? 0).ToString("0.###", CultureInfo.InvariantCulture)
                 : SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond.ToString("0.###", CultureInfo.InvariantCulture);
             // 上限是被内嵌视频大小收紧的，原因后面补一句说明收紧依据，否则用户看到的秒数和自己给的对不上。
-            string limitZh = options.VideoLimit is { Applied: true } appliedLimit ? appliedLimit.Sentence(Messages.Chinese) : "";
-            string limitEn = options.VideoLimit is { Applied: true } appliedLimitEn ? " " + appliedLimitEn.Sentence(Messages.English) : "";
+            string limitZh = options.VideoLimit is { Applied: true } appliedLimit ? appliedLimit.Sentence(MessageCatalog.Chinese) : "";
+            string limitEn = options.VideoLimit is { Applied: true } appliedLimitEn ? " " + appliedLimitEn.Sentence(MessageCatalog.English) : "";
             record["status"] = status;
-            record["reason_zh"] = Messages.Get("sway_retime." + status, Messages.Chinese, maximum, limit) + limitZh;
-            record["reason_en"] = Messages.Get("sway_retime." + status, Messages.English, maximum, limit) + limitEn;
+            record["reason_zh"] = MessageCatalog.Get("sway_retime." + status, MessageCatalog.Chinese, maximum, limit) + limitZh;
+            record["reason_en"] = MessageCatalog.Get("sway_retime." + status, MessageCatalog.English, maximum, limit) + limitEn;
             return record;
         }
         for (int index = candidates.Count - 1; index >= 0; --index)
@@ -842,7 +842,7 @@ public static class HybridLoopService
             if (spriteDurationIsPeriod && owner["particle"] is not null)
             {
                 // 证明不了周期时要说清是哪一种随机源或外部输入，不是一句笼统的拒绝。分配不变：本次不合成粒子有效周期。
-                // detail 走 Messages（每条理由一个 key），与 i18n 分支口径一致：legacy 英文写进 plan，中文由 Localize 反查。
+                // detail 走 MessageCatalog（每条理由一个 key），与 i18n 分支口径一致：legacy 英文写进 plan，中文由 Localize 反查。
                 // particle_stationarity 是下游（更小分配回退、残差掩盖）读的结构化结论，detail 与理由代号保持原样。
                 (string code, Message detail) = ParticleInputAnalysis.NonperiodicReason(owner, source, assetsDirectory);
                 unresolved.Add(detail.Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["track_name"] = trackName,

@@ -190,7 +190,7 @@ public static class PresetCascade
                 string key = mode == "fixed" ? "interaction.suggest_fixed" : "interaction.suggest_off";
                 result["suggested_change"] = new JsonObject { ["verified"] = true, ["plan_path"] = path,
                     ["settings"] = new JsonObject { ["interaction"] = mode },
-                    ["zh"] = Messages.Get(key, "zh"), ["en"] = Messages.Get(key, "en") };
+                    ["zh"] = MessageCatalog.Get(key, "zh"), ["en"] = MessageCatalog.Get(key, "en") };
                 break;
             }
             if (Bakeable(result) && GroupCount(result) > MaxVideoGroups)
@@ -222,9 +222,9 @@ public static class PresetCascade
         if (result["settings"] is JsonObject settings) settings["keep_live"] = false;
         if (Accepted(result) && result["summary"] is JsonObject summary)
             foreach (string language in new[] { "zh", "en" })
-                summary[language] = Messages.Get("preset.generated", language) + (kinds.Count == 0 ? "" : "\n" +
-                    Messages.Get("preset.omitted", language, string.Join(language == "zh" ? "、" : ", ", kinds.Order().Select(k => TradeoffOptions.KindLabel(k, language))))) +
-                    (result["settings"]?["daytime_state"] is JsonValue state ? "\n" + Messages.Get("preset.daytime", language, state.GetValue<string>()) : "");
+                summary[language] = MessageCatalog.Get("preset.generated", language) + (kinds.Count == 0 ? "" : "\n" +
+                    MessageCatalog.Get("preset.omitted", language, string.Join(language == "zh" ? "、" : ", ", kinds.Order().Select(k => TradeoffOptions.KindLabel(k, language))))) +
+                    (result["settings"]?["daytime_state"] is JsonValue state ? "\n" + MessageCatalog.Get("preset.daytime", language, state.GetValue<string>()) : "");
         string stagedPlan = Path.Combine(run, "selected-plan.json");
         await VideoSceneBuilder.WriteJsonAsync(stagedPlan, result, token);
         File.Move(stagedPlan, Path.Combine(root, "plan.json"), true);

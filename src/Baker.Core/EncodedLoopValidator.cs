@@ -310,19 +310,19 @@ public static class EncodedLoopValidator
         if (seam["loop_closure"] is JsonObject closure && closure["status"]?.GetValue<string>() == LoopClosureCheck.NotClosedStatus)
         {
             JsonNode? rgb = closure["rgb"]?["tile_64"];
-            parts.Add(Messages.Get("bake.loop_not_closed", language, closure["loop_frames"]?.ToJsonString() ?? "?",
+            parts.Add(MessageCatalog.Get("bake.loop_not_closed", language, closure["loop_frames"]?.ToJsonString() ?? "?",
                 LoopClosureCheck.TileSize, rgb?["worst_x"]?.ToJsonString() ?? "?", rgb?["worst_y"]?.ToJsonString() ?? "?",
                 Number(rgb?["worst"]),
-                closure["alpha"] is JsonObject alpha ? Messages.Get("bake.loop_not_closed_alpha", language, Number(alpha["tile_64"]?["worst"])) : "",
+                closure["alpha"] is JsonObject alpha ? MessageCatalog.Get("bake.loop_not_closed_alpha", language, Number(alpha["tile_64"]?["worst"])) : "",
                 LoopClosureCheck.MaximumTileMae255.ToString("0.0", CultureInfo.InvariantCulture)));
         }
         if (failures.Contains("frame_count_mismatch"))
-            parts.Add(Messages.Get("bake.encoded_frame_count_mismatch", language,
+            parts.Add(MessageCatalog.Get("bake.encoded_frame_count_mismatch", language,
                 seam["actual"]?["decoded_frame_count"]?.ToJsonString() ?? "?", seam["expected"]?["frames"]?.ToJsonString() ?? "?"));
         if (failures.Contains("frame_rate_mismatch"))
-            parts.Add(Messages.Get("bake.encoded_frame_rate_mismatch", language, seam["actual"]?["frame_rate"]?.GetValue<string>() ?? "?",
+            parts.Add(MessageCatalog.Get("bake.encoded_frame_rate_mismatch", language, seam["actual"]?["frame_rate"]?.GetValue<string>() ?? "?",
                 $"{seam["expected"]?["fps_numerator"]}/{seam["expected"]?["fps_denominator"]}"));
-        return string.Join(Messages.NormalizeLanguage(language) == Messages.Chinese ? "" : " ", parts);
+        return string.Join(MessageCatalog.NormalizeLanguage(language) == MessageCatalog.Chinese ? "" : " ", parts);
     }
 
     private static JsonObject SeamPlane(byte[] enc0, byte[] enc1, byte[] encBefore, byte[] encLast, byte[] first, byte[] last,

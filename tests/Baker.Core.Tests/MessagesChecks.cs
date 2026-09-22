@@ -17,13 +17,13 @@ internal static class MessagesChecks
     public static void Run(Action<bool, string> Check)
     {
         // ---- 文案表本身 ----
-        Check(Messages.Keys.Count > 0, "messages table is not empty");
+        Check(MessageCatalog.Keys.Count > 0, "messages table is not empty");
 
         bool allFilled = true, placeholdersAgree = true, legacyWithinRange = true;
         var offenders = new List<string>();
-        foreach (string key in Messages.Keys)
+        foreach (string key in MessageCatalog.Keys)
         {
-            var entry = Messages.Find(key)!;
+            var entry = MessageCatalog.Find(key)!;
             if (string.IsNullOrWhiteSpace(entry.Zh) || string.IsNullOrWhiteSpace(entry.En)) { allFilled = false; offenders.Add(key); }
             int[] zh = Indexes(entry.Zh), en = Indexes(entry.En);
             if (!zh.SequenceEqual(en)) { placeholdersAgree = false; offenders.Add(key); }
@@ -41,23 +41,23 @@ internal static class MessagesChecks
             .Where(file => !file.Contains(objSegment, StringComparison.Ordinal))
             .SelectMany(file => KeyReference.Matches(File.ReadAllText(file)).Select(match => match.Groups[1].Value))
             .Distinct().ToArray();
-        string[] unknownKeys = referenced.Where(key => Messages.Find(key) is null).ToArray();
+        string[] unknownKeys = referenced.Where(key => MessageCatalog.Find(key) is null).ToArray();
         Check(referenced.Length > 50 && unknownKeys.Length == 0,
             "every message key referenced by a literal in src exists in the table: " + string.Join(", ", unknownKeys));
 
         // ---- 语言解析 ----
-        Check(Messages.NormalizeLanguage("zh") == "zh" && Messages.NormalizeLanguage("zh-CN") == "zh" &&
-            Messages.NormalizeLanguage("zh-Hans-CN") == "zh" && Messages.NormalizeLanguage("en") == "en" &&
-            Messages.NormalizeLanguage("en-US") == "en" && Messages.NormalizeLanguage(null) == "en" &&
-            Messages.NormalizeLanguage("de-DE") == "en" && Messages.NormalizeLanguage("ZH-cn") == "zh",
+        Check(MessageCatalog.NormalizeLanguage("zh") == "zh" && MessageCatalog.NormalizeLanguage("zh-CN") == "zh" &&
+            MessageCatalog.NormalizeLanguage("zh-Hans-CN") == "zh" && MessageCatalog.NormalizeLanguage("en") == "en" &&
+            MessageCatalog.NormalizeLanguage("en-US") == "en" && MessageCatalog.NormalizeLanguage(null) == "en" &&
+            MessageCatalog.NormalizeLanguage("de-DE") == "en" && MessageCatalog.NormalizeLanguage("ZH-cn") == "zh",
             "language tags normalize to zh or en");
-        Check(Messages.Get("blocker.perspective_needs_screenspace", "zh") != Messages.Get("blocker.perspective_needs_screenspace", "en"),
+        Check(MessageCatalog.Get("blocker.perspective_needs_screenspace", "zh") != MessageCatalog.Get("blocker.perspective_needs_screenspace", "en"),
             "zh and en render different text for the same key");
 
         // ---- 未知 key 与参数缺失都不抛异常 ----
-        Check(Messages.Get("blocker.does_not_exist", "zh") == "blocker.does_not_exist", "unknown key falls back to the key itself");
-        Check(Messages.RenderLegacy("blocker.does_not_exist") == "blocker.does_not_exist", "rendering an unknown key does not throw");
-        Check(Messages.Get("summary.blocked", "zh").Contains("{0}", StringComparison.Ordinal),
+        Check(MessageCatalog.Get("blocker.does_not_exist", "zh") == "blocker.does_not_exist", "unknown key falls back to the key itself");
+        Check(MessageCatalog.RenderLegacy("blocker.does_not_exist") == "blocker.does_not_exist", "rendering an unknown key does not throw");
+        Check(MessageCatalog.Get("summary.blocked", "zh").Contains("{0}", StringComparison.Ordinal),
             "a parameterised template with no arguments renders as the template");
 
         // ---- 反查：Localize 找回 key ----
@@ -75,12 +75,12 @@ internal static class MessagesChecks
 
         // ---- 层名截断与转义 ----
         string[] many = Enumerable.Range(1, 28).Select(index => "Layer " + index).ToArray();
-        string list = Messages.NameList(many);
+        string list = MessageCatalog.NameList(many);
         Check(list.Split('"').Length - 1 == 10 && list.EndsWith('…'), "at most five layer names are listed, then an ellipsis");
-        Check(Messages.NameList(["a", "b"]) == "\"a\", \"b\"", "a short list is not truncated");
-        Check(Messages.EscapeName("Matrix spawner\r\nREADNAME --> (place \"top left\")") ==
+        Check(MessageCatalog.NameList(["a", "b"]) == "\"a\", \"b\"", "a short list is not truncated");
+        Check(MessageCatalog.EscapeName("Matrix spawner\r\nREADNAME --> (place \"top left\")") ==
             "Matrix spawner READNAME -> (place 'top l…", "newlines, arrows and quotes in a layer name are escaped and the name is capped");
-        Check(!Messages.NameList(["one\ntwo"]).Contains('\n'), "a layer list never contains a newline");
+        Check(!MessageCatalog.NameList(["one\ntwo"]).Contains('\n'), "a layer list never contains a newline");
 
         // ---- summary.verdict 映射 ----
         Check(Verdict(Plan(blockers: [Hdr], candidates: 0)) == "blocked",
@@ -91,7 +91,7 @@ internal static class MessagesChecks
 
         JsonObject blocked = PlanNarrative.Summarize(Plan(blockers: [Perspective, new Blocker(BlockerCode.CameraPathNeedsEnvelope)], candidates: 0));
         Check(blocked["key"]?.GetValue<string>() == "summary.blocked" &&
-            blocked["zh"]!.GetValue<string>().Contains(Messages.Get("blocker.perspective_needs_screenspace", "zh"), StringComparison.Ordinal) &&
+            blocked["zh"]!.GetValue<string>().Contains(MessageCatalog.Get("blocker.perspective_needs_screenspace", "zh"), StringComparison.Ordinal) &&
             blocked["zh"]!.GetValue<string>().Contains('2'),
             "blocked summary uses the localized first blocker and the blocker count");
 
@@ -117,7 +117,7 @@ internal static class MessagesChecks
             "Attach moves the carried message key into unresolved_localized and strips the transient field from the plan");
         Check(unknownSummary["verdict"]!.GetValue<string>() == "unknown" &&
             unknownSummary["key"]?.GetValue<string>() != "summary.unknown_no_reason" &&
-            unknownSummary["zh"]!.GetValue<string>().Contains(Messages.Get("unresolved.particle_sprite_period", "zh").Split('，')[0], StringComparison.Ordinal),
+            unknownSummary["zh"]!.GetValue<string>().Contains(MessageCatalog.Get("unresolved.particle_sprite_period", "zh").Split('，')[0], StringComparison.Ordinal),
             "an unknown verdict carries the localized unresolved reason");
         Check(PlanNarrative.Summarize(Plan(blockers: [], candidates: 0))["key"]?.GetValue<string>() == "summary.unknown_no_reason",
             "an unknown verdict with nothing to report says so instead of throwing");
@@ -136,12 +136,12 @@ internal static class MessagesChecks
         Check(attached["loop"]?["unresolved_localized"] is JsonArray, "loop carries unresolved_localized");
 
         // ---- 效果前缀路线的省电提醒只挂在可生成的效果前缀结论上 ----
-        string caveat = Messages.Get("summary.effect_prefix_limited_saving", "zh");
+        string caveat = MessageCatalog.Get("summary.effect_prefix_limited_saving", "zh");
         JsonObject prefixPlan = Plan(blockers: [], candidates: 1);
         prefixPlan["route"] = "effect_prefix";
         PlanNarrative.Attach(prefixPlan);
         Check(prefixPlan["summary"]!["zh"]!.GetValue<string>().Contains(caveat, StringComparison.Ordinal) &&
-            prefixPlan["summary"]!["en"]!.GetValue<string>().Contains(Messages.Get("summary.effect_prefix_limited_saving", "en"), StringComparison.Ordinal),
+            prefixPlan["summary"]!["en"]!.GetValue<string>().Contains(MessageCatalog.Get("summary.effect_prefix_limited_saving", "en"), StringComparison.Ordinal),
             "an effect-prefix verdict says the saving depends on how much work is baked away");
         JsonObject wholePlan = Plan(blockers: [], candidates: 1);
         wholePlan["route"] = "whole_layer";
@@ -185,7 +185,7 @@ internal static class MessagesChecks
             "unresolved.particle_audio_input", "unresolved.particle_turbulent_velocity", "unresolved.particle_random_frame",
             "unresolved.particle_random_initializer", "unresolved.particle_emitter_extent",
             "unresolved.particle_effective_period_not_modelled"];
-        Check(particleKeys.All(key => Messages.Find(key) is not null), "every particle nonperiodic reason has a table entry");
+        Check(particleKeys.All(key => MessageCatalog.Find(key) is not null), "every particle nonperiodic reason has a table entry");
 
         // HDR 拒绝：legacy 行以 SdrRadianceClosure.HdrBlocker 开头（能力缺口分诊按前缀识别），未通过明细原样带进中文。
         const string unproven = "group-0 layer 7 \"Glow\": additive blending is not an alpha convex combination (R2).";
@@ -244,8 +244,8 @@ internal static class MessagesChecks
             "a plan without suitability keeps the narrative verdict");
     }
 
-    /// <summary>源码里对文案表的字面量引用：new Message("key"…) 与 Messages.RenderLegacy/Get/Find("key"…)。</summary>
-    private static readonly Regex KeyReference = new(@"(?:new Message|Messages\.(?:RenderLegacy|Get|Find))\(\s*""([a-z_]+(?:\.[a-z0-9_]+)+)""",
+    /// <summary>源码里对文案表的字面量引用：new Message("key"…) 与 MessageCatalog.RenderLegacy/Get/Find("key"…)。</summary>
+    private static readonly Regex KeyReference = new(@"(?:new Message|MessageCatalog\.(?:RenderLegacy|Get|Find))\(\s*""([a-z_]+(?:\.[a-z0-9_]+)+)""",
         RegexOptions.CultureInvariant);
 
     private static string Verdict(JsonObject plan) => PlanNarrative.Summarize(plan)["verdict"]!.GetValue<string>();

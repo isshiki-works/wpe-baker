@@ -165,10 +165,10 @@ internal static class GuiPresetTradeoffChecks
 
         // 分段拼回去就是 CLI 的那一段话，两处永远同一份文案。
         var option = plan[TradeoffOptions.Field]!["options"]!.AsArray().OfType<JsonObject>().First();
-        check(string.Join("", TradeoffOptions.OptionLines(option, Messages.Chinese).Select(part => part.Text)) ==
-            option[Messages.Chinese]!.GetValue<string>(),
+        check(string.Join("", TradeoffOptions.OptionLines(option, MessageCatalog.Chinese).Select(part => part.Text)) ==
+            option[MessageCatalog.Chinese]!.GetValue<string>(),
             "gui tradeoff list: the segments join back into the CLI sentence");
-        check(TradeoffOptions.OptionLines(option, Messages.Chinese).Select(part => part.Field).Contains("retain_live"),
+        check(TradeoffOptions.OptionLines(option, MessageCatalog.Chinese).Select(part => part.Field).Contains("retain_live"),
             "gui tradeoff list: the segments are labelled by field");
     }
 }

@@ -16,7 +16,7 @@ namespace Baker.Core;
 /// 输出时才渲染。Legacy 列只作 plan/bake v3 英文字段的渲染模板，C3 切 plan v4 时删。
 /// </para>
 /// </summary>
-public static class Messages
+public static class MessageCatalog
 {
     /// <summary>一条文案。Legacy 为 null 表示英文原文没有被改写，En 即原文。</summary>
     public sealed record Entry(string Zh, string En, string? Legacy = null)

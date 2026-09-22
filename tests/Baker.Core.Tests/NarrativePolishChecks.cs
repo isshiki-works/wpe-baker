@@ -29,8 +29,8 @@ internal static class NarrativePolishChecks
             Leaks("未通过的部分：group-1 layer 26: material combo \"version\" is not a known range-preserving combo (R1).") &&
             !Leaks("用 --video-layout layered 显式选择分层视频；图层 \"Rain downpour\", \"things in the air\" 保持实时"),
             "the english-leak detector flags joined english fragments but not layer names or switches");
-        check(Messages.Keys.Where(key => !key.StartsWith("cli.", StringComparison.Ordinal))
-                .All(key => !Leaks(Messages.Find(key)!.Zh)),
+        check(MessageCatalog.Keys.Where(key => !key.StartsWith("cli.", StringComparison.Ordinal))
+                .All(key => !Leaks(MessageCatalog.Find(key)!.Zh)),
             "no chinese template in the messages table contains an english sentence fragment");
 
         // ---- ① 全幅冲突选项：中文通道用中文拼接层名 ----
@@ -232,7 +232,7 @@ internal static class NarrativePolishChecks
             if (nonperiodicReason is not null) item["particle_nonperiodic_reason"] = nonperiodicReason;
             return item;
         }
-        string stationaryDetail = Messages.RenderLegacy("unresolved.particle_stationary_random");
+        string stationaryDetail = MessageCatalog.RenderLegacy("unresolved.particle_stationary_random");
 
         // 只剩平稳粒子（3594269099）：不说"1 处证明不了周期"，也不拿它当首条。
         JsonObject onlyPlan = UnresolvedPlan("not_applicable");

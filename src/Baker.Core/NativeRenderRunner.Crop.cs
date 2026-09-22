@@ -139,9 +139,9 @@ public sealed partial class NativeRenderRunner
             if (quality["passed"]?.GetValue<bool>() != true)
             {
                 report["status"] = "quality_rejected";
-                report["reason"] = Messages.RenderLegacy("bake.gpu_quality_rejected");
+                report["reason"] = MessageCatalog.RenderLegacy("bake.gpu_quality_rejected");
                 await WriteJsonAsync(Path.Combine(output, "manifest.json"), report, cancellationToken);
-                throw new InvalidDataException(Messages.RenderLegacy("bake.gpu_quality_rejected"));
+                throw new InvalidDataException(MessageCatalog.RenderLegacy("bake.gpu_quality_rejected"));
             }
         }
         await WriteJsonAsync(Path.Combine(output, "manifest.json"), report, cancellationToken);

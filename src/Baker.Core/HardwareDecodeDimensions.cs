@@ -175,7 +175,7 @@ public static class HardwareDecodeDimensions
             : violation.Measure switch { "width" => "width", "height" => "height", _ => "luma samples" } +
               $" {violation.Actual.ToString(CultureInfo.InvariantCulture)} > {violation.Limit.ToString(CultureInfo.InvariantCulture)}"));
 
-    private static bool NormalizedChinese(string language) => Messages.NormalizeLanguage(language) == Messages.Chinese;
+    private static bool NormalizedChinese(string language) => MessageCatalog.NormalizeLanguage(language) == MessageCatalog.Chinese;
 
     /// <summary>一次预检的结果。Content 是每半幅的逻辑内容，Padded 是每半幅补边后的画布，Stored 是实际编码尺寸。</summary>
     public sealed record Plan(string Status, string SoftwareEncoder, bool PackedAlpha, uint ContentWidth, uint ContentHeight,
@@ -220,7 +220,7 @@ public static class HardwareDecodeDimensions
 
         public string ViolationText(string language) => HardwareDecodeDimensions.ViolationText(Violations, language);
 
-        public string PackingText(string language) => Messages.NormalizeLanguage(language) == Messages.Chinese
+        public string PackingText(string language) => MessageCatalog.NormalizeLanguage(language) == MessageCatalog.Chinese
             ? Limits.DisplayName + (PackedAlpha ? "，透明通道左右并排" : "，不透明 RGB")
             : Limits.DisplayName + (PackedAlpha ? ", alpha packed side by side" : ", opaque RGB");
     }
@@ -319,7 +319,7 @@ public static class HardwareDecodeDimensions
         foreach (JsonObject cache in (report["effect_prefix_caches"] as JsonArray ?? []).OfType<JsonObject>())
         {
             if (cache["owner_layer_id"] is not JsonValue ownerValue || !ownerValue.TryGetValue(out int owner)) continue;
-            string layer = $"L{owner.ToString(CultureInfo.InvariantCulture)} \"{Messages.EscapeName(names.GetValueOrDefault(owner))}\"";
+            string layer = $"L{owner.ToString(CultureInfo.InvariantCulture)} \"{MessageCatalog.EscapeName(names.GetValueOrDefault(owner))}\"";
             var entry = new JsonObject { ["owner_layer_id"] = owner, ["source_image"] = cache["source_image"]?.DeepClone(),
                 ["basis"] = "Source texture image extent with the bake's own fit rule; the bake re-plans from the actual capture extent before encoding." };
             var unresolved = new JsonArray();
@@ -357,16 +357,16 @@ public static class HardwareDecodeDimensions
                 {
                     entry["status"] = "predicted_rejected";
                     unresolved.Add(new Message("unresolved.hardware_decode_dimensions_predicted",
-                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(Messages.English), opaque.ViolationText(Messages.English), opaque.Limits.BasisEn],
-                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(Messages.Chinese), opaque.ViolationText(Messages.Chinese), opaque.Limits.BasisZh])
+                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(MessageCatalog.English), opaque.ViolationText(MessageCatalog.English), opaque.Limits.BasisEn],
+                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(MessageCatalog.Chinese), opaque.ViolationText(MessageCatalog.Chinese), opaque.Limits.BasisZh])
                         .Write(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner }, "detail"));
                 }
                 else if (transparent.Rejected)
                 {
                     entry["status"] = "predicted_rejected_if_transparent";
                     unresolved.Add(new Message("unresolved.hardware_decode_dimensions_if_transparent",
-                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(Messages.English), transparent.ViolationText(Messages.English), transparent.Limits.BasisEn, Extent(opaque.StoredWidth, opaque.StoredHeight)],
-                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(Messages.Chinese), transparent.ViolationText(Messages.Chinese), transparent.Limits.BasisZh, Extent(opaque.StoredWidth, opaque.StoredHeight)])
+                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(MessageCatalog.English), transparent.ViolationText(MessageCatalog.English), transparent.Limits.BasisEn, Extent(opaque.StoredWidth, opaque.StoredHeight)],
+                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(MessageCatalog.Chinese), transparent.ViolationText(MessageCatalog.Chinese), transparent.Limits.BasisZh, Extent(opaque.StoredWidth, opaque.StoredHeight)])
                         .Write(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner }, "detail"));
                 }
                 else entry["status"] = opaque.Padded || transparent.Padded ? "predicted_padding" : "predicted_pass";

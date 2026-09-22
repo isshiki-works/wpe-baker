@@ -57,7 +57,7 @@ internal static class SourcePowerVerdictChecks
         SourcePowerVerdict.Apply(plan, power);
         string first = plan["summary"]!["zh"]!.GetValue<string>();
         SourcePowerVerdict.Apply(plan, power);
-        check(first.StartsWith(Messages.Get(SourcePowerVerdict.Observed, Messages.Chinese), StringComparison.Ordinal) &&
+        check(first.StartsWith(MessageCatalog.Get(SourcePowerVerdict.Observed, MessageCatalog.Chinese), StringComparison.Ordinal) &&
             first.EndsWith("可以烘：找到 5.0 秒循环。", StringComparison.Ordinal) &&
             plan["summary"]!["zh"]!.GetValue<string>() == first &&
             plan["summary"]!["source_power_key"]!.GetValue<string>() == SourcePowerVerdict.Observed,
@@ -100,8 +100,8 @@ internal static class SourcePowerVerdictChecks
             unmeasured["key"]!.GetValue<string>() == "measured_gain.unavailable" &&
             unmeasured["status"]!.GetValue<string>() == "not_measured",
             "measured gain: the three verdicts follow the measured rule, and an unmeasurable machine gives none");
-        check(SourcePowerVerdict.GainLine(saved, Messages.Chinese).Contains("57", StringComparison.Ordinal) &&
-            SourcePowerVerdict.GainLine(unmeasured, Messages.Chinese) == Messages.Get("measured_gain.unavailable", Messages.Chinese),
+        check(SourcePowerVerdict.GainLine(saved, MessageCatalog.Chinese).Contains("57", StringComparison.Ordinal) &&
+            SourcePowerVerdict.GainLine(unmeasured, MessageCatalog.Chinese) == MessageCatalog.Get("measured_gain.unavailable", MessageCatalog.Chinese),
             "measured gain: the spoken line carries the percentage, or says this machine cannot measure it");
 
         // ---- ⑤ 采样目录必须在分析输出目录之外（否则分析会以 "Analysis output must be new." 直接失败）----

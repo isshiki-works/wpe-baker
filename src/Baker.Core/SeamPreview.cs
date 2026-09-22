@@ -218,8 +218,8 @@ public static class SeamPreview
             {
                 ["key"] = "warning.seam_preview_failed",
                 ["group_id"] = groupId,
-                ["zh"] = Messages.Get("warning.seam_preview_failed", Messages.Chinese, groupId, error.Message),
-                ["en"] = Messages.Get("warning.seam_preview_failed", Messages.English, groupId, error.Message),
+                ["zh"] = MessageCatalog.Get("warning.seam_preview_failed", MessageCatalog.Chinese, groupId, error.Message),
+                ["en"] = MessageCatalog.Get("warning.seam_preview_failed", MessageCatalog.English, groupId, error.Message),
                 ["error_type"] = error.GetType().Name,
                 ["error"] = error.Message
             });
@@ -245,7 +245,7 @@ public static class SeamPreview
         ArgumentNullException.ThrowIfNull(report);
         foreach (JsonObject group in (report["groups"] as JsonArray ?? []).OfType<JsonObject>())
             if (group["seam_preview"] is JsonValue value && value.TryGetValue(out string? path) && !string.IsNullOrEmpty(path))
-                yield return Messages.Get("summary.seam_preview", language, path);
+                yield return MessageCatalog.Get("summary.seam_preview", language, path);
     }
 
     private const int GlyphWidth = 5, GlyphHeight = 7, GlyphAdvance = 6;

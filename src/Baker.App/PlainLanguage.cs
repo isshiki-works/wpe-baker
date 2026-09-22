@@ -339,12 +339,12 @@ internal static class PlainLanguage
     }
 
     // ---------------------------------------------------------------------------------------
-    // 禁用词扫描要覆盖的 Messages 条目
+    // 禁用词扫描要覆盖的 MessageCatalog 条目
     // ---------------------------------------------------------------------------------------
 
     /// <summary>
     /// 界面上会原样显示出来的 Baker.Core 文案（属性面板顶部那句的原因部分）。
-    /// 其余 Messages 条目只出现在折叠的"技术细节"面板和报告文件里，不在这个清单里。
+    /// 其余 MessageCatalog 条目只出现在折叠的"技术细节"面板和报告文件里，不在这个清单里。
     /// </summary>
     public static readonly string[] GuiMessageKeys = [
         "properties.reason.config_not_found", "properties.reason.config_unreadable",

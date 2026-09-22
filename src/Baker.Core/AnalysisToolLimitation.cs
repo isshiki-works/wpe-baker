@@ -91,9 +91,9 @@ public static class AnalysisToolLimitation
         {
             JsonArray layers = LayersUsing(scene, finding);
             string layerIds = string.Join(", ", layers.OfType<JsonObject>()
-                .Select(layer => $"{layer["id"]} \"{Messages.EscapeName(layer["name"]?.GetValue<string>())}\""));
-            string layersZh = layerIds.Length == 0 ? "" : Messages.Get("asset_layers.used_by", Messages.Chinese, layerIds);
-            string layersEn = layerIds.Length == 0 ? "" : Messages.Get("asset_layers.used_by", Messages.English, layerIds);
+                .Select(layer => $"{layer["id"]} \"{MessageCatalog.EscapeName(layer["name"]?.GetValue<string>())}\""));
+            string layersZh = layerIds.Length == 0 ? "" : MessageCatalog.Get("asset_layers.used_by", MessageCatalog.Chinese, layerIds);
+            string layersEn = layerIds.Length == 0 ? "" : MessageCatalog.Get("asset_layers.used_by", MessageCatalog.English, layerIds);
             Blocker blocker;
             if (finding.AssetKind == "texture")
                 blocker = new Blocker(BlockerCode.ToolUnsupportedTexture, [finding.File, finding.Field]);
@@ -101,8 +101,8 @@ public static class AnalysisToolLimitation
             {
                 string offsetText = offset.ToString(CultureInfo.InvariantCulture);
                 blocker = new Blocker(BlockerCode.ToolUnsupportedModelField,
-                    [finding.File, finding.Field, Messages.Get("asset_problem." + finding.Problem, Messages.English), offsetText, layersEn],
-                    [finding.File, finding.Field, Messages.Get("asset_problem." + finding.Problem, Messages.Chinese), offsetText, layersZh]);
+                    [finding.File, finding.Field, MessageCatalog.Get("asset_problem." + finding.Problem, MessageCatalog.English), offsetText, layersEn],
+                    [finding.File, finding.Field, MessageCatalog.Get("asset_problem." + finding.Problem, MessageCatalog.Chinese), offsetText, layersZh]);
             }
             else
                 blocker = new Blocker(BlockerCode.ToolUnsupportedModel,
@@ -141,8 +141,8 @@ public static class AnalysisToolLimitation
             ["summary"] = new JsonObject
             {
                 ["verdict"] = Verdict, ["key"] = "summary.tool_limitation",
-                ["zh"] = Messages.Get("summary.tool_limitation", Messages.Chinese, firstZh, findings.Count),
-                ["en"] = Messages.Get("summary.tool_limitation", Messages.English, firstEn, findings.Count)
+                ["zh"] = MessageCatalog.Get("summary.tool_limitation", MessageCatalog.Chinese, firstZh, findings.Count),
+                ["en"] = MessageCatalog.Get("summary.tool_limitation", MessageCatalog.English, firstEn, findings.Count)
             }
         };
     }

@@ -180,12 +180,12 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 uint storedWidth = decodePlan.StoredWidth, storedHeight = decodePlan.StoredHeight;
                 if (decodePlan.Rejected)
                 {
-                    string layer = $"L{owner.ToString(System.Globalization.CultureInfo.InvariantCulture)} \"{Messages.EscapeName(pristine["objects"]?.AsArray().OfType<JsonObject>()
+                    string layer = $"L{owner.ToString(System.Globalization.CultureInfo.InvariantCulture)} \"{MessageCatalog.EscapeName(pristine["objects"]?.AsArray().OfType<JsonObject>()
                         .FirstOrDefault(value => HybridScenePlanner.Id(value) == owner)?["name"] is JsonValue name && name.TryGetValue(out string? text) ? text : null)}\"";
                     string extent = HardwareDecodeDimensions.Extent(storedWidth, storedHeight);
                     var reason = new Message("bake.hardware_decode_dimensions_rejected",
-                        [layer, extent, decodePlan.PackingText(Messages.English), decodePlan.ViolationText(Messages.English), decodePlan.Limits.BasisEn],
-                        [layer, extent, decodePlan.PackingText(Messages.Chinese), decodePlan.ViolationText(Messages.Chinese), decodePlan.Limits.BasisZh]);
+                        [layer, extent, decodePlan.PackingText(MessageCatalog.English), decodePlan.ViolationText(MessageCatalog.English), decodePlan.Limits.BasisEn],
+                        [layer, extent, decodePlan.PackingText(MessageCatalog.Chinese), decodePlan.ViolationText(MessageCatalog.Chinese), decodePlan.Limits.BasisZh]);
                     result["groups"]!.AsArray().Add(new JsonObject { ["id"] = "effect-prefix-" + owner,
                         ["status"] = "rejected_hardware_decode_dimensions", ["owner_layer_id"] = owner, ["frames"] = frames,
                         ["source_extent"] = new JsonArray(sourceWidth, sourceHeight), ["encoded_extent"] = new JsonArray(storedWidth, storedHeight),
@@ -323,7 +323,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 if (SeamPreview.ShouldExport(false, false, seam, request.KeepIntermediates))
                 {
                     progress?.Report(new("exporting_seam_preview", 0,
-                        Messages.Get("progress.exporting_seam_preview", Messages.DefaultLanguage(),
+                        MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
                             SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
                     using (timing.Measure(StageTiming.SeamCheck))
                     seamPreview = await SeamPreview.ExportOrWarnAsync(result, "effect-prefix-" + owner,
@@ -357,13 +357,13 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     result["status"] = "candidate_rejected_" + rejection;
                     bool seamRejected = seam["status"]?.GetValue<string>() != "observed_seam_pass";
                     result["reason"] = seamRejected
-                        ? Messages.Get("bake.effect_prefix_seam_rejected", Messages.English, EncodedLoopValidator.RejectionDetail(seam, Messages.English))
+                        ? MessageCatalog.Get("bake.effect_prefix_seam_rejected", MessageCatalog.English, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.English))
                         : rejection == "quality" ? "GPU prefix encoding did not meet the existing playback quality threshold against CPU Lanczos."
                         : rejection == "hardware_decode" ? "The source-period prefix encoding did not pass the actual hardware decode check."
                         : "The full terminal capture did not prove opaque pixels for every encoded source frame.";
                     if (seamRejected)
                         result["reason_localized"] = new JsonObject { ["key"] = "bake.effect_prefix_seam_rejected",
-                            ["zh"] = Messages.Get("bake.effect_prefix_seam_rejected", Messages.Chinese, EncodedLoopValidator.RejectionDetail(seam, Messages.Chinese)),
+                            ["zh"] = MessageCatalog.Get("bake.effect_prefix_seam_rejected", MessageCatalog.Chinese, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.Chinese)),
                             ["en"] = result["reason"]!.DeepClone(), ["params"] = new JsonArray() };
                     await Save(); return result;
                 }
@@ -434,7 +434,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         // 证据里的数是内存里直接建的 byte/int/ulong 值，TryGetValue<int> 跨类型会失败；按 JSON 文本解析最稳。
         int Number(string key) => evidence[key] is JsonValue number && int.TryParse(number.ToJsonString(),
             System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int parsed) ? parsed : -1;
-        var reason = new Message("bake.effect_prefix_nonopaque_capture", [owner, Messages.EscapeName(name),
+        var reason = new Message("bake.effect_prefix_nonopaque_capture", [owner, MessageCatalog.EscapeName(name),
             Number("first_nonopaque_frame"), Number("x"), Number("y"), Number("alpha"),
             Number("nonopaque_pixels_in_frame"), Number("minimum_alpha_in_frame")]);
         var group = new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "rejected_opaque_capture",
