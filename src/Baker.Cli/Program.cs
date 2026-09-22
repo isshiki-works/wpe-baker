@@ -117,12 +117,12 @@ try
                 Console.Error.WriteLine(Messages.Get("summary.not_applicable", language, rejection.Text(language)));
                 return 3;
             }
-            throw new InvalidDataException(rejection.Legacy());
+            throw rejection.Message.Error(text => new InvalidDataException(text));
         }
         using var source = new ProjectSource(sourcePath);
         NativeTools tools = options.TryGetValue("--tools", out string? toolPath) ? await ReadTools(toolPath, cancellation.Token) : NativeEnvironment.FindTools();
         string assets = options.TryGetValue("--assets", out string? suppliedAssets) ? Path.GetFullPath(suppliedAssets) : NativeEnvironment.FindAssets();
-        if (!NativeEnvironment.AssetsValid(assets)) throw new DirectoryNotFoundException(Messages.Emit("setup.assets_missing"));
+        if (!NativeEnvironment.AssetsValid(assets)) throw new Message("setup.assets_missing").Error(text => new DirectoryNotFoundException(text));
         uint Number(string option, uint fallback) => options.TryGetValue(option, out string? value) ? uint.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : fallback;
         // 没给 --fps 时按 min(WPE 帧率上限, 主屏刷新率) 就近取标准档；--fps-den 是分子的配套，单独给没有意义。
         if (!options.ContainsKey("--fps") && options.ContainsKey("--fps-den"))
@@ -322,7 +322,7 @@ try
         string text = await File.ReadAllTextAsync(args[1], cancellation.Token);
         JsonObject input = JsonNode.Parse(text)?.AsObject() ?? throw new InvalidDataException("Invalid bake plan or request.");
         if (input["kind"] is JsonValue inputKind && inputKind.TryGetValue(out string? kindText) && kindText == AnalysisToolLimitation.Kind)
-            throw new InvalidDataException(Messages.Emit("cli.bake_tool_limitation_report"));
+            throw new InvalidDataException(Messages.RenderLegacy("cli.bake_tool_limitation_report"));
         if (input["kind"] is not null)
         {
             if (!options.TryGetValue("--out", out string? output)) throw new ArgumentException("Baking a plan directly requires --out NEW_DIRECTORY.");
@@ -467,10 +467,8 @@ catch (Exception error)
     Console.Error.WriteLine(JsonSerializer.Serialize(new { status = "failed", error_type = error.GetType().Name, message = error.Message }, jsonOptions));
     if (args.Length > 0 && args[0] == "analyze")
     {
-        JsonObject localized = Messages.Localize(error.Message);
-        string detail = localized[language]?.GetValue<string>() ?? error.Message;
-        bool notApplicable = localized["key"]?.GetValue<string>()?.StartsWith("cli.", StringComparison.Ordinal) == true;
-        Console.Error.WriteLine(Messages.Get(notApplicable ? "summary.not_applicable" : "summary.failed", language, detail));
+        // 人话那一行按异常带着的文案（键 + 参数）出；没带文案的异常原样给英文消息。
+        Console.Error.WriteLine(Messages.Get("summary.failed", language, Message.Of(error)?.In(language) ?? error.Message));
     }
     return 1;
 }

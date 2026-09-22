@@ -183,9 +183,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     string layer = $"L{owner.ToString(System.Globalization.CultureInfo.InvariantCulture)} \"{Messages.EscapeName(pristine["objects"]?.AsArray().OfType<JsonObject>()
                         .FirstOrDefault(value => HybridScenePlanner.Id(value) == owner)?["name"] is JsonValue name && name.TryGetValue(out string? text) ? text : null)}\"";
                     string extent = HardwareDecodeDimensions.Extent(storedWidth, storedHeight);
-                    string reason = Messages.EmitBilingual("bake.hardware_decode_dimensions_rejected",
-                        [layer, extent, decodePlan.PackingText(Messages.Chinese), decodePlan.ViolationText(Messages.Chinese), decodePlan.Limits.BasisZh],
-                        [layer, extent, decodePlan.PackingText(Messages.English), decodePlan.ViolationText(Messages.English), decodePlan.Limits.BasisEn]);
+                    var reason = new Message("bake.hardware_decode_dimensions_rejected",
+                        [layer, extent, decodePlan.PackingText(Messages.English), decodePlan.ViolationText(Messages.English), decodePlan.Limits.BasisEn],
+                        [layer, extent, decodePlan.PackingText(Messages.Chinese), decodePlan.ViolationText(Messages.Chinese), decodePlan.Limits.BasisZh]);
                     result["groups"]!.AsArray().Add(new JsonObject { ["id"] = "effect-prefix-" + owner,
                         ["status"] = "rejected_hardware_decode_dimensions", ["owner_layer_id"] = owner, ["frames"] = frames,
                         ["source_extent"] = new JsonArray(sourceWidth, sourceHeight), ["encoded_extent"] = new JsonArray(storedWidth, storedHeight),
@@ -194,8 +194,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         ["packed_alpha"] = packedAlpha, ["period"] = loop, ["hardware_decode_preflight"] = decodePlan.ToJson(),
                         ["encoded_loop_validation"] = null, ["hardware_decode"] = null });
                     result["status"] = "candidate_rejected_hardware_decode";
-                    result["reason"] = reason;
-                    result["reason_localized"] = Messages.Localize(reason);
+                    reason.Write(result, "reason");
                     await Save(); return result;
                 }
                 EncodedContentRegion? paddedContent = decodePlan.Padded
@@ -234,9 +233,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     using (timing.Measure(StageTiming.MasterRender))
                     {
                         try { rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken); }
-                        catch (IOException error) when (renderRequest.GpuEncoding is not null && !cancellationToken.IsCancellationRequested &&
-                            (error.Message.Contains("GPU encode initialization", StringComparison.Ordinal) ||
-                             error.Message.Contains("required vulkan device extension", StringComparison.Ordinal)))
+                        catch (GpuEncodeUnavailableException error) when (renderRequest.GpuEncoding is not null && !cancellationToken.IsCancellationRequested)
                         {
                             encoderFallback = error.Message;
                             renderOutput = Path.Combine(cacheOutput, "encoded-software");
@@ -248,12 +245,11 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                                               NativeRenderRunner.OpaquePixelEvidence(error) is { } nonOpaque)
                 {
                     // 首帧不透明不代表完整动画始终不透明；后续帧变化仍按拒绝收尾，不丢弃透明度。
-                    (JsonObject group, string reason) = OpaqueCaptureRejection(pristine, owner, cache["terminal_effect_id"]!.GetValue<int>(),
+                    (JsonObject group, Message reason) = OpaqueCaptureRejection(pristine, owner, cache["terminal_effect_id"]!.GetValue<int>(),
                         frames, sourceWidth, sourceHeight, loop, nonOpaque);
                     result["groups"]!.AsArray().Add(group);
                     result["status"] = "candidate_rejected_opaque_capture";
-                    result["reason"] = reason;
-                    result["reason_localized"] = Messages.Localize(reason);
+                    reason.Write(result, "reason");
                     await Save(); return result;
                 }
                 timing.AddMasterBreakdown(rendered);
@@ -429,7 +425,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
     /// 不透明规划被全分辨率捕获推翻时的拒绝记录：组条目带上预探测结论与逐帧扫描证据，理由点名层、坐标与 alpha。
     /// 纯函数，不读写文件。
     /// </summary>
-    internal static (JsonObject Group, string Reason) OpaqueCaptureRejection(JsonObject scene, int owner, int terminalEffectId,
+    internal static (JsonObject Group, Message Reason) OpaqueCaptureRejection(JsonObject scene, int owner, int terminalEffectId,
         ulong frames, uint sourceWidth, uint sourceHeight, JsonObject loop, JsonObject evidence)
     {
         string? name = scene["objects"]?.AsArray().OfType<JsonObject>()
@@ -438,9 +434,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         // 证据里的数是内存里直接建的 byte/int/ulong 值，TryGetValue<int> 跨类型会失败；按 JSON 文本解析最稳。
         int Number(string key) => evidence[key] is JsonValue number && int.TryParse(number.ToJsonString(),
             System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int parsed) ? parsed : -1;
-        string reason = Messages.Emit("bake.effect_prefix_nonopaque_capture", owner, Messages.EscapeName(name),
+        var reason = new Message("bake.effect_prefix_nonopaque_capture", [owner, Messages.EscapeName(name),
             Number("first_nonopaque_frame"), Number("x"), Number("y"), Number("alpha"),
-            Number("nonopaque_pixels_in_frame"), Number("minimum_alpha_in_frame"));
+            Number("nonopaque_pixels_in_frame"), Number("minimum_alpha_in_frame")]);
         var group = new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "rejected_opaque_capture",
             ["owner_layer_id"] = owner, ["terminal_effect_id"] = terminalEffectId, ["frames"] = frames,
             ["source_extent"] = new JsonArray(sourceWidth, sourceHeight), ["packed_alpha"] = false,

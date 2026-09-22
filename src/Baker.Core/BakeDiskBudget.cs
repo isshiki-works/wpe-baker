@@ -93,18 +93,17 @@ public static class BakeDiskBudget
         if (!estimate.Known) return null;
         if (FreeSpace(outputDirectory) is not (string volume, long available)) return null;
         if (available >= 0 && (ulong)available >= estimate.RequiredBytes) return null;
-        string reason = Messages.Emit("bake.insufficient_disk_space", Gibibytes(estimate.PeakBytes),
-            Gibibytes(ReserveBytes), Gibibytes(estimate.RequiredBytes), volume, Gibibytes((ulong)Math.Max(available, 0)));
-        return new JsonObject
+        var rejection = new JsonObject
         {
             ["status"] = RejectedBakeStatus,
             ["volume"] = volume,
             ["available_bytes"] = available,
             ["required_bytes"] = estimate.RequiredBytes,
             ["estimate"] = estimate.ToJson(),
-            ["reason"] = reason,
-            ["reason_localized"] = Messages.Localize(reason)
         };
+        new Message("bake.insufficient_disk_space", [Gibibytes(estimate.PeakBytes), Gibibytes(ReserveBytes),
+            Gibibytes(estimate.RequiredBytes), volume, Gibibytes((ulong)Math.Max(available, 0))]).Write(rejection, "reason");
+        return rejection;
     }
 
     /// <summary>输出目录所在卷与它的空闲字节数；卷不是盘符形式（UNC、<c>\\?\</c> 前缀）或读不到时返回 null。</summary>

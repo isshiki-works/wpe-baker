@@ -44,8 +44,8 @@ public static class EffectPrefixCaptureTarget
         result["capture_pass"] = nativeResult["capture_source"]?["pass"]?.DeepClone();
         result["layer_targets"] = new JsonArray(layerTargets.Select(item => (JsonNode?)JsonValue.Create(item)).ToArray());
         if (!owned)
-            SetReason(result, Messages.Emit("effect_prefix.capture_not_layer_target", Messages.EscapeName(layerName), ownerLayerId,
-                terminalEffectId, target ?? "(none)", layerTargets.Length == 0 ? "(none)" : string.Join(", ", layerTargets)));
+            new Message("effect_prefix.capture_not_layer_target", [Messages.EscapeName(layerName), ownerLayerId,
+                terminalEffectId, target ?? "(none)", layerTargets.Length == 0 ? "(none)" : string.Join(", ", layerTargets)]).Write(result, "reason");
         return result;
     }
 
@@ -53,7 +53,7 @@ public static class EffectPrefixCaptureTarget
     public static JsonObject ProbeFailed(int ownerLayerId, int terminalEffectId, string? layerName, string error)
     {
         var result = Describe(ownerLayerId, terminalEffectId, layerName, ProbeFailedStatus);
-        SetReason(result, Messages.Emit("effect_prefix.capture_probe_failed", Messages.EscapeName(layerName), ownerLayerId, terminalEffectId, error));
+        new Message("effect_prefix.capture_probe_failed", [Messages.EscapeName(layerName), ownerLayerId, terminalEffectId, error]).Write(result, "reason");
         return result;
     }
 
@@ -66,12 +66,6 @@ public static class EffectPrefixCaptureTarget
     {
         ["owner_layer_id"] = ownerLayerId, ["layer_name"] = layerName, ["terminal_effect_id"] = terminalEffectId, ["status"] = status
     };
-
-    private static void SetReason(JsonObject result, string legacy)
-    {
-        result["reason"] = legacy;
-        result["reason_localized"] = Messages.Localize(legacy);
-    }
 
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out string? text) ? text : null;
 }

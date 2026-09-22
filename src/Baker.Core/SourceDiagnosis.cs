@@ -16,20 +16,17 @@ public static class SourceDiagnosis
     public const string PresetKind = "preset";
 
     /// <summary>
-    /// 一条拒绝理由。<see cref="Legacy"/> 给出英文原文（同时登记到 <see cref="Messages"/> 供反查），
-    /// <see cref="Text"/> 给出指定语言的那一句。
+    /// 一条拒绝理由。<see cref="Message"/> 是这句话的键与参数（异常带着它走），<see cref="Text"/> 给出指定语言的那一句。
     /// </summary>
     public sealed record Rejection(string Kind, string Key, object?[] EnglishArgs, object?[] ChineseArgs)
     {
         /// <summary>project.json 里的 dependency（只有预设包有），用于指路到它依赖的壁纸。</summary>
         public string? Dependency { get; init; }
 
-        /// <summary>英文原文；同时把 key 与参数登记进 <see cref="Messages"/>，之后 Localize 能反查回双语。</summary>
-        public string Legacy() => Messages.EmitBilingual(Key, ChineseArgs, EnglishArgs);
+        public Message Message => new(Key, EnglishArgs, ChineseArgs);
 
         /// <summary>按语言取这一句。</summary>
-        public string Text(string language) => Messages.Get(Key, language,
-            Messages.NormalizeLanguage(language) == Messages.Chinese ? ChineseArgs : EnglishArgs);
+        public string Text(string language) => Message.In(language);
     }
 
     /// <summary>这个路径看上去像不像一个壁纸来源。只看路径形状，不打开文件，供拖放高亮之类的快速判断用。</summary>

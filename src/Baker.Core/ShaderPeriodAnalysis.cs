@@ -22,7 +22,15 @@ public enum ShaderTemporalUnresolvedKind
 /// </summary>
 public sealed record ShaderTemporalUnresolved(int OwnerLayerId, int EffectIndex, int PassIndex,
     string Resource, ShaderTemporalUnresolvedKind Kind, string Detail,
-    bool BoundedDisplacement = false, string Mechanism = "", SwayModel? Sway = null);
+    bool BoundedDisplacement = false, string Mechanism = "", SwayModel? Sway = null)
+{
+    /// <summary>Detail 由文案表生成时的键与参数；只有英文明细的为 null。</summary>
+    public Message? Message { get; init; }
+
+    public ShaderTemporalUnresolved(int ownerLayerId, int effectIndex, int passIndex, string resource,
+        ShaderTemporalUnresolvedKind kind, Message message)
+        : this(ownerLayerId, effectIndex, passIndex, resource, kind, message.Text) => Message = message;
+}
 
 /// <summary>Pinpoints one scalar in the authored scene effect pass; no patch is applied by this analysis.</summary>
 public sealed record ShaderSpeedPatch(int OwnerLayerId, int EffectIndex, int PassIndex,
@@ -147,14 +155,14 @@ public static class ShaderPeriodAnalysis
                     {
                         if (alternateClock) unresolved.Add(new(ownerId, effectIndex, authoredPassIndex, shaderResource,
                             ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
-                            Messages.Emit("unresolved.shader_runtime_clock_unverified")));
+                            new Message("unresolved.shader_runtime_clock_unverified")));
                         continue;
                     }
                     if (alternateClock)
                     {
                         unresolved.Add(new(ownerId, effectIndex, authoredPassIndex, shaderResource,
                             ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
-                            Messages.Emit("unresolved.shader_mixed_clock")));
+                            new Message("unresolved.shader_mixed_clock")));
                         continue;
                     }
                     ComboRead dualWaves = ReadCombo(effectivePass, "DUALWAVES", out int dualWavesValue);
@@ -215,7 +223,7 @@ public static class ShaderPeriodAnalysis
                         components, unresolved))
                         continue;
                     unresolved.Add(new(ownerId, effectIndex, authoredPassIndex, shaderResource, ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
-                        Messages.Emit("unresolved.shader_not_verified_periodic")));
+                        new Message("unresolved.shader_not_verified_periodic")));
                 }
             }
         }

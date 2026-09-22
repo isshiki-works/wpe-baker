@@ -16,6 +16,6 @@ internal sealed class FrameProgressEstimate
             : measuredSeconds >= 2 && completed > firstFrame
                 ? measuredSeconds / (completed - firstFrame) * (total - completed) : null;
         return new("rendering", (double)completed / total, $"{completed} / {total} frames",
-            elapsedSeconds, remaining);
+            elapsedSeconds, remaining, completed, total);
     }
 }

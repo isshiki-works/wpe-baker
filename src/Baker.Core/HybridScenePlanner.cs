@@ -114,7 +114,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         JsonObject Solve(double? ceilingOverride)
         {
             JsonObject input = scene();
-            string key = "loop-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
+            // 缓存内容带 unresolved 的文案键（detail_localized），格式变了就换前缀，旧缓存不再命中。
+            string key = "loop2-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
                 request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.SwayRetime, request.LoopPreference, ceilingOverride);
             return AnalysisCache.Get(request.AnalysisCacheDirectory, key, () => HybridLoopService.Analyze(input, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
@@ -1466,6 +1467,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             plan["video_groups"]!.AsArray().OfType<JsonObject>().SelectMany(g => g["layer_ids"]!.AsArray().Select(n => n!.GetValue<int>())).ToArray(),
             settings, plan["projection"] as JsonObject ?? new JsonObject(), plan["video_groups"] as JsonArray);
         AnnotateLoopCandidates(plan["loop"]!.AsObject());
+        // bake 侧重算的 loop 直接进 bake.json 的 plan 副本，不再 Attach，临时字段当场去掉。
+        PlanNarrative.StripTransient(plan["loop"]);
     }
 
     /// <summary>Returns a plan clone with one selected foreground suffix retained as whole live roots.</summary>

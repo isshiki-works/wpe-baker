@@ -10,15 +10,15 @@ internal static class AppEnvironment
     public static string Language { get; set; } = Messages.DefaultLanguage();
 
     /// <summary>
-    /// 自检随包工具。Core 抛的是英文原文（机器可读字段沿用英文），这里在显示给用户之前换成界面语言，
-    /// 与 blockers 走的是同一套 <see cref="Messages.Localize"/>。
+    /// 自检随包工具。Core 抛的异常消息是英文原文（机器可读字段沿用英文），异常带着文案的键与参数，
+    /// 这里在显示给用户之前按界面语言重新渲染。
     /// </summary>
     public static NativeTools FindTools()
     {
         try { return NativeEnvironment.FindTools(); }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException or InvalidDataException)
         {
-            throw new InvalidDataException(Messages.Localize(error.Message)[Language]?.GetValue<string>() ?? error.Message, error);
+            throw new InvalidDataException(Message.Of(error)?.In(Language) ?? error.Message, error);
         }
     }
 
