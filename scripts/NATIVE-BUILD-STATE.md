@@ -10,7 +10,7 @@ From `C:\Users\Alya\Desktop\Work\wpe-baker-next`:
 python scripts/build-native-cmake.py --target wpe-render
 ```
 
-New builds default to `.tools/llvm-mingw-22`, isolated `build/native-release22`, and the verified `.deps/ffmpeg-lgpl21/prefix` development libraries. `--ffmpeg-root` explicitly selects a different project-local prefix. Existing `build/native22` uses `.deps/ffmpeg` and remains preserved; reusing a build directory with a different FFmpeg prefix is rejected. Clang 22 and 23 module caches must never be mixed. CMake uses Clang's own dependency scanner and source lists generated from engine lito manifests. FetchContent is disconnected.
+New builds default to `.tools/llvm-mingw-22`, isolated `build/native-release22`, and the verified `.deps/ffmpeg-lgpl21/prefix` development libraries. `--ffmpeg-root` explicitly selects a different project-local prefix. Existing `build/native22` uses `.deps/ffmpeg` and remains preserved; reusing a build directory with a different FFmpeg prefix is rejected. Clang 22 and 23 module caches must never be mixed. CMake uses Clang's own dependency scanner; each engine package has a hand-written CMakeLists.txt, tool paths live in `engine/CMakePresets.json`, and the module-free third-party libraries are prebuilt once per lock hash under `build/third-party/<key>/`. FetchContent is disconnected.
 
 The LGPL 2.1 libraries and new full `native-release22` renderer build are ready. The capture/video source changes are included. No native22 reconfiguration was performed while adding this selection or producing the separate release build.
 
@@ -68,9 +68,9 @@ The Vulkan import library was generated from the pinned official Vulkan-Loader e
 
 ## Route decisions and failures
 
-Lito 0.7.1 performed a real Eigen build but its custom frontend could not scan MinGW intrinsic preprocessor macros. Its CMake receipt parser also rejected CRLF. A small receipt-normalizing proxy solved that first issue, but the custom-frontend failure justified the CMake route. `build-native.py` and `cmake-lito.cpp` retain diagnostic support; the supported command is build-native-cmake.py.
+Lito 0.7.1 performed a real Eigen build but its custom frontend could not scan MinGW intrinsic preprocessor macros. Its CMake receipt parser also rejected CRLF. The custom-frontend failure justified the CMake route; the Lito route (`build-native.py`, `cmake-lito.cpp`, all `lito.toml`/`lito.lock`) was removed in T1 (2026-09-23).
 
-Clang 23.1.0 built core/wavsen/Vulkan but crashed during Graphics.cppm IR generation at EmitStartEHSpec. A reduced-BMI experiment reproduced it. Stable Clang 22.1.8 passed using its own output tree. Old build/native and compiler probes are diagnostic only.
+Clang 23.1.0 built core/wavsen/Vulkan but crashed during Graphics.cppm IR generation at EmitStartEHSpec. A reduced-BMI experiment reproduced it. Stable Clang 22.1.8 passed using its own output tree. Old build/native is diagnostic only.
 
 Other changes are actual header, source or linker corrections: Windows UTF-8/wide paths, global module visibility of standard headers, GDI Arc collision, sizeof(long)=4, Synchronization import library, and platform-isolated Linux FD/device paths. No core behavior/checks were disabled to manufacture successful results.
 

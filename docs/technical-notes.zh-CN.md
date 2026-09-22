@@ -450,8 +450,8 @@ python scripts/package-source.py --native-build-dir build/native-speed22 --outpu
 `binary.path` 指向另一个构建目录，用它当默认值会被 `load_verified_build` 拒绝。本次发布的多线程渲染器在
 `build/native-mt22`，两条打包命令都要显式写 `--native-build-dir build/native-mt22`。
 
-打包前不要让 Git 重写工作树。源码绑定逐字节校验 8594 个文件，其中 7 个是被跟踪的脚本
-（`build-ffmpeg-lgpl21.py`、`build-native-cmake.py`、`build-native.py`、`distribution-inputs.lock.json`、
+打包前不要让 Git 重写工作树。源码绑定逐字节校验全部源码文件，其中 6 个是被跟踪的脚本
+（`build-ffmpeg-lgpl21.py`、`build-native-cmake.py`、`distribution-inputs.lock.json`、
 `fetch-ffmpeg-lgpl21-inputs.py`、`native-inputs.lock.json`、`native-provenance.py`）。在
 `core.autocrlf=true` 且没有 `.gitattributes` 覆盖它们的机器上，这些文件在工作树里是 LF
 （`native-inputs.lock.json` 还是混合换行），一旦被 Git 重写就会变成 CRLF、绑定立刻失效。切换分支请用

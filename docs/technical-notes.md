@@ -1149,8 +1149,8 @@ verified native build; the scripts refuse a combination with mismatched
 renderer hash, source snapshot, or provenance.
 
 Do not let Git rewrite the working tree before packaging. The source binding
-checks 8594 files byte by byte, 7 of them tracked scripts
-(`build-ffmpeg-lgpl21.py`, `build-native-cmake.py`, `build-native.py`,
+checks every source file byte by byte, 6 of them tracked scripts
+(`build-ffmpeg-lgpl21.py`, `build-native-cmake.py`,
 `distribution-inputs.lock.json`, `fetch-ffmpeg-lgpl21-inputs.py`,
 `native-inputs.lock.json`, `native-provenance.py`). On a machine with
 `core.autocrlf=true` and no `.gitattributes` entry covering them, those files
