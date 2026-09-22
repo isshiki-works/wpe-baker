@@ -157,7 +157,7 @@ target_sources(owe-scene PRIVATE
   VulkanRender/UniformBuffer.cpp
   VulkanRender/VulkanRender.cpp
   VulkanRender/GpuVideoEncoder.cpp)
-target_include_directories(owe-scene PUBLIC ../../third_party .. . Scene Particle Script VulkanRender)
+target_include_directories(owe-scene PUBLIC ${PROJECT_SOURCE_DIR}/third_party ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/Scene ${PROJECT_SOURCE_DIR}/src/Scene/Scene ${PROJECT_SOURCE_DIR}/src/Scene/Particle ${PROJECT_SOURCE_DIR}/src/Scene/Script ${PROJECT_SOURCE_DIR}/src/Scene/VulkanRender)
 target_compile_definitions(owe-scene PUBLIC "WAYWALLEN_WORKSHOP_DIR=\"workshop\"" "WAYWALLEN_ASSETS_DIR=\"assets\"")
 target_link_libraries(owe-scene PUBLIC owe-core)
 target_link_libraries(owe-scene PUBLIC owe-audio)

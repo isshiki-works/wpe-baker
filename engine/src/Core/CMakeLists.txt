@@ -14,7 +14,7 @@ target_sources(owe-core PRIVATE
   Fft.cpp
   Json.cpp
   UserProperty.cpp)
-target_include_directories(owe-core PUBLIC ../../third_party .. .)
+target_include_directories(owe-core PUBLIC ${PROJECT_SOURCE_DIR}/third_party ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/Core)
 target_compile_definitions(owe-core PUBLIC "FT_SIZEOF_LONG=4" NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(owe-core PUBLIC rstd.std)
 target_link_libraries(owe-core PUBLIC rstd.cppstd)

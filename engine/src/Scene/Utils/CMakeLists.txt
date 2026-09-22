@@ -6,7 +6,7 @@ target_sources(owe-utils PRIVATE
   Algorism.cpp
   FpsCounter.cpp
   Sha.cpp)
-target_include_directories(owe-utils PUBLIC ../../../third_party include include/Utils)
+target_include_directories(owe-utils PUBLIC ${PROJECT_SOURCE_DIR}/third_party ${PROJECT_SOURCE_DIR}/src/Scene/Utils/include ${PROJECT_SOURCE_DIR}/src/Scene/Utils/include/Utils)
 target_link_libraries(owe-utils PUBLIC owe-core)
 target_link_libraries(owe-utils PUBLIC owe-types)
 target_link_libraries(owe-utils PUBLIC rstd.std)

@@ -12,7 +12,7 @@ target_sources(owe-vulkan PRIVATE
   Shader.cpp
   Swapchain.cpp
   TextureCache.cpp)
-target_include_directories(owe-vulkan PUBLIC .)
+target_include_directories(owe-vulkan PUBLIC ${PROJECT_SOURCE_DIR}/src/Vulkan)
 target_link_libraries(owe-vulkan PUBLIC owe-core)
 target_link_libraries(owe-vulkan PUBLIC owe-types)
 target_link_libraries(owe-vulkan PRIVATE owe-utils)

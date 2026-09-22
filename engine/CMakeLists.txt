@@ -41,6 +41,8 @@ set(WPE_THIRD_PARTY_TARGETS lz4_static freetype qjs glslang SPIRV glslang-defaul
     OSDependent MachineIndependent GenericCodeGen glslang-standalone VulkanMemoryAllocator spirv-reflect)
 if(WPE_THIRD_PARTY_DIR)
   include("${WPE_THIRD_PARTY_DIR}/wpe-third-party.cmake")
+  # 导入目标默认按 -isystem 引头文件，会改变头文件搜索顺序；保持与树内编译相同的 -I。
+  set_target_properties(${WPE_THIRD_PARTY_TARGETS} PROPERTIES SYSTEM OFF)
   add_library(glslang::glslang ALIAS glslang)
   add_library(glslang::SPIRV ALIAS SPIRV)
   add_library(glslang::glslang-default-resource-limits ALIAS glslang-default-resource-limits)
