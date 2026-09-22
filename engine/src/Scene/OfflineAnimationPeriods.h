@@ -33,9 +33,9 @@ inline long long OfflineAnimationPeriodGcd(long long lhs, long long rhs) {
     return lhs;
 }
 
-// Shortest decimal that parses back to exactly this double (std::to_string kept 6 decimals).
-// Floats widen to double first, so the text is the exact value the renderer uses.
-inline std::string OfflineShortestNumber(double value) {
+// Shortest decimal that parses back to exactly this value (std::to_string kept 6 decimals).
+template <class Real>
+inline std::string OfflineShortestNumber(Real value) {
     char buffer[64];
     const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
     return std::string(buffer, result.ptr);
