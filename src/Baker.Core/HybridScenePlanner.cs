@@ -115,7 +115,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         {
             JsonObject input = scene();
             // 缓存内容带 unresolved 的文案键（detail_localized），格式变了就换前缀，旧缓存不再命中。
-            string key = "loop2-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
+            string key = "loop-v2-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
                 request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.SwayRetime, request.LoopPreference, ceilingOverride);
             return AnalysisCache.Get(request.AnalysisCacheDirectory, key, () => HybridLoopService.Analyze(input, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
@@ -1205,7 +1205,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             if (report["loop"]?["unresolved"] is JsonArray { Count: > 0 })
                 foreach (JsonObject probe in captureProbes.Values.Where(probe =>
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus))
-                    AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>());
+                    AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>(), probe["reason_localized"]);
         }
         // README 的承诺：解析周期不完整时，把未解决机制与粒子所在的完整作者子树保留实时，再重查一次周期与构图。
         // 这条路以前只在 bake 阶段跑，analyze 既没走也没记录，用户拿到的就是一个没有任何理由的 unavailable。
@@ -1328,12 +1328,15 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     }
 
     /// <summary>plan 里的 loop 与 whole_layer.loop 是两份独立副本，追加理由时必须同时写。</summary>
-    private static void AddLoopUnresolved(JsonObject report, string kind, string detail)
+    private static void AddLoopUnresolved(JsonObject report, string kind, string detail, JsonNode? localized = null)
     {
+        // localized 是 detail 的 {key, zh, en, params}（例如捕获点探测的理由）；只有英文原文的理由不带。
+        var entry = new JsonObject { ["kind"] = kind, ["detail"] = detail };
+        if (localized is not null) entry[PlanNarrative.DetailLocalized] = localized.DeepClone();
         foreach (JsonNode? node in new JsonNode?[] { report["loop"], report["whole_layer"]?["loop"] })
             if (node is JsonObject loop && loop["unresolved"] is JsonArray unresolved &&
-                !unresolved.OfType<JsonObject>().Any(item => item["detail"]?.GetValue<string>() == detail))
-                unresolved.Add(new JsonObject { ["kind"] = kind, ["detail"] = detail });
+                !unresolved.Any(item => JsonNode.DeepEquals(item, entry)))
+                unresolved.Add(entry.DeepClone());
     }
 
     /// <summary>

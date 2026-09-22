@@ -94,7 +94,7 @@ internal static class EmbeddedVideoBudgetChecks
             overLocalized["zh"]!.GetValue<string>().Contains("视频组 group-1 的成品（150000 帧，2500 s）按短段试编码外推约 2.10 GiB", StringComparison.Ordinal) &&
             overLocalized["zh"]!.GetValue<string>().Contains("按该码率最长约 2382 s。已在渲染前停止", StringComparison.Ordinal) &&
             overLocalized["en"]!.GetValue<string>().Contains("Stopped before rendering", StringComparison.Ordinal) &&
-            Messages.Localize(over["reason"]!.GetValue<string>())["key"]?.GetValue<string>() == "bake.embedded_video_size_predicted" &&
+            over["reason_localized"]?["key"]?.GetValue<string>() == "bake.embedded_video_size_predicted" &&
             over["reason"]!.GetValue<string>().Contains("video group group-1 (150000 frames, 2500 s)", StringComparison.Ordinal) &&
             !NarrativePolishChecks.Leaks(overLocalized["zh"]!.GetValue<string>()),
             "trial extrapolation: the pre-render rejection names the group, length, estimated size and the longest loop at this bitrate in both languages");
@@ -109,7 +109,7 @@ internal static class EmbeddedVideoBudgetChecks
             "trial extrapolation: any over-limit group rejects and is named; with no encoded trial the estimate is recorded as not_estimated without rejecting");
 
         // ---- 编码后兜底的文案 ----
-        JsonObject encoded = Messages.Localize(EmbeddedVideoBudget.EncodedRejection("group-1", 2_922_466_521, 150_000, 60, 1));
+        JsonObject encoded = EmbeddedVideoBudget.EncodedRejection("group-1", 2_922_466_521, 150_000, 60, 1).Localized();
         check(encoded["key"]!.GetValue<string>() == "bake.embedded_video_size_rejected" &&
             encoded["zh"]!.GetValue<string>().Contains("视频组 group-1 编码后 2.72 GiB（150000 帧，2500 s）", StringComparison.Ordinal) &&
             encoded["zh"]!.GetValue<string>().Contains("按实测码率最长约 1837 s", StringComparison.Ordinal) &&

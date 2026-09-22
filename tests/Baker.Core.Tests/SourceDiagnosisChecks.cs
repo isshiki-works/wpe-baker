@@ -51,12 +51,10 @@ internal static class SourceDiagnosisChecks
             File.WriteAllText(Path.Combine(folder, entry), "unchanged");
             var result = SourceDiagnosis.Inspect(folder);
             Check(result is not null && result.Kind == kind && result.Key == key, kind + " wallpaper is classified by its own kind");
-            string legacy = result!.Legacy();
+            string legacy = result!.Message.Text;
             Check(legacy.Contains("bakes Scene wallpapers only", StringComparison.Ordinal) &&
                 legacy.Contains("type=" + kind, StringComparison.Ordinal) && legacy.Contains(entry, StringComparison.Ordinal),
                 kind + " legacy english names the type and the content file");
-            Check(Messages.Localize(legacy)["key"]?.GetValue<string>() == key,
-                kind + " legacy english can be localized back to its key");
             string chinese = result.Text(Messages.Chinese);
             Check(chinese.Contains("内容是 " + entry, StringComparison.Ordinal) && !chinese.Contains("content is", StringComparison.Ordinal),
                 kind + " chinese text carries the content clause in chinese");
@@ -67,7 +65,7 @@ internal static class SourceDiagnosisChecks
         File.WriteAllText(Path.Combine(noFile, "project.json"), """{"type":"video"}""");
         var noFileResult = SourceDiagnosis.Inspect(noFile);
         Check(noFileResult is { Kind: "video" } && !noFileResult.Text(Messages.Chinese).Contains("内容是", StringComparison.Ordinal) &&
-            !noFileResult.Legacy().Contains("content is", StringComparison.Ordinal),
+            !noFileResult.Message.Text.Contains("content is", StringComparison.Ordinal),
             "a video wallpaper without a file entry omits the content clause in both languages");
 
         // ---- 预设包：单独的分类与 dependency，指路到它依赖的作品 ----
@@ -129,14 +127,14 @@ internal static class SourceDiagnosisChecks
             named = error.Message.Contains("wpe-render.exe", StringComparison.Ordinal) &&
                 error.Message.Contains(bare, StringComparison.Ordinal) &&
                 error.Message.Contains("antivirus", StringComparison.Ordinal);
-            // 界面显示前要能反查回中文：Core 抛英文原文，GUI 用 Localize 换语言。
-            JsonObject localized = Messages.Localize(error.Message);
+            // 界面显示前要能换成中文：Core 抛英文原文，异常带着键与参数，GUI 按它重新渲染。
+            JsonObject localized = Message.Of(error)!.Localized();
             translated = localized["key"]?.GetValue<string>() == "setup.tool_file_missing" &&
                 localized[Messages.Chinese]?.GetValue<string>() is string zh &&
                 zh.Contains("缺少随包的渲染器 wpe-render.exe", StringComparison.Ordinal) && zh.Contains(bare, StringComparison.Ordinal);
         }
         Check(named, "a missing bundled tool is reported by name and full path, not just 'Required tool is missing'");
-        Check(translated, "the missing-tool english text localizes back to chinese with the same tool name and path");
+        Check(translated, "the missing-tool error carries its message key, which renders chinese with the same tool name and path");
         Check(Messages.Get("setup.tool_file_missing", Messages.Chinese, Messages.Get("setup.tool_renderer", Messages.Chinese), "X")
             .Contains("渲染器 wpe-render.exe", StringComparison.Ordinal),
             "the missing-tool message renders in chinese");

@@ -137,10 +137,11 @@ internal static class HardwareDecodeDimensionsChecks
             "a capture smaller than the minimum keeps its crop; the preflight records it instead of inventing pixels");
 
         // ---- 文案 ----
-        string reason = Messages.EmitBilingual("bake.hardware_decode_dimensions_rejected",
-            ["L72 \"Персонаж\"", HardwareDecodeDimensions.Extent(atlas.StoredWidth, atlas.StoredHeight), atlas.PackingText("zh"), atlas.ViolationText("zh"), atlas.Limits.BasisZh],
-            ["L72 \"Персонаж\"", HardwareDecodeDimensions.Extent(atlas.StoredWidth, atlas.StoredHeight), atlas.PackingText("en"), atlas.ViolationText("en"), atlas.Limits.BasisEn]);
-        JsonObject localized = Messages.Localize(reason);
+        var message = new Message("bake.hardware_decode_dimensions_rejected",
+            ["L72 \"Персонаж\"", HardwareDecodeDimensions.Extent(atlas.StoredWidth, atlas.StoredHeight), atlas.PackingText("en"), atlas.ViolationText("en"), atlas.Limits.BasisEn],
+            ["L72 \"Персонаж\"", HardwareDecodeDimensions.Extent(atlas.StoredWidth, atlas.StoredHeight), atlas.PackingText("zh"), atlas.ViolationText("zh"), atlas.Limits.BasisZh]);
+        string reason = message.Text;
+        JsonObject localized = message.Localized();
         check(reason.Contains("10216×3160", StringComparison.Ordinal) && reason.Contains("width 10216 > 8192", StringComparison.Ordinal) &&
             localized["key"]?.GetValue<string>() == "bake.hardware_decode_dimensions_rejected" &&
             localized["zh"]!.GetValue<string>().Contains("宽 10216 > 8192", StringComparison.Ordinal) &&

@@ -157,7 +157,8 @@ internal static class NarrativePolishChecks
 
         JsonObject staticPlan = UnresolvedPlan("not_applicable");
         staticPlan["loop"]!["unresolved"] = new JsonArray(
-            new JsonObject { ["kind"] = "source_static", ["detail"] = "Baked layer 542 \"背景\": material texture \"背景\" is not a proven still image." },
+            new JsonObject { ["kind"] = "source_static", ["detail"] = "Baked layer 542 \"背景\": material texture \"背景\" is not a proven still image.",
+                [PlanNarrative.StaticLayer] = new JsonObject { ["name"] = "背景", ["particle"] = false } },
             new JsonObject { ["kind"] = "loop_allocation_fallback", ["detail"] = "A smaller bake allocation was not attempted: no reason recorded." });
         JsonObject staticSummary = PlanNarrative.Summarize(staticPlan);
         check(staticSummary["key"]!.GetValue<string>() == "summary.loop_unresolved" &&
@@ -231,7 +232,7 @@ internal static class NarrativePolishChecks
             if (nonperiodicReason is not null) item["particle_nonperiodic_reason"] = nonperiodicReason;
             return item;
         }
-        string stationaryDetail = Messages.Emit("unresolved.particle_stationary_random");
+        string stationaryDetail = Messages.RenderLegacy("unresolved.particle_stationary_random");
 
         // 只剩平稳粒子（3594269099）：不说"1 处证明不了周期"，也不拿它当首条。
         JsonObject onlyPlan = UnresolvedPlan("not_applicable");

@@ -56,7 +56,7 @@ internal static class MessagesChecks
 
         // ---- 未知 key 与参数缺失都不抛异常 ----
         Check(Messages.Get("blocker.does_not_exist", "zh") == "blocker.does_not_exist", "unknown key falls back to the key itself");
-        Check(Messages.Emit("blocker.does_not_exist") == "blocker.does_not_exist", "emitting an unknown key does not throw");
+        Check(Messages.RenderLegacy("blocker.does_not_exist") == "blocker.does_not_exist", "rendering an unknown key does not throw");
         Check(Messages.Get("summary.blocked", "zh").Contains("{0}", StringComparison.Ordinal),
             "a parameterised template with no arguments renders as the template");
 
@@ -72,13 +72,6 @@ internal static class MessagesChecks
         Check(PlanNarrative.FullFrameConflict(new JsonArray(), []).Code == BlockerCode.FullframeNoVideoGroup,
             "zero groups maps to its own key");
 
-        JsonObject unknown = Messages.Localize("Something no version of this table has ever produced.");
-        Check(unknown["key"] is null && unknown["zh"]?.GetValue<string>() == "Something no version of this table has ever produced." &&
-            unknown["en"]?.GetValue<string>() == "Something no version of this table has ever produced.",
-            "an unknown blocker falls back to its english text without throwing");
-        Check(Messages.Localize(null)["key"] is null, "localizing null does not throw");
-        Check(Messages.Localize(Messages.Emit("cli.not_scene_project"))["key"]?.GetValue<string>() == "cli.not_scene_project",
-            "a legacy sentence produced by another process is still recognised");
 
         // ---- 层名截断与转义 ----
         string[] many = Enumerable.Range(1, 28).Select(index => "Layer " + index).ToArray();
@@ -115,8 +108,8 @@ internal static class MessagesChecks
             "a single-frame candidate is described as a still image");
 
         JsonObject unknownPlan = Plan(blockers: [], candidates: 0);
-        unknownPlan["loop"]!["unresolved"]!.AsArray().Add(new JsonObject {
-            ["kind"] = "runtime_animation", ["detail"] = Messages.Emit("unresolved.particle_sprite_period") });
+        unknownPlan["loop"]!["unresolved"]!.AsArray().Add(new Message("unresolved.particle_sprite_period").Write(new JsonObject {
+            ["kind"] = "runtime_animation" }, "detail"));
         JsonObject unknownSummary = PlanNarrative.Summarize(unknownPlan);
         Check(unknownSummary["verdict"]!.GetValue<string>() == "unknown" &&
             unknownSummary["key"]?.GetValue<string>() != "summary.unknown_no_reason" &&
@@ -158,13 +151,9 @@ internal static class MessagesChecks
             "a refused effect-prefix plan is not told how much power it would save");
 
         // ---- 各路 blocker 反查到自己的 key，参数带进双语 ----
-        Check(Messages.Localize(VideoDominance.Blocker)["key"]?.GetValue<string>() == "blocker.video_shell",
-            "the video-shell blocker resolves to its bilingual entry by legacy text alone");
-
-        string unreachable = Messages.EmitBilingual("blocker.fullframe_unreachable",
-            ["\"Clock\" (wall_clock_api)", "关掉时钟/日期/系统信息：--exclude-layers 12"],
-            ["\"Clock\" (wall_clock_api)", "turn off the clock, date and system readouts: --exclude-layers 12"]);
-        JsonObject unreachableLocalized = Messages.Localize(unreachable);
+        JsonObject unreachableLocalized = new Blocker(BlockerCode.FullframeUnreachable,
+            ["\"Clock\" (wall_clock_api)", "turn off the clock, date and system readouts: --exclude-layers 12"],
+            ["\"Clock\" (wall_clock_api)", "关掉时钟/日期/系统信息：--exclude-layers 12"]).ToNode();
         Check(unreachableLocalized["key"]?.GetValue<string>() == "blocker.fullframe_unreachable" &&
             unreachableLocalized["zh"]!.GetValue<string>().Contains("--exclude-layers 12", StringComparison.Ordinal) &&
             unreachableLocalized["zh"]!.GetValue<string>().Contains("\"Clock\" (wall_clock_api)", StringComparison.Ordinal),
@@ -181,13 +170,8 @@ internal static class MessagesChecks
             optionsLocalized["en"]!.GetValue<string>().Contains("explicitly choose layered video", StringComparison.Ordinal),
             "the full-frame blocker with scene options renders english and chinese options side by side");
 
-        Check(Messages.Localize(Messages.Emit("unresolved.material_omits_active_uniforms"))["key"]?.GetValue<string>() ==
-                "unresolved.material_omits_active_uniforms",
-            "the rewritten runtime-material detail resolves to a bilingual entry");
-
-        string audio = Messages.EmitBilingual("unresolved.particle_audio_input",
-            ["一个未命名的粒子节点", "3"], ["an unnamed particle node", "3"]);
-        JsonObject audioLocalized = Messages.Localize(audio);
+        JsonObject audioLocalized = new Message("unresolved.particle_audio_input",
+            ["an unnamed particle node", "3"], ["一个未命名的粒子节点", "3"]).Localized();
         Check(audioLocalized["key"]?.GetValue<string>() == "unresolved.particle_audio_input" &&
             audioLocalized["zh"]!.GetValue<string>().Contains("一个未命名的粒子节点", StringComparison.Ordinal) &&
             !audioLocalized["zh"]!.GetValue<string>().Contains("an unnamed particle node", StringComparison.Ordinal),
@@ -256,8 +240,8 @@ internal static class MessagesChecks
             "a plan without suitability keeps the narrative verdict");
     }
 
-    /// <summary>源码里对文案表的字面量引用：Messages.Emit/EmitBilingual/Get/Find("key"…)。</summary>
-    private static readonly Regex KeyReference = new(@"Messages\.(?:Emit|EmitBilingual|Get|Find)\(\s*""([a-z_]+(?:\.[a-z0-9_]+)+)""",
+    /// <summary>源码里对文案表的字面量引用：new Message("key"…) 与 Messages.RenderLegacy/Get/Find("key"…)。</summary>
+    private static readonly Regex KeyReference = new(@"(?:new Message|Messages\.(?:RenderLegacy|Get|Find))\(\s*""([a-z_]+(?:\.[a-z0-9_]+)+)""",
         RegexOptions.CultureInvariant);
 
     private static string Verdict(JsonObject plan) => PlanNarrative.Summarize(plan)["verdict"]!.GetValue<string>();

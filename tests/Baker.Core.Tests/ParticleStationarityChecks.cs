@@ -141,7 +141,7 @@ internal static class ParticleStationarityChecks
             Frames(Candidates(rainReport)[0], "frames") == 48 &&
             Candidates(rainReport)[0]["components"]!.AsArray().OfType<JsonObject>().Any(component =>
                 component["id"]?.GetValue<string>() == "particle_cycle/352/48" && component["cycles"]!.GetValue<ulong>() == 1) &&
-            ParticleItems(rainReport, 352).Single()["detail"]!.GetValue<string>() == Messages.Emit("unresolved.particle_cyclostationary_locked", "48", "0.8"),
+            ParticleItems(rainReport, 352).Single()["detail"]!.GetValue<string>() == Messages.RenderLegacy("unresolved.particle_cyclostationary_locked", "48", "0.8"),
             "锁定周期交给求解器：只有雨透视 352 时候选全部是 48 帧的整数倍，候选分量里记 particle_cycle/352/48，未解析项文案说明按周期锁定（不再是 NoTemporalMechanism）");
         JsonObject rainAt30 = ParticleItems(Analyze([rain], fps: 30), 352).Single()["particle_stationarity"]!.AsObject();
         check(Stationary(rainAt30) && Frames(Lock(rainAt30), "period_frames") == 24 && Frames(Lock(rainAt30), "cycle_start_frame") == 20 &&
@@ -166,7 +166,7 @@ internal static class ParticleStationarityChecks
             FailureValue(demoted["particle_stationarity"]!.AsObject(), "lifetime_capped_no_common_loop").Contains("\"period_frames\":48", StringComparison.Ordinal) &&
             FailureValue(demoted["particle_stationarity"]!.AsObject(), "lifetime_capped_no_common_loop").Contains("\"solver_fixed_frame_step\":172752", StringComparison.Ordinal) &&
             Near(Seconds(demoted["particle_stationarity"]!.AsObject(), "warmup_seconds"), 0.795) &&
-            demoted["detail"]!.GetValue<string>() == Messages.Emit("unresolved.particle_not_stationary", "C2 lifetime_capped_no_common_loop") &&
+            demoted["detail"]!.GetValue<string>() == Messages.RenderLegacy("unresolved.particle_not_stationary", "C2 lifetime_capped_no_common_loop") &&
             Stationary(ParticleItems(withClip, 153).Single()["particle_stationarity"]!.AsObject()) && withClip["no_candidate_reason"] is null,
             "锁定周期与其余分量在上限内没有公共循环、不锁时有：雨透视 352 退回拒绝（lifetime_capped_no_common_loop，快照记 48 帧与求解器步长 172752），预热恢复连续公式，文案改成不满足判据；平稳随机的水滴不受影响");
 
@@ -374,8 +374,8 @@ internal static class ParticleStationarityChecks
         JsonObject[] dropletItems = ParticleItems(mixed, 153), trailItems = ParticleItems(mixed, 560);
         check(dropletItems.Length == 1 && dropletItems[0]["kind"]!.GetValue<string>() == "runtime_animation" &&
             dropletItems[0]["mechanism"]!.GetValue<string>() == "particle_system" && Stationary(dropletItems[0]["particle_stationarity"]!.AsObject()) &&
-            dropletItems[0]["detail"]!.GetValue<string>() == Messages.Emit("unresolved.particle_stationary_random") &&
-            Messages.Localize(dropletItems[0]["detail"]!.GetValue<string>())["zh"]!.GetValue<string>().Contains("平稳随机", StringComparison.Ordinal),
+            dropletItems[0]["detail"]!.GetValue<string>() == Messages.RenderLegacy("unresolved.particle_stationary_random") &&
+            dropletItems[0][PlanNarrative.DetailLocalized]?["key"]?.GetValue<string>() == "unresolved.particle_stationary_random",
             "没有精灵轨道的粒子层也产生一条 particle_system 未解析项：通过判据的标 stationary=true，文案走 Messages 双语");
         check(trailItems.Length == 1 && !Stationary(trailItems[0]["particle_stationarity"]!.AsObject()) &&
             trailItems[0]["detail"]!.GetValue<string>().Contains("C4 controlpoint_follows_cursor", StringComparison.Ordinal),

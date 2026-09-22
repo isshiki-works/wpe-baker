@@ -64,10 +64,10 @@ internal static class HybridLoopGeneralizationChecks
                 x["detail"]?.GetValue<string>().Contains("particle system", StringComparison.Ordinal) == true),
             "particle lifetime and sequence timing are not replaced by the material sprite texture period");
 
-        // 具名理由是结构化字段，而写给用户的那句话走文案表：同一条 detail 必须能反查出中英两版。
+        // 具名理由是结构化字段，而写给用户的那句话走文案表：同一条 detail 带着自己的键与中英两版。
         JsonObject particleReason = particle["unresolved"]!.AsArray().OfType<JsonObject>()
             .Single(x => x["particle_nonperiodic_reason"] is not null);
-        JsonObject particleLocalized = Messages.Localize(particleReason["detail"]!.GetValue<string>());
+        JsonObject particleLocalized = particleReason[PlanNarrative.DetailLocalized]!.AsObject();
         check(particleReason["particle_nonperiodic_reason"]!.GetValue<string>() == "particle_definition_unavailable" &&
             particleLocalized["key"]?.GetValue<string>() == "unresolved.particle_definition_unreadable" &&
             particleLocalized["en"]!.GetValue<string>().Contains("particle definition \"", StringComparison.Ordinal) &&

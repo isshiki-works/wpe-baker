@@ -564,8 +564,9 @@ internal static class ResidualMaskingChecks
         // 排序里有 10 个候选、全部超限 → 恰好试 8 个就拒绝，理由逐个列出起点与 max_k。
         ulong[] ten = [.. Enumerable.Range(0, 10).Select(index => (ulong)(index * 16))];
         var exhausted = Drive(Search(ten), _ => spike);
-        string reason = ResidualStartFallback.RejectionReason(exhausted.Attempts, 375, window);
-        JsonObject localized = Messages.Localize(reason);
+        Message message = ResidualStartFallback.RejectionReason(exhausted.Attempts, 375, window);
+        string reason = message.Text;
+        JsonObject localized = message.Localized();
         check(exhausted.Step == ResidualStartStep.Reject && exhausted.Attempts.Count == ResidualMasking.MaximumStartAttempts &&
             exhausted.Attempts.OfType<JsonObject>().All(row => row["status"]!.GetValue<string>() == "rejected_seam_residual") &&
             ResidualStartFallback.Order(Search(ten)).Length == 8 &&
