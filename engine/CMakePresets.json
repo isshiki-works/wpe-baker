@@ -1,0 +1,23 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 29, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "release",
+      "displayName": "Clang 22（llvm-mingw，项目内工具）Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../build/native-release22",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "${sourceDir}/../.tools/llvm-mingw-22/bin/clang.exe",
+        "CMAKE_CXX_COMPILER": "${sourceDir}/../.tools/llvm-mingw-22/bin/clang++.exe",
+        "CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS": "${sourceDir}/../.tools/llvm-mingw-22/bin/clang-scan-deps.exe",
+        "CMAKE_MAKE_PROGRAM": "${sourceDir}/../.tools/ninja/ninja.exe",
+        "PKG_CONFIG_EXECUTABLE": "${sourceDir}/../.tools/pkgconf/bin/pkgconf.exe",
+        "Vulkan_INCLUDE_DIR": "${sourceDir}/../.deps/vulkan-headers/include",
+        "Vulkan_LIBRARY": "${sourceDir}/../.deps/install/lib/vulkan-1.dll.a",
+        "WPE_FFMPEG_ROOT": "${sourceDir}/../.deps/ffmpeg-lgpl21/prefix"
+      }
+    }
+  ]
+}

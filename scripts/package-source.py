@@ -84,7 +84,7 @@ def main() -> None:
     def tree(directory: Path, prefix: str) -> None:
         for path in directory.rglob("*"):
             relative = path.relative_to(directory)
-            if prefix == "engine" and relative.parts[0] in {"build", ".lito"}:
+            if prefix == "engine" and relative.parts[0] in {"build"}:
                 continue
             if path.is_file() and not any(part in skipped_names for part in relative.parts):
                 candidates[prefix + "/" + relative.as_posix()] = path
