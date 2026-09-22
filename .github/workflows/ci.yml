@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 诊断（消融用，稍后删）：运行器预装的 SDK
+        run: dotnet --list-sdks
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: 诊断（消融用，稍后删）：单独计时还原
+        run: |
+          dotnet restore src/Baker.App
+          dotnet restore src/Baker.Cli
+          dotnet restore tests/Baker.Core.Tests
+
+      - name: 构建 Baker.App
+        run: dotnet build src/Baker.App -c Release
+
+      - name: 构建 Baker.Cli
+        run: dotnet build src/Baker.Cli -c Release
+
+      - name: 测试 L0–L2
+        run: dotnet test tests/Baker.Core.Tests -c Release --filter "Layer!=L3" --logger "trx;LogFileName=ci.trx" --results-directory TestResults
+
+      - name: 核对 trx
+        run: |
+          $c = ([xml](Get-Content TestResults/ci.trx)).TestRun.ResultSummary.Counters
+          "trx：总数 $($c.total)，执行 $($c.executed)，通过 $($c.passed)，失败 $($c.failed)"
+          if ([int]$c.passed -lt 70) { throw "只通过了 $($c.passed) 个测试，L0–L2 应至少 70 个" }
