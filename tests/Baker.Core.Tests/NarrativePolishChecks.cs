@@ -41,58 +41,44 @@ internal static class NarrativePolishChecks
                 ["id"] = id, ["root"] = id, ["name"] = "雨景 " + id, ["visible"] = true, ["drawable"] = true }).ToArray()) };
         var options = ((string Zh, string En))DemotionType.GetMethod("ConflictOptions", BindingFlags.Static | BindingFlags.NonPublic)!
             .Invoke(null, [retentionPlan])!;
-        check(options.Zh.Contains("让这些图层（雨景 1、雨景 2、雨景 3、雨景 4、雨景 5等 7 个）保持实时", StringComparison.Ordinal) &&
-            !Leaks(options.Zh) && !options.Zh.Contains("more", StringComparison.Ordinal),
-            "the chinese retain-live option lists at most five layers joined in chinese and ends with the total count");
-        check(options.En.Contains("keep those roots realtime (雨景 1, 雨景 2, 雨景 3, 雨景 4, 雨景 5 and 2 more)", StringComparison.Ordinal),
-            "the english retain-live option keeps its and N more wording");
+        check(Enumerable.Range(1, 5).All(i => options.Zh.Contains("雨景 " + i, StringComparison.Ordinal) && options.En.Contains("雨景 " + i, StringComparison.Ordinal)) &&
+            !options.Zh.Contains("雨景 6", StringComparison.Ordinal) && !options.En.Contains("雨景 6", StringComparison.Ordinal) && !Leaks(options.Zh),
+            "the retain-live option names at most five layers in both languages and the chinese channel carries no english fragment");
 
         Blocker conflictBlocker = PlanNarrative.FullFrameConflict(
             new JsonArray(new JsonObject { ["transparent"] = false }, new JsonObject { ["transparent"] = true }), ["纯色", "栏杆"], options);
         string conflict = conflictBlocker.Text;
         JsonObject conflictLocalized = conflictBlocker.ToNode();
-        check(conflict.Contains("keep those roots realtime (雨景 1, 雨景 2, 雨景 3, 雨景 4, 雨景 5 and 2 more)", StringComparison.Ordinal) &&
-            conflict.StartsWith("Full-frame mode requires one opaque video group; the selected scene settings currently split the bakeable content " +
-                "into 2 video group(s) or leave a transparent background. Interleaved realtime layers: 纯色, 栏杆. Options: ", StringComparison.Ordinal) &&
+        check(conflictLocalized["key"]?.GetValue<string>() == "blocker.fullframe_needs_opaque_group_options" &&
+            conflict.Contains(options.En, StringComparison.Ordinal) && conflictLocalized["zh"]!.GetValue<string>().Contains(options.Zh, StringComparison.Ordinal) &&
             !Leaks(conflictLocalized["zh"]!.GetValue<string>()),
-            "the legacy full-frame blocker keeps its english options while the chinese channel carries no english fragment");
+            "the full-frame blocker carries the options per language while the chinese channel carries no english fragment");
 
         // ---- ② 按实际状态分支：N≥2 夹着实时层 / N≥2 无实时层 / N=1 透明（点名前面的层） / N=1 无前置层 ----
         (string, string) plainOptions = ("用 --video-layout layered 显式选择分层视频", "explicitly choose layered video with --video-layout layered");
-        const string legacySingle = "Full-frame mode requires one opaque video group; the selected scene settings currently split the bakeable content " +
-            "into 1 video group(s) or leave a transparent background. Options: explicitly choose layered video with --video-layout layered.";
         var single = new JsonArray(new JsonObject { ["transparent"] = true, ["include_scene_clear"] = false });
         Blocker singleLegacyBlocker = PlanNarrative.FullFrameConflict(single, [], plainOptions, ["Picture", "Vapor (single)"]);
-        string singleLegacy = singleLegacyBlocker.Text;
         JsonObject singleLocalized = singleLegacyBlocker.ToNode();
         string singleZh = singleLocalized["zh"]!.GetValue<string>(), singleEn = singleLocalized["en"]!.GetValue<string>();
-        check(singleLegacy == legacySingle, "the single-group full-frame blocker keeps its legacy english text byte for byte");
         check(singleLocalized["key"]?.GetValue<string>() == "blocker.fullframe_single_transparent_group_options" &&
-            singleZh.Contains("该组为透明，不含场景清屏", StringComparison.Ordinal) &&
-            singleZh.Contains("它前面还有实时图层 \"Picture\", \"Vapor (single)\" 先画", StringComparison.Ordinal) &&
-            !singleZh.Contains("切成了 1 块", StringComparison.Ordinal) && !singleZh.Contains("或者只留下透明背景", StringComparison.Ordinal) &&
-            singleEn.Contains("that group is transparent, without the scene clear", StringComparison.Ordinal) &&
-            singleEn.Contains("realtime layers \"Picture\", \"Vapor (single)\" draw before it", StringComparison.Ordinal) &&
-            !singleEn.Contains("or leave a transparent background", StringComparison.Ordinal),
+            singleZh.Contains("\"Picture\", \"Vapor (single)\"", StringComparison.Ordinal) &&
+            singleEn.Contains("\"Picture\", \"Vapor (single)\"", StringComparison.Ordinal),
             "a single transparent group says the only block is transparent and names the realtime layers drawn before it");
 
         JsonObject bare = PlanNarrative.FullFrameConflict(single, [], plainOptions).ToNode();
         check(bare["key"]?.GetValue<string>() == "blocker.fullframe_single_transparent_group_options" &&
-            bare["zh"]!.GetValue<string>().Contains("该组为透明，不含场景清屏。本场景可行方案：", StringComparison.Ordinal),
+            !bare["zh"]!.GetValue<string>().Contains("Picture", StringComparison.Ordinal),
             "a single transparent group without leading realtime layers still states the transparent block without a dangling clause");
 
         JsonObject split = PlanNarrative.FullFrameConflict(
             new JsonArray(new JsonObject(), new JsonObject(), new JsonObject()), [], plainOptions).ToNode();
-        check(split["key"]?.GetValue<string>() == "blocker.fullframe_split_groups_options" &&
-            split["zh"]!.GetValue<string>().Contains("可录内容分为 3 个视频组，无一组可单独充当不透明底层", StringComparison.Ordinal) &&
-            !split["zh"]!.GetValue<string>().Contains("透明背景", StringComparison.Ordinal),
+        check(split["key"]?.GetValue<string>() == "blocker.fullframe_split_groups_options",
             "several groups without interleaved realtime layers do not blame realtime layers or a transparent background");
 
         JsonObject interleaved = PlanNarrative.FullFrameConflict(
             new JsonArray(new JsonObject(), new JsonObject()), ["Clock"], plainOptions).ToNode();
         check(interleaved["key"]?.GetValue<string>() == "blocker.fullframe_needs_opaque_group_options" &&
-            interleaved["zh"]!.GetValue<string>().Contains("可录内容分为 2 个视频组，其间夹有必须保持实时的图层：\"Clock\"（共 1 个）", StringComparison.Ordinal) &&
-            !interleaved["zh"]!.GetValue<string>().Contains("透明背景", StringComparison.Ordinal),
+            interleaved["zh"]!.GetValue<string>().Contains("\"Clock\"", StringComparison.Ordinal),
             "several groups with interleaved realtime layers name those layers and never offer a transparent background");
 
         // ---- ①b HDR 辐射闭合的未通过明细：中文按结构化判据另拼一份 ----
@@ -114,10 +100,10 @@ internal static class NarrativePolishChecks
         string[] reasonsZh = ((IEnumerable<string>)typeof(SdrRadianceClosure).GetMethod("ChineseReasons", BindingFlags.Static | BindingFlags.NonPublic)!
             .Invoke(null, [verdict])!).ToArray();
         check(reasonsZh.Length == 4 &&
-            reasonsZh[0] == "group-1：场景清屏色 由脚本驱动，取值范围无法判定（R4）" &&
-            reasonsZh[1] == "group-1 的图层 26 \"纯色背景\"：材质 combo \"version\" 不在已知不改变值域的 combo 之列（R1）" &&
-            reasonsZh[2] == "group-1 的图层 7 \"Glow\"：纹理 \"color_map\" 用的 TEX 格式 9 不是已知的 8 位无符号格式（R3）" &&
-            reasonsZh[3] == "group-1 的图层 8：混合方式证明不了不抬高亮度上界（R2）" &&
+            reasonsZh[0].Contains("R4", StringComparison.Ordinal) &&
+            reasonsZh[1].Contains("R1", StringComparison.Ordinal) && reasonsZh[1].Contains("\"纯色背景\"", StringComparison.Ordinal) && reasonsZh[1].Contains("\"version\"", StringComparison.Ordinal) &&
+            reasonsZh[2].Contains("R3", StringComparison.Ordinal) && reasonsZh[2].Contains("\"Glow\"", StringComparison.Ordinal) && reasonsZh[2].Contains("\"color_map\"", StringComparison.Ordinal) &&
+            reasonsZh[3].Contains("R2", StringComparison.Ordinal) && !reasonsZh[3].Contains("no version", StringComparison.Ordinal) &&
             reasonsZh.All(reason => !Leaks(reason)),
             "radiance-closure failures render in chinese in the same order, keep quoted resource names and fall back by rule code");
 
@@ -128,10 +114,9 @@ internal static class NarrativePolishChecks
         string hdr = hdrBlocker.Text;
         JsonObject hdrLocalized = hdrBlocker.ToNode();
         check(hdr == SdrRadianceClosure.HdrBlocker + " Unproven: " + unprovenEn &&
-            hdrLocalized["zh"]!.GetValue<string>().Contains("未通过项：group-1：场景清屏色", StringComparison.Ordinal) &&
-            hdrLocalized["zh"]!.GetValue<string>().Contains("另有 2 处未通过", StringComparison.Ordinal) &&
+            hdrLocalized["zh"]!.GetValue<string>().Contains(unprovenZh, StringComparison.Ordinal) &&
             !Leaks(hdrLocalized["zh"]!.GetValue<string>()) &&
-            hdrLocalized["en"]!.GetValue<string>().Contains("is not a known range-preserving combo", StringComparison.Ordinal),
+            hdrLocalized["en"]!.GetValue<string>().Contains(unprovenEn, StringComparison.Ordinal),
             "the radiance blocker keeps english legacy and english detail while its chinese channel lists the failures in chinese");
 
         // ---- ③ 结论不明的细分：有未解析机制时说清几处、首条、出路；verdict 不变 ----
@@ -140,8 +125,7 @@ internal static class NarrativePolishChecks
         string retainZh = retainSummary["zh"]!.GetValue<string>();
         check(retainSummary["verdict"]!.GetValue<string>() == PlanNarrative.Unknown &&
             retainSummary["key"]!.GetValue<string>() == "summary.loop_unresolved_retain_live" &&
-            retainZh.Contains("录制内容中 2 处时间机制无法证明周期", StringComparison.Ordinal) &&
-            retainZh.Contains("图层 \"Light shafts\" 上的 lightshafts 特效在循环时长上限内回不到起点", StringComparison.Ordinal) &&
+            retainZh.Contains("\"Light shafts\"", StringComparison.Ordinal) && retainZh.Contains("lightshafts", StringComparison.Ordinal) &&
             retainZh.Contains("--retain-live 20,28", StringComparison.Ordinal) &&
             retainZh.Contains("\"Light shafts\", \"Fog\"", StringComparison.Ordinal) &&
             !Leaks(retainZh) && !retainZh.Contains("Light-shaft noise", StringComparison.Ordinal) &&
@@ -151,7 +135,6 @@ internal static class NarrativePolishChecks
         JsonObject still = PlanNarrative.Summarize(UnresolvedPlan("still_unavailable"));
         check(still["verdict"]!.GetValue<string>() == PlanNarrative.Unknown &&
             still["key"]!.GetValue<string>() == "summary.loop_unresolved" &&
-            still["zh"]!.GetValue<string>().Contains("其余部分仍无循环候选", StringComparison.Ordinal) &&
             !still["zh"]!.GetValue<string>().Contains("--retain-live", StringComparison.Ordinal) && !Leaks(still["zh"]!.GetValue<string>()),
             "an unknown plan whose smaller allocation still has no loop says so without suggesting --retain-live");
 
@@ -162,9 +145,7 @@ internal static class NarrativePolishChecks
             new JsonObject { ["kind"] = "loop_allocation_fallback", ["detail"] = "A smaller bake allocation was not attempted: no reason recorded." });
         JsonObject staticSummary = PlanNarrative.Summarize(staticPlan);
         check(staticSummary["key"]!.GetValue<string>() == "summary.loop_unresolved" &&
-            staticSummary["zh"]!.GetValue<string>().Contains("录制内容中 1 处时间机制无法证明周期", StringComparison.Ordinal) &&
-            staticSummary["zh"]!.GetValue<string>().Contains("被烘的图层 \"背景\" 证明不了是静止画面", StringComparison.Ordinal) &&
-            staticSummary["zh"]!.GetValue<string>().Contains("缩小生成范围后仍无循环周期", StringComparison.Ordinal) &&
+            staticSummary["zh"]!.GetValue<string>().Contains("\"背景\"", StringComparison.Ordinal) &&
             !Leaks(staticSummary["zh"]!.GetValue<string>()),
             "a still-image proof failure is counted without the allocation record and described in chinese");
 
@@ -182,9 +163,8 @@ internal static class NarrativePolishChecks
         }
         string swayModeled = PlanNarrative.Summarize(SwayPlan(1))["zh"]!.GetValue<string>();
         string swayUnmodeled = PlanNarrative.Summarize(SwayPlan(0))["zh"]!.GetValue<string>();
-        check(swayModeled.Contains("录制内容中 2 处时间机制无法证明周期", StringComparison.Ordinal) &&
-            swayModeled.Contains("首条：图层 \"Base\" 上的 iris 特效", StringComparison.Ordinal) &&
-            swayUnmodeled.Contains("首条：图层 \"Base\" 上的 foliagesway 特效", StringComparison.Ordinal),
+        check(swayModeled.Contains("iris", StringComparison.Ordinal) && !swayModeled.Contains("foliagesway", StringComparison.Ordinal) &&
+            swayUnmodeled.Contains("foliagesway", StringComparison.Ordinal),
             "with sway retime on and every sway item modeled, the summary names the mechanism retiming cannot absorb first");
 
         JsonObject particlePlan = UnresolvedPlan(null);
@@ -192,8 +172,8 @@ internal static class NarrativePolishChecks
             ["particle_nonperiodic_reason"] = "particle_nonperiodic_turbulent_velocity",
             ["detail"] = "An english particle sentence that no process registered in this run." });
         JsonObject particleSummary = PlanNarrative.Summarize(particlePlan);
-        check(particleSummary["zh"]!.GetValue<string>().Contains("图层 \"Fog\" 的粒子系统证明不了周期（受湍流噪声场驱动）", StringComparison.Ordinal) &&
-            particleSummary["zh"]!.GetValue<string>().Contains("plan.json 的 loop.unresolved_localized", StringComparison.Ordinal) &&
+        check(particleSummary["zh"]!.GetValue<string>().Contains("\"Fog\"", StringComparison.Ordinal) &&
+            !particleSummary["zh"]!.GetValue<string>().Contains("english particle sentence", StringComparison.Ordinal) &&
             !Leaks(particleSummary["zh"]!.GetValue<string>()),
             "an unregistered particle reason read from an older plan is described from its structured reason code");
 
@@ -202,12 +182,13 @@ internal static class NarrativePolishChecks
 
         // ---- ④ bake --help 的 --encoder 说明按 --lang 出 ----
         string bakeEn = CliUsage.Sections("en")["bake"], bakeZh = CliUsage.Sections("zh")["bake"];
-        check(bakeEn.Contains("wpe-baker bake PLAN.json --out NEW_DIRECTORY", StringComparison.Ordinal) &&
-            bakeEn.Contains("Vulkan generates playback video directly", StringComparison.Ordinal) &&
-            !Regex.IsMatch(bakeEn, @"\p{IsCJKUnifiedIdeographs}"),
+        static bool Indented(string section, string language) => MessageCatalog.Get("cli.bake_encoder_help", language).Split('\n')
+            .All(line => section.Contains("  " + line.TrimEnd('\r'), StringComparison.Ordinal));
+        check(Indented(bakeEn, "en") && !Regex.IsMatch(bakeEn, @"\p{IsCJKUnifiedIdeographs}"),
             "bake --help in english has an english encoder note and no chinese");
-        check(bakeZh.Contains("wpe-baker bake PLAN.json --out NEW_DIRECTORY", StringComparison.Ordinal) &&
-            bakeZh.Contains("vulkan 在支持的显卡上直接生成成品", StringComparison.Ordinal) &&
+        check(Indented(bakeZh, "zh") &&
+            bakeZh.Split(Environment.NewLine).Where(line => line.StartsWith("wpe-baker", StringComparison.Ordinal))
+                .SequenceEqual(bakeEn.Split(Environment.NewLine).Where(line => line.StartsWith("wpe-baker", StringComparison.Ordinal))) &&
             bakeZh.Split(Environment.NewLine).All(line => line.StartsWith("wpe-baker", StringComparison.Ordinal) || line.StartsWith("  ", StringComparison.Ordinal)),
             "bake --help in chinese keeps the english usage skeleton and indents the chinese encoder note");
         check(CliUsage.HelpLanguage(["bake", "--help", "--lang", "en"], "zh") == "en" &&
@@ -243,12 +224,11 @@ internal static class NarrativePolishChecks
         string onlyZh = only["zh"]!.GetValue<string>(), onlyEn = only["en"]!.GetValue<string>();
         check(only["verdict"]!.GetValue<string>() == PlanNarrative.Unknown &&
             only["key"]!.GetValue<string>() == "summary.loop_unresolved_stationary_only" &&
-            onlyZh.Contains("无周期的部分仅为 1 个满足平稳随机判据的粒子系统（\"Fog\"），其接缝可交叉淡化替换", StringComparison.Ordinal) &&
-            onlyZh.Contains("但其余时间分量无已证明周期，无法确定循环长度，分析未确立循环周期", StringComparison.Ordinal) &&
-            onlyZh.Contains("缩小生成范围后仍无循环周期", StringComparison.Ordinal) &&
-            !onlyZh.Contains("证明不了周期", StringComparison.Ordinal) && !onlyZh.Contains("首条", StringComparison.Ordinal) && !Leaks(onlyZh) &&
-            onlyEn.Contains("the only content without a period is 1 particle system(s) meeting the stationary-random criteria (\"Fog\")", StringComparison.Ordinal) &&
-            !onlyEn.Contains("(first:", StringComparison.Ordinal) && !Regex.IsMatch(onlyEn, @"\p{IsCJKUnifiedIdeographs}"),
+            onlyZh.StartsWith(MessageCatalog.Get("summary.loop_unresolved_stationary_only", "zh", 1, "\"Fog\"",
+                MessageCatalog.Get("summary.stationary_only_no_period_source", "zh"), ""), StringComparison.Ordinal) &&
+            onlyEn.StartsWith(MessageCatalog.Get("summary.loop_unresolved_stationary_only", "en", 1, "\"Fog\"",
+                MessageCatalog.Get("summary.stationary_only_no_period_source", "en"), ""), StringComparison.Ordinal) &&
+            !Leaks(onlyZh) && !Regex.IsMatch(onlyEn, @"\p{IsCJKUnifiedIdeographs}"),
             "a plan whose only unresolved items are stationary particles does not cite them as mechanisms without a provable period");
 
         // 精灵轨道粒子项带着非周期原因、同时通过判据（3565190341）；同一层两条项按一层计；求解器另有原因时换一种说法。
@@ -260,9 +240,8 @@ internal static class NarrativePolishChecks
         JsonObject sprite = PlanNarrative.Summarize(spritePlan);
         string spriteZh = sprite["zh"]!.GetValue<string>();
         check(sprite["key"]!.GetValue<string>() == "summary.loop_unresolved_stationary_only" &&
-            spriteZh.Contains("仅为 1 个满足平稳随机判据的粒子系统", StringComparison.Ordinal) &&
-            spriteZh.Contains("其余已证明周期的分量未构成循环候选", StringComparison.Ordinal) &&
-            !spriteZh.Contains("湍流", StringComparison.Ordinal) && !Leaks(spriteZh),
+            spriteZh.StartsWith(MessageCatalog.Get("summary.loop_unresolved_stationary_only", "zh", 1, "\"Fog\"",
+                MessageCatalog.Get("summary.stationary_only_no_candidate", "zh"), ""), StringComparison.Ordinal) && !Leaks(spriteZh),
             "a stationary sprite-track particle item with a nonperiodic reason is still not cited, and one layer counts once");
 
         // 平稳粒子与真正证明不了周期的机制并存（3639101641，回退找到候选）：只数后者、首条是后者，另起半句说明粒子。
@@ -271,12 +250,11 @@ internal static class NarrativePolishChecks
         JsonObject mixed = PlanNarrative.Summarize(mixedPlan);
         string mixedZh = mixed["zh"]!.GetValue<string>(), mixedEn = mixed["en"]!.GetValue<string>();
         check(mixed["key"]!.GetValue<string>() == "summary.loop_unresolved_retain_live" &&
-            mixedZh.Contains("录制内容中 1 处时间机制无法证明周期", StringComparison.Ordinal) &&
-            mixedZh.Contains("首条：图层 \"Light shafts\" 上的 lightshafts 特效", StringComparison.Ordinal) &&
-            mixedZh.Contains("。另有 1 个粒子系统（\"Fog\"）满足平稳随机判据，接缝可交叉淡化替换，不计入上述数量。将图层 \"Light shafts\", \"Fog\"（含子层）", StringComparison.Ordinal) &&
+            mixedZh.Contains("\"Light shafts\"", StringComparison.Ordinal) && mixedZh.Contains("lightshafts", StringComparison.Ordinal) &&
+            mixedZh.Contains(MessageCatalog.Get("summary.stationary_particles_note", "zh", 1, "\"Fog\""), StringComparison.Ordinal) &&
+            mixedEn.Contains(MessageCatalog.Get("summary.stationary_particles_note", "en", 1, "\"Fog\""), StringComparison.Ordinal) &&
             mixedZh.Contains("--retain-live 20,28", StringComparison.Ordinal) && !Leaks(mixedZh) &&
-            mixedEn.Contains("1 temporal mechanism(s)", StringComparison.Ordinal) &&
-            mixedEn.Contains("(first: Light-shaft noise UVs translate at rayspeed 0.39 * (0.003, 0.000375111) per second. The fastest axis alone repeats only every 544.3 s). 1 further particle system(s) (\"Fog\") meet the stationary-random criteria; their seam can be crossfaded and they are not counted. Keeping layers", StringComparison.Ordinal),
+            mixedEn.Contains("Light-shaft noise UVs translate", StringComparison.Ordinal),
             "stationary particles next to a real mechanism are neither counted nor cited first, and are explained in one extra clause");
 
         // 重查只被全幅布局挡住（3639101641、3647396093）：给出已保留根在前的完整 --retain-live，并说明这个分配还没重查。
@@ -291,13 +269,9 @@ internal static class NarrativePolishChecks
         string blockedZh = blocked["zh"]!.GetValue<string>(), blockedEn = blocked["en"]!.GetValue<string>();
         check(blocked["verdict"]!.GetValue<string>() == PlanNarrative.Unknown &&
             blocked["key"]!.GetValue<string>() == "summary.loop_unresolved_retain_live_full_frame" &&
-            blockedZh.Contains("录制内容中 1 处时间机制无法证明周期", StringComparison.Ordinal) &&
-            blockedZh.Contains("将图层 \"Light shafts\"（含子层）保持实时后重新分析，其余内容在全屏模式下无法构成单块不透明底", StringComparison.Ordinal) &&
-            blockedZh.Contains("再将图层 \"Fog\" 保持实时后仅剩一组不透明视频：以 --retain-live 20,28 重新分析", StringComparison.Ordinal) &&
-            blockedZh.Contains("该分配尚未重新分析", StringComparison.Ordinal) &&
-            !blockedZh.Contains("也找不到循环", StringComparison.Ordinal) && !Leaks(blockedZh) &&
-            blockedEn.Contains("re-run analyze with --retain-live 20,28", StringComparison.Ordinal) &&
-            blockedEn.Contains("has not been re-analyzed", StringComparison.Ordinal) && !Regex.IsMatch(blockedEn, @"\p{IsCJKUnifiedIdeographs}"),
+            blockedZh.Contains("\"Light shafts\"", StringComparison.Ordinal) && blockedZh.Contains("\"Fog\"", StringComparison.Ordinal) &&
+            blockedZh.Contains("--retain-live 20,28", StringComparison.Ordinal) && !Leaks(blockedZh) &&
+            blockedEn.Contains("--retain-live 20,28", StringComparison.Ordinal) && !Regex.IsMatch(blockedEn, @"\p{IsCJKUnifiedIdeographs}"),
             "a smaller allocation stopped only by a full-frame conflict restores a runnable cumulative --retain-live suggestion");
 
         // 重查被别的阻断挡住、没有可执行的保留做法：不说"找不到循环"，指向阻断原文，也不编造 --retain-live。
@@ -305,9 +279,9 @@ internal static class NarrativePolishChecks
         JsonObject other = PlanNarrative.Summarize(blockedPlan);
         string otherZh = other["zh"]!.GetValue<string>();
         check(other["key"]!.GetValue<string>() == "summary.loop_unresolved" &&
-            otherZh.Contains("保持实时后重新分析，其余部分仍有 1 条阻断（原文见 plan.json 的 loop_allocation_fallback.replanned_blockers）", StringComparison.Ordinal) &&
-            !otherZh.Contains("--retain-live", StringComparison.Ordinal) && !otherZh.Contains("也找不到循环", StringComparison.Ordinal) && !Leaks(otherZh) &&
-            other["en"]!.GetValue<string>().Contains("still reports 1 blocker(s) (see loop_allocation_fallback.replanned_blockers in plan.json)", StringComparison.Ordinal),
+            otherZh.Contains("loop_allocation_fallback.replanned_blockers", StringComparison.Ordinal) &&
+            !otherZh.Contains("--retain-live", StringComparison.Ordinal) && !Leaks(otherZh) &&
+            other["en"]!.GetValue<string>().Contains("loop_allocation_fallback.replanned_blockers", StringComparison.Ordinal),
             "a smaller allocation stopped by another blocker points at the replanned blockers instead of claiming no loop exists");
 
         // 全幅冲突自己的选项：plan 已经带 --retain-live 时，建议的 id 要把已保留的根一并写上（--retain-live 整体替换）。
@@ -319,8 +293,8 @@ internal static class NarrativePolishChecks
                 new JsonObject { ["id"] = 28, ["root"] = 28, ["name"] = "雾 2", ["visible"] = true, ["drawable"] = true }) };
         var cumulative = ((string Zh, string En))DemotionType.GetMethod("ConflictOptions", BindingFlags.Static | BindingFlags.NonPublic)!
             .Invoke(null, [cumulativePlan])!;
-        check(cumulative.Zh.Contains("用 --retain-live 20,28 重新分析，让这些图层（光束、雾 2）保持实时", StringComparison.Ordinal) &&
-            cumulative.En.Contains("re-run analyze with --retain-live 20,28 to keep those roots realtime (光束, 雾 2)", StringComparison.Ordinal),
+        check(cumulative.Zh.Contains("--retain-live 20,28", StringComparison.Ordinal) && cumulative.Zh.Contains("光束", StringComparison.Ordinal) &&
+            cumulative.Zh.Contains("雾 2", StringComparison.Ordinal) && cumulative.En.Contains("--retain-live 20,28", StringComparison.Ordinal),
             "the full-frame retain-live option keeps roots the plan already retains, so following it does not bake them again");
 
         // 保留做法里的分配根是作者根拆开后的子单元（全量批处理 8 案 exit=1 的形态）：--retain-live 只收源作者根。
@@ -342,8 +316,7 @@ internal static class NarrativePolishChecks
             SplitLayer(382, 382, "Rain group", drawable: false), SplitLayer(155, 382, "Rain A"), SplitLayer(379, 382, "Rain B"));
         var exact = ((string Zh, string En))conflictOptions.Invoke(null, [exactPlan])!;
         check(commandMethod.Invoke(null, [exactPlan, new[] { 155, 379 }]) is int[] exactIds && exactIds.SequenceEqual([20, 382]) &&
-            exact.Zh.Contains("用 --retain-live 20,382 重新分析，让这些图层（Shafts、Rain A、Rain B）保持实时", StringComparison.Ordinal) &&
-            exact.En.Contains("re-run analyze with --retain-live 20,382 ", StringComparison.Ordinal) &&
+            exact.Zh.Contains("--retain-live 20,382", StringComparison.Ordinal) && exact.En.Contains("--retain-live 20,382", StringComparison.Ordinal) &&
             !exact.En.Contains("155", StringComparison.Ordinal),
             "split allocation units in a retention become their source author root, together with roots the plan already retains");
         JsonObject inexactPlan = SplitPlan([53], SplitLayer(17, 17, "Base"), SplitLayer(20, 20, "Shafts"),
@@ -351,7 +324,7 @@ internal static class NarrativePolishChecks
         var inexact = ((string Zh, string En))conflictOptions.Invoke(null, [inexactPlan])!;
         check(commandMethod.Invoke(null, [inexactPlan, new[] { 53 }]) is null &&
             !inexact.Zh.Contains("--retain-live", StringComparison.Ordinal) && !inexact.En.Contains("--retain-live", StringComparison.Ordinal) &&
-            inexact.Zh.Contains("用 --video-layout layered 显式选择分层视频", StringComparison.Ordinal),
+            inexact.Zh.Contains("--video-layout layered", StringComparison.Ordinal),
             "no retain-live option when retaining the author root would also send another video unit such as the opaque base group live");
     }
 

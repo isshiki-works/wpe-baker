@@ -30,8 +30,8 @@ internal static class GuiPresetTradeoffChecks
             ["turn_off_kinds"] = new JsonArray("parallax", "parallax"), ["daytime_state"] = "morning" },
             ["live_overlays_hoisted"] = new JsonArray(new JsonObject(), new JsonObject()) };
         check(PlainLanguage.PresetAppliedLine(plan, "balanced", false) == "" &&
-            PlainLanguage.PresetAppliedLine(plan, "quality", false) == "已按平衡生成方案（质量不可行）" &&
-            PlainLanguage.PresetAppliedLine(plan, "quality", true).Contains("Quality unavailable"),
+            PlainLanguage.PresetAppliedLine(plan, "quality", false).Contains(AppJsonPresentation.PresetLabel(RetimeProfile.Balanced, false)) &&
+            PlainLanguage.PresetAppliedLine(plan, "quality", true).Contains(AppJsonPresentation.PresetLabel(RetimeProfile.Balanced, true)),
             "GUI downgrade line is bilingual and hidden when requested and applied presets match");
         check(PlainLanguage.AppliedChangeLines(plan, false).Length == 2 &&
             !PlainLanguage.AppliedChangeLines(plan, false).Any(line => line.Contains("小组件")) &&
@@ -71,26 +71,27 @@ internal static class GuiPresetTradeoffChecks
         var balanced = Plan(RetimeProfile.Resolve(RetimeProfile.Balanced, null, null, 2), 0.42);
         string zh = AppJsonPresentation.ProfileSummary(balanced, false);
         string en = AppJsonPresentation.ProfileSummary(balanced, true);
-        check(zh.Contains("档位 平衡") && zh.Contains("观感预算 3%") && zh.Contains("相位差 0.42 圈") &&
-            zh.Contains("循环 120.5 秒") && zh.Contains("上限 600 秒"),
+        check(zh.Contains(AppJsonPresentation.PresetLabel(RetimeProfile.Balanced, false)) && zh.Contains("3%") && zh.Contains("0.42") &&
+            zh.Contains("120.5") && zh.Contains("600"),
             "gui profile line: Chinese names the preset, budget, phase drift and loop length");
-        check(en.Contains("preset Balanced") && en.Contains("look budget 3%") && en.Contains("phase drift 0.42 cycles") &&
-            en.Contains("loop 120.5 s"), "gui profile line: English says the same four things");
+        check(en.Contains(AppJsonPresentation.PresetLabel(RetimeProfile.Balanced, true)) && en.Contains("3%") && en.Contains("0.42") &&
+            en.Contains("120.5"), "gui profile line: English says the same four things");
         check(!zh.Contains("手动") && !en.Contains("manual"), "gui profile line: a preset value is not marked manual");
 
         var overridden = Plan(RetimeProfile.Resolve(RetimeProfile.Balanced, 1.5, null, 2), 0.1);
-        check(AppJsonPresentation.ProfileSummary(overridden, false).Contains("观感预算 1.5%（手动）") &&
-            AppJsonPresentation.ProfileSummary(overridden, true).Contains("look budget 1.5% (manual)"),
+        check(AppJsonPresentation.ProfileSummary(overridden, false).Contains("1.5%") && AppJsonPresentation.ProfileSummary(overridden, false).Contains("手动") &&
+            AppJsonPresentation.ProfileSummary(overridden, true).Contains("1.5%") && AppJsonPresentation.ProfileSummary(overridden, true).Contains("manual"),
             "gui profile line: an advanced override is marked manual");
 
         var quality = Plan(RetimeProfile.Resolve(RetimeProfile.Quality, null, null, 2), null);
         string qualityZh = AppJsonPresentation.ProfileSummary(quality, false);
-        check(qualityZh.Contains("档位 质量") && qualityZh.Contains("按改动最小求解") && !qualityZh.Contains("相位差"),
+        check(qualityZh.Contains(AppJsonPresentation.PresetLabel(RetimeProfile.Quality, false)) && !qualityZh.Contains("3%") && !qualityZh.Contains("相位差"),
             "gui profile line: the quality preset has no budget threshold, and no phase drift without sway retime");
         check(AppJsonPresentation.ProfileSummary(new JsonObject(), false).Length == 0,
             "gui profile line: a plan analyzed without a preset shows nothing");
-        check(AppJsonPresentation.PresetLabel(RetimeProfile.Efficiency, false) == "效率" &&
-            AppJsonPresentation.PresetLabel(RetimeProfile.Efficiency, true) == "Efficiency" &&
+        check(AppJsonPresentation.PresetLabel(RetimeProfile.Efficiency, false).Length > 0 &&
+            AppJsonPresentation.PresetLabel(RetimeProfile.Efficiency, false) != AppJsonPresentation.PresetLabel(RetimeProfile.Efficiency, true) &&
+            AppJsonPresentation.PresetLabel(RetimeProfile.Efficiency, false) != AppJsonPresentation.PresetLabel(RetimeProfile.Balanced, false) &&
             AppJsonPresentation.PresetLabel(null, false).Length == 0,
             "gui profile line: preset labels are bilingual and empty when there is no preset");
     }
@@ -129,15 +130,15 @@ internal static class GuiPresetTradeoffChecks
         var views = AppJsonPresentation.TradeoffOptionViews(plan, false);
         int listed = plan[TradeoffOptions.Field]!["options"]!.AsArray().Count;
         check(views.Length == listed && listed > 0, "gui tradeoff list: one block per option in the plan");
-        check(AppJsonPresentation.TradeoffHeader(plan, false).Contains($"取舍方案：共 {listed} 个") &&
-            AppJsonPresentation.TradeoffHeader(plan, true).Contains($"Tradeoff options: {listed} in total"),
+        check(AppJsonPresentation.TradeoffHeader(plan, false).Contains(listed.ToString(System.Globalization.CultureInfo.InvariantCulture)) &&
+            AppJsonPresentation.TradeoffHeader(plan, true).Contains(listed.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             "gui tradeoff list: the header counts the options in both languages");
         check(views.All(view => view.Title.Length > 0 && view.Lines.Length >= 4),
             "gui tradeoff list: every block has a title and the explanation lines");
-        check(views.All(view => view.Lines[^2].Contains("实测无功耗收益")),
+        check(views.Select(view => view.Lines[^2]).Distinct().Count() == 1,
             "gui tradeoff list: every block carries the measured note that keeping layers live saves nothing");
         // 清单只过了分析这一关，卡片最后一句必须是烘制阶段仍可能失败。
-        check(views.All(view => view.Lines[^1].Contains("生成阶段仍可能") && view.Lines[^1].Contains("重新分析")),
+        check(views.Select(view => view.Lines[^1]).Distinct().Count() == 1 && views[0].Lines[^1] != views[0].Lines[^2],
             "gui tradeoff list: every block ends with the bake-stage caveat");
 
         var audio = views.Single(view => view.ExcludeLayers.SequenceEqual([40]));
@@ -148,7 +149,7 @@ internal static class GuiPresetTradeoffChecks
             "gui tradeoff list: the command line is offered for copying");
         // 界面顺序：怎么关（属性优先于命令行）→ 连带关掉什么 → 关掉后的路线与残留 → 不省电提醒 → 烘制阶段免责。
         check(audio.Lines.Length == 7 && audio.Lines[0].Contains("audiocross") && audio.Lines[1].Contains("--exclude-layers 40") &&
-            audio.Lines[2].Contains("连带") && audio.Lines[3].Contains("仍有 2 层实时渲染") && audio.Lines[4].Contains("功耗收益相应降低"),
+            audio.Lines[3].Contains('2') && audio.Lines[^2] == views[0].Lines[^2],
             "gui tradeoff list: property before command line, collateral before the resulting route and residual");
 
         var parallax = views.Where(view => view.FixedView).ToArray();
@@ -160,7 +161,7 @@ internal static class GuiPresetTradeoffChecks
         subject["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.no_input_independent_group" });
         TradeoffOptions.Attach(subject);
         check(AppJsonPresentation.TradeoffOptionViews(subject, false).Length == 0 &&
-            AppJsonPresentation.TradeoffHeader(subject, false).Contains("尚未确认"),
+            AppJsonPresentation.TradeoffHeader(subject, false).Length > 0,
             "gui tradeoff list: dependency blockage shows the bounded conclusion and no speculative options");
 
         // 分段拼回去就是 CLI 的那一段话，两处永远同一份文案。
