@@ -62,14 +62,14 @@ internal static class MessagesChecks
 
         // ---- 反查：Localize 找回 key ----
         var groups = new JsonArray(new JsonObject { ["transparent"] = true });
-        string legacyFullFrame = PlanNarrative.FullFrameConflict(groups, ["Clock", "Spectrum"]);
-        JsonObject localizedFullFrame = Messages.Localize(legacyFullFrame);
+        Blocker legacyFullFrameBlocker = PlanNarrative.FullFrameConflict(groups, ["Clock", "Spectrum"]);
+        string legacyFullFrame = legacyFullFrameBlocker.Text;
+        JsonObject localizedFullFrame = legacyFullFrameBlocker.ToNode();
         Check(localizedFullFrame["key"]?.GetValue<string>() == "blocker.fullframe_single_transparent_group_live",
             "a single transparent group with interleaved layers maps to its own key");
         Check(localizedFullFrame["params"] is JsonArray parameters && parameters.Count == 3,
             "params exposes only the arguments the bilingual text uses, not the legacy-only segment");
-        Check(PlanNarrative.FullFrameConflict(new JsonArray(), []) is string empty &&
-            Messages.Localize(empty)["key"]?.GetValue<string>() == "blocker.fullframe_no_video_group",
+        Check(PlanNarrative.FullFrameConflict(new JsonArray(), []).Code == BlockerCode.FullframeNoVideoGroup,
             "zero groups maps to its own key");
 
         JsonObject unknown = Messages.Localize("Something no version of this table has ever produced.");
@@ -90,13 +90,13 @@ internal static class MessagesChecks
         Check(!Messages.NameList(["one\ntwo"]).Contains('\n'), "a layer list never contains a newline");
 
         // ---- summary.verdict 映射 ----
-        Check(Verdict(Plan(blockers: [Messages.Emit("blocker.hdr_unsupported")], candidates: 0)) == "blocked",
+        Check(Verdict(Plan(blockers: [Hdr], candidates: 0)) == "blocked",
             "blockers present yields verdict blocked");
-        Check(Verdict(Plan(blockers: ["one", "two"], candidates: 2)) == "blocked", "blockers win over candidates");
+        Check(Verdict(Plan(blockers: [Perspective, new Blocker(BlockerCode.CameraPathNeedsEnvelope)], candidates: 2)) == "blocked", "blockers win over candidates");
         Check(Verdict(Plan(blockers: [], candidates: 1)) == "bakeable", "a candidate without blockers yields verdict bakeable");
         Check(Verdict(Plan(blockers: [], candidates: 0)) == "unknown", "no candidate and no blocker yields verdict unknown");
 
-        JsonObject blocked = PlanNarrative.Summarize(Plan(blockers: [Messages.Emit("blocker.perspective_needs_screenspace"), "second"], candidates: 0));
+        JsonObject blocked = PlanNarrative.Summarize(Plan(blockers: [Perspective, new Blocker(BlockerCode.CameraPathNeedsEnvelope)], candidates: 0));
         Check(blocked["key"]?.GetValue<string>() == "summary.blocked" &&
             blocked["zh"]!.GetValue<string>().Contains(Messages.Get("blocker.perspective_needs_screenspace", "zh"), StringComparison.Ordinal) &&
             blocked["zh"]!.GetValue<string>().Contains('2'),
@@ -126,13 +126,13 @@ internal static class MessagesChecks
             "an unknown verdict with nothing to report says so instead of throwing");
 
         // ---- Attach 只添加字段，不动现有英文 ----
-        JsonObject attached = Plan(blockers: [Messages.Emit("blocker.hdr_unsupported")], candidates: 0);
-        string before = attached["blockers"]!.ToJsonString();
+        JsonObject attached = Plan(blockers: [Hdr], candidates: 0);
         PlanNarrative.Attach(attached);
-        Check(attached["blockers"]!.ToJsonString() == before, "attaching bilingual fields leaves the english blockers array untouched");
+        Check(attached["blockers"] is JsonArray { Count: 1 } blockerTexts && blockerTexts[0]!.GetValue<string>() == Hdr.Text,
+            "attaching writes the v3 english blockers array from the blocker codes");
         Check(attached["blockers_localized"] is JsonArray { Count: 1 } &&
-            attached["blockers_localized"]![0]!["zh"]!.GetValue<string>() == Messages.Get("blocker.hdr_unsupported", "zh"),
-            "blockers_localized is a parallel array with chinese text");
+            attached["blockers_localized"]![0]!["key"]!.GetValue<string>() == "blocker.hdr_radiance_open",
+            "blockers_localized is a parallel array keyed by the blocker code");
         Check(attached["summary"]?["verdict"]?.GetValue<string>() == "blocked" &&
             attached["summary"]?["zh"] is not null && attached["summary"]?["en"] is not null,
             "summary carries a verdict plus both languages");
@@ -151,7 +151,7 @@ internal static class MessagesChecks
         PlanNarrative.Attach(wholePlan);
         Check(!wholePlan["summary"]!["zh"]!.GetValue<string>().Contains(caveat, StringComparison.Ordinal),
             "the whole-layer route does not carry the effect-prefix caveat");
-        JsonObject prefixBlocked = Plan(blockers: [Messages.Emit("blocker.hdr_unsupported")], candidates: 0);
+        JsonObject prefixBlocked = Plan(blockers: [Hdr], candidates: 0);
         prefixBlocked["route"] = "effect_prefix";
         PlanNarrative.Attach(prefixBlocked);
         Check(!prefixBlocked["summary"]!["zh"]!.GetValue<string>().Contains(caveat, StringComparison.Ordinal),
@@ -170,10 +170,11 @@ internal static class MessagesChecks
             unreachableLocalized["zh"]!.GetValue<string>().Contains("\"Clock\" (wall_clock_api)", StringComparison.Ordinal),
             "the unreachable full-frame blocker resolves to its key and carries its arguments");
 
-        string withOptions = PlanNarrative.FullFrameConflict(
+        Blocker withOptionsBlocker = PlanNarrative.FullFrameConflict(
             new JsonArray(new JsonObject { ["transparent"] = false }, new JsonObject()), ["Clock"],
             ("用 --video-layout layered 显式选择分层视频", "explicitly choose layered video with --video-layout layered"));
-        JsonObject optionsLocalized = Messages.Localize(withOptions);
+        string withOptions = withOptionsBlocker.Text;
+        JsonObject optionsLocalized = withOptionsBlocker.ToNode();
         Check(optionsLocalized["key"]?.GetValue<string>() == "blocker.fullframe_needs_opaque_group_options" &&
             optionsLocalized["zh"]!.GetValue<string>().Contains("用 --video-layout layered 显式选择分层视频", StringComparison.Ordinal) &&
             !optionsLocalized["zh"]!.GetValue<string>().Contains("explicitly choose", StringComparison.Ordinal) &&
@@ -201,17 +202,19 @@ internal static class MessagesChecks
         // HDR 拒绝：legacy 行以 SdrRadianceClosure.HdrBlocker 开头（能力缺口分诊按前缀识别），未通过明细原样带进中文。
         const string unproven = "group-0 layer 7 \"Glow\": additive blending is not an alpha convex combination (R2).";
         var hdrScene = new JsonObject { ["general"] = new JsonObject { ["hdr"] = true } };
-        string plain = PlanNarrative.HdrRadianceOpen(hdrScene, new JsonObject(), unproven);
-        JsonObject plainLocalized = Messages.Localize(plain);
+        Blocker plainBlocker = PlanNarrative.HdrRadianceOpen(hdrScene, new JsonObject(), unproven);
+        string plain = plainBlocker.Text;
+        JsonObject plainLocalized = plainBlocker.ToNode();
         Check(plain.StartsWith(SdrRadianceClosure.HdrBlocker, StringComparison.Ordinal) &&
             plainLocalized["key"]?.GetValue<string>() == "blocker.hdr_radiance_open" &&
             plainLocalized["zh"]!.GetValue<string>().Contains(unproven, StringComparison.Ordinal),
             "the radiance-closure blocker keeps the hdr prefix and carries the unproven detail into chinese");
 
-        string named = PlanNarrative.HdrRadianceOpen(
+        Blocker namedBlocker = PlanNarrative.HdrRadianceOpen(
             new JsonObject { ["general"] = new JsonObject { ["hdr"] = new JsonObject { ["user"] = "hdrmode" } } },
             new JsonObject(), unproven);
-        JsonObject namedLocalized = Messages.Localize(named);
+        string named = namedBlocker.Text;
+        JsonObject namedLocalized = namedBlocker.ToNode();
         Check(named == plain &&
             namedLocalized["key"]?.GetValue<string>() == "blocker.hdr_radiance_open_property" &&
             namedLocalized["zh"]!.GetValue<string>().Contains("\"hdrmode\"", StringComparison.Ordinal) &&
@@ -221,21 +224,21 @@ internal static class MessagesChecks
             namedLocalized["en"]!.GetValue<string>().Contains("{\"hdrmode\": false}", StringComparison.Ordinal),
             "a bound hdr switch names its off value as a ready-to-use --properties entry");
 
-        JsonObject conditioned = Messages.Localize(PlanNarrative.HdrRadianceOpen(
+        JsonObject conditioned = PlanNarrative.HdrRadianceOpen(
             new JsonObject { ["general"] = new JsonObject { ["hdr"] = new JsonObject {
                 ["user"] = new JsonObject { ["name"] = "mode", ["condition"] = "2" }, ["value"] = true } } },
             new JsonObject { ["general"] = new JsonObject { ["properties"] = new JsonObject {
-                ["mode"] = new JsonObject { ["text"] = "Quality" } } } }, unproven));
+                ["mode"] = new JsonObject { ["text"] = "Quality" } } } }, unproven).ToNode();
         Check(conditioned["key"]?.GetValue<string>() == "blocker.hdr_radiance_open_property" &&
             conditioned["zh"]!.GetValue<string>().Contains("\"Quality / mode\"", StringComparison.Ordinal) &&
             conditioned["en"]!.GetValue<string>().Contains("\"2\"", StringComparison.Ordinal),
             "a condition-bound hdr switch reports the interface label and its condition value");
 
         // 场景的 hdr 是字面量 true 时，名字带 hdr 的属性不是 HDR 开关，不得点名。
-        JsonObject literalHdr = Messages.Localize(PlanNarrative.HdrRadianceOpen(hdrScene, new JsonObject { ["general"] = new JsonObject {
+        JsonObject literalHdr = PlanNarrative.HdrRadianceOpen(hdrScene, new JsonObject { ["general"] = new JsonObject {
             ["properties"] = new JsonObject {
                 ["enablehdr"] = new JsonObject { ["text"] = "HDR 模式" },
-                ["bloomrequiredforhdr"] = new JsonObject { ["text"] = "Bloom (required for HDR)" } } } }, unproven));
+                ["bloomrequiredforhdr"] = new JsonObject { ["text"] = "Bloom (required for HDR)" } } } }, unproven).ToNode();
         Check(literalHdr["key"]?.GetValue<string>() == "blocker.hdr_radiance_open" &&
             !literalHdr["zh"]!.GetValue<string>().Contains("enablehdr", StringComparison.Ordinal) &&
             !literalHdr["zh"]!.GetValue<string>().Contains("bloomrequiredforhdr", StringComparison.Ordinal),
@@ -260,7 +263,10 @@ internal static class MessagesChecks
     private static string Verdict(JsonObject plan) => PlanNarrative.Summarize(plan)["verdict"]!.GetValue<string>();
 
     /// <summary>最小 plan 骨架：只放 summary 会读到的字段。</summary>
-    private static JsonObject Plan(string[] blockers, int candidates)
+    private static readonly Blocker Hdr = new(BlockerCode.HdrRadianceOpen, ["group-1 layer 1 (R1)."], ["group-1 layer 1 (R1)."]);
+    private static readonly Blocker Perspective = new(BlockerCode.PerspectiveNeedsScreenspace);
+
+    private static JsonObject Plan(Blocker[] blockers, int candidates)
     {
         var candidateArray = new JsonArray();
         for (int index = 0; index < candidates; ++index)
@@ -269,7 +275,7 @@ internal static class MessagesChecks
             ["settings"] = new JsonObject { ["fps_numerator"] = 120, ["fps_denominator"] = 1 },
             ["layers"] = new JsonArray(new JsonObject { ["id"] = 26, ["name"] = "Clock" }, new JsonObject { ["id"] = 27, ["name"] = "Spectrum" }),
             ["live_layer_ids"] = new JsonArray(26, 27),
-            ["blockers"] = new JsonArray(blockers.Select(text => (JsonNode)JsonValue.Create(text)).ToArray()),
+            ["blockers"] = new JsonArray(blockers.Select(blocker => (JsonNode)blocker.ToNode()).ToArray()),
             ["loop"] = new JsonObject { ["candidates"] = candidateArray, ["unresolved"] = new JsonArray() } };
     }
 }

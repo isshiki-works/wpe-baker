@@ -13,8 +13,9 @@ namespace Baker.Core;
 /// <c>blockers_localized</c> / <c>unresolved_localized</c> / <c>summary</c> 里。
 /// </para>
 /// <para>
-/// <see cref="Emit"/> 在生成 legacy 文本的同时登记 key 与参数，之后 <see cref="Localize"/> 用这份登记
-/// 反查双语文案；查不到（例如别的分支新增了 blocker，或 plan 由旧版本生成）就原样回退英文，不抛异常。
+/// 拒绝原因（blocker）不再走反查：它们是 <see cref="Blocker"/>（编号 + 参数），写 plan 时由 <see cref="PlanBlockers.Finish"/>
+/// 按编号渲染 legacy 与双语。<see cref="Emit"/> / <see cref="Localize"/> 的登记反查只剩 unresolved 明细、bake 理由与异常文本在用，
+/// C1.1 后续部分改完即删。
 /// </para>
 /// </summary>
 public static class Messages
@@ -137,7 +138,7 @@ public static class Messages
         // 以下三条原先是 AssembleAllocationObjects 直接抛出的英文，经 CompositionHierarchyConflict 原样进 blockers，
         // blockers_localized 的 key 为 null（3674038504 的 layer_count 查询）。legacy 逐字沿用抛出处原文。
         ["blocker.public_layer_query"] = new(
-            Zh: "不可生成：保留实时的脚本读取了 {0}，而混合导出会改变公开的图层{1}。请不要烘焙会改变这个脚本所见图层视图的图层，然后重新分析。",
+            Zh: "不可生成：保留实时的脚本读取了 {0}，而混合导出会改变公开的图层{1}。请让会改变这个脚本所见图层视图的图层保持实时，然后重新分析。",
             En: "Cannot generate: a retained script reads {0}, but hybrid export changes the public layer {1}. Analyze again without baking layers that alter this script's public layer view.",
             Legacy: "A retained script queried {0}, but hybrid export changes the public layer {1}. Re-analyze without baking layers that alter this script's public layer view."),
         ["blocker.omitted_snapshot_dependency"] = new(

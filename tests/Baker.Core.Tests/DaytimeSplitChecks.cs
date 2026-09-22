@@ -141,9 +141,10 @@ internal static class DaytimeSplitChecks
             DaytimeSplit.PrepareVideoObservation(new JsonObject { ["objects"] = Scene() }, new JsonObject(), "day") is null,
             "观测前激活请求的视频状态、按冻结场景隔离缓存并保留原作，静态不明或旧模板继续原观测路径");
 
-        string blocker = PlanNarrative.NoInputIndependentGroup(ById(VideoScene()), new Dictionary<int, HashSet<string>> {
+        Blocker blockerBlocker = PlanNarrative.NoInputIndependentGroup(ById(VideoScene()), new Dictionary<int, HashSet<string>> {
             [1] = ["wall_clock_api", "observed_wall_clock"], [10] = ["active_shader_audio_spectrum"] });
-        JsonObject localized = Messages.Localize(blocker);
+        string blocker = blockerBlocker.Text;
+        JsonObject localized = blockerBlocker.ToNode();
         string explanation = localized["en"]!.GetValue<string>();
         check(explanation.Contains("wall-clock", StringComparison.Ordinal) && explanation.Contains("audio-spectrum", StringComparison.Ordinal) &&
             !explanation.Contains("all visible content", StringComparison.Ordinal) && !explanation.Contains("nothing remains", StringComparison.Ordinal),

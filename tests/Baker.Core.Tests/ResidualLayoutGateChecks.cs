@@ -93,9 +93,9 @@ internal static class ResidualLayoutGateChecks
             groupLayers: [[1]]);
         JsonObject? gate = ResidualMasking.ApplyLayoutGate(unplaced, scene, NoResource);
         string blocker = gate?["reason"]?.GetValue<string>() ?? "";
-        JsonObject localized = Messages.Localize(blocker);
-        check(gate is not null && unplaced["blockers"] is JsonArray { Count: 1 } blockers && blockers[0]!.GetValue<string>() == blocker &&
-            unplaced["whole_layer"]!["blockers"]!.AsArray().Any(node => node!.GetValue<string>() == blocker) &&
+        JsonObject localized = unplaced["blockers"]![0]!.AsObject();
+        check(gate is not null && unplaced["blockers"] is JsonArray { Count: 1 } blockers && blockers[0]!["text"]!.GetValue<string>() == blocker &&
+            PlanBlockers.Codes(unplaced["whole_layer"]!.AsObject()).Contains(BlockerCode.ResidualMaskingLayout) &&
             unplaced["status"]!.GetValue<string>() == "requires_resolution" &&
             unplaced["residual_layout_gate"]?["rule"]?.GetValue<string>() == "residual_masking_requires_residual_layers_in_video_groups",
             "a maskable residual layer that is in no video group gains an analyze blocker because no group can crossfade it");

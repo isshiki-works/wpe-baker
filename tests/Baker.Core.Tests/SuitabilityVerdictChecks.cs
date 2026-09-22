@@ -46,7 +46,7 @@ internal static class SuitabilityVerdictChecks
             "an empty video group set is ruled not_suitable with rule nothing_to_bake");
 
         JsonObject exhaustedAllocation = Plan(groups: 2, totalLayers: 5, videoLayers: 2,
-            loop: Loop(unresolved: 1), blockers: ["A live controller must be retained."]);
+            loop: Loop(unresolved: 1), blockers: [new Blocker(BlockerCode.BakeAllocation, ["A live controller must be retained."])]);
         exhaustedAllocation["loop_allocation_fallback"] = new JsonObject {
             ["status"] = "still_unavailable", ["replanned_video_group_count"] = 0,
             ["replanned_effect_prefix_cache_count"] = 0 };
@@ -104,7 +104,7 @@ internal static class SuitabilityVerdictChecks
         // --- 优先级：能力缺口与布局选择只进 notes，主裁定与既有 blockers 都不受影响 ---
         JsonObject blocked = Plan(groups: 1, totalLayers: 130, videoLayers: 8,
             loop: Loop(reason: Reason("NoTemporalMechanism", periodCount: 0)),
-            blockers: [HdrBlocker, PerspectiveBlocker, LayoutBlocker], layoutConflict: LayoutBlocker);
+            blockers: [HdrBlocker, PerspectiveBlocker, LayoutBlockerCode], layoutConflict: LayoutBlocker);
         string beforeBlockers = blocked["blockers"]!.ToJsonString();
         JsonObject blockedVerdict = Verdict(blocked);
         check(Text(blockedVerdict, "rule") == "no_temporal_mechanism_in_video" &&
@@ -152,8 +152,9 @@ internal static class SuitabilityVerdictChecks
         RunAnalyzeChecks(check, outputRoot);
     }
 
-    private const string HdrBlocker = "HDR intermediate compositing is not supported by the current RGBA8 group capture; its radiance range must not be silently clipped into an SDR video.";
-    private const string PerspectiveBlocker = "Perspective capture needs an explicit screen-space composition before production.";
+    private static readonly Blocker HdrBlocker = new(BlockerCode.HdrRadianceOpen, ["group-1 layer 1 (R1)."]);
+    private static readonly Blocker PerspectiveBlocker = new(BlockerCode.PerspectiveNeedsScreenspace);
+    private static readonly Blocker LayoutBlockerCode = new(BlockerCode.FullframeNeedsOpaqueGroupNoLive, [5, 0, "", ""]);
     private const string LayoutBlocker = "Full-frame mode requires one opaque video group; the selected scene settings currently need 5 group(s) or a transparent background.";
 
     private static JsonObject Reason(string kind, int periodCount, double? fixedPeriodSeconds = null) => new()
@@ -173,14 +174,14 @@ internal static class SuitabilityVerdictChecks
     };
 
     private static JsonObject Plan(int groups, int totalLayers, int videoLayers, JsonObject loop, string route = "whole_layer",
-        int prefixCaches = 0, string[]? blockers = null, string? layoutConflict = null) => new()
+        int prefixCaches = 0, Blocker[]? blockers = null, string? layoutConflict = null) => new()
     {
         ["route"] = route,
         ["status"] = (blockers?.Length ?? 0) == 0 ? "requires_loop_analysis" : "requires_resolution",
         ["video_groups"] = new JsonArray(Enumerable.Range(0, groups).Select(index => (JsonNode)new JsonObject { ["id"] = index }).ToArray()),
         ["layers"] = new JsonArray(Enumerable.Range(0, totalLayers).Select(index => (JsonNode)new JsonObject {
             ["id"] = index, ["allocation"] = index < videoLayers ? "video" : "live" }).ToArray()),
-        ["blockers"] = new JsonArray((blockers ?? []).Select(item => (JsonNode)JsonValue.Create(item)!).ToArray()),
+        ["blockers"] = new JsonArray((blockers ?? []).Select(item => (JsonNode)item.ToNode()).ToArray()),
         ["video_layout_admission"] = new JsonObject { ["status"] = layoutConflict is null ? "planned_layout_allowed" : "requires_user_choice", ["reason"] = layoutConflict },
         ["whole_layer"] = new JsonObject { ["status"] = "unavailable" },
         ["effect_prefix_caches"] = new JsonArray(Enumerable.Range(0, prefixCaches).Select(index => (JsonNode)new JsonObject { ["id"] = index }).ToArray()),

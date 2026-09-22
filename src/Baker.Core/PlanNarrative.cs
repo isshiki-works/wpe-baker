@@ -273,7 +273,7 @@ public static class PlanNarrative
         var blockers = report["blockers"] as JsonArray ?? [];
         if (blockers.Count > 0)
         {
-            JsonObject first = report["blockers_localized"]![0]!.AsObject();
+            JsonObject first = report["blockers_localized"]?[0] as JsonObject ?? blockers[0]!.AsObject();
             return Bilingual(Blocked, "summary.blocked",
                 [first["zh"]?.GetValue<string>() ?? "", blockers.Count], [first["en"]?.GetValue<string>() ?? "", blockers.Count]);
         }

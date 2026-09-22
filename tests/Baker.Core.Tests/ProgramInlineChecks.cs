@@ -698,7 +698,7 @@ Check(!Directory.Exists(Path.Combine(root, "must-not-be-generated")),
     "a legacy or edited multigroup plan is rejected before opening source files or starting generation");
 var layoutMethod = typeof(HybridScenePlanner).GetMethod("FullFrameConflict",
     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
-string conflictNames = (string)layoutMethod.Invoke(null, [interleavedPlan])!;
+string conflictNames = ((Blocker)layoutMethod.Invoke(null, [interleavedPlan])!).Text;
 Check(conflictNames.Contains("Visible overlay", StringComparison.Ordinal) &&
     !conflictNames.Contains("Hidden controller", StringComparison.Ordinal) && !conflictNames.Contains("music.mp3", StringComparison.Ordinal),
     "full-frame conflict names only visible drawable interleaved layers");
