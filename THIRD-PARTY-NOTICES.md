@@ -31,7 +31,7 @@ GPL v2 第 3 条要求二进制与对应完整源码一起提供 —— 两个 z
 | Eigen | `bc3b39870ecb690a623a3f49149a358b95c5781d` | MPL-2.0 为主，个别文件 BSD 等 MPL2 兼容许可 | https://gitlab.com/libeigen/eigen | 否 | — | `eigen.COPYING.MPL2` + `eigen.COPYING.README` |
 | Vulkan-Headers | `v1.4.321` | Apache-2.0 OR MIT | https://github.com/KhronosGroup/Vulkan-Headers | 否 | — | `vulkan-headers.LICENSE.md` + `vulkan-headers.Apache-2.0.txt` + `vulkan-headers.MIT.txt` |
 | Vulkan-Loader | `v1.4.321` | Apache-2.0 | https://github.com/KhronosGroup/Vulkan-Loader | 否 | — | `vulkan-loader.LICENSE.txt` |
-| rstd | `456fec5cc2b87acdb56800e298b5712ea69cdd47` | MIT OR Apache-2.0 | https://github.com/litocpp/rstd | **是** | `scripts\dependency-patches\rstd.patch`（manifest 记 143 个文件，其中 138 个是误捕获的 lito 构建缓存，真实源码改动 5 个文件） | `rstd.LICENSE-MIT` + `rstd.LICENSE-APACHE` |
+| rstd | `456fec5cc2b87acdb56800e298b5712ea69cdd47` | MIT OR Apache-2.0 | https://github.com/litocpp/rstd | **是** | `scripts\dependency-patches\rstd.patch`（4 个文件：`src/core/src/convert.cppm`、`src/json/src/parser.cppm`、`src/json/src/reader.cpp`、`tests/main/json/parser.cpp`） | `rstd.LICENSE-MIT` + `rstd.LICENSE-APACHE` |
 | wavsen | `77dfd33d07112c05df4682e08b98e19153ebe3ab` | MIT OR Apache-2.0（作者 2026-09-18 确认同样适用于锁定的 `77dfd33`：https://github.com/hypengw/wavsen/issues/5） | https://github.com/hypengw/wavsen | **是** | `scripts\dependency-patches\wavsen.patch`（19 个文件，已含多线程视频解码改动） | `wavsen.LICENSE-MIT` + `wavsen.LICENSE-APACHE`（取自 `5a0ddb9`，见下方说明） |
 | vvk | `f53d60cc70938d0485802750deeb15d18ba033ea` | MIT OR Apache-2.0（作者 2026-09-18 在 `220116d` 加入许可文件，并确认适用于此前所有提交：https://github.com/litocpp/vvk/issues/3） | https://github.com/litocpp/vvk | **是** | `scripts\dependency-patches\vvk.patch`（6 个文件） | `vvk.LICENSE-MIT` + `vvk.LICENSE-APACHE` |
 

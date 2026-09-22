@@ -61,7 +61,7 @@ Windows 10/11, Wallpaper Engine, a GPU for the offline render (any modern iGPU w
 
 ## Building from source
 
-Full source, third-party notices and build records are in `WpeBaker-1.0.2-source.zip` on the release page. On GitHub, `scripts/dependency-patches/rstd.patch` is stored as `rstd.patch.xz` (GitHub's 100 MB limit); `scripts/apply-dependency-patches.py` unpacks it automatically. See `REBUILD.md` in the source archive.
+Full source, third-party notices and build records are in `WpeBaker-1.0.2-source.zip` on the release page. See `REBUILD.md` in the source archive.
 
 ## Licenses
 

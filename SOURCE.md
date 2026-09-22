@@ -46,12 +46,10 @@ this repository is under the root `LICENSE` (MIT).
 `LICENSE`（MIT）。
 
 Three of the renderer's dependencies carry our fixes: rstd, vvk and wavsen. The patches and
-their checksums are in `scripts/dependency-patches/` (`manifest.json`); `rstd.patch` is stored
-as `rstd.patch.xz` because of GitHub's file-size limit and is unpacked by
+their checksums are in `scripts/dependency-patches/` (`manifest.json`) and are applied by
 `scripts/apply-dependency-patches.py`.
 渲染器有三个依赖带我们的修改：rstd、vvk、wavsen。补丁与校验值在
-`scripts/dependency-patches/`（`manifest.json`）；`rstd.patch` 因 GitHub 单文件大小限制以
-`rstd.patch.xz` 存放，由 `scripts/apply-dependency-patches.py` 自动解压。
+`scripts/dependency-patches/`（`manifest.json`），由 `scripts/apply-dependency-patches.py` 应用。
 
 ## Which binaries need source / 哪些二进制需要对应源码
 
