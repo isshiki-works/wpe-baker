@@ -414,6 +414,16 @@ Option<Displacement> WaterWaves(const EffectParams& p) {
     return Some(Displacement { d, d });
 }
 
+// genericimage3（图层自身材质，常作最终合成 pass）：v_TexCoord.xy = a_TexCoord，片元只在
+// v_TexCoord.xy 采 g_Texture0；SPRITESHEET 改纹理坐标，SKINNING/MORPHING 改位置，
+// PRELIGHTING/LIGHTING 换矩阵路径，这些组合一律当未知。
+Option<Displacement> GenericImage3(const EffectParams& p) {
+    if (! p.HasVariant()) return None();
+    for (const char* combo : { "SPRITESHEET", "SKINNING", "MORPHING", "PRELIGHTING", "LIGHTING" })
+        if (p.Combo(combo) != 0) return None();
+    return Some(Displacement {});
+}
+
 // 位移上界表：按着色器名 + 源码指纹（.vert 与 .frag 文件内容的 FNV-1a 64）查。指纹不符（工程自带
 // 改过的同名着色器、WPE 资源版本变化）就当未知。表外一律视为无界、整层不裁；不设"未知效果
 // 保守常数"——自定义着色器可以缩放/镜像/环绕采样，任何常数都证明不了。
@@ -425,6 +435,7 @@ struct Rule {
 constexpr Rule kDisplacementTable[] = {
     { "effects/waterwaves", 1665525461160322644ull, WaterWaves },
     { "effects/pulse", 4691102007919585790ull, Pointwise },
+    { "genericimage3", 8045191383678370494ull, GenericImage3 },
 };
 
 std::uint64_t Fnv1a(std::uint64_t h, std::string_view bytes) {
