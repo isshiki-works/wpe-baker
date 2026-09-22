@@ -3,6 +3,14 @@
 // L3 同属一个集合、彼此串行：共用 tools.json 的渲染器与 ffmpeg，取消检查按进程名认子进程，稀疏读回改进程级环境变量。
 using Xunit;
 
+// SourceDiagnosisChecks 探测缺件报错时要临时改进程当前目录（NativeEnvironment.FindTools 只认程序目录和当前目录），
+// 当前目录是进程级的，和其它测试并行会让别处的相对路径、工具查找读到临时目录。放进禁并行集合，xUnit 等其它测试跑完再单独跑它。
+[CollectionDefinition(Name, DisableParallelization = true)]
+public class ProcessCurrentDirectoryCollection
+{
+    public const string Name = "改进程当前目录";
+}
+
 [Trait("Layer", "L2")]
 public class MessagesTests
 {
@@ -23,7 +31,7 @@ public class PresetCascadeTests
     }
 }
 
-[Trait("Layer", "L1")]
+[Trait("Layer", "L1"), Collection(ProcessCurrentDirectoryCollection.Name)]
 public class SourceDiagnosisTests
 {
     [Fact]
