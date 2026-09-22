@@ -388,7 +388,7 @@ internal static class SwayRetimeChecks
 
         JsonObject tooShort = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
             CommonLoopPreference.Balanced, new SwayRetimeOptions(0.5, 0.5, 0.5));
-        // --loop-length-max 同时是求解器上限：0.5 秒装不下 1 秒的颗粒周期，其余分量就没有基础候选，摆动项照旧留在未解析项里。
+        // --loop-max-seconds 同时是求解器上限：0.5 秒装不下 1 秒的颗粒周期，其余分量就没有基础候选，摆动项照旧留在未解析项里。
         check(tooShort["unresolved"]!.AsArray().Count == 1 && tooShort["sway_retime"]!["status"]!.GetValue<string>() == "no_base_candidate" &&
             tooShort["candidates"]!.AsArray().Count == 0 && tooShort["maximum_seconds"]!.GetValue<double>() == 0.5 &&
             tooShort["no_candidate_reason"]!["kind"]!.GetValue<string>() == "FixedPeriodExceedsCeiling" &&

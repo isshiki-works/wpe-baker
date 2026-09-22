@@ -33,7 +33,6 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     // 选择器脚本不再算实时控制器，它切换的受控层里不属于该状态的按剔除处理、属于该状态的视为可见。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool DaytimeSplit = false,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DaytimeState = null,
-    [property: JsonIgnore] bool KeepLive = false,
     [property: JsonIgnore] bool CustomSettings = false,
     [property: JsonIgnore] string? AnalysisCacheDirectory = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Interaction = null,
@@ -77,7 +76,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     }
 
     /// <summary>
-    /// 内嵌视频 2 GiB 对循环时长上限的收紧记录（EmbeddedVideoBudget）：按 --loop-length-max（未给时 600）、输出宽高与帧率，
+    /// 内嵌视频 2 GiB 对循环时长上限的收紧记录（EmbeddedVideoBudget）：按 --loop-max-seconds（未给时 600）、输出宽高与帧率，
     /// 有透明组时按 alpha 左右并排的双宽算。输出尺寸未知（0）时为 null，不收紧。
     /// </summary>
     internal static EmbeddedVideoLoopLimit? EmbeddedVideoLimitOf(HybridAnalyzeRequest request, JsonArray? videoGroups,
@@ -201,9 +200,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     }
 
     public async Task<JsonObject> AnalyzeAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
-        CancellationToken cancellationToken = default) => request.KeepLive
-        ? await AnalyzeSingleAsync(request, progress, cancellationToken)
-        : await PresetCascade.AnalyzeAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, progress, token), cancellationToken, tools);
+        CancellationToken cancellationToken = default) =>
+        await PresetCascade.AnalyzeAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, progress, token), cancellationToken, tools);
 
     public async Task<JsonObject> AnalyzeSingleAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
         CancellationToken cancellationToken = default)
@@ -1034,7 +1032,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             ["status"] = effectPrefixRoute || blockers.Count == 0 ? "requires_loop_analysis" : "requires_resolution",
             ["source"] = source.SourcePath, ["source_sha256"] = sourceHash, ["source_digest_scope"] = ProjectSource.DigestScope,
             ["assets"] = Path.GetFullPath(request.Assets), ["analysis_directory"] = output,
-            ["settings"] = JsonSerializer.SerializeToNode(request with { RuntimeTraceFile = null, PropertiesOrigin = null, FrameRateOrigin = null }, JsonOptions),
+            ["settings"] = PlanSettings.ToJson(request),
             // 档位与两个高级覆盖合成的生效值，每个值带来源（preset/override/default）；求解器与 bake 读的都是这一份。
             ["retime_profile"] = RetimeProfile.Resolve(request).ToJson(),
             ["output_resolution"] = resolution.ToJson(),
@@ -1589,7 +1587,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             result["blockers"] = blockers;
             PlanBlockers.Add(blockers, blocker);
             result["status"] = "requires_resolution";
-            result["video_layout_admission"] = new JsonObject { ["requested"] = result["settings"]?["video_layout"]?.DeepClone() ?? "full_frame",
+            result["video_layout_admission"] = new JsonObject { ["requested"] = PlanSettings.Of(result).VideoLayout,
                 ["status"] = status, ["reason"] = reason,
                 ["scope"] = "The allocation did not reorder roots, split a video group or change parallax settings." };
             return result;
@@ -1675,7 +1673,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
 
         Blocker? layoutConflict = FullFrameConflict(result) ?? CompositionHierarchyConflict(result);
         if (layoutConflict is not null) return RejectAllocation(layoutConflict, LayoutConflictStatus(result));
-        result["video_layout_admission"] = new JsonObject { ["requested"] = result["settings"]?["video_layout"]?.DeepClone() ?? "full_frame",
+        result["video_layout_admission"] = new JsonObject { ["requested"] = PlanSettings.Of(result).VideoLayout,
             ["status"] = "planned_layout_allowed", ["reason"] = null,
             ["scope"] = "Layout permission is not proof of image correctness, looping, hardware decoding or playback benefit." };
         return result;
@@ -1687,7 +1685,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
 
     internal static Blocker? FullFrameConflict(JsonObject plan)
     {
-        string layout = plan["settings"]?["video_layout"]?.GetValue<string>() ?? "full_frame";
+        string layout = PlanSettings.Of(plan).VideoLayout;
         if (layout == "layered") return null;
         if (layout != "full_frame") throw new InvalidDataException("Unknown video layout; use full_frame or layered.");
         JsonArray groups = plan["video_groups"]?.AsArray() ?? throw new InvalidDataException("Video groups are missing.");
@@ -1716,7 +1714,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         IReadOnlyDictionary<int, JsonObject>? sourceObjects = null, JsonArray? dependencies = null)
     {
         HybridPlanFormat.Validate(plan);
-        if (plan["layers"] is not JsonArray layers || !layers.OfType<JsonObject>().Any(layer => layer.ContainsKey("allocation_root"))) return null;
+        JsonArray layers = plan["layers"]!.AsArray();
         var objects = sourceObjects ?? layers.OfType<JsonObject>().ToDictionary(Id, layer => new JsonObject {
             ["id"] = layer["id"]!.DeepClone(), ["parent"] = layer["parent"]?.DeepClone() });
         int nextId = checked(objects.Keys.Max() + 1);

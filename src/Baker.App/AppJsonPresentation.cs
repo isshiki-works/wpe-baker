@@ -10,14 +10,14 @@ internal sealed record AppPropertyDefinition(string Key, JsonObject Definition);
 internal static class AppJsonPresentation
 {
     public static HybridAnalyzeRequest ConfigureAnalysis(HybridAnalyzeRequest request, string preset, string interaction,
-        bool compatibility, bool custom, bool layoutExplicit) => request with
+        bool custom, bool layoutExplicit) => request with
     {
-        Preset = compatibility ? RetimeProfile.Balanced : preset,
-        LoopPreference = RetimeProfile.LoopPreferenceForPreset(compatibility ? RetimeProfile.Balanced : preset),
-        Interaction = compatibility ? null : interaction,
-        ViewMode = compatibility || interaction == "keep" ? "preserve" : "fixed_view",
-        LiveOverlayPlacement = compatibility ? "preserve" : "foreground",
-        KeepLive = compatibility, CustomSettings = custom, LayoutExplicit = layoutExplicit
+        Preset = preset,
+        LoopPreference = RetimeProfile.LoopPreferenceForPreset(preset),
+        Interaction = interaction,
+        ViewMode = interaction == "keep" ? "preserve" : "fixed_view",
+        LiveOverlayPlacement = "foreground",
+        CustomSettings = custom, LayoutExplicit = layoutExplicit
     };
 
     public static JsonObject? SuggestedSettings(JsonObject? plan)

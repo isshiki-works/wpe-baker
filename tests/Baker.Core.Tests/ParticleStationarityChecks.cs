@@ -202,7 +202,7 @@ internal static class ParticleStationarityChecks
                 lifetimeNode["min"] = "0.5"; lifetimeNode["max"] = "0.5"; })), "lifetime_capped_parameters_unverified") &&
             Rejected(Verdict(Mutate(rain, (_, definition, _) => definition["emitter"]![0]!["flags"] = "2")), "lifetime_capped_parameters_unverified"),
             "C2 反例：maxcount、寿命或发射器 flags 写成字符串时渲染器读到的值说不清，替换周期算不准，维持拒绝（lifetime_capped_parameters_unverified）");
-        // 合并 fix/loop-ceiling 后：上限是本次分析实际用的循环时长上限（--loop-length-max），不是写死的 180 s。
+        // 合并 fix/loop-ceiling 后：上限是本次分析实际用的循环时长上限（--loop-max-seconds），不是写死的 180 s。
         Fixture birds200 = Mutate(birds, (_, definition, _) => {
             JsonObject lifetimeNode = Node(definition, "initializer", "lifetimerandom");
             lifetimeNode["min"] = 200; lifetimeNode["max"] = 200; });
@@ -461,7 +461,7 @@ internal static class ParticleStationarityChecks
         check(CandidateFrames(shortCeiling).SequenceEqual([2730UL]) && shortCeiling["loop_length_default"]!["seconds"]!.GetValue<double>() == 45.5 &&
             CandidateFrames(ntsc).SequenceEqual([3596UL]) && ntsc["loop_length_default"]!["seconds"]!.GetValue<double>() <= 60 &&
             CandidateFrames(sprite).SequenceEqual([3600UL]),
-            "默认长度受 --loop-length-max 约束（45.5 秒上限取 2730 帧），向下取整到输出帧网格（59.94 fps 取 3596 帧），带精灵轨道的平稳粒子同样适用");
+            "默认长度受 --loop-max-seconds 约束（45.5 秒上限取 2730 帧），向下取整到输出帧网格（59.94 fps 取 3596 帧），带精灵轨道的平稳粒子同样适用");
 
         var longParticle = Mutate(droplets, (_, definition, _) =>
             definition["initializer"]!.AsArray().OfType<JsonObject>().Single(item => item["name"]!.GetValue<string>() == "lifetimerandom")["max"] = 40);

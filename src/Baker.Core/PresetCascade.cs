@@ -10,9 +10,9 @@ public static class PresetCascade
     public const bool MeasureSourceByDefault = false;
     public static bool IsCustom(IEnumerable<string> options) => options.Any(option => option is
         "--properties" or "--properties-source" or "--width" or "--height" or "--fps" or "--fps-den" or
-        "--view-mode" or "--video-layout" or "--live-overlays" or "--text-effects" or "--audio-effects" or
-        "--exclude-layers" or "--retime-budget" or "--max-retime" or "--loop-preference" or "--video-shell" or
-        "--sway-retime" or "--loop-max-seconds" or "--loop-length-max" or "--local-seam-repair" or
+        "--video-layout" or "--live-overlays" or "--text-effects" or "--audio-effects" or
+        "--exclude-layers" or "--retime-budget" or "--video-shell" or
+        "--sway-retime" or "--loop-max-seconds" or
         "--retain-live" or "--daytime-split" or "--trace");
     internal static bool Bakeable(JsonObject plan) =>
         plan["summary"]?["key"]?.GetValue<string>()?.StartsWith("summary.bakeable", StringComparison.Ordinal) == true;
@@ -219,7 +219,6 @@ public static class PresetCascade
             ["excluded_layer_ids"] = result["settings"]?["excluded_layer_ids"]?.DeepClone() ?? new JsonArray(),
             ["turn_off_kinds"] = new JsonArray(kinds.Order().Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
             ["daytime_state"] = result["settings"]?["daytime_state"]?.DeepClone() };
-        if (result["settings"] is JsonObject settings) settings["keep_live"] = false;
         if (Accepted(result) && result["summary"] is JsonObject summary)
             foreach (string language in new[] { "zh", "en" })
                 summary[language] = MessageCatalog.Get("preset.generated", language) + (kinds.Count == 0 ? "" : "\n" +

@@ -215,7 +215,7 @@ public static class TradeoffOptions
     {
         bool parallax = tier.Contains("parallax", StringComparer.Ordinal) &&
             (targets.Any(id => Kinds(layers[id]).Contains("parallax", StringComparer.Ordinal)) || Flag(plan["has_parallax"]) == true);
-        // 视差靠固定视角关；扫描实测 C2 档是"排除视差层 + --view-mode fixed_view"，这里照同一口径给。
+        // 视差靠固定视角关；扫描实测 C2 档是"排除视差层 + 固定视角"，这里照同一口径给。
         bool fixedView = parallax && !viewFixed;
         // 显式排除清单：祖先已在清单里的层不必再写，--exclude-layers 本来就连带整棵子树。
         int[] excludeRoots = [.. targets.Where(id => !Ancestors(layers, id).Any(targets.Contains)).Order()];
@@ -227,10 +227,10 @@ public static class TradeoffOptions
             tier.Contains(kind, StringComparer.Ordinal))];
         if (fixedView && !kinds.Contains("parallax", StringComparer.Ordinal) && parallax) kinds = [.. kinds.Append("parallax")];
         var properties = Properties(layers, targets);
-        // 命令行等价写法：属性关不掉的那部分靠 --exclude-layers，视差靠 --view-mode fixed_view。
+        // 命令行等价写法：属性关不掉的那部分靠 --exclude-layers，视差靠 --interaction fixed。
         string command = string.Join(" ", new[] {
             excludeRoots.Length == 0 ? null : "--exclude-layers " + string.Join(",", excludeRoots),
-            fixedView ? "--view-mode fixed_view" : null }.OfType<string>());
+            fixedView ? "--interaction fixed" : null }.OfType<string>());
         return new JsonObject {
             ["turn_off_kinds"] = new JsonArray([.. kinds.Select(kind => (JsonNode)JsonValue.Create(kind))]),
             ["turn_off_count"] = kinds.Length,

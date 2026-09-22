@@ -197,7 +197,7 @@ internal static class ResidualLayoutGateChecks
             VideoLayout: "layered");
         var plan = new JsonObject
         {
-            ["schema_version"] = 2, ["kind"] = "hybrid_video", ["route"] = "whole_layer", ["source"] = sourceDirectory,
+            ["kind"] = "hybrid_video", ["route"] = "whole_layer", ["source"] = sourceDirectory,
             ["source_sha256"] = await source.SourceHashAsync(),
             ["settings"] = JsonSerializer.SerializeToNode(settings, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }),
             // 保存的循环故意是空壳：bake 必须按源与运行时证据重新解析，得到"有候选 + 可掩盖的随机精灵"。
@@ -211,6 +211,7 @@ internal static class ResidualLayoutGateChecks
             ["source_script_error_evidence"] = new JsonObject { ["status"] = "available" },
             ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray()
         };
+        V3Fixture.Upgrade(plan);
         string output = Path.Combine(root, "residual-layout-bake");
         Exception? thrown = null;
         JsonObject? result = null;

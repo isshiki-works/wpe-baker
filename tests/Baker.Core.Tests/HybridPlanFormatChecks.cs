@@ -28,25 +28,20 @@ internal static class HybridPlanFormatChecks
         var currentRoundTrip = JsonNode.Parse(current.ToJsonString())!.AsObject();
         HybridPlanFormat.Validate(currentRoundTrip);
         check(JsonNode.DeepEquals(current, currentRoundTrip), "current v3 plan survives a JSON round trip without losing hierarchy metadata");
+        // 旧版 plan 不迁移：v2 一律按"旧版，请重新分析"拒绝，异常带文案键，调用方按键出中英文。
         var legacy = JsonNode.Parse("""
             {"schema_version":2,"kind":"hybrid_video","layers":[{"id":1,"root":1},{"id":2,"root":1}],
              "root_order":[1],"video_groups":[{"id":"group-1","root_ids":[1],"layer_ids":[1,2]}]}
             """)!.AsObject();
-        HybridPlanFormat.Validate(legacy);
-        foreach (var template in new[] { current, legacy })
-        {
-            var escapedGroup = template.DeepClone().AsObject();
-            escapedGroup["video_groups"]![0]!["id"] = "../outside";
-            if (escapedGroup["composition"] is JsonArray entries) entries[0]!["video_group"] = "../outside";
-            Reject(escapedGroup, $"plan v{template["schema_version"]} rejects a group path escaping owned scratch storage");
-        }
-        check(!legacy["layers"]![0]!.AsObject().ContainsKey("allocation_root"),
-            "genuine legacy v2 remains readable without inventing allocation metadata");
-        var legacyRoundTrip = JsonNode.Parse(legacy.ToJsonString())!.AsObject();
-        HybridPlanFormat.Validate(legacyRoundTrip);
-        check(JsonNode.DeepEquals(legacy, legacyRoundTrip), "legacy v2 plan survives a JSON round trip without gaining v3 metadata");
-        var disguised = Plan(); disguised["schema_version"] = 2;
-        Reject(disguised, "subtree semantics cannot masquerade as a legacy v2 plan");
+        Message? legacyMessage = null;
+        try { HybridPlanFormat.Validate(legacy); }
+        catch (InvalidDataException error) { legacyMessage = Message.Of(error); }
+        check(legacyMessage is { Key: "plan.legacy_version" } && legacyMessage.Args.SequenceEqual(new object?[] { 2 }),
+            "a legacy v2 plan is rejected as an older plan to analyze again, not read or migrated");
+        var escapedGroup = Plan();
+        escapedGroup["video_groups"]![0]!["id"] = "../outside";
+        escapedGroup["composition"]![0]!["video_group"] = "../outside";
+        Reject(escapedGroup, "plan v3 rejects a group path escaping owned scratch storage");
         var missing = Plan(); missing["layers"]![1]!.AsObject().Remove("allocation_root");
         Reject(missing, "v3 does not silently fall back when allocation data is absent");
         var noParent = Plan(); noParent["video_groups"]![0]!.AsObject().Remove("parent_transform");
@@ -67,7 +62,7 @@ internal static class HybridPlanFormatChecks
             string output = Path.Combine(outputRoot, name);
             bool rejected = false;
             try { await action(output); }
-            catch (InvalidDataException error) when (error.Message.Contains("supported Scene plan", StringComparison.Ordinal)) { rejected = true; }
+            catch (InvalidDataException error) when (Message.Of(error)?.Key == "plan.legacy_version") { rejected = true; }
             check(rejected && !Directory.Exists(output), name + " rejects plan version before tools and output creation");
         }
         await RejectBeforeTools(async output => { await new HybridBakeService(tools).BakeAsync(new(2, unknown, output)); }, "bake-version-boundary");

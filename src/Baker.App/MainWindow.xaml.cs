@@ -239,7 +239,7 @@ public partial class MainWindow : Window
         ++settingsRevision;
         if (sender == OutputBox || sender == TargetBox || sender == EncoderBox || sender == MatchEffectResolutionBox)
         { RefreshControls(); return; }
-        if (sender is FrameworkElement control && control != CompatibilityBox && control.IsDescendantOf(AdvancedExpander) &&
+        if (sender is FrameworkElement control && control.IsDescendantOf(AdvancedExpander) &&
             (control != GpuBox || control.IsKeyboardFocusWithin)) advancedSettingsEdited = true;
         if (sender != AudioEffectsBox) audioEffectsChoiceKnown = false;
         analysisCancellation?.Cancel(); hybridPlan = null;
@@ -271,7 +271,7 @@ public partial class MainWindow : Window
         return new(width, height, FpsBox.Text.Trim(),
             (GpuBox.SelectedItem as VulkanDeviceInfo)?.DeviceUuid, RetimeBox.IsChecked == true, SelectedInteraction() != "keep",
             LayeredVideoBox.IsChecked == true, true, false,
-            AudioEffectsBox.IsChecked == true, SelectedLoopPreference(), SelectedInteraction(), CompatibilityBox.IsChecked == true,
+            AudioEffectsBox.IsChecked == true, SelectedLoopPreference(), SelectedInteraction(),
             SelectedPlaybackEncoder(), MatchEffectResolutionBox.IsChecked == true);
     }
 
@@ -431,7 +431,7 @@ public partial class MainWindow : Window
                 HeightBox.Text = preset.Settings.Height == 0 ? "" : preset.Settings.Height.ToString(CultureInfo.InvariantCulture);
                 FpsBox.Text = preset.Settings.Fps;
                 GpuBox.SelectedItem = gpu;
-                RetimeBox.IsChecked = preset.Settings.Retime; InteractionBox.SelectedIndex = preset.Settings.Interaction switch { "keep" => 0, "off" => 2, _ => 1 }; CompatibilityBox.IsChecked = preset.Settings.Compatibility;
+                RetimeBox.IsChecked = preset.Settings.Retime; InteractionBox.SelectedIndex = preset.Settings.Interaction switch { "keep" => 0, "off" => 2, _ => 1 };
                 // 剩余实时图层置顶／简化文字效果两项界面已移除，方案里的旧值不再回填控件（分析时固定传 foreground/preserve）。
                 LayeredVideoBox.IsChecked = preset.Settings.LayeredVideo;
                 AudioEffectsBox.IsChecked = preset.Settings.AudioEffects;
@@ -496,7 +496,7 @@ public partial class MainWindow : Window
                 // 摆动改频三档都开（设计 §3），高级区的勾选框默认勾上，取消勾选才关；与 CLI 的 --sway-retime 默认一致。
                 SwayRetime: SwayRetimeBox.IsChecked == true);
             request = AppJsonPresentation.ConfigureAnalysis(request, SelectedPreset(), SelectedInteraction(),
-                CompatibilityBox.IsChecked == true, AdvancedIsCustom(), LayeredVideoBox.IsChecked == true) with
+                AdvancedIsCustom(), LayeredVideoBox.IsChecked == true) with
                 { AnalysisCacheDirectory = analysisCacheDirectory };
             // 分析前先量一遍原来这张现在费多少电（默认开）：读数写进 plan 的 source_power，结论第一行按实测分档；
             // 量不了的机器跳过并把原因记进 plan，分析照常进行。
@@ -618,7 +618,6 @@ public partial class MainWindow : Window
         suppressSettingsChanges = true;
         try
         {
-            CompatibilityBox.IsChecked = false;
             if (settings["preset"]?.GetValue<string>() is string preset)
                 PresetBox.SelectedIndex = preset switch { "efficiency" => 0, "balanced" => 1, _ => 2 };
             if (settings["interaction"]?.GetValue<string>() is string interaction)
@@ -633,7 +632,7 @@ public partial class MainWindow : Window
     private void RefreshControls()
     {
         if (!initialized) return;
-        PresetBox.IsEnabled = InteractionBox.IsEnabled = CompatibilityBox.IsChecked != true && !analyzing && !presetBusy;
+        PresetBox.IsEnabled = InteractionBox.IsEnabled = !analyzing && !presetBusy;
         SuggestionButton.IsEnabled = !analyzing && !presetBusy;
         bool sourceValid = AppEnvironment.SourceExists(SourceBox.Text.Trim());
         bool assetsValid = AppEnvironment.AssetsValid(AssetsBox.Text.Trim());
@@ -739,10 +738,8 @@ public partial class MainWindow : Window
             JsonObject savedPlan = report["plan"]?.DeepClone().AsObject()
                 ?? throw new InvalidDataException("The hybrid result has no saved plan.");
             HybridPlanFormat.Validate(savedPlan);
-            JsonObject settings = savedPlan["settings"]?.AsObject()
-                ?? throw new InvalidDataException("The hybrid result has no generation settings.");
             request = new HybridBakeRequest(2, savedPlan, output,
-                kind == "hybrid_video_probe" ? report["frames"]!.GetValue<ulong>() : 0, settings["device_uuid"]?.GetValue<string>(),
+                kind == "hybrid_video_probe" ? report["frames"]!.GetValue<ulong>() : 0, PlanSettings.Of(savedPlan).DeviceUuid,
                 // 重放一份已保存的结果时沿用它当时请求的播放版编码档位。
                 PlaybackEncoder: report["playback_encoder"]?["requested"]?.GetValue<string>(),
                 EffectRenderScale: report["effect_render_scale"]?.GetValue<double>() ?? 1.0,
@@ -1443,8 +1440,8 @@ public partial class MainWindow : Window
         string executable = WpeExeBox.Text.Trim();
         await RunJobOperationAsync(job, "previewing", async token =>
         {
-            JsonObject settings = job.Request.Plan["settings"]!.AsObject();
-            var (width, height) = (settings["width"]!.GetValue<uint>(), settings["height"]!.GetValue<uint>());
+            HybridAnalyzeRequest settings = PlanSettings.Of(job.Request.Plan);
+            var (width, height) = (settings.Width, settings.Height);
             if (officialPreviewExecutable is not null)
                 await new WallpaperController(officialPreviewExecutable).CloseWindowAsync(officialPreviewName, token);
             await new WallpaperController(executable).OpenInWindowAsync(project, officialPreviewName, width, height, token, activate: true);
@@ -1557,9 +1554,9 @@ public partial class MainWindow : Window
         public string Source => Request.Plan["source"]!.GetValue<string>();
         public string SourceSha256 => Request.Plan["source_sha256"]!.GetValue<string>();
         public string Assets => Request.Plan["assets"]!.GetValue<string>();
-        public uint FpsNumerator => Request.Plan["settings"]!["fps_numerator"]!.GetValue<uint>();
-        public uint FpsDenominator => Request.Plan["settings"]!["fps_denominator"]!.GetValue<uint>();
-        public string? DeviceUuid => Request.DeviceUuid ?? Request.Plan["settings"]?["device_uuid"]?.GetValue<string>();
+        public uint FpsNumerator => PlanSettings.Of(Request.Plan).FpsNumerator;
+        public uint FpsDenominator => PlanSettings.Of(Request.Plan).FpsDenominator;
+        public string? DeviceUuid => Request.DeviceUuid ?? PlanSettings.Of(Request.Plan).DeviceUuid;
         public string Title => Path.GetFileName(Directory.Exists(Source) ? Source.TrimEnd(Path.DirectorySeparatorChar) : Path.GetDirectoryName(Source)) ?? "Wallpaper";
         public string Settings => $"{FpsNumerator}/{FpsDenominator} fps · {GpuName}";
         public string State { get; set; } = "queued";

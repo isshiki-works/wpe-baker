@@ -89,12 +89,10 @@ internal static class HybridHierarchyGeneralizationChecks
         using var source = new ProjectSource(sourceDirectory);
         string noLoopOutput = Path.Combine(root, "stale-cost-no-loop");
         var staleCostPlan = plan.DeepClone().AsObject();
-        // Model an older version-2 saved proposal, but retain current source and runtime evidence.
-        staleCostPlan["schema_version"] = 2;
+        // Model an edited saved proposal, but retain current source and runtime evidence.
         staleCostPlan["blockers"] = new JsonArray();
         staleCostPlan["video_groups"] = new JsonArray(new JsonObject { ["layer_ids"] = new JsonArray(102), ["include_scene_clear"] = true });
-        foreach (JsonObject layer in staleCostPlan["layers"]!.AsArray().OfType<JsonObject>())
-            layer.Remove("allocation_root");
+        V3Fixture.Upgrade(staleCostPlan);
         staleCostPlan["loop"] = new JsonObject { ["status"] = "observed", ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 600 }) };
         JsonObject noLoop = await new HybridBakeService(new("not-started", "not-started", "not-started", [])).BakeAsync(
             new(2, staleCostPlan, noLoopOutput));

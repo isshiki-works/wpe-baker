@@ -120,7 +120,7 @@ internal static class TradeoffOptionsChecks
             .Select(kind => kind!.GetValue<string>()).SequenceEqual(["parallax"])) == 1,
             "tradeoff list: turning off only parallax is offered on its own");
         check(parallax["view_mode"]?.GetValue<string>() == "fixed_view" &&
-            parallax["command"]!.GetValue<string>().Contains("--view-mode fixed_view"),
+            parallax["command"]!.GetValue<string>().Contains("--interaction fixed"),
             "tradeoff list: turning off parallax uses fixed_view");
         check(parallax["excluded_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()).Contains(30) &&
             parallax["collateral_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()).Contains(30) &&

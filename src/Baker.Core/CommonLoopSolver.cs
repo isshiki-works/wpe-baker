@@ -102,13 +102,13 @@ public static class CommonLoopSolver
     private static readonly CommonLoopRational DefaultMaximum = Ceiling(SwayRetimeOptions.DefaultLoopLengthMaximumSeconds);
 
     /// <summary>
-    /// 请求没带上限时使用的循环时长上限（秒），等于 --loop-length-max 的默认值。
-    /// 实际上限由调用方按 --loop-length-max 传入；上层讲"超上限"时复述请求里实际用的那个数，不要自己写死。
+    /// 请求没带上限时使用的循环时长上限（秒），等于 --loop-max-seconds 的默认值。
+    /// 实际上限由调用方按 --loop-max-seconds 传入；上层讲"超上限"时复述请求里实际用的那个数，不要自己写死。
     /// </summary>
     public static double DefaultMaximumSeconds => DefaultMaximum.ToSeconds();
 
     /// <summary>
-    /// 把 --loop-length-max 的秒数换成求解器上限（取到微秒，0 &lt; 秒数 ≤ 3600）。
+    /// 把 --loop-max-seconds 的秒数换成求解器上限（取到微秒，0 &lt; 秒数 ≤ 3600）。
     /// 所有周期分量（着色器、动画、视频、摆动改频）共用这一个上限。
     /// </summary>
     public static CommonLoopRational Ceiling(double seconds)

@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 using Baker.Core;
 
 /// <summary>
-/// 循环时长上限跟随 --loop-length-max：上限从请求一路传到求解器与 plan，拒绝理由复述实际上限；
+/// 循环时长上限跟随 --loop-max-seconds：上限从请求一路传到求解器与 plan，拒绝理由复述实际上限；
 /// 原本 180 秒内就有候选的，效率档与未回落的平衡档选中项不随上限变大而改变。
 /// </summary>
 internal static class LoopCeilingChecks
@@ -19,7 +19,7 @@ internal static class LoopCeilingChecks
         check(CommonLoopSolver.DefaultMaximumSeconds == SwayRetimeOptions.DefaultLoopLengthMaximumSeconds &&
             CommonLoopSolver.Ceiling(3600) == new CommonLoopRational(3600) && CommonLoopSolver.Ceiling(45.5) == new CommonLoopRational(91, 2) &&
             Throws(() => CommonLoopSolver.Ceiling(0)) && Throws(() => CommonLoopSolver.Ceiling(3600.5)) && Throws(() => CommonLoopSolver.Ceiling(double.NaN)),
-            "the solver ceiling defaults to the --loop-length-max default and accepts exactly the (0, 3600] range");
+            "the solver ceiling defaults to the --loop-max-seconds default and accepts exactly the (0, 3600] range");
 
         CommonLoopComponent[] fixed300 = [new("track", new(300, CommonLoopPeriodEvidence.Analytic, new(300)))];
         CommonLoopSearchResult defaultCeiling = CommonLoopSolver.Suggest(new(60, 1, fixed300, new(1, 60)));
@@ -91,9 +91,9 @@ internal static class LoopCeilingChecks
         check((double)loopLengthMaximumOf.Invoke(null, [request, null, null])! == 600 &&
             (double)loopLengthMaximumOf.Invoke(null, [request with { LoopLengthMaximumSeconds = 1800 }, null, null])! == 1800 &&
             (double)loopLengthMaximumOf.Invoke(null, [request with { LoopLengthMaximumSeconds = 1800, SwayRetime = false }, null, null])! == 1800,
-            "the planner takes the loop ceiling from --loop-length-max whether or not sway retime is on, defaulting to 600 seconds");
+            "the planner takes the loop ceiling from --loop-max-seconds whether or not sway retime is on, defaulting to 600 seconds");
 
-        // ---- 合并 fix/embedded-video-size 后：内嵌视频 2 GiB 收紧与 --loop-length-max 是同一个实际上限 ----
+        // ---- 合并 fix/embedded-video-size 后：内嵌视频 2 GiB 收紧与 --loop-max-seconds 是同一个实际上限 ----
         var swayOptionsOf = typeof(HybridScenePlanner).GetMethod("SwayRetimeOptionsOf", BindingFlags.Static | BindingFlags.NonPublic)!;
         var fourKRequest = new HybridAnalyzeRequest(2, "source", "assets", "out", Width: 3840, Height: 2160, FpsNumerator: 60,
             LoopLengthMaximumSeconds: 3600);
@@ -107,7 +107,7 @@ internal static class LoopCeilingChecks
             (double)loopLengthMaximumOf.Invoke(null, [fourKRequest, null, null])! == 558 &&
             (double)loopLengthMaximumOf.Invoke(null, [fourKRequest with { LoopLengthMaximumSeconds = 300 }, opaqueGroups, null])! == 300 &&
             swayOn.LoopLengthMaximumSeconds == packedCeiling && swayOn.VideoLimit is { Applied: true, PackedAlpha: true },
-            "the solver ceiling and the sway Lmax are one value: --loop-length-max lowered by the embedded video limit, with or without sway retime");
+            "the solver ceiling and the sway Lmax are one value: --loop-max-seconds lowered by the embedded video limit, with or without sway retime");
         EmbeddedVideoLoopLimit fourK = EmbeddedVideoBudget.LoopLengthLimit(3600, 3840, 2160, false, 60, 1)!;
         JsonObject limitedOff = Analyze(300, fourK.EffectiveSeconds, limit: fourK);
         JsonObject limitedSummary = PlanNarrative.Summarize(new JsonObject {
