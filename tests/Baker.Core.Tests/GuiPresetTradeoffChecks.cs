@@ -15,16 +15,13 @@ internal static class GuiPresetTradeoffChecks
     private static void TwoAxes(Action<bool, string> check)
     {
         var original = new HybridAnalyzeRequest(2, "s", "a", "o", SwayRetime: true);
-        var fixedQuality = AppJsonPresentation.ConfigureAnalysis(original, "quality", "fixed", false, false, false);
-        var offEfficiency = AppJsonPresentation.ConfigureAnalysis(original, "efficiency", "off", false, false, false);
-        check(fixedQuality is { Preset: "quality", Interaction: "fixed", ViewMode: "fixed_view", CustomSettings: false, KeepLive: false } &&
+        var fixedQuality = AppJsonPresentation.ConfigureAnalysis(original, "quality", "fixed", false, false);
+        var offEfficiency = AppJsonPresentation.ConfigureAnalysis(original, "efficiency", "off", false, false);
+        check(fixedQuality is { Preset: "quality", Interaction: "fixed", ViewMode: "fixed_view", CustomSettings: false } &&
             offEfficiency is { Preset: "efficiency", Interaction: "off", CustomSettings: false } &&
             fixedQuality.UserProperties is null && offEfficiency.ExcludedLayerIds is null,
             "GUI axes map independently to Core without implicitly excluding content or marking custom");
-        var legacy = AppJsonPresentation.ConfigureAnalysis(original, "efficiency", "off", true, false, false);
-        check(legacy is { KeepLive: true, Preset: "balanced", LoopPreference: "balanced", ViewMode: "preserve", Interaction: null, LiveOverlayPlacement: "preserve" },
-            "GUI compatibility ignores both axes and restores the CLI legacy defaults");
-        check(AppJsonPresentation.ConfigureAnalysis(original, "quality", "fixed", false, true, true) is { CustomSettings: true, LayoutExplicit: true },
+        check(AppJsonPresentation.ConfigureAnalysis(original, "quality", "fixed", true, true) is { CustomSettings: true, LayoutExplicit: true },
             "GUI advanced overrides are recorded separately from the preset");
         var plan = new JsonObject { ["preset_applied"] = "balanced", ["applied_tradeoffs"] = new JsonObject {
             ["turn_off_kinds"] = new JsonArray("parallax", "parallax"), ["daytime_state"] = "morning" },
@@ -153,7 +150,7 @@ internal static class GuiPresetTradeoffChecks
             "gui tradeoff list: property before command line, collateral before the resulting route and residual");
 
         var parallax = views.Where(view => view.FixedView).ToArray();
-        check(parallax.Length > 0 && parallax.All(view => view.Command.Contains("--view-mode fixed_view")),
+        check(parallax.Length > 0 && parallax.All(view => view.Command.Contains("--interaction fixed")),
             "gui tradeoff list: an option that turns off parallax carries fixed_view");
 
         // 主体类：只显示那句拒绝说明，不出清单块。

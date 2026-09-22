@@ -48,8 +48,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         JsonObject plan = request.Plan.DeepClone().AsObject();
         if (plan["effect_prefix_caches"] is not JsonArray { Count: > 0 } caches)
             throw new InvalidDataException("The plan has no effect_prefix_caches.");
-        HybridAnalyzeRequest settings = plan["settings"]?.Deserialize<HybridAnalyzeRequest>(JsonOptions)
-            ?? throw new InvalidDataException("Effect-prefix settings are missing.");
+        HybridAnalyzeRequest settings = PlanSettings.Of(plan);
         using var source = new ProjectSource(plan["source"]?.GetValue<string>() ?? throw new InvalidDataException("Effect-prefix source is missing."));
         string hash = await source.SourceHashAsync(cancellationToken);
         if (hash != plan["source_sha256"]?.GetValue<string>()) throw new InvalidDataException("Source changed; analyze it again.");
@@ -356,11 +355,11 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     result["groups"]!.AsArray().Add(rejectedGroup);
                     result["status"] = "candidate_rejected_" + rejection;
                     bool seamRejected = seam["status"]?.GetValue<string>() != "observed_seam_pass";
-                    result["reason"] = seamRejected
-                        ? MessageCatalog.Get("bake.effect_prefix_seam_rejected", MessageCatalog.English, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.English))
-                        : rejection == "quality" ? "GPU prefix encoding did not meet the existing playback quality threshold against CPU Lanczos."
-                        : rejection == "hardware_decode" ? "The source-period prefix encoding did not pass the actual hardware decode check."
-                        : "The full terminal capture did not prove opaque pixels for every encoded source frame.";
+                    if (!seamRejected)
+                        new Message(rejection == "quality" ? "bake.effect_prefix_quality_rejected"
+                            : rejection == "hardware_decode" ? "bake.effect_prefix_hardware_decode_rejected"
+                            : "bake.effect_prefix_opaque_unproven").Write(result, "reason");
+                    else result["reason"] = MessageCatalog.Get("bake.effect_prefix_seam_rejected", MessageCatalog.English, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.English));
                     if (seamRejected)
                         result["reason_localized"] = new JsonObject { ["key"] = "bake.effect_prefix_seam_rejected",
                             ["zh"] = MessageCatalog.Get("bake.effect_prefix_seam_rejected", MessageCatalog.Chinese, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.Chinese)),
@@ -409,7 +408,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 await Save(); return result;
             }
             if (composition["status"]?.GetValue<string>() != "composition_pass")
-            { result["status"] = "candidate_rejected_composition"; result["reason"] = "The pristine-source 48-frame composition comparison failed."; await Save(); return result; }
+            { result["status"] = "candidate_rejected_composition"; new Message("bake.effect_prefix_composition_failed").Write(result, "reason"); await Save(); return result; }
             if (hash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during effect-prefix bake.");
             result["status"] = "candidate_generated"; result["loop_validation"] = "encoded_seams_passed"; result["project_path"] = candidateProject;
             await Save(); return result;

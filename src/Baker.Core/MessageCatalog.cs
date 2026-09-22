@@ -186,7 +186,7 @@ public static class MessageCatalog
 
         // 第 1 批合并新增：唯一视频组被搬不走的实时绘制挡住（feat/single-shot-live）。{0}=阻挡者列表。
         // feat/tradeoff-list 改写：原文说"改设置或改成分层都不会改变这一点"，与实测冲突——这 4 案 4/4
-        // 只要把挡路的可取舍实时元素关掉就能进整幅（3680252478 单加 --view-mode fixed_view 即可），
+        // 只要把挡路的可取舍实时元素关掉就能进整幅（3680252478 单加 --interaction fixed 即可），
         // 所以改成给出解锁路径。{1}=本场景可执行的关法（分语言，SingleShotAllocation 拼好）。
         // legacy 英文逐字沿用原 En，写进 plan 的 blockers 一个字没变。
         ["blocker.fullframe_unreachable"] = new(
@@ -317,11 +317,6 @@ public static class MessageCatalog
 
         // feat/video-control-scope 之后生产代码不再走这条笼统文案，改由下面七条具名理由代替；
         // 这里保留它，好让旧版本生成的 plan 仍能反查出中文。
-        ["unresolved.particle_sprite_period"] = new(
-            Zh: "粒子精灵纹理周期不等于粒子系统的有效周期，不可作为循环依据。",
-            En: "A particle sprite texture period does not establish the particle system's effective period and cannot serve as a loop basis.",
-            Legacy: "A particle sprite texture period does not establish the particle system's effective period."),
-
         // 第 2 批合并新增（feat/video-control-scope）：粒子证明不出周期时，说清是哪一种随机源或外部输入。
         // 英文逐字沿用该分支的原文，中文是同一句话的改写。{n} 里的节点名用 Message 的 ZhArgs，中英各一套。
         ["unresolved.particle_definition_missing"] = new(
@@ -425,6 +420,10 @@ public static class MessageCatalog
             En: "The runtime material omits the active_uniforms list, so it can establish neither a static state nor an analyzed temporal state.",
             Legacy: "Runtime material omitted active_uniforms; it cannot establish a static or analyzed temporal state."),
 
+        ["unresolved.material_role_not_string"] = new(
+            Zh: "运行时材质的 role 字段不是字符串，认不出它是哪类材质，也就判断不了它会不会随时间变化。",
+            En: "Runtime material role is not a string, so its temporal behavior is unknown."),
+
         ["unresolved.material_temporal_uniforms"] = new(
             Zh: "运行时 {0} 材质使用尚未建模的时间变量 {1}，周期无法证明。",
             En: "The runtime {0} material uses unmodeled temporal uniforms {1}, so its period cannot be proven.",
@@ -480,16 +479,6 @@ public static class MessageCatalog
             Legacy: "Within the locked analytic period, {0} candidate start frame(s) (of {1}) were re-checked in sort order on the full-resolution lossless master and every one exceeded the first layer: {2}. The first layer requires the worst 64px tile of the residual Δ_k = f[P+k] − f[k] to stay within {3}/255 for every k = 0..{5} of the crossfade window, and the hard-cut residual Δ_0 to stay within {4}/255 whole-frame RGB MAE; beyond that the crossfade ghost and seam step become visible. The period was not changed, no threshold was relaxed, no local seam repair was applied and the grouping was not changed automatically."),
 
         // ---- bake 结果（界面一行说明） ----
-        ["bake.script_errors_rejected"] = new(
-            Zh: "不可生成：候选工程渲染时脚本报错多于原作，画面不可信，未产出候选工程。报错原文与对象见 bake.json 的 reason_zh。",
-            En: "Cannot generate: the candidate project raised more script errors than the original, so its image is not trustworthy and no candidate project was created. The errors and objects are listed in bake.json reason_en.",
-            Legacy: "The candidate project raised more script errors than the original, so its image cannot be trusted and no candidate project was created; bake.json reason_en lists the errors and objects."),
-
-        ["bake.residual_layout_rejected"] = new(
-            Zh: "不可生成：本计划的未解析分量只能由接缝交叉淡化掩盖，但其所在图层不属于任何视频组，无组可执行淡化，未产出候选工程。按 bake.json 中的理由用 --retain-live 重新分析。",
-            En: "Cannot generate: this plan's unresolved components could only be masked by a seam crossfade, but their layers belong to no video group, so no group can perform it and no candidate project was created. Follow the reason in bake.json and re-analyze with --retain-live.",
-            Legacy: "This plan's unresolved components could only be hidden by a seam crossfade, but their layers are not in any video group, so no group can crossfade them and no candidate project was created; follow the reason in bake.json and re-analyze with --retain-live."),
-
         // ---- effect_prefix 终端捕获点（analyze 写进 loop.unresolved 与 effect_prefix_capture_probes，bake 写进 reason） ----
         // {0}=层名 {1}=层 id {2}=终端效果 id {3}=实际捕获点 {4}=这一层自己的渲染目标列表
         ["effect_prefix.capture_not_layer_target"] = new(
@@ -668,10 +657,148 @@ public static class MessageCatalog
         ["setup.tool_ffmpeg"] = new(Zh: "视频编码器 ffmpeg.exe", En: "the video encoder ffmpeg.exe"),
         ["setup.tool_ffprobe"] = new(Zh: "视频检查器 ffprobe.exe", En: "the media inspector ffprobe.exe"),
 
+        // {0}=plan 里的 schema_version
+        ["plan.legacy_version"] = new(
+            Zh: "旧版 plan（schema_version {0}），当前版本不再读取，请重新分析。",
+            En: "This is an older plan (schema_version {0}) that this version no longer reads; analyze the wallpaper again."),
         ["setup.assets_missing"] = new(
             Zh: "未评估：未找到 Wallpaper Engine 的 assets 目录，分析需要它读取着色器与特效。已安装 Wallpaper Engine 时，手动指向安装目录下的 assets（通常为 …\\steamapps\\common\\wallpaper_engine\\assets）；命令行用 --assets 指定。",
             En: "Not evaluated: the Wallpaper Engine assets folder was not found; analysis requires it to read shaders and effects. If Wallpaper Engine is installed, point at the assets folder inside its install directory (usually ...\\steamapps\\common\\wallpaper_engine\\assets); on the command line pass --assets.",
             Legacy: "The Wallpaper Engine assets folder was not found; analysis needs it to read shaders and effects. If Wallpaper Engine is installed, point at the assets folder inside its install directory (usually ...\\steamapps\\common\\wallpaper_engine\\assets); on the command line pass --assets."),
+        ["plan.legacy_unnumbered_blocker"] = new(
+            Zh: "旧版 plan：里面的拒绝原因是更早的版本写的，没有编号，当前版本不再读取，请重新分析。",
+            En: "This is an older plan: its rejection reasons were written by an earlier version and carry no code, so this version no longer reads it; analyze the wallpaper again."),
+
+        // ---- C1.1d：原来直接写英文的 reason（plan / bake / 测量报告）。En 即原文。 ----
+        ["reason.demotion_unavailable"] = new(
+            Zh: "从末尾整根退回视频根，都剩不下一个能承担场景清屏的不透明视频组。",
+            En: "No suffix of whole video roots leaves a single opaque group that carries the scene clear."),
+        ["reason.demotion_available"] = new(
+            Zh: "对这些根加 --retain-live 重新分析，就只剩一个不透明视频组；analyze 不会自己这么做。",
+            En: "Re-running analyze with --retain-live for these roots leaves one opaque video group; analyze does not apply it on its own."),
+        ["reason.demotion_not_full_frame"] = new(
+            Zh: "尾组退回只适用于整幅布局。",
+            En: "Tail-group demotion only applies to a full-frame layout."),
+        ["reason.demotion_no_single_opaque_group"] = new(
+            Zh: "把不透明底组之后的视频根退回实时后，剩下的不是恰好一个承担场景清屏的不透明组，或者依赖闭包会牵连到更多根。",
+            En: "Demoting the video roots after the opaque base group does not leave exactly one opaque group that carries the scene clear, or its dependency closure would reach further roots."),
+        ["reason.demotion_fraction_unknown"] = new(
+            Zh: "退回的可见图层里有一层画布占比未知，没法和保留的视频组比大小。",
+            En: "A demoted visible drawable layer has an unknown canvas fraction, so the comparison against the retained group is not decidable."),
+        ["reason.demotion_video_not_dominant"] = new(
+            Zh: "退回的内容占比不低于保留组里最大的可见图层，视频就不再是画面主体了，维持原来的拒绝。",
+            En: "The demoted content does not stay below the retained group's largest visible drawable canvas fraction, so the video would no longer carry the image; the original rejection stands."),
+        ["reason.demotion_order_changes"] = new(
+            Zh: "退回后可见的实时根不再按原来的分配顺序绘制；绘制顺序不能变。",
+            En: "The demoted composition would not keep visible drawable live roots in their recorded source allocation order; draw order must not change."),
+        // {0}=退回实时的视频根个数
+        ["reason.demotion_applied"] = new(
+            Zh: "不透明底组上面的 {0} 个视频根原地改为实时，绘制顺序和遮挡关系都不变。",
+            En: "The {0} video root(s) above the opaque base group stay realtime in place; draw order and occlusion are unchanged."),
+        ["reason.foreground_occlusion"] = new(
+            Zh: "把这些根放到前景会改变它们和后面源根之间的遮挡；原来的父子层级和变换保持不变。",
+            En: "Foreground placement changes occlusion with later source roots. The original parent hierarchy and transforms are retained."),
+        ["reason.composition_pass"] = new(
+            Zh: "短时成对采样在全局、分块 RGB 和全局透明度三项固定限值之内。",
+            En: "The short paired sample stayed within the fixed global, tile RGB, and global alpha limits."),
+        ["reason.composition_rejected"] = new(
+            Zh: "短时成对采样不完整，或至少超出了一项固定的合成限值。",
+            En: "The short paired sample was incomplete or exceeded at least one fixed composition limit."),
+        ["reason.sdr_scene_not_hdr"] = new(
+            Zh: "场景没有开启 general.hdr，分组截取没有 HDR 中间缓冲，不存在需要裁掉的超范围亮度。",
+            En: "Scene general.hdr is not enabled; the group capture has no HDR intermediate to clip."),
+        ["reason.allocation_nothing_baked"] = new(
+            Zh: "没有图层分进视频，也没有更小的视频分配可试。",
+            En: "No layer is allocated to video, so there is no smaller bake allocation left to try."),
+        ["reason.allocation_no_trigger"] = new(
+            Zh: "转成视频的图层里没有不满足平稳随机判据的粒子，也没有带未解析循环机制的层，整棵保留作者子树得到的还是同一个分配。",
+            En: "No baked layer is a particle system that fails the stationary-random criteria or owns an unresolved loop mechanism, so retaining whole author subtrees would keep the same allocation."),
+        ["reason.allocation_nothing_left"] = new(
+            Zh: "把所有未解析层和粒子层的作者子树都保留实时后，没有内容可以转成视频，缩小分配没有意义。",
+            En: "Retaining the author subtrees of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help."),
+        ["reason.power_counters_missing"] = new(
+            Zh: "这台机器没有提供 Energy Meter（RAPL）功耗计数器，这里测不了壁纸功耗。",
+            En: "This machine publishes no Energy Meter (RAPL) power counters, so wallpaper power cannot be measured here."),
+        ["reason.presentmon_no_csv"] = new(
+            Zh: "PresentMon 没有产出 CSV，目标可能没有在呈现画面。",
+            En: "PresentMon produced no CSV; the target may have had no active presentation."),
+        ["reason.presentmon_no_rows"] = new(
+            Zh: "PresentMon 的 CSV 里没有呈现记录。",
+            En: "PresentMon CSV has no presentation rows."),
+        ["reason.presentmon_columns_missing"] = new(
+            Zh: "PresentMon v1 必需的列不全。",
+            En: "Required PresentMon v1 columns are unavailable."),
+        ["reason.presentmon_swapchain_missing"] = new(
+            Zh: "CSV 里没有指定的 SwapChainAddress。",
+            En: "Requested SwapChainAddress was not present in the CSV."),
+        ["reason.presentmon_no_intervals"] = new(
+            Zh: "PresentMon 的 CSV 里没有有效的呈现间隔。",
+            En: "PresentMon CSV contained no valid presentation intervals."),
+        ["reason.presentmon_incomplete"] = new(
+            Zh: "PresentMon 的 CSV 里交换链数据不完整或格式有误。",
+            En: "PresentMon CSV contained incomplete or malformed swap-chain evidence."),
+        ["hardware_decode.owner_unreadable"] = new(
+            Zh: "读不到缓存所属图层的模型、材质或底图纹理。",
+            En: "The cache owner's model, material or base texture could not be read."),
+        ["bake.loop_unresolved"] = new(
+            Zh: "循环解析留下了未解析的时间分量，没有切视频，也没有生成工程。",
+            En: "The analytic loop parse left unresolved temporal components. No video was cut or project generated."),
+        ["bake.no_loop_candidate"] = new(
+            Zh: "没有找到解析循环候选，没有切视频，也没有生成工程。",
+            En: "No analytic loop candidate was found. No video was cut or project generated."),
+        ["bake.late_script_fault"] = new(
+            Zh: "完整截取时，转成视频的内容、保留的祖先或原本没保留实时的图层里出现了源脚本报错。请重新分析分配，让官方的报错隔离和原有属性值留在实时部分；这一组没有写替换图层。",
+            En: "The complete capture observed a source script fault in baked content, a retained ancestor or a layer not already retained live. Re-analyze the allocation so official fault isolation and prior property values remain live; no replacement layer was written for this group."),
+        ["bake.late_external_write"] = new(
+            Zh: "完整截取时发现一次跨越分配边界的非初始化写入：要么写进了转成视频的内容或它保留的祖先，要么由转成视频的控制器写到已知的外部源对象。去掉写入方会丢实时更新，保留它又会让截下来的运动叠加两次。请重新分析分配；这一组没有写替换图层。",
+            En: "The complete capture observed a non-initialization write crossing the allocation boundary, either into baked content/its retained ancestors or from a baked controller to a known external source object. Removing the writer can lose live updates; retaining it can apply captured motion twice. Re-analyze the allocation; no replacement layer was written for this group."),
+        ["bake.late_external_input"] = new(
+            Zh: "完整截取时，转成视频的内容或保留的祖先里出现了分析阶段没有保护到的实时外部输入。请重新分析分配；这一组没有写替换图层。",
+            En: "The complete capture observed a live external input in baked content or a retained ancestor that the bounded analysis had not protected. Re-analyze the allocation; no replacement layer was written for this group."),
+        ["bake.static_proof_changed"] = new(
+            Zh: "一个按静止处理、不计入动态视频预算的组在完整截取中变了，没有导出超大视频布局。",
+            En: "A group excluded from the dynamic-video budget changed during the full capture; no oversized video layout was exported."),
+        ["bake.probe_no_encoded_group"] = new(
+            Zh: "合成探测没有产出可外推的编码视频组。",
+            En: "The composition probe produced no encoded video group to extrapolate."),
+        ["bake.probe_all_static"] = new(
+            Zh: "合成探测没有存下编码视频组（所有组都是静止的）。",
+            En: "The composition probe stored no encoded video group (every group was static)."),
+        // {0}=读取失败的异常消息（外部错误原文，不翻译）
+        ["bake.probe_unreadable"] = new(
+            Zh: "读不了合成探测的编码结果：{0}",
+            En: "The composition probe encode could not be read: {0}"),
+        ["bake.effect_prefix_quality_rejected"] = new(
+            Zh: "GPU 编码的效果前缀对比 CPU Lanczos 没达到现有的播放画质门槛。",
+            En: "GPU prefix encoding did not meet the existing playback quality threshold against CPU Lanczos."),
+        ["bake.effect_prefix_hardware_decode_rejected"] = new(
+            Zh: "按源周期编码的效果前缀没通过实际硬件解码检查。",
+            En: "The source-period prefix encoding did not pass the actual hardware decode check."),
+        ["bake.effect_prefix_opaque_unproven"] = new(
+            Zh: "完整的末端截取没能证明每个编码源帧都是不透明像素。",
+            En: "The full terminal capture did not prove opaque pixels for every encoded source frame."),
+        ["bake.effect_prefix_composition_failed"] = new(
+            Zh: "原始源 48 帧合成比对没通过。",
+            En: "The pristine-source 48-frame composition comparison failed."),
+        // 残差判定理由整族只出中文（ResidualMasking 用 Get(…, Chinese)），En 供将来带键时用。
+        // {0}=各不可掩盖项的理由，用"；"连接
+        ["residual.not_maskable_items"] = new(
+            Zh: "未解析分量里有不可掩盖的项：{0}",
+            En: "Some unresolved components cannot be masked: {0}"),
+        ["residual.reason_missing"] = new(Zh: "未给出原因", En: "no reason given"),
+        ["residual.layer_prefix"] = new(Zh: "层 {0} 的", En: "Layer {0}: "),
+        // {0}=层 id，{1}=解析失败细节
+        ["residual.sprite_unrecognized"] = new(
+            Zh: "层 {0} 的运行时动画只是没能解析出周期（{1}），这属于识别不了而不是已证明非周期或随机，不允许被掩盖。",
+            En: "Layer {0}'s runtime animation merely has no parsed period ({1}); that is unrecognized, not proven non-periodic or random, so it cannot be masked."),
+        // {0}=层前缀（residual.layer_prefix 或空），{1}=机制种类，{2}=循环上限秒数，{3}=细节
+        ["residual.proven_nonperiodic_unbounded"] = new(
+            Zh: "{0}未解析分量 {1} 已由方程证明在 {2} 秒的循环上限内没有周期，而这套机制的位移没有幅度上界，接缝交叉淡化盖不住它（{3}）。",
+            En: "{0}unresolved component {1} is proven by its equations to have no period within the {2}-second loop ceiling, and its displacement has no amplitude bound, so a seam crossfade cannot hide it ({3})."),
+        // {0}=层前缀，{1}=机制种类，{2}=细节
+        ["residual.unrecognized_unbounded"] = new(
+            Zh: "{0}未解析分量 {1} 没有可用的非周期或随机证明，也没有幅度上界（{2}）。",
+            En: "{0}unresolved component {1} has no usable non-periodic or random proof and no amplitude bound ({2})."),
 
         // ---- 应用到桌面 ----
         ["apply.wallpaper_engine_not_running"] = new(
@@ -807,7 +934,7 @@ public static class MessageCatalog
         ["summary.sway_budget_minimized"] = new(Zh: "按最小改动求解", En: "minimum-change solution",
             Legacy: "solved for the smallest change"),
 
-        // {0}=--loop-length-max 秒数 {1}=慢项峰值速度偏差上限（像素/秒）
+        // {0}=--loop-max-seconds 秒数 {1}=慢项峰值速度偏差上限（像素/秒）
         ["sway_retime.no_multiple_meets_speed_limit"] = new(
             Zh: "摆动改频已启用，但 {0} s 循环长度上限内无合规 L = kP：存在周期 < 60 s 的可见摆动项走不满整圈（可见项不可冻结），或慢项冻结、改频后峰值速度偏差超过 {1} px/s；摆动分量按未解析项处理。",
             En: "Sway retime enabled, but no L = kP within the {0} s loop-length maximum qualifies: a visible sway term (period < 60 s) cannot complete a whole cycle (visible terms cannot be frozen), or a slow term's peak speed deviation after freezing or retiming exceeds {1} px/s; sway components remain unresolved.",
@@ -831,7 +958,7 @@ public static class MessageCatalog
             En: "All unresolved mechanisms are stationary-random particle systems, but the longest particle lifetime ({1} s) is not shorter than the default loop length ({0} s): both sides of the seam would share particles, so the crossfade replacement premise fails and the default loop length is not applied.",
             Legacy: "Every unresolved mechanism is a stationary-random particle system, but the longest particle lifetime ({1} s) is not shorter than the default loop length ({0} s): both sides of the seam would share particles, so the crossfade replacement premise fails and no default loop length is used."),
 
-        // {0}=--loop-length-max 秒数
+        // {0}=--loop-max-seconds 秒数
         ["sway_retime.no_multiple_within_maximum"] = new(
             Zh: "摆动改频已启用，但其余分量解出的循环周期均超过 {0} s 循环长度上限，无法取得 L = kP；摆动分量按未解析项处理。",
             En: "Sway retime enabled, but every loop period solved from the other components exceeds the {0} s loop-length maximum, so no L = kP exists; sway components remain unresolved.",
@@ -857,15 +984,15 @@ public static class MessageCatalog
 
         // {0}=视频组 {1}=帧数 {2}=秒数 {3}=预估大小（GiB） {4}=按试编码码率最长秒数
         ["bake.embedded_video_size_predicted"] = new(
-            Zh: "视频组 {0} 的成品（{1} 帧，{2} s）按短段试编码外推约 {3} GiB，超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按该码率最长约 {4} s。已在渲染前停止，未生成候选项目；请用更小的 --loop-length-max、更低的分辨率或帧率重新分析。",
-            En: "Video group {0} ({1} frames, {2} s) extrapolates to about {3} GiB from the trial encode, above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At this bitrate the limit is about {4} s. Stopped before rendering; no candidate project generated. Re-run analysis with a smaller --loop-length-max, a lower resolution, or a lower frame rate.",
-            Legacy: "Extrapolated from the short trial encode, video group {0} ({1} frames, {2} s) would be about {3} GiB, above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At this bitrate it fits about {4} s. Stopped before rendering; no candidate project was generated. Analyze again with a smaller --loop-length-max, a lower resolution, or a lower frame rate."),
+            Zh: "视频组 {0} 的成品（{1} 帧，{2} s）按短段试编码外推约 {3} GiB，超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按该码率最长约 {4} s。已在渲染前停止，未生成候选项目；请用更小的 --loop-max-seconds、更低的分辨率或帧率重新分析。",
+            En: "Video group {0} ({1} frames, {2} s) extrapolates to about {3} GiB from the trial encode, above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At this bitrate the limit is about {4} s. Stopped before rendering; no candidate project generated. Re-run analysis with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate.",
+            Legacy: "Extrapolated from the short trial encode, video group {0} ({1} frames, {2} s) would be about {3} GiB, above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At this bitrate it fits about {4} s. Stopped before rendering; no candidate project was generated. Analyze again with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate."),
 
         // {0}=视频组 {1}=实际大小（GiB） {2}=帧数 {3}=秒数 {4}=按实际码率最长秒数
         ["bake.embedded_video_size_rejected"] = new(
-            Zh: "视频组 {0} 编码后 {1} GiB（{2} 帧，{3} s），超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按实测码率最长约 {4} s。已在接缝校验前停止，未生成候选项目；请用更小的 --loop-length-max、更低的分辨率或帧率重新分析。",
-            En: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At the measured bitrate the limit is about {4} s. Stopped before the seam checks; no candidate project generated. Re-run analysis with a smaller --loop-length-max, a lower resolution, or a lower frame rate.",
-            Legacy: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At the actual bitrate it fits about {4} s. Stopped before the seam checks; no candidate project was generated. Analyze again with a smaller --loop-length-max, a lower resolution, or a lower frame rate."),
+            Zh: "视频组 {0} 编码后 {1} GiB（{2} 帧，{3} s），超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按实测码率最长约 {4} s。已在接缝校验前停止，未生成候选项目；请用更小的 --loop-max-seconds、更低的分辨率或帧率重新分析。",
+            En: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At the measured bitrate the limit is about {4} s. Stopped before the seam checks; no candidate project generated. Re-run analysis with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate.",
+            Legacy: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At the actual bitrate it fits about {4} s. Stopped before the seam checks; no candidate project was generated. Analyze again with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate."),
 
         // ---- 开烘前的磁盘闸门（BakeDiskBudget）----
         // {0}=预估峰值（GiB） {1}=固定余量（GiB） {2}=合计需要（GiB） {3}=输出所在盘 {4}=现有空闲（GiB）
@@ -1171,9 +1298,9 @@ public static class MessageCatalog
             Legacy: "Collateral: {0} drawable layer(s) sitting under them are turned off as well ({1})."),
 
         ["tradeoff.parallax_alternative"] = new(
-            Zh: "鼠标视差另有一种改动更小的禁用方式：仅追加 --view-mode fixed_view，不移除任何图层；重新分析后视差图层若仍需保持实时，再按上述清单排除。",
-            En: "Mouse parallax has a lighter alternative: pass --view-mode fixed_view alone, which removes no layer; if the parallax layers still stay live after re-analysis, exclude them as listed above.",
-            Legacy: "There is a lighter way to turn parallax off: pass --view-mode fixed_view alone, which removes no layer at all; if the parallax layers still have to stay live after analyzing again, exclude them as listed above."),
+            Zh: "鼠标视差另有一种改动更小的禁用方式：仅追加 --interaction fixed，不移除任何图层；重新分析后视差图层若仍需保持实时，再按上述清单排除。",
+            En: "Mouse parallax has a lighter alternative: pass --interaction fixed alone, which removes no layer; if the parallax layers still stay live after re-analysis, exclude them as listed above.",
+            Legacy: "There is a lighter way to turn parallax off: pass --interaction fixed alone, which removes no layer at all; if the parallax layers still have to stay live after analyzing again, exclude them as listed above."),
 
         // {0}=连带关掉的可取舍元素标签
         ["tradeoff.collateral_kinds"] = new(

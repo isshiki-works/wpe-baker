@@ -83,7 +83,7 @@ internal static class HybridLoopGeneralizationChecks
         var mixedRuntime = new JsonObject { ["runtime_animation_periods"] = new JsonArray { Sprite(1.68), fixedHundred } };
         JsonObject Mixed() => HybridLoopService.Analyze(mixedScene, source, null, mixedRuntime, [1, 2], 60, 1);
         var controlled = Mixed();
-        // 上限是 --loop-length-max（默认 600 秒）：100 秒定长轨在上限内有 100、200 … 600 秒六个候选，选中的仍是 100 秒。
+        // 上限是 --loop-max-seconds（默认 600 秒）：100 秒定长轨在上限内有 100、200 … 600 秒六个候选，选中的仍是 100 秒。
         check(controlled["fixed_frame_step"]!.GetValue<ulong>() == 6000 &&
             controlled["candidates"]!.AsArray().Select(x => x!["frames"]!.GetValue<ulong>())
                 .SequenceEqual(new ulong[] { 6000, 12000, 18000, 24000, 30000, 36000 }) &&

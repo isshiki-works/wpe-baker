@@ -82,7 +82,7 @@ try
     }
     if (args.Length < 2) throw new ArgumentException("Source path is required.");
     string[] allowed = args[0] switch {
-        "analyze" => ["--assets", "--out", "--tools", "--properties", "--properties-source", "--width", "--height", "--fps", "--fps-den", "--view-mode", "--video-layout", "--live-overlays", "--text-effects", "--audio-effects", "--exclude-layers", "--preset", "--retime-budget", "--max-retime", "--loop-preference", "--video-shell", "--sway-retime", "--loop-max-seconds", "--loop-length-max", "--local-seam-repair", "--trace", "--retain-live", "--device", "--lang", "--measure-source", "--wallpaper-engine", "--present-mon", "--daytime-split", "--keep-live", "--interaction"],
+        "analyze" => ["--assets", "--out", "--tools", "--properties", "--properties-source", "--width", "--height", "--fps", "--fps-den", "--video-layout", "--live-overlays", "--text-effects", "--audio-effects", "--exclude-layers", "--preset", "--retime-budget", "--video-shell", "--sway-retime", "--loop-max-seconds", "--trace", "--retain-live", "--device", "--lang", "--measure-source", "--wallpaper-engine", "--present-mon", "--daytime-split", "--interaction"],
         "inspect" => ["--assets", "--out"],
         "decode-check" => ["--tools", "--out"],
         "extract" => ["--out"], "bake" => ["--tools", "--out", "--encoder", "--encode-slots", "--group-parallel", "--keep-intermediates", "--effect-render-scale", "--effect-resolution", "--lang"], "render" or "validate" => ["--tools"],
@@ -130,19 +130,11 @@ try
         var frameRate = OutputFrameRate.Choose(Number("--fps", 0),
             () => WallpaperEngineProperties.ReadFrameRateLimit(WallpaperEngineProperties.LocateConfig(Path.GetDirectoryName(assets))),
             OutputFrameRate.PrimaryDisplayRefreshHz);
-        // 档位给观感改动预算与长度上限兜底；--retime-budget / --loop-max-seconds 是高级覆盖，旧名 --max-retime 由这里统一读，提示改名。
-        RetimeProfile.Arguments retimeArguments = RetimeProfile.ReadArguments(options, Console.Error.WriteLine);
-        string keepLive = options.GetValueOrDefault("--keep-live", "off");
-        if (keepLive is not ("on" or "off")) throw new ArgumentException("--keep-live must be on or off.");
-        string interaction = options.GetValueOrDefault("--interaction",
-            options.TryGetValue("--view-mode", out string? explicitView) ? explicitView == "preserve" ? "keep" : "fixed" : "fixed");
+        // 档位给观感改动预算与长度上限兜底；--retime-budget / --loop-max-seconds 是高级覆盖。
+        RetimeProfile.Arguments retimeArguments = RetimeProfile.ReadArguments(options);
+        string interaction = options.GetValueOrDefault("--interaction", "fixed");
         if (interaction is not ("keep" or "fixed" or "off")) throw new ArgumentException("--interaction must be keep, fixed, or off.");
-        if (keepLive == "on" && options.ContainsKey("--interaction")) throw new ArgumentException("--keep-live on uses legacy settings; omit --interaction.");
-        if (options.TryGetValue("--view-mode", out string? selectedView) && options.ContainsKey("--interaction") &&
-            (selectedView == "preserve") != (interaction == "keep")) throw new ArgumentException("--view-mode conflicts with --interaction.");
-        if (options.TryGetValue("--local-seam-repair", out string? repairText) && bool.Parse(repairText))
-            throw new ArgumentException("--local-seam-repair true is no longer supported; source-period encodings are never repaired.");
-        string liveOverlayPlacement = options.GetValueOrDefault("--live-overlays", keepLive == "on" ? "preserve" : "foreground");
+        string liveOverlayPlacement = options.GetValueOrDefault("--live-overlays", "foreground");
         if (liveOverlayPlacement is not ("preserve" or "foreground"))
             throw new ArgumentException("--live-overlays must be preserve or foreground.");
         string liveTextEffects = options.GetValueOrDefault("--text-effects", "preserve");
@@ -151,7 +143,7 @@ try
         string audioEffects = options.GetValueOrDefault("--audio-effects", "preserve");
         if (audioEffects is not ("preserve" or "omit"))
             throw new ArgumentException("--audio-effects must be preserve or omit.");
-        // 循环取向跟着档位走：--loop-preference 已降为 --preset 的别名，解析与冲突判定都在 RetimeProfile.ReadArguments。
+        // 循环取向跟着档位走。
         string loopPreference = RetimeProfile.LoopPreferenceForPreset(retimeArguments.Preset);
         string videoShell = options.GetValueOrDefault("--video-shell", VideoDominance.RejectChoice);
         if (videoShell is not (VideoDominance.RejectChoice or VideoDominance.AllowChoice))
@@ -182,7 +174,7 @@ try
         var request = new HybridAnalyzeRequest(2, sourcePath, assets, analysisDirectory,
             Number("--width", 0), Number("--height", 0), frameRate.Fps, Number("--fps-den", 1), properties,
             // 质量档不设百分比预算（取改动最小的解），通用分量调速这时仍要一个上限，沿用旧默认 2%。
-            options.GetValueOrDefault("--view-mode", "preserve"), MaximumRetimePercent: 2, AllowLocalSeamRepair: false,
+            MaximumRetimePercent: 2, AllowLocalSeamRepair: false,
             RuntimeTraceFile: options.GetValueOrDefault("--trace"),
             DeviceUuid: options.GetValueOrDefault("--device"),
             RetainLiveRootIds: options.TryGetValue("--retain-live", out string? keep) ? keep.Split(',').Select(int.Parse).ToArray() : null,
@@ -200,8 +192,8 @@ try
             FrameRateOrigin: frameRate.ToJson(),
             Preset: retimeArguments.Preset,
             RetimeBudgetPercent: retimeArguments.BudgetPercent,
-            DaytimeSplit: daytimeSplit == "on", KeepLive: keepLive == "on",
-            CustomSettings: PresetCascade.IsCustom(options.Keys), Interaction: keepLive == "on" ? null : interaction,
+            DaytimeSplit: daytimeSplit == "on",
+            CustomSettings: PresetCascade.IsCustom(options.Keys), Interaction: interaction,
             LayoutExplicit: options.ContainsKey("--video-layout"));
         var progress = new Progress<RenderProgress>(p => Console.Error.WriteLine(JsonSerializer.Serialize(p, jsonOptions)));
         // 分析前先实测原作功耗：在官方 Wallpaper Engine 里播原作、等稳定、采样、还原，读数写进 plan 的 source_power，
@@ -257,6 +249,8 @@ try
                 string stateDirectory = Path.Combine(analysisDirectory, "state-" + stateName);
                 JsonObject statePlan = await new HybridScenePlanner(tools).AnalyzeSingleAsync(
                     request with { OutputDirectory = stateDirectory, DaytimeState = stateName }, progress, cancellation.Token);
+                // 子 plan 不经预设级联，生成准入要在这里补上，否则它会说能生成、bake 第一步才拒。
+                Admission.ApplyGenerationAdmission(statePlan);
                 string statePlanPath = options.TryGetValue("--out", out var planOut) ? planOut + ".state-" + stateName + ".json"
                     : Path.Combine(stateDirectory, "plan.json");
                 await using (var stateFile = new FileStream(statePlanPath, FileMode.CreateNew, FileAccess.Write))
@@ -275,7 +269,7 @@ try
         string text = JsonSerializer.Serialize(report, jsonOptions);
         if (options.TryGetValue("--out", out var output))
         {
-            await using var file = new FileStream(output, keepLive == "on" ? FileMode.CreateNew : FileMode.Create, FileAccess.Write);
+            await using var file = new FileStream(output, FileMode.Create, FileAccess.Write);
             await JsonSerializer.SerializeAsync(file, report, jsonOptions, cancellation.Token);
         }
         Console.WriteLine(text);

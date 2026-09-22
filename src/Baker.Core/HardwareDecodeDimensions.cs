@@ -332,7 +332,7 @@ public static class HardwareDecodeDimensions
                     source.ReadJson(materialResource)["passes"] is not JsonArray { Count: > 0 } passes ||
                     passes[0]?["textures"] is not JsonArray { Count: > 0 } textures || Text(textures[0]) is not string texture)
                 {
-                    entry["status"] = "not_predicted"; entry["reason"] = "The cache owner's model, material or base texture could not be read."; continue;
+                    entry["status"] = "not_predicted"; new Message("hardware_decode.owner_unreadable").Write(entry, "reason"); continue;
                 }
                 JsonObject model = source.ReadJson(image);
                 string resource = "materials/" + texture + ".tex";

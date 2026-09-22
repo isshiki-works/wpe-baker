@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// <summary>Versioned allocation semantics; request and result versions are independent.</summary>
+/// <remarks>只读当前版本；旧版 plan 不迁移，一律提示重新分析。</remarks>
 public static class HybridPlanFormat
 {
     public const int CurrentVersion = 3;
@@ -10,19 +11,12 @@ public static class HybridPlanFormat
     public static void Validate(JsonObject plan)
     {
         int version = Number(plan["schema_version"], "schema_version");
-        if (version is not (2 or CurrentVersion) || plan["kind"]?.GetValue<string>() != "hybrid_video")
-            throw new InvalidDataException("A supported Scene plan (version 2 or 3) is required; analyze the source with this version of WPE Baker.");
+        if (plan["kind"]?.GetValue<string>() != "hybrid_video")
+            throw new InvalidDataException("A Scene plan is required; analyze the source with this version of WPE Baker.");
+        if (version != CurrentVersion) throw new Message("plan.legacy_version", [version]).Error(text => new InvalidDataException(text));
         foreach (var group in Objects(plan["video_groups"], "video_groups"))
             if (group["id"] is not null && ProjectSource.NormalizeResource(Text(group["id"], "video group id")).Contains('/'))
                 throw new InvalidDataException("Video group IDs must be single path components.");
-        if (version == 2)
-        {
-            if ((plan["layers"] as JsonArray)?.OfType<JsonObject>().Any(layer =>
-                    layer["allocation_root"] is not null && Number(layer["allocation_root"], "allocation_root") != Number(layer["root"], "root")) == true ||
-                (plan["video_groups"] as JsonArray)?.OfType<JsonObject>().Any(group => group["parent_id"] is not null || group["parent_transform"] is not null) == true)
-                throw new InvalidDataException("Subtree allocation requires plan version 3; a version 2 plan must retain original root semantics.");
-            return;
-        }
         var layers = Objects(plan["layers"], "layers");
         var byId = new Dictionary<int, JsonObject>();
         foreach (var layer in layers)

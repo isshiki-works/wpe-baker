@@ -9,7 +9,7 @@ import time
 ROOT = Path(__file__).resolve().parent.parent
 ap = argparse.ArgumentParser()
 ap.add_argument('source')
-ap.add_argument('--view-mode', choices=['preserve', 'fixed_view'], default='preserve')
+ap.add_argument('--interaction', choices=['keep', 'fixed', 'off'], default='keep')
 ap.add_argument('--seconds', type=int, default=2)
 ap.add_argument('--width', type=int, default=960)
 ap.add_argument('--height', type=int, default=540)
@@ -44,7 +44,7 @@ def run(name, command):
 print(out, flush=True)
 plan, elapsed = run('analyze', ['analyze', args.source, '--assets', assets, '--tools', str(tools),
                                '--out', str(out/'plan.json'), '--width', str(args.width), '--height', str(args.height),
-                               '--fps', '120', '--view-mode', args.view_mode] +
+                               '--fps', '120', '--interaction', args.interaction] +
                                (['--device', args.device] if args.device else []) +
                                (['--retain-live', args.retain_live] if args.retain_live else []))
 print(json.dumps({'groups': [dict(id=g['id'], layers=len(g['layer_ids'])) for g in plan['video_groups']],

@@ -276,9 +276,9 @@ conditions hold.
   (`--measure-source`; an optional checkbox in the GUI, about 60 s).
 - **GUI:** four fixed verdict texts; Technical details collapses to a table
   of numbers; a "Not included in this bake" card lists only what was
-  actually left out; edits in Advanced show as "Custom"; the Compatibility
-  mode checkbox equals `--keep-live on` and reproduces the 1.0 analysis path
-  byte for byte.
+  actually left out; edits in Advanced show as "Custom". The 1.0
+  Compatibility mode (`--keep-live on`) has been removed; plans from older
+  versions are not read and must be analyzed again.
 - **1.0.2: analysis and bake share one admission check.** The
   loop-allocation verdict (particle stationarity, residual masking) now runs
   during analysis, so subtrees that must stay live are decided before the
@@ -842,8 +842,8 @@ quoted anywhere.
 - Everything in **The compatibility sample** and **A wider sample** is
   analyze output only. Nothing there has been baked, and no power figure
   exists for any of it.
-- Local seam repair has been removed. `--local-seam-repair true` is an
-  error; a source-period encoding is never patched up after the fact. If
+- Local seam repair has been removed (the `--local-seam-repair` switch is
+  gone too); a source-period encoding is never patched up after the fact. If
   the seam does not pass, the candidate is rejected. The one narrow
   exception is a seam that matches the source clip's own cut tile for tile
   (see **How it works**): that is accepted as a faithful reproduction, not
@@ -1035,15 +1035,11 @@ Analyze options that change what goes into the plan:
   (5% / 3% / smallest), balanced by default; quality is capped at 600 s,
   and `preset_applied` in the plan names the budget used. Advanced overrides: `--retime-budget
   PERCENT` (0..5) and `--loop-max-seconds`. The older `--loop-preference`,
-  `--max-retime` and `--loop-length-max` names are accepted for one release as
-  aliases and print a rename notice.
+  `--max-retime`, `--loop-length-max` and `--view-mode` names have been removed.
 - `--interaction keep|fixed|off` — what input-driven content does: keep it
   live, fix the view (default), or also drop pointer effects and sampled,
   costly full-screen audio effects. Clocks, dates and media text stay live in
   every mode.
-- `--keep-live on|off` — `on` runs the 1.0 analysis path unchanged (balanced,
-  view preserved, no suggestions, no new plan fields); this is the GUI's
-  Compatibility mode. Cannot be combined with `--interaction`.
 - `--measure-source on|off` — measure the original's power in the official
   player before analysis; off by default.
 - `--sway-retime on|off` — sway retime is **on by default** under all three

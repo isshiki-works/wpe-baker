@@ -402,8 +402,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     parent.StartsWith(destination + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("The destination project must be separate from source and working directories.");
         }
-        HybridAnalyzeRequest settings = plan["settings"]!.Deserialize<HybridAnalyzeRequest>(JsonOptions)
-            ?? throw new InvalidDataException("Invalid capture settings.");
+        HybridAnalyzeRequest settings = PlanSettings.Of(plan);
         if (request.ProbeFrames == 0)
         {
             JsonArray? errors = PlannedSourceScriptErrors(plan);
@@ -422,8 +421,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     throw refreshedLayoutConflict.ToException();
                 if (HybridScenePlanner.CompositionHierarchyConflict(plan) is Blocker refreshedHierarchyConflict)
                     throw refreshedHierarchyConflict.ToException();
-                settings = plan["settings"]!.Deserialize<HybridAnalyzeRequest>(JsonOptions)
-                    ?? throw new InvalidDataException("Refreshed capture settings are invalid.");
+                settings = PlanSettings.Of(plan);
                 errors = PlannedSourceScriptErrors(plan)
                     ?? throw new InvalidDataException("The refreshed analysis omitted source script fault evidence.");
             }
@@ -441,11 +439,10 @@ public sealed class HybridBakeService(NativeTools tools)
                 ["status"] = status, ["source_sha256"] = sourceHash,
                 ["source_digest_scope"] = ProjectSource.DigestScope, ["plan"] = plan.DeepClone(),
                 ["effect_render_scale"] = request.EffectRenderScale, ["match_effect_resolution"] = request.MatchEffectResolution,
-                ["reason"] = residual?["reason"]?.GetValue<string>() ?? (unresolved is { Count: > 0 }
-                    ? "The analytic loop parse left unresolved temporal components. No video was cut or project generated."
-                    : "No analytic loop candidate was found. No video was cut or project generated."),
                 ["frames"] = 0, ["groups"] = new JsonArray(), ["loop_validation"] = layoutRejected ? "not_performed" : "no_suitable_loop",
                 ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified" };
+            if (residual?["reason"]?.GetValue<string>() is string residualReason) rejected["reason"] = residualReason;
+            else new Message(unresolved is { Count: > 0 } ? "bake.loop_unresolved" : "bake.no_loop_candidate").Write(rejected, "reason");
             if (layoutRejected)
             {
                 rejected["reason_zh"] = residual?["reason_zh"]?.DeepClone();
@@ -462,23 +459,23 @@ public sealed class HybridBakeService(NativeTools tools)
             var runtime = JsonNode.Parse(await File.ReadAllTextAsync(plan["runtime_evidence"]!.GetValue<string>(), cancellationToken))!.AsObject();
             // Rebuild from source and current runtime evidence; never accept a saved observed cut or start.
             HybridScenePlanner.RefreshLoop(plan, source, runtime, settings);
-            JsonArray? candidates = plan["loop"]?["candidates"] as JsonArray;
             JsonArray? unresolved = plan["loop"]?["unresolved"] as JsonArray;
             residualMasking = null;
-            if (candidates is not { Count: > 0 }) return await NoLoopReportAsync(unresolved);
-            if (unresolved is not { Count: > 0 }) return null;
-            // 解析候选成立但留着未解析分量：逐条判定残差能不能被固定窗口的接缝淡化掩盖。
-            // 判据在 ResidualMasking 里，拒绝要说清是哪一层、哪个机制、缺什么证明。
-            JsonObject classification = ResidualMasking.ClassifyBakeAllocation(plan, source.ReadJson(source.SceneResource),
+            // 与分析同一个准入判定：无候选按无循环拒绝；留着的未解析分量逐条判定能否被接缝淡化掩盖，
+            // 拒绝要说清是哪一层、哪个机制、缺什么证明。
+            AdmissionVerdict admission = Admission.Evaluate(plan, source.ReadJson(source.SceneResource),
                 ResidualMasking.ResourceReader(source, settings.Assets));
+            if (admission.Rejection == AdmissionRejection.NoLoop) return await NoLoopReportAsync(unresolved);
+            JsonObject classification = admission.Residual!;
+            if (classification["status"]?.GetValue<string>() == "no_residual") return null;
             plan["loop"]!["residual_masking"] = classification.DeepClone();
-            if (classification["status"]?.GetValue<string>() != "residual_maskable")
+            if (admission.Rejection == AdmissionRejection.ResidualNotMaskable)
                 return await NoLoopReportAsync(unresolved, classification);
             // 防御：透明组与多组都能淡化，布局淡化不了的只有"可掩盖分量不在任何视频组里"；analyze 已把它写成 blocker，
-            // 旧版计划或界面改过分配的计划仍可能走到这里。在合成校验与任何渲染之前干净拒绝，写 bake.json，不抛异常，也不自动换分配。
-            if (!ResidualMasking.LayoutAllowsMasking(plan, classification))
+            // 界面改过分配的计划仍可能走到这里。在合成校验与任何渲染之前干净拒绝，写 bake.json，不抛异常，也不自动换分配。
+            if (admission.Rejection == AdmissionRejection.ResidualLayout)
             {
-                JsonObject layout = ResidualMasking.LayoutRejection(plan, classification);
+                JsonObject layout = admission.LayoutGate!;
                 classification["status"] = "rejected_layout";
                 classification["reason"] = layout["reason"]!.DeepClone();
                 classification["reason_zh"] = layout["reason_zh"]!.DeepClone();
@@ -1018,11 +1015,8 @@ public sealed class HybridBakeService(NativeTools tools)
                                 ["late_dependency_validation"] = lateDependencyValidation.DeepClone()
                             });
                             report["status"] = "candidate_rejected_late_dependency";
-                            report["reason"] = unsafeScriptErrors.Count > 0
-                                ? "The complete capture observed a source script fault in baked content, a retained ancestor or a layer not already retained live. Re-analyze the allocation so official fault isolation and prior property values remain live; no replacement layer was written for this group."
-                                : crossBoundaryWrite
-                                    ? "The complete capture observed a non-initialization write crossing the allocation boundary, either into baked content/its retained ancestors or from a baked controller to a known external source object. Removing the writer can lose live updates; retaining it can apply captured motion twice. Re-analyze the allocation; no replacement layer was written for this group."
-                                    : "The complete capture observed a live external input in baked content or a retained ancestor that the bounded analysis had not protected. Re-analyze the allocation; no replacement layer was written for this group.";
+                            new Message(unsafeScriptErrors.Count > 0 ? "bake.late_script_fault"
+                                : crossBoundaryWrite ? "bake.late_external_write" : "bake.late_external_input").Write(report, "reason");
                             report["late_dependency_validation"] = lateDependencyValidation;
                             report["loop_validation"] = "not_performed";
                             await Save();
@@ -1109,7 +1103,7 @@ public sealed class HybridBakeService(NativeTools tools)
                         report["groups"]!.AsArray().Add(new JsonObject { ["id"] = id, ["status"] = "rejected_static_proof",
                             ["source_layers"] = JsonSerializer.SerializeToNode(layers), ["late_dependency_validation"] = lateDependencyValidation });
                         report["status"] = "candidate_rejected_static_proof";
-                        report["reason"] = "A group excluded from the dynamic-video budget changed during the full capture; no oversized video layout was exported.";
+                        new Message("bake.static_proof_changed").Write(report, "reason");
                         await Save(); return report;
                     }
                     if (settings.VideoLayout == "full_frame" && (packedAlpha || master["alpha_bounds"]?["minimum_alpha"]?.ToJsonString() != "255"))
@@ -1409,7 +1403,7 @@ public sealed class HybridBakeService(NativeTools tools)
         HybridAnalyzeRequest settings, CancellationToken cancellationToken)
     {
         var samples = new List<EmbeddedVideoBudget.ProbeGroup>();
-        string? reason = null;
+        Message? reason = null;
         try
         {
             string probeOutput = compositionValidation["probe_output_path"]?.GetValue<string>()
@@ -1426,13 +1420,13 @@ public sealed class HybridBakeService(NativeTools tools)
                 samples.Add(new(group["id"]!.GetValue<string>(), packed, width * (packed ? 2u : 1u), height, probeFrames,
                     new FileInfo(video).Length, await EmbeddedVideoBudget.ReadPacketsAsync(tools, video, cancellationToken)));
             }
-            if (samples.Count == 0) reason = "The composition probe stored no encoded video group (every group was static).";
+            if (samples.Count == 0) reason = new Message("bake.probe_all_static");
         }
         catch (Exception error) when (error is IOException or InvalidDataException or JsonException or InvalidOperationException or FormatException or
             System.ComponentModel.Win32Exception)
         {
             samples.Clear();
-            reason = "The composition probe encode could not be read: " + error.Message;
+            reason = new Message("bake.probe_unreadable", [error.Message]);
         }
         return EmbeddedVideoBudget.EvaluateProbe(samples, frames, settings.FpsNumerator, settings.FpsDenominator, reason);
     }
@@ -1455,8 +1449,7 @@ public sealed class HybridBakeService(NativeTools tools)
         string outputPrefix, IProgress<RenderProgress>? progress = null, CancellationToken cancellationToken = default,
         JsonObject? input = null, JsonArray? inputTimeline = null)
     {
-        var settings = plan["settings"]?.Deserialize<HybridAnalyzeRequest>(JsonOptions)
-            ?? throw new InvalidDataException("Invalid capture settings.");
+        var settings = PlanSettings.Of(plan);
         using var source = new ProjectSource(plan["source"]?.GetValue<string>()
             ?? throw new InvalidDataException("Hybrid plan source is missing."));
         if (await source.SourceHashAsync(cancellationToken) != plan["source_sha256"]?.GetValue<string>())

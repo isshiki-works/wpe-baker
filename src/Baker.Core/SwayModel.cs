@@ -65,9 +65,9 @@ public sealed record SwayRetimeOptions(double LoopLengthMaximumSeconds, double O
     /// </summary>
     public const bool OnByDefault = true;
 
-    /// <summary>--loop-length-max 的默认值（秒）。</summary>
+    /// <summary>--loop-max-seconds 的默认值（秒）。</summary>
     public const double DefaultLoopLengthMaximumSeconds = 600;
 
-    /// <summary>--loop-length-max 允许的上限（秒）。</summary>
+    /// <summary>--loop-max-seconds 允许的上限（秒）。</summary>
     public const double MaximumLoopLengthSeconds = 3600;
 }

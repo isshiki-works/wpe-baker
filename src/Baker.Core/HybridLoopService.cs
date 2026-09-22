@@ -16,7 +16,7 @@ public static class HybridLoopService
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumBudgetPercent)
             throw new ArgumentException("FPS must be positive and retiming must be between zero and five percent.");
-        // 循环时长上限 = --loop-length-max 再按内嵌视频 2 GiB 收紧后的那一个值：所有周期分量共用。
+        // 循环时长上限 = --loop-max-seconds 再按内嵌视频 2 GiB 收紧后的那一个值：所有周期分量共用。
         // 摆动改频的 Lmax 与收紧记录来自同一个请求字段，三者不许不一致。
         double ceilingSeconds = loopLengthMaximumSeconds ?? swayRetime?.LoopLengthMaximumSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
         if (swayRetime is not null && swayRetime.LoopLengthMaximumSeconds != ceilingSeconds)
@@ -927,8 +927,8 @@ public static class HybridLoopService
                 if (node is not JsonObject material) continue;
                 if (material["role"] is JsonNode roleNode && (roleNode is not JsonValue roleValue || !roleValue.TryGetValue<string>(out _)))
                 {
-                    AddRuntimeMaterialUnresolved(new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value,
-                        ["detail"] = "Runtime material role is not a string, so its temporal behavior is unknown." }, unresolved);
+                    AddRuntimeMaterialUnresolved(new Message("unresolved.material_role_not_string").Write(
+                        new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value }, "detail"), unresolved);
                     continue;
                 }
                 string? role = material["role"]?.GetValue<string>();
@@ -937,8 +937,8 @@ public static class HybridLoopService
                     shaderName is not null && ruledMaterials.Contains((owner.Value, shaderName))) continue;
                 if (material["active_uniforms"] is not JsonArray uniforms)
                 {
-                    if (role is not null) AddRuntimeMaterialUnresolved(new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value,
-                        ["detail"] = "Runtime material omitted active_uniforms; it cannot establish a static or analyzed temporal state." }, unresolved);
+                    if (role is not null) AddRuntimeMaterialUnresolved(new Message("unresolved.material_omits_active_uniforms").Write(
+                        new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value }, "detail"), unresolved);
                     continue;
                 }
                 if (uniforms.Any(uniform => uniform is not JsonValue value || !value.TryGetValue<string>(out _)))

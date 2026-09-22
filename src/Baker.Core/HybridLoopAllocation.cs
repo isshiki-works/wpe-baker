@@ -9,8 +9,8 @@ internal static class HybridLoopAllocation
     internal static JsonObject? Propose(JsonObject plan, JsonObject scene) =>
         Explain(plan, scene) is JsonObject result && result["status"]?.GetValue<string>() == "proposed" ? result : null;
 
-    private static JsonObject NotApplicable(string reason) =>
-        new() { ["schema_version"] = 1, ["status"] = "not_applicable", ["reason"] = reason };
+    private static JsonObject NotApplicable(string key) =>
+        new Message(key).Write(new JsonObject { ["schema_version"] = 1, ["status"] = "not_applicable" }, "reason");
 
     /// <summary>
     /// 与 <see cref="Propose"/> 同一判定，但提议不成立时也给出原因，
@@ -20,7 +20,7 @@ internal static class HybridLoopAllocation
     {
         var baked = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
             .SelectMany(group => ReadIds(group["layer_ids"])).ToHashSet();
-        if (baked.Count == 0) return NotApplicable("No layer is allocated to video, so there is no smaller bake allocation left to try.");
+        if (baked.Count == 0) return NotApplicable("reason.allocation_nothing_baked");
         var objects = (scene["objects"]?.AsArray()
             ?? throw new InvalidDataException("Loop allocation requires source objects."))
             .OfType<JsonObject>().ToDictionary(HybridScenePlanner.Id);
@@ -61,12 +61,10 @@ internal static class HybridLoopAllocation
         triggers.UnionWith(baked.Where(id => objects[id].ContainsKey("particle") && !particleStationary.GetValueOrDefault(id)));
 
         var added = triggers.Select(id => rootOf[id]).Where(root => !retained.Contains(root)).ToHashSet();
-        if (added.Count == 0) return NotApplicable(
-            "No baked layer is a particle system that fails the stationary-random criteria or owns an unresolved loop mechanism, so retaining whole author subtrees would keep the same allocation.");
+        if (added.Count == 0) return NotApplicable("reason.allocation_no_trigger");
         retained.UnionWith(added);
         int[] remaining = objects.Keys.Where(id => baked.Contains(id) && !retained.Contains(rootOf[id])).ToArray();
-        if (remaining.Length == 0) return NotApplicable(
-            "Retaining the author subtrees of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help.");
+        if (remaining.Length == 0) return NotApplicable("reason.allocation_nothing_left");
 
         return new JsonObject {
             ["schema_version"] = 1,
@@ -93,22 +91,11 @@ internal static class HybridLoopAllocation
         if (replanned["route"]?.GetValue<string>() == "effect_prefix") return (true, "effect_prefix", null);
         if (replanned["route"]?.GetValue<string>() != "whole_layer" || replanned["blockers"] is not JsonArray { Count: 0 } ||
             replanned["loop"]?["candidates"] is not JsonArray { Count: > 0 }) return (false, "unavailable", null);
-        JsonNode[] mechanisms = (replanned["loop"]?["unresolved"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(item => item["kind"]?.GetValue<string>() != ResidualMasking.AllocationFallbackKind)
-            .Select(item => item.DeepClone()).ToArray();
-        if (mechanisms.Length == 0) return (false, "unavailable", null);
-        // 与 ResidualMasking.LayoutGate 同一份最小副本：说明性条目不当成识别不了的机制。
-        var probe = new JsonObject
-        {
-            ["settings"] = replanned["settings"]?.DeepClone(), ["canvas_width"] = replanned["canvas_width"]?.DeepClone(),
-            ["canvas_height"] = replanned["canvas_height"]?.DeepClone(), ["layers"] = replanned["layers"]?.DeepClone(),
-            ["video_groups"] = replanned["video_groups"]?.DeepClone(),
-            ["loop"] = new JsonObject { ["unresolved"] = new JsonArray(mechanisms) }
-        };
-        JsonObject classification = ResidualMasking.Classify(probe, sourceScene, readResource);
-        bool maskable = classification["status"]?.GetValue<string>() == "residual_maskable" &&
-            ResidualMasking.LayoutAllowsMasking(probe, classification);
-        return (maskable, maskable ? "residual_maskable" : "unavailable", classification);
+        // 与分析、bake 同一个准入判定；说明性条目以外没有未解析项时不走残差掩盖。
+        AdmissionVerdict verdict = Admission.Evaluate(replanned, sourceScene, readResource);
+        if (verdict.Residual?["status"]?.GetValue<string>() == "no_residual") return (false, "unavailable", null);
+        bool admitted = verdict.Rejection == AdmissionRejection.None;
+        return (admitted, admitted ? "residual_maskable" : "unavailable", verdict.Residual);
     }
 
     /// <summary>

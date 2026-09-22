@@ -12,6 +12,9 @@ namespace Baker.Core;
 /// </summary>
 internal static class HybridSuitability
 {
+    /// <summary>重分配后没有可独立烘焙的内容：结论行与准入都按这条规则判不可烘。</summary>
+    internal const string NoIndependentContentRule = "no_independent_content_after_reallocation";
+
     internal static JsonObject Verdict(JsonObject plan)
     {
         var loop = plan["loop"] as JsonObject;
@@ -51,7 +54,7 @@ internal static class HybridSuitability
             plan["loop_allocation_fallback"] is JsonObject fallback && Text(fallback["status"]) == "still_unavailable" &&
             fallback["replanned_video_group_count"] is JsonValue remainingGroups && remainingGroups.TryGetValue<int>(out int groupCount) && groupCount == 0 &&
             fallback["replanned_effect_prefix_cache_count"] is JsonValue remainingCaches && remainingCaches.TryGetValue<int>(out int cacheCount) && cacheCount == 0)
-            return Build("not_suitable", "no_independent_content_after_reallocation",
+            return Build("not_suitable", NoIndependentContentRule,
                 "Keeping the controls and live interactions intact leaves no independently bakeable content with the current settings. " +
                 "Automatic reallocation was already tried; keep using the original wallpaper.",
                 "保留控制和实时交互后，当前设置下没有可独立烘焙的画面。已经尝试自动重新分配，建议继续使用原壁纸。", notes);

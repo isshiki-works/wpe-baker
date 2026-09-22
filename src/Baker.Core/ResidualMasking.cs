@@ -257,47 +257,6 @@ public static class ResidualMasking
     }
 
     /// <summary>
-    /// analyze 侧的前移判定。条件全部满足才返回阻断取证，否则返回 null：整层路线；布局本身没有冲突（有冲突时那条 blocker
-    /// 已经让用户先选布局）；有解析候选；留有未解析的时间机制且全部可掩盖（即 bake 会走残差掩盖路线）；却有残差层不在任何视频组里。
-    /// 未解析分量里有不可掩盖项时 bake 会按"无循环"拒绝，那与布局无关，这里不管。
-    /// </summary>
-    private static JsonObject? LayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource, out Blocker? blocker)
-    {
-        blocker = null;
-        ArgumentNullException.ThrowIfNull(plan);
-        if (Text(plan["route"]) != "whole_layer" || plan["whole_layer"]?["layout_conflict"] is not null ||
-            plan["loop"]?["candidates"] is not JsonArray { Count: > 0 }) return null;
-        JsonNode[] mechanisms = (plan["loop"]?["unresolved"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(item => Text(item["kind"]) != AllocationFallbackKind).Select(item => item.DeepClone()).ToArray();
-        if (mechanisms.Length == 0) return null;
-        // Classify 只读这几项；拼一份最小副本，免得说明性条目被当成识别不了的机制。
-        var probe = new JsonObject
-        {
-            ["settings"] = plan["settings"]?.DeepClone(), ["canvas_width"] = plan["canvas_width"]?.DeepClone(),
-            ["canvas_height"] = plan["canvas_height"]?.DeepClone(), ["layers"] = plan["layers"]?.DeepClone(),
-            ["loop"] = new JsonObject { ["unresolved"] = new JsonArray(mechanisms) }
-        };
-        JsonObject classification = Classify(probe, scene, readResource);
-        return classification["status"]?.GetValue<string>() == "residual_maskable" && !LayoutAllowsMasking(plan, classification)
-            ? LayoutRejection(plan, classification, out blocker) : null;
-    }
-
-    /// <summary>
-    /// 把 <see cref="LayoutGate"/> 的结论写进 plan：取证放 residual_layout_gate，blocker 同时进 blockers 与 whole_layer.blockers，
-    /// status 改为 requires_resolution。不适用时什么都不改，返回 null。
-    /// </summary>
-    public static JsonObject? ApplyLayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
-    {
-        if (LayoutGate(plan, scene, readResource, out Blocker? blocker) is not JsonObject gate) return null;
-        plan["residual_layout_gate"] = gate;
-        foreach (JsonNode? node in new[] { plan["blockers"], plan["whole_layer"]?["blockers"] })
-            if (node is JsonArray blockers) PlanBlockers.Add(blockers, blocker!);
-        plan["status"] = "requires_resolution";
-        if (plan["whole_layer"] is JsonObject wholeLayer) wholeLayer["status"] = "unavailable";
-        return gate;
-    }
-
-    /// <summary>
     /// 布局不允许掩盖时的取证与双语理由：点名不在任何视频组里的可掩盖分量、说明没有组能替它们淡化、给出本场景可执行的出路。
     /// --retain-live 的具体 id 优先取 analyze 已经重查过的更小分配（loop_allocation_fallback 为 candidate_found），
     /// 否则退回这些分量所在的作者根，并如实说明还没重新分析过。
@@ -305,11 +264,11 @@ public static class ResidualMasking
     public static JsonObject LayoutRejection(JsonObject plan, JsonObject classification) =>
         LayoutRejection(plan, classification, out _);
 
-    private static JsonObject LayoutRejection(JsonObject plan, JsonObject classification, out Blocker blocker)
+    internal static JsonObject LayoutRejection(JsonObject plan, JsonObject classification, out Blocker blocker)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(classification);
-        string layout = Text(plan["settings"]?["video_layout"]) is { Length: > 0 } requested ? requested : "full_frame";
+        string layout = PlanSettings.Of(plan).VideoLayout;
         JsonObject[] groups = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
         int transparentGroups = groups.Count(group => !Flag(group["include_scene_clear"]));
         var layers = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
@@ -419,17 +378,8 @@ public static class ResidualMasking
 
     /// <summary>
     /// 对 plan.loop.unresolved 的每一项判定"残差可掩盖"或"不可掩盖"。
-    /// <paramref name="readResource"/> 读取工程内的 JSON 资源（粒子预设等），读不到返回 null。
+    /// <paramref name="readResource"/> 读取工程内的 JSON 资源（粒子预设等），读不到返回 null。准入统一走 <see cref="Admission.Evaluate(JsonObject, JsonObject, Func{string, JsonObject?})"/>。
     /// </summary>
-    public static JsonObject ClassifyBakeAllocation(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
-    {
-        var input = plan.DeepClone().AsObject();
-        if (input["loop"] is JsonObject loop && loop["unresolved"] is JsonArray unresolved)
-            loop["unresolved"] = new JsonArray(unresolved.OfType<JsonObject>()
-                .Where(item => item["kind"]?.GetValue<string>() != AllocationFallbackKind).Select(item => item.DeepClone()).ToArray());
-        return Classify(input, scene, readResource);
-    }
-
     public static JsonObject Classify(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
     {
         ArgumentNullException.ThrowIfNull(plan);
@@ -466,7 +416,7 @@ public static class ResidualMasking
         double outputHeight = Number(plan["settings"]?["height"]) ?? 0;
         double sceneWidth = Number(plan["canvas_width"]) ?? 0;
         double sceneHeight = Number(plan["canvas_height"]) ?? 0;
-        // 拒绝理由复述这份计划实际用的循环时长上限（= --loop-length-max）；旧计划没记就按默认值讲。
+        // 拒绝理由复述这份计划实际用的循环时长上限（= --loop-max-seconds）；旧计划没记就按默认值讲。
         double loopCeiling = Number(plan["loop"]?["maximum_seconds"]) ?? CommonLoopSolver.DefaultMaximumSeconds;
         result["output_width"] = outputWidth;
         result["output_height"] = outputHeight;
@@ -495,8 +445,8 @@ public static class ResidualMasking
         result["sprite_canvas_coverage_basis"] = "随机精灵与粒子层的包围盒画布占比合计，只记录不裁决；掩盖是否可接受由第一层残差判据在全分辨率 master 上实测决定。";
         result["status"] = blocking.Count == 0 ? "residual_maskable" : "rejected";
         if (blocking.Count > 0)
-            result["reason"] = "未解析分量里有不可掩盖的项：" + string.Join("；", blocking.OfType<JsonObject>()
-                .Select(node => node["reason"]?.GetValue<string>() ?? "未给出原因"));
+            result["reason"] = MessageCatalog.Get("residual.not_maskable_items", MessageCatalog.Chinese, string.Join("；", blocking.OfType<JsonObject>()
+                .Select(node => node["reason"]?.GetValue<string>() ?? MessageCatalog.Get("residual.reason_missing", MessageCatalog.Chinese))));
         return result;
     }
 
@@ -551,8 +501,7 @@ public static class ResidualMasking
             }
             verdict["classification"] = "unrecognized";
             verdict["maskable"] = false;
-            verdict["reason"] = $"层 {spriteOwner} 的运行时动画只是没能解析出周期（{detail}），" +
-                "这属于识别不了而不是已证明非周期或随机，不允许被掩盖。";
+            verdict["reason"] = MessageCatalog.Get("residual.sprite_unrecognized", MessageCatalog.Chinese, spriteOwner, detail);
             return verdict;
         }
 
@@ -562,11 +511,10 @@ public static class ResidualMasking
         if (mechanism.Length > 0) verdict["mechanism"] = mechanism;
         verdict["classification"] = provenNonPeriodic ? "proven_nonperiodic_unbounded" : "unrecognized";
         verdict["maskable"] = false;
-        string layerPrefix = owner is int unknownOwner ? $"层 {unknownOwner} 的" : "";
+        string layerPrefix = owner is int unknownOwner ? MessageCatalog.Get("residual.layer_prefix", MessageCatalog.Chinese, unknownOwner) : "";
         verdict["reason"] = provenNonPeriodic
-            ? $"{layerPrefix}未解析分量 {kind} 已由方程证明在 {ceiling} 秒的循环上限内没有周期，" +
-              $"而这套机制的位移没有幅度上界，接缝交叉淡化盖不住它（{detail}）。"
-            : $"{layerPrefix}未解析分量 {kind} 没有可用的非周期或随机证明，也没有幅度上界（{detail}）。";
+            ? MessageCatalog.Get("residual.proven_nonperiodic_unbounded", MessageCatalog.Chinese, layerPrefix, kind, ceiling, detail)
+            : MessageCatalog.Get("residual.unrecognized_unbounded", MessageCatalog.Chinese, layerPrefix, kind, detail);
         if (mechanism == ShaderPeriodAnalysis.LightShaftDriftMechanism) AddLinearDriftGuidance(verdict, item, objects, loopCeiling);
         return verdict;
     }

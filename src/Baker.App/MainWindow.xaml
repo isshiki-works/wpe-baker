@@ -223,9 +223,6 @@
                                             <ScrollViewer MaxHeight="230" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel x:Name="PropertiesEditor"/></ScrollViewer>
                                         </StackPanel>
                                     </Expander>
-                                    <CheckBox x:Name="CompatibilityBox" Checked="SettingsChanged" Unchecked="SettingsChanged" Margin="0,14,0,0">
-                                        <TextBlock Tag="兼容模式（1.0 旧默认）|Compatibility mode (1.0 defaults)"/>
-                                    </CheckBox>
                                 </StackPanel>
                             </Expander>
                         </StackPanel>

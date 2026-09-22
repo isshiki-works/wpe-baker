@@ -238,7 +238,7 @@ def main() -> int:
             result["dimensions"] = {"width": width, "height": height, "source_canvas": canvas}
 
             plan_path = case_dir / "plan.json"
-            analyze = run_command(case_dir, "analyze", [str(cli_exe), "analyze", case["source"], "--assets", str(ASSETS), "--tools", str(tools), "--out", str(plan_path), "--width", str(width), "--height", str(height), "--fps", "120", "--device", args.device, "--view-mode", "preserve", "--local-seam-repair", "true", "--max-retime", "2"], env)
+            analyze = run_command(case_dir, "analyze", [str(cli_exe), "analyze", case["source"], "--assets", str(ASSETS), "--tools", str(tools), "--out", str(plan_path), "--width", str(width), "--height", str(height), "--fps", "120", "--device", args.device, "--interaction", "keep", "--retime-budget", "2"], env)
             result["steps"]["analyze"] = analyze
             plan = analyze.get("stdout")
             if plan is None and plan_path.exists():

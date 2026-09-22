@@ -130,9 +130,8 @@ internal static class RetimeBudgetChecks
 
     private static void ArgumentChecks(Action<bool, string> check)
     {
-        var warnings = new List<string>();
-        RetimeProfile.Arguments defaults = RetimeProfile.ReadArguments(new Dictionary<string, string>(), warnings.Add);
-        check(defaults is { Preset: "balanced", BudgetPercent: null, LoopMaximumSeconds: null, SwayRetime: true } && warnings.Count == 0,
+        RetimeProfile.Arguments defaults = RetimeProfile.ReadArguments(new Dictionary<string, string>());
+        check(defaults is { Preset: "balanced", BudgetPercent: null, LoopMaximumSeconds: null, SwayRetime: true },
             "retime arguments: analyze defaults to the balanced preset, no overrides and sway retime on");
         // 摆动改频默认开（设计 §3：三档都开），只有显式 off 才关；默认值与界面共用 SwayRetimeOptions.OnByDefault。
         check(SwayRetimeOptions.OnByDefault &&
@@ -148,49 +147,21 @@ internal static class RetimeBudgetChecks
             analyzeHelp.Contains("摆动改频三档都开", StringComparison.Ordinal),
             "retime arguments: analyze --help states that sway retime defaults to on for all three presets");
         RetimeProfile.Arguments modern = RetimeProfile.ReadArguments(new Dictionary<string, string>
-            { ["--preset"] = "quality", ["--retime-budget"] = "4.5", ["--loop-max-seconds"] = "900" }, warnings.Add);
-        check(modern is { Preset: "quality", BudgetPercent: 4.5, LoopMaximumSeconds: 900 } && warnings.Count == 0,
-            "retime arguments: --preset, --retime-budget and --loop-max-seconds are read as given, without a deprecation notice");
-        // 旧名仍然可用，但要提示改名；值与新名走同一条校验。
-        RetimeProfile.Arguments legacy = RetimeProfile.ReadArguments(new Dictionary<string, string>
-            { ["--max-retime"] = "1.5", ["--loop-length-max"] = "600" }, warnings.Add);
-        check(legacy is { Preset: "balanced", BudgetPercent: 1.5, LoopMaximumSeconds: 600 } && warnings.Count == 2 &&
-            warnings[0].Contains("--max-retime is now --retime-budget", StringComparison.Ordinal) &&
-            warnings[1].Contains("--loop-length-max is now --loop-max-seconds", StringComparison.Ordinal),
-            "retime arguments: the old names --max-retime and --loop-length-max still work as aliases and print a rename notice");
-        bool both = false, tooLarge = false, badPreset = false;
-        try { RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--retime-budget"] = "3", ["--max-retime"] = "2" }); }
-        catch (ArgumentException) { both = true; }
+            { ["--preset"] = "quality", ["--retime-budget"] = "4.5", ["--loop-max-seconds"] = "900" });
+        check(modern is { Preset: "quality", BudgetPercent: 4.5, LoopMaximumSeconds: 900 },
+            "retime arguments: --preset, --retime-budget and --loop-max-seconds are read as given");
+        bool tooLarge = false, badPreset = false;
         try { RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--retime-budget"] = "6" }); }
         catch (ArgumentException) { tooLarge = true; }
         try { RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--preset"] = "fast" }); }
         catch (ArgumentException) { badPreset = true; }
-        check(both && tooLarge && badPreset,
-            "retime arguments: a new name and its alias together, a budget above 5% and an unknown preset are all rejected");
+        check(tooLarge && badPreset,
+            "retime arguments: a budget above 5% and an unknown preset are rejected");
 
-        // ---- --loop-preference 降为 --preset 的别名（README 早已这么写，实现原先漏了）----
-        warnings.Clear();
-        RetimeProfile.Arguments aliased = RetimeProfile.ReadArguments(new Dictionary<string, string>
-            { ["--loop-preference"] = "performance" }, warnings.Add);
-        RetimeProfile.Arguments agreeing = RetimeProfile.ReadArguments(new Dictionary<string, string>
-            { ["--preset"] = "quality", ["--loop-preference"] = "quality" }, warnings.Add);
-        check(aliased.Preset == RetimeProfile.Efficiency && agreeing.Preset == RetimeProfile.Quality &&
-            warnings.Count == 2 && warnings.All(text => text.Contains("--loop-preference is now an alias", StringComparison.Ordinal)) &&
-            RetimeProfile.PresetForLoopPreference("performance") == RetimeProfile.Efficiency &&
-            RetimeProfile.PresetForLoopPreference("balanced") == RetimeProfile.Balanced &&
-            RetimeProfile.PresetForLoopPreference("quality") == RetimeProfile.Quality &&
-            RetimeProfile.LoopPreferenceForPreset(RetimeProfile.Efficiency) == "performance" &&
+        check(RetimeProfile.LoopPreferenceForPreset(RetimeProfile.Efficiency) == "performance" &&
             RetimeProfile.LoopPreferenceForPreset(RetimeProfile.Balanced) == "balanced" &&
             RetimeProfile.LoopPreferenceForPreset(RetimeProfile.Quality) == "quality",
-            "loop preference: the old switch maps onto a preset in both directions and prints a rename notice");
-        bool conflicting = false, unknownPreference = false;
-        try { RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--preset"] = "efficiency", ["--loop-preference"] = "quality" }); }
-        catch (ArgumentException) { conflicting = true; }
-        try { RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--loop-preference"] = "fastest" }); }
-        catch (ArgumentException) { unknownPreference = true; }
-        check(conflicting && unknownPreference &&
-            CliUsage.Sections("zh")["analyze"].Contains("the old name for --preset", StringComparison.Ordinal),
-            "loop preference: disagreeing presets and unknown values are rejected, and the help text says it is an alias");
+            "loop preference: each preset maps onto the solver's loop preference");
     }
 
     private static void BudgetSolveChecks(Action<bool, string> check)

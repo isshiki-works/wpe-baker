@@ -75,8 +75,8 @@ internal static class SingleShotAllocation
         bool parallax = kinds.Contains("parallax", StringComparer.Ordinal);
         bool parallaxOnly = parallax && kinds.Length == 1;
         string ids = string.Join(",", blocking.Order());
-        string command = parallaxOnly ? "--view-mode fixed_view"
-            : string.Join(" ", new[] { "--exclude-layers " + ids, parallax ? "--view-mode fixed_view" : null }.OfType<string>());
+        string command = parallaxOnly ? "--interaction fixed"
+            : string.Join(" ", new[] { "--exclude-layers " + ids, parallax ? "--interaction fixed" : null }.OfType<string>());
         if (kinds.Length == 0)
             return ($"用 {command} 关掉它们后重新分析", $"turn them off with {command} and analyze again");
         return ($"关掉{TradeoffOptions.KindList(kinds, MessageCatalog.Chinese)}：{command}",
