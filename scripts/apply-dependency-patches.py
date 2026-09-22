@@ -33,13 +33,9 @@ def main() -> None:
         if any(state == "after" for state in states):
             raise RuntimeError("Partial patch state; preserving " + str(directory))
         patch = ROOT / dependency["patch"]
-        # GitHub 镜像里体积超限的补丁以 .xz 存放；本地没有原文件时解压到旁边再用（内容与摘要不变）。
-        if not patch.exists() and patch.with_name(patch.name + ".xz").exists():
-            import lzma
-            with lzma.open(patch.with_name(patch.name + ".xz"), "rb") as packed, patch.open("wb") as unpacked:
-                unpacked.write(packed.read())
         if sha(patch) != dependency["sha256"]: raise RuntimeError("Patch digest mismatch: " + str(patch))
-        command = ["git", "apply", "--directory=" + directory.relative_to(ROOT).as_posix()]
+        # 干净 clone 若继承系统级 core.autocrlf=true，git apply 会写出 CRLF，应用后摘要必然对不上。
+        command = ["git", "-c", "core.autocrlf=false", "apply", "--directory=" + directory.relative_to(ROOT).as_posix()]
         for arguments in [["--check", str(patch)], [str(patch)]]:
             result = subprocess.run(command + arguments, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=subprocess.CREATE_NO_WINDOW)
             if result.returncode: raise RuntimeError(result.stdout + result.stderr)

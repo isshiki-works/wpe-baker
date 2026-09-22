@@ -1,0 +1,87 @@
+--- a/src/core/src/convert.cppm
++++ b/src/core/src/convert.cppm
+@@ -223,17 +223,21 @@
+ 
+ template<>
+ struct Impl<fmt::Display, convert::Infallible> : ImplBase<convert::Infallible> {
+-    auto fmt(fmt::Formatter&) const -> bool { __builtin_unreachable(); }
++    // Reuse the trait partition's bound intrinsic. Clang/MinGW can expose
++    // distinct builtin declarations after importing both trait and CRT modules.
++    auto fmt(fmt::Formatter&) const -> bool { return mtp::trait_check_return<bool>(); }
+ };
+ 
+ template<>
+ struct Impl<fmt::Debug, convert::Infallible> : ImplBase<convert::Infallible> {
+-    auto fmt(fmt::Formatter&) const -> bool { __builtin_unreachable(); }
++    auto fmt(fmt::Formatter&) const -> bool { return mtp::trait_check_return<bool>(); }
+ };
+ 
+ template<>
+ struct Impl<error::Error, convert::Infallible> : ImplBase<convert::Infallible> {
+-    auto source() const noexcept -> Option<error::ErrorRef> { __builtin_unreachable(); }
++    auto source() const noexcept -> Option<error::ErrorRef> {
++        return mtp::trait_check_return<Option<error::ErrorRef>>();
++    }
+ };
+ 
+ template<typename T, typename Self>
+--- a/src/json/src/parser.cppm
++++ b/src/json/src/parser.cppm
+@@ -12,6 +12,8 @@
+ struct ParseOptions {
+     /// Allows line and block comments when enabled.
+     bool allow_comments { false };
++    /// Allows one comma immediately before an array or object closing delimiter.
++    bool allow_trailing_commas { false };
+     /// Rejects repeated keys in the same object when enabled.
+     bool reject_duplicate_keys { false };
+ };
+--- a/src/json/src/reader.cpp
++++ b/src/json/src/reader.cpp
+@@ -341,7 +341,11 @@
+         take();
+         if (auto failure = consume_whitespace(); failure.is_some()) return Err(*failure);
+         if (eof()) return Err(error(ErrorCode::EofWhileParsingValue));
+-        if (peek() == u8(']')) return Err(error(ErrorCode::TrailingComma));
++        if (peek() == u8(']')) {
++            if (! options_.allow_trailing_commas) return Err(error(ErrorCode::TrailingComma));
++            leave_container(u8(']'));
++            return Ok(false);
++        }
+     }
+     first = false;
+     return Ok(true);
+@@ -370,7 +374,11 @@
+         take();
+         if (auto failure = consume_whitespace(); failure.is_some()) return Err(*failure);
+         if (eof()) return Err(error(ErrorCode::EofWhileParsingValue));
+-        if (peek() == u8('}')) return Err(error(ErrorCode::TrailingComma));
++        if (peek() == u8('}')) {
++            if (! options_.allow_trailing_commas) return Err(error(ErrorCode::TrailingComma));
++            leave_container(u8('}'));
++            return Ok(None<String>());
++        }
+     }
+     if (peek() != u8('"')) return Err(error(ErrorCode::KeyMustBeAString));
+     auto key = parse_string();
+--- a/tests/main/json/parser.cpp
++++ b/tests/main/json/parser.cpp
+@@ -143,6 +143,18 @@
+     EXPECT_TRUE(unterminated.unwrap_err().is_eof());
+ }
+ 
++TEST(JsonParser, TrailingCommasRequireExplicitOption) {
++    const auto permissive = rstd::json::ParseOptions { .allow_trailing_commas = true };
++
++    EXPECT_TRUE(parse("[1,]"_str).is_err());
++    EXPECT_TRUE(parse("{\"a\":1,}"_str).is_err());
++    EXPECT_TRUE(rstd::json::from_str("[1,{\"nested\":[2,],},]"_str, permissive).is_ok());
++    EXPECT_TRUE(rstd::json::from_str("{\"a\":[1,],\"b\":{\"c\":2,},}"_str, permissive).is_ok());
++    EXPECT_TRUE(rstd::json::from_str(R"({"text":"comma,] remains text",})"_str, permissive).is_ok());
++    EXPECT_TRUE(rstd::json::from_str("[1,,2]"_str, permissive).is_err());
++    EXPECT_TRUE(rstd::json::from_str("{\"a\":1,,\"b\":2}"_str, permissive).is_err());
++}
++
+ TEST(JsonParser, ClassifiesTruncatedInputAsEof) {
+     expect_eof_error(""_str);
+     expect_eof_error("["_str);

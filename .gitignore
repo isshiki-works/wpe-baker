@@ -12,7 +12,5 @@ dist/
 artifacts/
 work/
 checkpoint/
-# 从 .xz 解压出来的本地补丁副本
-scripts/dependency-patches/rstd.patch
 # 本机工具路径配置（每台机器不同）
 tools.json
