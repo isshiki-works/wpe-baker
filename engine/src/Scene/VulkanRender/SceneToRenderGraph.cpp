@@ -584,36 +584,6 @@ Option<Displacement> ShineCombine(const EffectParams& p) {
     return Some(Displacement {});
 }
 
-// iris（芙莉莲、炎珀工程自带同一份）：采样点 = v_TexCoord.xy + da·mask（MASK）或 + da，
-//   da = (mix(moveStart, moveEnd, s) + (sin, cos)·g_NoiseAmount)·g_Scale·0.001，moveStart/End 各分量是
-//   两个 sin 之和（|·| ≤ 2），s ∈ [0,1] ⇒ |da.x| ≤ (2 + |noise|)·|scale.x|·0.001。g_Rough ≤ 0 时
-//   smoothstep 两端相等会得 NaN，按未知处理。
-Option<Displacement> Iris(const EffectParams& p) {
-    if (! p.HasVariant()) return None();
-    auto scale = p.Vec2("g_Scale");
-    auto noise = p.Scalar("g_NoiseAmount"), rough = p.Scalar("g_Rough");
-    if (scale.is_none() || noise.is_none() || rough.is_none() || *rough <= 0.0) return None();
-    const double a = (2.0 + std::abs(*noise)) * 0.001;
-    return Some(Displacement { a * std::abs((*scale)[0]), a * std::abs((*scale)[1]), None() });
-}
-
-// 工坊水波 3221939295：texCoord += val1·s1·[val2·s2]·offset·strength·mask，offset 是单位向量，
-//   strength = (500 / g_Texture0Resolution.xy)·g_Strength²，|val1| = |sin + g_Offset|^g_Exponent ≤
-//   (1 + |g_Offset|)^g_Exponent，|val2| ≤ 1（指数 > 0），mask ∈ [0,1]。
-Option<Displacement> WorkshopWaves(const EffectParams& p) {
-    if (! p.HasVariant()) return None();
-    auto strength = p.Scalar("g_Strength"), exponent = p.Scalar("g_Exponent"),
-         offset = p.Scalar("g_Offset");
-    if (strength.is_none() || exponent.is_none() || offset.is_none() || *exponent <= 0.0)
-        return None();
-    if (p.Combo("DUALWAVES", 0) != 0) {
-        auto exponent2 = p.Scalar("g_Exponent2");
-        if (exponent2.is_none() || *exponent2 <= 0.0) return None();
-    }
-    const double amp = std::pow(1.0 + std::abs(*offset), *exponent) * *strength * *strength * 500.0;
-    return Some(Displacement { amp / p.Input().min_w, amp / p.Input().min_h, None() });
-}
-
 // waterflow：采样点 = v_TexCoord.xy + flowMask·g_FlowAmp·0.1·(cycles − 0.5)，flowMask =
 //   (rg − 0.498)·2 ∈ [−0.996, 1.004]，cycles − 0.5 ∈ [−0.5, 0.5) ⇒ |Δ| ≤ 0.0502·|amp|（两轴）。
 Option<Displacement> WaterFlow(const EffectParams& p) {
@@ -646,9 +616,6 @@ constexpr Rule kDisplacementTable[] = {
     { "effects/shine_cast", 17347959800840427808ull, ShineCast },
     { "effects/shine_gaussian", 94899090392042740ull, ShineGaussian },
     { "effects/shine_combine", 9097062468333062290ull, ShineCombine, 1u << 1 },
-    { "effects/iris", 149053491644285638ull, Iris },
-    { "workshop/2718465779/effects/pulse_", 6446172188147822368ull, Pointwise },
-    { "workshop/3221939295/effects/____________________", 18382066121782785803ull, WorkshopWaves },
     { "effects/waterflow", 8434346930136608297ull, WaterFlow },
     { "effects/shimmer", 1518327559064762644ull, Pointwise },
 };
