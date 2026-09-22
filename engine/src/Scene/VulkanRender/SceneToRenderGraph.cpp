@@ -85,6 +85,8 @@ struct ExtraInfo {
     Option<rg::TextureNodeRef> mip_framebuffer_history;
     const RenderSceneSnapshot* render_scene { nullptr };
     const RenderLayerSelection* selection { nullptr };
+    // X3 M1：离线捕获（图层/效果/FBO 抓取）会直接读中间 RT，区域反推不建模这类读取，整场景不裁。
+    bool capture { false };
     // X3 M1：效果 pass → （输出中需保留的 UV 矩形，逐帧 guard）
     std::unordered_map<const SceneImageEffectNode*,
                        std::shared_ptr<const std::function<Option<std::array<double, 4>>()>>>
@@ -1089,6 +1091,7 @@ Option<LayerPlan> PlanLayer(SceneNodeLayer& layer, Scene& scene, ExtraInfo& extr
     if (layer.FinalResolveEffect() || layer.PublishedEffect() || layer.VisibleResolveEffect())
         return fail("resolve/published effect");
     if (! layer.PrefillNodes().empty()) return fail("prefill nodes");
+    if (extra.capture) return fail("offline capture target");
     auto state_ext = scene.ExtensionMut<Arc<UniformSceneState>>();
     if (state_ext.is_none()) return fail("no uniform state");
     // 扩展由场景持有，生命周期覆盖渲染图；guard 里存裸指针以便 std::function 可拷贝。
@@ -1863,6 +1866,7 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
                                              const RenderCaptureTarget* capture_target) {
     auto      rgraph = Box<rg::RenderGraph>::make();
     ExtraInfo extra { .rgraph = rgraph.get(), .scene = &scene, .render_scene = &render_scene, .selection = selection };
+    extra.capture = capture_target != nullptr;
 
     // The snapshot owns link-consumer discovery; graph build only consumes the
     // resulting source ids.
