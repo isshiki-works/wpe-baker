@@ -163,9 +163,7 @@ public static class HybridCompositionValidator
         result["worst_rgb_tile"] = worstTile;
         bool passed = failures.Count == 0;
         result["status"] = passed ? "composition_pass" : "composition_rejected";
-        result["reason"] = passed
-            ? "The short paired sample stayed within the fixed global, tile RGB, and global alpha limits."
-            : "The short paired sample was incomplete or exceeded at least one fixed composition limit.";
+        new Message(passed ? "reason.composition_pass" : "reason.composition_rejected").Write(result, "reason");
         return result;
     }
 

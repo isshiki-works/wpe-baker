@@ -78,5 +78,15 @@ internal static class HybridPlanFormatChecks
         catch (InvalidDataException error) when (error.Message.StartsWith("Resolve the plan", StringComparison.Ordinal)) { blockerReached = true; }
         check(blockerReached && !Directory.Exists(Path.Combine(outputRoot, "v3-blocked")),
             "request v2 accepts plan v3 and still enforces the pre-render blocker");
+        // C1.1a 之前分析出的 v3 plan：拒因是英文原文，blockers_localized 的 key 为 null。按旧版 plan 提示重新分析，
+        // 与读到旧版本号同一种异常，不能漏成 InvalidOperationException。
+        var unnumbered = Plan();
+        unnumbered["blockers"] = new JsonArray("Resolve the plan blockers before baking.");
+        unnumbered["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = null, ["zh"] = "x", ["en"] = "x", ["params"] = new JsonArray() });
+        Message? unnumberedMessage = null;
+        try { await new HybridBakeService(tools).BakeAsync(new(2, unnumbered, Path.Combine(outputRoot, "v3-unnumbered"))); }
+        catch (InvalidDataException error) { unnumberedMessage = Message.Of(error); }
+        check(unnumberedMessage?.Key == "plan.legacy_unnumbered_blocker" && !Directory.Exists(Path.Combine(outputRoot, "v3-unnumbered")),
+            "a v3 plan whose blockers carry no code is rejected as an older plan to analyze again");
     }
 }

@@ -662,14 +662,13 @@ public static class OfficialPerformanceSampler
         var instances = new JsonArray();
         foreach (var item in indexed) instances.Add(item.Instance);
         if (indexed.Length == 0)
-            return new JsonObject
+            return new Message("reason.power_counters_missing").Write(new JsonObject
             {
                 ["status"] = "unsupported_platform", ["source"] = "windows_energy_meter",
                 ["missing"] = @"\Energy Meter(*)\Power",
-                ["reason"] = "This machine publishes no Energy Meter (RAPL) power counters, so wallpaper power cannot be measured here.",
                 ["instances"] = instances, ["package_watts"] = null, ["cores_watts"] = null,
                 ["igpu_domain_watts"] = null, ["igpu_domain_method"] = "unavailable"
-            };
+            }, "reason");
         int[] package = indexed.Where(item => item.Instance.EndsWith("_PKG", StringComparison.OrdinalIgnoreCase))
             .Select(item => item.Index).ToArray();
         int[] cores = indexed.Where(item => item.Instance.EndsWith("_CORE", StringComparison.OrdinalIgnoreCase))
@@ -845,9 +844,8 @@ public static class OfficialPerformanceSampler
         int? expectedProcessId = null, bool trackDisplay = true)
     {
         if (!File.Exists(path) || new FileInfo(path).Length == 0)
-            return new JsonObject { ["status"] = "not_measured",
-                ["reason"] = "PresentMon produced no CSV; the target may have had no active presentation.",
-                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = new JsonArray() };
+            return new Message("reason.presentmon_no_csv").Write(new JsonObject { ["status"] = "not_measured",
+                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = new JsonArray() }, "reason");
         CsvData csv;
         try { csv = ParseCsv(Decode(File.ReadAllBytes(path))); }
         catch (Exception error)
@@ -856,8 +854,8 @@ public static class OfficialPerformanceSampler
                 ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = new JsonArray() };
         }
         if (csv.Rows.Count < 2)
-            return new JsonObject { ["status"] = "not_measured", ["reason"] = "PresentMon CSV has no presentation rows.",
-                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = csv.Errors };
+            return new Message("reason.presentmon_no_rows").Write(new JsonObject { ["status"] = "not_measured",
+                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = csv.Errors }, "reason");
         string[] header = csv.Rows[0];
         int chainIndex = Header(header, "SwapChainAddress", "SwapChain", "SwapChainID");
         int presentsIndex = Header(header, "msBetweenPresents");
@@ -866,8 +864,8 @@ public static class OfficialPerformanceSampler
         int runtimeIndex = Header(header, "Runtime");
         int processIndex = Header(header, "ProcessID");
         if (chainIndex < 0 || presentsIndex < 0 && displayIndex < 0 || expectedProcessId is not null && processIndex < 0)
-            return new JsonObject { ["status"] = "partial_report", ["reason"] = "Required PresentMon v1 columns are unavailable.",
-                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = csv.Errors };
+            return new Message("reason.presentmon_columns_missing").Write(new JsonObject { ["status"] = "partial_report",
+                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = csv.Errors }, "reason");
 
         var chains = new Dictionary<string, PresentChain>(StringComparer.OrdinalIgnoreCase);
         int validRows = 0, excludedProcessRows = 0;
@@ -960,11 +958,12 @@ public static class OfficialPerformanceSampler
         string status = validRows == 0 || chains.Values.All(chain => chain.Intervals.Count == 0 && chain.DisplayIntervals.Count == 0) ? "not_measured" :
             requestedMissing || incompleteIntervals || unidentified || csv.Errors.Count > 0
                 ? "partial_report" : "sampled";
-        return new JsonObject
+        string? reasonKey = requestedMissing ? "reason.presentmon_swapchain_missing" :
+            status == "not_measured" ? "reason.presentmon_no_intervals" :
+            status == "partial_report" ? "reason.presentmon_incomplete" : null;
+        var sampled = new JsonObject
         {
-            ["status"] = status, ["reason"] = requestedMissing ? "Requested SwapChainAddress was not present in the CSV." :
-                status == "not_measured" ? "PresentMon CSV contained no valid presentation intervals." :
-                status == "partial_report" ? "PresentMon CSV contained incomplete or malformed swap-chain evidence." : null,
+            ["status"] = status, ["reason"] = null,
             ["swapchains"] = swapchains, ["csv_rows"] = validRows, ["csv_rows_total"] = csv.Rows.Count - 1,
             ["expected_process_id"] = expectedProcessId, ["excluded_process_rows"] = excludedProcessRows,
             ["display_tracking_enabled"] = trackDisplay,
@@ -975,6 +974,7 @@ public static class OfficialPerformanceSampler
                 DisplayMeetsTarget(resolvedChain, targetFps),
             ["metric_note"] = "effective_fps, interval_ms and below_target_fps_ratio describe Present API submissions only. displayed_fps uses positive msBetweenDisplayChange values from displayed rows; missing display evidence never verifies target FPS. Chains are never summed."
         };
+        return reasonKey is null ? sampled : new Message(reasonKey).Write(sampled, "reason");
     }
 
     private sealed class PresentChain

@@ -100,12 +100,12 @@ internal static class EmbeddedVideoBudgetChecks
             "trial extrapolation: the pre-render rejection names the group, length, estimated size and the longest loop at this bitrate in both languages");
         JsonObject mixed = EmbeddedVideoBudget.EvaluateProbe([new("group-1", false, 1920, 1080, 48, 1, simple),
             new("group-2", true, 3840, 1080, 48, 814_173, amiyaTrial)], 150_000, 60, 1);
-        JsonObject none = EmbeddedVideoBudget.EvaluateProbe([], 150_000, 60, 1, "The composition probe stored no encoded video group (every group was static).");
+        JsonObject none = EmbeddedVideoBudget.EvaluateProbe([], 150_000, 60, 1, new Message("bake.probe_all_static"));
         check(mixed["status"]!.GetValue<string>() == "predicted_over_limit" && mixed["groups"]!.AsArray().Count == 2 &&
             !mixed["groups"]![0]!["over_limit"]!.GetValue<bool>() && mixed["groups"]![1]!["over_limit"]!.GetValue<bool>() &&
             mixed["reason_localized"]!["zh"]!.GetValue<string>().Contains("视频组 group-2", StringComparison.Ordinal) &&
-            none["status"]!.GetValue<string>() == "not_estimated" && none["reason_localized"] is null &&
-            none["reason"]!.GetValue<string>().Contains("static", StringComparison.Ordinal),
+            none["status"]!.GetValue<string>() == "not_estimated" &&
+            none["reason_localized"]?["key"]?.GetValue<string>() == "bake.probe_all_static",
             "trial extrapolation: any over-limit group rejects and is named; with no encoded trial the estimate is recorded as not_estimated without rejecting");
 
         // ---- 编码后兜底的文案 ----

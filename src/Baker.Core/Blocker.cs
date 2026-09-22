@@ -118,9 +118,16 @@ public static class PlanBlockers
         {
             string? key = items[i] is JsonObject node ? node["key"]?.GetValue<string>()
                 : localized is not null && i < localized.Count ? localized[i]?["key"]?.GetValue<string>() : null;
-            yield return BlockerCodes.FromKey(key) ?? throw new InvalidOperationException("blocker 没有编号：" + items[i]?.ToJsonString());
+            yield return BlockerCodes.FromKey(key) ?? throw UnnumberedPlan();
         }
     }
+
+    /// <summary>
+    /// 拒因没有编号：plan 是 C1.1a 之前分析出来的（v3 字段齐全，blockers_localized 的 key 为 null）。
+    /// 与读到旧版本号一样按旧版 plan 处理，提示重新分析（决策 1：旧 plan 不迁移）。
+    /// </summary>
+    private static InvalidDataException UnnumberedPlan() =>
+        new Message("plan.legacy_unnumbered_blocker").Error(text => new InvalidDataException(text));
 
     /// <summary>追加一条；同编号同参数的已在数组里就不重复加。</summary>
     public static void Add(JsonArray items, Blocker blocker)
@@ -153,7 +160,7 @@ public static class PlanBlockers
                 texts.Add(items[i]!.DeepClone());
                 localized.Add(previous[i]!.DeepClone());
             }
-            else throw new InvalidOperationException("blocker 没有编号：" + items[i]?.ToJsonString());
+            else throw UnnumberedPlan();
         }
         if (items is not null) owner["blockers"] = texts;
         owner["blockers_localized"] = localized;
