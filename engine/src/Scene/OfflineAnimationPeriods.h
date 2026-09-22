@@ -33,6 +33,48 @@ inline long long OfflineAnimationPeriodGcd(long long lhs, long long rhs) {
     return lhs;
 }
 
+// Shortest decimal that parses back to exactly this value (std::to_string kept 6 decimals).
+template <class Real>
+inline std::string OfflineShortestNumber(Real value) {
+    char buffer[64];
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+    return std::string(buffer, result.ptr);
+}
+
+struct OfflinePeriodRational {
+    long long numerator {};
+    long long denominator { 1 };
+};
+
+// Exact value of a positive float/double: every finite binary float is n / 2^k.
+inline std::optional<OfflinePeriodRational> OfflinePeriodExact(double value) {
+    if (! std::isfinite(value) || value <= 0.0) return std::nullopt;
+    int exponent {};
+    long long numerator = static_cast<long long>(std::ldexp(std::frexp(value, &exponent), 53));
+    exponent -= 53;
+    while (exponent < 0 && (numerator & 1) == 0) {
+        numerator >>= 1;
+        ++exponent;
+    }
+    if (exponent < -62 || exponent > 9) return std::nullopt;
+    if (exponent >= 0) return OfflinePeriodRational { numerator << exponent, 1 };
+    return OfflinePeriodRational { numerator, 1LL << -exponent };
+}
+
+// lhs + rhs reduced; none on int64 overflow.
+inline std::optional<OfflinePeriodRational> OfflinePeriodAdd(OfflinePeriodRational lhs,
+                                                             OfflinePeriodRational rhs) {
+    const long long common = OfflineAnimationPeriodGcd(lhs.denominator, rhs.denominator);
+    long long denominator {}, left {}, right {}, numerator {};
+    if (__builtin_mul_overflow(lhs.denominator / common, rhs.denominator, &denominator) ||
+        __builtin_mul_overflow(lhs.numerator, rhs.denominator / common, &left) ||
+        __builtin_mul_overflow(rhs.numerator, lhs.denominator / common, &right) ||
+        __builtin_add_overflow(left, right, &numerator))
+        return std::nullopt;
+    const long long reduce = OfflineAnimationPeriodGcd(numerator, denominator);
+    return OfflinePeriodRational { numerator / reduce, denominator / reduce };
+}
+
 inline void AppendOfflineAnimationPeriod(std::string& out, bool& first, i32 owner,
                                          std::string_view mechanism,
                                          std::string_view track_name,
@@ -57,7 +99,7 @@ inline void AppendOfflineAnimationPeriod(std::string& out, bool& first, i32 owne
     out += ",\"track_name\":";
     out += track_name.empty() ? "null" : OfflineAnimationPeriodJsonString(track_name);
     out += ",\"duration_seconds\":";
-    out += std::to_string(duration_seconds);
+    out += OfflineShortestNumber(duration_seconds);
     if (! duration_numerator.empty() && ! duration_denominator.empty()) {
         out += ",\"duration_numerator\":";
         out += duration_numerator;
@@ -136,7 +178,23 @@ inline std::string DescribeOfflineAnimationPeriods(Scene& scene) {
             std::string playback_rate;
             const float rate = playback->Rate();
             if (rstd::f32(rate).is_finite() && rate > 0.0f)
-                playback_rate = std::to_string(rate);
+                playback_rate = OfflineShortestNumber(rate);
+            // Duration() = End frames / Fps; exact as End * fps_den / fps_num.
+            std::string duration_numerator;
+            std::string duration_denominator;
+            const auto fps = OfflinePeriodExact(static_cast<double>(clip->Fps()));
+            if (fps && clip->End() > i32()) {
+                long long frames = clip->End().to_primitive();
+                long long fps_numerator = fps->numerator;
+                const long long common = OfflineAnimationPeriodGcd(frames, fps_numerator);
+                frames /= common;
+                fps_numerator /= common;
+                long long numerator {};
+                if (! __builtin_mul_overflow(frames, fps->denominator, &numerator)) {
+                    duration_numerator = std::to_string(numerator);
+                    duration_denominator = std::to_string(fps_numerator);
+                }
+            }
 
             AppendOfflineAnimationPeriod(
                 out,
@@ -151,7 +209,9 @@ inline std::string DescribeOfflineAnimationPeriods(Scene& scene) {
                 "high",
                 "SceneAnimationPlayback::Duration/Rate and SceneAnimationClip mode/events; event markers do not imply event-driven playback",
                 std::to_string(clip->Events().len().to_primitive()),
-                mode);
+                mode,
+                duration_numerator,
+                duration_denominator);
         }
 
         const auto* mesh = node->Mesh();
@@ -169,6 +229,8 @@ inline std::string DescribeOfflineAnimationPeriods(Scene& scene) {
 
                     double period {};
                     bool   valid { true };
+                    // Exact sum of the float frame times, when it fits in int64.
+                    std::optional<OfflinePeriodRational> exact { OfflinePeriodRational { 0, 1 } };
                     for (usize frame_index {}; frame_index < frame_count; ++frame_index) {
                         const float frame_time =
                             (**texture).spriteAnim.GetFrame(frame_index).frametime;
@@ -177,6 +239,8 @@ inline std::string DescribeOfflineAnimationPeriods(Scene& scene) {
                             break;
                         }
                         period += static_cast<double>(frame_time);
+                        const auto term = OfflinePeriodExact(static_cast<double>(frame_time));
+                        exact = exact && term ? OfflinePeriodAdd(*exact, *term) : std::nullopt;
                     }
                     if (! valid || ! rstd::f64(period).is_finite() || period <= 0.0) continue;
                     if (was_emitted(owner, "sprite", texture_name)) continue;
@@ -194,7 +258,9 @@ inline std::string DescribeOfflineAnimationPeriods(Scene& scene) {
                         "high",
                         "SceneTexture.spriteAnim frame[].frametime; SpriteAnimation loops at its final frame",
                         {},
-                        "loop");
+                        "loop",
+                        exact ? std::to_string(exact->numerator) : std::string {},
+                        exact ? std::to_string(exact->denominator) : std::string {});
                     continue;
                 }
 
@@ -210,7 +276,7 @@ inline std::string DescribeOfflineAnimationPeriods(Scene& scene) {
                 const auto metadata = (*control)->PeriodMetadata();
                 std::string playback_rate;
                 if (snapshot.rate.is_finite() && snapshot.rate > rstd::f64()) {
-                    playback_rate = std::to_string(snapshot.rate.to_primitive());
+                    playback_rate = OfflineShortestNumber(snapshot.rate.to_primitive());
                 }
                 std::string duration_numerator;
                 std::string duration_denominator;

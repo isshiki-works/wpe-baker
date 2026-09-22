@@ -1949,8 +1949,8 @@ std::string SceneRenderController::describeOfflineScene() const {
                 << ",\"render_group\":" << (identity.is_some() && m_scene->RenderGroupCamera(*identity).is_some() ? "true" : "false")
                 << ",\"effective_parallax_depth\":";
             if (effective_parallax.is_some()) {
-                out << '[' << (*effective_parallax).depth[usize()] << ','
-                    << (*effective_parallax).depth[usize(1)] << ']';
+                out << '[' << OfflineShortestNumber((*effective_parallax).depth[usize()]) << ','
+                    << OfflineShortestNumber((*effective_parallax).depth[usize(1)]) << ']';
             } else {
                 out << "null";
             }
