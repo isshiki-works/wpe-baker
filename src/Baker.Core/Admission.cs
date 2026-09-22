@@ -15,13 +15,10 @@ public enum AdmissionRejection
 }
 
 /// <summary>
-/// <see cref="Admission.Evaluate"/> 的结论。Residual 是 loop.residual_masking 的内容（整层路线才有）；
-/// Blocker 是分析要写进 plan 的那一条（残差不可掩盖或残差布局），没有则为 null；LayoutGate 是 residual_layout_gate 的取证。
+/// <see cref="Admission.Evaluate"/> 的结论。Rejection 为 None 即可生成；Residual 是 loop.residual_masking 的内容（整层路线才有）；
+/// Blocker 是分析要写进 plan 的那一条（残差不可掩盖与残差布局互斥，最多一条），没有则为 null；LayoutGate 是 residual_layout_gate 的取证。
 /// </summary>
-public sealed record AdmissionVerdict(string Route, AdmissionRejection Rejection, JsonObject? Residual, Blocker? Blocker, JsonObject? LayoutGate)
-{
-    public bool Admitted => Rejection == AdmissionRejection.None;
-}
+public sealed record AdmissionVerdict(AdmissionRejection Rejection, JsonObject? Residual, Blocker? Blocker, JsonObject? LayoutGate);
 
 /// <summary>
 /// 生成准入的唯一判定。analyze（残差布局前提、更小分配取证）、PresetCascade（生成准入、组数上限、可烘判定）、
@@ -41,8 +38,7 @@ public static class Admission
     public static AdmissionVerdict Evaluate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        string route = plan["route"]?.GetValue<string>() ?? "";
-        if (route == "effect_prefix") return new(route, AdmissionRejection.None, null, null, null);
+        if (plan["route"]?.GetValue<string>() == "effect_prefix") return new(AdmissionRejection.None, null, null, null);
         // 说明性条目（更小分配取证）不是时间机制，不能当成识别不了的机制去判定。
         var input = plan.DeepClone().AsObject();
         if (input["loop"] is JsonObject loop && loop["unresolved"] is JsonArray unresolved)
@@ -54,18 +50,18 @@ public static class Admission
         {
             // 无候选时 bake 先按"无循环"拒绝；分析照样记下残差不可掩盖，两边都拒。
             string reason = residual["reason_en"]?.GetValue<string>() ?? residual["reason"]?.GetValue<string>() ?? "Unresolved content must remain live.";
-            return new(route, hasCandidates ? AdmissionRejection.ResidualNotMaskable : AdmissionRejection.NoLoop, residual,
+            return new(hasCandidates ? AdmissionRejection.ResidualNotMaskable : AdmissionRejection.NoLoop, residual,
                 new Blocker(BlockerCode.BakeAllocation, [reason]), null);
         }
-        if (!hasCandidates) return new(route, AdmissionRejection.NoLoop, residual, null, null);
+        if (!hasCandidates) return new(AdmissionRejection.NoLoop, residual, null, null);
         // 布局本身有冲突时那条 blocker 已经让用户先选布局，这里不叠加。
         if (residual["status"]?.GetValue<string>() == "residual_maskable" && plan["whole_layer"]?["layout_conflict"] is null &&
             !ResidualMasking.LayoutAllowsMasking(plan, residual))
         {
             JsonObject gate = ResidualMasking.LayoutRejection(plan, residual, out Blocker blocker);
-            return new(route, AdmissionRejection.ResidualLayout, residual, blocker, gate);
+            return new(AdmissionRejection.ResidualLayout, residual, blocker, gate);
         }
-        return new(route, AdmissionRejection.None, residual, null, null);
+        return new(AdmissionRejection.None, residual, null, null);
     }
 
     /// <summary>
@@ -85,14 +81,6 @@ public static class Admission
         return verdict.LayoutGate;
     }
 
-    /// <summary>从 plan 自带的源与 assets 读场景后判定（cascade 与 CLI 分状态子 plan 用）。</summary>
-    public static AdmissionVerdict Evaluate(JsonObject plan)
-    {
-        using var source = new ProjectSource(plan["source"]!.GetValue<string>());
-        return Evaluate(plan, source.ReadJson(source.SceneResource),
-            ResidualMasking.ResourceReader(source, plan["settings"]?["assets"]?.GetValue<string>()));
-    }
-
     /// <summary>
     /// 把生成准入写进整层 plan：loop.residual_masking 记分类，残差不可掩盖时追加 blocker.bake_allocation 并重算裁定与结论。
     /// 所有产出最终 plan 的分析路径（预设级联的每次尝试、CLI 的分状态子 plan）都要过这一步，分析说能生成的 bake 第一步才不会拒。
@@ -101,7 +89,14 @@ public static class Admission
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (plan["kind"]?.GetValue<string>() != "hybrid_video" || plan["route"]?.GetValue<string>() != "whole_layer") return;
-        AdmissionVerdict verdict = Evaluate(plan);
+        using var source = new ProjectSource(plan["source"]!.GetValue<string>());
+        ApplyGenerationAdmission(plan, source.ReadJson(source.SceneResource),
+            ResidualMasking.ResourceReader(source, plan["settings"]?["assets"]?.GetValue<string>()));
+    }
+
+    internal static void ApplyGenerationAdmission(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
+    {
+        AdmissionVerdict verdict = Evaluate(plan, scene, readResource);
         plan["loop"]!["residual_masking"] = verdict.Residual;
         if (verdict.Blocker is not { Code: BlockerCode.BakeAllocation } blocker) return;
         plan["blockers"]!.AsArray().Add(blocker.ToNode());

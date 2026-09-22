@@ -96,7 +96,8 @@ internal static class HybridLoopAllocation
         // 与分析、bake 同一个准入判定；说明性条目以外没有未解析项时不走残差掩盖。
         AdmissionVerdict verdict = Admission.Evaluate(replanned, sourceScene, readResource);
         if (verdict.Residual?["status"]?.GetValue<string>() == "no_residual") return (false, "unavailable", null);
-        return (verdict.Admitted, verdict.Admitted ? "residual_maskable" : "unavailable", verdict.Residual);
+        bool admitted = verdict.Rejection == AdmissionRejection.None;
+        return (admitted, admitted ? "residual_maskable" : "unavailable", verdict.Residual);
     }
 
     /// <summary>

@@ -59,7 +59,7 @@ public class AdmissionTests
     public void NoResidualIsAdmitted()
     {
         AdmissionVerdict verdict = Evaluate(Plan(new JsonArray()));
-        Assert.True(verdict.Admitted);
+        Assert.Equal(AdmissionRejection.None, verdict.Rejection);
         Assert.Equal("no_residual", verdict.Residual!["status"]!.GetValue<string>());
         Assert.Null(verdict.Blocker);
     }
@@ -69,7 +69,7 @@ public class AdmissionTests
     {
         // 只剩说明性条目时就是没有残差：cascade 与 bake 同一口径（原来 bake 会把它当"不可掩盖"拒绝）。
         AdmissionVerdict verdict = Evaluate(Plan(new JsonArray(Note())));
-        Assert.True(verdict.Admitted);
+        Assert.Equal(AdmissionRejection.None, verdict.Rejection);
         Assert.Equal("no_residual", verdict.Residual!["status"]!.GetValue<string>());
     }
 
@@ -103,7 +103,7 @@ public class AdmissionTests
     public void MaskableResidualInsideAGroupIsAdmitted()
     {
         AdmissionVerdict verdict = Evaluate(Plan(new JsonArray(Maskable(), Note())));
-        Assert.True(verdict.Admitted);
+        Assert.Equal(AdmissionRejection.None, verdict.Rejection);
         Assert.Equal("residual_maskable", verdict.Residual!["status"]!.GetValue<string>());
     }
 
@@ -121,7 +121,7 @@ public class AdmissionTests
     public void ExistingLayoutConflictIsNotStacked()
     {
         AdmissionVerdict verdict = Evaluate(Plan(new JsonArray(Maskable()), groups: [[1]], layoutConflict: "conflict"));
-        Assert.True(verdict.Admitted);
+        Assert.Equal(AdmissionRejection.None, verdict.Rejection);
         Assert.Null(verdict.Blocker);
     }
 
@@ -129,7 +129,7 @@ public class AdmissionTests
     public void EffectPrefixRouteHasNoResidualAdmission()
     {
         AdmissionVerdict verdict = Evaluate(Plan(new JsonArray(Unmaskable()), route: "effect_prefix"));
-        Assert.True(verdict.Admitted);
+        Assert.Equal(AdmissionRejection.None, verdict.Rejection);
         Assert.Null(verdict.Residual);
     }
 
@@ -163,6 +163,26 @@ public class AdmissionTests
         Assert.True(Admission.Bakeable(bakeable));
         Assert.False(Admission.Bakeable(blocked));
         Assert.False(Admission.Bakeable(noCandidate));
+    }
+
+    [Fact]
+    public void GenerationAdmissionWritesTheBlockerBakeWouldRejectWith()
+    {
+        // 分析说不能生成的，正是 bake 第一步会拒的：blocker.bake_allocation、requires_resolution、结论行不再是可烘。
+        JsonObject rejected = Narrated(Plan(new JsonArray(Unmaskable())));
+        Assert.True(Admission.Bakeable(rejected));
+        Admission.ApplyGenerationAdmission(rejected, Scene, NoResource);
+        Assert.Equal([BlockerCode.BakeAllocation], PlanBlockers.Codes(rejected).ToArray());
+        Assert.Equal("requires_resolution", rejected["status"]!.GetValue<string>());
+        Assert.Equal("rejected", rejected["loop"]!["residual_masking"]!["status"]!.GetValue<string>());
+        Assert.False(Admission.Bakeable(rejected));
+        Assert.False(rejected["summary"]!["key"]!.GetValue<string>().StartsWith("summary.bakeable", StringComparison.Ordinal));
+
+        JsonObject admitted = Narrated(Plan(new JsonArray(Maskable())));
+        Admission.ApplyGenerationAdmission(admitted, Scene, NoResource);
+        Assert.Empty(PlanBlockers.Codes(admitted));
+        Assert.Equal("residual_maskable", admitted["loop"]!["residual_masking"]!["status"]!.GetValue<string>());
+        Assert.True(Admission.Bakeable(admitted));
     }
 
     [Fact]
