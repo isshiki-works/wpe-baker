@@ -21,10 +21,6 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 CREATE_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 ENV = os.environ.copy()
-ENV["PATH"] = os.pathsep.join(str(ROOT / path) for path in (
-    ".tools/llvm-mingw/bin", ".deps/ffmpeg/bin", ".deps/install/bin",
-)) + os.pathsep + ENV.get("PATH", "")
-ENV["TEMP"] = ENV["TMP"] = str(ROOT / ".tools" / "tmp")
 
 
 def run(command: list[str], cwd: Path, log: Path, timeout: int = 180) -> None:
@@ -95,7 +91,6 @@ def red_pixel(run_result: dict, frame: int) -> int:
 def main() -> None:
     if not __debug__:
         raise RuntimeError("validation must run with Python assertions enabled")
-    (ROOT / ".tools/tmp").mkdir(parents=True, exist_ok=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--renderer", type=Path, required=True)
     parser.add_argument("--ffmpeg", type=Path, required=True)

@@ -2736,84 +2736,9 @@ std::string ShaderParser::PreShaderHeader(const std::string& src, const Combos& 
     return pre + user_src;
 }
 
-namespace
-{
-
-// Serialize one CompileToSpv invocation as a JSON object. Captures the
-// raw post-PreShaderSrc state (includes resolved, prologue not yet
-// applied, regex extraction not yet run) so a replay through the full
-// pipeline exercises every transform downstream.
-Json BuildShaderRecord(std::string_view scene_id, std::span<const ShaderUnit> units,
-                       const ShaderInfo* shader_info, std::span<const ShaderTexInfo> texs) {
-    auto stage_name = [](ShaderType s) -> const char* {
-        switch (s) {
-        case ShaderType::VERTEX: return "VERTEX";
-        case ShaderType::FRAGMENT: return "FRAGMENT";
-        case ShaderType::GEOMETRY: return "GEOMETRY";
-        }
-        return "UNKNOWN";
-    };
-
-    auto rec = rstd::json::Map::make();
-    rec.insert(::alloc::string::String::make("scene_id"_str), JsonFromStd(scene_id));
-
-    auto js_stages = rstd::json::Array::make();
-    for (const auto& u : units) {
-        auto stage = rstd::json::Map::make();
-        stage.insert(::alloc::string::String::make("stage"_str), JsonFromStd(stage_name(u.stage)));
-        stage.insert(::alloc::string::String::make("src"_str), JsonFromStd(u.src));
-        js_stages.push(Json::Object(rstd::move(stage)));
-    }
-    rec.insert(::alloc::string::String::make("stages"_str), Json::Array(rstd::move(js_stages)));
-
-    auto js_combos = rstd::json::Map::make();
-    if (shader_info) {
-        for (const auto& [k, v] : shader_info->combos)
-            js_combos.insert(::alloc::string::String::make(rstd::cppstd::as_str(k).unwrap()),
-                             JsonFromStd(v));
-    }
-    rec.insert(::alloc::string::String::make("combos"_str), Json::Object(rstd::move(js_combos)));
-
-    auto js_texs = rstd::json::Array::make();
-    for (const auto& t : texs) {
-        auto compos = rstd::json::Array::make();
-        for (bool enabled : t.composEnabled) compos.push(rstd::into<Json>(enabled));
-        auto tex = rstd::json::Map::make();
-        tex.insert(::alloc::string::String::make("enabled"_str),
-                   rstd::into<Json>(bool { t.enabled }));
-        tex.insert(::alloc::string::String::make("compos"_str), Json::Array(rstd::move(compos)));
-        js_texs.push(Json::Object(rstd::move(tex)));
-    }
-    rec.insert(::alloc::string::String::make("tex_infos"_str), Json::Array(rstd::move(js_texs)));
-
-    return Json::Object(rstd::move(rec));
-}
-
-// Appends one JSONL line to WP_SHADER_RECORD's path. O_APPEND is atomic
-// for writes ≤ PIPE_BUF on Linux, which is more than enough for a single
-// JSON line; concurrent recorders won't interleave.
-void MaybeRecordCompile(std::string_view scene_id, std::span<const ShaderUnit> units,
-                        const ShaderInfo* shader_info, std::span<const ShaderTexInfo> texs) {
-    const char* path = std::getenv("WP_SHADER_RECORD");
-    if (! path || path[0] == '\0') return;
-    Json        rec  = BuildShaderRecord(scene_id, units, shader_info, texs);
-    std::string line = Dump(rec);
-    line.push_back('\n');
-    if (FILE* f = std::fopen(path, "a")) {
-        std::fwrite(line.data(), 1, line.size(), f);
-        std::fclose(f);
-    } else {
-        rstd_warn("WP_SHADER_RECORD: cannot open '{}' for append", path);
-    }
-}
-
-} // namespace
-
 bool ShaderParser::CompileToSpv(std::string_view scene_id, std::span<ShaderUnit> units,
                                 std::vector<ShaderCode>& codes, ShaderInfo* shader_info,
                                 std::span<const ShaderTexInfo> texs, ShaderCache* cache) {
-    MaybeRecordCompile(scene_id, units, shader_info, texs);
-
     auto make_compile_entry =
         [](std::span<const ShaderUnit> source_units, std::span<const ShaderCode> source_codes) {
             ShaderCache::CompileEntry entry;

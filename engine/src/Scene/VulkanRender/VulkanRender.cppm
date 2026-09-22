@@ -56,7 +56,7 @@ enum class CpuFrameStatus
 // Owns completed pixels or an explicit GPU submission receipt. Submitted frames
 // contain no CPU pixels or completed GPU timing. No pixel view outlives a map.
 struct CpuFrameResult {
-    // Optional host-side spans, enabled by gpu_timing or WPE_RENDER_CPU_PROFILE. These are wall
+    // Optional host-side spans, enabled by gpu_timing. These are wall
     // times, not GPU timestamps, and distinguish preparation from waits.
     std::optional<double>    cpu_prepare_ms, cpu_render_wait_ms, cpu_encode_ms, cpu_pass_check_ms;
     std::optional<double>    cpu_scene_ms, cpu_resources_ms, cpu_script_ms, cpu_pending_wait_ms;

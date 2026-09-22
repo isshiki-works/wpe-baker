@@ -16,25 +16,21 @@ using namespace rstd::prelude;
 using namespace rstd::literals;
 using rstd::sync::Arc;
 
-TEST(OfflineFrameSelection, DrawSkippingKeepsEveryWarmupAndSelectedFrame) {
+TEST(OfflineFrameSelection, ReadbackSelectsStrideAndPhaseAfterStart) {
     owe::OfflineOptions options;
     options.readback_start = 300;
     options.readback_stride = 32;
-    EXPECT_TRUE(options.drawsFrame(301)); // Default behavior still draws unread frames.
-    options.draw_selected_frames_only = true;
-    uint64_t drawn = 0, read = 0;
+    uint64_t read = 0;
     for (uint64_t index = 0; index < 780; ++index) {
-        if (index < 300) EXPECT_TRUE(options.drawsFrame(index));
-        drawn += options.drawsFrame(index);
+        if (index < 300) EXPECT_FALSE(options.readsFrame(index));
         read += options.readsFrame(index);
     }
-    EXPECT_EQ(drawn, 315u);
     EXPECT_EQ(read, 15u);
-    EXPECT_FALSE(options.drawsFrame(301));
-    EXPECT_TRUE(options.drawsFrame(332));
+    EXPECT_TRUE(options.readsFrame(332));
+    EXPECT_FALSE(options.readsFrame(316));
     options.readback_phase = 16;
-    EXPECT_TRUE(options.drawsFrame(316));
-    EXPECT_FALSE(options.drawsFrame(317));
+    EXPECT_TRUE(options.readsFrame(316));
+    EXPECT_FALSE(options.readsFrame(317));
 }
 
 namespace uniform_test

@@ -168,7 +168,6 @@ struct Job {
     double effect_render_scale { 1.0 };
     bool match_effect_resolution { false };
     bool raw_stdout{}, validation{}, gpu_timing{}, trace_scene{};
-    bool draw_selected_frames_only { false };
     bool write_audio { true };
     owe::OfflineFrameInput input;
     std::vector<std::pair<uint64_t, PointerInput>> input_timeline;
@@ -326,7 +325,6 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     job.gpu_timing = Bool(json, "gpu_timing", false);
     job.trace_scene = Bool(json, "trace_scene", false);
     job.write_audio = Bool(json, "write_audio", true);
-    job.draw_selected_frames_only = Bool(json, "draw_selected_frames_only", false);
     if (auto* overrides = Field(json, "offline_video_rate_overrides")) {
         auto array = overrides->as_array();
         if (array.is_none())
@@ -448,9 +446,6 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
             throw std::runtime_error("orthographic_capture_viewport width and height must be positive");
         job.orthographic_capture_viewport = parsed;
     }
-    if (job.draw_selected_frames_only && (job.collect_sampling_coverage || job.gpu_encode || job.capture_target ||
-        job.orthographic_capture_viewport || job.layer_selection.enabled))
-        throw std::runtime_error("draw_selected_frames_only cannot be combined with full coverage, GPU encoding or capture selection");
     return job;
 }
 
@@ -467,7 +462,7 @@ int Render(const fs::path& job_path) {
     WriteText(job.output / "request.json", text);
     uint64_t written = 0;
     uint64_t audio_processed = 0;
-    uint64_t simulated_frames = 0, drawn_frames = 0, skipped_draw_frames = 0, readback_frames = 0;
+    uint64_t simulated_frames = 0, drawn_frames = 0, readback_frames = 0;
     bool gpu_sampled = false;
     const auto start = std::chrono::steady_clock::now();
     owe::SceneWallpaper wallpaper;
@@ -490,12 +485,12 @@ int Render(const fs::path& job_path) {
             << ",\"fps_num\":" << job.fps_num << ",\"fps_den\":" << job.fps_den
             << ",\"requested_frames\":" << job.frames << ",\"written_frames\":" << written
             << ",\"output_frame_stride\":" << job.output_stride
-            << ",\"draw_selected_frames_only\":" << (job.draw_selected_frames_only ? "true" : "false")
+            << ",\"draw_selected_frames_only\":false"
             << ",\"simulated_frames\":" << simulated_frames
             << ",\"drawn_frames\":" << drawn_frames
-            << ",\"skipped_draw_frames\":" << skipped_draw_frames
+            << ",\"skipped_draw_frames\":0"
             << ",\"frame_counts_include_warmup\":true"
-            << ",\"last_step_draw_skipped\":" << (wallpaper.offlineStepStatus() == owe::OfflineStepStatus::DrawSkipped ? "true" : "false")
+            << ",\"last_step_draw_skipped\":false"
             << ",\"output_frame_phase\":" << (job.output_phase ? std::to_string(*job.output_phase) : "null")
             << ",\"readback_width\":" << (job.sample_width ? job.sample_width : job.width)
             << ",\"readback_height\":" << (job.sample_height ? job.sample_height : job.height)
@@ -654,8 +649,7 @@ int Render(const fs::path& job_path) {
         offline.trace_scene = job.trace_scene;
         offline.readback_stride = job.output_stride;
         offline.readback_phase = job.output_phase;
-        offline.draw_selected_frames_only = job.draw_selected_frames_only;
-        if (Field(json, "output_frame_stride") || job.gpu_encode || job.collect_sampling_coverage || job.draw_selected_frames_only)
+        if (Field(json, "output_frame_stride") || job.gpu_encode || job.collect_sampling_coverage)
             offline.readback_start = job.warmup;
         offline.video_rate_overrides = job.video_rate_overrides;
         if (!wallpaper.initOffline(std::move(config), std::move(info), offline))
@@ -689,14 +683,7 @@ int Render(const fs::path& job_path) {
             const bool read_pixels = !job.gpu_encode && offline.readsFrame(frame);
             const uint32_t output_width = job.sample_width ? job.sample_width : job.width;
             const uint32_t output_height = job.sample_height ? job.sample_height : job.height;
-            const auto step_status = wallpaper.offlineStepStatus();
-            const bool draw_skipped = step_status == owe::OfflineStepStatus::DrawSkipped;
-            if (draw_skipped) {
-                if (offline.drawsFrame(frame) || read_pixels || pixels.completed() ||
-                    pixels.frame_index != frame || pixels.width || pixels.height || pixels.row_pitch ||
-                    !pixels.pixels.empty() || pixels.gpu_total_ms || pixels.gpu_draw_ms)
-                    throw std::runtime_error("skipped draw violates simulation-only contract");
-            } else if (!offline.drawsFrame(frame) || step_status != owe::OfflineStepStatus::Drawn ||
+            if (wallpaper.offlineStepStatus() != owe::OfflineStepStatus::Drawn ||
                 (!pixels.completed() && !(!read_pixels && frame + 1 < job.warmup + job.frames && pixels.submitted())) || pixels.frame_index != frame || pixels.width != output_width ||
                 pixels.height != output_height || pixels.row_pitch != output_width * 4 ||
                 pixels.pixels.size() != (read_pixels ? uint64_t(output_width) * output_height * 4 : 0)) {
@@ -713,8 +700,7 @@ int Render(const fs::path& job_path) {
             next_audio_sample = pcm.sample_start + pcm.frame_count;
             ++simulated_frames;
             gpu_sampled = gpu_sampled || pixels.gpu_sampled;
-            if (draw_skipped) ++skipped_draw_frames;
-            else ++drawn_frames;
+            ++drawn_frames;
             if (!pixels.pixels.empty()) ++readback_frames;
             if (frame < job.warmup) continue;
             if (job.write_audio) {
@@ -779,27 +765,6 @@ int Render(const fs::path& job_path) {
     }
 }
 
-int Inspect(const fs::path& source) {
-    auto path = source;
-    if (fs::is_directory(path)) path /= fs::is_regular_file(path / "scene.pkg") ? "scene.pkg" : "scene.json";
-    auto document = owe::wpscene::LoadSceneDocumentFromSource(Utf8(path));
-    if (document.is_none()) throw std::runtime_error("scene metadata could not be parsed");
-    RequireNoLoggedErrors();
-    std::cout << "{\"schema_version\":1,\"status\":\"metadata_parsed\",\"source\":" << Quote(Utf8(path))
-              << ",\"pkg_version\":" << document->metadata.pkg_version
-              << ",\"objects\":" << document->objects.len().to_primitive()
-              << ",\"render_validated\":false,\"objects_detail\":[";
-    bool first = true;
-    for (const auto& object : document->objects) {
-        if (!first) std::cout << ',';
-        first = false;
-        std::cout << "{\"id\":" << object.metadata.id.to_primitive()
-                  << ",\"name\":" << Quote(object.metadata.name)
-                  << ",\"authored\":" << owe::Dump(object.authored) << '}';
-    }
-    std::cout << "]}\n";
-    return 0;
-}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -809,13 +774,11 @@ int main(int argc, char** argv) {
         auto args = Arguments(argc, argv);
         if (args.size() == 2 && args[1] == "--version") {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,selected-draw-v1,gpu-scene-overlap-v1,gpu-quality-samples-v1,gpu-search-overlap-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1\n";
             return 0;
         }
         if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));
-        if (args.size() == 4 && args[1] == "inspect" && args[2] == "--source") return Inspect(Path(args[3]));
-        std::cerr << "Usage: wpe-render render --job job.json\n"
-                     "       wpe-render inspect --source scene.pkg\n";
+        std::cerr << "Usage: wpe-render render --job job.json\n";
         return 2;
     } catch (const std::exception& error) {
         std::cerr << "wpe-render: " << error.what() << '\n';
