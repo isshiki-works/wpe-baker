@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "base_commit": "2866b4ff22cde7f0c6cbc20f108d680bcdc1b8a0",
-  "target_commit": "d732d6223600cbb46a4fef5476a3bd749157b4d4",
-  "target_tree": "61a72ff5583556668918aca5144ff0d837aafba2",
-  "patch": "development-update.patch",
-  "patch_sha256": "0aebc5de4a33c45f6cea2c4ad67c810a25524d81a4c42aedc85c39d8037a6295",
-  "distribution": "Renderer source delta for development builds."
-}
