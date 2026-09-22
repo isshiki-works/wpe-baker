@@ -42,16 +42,15 @@ internal sealed record RenderJob
     public bool? CollectSamplingCoverage { get; init; }
     public RenderGpuEncodeJob? GpuEncode { get; init; }
 
-    /// <summary>整帧渲染与原始帧渲染共用的字段；JsonObject 类输入深拷贝，job 与请求互不共享节点。</summary>
+    /// <summary>整帧渲染与原始帧渲染共用的字段。JsonObject 类输入直接引用请求里的节点：记录只被序列化、不挂父节点，不必深拷贝。</summary>
     public static RenderJob From(RenderRequest request, string source, string outputDir, bool rawStdout) => new()
     {
         Source = source, Assets = Path.GetFullPath(request.Assets), OutputDir = outputDir,
         Width = request.Width, Height = request.Height, FpsNum = request.FpsNumerator, FpsDen = request.FpsDenominator,
         Frames = request.Frames, WarmupFrames = request.WarmupFrames, Seed = request.Seed, RawStdout = rawStdout,
         CaptureTarget = request.CaptureTarget, OrthographicCaptureViewport = request.OrthographicCaptureViewport,
-        LayerSelection = request.LayerSelection, Input = request.Input?.DeepClone().AsObject(),
-        InputTimeline = request.InputTimeline?.DeepClone().AsArray(), UserProperties = request.UserProperties?.DeepClone().AsObject(),
-        OfflineVideoRateOverrides = request.OfflineVideoRateOverrides?.DeepClone().AsArray(), DeviceUuid = request.DeviceUuid,
+        LayerSelection = request.LayerSelection, Input = request.Input, InputTimeline = request.InputTimeline,
+        UserProperties = request.UserProperties, OfflineVideoRateOverrides = request.OfflineVideoRateOverrides, DeviceUuid = request.DeviceUuid,
         GpuTiming = request.GpuTiming ? true : null, TraceScene = request.TraceScene ? true : null
     };
 }
