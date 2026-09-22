@@ -216,3 +216,88 @@ public class AdmissionTests
         Assert.True(Admission.Accepted(plan));
     }
 }
+
+// bake 第一步与分析同一口径：重算循环后留下不可掩盖的未解析分量，bake 在任何渲染之前按"无循环"干净拒绝，
+// 写出的残差分类与 Admission.Evaluate 对同一份 plan 给出的 blocker.bake_allocation 是同一个结论。
+[Trait("Layer", "L1")]
+public class AdmissionBakeTests
+{
+    // 层 1 的动画置信度决定有没有解析候选；层 3 置信度不够，留下不可掩盖的未解析分量。
+    private static async Task<(JsonObject Result, JsonObject Scene)> BakeAsync(string root, string firstConfidence)
+    {
+        string sourceDirectory = Path.Combine(root, "source");
+        Directory.CreateDirectory(sourceDirectory);
+        JsonObject Owner(int id) => new()
+        {
+            ["id"] = id, ["size"] = "100 100", ["visible"] = true,
+            ["animationlayers"] = new JsonArray(new JsonObject { ["id"] = 50, ["name"] = "sway", ["rate"] = 1 })
+        };
+        await File.WriteAllTextAsync(Path.Combine(sourceDirectory, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
+        await File.WriteAllTextAsync(Path.Combine(sourceDirectory, "scene.json"), new JsonObject
+        {
+            ["general"] = new JsonObject(), ["objects"] = new JsonArray(Owner(1), Owner(3))
+        }.ToJsonString());
+        string runtimeEvidence = Path.Combine(root, "runtime.json");
+        await File.WriteAllTextAsync(runtimeEvidence, new JsonObject
+        {
+            ["status"] = "complete", ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray(),
+            ["runtime_dependencies"] = new JsonArray(),
+            ["runtime_animation_periods"] = new JsonArray(
+                new JsonObject
+                {
+                    ["source_owner_layer_id"] = 1, ["mechanism"] = "puppet_bone", ["track_name"] = "sway", ["duration_seconds"] = 2,
+                    ["looping"] = true, ["playback_mode"] = "loop", ["event_driven"] = false, ["confidence"] = firstConfidence, ["playback_rate"] = 1
+                },
+                new JsonObject
+                {
+                    ["source_owner_layer_id"] = 3, ["mechanism"] = "sprite", ["track_name"] = "flip", ["duration_seconds"] = 1.68,
+                    ["looping"] = true, ["playback_mode"] = "loop", ["event_driven"] = false, ["confidence"] = "low"
+                })
+        }.ToJsonString());
+        using var source = new ProjectSource(sourceDirectory);
+        var settings = new HybridAnalyzeRequest(2, sourceDirectory, root, Path.Combine(root, "analysis"), 64, 32, 60, 1, VideoLayout: "layered");
+        var plan = new JsonObject
+        {
+            ["kind"] = "hybrid_video", ["route"] = "whole_layer", ["source"] = sourceDirectory, ["source_sha256"] = await source.SourceHashAsync(),
+            ["settings"] = System.Text.Json.JsonSerializer.SerializeToNode(settings,
+                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower }),
+            ["loop"] = new JsonObject { ["status"] = "observed", ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 600 }) },
+            ["video_groups"] = new JsonArray(new JsonObject
+            {
+                ["id"] = "group-1", ["layer_ids"] = new JsonArray(1, 3), ["include_scene_clear"] = true, ["transparent"] = false
+            }),
+            ["layers"] = new JsonArray(new JsonObject { ["id"] = 1, ["root"] = 1, ["name"] = "background" },
+                new JsonObject { ["id"] = 3, ["root"] = 3, ["name"] = "sprite" }),
+            ["blockers"] = new JsonArray(), ["snapshot_properties"] = new JsonObject(), ["runtime_evidence"] = runtimeEvidence,
+            ["source_script_error_evidence"] = new JsonObject { ["status"] = "available" },
+            ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray()
+        };
+        V3Fixture.Upgrade(plan);
+        string output = Path.Combine(root, "bake");
+        JsonObject result = await new HybridBakeService(new("not-started", "not-started", "not-started", [])).BakeAsync(new(2, plan, output));
+        return (result, source.ReadJson(source.SceneResource));
+    }
+
+    [Fact]
+    public async Task BakeRejectsTheResidualAnalysisWouldBlock() => await TestTemp.Run(async root =>
+    {
+        (JsonObject result, JsonObject scene) = await BakeAsync(root, "high");
+        Assert.Equal("candidate_rejected_no_loop", result["status"]!.GetValue<string>());
+        Assert.Equal("rejected", result["residual_masking"]?["status"]?.GetValue<string>());
+        // 同一份（bake 重算过循环的）plan 交给分析侧的判定，给出的正是 blocker.bake_allocation。
+        JsonObject refreshed = result["plan"]!.AsObject();
+        AdmissionVerdict verdict = Admission.Evaluate(refreshed, scene, _ => null);
+        Assert.Equal(AdmissionRejection.ResidualNotMaskable, verdict.Rejection);
+        Assert.Equal(BlockerCode.BakeAllocation, verdict.Blocker!.Code);
+    });
+
+    [Fact]
+    public async Task BakeWithoutCandidateStopsBeforeResidualClassification() => await TestTemp.Run(async root =>
+    {
+        // 没有解析候选时 bake 先按无循环拒，不做残差分类，bake.json 里的 plan 副本也不带 residual_masking。
+        (JsonObject result, _) = await BakeAsync(root, "low");
+        Assert.Equal("candidate_rejected_no_loop", result["status"]!.GetValue<string>());
+        Assert.Null(result["residual_masking"]);
+        Assert.Null(result["plan"]!["loop"]!["residual_masking"]);
+    });
+}
