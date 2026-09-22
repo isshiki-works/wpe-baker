@@ -1,0 +1,76 @@
+[package]
+name = "owe-webviewer"
+version.workspace = true
+
+[[bin]]
+name = "WebViewer"
+module = "viewer.web"
+sources = [
+  "Web.cppm",
+  "Presenter.cppm",
+  "VulkanBlitter.cppm",
+  "EglPresenter.cppm",
+  "VulkanBlitter.cpp",
+  "EglPresenter.cpp",
+  "WebViewer.cpp",
+]
+
+[usage]
+options = [
+  "-Wextra",
+  "-Wno-missing-field-initializers",
+  "-Wno-gnu-zero-variadic-macro-arguments",
+]
+threads = true
+
+[dependencies.owe-core]
+workspace = true
+visibility = "private"
+
+[dependencies.owe-audio]
+workspace = true
+visibility = "private"
+
+[dependencies.owe-viewer-common]
+workspace = true
+visibility = "private"
+
+[dependencies.owe-web]
+workspace = true
+visibility = "private"
+
+[dependencies.rstd-cppstd]
+workspace = true
+visibility = "private"
+
+[dependencies.rstd-argparse]
+workspace = true
+visibility = "private"
+
+[dependencies.wavsen]
+workspace = true
+visibility = "private"
+
+[dependencies.vvk]
+workspace = true
+visibility = "private"
+
+[external-dependencies.pkg-config.glfw]
+workspace = true
+visibility = "private"
+
+[external-dependencies.pkg-config.egl]
+workspace = true
+visibility = "private"
+
+[external-dependencies.pkg-config.gles]
+workspace = true
+visibility = "private"
+
+[external-dependencies.pkg-config.x11]
+workspace = true
+visibility = "private"
+
+[external-dependencies.pkg-config.wayland-egl]
+workspace = true
+visibility = "private"

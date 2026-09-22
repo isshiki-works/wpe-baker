@@ -1,0 +1,23 @@
+[package]
+name = "owe-offline-vulkan-tests"
+version.workspace = true
+
+[[bin]]
+name = "owe-offline-vulkan-test"
+sources = ["headless_readback.cpp"]
+
+[dependencies.owe-scene]
+workspace = true
+visibility = "private"
+
+[dependencies.owe-vulkan]
+workspace = true
+visibility = "private"
+
+[dependencies.rstd-std]
+workspace = true
+visibility = "private"
+
+[dependencies.rstd-cppstd]
+workspace = true
+visibility = "private"

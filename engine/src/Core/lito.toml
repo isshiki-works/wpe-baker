@@ -1,0 +1,67 @@
+[package]
+name = "owe-core"
+version.workspace = true
+source-root = "../.."
+
+[lib]
+name = "owe-core"
+module = "owe.core"
+archive = "owe-core"
+sources = [
+  "src/Core/Cli.cppm",
+  "src/Core/Core.cppm",
+  "src/Core/Fft.cppm",
+  "src/Core/Fft.cpp",
+  "src/Core/Fs.cppm",
+  "src/Core/Fs/Fs.cppm",
+  "src/Core/IO/Binary.cppm",
+  "src/Core/Json.cppm",
+  "src/Core/Json.cpp",
+  "src/Core/UserProperty.cppm",
+  "src/Core/UserProperty.cpp",
+  "src/Core/eigen.cppm",
+]
+
+[usage]
+public-include-directories = ["third_party", "src", "src/Core"]
+options = [
+  "-Wextra",
+  "-Wno-missing-field-initializers",
+  "-Wno-gnu-zero-variadic-macro-arguments",
+]
+threads = true
+
+[[when]]
+condition = 'target.family == "unix"'
+[when.usage]
+public-definitions = ["FT_SIZEOF_LONG=8"]
+system-libraries = ["dl"]
+
+[[when]]
+condition = 'target.os == "windows"'
+[when.usage]
+public-definitions = ["FT_SIZEOF_LONG=4", "NOMINMAX", "WIN32_LEAN_AND_MEAN"]
+
+[dependencies.rstd-std]
+workspace = true
+visibility = "public"
+
+[dependencies.rstd-cppstd]
+workspace = true
+visibility = "public"
+
+[dependencies.rstd-json]
+workspace = true
+visibility = "public"
+
+[dependencies.rstd-log]
+workspace = true
+visibility = "public"
+
+[dependencies.rstd-argparse]
+workspace = true
+visibility = "public"
+
+[external-dependencies.cmake.eigen]
+workspace = true
+targets = [{ name = "Eigen3::Eigen", visibility = "public" }]

@@ -1,0 +1,58 @@
+[package]
+name = "owe-waywallen-web-renderer"
+version.workspace = true
+
+[[bin]]
+name = "waywallen-weweb-renderer"
+module = "waywallen.web_entry"
+sources = [
+  "web_entry.cppm",
+  "web_entry.cpp",
+  "WebProducerDevice.cppm",
+  "WebProducerDevice.cpp",
+  "web_main.cpp",
+]
+
+[usage]
+options = [
+  "-Wextra",
+  "-Wno-missing-field-initializers",
+  "-Wno-gnu-zero-variadic-macro-arguments",
+]
+threads = true
+
+[dependencies.owe-audio]
+workspace = true
+visibility = "private"
+
+[dependencies.owe-core]
+workspace = true
+visibility = "private"
+
+[dependencies.owe-waywallen-producer]
+workspace = true
+visibility = "private"
+
+[dependencies.owe-web]
+workspace = true
+visibility = "private"
+
+[dependencies.rstd-argparse]
+workspace = true
+visibility = "private"
+
+[dependencies.rstd-cppstd]
+workspace = true
+visibility = "private"
+
+[dependencies.rstd-log]
+workspace = true
+visibility = "private"
+
+[dependencies.rstd-std]
+workspace = true
+visibility = "private"
+
+[dependencies.vvk]
+workspace = true
+visibility = "private"

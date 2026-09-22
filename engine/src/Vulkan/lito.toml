@@ -1,0 +1,72 @@
+[package]
+name = "owe-vulkan"
+version.workspace = true
+
+[lib]
+name = "owe-vulkan"
+module = "wescene.vulkan"
+archive = "owe-vulkan"
+sources = [
+  "ShaderCompile.cppm",
+  "Vulkan.cppm",
+  "BufferManager.cpp",
+  "Device.cpp",
+  "GraphicsPipeline.cpp",
+  "Instance.cpp",
+  "Parameters.cpp",
+  "Shader.cpp",
+  "Swapchain.cpp",
+  "TextureCache.cpp",
+]
+
+[usage]
+public-include-directories = ["."]
+options = [
+  "-Wextra",
+  "-Wno-missing-field-initializers",
+  "-Wno-gnu-zero-variadic-macro-arguments",
+]
+
+[dependencies.owe-core]
+workspace = true
+visibility = "public"
+
+[dependencies.owe-types]
+workspace = true
+visibility = "public"
+
+[dependencies.owe-utils]
+workspace = true
+visibility = "private"
+
+[dependencies.rstd-std]
+workspace = true
+visibility = "public"
+
+[dependencies.rstd-cppstd]
+workspace = true
+visibility = "public"
+
+[dependencies.rstd-log]
+workspace = true
+visibility = "public"
+
+[dependencies.wavsen]
+workspace = true
+visibility = "private"
+
+[dependencies.vvk]
+workspace = true
+visibility = "public"
+
+[dependencies.spirv-reflect]
+workspace = true
+visibility = "private"
+
+[external-dependencies.cmake.glslang]
+workspace = true
+targets = [
+  { name = "glslang::glslang", visibility = "public" },
+  { name = "glslang::SPIRV", visibility = "public" },
+  { name = "glslang::glslang-default-resource-limits", visibility = "public" },
+]

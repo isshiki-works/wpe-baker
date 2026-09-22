@@ -1,0 +1,28 @@
+[package]
+name = "owe-types"
+version.workspace = true
+
+[lib]
+name = "owe-types"
+module = "wescene.types"
+archive = "owe-types"
+sources = ["types.cppm", "types.cpp"]
+
+[usage]
+options = [
+  "-Wextra",
+  "-Wno-missing-field-initializers",
+  "-Wno-gnu-zero-variadic-macro-arguments",
+]
+
+[dependencies.owe-core]
+workspace = true
+visibility = "public"
+
+[dependencies.rstd-std]
+workspace = true
+visibility = "public"
+
+[dependencies.rstd-cppstd]
+workspace = true
+visibility = "public"

@@ -1,0 +1,30 @@
+[package]
+name = "owe-sceneviewer"
+version.workspace = true
+
+[[bin]]
+name = "SceneViewer"
+sources = ["SceneViewer.cpp"]
+
+[usage]
+options = [
+  "-Wextra",
+  "-Wno-missing-field-initializers",
+  "-Wno-gnu-zero-variadic-macro-arguments",
+]
+
+[dependencies.rstd-log]
+workspace = true
+visibility = "public"
+
+[dependencies.owe-core]
+workspace = true
+visibility = "private"
+
+[dependencies.owe-viewer-common]
+workspace = true
+visibility = "public"
+
+[dependencies.owe-scene]
+workspace = true
+visibility = "public"
