@@ -84,9 +84,7 @@ else()
   add_library(spirv-reflect STATIC "${WPE_DEPS}/spirv-reflect/spirv_reflect.cpp")
   target_include_directories(spirv-reflect PUBLIC "${WPE_DEPS}/spirv-reflect")
 
-  # 只给单测用；不编 gmock，不走 pthread（MinGW 上用 Win32 原生同步）。
-  set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
-  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+  # 只给单测用；不走 pthread（MinGW 上用 Win32 原生同步），否则导出的 gtest 带 Threads::Threads 依赖。
   set(gtest_disable_pthreads ON CACHE BOOL "" FORCE)
   add_subdirectory("${WPE_DEPS}/googletest" dependencies/googletest EXCLUDE_FROM_ALL)
 

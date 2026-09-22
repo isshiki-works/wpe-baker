@@ -34,7 +34,6 @@ public:
         {
             std::lock_guard lock(m_mutex);
             m_stopping = true;
-            m_queue.clear();
         }
         m_work.notify_all();
         for (auto& thread : m_threads) thread.join();

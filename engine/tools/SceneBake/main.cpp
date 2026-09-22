@@ -773,14 +773,13 @@ int main(int argc, char** argv) {
     rstd::log::set_max_level(rstd::log::LevelFilter::Info);
     try {
         // 只有两种调用形式：--version 与 render --job <file>（C# 与脚本只用这两种）。
-        // 其余输入（含 -h/--help、多余参数、两者混用）一律打印用法、退出码 2，与换 CLI11 前一致。
+        // 其余输入（含 -h/--help、多余参数、两者混用）一律打印用法、退出码 2，与换 CLI11 前一致：
+        // CLI11 的 --help 也是以 ParseError（CallForHelp）抛出，同样落到用法行。
         CLI::App app { "wpe-render" };
-        app.set_help_flag();
         bool version = false;
         app.add_flag("--version", version);
         std::string job;
         auto*       render = app.add_subcommand("render");
-        render->set_help_flag();
         render->add_option("--job", job)->required();
         auto                     args = Arguments(argc, argv);
         std::vector<const char*> pointers;
