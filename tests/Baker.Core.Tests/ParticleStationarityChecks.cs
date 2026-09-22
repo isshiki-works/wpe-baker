@@ -420,7 +420,7 @@ internal static class ParticleStationarityChecks
             Near(dropletResidual["max_warmup_seconds"]!.GetValue<double>(), 4 / 1.29) && ResidualMasking.WarmupFrames(dropletResidual, 60, 1) == 187 &&
             ResidualMasking.ResidualGroupIndexes(dropletPlan, dropletResidual).SequenceEqual([1]) &&
             ResidualMasking.LayoutAllowsMasking(dropletPlan, dropletResidual) &&
-            ResidualMasking.ApplyLayoutGate(gatePlan, residualScene, _ => null) is null && gatePlan["blockers"]!.AsArray().Count == 0,
+            Admission.ApplyResidualLayoutGate(gatePlan, residualScene, _ => null) is null && gatePlan["blockers"]!.AsArray().Count == 0,
             "只剩平稳随机的水滴时可掩盖：预热 3.100775 s = 187 帧，残差组是它所在的透明组，布局门放行");
 
         JsonArray spriteTrack = [new JsonObject { ["source_owner_layer_id"] = 153, ["mechanism"] = "sprite", ["track_name"] = "particle/drop",

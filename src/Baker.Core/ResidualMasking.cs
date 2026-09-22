@@ -257,47 +257,6 @@ public static class ResidualMasking
     }
 
     /// <summary>
-    /// analyze 侧的前移判定。条件全部满足才返回阻断取证，否则返回 null：整层路线；布局本身没有冲突（有冲突时那条 blocker
-    /// 已经让用户先选布局）；有解析候选；留有未解析的时间机制且全部可掩盖（即 bake 会走残差掩盖路线）；却有残差层不在任何视频组里。
-    /// 未解析分量里有不可掩盖项时 bake 会按"无循环"拒绝，那与布局无关，这里不管。
-    /// </summary>
-    private static JsonObject? LayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource, out Blocker? blocker)
-    {
-        blocker = null;
-        ArgumentNullException.ThrowIfNull(plan);
-        if (Text(plan["route"]) != "whole_layer" || plan["whole_layer"]?["layout_conflict"] is not null ||
-            plan["loop"]?["candidates"] is not JsonArray { Count: > 0 }) return null;
-        JsonNode[] mechanisms = (plan["loop"]?["unresolved"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(item => Text(item["kind"]) != AllocationFallbackKind).Select(item => item.DeepClone()).ToArray();
-        if (mechanisms.Length == 0) return null;
-        // Classify 只读这几项；拼一份最小副本，免得说明性条目被当成识别不了的机制。
-        var probe = new JsonObject
-        {
-            ["settings"] = plan["settings"]?.DeepClone(), ["canvas_width"] = plan["canvas_width"]?.DeepClone(),
-            ["canvas_height"] = plan["canvas_height"]?.DeepClone(), ["layers"] = plan["layers"]?.DeepClone(),
-            ["loop"] = new JsonObject { ["unresolved"] = new JsonArray(mechanisms) }
-        };
-        JsonObject classification = Classify(probe, scene, readResource);
-        return classification["status"]?.GetValue<string>() == "residual_maskable" && !LayoutAllowsMasking(plan, classification)
-            ? LayoutRejection(plan, classification, out blocker) : null;
-    }
-
-    /// <summary>
-    /// 把 <see cref="LayoutGate"/> 的结论写进 plan：取证放 residual_layout_gate，blocker 同时进 blockers 与 whole_layer.blockers，
-    /// status 改为 requires_resolution。不适用时什么都不改，返回 null。
-    /// </summary>
-    public static JsonObject? ApplyLayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
-    {
-        if (LayoutGate(plan, scene, readResource, out Blocker? blocker) is not JsonObject gate) return null;
-        plan["residual_layout_gate"] = gate;
-        foreach (JsonNode? node in new[] { plan["blockers"], plan["whole_layer"]?["blockers"] })
-            if (node is JsonArray blockers) PlanBlockers.Add(blockers, blocker!);
-        plan["status"] = "requires_resolution";
-        if (plan["whole_layer"] is JsonObject wholeLayer) wholeLayer["status"] = "unavailable";
-        return gate;
-    }
-
-    /// <summary>
     /// 布局不允许掩盖时的取证与双语理由：点名不在任何视频组里的可掩盖分量、说明没有组能替它们淡化、给出本场景可执行的出路。
     /// --retain-live 的具体 id 优先取 analyze 已经重查过的更小分配（loop_allocation_fallback 为 candidate_found），
     /// 否则退回这些分量所在的作者根，并如实说明还没重新分析过。
@@ -305,7 +264,7 @@ public static class ResidualMasking
     public static JsonObject LayoutRejection(JsonObject plan, JsonObject classification) =>
         LayoutRejection(plan, classification, out _);
 
-    private static JsonObject LayoutRejection(JsonObject plan, JsonObject classification, out Blocker blocker)
+    internal static JsonObject LayoutRejection(JsonObject plan, JsonObject classification, out Blocker blocker)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(classification);
@@ -419,17 +378,8 @@ public static class ResidualMasking
 
     /// <summary>
     /// 对 plan.loop.unresolved 的每一项判定"残差可掩盖"或"不可掩盖"。
-    /// <paramref name="readResource"/> 读取工程内的 JSON 资源（粒子预设等），读不到返回 null。
+    /// <paramref name="readResource"/> 读取工程内的 JSON 资源（粒子预设等），读不到返回 null。准入统一走 <see cref="Admission.Evaluate(JsonObject, JsonObject, Func{string, JsonObject?})"/>。
     /// </summary>
-    public static JsonObject ClassifyBakeAllocation(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
-    {
-        var input = plan.DeepClone().AsObject();
-        if (input["loop"] is JsonObject loop && loop["unresolved"] is JsonArray unresolved)
-            loop["unresolved"] = new JsonArray(unresolved.OfType<JsonObject>()
-                .Where(item => item["kind"]?.GetValue<string>() != AllocationFallbackKind).Select(item => item.DeepClone()).ToArray());
-        return Classify(input, scene, readResource);
-    }
-
     public static JsonObject Classify(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
     {
         ArgumentNullException.ThrowIfNull(plan);

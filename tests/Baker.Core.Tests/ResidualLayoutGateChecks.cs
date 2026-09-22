@@ -67,7 +67,7 @@ internal static class ResidualLayoutGateChecks
         JsonObject layered = Plan("layered", [true, false], new JsonArray(RandomSprite(), Informational()), candidateFound.DeepClone().AsObject());
         string layeredBefore = layered.ToJsonString();
         JsonObject layeredClassification = ResidualMasking.Classify(layered, scene, NoResource);
-        check(ResidualMasking.ApplyLayoutGate(layered, scene, NoResource) is null && layered.ToJsonString() == layeredBefore &&
+        check(Admission.ApplyResidualLayoutGate(layered, scene, NoResource) is null && layered.ToJsonString() == layeredBefore &&
             Verdict(layered)["verdict"]!.GetValue<string>() == "suitable",
             "layered groups whose residual layer sits in a transparent group need no layout blocker: packed crossfades are premultiplied crossfades");
         check(ResidualMasking.LayoutAllowsMasking(layered, layeredClassification) &&
@@ -76,7 +76,7 @@ internal static class ResidualLayoutGateChecks
             "the residual group index points at the transparent group that contains the random sprite");
         JsonObject threeGroups = Plan("layered", [true, false, false], new JsonArray(RandomSprite()), groupLayers: [[1], [3], [3]]);
         check(ResidualMasking.ResidualGroupIndexes(threeGroups, ResidualMasking.Classify(threeGroups, scene, NoResource)).SequenceEqual([1, 2]) &&
-            ResidualMasking.ApplyLayoutGate(threeGroups, scene, NoResource) is null,
+            Admission.ApplyResidualLayoutGate(threeGroups, scene, NoResource) is null,
             "every video group that contains a residual layer is listed, in plan order, and several transparent groups are allowed");
 
         // ---- full_frame 单个不透明组 + 需掩盖 → 不受影响 ----
@@ -84,14 +84,14 @@ internal static class ResidualLayoutGateChecks
             groupLayers: [[1, 3]]);
         string fullFrameBefore = fullFrame.ToJsonString();
         check(ResidualMasking.LayoutAllowsMasking(fullFrame, ResidualMasking.Classify(fullFrame, scene, NoResource)) &&
-            ResidualMasking.ApplyLayoutGate(fullFrame, scene, NoResource) is null &&
+            Admission.ApplyResidualLayoutGate(fullFrame, scene, NoResource) is null &&
             fullFrame.ToJsonString() == fullFrameBefore && Verdict(fullFrame)["verdict"]!.GetValue<string>() == "suitable",
             "a single opaque full-frame group that needs residual masking is left untouched");
 
         // ---- 残差层不在任何视频组里 → 布局确实淡化不了，写 blocker ----
         JsonObject unplaced = Plan("layered", [true], new JsonArray(RandomSprite(), Informational()), candidateFound.DeepClone().AsObject(),
             groupLayers: [[1]]);
-        JsonObject? gate = ResidualMasking.ApplyLayoutGate(unplaced, scene, NoResource);
+        JsonObject? gate = Admission.ApplyResidualLayoutGate(unplaced, scene, NoResource);
         string blocker = gate?["reason"]?.GetValue<string>() ?? "";
         JsonObject localized = unplaced["blockers"]![0]!.AsObject();
         check(gate is not null && unplaced["blockers"] is JsonArray { Count: 1 } blockers && blockers[0]!["text"]!.GetValue<string>() == blocker &&
@@ -117,12 +117,12 @@ internal static class ResidualLayoutGateChecks
             localized["zh"]!.GetValue<string>().Contains("--retain-live 30", StringComparison.Ordinal) &&
             !localized["zh"]!.GetValue<string>().Contains("layer 3", StringComparison.Ordinal),
             "the residual layout blocker localizes to chinese with chinese component and option wording");
-        check(ResidualMasking.ApplyLayoutGate(unplaced, scene, NoResource) is not null && unplaced["blockers"]!.AsArray().Count == 1,
+        check(Admission.ApplyResidualLayoutGate(unplaced, scene, NoResource) is not null && unplaced["blockers"]!.AsArray().Count == 1,
             "applying the residual layout gate twice does not duplicate the blocker");
 
         // 没有重查过的更小分配时，退回分量所在的作者根，并如实说明还没重新分析。
         JsonObject unverified = Plan("layered", [true], new JsonArray(RandomSprite()), groupLayers: [[1]]);
-        JsonObject? unverifiedGate = ResidualMasking.ApplyLayoutGate(unverified, scene, NoResource);
+        JsonObject? unverifiedGate = Admission.ApplyResidualLayoutGate(unverified, scene, NoResource);
         check(unverifiedGate?["retain_live_basis"]?.GetValue<string>() == "unresolved_owner_author_roots_not_reanalyzed" &&
             unverifiedGate["reason"]!.GetValue<string>().Contains("--retain-live 30 to keep", StringComparison.Ordinal) &&
             unverifiedGate["reason"]!.GetValue<string>().Contains("has not been re-analyzed", StringComparison.Ordinal) &&
@@ -134,7 +134,7 @@ internal static class ResidualLayoutGateChecks
         {
             JsonObject resolved = Plan("layered", [true, false], unresolved);
             string before = resolved.ToJsonString();
-            check(ResidualMasking.ApplyLayoutGate(resolved, scene, NoResource) is null && resolved.ToJsonString() == before,
+            check(Admission.ApplyResidualLayoutGate(resolved, scene, NoResource) is null && resolved.ToJsonString() == before,
                 $"layered groups without unresolved temporal mechanisms are left untouched ({unresolved.Count} informational item(s))");
         }
 
@@ -142,7 +142,7 @@ internal static class ResidualLayoutGateChecks
         JsonObject conflicted = Plan("full_frame", [true, false], new JsonArray(RandomSprite()), layoutConflict: "Full-frame mode requires one opaque video group.",
             groupLayers: [[1], [2]]);
         string conflictedBefore = conflicted.ToJsonString();
-        check(ResidualMasking.ApplyLayoutGate(conflicted, scene, NoResource) is null && conflicted.ToJsonString() == conflictedBefore,
+        check(Admission.ApplyResidualLayoutGate(conflicted, scene, NoResource) is null && conflicted.ToJsonString() == conflictedBefore,
             "a plan already blocked by its layout conflict keeps exactly that blocker");
 
         // ---- 分量本身不可掩盖 → 不是布局问题，不写这条 blocker ----
@@ -150,7 +150,7 @@ internal static class ResidualLayoutGateChecks
         {
             ["kind"] = "runtime_animation", ["owner_layer_id"] = 3, ["detail"] = "Runtime duration or source owner cannot be resolved exactly."
         }), groupLayers: [[1]]);
-        check(ResidualMasking.ApplyLayoutGate(unmaskable, scene, NoResource) is null,
+        check(Admission.ApplyResidualLayoutGate(unmaskable, scene, NoResource) is null,
             "unmaskable residual components are not reported as a layout problem");
 
         await BakePassesLayoutAsync(check, root);

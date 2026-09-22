@@ -1209,8 +1209,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         Func<string, JsonObject?> residualResources = ResidualMasking.ResourceReader(source, request.Assets);
         await RecordLoopAllocationFallbackAsync(report, scene, request, output, residualScene, residualResources, progress, cancellationToken);
         // 残差掩盖要在可掩盖分量所在的视频组里淡化（透明组、多组都可以）：分量不在任何视频组里时，在这里写 blocker，不留到 bake 才拒。
-        // 放在更小分配取证之后，blocker 才能给出重查过的 --retain-live id；判定读原始源场景，与 bake 的 Classify 同一口径。
-        ResidualMasking.ApplyLayoutGate(report, residualScene, residualResources);
+        // 放在更小分配取证之后，blocker 才能给出重查过的 --retain-live id；判定读原始源场景，与 bake 第一步同一个 Admission.Evaluate。
+        Admission.ApplyResidualLayoutGate(report, residualScene, residualResources);
         RecordSolverNoCandidateBlocker(report);
         RequireTraceableRejection(report);
         // 视频外壳判据放在最后：前面两处 effect_prefix 回退与布局裁决都已经定稿，这里只读结构、只追加，

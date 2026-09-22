@@ -165,10 +165,10 @@ internal static class HybridLoopAllocationChecks
         var maskableReplan = Resolve(Replanned(new JsonArray(WarmStationary(), Note())));
         JsonObject admitted = Replanned(new JsonArray(WarmStationary(), Note()));
         string admissionInput = admitted.ToJsonString();
-        check(ResidualMasking.ClassifyBakeAllocation(admitted, particleScene, _ => null)["status"]!.GetValue<string>() == "residual_maskable" &&
+        check(Admission.Evaluate(admitted, particleScene, _ => null).Residual!["status"]!.GetValue<string>() == "residual_maskable" &&
             admitted.ToJsonString() == admissionInput, "shared bake admission ignores explanatory notes without changing the analyzed plan");
-        check(ResidualMasking.ClassifyBakeAllocation(Replanned(new JsonArray(StationarityItem(2, false))), particleScene, _ => null)
-            ["status"]!.GetValue<string>() == "rejected", "shared analysis/bake admission rejects a nonstationary particle before rendering");
+        check(Admission.Evaluate(Replanned(new JsonArray(StationarityItem(2, false))), particleScene, _ => null)
+            .Residual!["status"]!.GetValue<string>() == "rejected", "shared analysis/bake admission rejects a nonstationary particle before rendering");
         var ordered = new JsonArray(new JsonObject { ["frames"] = 36000UL }, new JsonObject { ["frames"] = 18001UL }, new JsonObject { ["frames"] = 18024UL });
         LoopCandidateFallback.PrioritizeShortest(ordered);
         check(ordered.Select(c => c!["frames"]!.GetValue<ulong>()).SequenceEqual(new ulong[] { 18001, 18024, 36000 }),
