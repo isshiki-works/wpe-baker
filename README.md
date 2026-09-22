@@ -69,8 +69,7 @@ Tooling: MIT. Offline renderer: GPL-2.0 (derived from open-wallpaper-engine). Th
 
 ## Credits
 
-Built for the GPT-6 Astra Challenge.
-
-- **GPT-6 Astra (OpenAI Codex)** — the period solver, the Vulkan offline renderer for Wallpaper Engine scenes, the layer allocator, the encoder pipeline with hardware-decode checks, the power-measurement rig, and the 1.0.2 admission check and preset cascade.
 - **hypengw** — vvk, wavsen and rstd, the libraries under the renderer.
 - **isshiki** — direction, product decisions, hardware, testing.
+
+Developed with AI coding agents: Claude Code (Anthropic) and OpenAI Codex.

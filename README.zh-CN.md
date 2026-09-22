@@ -67,6 +67,7 @@ Windows 10/11 64 位；Wallpaper Engine（Steam 版）；一块支持 Vulkan 的
 
 ## 致谢
 
-- **GPT-6 Astra（OpenAI Codex）**：周期求解器、Wallpaper Engine 场景的 Vulkan 离线渲染器、图层分配器、带硬解校验的编码流水线、功耗测量台。
 - **hypengw**：渲染器底下的 vvk、wavsen、rstd 等库。
 - **isshiki**：方向、产品决策、硬件与测试。
+
+开发中使用了 AI 编程代理：Claude Code（Anthropic）与 OpenAI Codex。
