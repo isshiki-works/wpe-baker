@@ -298,7 +298,7 @@ public static class PlanNarrative
     private static JsonObject Narrate(JsonObject report)
     {
         if (report["suitability"] is JsonObject suitability &&
-            suitability["rule"]?.GetValue<string>() == "no_independent_content_after_reallocation")
+            suitability["rule"]?.GetValue<string>() == HybridSuitability.NoIndependentContentRule)
             return Bilingual(Blocked, "summary.not_suitable_current",
                 [suitability["reason_zh"]!.GetValue<string>()], [suitability["reason_en"]!.GetValue<string>()]);
         var blockers = report["blockers"] as JsonArray ?? [];
@@ -308,7 +308,7 @@ public static class PlanNarrative
             return Bilingual(Blocked, "summary.blocked",
                 [first["zh"]?.GetValue<string>() ?? "", blockers.Count], [first["en"]?.GetValue<string>() ?? "", blockers.Count]);
         }
-        if (FirstCandidate(report) is JsonObject candidate) return Bakeable_(report, candidate);
+        if (Admission.FirstCandidate(report) is JsonObject candidate) return Bakeable_(report, candidate);
         if (LoopUnresolved(report) is JsonObject specific) return specific;
         if (FirstReason(report) is not var (zh, en)) return Verdict(Unknown, "summary.unknown_no_reason");
         return Bilingual(Unknown, "summary.unknown_with_reason", [zh], [en]);
@@ -392,14 +392,6 @@ public static class PlanNarrative
         ["zh"] = MessageCatalog.Get(key, MessageCatalog.Chinese, chineseArgs), ["en"] = MessageCatalog.Get(key, MessageCatalog.English, englishArgs) };
 
     /// <summary>整幅候选优先，其次特效前缀候选。</summary>
-    private static JsonObject? FirstCandidate(JsonObject report)
-    {
-        if ((report["loop"]?["candidates"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault() is { } whole) return whole;
-        return (report["effect_prefix_caches"] as JsonArray)?.OfType<JsonObject>()
-            .Select(cache => (cache["loop"]?["candidates"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault())
-            .FirstOrDefault(candidate => candidate is not null);
-    }
-
     /// <summary>补充分析"更小的烘焙分配"写进 loop.unresolved 的那条记录；它是出路说明，不是时间机制。</summary>
     private const string AllocationFallbackKind = "loop_allocation_fallback";
 

@@ -93,22 +93,10 @@ internal static class HybridLoopAllocation
         if (replanned["route"]?.GetValue<string>() == "effect_prefix") return (true, "effect_prefix", null);
         if (replanned["route"]?.GetValue<string>() != "whole_layer" || replanned["blockers"] is not JsonArray { Count: 0 } ||
             replanned["loop"]?["candidates"] is not JsonArray { Count: > 0 }) return (false, "unavailable", null);
-        JsonNode[] mechanisms = (replanned["loop"]?["unresolved"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(item => item["kind"]?.GetValue<string>() != ResidualMasking.AllocationFallbackKind)
-            .Select(item => item.DeepClone()).ToArray();
-        if (mechanisms.Length == 0) return (false, "unavailable", null);
-        // 与 ResidualMasking.LayoutGate 同一份最小副本：说明性条目不当成识别不了的机制。
-        var probe = new JsonObject
-        {
-            ["settings"] = replanned["settings"]?.DeepClone(), ["canvas_width"] = replanned["canvas_width"]?.DeepClone(),
-            ["canvas_height"] = replanned["canvas_height"]?.DeepClone(), ["layers"] = replanned["layers"]?.DeepClone(),
-            ["video_groups"] = replanned["video_groups"]?.DeepClone(),
-            ["loop"] = new JsonObject { ["unresolved"] = new JsonArray(mechanisms) }
-        };
-        JsonObject classification = ResidualMasking.Classify(probe, sourceScene, readResource);
-        bool maskable = classification["status"]?.GetValue<string>() == "residual_maskable" &&
-            ResidualMasking.LayoutAllowsMasking(probe, classification);
-        return (maskable, maskable ? "residual_maskable" : "unavailable", classification);
+        // 与分析、bake 同一个准入判定；说明性条目以外没有未解析项时不走残差掩盖。
+        AdmissionVerdict verdict = Admission.Evaluate(replanned, sourceScene, readResource);
+        if (verdict.Residual?["status"]?.GetValue<string>() == "no_residual") return (false, "unavailable", null);
+        return (verdict.Admitted, verdict.Admitted ? "residual_maskable" : "unavailable", verdict.Residual);
     }
 
     /// <summary>

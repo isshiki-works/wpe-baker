@@ -44,7 +44,7 @@ internal static class PresetCascadeChecks
         JsonObject overLimit = await Run("preset-over-limit", r => Plan(r, r.LiveOverlayPlacement == "foreground", 5));
         check(overLimit["preset_applied"]!.GetValue<string>() == "none" &&
             overLimit["preset_rejection_reason"]!.GetValue<string>() == "too_many_video_groups" &&
-            overLimit["blockers"]!.AsArray().Count == 1 && !PresetCascade.Bakeable(overLimit),
+            overLimit["blockers"]!.AsArray().Count == 1 && !Admission.Bakeable(overLimit),
             "five groups remain rejected within the requested policy");
         JsonObject custom = await Run("preset-custom", r => Plan(r, true, 1), custom: true);
         check(calls.Count == 1 && custom["custom_settings"]!.GetValue<bool>() && custom["preset_applied"]!.GetValue<string>() == "quality",
@@ -72,7 +72,7 @@ internal static class PresetCascadeChecks
         outer["analysis_directory"] = allocation;
         outer["loop_allocation_fallback"] = new JsonObject { ["status"] = "candidate_found", ["resolution_basis"] = "residual_maskable" };
         JsonObject adopted = await PresetCascade.AdoptAllocationAsync(outer, CancellationToken.None);
-        check(PresetCascade.Accepted(adopted) && adopted["settings"]!["daytime_state"]!.GetValue<string>() == "morning" &&
+        check(Admission.Accepted(adopted) && adopted["settings"]!["daytime_state"]!.GetValue<string>() == "morning" &&
             adopted["allocation_adopted"] is JsonObject, "a usable internal morning allocation reaches the outer result");
         var audio = new JsonObject { ["kind"] = "image", ["canvas_fraction"] = 1.0, ["tradeoff_kinds"] = new JsonArray("audio") };
         check(InteractionPolicy.ExpensiveAudio(audio, 10, 6) && !InteractionPolicy.ExpensiveAudio(audio, 10, 9) &&
@@ -121,7 +121,7 @@ internal static class PresetCascadeChecks
         staticBudget["runtime_evidence"] = trace;
         foreach (JsonObject group in staticBudget["video_groups"]!.AsArray().OfType<JsonObject>()) group["layer_ids"] = new JsonArray(1);
         JsonObject verifiedStaticBudget = await PresetCascade.AdoptAllocationAsync(staticBudget, CancellationToken.None);
-        check(PresetCascade.GroupCount(verifiedStaticBudget) == 0 && PresetCascade.StaticGroupCount(verifiedStaticBudget) == 5 &&
+        check(Admission.GroupCount(verifiedStaticBudget) == 0 && Admission.StaticGroupCount(verifiedStaticBudget) == 5 &&
             verifiedStaticBudget["static_group_budget"]?["status"]?.GetValue<string>() == "verified",
             "only an over-budget plan with source_static proof frees decoder slots for static caches");
         var planner = new HybridScenePlanner(new("not-started", "not-started", "not-started", []));
@@ -149,6 +149,8 @@ internal static class PresetCascadeChecks
         ["route"] = "whole_layer", ["has_parallax"] = true,
         ["video_groups"] = new JsonArray(Enumerable.Range(0, count).Select(i => (JsonNode)new JsonObject { ["id"] = i }).ToArray()),
         ["blockers"] = new JsonArray(),
+        // 可烘按结构判定（Admission.Bakeable）：有首个候选、无 blocker。
+        ["loop"] = new JsonObject { ["candidates"] = usable ? new JsonArray(new JsonObject { ["frames"] = 600 }) : new JsonArray() },
         ["tradeoff_options"] = new JsonObject { ["options"] = new JsonArray(new JsonObject { ["turn_off_kinds"] = new JsonArray("fps") }) },
         ["layers"] = new JsonArray(
             new JsonObject { ["id"] = 7, ["tradeoff_class"] = "tradeoff", ["tradeoff_kinds"] = new JsonArray("fps"),

@@ -249,6 +249,8 @@ try
                 string stateDirectory = Path.Combine(analysisDirectory, "state-" + stateName);
                 JsonObject statePlan = await new HybridScenePlanner(tools).AnalyzeSingleAsync(
                     request with { OutputDirectory = stateDirectory, DaytimeState = stateName }, progress, cancellation.Token);
+                // 子 plan 不经预设级联，生成准入要在这里补上，否则它会说能生成、bake 第一步才拒。
+                Admission.ApplyGenerationAdmission(statePlan);
                 string statePlanPath = options.TryGetValue("--out", out var planOut) ? planOut + ".state-" + stateName + ".json"
                     : Path.Combine(stateDirectory, "plan.json");
                 await using (var stateFile = new FileStream(statePlanPath, FileMode.CreateNew, FileAccess.Write))

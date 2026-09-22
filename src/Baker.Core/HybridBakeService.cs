@@ -460,23 +460,23 @@ public sealed class HybridBakeService(NativeTools tools)
             var runtime = JsonNode.Parse(await File.ReadAllTextAsync(plan["runtime_evidence"]!.GetValue<string>(), cancellationToken))!.AsObject();
             // Rebuild from source and current runtime evidence; never accept a saved observed cut or start.
             HybridScenePlanner.RefreshLoop(plan, source, runtime, settings);
-            JsonArray? candidates = plan["loop"]?["candidates"] as JsonArray;
             JsonArray? unresolved = plan["loop"]?["unresolved"] as JsonArray;
             residualMasking = null;
-            if (candidates is not { Count: > 0 }) return await NoLoopReportAsync(unresolved);
-            if (unresolved is not { Count: > 0 }) return null;
-            // 解析候选成立但留着未解析分量：逐条判定残差能不能被固定窗口的接缝淡化掩盖。
-            // 判据在 ResidualMasking 里，拒绝要说清是哪一层、哪个机制、缺什么证明。
-            JsonObject classification = ResidualMasking.ClassifyBakeAllocation(plan, source.ReadJson(source.SceneResource),
+            // 与分析同一个准入判定：无候选按无循环拒绝；留着的未解析分量逐条判定能否被接缝淡化掩盖，
+            // 拒绝要说清是哪一层、哪个机制、缺什么证明。
+            AdmissionVerdict admission = Admission.Evaluate(plan, source.ReadJson(source.SceneResource),
                 ResidualMasking.ResourceReader(source, settings.Assets));
+            if (admission.Rejection == AdmissionRejection.NoLoop) return await NoLoopReportAsync(unresolved);
+            JsonObject classification = admission.Residual!;
+            if (classification["status"]?.GetValue<string>() == "no_residual") return null;
             plan["loop"]!["residual_masking"] = classification.DeepClone();
-            if (classification["status"]?.GetValue<string>() != "residual_maskable")
+            if (admission.Rejection == AdmissionRejection.ResidualNotMaskable)
                 return await NoLoopReportAsync(unresolved, classification);
             // 防御：透明组与多组都能淡化，布局淡化不了的只有"可掩盖分量不在任何视频组里"；analyze 已把它写成 blocker，
-            // 旧版计划或界面改过分配的计划仍可能走到这里。在合成校验与任何渲染之前干净拒绝，写 bake.json，不抛异常，也不自动换分配。
-            if (!ResidualMasking.LayoutAllowsMasking(plan, classification))
+            // 界面改过分配的计划仍可能走到这里。在合成校验与任何渲染之前干净拒绝，写 bake.json，不抛异常，也不自动换分配。
+            if (admission.Rejection == AdmissionRejection.ResidualLayout)
             {
-                JsonObject layout = ResidualMasking.LayoutRejection(plan, classification);
+                JsonObject layout = admission.LayoutGate!;
                 classification["status"] = "rejected_layout";
                 classification["reason"] = layout["reason"]!.DeepClone();
                 classification["reason_zh"] = layout["reason_zh"]!.DeepClone();

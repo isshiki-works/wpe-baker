@@ -510,7 +510,7 @@ internal static class AppJsonPresentation
     public static string RouteSummary(JsonObject? plan, bool english)
     {
         if (plan is null) return "";
-        int groups = PresetCascade.GroupCount(plan), statics = PresetCascade.StaticGroupCount(plan), live = plan["live_layer_ids"]?.AsArray().Count ?? 0;
+        int groups = Admission.GroupCount(plan), statics = Admission.StaticGroupCount(plan), live = plan["live_layer_ids"]?.AsArray().Count ?? 0;
         int prefixCaches = plan["effect_prefix_caches"]?.AsArray().Count ?? 0;
         return plan["route"]?.GetValue<string>() == "effect_prefix"
             ? english ? $"{prefixCaches} effect-prefix caches · {live} live objects"
@@ -588,7 +588,7 @@ internal static class AppJsonPresentation
         }
         if (Number(candidate?["total_retime_cost_percent"]) is double retime)
             rows.Add((english ? "Total retime" : "总调速", retime.ToString("0.###", CultureInfo.InvariantCulture) + "%"));
-        int groups = PresetCascade.GroupCount(plan), statics = PresetCascade.StaticGroupCount(plan);
+        int groups = Admission.GroupCount(plan), statics = Admission.StaticGroupCount(plan);
         rows.Add((english ? "Video groups" : "视频组数", groups.ToString(CultureInfo.InvariantCulture)));
         if (plan["route"]?.GetValue<string>() == "whole_layer")
             rows.Add((english ? "Static caches" : "静态缓存", statics.ToString(CultureInfo.InvariantCulture)));
