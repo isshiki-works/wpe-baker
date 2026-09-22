@@ -46,11 +46,6 @@ public static class SdrRadianceClosure
     /// <paramref name="project"/> 只用于文案：报出壁纸自带的 HDR 开关叫什么，传 null 时那半句略去。
     /// </summary>
     public static JsonObject Describe(JsonObject scene, JsonObject properties, JsonObject? trace, JsonArray groups,
-        ProjectSource source, string? assets, bool hdrEnabled, JsonObject? project = null) =>
-        Describe(scene, properties, trace, groups, source, assets, hdrEnabled, project, out _);
-
-    /// <summary>同 <see cref="Describe(JsonObject, JsonObject, JsonObject?, JsonArray, ProjectSource, string?, bool, JsonObject?)"/>，另把拒绝原因按编号交给调用方。</summary>
-    public static JsonObject Describe(JsonObject scene, JsonObject properties, JsonObject? trace, JsonArray groups,
         ProjectSource source, string? assets, bool hdrEnabled, JsonObject? project, out Blocker? blocker)
     {
         blocker = null;

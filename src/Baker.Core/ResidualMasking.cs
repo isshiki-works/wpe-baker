@@ -261,9 +261,6 @@ public static class ResidualMasking
     /// 已经让用户先选布局）；有解析候选；留有未解析的时间机制且全部可掩盖（即 bake 会走残差掩盖路线）；却有残差层不在任何视频组里。
     /// 未解析分量里有不可掩盖项时 bake 会按"无循环"拒绝，那与布局无关，这里不管。
     /// </summary>
-    public static JsonObject? LayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource) =>
-        LayoutGate(plan, scene, readResource, out _);
-
     private static JsonObject? LayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource, out Blocker? blocker)
     {
         blocker = null;
