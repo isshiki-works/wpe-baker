@@ -9,9 +9,9 @@
 licenses-extra/** -text
 
 # 不要在这里加 `* -text` 或给 scripts/ 下的文件加 eol=lf。
-# scripts/{build-ffmpeg-lgpl21.py,build-native-cmake.py,build-native.py,
+# scripts/{build-ffmpeg-lgpl21.py,build-native-cmake.py,
 # distribution-inputs.lock.json,fetch-ffmpeg-lgpl21-inputs.py,
-# native-inputs.lock.json,native-provenance.py} 这 7 个文件参与渲染器的逐文件
+# native-inputs.lock.json,native-provenance.py} 这 6 个文件参与渲染器的逐文件
 # 源码绑定（native-provenance.load_verified_build）。构建机上它们在工作树里是
 # LF、native-inputs.lock.json 还是混合换行，与仓库 blob 并不逐字节相同；一旦
 # 被这里的规则纳入，git status 会把它们判成 modified（打包脚本的「工作树必须
