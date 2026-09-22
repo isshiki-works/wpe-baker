@@ -110,7 +110,11 @@ internal static class MessagesChecks
         JsonObject unknownPlan = Plan(blockers: [], candidates: 0);
         unknownPlan["loop"]!["unresolved"]!.AsArray().Add(new Message("unresolved.particle_sprite_period").Write(new JsonObject {
             ["kind"] = "runtime_animation" }, "detail"));
-        JsonObject unknownSummary = PlanNarrative.Summarize(unknownPlan);
+        PlanNarrative.Attach(unknownPlan);
+        JsonObject unknownSummary = unknownPlan["summary"]!.AsObject();
+        Check(unknownPlan["loop"]!["unresolved_localized"]![0]!["key"]?.GetValue<string>() == "unresolved.particle_sprite_period" &&
+            !unknownPlan.ToJsonString().Contains(PlanNarrative.DetailLocalized, StringComparison.Ordinal),
+            "Attach moves the carried message key into unresolved_localized and strips the transient field from the plan");
         Check(unknownSummary["verdict"]!.GetValue<string>() == "unknown" &&
             unknownSummary["key"]?.GetValue<string>() != "summary.unknown_no_reason" &&
             unknownSummary["zh"]!.GetValue<string>().Contains(Messages.Get("unresolved.particle_sprite_period", "zh").Split('，')[0], StringComparison.Ordinal),

@@ -842,8 +842,6 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             request, projection, groups);
         AnnotateLoopCandidates(loop);
         bool WholeLoopComplete(JsonObject value) => value["unresolved"] is JsonArray { Count: 0 } && value["candidates"] is JsonArray { Count: > 0 };
-        bool PrefixSafetyBlocked() => PlanBlockers.Codes(blockers)
-            .Any(code => code is not (BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric));
         // 三处回退都可能要前缀缓存，同一个终端捕获点只问一次渲染器。
         var captureProbes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         async Task<JsonObject?> PrefixCaptureTargetAsync(JsonObject cache)
@@ -891,7 +889,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         }
         async Task<JsonArray> PrefixCachesAsync()
         {
-            if (PrefixSafetyBlocked()) return new JsonArray();
+            if (PrefixSafetyBlocked(blockers)) return new JsonArray();
             var proposed = EffectPrefixPlanner.Propose(scene, source, request.Assets, trace, properties, request, projection);
             var accepted = new JsonArray();
             // 提案按层分组、层内由长到短。每层只取第一个捕获点可用的前缀：最长的那个被拒时退一级，
@@ -1455,6 +1453,12 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     /// 走 <see cref="AnalyzeLoopForProfile"/> 这一个入口，与 analyze、布局降级重算同一口径——
     /// 否则质量档的双上限取优只在 analyze 侧生效，bake 会按另一个上限重算出别的循环。
     /// </summary>
+    /// <summary>
+    /// 效果前缀回退只救"没有与输入无关的可烘组"这一种拒因（含通用形态）；blockers 里还有别的拒因时不试前缀。
+    /// </summary>
+    internal static bool PrefixSafetyBlocked(JsonArray blockers) => PlanBlockers.Codes(blockers)
+        .Any(code => code is not (BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric));
+
     internal static void RefreshLoop(JsonObject plan, ProjectSource source, JsonObject runtime, HybridAnalyzeRequest settings)
     {
         // 每次求解都重新读一份场景：质量档要在两个上限下各求一次，求解会往场景副本上写，不能共用同一份。

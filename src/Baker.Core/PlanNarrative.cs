@@ -538,10 +538,10 @@ public static class PlanNarrative
             : subject + "证明不了是静止画面";
     }
 
-    /// <summary>unresolved 里这一条的 {key, zh, en, params}：还没 Attach 时取它带着的临时字段，否则取同下标的 unresolved_localized。</summary>
-    private static JsonObject? LocalizedOf(JsonObject? owner, JsonObject item) => item[DetailLocalized] as JsonObject ??
-        (owner?["unresolved"] is JsonArray items && items.IndexOf(item) is int index and >= 0 &&
-        owner["unresolved_localized"] is JsonArray localized && index < localized.Count ? localized[index] as JsonObject : null);
+    /// <summary>unresolved 里这一条对应的 unresolved_localized 条目（同下标；Attach 先建好它再写结论）。</summary>
+    private static JsonObject? LocalizedOf(JsonObject? owner, JsonObject item) =>
+        owner?["unresolved"] is JsonArray items && items.IndexOf(item) is int index and >= 0 &&
+        owner["unresolved_localized"] is JsonArray localized && index < localized.Count ? localized[index] as JsonObject : null;
 
     /// <summary>"shaders/effects/lightshafts.frag + shaders/effects/lightshafts.vert" → "lightshafts"。</summary>
     private static string EffectName(string? resource)
