@@ -16,7 +16,6 @@ import wescene.core;
 import wescene.types;
 import rstd.log;
 import rstd.cppstd;
-import wescene.load_bench;
 import wescene.resource_registry;
 import wescene.vulkan;
 import wescene.shader_compile;
@@ -310,7 +309,7 @@ struct VulkanRender::Impl {
     Impl()  = default;
     ~Impl() = default;
 
-    bool init(RenderInitInfo, SceneLoadBenchRecorderView);
+    bool init(RenderInitInfo);
     void destroy();
 
     void drawFrame(Scene&);
@@ -328,8 +327,6 @@ struct VulkanRender::Impl {
     void configureRenderTargets(Scene&);
     void compileRenderGraph(Scene&, rg::RenderGraph&);
     void compileRenderGraph(Scene&, rg::RenderGraph&, const RenderSceneSnapshot&);
-    void compileRenderGraph(Scene&, rg::RenderGraph&, const RenderSceneSnapshot&,
-                            SceneLoadBenchRecorderView);
     void refreshPreparedResources(Scene&);
     void refreshPreparedResources(Scene&, const RenderSceneSnapshot&);
     void refreshPreparedResources(Scene&, const RenderSceneSnapshot&,
@@ -351,9 +348,8 @@ struct VulkanRender::Impl {
 
     bool                      initRes();
     rstd::Option<std::size_t> acquireUploadCommandSlot(RenderingResources&);
-    bool                      commitPreparedUploads(SceneLoadBenchRecorderView load_bench = {});
-    bool prepareProgram(Scene&, const RenderSceneSnapshot&, resource::ResourcePlanSections,
-                        SceneLoadBenchRecorderView = {});
+    bool                      commitPreparedUploads();
+    bool prepareProgram(Scene&, const RenderSceneSnapshot&, resource::ResourcePlanSections);
     bool waitForPreparedUploads(RenderingResources&);
     void drawFrameSwapchain(Scene&);
     void drawFrameOffscreen(Scene&);
@@ -366,7 +362,6 @@ struct VulkanRender::Impl {
     ReDrawCB     m_redraw_cb;
 
     ShaderReflectionCache      m_shader_reflection_cache;
-    SceneLoadBenchRecorderView m_pending_load_bench;
 
     vvk::CommandBuffers             m_cmds;
     std::vector<vvk::CommandBuffer> m_upload_cmds;
@@ -557,9 +552,7 @@ void VulkanRender::driverUuid(std::uint8_t out[16]) const {
     std::memcpy(out, id.driverUUID, 16);
 }
 
-bool VulkanRender::init(RenderInitInfo info, SceneLoadBenchRecorderView load_bench) {
-    return pImpl->init(rstd::move(info), load_bench);
-}
+bool VulkanRender::init(RenderInitInfo info) { return pImpl->init(rstd::move(info)); }
 void VulkanRender::destroy() { pImpl->destroy(); }
 void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
 owe::CpuFrameResult VulkanRender::drawFrameCpu(Scene& scene, bool read_pixels) {
@@ -578,11 +571,6 @@ void VulkanRender::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
 void VulkanRender::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
                                       const RenderSceneSnapshot& render_scene) {
     pImpl->compileRenderGraph(scene, rg, render_scene);
-}
-void VulkanRender::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
-                                      const RenderSceneSnapshot& render_scene,
-                                      SceneLoadBenchRecorderView load_bench) {
-    pImpl->compileRenderGraph(scene, rg, render_scene, load_bench);
 }
 void VulkanRender::refreshPreparedResources(Scene& scene) {
     pImpl->refreshPreparedResources(scene);
@@ -641,7 +629,7 @@ bool VulkanRender::onSwapchainReady(unsigned width, unsigned height) {
 
 owe::ExSwapchain* VulkanRender::exSwapchain() const { return pImpl->m_ex_swapchain.get(); };
 
-bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView load_bench) {
+bool VulkanRender::Impl::init(RenderInitInfo info) {
     if (m_inited) return true;
 
     if (!std::isfinite(info.effect_render_scale) || info.effect_render_scale <= 0.0 ||
@@ -767,7 +755,6 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
     const auto instance_api_version =
         info.video_hwdec == "none" && !info.gpu_encode ? WP_VULKAN_VERSION : VK_API_VERSION_1_3;
     {
-        auto instance_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::vulkan_instance);
         if (! Instance::Create(m_instance, inst_exts, inst_layers, instance_api_version)) {
             rstd_error("init vulkan failed");
             return false;
@@ -791,7 +778,6 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
     }
 
     {
-        auto device_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::vulkan_device);
         if (! Device::Create(m_instance, device_exts, extent, *m_device)) {
             rstd_error("init vulkan device failed");
             return false;
@@ -830,7 +816,6 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
     if (m_cpu_readback) {
         if (! initCpuReadback(info)) return false;
     } else if (info.offscreen) {
-        auto swapchain_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::vulkan_swapchain);
         if (info.ex_swapchain_factory) {
             RenderInitInfo::ExSwapchainHandles h {
                 *m_instance.inst(),
@@ -856,7 +841,6 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
     }
 
     {
-        auto resources_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::vulkan_resources);
         if (! initRes()) return false;
     }
 
@@ -1237,8 +1221,7 @@ rstd::Option<std::size_t> VulkanRender::Impl::acquireUploadCommandSlot(Rendering
     return rstd::Some<std::size_t>(slot);
 }
 
-bool VulkanRender::Impl::commitPreparedUploads(SceneLoadBenchRecorderView load_bench) {
-    auto upload_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_upload_submit);
+bool VulkanRender::Impl::commitPreparedUploads() {
     if (! m_rendering_resources.resources.HasPendingUploads()) return true;
     auto slot = acquireUploadCommandSlot(m_rendering_resources);
     if (slot.is_none()) return false;
@@ -1252,11 +1235,8 @@ bool VulkanRender::Impl::commitPreparedUploads(SceneLoadBenchRecorderView load_b
 }
 
 bool VulkanRender::Impl::waitForPreparedUploads(RenderingResources& rr) {
-    auto wait_span =
-        SceneLoadSpan(m_pending_load_bench, &SceneLoadProbeIds::render_texture_upload_wait);
     auto pending = rr.resources.PendingUpload();
     if (pending.is_none()) {
-        m_pending_load_bench = {};
         return true;
     }
     std::uint64_t counter = 0;
@@ -1267,7 +1247,6 @@ bool VulkanRender::Impl::waitForPreparedUploads(RenderingResources& rr) {
         VVK_CHECK_ACT(return false, result);
     }
     rr.resources.CompleteUploadsThrough(pending->value);
-    m_pending_load_bench = {};
     return true;
 }
 
@@ -1412,7 +1391,6 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         if (result != VK_SUCCESS) return fail(result, "wait for texture uploads");
         rr.resources.CompleteUploadsThrough(pending_upload->value);
     }
-    m_pending_load_bench = {};
 
     const auto queue_family = m_device->graphics_queue().family_index;
     owe::FrameSurfaceLease surface {
@@ -2122,22 +2100,16 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
     compileRenderGraph(scene, rg, render_scene);
 }
 
-void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
-                                            const RenderSceneSnapshot& render_scene) {
-    compileRenderGraph(scene, rg, render_scene, {});
-}
-
 bool VulkanRender::Impl::prepareProgram(Scene& scene, const RenderSceneSnapshot& render_scene,
-                                        resource::ResourcePlanSections sections,
-                                        SceneLoadBenchRecorderView     load_bench) {
+                                        resource::ResourcePlanSections sections) {
     auto status = m_program.beginPrepare(
-        scene, *m_device, m_rendering_resources, render_scene, sections, load_bench);
+        scene, *m_device, m_rendering_resources, render_scene, sections);
     while (status == RenderProgramPrepareStatus::BatchReady) {
-        if (! commitPreparedUploads(load_bench)) {
+        if (! commitPreparedUploads()) {
             m_program.abortPrepare(m_rendering_resources);
             return false;
         }
-        status = m_program.continuePrepare(scene, *m_device, m_rendering_resources, load_bench);
+        status = m_program.continuePrepare(scene, *m_device, m_rendering_resources);
     }
     if (status == RenderProgramPrepareStatus::Failed) {
         m_program.abortPrepare(m_rendering_resources);
@@ -2145,10 +2117,9 @@ bool VulkanRender::Impl::prepareProgram(Scene& scene, const RenderSceneSnapshot&
     }
 
     {
-        auto scopes_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_scopes);
         m_program.rebuildScopes();
     }
-    if (! commitPreparedUploads(load_bench)) {
+    if (! commitPreparedUploads()) {
         m_program.abortPrepare(m_rendering_resources);
         return false;
     }
@@ -2158,17 +2129,13 @@ bool VulkanRender::Impl::prepareProgram(Scene& scene, const RenderSceneSnapshot&
 }
 
 void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
-                                            const RenderSceneSnapshot& render_scene,
-                                            SceneLoadBenchRecorderView load_bench) {
+                                            const RenderSceneSnapshot& render_scene) {
     if (! m_inited) return;
-    m_pending_load_bench = load_bench;
-    auto compile_span    = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_graph_compile);
     m_program.loaded     = false;
     m_capture_binding.reset();
     m_capture_error.clear();
 
     {
-        auto program_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_program_build);
         if (! m_program.buildFromGraph(rg)) {
             rstd_error("compile render graph failed: dependency cycle");
             return;
@@ -2196,12 +2163,11 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
     }
 
     {
-        auto requests_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_requests);
         configureRenderTargets(scene);
         m_program.finalizeFramePassRequests(scene);
         m_program.finalizeResourceRequests(scene);
     }
-    (void)prepareProgram(scene, render_scene, resource::ResourcePlanAll, load_bench);
+    (void)prepareProgram(scene, render_scene, resource::ResourcePlanAll);
 };
 
 void VulkanRender::Impl::refreshPreparedResources(Scene& scene) {

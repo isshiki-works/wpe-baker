@@ -12,7 +12,6 @@ export import wescene.resource;
 export import wescene.resource_registry;
 import wescene.vulkan;
 import wescene.scene;
-import wescene.load_bench;
 
 using namespace rstd::prelude;
 using rstd::collections::HashMap;
@@ -412,32 +411,6 @@ private:
     ref<Scene>                 m_scene;
 };
 
-class SnapshotTexturePrepareObserver {
-public:
-    explicit SnapshotTexturePrepareObserver(SceneLoadBenchRecorderView load_bench)
-        : m_load_bench(load_bench) {}
-
-    void BeginTexturePlan() {
-        m_plan = Some(SceneLoadSpan(m_load_bench, &SceneLoadProbeIds::render_texture_plan));
-    }
-    void EndTexturePlan() { (void)m_plan.take(); }
-    void BeginTextureDecode() {
-        m_decode = Some(SceneLoadSpan(m_load_bench, &SceneLoadProbeIds::render_texture_decode));
-    }
-    void EndTextureDecode() { (void)m_decode.take(); }
-    void BeginTextureUpload() {
-        m_upload =
-            Some(SceneLoadSpan(m_load_bench, &SceneLoadProbeIds::render_texture_upload_prepare));
-    }
-    void EndTextureUpload() { (void)m_upload.take(); }
-
-private:
-    SceneLoadBenchRecorderView m_load_bench;
-    Option<SceneLoadSpanGuard> m_plan;
-    Option<SceneLoadSpanGuard> m_decode;
-    Option<SceneLoadSpanGuard> m_upload;
-};
-
 struct RenderingResources {
     vvk::CommandBuffer command;
 
@@ -503,17 +476,6 @@ struct Impl<owe::resource::TextureContentProvider, owe::vulkan::SnapshotImported
         -> Option<Arc<owe::VideoPlaybackState>> {
         return this->self().ResolveVideoPlayback(request);
     }
-};
-
-template<>
-struct Impl<owe::resource::TexturePrepareObserver, owe::vulkan::SnapshotTexturePrepareObserver>
-    : ImplBase<owe::vulkan::SnapshotTexturePrepareObserver> {
-    void BeginTexturePlan() { this->self().BeginTexturePlan(); }
-    void EndTexturePlan() { this->self().EndTexturePlan(); }
-    void BeginTextureDecode() { this->self().BeginTextureDecode(); }
-    void EndTextureDecode() { this->self().EndTextureDecode(); }
-    void BeginTextureUpload() { this->self().BeginTextureUpload(); }
-    void EndTextureUpload() { this->self().EndTextureUpload(); }
 };
 
 } // namespace rstd

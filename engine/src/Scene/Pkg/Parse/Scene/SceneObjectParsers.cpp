@@ -6,7 +6,6 @@ module wescene.pkg.parse;
 import :scene_context;
 import eigen;
 import wescene.pkg.spec_names;
-import wescene.load_bench;
 import wescene.core;
 import wescene.types;
 import rstd;
@@ -685,8 +684,7 @@ void ProcessContainers(SceneParseContext& context, mut_ref<SceneObjectVar[]> sce
 }
 
 void ProcessObjects(SceneParseContext& context, mut_ref<SceneObjectVar[]> scene_objs,
-                    wavsen::audio::SoundManager* sm, ProcessOpts opts,
-                    SceneLoadBenchRecorderView load_bench) {
+                    wavsen::audio::SoundManager* sm, ProcessOpts opts) {
     context.sound_manager = sm;
     IndexSystemMediaImageFallbacks(context, scene_objs.as_ref());
 
@@ -696,41 +694,33 @@ void ProcessObjects(SceneParseContext& context, mut_ref<SceneObjectVar[]> scene_
             RSTD_CASE(Container) { continue; }
             RSTD_CASE(Image, value) {
                 if (! (opts.kinds & ProcessOpts::Image)) continue;
-                auto span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::parse_object_image);
                 ParseImageObj(context, value);
             }
             RSTD_CASE(Shape, value) {
                 if (! (opts.kinds & ProcessOpts::Image)) continue;
-                auto span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::parse_object_image);
                 ParseShapeObj(context, value);
             }
             RSTD_CASE(Particle, value) {
                 if (! (opts.kinds & ProcessOpts::Particle)) continue;
-                auto span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::parse_object_particle);
                 ParseParticleObj(context, value);
             }
             RSTD_CASE(Sound, value) {
                 if (! (opts.kinds & ProcessOpts::Sound) || ! sm) continue;
-                auto span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::parse_object_sound);
                 ParseSoundObj(context, value, *sm);
             }
             RSTD_CASE(Light, value) {
                 if (! (opts.kinds & ProcessOpts::Light)) continue;
-                auto span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::parse_object_light);
                 ParseLightObj(context, value);
             }
             RSTD_CASE(Text, value) {
                 if (! (opts.kinds & ProcessOpts::Text)) continue;
-                auto span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::parse_object_text);
                 ParseTextObj(context, value);
             }
             RSTD_CASE(Model, value) {
                 if (! (opts.kinds & ProcessOpts::Model)) continue;
-                auto span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::parse_object_model);
                 ParseModelObj(context, value);
             }
             RSTD_CASE(Camera, value) {
-                auto span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::parse_object_camera);
                 ParseCameraObj(context, value);
             }
         }

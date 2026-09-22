@@ -5,7 +5,6 @@ module;
 module wescene.pkg.parse;
 import :scene_context;
 import eigen;
-import wescene.load_bench;
 import wescene.core;
 import wescene.types;
 import rstd;

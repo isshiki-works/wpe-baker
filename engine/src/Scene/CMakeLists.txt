@@ -3,7 +3,6 @@ add_library(owe-scene STATIC)
 target_sources(owe-scene PUBLIC FILE_SET CXX_MODULES BASE_DIRS ../.. FILES
   Audio/SceneAudioResponse.cppm
   Lighting/Lighting.cppm
-  LoadBench.cppm
   Particle/Particle.cppm
   Particle/ParticleProgram.cppm
   Pkg/AssetVersion.cppm
@@ -168,7 +167,6 @@ target_link_libraries(owe-scene PUBLIC rstd.std)
 target_link_libraries(owe-scene PUBLIC rstd.cppstd)
 target_link_libraries(owe-scene PUBLIC rstd.json)
 target_link_libraries(owe-scene PUBLIC rstd.log)
-target_link_libraries(owe-scene PUBLIC rstd.bench)
 target_link_libraries(owe-scene PUBLIC wavsen)
 target_link_libraries(owe-scene PRIVATE dwrite)
 target_link_libraries(owe-scene PUBLIC qjs lz4_static freetype)

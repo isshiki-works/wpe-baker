@@ -4,7 +4,6 @@ export module wescene.vulkan_render;
 import wescene.types;
 import rstd;
 import rstd.cppstd;
-import wescene.load_bench;
 import wescene.vulkan;
 import wescene.scene;
 import wescene.resource_registry;
@@ -243,7 +242,7 @@ public:
     VulkanRender();
     ~VulkanRender();
 
-    bool init(RenderInitInfo, SceneLoadBenchRecorderView load_bench = {});
+    bool init(RenderInitInfo);
 
     void destroy();
 
@@ -264,8 +263,6 @@ public:
     void configureRenderTargets(Scene&);
     void compileRenderGraph(Scene&, rg::RenderGraph&);
     void compileRenderGraph(Scene&, rg::RenderGraph&, const RenderSceneSnapshot&);
-    void compileRenderGraph(Scene&, rg::RenderGraph&, const RenderSceneSnapshot&,
-                            SceneLoadBenchRecorderView);
     void refreshPreparedResources(Scene&);
     void refreshPreparedResources(Scene&, const RenderSceneSnapshot&);
     void refreshPreparedTextures(Scene&, const RenderSceneSnapshot&);

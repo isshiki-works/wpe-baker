@@ -5,7 +5,6 @@ import rstd;
 import wavsen.audio;
 import wescene.fs;
 import wescene.json;
-import wescene.load_bench;
 import wescene.scene;
 import wescene.script;
 import wescene.text;
@@ -349,7 +348,7 @@ void IndexSceneDocument(SceneParseContext&, ref<wpscene::SceneDocument>, slice<S
 void ProcessContainers(SceneParseContext&, mut_ref<SceneObjectVar[]>);
 
 void ProcessObjects(SceneParseContext&, mut_ref<SceneObjectVar[]>, wavsen::audio::SoundManager* sm,
-                    ProcessOpts opts = {}, SceneLoadBenchRecorderView load_bench = {});
+                    ProcessOpts opts = {});
 
 Box<Scene> FinalizeScene(SceneParseContext&);
 void       BuildBloomPostProcess(SceneParseContext&, fs::VFS&, const wpscene::SceneGeneral&);
