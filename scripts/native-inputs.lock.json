@@ -6,12 +6,6 @@
     "path": ".tools\\ninja"
   },
   {
-    "name": "lito",
-    "url": "https://github.com/litocpp/lito/releases/download/v0.7.1/lito-v0.7.1-windows-x86_64.zip",
-    "sha256": "42b199a9fa5a9d792da3df7bd97a497b533f843c1fd2eb5d19022a525517eb34",
-    "path": ".tools\\lito"
-  },
-  {
     "name": "vvk",
     "url": "https://codeload.github.com/litocpp/vvk/zip/f53d60cc70938d0485802750deeb15d18ba033ea",
     "sha256": "5cf53022f76e3bcf7d6f243fcc46bf73a9ca544322a4e1694688ca4f3e0984e9",
@@ -98,12 +92,6 @@
     "path": ".tools\\cmake"
   },
   {
-    "name": "llvm-mingw",
-    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260826/llvm-mingw-20260826-ucrt-x86_64.zip",
-    "sha256": "ae601f4e0f72bbdf441ad2df8bb16f037e2e9251559ea6b37b4057aef39c06c3",
-    "path": ".tools\\llvm-mingw"
-  },
-  {
     "name": "vulkan-loader",
     "url": "https://codeload.github.com/KhronosGroup/Vulkan-Loader/zip/v1.4.321",
     "sha256": "73f7e87421bf0eed324ffabd2c1665851835ed9aa053b8881d2e2c735aef4420",
@@ -114,12 +102,6 @@
     "url": "https://gitlab.com/libeigen/eigen/-/archive/bc3b39870ecb690a623a3f49149a358b95c5781d/eigen-bc3b39870ecb690a623a3f49149a358b95c5781d.zip",
     "sha256": "f0209070eb3a00ad0fe5d1cc4ccdac9c0b41e95ef7062f356fd01b7b2208630c",
     "path": ".deps\\eigen"
-  },
-  {
-    "name": "ffmpeg",
-    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip",
-    "sha256": "96eca80835f4000c43df261e70a8546a4b0f63fdf2c658f351e4f392483b0dfe",
-    "path": ".deps\\ffmpeg"
   },
   {
     "name": "pkgconf",

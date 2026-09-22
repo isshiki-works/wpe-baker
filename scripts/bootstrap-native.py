@@ -28,11 +28,9 @@ TOOLS_INPUTS = [
     ("llvm-mingw-22", "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip", "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"),
     ("cmake", "https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3-windows-x86_64.zip", "4d52ebab7193a698651639ed80d8d04fd903358843572cf44c7fd234cb7c26ab"),
     ("ninja", "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip", "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65"),
-    ("lito", "https://github.com/litocpp/lito/releases/download/v0.7.1/lito-v0.7.1-windows-x86_64.zip", "42b199a9fa5a9d792da3df7bd97a497b533f843c1fd2eb5d19022a525517eb34"),
 ]
 
-# The engine lito.lock supplies every SHA below except independently selected
-# LZ4 / FreeType / Vulkan-Headers source releases.
+# Pinned source revisions (LZ4 / FreeType / Vulkan-Headers use release tags).
 SOURCES = [
     ("rstd", "https://github.com/litocpp/rstd", "456fec5cc2b87acdb56800e298b5712ea69cdd47"),
     ("vvk", "https://github.com/litocpp/vvk", "f53d60cc70938d0485802750deeb15d18ba033ea"),

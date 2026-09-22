@@ -13,13 +13,12 @@ spec.loader.exec_module(bootstrap)
 
 INPUTS = [
     ("eigen", "https://gitlab.com/libeigen/eigen/-/archive/bc3b39870ecb690a623a3f49149a358b95c5781d/eigen-bc3b39870ecb690a623a3f49149a358b95c5781d.zip", None, bootstrap.DEPS),
-    ("ffmpeg", "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip", "96eca80835f4000c43df261e70a8546a4b0f63fdf2c658f351e4f392483b0dfe", bootstrap.DEPS),
     ("vulkan-loader", "https://codeload.github.com/KhronosGroup/Vulkan-Loader/zip/v1.4.321", None, bootstrap.DEPS),
 ]
 
 def main() -> None:
     records, errors = [], []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(bootstrap.obtain, *entry) for entry in INPUTS]
         for future in concurrent.futures.as_completed(futures):
             try:
