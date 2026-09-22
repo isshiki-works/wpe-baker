@@ -58,9 +58,9 @@ internal static class InteractionPolicy
                     JsonObject raw = new();
                     try
                     {
-                        uint width = Math.Min(512, plan["settings"]?["width"]?.GetValue<uint>() ?? 512);
-                        uint height = Math.Max(2, (uint)Math.Round((double)(plan["settings"]?["height"]?.GetValue<uint>() ?? 512) * width /
-                            (plan["settings"]?["width"]?.GetValue<uint>() ?? 512)));
+                        HybridAnalyzeRequest settings = PlanSettings.Of(plan);
+                        uint width = Math.Min(512, settings.Width);
+                        uint height = Math.Max(2, (uint)Math.Round((double)settings.Height * width / settings.Width));
                         raw = await new NativeRenderRunner(tools).RenderRawAsync(new(request.Source, request.Assets, directory,
                             width, height, request.FpsNumerator, request.FpsDenominator, 48, Seed: 17,
                             UserProperties: plan["snapshot_properties"]?.AsObject(), DeviceUuid: request.DeviceUuid,

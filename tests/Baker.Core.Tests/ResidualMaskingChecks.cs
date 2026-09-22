@@ -306,7 +306,7 @@ internal static class ResidualMaskingChecks
             driftVerdict["user_guidance_en"]?.GetValue<string>()?.Contains("2.564E+09 s", StringComparison.Ordinal) == true &&
             driftVerdict["user_guidance_zh"]?.GetValue<string>()?.Contains("光束 - 角", StringComparison.Ordinal) == false,
             "the drift guidance states the axis periods computed from the pass speed and never names a layer or wallpaper");
-        // 计划记下的循环时长上限（loop.maximum_seconds = --loop-length-max）原样进拒绝理由与指引，不再写死 180。
+        // 计划记下的循环时长上限（loop.maximum_seconds = --loop-max-seconds）原样进拒绝理由与指引，不再写死 180。
         JsonObject longPlan = Plan(new JsonArray(Unresolved("NonPeriodicOrDriftingMechanism", 83, ShaftDetail,
                 "shaders/effects/lightshafts.frag", mechanism: ShaderPeriodAnalysis.LightShaftDriftMechanism)),
             new JsonArray(Layer(83, "光束 - 角", 0.05)));

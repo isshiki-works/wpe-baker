@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='wpe-scene-cli-') as temporary:
     for flag in ('--help', '-h'):
         result = invoke('analyze', flag)
         assert result.returncode == 0 and result.stdout.startswith(b'wpe-baker analyze SOURCE')
-        assert b'--loop-preference' in result.stdout
+        assert b'--preset' in result.stdout
         checks.append('analyze ' + flag + ' prints its own usage')
     for name, request in [('legacy', {'schema_version': 1, 'actions': []}),
                           ('media-plan', {'schema_version': 2, 'kind': 'media_optimization'})]:

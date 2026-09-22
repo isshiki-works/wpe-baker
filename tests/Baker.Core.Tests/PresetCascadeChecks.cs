@@ -18,7 +18,7 @@ internal static class PresetCascadeChecks
         JsonObject quality = await Run("preset-quality", r => Plan(r, true, 1));
         check(calls.Count == 1 && calls[0].ViewMode == "fixed_view" && calls[0].LiveOverlayPlacement == "foreground" &&
             quality["preset_requested"]!.GetValue<string>() == "quality" && quality["preset_applied"]!.GetValue<string>() == "quality" &&
-            quality["settings"]!["keep_live"]!.GetValue<bool>() == false && quality["preset_fallback_reason"] is null,
+            quality["preset_fallback_reason"] is null,
             "default fixed interaction is independent of quality retiming and hoists overlays");
         JsonObject layered = await Run("preset-layered", r => Plan(r, r.VideoLayout == "layered", 4));
         check(calls.Count == 2 && layered["preset_applied"]!.GetValue<string>() == "quality" && layered["route_fallback"] is null,
@@ -139,13 +139,6 @@ internal static class PresetCascadeChecks
             Directory.GetFiles(Path.Combine(request.OutputDirectory, "cache"), "loop-*.json", SearchOption.AllDirectories).Length == caches.Length &&
             repeat["preset_applied"]!.GetValue<string>() == "balanced" && repeat["custom_settings"]!.GetValue<bool>(),
             "a layout edit reuses persistent period evidence and can reuse the same analysis directory");
-        var legacyRequest = request with { OutputDirectory = Path.Combine(root, "preset-legacy"), Preset = "balanced", KeepLive = true };
-        JsonObject legacy = await planner.AnalyzeAsync(legacyRequest);
-        JsonObject single = await planner.AnalyzeSingleAsync(legacyRequest with { OutputDirectory = Path.Combine(root, "preset-single") });
-        check(legacy["preset_applied"] is null && legacy["settings"]!["keep_live"] is null &&
-            legacy.ToJsonString().Replace("preset-legacy", "NORMALIZED", StringComparison.Ordinal) ==
-            single.ToJsonString().Replace("preset-single", "NORMALIZED", StringComparison.Ordinal),
-            "keep-live entry point preserves the exact single-pass plan and adds no fields");
     }
 
     private static JsonObject Plan(HybridAnalyzeRequest request, bool usable, int count) => new()

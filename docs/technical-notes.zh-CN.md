@@ -52,7 +52,7 @@ Windows 离线 Scene 壁纸烘焙器。1.0 只面向**重型** Scene 壁纸：�
 - **分层布局最多 4 个视频组**（2–4 组省电，6 组核显 +106%，9 组封装 +10.9%）。实时小组件默认置顶（`--live-overlays foreground`）。
 - **分析缓存：**同一输出目录改设置重分析时复用场景加载与周期求解（3426865175 4K：4.98 s → 0.95 s）。
 - **烘焙前实测原作功耗默认关**（`--measure-source`；界面里是可选勾选，约 60 秒）。
-- **界面：**结论四态固定文本；"技术细节"折叠为纯数字表；"本次未包含"卡片只列实际未包含项；高级区有改动时显示"自定义"；兼容模式勾选等于 `--keep-live on`，完全走 1.0 的分析路径，plan 与 1.0 逐字节相同。
+- **界面：**结论四态固定文本；"技术细节"折叠为纯数字表；"本次未包含"卡片只列实际未包含项；高级区有改动时显示"自定义"。1.0 的兼容模式（`--keep-live on`）已删除；旧版本的 plan 不再读取，需重新分析。
 - **1.0.2：分析与生成共用一套准入判定。**循环分配判定（粒子平稳性、残差掩盖）在分析阶段执行，必须保留实时的子树在报告写"可以生成"之前就已确定。生成失败直接报失败，不再自动重渲染，手动重试可用。候选按帧数从短到长排序。阿米娅（3486806915）1080p 平衡档：RTX 5090 上 8 分 44 秒，接缝校验通过。
 - 单测 1437 项。
 
@@ -275,9 +275,8 @@ wpe-baker measure-official REQUEST.json
 
 analyze 里会改变计划内容的参数：
 
-- `--preset efficiency|balanced|quality`：允许多大的观感改动（5% / 3% / 求改动最小），默认 balanced；质量档上限 600 秒，plan 的 `preset_applied` 记实际档位。高级覆盖是 `--retime-budget PERCENT`（0..5）与 `--loop-max-seconds`；旧名 `--loop-preference`、`--max-retime`、`--loop-length-max` 保留一个版本作别名并提示改名。
+- `--preset efficiency|balanced|quality`：允许多大的观感改动（5% / 3% / 求改动最小），默认 balanced；质量档上限 600 秒，plan 的 `preset_applied` 记实际档位。高级覆盖是 `--retime-budget PERCENT`（0..5）与 `--loop-max-seconds`；旧名 `--loop-preference`、`--max-retime`、`--loop-length-max`、`--view-mode` 已删除。
 - `--interaction keep|fixed|off`：由输入驱动的内容怎么处理——保留实时、固定视角（默认）、或再去掉指针效果与采样成本高的大面积音频效果。时钟、日期、媒体文字在任何模式下都保留实时。
-- `--keep-live on|off`：`on` 完全走 1.0 的分析路径（平衡档、保留视角、不给建议、不加新字段），即界面里的兼容模式；不能与 `--interaction` 同用。
 - `--measure-source on|off`：分析前在官方播放器里实测原作功耗，默认关。
 - `--sway-retime on|off`：摆动改频**默认开**，三档都开——档位的观感预算管的就是它。要关掉才显式传 `--sway-retime off`（界面上在「高级：调速覆盖」里取消「摆动改频」），关掉后摆动分量按未解析处理，只会多出拒绝。
 - `--fps N --fps-den D`：覆盖自动算出的帧率，plan 里该值记为手动覆盖而不是自动。

@@ -70,7 +70,7 @@ internal sealed record SettingsPreset(string SourceSha256, PresetSettings Settin
 
 internal sealed record PresetSettings(uint Width, uint Height, string Fps, string? DeviceUuid, bool Retime, bool FixedView,
     bool LayeredVideo, bool ForegroundLive, bool SimpleTextEffects, bool AudioEffects, string LoopPreference = "balanced",
-    string Interaction = "fixed", bool Compatibility = false, string PlaybackEncoder = "software", bool MatchEffectResolution = false)
+    string Interaction = "fixed", string PlaybackEncoder = "software", bool MatchEffectResolution = false)
 {
     public JsonObject ToJson() => new()
     {
@@ -78,7 +78,7 @@ internal sealed record PresetSettings(uint Width, uint Height, string Fps, strin
         ["retime"] = Retime, ["fixed_view"] = FixedView, ["layered_video"] = LayeredVideo,
         ["foreground_live"] = ForegroundLive, ["simple_text_effects"] = SimpleTextEffects,
         ["audio_effects"] = AudioEffects, ["loop_preference"] = LoopPreference,
-        ["interaction"] = Interaction, ["compatibility"] = Compatibility,
+        ["interaction"] = Interaction,
         ["playback_encoder"] = PlaybackEncoder, ["match_effect_resolution"] = MatchEffectResolution
     };
 
@@ -104,7 +104,6 @@ internal sealed record PresetSettings(uint Width, uint Height, string Fps, strin
         return new(width, height, fps, device, RequiredBool(settings, "retime"), RequiredBool(settings, "fixed_view"),
             RequiredBool(settings, "layered_video"), RequiredBool(settings, "foreground_live"), RequiredBool(settings, "simple_text_effects"),
             RequiredBool(settings, "audio_effects"), loopPreference, interaction,
-            settings.ContainsKey("compatibility") && RequiredBool(settings, "compatibility"),
             PlaybackEncoderSelection.Normalize(settings.ContainsKey("playback_encoder") ? RequiredString(settings, "playback_encoder") : null),
             settings.ContainsKey("match_effect_resolution") && RequiredBool(settings, "match_effect_resolution"));
     }

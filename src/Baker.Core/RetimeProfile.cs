@@ -32,7 +32,7 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
     /// <summary>--retime-budget 允许的最大值（百分比）：效率档 5% 是扫描过的最高档，再往上没有数据支持。</summary>
     public const double MaximumBudgetPercent = 5;
 
-    /// <summary>没选档时的循环长度上限（秒），与 --loop-length-max 的旧默认一致。</summary>
+    /// <summary>没选档时的循环长度上限（秒），与 --loop-max-seconds 的默认一致。</summary>
     public const double DefaultLoopMaximumSeconds = SwayRetimeOptions.DefaultLoopLengthMaximumSeconds;
 
     /// <summary>
@@ -55,18 +55,6 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
         Preset == Quality && effectiveMaximumSeconds > QualityComparisonSeconds + 1e-9;
 
     public static bool IsKnownPreset(string value) => value is Efficiency or Balanced or Quality;
-
-    /// <summary>
-    /// 旧开关 --loop-preference 的取值与档位一一对应（README.zh-CN 早已把它写成别名，只是实现漏了）：
-    /// performance = 效率、balanced = 平衡、quality = 质量。
-    /// </summary>
-    public static string PresetForLoopPreference(string preference) => preference switch
-    {
-        "performance" => Efficiency,
-        "balanced" => Balanced,
-        "quality" => Quality,
-        _ => throw new ArgumentException("--loop-preference must be performance, balanced, or quality.")
-    };
 
     /// <summary>档位对应的循环取向（求解器认的还是这三个名字）。</summary>
     public static string LoopPreferenceForPreset(string preset) => preset switch
@@ -154,36 +142,14 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
         return new(presetFrames < comparisonFrames, QualityCeilingChoice.ShorterLoop);
     }
 
-    /// <summary>
-    /// 从已解析的命令行选项里读档位、两个高级覆盖与摆动改频开关。旧名 --max-retime、--loop-length-max 保留为别名，
-    /// 用到时通过 <paramref name="deprecated"/> 提示改名；新旧名同时给视为写错命令，直接报错。
-    /// </summary>
-    public static Arguments ReadArguments(IReadOnlyDictionary<string, string> options, Action<string>? deprecated = null)
+    /// <summary>从已解析的命令行选项里读档位、两个高级覆盖与摆动改频开关。</summary>
+    public static Arguments ReadArguments(IReadOnlyDictionary<string, string> options)
     {
         ArgumentNullException.ThrowIfNull(options);
         string preset = options.TryGetValue("--preset", out string? name) ? name : Balanced;
         if (!IsKnownPreset(preset)) throw new ArgumentException("--preset must be efficiency, balanced, or quality.");
-        // --loop-preference 是 --preset 的旧名（README 早已这么写）：单独给时按对应档位走，
-        // 与 --preset 同时给且指的不是同一档就是写错了命令，直接报错，不再解出两套循环。
-        if (options.TryGetValue("--loop-preference", out string? preference))
-        {
-            string aliased = PresetForLoopPreference(preference);
-            if (options.ContainsKey("--preset") && aliased != preset)
-                throw new ArgumentException($"--loop-preference {preference} is the old name for --preset {aliased}; " +
-                    $"it cannot be combined with --preset {preset}. Give only --preset.");
-            deprecated?.Invoke($"--loop-preference is now an alias for --preset ({preference} = {aliased}); the old name still works.");
-            preset = aliased;
-        }
-        if (options.ContainsKey("--retime-budget") && options.ContainsKey("--max-retime"))
-            throw new ArgumentException("Give either --retime-budget or its old name --max-retime, not both.");
-        if (options.ContainsKey("--loop-max-seconds") && options.ContainsKey("--loop-length-max"))
-            throw new ArgumentException("Give either --loop-max-seconds or its old name --loop-length-max, not both.");
-        if (options.ContainsKey("--max-retime"))
-            deprecated?.Invoke("--max-retime is now --retime-budget (the same percentage also caps visible sway change); the old name still works.");
-        if (options.ContainsKey("--loop-length-max"))
-            deprecated?.Invoke("--loop-length-max is now --loop-max-seconds; the old name still works.");
         double? budget = null;
-        if (options.TryGetValue("--retime-budget", out string? budgetText) || options.TryGetValue("--max-retime", out budgetText))
+        if (options.TryGetValue("--retime-budget", out string? budgetText))
         {
             if (!double.TryParse(budgetText, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) ||
                 !double.IsFinite(parsed) || parsed < 0 || parsed > MaximumBudgetPercent)
@@ -191,7 +157,7 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
             budget = parsed;
         }
         double? maximum = null;
-        if (options.TryGetValue("--loop-max-seconds", out string? lengthText) || options.TryGetValue("--loop-length-max", out lengthText))
+        if (options.TryGetValue("--loop-max-seconds", out string? lengthText))
         {
             if (!double.TryParse(lengthText, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) ||
                 !double.IsFinite(parsed) || parsed <= 0 || parsed > SwayRetimeOptions.MaximumLoopLengthSeconds)

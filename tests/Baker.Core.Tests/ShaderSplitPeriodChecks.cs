@@ -204,7 +204,7 @@ internal static class ShaderSplitPeriodChecks
             shafts.Detail.Contains("1061.3 s", StringComparison.Ordinal) &&
             shafts.Detail.Contains("joint return inside the 600-second loop ceiling", StringComparison.Ordinal),
             "lightshafts states its four UV rates and the joint return that stays past the loop ceiling");
-        // 文案复述调用方传入的实际上限（--loop-length-max），判定本身不随上限变化。
+        // 文案复述调用方传入的实际上限（--loop-max-seconds），判定本身不随上限变化。
         ShaderTemporalUnresolved longShafts = ShaderPeriodAnalysis.Analyze(scene, source, null,
             [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], loopCeilingSeconds: 3600)
             .Unresolved.Single(item => item.OwnerLayerId == 5);

@@ -402,8 +402,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     parent.StartsWith(destination + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("The destination project must be separate from source and working directories.");
         }
-        HybridAnalyzeRequest settings = plan["settings"]!.Deserialize<HybridAnalyzeRequest>(JsonOptions)
-            ?? throw new InvalidDataException("Invalid capture settings.");
+        HybridAnalyzeRequest settings = PlanSettings.Of(plan);
         if (request.ProbeFrames == 0)
         {
             JsonArray? errors = PlannedSourceScriptErrors(plan);
@@ -422,8 +421,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     throw refreshedLayoutConflict.ToException();
                 if (HybridScenePlanner.CompositionHierarchyConflict(plan) is Blocker refreshedHierarchyConflict)
                     throw refreshedHierarchyConflict.ToException();
-                settings = plan["settings"]!.Deserialize<HybridAnalyzeRequest>(JsonOptions)
-                    ?? throw new InvalidDataException("Refreshed capture settings are invalid.");
+                settings = PlanSettings.Of(plan);
                 errors = PlannedSourceScriptErrors(plan)
                     ?? throw new InvalidDataException("The refreshed analysis omitted source script fault evidence.");
             }
@@ -1455,8 +1453,7 @@ public sealed class HybridBakeService(NativeTools tools)
         string outputPrefix, IProgress<RenderProgress>? progress = null, CancellationToken cancellationToken = default,
         JsonObject? input = null, JsonArray? inputTimeline = null)
     {
-        var settings = plan["settings"]?.Deserialize<HybridAnalyzeRequest>(JsonOptions)
-            ?? throw new InvalidDataException("Invalid capture settings.");
+        var settings = PlanSettings.Of(plan);
         using var source = new ProjectSource(plan["source"]?.GetValue<string>()
             ?? throw new InvalidDataException("Hybrid plan source is missing."));
         if (await source.SourceHashAsync(cancellationToken) != plan["source_sha256"]?.GetValue<string>())

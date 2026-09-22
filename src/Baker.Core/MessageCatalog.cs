@@ -186,7 +186,7 @@ public static class MessageCatalog
 
         // 第 1 批合并新增：唯一视频组被搬不走的实时绘制挡住（feat/single-shot-live）。{0}=阻挡者列表。
         // feat/tradeoff-list 改写：原文说"改设置或改成分层都不会改变这一点"，与实测冲突——这 4 案 4/4
-        // 只要把挡路的可取舍实时元素关掉就能进整幅（3680252478 单加 --view-mode fixed_view 即可），
+        // 只要把挡路的可取舍实时元素关掉就能进整幅（3680252478 单加 --interaction fixed 即可），
         // 所以改成给出解锁路径。{1}=本场景可执行的关法（分语言，SingleShotAllocation 拼好）。
         // legacy 英文逐字沿用原 En，写进 plan 的 blockers 一个字没变。
         ["blocker.fullframe_unreachable"] = new(
@@ -668,6 +668,10 @@ public static class MessageCatalog
         ["setup.tool_ffmpeg"] = new(Zh: "视频编码器 ffmpeg.exe", En: "the video encoder ffmpeg.exe"),
         ["setup.tool_ffprobe"] = new(Zh: "视频检查器 ffprobe.exe", En: "the media inspector ffprobe.exe"),
 
+        // {0}=plan 里的 schema_version
+        ["plan.legacy_version"] = new(
+            Zh: "旧版 plan（schema_version {0}），当前版本不再读取，请重新分析。",
+            En: "This is an older plan (schema_version {0}) that this version no longer reads; analyze the wallpaper again."),
         ["setup.assets_missing"] = new(
             Zh: "未评估：未找到 Wallpaper Engine 的 assets 目录，分析需要它读取着色器与特效。已安装 Wallpaper Engine 时，手动指向安装目录下的 assets（通常为 …\\steamapps\\common\\wallpaper_engine\\assets）；命令行用 --assets 指定。",
             En: "Not evaluated: the Wallpaper Engine assets folder was not found; analysis requires it to read shaders and effects. If Wallpaper Engine is installed, point at the assets folder inside its install directory (usually ...\\steamapps\\common\\wallpaper_engine\\assets); on the command line pass --assets.",
@@ -807,7 +811,7 @@ public static class MessageCatalog
         ["summary.sway_budget_minimized"] = new(Zh: "按最小改动求解", En: "minimum-change solution",
             Legacy: "solved for the smallest change"),
 
-        // {0}=--loop-length-max 秒数 {1}=慢项峰值速度偏差上限（像素/秒）
+        // {0}=--loop-max-seconds 秒数 {1}=慢项峰值速度偏差上限（像素/秒）
         ["sway_retime.no_multiple_meets_speed_limit"] = new(
             Zh: "摆动改频已启用，但 {0} s 循环长度上限内无合规 L = kP：存在周期 < 60 s 的可见摆动项走不满整圈（可见项不可冻结），或慢项冻结、改频后峰值速度偏差超过 {1} px/s；摆动分量按未解析项处理。",
             En: "Sway retime enabled, but no L = kP within the {0} s loop-length maximum qualifies: a visible sway term (period < 60 s) cannot complete a whole cycle (visible terms cannot be frozen), or a slow term's peak speed deviation after freezing or retiming exceeds {1} px/s; sway components remain unresolved.",
@@ -831,7 +835,7 @@ public static class MessageCatalog
             En: "All unresolved mechanisms are stationary-random particle systems, but the longest particle lifetime ({1} s) is not shorter than the default loop length ({0} s): both sides of the seam would share particles, so the crossfade replacement premise fails and the default loop length is not applied.",
             Legacy: "Every unresolved mechanism is a stationary-random particle system, but the longest particle lifetime ({1} s) is not shorter than the default loop length ({0} s): both sides of the seam would share particles, so the crossfade replacement premise fails and no default loop length is used."),
 
-        // {0}=--loop-length-max 秒数
+        // {0}=--loop-max-seconds 秒数
         ["sway_retime.no_multiple_within_maximum"] = new(
             Zh: "摆动改频已启用，但其余分量解出的循环周期均超过 {0} s 循环长度上限，无法取得 L = kP；摆动分量按未解析项处理。",
             En: "Sway retime enabled, but every loop period solved from the other components exceeds the {0} s loop-length maximum, so no L = kP exists; sway components remain unresolved.",
@@ -857,15 +861,15 @@ public static class MessageCatalog
 
         // {0}=视频组 {1}=帧数 {2}=秒数 {3}=预估大小（GiB） {4}=按试编码码率最长秒数
         ["bake.embedded_video_size_predicted"] = new(
-            Zh: "视频组 {0} 的成品（{1} 帧，{2} s）按短段试编码外推约 {3} GiB，超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按该码率最长约 {4} s。已在渲染前停止，未生成候选项目；请用更小的 --loop-length-max、更低的分辨率或帧率重新分析。",
-            En: "Video group {0} ({1} frames, {2} s) extrapolates to about {3} GiB from the trial encode, above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At this bitrate the limit is about {4} s. Stopped before rendering; no candidate project generated. Re-run analysis with a smaller --loop-length-max, a lower resolution, or a lower frame rate.",
-            Legacy: "Extrapolated from the short trial encode, video group {0} ({1} frames, {2} s) would be about {3} GiB, above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At this bitrate it fits about {4} s. Stopped before rendering; no candidate project was generated. Analyze again with a smaller --loop-length-max, a lower resolution, or a lower frame rate."),
+            Zh: "视频组 {0} 的成品（{1} 帧，{2} s）按短段试编码外推约 {3} GiB，超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按该码率最长约 {4} s。已在渲染前停止，未生成候选项目；请用更小的 --loop-max-seconds、更低的分辨率或帧率重新分析。",
+            En: "Video group {0} ({1} frames, {2} s) extrapolates to about {3} GiB from the trial encode, above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At this bitrate the limit is about {4} s. Stopped before rendering; no candidate project generated. Re-run analysis with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate.",
+            Legacy: "Extrapolated from the short trial encode, video group {0} ({1} frames, {2} s) would be about {3} GiB, above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At this bitrate it fits about {4} s. Stopped before rendering; no candidate project was generated. Analyze again with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate."),
 
         // {0}=视频组 {1}=实际大小（GiB） {2}=帧数 {3}=秒数 {4}=按实际码率最长秒数
         ["bake.embedded_video_size_rejected"] = new(
-            Zh: "视频组 {0} 编码后 {1} GiB（{2} 帧，{3} s），超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按实测码率最长约 {4} s。已在接缝校验前停止，未生成候选项目；请用更小的 --loop-length-max、更低的分辨率或帧率重新分析。",
-            En: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At the measured bitrate the limit is about {4} s. Stopped before the seam checks; no candidate project generated. Re-run analysis with a smaller --loop-length-max, a lower resolution, or a lower frame rate.",
-            Legacy: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At the actual bitrate it fits about {4} s. Stopped before the seam checks; no candidate project was generated. Analyze again with a smaller --loop-length-max, a lower resolution, or a lower frame rate."),
+            Zh: "视频组 {0} 编码后 {1} GiB（{2} 帧，{3} s），超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按实测码率最长约 {4} s。已在接缝校验前停止，未生成候选项目；请用更小的 --loop-max-seconds、更低的分辨率或帧率重新分析。",
+            En: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At the measured bitrate the limit is about {4} s. Stopped before the seam checks; no candidate project generated. Re-run analysis with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate.",
+            Legacy: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At the actual bitrate it fits about {4} s. Stopped before the seam checks; no candidate project was generated. Analyze again with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate."),
 
         // ---- 开烘前的磁盘闸门（BakeDiskBudget）----
         // {0}=预估峰值（GiB） {1}=固定余量（GiB） {2}=合计需要（GiB） {3}=输出所在盘 {4}=现有空闲（GiB）
@@ -1171,9 +1175,9 @@ public static class MessageCatalog
             Legacy: "Collateral: {0} drawable layer(s) sitting under them are turned off as well ({1})."),
 
         ["tradeoff.parallax_alternative"] = new(
-            Zh: "鼠标视差另有一种改动更小的禁用方式：仅追加 --view-mode fixed_view，不移除任何图层；重新分析后视差图层若仍需保持实时，再按上述清单排除。",
-            En: "Mouse parallax has a lighter alternative: pass --view-mode fixed_view alone, which removes no layer; if the parallax layers still stay live after re-analysis, exclude them as listed above.",
-            Legacy: "There is a lighter way to turn parallax off: pass --view-mode fixed_view alone, which removes no layer at all; if the parallax layers still have to stay live after analyzing again, exclude them as listed above."),
+            Zh: "鼠标视差另有一种改动更小的禁用方式：仅追加 --interaction fixed，不移除任何图层；重新分析后视差图层若仍需保持实时，再按上述清单排除。",
+            En: "Mouse parallax has a lighter alternative: pass --interaction fixed alone, which removes no layer; if the parallax layers still stay live after re-analysis, exclude them as listed above.",
+            Legacy: "There is a lighter way to turn parallax off: pass --interaction fixed alone, which removes no layer at all; if the parallax layers still have to stay live after analyzing again, exclude them as listed above."),
 
         // {0}=连带关掉的可取舍元素标签
         ["tradeoff.collateral_kinds"] = new(

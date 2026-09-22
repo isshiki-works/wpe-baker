@@ -27,7 +27,7 @@ public sealed record RenderRequest(string Source, string Assets, string OutputDi
     ulong? ForceKeyFrameFrame = null, RenderEncodePadding? EncodePadding = null,
     ulong? EncodedFrames = null, ulong[]? RetainFrames = null, string? PlaybackEncoderKind = null,
     GpuEncodeRequest? GpuEncoding = null, bool CollectSamplingCoverage = false,
-    double EffectRenderScale = 1.0, bool DrawSelectedFramesOnly = false, bool MatchEffectResolution = false);
+    double EffectRenderScale = 1.0, bool MatchEffectResolution = false);
 public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
     uint CrossfadeFrames = 0, CacheRegion? Crop = null, bool RetainLoopWindow = false,
     bool RetainQualitySamples = false);
@@ -134,10 +134,6 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             throw new ArgumentException("EffectRenderScale must be finite and in (0, 1].");
         if (request.MatchEffectResolution && request.EffectRenderScale != 1.0)
             throw new ArgumentException("Adaptive effect resolution cannot be combined with EffectRenderScale other than 1.");
-        if (request.DrawSelectedFramesOnly && (!request.FrameSamplesOnly || request.CollectSamplingCoverage ||
-            request.CollectAlphaBounds || request.RequireOpaquePixels || request.GpuEncoding is not null ||
-            request.CaptureTarget is not null || request.OrthographicCaptureViewport is not null || request.LayerSelection is not null))
-            throw new ArgumentException("Experimental draw skipping requires whole-scene samples without full coverage or capture selection.");
         if (request.PixelPacking is not "rgb" and not "rgba_side_by_side") throw new ArgumentException("Unsupported pixel packing.");
         if (request.CollectSamplingCoverage && !request.FrameSamplesOnly)
             throw new ArgumentException("Sampling coverage applies only to frame-sample requests.");
@@ -274,7 +270,6 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             if (request.TraceScene) job["trace_scene"] = true;
             if (request.EffectRenderScale != 1.0) job["effect_render_scale"] = request.EffectRenderScale;
             job["match_effect_resolution"] = request.MatchEffectResolution;
-            if (request.DrawSelectedFramesOnly) job["draw_selected_frames_only"] = true;
             // Only pure sample consumers may omit full frames. Bounds, opacity and retained-frame
             // checks still require their original complete input. Older renderers keep that path.
             bool sampleConsumer = request.FrameSamplesOnly && !request.CollectAlphaBounds && !request.RequireOpaquePixels &&
@@ -285,8 +280,6 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 throw new InvalidDataException("Renderer does not support internal effect scaling.");
             if (request.MatchEffectResolution && !rendererVersion.Contains("adaptive-effect-resolution-v1", StringComparison.Ordinal))
                 throw new InvalidDataException("Renderer does not support adaptive effect resolution.");
-            if (request.DrawSelectedFramesOnly && !rendererVersion.Contains("selected-draw-v1", StringComparison.Ordinal))
-                throw new InvalidDataException("Renderer does not support experimental draw skipping.");
             if (request.CaptureTarget?.ForceVisibleOwner == true && !rendererVersion.Contains("capture-force-visible-owner-v1", StringComparison.Ordinal))
                 throw new InvalidDataException("Renderer does not support capturing a visibility-controlled effect owner.");
             bool sparseInput = sampleConsumer && rendererVersion.Contains("features=sparse-readback-v1", StringComparison.Ordinal);
@@ -768,12 +761,6 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             throw new InvalidDataException("Renderer did not confirm the requested effect resolution scale.");
         if ((nativeResult["match_effect_resolution"]?.GetValue<bool>() ?? false) != request.MatchEffectResolution)
             throw new InvalidDataException("Renderer did not confirm the requested adaptive effect resolution.");
-        if ((nativeResult["draw_selected_frames_only"]?.GetValue<bool>() ?? false) != request.DrawSelectedFramesOnly)
-            throw new InvalidDataException("Renderer did not confirm the requested draw selection.");
-        if (request.DrawSelectedFramesOnly &&
-            (nativeResult["simulated_frames"]?.GetValue<ulong>() != checked(request.WarmupFrames + request.Frames) ||
-             nativeResult["drawn_frames"]?.GetValue<ulong>() != checked(request.WarmupFrames + nativeResult["written_frames"]!.GetValue<ulong>())))
-            throw new InvalidDataException("Experimental draw skipping did not preserve the full simulation interval and warmup draws.");
     }
 
     private static void ConfirmVideoRateOverrides(RenderRequest request, JsonObject nativeResult)

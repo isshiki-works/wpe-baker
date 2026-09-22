@@ -251,7 +251,7 @@ internal static class FullFrameDemotion
 
     private static int? SourceRoot(JsonObject layer) => HybridScenePlanner.Int(layer["root"] ?? layer["allocation_root"]);
 
-    private static string Layout(JsonObject plan) => plan["settings"]?["video_layout"]?.GetValue<string>() ?? "full_frame";
+    private static string Layout(JsonObject plan) => PlanSettings.Of(plan).VideoLayout;
 
     private static JsonObject[] Layers(JsonObject plan) => (plan["layers"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? [];
 

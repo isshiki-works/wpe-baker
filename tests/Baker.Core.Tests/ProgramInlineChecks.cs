@@ -132,7 +132,7 @@ using (var source = new ProjectSource(noLoopSource))
         ["runtime_animation_periods"] = new JsonArray(new JsonObject {
             ["source_owner_layer_id"] = 1, ["mechanism"] = "video", ["track_name"] = "unknown-video",
             ["looping"] = true, ["event_driven"] = false, ["playback_rate"] = 1 }) }.ToJsonString());
-    var noLoopPlan = new JsonObject { ["schema_version"] = 2, ["kind"] = "hybrid_video", ["source"] = noLoopSource,
+    var noLoopPlan = new JsonObject { ["kind"] = "hybrid_video", ["source"] = noLoopSource,
         ["source_sha256"] = await source.SourceHashAsync(), ["settings"] = JsonSerializer.SerializeToNode(captureSettings,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }),
         // The saved observed cut is deliberately stale: BakeAsync must derive the unresolved video again from source and trace.
@@ -142,6 +142,7 @@ using (var source = new ProjectSource(noLoopSource))
         ["snapshot_properties"] = new JsonObject(), ["runtime_evidence"] = noLoopRuntimeEvidence,
         ["source_script_error_evidence"] = new JsonObject { ["status"] = "available" },
         ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray() };
+    V3Fixture.Upgrade(noLoopPlan);
     try
     {
         await new HybridBakeService(new("not-started", "not-started", "not-started", [])).BakeAsync(new(2, noLoopPlan, nested));
@@ -185,6 +186,9 @@ using (var source = new ProjectSource(noLoopSource))
     Check(!Directory.Exists(rejectedDestination), "rejected candidates are not published into wallpaper storage");
     var fallbackPlan = noLoopPlan.DeepClone().AsObject();
     fallbackPlan["video_groups"]![0]!["layer_ids"] = new JsonArray(1, 2);
+    fallbackPlan["video_groups"]![0]!.AsObject().Remove("root_ids");
+    fallbackPlan.Remove("live_layer_ids");
+    V3Fixture.Upgrade(fallbackPlan);
     fallbackPlan["loop"]!["unresolved"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 1 });
     string fallbackOutput = Path.Combine(root, "fallback-missing-renderer");
     JsonObject stoppedBake = await new HybridBakeService(new("not-started", "not-started", "not-started", []))
@@ -677,7 +681,7 @@ Check(foregroundSubtreePlan["video_groups"]!.AsArray().Count == 1 && foregroundS
     "explicit foreground placement moves the complete static ancestor branch without changing author parents");
 
 JsonObject interleavedPlan = groupingPlan.DeepClone().AsObject();
-interleavedPlan["schema_version"] = 2; // This fixture deliberately uses the legacy layer/root representation.
+interleavedPlan["schema_version"] = 2; // 旧版 layer/root 表示：现在一律按旧版 plan 拒绝，不再读取。
 interleavedPlan["video_groups"]!.AsArray().Add(new JsonObject { ["id"] = "group-2", ["include_scene_clear"] = false });
 interleavedPlan["composition"] = new JsonArray(new JsonObject { ["video_group"] = "group-1" },
     new JsonObject { ["live_root"] = 908 }, new JsonObject { ["video_group"] = "group-2" });
@@ -693,9 +697,9 @@ try
         .BakeAsync(new(2, interleavedPlan, Path.Combine(root, "must-not-be-generated")));
     throw new InvalidOperationException("A layered plan silently bypassed full-frame mode.");
 }
-catch (InvalidDataException error) when (error.Message.Contains("Full-frame mode", StringComparison.Ordinal)) { }
+catch (InvalidDataException error) when (Message.Of(error)?.Key == "plan.legacy_version") { }
 Check(!Directory.Exists(Path.Combine(root, "must-not-be-generated")),
-    "a legacy or edited multigroup plan is rejected before opening source files or starting generation");
+    "a legacy multigroup plan is rejected as an older plan before opening source files or starting generation");
 var layoutMethod = typeof(HybridScenePlanner).GetMethod("FullFrameConflict",
     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 string conflictNames = ((Blocker)layoutMethod.Invoke(null, [interleavedPlan])!).Text;

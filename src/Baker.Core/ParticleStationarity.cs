@@ -66,8 +66,8 @@ internal static class ParticleStationarity
 
     /// <summary>
     /// 输出帧时钟：bake 的离线步长就是 fps_den / fps_num（渲染器强制），封顶替换的周期按它逐帧推。
-    /// <paramref name="LoopCeilingSeconds"/> 是本次分析实际用的循环时长上限（= --loop-length-max，含内嵌视频收紧）：
-    /// 锁定周期超过它就算不出可用循环，维持拒绝。不给时按 --loop-length-max 的默认值。
+    /// <paramref name="LoopCeilingSeconds"/> 是本次分析实际用的循环时长上限（= --loop-max-seconds，含内嵌视频收紧）：
+    /// 锁定周期超过它就算不出可用循环，维持拒绝。不给时按 --loop-max-seconds 的默认值。
     /// </summary>
     internal readonly record struct FrameClock(uint FpsNumerator, uint FpsDenominator,
         double LoopCeilingSeconds = SwayRetimeOptions.DefaultLoopLengthMaximumSeconds);

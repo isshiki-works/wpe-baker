@@ -309,7 +309,7 @@ public static class ResidualMasking
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(classification);
-        string layout = Text(plan["settings"]?["video_layout"]) is { Length: > 0 } requested ? requested : "full_frame";
+        string layout = PlanSettings.Of(plan).VideoLayout;
         JsonObject[] groups = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
         int transparentGroups = groups.Count(group => !Flag(group["include_scene_clear"]));
         var layers = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
@@ -466,7 +466,7 @@ public static class ResidualMasking
         double outputHeight = Number(plan["settings"]?["height"]) ?? 0;
         double sceneWidth = Number(plan["canvas_width"]) ?? 0;
         double sceneHeight = Number(plan["canvas_height"]) ?? 0;
-        // 拒绝理由复述这份计划实际用的循环时长上限（= --loop-length-max）；旧计划没记就按默认值讲。
+        // 拒绝理由复述这份计划实际用的循环时长上限（= --loop-max-seconds）；旧计划没记就按默认值讲。
         double loopCeiling = Number(plan["loop"]?["maximum_seconds"]) ?? CommonLoopSolver.DefaultMaximumSeconds;
         result["output_width"] = outputWidth;
         result["output_height"] = outputHeight;

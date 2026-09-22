@@ -79,7 +79,7 @@ public static class ShaderPeriodAnalysis
     public const double LightShaftJointRepeatUnits = 1e9;
 
 
-    /// <param name="loopCeilingSeconds">循环时长上限（秒，= --loop-length-max，缺省 600），只进拒绝文案，不改判定。</param>
+    /// <param name="loopCeilingSeconds">循环时长上限（秒，= --loop-max-seconds，缺省 600），只进拒绝文案，不改判定。</param>
     public static ShaderPeriodAnalysisResult Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory,
         IReadOnlyCollection<int> selectedLayerIds, double? loopCeilingSeconds = null)
     {
@@ -1165,7 +1165,7 @@ public static class ShaderPeriodAnalysis
             $"{period.ToString("0.###", CultureInfo.InvariantCulture)} s";
         // 最大调速也够不进上限的精确周期不交给求解器：作为分量它只会让整张壁纸无候选，而作为未解析项，
         // 分配回退还能把这一层留实时、让其余图层照常找循环。
-        // 上限是本次分析实际用的循环时长上限（--loop-length-max，含内嵌视频收紧），由 Analyze 传入，不取求解器缺省值。
+        // 上限是本次分析实际用的循环时长上限（--loop-max-seconds，含内嵌视频收紧），由 Analyze 传入，不取求解器缺省值。
         if (period > ceiling * (1 + MaximumRetimeFraction))
         {
             unresolved.Add(new(ownerId, effectIndex, passIndex, shaderResource, ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
