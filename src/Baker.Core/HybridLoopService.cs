@@ -829,7 +829,10 @@ public static class HybridLoopService
             if (trace["looping"]?.GetValue<bool>() != true || trace["event_driven"]?.GetValue<bool>() == true ||
                 !string.Equals(trace["confidence"]?.GetValue<string>(), "high", StringComparison.OrdinalIgnoreCase))
             { unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["detail"] = Messages.Emit("unresolved.animation_not_high_confidence") }); continue; }
-            if (trace["duration_seconds"] is not JsonValue durationValue || !TryRational(durationValue.ToJsonString(), out CommonLoopRational duration))
+            // 优先读渲染器给的有理时长（已吸附成 float 精度区间内的最简分数，如 12/5）；duration_seconds 是 double 真值
+            // （2.400000035762787），按十进制文字取有理数会把 float 误差带进公倍数。旧渲染器或溢出时没有有理字段，才退回十进制。
+            if (!TryExactVideoDuration(trace, out CommonLoopRational duration) &&
+                (trace["duration_seconds"] is not JsonValue durationValue || !TryRational(durationValue.ToJsonString(), out duration)))
             { unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["detail"] = Messages.Emit("unresolved.owner_or_duration_unresolved") }); continue; }
             bool spriteDurationIsPeriod = string.Equals(trace["mechanism"]?.GetValue<string>(), "sprite", StringComparison.OrdinalIgnoreCase);
             if (spriteDurationIsPeriod && owner["particle"] is not null)

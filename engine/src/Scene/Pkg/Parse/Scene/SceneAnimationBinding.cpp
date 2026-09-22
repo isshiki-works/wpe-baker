@@ -127,11 +127,23 @@ Option<SceneCameraLookAtTrack> ParseLookAtTrack(const owe::Json& json) {
 struct ResolvedFieldAnimations {
     HashMap<String, SceneAnimationTrack> tracks;
 
+    // Bind in field-name order: HashMap iteration order changes between runs, and bind
+    // order is the node's playback order (runtime_animation_periods, event dispatch).
     void Bind(SceneNode& node) const {
+        Vec<String> fields;
         tracks.iter().for_each([&](auto entry) {
             auto [field, track] = entry;
-            node.BindFieldAnimation(field->clone(), track->playback.clone());
+            fields.push(field->clone());
         });
+        sort_unstable_by(fields.as_mut_slice().as_mut_ref(),
+                         [](const String& left, const String& right) {
+                             return rstd::cppstd::as_string_view(left.as_str()) <
+                                    rstd::cppstd::as_string_view(right.as_str());
+                         });
+        for (const auto& field : fields) {
+            auto track = tracks.get(field.as_str());
+            node.BindFieldAnimation(field.clone(), (**track).playback.clone());
+        }
     }
 
     auto Take(ref<str> field) -> Option<SceneAnimationTrack> { return tracks.remove(field); }
