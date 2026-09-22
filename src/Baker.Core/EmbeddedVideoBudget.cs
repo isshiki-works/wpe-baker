@@ -143,19 +143,17 @@ public static class EmbeddedVideoBudget
         {
             object?[] args = [worst.Id, frames, Seconds(frames, fpsNumerator, fpsDenominator), Gibibytes(worstBytes),
                 WholeSeconds(worstMaximum, fpsNumerator, fpsDenominator).ToString("0", CultureInfo.InvariantCulture)];
-            string reason = Messages.Emit("bake.embedded_video_size_predicted", args);
-            result["reason"] = reason;
-            result["reason_localized"] = Messages.Localize(reason);
+            new Message("bake.embedded_video_size_predicted", args).Write(result, "reason");
         }
         return result;
     }
 
     /// <summary>编码后的实际字节超限时的拒绝理由（外推低估时的兜底）。</summary>
-    public static string EncodedRejection(string groupId, long bytes, ulong frames, uint fpsNumerator, uint fpsDenominator)
+    public static Message EncodedRejection(string groupId, long bytes, ulong frames, uint fpsNumerator, uint fpsDenominator)
     {
         ulong maximum = bytes <= 0 ? frames : (ulong)Math.Floor((double)frames * MaximumBytes / bytes);
-        return Messages.Emit("bake.embedded_video_size_rejected", groupId, Gibibytes(bytes), frames,
-            Seconds(frames, fpsNumerator, fpsDenominator), WholeSeconds(maximum, fpsNumerator, fpsDenominator).ToString("0", CultureInfo.InvariantCulture));
+        return new Message("bake.embedded_video_size_rejected", [groupId, Gibibytes(bytes), frames,
+            Seconds(frames, fpsNumerator, fpsDenominator), WholeSeconds(maximum, fpsNumerator, fpsDenominator).ToString("0", CultureInfo.InvariantCulture)]);
     }
 
     /// <summary>用 ffprobe 读出视频流全部包的大小与关键帧标记（试编码只有几十个包）。</summary>

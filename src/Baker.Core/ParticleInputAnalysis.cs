@@ -27,56 +27,51 @@ internal static class ParticleInputAnalysis
     /// 一层粒子为什么证明不出有效周期。返回 (code, detail)：code 供下游读，detail 供用户读。
     /// 顺序固定，先外部输入后随机源，取第一条命中的原因。
     /// <para>
-    /// detail 一律经 <see cref="Messages"/> 生成：写进 plan 的仍是逐字不变的英文原文，
-    /// <c>unresolved_localized</c> 由 <see cref="Messages.Localize"/> 反查出中文。节点名这一半本身分语言
-    /// （未命名节点中英各一种写法），所以走 <see cref="Messages.EmitBilingual"/>。
+    /// detail 是一条 <see cref="Message"/>（键 + 参数）：写进 plan 的仍是逐字不变的英文原文，
+    /// <c>unresolved_localized</c> 按键渲染。节点名这一半本身分语言（未命名节点中英各一种写法），所以另给中文参数。
     /// </para>
     /// </summary>
-    internal static (string Code, string Detail) NonperiodicReason(JsonObject owner, ProjectSource source, string? assetsDirectory)
+    internal static (string Code, Message Detail) NonperiodicReason(JsonObject owner, ProjectSource source, string? assetsDirectory)
     {
         if (owner["particle"] is not JsonValue particle || !particle.TryGetValue<string>(out string? resource))
-            return ("particle_definition_unavailable", Messages.Emit("unresolved.particle_definition_missing"));
+            return ("particle_definition_unavailable", new Message("unresolved.particle_definition_missing"));
         JsonObject definition;
         try { definition = SceneAnalyzer.ReadResourceJson(source, assetsDirectory, resource); }
         catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException or InvalidOperationException)
         {
             return ("particle_definition_unavailable",
-                Messages.Emit("unresolved.particle_definition_unreadable", resource, error.Message));
+                new Message("unresolved.particle_definition_unreadable", [resource, error.Message]));
         }
 
         foreach (JsonObject node in SectionNodes([definition, owner]))
         {
             if (!AudioDriven(node)) continue;
             string mode = node["audioprocessingmode"]!.ToJsonString();
-            return ("particle_audio_input", Messages.EmitBilingual("unresolved.particle_audio_input",
-                [NameZh(node), mode], [Name(node), mode]));
+            return ("particle_audio_input", new Message("unresolved.particle_audio_input", [Name(node), mode], [NameZh(node), mode]));
         }
         foreach (JsonObject node in SectionNodes([definition, owner]))
         {
             string name = RawName(node);
             if (!name.StartsWith("turbulen", StringComparison.OrdinalIgnoreCase) && !name.StartsWith("noise", StringComparison.OrdinalIgnoreCase)) continue;
-            return ("particle_nonperiodic_turbulent_velocity", Messages.EmitBilingual("unresolved.particle_turbulent_velocity",
-                [NameZh(node)], [Name(node)]));
+            return ("particle_nonperiodic_turbulent_velocity", new Message("unresolved.particle_turbulent_velocity", [Name(node)], [NameZh(node)]));
         }
         foreach (JsonNode node in SceneAnalyzer.Walk(definition))
             if (node is JsonObject animated && animated["animationmode"] is JsonValue mode &&
                 mode.TryGetValue<string>(out string? text) && string.Equals(text, "randomframe", StringComparison.OrdinalIgnoreCase))
-                return ("particle_nonperiodic_random_frame", Messages.Emit("unresolved.particle_random_frame"));
+                return ("particle_nonperiodic_random_frame", new Message("unresolved.particle_random_frame"));
         foreach (JsonObject node in SectionNodes([definition, owner]))
         {
             if (!RawName(node).EndsWith("random", StringComparison.OrdinalIgnoreCase) || !RangeIsRandom(node["min"], node["max"])) continue;
             string low = node["min"]!.ToJsonString(), high = node["max"]!.ToJsonString();
-            return ("particle_nonperiodic_random_initializer", Messages.EmitBilingual("unresolved.particle_random_initializer",
-                [NameZh(node), low, high], [Name(node), low, high]));
+            return ("particle_nonperiodic_random_initializer", new Message("unresolved.particle_random_initializer", [Name(node), low, high], [NameZh(node), low, high]));
         }
         foreach (JsonObject node in SectionNodes([definition, owner]))
         {
             if (!node.ContainsKey("distancemax") || Numbers(node["distancemax"]).All(value => value == 0)) continue;
             string extent = node["distancemax"]!.ToJsonString();
-            return ("particle_nonperiodic_emitter_extent", Messages.EmitBilingual("unresolved.particle_emitter_extent",
-                [NameZh(node), extent], [Name(node), extent]));
+            return ("particle_nonperiodic_emitter_extent", new Message("unresolved.particle_emitter_extent", [Name(node), extent], [NameZh(node), extent]));
         }
-        return ("particle_effective_period_not_modelled", Messages.Emit("unresolved.particle_effective_period_not_modelled", resource));
+        return ("particle_effective_period_not_modelled", new Message("unresolved.particle_effective_period_not_modelled", [resource]));
     }
 
     private static IEnumerable<JsonObject> SectionNodes(IEnumerable<JsonNode?> roots) =>

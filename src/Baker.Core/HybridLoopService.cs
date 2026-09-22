@@ -35,10 +35,9 @@ public static class HybridLoopService
                 item["initialization"]?.GetValue<bool>() != true &&
                 HybridScenePlanner.Int(item["owner"]) is int owner && bakedLayerIds.Contains(owner))
             .DistinctBy(item => (HybridScenePlanner.Int(item["owner"]), item["binding"]?.GetValue<string>())))
-            unresolved.Add(new JsonObject {
+            unresolved.Add(new Message("unresolved.script_time").Write(new JsonObject {
                 ["kind"] = "script_time", ["owner_layer_id"] = dependency["owner"]!.DeepClone(),
-                ["binding"] = dependency["binding"]?.DeepClone(), ["clock"] = dependency["property"]?.DeepClone(),
-                ["detail"] = Messages.Emit("unresolved.script_time") });
+                ["binding"] = dependency["binding"]?.DeepClone(), ["clock"] = dependency["property"]?.DeepClone() }, "detail"));
         var patches = new List<Patch>();
         foreach (var item in shader.Components)
         {
@@ -155,8 +154,7 @@ public static class HybridLoopService
             candidates.Add(candidateJson);
         }
         if (spriteRejectedCandidates > 0)
-            unresolved.Add(new JsonObject { ["kind"] = "sprite_float32_seam", ["rejected_candidate_count"] = spriteRejectedCandidates,
-                ["detail"] = Messages.Emit("unresolved.sprite_float32_seam_mismatch") });
+            unresolved.Add(new Message("unresolved.sprite_float32_seam_mismatch").Write(new JsonObject { ["kind"] = "sprite_float32_seam", ["rejected_candidate_count"] = spriteRejectedCandidates }, "detail"));
         long contentStep = ContentStepFrames(shader.Components.Count, animation, unresolved.Count, fpsNumerator, fpsDenominator);
         // 摆动改频（默认关）：在其余分量解出的每个候选 P 上找 L = kP，让摆动层逐项精确闭合；成立时摆动分量
         // 从未解析项里移出，候选帧数改成 L。开关关闭时这里什么都不做，plan 与旧版逐字节相同。
@@ -323,12 +321,12 @@ public static class HybridLoopService
         })];
 
     /// <summary>粒子未解析项的 detail：锁定周期、平稳随机、不满足判据三种，文案走 Messages。</summary>
-    private static string ParticleDetail(ParticleStationarity.Result verdict) => verdict.Stationary
+    private static Message ParticleDetail(ParticleStationarity.Result verdict) => verdict.Stationary
         ? verdict.Lock is ParticleStationarity.CyclostationaryLock cycle
-            ? Messages.Emit("unresolved.particle_cyclostationary_locked", cycle.PeriodFrames.ToString(CultureInfo.InvariantCulture),
-                cycle.PeriodSeconds.ToSeconds().ToString("0.######", CultureInfo.InvariantCulture))
-            : Messages.Emit("unresolved.particle_stationary_random")
-        : Messages.Emit("unresolved.particle_not_stationary", verdict.FailureSummary());
+            ? new Message("unresolved.particle_cyclostationary_locked", [cycle.PeriodFrames.ToString(CultureInfo.InvariantCulture),
+                cycle.PeriodSeconds.ToSeconds().ToString("0.######", CultureInfo.InvariantCulture)])
+            : new Message("unresolved.particle_stationary_random")
+        : new Message("unresolved.particle_not_stationary", [verdict.FailureSummary()]);
 
     /// <summary>判据结论改变（锁定周期退回拒绝）后，重写 unresolved 里对应层的 particle_stationarity；补记的 particle_system 条目连 detail 一起换。</summary>
     private static void RewriteParticleItems(JsonArray unresolved, IReadOnlyDictionary<int, ParticleStationarity.Result> verdicts)
@@ -338,7 +336,7 @@ public static class HybridLoopService
             if (item["particle_stationarity"] is not JsonObject || HybridScenePlanner.Int(item["owner_layer_id"]) is not int owner ||
                 !verdicts.TryGetValue(owner, out ParticleStationarity.Result? verdict)) continue;
             item["particle_stationarity"] = verdict.ToJson();
-            if (item["mechanism"]?.GetValue<string>() == "particle_system") item["detail"] = ParticleDetail(verdict);
+            if (item["mechanism"]?.GetValue<string>() == "particle_system") ParticleDetail(verdict).Write(item, "detail");
         }
     }
 
@@ -495,6 +493,13 @@ public static class HybridLoopService
     {
         static JsonObject Obstacle(string detail, int? owner = null) => new() {
             ["kind"] = "source_static", ["detail"] = detail, ["owner_layer_id"] = owner };
+        // 点名被烘图层的几种理由另带结构化的层名与"是不是粒子系统"，一行结论的中文据此说，不从英文明细里抠。
+        JsonObject Named(string detail, int id, bool particle = false)
+        {
+            JsonObject obstacle = Obstacle(detail, id);
+            obstacle[PlanNarrative.StaticLayer] = new JsonObject { ["name"] = Name(id), ["particle"] = particle };
+            return obstacle;
+        }
         if (runtime["status"] is not JsonValue status || !status.TryGetValue<string>(out string? state) || state != "complete" || runtime["runtime_layers"] is not JsonArray layers ||
             runtime["runtime_dependencies"] is not JsonArray dependencies || runtime["runtime_animation_periods"] is not JsonArray periods)
             return Obstacle("Runtime observation is incomplete, so a static capture cannot be proven.");
@@ -508,13 +513,14 @@ public static class HybridLoopService
             if (node is not JsonObject owner || owner["id"] is not JsonValue idValue || !idValue.TryGetValue<int>(out int id) || !owners.TryAdd(id, owner))
                 return Obstacle("The source scene has an object without a unique integer id.");
         }
-        string Describe(int id) => owners.TryGetValue(id, out JsonObject? owner) && owner["name"] is JsonValue name &&
-            name.TryGetValue<string>(out string? text) && !string.IsNullOrWhiteSpace(text) ? $"layer {id} \"{text}\"" : $"layer {id}";
+        string? Name(int id) => owners.TryGetValue(id, out JsonObject? owner) && owner["name"] is JsonValue name &&
+            name.TryGetValue<string>(out string? text) && !string.IsNullOrWhiteSpace(text) ? text : null;
+        string Describe(int id) => Name(id) is string text ? $"layer {id} \"{text}\"" : $"layer {id}";
         foreach (int id in selected)
             if (!owners.ContainsKey(id)) return Obstacle($"Baked {Describe(id)} is absent from the source scene.");
         foreach (int id in selected)
-            if (DynamicSourceMechanism(owners[id]) is string mechanism)
-                return Obstacle($"Baked {Describe(id)} contains {mechanism}; no analytic period was established for it either, so neither a loop nor a still image can be proven.", id);
+            if (DynamicSourceMechanism(owners[id]) is (string key, string mechanism))
+                return Named($"Baked {Describe(id)} contains {mechanism}; no analytic period was established for it either, so neither a loop nor a still image can be proven.", id, key == "particle");
         foreach (JsonNode? node in periods)
         {
             if (node is not JsonObject period || period["source_owner_layer_id"] is not JsonValue owner ||
@@ -530,7 +536,7 @@ public static class HybridLoopService
             if (!selected.Contains(ownerId) && !selected.Contains(targetId)) continue;
             if (dependency["operation"] is not JsonValue operation || !operation.TryGetValue<string>(out string? name) || name != "write" ||
                 dependency["initialization"] is not JsonValue initialization || !initialization.TryGetValue<bool>(out bool initial) || !initial)
-                return Obstacle($"Baked {Describe(selected.Contains(ownerId) ? ownerId : targetId)} takes part in a runtime dependency that is not an initialization write.", selected.Contains(ownerId) ? ownerId : targetId);
+                return Named($"Baked {Describe(selected.Contains(ownerId) ? ownerId : targetId)} takes part in a runtime dependency that is not an initialization write.", selected.Contains(ownerId) ? ownerId : targetId);
         }
         foreach (int id in selected)
         {
@@ -545,7 +551,7 @@ public static class HybridLoopService
                 {
                     if (node is not JsonObject material) return Obstacle($"Runtime observation of baked {Describe(id)} has a malformed material entry.", id);
                     if (MaterialStaticObstacle(material, source, assetsDirectory, noLights) is string reason)
-                        return Obstacle($"Baked {Describe(id)}: {reason}.", id);
+                        return Named($"Baked {Describe(id)}: {reason}.", id);
                 }
             }
         }
@@ -560,13 +566,13 @@ public static class HybridLoopService
         ("animations", "authored animations"),
         ("animationlayers", "authored animation layers")];
 
-    private static string? DynamicSourceMechanism(JsonObject owner)
+    private static (string Key, string Description)? DynamicSourceMechanism(JsonObject owner)
     {
         foreach (JsonObject node in SceneAnalyzer.Walk(owner).OfType<JsonObject>())
         {
-            if (node["script"] is not null) return "a script binding whose behavior over time is not proven";
+            if (node["script"] is not null) return ("script", "a script binding whose behavior over time is not proven");
             foreach (var (key, description) in DynamicSourceMechanisms)
-                if (node.ContainsKey(key)) return description;
+                if (node.ContainsKey(key)) return (key, description);
         }
         return null;
     }
@@ -801,21 +807,19 @@ public static class HybridLoopService
             string? trackName = trace["track_name"]?.GetValue<string>();
             bool video = string.Equals(trace["mechanism"]?.GetValue<string>(), "video", StringComparison.OrdinalIgnoreCase);
             if (!owners.TryGetValue(ownerId, out JsonObject? owner))
-            { unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["detail"] = Messages.Emit("unresolved.owner_or_duration_unresolved") }); continue; }
+            { unresolved.Add(new Message("unresolved.owner_or_duration_unresolved").Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId }, "detail")); continue; }
             if (video)
             {
                 if (trace["looping"]?.GetValue<bool>() != true || trace["event_driven"]?.GetValue<bool>() == true ||
                     !TryExactVideoDuration(trace, out CommonLoopRational videoDuration) || VideoPlaybackIsControlled(trace, runtime, ownerId, videoControlScope))
                 {
-                    unresolved.Add(new JsonObject { ["kind"] = "runtime_video", ["owner_layer_id"] = ownerId, ["track_name"] = trackName,
-                        ["detail"] = Messages.Emit("unresolved.video_needs_exact_duration") });
+                    unresolved.Add(new Message("unresolved.video_needs_exact_duration").Write(new JsonObject { ["kind"] = "runtime_video", ["owner_layer_id"] = ownerId, ["track_name"] = trackName }, "detail"));
                     continue;
                 }
                 JsonValue? videoRate = trace["playback_rate"] as JsonValue ?? trace["current_rate"] as JsonValue;
                 if (videoRate is null || !TryRational(videoRate.ToJsonString(), out CommonLoopRational lockedVideoRate) || lockedVideoRate != new CommonLoopRational(1))
                 {
-                    unresolved.Add(new JsonObject { ["kind"] = "runtime_video", ["owner_layer_id"] = ownerId, ["track_name"] = trackName,
-                        ["detail"] = Messages.Emit("unresolved.video_rate_not_one") });
+                    unresolved.Add(new Message("unresolved.video_rate_not_one").Write(new JsonObject { ["kind"] = "runtime_video", ["owner_layer_id"] = ownerId, ["track_name"] = trackName }, "detail"));
                     continue;
                 }
                 string videoTrack = string.IsNullOrWhiteSpace(trackName) ? "(anonymous)" : trackName;
@@ -828,21 +832,21 @@ public static class HybridLoopService
             }
             if (trace["looping"]?.GetValue<bool>() != true || trace["event_driven"]?.GetValue<bool>() == true ||
                 !string.Equals(trace["confidence"]?.GetValue<string>(), "high", StringComparison.OrdinalIgnoreCase))
-            { unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["detail"] = Messages.Emit("unresolved.animation_not_high_confidence") }); continue; }
+            { unresolved.Add(new Message("unresolved.animation_not_high_confidence").Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId }, "detail")); continue; }
             // 优先读渲染器给的有理时长（已吸附成 float 精度区间内的最简分数，如 12/5）；duration_seconds 是 double 真值
             // （2.400000035762787），按十进制文字取有理数会把 float 误差带进公倍数。旧渲染器或溢出时没有有理字段，才退回十进制。
             if (!TryExactVideoDuration(trace, out CommonLoopRational duration) &&
                 (trace["duration_seconds"] is not JsonValue durationValue || !TryRational(durationValue.ToJsonString(), out duration)))
-            { unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["detail"] = Messages.Emit("unresolved.owner_or_duration_unresolved") }); continue; }
+            { unresolved.Add(new Message("unresolved.owner_or_duration_unresolved").Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId }, "detail")); continue; }
             bool spriteDurationIsPeriod = string.Equals(trace["mechanism"]?.GetValue<string>(), "sprite", StringComparison.OrdinalIgnoreCase);
             if (spriteDurationIsPeriod && owner["particle"] is not null)
             {
                 // 证明不了周期时要说清是哪一种随机源或外部输入，不是一句笼统的拒绝。分配不变：本次不合成粒子有效周期。
                 // detail 走 Messages（每条理由一个 key），与 i18n 分支口径一致：legacy 英文写进 plan，中文由 Localize 反查。
                 // particle_stationarity 是下游（更小分配回退、残差掩盖）读的结构化结论，detail 与理由代号保持原样。
-                (string code, string detail) = ParticleInputAnalysis.NonperiodicReason(owner, source, assetsDirectory);
-                unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["track_name"] = trackName,
-                    ["particle_nonperiodic_reason"] = code, ["particle_stationarity"] = Stationarity(ownerId, owner).ToJson(), ["detail"] = detail });
+                (string code, Message detail) = ParticleInputAnalysis.NonperiodicReason(owner, source, assetsDirectory);
+                unresolved.Add(detail.Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["track_name"] = trackName,
+                    ["particle_nonperiodic_reason"] = code, ["particle_stationarity"] = Stationarity(ownerId, owner).ToJson() }, "detail"));
                 continue;
             }
             string resource = spriteDurationIsPeriod ? "textureAnimation" : "animation";
@@ -855,19 +859,18 @@ public static class HybridLoopService
                 // 用 Math.random 喂定时器延迟。骨骼/属性动画轨道被脚本控制时不借用这份证明；脚本别处拿
                 // Math.random 做颜色之类也不算。结论写成结构化字段，下游（残差掩盖）读字段，不再匹配文案。
                 bool randomRestart = spriteDurationIsPeriod && HasRandomSpriteRestart(owner, trackName);
-                unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId,
+                unresolved.Add(new Message(randomRestart ? "unresolved.script_random_restart" : "unresolved.script_controlled_playback").Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId,
                     ["track_name"] = trackName,
                     ["mechanism"] = spriteDurationIsPeriod ? "sprite" : trace["mechanism"]?.GetValue<string>() ?? "animation",
-                    ["random_restart"] = randomRestart,
-                    ["detail"] = Messages.Emit(randomRestart ? "unresolved.script_random_restart" : "unresolved.script_controlled_playback") });
+                    ["random_restart"] = randomRestart }, "detail"));
                 continue;
             }
             JsonValue? traceRate = trace["playback_rate"] as JsonValue ?? trace["current_rate"] as JsonValue;
             CommonLoopRational rate = new(1);
             if ((traceRate is not null && !TryRational(traceRate.ToJsonString(), out rate)) || (!spriteDurationIsPeriod && traceRate is null))
-            { unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["track_name"] = trackName, ["detail"] = Messages.Emit("unresolved.playback_rate_unresolved") }); continue; }
+            { unresolved.Add(new Message("unresolved.playback_rate_unresolved").Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["track_name"] = trackName }, "detail")); continue; }
             if (spriteDurationIsPeriod && rate != new CommonLoopRational(1))
-            { unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["track_name"] = trackName, ["detail"] = Messages.Emit("unresolved.sprite_rate_not_one") }); continue; }
+            { unresolved.Add(new Message("unresolved.sprite_rate_not_one").Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["track_name"] = trackName }, "detail")); continue; }
             CommonLoopRational period = spriteDurationIsPeriod ? duration : Divide(duration, rate);
             // Duration is one authored traversal; a mirror track returns to its start after two.
             if (!spriteDurationIsPeriod && string.Equals(trace["playback_mode"]?.GetValue<string>(), "mirror", StringComparison.OrdinalIgnoreCase))
@@ -885,7 +888,7 @@ public static class HybridLoopService
             bool canRetime = !spriteDurationIsPeriod && matched.Length != 0 && ids.Length == matched.Length && finiteAuthoredRates &&
                 matched.All(x => Float32RateEquals(x["rate"], rate));
             if (!canRetime && matched.Length != 0)
-                unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["track_name"] = track, ["detail"] = Messages.Emit("unresolved.no_authored_rate_patch") });
+                unresolved.Add(new Message("unresolved.no_authored_rate_patch").Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["track_name"] = track }, "detail"));
             if (!output.ContainsKey(key)) output[key] = new(ownerId, track, ids, authoredRates, canRetime, new CommonLoopComponent(key,
                 new CommonLoopPeriod(period.ToSeconds(), CommonLoopPeriodEvidence.Observed, period)),
                 new CommonLoopComponent(key, new CommonLoopPeriod(period.ToSeconds(), CommonLoopPeriodEvidence.Observed), true), false,
@@ -898,8 +901,8 @@ public static class HybridLoopService
         {
             if (!owners.TryGetValue(ownerId, out JsonObject? owner) || owner["particle"] is null || stationarity.ContainsKey(ownerId)) continue;
             ParticleStationarity.Result verdict = Stationarity(ownerId, owner);
-            unresolved.Add(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["mechanism"] = "particle_system",
-                ["particle_stationarity"] = verdict.ToJson(), ["detail"] = ParticleDetail(verdict) });
+            unresolved.Add(ParticleDetail(verdict).Write(new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = ownerId, ["mechanism"] = "particle_system",
+                ["particle_stationarity"] = verdict.ToJson() }, "detail"));
         }
         return output.Values.ToList();
     }
@@ -924,7 +927,8 @@ public static class HybridLoopService
                 if (node is not JsonObject material) continue;
                 if (material["role"] is JsonNode roleNode && (roleNode is not JsonValue roleValue || !roleValue.TryGetValue<string>(out _)))
                 {
-                    AddRuntimeMaterialUnresolved(owner.Value, "Runtime material role is not a string, so its temporal behavior is unknown.", unresolved);
+                    AddRuntimeMaterialUnresolved(new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value,
+                        ["detail"] = "Runtime material role is not a string, so its temporal behavior is unknown." }, unresolved);
                     continue;
                 }
                 string? role = material["role"]?.GetValue<string>();
@@ -933,20 +937,21 @@ public static class HybridLoopService
                     shaderName is not null && ruledMaterials.Contains((owner.Value, shaderName))) continue;
                 if (material["active_uniforms"] is not JsonArray uniforms)
                 {
-                    if (role is not null) AddRuntimeMaterialUnresolved(owner.Value,
-                        "Runtime material omitted active_uniforms; it cannot establish a static or analyzed temporal state.", unresolved);
+                    if (role is not null) AddRuntimeMaterialUnresolved(new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value,
+                        ["detail"] = "Runtime material omitted active_uniforms; it cannot establish a static or analyzed temporal state." }, unresolved);
                     continue;
                 }
                 if (uniforms.Any(uniform => uniform is not JsonValue value || !value.TryGetValue<string>(out _)))
                 {
-                    AddRuntimeMaterialUnresolved(owner.Value, Messages.Emit("unresolved.material_uniforms_invalid"), unresolved);
+                    AddRuntimeMaterialUnresolved(new Message("unresolved.material_uniforms_invalid").Write(
+                        new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value }, "detail"), unresolved);
                     continue;
                 }
                 string[] clocks = uniforms.OfType<JsonValue>().Select(value => value.GetValue<string>())
                     .Where(IsRuntimeClock).Distinct(StringComparer.Ordinal).ToArray();
                 if (clocks.Length != 0)
-                    AddRuntimeMaterialUnresolved(owner.Value,
-                        Messages.Emit("unresolved.material_temporal_uniforms", role ?? "unknown-role", string.Join(", ", clocks)), unresolved);
+                    AddRuntimeMaterialUnresolved(new Message("unresolved.material_temporal_uniforms", [role ?? "unknown-role", string.Join(", ", clocks)])
+                        .Write(new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value }, "detail"), unresolved);
             }
         }
     }
@@ -979,11 +984,10 @@ public static class HybridLoopService
         return count;
     }
 
-    private static void AddRuntimeMaterialUnresolved(int ownerId, string detail, JsonArray unresolved)
+    /// <summary>追加一条运行时材质未解析项；同一条（整条结构相等）已在就不重复加。</summary>
+    private static void AddRuntimeMaterialUnresolved(JsonObject item, JsonArray unresolved)
     {
-        if (!unresolved.OfType<JsonObject>().Any(item => item["kind"]?.GetValue<string>() == "runtime_material" &&
-            item["owner_layer_id"]?.GetValue<int>() == ownerId && item["detail"]?.GetValue<string>() == detail))
-            unresolved.Add(new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = ownerId, ["detail"] = detail });
+        if (!unresolved.Any(existing => JsonNode.DeepEquals(existing, item))) unresolved.Add(item);
     }
 
     private static readonly Regex TextureAnimationCall = new(@"getTextureAnimation\s*\(\s*(?:['""]([^'""]*)['""]\s*)?\)", RegexOptions.CultureInvariant);
@@ -1182,10 +1186,14 @@ public static class HybridLoopService
         ["rate_numerator"] = rate.Numerator, ["rate_denominator"] = rate.Denominator,
         ["old_value"] = 1, ["new_value"] = rate.ToSeconds(), ["delta_percent"] = 100 * (rate.ToSeconds() - 1)
     };
-    private static JsonNode UnresolvedJson(ShaderTemporalUnresolved x) => new JsonObject { ["kind"] = x.Kind.ToString(), ["owner_layer_id"] = x.OwnerLayerId,
+    private static JsonNode UnresolvedJson(ShaderTemporalUnresolved x)
+    {
+        var json = new JsonObject { ["kind"] = x.Kind.ToString(), ["owner_layer_id"] = x.OwnerLayerId,
         ["effect_index"] = x.EffectIndex, ["pass_index"] = x.PassIndex, ["resource"] = x.Resource, ["detail"] = x.Detail,
         // 机制知识按结构化字段下传，残差掩盖据此判定，不再按资源名匹配字样。
         ["bounded_displacement"] = x.BoundedDisplacement, ["mechanism"] = x.Mechanism.Length == 0 ? null : x.Mechanism };
+        return x.Message?.Write(json, "detail") ?? json;
+    }
     private sealed record Patch(string ComponentId, string Kind, int OwnerLayerId, int EffectIndex, int PassIndex, string ConstantKey, int ValueIndex, int? AnimationLayerId, double OldValue, double NewValue, double SpeedExponent = 1);
     private sealed record AnimationInfo(int OwnerLayerId, string TrackName, int[] AnimationLayerIds, double[] AuthoredRates, bool CanRetime, CommonLoopComponent LockedComponent, CommonLoopComponent RetimableComponent, bool IsVideo, CommonLoopRational? ClipFrameRate = null, float[]? SpriteFrameTimes = null);
 

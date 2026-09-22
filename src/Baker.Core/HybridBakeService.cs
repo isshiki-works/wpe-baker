@@ -905,9 +905,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     rendered["gpu_bounds_prepass"] = coveragePass;
                     return rendered;
                 }
-                catch (IOException error) when (render.GpuEncoding is not null && !groupRenderCancellation.IsCancellationRequested &&
-                    (error.Message.Contains("GPU encode initialization",StringComparison.Ordinal) ||
-                     error.Message.Contains("required vulkan device extension",StringComparison.Ordinal)))
+                catch (GpuEncodeUnavailableException error) when (render.GpuEncoding is not null && !groupRenderCancellation.IsCancellationRequested)
                 {
                     string parent=Path.GetDirectoryName(render.OutputDirectory)!;
                     string failed=ProjectSource.ContainedPath(parent,"master.gpu-unavailable");
@@ -1086,10 +1084,8 @@ public sealed class HybridBakeService(NativeTools tools)
                             report["status"] = "candidate_rejected_seam";
                             report["loop_validation"] = "residual_above_limits";
                             // 选定起点被拒即停止；记录本次各组的残差，不启动整案重渲。
-                            string residualReason = ResidualStartFallback.RejectionReason(startAttempts,
-                                startSearch?["candidate_count"]?.GetValue<int>() ?? startOrder.Length, crossfadeFrames);
-                            report["reason"] = residualReason;
-                            report["reason_localized"] = Messages.Localize(residualReason);
+                            ResidualStartFallback.RejectionReason(startAttempts,
+                                startSearch?["candidate_count"]?.GetValue<int>() ?? startOrder.Length, crossfadeFrames).Write(report, "reason");
                             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
@@ -1171,10 +1167,8 @@ public sealed class HybridBakeService(NativeTools tools)
                             ["video_bytes"] = encodedBytes, ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes,
                             ["late_dependency_validation"] = lateDependencyValidation,
                             ["encoded_loop_validation"] = null, ["hardware_decode"] = null });
-                        string sizeReason = EmbeddedVideoBudget.EncodedRejection(id, encodedBytes, frames, settings.FpsNumerator, settings.FpsDenominator);
                         report["status"] = EmbeddedVideoBudget.RejectedBakeStatus;
-                        report["reason"] = sizeReason;
-                        report["reason_localized"] = Messages.Localize(sizeReason);
+                        EmbeddedVideoBudget.EncodedRejection(id, encodedBytes, frames, settings.FpsNumerator, settings.FpsDenominator).Write(report, "reason");
                         if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                         await Save();
                         return report;

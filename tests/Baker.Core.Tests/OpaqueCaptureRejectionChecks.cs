@@ -67,13 +67,14 @@ internal static class OpaqueCaptureRejectionChecks
         // 拒绝记录：纯函数，点名层、坐标与 alpha；中英理由走 Messages。
         Type service = typeof(NativeRenderRunner).Assembly.GetType("Baker.Core.EffectPrefixBakeService", throwOnError: true)!;
         MethodInfo rejection = service.GetMethod("OpaqueCaptureRejection", BindingFlags.Static | BindingFlags.NonPublic)!;
-        (JsonObject Group, string Reason) Reject(JsonObject scene, int owner) =>
-            ((JsonObject, string))rejection.Invoke(null, [scene, owner, 356, 188UL, 5160U, 2160U,
+        (JsonObject Group, Message Reason) Reject(JsonObject scene, int owner) =>
+            ((JsonObject, Message))rejection.Invoke(null, [scene, owner, 356, 188UL, 5160U, 2160U,
                 new JsonObject { ["candidates"] = new JsonArray() }, evidence])!;
         var sceneJson = new JsonObject { ["objects"] = new JsonArray(
             new JsonObject { ["id"] = 7, ["name"] = "前景" },
             new JsonObject { ["id"] = 23, ["name"] = "背景\n底图" }) };
-        (JsonObject group, string reason) = Reject(sceneJson, 23);
+        (JsonObject group, Message message) = Reject(sceneJson, 23);
+        string reason = message.Text;
         check(group["status"]?.GetValue<string>() == "rejected_opaque_capture" && group["id"]?.GetValue<string>() == "effect-prefix-23" &&
             group["owner_layer_id"]?.GetValue<int>() == 23 && group["terminal_effect_id"]?.GetValue<int>() == 356 &&
             group["packed_alpha"]?.GetValue<bool>() == false && group["probe_opacity"]?["minimum_alpha"]?.GetValue<int>() == 255 &&
@@ -85,7 +86,7 @@ internal static class OpaqueCaptureRejectionChecks
             reason.Contains("alpha=246 at (0, 0) in frame 1", StringComparison.Ordinal) &&
             reason.Contains("6 pixel(s)", StringComparison.Ordinal) && reason.Contains("lowest alpha 240", StringComparison.Ordinal),
             "opaque capture rejection reason names the layer, coordinate, alpha and affected pixel count");
-        JsonObject localized = Messages.Localize(reason);
+        JsonObject localized = message.Localized();
         string zh = localized["zh"]?.GetValue<string>() ?? "";
         check(localized["key"]?.GetValue<string>() == "bake.effect_prefix_nonopaque_capture" &&
             localized["en"]!.GetValue<string>().Contains("alpha=246 at (0, 0) in frame 1", StringComparison.Ordinal) &&
@@ -94,7 +95,7 @@ internal static class OpaqueCaptureRejectionChecks
             zh.Contains("该帧有 6 个像素", StringComparison.Ordinal) && zh.Contains("最低 alpha 240", StringComparison.Ordinal) &&
             !zh.Contains("opaque video", StringComparison.Ordinal),
             "opaque capture rejection reason localizes to Chinese with the same layer and alpha");
-        check(Reject(sceneJson, 99).Reason.Contains("Layer 99 (\"\")", StringComparison.Ordinal),
+        check(Reject(sceneJson, 99).Reason.Text.Contains("Layer 99 (\"\")", StringComparison.Ordinal),
             "opaque capture rejection tolerates an owner missing from the scene");
     }
 }

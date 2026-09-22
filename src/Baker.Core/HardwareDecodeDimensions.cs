@@ -356,18 +356,18 @@ public static class HardwareDecodeDimensions
                 if (opaque.Rejected)
                 {
                     entry["status"] = "predicted_rejected";
-                    unresolved.Add(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner,
-                        ["detail"] = Messages.EmitBilingual("unresolved.hardware_decode_dimensions_predicted",
-                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(Messages.Chinese), opaque.ViolationText(Messages.Chinese), opaque.Limits.BasisZh],
-                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(Messages.English), opaque.ViolationText(Messages.English), opaque.Limits.BasisEn]) });
+                    unresolved.Add(new Message("unresolved.hardware_decode_dimensions_predicted",
+                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(Messages.English), opaque.ViolationText(Messages.English), opaque.Limits.BasisEn],
+                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(Messages.Chinese), opaque.ViolationText(Messages.Chinese), opaque.Limits.BasisZh])
+                        .Write(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner }, "detail"));
                 }
                 else if (transparent.Rejected)
                 {
                     entry["status"] = "predicted_rejected_if_transparent";
-                    unresolved.Add(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner,
-                        ["detail"] = Messages.EmitBilingual("unresolved.hardware_decode_dimensions_if_transparent",
-                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(Messages.Chinese), transparent.ViolationText(Messages.Chinese), transparent.Limits.BasisZh, Extent(opaque.StoredWidth, opaque.StoredHeight)],
-                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(Messages.English), transparent.ViolationText(Messages.English), transparent.Limits.BasisEn, Extent(opaque.StoredWidth, opaque.StoredHeight)]) });
+                    unresolved.Add(new Message("unresolved.hardware_decode_dimensions_if_transparent",
+                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(Messages.English), transparent.ViolationText(Messages.English), transparent.Limits.BasisEn, Extent(opaque.StoredWidth, opaque.StoredHeight)],
+                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(Messages.Chinese), transparent.ViolationText(Messages.Chinese), transparent.Limits.BasisZh, Extent(opaque.StoredWidth, opaque.StoredHeight)])
+                        .Write(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner }, "detail"));
                 }
                 else entry["status"] = opaque.Padded || transparent.Padded ? "predicted_padding" : "predicted_pass";
             }

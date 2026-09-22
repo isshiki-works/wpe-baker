@@ -182,7 +182,7 @@ internal static class WaterRippleSineClockChecks
             "clamped normal texture, fullscreen render target and a non-simple ratio are not given a period");
         check(!ripple.Components.Any(item => item.Patch.OwnerLayerId == 7) && !ripple.Unresolved.Any(item => item.OwnerLayerId == 7),
             "water ripple with both speeds zero has no motion and constrains no loop");
-        check(Unresolved(ripple, 8).Detail == Messages.Emit("unresolved.shader_not_verified_periodic"),
+        check(Unresolved(ripple, 8).Message?.Key == "unresolved.shader_not_verified_periodic",
             "an extra clock use falls back to the unverified shader verdict");
         // rt 尺寸按 size 截断取整：1000×500，ratio 1 → 公约数 1，周期 1/0.25 = 4 秒。
         check(Math.Abs(ripple.Components.Single(item => item.Patch.OwnerLayerId == 9).Component.BasePeriod!.Seconds - 4) < 1e-9,

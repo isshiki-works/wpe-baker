@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -13,9 +12,8 @@ namespace Baker.Core;
 /// <c>blockers_localized</c> / <c>unresolved_localized</c> / <c>summary</c> 里。
 /// </para>
 /// <para>
-/// 拒绝原因（blocker）不再走反查：它们是 <see cref="Blocker"/>（编号 + 参数），写 plan 时由 <see cref="PlanBlockers.Finish"/>
-/// 按编号渲染 legacy 与双语。<see cref="Emit"/> / <see cref="Localize"/> 的登记反查只剩 unresolved 明细、bake 理由与异常文本在用，
-/// C1.1 后续部分改完即删。
+/// 程序不按文案判断，也不按英文反查：产生文案的一方带着 <see cref="Message"/>（键 + 参数）或 <see cref="Blocker"/>（编号 + 参数）走，
+/// 输出时才渲染。Legacy 列只作 plan/bake v3 英文字段的渲染模板，C3 切 plan v4 时删。
 /// </para>
 /// </summary>
 public static class Messages
@@ -325,7 +323,7 @@ public static class Messages
             Legacy: "A particle sprite texture period does not establish the particle system's effective period."),
 
         // 第 2 批合并新增（feat/video-control-scope）：粒子证明不出周期时，说清是哪一种随机源或外部输入。
-        // 英文逐字沿用该分支的原文，中文是同一句话的改写。{n} 里的节点名走 EmitBilingual，中英各一套。
+        // 英文逐字沿用该分支的原文，中文是同一句话的改写。{n} 里的节点名用 Message 的 ZhArgs，中英各一套。
         ["unresolved.particle_definition_missing"] = new(
             Zh: "粒子精灵纹理周期不等于粒子系统的有效周期：该层未指明粒子定义文件，无法排除随机源。",
             En: "A particle sprite texture period does not establish the particle system's effective period: the layer names no particle definition, so no random source can be ruled out.",
@@ -1261,25 +1259,6 @@ public static class Messages
             En: "No settings tradeoff has been established for the current plan."),
     };
 
-    /// <summary>legacy 英文原文 → key，只收无参数的条目；用于 plan 由旧版本生成、运行时登记缺失时反查。</summary>
-    private static readonly Dictionary<string, string> LegacyLookup = BuildLegacyLookup();
-
-    private static Dictionary<string, string> BuildLegacyLookup()
-    {
-        var lookup = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, entry) in Table)
-        {
-            string legacy = entry.LegacyTemplate;
-            if (PlaceholderCount(legacy) != 0) continue;
-            // 同一段 legacy 被多个 key 共用时（例如文案① 的几种形态），保留第一个作为回退。
-            lookup.TryAdd(legacy, key);
-        }
-        return lookup;
-    }
-
-    /// <summary>本次进程内生成过的 legacy 文本 → (key, 英文参数, 中文参数)。中文参数为 null 表示两种语言共用一套。</summary>
-    private static readonly ConcurrentDictionary<string, (string Key, object?[] Args, object?[]? ChineseArgs)> Registry = new(StringComparer.Ordinal);
-
     /// <summary>全部 key，供测试与文档使用。</summary>
     public static IReadOnlyCollection<string> Keys => Table.Keys;
 
@@ -1302,63 +1281,15 @@ public static class Messages
         return Render(NormalizeLanguage(language) == Chinese ? entry.Zh : entry.En, args);
     }
 
-    /// <summary>按 plan v3 模板渲染英文原文；不登记、不反查。未知 key 回退为 key 本身。</summary>
-    public static string RenderLegacy(string key, object?[] args) =>
+    /// <summary>按 plan v3 模板渲染英文原文。未知 key 回退为 key 本身。</summary>
+    public static string RenderLegacy(string key, params object?[] args) =>
         Table.GetValueOrDefault(key) is { } entry ? Render(entry.LegacyTemplate, args) : key;
 
-    /// <summary>生成 legacy 英文原文，并登记 key 与参数供 <see cref="Localize"/> 反查。</summary>
-    public static string Emit(string key, params object?[] args)
-    {
-        if (Table.GetValueOrDefault(key) is not { } entry) return key;
-        string text = Render(entry.LegacyTemplate, args);
-        // 参数化文案可能在一次分析里出现很多不同实例；进程是短命的，但仍设一个上限防止长驻 GUI 无限增长。
-        if (Registry.Count > 4096) Registry.Clear();
-        Registry[text] = (key, args, null);
-        return text;
-    }
-
-    /// <summary>
-    /// 中英各带一套参数的 <see cref="Emit"/>：嵌进文案里的那半句本身就分语言时用它
-    /// （例如全幅冲突里"这个场景实际可行的做法"那一串）。legacy 英文一律用英文参数渲染，
-    /// 写进 plan 的 blockers 逐字不变；<see cref="Localize"/> 反查时中文那一半才用中文参数。
-    /// </summary>
-    public static string EmitBilingual(string key, object?[] chineseArgs, object?[] englishArgs)
-    {
-        ArgumentNullException.ThrowIfNull(chineseArgs);
-        ArgumentNullException.ThrowIfNull(englishArgs);
-        if (Table.GetValueOrDefault(key) is not { } entry) return key;
-        string text = Render(entry.LegacyTemplate, englishArgs);
-        if (Registry.Count > 4096) Registry.Clear();
-        Registry[text] = (key, englishArgs, chineseArgs);
-        return text;
-    }
-
-    /// <summary>
-    /// 把一段用户可见的英文文本翻成 {key, zh, en, params}。
-    /// 先查本次生成时的登记，再查无参 legacy 原文；都查不到就原样回退英文（key 为 null），不抛异常。
-    /// </summary>
-    public static JsonObject Localize(string? english)
-    {
-        string text = english ?? "";
-        if (Registry.TryGetValue(text, out var registered) && Table.GetValueOrDefault(registered.Key) is { } entry)
-            return Build(registered.Key, entry, registered.Args, registered.ChineseArgs);
-        if (LegacyLookup.GetValueOrDefault(text) is { } key && Table.GetValueOrDefault(key) is { } found)
-            return Build(key, found, []);
-        return new JsonObject { ["key"] = null, ["zh"] = text, ["en"] = text, ["params"] = new JsonArray() };
-    }
-
-    /// <summary>
-    /// 直接按 key 与中英各一套参数生成 {key, zh, en, params}。给的是不走 legacy 英文原文的结果字段
-    /// （例如硬解报告里的结论），不登记 Registry，也不影响 <see cref="Localize"/> 的反查。
-    /// </summary>
+    /// <summary>按 key 与中英各一套参数生成 {key, zh, en, params}。</summary>
     public static JsonObject Localized(string key, object?[] chineseArgs, object?[] englishArgs) =>
         Table.GetValueOrDefault(key) is { } entry
             ? Build(key, entry, englishArgs, chineseArgs)
             : new JsonObject { ["key"] = key, ["zh"] = key, ["en"] = key, ["params"] = new JsonArray() };
-
-    /// <summary>逐条本地化一个英文字符串数组（blockers）。</summary>
-    public static JsonArray LocalizeAll(JsonArray? items) =>
-        new((items ?? []).Select(item => (JsonNode)Localize(item?.GetValue<string>())).ToArray());
 
     private static JsonObject Build(string key, Entry entry, object?[] args, object?[]? chineseArgs = null)
     {

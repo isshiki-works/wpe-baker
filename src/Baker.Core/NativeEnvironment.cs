@@ -12,8 +12,8 @@ public static class NativeEnvironment
     /// 找到随包的原生工具。缺件时点名缺的是哪一个、应该在哪个路径、该怎么办——以前只有一句
     /// "Required tool is missing."，界面上看不出要做什么。
     /// <para>
-    /// 抛出的是英文原文（同时登记进 <see cref="Messages"/>），机器可读的字段沿用英文；显示给用户之前
-    /// 用 <see cref="Messages.Localize"/> 换成当前语言，与 blockers 是同一套做法。
+    /// 抛出的异常消息是英文原文，机器可读的字段沿用英文；异常带着 <see cref="Message"/>（键 + 参数），
+    /// 显示给用户之前按当前语言重新渲染。
     /// </para>
     /// </summary>
     public static NativeTools FindTools()
@@ -25,7 +25,7 @@ public static class NativeEnvironment
         {
             var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower, PropertyNameCaseInsensitive = true };
             var value = JsonSerializer.Deserialize<NativeTools>(File.ReadAllText(configuration), options)
-                ?? throw new InvalidDataException(Messages.Emit("setup.tools_config_missing"));
+                ?? throw new Message("setup.tools_config_missing").Error(text => new InvalidDataException(text));
             string root = Path.GetDirectoryName(configuration)!;
             string Resolve(string path) => Path.GetFullPath(path, root);
             tools = new(Resolve(value.Renderer), Resolve(value.Ffmpeg), Resolve(value.Ffprobe), (value.RuntimeDirectories ?? []).Select(Resolve).ToArray());
@@ -33,7 +33,7 @@ public static class NativeEnvironment
         else
         {
             string? root = DevelopmentRoot();
-            if (root is null) throw new FileNotFoundException(Messages.Emit("setup.tools_config_missing"));
+            if (root is null) throw new Message("setup.tools_config_missing").Error(text => new FileNotFoundException(text));
             tools = new(Path.Combine(root, "build/native-release22/bin/wpe-render.exe"),
                 Path.Combine(root, ".deps/ffmpeg-encoder-gpl2/portable/ffmpeg.exe"),
                 Path.Combine(root, ".deps/ffmpeg-encoder-gpl2/portable/ffprobe.exe"),
@@ -41,11 +41,11 @@ public static class NativeEnvironment
         }
         foreach (var (file, name) in new[] { (tools.Renderer, "setup.tool_renderer"), (tools.Ffmpeg, "setup.tool_ffmpeg"), (tools.Ffprobe, "setup.tool_ffprobe") })
             if (!File.Exists(file))
-                throw new FileNotFoundException(Messages.EmitBilingual("setup.tool_file_missing",
-                    [Messages.Get(name, Messages.Chinese), file], [Messages.Get(name, Messages.English), file]), file);
+                throw new Message("setup.tool_file_missing", [Messages.Get(name, Messages.English), file], [Messages.Get(name, Messages.Chinese), file])
+                    .Error(text => new FileNotFoundException(text, file));
         foreach (string directory in tools.RuntimeDirectories)
             if (!Directory.Exists(directory))
-                throw new DirectoryNotFoundException(Messages.Emit("setup.runtime_directory_missing", directory));
+                throw new Message("setup.runtime_directory_missing", [directory]).Error(text => new DirectoryNotFoundException(text));
         return tools;
     }
 

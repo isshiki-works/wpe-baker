@@ -114,7 +114,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         JsonObject Solve(double? ceilingOverride)
         {
             JsonObject input = scene();
-            string key = "loop-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
+            // 缓存内容带 unresolved 的文案键（detail_localized），格式变了就换前缀，旧缓存不再命中。
+            string key = "loop-v2-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
                 request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.SwayRetime, request.LoopPreference, ceilingOverride);
             return AnalysisCache.Get(request.AnalysisCacheDirectory, key, () => HybridLoopService.Analyze(input, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
@@ -841,8 +842,6 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             request, projection, groups);
         AnnotateLoopCandidates(loop);
         bool WholeLoopComplete(JsonObject value) => value["unresolved"] is JsonArray { Count: 0 } && value["candidates"] is JsonArray { Count: > 0 };
-        bool PrefixSafetyBlocked() => PlanBlockers.Codes(blockers)
-            .Any(code => code is not (BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric));
         // 三处回退都可能要前缀缓存，同一个终端捕获点只问一次渲染器。
         var captureProbes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         async Task<JsonObject?> PrefixCaptureTargetAsync(JsonObject cache)
@@ -890,7 +889,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         }
         async Task<JsonArray> PrefixCachesAsync()
         {
-            if (PrefixSafetyBlocked()) return new JsonArray();
+            if (PrefixSafetyBlocked(blockers)) return new JsonArray();
             var proposed = EffectPrefixPlanner.Propose(scene, source, request.Assets, trace, properties, request, projection);
             var accepted = new JsonArray();
             // 提案按层分组、层内由长到短。每层只取第一个捕获点可用的前缀：最长的那个被拒时退一级，
@@ -1204,7 +1203,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             if (report["loop"]?["unresolved"] is JsonArray { Count: > 0 })
                 foreach (JsonObject probe in captureProbes.Values.Where(probe =>
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus))
-                    AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>());
+                    AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>(), probe["reason_localized"]);
         }
         // README 的承诺：解析周期不完整时，把未解决机制与粒子所在的完整作者子树保留实时，再重查一次周期与构图。
         // 这条路以前只在 bake 阶段跑，analyze 既没走也没记录，用户拿到的就是一个没有任何理由的 unavailable。
@@ -1327,12 +1326,15 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     }
 
     /// <summary>plan 里的 loop 与 whole_layer.loop 是两份独立副本，追加理由时必须同时写。</summary>
-    private static void AddLoopUnresolved(JsonObject report, string kind, string detail)
+    private static void AddLoopUnresolved(JsonObject report, string kind, string detail, JsonNode? localized = null)
     {
+        // localized 是 detail 的 {key, zh, en, params}（例如捕获点探测的理由）；只有英文原文的理由不带。
+        var entry = new JsonObject { ["kind"] = kind, ["detail"] = detail };
+        if (localized is not null) entry[PlanNarrative.DetailLocalized] = localized.DeepClone();
         foreach (JsonNode? node in new JsonNode?[] { report["loop"], report["whole_layer"]?["loop"] })
             if (node is JsonObject loop && loop["unresolved"] is JsonArray unresolved &&
-                !unresolved.OfType<JsonObject>().Any(item => item["detail"]?.GetValue<string>() == detail))
-                unresolved.Add(new JsonObject { ["kind"] = kind, ["detail"] = detail });
+                !unresolved.Any(item => JsonNode.DeepEquals(item, entry)))
+                unresolved.Add(entry.DeepClone());
     }
 
     /// <summary>
@@ -1451,6 +1453,12 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     /// 走 <see cref="AnalyzeLoopForProfile"/> 这一个入口，与 analyze、布局降级重算同一口径——
     /// 否则质量档的双上限取优只在 analyze 侧生效，bake 会按另一个上限重算出别的循环。
     /// </summary>
+    /// <summary>
+    /// 效果前缀回退只救"没有与输入无关的可烘组"这一种拒因（含通用形态）；blockers 里还有别的拒因时不试前缀。
+    /// </summary>
+    internal static bool PrefixSafetyBlocked(JsonArray blockers) => PlanBlockers.Codes(blockers)
+        .Any(code => code is not (BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric));
+
     internal static void RefreshLoop(JsonObject plan, ProjectSource source, JsonObject runtime, HybridAnalyzeRequest settings)
     {
         // 每次求解都重新读一份场景：质量档要在两个上限下各求一次，求解会往场景副本上写，不能共用同一份。
@@ -1466,6 +1474,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             plan["video_groups"]!.AsArray().OfType<JsonObject>().SelectMany(g => g["layer_ids"]!.AsArray().Select(n => n!.GetValue<int>())).ToArray(),
             settings, plan["projection"] as JsonObject ?? new JsonObject(), plan["video_groups"] as JsonArray);
         AnnotateLoopCandidates(plan["loop"]!.AsObject());
+        // bake 侧重算的 loop 直接进 bake.json 的 plan 副本，不再 Attach，临时字段当场去掉。
+        PlanNarrative.StripTransient(plan["loop"]);
     }
 
     /// <summary>Returns a plan clone with one selected foreground suffix retained as whole live roots.</summary>

@@ -39,7 +39,13 @@ public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
 /// <summary>缩放后的内容居中放进更大的编码画布（每半幅），补边为透明黑；只为满足硬件解码下限，回放按原矩形取样。</summary>
 public sealed record RenderEncodePadding(uint Width, uint Height, uint OffsetX, uint OffsetY);
 public sealed record RenderProgress(string Stage, double? Fraction, string Message,
-    double? StageElapsedSeconds = null, double? StageRemainingSeconds = null);
+    double? StageElapsedSeconds = null, double? StageRemainingSeconds = null, ulong? FramesCompleted = null, ulong? FramesTotal = null);
+
+/// <summary>
+/// 同设备 GPU 编码起不来（渲染器缺能力、编码初始化失败、缺 Vulkan 设备扩展）：调用方据此改走软件编码。
+/// 渲染器是外部进程，只能从它的错误行归类；归类只在 <see cref="NativeRenderRunner"/> 这一处做。
+/// </summary>
+public sealed class GpuEncodeUnavailableException(string message, Exception? inner = null) : IOException(message, inner);
 
 /// <summary>Runs the actual renderer and encoder with bounded streaming backpressure.</summary>
 public sealed partial class NativeRenderRunner(NativeTools tools)
@@ -306,9 +312,9 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             if (request.GpuEncoding is { } encoding)
             {
                 if (encodeSizeRequested && !rendererVersion.Contains("gpu-encode-resize-v1", StringComparison.Ordinal))
-                    throw new IOException("GPU encode initialization: renderer cannot resize texture captures on the GPU.");
+                    throw new GpuEncodeUnavailableException("GPU encode initialization: renderer cannot resize texture captures on the GPU.");
                 if (encoding.RetainQualitySamples && !rendererVersion.Contains("gpu-quality-samples-v1", StringComparison.Ordinal))
-                    throw new IOException("GPU encode initialization: renderer cannot retain the required quality samples.");
+                    throw new GpuEncodeUnavailableException("GPU encode initialization: renderer cannot retain the required quality samples.");
                 if (!rendererVersion.Contains("gpu-encode-v1", StringComparison.Ordinal))
                     throw new InvalidDataException("Renderer does not support same-device GPU encoding.");
                 if ((request.CollectAlphaBounds || request.RetainFrames is not null || request.EncodedFrames is not null) &&
@@ -853,10 +859,18 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             if (result?["diagnostics"] is JsonArray diagnostics)
                 detail.AddRange(diagnostics.OfType<JsonValue>().Select(value => value.TryGetValue<string>(out string? text) ? text : null)
                     .OfType<string>().Take(8));
-            if (detail.Count > 0) return new IOException(fallback + "\n" + string.Join("\n", detail), inner);
+            if (detail.Count > 0) return Classified(fallback + "\n" + string.Join("\n", detail), inner);
         }
         catch (Exception error) when (error is IOException or JsonException or InvalidOperationException) { }
-        return new IOException(fallback, inner);
+        return Classified(fallback, inner);
+    }
+
+    /// <summary>渲染器报的是 GPU 编码初始化失败或缺 Vulkan 设备扩展时，归成 <see cref="GpuEncodeUnavailableException"/>。</summary>
+    private static IOException Classified(string message, Exception? inner)
+    {
+        bool gpuUnavailable = message.Contains("GPU encode initialization", StringComparison.Ordinal) ||
+            message.Contains("required vulkan device extension", StringComparison.Ordinal);
+        return gpuUnavailable ? new GpuEncodeUnavailableException(message, inner) : new IOException(message, inner);
     }
 
     /// <summary>

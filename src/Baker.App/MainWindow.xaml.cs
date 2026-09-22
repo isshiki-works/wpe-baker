@@ -913,8 +913,8 @@ public partial class MainWindow : Window
             "official_sampling" => L("正在实测 Wallpaper Engine 功耗…", "Measuring Wallpaper Engine power draw…"),
             "completed" => L("阶段完成…", "Stage complete…"),
             "finishing_encode" => L("正在完成视频编码…", "Finishing video encoding…"),
-            "rendering" => value.Message.EndsWith(" frames", StringComparison.Ordinal)
-                ? L("正在渲染：", "Rendering: ") + value.Message.Replace(" frames", L(" 帧", " frames"))
+            "rendering" => value.FramesCompleted is ulong done && value.FramesTotal is ulong total
+                ? L("正在渲染：", "Rendering: ") + $"{done} / {total}" + L(" 帧", " frames")
                 : L("正在准备渲染与预热…", "Preparing the render and warmup…"),
             _ => StageTiming.ExclusiveStages.Contains(value.Stage) ? StageTiming.StageLabel(value.Stage, english) + "…" : value.Message };
         job.Detail = message;
@@ -1588,8 +1588,6 @@ public partial class MainWindow : Window
         {
             if (GpuName is "生成设备未记录" or "Generation device not recorded")
                 GpuName = english ? "Generation device not recorded" : "生成设备未记录";
-            foreach (string prefix in new[] { "已载入：", "Loaded: " })
-                if (Detail.StartsWith(prefix, StringComparison.Ordinal)) { Detail = (english ? "Loaded: " : "已载入：") + Detail[prefix.Length..]; break; }
             StatusText = State switch { "queued" => english ? "Queued" : "等待中", "running" => english ? "Generating" : "正在生成",
                 "completed" => english ? "Completed" : "已完成", "cancelled" => english ? "Cancelled" : "已取消",
                 "failed" => english ? "Failed" : "失败", "previewing" => english ? "Making previews" : "正在生成预览",

@@ -71,7 +71,7 @@ public sealed record Blocker(BlockerCode Code, object?[] Args, object?[]? ZhArgs
     /// <summary>带编号抛出：消息仍是 v3 英文原文，捕获方用 <see cref="Of"/> 取回编号，不拿异常文本当 blocker。</summary>
     public InvalidDataException ToException()
     {
-        var error = new InvalidDataException(Text);
+        var error = new Message(Key, Args, ZhArgs).Error(text => new InvalidDataException(text));
         error.Data[nameof(Blocker)] = this;
         return error;
     }

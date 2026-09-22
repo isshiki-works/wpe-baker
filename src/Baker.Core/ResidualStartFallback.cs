@@ -90,10 +90,10 @@ public static class ResidualStartFallback
     };
 
     /// <summary>
-    /// 候选起点全部被拒时写进 bake.json 的理由：legacy 英文进 reason，<see cref="Messages.Localize"/> 给中英对照。
+    /// 候选起点全部被拒时写进 bake.json 的理由：legacy 英文进 reason，<see cref="Message.Write"/> 同时写中英对照。
     /// 每个起点列出各组的 max_k 瓦片（带 k）与 Δ_0 整幅。
     /// </summary>
-    public static string RejectionReason(JsonArray attempts, int candidateCount, uint crossfadeFrames)
+    public static Message RejectionReason(JsonArray attempts, int candidateCount, uint crossfadeFrames)
     {
         ArgumentNullException.ThrowIfNull(attempts);
         string Fixed(JsonNode? node) => node is JsonValue value && value.TryGetValue(out double number)
@@ -117,8 +117,8 @@ public static class ResidualStartFallback
         string tile = ResidualMasking.MaximumResidualTileRgbMae255.ToString("0.##", CultureInfo.InvariantCulture);
         string whole = ResidualMasking.MaximumSeamRgbMae255.ToString("0.##", CultureInfo.InvariantCulture);
         string lastK = (crossfadeFrames == 0 ? 0 : crossfadeFrames - 1).ToString(CultureInfo.InvariantCulture);
-        return Messages.EmitBilingual("bake.residual_start_attempts_rejected",
-            [tried, candidates, List(chinese: true), tile, whole, lastK],
-            [tried, candidates, List(chinese: false), tile, whole, lastK]);
+        return new Message("bake.residual_start_attempts_rejected",
+            [tried, candidates, List(chinese: false), tile, whole, lastK],
+            [tried, candidates, List(chinese: true), tile, whole, lastK]);
     }
 }

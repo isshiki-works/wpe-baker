@@ -145,19 +145,26 @@ public static class PlanNarrative
         return new Blocker(code, [count, live, names, legacySegment]);
     }
 
+    /// <summary>
+    /// 分析过程中 unresolved 条目带的两个临时字段：<see cref="DetailLocalized"/> 是 detail 的键与参数渲染出的
+    /// {key, zh, en, params}（<see cref="Message.Write"/> 写入），<see cref="StaticLayer"/> 是静止证明失败时点名的被烘图层
+    /// {name, particle}。<see cref="Attach"/> 把前者搬进 unresolved_localized，两者都不进输出（<see cref="StripTransient"/>）。
+    /// </summary>
+    internal const string DetailLocalized = "detail_localized";
+    internal const string StaticLayer = "static_layer";
+
     /// <summary>给 plan 挂上双语字段与一行结论。现有英文字段一律不动。</summary>
     public static void Attach(JsonObject report)
     {
         PlanBlockers.Finish(report);
-        if (report["loop"] is JsonObject loop) loop["unresolved_localized"] = LocalizeUnresolved(loop["unresolved"] as JsonArray);
+        if (report["loop"] is JsonObject loop) LocalizeUnresolved(loop);
         if (report["whole_layer"] is JsonObject whole)
         {
             PlanBlockers.Finish(whole);
-            if (whole["loop"] is JsonObject wholeLoop)
-                wholeLoop["unresolved_localized"] = LocalizeUnresolved(wholeLoop["unresolved"] as JsonArray);
+            if (whole["loop"] is JsonObject wholeLoop) LocalizeUnresolved(wholeLoop);
         }
         foreach (JsonObject preflight in (report["effect_prefix_hardware_decode_preflight"] as JsonArray ?? []).OfType<JsonObject>())
-            preflight["unresolved_localized"] = LocalizeUnresolved(preflight["unresolved"] as JsonArray);
+            LocalizeUnresolved(preflight);
         report["summary"] = Summarize(report);
         // 取舍清单要读 blockers_localized 与 summary.key，所以排在它们之后；它只读 plan，不改任何判定。
         TradeoffOptions.Attach(report);
@@ -184,16 +191,40 @@ public static class PlanNarrative
             prefixLine["zh"] = prefixLine["zh"]?.GetValue<string>() + Messages.Get("summary.effect_prefix_limited_saving", Messages.Chinese);
             prefixLine["en"] = prefixLine["en"]?.GetValue<string>() + " " + Messages.Get("summary.effect_prefix_limited_saving", Messages.English);
         }
+        StripTransient(report);
     }
 
-    private static JsonArray LocalizeUnresolved(JsonArray? unresolved) =>
-        new((unresolved ?? []).OfType<JsonObject>().Select(item => {
-            var localized = Messages.Localize(item["detail"]?.GetValue<string>());
-            if (item["kind"] is JsonNode kind) localized["kind"] = kind.DeepClone();
-            if (item["owner_layer_id"] is JsonNode owner) localized["owner_layer_id"] = owner.DeepClone();
-            if (item["track_name"] is JsonNode track) localized["track_name"] = track.DeepClone();
+    /// <summary>
+    /// owner.unresolved_localized：每条取它带着的 <see cref="DetailLocalized"/>；已经写过的 plan 再次 Attach 时
+    /// （临时字段已去掉）沿用同下标的旧条目；只有英文明细的条目 key 为 null、中英都是原文。
+    /// </summary>
+    private static void LocalizeUnresolved(JsonObject owner)
+    {
+        var previous = owner["unresolved_localized"] as JsonArray;
+        owner["unresolved_localized"] = new JsonArray((owner["unresolved"] as JsonArray ?? []).OfType<JsonObject>().Select((item, i) => {
+            JsonObject localized = (item[DetailLocalized] ?? (previous is not null && i < previous.Count ? previous[i] : null))?.DeepClone() as JsonObject
+                ?? new JsonObject { ["key"] = null, ["zh"] = Text(item["detail"]), ["en"] = Text(item["detail"]), ["params"] = new JsonArray() };
+            foreach (string field in new[] { "kind", "owner_layer_id", "track_name" })
+            {
+                localized.Remove(field);
+                if (item[field] is JsonNode value) localized[field] = value.DeepClone();
+            }
             return (JsonNode)localized;
         }).ToArray());
+    }
+
+    /// <summary>去掉 plan 里所有 unresolved 条目上的临时字段（loop、whole_layer.loop 以外的嵌入副本也算）。</summary>
+    internal static void StripTransient(JsonNode? node)
+    {
+        if (node is JsonObject item)
+        {
+            item.Remove(DetailLocalized);
+            item.Remove(StaticLayer);
+            foreach (var (_, value) in item) StripTransient(value);
+        }
+        else if (node is JsonArray items)
+            foreach (JsonNode? value in items) StripTransient(value);
+    }
 
     /// <summary>
     /// 一行结论：verdict 加中英文各一句。这是用户唯一保证会读到的输出。
@@ -279,10 +310,8 @@ public static class PlanNarrative
         }
         if (FirstCandidate(report) is JsonObject candidate) return Bakeable_(report, candidate);
         if (LoopUnresolved(report) is JsonObject specific) return specific;
-        if (FirstReason(report) is not string reason) return Verdict(Unknown, "summary.unknown_no_reason");
-        JsonObject localized = Messages.Localize(reason);
-        return Bilingual(Unknown, "summary.unknown_with_reason",
-            [localized["zh"]?.GetValue<string>() ?? reason], [localized["en"]?.GetValue<string>() ?? reason]);
+        if (FirstReason(report) is not var (zh, en)) return Verdict(Unknown, "summary.unknown_no_reason");
+        return Bilingual(Unknown, "summary.unknown_with_reason", [zh], [en]);
     }
 
     private static JsonObject Bakeable_(JsonObject report, JsonObject candidate)
@@ -408,7 +437,8 @@ public static class PlanNarrative
                 [stationaryLayers.Length, listed, Messages.Get(reasonKey, Messages.Chinese), nextZh],
                 [stationaryLayers.Length, listed, Messages.Get(reasonKey, Messages.English), nextEn]);
         }
-        var (firstZh, firstEn) = DescribeUnresolved(mechanisms[0], names, Number(report["loop"]?["maximum_seconds"]));
+        var (firstZh, firstEn) = DescribeUnresolved(mechanisms[0], LocalizedOf(report["loop"] as JsonObject, mechanisms[0]), names,
+            Number(report["loop"]?["maximum_seconds"]));
         // 首条说明嵌在括号里，去掉它自带的句末标点。
         firstZh = firstZh.TrimEnd('。', ' ');
         firstEn = firstEn.TrimEnd('.', ' ');
@@ -460,12 +490,12 @@ public static class PlanNarrative
     /// 一条未解析机制的一句话说明。文案表认得的直接用双语文案；认不得的（着色器周期分析、静止证明等只有英文明细的）
     /// 按 kind 与结构化字段给中文说明，英文明细原样留给英文通道与 plan.json，不进中文。
     /// </summary>
-    internal static (string Zh, string En) DescribeUnresolved(JsonObject item, IReadOnlyDictionary<int, string> names, double? ceilingSeconds = null)
+    internal static (string Zh, string En) DescribeUnresolved(JsonObject item, JsonObject? localized, IReadOnlyDictionary<int, string> names,
+        double? ceilingSeconds = null)
     {
         string detail = Text(item["detail"]) ?? "";
-        JsonObject localized = Messages.Localize(detail);
-        if (localized["key"] is not null)
-            return (localized["zh"]?.GetValue<string>() ?? detail, localized["en"]?.GetValue<string>() ?? detail);
+        if (localized?["key"] is not null)
+            return (Text(localized["zh"]) ?? detail, Text(localized["en"]) ?? detail);
         string kind = Text(item["kind"]) ?? "";
         string? owner = Number(item["owner_layer_id"]) is double id
             ? "\"" + Messages.EscapeName(names.GetValueOrDefault((int)id) ?? ((int)id).ToString(CultureInfo.InvariantCulture)) + "\"" : null;
@@ -477,7 +507,7 @@ public static class PlanNarrative
             "UnsupportedShaderMechanism" => (where.Length > 0 ? where : "一个着色器特效") + "不符合任何已验证的周期公式",
             "ResourceUnavailable" => (where.Length > 0 ? where : "一个着色器特效") + "读不到着色器源码",
             "MissingOrInvalidSpeed" => (where.Length > 0 ? where : "一个着色器特效") + "的速度参数缺失或不合法",
-            "source_static" => SourceStaticChinese(detail),
+            "source_static" => SourceStaticChinese(item[StaticLayer] as JsonObject),
             "runtime_animation" when Text(item["particle_nonperiodic_reason"]) is string particle =>
                 (owner is null ? "一个粒子系统" : $"图层 {owner} 的粒子系统") + "证明不了周期" + ParticleReasonChinese(particle),
             "runtime_animation" => (owner is null ? "一条运行时动画" : $"图层 {owner} 的运行时动画") + "证明不了周期",
@@ -499,16 +529,19 @@ public static class PlanNarrative
         "particle_effective_period_not_modelled" => "（有效周期尚未建模）",
         _ => "" };
 
-    /// <summary>静止证明失败的明细以 Baked layer N "名字" 开头；认不出就给通用说明。</summary>
-    private static string SourceStaticChinese(string detail)
+    /// <summary>静止证明失败：理由点名了被烘图层（<see cref="StaticLayer"/>）就说出层名，否则给通用说明。</summary>
+    private static string SourceStaticChinese(JsonObject? layer)
     {
-        var match = System.Text.RegularExpressions.Regex.Match(detail, "^Baked layer \\d+ \"(?<name>[^\"]*)\"",
-            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        string layer = match.Success ? $"被烘的图层 \"{Messages.EscapeName(match.Groups["name"].Value)}\" " : "有一个被烘的图层";
-        return detail.Contains("contains a particle system", StringComparison.Ordinal)
-            ? layer + "含有粒子系统，既证明不了循环也证明不了静止"
-            : layer + "证明不了是静止画面";
+        string subject = Text(layer?["name"]) is string name ? $"被烘的图层 \"{Messages.EscapeName(name)}\" " : "有一个被烘的图层";
+        return layer?["particle"]?.GetValue<bool>() == true
+            ? subject + "含有粒子系统，既证明不了循环也证明不了静止"
+            : subject + "证明不了是静止画面";
     }
+
+    /// <summary>unresolved 里这一条对应的 unresolved_localized 条目（同下标；Attach 先建好它再写结论）。</summary>
+    private static JsonObject? LocalizedOf(JsonObject? owner, JsonObject item) =>
+        owner?["unresolved"] is JsonArray items && items.IndexOf(item) is int index and >= 0 &&
+        owner["unresolved_localized"] is JsonArray localized && index < localized.Count ? localized[index] as JsonObject : null;
 
     /// <summary>"shaders/effects/lightshafts.frag + shaders/effects/lightshafts.vert" → "lightshafts"。</summary>
     private static string EffectName(string? resource)
@@ -530,16 +563,24 @@ public static class PlanNarrative
     private static string? Text(JsonNode? node) =>
         node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
 
-    /// <summary>unknown 时把 plan 里任何一条现成的理由带出来，没有就说内部未给出理由。</summary>
-    private static string? FirstReason(JsonObject report)
+    /// <summary>
+    /// unknown 时把 plan 里任何一条现成的理由带出来（中、英），没有就说内部未给出理由。loop.unresolved 首条按它的
+    /// unresolved_localized 出双语；其余几处只有英文原文，中英都用原文。
+    /// </summary>
+    private static (string Zh, string En)? FirstReason(JsonObject report)
     {
-        string?[] candidates = [
-            (report["loop"]?["unresolved"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault()?["detail"]?.GetValue<string>(),
-            report["whole_layer"]?["layout_conflict"]?.GetValue<string>(),
-            report["video_layout_admission"]?["reason"]?.GetValue<string>(),
-            report["allocation"]?["reason"]?.GetValue<string>(),
-            report["source_script_error_evidence"]?["reason"]?.GetValue<string>()];
-        return candidates.FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
+        if ((report["loop"]?["unresolved"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault() is JsonObject first &&
+            Text(first["detail"]) is string detail && !string.IsNullOrWhiteSpace(detail))
+        {
+            JsonObject? localized = LocalizedOf(report["loop"] as JsonObject, first);
+            return (Text(localized?["zh"]) ?? detail, Text(localized?["en"]) ?? detail);
+        }
+        string? text = new[] {
+            Text(report["whole_layer"]?["layout_conflict"]),
+            Text(report["video_layout_admission"]?["reason"]),
+            Text(report["allocation"]?["reason"]),
+            Text(report["source_script_error_evidence"]?["reason"]) }.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        return text is null ? null : (text, text);
     }
 
     private static string[] LiveLayerNames(JsonObject report)
