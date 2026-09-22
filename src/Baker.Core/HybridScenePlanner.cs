@@ -47,7 +47,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     private static readonly Regex OverlayVocabulary = new(
         @"\b(ads?|advert\w*|qr\w*|donate|donation|watermark|logo|signature|credit)\b|广告|二维码|捐赠|打赏|水印|署名|关注",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    internal static readonly string MissingScriptFaultEvidenceBlocker = Messages.Emit("blocker.missing_script_fault_evidence");
+    internal static readonly Blocker MissingScriptFaultEvidenceBlocker = new(BlockerCode.MissingScriptFaultEvidence);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
     /// <summary>把命令行/界面上的三档名字翻成求解器的择优倾向；非法值在请求校验里已被挡下。</summary>
@@ -813,20 +813,20 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // A later parallax/occlusion group can stay live in its original place. Compare that
         // complete suffix before concluding that the user needs multiple transparent videos.
         var blockers = new JsonArray();
-        if (!scriptErrorEvidenceAvailable) blockers.Add(MissingScriptFaultEvidenceBlocker);
-        if (groups.Count == 0) blockers.Add(PlanNarrative.NoInputIndependentGroup(objects, reasons));
+        if (!scriptErrorEvidenceAvailable) blockers.Add(MissingScriptFaultEvidenceBlocker.ToNode());
+        if (groups.Count == 0) blockers.Add(PlanNarrative.NoInputIndependentGroup(objects, reasons).ToNode());
         // hdr 标志本身不是拒绝理由；拒绝理由是被捕获组的输出可能超出 [0,1] 而被 RGBA8 捕获 clip。
         // 文案走 i18n：判据给出未通过的明细，legacy 英文逐字不变，中文另报壁纸自带的 HDR 开关。
         JsonObject radianceClosure = SdrRadianceClosure.Describe(scene, properties, trace, groups, source, request.Assets,
-            Resolve(scene["general"]?["hdr"], properties)?.ToJsonString() == "true", project);
-        if (radianceClosure["blocker"] is JsonValue radianceBlocker) blockers.Add(radianceBlocker.GetValue<string>());
-        if (projection["status"]?.GetValue<string>() != "orthographic") blockers.Add(Messages.Emit("blocker.perspective_needs_screenspace"));
+            Resolve(scene["general"]?["hdr"], properties)?.ToJsonString() == "true", project, out Blocker? radianceBlocker);
+        if (radianceBlocker is not null) blockers.Add(radianceBlocker.ToNode());
+        if (projection["status"]?.GetValue<string>() != "orthographic") blockers.Add(new Blocker(BlockerCode.PerspectiveNeedsScreenspace).ToNode());
         foreach (var camera in objects.Values.Where(obj => obj.ContainsKey("camera")))
         {
             if (camera["path"] is JsonValue path && path.TryGetValue<string>(out string? file) &&
                 SceneAnalyzer.ReadResourceJson(source, request.Assets, file)["paths"] is JsonArray { Count: > 0 })
-                blockers.Add(Messages.Emit("blocker.camera_path_needs_envelope"));
-            if (trace["runtime_projection"] is not JsonObject) blockers.Add(Messages.Emit("blocker.runtime_projection_required"));
+                blockers.Add(new Blocker(BlockerCode.CameraPathNeedsEnvelope).ToNode());
+            if (trace["runtime_projection"] is not JsonObject) blockers.Add(new Blocker(BlockerCode.RuntimeProjectionRequired).ToNode());
         }
         double canvasWidth = projection["canvas_width"]!.GetValue<double>(), canvasHeight = projection["canvas_height"]!.GetValue<double>();
         JsonObject LoopScene()
@@ -841,8 +841,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             request, projection, groups);
         AnnotateLoopCandidates(loop);
         bool WholeLoopComplete(JsonObject value) => value["unresolved"] is JsonArray { Count: 0 } && value["candidates"] is JsonArray { Count: > 0 };
-        bool PrefixSafetyBlocked() => blockers.OfType<JsonValue>().Select(item => item.GetValue<string>())
-            .Any(item => item != "No input-independent visual group remains after dependency closure.");
+        bool PrefixSafetyBlocked() => PlanBlockers.Codes(blockers)
+            .Any(code => code is not (BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric));
         // 三处回退都可能要前缀缓存，同一个终端捕获点只问一次渲染器。
         var captureProbes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         async Task<JsonObject?> PrefixCaptureTargetAsync(JsonObject cache)
@@ -1100,7 +1100,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             ["runtime_evidence"] = Path.Combine(output, "runtime.json"),
             ["source_script_error_evidence"] = new JsonObject {
                 ["status"] = scriptErrorEvidenceAvailable ? "available" : "not_available",
-                ["reason"] = scriptErrorEvidenceAvailable ? null : MissingScriptFaultEvidenceBlocker },
+                ["reason"] = scriptErrorEvidenceAvailable ? null : MissingScriptFaultEvidenceBlocker.Text },
             ["source_script_error_count"] = scriptErrorCount is int recordedErrorCount ? recordedErrorCount : null,
             ["source_script_errors"] = scriptErrorEvidenceAvailable ? sourceScriptErrors.DeepClone() : null,
             ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified" };
@@ -1128,7 +1128,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             report["full_frame_retention"] = FullFrameDemotion.Describe(report, dependencies);
         // 一个视频组都没有时无从谈布局：blockers 已经说明依赖闭包之后没有输入无关的可视组，再追加一条
         // "改设置或选分层后重新分析"只会把用户引向无效操作。分配路径仍用这条冲突报告不透明视频的丢失。
-        string? layoutConflict = (groups.Count == 0 ? null : FullFrameConflict(report)) ?? CompositionHierarchyConflict(report);
+        Blocker? layoutConflict = (groups.Count == 0 ? null : FullFrameConflict(report)) ?? CompositionHierarchyConflict(report);
         bool layoutDemoted = false;
         // 尾组降级：把底组之上的视频 root 整体退回实时，是全幅被拒时唯一允许的自动补救。
         if (layoutConflict is not null && !effectPrefixRoute && request.VideoLayout == "full_frame" && groups.Count > 1)
@@ -1179,20 +1179,20 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 report["status"] = "requires_loop_analysis";
             }
         }
-        if (layoutConflict is not null) report["whole_layer"]!.AsObject()["layout_conflict"] = layoutConflict;
+        if (layoutConflict is not null) report["whole_layer"]!.AsObject()["layout_conflict"] = layoutConflict.Text;
         report["video_layout_admission"] = new JsonObject {
             ["requested"] = request.VideoLayout,
             ["status"] = effectPrefixRoute ? "not_applicable_to_effect_prefix" :
                 groups.Count == 0 ? "not_applicable_no_video_group" :
                 layoutConflict is not null ? LayoutConflictStatus(report) :
                 layoutDemoted ? FullFrameDemotion.DemotedAdmissionStatus : "planned_layout_allowed",
-            ["reason"] = layoutConflict ?? (layoutDemoted ? report["layout_admission_demotion"]?["reason"]?.GetValue<string>() : null),
+            ["reason"] = layoutConflict?.Text ?? (layoutDemoted ? report["layout_admission_demotion"]?["reason"]?.GetValue<string>() : null),
             ["scope"] = effectPrefixRoute ? "Effect-prefix caching retains the authored layer and suffix; it does not reorder whole-layer groups." :
                 "Layout permission is not proof of image correctness, looping, hardware decoding or playback benefit." };
         if (layoutConflict is not null && !effectPrefixRoute)
         {
             var finalBlockers = report["blockers"]!.AsArray();
-            if (!finalBlockers.Any(node => node?.GetValue<string>() == layoutConflict)) finalBlockers.Add(layoutConflict);
+            PlanBlockers.Add(finalBlockers, layoutConflict);
             report["status"] = "requires_resolution";
         }
         // 探测过的前缀捕获点全部留档。被拒的原因只在整层循环本来就有未解机制时并进 loop.unresolved：这时前缀是
@@ -1223,9 +1223,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         report[BakeValueAssessment.Field] = BakeValueAssessment.Evaluate(report, trace, source, request.Assets);
         if (videoDominance["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
         {
-            var shellBlockers = report["blockers"]!.AsArray();
-            if (!shellBlockers.Any(node => node?.GetValue<string>() == VideoDominance.Blocker))
-                shellBlockers.Add(VideoDominance.Blocker);
+            PlanBlockers.Add(report["blockers"]!.AsArray(), new Blocker(BlockerCode.VideoShell));
             report["status"] = "requires_resolution";
         }
         // 特效前缀缓存的编码尺寸在 analyze 阶段就能按源纹理算出来：越过硬件解码上限的提前写 unresolved 提示。
@@ -1238,10 +1236,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         if (!effectPrefixRoute && dependencies.OfType<JsonObject>().Any(item =>
                 item["operation"]?.GetValue<string>() == "query" &&
                 item["property"]?.GetValue<string>()?.StartsWith("layer_", StringComparison.Ordinal) == true) &&
-            CompositionHierarchyConflict(report, objects, dependencies) is string publicQueryConflict)
+            CompositionHierarchyConflict(report, objects, dependencies) is Blocker publicQueryConflict)
         {
-            report["blockers"]!.AsArray().Add(publicQueryConflict);
-            report["whole_layer"]!["blockers"]!.AsArray().Add(publicQueryConflict);
+            report["blockers"]!.AsArray().Add(publicQueryConflict.ToNode());
+            report["whole_layer"]!["blockers"]!.AsArray().Add(publicQueryConflict.ToNode());
             report["whole_layer"]!["status"] = "unavailable";
             report["status"] = "requires_resolution";
         }
@@ -1356,16 +1354,16 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         static string Seconds(JsonNode? node) => Number(node).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         string ceiling = Seconds(reason["ceiling_seconds"]), period = Seconds(reason["fixed_period_seconds"]);
         int shaders = (int)Number(reason["shader_component_count"]), tracks = (int)Number(reason["runtime_period_count"]);
-        string? blocker = reason["kind"]?.GetValue<string>() switch
+        Blocker? blocker = reason["kind"]?.GetValue<string>() switch
         {
-            nameof(CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents) => Messages.Emit("blocker.loop_no_common_frame", shaders, tracks, period, ceiling),
-            nameof(CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling) => Messages.Emit("blocker.loop_fixed_period_exceeds_ceiling", tracks, period, ceiling),
-            nameof(CommonLoopNoCandidateKind.NoExactVideoRetimeFrame) => Messages.Emit("blocker.loop_no_exact_video_retime"),
+            nameof(CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents) => new Blocker(BlockerCode.LoopNoCommonFrame, [shaders, tracks, period, ceiling]),
+            nameof(CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling) => new Blocker(BlockerCode.LoopFixedPeriodExceedsCeiling, [tracks, period, ceiling]),
+            nameof(CommonLoopNoCandidateKind.NoExactVideoRetimeFrame) => new Blocker(BlockerCode.LoopNoExactVideoRetime),
             _ => null
         };
         if (blocker is null) return;
         foreach (JsonNode? node in new[] { report["blockers"], wholeLayer["blockers"] })
-            if (node is JsonArray blockers && !blockers.Any(item => item?.GetValue<string>() == blocker)) blockers.Add(blocker);
+            if (node is JsonArray blockers) PlanBlockers.Add(blockers, blocker);
         report["status"] = "requires_resolution";
     }
 
@@ -1572,13 +1570,14 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             ["scope"] = "Whole allocation subtrees only; author parents, existing group order, parallax depths and scene-clear ownership are preserved."
         };
         result["allocation"] = allocation;
-        JsonObject RejectAllocation(string reason, string status = "requires_user_choice")
+        JsonObject RejectAllocation(Blocker blocker, string status = "requires_user_choice")
         {
+            string reason = blocker.Text;
             allocation["status"] = "requires_resolution";
             allocation["reason"] = reason;
             var blockers = result["blockers"] as JsonArray ?? new JsonArray();
             result["blockers"] = blockers;
-            if (!blockers.Any(node => node?.GetValue<string>() == reason)) blockers.Add(reason);
+            PlanBlockers.Add(blockers, blocker);
             result["status"] = "requires_resolution";
             result["video_layout_admission"] = new JsonObject { ["requested"] = result["settings"]?["video_layout"]?.DeepClone() ?? "full_frame",
                 ["status"] = status, ["reason"] = reason,
@@ -1592,11 +1591,11 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             {
                 if (liveRoots.Contains(root)) removed = true;
                 else if (removed)
-                    return RejectAllocation(Messages.Emit("blocker.foreground_splits_video_group"));
+                    return RejectAllocation(new Blocker(BlockerCode.ForegroundSplitsVideoGroup));
             }
         }
         if (dependencyRoots.Any(root => !videoRoots.Contains(root) && !existingLiveRoots.Contains(root)))
-            return RejectAllocation(Messages.Emit("blocker.foreground_outside_composition"));
+            return RejectAllocation(new Blocker(BlockerCode.ForegroundOutsideComposition));
 
         var remainingGroups = new HashSet<string>(StringComparer.Ordinal);
         var promotedByGroup = new Dictionary<string, int[]>(StringComparer.Ordinal);
@@ -1664,7 +1663,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             return (JsonNode)role;
         }).ToArray());
 
-        string? layoutConflict = FullFrameConflict(result) ?? CompositionHierarchyConflict(result);
+        Blocker? layoutConflict = FullFrameConflict(result) ?? CompositionHierarchyConflict(result);
         if (layoutConflict is not null) return RejectAllocation(layoutConflict, LayoutConflictStatus(result));
         result["video_layout_admission"] = new JsonObject { ["requested"] = result["settings"]?["video_layout"]?.DeepClone() ?? "full_frame",
             ["status"] = "planned_layout_allowed", ["reason"] = null,
@@ -1676,7 +1675,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     private static string LayoutConflictStatus(JsonObject plan) =>
         SingleShotAllocation.UnreachableBlockingRoots(plan).Length > 0 ? "full_frame_unreachable" : "requires_user_choice";
 
-    internal static string? FullFrameConflict(JsonObject plan)
+    internal static Blocker? FullFrameConflict(JsonObject plan)
     {
         string layout = plan["settings"]?["video_layout"]?.GetValue<string>() ?? "full_frame";
         if (layout == "layered") return null;
@@ -1703,7 +1702,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         return PlanNarrative.FullFrameConflict(groups, names, FullFrameDemotion.ConflictOptions(plan), leading);
     }
 
-    internal static string? CompositionHierarchyConflict(JsonObject plan,
+    internal static Blocker? CompositionHierarchyConflict(JsonObject plan,
         IReadOnlyDictionary<int, JsonObject>? sourceObjects = null, JsonArray? dependencies = null)
     {
         HybridPlanFormat.Validate(plan);
@@ -1714,7 +1713,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         var replacements = plan["video_groups"]!.AsArray().OfType<JsonObject>().ToDictionary(
             group => group["id"]!.GetValue<string>(), group => new JsonObject { ["id"] = nextId++, ["parent"] = group["parent_id"]?.DeepClone() });
         try { _ = HybridBakeService.AssembleAllocationObjects(objects, plan, replacements, dependencies ?? new JsonArray()); return null; }
-        catch (InvalidDataException error) { return error.Message; }
+        catch (InvalidDataException error) when (Blocker.Of(error) is Blocker blocker) { return blocker; }
     }
 
     internal static void FreezeTemporalProperties(JsonObject scene, JsonObject properties)

@@ -94,27 +94,31 @@ public static class AnalysisToolLimitation
                 .Select(layer => $"{layer["id"]} \"{Messages.EscapeName(layer["name"]?.GetValue<string>())}\""));
             string layersZh = layerIds.Length == 0 ? "" : Messages.Get("asset_layers.used_by", Messages.Chinese, layerIds);
             string layersEn = layerIds.Length == 0 ? "" : Messages.Get("asset_layers.used_by", Messages.English, layerIds);
-            string blocker;
+            Blocker blocker;
             if (finding.AssetKind == "texture")
-                blocker = Messages.Emit("blocker.tool_unsupported_texture", finding.File, finding.Field);
+                blocker = new Blocker(BlockerCode.ToolUnsupportedTexture, [finding.File, finding.Field]);
             else if (finding.Field is not null && finding.Problem is not null && finding.Offset is long offset)
             {
                 string offsetText = offset.ToString(CultureInfo.InvariantCulture);
-                blocker = Messages.EmitBilingual("blocker.tool_unsupported_model_field",
-                    [finding.File, finding.Field, Messages.Get("asset_problem." + finding.Problem, Messages.Chinese), offsetText, layersZh],
-                    [finding.File, finding.Field, Messages.Get("asset_problem." + finding.Problem, Messages.English), offsetText, layersEn]);
+                blocker = new Blocker(BlockerCode.ToolUnsupportedModelField,
+                    [finding.File, finding.Field, Messages.Get("asset_problem." + finding.Problem, Messages.English), offsetText, layersEn],
+                    [finding.File, finding.Field, Messages.Get("asset_problem." + finding.Problem, Messages.Chinese), offsetText, layersZh]);
             }
             else
-                blocker = Messages.EmitBilingual("blocker.tool_unsupported_model",
-                    [finding.File, layersZh, finding.Detail], [finding.File, layersEn, finding.Detail]);
-            blockers.Add(blocker);
+                blocker = new Blocker(BlockerCode.ToolUnsupportedModel,
+                    [finding.File, layersEn, finding.Detail], [finding.File, layersZh, finding.Detail]);
+            blockers.Add(blocker.ToNode());
             files.Add(new JsonObject
             {
                 ["kind"] = finding.AssetKind, ["file"] = finding.File, ["field"] = finding.Field, ["problem"] = finding.Problem,
                 ["renderer_detail"] = finding.Detail, ["offset"] = finding.Offset, ["boundary"] = finding.Boundary, ["layers"] = layers
             });
         }
-        JsonArray localized = Messages.LocalizeAll(blockers);
+        var holder = new JsonObject { ["blockers"] = blockers };
+        PlanBlockers.Finish(holder);
+        blockers = holder["blockers"]!.AsArray();
+        JsonArray localized = holder["blockers_localized"]!.AsArray();
+        holder.Clear();
         string firstZh = localized[0]?["zh"]?.GetValue<string>() ?? "", firstEn = localized[0]?["en"]?.GetValue<string>() ?? "";
         return new JsonObject
         {

@@ -12,10 +12,6 @@ namespace Baker.Core;
 /// </summary>
 internal static class HybridSuitability
 {
-    /// <summary>能力缺口 blocker 的识别前缀。只用于分诊，不改写、不删除任何 blocker 原文。</summary>
-    private const string HdrCapturePrefix = "HDR intermediate compositing is not supported";
-    private const string PerspectiveCapturePrefix = "Perspective capture needs an explicit screen-space composition";
-
     internal static JsonObject Verdict(JsonObject plan)
     {
         var loop = plan["loop"] as JsonObject;
@@ -30,10 +26,11 @@ internal static class HybridSuitability
         int unresolved = (loop?["unresolved"] as JsonArray)?.Count ?? -1;
         int totalLayers = layers?.Count ?? 0;
         int videoLayers = layers?.OfType<JsonObject>().Count(layer => Text(layer["allocation"]) == "video") ?? 0;
-        string[] blockers = (plan["blockers"] as JsonArray)?.Select(node => Text(node)).OfType<string>().ToArray() ?? [];
+        // 能力缺口按 blocker 编号分诊，不看文案。
+        BlockerCode[] blockers = PlanBlockers.Codes(plan).ToArray();
         string? layoutConflict = Text(plan["video_layout_admission"]?["reason"]) ?? Text(plan["whole_layer"]?["layout_conflict"]);
-        bool hdr = blockers.Any(item => item.StartsWith(HdrCapturePrefix, StringComparison.Ordinal));
-        bool perspective = blockers.Any(item => item.StartsWith(PerspectiveCapturePrefix, StringComparison.Ordinal));
+        bool hdr = blockers.Any(code => code is BlockerCode.HdrRadianceOpen or BlockerCode.HdrRadianceOpenProperty);
+        bool perspective = blockers.Contains(BlockerCode.PerspectiveNeedsScreenspace);
 
         // 能力缺口与布局选择只进 notes：它们说的是工具或设置，不是这张壁纸的结论。
         var notes = new JsonArray();

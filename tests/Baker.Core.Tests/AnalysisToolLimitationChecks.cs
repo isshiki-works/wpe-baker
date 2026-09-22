@@ -87,7 +87,7 @@ internal static class AnalysisToolLimitationChecks
             modelEn.Contains("animation play_mode", StringComparison.Ordinal) && modelEn.Contains("referenced by layer 536", StringComparison.Ordinal) &&
             !modelEn.Contains("图层", StringComparison.Ordinal) &&
             report["blockers"]![0]!.GetValue<string>().StartsWith("The tool cannot read this 3D model file yet:", StringComparison.Ordinal) &&
-            Messages.Localize(report["blockers"]![0]!.GetValue<string>())["en"]!.GetValue<string>() == modelEn,
+            report["blockers_localized"]![0]!["en"]!.GetValue<string>() == modelEn,
             "the english model blocker is the legacy blocker line and carries the same facts");
         Check(report["blockers_localized"]![1]!["zh"]!.GetValue<string>().Contains("纹理文件", StringComparison.Ordinal) &&
             report["blockers_localized"]![1]!["en"]!.GetValue<string>().Contains("mipmap", StringComparison.Ordinal),

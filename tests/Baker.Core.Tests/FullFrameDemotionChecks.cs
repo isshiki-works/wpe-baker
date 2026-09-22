@@ -128,7 +128,7 @@ internal static class FullFrameDemotionChecks
 
     private static int[]? Retention(JsonObject plan) => (int[]?)RetentionMethod.Invoke(null, [plan]);
 
-    private static string? Conflict(JsonObject plan) => (string?)ConflictMethod.Invoke(null, [plan]);
+    private static string? Conflict(JsonObject plan) => ((Blocker?)ConflictMethod.Invoke(null, [plan]))?.Text;
 
     private static JsonObject Allocate(JsonObject plan, int[] roots, JsonArray dependencies) =>
         (JsonObject)AllocationMethod.Invoke(null, [plan, roots, dependencies])!;

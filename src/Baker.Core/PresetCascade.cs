@@ -106,7 +106,7 @@ public static class PresetCascade
         plan["loop"]!["residual_masking"] = classification;
         if (classification["status"]?.GetValue<string>() is "no_residual" or "residual_maskable") return;
         string reason = classification["reason_en"]?.GetValue<string>() ?? classification["reason"]?.GetValue<string>() ?? "Unresolved content must remain live.";
-        plan["blockers"]!.AsArray().Add(Messages.Emit("blocker.bake_allocation", reason));
+        plan["blockers"]!.AsArray().Add(new Blocker(BlockerCode.BakeAllocation, [reason]).ToNode());
         plan["status"] = "requires_resolution";
         plan["suitability"] = HybridScenePlanner.Suitability(plan);
         PlanNarrative.Attach(plan);
@@ -195,7 +195,7 @@ public static class PresetCascade
             }
             if (Bakeable(result) && GroupCount(result) > MaxVideoGroups)
             {
-                result["blockers"]!.AsArray().Add(Messages.Emit("preset.too_many_video_groups", MaxVideoGroups));
+                result["blockers"]!.AsArray().Add(new Blocker(BlockerCode.TooManyVideoGroups, [MaxVideoGroups]).ToNode());
                 result["status"] = "requires_resolution";
                 result["preset_rejection_reason"] = "too_many_video_groups";
                 result["suitability"] = HybridScenePlanner.Suitability(result);

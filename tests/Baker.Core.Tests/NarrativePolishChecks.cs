@@ -47,9 +47,10 @@ internal static class NarrativePolishChecks
         check(options.En.Contains("keep those roots realtime (雨景 1, 雨景 2, 雨景 3, 雨景 4, 雨景 5 and 2 more)", StringComparison.Ordinal),
             "the english retain-live option keeps its and N more wording");
 
-        string conflict = PlanNarrative.FullFrameConflict(
+        Blocker conflictBlocker = PlanNarrative.FullFrameConflict(
             new JsonArray(new JsonObject { ["transparent"] = false }, new JsonObject { ["transparent"] = true }), ["纯色", "栏杆"], options);
-        JsonObject conflictLocalized = Messages.Localize(conflict);
+        string conflict = conflictBlocker.Text;
+        JsonObject conflictLocalized = conflictBlocker.ToNode();
         check(conflict.Contains("keep those roots realtime (雨景 1, 雨景 2, 雨景 3, 雨景 4, 雨景 5 and 2 more)", StringComparison.Ordinal) &&
             conflict.StartsWith("Full-frame mode requires one opaque video group; the selected scene settings currently split the bakeable content " +
                 "into 2 video group(s) or leave a transparent background. Interleaved realtime layers: 纯色, 栏杆. Options: ", StringComparison.Ordinal) &&
@@ -61,8 +62,9 @@ internal static class NarrativePolishChecks
         const string legacySingle = "Full-frame mode requires one opaque video group; the selected scene settings currently split the bakeable content " +
             "into 1 video group(s) or leave a transparent background. Options: explicitly choose layered video with --video-layout layered.";
         var single = new JsonArray(new JsonObject { ["transparent"] = true, ["include_scene_clear"] = false });
-        string singleLegacy = PlanNarrative.FullFrameConflict(single, [], plainOptions, ["Picture", "Vapor (single)"]);
-        JsonObject singleLocalized = Messages.Localize(singleLegacy);
+        Blocker singleLegacyBlocker = PlanNarrative.FullFrameConflict(single, [], plainOptions, ["Picture", "Vapor (single)"]);
+        string singleLegacy = singleLegacyBlocker.Text;
+        JsonObject singleLocalized = singleLegacyBlocker.ToNode();
         string singleZh = singleLocalized["zh"]!.GetValue<string>(), singleEn = singleLocalized["en"]!.GetValue<string>();
         check(singleLegacy == legacySingle, "the single-group full-frame blocker keeps its legacy english text byte for byte");
         check(singleLocalized["key"]?.GetValue<string>() == "blocker.fullframe_single_transparent_group_options" &&
@@ -74,20 +76,20 @@ internal static class NarrativePolishChecks
             !singleEn.Contains("or leave a transparent background", StringComparison.Ordinal),
             "a single transparent group says the only block is transparent and names the realtime layers drawn before it");
 
-        JsonObject bare = Messages.Localize(PlanNarrative.FullFrameConflict(single, [], plainOptions));
+        JsonObject bare = PlanNarrative.FullFrameConflict(single, [], plainOptions).ToNode();
         check(bare["key"]?.GetValue<string>() == "blocker.fullframe_single_transparent_group_options" &&
             bare["zh"]!.GetValue<string>().Contains("该组为透明，不含场景清屏。本场景可行方案：", StringComparison.Ordinal),
             "a single transparent group without leading realtime layers still states the transparent block without a dangling clause");
 
-        JsonObject split = Messages.Localize(PlanNarrative.FullFrameConflict(
-            new JsonArray(new JsonObject(), new JsonObject(), new JsonObject()), [], plainOptions));
+        JsonObject split = PlanNarrative.FullFrameConflict(
+            new JsonArray(new JsonObject(), new JsonObject(), new JsonObject()), [], plainOptions).ToNode();
         check(split["key"]?.GetValue<string>() == "blocker.fullframe_split_groups_options" &&
             split["zh"]!.GetValue<string>().Contains("可录内容分为 3 个视频组，无一组可单独充当不透明底层", StringComparison.Ordinal) &&
             !split["zh"]!.GetValue<string>().Contains("透明背景", StringComparison.Ordinal),
             "several groups without interleaved realtime layers do not blame realtime layers or a transparent background");
 
-        JsonObject interleaved = Messages.Localize(PlanNarrative.FullFrameConflict(
-            new JsonArray(new JsonObject(), new JsonObject()), ["Clock"], plainOptions));
+        JsonObject interleaved = PlanNarrative.FullFrameConflict(
+            new JsonArray(new JsonObject(), new JsonObject()), ["Clock"], plainOptions).ToNode();
         check(interleaved["key"]?.GetValue<string>() == "blocker.fullframe_needs_opaque_group_options" &&
             interleaved["zh"]!.GetValue<string>().Contains("可录内容分为 2 个视频组，其间夹有必须保持实时的图层：\"Clock\"（共 1 个）", StringComparison.Ordinal) &&
             !interleaved["zh"]!.GetValue<string>().Contains("透明背景", StringComparison.Ordinal),
@@ -122,8 +124,9 @@ internal static class NarrativePolishChecks
         string unprovenZh = (string)typeof(SdrRadianceClosure).GetMethod("ChineseUnproven", BindingFlags.Static | BindingFlags.NonPublic)!
             .Invoke(null, [reasonsZh, 6])!;
         const string unprovenEn = "group-1 layer 26 \"纯色背景\": material combo \"version\" is not a known range-preserving combo (R1). (+2 more unproven layers.)";
-        string hdr = PlanNarrative.HdrRadianceOpen(new JsonObject { ["general"] = new JsonObject { ["hdr"] = true } }, null, unprovenEn, unprovenZh);
-        JsonObject hdrLocalized = Messages.Localize(hdr);
+        Blocker hdrBlocker = PlanNarrative.HdrRadianceOpen(new JsonObject { ["general"] = new JsonObject { ["hdr"] = true } }, null, unprovenEn, unprovenZh);
+        string hdr = hdrBlocker.Text;
+        JsonObject hdrLocalized = hdrBlocker.ToNode();
         check(hdr == SdrRadianceClosure.HdrBlocker + " Unproven: " + unprovenEn &&
             hdrLocalized["zh"]!.GetValue<string>().Contains("未通过项：group-1：场景清屏色", StringComparison.Ordinal) &&
             hdrLocalized["zh"]!.GetValue<string>().Contains("另有 2 处未通过", StringComparison.Ordinal) &&

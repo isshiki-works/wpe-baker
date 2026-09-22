@@ -172,7 +172,7 @@ internal static class SourceStaticLoopChecks
         JsonObject noFrame = SolverPlan("NoFrameOnFixedStepSatisfiesComponents");
         solverMethod.Invoke(null, [noFrame]);
         solverMethod.Invoke(null, [noFrame]);
-        JsonObject noFrameBlocker = Messages.Localize(noFrame["blockers"]![0]!.GetValue<string>());
+        JsonObject noFrameBlocker = noFrame["blockers"]![0]!.AsObject();
         bool noFrameTraceable = true;
         try { Require(noFrame); } catch (InvalidOperationException) { noFrameTraceable = false; }
         check(noFrame["blockers"]!.AsArray().Count == 1 && noFrame["whole_layer"]!["blockers"]!.AsArray().Count == 1 &&
@@ -186,8 +186,8 @@ internal static class SourceStaticLoopChecks
         solverMethod.Invoke(null, [fixedPeriod]);
         JsonObject video = SolverPlan("NoExactVideoRetimeFrame");
         solverMethod.Invoke(null, [video]);
-        check(Messages.Localize(fixedPeriod["blockers"]![0]!.GetValue<string>())["key"]?.GetValue<string>() == "blocker.loop_fixed_period_exceeds_ceiling" &&
-            Messages.Localize(video["blockers"]![0]!.GetValue<string>())["key"]?.GetValue<string>() == "blocker.loop_no_exact_video_retime",
+        check(PlanBlockers.Codes(fixedPeriod).Single() == BlockerCode.LoopFixedPeriodExceedsCeiling &&
+            PlanBlockers.Codes(video).Single() == BlockerCode.LoopNoExactVideoRetime,
             "the fixed-period ceiling and single-video retime no-candidate reasons get their own blockers");
         JsonObject withMechanism = SolverPlan("NoFrameOnFixedStepSatisfiesComponents", [new JsonObject { ["kind"] = "source_static", ["detail"] = "reason" }]);
         JsonObject noTemporal = SolverPlan("NoTemporalMechanism");
@@ -200,10 +200,6 @@ internal static class SourceStaticLoopChecks
         check(withMechanism["blockers"]!.AsArray().Count == 0 && noTemporal["blockers"]!.AsArray().Count == 0 &&
             withCandidate["blockers"]!.AsArray().Count == 0 && noTemporalTrapped,
             "no solver blocker when a mechanism already explains the result, when candidates exist, or for the no-temporal-mechanism reason, which the invariant still guards");
-        JsonObject hierarchy = Messages.Localize("Retained parent hierarchies would change the planned video/live draw order. The selected allocation does not preserve source sibling order.");
-        check(hierarchy["key"]?.GetValue<string>() == "blocker.hierarchy_changes_draw_order" &&
-            hierarchy["zh"]!.GetValue<string>().StartsWith("不可生成：保留实时的父级层级会改变计划中视频与实时图层的绘制顺序", StringComparison.Ordinal),
-            "the retained-hierarchy draw-order blocker, recorded as fixed english text, localizes to chinese from its legacy wording");
 
         var explainMethod = typeof(HybridScenePlanner).Assembly.GetType("Baker.Core.HybridLoopAllocation")!
             .GetMethod("Explain", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;

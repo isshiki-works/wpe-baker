@@ -15,7 +15,7 @@ public static class PlanNarrative
     public const string Unknown = "unknown";
 
     /// <summary>无独立组时只描述依赖分析的结果，并列出相关证据；单层输入不能证明整幅画面的构成。</summary>
-    public static string NoInputIndependentGroup(IReadOnlyDictionary<int, JsonObject> objects,
+    public static Blocker NoInputIndependentGroup(IReadOnlyDictionary<int, JsonObject> objects,
         IReadOnlyDictionary<int, HashSet<string>> reasons)
     {
         (string Reason, string Mechanism)[] known = [
@@ -32,8 +32,8 @@ public static class PlanNarrative
             if (mechanisms.Length > 0)
                 evidence.Add("\"" + Messages.EscapeName(objects.GetValueOrDefault(id)?["name"]?.GetValue<string>()) + "\" (" + string.Join(", ", mechanisms) + ")");
         }
-        return evidence.Count == 0 ? Messages.Emit("blocker.no_input_independent_group_generic")
-            : Messages.Emit("blocker.no_input_independent_group", string.Join("; ", evidence));
+        return evidence.Count == 0 ? new Blocker(BlockerCode.NoInputIndependentGroupGeneric)
+            : new Blocker(BlockerCode.NoInputIndependentGroup, [string.Join("; ", evidence)]);
     }
 
     /// <summary>
@@ -42,7 +42,7 @@ public static class PlanNarrative
     /// 同时把壁纸自带的 HDR 属性指出来——关掉它就可能过关。
     /// </summary>
     /// <remarks><paramref name="unprovenZh"/> 是同一份明细的中文版；不给时中文通道沿用英文明细（旧调用方）。</remarks>
-    public static string HdrRadianceOpen(JsonObject scene, JsonObject? project, string unproven, string? unprovenZh = null)
+    public static Blocker HdrRadianceOpen(JsonObject scene, JsonObject? project, string unproven, string? unprovenZh = null)
     {
         ArgumentNullException.ThrowIfNull(scene);
         // 只有 general.hdr 本身绑定了属性，关掉那个属性才会让 hdr 变成 false、判据不再运行。
@@ -51,7 +51,7 @@ public static class PlanNarrative
         var binding = BoundProperty(scene["general"]?["hdr"]);
         string chinese = unprovenZh ?? unproven;
         if (binding is null)
-            return Messages.EmitBilingual("blocker.hdr_radiance_open", [chinese], [unproven]);
+            return new Blocker(BlockerCode.HdrRadianceOpen, [unproven], [chinese]);
         string name = Messages.EscapeName(binding.Value.Name);
         string label = project?["general"]?["properties"]?[binding.Value.Name]?["text"]?.GetValue<string>() is string text
             && !string.IsNullOrWhiteSpace(text) ? "\"" + Messages.EscapeName(text) + " / " + name + "\"" : "\"" + name + "\"";
@@ -70,7 +70,7 @@ public static class PlanNarrative
             offZh = $"关闭值 false，--properties 文件写 {json}";
             offEn = $"the off value is false; write {json} in the --properties file";
         }
-        return Messages.EmitBilingual("blocker.hdr_radiance_open_property", [chinese, label, offZh], [unproven, label, offEn]);
+        return new Blocker(BlockerCode.HdrRadianceOpenProperty, [unproven, label, offEn], [chinese, label, offZh]);
     }
 
     /// <summary>
@@ -91,7 +91,7 @@ public static class PlanNarrative
     /// 文案①：全屏模式拿不到不透明底。legacy 英文逐字不变，双语版另说清楚 N=1 透明组这一真实原因。
     /// <paramref name="leadingNames"/> 是排在第一组视频之前先画的可见实时层，只用于 N=1 时点名挡在前面的层。
     /// </summary>
-    public static string FullFrameConflict(JsonArray groups, IReadOnlyList<string> interleavedNames,
+    public static Blocker FullFrameConflict(JsonArray groups, IReadOnlyList<string> interleavedNames,
         (string Zh, string En)? options = null, IReadOnlyList<string>? leadingNames = null)
     {
         ArgumentNullException.ThrowIfNull(groups);
@@ -108,16 +108,16 @@ public static class PlanNarrative
             string legacyListed = live == 0 ? "" : " Interleaved realtime layers: " +
                 string.Join(", ", interleavedNames.Take(limit)) + (live > limit ? $" and {live - limit} more" : "") + ".";
             // 按实际状态分支，不把"透明背景"写成与"切成 N 块"并列的备选。
-            string optionsKey;
+            BlockerCode optionsKey;
             string phraseZh, phraseEn;
             if (count == 0)
             {
-                optionsKey = "blocker.fullframe_no_video_group_options";
+                optionsKey = BlockerCode.FullframeNoVideoGroupOptions;
                 phraseZh = phraseEn = "";
             }
             else if (count == 1)
             {
-                optionsKey = "blocker.fullframe_single_transparent_group_options";
+                optionsKey = BlockerCode.FullframeSingleTransparentGroupOptions;
                 string[] leading = (leadingNames ?? []).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct().ToArray();
                 string leadingList = Messages.NameList(leading);
                 phraseZh = leading.Length == 0 ? "" : $"：它前面还有实时图层 {leadingList} 先画，视频若带上清屏就会把它们盖掉";
@@ -125,34 +125,34 @@ public static class PlanNarrative
             }
             else if (live > 0)
             {
-                optionsKey = "blocker.fullframe_needs_opaque_group_options";
+                optionsKey = BlockerCode.FullframeNeedsOpaqueGroupOptions;
                 phraseZh = $"{names}（共 {live} 个）。";
                 phraseEn = $" {names} ({live} in total).";
             }
             else
             {
-                optionsKey = "blocker.fullframe_split_groups_options";
+                optionsKey = BlockerCode.FullframeSplitGroupsOptions;
                 phraseZh = phraseEn = "";
             }
-            return Messages.EmitBilingual(optionsKey,
-                [count, phraseZh, choices.Zh, legacyListed, choices.En],
-                [count, phraseEn, choices.En, legacyListed, choices.En]);
+            return new Blocker(optionsKey,
+                [count, phraseEn, choices.En, legacyListed, choices.En],
+                [count, phraseZh, choices.Zh, legacyListed, choices.En]);
         }
         bool singleTransparent = count == 1 && groups[0]?["transparent"]?.GetValue<bool>() == true;
-        string key = count == 0 ? "blocker.fullframe_no_video_group"
-            : singleTransparent ? live > 0 ? "blocker.fullframe_single_transparent_group_live" : "blocker.fullframe_single_transparent_group"
-            : live > 0 ? "blocker.fullframe_needs_opaque_group" : "blocker.fullframe_needs_opaque_group_no_live";
-        return Messages.Emit(key, count, live, names, legacySegment);
+        BlockerCode code = count == 0 ? BlockerCode.FullframeNoVideoGroup
+            : singleTransparent ? live > 0 ? BlockerCode.FullframeSingleTransparentGroupLive : BlockerCode.FullframeSingleTransparentGroup
+            : live > 0 ? BlockerCode.FullframeNeedsOpaqueGroup : BlockerCode.FullframeNeedsOpaqueGroupNoLive;
+        return new Blocker(code, [count, live, names, legacySegment]);
     }
 
     /// <summary>给 plan 挂上双语字段与一行结论。现有英文字段一律不动。</summary>
     public static void Attach(JsonObject report)
     {
-        report["blockers_localized"] = Messages.LocalizeAll(report["blockers"] as JsonArray);
+        PlanBlockers.Finish(report);
         if (report["loop"] is JsonObject loop) loop["unresolved_localized"] = LocalizeUnresolved(loop["unresolved"] as JsonArray);
         if (report["whole_layer"] is JsonObject whole)
         {
-            whole["blockers_localized"] = Messages.LocalizeAll(whole["blockers"] as JsonArray);
+            PlanBlockers.Finish(whole);
             if (whole["loop"] is JsonObject wholeLoop)
                 wholeLoop["unresolved_localized"] = LocalizeUnresolved(wholeLoop["unresolved"] as JsonArray);
         }
@@ -273,7 +273,7 @@ public static class PlanNarrative
         var blockers = report["blockers"] as JsonArray ?? [];
         if (blockers.Count > 0)
         {
-            JsonObject first = Messages.Localize(blockers[0]?.GetValue<string>());
+            JsonObject first = report["blockers_localized"]?[0] as JsonObject ?? blockers[0]!.AsObject();
             return Bilingual(Blocked, "summary.blocked",
                 [first["zh"]?.GetValue<string>() ?? "", blockers.Count], [first["en"]?.GetValue<string>() ?? "", blockers.Count]);
         }

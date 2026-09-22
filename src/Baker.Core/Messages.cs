@@ -13,8 +13,9 @@ namespace Baker.Core;
 /// <c>blockers_localized</c> / <c>unresolved_localized</c> / <c>summary</c> 里。
 /// </para>
 /// <para>
-/// <see cref="Emit"/> 在生成 legacy 文本的同时登记 key 与参数，之后 <see cref="Localize"/> 用这份登记
-/// 反查双语文案；查不到（例如别的分支新增了 blocker，或 plan 由旧版本生成）就原样回退英文，不抛异常。
+/// 拒绝原因（blocker）不再走反查：它们是 <see cref="Blocker"/>（编号 + 参数），写 plan 时由 <see cref="PlanBlockers.Finish"/>
+/// 按编号渲染 legacy 与双语。<see cref="Emit"/> / <see cref="Localize"/> 的登记反查只剩 unresolved 明细、bake 理由与异常文本在用，
+/// C1.1 后续部分改完即删。
 /// </para>
 /// </summary>
 public static class Messages
@@ -71,18 +72,6 @@ public static class Messages
             Zh: "当前无法生成：依赖分析后未找到不依赖实时输入、可生成的视频组。",
             En: "Cannot generate with the current plan: dependency analysis found no video group independent of live input.",
             Legacy: "No input-independent visual group remains after dependency closure."),
-
-        // feat/sdr-closure 之后 hdr 标志本身不再是拒绝理由，下面这两条没有生产出口了；
-        // 保留它们，好让旧版本生成的 plan 仍能靠 legacy 原文反查出中文。
-        ["blocker.hdr_unsupported"] = new(
-            Zh: "不可生成：场景为 HDR 合成，当前仅支持 8 位 SDR 捕获，亮部将被压缩。若壁纸提供 HDR 属性开关，在 Wallpaper Engine 中禁用后重新分析，或用 --properties 传入禁用后的属性。",
-            En: "Cannot generate: the scene composites in HDR and capture is 8-bit SDR only, so highlights would be compressed. If the wallpaper exposes an HDR property, disable it in Wallpaper Engine and analyze again, or pass the adjusted properties with --properties.",
-            Legacy: "HDR intermediate compositing is not supported by the current RGBA8 group capture; its radiance range must not be silently clipped into an SDR video."),
-
-        ["blocker.hdr_unsupported_property"] = new(
-            Zh: "不可生成：场景为 HDR 合成，当前仅支持 8 位 SDR 捕获，亮部将被压缩。壁纸提供 HDR 属性开关（{0}），在 Wallpaper Engine 中禁用后重新分析，或用 --properties 传入禁用后的属性。",
-            En: "Cannot generate: the scene composites in HDR and capture is 8-bit SDR only, so highlights would be compressed. The wallpaper exposes an HDR property ({0}): disable it in Wallpaper Engine and analyze again, or pass the adjusted properties with --properties.",
-            Legacy: "HDR intermediate compositing is not supported by the current RGBA8 group capture; its radiance range must not be silently clipped into an SDR video."),
 
         // 第 2 批合并新增（feat/sdr-closure）：拒绝理由不再是"场景开了 hdr"，而是"这一组的输出证明不了落在 [0,1] 内"。
         // {0} 是判据点名的失败层与判据代号（英文，下游脚本按它对账），{1} 是 general.hdr 绑定的属性名，
@@ -146,6 +135,20 @@ public static class Messages
 
         // HybridBakeService.AssembleObjects 的层级检查，经 CompositionHierarchyConflict 进 blockers。英文逐字沿用抛出处的原文，
         // 无参数，旧版 plan 也能靠原文反查出中文（实测 --retain-live 换成源作者根后 3441873795、3521337568、3602673806 会撞上它）。
+        // 以下三条原先是 AssembleAllocationObjects 直接抛出的英文，经 CompositionHierarchyConflict 原样进 blockers，
+        // blockers_localized 的 key 为 null（3674038504 的 layer_count 查询）。legacy 逐字沿用抛出处原文。
+        ["blocker.public_layer_query"] = new(
+            Zh: "不可生成：保留实时的脚本读取了 {0}，而混合导出会改变公开的图层{1}。请让会改变这个脚本所见图层视图的图层保持实时，然后重新分析。",
+            En: "Cannot generate: a retained script reads {0}, but hybrid export changes the public layer {1}. Analyze again without baking layers that alter this script's public layer view.",
+            Legacy: "A retained script queried {0}, but hybrid export changes the public layer {1}. Re-analyze without baking layers that alter this script's public layer view."),
+        ["blocker.omitted_snapshot_dependency"] = new(
+            Zh: "不可生成：保留实时的对象依赖一个被省略的快照祖先或身份。",
+            En: "Cannot generate: a retained object depends on an omitted snapshot ancestor or identity.",
+            Legacy: "A retained object depends on an omitted snapshot ancestor or identity."),
+        ["blocker.replacement_parent_mismatch"] = new(
+            Zh: "不可生成：视频替身必须挂在计划中的源同级父节点下。",
+            En: "Cannot generate: a video replacement must use its planned source sibling parent.",
+            Legacy: "A video replacement must use its planned source sibling parent."),
         ["blocker.hierarchy_changes_draw_order"] = new(
             Zh: "不可生成：保留实时的父级层级会改变计划中视频与实时图层的绘制顺序；该分配不保持作者的同级叠放顺序，遮挡关系将改变。",
             En: "Cannot generate: retained parent hierarchies would change the planned video and live draw order; the allocation does not preserve source sibling order and occlusion would change.",
@@ -1298,6 +1301,10 @@ public static class Messages
         if (Table.GetValueOrDefault(key) is not { } entry) return key;
         return Render(NormalizeLanguage(language) == Chinese ? entry.Zh : entry.En, args);
     }
+
+    /// <summary>按 plan v3 模板渲染英文原文；不登记、不反查。未知 key 回退为 key 本身。</summary>
+    public static string RenderLegacy(string key, object?[] args) =>
+        Table.GetValueOrDefault(key) is { } entry ? Render(entry.LegacyTemplate, args) : key;
 
     /// <summary>生成 legacy 英文原文，并登记 key 与参数供 <see cref="Localize"/> 反查。</summary>
     public static string Emit(string key, params object?[] args)

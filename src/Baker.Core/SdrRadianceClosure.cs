@@ -46,8 +46,9 @@ public static class SdrRadianceClosure
     /// <paramref name="project"/> 只用于文案：报出壁纸自带的 HDR 开关叫什么，传 null 时那半句略去。
     /// </summary>
     public static JsonObject Describe(JsonObject scene, JsonObject properties, JsonObject? trace, JsonArray groups,
-        ProjectSource source, string? assets, bool hdrEnabled, JsonObject? project = null)
+        ProjectSource source, string? assets, bool hdrEnabled, JsonObject? project, out Blocker? blocker)
     {
+        blocker = null;
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(properties);
         ArgumentNullException.ThrowIfNull(groups);
@@ -88,7 +89,8 @@ public static class SdrRadianceClosure
         string listedZh = ChineseUnproven(failuresZh, failures.Count);
         // 明细单独留一份字段，文案由 PlanNarrative 按语言渲染；写进 blockers 的 legacy 英文与本判据自己的措辞逐字相同。
         result["unproven"] = listed;
-        result["blocker"] = PlanNarrative.HdrRadianceOpen(scene, project, listed, listedZh);
+        blocker = PlanNarrative.HdrRadianceOpen(scene, project, listed, listedZh);
+        result["blocker"] = blocker.Text;
         return result;
     }
 
