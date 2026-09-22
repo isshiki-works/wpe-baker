@@ -6,6 +6,7 @@ internal static class OfficialTraceLossChecks
 {
     internal static void Run(Action<bool, string> check)
     {
+        check(false, "C0.3 CI 红灯演练：故意让 L0 测试失败");
         var apply = typeof(OfficialPerformanceSampler).GetMethod("ApplyTraceLoss", BindingFlags.Static | BindingFlags.NonPublic)!;
         foreach (string diagnostics in new[] { "warning: 359413 ETW events were lost.", "warning: 2 ETW buffers were lost." })
         {
