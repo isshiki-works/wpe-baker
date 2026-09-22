@@ -38,6 +38,12 @@ internal static class HybridPlanFormatChecks
         catch (InvalidDataException error) { legacyMessage = Message.Of(error); }
         check(legacyMessage is { Key: "plan.legacy_version" } && legacyMessage.Args.SequenceEqual(new object?[] { 2 }),
             "a legacy v2 plan is rejected as an older plan to analyze again, not read or migrated");
+        var otherKind = Plan(); otherKind["kind"] = "media_optimization";
+        Reject(otherKind, "a current-version document of another kind is not accepted as a Scene plan");
+        bool missingSettings = false;
+        try { PlanSettings.Of(Plan()); }
+        catch (InvalidDataException) { missingSettings = true; }
+        check(missingSettings, "a plan without settings is reported as invalid data, not a null dereference");
         var escapedGroup = Plan();
         escapedGroup["video_groups"]![0]!["id"] = "../outside";
         escapedGroup["composition"]![0]!["video_group"] = "../outside";
