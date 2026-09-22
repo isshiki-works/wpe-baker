@@ -48,8 +48,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         JsonObject plan = request.Plan.DeepClone().AsObject();
         if (plan["effect_prefix_caches"] is not JsonArray { Count: > 0 } caches)
             throw new InvalidDataException("The plan has no effect_prefix_caches.");
-        HybridAnalyzeRequest settings = plan["settings"]?.Deserialize<HybridAnalyzeRequest>(JsonOptions)
-            ?? throw new InvalidDataException("Effect-prefix settings are missing.");
+        HybridAnalyzeRequest settings = PlanSettings.Of(plan);
         using var source = new ProjectSource(plan["source"]?.GetValue<string>() ?? throw new InvalidDataException("Effect-prefix source is missing."));
         string hash = await source.SourceHashAsync(cancellationToken);
         if (hash != plan["source_sha256"]?.GetValue<string>()) throw new InvalidDataException("Source changed; analyze it again.");
