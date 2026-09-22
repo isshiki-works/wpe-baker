@@ -113,7 +113,7 @@ def run(command: list[str], log_name: str, environment: dict[str, str]) -> None:
         if code: raise SystemExit(code)
 
 def validate_ffmpeg_root(ffmpeg_root: pathlib.Path, build: pathlib.Path) -> None:
-    if not ffmpeg_root.is_relative_to(DEPS.resolve()):
+    if not ffmpeg_root.resolve().is_relative_to(DEPS.resolve()):
         raise SystemExit("FFmpeg development prefix must remain in the project .deps/ tree")
     required = [ffmpeg_root / directory for directory in ("include", "lib", "bin")]
     required += [ffmpeg_root / "lib/pkgconfig" / (name + ".pc") for name in ("libavcodec", "libavformat", "libavutil", "libswscale", "libswresample")]
@@ -126,7 +126,7 @@ def validate_ffmpeg_root(ffmpeg_root: pathlib.Path, build: pathlib.Path) -> None
         cached = re.search(r"^WPE_FFMPEG_ROOT:[^=]+=(.+)$", text, re.MULTILINE)
         if cached is None:
             cached = re.search(r"^WAVSEN_AVFORMAT_PREFIX:[^=]+=(.+)$", text, re.MULTILINE)
-        if cached and pathlib.Path(cached[1].strip()).resolve() != ffmpeg_root:
+        if cached and pathlib.Path(cached[1].strip()).resolve() != ffmpeg_root.resolve():
             raise SystemExit("Build directory already uses FFmpeg " + cached[1].strip() + "; choose a separate --build-dir for " + str(ffmpeg_root))
 
 def main() -> None:
@@ -138,10 +138,10 @@ def main() -> None:
     parser.add_argument("--build-dir", default="build/native-release22", help="Separate output directory for this compiler and FFmpeg prefix")
     parser.add_argument("--ffmpeg-root", default=".deps/ffmpeg-lgpl21/prefix", help="Project-local FFmpeg development prefix (default: verified LGPL 2.1 build)")
     options = parser.parse_args()
-    toolchain = (ROOT / options.toolchain).resolve()
+    toolchain = pathlib.Path(os.path.abspath(ROOT / options.toolchain))
     build = (ROOT / options.build_dir).resolve()
-    ffmpeg_root = (ROOT / options.ffmpeg_root).resolve()
-    if not toolchain.is_relative_to(TOOLS.resolve()) or not build.is_relative_to((ROOT / "build").resolve()):
+    ffmpeg_root = pathlib.Path(os.path.abspath(ROOT / options.ffmpeg_root))
+    if not toolchain.resolve().is_relative_to(TOOLS.resolve()) or not build.is_relative_to((ROOT / "build").resolve()):
         raise SystemExit("Toolchain and build directories must remain in the project .tools/ and build/ trees")
     validate_ffmpeg_root(ffmpeg_root, build)
     input_snapshot = provenance.snapshot(ffmpeg_root)
