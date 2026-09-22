@@ -17,7 +17,7 @@
 <div class="wrap">
 <nav>
   <div class="logo">PERIODICA<small>WPE BAKER · 1.0.2</small></div>
-  <div class="links"><a href="#loop">The loop</a><a href="#numbers">Numbers</a><a href="#refresh">Refresh rate</a><a href="#gui">The tool</a><a href="#astra">Technology</a><a href="#roadmap">Roadmap</a></div>
+  <div class="links"><a href="#loop">The loop</a><a href="#numbers">Numbers</a><a href="#refresh">Refresh rate</a><a href="#gui">The tool</a><a href="#roadmap">Roadmap</a></div>
   <div class="lang"><a href="index.html" aria-current="page" onclick="try{localStorage.setItem('lang','en')}catch(e){}">EN</a><a href="zh.html" onclick="try{localStorage.setItem('lang','zh')}catch(e){}">中文</a></div>
 </nav>
 
@@ -25,12 +25,12 @@
   <div>
     <div class="eyebrow">Deterministic animation baking engine</div>
     <h1>Your wallpaper renders forever.<br><span>Bake it once.</span></h1>
-    <p class="lead">Periodica builds mathematical models of Wallpaper Engine animations, coordinates the periods of the parts it can bake, and plays the resulting seamless loop as video. Nearly the same look; up to 96% less GPU load and power, plugged in or on battery. Its first application is WPE Baker, for Wallpaper Engine.</p>
+    <p class="lead">Periodica models a Wallpaper Engine scene’s entire animation math, retunes its periods until the whole scene closes into one loop, and plays it back as video. Nearly the same look; up to 96% less GPU load and power, plugged in or on battery. Its first application is WPE Baker, for Wallpaper Engine.</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/latest">Download for Windows</a>
       <a class="btn ghost" href="#numbers">Read the measurements</a>
     </div>
-    <div class="fine" style="margin-top:12px">open source · portable · no AI model calls at runtime</div>
+    <div class="fine" style="margin-top:12px">open source · portable · no model calls at runtime</div>
   </div>
   <div class="screen">
     <video src="site/hero-landscape.mp4" autoplay muted loop playsinline aria-label="Baked wallpaper output playing as a seamless 50-second loop"></video>
@@ -43,13 +43,13 @@
   <div><div class="n">up to −96%</div><div class="l">GPU load and power on baked scenes</div></div>
   <div><div class="n">3.9 W</div><div class="l">Atri at 165 Hz on the iGPU rail; the original draws 26.0 W</div></div>
   <div><div class="n">1,400+</div><div class="l">automated checks in the release build</div></div>
-  <div><div class="n">0</div><div class="l">AI model calls at runtime</div></div>
+  <div><div class="n">0</div><div class="l">model calls at runtime</div></div>
 </div>
 
 <section id="loop">
   <div class="eyebrow">The loop</div>
-  <h2>Back to the same moment.</h2>
-  <p class="sub">Frame-comparison tools look for repetition in the images. Periodica analyzes the mathematics behind the motion, coordinating shader timing, animation tracks, particle cycles and video timebases into a common period. Drag the divider to compare the first and last frames of the 50-second loop above.</p>
+  <h2>Solved from the math, so it always closes.</h2>
+  <p class="sub">A frame-comparison tool guesses where a video might repeat. Periodica reads the equations that produce the motion — shader time, animation tracks, particle cycles, video timebases — and retunes them into one common period. Drag the divider: the first frame and the last frame of the 50-second loop above.</p>
   <div class="cmp" id="cmp">
     <img src="site/land-last.jpg" alt="Last frame of the baked loop">
     <img class="top" id="cmpTop" src="site/land-first.jpg" alt="First frame of the baked loop">
@@ -84,11 +84,11 @@
 
 <section id="period">
   <div class="eyebrow">The hard part</div>
-  <h2>Different periods. Periodica brings them into one loop.</h2>
-  <p class="sub">A wave repeats every 7.3 s, a sway every 11.1 s, a particle cycle every 4.6 s and a video every 20 s. They may take too long to return to their starting states together for a practical video loop. Periodica solves each component's period, then adjusts its playback speed within the selected budget so the animations share one common loop.</p>
+  <h2>Most scenes have no period. Periodica makes one.</h2>
+  <p class="sub">A wave at 7.3 s, a sway at 11.1 s, a particle cycle at 4.6 s and a video at 20 s almost never return to the same phase together; a naive recording would need hours to repeat and would still show a cut. Periodica solves each component's own period, then retunes their speeds by a fraction of a percent so they share one common loop — a period the artist never authored.</p>
   <div class="rows">
-    <div class="row"><div class="k">BUDGET</div><h3>Control how much the animation changes</h3><p>The three precision presets set a visible-change budget for each component: Efficiency allows up to 5%, Balanced up to 3%, and Quality finds the smallest change that still closes the loop. Yuri's 100 periodic components were reconciled into one 180.4 s loop; Nijika's 20 into 44 s; Ayanami Rei's scene closes in 56.2 s with a total retime of 4.68%.</p></div>
-    <div class="row"><div class="k">GUARDS</div><h3>Keep retiming visually subtle</h3><p>The slowest visible component completes at least three cycles per loop; visible drift stays under 0.2 px/s; sways are retuned in frequency only, never in path. Every retune is bounded per component and listed in the report. If the rules cannot be met, the layer stays live and the report says which one.</p></div>
+    <div class="row"><div class="k">BUDGET</div><h3>A visible-change budget</h3><p>Three presets cap how far any component may be retuned: Efficiency 5%, Balanced 3%, Quality the smallest change that still closes. Yuri's 100 periodic components were reconciled into one 180.4 s loop; Nijika's 20 into 44 s; Ayanami Rei's scene closes in 56.2 s with a total retime of 4.68%.</p></div>
+    <div class="row"><div class="k">GUARDS</div><h3>Rules that keep the changes nearly invisible</h3><p>The slowest visible component completes at least three cycles per loop; visible drift stays under 0.2 px/s; sways are retuned in frequency only, never in path. Every retune is bounded per component and listed in the report. If the rules cannot be met, the layer stays live and the report says which one.</p></div>
     <div class="row"><div class="k">PROOF</div><h3>Every seam verified frame by frame against the original</h3><p>Every output is rendered past its loop point and compared tile by tile with the original's next frame before it is accepted; that proves the loop closes, and the per-component budget bounds how far any motion drifts from the original over the whole loop.</p></div>
   </div>
 </section>
@@ -96,12 +96,12 @@
 <section id="gui">
   <div class="eyebrow">The tool</div>
   <h2>Drop a scene in, get a verdict.</h2>
-  <p class="sub">Two settings, one analysis result. Animation precision limits how much the animation can be retimed; Interaction controls how mouse and audio effects are handled. More settings are available under Advanced.</p>
+  <p class="sub">Two controls and one verdict. Animation precision bounds how far any motion may be retimed; Interaction decides what input-driven content does. Advanced holds the options for power users.</p>
   <div class="tool">
     <div class="steps">
       <div><b>01</b><h3>Drop the wallpaper folder in</h3><p>From <span class="mono">steamapps\workshop\content\431960</span>. The output directory is Wallpaper Engine's own project folder, so the result appears in its list.</p></div>
-      <div><b>02</b><h3>Animation precision · Interaction</h3><p>Quality, Balanced and Efficiency set different visible-change budgets; Balanced is the default. If the current precision setting cannot produce a closed loop, the analysis tries the next precision preset and reports the one it selects. Interaction offers Keep, Fixed view and Off for mouse and audio effects. Clocks, dates and media text stay live in every mode.</p></div>
-      <div><b>03</b><h3>Read the verdict</h3><p>The result is one of four states. "Not included in this bake" lists the content excluded from baking. If the current settings cannot close the loop but another combination can, the report offers a suggestion you can apply with one click.</p></div>
+      <div><b>02</b><h3>Animation precision · Interaction</h3><p>Quality, balanced and efficiency are the visible-change budget; balanced is the default. If the loop does not close inside the current budget, the solver steps down a level and retries, and the verdict says which one it used. Keep, fixed view or off is what mouse and audio do. Clocks, dates and media text stay live in every mode.</p></div>
+      <div><b>03</b><h3>Read the verdict</h3><p>One of four fixed states. "Not included in this bake" lists what was left out. If your settings do not close but another pair does, the report offers it as a single click.</p></div>
     </div>
     <figure class="shot"><img src="site/gui-en.png" alt="WPE Baker 1.0.2 window: Alone (3448877775) analyzed at quality precision with fixed view; verdict Ready to generate; mouse parallax not included" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker 1.0.2 · Alone (3448877775), quality precision, fixed view.</figcaption></figure>
   </div>
@@ -109,7 +109,7 @@
 
 <section id="numbers">
   <div class="eyebrow">Measurements</div>
-  <h2>The cost of repetition.</h2>
+  <h2>Every number here comes from a real measurement.</h2>
   <p class="sub">Intel Arc B390 laptop, official Wallpaper Engine, A/B/B/A runs at 60 fps, RAPL iGPU rail. Original scene against its baked output.</p>
   <div class="gal">
     <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 wallpaper preview"><figcaption><b>−57%</b>Lost Landscape 3<small>3713073223 · 329k subs · effect prefix</small></figcaption></figure>
@@ -134,13 +134,13 @@
     </tbody>
   </table>
   </div>
-  <div class="note">In these measurements, higher frame rates increased the rendering cost of the original scenes, while baked outputs kept power use low. Going from 60 fps to 120 fps, Atri's original scene rose from 8.45 W to 16.25 W, and Ayanami Rei's from 2.29 W to 7.77 W. At 120 fps, their baked outputs used 1.51 W and 0.31 W respectively. Detailed tables for every measured output, including those that did not save power, are included with the README. Wallpaper artwork belongs to its Steam Workshop authors and is shown to demonstrate the tool.</div>
+  <div class="note">At 120 fps the originals roughly double (Atri 8.45 → 16.25 W, Ayanami Rei 2.29 → 7.77 W) while the baked outputs stay near 1 W (1.51 W and 0.31 W): the refresh rate becomes free. Per-title tables for every measured output, including the ones that did not save, ship in the README. Wallpaper artwork belongs to its Steam Workshop authors and is shown to demonstrate the tool.</div>
 </section>
 
 <section id="refresh">
   <div class="eyebrow">Refresh rate</div>
-  <h2>High refresh rates. Lower power use.</h2>
-  <p class="sub">Higher playback frame rates require the original scene to render more frames in real time. Once fully baked, the video decoder handles most of the work, reducing the 3D engine's real-time rendering load. This project started on a laptop with an integrated GPU.</p>
+  <h2>Max out the refresh rate. The fans still stay off.</h2>
+  <p class="sub">A heavy wallpaper costs the GPU roughly twice as much at 120 fps as at 60; a fully baked output barely notices: the decoder does the work and the 3D engine idles. This project started on an iGPU laptop.</p>
   <div class="tablewrap">
   <table>
     <thead><tr><th>Wallpaper</th><th>Original 60 → 120 fps</th><th>Baked 60 → 120 fps</th><th style="text-align:right">Baked at 120 vs original at 60</th><th>Package power, 120 fps</th></tr></thead>
@@ -154,7 +154,7 @@
   </div>
   <div class="tablewrap">
   <table>
-    <thead><tr><th>Atri at the display's native 165 Hz</th><th>Original</th><th>Baked</th><th style="text-align:right">Change</th></tr></thead>
+    <thead><tr><th>Atri at the panel's full 165 Hz</th><th>Original</th><th>Baked</th><th style="text-align:right">Change</th></tr></thead>
     <tbody>
       <tr><td>iGPU rail</td><td class="num">26.03 W</td><td class="num">3.95 W</td><td class="delta">−84.8%</td></tr>
       <tr><td>CPU package</td><td class="num">41.44 W</td><td class="num">15.36 W</td><td class="delta">−62.9%</td></tr>
@@ -166,8 +166,8 @@
 </section>
 
 <section id="what">
-  <div class="eyebrow">What gets baked</div>
-  <h2>Bake periodic motion.<br>Handle interaction and live content separately.</h2>
+  <div class="eyebrow">What counts as animation</div>
+  <h2>Deterministic motion is baked. Input stays input.</h2>
   <div class="two">
     <div>
       <h3>Baked into the loop</h3>
@@ -179,48 +179,26 @@
       </ul>
     </div>
     <div>
-      <h3>Interactive and live content</h3>
+      <h3>Treated as input<span class="tag">Interaction: keep · fixed view · off</span></h3>
       <ul>
         <li>Mouse parallax and pointer effects</li>
-        <li>Audio-reactive effects and spectrum displays</li>
-        <li>Clocks, dates and day/night switching</li>
-        <li>Interactive panels and custom scripts</li>
+        <li>Audio-reactive layers and spectrums</li>
+        <li>Clocks, dates, day/night switching</li>
+        <li>Interactive panels and customization scripts</li>
       </ul>
-      <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">Interaction offers three modes: Keep, Fixed view and Off. Fixed view is the default.</p>
-      <p class="mono" style="margin:8px 0 0;color:var(--dim);font-size:13px">Clocks, dates and media text update live in every mode. Keep is experimental and may increase GPU load.</p>
-    </div>
-  </div>
-</section>
-
-<section id="astra">
-  <div class="eyebrow">Under the hood</div>
-  <h2>From period analysis to offline rendering.</h2>
-  <div class="spec">
-    <div>
-      <p>Wallpaper Engine's scene format is undocumented. Rendering it frame-exact offline means handling hundreds of shader variants, particle systems, script controllers and video layers.</p>
-      <p>Periodica combines a multithreaded Vulkan offline renderer for Wallpaper Engine scenes, an analytic period solver, a layer allocator, an encoding pipeline with hardware decoding checks and a power measurement system. Performance tuning cut the bake time for a 25,599-frame scene from 2,566 s to 214 s. The full library of 78 scenes can be baked in one afternoon, with one bake running at a time.</p>
-    </div>
-    <div class="kvs">
-      <div><span>Engine</span><span>Periodica · deterministic animation baking</span></div>
-      <div><span>Solver</span><span>Analytic solving per component · Common-period retiming</span></div>
-      <div><span>Renderer</span><span>Vulkan offline rendering · Multithreaded · Frame-exact</span></div>
-      <div><span>Encoder</span><span>H.264 / HEVC · Hardware decoding verified</span></div>
-      <div><span>Power measurement</span><span>Official player · RAPL · A/B/B/A</span></div>
-      <div><span>Code size</span><span>~29,000 lines of C# · 14,000 lines of test code · 1,400+ checks</span></div>
-      <div><span>Speedup</span><span>12× on a 25,599-frame scene · 7× on a 671-frame scene</span></div>
-      <div><span>Runtime AI calls</span><span>None</span></div>
+      <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">Default: fixed view. Clocks, dates and media text stay live in every mode. Keep: experimental, may increase GPU load.</p>
     </div>
   </div>
 </section>
 
 <section id="roadmap">
   <div class="eyebrow">Where Periodica goes</div>
-  <h2>The next screen.</h2>
+  <h2>Every screen that loops is a candidate.</h2>
   <div class="road">
-    <div><div class="when">1.0 · Delivered</div><h3>Wallpaper Engine, Windows</h3><p>Bake repeating scene animation into video and place it back alongside retained live content. Wallpaper Engine is Periodica's first application area.</p></div>
-    <div class="now"><div class="when">1.1</div><h3>Performance update</h3><p>Reduce readbacks, repeated encoding and unnecessary waits to make faster-than-realtime baking faster still. Optional output-matched effect resolution further reduces work beyond the actual output size.</p></div>
-    <div><div class="when">1.2</div><h3>General baking acceleration</h3><p>Use caching, reuse, precomputation and deterministic replay to bring more real-time layers within practical baking range. Neural networks are considered only where they deliver a measured benefit.</p></div>
-    <div class="big"><div class="when">1.5 · Beta → 2.0 · Stable</div><h3>Temporal reconstruction</h3><p>Use history and motion information to reconstruct frames, reducing the work of rendering each frame from scratch. Validate the approach in beta, then deliver it as a stable capability in 2.0 while exploring cooperation between the GPU and NPU.</p></div>
+    <div class="now"><div class="when">1.0.2 · NOW</div><h3>Wallpaper Engine, Windows</h3><p>One admission check for analysis and bake, no automatic re-renders, balanced precision and fixed view by default, at most four video groups, verified one-click suggestions, day/night state splitting.</p></div>
+    <div><div class="when">NEXT</div><h3>Passthrough controller</h3><p>The baked video as a layer inside the original scene, so pointer and audio effects keep running on top of it at their own cost.</p></div>
+    <div class="big"><div class="when">THE BIG ONE</div><h3>Temporal reconstruction</h3><p>Bake at a fraction of the resolution with sub-pixel jitter; reconstruct at playback from motion vectors solved offline. Better inputs than DLSS gets in a game, at a fraction of the decode.</p></div>
+    <div><div class="when">BEYOND</div><h3>Any looping surface</h3><p>Phone live wallpapers, lock screens, kiosks, stream backdrops. Wallpaper Engine is the first screen Periodica runs on.</p></div>
   </div>
 </section>
 
@@ -228,9 +206,9 @@
   <div class="eyebrow">FAQ</div>
   <h2>Short answers.</h2>
   <div class="faq">
-    <details><summary>What is the main benefit?</summary><p>Run your favorite animated wallpaper with lower power use.</p></details>
-    <details><summary>Will it reduce resource use for every wallpaper?</summary><p>Lightweight scenes offer little room for savings, and the tool tells you before rendering. Heavy scenes dominated by periodic animation are where the 46–96% reductions come from. For scenes with extensive interaction, the deterministic core is baked while interactive and live content is handled separately.</p></details>
-    <details><summary>Does the loop look different from the original?</summary><p>Choose Efficiency, Balanced or Quality to set the visible-change budget. The report lists every retimed component and its exact adjustment percentage. Each seam is checked against the original scene's motion before the output is accepted.</p></details>
+    <details><summary>What is the simplest thing I get?</summary><p>Your favorite wallpaper at its highest refresh rate and quality, and the fans stay off. That is the whole reason this exists.</p></details>
+    <details><summary>Will it make every wallpaper cheaper?</summary><p>Light scenes have nothing to save, and it says so before rendering. Heavy, mostly periodic scenes are where the 46–96% savings come from; interaction-heavy scenes get their deterministic core baked and the rest treated as input.</p></details>
+    <details><summary>Does the loop look different from the original?</summary><p>You choose the visible-change budget — efficiency, balanced or quality — and the report lists every retimed component with its exact percentage. Seams are validated against the original's own motion before an output is accepted.</p></details>
     <details><summary>What do I need?</summary><p>Windows, Wallpaper Engine, and a GPU for the offline render. The portable build has no installer and no Python. Baking a typical scene takes minutes; playback needs only hardware video decode.</p></details>
     <details><summary>Is it open source?</summary><p>Yes. Tooling under MIT, the renderer under GPL v2; full source, third-party notices and build records are in the repository.</p></details>
   </div>
