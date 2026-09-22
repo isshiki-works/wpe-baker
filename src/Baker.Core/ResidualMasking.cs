@@ -261,8 +261,12 @@ public static class ResidualMasking
     /// 已经让用户先选布局）；有解析候选；留有未解析的时间机制且全部可掩盖（即 bake 会走残差掩盖路线）；却有残差层不在任何视频组里。
     /// 未解析分量里有不可掩盖项时 bake 会按"无循环"拒绝，那与布局无关，这里不管。
     /// </summary>
-    public static JsonObject? LayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
+    public static JsonObject? LayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource) =>
+        LayoutGate(plan, scene, readResource, out _);
+
+    private static JsonObject? LayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource, out Blocker? blocker)
     {
+        blocker = null;
         ArgumentNullException.ThrowIfNull(plan);
         if (Text(plan["route"]) != "whole_layer" || plan["whole_layer"]?["layout_conflict"] is not null ||
             plan["loop"]?["candidates"] is not JsonArray { Count: > 0 }) return null;
@@ -278,7 +282,7 @@ public static class ResidualMasking
         };
         JsonObject classification = Classify(probe, scene, readResource);
         return classification["status"]?.GetValue<string>() == "residual_maskable" && !LayoutAllowsMasking(plan, classification)
-            ? LayoutRejection(plan, classification) : null;
+            ? LayoutRejection(plan, classification, out blocker) : null;
     }
 
     /// <summary>
@@ -287,11 +291,10 @@ public static class ResidualMasking
     /// </summary>
     public static JsonObject? ApplyLayoutGate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
     {
-        if (LayoutGate(plan, scene, readResource) is not JsonObject gate) return null;
+        if (LayoutGate(plan, scene, readResource, out Blocker? blocker) is not JsonObject gate) return null;
         plan["residual_layout_gate"] = gate;
-        string blocker = gate["reason"]!.GetValue<string>();
         foreach (JsonNode? node in new[] { plan["blockers"], plan["whole_layer"]?["blockers"] })
-            if (node is JsonArray blockers && !blockers.Any(item => Text(item) == blocker)) blockers.Add(blocker);
+            if (node is JsonArray blockers) PlanBlockers.Add(blockers, blocker!);
         plan["status"] = "requires_resolution";
         if (plan["whole_layer"] is JsonObject wholeLayer) wholeLayer["status"] = "unavailable";
         return gate;
@@ -302,7 +305,10 @@ public static class ResidualMasking
     /// --retain-live 的具体 id 优先取 analyze 已经重查过的更小分配（loop_allocation_fallback 为 candidate_found），
     /// 否则退回这些分量所在的作者根，并如实说明还没重新分析过。
     /// </summary>
-    public static JsonObject LayoutRejection(JsonObject plan, JsonObject classification)
+    public static JsonObject LayoutRejection(JsonObject plan, JsonObject classification) =>
+        LayoutRejection(plan, classification, out _);
+
+    private static JsonObject LayoutRejection(JsonObject plan, JsonObject classification, out Blocker blocker)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(classification);
@@ -374,7 +380,8 @@ public static class ResidualMasking
             ComponentList(chinese: true), string.Join("；或者", optionsZh)];
         object?[] en = [layout, groupCount, transparentGroups > 0 ? $" ({transparentGroups} transparent)" : "",
             ComponentList(chinese: false), string.Join("; or ", optionsEn)];
-        string reason = Messages.EmitBilingual("blocker.residual_masking_layout", zh, en);
+        blocker = new Blocker(BlockerCode.ResidualMaskingLayout, en, zh);
+        string reason = blocker.Text;
         return new JsonObject
         {
             ["schema_version"] = 1,

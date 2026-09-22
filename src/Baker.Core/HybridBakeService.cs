@@ -186,7 +186,7 @@ public sealed class HybridBakeService(NativeTools tools)
         void Emit(int id)
         {
             if (!originalObjects.TryGetValue(id, out var original) || !emitted.Add(id)) return;
-            if (omitted.Contains(id)) throw new InvalidDataException("A retained object depends on an omitted snapshot ancestor or identity.");
+            if (omitted.Contains(id)) throw new Blocker(BlockerCode.OmittedSnapshotDependency).ToException();
             if (HybridScenePlanner.Int(original["parent"]) is int parent && originalObjects.ContainsKey(parent)) Emit(parent);
             var obj = original.DeepClone().AsObject();
             if (!liveIds.Contains(id))
@@ -202,7 +202,7 @@ public sealed class HybridBakeService(NativeTools tools)
             {
                 var group = plan["video_groups"]!.AsArray().OfType<JsonObject>().Single(g => g["id"]!.GetValue<string>() == groupName.GetValue<string>());
                 if (HybridScenePlanner.Int(replacement["parent"]) != HybridScenePlanner.Int(group["parent_id"]))
-                    throw new InvalidDataException("A video replacement must use its planned source sibling parent.");
+                    throw new Blocker(BlockerCode.ReplacementParentMismatch).ToException();
                 if (HybridScenePlanner.Int(replacement["parent"]) is int parent) Emit(parent);
                 finalObjects.Add(replacement.DeepClone());
                 expected.Add(HybridScenePlanner.Id(replacement));
@@ -233,7 +233,7 @@ public sealed class HybridBakeService(NativeTools tools)
         foreach (var obj in all.Where(obj => HybridScenePlanner.Int(obj["parent"]) is not int parent || !ids.Contains(parent)))
             Visit(HybridScenePlanner.Id(obj));
         if (!actual.SequenceEqual(expected))
-            throw new InvalidDataException(Messages.Emit("blocker.hierarchy_changes_draw_order"));
+            throw new Blocker(BlockerCode.HierarchyChangesDrawOrder).ToException();
         GuardPublicLayerQueries(originalObjects.Values, all, dependencies);
         return finalObjects;
     }
@@ -371,14 +371,16 @@ public sealed class HybridBakeService(NativeTools tools)
             throw new InvalidDataException("A version 2 hybrid-video bake request is required.");
         HybridPlanFormat.Validate(plan);
         if (request.ProbeFrames == 0 && plan["blockers"] is JsonArray previousBlockers)
+        {
+            BlockerCode[] previousCodes = PlanBlockers.Codes(plan).ToArray();
             for (int i = previousBlockers.Count - 1; i >= 0; --i)
-                if (previousBlockers[i]?.GetValue<string>() == HybridScenePlanner.MissingScriptFaultEvidenceBlocker)
-                    previousBlockers.RemoveAt(i);
+                if (previousCodes[i] == BlockerCode.MissingScriptFaultEvidence) previousBlockers.RemoveAt(i);
+        }
         if (plan["blockers"] is JsonArray { Count: > 0 }) throw new InvalidDataException("Resolve the plan's listed blockers before generating it.");
-        if (HybridScenePlanner.FullFrameConflict(plan) is string initialLayoutConflict)
-            throw new InvalidDataException(initialLayoutConflict);
-        if (HybridScenePlanner.CompositionHierarchyConflict(plan) is string initialHierarchyConflict)
-            throw new InvalidDataException(initialHierarchyConflict);
+        if (HybridScenePlanner.FullFrameConflict(plan) is Blocker initialLayoutConflict)
+            throw initialLayoutConflict.ToException();
+        if (HybridScenePlanner.CompositionHierarchyConflict(plan) is Blocker initialHierarchyConflict)
+            throw initialHierarchyConflict.ToException();
         if (request.DeviceUuid is not null)
         {
             if (plan["settings"] is not JsonObject captureSettings) throw new InvalidDataException("Hybrid capture settings are missing.");
@@ -416,10 +418,10 @@ public sealed class HybridBakeService(NativeTools tools)
                 HybridPlanFormat.Validate(plan);
                 if (plan["blockers"] is JsonArray { Count: > 0 })
                     throw new InvalidDataException("The refreshed analysis requires resolution before generation.");
-                if (HybridScenePlanner.FullFrameConflict(plan) is string refreshedLayoutConflict)
-                    throw new InvalidDataException(refreshedLayoutConflict);
-                if (HybridScenePlanner.CompositionHierarchyConflict(plan) is string refreshedHierarchyConflict)
-                    throw new InvalidDataException(refreshedHierarchyConflict);
+                if (HybridScenePlanner.FullFrameConflict(plan) is Blocker refreshedLayoutConflict)
+                    throw refreshedLayoutConflict.ToException();
+                if (HybridScenePlanner.CompositionHierarchyConflict(plan) is Blocker refreshedHierarchyConflict)
+                    throw refreshedHierarchyConflict.ToException();
                 settings = plan["settings"]!.Deserialize<HybridAnalyzeRequest>(JsonOptions)
                     ?? throw new InvalidDataException("Refreshed capture settings are invalid.");
                 errors = PlannedSourceScriptErrors(plan)

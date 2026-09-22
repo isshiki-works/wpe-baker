@@ -30,7 +30,8 @@ internal static class HybridExportSafety
             string property = query["property"]!.GetValue<string>();
             if ((property == "layer_count" ? original.Length != final.Length : !original.SequenceEqual(final.Select(HybridScenePlanner.Id))) &&
                 !SelfAnchoredInsert(originalObjects, finalById, query, property))
-                throw new InvalidDataException($"A retained script queried {property}, but hybrid export changes the public layer {(property == "layer_count" ? "count" : "order")}. Re-analyze without baking layers that alter this script's public layer view.");
+                throw new Blocker(BlockerCode.PublicLayerQuery,
+                    [property, property == "layer_count" ? "count" : "order"], [property, property == "layer_count" ? "数量" : "顺序"]).ToException();
         }
     }
 

@@ -46,7 +46,7 @@ internal static class SingleShotAllocation
 
     /// 陈述哪些实时绘制挡在视频组之前、为什么搬不走，并给出这个场景真正可执行的解锁路径：
     /// 反事实实测里这一形态 4/4 都能靠关掉挡路的可取舍元素进整幅，所以不再说"改设置也没用"。
-    internal static string UnreachableReason(JsonObject plan, int[] blocking)
+    internal static Blocker UnreachableReason(JsonObject plan, int[] blocking)
     {
         var layers = (plan["layers"]?.AsArray() ?? []).OfType<JsonObject>().ToArray();
         string Describe(int root)
@@ -62,7 +62,7 @@ internal static class SingleShotAllocation
         // 文案入 Messages 表（key: blocker.fullframe_unreachable），legacy 英文逐字不变，中文与新英文在 blockers_localized 里给出。
         string listed = string.Join("; ", blocking.Select(Describe));
         var (zh, en) = UnlockPath(layers, blocking);
-        return Messages.EmitBilingual("blocker.fullframe_unreachable", [listed, zh], [listed, en]);
+        return new Blocker(BlockerCode.FullframeUnreachable, [listed, en], [listed, zh]);
     }
 
     /// 挡路的这批根里哪些是可取舍元素、怎么关（中英各一句）。全是视差时只要固定视角，不必排除图层。
