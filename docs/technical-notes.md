@@ -1124,10 +1124,10 @@ drawn into the artwork itself cannot be switched off and stays in the output.
 ## Build from source
 
 Regular users do not need this — it's for contributors building the native
-renderer and managed tooling. The native renderer is built from
-`waywallen/open-wallpaper-engine` at commit
-`b866e8e711fdd7762385b23601affa1ea5539e3b`, with Windows patches kept in
-source and in `patches/`. `build/native-mt22` holds the renderer shipped in
+renderer and managed tooling. The native renderer's source is `engine/`, a
+GPL-2.0 fork of `waywallen/open-wallpaper-engine` based on upstream commit
+`b866e8e711fdd7762385b23601affa1ea5539e3b`, with its full Git history; the
+Windows changes are ordinary commits there. `build/native-mt22` holds the renderer shipped in
 this release (the multithreaded-decode build); `build/native-speed22` is the
 RC8 renderer, and `build/native-release22` is a 2026-09-09 leftover whose
 provenance record points at a different build directory — left as the
@@ -1182,8 +1182,9 @@ are never part of the public source package.
   DLLs are FFmpeg 8.1.2 built with x264 and x265; notices are in
   `encoder/licenses/`.
 - **Corresponding source.** Every release publishes `WpeBaker-source.zip` next
-  to the portable zip. It contains the modified renderer source with its
-  `patches/` and `scripts/dependency-patches/`, the renderer's dependencies,
+  to the portable zip. It contains the modified renderer source (`engine/` in
+  this repository, with its full history) and `scripts/dependency-patches/`,
+  the renderer's dependencies,
   the complete FFmpeg, dav1d, x264 and x265 sources used for both FFmpeg
   builds, the build scripts and input locks, `REBUILD.md`, and the original
   license texts. `build-records/` in both archives name the same renderer

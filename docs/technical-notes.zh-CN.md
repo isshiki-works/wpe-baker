@@ -430,7 +430,7 @@ P/步长 个，每个比较的是 (s, s+P)，全部落在前 2P 帧里，更宽�
 
 本机跑长烘焙统一走 `scripts/run-guarded.ps1`：它盯着系统可用内存与目标盘剩余空间，任一越线立刻终止整棵进程树并把原因写进 status 文件。看门狗自身出错时（资源采样连续失败、status 文件被占用等）同样会先杀掉整棵子进程树，再把 status 写成 `watchdog_failed` 和原因，不会留下无人看管的子进程；单次采样失败只沿用上一次的值并计数，连续 `-MaximumSampleFailures`（默认 4）次才判定保护失效。数组参数要用 `& scripts\run-guarded.ps1 -Executable ... -Arguments @('a','b')` 调用，`pwsh -File` 会把数组拍平（脚本会检出这种畸形入参直接报错）。不要用 `Invoke-CimMethod Win32_Process Create` 拉 MSIX（Microsoft Store）版 pwsh：那样起来的进程落在 Session 0 会静默退出，日志和 status 一个字都不写；计划任务或远程拉起请用 `powershell.exe` 或非 MSIX 安装的 `pwsh.exe`。
 
-开发者可使用项目内的 Python 辅助脚本下载和构建，普通用户不需要此环境。原生构建来自 `waywallen/open-wallpaper-engine` 的 `b866e8e711fdd7762385b23601affa1ea5539e3b`，Windows 补丁保留在源码和 `patches/`。
+开发者可使用项目内的 Python 辅助脚本下载和构建，普通用户不需要此环境。原生渲染器的源码是 `engine/`：`waywallen/open-wallpaper-engine` 的 GPL-2.0 分叉，上游基点 `b866e8e711fdd7762385b23601affa1ea5539e3b`，带完整 Git 历史，Windows 改动就是其中的普通提交。
 
 ```text
 python scripts/fetch-dotnet.py
@@ -467,6 +467,6 @@ python scripts/package-source.py --native-build-dir build/native-speed22 --outpu
 - **工具层：MIT。** C# 界面、命令行、核心库与开发脚本，见 `LICENSE`。
 - **原生渲染器：GPL v2。** `renderer/wpe-render.exe` 是 open-wallpaper-engine（上游提交 `b866e8e711fdd7762385b23601affa1ea5539e3b`）的 Windows 移植，许可文本随包附在 `licenses/open-wallpaper-engine.LICENSE`；它用的 FFmpeg 解码 DLL 按 LGPL 2.1 构建（声明在 `licenses/renderer-codecs/`）。
 - **打包的编码器：GPL v2。** `encoder/ffmpeg.exe`、`ffprobe.exe` 及其 DLL 是带 x264 与 x265 构建的 FFmpeg 8.1.2，声明在 `encoder/licenses/`。
-- **对应源码。** 每次发布都在便携包旁边同时提供 `WpeBaker-source.zip`，内含修改后的渲染器源码及 `patches/`、`scripts/dependency-patches/` 两处补丁、渲染器依赖、两套 FFmpeg 构建所用的完整 FFmpeg / dav1d / x264 / x265 源码、构建脚本与输入 lock、`REBUILD.md`，以及各组件原始许可文本。两个压缩包的 `build-records/` 记录的是同一个渲染器 SHA-256，可以据此核对源码与二进制对应。如果拿到的便携包没有附带源码包，请向下载来源索取。
+- **对应源码。** 每次发布都在便携包旁边同时提供 `WpeBaker-source.zip`，内含修改后的渲染器源码（即本仓库带完整历史的 `engine/`）与 `scripts/dependency-patches/` 依赖补丁、渲染器依赖、两套 FFmpeg 构建所用的完整 FFmpeg / dav1d / x264 / x265 源码、构建脚本与输入 lock、`REBUILD.md`，以及各组件原始许可文本。两个压缩包的 `build-records/` 记录的是同一个渲染器 SHA-256，可以据此核对源码与二进制对应。如果拿到的便携包没有附带源码包，请向下载来源索取。
 - **vvk 与 wavsen：MIT OR Apache-2.0，作者已确认。**两者的锁定版本（vvk `f53d60c`、wavsen `77dfd33`）都早于上游加入许可文件的提交。作者 hypengw 于 2026-09-18 给 vvk 加入 MIT OR Apache-2.0 并确认适用于此前的提交（https://github.com/litocpp/vvk/issues/3），同时确认 wavsen `77dfd33` 适用同一许可（https://github.com/hypengw/wavsen/issues/5）。许可文本随包在 `licenses\` 下。感谢 hypengw 的及时答复。逐组件的版本、许可、来源、是否修改与补丁位置见 `THIRD-PARTY-NOTICES.md`。
 - 其余随包组件（.NET 运行时、LLVM-MinGW 运行时 DLL、PresentMon）沿用各自许可，许可文本在 `licenses/` 下。

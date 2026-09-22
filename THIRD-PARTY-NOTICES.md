@@ -1,10 +1,10 @@
-# 第三方组件与许可声明（RC11）
+# 第三方组件与许可声明
 
-本文件随 WpeBaker 便携包（`WpeBaker-win-x64-preview.zip`）与源码包
-（`WpeBaker-source.zip`）一起分发，列出成品里包含或静态链接的全部第三方组件。
-许可全文在便携包 `licenses\` 目录下；对应的完整源码在源码包里，获取方式见 `SOURCE.md`。
+本文件随 WpeBaker 便携包（`WpeBaker-<version>-win-x64.zip`）与源码包
+（`WpeBaker-<version>-source.zip`）一起分发，列出成品里包含或静态链接的全部第三方组件。
+许可全文在便携包 `licenses\` 目录下；对应的完整源码在本仓库与源码包里，获取方式见 `SOURCE.md`。
 
-「修改」一列指我们是否改动过该组件的源码；补丁路径都是源码包内的相对路径。
+「修改」一列指我们是否改动过该组件的源码；补丁路径都是本仓库内的相对路径，`.deps\` 开头的是源码包内的依赖快照。
 许可文本一列是 `licenses\` 下的文件名（本文件同目录的 `licenses\` 是打包用的核对副本，
 2026-09-18 从各上游按锁定版本下载，文本 SHA256 见本文件末尾）。
 
@@ -12,9 +12,9 @@
 
 | 组件 | 版本 / 提交 | 许可 | 来源 | 修改 | 补丁位置 |
 |---|---|---|---|---|---|
-| open-wallpaper-engine（`renderer\wpe-render.exe`） | 父仓 gitlink `ce30024`；发布用多线程版另加 `perf/video-decode-threads`（engine `2866b4f`，父仓 `028aad68`） | GPL-2.0-only（无 "or later"） | https://github.com/waywallen/open-wallpaper-engine （上游基线 `b866e8e`） | 是 | `engine/` 整树即修改后源码；`engine-upstream.bundle` 给出上游 Git 身份；`patches\embedded-video-runtime.patch`、`patches\scene-script-offline.patch`、`patches\wavsen-offline.patch`；多线程版补丁 `patches\renderer-mt\` |
+| open-wallpaper-engine（`renderer\wpe-render.exe`） | 本仓库 `engine/`（分叉，带完整 Git 历史）；1.0.x 发行用 engine `2866b4f`，见 `SOURCE.md`「历史发行」 | GPL-2.0-only（无 "or later"），仅适用于 `engine/` 目录 | https://github.com/waywallen/open-wallpaper-engine （上游基点 `b866e8e`） | 是 | `engine/` 即修改后的完整源码；改动是 `b866e8e` 之上的普通提交（`git log b866e8e..d732d62`） |
 
-许可文本：`licenses\open-wallpaper-engine.LICENSE`（GPL v2 全文）。
+许可文本：`licenses\open-wallpaper-engine.LICENSE`（GPL v2 全文，即本仓库 `engine/LICENSE`）。
 GPL v2 第 3 条要求二进制与对应完整源码一起提供 —— 两个 zip 必须发布在同一位置。
 **引擎 LICENSE 没有 "or later"，所以不能合入 GPL v3 代码。**
 
@@ -32,7 +32,7 @@ GPL v2 第 3 条要求二进制与对应完整源码一起提供 —— 两个 z
 | Vulkan-Headers | `v1.4.321` | Apache-2.0 OR MIT | https://github.com/KhronosGroup/Vulkan-Headers | 否 | — | `vulkan-headers.LICENSE.md` + `vulkan-headers.Apache-2.0.txt` + `vulkan-headers.MIT.txt` |
 | Vulkan-Loader | `v1.4.321` | Apache-2.0 | https://github.com/KhronosGroup/Vulkan-Loader | 否 | — | `vulkan-loader.LICENSE.txt` |
 | rstd | `456fec5cc2b87acdb56800e298b5712ea69cdd47` | MIT OR Apache-2.0 | https://github.com/litocpp/rstd | **是** | `scripts\dependency-patches\rstd.patch`（manifest 记 143 个文件，其中 138 个是误捕获的 lito 构建缓存，真实源码改动 5 个文件） | `rstd.LICENSE-MIT` + `rstd.LICENSE-APACHE` |
-| wavsen | `77dfd33d07112c05df4682e08b98e19153ebe3ab` | MIT OR Apache-2.0（作者 2026-09-18 确认同样适用于锁定的 `77dfd33`：https://github.com/hypengw/wavsen/issues/5） | https://github.com/hypengw/wavsen | **是** | `scripts\dependency-patches\wavsen.patch`（18 个文件）；多线程解码追加改动见 `patches\renderer-mt\parent-perf-video-decode-threads.patch` | `wavsen.LICENSE-MIT` + `wavsen.LICENSE-APACHE`（取自 `5a0ddb9`，见下方说明） |
+| wavsen | `77dfd33d07112c05df4682e08b98e19153ebe3ab` | MIT OR Apache-2.0（作者 2026-09-18 确认同样适用于锁定的 `77dfd33`：https://github.com/hypengw/wavsen/issues/5） | https://github.com/hypengw/wavsen | **是** | `scripts\dependency-patches\wavsen.patch`（19 个文件，已含多线程视频解码改动） | `wavsen.LICENSE-MIT` + `wavsen.LICENSE-APACHE`（取自 `5a0ddb9`，见下方说明） |
 | vvk | `f53d60cc70938d0485802750deeb15d18ba033ea` | MIT OR Apache-2.0（作者 2026-09-18 在 `220116d` 加入许可文件，并确认适用于此前所有提交：https://github.com/litocpp/vvk/issues/3） | https://github.com/litocpp/vvk | **是** | `scripts\dependency-patches\vvk.patch`（6 个文件） | `vvk.LICENSE-MIT` + `vvk.LICENSE-APACHE` |
 
 FreeType 选 FTL 时上游要求在文档里致谢，发布文档与便携包 README 的 License 节须包含：
