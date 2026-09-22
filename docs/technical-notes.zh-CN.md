@@ -458,7 +458,7 @@ python scripts/package-source.py --native-build-dir build/native-speed22 --outpu
 `git fetch <bundle> <分支>:<分支>` + `git switch`，别对 `scripts/` 用 `checkout -f`、`reset --hard`、
 `stash` 或 `clean -x`；确实要还原某个文件时只还原那一个路径，不要整树还原。
 
-测试跑法是 `dotnet run --project tests/Baker.Core.Tests -c Release --no-build`（`dotnet test` 对该工程空转），当前 1299 项全过（本分支 Release 实测，`status=passed`）。
+测试跑法是 `dotnet test tests/Baker.Core.Tests -c Release`（xUnit）。`--filter "Layer!=L3"` 只跑不需要 ffmpeg、渲染器、GPU 或本机夹具的 L0–L2；L3 的工具路径取 `tools.json` 或 `WPE_BAKER_TOOLS_JSON`，缺了就跳过并写明原因。
 
 原生依赖、输入版本、对应源码和完整构建说明见 `scripts/NATIVE-BUILD-STATE.md`、`scripts/DISTRIBUTION-DEPENDENCIES.md` 及输入 lock 文件。合成测试素材在 `tests/`。真实 Workshop 素材和生成文件放在忽略的 `artifacts/`，不进入公开源码包。
 

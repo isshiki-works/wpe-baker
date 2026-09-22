@@ -10,12 +10,8 @@ internal static class NativeGpuEncodeChecks
         output = Path.GetFullPath(output);
         if (Directory.Exists(output)) throw new IOException("GPU encode check output must be new.");
         Directory.CreateDirectory(output);
-        string root = Directory.GetCurrentDirectory();
-        string portable = Path.Combine(root, "dist/progress-preview-20260919/WpeBaker");
-        var tools = new NativeTools(Path.Combine(root, "build/native-local22/bin/wpe-render.exe"),
-            Path.Combine(portable, "encoder/ffmpeg.exe"), Path.Combine(portable, "encoder/ffprobe.exe"),
-            [Path.Combine(root, ".tools/llvm-mingw-22/bin"), Path.Combine(root, ".deps/ffmpeg-lgpl21/prefix/bin")]);
-        string fixture = Path.Combine(root, "tests/fixtures/native/shader-clock");
+        var tools = LocalTools.Tools!;
+        string fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         string croppedFixture = Path.Combine(output, "fixture");
         using (var source = new ProjectSource(fixture)) await source.ExtractAsync(croppedFixture, timeout.Token);
