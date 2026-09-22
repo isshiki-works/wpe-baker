@@ -46,7 +46,7 @@ public class RenderJobContractTests
             GpuTiming: true, TraceScene: true, EffectRenderScale: 0.5,
             UserProperties: new JsonObject { ["speed"] = 1.25 }, InputTimeline: [new JsonObject { ["frame"] = 0, ["x"] = 0.5 }],
             OfflineVideoRateOverrides: [new JsonObject { ["owner_layer_id"] = 3, ["rate_numerator"] = 99, ["rate_denominator"] = 100 }]);
-        Assert.Equal(GpuLoopExpected, (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
+        Assert.Equal(GpuLoopExpected.ReplaceLineEndings("\n"), (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
     });
 
     [Fact]
@@ -55,7 +55,7 @@ public class RenderJobContractTests
         var request = new RenderRequest(Fixture, Fixture, Path.Combine(dir, "gpu-resize"), 64, 48, 60, 1, 10,
             IncludeAudio: true, GpuEncoding: new("hevc_vulkan", 23), EncodeWidth: 32, EncodeHeight: 24,
             MatchEffectResolution: true, Input: new JsonObject { ["mouse"] = new JsonObject { ["x"] = 0.25 } });
-        Assert.Equal(GpuResizeExpected, (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
+        Assert.Equal(GpuResizeExpected.ReplaceLineEndings("\n"), (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
     });
 
     [Fact]
@@ -63,7 +63,7 @@ public class RenderJobContractTests
     {
         var request = new RenderRequest(Fixture, Fixture, Path.Combine(dir, "sampled"), 256, 144, 60, 1, 120, WarmupFrames: 30,
             FrameSamplesOnly: true, FrameSampleStride: 8, FrameSampleWidth: 64, FrameSamplePhaseFrames: 13, CollectSamplingCoverage: true);
-        Assert.Equal(SampledExpected, (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
+        Assert.Equal(SampledExpected.ReplaceLineEndings("\n"), (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
     });
 
     [Fact]
@@ -71,7 +71,7 @@ public class RenderJobContractTests
     {
         var request = new RenderRequest(Fixture, Fixture, Path.Combine(dir, "sparse"), 256, 144, 60, 1, 120,
             FrameSamplesOnly: true, FrameSampleStride: 8, FrameSampleWidth: 64);
-        Assert.Equal(SparseExpected, (await JobAsync(dir, request, "sparse-readback-v1")).ReplaceLineEndings("\n"));
+        Assert.Equal(SparseExpected.ReplaceLineEndings("\n"), (await JobAsync(dir, request, "sparse-readback-v1")).ReplaceLineEndings("\n"));
     });
 
     private const string SampledExpected = """
@@ -118,6 +118,7 @@ public class RenderJobContractTests
         """;
 
     // 期望值取自改动前（main f7b50705）的代码对同一请求写出的 renderer-job.json（D:/Periodica/runs/C1.4/jobs-gpu/old/）。
+    // 两边都统一成 LF 再比：CI 检出按 autocrlf 把本文件变成 CRLF，写 job 的换行随平台。
     private const string GpuLoopExpected = """
         {
           "schema_version": 1,
