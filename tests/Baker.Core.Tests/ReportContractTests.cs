@@ -1,0 +1,297 @@
+using System.Text.Json.Nodes;
+using Baker.Core;
+using Xunit;
+
+// C1.4：渲染器 job/result、plan.loop、bake.json 拒绝报告的类型化。守住写出的字段、顺序与缺省写法（逐字节），以及 result 的读取映射。
+
+[Trait("Layer", "L1")]
+public class RenderJobContractTests
+{
+    private static readonly string Fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
+
+    // 假渲染器：--version 报全部能力，真正渲染时退出 3。job 在启动渲染前就写好了，失败后照样能读。
+    private static NativeTools FakeTools(string dir)
+    {
+        string renderer = Path.Combine(dir, "fake-render.cmd");
+        File.WriteAllText(renderer, "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo wpe-render test features=sparse-readback-v1,gpu-samples-v1," +
+            "gpu-sampling-coverage-v1,gpu-encode-v1,gpu-capture-v1,gpu-loop-encode-v1,gpu-encode-resize-v1,gpu-quality-samples-v1," +
+            "effect-render-scale-v1,adaptive-effect-resolution-v1,capture-force-visible-owner-v1\r\n  exit /b 0\r\n)\r\nexit /b 3\r\n");
+        string ffmpeg = Path.Combine(dir, "ffmpeg.exe"), ffprobe = Path.Combine(dir, "ffprobe.exe");
+        File.WriteAllBytes(ffmpeg, []);
+        File.WriteAllBytes(ffprobe, []);
+        return new NativeTools(renderer, ffmpeg, ffprobe, []);
+    }
+
+    private static async Task<string> JobAsync(string dir, RenderRequest request)
+    {
+        await Assert.ThrowsAnyAsync<IOException>(() => new NativeRenderRunner(FakeTools(dir)).RenderAsync(request));
+        string job = await File.ReadAllTextAsync(Path.Combine(request.OutputDirectory, "renderer-job.json"));
+        string text = job.Replace(Path.GetFullPath(dir).Replace("\\", "\\\\"), "<DIR>").Replace(Fixture.Replace("\\", "\\\\"), "<FIXTURE>");
+        await File.WriteAllTextAsync(Path.Combine(dir, Path.GetFileName(request.OutputDirectory) + ".job.json"), text);
+        return text;
+    }
+
+    [Fact]
+    public async Task GpuLoopEncodeJob() => await TestTemp.Run(async dir =>
+    {
+        var request = new RenderRequest(Fixture, Fixture, Path.Combine(dir, "gpu-loop"), 130, 98, 30000, 1001, 37,
+            WarmupFrames: 7, Seed: 17, PixelPacking: "rgba_side_by_side",
+            GpuEncoding: new(CrossfadeFrames: 6, Crop: new(130, 98, 16, 10, 100, 78), RetainLoopWindow: true, RetainQualitySamples: true),
+            CollectAlphaBounds: true, BoundsIncludeRgb: true, EncodedFrames: 31, RetainFrames: [0, 1, 30, 31, 36],
+            LayerSelection: new([1], TransparentBackground: true, IncludePostprocessing: false),
+            CaptureTarget: new(OwnerLayerId: 1, EffectOrdinal: 0, ForceVisibleOwner: true),
+            OrthographicCaptureViewport: new(65, 49, 130, 98), DeviceUuid: "00112233445566778899aabbccddeeff",
+            GpuTiming: true, TraceScene: true, EffectRenderScale: 0.5,
+            UserProperties: new JsonObject { ["speed"] = 1.25 }, InputTimeline: [new JsonObject { ["frame"] = 0, ["x"] = 0.5 }],
+            OfflineVideoRateOverrides: [new JsonObject { ["owner_layer_id"] = 3, ["rate_numerator"] = 99, ["rate_denominator"] = 100 }]);
+        Assert.Equal(GpuLoopExpected, (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
+    });
+
+    [Fact]
+    public async Task GpuResizeAudioJob() => await TestTemp.Run(async dir =>
+    {
+        var request = new RenderRequest(Fixture, Fixture, Path.Combine(dir, "gpu-resize"), 64, 48, 60, 1, 10,
+            IncludeAudio: true, GpuEncoding: new("hevc_vulkan", 23), EncodeWidth: 32, EncodeHeight: 24,
+            MatchEffectResolution: true, Input: new JsonObject { ["mouse"] = new JsonObject { ["x"] = 0.25 } });
+        Assert.Equal(GpuResizeExpected, (await JobAsync(dir, request)).ReplaceLineEndings("\n"));
+    });
+
+    // 期望值取自改动前（main f7b50705）的代码对同一请求写出的 renderer-job.json（D:/Periodica/runs/C1.4/jobs-gpu/old/）。
+    private const string GpuLoopExpected = """
+        {
+          "schema_version": 1,
+          "source": "<FIXTURE>\\scene.json",
+          "assets": "<FIXTURE>",
+          "output_dir": "<DIR>\\gpu-loop\\native",
+          "width": 130,
+          "height": 98,
+          "fps_num": 30000,
+          "fps_den": 1001,
+          "frames": 37,
+          "warmup_frames": 7,
+          "seed": 17,
+          "raw_stdout": false,
+          "write_audio": false,
+          "capture_target": {
+            "owner_layer_id": 1,
+            "effect_ordinal": 0,
+            "force_visible_owner": true
+          },
+          "orthographic_capture_viewport": {
+            "center_x": 65,
+            "center_y": 49,
+            "width": 130,
+            "height": 98
+          },
+          "layer_selection": {
+            "include_layers": [
+              1
+            ],
+            "transparent_background": true,
+            "include_postprocessing": false
+          },
+          "input_timeline": [
+            {
+              "frame": 0,
+              "x": 0.5
+            }
+          ],
+          "user_properties": {
+            "speed": 1.25
+          },
+          "offline_video_rate_overrides": [
+            {
+              "owner_layer_id": 3,
+              "rate_numerator": 99,
+              "rate_denominator": 100
+            }
+          ],
+          "device_uuid": "00112233445566778899aabbccddeeff",
+          "gpu_timing": true,
+          "trace_scene": true,
+          "effect_render_scale": 0.5,
+          "match_effect_resolution": false,
+          "gpu_encode": {
+            "codec": "h264_vulkan",
+            "qp": 18,
+            "packed_alpha": true,
+            "encoded_frames": 31,
+            "collect_bounds": true,
+            "bounds_include_rgb": true,
+            "retain_frames": [
+              0,
+              1,
+              3,
+              7,
+              11,
+              15,
+              18,
+              22,
+              26,
+              30,
+              31,
+              36
+            ],
+            "crossfade_frames": 6,
+            "retain_loop_window": true,
+            "crop_x": 16,
+            "crop_y": 10,
+            "crop_width": 100,
+            "crop_height": 78
+          }
+        }
+        """;
+    private const string GpuResizeExpected = """
+        {
+          "schema_version": 1,
+          "source": "<FIXTURE>\\scene.json",
+          "assets": "<FIXTURE>",
+          "output_dir": "<DIR>\\gpu-resize\\native",
+          "width": 64,
+          "height": 48,
+          "fps_num": 60,
+          "fps_den": 1,
+          "frames": 10,
+          "warmup_frames": 0,
+          "seed": 0,
+          "raw_stdout": false,
+          "write_audio": true,
+          "input": {
+            "mouse": {
+              "x": 0.25
+            }
+          },
+          "match_effect_resolution": true,
+          "gpu_encode": {
+            "codec": "hevc_vulkan",
+            "qp": 23,
+            "packed_alpha": false,
+            "encoded_frames": 10,
+            "collect_bounds": false,
+            "bounds_include_rgb": false,
+            "retain_frames": [],
+            "crossfade_frames": 0,
+            "retain_loop_window": false,
+            "crop_x": 0,
+            "crop_y": 0,
+            "crop_width": 64,
+            "crop_height": 48,
+            "resize_width": 32,
+            "resize_height": 24
+          }
+        }
+        """;
+}
+
+[Trait("Layer", "L0")]
+public class RenderResultContractTests
+{
+    private const string Complete = """
+        {"schema_version":1,"status":"complete","written_frames":12,"renderer_error_count":0,"device_uuid":"ABCD",
+         "capture_source":{"render_target":"_rt_x","width":64},"readback_width":32,"readback_height":16,"gpu_sampled":true,
+         "output_frame_stride":4,"output_frame_phase":1,"effect_render_scale":0.5,"match_effect_resolution":true,
+         "gpu_encoded":true,"readback_frames":3,"gpu_encoder":"h264_vulkan","gpu_packed_alpha":false,
+         "gpu_capture":{"encoded_packets":12,"crop":{"x":2},"loop_crossfade":{"status":"applied","crossfade_frames":2.50}},
+         "sampling_coverage":{"status":"complete","minimum_alpha":0.10},"runtime_layers":[],"runtime_dependencies":[],
+         "runtime_video_rate_overrides":[{"owner_layer_id":3}],"future_field":{"nested":[1,2]}}
+        """;
+
+    [Fact]
+    public void ReadsSnakeCaseFieldsAndIgnoresUnknown()
+    {
+        RenderResult r = RenderResult.Parse(Complete);
+        Assert.Equal(("ABCD", "_rt_x", 32u, 16u, true, 4u, 1ul), (r.DeviceUuid, r.CaptureSource?.RenderTarget, r.ReadbackWidth, r.ReadbackHeight,
+            r.GpuSampled, r.OutputFrameStride, r.OutputFramePhase));
+        Assert.Equal((0.5, true, true, 3ul, "h264_vulkan", false), (r.EffectRenderScale, r.MatchEffectResolution, r.GpuEncoded,
+            r.ReadbackFrames, r.GpuEncoder, r.GpuPackedAlpha));
+        Assert.Equal(12ul, r.GpuCapture?.EncodedPackets);
+        Assert.Equal("applied", r.GpuCapture?.LoopCrossfade?["status"]?.GetValue<string>());
+        Assert.Equal(2, r.GpuCapture?.Crop?["x"]?.GetValue<int>());
+        Assert.NotNull(r.RuntimeLayers);
+        Assert.NotNull(r.RuntimeDependencies);
+        Assert.Single(r.RuntimeVideoRateOverrides!);
+    }
+
+    [Fact]
+    public void KeepsOriginalTextForManifest()
+    {
+        // manifest.native_result 与转写进 manifest 的子对象要保留原文（字段、顺序、数值写法）。
+        RenderResult r = RenderResult.Parse(Complete);
+        Assert.Equal(JsonNode.Parse(Complete)!.ToJsonString(), r.Json.ToJsonString());
+        Assert.Equal("""{"status":"complete","minimum_alpha":0.10}""", r.SamplingCoverage!.ToJsonString());
+        Assert.Equal("""{"status":"applied","crossfade_frames":2.50}""", r.GpuCapture!.LoopCrossfade!.ToJsonString());
+    }
+
+    [Theory]
+    [InlineData("""{"status":"complete","written_frames":12,"renderer_error_count":0}""", true)]
+    [InlineData("""{"status":"failed","written_frames":12,"renderer_error_count":0}""", false)]
+    [InlineData("""{"status":"complete","written_frames":11,"renderer_error_count":0}""", false)]
+    [InlineData("""{"status":"complete","written_frames":12,"renderer_error_count":1}""", false)]
+    [InlineData("""{"status":"complete","written_frames":12}""", false)]
+    public void ConfirmsFrameSequence(string json, bool confirmed) => Assert.Equal(confirmed, RenderResult.Parse(json).Confirms(12));
+}
+
+[Trait("Layer", "L0")]
+public class LoopReportContractTests
+{
+    private static LoopReport Report(JsonArray candidates, LoopNoCandidateReason? reason = null, EmbeddedVideoLoopLimit? limit = null,
+        JsonObject? sway = null, JsonObject? particle = null, long cadence = 1) =>
+        new(30000, 1001, "locked_clip_rates", CommonLoopPreference.Balanced, 2, false, null, 60, reason, candidates, [], false,
+            VideoControlScope.Resolve(new JsonObject { ["objects"] = new JsonArray() }, new JsonObject()),
+            new LoopContentCadence(cadence, [new("video:1", 1, "clip", new CommonLoopRational(30))]), [], sway, particle, limit);
+
+    [Fact]
+    public void WritesV3FieldsInOrderWithNullsWhereTheyWereWritten()
+    {
+        JsonObject json = Report([], new LoopNoCandidateReason(new(CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling, 60), 1, 2, 3, 4)).ToJson();
+        Assert.Equal("schema_version,status,fps_num,fps_den,retime_mode,loop_preference,retime_budget_percent,budget_relaxed," +
+            "fixed_frame_step,maximum_seconds,no_candidate_reason,candidates,unresolved,source_static,video_control_scope," +
+            "content_cadence,evidence,visual_seam,encoded_loop", string.Join(",", json.Select(x => x.Key)));
+        Assert.Equal("no_analytic_candidate", json["status"]!.GetValue<string>());
+        Assert.Equal("balanced", json["loop_preference"]!.GetValue<string>());
+        Assert.Equal("""{"kind":"FixedPeriodExceedsCeiling","ceiling_seconds":60,"fixed_period_seconds":null,"shader_component_count":1""" +
+            ""","runtime_period_count":2,"particle_cycle_count":3,"runtime_clock_uniform_count":4}""", json["no_candidate_reason"]!.ToJsonString());
+        JsonObject withCandidate = Report([new JsonObject { ["frames"] = 1 }]).ToJson();
+        Assert.Equal("analytic_candidate_requires_seam_validation", withCandidate["status"]!.GetValue<string>());
+        Assert.True(withCandidate.ContainsKey("no_candidate_reason") && withCandidate["no_candidate_reason"] is null);
+        Assert.True(withCandidate.ContainsKey("fixed_frame_step") && withCandidate["fixed_frame_step"] is null);
+    }
+
+    [Fact]
+    public void OptionalRecordsAreAppendedOnlyWhenPresent()
+    {
+        var applied = new EmbeddedVideoLoopLimit(60, 30, 1920, 1080, false, 60, 1, 1e6);
+        JsonObject json = Report([], sway: new JsonObject { ["enabled"] = true }, particle: new JsonObject { ["kind"] = "p" }, limit: applied).ToJson();
+        Assert.Equal("sway_retime,loop_length_default,embedded_video_limit", string.Join(",", json.Select(x => x.Key).TakeLast(3)));
+        Assert.False(Report([], limit: applied with { FitSeconds = 90 }).ToJson().ContainsKey("embedded_video_limit"));
+        Assert.Equal("encoded_loop", Report([]).ToJson().Last().Key);
+    }
+
+    [Fact]
+    public void ContentCadenceBasisFollowsRepeatCount()
+    {
+        JsonObject repeated = Report([], cadence: 2).ToJson()["content_cadence"]!.AsObject();
+        JsonObject single = Report([], cadence: 1).ToJson()["content_cadence"]!.AsObject();
+        Assert.StartsWith("Every temporal mechanism", repeated["basis"]!.GetValue<string>());
+        Assert.StartsWith("No proven clip cadence", single["basis"]!.GetValue<string>());
+        Assert.Equal("""[{"component":"video:1","owner_layer_id":1,"track_name":"clip","clip_fps_numerator":30,"clip_fps_denominator":1}]""",
+            single["clips"]!.ToJsonString());
+    }
+}
+
+[Trait("Layer", "L0")]
+public class BakeRejectionContractTests
+{
+    [Fact]
+    public void WritesHeaderEvidenceTailTrailerInOrder()
+    {
+        var plan = new JsonObject { ["loop"] = new JsonObject() };
+        var evidence = new JsonObject { ["reason"] = "r", ["disk_budget"] = new JsonObject { ["x"] = 1 } };
+        var trailer = new JsonObject { ["reason_zh"] = "中", ["reason_en"] = "en" };
+        JsonObject json = new BakeRejection("candidate_rejected_disk_space", "abc", plan, 0.5, true, "no_suitable_loop", evidence, trailer).ToJson();
+        const string expected = """{"schema_version":2,"artifact_kind":"hybrid_video_candidate","status":"candidate_rejected_disk_space","source_sha256":"abc","source_digest_scope":"project-source-files-sha256-v2","plan":{"loop":{}},"effect_render_scale":0.5,"match_effect_resolution":true,"reason":"r","disk_budget":{"x":1},"frames":0,"groups":[],"loop_validation":"no_suitable_loop","official_playback":"not_verified","measured_gain":"not_verified","reason_zh":"中","reason_en":"en"}""";
+        Assert.Equal(expected,
+            json.ToJsonString(new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+        Assert.Same(plan, json["plan"]);
+    }
+}
