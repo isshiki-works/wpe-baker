@@ -760,3 +760,23 @@ public class NativeProgressCancelTests
         await ProgressCancellationChecks.RunNativeAsync(Path.Combine(Directory.CreateTempSubdirectory("periodica-tests-").FullName, "out"));
     }
 }
+
+[Trait("Layer", "L0")]
+public class CommonLoopSolverCaseTests
+{
+    [Fact]
+    public void Run()
+    {
+        CommonLoopSolverCaseChecks.Run(Assert.True);
+    }
+}
+
+[Trait("Layer", "L1")]
+public class HybridCompositionValidatorCaseTests
+{
+    [Fact]
+    public async Task Run()
+    {
+        await HybridCompositionValidatorCaseChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+    }
+}

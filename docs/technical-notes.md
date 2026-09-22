@@ -1160,10 +1160,10 @@ between branches with `git fetch <bundle> <branch>:<branch>` plus
 `git switch`, and keep `checkout -f`, `reset --hard`, `stash` and `clean -x`
 away from `scripts/`; restore a single path rather than the tree.
 
-Tests run with
-`dotnet run --project tests/Baker.Core.Tests -c Release --no-build`
-(`dotnet test` does nothing for this project); 1299 checks pass on this
-build. See `scripts/NATIVE-BUILD-STATE.md` and
+Tests run with `dotnet test tests/Baker.Core.Tests -c Release` (xUnit;
+`--filter "Layer!=L3"` skips the tests that need ffmpeg, the renderer, a GPU
+or local fixtures; those read tool paths from `tools.json` or
+`WPE_BAKER_TOOLS_JSON` and are skipped with a reason when missing). See `scripts/NATIVE-BUILD-STATE.md` and
 `scripts/DISTRIBUTION-DEPENDENCIES.md` for native dependency versions and
 full build notes. Synthetic test assets live in `tests/`; real Workshop
 assets and generated output live in the git-ignored `artifacts/` folder and
