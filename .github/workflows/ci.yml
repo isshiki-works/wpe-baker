@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    # Baker.App 是 WPF（net10.0-windows），只能在 Windows 上构建
+    runs-on: windows-latest
+    # 正常约 1.5 分钟；测试卡死（跨进程槽位、子进程等待）时 15 分钟变红，而不是挂满默认的 6 小时
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      # 按 global.json 装 SDK 10.0.400，与 scripts/fetch-dotnet.py 给本地装的是同一个版本。
+      # 运行器镜像目前恰好预装了 10.0.400，但镜像每周更新、只留各功能段的最新补丁；到时不装就会换成别的 SDK。
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      # 测试工程只引用 Baker.Core 并链接 Baker.App 的 3 个文件，App 和 Cli 的编译错误得单独构建才看得到
+      - name: 构建 Baker.App
+        run: dotnet build src/Baker.App -c Release
+
+      - name: 构建 Baker.Cli
+        run: dotnet build src/Baker.Cli -c Release
+
+      # L3 要 GPU、渲染器和 ffmpeg，CI 不跑
+      - name: 测试 L0–L2
+        run: dotnet test tests/Baker.Core.Tests -c Release --filter "Layer!=L3" --logger "trx;LogFileName=ci.trx"
+
+      # 测试工程没被识别成测试工程时（例如缺 Microsoft.NET.Test.Sdk），dotnet test 一个测试不跑、不写 trx、退出码仍是 0。
+      # 所以直接读 trx 数通过的个数；没有 trx 时 Get-Content 报错，这一步同样失败。70 = 当前 L0–L2 测试数，测试增删时一起改。
+      - name: 核对 trx
+        run: |
+          $c = ([xml](Get-Content tests/Baker.Core.Tests/TestResults/ci.trx)).TestRun.ResultSummary.Counters
+          "trx：总数 $($c.total)，执行 $($c.executed)，通过 $($c.passed)，失败 $($c.failed)"
+          if ([int]$c.passed -lt 70) { throw "只通过了 $($c.passed) 个测试，L0–L2 应至少 70 个" }
