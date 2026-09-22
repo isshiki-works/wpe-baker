@@ -657,10 +657,8 @@ bool VulkanRender::Impl::init(RenderInitInfo info, SceneLoadBenchRecorderView lo
     m_match_effect_resolution = info.match_effect_resolution;
 
     m_cpu_readback = info.output_mode == RenderOutputMode::CpuReadback;
-    m_cpu_timing_requested = info.gpu_timing || std::getenv("WPE_RENDER_CPU_PROFILE") != nullptr;
-    const char* pipeline = std::getenv("WPE_RENDER_GPU_PIPELINE");
-    m_gpu_pipeline = m_cpu_readback && (info.gpu_encode || info.collect_sampling_coverage) && !info.gpu_timing &&
-        (!pipeline || std::string_view(pipeline) != "0");
+    m_cpu_timing_requested = info.gpu_timing;
+    m_gpu_pipeline = m_cpu_readback && (info.gpu_encode || info.collect_sampling_coverage) && !info.gpu_timing;
     m_prepass->setTransparentBackground(info.layer_selection.enabled &&
                                         info.layer_selection.transparent_background);
     if (info.orthographic_capture_viewport.has_value()) {
@@ -910,8 +908,7 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
     const auto cell_pixels = std::uint64_t((extent.width + m_readback_width - 1) / m_readback_width) *
         ((extent.height + m_readback_height - 1) / m_readback_height);
     const auto sample_bytes = std::uint64_t(m_readback_width) * m_readback_height * 4;
-    const char* gpu_samples = std::getenv("WPE_RENDER_GPU_SAMPLES");
-    m_gpu_samples = m_sample_readback && (!gpu_samples || std::string_view(gpu_samples) != "0") &&
+    m_gpu_samples = m_sample_readback &&
         (features & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) &&
         (queue_properties[usize(m_device->graphics_queue().family_index)].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
         sample_bytes <= m_device->limits().maxStorageBufferRange &&

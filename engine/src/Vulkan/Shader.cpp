@@ -550,22 +550,6 @@ bool owe::vulkan::CompileAndLinkShaderUnits(std::span<const ShaderCompUnit> comp
             return false;
         }
 
-        if (std::getenv("WP_DUMP_SPIRV")) {
-            static int  dump_idx = 0;
-            std::string base     = "/tmp/ww_dump_" + std::to_string(dump_idx++) + "_" + entry_str;
-            std::string spv_path = base + ".spv";
-            std::string src_path = base + ".glsl";
-            if (auto* f = std::fopen(spv_path.c_str(), "wb")) {
-                std::fwrite(spv->spirv.data(), sizeof(u32), spv->spirv.size(), f);
-                std::fclose(f);
-            }
-            if (auto* f = std::fopen(src_path.c_str(), "wb")) {
-                std::fwrite(unit.src.data(), 1, unit.src.size(), f);
-                std::fclose(f);
-            }
-            rstd_info("dumped SPIR-V + source: {}.{{spv,glsl}}", base);
-        }
-
         spvs.emplace_back(std::move(spv));
     }
 
