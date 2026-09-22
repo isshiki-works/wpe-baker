@@ -10,7 +10,7 @@
 // Adding a workshop with a previously-unseen version automatically extends
 // the checked data without requiring an allow-list update.
 
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 import rstd.cppstd;
 import wescene.json;

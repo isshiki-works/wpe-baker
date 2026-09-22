@@ -1,3 +1,7 @@
+module;
+
+#include <Core/OrderedTaskPool.hpp>
+
 export module wescene.resource_registry:prepared;
 import rstd;
 import rstd.cppstd;
@@ -542,8 +546,9 @@ private:
     usize                                                 m_next_submit {};
     usize                                                 m_completed {};
     Option<rstd::sync::Arc<dyn<resource::TextureLoader>>> m_loader;
-    Option<rstd::thread::ThreadPool>                      m_pool;
-    Option<rstd::thread::BlockingTaskSet<DecodedContent>> m_tasks;
+    // 解码结果按提交顺序取回（上传顺序确定）；同时在飞的任务不超过 worker 数，限制已解码未上传的内存。
+    std::unique_ptr<OrderedTaskPool<DecodedContent>>      m_tasks;
+    usize                                                 m_workers {};
 };
 
 class ResourcePlanPrepareVisitor {
@@ -782,28 +787,11 @@ public:
         if (loader.is_err()) return Err(rstd::move(loader).unwrap_err_unchecked());
         session.m_loader = Some(rstd::move(loader).unwrap_unchecked());
 
-        const auto worker_count = rstd::min(usize(4), session.m_pending.len());
-        auto       builder      = rstd::thread::ThreadPoolBuilder::make();
-        builder.worker_count(worker_count);
-        builder.thread_name(String::make("owe-texture-decode"_str));
-        auto pool = builder.build();
-        if (pool.is_err()) {
-            return Err(resource::ResourceError {
-                .kind    = resource::ResourceErrorKind::BackendFailure,
-                .message = String::make("create texture decode thread pool failed"_str),
-            });
-        }
-        session.m_pool = Some(rstd::move(pool).unwrap_unchecked());
-        auto tasks = rstd::thread::BlockingTaskSet<ResourcePrepareSession::DecodedContent>::make(
-            session.m_pool->handle(), worker_count);
-        if (tasks.is_err()) {
-            return Err(resource::ResourceError {
-                .kind    = resource::ResourceErrorKind::BackendFailure,
-                .message = String::make("create texture decode task set failed"_str),
-            });
-        }
-        session.m_tasks = Some(rstd::move(tasks).unwrap_unchecked());
-        return SubmitAvailable(session);
+        session.m_workers = rstd::min(usize(4), session.m_pending.len());
+        session.m_tasks   = std::make_unique<OrderedTaskPool<ResourcePrepareSession::DecodedContent>>(
+            session.m_workers.to_primitive());
+        SubmitAvailable(session);
+        return Ok(empty {});
     }
 
     auto Continue(ResourcePrepareSession&                                session,
@@ -818,22 +806,8 @@ public:
         usize           prepared_count {};
         while (prepared_count < batch_size && session.m_completed < session.m_pending.len()) {
             TexturePrepareTrace decode_trace(observer, TexturePrepareTrace::Kind::Decode);
-            auto                completion = session.m_tasks->recv();
+            auto                item = session.m_tasks->Next();
             decode_trace.Finish();
-            if (completion.is_none()) {
-                return Err(resource::ResourceError {
-                    .kind    = resource::ResourceErrorKind::BackendFailure,
-                    .message = String::make("texture decode task set closed early"_str),
-                });
-            }
-            auto decoded = rstd::move(*completion).into_value();
-            if (decoded.is_none()) {
-                return Err(resource::ResourceError {
-                    .kind    = resource::ResourceErrorKind::BackendFailure,
-                    .message = String::make("texture decode task cancelled"_str),
-                });
-            }
-            auto item = rstd::move(decoded).unwrap_unchecked();
             if (item.image.is_err()) {
                 return Err(rstd::move(item.image).unwrap_err_unchecked());
             }
@@ -877,48 +851,31 @@ public:
 
             ++session.m_completed;
             ++prepared_count;
-            auto submitted = SubmitAvailable(session);
-            if (submitted.is_err()) return Err(rstd::move(submitted).unwrap_err_unchecked());
+            SubmitAvailable(session);
         }
         return Ok(ResourcePrepareProgress::BatchReady);
     }
 
 private:
-    static auto SubmitAvailable(ResourcePrepareSession& session)
-        -> Result<empty, resource::ResourceError> {
-        while (session.m_next_submit < session.m_pending.len()) {
-            const auto index     = session.m_next_submit;
-            auto       key       = session.m_pending[index].key.clone();
-            auto       loader    = session.m_loader->clone();
-            auto       submitted = session.m_tasks->try_submit(
+    static void SubmitAvailable(ResourcePrepareSession& session) {
+        while (session.m_next_submit < session.m_pending.len() &&
+               session.m_tasks->InFlight() < session.m_workers.to_primitive()) {
+            const auto index  = session.m_next_submit;
+            auto       key    = session.m_pending[index].key.clone();
+            auto       loader = session.m_loader->clone();
+            session.m_tasks->Submit(
                 [index, key = rstd::move(key), loader = rstd::move(loader)]() mutable {
                     return ResourcePrepareSession::DecodedContent {
                         .index = index,
                         .image = loader->LoadTexture(key.as_str()),
                     };
                 });
-            if (submitted.is_err()) {
-                if (submitted.unwrap_err_unchecked() ==
-                    rstd::thread::BlockingTaskSetSubmitError::Full) {
-                    break;
-                }
-                return Err(resource::ResourceError {
-                    .kind    = resource::ResourceErrorKind::BackendFailure,
-                    .message = String::make("submit texture decode task failed"_str),
-                });
-            }
             ++session.m_next_submit;
         }
-        if (session.m_next_submit == session.m_pending.len()) session.m_tasks->close();
-        return Ok(empty {});
     }
 
     static void FinishTasks(ResourcePrepareSession& session) {
-        {
-            auto tasks = session.m_tasks.take();
-        }
-        auto pool = session.m_pool.take();
-        if (pool.is_some()) rstd::move(*pool).join();
+        session.m_tasks.reset();
         session.m_loader = None();
     }
 

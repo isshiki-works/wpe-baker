@@ -9,6 +9,7 @@
 #endif
 #include <cstdio>
 #include <filesystem>
+#include <CLI11.hpp>
 #ifndef WPE_RENDER_SOURCE_DIGEST
 #define WPE_RENDER_SOURCE_DIGEST "unrecorded"
 #endif
@@ -771,13 +772,31 @@ int main(int argc, char** argv) {
     rstd::log::set_logger(logger);
     rstd::log::set_max_level(rstd::log::LevelFilter::Info);
     try {
-        auto args = Arguments(argc, argv);
-        if (args.size() == 2 && args[1] == "--version") {
+        // 只有两种调用形式：--version 与 render --job <file>（C# 与脚本只用这两种）。
+        // 其余输入（含 -h/--help、多余参数、两者混用）一律打印用法、退出码 2，与换 CLI11 前一致。
+        CLI::App app { "wpe-render" };
+        app.set_help_flag();
+        bool version = false;
+        app.add_flag("--version", version);
+        std::string job;
+        auto*       render = app.add_subcommand("render");
+        render->set_help_flag();
+        render->add_option("--job", job)->required();
+        auto                     args = Arguments(argc, argv);
+        std::vector<const char*> pointers;
+        for (const auto& arg : args) pointers.push_back(arg.c_str());
+        bool parsed = true;
+        try {
+            app.parse(static_cast<int>(pointers.size()), pointers.data());
+        } catch (const CLI::ParseError&) {
+            parsed = false;
+        }
+        if (parsed && version && !render->parsed()) {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
                       << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1\n";
             return 0;
         }
-        if (args.size() == 4 && args[1] == "render" && args[2] == "--job") return Render(Path(args[3]));
+        if (parsed && !version && render->parsed()) return Render(Path(job));
         std::cerr << "Usage: wpe-render render --job job.json\n";
         return 2;
     } catch (const std::exception& error) {

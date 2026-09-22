@@ -1,7 +1,6 @@
 # owe-core（原 lito.toml 的源文件清单与用法，T1 起手写维护）
 add_library(owe-core STATIC)
 target_sources(owe-core PUBLIC FILE_SET CXX_MODULES BASE_DIRS ../.. FILES
-  Cli.cppm
   Core.cppm
   Fft.cppm
   Fs.cppm
@@ -20,6 +19,5 @@ target_link_libraries(owe-core PUBLIC rstd.std)
 target_link_libraries(owe-core PUBLIC rstd.cppstd)
 target_link_libraries(owe-core PUBLIC rstd.json)
 target_link_libraries(owe-core PUBLIC rstd.log)
-target_link_libraries(owe-core PUBLIC rstd.argparse)
 target_link_libraries(owe-core PUBLIC wpe-eigen)
 target_link_libraries(owe-core PUBLIC nlohmann-json)

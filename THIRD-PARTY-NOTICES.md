@@ -28,6 +28,7 @@ GPL v2 第 3 条要求二进制与对应完整源码一起提供 —— 两个 z
 | quickjs-ng | `3c051980ab7e783dfbfb1c70c014ce5e05ecf24c` | MIT | https://github.com/quickjs-ng/quickjs | 否 | — | `quickjs-ng.LICENSE` |
 | VulkanMemoryAllocator | `3aa921224c154a0d2c43912bc88e1c42ce1f7607` | MIT | https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator | 否 | — | `vma.LICENSE.txt` |
 | SPIRV-Reflect（hypengw fork） | `355785128c1b6ba808e3a7d0e344814fe6cff502` | Apache-2.0 | https://github.com/hypengw/SPIRV-Reflect | 否 | — | `spirv-reflect.LICENSE` |
+| CLI11（单头文件，wpe-render 命令行） | `v2.7.2`（发布件 `CLI11.hpp`，SHA256 `ffa9a30d…`，见 `scripts\native-inputs.lock.json`） | BSD-3-Clause | https://github.com/CLIUtils/CLI11 | 否 | — | `cli11.LICENSE`（取自头文件开头的许可注释） |
 | Eigen | `bc3b39870ecb690a623a3f49149a358b95c5781d` | MPL-2.0 为主，个别文件 BSD 等 MPL2 兼容许可 | https://gitlab.com/libeigen/eigen | 否 | — | `eigen.COPYING.MPL2` + `eigen.COPYING.README` |
 | nlohmann/json | `v3.12.0`（发布包 `include.zip`，SHA256 `b8cb0ef2…59372`） | MIT | https://github.com/nlohmann/json | 否 | — | `nlohmann-json.LICENSE.MIT` |
 | Vulkan-Headers | `v1.4.321` | Apache-2.0 OR MIT | https://github.com/KhronosGroup/Vulkan-Headers | 否 | — | `vulkan-headers.LICENSE.md` + `vulkan-headers.Apache-2.0.txt` + `vulkan-headers.MIT.txt` |
@@ -101,6 +102,9 @@ vvk 的完整源码与我们的补丁在源码包 `.deps\vvk\`、`scripts\depend
 GPL-2.0-only 的引擎静态链接 Apache-2.0-only 的组件（SPIRV-Reflect、Vulkan-Loader 导入库），
 按 FSF 的观点存在兼容性争议。这个结构是上游本来就有的，本文件只做记录。
 
+只在构建期使用、不进成品的：GoogleTest `v1.18.0`（BSD-3-Clause，https://github.com/google/googletest ，
+只链进引擎单测程序；锁条目见 `scripts\native-inputs.lock.json`）。
+
 ## 8. 核对副本的文本 SHA256（2026-09-18 下载）
 
 | 文件 | SHA256（前 16 位） |
@@ -120,6 +124,7 @@ GPL-2.0-only 的引擎静态链接 Apache-2.0-only 的组件（SPIRV-Reflect、V
 | vulkan-headers-LICENSES-MIT.txt | `1ca3502222d967f3` |
 | vulkan-loader-LICENSE.txt | `43c0a37e6a0fa7ff` |
 | nlohmann-json-LICENSE.MIT | `46a65cffd1ea9551` |
+| cli11.LICENSE（2026-09-23 从 v2.7.2 头文件提取） | `a4e99505fae59bea` |
 | rstd-LICENSE-MIT | `dc69d4de4e50e20b` |
 | rstd-LICENSE-APACHE | `cfc7749b96f63bd3` |
 | wavsen-LICENSE-MIT | `2d1edaf74e77c63e` |
@@ -133,4 +138,4 @@ GPL-2.0-only 的引擎静态链接 Apache-2.0-only 的组件（SPIRV-Reflect、V
 | x265-COPYING | `d8afb1bcc7a2cfc6` |
 
 打包时优先从构建机 `.deps\<组件>\` 里的原始许可文件拷贝（那是真正参与构建的副本）；
-本目录的 21 份下载件是台式机 `.deps` 为空时的兜底与核对基准。
+本目录的 22 份下载件是台式机 `.deps` 为空时的兜底与核对基准。

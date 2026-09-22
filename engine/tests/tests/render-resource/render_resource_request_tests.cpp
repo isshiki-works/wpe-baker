@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 import rstd;
 import rstd.cppstd;

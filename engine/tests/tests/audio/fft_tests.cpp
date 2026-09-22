@@ -1,6 +1,6 @@
 #include <cmath>
 #include <cstdio>
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 import owe.fft;
 import rstd;

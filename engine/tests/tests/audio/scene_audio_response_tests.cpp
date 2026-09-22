@@ -1,5 +1,5 @@
 #include <cmath>
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 import owe.audio_response;
 import owe.scene_audio_response;

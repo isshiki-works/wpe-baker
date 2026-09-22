@@ -28,7 +28,7 @@
 // respectively; when you add a new owe::GetJsonValue(json, "key", ...) call for a
 // top-level field, list it here too.
 
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 import rstd.cppstd;
 import wescene.json;

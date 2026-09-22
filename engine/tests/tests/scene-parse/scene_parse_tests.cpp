@@ -11,7 +11,7 @@
 // MdlParser / TexImageParser too, which can hit unrelated assertions
 // on rare .mdl inputs and would mask scene.json regressions.
 
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 #include <cmath>
 

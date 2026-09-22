@@ -1,4 +1,4 @@
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 import rstd.cppstd;
 import wescene.types;

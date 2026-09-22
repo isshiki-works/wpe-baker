@@ -1,4 +1,4 @@
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 import rstd.bench;
 import wescene.load_bench;

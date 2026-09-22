@@ -11,6 +11,7 @@ import json
 import pathlib
 import shutil
 import sys
+import tarfile
 import tempfile
 import urllib.request
 import zipfile
@@ -44,12 +45,17 @@ SOURCES = [
     ("vulkan-headers", "https://github.com/KhronosGroup/Vulkan-Headers", "v1.4.321"),
 ]
 
+def archive_suffix(url: str) -> str:
+    """缓存文件名按 URL 后缀区分：zip、tar.gz 或单个头文件（CLI11 只发布单头）。"""
+    return ".tar.gz" if url.endswith(".tar.gz") else ".hpp" if url.endswith(".hpp") else ".zip"
+
 def obtain(name: str, url: str, expected: str | None, base: pathlib.Path) -> dict:
     expected = expected or LOCKED.get(url)
     base.mkdir(parents=True, exist_ok=True)
     cache = base / "downloads"
     cache.mkdir(exist_ok=True)
-    archive = cache / (name + ".zip")
+    suffix = archive_suffix(url)
+    archive = cache / (name + suffix)
     if not archive.exists():
         temporary = archive.with_suffix(".part")
         print("Downloading", name, flush=True)
@@ -62,15 +68,22 @@ def obtain(name: str, url: str, expected: str | None, base: pathlib.Path) -> dic
     if expected and expected != digest:
         raise RuntimeError(f"SHA256 mismatch for {name}: {digest}")
     destination = base / name
-    if not destination.exists():
+    if not destination.exists() and suffix == ".hpp":
+        destination.mkdir()
+        shutil.copyfile(archive, destination / url.rsplit("/", 1)[1])
+    elif not destination.exists():
         with tempfile.TemporaryDirectory(prefix=name + "-", dir=base) as temporary:
             unpack = pathlib.Path(temporary)
-            with zipfile.ZipFile(archive) as zipped:
-                for member in zipped.infolist():
-                    resolved = (unpack / member.filename).resolve()
-                    if not resolved.is_relative_to(unpack.resolve()):
-                        raise RuntimeError("Unsafe archive member: " + member.filename)
-                zipped.extractall(unpack)
+            if suffix == ".tar.gz":
+                with tarfile.open(archive) as packed:
+                    packed.extractall(unpack, filter="data")
+            else:
+                with zipfile.ZipFile(archive) as zipped:
+                    for member in zipped.infolist():
+                        resolved = (unpack / member.filename).resolve()
+                        if not resolved.is_relative_to(unpack.resolve()):
+                            raise RuntimeError("Unsafe archive member: " + member.filename)
+                    zipped.extractall(unpack)
             children = list(unpack.iterdir())
             if len(children) == 1 and children[0].is_dir():
                 shutil.move(str(children[0]), str(destination))
