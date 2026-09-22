@@ -27,7 +27,7 @@ public class PresetCascadeTests
     [Fact]
     public async Task Run()
     {
-        await PresetCascadeChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => PresetCascadeChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -35,9 +35,9 @@ public class PresetCascadeTests
 public class SourceDiagnosisTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        SourceDiagnosisChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => SourceDiagnosisChecks.Run(Assert.True, dir));
     }
 }
 
@@ -97,7 +97,7 @@ public class OutputResolutionTests
     [Fact]
     public async Task Run()
     {
-        await OutputResolutionChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => OutputResolutionChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -107,7 +107,7 @@ public class OutputFrameRateTests
     [Fact]
     public async Task Run()
     {
-        await OutputFrameRateChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => OutputFrameRateChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -147,7 +147,7 @@ public class TemporaryCaptureTests
     [Fact]
     public async Task Run()
     {
-        await TemporaryCaptureChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => TemporaryCaptureChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -155,9 +155,9 @@ public class TemporaryCaptureTests
 public class BakeDiskBudgetTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        BakeDiskBudgetChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => BakeDiskBudgetChecks.Run(Assert.True, dir));
     }
 }
 
@@ -165,9 +165,9 @@ public class BakeDiskBudgetTests
 public class ReparsePointTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        ReparsePointChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ReparsePointChecks.Run(Assert.True, dir));
     }
 }
 
@@ -177,7 +177,7 @@ public class SegmentedMasterRewriteTests
     [Fact]
     public async Task Run()
     {
-        await SegmentedMasterRewriteChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => SegmentedMasterRewriteChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -197,7 +197,7 @@ public class CandidateExportTests
     [Fact]
     public async Task Run()
     {
-        await CandidateExportChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => CandidateExportChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -207,7 +207,7 @@ public class SingleShotAllocationTests
     [Fact]
     public async Task Run()
     {
-        await SingleShotAllocationChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => SingleShotAllocationChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -217,7 +217,7 @@ public class DaytimeSplitTests
     [Fact]
     public async Task Run()
     {
-        await DaytimeSplitChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => DaytimeSplitChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -227,7 +227,7 @@ public class TradeoffOptionsTests
     [Fact]
     public async Task Run()
     {
-        await TradeoffOptionsChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => TradeoffOptionsChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -267,7 +267,7 @@ public class FullFrameDemotionTests
     [Fact]
     public async Task Run()
     {
-        await FullFrameDemotionChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => FullFrameDemotionChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -297,7 +297,7 @@ public class SdrRadianceClosureTests
     [Fact]
     public async Task Run()
     {
-        await SdrRadianceClosureChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => SdrRadianceClosureChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -315,9 +315,9 @@ public class LoopPreferenceTests
 public class LoopCeilingTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        LoopCeilingChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => LoopCeilingChecks.Run(Assert.True, dir));
     }
 }
 
@@ -337,7 +337,7 @@ public class VideoDominanceTests
     [Fact]
     public async Task Run()
     {
-        await VideoDominanceChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => VideoDominanceChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -347,7 +347,7 @@ public class ResidualLayoutGateTests
     [Fact]
     public async Task Run()
     {
-        await ResidualLayoutGateChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ResidualLayoutGateChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -367,7 +367,7 @@ public class AnalysisToolLimitationTests
     [Fact]
     public async Task Run()
     {
-        await AnalysisToolLimitationChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => AnalysisToolLimitationChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -377,7 +377,7 @@ public class ProgramInlineTests
     [Fact]
     public async Task Run()
     {
-        await ProgramInlineChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ProgramInlineChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -397,7 +397,7 @@ public class HybridPlanFormatTests
     [Fact]
     public async Task Run()
     {
-        await HybridPlanFormatChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => HybridPlanFormatChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -405,9 +405,9 @@ public class HybridPlanFormatTests
 public class ExactVideoLoopTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        ExactVideoLoopChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ExactVideoLoopChecks.Run(Assert.True, dir));
     }
 }
 
@@ -415,9 +415,9 @@ public class ExactVideoLoopTests
 public class SpriteSeamPhaseTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        SpriteSeamPhaseChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => SpriteSeamPhaseChecks.Run(Assert.True, dir));
     }
 }
 
@@ -445,9 +445,9 @@ public class SourceStartOffsetTests
 public class LoopFixTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        LoopFixChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => LoopFixChecks.Run(Assert.True, dir));
     }
 }
 
@@ -465,9 +465,9 @@ public class SavedLoopApplyTests
 public class CanonicalRepeatNoiseTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        CanonicalRepeatNoiseChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => CanonicalRepeatNoiseChecks.Run(Assert.True, dir));
     }
 }
 
@@ -475,9 +475,9 @@ public class CanonicalRepeatNoiseTests
 public class SourceStaticLoopTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        SourceStaticLoopChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => SourceStaticLoopChecks.Run(Assert.True, dir));
     }
 }
 
@@ -485,9 +485,9 @@ public class SourceStaticLoopTests
 public class SuitabilityVerdictTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        SuitabilityVerdictChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => SuitabilityVerdictChecks.Run(Assert.True, dir));
     }
 }
 
@@ -495,9 +495,9 @@ public class SuitabilityVerdictTests
 public class HybridLoopGeneralizationTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        HybridLoopGeneralizationChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => HybridLoopGeneralizationChecks.Run(Assert.True, dir));
     }
 }
 
@@ -505,9 +505,9 @@ public class HybridLoopGeneralizationTests
 public class ShaderPeriodGeneralizationTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        ShaderPeriodGeneralizationChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ShaderPeriodGeneralizationChecks.Run(Assert.True, dir));
     }
 }
 
@@ -515,9 +515,9 @@ public class ShaderPeriodGeneralizationTests
 public class ShaderEffectivePassTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        ShaderEffectivePassChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ShaderEffectivePassChecks.Run(Assert.True, dir));
     }
 }
 
@@ -525,9 +525,9 @@ public class ShaderEffectivePassTests
 public class ShaderAdditionalPeriodTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        ShaderAdditionalPeriodChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ShaderAdditionalPeriodChecks.Run(Assert.True, dir));
     }
 }
 
@@ -535,9 +535,9 @@ public class ShaderAdditionalPeriodTests
 public class WaterRippleSineClockTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        WaterRippleSineClockChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => WaterRippleSineClockChecks.Run(Assert.True, dir));
     }
 }
 
@@ -545,9 +545,9 @@ public class WaterRippleSineClockTests
 public class ShaderSplitPeriodTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        ShaderSplitPeriodChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ShaderSplitPeriodChecks.Run(Assert.True, dir));
     }
 }
 
@@ -555,9 +555,9 @@ public class ShaderSplitPeriodTests
 public class WaterFlowPeriodTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        WaterFlowPeriodChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => WaterFlowPeriodChecks.Run(Assert.True, dir));
     }
 }
 
@@ -577,7 +577,7 @@ public class SwayRetimeTests
     [Fact]
     public async Task Run()
     {
-        await SwayRetimeChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => SwayRetimeChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -595,9 +595,9 @@ public class RetimeBudgetTests
 public class EffectPrefixProfileTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        EffectPrefixProfileChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => EffectPrefixProfileChecks.Run(Assert.True, dir));
     }
 }
 
@@ -607,7 +607,7 @@ public class HybridHierarchyGeneralizationTests
     [Fact]
     public async Task Run()
     {
-        await HybridHierarchyGeneralizationChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => HybridHierarchyGeneralizationChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -617,7 +617,7 @@ public class OverlayExclusionTests
     [Fact]
     public async Task Run()
     {
-        await OverlayExclusionChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => OverlayExclusionChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -627,7 +627,7 @@ public class WallpaperEnginePropertiesTests
     [Fact]
     public async Task Run()
     {
-        await WallpaperEnginePropertiesChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => WallpaperEnginePropertiesChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -637,7 +637,7 @@ public class ParticleRealtimeTests
     [Fact]
     public async Task Run()
     {
-        await ParticleRealtimeChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ParticleRealtimeChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -645,10 +645,10 @@ public class ParticleRealtimeTests
 public class ParticleStationarityTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         Assert.SkipUnless(File.Exists(ParticleStationarityChecks.SurveyPath), "缺本机粒子普查夹具：" + ParticleStationarityChecks.SurveyPath + "（用 WPE_PARTICLE_SURVEY 指定目录）");
-        ParticleStationarityChecks.Run(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ParticleStationarityChecks.Run(Assert.True, dir));
     }
 }
 
@@ -658,7 +658,7 @@ public class NativeFrameSampleTests
     [Fact]
     public async Task Run()
     {
-        await NativeFrameSampleChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => NativeFrameSampleChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -668,7 +668,7 @@ public class OpaqueCaptureRejectionTests
     [Fact]
     public async Task Run()
     {
-        await OpaqueCaptureRejectionChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => OpaqueCaptureRejectionChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -689,7 +689,7 @@ public class ExactFrameRangeTests
     public async Task Run()
     {
         Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
-        await ExactFrameRangeChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ExactFrameRangeChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -700,7 +700,7 @@ public class ReferenceSeamTests
     public async Task Run()
     {
         Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
-        await ReferenceSeamChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => ReferenceSeamChecks.RunAsync(Assert.True, dir));
     }
 }
 
@@ -731,7 +731,7 @@ public class NativeGpuEncodeTests
     public async Task Run()
     {
         Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
-        await NativeGpuEncodeChecks.RunAsync(Path.Combine(Directory.CreateTempSubdirectory("periodica-tests-").FullName, "out"));
+        await TestTemp.Run(dir => NativeGpuEncodeChecks.RunAsync(Path.Combine(dir, "out")));
     }
 }
 
@@ -742,7 +742,7 @@ public class NativeSamplingCoverageTests
     public async Task Run()
     {
         Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
-        await SparseReadbackChecks.RunCoverageAsync(Path.Combine(Directory.CreateTempSubdirectory("periodica-tests-").FullName, "out"));
+        await TestTemp.Run(dir => SparseReadbackChecks.RunCoverageAsync(Path.Combine(dir, "out")));
     }
 }
 
@@ -754,7 +754,7 @@ public class NativeSparseReadbackTests
     {
         Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
         Assert.SkipUnless(LocalTools.ReferenceRenderer is not null, "tools.json 没有 reference_renderer（对照用的旧版 wpe-render.exe）");
-        await SparseReadbackChecks.RunNativeAsync(Path.Combine(Directory.CreateTempSubdirectory("periodica-tests-").FullName, "out"));
+        await TestTemp.Run(dir => SparseReadbackChecks.RunNativeAsync(Path.Combine(dir, "out")));
     }
 }
 
@@ -765,7 +765,7 @@ public class NativeProgressCancelTests
     public async Task Run()
     {
         Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
-        await ProgressCancellationChecks.RunNativeAsync(Path.Combine(Directory.CreateTempSubdirectory("periodica-tests-").FullName, "out"));
+        await TestTemp.Run(dir => ProgressCancellationChecks.RunNativeAsync(Path.Combine(dir, "out")));
     }
 }
 
@@ -785,6 +785,6 @@ public class HybridCompositionValidatorCaseTests
     [Fact]
     public async Task Run()
     {
-        await HybridCompositionValidatorCaseChecks.RunAsync(Assert.True, Directory.CreateTempSubdirectory("periodica-tests-").FullName);
+        await TestTemp.Run(dir => HybridCompositionValidatorCaseChecks.RunAsync(Assert.True, dir));
     }
 }
