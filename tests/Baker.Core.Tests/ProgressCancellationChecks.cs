@@ -40,7 +40,7 @@ internal static class ProgressCancellationChecks
         if (Directory.Exists(output)) throw new IOException("Native check output must be new.");
         Directory.CreateDirectory(output);
         var tools = LocalTools.Tools!;
-        string fixture = LocalTools.Fixture("shader-clock");
+        string fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
         var request = new RenderRequest(fixture, fixture, "", 128, 96, 30, 1, 1_000_000, WarmupFrames: 17);
         using var source = new ProjectSource(fixture);
         string before = await source.SourceHashAsync();

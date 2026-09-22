@@ -11,7 +11,7 @@ internal static class NativeGpuEncodeChecks
         if (Directory.Exists(output)) throw new IOException("GPU encode check output must be new.");
         Directory.CreateDirectory(output);
         var tools = LocalTools.Tools!;
-        string fixture = LocalTools.Fixture("shader-clock");
+        string fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         string croppedFixture = Path.Combine(output, "fixture");
         using (var source = new ProjectSource(fixture)) await source.ExtractAsync(croppedFixture, timeout.Token);

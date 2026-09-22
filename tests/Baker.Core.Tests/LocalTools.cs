@@ -12,8 +12,6 @@ internal static class LocalTools
     internal static readonly string RepositoryRoot = Ancestors().FirstOrDefault(directory =>
         Directory.Exists(Path.Combine(directory, "tests", "fixtures", "native"))) ?? Environment.CurrentDirectory;
 
-    internal static string Fixture(string name) => Path.Combine(RepositoryRoot, "tests", "fixtures", "native", name);
-
     internal static readonly string Missing;
     internal static readonly NativeTools? Tools;
     internal static readonly string? ReferenceRenderer;

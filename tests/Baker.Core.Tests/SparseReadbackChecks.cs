@@ -9,7 +9,7 @@ internal static class SparseReadbackChecks
         output=Path.GetFullPath(output);
         if (Directory.Exists(output)) throw new IOException("Coverage check output must be new.");
         Directory.CreateDirectory(output);
-        string original=LocalTools.Fixture("shader-clock"), fixture=Path.Combine(output,"fixture");
+        string original=Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock"), fixture=Path.Combine(output,"fixture");
         using var timeout=new CancellationTokenSource(TimeSpan.FromMinutes(2));
         using (var source=new ProjectSource(original)) await source.ExtractAsync(fixture,timeout.Token);
         await File.WriteAllTextAsync(Path.Combine(fixture,"shaders/probe.frag"), """
@@ -84,7 +84,7 @@ internal static class SparseReadbackChecks
         foreach (string fixtureName in new[] { "shader-clock", "random-clock" })
         foreach (ulong? phase in new ulong?[] { null, 3 })
         {
-            string fixture = LocalTools.Fixture(fixtureName);
+            string fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", fixtureName);
             string label = fixtureName + "-" + (phase?.ToString() ?? "zero");
             var request = new RenderRequest(fixture, fixture, "", 128, 96, 30, 1, 41,
                 WarmupFrames: 7, Seed: 17, FrameSampleStride: 8, FrameSampleWidth: 31,
