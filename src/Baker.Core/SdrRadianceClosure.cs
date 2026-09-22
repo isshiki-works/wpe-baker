@@ -62,7 +62,7 @@ public static class SdrRadianceClosure
             ["blocker"] = null };
         if (!hdrEnabled)
         {
-            result["reason"] = "Scene general.hdr is not enabled; the group capture has no HDR intermediate to clip.";
+            new Message("reason.sdr_scene_not_hdr").Write(result, "reason");
             return result;
         }
         var runtimeLayers = trace?["runtime_layers"] as JsonArray;

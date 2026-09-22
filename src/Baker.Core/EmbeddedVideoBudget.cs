@@ -106,7 +106,7 @@ public static class EmbeddedVideoBudget
 
     /// <summary>主渲染前的判定：任一视频组外推超限就是 predicted_over_limit，带中英理由；没有样本时 not_estimated，不拒绝。</summary>
     public static JsonObject EvaluateProbe(IReadOnlyList<ProbeGroup> groups, ulong frames, uint fpsNumerator, uint fpsDenominator,
-        string? notEstimatedReason = null)
+        Message? notEstimatedReason = null)
     {
         ArgumentNullException.ThrowIfNull(groups);
         var result = new JsonObject { ["maximum_bytes"] = MaximumBytes, ["frames"] = frames,
@@ -115,7 +115,7 @@ public static class EmbeddedVideoBudget
         if (groups.Count == 0)
         {
             result["status"] = "not_estimated";
-            result["reason"] = notEstimatedReason ?? "The composition probe produced no encoded video group to extrapolate.";
+            (notEstimatedReason ?? new Message("bake.probe_no_encoded_group")).Write(result, "reason");
             return result;
         }
         var records = new JsonArray();

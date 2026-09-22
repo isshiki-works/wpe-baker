@@ -9,8 +9,8 @@ internal static class HybridLoopAllocation
     internal static JsonObject? Propose(JsonObject plan, JsonObject scene) =>
         Explain(plan, scene) is JsonObject result && result["status"]?.GetValue<string>() == "proposed" ? result : null;
 
-    private static JsonObject NotApplicable(string reason) =>
-        new() { ["schema_version"] = 1, ["status"] = "not_applicable", ["reason"] = reason };
+    private static JsonObject NotApplicable(string key) =>
+        new Message(key).Write(new JsonObject { ["schema_version"] = 1, ["status"] = "not_applicable" }, "reason");
 
     /// <summary>
     /// 与 <see cref="Propose"/> 同一判定，但提议不成立时也给出原因，
@@ -20,7 +20,7 @@ internal static class HybridLoopAllocation
     {
         var baked = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
             .SelectMany(group => ReadIds(group["layer_ids"])).ToHashSet();
-        if (baked.Count == 0) return NotApplicable("No layer is allocated to video, so there is no smaller bake allocation left to try.");
+        if (baked.Count == 0) return NotApplicable("reason.allocation_nothing_baked");
         var objects = (scene["objects"]?.AsArray()
             ?? throw new InvalidDataException("Loop allocation requires source objects."))
             .OfType<JsonObject>().ToDictionary(HybridScenePlanner.Id);
@@ -61,12 +61,10 @@ internal static class HybridLoopAllocation
         triggers.UnionWith(baked.Where(id => objects[id].ContainsKey("particle") && !particleStationary.GetValueOrDefault(id)));
 
         var added = triggers.Select(id => rootOf[id]).Where(root => !retained.Contains(root)).ToHashSet();
-        if (added.Count == 0) return NotApplicable(
-            "No baked layer is a particle system that fails the stationary-random criteria or owns an unresolved loop mechanism, so retaining whole author subtrees would keep the same allocation.");
+        if (added.Count == 0) return NotApplicable("reason.allocation_no_trigger");
         retained.UnionWith(added);
         int[] remaining = objects.Keys.Where(id => baked.Contains(id) && !retained.Contains(rootOf[id])).ToArray();
-        if (remaining.Length == 0) return NotApplicable(
-            "Retaining the author subtrees of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help.");
+        if (remaining.Length == 0) return NotApplicable("reason.allocation_nothing_left");
 
         return new JsonObject {
             ["schema_version"] = 1,

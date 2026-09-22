@@ -716,16 +716,15 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 !reasons[id].Contains("reads_current_framebuffer"))).ToArray();
         bool moveOverlays = request.LiveOverlayPlacement == "foreground" && overlayRoots.Length > 0;
         if (moveOverlays) roots = roots.Except(overlayRoots).Concat(overlayRoots).ToArray();
-        var occlusionTradeoff = new JsonObject {
+        var occlusionTradeoff = new Message("reason.foreground_occlusion").Write(new JsonObject {
             ["status"] = moveOverlays ? "applied" : overlayRoots.Length > 0 ? "available" : "not_needed",
             ["selection"] = request.LiveOverlayPlacement,
-            ["reason"] = "Foreground placement changes occlusion with later source roots. The original parent hierarchy and transforms are retained.",
             ["promoted_roots"] = new JsonArray(overlayRoots.Select(root => (JsonNode)new JsonObject {
                 ["root_id"] = root, ["name"] = objects[root]["name"]?.DeepClone(),
                 ["layer_names"] = JsonSerializer.SerializeToNode(sourceOrder.Where(id => allocationOf[id] == root && MayBeVisible(id) && Contributes(id))
                     .Select(id => objects[id]["name"]?.GetValue<string>() ?? id.ToString())),
                 ["crossed_root_ids"] = JsonSerializer.SerializeToNode(sourceRootOrder.Skip(Array.IndexOf(sourceRootOrder, root) + 1).Except(overlayRoots))
-            }).ToArray()) };
+            }).ToArray()) }, "reason");
         var groups = new JsonArray();
         var current = new List<int>();
         var rootSequence = new JsonArray();

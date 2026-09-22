@@ -48,7 +48,7 @@ internal static class FullFrameDemotion
         ArgumentNullException.ThrowIfNull(plan);
         int[]? retained = FullFrameSingleGroupRetention(plan, runtimeDependencies);
         var layers = Layers(plan);
-        return new JsonObject {
+        return new Message(retained is null ? "reason.demotion_unavailable" : "reason.demotion_available").Write(new JsonObject {
             ["status"] = retained is null ? "unavailable" : "available",
             ["root_ids"] = JsonSerializer.SerializeToNode(retained ?? []),
             // root_ids 是分配根，可能是作者根拆开后的子单元；--retain-live 只收源作者根。这里给出照抄就能跑的完整列表，
@@ -59,10 +59,7 @@ internal static class FullFrameDemotion
             ["canvas_fractions"] = new JsonArray((retained ?? []).Select(root => (JsonNode?)(
                 layers.Where(layer => AllocationRoot(layer) == root && VisibleDrawable(layer)).Select(Fraction).OfType<double>().ToArray() is { Length: > 0 } found
                     ? JsonValue.Create(Math.Round(found.Sum(), 6)) : null)).ToArray()),
-            ["remaining_group"] = (plan["video_groups"] as JsonArray)?.FirstOrDefault()?["id"]?.DeepClone(),
-            ["reason"] = retained is null
-                ? "No suffix of whole video roots leaves a single opaque group that carries the scene clear."
-                : "Re-running analyze with --retain-live for these roots leaves one opaque video group; analyze does not apply it on its own." };
+            ["remaining_group"] = (plan["video_groups"] as JsonArray)?.FirstOrDefault()?["id"]?.DeepClone() }, "reason");
     }
 
     /// <summary>尝试尾组降级。采纳条件全部满足才返回新的 plan，否则返回 null 并在 record 里写明理由。</summary>
@@ -73,7 +70,7 @@ internal static class FullFrameDemotion
         record = new JsonObject { ["status"] = "not_applied", ["scope"] = Scope };
         if (probing || Layout(plan) != "full_frame")
         {
-            record["reason"] = "Tail-group demotion only applies to a full-frame layout.";
+            new Message("reason.demotion_not_full_frame").Write(record, "reason");
             return null;
         }
         JsonObject? demotedPlan;
@@ -86,8 +83,7 @@ internal static class FullFrameDemotion
         record["blocking_live_root_ids"] = JsonSerializer.SerializeToNode(BlockingLiveRoots(plan, layers));
         if (demotedPlan is null)
         {
-            record["reason"] = "Demoting the video roots after the opaque base group does not leave exactly one opaque group that carries the scene clear, " +
-                "or its dependency closure would reach further roots.";
+            new Message("reason.demotion_no_single_opaque_group").Write(record, "reason");
             record["allocation_reason"] = rejection;
             return null;
         }
@@ -100,7 +96,7 @@ internal static class FullFrameDemotion
         // 不能用于任何正确性判断，更不能当作遮挡证明。
         if (demotedLayers.Any(layer => Fraction(layer) is null))
         {
-            record["reason"] = "A demoted visible drawable layer has an unknown canvas fraction, so the comparison against the retained group is not decidable.";
+            new Message("reason.demotion_fraction_unknown").Write(record, "reason");
             return null;
         }
         double sum = demotedLayers.Sum(layer => Fraction(layer)!.Value);
@@ -111,8 +107,7 @@ internal static class FullFrameDemotion
         record["kept_group_canvas_fraction_max"] = keptFractions.Length == 0 ? null : Math.Round(keptFractions.Max(), 6);
         if (keptFractions.Length == 0 || sum >= keptFractions.Max())
         {
-            record["reason"] = "The demoted content does not stay below the retained group's largest visible drawable canvas fraction, " +
-                "so the video would no longer carry the image; the original rejection stands.";
+            new Message("reason.demotion_video_not_dominant").Write(record, "reason");
             return null;
         }
         // 绘制顺序不变性：退回后 composition 里真正绘制的 live root 必须仍按原始分配顺序出现。
@@ -125,12 +120,12 @@ internal static class FullFrameDemotion
             .Select(root => Array.IndexOf(order, root)).ToArray();
         if (positions.Any(position => position < 0) || positions.Zip(positions.Skip(1)).Any(pair => pair.First >= pair.Second))
         {
-            record["reason"] = "The demoted composition would not keep visible drawable live roots in their recorded source allocation order; draw order must not change.";
+            new Message("reason.demotion_order_changes").Write(record, "reason");
             return null;
         }
         record["status"] = "applied";
         record["kept_group_id"] = (demotedPlan["video_groups"] as JsonArray)?.FirstOrDefault()?["id"]?.DeepClone();
-        record["reason"] = $"The {demoted.Length} video root(s) above the opaque base group stay realtime in place; draw order and occlusion are unchanged.";
+        new Message("reason.demotion_applied", [demoted.Length]).Write(record, "reason");
         return demotedPlan;
     }
 

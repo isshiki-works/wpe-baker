@@ -927,8 +927,8 @@ public static class HybridLoopService
                 if (node is not JsonObject material) continue;
                 if (material["role"] is JsonNode roleNode && (roleNode is not JsonValue roleValue || !roleValue.TryGetValue<string>(out _)))
                 {
-                    AddRuntimeMaterialUnresolved(new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value,
-                        ["detail"] = "Runtime material role is not a string, so its temporal behavior is unknown." }, unresolved);
+                    AddRuntimeMaterialUnresolved(new Message("unresolved.material_role_not_string").Write(
+                        new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value }, "detail"), unresolved);
                     continue;
                 }
                 string? role = material["role"]?.GetValue<string>();
@@ -937,8 +937,8 @@ public static class HybridLoopService
                     shaderName is not null && ruledMaterials.Contains((owner.Value, shaderName))) continue;
                 if (material["active_uniforms"] is not JsonArray uniforms)
                 {
-                    if (role is not null) AddRuntimeMaterialUnresolved(new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value,
-                        ["detail"] = "Runtime material omitted active_uniforms; it cannot establish a static or analyzed temporal state." }, unresolved);
+                    if (role is not null) AddRuntimeMaterialUnresolved(new Message("unresolved.material_omits_active_uniforms").Write(
+                        new JsonObject { ["kind"] = "runtime_material", ["owner_layer_id"] = owner.Value }, "detail"), unresolved);
                     continue;
                 }
                 if (uniforms.Any(uniform => uniform is not JsonValue value || !value.TryGetValue<string>(out _)))

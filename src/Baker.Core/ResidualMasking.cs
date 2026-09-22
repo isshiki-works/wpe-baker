@@ -445,8 +445,8 @@ public static class ResidualMasking
         result["sprite_canvas_coverage_basis"] = "随机精灵与粒子层的包围盒画布占比合计，只记录不裁决；掩盖是否可接受由第一层残差判据在全分辨率 master 上实测决定。";
         result["status"] = blocking.Count == 0 ? "residual_maskable" : "rejected";
         if (blocking.Count > 0)
-            result["reason"] = "未解析分量里有不可掩盖的项：" + string.Join("；", blocking.OfType<JsonObject>()
-                .Select(node => node["reason"]?.GetValue<string>() ?? "未给出原因"));
+            result["reason"] = MessageCatalog.Get("residual.not_maskable_items", MessageCatalog.Chinese, string.Join("；", blocking.OfType<JsonObject>()
+                .Select(node => node["reason"]?.GetValue<string>() ?? MessageCatalog.Get("residual.reason_missing", MessageCatalog.Chinese))));
         return result;
     }
 
@@ -501,8 +501,7 @@ public static class ResidualMasking
             }
             verdict["classification"] = "unrecognized";
             verdict["maskable"] = false;
-            verdict["reason"] = $"层 {spriteOwner} 的运行时动画只是没能解析出周期（{detail}），" +
-                "这属于识别不了而不是已证明非周期或随机，不允许被掩盖。";
+            verdict["reason"] = MessageCatalog.Get("residual.sprite_unrecognized", MessageCatalog.Chinese, spriteOwner, detail);
             return verdict;
         }
 
@@ -512,11 +511,10 @@ public static class ResidualMasking
         if (mechanism.Length > 0) verdict["mechanism"] = mechanism;
         verdict["classification"] = provenNonPeriodic ? "proven_nonperiodic_unbounded" : "unrecognized";
         verdict["maskable"] = false;
-        string layerPrefix = owner is int unknownOwner ? $"层 {unknownOwner} 的" : "";
+        string layerPrefix = owner is int unknownOwner ? MessageCatalog.Get("residual.layer_prefix", MessageCatalog.Chinese, unknownOwner) : "";
         verdict["reason"] = provenNonPeriodic
-            ? $"{layerPrefix}未解析分量 {kind} 已由方程证明在 {ceiling} 秒的循环上限内没有周期，" +
-              $"而这套机制的位移没有幅度上界，接缝交叉淡化盖不住它（{detail}）。"
-            : $"{layerPrefix}未解析分量 {kind} 没有可用的非周期或随机证明，也没有幅度上界（{detail}）。";
+            ? MessageCatalog.Get("residual.proven_nonperiodic_unbounded", MessageCatalog.Chinese, layerPrefix, kind, ceiling, detail)
+            : MessageCatalog.Get("residual.unrecognized_unbounded", MessageCatalog.Chinese, layerPrefix, kind, detail);
         if (mechanism == ShaderPeriodAnalysis.LightShaftDriftMechanism) AddLinearDriftGuidance(verdict, item, objects, loopCeiling);
         return verdict;
     }
