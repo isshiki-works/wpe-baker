@@ -94,3 +94,15 @@ target_sources(shader-parse-tests PRIVATE
   tests/shader-parse/shader_parse_tests.cpp)
 target_link_libraries(shader-parse-tests PRIVATE owe-test-support owe-core owe-audio owe-scene owe-vulkan rstd.std rstd.cppstd rstd.json rstd.log rstd.argparse rstd.bench rstd.test wavsen vvk::vvk spirv-reflect)
 target_compile_options(shader-parse-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
+
+# T2a：rstd 与 owe::compat 的差分测试。同一份用例（compat/cases.inc）分别对 rstd（模块，C++20）
+# 与 compat（头文件，C++23）编译进两个命名空间，main 以子进程逐例运行两侧并比较退出码、stdout、stderr。
+# 摘除 rstd（T2 集成步）时整组删除。
+add_library(compat-diff-rstd OBJECT EXCLUDE_FROM_ALL compat/side_rstd.cpp)
+target_link_libraries(compat-diff-rstd PRIVATE rstd.std rstd.cppstd rstd.log)
+add_library(compat-diff-compat OBJECT EXCLUDE_FROM_ALL compat/side_compat.cpp)
+target_link_libraries(compat-diff-compat PRIVATE owe-compat)
+set_target_properties(compat-diff-compat PROPERTIES CXX_STANDARD 23 CXX_SCAN_FOR_MODULES OFF)
+add_executable(compat-difftest EXCLUDE_FROM_ALL compat/main.cpp)
+set_target_properties(compat-difftest PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+target_link_libraries(compat-difftest PRIVATE compat-diff-rstd compat-diff-compat rstd.std rstd.cppstd rstd.log)
