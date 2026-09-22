@@ -1,6 +1,9 @@
 module;
 
 #include <rstd/macro.hpp>
+#include <cstdint>
+#include <cstring>
+#include <string>
 
 module wescene.vulkan_render;
 import wescene.spec_names;
@@ -84,7 +87,7 @@ struct ExtraInfo {
     const RenderLayerSelection* selection { nullptr };
     // X3 M1：效果 pass → （输出中需保留的 UV 矩形，逐帧 guard）
     std::unordered_map<const SceneImageEffectNode*,
-                       std::pair<std::array<double, 4>, std::shared_ptr<const std::function<bool()>>>>
+                       std::shared_ptr<const std::function<Option<std::array<double, 4>>()>>>
         region_clip;
 };
 
@@ -334,11 +337,38 @@ namespace region_clip
 struct Rect {
     double u0, v0, u1, v1;
     Rect Grow(double du, double dv) const { return { u0 - du, v0 - dv, u1 + du, v1 + dv }; }
+    Rect Union(const Rect& o) const {
+        return { std::min(u0, o.u0), std::min(v0, o.v0), std::max(u1, o.u1), std::max(v1, o.v1) };
+    }
 };
 
-// 采样坐标相对本片元 UV 的最大偏移（UV 单位）。
+// 某个 RT（某一版本）在本帧需要保留的区域：无人读 / 矩形 / 整幅。
+struct Region {
+    enum class Kind
+    {
+        Nothing,
+        Some,
+        Full
+    };
+    Kind kind { Kind::Nothing };
+    Rect r {};
+    void Add(const Rect& x) {
+        if (kind == Kind::Full) return;
+        if (! (std::isfinite(x.u0) && std::isfinite(x.v0) && std::isfinite(x.u1) && std::isfinite(x.v1))) {
+            kind = Kind::Full;
+            return;
+        }
+        r    = kind == Kind::Nothing ? x : r.Union(x);
+        kind = Kind::Some;
+    }
+    void AddFull() { kind = Kind::Full; }
+};
+
+// 采样坐标相对本片元 UV 的最大偏移（UV 单位）；extra 是只在效果支撑区内才会读到的额外采样
+// 范围（UV，已含位移），与"片元 ⊕ 偏移"取并集。
 struct Displacement {
-    double du { 0.0 }, dv { 0.0 };
+    double       du { 0.0 }, dv { 0.0 };
+    Option<Rect> extra;
 };
 
 // 读取效果参数；记录用到的参数，运行时 guard 逐帧核对它们没被脚本/用户属性改动。
@@ -348,12 +378,16 @@ struct ParamSnapshot {
     std::vector<float> values;
 };
 
+// g_Texture0 所读 RT 的尺寸（像素）。min_* 取逻辑/物理较小者，aspect_* 取两者宽高比的范围。
+struct InputExtent {
+    double min_w { 1.0 }, min_h { 1.0 }, aspect_lo { 1.0 }, aspect_hi { 1.0 };
+};
+
 class EffectParams {
 public:
-    EffectParams(SceneMaterial& material, double aspect, double min_width, double min_height,
-                 std::vector<ParamSnapshot>& used)
-        : m_material(material), m_aspect(aspect), m_min_width(min_width),
-          m_min_height(min_height), m_used(used) {}
+    EffectParams(SceneMaterial& material, InputExtent input, std::vector<ParamSnapshot>& used,
+                 bool skinned_final)
+        : m_material(material), m_input(input), m_used(used), m_skinned_final(skinned_final) {}
 
     // 常量优先，其次着色器注解默认值；被动画驱动的参数视为未知。
     Option<std::vector<float>> Get(const char* name) const {
@@ -369,30 +403,38 @@ public:
         if (value == nullptr) return None();
         std::vector<float> out;
         for (usize i {}; i < value->size(); ++i) out.push_back((*value)[i]);
+        for (float f : out)
+            if (! std::isfinite(f)) return None();
         m_used.push_back(ParamSnapshot { &m_material, name, out });
         return Some(rstd::move(out));
     }
     Option<double> Scalar(const char* name) const {
         auto v = Get(name);
-        if (v.is_none() || v->empty() || ! std::isfinite((*v)[0])) return None();
+        if (v.is_none() || v->empty()) return None();
         return Some(static_cast<double>((*v)[0]));
     }
-    int Combo(const char* name) const {
+    Option<std::array<double, 2>> Vec2(const char* name) const {
+        auto v = Get(name);
+        if (v.is_none() || v->size() < 2) return None();
+        return Some(std::array<double, 2> { (*v)[0], (*v)[1] });
+    }
+    // 着色器实际编译用的组合值；没解析到时按注解默认值 dflt（由规则按源码填写）。
+    int Combo(const char* name, int dflt = 0) const {
         auto& variant = m_material.customShader.variant;
         if (variant.is_none()) return -1;
         auto it = variant->resolved_combos.find(name);
-        if (it == variant->resolved_combos.end()) return 0;
+        if (it == variant->resolved_combos.end()) return dflt;
         return std::atoi(it->second.c_str());
     }
-    bool   HasVariant() const { return m_material.customShader.variant.is_some(); }
-    double Aspect() const { return m_aspect; }          // 输入宽/高
-    double MinWidth() const { return m_min_width; }     // 输入逻辑/物理宽的较小者（像素）
-    double MinHeight() const { return m_min_height; }
+    bool               HasVariant() const { return m_material.customShader.variant.is_some(); }
+    const InputExtent& Input() const { return m_input; }
+    bool               SkinnedFinal() const { return m_skinned_final; }
 
 private:
     SceneMaterial&              m_material;
-    double                      m_aspect, m_min_width, m_min_height;
+    InputExtent                 m_input;
     std::vector<ParamSnapshot>& m_used;
+    bool                        m_skinned_final;
 };
 
 using BoundFn = Option<Displacement> (*)(const EffectParams&);
@@ -411,31 +453,202 @@ Option<Displacement> WaterWaves(const EffectParams& p) {
         if (exponent2.is_none() || *exponent2 <= 0.0) return None();
     }
     const double d = *strength * *strength;
-    return Some(Displacement { d, d });
+    return Some(Displacement { d, d, None() });
 }
 
-// genericimage3（图层自身材质，常作最终合成 pass）：v_TexCoord.xy = a_TexCoord，片元只在
-// v_TexCoord.xy 采 g_Texture0；SPRITESHEET 改纹理坐标，SKINNING/MORPHING 改位置，
-// PRELIGHTING/LIGHTING 换矩阵路径，这些组合一律当未知。
-Option<Displacement> GenericImage3(const EffectParams& p) {
+// genericimage2/3/4（图层自身材质，常作最终合成 pass）：v_TexCoord.xy = a_TexCoord，片元只在
+// v_TexCoord.xy 采 g_Texture0。SPRITESHEET 改纹理坐标，MORPHING 改位置，PRELIGHTING/LIGHTING
+// 换矩阵路径，一律当未知。SKINNING 只在最终 pass 走逐帧 CPU 蒙皮包围盒时接受：三份着色器
+// 的蒙皮都是 localPos = Σ w_k·(a_Position·g_Bones[i_k])，与 CPU 端 SkinnedFinalRegion 同式。
+Option<Displacement> GenericImage(const EffectParams& p) {
     if (! p.HasVariant()) return None();
-    for (const char* combo : { "SPRITESHEET", "SKINNING", "MORPHING", "PRELIGHTING", "LIGHTING" })
+    for (const char* combo : { "SPRITESHEET", "MORPHING", "PRELIGHTING", "LIGHTING" })
         if (p.Combo(combo) != 0) return None();
+    if (p.Combo("SKINNING") != 0 && ! p.SkinnedFinal()) return None();
     return Some(Displacement {});
 }
 
+// twirl（效果目录 effects/twirl，芙莉莲工程自带版本）：
+//   t = [ELLIPTICAL: Rot(g_Axis)·] ((p − c)·(aspect, 1))，[ELLIPTICAL: t.x *= g_Ratio]；
+//   feather = smoothstep(size + fea + 1e-5, size − fea, |t|)：|t| ≥ size + fea + 1e-5 时为 0，
+//   此时 mix(v_TexCoord, ·, 0) 原样返回片元 UV（逐像素）。支撑区内 t 只被旋转（anim/噪声都只
+//   改角度），|t| 不变，反变换回 UV 后 |Δx| ≤ R·k/aspect、|Δy| ≤ R·k（k = ELLIPTICAL ?
+//   max(1, 1/ratio) : 1）。REPEAT 时 frac 可把越界坐标折到对边，mix 结果在片元与折回点的
+//   连线上，所以越界的轴按 [0,1] 整轴算。MASK 分支另采 v_TexCoord.xy（逐像素）。
+Option<Displacement> Twirl(const EffectParams& p) {
+    if (! p.HasVariant()) return None();
+    auto center = p.Vec2("g_SpinCenter");
+    auto size = p.Scalar("g_Size"), feather = p.Scalar("g_Feather");
+    if (center.is_none() || size.is_none() || feather.is_none() || *size <= 0.0 ||
+        *feather < 0.0)
+        return None();
+    double k = 1.0;
+    if (p.Combo("ELLIPTICAL", 1) != 0) {
+        auto ratio = p.Scalar("g_Ratio");
+        if (ratio.is_none() || *ratio <= 0.0) return None();
+        k = std::max(1.0, 1.0 / *ratio);
+    }
+    const double R  = *size + *feather + 1e-5;
+    const double rx = R * k / (p.Input().aspect_lo * 0.99), ry = R * k;
+    Rect box { (*center)[0] - rx, (*center)[1] - ry, (*center)[0] + rx, (*center)[1] + ry };
+    if (p.Combo("REPEAT", 1) != 0) {
+        if (box.u0 < 0.0 || box.u1 > 1.0) box.u0 = std::min(box.u0, 0.0), box.u1 = std::max(box.u1, 1.0);
+        if (box.v0 < 0.0 || box.v1 > 1.0) box.v0 = std::min(box.v0, 0.0), box.v1 = std::max(box.v1, 1.0);
+    }
+    return Some(Displacement { 0.0, 0.0, Some(box) });
+}
+
+// auto_sway（工坊 3235948233，AA_VERSION 2）：片元依次绕节点中心 c_k（g_SpinCenter{k}，x 乘
+// aspect）旋转 θ_k = motionRadian_k·g_Strength·w_k。
+//   motionRadian_k = sin(·)[^exp] + sin(wind_k + π/2) + sin(g_GlobalWindOffset)
+//                    − (sin(·)[^exp]·g_Inertia + sin(wind_{k+1} + π/2))  [NOISE 各加 ±noiseamount]
+//   ⇒ |motionRadian_k| ≤ 1 + |sin(wind_k+π/2)| + |sin(offset)| + |inertia| + |sin(wind_{k+1}+π/2)|
+//   w_k = weight·(1 − weight·u_Damping)·autoMask·mask，weight/autoMask/mask ∈ [0,1]
+//   ⇒ |w_k| ≤ (0 ≤ d ≤ 0.5 ? 1 − d : 1 + |d|)
+//   绕 c 转 θ 的位移 = 2r·sin(|θ|/2) ≤ r·|θ|，r 取 c 到纹理四角（aspect 空间）最远距离加上前面
+//   各节点已产生的位移。权重的支撑区（autoMask 条带）是沿节点方向的无限长楔形，不设上界，
+//   所以只能按整幅纹理取 r。
+Option<Displacement> AutoSway(const EffectParams& p) {
+    if (! p.HasVariant() || p.Combo("AA_VERSION", 2) != 2) return None();
+    const int n = p.Combo("NODE_COUNT", 2);
+    if (n < 2 || n > 11) return None();
+    auto strength = p.Scalar("g_Strength"), inertia = p.Scalar("g_Inertia"),
+         offset = p.Scalar("g_GlobalWindOffset"), damping = p.Scalar("u_Damping");
+    if (strength.is_none() || inertia.is_none() || offset.is_none() || damping.is_none())
+        return None();
+    if (p.Combo("EXPONENT", 0) != 0) {
+        auto e = p.Scalar("g_Exponent");
+        if (e.is_none() || *e <= 0.0) return None();
+    }
+    double noise = 0.0;
+    if (p.Combo("NOISE", 0) != 0) {
+        auto amount = p.Scalar("g_NoiseAmount");
+        if (amount.is_none()) return None();
+        noise = 2.0 * std::abs(*amount);
+    }
+    const double d  = *damping;
+    const double wd = (d >= 0.0 && d <= 0.5) ? 1.0 - d : 1.0 + std::abs(d);
+    const double a  = p.Input().aspect_hi * 1.01;
+    constexpr double kHalfPi = 1.5707963267948966;
+    auto wind = [&](int k) -> Option<double> {
+        if (k > 11) return Some(static_cast<double>(kHalfPi)); // 节点 11 的"下一风向"写死 M_PI_D2
+        return p.Scalar(("g_WindDirection" + std::to_string(k)).c_str());
+    };
+    double total = 0.0;
+    for (int k = 2; k <= n; ++k) {
+        auto w0 = wind(k), w1 = wind(k + 1);
+        auto c = p.Vec2(("g_SpinCenter" + std::to_string(k)).c_str());
+        if (w0.is_none() || w1.is_none() || c.is_none()) return None();
+        const double motion = 1.0 + std::abs(std::sin(*w0 + kHalfPi)) + std::abs(std::sin(*offset)) +
+                              std::abs(*inertia) + std::abs(std::sin(*w1 + kHalfPi)) + noise;
+        const double theta = std::abs(*strength) * motion * wd;
+        const double cx = (*c)[0] * a, cy = (*c)[1];
+        double       r  = 0.0;
+        for (double x : { 0.0, a })
+            for (double y : { 0.0, 1.0 }) r = std::max(r, std::hypot(x - cx, y - cy));
+        total += (r + total) * theta;
+    }
+    return Some(Displacement { total / (p.Input().aspect_lo * 0.99), total, None() });
+}
+
+// shine_cast（芙莉莲工程自带）：沿 d = rotate((0,0.5), ·)·(1, ratio) 方向在 [p, p + d·g_Length]
+// 上取样（EDGES 2..5 每个方向 |rotate(...)| = 0.5），ratio = g_Texture0Resolution.x/.y。
+Option<Displacement> ShineCast(const EffectParams& p) {
+    if (! p.HasVariant()) return None();
+    auto length = p.Scalar("g_Length");
+    if (length.is_none()) return None();
+    const double l = std::abs(*length);
+    return Some(Displacement { 0.5 * l, 0.5 * l * p.Input().aspect_hi * 1.01, None() });
+}
+
+// shine_gaussian：blur13a 最远 5.2063·d，blur7a 最远 3·d；d = g_Scale / g_Texture0Resolution.zw，
+// VERTICAL 只沿 y，否则只沿 x。KERNEL 2（blur3a）未推导。
+Option<Displacement> ShineGaussian(const EffectParams& p) {
+    if (! p.HasVariant()) return None();
+    const int    kernel = p.Combo("KERNEL", 0);
+    const double reach  = kernel == 0 ? 5.2062900776825969 : kernel == 1 ? 3.0 : -1.0;
+    if (reach < 0.0) return None();
+    auto scale = p.Vec2("g_Scale");
+    if (scale.is_none()) return None();
+    if (p.Combo("VERTICAL", 0) != 0)
+        return Some(Displacement { 0.0, reach * std::abs((*scale)[1]) / p.Input().min_h, None() });
+    return Some(Displacement { reach * std::abs((*scale)[0]) / p.Input().min_w, 0.0, None() });
+}
+
+// shine_combine：g_Texture0（光线）在 v_TexCoord.zw、g_Texture1（previous）在 v_TexCoord.xy，
+// 都等于 a_TexCoord。COPYBG 会读屏幕，按未知处理。
+Option<Displacement> ShineCombine(const EffectParams& p) {
+    if (! p.HasVariant() || p.Combo("COPYBG", 0) != 0) return None();
+    return Some(Displacement {});
+}
+
+// iris（芙莉莲、炎珀工程自带同一份）：采样点 = v_TexCoord.xy + da·mask（MASK）或 + da，
+//   da = (mix(moveStart, moveEnd, s) + (sin, cos)·g_NoiseAmount)·g_Scale·0.001，moveStart/End 各分量是
+//   两个 sin 之和（|·| ≤ 2），s ∈ [0,1] ⇒ |da.x| ≤ (2 + |noise|)·|scale.x|·0.001。g_Rough ≤ 0 时
+//   smoothstep 两端相等会得 NaN，按未知处理。
+Option<Displacement> Iris(const EffectParams& p) {
+    if (! p.HasVariant()) return None();
+    auto scale = p.Vec2("g_Scale");
+    auto noise = p.Scalar("g_NoiseAmount"), rough = p.Scalar("g_Rough");
+    if (scale.is_none() || noise.is_none() || rough.is_none() || *rough <= 0.0) return None();
+    const double a = (2.0 + std::abs(*noise)) * 0.001;
+    return Some(Displacement { a * std::abs((*scale)[0]), a * std::abs((*scale)[1]), None() });
+}
+
+// 工坊水波 3221939295：texCoord += val1·s1·[val2·s2]·offset·strength·mask，offset 是单位向量，
+//   strength = (500 / g_Texture0Resolution.xy)·g_Strength²，|val1| = |sin + g_Offset|^g_Exponent ≤
+//   (1 + |g_Offset|)^g_Exponent，|val2| ≤ 1（指数 > 0），mask ∈ [0,1]。
+Option<Displacement> WorkshopWaves(const EffectParams& p) {
+    if (! p.HasVariant()) return None();
+    auto strength = p.Scalar("g_Strength"), exponent = p.Scalar("g_Exponent"),
+         offset = p.Scalar("g_Offset");
+    if (strength.is_none() || exponent.is_none() || offset.is_none() || *exponent <= 0.0)
+        return None();
+    if (p.Combo("DUALWAVES", 0) != 0) {
+        auto exponent2 = p.Scalar("g_Exponent2");
+        if (exponent2.is_none() || *exponent2 <= 0.0) return None();
+    }
+    const double amp = std::pow(1.0 + std::abs(*offset), *exponent) * *strength * *strength * 500.0;
+    return Some(Displacement { amp / p.Input().min_w, amp / p.Input().min_h, None() });
+}
+
+// waterflow：采样点 = v_TexCoord.xy + flowMask·g_FlowAmp·0.1·(cycles − 0.5)，flowMask =
+//   (rg − 0.498)·2 ∈ [−0.996, 1.004]，cycles − 0.5 ∈ [−0.5, 0.5) ⇒ |Δ| ≤ 0.0502·|amp|（两轴）。
+Option<Displacement> WaterFlow(const EffectParams& p) {
+    if (! p.HasVariant()) return None();
+    auto amp = p.Scalar("g_FlowAmp");
+    if (amp.is_none()) return None();
+    const double d = 1.004 * 0.1 * 0.5 * std::abs(*amp);
+    return Some(Displacement { d, d, None() });
+}
+
 // 位移上界表：按着色器名 + 源码指纹（.vert 与 .frag 文件内容的 FNV-1a 64）查。指纹不符（工程自带
-// 改过的同名着色器、WPE 资源版本变化）就当未知。表外一律视为无界、整层不裁；不设"未知效果
-// 保守常数"——自定义着色器可以缩放/镜像/环绕采样，任何常数都证明不了。
+// 改过的同名着色器、WPE 资源版本变化）就当未知。表外一律视为无界；不设"未知效果保守常数"——
+// 自定义着色器可以缩放/镜像/环绕采样，任何常数都证明不了。rt_slots 是除 g_Texture0 外还允许读
+// 本层 RT（合成 RT 或本效果 FBO）的槽位掩码，这些槽位一律逐像素采样。
 struct Rule {
     std::string_view shader;
     std::uint64_t    source_fnv;
     BoundFn          bound;
+    std::uint32_t    rt_slots { 0 };
 };
 constexpr Rule kDisplacementTable[] = {
     { "effects/waterwaves", 1665525461160322644ull, WaterWaves },
     { "effects/pulse", 4691102007919585790ull, Pointwise },
-    { "genericimage3", 8045191383678370494ull, GenericImage3 },
+    { "genericimage3", 8045191383678370494ull, GenericImage },
+    { "genericimage2", 4186575975355154278ull, GenericImage },
+    { "genericimage4", 13446820757646335182ull, GenericImage },
+    { "effects/twirl", 15515623398863031119ull, Twirl },
+    { "workshop/3235948233/effects/auto_sway", 3454525798839054591ull, AutoSway },
+    { "effects/shine_downsample2", 17177365509716486298ull, Pointwise },
+    { "effects/shine_cast", 17347959800840427808ull, ShineCast },
+    { "effects/shine_gaussian", 94899090392042740ull, ShineGaussian },
+    { "effects/shine_combine", 9097062468333062290ull, ShineCombine, 1u << 1 },
+    { "effects/iris", 149053491644285638ull, Iris },
+    { "workshop/2718465779/effects/pulse_", 6446172188147822368ull, Pointwise },
+    { "workshop/3221939295/effects/____________________", 18382066121782785803ull, WorkshopWaves },
+    { "effects/waterflow", 8434346930136608297ull, WaterFlow },
+    { "effects/shimmer", 1518327559064762644ull, Pointwise },
 };
 
 std::uint64_t Fnv1a(std::uint64_t h, std::string_view bytes) {
@@ -454,14 +667,6 @@ Option<std::uint64_t> ShaderSourceFnv(Scene& scene, const std::string& shader) {
         h = Fnv1a(h, "\n");
     }
     return Some(h);
-}
-
-BoundFn FindRule(Scene& scene, const std::string& shader, std::uint64_t& fnv) {
-    auto hash = ShaderSourceFnv(scene, shader);
-    fnv       = hash.is_some() ? *hash : 0;
-    for (const auto& rule : kDisplacementTable)
-        if (rule.shader == shader && hash.is_some() && *hash == rule.source_fnv) return rule.bound;
-    return nullptr;
 }
 
 // 最终 pass 在屏幕（NDC 放大 grow_x/grow_y）内片元的 UV 包围盒。网格 UV 是位置的全局仿射函数时
@@ -570,19 +775,312 @@ Option<Rect> FinalSampledRegion(const SceneMesh& mesh, const Eigen::Matrix4d& mv
     return Some(r);
 }
 
+// ---- 蒙皮最终 pass：每帧 CPU 蒙皮 → 屏幕内三角形 → UV 包围盒 ----
+//
+// 顶点 = Σ_k w_k·(B_k·p)，B_k 是 Puppet::lastFrame()（本帧 uniform 更新时 genFrame 写入、上传给
+// g_Bones 的同一组 float 矩阵；Program::update 先更新全部 uniform 再 record，所以录制时已是本帧值）。
+// 片元 UV 是所在三角形顶点 UV 的重心组合，只要三角形与屏幕（NDC 放大包络 + 余量）有交，就把
+// 三角形∩屏幕的多边形按三角形自身的仿射关系映射回 UV；与屏幕无交的三角形没有片元。
+// 余量：CPU 用 double、GPU 用 float，蒙皮误差 ≲ 16 项累加 × 2^-24 × |坐标|（4K 画布约 0.03 px），
+// 光栅化顶点吸附 1/256 px，片元中心规则只在像素中心落在边上时起作用。取 NDC 2e-3（512 宽约
+// 0.5 px，1920 宽约 1.9 px），远大于上述误差之和；UV 侧再外扩合成 RT 的 0.5 像素盖住属性插值误差。
+constexpr double kSkinMarginNdc = 2e-3;
+constexpr double kSkinMarginUvPx = 0.5;
+
+struct SkinnedMesh {
+    std::vector<float>         pos;     // xyz
+    std::vector<float>         uv;      // uv
+    std::vector<std::uint32_t> bone;    // 4 个索引
+    std::vector<float>         weight;  // 4 个权重
+    std::vector<std::uint32_t> tris;    // 三角形顶点下标
+};
+
+Option<SkinnedMesh> ExtractSkinnedMesh(const SceneMesh& mesh) {
+    if (mesh.Primitive() != MeshPrimitive::TRIANGLE) return None();
+    if (mesh.Submeshes().size() != 1) return None();
+    const auto& sm = mesh.Submeshes()[0];
+    if (sm.vertex_arrays.size() != 1 || sm.index_arrays.size() != 1) return None();
+    const auto& array   = sm.vertex_arrays[0];
+    auto        offsets = array.GetAttrOffsetMap();
+    auto pos = offsets.find(std::string(as_string_view(WE_IN_POSITION)));
+    auto uv  = offsets.find(std::string(as_string_view(WE_IN_TEXCOORD)));
+    auto bi  = offsets.find(std::string(as_string_view(WE_IN_BLENDINDICES)));
+    auto bw  = offsets.find(std::string(as_string_view(WE_IN_BLENDWEIGHTS)));
+    if (pos == offsets.end() || uv == offsets.end() || bi == offsets.end() || bw == offsets.end())
+        return None();
+    const float* data   = array.Data();
+    const usize  stride = array.OneSize();
+    if (data == nullptr) return None();
+    SkinnedMesh out;
+    const std::size_t count = array.VertexCount().to_primitive();
+    for (std::size_t i = 0; i < count; ++i) {
+        const float* vtx = data + (usize(i) * stride).to_primitive();
+        // GetAttrOffsetMap 的 offset 是字节，stride（OneSize）是 float 个数。
+        const float* p = vtx + pos->second.offset.to_primitive() / sizeof(float);
+        const float* t = vtx + uv->second.offset.to_primitive() / sizeof(float);
+        const float* w = vtx + bw->second.offset.to_primitive() / sizeof(float);
+        std::uint32_t idx[4];
+        std::memcpy(idx, vtx + bi->second.offset.to_primitive() / sizeof(float), sizeof(idx));
+        out.pos.insert(out.pos.end(), { p[0], p[1], p[2] });
+        out.uv.insert(out.uv.end(), { t[0], t[1] });
+        out.bone.insert(out.bone.end(), idx, idx + 4);
+        out.weight.insert(out.weight.end(), w, w + 4);
+    }
+    const auto& ia = sm.index_arrays[0];
+    const std::size_t n = ia.DataCount().to_primitive();
+    if (ia.Data() == nullptr || n % 3 != 0 || n == 0) return None();
+    // 全部索引都当三角形（draw_ranges 只画其中一部分，多算只会让区域变大）。
+    out.tris.assign(ia.Data(), ia.Data() + n);
+    for (auto v : out.tris)
+        if (v >= count) return None();
+    return Some(rstd::move(out));
+}
+
+// lim = NDC 矩形 {x0, y0, x1, y1}（已含包络与余量）。返回 None 即本帧无法给出区域（整幅绘制）。
+Option<Rect> SkinnedFinalRegion(const SkinnedMesh& m, const Vec<Eigen::Affine3f>& bones,
+                                const Eigen::Matrix4d& mvp, const double lim[4]) {
+    const std::size_t count = m.pos.size() / 3;
+    std::vector<double> ndc(count * 2);
+    for (std::size_t i = 0; i < count; ++i) {
+        Eigen::Vector3d s(0.0, 0.0, 0.0);
+        const Eigen::Vector3d p(m.pos[i * 3], m.pos[i * 3 + 1], m.pos[i * 3 + 2]);
+        for (int k = 0; k < 4; ++k) {
+            const double w = m.weight[i * 4 + k];
+            if (w == 0.0) continue; // 0·有限值 = 0；索引可能越界的零权重槽不读
+            const std::uint32_t b = m.bone[i * 4 + k];
+            if (b >= bones.len().to_primitive()) return None();
+            const auto& bm = bones[usize(b)].matrix();
+            Eigen::Matrix4d bd = bm.cast<double>();
+            s += w * (bd.topLeftCorner<3, 3>() * p + bd.topRightCorner<3, 1>());
+        }
+        const Eigen::Vector4d clip = mvp * Eigen::Vector4d(s.x(), s.y(), s.z(), 1.0);
+        if (std::abs(clip.w() - 1.0) > 1e-9 || ! std::isfinite(clip.x()) || ! std::isfinite(clip.y()))
+            return None();
+        ndc[i * 2] = clip.x(), ndc[i * 2 + 1] = clip.y();
+    }
+    Region r;
+    std::vector<std::array<double, 2>> poly, next;
+    for (std::size_t t = 0; t + 2 < m.tris.size(); t += 3) {
+        const std::uint32_t id[3] = { m.tris[t], m.tris[t + 1], m.tris[t + 2] };
+        double bx0 = 1e300, by0 = 1e300, bx1 = -1e300, by1 = -1e300;
+        Rect   tuv { 1e300, 1e300, -1e300, -1e300 };
+        for (auto v : id) {
+            bx0 = std::min(bx0, ndc[v * 2]), bx1 = std::max(bx1, ndc[v * 2]);
+            by0 = std::min(by0, ndc[v * 2 + 1]), by1 = std::max(by1, ndc[v * 2 + 1]);
+            tuv = tuv.Union({ m.uv[v * 2], m.uv[v * 2 + 1], m.uv[v * 2], m.uv[v * 2 + 1] });
+        }
+        if (bx1 < lim[0] || bx0 > lim[2] || by1 < lim[1] || by0 > lim[3]) continue;
+        if (bx0 >= lim[0] && bx1 <= lim[2] && by0 >= lim[1] && by1 <= lim[3]) {
+            r.Add(tuv);
+            continue;
+        }
+        const double ax = ndc[id[0] * 2], ay = ndc[id[0] * 2 + 1];
+        const double ex = ndc[id[1] * 2] - ax, ey = ndc[id[1] * 2 + 1] - ay;
+        const double fx = ndc[id[2] * 2] - ax, fy = ndc[id[2] * 2 + 1] - ay;
+        const double det = ex * fy - ey * fx;
+        const double scale = std::max({ std::abs(ex), std::abs(ey), std::abs(fx), std::abs(fy), 1e-300 });
+        if (! (std::abs(det) > 1e-9 * scale * scale)) {
+            r.Add(tuv); // 近退化三角形：取整个 UV 三角形
+            continue;
+        }
+        poly = { { ax, ay }, { ndc[id[1] * 2], ndc[id[1] * 2 + 1] }, { ndc[id[2] * 2], ndc[id[2] * 2 + 1] } };
+        for (int edge = 0; edge < 4 && ! poly.empty(); ++edge) {
+            const int  axis = edge % 2;
+            const bool low  = edge < 2;
+            auto inside = [&](const auto& q) { return low ? q[axis] >= lim[edge] : q[axis] <= lim[edge]; };
+            next.clear();
+            for (std::size_t i = 0; i < poly.size(); ++i) {
+                const auto& a = poly[i];
+                const auto& b = poly[(i + 1) % poly.size()];
+                if (inside(a)) next.push_back(a);
+                if (inside(a) != inside(b)) {
+                    const double s = (lim[edge] - a[axis]) / (b[axis] - a[axis]);
+                    next.push_back({ a[0] + s * (b[0] - a[0]), a[1] + s * (b[1] - a[1]) });
+                }
+            }
+            std::swap(poly, next);
+        }
+        if (poly.empty()) continue;
+        const double tu = m.uv[id[0] * 2], tv = m.uv[id[0] * 2 + 1];
+        const double du1 = m.uv[id[1] * 2] - tu, dv1 = m.uv[id[1] * 2 + 1] - tv;
+        const double du2 = m.uv[id[2] * 2] - tu, dv2 = m.uv[id[2] * 2 + 1] - tv;
+        Rect c { 1e300, 1e300, -1e300, -1e300 };
+        for (const auto& q : poly) {
+            const double qx = q[0] - ax, qy = q[1] - ay;
+            const double l1 = (qx * fy - qy * fx) / det, l2 = (ex * qy - ey * qx) / det;
+            const double u = tu + l1 * du1 + l2 * du2, v = tv + l1 * dv1 + l2 * dv2;
+            c = c.Union({ u, v, u, v });
+        }
+        // 真实 UV 在三角形 UV 凸包内，截到三角形 UV 包围盒上只去掉数值误差。
+        c = { std::max(c.u0, tuv.u0), std::max(c.v0, tuv.v0), std::min(c.u1, tuv.u1), std::min(c.v1, tuv.v1) };
+        if (c.u1 < c.u0 || c.v1 < c.v0) c = tuv;
+        r.Add(c);
+    }
+    if (r.kind == Region::Kind::Full) return None();
+    if (r.kind == Region::Kind::Nothing) return Some(Rect { 0.0, 0.0, 0.0, 0.0 });
+    return Some(r.r);
+}
+
+// ---- 逐 pass 反推 ----
+struct ReadRule {
+    std::string          rt;
+    Option<Displacement> disp; // None = 无界
+};
+struct PassRule {
+    std::string           target;   // 写入的 RT；最终 pass 为空（屏幕）
+    double                margin_u; // 本 pass 输出 2 像素（UV）
+    double                margin_v;
+    std::vector<ReadRule> reads;
+};
+struct FrameRegions {
+    std::vector<Region> out; // 与 passes 对齐；最终 pass 不用
+    Region              source;
+};
+
+void Sample(Region& dst, const Rect& r, double mu, double mv, const Option<Displacement>& d) {
+    if (d.is_none()) {
+        dst.AddFull();
+        return;
+    }
+    dst.Add(r.Grow(mu + d->du, mv + d->dv));
+    if (d->extra.is_some()) dst.Add(*d->extra);
+}
+
+// 从最终 pass 往前做一遍"活跃区域"反推：pass 写 T 时，T 的旧版本不再被后面读，need[T] 清空，
+// 再把本 pass 各槽位的采样区并进被读 RT 的 need。某步无界只让它上游整幅，下游仍可裁。
+FrameRegions Propagate(const std::vector<PassRule>& passes, const std::string& composite,
+                       const Rect& final_uv) {
+    std::unordered_map<std::string, Region> need;
+    FrameRegions                            fr;
+    fr.out.resize(passes.size());
+    for (const auto& rd : passes.back().reads) Sample(need[rd.rt], final_uv, 0.0, 0.0, rd.disp);
+    fr.out.back().AddFull();
+    for (std::size_t i = passes.size() - 1; i-- > 0;) {
+        const auto& p = passes[i];
+        Region      o = need[p.target];
+        need[p.target] = Region {};
+        fr.out[i]      = o;
+        if (o.kind == Region::Kind::Nothing) continue;
+        for (const auto& rd : p.reads) {
+            if (o.kind == Region::Kind::Full) need[rd.rt].AddFull();
+            else Sample(need[rd.rt], o.r, p.margin_u, p.margin_v, rd.disp);
+        }
+    }
+    fr.source = need[composite];
+    return fr;
+}
+
+// 一层的共享状态：guard + 最终区域（静态，或按骨骼矩阵逐帧重算并缓存）+ 各 pass 区域。
+struct LayerState {
+    std::function<bool()>  guard;
+    std::vector<PassRule>  passes;
+    std::string            composite;
+    double                 uv_margin_u { 0.0 }, uv_margin_v { 0.0 };
+    // 静态
+    Option<FrameRegions>   fixed;
+    // 蒙皮
+    Option<SkinnedMesh>    skinned;
+    const PuppetLayer*     puppet { nullptr };
+    Eigen::Matrix4d        mvp;
+    double                 lim[4] {};
+    std::vector<float>     cache_key;
+    bool                   cache_ok { false };
+    Option<FrameRegions>   cache;
+    // 统计（每层每帧一次，第一个带区域的 pass 录制时计）：各 pass 保留面积比例累计，每 60 帧打一行日志。
+    std::uint64_t          frames { 0 }, full_frames { 0 };
+    std::vector<double>    kept_sum;
+    double                 src_kept_sum { 0.0 };
+    Rect                   last_final {};
+
+    const FrameRegions* Get() {
+        if (! guard()) return nullptr;
+        if (fixed.is_some()) return &*fixed;
+        const auto& bones = puppet->puppet().lastFrame();
+        const std::size_t nb = bones.len().to_primitive();
+        if (cache_ok && cache_key.size() == nb * 16 &&
+            std::memcmp(cache_key.data(), bones[usize()].data(), nb * 16 * sizeof(float)) == 0)
+            return cache.is_some() ? &*cache : nullptr;
+        cache_key.resize(nb * 16);
+        if (nb > 0) std::memcpy(cache_key.data(), bones[usize()].data(), nb * 16 * sizeof(float));
+        cache_ok = true;
+        auto uv  = SkinnedFinalRegion(*skinned, bones, mvp, lim);
+        if (uv.is_none()) {
+            cache = None();
+            return nullptr;
+        }
+        last_final = uv->Grow(uv_margin_u, uv_margin_v);
+        cache = Some(Propagate(passes, composite, last_final));
+        return &*cache;
+    }
+
+    static double Frac(const Region& r) {
+        if (r.kind == Region::Kind::Full) return 1.0;
+        if (r.kind == Region::Kind::Nothing) return 0.0;
+        const double w = std::clamp(r.r.u1, 0.0, 1.0) - std::clamp(r.r.u0, 0.0, 1.0);
+        const double h = std::clamp(r.r.v1, 0.0, 1.0) - std::clamp(r.r.v0, 0.0, 1.0);
+        return std::max(0.0, w) * std::max(0.0, h);
+    }
+    void Account(const FrameRegions* fr, bool has_source) {
+        ++frames;
+        kept_sum.resize(passes.size() - 1, 0.0);
+        if (fr == nullptr) ++full_frames;
+        for (std::size_t i = 0; i + 1 < passes.size(); ++i) kept_sum[i] += fr ? Frac(fr->out[i]) : 1.0;
+        src_kept_sum += fr && has_source ? Frac(fr->source) : 1.0;
+        if (frames % 60 != 0) return;
+        std::string line = rstd::cppstd::to_string(rstd::format("src={}", src_kept_sum / frames).as_str());
+        for (std::size_t i = 0; i < kept_sum.size(); ++i)
+            line += rstd::cppstd::to_string(rstd::format(" p{}={}", i, kept_sum[i] / frames).as_str());
+        rstd_info("region clip stats {}: frames={} full_frames={} last_final_uv=[{},{},{},{}] avg_kept: {}", composite,
+                  frames, full_frames, last_final.u0, last_final.v0, last_final.u1, last_final.v1, line);
+    }
+};
+
+using RegionFn = std::shared_ptr<const std::function<Option<std::array<double, 4>>()>>;
+
+RegionFn MakeRegionFn(std::shared_ptr<LayerState> state, std::size_t index, bool source,
+                      bool accounts, bool has_source) {
+    return std::make_shared<const std::function<Option<std::array<double, 4>>()>>(
+        [state, index, source, accounts, has_source]() -> Option<std::array<double, 4>> {
+            const FrameRegions* fr = state->Get();
+            if (accounts) state->Account(fr, has_source);
+            if (fr == nullptr) return None();
+            const Region& r = source ? fr->source : fr->out[index];
+            if (r.kind == Region::Kind::Full) return None();
+            if (r.kind == Region::Kind::Nothing)
+                return Some(std::array<double, 4> { 0.0, 0.0, 0.0, 0.0 });
+            return Some(std::array<double, 4> { r.r.u0, r.r.v0, r.r.u1, r.r.v1 });
+        });
+}
+
 struct LayerPlan {
-    Option<std::array<double, 4>>                          source_region;
-    std::unordered_map<const SceneImageEffectNode*, std::array<double, 4>> effect_regions;
-    std::shared_ptr<const std::function<bool()>>           guard;
+    RegionFn                                               source_region;
+    std::unordered_map<const SceneImageEffectNode*, RegionFn> effect_regions;
 };
 
 bool Near(const Eigen::Matrix4d& a, const Eigen::Matrix4d& b) { return a == b; }
 
+Option<InputExtent> ExtentOf(Scene& scene, const std::string& name) {
+    auto rt = scene.RenderTarget(as_str(name).unwrap());
+    if (rt.is_none()) return None();
+    const auto& t = **rt;
+    if (t.has_mipmap || t.sample_count > 1 || t.bind.enable || t.preserve_on_write) return None();
+    const double w = rstd::as_cast<double>(t.width), h = rstd::as_cast<double>(t.height);
+    if (! (w > 0.0 && h > 0.0)) return None();
+    const double pw = t.physical_width > i32() ? rstd::as_cast<double>(t.physical_width) : w;
+    const double ph = t.physical_height > i32() ? rstd::as_cast<double>(t.physical_height) : h;
+    InputExtent e;
+    e.min_w     = std::max(1.0, std::min(w, pw));
+    e.min_h     = std::max(1.0, std::min(h, ph));
+    e.aspect_lo = std::min(w / h, pw / ph);
+    e.aspect_hi = std::max(w / h, pw / ph);
+    return Some(e);
+}
+
 // 返回 None 即整层不裁；reason 写日志。
 Option<LayerPlan> PlanLayer(SceneNodeLayer& layer, Scene& scene, ExtraInfo& extra,
                             std::string& reason) {
-    auto fail = [&](const char* why) {
-        reason = why;
+    auto fail = [&](std::string why) {
+        reason = rstd::move(why);
         return None<LayerPlan>();
     };
     if (extra.selection != nullptr &&
@@ -597,17 +1095,9 @@ Option<LayerPlan> PlanLayer(SceneNodeLayer& layer, Scene& scene, ExtraInfo& extr
     UniformSceneState* uniform_state = (**state_ext).as_ptr();
 
     const std::string composite(layer.CompositeTarget());
-    auto              composite_rt = scene.RenderTarget(as_str(composite).unwrap());
-    if (composite_rt.is_none()) return fail("no composite rt");
-    const auto& crt = **composite_rt;
-    if (crt.has_mipmap || crt.sample_count > 1 || crt.bind.enable || crt.preserve_on_write)
-        return fail("composite rt kind");
-    const double width  = rstd::as_cast<double>(crt.width);
-    const double height = rstd::as_cast<double>(crt.height);
-    const double min_w  = std::max(1.0, std::min(width, crt.physical_width > i32() ? rstd::as_cast<double>(crt.physical_width) : width));
-    const double min_h  = std::max(1.0, std::min(height, crt.physical_height > i32() ? rstd::as_cast<double>(crt.physical_height) : height));
+    auto              comp_extent = ExtentOf(scene, composite);
+    if (comp_extent.is_none()) return fail("composite rt kind");
 
-    // 依序收集效果 pass；v0 只接受单 pass、写合成 RT、g_Texture0 读合成 RT 的效果。
     std::vector<SceneImageEffectNode*> nodes;
     for (auto* eff : layer.ResolvedEffects()) {
         if (eff == nullptr) continue;
@@ -621,51 +1111,12 @@ Option<LayerPlan> PlanLayer(SceneNodeLayer& layer, Scene& scene, ExtraInfo& extr
         if (t.kind != SceneEffectTargetKind::Named || t.key != std::string(as_string_view(SpecTex_Default)))
             return fail("final target not screen");
     }
-    for (std::size_t i = 0; i + 1 < nodes.size(); ++i) {
-        if (ResolveEffectTarget(layer, layer.ResolvedTarget(*nodes[i])) != composite)
-            return fail("effect writes named fbo");
-    }
 
-    std::vector<ParamSnapshot> used_params;
-    std::vector<Displacement>  displacement;
-    for (auto* n : nodes) {
-        SceneNode* node = n->sceneNode.as_ptr();
-        if (node->Mesh() == nullptr || node->Mesh()->Submeshes().size() != 1 ||
-            node->Mesh()->Material() == nullptr)
-            return fail("effect mesh");
-        auto& material = *node->Mesh()->Material();
-        if (! material.customShader.shader) return fail("no shader");
-        if (material.textures.empty() || material.textures[0] != composite)
-            return fail("g_Texture0 not previous");
-        for (std::size_t s = 1; s < material.textures.size(); ++s) {
-            const auto& key = material.textures[s];
-            if (key == composite || (! key.empty() && IsSpecTex(as_str(key).unwrap())))
-                return fail("reads render target in extra slot");
-        }
-        std::uint64_t fnv  = 0;
-        auto          rule = FindRule(scene, material.customShader.shader->name, fnv);
-        if (rule == nullptr) {
-            reason = rstd::cppstd::to_string(rstd::format("unknown effect {} fnv={}",
-                                                            material.customShader.shader->name, fnv).as_str());
-            return None();
-        }
-        EffectParams params(material, width / height, min_w, min_h, used_params);
-        auto         bound = rule(params);
-        if (bound.is_none()) {
-            reason = "unbounded params " + material.customShader.shader->name;
-            return None();
-        }
-        displacement.push_back(*bound);
-    }
-
-    // 最终 pass：静态正交投影、非透视/反射、不在世界空间。
+    // 最终 pass：静态正交投影、非透视/反射、不在世界空间；蒙皮时走逐帧 CPU 包围盒。
     SceneNode* final_scene_node = final_node->sceneNode.as_ptr();
-    if (final_scene_node->Perspective() ||
-        (final_scene_node->Reflected() && scene.PlanarReflectionEnabled()))
-        return fail("perspective/reflected final");
     for (auto* p = final_scene_node; p != nullptr; p = p->Parent())
         if (p->Perspective() || (p->Reflected() && scene.PlanarReflectionEnabled()))
-            return fail("perspective/reflected parent");
+            return fail("perspective/reflected final");
     if (! final_scene_node->Camera().empty() && final_scene_node->Camera() != "global")
         return fail("final camera");
     const auto* node_state = uniform_state->FindNodeState(final_scene_node);
@@ -676,14 +1127,91 @@ Option<LayerPlan> PlanLayer(SceneNodeLayer& layer, Scene& scene, ExtraInfo& extr
     SceneCamera* camera = (*camera_ref).as_raw_ptr();
     auto*        mesh   = final_scene_node->Mesh();
     if (mesh == nullptr || mesh->Material() == nullptr) return fail("final mesh");
-    // 最终 pass 的顶点着色器若做蒙皮，网格位置随骨骼动画变，静态投影不成立。
     if (mesh->Material()->customShader.variant.is_none()) return fail("final variant");
+    bool skinned = false;
     {
         const auto& combos = mesh->Material()->customShader.variant->resolved_combos;
-        for (const auto& key : { "SKINNING", "BONECOUNT", "MORPHING" }) {
-            auto it = combos.find(key);
-            if (it != combos.end() && it->second != "0") return fail("skinned final mesh");
+        if (auto it = combos.find("MORPHING"); it != combos.end() && it->second != "0")
+            return fail("morphing final mesh");
+        if (auto it = combos.find("SKINNING"); it != combos.end() && it->second != "0") skinned = true;
+    }
+    const PuppetLayer* puppet = nullptr;
+    if (skinned) {
+        auto layers = scene.ExtensionMut<PuppetNodeLayers>();
+        if (layers.is_none()) return fail("no puppet registry");
+        auto found = (**layers).by_node.get(static_cast<const SceneNode*>(final_scene_node));
+        if (found.is_none()) return fail("skinned final without puppet layer");
+        puppet = (**found).as_ptr();
+        // 同一 Puppet 被多个木偶层共用时 lastFrame 可能是别的层算的，不裁。
+        std::size_t sharing = 0;
+        (**layers).by_node.iter().for_each([&](auto entry) {
+            auto [node_ref, layer_ref] = entry;
+            if (&(*layer_ref)->puppet() == &puppet->puppet() && (*layer_ref).as_ptr() != puppet) ++sharing;
+        });
+        if (sharing > 0) return fail("puppet shared by several layers");
+    }
+
+    // 逐 pass 规则。
+    std::vector<ParamSnapshot> used_params;
+    std::vector<PassRule>      passes;
+    std::string                chain_log;
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        auto*      n        = nodes[i];
+        const bool is_final = i + 1 == nodes.size();
+        SceneNode* node     = n->sceneNode.as_ptr();
+        if (node->Mesh() == nullptr || node->Mesh()->Submeshes().size() != 1 ||
+            node->Mesh()->Material() == nullptr)
+            return fail("effect mesh");
+        auto& material = *node->Mesh()->Material();
+        if (! material.customShader.shader) return fail("no shader");
+        PassRule pr;
+        InputExtent out_extent = *comp_extent;
+        if (! is_final) {
+            pr.target = std::string(ResolveEffectTarget(layer, layer.ResolvedTarget(*n)));
+            auto ext  = ExtentOf(scene, pr.target);
+            if (ext.is_none()) return fail("effect target kind " + pr.target);
+            out_extent = *ext;
+            // 读回旧内容（混合/保留）的 pass 依赖物理 RT 的历史内容（可能来自上一帧被裁的 pass），整层不裁。
+            if (LoadsPreviousAttachment(material.blenmode)) return fail("effect pass loads previous attachment");
         }
+        pr.margin_u = 2.0 / out_extent.min_w;
+        pr.margin_v = 2.0 / out_extent.min_h;
+        if (material.textures.empty()) return fail("no g_Texture0");
+        const std::string& in0 = material.textures[0];
+        auto in_extent = ExtentOf(scene, in0);
+        std::uint64_t fnv  = 0;
+        const Rule*   rule = nullptr;
+        {
+            auto hash = ShaderSourceFnv(scene, material.customShader.shader->name);
+            fnv       = hash.is_some() ? *hash : 0;
+            for (const auto& r : kDisplacementTable)
+                if (r.shader == material.customShader.shader->name && hash.is_some() && *hash == r.source_fnv)
+                    rule = &r;
+        }
+        Option<Displacement> disp;
+        if (rule != nullptr && in_extent.is_some()) {
+            EffectParams params(material, *in_extent, used_params, is_final && skinned);
+            disp = rule->bound(params);
+        }
+        chain_log += rstd::cppstd::to_string(rstd::format(" [{} {} fnv={} {}]", i,
+                                                          material.customShader.shader->name, fnv,
+                                                          rule == nullptr ? "unknown" : disp.is_none() ? "unbounded" : "ok").as_str());
+        if (is_final && disp.is_none()) return fail("final pass not bounded:" + chain_log);
+        for (std::size_t s = 0; s < material.textures.size(); ++s) {
+            const auto& key = material.textures[s];
+            if (key.empty()) continue;
+            const bool is_rt = key == composite || IsSpecTex(as_str(key).unwrap()) ||
+                               scene.RenderTarget(as_str(key).unwrap()).is_some();
+            if (! is_rt) continue;
+            // 本层以外的 RT（屏幕、别层结果）不受裁剪影响，但读屏幕的 pass 结果依赖本层之外，保守起见不裁。
+            if (key != composite && ExtentOf(scene, key).is_none())
+                return fail("reads foreign render target " + key);
+            if (s == 0) pr.reads.push_back({ key, disp });
+            else if (rule != nullptr && disp.is_some() && ((rule->rt_slots >> s) & 1u))
+                pr.reads.push_back({ key, Some(Displacement {}) });
+            else pr.reads.push_back({ key, None() });
+        }
+        passes.push_back(rstd::move(pr));
     }
 
     final_scene_node->UpdateTrans();
@@ -691,14 +1219,16 @@ Option<LayerPlan> PlanLayer(SceneNodeLayer& layer, Scene& scene, ExtraInfo& extr
                                   final_scene_node->GeometryTransform() * mesh->GeometryTransform();
     const Eigen::Matrix4d view_projection = camera->GetViewProjectionMatrix();
     std::vector<u64> mesh_generations;
-    for (const auto& sm : mesh->Submeshes())
+    for (const auto& sm : mesh->Submeshes()) {
         for (const auto& va : sm.vertex_arrays) mesh_generations.push_back(va.DataGeneration());
+        for (const auto& ia : sm.index_arrays) mesh_generations.push_back(ia.DataGeneration());
+    }
 
     // 视差包络：|shift| ≤ (|节点 − 相机| + 0.5·ortho·|mouse_influence|)·|depth|·amount（指针在 [0,1]）；
     // 运行时直接用同一函数算本帧真实偏移核对，不依赖这里的推导。
-    const auto   ortho    = uniform_state->Ortho();
-    const auto   parallax = uniform_state->CameraParallax();
-    double       parallax_x = 0.0, parallax_y = 0.0;
+    const auto ortho      = uniform_state->Ortho();
+    const auto parallax   = uniform_state->CameraParallax();
+    double     parallax_x = 0.0, parallax_y = 0.0;
     if (parallax.enable) {
         auto effective = uniform_state->EffectiveParallax(*final_scene_node);
         if (effective.is_some()) {
@@ -722,83 +1252,116 @@ Option<LayerPlan> PlanLayer(SceneNodeLayer& layer, Scene& scene, ExtraInfo& extr
     const double grow_x = std::abs(view_projection(0, 0)) * ex + std::abs(view_projection(0, 1)) * ey;
     const double grow_y = std::abs(view_projection(1, 0)) * ex + std::abs(view_projection(1, 1)) * ey;
 
-    auto final_region = FinalSampledRegion(*mesh, view_projection * model, grow_x, grow_y);
-    if (final_region.is_none()) return fail("final mesh region");
-
-    // 反推：P = 最终片元 UV ⊕ 最终位移；每级输出需覆盖 P（执行时再外扩 1 像素 + 取整），
-    // 该级片元的采样区 = P 外扩 2 像素 ⊕ 该级位移。
-    LayerPlan  plan;
-    const double margin_u = 2.0 / min_w, margin_v = 2.0 / min_h;
-    Rect         need     = final_region->Grow(displacement.back().du, displacement.back().dv);
-    for (std::size_t i = nodes.size() - 1; i-- > 0;) {
-        plan.effect_regions[nodes[i]] = { need.u0, need.v0, need.u1, need.v1 };
-        need = need.Grow(margin_u + displacement[i].du, margin_v + displacement[i].dv);
+    auto state        = std::make_shared<LayerState>();
+    state->passes     = passes;
+    state->composite  = composite;
+    std::string final_desc;
+    if (skinned) {
+        state->skinned = ExtractSkinnedMesh(*mesh);
+        if (state->skinned.is_none()) return fail("skinned final mesh layout");
+        state->puppet      = puppet;
+        state->mvp         = view_projection * model;
+        state->lim[0]      = -1.0 - grow_x - kSkinMarginNdc;
+        state->lim[1]      = -1.0 - grow_y - kSkinMarginNdc;
+        state->lim[2]      = 1.0 + grow_x + kSkinMarginNdc;
+        state->lim[3]      = 1.0 + grow_y + kSkinMarginNdc;
+        state->uv_margin_u = kSkinMarginUvPx / comp_extent->min_w;
+        state->uv_margin_v = kSkinMarginUvPx / comp_extent->min_h;
+        final_desc = rstd::cppstd::to_string(rstd::format("skinned verts={} tris={} bones={}",
+                                                          state->skinned->pos.size() / 3,
+                                                          state->skinned->tris.size() / 3,
+                                                          puppet->puppet().lastFrame().len()).as_str());
+    } else {
+        auto final_region = FinalSampledRegion(*mesh, view_projection * model, grow_x, grow_y);
+        if (final_region.is_none()) return fail("final mesh region");
+        state->fixed = Some(Propagate(passes, composite, *final_region));
+        final_desc   = rstd::cppstd::to_string(rstd::format("static final_uv=[{},{},{},{}]",
+                                                            final_region->u0, final_region->v0,
+                                                            final_region->u1, final_region->v1).as_str());
     }
-    plan.source_region = Some(std::array<double, 4> { need.u0, need.v0, need.u1, need.v1 });
 
     // 运行时 guard：本帧最终 pass 的模型/相机/网格/参数与规划时一致，且真实视差偏移在包络内。
     const float parallax_amount = parallax.amount, parallax_influence = parallax.mouse_influence;
     const bool  parallax_enable = parallax.enable;
-    auto        guard = std::make_shared<const std::function<bool()>>(
-        [=, used = rstd::move(used_params)]() -> bool {
-            final_scene_node->UpdateTrans();
-            const Eigen::Matrix4d now = final_scene_node->ModelTrans() *
-                                        final_scene_node->GeometryTransform() * mesh->GeometryTransform();
-            if (! Near(now, model)) return false;
-            if (! Near(camera->GetViewProjectionMatrix(), view_projection)) return false;
-            std::size_t g = 0;
-            for (const auto& sm : mesh->Submeshes())
-                for (const auto& va : sm.vertex_arrays)
-                    if (g >= mesh_generations.size() || va.DataGeneration() != mesh_generations[g++])
-                        return false;
-            if (g != mesh_generations.size()) return false;
-            const auto& cp = uniform_state->CameraParallax();
-            if (cp.enable != parallax_enable || cp.amount != parallax_amount ||
-                cp.mouse_influence != parallax_influence)
-                return false;
-            if (cp.enable) {
-                const auto* st = uniform_state->FindNodeState(final_scene_node);
-                if (st == nullptr) return false;
-                const auto off = uniform_state->ComputeParallaxOffset(*st, *camera, SceneRenderViewKind::Primary);
-                if (! (std::abs(off[usize(0)]) <= parallax_x && std::abs(off[usize(1)]) <= parallax_y))
+    state->guard = [=, used = rstd::move(used_params)]() -> bool {
+        final_scene_node->UpdateTrans();
+        const Eigen::Matrix4d now = final_scene_node->ModelTrans() *
+                                    final_scene_node->GeometryTransform() * mesh->GeometryTransform();
+        if (! Near(now, model)) return false;
+        if (! Near(camera->GetViewProjectionMatrix(), view_projection)) return false;
+        std::size_t g = 0;
+        for (const auto& sm : mesh->Submeshes()) {
+            for (const auto& va : sm.vertex_arrays)
+                if (g >= mesh_generations.size() || va.DataGeneration() != mesh_generations[g++])
                     return false;
-            }
-            const auto& cs = uniform_state->CameraShake();
-            if (cs.enable != shake.enable || cs.amplitude != shake.amplitude ||
-                cs.roughness != shake.roughness || (cs.speed > 0.0f) != (shake.speed > 0.0f))
+            for (const auto& ia : sm.index_arrays)
+                if (g >= mesh_generations.size() || ia.DataGeneration() != mesh_generations[g++])
+                    return false;
+        }
+        if (g != mesh_generations.size()) return false;
+        const auto& cp = uniform_state->CameraParallax();
+        if (cp.enable != parallax_enable || cp.amount != parallax_amount ||
+            cp.mouse_influence != parallax_influence)
+            return false;
+        if (cp.enable) {
+            const auto* st = uniform_state->FindNodeState(final_scene_node);
+            if (st == nullptr) return false;
+            const auto off = uniform_state->ComputeParallaxOffset(*st, *camera, SceneRenderViewKind::Primary);
+            if (! (std::abs(off[usize(0)]) <= parallax_x && std::abs(off[usize(1)]) <= parallax_y))
                 return false;
-            const auto o = uniform_state->Ortho();
-            if (o[usize(0)] != ortho[usize(0)] || o[usize(1)] != ortho[usize(1)]) return false;
-            for (const auto& p : used) {
-                auto& shader = p.material->customShader;
-                if (shader.valueAnimations.get(as_str(p.name).unwrap()).is_some()) return false;
-                const ShaderValue* value = nullptr;
-                if (auto it = shader.constValues.find(p.name); it != shader.constValues.end())
-                    value = &it->second;
-                else if (shader.variant.is_some()) {
-                    auto it = shader.variant->default_uniforms.find(p.name);
-                    if (it != shader.variant->default_uniforms.end()) value = &it->second;
-                }
-                if (value == nullptr || value->size() != usize(p.values.size())) return false;
-                for (usize i {}; i < value->size(); ++i)
-                    if ((*value)[i] != p.values[i.to_primitive()]) return false;
+        }
+        const auto& cs = uniform_state->CameraShake();
+        if (cs.enable != shake.enable || cs.amplitude != shake.amplitude ||
+            cs.roughness != shake.roughness || (cs.speed > 0.0f) != (shake.speed > 0.0f))
+            return false;
+        const auto o = uniform_state->Ortho();
+        if (o[usize(0)] != ortho[usize(0)] || o[usize(1)] != ortho[usize(1)]) return false;
+        for (const auto& p : used) {
+            auto& shader = p.material->customShader;
+            if (shader.valueAnimations.get(as_str(p.name).unwrap()).is_some()) return false;
+            const ShaderValue* value = nullptr;
+            if (auto it = shader.constValues.find(p.name); it != shader.constValues.end())
+                value = &it->second;
+            else if (shader.variant.is_some()) {
+                auto it = shader.variant->default_uniforms.find(p.name);
+                if (it != shader.variant->default_uniforms.end()) value = &it->second;
             }
-            return true;
-        });
-    plan.guard = guard;
-
-    double full = 0.0, kept = 0.0;
-    auto   account = [&](const std::array<double, 4>& r) {
-        const double w = std::clamp(r[2], 0.0, 1.0) - std::clamp(r[0], 0.0, 1.0);
-        const double h = std::clamp(r[3], 0.0, 1.0) - std::clamp(r[1], 0.0, 1.0);
-        full += 1.0;
-        kept += std::max(0.0, w) * std::max(0.0, h);
+            if (value == nullptr || value->size() != usize(p.values.size())) return false;
+            for (usize i {}; i < value->size(); ++i)
+                if ((*value)[i] != p.values[i.to_primitive()]) return false;
+        }
+        return true;
     };
-    account(*plan.source_region);
-    for (std::size_t i = 0; i + 1 < nodes.size(); ++i) account(plan.effect_regions[nodes[i]]);
-    rstd_info("region clip {}: passes={} final_uv=[{},{},{},{}] source_uv=[{},{},{},{}] clipped_fraction={} envelope_world=({},{})",
-              composite, full, final_region->u0, final_region->v0, final_region->u1,
-              final_region->v1, need.u0, need.v0, need.u1, need.v1, 1.0 - kept / full, ex, ey);
+
+    LayerPlan plan;
+    const bool has_source = layer.RequiresSourceDraw();
+    if (has_source) plan.source_region = MakeRegionFn(state, 0, true, true, true);
+    for (std::size_t i = 0; i + 1 < nodes.size(); ++i)
+        plan.effect_regions[nodes[i]] = MakeRegionFn(state, i, false, ! has_source && i == 0, has_source);
+
+    // 规划日志：静态层直接给出各 pass 保留比例；蒙皮层按首帧（规划时的骨骼）估一次。
+    const FrameRegions* fr = state->Get();
+    std::string         kept;
+    auto frac = [](const Region& r) {
+        if (r.kind == Region::Kind::Full) return 1.0;
+        if (r.kind == Region::Kind::Nothing) return 0.0;
+        const double w = std::clamp(r.r.u1, 0.0, 1.0) - std::clamp(r.r.u0, 0.0, 1.0);
+        const double h = std::clamp(r.r.v1, 0.0, 1.0) - std::clamp(r.r.v0, 0.0, 1.0);
+        return std::max(0.0, w) * std::max(0.0, h);
+    };
+    if (fr != nullptr) {
+        if (skinned)
+            kept = rstd::cppstd::to_string(rstd::format(" final_uv=[{},{},{},{}]", state->last_final.u0,
+                                                        state->last_final.v0, state->last_final.u1,
+                                                        state->last_final.v1).as_str());
+        kept += rstd::cppstd::to_string(rstd::format(" src={}", frac(fr->source)).as_str());
+        for (std::size_t i = 0; i + 1 < nodes.size(); ++i)
+            kept += rstd::cppstd::to_string(rstd::format(" p{}={}", i, frac(fr->out[i])).as_str());
+    } else {
+        kept = " (guard/region unavailable at plan time)";
+    }
+    rstd_info("region clip {}: {} envelope_world=({},{}) kept_fraction:{} chain:{}", composite,
+              final_desc, ex, ey, kept, chain_log);
     return Some(rstd::move(plan));
 }
 } // namespace region_clip
@@ -890,15 +1453,13 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
         }
     }
 
-    Option<std::array<double, 4>>                source_region;
-    std::shared_ptr<const std::function<bool()>> source_guard;
+    std::shared_ptr<const std::function<Option<std::array<double, 4>>()>> source_region;
     if (imgeff != nullptr && ! defer_effect && render_view == SceneRenderViewKind::Primary &&
         imgeff->HasRenderEffects()) {
         std::string reason;
         if (auto plan = region_clip::PlanLayer(*imgeff, scene, extra, reason); plan.is_some()) {
             source_region = plan->source_region;
-            source_guard  = plan->guard;
-            for (auto& [n, r] : plan->effect_regions) extra.region_clip[n] = { r, plan->guard };
+            for (auto& [n, r] : plan->effect_regions) extra.region_clip[n] = r;
         } else {
             rstd_info("region clip {}: skipped ({})", imgeff->CompositeTarget(), reason);
         }
@@ -936,18 +1497,14 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
              preserve_output = submesh.preserve_output,
              render_view,
              effect_node,
-             source_region = submesh.output_override.empty() ? source_region : None(),
-             source_guard,
+             source_region = submesh.output_override.empty() ? source_region : nullptr,
              &scene,
              &extra](rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
                 if (effect_node != nullptr) {
-                    if (auto it = extra.region_clip.find(effect_node); it != extra.region_clip.end()) {
-                        pdesc.region_uv    = Some(it->second.first);
-                        pdesc.region_guard = it->second.second;
-                    }
-                } else if (source_region.is_some()) {
-                    pdesc.region_uv    = source_region;
-                    pdesc.region_guard = source_guard;
+                    if (auto it = extra.region_clip.find(effect_node); it != extra.region_clip.end())
+                        pdesc.region = it->second;
+                } else if (source_region) {
+                    pdesc.region = source_region;
                 }
                 const auto& pass        = builder.workPassNode();
                 if (effect_node != nullptr)

@@ -227,6 +227,9 @@ public:
     void                    prepared();
     Option<usize>           attachmentIndex(ref<str> name) const noexcept;
     Option<Eigen::Affine3f> attachmentBindTransform(usize index) const noexcept;
+    // X3 M1：最近一次 genFrame 的蒙皮矩阵（即本帧上传给 g_Bones 的值；渲染图录制在
+    // uniform 更新之后）。只读，不重新求值，避免 IK 计数等副作用。
+    const Vec<Eigen::Affine3f>& lastFrame() const noexcept { return m_final_affines; }
 
 private:
     Vec<Eigen::Affine3f> m_final_affines;
@@ -278,6 +281,7 @@ public:
     auto TextureChannelBlendMap(double time) noexcept -> slice<float>;
 
     void updateInterpolation(double time) noexcept;
+    const Puppet& puppet() const noexcept { return *m_puppet; }
 
 private:
     struct Layer {
@@ -293,6 +297,11 @@ private:
     Vec<Arc<SceneAnimationPlayback>> m_playbacks;
     Vec<float>                       m_texture_channel_blend_map;
     Arc<Puppet>                      m_puppet;
+};
+
+// X3 M1：场景节点 → 木偶层，渲染图规划区域裁剪时按最终 pass 节点找骨骼矩阵。
+struct PuppetNodeLayers {
+    rstd::collections::HashMap<const SceneNode*, Arc<PuppetLayer>> by_node;
 };
 
 } // namespace owe

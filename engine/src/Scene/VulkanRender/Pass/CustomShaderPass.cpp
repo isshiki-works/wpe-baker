@@ -1308,8 +1308,10 @@ void CustomShaderPass::recordRenderScopeDraw(PassRecordContext& context) {
         cmd.SetViewport(0, m_desc.viewports.as_slice());
     }
     if (m_desc.scissors.is_empty()) {
-        if (m_desc.region_uv.is_some() && (! m_desc.region_guard || (*m_desc.region_guard)())) {
-            const auto& r     = *m_desc.region_uv;
+        rstd::Option<std::array<double, 4>> region = rstd::None();
+        if (m_desc.region) region = (*m_desc.region)();
+        if (region.is_some()) {
+            const auto& r     = *region;
             auto        clamp = [](double value, uint32_t limit) {
                 return static_cast<uint32_t>(std::clamp(value, 0.0, static_cast<double>(limit)));
             };

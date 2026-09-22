@@ -496,6 +496,14 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
     // X3 M1：渲染图规划区域裁剪时读视差/抖动设置，录制时逐帧核对真实视差偏移。
     context.scene->InstallExtension(
         Box<Arc<UniformSceneState>>::make(context.uniform_state.clone()));
+    {
+        auto layers = Box<PuppetNodeLayers>::make();
+        context.puppet_layers->by_node.iter().for_each([&](auto entry) {
+            auto [node_ref, layer_ref] = entry;
+            if (*node_ref != nullptr) (void)layers->by_node.insert(*node_ref, (*layer_ref).clone());
+        });
+        context.scene->InstallExtension(rstd::move(layers));
+    }
     return context.scene.Take();
 }
 

@@ -39,10 +39,9 @@ public:
         u32                                    instance_count { 1 };
         Vec<VkViewport>                        viewports;
         Vec<VkRect2D>                          scissors;
-        // X3 M1：输出中会被后级采样的 UV 矩形（u0, v0, u1, v1）；guard 逐帧判定规划前提仍成立，
-        // 不成立则本帧整幅绘制。录制时按实际输出尺寸换算 scissor（外扩 1 像素并向外取整）。
-        rstd::Option<std::array<double, 4>>          region_uv;
-        std::shared_ptr<const std::function<bool()>> region_guard;
+        // X3 M1：逐帧给出输出中会被后级采样的 UV 矩形（u0, v0, u1, v1）；返回 None（guard 不成立、
+        // 本帧给不出区域）则整幅绘制。录制时按实际输出尺寸换算 scissor（外扩 1 像素并向外取整）。
+        std::shared_ptr<const std::function<rstd::Option<std::array<double, 4>>()>> region;
         rstd::usize                            graph_pass_index { 0 };
         // Which submesh of node->Mesh() this pass renders. SceneToRenderGraph
         // emits one pass per (node, submesh).
