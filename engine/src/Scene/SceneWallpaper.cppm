@@ -7,7 +7,6 @@ import rstd;
 export import wescene.core;
 export import wescene.json;
 export import rstd.cppstd;
-export import wescene.load_bench;
 export import wescene.scene;
 export import wescene.vulkan_render;
 export import wescene.vulkan;
@@ -57,7 +56,6 @@ struct SceneWallpaperConfig {
     std::string                             assets_dir;
     std::string                             cache_dir;
     std::shared_ptr<wpscene::SceneDocument> scene_document;
-    Option<SceneLoadBenchHandle>            load_bench;
     rstd::json::Map                         user_properties;
     uint32_t                                fps { 30 };
     float                                   volume { 1.0f };
@@ -199,7 +197,6 @@ private:
     friend class SceneRuntimeController;
 
     bool                                    m_offscreen { false };
-    Option<SceneLoadBenchHandle>            m_load_bench;
     std::unique_ptr<SceneRuntimeController> m_runtime;
 };
 

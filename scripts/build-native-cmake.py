@@ -25,7 +25,7 @@ provenance = importlib.util.module_from_spec(provenance_spec)
 provenance_spec.loader.exec_module(provenance)
 
 # 预构建第三方库的缓存键：这些锁条目 + 定义它们编译方式的 CMake 文件。
-THIRD_PARTY_INPUTS = ["glslang", "freetype", "quickjs", "lz4", "vma", "spirv-reflect", "llvm-mingw-22", "cmake", "ninja"]
+THIRD_PARTY_INPUTS = ["glslang", "freetype", "quickjs", "lz4", "vma", "spirv-reflect", "googletest", "llvm-mingw-22", "cmake", "ninja"]
 
 def native_environment(toolchain: pathlib.Path, ffmpeg_root: pathlib.Path) -> dict[str, str]:
     environment = dict(os.environ)

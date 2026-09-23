@@ -30,6 +30,7 @@ STATIC_LICENSES = {
     "quickjs-ng.LICENSE": ".deps/quickjs/LICENSE",
     "vma.LICENSE.txt": ".deps/vma/LICENSE.txt",
     "spirv-reflect.LICENSE": ".deps/spirv-reflect/LICENSE",
+    "cli11.LICENSE": None,
     "eigen.COPYING.MPL2": ".deps/eigen/COPYING.MPL2",
     "eigen.COPYING.README": ".deps/eigen/COPYING.README",
     "vulkan-headers.LICENSE.md": ".deps/vulkan-headers/LICENSE.md",

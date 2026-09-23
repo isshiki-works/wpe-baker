@@ -9,7 +9,7 @@
 //   build/debug/bin/owe-tests/wescene-test valid workshop/<id> \
 //       -o tests/fixtures/<category>/<v>/<id>.json
 
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 import rstd.cppstd;
 import wescene.json;

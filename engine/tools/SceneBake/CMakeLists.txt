@@ -8,6 +8,7 @@ target_link_libraries(wpe-render PRIVATE rstd.cppstd)
 target_link_libraries(wpe-render PRIVATE rstd.json)
 target_link_libraries(wpe-render PRIVATE rstd.log)
 target_link_libraries(wpe-render PRIVATE shell32)
+target_link_libraries(wpe-render PRIVATE wpe-cli11)
 # 源码摘要由 scripts/build-native-cmake.py 经 -DWPE_RENDER_SOURCE_DIGEST 传入
 if(WPE_RENDER_SOURCE_DIGEST)
   target_compile_definitions(wpe-render PRIVATE WPE_RENDER_SOURCE_DIGEST="${WPE_RENDER_SOURCE_DIGEST}")

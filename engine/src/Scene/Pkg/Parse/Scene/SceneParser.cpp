@@ -6,7 +6,6 @@ module wescene.pkg.parse;
 import :scene_context;
 import rstd;
 import rstd.log;
-import wescene.load_bench;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
@@ -17,7 +16,6 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
                              SceneParseOptions options) -> Result<ParsedScene, SceneParseError> {
     auto&       vfs_owner   = *vfs.as_raw_ptr();
     auto&       sound_owner = *sound.as_raw_ptr();
-    auto        total_span  = SceneLoadSpan(options.load_bench, &SceneLoadProbeIds::parse_total);
     const auto& metadata    = document->metadata;
     rstd_info("scene: pkg_version={} scene_json_version={}",
               static_cast<unsigned>(metadata.pkg_version),
@@ -31,7 +29,6 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
     }
 
     auto expanded = [&] {
-        auto span = SceneLoadSpan(options.load_bench, &SceneLoadProbeIds::parse_expand_objects);
         return ExpandSceneObjects(document, vfs, options.user_properties);
     }();
     auto objects = rstd::move(expanded.objects);
@@ -50,7 +47,6 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
         }
     }
 
-    auto context_span = SceneLoadSpan(options.load_bench, &SceneLoadProbeIds::parse_context);
     auto context =
         BuildContext(vfs_owner,
                      scene_id,
@@ -70,19 +66,15 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
     context.linked_source_ids      = rstd::move(expanded.linked_source_ids);
     IndexSceneDocument(context, document, objects.as_slice());
     ProcessContainers(context, objects.as_mut_slice().as_mut_ref());
-    (void)context_span.finish();
 
     {
-        auto span = SceneLoadSpan(options.load_bench, &SceneLoadProbeIds::parse_objects);
         ProcessObjects(
-            context, objects.as_mut_slice().as_mut_ref(), &sound_owner, {}, options.load_bench);
+            context, objects.as_mut_slice().as_mut_ref(), &sound_owner, {});
     }
     {
-        auto span = SceneLoadSpan(options.load_bench, &SceneLoadProbeIds::parse_post_process);
         if (metadata.general.bloom) BuildBloomPostProcess(context, vfs_owner, metadata.general);
     }
 
-    auto finalize_span = SceneLoadSpan(options.load_bench, &SceneLoadProbeIds::parse_finalize);
     const bool retain_context = context.script_scene.is_some();
     auto       scene          = FinalizeScene(context);
     if (retain_context) {

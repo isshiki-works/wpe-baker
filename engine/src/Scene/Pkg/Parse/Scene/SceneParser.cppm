@@ -3,7 +3,6 @@ import rstd;
 import wavsen.audio;
 import wescene.fs;
 import wescene.json;
-import wescene.load_bench;
 import wescene.scene;
 import wescene.pkg.scene_obj;
 import :uniform_source;
@@ -35,7 +34,6 @@ struct SceneParseCapabilities {
 };
 
 struct SceneParseOptions {
-    SceneLoadBenchRecorderView   load_bench;
     Option<ref<rstd::json::Map>> user_properties;
     Option<rstd::path::PathBuf>  shader_cache_dir;
     SceneParseCapabilities       capabilities;

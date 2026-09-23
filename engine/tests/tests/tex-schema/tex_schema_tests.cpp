@@ -1,6 +1,6 @@
 // .tex format schema reverse-coverage report.
 
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 
 #include <ios>
 

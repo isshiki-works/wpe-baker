@@ -32,13 +32,14 @@ set(FETCHCONTENT_FULLY_DISCONNECTED ON CACHE BOOL "Never fetch unpinned dependen
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-# 不含模块的第三方库（lz4/freetype/quickjs/glslang/vma/spirv-reflect）：
+# 不含模块的第三方库（lz4/freetype/quickjs/glslang/vma/spirv-reflect/googletest）：
 # WPE_THIRD_PARTY_DIR 指向按锁哈希预构建的目录时直接导入；否则在本构建里编。
 # WPE_THIRD_PARTY_ONLY=ON 只编这些库并导出导入文件，供 scripts/build-native-cmake.py 生成预构建目录。
 set(WPE_THIRD_PARTY_DIR "" CACHE PATH "预构建第三方库目录（空 = 在本构建内编译）")
 option(WPE_THIRD_PARTY_ONLY "只构建并导出第三方库" OFF)
 set(WPE_THIRD_PARTY_TARGETS lz4_static freetype qjs glslang SPIRV glslang-default-resource-limits
-    OSDependent MachineIndependent GenericCodeGen glslang-standalone VulkanMemoryAllocator spirv-reflect)
+    OSDependent MachineIndependent GenericCodeGen glslang-standalone VulkanMemoryAllocator spirv-reflect
+    gtest gtest_main)
 if(WPE_THIRD_PARTY_DIR)
   include("${WPE_THIRD_PARTY_DIR}/wpe-third-party.cmake")
   # 导入目标默认按 -isystem 引头文件，会改变头文件搜索顺序；保持与树内编译相同的 -I。
@@ -83,6 +84,9 @@ else()
   add_library(spirv-reflect STATIC "${WPE_DEPS}/spirv-reflect/spirv_reflect.cpp")
   target_include_directories(spirv-reflect PUBLIC "${WPE_DEPS}/spirv-reflect")
 
+  # 只给单测用（MinGW 上 googletest 自己就不走 pthread）。
+  add_subdirectory("${WPE_DEPS}/googletest" dependencies/googletest EXCLUDE_FROM_ALL)
+
   if(WPE_THIRD_PARTY_ONLY)
     add_custom_target(wpe-third-party ALL DEPENDS ${WPE_THIRD_PARTY_TARGETS})
     export(TARGETS ${WPE_THIRD_PARTY_TARGETS} FILE "${CMAKE_BINARY_DIR}/wpe-third-party.cmake")
@@ -108,18 +112,6 @@ set(RSTD_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WPE_DEPS}/rstd" dependencies/rstd EXCLUDE_FROM_ALL)
 target_link_libraries(rstd.std PRIVATE synchronization)
 
-# rstd 的 CMake 没有 rstd.test 目标；着色器与场景运行时测试 import rstd.test，这里单独暴露。
-add_library(rstd.test STATIC)
-target_sources(rstd.test
-  PUBLIC FILE_SET CXX_MODULES BASE_DIRS "${WPE_DEPS}/rstd/src/test/src" FILES
-    "${WPE_DEPS}/rstd/src/test/src/lib.cppm"
-    "${WPE_DEPS}/rstd/src/test/src/model.cppm"
-    "${WPE_DEPS}/rstd/src/test/src/runner.cppm"
-    "${WPE_DEPS}/rstd/src/test/src/temp_dir.cppm"
-  PRIVATE "${WPE_DEPS}/rstd/src/test/src/lib.cpp")
-target_include_directories(rstd.test PUBLIC "${WPE_DEPS}/rstd/src/test/include")
-target_link_libraries(rstd.test PUBLIC rstd.std)
-
 set(VVK_FETCH_MISSING_DEPENDENCIES OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WPE_DEPS}/vvk" dependencies/vvk EXCLUDE_FROM_ALL)
 
@@ -135,6 +127,10 @@ target_include_directories(wpe-eigen INTERFACE "${WPE_DEPS}/eigen")
 # nlohmann/json 3.12（header-only）：取代 rstd::json 的解析与写出（T2-3）。
 add_library(nlohmann-json INTERFACE)
 target_include_directories(nlohmann-json INTERFACE "${WPE_DEPS}/nlohmann-json/single_include")
+
+# CLI11 单头文件（wpe-render 的命令行）。
+add_library(wpe-cli11 INTERFACE)
+target_include_directories(wpe-cli11 INTERFACE "${WPE_DEPS}/cli11")
 
 # 各包的源文件清单与用法（原 lito.toml）。
 add_subdirectory(src/Core)

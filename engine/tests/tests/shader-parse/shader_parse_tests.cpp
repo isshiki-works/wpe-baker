@@ -4,7 +4,7 @@
 // the collector grabs annotations unconditionally and the comment/keyword
 // handling resists obvious false positives.
 
-#include <rstd/test/gtest.hpp>
+#include <gtest/gtest.h>
 #include <spirv_reflect.h>
 
 #include <array>

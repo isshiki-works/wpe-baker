@@ -8,7 +8,6 @@ import wescene.types;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
-import wescene.load_bench;
 import wescene.resource_registry;
 import wescene.vulkan;
 import wescene.scene;
@@ -671,9 +670,8 @@ struct RenderProgram {
 
     auto beginPrepare(owe::Scene& scene, const Device& device, RenderingResources& rr,
                       const owe::RenderSceneSnapshot& render_scene,
-                      resource::ResourcePlanSections  sections = resource::ResourcePlanAll,
-                      SceneLoadBenchRecorderView load_bench    = {}) -> RenderProgramPrepareStatus {
-        auto prepare_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_resources_prepare);
+                      resource::ResourcePlanSections  sections = resource::ResourcePlanAll)
+        -> RenderProgramPrepareStatus {
         loaded            = false;
         resource_prepare_session = rstd::None();
         if (rr.shader_reflection_cache.is_none()) {
@@ -706,11 +704,8 @@ struct RenderProgram {
 
         SnapshotImportedTextureProvider imported_textures(
             render_scene, ref<Scene>::from_raw_parts(rstd::addressof(scene)));
-        SnapshotTexturePrepareObserver texture_observer(load_bench);
-        auto                           content =
+        auto content =
             rstd::dyn<owe::resource::TextureContentProvider>::from_ref(imported_textures);
-        auto observer =
-            rstd::dyn<owe::resource::TexturePrepareObserver>::from_ref(texture_observer);
         auto buffer_content =
             rstd::dyn<owe::resource::BufferContentProvider>::from_ref(declarations);
         DeclaredShaderArtifactProvider declared_shaders(declarations);
@@ -724,25 +719,20 @@ struct RenderProgram {
                                               .shader  = rstd::Some(shader_artifacts.as_mut_ref()),
                                           },
                                           sections,
-                                          Some(observer.as_mut_ref()));
+                                          None());
         if (started.is_err()) {
             auto error = rstd::move(started).unwrap_err_unchecked();
             rstd_error("prepare resource plan failed: {}", error.message);
             return RenderProgramPrepareStatus::Failed;
         }
         resource_prepare_session.insert(rstd::move(started).unwrap_unchecked());
-        return continuePrepare(scene, device, rr, load_bench);
+        return continuePrepare(scene, device, rr);
     }
 
-    auto continuePrepare(owe::Scene& scene, const Device& device, RenderingResources& rr,
-                         SceneLoadBenchRecorderView load_bench = {}) -> RenderProgramPrepareStatus {
-        auto prepare_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_resources_prepare);
+    auto continuePrepare(owe::Scene& scene, const Device& device, RenderingResources& rr)
+        -> RenderProgramPrepareStatus {
         if (resource_prepare_session.is_none()) return RenderProgramPrepareStatus::Failed;
-        SnapshotTexturePrepareObserver texture_observer(load_bench);
-        auto                           observer =
-            rstd::dyn<owe::resource::TexturePrepareObserver>::from_ref(texture_observer);
-        auto progress = rr.resources.ContinuePreparePlan(*resource_prepare_session,
-                                                         Some(observer.as_mut_ref()));
+        auto progress = rr.resources.ContinuePreparePlan(*resource_prepare_session, None());
         if (progress.is_err()) {
             auto error = rstd::move(progress).unwrap_err_unchecked();
             rstd_error("prepare resource plan failed: {}", error.message);

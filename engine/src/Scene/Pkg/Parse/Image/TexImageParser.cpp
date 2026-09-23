@@ -4,6 +4,7 @@ module;
 #include <lz4.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#include <Core/OrderedTaskPool.hpp>
 
 module wescene.pkg.parse;
 import wescene.core;
@@ -497,36 +498,16 @@ auto owe::ParseImages(ref<dyn<IImageParser>> parser, slice<String> names, usize 
 
     if (names.len() < usize(2) || max_workers < usize(2)) return parse_sequential();
 
-    const auto worker_count = rstd::min(names.len(), max_workers);
-    auto       group = rstd::thread::BlockingTaskGroup<Result<Arc<Image>, ImageParseError>>::make(
-        worker_count, worker_count);
-    if (group.is_err()) return parse_sequential();
-
-    usize submitted_count {};
-    for (; submitted_count < names.len(); ++submitted_count) {
-        auto name      = names[submitted_count].clone();
-        auto submitted = group->submit([parser, name = rstd::move(name)]() mutable {
+    // 结果按 names 的下标顺序取回，与各任务完成先后无关。
+    OrderedTaskPool<Result<Arc<Image>, ImageParseError>> pool(
+        rstd::min(names.len(), max_workers).to_primitive());
+    for (usize index {}; index < names.len(); ++index) {
+        pool.Submit([parser, name = names[index].clone()]() mutable {
             return parser->Parse(name.as_str());
         });
-        if (submitted.is_err()) break;
     }
-
-    auto outcomes = rstd::move(*group).join();
-    auto images   = Vec<Result<Arc<Image>, ImageParseError>>::with_capacity(names.len());
-    for (auto& outcome : outcomes) {
-        auto value = rstd::move(outcome).into_value();
-        if (value.is_some()) {
-            images.push(rstd::move(value).unwrap_unchecked());
-        } else {
-            images.push(Err(ImageParseError {
-                .kind    = ImageParseErrorKind::DecodeFailed,
-                .message = String::make("texture parse task failed"_str),
-            }));
-        }
-    }
-    for (usize index = submitted_count; index < names.len(); ++index) {
-        images.push(parser->Parse(names[index].as_str()));
-    }
+    auto images = Vec<Result<Arc<Image>, ImageParseError>>::with_capacity(names.len());
+    for (usize index {}; index < names.len(); ++index) images.push(pool.Next());
     return images;
 }
 

@@ -18,13 +18,15 @@ INPUTS = [
     ("eigen", "https://gitlab.com/libeigen/eigen/-/archive/bc3b39870ecb690a623a3f49149a358b95c5781d/eigen-bc3b39870ecb690a623a3f49149a358b95c5781d.zip", None, bootstrap.DEPS),
     ("vulkan-loader", "https://codeload.github.com/KhronosGroup/Vulkan-Loader/zip/v1.4.321", None, bootstrap.DEPS),
     ("nlohmann-json", "https://github.com/nlohmann/json/releases/download/v3.12.0/include.zip", None, bootstrap.DEPS),
+    ("cli11", "https://github.com/CLIUtils/CLI11/releases/download/v2.7.2/CLI11.hpp", "ffa9a30da295c5858fb5f91f9f45771bab09471d7010a34c7c68c857a330dd76", bootstrap.DEPS),
+    ("googletest", "https://github.com/google/googletest/archive/refs/tags/v1.18.0.tar.gz", "6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5", bootstrap.DEPS),
 ]
 
 def seed_from_cache(cache: pathlib.Path, inputs: list) -> None:
     """本地缓存里有 SHA256 与锁一致的包时，先放进 .deps/downloads，obtain 就不再联网。"""
     for name, url, _, base in inputs:
         expected = bootstrap.LOCKED.get(url)
-        target = base / "downloads" / (name + ".zip")
+        target = base / "downloads" / (name + bootstrap.archive_suffix(url))
         if expected is None or target.exists():
             continue
         for candidate in cache.iterdir():
