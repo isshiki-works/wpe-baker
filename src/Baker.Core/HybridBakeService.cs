@@ -89,7 +89,7 @@ public sealed class HybridBakeService(NativeTools tools)
         report.Remove("reason_localized");
     }
 
-    private static JsonArray? PlannedSourceScriptErrors(JsonObject plan) =>
+    internal static JsonArray? PlannedSourceScriptErrors(JsonObject plan) =>
         plan["source_script_error_evidence"]?["status"]?.GetValue<string>() == "available" ? SourceScriptErrors(plan) : null;
 
     private static void AttachPlanProvenance(JsonObject report, JsonObject plan)
@@ -251,7 +251,7 @@ public sealed class HybridBakeService(NativeTools tools)
         HybridExportSafety.LateExternalDependencies(master, groupLayers, sourceObjects);
 
     /// <summary>
-    /// 一次烘焙的外层入口。中间产物（捕获副本、各组无损 master、合成探针与参照、分析刷新目录）在这里统一清理：
+    /// 一次烘焙的外层入口。中间产物（捕获副本、各组无损 master、合成探针与参照、分析刷新目录等，登记表见 WorkLayout）在这里统一清理：
     /// 成功、拒绝、失败、取消都清，只留成品工程、bake.json、接缝预览与日志。
     /// <c>--keep-intermediates</c>（<see cref="HybridBakeRequest.KeepIntermediates"/>）给开发者留原样；
     /// 合成校验被拒时保留探针与参照，报告里的 probe_paths 才有东西可看。
@@ -263,49 +263,21 @@ public sealed class HybridBakeService(NativeTools tools)
         ArgumentNullException.ThrowIfNull(request);
         if (request.ProbeFrames > 0 || request.KeepIntermediates)
             return await BakeRunAsync(request, progress, cancellationToken);
-        string output = Path.GetFullPath(request.OutputDirectory);
+        var layout = new WorkLayout(request.OutputDirectory);
         JsonObject? result = null;
         try { return result = await BakeRunAsync(request, progress, cancellationToken); }
         finally
         {
-            JsonArray? cleanupErrors = RemoveIntermediates(output, keepCompositionProbe: result?["probe_paths"] is JsonObject);
+            // 按 WorkLayout 的登记表清理；合成被拒时探针与参照留给报告指路。
+            JsonArray? cleanupErrors = layout.RemoveIntermediates(WorkLayout.KeepsCompositionProbe(result));
             if (result is not null)
             {
                 result["intermediates_removed"] = true;
                 if (cleanupErrors is not null) result["intermediate_cleanup_errors"] = cleanupErrors;
-                try { await File.WriteAllTextAsync(Path.Combine(output, "bake.json"), result.ToJsonString(JsonOptions), CancellationToken.None); }
+                try { await BakeReportWriter.SaveAsync(layout.Report, result, null, CancellationToken.None); }
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             }
         }
-    }
-
-    /// <summary>这一案结束后不再需要的目录。合成探针与参照在被拒的报告里还被 probe_paths 引用，按需保留。</summary>
-    internal static JsonArray? RemoveIntermediates(string outputDirectory, bool keepCompositionProbe = false)
-    {
-        JsonArray? errors = null;
-        void Remove(string directory)
-        {
-            try { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                (errors ??= []).Add(new JsonObject { ["path"] = directory, ["error"] = error.Message });
-            }
-        }
-        // 候选回退那一次烘焙的输出在 loop-allocation-candidate 下，中间产物同名同结构。
-        foreach (string root in new[] { outputDirectory, Path.Combine(outputDirectory, "loop-allocation-candidate") })
-        {
-            foreach (string suffix in keepCompositionProbe
-                ? new[] { ".analysis-refresh" }
-                : [".composition-probe", ".composition-reference", ".analysis-refresh"])
-                Remove(root + suffix);
-            if (!Directory.Exists(root)) continue;
-            Remove(Path.Combine(root, "capture-source"));
-            string[] children;
-            try { children = Directory.GetDirectories(root); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { continue; }
-            foreach (string child in children) Remove(Path.Combine(child, "master"));
-        }
-        return errors;
     }
 
     private async Task<JsonObject> BakeRunAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
@@ -389,176 +361,29 @@ public sealed class HybridBakeService(NativeTools tools)
         using var source = new ProjectSource(plan["source"]!.GetValue<string>());
         string sourceHash = await source.SourceHashAsync(cancellationToken);
         if (sourceHash != plan["source_sha256"]!.GetValue<string>()) throw new InvalidDataException("Source changed; analyze it again.");
-        string output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.OutputDirectory));
+        var layout = new WorkLayout(request.OutputDirectory);
+        string output = layout.Output;
         EnsureNewDerivedOutput(source, output, "Hybrid output");
-        string? destination = request.ProjectDirectory is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.ProjectDirectory));
-        if (destination is not null)
+        string? destination = ProjectPublisher.Destination(request.ProjectDirectory, source, output);
+        // 成品烘焙在任何渲染之前过闸门链（BakeGates.Preflight），第一道拒绝就写 bake.json 结束；
+        // 探针（合成校验的短烘焙）由外层这一案发起，不过闸。
+        var preflight = new BakeGateContext(request, source, sourceHash, layout, progress, timing)
+            { Plan = plan, Settings = PlanSettings.Of(plan) };
+        if (request.ProbeFrames == 0 && await BakeGates.FirstRejectionAsync(BakeGates.Preflight(tools,
+                (context, token) => ValidateCompositionAsync(context.Request, context.Plan, context.Settings, context.Source,
+                    context.Layout.Output, context.Progress, token),
+                EstimateEmbeddedVideoAsync), preflight, cancellationToken) is BakeRejection rejection)
         {
-            ProjectSource.EnsureNoReparsePoints(destination);
-            if (Directory.Exists(destination) || File.Exists(destination)) throw new IOException("The destination project directory must be new.");
-            foreach (string parent in new[] { source.DirectoryPath, output })
-                if (destination.Equals(parent, StringComparison.OrdinalIgnoreCase) ||
-                    destination.StartsWith(Path.TrimEndingDirectorySeparator(parent) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                    parent.StartsWith(destination + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                    throw new IOException("The destination project must be separate from source and working directories.");
-        }
-        HybridAnalyzeRequest settings = PlanSettings.Of(plan);
-        if (request.ProbeFrames == 0)
-        {
-            JsonArray? errors = PlannedSourceScriptErrors(plan);
-            if (errors is null)
-            {
-                string refreshOutput = output + ".analysis-refresh";
-                progress?.Report(new("refreshing_script_fault_evidence", 0,
-                    "Refreshing an older plan with current source script fault evidence."));
-                plan = await new HybridScenePlanner(tools).AnalyzeSingleAsync(settings with {
-                    Source = source.SourcePath, OutputDirectory = refreshOutput, RuntimeTraceFile = null
-                    }, progress, cancellationToken);
-                HybridPlanFormat.Validate(plan);
-                if (plan["blockers"] is JsonArray { Count: > 0 })
-                    throw new InvalidDataException("The refreshed analysis requires resolution before generation.");
-                if (HybridScenePlanner.FullFrameConflict(plan) is Blocker refreshedLayoutConflict)
-                    throw refreshedLayoutConflict.ToException();
-                if (HybridScenePlanner.CompositionHierarchyConflict(plan) is Blocker refreshedHierarchyConflict)
-                    throw refreshedHierarchyConflict.ToException();
-                settings = PlanSettings.Of(plan);
-                errors = PlannedSourceScriptErrors(plan)
-                    ?? throw new InvalidDataException("The refreshed analysis omitted source script fault evidence.");
-            }
-            var plannedIds = plan["layers"]!.AsArray().OfType<JsonObject>().Select(HybridScenePlanner.Id).ToHashSet();
-            if (errors.OfType<JsonObject>().Any(error => HybridScenePlanner.Int(error["owner_layer_id"]) is not int owner || !plannedIds.Contains(owner)))
-                throw new InvalidDataException("A source script fault lacks a known authored owner; analyze the source again before generation.");
-        }
-        JsonObject? residualMasking = null;
-        async Task<JsonObject> NoLoopReportAsync(JsonArray? unresolved, JsonObject? residual = null,
-            string status = "candidate_rejected_no_loop")
-        {
-            bool layoutRejected = status == ResidualMasking.LayoutRejectedStatus;
-            var trailer = new JsonObject();
-            if (residual?["reason"]?.GetValue<string>() is string residualReason) trailer["reason"] = residualReason;
-            else new Message(unresolved is { Count: > 0 } ? "bake.loop_unresolved" : "bake.no_loop_candidate").Write(trailer, "reason");
-            if (layoutRejected)
-            {
-                trailer["reason_zh"] = residual?["reason_zh"]?.DeepClone();
-                trailer["reason_en"] = residual?["reason_en"]?.DeepClone();
-            }
-            if (residual is not null) trailer["residual_masking"] = residual.DeepClone();
-            return await RejectAsync(new(status, sourceHash, plan.DeepClone().AsObject(), request.EffectRenderScale,
-                request.MatchEffectResolution, layoutRejected ? "not_performed" : "no_suitable_loop", new(), trailer));
-        }
-        // 拒绝出口共用：写出报告、带上计划来源与阶段计时。
-        async Task<JsonObject> RejectAsync(BakeRejection rejection)
-        {
-            Directory.CreateDirectory(output);
             JsonObject rejected = rejection.ToJson();
-            AttachPlanProvenance(rejected, plan);
-            timing.Stamp(rejected);
-            await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "bake.json"), rejected, cancellationToken);
-            return rejected;
+            AttachPlanProvenance(rejected, preflight.Plan);
+            return await BakeReportWriter.WriteNewAsync(layout.Report, rejected, timing, cancellationToken);
         }
-        async Task<JsonObject?> RefreshLoopOrRejectAsync()
-        {
-            var runtime = JsonNode.Parse(await File.ReadAllTextAsync(plan["runtime_evidence"]!.GetValue<string>(), cancellationToken))!.AsObject();
-            // Rebuild from source and current runtime evidence; never accept a saved observed cut or start.
-            HybridScenePlanner.RefreshLoop(plan, source, runtime, settings);
-            JsonArray? unresolved = plan["loop"]?["unresolved"] as JsonArray;
-            residualMasking = null;
-            // 与分析同一个准入判定：无候选按无循环拒绝；留着的未解析分量逐条判定能否被接缝淡化掩盖，
-            // 拒绝要说清是哪一层、哪个机制、缺什么证明。
-            AdmissionVerdict admission = Admission.Evaluate(plan, source.ReadJson(source.SceneResource),
-                ResidualMasking.ResourceReader(source, settings.Assets));
-            if (admission.Rejection == AdmissionRejection.NoLoop) return await NoLoopReportAsync(unresolved);
-            JsonObject classification = admission.Residual!;
-            if (classification["status"]?.GetValue<string>() == "no_residual") return null;
-            plan["loop"]!["residual_masking"] = classification.DeepClone();
-            if (admission.Rejection == AdmissionRejection.ResidualNotMaskable)
-                return await NoLoopReportAsync(unresolved, classification);
-            // 防御：透明组与多组都能淡化，布局淡化不了的只有"可掩盖分量不在任何视频组里"；analyze 已把它写成 blocker，
-            // 界面改过分配的计划仍可能走到这里。在合成校验与任何渲染之前干净拒绝，写 bake.json，不抛异常，也不自动换分配。
-            if (admission.Rejection == AdmissionRejection.ResidualLayout)
-            {
-                JsonObject layout = admission.LayoutGate!;
-                classification["status"] = "rejected_layout";
-                classification["reason"] = layout["reason"]!.DeepClone();
-                classification["reason_zh"] = layout["reason_zh"]!.DeepClone();
-                classification["reason_en"] = layout["reason_en"]!.DeepClone();
-                classification["layout_gate"] = layout;
-                plan["loop"]!["residual_masking"] = classification.DeepClone();
-                return await NoLoopReportAsync(unresolved, classification, ResidualMasking.LayoutRejectedStatus);
-            }
-            residualMasking = classification;
-            return null;
-        }
-        if (request.ProbeFrames == 0 && await RefreshLoopOrRejectAsync() is JsonObject initialLoopRejection)
-            return initialLoopRejection;
-        ulong frames = request.ProbeFrames > 0 ? request.ProbeFrames :
-            (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["frames"]?.GetValue<ulong>() ?? 0;
-        if (frames == 0) return await NoLoopReportAsync(null);
-        // 磁盘闸门：中间产物峰值按计划预估，空间不够就在任何渲染开始前干净拒绝（见 BakeDiskBudget）。
-        // 探针只有几十帧，不值得为它拦一次；真正的量在主渲染上。
-        if (request.ProbeFrames == 0 &&
-            BakeDiskBudget.Reject(plan, frames, request.GroupParallel, output) is JsonObject diskRejection)
-            return await RejectAsync(new(BakeDiskBudget.RejectedBakeStatus, sourceHash, plan, request.EffectRenderScale,
-                request.MatchEffectResolution, "not_performed", new() {
-                    ["reason"] = diskRejection["reason"]?.DeepClone(), ["reason_localized"] = diskRejection["reason_localized"]?.DeepClone(),
-                    ["disk_budget"] = diskRejection }, new()));
-        // 锁定周期的粒子层（封顶 + 确定寿命）只在循环长度是替换周期的整数倍时同相位：analyze 的求解器已保证，这里防御旧版或改过的计划。
-        if (request.ProbeFrames == 0 && residualMasking is not null &&
-            ResidualMasking.LockedCycleMismatch(residualMasking, frames, settings.FpsNumerator, settings.FpsDenominator) is JsonObject cycleMismatch)
-        {
-            residualMasking["status"] = "rejected_particle_cycle";
-            residualMasking["reason"] = cycleMismatch["reason"]!.DeepClone();
-            residualMasking["particle_cycle_mismatch"] = cycleMismatch;
-            plan["loop"]!["residual_masking"] = residualMasking.DeepClone();
-            return await NoLoopReportAsync(plan["loop"]?["unresolved"] as JsonArray, residualMasking);
-        }
-        JsonObject? compositionValidation = null;
-        if (request.ProbeFrames == 0)
-        {
-            using (timing.Measure(StageTiming.CompositionValidation))
-                compositionValidation = await ValidateCompositionAsync(request, plan, settings, source, output, progress, cancellationToken);
-            if (compositionValidation["status"]?.GetValue<string>() != "composition_pass")
-            {
-                bool scriptErrorsRejected = compositionValidation["status"]?.GetValue<string>() == CandidateScriptErrorGate.RejectedCompositionStatus;
-                var evidence = new JsonObject
-                {
-                    ["reason"] = compositionValidation["reason"]?.DeepClone(),
-                    ["metrics"] = compositionValidation["metrics"]?.DeepClone(),
-                    ["composition_validation"] = compositionValidation,
-                    ["probe_paths"] = new JsonObject
-                    {
-                        ["output"] = compositionValidation["probe_output_path"]?.DeepClone(),
-                        ["capture_source"] = compositionValidation["probe_capture_source_path"]?.DeepClone(),
-                        ["reference"] = compositionValidation["comparison_reference_path"]?.DeepClone(),
-                        ["project"] = compositionValidation["probe_project_path"]?.DeepClone(),
-                        ["comparison"] = compositionValidation["comparison_report_path"]?.DeepClone()
-                    }
-                };
-                var trailer = new JsonObject();
-                if (scriptErrorsRejected)
-                {
-                    trailer["reason_zh"] = compositionValidation["reason_zh"]?.DeepClone();
-                    trailer["reason_en"] = compositionValidation["reason_en"]?.DeepClone();
-                }
-                return await RejectAsync(new(scriptErrorsRejected ? CandidateScriptErrorGate.RejectedBakeStatus : "candidate_rejected_composition",
-                    sourceHash, plan, request.EffectRenderScale, request.MatchEffectResolution, "not_performed", evidence, trailer));
-            }
-        }
-        // 内嵌视频大小（WPE 实测 2 GiB 上限，见 EmbeddedVideoBudget）：起点搜索与主渲染之前按试编码外推，超限就干净拒绝，
-        // 不再跑完几个小时才在装配时失败。外推读不到时只记录、不拒绝，编码后还有一次按实际字节的检查。
-        JsonObject? embeddedVideoEstimate = null;
-        if (request.ProbeFrames == 0 && compositionValidation is not null)
-        {
-            embeddedVideoEstimate = await EstimateEmbeddedVideoAsync(compositionValidation, frames, settings, cancellationToken);
-            if (embeddedVideoEstimate["status"]?.GetValue<string>() == "predicted_over_limit")
-            {
-                return await RejectAsync(new(EmbeddedVideoBudget.RejectedBakeStatus, sourceHash, plan, request.EffectRenderScale,
-                    request.MatchEffectResolution, "not_performed", new() {
-                        ["reason"] = embeddedVideoEstimate["reason"]?.DeepClone(),
-                        ["reason_localized"] = embeddedVideoEstimate["reason_localized"]?.DeepClone(),
-                        ["composition_validation"] = compositionValidation, ["embedded_video_estimate"] = embeddedVideoEstimate }, new()));
-            }
-        }
+        plan = preflight.Plan;
+        HybridAnalyzeRequest settings = preflight.Settings;
+        ulong frames = request.ProbeFrames > 0 ? request.ProbeFrames : preflight.Frames;
+        JsonObject? residualMasking = preflight.ResidualMasking;
+        JsonObject? compositionValidation = preflight.CompositionValidation;
+        JsonObject? embeddedVideoEstimate = preflight.EmbeddedVideoEstimate;
         var original = source.ReadJson(source.SceneResource);
         HybridScenePlanner.ApplyAudioEffectChoice(original, plan);
         var metadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
@@ -571,17 +396,8 @@ public sealed class HybridBakeService(NativeTools tools)
         // 1 = 与改动前逐组串行完全一致，核显机器上默认不变。
         int groupParallel = Math.Clamp(request.GroupParallel, 1, Math.Max(1, groups.Length));
         Directory.CreateDirectory(output);
-        var report = new JsonObject {
-            ["schema_version"] = 2, ["artifact_kind"] = request.ProbeFrames > 0 ? "hybrid_video_probe" : "hybrid_video_candidate",
-            ["status"] = "running", ["source_sha256"] = sourceHash, ["source_digest_scope"] = ProjectSource.DigestScope,
-            ["frames"] = frames, ["plan"] = plan.DeepClone(), ["groups"] = new JsonArray(),
-            ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified", ["loop_validation"] = "not_performed",
-            ["source_start_frame"] = 0,
-            // 这两项记下本次实际生效的并行设置，事后核对每案耗时时不用再翻命令行。
-            ["encode_slots"] = request.EncodeSlots, ["group_parallel"] = groupParallel,
-            ["effect_render_scale"] = request.EffectRenderScale,
-            ["match_effect_resolution"] = request.MatchEffectResolution,
-            ["seam_policy"] = residualMasking is null ? "source_period_no_repair" : ResidualMasking.SeamPolicy };
+        var report = BakeReportWriter.Running(request, sourceHash, frames, plan.DeepClone().AsObject(), groupParallel,
+            residualMasking is null ? "source_period_no_repair" : ResidualMasking.SeamPolicy);
         if (residualMasking is not null)
         {
             report["residual_masking"] = residualMasking.DeepClone();
@@ -597,12 +413,7 @@ public sealed class HybridBakeService(NativeTools tools)
             report["full_capture_source_script_error_count"] = 0;
             report["full_capture_source_script_errors"] = fullCaptureScriptErrors;
         }
-        string reportPath = Path.Combine(output, "bake.json");
-        async Task Save()
-        {
-            timing.Stamp(report);
-            await File.WriteAllTextAsync(reportPath, report.ToJsonString(JsonOptions), CancellationToken.None);
-        }
+        Task Save() => BakeReportWriter.SaveAsync(layout.Report, report, timing, CancellationToken.None);
         await Save();
         // 提前启动的组主渲染登记表：换起点、换候选或收尾时先取消并等这些渲染器退出，再动组目录。
         // groupParallel == 1 时永远只登记当前这一组，等于没有提前启动。
@@ -625,7 +436,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 ?? throw new InvalidDataException("Runtime dependencies are missing.");
             DaytimeSplit.DynamicExport? daytimeExport = DaytimeSplit.PrepareDynamicExport(originalObjects, plan, runtimeDependencies);
             var finalDependencies = MergeRuntimeDependencies(runtimeDependencies, new JsonArray());
-            string captureProject = Path.Combine(output, "capture-source");
+            string captureProject = layout.CaptureSource;
             using (timing.Measure(StageTiming.SourceCapture)) await source.ExtractAsync(captureProject, cancellationToken);
             var snapshot = plan["snapshot_properties"]!.DeepClone().AsObject();
             async Task PrepareCaptureSourceAsync()
@@ -1333,19 +1144,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 report["groups"]!.AsArray().OfType<JsonObject>());
             report["retained_object_count"] = finalObjects.Count - replacements.Count;
             report["source_draw_objects_removed"] = groups.Sum(g => g["layer_ids"]!.AsArray().Count);
-            if (destination is not null && StaticOnlyBake.Finished(report["status"]!.GetValue<string>()))
-            {
-                progress?.Report(new("saving_project", 1, "Saving the validated project to the selected wallpaper folder."));
-                using (timing.Measure(StageTiming.ProjectAssembly))
-                {
-                    using var generated = new ProjectSource(project);
-                    await generated.ExtractAsync(destination, cancellationToken);
-                }
-                report["project_path"] = destination;
-                report["work_directory"] = output;
-                await Save();
-                await VideoSceneBuilder.WriteJsonAsync(Path.Combine(destination, "bake.json"), report, cancellationToken);
-            }
+            await ProjectPublisher.PublishAsync(report, project, destination, layout, timing, progress, cancellationToken);
             await Save();
             return report;
         }

@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json.Nodes;
 using Baker.Core;
 
@@ -60,34 +59,42 @@ internal static class BakeDiskBudgetChecks
             rejection["estimate"]?["peak_bytes"] is not null,
             "a bake that cannot fit is rejected with the required and available space in both languages");
 
-        // ---- ③ 结束后的清理范围 ----
+        // ---- ③ 结束后按 WorkLayout 登记表清理 ----
         string output = Path.Combine(root, "disk-budget-cleanup");
-        string[] removed = [Path.Combine(output, "capture-source"), Path.Combine(output, "group-1", "master"),
-            Path.Combine(output, "loop-allocation-candidate", "capture-source"),
-            Path.Combine(output, "loop-allocation-candidate", "group-1", "master"),
+        string[] removed = [Path.Combine(output, "capture-source"), Path.Combine(output, "reference"),
+            Path.Combine(output, "group-1", "master"), Path.Combine(output, "group-1", "master.gpu-unavailable"),
+            Path.Combine(output, "group-1", "capture-bounds"), Path.Combine(output, "group-1.start-search"),
+            Path.Combine(output, "prefix-7", "capture-source"),
             output + ".composition-probe", output + ".composition-reference", output + ".analysis-refresh"];
-        string[] kept = [Path.Combine(output, "project"), Path.Combine(output, "group-1", "seam-preview"),
-            Path.Combine(output, "loop-allocation-analysis"), output + ".composition-validation"];
+        // 成品工程是原作解包，里面恰好有叫 master 的文件夹也不能动；编码成品、硬解日志、合成比对结果都留着。
+        string[] kept = [Path.Combine(output, "project", "master"), Path.Combine(output, "group-1", "encoded"),
+            Path.Combine(output, "group-1", "hardware-decode"), Path.Combine(output, "prefix-7", "encoded"),
+            Path.Combine(output, "composition-validation"), output + ".composition-validation"];
         foreach (string directory in removed.Concat(kept))
         {
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "content.bin"), "x");
         }
+        File.WriteAllText(Path.Combine(output, "group-1", "seam-preview.mp4"), "x");
         File.WriteAllText(Path.Combine(output, "bake.json"), "{}");
-        MethodInfo remove = typeof(HybridBakeService).GetMethod("RemoveIntermediates", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var errors = (JsonArray?)remove.Invoke(null, [output, false]);
-        check(errors is null && removed.All(directory => !Directory.Exists(directory)) &&
-            kept.All(Directory.Exists) && File.Exists(Path.Combine(output, "bake.json")),
-            "finishing a bake removes the capture copies, group masters and composition probe but keeps the project and report");
+        JsonArray? errors = new WorkLayout(output + Path.DirectorySeparatorChar).RemoveIntermediates(
+            WorkLayout.KeepsCompositionProbe(new JsonObject { ["status"] = "candidate_generated" }));
+        check(errors is null && removed.All(directory => !Directory.Exists(directory)) && kept.All(Directory.Exists) &&
+            File.Exists(Path.Combine(output, "bake.json")) && File.Exists(Path.Combine(output, "group-1", "seam-preview.mp4")),
+            "finishing a bake removes every registered intermediate but keeps the project, report, videos and diagnostics");
 
-        // 合成校验被拒的报告靠 probe_paths 指路，这时探针与参照保留。
+        // 合成校验被拒的报告靠 probe_paths 指路，这时探针与参照（含效果前缀路线的原作参照）保留。
         string probeOutput = Path.Combine(root, "disk-budget-probe-kept");
         Directory.CreateDirectory(Path.Combine(probeOutput, "capture-source"));
+        Directory.CreateDirectory(Path.Combine(probeOutput, "reference"));
         Directory.CreateDirectory(probeOutput + ".composition-probe");
         Directory.CreateDirectory(probeOutput + ".composition-reference");
-        remove.Invoke(null, [probeOutput, true]);
-        check(!Directory.Exists(Path.Combine(probeOutput, "capture-source")) &&
+        new WorkLayout(probeOutput).RemoveIntermediates(WorkLayout.KeepsCompositionProbe(new JsonObject { ["probe_paths"] = new JsonObject() }));
+        check(!Directory.Exists(Path.Combine(probeOutput, "capture-source")) && Directory.Exists(Path.Combine(probeOutput, "reference")) &&
             Directory.Exists(probeOutput + ".composition-probe") && Directory.Exists(probeOutput + ".composition-reference"),
             "a composition rejection keeps the probe and reference its report points at");
+        check(!WorkLayout.KeepsCompositionProbe(null) &&
+            WorkLayout.KeepsCompositionProbe(new JsonObject { ["status"] = "candidate_rejected_composition" }),
+            "only composition rejections keep the probe");
     }
 }
