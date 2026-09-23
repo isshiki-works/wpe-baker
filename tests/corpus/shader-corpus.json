@@ -1,0 +1,447 @@
+{
+ "about": "着色器时钟规则的数据驱动测试语料。每个 suite 合成一个工程：shaders 下每个名字各生成 effects/<名>.json → materials/<名>.json → shaders/<名>.frag|.vert；objects 每项是一个图层，引用 shader 名并给出作者 pass 的常量与 combo。expect 每项对应原 Shader*Checks 的一条断言（message 保留原文），按图层过滤后核对裁定、周期、补丁与明细。",
+ "suites": [
+  {
+   "name": "water-flow",
+   "from": "WaterFlowPeriodChecks",
+   "shaders": {
+    "flow": {
+     "frag": [
+      "uniform float g_Time;",
+      "uniform float g_FlowSpeed; // {\"material\":\"speed\",\"default\":1}",
+      "float flowPhase = texSample2D(g_Texture2, v_TexCoord.xy * g_FlowPhaseScale).r;",
+      "vec4 cycles = vec4(frac(g_Time * g_FlowSpeed),",
+      "                   frac(g_Time * g_FlowSpeed + 0.5),",
+      "                   frac(0.25 + g_Time * g_FlowSpeed),",
+      "                   frac(0.25 + g_Time * g_FlowSpeed + 0.5));",
+      "float outputPhase = flowPhase + cycles.x;"
+     ]
+    },
+    "flow-drift": {
+     "same_as": "flow",
+     "append": [
+      "uv += g_Time * 0.125;"
+     ]
+    },
+    "flow-conditional": {
+     "same_as": "flow",
+     "prepend": [
+      "#if MODE"
+     ],
+     "append": [
+      "#endif"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "flow",
+     "constants": {
+      "speed": 0.19
+     }
+    },
+    {
+     "id": 2,
+     "shader": "flow-drift",
+     "constants": {
+      "speed": 0.19
+     }
+    },
+    {
+     "id": 3,
+     "shader": "flow-conditional",
+     "constants": {
+      "speed": 0.19
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "four water-flow frac phases yield one analytic reciprocal-speed period",
+     "components_total": 1,
+     "layer": 1,
+     "components": 1,
+     "allow_retime": true,
+     "key": "speed",
+     "period": "1/0.19"
+    },
+    {
+     "message": "extra time drift and an effective preprocessor branch keep water-flow-like shaders unresolved",
+     "unresolved_total": 2
+    },
+    {
+     "message": "extra time drift and an effective preprocessor branch keep water-flow-like shaders unresolved",
+     "layer": 2,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "extra time drift and an effective preprocessor branch keep water-flow-like shaders unresolved",
+     "layer": 3,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    }
+   ]
+  },
+  {
+   "name": "shake",
+   "from": "ShaderPeriodGeneralizationChecks",
+   "shaders": {
+    "shake": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"NOISE\",\"type\":\"options\",\"default\":0}",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "#if AUDIOPROCESSING == 0",
+      "float flowPhase = 0.0;",
+      "flowPhase = texSample2D(g_Texture2, v_TexCoord.zw).r * M_PI_2;",
+      "#if NOISE",
+      "vec4 sines = flowPhase + frac(g_Speed * g_Time / M_PI_2 * vec4(1, -0.16161616, 0.0083333, -0.00019841)) * M_PI_2;",
+      "#else",
+      "float time = g_Speed * g_Time + flowPhase;",
+      "offset = sin(frac(time / M_PI_2) * M_PI_2);",
+      "float base = step(0.0, cos(time));",
+      "#endif",
+      "#endif"
+     ]
+    },
+    "shake-drift": {
+     "same_as": "shake",
+     "append": [
+      "uv += g_Time * 0.125;"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "shake",
+     "constants": {
+      "speed": 1.25
+     }
+    },
+    {
+     "id": 2,
+     "shader": "shake",
+     "constants": {
+      "speed": 0.5
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 3,
+     "shader": "shake",
+     "constants": {
+      "speed": 0.75
+     },
+     "combos": {
+      "AUDIOPROCESSING": 1
+     }
+    },
+    {
+     "id": 4,
+     "shader": "shake-drift",
+     "constants": {
+      "speed": 1
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "wrapped shake sin/cos timing yields one analytic retimable speed component",
+     "components_total": 1,
+     "layer": 1,
+     "components": 1,
+     "allow_retime": true,
+     "key": "speed",
+     "period": "2pi/1.25"
+    },
+    {
+     "message": "shake noise and audio variants remain unresolved",
+     "layer": 2,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "NOISE"
+     ]
+    },
+    {
+     "message": "shake noise and audio variants remain unresolved",
+     "layer": 3,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains_ignore_case": [
+      "audio"
+     ]
+    },
+    {
+     "message": "a shake-like shader with an additional time drift is not reduced to the wrapped period",
+     "layer": 4,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    }
+   ]
+  },
+  {
+   "name": "rule-coverage",
+   "from": "C2.1b 消融补例（规则表逐条破坏时必须挂）",
+   "shaders": {
+    "wave": {
+     "frag": [
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"default\":1}",
+      "float distance = g_Time * g_Speed;",
+      "float v = sin(distance);"
+     ]
+    },
+    "autosway": {
+     "frag": [
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"default\":1}",
+      "float thisMotionTime = g_Time * g_Speed;",
+      "float s = sin(thisMotionTime * M_PI_2);"
+     ]
+    },
+    "autosway-noise": {
+     "same_as": "autosway",
+     "prepend": [
+      "#if NOISE"
+     ],
+     "append": [
+      "#endif"
+     ]
+    },
+    "scroll": {
+     "frag": [
+      "uniform float g_Time;",
+      "scroll = sign(scroll) * pow(vec2(g_ScrollX, g_ScrollY), CAST2(2.0));",
+      "vec2 uv = frac((v_TexCoord + v_Scroll) * g_Scale);"
+     ]
+    },
+    "sine": {
+     "frag": [
+      "// [COMBO] {\"combo\":\"NOISE\",\"type\":\"options\",\"default\":0}",
+      "uniform float g_Time;",
+      "#if NOISE",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-noise-on": {
+     "frag": [
+      "// [COMBO] {\"combo\":\"NOISE\",\"type\":\"options\",\"default\":1}",
+      "uniform float g_Time;",
+      "#if NOISE",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "pulse": {
+     "frag": [
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "uniform float g_Time;",
+      "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":1}",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}",
+      "uniform float g_NoiseSpeed;",
+      "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
+      "float pulse = sin(g_Time * g_PulseSpeed + noise);"
+     ]
+    },
+    "pulse-two-stage": {
+     "same_as": "pulse",
+     "vert": [
+      "uniform float g_Time;",
+      "uniform float g_PulseSpeed;"
+     ]
+    },
+    "plain-clock": {
+     "frag": [
+      "uniform float g_Time;",
+      "float v = g_Time;"
+     ]
+    },
+    "sine-bare": {
+     "frag": [
+      "uniform float g_Time;",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "wave",
+     "constants": {
+      "speed": 0.5
+     }
+    },
+    {
+     "id": 2,
+     "shader": "wave",
+     "constants": {
+      "speed": 0
+     }
+    },
+    {
+     "id": 3,
+     "shader": "autosway",
+     "constants": {
+      "speed": 0.25
+     }
+    },
+    {
+     "id": 4,
+     "shader": "autosway-noise",
+     "constants": {
+      "speed": 0.25
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 5,
+     "shader": "scroll",
+     "constants": {
+      "repeat": "2 2",
+      "speedx": 0.5,
+      "speedy": 0
+     }
+    },
+    {
+     "id": 6,
+     "shader": "sine",
+     "constants": {
+      "speed": 2
+     }
+    },
+    {
+     "id": 7,
+     "shader": "sine-noise-on",
+     "constants": {
+      "speed": 2
+     }
+    },
+    {
+     "id": 8,
+     "shader": "pulse",
+     "constants": {
+      "speed": 3,
+      "noiseamount": 0
+     }
+    },
+    {
+     "id": 9,
+     "shader": "pulse-two-stage",
+     "constants": {
+      "speed": 3,
+      "noiseamount": 0
+     }
+    },
+    {
+     "id": 10,
+     "shader": "plain-clock",
+     "combos": {
+      "DUALWAVES": 1
+     }
+    },
+    {
+     "id": 11,
+     "shader": "sine-bare",
+     "constants": {
+      "speed": 2
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "a single-clock water wave yields its 2π/speed period",
+     "layer": 1,
+     "components": 1,
+     "allow_retime": true,
+     "key": "speed",
+     "period": "2pi/0.5"
+    },
+    {
+     "message": "a zero water-wave speed is a missing speed, not a stopped clock",
+     "layer": 2,
+     "unresolved": 1,
+     "kind": "MissingOrInvalidSpeed"
+    },
+    {
+     "message": "a single-clock auto sway yields the exact fixed 1/speed period without retime",
+     "layer": 3,
+     "components": 1,
+     "allow_retime": false,
+     "key": "speed",
+     "period": "1/0.25"
+    },
+    {
+     "message": "auto sway under an enabled NOISE branch is refused",
+     "layer": 4,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "Auto-sway noise"
+     ]
+    },
+    {
+     "message": "scroll x closes after 1/(speedx²·repeat) and a zero speedy adds nothing",
+     "layer": 5,
+     "components": 1,
+     "key": "speedx",
+     "exponent": 2,
+     "period_seconds": 2
+    },
+    {
+     "message": "the generic sine yields 2π/speed when NOISE defaults off",
+     "layer": 6,
+     "components": 1,
+     "key": "speed",
+     "period": "2pi/2"
+    },
+    {
+     "message": "a sine whose NOISE combo defaults on and is not authored is refused",
+     "layer": 7,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "NOISE"
+     ]
+    },
+    {
+     "message": "a noise-free pulse yields 2π/speed",
+     "layer": 8,
+     "components": 1,
+     "key": "speed",
+     "period": "2pi/3"
+    },
+    {
+     "message": "a pulse whose g_Time uniforms outnumber its pulse sines is not the verified pulse",
+     "layer": 9,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "DUALWAVES=1 on a source without the dual-wave equation refuses with the dual-wave reason",
+     "layer": 10,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism",
+     "detail_contains": [
+      "Dual water-wave source has an unverified equation"
+     ]
+    },
+    {
+     "message": "a sine without any NOISE branch is not gated by an undeclared NOISE default",
+     "layer": 11,
+     "components": 1,
+     "key": "speed",
+     "period": "2pi/2"
+    }
+   ]
+  }
+ ]
+}
