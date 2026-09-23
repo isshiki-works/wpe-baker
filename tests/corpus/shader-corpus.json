@@ -968,7 +968,8 @@
       "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
       "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
       "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
-      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}",
+      "pulse = sin(g_Time * g_PulseSpeed + phase);",
       "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
       "pulse += noise;"
      ]
@@ -979,7 +980,8 @@
       "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
       "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
       "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
-      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}",
+      "pulse = sin(g_Time * g_PulseSpeed + phase);",
       "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
       "pulse += noise;"
      ],
@@ -995,7 +997,8 @@
       "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
       "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
       "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
-      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}",
+      "pulse = sin(g_Time * g_PulseSpeed + phase);",
       "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
       "pulse += noise;"
      ]
@@ -1006,7 +1009,8 @@
       "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
       "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
       "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
-      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}",
+      "pulse = sin(g_Time * g_PulseSpeed + phase);",
       "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
       "pulse += noise;"
      ]
@@ -1017,7 +1021,8 @@
       "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
       "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
       "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
-      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}",
+      "pulse = sin(g_Time * g_PulseSpeed + phase);",
       "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
       "pulse += noise;",
       "uv += g_Time * 0.125;"
@@ -1103,6 +1108,280 @@
     {
      "message": "an additional pulse time input is not hidden by the noise-disabled mechanism",
      "layer": 5,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    }
+   ]
+  },
+  {
+   "name": "whitespace",
+   "from": "SPA 修正 3：指纹统一在归一化文本上求值，注释元数据按解析后的 JSON 核对",
+   "shaders": {
+    "spaced_pulse": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "uniform  float g_PulseSpeed;   // { \"material\" : \"speed\", \"default\" : 3 }",
+      "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
+      "uniform float g_NoiseAmount; //{ \"default\": 0, \"material\": \"noiseamount\" }",
+      "pulse = sin(g_Time *\tg_PulseSpeed + phase);",
+      "float noise = texSample2D(g_Texture1,",
+      "    vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
+      "pulse += noise;"
+     ]
+    },
+    "commented_pulse": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
+      "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
+      "pulse += noise;"
+     ]
+    },
+    "wrong_material": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "uniform float g_PulseSpeed; // {\"material\":\"rate\",\"default\":3}",
+      "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}",
+      "pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
+      "pulse += noise;"
+     ]
+    },
+    "spaced_sine": {
+     "frag": [
+      "// [COMBO] {\"combo\":\"NOISE\",\"type\":\"options\",\"default\":0}",
+      "#if NOISE",
+      "#endif",
+      "uniform float g_Time;  uniform float g_Speed;\tuniform float g_Phase; uniform float g_Amount;",
+      "void main(){float x=sin(g_Time  *  g_Speed + g_Phase * 6.28318530718)",
+      "        * g_Amount;}"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "spaced_pulse",
+     "constants": {
+      "speed": 2,
+      "noiseamount": 0
+     }
+    },
+    {
+     "id": 2,
+     "shader": "commented_pulse",
+     "constants": {
+      "speed": 2,
+      "noiseamount": 0
+     }
+    },
+    {
+     "id": 3,
+     "shader": "wrong_material",
+     "constants": {
+      "speed": 2,
+      "noiseamount": 0
+     }
+    },
+    {
+     "id": 4,
+     "shader": "spaced_sine",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 0
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "extra spaces, a tab, a line break and reordered annotation JSON do not hide a verified pulse",
+     "layer": 1,
+     "components": 1,
+     "period": "2pi/2"
+    },
+    {
+     "message": "a pulse sine that sits inside a // comment is not code and does not prove the pulse rule",
+     "layer": 2,
+     "components": 0,
+     "unresolved": 1
+    },
+    {
+     "message": "the pulse fingerprint still checks the uniform annotation: g_PulseSpeed bound to a different material is not the verified pulse",
+     "layer": 3,
+     "components": 0,
+     "unresolved": 1
+    },
+    {
+     "message": "extra spaces, a tab and a line break inside the fingerprint line do not hide a verified sine",
+     "layer": 4,
+     "components": 1,
+     "period": "2pi/2"
+    }
+   ]
+  },
+  {
+   "name": "shine-edges-default",
+   "from": "SPA 修正 3：[COMBO] 缺省值按解析后的 JSON 核对",
+   "shaders": {},
+   "files": {
+    "effects/shine.json": [
+     "{\"passes\":[{\"material\":\"materials/shine-down.json\"},{\"material\":\"materials/shine-cast.json\"},{\"material\":\"materials/shine-extra.json\"}]}"
+    ],
+    "materials/shine-down.json": [
+     "{\"passes\":[{\"shader\":\"shine_downsample2\"}]}"
+    ],
+    "materials/shine-cast.json": [
+     "{\"passes\":[{\"shader\":\"shine_cast\"}]}"
+    ],
+    "materials/shine-extra.json": [
+     "{\"passes\":[{\"shader\":\"shine_extra\"}]}"
+    ],
+    "shaders/shine_downsample2.vert": [
+     "varying vec4 v_NoiseTexCoord; uniform float g_Time; uniform float g_NoiseSpeed; uniform float g_NoiseScale; void main(){v_NoiseTexCoord.xy = a_TexCoord + g_Time * g_NoiseSpeed; v_NoiseTexCoord.wz = vec2(a_TexCoord.y, -a_TexCoord.x) * 0.633 + vec2(-g_Time, g_Time) * 0.5 * g_NoiseSpeed; v_NoiseTexCoord *= g_NoiseScale;}"
+    ],
+    "shaders/shine_downsample2.frag": [
+     "varying vec4 v_NoiseTexCoord; uniform sampler2D g_Texture2; // {\"default\":\"util/clouds_256\"}",
+     "void main(){float x=texSample2D(g_Texture2, v_NoiseTexCoord.xy).r * texSample2D(g_Texture2, v_NoiseTexCoord.zw).r;}"
+    ],
+    "shaders/shine_cast.vert": [
+     "// [COMBO] { \"combo\" : \"EDGES\",  \"default\" : 4 }",
+     "uniform float g_Time; uniform float g_Speed; void main(){vec2 baseDirection = rotateVec2(vec2(0, 0.5), g_Time * g_Speed); #if EDGES == 3 vec2 x=rotateVec2(baseDirection, 0); #endif #if EDGES == 4 vec2 y=rotateVec2(vec2(-baseDirection.y, baseDirection.x), 0); #endif}"
+    ],
+    "shaders/shine_cast.frag": [
+     "void main(){}"
+    ],
+    "shaders/shine_extra.frag": [
+     "uniform float g_Time; void main(){ float unknown = g_Time; }"
+    ]
+   },
+   "textures": {
+    "materials/util/clouds_256.tex": 0
+   },
+   "objects": [
+    {
+     "id": 1,
+     "raw": {
+      "id": 1,
+      "effects": [
+       {
+        "file": "effects/shine.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "noisespeed": 0.2,
+           "noisescale": 5.0
+          }
+         },
+         {
+          "constantshadervalues": {
+           "speed": 0.5
+          }
+         },
+         {}
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "an EDGES combo annotation with default 4 (spaced JSON) proves the four-direction cast when the pass sets no EDGES",
+     "layer": 1,
+     "components": 2
+    },
+    {
+     "message": "an EDGES combo annotation with default 4 (spaced JSON) proves the four-direction cast when the pass sets no EDGES",
+     "layer": 1,
+     "components": 1,
+     "key_filter": "speed",
+     "period": "3.14159265358979/1"
+    }
+   ]
+  },
+  {
+   "name": "shine-edges-default3",
+   "from": "SPA 修正 3：[COMBO] 缺省值按解析后的 JSON 核对",
+   "shaders": {},
+   "files": {
+    "effects/shine.json": [
+     "{\"passes\":[{\"material\":\"materials/shine-down.json\"},{\"material\":\"materials/shine-cast.json\"},{\"material\":\"materials/shine-extra.json\"}]}"
+    ],
+    "materials/shine-down.json": [
+     "{\"passes\":[{\"shader\":\"shine_downsample2\"}]}"
+    ],
+    "materials/shine-cast.json": [
+     "{\"passes\":[{\"shader\":\"shine_cast\"}]}"
+    ],
+    "materials/shine-extra.json": [
+     "{\"passes\":[{\"shader\":\"shine_extra\"}]}"
+    ],
+    "shaders/shine_downsample2.vert": [
+     "varying vec4 v_NoiseTexCoord; uniform float g_Time; uniform float g_NoiseSpeed; uniform float g_NoiseScale; void main(){v_NoiseTexCoord.xy = a_TexCoord + g_Time * g_NoiseSpeed; v_NoiseTexCoord.wz = vec2(a_TexCoord.y, -a_TexCoord.x) * 0.633 + vec2(-g_Time, g_Time) * 0.5 * g_NoiseSpeed; v_NoiseTexCoord *= g_NoiseScale;}"
+    ],
+    "shaders/shine_downsample2.frag": [
+     "varying vec4 v_NoiseTexCoord; uniform sampler2D g_Texture2; // {\"default\":\"util/clouds_256\"}",
+     "void main(){float x=texSample2D(g_Texture2, v_NoiseTexCoord.xy).r * texSample2D(g_Texture2, v_NoiseTexCoord.zw).r;}"
+    ],
+    "shaders/shine_cast.vert": [
+     "// [COMBO] {\"combo\":\"EDGES\",\"default\":3}",
+     "uniform float g_Time; uniform float g_Speed; void main(){vec2 baseDirection = rotateVec2(vec2(0, 0.5), g_Time * g_Speed); #if EDGES == 3 vec2 x=rotateVec2(baseDirection, 0); #endif #if EDGES == 4 vec2 y=rotateVec2(vec2(-baseDirection.y, baseDirection.x), 0); #endif}"
+    ],
+    "shaders/shine_cast.frag": [
+     "void main(){}"
+    ],
+    "shaders/shine_extra.frag": [
+     "uniform float g_Time; void main(){ float unknown = g_Time; }"
+    ]
+   },
+   "textures": {
+    "materials/util/clouds_256.tex": 0
+   },
+   "objects": [
+    {
+     "id": 1,
+     "raw": {
+      "id": 1,
+      "effects": [
+       {
+        "file": "effects/shine.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "noisespeed": 0.2,
+           "noisescale": 5.0
+          }
+         },
+         {
+          "constantshadervalues": {
+           "speed": 0.5
+          }
+         },
+         {}
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "an EDGES combo annotation with default 3 is not the four-direction cast",
+     "layer": 1,
+     "components": 0
+    },
+    {
+     "message": "an EDGES combo annotation with default 3 is not the four-direction cast",
+     "layer": 1,
+     "pass_index": -1,
      "unresolved": 1,
      "kind": "UnsupportedShaderMechanism"
     }
@@ -1763,6 +2042,52 @@
      "components": 1,
      "period_seconds": 400,
      "tolerance": 1e-06
+    },
+    {
+     "message": "the water-ripple past-ceiling refusal uses the retime budget this analysis was given (preset budget), not a fixed 2%",
+     "ceiling": 390,
+     "retime_percent": 0,
+     "layer": 10,
+     "components": 0,
+     "unresolved": 1,
+     "mechanism": "uv_normal_scroll",
+     "detail_contains": [
+      "390-second loop ceiling",
+      "(0%)"
+     ]
+    },
+    {
+     "message": "the water-ripple past-ceiling refusal uses the retime budget this analysis was given (preset budget), not a fixed 2%",
+     "ceiling": 390,
+     "retime_percent": 2,
+     "layer": 10,
+     "components": 0,
+     "unresolved": 1,
+     "mechanism": "uv_normal_scroll",
+     "detail_contains": [
+      "390-second loop ceiling",
+      "(2%)"
+     ]
+    },
+    {
+     "message": "the water-ripple past-ceiling refusal uses the retime budget this analysis was given (preset budget), not a fixed 2%",
+     "ceiling": 390,
+     "retime_percent": 3,
+     "layer": 10,
+     "unresolved": 0,
+     "components": 1,
+     "period_seconds": 400,
+     "tolerance": 1e-06
+    },
+    {
+     "message": "the water-ripple past-ceiling refusal uses the retime budget this analysis was given (preset budget), not a fixed 2%",
+     "ceiling": 390,
+     "retime_percent": 5,
+     "layer": 10,
+     "unresolved": 0,
+     "components": 1,
+     "period_seconds": 400,
+     "tolerance": 1e-06
     }
    ]
   },
@@ -2133,7 +2458,8 @@
      "varying vec4 v_NoiseTexCoord; uniform float g_Time; uniform float g_NoiseSpeed; uniform float g_NoiseScale; void main(){v_NoiseTexCoord.xy = a_TexCoord + g_Time * g_NoiseSpeed; v_NoiseTexCoord.wz = vec2(a_TexCoord.y, -a_TexCoord.x) * 0.633 + vec2(-g_Time, g_Time) * 0.5 * g_NoiseSpeed; v_NoiseTexCoord *= g_NoiseScale;}"
     ],
     "shaders/shine_downsample2.frag": [
-     "varying vec4 v_NoiseTexCoord; uniform sampler2D g_Texture2; // {\"default\":\"util/clouds_256\"} void main(){float x=texSample2D(g_Texture2, v_NoiseTexCoord.xy).r * texSample2D(g_Texture2, v_NoiseTexCoord.zw).r;}"
+     "varying vec4 v_NoiseTexCoord; uniform sampler2D g_Texture2; // {\"default\":\"util/clouds_256\"}",
+     "void main(){float x=texSample2D(g_Texture2, v_NoiseTexCoord.xy).r * texSample2D(g_Texture2, v_NoiseTexCoord.zw).r;}"
     ],
     "shaders/shine_cast.vert": [
      "// [COMBO] {\"combo\":\"EDGES\",\"default\":4}",
@@ -2342,6 +2668,215 @@
      "layer": 6,
      "pass_index": 2,
      "kind": "UnsupportedShaderMechanism"
+    }
+   ]
+  },
+  {
+   "name": "bundled-clouds",
+   "from": "SPA 修正 1：工程自带 clouds_256.tex",
+   "shaders": {},
+   "files": {
+    "effects/shine.json": [
+     "{\"passes\":[{\"material\":\"materials/shine-down.json\"},{\"material\":\"materials/shine-cast.json\"},{\"material\":\"materials/shine-extra.json\"}]}"
+    ],
+    "materials/shine-down.json": [
+     "{\"passes\":[{\"shader\":\"shine_downsample2\"}]}"
+    ],
+    "materials/shine-cast.json": [
+     "{\"passes\":[{\"shader\":\"shine_cast\"}]}"
+    ],
+    "materials/shine-extra.json": [
+     "{\"passes\":[{\"shader\":\"shine_extra\"}]}"
+    ],
+    "shaders/shine_downsample2.vert": [
+     "varying vec4 v_NoiseTexCoord; uniform float g_Time; uniform float g_NoiseSpeed; uniform float g_NoiseScale; void main(){v_NoiseTexCoord.xy = a_TexCoord + g_Time * g_NoiseSpeed; v_NoiseTexCoord.wz = vec2(a_TexCoord.y, -a_TexCoord.x) * 0.633 + vec2(-g_Time, g_Time) * 0.5 * g_NoiseSpeed; v_NoiseTexCoord *= g_NoiseScale;}"
+    ],
+    "shaders/shine_downsample2.frag": [
+     "varying vec4 v_NoiseTexCoord; uniform sampler2D g_Texture2; // {\"default\":\"util/clouds_256\"}",
+     "void main(){float x=texSample2D(g_Texture2, v_NoiseTexCoord.xy).r * texSample2D(g_Texture2, v_NoiseTexCoord.zw).r;}"
+    ],
+    "shaders/shine_cast.vert": [
+     "// [COMBO] {\"combo\":\"EDGES\",\"default\":4}",
+     "uniform float g_Time; uniform float g_Speed; void main(){vec2 baseDirection = rotateVec2(vec2(0, 0.5), g_Time * g_Speed); #if EDGES == 3 vec2 x=rotateVec2(baseDirection, 0); #endif #if EDGES == 4 vec2 y=rotateVec2(vec2(-baseDirection.y, baseDirection.x), 0); #endif}"
+    ],
+    "shaders/shine_cast.frag": [
+     "void main(){}"
+    ],
+    "shaders/shine_extra.frag": [
+     "uniform float g_Time; void main(){ float unknown = g_Time; }"
+    ]
+   },
+   "textures": {
+    "materials/util/clouds_256.tex": {
+     "flags": 0,
+     "bytes": 200724
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "raw": {
+      "id": 1,
+      "effects": [
+       {
+        "file": "effects/shine.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "noisespeed": 0.2,
+           "noisescale": 5.0
+          }
+         },
+         {
+          "combos": {
+           "EDGES": 3
+          },
+          "constantshadervalues": {
+           "speed": 0.0
+          }
+         },
+         {}
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": 2,
+     "raw": {
+      "id": 2,
+      "effects": [
+       {
+        "file": "effects/shine.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "noisespeed": 0.2,
+           "noisescale": 5.0
+          }
+         },
+         {
+          "combos": {
+           "EDGES": 4
+          },
+          "constantshadervalues": {
+           "speed": 0.0
+          }
+         },
+         {}
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "a project-bundled full-size clouds_256 (repeat addressing) proves the shine repeat noise like the WE assets copy does",
+     "layer": 1,
+     "components": 1,
+     "id_suffix": "noise-speed",
+     "period_seconds": 2
+    },
+    {
+     "message": "a project-bundled full-size clouds_256 (repeat addressing) proves the shine repeat noise like the WE assets copy does",
+     "layer": 1,
+     "pass_index": 2,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "a project-bundled full-size clouds_256 also proves the EDGES=4 static shine cast",
+     "layer": 2,
+     "components": 1,
+     "id_suffix": "noise-speed",
+     "period_seconds": 2
+    }
+   ]
+  },
+  {
+   "name": "bundled-clouds-clamp",
+   "from": "SPA 修正 1：工程自带 clouds_256.tex（ClampUVs）",
+   "shaders": {},
+   "files": {
+    "effects/shine.json": [
+     "{\"passes\":[{\"material\":\"materials/shine-down.json\"},{\"material\":\"materials/shine-cast.json\"},{\"material\":\"materials/shine-extra.json\"}]}"
+    ],
+    "materials/shine-down.json": [
+     "{\"passes\":[{\"shader\":\"shine_downsample2\"}]}"
+    ],
+    "materials/shine-cast.json": [
+     "{\"passes\":[{\"shader\":\"shine_cast\"}]}"
+    ],
+    "materials/shine-extra.json": [
+     "{\"passes\":[{\"shader\":\"shine_extra\"}]}"
+    ],
+    "shaders/shine_downsample2.vert": [
+     "varying vec4 v_NoiseTexCoord; uniform float g_Time; uniform float g_NoiseSpeed; uniform float g_NoiseScale; void main(){v_NoiseTexCoord.xy = a_TexCoord + g_Time * g_NoiseSpeed; v_NoiseTexCoord.wz = vec2(a_TexCoord.y, -a_TexCoord.x) * 0.633 + vec2(-g_Time, g_Time) * 0.5 * g_NoiseSpeed; v_NoiseTexCoord *= g_NoiseScale;}"
+    ],
+    "shaders/shine_downsample2.frag": [
+     "varying vec4 v_NoiseTexCoord; uniform sampler2D g_Texture2; // {\"default\":\"util/clouds_256\"}",
+     "void main(){float x=texSample2D(g_Texture2, v_NoiseTexCoord.xy).r * texSample2D(g_Texture2, v_NoiseTexCoord.zw).r;}"
+    ],
+    "shaders/shine_cast.vert": [
+     "// [COMBO] {\"combo\":\"EDGES\",\"default\":4}",
+     "uniform float g_Time; uniform float g_Speed; void main(){vec2 baseDirection = rotateVec2(vec2(0, 0.5), g_Time * g_Speed); #if EDGES == 3 vec2 x=rotateVec2(baseDirection, 0); #endif #if EDGES == 4 vec2 y=rotateVec2(vec2(-baseDirection.y, baseDirection.x), 0); #endif}"
+    ],
+    "shaders/shine_cast.frag": [
+     "void main(){}"
+    ],
+    "shaders/shine_extra.frag": [
+     "uniform float g_Time; void main(){ float unknown = g_Time; }"
+    ]
+   },
+   "textures": {
+    "materials/util/clouds_256.tex": {
+     "flags": 2,
+     "bytes": 200724
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "raw": {
+      "id": 1,
+      "effects": [
+       {
+        "file": "effects/shine.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "noisespeed": 0.2,
+           "noisescale": 5.0
+          }
+         },
+         {
+          "combos": {
+           "EDGES": 3
+          },
+          "constantshadervalues": {
+           "speed": 0.0
+          }
+         },
+         {}
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "a project-bundled full-size clouds_256 with ClampUVs is still read and still refused",
+     "layer": 1,
+     "components": 0
+    },
+    {
+     "message": "a project-bundled full-size clouds_256 with ClampUVs is still read and still refused",
+     "layer": 1,
+     "pass_index": -1,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism",
+     "detail": "Shine source, supported cast variant, or canonical repeat noise texture is not proven."
     }
    ]
   }

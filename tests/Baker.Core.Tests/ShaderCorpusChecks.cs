@@ -46,8 +46,11 @@ internal static class ShaderCorpusChecks
             return (shader["prepend"] is null ? "" : Lines(shader["prepend"]) + "\n") + baseText + (shader["append"] is null ? "" : "\n" + Lines(shader["append"]));
         }
         foreach ((string path, JsonNode? lines) in suite["files"]?.AsObject() ?? []) Write(path, Lines(lines));
-        foreach ((string path, JsonNode? flags) in suite["textures"]?.AsObject() ?? [])
-            WriteTexture(Path.Combine(directory, path.Replace('/', Path.DirectorySeparatorChar)), flags!.GetValue<uint>());
+        // 贴图写法：数字 = flags；{"flags":…, "bytes":…} = 同样的头、再补零到指定总字节数（模拟真实尺寸的贴图）。
+        foreach ((string path, JsonNode? texture) in suite["textures"]?.AsObject() ?? [])
+            WriteTexture(Path.Combine(directory, path.Replace('/', Path.DirectorySeparatorChar)),
+                texture is JsonObject spec ? spec["flags"]!.GetValue<uint>() : texture!.GetValue<uint>(),
+                texture is JsonObject sized ? sized["bytes"]!.GetValue<int>() : 0);
         var objects = new JsonArray();
         foreach (JsonObject item in suite["objects"]!.AsArray().OfType<JsonObject>())
         {
@@ -66,18 +69,20 @@ internal static class ShaderCorpusChecks
         Write("scene.json", scene.ToJsonString());
         int[] ids = [.. objects.Select(item => item!["id"]!.GetValue<int>())];
         using var source = new ProjectSource(directory);
-        var analyses = new Dictionary<double, ShaderPeriodAnalysisResult>();
+        // 同一 (上限, 调速预算) 只分析一次；expect 的 retime_percent 是交给 Analyze 的调速预算（百分比），缺省用 Analyze 自己的缺省。
+        var analyses = new Dictionary<(double, double), ShaderPeriodAnalysisResult>();
         double? defaultCeiling = suite["ceiling"]?.GetValue<double>();
-        ShaderPeriodAnalysisResult Analyze(double? ceiling)
+        ShaderPeriodAnalysisResult Analyze(double? ceiling, double? retimePercent)
         {
-            double key = ceiling ?? defaultCeiling ?? double.NaN;
+            var key = (ceiling ?? defaultCeiling ?? double.NaN, retimePercent ?? ShaderPeriodAnalysis.DefaultRetimePercent);
             if (!analyses.TryGetValue(key, out ShaderPeriodAnalysisResult? result))
-                analyses[key] = result = ShaderPeriodAnalysis.Analyze(scene, source, null, ids, ceiling ?? defaultCeiling);
+                analyses[key] = result = ShaderPeriodAnalysis.Analyze(scene, source, null, ids, ceiling ?? defaultCeiling, key.Item2);
             return result;
         }
         foreach (JsonObject expect in suite["expect"]!.AsArray().OfType<JsonObject>())
-            check(Holds(Analyze(expect["ceiling"]?.GetValue<double>()), expect), expect["message"]!.GetValue<string>());
-        return new(Analyze(null), directory, scene);
+            check(Holds(Analyze(expect["ceiling"]?.GetValue<double>(), expect["retime_percent"]?.GetValue<double>()), expect),
+                expect["message"]!.GetValue<string>());
+        return new(Analyze(null, null), directory, scene);
     }
 
     /// <summary>
@@ -152,7 +157,7 @@ internal static class ShaderCorpusChecks
     }
 
     /// <summary>TEXV0005/TEXI0001 头、flags 在偏移 22 的最小 .tex：flags 0 为 repeat 寻址的静止贴图，2 为 ClampUVs。</summary>
-    private static void WriteTexture(string path, uint flags)
+    private static void WriteTexture(string path, uint flags, int totalBytes)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         using var writer = new BinaryWriter(File.Create(path), Encoding.ASCII);
@@ -161,5 +166,7 @@ internal static class ShaderCorpusChecks
         writer.Write(64); writer.Write(64); writer.Write(64); writer.Write(64); writer.Write(0);
         writer.Write(Encoding.ASCII.GetBytes("TEXB0001\0"));
         writer.Write(new byte[32]);
+        writer.Flush();
+        if (writer.BaseStream.Length < totalBytes) writer.Write(new byte[totalBytes - writer.BaseStream.Length]);
     }
 }

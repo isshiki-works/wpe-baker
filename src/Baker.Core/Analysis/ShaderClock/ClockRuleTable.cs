@@ -7,15 +7,15 @@ namespace Baker.Core.Analysis.ShaderClock;
 /// <summary>
 /// 着色器时钟规则表：嵌入资源 clock-rules.json 解析后的只读视图。
 /// patterns 是具名指纹（在哪个视图上查、必须含哪些官方源码行、每个标识符恰好出现几次）；
-/// rules 按试探顺序排列，第一条认领的规则给出裁定。每个指纹带 normalize 属性，保持各规则现有的空白敏感性口径。
+/// rules 按试探顺序排列，第一条认领的规则给出裁定。指纹一律在归一化文本（去注释、压空白）上求值（normalize 全为 true），
+/// 空白写法不同的同一份源码裁定相同；注释里的元数据（uniform 注释 JSON、[COMBO] 行）由 uniforms / combos 子句按解析后的 JSON 核对。
 /// </summary>
 internal sealed class ClockRuleTable
 {
     public static ClockRuleTable Default { get; } = Parse(ReadEmbedded());
 
     /// <summary>
-    /// 规则表随程序集嵌入（Baker.Core.csproj 的 EmbeddedResource）。指纹串是官方 shader 源码的原行，normalize 为 false
-    /// 的指纹按原文逐字比较（空白、注释 JSON 都算在内），这是现有口径，统一口径另开 PR。
+    /// 规则表随程序集嵌入（Baker.Core.csproj 的 EmbeddedResource）。指纹串是官方 shader 源码行的归一化写法（单空格、不含注释）。
     /// </summary>
     private static string ReadEmbedded()
     {
@@ -88,7 +88,8 @@ internal sealed record ClockPattern(bool Normalize, bool ForbidAlternateClock, I
 /// "&gt;0" 表示大于，"U+S+2" 这类和式引用 vars 里命名正则的匹配数；require 对 vars 本身设条件。
 /// </summary>
 internal sealed record ClockClause(IReadOnlyList<string> Contains, IReadOnlyList<(string Kind, string Identifier, string Spec)> Counts,
-    IReadOnlyList<(string Pattern, string Spec)> Patterns, IReadOnlyDictionary<string, string> Vars, IReadOnlyDictionary<string, string> Require)
+    IReadOnlyList<(string Pattern, string Spec)> Patterns, IReadOnlyDictionary<string, string> Vars, IReadOnlyDictionary<string, string> Require,
+    IReadOnlyList<(string Name, JsonObject Subset)> Uniforms, IReadOnlyList<(string Name, JsonObject Subset)> Combos)
 {
     public bool IsSatisfiedBy(ShaderSource source, bool normalize)
     {
@@ -98,8 +99,23 @@ internal sealed record ClockClause(IReadOnlyList<string> Contains, IReadOnlyList
         return Require.All(item => Holds(values[item.Key], item.Value, values)) &&
             Contains.All(line => view.Contains(line, StringComparison.Ordinal)) &&
             Counts.All(item => Holds(source.Count(normalize, item.Kind, item.Identifier), item.Spec, values)) &&
-            Patterns.All(item => Holds(Regex.Matches(view, item.Pattern, RegexOptions.CultureInvariant).Count, item.Spec, values));
+            Patterns.All(item => Holds(Regex.Matches(view, item.Pattern, RegexOptions.CultureInvariant).Count, item.Spec, values)) &&
+            Uniforms.All(item => HasAnnotation(source.UniformAnnotations, item.Name, item.Subset)) &&
+            Combos.All(item => HasAnnotation(source.ComboAnnotations, item.Name, item.Subset));
     }
+
+    /// <summary>
+    /// 有一条同名注释包含 subset 的全部键且值相等：数字按数值比（1 与 1.0 相同），其余按 JSON 结构比。
+    /// 注释是解析后的 JSON，所以比较与注释里的空白、键序、其余键都无关。
+    /// </summary>
+    private static bool HasAnnotation(IReadOnlyList<(string Name, JsonObject Annotation)> annotations, string name, JsonObject subset) =>
+        annotations.Any(item => item.Name == name && subset.All(pair => SameValue(item.Annotation[pair.Key], pair.Value)));
+
+    private static bool SameValue(JsonNode? actual, JsonNode? expected) =>
+        actual is JsonValue a && expected is JsonValue e && a.GetValueKind() == System.Text.Json.JsonValueKind.Number &&
+        e.GetValueKind() == System.Text.Json.JsonValueKind.Number
+            ? a.GetValue<double>() == e.GetValue<double>()
+            : JsonNode.DeepEquals(actual, expected);
 
     private static bool Holds(int actual, string spec, IReadOnlyDictionary<string, int> values) => spec.StartsWith('>')
         ? actual > Sum(spec[1..], values)
@@ -126,6 +142,9 @@ internal sealed record ClockClause(IReadOnlyList<string> Contains, IReadOnlyList
             patterns.Add((pair[0]!.GetValue<string>(), Spec(pair[1])));
         Dictionary<string, string> Map(string name) => (node[name]?.AsObject() ?? []).ToDictionary(
             item => item.Key, item => Spec(item.Value), StringComparer.Ordinal);
-        return new(contains, counts, patterns, Map("vars"), Map("require"));
+        // uniforms / combos：[名, {注释应含的键值}] 列表，同名可出现多次（每项各自要有一条注释满足）。
+        List<(string, JsonObject)> Annotations(string name) => [.. (node[name]?.AsArray() ?? []).OfType<JsonArray>()
+            .Select(pair => (pair[0]!.GetValue<string>(), pair[1]!.AsObject()))];
+        return new(contains, counts, patterns, Map("vars"), Map("require"), Annotations("uniforms"), Annotations("combos"));
     }
 }

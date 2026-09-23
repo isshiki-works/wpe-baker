@@ -9,6 +9,7 @@ namespace Baker.Core;
 /// 不透明整幅图层承载、被烘图层不含任何特效通道。任何一条不成立都不足以判为无工作量缩减，
 /// 不在此追加拒绝理由。
 /// 缺少源解码元数据时不拒绝；元数据比较不构成任何设备上的功耗结论。
+/// 解码量比较与分量归属在 Domain 的 <see cref="WorkloadValue"/>；这里读 plan 与运行时观察、写记录与理由。
 /// </summary>
 public static class VideoDominance
 {
@@ -76,11 +77,11 @@ public static class VideoDominance
         if (failure is not null) return Record(NotShellStatus, choice, evidence, failure.Value.En, failure.Value.Zh);
         JsonObject decodeWork = DecodeWork(plan, runtime);
         string decodeStatus = decodeWork["status"]!.GetValue<string>();
-        JsonObject result = decodeStatus != "not_reduced"
+        JsonObject result = decodeStatus != WorkloadValue.DecodeNotReduced
             ? Record(NotShellStatus, choice, evidence,
-                decodeStatus == "potential_gain" ? "Source video dimensions or frame rate can be reduced; decoding savings remain to be verified."
+                decodeStatus == WorkloadValue.DecodePotentialGain ? "Source video dimensions or frame rate can be reduced; decoding savings remain to be verified."
                     : "Source decoding metadata is incomplete or not directly comparable with the output; the absence of decoding savings has not been established.",
-                decodeStatus == "potential_gain" ? "源视频尺寸或帧率可降低，解码收益仍待验证。" : "源视频解码元数据不完整或不能与输出直接比较，尚未证明没有解码收益。")
+                decodeStatus == WorkloadValue.DecodePotentialGain ? "源视频尺寸或帧率可降低，解码收益仍待验证。" : "源视频解码元数据不完整或不能与输出直接比较，尚未证明没有解码收益。")
             : choice == AllowChoice
             ? Record(OverrideStatus, choice, evidence, OverrideReasonEn, OverrideReasonZh)
             : Record(ShellStatus, choice, evidence, Blocker, BlockerZh);
@@ -111,7 +112,7 @@ public static class VideoDominance
         double numerator = BakeValueAssessment.Number(plan["settings"]?["fps_numerator"]);
         double denominator = BakeValueAssessment.Number(plan["settings"]?["fps_denominator"]);
         double fps = numerator / denominator;
-        if (!double.IsFinite(width * height * fps) || width <= 0 || height <= 0 || fps <= 0) return result;
+        if (!WorkloadValue.IsComparableOutput(width, height, fps)) return result;
         result["source"] = streams[0].DeepClone();
         result["output_width"] = width; result["output_height"] = height; result["output_fps"] = fps;
         string? codec = plan["encoding"]?["codec"]?.GetValue<string>();
@@ -126,7 +127,7 @@ public static class VideoDominance
         result["output_codec"] = codec; result["output_pixel_format"] = pixelFormat;
         if (codec is not ("h264" or "hevc") || codec != streams[0]["codec"]?.GetValue<string>() ||
             string.IsNullOrWhiteSpace(pixelFormat) || pixelFormat != streams[0]["pixel_format"]?.GetValue<string>()) return result;
-        result["status"] = width * height < sourceWidth * sourceHeight || fps < sourceFps ? "potential_gain" : "not_reduced";
+        result["status"] = WorkloadValue.DecodeWorkStatus(width, height, fps, sourceWidth, sourceHeight, sourceFps);
         return result;
     }
 
@@ -172,7 +173,7 @@ public static class VideoDominance
             return ("The plan does not name exactly one fixed-rate clip that owns the selected period.",
                 "计划没有恰好指明一段承载选中周期的定速片源。");
         evidence.Add("clip_owner_layer=" + owner.ToString(CultureInfo.InvariantCulture));
-        int[] componentOwners = components.Select(OwnerOf).Distinct().ToArray();
+        int[] componentOwners = components.Select(WorkloadValue.OwnerOf).Distinct().ToArray();
         evidence.Add("periodic_component_owners=" + Join(componentOwners.Select(id => id.ToString(CultureInfo.InvariantCulture))));
         if (componentOwners.Length != 1 || componentOwners[0] != owner)
             return ("More than one layer carries the periodic video components, so no single clip stands for the whole capture.",
@@ -228,13 +229,6 @@ public static class VideoDominance
             return ("The baked layers carry effect passes, so the bake moves that per-frame shader work into the video.",
                 "被烘图层上挂着特效通道，烘焙会把这些逐帧着色器计算转进视频。");
         return null;
-    }
-
-    /// <summary>分量 id 的第二段就是承载它的图层；解析不出来记 -1，落在"不止一层"那一侧。</summary>
-    private static int OwnerOf(string component)
-    {
-        string[] parts = component.Split('/');
-        return parts.Length > 1 && int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out int id) ? id : -1;
     }
 
     private static string Join(IEnumerable<string> values)

@@ -5,7 +5,7 @@ namespace Baker.Core;
 
 /// <summary>
 /// 播放版视频的硬件解码尺寸预检。所有数字集中在 <see cref="H264"/> / <see cref="Hevc"/> 两行表里并注明出处；
-/// 规划只做两件事：过小（或奇数）时把编码画布居中补边到下限，回放按原矩形取样，显示不变；
+/// 补边与越限的算术在 Domain 的 DecodeDimensions。规划只做两件事：过小（或奇数）时把编码画布居中补边到下限，回放按原矩形取样，显示不变；
 /// 补边后仍越过上限就列出越限项，由调用方在编码之前干净拒绝。编码后的 D3D11VA 实测照旧执行，预检不替代它。
 /// <para>
 /// 另外收着"目标播放机"这一侧的数字（<see cref="IntegratedH264"/> / <see cref="IntegratedHevc"/> 与
@@ -23,9 +23,6 @@ public static class HardwareDecodeDimensions
     public sealed record Limits(string Codec, string DisplayName, uint MinimumWidth, uint MinimumHeight,
         uint MaximumWidth, uint MaximumHeight, ulong? MaximumLumaSamples, ulong? MaximumMacroblocks,
         ulong? MaximumMacroblocksPerSecond, string BasisZh, string BasisEn, string[] Sources);
-
-    /// <summary>4:2:0 色度二次采样要求编码宽高为偶数（FFmpeg yuv420p 与 ITU-T H.264/H.265 的 4:2:0 定义）。</summary>
-    public const uint ChromaAlignment = 2;
 
     // 取最严者：公开文档里各厂商下限取最大、上限取最小；本机实测比公开值更严的，按实测收紧并写明。
     public static readonly Limits H264 = new("h264", "H.264",
@@ -54,8 +51,6 @@ public static class HardwareDecodeDimensions
             "Local D3D11VA probe 2026-09-17: NVIDIA GeForce RTX 5090 D v2 failed 128x128 and 8192x64, passed 144x144, 144x136, 136x144, 8192x144 and 8192x3160; both NVIDIA and AMD Radeon integrated graphics failed 10216x3160 and passed 8192x3160."]);
 
     public static Limits For(string softwareEncoder) => softwareEncoder == "libx265" ? Hevc : H264;
-
-    public sealed record Violation(string Measure, ulong Actual, ulong Limit);
 
     // ---------------------------------------------------------------------------------------
     // 目标播放机一侧。硬解只能在真正跑它的那台机器上验，烘焙机（常是独显）验过不等于播放机（常是核显）能放。
@@ -130,7 +125,7 @@ public static class HardwareDecodeDimensions
     };
 
     /// <summary>一条目标播放机提示：这段码流的尺寸越过了常见核显的硬解上限。</summary>
-    public sealed record TargetHint(IntegratedCeiling Ceiling, uint Width, uint Height, IReadOnlyList<Violation> Exceeded)
+    public sealed record TargetHint(IntegratedCeiling Ceiling, uint Width, uint Height, IReadOnlyList<DecodeViolation> Exceeded)
     {
         public JsonObject ToJson() => new()
         {
@@ -159,16 +154,12 @@ public static class HardwareDecodeDimensions
     public static TargetHint? HintFor(string? codecName, uint width, uint height)
     {
         if (CeilingFor(codecName) is not { } ceiling || width == 0 || height == 0) return null;
-        var exceeded = new List<Violation>();
-        if (width > ceiling.MaximumWidth) exceeded.Add(new("width", width, ceiling.MaximumWidth));
-        if (height > ceiling.MaximumHeight) exceeded.Add(new("height", height, ceiling.MaximumHeight));
-        ulong luma = (ulong)width * height;
-        if (luma > ceiling.MaximumLumaSamples) exceeded.Add(new("luma_samples", luma, ceiling.MaximumLumaSamples));
+        var exceeded = DecodeDimensions.Violations(width, height, ceiling.MaximumWidth, ceiling.MaximumHeight, ceiling.MaximumLumaSamples);
         return exceeded.Count == 0 ? null : new TargetHint(ceiling, width, height, exceeded);
     }
 
     /// <summary>越限项列成一句，中英各一套。</summary>
-    public static string ViolationText(IEnumerable<Violation> violations, string language) =>
+    public static string ViolationText(IEnumerable<DecodeViolation> violations, string language) =>
         string.Join(NormalizedChinese(language) ? "、" : ", ", violations.Select(violation => NormalizedChinese(language)
             ? violation.Measure switch { "width" => "宽", "height" => "高", _ => "亮度样本数" } +
               $" {violation.Actual.ToString(CultureInfo.InvariantCulture)} > {violation.Limit.ToString(CultureInfo.InvariantCulture)}"
@@ -179,7 +170,7 @@ public static class HardwareDecodeDimensions
 
     /// <summary>一次预检的结果。Content 是每半幅的逻辑内容，Padded 是每半幅补边后的画布，Stored 是实际编码尺寸。</summary>
     public sealed record Plan(string Status, string SoftwareEncoder, bool PackedAlpha, uint ContentWidth, uint ContentHeight,
-        uint PaddedWidth, uint PaddedHeight, uint OffsetX, uint OffsetY, IReadOnlyList<Violation> Violations)
+        uint PaddedWidth, uint PaddedHeight, uint OffsetX, uint OffsetY, IReadOnlyList<DecodeViolation> Violations)
     {
         public Limits Limits => For(SoftwareEncoder);
         public uint StoredWidth => checked(PaddedWidth * (PackedAlpha ? 2u : 1u));
@@ -208,7 +199,7 @@ public static class HardwareDecodeDimensions
             {
                 ["codec"] = Limits.Codec, ["minimum_width"] = Limits.MinimumWidth, ["minimum_height"] = Limits.MinimumHeight,
                 ["maximum_width"] = Limits.MaximumWidth, ["maximum_height"] = Limits.MaximumHeight,
-                ["maximum_luma_samples"] = Limits.MaximumLumaSamples, ["alignment"] = ChromaAlignment,
+                ["maximum_luma_samples"] = Limits.MaximumLumaSamples, ["alignment"] = DecodeDimensions.ChromaAlignment,
                 ["sources"] = new JsonArray(Limits.Sources.Select(source => (JsonNode?)JsonValue.Create(source)).ToArray()),
             },
             ["violations"] = new JsonArray(Violations.Select(violation => (JsonNode?)new JsonObject
@@ -237,14 +228,14 @@ public static class HardwareDecodeDimensions
         if (contentWidth == 0 || contentHeight == 0) throw new ArgumentException("Hardware decode preflight requires a positive content extent.");
         if (fpsNumerator == 0 || fpsDenominator == 0) throw new ArgumentException("Hardware decode preflight requires a positive rational frame rate.");
         uint halves = packedAlpha ? 2u : 1u;
-        (uint width, uint offsetX) = Grow(contentWidth, contentWidth);
-        (uint height, uint offsetY) = Grow(contentHeight, contentHeight);
+        (uint width, uint offsetX) = DecodeDimensions.Grow(contentWidth, contentWidth);
+        (uint height, uint offsetY) = DecodeDimensions.Grow(contentHeight, contentHeight);
         string encoder = PlaybackEncodeProfile.SelectPlaybackEncoder(checked(width * halves), height, fpsNumerator, fpsDenominator);
         for (int pass = 0; ; ++pass)
         {
             Limits limits = For(encoder);
-            (width, offsetX) = Grow(contentWidth, (limits.MinimumWidth + halves - 1) / halves);
-            (height, offsetY) = Grow(contentHeight, limits.MinimumHeight);
+            (width, offsetX) = DecodeDimensions.Grow(contentWidth, (limits.MinimumWidth + halves - 1) / halves);
+            (height, offsetY) = DecodeDimensions.Grow(contentHeight, limits.MinimumHeight);
             string next = PlaybackEncodeProfile.SelectPlaybackEncoder(checked(width * halves), height, fpsNumerator, fpsDenominator);
             if (next == encoder) break;
             if (pass >= 2) throw new InvalidOperationException("Hardware decode preflight did not converge on one encoder.");
@@ -252,29 +243,11 @@ public static class HardwareDecodeDimensions
         }
         Limits chosen = For(encoder);
         uint storedWidth = checked(width * halves);
-        var violations = new List<Violation>();
-        if (storedWidth > chosen.MaximumWidth) violations.Add(new("width", storedWidth, chosen.MaximumWidth));
-        if (height > chosen.MaximumHeight) violations.Add(new("height", height, chosen.MaximumHeight));
-        ulong luma = (ulong)storedWidth * height;
-        if (chosen.MaximumLumaSamples is ulong maximumLuma && luma > maximumLuma) violations.Add(new("luma_samples", luma, maximumLuma));
+        var violations = DecodeDimensions.Violations(storedWidth, height, chosen.MaximumWidth, chosen.MaximumHeight, chosen.MaximumLumaSamples);
         string status = violations.Count > 0 ? RejectedStatus : width != contentWidth || height != contentHeight ? PaddedStatus : PassStatus;
         return new(status, encoder, packedAlpha, contentWidth, contentHeight, width, height, offsetX, offsetY, violations);
     }
 
-    /// <summary>
-    /// 把一边从 <paramref name="content"/> 补到不小于 <paramref name="minimum"/>：两侧对称、偏移取偶数，
-    /// 这样 4:2:0 色度块不跨内容边界，且上下或左右翻转取样时内容矩形的 UV 不变。奇数内容多出的 1 像素补在末端。
-    /// </summary>
-    public static (uint Size, uint Offset) Grow(uint content, uint minimum)
-    {
-        ulong needed = minimum > content ? minimum - content : 0;
-        ulong offset = (needed + 1) / 2;
-        offset += offset % 2;
-        ulong size = content + 2 * offset;
-        size += size % ChromaAlignment;
-        if (size > uint.MaxValue) throw new OverflowException("Padded dimension exceeds the supported range.");
-        return ((uint)size, (uint)offset);
-    }
 
     /// <summary>
     /// 硬件解码下限对裁剪区的要求：在捕获范围内对称扩大裁剪区（只会多带进透明/已渲染像素，图层几何随裁剪区同步），
@@ -285,23 +258,11 @@ public static class HardwareDecodeDimensions
         region.Validate();
         Plan plan = Evaluate((uint)region.Width, (uint)region.Height, packedAlpha, fpsNumerator, fpsDenominator);
         if (!plan.Padded) return region;
-        (int x, int width) = Expand(region.X, region.Width, (int)plan.PaddedWidth, region.CaptureWidth);
-        (int y, int height) = Expand(region.Y, region.Height, (int)plan.PaddedHeight, region.CaptureHeight);
+        (int x, int width) = DecodeDimensions.Expand(region.X, region.Width, (int)plan.PaddedWidth, region.CaptureWidth);
+        (int y, int height) = DecodeDimensions.Expand(region.Y, region.Height, (int)plan.PaddedHeight, region.CaptureHeight);
         var grown = region with { X = x, Y = y, Width = width, Height = height };
         grown.Validate();
         return grown;
-    }
-
-    private static (int Start, int Size) Expand(int start, int size, int target, int capture)
-    {
-        if (target <= size || capture < target) return (start, size);
-        int extra = target - size;
-        int begin = start - extra / 2;
-        begin -= begin & 1;
-        begin = Math.Clamp(begin, 0, capture - target);
-        begin -= begin & 1;
-        if (begin < 0 || begin + target > capture) return (start, size);
-        return (begin, target);
     }
 
     /// <summary>

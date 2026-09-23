@@ -7,6 +7,10 @@ internal static class ShaderAdditionalPeriodChecks
     internal static void Run(Action<bool, string> check, string root)
     {
         ShaderCorpusChecks.Run(check, root, "pulse");
+        // 指纹统一在归一化文本上求值：空白写法不同照样认，落在注释里的"代码"不算，注释元数据按 JSON 核对。
+        ShaderCorpusChecks.Run(check, root, "whitespace");
+        ShaderCorpusChecks.Run(check, root, "shine-edges-default");
+        ShaderCorpusChecks.Run(check, root, "shine-edges-default3");
         ShaderCorpusRun dual = ShaderCorpusChecks.Run(check, root, "dual-wave");
         using var dualSource = new ProjectSource(dual.Directory);
         JsonObject dualScene = dual.Scene;

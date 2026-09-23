@@ -2,11 +2,14 @@ using System.Text.Json.Nodes;
 
 namespace Baker.Core;
 
-/// <summary>Device-independent work that the selected capture would remove; not a power prediction.</summary>
+/// <summary>
+/// Device-independent work that the selected capture would remove; not a power prediction.
+/// 规则表（状态、代号、中英理由）与数值比较在 Domain 的 <see cref="WorkloadValue"/>；这里按顺序读 plan、运行时观察与纹理头。
+/// </summary>
 public static class BakeValueAssessment
 {
     public const string Field = "bake_value";
-    public static bool IsLowValue(JsonObject plan) => plan[Field]?["status"]?.GetValue<string>() == "low_value";
+    public static bool IsLowValue(JsonObject plan) => plan[Field]?["status"]?.GetValue<string>() == WorkloadValue.LowValueStatus;
 
     // Plans mix parsed JSON numbers with CLR-backed uint output extents and int settings.
     internal static double Number(JsonNode? node, double fallback = double.NaN)
@@ -22,29 +25,22 @@ public static class BakeValueAssessment
 
     public static JsonObject Evaluate(JsonObject plan, JsonObject runtime, ProjectSource source, string? assets)
     {
-        JsonObject Result(string status, string rule, string zh, string en, JsonObject? evidence = null) => new() {
-            ["status"] = status, ["rule"] = rule, ["reason_zh"] = zh, ["reason_en"] = en,
+        JsonObject Result(WorkloadValue.Verdict verdict, JsonObject? evidence = null) => new() {
+            ["status"] = verdict.Status, ["rule"] = verdict.Rule, ["reason_zh"] = verdict.ReasonZh, ["reason_en"] = verdict.ReasonEn,
             ["evidence"] = evidence ?? new JsonObject(), ["device_independent"] = true,
-            ["scope"] = "Work removed by this plan, independent of current GPU speed. Potential gain is not measured power saving; unknown is not low value." };
+            ["scope"] = WorkloadValue.Scope };
         if (plan["blockers"] is JsonArray { Count: > 0 })
-            return Result("unknown", "unresolved_plan", "当前方案仍有未解决的问题，不能据此判断原作没有优化价值。",
-                "The current plan has unresolved issues; that does not establish a lack of optimization value.");
+            return Result(WorkloadValue.UnresolvedPlan);
         if (plan["effect_prefix_caches"] is JsonArray { Count: > 0 } prefixes)
-            return Result("potential_gain", "cached_effect_prefix", "方案可以缓存重复执行的特效；实际收益仍需原作与成品对照。",
-                "The plan caches repeated effect work; actual savings still need a source/candidate comparison.",
-                new JsonObject { ["prefix_count"] = prefixes.Count });
+            return Result(WorkloadValue.CachedEffectPrefix, new JsonObject { ["prefix_count"] = prefixes.Count });
         if (plan["loop"]?["candidates"] is not JsonArray { Count: > 0 })
-            return Result("unknown", "no_working_candidate", "当前未找到可用方案，不能据此断言原作负载低或没有优化价值。",
-                "No usable candidate was found; that does not establish low load or lack of optimization value.");
+            return Result(WorkloadValue.NoWorkingCandidate);
         JsonObject? decodeWork = plan["video_dominant"]?["decode_work"] as JsonObject;
-        if (decodeWork?["status"]?.GetValue<string>() == "potential_gain")
-            return Result("potential_gain", "reduced_video_decode", "源视频的编码像素数或帧率可降低，可能减少解码开销；实际收益仍待对照。",
-                "The source video's encoded pixel count or frame rate can fall, potentially reducing decoding work; actual savings still need comparison.",
-                decodeWork.DeepClone().AsObject());
-        if (decodeWork?["status"]?.GetValue<string>() == "not_reduced" &&
+        if (decodeWork?["status"]?.GetValue<string>() == WorkloadValue.DecodePotentialGain)
+            return Result(WorkloadValue.ReducedVideoDecode, decodeWork.DeepClone().AsObject());
+        if (decodeWork?["status"]?.GetValue<string>() == WorkloadValue.DecodeNotReduced &&
             plan["video_dominant"]?["status"]?.GetValue<string>() is VideoDominance.ShellStatus or VideoDominance.OverrideStatus)
-            return Result("low_value", "unchanged_video_playback", "当前方案没有已识别的特效、绘制或视频解码量缩减，通常无需重复烘焙。",
-                "The plan removes no identified effect, draw or video decoding work; rebaking is usually unnecessary.");
+            return Result(WorkloadValue.UnchangedVideoPlayback);
         int[] owners = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
             .SelectMany(group => (group["layer_ids"] as JsonArray ?? []).Select(HybridScenePlanner.Int).OfType<int>()).Distinct().ToArray();
         var selected = owners.ToHashSet();
@@ -53,9 +49,7 @@ public static class BakeValueAssessment
         int effects = observed.SelectMany(layer => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>())
             .Count(material => material["role"]?.GetValue<string>() == "effect");
         if (effects > 0)
-            return Result("potential_gain", "cached_effect_passes", "方案可以省去逐帧特效计算；画面静止也可能有缓存价值。",
-                "The plan can remove per-frame effects; a still result can still have caching value.",
-                new JsonObject { ["effect_passes"] = effects });
+            return Result(WorkloadValue.CachedEffectPasses, new JsonObject { ["effect_passes"] = effects });
         if (plan["loop"]?["source_static"]?.GetValue<bool>() == true && owners.Length == 1 && observed.Length == 1 &&
             plan["video_groups"] is JsonArray { Count: 1 } && observed[0]["has_effect_layer"]?.GetValue<bool>() == false &&
             observed[0]["materials"] is JsonArray { Count: 1 } materials && materials[0] is JsonObject baseMaterial &&
@@ -75,18 +69,15 @@ public static class BakeValueAssessment
                 {
                     var facts = new JsonObject { ["source_width"] = iw, ["source_height"] = ih,
                         ["output_width"] = width, ["output_height"] = height, ["source_format"] = header.Format };
-                    if (iw > width || ih > height)
-                        return Result("potential_gain", "static_texture_footprint", "原静态纹理大于输出尺寸，可能降低纹理驻留或采样开销；不能仅因画面静止而排除。",
-                            "The static texture exceeds the output size; residency or sampling costs may fall, so still imagery is not automatically excluded.", facts);
+                    if (WorkloadValue.TextureExceedsOutput(iw, ih, width, height))
+                        return Result(WorkloadValue.StaticTextureFootprint, facts);
                     if (HybridScenePlanner.Numeric(layer?["canvas_fraction"], 0) >= 1 &&
                         Math.Abs(HybridScenePlanner.Numeric(layer?["canvas_center_x"], double.NaN) - .5) < 1e-9 &&
                         Math.Abs(HybridScenePlanner.Numeric(layer?["canvas_center_y"], double.NaN) - .5) < 1e-9)
-                        return Result("low_value", "one_still_texture_unchanged", "原作已经只绘制一张无特效静态背景，纹理也不大于输出；生成后仍需同一次贴图，其他实时层不会因此省去。",
-                            "The source already draws one plain still background no larger than the output; generation retains that draw and does not remove the other live layers.", facts);
+                        return Result(WorkloadValue.OneStillTextureUnchanged, facts);
                 }
             }
         }
-        return Result("unknown", "needs_work_comparison", "尚未证明能省去多少计算，不按本机运行轻松或画面静止直接排除。",
-            "Removed work has not been established; low load on this GPU or still imagery alone is not an exclusion.");
+        return Result(WorkloadValue.NeedsWorkComparison);
     }
 }
