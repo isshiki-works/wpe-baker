@@ -308,7 +308,6 @@ bool OfflineSession::Impl::beginFrame(const FrameClock& clock, const OfflineFram
     m_render->recycleCpuPixels(rstd::move(m_cpu_frame.pixels));
     m_cpu_frame = CpuFrameResult {};
     m_step_status = OfflineStepStatus::NotReady;
-    if (!hasScene()) return false;
     m_step_index = clock.index;
     m_pointer = array<float, 2> { static_cast<float>(input.cursor_x), static_cast<float>(input.cursor_y) };
     m_cursor_in_window = input.cursor_in_window;
