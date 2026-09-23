@@ -19,16 +19,13 @@ struct PcmDesc {
 // 可挂到混音器上的 PCM 源（原 wavsen SoundStream）。
 class PcmSource {
 public:
-    PcmSource()                                    = default;
-    virtual ~PcmSource()                           = default;
-    PcmSource(const PcmSource&)                    = delete;
-    auto operator=(const PcmSource&) -> PcmSource& = delete;
+    virtual ~PcmSource() = default;
 
     // 往 dst 写至多 frames 帧交错 f32，返回实际帧数。
     virtual auto next_pcm(float* dst, std::uint32_t frames) -> std::uint32_t = 0;
     virtual void pass_desc(const PcmDesc&)                                   = 0;
     // 空串表示没有错误。
-    virtual auto last_error() const -> std::string_view { return {}; }
+    virtual auto last_error() const -> std::string_view = 0;
 };
 
 // libav 解码 + swr 重采样到目标格式的交错 f32（原 wavsen StreamDecoder 的离线子集）。
@@ -40,7 +37,7 @@ public:
     AudioDecoder(AudioDecoder&&) noexcept;
     auto operator=(AudioDecoder&&) noexcept -> AudioDecoder&;
 
-    // 打开失败返回 false，原因见 last_error()。
+    // 打开失败返回 false，原因见 last_error()。其余成员都只能在 open() 之后调用。
     auto open(owe::io::RangeReader source, PcmDesc target) -> bool;
 
     // 拉 frames 帧；少于 frames 只发生在读完（已 drain 重采样器）或出错时。
@@ -88,7 +85,7 @@ public:
     void set_volume(float value) { m_volume = value; }
     // 静音只作用于输出增益，不停解码时钟。
     void set_muted(bool muted) { m_muted = muted; }
-    void set_volume_scale(float value, std::uint32_t fade_ms = 0);
+    void set_volume_scale(float value, std::uint32_t fade_ms);
 
 private:
     PcmDesc                                 m_desc;

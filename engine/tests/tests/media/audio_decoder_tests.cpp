@@ -80,11 +80,8 @@ auto DecodedFrames(std::uint32_t source_rate) -> std::uint64_t {
 
 TEST(AudioDecoder, SameRateKeepsEveryFrame) { EXPECT_EQ(DecodedFrames(48000), 48000u); }
 
-TEST(AudioDecoder, ResamplesAndDrainsTail) {
-    const auto frames = DecodedFrames(44100);
-    EXPECT_GE(frames, 47000u);
-    EXPECT_LE(frames, 49000u);
-}
+// 1 秒 44.1k 重采样到 48k 恰好 48000 帧；少了 EOF 时的 drain 就会缺重采样滤波器里缓着的尾巴。
+TEST(AudioDecoder, ResamplesAndDrainsTail) { EXPECT_EQ(DecodedFrames(44100), 48000u); }
 
 TEST(AudioDecoder, RejectsNonAudioInput) {
     owe::media::AudioDecoder decoder;

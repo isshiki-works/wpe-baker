@@ -1,4 +1,5 @@
 module;
+// vector 扩容要 operator new；不先包含 <new>，clang 22 报 operator new 歧义（消融实测）。
 #include <new>
 
 module owe.media;
@@ -37,7 +38,6 @@ void VolumeScaleRamp::redirect(float target, std::uint32_t sample_rate, std::uin
 }
 
 void VolumeScaleRamp::apply(std::span<float> output, std::uint32_t channels, float volume) {
-    if (channels == 0) return;
     if (m_frames_left == 0) {
         const float gain = volume * m_current;
         for (auto& sample : output) sample *= gain;
@@ -61,7 +61,6 @@ void VolumeScaleRamp::advance() {
 OfflineMixer::OfflineMixer(PcmDesc desc): m_desc(desc) {}
 
 void OfflineMixer::mount(std::unique_ptr<PcmSource> source) {
-    if (! source) return;
     source->pass_desc(m_desc);
     m_sources.push_back(std::move(source));
 }
@@ -80,18 +79,13 @@ auto OfflineMixer::mix(std::span<float> output) -> bool {
     }
     const auto frames = static_cast<std::uint32_t>(output.size() / channels);
     std::fill(output.begin(), output.end(), 0.0f);
-    if (frames == 0 || ! m_playing) return true;
+    if (! m_playing) return true;
 
     m_scratch.resize(output.size());
     for (auto& source : m_sources) {
-        std::fill(m_scratch.begin(), m_scratch.end(), 0.0f);
         const auto produced = source->next_pcm(m_scratch.data(), frames);
         if (auto error = source->last_error(); ! error.empty()) {
             m_error = error;
-            return false;
-        }
-        if (produced > frames) {
-            m_error = "PCM source returned more frames than requested";
             return false;
         }
         const auto count = std::size_t(produced) * channels;

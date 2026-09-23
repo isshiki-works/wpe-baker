@@ -1,16 +1,10 @@
 module;
+// make_unique 之前先包含 <new>，避开 clang 22 的 operator new 歧义。
 #include <new>
-
-#include <errno.h>
-#include <stdio.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#include <libavformat/avio.h>
-#include <libavutil/channel_layout.h>
-#include <libavutil/error.h>
-#include <libavutil/mem.h>
 #include <libswresample/swresample.h>
 }
 
@@ -268,11 +262,9 @@ auto AudioDecoder::open(owe::io::RangeReader source, PcmDesc target) -> bool {
 }
 
 auto AudioDecoder::next_pcm(float* dst, std::uint32_t frames) -> std::uint32_t {
-    return m_impl ? m_impl->next_pcm(dst, frames) : 0;
+    return m_impl->next_pcm(dst, frames);
 }
 
-auto AudioDecoder::last_error() const -> std::string_view {
-    return m_impl ? std::string_view(m_impl->error) : std::string_view {};
-}
+auto AudioDecoder::last_error() const -> std::string_view { return m_impl->error; }
 
 } // namespace owe::media
