@@ -565,7 +565,7 @@ internal static class AppJsonPresentation
 
     /// <summary>
     /// 折叠的"技术细节"面板：纯数字表，一行一对（名称, 值），不组句子、不写段落。
-    /// 循环长度、总调速、视频组数、实时图层数、输出分辨率与帧率原样取自 plan；原作功耗只在实测过时才出这一行。
+    /// 循环长度、总调速、视频组数、实时图层数、输出分辨率与帧率原样取自 plan。
     /// </summary>
     public static (string Label, string Value)[] NumberRows(JsonObject? plan, bool english)
     {
@@ -600,9 +600,6 @@ internal static class AppJsonPresentation
             rows.Add((english ? "Output resolution and frame rate" : "输出分辨率与帧率",
                 width.ToString("0", CultureInfo.InvariantCulture) + "×" + height.ToString("0", CultureInfo.InvariantCulture) +
                 (fpsText.Length > 0 ? " @" + fpsText : "")));
-        if (plan["source_power"] is JsonObject power && power["status"]?.GetValue<string>() == "measured" &&
-            SourcePowerVerdict.Watts(power) is double watts)
-            rows.Add((english ? "Original power" : "原作功耗", watts.ToString("0.##", CultureInfo.InvariantCulture) + " W"));
         return [.. rows];
     }
 

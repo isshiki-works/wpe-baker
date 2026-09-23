@@ -27,6 +27,13 @@ jobs:
       - name: 构建 Baker.Cli
         run: dotnet build src/Baker.Cli -c Release
 
+      # 自用测量工具 Periodica.Bench：独立 slnx、不引用产品工程；自测只核对纯函数，不碰 WPE、GPU 与计数器
+      - name: 构建 Periodica.Bench
+        run: dotnet build bench/Periodica.Bench.slnx -c Release
+
+      - name: 自测 Periodica.Bench
+        run: dotnet run --project bench/Periodica.Bench -c Release --no-build -- selftest
+
       # L3 要 GPU、渲染器和 ffmpeg，CI 不跑
       - name: 测试 L0–L2
         run: dotnet test tests/Baker.Core.Tests -c Release --filter "Layer!=L3" --logger "trx;LogFileName=ci.trx"

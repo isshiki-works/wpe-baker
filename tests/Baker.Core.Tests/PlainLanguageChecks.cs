@@ -250,21 +250,9 @@ internal static class PlainLanguageChecks
             PlainLanguage.Basis(noLoop, true).Contains("no loop period") && PlainLanguage.Verdict(noLoop, false) == "无法生成",
             "tool register: a missing loop period is named in the details");
 
-        // Old source-only power verdicts remain readable without inheriting their unsupported benefit inference.
         var cheap = Plan(Layer(10, null, "底", live: false, []));
         cheap["settings"]!["video_layout"] = "full_frame";
         TradeoffOptions.Attach(cheap);
-        cheap["source_power"] = new JsonObject { ["verdict"] = new JsonObject {
-            ["status"] = "measured", ["worth_baking"] = false } };
-        check(PlainLanguage.Verdict(cheap, false) == "可以生成" &&
-            PlainLanguage.Verdict(cheap, true) == "Ready to generate" &&
-            PlainLanguage.Basis(cheap, false).Contains("仅代表本机"),
-            "source-only power in older reports does not predict a lack of savings");
-        cheap["source_power"] = new JsonObject { ["verdict"] = new JsonObject {
-            ["status"] = "not_measured", ["worth_baking"] = null } };
-        check(PlainLanguage.Verdict(cheap, false) == "可以生成",
-            "plain language: without a measurement nothing is claimed about power");
-        cheap.Remove("source_power");
         cheap["summary"]!["key"] = "summary.bakeable_static";
         check(PlainLanguage.Verdict(cheap, false) == "可以生成" && PlainLanguage.Basis(cheap, false).Contains("尚待确认"),
             "an older static result is not automatically described as having no savings");

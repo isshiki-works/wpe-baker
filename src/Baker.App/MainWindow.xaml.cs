@@ -498,15 +498,8 @@ public partial class MainWindow : Window
             request = AppJsonPresentation.ConfigureAnalysis(request, SelectedPreset(), SelectedInteraction(),
                 AdvancedIsCustom(), LayeredVideoBox.IsChecked == true) with
                 { AnalysisCacheDirectory = analysisCacheDirectory };
-            // 分析前先量一遍原来这张现在费多少电（默认开）：读数写进 plan 的 source_power，结论第一行按实测分档；
-            // 量不了的机器跳过并把原因记进 plan，分析照常进行。
-            JsonObject? sourcePower = MeasureSourceBox.IsChecked == true
-                ? await MeasureSourcePowerAsync(source, SourcePowerVerdict.SampleDirectory(output),
-                    numerator / (double)denominator, analysisCancellation.Token)
-                : null;
             StatusText.Text = L("正在分析…", "Analyzing…");
             var found = await Task.Run(() => new HybridScenePlanner(tools).AnalyzeAsync(request, null, analysisCancellation.Token));
-            if (sourcePower is not null) SourcePowerVerdict.Apply(found, sourcePower);
             analysisCancellation.Token.ThrowIfCancellationRequested();
             if (SourceBox.Text.Trim() == source && AssetsBox.Text.Trim() == assets)
             {
@@ -678,9 +671,6 @@ public partial class MainWindow : Window
             selected.ProjectPath is not null;
         ValidateButton.Content = L("查看自动检查结果", "Show automatic checks");
         ValidateButton.ToolTip = L("显示生成过程中记录的自动检查结果。", "Shows the checks recorded during generation.");
-        MeasurePlaybackButton.IsEnabled = selected?.State == "completed" && !processing && File.Exists(WpeExeBox.Text.Trim());
-        MeasurePlaybackButton.Content = L("实测当前播放功耗", "Measure current playback power");
-        MeasurePlaybackButton.ToolTip = L("读取运行中 Wallpaper Engine 的功耗；同时采集帧率需管理员权限。", "Reads the running Wallpaper Engine power draw; sampling displayed frames requires administrator rights.");
         ExportButton.IsEnabled = selected?.State == "completed" && selected.ProjectPath is not null &&
             (!processing || selected.ExportArchive is not null);
         ExportButton.Content = selected?.ExportArchive is null ? L("导出 ZIP", "Export ZIP") : L("打开 ZIP", "Open ZIP");
@@ -907,7 +897,6 @@ public partial class MainWindow : Window
             "validating" => L("正在校验输出画面…", "Verifying rendered output…"),
             "official_window_phase" => english ? value.Message
                 : L("正在通过 Wallpaper Engine 对比原作与成品…", "Comparing the original and the result through Wallpaper Engine…"),
-            "official_sampling" => L("正在实测 Wallpaper Engine 功耗…", "Measuring Wallpaper Engine power draw…"),
             "completed" => L("阶段完成…", "Stage complete…"),
             "finishing_encode" => L("正在完成视频编码…", "Finishing video encoding…"),
             "rendering" => value.FramesCompleted is ulong done && value.FramesTotal is ulong total
@@ -1151,82 +1140,6 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>
-    /// 烘完之后量一遍省了多少电：原来那张和做出来的各在官方 Wallpaper Engine 里播一次、各采样一次，
-    /// 比出核显域的降幅，给一句人话，读数写进 gain.json 与 bake.json 的 measured_gain。
-    /// </summary>
-    private async void MeasurePlaybackClicked(object sender, RoutedEventArgs e)
-    {
-        if (processing || QueueList.SelectedItem is not JobItem { State: "completed" } job) return;
-        string executable = WpeExeBox.Text.Trim();
-        string original = Directory.Exists(job.Source) ? job.Source : Path.GetDirectoryName(job.Source) ?? job.Source;
-        string? baked = job.ProjectPath;
-        double fps = job.FpsNumerator / (double)job.FpsDenominator;
-        await RunJobOperationAsync(job, "sampling", async token =>
-        {
-            if (baked is null || !Directory.Exists(baked)) throw new InvalidOperationException("The finished wallpaper folder is missing.");
-            if (!File.Exists(executable)) throw new FileNotFoundException("Wallpaper Engine was not found at the chosen path.");
-            string root = Path.Combine(job.Request.OutputDirectory, "gain-" + Guid.NewGuid().ToString("N")[..8]);
-            string? presentMon = FindPresentMon();
-            JsonObject before = await OfficialPerformanceSampler.SampleAsync(new(1, 0, "original", Path.Combine(root, "original"),
-                Seconds: 45, TargetFps: fps, PresentMonPath: presentMon, SourceProject: original,
-                WallpaperEngineExecutable: executable), MakeProgress(job), token);
-            JsonObject after = await OfficialPerformanceSampler.SampleAsync(new(1, 0, "baked", Path.Combine(root, "baked"),
-                Seconds: 45, TargetFps: fps, PresentMonPath: presentMon, SourceProject: baked,
-                WallpaperEngineExecutable: executable), MakeProgress(job), token);
-            JsonObject gain = SourcePowerVerdict.Gain(SourcePowerVerdict.FromSample(before), SourcePowerVerdict.FromSample(after));
-            Directory.CreateDirectory(root);
-            string gainPath = Path.Combine(root, "gain.json");
-            await File.WriteAllTextAsync(gainPath, gain.ToJsonString(), token);
-            job.LatestReportPath = gainPath;
-            // bake.json 里的 measured_gain 一直是 not_verified 的占位，这里换成真读数。
-            if (File.Exists(job.GenerationReportPath) &&
-                JsonNode.Parse(await File.ReadAllTextAsync(job.GenerationReportPath, token)) is JsonObject bake)
-            {
-                bake["measured_gain"] = gain.DeepClone();
-                await File.WriteAllTextAsync(job.GenerationReportPath, bake.ToJsonString(), token);
-            }
-            return SourcePowerVerdict.GainLine(gain, english ? MessageCatalog.English : MessageCatalog.Chinese);
-        });
-    }
-
-    /// <summary>分析前在官方 Wallpaper Engine 里播一遍原来那张实测功耗；量不了就记下原因，绝不让分析失败。</summary>
-    private async Task<JsonObject> MeasureSourcePowerAsync(string source, string output, double fps, CancellationToken token)
-    {
-        string executable = WpeExeBox.Text.Trim();
-        StatusText.Text = L("正在实测原壁纸功耗（约 60 s）…", "Measuring original wallpaper power draw (about 60 s)…");
-        try
-        {
-            if (!File.Exists(executable)) throw new FileNotFoundException("Wallpaper Engine was not found at the chosen path.");
-            JsonObject sample = await OfficialPerformanceSampler.SampleAsync(new(1, 0, "source power", output,
-                Seconds: 30, TargetFps: fps, PresentMonPath: FindPresentMon(),
-                SourceProject: Directory.Exists(source) ? source : Path.GetDirectoryName(source) ?? source,
-                WallpaperEngineExecutable: executable), null, token);
-            return SourcePowerVerdict.FromSample(sample);
-        }
-        catch (Exception error) when (error is not OperationCanceledException)
-        {
-            return SourcePowerVerdict.Skipped(error.Message);
-        }
-    }
-
-    private static string? FindPresentMon()
-    {
-        string[] names = ["PresentMon.exe", "PresentMon-2.5.1-x64.exe"];
-        foreach (string name in names)
-        {
-            string bundled = Path.Combine(AppContext.BaseDirectory, "performance", name);
-            if (File.Exists(bundled)) return bundled;
-        }
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        for (int depth = 0; directory is not null && depth < 8; ++depth, directory = directory.Parent)
-            foreach (string name in names)
-            {
-                string local = Path.Combine(directory.FullName, ".tools", "presentmon", name);
-                if (File.Exists(local)) return local;
-            }
-        return null;
-    }
 
     private async void ExportClicked(object sender, RoutedEventArgs e)
     {
@@ -1589,7 +1502,6 @@ public partial class MainWindow : Window
                 "completed" => english ? "Completed" : "已完成", "cancelled" => english ? "Cancelled" : "已取消",
                 "failed" => english ? "Failed" : "失败", "previewing" => english ? "Making previews" : "正在生成预览",
                 "applying" => english ? "Applying wallpaper" : "正在应用壁纸", "restoring" => english ? "Restoring wallpaper" : "正在恢复壁纸",
-                "sampling" => english ? "Measuring current playback" : "正在测量当前播放",
                 "reading_report" => english ? "Reading validation report" : "正在读取验证报告",
                 "exporting" => english ? "Exporting ZIP" : "正在导出 ZIP", _ => State };
             (string Zh, string En)[] details = [

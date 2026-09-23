@@ -83,11 +83,6 @@ def main() -> None:
                         help="Existing validation record to copy and reference without changing its result")
     args = parser.parse_args()
     native_build, native_renderer, native_record = provenance.load_verified_build(args.native_build_dir)
-    presentmon_records = ROOT / "scripts/presentmon"
-    presentmon_source = json.loads((presentmon_records / "source.json").read_text(encoding="utf-8"))
-    presentmon_binary = ROOT / ".tools/presentmon" / presentmon_source["file"]
-    if digest(presentmon_binary) != presentmon_source["sha256"]:
-        raise RuntimeError("PresentMon does not match the recorded upstream binary.")
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     bundle = output / "WpeBaker"
@@ -111,10 +106,6 @@ def main() -> None:
     for library in (ROOT / ".deps/ffmpeg-lgpl21/prefix/bin").glob("*.dll"):
         shutil.copy2(library, renderer)
     shutil.copytree(ROOT / ".deps/ffmpeg-encoder-gpl2/portable", bundle / "encoder")
-    performance = bundle / "performance"
-    performance.mkdir()
-    shutil.copy2(presentmon_binary, performance / "PresentMon.exe")
-    shutil.copy2(presentmon_records / "source.json", performance / "source.json")
     tools = {"renderer": "renderer/wpe-render.exe", "ffmpeg": "encoder/ffmpeg.exe",
              "ffprobe": "encoder/ffprobe.exe", "runtime_directories": ["renderer"]}
     (bundle / "tools.json").write_text(json.dumps(tools, indent=2) + "\n", encoding="utf-8")
@@ -124,8 +115,6 @@ def main() -> None:
         shutil.copy2(ROOT / name, bundle)
     licenses = bundle / "licenses"
     licenses.mkdir()
-    shutil.copy2(presentmon_records / "LICENSE.txt", licenses / "PresentMon.LICENSE.txt")
-    shutil.copy2(presentmon_records / "THIRD_PARTY.txt", licenses / "PresentMon.THIRD_PARTY.txt")
     shutil.copy2(ROOT / "engine/LICENSE", licenses / "open-wallpaper-engine.LICENSE")
     shutil.copy2(ROOT / ".tools/llvm-mingw-22/LICENSE.TXT", licenses / "llvm-mingw.LICENSE.txt")
     shutil.copy2(ROOT / ".dotnet/LICENSE.txt", licenses / "dotnet.LICENSE.txt")

@@ -6,113 +6,22 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
-namespace Baker.Core;
+namespace Periodica.Bench;
 
 public sealed record OfficialPerformanceRequest(int SchemaVersion, int ProcessId, string Label, string OutputDirectory,
     int Seconds = 30, double TargetFps = 120, string? PresentMonPath = null, string? NvidiaGpuUuid = null,
-    string? ExpectedProcessPath = null, string? SwapChainAddress = null, bool TrackDisplay = true,
-    // 以下为"烘前实测原作功耗"用：给了 SourceProject 就由采样器打开原作、等稳定、采样、按 apply 记录还原。
-    string? SourceProject = null, string? WallpaperEngineExecutable = null, string? Location = null,
-    int SettleSeconds = 20, double IgpuWattsThreshold = 1);
+    string? ExpectedProcessPath = null, string? SwapChainAddress = null, bool TrackDisplay = true);
 
-/// <summary>Read-only, per-process Windows sampler. It never starts, stops, or changes the target application
-/// unless a SourceProject is requested, in which case playback is applied and restored through WallpaperController.</summary>
+/// <summary>只读的逐进程 Windows 采样器：PresentMon（呈现节奏）、typeperf/PDH（GPU 引擎、显存、RAPL 功耗）、
+/// nvidia-smi（板卡功耗）、进程 CPU 与工作集。自身从不启动、停止或改动目标程序；换壁纸由 <see cref="Abba"/> 编排。</summary>
 public static class OfficialPerformanceSampler
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly TimeSpan CollectorGrace = TimeSpan.FromSeconds(30);
 
+    /// <param name="playback">编排方换过壁纸时传入的播放记录，写进报告并改写 scope；只读采样传 null。</param>
     public static async Task<JsonObject> SampleAsync(OfficialPerformanceRequest request,
-        IProgress<RenderProgress>? progress = null, CancellationToken cancellationToken = default)
-    {
-        if (request.SourceProject is not null) return await PlayAndSampleAsync(request, progress, cancellationToken);
-        return await SampleCoreAsync(request, progress, false, null, cancellationToken);
-    }
-
-    /// <summary>烘前实测：在官方 Wallpaper Engine 里播原作、等稳定、采样，最后按 apply 记录还原原来的壁纸。
-    /// 打开与还原都走 WallpaperController 的官方 -control 命令，不改 config.json 的排版，也不重启 WPE。</summary>
-    private static async Task<JsonObject> PlayAndSampleAsync(OfficialPerformanceRequest request,
-        IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
-    {
-        if (!OperatingSystem.IsWindows())
-            throw new PlatformNotSupportedException("Official performance sampling requires Windows.");
-        string executable = request.WallpaperEngineExecutable
-            ?? throw new ArgumentException("Playing the source requires the Wallpaper Engine executable.");
-        string output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.OutputDirectory));
-        ProjectSource.EnsureNoReparsePoints(output);
-        if (Directory.Exists(output) || File.Exists(output)) throw new IOException("Sampler output must be a new directory.");
-        var controller = new WallpaperController(executable);
-        var targets = await controller.ReadCurrentTargetsAsync(cancellationToken);
-        WallpaperTarget target = request.Location is not null
-            ? targets.SingleOrDefault(item => item.Location == request.Location)
-                ?? throw new InvalidDataException("The requested Wallpaper Engine location is not assigned.")
-            : targets.Count == 1 ? targets[0]
-                : throw new InvalidDataException("Several Wallpaper Engine locations are assigned; name the one to measure.");
-        Directory.CreateDirectory(output);
-        string applyDirectory = Path.Combine(output, "apply");
-        progress?.Report(new("official_sampling", 0, "Applying the source wallpaper to " + target.Location + "."));
-        JsonObject applied = await controller.ApplyAsync(
-            new(1, request.SourceProject!, target.Profile, target.Location, applyDirectory), cancellationToken);
-        var playback = new JsonObject
-        {
-            ["source_project"] = request.SourceProject, ["profile"] = target.Profile, ["location"] = target.Location,
-            ["settle_seconds"] = request.SettleSeconds, ["applied"] = applied.DeepClone(), ["restored"] = null
-        };
-        JsonObject? report = null;
-        try
-        {
-            int processId = request.ProcessId > 0 ? request.ProcessId : WallpaperProcessId(executable);
-            OfficialPerformanceRequest sampling = request with
-            {
-                ProcessId = processId, ExpectedProcessPath = request.ExpectedProcessPath ?? executable
-            };
-            if (sampling.SettleSeconds > 0)
-            {
-                progress?.Report(new("official_sampling", 0, $"Letting playback settle for {sampling.SettleSeconds} s."));
-                await Task.Delay(TimeSpan.FromSeconds(sampling.SettleSeconds), cancellationToken);
-            }
-            report = await SampleCoreAsync(sampling, progress, true, playback, cancellationToken);
-            return report;
-        }
-        finally
-        {
-            // 还原永远要做，采样失败也一样；还原本身失败只记录，不掩盖原始异常。
-            try
-            {
-                playback["restored"] = (await controller.RollbackAsync(Path.Combine(applyDirectory, "apply.json"),
-                    CancellationToken.None)).DeepClone();
-            }
-            catch (Exception error) { playback["restore_error"] = error.ToString(); }
-            await WriteAsync(Path.Combine(output, "playback.json"), playback, CancellationToken.None);
-            if (report is not null)
-            {
-                report["playback"] = playback.DeepClone();
-                await WriteAsync(report["report_path"]!.GetValue<string>(), report, CancellationToken.None);
-            }
-        }
-    }
-
-    private static int WallpaperProcessId(string executable)
-    {
-        string full = Path.GetFullPath(executable);
-        Process[] candidates = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(full));
-        try
-        {
-            int[] ids = candidates.Where(process =>
-            {
-                try { return string.Equals(process.MainModule?.FileName, full, StringComparison.OrdinalIgnoreCase); }
-                catch (Exception error) when (error is Win32Exception or InvalidOperationException or NotSupportedException)
-                { return false; }
-            }).Select(process => process.Id).ToArray();
-            if (ids.Length != 1)
-                throw new InvalidDataException("Exactly one running Wallpaper Engine process must match the executable.");
-            return ids[0];
-        }
-        finally { foreach (Process process in candidates) process.Dispose(); }
-    }
-
-    private static async Task<JsonObject> SampleCoreAsync(OfficialPerformanceRequest request,
-        IProgress<RenderProgress>? progress, bool outputExists, JsonObject? playback, CancellationToken cancellationToken)
+        IProgress<string>? progress = null, JsonObject? playback = null, CancellationToken cancellationToken = default)
     {
         if (request.SchemaVersion != 1 || request.ProcessId <= 0 || request.Seconds <= 0 || request.TargetFps <= 0 ||
             !double.IsFinite(request.TargetFps))
@@ -121,8 +30,7 @@ public static class OfficialPerformanceSampler
             throw new PlatformNotSupportedException("Official performance sampling requires Windows.");
 
         string output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.OutputDirectory));
-        ProjectSource.EnsureNoReparsePoints(output);
-        if (!outputExists && (Directory.Exists(output) || File.Exists(output)))
+        if (Directory.Exists(output) || File.Exists(output))
             throw new IOException("Sampler output must be a new directory.");
         Directory.CreateDirectory(output);
         string reportPath = Path.Combine(output, "report.json");
@@ -140,10 +48,10 @@ public static class OfficialPerformanceSampler
             throw new InvalidDataException("Could not verify the target executable name for PresentMon capture.");
 
         string presentMon = Path.GetFullPath(request.PresentMonPath ??
-            Path.Combine(AppContext.BaseDirectory, "performance", "PresentMon.exe"));
+            PresentMonLocator.Find() ?? throw new FileNotFoundException(PresentMonLocator.Missing));
         string typeperf = Path.Combine(Environment.SystemDirectory, "typeperf.exe");
         string smi = Path.Combine(Environment.SystemDirectory, "nvidia-smi.exe");
-        string session = "wpe-baker-" + Guid.NewGuid().ToString("N");
+        string session = "periodica-bench-" + Guid.NewGuid().ToString("N");
         DateTimeOffset startedUtc = DateTimeOffset.UtcNow;
         var metadata = new JsonObject
         {
@@ -159,16 +67,16 @@ public static class OfficialPerformanceSampler
             ["presentation_tracking_note"] = request.TrackDisplay
                 ? "PresentMon tracks presentation through display when supported."
                 : "Only Present API cadence is measured. Displayed-frame pacing and dropped/displayed status are not measured; GPU engine counters remain separate.",
-            // 只读采样与"烘前实测"是两种范围，写死成只读会谎报：后者确实换过桌面壁纸再还原。
+            // 只读采样与 A/B/B/A 编排是两种范围，写死成只读会谎报：后者确实换过桌面壁纸再还原。
             ["scope"] = playback is null
                 ? "Read-only measurements of one specified existing process. No desktop or application control occurred."
-                : "The requested source was applied to one Wallpaper Engine location through the official control commands, sampled, and the previous wallpaper restored. Every other process was only read.",
+                : "Wallpaper Engine was switched through its official -control commands before sampling and the previous wallpaper is restored afterwards. Every other process was only read.",
             ["power_scope"] = "NVIDIA board power is the total board reading, not an increment attributable to this wallpaper.",
             ["gpu_scope"] = "GPU Engine counters are grouped by adapter LUID from counter paths; process engine attribution is not a per-wallpaper isolation guarantee."
         };
         await WriteAsync(Path.Combine(output, "metadata.json"), metadata, cancellationToken);
 
-        progress?.Report(new("official_sampling", 0, "Discovering Windows per-process counters."));
+        progress?.Report("Discovering Windows per-process counters.");
         var discoveryErrors = new JsonArray();
         string[] gpu = await QueryCountersAsync(typeperf, "GPU Engine", request.ProcessId, discoveryErrors, cancellationToken);
         gpu = gpu.Where(path => path.EndsWith(@"\Utilization Percentage", StringComparison.OrdinalIgnoreCase) &&
@@ -302,7 +210,7 @@ public static class OfficialPerformanceSampler
                 new JsonObject { ["status"] = "not_measured" };
             platformPower["discovery_errors"] = powerDiscoveryErrors.DeepClone();
             platformPower["seconds_sampled"] = elapsed;
-            JsonObject verdict = Verdict(platformPower, request.IgpuWattsThreshold);
+            JsonObject verdict = Verdict(platformPower);
             var incomplete = CompletionFailures(targetValidation, presentSummary, typeperfSummary, cpu, power,
                 gpu.Length, memory, request.NvidiaGpuUuid, discoveryErrors);
             if (platformPower["status"]?.GetValue<string>() != "sampled")
@@ -662,13 +570,13 @@ public static class OfficialPerformanceSampler
         var instances = new JsonArray();
         foreach (var item in indexed) instances.Add(item.Instance);
         if (indexed.Length == 0)
-            return new Message("reason.power_counters_missing").Write(new JsonObject
+            return Reason.Write("reason.power_counters_missing", new JsonObject
             {
                 ["status"] = "unsupported_platform", ["source"] = "windows_energy_meter",
                 ["missing"] = @"\Energy Meter(*)\Power",
                 ["instances"] = instances, ["package_watts"] = null, ["cores_watts"] = null,
                 ["igpu_domain_watts"] = null, ["igpu_domain_method"] = "unavailable"
-            }, "reason");
+            });
         int[] package = indexed.Where(item => item.Instance.EndsWith("_PKG", StringComparison.OrdinalIgnoreCase))
             .Select(item => item.Index).ToArray();
         int[] cores = indexed.Where(item => item.Instance.EndsWith("_CORE", StringComparison.OrdinalIgnoreCase))
@@ -729,7 +637,7 @@ public static class OfficialPerformanceSampler
     }
 
     /// <summary>记录本机原作读数；不从原作功耗阈值推断生成收益。</summary>
-    private static JsonObject Verdict(JsonObject power, double threshold)
+    private static JsonObject Verdict(JsonObject power)
     {
         string status = power["status"]?.GetValue<string>() ?? "not_measured";
         double? watts = Metric(power["igpu_domain_watts"]?["median"]);
@@ -829,7 +737,7 @@ public static class OfficialPerformanceSampler
         };
     }
 
-    private static void ApplyTraceLoss(JsonObject summary, string diagnostics)
+    internal static void ApplyTraceLoss(JsonObject summary, string diagnostics)
     {
         // PresentMon can exit successfully after losing events. Its surviving CSV
         // cannot establish displayed cadence or a valid dropped-frame ratio.
@@ -840,12 +748,12 @@ public static class OfficialPerformanceSampler
         if (summary["status"]?.GetValue<string>() == "sampled") summary["status"] = "incomplete_trace";
     }
 
-    private static JsonObject PresentSummary(string path, double targetFps, string? selectedAddress,
+    internal static JsonObject PresentSummary(string path, double targetFps, string? selectedAddress,
         int? expectedProcessId = null, bool trackDisplay = true)
     {
         if (!File.Exists(path) || new FileInfo(path).Length == 0)
-            return new Message("reason.presentmon_no_csv").Write(new JsonObject { ["status"] = "not_measured",
-                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = new JsonArray() }, "reason");
+            return Reason.Write("reason.presentmon_no_csv", new JsonObject { ["status"] = "not_measured",
+                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = new JsonArray() });
         CsvData csv;
         try { csv = ParseCsv(Decode(File.ReadAllBytes(path))); }
         catch (Exception error)
@@ -854,8 +762,8 @@ public static class OfficialPerformanceSampler
                 ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = new JsonArray() };
         }
         if (csv.Rows.Count < 2)
-            return new Message("reason.presentmon_no_rows").Write(new JsonObject { ["status"] = "not_measured",
-                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = csv.Errors }, "reason");
+            return Reason.Write("reason.presentmon_no_rows", new JsonObject { ["status"] = "not_measured",
+                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = csv.Errors });
         string[] header = csv.Rows[0];
         int chainIndex = Header(header, "SwapChainAddress", "SwapChain", "SwapChainID");
         int presentsIndex = Header(header, "msBetweenPresents");
@@ -864,8 +772,8 @@ public static class OfficialPerformanceSampler
         int runtimeIndex = Header(header, "Runtime");
         int processIndex = Header(header, "ProcessID");
         if (chainIndex < 0 || presentsIndex < 0 && displayIndex < 0 || expectedProcessId is not null && processIndex < 0)
-            return new Message("reason.presentmon_columns_missing").Write(new JsonObject { ["status"] = "partial_report",
-                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = csv.Errors }, "reason");
+            return Reason.Write("reason.presentmon_columns_missing", new JsonObject { ["status"] = "partial_report",
+                ["verified_target_fps"] = false, ["swapchains"] = new JsonObject(), ["csv_errors"] = csv.Errors });
 
         var chains = new Dictionary<string, PresentChain>(StringComparer.OrdinalIgnoreCase);
         int validRows = 0, excludedProcessRows = 0;
@@ -974,7 +882,7 @@ public static class OfficialPerformanceSampler
                 DisplayMeetsTarget(resolvedChain, targetFps),
             ["metric_note"] = "effective_fps, interval_ms and below_target_fps_ratio describe Present API submissions only. displayed_fps uses positive msBetweenDisplayChange values from displayed rows; missing display evidence never verifies target FPS. Chains are never summed."
         };
-        return reasonKey is null ? sampled : new Message(reasonKey).Write(sampled, "reason");
+        return reasonKey is null ? sampled : Reason.Write(reasonKey, sampled);
     }
 
     private sealed class PresentChain
@@ -987,7 +895,7 @@ public static class OfficialPerformanceSampler
         public HashSet<string> Runtimes { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
-    internal static bool DisplayMeetsTarget(JsonObject? chain, double targetFps) =>
+    private static bool DisplayMeetsTarget(JsonObject? chain, double targetFps) =>
         chain?["display_evidence_complete"]?.GetValue<bool>() == true &&
         Metric(chain["displayed_fps"]) is double fps && double.IsFinite(fps) && fps >= targetFps;
 
