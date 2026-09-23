@@ -36,6 +36,7 @@ internal static class ShaderCorpusChecks
             if (shader["same_as"] is JsonValue same)
             {
                 string? baseText = Stage(shaders[same.GetValue<string>()]!.AsObject(), stage);
+                if (shader[stage] is JsonArray own) return string.Join('\n', own.Select(line => line!.GetValue<string>()));
                 if (baseText is null || stage != "frag") return baseText;
                 string Lines(string key) => string.Join('\n', (shader[key]?.AsArray() ?? []).Select(line => line!.GetValue<string>()));
                 return (shader["prepend"] is null ? "" : Lines("prepend") + "\n") + baseText + (shader["append"] is null ? "" : "\n" + Lines("append"));
@@ -82,6 +83,9 @@ internal static class ShaderCorpusChecks
                 ok &= unresolved.Length > 0 && unresolved.All(item => item.Detail.Contains(text, comparison));
         if (expect["allow_retime"] is JsonValue retime) ok &= components.Length > 0 && components.All(item => item.Component.AllowRetime == retime.GetValue<bool>());
         if (expect["key"] is JsonValue constantKey) ok &= components.Length > 0 && components.All(item => item.Patch.ConstantKey == constantKey.GetValue<string>());
+        if (expect["exponent"] is JsonValue exponent) ok &= components.Length > 0 && components.All(item => item.Patch.SpeedExponent == exponent.GetValue<double>());
+        if (expect["period_seconds"] is JsonValue seconds)
+            ok &= components.Length == 1 && Math.Abs(components[0].Component.BasePeriod!.Seconds - seconds.GetValue<double>()) < 1e-12;
         if (expect["period"] is JsonValue period)
         {
             // "分子/速度"，分子为 2pi 或数字：与实现同一算式求值，容差 1e-12。
