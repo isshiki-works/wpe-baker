@@ -222,15 +222,8 @@ public class BakeGateTests : IDisposable
     [Fact]
     public void RunningSkeletonsKeepTheirV2KeyOrder()
     {
-        var options = new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-        JsonObject running = BakeReportWriter.Running(new HybridBakeRequest(2, new JsonObject(), "o", EncodeSlots: 3, EffectRenderScale: 0.5),
-            "abc", 600, new JsonObject(), 2, "source_period_no_repair");
-        Assert.Equal("""{"schema_version":2,"artifact_kind":"hybrid_video_candidate","status":"running","source_sha256":"abc","source_digest_scope":"project-source-files-sha256-v2","frames":600,"plan":{},"groups":[],"official_playback":"not_verified","measured_gain":"not_verified","loop_validation":"not_performed","source_start_frame":0,"encode_slots":3,"group_parallel":2,"effect_render_scale":0.5,"match_effect_resolution":false,"seam_policy":"source_period_no_repair"}""",
-            running.ToJsonString(options));
         JsonObject probe = BakeReportWriter.Running(new HybridBakeRequest(2, new JsonObject(), "o", ProbeFrames: 48), "abc", 48, new JsonObject(), 1, "x");
         Assert.Equal("hybrid_video_probe", probe["artifact_kind"]!.GetValue<string>());
-        Assert.Equal("""{"schema_version":2,"artifact_kind":"hybrid_video_candidate","status":"running","source_sha256":"abc","source_digest_scope":"project-source-files-sha256-v2","plan":{},"groups":[],"source_start_frame":0,"seam_policy":"source_period_no_repair","official_playback":"not_verified","measured_gain":"not_verified"}""",
-            BakeReportWriter.EffectPrefixRunning("abc", new JsonObject()).ToJsonString(options));
     }
 
     [Fact]

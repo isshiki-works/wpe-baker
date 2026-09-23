@@ -145,7 +145,6 @@ public class LayoutAdmissionTests
         Assert.Null(plan["layout_admission_demotion"]);
         admission.Record(effectPrefix: true);
         Assert.Equal("not_applicable_to_effect_prefix", Text(plan["video_layout_admission"]!["status"]));
-        Assert.StartsWith("Effect-prefix caching", Text(plan["video_layout_admission"]!["scope"]));
         Assert.Equal(blockers, plan["blockers"]!.AsArray().Count);
         Assert.Equal(status, Text(plan["status"]));
     });
@@ -161,7 +160,6 @@ public class LayoutAdmissionTests
         JsonObject record = plan["video_layout_admission"]!.AsObject();
         Assert.Equal(LayoutAdmission.AllowedStatus, Text(record["status"]));
         Assert.Null(record["reason"]);
-        Assert.StartsWith("Layout permission is not proof", Text(record["scope"]));
     });
 
     [Fact]

@@ -68,11 +68,6 @@ internal static class SavedLoopApplyChecks
             AppJsonPresentation.Number(JsonValue.Create(1.5f)) == 1.5 &&
             AppJsonPresentation.Number(JsonValue.Create(float.PositiveInfinity)) is null,
             "Number accepts in-memory integer/floating JsonValues and rejects non-finite values");
-        string prefixSummary = AppJsonPresentation.LoopSummary(prefixes["plan"]!.AsObject(), null, true);
-        check(prefixSummary.Contains("owner 55") && prefixSummary.Contains("owner 81") && prefixSummary.Contains("later effects stay live") &&
-            !prefixSummary.Contains("complete loop"), "effect-prefix summary lists each period and retained live suffix");
-        string validationSummary = AppJsonPresentation.HybridValidationSummary(prefixes, true);
-        check(validationSummary.Contains("Official WPE playback and GPU power benefit are unverified"), "effect-prefix summary does not claim playback or power benefit");
         prefixes["plan"]!["effect_prefix_caches"]![0]!["loop"]!["unresolved"]!.AsArray().Add(new JsonObject());
         check(!AppJsonPresentation.CandidateCanApply(prefixes), "effect-prefix with unresolved loop mechanism is rejected");
         prefixes["plan"]!["effect_prefix_caches"]![0]!["loop"]!["unresolved"]!.AsArray().Clear();

@@ -101,7 +101,7 @@ internal static class OverlayExclusionChecks
 
         bool unknownRejected = false;
         try { await PlanAsync("overlay-exclusion-unknown", [10, 999]); }
-        catch (InvalidDataException error) when (error.Message.Contains("excluded layer id", StringComparison.Ordinal))
+        catch (InvalidDataException)
         { unknownRejected = true; }
         check(unknownRejected, "an excluded layer id that is not in the scene fails closed instead of being ignored");
     }

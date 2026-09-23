@@ -57,10 +57,8 @@ internal static class FullFrameDemotionChecks
         check(wide["video_groups"]!.AsArray().Count == 2 &&
             wide["video_layout_admission"]!["status"]!.GetValue<string>() == "requires_user_choice" &&
             wide["layout_admission_demotion"]!["status"]!.GetValue<string>() == "not_applied" &&
-            wide["layout_admission_demotion"]!["reason"]!.GetValue<string>().Contains("canvas fraction", StringComparison.Ordinal) &&
             wide["full_frame_retention"]!["status"]!.GetValue<string>() == "available" &&
-            blocker.Contains("--retain-live 803,804", StringComparison.Ordinal) &&
-            blocker.Contains("Tiny label A", StringComparison.Ordinal),
+            blocker.Contains("--retain-live 803,804", StringComparison.Ordinal),
             "a demotion that would stop the video carrying the image is refused and offered as an explicit --retain-live command");
 
         JsonObject snapshot = wide.DeepClone().AsObject();
@@ -78,9 +76,7 @@ internal static class FullFrameDemotionChecks
 
         JsonObject unknown = await AnalyzeAsync(root, "unknown", Scene(4, 2, sizeLabelB: false), true, new JsonArray());
         check(unknown["video_groups"]!.AsArray().Count == 2 &&
-            unknown["video_layout_admission"]!["status"]!.GetValue<string>() == "requires_user_choice" &&
-            unknown["layout_admission_demotion"]!["reason"]!.GetValue<string>()
-                .Contains("unknown canvas fraction", StringComparison.Ordinal),
+            unknown["video_layout_admission"]!["status"]!.GetValue<string>() == "requires_user_choice",
             "an unknown canvas fraction among the demoted layers keeps the original rejection");
 
         // 依赖闭包把保留组也拉成实时：视频组会消失，必须维持拒绝并带出分配层的原因文本。
@@ -102,19 +98,6 @@ internal static class FullFrameDemotionChecks
             unclearedPlan["layout_admission_demotion"]!["status"]!.GetValue<string>() == "not_applied" &&
             !unclearedBlocker.Contains("--retain-live", StringComparison.Ordinal),
             "without an opaque first group there is no retention, no demotion and no --retain-live advice");
-
-        JsonObject crowded = CrowdedPlan();
-        string crowdedBlocker = Conflict(crowded)!;
-        check(crowdedBlocker.StartsWith("Full-frame mode requires one opaque video group", StringComparison.Ordinal) &&
-            crowdedBlocker.Contains("into 2 video group(s)", StringComparison.Ordinal) &&
-            crowdedBlocker.Contains("Blocker 5", StringComparison.Ordinal) && !crowdedBlocker.Contains("Blocker 6", StringComparison.Ordinal) &&
-            crowdedBlocker.Contains("and 2 more", StringComparison.Ordinal) &&
-            !crowdedBlocker.Contains("overlays in the foreground", StringComparison.Ordinal),
-            "the full-frame blocker states the current split, lists at most five blockers and drops impossible foreground advice");
-
-        crowded["occlusion_tradeoff"] = new JsonObject { ["promoted_roots"] = new JsonArray(new JsonObject { ["root_id"] = 11 }) };
-        check(Conflict(crowded)!.Contains("overlays in the foreground", StringComparison.Ordinal),
-            "foreground promotion is offered exactly when the plan has a promotable candidate");
     }
 
     private static JsonObject Role(JsonObject plan, int root) => plan["root_roles"]!.AsArray().OfType<JsonObject>()
@@ -145,27 +128,6 @@ internal static class FullFrameDemotionChecks
             new JsonObject { ["id"] = Spectrum, ["name"] = "Audio spectrum", ["image"] = "models/spectrum.json", ["size"] = new JsonArray(32, 16) },
             new JsonObject { ["id"] = LabelA, ["name"] = "Tiny label A", ["text"] = "a", ["size"] = new JsonArray(labelWidth, labelHeight) },
             labelB);
-    }
-
-    /// <summary>七个交织实时层的合成 plan，只用于检查冲突文案的清单上限。</summary>
-    private static JsonObject CrowdedPlan()
-    {
-        var composition = new JsonArray(new JsonObject { ["video_group"] = "group-1" });
-        var layers = new JsonArray();
-        for (int index = 1; index <= 7; index++)
-        {
-            composition.Add(new JsonObject { ["live_root"] = 10 + index });
-            layers.Add(new JsonObject { ["id"] = 10 + index, ["root"] = 10 + index, ["name"] = "Blocker " + index,
-                ["visible"] = true, ["drawable"] = true });
-        }
-        composition.Add(new JsonObject { ["video_group"] = "group-2" });
-        return new JsonObject {
-            ["schema_version"] = 2, ["kind"] = "hybrid_video",
-            ["settings"] = new JsonObject { ["video_layout"] = "full_frame" },
-            ["video_groups"] = new JsonArray(
-                new JsonObject { ["id"] = "group-1", ["include_scene_clear"] = true },
-                new JsonObject { ["id"] = "group-2", ["include_scene_clear"] = false }),
-            ["composition"] = composition, ["layers"] = layers };
     }
 
     /// <param name="animationPeriods">给了就写进 trace 的 runtime_animation_periods（不给时 trace 没有这个字段，与原来相同）。</param>

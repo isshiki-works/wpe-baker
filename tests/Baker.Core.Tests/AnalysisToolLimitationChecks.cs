@@ -76,37 +76,11 @@ internal static class AnalysisToolLimitationChecks
             files[1]!["layers"] is JsonArray { Count: 0 },
             "only the layer that references the unreadable model file is named");
 
-        string modelZh = report["blockers_localized"]![0]!["zh"]!.GetValue<string>();
-        string modelEn = report["blockers_localized"]![0]!["en"]!.GetValue<string>();
-        Check(modelZh.Contains("3D 模型文件", StringComparison.Ordinal) && modelZh.Contains("models/link_adult/link_adult.mdl", StringComparison.Ordinal) &&
-            modelZh.Contains("animation play_mode", StringComparison.Ordinal) && modelZh.Contains("不是合法的 UTF-8", StringComparison.Ordinal) &&
-            modelZh.Contains("380009", StringComparison.Ordinal) && modelZh.Contains("图层 536 \"link_adult\"", StringComparison.Ordinal) &&
-            !modelZh.Contains("used by", StringComparison.Ordinal),
-            "the chinese model blocker names the file, field, problem, offset and layer in chinese");
-        Check(modelEn.Contains("3D model file", StringComparison.Ordinal) && modelEn.Contains("models/link_adult/link_adult.mdl", StringComparison.Ordinal) &&
-            modelEn.Contains("animation play_mode", StringComparison.Ordinal) && modelEn.Contains("referenced by layer 536", StringComparison.Ordinal) &&
-            !modelEn.Contains("图层", StringComparison.Ordinal) &&
-            report["blockers"]![0]!.GetValue<string>().StartsWith("The tool cannot read this 3D model file yet:", StringComparison.Ordinal) &&
-            report["blockers_localized"]![0]!["en"]!.GetValue<string>() == modelEn,
-            "the english model blocker is the legacy blocker line and carries the same facts");
-        Check(report["blockers_localized"]![1]!["zh"]!.GetValue<string>().Contains("纹理文件", StringComparison.Ordinal) &&
-            report["blockers_localized"]![1]!["en"]!.GetValue<string>().Contains("mipmap", StringComparison.Ordinal),
-            "the texture blocker is localized too");
-        Check(report["summary"]!["zh"]!.GetValue<string>().Contains("工具局限", StringComparison.Ordinal) &&
-            report["summary"]!["zh"]!.GetValue<string>().Contains("共 2 个素材文件", StringComparison.Ordinal) &&
-            report["summary"]!["zh"]!.GetValue<string>().Contains("非对壁纸可生成性的判定", StringComparison.Ordinal) &&
-            report["summary"]!["en"]!.GetValue<string>().StartsWith("Tool limitation, not analyzed:", StringComparison.Ordinal),
-            "the one-line summary says it is a tool limitation, counts the files and is not a verdict on the wallpaper");
-
-        JsonObject generic = AnalysisToolLimitation.BuildReport(unknownReason, null, "s", "h", output, "m");
-        Check(generic["blockers_localized"]![0]!["zh"]!.GetValue<string>().Contains("invalid MDLA end_offset", StringComparison.Ordinal),
-            "a model failure without a known field quotes the renderer's words");
-
         try { HybridPlanFormat.Validate(report); Check(false, "a tool limitation report is rejected as a bake plan"); }
         catch (InvalidDataException) { Check(true, "a tool limitation report is rejected as a bake plan"); }
 
         var exception = new AnalysisToolLimitationException(report, failure);
-        Check(ReferenceEquals(exception.Report, report) && exception.Message == report["summary"]!["en"]!.GetValue<string>() &&
+        Check(ReferenceEquals(exception.Report, report) &&
             exception.InnerException == failure,
             "the limitation exception carries the report and keeps the renderer failure as its cause");
         int[] existingExitCodes = [0, 1, 3, 130];

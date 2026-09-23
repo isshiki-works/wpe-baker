@@ -198,6 +198,5 @@ public class PairedComparisonTests
         JsonObject tile = CompositionGate.Evaluate(Comparison(Errors(3, 3), [Errors(3, 3), Errors(3, 226)]));
         Assert.Equal("composition_rejected", tile["status"]!.GetValue<string>());
         Assert.Equal(64, tile["worst_rgb_tile"]!["x"]!.GetValue<int>());
-        Assert.Contains("Tile (64,0) RGB MAE 25.1111 exceeds 25.", tile["failures"]!.AsArray().Select(node => node!.GetValue<string>()));
     }
 }

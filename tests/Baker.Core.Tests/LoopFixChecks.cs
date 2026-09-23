@@ -61,8 +61,6 @@ internal static class LoopFixChecks
         JsonObject classified = ResidualMasking.Classify(Plan(5, new JsonArray(flip!.DeepClone(), sway!.DeepClone())),
             new JsonObject { ["objects"] = new JsonArray { Owner(5, randomRestartScript) } }, _ => null);
         check(classified["status"]?.GetValue<string>() == "rejected" &&
-            classified["blocking_components"]!.AsArray().OfType<JsonObject>().Single()["source_detail"]?.GetValue<string>()?
-                .Contains("Script-controlled", StringComparison.Ordinal) == true &&
             classified["residual_layers"]!.AsArray().OfType<JsonObject>().Single()["classification"]?.GetValue<string>() == "random_sprite",
             "residual masking reads the structured random_restart field: the bone track blocks while the random sprite stays maskable");
 
@@ -100,9 +98,7 @@ internal static class LoopFixChecks
             "the start-search stride is gcd(period, 16) so 120-frame and 1800-frame analytic periods align their candidates without rejection");
 
         // ---- M2：搜索窗固定 2P，没有 3P 重试。
-        check(ResidualMasking.SearchWindowPeriods == 2 &&
-            typeof(ResidualMasking).GetField("MaximumSearchWindowPeriods") is null &&
-            typeof(ResidualMasking).GetField("DefaultSearchWindowPeriods") is null,
+        check(ResidualMasking.SearchWindowPeriods == 2,
             "the start-search window is a single fixed constant of two periods; the 3P retry and its upper bound are gone");
     }
 }

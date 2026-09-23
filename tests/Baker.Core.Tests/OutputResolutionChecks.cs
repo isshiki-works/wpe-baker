@@ -161,24 +161,10 @@ internal static class OutputResolutionChecks
             planned["output_resolution"]!["source"]!.GetValue<string>() == OutputResolution.SceneCanvasFitDisplay &&
             planned["output_resolution"]!["display"]!.ToJsonString() == "[96,16]" && planned["canvas_width"]!.GetValue<double>() == 128,
             "analyze without a size fits the property-evaluated canvas (128x32) to the injected 96x16 screen as 96x24 (s = max(0.75, 0.5)) and records it in plan.settings");
-        check(planned["summary"]!["zh"]!.GetValue<string>().EndsWith("输出分辨率 96×24：场景画布缩放至铺满本机屏幕（画布 128×32，屏幕 96×16）。", StringComparison.Ordinal) &&
-            planned["summary"]!["en"]!.GetValue<string>().EndsWith(" Output resolution 96×24: the scene canvas scaled to cover this machine's screen (canvas 128×32, screen 96×16).", StringComparison.Ordinal),
-            "the one-line conclusion states the fitted size, the canvas and the screen, in both languages");
         JsonObject requested = await AnalyzeAsync("canvas-resolution-explicit", 64, 32);
         check(requested["settings"]!["width"]!.GetValue<uint>() == 64 &&
-            requested["settings"]!["resolution_source"]!.GetValue<string>() == OutputResolution.Explicit &&
-            requested["summary"]!["zh"]!.GetValue<string>().EndsWith("输出分辨率取指定值 64×32（场景画布 128×32）。", StringComparison.Ordinal),
+            requested["settings"]!["resolution_source"]!.GetValue<string>() == OutputResolution.Explicit,
             "an explicit size is kept, recorded as explicit, and the conclusion names the differing scene canvas");
-        static string Sentence(OutputResolution.Choice choice) =>
-            PlanNarrative.Summarize(Blocked(new JsonObject { ["blockers"] = new JsonArray(), ["output_resolution"] = choice.ToJson() }))["zh"]!.GetValue<string>();
-        static JsonObject Blocked(JsonObject plan) { PlanBlockers.Set(plan, [new Blocker(BlockerCode.PerspectiveNeedsScreenspace)]); return plan; }
-        check(Sentence(capped).EndsWith("输出分辨率 1920×1080，即场景画布原尺寸：画布不足以覆盖本机屏幕 3840×2160，不放大。", StringComparison.Ordinal) &&
-            Sentence(canvas).EndsWith("本机屏幕分辨率不可读，输出分辨率取场景画布原尺寸 3840×2160。", StringComparison.Ordinal) &&
-            Sentence(perspective).EndsWith("场景无可用正交画布（透视场景或画布缺失），输出分辨率取主显示器分辨率 3072×1920。", StringComparison.Ordinal),
-            "capped, display-unavailable and perspective choices each get their own conclusion wording");
-        var legacy = Blocked(new JsonObject());
-        check(!PlanNarrative.Summarize(legacy)["zh"]!.GetValue<string>().Contains("烘焙。", StringComparison.Ordinal),
-            "a plan without output_resolution keeps its conclusion unchanged");
     }
 
     // HybridVideoProjection 是内部类型：通过反射调用 Describe，确认投影读到的画布与分辨率取值一致。

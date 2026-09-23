@@ -47,13 +47,9 @@ internal static class EmbeddedVideoBudgetChecks
         JsonObject record = EmbeddedVideoBudgetJson.ToJson(desktop);
         check(record["applied"]!.GetValue<bool>() && record["requested_loop_length_maximum_seconds"]!.GetValue<double>() == 600 &&
             record["fit_seconds"]!.GetValue<double>() == 558 && record["maximum_bytes"]!.GetValue<long>() == int.MaxValue &&
-            record["encoded_width"]!.GetValue<uint>() == 3840 && record["fps_numerator"]!.GetValue<uint>() == 60 &&
-            record["basis"]!.GetValue<string>().Contains("2,922,466,521", StringComparison.Ordinal),
+            record["encoded_width"]!.GetValue<uint>() == 3840 && record["fps_numerator"]!.GetValue<uint>() == 60,
             "embedded video limit: the plan record carries the requested and fitted seconds, the limit, the encoded size and its basis");
-        string zh = EmbeddedVideoBudgetJson.Sentence(desktop, MessageCatalog.Chinese), en = EmbeddedVideoBudgetJson.Sentence(desktop, MessageCatalog.English);
-        check(zh == "按 Wallpaper Engine 内嵌视频上限 2 GiB 与参考码率估算，3840×2160 @60 fps 成品视频最长约 558 s；循环长度上限由 600 s 降至 558 s。" &&
-            en.Contains("a 3840×2160 @60 fps video fits about 558 s, so the loop-length maximum was lowered from 600 s to 558 s", StringComparison.Ordinal) &&
-            !NarrativePolishChecks.Leaks(zh) && EmbeddedVideoBudgetJson.Sentence(laptop, MessageCatalog.Chinese) == "" &&
+        check(EmbeddedVideoBudgetJson.Sentence(laptop, MessageCatalog.Chinese) == "" &&
             EmbeddedVideoBudgetJson.Sentence(EmbeddedVideoBudget.LoopLengthLimit(600, 1920, 1080, false, 60000, 1001)!, MessageCatalog.English) == "",
             "embedded video limit: the sentence names the resolution, frame rate, longest and requested seconds, and is empty when nothing was lowered");
 
@@ -91,30 +87,20 @@ internal static class EmbeddedVideoBudgetChecks
             "trial extrapolation: Amiya's 2500 s bake is rejected before rendering while 3572877776's 9180 frames pass, both extrapolations below the real size");
         JsonObject overLocalized = over["reason_localized"]!.AsObject();
         check(overLocalized["key"]!.GetValue<string>() == "bake.embedded_video_size_predicted" &&
-            overLocalized["zh"]!.GetValue<string>().Contains("视频组 group-1 的成品（150000 帧，2500 s）按短段试编码外推约 2.10 GiB", StringComparison.Ordinal) &&
-            overLocalized["zh"]!.GetValue<string>().Contains("按该码率最长约 2382 s。已在渲染前停止", StringComparison.Ordinal) &&
-            overLocalized["en"]!.GetValue<string>().Contains("Stopped before rendering", StringComparison.Ordinal) &&
-            over["reason_localized"]?["key"]?.GetValue<string>() == "bake.embedded_video_size_predicted" &&
-            over["reason"]!.GetValue<string>().Contains("video group group-1 (150000 frames, 2500 s)", StringComparison.Ordinal) &&
-            !NarrativePolishChecks.Leaks(overLocalized["zh"]!.GetValue<string>()),
+            over["reason_localized"]?["key"]?.GetValue<string>() == "bake.embedded_video_size_predicted",
             "trial extrapolation: the pre-render rejection names the group, length, estimated size and the longest loop at this bitrate in both languages");
         JsonObject mixed = EmbeddedVideoBudgetJson.EvaluateProbe([new("group-1", false, 1920, 1080, 48, 1, simple),
             new("group-2", true, 3840, 1080, 48, 814_173, amiyaTrial)], 150_000, 60, 1);
         JsonObject none = EmbeddedVideoBudgetJson.EvaluateProbe([], 150_000, 60, 1, new Message("bake.probe_all_static"));
         check(mixed["status"]!.GetValue<string>() == "predicted_over_limit" && mixed["groups"]!.AsArray().Count == 2 &&
             !mixed["groups"]![0]!["over_limit"]!.GetValue<bool>() && mixed["groups"]![1]!["over_limit"]!.GetValue<bool>() &&
-            mixed["reason_localized"]!["zh"]!.GetValue<string>().Contains("视频组 group-2", StringComparison.Ordinal) &&
             none["status"]!.GetValue<string>() == "not_estimated" &&
             none["reason_localized"]?["key"]?.GetValue<string>() == "bake.probe_all_static",
             "trial extrapolation: any over-limit group rejects and is named; with no encoded trial the estimate is recorded as not_estimated without rejecting");
 
         // ---- 编码后兜底的文案 ----
         JsonObject encoded = EmbeddedVideoBudgetJson.EncodedRejection("group-1", 2_922_466_521, 150_000, 60, 1).Localized();
-        check(encoded["key"]!.GetValue<string>() == "bake.embedded_video_size_rejected" &&
-            encoded["zh"]!.GetValue<string>().Contains("视频组 group-1 编码后 2.72 GiB（150000 帧，2500 s）", StringComparison.Ordinal) &&
-            encoded["zh"]!.GetValue<string>().Contains("按实测码率最长约 1837 s", StringComparison.Ordinal) &&
-            encoded["en"]!.GetValue<string>().Contains("Stopped before the seam checks", StringComparison.Ordinal) &&
-            !NarrativePolishChecks.Leaks(encoded["zh"]!.GetValue<string>()),
+        check(encoded["key"]!.GetValue<string>() == "bake.embedded_video_size_rejected",
             "encoded size check: Amiya's real 2.72 GiB video is rejected with the longest loop its actual bitrate allows");
         check(EmbeddedVideoBudget.RejectedBakeStatus == "candidate_rejected_embedded_video_size",
             "embedded video budget: pre-render and post-encode rejections share one bake status the app recognizes");

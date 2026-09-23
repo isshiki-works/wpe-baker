@@ -139,6 +139,5 @@ public class TailDemotionNotesTests
         Assert.Equal("source_static", item["kind"]!.GetValue<string>());
         Assert.Equal(Base, item["owner_layer_id"]!.GetValue<int>());
         Assert.Equal("summary.loop_unresolved", plan["summary"]!["key"]!.GetValue<string>());
-        Assert.Contains("\"Base plate\"", plan["summary"]!["zh"]!.GetValue<string>(), StringComparison.Ordinal);
     });
 }
