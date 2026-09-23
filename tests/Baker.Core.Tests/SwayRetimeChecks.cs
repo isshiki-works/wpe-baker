@@ -458,6 +458,15 @@ internal static class SwayRetimeChecks
             overLimit8K["sway_retime"]!["reason_zh"]!.GetValue<string>().Contains("峰值速度偏差超过 0.4 px/s", StringComparison.Ordinal) &&
             overLimit8K["sway_retime"]!["reason_en"]!.GetValue<string>().Contains("exceeds 0.4 px/s", StringComparison.Ordinal),
             "sway speed limit on an 8K canvas: the same motion resolves to the same L, the record and the bilingual reason carry the scaled limits");
+        // 预算诊断同一口径：预算卡死（0%）时，"不设预算能不能解"的重解也要按生效门限判，否则大画布上会把"预算太紧"误报成"速度超限"。
+        // 用 64 倍边长的画布（振幅 ×64，精确）让旧口径的门限一定咬住：不换算时报速度超限，换算后与原画布同样报预算太紧。
+        RetimeProfile zeroBudget = RetimeProfile.Resolve(RetimeProfile.Balanced, 0, 200, 2);
+        string BudgetStatus(double outputPerScene, double speedLimitScale) => HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null,
+            new JsonObject(), [1, 2], 60, 1, 2, CommonLoopPreference.Balanced,
+            new SwayRetimeOptions(200, outputPerScene, outputPerScene, Profile: zeroBudget, SpeedLimitScale: speedLimitScale))["sway_retime"]!["status"]!.GetValue<string>();
+        check(BudgetStatus(0.5, 1) == "no_multiple_within_budget" && BudgetStatus(32, 64) == "no_multiple_within_budget" &&
+            BudgetStatus(32, 1) == "no_multiple_meets_speed_limit",
+            "sway budget diagnosis on a large canvas: the no-budget re-solve uses the same scaled speed limits, so a budget rejection is not reported as a speed-limit rejection");
 
         // 振幅读不到（没有 size）：慢项偏差无从判定，候选与未解析项原样保留，写明是哪一层。
         JsonObject sizeless = Sway(2, 3.55);
