@@ -163,6 +163,12 @@ bool next_after_zero_is_anim_trans_main(fs::BinaryReader& f, int32_t length) {
     return peek_uint32_at(f, off + 4, byte_size) && is_anim_trans_main_size(byte_size, length);
 }
 
+// MDLA 动画头里 length 之后的 u32 flags。语料（D:/WPE-regress-src 342 个 mdl、505 条动画）
+// 只出现过 0 和 0x401。0x400 决定事件表前有没有源动画引用尾块；0x001 只与 0x400 同时出现，
+// 含义未知。其余位和其余组合照原样保留在 anim.flags 里，打一条 info 日志，不改变读法。
+constexpr uint32_t kAnimFlagSourceRef = 0x400;
+constexpr uint32_t kAnimFlagsKnown    = 0x401;
+
 bool next_is_anim_bone_curves(fs::BinaryReader& f) {
     auto    off        = f.Tell();
     uint8_t has_curves = 0;
@@ -757,7 +763,14 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
         return ParseFailure(path, "unsupported animation play_mode", mode_offset, mdla_end_offset);
     anim.fps    = f.ReadFloat();
     anim.length = f.ReadInt32();
-    f.ReadInt32(); // anim_zero
+    anim.flags  = f.ReadUint32();
+    if (anim.flags != 0 && anim.flags != kAnimFlagsKnown) {
+        rstd_info("Animation {} flags 0x{:X} differs from the observed 0x{:X} ({})",
+                  anim.name,
+                  anim.flags,
+                  kAnimFlagsKnown,
+                  std::string(path));
+    }
 
     uint32_t b_num = f.ReadUint32();
     ResetDefault(anim.bone_tracks, usize(b_num));
@@ -914,6 +927,26 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
         if (next_is_anim_bone_curves(f)) {
             if (! ParseAnimBoneCurves(f, anim.scalar_curves, b_num)) return false;
         }
+    }
+
+    // flags 位 0x400：事件表之前多一段 18 字节的源动画引用尾块
+    // {u32 源动画序号, u16 0, u32 帧数, u32 0, i32 -1}。语料里 6 条样本全是 MDLA0006、
+    // play_mode 为空、源序号 < anim_num、帧数 == length；读过即可，渲染不用这段。
+    if (anim.flags & kAnimFlagSourceRef) {
+        if (! RequireBytes(f, 18, mdla_end_offset, path, "MDLA animation source reference"))
+            return false;
+        f.ReadUint32(); // 源动画序号
+        const uint16_t pad = f.ReadUint16();
+        f.ReadUint32(); // 帧数
+        const uint32_t zero      = f.ReadUint32();
+        const int32_t  minus_one = f.ReadInt32();
+        if (pad != 0 || zero != 0 || minus_one != -1)
+            rstd_info("Animation {} source reference {}/{}/{} differs from observed 0/0/-1 ({})",
+                      anim.name,
+                      pad,
+                      zero,
+                      minus_one,
+                      std::string(path));
     }
 
     // Trailing event list — present on every animation regardless of mdla

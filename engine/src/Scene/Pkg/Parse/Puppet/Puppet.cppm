@@ -152,6 +152,7 @@ public:
         rstd::uint32_t unk_after_id { 0 };
         double         fps;
         rstd::int32_t  length;
+        rstd::uint32_t flags { 0 }; // MDLA 动画头 flags 原值（0x400 = 带源动画引用尾块）
         PlayMode       mode;
         String         name;
 
