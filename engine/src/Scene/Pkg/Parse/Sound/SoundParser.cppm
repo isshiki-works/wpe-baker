@@ -3,7 +3,7 @@ module;
 
 export module wescene.pkg.parse:sound_parser;
 import rstd;
-import wavsen.audio;
+import owe.media;
 import wescene.fs;
 import wescene.scene;
 import wescene.pkg.scene_obj;
@@ -16,7 +16,7 @@ using rstd::sync::Arc;
 class SoundParser {
 public:
     static std::shared_ptr<SceneSoundControl> Parse(const wpscene::SoundObject&, fs::VFS&,
-                                                   wavsen::audio::SoundManager&, Scene*);
+                                                   owe::media::OfflineMixer&, Scene*);
 };
 
 } // namespace owe

@@ -5,7 +5,7 @@
 import eigen;
 import rstd;
 import rstd.cppstd;
-import wavsen.audio;
+import owe.media;
 import wescene.fs;
 import wescene.json;
 import wescene.pkg.parse;
@@ -469,13 +469,13 @@ TEST(SceneParserSoundScript, UserPropertyCanStartSilentSoundFromVolumeField) {
     ASSERT_TRUE(document.is_some());
 
     owe::fs::VFS                vfs;
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "sound-script"_str,
         ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene      = rstd::move(parsed).unwrap();
@@ -509,13 +509,13 @@ TEST(SceneParserSound, EmptyPlaylistIsAStableSilentControl) {
     ASSERT_TRUE(document.is_some());
 
     owe::fs::VFS                vfs;
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "empty-sound"_str,
         ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene = rstd::move(parsed).unwrap();
@@ -555,13 +555,13 @@ TEST(SceneParserScript, DynamicObjectsUseSceneIdentity) {
     owe::fs::VFS vfs;
     ASSERT_TRUE(vfs.mount("/assets"_str, rstd::move(assets).unwrap_unchecked()).is_ok());
 
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "dynamic-object-id"_str,
         ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene      = rstd::move(parsed).unwrap();
@@ -623,13 +623,13 @@ TEST(SceneParserScript, ModuleFaultPreservesSourceFieldValueAndPeerBinding) {
     ASSERT_TRUE(assets.is_ok());
     owe::fs::VFS vfs;
     ASSERT_TRUE(vfs.mount("/assets"_str, rstd::move(assets).unwrap_unchecked()).is_ok());
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser parser;
     auto parsed = parser.Parse(
         "module-fault-source-field"_str,
         ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene = rstd::move(parsed).unwrap();
@@ -664,13 +664,13 @@ TEST(SceneParserScript, ContainerModuleFaultKeepsAuthoredIdentity) {
         owe::wpscene::kSceneVersionUnknown);
     ASSERT_TRUE(document.is_some());
     owe::fs::VFS vfs;
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser parser;
     auto parsed = parser.Parse(
         "container-module-fault"_str,
         ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene = rstd::move(parsed).unwrap();
@@ -711,13 +711,13 @@ TEST(SceneParserText, EmptyStaticTextPreservesLayerHierarchy) {
     ASSERT_TRUE(document.is_some());
 
     owe::fs::VFS                vfs;
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "empty-text-parent"_str,
         ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene  = rstd::move(parsed).unwrap();
@@ -756,13 +756,13 @@ TEST(SceneParserText, ScriptSceneExposesTextWritesWithoutSourceInspection) {
     ASSERT_TRUE(document.is_some());
 
     owe::fs::VFS                vfs;
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "runtime-text-write"_str,
         ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene = rstd::move(parsed).unwrap();

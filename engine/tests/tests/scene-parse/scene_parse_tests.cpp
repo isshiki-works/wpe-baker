@@ -17,7 +17,7 @@
 
 import rstd.cppstd;
 import rstd;
-import wavsen.audio;
+import owe.media;
 import wescene.fs;
 import wescene.json;
 import wescene.pkg.parse;
@@ -219,13 +219,13 @@ TEST(SceneDocumentObjects, RejectsNonArrayObjectsAtTheCanonicalParseEntry) {
     ASSERT_FALSE(document->objects_are_array);
 
     owe::fs::VFS                vfs;
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "invalid-objects"_str,
         rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_err());
     EXPECT_EQ(parsed.unwrap_err().kind, owe::SceneParseErrorKind::ObjectExpansion);
 }
@@ -330,13 +330,13 @@ TEST(SceneObjectExpansion, PreservesSoundHiddenByUserBoundParent) {
         auto user_properties = properties.unwrap();
 
         owe::fs::VFS                vfs;
-        wavsen::audio::SoundManager sound_manager;
+        owe::media::OfflineMixer    sound_manager;
         owe::SceneParser            parser;
         return parser.Parse(
             "hidden-sound-parent"_str,
             rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
             rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-            rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)),
+            rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)),
             owe::SceneParseOptions { .user_properties = &user_properties });
     };
 
@@ -432,13 +432,13 @@ TEST(SceneObjectExpansion, ShapeOwnsIdentityAndBuildsAnnotatedTextureFormatCombo
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(effect_assets).unwrap_unchecked()).is_ok());
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(refraction_assets).unwrap_unchecked()).is_ok());
 
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "shape-layer-identity"_str,
         rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene = rstd::move(parsed).unwrap();
@@ -487,13 +487,13 @@ TEST(ImageColorBlendParsing, LinearDodgeUsesAdditiveAttachmentOwner) {
     owe::fs::VFS vfs;
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(assets).unwrap_unchecked()).is_ok());
 
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "linear-dodge-owner"_str,
         rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene = rstd::move(parsed).unwrap();
@@ -533,13 +533,13 @@ TEST(ImageColorBlendParsing, EffectLayerPreservesLinearDodgeAttachmentOwner) {
     owe::fs::VFS vfs;
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(assets).unwrap_unchecked()).is_ok());
 
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "linear-dodge-effect-owner"_str,
         rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene = rstd::move(parsed).unwrap();
@@ -591,13 +591,13 @@ TEST(SceneLinkedSources, EffectSelfCompositeStaysInOwningLayer) {
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(assets).unwrap_unchecked()).is_ok());
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(effect_assets).unwrap_unchecked()).is_ok());
 
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "self-composite"_str,
         rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene = rstd::move(parsed).unwrap();
@@ -641,13 +641,13 @@ TEST(SceneLightParsing, RecognizesPrefixedKindsAndFullConeAngles) {
     owe::fs::VFS vfs;
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(assets).unwrap_unchecked()).is_ok());
 
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "prefixed-light-kinds"_str,
         rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene  = rstd::move(parsed).unwrap();
@@ -694,13 +694,13 @@ TEST(SceneShadowParsing, RequiresRendererCapabilityBeforeRegisteringDerivedResou
     owe::fs::VFS vfs;
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(assets).unwrap_unchecked()).is_ok());
 
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        unsupported = parser.Parse(
         "shadow-capability-disabled"_str,
         rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(unsupported.is_ok());
     auto unsupported_scene = rstd::move(unsupported).unwrap();
     EXPECT_TRUE(unsupported_scene.scene->ShadowDefinitions().is_empty());
@@ -710,7 +710,7 @@ TEST(SceneShadowParsing, RequiresRendererCapabilityBeforeRegisteringDerivedResou
         "shadow-capability-enabled"_str,
         rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)),
+        rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)),
         owe::SceneParseOptions {
             .capabilities = { .directional_shadow = true },
         });
@@ -756,13 +756,13 @@ TEST(SceneCameraParsing, PerspectiveOverridePreservesTheOrthographicReferencePla
     owe::fs::VFS vfs;
     ASSERT_TRUE(vfs.mount("/assets"_str, std::move(assets).unwrap_unchecked()).is_ok());
 
-    wavsen::audio::SoundManager sound_manager;
+    owe::media::OfflineMixer    sound_manager;
     owe::SceneParser            parser;
     auto                        parsed = parser.Parse(
         "perspective-override"_str,
         rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
-        rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)));
+        rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(rstd::addressof(sound_manager)));
     ASSERT_TRUE(parsed.is_ok());
 
     auto scene  = rstd::move(parsed).unwrap();
