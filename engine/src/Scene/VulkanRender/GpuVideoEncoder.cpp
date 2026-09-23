@@ -36,6 +36,40 @@ void Vk(VkResult result, const char* operation) {
         throw std::runtime_error(std::string(operation) + ": VkResult=" + std::to_string(result));
 }
 constexpr std::uint64_t timeout_ns = 30'000'000'000ull;
+
+// 编码帧池的 img_flags。留 0 时 FFmpeg 不看驱动、自动补 MUTABLE_FORMAT|ALIAS|EXTENDED_USAGE；驱动对编码输入
+// 格式报告的 imageCreateFlags 不含其中某位时（如 NVIDIA 不报 ALIAS），图像与编码 profile 不兼容
+// （VUID-vkCmdEncodeVideoKHR-pEncodeInfo-08206）。这里查 NV12 编码输入格式，与那三位取交集。
+// profile 按 FFmpeg 8.1 的选法：h264_vulkan 取 Constrained Baseline/Main/High 里驱动支持的最后一个（即支持 High 时用 High），
+// hevc_vulkan 对 NV12 只用 Main。VIDEO_PROFILE_INDEPENDENT 是 FFmpeg 无 profile 列表时本来就加的，放进来让交集为空时
+// img_flags 仍非 0、不触发自动补位。查不到（驱动不支持该 profile 或没有 NV12 条目）返回 0，保持 FFmpeg 默认。
+VkImageCreateFlags EncoderInputFlags(VkInstance instance, VkPhysicalDevice gpu, bool hevc) {
+    auto query = reinterpret_cast<PFN_vkGetPhysicalDeviceVideoFormatPropertiesKHR>(
+        vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceVideoFormatPropertiesKHR"));
+    if (!query) return 0;
+    VkVideoEncodeH264ProfileInfoKHR h264 { .sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_PROFILE_INFO_KHR,
+        .stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH };
+    VkVideoEncodeH265ProfileInfoKHR h265 { .sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_H265_PROFILE_INFO_KHR,
+        .stdProfileIdc = STD_VIDEO_H265_PROFILE_IDC_MAIN };
+    VkVideoProfileInfoKHR profile { .sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR,
+        .pNext = hevc ? static_cast<const void*>(&h265) : &h264,
+        .videoCodecOperation = hevc ? VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR : VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR,
+        .chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR,
+        .lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR, .chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR };
+    VkVideoProfileListInfoKHR list { .sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_LIST_INFO_KHR,
+        .profileCount = 1, .pProfiles = &profile };
+    VkPhysicalDeviceVideoFormatInfoKHR info { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_FORMAT_INFO_KHR,
+        .pNext = &list, .imageUsage = VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT };
+    std::uint32_t count = 0;
+    if (query(gpu, &info, &count, nullptr) != VK_SUCCESS) return 0;
+    std::vector<VkVideoFormatPropertiesKHR> formats(count, { .sType = VK_STRUCTURE_TYPE_VIDEO_FORMAT_PROPERTIES_KHR });
+    if (query(gpu, &info, &count, formats.data()) != VK_SUCCESS) return 0;
+    for (std::uint32_t i = 0; i < count; ++i)
+        if (formats[i].format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM && formats[i].imageTiling == VK_IMAGE_TILING_OPTIMAL)
+            return (formats[i].imageCreateFlags & (VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_ALIAS_BIT |
+                VK_IMAGE_CREATE_EXTENDED_USAGE_BIT)) | VK_IMAGE_CREATE_VIDEO_PROFILE_INDEPENDENT_BIT_KHR;
+    return 0;
+}
 }
 
 struct GpuVideoEncoder::Impl {
@@ -405,6 +439,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     frames->width = static_cast<int>(p.output_width); frames->height = static_cast<int>(p.output_height);
     auto* vkframes = reinterpret_cast<AVVulkanFramesContext*>(frames->hwctx);
     vkframes->usage = static_cast<VkImageUsageFlagBits>(VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    vkframes->img_flags = EncoderInputFlags(instance, gpu, codec_name == "hevc_vulkan");
     Av(av_hwframe_ctx_init(p.frames), "allocate Vulkan encoder frame pool");
     if (vkframes->format[0] != VK_FORMAT_G8_B8R8_2PLANE_420_UNORM)
         throw std::runtime_error("Vulkan encoder needs one multiplane NV12 image");
