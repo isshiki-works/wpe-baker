@@ -17,6 +17,7 @@ target_sources(owe-scene PUBLIC FILE_SET CXX_MODULES BASE_DIRS ../.. FILES
   Pkg/Parse/Scene/SceneContext.cppm
   Pkg/Parse/Scene/SceneParser.cppm
   Pkg/Parse/Scene/SceneStages.cppm
+  Pkg/Parse/Shader/MaskIdentity.cppm
   Pkg/Parse/Shader/ShaderLex.cppm
   Pkg/Parse/Shader/ShaderParser.cppm
   Pkg/Parse/Sound/SoundParser.cppm

@@ -94,6 +94,19 @@ public:
         u64                              render_pass_cache_observed_count { 0 };
         bool                             framebuffer_cache_hit { false };
         u64                              framebuffer_cache_observed_count { 0 };
+
+        // M2 遮罩支撑区限定（SceneToRenderGraph 填 in，prepare 填 prepared）。
+        // m2_support 非空 = 候选：输出版本应与 m2_alias_use（V_{i-2}）同物理纹理，
+        // 只画 tiles(m2_support) ∪ tiles(m2_prev_change)；核验不过就照常全画。
+        std::shared_ptr<const EffectMaskSupport> m2_support;
+        std::shared_ptr<const EffectMaskSupport> m2_prev_change;
+        rstd::Option<resource::TextureUseHandle> m2_prev_use;
+        rstd::Option<resource::TextureUseHandle> m2_alias_use;
+        bool                                     m2_active { false };
+        std::vector<VkRect2D>                    m2_rects;
+        VkExtent2D                               m2_rects_extent {};
+        // 支撑区覆盖全部 tile：没有可省的面积，照常全画（不多付一次 LOAD）。
+        bool                                     m2_rects_all { false };
     };
 
     CustomShaderPass(Desc&&);
@@ -141,6 +154,9 @@ public:
     PassTimingTarget timingTarget(const PreparedPassResources&) const override;
 
 private:
+    // 按 submesh 的 draw_ranges 发 draw；M2 受限时每个矩形调一次。
+    void recordDrawCalls(vvk::CommandBuffer& cmd);
+
     Desc m_desc;
 };
 
