@@ -3,25 +3,47 @@ using System.Text.Json.Nodes;
 
 namespace Baker.Core;
 
-/// <summary>全分辨率第一层结论出来之后下一步做什么。</summary>
-public enum ResidualStartStep
-{
-    /// <summary>第一层通过，用这个起点继续淡化与编码。</summary>
-    Accept,
-    /// <summary>第一层被拒，还有排序靠后的候选起点：清掉这一轮的输出，换下一个起点重渲 master 再测。</summary>
-    RetryNextStart,
-    /// <summary>第一层被拒，候选起点已经试完（或到了 <see cref="ResidualMasking.MaximumStartAttempts"/>）：拒绝。</summary>
-    Reject
-}
-
 /// <summary>
-/// 残差掩盖路线的起点回退。起点搜索只在降采样样本上看得到 Δ_0 与 Δ_stride，淡化窗口后段的单帧尖峰（例如随机精灵
-/// 在两条时间线里出现的时刻不同）要到全分辨率 master 上才测得出来。所以第一层在某个起点上被拒时，按起点排序依次换下一个
-/// 候选重渲 master 再测，最多 <see cref="ResidualMasking.MaximumStartAttempts"/> 个；周期不变、阈值不变，只换相位。
-/// 每次尝试的起点、样本排序键与各残差组的 max_k / 整幅都记进 bake.json 的 loop_start_attempts。
+/// 残差掩盖路线的起点：每个残差组都参与低分辨率起点评分，联合挑一个起点共享给所有组，保持原作的组间相位关系；
+/// 放在任何组主渲染之前，排在前面的非残差组也用同一个起点。选中的起点再由全分辨率第一层复核（组循环里），
+/// 这里同时给出复核的尝试顺序与记录格式。周期不变、阈值不变，只选相位。
 /// </summary>
-public static class ResidualStartFallback
+internal static class LoopStartSelector
 {
+    /// <summary>
+    /// 跑各残差组的起点评分并合成共享起点，写进 <paramref name="scheduler"/> 的 <see cref="GroupRenderScheduler.StartFrame"/>
+    /// 与各组搜索记录；返回合成后的搜索记录（bake.json 的 loop_start_search）。
+    /// 采样步长取 gcd(P, 16)：周期不是 16 的倍数时步长缩小、候选变多，不再因对齐问题抛异常。
+    /// </summary>
+    internal static async Task<JsonObject> SearchAsync(NativeRenderRunner runner, GroupRenderScheduler scheduler,
+        IProgress<RenderProgress>? progress, StageTiming timing, CancellationToken cancellationToken)
+    {
+        uint sampleStride = ResidualMasking.StartSearchStride(scheduler.Frames);
+        int[] residualGroups = scheduler.ResidualGroupIndexes;
+        var searches = new List<(JsonObject Search, IReadOnlyList<ResidualStartCandidate> Candidates)>();
+        JsonObject startSearch;
+        using (timing.Measure(StageTiming.LoopStartSearch))
+        {
+            foreach (int groupIndex in residualGroups)
+            {
+                JsonObject group = scheduler.Groups[groupIndex];
+                string searchId = group["id"]!.GetValue<string>();
+                GroupCapture capture = scheduler.Capture(group);
+                progress?.Report(new("searching_loop_start", 0,
+                    $"在锁定的解析周期内按接缝残差挑选起点帧（组 {searchId}，预热 {scheduler.SearchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {ResidualMasking.SearchWindowPeriods} 个周期）。"));
+                var scores = new List<ResidualStartCandidate>();
+                JsonObject search = await runner.SearchLoopStartAsync(scheduler.StartSearchRequest(group, capture, sampleStride),
+                    scheduler.Frames, scheduler.CrossfadeFrames, progress, cancellationToken, residualGroups.Length > 1 ? scores : null);
+                search["group_id"] = searchId;
+                scheduler.StartSearches.Add(searchId, search);
+                searches.Add((search, scores));
+            }
+            startSearch = NativeRenderRunner.CombineLoopStartSearches(searches);
+        }
+        scheduler.StartFrame = startSearch["selected_start_frame"]!.GetValue<ulong>();
+        return startSearch;
+    }
+
     /// <summary>起点搜索记录里的尝试顺序（按排序键排好的前 N 个候选），缺失时退回选中的那一个。</summary>
     public static JsonObject[] Order(JsonObject startSearch)
     {
@@ -30,15 +52,6 @@ public static class ResidualStartFallback
             .Where(row => row["start_frame"] is JsonValue).Take(ResidualMasking.MaximumStartAttempts).ToArray();
         if (order.Length > 0) return order;
         return startSearch["selected"] is JsonObject selected ? [selected] : [];
-    }
-
-    /// <summary>第 <paramref name="attemptIndex"/> 次（从 0 数）尝试的第一层结论出来之后的下一步。</summary>
-    public static ResidualStartStep Next(int attemptIndex, bool firstLayerPassed, int orderCount)
-    {
-        if (attemptIndex < 0) throw new ArgumentOutOfRangeException(nameof(attemptIndex));
-        if (firstLayerPassed) return ResidualStartStep.Accept;
-        return attemptIndex + 1 < Math.Min(ResidualMasking.MaximumStartAttempts, orderCount)
-            ? ResidualStartStep.RetryNextStart : ResidualStartStep.Reject;
     }
 
     /// <summary>
