@@ -9,7 +9,12 @@ namespace Baker.Core;
 /// </summary>
 internal sealed record RuntimeTrack(int OwnerLayerId, string TrackName, int[] AnimationLayerIds, double[] AuthoredRates, bool CanRetime,
     CommonLoopComponent LockedComponent, CommonLoopComponent RetimableComponent, bool IsVideo, CommonLoopRational? ClipFrameRate = null,
-    float[]? SpriteFrameTimes = null);
+    float[]? SpriteFrameTimes = null, AuthoredFpsLocation? AuthoredFps = null);
+
+/// <summary>
+/// 属性动画轨道（字段上的 animation，没有 animationlayers）的调速点：相对所有者对象的 JSON 指针（指向那条 animation）与作者 options.fps。
+/// </summary>
+internal sealed record AuthoredFpsLocation(string AnimationPath, double Fps);
 
 /// <summary>
 /// 读运行时证据里被烘图层的时间机制：动画/精灵/视频轨道变成求解分量，证明不了周期的记成类型化未解析项；
@@ -129,14 +134,19 @@ internal static class RuntimeTrackReader
             bool finiteAuthoredRates = true;
             for (int index = 0; index < matched.Length; ++index)
                 finiteAuthoredRates &= TryFiniteRate(matched[index]["rate"], out authoredRates[index]);
-            bool canRetime = !spriteDurationIsPeriod && matched.Length != 0 && ids.Length == matched.Length && finiteAuthoredRates &&
-                matched.All(x => Float32RateEquals(x["rate"], rate));
+            // 属性动画轨道没有 animationlayers 可改 rate；能唯一定位到场景里那条 animation 时改它的 options.fps（周期 = End/fps）。
+            AuthoredFpsLocation? authoredFps = !spriteDurationIsPeriod && matched.Length == 0 &&
+                string.Equals(trace["mechanism"]?.GetValue<string>(), "authored_track", StringComparison.OrdinalIgnoreCase)
+                ? LocateAuthoredFps(owner, trackName, duration) : null;
+            bool canRetime = !spriteDurationIsPeriod && (authoredFps is not null || matched.Length != 0 && ids.Length == matched.Length &&
+                finiteAuthoredRates && matched.All(x => Float32RateEquals(x["rate"], rate)));
             if (!canRetime && matched.Length != 0)
                 unresolved.Add(Track(false, ownerId, track, "unresolved.no_authored_rate_patch"));
             if (!output.ContainsKey(key)) output[key] = new(ownerId, track, ids, authoredRates, canRetime, new CommonLoopComponent(key,
                 new CommonLoopPeriod(period.ToSeconds(), CommonLoopPeriodEvidence.Observed, period)),
                 new CommonLoopComponent(key, new CommonLoopPeriod(period.ToSeconds(), CommonLoopPeriodEvidence.Observed), true), false,
-                SpriteFrameTimes: spriteDurationIsPeriod ? ReadSpriteFrameTimes(source, assetsDirectory, trackName, duration) : null);
+                SpriteFrameTimes: spriteDurationIsPeriod ? ReadSpriteFrameTimes(source, assetsDirectory, trackName, duration) : null,
+                AuthoredFps: authoredFps);
         }
         // 没有精灵轨道的粒子层（雨、雪、雾大多如此）运行时观测里没有任何轨道，以前对周期分析不可见，
         // 只能靠更小分配回退把所有粒子层一律留实时。这里给每个被烘的粒子层补一条未解析项：
@@ -148,6 +158,43 @@ internal static class RuntimeTrackReader
             unresolved.Add(new RuntimeTrackUnresolved(false, ownerId, ParticleDetail(verdict)) { Mechanism = ParticleSystemMechanism, Particle = verdict });
         }
         return output.Values.ToList();
+    }
+
+    /// <summary>
+    /// 在所有者对象里找与轨道同名的唯一一条字段动画（<c>{"animation":{"options":{...}}}</c>），返回它的 JSON 指针与作者 fps。
+    /// 渲染器的片段帧率取这条 options.fps（float，SceneAnimationBinding.cpp BuildSceneAnimationClip），时长 = End/fps，
+    /// End = max(length, 末关键帧) 是整数帧，求值按连续的 float 帧号插值、不取整（Scene.cpp SceneAnimationPlayback::Sample），
+    /// 所以把 fps 乘以倍率 m 就把周期精确除以 m。下列任一不成立就不调速（保守）：同名不唯一；带 parent/children
+    /// （渲染器把父子并成一个播放并要求 fps 相同，只改一条会拆散关系）；fps 不是有限正数；轨道时长 × fps 不是不小于 length
+    /// 的整数帧（场景与运行时观测对不上，与 animation_rate 要求源 rate 等于观测 rate 同理）。
+    /// </summary>
+    private static AuthoredFpsLocation? LocateAuthoredFps(JsonObject owner, string? trackName, CommonLoopRational duration)
+    {
+        string name = trackName ?? "";
+        var found = new List<(string Path, JsonObject Options)>();
+        void Walk(JsonNode? node, string path)
+        {
+            if (node is JsonArray array)
+                for (int index = 0; index < array.Count; ++index) Walk(array[index], path + "/" + index.ToString(CultureInfo.InvariantCulture));
+            if (node is not JsonObject item) return;
+            foreach (var (key, child) in item)
+            {
+                string childPath = path + "/" + key.Replace("~", "~0").Replace("/", "~1");
+                if (key == "animation" && child is JsonObject animation && animation["options"] is JsonObject options &&
+                    (options["name"] is null ? "" : options["name"] is JsonValue text && text.TryGetValue(out string? value) ? value : null) == name)
+                    found.Add((childPath, options));
+                Walk(child, childPath);
+            }
+        }
+        Walk(owner, "");
+        if (found.Count != 1) return null;
+        JsonObject authored = found[0].Options;
+        if (authored["parent"] is not null || authored["children"] is not (null or JsonArray { Count: 0 })) return null;
+        // fps 缺省、为零、为负或超出 float 时下面的整数帧核对不会成立（渲染器缺省 30 时场景里也没有可改的值）。
+        if (!TryFiniteRate(authored["fps"], out double fps)) return null;
+        double frames = duration.ToSeconds() * (float)fps, end = Math.Round(frames);
+        double length = authored["length"] is JsonValue lengthValue && lengthValue.TryGetValue(out double authoredLength) ? authoredLength : 0;
+        return end >= 1 && Math.Abs(frames - end) <= end * 1e-6 && end >= length ? new AuthoredFpsLocation(found[0].Path, fps) : null;
     }
 
     /// <summary>无精灵轨道的粒子层补记条目上的 mechanism。</summary>

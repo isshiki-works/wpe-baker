@@ -61,8 +61,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         if (!request.SwayRetime) return null;
         double visibleWidth = projection["visible_width"] is JsonValue width && width.TryGetValue(out double w) && w > 0 ? w : request.Width;
         double visibleHeight = projection["visible_height"] is JsonValue height && height.TryGetValue(out double h) && h > 0 ? h : request.Height;
+        // 速度门限按最终输出画布（OutputResolution 定下的 request 宽高，与振幅换算同一个画布）的短边换算。
         return new(LoopLengthMaximumOf(request, videoGroups, ceilingOverride), request.Width / visibleWidth, request.Height / visibleHeight,
-            EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride), RetimeProfile.Resolve(request));
+            EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride), RetimeProfile.Resolve(request),
+            SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height));
     }
 
     /// <summary>

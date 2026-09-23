@@ -16,6 +16,12 @@ internal static class ShaderAdditionalPeriodChecks
         // 门控：[COMBO] 缺省值与指纹同一套求值（按解析后的 JSON 比）；directive 按预处理指令词法找。
         ShaderCorpusChecks.Run(check, root, "gate-parsed");
         ShaderCorpusChecks.Run(check, root, "gate-directive");
+        // fix-j：glitter、frac 线性时钟、字面值步进时钟；只声明不用的时钟不算输入；图层基底材质只试 base_material 规则。
+        ShaderCorpusChecks.Run(check, root, "glitter");
+        ShaderCorpusRun flow = ShaderCorpusChecks.Run(check, root, "frac-linear");
+        check(flow.Analysis.RuledMaterials.Contains((5, "flowbase")) && !flow.Analysis.RuledMaterials.Contains((6, "sinebase")),
+            "a claimed base material is ruled; an unclaimed one stays with the runtime material check");
+        ShaderCorpusChecks.Run(check, root, "literal-step");
         ShaderCorpusRun dual = ShaderCorpusChecks.Run(check, root, "dual-wave");
         using var dualSource = new ProjectSource(dual.Directory);
         JsonObject dualScene = dual.Scene;
