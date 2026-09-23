@@ -32,6 +32,13 @@ public static class WorkloadValue
         return parts.Length > 1 && int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out int id) ? id : -1;
     }
 
+    /// <summary>
+    /// 图层铺满居中的整幅画布：覆盖占比 ≥ 1，包围盒中心两轴都离画布中心不到 1e-9。视频外壳判据与烘焙价值共用这一条。
+    /// 任一值缺失（NaN）都不成立：位置未知证明不了"只是把这一层画满"，与"未知一律不当作低价值"同一口径。
+    /// </summary>
+    public static bool FillsCentredCanvas(double fraction, double centreX, double centreY) =>
+        fraction >= 1 && Math.Abs(centreX - .5) < 1e-9 && Math.Abs(centreY - .5) < 1e-9;
+
     /// <summary>静态纹理的图像尺寸是否大于输出（任一边）：大于时缩小后驻留与采样开销可能下降。</summary>
     public static bool TextureExceedsOutput(uint textureWidth, uint textureHeight, double width, double height) =>
         textureWidth > width || textureHeight > height;

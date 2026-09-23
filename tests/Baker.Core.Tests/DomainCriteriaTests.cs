@@ -39,6 +39,18 @@ public class DomainCriteriaTests
     [InlineData("video/99999999999/clip", -1)]
     public void Owner(string component, int expected) => Assert.Equal(expected, WorkloadValue.OwnerOf(component));
 
+    // 铺满居中：占比 ≥ 1 且中心两轴偏差 < 1e-9；plan 里坐标保留 6 位小数，最小非零偏差 1e-6。任一值缺失（NaN）都不算。
+    [Theory]
+    [InlineData(1.0, 0.5, 0.5, true)]
+    [InlineData(0.999999, 0.5, 0.5, false)]
+    [InlineData(1.0, 0.500001, 0.5, false)]
+    [InlineData(1.0, 0.5, 0.499999, false)]
+    [InlineData(double.NaN, 0.5, 0.5, false)]
+    [InlineData(1.0, double.NaN, 0.5, false)]
+    [InlineData(1.0, 0.5, double.NaN, false)]
+    public void FillsCentredCanvas(double fraction, double centreX, double centreY, bool expected) =>
+        Assert.Equal(expected, WorkloadValue.FillsCentredCanvas(fraction, centreX, centreY));
+
     // 静态纹理大于输出：任一边大于即是。
     [Theory]
     [InlineData(3840u, 2160u, 1920.0, 1080.0, true)]

@@ -197,7 +197,7 @@ public static class VideoDominance
         double centreX = HybridScenePlanner.Numeric(clipLayer?["canvas_center_x"], double.NaN);
         double centreY = HybridScenePlanner.Numeric(clipLayer?["canvas_center_y"], double.NaN);
         evidence.Add("clip_layer_canvas_fraction=" + Text(fraction) + " centre=" + Text(centreX) + "," + Text(centreY));
-        if (!(fraction >= 1) || Math.Abs(centreX - 0.5) > 1e-9 || Math.Abs(centreY - 0.5) > 1e-9)
+        if (!WorkloadValue.FillsCentredCanvas(fraction, centreX, centreY))
             return ("The clip layer does not cover the whole centred canvas, so the wallpaper is not that clip played back.",
                 "承载片源的图层没有铺满居中的整幅画布，这张壁纸不只是把那段视频播出来而已。");
         int[] baked = (plan["layers"] as JsonArray)?.OfType<JsonObject>()

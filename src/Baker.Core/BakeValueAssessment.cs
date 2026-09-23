@@ -71,9 +71,9 @@ public static class BakeValueAssessment
                         ["output_width"] = width, ["output_height"] = height, ["source_format"] = header.Format };
                     if (WorkloadValue.TextureExceedsOutput(iw, ih, width, height))
                         return Result(WorkloadValue.StaticTextureFootprint, facts);
-                    if (HybridScenePlanner.Numeric(layer?["canvas_fraction"], 0) >= 1 &&
-                        Math.Abs(HybridScenePlanner.Numeric(layer?["canvas_center_x"], double.NaN) - .5) < 1e-9 &&
-                        Math.Abs(HybridScenePlanner.Numeric(layer?["canvas_center_y"], double.NaN) - .5) < 1e-9)
+                    if (WorkloadValue.FillsCentredCanvas(HybridScenePlanner.Numeric(layer?["canvas_fraction"], 0),
+                        HybridScenePlanner.Numeric(layer?["canvas_center_x"], double.NaN),
+                        HybridScenePlanner.Numeric(layer?["canvas_center_y"], double.NaN)))
                         return Result(WorkloadValue.OneStillTextureUnchanged, facts);
                 }
             }
