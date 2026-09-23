@@ -107,7 +107,7 @@ set(ENV{PKG_CONFIG_LIBDIR} "$ENV{PKG_CONFIG_PATH}")
 message(STATUS "FFmpeg development prefix: ${WPE_FFMPEG_ROOT}")
 # owe-media 解码、owe-scene 的 GpuVideoEncoder 编码都直接用它。
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(OWE_FFMPEG REQUIRED IMPORTED_TARGET GLOBAL libavformat libavcodec libavutil libswresample libswscale)
+pkg_check_modules(OWE_FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswresample libswscale)
 
 # 带模块的依赖（rstd/vvk）的 BMI 与编译器、选项绑定，留在主构建里编。
 set(RSTD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
