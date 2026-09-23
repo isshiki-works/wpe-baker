@@ -1,12 +1,5 @@
 module;
 
-#ifdef _WIN32
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
-#include <cerrno>
-
 // Macros only — VVK_CHECK family.
 #include "vvk/macros.hpp"
 
@@ -34,15 +27,6 @@ using namespace rstd::prelude;
 
 export namespace owe
 {
-
-inline void CloseExternalFileDescriptor(int fd) {
-    if (fd < 0) return;
-#ifdef _WIN32
-    ::_close(fd);
-#else
-    ::close(fd);
-#endif
-}
 
 // ---------- ExSwapchain (formerly Swapchain/ExSwapchain.hpp) ----------
 
@@ -76,16 +60,6 @@ struct ImageParameters {
 };
 
 } // namespace vulkan
-
-// Snapshot of the negotiated buffer set the producer should render into.
-// Fired by ExSwapchain implementations whenever readiness flips or the
-// negotiated extent/format changes.
-struct ExSwapchainReadyEvent {
-    bool     ready;
-    unsigned width;
-    unsigned height;
-    VkFormat format;
-};
 
 enum class FrameSurfaceAcquireKind
 {
@@ -159,238 +133,6 @@ struct FrameSurfaceLease {
                final_queue_family != VK_QUEUE_FAMILY_IGNORED;
     }
 };
-
-enum class FrameSurfaceCompletionStatus
-{
-    Submitted,
-    Aborted,
-    NotPending,
-    StaleIdentity,
-    SessionLost,
-    ProtocolError,
-};
-
-struct FrameSurfaceCompletionResult {
-    FrameSurfaceCompletionStatus status { FrameSurfaceCompletionStatus::NotPending };
-    FrameSurfaceIdentity         identity;
-    i32                          error_code { 0 };
-
-    bool completed() const noexcept {
-        return status == FrameSurfaceCompletionStatus::Submitted ||
-               status == FrameSurfaceCompletionStatus::Aborted;
-    }
-};
-
-class ExSwapchain;
-
-class FrameSurfaceCompletionCapability {
-public:
-    FrameSurfaceCompletionCapability() = default;
-    ~FrameSurfaceCompletionCapability();
-
-    FrameSurfaceCompletionCapability(const FrameSurfaceCompletionCapability&)            = delete;
-    FrameSurfaceCompletionCapability& operator=(const FrameSurfaceCompletionCapability&) = delete;
-    FrameSurfaceCompletionCapability(FrameSurfaceCompletionCapability&&) noexcept;
-    FrameSurfaceCompletionCapability& operator=(FrameSurfaceCompletionCapability&&) noexcept;
-
-    bool valid() const noexcept { return m_owner != nullptr && m_identity.valid(); }
-
-    FrameSurfaceCompletionResult Submit(int producer_sync_fd);
-    FrameSurfaceCompletionResult Abort();
-
-private:
-    friend class ExSwapchain;
-
-    FrameSurfaceCompletionCapability(std::shared_ptr<ExSwapchain> owner,
-                                     FrameSurfaceIdentity         identity)
-        : m_owner(std::move(owner)), m_identity(identity) {}
-
-    std::shared_ptr<ExSwapchain> m_owner;
-    FrameSurfaceIdentity         m_identity;
-};
-
-enum class FrameSurfaceAcquireStatus
-{
-    Acquired,
-    Suboptimal,
-    Busy,
-    NotReady,
-    SessionLost,
-    ProtocolError,
-};
-
-struct FrameSurfaceAcquireResult {
-    FrameSurfaceAcquireStatus        status { FrameSurfaceAcquireStatus::NotReady };
-    FrameSurfaceLease                lease;
-    FrameSurfaceCompletionCapability completion;
-    i32                              error_code { 0 };
-
-    bool acquired() const noexcept {
-        return (status == FrameSurfaceAcquireStatus::Acquired ||
-                status == FrameSurfaceAcquireStatus::Suboptimal) &&
-               lease.valid() && completion.valid();
-    }
-};
-
-enum class TexTiling
-{
-    OPTIMAL,
-    LINEAR
-};
-
-// Per-slot DMA-BUF descriptor surfaced to the IPC layer. Local backend
-// fills these from its self-allocated `ExImageParameters`; bridge backend
-// keeps them empty (the bridge already published the metadata via
-// `bind_buffers` itself).
-struct ExHandle {
-    int   fd { -1 };
-    i32   width { 0 };
-    i32   height { 0 };
-    usize size { 0 };
-
-    rstd::uint32_t drm_fourcc { 0 };
-    rstd::uint64_t drm_modifier { 0 };
-    VkDeviceSize   plane0_offset { 0 };
-    rstd::uint32_t plane0_stride { 0 };
-
-    ExHandle() = default;
-    ExHandle(int id): m_id(id) {};
-
-    i32 id() const { return m_id; }
-
-private:
-    i32 m_id { 0 };
-};
-
-template<typename T>
-class TripleSwapchain {
-public:
-    virtual ~TripleSwapchain() = default;
-
-    TripleSwapchain(const TripleSwapchain&)            = delete;
-    TripleSwapchain& operator=(const TripleSwapchain&) = delete;
-    TripleSwapchain(TripleSwapchain&&)                 = delete;
-    TripleSwapchain& operator=(TripleSwapchain&&)      = delete;
-
-    T* eatFrame() {
-        if (! dirty().exchange(false)) return nullptr;
-        presented() = ready().exchange(presented());
-        return presented();
-    }
-    void renderFrame() {
-        inprogress() = ready().exchange(inprogress());
-        dirty().exchange(true);
-    }
-    T* getInprogress() { return inprogress(); }
-
-    rstd::array<T*, 3> snapshot_all_slots() {
-        return rstd::array<T*, 3> { presented().load(), ready().load(), inprogress().load() };
-    }
-
-    virtual unsigned width() const  = 0;
-    virtual unsigned height() const = 0;
-
-protected:
-    TripleSwapchain() = default;
-
-    virtual std::atomic<T*>& presented()  = 0;
-    virtual std::atomic<T*>& ready()      = 0;
-    virtual std::atomic<T*>& inprogress() = 0;
-
-private:
-    std::atomic<bool>& dirty() { return m_dirty; };
-    std::atomic<bool>  m_dirty { false };
-};
-
-// Producer-side abstraction over the offscreen swapchain. Two
-// implementations exist:
-//   - LocalExSwapchain: self-allocates 3 DMA-BUF-backed VkImages via the
-//     Vulkan TextureCache; the standalone viewers and any in-process host
-//     drive bind_buffers / frame_ready themselves and consume `eatFrame()`
-//     / `snapshot_all_slots()`.
-//   - BridgeExSwapchain: wraps a `ww_pool_t`; bridge owns the slot images
-//     and completes submission through the acquired frame capability.
-class ExSwapchain : public std::enable_shared_from_this<ExSwapchain> {
-public:
-    virtual ~ExSwapchain() = default;
-
-    ExSwapchain(const ExSwapchain&)            = delete;
-    ExSwapchain& operator=(const ExSwapchain&) = delete;
-    ExSwapchain(ExSwapchain&&)                 = delete;
-    ExSwapchain& operator=(ExSwapchain&&)      = delete;
-
-    virtual void poll() {}
-
-    virtual FrameSurfaceAcquireResult acquireRenderTarget() = 0;
-
-    virtual int takeLastFrameSyncFd() { return -1; }
-
-    virtual ExHandle*                 eatFrame() { return nullptr; }
-    virtual rstd::array<ExHandle*, 3> snapshot_all_slots() {
-        return rstd::array<ExHandle*, 3> { nullptr, nullptr, nullptr };
-    }
-
-    virtual unsigned width() const  = 0;
-    virtual unsigned height() const = 0;
-    virtual VkFormat format() const = 0;
-
-    virtual bool ready() const = 0;
-
-    virtual void setOnReadyChanged(std::function<void(const ExSwapchainReadyEvent&)>) = 0;
-
-protected:
-    ExSwapchain() = default;
-
-    FrameSurfaceCompletionCapability MakeCompletionCapability(FrameSurfaceIdentity identity) {
-        return FrameSurfaceCompletionCapability(shared_from_this(), identity);
-    }
-
-private:
-    friend class FrameSurfaceCompletionCapability;
-
-    virtual FrameSurfaceCompletionResult CompleteRendered(FrameSurfaceIdentity identity,
-                                                          int producer_sync_fd)           = 0;
-    virtual FrameSurfaceCompletionResult AbortRenderTarget(FrameSurfaceIdentity identity) = 0;
-};
-
-inline FrameSurfaceCompletionCapability::~FrameSurfaceCompletionCapability() {
-    if (valid()) (void)Abort();
-}
-
-inline FrameSurfaceCompletionCapability::FrameSurfaceCompletionCapability(
-    FrameSurfaceCompletionCapability&& other) noexcept
-    : m_owner(std::move(other.m_owner)), m_identity(other.m_identity) {
-    other.m_identity = {};
-}
-
-inline FrameSurfaceCompletionCapability&
-FrameSurfaceCompletionCapability::operator=(FrameSurfaceCompletionCapability&& other) noexcept {
-    if (this == &other) return *this;
-    if (valid()) (void)Abort();
-    m_owner          = std::move(other.m_owner);
-    m_identity       = other.m_identity;
-    other.m_identity = {};
-    return *this;
-}
-
-inline FrameSurfaceCompletionResult FrameSurfaceCompletionCapability::Submit(int producer_sync_fd) {
-    if (! valid()) {
-        CloseExternalFileDescriptor(producer_sync_fd);
-        return {};
-    }
-    auto owner    = std::move(m_owner);
-    auto identity = m_identity;
-    m_identity    = {};
-    return owner->CompleteRendered(identity, producer_sync_fd);
-}
-
-inline FrameSurfaceCompletionResult FrameSurfaceCompletionCapability::Abort() {
-    if (! valid()) return {};
-    auto owner    = std::move(m_owner);
-    auto identity = m_identity;
-    m_identity    = {};
-    return owner->AbortRenderTarget(identity);
-}
 
 namespace vulkan
 {
@@ -490,44 +232,11 @@ struct VmaImageParameters : NoCopy {
     VmaImageParameters& operator=(VmaImageParameters&& o) noexcept;
 };
 
-struct ExImageParameters : NoCopy {
-    vvk::DeviceMemory    mem {};
-    VkMemoryRequirements mem_reqs {};
-
-    vvk::Image     handle;
-    vvk::ImageView view;
-    vvk::Sampler   sampler;
-    VkExtent3D     extent;
-    unsigned       mipmap_level { 1 };
-    u64            generation { 0 };
-    int            fd { 0 };
-
-    rstd::uint32_t drm_fourcc { 0 };
-    rstd::uint64_t drm_modifier { 0 };
-    VkDeviceSize   plane0_offset { 0 };
-    rstd::uint32_t plane0_stride { 0 };
-
-    ExImageParameters();
-    ~ExImageParameters();
-    ExImageParameters(ExImageParameters&& o) noexcept;
-    ExImageParameters& operator=(ExImageParameters&& o) noexcept;
-};
-
 // `ImageParameters` itself is global-attached (defined in classic
 // Swapchain/ExSwapchain.hpp). These free helpers replace the conversion
 // ctors that used to live on it — those ctors needed module-attached
 // Vma/Ex types which can't be visible in classic purview.
 inline ImageParameters ToImageParameters(const VmaImageParameters& o) noexcept {
-    ImageParameters out;
-    out.handle       = *o.handle;
-    out.view         = *o.view;
-    out.sampler      = *o.sampler;
-    out.extent       = o.extent;
-    out.mipmap_level = o.mipmap_level;
-    out.generation   = o.generation;
-    return out;
-}
-inline ImageParameters ToImageParameters(const ExImageParameters& o) noexcept {
     ImageParameters out;
     out.handle       = *o.handle;
     out.view         = *o.view;
@@ -662,7 +371,6 @@ public:
 
     void SetVideoDecodeOptions(VideoDecodeOptions);
 
-    Option<ExImageParameters> CreateExTex(u32 witdh, u32 height, VkFormat, VkImageTiling);
     rstd::Option<rstd::sync::Arc<TextureAllocation>>
     AllocateImportedTexture(const Image&, Option<rstd::sync::Arc<VideoPlaybackState>> playback);
     rstd::Option<rstd::sync::Arc<TextureAllocation>> AllocateTexture(TextureKey);
@@ -685,7 +393,6 @@ private:
     Option<VmaImageParameters> CreateTex(TextureKey);
     u64                        nextImageGeneration();
     void                       AssignImageGeneration(VmaImageParameters&);
-    void                       AssignImageGeneration(ExImageParameters&);
     /* VIDEO-typed Image branch of AllocateImportedTexture: registers an
      * owe::media::VideoSource + stable RGBA8 VkImage and returns an ImageSlotsRef
      * pointing at that same VkImage so material binding is transparent. */
@@ -1171,191 +878,6 @@ struct VertexInputState {
     std::vector<VkVertexInputBindingDescription>   bind_descriptions;
     std::vector<VkVertexInputAttributeDescription> attr_descriptions;
 };
-
-// ---------- LocalExSwapchain.hpp ----------
-
-struct LocalExHandle : NoCopy {
-    ExHandle          handle;
-    ExImageParameters image;
-
-    LocalExHandle()  = default;
-    ~LocalExHandle() = default;
-    LocalExHandle(LocalExHandle&& o) noexcept: handle(o.handle), image(std::move(o.image)) {}
-    LocalExHandle& operator=(LocalExHandle&& o) noexcept {
-        handle = o.handle;
-        image  = std::move(o.image);
-        return *this;
-    }
-};
-
-// NB: this used to be `private TripleSwapchain<ExHandle>` in classic, but
-// module-attached classes can't downcast `this` to a privately-inherited
-// global-attached base — clang refuses the implicit `this` conversion at
-// the qualified-call site. Public inheritance is semantically equivalent
-// here (callers never reach for the base interface directly).
-class LocalExSwapchain final : public ::owe::ExSwapchain,
-                               public ::owe::TripleSwapchain<::owe::ExHandle> {
-public:
-    LocalExSwapchain(rstd::array<LocalExHandle, 3> handles, VkExtent2D ext,
-                     rstd::uint32_t queue_family)
-        : m_handles(std::move(handles)), m_extent(ext), m_queue_family(queue_family) {
-        int index = 0;
-        for (auto& h : m_handles) {
-            auto& handle         = h.handle;
-            handle               = ::owe::ExHandle(index++);
-            handle.width         = (i32)h.image.extent.width;
-            handle.height        = (i32)h.image.extent.height;
-            handle.fd            = h.image.fd;
-            handle.size          = usize(h.image.mem_reqs.size);
-            handle.drm_fourcc    = h.image.drm_fourcc;
-            handle.drm_modifier  = h.image.drm_modifier;
-            handle.plane0_offset = h.image.plane0_offset;
-            handle.plane0_stride = h.image.plane0_stride;
-        }
-        m_presented  = &m_handles[usize()].handle;
-        m_ready      = &m_handles[usize(1)].handle;
-        m_inprogress = &m_handles[usize(2)].handle;
-    }
-
-    ~LocalExSwapchain() override {
-        int fd = m_last_sync_fd.exchange(-1, std::memory_order_acq_rel);
-        CloseExternalFileDescriptor(fd);
-    }
-
-    ::owe::FrameSurfaceAcquireResult acquireRenderTarget() override {
-        if (m_surface_pending) {
-            return { .status = ::owe::FrameSurfaceAcquireStatus::Busy };
-        }
-        const u32 slot_index     = rstd::as_cast<u32>(this->getInprogress()->id());
-        const u64 acquire_serial = m_next_acquire_serial++;
-        if (acquire_serial == u64()) {
-            return { .status     = ::owe::FrameSurfaceAcquireStatus::ProtocolError,
-                     .error_code = i32(-EOVERFLOW) };
-        }
-        ::owe::FrameSurfaceLease lease {
-            .identity = { .owner_generation = u64(1),
-                          .image_index      = slot_index,
-                          .acquire_serial   = acquire_serial },
-            .reuse    = { .kind = ::owe::FrameSurfaceReuseKind::QueueOrdered },
-            .image    = ToImageParameters(m_handles.at(rstd::as_cast<usize>(slot_index)).image),
-            .format   = VK_FORMAT_R8G8B8A8_UNORM,
-            .initial_layout       = VK_IMAGE_LAYOUT_GENERAL,
-            .initial_queue_family = m_queue_family,
-            .acquire              = { .kind = ::owe::FrameSurfaceAcquireKind::QueueOrdered },
-            .final_layout         = VK_IMAGE_LAYOUT_GENERAL,
-            .final_queue_family   = m_queue_family,
-            .discard_content      = true,
-        };
-        if (! lease.valid()) {
-            return { .status     = ::owe::FrameSurfaceAcquireStatus::ProtocolError,
-                     .error_code = i32(-EINVAL) };
-        }
-        m_surface_pending  = true;
-        m_pending_identity = lease.identity;
-        auto completion    = MakeCompletionCapability(lease.identity);
-        return { .status     = ::owe::FrameSurfaceAcquireStatus::Acquired,
-                 .lease      = std::move(lease),
-                 .completion = std::move(completion) };
-    }
-
-    int takeLastFrameSyncFd() override {
-        return m_last_sync_fd.exchange(-1, std::memory_order_acq_rel);
-    }
-
-    ::owe::ExHandle* eatFrame() override {
-        return this->TripleSwapchain<::owe::ExHandle>::eatFrame();
-    }
-    rstd::array<::owe::ExHandle*, 3> snapshot_all_slots() override {
-        return this->TripleSwapchain<::owe::ExHandle>::snapshot_all_slots();
-    }
-
-    unsigned width() const override { return m_extent.width; }
-    unsigned height() const override { return m_extent.height; }
-    VkFormat format() const override { return VK_FORMAT_R8G8B8A8_UNORM; }
-
-    bool ready() const override { return true; }
-
-    void setOnReadyChanged(std::function<void(const ::owe::ExSwapchainReadyEvent&)> cb) override {
-        if (cb) {
-            ::owe::ExSwapchainReadyEvent e {
-                .ready  = true,
-                .width  = m_extent.width,
-                .height = m_extent.height,
-                .format = VK_FORMAT_R8G8B8A8_UNORM,
-            };
-            cb(e);
-        }
-    }
-
-protected:
-    std::atomic<::owe::ExHandle*>& presented() override { return m_presented; }
-    std::atomic<::owe::ExHandle*>& ready() override { return m_ready; }
-    std::atomic<::owe::ExHandle*>& inprogress() override { return m_inprogress; }
-
-private:
-    ::owe::FrameSurfaceCompletionResult CompleteRendered(::owe::FrameSurfaceIdentity identity,
-                                                         int acquire_sync_fd) override {
-        if (! m_surface_pending) {
-            CloseExternalFileDescriptor(acquire_sync_fd);
-            return { .status   = ::owe::FrameSurfaceCompletionStatus::NotPending,
-                     .identity = identity };
-        }
-        if (identity != m_pending_identity) {
-            CloseExternalFileDescriptor(acquire_sync_fd);
-            return { .status   = ::owe::FrameSurfaceCompletionStatus::StaleIdentity,
-                     .identity = identity };
-        }
-        m_surface_pending  = false;
-        m_pending_identity = {};
-        if (acquire_sync_fd >= 0) {
-            int old = m_last_sync_fd.exchange(acquire_sync_fd, std::memory_order_acq_rel);
-            CloseExternalFileDescriptor(old);
-        }
-        this->renderFrame();
-        return { .status = ::owe::FrameSurfaceCompletionStatus::Submitted, .identity = identity };
-    }
-
-    ::owe::FrameSurfaceCompletionResult
-    AbortRenderTarget(::owe::FrameSurfaceIdentity identity) override {
-        if (! m_surface_pending) {
-            return { .status   = ::owe::FrameSurfaceCompletionStatus::NotPending,
-                     .identity = identity };
-        }
-        if (identity != m_pending_identity) {
-            return { .status   = ::owe::FrameSurfaceCompletionStatus::StaleIdentity,
-                     .identity = identity };
-        }
-        m_surface_pending  = false;
-        m_pending_identity = {};
-        return { .status = ::owe::FrameSurfaceCompletionStatus::Aborted, .identity = identity };
-    }
-
-    rstd::array<LocalExHandle, 3> m_handles;
-    std::atomic<::owe::ExHandle*> m_presented { nullptr };
-    std::atomic<::owe::ExHandle*> m_ready { nullptr };
-    std::atomic<::owe::ExHandle*> m_inprogress { nullptr };
-    VkExtent2D                    m_extent;
-    rstd::uint32_t                m_queue_family { VK_QUEUE_FAMILY_IGNORED };
-    std::atomic<int>              m_last_sync_fd { -1 };
-    u64                           m_next_acquire_serial { 1 };
-    ::owe::FrameSurfaceIdentity   m_pending_identity;
-    bool                          m_surface_pending { false };
-};
-
-inline std::shared_ptr<LocalExSwapchain> CreateLocalExSwapchain(const Device& device,
-                                                                TextureCache& textures, unsigned w,
-                                                                unsigned h, VkImageTiling tiling) {
-    rstd::array<LocalExHandle, 3> handles;
-    for (auto& handle : handles) {
-        if (auto rv = textures.CreateExTex(u32(w), u32(h), VK_FORMAT_R8G8B8A8_UNORM, tiling);
-            rv.is_some())
-            handle.image = rstd::move(rv).unwrap();
-        else
-            return nullptr;
-    }
-    return std::make_shared<LocalExSwapchain>(
-        std::move(handles), VkExtent2D { w, h }, device.graphics_queue().family_index);
-}
 
 } // namespace vulkan
 } // namespace owe

@@ -79,21 +79,6 @@ constexpr rstd::array<Extension, 5> base_device_exts {
     Extension { false, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME },
 };
 
-void AppendVideoDeviceExtensions(std::vector<Extension>& device_exts) {
-    device_exts.push_back({ false, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME });
-    device_exts.push_back({ false, VK_EXT_SHADER_OBJECT_EXTENSION_NAME });
-}
-
 void ReleaseCompletedRetiredResources(Device& device, RenderingResources& rr) {
     rr.resources.Collect(&device);
 }
@@ -418,7 +403,6 @@ struct VulkanRender::Impl {
     vvk::CommandBuffer              m_render_cmd;
 
     bool m_inited { false };
-    bool m_cpu_readback { false };
     bool m_cpu_failed { false };
     VkFormat m_cpu_format { VK_FORMAT_R8G8B8A8_UNORM };
     std::uint64_t m_readback_timeout_ns { vk_wait_time };
@@ -635,51 +619,41 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     }
     m_match_effect_resolution = info.match_effect_resolution;
 
-    m_cpu_readback = info.output_mode == RenderOutputMode::CpuReadback;
     m_cpu_timing_requested = info.gpu_timing;
-    m_gpu_pipeline = m_cpu_readback && (info.gpu_encode || info.collect_sampling_coverage) && !info.gpu_timing;
+    m_gpu_pipeline = (info.gpu_encode || info.collect_sampling_coverage) && !info.gpu_timing;
     m_prepass->setTransparentBackground(info.layer_selection.enabled &&
                                         info.layer_selection.transparent_background);
     if (info.orthographic_capture_viewport.has_value()) {
         const auto& viewport = *info.orthographic_capture_viewport;
-        if (!m_cpu_readback || !std::isfinite(viewport.center_x) ||
+        if (!std::isfinite(viewport.center_x) ||
             !std::isfinite(viewport.center_y) || !std::isfinite(viewport.width) ||
             !std::isfinite(viewport.height) || viewport.width <= 0.0 || viewport.height <= 0.0) {
-            rstd_error("orthographic capture viewport requires CpuReadback and finite positive width/height");
+            rstd_error("orthographic capture viewport requires finite positive width/height");
             return false;
         }
         m_orthographic_capture_viewport = viewport;
     }
     if (info.capture_target.has_value()) {
         m_capture_error = ValidateCaptureSelector(*info.capture_target);
-        if (!m_cpu_readback || !m_capture_error.empty()) {
-            rstd_error("invalid CPU capture selector: {}", !m_cpu_readback
-                ? "graph capture requires CpuReadback mode" : m_capture_error);
+        if (!m_capture_error.empty()) {
+            rstd_error("invalid CPU capture selector: {}", m_capture_error);
             return false;
         }
         m_capture_target = std::move(info.capture_target);
     }
-    if (m_cpu_readback) {
-        info.offscreen = true;
-        info.video_hwdec = "none";
-        if (info.width == 0 || info.height == 0 ||
-            info.cpu_format != VK_FORMAT_R8G8B8A8_UNORM || info.readback_timeout_ns == 0) {
-            rstd_error("CPU readback requires nonzero dimensions/timeout, RGBA8, and no external swapchain");
-            return false;
-        }
-        const std::uint64_t bytes = std::uint64_t(info.width) * info.height * 4;
-        if (bytes > info.max_readback_bytes || bytes > std::numeric_limits<std::size_t>::max()) {
-            rstd_error("CPU readback frame ({} bytes) exceeds configured budget ({})",
-                       bytes, info.max_readback_bytes);
-            return false;
-        }
-        m_cpu_format = info.cpu_format;
-        m_readback_timeout_ns = info.readback_timeout_ns;
-    }
-    if (! m_cpu_readback) {
-        rstd_error("this Windows renderer requires CpuReadback output mode");
+    if (info.width == 0 || info.height == 0 ||
+        info.cpu_format != VK_FORMAT_R8G8B8A8_UNORM || info.readback_timeout_ns == 0) {
+        rstd_error("CPU readback requires nonzero dimensions/timeout, RGBA8, and no external swapchain");
         return false;
     }
+    const std::uint64_t bytes = std::uint64_t(info.width) * info.height * 4;
+    if (bytes > info.max_readback_bytes || bytes > std::numeric_limits<std::size_t>::max()) {
+        rstd_error("CPU readback frame ({} bytes) exceeds configured budget ({})",
+                   bytes, info.max_readback_bytes);
+        return false;
+    }
+    m_cpu_format = info.cpu_format;
+    m_readback_timeout_ns = info.readback_timeout_ns;
 
     VkExtent2D extent { info.width, info.height };
     rstd_info("set swapchain image size: {}x{}", extent.width, extent.height);
@@ -697,10 +671,6 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
         device_exts.push_back({ true, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME });
         device_exts.push_back({ true, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME });
     }
-    if (info.video_hwdec != "none") {
-        AppendVideoDeviceExtensions(device_exts);
-    }
-
     std::vector<InstanceLayer> inst_layers;
     // valid layer
     if (info.enable_valid_layer) {
@@ -709,7 +679,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     }
 
     const auto instance_api_version =
-        info.video_hwdec == "none" && !info.gpu_encode ? WP_VULKAN_VERSION : VK_API_VERSION_1_3;
+        !info.gpu_encode ? WP_VULKAN_VERSION : VK_API_VERSION_1_3;
     {
         if (! Instance::Create(m_instance, inst_exts, inst_layers, instance_api_version)) {
             rstd_error("init vulkan failed");
@@ -732,8 +702,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
             return false;
         }
         m_rendering_resources.resources.SetVideoDecodeOptions(TextureCache::VideoDecodeOptions {
-            .hwdec       = info.video_hwdec,
-            .render_node = info.video_render_node,
+            .hwdec = "none",
         });
     }
 
@@ -758,9 +727,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
             "msaa requested={} actual={}", requested, static_cast<std::uint32_t>(m_msaa_samples));
     }
 
-    if (m_cpu_readback) {
-        if (! initCpuReadback(info)) return false;
-    }
+    if (! initCpuReadback(info)) return false;
 
     {
         if (! initRes()) return false;
@@ -997,10 +964,6 @@ void VulkanRender::Impl::initGpuTiming(const RenderInitInfo& info) {
         m_gpu_timing_error_code = VK_ERROR_FEATURE_NOT_PRESENT;
         m_gpu_timing_message = message;
     };
-    if (!m_cpu_readback) {
-        unsupported("GPU timing requires CpuReadback mode");
-        return;
-    }
     const auto family = m_device->graphics_queue().family_index;
     const auto properties = m_device->gpu().GetQueueFamilyProperties();
     if (usize(family) >= properties.len()) {
@@ -1244,11 +1207,6 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     frame.gpu_timing_error_code = m_gpu_timing_error_code;
     frame.gpu_timing_message = m_gpu_timing_message;
     frame.frame_index = m_cpu_frame_index;
-    if (! m_cpu_readback) {
-        frame.status = CpuFrameStatus::InvalidMode;
-        frame.message = "renderer was not initialized for CPU readback";
-        return frame;
-    }
     if (m_cpu_failed) {
         frame.status = CpuFrameStatus::RenderError;
         frame.message = "CPU renderer failed previously; create a new renderer before retrying";
