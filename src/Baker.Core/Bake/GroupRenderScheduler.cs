@@ -4,7 +4,8 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// <summary>一个视频组的捕获几何：源图层、是否含场景底色、正交捕获视口（场景单位）与像素尺寸（向上取偶）。</summary>
-internal readonly record struct GroupCapture(int[] Layers, bool SceneClear, double Width, double Height, uint PixelWidth, uint PixelHeight);
+internal readonly record struct GroupCapture(int[] Layers, bool SceneClear, double Width, double Height, uint PixelWidth, uint PixelHeight,
+    double? HdrScale = null);
 
 /// <summary>
 /// 一个组的渲染帧数与预热。残差组多渲一个淡化窗口；其余成品组多渲 1 帧（第 P 帧原帧留作闭合检验与接缝参照）；探针只渲 P 帧。
@@ -61,8 +62,17 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         string id = group["id"]!.GetValue<string>();
         if (id != Path.GetFileName(id)) throw new InvalidDataException("Video group IDs must be single path components.");
         return new(group["layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).ToArray(),
-            group["include_scene_clear"]?.GetValue<bool>() == true, viewport.Width, viewport.Height, pixelWidth, pixelHeight);
+            group["include_scene_clear"]?.GetValue<bool>() == true, viewport.Width, viewport.Height, pixelWidth, pixelHeight, HdrScale(id));
     }
+
+    /// <summary>
+    /// 官方 HDR 管线下闭合不成立的组：浮点捕获，编 v/k。k 固定 2：8 bit 还原误差 ≤1 级（低于编码噪声），>2 的部分截断。
+    /// 闭合成立或非 HDR 管线的组走原 RGBA8 路径（null）。
+    /// </summary>
+    private double? HdrScale(string groupId) =>
+        plan["hdr_radiance_closure"] is JsonObject closure && closure["hdr"]?.GetValue<bool>() == true &&
+        (closure["groups"] as JsonArray ?? []).OfType<JsonObject>().Any(g =>
+            g["group_id"]?.GetValue<string>() == groupId && g["status"]?.GetValue<string>() != "closed") ? 2.0 : null;
 
     /// <summary>一个组的渲染帧数与预热：组循环和提前启动的渲染共用一份，两处算法不会漂开。</summary>
     internal GroupFraming Framing(int index)
@@ -93,7 +103,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             FrameSampleWidth: ResidualMasking.StartSearchSampleWidth,
             FrameSamplesOnly: true,
             EffectRenderScale: request.EffectRenderScale,
-            MatchEffectResolution: request.MatchEffectResolution,
+            MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,
             CollectSamplingCoverage: PlaybackEncoderSelection.Normalize(request.PlaybackEncoder) == PlaybackEncoderSelection.Vulkan,
             FrameSampleIncludeAlpha: !capture.SceneClear,
             OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet()));
@@ -143,7 +153,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 playbackKind == PlaybackEncoderSelection.Vulkan ? PlaybackEncoderSelection.Software : playbackKind : null,
             DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, CollectAlphaBounds: true, BoundsIncludeRgb: true,
             EffectRenderScale: request.EffectRenderScale,
-            MatchEffectResolution: request.MatchEffectResolution,
+            MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,
             Input: new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
             OrthographicCaptureViewport: new(CenterX, CenterY, capture.Width, capture.Height),
             LayerSelection: new(capture.Layers, TransparentBackground: !capture.SceneClear, IncludePostprocessing: false),

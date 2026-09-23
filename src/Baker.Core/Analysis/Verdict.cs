@@ -35,11 +35,13 @@ internal sealed class Verdict
         var blockers = new List<Blocker>();
         if (!scriptFaults.Available) blockers.Add(MissingScriptFaultEvidenceBlocker);
         if (composer.Groups.Count == 0) blockers.Add(PlanNarrative.NoInputIndependentGroup(graph.Objects, liveness.Reasons));
-        // hdr 标志本身不是拒绝理由；拒绝理由是被捕获组的输出可能超出 [0,1] 而被 RGBA8 捕获 clip。
-        // 文案走 i18n：判据给出未通过的明细，legacy 英文逐字不变，中文另报壁纸自带的 HDR 开关。
+        // 官方只在"后处理 ultra/displayhdr + 场景 hdr + bloom"时走浮点 HDR 管线；其余情况逐级截到 [0,1]，与 RGBA8 捕获等价，判据不运行。
+        // HDR 管线里闭合不成立的组由烘焙改走浮点捕获（GroupRenderScheduler.HdrScale），不再拒绝。
+        bool hdrPipeline = request.Postprocessing is "ultra" or "displayhdr" &&
+            Resolve(scene["general"]?["hdr"], properties)?.ToJsonString() == "true" &&
+            Resolve(scene["general"]?["bloom"], properties)?.ToJsonString() == "true";
         JsonObject radianceClosure = SdrRadianceClosure.Describe(scene, properties, observation.Trace, composer.Groups, source, request.Assets,
-            Resolve(scene["general"]?["hdr"], properties)?.ToJsonString() == "true", project, out Blocker? radianceBlocker);
-        if (radianceBlocker is not null) blockers.Add(radianceBlocker);
+            hdrPipeline, project, out _);
         if (projection["status"]?.GetValue<string>() != "orthographic") blockers.Add(new Blocker(BlockerCode.PerspectiveNeedsScreenspace));
         foreach (var camera in graph.Objects.Values.Where(obj => obj.ContainsKey("camera")))
         {

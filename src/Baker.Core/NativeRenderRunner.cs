@@ -27,7 +27,8 @@ public sealed record RenderRequest(string Source, string Assets, string OutputDi
     ulong? ForceKeyFrameFrame = null, RenderEncodePadding? EncodePadding = null,
     ulong? EncodedFrames = null, ulong[]? RetainFrames = null, string? PlaybackEncoderKind = null,
     GpuEncodeRequest? GpuEncoding = null, bool CollectSamplingCoverage = false,
-    double EffectRenderScale = 1.0, bool MatchEffectResolution = false);
+    double EffectRenderScale = 1.0, bool MatchEffectResolution = false, double? HdrScale = null);
+// HdrScale：官方 HDR 管线下闭合不成立的组。渲染器按浮点中间目标合成，出帧为 rgb/k；成品图层着色器再乘回 k。
 public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
     uint CrossfadeFrames = 0, CacheRegion? Crop = null, bool RetainLoopWindow = false,
     bool RetainQualitySamples = false);
@@ -192,7 +193,8 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             {
                 WriteAudio = request.IncludeAudio,
                 EffectRenderScale = request.EffectRenderScale != 1.0 ? request.EffectRenderScale : null,
-                MatchEffectResolution = request.MatchEffectResolution
+                MatchEffectResolution = request.MatchEffectResolution,
+                HdrScale = request.HdrScale
             };
             // Only pure sample consumers may omit full frames. Bounds, opacity and retained-frame
             // checks still require their original complete input. Older renderers keep that path.

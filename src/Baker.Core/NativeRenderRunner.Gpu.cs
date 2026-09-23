@@ -81,7 +81,7 @@ public sealed partial class NativeRenderRunner
         // Compare the simulation inputs, not sampling/encoding/output settings.
         foreach (string key in new[] {"source","assets","width","height","fps_numerator","fps_denominator","seed",
             "device_uuid","capture_target","input","input_timeline","user_properties","orthographic_capture_viewport",
-            "layer_selection","offline_video_rate_overrides","effect_render_scale","match_effect_resolution"})
+            "layer_selection","offline_video_rate_overrides","effect_render_scale","match_effect_resolution","hdr_scale"})
             if (!JsonNode.DeepEquals(observed[key],target[key])) return null;
         bool packed=coverage["minimum_alpha"]!.GetValue<int>()!=255;
         var basis=new JsonObject { ["request"]=target, ["alpha_bounds"]=coverage.DeepClone() };

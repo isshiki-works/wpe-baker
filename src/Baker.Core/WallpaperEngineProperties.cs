@@ -255,6 +255,11 @@ public static class WallpaperEngineProperties
         return fps >= 1 && fps <= MaximumFrameRateLimit ? new(true, (uint)Math.Round(fps), LimitFound) : new(true, null, LimitNone);
     }
 
+    /// <summary>读 config.json 的 general.user.postprocessing（disabled/enabled/ultra/displayhdr）；读不到为 null。</summary>
+    public static string? ReadPostprocessing(ConfigLocation? location) =>
+        location is not null && ReadAccount(location, null).Item1?["general"]?["user"]?["postprocessing"] is JsonValue value &&
+        value.TryGetValue(out string? text) ? text : null;
+
     private static JsonObject Record(string source, string? reason, ConfigLocation? location = null)
     {
         var record = new JsonObject { ["source"] = source, ["reason"] = reason };

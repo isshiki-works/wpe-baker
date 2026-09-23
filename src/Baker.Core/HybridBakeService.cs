@@ -572,7 +572,7 @@ public sealed class HybridBakeService(NativeTools tools)
                             groupScheduler.CenterX, groupScheduler.CenterY,
                             crop.Width * capture.Width / capture.PixelWidth, crop.Height * capture.Height / capture.PixelHeight,
                             cancellationToken, packedAlpha, depthX, depthY, x, y, isStatic,
-                            capturedColor: SceneGraph.Int(group["parent_id"]) is not null);
+                            capturedColor: SceneGraph.Int(group["parent_id"]) is not null, hdrScale: capture.HdrScale ?? 1);
                         HybridVideoProjection.AttachToParent(layer, group);
                         if (daytimeExport is not null)
                             daytimeExport.BindReplacement(layer, originalObjects[daytimeExport.ReplacementTargets[id]], isStatic);

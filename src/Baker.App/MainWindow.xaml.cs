@@ -484,7 +484,8 @@ public partial class MainWindow : Window
             var request = AnalyzeRequestFactory.Build(options, source, assets, output, properties, propertiesOrigin, numerator, denominator,
                 // 帧率框还是启动时算出的默认值就记 auto（连同依据），用户改过就记 explicit。
                 (autoFrameRate is { } automatic && denominator == 1 && numerator == automatic.Fps
-                    ? automatic : OutputFrameRate.Requested(numerator)).ToJson(), analysisCacheDirectory);
+                    ? automatic : OutputFrameRate.Requested(numerator)).ToJson(), analysisCacheDirectory) with {
+                Postprocessing = WallpaperEngineProperties.ReadPostprocessing(WallpaperEngineProperties.LocateConfig(WpeExeBox.Text.Trim())) };
             StatusText.Text = L("正在分析…", "Analyzing…");
             var found = await Task.Run(() => new HybridScenePlanner(tools).AnalyzeAsync(request, null, analysisCancellation.Token));
             analysisCancellation.Token.ThrowIfCancellationRequested();

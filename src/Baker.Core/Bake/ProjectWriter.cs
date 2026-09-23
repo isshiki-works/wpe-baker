@@ -14,7 +14,7 @@ internal static class ProjectWriter
         uint videoWidth, uint videoHeight, int id, double x, double y, double drawWidth, double drawHeight,
         CancellationToken cancellationToken = default, bool packedAlpha = false,
         double parallaxDepthX = 0, double parallaxDepthY = 0, double geometryOffsetX = 0, double geometryOffsetY = 0,
-        bool rgbaFrame = false, bool capturedColor = false)
+        bool rgbaFrame = false, bool capturedColor = false, double hdrScale = 1)
     {
         string textureStem = "wpe_baker_video/" + stem;
         string texturePath = ProjectSource.ContainedPath(project, $"materials/{textureStem}.tex");
@@ -25,7 +25,7 @@ internal static class ProjectWriter
             await File.ReadAllBytesAsync(videoFile, cancellationToken), cancellationToken);
         else await TextureContainer.WriteVideoAsync(texturePath, videoFile, videoWidth, videoHeight, cancellationToken);
         string shader = "genericimage4";
-        if (packedAlpha || geometryOffsetX != 0 || geometryOffsetY != 0 || capturedColor)
+        if (packedAlpha || geometryOffsetX != 0 || geometryOffsetY != 0 || capturedColor || hdrScale != 1)
         {
             shader = "wpe_baker_video/" + stem;
             string vertex = "// SPDX-License-Identifier: MIT\nuniform mat4 g_ModelViewProjectionMatrix;\nattribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvarying vec3 v_ScreenPos;\nvoid main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; v_ScreenPos = gl_Position.xyw;\n#ifdef HLSL\nv_ScreenPos.y = -v_ScreenPos.y;\n#endif\n}\n";
@@ -47,6 +47,10 @@ internal static class ProjectWriter
                     .Replace("vec2(v_TexCoord.x * 0.5 + 0.5, v_TexCoord.y)",
                     FormattableString.Invariant($"vec2(clamp(v_TexCoord.x * 0.5 + 0.5, {.5 + halfTexel:R}, {1 - halfTexel:R}), v_TexCoord.y)"), StringComparison.Ordinal);
             }
+            // 浮点捕获的组存的是 rgb/k（预乘），在着色器里乘回 k：官方 HDR 管线的浮点目标保留 >1。
+            // genericimage4 没有 g_Brightness，所以不靠图层 brightness。
+            if (hdrScale != 1) fragment = fragment.Replace("gl_FragColor = vec4(rgb + ", $"gl_FragColor = vec4(rgb * {Number(hdrScale)} + ", StringComparison.Ordinal)
+                .Replace(".rgb, 1.0);", $".rgb * {Number(hdrScale)}, 1.0);", StringComparison.Ordinal);
             string vertexPath = ProjectSource.ContainedPath(project, $"shaders/{shader}.vert");
             Directory.CreateDirectory(Path.GetDirectoryName(vertexPath)!);
             await File.WriteAllTextAsync(vertexPath, vertex, cancellationToken);
