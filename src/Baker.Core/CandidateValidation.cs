@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -7,8 +10,7 @@ namespace Baker.Core;
 public sealed record ValidationRequest(int SchemaVersion, string Source, string Candidate, string Assets,
     string OutputDirectory, uint Width, uint Height, uint FpsNumerator = 60, uint FpsDenominator = 1,
     ulong Frames = 24, ulong WarmupFrames = 0, ulong Seed = 0, string? DeviceUuid = null,
-    JsonObject? UserProperties = null, JsonObject? Input = null, JsonArray? InputTimeline = null, uint TileSize = 64,
-    bool RetainRawFrames = true);
+    JsonObject? UserProperties = null, JsonObject? Input = null, JsonArray? InputTimeline = null, uint TileSize = 64);
 
 /// <summary>Measures sampled offline RGBA differences; never certifies visual equivalence.</summary>
 public sealed class CandidateValidation(NativeTools tools)
@@ -18,13 +20,21 @@ public sealed class CandidateValidation(NativeTools tools)
         WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
     };
 
+    /// <summary>CLI <c>validate</c> 的入口：返回的就是写进 comparison.json 的报告。</summary>
     public async Task<JsonObject> ValidateAsync(ValidationRequest request, IProgress<RenderProgress>? progress = null,
+        CancellationToken cancellationToken = default) => (await CompareAsync(request, progress, cancellationToken)).Report;
+
+    /// <summary>
+    /// 原作与候选各起一个渲染器，两条 stdout 锁步逐帧比较，帧不落盘；
+    /// 每帧按 <see cref="ValidationRequest.TileSize"/> 见方的瓦片做整数累加（<see cref="PairedFrameComparer"/>）。
+    /// </summary>
+    internal async Task<PairedComparison> CompareAsync(ValidationRequest request, IProgress<RenderProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         if (request.SchemaVersion != 1 || request.Frames == 0 || request.FpsNumerator == 0 ||
             request.FpsDenominator == 0 || request.TileSize == 0 || request.TileSize > ushort.MaxValue)
             throw new ArgumentException("Validation requires schema version 1 and positive frame, FPS and tile values.");
-        int frameBytes = FrameByteCount(request.Width, request.Height);
+        FrameByteCount(request.Width, request.Height);
         string output = PrepareOutput(request.Source, request.Candidate, request.OutputDirectory);
         string reportPath = Path.Combine(output, "comparison.json");
         string framesPath = Path.Combine(output, "frame-comparison.jsonl");
@@ -34,7 +44,7 @@ public sealed class CandidateValidation(NativeTools tools)
             ["request"] = JsonSerializer.SerializeToNode(request, JsonOptions),
             ["scope"] = "Sampled full-frame RGBA8 from the same offline renderer and inputs; RGB includes transparent pixels.",
             ["automatic_visual_certification"] = false, ["official_playback_verified"] = false,
-            ["frames_report_path"] = framesPath, ["raw_retained"] = true
+            ["frames_report_path"] = framesPath
         };
         await WriteReportAsync(reportPath, report, cancellationToken);
         bool validationFailed = false;
@@ -45,53 +55,27 @@ public sealed class CandidateValidation(NativeTools tools)
                 request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, request.Frames,
                 request.WarmupFrames, request.Seed, DeviceUuid: request.DeviceUuid, UserProperties: request.UserProperties,
                 Input: request.Input, InputTimeline: request.InputTimeline, TraceScene: true);
-            progress?.Report(new("rendering_source", 0, "Rendering sampled source frames."));
-            JsonObject original = await runner.RenderRawAsync(RenderSide(request.Source, "source"), cancellationToken);
-            progress?.Report(new("rendering_candidate", 0, "Rendering the candidate with the same sampled inputs."));
-            JsonObject candidate = await runner.RenderRawAsync(RenderSide(request.Candidate, "candidate"), cancellationToken);
-            string aPath = original["rgba_path"]!.GetValue<string>();
-            string bPath = candidate["rgba_path"]!.GetValue<string>();
-            report["source_raw_path"] = aPath;
-            report["candidate_raw_path"] = bPath;
+            var comparer = new PairedFrameComparer(checked((int)request.Width), checked((int)request.Height), checked((int)request.TileSize));
+            await using var frameReport = new StreamWriter(new FileStream(framesPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.Read, 128 * 1024, true), new UTF8Encoding(false));
+            progress?.Report(new("rendering_pair", 0, "Rendering the source and the candidate with the same sampled inputs; frames are compared as they arrive."));
+            async ValueTask CompareFrameAsync(ulong frame, ReadOnlyMemory<byte> a, ReadOnlyMemory<byte> b, CancellationToken token)
+            {
+                PixelErrors frameErrors = comparer.Add(a, b, token);
+                var line = new JsonObject { ["frame"] = frame, ["metrics"] = frameErrors.ToJson() };
+                await frameReport.WriteLineAsync(line.ToJsonString().AsMemory(), token);
+                progress?.Report(new("comparing", (double)(frame + 1) / request.Frames, $"Compared {frame + 1} / {request.Frames} frames."));
+            }
+            (JsonObject original, JsonObject candidate) = await RenderLockstepAsync(
+                (sink, token) => runner.RenderRawAsync(RenderSide(request.Source, "source"), sink, token),
+                (sink, token) => runner.RenderRawAsync(RenderSide(request.Candidate, "candidate"), sink, token),
+                CompareFrameAsync, cancellationToken);
             report["source_sha256"] = original["source_sha256"]!.DeepClone();
             report["candidate_sha256"] = candidate["source_sha256"]!.DeepClone();
             report["source_native_result"] = original["native_result"]!.DeepClone();
             report["candidate_native_result"] = candidate["native_result"]!.DeepClone();
             report["source_compiled_scene_passes"] = original["native_result"]!["compiled_scene_passes"]!.DeepClone();
             report["candidate_compiled_scene_passes"] = candidate["native_result"]!["compiled_scene_passes"]!.DeepClone();
-            int width = checked((int)request.Width), height = checked((int)request.Height), edge = checked((int)request.TileSize);
-            int columns = (width + edge - 1) / edge, rows = (height + edge - 1) / edge;
-            var aggregateTiles = Enumerable.Range(0, checked(columns * rows)).Select(_ => new Errors()).ToArray();
-            var aggregate = new Errors();
-            byte[] a = new byte[frameBytes], b = new byte[frameBytes];
-            await using var aFile = new FileStream(aPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
-            await using var bFile = new FileStream(bPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
-            await using var frameReport = new StreamWriter(new FileStream(framesPath, FileMode.CreateNew, FileAccess.Write,
-                FileShare.Read, 128 * 1024, true), new UTF8Encoding(false));
-            for (ulong frame = 0; frame < request.Frames; ++frame)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await aFile.ReadExactlyAsync(a, cancellationToken);
-                await bFile.ReadExactlyAsync(b, cancellationToken);
-                var frameErrors = new Errors();
-                for (int y = 0; y < height; ++y)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    int tileRow = y / edge * columns;
-                    for (int x = 0; x < width; ++x)
-                    {
-                        int offset = (y * width + x) * 4;
-                        int dr = Math.Abs(a[offset] - b[offset]), dg = Math.Abs(a[offset + 1] - b[offset + 1]);
-                        int db = Math.Abs(a[offset + 2] - b[offset + 2]), da = Math.Abs(a[offset + 3] - b[offset + 3]);
-                        frameErrors.Add(dr, dg, db, da);
-                        aggregateTiles[tileRow + x / edge].Add(dr, dg, db, da);
-                    }
-                }
-                aggregate.Merge(frameErrors);
-                var line = new JsonObject { ["frame"] = frame, ["metrics"] = frameErrors.ToJson() };
-                await frameReport.WriteLineAsync(line.ToJsonString().AsMemory(), cancellationToken);
-                progress?.Report(new("comparing", (double)(frame + 1) / request.Frames, $"Compared {frame + 1} / {request.Frames} frames."));
-            }
             using var sourceView = new ProjectSource(request.Source);
             using var candidateView = new ProjectSource(request.Candidate);
             if (await sourceView.SourceHashAsync(cancellationToken) != original["source_sha256"]!.GetValue<string>() ||
@@ -104,14 +88,13 @@ public sealed class CandidateValidation(NativeTools tools)
                 original["native_result"]?["runtime_dependencies"] as JsonArray,
                 candidate["native_result"]?["runtime_dependencies"] as JsonArray);
             report["frames_compared"] = request.Frames;
-            report["metrics"] = aggregate.ToJson();
-            report["tiles"] = Tiles(aggregateTiles, columns, edge, width, height);
-            int worst = Enumerable.Range(0, aggregateTiles.Length).MaxBy(i => aggregateTiles[i].RgbSum / aggregateTiles[i].Pixels);
-            report["worst_rgb_tile"] = report["tiles"]![worst]!.DeepClone();
-            report["byte_identical_samples"] = aggregate.MaxRgb == 0 && aggregate.MaxAlpha == 0;
+            report["metrics"] = comparer.Total.ToJson();
+            report["tiles"] = new JsonArray([.. comparer.Tiles.Select(tile => (JsonNode)tile.ToJson())]);
+            report["worst_rgb_tile"] = report["tiles"]![comparer.WorstRgbTile]!.DeepClone();
+            report["byte_identical_samples"] = comparer.Total.MaxRgb == 0 && comparer.Total.MaxAlpha == 0;
             report["status"] = "compared";
             await WriteReportAsync(reportPath, report, cancellationToken);
-            return report;
+            return new PairedComparison(report, comparer.Total, comparer.Tiles);
         }
         catch (Exception error)
         {
@@ -124,18 +107,76 @@ public sealed class CandidateValidation(NativeTools tools)
         }
         finally
         {
-            if (!request.RetainRawFrames)
-            {
-                string[] rawFiles = [
-                    "source/native/frames.rgba", "source/native/frames.rgba.partial",
-                    "source/native/audio.f32le", "source/native/audio.f32le.partial",
-                    "candidate/native/frames.rgba", "candidate/native/frames.rgba.partial",
-                    "candidate/native/audio.f32le", "candidate/native/audio.f32le.partial"];
-                TemporaryCaptureFiles.Delete(report, output, rawFiles);
-                report["raw_retained"] = rawFiles.Any(relative => File.Exists(Path.Combine(output, relative)));
+            // 帧不落盘；渲染器照旧写出的 PCM 在这里删掉。
+            TemporaryCaptureFiles.Delete(report, output, "source/native/audio.f32le", "source/native/audio.f32le.partial",
+                "candidate/native/audio.f32le", "candidate/native/audio.f32le.partial");
+            if (report.ContainsKey("temporary_cleanup_errors"))
                 try { await WriteReportAsync(reportPath, report, CancellationToken.None); }
                 catch when (validationFailed) { }
+        }
+    }
+
+    /// <summary>
+    /// 两个渲染器同时跑，stdout 锁步：两边都交出第 i 帧时由后到的一边调用 <paramref name="compare"/>，先到的一边等它比完
+    /// 才把缓冲区还给自己的渲染器，所以比较时两块缓冲区都有效，也不用复制。任何一边失败（含比较失败）就取消另一边；
+    /// 被连带取消的一边结束为 Canceled、不带异常，所以抛出的是失败那边的原始错误。
+    /// </summary>
+    internal static async Task<(JsonObject Source, JsonObject Candidate)> RenderLockstepAsync(
+        Func<IFrameSink, CancellationToken, Task<JsonObject>> source, Func<IFrameSink, CancellationToken, Task<JsonObject>> candidate,
+        Func<ulong, ReadOnlyMemory<byte>, ReadOnlyMemory<byte>, CancellationToken, ValueTask> compare, CancellationToken token)
+    {
+        using var pair = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var lockstep = new Lockstep(compare);
+        async Task<JsonObject> Side(Func<IFrameSink, CancellationToken, Task<JsonObject>> render, IFrameSink sink)
+        {
+            try { return await render(sink, pair.Token); }
+            catch { await pair.CancelAsync(); throw; }
+        }
+        Task<JsonObject> a = Side(source, lockstep.Source), b = Side(candidate, lockstep.Candidate);
+        await Task.WhenAll(a, b);
+        return (a.Result, b.Result);
+    }
+
+    /// <summary>两个接收器共用的汇合点：同一时刻最多一边在等（它交出的帧没比完之前，它的渲染器交不出下一帧）。</summary>
+    private sealed class Lockstep
+    {
+        private readonly Func<ulong, ReadOnlyMemory<byte>, ReadOnlyMemory<byte>, CancellationToken, ValueTask> compare;
+        private readonly Lock gate = new();
+        private (ReadOnlyMemory<byte> Frame, TaskCompletionSource Done)? waiting;
+
+        internal Lockstep(Func<ulong, ReadOnlyMemory<byte>, ReadOnlyMemory<byte>, CancellationToken, ValueTask> compare)
+        {
+            this.compare = compare;
+            Source = new Side(this, isSource: true);
+            Candidate = new Side(this, isSource: false);
+        }
+
+        internal IFrameSink Source { get; }
+        internal IFrameSink Candidate { get; }
+
+        private async ValueTask ArriveAsync(bool isSource, ulong index, ReadOnlyMemory<byte> frame, CancellationToken token)
+        {
+            (ReadOnlyMemory<byte> Frame, TaskCompletionSource Done)? first;
+            var mine = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (gate)
+            {
+                first = waiting;
+                waiting = first is null ? (frame, mine) : null;
             }
+            if (first is not { } other)
+            {
+                await mine.Task.WaitAsync(token);
+                return;
+            }
+            // 比较失败时这里直接抛出，等着的一边随整对取消退出。
+            await (isSource ? compare(index, frame, other.Frame, token) : compare(index, other.Frame, frame, token));
+            other.Done.SetResult();
+        }
+
+        private sealed class Side(Lockstep owner, bool isSource) : IFrameSink
+        {
+            public ValueTask WriteFrameAsync(ulong index, ReadOnlyMemory<byte> rgba, CancellationToken token) =>
+                owner.ArriveAsync(isSource, index, rgba, token);
         }
     }
 
@@ -151,8 +192,8 @@ public sealed class CandidateValidation(NativeTools tools)
         if (sourceDependencies is null || candidateDependencies is null) return report;
         try
         {
-            HybridExportSafety.GuardPublicLayerQueries(sourceObjects.OfType<JsonObject>(), candidateObjects.OfType<JsonObject>(),
-                HybridExportSafety.MergeRuntimeDependencies(sourceDependencies, candidateDependencies));
+            SceneAssembler.GuardPublicLayerQueries(sourceObjects.OfType<JsonObject>(), candidateObjects.OfType<JsonObject>(),
+                SceneAssembler.MergeRuntimeDependencies(sourceDependencies, candidateDependencies));
         }
         catch (InvalidDataException error)
         {
@@ -230,50 +271,6 @@ public sealed class CandidateValidation(NativeTools tools)
     internal static Task WriteReportAsync(string path, JsonObject report, CancellationToken token) =>
         File.WriteAllTextAsync(path, report.ToJsonString(JsonOptions), token);
 
-    private sealed class Errors
-    {
-        public ulong Pixels, DifferentRgb, DifferentAlpha;
-        public double RgbSum, RgbSquared, AlphaSum;
-        public int MaxRgb, MaxAlpha;
-        public void Add(int r, int g, int b, int alpha)
-        {
-            ++Pixels;
-            RgbSum += r + g + b;
-            RgbSquared += r * r + g * g + b * b;
-            AlphaSum += alpha;
-            int maximum = Math.Max(r, Math.Max(g, b));
-            MaxRgb = Math.Max(MaxRgb, maximum); MaxAlpha = Math.Max(MaxAlpha, alpha);
-            if (maximum != 0) ++DifferentRgb;
-            if (alpha != 0) ++DifferentAlpha;
-        }
-        public void Merge(Errors other)
-        {
-            Pixels += other.Pixels; DifferentRgb += other.DifferentRgb; DifferentAlpha += other.DifferentAlpha;
-            RgbSum += other.RgbSum; RgbSquared += other.RgbSquared; AlphaSum += other.AlphaSum;
-            MaxRgb = Math.Max(MaxRgb, other.MaxRgb); MaxAlpha = Math.Max(MaxAlpha, other.MaxAlpha);
-        }
-        public JsonObject ToJson() => new()
-        {
-            ["pixels"] = Pixels, ["rgb_mae_255"] = RgbSum / (Pixels * 3.0),
-            ["rgb_rmse_255"] = Math.Sqrt(RgbSquared / (Pixels * 3.0)), ["rgb_max_abs_255"] = (double)MaxRgb,
-            ["alpha_mae_255"] = AlphaSum / Pixels, ["alpha_max_abs_255"] = (double)MaxAlpha,
-            ["differing_rgb_pixel_fraction"] = (double)DifferentRgb / Pixels,
-            ["differing_alpha_pixel_fraction"] = (double)DifferentAlpha / Pixels
-        };
-    }
-
-    private static JsonArray Tiles(Errors[] errors, int columns, int edge, int width, int height)
-    {
-        var result = new JsonArray();
-        for (int i = 0; i < errors.Length; ++i)
-        {
-            int x = i % columns * edge, y = i / columns * edge;
-            result.Add(new JsonObject { ["x"] = x, ["y"] = y, ["width"] = Math.Min(edge, width - x),
-                ["height"] = Math.Min(edge, height - y), ["metrics"] = errors[i].ToJson() });
-        }
-        return result;
-    }
-
     private static JsonObject ObjectPreservation(ProjectSource source, ProjectSource candidate)
     {
         JsonObject aScene = source.ReadJson(source.SceneResource), bScene = candidate.ReadJson(candidate.SceneResource);
@@ -327,5 +324,157 @@ public sealed class CandidateValidation(NativeTools tools)
         }
         Walk(node, "");
         return found;
+    }
+}
+
+/// <summary>成对比较的类型化结果：<see cref="Report"/> 就是 comparison.json；合成门（<see cref="CompositionGate"/>）读 <see cref="Total"/> 与 <see cref="Tiles"/> 判定。</summary>
+internal sealed record PairedComparison(JsonObject Report, PixelErrors Total, PairedTile[] Tiles);
+
+/// <summary>一个瓦片的位置、尺寸与跨帧累计误差。</summary>
+internal sealed record PairedTile(int X, int Y, int Width, int Height, PixelErrors Errors)
+{
+    internal JsonObject ToJson() => new() { ["x"] = X, ["y"] = Y, ["width"] = Width, ["height"] = Height, ["metrics"] = Errors.ToJson() };
+}
+
+/// <summary>
+/// 逐像素 |a−b| 的整数累计：RGB 三通道合计、alpha 单列。均值等派生量只在写出与判定时由整数和算出，
+/// 与原来逐像素 double 累加的结果逐位相同（double 累加整数在 2^53 以内是精确的，48 帧 8K 的平方和约 3e14）。
+/// </summary>
+internal sealed class PixelErrors
+{
+    internal ulong Pixels, DifferentRgb, DifferentAlpha, RgbSum, RgbSquared, AlphaSum;
+    internal int MaxRgb, MaxAlpha;
+
+    /// <summary>RGB 平均绝对误差（0–255 标度），写出与合成门判定用同一个表达式。</summary>
+    internal double RgbMae => RgbSum / (Pixels * 3.0);
+    internal double AlphaMae => (double)AlphaSum / Pixels;
+
+    internal void Merge(PixelErrors other)
+    {
+        Pixels += other.Pixels; DifferentRgb += other.DifferentRgb; DifferentAlpha += other.DifferentAlpha;
+        RgbSum += other.RgbSum; RgbSquared += other.RgbSquared; AlphaSum += other.AlphaSum;
+        MaxRgb = Math.Max(MaxRgb, other.MaxRgb); MaxAlpha = Math.Max(MaxAlpha, other.MaxAlpha);
+    }
+
+    internal JsonObject ToJson() => new()
+    {
+        ["pixels"] = Pixels, ["rgb_mae_255"] = RgbMae,
+        ["rgb_rmse_255"] = Math.Sqrt(RgbSquared / (Pixels * 3.0)), ["rgb_max_abs_255"] = (double)MaxRgb,
+        ["alpha_mae_255"] = AlphaMae, ["alpha_max_abs_255"] = (double)MaxAlpha,
+        ["differing_rgb_pixel_fraction"] = (double)DifferentRgb / Pixels,
+        ["differing_alpha_pixel_fraction"] = (double)DifferentAlpha / Pixels
+    };
+}
+
+/// <summary>
+/// 成对帧比较：一帧按瓦片行并行，瓦片内 AVX2 每次 8 个像素（CPU 不支持或不足 8 个像素时逐像素），全部整数累加。
+/// 瓦片跨帧累计，帧合计由瓦片相加，最后的整体合计由帧相加。
+/// </summary>
+internal sealed class PairedFrameComparer
+{
+    private readonly int width, height, rows, columns;
+
+    internal PairedFrameComparer(int width, int height, int edge)
+    {
+        this.width = width; this.height = height;
+        columns = (width + edge - 1) / edge; rows = (height + edge - 1) / edge;
+        Tiles = new PairedTile[checked(columns * rows)];
+        for (int i = 0; i < Tiles.Length; ++i)
+        {
+            int x = i % columns * edge, y = i / columns * edge;
+            Tiles[i] = new(x, y, Math.Min(edge, width - x), Math.Min(edge, height - y), new PixelErrors());
+        }
+    }
+
+    internal PairedTile[] Tiles { get; }
+    internal PixelErrors Total { get; } = new();
+
+    /// <summary>RGB 平均误差最大的瓦片（并列取第一个）。</summary>
+    internal int WorstRgbTile => Enumerable.Range(0, Tiles.Length).MaxBy(i => (double)Tiles[i].Errors.RgbSum / Tiles[i].Errors.Pixels);
+
+    /// <summary>加一帧（两块 宽×高×4 的 RGBA8），返回这一帧的合计。</summary>
+    internal PixelErrors Add(ReadOnlyMemory<byte> a, ReadOnlyMemory<byte> b, CancellationToken token, bool vectorized = true)
+    {
+        // 内核用不检查边界的向量读取；长度不对直接拒绝，不读越界内存。
+        if (a.Length != width * height * 4 || b.Length != a.Length) throw new ArgumentException("Paired frames must both be width x height RGBA8.");
+        vectorized &= Avx2.IsSupported;
+        var frameTiles = new PixelErrors[Tiles.Length];
+        Parallel.For(0, rows, new ParallelOptions { CancellationToken = token }, row =>
+        {
+            for (int column = 0, i = row * columns; column < columns; ++column, ++i)
+                frameTiles[i] = Tile(a.Span, b.Span, width, Tiles[i], vectorized);
+        });
+        var frame = new PixelErrors();
+        for (int i = 0; i < Tiles.Length; ++i)
+        {
+            frame.Merge(frameTiles[i]);
+            Tiles[i].Errors.Merge(frameTiles[i]);
+        }
+        Total.Merge(frame);
+        return frame;
+    }
+
+    private static PixelErrors Tile(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b, int stride, PairedTile tile, bool vectorized)
+    {
+        var errors = new PixelErrors { Pixels = (ulong)tile.Width * (ulong)tile.Height };
+        int vectorWidth = vectorized ? tile.Width & ~7 : 0;
+        if (vectorWidth > 0) AddVectorized(a, b, stride, tile, vectorWidth, errors);
+        for (int y = tile.Y; y < tile.Y + tile.Height; ++y)
+            for (int x = tile.X + vectorWidth; x < tile.X + tile.Width; ++x)
+            {
+                int offset = (y * stride + x) * 4;
+                int dr = Math.Abs(a[offset] - b[offset]), dg = Math.Abs(a[offset + 1] - b[offset + 1]);
+                int db = Math.Abs(a[offset + 2] - b[offset + 2]), da = Math.Abs(a[offset + 3] - b[offset + 3]);
+                errors.RgbSum += (ulong)(dr + dg + db);
+                errors.RgbSquared += (ulong)(dr * dr + dg * dg + db * db);
+                errors.AlphaSum += (ulong)da;
+                int maximum = Math.Max(dr, Math.Max(dg, db));
+                errors.MaxRgb = Math.Max(errors.MaxRgb, maximum); errors.MaxAlpha = Math.Max(errors.MaxAlpha, da);
+                if (maximum != 0) ++errors.DifferentRgb;
+                if (da != 0) ++errors.DifferentAlpha;
+            }
+        return errors;
+    }
+
+    /// <summary>
+    /// 每行前 <paramref name="vectorWidth"/> 个像素（8 的倍数）：|a−b| 用无符号字节 max−min，RGB 与 alpha 按掩码分开；
+    /// 和用 SAD 累到 64 位；平方和用 pmaddwd 累到 32 位、每行并入 64 位（一行最多 8191 次，每道每次不超过 4×255²，不溢出 uint）。
+    /// </summary>
+    private static void AddVectorized(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b, int stride, PairedTile tile, int vectorWidth, PixelErrors errors)
+    {
+        Vector256<byte> rgbMask = Vector256.Create(0x00FFFFFFu).AsByte(), alphaMask = Vector256.Create(0xFF000000u).AsByte();
+        Vector256<ulong> rgbSum = default, alphaSum = default;
+        Vector256<byte> maxRgb = default, maxAlpha = default;
+        ref byte left = ref MemoryMarshal.GetReference(a), right = ref MemoryMarshal.GetReference(b);
+        for (int y = tile.Y; y < tile.Y + tile.Height; ++y)
+        {
+            Vector256<uint> squares = default, sameRgb = default, sameAlpha = default;
+            nuint offset = (nuint)((y * stride + tile.X) * 4), end = offset + (nuint)(vectorWidth * 4);
+            for (; offset < end; offset += 32)
+            {
+                Vector256<byte> va = Vector256.LoadUnsafe(ref left, offset), vb = Vector256.LoadUnsafe(ref right, offset);
+                Vector256<byte> difference = Avx2.Subtract(Avx2.Max(va, vb), Avx2.Min(va, vb));
+                Vector256<byte> rgb = Avx2.And(difference, rgbMask), alpha = Avx2.And(difference, alphaMask);
+                rgbSum = Avx2.Add(rgbSum, Avx2.SumAbsoluteDifferences(rgb, Vector256<byte>.Zero).AsUInt64());
+                alphaSum = Avx2.Add(alphaSum, Avx2.SumAbsoluteDifferences(alpha, Vector256<byte>.Zero).AsUInt64());
+                Vector256<short> low = Avx2.UnpackLow(rgb, Vector256<byte>.Zero).AsInt16(), high = Avx2.UnpackHigh(rgb, Vector256<byte>.Zero).AsInt16();
+                squares = Avx2.Add(squares, Avx2.Add(Avx2.MultiplyAddAdjacent(low, low), Avx2.MultiplyAddAdjacent(high, high)).AsUInt32());
+                maxRgb = Avx2.Max(maxRgb, rgb); maxAlpha = Avx2.Max(maxAlpha, alpha);
+                // 相等时比较结果是全 1（−1），减掉即计数加一。
+                sameRgb = Avx2.Subtract(sameRgb, Avx2.CompareEqual(rgb.AsUInt32(), Vector256<uint>.Zero));
+                sameAlpha = Avx2.Subtract(sameAlpha, Avx2.CompareEqual(alpha.AsUInt32(), Vector256<uint>.Zero));
+            }
+            (Vector256<ulong> lower, Vector256<ulong> upper) = Vector256.Widen(squares);
+            errors.RgbSquared += Vector256.Sum(lower + upper);
+            errors.DifferentRgb += (ulong)vectorWidth - Vector256.Sum(sameRgb);
+            errors.DifferentAlpha += (ulong)vectorWidth - Vector256.Sum(sameAlpha);
+        }
+        errors.RgbSum += Vector256.Sum(rgbSum);
+        errors.AlphaSum += Vector256.Sum(alphaSum);
+        for (int i = 0; i < Vector256<byte>.Count; ++i)
+        {
+            errors.MaxRgb = Math.Max(errors.MaxRgb, maxRgb.GetElement(i));
+            errors.MaxAlpha = Math.Max(errors.MaxAlpha, maxAlpha.GetElement(i));
+        }
     }
 }

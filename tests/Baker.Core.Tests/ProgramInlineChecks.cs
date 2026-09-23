@@ -372,7 +372,7 @@ Check(subtreePlan["source_root_order"]!.AsArray().Single()!.GetValue<int>() == 1
     subtreePlan["root_order"]!.AsArray().Select(n => n!.GetValue<int>()).SequenceEqual(new[] { 1200, 1201, 1204, 1202, 1203, 1205, 1207 }) &&
     subtreePlan["layers"]!.AsArray().OfType<JsonObject>().Single(layer => layer["id"]!.GetValue<int>() == 1206)["allocation_root"]!.GetValue<int>() == 1201,
     "author roots remain facts while allocation order follows native sibling DFS and drawable subtrees remain whole");
-var assembleMethod = typeof(HybridBakeService).GetMethod("AssembleObjects", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+var assembleMethod = typeof(SceneAssembler).GetMethod("AssembleObjects", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 var projectionType = typeof(HybridBakeService).Assembly.GetType("Baker.Core.HybridVideoProjection")!;
 var attachMethod = projectionType.GetMethod("AttachToParent", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 JsonArray Assemble(JsonObject plan, JsonArray objects, JsonArray? dependencies = null)
@@ -442,7 +442,7 @@ Check(Assemble(addedVideoPlan, new JsonArray(publicObjects[0]!.DeepClone()),
     "name lookup allows a public layer count change");
 RejectPublicLayerExport(() => Assemble(addedVideoPlan, new JsonArray(publicObjects[0]!.DeepClone()),
     new JsonArray(LayerQuery(1900, "layer_count"))), "added video rejects a numeric public layer count query");
-var mergeDependencies = typeof(HybridBakeService).GetMethod("MergeRuntimeDependencies", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+var mergeDependencies = typeof(SceneAssembler).GetMethod("MergeRuntimeDependencies", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 var mergedLateQueries = (JsonArray)mergeDependencies.Invoke(null, new object[] { new JsonArray(LayerQuery(1900, "lookup")),
     new JsonArray(LayerQuery(1900, "layer_enumeration"), LayerQuery(1900, "layer_enumeration")) })!;
 Check(mergedLateQueries.Count == 2, "full-capture dependency merge preserves old dependencies and de-duplicates repeated late trace events");
@@ -469,10 +469,10 @@ Check(CompareLookups(null, new JsonArray())["status"]!.GetValue<string>() == "no
 Check(CompareLookups(new JsonArray(), new JsonArray(LayerQuery(1900, "layer_count")),
     new JsonArray(publicObjects[0]!.DeepClone()))["status"]!.GetValue<string>() == "rejected_public_layer_queries",
     "a public layer query first observed in paired rendering reaches the same export guard");
-Check(HybridCompositionValidator.Evaluate(new JsonObject { ["lookup_binding_validation"] = CompareLookups(new JsonArray(Lookup(1901)), new JsonArray(Lookup(1902))) })
+Check(CompositionGate.Evaluate(PairedComparisonTests.Comparison(extra: new JsonObject { ["lookup_binding_validation"] = CompareLookups(new JsonArray(Lookup(1901)), new JsonArray(Lookup(1902))) }))
     ["failures"]!.AsArray().Any(node => node!.GetValue<string>().Contains("lookup bindings")),
     "composition rejection includes retained lookup binding drift");
-var exportSafetyType = typeof(HybridBakeService).Assembly.GetType("Baker.Core.HybridExportSafety", throwOnError: true)!;
+var exportSafetyType = typeof(SceneAssembler);
 var publicQueryGuard = exportSafetyType.GetMethod("GuardPublicLayerQueries", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 bool SelfAnchoredGuardAllows(string sourceScript, string? candidateScript = null, int? sourceParent = null, int? candidateParent = null,
     string property = "layer_index", bool initialization = true, string binding = "visible", string scriptBinding = "visible")
@@ -626,7 +626,7 @@ Check(Math.Abs(37 + mappedOrigin[0] - 32) < 1e-10 && Math.Abs(29 - 6 * mappedOri
 string capturedPixel = Path.Combine(root, "captured-parent-color.rgba");
 await File.WriteAllBytesAsync(capturedPixel, new byte[] { 20, 40, 60, 255 });
 string capturedColorProject = Path.Combine(root, "captured-parent-color");
-await VideoSceneBuilder.WriteLayerAsync(capturedColorProject, "color", capturedPixel, 1, 1, 1600, 32, 16, 64, 32,
+await ProjectWriter.WriteLayerAsync(capturedColorProject, "color", capturedPixel, 1, 1, 1600, 32, 16, 64, 32,
     rgbaFrame: true, capturedColor: true);
 string capturedColorShader = await File.ReadAllTextAsync(Path.Combine(capturedColorProject, "shaders/wpe_baker_video/color.frag"));
 Check(capturedColorShader.Contains("texSample2D") && !capturedColorShader.Contains("g_Color") && !capturedColorShader.Contains("g_Alpha"),
@@ -852,7 +852,7 @@ Check(preservedLabel["effects"]!.AsArray().Count == 2 && simpleLabel["effects"]!
     await File.ReadAllTextAsync(Path.Combine(overlaySource, "scene.json")) == overlaySourceBeforeTextChoice,
     "simple text effects remove only selected effects while preserving parent, script, protected effect, and source bytes");
 
-var lateDependencyMethod = typeof(HybridBakeService).GetMethod("LateExternalDependencies",
+var lateDependencyMethod = typeof(HybridExportSafety).GetMethod("LateExternalDependencies",
     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 var lateSourceObjects = new[] {
     new JsonObject { ["id"] = 1700 },
@@ -897,8 +897,7 @@ Check(LateDependencies(LateEvent(1702, 1702, "write", "origin"), LateEvent(1703,
 Check(LateDependencies(LateEvent(1702, -1, "input", "wall_clock", initialization: true)).Count == 1,
     "initialization does not exempt an external input from the existing capture guard");
 var fallbackScene = JsonNode.Parse("""{"objects":[{"id":1,"visible":{"user":"shown","value":false},"scale":{"user":"size","value":"0.5 0.5 0.5"}}]}""")!.AsObject();
-typeof(HybridBakeService).GetMethod("ApplyVisibilityFallbacks", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
-    .Invoke(null, new object[] { fallbackScene, new JsonObject { ["shown"] = true, ["size"] = .7 } });
+ProjectWriter.ApplyVisibilityFallbacks(fallbackScene, new JsonObject { ["shown"] = true, ["size"] = .7 });
 Check(fallbackScene["objects"]![0]!["visible"]!["value"]!.GetValue<bool>() &&
     fallbackScene["objects"]![0]!["scale"]!["value"]!.GetValue<string>() == "0.5 0.5 0.5",
     "export synchronizes visibility without replacing a vector fallback with its scalar slider");
