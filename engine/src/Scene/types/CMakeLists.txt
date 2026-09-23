@@ -5,5 +5,4 @@ target_sources(owe-types PUBLIC FILE_SET CXX_MODULES BASE_DIRS . FILES
 target_sources(owe-types PRIVATE
   types.cpp)
 target_link_libraries(owe-types PUBLIC owe-core)
-target_link_libraries(owe-types PUBLIC rstd.std)
-target_link_libraries(owe-types PUBLIC rstd.cppstd)
+target_link_libraries(owe-types PUBLIC owe-compat)

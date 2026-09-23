@@ -9,6 +9,4 @@ target_sources(owe-utils PRIVATE
 target_include_directories(owe-utils PUBLIC ${PROJECT_SOURCE_DIR}/third_party ${PROJECT_SOURCE_DIR}/src/Scene/Utils/include ${PROJECT_SOURCE_DIR}/src/Scene/Utils/include/Utils)
 target_link_libraries(owe-utils PUBLIC owe-core)
 target_link_libraries(owe-utils PUBLIC owe-types)
-target_link_libraries(owe-utils PUBLIC rstd.std)
-target_link_libraries(owe-utils PUBLIC rstd.cppstd)
-target_link_libraries(owe-utils PUBLIC rstd.log)
+target_link_libraries(owe-utils PUBLIC owe-compat)

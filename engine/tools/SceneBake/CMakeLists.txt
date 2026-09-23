@@ -4,8 +4,6 @@ target_sources(wpe-render PRIVATE
   main.cpp)
 target_link_libraries(wpe-render PRIVATE owe-core)
 target_link_libraries(wpe-render PRIVATE owe-scene)
-target_link_libraries(wpe-render PRIVATE rstd.cppstd)
-target_link_libraries(wpe-render PRIVATE rstd.log)
 target_link_libraries(wpe-render PRIVATE shell32)
 target_link_libraries(wpe-render PRIVATE wpe-cli11)
 # 源码摘要由 scripts/build-native-cmake.py 经 -DWPE_RENDER_SOURCE_DIGEST 传入

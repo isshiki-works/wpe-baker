@@ -6,7 +6,7 @@ project(wpe_baker_native VERSION 0.1.0 LANGUAGES C CXX)
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   message(FATAL_ERROR "engine 需要 Clang 编译（当前 ${CMAKE_CXX_COMPILER_ID}）")
 endif()
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES ON)
@@ -107,13 +107,13 @@ set(ENV{PKG_CONFIG_LIBDIR} "$ENV{PKG_CONFIG_PATH}")
 message(STATUS "FFmpeg development prefix: ${WPE_FFMPEG_ROOT}")
 
 # 带模块的依赖（rstd/vvk/wavsen）的 BMI 与编译器、选项绑定，留在主构建里编。
+# T2-6 起引擎与 vvk 改用 owe::compat；rstd 只剩 wavsen 的私有依赖（T5 换掉 wavsen 后摘除）。
 set(RSTD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(RSTD_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WPE_DEPS}/rstd" dependencies/rstd EXCLUDE_FROM_ALL)
 target_link_libraries(rstd.std PRIVATE synchronization)
 
-set(VVK_FETCH_MISSING_DEPENDENCIES OFF CACHE BOOL "" FORCE)
-add_subdirectory("${WPE_DEPS}/vvk" dependencies/vvk EXCLUDE_FROM_ALL)
+include(cmake/vvk-compat.cmake)
 
 set(WAVSEN_AUDIO_BACKEND offline CACHE STRING "Deterministic offline audio" FORCE)
 set(WAVSEN_BUILD_TESTS ON CACHE BOOL "Real offline audio/video regression targets" FORCE)

@@ -4,5 +4,4 @@ target_sources(owe-offline-vulkan-test PRIVATE
   headless_readback.cpp)
 target_link_libraries(owe-offline-vulkan-test PRIVATE owe-scene)
 target_link_libraries(owe-offline-vulkan-test PRIVATE owe-vulkan)
-target_link_libraries(owe-offline-vulkan-test PRIVATE rstd.std)
-target_link_libraries(owe-offline-vulkan-test PRIVATE rstd.cppstd)
+target_link_libraries(owe-offline-vulkan-test PRIVATE owe-compat)

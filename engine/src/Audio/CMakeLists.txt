@@ -5,4 +5,4 @@ target_sources(owe-audio PUBLIC FILE_SET CXX_MODULES BASE_DIRS . FILES
 target_sources(owe-audio PRIVATE
   AudioResponse.cpp)
 target_link_libraries(owe-audio PUBLIC owe-core)
-target_link_libraries(owe-audio PUBLIC rstd.std)
+target_link_libraries(owe-audio PUBLIC owe-compat)
