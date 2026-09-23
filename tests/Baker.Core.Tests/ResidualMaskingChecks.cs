@@ -531,7 +531,7 @@ internal static class ResidualMaskingChecks
         {
             ["candidate_count"] = 375,
             ["selected"] = new JsonObject { ["start_frame"] = starts[0] },
-            ["start_attempt_order"] = new JsonArray([.. starts.Take(ResidualMasking.MaximumStartAttempts).Select((start, index) => (JsonNode)new JsonObject
+            ["start_attempt_order"] = new JsonArray([.. starts.Select((start, index) => (JsonNode)new JsonObject
                 { ["start_frame"] = start, ["sampled_sort_key"] = 20 + index, ["sampled_global_rgb_mae_255"] = 1.0 })])
         };
         // 按排序顺序逐个起点记尝试，直到第一层通过或清单用完。
