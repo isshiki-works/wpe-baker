@@ -228,8 +228,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
     const bool copy_background_seed = has_text_effect || obj.copybackground || linked_source;
 
     std::string s_text;
-    // obj.text 来自 B 组 wpscene::TextObject（rstd），读取走 NJson。
-    if (const auto text = FromRstd(obj.text); text.is_string()) {
+    if (const auto& text = obj.text; text.is_string()) {
         s_text = text.get<std::string>();
     } else if (text.is_object()) {
         auto value = Find(text, "value");
@@ -273,7 +272,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
     // --- font resolution: VFS first (WE shared /assets + pkg overlay),
     //     then host system font dirs.
     std::string font_name;
-    if (const auto font = FromRstd(obj.font); font.is_string()) {
+    if (const auto& font = obj.font; font.is_string()) {
         font_name = font.get<std::string>();
     } else if (font.is_object()) {
         if (auto value = Find(font, "value"); value != nullptr && value->is_string())
@@ -651,7 +650,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
                 return None();
             }
             wpscene::Material pt_mat;
-            if (! pt_mat.FromJson(ToRstd(*pt_json))) {
+            if (! pt_mat.FromJson(*pt_json)) {
                 rstd_error("text '{}': Material::FromJson failed", obj.name);
                 return None();
             }

@@ -24,7 +24,7 @@ export namespace owe::wpscene
 // Text-overlay object (PKGV0005+). Discriminator: top-level `text` is
 // non-null. The `text` and `font` fields appear in two shapes — plain
 // string, or an object (e.g. `{"script": "..."}` for property-bound
-// text). Both are captured verbatim as owe::Json so future consumers
+// text). Both are captured verbatim as owe::NJson so future consumers
 // can decode either path without re-parsing.
 struct TextObject {
     // Common positional/metadata (mirrors ImageObject prefix).
@@ -42,13 +42,13 @@ struct TextObject {
     u32              parent { 0 };
     std::string      attachment;
     std::vector<i32> dependencies;
-    owe::Json        instance;
+    owe::NJson       instance;
     FieldBindings    field_bindings;
 
     // Text-specific.
-    owe::Json        text; // string | {script: ...} | {user: ..., value: ...}
+    owe::NJson       text; // string | {script: ...} | {user: ..., value: ...}
     UserValueBinding text_user;
-    owe::Json        font; // string | {value: ...}
+    owe::NJson       font; // string | {value: ...}
     float            pointsize { 12.0f };
     u32              padding { 0 };
     std::string      horizontalalign;
@@ -82,10 +82,10 @@ struct TextObject {
     float                    backgroundbrightness { 1.0f };
     std::vector<ImageEffect> effects;
 
-    bool FromJson(const owe::Json& json, fs::VFS& vfs) {
+    bool FromJson(const owe::NJson& json, fs::VFS& vfs) {
         return FromJson(json, vfs, kSceneVersionUnknown);
     }
-    bool FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion /*v*/) {
+    bool FromJson(const owe::NJson& json, fs::VFS& vfs, SceneVersion /*v*/) {
         owe::GetJsonValue(json, "id", id, false);
         owe::GetJsonValue(json, "name", name, false);
         owe::GetJsonValue(json, "origin", origin, false);
@@ -100,11 +100,11 @@ struct TextObject {
         owe::GetJsonValue(json, "parent", parent, false);
         owe::GetJsonValue(json, "attachment", attachment, false);
         owe::GetJsonValue(json, "dependencies", dependencies, false);
-        if (auto value = json.get("instance"_str); value.is_some()) instance = (*value)->clone();
+        if (auto value = owe::Find(json, "instance"); value != nullptr) instance = *value;
 
-        if (auto value = json.get("text"_str); value.is_some()) text = (*value)->clone();
+        if (auto value = owe::Find(json, "text"); value != nullptr) text = *value;
         ReadUserValueBinding(json, "text", text_user);
-        if (auto value = json.get("font"_str); value.is_some()) font = (*value)->clone();
+        if (auto value = owe::Find(json, "font"); value != nullptr) font = *value;
 
         owe::GetJsonValue(json, "pointsize", pointsize, false);
         owe::GetJsonValue(json, "padding", padding, false);
@@ -130,10 +130,9 @@ struct TextObject {
         owe::GetJsonValue(json, "ledsource", ledsource, false);
         owe::GetJsonValue(json, "backgroundcolor", backgroundcolor, false);
         owe::GetJsonValue(json, "backgroundbrightness", backgroundbrightness, false);
-        if (auto effect_values = json.get("effects"_str); effect_values.is_some()) {
-            auto array = (*effect_values)->as_array();
-            if (array.is_some()) {
-                for (const auto& jE : **array) {
+        if (auto effect_values = owe::Find(json, "effects"); effect_values != nullptr) {
+            if (effect_values->is_array()) {
+                for (const auto& jE : *effect_values) {
                     ImageEffect wpeff;
                     wpeff.FromJson(jE, vfs);
                     effects.push_back(std::move(wpeff));
@@ -162,7 +161,7 @@ struct ModelObject {
     bool             nointerpolation { false };
     u32              parent { 0 };
     std::vector<i32> dependencies;
-    owe::Json        instance;
+    owe::NJson       instance;
     FieldBindings    field_bindings;
 
     std::string model;
@@ -176,10 +175,10 @@ struct ModelObject {
     VisibleUserBinding                       visible_user;
     std::string                              visible_user_key;
 
-    bool FromJson(const owe::Json& json, fs::VFS& vfs) {
+    bool FromJson(const owe::NJson& json, fs::VFS& vfs) {
         return FromJson(json, vfs, kSceneVersionUnknown);
     }
-    bool FromJson(const owe::Json& json, fs::VFS&, SceneVersion /*v*/) {
+    bool FromJson(const owe::NJson& json, fs::VFS&, SceneVersion /*v*/) {
         owe::GetJsonValue(json, "id", id, false);
         owe::GetJsonValue(json, "name", name, false);
         owe::GetJsonValue(json, "origin", origin, false);
@@ -193,7 +192,7 @@ struct ModelObject {
         owe::GetJsonValue(json, "nointerpolation", nointerpolation, false);
         owe::GetJsonValue(json, "parent", parent, false);
         owe::GetJsonValue(json, "dependencies", dependencies, false);
-        if (auto value = json.get("instance"_str); value.is_some()) instance = (*value)->clone();
+        if (auto value = owe::Find(json, "instance"); value != nullptr) instance = *value;
 
         owe::GetJsonValue(json, "model", model, false);
         owe::GetJsonValue(json, "attachment", attachment, false);
@@ -224,7 +223,7 @@ struct CameraObject {
     bool             nointerpolation { false };
     u32              parent { 0 };
     std::vector<i32> dependencies;
-    owe::Json        instance;
+    owe::NJson       instance;
     FieldBindings    field_bindings;
 
     std::string camera; // camera name reference
@@ -238,10 +237,10 @@ struct CameraObject {
     VisibleUserBinding visible_user;
     std::string        visible_user_key;
 
-    bool FromJson(const owe::Json& json, fs::VFS& vfs) {
+    bool FromJson(const owe::NJson& json, fs::VFS& vfs) {
         return FromJson(json, vfs, kSceneVersionUnknown);
     }
-    bool FromJson(const owe::Json& json, fs::VFS&, SceneVersion /*v*/) {
+    bool FromJson(const owe::NJson& json, fs::VFS&, SceneVersion /*v*/) {
         owe::GetJsonValue(json, "id", id, false);
         owe::GetJsonValue(json, "name", name, false);
         owe::GetJsonValue(json, "origin", origin, false);
@@ -255,7 +254,7 @@ struct CameraObject {
         owe::GetJsonValue(json, "nointerpolation", nointerpolation, false);
         owe::GetJsonValue(json, "parent", parent, false);
         owe::GetJsonValue(json, "dependencies", dependencies, false);
-        if (auto value = json.get("instance"_str); value.is_some()) instance = (*value)->clone();
+        if (auto value = owe::Find(json, "instance"); value != nullptr) instance = *value;
 
         owe::GetJsonValue(json, "camera", camera, false);
         owe::GetJsonValue(json, "path", path, false);
@@ -280,31 +279,31 @@ struct CameraPathClip {
     Option<AnimCurve> fov;
     Option<AnimCurve> zoom;
 
-    bool FromJson(const owe::Json& json) {
+    bool FromJson(const owe::NJson& json) {
         if (! json.is_object()) return false;
         owe::GetJsonValue(json, "id", id, false);
         std::string raw_name;
         owe::GetJsonValue(json, "name", raw_name, false);
         name = String::make(rstd::cppstd::as_str(raw_name).unwrap());
         owe::GetJsonValue(json, "visible", visible, false);
-        if (auto value = json.get("options"_str); value.is_some())
-            ParseAnimOptions(**value, options);
+        if (auto value = owe::Find(json, "options"); value != nullptr)
+            ParseAnimOptions(*value, options);
 
-        auto parse_curve = [&](ref<str> key) -> Option<AnimCurve> {
-            auto value = json.get(key);
-            if (value.is_none() || (*value)->is_null()) return None();
+        auto parse_curve = [&](std::string_view key) -> Option<AnimCurve> {
+            auto value = owe::Find(json, key);
+            if (value == nullptr || value->is_null()) return None();
             AnimCurve curve;
-            bool      parsed = (*value)->is_array() ? ParseAnimAxis(**value, curve.c0)
-                                                    : ParseAnimCurve(**value, curve);
+            bool      parsed =
+                value->is_array() ? ParseAnimAxis(*value, curve.c0) : ParseAnimCurve(*value, curve);
             if (! parsed) return None();
             curve.options = options.clone();
             return Some(rstd::move(curve));
         };
-        eye    = parse_curve("eye"_str);
-        center = parse_curve("center"_str);
-        up     = parse_curve("up"_str);
-        fov    = parse_curve("fov"_str);
-        zoom   = parse_curve("zoom"_str);
+        eye    = parse_curve("eye");
+        center = parse_curve("center");
+        up     = parse_curve("up");
+        fov    = parse_curve("fov");
+        zoom   = parse_curve("zoom");
         return true;
     }
 };
@@ -312,12 +311,10 @@ struct CameraPathClip {
 struct CameraPathDocument {
     Vec<CameraPathClip> paths;
 
-    bool FromJson(const owe::Json& json) {
-        auto value = json.get("paths"_str);
-        if (value.is_none()) return false;
-        auto values = (*value)->as_array();
-        if (values.is_none()) return false;
-        for (const auto& entry : **values) {
+    bool FromJson(const owe::NJson& json) {
+        auto value = owe::Find(json, "paths");
+        if (value == nullptr || ! value->is_array()) return false;
+        for (const auto& entry : *value) {
             CameraPathClip path;
             if (path.FromJson(entry)) paths.push(rstd::move(path));
         }

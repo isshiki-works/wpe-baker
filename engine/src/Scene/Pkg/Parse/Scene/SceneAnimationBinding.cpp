@@ -568,7 +568,7 @@ void owe::LoadCameraObjectPath(SceneParseContext& context, const wpscene::Camera
     }
 
     wpscene::CameraPathDocument document;
-    if (! document.FromJson(ToRstd(*parsed))) {
+    if (! document.FromJson(*parsed)) {
         rstd_warn("Invalid camera path document {}", object.path);
         return;
     }

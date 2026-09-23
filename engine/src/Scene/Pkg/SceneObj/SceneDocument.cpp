@@ -1,6 +1,7 @@
 module;
 
 #include <rstd/macro.hpp>
+#include "JsonNlohmann.hpp"
 
 module wescene.pkg.scene_obj;
 import rstd.log;
@@ -26,20 +27,20 @@ SceneVersion ParsePkgVersionStamp(std::string_view stamp) {
     return v;
 }
 
-SceneJsonVersion DetectSceneJsonVersion(const owe::Json& root) {
-    auto version = root.get("version"_str);
-    if (version.is_none()) return kSceneJsonVersionDefault;
-    auto value = (*version)->as_u64();
-    if (value.is_some() && value->to_primitive() <= std::numeric_limits<SceneJsonVersion>::max())
-        return static_cast<SceneJsonVersion>(value->to_primitive());
+SceneJsonVersion DetectSceneJsonVersion(const owe::NJson& root) {
+    auto version = owe::Find(root, "version");
+    if (version == nullptr) return kSceneJsonVersionDefault;
+    if (version->is_number_unsigned() &&
+        version->get<std::uint64_t>() <= std::numeric_limits<SceneJsonVersion>::max())
+        return static_cast<SceneJsonVersion>(version->get<std::uint64_t>());
     return kSceneJsonVersionDefault;
 }
 
 } // namespace owe::wpscene
 
-bool Orthogonalprojection::FromJson(const owe::Json& json) {
+bool Orthogonalprojection::FromJson(const owe::NJson& json) {
     if (json.is_null()) return false;
-    if (json.get("auto"_str).is_some()) {
+    if (owe::Find(json, "auto") != nullptr) {
         owe::GetJsonValue(json, "auto", auto_);
     } else {
         owe::GetJsonValue(json, "width", width);
@@ -48,22 +49,20 @@ bool Orthogonalprojection::FromJson(const owe::Json& json) {
     return true;
 }
 
-bool SceneCamera::FromJson(const owe::Json& json) {
+bool SceneCamera::FromJson(const owe::NJson& json) {
     owe::GetJsonValue(json, "center", center);
     owe::GetJsonValue(json, "eye", eye);
     owe::GetJsonValue(json, "up", up);
-    if (auto raw_paths = json.get("paths"_str); raw_paths.is_some()) {
-        auto array = (*raw_paths)->as_array();
-        if (array.is_none()) return true;
-        for (const auto& path : **array) {
-            auto value = path.as_str();
-            if (value.is_some()) paths.push_back(rstd::cppstd::to_string(*value));
+    if (auto raw_paths = owe::Find(json, "paths"); raw_paths != nullptr) {
+        if (! raw_paths->is_array()) return true;
+        for (const auto& path : *raw_paths) {
+            if (path.is_string()) paths.push_back(path.get_ref<const std::string&>());
         }
     }
     return true;
 }
 
-bool SceneLightConfig::FromJson(const owe::Json& json) {
+bool SceneLightConfig::FromJson(const owe::NJson& json) {
     owe::GetJsonValue(json, "directional", directional, false);
     owe::GetJsonValue(json, "directionalshadow", directionalshadow, false);
     owe::GetJsonValue(json, "point", point, false);
@@ -84,21 +83,17 @@ constexpr bool wants(SceneVersion v, SceneVersion gate) {
     return v == kSceneVersionUnknown || v >= gate;
 }
 
-void capture_user_bindings(SceneGeneral& g, const owe::Json& json) {
-    auto object = json.as_object();
-    if (object.is_none()) return;
-    (*object)->iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        const auto& field             = *entry_value;
-        if (! field.is_object()) return;
-        auto user = field.get("user"_str);
-        if (user.is_none() || ! (*user)->is_string()) return;
-        g.user_bindings[rstd::cppstd::to_string(entry_key->as_str())] =
-            rstd::cppstd::to_string(*(*user)->as_str());
-    });
+void capture_user_bindings(SceneGeneral& g, const owe::NJson& json) {
+    if (! json.is_object()) return;
+    for (const auto& [entry_key, field] : json.items()) {
+        if (! field.is_object()) continue;
+        auto user = owe::Find(field, "user");
+        if (user == nullptr || ! user->is_string()) continue;
+        g.user_bindings[entry_key] = user->get_ref<const std::string&>();
+    }
 }
 
-void parse_baseline(SceneGeneral& g, const owe::Json& json) {
+void parse_baseline(SceneGeneral& g, const owe::NJson& json) {
     owe::GetJsonValue(json, "ambientcolor", g.ambientcolor);
     owe::GetJsonValue(json, "skylightcolor", g.skylightcolor);
     owe::GetJsonValue(json, "clearcolor", g.clearcolor);
@@ -121,17 +116,17 @@ void parse_baseline(SceneGeneral& g, const owe::Json& json) {
     owe::GetJsonValue(json, "camerashakespeed", g.camerashakespeed, false);
     owe::GetJsonValue(json, "camerashakeroughness", g.camerashakeroughness, false);
     g.isOrtho = false;
-    if (auto ortho = json.get("orthogonalprojection"_str); ortho.is_some()) {
-        if ((*ortho)->is_null())
+    if (auto ortho = owe::Find(json, "orthogonalprojection"); ortho != nullptr) {
+        if (ortho->is_null())
             g.isOrtho = false;
         else {
             g.isOrtho = true;
-            g.orthogonalprojection.FromJson(**ortho);
+            g.orthogonalprojection.FromJson(*ortho);
         }
     }
 }
 
-void parse_v10_plus(SceneGeneral& g, const owe::Json& json) {
+void parse_v10_plus(SceneGeneral& g, const owe::NJson& json) {
     owe::GetJsonValue(json, "hdr", g.hdr, false);
     owe::GetJsonValue(json, "norecompile", g.norecompile, false);
     owe::GetJsonValue(json, "bloomhdrfeather", g.bloomhdrfeather, false);
@@ -141,11 +136,11 @@ void parse_v10_plus(SceneGeneral& g, const owe::Json& json) {
     owe::GetJsonValue(json, "bloomhdrthreshold", g.bloomhdrthreshold, false);
 }
 
-void parse_v20_plus(SceneGeneral& g, const owe::Json& json) {
+void parse_v20_plus(SceneGeneral& g, const owe::NJson& json) {
     owe::GetJsonValue(json, "bloomtint", g.bloomtint, false);
 }
 
-void parse_v21_plus(SceneGeneral& g, const owe::Json& json) {
+void parse_v21_plus(SceneGeneral& g, const owe::NJson& json) {
     owe::GetJsonValue(json, "perspectiveoverridefov", g.perspectiveoverridefov, false);
     owe::GetJsonValue(json, "windenabled", g.windenabled, false);
     owe::GetJsonValue(json, "winddirection", g.winddirection, false);
@@ -154,7 +149,7 @@ void parse_v21_plus(SceneGeneral& g, const owe::Json& json) {
     owe::GetJsonValue(json, "gravitystrength", g.gravitystrength, false);
 }
 
-void parse_v22_plus(SceneGeneral& g, const owe::Json& json) {
+void parse_v22_plus(SceneGeneral& g, const owe::NJson& json) {
     owe::GetJsonValue(json, "transparentsorting", g.transparentsorting, false);
     owe::GetJsonValue(json, "fogdistance", g.fogdistance, false);
     owe::GetJsonValue(json, "fogdistancestart", g.fogdistancestart, false);
@@ -170,35 +165,35 @@ void parse_v22_plus(SceneGeneral& g, const owe::Json& json) {
     owe::GetJsonValue(json, "fogheightenddensity", g.fogheightenddensity, false);
 }
 
-void parse_lightconfig(SceneGeneral& g, const owe::Json& json) {
-    if (auto lightconfig = json.get("lightconfig"_str);
-        lightconfig.is_some() && (*lightconfig)->is_object()) {
-        g.lightconfig.FromJson(**lightconfig);
+void parse_lightconfig(SceneGeneral& g, const owe::NJson& json) {
+    if (auto lightconfig = owe::Find(json, "lightconfig");
+        lightconfig != nullptr && lightconfig->is_object()) {
+        g.lightconfig.FromJson(*lightconfig);
     }
 }
 
-SceneObjectKind object_kind(const owe::Json& obj) {
+SceneObjectKind object_kind(const owe::NJson& obj) {
     if (! obj.is_object()) return SceneObjectKind::Unknown;
-    if (auto value = obj.get("image"_str); value.is_some() && ! (*value)->is_null())
+    if (auto value = owe::Find(obj, "image"); value != nullptr && ! value->is_null())
         return SceneObjectKind::Image;
-    if (auto value = obj.get("shape"_str); value.is_some() && ! (*value)->is_null())
+    if (auto value = owe::Find(obj, "shape"); value != nullptr && ! value->is_null())
         return SceneObjectKind::Shape;
-    if (auto value = obj.get("particle"_str); value.is_some() && ! (*value)->is_null())
+    if (auto value = owe::Find(obj, "particle"); value != nullptr && ! value->is_null())
         return SceneObjectKind::Particle;
-    if (auto value = obj.get("sound"_str); value.is_some() && ! (*value)->is_null())
+    if (auto value = owe::Find(obj, "sound"); value != nullptr && ! value->is_null())
         return SceneObjectKind::Sound;
-    if (auto value = obj.get("light"_str); value.is_some() && ! (*value)->is_null())
+    if (auto value = owe::Find(obj, "light"); value != nullptr && ! value->is_null())
         return SceneObjectKind::Light;
-    if (auto value = obj.get("text"_str); value.is_some() && ! (*value)->is_null())
+    if (auto value = owe::Find(obj, "text"); value != nullptr && ! value->is_null())
         return SceneObjectKind::Text;
-    if (auto value = obj.get("model"_str); value.is_some() && ! (*value)->is_null())
+    if (auto value = owe::Find(obj, "model"); value != nullptr && ! value->is_null())
         return SceneObjectKind::Model;
-    if (auto value = obj.get("camera"_str); value.is_some() && ! (*value)->is_null())
+    if (auto value = owe::Find(obj, "camera"); value != nullptr && ! value->is_null())
         return SceneObjectKind::Camera;
     return SceneObjectKind::Container;
 }
 
-SceneObjectMetadata parse_object_metadata(const owe::Json& obj, std::size_t raw_index) {
+SceneObjectMetadata parse_object_metadata(const owe::NJson& obj, std::size_t raw_index) {
     SceneObjectMetadata metadata;
     metadata.raw_index = raw_index;
     metadata.kind      = object_kind(obj);
@@ -217,23 +212,22 @@ SceneObjectMetadata parse_object_metadata(const owe::Json& obj, std::size_t raw_
     return metadata;
 }
 
-Vec<SceneObjectRecord> parse_object_records(const owe::Json& root, bool& objects_are_array) {
+Vec<SceneObjectRecord> parse_object_records(const owe::NJson& root, bool& objects_are_array) {
     Vec<SceneObjectRecord> objects;
-    auto                   raw_objects = root.get("objects"_str);
-    if (raw_objects.is_none()) return objects;
+    auto                   raw_objects = owe::Find(root, "objects");
+    if (raw_objects == nullptr) return objects;
 
-    auto array = (*raw_objects)->as_array();
-    if (array.is_none()) {
+    if (! raw_objects->is_array()) {
         objects_are_array = false;
         return objects;
     }
-    const auto count = (*array)->len().to_primitive();
+    const auto count = raw_objects->size();
     objects.reserve(rstd::usize(count));
     for (std::size_t i = 0; i < count; ++i) {
-        const auto& authored = (**array)[rstd::usize(i)];
+        const auto& authored = (*raw_objects)[i];
         objects.push(SceneObjectRecord {
             .metadata = parse_object_metadata(authored, i),
-            .authored = authored.clone(),
+            .authored = authored,
         });
     }
     return objects;
@@ -279,9 +273,9 @@ Option<std::array<u32, 2>> scene_canvas_extent(const SceneMetadata&          met
 
 } // namespace
 
-bool SceneGeneral::FromJson(const owe::Json& json) { return FromJson(json, kSceneVersionUnknown); }
+bool SceneGeneral::FromJson(const owe::NJson& json) { return FromJson(json, kSceneVersionUnknown); }
 
-bool SceneGeneral::FromJson(const owe::Json& json, SceneVersion v) {
+bool SceneGeneral::FromJson(const owe::NJson& json, SceneVersion v) {
     parse_baseline(*this, json);
     if (wants(v, 10)) parse_v10_plus(*this, json);
     if (wants(v, 20)) parse_v20_plus(*this, json);
@@ -293,20 +287,22 @@ bool SceneGeneral::FromJson(const owe::Json& json, SceneVersion v) {
     return true;
 }
 
-bool SceneMetadata::FromJson(const owe::Json& json) { return FromJson(json, kSceneVersionUnknown); }
+bool SceneMetadata::FromJson(const owe::NJson& json) {
+    return FromJson(json, kSceneVersionUnknown);
+}
 
-bool SceneMetadata::FromJson(const owe::Json& json, SceneVersion v) {
+bool SceneMetadata::FromJson(const owe::NJson& json, SceneVersion v) {
     pkg_version        = v;
     scene_json_version = DetectSceneJsonVersion(json);
-    if (auto camera_json = json.get("camera"_str); camera_json.is_some()) {
+    if (auto camera_json = owe::Find(json, "camera"); camera_json != nullptr) {
         // camera schema is identical across PKGV0001..PKGV0023; no version gate needed.
-        camera.FromJson(**camera_json);
+        camera.FromJson(*camera_json);
     } else {
         rstd_error("scene no camera");
         return false;
     }
-    if (auto general_json = json.get("general"_str); general_json.is_some()) {
-        general.FromJson(**general_json, v);
+    if (auto general_json = owe::Find(json, "general"); general_json != nullptr) {
+        general.FromJson(*general_json, v);
     } else {
         rstd_error("scene no genera data");
         return false;
@@ -317,12 +313,12 @@ bool SceneMetadata::FromJson(const owe::Json& json, SceneVersion v) {
 namespace owe::wpscene
 {
 
-Vec<SceneObjectRecord> ParseSceneObjectRecords(const owe::Json& root, bool& objects_are_array) {
+Vec<SceneObjectRecord> ParseSceneObjectRecords(const owe::NJson& root, bool& objects_are_array) {
     return parse_object_records(root, objects_are_array);
 }
 
 Option<SceneDocument> ParseSceneDocumentJson(std::string_view buf, SceneVersion pkg_version) {
-    auto parsed = owe::ParseJson(buf);
+    auto parsed = owe::ParseNJson(buf);
     if (parsed.is_err()) {
         rstd_error("Can't parse scene json: {}", parsed.unwrap_err());
         return None();
@@ -330,7 +326,7 @@ Option<SceneDocument> ParseSceneDocumentJson(std::string_view buf, SceneVersion 
     return ParseSceneDocumentValue(parsed.unwrap(), pkg_version);
 }
 
-Option<SceneDocument> ParseSceneDocumentValue(owe::Json root, SceneVersion pkg_version) {
+Option<SceneDocument> ParseSceneDocumentValue(owe::NJson root, SceneVersion pkg_version) {
     SceneDocument doc;
     if (! doc.metadata.FromJson(root, pkg_version)) return None();
     doc.objects                = ParseSceneObjectRecords(root, doc.objects_are_array);

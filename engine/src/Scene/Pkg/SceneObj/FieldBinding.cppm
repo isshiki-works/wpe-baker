@@ -47,7 +47,7 @@ struct AnimOptions : rstd::DefaultInClass<AnimOptions, rstd::clone::Clone> {
     bool        wraploop { false };
     // `smoothing` may be null/int/float in the corpus; kept as raw json
     // until a renderer consumer needs it.
-    owe::Json              smoothing;
+    owe::NJson             smoothing;
     Option<String>         parent;
     Vec<String>            children;
     std::vector<AnimEvent> events;
@@ -66,16 +66,17 @@ struct AnimCurve : rstd::DefaultInClass<AnimCurve, rstd::clone::Clone> {
 };
 
 // FromJson helpers (defined in FieldBinding.cpp).
-bool ParseAnimKeyframeTangent(const owe::Json&, AnimKeyframeTangent&);
-bool ParseAnimKeyframe(const owe::Json&, AnimKeyframe&);
-bool ParseAnimAxis(const owe::Json&, std::vector<AnimKeyframe>&);
-bool ParseAnimEvent(const owe::Json&, AnimEvent&);
-bool ParseAnimOptions(const owe::Json&, AnimOptions&);
-bool ParseAnimCurve(const owe::Json&, AnimCurve&);
+bool ParseAnimKeyframeTangent(const owe::NJson&, AnimKeyframeTangent&);
+bool ParseAnimKeyframe(const owe::NJson&, AnimKeyframe&);
+bool ParseAnimAxis(const owe::NJson&, std::vector<AnimKeyframe>&);
+bool ParseAnimEvent(const owe::NJson&, AnimEvent&);
+bool ParseAnimOptions(const owe::NJson&, AnimOptions&);
+bool ParseAnimCurve(const owe::NJson&, AnimCurve&);
 
 struct ScriptBinding {
     std::string source;
-    owe::Json   initial_value;
+    // 仍是 rstd：只有脚本运行时（C 组）读，AbsorbFieldBinding 处 ToRstd（过渡桥）。
+    owe::Json initial_value;
 
     auto clone() const -> ScriptBinding;
 };
@@ -84,6 +85,7 @@ struct FieldBindingSpec {
     u64                   identity {};
     String                field;
     Option<AnimCurve>     animation;
+    // 同 ScriptBinding::initial_value，仍是 rstd。
     Option<owe::Json>     script_properties;
     Option<ScriptBinding> script;
     Option<String>        user;
@@ -109,12 +111,12 @@ private:
     Vec<FieldBindingSpec> entries;
 };
 
-std::size_t AbsorbFieldBinding(std::string_view field, const owe::Json& value, FieldBindings& out);
+std::size_t AbsorbFieldBinding(std::string_view field, const owe::NJson& value, FieldBindings& out);
 
 // Walks every direct child of `obj_json` and, when the child is an
 // object containing `animation` and/or `scriptproperties`, captures into
 // `out`. Idempotent: re-running on the same json overwrites prior
 // entries. Returns the count of bindings absorbed.
-std::size_t AbsorbAllFieldBindings(const owe::Json& obj_json, FieldBindings& out);
+std::size_t AbsorbAllFieldBindings(const owe::NJson& obj_json, FieldBindings& out);
 
 } // namespace owe::wpscene

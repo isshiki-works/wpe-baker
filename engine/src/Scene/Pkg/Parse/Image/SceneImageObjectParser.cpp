@@ -144,7 +144,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
         if (! json) {
             return;
         }
-        colorMat.FromJson(ToRstd(*json));
+        colorMat.FromJson(*json);
         colorMat.combos[rstd::cppstd::to_string(WE_CB_BONECOUNT)] = i32(1);
         color_blend_attachment_override = ApplyImageColorBlend(colorMat, wpimgobj);
         colorEffect.materials.push_back(std::move(colorMat));
@@ -983,7 +983,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                 std::shared_ptr<SceneImageEffect> result;
                 wpscene::Material                 passthrough_mat;
                 auto json = LoadJsonFile(vfs, "/assets/materials/util/effectpassthrough.json");
-                if (! json || ! passthrough_mat.FromJson(ToRstd(*json))) {
+                if (! json || ! passthrough_mat.FromJson(*json)) {
                     rstd_error("parse effectpassthrough.json failed for '{}'", wpimgobj.name);
                     return result;
                 }
@@ -1066,7 +1066,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
             if (! json) {
                 rstd_error("parse effectpassthrough.json failed for '{}'", wpimgobj.name);
             } else {
-                if (! passthrough_mat.FromJson(ToRstd(*json))) {
+                if (! passthrough_mat.FromJson(*json)) {
                     rstd_error("parse effectpassthrough.json failed for '{}'", wpimgobj.name);
                 } else {
                     if (passthrough_mat.textures.empty())

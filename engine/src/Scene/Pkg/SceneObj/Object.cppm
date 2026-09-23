@@ -18,7 +18,7 @@ export namespace owe::wpscene
 {
 
 struct ContainerObject {
-    bool FromJson(const owe::Json&);
+    bool FromJson(const owe::NJson&);
 
     i32                  id { 0 };
     std::string          name;
@@ -32,7 +32,7 @@ struct ContainerObject {
     u32                  parent { 0 };
     std::string          attachment;
     Vec<i32>             dependencies;
-    owe::Json            instance;
+    owe::NJson           instance;
     VisibleUserBinding   visible_user;
     FieldBindings        field_bindings;
 };

@@ -11,7 +11,7 @@ using namespace rstd::prelude;
 using namespace rstd::literals;
 using namespace owe::wpscene;
 
-bool ContainerObject::FromJson(const owe::Json& json) {
+bool ContainerObject::FromJson(const owe::NJson& json) {
     if (! json.is_object()) return false;
     owe::GetJsonValue(json, "id", id, false);
     owe::GetJsonValue(json, "name", name, false);
@@ -25,7 +25,7 @@ bool ContainerObject::FromJson(const owe::Json& json) {
     owe::GetJsonValue(json, "parent", parent, false);
     owe::GetJsonValue(json, "attachment", attachment, false);
     owe::GetJsonValue(json, "dependencies", dependencies, false);
-    if (auto value = json.get("instance"_str); value.is_some()) instance = (*value)->clone();
+    if (auto value = owe::Find(json, "instance"); value != nullptr) instance = *value;
     AbsorbAllFieldBindings(json, field_bindings);
     return true;
 }

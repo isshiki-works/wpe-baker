@@ -1,5 +1,7 @@
 module;
 
+#include "JsonNlohmann.hpp"
+
 module wescene.pkg.scene_obj;
 import rstd;
 import rstd.cppstd;
@@ -16,7 +18,7 @@ Atomic<u64> next_field_binding_identity { u64(1) };
 namespace owe::wpscene
 {
 
-bool ParseAnimKeyframeTangent(const owe::Json& json, AnimKeyframeTangent& out) {
+bool ParseAnimKeyframeTangent(const owe::NJson& json, AnimKeyframeTangent& out) {
     if (! json.is_object()) return false;
     out.enabled = true;
     owe::GetJsonValue(json, "enabled", out.enabled, false);
@@ -26,39 +28,38 @@ bool ParseAnimKeyframeTangent(const owe::Json& json, AnimKeyframeTangent& out) {
     return true;
 }
 
-bool ParseAnimKeyframe(const owe::Json& json, AnimKeyframe& out) {
+bool ParseAnimKeyframe(const owe::NJson& json, AnimKeyframe& out) {
     if (! json.is_object()) return false;
     owe::GetJsonValue(json, "frame", out.frame, false);
     owe::GetJsonValue(json, "value", out.value, false);
     owe::GetJsonValue(json, "step", out.step, false);
     owe::GetJsonValue(json, "lockangle", out.lockangle, false);
     owe::GetJsonValue(json, "locklength", out.locklength, false);
-    if (auto front = json.get("front"_str); front.is_some())
-        ParseAnimKeyframeTangent(**front, out.front);
-    if (auto back = json.get("back"_str); back.is_some())
-        ParseAnimKeyframeTangent(**back, out.back);
+    if (auto front = owe::Find(json, "front"); front != nullptr)
+        ParseAnimKeyframeTangent(*front, out.front);
+    if (auto back = owe::Find(json, "back"); back != nullptr)
+        ParseAnimKeyframeTangent(*back, out.back);
     return true;
 }
 
-bool ParseAnimAxis(const owe::Json& json, std::vector<AnimKeyframe>& out) {
+bool ParseAnimAxis(const owe::NJson& json, std::vector<AnimKeyframe>& out) {
     if (! json.is_array()) return false;
-    auto array = json.as_array();
-    out.reserve((*array)->len().to_primitive());
-    for (const auto& jK : **array) {
+    out.reserve(json.size());
+    for (const auto& jK : json) {
         AnimKeyframe k;
         if (ParseAnimKeyframe(jK, k)) out.push_back(std::move(k));
     }
     return true;
 }
 
-bool ParseAnimEvent(const owe::Json& json, AnimEvent& out) {
+bool ParseAnimEvent(const owe::NJson& json, AnimEvent& out) {
     if (! json.is_object()) return false;
     owe::GetJsonValue(json, "frame", out.frame, false);
     owe::GetJsonValue(json, "name", out.name, false);
     return ! out.name.empty();
 }
 
-bool ParseAnimOptions(const owe::Json& json, AnimOptions& out) {
+bool ParseAnimOptions(const owe::NJson& json, AnimOptions& out) {
     if (! json.is_object()) return false;
     owe::GetJsonValue(json, "fps", out.fps, false);
     owe::GetJsonValue(json, "length", out.length, false);
@@ -66,24 +67,24 @@ bool ParseAnimOptions(const owe::Json& json, AnimOptions& out) {
     owe::GetJsonValue(json, "name", out.name, false);
     owe::GetJsonValue(json, "startpaused", out.startpaused, false);
     owe::GetJsonValue(json, "wraploop", out.wraploop, false);
-    if (auto value = json.get("smoothing"_str); value.is_some()) out.smoothing = (*value)->clone();
-    if (auto value = json.get("parent"_str); value.is_some()) {
+    if (auto value = owe::Find(json, "smoothing"); value != nullptr) out.smoothing = *value;
+    if (auto value = owe::Find(json, "parent"); value != nullptr) {
         std::string key;
-        if (owe::GetJsonValue(**value, "key", key, false) && ! key.empty())
+        if (owe::GetJsonValue(*value, "key", key, false) && ! key.empty())
             out.parent = Some(String::make(rstd::cppstd::as_str(key).unwrap()));
     }
-    if (auto value = json.get("children"_str); value.is_some()) {
-        if (auto array = (*value)->as_array(); array.is_some()) {
-            for (const auto& entry : **array) {
+    if (auto value = owe::Find(json, "children"); value != nullptr) {
+        if (value->is_array()) {
+            for (const auto& entry : *value) {
                 std::string key;
                 if (owe::GetJsonValue(entry, "key", key, false) && ! key.empty())
                     out.children.push(String::make(rstd::cppstd::as_str(key).unwrap()));
             }
         }
     }
-    if (auto value = json.get("events"_str); value.is_some()) {
-        if (auto array = (*value)->as_array(); array.is_some()) {
-            for (const auto& entry : **array) {
+    if (auto value = owe::Find(json, "events"); value != nullptr) {
+        if (value->is_array()) {
+            for (const auto& entry : *value) {
                 AnimEvent event;
                 if (ParseAnimEvent(entry, event)) out.events.push_back(std::move(event));
             }
@@ -100,20 +101,20 @@ auto AnimOptions::clone() const -> AnimOptions {
     result.name        = name;
     result.startpaused = startpaused;
     result.wraploop    = wraploop;
-    result.smoothing   = smoothing.clone();
+    result.smoothing   = smoothing;
     result.parent      = parent.is_some() ? Some(parent->clone()) : None();
     for (const auto& child : children) result.children.push(child.clone());
     result.events = events;
     return result;
 }
 
-bool ParseAnimCurve(const owe::Json& json, AnimCurve& out) {
+bool ParseAnimCurve(const owe::NJson& json, AnimCurve& out) {
     if (! json.is_object()) return false;
-    if (auto value = json.get("c0"_str); value.is_some()) ParseAnimAxis(**value, out.c0);
-    if (auto value = json.get("c1"_str); value.is_some()) ParseAnimAxis(**value, out.c1);
-    if (auto value = json.get("c2"_str); value.is_some()) ParseAnimAxis(**value, out.c2);
-    if (auto value = json.get("options"_str); value.is_some())
-        ParseAnimOptions(**value, out.options);
+    if (auto value = owe::Find(json, "c0"); value != nullptr) ParseAnimAxis(*value, out.c0);
+    if (auto value = owe::Find(json, "c1"); value != nullptr) ParseAnimAxis(*value, out.c1);
+    if (auto value = owe::Find(json, "c2"); value != nullptr) ParseAnimAxis(*value, out.c2);
+    if (auto value = owe::Find(json, "options"); value != nullptr)
+        ParseAnimOptions(*value, out.options);
     owe::GetJsonValue(json, "relative", out.relative, false);
     return true;
 }
@@ -200,51 +201,46 @@ void FieldBindings::Update(const FieldBindings& other) {
     for (const auto& binding : other.entries) *Ensure(binding.field.as_str()) = binding.clone();
 }
 
-std::size_t AbsorbFieldBinding(std::string_view field, const owe::Json& field_value,
+std::size_t AbsorbFieldBinding(std::string_view field, const owe::NJson& field_value,
                                FieldBindings& out) {
     if (! field_value.is_object()) return 0;
     std::size_t count = 0;
-    if (auto animation = field_value.get("animation"_str); animation.is_some()) {
+    if (auto animation = owe::Find(field_value, "animation"); animation != nullptr) {
         AnimCurve curve;
-        if (ParseAnimCurve(**animation, curve)) {
+        if (ParseAnimCurve(*animation, curve)) {
             out.Ensure(rstd::cppstd::as_str(field).unwrap())->animation = Some(rstd::move(curve));
             ++count;
         }
     }
-    if (auto properties = field_value.get("scriptproperties"_str); properties.is_some()) {
+    if (auto properties = owe::Find(field_value, "scriptproperties"); properties != nullptr) {
         out.Ensure(rstd::cppstd::as_str(field).unwrap())->script_properties =
-            Some((*properties)->clone());
+            Some(owe::ToRstd(*properties)); // 过渡桥：script_properties 仍是 rstd
         ++count;
     }
-    if (auto user = field_value.get("user"_str); user.is_some()) {
-        auto key = (*user)->as_str();
-        if (key.is_some()) {
-            out.Ensure(rstd::cppstd::as_str(field).unwrap())->user = Some(String::make(*key));
+    if (auto user = owe::Find(field_value, "user"); user != nullptr) {
+        if (user->is_string()) {
+            out.Ensure(rstd::cppstd::as_str(field).unwrap())->user = Some(
+                String::make(rstd::cppstd::as_str(user->get_ref<const std::string&>()).unwrap()));
             ++count;
         }
     }
-    auto script = field_value.get("script"_str);
-    if (script.is_some() && (*script)->is_string()) {
+    auto script = owe::Find(field_value, "script");
+    if (script != nullptr && script->is_string()) {
         ScriptBinding binding;
-        binding.source = rstd::cppstd::to_string(*(*script)->as_str());
-        if (auto value = field_value.get("value"_str); value.is_some())
-            binding.initial_value = (*value)->clone();
+        binding.source = script->get_ref<const std::string&>();
+        if (auto value = owe::Find(field_value, "value"); value != nullptr)
+            binding.initial_value = owe::ToRstd(*value); // 过渡桥：同上
         out.Ensure(rstd::cppstd::as_str(field).unwrap())->script = Some(rstd::move(binding));
         ++count;
     }
     return count;
 }
 
-std::size_t AbsorbAllFieldBindings(const owe::Json& obj_json, FieldBindings& out) {
+std::size_t AbsorbAllFieldBindings(const owe::NJson& obj_json, FieldBindings& out) {
     if (! obj_json.is_object()) return 0;
-    std::size_t n      = 0;
-    auto        object = obj_json.as_object();
-    (*object)->iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        const auto  field             = rstd::cppstd::as_string_view(entry_key->as_str());
-        const auto& field_value       = *entry_value;
+    std::size_t n = 0;
+    for (const auto& [field, field_value] : obj_json.items())
         n += AbsorbFieldBinding(field, field_value, out);
-    });
     return n;
 }
 

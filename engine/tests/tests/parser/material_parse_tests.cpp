@@ -12,7 +12,7 @@ namespace
 {
 
 void ParseBinding(owe::wpscene::FieldBindings& bindings, ref<str> field, ref<str> json) {
-    auto value = rstd::json::from_str(json).unwrap();
+    auto value = owe::ParseNJson(rstd::cppstd::as_string_view(json)).unwrap();
     ASSERT_GT(
         owe::wpscene::AbsorbFieldBinding(rstd::cppstd::as_string_view(field), value, bindings), 0u);
 }
@@ -27,7 +27,7 @@ bool HasIssue(const owe::SceneAnimationBindingScope& scope, owe::SceneAnimationB
 } // namespace
 
 TEST(MaterialParser, ParsesLegacyUserShaderValues) {
-    auto j = rstd::json::from_str(R"({
+    auto j = owe::ParseNJson(R"({
         "passes": [
             {
                 "shader": "flag",
@@ -39,7 +39,7 @@ TEST(MaterialParser, ParsesLegacyUserShaderValues) {
                 }
             }
         ]
-    })"_str)
+    })")
                  .unwrap();
 
     owe::wpscene::Material material;
@@ -52,16 +52,16 @@ TEST(MaterialParser, ParsesLegacyUserShaderValues) {
 }
 
 TEST(MaterialParser, PreservesConstantShaderValueScriptBindingsAcrossPassMerge) {
-    auto material_json = rstd::json::from_str(R"({
+    auto material_json = owe::ParseNJson(R"({
         "passes": [{
             "shader": "effect",
             "constantshadervalues": {
                 "color": [1.0, 1.0, 1.0]
             }
         }]
-    })"_str)
+    })")
                              .unwrap();
-    auto pass_json     = rstd::json::from_str(R"({
+    auto pass_json     = owe::ParseNJson(R"({
         "constantshadervalues": {
             "color": {
                 "script": "export function update(value) { return value; }",
@@ -70,7 +70,7 @@ TEST(MaterialParser, PreservesConstantShaderValueScriptBindingsAcrossPassMerge) 
                 "value": "0.1 0.2 0.3"
             }
         }
-    })"_str)
+    })")
                              .unwrap();
 
     owe::wpscene::Material material;

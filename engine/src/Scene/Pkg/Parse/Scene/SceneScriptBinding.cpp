@@ -100,7 +100,7 @@ bool SceneHasScripts(slice<SceneObjectVar> scene_objs) {
 bool AppendLayerCompositePassthroughEffect(fs::VFS& vfs, wpscene::ImageObject& image) {
     wpscene::Material material;
     auto              json = LoadJsonFile(vfs, "/assets/materials/util/effectpassthrough.json");
-    if (! json || ! material.FromJson(ToRstd(*json))) {
+    if (! json || ! material.FromJson(*json)) {
         rstd_error("parse effectpassthrough.json failed for '{}'", image.name);
         return false;
     }
@@ -550,7 +550,7 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
         }
 
         wpscene::FieldBindings fields;
-        (void)wpscene::AbsorbFieldBinding("visible", *authored.visible_binding, fields);
+        (void)wpscene::AbsorbFieldBinding("visible", FromRstd(*authored.visible_binding), fields);
         auto binding = fields.Get("visible"_str);
         if (binding.is_none() || (**binding).script.is_none()) continue;
 
