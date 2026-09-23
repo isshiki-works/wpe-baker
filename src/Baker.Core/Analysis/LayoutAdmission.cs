@@ -131,7 +131,7 @@ internal sealed class LayoutAdmission
         int nextId = checked(objects.Keys.Max() + 1);
         var replacements = plan["video_groups"]!.AsArray().OfType<JsonObject>().ToDictionary(
             group => group["id"]!.GetValue<string>(), group => new JsonObject { ["id"] = nextId++, ["parent"] = group["parent_id"]?.DeepClone() });
-        try { _ = HybridBakeService.AssembleAllocationObjects(objects, plan, replacements, dependencies ?? new JsonArray()); return null; }
+        try { _ = SceneAssembler.AssembleAllocationObjects(objects, plan, replacements, dependencies ?? new JsonArray()); return null; }
         catch (InvalidDataException error) when (Blocker.Of(error) is Blocker blocker) { return blocker; }
     }
 }
