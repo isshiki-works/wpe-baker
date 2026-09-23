@@ -181,6 +181,7 @@ using (var source = new ProjectSource(noLoopSource))
     JsonObject rejected = await new HybridBakeService(new("not-started", "not-started", "not-started", []))
         .BakeAsync(new(2, noLoopPlan, rejectedOutput, ProjectDirectory: rejectedDestination));
     Check(rejected["status"]?.GetValue<string>() == "candidate_rejected_no_loop" &&
+        rejected["reason_localized"]?["key"]?.GetValue<string>() == "bake.loop_unresolved" &&
         File.Exists(Path.Combine(rejectedOutput, "bake.json")) && !Directory.Exists(Path.Combine(rejectedOutput, "project")),
         "a stale observed loop is re-parsed as unresolved without indexing or rendering");
     Check(!Directory.Exists(rejectedDestination), "rejected candidates are not published into wallpaper storage");
