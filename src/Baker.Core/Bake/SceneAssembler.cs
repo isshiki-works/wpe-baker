@@ -79,6 +79,7 @@ internal static class SceneAssembler
         var finalObjects = new JsonArray();
         var emitted = new HashSet<int>();
         var expected = new List<int>();
+        var videos = new List<(JsonObject Video, JsonObject Group)>();
         var sourceDrawOrder = new List<int>();
         void SourceOrder(int id)
         {
@@ -107,7 +108,9 @@ internal static class SceneAssembler
                 if (Int(replacement["parent"]) != Int(group["parent_id"]))
                     throw new Blocker(BlockerCode.ReplacementParentMismatch).ToException();
                 if (Int(replacement["parent"]) is int parent) Emit(parent);
-                finalObjects.Add(replacement.DeepClone());
+                var video = replacement.DeepClone().AsObject();
+                finalObjects.Add(video);
+                videos.Add((video, group));
                 expected.Add(Id(replacement));
             }
             else if (Int(entry["live_root"]) is int unit)
@@ -124,20 +127,64 @@ internal static class SceneAssembler
 
         // Native FinalizeScene appends siblings in declaration order; EmitSceneNode traverses them
         // depth first. Verify parented videos occupy the planned sibling positions.
-        var all = finalObjects.OfType<JsonObject>().ToArray();
-        var ids = all.Select(Id).ToHashSet();
-        var expectedIds = expected.ToHashSet();
-        var actual = new List<int>();
-        void Visit(int id)
+        bool KeepsDrawOrder(JsonArray objects, List<int> order)
         {
-            if (expectedIds.Contains(id)) actual.Add(id);
-            foreach (var child in all.Where(obj => Int(obj["parent"]) == id)) Visit(Id(child));
+            var all = objects.OfType<JsonObject>().ToArray();
+            var ids = all.Select(Id).ToHashSet();
+            var orderIds = order.ToHashSet();
+            var actual = new List<int>();
+            void Visit(int id)
+            {
+                if (orderIds.Contains(id)) actual.Add(id);
+                foreach (var child in all.Where(obj => Int(obj["parent"]) == id)) Visit(Id(child));
+            }
+            foreach (var obj in all.Where(obj => Int(obj["parent"]) is not int parent || !ids.Contains(parent)))
+                Visit(Id(obj));
+            return actual.SequenceEqual(order);
         }
-        foreach (var obj in all.Where(obj => Int(obj["parent"]) is not int parent || !ids.Contains(parent)))
-            Visit(Id(obj));
-        if (!actual.SequenceEqual(expected))
+        // 保留的脚本查询过公开图层表时，按原作声明顺序逐位重排：没保留的对象留同 id、同名、不绘制的占位，
+        // 每个视频组占用组内一个没保留的成员（或它在组父级下的祖先）的位置和 id。找不到槽位或绘制顺序变了就不重排，交给下面的检查。
+        var moved = new Dictionary<int, int>();
+        JsonArray? PublicLayerTable()
+        {
+            var kept = finalObjects.OfType<JsonObject>().Where(obj => videos.All(v => v.Video != obj)).ToDictionary(Id);
+            var bySlot = new Dictionary<int, JsonObject>();
+            foreach (var (video, group) in videos)
+            {
+                int? groupParent = Int(group["parent_id"]);
+                int? SlotOf(int id)
+                {
+                    while (originalObjects.TryGetValue(id, out var obj))
+                    {
+                        int? up = Int(obj["parent"]) is int p && originalObjects.ContainsKey(p) ? p : null;
+                        if (up == groupParent) return id;
+                        if (up is not int next) return null;
+                        id = next;
+                    }
+                    return null;
+                }
+                var members = group["layer_ids"]!.AsArray().Select(n => Int(n)).OfType<int>().ToHashSet();
+                if (sourceDrawOrder.Where(members.Contains).Select(SlotOf)
+                    .FirstOrDefault(slot => slot is int id && !kept.ContainsKey(id) && !bySlot.ContainsKey(id)) is not int free) return null;
+                var placed = video.DeepClone().AsObject();
+                placed["id"] = free;
+                bySlot[free] = placed;
+                moved[Id(video)] = free;
+            }
+            var table = new JsonArray();
+            foreach (var (id, original) in originalObjects)
+                table.Add(bySlot.GetValueOrDefault(id) ?? kept.GetValueOrDefault(id)?.DeepClone() ??
+                    new JsonObject { ["id"] = id, ["name"] = original["name"]?.DeepClone() });
+            return table;
+        }
+        if (PublicLayerQueries(finalObjects.OfType<JsonObject>(), dependencies).Any() && PublicLayerTable() is JsonArray table)
+        {
+            var remapped = expected.Select(id => moved.GetValueOrDefault(id, id)).ToList();
+            if (KeepsDrawOrder(table, remapped)) (finalObjects, expected) = (table, remapped);
+        }
+        if (!KeepsDrawOrder(finalObjects, expected))
             throw new Blocker(BlockerCode.HierarchyChangesDrawOrder).ToException();
-        GuardPublicLayerQueries(originalObjects.Values, all, dependencies);
+        GuardPublicLayerQueries(originalObjects.Values, finalObjects.OfType<JsonObject>(), dependencies);
         return finalObjects;
     }
 
@@ -151,66 +198,32 @@ internal static class SceneAssembler
         return merged;
     }
 
+    /// <summary>保留下来、带脚本的对象在运行时查询公开图层表（数量、下标、枚举、顺序）的记录。</summary>
+    private static IEnumerable<JsonObject> PublicLayerQueries(IEnumerable<JsonObject> finalObjects, JsonArray dependencies)
+    {
+        var finalById = finalObjects.ToDictionary(Id);
+        return dependencies.OfType<JsonObject>().Where(dependency =>
+            dependency["operation"]?.GetValue<string>() == "query" && dependency["property"]?.GetValue<string>() is
+                "layer_numeric_index" or "layer_count" or "layer_enumeration" or "layer_index" or "layer_order" &&
+            Int(dependency["owner"]) is int id && finalById.TryGetValue(id, out var owner) &&
+            SceneAnalyzer.Walk(owner).OfType<JsonObject>().Any(node => node["script"] is JsonValue));
+    }
+
     /// <summary>
-    /// 保留下来的脚本查询过图层数量或顺序时，成品对象表的数量/顺序必须与原作相同；
-    /// 唯一放行的例外是脚本在 init 里按自己的位置插入新图层（<see cref="IsSelfAnchoredInsert"/>）。
+    /// 保留下来的脚本查询过公开图层表时，成品对象表的数量/顺序必须与原作相同（按分配装配时已逐位重排）。
     /// 成对比较（CandidateValidation）用同一条检查核对两边的运行时查询。
     /// </summary>
     internal static void GuardPublicLayerQueries(IEnumerable<JsonObject> originalObjects,
         IEnumerable<JsonObject> finalObjects, JsonArray dependencies)
     {
         var original = originalObjects.Select(Id).ToArray();
-        var final = finalObjects.ToArray();
-        var finalById = final.ToDictionary(Id);
-        foreach (var query in dependencies.OfType<JsonObject>().Where(dependency =>
-            dependency["operation"]?.GetValue<string>() == "query" && dependency["property"]?.GetValue<string>() is
-                "layer_numeric_index" or "layer_count" or "layer_enumeration" or "layer_index" or "layer_order"))
+        var final = finalObjects.Select(Id).ToArray();
+        foreach (var query in PublicLayerQueries(finalObjects, dependencies))
         {
-            int? owner = Int(query["owner"]);
-            if (owner is not int id || !finalById.TryGetValue(id, out var objectWithScript) ||
-                !SceneAnalyzer.Walk(objectWithScript).OfType<JsonObject>().Any(node => node["script"] is JsonValue)) continue;
             string property = query["property"]!.GetValue<string>();
-            if ((property == "layer_count" ? original.Length != final.Length : !original.SequenceEqual(final.Select(Id))) &&
-                !SelfAnchoredInsert(originalObjects, finalById, query, property))
+            if (property == "layer_count" ? original.Length != final.Length : !original.SequenceEqual(final))
                 throw new Blocker(BlockerCode.PublicLayerQuery,
                     [property, property == "layer_count" ? "count" : "order"], [property, property == "layer_count" ? "数量" : "顺序"]).ToException();
         }
-    }
-
-    private static bool SelfAnchoredInsert(IEnumerable<JsonObject> originalObjects, IReadOnlyDictionary<int, JsonObject> final,
-        JsonObject query, string property)
-    {
-        if (property is not ("layer_index" or "layer_order") || query["initialization"]?.GetValue<bool>() != true ||
-            Int(query["owner"]) is not int owner || query["binding"]?.GetValue<string>() is not string binding) return false;
-        JsonObject? source = originalObjects.FirstOrDefault(obj => Id(obj) == owner);
-        if (source is null || !final.TryGetValue(owner, out var candidate) || Int(source["parent"]) != Int(candidate["parent"])) return false;
-        string? sourceScript = source[binding]?["script"]?.GetValue<string>();
-        return sourceScript is not null && sourceScript == candidate[binding]?["script"]?.GetValue<string>() && IsSelfAnchoredInsert(sourceScript);
-    }
-
-    private static bool IsSelfAnchoredInsert(string code)
-    {
-        var tokens = new List<string>();
-        for (int i = 0; i < code.Length;)
-        {
-            char c = code[i]; if (char.IsWhiteSpace(c)) { ++i; continue; } if (c == '`') return false;
-            if (c is '\'' or '"') { char quote = c; ++i; while (i < code.Length && code[i] != quote) { if (code[i++] == '\\' && i < code.Length) ++i; } if (i == code.Length) return false; ++i; tokens.Add("$literal"); continue; }
-            if (c == '/' && i + 1 < code.Length && (code[i + 1] == '/' || code[i + 1] == '*')) { bool line = code[i + 1] == '/'; i += 2; if (line) while (i < code.Length && code[i] is not '\r' and not '\n') ++i; else { while (i + 1 < code.Length && (code[i] != '*' || code[i + 1] != '/')) ++i; if (i + 1 >= code.Length) return false; i += 2; } continue; }
-            if (c == '/' && (tokens.Count == 0 || tokens[^1] is "=" or "(" or "[" or "{" or "," or ":" or ";" or "!")) { ++i; while (i < code.Length && code[i] != '/') { if (code[i++] == '\\' && i < code.Length) ++i; } if (i == code.Length) return false; ++i; while (i < code.Length && char.IsLetter(code[i])) ++i; tokens.Add("$literal"); continue; }
-            if (char.IsLetter(c) || c is '_' or '$') { int start = i++; while (i < code.Length && (char.IsLetterOrDigit(code[i]) || code[i] is '_' or '$')) ++i; tokens.Add(code[start..i]); continue; }
-            if (char.IsDigit(c)) { int start = i++; while (i < code.Length && (char.IsLetterOrDigit(code[i]) || code[i] == '.')) ++i; tokens.Add(code[start..i]); continue; }
-            if (c == '=' && i + 1 < code.Length && code[i + 1] == '>') { tokens.Add("=>"); i += 2; continue; }
-            if ("(){};,.=<>+-*![]:?/".Contains(c)) { tokens.Add(c.ToString()); ++i; continue; } return false;
-        }
-        bool At(int at, params string[] expected) => at + expected.Length <= tokens.Count && expected.Select((value, offset) => tokens[at + offset] == value).All(match => match);
-        var forbidden = new HashSet<string>(StringComparer.Ordinal) { "eval", "Function", "Reflect", "Proxy", "with", "globalThis", "constructor", "__proto__", "prototype", "import" }; if (tokens.Any(forbidden.Contains)) return false;
-        int[] depth = new int[tokens.Count]; int level = 0; for (int i = 0; i < tokens.Count; ++i) { depth[i] = level; if (tokens[i] == "{") ++level; else if (tokens[i] == "}" && --level < 0) return false; } if (level != 0) return false;
-        int Match(int open, string left, string right) { int nesting = 0; for (int i = open; i < tokens.Count; ++i) { if (tokens[i] == left) ++nesting; else if (tokens[i] == right && --nesting == 0) return i; } return -1; }
-        int init = -1, initBody = -1, initEnd = -1; for (int i = 0; i < tokens.Count; ++i) { if (!At(i, "function", "init", "(")) continue; int close = Match(i + 2, "(", ")"); if (close != i + 3 || close + 1 >= tokens.Count || tokens[close + 1] != "{" || init >= 0) return false; init = i; initBody = close + 2; initEnd = Match(close + 1, "{", "}"); if (initEnd < 0) return false; } if (init < 0) return false;
-        int anchor = -1, bar = -1, create = -1, sort = -1; for (int i = initBody; i < initEnd; ++i) { if (tokens[i] is "function" or "async" or "=>" or "setTimeout" or "setInterval") return false; if (At(i, "let") && i + 9 < initEnd && depth[i] == depth[initBody] && At(i + 2, "=", "thisScene", ".", "getLayerIndex", "(", "thisLayer", ")", ";")) { if (anchor >= 0) return false; anchor = i + 1; } if (At(i, "let") && i + 9 < initEnd && At(i + 2, "=", "thisScene", ".", "createLayer", "(", "$literal", ")", ";")) { if (bar >= 0) return false; bar = i + 1; create = i; } if (At(i, "thisScene", ".", "sortLayer", "(")) { if (sort >= 0) return false; sort = i; } }
-        if (anchor < 0 || bar < 0 || sort < 0 || anchor >= create || create >= sort || depth[create] != depth[sort] || !At(sort, "thisScene", ".", "sortLayer", "(", tokens[bar], ",", tokens[anchor], ")", ";")) return false;
-        for (int i = 0; i < tokens.Count; ++i) { if (tokens[i] == "thisScene" && i != anchor + 2 && i != create + 3 && i != sort) return false; if (tokens[i] == "thisLayer" && i + 1 < tokens.Count && tokens[i + 1] == "=") return false; if (i + 1 < tokens.Count && (tokens[i] is "let" or "const" or "var") && tokens[i + 1] == "thisLayer") return false; if (tokens[i] == tokens[anchor] && i != anchor && i != sort + 6) return false; }
-        for (int i = create + 10; i < sort;) { if (!At(i, tokens[bar], ".") || i + 3 >= sort || tokens[i + 3] != "=") return false; int start = i; while (i < sort && tokens[i] != ";") { if (i > start && tokens[i] == tokens[bar]) return false; ++i; } if (i++ >= sort) return false; }
-        return true;
     }
 }
