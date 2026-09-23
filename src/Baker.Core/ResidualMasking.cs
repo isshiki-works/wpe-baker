@@ -12,16 +12,6 @@ public readonly record struct ResidualFirstLayer(bool Passed, double MaximumWors
     int WorstTileX, int WorstTileY, double HardCutGlobalRgbMae);
 
 /// <summary>
-/// 起点搜索里的一个候选（降采样样本上的读数）。<paramref name="WorstTile"/> 是 Δ_0 的最差瓦片；
-/// <paramref name="StrideWorstTile"/> 是 Δ_stride 的最差瓦片，步长不在淡化窗口内或样本不够时为 null。
-/// </summary>
-public readonly record struct ResidualStartCandidate(ulong Start, double Global, double WorstTile, double? StrideWorstTile)
-{
-    /// <summary>排序键：样本上能看到的第一层量 max(M(Δ_0), M(Δ_stride))。</summary>
-    public double SortKey => StrideWorstTile is double stride ? Math.Max(WorstTile, stride) : WorstTile;
-}
-
-/// <summary>
 /// 解析周期 + 残差掩盖规则。周期只能来自解析（CommonLoopSolver 候选）；未解析的时间分量必须逐条
 /// 拿出"数学上随机"的证明，才允许在接缝处用固定窗口的整帧交叉淡化掩盖其残差：脚本随机重启的精灵、满足平稳随机判据
 /// 的粒子系统。位移类分量（foliagesway 这类 UV/顶点抖动）即使幅度有界也不可掩盖——人眼定标判定淡化后位置跳变明显，

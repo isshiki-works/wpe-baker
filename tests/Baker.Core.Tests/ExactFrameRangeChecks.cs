@@ -68,11 +68,6 @@ internal static class ExactFrameRangeChecks
             still["first_layer"]!["hard_cut_global_rgb_mae_255"]!.GetValue<double>() == 1.25 &&
             Math.Abs(still["first_layer"]!["ghost_peak_worst_tile_rgb_mae_255"]!.GetValue<double>() - 20.0 * 12 / 25) < 1e-3,
             "静止场景里一块 20 级的残差按 48/255 与 2/255 通过第一层，场景没有普通运动不再把上限压到 0；重影峰值记为 min(w,1-w)·20");
-        JsonObject stillFade = await runner.ApplyLoopCrossfadeAsync(stillMaster, Period, Crossfade);
-        check(stillFade["step_self_check"]?["status"]?.GetValue<string>() == "verified_within_derived_bound" &&
-            stillFade["step_self_check"]!["per_step"]!.AsArray().Count == (int)Crossfade + 1 &&
-            stillFade["step_self_check"]!["maximum_excess_over_bound_255"]!.GetValue<double>() <= ResidualMasking.CrossfadeSelfCheckRounding255,
-            "静止残差 master 淡化后，成品每一步都在推导上界加 1/255 之内，自检通过并记进 loop_crossfade");
 
         // 残差在淡化窗口中段才出现：Δ_0 = 0、Δ_12.. = 60，第一层按 max_k 拒，而不是只看硬切。
         string lateMaster = Path.Combine(directory, "late-residual-60");
@@ -99,16 +94,11 @@ internal static class ExactFrameRangeChecks
                 $"{rate}：周期闭合的 master 淡化后仍是第 0..P-1 帧各一次，接缝处没有重复帧、没有跳帧（含 stream copy 尾段）");
             check(record["weight_verification"]?["status"]?.GetValue<string>() == "verified_against_source_frames",
                 $"{rate}：淡化权重校验用独立取帧路径通过");
-            check(record["step_self_check"]?["status"]?.GetValue<string>() == "verified_within_derived_bound",
-                $"{rate}：周期闭合 master 的淡化实现自检通过");
 
             // 帧号不回卷时，淡化第 i 帧必须是 (1-w)·f[i] + w·f[P+i]；混进 f[P-1+i] 在帧号位上会差出整条色块。
             string open = Path.Combine(directory, $"crossfade-open-{numerator}_{denominator}");
             _ = await EncodeMasterAsync(tools!, open, null, total, numerator, denominator, n => n);
-            JsonObject openRecord = await runner.ApplyLoopCrossfadeAsync(open, Period, Crossfade);
-            check(openRecord["step_self_check"]?["status"]?.GetValue<string>() == "verified_within_derived_bound" &&
-                openRecord["step_self_check"]!["maximum_step_worst_tile_rgb_mae_255"]!.GetValue<double>() > 0,
-                $"{rate}：帧号不回卷（残差很大、逐帧变化）的 master 上正确淡化的自检也通过");
+            _ = await runner.ApplyLoopCrossfadeAsync(open, Period, Crossfade);
             byte[] faded = await DecodeRawAsync(tools!, Path.Combine(open, "preview.mp4"), 0, Crossfade, numerator, denominator);
             bool matchesWrap = true, matchesShifted = true;
             foreach (uint i in new uint[] { 0, Crossfade / 2, Crossfade - 1 })
@@ -130,7 +120,7 @@ internal static class ExactFrameRangeChecks
                 $"{rate}：淡化窗口首、中、末帧混入的是 f[P+i] 而不是 f[P-1+i]");
         }
 
-        // 淡化实现错位一帧（混入 f[P-1+i]）的成品必须让自检抛内部错误；同一 master 上按正确公式合成的成品不抛。
+        // 淡化实现错位一帧（混入 f[P-1+i]）的成品必须让权重核对失败；同一 master 上按正确公式合成的成品通过。
         string mutation = Path.Combine(directory, "self-check-mutation");
         string source = await EncodeMasterAsync(tools!, mutation, "source", total, 60, 1, n => n);
         byte Faded(ulong n, int x, ulong wrapStart)
@@ -143,20 +133,23 @@ internal static class ExactFrameRangeChecks
             (n, x, _) => Faded(n, x, Period));
         string fadedShifted = await EncodeGrayAsync(tools!, mutation, "faded-shifted", Width, Height, Period, 60, 1,
             (n, x, _) => Faded(n, x, Period - 1));
-        JsonObject rightCheck = await runner.VerifyCrossfadeStepsAsync(source, fadedRight, Period, Crossfade, Width, Height, 60, 1, mutation);
-        check(rightCheck["status"]?.GetValue<string>() == "verified_within_derived_bound",
-            "按 w = (C-i)/(C+1) 混入 f[P+i] 的成品通过淡化实现自检");
-        string? mutationError = null;
-        try { _ = await runner.VerifyCrossfadeStepsAsync(source, fadedShifted, Period, Crossfade, Width, Height, 60, 1, mutation); }
-        catch (InvalidOperationException error) { mutationError = error.Message; }
-        check(mutationError?.Contains("内部错误", StringComparison.Ordinal) == true &&
-            !File.Exists(Path.Combine(mutation, "crossfade-steps-source.rgb")) && !File.Exists(Path.Combine(mutation, "crossfade-steps-faded.rgb")),
-            "混入 f[P-1+i]（淡化实现错位一帧）的成品让淡化自检抛内部错误，帧包照样清掉");
+        var rewrite = new MasterRewrite(new FfmpegTool(tools!));
+        // 两次核对各用一个工作目录：核对的 ffmpeg 日志按 CreateNew 写，产品路径由 CrossfadeAsync 先清残留。
+        string rightWork = Directory.CreateDirectory(Path.Combine(mutation, "right")).FullName;
+        string shiftedWork = Directory.CreateDirectory(Path.Combine(mutation, "shifted")).FullName;
+        JsonObject rightCheck = await rewrite.VerifyWeightsAsync(source, fadedRight, Period, Crossfade, Width, Height, 60, 1, rightWork, default);
+        check(rightCheck["status"]?.GetValue<string>() == "verified_against_source_frames",
+            "按 w = (C-i)/(C+1) 混入 f[P+i] 的成品通过权重核对");
+        bool shiftedRejected = false;
+        try { _ = await rewrite.VerifyWeightsAsync(source, fadedShifted, Period, Crossfade, Width, Height, 60, 1, shiftedWork, default); }
+        catch (InvalidDataException) { shiftedRejected = true; }
+        check(shiftedRejected && !File.Exists(Path.Combine(shiftedWork, "crossfade-verify-faded.rgb")),
+            "混入 f[P-1+i]（淡化实现错位一帧）的成品让权重核对失败，帧包照样清掉");
     }
 
     /// <summary>
     /// 透明组 master（左半预乘色、右半覆盖度，视频宽 2W，清单宽 W）：残差两半分别算、RGB 半带掩码；淡化在 packed 域照同一公式做，
-    /// 权重校验与淡化自检按 2W 宽逐像素通过，覆盖度半淡化后正好是两段覆盖度的线性混合。
+    /// 权重校验按 2W 宽逐像素通过，覆盖度半淡化后正好是两段覆盖度的线性混合。
     /// </summary>
     private static async Task PackedMasterChecksAsync(Action<bool, string> check, NativeTools tools, NativeRenderRunner runner,
         string directory, ulong total)
@@ -194,9 +187,8 @@ internal static class ExactFrameRangeChecks
         int coverage = faded[((10 * Half * 2) + Half + 80) * 3], color = faded[(10 * Half * 2 + 10) * 3];
         check(fade["status"]!.GetValue<string>() == "applied" && fade["pixel_packing"]!.GetValue<string>() == "rgba_side_by_side" &&
             fade["weight_verification"]?["status"]?.GetValue<string>() == "verified_against_source_frames" &&
-            fade["step_self_check"]?["status"]?.GetValue<string>() == "verified_within_derived_bound" &&
             Math.Abs(coverage - ((1 - w) * 200 + w * 188)) <= 1 && Math.Abs(color - ((1 - w) * 100 + w * 120)) <= 1,
-            "透明组 master 在 packed 域淡化：权重校验与淡化自检按两倍宽度逐像素通过，覆盖度与预乘色都是两段的线性混合");
+            "透明组 master 在 packed 域淡化：权重校验按两倍宽度逐像素通过，覆盖度与预乘色都是两段的线性混合");
 
         JsonObject reject = await runner.MeasureSeamResidualAsync(await PackedAsync("packed-reject-60", 60), Period, Crossfade);
         check(reject["status"]!.GetValue<string>() == "rejected_residual_above_limits" &&
