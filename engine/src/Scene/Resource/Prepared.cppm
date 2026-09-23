@@ -7,6 +7,7 @@ import rstd;
 import rstd.cppstd;
 import wescene.resource;
 import wescene.vulkan;
+import wescene.vk;
 
 import :texture_registry;
 import :buffer_registry;
@@ -99,7 +100,7 @@ struct PreparedFramebufferLease {
 
 struct PreparedDescriptorLease {
     resource::DescriptorBindingHandle handle;
-    Option<vvk::DescriptorSetLease>   set;
+    Option<vk::DescriptorSetLease>    set;
 };
 
 struct PreparedExternalLease {
@@ -230,8 +231,7 @@ public:
              descriptor      = descriptors.next()) {
             descriptor_leases.push(PreparedDescriptorLease {
                 .handle = (**descriptor).handle,
-                .set    = (**descriptor).set.is_some() ? Some((**descriptor).set->clone())
-                                                       : None<vvk::DescriptorSetLease>(),
+                .set    = (**descriptor).set.clone(),
             });
         }
 

@@ -104,3 +104,10 @@ target_sources(media-parity-tests PRIVATE
   tests/media/media_parity_tests.cpp)
 target_link_libraries(media-parity-tests PRIVATE owe-media gtest_main wavsen::audio)
 target_compile_options(media-parity-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
+
+# wescene.vk 薄层单测（T4a）：不需要 GPU；Vulkan 入口由测试注入，VK_CHECK 的失败处理由测试提供。
+add_executable(vk-tests EXCLUDE_FROM_ALL)
+target_sources(vk-tests PRIVATE
+  tests/vk/vk_tests.cpp)
+target_link_libraries(vk-tests PRIVATE owe-vk gtest_main)
+target_compile_options(vk-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
