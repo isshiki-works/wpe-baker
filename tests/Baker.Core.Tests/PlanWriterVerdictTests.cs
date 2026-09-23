@@ -135,6 +135,8 @@ public class PlanTransformsFreezeTests
         PlanTransforms.FreezeTemporalProperties(scene, new JsonObject { ["sun"] = true, ["slider"] = 0.5 });
         JsonNode pass = scene["objects"]![0]!["effects"]![0]!["passes"]![0]!;
         Assert.Equal("1", pass["constantshadervalues"]!["speed"]!.ToJsonString());
+        // 周期分析不经序列化，直接按 double 读冻结后的常量。
+        Assert.True(pass["constantshadervalues"]!["speed"]!.AsValue().TryGetValue(out double speed) && speed == 1);
         Assert.Equal("0.5", pass["constantshadervalues"]!["alpha"]!.ToJsonString());
         Assert.Equal("true", pass["combos"]!["NOISE"]!.ToJsonString());
         var off = new JsonObject { ["objects"] = new JsonArray(new JsonObject {

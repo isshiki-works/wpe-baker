@@ -228,7 +228,8 @@ internal static class PlanTransforms
             JsonNode? value = Resolve(binding, properties);
             // 数值常量绑到复选框（bool）属性时，WE 按 1/0 生效（作者用复选框开关 opacity 的 alpha 就靠这个）。
             // 冻结成 JSON true/false 的话，渲染器按数值向量读不出、周期分析也读不出速度，所以这里写成 1/0。
-            if (numeric && value is JsonValue flag && flag.TryGetValue(out bool on)) value = JsonValue.Create(on ? 1 : 0);
+            // 用 double：周期分析在内存里按 TryGetValue<double> 读常量，int 装箱的 JsonValue 读不出（序列化仍是 1/0）。
+            if (numeric && value is JsonValue flag && flag.TryGetValue(out bool on)) value = JsonValue.Create(on ? 1.0 : 0.0);
             container[key] = value;
         }
         foreach (var obj in scene["objects"]!.AsArray().OfType<JsonObject>())

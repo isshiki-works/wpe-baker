@@ -234,7 +234,6 @@ public static class ShaderPeriodAnalysis
             !TryReadMaterialShader(source, assetsDirectory, material, out string shader, out JsonObject pass, out _) ||
             !TryReadShader(source, assetsDirectory, shader, out string resource, out string text, out _)) return;
         var shaderSource = new ShaderSource(text);
-        if (!shaderSource.Uses("g_Time") || AlternateClocks.Any(shaderSource.Uses)) return;
         var c = new PassContext(ownerId, BaseMaterialEffectIndex, 0, pass, shader, resource, shaderSource, owner, objectsById, source,
             assetsDirectory, ceiling, retimePercent) { BaseMaterial = true };
         foreach (ClockRule rule in Table.Rules)
@@ -947,15 +946,6 @@ public static class ShaderPeriodAnalysis
         var uses = Regex.Matches(code, @"\bg_Time\b", RegexOptions.CultureInvariant);
         var fracs = Regex.Matches(code, @"(?<![\w.])frac\(\s*g_Time\s*\*\s*(?<u>\w+)\s*(?:\)|\+)", RegexOptions.CultureInvariant);
         if (fracs.Count == 0 || fracs.Count != uses.Count || fracs.Select(m => m.Groups["u"].Value).Distinct().Count() != 1) return null;
-        // 带静态项的 frac：从 frac( 数到配对的右括号，括号里只许有这一个 g_Time。
-        foreach (Match frac in fracs)
-        {
-            int open = frac.Index + "frac".Length, depth = 0, close = -1;
-            for (int i = open; i < code.Length && close < 0; ++i)
-                if (code[i] == '(') ++depth;
-                else if (code[i] == ')' && --depth == 0) close = i;
-            if (close < 0 || Regex.Matches(code[open..close], @"\bg_Time\b", RegexOptions.CultureInvariant).Count != 1) return null;
-        }
         string uniform = fracs[0].Groups["u"].Value;
         if (c.Source.UniformAnnotations.FirstOrDefault(item => item.Name == uniform).Annotation?["material"] is not JsonValue keyValue ||
             !keyValue.TryGetValue(out string? key) || string.IsNullOrEmpty(key)) return null;

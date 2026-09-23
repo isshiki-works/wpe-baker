@@ -3641,6 +3641,12 @@
      "append": [
       "float extra = frac(g_Time * g_Other);"
      ]
+    },
+    "flow-define": {
+     "same_as": "flowmap",
+     "prepend": [
+      "#define frac(x) (x)"
+     ]
     }
    },
    "files": {
@@ -3693,6 +3699,49 @@
      "uniform float g_Time;",
      "uniform float g_FlowSpeed; // {\"material\":\"Speed\",\"default\":1}",
      "void main() { gl_FragColor = vec4(sin(g_Time * g_FlowSpeed)); }"
+    ],
+    "models/glitterbase.json": [
+     "{\"material\":\"materials/glitterbase.json\"}"
+    ],
+    "materials/glitterbase.json": [
+     "{\"passes\":[{\"shader\":\"glitterbase\",\"constantshadervalues\":{\"speed\":1,\"density\":0.5}}]}"
+    ],
+    "shaders/glitterbase.frag": [
+     "uniform sampler2D g_Texture0; // {\"material\":\"framebuffer\",\"label\":\"ui_editor_properties_framebuffer\",\"hidden\":true}",
+     "uniform sampler2D g_Texture1; // {\"label\":\"ui_editor_properties_noise\",\"default\":\"util/perlin_256\"}",
+     "uniform float g_Time;",
+     "uniform float g_Speed; // {\"material\":\"speed\",\"label\":\"ui_editor_properties_speed\",\"default\":1,\"range\":[0.0, 2]}",
+     "uniform float g_Density; // {\"material\":\"density\",\"label\":\"ui_editor_properties_density\",\"default\":0.5,\"range\":[0.01, 1]}",
+     "varying vec4 v_TexCoord;",
+     "varying vec2 v_NoiseCoord;",
+     "void main() {",
+     "\tvec4 albedo = CAST4(1);",
+     "\tvec3 effectAlbedo = albedo.rgb;",
+     "\tfloat density = g_Density * g_Density;",
+     "\tfloat time = g_Time * g_Speed * density;",
+     "\tvec2 noiseCoord = v_NoiseCoord;",
+     "\tvec4 noise0 = texSample2D(g_Texture1, noiseCoord);",
+     "\tnoise0.r = noise0.r * (1.0 - noise0.g);",
+     "\tfloat timer0 = frac(noise0.r * 100 + time);",
+     "\tfloat glitterDensity = density * 0.5;",
+     "\tfloat glitter0 = smoothstep(0.5 - glitterDensity, 0.5, timer0) * smoothstep(0.5 + glitterDensity, 0.5, timer0);",
+     "\tglitter0 = smoothstep(0.5, 1.0, glitter0);",
+     "\tglitter0 *= glitter0;",
+     "\teffectAlbedo = CAST3(glitter0);",
+     "\talbedo.rgb = effectAlbedo;",
+     "\tgl_FragColor = albedo;",
+     "}"
+    ],
+    "shaders/glitterbase.vert": [
+     "attribute vec3 a_Position;",
+     "attribute vec2 a_TexCoord;",
+     "varying vec2 v_TexCoord;",
+     "varying vec2 v_NoiseCoord;",
+     "void main() {",
+     "\tgl_Position = vec4(a_Position, 1.0);",
+     "\tv_TexCoord.xy = a_TexCoord.xy;",
+     "\tv_NoiseCoord = vec2(a_TexCoord.x, a_TexCoord.y) * 5;",
+     "}"
     ]
    },
    "objects": [
@@ -3752,6 +3801,20 @@
      "shader": "flowmap",
      "constants": {
       "Speed": 0.0001
+     }
+    },
+    {
+     "id": 9,
+     "shader": "flow-define",
+     "constants": {
+      "Speed": 0.07
+     }
+    },
+    {
+     "id": 10,
+     "raw": {
+      "id": 10,
+      "image": "models/glitterbase.json"
      }
     }
    ],
@@ -3819,6 +3882,19 @@
      "components": 0,
      "unresolved": 1,
      "kind": "NonPeriodicOrDriftingMechanism"
+    },
+    {
+     "message": "a #define that rewrites frac is not the verified frac clock",
+     "layer": 9,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "a base material only tries base_material rules (a glitter base material is not claimed by the author-effect glitter rule)",
+     "layer": 10,
+     "components": 0,
+     "unresolved": 0
     }
    ]
   },
