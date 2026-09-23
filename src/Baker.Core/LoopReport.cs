@@ -72,10 +72,8 @@ internal sealed record LoopCadenceClip(string Component, int OwnerLayerId, strin
 internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalRetimeCostPercent,
     IReadOnlyList<CommonLoopComponentCycle> Components, IReadOnlyList<LoopPatch> Patches)
 {
-    /// <summary>精灵 float32 帧表的接缝判定；null = 这次捕获没有可读帧表的精灵轨道。</summary>
+    /// <summary>精灵 float32 帧表的接缝判定；null = 这次捕获没有可读帧表的精灵轨道。带摆动改频解时是在 L = kP 上重判的结果。</summary>
     public SpriteSeamPhase.Selection? SpriteSeam { get; init; }
-    /// <summary>接缝是在摆动改频后的 L = kP 上重判的（basis 说明不同）。</summary>
-    public bool SpriteSeamOnSwayLength { get; init; }
     /// <summary>循环长度不来自周期求解时的来源（目前只有 stationary_particle_default）。</summary>
     public string? LoopLengthSource { get; init; }
     public CandidateSwayRetime? SwayRetime { get; init; }
@@ -94,7 +92,7 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
             json["source_period_warmup_frames"] = warmup;
             json["sprite_seam_phase"] = new JsonObject { ["origin"] = sprite.AtOrigin.ToString().ToLowerInvariant(),
                 ["after_one_period"] = sprite.AfterOnePeriod?.ToString().ToLowerInvariant(),
-                ["basis"] = SpriteSeamOnSwayLength ? "float32 sprite frame table re-checked on the sway-retimed loop length"
+                ["basis"] = SwayRetime is not null ? "float32 sprite frame table re-checked on the sway-retimed loop length"
                     : "float32 sprite frame table; frame 0 sits on the sprite frame-0 start boundary" };
         }
         else if (SpriteSeam?.AtOrigin == SpriteSeamPhase.Verdict.Undetermined)

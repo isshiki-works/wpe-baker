@@ -166,7 +166,7 @@ internal static class LoopAnalysis
     /// 必要时延长到最长寿命之后的首个输出帧，但不超过上限。返回 loop.loop_length_default 记录；有其它未解析项时不追加候选。
     /// 交叉淡化替换要求接缝两侧不共享粒子（循环长度 &gt; 粒子最长寿命，见 design-particle-crossfade §2.3），不满足时不加候选、记原因。
     /// </summary>
-    private static JsonObject? StationaryParticleDefaultLoop(List<LoopUnresolved> unresolved, List<LoopCandidate> candidates, uint fpsNumerator,
+    internal static JsonObject? StationaryParticleDefaultLoop(List<LoopUnresolved> unresolved, List<LoopCandidate> candidates, uint fpsNumerator,
         uint fpsDenominator, CommonLoopRational ceiling)
     {
         if (unresolved.Count == 0) return null;

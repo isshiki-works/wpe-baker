@@ -108,12 +108,12 @@ internal static class SwayRetimeApplier
         {
             if (solutions[index] is not SwayRetimeSolution solution) { candidates.RemoveAt(index); continue; }
             LoopCandidate candidate = candidates[index];
-            SpriteSeamPhase.Selection? sprite = spriteSelections[index];
-            // 其余分量在 P 上已闭合，L = kP 上各自多走 k 倍圈数，调速倍率与补丁不变。
+            // 其余分量在 P 上已闭合，L = kP 上各自多走 k 倍圈数，调速倍率与补丁不变。精灵接缝换成 L 上的判定
+            // （有精灵帧表时每个有解候选都在上面重判过；没有帧表时原候选也没有判定）。
             candidates[index] = candidate with {
                 Frames = solution.Frames, Seconds = solution.Seconds,
                 Components = [.. candidate.Components.Select(component => component with { Cycles = checked(component.Cycles * solution.Multiple) })],
-                SpriteSeam = sprite ?? candidate.SpriteSeam, SpriteSeamOnSwayLength = sprite is not null || candidate.SpriteSeamOnSwayLength,
+                SpriteSeam = spriteSelections[index],
                 SwayRetime = new CandidateSwayRetime(solution, options.LoopLengthMaximumSeconds, fpsNumerator, fpsDenominator, options.Profile) };
         }
         // shader 未解析项在 unresolved 里排在最前、与 shaderUnresolved 同序；从后往前移出已建模的摆动项。
