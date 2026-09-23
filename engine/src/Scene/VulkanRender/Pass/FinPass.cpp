@@ -119,12 +119,14 @@ void FinPass::record(PassRecordContext& context) {
     prepared.before_copy.Record(cmd);
 
     {
-        // Result is always R8G8B8A8_UNORM (screen RT). We can copy when
-        // present matches that and dimensions are identical; otherwise
-        // fall back to blit which handles size/format mismatch.
+        // Result is R8G8B8A8_UNORM (screen RT), or RGBA16F under hdr_scale. We can
+        // copy when present matches that and dimensions are identical; otherwise
+        // fall back to blit which handles size/format mismatch (float -> UNORM clamps to [0,1]).
         const bool can_copy = result.extent.width == present.extent.width &&
                               result.extent.height == present.extent.height &&
-                              frame_surface.format == VK_FORMAT_R8G8B8A8_UNORM;
+                              frame_surface.format == VK_FORMAT_R8G8B8A8_UNORM &&
+                              ! ((**source).request.definition.is_some() &&
+                                 (*(**source).request.definition).format == owe::TextureFormat::RGBA16F);
 
         if (! m_path_logged) {
             rstd_info("FinPass: {}", can_copy ? "copy" : "blit");

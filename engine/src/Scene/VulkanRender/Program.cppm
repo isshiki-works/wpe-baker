@@ -485,6 +485,7 @@ struct RenderProgram {
             auto target = scene.RenderTargetMut(names[index].as_str());
             if (target.is_none()) continue;
             auto& rt = **target;
+            rt.hdr   = scene.HdrScale() > 0.0f && rt.kind == owe::SceneRenderTargetKind::Color;
             if (! names[index].is_empty() && (rt.width <= i32() || rt.height <= i32())) {
                 rstd_error("wrong size for render target: {}", names[index].as_str());
             }

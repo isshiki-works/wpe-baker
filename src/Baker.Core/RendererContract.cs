@@ -35,6 +35,7 @@ internal sealed record RenderJob
     public bool? TraceScene { get; init; }
     public double? EffectRenderScale { get; init; }
     public bool? MatchEffectResolution { get; init; }
+    public double? HdrScale { get; init; }
     public uint? OutputFrameStride { get; init; }
     public ulong? OutputFramePhase { get; init; }
     public uint? OutputSampleWidth { get; init; }

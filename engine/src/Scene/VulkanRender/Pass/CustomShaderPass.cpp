@@ -1063,7 +1063,8 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, PassPrepareCo
             }
         }
         m_desc.color_load_op                       = loadOp;
-        constexpr VkFormat      color_format       = VK_FORMAT_R8G8B8A8_UNORM;
+        const VkFormat color_format = (**output_rt).hdr ? VK_FORMAT_R16G16B16A16_SFLOAT
+                                                        : VK_FORMAT_R8G8B8A8_UNORM;
         constexpr VkImageLayout color_final_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         GraphicsPipeline pipeline_state;

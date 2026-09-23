@@ -870,9 +870,13 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
     // Each step is either a CustomShaderPass (built on the synthetic node's
     // mesh+material) or a CopyPass (RT-to-RT blit).
     auto post_processes = scene.PostProcesses();
-    for (usize index {}; index < post_processes.len() &&
-        (selection == nullptr || selection->include_postprocessing); ++index) {
+    for (usize index {}; index < post_processes.len(); ++index) {
         const auto& pp = post_processes[index];
+        // hdr_scale 的 rgb/k 属于捕获出口：不含后处理的组捕获也要做；去掉选择，
+        // 免得这个无图层归属的节点被剔除、或在透明底捕获里被强制写 alpha。
+        const bool hdr_scale = pp->name == "__hdr_scale";
+        if (! hdr_scale && selection != nullptr && ! selection->include_postprocessing) continue;
+        if (hdr_scale) extra.selection = nullptr;
         for (auto& step : pp->steps) {
             if (std::holds_alternative<ScenePostProcessPass>(step)) {
                 auto&            sp     = std::get<ScenePostProcessPass>(step);
@@ -884,6 +888,7 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
                 AddCopyPass(extra, MakeTextureDesc(extra, cp.src), MakeTextureDesc(extra, cp.dst));
             }
         }
+        extra.selection = selection;
     }
 
     StoreMipFramebufferHistory(extra);

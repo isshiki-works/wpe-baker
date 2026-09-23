@@ -611,6 +611,11 @@ int Render(const fs::path& job_path) {
         config.assets_dir = Utf8(job.assets);
         config.cache_dir = Utf8(job.cache);
         config.muted = false; // Offline mode has no host audio device; preserve authored audio.
+        if (Field(json, "hdr_scale")) {
+            config.hdr_scale = static_cast<float>(Number(json, "hdr_scale", 1.0));
+            if (!(config.hdr_scale >= 1.0f) || !std::isfinite(config.hdr_scale))
+                throw std::runtime_error("hdr_scale must be a finite number >= 1");
+        }
         if (auto* properties = Field(json, "user_properties")) {
             if (!properties->is_object()) throw std::runtime_error("user_properties must be an object");
             config.user_properties = *properties;

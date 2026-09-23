@@ -74,7 +74,7 @@ internal static class SdrRadianceClosureChecks
             string tracePath = Path.Combine(root, "sdr-" + name + "-trace.json");
             await File.WriteAllTextAsync(tracePath, trace.ToJsonString());
             return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
-                new(2, directory, root, Path.Combine(root, "sdr-" + name + "-plan"), 64, 32, RuntimeTraceFile: tracePath));
+                new(2, directory, root, Path.Combine(root, "sdr-" + name + "-plan"), 64, 32, RuntimeTraceFile: tracePath, Postprocessing: "ultra"));
         }
         static JsonObject Closure(JsonObject plan) => plan["hdr_radiance_closure"]!.AsObject();
         static bool Blocked(JsonObject plan) => plan["blockers"]!.AsArray()
@@ -106,36 +106,36 @@ internal static class SdrRadianceClosureChecks
             files["materials/video.json"] = Utf8(new JsonObject { ["passes"] = new JsonArray(new JsonObject {
                 ["blending"] = "additive", ["shader"] = "genericimage3",
                 ["combos"] = new JsonObject { ["VERSION"] = 2 }, ["textures"] = new JsonArray("clip") }) }));
-        check(Closure(additive)["status"]!.GetValue<string>() == "open" && Blocked(additive) &&
+        check(Closure(additive)["status"]!.GetValue<string>() == "open" && !Blocked(additive) &&
             Reasons(additive).Contains("(R2)", StringComparison.Ordinal) &&
             Reasons(additive).Contains("additive", StringComparison.Ordinal),
-            "additive blending keeps the HDR blocker and names the layer and R2");
+            "additive blending stays open (HDR pipeline: float capture, no blocker) and names the layer and R2");
 
         JsonObject bright = await PlanAsync("brightness", mutate: (scene, _, _) =>
             scene["objects"]![1]!["brightness"] = 2.0);
-        check(Closure(bright)["status"]!.GetValue<string>() == "open" && Blocked(bright) &&
+        check(Closure(bright)["status"]!.GetValue<string>() == "open" && !Blocked(bright) &&
             Reasons(bright).Contains("(R4)", StringComparison.Ordinal) &&
             Reasons(bright).Contains("brightness", StringComparison.Ordinal),
-            "brightness above one keeps the HDR blocker and names R4");
+            "brightness above one stays open (HDR pipeline: float capture, no blocker) and names R4");
 
         JsonObject overColor = await PlanAsync("color", mutate: (scene, _, _) =>
             scene["objects"]![0]!["color"] = "1 1 4");
-        check(Closure(overColor)["status"]!.GetValue<string>() == "open" && Blocked(overColor) &&
+        check(Closure(overColor)["status"]!.GetValue<string>() == "open" && !Blocked(overColor) &&
             Reasons(overColor).Contains("(R4)", StringComparison.Ordinal),
-            "a color component above one keeps the HDR blocker and names R4");
+            "a color component above one stays open (HDR pipeline: float capture, no blocker) and names R4");
 
         JsonObject scripted = await PlanAsync("alpha-script", mutate: (scene, _, _) =>
             scene["objects"]![1]!["alpha"] = new JsonObject { ["value"] = 1.0, ["script"] = "thisLayer.alpha = 1;" });
-        check(Closure(scripted)["status"]!.GetValue<string>() == "open" && Blocked(scripted) &&
+        check(Closure(scripted)["status"]!.GetValue<string>() == "open" && !Blocked(scripted) &&
             Reasons(scripted).Contains("(R4)", StringComparison.Ordinal),
-            "a script-bound alpha is undecidable and keeps the HDR blocker");
+            "a script-bound alpha is undecidable and stays open (HDR pipeline: float capture, no blocker)");
 
         JsonObject animated = await PlanAsync("alpha-animation", mutate: (scene, _, _) =>
             scene["objects"]![1]!["alpha"] = new JsonObject { ["animation"] = new JsonObject {
                 ["options"] = new JsonObject { ["fps"] = 30, ["length"] = 120, ["mode"] = "single" } } });
-        check(Closure(animated)["status"]!.GetValue<string>() == "open" && Blocked(animated) &&
+        check(Closure(animated)["status"]!.GetValue<string>() == "open" && !Blocked(animated) &&
             Reasons(animated).Contains("(R4)", StringComparison.Ordinal),
-            "an animation-bound alpha is undecidable and keeps the HDR blocker");
+            "an animation-bound alpha is undecidable and stays open (HDR pipeline: float capture, no blocker)");
 
         JsonObject custom = await PlanAsync("custom-shader", mutate: (_, trace, files) => {
             files["materials/video.json"] = Utf8(new JsonObject { ["passes"] = new JsonArray(new JsonObject {
@@ -143,19 +143,19 @@ internal static class SdrRadianceClosureChecks
                 ["textures"] = new JsonArray("clip") }) });
             trace["runtime_layers"]![1]!["materials"]![0]!["shader"] = "workshop/2084198056/effects/glow";
         });
-        check(Closure(custom)["status"]!.GetValue<string>() == "open" && Blocked(custom) &&
+        check(Closure(custom)["status"]!.GetValue<string>() == "open" && !Blocked(custom) &&
             Reasons(custom).Contains("(R1)", StringComparison.Ordinal),
-            "a workshop shader is not a built-in SDR shader and keeps the HDR blocker");
+            "a workshop shader is not a built-in SDR shader and stays open (HDR pipeline: float capture, no blocker)");
 
         JsonObject combo = await PlanAsync("unknown-combo", mutate: (_, _, files) =>
             files["materials/video.json"] = Utf8(new JsonObject { ["passes"] = new JsonArray(new JsonObject {
                 ["blending"] = "translucent", ["shader"] = "genericimage3",
                 ["combos"] = new JsonObject { ["VERSION"] = 2, ["HDR_BOOST"] = 1 },
                 ["textures"] = new JsonArray("clip") }) }));
-        check(Closure(combo)["status"]!.GetValue<string>() == "open" && Blocked(combo) &&
+        check(Closure(combo)["status"]!.GetValue<string>() == "open" && !Blocked(combo) &&
             Reasons(combo).Contains("(R1)", StringComparison.Ordinal) &&
             Reasons(combo).Contains("HDR_BOOST", StringComparison.Ordinal),
-            "an unknown material combo is undecidable and keeps the HDR blocker");
+            "an unknown material combo is undecidable and stays open (HDR pipeline: float capture, no blocker)");
 
         // 渲染器把 combo 键 toupper 后才 #define（engine ShaderParser::PreShaderHeader），官方
         // materials/util/solidlayer_instance_*.json 写的就是小写 "version"：与 "VERSION" 是同一个宏，判据必须同样放行。
@@ -171,10 +171,10 @@ internal static class SdrRadianceClosureChecks
             files["materials/video.json"] = Utf8(new JsonObject { ["passes"] = new JsonArray(new JsonObject {
                 ["blending"] = "translucent", ["shader"] = "genericimage3",
                 ["combos"] = new JsonObject { ["version"] = 2, ["hdr_boost"] = 1 }, ["textures"] = new JsonArray("clip") }) }));
-        check(Closure(lowerUnknown)["status"]!.GetValue<string>() == "open" && Blocked(lowerUnknown) &&
+        check(Closure(lowerUnknown)["status"]!.GetValue<string>() == "open" && !Blocked(lowerUnknown) &&
             Reasons(lowerUnknown).Contains("(R1)", StringComparison.Ordinal) &&
             Reasons(lowerUnknown).Contains("\"hdr_boost\"", StringComparison.Ordinal),
-            "a lower-case unknown combo is still undecidable and keeps the HDR blocker");
+            "a lower-case unknown combo is still undecidable and stays open (HDR pipeline: float capture, no blocker)");
 
         // 反例②：同一份小写 version 材质，层亮度 2.0 仍由 R4 拒绝——combo 放行不放松标量判据。
         JsonObject lowerVersionBright = await PlanAsync("lower-version-bright", mutate: (scene, _, files) => {
@@ -183,25 +183,25 @@ internal static class SdrRadianceClosureChecks
                 ["combos"] = new JsonObject { ["version"] = 2 }, ["textures"] = new JsonArray("clip") }) });
             scene["objects"]![1]!["brightness"] = 2.0;
         });
-        check(Closure(lowerVersionBright)["status"]!.GetValue<string>() == "open" && Blocked(lowerVersionBright) &&
+        check(Closure(lowerVersionBright)["status"]!.GetValue<string>() == "open" && !Blocked(lowerVersionBright) &&
             Reasons(lowerVersionBright).Contains("(R4)", StringComparison.Ordinal) &&
             Reasons(lowerVersionBright).Contains("brightness", StringComparison.Ordinal),
             "the same lower-case version material with brightness above one is still rejected by R4");
 
         JsonObject effectLayer = await PlanAsync("effect-layer", mutate: (_, trace, _) =>
             trace["runtime_layers"]![1]!["has_effect_layer"] = true);
-        check(Closure(effectLayer)["status"]!.GetValue<string>() == "open" && Blocked(effectLayer) &&
+        check(Closure(effectLayer)["status"]!.GetValue<string>() == "open" && !Blocked(effectLayer) &&
             Reasons(effectLayer).Contains("(R1)", StringComparison.Ordinal),
-            "an observed effect layer keeps the HDR blocker and names R1");
+            "an observed effect layer stays open (HDR pipeline: float capture, no blocker) and names R1");
 
         JsonObject wideTexture = await PlanAsync("tex-format", mutate: (_, trace, files) => {
             files["materials/clip.tex"] = Tex(10, 0x2);
             trace["runtime_video_decoders"] = new JsonArray();
             trace["runtime_video_decoder_observation"] = new JsonObject { ["status"] = "observed", ["opened_instances"] = 0 };
         });
-        check(Closure(wideTexture)["status"]!.GetValue<string>() == "open" && Blocked(wideTexture) &&
+        check(Closure(wideTexture)["status"]!.GetValue<string>() == "open" && !Blocked(wideTexture) &&
             Reasons(wideTexture).Contains("(R3)", StringComparison.Ordinal),
-            "a non 8-bit tex container keeps the HDR blocker and names R3");
+            "a non 8-bit tex container stays open (HDR pipeline: float capture, no blocker) and names R3");
 
         JsonObject narrowTexture = await PlanAsync("tex-format-rgba8", mutate: (_, trace, files) => {
             files["materials/clip.tex"] = Tex(TextureContainer.FormatRgba8, 0x2);
@@ -213,10 +213,10 @@ internal static class SdrRadianceClosureChecks
 
         JsonObject tenBit = await PlanAsync("ten-bit-video", mutate: (_, trace, _) =>
             trace["runtime_video_decoders"]![0]!["pixel_format"] = "yuv420p10le");
-        check(Closure(tenBit)["status"]!.GetValue<string>() == "open" && Blocked(tenBit) &&
+        check(Closure(tenBit)["status"]!.GetValue<string>() == "open" && !Blocked(tenBit) &&
             Reasons(tenBit).Contains("(R3)", StringComparison.Ordinal) &&
             Reasons(tenBit).Contains("yuv420p10le", StringComparison.Ordinal),
-            "a 10-bit video decode keeps the HDR blocker and names R3");
+            "a 10-bit video decode stays open (HDR pipeline: float capture, no blocker) and names R3");
 
         // 采样帧缓冲的层本就会被 planner 判为 live 而不进组；判据必须独立于那条路径也拒绝它。
         JsonObject feedback = await PlanAsync("feedback", mutate: (_, trace, _) =>
@@ -241,9 +241,9 @@ internal static class SdrRadianceClosureChecks
 
         JsonObject clear = await PlanAsync("clear-color", mutate: (scene, _, _) =>
             scene["general"]!["clearcolor"] = "2 2 2");
-        check(Closure(clear)["status"]!.GetValue<string>() == "open" && Blocked(clear) &&
+        check(Closure(clear)["status"]!.GetValue<string>() == "open" && !Blocked(clear) &&
             Reasons(clear).Contains("(R4)", StringComparison.Ordinal),
-            "a captured scene clear color above one keeps the HDR blocker and names R4");
+            "a captured scene clear color above one stays open (HDR pipeline: float capture, no blocker) and names R4");
 
         JsonObject sdr = await PlanAsync("no-hdr", hdr: false);
         check(Closure(sdr)["status"]!.GetValue<string>() == "not_applicable" && !Blocked(sdr) &&
@@ -253,9 +253,9 @@ internal static class SdrRadianceClosureChecks
 
         JsonObject missingRuntime = await PlanAsync("missing-runtime", mutate: (_, trace, _) =>
             trace["runtime_layers"]!.AsArray().RemoveAt(1));
-        check(Closure(missingRuntime)["status"]!.GetValue<string>() == "open" && Blocked(missingRuntime) &&
+        check(Closure(missingRuntime)["status"]!.GetValue<string>() == "open" && !Blocked(missingRuntime) &&
             Reasons(missingRuntime).Contains("(R1)", StringComparison.Ordinal),
-            "a captured layer without runtime material evidence is undecidable and keeps the HDR blocker");
+            "a captured layer without runtime material evidence is undecidable and stays open (HDR pipeline: float capture, no blocker)");
 
         check(!TextureContainer.IsEightBitUnsignedFormat(10) && TextureContainer.IsEightBitUnsignedFormat(0) &&
             TextureContainer.IsEightBitUnsignedFormat(4) && TextureContainer.IsEightBitUnsignedFormat(6) &&

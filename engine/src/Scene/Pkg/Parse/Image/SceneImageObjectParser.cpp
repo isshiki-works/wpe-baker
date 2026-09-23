@@ -330,6 +330,9 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
         if (size.is_some()) wpimgobj.size = { (*size)[usize()], (*size)[usize(1)] };
     }
 
+    // HDR 管线下图层 brightness 生效：乘进颜色（genericimage4 只读 g_Color4）。
+    if (context.scene->HdrScale() > 0.0f)
+        for (auto& c : wpimgobj.color) c *= wpimgobj.brightness;
     bool       isPassthrough      = wpimgobj.config.passthrough;
     const bool alpha_can_change   = ! wpimgobj.alpha_user_key.empty() ||
                                     wpimgobj.field_bindings.HasAnimation("alpha"_str) ||

@@ -32,7 +32,10 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     [property: JsonIgnore] bool CustomSettings = false,
     [property: JsonIgnore] string? AnalysisCacheDirectory = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Interaction = null,
-    [property: JsonIgnore] bool LayoutExplicit = false);
+    [property: JsonIgnore] bool LayoutExplicit = false,
+    // WPE 设置里的后处理画质档（config.json general.user.postprocessing）。只有它是 ultra/displayhdr 且场景 hdr、bloom 都开时，
+    // 官方走浮点 HDR 管线；plan 的 settings 只在这种场景里记它，其余 plan 逐字不变。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Postprocessing = null);
 
 /// <summary>Plans video replacement from source hierarchy and observed input dependencies.</summary>
 /// <param name="display">未指定宽高时用来铺满的屏幕尺寸；省略时读本机主显示器物理分辨率，测试可注入固定值。</param>

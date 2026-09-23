@@ -120,7 +120,8 @@ try
         string analysisDirectory = options.TryGetValue("--out", out var planPath)
             ? Path.GetFullPath(planPath) + ".work" : Path.Combine(Path.GetTempPath(), "WpeBaker", "analysis-" + Guid.NewGuid().ToString("N"));
         var request = AnalyzeRequestFactory.Build(analyzeOptions, sourcePath, assets, analysisDirectory, properties, propertiesOrigin,
-            frameRate.Fps, (uint)OptionTable.Value("analyze", options, "--fps-den")!, frameRate.ToJson());
+            frameRate.Fps, (uint)OptionTable.Value("analyze", options, "--fps-den")!, frameRate.ToJson()) with {
+            Postprocessing = WallpaperEngineProperties.ReadPostprocessing(WallpaperEngineProperties.LocateConfig(Path.GetDirectoryName(assets))) };
         var progress = new Progress<RenderProgress>(p => Console.Error.WriteLine(JsonSerializer.Serialize(p, jsonOptions)));
         // 状态拆分（--daytime-split on）：识别成功时编排器每个状态按"只有这套图层可见"再规划一次，子 plan 落在 <out>.state-<名字>.json，
         // 母 plan 的 daytime_split.states[] 记下各状态的 plan 路径、结论 key、阻断数、实时层数与视频组数。各状态的结论行排在视频外壳两行之后。

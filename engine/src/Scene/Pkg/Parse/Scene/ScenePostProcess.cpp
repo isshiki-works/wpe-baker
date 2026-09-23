@@ -25,7 +25,7 @@ namespace owe
 {
 
 void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
-                           const wpscene::SceneGeneral& g) {
+                           const wpscene::SceneGeneral& g, float hdr_scale) {
     auto& scene = *context.scene;
 
     auto declare_rt = [&](std::string name, float inv_scale) {
@@ -61,7 +61,7 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
                         std::vector<wpscene::MaterialPassBindItem>
                                                                 binds,
                         std::string                             output_rt,
-                        std::function<void(wpscene::Material&)> mutate = nullptr) -> bool {
+                        std::function<void(wpscene::Material&, ShaderInfo&)> mutate = nullptr) -> bool {
         std::string material_path { "/assets/" };
         material_path.append(mat_relpath);
         auto loaded = ReadNJsonFile(vfs, material_path);
@@ -76,10 +76,10 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
             return false;
         }
         ApplyTextureBinds(wpmat, std::span(binds), render_targets);
-        if (mutate) mutate(wpmat);
 
         ShaderInfo wpShaderInfo;
         wpShaderInfo.baseConstSvs = context.global_base_uniforms;
+        if (mutate) mutate(wpmat, wpShaderInfo);
 
         auto                   pp_node = Arc<SceneNode>::make();
         SceneMaterial          material;
@@ -128,7 +128,7 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
     if (! add_pass("materials/util/downsample_quarter_bloom.json",
                    { { "previous", i32() } },
                    "_rt_bloom_mip1",
-                   [&](wpscene::Material& m) {
+                   [&](wpscene::Material& m, ShaderInfo&) {
                        m.constantshadervalues["bloomstrength"]  = { g.bloomstrength };
                        m.constantshadervalues["bloomthreshold"] = { g.bloomthreshold };
                        m.constantshadervalues["bloomtint"]      = {
@@ -159,6 +159,22 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
     }));
 
     (void)scene.RegisterPostProcess(rstd::move(pp));
+
+    // hdr_scale=k：给 RGBA8 捕获前把浮点结果 rgb 除以 k。在 _rt_default 上叠一层黑色、
+    // alpha=1-1/k 的 translucent，dst*(1-a) 正好是 rgb/k；不写 alpha，alpha 不变。
+    // 单独注册为 "__hdr_scale"：组捕获不含后处理时也照做（见 SceneToRenderGraph）。
+    if (hdr_scale <= 1.0f) return;
+    pp       = Box<ScenePostProcess>::make();
+    pp->name = "__hdr_scale";
+    if (add_pass("materials/util/fade.json",
+                 {},
+                 rstd::cppstd::to_string(SpecTex_Default),
+                 [&](wpscene::Material& m, ShaderInfo& info) {
+                     m.constantshadervalues["tint"] = { 0.0f, 0.0f, 0.0f };
+                     m.alphawriting                 = "disabled";
+                     info.baseConstSvs[rstd::cppstd::to_string(G_ALPHA)] = 1.0f - 1.0f / hdr_scale;
+                 }))
+        (void)scene.RegisterPostProcess(rstd::move(pp));
 }
 
 } // namespace owe
