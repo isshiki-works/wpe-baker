@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
+#include "JsonNlohmann.hpp"
+
 import eigen;
 import rstd;
 import rstd.cppstd;
@@ -7,7 +10,6 @@ import wescene.core;
 import wescene.json;
 import wescene.scene;
 import wescene.script;
-import wescene.testing.json_builder;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
@@ -44,8 +46,8 @@ TEST(ScriptFaultIsolation, UpdateFaultKeepsLastValueAndOtherBindingsRunning) {
         )JS",
         "test/update_fault_isolation",
         FieldKind::String,
-        owe::MakeObject(),
-        owe::IntoJson("INITIAL"),
+        owe::NJson::object(),
+        owe::NJson("INITIAL"),
         ScriptBindingContext::ForLayer(faulty_owner.as_ptr(), "text"_str));
     auto* healthy = runtime.MakeFieldScript(
         R"JS(
@@ -54,8 +56,8 @@ TEST(ScriptFaultIsolation, UpdateFaultKeepsLastValueAndOtherBindingsRunning) {
         )JS",
         "test/update_fault_healthy_peer",
         FieldKind::Scalar,
-        owe::MakeObject(),
-        owe::IntoJson(0),
+        owe::NJson::object(),
+        owe::NJson(0),
         ScriptBindingContext::ForLayer(healthy_owner.as_ptr(), "text"_str));
     ASSERT_NE(faulty, nullptr);
     ASSERT_NE(healthy, nullptr);
@@ -117,8 +119,8 @@ TEST(ScriptFaultIsolation, InitFaultRecordsAndStillRunsUpdates) {
         )JS",
         "test/init_fault_isolation",
         FieldKind::Scalar,
-        owe::MakeObject(),
-        owe::IntoJson(0),
+        owe::NJson::object(),
+        owe::NJson(0),
         ScriptBindingContext::ForLayer(faulty.as_ptr(), "alpha"_str));
     auto* peer = runtime.MakeFieldScript(
         R"JS(
@@ -128,8 +130,8 @@ TEST(ScriptFaultIsolation, InitFaultRecordsAndStillRunsUpdates) {
         )JS",
         "test/init_fault_healthy_peer",
         FieldKind::Scalar,
-        owe::MakeObject(),
-        owe::IntoJson(0),
+        owe::NJson::object(),
+        owe::NJson(0),
         ScriptBindingContext::ForLayer(healthy.as_ptr(), "text"_str));
     ASSERT_NE(failed, nullptr);
     ASSERT_NE(peer, nullptr);
@@ -178,16 +180,16 @@ TEST(ScriptFaultIsolation, ModuleFaultKeepsPeerRunningAndPreservesUnsupportedFat
         "const x = scene.nonexistent; export function update() { return 1; }",
         "test/module_fault_isolation",
         FieldKind::Scalar,
-        owe::MakeObject(),
-        owe::IntoJson(0.75),
+        owe::NJson::object(),
+        owe::NJson(0.75),
         ScriptBindingContext::ForLayer(faulty.as_ptr(), "alpha"_str));
     ASSERT_NE(failed, nullptr);
     auto* peer = runtime.MakeFieldScript(
         "export function update() { return 1; }",
         "test/module_fault_healthy_peer",
         FieldKind::Scalar,
-        owe::MakeObject(),
-        owe::IntoJson(0),
+        owe::NJson::object(),
+        owe::NJson(0),
         ScriptBindingContext::ForLayer(healthy.as_ptr(), "text"_str));
     ASSERT_NE(peer, nullptr);
     runtime.SetSceneRoot(root.as_ptr());
@@ -210,8 +212,8 @@ TEST(ScriptFaultIsolation, ModuleFaultKeepsPeerRunningAndPreservesUnsupportedFat
                   "engine.notImplementedOffline();",
                   "test/module_unsupported_fatal",
                   FieldKind::Scalar,
-                  owe::MakeObject(),
-                  owe::IntoJson(0.75),
+                  owe::NJson::object(),
+                  owe::NJson(0.75),
                   ScriptBindingContext::ForLayer(faulty.as_ptr(), "alpha"_str)),
               nullptr);
     EXPECT_TRUE(unsupported_offline.failed);
@@ -239,15 +241,15 @@ TEST(ScriptFaultIsolation, CompileFaultPreservesInitialValueAndPeer) {
         "export function update( {",
         "test/compile_fault_isolation",
         FieldKind::Scalar,
-        owe::MakeObject(),
-        owe::IntoJson(0.75),
+        owe::NJson::object(),
+        owe::NJson(0.75),
         ScriptBindingContext::ForLayer(faulty.as_ptr(), "alpha"_str));
     auto* peer = runtime.MakeFieldScript(
         "export function update() { return 1; }",
         "test/compile_fault_healthy_peer",
         FieldKind::Scalar,
-        owe::MakeObject(),
-        owe::IntoJson(0),
+        owe::NJson::object(),
+        owe::NJson(0),
         ScriptBindingContext::ForLayer(healthy.as_ptr(), "text"_str));
     ASSERT_NE(failed, nullptr);
     ASSERT_NE(peer, nullptr);

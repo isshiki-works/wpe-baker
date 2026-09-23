@@ -5,6 +5,8 @@ module;
 #include <cstdlib>
 #include <rstd/enum.hpp>
 
+#include "JsonNlohmann.hpp"
+
 module wescene.scene_wallpaper;
 import wescene.types;
 import wescene.utils;
@@ -45,7 +47,7 @@ class RenderMsg final {
               (SetScene, (Box<Scene> scene; Arc<UniformRuntimeInput> uniform_input;
                           Option<u64> random_seed;)),
               (SetFillMode, (FillMode mode;)), (SetSpeed, (f32 speed;)),
-              (SetUserProperty, (std::string key; Json property;)),
+              (SetUserProperty, (std::string key; NJson property;)),
               (SetMediaStatus, (MediaStatus status;)),
               (SetAudioResponseDemandCallback, (AudioResponseDemandCallback callback;)),
               (SetAudioResponseEnabled, (bool enabled;)),
@@ -62,7 +64,7 @@ class MainMsg final {
               (SetAudioClientIdentity, (SceneAudioClientIdentity identity;)),
               (AudioDeviceEvent, (wavsen::audio::AudioDeviceEvent event;)),
               (SetFillMode, (FillMode mode;)), (SetSpeed, (f32 speed;)),
-              (SetUserProperty, (std::string key; Json value;)),
+              (SetUserProperty, (std::string key; NJson value;)),
               (SetFirstFrameCallback, (FirstFrameCallback cb;)),
               (SetUserPropertyDiagnosticCallback, (UserPropertyDiagnosticCallback cb;)),
               (UserPropertyDiagnostics, (Vec<SceneUserPropertyDiagnostic> diagnostics;)),
@@ -105,21 +107,18 @@ float LocalTimeOfDay() {
     return static_cast<float>(seconds / 86400.0);
 }
 
-Json MakeUserPropertyDescriptor(Json value) {
-    if (value.get("value"_str).is_some()) return value;
-    auto object = rstd::json::Map::make();
-    object.insert(::alloc::string::String::make("value"_str), rstd::move(value));
-    return Json::Object(rstd::move(object));
+NJson MakeUserPropertyDescriptor(NJson value) {
+    if (Find(value, "value") != nullptr) return value;
+    NJson object    = NJson::object();
+    object["value"] = std::move(value);
+    return object;
 }
 
-Json RawUserProperty(std::string_view value) { return MakeUserPropertyWirePatch(value); }
+NJson RawUserProperty(std::string_view value) { return MakeUserPropertyWirePatch(value); }
 
-Json InitialUserProperty(Json value) {
-    if (value.is_string()) {
-        auto raw = rstd::cppstd::to_string(*value.as_str());
-        return RawUserProperty(raw);
-    }
-    return MakeUserPropertyDescriptor(rstd::move(value));
+NJson InitialUserProperty(NJson value) {
+    if (value.is_string()) return RawUserProperty(value.get_ref<const std::string&>());
+    return MakeUserPropertyDescriptor(std::move(value));
 }
 
 bool SameSceneMaterialId(SceneMaterialId lhs, SceneMaterialId rhs) {
@@ -145,11 +144,8 @@ vulkan::PassInvalidationFlags MaterialDirtyToPassInvalidationFlags(SceneMaterial
     return out;
 }
 
-Json RuntimeTextureProperty(std::string value) {
-    auto object = rstd::json::Map::make();
-    object.insert(::alloc::string::String::make("type"_str), JsonFromStd("scenetexture"));
-    object.insert(::alloc::string::String::make("value"_str), JsonFromStd(value));
-    return Json::Object(rstd::move(object));
+NJson RuntimeTextureProperty(std::string value) {
+    return NJson { { "type", "scenetexture" }, { "value", std::move(value) } };
 }
 
 owe::script::MediaStatus ToScriptMediaStatus(const MediaStatus& status) {
@@ -162,50 +158,39 @@ owe::script::MediaStatus ToScriptMediaStatus(const MediaStatus& status) {
                                       .previous_art_url = status.previous_art_url };
 }
 
-void MergeProjectUserProperties(const std::filesystem::path& project_dir, rstd::json::Map& out) {
+void MergeProjectUserProperties(const std::filesystem::path& project_dir, NJson& out) {
     const auto    project_path = project_dir / "project.json";
     std::ifstream is(project_path);
     if (! is) return;
 
     std::string source(std::istreambuf_iterator<char>(is), {});
-    auto        parsed = ParseJson(source, { .allow_comments = true });
+    auto        parsed = ParseNJson(source, { .allow_comments = true });
     if (parsed.is_err()) {
         rstd_warn("Can't parse {}: {}", project_path.string(), parsed.unwrap_err());
         return;
     }
-    auto root    = parsed.unwrap();
-    auto general = root.get("general"_str);
-    if (general.is_none()) return;
-    auto properties = (*general)->get("properties"_str);
-    if (properties.is_none()) return;
-    auto object = (*properties)->as_object();
-    if (object.is_none()) return;
+    auto        root    = parsed.unwrap();
+    const auto* general = Find(root, "general");
+    if (general == nullptr) return;
+    const auto* properties = Find(*general, "properties");
+    if (properties == nullptr || ! properties->is_object()) return;
 
-    (*object)->iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        const auto  raw_key           = rstd::cppstd::as_string_view(entry_key->as_str());
-        const auto& value             = *entry_value;
-        std::string key               = CanonicalSceneUserPropertyKey(raw_key);
-        auto        current           = out.get(rstd::cppstd::as_str(key).unwrap());
-        auto        descriptor = current.is_some() ? MergeUserPropertyDescriptor(value, **current)
-                                                   : MakeUserPropertyDescriptor(value.clone());
-        out.insert(::alloc::string::String::make(rstd::cppstd::as_str(key).unwrap()),
-                   rstd::move(descriptor));
-    });
+    for (const auto& [raw_key, value] : properties->items()) {
+        std::string key        = CanonicalSceneUserPropertyKey(raw_key);
+        const auto* current    = Find(out, key);
+        auto        descriptor = current != nullptr ? MergeUserPropertyDescriptor(value, *current)
+                                                    : MakeUserPropertyDescriptor(value);
+        out[key]               = std::move(descriptor);
+    }
 }
 
-rstd::json::Map NormalizeUserProperties(const rstd::json::Map& input) {
-    auto out = rstd::json::Map::make();
-    input.iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        const auto  key               = rstd::cppstd::as_string_view(entry_key->as_str());
-        const auto& value             = *entry_value;
-        std::string canonical         = CanonicalSceneUserPropertyKey(key);
-        if (key == canonical || out.get(rstd::cppstd::as_str(canonical).unwrap()).is_none()) {
-            out.insert(::alloc::string::String::make(rstd::cppstd::as_str(canonical).unwrap()),
-                       InitialUserProperty(value.clone()));
-        }
-    });
+NJson NormalizeUserProperties(const NJson& input) {
+    NJson out = NJson::object();
+    for (const auto& [key, value] : input.items()) {
+        std::string canonical = CanonicalSceneUserPropertyKey(key);
+        if (key == canonical || Find(out, canonical) == nullptr)
+            out[canonical] = InitialUserProperty(value);
+    }
     return out;
 }
 
@@ -308,7 +293,7 @@ private:
     std::optional<RenderCaptureTarget> m_offline_capture_target;
 
     SceneWallpaperConfig               m_config;
-    rstd::json::Map                    m_user_properties;
+    NJson                              m_user_properties;
     Option<vulkan::DeviceCapabilities> m_render_capabilities;
 
     Box<wavsen::audio::SoundManager> m_sound_manager;
@@ -1024,8 +1009,8 @@ bool SceneRuntimeController::dispatch(MainMsg message) {
 void SceneRuntimeController::post(RenderMsg msg) { m_render_controller->post(rstd::move(msg)); }
 
 auto SceneRuntimeController::schemeColor() const -> Option<array<float, 3>> {
-    auto property = m_user_properties.get("schemecolor"_str);
-    return property.is_some() ? ResolveSceneUserPropertyColor(**property) : None();
+    const auto* property = Find(m_user_properties, "schemecolor");
+    return property != nullptr ? ResolveSceneUserPropertyColor(*property) : None();
 }
 
 void SceneRuntimeController::publishClearColor(array<float, 3> fallback) {
@@ -1188,13 +1173,11 @@ void SceneRuntimeController::on(MainMsg::SetSpeed_payload&& m) {
 
 void SceneRuntimeController::on(MainMsg::SetUserProperty_payload&& m) {
     const std::string property = CanonicalSceneUserPropertyKey(m.key);
-    auto              current  = m_user_properties.get(rstd::cppstd::as_str(property).unwrap());
-    Json              prop = current.is_some() ? MergeUserPropertyDescriptor(**current, m.value)
-                                               : MakeUserPropertyDescriptor(rstd::move(m.value));
-    m_config.user_properties.insert(
-        ::alloc::string::String::make(rstd::cppstd::as_str(property).unwrap()), prop.clone());
-    m_user_properties.insert(::alloc::string::String::make(rstd::cppstd::as_str(property).unwrap()),
-                             prop.clone());
+    const auto*       current  = Find(m_user_properties, property);
+    NJson             prop     = current != nullptr ? MergeUserPropertyDescriptor(*current, m.value)
+                                                    : MakeUserPropertyDescriptor(std::move(m.value));
+    m_config.user_properties[property] = prop;
+    m_user_properties[property]        = prop;
     if (property == "schemecolor") {
         auto color = ResolveSceneUserPropertyColor(prop);
         if (color.is_some() && m_clear_color_cb) {
@@ -1345,8 +1328,7 @@ void SceneRuntimeController::loadScene() {
             rstd::mut_ref<fs::VFS>::from_raw_parts(&vfs),
             rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(m_sound_manager.get()),
             SceneParseOptions {
-                .user_properties = Some(
-                    rstd::ref<rstd::json::Map>::from_raw_parts(rstd::addressof(m_user_properties))),
+                .user_properties  = &m_user_properties,
                 .shader_cache_dir = rstd::move(shader_cache_dir),
                 .capabilities =
                     SceneParseCapabilities {
@@ -1650,7 +1632,7 @@ std::string SceneRenderController::describeOfflineProjection() const {
     std::ostringstream out;
     out << "{\"frame_index\":" << m_step_index
         << ",\"active_camera_name\":"
-        << (active_name.empty() ? "null" : Dump(JsonFromStd(active_name)))
+        << (active_name.empty() ? "null" : Dump(NJson(active_name)))
         << ",\"active_camera_is_perspective\":"
         << ((*active)->IsPerspective() ? "true" : "false")
         << ",\"active_camera_position\":[" << position.x() << ',' << position.y() << ','
@@ -1685,7 +1667,7 @@ std::string SceneRenderController::describeOfflineScene() const {
             first = false;
             out << "{\"id\":" << (identity.is_some() ? identity->value.to_primitive() : -1)
                 << ",\"owner\":" << owner << ",\"parent\":" << inherited
-                << ",\"name\":" << Dump(JsonFromStd(node->Name()))
+                << ",\"name\":" << Dump(NJson(node->Name()))
                 << ",\"visible\":" << (node->Visible() ? "true" : "false")
                 << ",\"has_mesh\":" << (node->Mesh() != nullptr ? "true" : "false")
                 << ",\"has_effect_layer\":" << (node->HasLayer() ? "true" : "false")
@@ -1737,8 +1719,8 @@ std::string SceneRenderController::describeOfflineScene() const {
                         }
                     }
                 }
-                out << "{\"shader\":" << Dump(JsonFromStd(material->customShader.shader ? material->customShader.shader->name : std::string()))
-                    << ",\"role\":" << Dump(JsonFromStd(role))
+                out << "{\"shader\":" << Dump(NJson(material->customShader.shader ? material->customShader.shader->name : std::string()))
+                    << ",\"role\":" << Dump(NJson(role))
                     << ",\"blend\":" << static_cast<int>(material->blenmode)
                     << ",\"uses_audio_spectrum\":" << (uses_audio_spectrum ? "true" : "false")
                     << ",\"uses_system_media_thumbnail\":"
@@ -1748,14 +1730,14 @@ std::string SceneRenderController::describeOfflineScene() const {
                 for (const auto& name : active_uniforms) {
                     if (! first_uniform) out << ',';
                     first_uniform = false;
-                    out << Dump(JsonFromStd(name));
+                    out << Dump(NJson(name));
                 }
                 out << "],\"textures\":[";
                 bool first_texture = true;
                 for (const auto& texture : material->textures) {
                     if (!first_texture) out << ',';
                     first_texture = false;
-                    out << Dump(JsonFromStd(texture));
+                    out << Dump(NJson(texture));
                 }
                 out << "]}";
             }
@@ -1847,7 +1829,7 @@ void SceneWallpaper::setUserPropertyRaw(std::string_view name, std::string value
     m_runtime->post(MainMsg::SetUserProperty(std::string(name), RawUserProperty(value)));
 }
 
-void SceneWallpaper::setUserPropertyJson(std::string_view name, Json value) {
+void SceneWallpaper::setUserPropertyJson(std::string_view name, NJson value) {
     m_runtime->post(MainMsg::SetUserProperty(std::string(name), rstd::move(value)));
 }
 

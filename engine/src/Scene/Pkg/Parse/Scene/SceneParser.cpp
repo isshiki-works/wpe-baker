@@ -78,15 +78,9 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
     const bool retain_context = context.script_scene.is_some();
     auto       scene          = FinalizeScene(context);
     if (retain_context) {
-        if (context.user_properties.is_some()) {
-            auto properties = Box<rstd::json::Map>::make();
-            (*context.user_properties)->iter().for_each([&](auto entry) {
-                auto [key, value] = entry;
-                properties->insert(key->clone(), value->clone());
-            });
-            context.owned_user_properties = Some(rstd::move(properties));
-            context.user_properties = Some(ref<rstd::json::Map>::from_raw_parts(
-                (*context.owned_user_properties).get()));
+        if (context.user_properties != nullptr) {
+            context.owned_user_properties = Some(Box<NJson>::make(*context.user_properties));
+            context.user_properties       = (*context.owned_user_properties).get();
         }
         context.scene.Borrow(*scene);
         scene->InstallExtension(Box<SceneParseContext>::make(rstd::move(context)));

@@ -20,13 +20,13 @@ struct SceneUserPropertyMutation {
 };
 
 std::string             CanonicalSceneUserPropertyKey(std::string_view key);
-Option<array<float, 3>> ResolveSceneUserPropertyColor(const Json&);
+Option<array<float, 3>> ResolveSceneUserPropertyColor(const NJson&);
 
 class SceneUserPropertyApplier {
 public:
-    static SceneUserPropertyMutation Apply(Scene&, std::string_view key, const Json&);
-    static SceneUserPropertyMutation ApplyAll(Scene&, const rstd::json::Map&);
-    static Vec<SceneMaterialId>      ApplyTexture(Scene&, std::string_view key, const Json&);
+    static SceneUserPropertyMutation Apply(Scene&, std::string_view key, const NJson&);
+    static SceneUserPropertyMutation ApplyAll(Scene&, const NJson& properties);
+    static Vec<SceneMaterialId>      ApplyTexture(Scene&, std::string_view key, const NJson&);
 };
 
 Vec<SceneUserPropertyDiagnostic> CollectSceneUserPropertyDiagnostics(const Scene&,

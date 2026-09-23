@@ -224,7 +224,7 @@ public:
     bool SetEffectProjectionSize(SceneNodeId, array<float, 2>);
     bool SetObjectParallaxDepth(i32, array<float, 2>);
     bool SetNodeParallaxDepth(const SceneNode&, array<float, 2>);
-    bool ApplyObjectParallaxDepth(i32, const Json&);
+    bool ApplyObjectParallaxDepth(i32, const NJson&);
     auto NodeParallaxDepth(const SceneNode&) const -> Option<array<float, 2>>;
     auto EffectiveParallax(const SceneNode&) const -> Option<UniformEffectiveParallax>;
     auto FindNodeState(const SceneNode*) const -> const UniformNodeState*;
@@ -246,7 +246,7 @@ public:
     void SetTimeOfDay(float value) { m_inputs.time_of_day = value; }
     void SetAudioSpectrum(const scene_audio::Buffers&);
     void Advance(const SceneFrame&);
-    void ApplyUserProperty(std::string_view, const Json&);
+    void ApplyUserProperty(std::string_view, const NJson&);
     auto AcquireAudioResponse() const -> Box<dyn<UniformBindingLease>> {
         return m_audio_demand->Acquire();
     }

@@ -484,7 +484,7 @@ TEST(SceneParserSoundScript, UserPropertyCanStartSilentSoundFromVolumeField) {
     ASSERT_NE(target, nullptr);
     EXPECT_FALSE(target->IsPlaying());
 
-    auto property = rstd::json::from_str(R"({"type":"combo","value":"0"})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"combo","value":"0"})").unwrap();
     owe::script::SetSceneUserProperty(*scene.scene, "song_selection", property);
     EXPECT_TRUE(target->IsPlaying());
 
@@ -787,7 +787,7 @@ TEST(SceneUserTextBinding, AppliesDescriptorPayloadToMatchingBindings) {
                                       second = to_string(value);
                                   }));
 
-    auto property = owe::ParseJson(R"({"type":"textinput","value":"updated"})").unwrap();
+    auto property = owe::ParseNJson(R"({"type":"textinput","value":"updated"})").unwrap();
     EXPECT_TRUE(scene.ApplyUserTextBindings("title"_str, property));
     EXPECT_EQ(first, "updated");
     EXPECT_EQ(second, "updated");
@@ -802,7 +802,7 @@ TEST(SceneUserTextBinding, AppliesEmptyString) {
                                       value = to_string(next);
                                   }));
 
-    auto property = owe::ParseJson(R"({"type":"textinput","value":""})").unwrap();
+    auto property = owe::ParseNJson(R"({"type":"textinput","value":""})").unwrap();
     EXPECT_TRUE(scene.ApplyUserTextBindings("title"_str, property));
     EXPECT_TRUE(value.empty());
 }
@@ -812,11 +812,11 @@ TEST(SceneUserPropertyBinding, AppliesJsonPayloadToOwnedCallback) {
     bool       called = false;
     scene.RegisterUserPropertyBinding(
         String::make("camera"_str),
-        Box<dyn<FnMut<void(ref<owe::Json>)>>>::make([&](ref<owe::Json> property) {
+        Box<dyn<FnMut<void(ref<owe::NJson>)>>>::make([&](ref<owe::NJson> property) {
             called = property->is_object();
         }));
 
-    auto property = owe::ParseJson(R"({"value":true})").unwrap();
+    auto property = owe::ParseNJson(R"({"value":true})").unwrap();
     EXPECT_TRUE(scene.ApplyUserPropertyBindings("camera"_str, property));
     EXPECT_TRUE(called);
     EXPECT_FALSE(scene.ApplyUserPropertyBindings("other"_str, property));
@@ -883,11 +883,11 @@ TEST(SceneCameraPath, UserBindingMutatesRegisteredArc) {
     scene.RegisterCameraPath(path.clone());
     scene.RegisterCameraPathUserBinding(String::make("camera-path"_str), path.clone());
 
-    auto disabled = owe::ParseJson(R"({"value":false})").unwrap();
+    auto disabled = owe::ParseNJson(R"({"value":false})").unwrap();
     EXPECT_TRUE(scene.ApplyUserCameraPathVisibilityBindings("camera-path", disabled));
     EXPECT_FALSE(path->enabled);
 
-    auto enabled = owe::ParseJson(R"({"value":true})").unwrap();
+    auto enabled = owe::ParseNJson(R"({"value":true})").unwrap();
     EXPECT_TRUE(scene.ApplyUserCameraPathVisibilityBindings("camera-path", enabled));
     EXPECT_TRUE(path->enabled);
 }
@@ -979,23 +979,23 @@ TEST(UniformSourceParallax, UserPropertiesDriveEveryParallaxField) {
     auto state = Arc<owe::UniformSceneState>::make(Arc<owe::AudioResponseDemand>::make());
     state->CameraParallax() = { true, 0.03f, 0.1f, 0.36f };
 
-    auto disable = owe::ParseJson(R"({"value":false})").unwrap();
+    auto disable = owe::ParseNJson(R"({"value":false})").unwrap();
     state->ApplyUserProperty("cameraparallax", disable);
     EXPECT_FALSE(state->CameraParallax().enable);
 
-    auto enable = owe::ParseJson(R"({"value":true})").unwrap();
+    auto enable = owe::ParseNJson(R"({"value":true})").unwrap();
     state->ApplyUserProperty("cameraparallax", enable);
     EXPECT_TRUE(state->CameraParallax().enable);
 
-    auto amount = owe::ParseJson(R"({"value":0.25})").unwrap();
+    auto amount = owe::ParseNJson(R"({"value":0.25})").unwrap();
     state->ApplyUserProperty("cameraparallaxamount", amount);
     EXPECT_FLOAT_EQ(state->CameraParallax().amount, 0.25f);
 
-    auto delay = owe::ParseJson(R"({"value":0.5})").unwrap();
+    auto delay = owe::ParseNJson(R"({"value":0.5})").unwrap();
     state->ApplyUserProperty("cameraparallaxdelay", delay);
     EXPECT_FLOAT_EQ(state->CameraParallax().delay, 0.5f);
 
-    auto influence = owe::ParseJson(R"({"value":0.75})").unwrap();
+    auto influence = owe::ParseNJson(R"({"value":0.75})").unwrap();
     state->ApplyUserProperty("cameraparallaxmouseinfluence", influence);
     EXPECT_FLOAT_EQ(state->CameraParallax().mouse_influence, 0.75f);
 }

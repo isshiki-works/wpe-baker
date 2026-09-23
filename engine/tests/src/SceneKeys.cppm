@@ -10,6 +10,8 @@ module;
 #include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
 #include <rstd/enum.hpp>
 
+#include "JsonNlohmann.hpp"
+
 export module wescene.testing.scene_keys;
 
 import rstd.cppstd;
@@ -17,7 +19,6 @@ import wescene.json;
 import wescene.pkg_fs;
 import wescene.fs;
 import wescene.testing.pkg_header;
-import wescene.testing.json_builder;
 
 using namespace rstd::literals;
 
@@ -39,7 +40,7 @@ export namespace owe::testing
 //     },
 //     ...
 //   }
-owe::Json ScanSceneKeys(const std::string& workshop_root);
+owe::NJson ScanSceneKeys(const std::string& workshop_root);
 
 } // namespace owe::testing
 
@@ -50,22 +51,17 @@ namespace
 {
 
 namespace fs = std::filesystem;
-using Json   = owe::Json;
+using Json   = owe::NJson;
 
 const char* TypeName(const Json& value) {
-    RSTD_MATCH(value) {
-        RSTD_CASE(Null) { return "null"; }
-        RSTD_CASE(Object) { return "object"; }
-        RSTD_CASE(Array) { return "array"; }
-        RSTD_CASE(String) { return "string"; }
-        RSTD_CASE(Bool) { return "boolean"; }
-        RSTD_CASE(Number, number) {
-            if (number.is_f64()) return "number_float";
-            if (number.is_u64()) return "number_unsigned";
-            return "number_integer";
-        }
-    }
-    rstd::unreachable();
+    if (value.is_object()) return "object";
+    if (value.is_array()) return "array";
+    if (value.is_string()) return "string";
+    if (value.is_boolean()) return "boolean";
+    if (value.is_number_float()) return "number_float";
+    if (value.is_number_unsigned()) return "number_unsigned";
+    if (value.is_number_integer()) return "number_integer";
+    return "null";
 }
 
 struct LocalObs {
@@ -80,31 +76,19 @@ void Walk(const Json& node, std::string& path, LocalMap& out) {
         obs.occurrences += 1;
         obs.types.insert(TypeName(node));
     }
-    RSTD_MATCH(node) {
-        RSTD_CASE(Object, object) {
-            object.iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
-                const auto        key         = rstd::cppstd::as_string_view(entry_key->as_str());
-                const auto&       value       = *entry_value;
-                const std::size_t old         = path.size();
-                if (! path.empty()) path += '.';
-                path += key;
-                Walk(value, path, out);
-                path.resize(old);
-            });
-            return;
-        }
-        RSTD_CASE(Array, array) {
+    if (node.is_object()) {
+        for (const auto& [key, value] : node.items()) {
             const std::size_t old = path.size();
-            path += "[]";
-            for (const auto& el : array) Walk(el, path, out);
+            if (! path.empty()) path += '.';
+            path += key;
+            Walk(value, path, out);
             path.resize(old);
-            return;
         }
-        RSTD_CASE(Null) { return; }
-        RSTD_CASE(Bool) { return; }
-        RSTD_CASE(Number) { return; }
-        RSTD_CASE(String) { return; }
+    } else if (node.is_array()) {
+        const std::size_t old = path.size();
+        path += "[]";
+        for (const auto& el : node) Walk(el, path, out);
+        path.resize(old);
     }
 }
 
@@ -165,7 +149,7 @@ bool ScanOneWorkshop(const fs::path& workshop_dir, std::map<std::string, Version
     }
     std::string text = stream->ReadAllStr();
 
-    auto parsed = owe::ParseJson(text);
+    auto parsed = owe::ParseNJson(text);
     if (parsed.is_err()) {
         std::fprintf(stderr, "wpscan: skip %s: invalid scene JSON\n", id.c_str());
         return false;
@@ -181,22 +165,20 @@ bool ScanOneWorkshop(const fs::path& workshop_dir, std::map<std::string, Version
 }
 
 Json AggToJson(const std::map<std::string, VersionAgg>& by_version) {
-    auto out = owe::MakeObject();
+    Json out = Json::object();
     for (const auto& [version, agg] : by_version) {
-        auto jv = owe::MakeObject();
-        owe::SetMember(jv, "total_scenes", agg.total_scenes);
-        auto jkeys = owe::MakeObject();
+        Json jv            = Json::object();
+        jv["total_scenes"] = agg.total_scenes;
+        Json jkeys         = Json::object();
         for (const auto& [path, st] : agg.keys) {
-            auto jk = owe::MakeObject();
-            owe::SetMember(jk, "present_in", st.present_in);
-            owe::SetMember(jk, "occurrences", st.occurrences);
-            auto jtypes = owe::MakeArray();
-            for (const auto& t : st.value_types) owe::AppendElement(jtypes, t);
-            owe::SetMember(jk, "value_types", std::move(jtypes));
-            owe::SetMember(jkeys, path, std::move(jk));
+            Json jk           = Json::object();
+            jk["present_in"]  = st.present_in;
+            jk["occurrences"] = st.occurrences;
+            jk["value_types"] = Json(st.value_types);
+            jkeys[path]       = std::move(jk);
         }
-        owe::SetMember(jv, "keys", std::move(jkeys));
-        owe::SetMember(out, version, std::move(jv));
+        jv["keys"]   = std::move(jkeys);
+        out[version] = std::move(jv);
     }
     return out;
 }

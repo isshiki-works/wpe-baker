@@ -2,6 +2,8 @@ module;
 
 #include <rstd/enum.hpp>
 
+#include "JsonNlohmann.hpp"
+
 module wescene.pkg.parse;
 import :scene_context;
 import eigen;
@@ -153,7 +155,7 @@ SceneUserVisibilityBinding
 ToSceneUserVisibilityBinding(const wpscene::VisibleUserBinding& binding) {
     SceneUserVisibilityBinding out;
     out.key           = String::make(rstd::cppstd::as_str(binding.name).unwrap());
-    out.condition     = binding.condition.clone();
+    out.condition     = std::make_shared<const NJson>(FromRstd(binding.condition));
     out.has_condition = binding.has_condition;
     return out;
 }
@@ -239,12 +241,9 @@ script::ScriptScene& EnsureScriptScene(SceneParseContext& context) {
                     Eigen::Vector3f t     = (world * *bone).translation();
                     return Some(script::BoneTranslation { t.x(), t.y(), t.z() });
                 });
-        if (context.user_properties.is_some())
-            (*context.user_properties)->iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
-                auto key                      = rstd::cppstd::as_string_view(entry_key->as_str());
-                (*context.script_scene)->runtime().SetUserProperty(key, *entry_value);
-            });
+        if (context.user_properties != nullptr)
+            for (const auto& [key, value] : context.user_properties->items())
+                (*context.script_scene)->runtime().SetUserProperty(key, value);
         for (const auto& binding : context.image_alignment_bindings) {
             InstallImageAlignmentBinding((*context.script_scene)->runtime(),
                                          binding.node,
@@ -300,82 +299,66 @@ Option<Vector3f> ScriptValueAsVec3(const script::ScriptValue& value, const Vecto
     return Some(next);
 }
 
-bool IsFractionSliderProperty(const SceneParseContext& context, const Json& binding) {
-    if (context.user_properties.is_none() || ! binding.is_object()) return false;
-    auto user = binding.get("user"_str);
-    if (user.is_none()) return false;
-    auto key = (*user)->as_str();
-    if (key.is_none()) return false;
-    auto prop = (*context.user_properties)->get(*key);
-    if (prop.is_none() || ! (*prop)->is_object()) return false;
-    auto type = (*prop)->get("type"_str);
-    if (type.is_none()) return false;
-    auto type_string = (*type)->as_str();
-    if (type_string.is_none() || rstd::cppstd::as_string_view(*type_string) != "slider")
+bool IsFractionSliderProperty(const SceneParseContext& context, const NJson& binding) {
+    if (context.user_properties == nullptr || ! binding.is_object()) return false;
+    const auto* user = Find(binding, "user");
+    if (user == nullptr || ! user->is_string()) return false;
+    const auto* prop = Find(*context.user_properties, user->get_ref<const std::string&>());
+    if (prop == nullptr || ! prop->is_object()) return false;
+    const auto* type = Find(*prop, "type");
+    if (type == nullptr || ! type->is_string() || type->get_ref<const std::string&>() != "slider")
         return false;
-    auto fraction = (*prop)->get("fraction"_str);
-    return fraction.is_some() && (*fraction)->as_bool().unwrap_or(false);
+    const auto* fraction = Find(*prop, "fraction");
+    return fraction != nullptr && fraction->is_boolean() && fraction->get<bool>();
 }
 
-Json ScriptPropertiesForField(const SceneParseContext& context, std::string_view field,
-                              const Json& properties, const wpscene::ScriptBinding& binding) {
-    Json props = properties.clone();
+NJson ScriptPropertiesForField(const SceneParseContext& context, std::string_view field,
+                               const NJson& properties, const wpscene::ScriptBinding& binding) {
+    NJson props = properties;
     if (field != "scale" || binding.source.find("/10000") == std::string::npos ||
         ! props.is_object())
         return props;
 
-    auto object = props.as_object_mut();
-    (*object)->iter_mut().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        auto& item                    = *entry_value;
-        if (IsFractionSliderProperty(context, item)) {
-            auto item_object = item.as_object_mut();
-            (*item_object)
-                ->insert(::alloc::string::String::make("__scriptValueScale"_str),
-                         rstd::into<Json>(f64(50.0)));
-        }
-    });
+    for (auto& [key, item] : props.items()) {
+        if (IsFractionSliderProperty(context, item)) item["__scriptValueScale"] = 50.0;
+    }
     return props;
 }
 
-Json ScriptInitialValueForField(std::string_view field, const Json& value) {
-    if (field != "angles") return value.clone();
+NJson ScriptInitialValueForField(std::string_view field, const NJson& value) {
+    if (field != "angles") return value;
 
     constexpr float kRadToDeg = 180.0f / rstd::f32::consts::PI.to_primitive();
-    if (value.is_null()) return Json::Null();
+    auto in_float_range = [](double number) {
+        return number >= std::numeric_limits<float>::lowest() &&
+               number <= std::numeric_limits<float>::max();
+    };
+    if (value.is_null()) return NJson();
     if (value.is_number()) {
-        auto number = value.as_f64();
-        return number.is_some() && number->to_primitive() >= std::numeric_limits<float>::lowest() &&
-                       number->to_primitive() <= std::numeric_limits<float>::max()
-                   ? rstd::into<Json>(f32(static_cast<float>(number->to_primitive()) * kRadToDeg))
-                   : Json::Null();
+        const double number = value.get<double>();
+        return in_float_range(number) ? NJson(double(static_cast<float>(number) * kRadToDeg))
+                                      : NJson();
     }
 
     if (value.is_object()) {
-        auto out = value.clone();
-        for (auto axis : rstd::array<ref<str>, 3> { "x"_str, "y"_str, "z"_str }) {
-            auto member = out.get_mut(axis);
-            if (member.is_none()) continue;
-            auto number = (*member)->as_f64();
-            if (number.is_some() &&
-                number->to_primitive() >= std::numeric_limits<float>::lowest() &&
-                number->to_primitive() <= std::numeric_limits<float>::max()) {
-                **member =
-                    rstd::into<Json>(f32(static_cast<float>(number->to_primitive()) * kRadToDeg));
-            }
+        NJson out = value;
+        for (const char* axis : { "x", "y", "z" }) {
+            auto member = out.find(axis);
+            if (member == out.end() || ! member->is_number()) continue;
+            const double number = member->get<double>();
+            if (in_float_range(number)) *member = double(static_cast<float>(number) * kRadToDeg);
         }
         return out;
     }
 
     Vec<float> values;
     if (owe::GetJsonValue(value, values) && ! values.is_empty()) {
-        for (auto& axis : values) axis *= kRadToDeg;
-        auto out = rstd::json::Array::make();
-        for (float axis : values) out.push(rstd::into<Json>(f32(axis)));
-        return Json::Array(rstd::move(out));
+        NJson out = NJson::array();
+        for (float axis : values) out.push_back(double(axis * kRadToDeg));
+        return out;
     }
 
-    return value.clone();
+    return value;
 }
 
 } // namespace owe
@@ -386,21 +369,22 @@ namespace owe
 namespace
 {
 
-Option<SceneUserVisibilityBinding> AnimationLayerVisibleUserBinding(const Json& visible) {
+Option<SceneUserVisibilityBinding> AnimationLayerVisibleUserBinding(const NJson& visible) {
     if (! visible.is_object()) return None();
-    auto user = visible.get("user"_str);
-    if (user.is_none()) return None();
+    const auto* user = Find(visible, "user");
+    if (user == nullptr) return None();
 
+    auto to_string = [](const NJson& text) {
+        return String::make(rstd::cppstd::as_str(text.get_ref<const std::string&>()).unwrap());
+    };
     SceneUserVisibilityBinding binding;
-    if ((*user)->is_string()) {
-        binding.key = String::make(*(*user)->as_str());
-    } else if ((*user)->is_object()) {
-        if (auto name = (*user)->get("name"_str); name.is_some()) {
-            auto value = (*name)->as_str();
-            if (value.is_some()) binding.key = String::make(*value);
-        }
-        if (auto condition = (*user)->get("condition"_str); condition.is_some()) {
-            binding.condition     = (*condition)->clone();
+    if (user->is_string()) {
+        binding.key = to_string(*user);
+    } else if (user->is_object()) {
+        if (const auto* name = Find(*user, "name"); name != nullptr && name->is_string())
+            binding.key = to_string(*name);
+        if (const auto* condition = Find(*user, "condition"); condition != nullptr) {
+            binding.condition     = std::make_shared<const NJson>(*condition);
             binding.has_condition = true;
         }
     }
@@ -422,8 +406,8 @@ void WireFieldScripts(SceneParseContext& context, const Arc<SceneNode>& node_sp,
         auto state = CopyableArcHold(context.uniform_state.clone());
         context.scene->RegisterUserPropertyBinding(
             (**parallax_binding).user->clone(),
-            Box<dyn<FnMut<void(ref<Json>)>>>::make(
-                [state, object_id = node->ID()](ref<Json> property) mutable {
+            Box<dyn<FnMut<void(ref<NJson>)>>>::make(
+                [state, object_id = node->ID()](ref<NJson> property) mutable {
                     (void)state.value->ApplyObjectParallaxDepth(object_id, *property);
                 }));
     }
@@ -471,8 +455,9 @@ void WireFieldScripts(SceneParseContext& context, const Arc<SceneNode>& node_sp,
             continue;
         }
         std::string sha = utils::genSha1(std::span<const char>(sb.source));
-        auto props      = ScriptPropertiesForField(context, field, binding.ScriptProperties(), sb);
-        auto initial_value = ScriptInitialValueForField(field, sb.initial_value);
+        auto props =
+            ScriptPropertiesForField(context, field, FromRstd(binding.ScriptProperties()), sb);
+        auto initial_value = ScriptInitialValueForField(field, FromRstd(sb.initial_value));
         Option<Arc<SceneAnimationPlayback>> animation;
         if (binding.animation.is_some())
             animation = Some(ResolveAnimationTrack(context, binding).playback.clone());
@@ -526,13 +511,14 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
     for (const auto& authored : authored_layers) {
         if (authored.visible_binding.is_none() || ! authored.visible_binding->is_object()) continue;
 
-        auto user_binding = AnimationLayerVisibleUserBinding(*authored.visible_binding);
+        auto user_binding = AnimationLayerVisibleUserBinding(FromRstd(*authored.visible_binding));
         const bool user_controls_visibility = user_binding.is_some();
         if (user_binding.is_some()) {
-            if (context.user_properties.is_some()) {
-                auto property = (*context.user_properties)->get(user_binding->key.as_str());
-                if (property.is_some()) {
-                    auto visible = ResolveSceneUserVisibilityBinding(*user_binding, **property);
+            if (context.user_properties != nullptr) {
+                const auto* property = Find(*context.user_properties,
+                                            rstd::cppstd::as_string_view(user_binding->key.as_str()));
+                if (property != nullptr) {
+                    auto visible = ResolveSceneUserVisibilityBinding(*user_binding, *property);
                     if (visible.is_some())
                         (void)puppet_layer->SetAnimationLayerVisible(authored.layer_id, *visible);
                 }
@@ -540,9 +526,9 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
             auto hold = CopyableArcHold(puppet_layer.clone());
             context.scene->RegisterUserPropertyBinding(
                 user_binding->key.clone(),
-                Box<dyn<FnMut<void(ref<Json>)>>>::make(
+                Box<dyn<FnMut<void(ref<NJson>)>>>::make(
                     [hold, layer_id = authored.layer_id,
-                     binding = rstd::move(*user_binding)](ref<Json> property) mutable {
+                     binding = rstd::move(*user_binding)](ref<NJson> property) mutable {
                         auto visible = ResolveSceneUserVisibilityBinding(binding, *property);
                         if (visible.is_some())
                             (void)hold.value->SetAnimationLayerVisible(layer_id, *visible);
@@ -565,17 +551,17 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
         const auto& script_binding = *(**binding).script;
         auto&       scripts        = EnsureScriptScene(context);
         auto&       runtime        = scripts.runtime();
-        Json initial_value = script_binding.initial_value.clone();
+        NJson initial_value = FromRstd(script_binding.initial_value);
         if (user_controls_visibility) {
             auto visible = puppet_layer->AnimationLayerVisible(authored.layer_id);
-            if (visible.is_some()) initial_value = rstd::into<Json>(*visible);
+            if (visible.is_some()) initial_value = bool(*visible);
         }
         std::string sha = utils::genSha1(std::span<const char>(script_binding.source));
         auto* field_script = runtime.MakeFieldScript(
             script_binding.source,
             sha,
             script::FieldKind::Bool,
-            (**binding).ScriptProperties(),
+            FromRstd((**binding).ScriptProperties()),
             initial_value,
             script::ScriptBindingContext::ForAnimationLayer(owner.as_ptr(),
                                                              puppet_layer.clone(),
@@ -627,8 +613,8 @@ void WireImageEffectVisibilityScript(SceneParseContext& context, SceneNode* node
         rt.MakeFieldScript(sb.source,
                            sha,
                            script::FieldKind::Bool,
-                           binding->ScriptProperties(),
-                           sb.initial_value,
+                           FromRstd(binding->ScriptProperties()),
+                           FromRstd(sb.initial_value),
                            script::ScriptBindingContext::ForEffect(
                                node, { .id = effect_id }, "visible"_str, rstd::move(animation)));
     if (! fs) return;
@@ -671,8 +657,8 @@ void WireCameraShakeScripts(SceneParseContext& context, const wpscene::FieldBind
         auto* fs = rt.MakeFieldScript(sb.source,
                                       sha,
                                       kind,
-                                      binding.ScriptProperties(),
-                                      sb.initial_value,
+                                      FromRstd(binding.ScriptProperties()),
+                                      FromRstd(sb.initial_value),
                                       script::ScriptBindingContext::ForLayer(
                                           nullptr, binding.field.as_str(), rstd::move(animation)));
         if (! fs) continue;
@@ -716,12 +702,12 @@ void WireCameraFieldScripts(SceneParseContext& context, const Arc<SceneNode>& no
         }
 
         std::string sha           = utils::genSha1(std::span<const char>(sb.source));
-        auto        initial_value = ScriptInitialValueForField(field, sb.initial_value);
+        auto        initial_value = ScriptInitialValueForField(field, FromRstd(sb.initial_value));
         auto*       fs            = rt.MakeFieldScript(
             sb.source,
             sha,
             kind,
-            binding.ScriptProperties(),
+            FromRstd(binding.ScriptProperties()),
             initial_value,
             script::ScriptBindingContext::ForLayer(
                 node, binding.field.as_str(), node->FieldAnimation(binding.field.as_str())));

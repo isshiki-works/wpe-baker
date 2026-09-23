@@ -261,8 +261,8 @@ void InitContext(SceneParseContext& context, fs::VFS& vfs, const wpscene::SceneM
                 auto state =
                     mut_ref<UniformSceneState>::from_raw_parts(context.uniform_state.as_ptr());
                 scene.RegisterUserPropertyBinding(String::make(as_str(key).unwrap()),
-                                                  Box<dyn<FnMut<void(ref<Json>)>>>::make(
-                                                      [state, field](ref<Json> property) mutable {
+                                                  Box<dyn<FnMut<void(ref<NJson>)>>>::make(
+                                                      [state, field](ref<NJson> property) mutable {
                                                           state->ApplyUserProperty(field,
                                                                                    *property);
                                                       }));
@@ -282,8 +282,8 @@ void InitContext(SceneParseContext& context, fs::VFS& vfs, const wpscene::SceneM
                 auto state =
                     mut_ref<UniformSceneState>::from_raw_parts(context.uniform_state.as_ptr());
                 scene.RegisterUserPropertyBinding(String::make(as_str(key).unwrap()),
-                                                  Box<dyn<FnMut<void(ref<Json>)>>>::make(
-                                                      [state, field](ref<Json> property) mutable {
+                                                  Box<dyn<FnMut<void(ref<NJson>)>>>::make(
+                                                      [state, field](ref<NJson> property) mutable {
                                                           state->ApplyUserProperty(field,
                                                                                    *property);
                                                       }));
@@ -564,7 +564,7 @@ void IndexSceneDocument(SceneParseContext& context, ref<wpscene::SceneDocument> 
     for (const auto& record : document->objects) {
         const auto& metadata = record.metadata;
         if (metadata.kind == wpscene::SceneObjectKind::Unknown || ! metadata.has_id) continue;
-        (void)context.initial_layer_configs.insert(metadata.id, ToRstd(record.authored));
+        (void)context.initial_layer_configs.insert(metadata.id, record.authored);
         (void)context.script_initialization_orders.insert(
             metadata.id, static_cast<std::uint64_t>(context.node_id_order.len().to_primitive()));
         context.node_id_order.emplace_back(metadata.id);
@@ -575,8 +575,8 @@ void IndexSceneDocument(SceneParseContext& context, ref<wpscene::SceneDocument> 
 
 SceneParseContext BuildContext(fs::VFS& vfs, ref<str> scene_id, const wpscene::SceneMetadata& sc,
                                array<i32, 2>                ortho_extent,
-                               Option<ref<rstd::json::Map>> user_properties,
-                               Option<rstd::path::PathBuf>  shader_cache_dir,
+                               const NJson*                user_properties,
+                               Option<rstd::path::PathBuf> shader_cache_dir,
                                GeometryShaderLimits geometry_limits, bool directional_shadow) {
     SceneParseContext context;
     PrepareAnimationBindings(context, sc.general.field_bindings);

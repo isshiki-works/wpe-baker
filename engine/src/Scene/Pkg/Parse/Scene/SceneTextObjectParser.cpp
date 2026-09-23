@@ -169,13 +169,10 @@ bool EnsureTextAtlas(Scene& scene, text::FontFace& face) {
     return true;
 }
 
-auto UserPropertyValue(Option<ref<rstd::json::Map>> user_props, std::string_view key)
-    -> Option<ref<Json>> {
-    if (key.empty()) return None();
-    auto        props   = rstd_try(user_props);
-    auto        value   = rstd_try(props->get(rstd::cppstd::as_str(key).unwrap()));
-    const auto& payload = SceneUserPropertyPayload(*value);
-    return Some(ref<Json>::from_raw_parts(rstd::addressof(payload)));
+auto UserPropertyValue(const NJson* user_props, std::string_view key) -> const NJson* {
+    if (key.empty() || user_props == nullptr) return nullptr;
+    const auto* value = Find(*user_props, key);
+    return value != nullptr ? &SceneUserPropertyPayload(*value) : nullptr;
 }
 
 void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
@@ -236,9 +233,9 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
         if (value != nullptr && value->is_string()) s_text = value->get<std::string>();
     }
     if (has_text_user) {
-        auto value = UserPropertyValue(context.user_properties, obj.text_user.name);
-        if (value.is_some()) {
-            auto text = SceneJsonScalarString(**value);
+        const auto* value = UserPropertyValue(context.user_properties, obj.text_user.name);
+        if (value != nullptr) {
+            auto text = SceneJsonScalarString(*value);
             if (text.is_some()) s_text = rstd::cppstd::to_string(text->as_str());
         }
     }
@@ -1084,8 +1081,8 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
             sb.source,
             sha,
             script::FieldKind::String,
-            binding.ScriptProperties(),
-            sb.initial_value,
+            FromRstd(binding.ScriptProperties()),
+            FromRstd(sb.initial_value),
             script::ScriptBindingContext::ForLayer(
                 layer_node.as_ptr(), "text"_str, layer_node->FieldAnimation("text"_str)));
         if (fs) {
@@ -1108,8 +1105,8 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
             sb.source,
             sha,
             script::FieldKind::Scalar,
-            binding.ScriptProperties(),
-            sb.initial_value,
+            FromRstd(binding.ScriptProperties()),
+            FromRstd(sb.initial_value),
             script::ScriptBindingContext::ForLayer(
                 layer_node.as_ptr(), "pointsize"_str, layer_node->FieldAnimation("pointsize"_str)));
         if (fs) {

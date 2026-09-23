@@ -558,16 +558,12 @@ auto ReadAssetNJsonFile(fs::VFS& vfs, std::string_view path, JsonParseOptions op
 }
 
 auto Dump(const Json& value, Option<usize> indent) -> std::string {
-    return rstd::cppstd::to_string(DumpString(value, indent));
-}
-
-auto DumpString(const Json& value, Option<usize> indent) -> String {
     auto options = rstd::json::FormatOptions {};
     if (indent) {
         options.pretty = true;
         options.indent = *indent;
     }
-    return rstd::json::to_string(value, options);
+    return rstd::cppstd::to_string(rstd::json::to_string(value, options));
 }
 
 auto Dump(const NJson& value, Option<usize> indent) -> std::string {
