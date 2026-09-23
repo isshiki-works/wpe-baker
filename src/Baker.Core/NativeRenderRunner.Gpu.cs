@@ -50,7 +50,7 @@ public sealed partial class NativeRenderRunner
                 }
                 await reference.WriteAsync(rgb, token);
                 var range = ExactFrameRange.Build(video, index, 1, request.FpsNumerator, request.FpsDenominator);
-                byte[] yuv = await EncodedQualityValidator.RunFfmpegBytesAsync(tools,
+                byte[] yuv = await ff.RunBytesAsync(
                     ["-hide_banner", "-nostdin", "-v", "error", "-threads", "2", .. range.Arguments,
                      "-map", "0:v:0", "-vf", range.Filter, "-fps_mode", "passthrough", "-frames:v", "1",
                      "-an", "-sn", "-dn", "-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"],
@@ -65,7 +65,7 @@ public sealed partial class NativeRenderRunner
             "[0:v]setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709,split=2[p1][p2];" +
             "[p1][r1]ssim[ss];[p2][r2]psnr[ps]";
         string log = Path.Combine(output, "quality.stderr.log");
-        await RunTextAsync(tools.Ffmpeg,
+        await ff.RunTextAsync(tools.Ffmpeg,
             ["-hide_banner", "-nostdin", "-nostats", "-f", "rawvideo", "-pixel_format", "yuv420p", "-video_size", size,
              "-framerate", "1", "-i", productPath, "-f", "rawvideo", "-pixel_format", "rgb24", "-video_size", size,
              "-framerate", "1", "-i", referencePath, "-filter_complex_threads", "1", "-filter_complex", graph,

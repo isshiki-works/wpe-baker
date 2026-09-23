@@ -56,14 +56,13 @@ public sealed partial class NativeRenderRunner
         Directory.CreateDirectory(logDirectory);
         if (kind == PlaybackEncoderSelection.Vulkan)
         {
-            string version = await RunTextAsync(tools.Renderer,["--version"],
-                Path.Combine(logDirectory,"gpu-renderer-capabilities.stderr.log"),cancellationToken);
-            return version.Contains("gpu-loop-encode-v1",StringComparison.Ordinal) &&
-                version.Contains("gpu-sampling-coverage-v1",StringComparison.Ordinal)
+            RendererCapabilities capabilities = await client.CapabilitiesAsync(
+                Path.Combine(logDirectory, "gpu-renderer-capabilities.stderr.log"), cancellationToken);
+            return capabilities.Has("gpu-loop-encode-v1") && capabilities.Has("gpu-sampling-coverage-v1")
                 ? (kind,null) : (PlaybackEncoderSelection.Software,"Renderer does not support the complete GPU pipeline.");
         }
         return PlaybackEncoderSelection.Resolve(kind, PlaybackEncoderSelection.ParseEncoders(
-            await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-encoders"],
+            await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-encoders"],
                 Path.Combine(logDirectory, "playback-encoders.stderr.log"), cancellationToken)));
     }
 
@@ -203,7 +202,7 @@ public sealed partial class NativeRenderRunner
             encoderFallbackReason = "This group requires the lossless path; using the software playback encoder.";
         else if (requestedEncoder != PlaybackEncoderSelection.Software)
             (encoderKind, encoderFallbackReason) = PlaybackEncoderSelection.Resolve(requestedEncoder,
-                PlaybackEncoderSelection.ParseEncoders(await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-encoders"],
+                PlaybackEncoderSelection.ParseEncoders(await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-encoders"],
                     Path.Combine(output, "encoders.stderr.log"), cancellationToken)));
         var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)region.Height, numerator, denominator,
             losslessTest: false, encoderKind);
@@ -215,7 +214,7 @@ public sealed partial class NativeRenderRunner
             int probeExit = 0;
             try
             {
-                _ = await RunTextAsync(tools.Ffmpeg,
+                _ = await ff.RunTextAsync(tools.Ffmpeg,
                     PlaybackEncoderSelection.MfProbeArguments(profile.Encoder, inputPath, probeVideo), probeLog, cancellationToken);
             }
             // 探测失败是正常结果之一（这台机器走不通硬件 MFT），不是这次生成的错误。
@@ -263,23 +262,18 @@ public sealed partial class NativeRenderRunner
                 string suffix = attempt == 0 ? "" : "." + attempt.ToString(CultureInfo.InvariantCulture);
                 // 只包住这一次 ffmpeg 调用：播放版编码在这里是独立进程，不与渲染重叠，秒数可直接横比。
                 long encodeStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                _ = await RunTextAsync(tools.Ffmpeg, arguments, Path.Combine(output, $"encoder{suffix}.stderr.log"), cancellationToken);
+                _ = await ff.RunTextAsync(tools.Ffmpeg, arguments, Path.Combine(output, $"encoder{suffix}.stderr.log"), cancellationToken);
                 report["encode_seconds"] = Math.Round(System.Diagnostics.Stopwatch.GetElapsedTime(encodeStart).TotalSeconds, 3);
-                string probeText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-threads", "4", "-select_streams", "v:0", "-show_entries",
-                    "stream=codec_name,width,height,avg_frame_rate,nb_frames,duration,duration_ts,time_base,pix_fmt,color_space,color_range", "-of", "json", partial],
-                    Path.Combine(output, $"ffprobe{suffix}.stderr.log"), cancellationToken);
-                probe = JsonNode.Parse(probeText)!.AsObject();
-                var stream = probe["streams"]!.AsArray().Single()!.AsObject();
-                var count = await EncodedLoopValidator.FrameCountAsync(partial, tools, stream, frames, cancellationToken);
+                EncodedStream verified = await VerifyEncoded.ProbeAsync(ff, partial,
+                    "stream=codec_name,width,height,avg_frame_rate,nb_frames,duration,duration_ts,time_base,pix_fmt,color_space,color_range",
+                    frames, Path.Combine(output, $"ffprobe{suffix}.stderr.log"), cancellationToken);
+                probe = verified.Probe;
                 report["frame_count_validation"] = new JsonObject {
-                    ["source"] = count.Source, ["full_decode_performed"] = count.Source == "full_decode", ["fallback_reason"] = count.FallbackReason };
-                string[] rate = stream["avg_frame_rate"]!.GetValue<string>().Split('/');
-                if (stream["width"]!.GetValue<int>() != encodedWidth || stream["height"]!.GetValue<int>() != region.Height ||
-                    count.Count != frames ||
-                    rate.Length != 2 || !ulong.TryParse(rate[0], out var rn) || !ulong.TryParse(rate[1], out var rd) || rd == 0 ||
-                    (UInt128)rn * denominator != (UInt128)rd * numerator)
+                    ["source"] = verified.CountSource, ["full_decode_performed"] = verified.CountSource == "full_decode",
+                    ["fallback_reason"] = verified.FallbackReason };
+                if (!verified.Has(encodedWidth, region.Height, frames) || !verified.RateIs(numerator, denominator))
                     throw new InvalidDataException("Cropped video violates dimensions, frame count or rational FPS.");
-                ConfirmEncodedDuration(stream, frames, numerator, denominator);
+                ConfirmEncodedDuration(verified, frames, numerator, denominator);
                 // 软件档位本身就是画质判据的参照，不自己跟自己比，也保持原来的零额外进程。
                 if (profile.Kind == PlaybackEncoderSelection.Software || gateFrames.Length == 0) break;
                 string qualityLog = Path.Combine(output, $"quality{suffix}.stderr.log");
@@ -294,7 +288,7 @@ public sealed partial class NativeRenderRunner
                     foreach (ulong frame in gateFrames)
                     {
                         string sampleLog = Path.Combine(output, $"quality{suffix}-{frame}.stderr.log");
-                        await RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.SampleMetricArguments(partial, inputPath, filter,
+                        await ff.RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.SampleMetricArguments(partial, inputPath, filter,
                             frame, numerator, denominator), sampleLog, cancellationToken);
                         string metrics = await File.ReadAllTextAsync(sampleLog, cancellationToken);
                         double? sampleSsim = PlaybackQualityGate.ParseSsim(metrics), samplePsnr = PlaybackQualityGate.ParsePsnr(metrics);
@@ -307,7 +301,7 @@ public sealed partial class NativeRenderRunner
                 }
                 else
                 {
-                    await RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.MetricsArguments(partial, inputPath, filter, gateFrames),
+                    await ff.RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.MetricsArguments(partial, inputPath, filter, gateFrames),
                         qualityLog, cancellationToken);
                     string metrics = await File.ReadAllTextAsync(qualityLog, cancellationToken);
                     ssim = PlaybackQualityGate.ParseSsim(metrics);
