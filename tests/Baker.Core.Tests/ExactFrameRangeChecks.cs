@@ -134,13 +134,16 @@ internal static class ExactFrameRangeChecks
         string fadedShifted = await EncodeGrayAsync(tools!, mutation, "faded-shifted", Width, Height, Period, 60, 1,
             (n, x, _) => Faded(n, x, Period - 1));
         var rewrite = new MasterRewrite(new FfmpegTool(tools!));
-        JsonObject rightCheck = await rewrite.VerifyWeightsAsync(source, fadedRight, Period, Crossfade, Width, Height, 60, 1, mutation, default);
+        // 两次核对各用一个工作目录：核对的 ffmpeg 日志按 CreateNew 写，产品路径由 CrossfadeAsync 先清残留。
+        string rightWork = Directory.CreateDirectory(Path.Combine(mutation, "right")).FullName;
+        string shiftedWork = Directory.CreateDirectory(Path.Combine(mutation, "shifted")).FullName;
+        JsonObject rightCheck = await rewrite.VerifyWeightsAsync(source, fadedRight, Period, Crossfade, Width, Height, 60, 1, rightWork, default);
         check(rightCheck["status"]?.GetValue<string>() == "verified_against_source_frames",
             "按 w = (C-i)/(C+1) 混入 f[P+i] 的成品通过权重核对");
         bool shiftedRejected = false;
-        try { _ = await rewrite.VerifyWeightsAsync(source, fadedShifted, Period, Crossfade, Width, Height, 60, 1, mutation, default); }
+        try { _ = await rewrite.VerifyWeightsAsync(source, fadedShifted, Period, Crossfade, Width, Height, 60, 1, shiftedWork, default); }
         catch (InvalidDataException) { shiftedRejected = true; }
-        check(shiftedRejected && !File.Exists(Path.Combine(mutation, "crossfade-verify-faded.rgb")),
+        check(shiftedRejected && !File.Exists(Path.Combine(shiftedWork, "crossfade-verify-faded.rgb")),
             "混入 f[P-1+i]（淡化实现错位一帧）的成品让权重核对失败，帧包照样清掉");
     }
 

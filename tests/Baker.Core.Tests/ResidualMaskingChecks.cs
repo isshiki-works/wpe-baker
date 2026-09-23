@@ -397,6 +397,13 @@ internal static class ResidualMaskingChecks
             ResidualMasking.StartCandidateAdmitted(bigStride) &&
             ordered.Select(x => x.Start).SequenceEqual(new ulong[] { 16, 0, 64, 32, 48 }),
             "start candidates rank by max(delta_0, delta_stride) after the whole-frame admission, so a small hard cut cannot hide a large residual one stride later");
+        // 逐相位打分：Δ_stride 取下一个相位的 Δ_0，只在 stride 落在淡化窗口内、且下一相位存在时才有。
+        LoopWrapResidual Wrap(double global, double tile) => new(global, tile, 0, 0, 64, 0);
+        LoopWrapResidual[] wraps = [Wrap(0.5, 7), Wrap(1.5, 9), Wrap(0.2, 3)];
+        ResidualStartCandidate[] inWindow = SeamMath.ScoreStarts(wraps, 16, 24), outside = SeamMath.ScoreStarts(wraps, 24, 24);
+        check(inWindow.Select(x => x.Start).SequenceEqual(new ulong[] { 0, 16, 32 }) && inWindow[0] == new ResidualStartCandidate(0, 0.5, 7, 9) &&
+            inWindow[1].StrideWorstTile == 3 && inWindow[2].StrideWorstTile is null && outside.All(x => x.StrideWorstTile is null),
+            "phase scoring takes delta_stride from the next phase only when the stride lies inside the crossfade window and a next phase exists");
         // 阿米娅形态：样本排序键 53（远超旧准入 24）、整幅在限内的候选照样准入并参与排序；只有整幅超限的排到最后。
         var sampledSpike = new ResidualStartCandidate(2688, 1.3, 53, 21);
         check(ResidualMasking.StartCandidateAdmitted(sampledSpike) &&
