@@ -1282,7 +1282,7 @@ Option<wpscene::Material> MdlParser::ParseMaterial(ref<str> material_ref, fs::VF
     material.depthtest  = "enabled";
     material.depthwrite = "enabled";
     material.cullmode   = "back";
-    if (! material.FromJson(owe::ToRstd(json))) {
+    if (! material.FromJson(json)) {
         rstd_error("parse mdl material '{}' failed", path);
         return None();
     }

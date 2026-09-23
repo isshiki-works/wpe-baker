@@ -23,7 +23,7 @@ float NormalizeLayerAlpha(float alpha);
 
 class EffectCommand {
 public:
-    bool        FromJson(const owe::Json&);
+    bool        FromJson(const owe::NJson&);
     std::string command;
     std::string target;
     std::string source;
@@ -33,7 +33,7 @@ public:
 
 class EffectFbo {
 public:
-    bool        FromJson(const owe::Json&);
+    bool        FromJson(const owe::NJson&);
     std::string name;
     std::string format;
     u32         scale { 1 };
@@ -45,7 +45,7 @@ public:
 // (compiled-shader id + textures + combos).
 class ObjectInstance {
 public:
-    bool                                 FromJson(const owe::Json&);
+    bool                                 FromJson(const owe::NJson&);
     void                                 ApplyTo(Material&) const;
     bool                                 present { false };
     u32                                  id { 0 };
@@ -54,14 +54,14 @@ public:
     // usertextures elements are polymorphic: bare property-name strings
     // (PKGV0022+) and `{name, type}` system bindings (PKGV0018+). Stored
     // as raw json so both shapes are preserved.
-    rstd::json::Array usertextures;
+    std::vector<owe::NJson> usertextures;
 };
 
 class ImageEffect {
 public:
-    bool                       FromJson(const owe::Json&, fs::VFS& vfs);               // legacy
-    bool                       FromJson(const owe::Json&, fs::VFS& vfs, SceneVersion); // canonical
-    bool                       FromFileJson(const owe::Json&, fs::VFS& vfs);
+    bool                       FromJson(const owe::NJson&, fs::VFS& vfs);               // legacy
+    bool                       FromJson(const owe::NJson&, fs::VFS& vfs, SceneVersion); // canonical
+    bool                       FromFileJson(const owe::NJson&, fs::VFS& vfs);
     i32                        id;
     std::string                name;
     std::string                username; // PKGV0001+; per-instance label override
@@ -94,8 +94,8 @@ public:
     struct Config {
         bool passthrough { false };
     };
-    bool        FromJson(const owe::Json&, fs::VFS&);               // legacy
-    bool        FromJson(const owe::Json&, fs::VFS&, SceneVersion); // canonical
+    bool        FromJson(const owe::NJson&, fs::VFS&);               // legacy
+    bool        FromJson(const owe::NJson&, fs::VFS&, SceneVersion); // canonical
     bool        FromAsset(rstd::ref<rstd::str>, rstd::array<float, 2>, fs::VFS&, SceneVersion);
     i32         id { 0 };
     std::string name;
@@ -167,7 +167,7 @@ public:
 
 class ShapeObject {
 public:
-    bool FromJson(const owe::Json&, fs::VFS&, SceneVersion);
+    bool FromJson(const owe::NJson&, fs::VFS&, SceneVersion);
 
     i32                      id { 0 };
     std::string              name;

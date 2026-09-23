@@ -5,11 +5,11 @@ module wescene.pkg.scene_obj;
 using namespace owe::wpscene;
 using namespace rstd::literals;
 
-bool LightObject::FromJson(const owe::Json& json, fs::VFS& vfs) {
+bool LightObject::FromJson(const owe::NJson& json, fs::VFS& vfs) {
     return FromJson(json, vfs, kSceneVersionUnknown);
 }
 
-bool LightObject::FromJson(const owe::Json& json, fs::VFS&, SceneVersion /*v*/) {
+bool LightObject::FromJson(const owe::NJson& json, fs::VFS&, SceneVersion /*v*/) {
     owe::GetJsonValue(json, "origin", origin);
     owe::GetJsonValue(json, "angles", angles);
     owe::GetJsonValue(json, "scale", scale);
@@ -42,7 +42,7 @@ bool LightObject::FromJson(const owe::Json& json, fs::VFS&, SceneVersion /*v*/) 
     owe::GetJsonValue(json, "cascadedistance1", cascadedistance1, false);
     owe::GetJsonValue(json, "cascadedistance2", cascadedistance2, false);
     owe::GetJsonValue(json, "dependencies", dependencies, false);
-    if (auto value = json.get("instance"_str); value.is_some()) instance = (*value)->clone();
+    if (auto value = owe::Find(json, "instance"); value != nullptr) instance = *value;
     AbsorbAllFieldBindings(json, field_bindings);
     return true;
 }

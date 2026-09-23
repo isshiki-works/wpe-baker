@@ -1,3 +1,7 @@
+module;
+
+#include "JsonNlohmann.hpp"
+
 export module wescene.pkg.scene_obj:visibility_binding;
 import rstd.cppstd;
 import wescene.json;
@@ -9,7 +13,7 @@ export namespace owe::wpscene
 
 struct VisibleUserBinding {
     std::string name;
-    owe::Json   condition;
+    owe::Json   condition; // 仍是 rstd：只有用户属性链（C 组）读，读取处 ToRstd（过渡桥）
     bool        has_condition { false };
 
     bool empty() const { return name.empty(); }
@@ -17,53 +21,51 @@ struct VisibleUserBinding {
 
 struct UserValueBinding {
     std::string name;
-    owe::Json   condition;
+    owe::Json   condition; // 仍是 rstd：只有用户属性链（C 组）读，读取处 ToRstd（过渡桥）
     bool        has_condition { false };
 
     bool empty() const { return name.empty(); }
 };
 
-inline void ReadVisibleUserBinding(const owe::Json& json, VisibleUserBinding& out) {
+inline void ReadVisibleUserBinding(const owe::NJson& json, VisibleUserBinding& out) {
     out          = {};
-    auto visible = json.get("visible"_str);
-    if (visible.is_none() || ! (*visible)->is_object()) return;
+    auto visible = owe::Find(json, "visible");
+    if (visible == nullptr || ! visible->is_object()) return;
 
-    auto user = (*visible)->get("user"_str);
-    if (user.is_none()) return;
-    if ((*user)->is_string()) {
-        out.name = rstd::cppstd::to_string(*(*user)->as_str());
+    auto user = owe::Find(*visible, "user");
+    if (user == nullptr) return;
+    if (user->is_string()) {
+        out.name = user->get_ref<const std::string&>();
         return;
     }
 
-    if (! (*user)->is_object()) return;
-    if (auto name = (*user)->get("name"_str); name.is_some()) {
-        auto string = (*name)->as_str();
-        if (string.is_some()) out.name = rstd::cppstd::to_string(*string);
+    if (! user->is_object()) return;
+    if (auto name = owe::Find(*user, "name"); name != nullptr) {
+        if (name->is_string()) out.name = name->get_ref<const std::string&>();
     }
-    if (auto condition = (*user)->get("condition"_str); condition.is_some()) {
-        out.condition     = (*condition)->clone();
+    if (auto condition = owe::Find(*user, "condition"); condition != nullptr) {
+        out.condition     = owe::ToRstd(*condition);
         out.has_condition = true;
     }
 }
 
-inline void ReadVisibleProperty(const owe::Json& json, bool& visible, VisibleUserBinding& out) {
+inline void ReadVisibleProperty(const owe::NJson& json, bool& visible, VisibleUserBinding& out) {
     out        = {};
-    auto value = json.get("visible"_str);
-    if (value.is_none()) return;
+    auto value = owe::Find(json, "visible");
+    if (value == nullptr) return;
 
-    if ((*value)->is_boolean()) {
-        visible = *(*value)->as_bool();
+    if (value->is_boolean()) {
+        visible = value->get<bool>();
         return;
     }
-    if (! (*value)->is_object()) return;
+    if (! value->is_object()) return;
 
-    if (auto initial = (*value)->get("value"_str); initial.is_some()) {
-        if ((*initial)->is_boolean()) {
-            visible = *(*initial)->as_bool();
+    if (auto initial = owe::Find(*value, "value"); initial != nullptr) {
+        if (initial->is_boolean()) {
+            visible = initial->get<bool>();
         } else {
-            auto numeric = (*initial)->as_f64();
-            if (numeric.is_some()) {
-                const auto value = numeric->to_primitive();
+            if (initial->is_number()) {
+                const auto value = initial->get<double>();
                 if (value >= std::numeric_limits<int>::min() &&
                     value <= std::numeric_limits<int>::max())
                     visible = static_cast<int>(value) != 0;
@@ -73,27 +75,26 @@ inline void ReadVisibleProperty(const owe::Json& json, bool& visible, VisibleUse
     ReadVisibleUserBinding(json, out);
 }
 
-inline void ReadUserValueBinding(const owe::Json& json, std::string_view field,
+inline void ReadUserValueBinding(const owe::NJson& json, std::string_view field,
                                  UserValueBinding& out) {
     out        = {};
-    auto value = json.get(rstd::cppstd::as_str(field).unwrap());
-    if (value.is_none() || ! (*value)->is_object()) return;
+    auto value = owe::Find(json, field);
+    if (value == nullptr || ! value->is_object()) return;
 
-    auto user = (*value)->get("user"_str);
-    if (user.is_none()) return;
+    auto user = owe::Find(*value, "user");
+    if (user == nullptr) return;
 
-    if ((*user)->is_string()) {
-        out.name = rstd::cppstd::to_string(*(*user)->as_str());
+    if (user->is_string()) {
+        out.name = user->get_ref<const std::string&>();
         return;
     }
 
-    if (! (*user)->is_object()) return;
-    if (auto name = (*user)->get("name"_str); name.is_some()) {
-        auto string = (*name)->as_str();
-        if (string.is_some()) out.name = rstd::cppstd::to_string(*string);
+    if (! user->is_object()) return;
+    if (auto name = owe::Find(*user, "name"); name != nullptr) {
+        if (name->is_string()) out.name = name->get_ref<const std::string&>();
     }
-    if (auto condition = (*user)->get("condition"_str); condition.is_some()) {
-        out.condition     = (*condition)->clone();
+    if (auto condition = owe::Find(*user, "condition"); condition != nullptr) {
+        out.condition     = owe::ToRstd(*condition);
         out.has_condition = true;
     }
 }

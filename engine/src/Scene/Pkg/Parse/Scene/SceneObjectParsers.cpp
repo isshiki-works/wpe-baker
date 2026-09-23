@@ -564,7 +564,7 @@ void IndexSceneDocument(SceneParseContext& context, ref<wpscene::SceneDocument> 
     for (const auto& record : document->objects) {
         const auto& metadata = record.metadata;
         if (metadata.kind == wpscene::SceneObjectKind::Unknown || ! metadata.has_id) continue;
-        (void)context.initial_layer_configs.insert(metadata.id, record.authored.clone());
+        (void)context.initial_layer_configs.insert(metadata.id, ToRstd(record.authored));
         (void)context.script_initialization_orders.insert(
             metadata.id, static_cast<std::uint64_t>(context.node_id_order.len().to_primitive()));
         context.node_id_order.emplace_back(metadata.id);

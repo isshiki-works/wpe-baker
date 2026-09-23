@@ -1,6 +1,7 @@
 module;
 
 #include <rstd/macro.hpp>
+#include "JsonNlohmann.hpp"
 
 module wescene.pkg.scene_obj;
 import rstd.log;
@@ -13,28 +14,23 @@ using namespace rstd::literals;
 namespace
 {
 
-void LoadUserShaderValues(const owe::Json&                              json,
+void LoadUserShaderValues(const owe::NJson&                             json,
                           std::unordered_map<std::string, std::string>& out) {
-    auto values = json.get("usershadervalues"_str);
-    if (values.is_none()) return;
-    auto object = (*values)->as_object();
-    if (object.is_none()) return;
-    (*object)->iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        auto text                     = entry_value->as_str();
-        if (text.is_some())
-            out[rstd::cppstd::to_string(entry_key->as_str())] = rstd::cppstd::to_string(*text);
-    });
-}
-
-void MergeUserTextures(const rstd::json::Array& src, rstd::json::Array& dst) {
-    while (src.len() > dst.len()) dst.push(owe::Json::Null());
-    for (rstd::usize i = rstd::usize(); i < src.len(); ++i) {
-        if (! src[i].is_null()) dst[i] = src[i].clone();
+    auto values = owe::Find(json, "usershadervalues");
+    if (values == nullptr || ! values->is_object()) return;
+    for (const auto& [entry_key, entry_value] : values->items()) {
+        if (entry_value.is_string()) out[entry_key] = entry_value.get_ref<const std::string&>();
     }
 }
 
-void LoadConstantShaderValue(std::string name, const owe::Json& json,
+void MergeUserTextures(const std::vector<owe::NJson>& src, std::vector<owe::NJson>& dst) {
+    if (src.size() > dst.size()) dst.resize(src.size());
+    for (std::size_t i = 0; i < src.size(); ++i) {
+        if (! src[i].is_null()) dst[i] = src[i];
+    }
+}
+
+void LoadConstantShaderValue(std::string name, const owe::NJson& json,
                              std::unordered_map<std::string, std::vector<float>>& constant_values,
                              FieldBindings&                                       bindings) {
     std::vector<float> value;
@@ -65,7 +61,7 @@ auto owe::wpscene::Material::clone() const -> Material {
     return clone;
 }
 
-bool MaterialPassBindItem::FromJson(const owe::Json& json) {
+bool MaterialPassBindItem::FromJson(const owe::NJson& json) {
     owe::GetJsonValue(json, "name", name);
     owe::GetJsonValue(json, "index", index);
     return true;
@@ -105,7 +101,7 @@ void Material::MergePass(const MaterialPass& p) {
 }
 
 void Material::MergeBindingOverrides(const std::vector<std::string>&             textures,
-                                     const rstd::json::Array&                    usertextures,
+                                     const std::vector<owe::NJson>&              usertextures,
                                      const std::unordered_map<std::string, i32>& combos) {
     if (textures.size() > this->textures.size()) this->textures.resize(textures.size());
     for (std::size_t i = 0; i < textures.size(); ++i) {
@@ -117,50 +113,40 @@ void Material::MergeBindingOverrides(const std::vector<std::string>&            
     }
 }
 
-bool MaterialPass::FromJson(const owe::Json& json) {
+bool MaterialPass::FromJson(const owe::NJson& json) {
     owe::GetJsonValue(json, "id", id, false);
-    if (auto values = json.get("textures"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some()) {
-            for (const auto& jT : **array) {
+    if (auto values = owe::Find(json, "textures"); values != nullptr) {
+        if (values->is_array()) {
+            for (const auto& jT : *values) {
                 std::string tex;
                 if (! jT.is_null()) owe::GetJsonValue(jT, tex);
                 textures.push_back(std::move(tex));
             }
         }
     }
-    if (auto values = json.get("usertextures"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some())
-            for (const auto& jU : **array) usertextures.push(jU.clone());
+    if (auto values = owe::Find(json, "usertextures"); values != nullptr) {
+        if (values->is_array())
+            for (const auto& jU : *values) usertextures.push_back(jU);
     }
-    if (auto values = json.get("constantshadervalues"_str); values.is_some()) {
-        auto object = (*values)->as_object();
-        if (object.is_some())
-            (*object)->iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
-                LoadConstantShaderValue(rstd::cppstd::to_string(entry_key->as_str()),
-                                        *entry_value,
-                                        constantshadervalues,
-                                        constantshadervalues_bindings);
-            });
+    if (auto values = owe::Find(json, "constantshadervalues"); values != nullptr) {
+        if (values->is_object())
+            for (const auto& [entry_key, entry_value] : values->items())
+                LoadConstantShaderValue(
+                    entry_key, entry_value, constantshadervalues, constantshadervalues_bindings);
     }
     LoadUserShaderValues(json, user_shader_values);
-    if (auto values = json.get("combos"_str); values.is_some()) {
-        auto object = (*values)->as_object();
-        if (object.is_some())
-            (*object)->iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
+    if (auto values = owe::Find(json, "combos"); values != nullptr) {
+        if (values->is_object())
+            for (const auto& [entry_key, entry_value] : values->items()) {
                 i32 value { 0 };
-                owe::GetJsonValue(*entry_value, value);
-                combos[rstd::cppstd::to_string(entry_key->as_str())] = value;
-            });
+                owe::GetJsonValue(entry_value, value);
+                combos[entry_key] = value;
+            }
     }
     owe::GetJsonValue(json, "target", target, false);
-    if (auto values = json.get("bind"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some()) {
-            for (const auto& jB : **array) {
+    if (auto values = owe::Find(json, "bind"); values != nullptr) {
+        if (values->is_array()) {
+            for (const auto& jB : *values) {
                 MaterialPassBindItem bindItem;
                 bindItem.FromJson(jB);
                 bind.push_back(bindItem);
@@ -170,21 +156,20 @@ bool MaterialPass::FromJson(const owe::Json& json) {
     return true;
 }
 
-bool Material::FromJson(const owe::Json& json) { return FromJson(json, kSceneVersionUnknown); }
+bool Material::FromJson(const owe::NJson& json) { return FromJson(json, kSceneVersionUnknown); }
 
-bool Material::FromJson(const owe::Json& json, SceneVersion /*v*/) {
-    auto passes = json.get("passes"_str);
-    if (passes.is_none()) {
+bool Material::FromJson(const owe::NJson& json, SceneVersion /*v*/) {
+    auto passes = owe::Find(json, "passes");
+    if (passes == nullptr) {
         rstd_error("material no data");
         return false;
     }
-    auto pass_array = (*passes)->as_array();
-    if (pass_array.is_none() || (*pass_array)->is_empty()) {
+    if (! passes->is_array() || passes->empty()) {
         rstd_error("material no data");
         return false;
     }
-    const auto& jContent = (**pass_array)[rstd::usize()];
-    if (jContent.get("shader"_str).is_none()) {
+    const auto& jContent = (*passes)[0];
+    if (owe::Find(jContent, "shader") == nullptr) {
         rstd_error("material no shader");
         return false;
     }
@@ -194,42 +179,33 @@ bool Material::FromJson(const owe::Json& json, SceneVersion /*v*/) {
     owe::GetJsonValue(jContent, "depthtest", depthtest);
     owe::GetJsonValue(jContent, "depthwrite", depthwrite);
     owe::GetJsonValue(jContent, "shader", shader);
-    if (auto values = jContent.get("textures"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some()) {
-            for (const auto& jT : **array) {
+    if (auto values = owe::Find(jContent, "textures"); values != nullptr) {
+        if (values->is_array()) {
+            for (const auto& jT : *values) {
                 std::string tex;
                 if (! jT.is_null()) owe::GetJsonValue(jT, tex);
                 textures.push_back(std::move(tex));
             }
         }
     }
-    if (auto values = jContent.get("usertextures"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some())
-            for (const auto& jU : **array) usertextures.push(jU.clone());
+    if (auto values = owe::Find(jContent, "usertextures"); values != nullptr) {
+        if (values->is_array())
+            for (const auto& jU : *values) usertextures.push_back(jU);
     }
-    if (auto values = jContent.get("constantshadervalues"_str); values.is_some()) {
-        auto object = (*values)->as_object();
-        if (object.is_some())
-            (*object)->iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
-                LoadConstantShaderValue(rstd::cppstd::to_string(entry_key->as_str()),
-                                        *entry_value,
-                                        constantshadervalues,
-                                        constantshadervalues_bindings);
-            });
+    if (auto values = owe::Find(jContent, "constantshadervalues"); values != nullptr) {
+        if (values->is_object())
+            for (const auto& [entry_key, entry_value] : values->items())
+                LoadConstantShaderValue(
+                    entry_key, entry_value, constantshadervalues, constantshadervalues_bindings);
     }
     LoadUserShaderValues(jContent, user_shader_values);
-    if (auto values = jContent.get("combos"_str); values.is_some()) {
-        auto object = (*values)->as_object();
-        if (object.is_some())
-            (*object)->iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
+    if (auto values = owe::Find(jContent, "combos"); values != nullptr) {
+        if (values->is_object())
+            for (const auto& [entry_key, entry_value] : values->items()) {
                 i32 value { 0 };
-                owe::GetJsonValue(*entry_value, value);
-                combos[rstd::cppstd::to_string(entry_key->as_str())] = value;
-            });
+                owe::GetJsonValue(entry_value, value);
+                combos[entry_key] = value;
+            }
     }
     return true;
 }

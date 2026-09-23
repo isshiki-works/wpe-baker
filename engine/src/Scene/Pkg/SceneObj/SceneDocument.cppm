@@ -1,3 +1,7 @@
+module;
+
+#include "JsonNlohmann.hpp"
+
 export module wescene.pkg.scene_obj:scene_document;
 import rstd;
 import rstd.cppstd;
@@ -30,12 +34,12 @@ struct ParallaxDepthBinding {
     bool                 authored { false };
 };
 
-inline bool JsonHasParallaxDepth(const owe::Json& json) {
-    auto member = json.get("parallaxDepth"_str);
-    return member.is_some() && ! (*member)->is_null();
+inline bool JsonHasParallaxDepth(const owe::NJson& json) {
+    auto member = owe::Find(json, "parallaxDepth");
+    return member != nullptr && ! member->is_null();
 }
 
-inline void ReadParallaxDepth(const owe::Json& json, ParallaxDepthBinding& binding) {
+inline void ReadParallaxDepth(const owe::NJson& json, ParallaxDepthBinding& binding) {
     binding.authored = JsonHasParallaxDepth(json);
     binding.depth    = kDefaultParallaxDepth;
     if (binding.authored) (void)owe::GetJsonValue(json, "parallaxDepth", binding.depth, false);
@@ -67,11 +71,11 @@ SceneVersion ParsePkgVersionStamp(std::string_view stamp);
 
 // Read top-level "version" number_unsigned; returns kSceneJsonVersionDefault
 // when absent or wrong type.
-SceneJsonVersion DetectSceneJsonVersion(const owe::Json& root);
+SceneJsonVersion DetectSceneJsonVersion(const owe::NJson& root);
 
 class Orthogonalprojection {
 public:
-    bool FromJson(const owe::Json&);
+    bool FromJson(const owe::NJson&);
     i32  width;
     i32  height;
     bool auto_ { false };
@@ -79,7 +83,7 @@ public:
 
 class SceneCamera {
 public:
-    bool                     FromJson(const owe::Json&);
+    bool                     FromJson(const owe::NJson&);
     std::array<float, 3>     center { 0.0f, 0.0f, 0.0f };
     std::array<float, 3>     eye { 0.0f, 0.0f, 1.0f };
     std::array<float, 3>     up { 0.0f, 1.0f, 0.0f };
@@ -90,7 +94,7 @@ public:
 // (per WE editor configuration). All entries default to 0 if absent.
 class SceneLightConfig {
 public:
-    bool FromJson(const owe::Json&);
+    bool FromJson(const owe::NJson&);
     u32  directional { 0 };
     u32  directionalshadow { 0 };
     u32  point { 0 };
@@ -101,8 +105,8 @@ public:
 
 class SceneGeneral {
 public:
-    bool FromJson(const owe::Json&);               // legacy
-    bool FromJson(const owe::Json&, SceneVersion); // canonical
+    bool FromJson(const owe::NJson&);               // legacy
+    bool FromJson(const owe::NJson&, SceneVersion); // canonical
 
     // ---- baseline (PKGV0001+) ------------------------------------------
     std::array<float, 3> clearcolor { 0.0f, 0.0f, 0.0f };
@@ -175,8 +179,8 @@ public:
 
 class SceneMetadata {
 public:
-    bool                       FromJson(const owe::Json&); // legacy: defaults to unknown version
-    bool                       FromJson(const owe::Json&, SceneVersion); // canonical entry
+    bool                       FromJson(const owe::NJson&); // legacy: defaults to unknown version
+    bool                       FromJson(const owe::NJson&, SceneVersion); // canonical entry
     SceneVersion               pkg_version { kSceneVersionUnknown };
     SceneJsonVersion           scene_json_version { kSceneJsonVersionDefault };
     SceneCamera                camera;
@@ -214,7 +218,7 @@ public:
 
 struct SceneObjectRecord {
     SceneObjectMetadata metadata;
-    owe::Json           authored;
+    owe::NJson          authored;
 };
 
 class SceneDocument {
@@ -224,8 +228,8 @@ public:
     bool                   objects_are_array { true };
 };
 
-Option<SceneDocument>  ParseSceneDocumentValue(owe::Json, SceneVersion);
-Vec<SceneObjectRecord> ParseSceneObjectRecords(const owe::Json&, bool& objects_are_array);
+Option<SceneDocument>  ParseSceneDocumentValue(owe::NJson, SceneVersion);
+Vec<SceneObjectRecord> ParseSceneObjectRecords(const owe::NJson&, bool& objects_are_array);
 Option<SceneDocument>  ParseSceneDocumentJson(std::string_view, SceneVersion);
 Option<SceneDocument>  LoadSceneDocumentFromVfs(fs::VFS&, std::string_view, SceneVersion);
 Option<SceneDocument>  LoadSceneDocumentFromPkg(std::string_view);

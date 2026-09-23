@@ -3308,7 +3308,7 @@ CompileMaterialShaderResult ShaderParser::CompileMaterialShader(const Json&     
     CompileMaterialShaderResult r;
 
     wpscene::Material mat;
-    if (! mat.FromJson(material_json)) {
+    if (! mat.FromJson(FromRstd(material_json))) {
         r.error = "Material::FromJson failed";
         return r;
     }

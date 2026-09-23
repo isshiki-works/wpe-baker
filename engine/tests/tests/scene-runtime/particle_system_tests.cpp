@@ -481,7 +481,7 @@ TEST(ParticleSubSystem, ConvertsWorldSpaceFollowAnchorsIntoChildLocalSpace) {
 }
 
 TEST(ParticleInstanceOverride, TracksProvidedControlpoints) {
-    auto json = owe::ParseJson(R"({"size":2,"controlpoint1":"120 240 0"})").unwrap();
+    auto json = owe::ParseNJson(R"({"size":2,"controlpoint1":"120 240 0"})").unwrap();
     owe::wpscene::ParticleInstanceoverride override;
 
     ASSERT_TRUE(override.FromJosn(json));

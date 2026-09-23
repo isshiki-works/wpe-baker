@@ -259,7 +259,7 @@ Option<Arc<SceneNode>> InstantiateLayerConfiguration(SceneParseContext& context,
 
     if (Find(nconfig, "text") != nullptr) {
         wpscene::TextObject text;
-        if (! text.FromJson(config, *context.vfs, context.pkg_version)) return None();
+        if (! text.FromJson(nconfig, *context.vfs, context.pkg_version)) return None();
         text.id      = id;
         text.parent  = u32();
         ParseTextObj(context, text);
@@ -268,7 +268,7 @@ Option<Arc<SceneNode>> InstantiateLayerConfiguration(SceneParseContext& context,
 
     if (Find(nconfig, "image") != nullptr) {
         wpscene::ImageObject image;
-        if (! image.FromJson(config, *context.vfs, context.pkg_version)) return None();
+        if (! image.FromJson(nconfig, *context.vfs, context.pkg_version)) return None();
         image.id      = id;
         image.parent  = u32();
         ParseImageObj(context, image);

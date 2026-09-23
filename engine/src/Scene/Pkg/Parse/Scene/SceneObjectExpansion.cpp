@@ -1,6 +1,7 @@
 module;
 
 #include <rstd/enum.hpp>
+#include "JsonNlohmann.hpp"
 
 module wescene.pkg.parse;
 import :scene_context;
@@ -44,25 +45,15 @@ void CollectLinkedSourceId(ref<str> value, HashSet<i32>& out, Option<i32> effect
     if (IsSpecLinkTex(value)) out.insert(rstd::as_cast<i32>(ParseLinkTex(value)));
 }
 
-void CollectLinkedSourceIdsFromValue(const Json& value, HashSet<i32>& out,
+void CollectLinkedSourceIdsFromValue(const NJson& value, HashSet<i32>& out,
                                      Option<i32> effect_owner = None()) {
     if (value.is_string()) {
-        auto text = *value.as_str();
-        CollectLinkedSourceId(text, out, effect_owner);
+        CollectLinkedSourceId(
+            rstd::cppstd::as_str(value.get_ref<const std::string&>()).unwrap(), out, effect_owner);
         return;
     }
-    if (value.is_array()) {
-        auto values = value.as_array();
-        for (const auto& element : **values)
-            CollectLinkedSourceIdsFromValue(element, out, effect_owner);
-        return;
-    }
-    auto object = value.as_object();
-    if (object.is_none()) return;
-    (*object)->iter().for_each([&](auto entry) {
-        auto [_, entry_value] = entry;
-        CollectLinkedSourceIdsFromValue(*entry_value, out, effect_owner);
-    });
+    if (! value.is_array() && ! value.is_object()) return;
+    for (const auto& element : value) CollectLinkedSourceIdsFromValue(element, out, effect_owner);
 }
 
 void CollectLinkedSourceId(std::string_view value, HashSet<i32>& out,
@@ -307,7 +298,7 @@ Vec<SceneObjectVar> ExpandObjects(const Json& json, fs::VFS& vfs, wpscene::Scene
                                   Option<ref<rstd::json::Map>> user_properties) {
     wpscene::SceneDocument document;
     document.metadata.pkg_version = version;
-    document.objects = wpscene::ParseSceneObjectRecords(json, document.objects_are_array);
+    document.objects = wpscene::ParseSceneObjectRecords(FromRstd(json), document.objects_are_array);
     if (! document.objects_are_array) return {};
     return ExpandObjects(ref<wpscene::SceneDocument>::from_raw_parts(rstd::addressof(document)),
                          mut_ref<fs::VFS>::from_raw_parts(rstd::addressof(vfs)),

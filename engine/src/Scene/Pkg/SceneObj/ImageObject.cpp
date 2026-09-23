@@ -1,6 +1,7 @@
 module;
 
 #include <rstd/macro.hpp>
+#include "JsonNlohmann.hpp"
 
 module wescene.pkg.scene_obj;
 import rstd;
@@ -14,8 +15,8 @@ using namespace rstd::literals;
 namespace
 {
 
-auto LoadJsonFile(owe::fs::VFS& vfs, const std::string& path) -> Option<owe::Json> {
-    auto parsed = owe::ReadJsonFile(vfs, path);
+auto LoadJsonFile(owe::fs::VFS& vfs, const std::string& path) -> Option<owe::NJson> {
+    auto parsed = owe::ReadNJsonFile(vfs, path);
     if (parsed.is_err()) {
         auto error = rstd::move(parsed).unwrap_err_unchecked();
         rstd_error("Can't load json {}: {}", path, error.message.as_str());
@@ -28,7 +29,7 @@ constexpr std::string_view kFoliageSwayEffect = "effects/foliagesway/effect.json
 constexpr SceneVersion     kNormalizedFoliageSwayStrengthVersion = 9;
 
 auto LoadImageAssetJson(ImageObject& object, owe::fs::VFS& vfs, SceneVersion version,
-                        bool explicit_no_copy_background) -> Option<owe::Json> {
+                        bool explicit_no_copy_background) -> Option<owe::NJson> {
     auto json = LoadJsonFile(vfs, "/assets/" + object.image);
     if (json.is_none()) return None();
 
@@ -83,41 +84,35 @@ float owe::wpscene::NormalizeLayerAlpha(float alpha) {
     return std::clamp(alpha, 0.0f, 1.0f);
 }
 
-bool EffectCommand::FromJson(const owe::Json& json) {
+bool EffectCommand::FromJson(const owe::NJson& json) {
     owe::GetJsonValue(json, "command", command);
     owe::GetJsonValue(json, "target", target);
     owe::GetJsonValue(json, "source", source);
     return true;
 }
 
-bool ObjectInstance::FromJson(const owe::Json& json) {
+bool ObjectInstance::FromJson(const owe::NJson& json) {
     present = true;
     owe::GetJsonValue(json, "id", id, false);
-    if (auto values = json.get("combos"_str); values.is_some()) {
-        auto object = (*values)->as_object();
-        if (object.is_some())
-            (*object)->iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
+    if (auto values = owe::Find(json, "combos"); values != nullptr) {
+        if (values->is_object())
+            for (const auto& [entry_key, entry_value] : values->items()) {
                 i32 value { 0 };
-                if (owe::GetJsonValue(*entry_value, value))
-                    combos.emplace(rstd::cppstd::to_string(entry_key->as_str()), value);
-            });
+                if (owe::GetJsonValue(entry_value, value)) combos.emplace(entry_key, value);
+            }
     }
-    if (auto values = json.get("textures"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some()) {
-            for (const auto& value : **array) {
+    if (auto values = owe::Find(json, "textures"); values != nullptr) {
+        if (values->is_array()) {
+            for (const auto& value : *values) {
                 std::string texture;
-                auto        string = value.as_str();
-                if (string.is_some()) texture = rstd::cppstd::to_string(*string);
+                if (value.is_string()) texture = value.get_ref<const std::string&>();
                 textures.push_back(std::move(texture));
             }
         }
     }
-    if (auto values = json.get("usertextures"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some()) {
-            for (const auto& value : **array) usertextures.push(value.clone());
+    if (auto values = owe::Find(json, "usertextures"); values != nullptr) {
+        if (values->is_array()) {
+            for (const auto& value : *values) usertextures.push_back(value);
         }
     }
     return true;
@@ -127,7 +122,7 @@ void ObjectInstance::ApplyTo(Material& material) const {
     material.MergeBindingOverrides(textures, usertextures, combos);
 }
 
-bool EffectFbo::FromJson(const owe::Json& json) {
+bool EffectFbo::FromJson(const owe::NJson& json) {
     owe::GetJsonValue(json, "name", name);
     owe::GetJsonValue(json, "format", format);
     owe::GetJsonValue(json, "scale", scale);
@@ -140,11 +135,11 @@ bool EffectFbo::FromJson(const owe::Json& json) {
     return true;
 }
 
-bool ImageEffect::FromJson(const owe::Json& json, fs::VFS& vfs) {
+bool ImageEffect::FromJson(const owe::NJson& json, fs::VFS& vfs) {
     return FromJson(json, vfs, kSceneVersionUnknown);
 }
 
-bool ImageEffect::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion v) {
+bool ImageEffect::FromJson(const owe::NJson& json, fs::VFS& vfs, SceneVersion v) {
     std::string filePath;
     owe::GetJsonValue(json, "file", filePath);
     ReadVisibleProperty(json, visible, visible_user);
@@ -157,15 +152,14 @@ bool ImageEffect::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion v) 
     if (! jEffect) return false;
     if (! FromFileJson(*jEffect, vfs)) return false;
 
-    if (auto injected_passes = json.get("passes"_str); injected_passes.is_some()) {
-        auto array = (*injected_passes)->as_array();
-        if (array.is_none()) return true;
-        if ((*array)->len().to_primitive() > passes.size()) {
+    if (auto injected_passes = owe::Find(json, "passes"); injected_passes != nullptr) {
+        if (! injected_passes->is_array()) return true;
+        if (injected_passes->size() > passes.size()) {
             rstd_error("passes is not injective");
             return false;
         }
         std::size_t i = 0;
-        for (const auto& jP : **array) {
+        for (const auto& jP : *injected_passes) {
             MaterialPass pass;
             pass.FromJson(jP);
             if (filePath == kFoliageSwayEffect && v != kSceneVersionUnknown &&
@@ -177,29 +171,27 @@ bool ImageEffect::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion v) 
     return true;
 }
 
-bool ImageEffect::FromFileJson(const owe::Json& json, fs::VFS& vfs) {
+bool ImageEffect::FromFileJson(const owe::NJson& json, fs::VFS& vfs) {
     owe::GetJsonValue(json, "version", version, false);
     owe::GetJsonValue(json, "name", name);
-    if (auto values = json.get("fbos"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some()) {
-            for (const auto& jF : **array) {
+    if (auto values = owe::Find(json, "fbos"); values != nullptr) {
+        if (values->is_array()) {
+            for (const auto& jF : *values) {
                 EffectFbo fbo;
                 fbo.FromJson(jF);
                 fbos.push_back(std::move(fbo));
             }
         }
     }
-    if (auto effect_passes = json.get("passes"_str); effect_passes.is_some()) {
-        auto array = (*effect_passes)->as_array();
-        if (array.is_none()) {
+    if (auto effect_passes = owe::Find(json, "passes"); effect_passes != nullptr) {
+        if (! effect_passes->is_array()) {
             rstd_error("passes in effect file is not an array");
             return false;
         }
         bool compose { false };
-        for (const auto& jP : **array) {
-            if (jP.get("material"_str).is_none()) {
-                if (jP.get("command"_str).is_some()) {
+        for (const auto& jP : *effect_passes) {
+            if (owe::Find(jP, "material") == nullptr) {
+                if (owe::Find(jP, "command") != nullptr) {
                     EffectCommand cmd;
                     cmd.FromJson(jP);
                     cmd.afterpos = rstd::as_cast<i32>(usize(passes.size()));
@@ -219,7 +211,7 @@ bool ImageEffect::FromFileJson(const owe::Json& json, fs::VFS& vfs) {
             MaterialPass pass;
             pass.FromJson(jP);
             passes.push_back(std::move(pass));
-            if (jP.get("compose"_str).is_some()) owe::GetJsonValue(jP, "compose", compose);
+            if (owe::Find(jP, "compose") != nullptr) owe::GetJsonValue(jP, "compose", compose);
         }
         if (compose) {
             if (passes.size() != 2) {
@@ -246,14 +238,13 @@ bool ImageEffect::FromFileJson(const owe::Json& json, fs::VFS& vfs) {
 namespace
 {
 
-void ReadImageEffects(const owe::Json& json, owe::fs::VFS& vfs, SceneVersion version,
+void ReadImageEffects(const owe::NJson& json, owe::fs::VFS& vfs, SceneVersion version,
                       std::vector<ImageEffect>& effects) {
-    auto values = json.get("effects"_str);
-    if (values.is_none()) return;
-    auto array = (*values)->as_array();
-    if (array.is_none()) return;
+    auto values = owe::Find(json, "effects");
+    if (values == nullptr) return;
+    if (! values->is_array()) return;
 
-    for (const auto& value : **array) {
+    for (const auto& value : *values) {
         ImageEffect effect;
         if (effect.FromJson(value, vfs, version)) effects.push_back(std::move(effect));
     }
@@ -261,7 +252,7 @@ void ReadImageEffects(const owe::Json& json, owe::fs::VFS& vfs, SceneVersion ver
 
 } // namespace
 
-bool ImageObject::FromJson(const owe::Json& json, fs::VFS& vfs) {
+bool ImageObject::FromJson(const owe::NJson& json, fs::VFS& vfs) {
     return FromJson(json, vfs, kSceneVersionUnknown);
 }
 
@@ -272,7 +263,7 @@ Option<ImageAssetInfo> owe::wpscene::LoadImageAssetInfo(fs::VFS& vfs, std::strin
     ImageAssetInfo info;
     owe::GetJsonValue(*j_image, "solidlayer", info.solid_layer, false);
     i32 w {}, h {};
-    if (j_image->get("width"_str).is_some() && j_image->get("height"_str).is_some()) {
+    if (owe::Find(*j_image, "width") != nullptr && owe::Find(*j_image, "height") != nullptr) {
         owe::GetJsonValue(*j_image, "width", w, false);
         owe::GetJsonValue(*j_image, "height", h, false);
         if (w > i32() && h > i32()) {
@@ -291,7 +282,7 @@ Option<ImageAssetInfo> owe::wpscene::LoadImageAssetInfo(fs::VFS& vfs, std::strin
     return Some(rstd::move(info));
 }
 
-bool ImageObject::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion v) {
+bool ImageObject::FromJson(const owe::NJson& json, fs::VFS& vfs, SceneVersion v) {
     owe::GetJsonValue(json, "image", image);
     composite_layer = image == "models/util/composelayer.json";
     ReadVisibleProperty(json, visible, visible_user);
@@ -311,12 +302,12 @@ bool ImageObject::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion v) 
         owe::GetJsonValue(json, "origin", origin);
         owe::GetJsonValue(json, "angles", angles);
         owe::GetJsonValue(json, "scale", scale);
-        if (jImage->get("width"_str).is_some()) {
+        if (owe::Find(*jImage, "width") != nullptr) {
             i32 w {}, h {};
             owe::GetJsonValue(*jImage, "width", w);
             owe::GetJsonValue(*jImage, "height", h);
             size = { static_cast<float>(w.to_primitive()), static_cast<float>(h.to_primitive()) };
-        } else if (json.get("size"_str).is_some()) {
+        } else if (owe::Find(json, "size") != nullptr) {
             owe::GetJsonValue(json, "size", size);
         } else {
             size = { origin.at(0) * 2, origin.at(1) * 2 };
@@ -333,8 +324,8 @@ bool ImageObject::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion v) 
 
     ReadImageEffects(json, vfs, v, effects);
     ReadPuppetAnimationLayers(json, puppet_layers);
-    if (auto config_json = json.get("config"_str); config_json.is_some()) {
-        owe::GetJsonValue(**config_json, "passthrough", config.passthrough, false);
+    if (auto config_json = owe::Find(json, "config"); config_json != nullptr) {
+        owe::GetJsonValue(*config_json, "passthrough", config.passthrough, false);
     }
 
     owe::GetJsonValue(json, "locktransforms", locktransforms, false);
@@ -354,9 +345,9 @@ bool ImageObject::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion v) 
     owe::GetJsonValue(json, "backgroundcolor", backgroundcolor, false);
     owe::GetJsonValue(json, "backgroundbrightness", backgroundbrightness, false);
     owe::GetJsonValue(json, "dependencies", dependencies, false);
-    if (auto instance_json = json.get("instance"_str);
-        instance_json.is_some() && (*instance_json)->is_object()) {
-        instance.FromJson(**instance_json);
+    if (auto instance_json = owe::Find(json, "instance");
+        instance_json != nullptr && instance_json->is_object()) {
+        instance.FromJson(*instance_json);
         instance.ApplyTo(material);
     }
     AbsorbAllFieldBindings(json, field_bindings);
@@ -372,7 +363,7 @@ bool ImageObject::FromAsset(rstd::ref<rstd::str> asset, rstd::array<float, 2> as
     return LoadImageAssetJson(*this, vfs, version, false).is_some();
 }
 
-bool ShapeObject::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion v) {
+bool ShapeObject::FromJson(const owe::NJson& json, fs::VFS& vfs, SceneVersion v) {
     owe::GetJsonValue(json, "shape", shape);
     ReadVisibleProperty(json, visible, visible_user);
     visible_user_key = visible_user.name;

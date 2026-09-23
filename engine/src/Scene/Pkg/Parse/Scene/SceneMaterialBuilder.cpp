@@ -757,8 +757,8 @@ void RegisterMaterialUserTextureIndex(Scene*                                pSce
                                       const wpscene::Material&              fallback_material,
                                       const ShaderInfo&                     shader_info) {
     if (! pScene || ! stable_mat) return;
-    for (usize i {}; i < fallback_material.usertextures.len(); ++i) {
-        const auto binding = FromRstd(fallback_material.usertextures[i]);
+    for (usize i {}; i < usize(fallback_material.usertextures.size()); ++i) {
+        const auto& binding = fallback_material.usertextures[i.to_primitive()];
         auto       key     = UserTexturePropertyKey(binding);
         if (key.is_none()) continue;
         std::string fallback =
@@ -844,9 +844,9 @@ std::string ResolveMaterialTextureSlot(const SceneParseContext& context,
     if (slot.to_primitive() < material.textures.size()) {
         fallback = material.textures[slot.to_primitive()];
     }
-    if (slot >= material.usertextures.len()) return fallback;
+    if (slot >= usize(material.usertextures.size())) return fallback;
 
-    if (auto prop = ResolveUserTextureProperty(context, FromRstd(material.usertextures[slot]));
+    if (auto prop = ResolveUserTextureProperty(context, material.usertextures[slot.to_primitive()]);
         ! prop.empty())
         return prop;
     return fallback;
@@ -877,8 +877,8 @@ std::string ResolveSystemMediaFallback(const SceneParseContext& context,
 }
 
 void ApplyUserTextureBindings(SceneParseContext& context, wpscene::Material& material) {
-    for (usize i {}; i < material.usertextures.len(); ++i) {
-        const auto binding = FromRstd(material.usertextures[i]);
+    for (usize i {}; i < usize(material.usertextures.size()); ++i) {
+        const auto& binding = material.usertextures[i.to_primitive()];
         if (binding.is_null()) continue;
 
         std::string resolved = ResolveUserTextureProperty(context, binding);

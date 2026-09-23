@@ -18,8 +18,8 @@ namespace wpscene
 
 class LightObject {
 public:
-    bool                 FromJson(const owe::Json&, fs::VFS&);               // legacy
-    bool                 FromJson(const owe::Json&, fs::VFS&, SceneVersion); // canonical
+    bool                 FromJson(const owe::NJson&, fs::VFS&);               // legacy
+    bool                 FromJson(const owe::NJson&, fs::VFS&, SceneVersion); // canonical
     i32                  id { 0 };
     std::string          name;
     std::array<float, 3> origin { 0.0f, 0.0f, 0.0f };
@@ -41,7 +41,7 @@ public:
     bool             nointerpolation { false };
     u32              parent { 0 };
     std::vector<i32> dependencies;
-    owe::Json        instance;
+    owe::NJson       instance;
     FieldBindings    field_bindings;
 
     // Light-kind specifics.

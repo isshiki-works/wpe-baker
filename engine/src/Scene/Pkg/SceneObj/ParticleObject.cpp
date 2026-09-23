@@ -1,6 +1,7 @@
 module;
 
 #include <rstd/macro.hpp>
+#include "JsonNlohmann.hpp"
 
 module wescene.pkg.scene_obj;
 import wescene.core;
@@ -14,8 +15,8 @@ using namespace rstd::literals;
 namespace
 {
 
-auto LoadAssetJsonFile(owe::fs::VFS& vfs, std::string_view path) -> Option<owe::Json> {
-    auto parsed = owe::ReadAssetJsonFile(vfs, path);
+auto LoadAssetJsonFile(owe::fs::VFS& vfs, std::string_view path) -> Option<owe::NJson> {
+    auto parsed = owe::ReadAssetNJsonFile(vfs, path);
     if (parsed.is_err()) {
         auto error = rstd::move(parsed).unwrap_err_unchecked();
         rstd_error("Can't load json {}: {}", path, error.message.as_str());
@@ -26,14 +27,14 @@ auto LoadAssetJsonFile(owe::fs::VFS& vfs, std::string_view path) -> Option<owe::
 
 } // namespace
 
-bool ParticleChild::FromJson(const owe::Json& json, fs::VFS& vfs) {
+bool ParticleChild::FromJson(const owe::NJson& json, fs::VFS& vfs) {
     owe::GetJsonValue(json, "name", name);
 
     u32 raw_flags {};
     owe::GetJsonValue(json, "flags", raw_flags, false);
     flags = EFlags(raw_flags.to_primitive());
 
-    if (json.get("type"_str).is_some()) {
+    if (owe::Find(json, "type") != nullptr) {
         owe::GetJsonValue(json, "type", type);
     } else if (flags[FlagEnum::eventfollow]) {
         // Legacy child entries encode event-follow attachment in flags without a type field.
@@ -50,8 +51,8 @@ bool ParticleChild::FromJson(const owe::Json& json, fs::VFS& vfs) {
     if (! obj.FromJson(*jParticle, vfs)) return false;
 
     owe::GetJsonValue(json, "maxcount", maxcount, false);
-    auto controlpoint_start = json.get("controlpointstartindex"_str);
-    if (controlpoint_start.is_some() && ! (*controlpoint_start)->is_null()) {
+    auto controlpoint_start = owe::Find(json, "controlpointstartindex");
+    if (controlpoint_start != nullptr && ! controlpoint_start->is_null()) {
         i32 value {};
         owe::GetJsonValue(json, "controlpointstartindex", value, false);
         controlpointstartindex = Some(value);
@@ -78,7 +79,7 @@ ParticleChild ParticleChild::Clone() const {
     return out;
 }
 
-bool ParticleControlpoint::FromJson(const owe::Json& json) {
+bool ParticleControlpoint::FromJson(const owe::NJson& json) {
     owe::GetJsonValue(json, "id", id);
 
     u32 _raw_flags { 0 };
@@ -89,7 +90,7 @@ bool ParticleControlpoint::FromJson(const owe::Json& json) {
     return true;
 };
 
-bool ParticleRender::FromJson(const owe::Json& json) {
+bool ParticleRender::FromJson(const owe::NJson& json) {
     owe::GetJsonValue(json, "name", name);
 
     if (name == "ropetrail") subdivision = 1.0f;
@@ -104,7 +105,7 @@ bool ParticleRender::FromJson(const owe::Json& json) {
     return true;
 }
 
-bool Emitter::FromJson(const owe::Json& json) {
+bool Emitter::FromJson(const owe::NJson& json) {
     owe::GetJsonValue(json, "name", name);
     owe::GetJsonValue(json, "id", id);
     owe::GetJsonValue(json, "speedmin", speedmin, false);
@@ -140,45 +141,43 @@ bool Emitter::FromJson(const owe::Json& json) {
     return true;
 }
 
-bool ParticleInstanceoverride::FromJosn(const owe::Json& json) {
+bool ParticleInstanceoverride::FromJosn(const owe::NJson& json) {
     enabled = true;
 
     // {"user":"<key>","value":...} indirection -> record the key for the
     // live user-property pipeline. The value still parses normally via
     // GetJsonValue (which already looks through the `value` wrapper).
-    auto bind = [&](ref<str> field) {
-        auto sub = json.get(field);
-        if (sub.is_none() || ! (*sub)->is_object()) return;
-        auto user = (*sub)->get("user"_str);
-        if (user.is_none()) return;
-        auto string = (*user)->as_str();
-        if (string.is_some())
-            bindings[rstd::cppstd::to_string(field)] = rstd::cppstd::to_string(*string);
+    auto bind = [&](std::string_view field) {
+        auto sub = owe::Find(json, field);
+        if (sub == nullptr || ! sub->is_object()) return;
+        auto user = owe::Find(*sub, "user");
+        if (user == nullptr) return;
+        if (user->is_string()) bindings[std::string(field)] = user->get_ref<const std::string&>();
     };
 
     owe::GetJsonValue(json, "alpha", alpha, false);
-    bind("alpha"_str);
+    bind("alpha");
     owe::GetJsonValue(json, "size", size, false);
-    bind("size"_str);
+    bind("size");
     owe::GetJsonValue(json, "lifetime", lifetime, false);
-    bind("lifetime"_str);
+    bind("lifetime");
     owe::GetJsonValue(json, "rate", rate, false);
-    bind("rate"_str);
+    bind("rate");
     owe::GetJsonValue(json, "speed", speed, false);
-    bind("speed"_str);
+    bind("speed");
     owe::GetJsonValue(json, "count", count, false);
-    bind("count"_str);
+    bind("count");
     owe::GetJsonValue(json, "brightness", brightness, false);
-    bind("brightness"_str);
+    bind("brightness");
     owe::GetJsonValue(json, "id", id, false);
-    if (auto value = json.get("color"_str); value.is_some()) {
+    if (auto value = owe::Find(json, "color"); value != nullptr) {
         owe::GetJsonValue(json, "color", color);
         overColor = true;
-        bind("color"_str);
-    } else if (auto value = json.get("colorn"_str); value.is_some()) {
+        bind("color");
+    } else if (auto value = owe::Find(json, "colorn"); value != nullptr) {
         owe::GetJsonValue(json, "colorn", colorn);
         overColorn = true;
-        bind("colorn"_str);
+        bind("colorn");
     }
     {
         const char* cp_keys[]  = { "controlpoint0", "controlpoint1", "controlpoint2",
@@ -188,15 +187,15 @@ bool ParticleInstanceoverride::FromJosn(const owe::Json& json) {
                                    "controlpointangle3", "controlpointangle4", "controlpointangle5",
                                    "controlpointangle6", "controlpointangle7" };
         for (int i = 0; i < 8; ++i) {
-            auto value = json.get(rstd::cppstd::as_str(cp_keys[i]).unwrap());
-            if (value.is_some() && ! (*value)->is_null()) {
+            auto value = owe::Find(json, cp_keys[i]);
+            if (value != nullptr && ! value->is_null()) {
                 std::array<float, 3> point {};
                 owe::GetJsonValue(json, cp_keys[i], point, false);
                 controlpoint[i] = Some(point);
             }
-            bind(rstd::cppstd::as_str(cp_keys[i]).unwrap());
+            bind(cp_keys[i]);
             owe::GetJsonValue(json, cpa_keys[i], controlpointangle[i], false);
-            bind(rstd::cppstd::as_str(cpa_keys[i]).unwrap());
+            bind(cpa_keys[i]);
         }
     }
     auto field_binding_state = std::make_shared<FieldBindings>();
@@ -205,26 +204,24 @@ bool ParticleInstanceoverride::FromJosn(const owe::Json& json) {
     return true;
 };
 
-bool Particle::FromJson(const owe::Json& json, fs::VFS& vfs) {
-    auto emitter_values = json.get("emitter"_str);
-    if (emitter_values.is_none()) {
+bool Particle::FromJson(const owe::NJson& json, fs::VFS& vfs) {
+    auto emitter_values = owe::Find(json, "emitter");
+    if (emitter_values == nullptr) {
         rstd_error("particle no emitter");
         return false;
     }
-    auto emitter_array = (*emitter_values)->as_array();
-    if (emitter_array.is_none()) {
+    if (! emitter_values->is_array()) {
         rstd_error("particle emitter is not an array");
         return false;
     }
-    for (const auto& el : **emitter_array) {
+    for (const auto& el : *emitter_values) {
         Emitter emi;
         emi.FromJson(el);
         emitters.push_back(std::move(emi));
     }
-    if (auto values = json.get("renderer"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some()) {
-            for (const auto& el : **array) {
+    if (auto values = owe::Find(json, "renderer"); values != nullptr) {
+        if (values->is_array()) {
+            for (const auto& el : *values) {
                 ParticleRender pr;
                 pr.FromJson(el);
                 renderers.push_back(std::move(pr));
@@ -237,20 +234,17 @@ bool Particle::FromJson(const owe::Json& json, fs::VFS& vfs) {
         pr.name = "sprite";
         renderers.push_back(pr);
     }
-    if (auto values = json.get("initializer"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some())
-            for (const auto& el : **array) initializers.push(el.clone());
+    if (auto values = owe::Find(json, "initializer"); values != nullptr) {
+        if (values->is_array())
+            for (const auto& el : *values) initializers.push_back(el);
     }
-    if (auto values = json.get("operator"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some())
-            for (const auto& el : **array) operators.push(el.clone());
+    if (auto values = owe::Find(json, "operator"); values != nullptr) {
+        if (values->is_array())
+            for (const auto& el : *values) operators.push_back(el);
     }
-    if (auto values = json.get("controlpoint"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some()) {
-            for (const auto& el : **array) {
+    if (auto values = owe::Find(json, "controlpoint"); values != nullptr) {
+        if (values->is_array()) {
+            for (const auto& el : *values) {
                 ParticleControlpoint pc;
                 pc.FromJson(el);
                 controlpoints.push_back(std::move(pc));
@@ -258,16 +252,15 @@ bool Particle::FromJson(const owe::Json& json, fs::VFS& vfs) {
         }
     }
 
-    if (auto values = json.get("children"_str); values.is_some()) {
-        auto array = (*values)->as_array();
-        if (array.is_some()) {
-            for (const auto& el : **array) {
+    if (auto values = owe::Find(json, "children"); values != nullptr) {
+        if (values->is_array()) {
+            for (const auto& el : *values) {
                 ParticleChild child;
                 if (child.FromJson(el, vfs)) children.push_back(std::move(child));
             }
         }
     }
-    if (json.get("material"_str).is_some()) {
+    if (owe::Find(json, "material") != nullptr) {
         std::string matPath;
         owe::GetJsonValue(json, "material", matPath);
         auto jMat = LoadAssetJsonFile(vfs, matPath);
@@ -295,8 +288,8 @@ Particle Particle::Clone() const {
     out.emitters      = emitters;
     out.renderers     = renderers;
     out.controlpoints = controlpoints;
-    for (const auto& value : initializers) out.initializers.push(value.clone());
-    for (const auto& value : operators) out.operators.push(value.clone());
+    out.initializers  = initializers;
+    out.operators     = operators;
     out.material = material.clone();
     out.children.reserve(children.size());
     for (const auto& child : children) out.children.push_back(child.Clone());
@@ -308,7 +301,7 @@ Particle Particle::Clone() const {
     return out;
 }
 
-bool ParticleObject::FromJson(const owe::Json& json, fs::VFS& vfs) {
+bool ParticleObject::FromJson(const owe::NJson& json, fs::VFS& vfs) {
     return FromJson(json, vfs, kSceneVersionUnknown);
 }
 
@@ -338,15 +331,15 @@ ParticleObject ParticleObject::Clone() const {
     out.parent           = parent;
     out.attachment       = attachment;
     out.dependencies     = dependencies;
-    out.instance         = instance.clone();
-    out.particlesrc      = particlesrc.clone();
+    out.instance         = instance;
+    out.particlesrc      = particlesrc;
     out.controlpoint     = controlpoint;
     out.visible_user_key = visible_user_key;
 
     return out;
 }
 
-bool ParticleObject::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion /*v*/) {
+bool ParticleObject::FromJson(const owe::NJson& json, fs::VFS& vfs, SceneVersion /*v*/) {
     owe::GetJsonValue(json, "particle", particle);
     ReadVisibleProperty(json, visible, visible_user);
     visible_user_key = visible_user.name;
@@ -358,8 +351,8 @@ bool ParticleObject::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion 
     owe::GetJsonValue(json, "scale", scale);
     ReadParallaxDepth(json, parallax);
 
-    if (auto value = json.get("instanceoverride"_str); value.is_some() && ! (*value)->is_null()) {
-        instanceoverride.FromJosn(**value);
+    if (auto value = owe::Find(json, "instanceoverride"); value != nullptr && ! value->is_null()) {
+        instanceoverride.FromJosn(*value);
     }
 
     owe::GetJsonValue(json, "locktransforms", locktransforms, false);
@@ -370,8 +363,8 @@ bool ParticleObject::FromJson(const owe::Json& json, fs::VFS& vfs, SceneVersion 
     owe::GetJsonValue(json, "attachment", attachment, false);
     owe::GetJsonValue(json, "dependencies", dependencies, false);
     owe::GetJsonValue(json, "controlpoint", controlpoint, false);
-    if (auto value = json.get("instance"_str); value.is_some()) instance = (*value)->clone();
-    if (auto value = json.get("particlesrc"_str); value.is_some()) particlesrc = (*value)->clone();
+    if (auto value = owe::Find(json, "instance"); value != nullptr) instance = *value;
+    if (auto value = owe::Find(json, "particlesrc"); value != nullptr) particlesrc = *value;
 
     AbsorbAllFieldBindings(json, field_bindings);
 

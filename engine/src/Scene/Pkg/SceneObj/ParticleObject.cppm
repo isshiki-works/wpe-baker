@@ -30,7 +30,7 @@ public:
     };
     using EFlags = BitFlags<FlagEnum>;
 
-    bool                 FromJson(const owe::Json&);
+    bool                 FromJson(const owe::NJson&);
     EFlags               flags { 0 };
     i32                  id { -1 };
     std::array<float, 3> offset { 0, 0, 0 };
@@ -39,7 +39,7 @@ public:
 
 class ParticleRender {
 public:
-    bool        FromJson(const owe::Json&);
+    bool        FromJson(const owe::NJson&);
     std::string name;
     float       length { 0.05f };
     float       maxlength { 10.0f };
@@ -49,7 +49,7 @@ public:
 
 class Initializer {
 public:
-    bool                 FromJson(const owe::Json&);
+    bool                 FromJson(const owe::NJson&);
     std::array<float, 3> max { 0, 0, 0 };
     std::array<float, 3> min { 0, 0, 0 };
     std::string          name;
@@ -64,7 +64,7 @@ public:
     using EFlags = BitFlags<FlagEnum>;
 
 public:
-    bool                 FromJson(const owe::Json&);
+    bool                 FromJson(const owe::NJson&);
     std::array<float, 3> directions { 1.0f, 1.0f, 0.0f };
     std::array<float, 3> distancemax { 256.0f, 256.0f, 256.0f };
     std::array<float, 3> distancemin { 0.0f, 0.0f, 0.0f };
@@ -104,12 +104,12 @@ public:
     using EFlags = BitFlags<FlagEnum>;
 
 public:
-    bool     FromJson(const owe::Json&, fs::VFS&);
+    bool     FromJson(const owe::NJson&, fs::VFS&);
     Particle Clone() const;
 
     std::vector<Emitter>              emitters;
-    rstd::json::Array                 initializers;
-    rstd::json::Array                 operators;
+    std::vector<owe::NJson>           initializers;
+    std::vector<owe::NJson>           operators;
     std::vector<ParticleRender>       renderers;
     std::vector<ParticleControlpoint> controlpoints;
 
@@ -131,7 +131,7 @@ public:
     };
     using EFlags = BitFlags<FlagEnum>;
 
-    bool          FromJson(const owe::Json&, fs::VFS&);
+    bool          FromJson(const owe::NJson&, fs::VFS&);
     ParticleChild Clone() const;
 
     // static
@@ -155,7 +155,7 @@ public:
 
 class ParticleInstanceoverride {
 public:
-    bool FromJosn(const owe::Json&);
+    bool FromJosn(const owe::NJson&);
     bool enabled { false };
     bool overColor { false };
     bool overColorn { false };
@@ -187,8 +187,8 @@ public:
 
 class ParticleObject {
 public:
-    bool                     FromJson(const owe::Json&, fs::VFS&);               // legacy
-    bool                     FromJson(const owe::Json&, fs::VFS&, SceneVersion); // canonical
+    bool                     FromJson(const owe::NJson&, fs::VFS&);               // legacy
+    bool                     FromJson(const owe::NJson&, fs::VFS&, SceneVersion); // canonical
     bool                     FromAsset(ref<str>, fs::VFS&);
     ParticleObject           Clone() const;
     i32                      id { 0 };
@@ -210,8 +210,8 @@ public:
     u32                  parent { 0 };
     std::string          attachment;
     std::vector<i32>     dependencies;
-    owe::Json            instance;
-    owe::Json            particlesrc;                       // PKGV0001+; always null in corpus
+    owe::NJson           instance;
+    owe::NJson           particlesrc;                       // PKGV0001+; always null in corpus
     std::array<float, 3> controlpoint { 0.0f, 0.0f, 0.0f }; // PKGV0019+
     FieldBindings        field_bindings;
 

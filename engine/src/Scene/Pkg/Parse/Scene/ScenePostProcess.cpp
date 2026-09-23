@@ -71,7 +71,7 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
         }
         auto              material_json = rstd::move(loaded).unwrap_unchecked();
         wpscene::Material wpmat;
-        if (! wpmat.FromJson(ToRstd(material_json))) {
+        if (! wpmat.FromJson(material_json)) {
             rstd_error("bloom: Material::FromJson failed: {}", mat_relpath);
             return false;
         }

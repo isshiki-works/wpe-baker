@@ -394,7 +394,7 @@ Json dump_light_object(const Json& obj, owe::fs::VFS& vfs) {
     owe::wpscene::LightObject lo;
     bool                      ok = false;
     try {
-        ok = lo.FromJson(obj, vfs);
+        ok = lo.FromJson(owe::FromRstd(obj), vfs);
     } catch (const std::exception&) {
         ok = false;
     }
@@ -417,7 +417,7 @@ Json dump_particle_object(const Json& obj, owe::fs::VFS& vfs) {
     owe::wpscene::ParticleObject po;
     bool                         ok = false;
     try {
-        ok = po.FromJson(obj, vfs);
+        ok = po.FromJson(owe::FromRstd(obj), vfs);
     } catch (const std::exception&) {
         ok = false;
     }
@@ -431,9 +431,9 @@ Json dump_particle_object(const Json& obj, owe::fs::VFS& vfs) {
     SetSnapshot(out, "emitter_count", static_cast<int>(po.particleObj.emitters.size()));
     SetSnapshot(out,
                 "initializer_count",
-                static_cast<int>(po.particleObj.initializers.len().to_primitive()));
+                static_cast<int>(po.particleObj.initializers.size()));
     SetSnapshot(
-        out, "operator_count", static_cast<int>(po.particleObj.operators.len().to_primitive()));
+        out, "operator_count", static_cast<int>(po.particleObj.operators.size()));
     SetSnapshot(out, "renderer_count", static_cast<int>(po.particleObj.renderers.size()));
     SetSnapshot(out, "controlpoint_count", static_cast<int>(po.particleObj.controlpoints.size()));
     SetSnapshot(out, "child_count", static_cast<int>(po.particleObj.children.size()));
@@ -449,7 +449,7 @@ Json dump_sound_object(const Json& obj, owe::fs::VFS& vfs) {
     owe::wpscene::SoundObject so;
     bool                      ok = false;
     try {
-        ok = so.FromJson(obj, vfs);
+        ok = so.FromJson(owe::FromRstd(obj), vfs);
     } catch (const std::exception&) {
         ok = false;
     }
@@ -470,7 +470,7 @@ Json dump_image_object(const Json& obj, owe::fs::VFS& vfs) {
     owe::wpscene::ImageObject img;
     bool                      ok = false;
     try {
-        ok = img.FromJson(obj, vfs);
+        ok = img.FromJson(owe::FromRstd(obj), vfs);
     } catch (const std::exception&) {
         ok = false;
     }
@@ -611,7 +611,7 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
             if (parsed_json.is_ok()) {
                 auto                        j = parsed_json.unwrap();
                 owe::wpscene::SceneMetadata scene;
-                bool                        parsed = scene.FromJson(j);
+                bool                        parsed = scene.FromJson(owe::FromRstd(j));
                 auto                        jscene = owe::MakeObject();
                 SetSnapshot(jscene, "parsed", parsed);
                 SetSnapshot(jscene, "is_ortho", scene.general.isOrtho);

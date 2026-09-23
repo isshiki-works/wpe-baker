@@ -15,6 +15,8 @@
 
 #include <cmath>
 
+#include "JsonNlohmann.hpp"
+
 import rstd.cppstd;
 import rstd;
 import wavsen.audio;
@@ -30,7 +32,7 @@ import wescene.types;
 using namespace rstd::literals;
 
 TEST(FieldBindingJson, CompatibilityReaderPopulatesAnimationMetadata) {
-    auto parsed = owe::ParseJson(R"({"enabled":true,"x":{"value":1.5},"y":-2.0,"magic":7})");
+    auto parsed = owe::ParseNJson(R"({"enabled":true,"x":{"value":1.5},"y":-2.0,"magic":7})");
     ASSERT_TRUE(parsed.is_ok());
 
     owe::wpscene::AnimKeyframeTangent tangent;
@@ -42,7 +44,7 @@ TEST(FieldBindingJson, CompatibilityReaderPopulatesAnimationMetadata) {
 }
 
 TEST(FieldBindingJson, TangentObjectDefaultsToEnabledAndParsesStep) {
-    auto parsed = owe::ParseJson(R"({
+    auto parsed = owe::ParseNJson(R"({
         "frame": 10,
         "value": 2.0,
         "step": true,
@@ -78,7 +80,7 @@ TEST(SceneObjectClone, MembersProvideCloneTraitImplementation) {
 }
 
 TEST(ObjectInstanceJson, AppliesMaterialBindingOverridesBySlot) {
-    auto parsed = owe::ParseJson(R"({
+    auto parsed = owe::ParseNJson(R"({
         "textures": [null, "linked"],
         "usertextures": [null, "replacement"],
         "combos": {"version": 2}
@@ -94,16 +96,15 @@ TEST(ObjectInstanceJson, AppliesMaterialBindingOverridesBySlot) {
     ASSERT_EQ(material.textures.size(), 2u);
     EXPECT_EQ(material.textures[0], "base-0");
     EXPECT_EQ(material.textures[1], "linked");
-    ASSERT_EQ(material.usertextures.len(), rstd::usize(2));
-    EXPECT_TRUE(material.usertextures[rstd::usize()].is_null());
-    ASSERT_TRUE(material.usertextures[rstd::usize(1)].is_string());
-    EXPECT_EQ(rstd::cppstd::to_string(*material.usertextures[rstd::usize(1)].as_str()),
-              "replacement");
+    ASSERT_EQ(material.usertextures.size(), 2u);
+    EXPECT_TRUE(material.usertextures[0].is_null());
+    ASSERT_TRUE(material.usertextures[1].is_string());
+    EXPECT_EQ(material.usertextures[1].get_ref<const std::string&>(), "replacement");
     EXPECT_EQ(material.combos.at("version"), rstd::i32(2));
 }
 
 TEST(TextObjectJson, ReadsDirectUserValueBinding) {
-    auto parsed = owe::ParseJson(R"({"text":{"user":"title","value":"default"}})");
+    auto parsed = owe::ParseNJson(R"({"text":{"user":"title","value":"default"}})");
     ASSERT_TRUE(parsed.is_ok());
 
     owe::fs::VFS             vfs;
@@ -114,7 +115,7 @@ TEST(TextObjectJson, ReadsDirectUserValueBinding) {
 }
 
 TEST(TextObjectJson, ReadsReflectionParticipation) {
-    auto parsed = owe::ParseJson(R"({"reflected":false})");
+    auto parsed = owe::ParseNJson(R"({"reflected":false})");
     ASSERT_TRUE(parsed.is_ok());
 
     owe::fs::VFS             vfs;
@@ -694,7 +695,7 @@ TEST(SceneShadowParsing, RequiresRendererCapabilityBeforeRegisteringDerivedResou
 }
 
 TEST(ModelObjectJson, ReadsMaterialSkin) {
-    auto parsed = owe::ParseJson(R"({"model":"models/prism.mdl","skin":2,"perspective":true})");
+    auto parsed = owe::ParseNJson(R"({"model":"models/prism.mdl","skin":2,"perspective":true})");
     ASSERT_TRUE(parsed.is_ok());
 
     owe::fs::VFS              vfs;
@@ -750,14 +751,14 @@ TEST(SceneCameraParsing, PerspectiveOverridePreservesTheOrthographicReferencePla
 }
 
 TEST(ImageEffectJson, FailedEffectsAreAbsentFromParsedObjects) {
-    auto image_json = owe::ParseJson(R"({
+    auto image_json = owe::ParseNJson(R"({
         "image": "models/util/fullscreenlayer.json",
         "effects": [
             {"file": "effects/_empty/effect.json", "visible": true},
             {"file": "effects/missing/effect.json", "visible": true}
         ]
     })");
-    auto shape_json = owe::ParseJson(R"({
+    auto shape_json = owe::ParseNJson(R"({
         "shape": "rectangle",
         "origin": [0.0, 0.0, 0.0],
         "angles": [0.0, 0.0, 0.0],

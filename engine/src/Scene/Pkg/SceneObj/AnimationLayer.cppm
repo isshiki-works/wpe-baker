@@ -1,5 +1,7 @@
 module;
 
+#include "JsonNlohmann.hpp"
+
 export module wescene.pkg.scene_obj:animation_layer;
 import rstd;
 import rstd.cppstd;
@@ -12,31 +14,31 @@ using namespace rstd::literals;
 export namespace owe::wpscene
 {
 
-inline void ReadPuppetAnimationLayers(const owe::Json&                          json,
+inline void ReadPuppetAnimationLayers(const owe::NJson&                         json,
                                       std::vector<PuppetLayer::AnimationLayer>& out) {
-    auto layers = json.get("animationlayers"_str);
-    if (layers.is_none()) return;
-    auto array = (*layers)->as_array();
-    if (array.is_none()) return;
-    for (const auto& jLayer : **array) {
+    auto layers = owe::Find(json, "animationlayers");
+    if (layers == nullptr) return;
+    if (! layers->is_array()) return;
+    for (const auto& jLayer : *layers) {
         PuppetLayer::AnimationLayer layer;
         owe::GetJsonValue(jLayer, "animation", layer.id);
         owe::GetJsonValue(jLayer, "blend", layer.blend);
         owe::GetJsonValue(jLayer, "rate", layer.rate);
-        if (auto visible = jLayer.get("visible"_str); visible.is_some()) {
-            layer.visible_binding = Some((*visible)->clone());
-            if ((*visible)->is_boolean()) {
-                layer.visible = *(*visible)->as_bool();
-            } else if ((*visible)->is_object()) {
-                if (auto value = (*visible)->get("value"_str); value.is_some()) {
-                    if ((*value)->is_boolean()) {
-                        layer.visible = *(*value)->as_bool();
-                    } else if (auto numeric = (*value)->as_f64(); numeric.is_some()) {
-                        layer.visible = numeric->to_primitive() != 0.0;
+        if (auto visible = owe::Find(jLayer, "visible"); visible != nullptr) {
+            // 过渡桥：PuppetLayer::AnimationLayer::visible_binding 仍是 rstd（C 组迁）。
+            layer.visible_binding = Some(owe::ToRstd(*visible));
+            if (visible->is_boolean()) {
+                layer.visible = visible->get<bool>();
+            } else if (visible->is_object()) {
+                if (auto value = owe::Find(*visible, "value"); value != nullptr) {
+                    if (value->is_boolean()) {
+                        layer.visible = value->get<bool>();
+                    } else if (value->is_number()) {
+                        layer.visible = value->get<double>() != 0.0;
                     }
                 }
-                layer.visible_can_change = (*visible)->get("script"_str).is_some() ||
-                                           (*visible)->get("user"_str).is_some();
+                layer.visible_can_change = owe::Find(*visible, "script") != nullptr ||
+                                           owe::Find(*visible, "user") != nullptr;
             }
         }
         owe::GetJsonValue(jLayer, "id", layer.layer_id, false);
