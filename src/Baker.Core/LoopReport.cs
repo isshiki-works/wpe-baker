@@ -115,14 +115,24 @@ internal abstract record LoopPatch
     public abstract JsonObject ToJson();
 }
 
-/// <summary>shader_speed / shader_phase / animation_rate：改一个标量，old_value → new_value。</summary>
+/// <summary>
+/// shader_speed / shader_phase / animation_rate / animation_fps：改一个标量，old_value → new_value。
+/// animation_fps 另带 <see cref="AnimationPath"/>（相对所有者对象的 JSON 指针，指向那条字段动画），其余种类不写这个键。
+/// </summary>
 internal sealed record LoopValuePatch(string ComponentId, string Kind, int OwnerLayerId, int EffectIndex, int PassIndex,
     string ConstantKey, int ValueIndex, int? AnimationLayerId, double OldValue, double NewValue, double SpeedExponent = 1) : LoopPatch
 {
-    public override JsonObject ToJson() => new() { ["component"] = ComponentId, ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId,
-        ["effect_index"] = EffectIndex, ["pass_index"] = PassIndex, ["constant_key"] = ConstantKey, ["value_index"] = ValueIndex,
-        ["animation_layer_id"] = AnimationLayerId, ["old_value"] = OldValue, ["new_value"] = NewValue,
-        ["speed_exponent"] = SpeedExponent, ["delta_percent"] = 100 * (NewValue / OldValue - 1) };
+    public string? AnimationPath { get; init; }
+
+    public override JsonObject ToJson()
+    {
+        var json = new JsonObject { ["component"] = ComponentId, ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId,
+            ["effect_index"] = EffectIndex, ["pass_index"] = PassIndex, ["constant_key"] = ConstantKey, ["value_index"] = ValueIndex,
+            ["animation_layer_id"] = AnimationLayerId, ["old_value"] = OldValue, ["new_value"] = NewValue,
+            ["speed_exponent"] = SpeedExponent, ["delta_percent"] = 100 * (NewValue / OldValue - 1) };
+        if (AnimationPath is not null) json["animation_path"] = AnimationPath;
+        return json;
+    }
 }
 
 /// <summary>video_rate：视频片段按精确有理倍率调速。</summary>

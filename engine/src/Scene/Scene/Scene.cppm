@@ -1961,11 +1961,30 @@ struct SceneEffectTarget {
     std::string           key;
 };
 
+// M2 遮罩支撑区：载入时由白名单效果的静态遮罩纹理算出，之后只读。
+// cells 是遮罩归一化 UV 上的粗格子（grid_w×grid_h，行序 = 遮罩数据行序 = RT 行序），
+// 1 表示这一格里遮罩采样值可能非 0（已按线性过滤足迹、各级 mip、环绕保守膨胀）。
+// 白名单效果在遮罩为 0 处输出逐位等于输入，所以格子为 0 的区域 pass 可以不画。
+struct EffectMaskSupport {
+    std::uint32_t             grid_w { 0 };
+    std::uint32_t             grid_h { 0 };
+    // RT 像素中心 UV → 遮罩归一化 UV 的缩放（着色器里的 res.z/res.x、res.w/res.y）。
+    float                     uv_scale_x { 1.0f };
+    float                     uv_scale_y { 1.0f };
+    // 遮罩归一化 UV 1.0 对应多少格（= 0 级宽高 / 格边长；grid_w 是它向上取整）。
+    float                     cells_per_u { 0.0f };
+    float                     cells_per_v { 0.0f };
+    std::vector<std::uint8_t> cells;
+    std::string               label;
+};
+
 struct SceneImageEffectNode {
     SceneEffectTarget            output;
     Arc<SceneNode>               sceneNode;
     bool                         uses_unit_final_quad { false };
     SceneShaderValueAnimationMap final_quad_shader_values;
+    // M2：非空 = 本 pass 是白名单效果且前提成立，变化集 ⊆ 遮罩支撑区。
+    std::shared_ptr<const EffectMaskSupport> mask_support;
     // Assigned only while the render graph is built. It identifies this
     // node's real graph pass without inferring it from a render-target name.
     Option<u64>                  graph_pass_index;

@@ -4,6 +4,7 @@ import wescene.json;
 import wescene.fs;
 
 export import :shader_lex;
+export import :mask_identity;
 export import wescene.pkg.scene_obj;
 export import :mdl_parser;
 export import :particle_runtime;

@@ -1,8 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <bit>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <string>
 #include <vector>
 
 import eigen;
@@ -20,6 +25,13 @@ using rstd::sync::Arc;
 
 namespace
 {
+
+// 夹具构造时记下的字段位置（名字 → 文件偏移），表驱动用例据此改写字段、算期望的核对点偏移。
+using Marks = std::map<std::string, std::size_t, std::less<>>;
+
+void Mark(Marks* at, const char* name, std::size_t offset) {
+    if (at) (*at)[name] = offset;
+}
 
 void AppendU32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
     for (unsigned shift = 0; shift < 32; shift += 8)
@@ -110,9 +122,10 @@ void AppendBoneFrames(std::vector<std::uint8_t>& bytes, float x, float y) {
     }
 }
 
-std::vector<std::uint8_t> MdlWithIkRig(float end_segment_length = 3.0f) {
+std::vector<std::uint8_t> MdlWithIkRig(float end_segment_length = 3.0f, Marks* at = nullptr) {
     auto bytes    = MdlPrefix();
     auto mdls_end = BeginMdlBlock(bytes, "MDLS0004");
+    Mark(at, "mdls_end", mdls_end);
     AppendU16(bytes, 3);
     AppendU16(bytes, 0);
     AppendBone(bytes, owe::Puppet::NO_PARENT, 0.0f, 0.0f);
@@ -132,9 +145,11 @@ std::vector<std::uint8_t> MdlWithIkRig(float end_segment_length = 3.0f) {
     bytes.push_back(0);
     AppendU32(bytes, 0);
     AppendU16(bytes, 3);
+    Mark(at, "ik_lengths", bytes.size());
     AppendFloat(bytes, 0.0f);
     AppendFloat(bytes, 2.0f);
     AppendFloat(bytes, end_segment_length);
+    Mark(at, "ik_child_count", bytes.size());
     AppendU16(bytes, 1);
     AppendU32(bytes, 1);
     AppendFloat(bytes, 1.0f);
@@ -159,6 +174,7 @@ std::vector<std::uint8_t> MdlWithIkRig(float end_segment_length = 3.0f) {
     AppendFloat(bytes, 5.0f);
     AppendU32(bytes, 0);
     AppendU16(bytes, 3);
+    Mark(at, "ik_chain_path", bytes.size());
     AppendU32(bytes, 0);
     AppendU32(bytes, 1);
     AppendU32(bytes, 2);
@@ -172,6 +188,7 @@ std::vector<std::uint8_t> MdlWithIkRig(float end_segment_length = 3.0f) {
     AppendString(bytes, "clip");
     AppendString(bytes, "loop");
     AppendFloat(bytes, 1.0f);
+    Mark(at, "anim_length", bytes.size());
     AppendU32(bytes, 1); // length: two samples
     AppendU32(bytes, 0);
     AppendU32(bytes, 3);
@@ -181,6 +198,7 @@ std::vector<std::uint8_t> MdlWithIkRig(float end_segment_length = 3.0f) {
         AppendBoneFrames(bytes, x, 0.0f);
     }
     AppendU32(bytes, 0); // trans_flag
+    Mark(at, "controller_track_size", bytes.size());
     AppendU32(bytes, 72);
     AppendBoneFrames(bytes, 0.0f, 4.0f);
     AppendU32(bytes, 0); // next track separator
@@ -202,7 +220,10 @@ std::vector<std::uint8_t> MdlWithPlayMode(std::string_view mode, bool terminated
     AppendU32(bytes, 0);
     AppendString(bytes, "clip");
     bytes.insert(bytes.end(), mode.begin(), mode.end());
-    if (terminated) bytes.push_back(0);
+    if (terminated) {
+        bytes.push_back(0);
+        bytes.insert(bytes.end(), 20, 0); // fps、length、flags、骨骼轨数、事件数
+    }
     FinishMdlBlock(bytes, end_field);
     if (! terminated) bytes.push_back(0); // must not be consumed beyond MDLA's boundary
     return bytes;
@@ -316,6 +337,411 @@ std::uint32_t CountUvSeamTriangles(const owe::Mdl::Mesh& mesh) {
     return seam_triangles;
 }
 
+// 每种块各一段的小夹具：网格（UV + 蒙皮 + part uv2 + parts + masks）、MDLS（1 根骨骼 +
+// 偏移变换/骨骼序号表）、 MDAT、MDLA0006（第一条：骨骼轨、主平移轨、混合曲线、v4
+// 事件、标量曲线、事件表；第二条：trans_flag=1 的附加/主平移轨）、MDMP（shape 1 带逐顶点尾、shape 0
+// 带整段尾）、MDLE。
+std::vector<std::uint8_t> MdlWithAllBlocks(Marks* at = nullptr) {
+    auto bytes = MdlPrefix(1);
+    Mark(at, "skin_count", bytes.size() - 8);
+    Mark(at, "mesh_count", bytes.size() - 4);
+    Mark(at, "mesh", bytes.size());
+    AppendString(bytes, "materials/a.json");
+    AppendU32(bytes, 0);                                                          // flag_a
+    for (float v : { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f }) AppendFloat(bytes, v); // AABB
+    AppendU32(bytes, 0x8 | 0x00800000 | 0x01000000);                              // UV + 蒙皮
+    Mark(at, "vertex_size", bytes.size());
+    AppendU32(bytes, 3 * 52);
+    for (float x : { 0.0f, 1.0f, 0.0f }) {
+        for (float v : { x, x > 0.0f ? 0.0f : 1.0f, 0.0f }) AppendFloat(bytes, v);
+        for (unsigned i = 0; i < 4; ++i) AppendU32(bytes, 0); // blend indices
+        for (float w : { 1.0f, 0.0f, 0.0f, 0.0f }) AppendFloat(bytes, w);
+        AppendFloat(bytes, x);
+        AppendFloat(bytes, 0.5f);
+    }
+    Mark(at, "indices_size", bytes.size());
+    AppendU32(bytes, 6); // 一个 u16 三角形
+    for (std::uint16_t i : { 0, 1, 2 }) AppendU16(bytes, i);
+    bytes.push_back(1); // part uv2
+    bytes.push_back(1);
+    AppendU16(bytes, 0);
+    bytes.push_back(0);
+    AppendU32(bytes, 3 * 12);
+    Mark(at, "part_uv2", bytes.size());
+    for (unsigned i = 0; i < 3; ++i) {
+        AppendFloat(bytes, 0.25f);
+        AppendFloat(bytes, 0.75f);
+        AppendU32(bytes, 0);
+    }
+    bytes.push_back(1); // parts
+    Mark(at, "parts_bytes", bytes.size());
+    AppendU32(bytes, 16);
+    for (std::uint32_t v : { 1u, 0u, 0u, 3u }) AppendU32(bytes, v);
+    Mark(at, "mask_count", bytes.size());
+    AppendU32(bytes, 1); // masks
+    AppendU32(bytes, 0);
+    AppendU32(bytes, 0);
+    AppendString(bytes, "materials/m.json");
+    AppendU32(bytes, 0);
+    for (const char* list : { "mask_part_ids_a", "mask_part_ids_b" }) {
+        Mark(at, list, bytes.size());
+        AppendU32(bytes, 1);
+        AppendU32(bytes, 0);
+    }
+
+    auto mdls_end = BeginMdlBlock(bytes, "MDLS0004");
+    Mark(at, "bones_num", bytes.size());
+    AppendU16(bytes, 1);
+    AppendU16(bytes, 0);
+    AppendBone(bytes, owe::Puppet::NO_PARENT, 0.0f, 0.0f);
+    AppendU16(bytes, 0);             // extras
+    bytes.insert(bytes.end(), 9, 0); // metadata header
+    bytes.push_back(1);              // offset transforms
+    for (unsigned i = 0; i < 3; ++i) AppendFloat(bytes, 0.0f);
+    AppendAffine(bytes, 0.0f, 0.0f);
+    bytes.push_back(1); // bone-index table
+    AppendU32(bytes, 0);
+    bytes.push_back(0); // no bone depths
+    FinishMdlBlock(bytes, mdls_end);
+
+    auto mdat_end = BeginMdlBlock(bytes, "MDAT0001");
+    Mark(at, "attachment_count", bytes.size());
+    AppendU16(bytes, 1);
+    AppendU16(bytes, 0);
+    AppendString(bytes, "att");
+    AppendAffine(bytes, 1.0f, 0.0f);
+    FinishMdlBlock(bytes, mdat_end);
+
+    Mark(at, "mdla_tag", bytes.size());
+    Mark(at, "mdla_version", bytes.size() + 4);
+    auto mdla_end = BeginMdlBlock(bytes, "MDLA0006");
+    Mark(at, "mdla_end", mdla_end);
+    Mark(at, "anim_num", bytes.size());
+    AppendU32(bytes, 2); // animations
+    AppendU32(bytes, 1); // id
+    AppendU32(bytes, 0);
+    AppendString(bytes, "clip");
+    AppendString(bytes, "loop");
+    AppendFloat(bytes, 30.0f);
+    Mark(at, "anim_length", bytes.size());
+    AppendU32(bytes, 1); // length
+    AppendU32(bytes, 0); // flags
+    Mark(at, "bone_track_count", bytes.size());
+    AppendU32(bytes, 1); // bone tracks
+    AppendU32(bytes, 0);
+    Mark(at, "bone_track_size", bytes.size());
+    AppendU32(bytes, 72);
+    AppendBoneFrames(bytes, 0.0f, 0.0f);
+    AppendU32(bytes, 0); // trans_flag
+    Mark(at, "trans_main_size", bytes.size());
+    AppendU32(bytes, 8); // AnimTransMain：length+1 个标量
+    AppendFloat(bytes, 0.0f);
+    AppendFloat(bytes, 1.0f);
+    Mark(at, "blend_curves", bytes.size());
+    bytes.push_back(1); // per-bone blend curves
+    AppendU32(bytes, 0);
+    Mark(at, "blend_curve_size", bytes.size());
+    AppendU32(bytes, 8);
+    AppendFloat(bytes, 1.0f);
+    AppendFloat(bytes, 1.0f);
+    bytes.push_back(1); // v4 events
+    Mark(at, "v4_count", bytes.size());
+    AppendU32(bytes, 1);
+    AppendFloat(bytes, 0.0f);
+    Mark(at, "v4_curve_count", bytes.size());
+    AppendU16(bytes, 2); // curves
+    AppendU16(bytes, 0); // flags
+    Mark(at, "v4_curve_size", bytes.size());
+    AppendU32(bytes, 8);
+    AppendFloat(bytes, 0.0f);
+    AppendFloat(bytes, 1.0f);
+    AppendU16(bytes, 1);
+    AppendU32(bytes, 8);
+    AppendFloat(bytes, 1.0f);
+    AppendFloat(bytes, 0.0f);
+    for (float v : { -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f }) AppendFloat(bytes, v); // AABB
+    bytes.push_back(1); // scalar curves
+    AppendU32(bytes, 0);
+    Mark(at, "scalar_curve_size", bytes.size());
+    AppendU32(bytes, 4);
+    AppendFloat(bytes, 0.5f);
+    Mark(at, "event_count", bytes.size());
+    AppendU32(bytes, 1); // events
+    AppendU32(bytes, 0);
+    AppendString(bytes, "{}");
+    AppendU32(bytes, 2); // 第二条动画：id
+    AppendU32(bytes, 0);
+    AppendString(bytes, "slide");
+    AppendString(bytes, "loop");
+    AppendFloat(bytes, 30.0f);
+    AppendU32(bytes, 1); // length
+    AppendU32(bytes, 0); // flags
+    AppendU32(bytes, 0); // bone tracks
+    AppendU32(bytes, 1); // trans_flag：附加轨 + 主轨
+    for (const char* track : { "trans_extra_size", "trans_main2_size" }) {
+        Mark(at, track, bytes.size());
+        AppendU32(bytes, 8);
+        AppendFloat(bytes, 0.0f);
+        AppendFloat(bytes, 1.0f);
+        AppendU32(bytes, 0);
+    }
+    bytes.push_back(0); // no per-bone blend curves
+    bytes.push_back(0); // no v4 events
+    for (float v : { -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f }) AppendFloat(bytes, v); // AABB
+    bytes.push_back(0);  // no scalar curves
+    AppendU32(bytes, 0); // events
+    FinishMdlBlock(bytes, mdla_end);
+
+    auto mdmp_end = BeginMdlBlock(bytes, "MDMP0001");
+    Mark(at, "mdmp_end", mdmp_end);
+    Mark(at, "morph_section_count", bytes.size());
+    AppendU16(bytes, 2); // section data count
+    AppendFloat(bytes, 0.0f);
+    AppendU16(bytes, 0);
+    AppendU16(bytes, 0);
+    for (std::uint32_t shape : { 1u, 0u }) {
+        AppendU32(bytes, shape);
+        AppendU32(bytes, 0);
+        AppendString(bytes, "m");
+        if (shape == 1) Mark(at, "morph_length", bytes.size());
+        AppendU32(bytes, 6);
+        AppendU32(bytes, 0);
+        for (std::uint16_t v : { 0, 1, 2 }) AppendU16(bytes, v);
+        Mark(at, shape == 1 ? "morph_vertex_trailers" : "morph_trailer", bytes.size());
+        if (shape == 1)
+            AppendU16(bytes, 0); // vertex trailer
+        else
+            bytes.insert(bytes.end(), 6, 0); // length 字节的整段尾
+    }
+    FinishMdlBlock(bytes, mdmp_end);
+
+    auto mdle_end = BeginMdlBlock(bytes, "MDLE0001");
+    Mark(at, "mdle_end", mdle_end);
+    AppendU32(bytes, 64);
+    Mark(at, "mdle_world_binds", bytes.size());
+    AppendAffine(bytes, 0.0f, 0.0f);
+    FinishMdlBlock(bytes, mdle_end);
+    bytes.push_back(0); // trailing_nul
+    Mark(at, "eof", bytes.size());
+    return bytes;
+}
+
+// MDLS0002：1 根骨骼，extras 0，带逐骨骼世界绑定矩阵。
+std::vector<std::uint8_t> MdlsV2WithWorldBinds(Marks* at) {
+    auto bytes    = MdlPrefix();
+    auto mdls_end = BeginMdlBlock(bytes, "MDLS0002");
+    Mark(at, "mdls_end", mdls_end);
+    AppendU16(bytes, 1);
+    AppendU16(bytes, 0);
+    AppendBone(bytes, owe::Puppet::NO_PARENT, 0.0f, 0.0f);
+    AppendU16(bytes, 0); // extras
+    bytes.push_back(1);  // has_world_binds
+    Mark(at, "world_binds", bytes.size());
+    AppendAffine(bytes, 0.0f, 0.0f);
+    bytes.insert(bytes.end(), 8, 0);
+    FinishMdlBlock(bytes, mdls_end);
+    bytes.push_back(0); // trailing_nul
+    return bytes;
+}
+
+// 没有 MDLS 就出现的挂点/动画/世界绑定块（读错位的典型样子）。
+std::vector<std::uint8_t> MdlBlockWithoutMdls(std::string_view tag, Marks* at) {
+    auto bytes = MdlPrefix();
+    auto end   = BeginMdlBlock(bytes, tag);
+    Mark(at, "block_end", end);
+    AppendU32(bytes, 0);
+    FinishMdlBlock(bytes, end);
+    bytes.push_back(0); // trailing_nul
+    return bytes;
+}
+
+void WriteBytes(const std::filesystem::path& file, const std::vector<std::uint8_t>& bytes) {
+    std::ofstream output(file, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+}
+
+// 一个目录挂到 /assets 一次，反复解析其中的文件（模糊用例多，不为每个用例重建目录和 VFS）。
+class MdlMount {
+public:
+    explicit MdlMount(const std::filesystem::path& root) {
+        auto physical = owe::fs::make_physical_fs(owe::fs::ToPath(root.string()));
+        if (physical.is_ok())
+            m_ok = m_vfs.mount("/assets"_str, rstd::move(physical).unwrap_unchecked()).is_ok();
+    }
+
+    bool ok() const { return m_ok; }
+
+    bool Parse(const std::string& name, owe::Services& context, owe::Mdl& mdl) {
+        return owe::MdlParser::Parse(rstd::cppstd::as_str(name).unwrap(), m_vfs, mdl, &context);
+    }
+
+private:
+    owe::fs::VFS m_vfs;
+    bool         m_ok { false };
+};
+
+// 解析结果的内容摘要：全语料对照"正常文件解析行为不变"用，覆盖解析器写出的全部字段和 prepared()
+// 的派生值。
+class MdlDigest {
+public:
+    std::string Of(const owe::Mdl& mdl) {
+        Add(mdl.header.mdlv, mdl.header.mdl_flag, mdl.header.skin_count, mdl.header.mesh_count);
+        Add(mdl.mdls, mdl.mdla, mdl.mdle, mdl.mdmp);
+        for (const auto& mesh : mdl.meshes) {
+            Add(mesh.mat_json_files.len().to_primitive());
+            for (const auto& name : mesh.mat_json_files) Text(name);
+            Add(mesh.flag_a,
+                mesh.has_flag_a2_one,
+                mesh.flag,
+                mesh.aabb_min,
+                mesh.aabb_max,
+                mesh.has_aabb);
+            Each(mesh.positions);
+            Each(mesh.normals);
+            Each(mesh.tangents);
+            Each(mesh.extra4);
+            Each(mesh.blend_indices);
+            Each(mesh.blend_weights);
+            Each(mesh.texcoords);
+            Each(mesh.texcoord2);
+            Each(mesh.indices);
+            Each(mesh.part_uv2);
+            Each(mesh.part_uv2_pad);
+            Add(mesh.parts.len().to_primitive());
+            for (const auto& part : mesh.parts) Add(part.id, part.start, part.size);
+            Add(mesh.masks.len().to_primitive());
+            for (const auto& mask : mesh.masks) {
+                Add(mask.leading_a);
+                Text(mask.mat_json);
+                Each(mask.part_ids_a);
+                Each(mask.part_ids_b);
+            }
+        }
+        Add(mdl.morph_sections.len().to_primitive());
+        for (const auto& section : mdl.morph_sections) {
+            Add(section.event_time, section.event_id, section.sections.len().to_primitive());
+            for (const auto& data : section.sections) {
+                Add(data.shape_id, data.hash);
+                Text(data.tag);
+                Each(data.vertices);
+                Each(data.vertex_trailers);
+                Each(data.trailer);
+            }
+        }
+        Add(mdl.puppet.is_some());
+        if (mdl.puppet.is_some()) Puppet(**mdl.puppet);
+        char text[17];
+        std::snprintf(text, sizeof(text), "%016llx", static_cast<unsigned long long>(m_hash));
+        return text;
+    }
+
+private:
+    void Bytes(const void* data, std::size_t size) {
+        const auto* p = static_cast<const std::uint8_t*>(data);
+        for (std::size_t i = 0; i < size; ++i) m_hash = (m_hash ^ p[i]) * 1099511628211ull;
+    }
+    template<typename... T>
+    void Add(const T&... values) {
+        (Bytes(&values, sizeof(values)), ...);
+    }
+    void Text(const String& text) {
+        auto view = rstd::cppstd::as_string_view(text.as_str());
+        Add(view.size());
+        Bytes(view.data(), view.size());
+    }
+    template<typename T>
+    void Each(const Vec<T>& values) {
+        Add(values.len().to_primitive());
+        for (const auto& value : values) Add(value);
+    }
+    void Matrix(const Eigen::Affine3f& m) { Bytes(m.matrix().data(), sizeof(float) * 16); }
+    void Frames(const Vec<owe::Puppet::BoneFrame>& frames) {
+        Add(frames.len().to_primitive());
+        for (const auto& f : frames) {
+            for (float v : f.position) Add(v);
+            for (float v : f.angle) Add(v);
+            for (float v : f.scale) Add(v);
+        }
+    }
+    void Curves(const Vec<owe::Puppet::BoneFrameCurve>& curves) {
+        Add(curves.len().to_primitive());
+        for (const auto& c : curves) Each(c.values);
+    }
+    void Puppet(const owe::Puppet& puppet) {
+        Add(puppet.bones.len().to_primitive());
+        for (const auto& b : puppet.bones) {
+            Text(b.name);
+            Text(b.simulation_json);
+            Add(b.sim_type, b.bind_parent, b.anim_parent, b.file_parent);
+            Add(b.has_file_skin_pivot, b.has_file_world_bind);
+            Matrix(b.local_bind);
+            Matrix(b.world_bind);
+            Matrix(b.file_world_bind);
+            Bytes(b.file_skin_mat.data(), sizeof(float) * 16);
+            for (float v : b.file_skin_pivot) Add(v);
+            for (float v : b.vertex_centroid_offset) Add(v);
+        }
+        Add(puppet.attachments.len().to_primitive());
+        for (const auto& a : puppet.attachments) {
+            Add(a.bone_index);
+            Text(a.name);
+            Matrix(a.local_xform);
+            Matrix(a.bind_xform);
+        }
+        Add(puppet.anims.len().to_primitive());
+        for (const auto& anim : puppet.anims) {
+            Add(anim.id, anim.unk_after_id, anim.fps, anim.length, anim.flags, anim.mode);
+            Text(anim.name);
+            Add(anim.bone_tracks.len().to_primitive(), anim.controller_tracks.len().to_primitive());
+            for (const auto& t : anim.bone_tracks) {
+                Add(t.bone_index, t.unk);
+                Frames(t.frames);
+            }
+            for (const auto& t : anim.controller_tracks) {
+                Add(t.bone_index);
+                Frames(t.frames);
+            }
+            Add(anim.trans.is_some());
+            if (anim.trans.is_some()) {
+                Each((*anim.trans).extra_track);
+                Each((*anim.trans).main_track);
+                Add((*anim.trans).tail_tracks.len().to_primitive());
+                for (const auto& t : (*anim.trans).tail_tracks) Each(t);
+            }
+            Curves(anim.blend_curves);
+            Add(anim.v4_events.len().to_primitive());
+            for (const auto& ev : anim.v4_events) {
+                Add(ev.time, ev.flags, ev.curves.len().to_primitive());
+                for (const auto& c : ev.curves) {
+                    Add(c.id);
+                    Each(c.values);
+                }
+            }
+            Add(anim.aabb_min, anim.aabb_max, anim.has_aabb);
+            Curves(anim.scalar_curves);
+            Add(anim.events.len().to_primitive());
+            for (const auto& ev : anim.events) {
+                Add(ev.time_value);
+                Text(ev.event_json);
+            }
+        }
+        Add(puppet.ik_controllers.len().to_primitive(), puppet.ik_nodes.len().to_primitive());
+        Add(puppet.ik_chains.len().to_primitive());
+    }
+
+    std::uint64_t m_hash { 1469598103934665603ull };
+};
+
+std::string JsonEscape(std::string_view text) {
+    std::string out;
+    for (char c : text) {
+        if (c == '"' || c == '\\') out.push_back('\\');
+        out.push_back(static_cast<unsigned char>(c) < 0x20 ? ' ' : c);
+    }
+    return out;
+}
+
 } // namespace
 
 TEST(MdlParser, AcceptsKnownEmptyMdlsMetadata) {
@@ -401,6 +827,7 @@ TEST(MdlParser, RejectsNonFiniteIkBoneLength) {
 TEST(MdlParser, RejectsInvalidUtf8MaterialName) {
     auto bytes = MdlPrefix(1);
     bytes.insert(bytes.end(), { 0xff, 0 });
+    bytes.insert(bytes.end(), 12, 0); // 网格其余定长字段，让网格数先通过剩余字节核对
     owe::Services context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
@@ -412,14 +839,14 @@ TEST(MdlParser, BoundsBoneNameToMdlsBlock) {
     auto end_field = BeginMdlBlock(bytes, "MDLS0004");
     AppendU16(bytes, 1);
     AppendU16(bytes, 0);
-    bytes.insert(bytes.end(), { 'b', 'o', 'n', 'e' });
+    bytes.insert(bytes.end(), 78, 'b'); // 一根骨骼的最小字节数，名字一直不结束
     FinishMdlBlock(bytes, end_field);
     bytes.push_back(0); // outside the declared MDLS block
     owe::Services context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "unterminated bone name"));
-    EXPECT_TRUE(HasDiagnostic(context, "offset=38, boundary=42"));
+    EXPECT_TRUE(HasDiagnostic(context, "offset=38, boundary=116"));
 }
 
 TEST(MdlParser, PropagatesInvalidUtf8PlayMode) {
@@ -431,8 +858,9 @@ TEST(MdlParser, PropagatesInvalidUtf8PlayMode) {
 }
 
 TEST(MdlParser, BoundsPlayModeToMdlaBlock) {
-    auto                         bytes = MdlWithPlayMode("loop", false);
-    owe::Services                context;
+    auto bytes =
+        MdlWithPlayMode("loop_loop_loop_loop", false); // 名字 + play_mode 撑满一条动画的最小字节数
+    owe::Services context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "unterminated animation play_mode"));
@@ -674,4 +1102,226 @@ TEST(MdlPuppet, Mdlv23ReadsMultiCurveMorphEvents) {
     ASSERT_EQ(mdl.morph_sections.len(), usize(1));
     EXPECT_FLOAT_EQ(mdl.morph_sections[usize()].event_time, event.time);
     EXPECT_EQ(mdl.morph_sections[usize()].sections.len(), event.curves.len());
+}
+
+TEST(MdlParser, ParsesFixtureWithEveryBlock) {
+    owe::Services context;
+    owe::Mdl      mdl;
+    ASSERT_TRUE(ParseMdlBytes(MdlWithAllBlocks(), context, &mdl));
+    EXPECT_FALSE(context.failed);
+    ASSERT_EQ(mdl.meshes.len(), usize(1));
+    const auto& mesh = mdl.meshes[usize()];
+    EXPECT_EQ(mesh.positions.len(), usize(3));
+    EXPECT_EQ(mesh.indices.len(), usize(1));
+    EXPECT_EQ(mesh.part_uv2.len(), usize(3));
+    EXPECT_EQ(mesh.part_uv2_pad.len(), usize(3));
+    EXPECT_EQ(mesh.parts.len(), usize(1));
+    ASSERT_EQ(mesh.masks.len(), usize(1));
+    EXPECT_EQ(mesh.masks[usize()].part_ids_b.len(), usize(1));
+    ASSERT_TRUE(mdl.puppet.is_some());
+    const auto& puppet = **mdl.puppet;
+    EXPECT_EQ(puppet.bones.len(), usize(1));
+    EXPECT_EQ(puppet.attachments.len(), usize(1));
+    ASSERT_EQ(puppet.anims.len(), usize(2));
+    const auto& anim = puppet.anims[usize()];
+    EXPECT_EQ(anim.bone_tracks.len(), usize(1));
+    EXPECT_TRUE(anim.trans.is_some());
+    EXPECT_EQ(anim.blend_curves.len(), usize(1));
+    ASSERT_EQ(anim.v4_events.len(), usize(1));
+    EXPECT_EQ(anim.v4_events[usize()].curves.len(), usize(2));
+    EXPECT_EQ(anim.scalar_curves.len(), usize(1));
+    EXPECT_EQ(anim.events.len(), usize(1));
+    const auto& slide = puppet.anims[usize(1)];
+    ASSERT_TRUE(slide.trans.is_some());
+    EXPECT_EQ((*slide.trans).extra_track.len(), usize(2));
+    EXPECT_EQ((*slide.trans).main_track.len(), usize(2));
+    ASSERT_EQ(mdl.morph_sections.len(), usize(1));
+    const auto& sections = mdl.morph_sections[usize()].sections;
+    ASSERT_EQ(sections.len(), usize(2));
+    EXPECT_EQ(sections[usize(0)].vertex_trailers.len(), usize(1));
+    EXPECT_EQ(sections[usize(1)].trailer.len(), usize(6));
+    EXPECT_EQ(mdl.mdle, 1);
+    EXPECT_TRUE(puppet.bones[usize()].has_file_world_bind);
+}
+
+namespace
+{
+
+// 计数/长度字段撑大、或块边界收紧到记录之前的文件：解析失败，诊断里指名被截断的字段和核对点偏移
+// （同名字段靠偏移区分位置）。哪处核对被删掉，对应用例要么报成别的字段/偏移，要么按巨大计数分配而崩溃。
+struct FieldPatch {
+    const char*   at;    // 被改写字段的标记
+    unsigned      width; // 字节数
+    std::uint32_t value; // 写入值；relative_to 非空时再加上该标记的位置
+    const char*   relative_to = nullptr;
+};
+
+struct InflationCase {
+    std::vector<std::uint8_t> (*fixture)(Marks*);
+    std::vector<FieldPatch> patches;
+    const char*             reason;   // 诊断里的原因
+    const char*             check_at; // 期望的 offset = 该标记位置 + check_delta
+    std::size_t             check_delta = 0;
+    const char*             truncate_at = nullptr; // 非空：文件截断到该标记处
+};
+
+std::vector<std::uint8_t> IkRig(Marks* at) { return MdlWithIkRig(3.0f, at); }
+std::vector<std::uint8_t> MdatWithoutMdls(Marks* at) { return MdlBlockWithoutMdls("MDAT0001", at); }
+std::vector<std::uint8_t> MdlaWithoutMdls(Marks* at) { return MdlBlockWithoutMdls("MDLA0001", at); }
+std::vector<std::uint8_t> MdleWithoutMdls(Marks* at) { return MdlBlockWithoutMdls("MDLE0001", at); }
+
+// clang-format off
+const InflationCase kInflationCases[] = {
+    { MdlWithAllBlocks, { { "skin_count", 4, 0x7FFFFFFFu } }, "truncated mesh material names", "mesh" },
+    { MdlWithAllBlocks, { { "mesh_count", 4, 0x7FFFFFFFu } }, "truncated meshes", "mesh" },
+    { MdlWithAllBlocks, { { "vertex_size", 4, 52u * 82595524u } }, "truncated mesh vertices", "vertex_size", 4 },
+    { MdlWithAllBlocks, { { "indices_size", 4, 6u * 715827882u } }, "truncated mesh indices", "indices_size", 4 },
+    // part uv2 条数与顶点数绑定（payload 须等于 12*顶点数），只能靠截断触发
+    { MdlWithAllBlocks, {}, "truncated mesh part uv2", "part_uv2", 0, "part_uv2" },
+    { MdlWithAllBlocks, { { "parts_bytes", 4, 16u * 268435455u } }, "truncated mesh parts", "parts_bytes", 4 },
+    { MdlWithAllBlocks, { { "mask_count", 4, 0xFFFFFFFFu } }, "truncated mesh masks", "mask_count", 4 },
+    { MdlWithAllBlocks, { { "mask_part_ids_a", 4, 0xFFFFFFFFu } }, "truncated mesh mask part ids", "mask_part_ids_a", 4 },
+    { MdlWithAllBlocks, { { "mask_part_ids_b", 4, 0xFFFFFFFFu } }, "truncated mesh mask part ids", "mask_part_ids_b", 4 },
+    { MdlWithAllBlocks, { { "bones_num", 2, 0xFFFFu } }, "truncated MDLS bones", "bones_num", 4 },
+    { MdlWithAllBlocks, { { "attachment_count", 2, 0xFFFFu } }, "truncated MDAT attachments", "attachment_count", 2 },
+    { MdlWithAllBlocks, { { "mdla_version", 1, 'x' } }, "invalid block version tag", "mdla_tag" },
+    { MdlWithAllBlocks, { { "anim_num", 4, 0xFFFFFFFFu } }, "truncated MDLA animations", "anim_num", 4 },
+    { MdlWithAllBlocks, { { "bone_track_count", 4, 0xFFFFFFFFu } }, "truncated MDLA bone tracks", "bone_track_count", 4 },
+    { MdlWithAllBlocks, { { "bone_track_size", 4, 36u * 119304647u } }, "truncated MDLA bone track frames", "bone_track_size", 4 },
+    // 主平移轨长度须等于 (length+1)*4，动画长度一起撑大
+    { MdlWithAllBlocks, { { "anim_length", 4, 0x3FFFFFFEu }, { "trans_main_size", 4, 0xFFFFFFFCu } },
+      "truncated MDLA translation track", "trans_main_size", 4 },
+    { MdlWithAllBlocks, { { "mdla_end", 4, 1, "blend_curves" } }, "truncated MDLA bone curves", "blend_curves", 1 },
+    { MdlWithAllBlocks, { { "blend_curve_size", 4, 0xFFFFFFFCu } }, "truncated MDLA bone curve values", "blend_curve_size", 4 },
+    { MdlWithAllBlocks, { { "v4_count", 4, 0xFFFFFFFFu } }, "truncated MDLA v4 events", "v4_count", 4 },
+    { MdlWithAllBlocks, { { "v4_curve_count", 2, 0xFFFFu } }, "truncated MDLA v4 event curves", "v4_curve_count", 4 },
+    { MdlWithAllBlocks, { { "v4_curve_size", 4, 0xFFFFFFFCu } }, "truncated MDLA v4 event curve values", "v4_curve_size", 4 },
+    { MdlWithAllBlocks, { { "scalar_curve_size", 4, 0xFFFFFFFCu } }, "truncated MDLA bone curve values", "scalar_curve_size", 4 },
+    { MdlWithAllBlocks, { { "event_count", 4, 0xFFFFFFFFu } }, "truncated animation events", "event_count", 4 },
+    { MdlWithAllBlocks, { { "trans_extra_size", 4, 0xFFFFFFFCu } }, "truncated MDLA translation extra track", "trans_extra_size", 4 },
+    { MdlWithAllBlocks, { { "trans_main2_size", 4, 0xFFFFFFFCu } }, "truncated MDLA translation track", "trans_main2_size", 4 },
+    { MdlWithAllBlocks, { { "morph_section_count", 2, 0xFFFFu } }, "truncated MDMP section data", "morph_section_count", 10 },
+    { MdlWithAllBlocks, { { "morph_length", 4, 0xFFFFFFFCu } }, "truncated MDMP vertices", "morph_length", 8 },
+    // 只留第一段，段表核对（每段至少 17 字节）才不会先于逐顶点尾触发
+    { MdlWithAllBlocks, { { "morph_section_count", 2, 1 }, { "mdmp_end", 4, 0, "morph_vertex_trailers" } },
+      "truncated MDMP vertex trailers", "morph_vertex_trailers" },
+    { MdlWithAllBlocks, { { "mdmp_end", 4, 0, "morph_trailer" } }, "truncated MDMP trailer", "morph_trailer" },
+    { MdlWithAllBlocks, { { "mdle_end", 4, 0, "mdle_world_binds" } }, "truncated MDLE world binds", "mdle_world_binds" },
+    { MdlWithAllBlocks, { { "mdle_end", 4, 100, "eof" } }, "invalid MDLE end_offset", "mdle_end", 4 },
+    { IkRig, { { "ik_child_count", 2, 0xFFFFu } }, "truncated MDLS IK child table", "ik_child_count", 2 },
+    { IkRig, { { "mdls_end", 4, 4, "ik_lengths" } }, "truncated MDLS IK bone lengths", "ik_lengths" },
+    { IkRig, { { "mdls_end", 4, 4, "ik_chain_path" } }, "truncated MDLS IK chain path", "ik_chain_path" },
+    // 控制器轨长度须等于 (length+1)*36，动画长度一起撑大
+    { IkRig, { { "anim_length", 4, 119304646u }, { "controller_track_size", 4, 0xFFFFFFFCu } },
+      "truncated MDLA IK controller track", "controller_track_size", 4 },
+    { MdlsV2WithWorldBinds, { { "mdls_end", 4, 0, "world_binds" } }, "truncated MDLS world binds", "world_binds" },
+    { MdatWithoutMdls, {}, "MDAT block without MDLS", "block_end" },
+    { MdlaWithoutMdls, {}, "MDLA block without MDLS", "block_end" },
+    { MdleWithoutMdls, {}, "MDLE block without MDLS", "block_end" },
+};
+// clang-format on
+
+} // namespace
+
+TEST(MdlParser, ReportsInflatedCountByFieldAndOffset) {
+    for (const auto& c : kInflationCases) {
+        Marks at;
+        auto  bytes = c.fixture(&at);
+        for (const auto& p : c.patches) {
+            const auto value =
+                p.value + (p.relative_to ? static_cast<std::uint32_t>(at.at(p.relative_to)) : 0u);
+            for (unsigned i = 0; i < p.width; ++i)
+                bytes.at(at.at(p.at) + i) = static_cast<std::uint8_t>(value >> (8 * i));
+        }
+        if (c.truncate_at) bytes.resize(at.at(c.truncate_at));
+        const auto expected = std::string(c.reason) +
+                              " (offset=" + std::to_string(at.at(c.check_at) + c.check_delta) + ",";
+        SCOPED_TRACE(expected);
+        owe::Services context;
+        EXPECT_FALSE(ParseMdlBytes(bytes, context));
+        EXPECT_TRUE(HasDiagnostic(context, expected))
+            << (context.diagnostics.empty() ? std::string("<no diagnostic>")
+                                            : std::string(context.diagnostics.front()));
+    }
+}
+
+// 三个夹具各截断到每一个长度，每个字节各做两种位翻转（最高位把计数变成巨大值，低位让读法错位）：
+// 解析器必须正常返回（成功或解析失败），不许 panic 或分配失败崩溃。
+TEST(MdlParser, SurvivesTruncationAndBitFlips) {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("owe-mdl-mutants-" + std::to_string(rstd::process::id().to_primitive()));
+    std::filesystem::create_directories(dir);
+    const auto file = dir / "fixture.mdl";
+    {
+        MdlMount mount(dir);
+        ASSERT_TRUE(mount.ok());
+        const std::vector<std::uint8_t> fixtures[] = { MdlWithAllBlocks(),
+                                                       MdlWithIkRig(),
+                                                       MdlaV6WithFirstFlags(0x401) };
+        for (const auto& original : fixtures) {
+            std::size_t cases = 0, accepted = 0;
+            auto        parse = [&](const std::vector<std::uint8_t>& bytes) {
+                WriteBytes(file, bytes);
+                owe::Services context;
+                owe::Mdl      mdl;
+                ++cases;
+                accepted += mount.Parse("fixture.mdl", context, mdl);
+            };
+            for (std::size_t size = 0; size < original.size(); ++size)
+                parse({ original.begin(), original.begin() + static_cast<std::ptrdiff_t>(size) });
+            for (std::size_t i = 0; i < original.size(); ++i) {
+                for (unsigned mask : { 0x80u, 1u << (i % 7) }) {
+                    auto bytes = original;
+                    bytes[i] ^= static_cast<std::uint8_t>(mask);
+                    parse(bytes);
+                }
+            }
+            EXPECT_EQ(cases, original.size() * 3);
+            EXPECT_LT(accepted, cases);
+        }
+    }
+    std::filesystem::remove(file);
+    std::filesystem::remove(dir);
+}
+
+// 模糊测试与全语料对照的驱动，由 runs/fix-mdl-robust/fuzz_mdl.py 调用；不设变量时跳过。
+// OWE_MDL_FUZZ_DIR 下的文件按 OWE_MDL_FUZZ_LIST（每行一个文件名）从第 OWE_MDL_FUZZ_START
+// 行起逐个解析， 每个文件解析完追加一行 JSON 到 OWE_MDL_FUZZ_OUT
+// 并刷新；进程若崩溃，脚本按已写行数定位崩溃的文件。
+TEST(MdlParserFuzz, ParsesListedFiles) {
+    const char* dir  = std::getenv("OWE_MDL_FUZZ_DIR");
+    const char* list = std::getenv("OWE_MDL_FUZZ_LIST");
+    const char* out  = std::getenv("OWE_MDL_FUZZ_OUT");
+    if (dir == nullptr || list == nullptr || out == nullptr)
+        GTEST_SKIP() << "OWE_MDL_FUZZ_DIR/LIST/OUT 未设置";
+    const char*       start_text = std::getenv("OWE_MDL_FUZZ_START");
+    const std::size_t start      = start_text ? std::strtoull(start_text, nullptr, 10) : 0;
+
+    MdlMount mount(dir);
+    ASSERT_TRUE(mount.ok());
+    std::ifstream names(list);
+    std::ofstream results(out, std::ios::app);
+    std::string   name;
+    for (std::size_t index = 0; std::getline(names, name); ++index) {
+        if (index < start || name.empty()) continue;
+        owe::Services context;
+        bool          parsed = false;
+        std::string   digest;
+        const auto    begin = std::chrono::steady_clock::now();
+        {
+            // 结果在 Mdl 析构之后再写：析构也算在这个文件头上，卡在析构里时脚本不会记到下一个文件。
+            owe::Mdl mdl;
+            parsed = mount.Parse(name, context, mdl);
+            if (parsed) digest = MdlDigest().Of(mdl);
+        }
+        const auto ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
+                .count();
+        results << "{\"index\":" << index << ",\"file\":\"" << JsonEscape(name)
+                << "\",\"ok\":" << (parsed ? "true" : "false") << ",\"digest\":\"" << digest
+                << "\",\"ms\":" << ms << ",\"diag\":\""
+                << JsonEscape(context.diagnostics.empty() ? std::string_view()
+                                                          : context.diagnostics.front())
+                << "\"}" << std::endl;
+    }
 }

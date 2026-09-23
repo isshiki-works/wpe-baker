@@ -119,7 +119,7 @@ internal static class RetimeBudgetChecks
         try { RetimeProfile.Resolve("ultra", null, null, 2); } catch (InvalidDataException) { rejected = true; }
         check(rejected && !RetimeProfile.IsKnownPreset("ultra") && RetimeProfile.MaximumBudgetPercent == 5,
             "retime preset: an unknown preset name is rejected and the budget tops out at 5%");
-        JsonObject record = RetimeProfile.Resolve(RetimeProfile.Efficiency, null, 300, 2).ToJson();
+        JsonObject record = RetimeProfile.Resolve(RetimeProfile.Efficiency, null, 300, 2).ToJson(1);
         check(record["preset"]!.GetValue<string>() == "efficiency" && record["retime_budget_percent"]!.GetValue<double>() == 5 &&
             record["retime_budget_source"]!.GetValue<string>() == "preset" && record["loop_max_seconds"]!.GetValue<double>() == 300 &&
             record["loop_max_seconds_source"]!.GetValue<string>() == "override" &&

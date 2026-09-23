@@ -16,7 +16,8 @@ export namespace owe
 int32_t ReadAssetVersion(std::string_view prefix, fs::BinaryReader& file) {
     char str_v[9] { '\0' };
     file.Read(str_v, 9);
-    if (! sstart_with(str_v, prefix)) return 0;
+    // 按 9 字节定长比较：9 字节都非 0 时（错位或损坏的文件）不能按 C 字符串求长度，会读出数组外。
+    if (! sstart_with(std::string_view(str_v, sizeof(str_v)), prefix)) return 0;
 
     char* str_int = str_v + 4;
     int   slot;

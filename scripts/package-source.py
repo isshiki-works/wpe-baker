@@ -14,7 +14,7 @@ provenance_spec = importlib.util.spec_from_file_location("native_provenance", RO
 if provenance_spec is None or provenance_spec.loader is None: raise RuntimeError("Could not load native provenance helper.")
 provenance = importlib.util.module_from_spec(provenance_spec)
 provenance_spec.loader.exec_module(provenance)
-DEPENDENCIES = ("rstd", "vvk", "wavsen", "lz4", "freetype", "quickjs", "glslang", "vma",
+DEPENDENCIES = ("rstd", "vvk", "lz4", "freetype", "quickjs", "glslang", "vma",
                 "spirv-reflect", "eigen", "vulkan-headers", "vulkan-loader")
 # GPL v2 section 3: the renderer binary must ship with the sources it was built from,
 # including the multithreaded-decode patches applied on top of the pinned engine.
@@ -23,7 +23,7 @@ REQUIRED_FILES = ("README.md", "README.zh-CN.md", "LICENSE", "THIRD-PARTY-NOTICE
                   "patches/renderer-mt/engine-perf-video-decode-threads.patch",
                   "patches/renderer-mt/parent-perf-video-decode-threads.patch",
                   "scripts/dependency-patches/manifest.json", "scripts/dependency-patches/rstd.patch",
-                  "scripts/dependency-patches/vvk.patch", "scripts/dependency-patches/wavsen.patch")
+                  "scripts/dependency-patches/vvk.patch")
 REQUIRED_TREES = tuple(f".deps/{name}" for name in DEPENDENCIES) + (
     "engine", ".deps/ffmpeg-lgpl21/sources/ffmpeg", ".deps/ffmpeg-lgpl21/sources/dav1d",
     ".deps/ffmpeg-encoder-gpl2/sources/ffmpeg", ".deps/ffmpeg-encoder-gpl2/sources/x264",

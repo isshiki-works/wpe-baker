@@ -30,6 +30,93 @@ Option<TextureRequest> TextureRequestFromScene(owe::Scene& scene, std::string_vi
     return Some(MakeRenderTargetTextureRequest(name, **target));
 }
 
+// M2：按 RT 尺寸把支撑区格子换成 64 px tile 位图（OR 进 bits）。像素中心 UV 区间换成格子区间后
+// 两侧各放宽 1 格，吸收插值与换算的浮点误差。
+constexpr std::uint32_t kM2Tile = 64;
+
+std::pair<long long, long long> M2CellRange(std::uint32_t p0, std::uint32_t p1, std::uint32_t size,
+                                            float scale, float cells_per, std::uint32_t grid) {
+    const double lo = (double(p0) + 0.5) / double(size) * scale * cells_per;
+    const double hi = (double(p1) + 0.5) / double(size) * scale * cells_per;
+    long long    c0 = static_cast<long long>(std::floor(lo)) - 1;
+    long long    c1 = static_cast<long long>(std::floor(hi)) + 1;
+    if (c0 < 0) c0 = 0;
+    if (c1 > static_cast<long long>(grid) - 1) c1 = static_cast<long long>(grid) - 1;
+    return { c0, c1 };
+}
+
+void M2MarkTiles(const owe::EffectMaskSupport& support, VkExtent2D extent,
+                 std::vector<std::uint8_t>& bits) {
+    const std::uint32_t tiles_x = (extent.width + kM2Tile - 1) / kM2Tile;
+    const std::uint32_t tiles_y = (extent.height + kM2Tile - 1) / kM2Tile;
+    for (std::uint32_t ty = 0; ty < tiles_y; ty++) {
+        const std::uint32_t py1 = std::min((ty + 1) * kM2Tile, extent.height) - 1;
+        const auto          cy  = M2CellRange(ty * kM2Tile, py1, extent.height,
+                                        support.uv_scale_y, support.cells_per_v, support.grid_h);
+        for (std::uint32_t tx = 0; tx < tiles_x; tx++) {
+            auto& bit = bits[std::size_t(ty) * tiles_x + tx];
+            if (bit) continue;
+            const std::uint32_t px1 = std::min((tx + 1) * kM2Tile, extent.width) - 1;
+            const auto          cx  = M2CellRange(tx * kM2Tile, px1, extent.width,
+                                            support.uv_scale_x, support.cells_per_u,
+                                            support.grid_w);
+            for (long long y = cy.first; y <= cy.second && ! bit; y++) {
+                for (long long x = cx.first; x <= cx.second; x++) {
+                    if (support.cells[std::size_t(y) * support.grid_w + std::size_t(x)]) {
+                        bit = 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// tile 位图 → 矩形：每行合并成段，相邻行完全相同的段纵向合并。返回画到的 tile 数。
+std::size_t M2TilesToRects(const std::vector<std::uint8_t>& bits, VkExtent2D extent,
+                           std::vector<VkRect2D>& rects) {
+    const std::uint32_t tiles_x = (extent.width + kM2Tile - 1) / kM2Tile;
+    const std::uint32_t tiles_y = (extent.height + kM2Tile - 1) / kM2Tile;
+    struct Run {
+        std::uint32_t x0, x1, y0, y1; // tile 坐标，含两端
+        bool          live;
+    };
+    std::vector<Run> open, done;
+    std::size_t      count = 0;
+    for (std::uint32_t ty = 0; ty < tiles_y; ty++) {
+        std::vector<Run> next;
+        for (std::uint32_t tx = 0; tx < tiles_x; tx++) {
+            if (! bits[std::size_t(ty) * tiles_x + tx]) continue;
+            std::uint32_t te = tx;
+            while (te + 1 < tiles_x && bits[std::size_t(ty) * tiles_x + te + 1]) te++;
+            count += te - tx + 1;
+            Run run { tx, te, ty, ty, true };
+            for (auto& o : open) {
+                if (o.live && o.x0 == tx && o.x1 == te) {
+                    run.y0 = o.y0;
+                    o.live = false; // 被这一行接走
+                    break;
+                }
+            }
+            next.push_back(run);
+            tx = te;
+        }
+        for (const auto& o : open)
+            if (o.live) done.push_back(o);
+        open = std::move(next);
+    }
+    for (const auto& o : open) done.push_back(o);
+    rects.clear();
+    for (const auto& r : done) {
+        const std::uint32_t x0 = r.x0 * kM2Tile, y0 = r.y0 * kM2Tile;
+        const std::uint32_t x1 = std::min((r.x1 + 1) * kM2Tile, extent.width);
+        const std::uint32_t y1 = std::min((r.y1 + 1) * kM2Tile, extent.height);
+        rects.push_back(VkRect2D { { static_cast<int32_t>(x0), static_cast<int32_t>(y0) },
+                                   { x1 - x0, y1 - y0 } });
+    }
+    return count;
+}
+
 bool IsDepthSampled(const TextureBindingRequest& binding) {
     return binding.request.is_some() && binding.request->definition.is_some() &&
            owe::resource::HasTextureUsage(binding.request->definition->usage,
@@ -923,6 +1010,57 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, PassPrepareCo
             if (m_desc.preserve_output) loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             if (m_desc.clear_output) loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             if (out_force_clear) loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+
+            // M2：核验 V_i 与 V_{i-2} 同物理纹理、与 V_{i-1} 不同，且整像素写（无混合、RGBA 全写、单采样），
+            // 通过才改 LOAD 只画支撑区；否则照常全画（见 runs/M2/design.json pingpong）。
+            m_desc.m2_active = false;
+            if (m_desc.m2_support && m_desc.m2_prev_change && m_desc.m2_alias_use.is_some() &&
+                m_desc.m2_prev_use.is_some()) {
+                auto       alias = context.resources->Resolve(*m_desc.m2_alias_use);
+                auto       prev  = context.resources->Resolve(*m_desc.m2_prev_use);
+                const bool same_alias =
+                    alias.is_some() && (**alias).image.getActive().handle == vk_output.handle;
+                const bool prev_other =
+                    prev.is_some() && (**prev).image.getActive().handle != vk_output.handle;
+                const bool whole_write =
+                    ! color_blend.blendEnable && m_desc.samples == VK_SAMPLE_COUNT_1_BIT &&
+                    ! m_desc.has_depth_attachment && ! m_desc.clear_output &&
+                    colorMask == (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                  VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);
+                if (same_alias && prev_other && whole_write) {
+                    const VkExtent2D ext = m_desc.output_extent;
+                    if (ext.width != m_desc.m2_rects_extent.width ||
+                        ext.height != m_desc.m2_rects_extent.height) {
+                        const std::uint32_t tiles_x = (ext.width + kM2Tile - 1) / kM2Tile;
+                        const std::uint32_t tiles_y = (ext.height + kM2Tile - 1) / kM2Tile;
+                        std::vector<std::uint8_t> bits(std::size_t(tiles_x) * tiles_y, 0);
+                        M2MarkTiles(*m_desc.m2_support, ext, bits);
+                        M2MarkTiles(*m_desc.m2_prev_change, ext, bits);
+                        const auto drawn       = M2TilesToRects(bits, ext, m_desc.m2_rects);
+                        m_desc.m2_rects_extent = ext;
+                        m_desc.m2_rects_all    = drawn == bits.size();
+                        rstd_info("m2: {} 受限 {}x{}：画 {}/{} tile，{} 个矩形{}",
+                                  m_desc.m2_support->label,
+                                  ext.width,
+                                  ext.height,
+                                  drawn,
+                                  bits.size(),
+                                  m_desc.m2_rects.size(),
+                                  m_desc.m2_rects_all ? "（覆盖全部，全画）" : "");
+                    }
+                    if (! m_desc.m2_rects_all) {
+                        m_desc.m2_active = true;
+                        loadOp           = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    }
+                } else if (m_desc.m2_rects_extent.width != ~0u) {
+                    m_desc.m2_rects_extent = { ~0u, ~0u }; // 只记一次
+                    rstd_info("m2: {} 核验不过，全画（alias {} prev {} whole {}）",
+                              m_desc.m2_support->label,
+                              same_alias,
+                              prev_other,
+                              whole_write);
+                }
+            }
         }
         m_desc.color_load_op                       = loadOp;
         constexpr VkFormat      color_format       = VK_FORMAT_R8G8B8A8_UNORM;
@@ -1125,6 +1263,8 @@ bool CustomShaderPass::canJoinRenderScopeAfter(const VulkanPass& previous) const
     const auto* prev_pass = dynamic_cast<const CustomShaderPass*>(&previous);
     if (prev_pass == nullptr) return false;
     if (! prepared() || ! prev_pass->prepared()) return false;
+    // M2 受限 pass 的 LOAD 读的是 V_{i-2} 那块物理纹理，不能并进别的 scope。
+    if (m_desc.m2_active || prev_pass->m_desc.m2_active) return false;
     if (m_desc.clear_output || m_desc.clear_depth) return false;
     if (m_desc.depth_only != prev_pass->m_desc.depth_only) return false;
     if (! m_desc.depth_only && m_desc.color_load_op != VK_ATTACHMENT_LOAD_OP_LOAD) return false;
@@ -1331,7 +1471,21 @@ void CustomShaderPass::recordRenderScopeDraw(PassRecordContext& context) {
         cmd.BindIndexBuffer(ib, off, VK_INDEX_TYPE_UINT32);
     }
 
-    const bool has_index = draw_buffers.hasIndex();
+    // M2：同一组三角形按每个矩形各画一次，只换 scissor（插值与采样不变，矩形内逐位同全画）。
+    if (m_desc.m2_active) {
+        for (const auto& rect : m_desc.m2_rects) {
+            cmd.SetScissor(0, rect);
+            recordDrawCalls(cmd);
+        }
+        cmd.SetScissor(0, scissor);
+        return;
+    }
+    recordDrawCalls(cmd);
+}
+
+void CustomShaderPass::recordDrawCalls(vvk::CommandBuffer& cmd) {
+    auto&      draw_buffers = m_desc.draw_buffers;
+    const bool has_index    = draw_buffers.hasIndex();
     if (has_index) {
         const auto& submeshes = (*m_desc.node)->Mesh()->Submeshes();
         static const std::vector<SceneMesh::DrawRange> kEmpty;

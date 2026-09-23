@@ -66,10 +66,11 @@ internal static class SwayRetimeChecks
         new(owner, 0, 0, "effects/foliagesway", 0, "speeduv", (float)layer.Speed, coefficients ?? SwayModel.CanonicalCoefficients,
             layer.Strength, layer.Ratio, layer.Direction, 1, 1, 0.2, layer.Width, layer.Height, layer.Scale, layer.Scale);
 
-    private static SwayRetimeInput[] Inputs(ProtoCase item) => item.Layers.Select((layer, index) =>
+    /// <param name="canvasFactor">输出画布相对原案的边长倍数（4 = 1080p 案放到 8K）：振幅按输出像素精确放大这么多倍。</param>
+    private static SwayRetimeInput[] Inputs(ProtoCase item, double canvasFactor = 1) => item.Layers.Select((layer, index) =>
     {
         SwayModel model = Model(index + 1, layer);
-        var amplitude = model.AmplitudeOutputPixels(item.OutScale, item.OutScale);
+        var amplitude = model.AmplitudeOutputPixels(item.OutScale * canvasFactor, item.OutScale * canvasFactor);
         return new SwayRetimeInput(model, amplitude?.X, amplitude?.Y);
     }).ToArray();
 
@@ -77,6 +78,7 @@ internal static class SwayRetimeChecks
     {
         EquationChecks(check);
         SolverParityChecks(check);
+        CanvasScaleChecks(check);
         TextPatchChecks(check);
         await IntegrationChecks(check, root);
     }
@@ -228,6 +230,30 @@ internal static class SwayRetimeChecks
         check(Math.Abs(tolerances[0] - 1e-4) < 1e-15 && Math.Abs(tolerances[1] - 1e-4) < 1e-12 && Math.Abs(tolerances[2] - 5e-4) < 1e-15 &&
             SwayRecurrenceSolver.SpeedTolerances([2.0, 2.0001])[0] < 6e-5,
             "sway shader branches: speed tolerance is relative 1e-4 and never reaches half the gap to a neighbouring speed");
+    }
+
+    /// <summary>
+    /// fix-j：同一运动放到 4 倍边长的画布（1080p → 8K），振幅与速度偏差按输出像素精确 ×4；门限随短边 ×4 后，
+    /// 六案在各上限与预算下解出的 L、冻结集合与 1080p 完全相同。不换算门限（旧口径）时至少一案改判，说明这些案确实压在门限附近。
+    /// </summary>
+    private static void CanvasScaleChecks(Action<bool, string> check)
+    {
+        double eightK = SwayRecurrenceSolver.SpeedLimitScale(7680, 4320);
+        static string Frozen(SwayRetimeSolution? solution) => solution is null ? "none"
+            : string.Join(",", solution.FrozenTerms.Select(item => item.Layer.Model.OwnerLayerId + ":" + item.Term.Index));
+        bool same = true, changedWithoutScale = false;
+        foreach (ProtoCase item in Cases)
+        foreach (double maximum in new[] { 600.0, 3600.0 })
+        foreach (double? budget in new double?[] { null, 3 })
+        {
+            SwayRetimeSolution? reference = SwayRecurrenceSolver.Solve(Inputs(item), item.PFrames, 60, 1, maximum, budget);
+            SwayRetimeSolution? scaled = SwayRecurrenceSolver.Solve(Inputs(item, 4), item.PFrames, 60, 1, maximum, budget, speedLimitScale: eightK);
+            SwayRetimeSolution? unscaled = SwayRecurrenceSolver.Solve(Inputs(item, 4), item.PFrames, 60, 1, maximum, budget);
+            same &= reference?.Multiple == scaled?.Multiple && Frozen(reference) == Frozen(scaled);
+            changedWithoutScale |= reference?.Multiple != unscaled?.Multiple;
+        }
+        check(same, "sway speed limits scale with the output short edge: the same motion on a 4x canvas solves to the same L and frozen set");
+        check(changedWithoutScale, "sway speed limits scale: without scaling, at least one case changes its L on the 4x canvas (the check is not vacuous)");
     }
 
     private static void TextPatchChecks(Action<bool, string> check)
@@ -414,6 +440,34 @@ internal static class SwayRetimeChecks
             faint["sway_retime"]!["status"]!.GetValue<string>() == "applied",
             "sway speed limit: when every L = kP leaves a slow term above 0.1 px/s the sway item stays unresolved with a bilingual reason; a faint layer still resolves");
 
+        // fix-j：同两张场景放到 4 倍边长的画布（输出/场景比 ×4，8K 对 1080p），门限随短边 ×4：faint 解出同一个 L，
+        // 记录写生效门限 0.4 / 0.8；strong 仍超限，原因里的数字是生效门限 0.4 px/s。
+        double eightK = SwayRecurrenceSolver.SpeedLimitScale(7680, 4320);
+        JsonObject faint8K = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, new SwayRetimeOptions(200, 2, 2, SpeedLimitScale: eightK));
+        JsonObject overLimit8K = HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray(Grain(1), Sway(2, 3.55, 1.0)) }, source, null,
+            new JsonObject(), [1, 2], 60, 1, 2, CommonLoopPreference.Balanced, new SwayRetimeOptions(100, 2, 2, SpeedLimitScale: eightK));
+        JsonObject faintRetime = faint["candidates"]![0]!["sway_retime"]!.AsObject(), faint8KRetime = faint8K["candidates"]![0]!["sway_retime"]!.AsObject();
+        static double Limit(JsonObject record, string kind) => record[kind + "_speed_deviation_limit_pixels_per_second"]!.GetValue<double>();
+        check(faint8K["sway_retime"]!["status"]!.GetValue<string>() == "applied" &&
+            faint8KRetime["multiple"]!.GetValue<ulong>() == faintRetime["multiple"]!.GetValue<ulong>() &&
+            faint8KRetime["frames"]!.GetValue<ulong>() == faintRetime["frames"]!.GetValue<ulong>() &&
+            Limit(faintRetime, "slow") == 0.1 && Limit(faintRetime, "visible") == 0.2 &&
+            Limit(faint8KRetime, "slow") == 0.4 && Limit(faint8KRetime, "visible") == 0.8 &&
+            overLimit8K["sway_retime"]!["status"]!.GetValue<string>() == "no_multiple_meets_speed_limit" &&
+            overLimit8K["sway_retime"]!["reason_zh"]!.GetValue<string>().Contains("峰值速度偏差超过 0.4 px/s", StringComparison.Ordinal) &&
+            overLimit8K["sway_retime"]!["reason_en"]!.GetValue<string>().Contains("exceeds 0.4 px/s", StringComparison.Ordinal),
+            "sway speed limit on an 8K canvas: the same motion resolves to the same L, the record and the bilingual reason carry the scaled limits");
+        // 预算诊断同一口径：预算卡死（0%）时，"不设预算能不能解"的重解也要按生效门限判，否则大画布上会把"预算太紧"误报成"速度超限"。
+        // 用 64 倍边长的画布（振幅 ×64，精确）让旧口径的门限一定咬住：不换算时报速度超限，换算后与原画布同样报预算太紧。
+        RetimeProfile zeroBudget = RetimeProfile.Resolve(RetimeProfile.Balanced, 0, 200, 2);
+        string BudgetStatus(double outputPerScene, double speedLimitScale) => HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null,
+            new JsonObject(), [1, 2], 60, 1, 2, CommonLoopPreference.Balanced,
+            new SwayRetimeOptions(200, outputPerScene, outputPerScene, Profile: zeroBudget, SpeedLimitScale: speedLimitScale))["sway_retime"]!["status"]!.GetValue<string>();
+        check(BudgetStatus(0.5, 1) == "no_multiple_within_budget" && BudgetStatus(32, 64) == "no_multiple_within_budget" &&
+            BudgetStatus(32, 1) == "no_multiple_meets_speed_limit",
+            "sway budget diagnosis on a large canvas: the no-budget re-solve uses the same scaled speed limits, so a budget rejection is not reported as a speed-limit rejection");
+
         // 振幅读不到（没有 size）：慢项偏差无从判定，候选与未解析项原样保留，写明是哪一层。
         JsonObject sizeless = Sway(2, 3.55);
         sizeless.Remove("size");
@@ -579,5 +633,9 @@ internal static class SwayRetimeChecks
             unknownSize.LoopLengthMaximumSeconds == 3600 && unknownSize.VideoLimit is null &&
             Of(nativeRequest with { SwayRetime = false }, null) is null,
             "embedded video limit: sway options take the output size, double the width for transparent groups, and keep smaller or unknown-size maximums");
+        // fix-j：速度门限倍率取最终输出画布的短边：3840×2160 与竖屏 2160×3840 都是 2，尺寸未知按 1080p 口径取 1。
+        check(opaqueOptions.SpeedLimitScale == 2 && Of(nativeRequest with { Width = 2160, Height = 3840 }, null)!.SpeedLimitScale == 2 &&
+            unknownSize.SpeedLimitScale == 1,
+            "sway speed limit scale: sway options take the short edge of the final output canvas, portrait or landscape");
     }
 }

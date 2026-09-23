@@ -4,7 +4,6 @@ target_sources(owe-utils PUBLIC FILE_SET CXX_MODULES BASE_DIRS ../../.. FILES
   Utils.cppm)
 target_sources(owe-utils PRIVATE
   Algorism.cpp
-  FpsCounter.cpp
   Sha.cpp)
 target_include_directories(owe-utils PUBLIC ${PROJECT_SOURCE_DIR}/third_party ${PROJECT_SOURCE_DIR}/src/Scene/Utils/include ${PROJECT_SOURCE_DIR}/src/Scene/Utils/include/Utils)
 target_link_libraries(owe-utils PUBLIC owe-core)

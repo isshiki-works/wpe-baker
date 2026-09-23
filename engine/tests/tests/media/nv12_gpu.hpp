@@ -1,6 +1,5 @@
 #pragma once
-// NV12 转换器 GPU 单测的公共夹具：裸 Vulkan 设备（Vulkan 1.1 + VK_KHR_timeline_semaphore，
-// wavsen 对拍要用时间线）、视频纹理目标图像（同 TextureCache::CreateVideoTex）与确定性 NV12。
+// NV12 转换器 GPU 单测的公共夹具：裸 Vulkan 设备、视频纹理目标图像（同 TextureCache::CreateVideoTex）与确定性 NV12。
 
 #include <vulkan/vulkan.h>
 
@@ -58,19 +57,11 @@ struct Gpu {
                                             .queueFamilyIndex = family,
                                             .queueCount       = 1,
                                             .pQueuePriorities = &priority };
-        VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timeline {
-            .sType             = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR,
-            .timelineSemaphore = VK_TRUE,
-        };
-        const char*              ext = VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
-        const VkDeviceCreateInfo dci { .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-                                       .pNext                   = &timeline,
-                                       .queueCreateInfoCount    = 1,
-                                       .pQueueCreateInfos       = &qci,
-                                       .enabledExtensionCount   = 1,
-                                       .ppEnabledExtensionNames = &ext };
+        const VkDeviceCreateInfo dci { .sType                = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+                                       .queueCreateInfoCount = 1,
+                                       .pQueueCreateInfos    = &qci };
         if (vkCreateDevice(phys, &dci, nullptr, &device) != VK_SUCCESS) {
-            skip = "vkCreateDevice(timeline semaphore) failed";
+            skip = "vkCreateDevice failed";
             return;
         }
         vkGetDeviceQueue(device, family, 0, &queue);

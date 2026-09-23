@@ -120,4 +120,28 @@ public class PlanTransformsFreezeTests
         Assert.IsType<JsonObject>(values["animated"]);
         Assert.Equal("2", scene["objects"]![0]!["animationlayers"]![0]!["rate"]!.ToJsonString());
     }
+
+    [Fact]
+    public void NumericShaderConstantBoundToCheckboxFreezesAsOneOrZero()
+    {
+        // 数值常量绑到 bool 属性：WE 按 1/0 生效；combo 与 visible 仍冻结成 bool（渲染器与 ReadCombo 都认 bool）。
+        JsonObject Pass() => new() {
+            ["constantshadervalues"] = new JsonObject {
+                ["speed"] = new JsonObject { ["user"] = "sun", ["value"] = 3 },
+                ["alpha"] = new JsonObject { ["user"] = "slider", ["value"] = 1 } },
+            ["combos"] = new JsonObject { ["NOISE"] = new JsonObject { ["user"] = "sun", ["value"] = 0 } } };
+        var scene = new JsonObject { ["objects"] = new JsonArray(new JsonObject {
+            ["id"] = 1, ["effects"] = new JsonArray(new JsonObject { ["passes"] = new JsonArray(Pass(), Pass()) }) }) };
+        PlanTransforms.FreezeTemporalProperties(scene, new JsonObject { ["sun"] = true, ["slider"] = 0.5 });
+        JsonNode pass = scene["objects"]![0]!["effects"]![0]!["passes"]![0]!;
+        Assert.Equal("1", pass["constantshadervalues"]!["speed"]!.ToJsonString());
+        // 周期分析不经序列化，直接按 double 读冻结后的常量。
+        Assert.True(pass["constantshadervalues"]!["speed"]!.AsValue().TryGetValue(out double speed) && speed == 1);
+        Assert.Equal("0.5", pass["constantshadervalues"]!["alpha"]!.ToJsonString());
+        Assert.Equal("true", pass["combos"]!["NOISE"]!.ToJsonString());
+        var off = new JsonObject { ["objects"] = new JsonArray(new JsonObject {
+            ["id"] = 1, ["effects"] = new JsonArray(new JsonObject { ["passes"] = new JsonArray(Pass()) }) }) };
+        PlanTransforms.FreezeTemporalProperties(off, new JsonObject { ["sun"] = false });
+        Assert.Equal("0", off["objects"]![0]!["effects"]![0]!["passes"]![0]!["constantshadervalues"]!["speed"]!.ToJsonString());
+    }
 }

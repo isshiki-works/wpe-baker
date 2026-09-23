@@ -20,7 +20,7 @@
 import rstd;
 import rstd.cppstd;
 import rstd.log;
-import wescene.scene_wallpaper;
+import wescene.offline_session;
 import wescene.pkg.parse;
 import wescene.json;
 
@@ -462,7 +462,7 @@ int Render(const fs::path& job_path) {
     uint64_t simulated_frames = 0, drawn_frames = 0, readback_frames = 0;
     bool gpu_sampled = false;
     const auto start = std::chrono::steady_clock::now();
-    owe::SceneWallpaper wallpaper;
+    owe::OfflineSession wallpaper;
     auto result = [&](std::string_view status, std::string_view error = {}) {
         std::array<uint8_t, 16> gpu_uuid {};
         wallpaper.deviceUuid(gpu_uuid.data());
@@ -503,7 +503,7 @@ int Render(const fs::path& job_path) {
             << ",\"gpu_packed_alpha\":" << (job.gpu_encode && job.gpu_encode->packed_alpha ? "true" : "false")
             << ",\"warmup_frames\":" << job.warmup << ",\"pixel_format\":\"rgba8\""
             << ",\"renderer_error_count\":" << logger.errors.load();
-        const auto& source_script_errors = wallpaper.offlineSourceScriptErrors();
+        const auto& source_script_errors = wallpaper.sourceScriptErrors();
         out << ",\"source_script_error_count\":" << source_script_errors.size()
             << ",\"source_script_errors\":[";
         bool first_source_script_error = true;
@@ -520,7 +520,7 @@ int Render(const fs::path& job_path) {
                 << ",\"stack\":" << Quote(item.stack) << '}';
         }
         out << "]"
-            << ",\"runtime_ik_chain_solves\":" << wallpaper.offlineIkChainSolves()
+            << ",\"runtime_ik_chain_solves\":" << wallpaper.ikChainSolves()
             << ",\"compiled_scene_passes\":" << wallpaper.readback().compiled_scene_passes;
         const auto& video_inventory = wallpaper.readback().video_decoders;
         auto optional_integer = [](const auto& value) { return value ? std::to_string(*value) : std::string("null"); };
@@ -577,22 +577,22 @@ int Render(const fs::path& job_path) {
             << ",\"texture_version\":" << wallpaper.readback().source_texture_version
             << ",\"width\":" << wallpaper.readback().source_width
             << ",\"height\":" << wallpaper.readback().source_height << '}'
-            << ",\"runtime_video_rate_overrides\":" << wallpaper.offlineVideoRateOverrides()
+            << ",\"runtime_video_rate_overrides\":" << wallpaper.videoRateOverrides()
             << ",\"wall_seconds\":" << std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count()
             << ",\"error\":" << Quote(error) << ",\"diagnostics\":[";
         bool first = true;
-        for (const auto& diagnostic : wallpaper.offlineDiagnostics()) {
+        for (const auto& diagnostic : wallpaper.diagnostics()) {
             if (!first) out << ',';
             first = false;
             out << Quote(diagnostic);
         }
         out << "]";
         if (job.trace_scene) {
-            out << ",\"runtime_layers\":" << wallpaper.offlineSceneDescription()
-                << ",\"runtime_projection\":" << wallpaper.offlineProjection()
-                << ",\"runtime_animation_periods\":" << wallpaper.offlineAnimationPeriods() << ",\"runtime_dependencies\":[";
+            out << ",\"runtime_layers\":" << wallpaper.sceneDescription()
+                << ",\"runtime_projection\":" << wallpaper.projection()
+                << ",\"runtime_animation_periods\":" << wallpaper.animationPeriods() << ",\"runtime_dependencies\":[";
             bool first_dependency = true;
-            for (const auto& item : wallpaper.offlineDependencies()) {
+            for (const auto& item : wallpaper.dependencies()) {
                 if (!first_dependency) out << ',';
                 first_dependency = false;
                 out << "{\"owner\":" << item.owner << ",\"target\":" << item.target
@@ -606,11 +606,10 @@ int Render(const fs::path& job_path) {
     };
     try {
         result("running");
-        owe::SceneWallpaperConfig config;
+        owe::SessionConfig config;
         config.source_pkg_path = Utf8(job.source);
         config.assets_dir = Utf8(job.assets);
         config.cache_dir = Utf8(job.cache);
-        config.fps = static_cast<uint32_t>(std::max<uint64_t>(1, (uint64_t(job.fps_num) + job.fps_den - 1) / job.fps_den));
         config.muted = false; // Offline mode has no host audio device; preserve authored audio.
         if (auto* properties = Field(json, "user_properties")) {
             if (!properties->is_object()) throw std::runtime_error("user_properties must be an object");
@@ -645,8 +644,8 @@ int Render(const fs::path& job_path) {
         if (Field(json, "output_frame_stride") || job.gpu_encode || job.collect_sampling_coverage)
             offline.readback_start = job.warmup;
         offline.video_rate_overrides = job.video_rate_overrides;
-        if (!wallpaper.initOffline(std::move(config), std::move(info), offline))
-            throw std::runtime_error(wallpaper.offlineError());
+        if (!wallpaper.init(std::move(config), std::move(info), offline))
+            throw std::runtime_error(wallpaper.error());
         RequireNoLoggedErrors();
 
         std::ofstream raw, index(job.output / "frames.jsonl", std::ios::binary);
@@ -669,14 +668,14 @@ int Render(const fs::path& job_path) {
             auto frame_start = std::chrono::steady_clock::now();
             if (next_input_event < job.input_timeline.size() && job.input_timeline[next_input_event].first == frame)
                 ApplyPointerInput(job.input, job.input_timeline[next_input_event++].second);
-            if (!wallpaper.step(frame, dt, job.input)) throw std::runtime_error(wallpaper.offlineError());
+            if (!wallpaper.step(frame, dt, job.input)) throw std::runtime_error(wallpaper.error());
             const double step_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frame_start).count();
             RequireNoLoggedErrors();
             const auto& pixels = wallpaper.readback();
             const bool read_pixels = !job.gpu_encode && offline.readsFrame(frame);
             const uint32_t output_width = job.sample_width ? job.sample_width : job.width;
             const uint32_t output_height = job.sample_height ? job.sample_height : job.height;
-            if (wallpaper.offlineStepStatus() != owe::OfflineStepStatus::Drawn ||
+            if (wallpaper.stepStatus() != owe::OfflineStepStatus::Drawn ||
                 (!pixels.completed() && !(!read_pixels && frame + 1 < job.warmup + job.frames && pixels.submitted())) || pixels.frame_index != frame || pixels.width != output_width ||
                 pixels.height != output_height || pixels.row_pitch != output_width * 4 ||
                 pixels.pixels.size() != (read_pixels ? uint64_t(output_width) * output_height * 4 : 0)) {

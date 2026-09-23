@@ -60,7 +60,13 @@ internal sealed class ShaderSource(string text)
     private static string[] Tokens(string line) => [.. Regex.Matches(line, @"\w+|\S", RegexOptions.CultureInvariant).Select(token => token.Value)];
 
     /// <summary>
-    /// 计数种类：word = 整词出现次数；assign = 任一赋值（+= -= *= /= =）；direct = 直接赋值 =；
+    /// 标识符在代码里被用到：归一化文本（已去注释）里的整词次数多于它的 uniform 声明次数。
+    /// 只声明不使用的时钟 uniform（例如 glitter_combine 里的 g_Time）不是时钟输入。
+    /// </summary>
+    public bool Uses(string identifier) => Count(true, "use", identifier) > 0;
+
+    /// <summary>
+    /// 计数种类：word = 整词出现次数；use = 整词次数减去 uniform 声明次数；assign = 任一赋值（+= -= *= /= =）；direct = 直接赋值 =；
     /// scaled = -= *= /=；swizzle = 带可选 .xyzw 分量的任一赋值；substr = 子串（不重叠）出现次数。
     /// </summary>
     public int Count(bool normalize, string kind, string identifier)
@@ -70,6 +76,8 @@ internal sealed class ShaderSource(string text)
         return kind switch
         {
             "word" => Regex.Matches(view, $@"\b{word}\b", RegexOptions.CultureInvariant).Count,
+            "use" => Regex.Matches(view, $@"\b{word}\b", RegexOptions.CultureInvariant).Count -
+                Regex.Matches(view, $@"\buniform\s+\w+\s+{word}\s*;", RegexOptions.CultureInvariant).Count,
             "assign" => Regex.Matches(view, $@"\b{word}\s*(?:\+=|-=|\*=|/=|=(?!=))", RegexOptions.CultureInvariant).Count,
             "direct" => Regex.Matches(view, $@"\b{word}\s*=(?!=)", RegexOptions.CultureInvariant).Count,
             "scaled" => Regex.Matches(view, $@"\b{word}\s*(?:-=|\*=|/=)", RegexOptions.CultureInvariant).Count,

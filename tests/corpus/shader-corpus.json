@@ -218,6 +218,7 @@
      "frag": [
       "uniform float g_Time;",
       "scroll = sign(scroll) * pow(vec2(g_ScrollX, g_ScrollY), CAST2(2.0));",
+      "v_Scroll = scroll * g_Time;",
       "vec2 uv = frac((v_TexCoord + v_Scroll) * g_Scale);"
      ]
     },
@@ -3361,6 +3362,671 @@
      "unresolved": 1,
      "kind": "UnsupportedShaderMechanism",
      "detail": "Shine source, supported cast variant, or canonical repeat noise texture is not proven."
+    }
+   ]
+  },
+  {
+   "name": "glitter",
+   "from": "fix-j（J 类 ① glitter）",
+   "shaders": {
+    "glitter_prepare": {
+     "frag": [
+      "uniform sampler2D g_Texture0; // {\"material\":\"framebuffer\",\"label\":\"ui_editor_properties_framebuffer\",\"hidden\":true}",
+      "uniform sampler2D g_Texture1; // {\"label\":\"ui_editor_properties_noise\",\"default\":\"util/perlin_256\"}",
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"label\":\"ui_editor_properties_speed\",\"default\":1,\"range\":[0.0, 2]}",
+      "uniform float g_Density; // {\"material\":\"density\",\"label\":\"ui_editor_properties_density\",\"default\":0.5,\"range\":[0.01, 1]}",
+      "varying vec4 v_TexCoord;",
+      "varying vec2 v_NoiseCoord;",
+      "void main() {",
+      "\tvec4 albedo = CAST4(1);",
+      "\tvec3 effectAlbedo = albedo.rgb;",
+      "\tfloat density = g_Density * g_Density;",
+      "\tfloat time = g_Time * g_Speed * density;",
+      "\tvec2 noiseCoord = v_NoiseCoord;",
+      "\tvec4 noise0 = texSample2D(g_Texture1, noiseCoord);",
+      "\tnoise0.r = noise0.r * (1.0 - noise0.g);",
+      "\tfloat timer0 = frac(noise0.r * 100 + time);",
+      "\tfloat glitterDensity = density * 0.5;",
+      "\tfloat glitter0 = smoothstep(0.5 - glitterDensity, 0.5, timer0) * smoothstep(0.5 + glitterDensity, 0.5, timer0);",
+      "\tglitter0 = smoothstep(0.5, 1.0, glitter0);",
+      "\tglitter0 *= glitter0;",
+      "\teffectAlbedo = CAST3(glitter0);",
+      "\talbedo.rgb = effectAlbedo;",
+      "\tgl_FragColor = albedo;",
+      "}"
+     ],
+     "vert": [
+      "attribute vec3 a_Position;",
+      "attribute vec2 a_TexCoord;",
+      "varying vec2 v_TexCoord;",
+      "varying vec2 v_NoiseCoord;",
+      "void main() {",
+      "\tgl_Position = vec4(a_Position, 1.0);",
+      "\tv_TexCoord.xy = a_TexCoord.xy;",
+      "\tv_NoiseCoord = vec2(a_TexCoord.x, a_TexCoord.y) * 5;",
+      "}"
+     ]
+    },
+    "glitter_combine": {
+     "frag": [
+      "// [COMBO] {\"material\":\"ui_editor_properties_blend_mode\",\"combo\":\"BLENDMODE\",\"type\":\"imageblending\",\"default\":32}",
+      "#include \"common_blending.h\"",
+      "uniform sampler2D g_Texture0; // {\"material\":\"framebuffer\",\"label\":\"ui_editor_properties_framebuffer\",\"hidden\":true}",
+      "uniform sampler2D g_Texture1; // {\"label\":\"glitter\",\"hidden\":true}",
+      "uniform float g_Time;",
+      "uniform float g_GlitterScale; // {\"material\":\"scale\",\"label\":\"ui_editor_properties_granularity\",\"default\":1,\"range\":[0.1, 5]}",
+      "varying vec4 v_TexCoord;",
+      "void main() {",
+      "\tvec4 albedo = texSample2D(g_Texture0, v_TexCoord.xy);",
+      "\tfloat glitter = texSample2D(g_Texture1, v_TexCoord.xy * g_GlitterScale).r;",
+      "\tgl_FragColor = albedo + glitter;",
+      "}"
+     ]
+    },
+    "glitter_drift": {
+     "same_as": "glitter_prepare",
+     "append": [
+      "vec2 drift = v_TexCoord.xy + g_Time * 0.01;"
+     ]
+    },
+    "commented_clock": {
+     "frag": [
+      "// uniform float g_Time; 注释里的时钟不是输入",
+      "/* frac(g_Time * g_Speed) */",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"default\":1}",
+      "void main() { gl_FragColor = vec4(g_Speed); }"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "glitter_prepare",
+     "constants": {
+      "density": 0.8,
+      "speed": 1.0
+     }
+    },
+    {
+     "id": 2,
+     "shader": "glitter_combine",
+     "constants": {
+      "alpha": 0.34,
+      "scale": 5
+     }
+    },
+    {
+     "id": 3,
+     "shader": "glitter_prepare",
+     "constants": {
+      "density": 0.02,
+      "speed": 0.23
+     }
+    },
+    {
+     "id": 4,
+     "shader": "glitter_prepare",
+     "constants": {
+      "speed": 1.0
+     }
+    },
+    {
+     "id": 5,
+     "shader": "glitter_drift",
+     "constants": {
+      "density": 0.8,
+      "speed": 1.0
+     }
+    },
+    {
+     "id": 6,
+     "shader": "commented_clock",
+     "constants": {
+      "speed": 1.0
+     }
+    },
+    {
+     "id": 7,
+     "shader": "glitter_prepare",
+     "constants": {
+      "density": 0.8,
+      "speed": 0
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "glitter_prepare repeats every 1/(speed*density²) and retimes through speed",
+     "layer": 1,
+     "components": 1,
+     "unresolved": 0,
+     "allow_retime": true,
+     "key": "speed",
+     "exponent": 1,
+     "period": "1/0.64",
+     "tolerance": 1e-09
+    },
+    {
+     "message": "a pass that only declares g_Time has no clock input",
+     "layer": 2,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "a glitter period past the loop ceiling even after retime is refused as a long-period mechanism",
+     "layer": 3,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism"
+    },
+    {
+     "message": "unauthored glitter density falls back to the shader default 0.5",
+     "layer": 4,
+     "components": 1,
+     "period": "1/0.25",
+     "tolerance": 1e-12
+    },
+    {
+     "message": "an extra g_Time use keeps glitter-like shaders unresolved",
+     "layer": 5,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "clock names inside comments are not clock inputs",
+     "layer": 6,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "zero glitter speed has no motion",
+     "layer": 7,
+     "components": 0,
+     "unresolved": 0
+    }
+   ]
+  },
+  {
+   "name": "frac-linear",
+   "from": "fix-j（J 类 ① flowimage 底材质）",
+   "shaders": {
+    "flowmap": {
+     "frag": [
+      "#include \"common_fragment.h\"",
+      "uniform sampler2D g_Texture0;",
+      "uniform sampler2D g_Texture1;",
+      "uniform float g_Brightness; // {\"material\":\"Bright\",\"default\":1,\"range\":[0,2]}",
+      "uniform float g_Time;",
+      "uniform float g_FlowSpeed; // {\"material\":\"Speed\",\"default\":0.5,\"range\":[0.01, 1]}",
+      "uniform float g_FlowAmp; // {\"material\":\"Amount\",\"default\":1,\"range\":[0.01, 1]}",
+      "varying vec2 v_TexCoord;",
+      "void main() {",
+      "\tvec3 flowColors = texSample2D(g_Texture1, v_TexCoord.xy).rgb;",
+      "\tvec2 flowMask = (flowColors.rg - vec2(0.5, 0.5)) * 2.0;",
+      "\tvec2 cycles = vec2(frac(g_Time * g_FlowSpeed + flowColors.b), frac(g_Time * g_FlowSpeed + flowColors.b + 0.5));",
+      "\tfloat blend = 2 * abs(cycles.x - 0.5);",
+      "\tvec2 flowUVOffset1 = flowMask * g_FlowAmp * 0.1 * cycles.x;",
+      "\tvec2 flowUVOffset2 = flowMask * g_FlowAmp * 0.1 * cycles.y;",
+      "\tvec4 albedo = mix(texSample2D(g_Texture0, v_TexCoord.xy + flowUVOffset1), texSample2D(g_Texture0, v_TexCoord.xy + flowUVOffset2), blend);",
+      "\talbedo.rgb *= g_Brightness;",
+      "\tgl_FragColor = albedo;",
+      "}"
+     ],
+     "vert": [
+      "#include \"common_vertex.h\"",
+      "uniform mat4 g_ModelViewProjectionMatrix;",
+      "uniform float g_Time;",
+      "attribute vec3 a_Position;",
+      "attribute vec2 a_TexCoord;",
+      "varying vec2 v_TexCoord;",
+      "void main() {",
+      "\tgl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);",
+      "\tv_TexCoord = a_TexCoord;",
+      "}"
+     ]
+    },
+    "flow-scaled": {
+     "frag": [
+      "#include \"common_fragment.h\"",
+      "uniform sampler2D g_Texture0;",
+      "uniform sampler2D g_Texture1;",
+      "uniform float g_Brightness; // {\"material\":\"Bright\",\"default\":1,\"range\":[0,2]}",
+      "uniform float g_Time;",
+      "uniform float g_FlowSpeed; // {\"material\":\"Speed\",\"default\":0.5,\"range\":[0.01, 1]}",
+      "uniform float g_FlowAmp; // {\"material\":\"Amount\",\"default\":1,\"range\":[0.01, 1]}",
+      "varying vec2 v_TexCoord;",
+      "void main() {",
+      "\tvec3 flowColors = texSample2D(g_Texture1, v_TexCoord.xy).rgb;",
+      "\tvec2 flowMask = (flowColors.rg - vec2(0.5, 0.5)) * 2.0;",
+      "\tvec2 cycles = vec2(frac(g_Time * g_FlowSpeed * 2.0 + flowColors.b), frac(g_Time * g_FlowSpeed + flowColors.b + 0.5));",
+      "\tfloat blend = 2 * abs(cycles.x - 0.5);",
+      "\tvec2 flowUVOffset1 = flowMask * g_FlowAmp * 0.1 * cycles.x;",
+      "\tvec2 flowUVOffset2 = flowMask * g_FlowAmp * 0.1 * cycles.y;",
+      "\tvec4 albedo = mix(texSample2D(g_Texture0, v_TexCoord.xy + flowUVOffset1), texSample2D(g_Texture0, v_TexCoord.xy + flowUVOffset2), blend);",
+      "\talbedo.rgb *= g_Brightness;",
+      "\tgl_FragColor = albedo;",
+      "}"
+     ]
+    },
+    "flow-nested": {
+     "frag": [
+      "#include \"common_fragment.h\"",
+      "uniform sampler2D g_Texture0;",
+      "uniform sampler2D g_Texture1;",
+      "uniform float g_Brightness; // {\"material\":\"Bright\",\"default\":1,\"range\":[0,2]}",
+      "uniform float g_Time;",
+      "uniform float g_FlowSpeed; // {\"material\":\"Speed\",\"default\":0.5,\"range\":[0.01, 1]}",
+      "uniform float g_FlowAmp; // {\"material\":\"Amount\",\"default\":1,\"range\":[0.01, 1]}",
+      "varying vec2 v_TexCoord;",
+      "void main() {",
+      "\tvec3 flowColors = texSample2D(g_Texture1, v_TexCoord.xy).rgb;",
+      "\tvec2 flowMask = (flowColors.rg - vec2(0.5, 0.5)) * 2.0;",
+      "\tvec2 cycles = vec2(frac(g_Time * g_FlowSpeed + flowColors.b), frac(g_Time * g_FlowSpeed + sin(g_Time)));",
+      "\tfloat blend = 2 * abs(cycles.x - 0.5);",
+      "\tvec2 flowUVOffset1 = flowMask * g_FlowAmp * 0.1 * cycles.x;",
+      "\tvec2 flowUVOffset2 = flowMask * g_FlowAmp * 0.1 * cycles.y;",
+      "\tvec4 albedo = mix(texSample2D(g_Texture0, v_TexCoord.xy + flowUVOffset1), texSample2D(g_Texture0, v_TexCoord.xy + flowUVOffset2), blend);",
+      "\talbedo.rgb *= g_Brightness;",
+      "\tgl_FragColor = albedo;",
+      "}"
+     ]
+    },
+    "flow-two-rates": {
+     "same_as": "flowmap",
+     "prepend": [
+      "uniform float g_Other; // {\"material\":\"Other\",\"default\":1}"
+     ],
+     "append": [
+      "float extra = frac(g_Time * g_Other);"
+     ]
+    },
+    "flow-define": {
+     "same_as": "flowmap",
+     "prepend": [
+      "#define frac(x) (x)"
+     ]
+    }
+   },
+   "files": {
+    "models/flowbase.json": [
+     "{\"material\":\"materials/flowbase.json\",\"width\":1920,\"height\":1080}"
+    ],
+    "materials/flowbase.json": [
+     "{\"passes\":[{\"shader\":\"flowbase\",\"constantshadervalues\":{\"Speed\":0.07,\"Amount\":1}}]}"
+    ],
+    "shaders/flowbase.frag": [
+     "#include \"common_fragment.h\"",
+     "uniform sampler2D g_Texture0;",
+     "uniform sampler2D g_Texture1;",
+     "uniform float g_Brightness; // {\"material\":\"Bright\",\"default\":1,\"range\":[0,2]}",
+     "uniform float g_Time;",
+     "uniform float g_FlowSpeed; // {\"material\":\"Speed\",\"default\":0.5,\"range\":[0.01, 1]}",
+     "uniform float g_FlowAmp; // {\"material\":\"Amount\",\"default\":1,\"range\":[0.01, 1]}",
+     "varying vec2 v_TexCoord;",
+     "void main() {",
+     "\tvec3 flowColors = texSample2D(g_Texture1, v_TexCoord.xy).rgb;",
+     "\tvec2 flowMask = (flowColors.rg - vec2(0.5, 0.5)) * 2.0;",
+     "\tvec2 cycles = vec2(frac(g_Time * g_FlowSpeed + flowColors.b), frac(g_Time * g_FlowSpeed + flowColors.b + 0.5));",
+     "\tfloat blend = 2 * abs(cycles.x - 0.5);",
+     "\tvec2 flowUVOffset1 = flowMask * g_FlowAmp * 0.1 * cycles.x;",
+     "\tvec2 flowUVOffset2 = flowMask * g_FlowAmp * 0.1 * cycles.y;",
+     "\tvec4 albedo = mix(texSample2D(g_Texture0, v_TexCoord.xy + flowUVOffset1), texSample2D(g_Texture0, v_TexCoord.xy + flowUVOffset2), blend);",
+     "\talbedo.rgb *= g_Brightness;",
+     "\tgl_FragColor = albedo;",
+     "}"
+    ],
+    "shaders/flowbase.vert": [
+     "#include \"common_vertex.h\"",
+     "uniform mat4 g_ModelViewProjectionMatrix;",
+     "uniform float g_Time;",
+     "attribute vec3 a_Position;",
+     "attribute vec2 a_TexCoord;",
+     "varying vec2 v_TexCoord;",
+     "void main() {",
+     "\tgl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);",
+     "\tv_TexCoord = a_TexCoord;",
+     "}"
+    ],
+    "models/sinebase.json": [
+     "{\"material\":\"materials/sinebase.json\"}"
+    ],
+    "materials/sinebase.json": [
+     "{\"passes\":[{\"shader\":\"sinebase\",\"constantshadervalues\":{\"Speed\":0.07}}]}"
+    ],
+    "shaders/sinebase.frag": [
+     "uniform float g_Time;",
+     "uniform float g_FlowSpeed; // {\"material\":\"Speed\",\"default\":1}",
+     "void main() { gl_FragColor = vec4(sin(g_Time * g_FlowSpeed)); }"
+    ],
+    "models/glitterbase.json": [
+     "{\"material\":\"materials/glitterbase.json\"}"
+    ],
+    "materials/glitterbase.json": [
+     "{\"passes\":[{\"shader\":\"glitterbase\",\"constantshadervalues\":{\"speed\":1,\"density\":0.5}}]}"
+    ],
+    "shaders/glitterbase.frag": [
+     "uniform sampler2D g_Texture0; // {\"material\":\"framebuffer\",\"label\":\"ui_editor_properties_framebuffer\",\"hidden\":true}",
+     "uniform sampler2D g_Texture1; // {\"label\":\"ui_editor_properties_noise\",\"default\":\"util/perlin_256\"}",
+     "uniform float g_Time;",
+     "uniform float g_Speed; // {\"material\":\"speed\",\"label\":\"ui_editor_properties_speed\",\"default\":1,\"range\":[0.0, 2]}",
+     "uniform float g_Density; // {\"material\":\"density\",\"label\":\"ui_editor_properties_density\",\"default\":0.5,\"range\":[0.01, 1]}",
+     "varying vec4 v_TexCoord;",
+     "varying vec2 v_NoiseCoord;",
+     "void main() {",
+     "\tvec4 albedo = CAST4(1);",
+     "\tvec3 effectAlbedo = albedo.rgb;",
+     "\tfloat density = g_Density * g_Density;",
+     "\tfloat time = g_Time * g_Speed * density;",
+     "\tvec2 noiseCoord = v_NoiseCoord;",
+     "\tvec4 noise0 = texSample2D(g_Texture1, noiseCoord);",
+     "\tnoise0.r = noise0.r * (1.0 - noise0.g);",
+     "\tfloat timer0 = frac(noise0.r * 100 + time);",
+     "\tfloat glitterDensity = density * 0.5;",
+     "\tfloat glitter0 = smoothstep(0.5 - glitterDensity, 0.5, timer0) * smoothstep(0.5 + glitterDensity, 0.5, timer0);",
+     "\tglitter0 = smoothstep(0.5, 1.0, glitter0);",
+     "\tglitter0 *= glitter0;",
+     "\teffectAlbedo = CAST3(glitter0);",
+     "\talbedo.rgb = effectAlbedo;",
+     "\tgl_FragColor = albedo;",
+     "}"
+    ],
+    "shaders/glitterbase.vert": [
+     "attribute vec3 a_Position;",
+     "attribute vec2 a_TexCoord;",
+     "varying vec2 v_TexCoord;",
+     "varying vec2 v_NoiseCoord;",
+     "void main() {",
+     "\tgl_Position = vec4(a_Position, 1.0);",
+     "\tv_TexCoord.xy = a_TexCoord.xy;",
+     "\tv_NoiseCoord = vec2(a_TexCoord.x, a_TexCoord.y) * 5;",
+     "}"
+    ]
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "flowmap",
+     "constants": {
+      "Speed": 0.07,
+      "Amount": 1
+     }
+    },
+    {
+     "id": 2,
+     "shader": "flow-scaled",
+     "constants": {
+      "Speed": 0.07
+     }
+    },
+    {
+     "id": 3,
+     "shader": "flow-nested",
+     "constants": {
+      "Speed": 0.07
+     }
+    },
+    {
+     "id": 4,
+     "shader": "flowmap",
+     "constants": {
+      "Amount": 1
+     }
+    },
+    {
+     "id": 5,
+     "raw": {
+      "id": 5,
+      "image": "models/flowbase.json"
+     }
+    },
+    {
+     "id": 6,
+     "raw": {
+      "id": 6,
+      "image": "models/sinebase.json"
+     }
+    },
+    {
+     "id": 7,
+     "shader": "flow-two-rates",
+     "constants": {
+      "Speed": 0.07,
+      "Other": 0.5
+     }
+    },
+    {
+     "id": 8,
+     "shader": "flowmap",
+     "constants": {
+      "Speed": 0.0001
+     }
+    },
+    {
+     "id": 9,
+     "shader": "flow-define",
+     "constants": {
+      "Speed": 0.07
+     }
+    },
+    {
+     "id": 10,
+     "raw": {
+      "id": 10,
+      "image": "models/glitterbase.json"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "every g_Time use inside frac(g_Time * U + static) repeats every 1/abs(U) and retimes through U",
+     "layer": 1,
+     "components": 1,
+     "unresolved": 0,
+     "allow_retime": true,
+     "key": "Speed",
+     "exponent": 1,
+     "period": "1/0.07",
+     "tolerance": 1e-09
+    },
+    {
+     "message": "a further factor on g_Time inside frac is not the verified form",
+     "layer": 2,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "a second g_Time inside the frac phase is not a static phase",
+     "layer": 3,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "an unauthored rate uses the shader default as a locked exact period",
+     "layer": 4,
+     "components": 1,
+     "unresolved": 0,
+     "allow_retime": false,
+     "key": "",
+     "exact_seconds": "2"
+    },
+    {
+     "message": "a base material frac clock is a locked exact period from its material constant",
+     "layer": 5,
+     "components": 1,
+     "unresolved": 0,
+     "allow_retime": false,
+     "key": "",
+     "exact_seconds": "100/7",
+     "id_suffix": "/-1/0/Speed"
+    },
+    {
+     "message": "an unrecognized base material clock is left to the runtime material check",
+     "layer": 6,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "two different frac rates are not one frac clock",
+     "layer": 7,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "a frac period past the loop ceiling is refused as a long-period mechanism",
+     "layer": 8,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism"
+    },
+    {
+     "message": "a #define that rewrites frac is not the verified frac clock",
+     "layer": 9,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "a base material only tries base_material rules (a glitter base material is not claimed by the author-effect glitter rule)",
+     "layer": 10,
+     "components": 0,
+     "unresolved": 0
+    }
+   ]
+  },
+  {
+   "name": "literal-step",
+   "from": "fix-j（J 类 ① we2d_sequence 序列帧）",
+   "shaders": {
+    "sequence": {
+     "frag": [
+      "uniform sampler2D g_Texture0;",
+      "uniform float g_Time;",
+      "uniform float u_FrameOverride; // {\"material\":\"frameoverride\",\"default\":-1,\"range\":[-1,8]}",
+      "varying vec2 v_TexCoord;",
+      "#if VERTEXCOLOR",
+      "varying vec4 v_Color;",
+      "#endif",
+      "void main() {",
+      "\tfloat frame = u_FrameOverride >= 0.0 ? u_FrameOverride : mod(floor(g_Time * 5.0), 9.0);",
+      "\tvec2 cell = vec2(mod(frame, 3.0), floor(frame / 3.0));",
+      "\tgl_FragColor = texSample2D(g_Texture0, (cell + v_TexCoord) / 3.0);",
+      "}"
+     ],
+     "vert": [
+      "uniform float g_Time;",
+      "void main() { gl_Position = vec4(0); }"
+     ]
+    },
+    "sequence-fraction": {
+     "frag": [
+      "uniform sampler2D g_Texture0;",
+      "uniform float g_Time;",
+      "uniform float u_FrameOverride; // {\"material\":\"frameoverride\",\"default\":-1,\"range\":[-1,8]}",
+      "varying vec2 v_TexCoord;",
+      "#if VERTEXCOLOR",
+      "varying vec4 v_Color;",
+      "#endif",
+      "void main() {",
+      "\tfloat frame = u_FrameOverride >= 0.0 ? u_FrameOverride : mod(floor(g_Time * 5.0), 9.5);",
+      "\tvec2 cell = vec2(mod(frame, 3.0), floor(frame / 3.0));",
+      "\tgl_FragColor = texSample2D(g_Texture0, (cell + v_TexCoord) / 3.0);",
+      "}"
+     ]
+    },
+    "sequence-drift": {
+     "same_as": "sequence",
+     "append": [
+      "float drift = g_Time * 0.1;"
+     ]
+    }
+   },
+   "files": {
+    "models/seqbase.json": [
+     "{\"material\":\"materials/seqbase.json\"}"
+    ],
+    "materials/seqbase.json": [
+     "{\"passes\":[{\"shader\":\"seqbase\",\"constantshadervalues\":{\"frameoverride\":-1}}]}"
+    ],
+    "shaders/seqbase.frag": [
+     "uniform sampler2D g_Texture0;",
+     "uniform float g_Time;",
+     "uniform float u_FrameOverride; // {\"material\":\"frameoverride\",\"default\":-1,\"range\":[-1,8]}",
+     "varying vec2 v_TexCoord;",
+     "#if VERTEXCOLOR",
+     "varying vec4 v_Color;",
+     "#endif",
+     "void main() {",
+     "\tfloat frame = u_FrameOverride >= 0.0 ? u_FrameOverride : mod(floor(g_Time * 5.0), 9.0);",
+     "\tvec2 cell = vec2(mod(frame, 3.0), floor(frame / 3.0));",
+     "\tgl_FragColor = texSample2D(g_Texture0, (cell + v_TexCoord) / 3.0);",
+     "}"
+    ]
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "sequence",
+     "constants": {
+      "frameoverride": -1
+     }
+    },
+    {
+     "id": 2,
+     "shader": "sequence-fraction",
+     "constants": {
+      "frameoverride": -1
+     }
+    },
+    {
+     "id": 3,
+     "shader": "sequence-drift",
+     "constants": {
+      "frameoverride": -1
+     }
+    },
+    {
+     "id": 4,
+     "raw": {
+      "id": 4,
+      "image": "models/seqbase.json"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "mod(floor(g_Time * A), B) with integer B repeats every B/A seconds as a locked period",
+     "layer": 1,
+     "components": 1,
+     "unresolved": 0,
+     "allow_retime": false,
+     "key": "",
+     "exact_seconds": "9/5"
+    },
+    {
+     "message": "a non-integer modulus is not a closed step cycle",
+     "layer": 2,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "an extra g_Time use keeps a step clock unresolved",
+     "layer": 3,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "a base material step clock is the same locked exact period",
+     "layer": 4,
+     "components": 1,
+     "unresolved": 0,
+     "exact_seconds": "9/5"
     }
    ]
   }

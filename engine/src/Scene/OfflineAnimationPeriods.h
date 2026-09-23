@@ -1,8 +1,8 @@
 #pragma once
 
-// This file is included by SceneWallpaper.cpp after its module imports.  Keep
+// This file is included by OfflineSession.cpp after its module imports.  Keep
 // it header-only and do not add textual standard-library includes here: the
-// scene-wallpaper translation unit already imports the scene, JSON, and C++
+// offline-session translation unit already imports the scene, JSON, and C++
 // standard-library module surfaces it needs.
 
 namespace owe
