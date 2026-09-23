@@ -172,7 +172,7 @@ internal static class SourceStaticLoopChecks
         JsonObject noFrame = SolverPlan("NoFrameOnFixedStepSatisfiesComponents");
         solverMethod.Invoke(null, [noFrame]);
         solverMethod.Invoke(null, [noFrame]);
-        JsonObject noFrameBlocker = noFrame["blockers"]![0]!.AsObject();
+        JsonObject noFrameBlocker = noFrame["blockers_localized"]![0]!.AsObject();
         bool noFrameTraceable = true;
         try { Require(noFrame); } catch (InvalidOperationException) { noFrameTraceable = false; }
         check(noFrame["blockers"]!.AsArray().Count == 1 && noFrame["whole_layer"]!["blockers"]!.AsArray().Count == 1 &&

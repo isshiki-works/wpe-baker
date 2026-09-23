@@ -156,13 +156,9 @@ public static class PlanNarrative
     /// <summary>给 plan 挂上双语字段与一行结论。现有英文字段一律不动。</summary>
     public static void Attach(JsonObject report)
     {
-        PlanBlockers.Finish(report);
+        // 拒因已是 v3 两个字段（PlanBlockers 追加时两边一起写），这里不再拆分。
         if (report["loop"] is JsonObject loop) LocalizeUnresolved(loop);
-        if (report["whole_layer"] is JsonObject whole)
-        {
-            PlanBlockers.Finish(whole);
-            if (whole["loop"] is JsonObject wholeLoop) LocalizeUnresolved(wholeLoop);
-        }
+        if (report["whole_layer"]?["loop"] is JsonObject wholeLoop) LocalizeUnresolved(wholeLoop);
         foreach (JsonObject preflight in (report["effect_prefix_hardware_decode_preflight"] as JsonArray ?? []).OfType<JsonObject>())
             LocalizeUnresolved(preflight);
         report["summary"] = Summarize(report);
@@ -304,7 +300,7 @@ public static class PlanNarrative
         var blockers = report["blockers"] as JsonArray ?? [];
         if (blockers.Count > 0)
         {
-            JsonObject first = report["blockers_localized"]?[0] as JsonObject ?? blockers[0]!.AsObject();
+            JsonObject first = report["blockers_localized"]![0]!.AsObject();
             return Bilingual(Blocked, "summary.blocked",
                 [first["zh"]?.GetValue<string>() ?? "", blockers.Count], [first["en"]?.GetValue<string>() ?? "", blockers.Count]);
         }

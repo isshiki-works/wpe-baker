@@ -181,7 +181,8 @@ internal static class SuitabilityVerdictChecks
         ["video_groups"] = new JsonArray(Enumerable.Range(0, groups).Select(index => (JsonNode)new JsonObject { ["id"] = index }).ToArray()),
         ["layers"] = new JsonArray(Enumerable.Range(0, totalLayers).Select(index => (JsonNode)new JsonObject {
             ["id"] = index, ["allocation"] = index < videoLayers ? "video" : "live" }).ToArray()),
-        ["blockers"] = new JsonArray((blockers ?? []).Select(item => (JsonNode)item.ToNode()).ToArray()),
+        ["blockers"] = new JsonArray((blockers ?? []).Select(item => (JsonNode)item.Text).ToArray()),
+        ["blockers_localized"] = new JsonArray((blockers ?? []).Select(item => (JsonNode)item.Localized()).ToArray()),
         ["video_layout_admission"] = new JsonObject { ["status"] = layoutConflict is null ? "planned_layout_allowed" : "requires_user_choice", ["reason"] = layoutConflict },
         ["whole_layer"] = new JsonObject { ["status"] = "unavailable" },
         ["effect_prefix_caches"] = new JsonArray(Enumerable.Range(0, prefixCaches).Select(index => (JsonNode)new JsonObject { ["id"] = index }).ToArray()),

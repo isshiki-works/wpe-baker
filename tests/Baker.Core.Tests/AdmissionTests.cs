@@ -155,7 +155,7 @@ public class AdmissionTests
         // 可烘改按结构判定后，必须与结论行 summary.bakeable* 的判定逐一相同（原来 cascade 读 summary.key 前缀）。
         JsonObject bakeable = Narrated(Plan(new JsonArray()));
         JsonObject blocked = Plan(new JsonArray());
-        blocked["blockers"]!.AsArray().Add(new Blocker(BlockerCode.VideoShell).ToNode());
+        PlanBlockers.Add(blocked, new Blocker(BlockerCode.VideoShell));
         blocked = Narrated(blocked);
         JsonObject noCandidate = Narrated(Plan(new JsonArray(Unmaskable()), candidates: 0));
         foreach (JsonObject plan in new[] { bakeable, blocked, noCandidate })

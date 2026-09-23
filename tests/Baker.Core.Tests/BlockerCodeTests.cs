@@ -12,14 +12,18 @@ public class BlockerTriageTests
         .GetType("Baker.Core.HybridScenePlanner")!.GetMethod("Suitability", BindingFlags.Static | BindingFlags.NonPublic)!
         .Invoke(null, [plan])!;
 
-    private static JsonObject Plan(params Blocker[] blockers) => new()
+    private static JsonObject Plan(params Blocker[] blockers)
     {
-        ["route"] = "whole_layer",
-        ["video_groups"] = new JsonArray(new JsonObject { ["id"] = "group-1" }),
-        ["layers"] = new JsonArray(),
-        ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject()), ["unresolved"] = new JsonArray() },
-        ["blockers"] = new JsonArray(blockers.Select(blocker => (JsonNode)blocker.ToNode()).ToArray()),
-    };
+        var plan = new JsonObject
+        {
+            ["route"] = "whole_layer",
+            ["video_groups"] = new JsonArray(new JsonObject { ["id"] = "group-1" }),
+            ["layers"] = new JsonArray(),
+            ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject()), ["unresolved"] = new JsonArray() },
+        };
+        PlanBlockers.Set(plan, blockers);
+        return plan;
+    }
 
     [Theory]
     [InlineData(BlockerCode.HdrRadianceOpen, "capture_capability_gap")]
@@ -50,9 +54,8 @@ public class BlockerTriageTests
     [Fact]
     public void TriageSurvivesFinishedPlan()
     {
-        // 写出后 blockers 变回英文原文，编号从同下标的 blockers_localized 取，不看句子。
+        // plan 里的拒因只有 v3 一种形态：blockers 是英文原文，编号从同下标的 blockers_localized 取，不看句子。
         JsonObject plan = Plan(new Blocker(BlockerCode.HdrRadianceOpen, ["x"]));
-        PlanBlockers.Finish(plan);
         Assert.IsType<string>(plan["blockers"]![0]!.GetValue<string>());
         Assert.Equal("capture_capability_gap", Verdict(plan)["rule"]!.GetValue<string>());
     }

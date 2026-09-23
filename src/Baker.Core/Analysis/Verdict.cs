@@ -59,9 +59,6 @@ internal sealed class Verdict
     internal static bool PrefixSafetyBlockedBy(IEnumerable<BlockerCode> codes) =>
         codes.Any(code => code is not (BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric));
 
-    /// <summary>初判拒因渲染成 plan v3 分析中的 blockers 数组（每次调用给一份新数组）。</summary>
-    internal JsonArray RenderBlockers() => new([.. Blockers.Select(blocker => (JsonNode)blocker.ToNode())]);
-
     /// <summary>
     /// 收尾裁定（原 X 段，顺序不可换）：残差布局闸门 → 求解器空候选 blocker → 可追溯不变量 → 视频外壳与烘焙价值 →
     /// 特效前缀硬解预检 → 公共图层查询冲突 → suitability。
@@ -82,7 +79,7 @@ internal sealed class Verdict
         report[BakeValueAssessment.Field] = BakeValueAssessment.Evaluate(report, observation.Trace, source, request.Assets);
         if (videoDominance["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
         {
-            PlanBlockers.Add(report["blockers"]!.AsArray(), new Blocker(BlockerCode.VideoShell));
+            PlanBlockers.Add(report, new Blocker(BlockerCode.VideoShell));
             report["status"] = "requires_resolution";
         }
         // 特效前缀缓存的编码尺寸在 analyze 阶段就能按源纹理算出来：越过硬件解码上限的提前写 unresolved 提示。
@@ -97,8 +94,8 @@ internal sealed class Verdict
                 item["property"]?.GetValue<string>()?.StartsWith("layer_", StringComparison.Ordinal) == true) &&
             LayoutAdmission.CompositionHierarchyConflict(report, graph.Objects, observation.Dependencies) is Blocker publicQueryConflict)
         {
-            PlanBlockers.Add(report["blockers"]!.AsArray(), publicQueryConflict);
-            PlanBlockers.Add(report["whole_layer"]!["blockers"]!.AsArray(), publicQueryConflict);
+            PlanBlockers.Add(report, publicQueryConflict);
+            PlanBlockers.Add(report["whole_layer"]!.AsObject(), publicQueryConflict);
             report["whole_layer"]!["status"] = "unavailable";
             report["status"] = "requires_resolution";
         }
@@ -144,8 +141,8 @@ internal sealed class Verdict
             _ => null
         };
         if (blocker is null) return;
-        foreach (JsonNode? node in new[] { report["blockers"], wholeLayer["blockers"] })
-            if (node is JsonArray blockers) PlanBlockers.Add(blockers, blocker);
+        foreach (JsonObject owner in new[] { report, wholeLayer })
+            if (owner["blockers"] is JsonArray) PlanBlockers.Add(owner, blocker);
         report["status"] = "requires_resolution";
     }
 

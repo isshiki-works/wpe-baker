@@ -205,9 +205,8 @@ internal static class PlanWriter
             ["optional_realtime_roots"] = JsonSerializer.SerializeToNode(composer.OptionalForeground),
             ["hdr_radiance_closure"] = verdict.RadianceClosure,
             ["composition_policy"] = "Keep adjacent input-independent content together; optional live foreground must not split a video group or change draw order.",
-            // 初判拒因在这里渲染：整层路线写进 blockers（特效前缀路线为空），whole_layer 始终记整层的那一份。
-            ["blockers"] = effectPrefixRoute ? new JsonArray() : verdict.RenderBlockers(), ["loop"] = loop,
-            ["whole_layer"] = Routes.WholeLayer(verdict.RenderBlockers(), loop),
+            ["blockers"] = new JsonArray(), ["loop"] = loop,
+            ["whole_layer"] = Routes.WholeLayer(verdict.Blockers, loop),
             ["effect_prefix_caches"] = effectPrefixCaches,
             ["encoding"] = new JsonObject { ["codec"] = "auto_h264_hevc", ["pixel_format"] = "yuv420p", ["crf"] = 16,
                 ["color_space"] = "bt709_sdr", ["transparent_groups"] = "rgb_contribution_and_coverage_side_by_side",
@@ -219,6 +218,8 @@ internal static class PlanWriter
             ["source_script_error_count"] = verdict.ScriptErrorCount is int recordedErrorCount ? recordedErrorCount : null,
             ["source_script_errors"] = verdict.ScriptFaultEvidence ? verdict.SourceScriptErrors.DeepClone() : null,
             ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified" };
+        // 初判拒因在这里渲染一次：整层路线写进 blockers（特效前缀路线为空），whole_layer 始终记整层的那一份。
+        PlanBlockers.Set(report, effectPrefixRoute ? [] : verdict.Blockers);
         // 开关关着时不写这一段，plan 逐字不变。
         if (daytime is not null) report["daytime_split"] = daytime.ToJson();
         return report;
@@ -234,6 +235,8 @@ internal static class PlanWriter
         if (request.PropertiesOrigin is JsonObject propertiesOrigin) AttachPropertiesSource(report, propertiesOrigin);
         // 帧率来源紧跟在 output_resolution 后面：没有来源记录的请求（测试、内部重分析）plan 不变。
         if (request.FrameRateOrigin is JsonObject frameRateOrigin) AttachFrameRate(report, frameRateOrigin);
+        PlanBlockers.PlaceLocalizedLast(report);
+        if (report["whole_layer"] is JsonObject wholeLayer) PlanBlockers.PlaceLocalizedLast(wholeLayer);
         PlanNarrative.Attach(report);
         await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "plan.json"), report, cancellationToken);
     }

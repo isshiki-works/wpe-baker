@@ -76,7 +76,7 @@ internal sealed class LayoutAdmission
             Conflict?.Text ?? (Demoted ? Plan["layout_admission_demotion"]?["reason"]?.GetValue<string>() : null),
             effectPrefix ? EffectPrefixScope : WholeLayerScope);
         if (Conflict is null || effectPrefix) return;
-        PlanBlockers.Add(Plan["blockers"]!.AsArray(), Conflict);
+        PlanBlockers.Add(Plan, Conflict);
         Plan["status"] = "requires_resolution";
     }
 

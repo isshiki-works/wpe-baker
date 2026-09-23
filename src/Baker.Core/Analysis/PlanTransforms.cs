@@ -131,9 +131,7 @@ internal static class PlanTransforms
             string reason = blocker.Text;
             allocation["status"] = "requires_resolution";
             allocation["reason"] = reason;
-            var blockers = result["blockers"] as JsonArray ?? new JsonArray();
-            result["blockers"] = blockers;
-            PlanBlockers.Add(blockers, blocker);
+            PlanBlockers.Add(result, blocker);
             result["status"] = "requires_resolution";
             result["video_layout_admission"] = LayoutAdmission.AdmissionRecord(PlanSettings.Of(result).VideoLayout, status, reason,
                 "The allocation did not reorder roots, split a video group or change parallax settings.");
