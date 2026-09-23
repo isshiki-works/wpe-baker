@@ -11,7 +11,7 @@ const string Usage = """
       output_directory, seconds, target_fps, present_mon_path, nvidia_gpu_uuid, expected_process_path,
       swap_chain_address, track_display.
     periodica-bench abba --wpe EXE --original PROJECT [--baked PROJECT] --out NEW_DIR
-        [--order ABBA] [--monitor 0] [--seconds 45] [--settle 20] [--fps 60] [--idle 0] [--present-mon EXE]
+        [--order ABBA] [--monitor 0] [--seconds 45] [--settle 20] [--fps 60] [--idle 0] [--present-mon EXE] [--restore FILE]
       Plays each segment in the official Wallpaper Engine, samples it, restores the previous wallpaper.
       --order A measures the original alone. --idle N adds paused idle segments first and last and
       subtracts their mean iGPU power before comparing.
@@ -46,7 +46,7 @@ try
     {
         string? baked = Opt("--baked");
         var abba = new AbbaOptions(Need("--wpe"), Need("--original"), baked, Need("--out"), Opt("--order") ?? (baked is null ? "A" : "ABBA"),
-            Int("--monitor", 0), Int("--seconds", 45), Int("--settle", 20), Real("--fps", 60), Int("--idle", 0), Opt("--present-mon"));
+            Int("--monitor", 0), Int("--seconds", 45), Int("--settle", 20), Real("--fps", 60), Int("--idle", 0), Opt("--present-mon"), Opt("--restore"));
         Unknown(options);
         result = await Abba.RunAsync(abba, progress, cancellation.Token);
     }
