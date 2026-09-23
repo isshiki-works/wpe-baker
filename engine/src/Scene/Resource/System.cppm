@@ -70,33 +70,20 @@ struct GraphicsResourcePreparer {
         -> Result<empty, resource::ResourceError> = 0;
 };
 
+// 把外部帧表面接入资源表（FinPass 用）。
 struct ExternalResourcePreparer {
-    using Trait                  = ExternalResourcePreparer;
-    static constexpr bool direct = false;
+    virtual ~ExternalResourcePreparer() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ExternalResourcePreparer;
-
-        auto PrepareExternal(resource::ExternalUseHandle       external_use,
-                             resource::TextureUseHandle        source_use,
-                             const vulkan::DeviceCapabilities& capabilities,
-                             FrameSurfaceLease lease, rstd::uint32_t graphics_queue_family)
-            -> Result<empty, resource::ResourceError> {
-            return rstd::trait_call<0>(this,
-                                       external_use,
-                                       source_use,
-                                       capabilities,
-                                       rstd::move(lease),
-                                       graphics_queue_family);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::PrepareExternal>;
+    virtual auto PrepareExternal(resource::ExternalUseHandle       external_use,
+                                 resource::TextureUseHandle        source_use,
+                                 const vulkan::DeviceCapabilities& capabilities,
+                                 FrameSurfaceLease lease, rstd::uint32_t graphics_queue_family)
+        -> Result<empty, resource::ResourceError> = 0;
 };
 
-class RenderResourceSystem final : public GraphicsResourcePreparer, public resource::BufferContentWriter {
+class RenderResourceSystem final : public GraphicsResourcePreparer,
+                                   public resource::BufferContentWriter,
+                                   public ExternalResourcePreparer {
 public:
     bool Initialize(const vulkan::Device& device) { return m_registries.Initialize(device); }
 
@@ -110,14 +97,13 @@ public:
 
     auto
     PreparePlan(const resource::ResourcePlan& plan, ResourceContentProviders providers,
-                resource::ResourcePlanSections sections = resource::ResourcePlanAll,
-                Option<mut_ref<dyn<resource::TexturePrepareObserver>>> texture_observer = None())
+                resource::ResourcePlanSections sections = resource::ResourcePlanAll)
         -> Result<empty, resource::ResourceError> {
-        auto started = BeginPreparePlan(plan, rstd::move(providers), sections, texture_observer);
+        auto started = BeginPreparePlan(plan, rstd::move(providers), sections);
         if (started.is_err()) return Err(rstd::move(started).unwrap_err_unchecked());
         auto session = rstd::move(started).unwrap_unchecked();
         while (true) {
-            auto progress = ContinuePreparePlan(session, texture_observer);
+            auto progress = ContinuePreparePlan(session);
             if (progress.is_err()) return Err(rstd::move(progress).unwrap_err_unchecked());
             if (progress.unwrap_unchecked() == ResourcePrepareProgress::Complete) break;
         }
@@ -126,9 +112,8 @@ public:
     }
 
     auto BeginPreparePlan(const resource::ResourcePlan& plan, ResourceContentProviders providers,
-                          resource::ResourcePlanSections sections = resource::ResourcePlanAll,
-                          Option<mut_ref<dyn<resource::TexturePrepareObserver>>> texture_observer =
-                              None()) -> Result<ResourcePrepareSession, resource::ResourceError> {
+                          resource::ResourcePlanSections sections = resource::ResourcePlanAll)
+        -> Result<ResourcePrepareSession, resource::ResourceError> {
         if (m_prepare_rollback.is_some()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
@@ -148,7 +133,7 @@ public:
                                        m_registries.Buffers(),
                                        &m_registries.BufferManager(),
                                        m_registries.Shaders());
-        auto started = service.Begin(plan, rstd::move(providers), sections, texture_observer);
+        auto started = service.Begin(plan, rstd::move(providers), sections);
         if (started.is_err()) {
             AbortPreparePlan();
             return Err(rstd::move(started).unwrap_err_unchecked());
@@ -156,9 +141,7 @@ public:
         return Ok(rstd::move(started).unwrap_unchecked());
     }
 
-    auto ContinuePreparePlan(
-        ResourcePrepareSession&                                session,
-        Option<mut_ref<dyn<resource::TexturePrepareObserver>>> texture_observer = None())
+    auto ContinuePreparePlan(ResourcePrepareSession& session)
         -> Result<ResourcePrepareProgress, resource::ResourceError> {
         vulkan::ImagePrepareContext image_context(m_registries.Textures(),
                                                   m_registries.ImageUploads());
@@ -167,7 +150,7 @@ public:
                                        m_registries.Buffers(),
                                        &m_registries.BufferManager(),
                                        m_registries.Shaders());
-        auto                   progress = service.Continue(session, texture_observer);
+        auto                   progress = service.Continue(session);
         if (progress.is_err()) {
             AbortPreparePlan();
             return Err(rstd::move(progress).unwrap_err_unchecked());
@@ -506,7 +489,7 @@ public:
                          resource::TextureUseHandle        source_use,
                          const vulkan::DeviceCapabilities& capabilities, FrameSurfaceLease lease,
                          rstd::uint32_t graphics_queue_family)
-        -> Result<empty, resource::ResourceError> {
+        -> Result<empty, resource::ResourceError> override {
         auto source = m_prepared.Resolve(source_use);
         if (source.is_none()) {
             return Err(resource::ResourceError {
@@ -587,23 +570,3 @@ private:
 };
 
 } // namespace owe::resource_registry
-
-export namespace rstd
-{
-
-template<>
-struct Impl<owe::resource_registry::ExternalResourcePreparer,
-            owe::resource_registry::RenderResourceSystem>
-    : ImplBase<owe::resource_registry::RenderResourceSystem> {
-    auto PrepareExternal(owe::resource::ExternalUseHandle       external_use,
-                         owe::resource::TextureUseHandle        source_use,
-                         const owe::vulkan::DeviceCapabilities& capabilities,
-                         owe::FrameSurfaceLease lease, rstd::uint32_t graphics_queue_family)
-        -> Result<empty, owe::resource::ResourceError> {
-        return this->self().PrepareExternal(
-            external_use, source_use, capabilities, rstd::move(lease), graphics_queue_family);
-    }
-};
-
-
-} // namespace rstd

@@ -36,7 +36,7 @@ struct PreparedShader {
 class ShaderRegistry {
 public:
     auto Prepare(resource::ShaderRequest                        request,
-                 mut_ref<dyn<resource::ShaderArtifactProvider>> provider)
+                 resource::ShaderArtifactProvider* provider)
         -> Result<PreparedShader, resource::ResourceError> {
         auto existing = m_requests.get(request);
         if (existing.is_some()) {
@@ -73,7 +73,7 @@ public:
     }
 
     auto Ensure(resource::ShaderRequest                        request,
-                mut_ref<dyn<resource::ShaderArtifactProvider>> provider)
+                resource::ShaderArtifactProvider* provider)
         -> Result<resource::ShaderHandle, resource::ResourceError> {
         auto prepared = Prepare(rstd::move(request), provider);
         if (prepared.is_err()) return Err(rstd::move(prepared).unwrap_err_unchecked());

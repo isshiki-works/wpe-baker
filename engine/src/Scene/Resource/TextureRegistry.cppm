@@ -390,17 +390,3 @@ private:
 };
 
 } // namespace owe::resource
-
-export namespace rstd
-{
-
-template<>
-struct Impl<owe::resource::TextureLogicalRegistryView, owe::resource::TextureRegistry>
-    : ImplBase<owe::resource::TextureRegistry> {
-    auto ResolveTextureState(owe::resource::TextureHandle handle) const
-        -> Option<owe::resource::TextureLogicalState> {
-        return this->self().ResolveTextureState(handle);
-    }
-};
-
-} // namespace rstd

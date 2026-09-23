@@ -1405,9 +1405,8 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         .final_queue_family = queue_family,
         .discard_content = true,
     };
-    auto external_preparer =
-        rstd::dyn<resource_registry::ExternalResourcePreparer>::from_ref(rr.resources);
-    if (! m_finpass->setFrameSurface(surface, external_preparer.as_mut_ref(),
+    resource_registry::ExternalResourcePreparer* external_preparer = &rr.resources;
+    if (! m_finpass->setFrameSurface(surface, external_preparer,
                                      m_device->capabilities(), queue_family)) {
         return fail(VK_ERROR_INITIALIZATION_FAILED, "prepare CPU output image");
     }
@@ -1713,10 +1712,9 @@ void VulkanRender::Impl::drawFrameSwapchain(Scene& scene) {
         .final_queue_family   = m_device->present_queue().family_index,
         .discard_content      = true,
     };
-    auto external_preparer =
-        rstd::dyn<resource_registry::ExternalResourcePreparer>::from_ref(rr.resources);
+    resource_registry::ExternalResourcePreparer* external_preparer = &rr.resources;
     if (! m_finpass->setFrameSurface(std::move(frame_surface),
-                                     external_preparer.as_mut_ref(),
+                                     external_preparer,
                                      m_device->capabilities(),
                                      m_device->graphics_queue().family_index)) {
         rstd_error("window frame surface lease rejected");
@@ -1832,10 +1830,9 @@ void VulkanRender::Impl::drawFrameOffscreen(Scene& scene) {
         return;
     }
 
-    auto external_preparer =
-        rstd::dyn<resource_registry::ExternalResourcePreparer>::from_ref(rr.resources);
+    resource_registry::ExternalResourcePreparer* external_preparer = &rr.resources;
     if (! m_finpass->setFrameSurface(frame_surface_acquire.lease,
-                                     external_preparer.as_mut_ref(),
+                                     external_preparer,
                                      m_device->capabilities(),
                                      m_device->graphics_queue().family_index)) {
         rstd_error("offscreen frame surface lease rejected");

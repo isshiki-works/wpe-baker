@@ -122,32 +122,16 @@ inline constexpr bool ResourcePlanIncludes(ResourcePlanSections sections,
     return (sections & section) == section;
 }
 
+// 按段遍历资源计划的访问者。
 struct ResourcePlanVisitor {
-    using Trait                  = ResourcePlanVisitor;
-    static constexpr bool direct = false;
+    virtual ~ResourcePlanVisitor() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ResourcePlanVisitor;
-
-        auto VisitTexture(const TexturePlanEntry& entry) -> Result<empty, ResourceError> {
-            return rstd::trait_call<0>(this, entry);
-        }
-
-        auto VisitBuffer(const BufferPlanEntry& entry) -> Result<empty, ResourceError> {
-            return rstd::trait_call<1>(this, entry);
-        }
-
-        auto VisitShader(const ShaderPlanEntry& entry) -> Result<empty, ResourceError> {
-            return rstd::trait_call<2>(this, entry);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::VisitTexture, &T::VisitBuffer, &T::VisitShader>;
+    virtual auto VisitTexture(const TexturePlanEntry& entry) -> Result<empty, ResourceError> = 0;
+    virtual auto VisitBuffer(const BufferPlanEntry& entry) -> Result<empty, ResourceError>   = 0;
+    virtual auto VisitShader(const ShaderPlanEntry& entry) -> Result<empty, ResourceError>   = 0;
 };
 
-inline auto VisitResourcePlan(const ResourcePlan& plan, mut_ref<dyn<ResourcePlanVisitor>> visitor,
+inline auto VisitResourcePlan(const ResourcePlan& plan, ResourcePlanVisitor* visitor,
                               ResourcePlanSections sections = ResourcePlanAll)
     -> Result<empty, ResourceError> {
     if (ResourcePlanIncludes(sections, ResourcePlanTextures)) {

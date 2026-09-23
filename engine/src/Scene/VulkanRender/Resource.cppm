@@ -280,16 +280,37 @@ inline TextureRequest MakeDepthTextureRequest(std::string_view name, const Scene
     };
 }
 
+// 按纹理定义 id 在渲染快照里解析导入纹理请求。
+inline auto ResolveSnapshotTexture(const RenderSceneSnapshot&    render_scene,
+                                   resource::TextureDefinitionId id) -> Option<TextureRequest> {
+    auto record = render_scene.textureDesc(
+        RenderTextureDescId { .index = id.index, .generation = id.generation });
+    if (record == nullptr) return None();
+    auto name = record->desc.url.empty() ? rstd::cppstd::as_string_view(record->key.as_str())
+                                         : std::string_view(record->desc.url);
+    return Some(MakeImportedTextureRequest(
+        name, Some(RenderTextureDescId { .index = id.index, .generation = id.generation })));
+}
+
+// 按名字在渲染快照里查导入纹理请求。
+inline auto FindSnapshotTexture(const RenderSceneSnapshot& render_scene, ref<str> name)
+    -> Option<TextureRequest> {
+    auto id = render_scene.textureDescId(name);
+    if (id.is_none()) return None();
+    return ResolveSnapshotTexture(
+        render_scene,
+        resource::TextureDefinitionId { .index = id->index, .generation = id->generation });
+}
+
 inline Option<String> ResolveImportedTextureName(const RenderSceneSnapshot& render_scene,
                                                  const TextureRequest&      request) {
     if (request.kind != TextureRequestKind::Imported) return None();
-    auto catalog  = rstd::dyn<resource::TextureCatalog>::from_ref(render_scene);
     auto resolved = rstd::None<TextureRequest>();
     if (request.source.is_some()) {
-        resolved = catalog->ResolveTexture(*request.source);
+        resolved = ResolveSnapshotTexture(render_scene, *request.source);
     }
     if (resolved.is_none()) {
-        resolved = catalog->FindTexture(request.name.as_str());
+        resolved = FindSnapshotTexture(render_scene, request.name.as_str());
     }
     if (resolved.is_none()) return None();
     return Some(resolved->name.clone());
@@ -337,11 +358,11 @@ inline Arc<Image> MakeMissingTexturePlaceholder(ref<str> key) {
     return img;
 }
 
-class SnapshotImportedTextureLoader {
+class SnapshotImportedTextureLoader final : public resource::TextureLoader {
 public:
     explicit SnapshotImportedTextureLoader(ref<Scene> scene): m_scene(scene) {}
 
-    auto LoadTexture(ref<str> key) const -> Result<Arc<Image>, resource::ResourceError> {
+    auto LoadTexture(ref<str> key) const -> Result<Arc<Image>, resource::ResourceError> override {
         auto parsed = m_scene->ParseImage(key);
         if (parsed.is_ok()) return Ok(rstd::move(parsed).unwrap_unchecked());
         auto error = rstd::move(parsed).unwrap_err_unchecked();
@@ -359,13 +380,13 @@ private:
     ref<Scene> m_scene;
 };
 
-class SnapshotImportedTextureProvider {
+class SnapshotImportedTextureProvider final : public resource::TextureContentProvider {
 public:
     SnapshotImportedTextureProvider(const RenderSceneSnapshot& render_scene, ref<Scene> scene)
         : m_render_scene(render_scene), m_scene(scene) {}
 
     auto ResolveTextureContent(const TextureRequest& request) const
-        -> Result<resource::ImportedTextureContentIdentity, resource::ResourceError> {
+        -> Result<resource::ImportedTextureContentIdentity, resource::ResourceError> override {
         auto record = ResolveRecord(request);
         if (record == nullptr) {
             return Ok(resource::ImportedTextureContentIdentity {
@@ -382,12 +403,13 @@ public:
     }
 
     auto OpenTextureLoader() const
-        -> Result<Arc<dyn<resource::TextureLoader>>, resource::ResourceError> {
-        return Ok(Arc<dyn<resource::TextureLoader>>::make(SnapshotImportedTextureLoader(m_scene)));
+        -> Result<std::shared_ptr<resource::TextureLoader>, resource::ResourceError> override {
+        return Ok(std::shared_ptr<resource::TextureLoader>(
+            std::make_shared<SnapshotImportedTextureLoader>(m_scene)));
     }
 
     auto ResolveVideoPlayback(const TextureRequest& request) const
-        -> Option<Arc<VideoPlaybackState>> {
+        -> Option<Arc<VideoPlaybackState>> override {
         auto record = ResolveRecord(request);
         return record != nullptr && record->video_control.is_some()
                    ? Some(record->video_control->clone())
@@ -424,58 +446,3 @@ struct RenderingResources {
 };
 
 } // namespace owe::vulkan
-
-export namespace rstd
-{
-
-template<>
-struct Impl<owe::resource::TextureCatalog, owe::RenderSceneSnapshot>
-    : ImplBase<owe::RenderSceneSnapshot> {
-    auto ResolveTexture(owe::resource::TextureDefinitionId id) const
-        -> Option<owe::resource::TextureRequest> {
-        auto record = this->self().textureDesc(
-            owe::RenderTextureDescId { .index = id.index, .generation = id.generation });
-        if (record == nullptr) return None();
-        auto name = record->desc.url.empty() ? rstd::cppstd::as_string_view(record->key.as_str())
-                                             : std::string_view(record->desc.url);
-        return Some(owe::vulkan::MakeImportedTextureRequest(
-            name,
-            Some(owe::RenderTextureDescId { .index = id.index, .generation = id.generation })));
-    }
-
-    auto FindTexture(ref<str> name) const -> Option<owe::resource::TextureRequest> {
-        auto id = this->self().textureDescId(name);
-        if (id.is_none()) return None();
-        return ResolveTexture(owe::resource::TextureDefinitionId { .index      = id->index,
-                                                                   .generation = id->generation });
-    }
-};
-
-template<>
-struct Impl<owe::resource::TextureLoader, owe::vulkan::SnapshotImportedTextureLoader>
-    : ImplBase<owe::vulkan::SnapshotImportedTextureLoader> {
-    auto LoadTexture(ref<str> key) const -> Result<Arc<owe::Image>, owe::resource::ResourceError> {
-        return this->self().LoadTexture(key);
-    }
-};
-
-template<>
-struct Impl<owe::resource::TextureContentProvider, owe::vulkan::SnapshotImportedTextureProvider>
-    : ImplBase<owe::vulkan::SnapshotImportedTextureProvider> {
-    auto ResolveTextureContent(const owe::resource::TextureRequest& request) const
-        -> Result<owe::resource::ImportedTextureContentIdentity, owe::resource::ResourceError> {
-        return this->self().ResolveTextureContent(request);
-    }
-
-    auto OpenTextureLoader() const
-        -> Result<Arc<dyn<owe::resource::TextureLoader>>, owe::resource::ResourceError> {
-        return this->self().OpenTextureLoader();
-    }
-
-    auto ResolveVideoPlayback(const owe::resource::TextureRequest& request) const
-        -> Option<Arc<owe::VideoPlaybackState>> {
-        return this->self().ResolveVideoPlayback(request);
-    }
-};
-
-} // namespace rstd

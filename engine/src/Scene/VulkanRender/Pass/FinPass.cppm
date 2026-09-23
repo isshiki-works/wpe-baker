@@ -31,7 +31,7 @@ public:
     virtual ~FinPass();
 
     bool setFrameSurface(owe::FrameSurfaceLease,
-                         rstd::mut_ref<rstd::dyn<resource_registry::ExternalResourcePreparer>>,
+                         resource_registry::ExternalResourcePreparer*,
                          const DeviceCapabilities&, rstd::uint32_t graphics_queue_family);
     bool setResultRequest(rstd::Option<TextureRequest>);
     void setGraphSource(std::string name, rstd::Option<resource::TextureUseHandle>);

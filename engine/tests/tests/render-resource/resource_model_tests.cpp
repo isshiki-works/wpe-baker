@@ -30,40 +30,32 @@ auto TextureRequest(std::string_view name, rstd::u32 width) -> owe::resource::Te
 namespace resource_model_test
 {
 
-struct CountingVisitor {
+struct CountingVisitor final : owe::resource::ResourcePlanVisitor {
     rstd::usize textures { 0 };
     rstd::usize buffers { 0 };
     rstd::usize shaders { 0 };
+
+    auto VisitTexture(const owe::resource::TexturePlanEntry&)
+        -> rstd::Result<rstd::empty, owe::resource::ResourceError> override {
+        ++textures;
+        return rstd::Ok(rstd::empty {});
+    }
+
+    auto VisitBuffer(const owe::resource::BufferPlanEntry&)
+        -> rstd::Result<rstd::empty, owe::resource::ResourceError> override {
+        ++buffers;
+        return rstd::Ok(rstd::empty {});
+    }
+
+    auto VisitShader(const owe::resource::ShaderPlanEntry&)
+        -> rstd::Result<rstd::empty, owe::resource::ResourceError> override {
+        ++shaders;
+        return rstd::Ok(rstd::empty {});
+    }
 };
 
 } // namespace resource_model_test
 
-namespace rstd
-{
-
-template<>
-struct Impl<owe::resource::ResourcePlanVisitor, resource_model_test::CountingVisitor>
-    : ImplBase<resource_model_test::CountingVisitor> {
-    auto VisitTexture(const owe::resource::TexturePlanEntry&)
-        -> Result<empty, owe::resource::ResourceError> {
-        ++this->self().textures;
-        return Ok(empty {});
-    }
-
-    auto VisitBuffer(const owe::resource::BufferPlanEntry&)
-        -> Result<empty, owe::resource::ResourceError> {
-        ++this->self().buffers;
-        return Ok(empty {});
-    }
-
-    auto VisitShader(const owe::resource::ShaderPlanEntry&)
-        -> Result<empty, owe::resource::ResourceError> {
-        ++this->self().shaders;
-        return Ok(empty {});
-    }
-};
-
-} // namespace rstd
 
 TEST(ResourceModel, ClonesMoveOnlyTextureRequestsExplicitly) {
     auto request = TextureRequest("frame", rstd::u32(256));
@@ -157,8 +149,7 @@ TEST(ResourcePlan, VisitsTypedRequestsThroughPublicTrait) {
     });
 
     resource_model_test::CountingVisitor counter;
-    auto visitor = rstd::dyn<owe::resource::ResourcePlanVisitor>::from_ref(counter);
-    auto result  = owe::resource::VisitResourcePlan(plan, visitor);
+    auto result = owe::resource::VisitResourcePlan(plan, &counter);
 
     ASSERT_TRUE(result.is_ok());
     EXPECT_EQ(counter.textures, rstd::usize(1));

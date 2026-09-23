@@ -29,14 +29,14 @@ using rstd::cppstd::as_str;
 
 export namespace owe::vulkan
 {
-class DeclaredShaderArtifactProvider {
+class DeclaredShaderArtifactProvider final : public resource::ShaderArtifactProvider {
 public:
     explicit DeclaredShaderArtifactProvider(const ResourceDeclarationContext& declarations)
         : m_declarations(rstd::ref<ResourceDeclarationContext>::from_raw_parts(
               rstd::addressof(declarations))) {}
 
     auto LoadShader(const resource::ShaderRequest& request)
-        -> rstd::Result<resource::ShaderArtifact, resource::ResourceError> {
+        -> rstd::Result<resource::ShaderArtifact, resource::ResourceError> override {
         auto artifact = m_declarations->ShaderArtifact(request);
         if (artifact.is_none()) {
             return rstd::Err(resource::ResourceError {
@@ -704,22 +704,21 @@ struct RenderProgram {
 
         SnapshotImportedTextureProvider imported_textures(
             render_scene, ref<Scene>::from_raw_parts(rstd::addressof(scene)));
-        auto content =
-            rstd::dyn<owe::resource::TextureContentProvider>::from_ref(imported_textures);
-        auto buffer_content =
-            rstd::dyn<owe::resource::BufferContentProvider>::from_ref(declarations);
+        owe::resource::TextureContentProvider* content =
+            &imported_textures;
+        owe::resource::BufferContentProvider* buffer_content =
+            &declarations;
         DeclaredShaderArtifactProvider declared_shaders(declarations);
-        auto                           shader_artifacts =
-            rstd::dyn<owe::resource::ShaderArtifactProvider>::from_ref(declared_shaders);
+        owe::resource::ShaderArtifactProvider*                           shader_artifacts =
+            &declared_shaders;
         auto started =
             rr.resources.BeginPreparePlan(resource_plan,
                                           owe::resource_registry::ResourceContentProviders {
                                               .texture = rstd::Some(content),
-                                              .buffer  = rstd::Some(buffer_content.as_mut_ref()),
-                                              .shader  = rstd::Some(shader_artifacts.as_mut_ref()),
+                                              .buffer  = rstd::Some(buffer_content),
+                                              .shader  = rstd::Some(shader_artifacts),
                                           },
-                                          sections,
-                                          None());
+                                          sections);
         if (started.is_err()) {
             auto error = rstd::move(started).unwrap_err_unchecked();
             rstd_error("prepare resource plan failed: {}", error.message);
@@ -732,7 +731,7 @@ struct RenderProgram {
     auto continuePrepare(owe::Scene& scene, const Device& device, RenderingResources& rr)
         -> RenderProgramPrepareStatus {
         if (resource_prepare_session.is_none()) return RenderProgramPrepareStatus::Failed;
-        auto progress = rr.resources.ContinuePreparePlan(*resource_prepare_session, None());
+        auto progress = rr.resources.ContinuePreparePlan(*resource_prepare_session);
         if (progress.is_err()) {
             auto error = rstd::move(progress).unwrap_err_unchecked();
             rstd_error("prepare resource plan failed: {}", error.message);

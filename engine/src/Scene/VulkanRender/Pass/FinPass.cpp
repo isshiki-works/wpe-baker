@@ -16,7 +16,7 @@ FinPass::~FinPass() {}
 
 bool FinPass::setFrameSurface(
     owe::FrameSurfaceLease                                                lease,
-    rstd::mut_ref<rstd::dyn<resource_registry::ExternalResourcePreparer>> resources,
+    resource_registry::ExternalResourcePreparer* resources,
     const DeviceCapabilities& capabilities, rstd::uint32_t graphics_queue_family) {
     if (m_desc.external_use.is_none() || m_desc.result_use.is_none()) return false;
     auto prepared = resources->PrepareExternal(*m_desc.external_use,

@@ -447,55 +447,10 @@ private:
 
 class ResourcePrepareService;
 
-class TexturePrepareTrace {
-public:
-    enum class Kind
-    {
-        Plan,
-        Decode,
-        Upload,
-    };
-
-    TexturePrepareTrace(Option<mut_ref<dyn<resource::TexturePrepareObserver>>> observer, Kind kind)
-        : m_observer(observer), m_kind(kind) {
-        if (m_observer.is_none()) return;
-        if (m_kind == Kind::Plan) {
-            (*m_observer)->BeginTexturePlan();
-        } else if (m_kind == Kind::Decode) {
-            (*m_observer)->BeginTextureDecode();
-        } else {
-            (*m_observer)->BeginTextureUpload();
-        }
-    }
-
-    ~TexturePrepareTrace() { Finish(); }
-
-    TexturePrepareTrace(const TexturePrepareTrace&)                    = delete;
-    TexturePrepareTrace(TexturePrepareTrace&&)                         = delete;
-    auto operator=(const TexturePrepareTrace&) -> TexturePrepareTrace& = delete;
-    auto operator=(TexturePrepareTrace&&) -> TexturePrepareTrace&      = delete;
-
-    void Finish() {
-        if (m_observer.is_none()) return;
-        if (m_kind == Kind::Plan) {
-            (*m_observer)->EndTexturePlan();
-        } else if (m_kind == Kind::Decode) {
-            (*m_observer)->EndTextureDecode();
-        } else {
-            (*m_observer)->EndTextureUpload();
-        }
-        m_observer = None();
-    }
-
-private:
-    Option<mut_ref<dyn<resource::TexturePrepareObserver>>> m_observer;
-    Kind                                                   m_kind;
-};
-
 struct ResourceContentProviders {
-    Option<mut_ref<dyn<resource::TextureContentProvider>>> texture;
-    Option<mut_ref<dyn<resource::BufferContentProvider>>>  buffer;
-    Option<mut_ref<dyn<resource::ShaderArtifactProvider>>> shader;
+    Option<resource::TextureContentProvider*> texture;
+    Option<resource::BufferContentProvider*>  buffer;
+    Option<resource::ShaderArtifactProvider*> shader;
 };
 
 enum class ResourcePrepareProgress
@@ -545,21 +500,24 @@ private:
     Vec<PendingContent>                                   m_pending { Vec<PendingContent>::make() };
     usize                                                 m_next_submit {};
     usize                                                 m_completed {};
-    Option<rstd::sync::Arc<dyn<resource::TextureLoader>>> m_loader;
+    Option<std::shared_ptr<resource::TextureLoader>>      m_loader;
     // 解码结果按提交顺序取回（上传顺序确定）；同时在飞的任务不超过 worker 数，限制已解码未上传的内存。
     std::unique_ptr<OrderedTaskPool<DecodedContent>>      m_tasks;
     usize                                                 m_workers {};
 };
 
-class ResourcePlanPrepareVisitor {
+class ResourcePlanPrepareVisitor final : public resource::ResourcePlanVisitor {
 public:
     ResourcePlanPrepareVisitor(ResourcePrepareService& service, PreparedResourceTable& table,
                                ResourceContentProviders providers)
         : m_service(service), m_table(table), m_providers(rstd::move(providers)) {}
 
-    auto VisitTexture(const resource::TexturePlanEntry&) -> Result<empty, resource::ResourceError>;
-    auto VisitBuffer(const resource::BufferPlanEntry&) -> Result<empty, resource::ResourceError>;
-    auto VisitShader(const resource::ShaderPlanEntry&) -> Result<empty, resource::ResourceError>;
+    auto VisitTexture(const resource::TexturePlanEntry&)
+        -> Result<empty, resource::ResourceError> override;
+    auto VisitBuffer(const resource::BufferPlanEntry&)
+        -> Result<empty, resource::ResourceError> override;
+    auto VisitShader(const resource::ShaderPlanEntry&)
+        -> Result<empty, resource::ResourceError> override;
 
 private:
     ResourcePrepareService&  m_service;
@@ -581,8 +539,7 @@ public:
           m_shaders(shaders) {}
 
     auto Begin(const resource::ResourcePlan& plan, ResourceContentProviders providers = {},
-               resource::ResourcePlanSections sections = resource::ResourcePlanAll,
-               Option<mut_ref<dyn<resource::TexturePrepareObserver>>> texture_observer = None())
+               resource::ResourcePlanSections sections = resource::ResourcePlanAll)
         -> Result<ResourcePrepareSession, resource::ResourceError> {
         ResourcePrepareSession   session(plan, sections);
         auto                     texture_provider = rstd::move(providers.texture);
@@ -592,11 +549,11 @@ public:
         };
         if (resource::ResourcePlanIncludes(sections, resource::ResourcePlanTextures)) {
             auto prepared = BeginTextures(
-                plan.textures.as_slice(), session, rstd::move(texture_provider), texture_observer);
+                plan.textures.as_slice(), session, rstd::move(texture_provider));
             if (prepared.is_err()) return Err(rstd::move(prepared).unwrap_err_unchecked());
         }
         ResourcePlanPrepareVisitor visitor(*this, session.m_table, rstd::move(remaining));
-        auto object  = rstd::dyn<resource::ResourcePlanVisitor>::from_ref(visitor);
+        resource::ResourcePlanVisitor* object = &visitor;
         auto visited = resource::VisitResourcePlan(
             plan,
             object,
@@ -606,14 +563,13 @@ public:
     }
 
     auto Prepare(const resource::ResourcePlan& plan, ResourceContentProviders providers = {},
-                 resource::ResourcePlanSections sections = resource::ResourcePlanAll,
-                 Option<mut_ref<dyn<resource::TexturePrepareObserver>>> texture_observer = None())
+                 resource::ResourcePlanSections sections = resource::ResourcePlanAll)
         -> Result<PreparedResourceTable, resource::ResourceError> {
-        auto started = Begin(plan, rstd::move(providers), sections, texture_observer);
+        auto started = Begin(plan, rstd::move(providers), sections);
         if (started.is_err()) return Err(rstd::move(started).unwrap_err_unchecked());
         auto session = rstd::move(started).unwrap_unchecked();
         while (true) {
-            auto progress = Continue(session, texture_observer);
+            auto progress = Continue(session);
             if (progress.is_err()) return Err(rstd::move(progress).unwrap_err_unchecked());
             if (progress.unwrap_unchecked() == ResourcePrepareProgress::Complete) break;
         }
@@ -621,7 +577,7 @@ public:
     }
 
     auto PrepareBuffer(const resource::BufferPlanEntry& entry, PreparedResourceTable& table,
-                       Option<mut_ref<dyn<resource::BufferContentProvider>>> content)
+                       Option<resource::BufferContentProvider*> content)
         -> Result<empty, resource::ResourceError> {
         if (content.is_none()) {
             return Err(resource::ResourceError {
@@ -648,7 +604,7 @@ public:
     }
 
     auto PrepareShader(const resource::ShaderPlanEntry& entry, PreparedResourceTable& table,
-                       Option<mut_ref<dyn<resource::ShaderArtifactProvider>>> provider)
+                       Option<resource::ShaderArtifactProvider*> provider)
         -> Result<empty, resource::ResourceError> {
         if (provider.is_none()) {
             return Err(resource::ResourceError {
@@ -672,12 +628,10 @@ public:
     }
 
     auto BeginTextures(slice<resource::TexturePlanEntry> entries, ResourcePrepareSession& session,
-                       Option<mut_ref<dyn<resource::TextureContentProvider>>> content,
-                       Option<mut_ref<dyn<resource::TexturePrepareObserver>>> observer)
+                       Option<resource::TextureContentProvider*> content)
         -> Result<empty, resource::ResourceError> {
         auto pending_index =
             rstd::collections::HashMap<resource::ImportedTextureContentIdentity, usize>::make();
-        TexturePrepareTrace plan_trace(observer, TexturePrepareTrace::Kind::Plan);
 
         for (usize entry_index {}; entry_index < entries.len(); ++entry_index) {
             const auto& entry              = entries[entry_index];
@@ -780,8 +734,6 @@ public:
                 .request  = entry.request.clone(),
             });
         }
-        plan_trace.Finish();
-
         if (session.m_pending.is_empty()) return Ok(empty {});
         auto loader = (*content)->OpenTextureLoader();
         if (loader.is_err()) return Err(rstd::move(loader).unwrap_err_unchecked());
@@ -794,8 +746,7 @@ public:
         return Ok(empty {});
     }
 
-    auto Continue(ResourcePrepareSession&                                session,
-                  Option<mut_ref<dyn<resource::TexturePrepareObserver>>> observer = None())
+    auto Continue(ResourcePrepareSession& session)
         -> Result<ResourcePrepareProgress, resource::ResourceError> {
         if (session.m_completed == session.m_pending.len()) {
             FinishTasks(session);
@@ -805,9 +756,7 @@ public:
         constexpr usize batch_size { 4 };
         usize           prepared_count {};
         while (prepared_count < batch_size && session.m_completed < session.m_pending.len()) {
-            TexturePrepareTrace decode_trace(observer, TexturePrepareTrace::Kind::Decode);
-            auto                item = session.m_tasks->Next();
-            decode_trace.Finish();
+            auto item = session.m_tasks->Next();
             if (item.image.is_err()) {
                 return Err(rstd::move(item.image).unwrap_err_unchecked());
             }
@@ -819,8 +768,7 @@ public:
             }
 
             {
-                TexturePrepareTrace upload_trace(observer, TexturePrepareTrace::Kind::Upload);
-                auto                image = rstd::move(item.image).unwrap_unchecked();
+                auto image = rstd::move(item.image).unwrap_unchecked();
                 auto playback = session.m_pending[item.index].playback.is_some()
                                     ? Some(session.m_pending[item.index].playback->clone())
                                     : None<rstd::sync::Arc<VideoPlaybackState>>();
@@ -846,7 +794,6 @@ public:
                         return Err(rstd::move(published).unwrap_err_unchecked());
                     }
                 }
-                upload_trace.Finish();
             }
 
             ++session.m_completed;
@@ -862,7 +809,7 @@ private:
                session.m_tasks->InFlight() < session.m_workers.to_primitive()) {
             const auto index  = session.m_next_submit;
             auto       key    = session.m_pending[index].key.clone();
-            auto       loader = session.m_loader->clone();
+            auto       loader = *session.m_loader;
             session.m_tasks->Submit(
                 [index, key = rstd::move(key), loader = rstd::move(loader)]() mutable {
                     return ResourcePrepareSession::DecodedContent {

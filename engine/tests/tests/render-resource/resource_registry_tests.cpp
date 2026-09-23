@@ -20,11 +20,11 @@ struct TextureRuntimeProbe final : owe::vulkan::TextureAllocationRuntime {
 namespace
 {
 
-struct ShaderArtifactProvider {
+struct ShaderArtifactProvider final : owe::resource::ShaderArtifactProvider {
     rstd::usize loads { 0 };
 
     auto LoadShader(const owe::resource::ShaderRequest& request)
-        -> rstd::Result<owe::resource::ShaderArtifact, owe::resource::ResourceError> {
+        -> rstd::Result<owe::resource::ShaderArtifact, owe::resource::ResourceError> override {
         ++loads;
         return rstd::Ok(owe::resource::ShaderArtifact {
             .source          = request.source,
@@ -33,7 +33,7 @@ struct ShaderArtifactProvider {
     }
 };
 
-struct BufferContentProvider {
+struct BufferContentProvider final : owe::resource::BufferContentProvider {
     rstd::usize              loads { 0 };
     rstd::vec::Vec<rstd::u8> content;
 
@@ -43,7 +43,7 @@ struct BufferContentProvider {
     }
 
     auto LoadBuffer(const owe::resource::BufferRequest&)
-        -> rstd::Result<rstd::slice<rstd::u8>, owe::resource::ResourceError> {
+        -> rstd::Result<rstd::slice<rstd::u8>, owe::resource::ResourceError> override {
         ++loads;
         return rstd::Ok(content.as_slice());
     }
@@ -74,11 +74,13 @@ struct BufferBackend final : owe::vulkan::BufferBackend {
 auto TextureAllocation(rstd::uint64_t generation)
     -> rstd::sync::Arc<owe::vulkan::TextureAllocation>;
 
-struct TextureLoader {
+struct TextureLoader final : owe::resource::TextureLoader {
+    explicit TextureLoader(std::atomic<std::size_t>* counter): loads(counter) {}
+
     std::atomic<std::size_t>* loads;
 
     auto LoadTexture(rstd::ref<rstd::str> key) const
-        -> rstd::Result<rstd::sync::Arc<owe::Image>, owe::resource::ResourceError> {
+        -> rstd::Result<rstd::sync::Arc<owe::Image>, owe::resource::ResourceError> override {
         loads->fetch_add(1, std::memory_order_relaxed);
         auto image = rstd::sync::Arc<owe::Image>::make();
         image->key = rstd::cppstd::to_string(key);
@@ -86,13 +88,13 @@ struct TextureLoader {
     }
 };
 
-struct TextureContentProvider {
+struct TextureContentProvider final : owe::resource::TextureContentProvider {
     mutable rstd::usize              resolves { 0 };
     mutable std::atomic<std::size_t> loads { 0 };
 
     auto ResolveTextureContent(const owe::resource::TextureRequest& request) const
         -> rstd::Result<owe::resource::ImportedTextureContentIdentity,
-                        owe::resource::ResourceError> {
+                        owe::resource::ResourceError> override {
         ++resolves;
         auto name = rstd::cppstd::as_string_view(request.name.as_str());
         if (name.starts_with("alias-")) {
@@ -106,16 +108,14 @@ struct TextureContentProvider {
     }
 
     auto OpenTextureLoader() const
-        -> rstd::Result<rstd::sync::Arc<rstd::dyn<owe::resource::TextureLoader>>,
-                        owe::resource::ResourceError> {
-        return rstd::Ok(
-            rstd::sync::Arc<rstd::dyn<owe::resource::TextureLoader>>::make(TextureLoader {
-                .loads = &loads,
-            }));
+        -> rstd::Result<std::shared_ptr<owe::resource::TextureLoader>,
+                        owe::resource::ResourceError> override {
+        return rstd::Ok(std::shared_ptr<owe::resource::TextureLoader>(
+            std::make_shared<TextureLoader>(&loads)));
     }
 
     auto ResolveVideoPlayback(const owe::resource::TextureRequest&) const
-        -> rstd::Option<rstd::sync::Arc<owe::VideoPlaybackState>> {
+        -> rstd::Option<rstd::sync::Arc<owe::VideoPlaybackState>> override {
         return rstd::None();
     }
 };
@@ -213,8 +213,7 @@ TEST(TextureRegistry, OwnsLogicalEntriesBehindGenerationalHandles) {
     ASSERT_TRUE(entry.is_some());
     EXPECT_EQ((**entry).definition_version, rstd::u64(2));
 
-    auto view  = rstd::dyn<owe::resource::TextureLogicalRegistryView>::from_ref(registry);
-    auto state = view->ResolveTextureState(handle);
+    auto state = registry.ResolveTextureState(handle);
     ASSERT_TRUE(state.is_some());
     EXPECT_EQ(state->definition_version, rstd::u64(2));
     EXPECT_EQ(state->content_version, rstd::u64(1));
@@ -486,7 +485,7 @@ TEST(TextureRegistry, PublishesUploadedPhysicalOnlyAfterSubmission) {
 TEST(ShaderRegistry, OwnsArtifactsByRequestIdentity) {
     owe::resource_registry::ShaderRegistry registry;
     ShaderArtifactProvider                 provider;
-    auto object = rstd::dyn<owe::resource::ShaderArtifactProvider>::from_ref(provider);
+    owe::resource::ShaderArtifactProvider* object = &provider;
 
     auto first = registry.Ensure(ShaderRequest(4), object);
     ASSERT_TRUE(first.is_ok());
@@ -631,8 +630,8 @@ TEST(ResourcePrepareService, VisitsBufferAndShaderPlansThroughTypedProviders) {
     BufferContentProvider                  buffer_provider;
     ShaderArtifactProvider                 shader_provider;
     owe::vulkan::BufferBackend* upload = &upload_backend;
-    auto buffer = rstd::dyn<owe::resource::BufferContentProvider>::from_ref(buffer_provider);
-    auto shader = rstd::dyn<owe::resource::ShaderArtifactProvider>::from_ref(shader_provider);
+    owe::resource::BufferContentProvider* buffer = &buffer_provider;
+    owe::resource::ShaderArtifactProvider* shader = &shader_provider;
 
     owe::resource::ResourcePlan plan { .generation = rstd::u64(12) };
     plan.buffers.push(owe::resource::BufferPlanEntry {
@@ -660,8 +659,8 @@ TEST(ResourcePrepareService, VisitsBufferAndShaderPlansThroughTypedProviders) {
         shaders);
     auto prepared = service.Prepare(plan,
                                     owe::resource_registry::ResourceContentProviders {
-                                        .buffer = rstd::Some(buffer.as_mut_ref()),
-                                        .shader = rstd::Some(shader.as_mut_ref()),
+                                        .buffer = rstd::Some(buffer),
+                                        .shader = rstd::Some(shader),
                                     });
 
     ASSERT_TRUE(prepared.is_ok());
@@ -675,8 +674,8 @@ TEST(ResourcePrepareService, VisitsBufferAndShaderPlansThroughTypedProviders) {
 
     auto texture_only = service.Prepare(plan,
                                         owe::resource_registry::ResourceContentProviders {
-                                            .buffer = rstd::Some(buffer.as_mut_ref()),
-                                            .shader = rstd::Some(shader.as_mut_ref()),
+                                            .buffer = rstd::Some(buffer),
+                                            .shader = rstd::Some(shader),
                                         },
                                         owe::resource::ResourcePlanTextures);
     ASSERT_TRUE(texture_only.is_ok());
@@ -792,7 +791,7 @@ TEST(ResourcePrepareService, BatchesDeduplicatesAndCachesImportedTextures) {
     TextureContentProvider                 content_provider;
     owe::vulkan::BufferBackend* buffer = &buffer_backend;
     owe::vulkan::ImagePrepareBackend* image = &image_backend;
-    auto content = rstd::dyn<owe::resource::TextureContentProvider>::from_ref(content_provider);
+    owe::resource::TextureContentProvider* content = &content_provider;
 
     owe::resource::ResourcePlan plan { .generation = rstd::u64(21) };
     for (std::uint64_t index = 0; index < 10; ++index) {
@@ -813,7 +812,7 @@ TEST(ResourcePrepareService, BatchesDeduplicatesAndCachesImportedTextures) {
         textures, image, buffers, buffer, shaders);
     auto started = service.Begin(plan,
                                  owe::resource_registry::ResourceContentProviders {
-                                     .texture = rstd::Some(content.as_mut_ref()),
+                                     .texture = rstd::Some(content),
                                  });
     ASSERT_TRUE(started.is_ok());
     auto        session = rstd::move(started).unwrap_unchecked();
@@ -836,7 +835,7 @@ TEST(ResourcePrepareService, BatchesDeduplicatesAndCachesImportedTextures) {
 
     auto second = service.Prepare(plan,
                                   owe::resource_registry::ResourceContentProviders {
-                                      .texture = rstd::Some(content.as_mut_ref()),
+                                      .texture = rstd::Some(content),
                                   });
     ASSERT_TRUE(second.is_ok());
     EXPECT_EQ(second->TextureCount(), rstd::usize(10));
