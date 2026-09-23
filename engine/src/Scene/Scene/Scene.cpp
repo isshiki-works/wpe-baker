@@ -46,8 +46,6 @@ struct AudioResponseDemand::Lease final : UniformBindingLease {
         auto owner = state.upgrade();
         if (owner) AudioResponseDemand::Update(*owner, i32(-1));
     }
-
-    void KeepAlive() const override {}
 };
 
 void AudioResponseDemand::Update(State& state, i32 delta) {

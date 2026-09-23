@@ -300,11 +300,9 @@ struct UniformUpdateContext {
     virtual auto RenderView() const -> SceneRenderViewKind            = 0;
 };
 
-// 绑定期间保持某项运行时需求（如音频响应）存活的租约；析构即释放。
+// 绑定期间保持某项运行时需求（如音频响应）存活的租约；只靠析构释放，没有其它操作。
 struct UniformBindingLease {
     virtual ~UniformBindingLease() = default;
-
-    virtual void KeepAlive() const = 0;
 };
 
 struct UniformSource {

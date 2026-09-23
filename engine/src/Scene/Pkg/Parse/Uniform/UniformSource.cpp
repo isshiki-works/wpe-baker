@@ -33,8 +33,6 @@ struct ArcUniformBindingLease final : UniformBindingLease {
     explicit ArcUniformBindingLease(Arc<T> value): state(rstd::move(value)) {}
 
     Arc<T> state;
-
-    void KeepAlive() const override {}
 };
 
 template<typename T>
