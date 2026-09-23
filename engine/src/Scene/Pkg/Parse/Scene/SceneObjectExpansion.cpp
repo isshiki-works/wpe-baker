@@ -18,21 +18,17 @@ using namespace owe;
 namespace
 {
 
-auto UserPropertyValue(Option<ref<rstd::json::Map>> user_properties, std::string_view key)
-    -> Option<ref<Json>> {
-    if (key.empty()) return None();
-    if (user_properties.is_none()) return None();
-    auto value = (*user_properties)->get(rstd::cppstd::as_str(key).unwrap());
-    if (value.is_none()) return None();
-    const auto& payload = SceneUserPropertyPayload(**value);
-    return Some(ref<Json>::from_raw_parts(rstd::addressof(payload)));
+auto UserPropertyValue(const NJson* user_properties, std::string_view key) -> const NJson* {
+    if (key.empty() || user_properties == nullptr) return nullptr;
+    const auto* value = Find(*user_properties, key);
+    return value != nullptr ? &SceneUserPropertyPayload(*value) : nullptr;
 }
 
 SceneUserVisibilityBinding
 ToSceneUserVisibilityBinding(const wpscene::VisibleUserBinding& binding) {
     return SceneUserVisibilityBinding {
         .key           = String::make(rstd::cppstd::as_str(binding.name).unwrap()),
-        .condition     = binding.condition.clone(),
+        .condition     = std::make_shared<const NJson>(binding.condition),
         .has_condition = binding.has_condition,
     };
 }
@@ -157,12 +153,11 @@ HashSet<i32> CollectLinkedSourceIds(slice<SceneObjectVar> objects) {
 }
 
 bool ResolveVisibleUserBinding(bool& visible, const wpscene::VisibleUserBinding& binding,
-                               Option<ref<rstd::json::Map>> user_properties) {
+                               const NJson* user_properties) {
     if (binding.empty()) return false;
-    auto value = UserPropertyValue(user_properties, binding.name);
-    if (value.is_some()) {
+    if (const auto* value = UserPropertyValue(user_properties, binding.name); value != nullptr) {
         if (auto resolved =
-                ResolveSceneUserVisibilityBinding(ToSceneUserVisibilityBinding(binding), **value))
+                ResolveSceneUserVisibilityBinding(ToSceneUserVisibilityBinding(binding), *value))
             visible = *resolved;
     }
     return true;
@@ -175,7 +170,7 @@ struct ObjectVisibilityInfo {
 };
 
 auto BuildObjectVisibilityInfo(ref<wpscene::SceneDocument>  document,
-                               Option<ref<rstd::json::Map>> user_properties)
+                               const NJson* user_properties)
     -> HashMap<i32, ObjectVisibilityInfo> {
     HashMap<i32, ObjectVisibilityInfo> result;
     for (const auto& record : document->objects) {
@@ -208,7 +203,7 @@ bool HasHiddenUserAncestor(u32 id, const HashMap<i32, ObjectVisibilityInfo>& obj
 
 HashSet<i32> CollectHiddenLinkedSourceIds(ref<wpscene::SceneDocument>  document,
                                           const HashSet<i32>&          linked_source_ids,
-                                          Option<ref<rstd::json::Map>> user_properties) {
+                                          const NJson* user_properties) {
     HashSet<i32> result;
     auto         visibility = BuildObjectVisibilityInfo(document, user_properties);
     linked_source_ids.iter().for_each([&](ref<i32> linked_id) {
@@ -221,7 +216,7 @@ HashSet<i32> CollectHiddenLinkedSourceIds(ref<wpscene::SceneDocument>  document,
 }
 
 template<typename T>
-bool PrepareSceneObject(T& object, Option<ref<rstd::json::Map>> user_properties,
+bool PrepareSceneObject(T& object, const NJson* user_properties,
                         ref<HashSet<i32>> linked_source_ids, bool force_invisible) {
     ResolveVisibleUserBinding(object.visible, object.visible_user, user_properties);
     if constexpr (any<T, wpscene::ImageObject, wpscene::ShapeObject>) {
@@ -247,7 +242,7 @@ bool PrepareSceneObject(T& object, Option<ref<rstd::json::Map>> user_properties,
 
 Vec<SceneObjectVar> FilterSceneObjects(Vec<SceneObjectVar>          decoded,
                                        ref<wpscene::SceneDocument>  document,
-                                       Option<ref<rstd::json::Map>> user_properties,
+                                       const NJson* user_properties,
                                        ref<HashSet<i32>>            linked_source_ids) {
     Vec<SceneObjectVar> result;
     result.reserve(decoded.len());
@@ -278,7 +273,7 @@ namespace owe
 {
 
 auto ExpandSceneObjects(ref<wpscene::SceneDocument> document, mut_ref<fs::VFS> vfs,
-                        Option<ref<rstd::json::Map>> user_properties) -> ExpandedSceneObjects {
+                        const NJson* user_properties) -> ExpandedSceneObjects {
     auto decoded = wpscene::DecodeSceneObjects(document, vfs);
     auto linked  = CollectLinkedSourceIds(decoded.as_slice());
     auto hidden  = CollectHiddenLinkedSourceIds(document, linked, user_properties);
@@ -293,11 +288,11 @@ auto ExpandSceneObjects(ref<wpscene::SceneDocument> document, mut_ref<fs::VFS> v
     };
 }
 
-Vec<SceneObjectVar> ExpandObjects(const Json& json, fs::VFS& vfs, wpscene::SceneVersion version,
-                                  Option<ref<rstd::json::Map>> user_properties) {
+Vec<SceneObjectVar> ExpandObjects(const NJson& json, fs::VFS& vfs, wpscene::SceneVersion version,
+                                  const NJson* user_properties) {
     wpscene::SceneDocument document;
     document.metadata.pkg_version = version;
-    document.objects = wpscene::ParseSceneObjectRecords(FromRstd(json), document.objects_are_array);
+    document.objects = wpscene::ParseSceneObjectRecords(json, document.objects_are_array);
     if (! document.objects_are_array) return {};
     return ExpandObjects(ref<wpscene::SceneDocument>::from_raw_parts(rstd::addressof(document)),
                          mut_ref<fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
@@ -305,7 +300,7 @@ Vec<SceneObjectVar> ExpandObjects(const Json& json, fs::VFS& vfs, wpscene::Scene
 }
 
 Vec<SceneObjectVar> ExpandObjects(ref<wpscene::SceneDocument> document, mut_ref<fs::VFS> vfs,
-                                  Option<ref<rstd::json::Map>> user_properties) {
+                                  const NJson* user_properties) {
     return ExpandSceneObjects(document, vfs, user_properties).objects;
 }
 

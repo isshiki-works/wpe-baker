@@ -4,6 +4,9 @@
 #include <filesystem>
 #include <fstream>
 
+#include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
+#include "JsonNlohmann.hpp"
+
 import rstd;
 import rstd.cppstd;
 import wescene.json;
@@ -27,13 +30,13 @@ bool RunPropertyReplay(const char* path) {
     try {
         std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
         const std::string text(std::istreambuf_iterator<char>(input), {});
-        auto parsed = owe::ParseJson(text);
+        auto parsed = owe::ParseNJson(text);
         if (parsed.is_err()) throw std::runtime_error("invalid replay JSON");
         auto job = parsed.unwrap();
-        auto field = [&](const char* name) -> const owe::Json& {
-            auto value = job.get(rstd::cppstd::as_str(name).unwrap());
-            if (value.is_none()) throw std::runtime_error(std::string("missing replay field: ") + name);
-            return **value;
+        auto field = [&](const char* name) -> const owe::NJson& {
+            const auto* value = owe::Find(job, name);
+            if (value == nullptr) throw std::runtime_error(std::string("missing replay field: ") + name);
+            return *value;
         };
         auto string_field = [&](const char* name) {
             std::string value;
@@ -48,12 +51,9 @@ bool RunPropertyReplay(const char* path) {
         config.assets_dir = string_field("assets");
         config.cache_dir = (output / "cache").string();
         config.fps = 30;
-        auto properties = field("user_properties").as_object();
-        if (properties.is_none()) throw std::runtime_error("properties must be an object");
-        (*properties)->iter().for_each([&](auto entry) {
-            auto [key, value] = entry;
-            config.user_properties.insert(key->clone(), value->clone());
-        });
+        const auto& properties = field("user_properties");
+        if (!properties.is_object()) throw std::runtime_error("properties must be an object");
+        config.user_properties = properties;
         owe::RenderInitInfo info;
         info.output_mode = owe::RenderOutputMode::CpuReadback;
         info.width = 640;
@@ -66,22 +66,18 @@ bool RunPropertyReplay(const char* path) {
         owe::SceneWallpaper wallpaper;
         if (!wallpaper.initOffline(std::move(config), std::move(info), options))
             throw std::runtime_error(wallpaper.offlineError());
-        auto events = field("events").as_array();
-        if (events.is_none()) throw std::runtime_error("events must be an array");
-        if ((*events)->len() != usize(6)) throw std::runtime_error("replay requires six bounded property events");
+        const auto& events = field("events");
+        if (!events.is_array()) throw std::runtime_error("events must be an array");
+        if (events.size() != 6) throw std::runtime_error("replay requires six bounded property events");
         std::ofstream raw(output / "frames.rgba", std::ios::binary);
         owe::OfflineFrameInput pointer;
         pointer.cursor_x = pointer.cursor_y = 0.5;
         pointer.cursor_in_window = true;
         for (uint64_t frame = 0; frame < 144; ++frame) {
             if (frame % 24 == 0) {
-                const auto& event = (**events)[usize(frame / 24)];
-                auto changes = event.as_object();
-                if (changes.is_none()) throw std::runtime_error("event must be an object");
-                (*changes)->iter().for_each([&](auto entry) {
-                    auto [key, value] = entry;
-                    wallpaper.setUserPropertyJson(rstd::cppstd::to_string(key->as_str()), value->clone());
-                });
+                const auto& event = events[frame / 24];
+                if (!event.is_object()) throw std::runtime_error("event must be an object");
+                for (const auto& [key, value] : event.items()) wallpaper.setUserPropertyJson(key, value);
             }
             if (!wallpaper.step(frame, 1.0 / 30, pointer)) throw std::runtime_error(wallpaper.offlineError());
             const auto& pixels = wallpaper.readback();
@@ -143,8 +139,8 @@ bool RunAnimationLayerBinding() {
             source,
             sha,
             owe::script::FieldKind::Bool,
-            owe::Json::Null(),
-            rstd::into<owe::Json>(initial),
+            owe::NJson(),
+            owe::NJson(initial),
             owe::script::ScriptBindingContext::ForAnimationLayer(
                 &owner, layers.clone(), layer_id, "visible"_str, rstd::move(playback)));
     };
@@ -184,13 +180,13 @@ bool RunAnimationLayerBinding() {
     };
     user_scene.RegisterUserPropertyBinding(
         user_binding.key.clone(),
-        Box<dyn<FnMut<void(ref<owe::Json>)>>>::make(
-            [layer = layers.as_ptr(), binding = &user_binding](ref<owe::Json> property) {
+        Box<dyn<FnMut<void(ref<owe::NJson>)>>>::make(
+            [layer = layers.as_ptr(), binding = &user_binding](ref<owe::NJson> property) {
                 auto visible = owe::ResolveSceneUserVisibilityBinding(*binding, *property);
                 if (visible.is_some())
                     (void)layer->SetAnimationLayerVisible(9002, *visible);
             }));
-    auto false_property = rstd::into<owe::Json>(false);
+    auto false_property = owe::NJson(false);
     const bool initial_false_applied =
         user_scene.ApplyUserPropertyBindings("breathing"_str, false_property);
 
@@ -199,7 +195,7 @@ bool RunAnimationLayerBinding() {
     const bool initial_false_preserved = initial_false_applied &&
         layers->AnimationLayerVisible(9002).is_some() &&
         ! *layers->AnimationLayerVisible(9002) && owner.Visible();
-    auto true_property = rstd::into<owe::Json>(true);
+    auto true_property = owe::NJson(true);
     const bool true_dispatched =
         user_scene.ApplyUserPropertyBindings("breathing"_str, true_property);
     scripts.Tick(owe::script::FrameInputs {});

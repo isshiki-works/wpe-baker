@@ -2,8 +2,12 @@
 
 #include <memory>
 
+#include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
+#include "JsonNlohmann.hpp"
+
 import rstd;
 import rstd.json;
+import wescene.json;
 import owe.user_property;
 import wescene.scene;
 import wescene.scene_user_property;
@@ -31,7 +35,7 @@ TEST(SceneUserProperty, CanonicalizesHostSchemeColor) {
 }
 
 TEST(SceneUserProperty, ResolvesClampedColorDescriptor) {
-    auto property = rstd::json::from_str(R"({"type":"color","value":"-0.2 0.4 1.4"})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"color","value":"-0.2 0.4 1.4"})").unwrap();
     auto color    = owe::ResolveSceneUserPropertyColor(property);
 
     ASSERT_TRUE(color.is_some());
@@ -41,7 +45,7 @@ TEST(SceneUserProperty, ResolvesClampedColorDescriptor) {
 }
 
 TEST(SceneUserProperty, ResolvesResetWireValueFromExistingDescriptor) {
-    auto schema = rstd::json::from_str(R"({"type":"color","value":"0.2 0.4 0.6"})"_str).unwrap();
+    auto schema = owe::ParseNJson(R"({"type":"color","value":"0.2 0.4 0.6"})").unwrap();
     auto overridden =
         owe::MergeUserPropertyDescriptor(schema, owe::MakeUserPropertyWirePatch("0.8 0.7 0.6"));
     auto reset =
@@ -60,17 +64,16 @@ TEST(SceneUserProperty, BatchUsesSinglePropertySemantics) {
     single.SetClearColorUserKey(String::make("schemecolor"_str));
     batch.SetClearColorUserKey(String::make("schemecolor"_str));
 
-    auto property = rstd::json::from_str(R"({"type":"color","value":"0.2 0.4 0.6"})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"color","value":"0.2 0.4 0.6"})").unwrap();
     auto properties =
-        rstd::json::from_str(
-            R"({"waywallen.scheme_color":{"type":"color","value":"0.2 0.4 0.6"}})"_str)
+        owe::ParseNJson(
+            R"({"waywallen.scheme_color":{"type":"color","value":"0.2 0.4 0.6"}})")
             .unwrap();
-    auto values = properties.as_object();
-    ASSERT_TRUE(values.is_some());
+    ASSERT_TRUE(properties.is_object());
 
     auto single_mutation =
         owe::SceneUserPropertyApplier::Apply(single, "waywallen.scheme_color", property);
-    auto batch_mutation = owe::SceneUserPropertyApplier::ApplyAll(batch, **values);
+    auto batch_mutation = owe::SceneUserPropertyApplier::ApplyAll(batch, properties);
 
     EXPECT_FALSE(single_mutation.graph_changed);
     EXPECT_FALSE(batch_mutation.graph_changed);
@@ -94,7 +97,7 @@ TEST(SceneUserProperty, AppliesRegisteredShaderUniformBinding) {
     scene.RegisterShaderUserBinding(
         String::make("brightness"_str), material, String::make("u_Brightness"_str));
 
-    auto property = rstd::json::from_str(R"({"type":"slider","value":0.5})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"slider","value":0.5})").unwrap();
     owe::SceneUserPropertyApplier::Apply(scene, "brightness", property);
 
     auto bindings = scene.ShaderUserBindings("brightness"_str);
@@ -115,7 +118,7 @@ TEST(SceneUserProperty, ReportsRegisteredShaderComboWithoutVfs) {
     (void)binding.options.insert(String::make("high"_str), String::make("2"_str));
     scene.RegisterShaderComboUserBinding(String::make("quality"_str), rstd::move(binding));
 
-    auto property = rstd::json::from_str(R"({"type":"combo","value":"high"})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"combo","value":"high"})").unwrap();
     auto mutation = owe::SceneUserPropertyApplier::Apply(scene, "quality", property);
 
     EXPECT_TRUE(mutation.diagnostics_changed);
@@ -140,7 +143,7 @@ TEST(SceneUserProperty, AppliesRegisteredMaterialTextureBinding) {
                                                  .fallback = String::make("tex/fallback"_str),
                                              });
 
-    auto property = rstd::json::from_str(R"({"type":"texture","value":"tex/new"})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"texture","value":"tex/new"})").unwrap();
     (void)owe::SceneUserPropertyApplier::ApplyTexture(scene, "cover", property);
 
     auto bindings = scene.MaterialTextureUserBindings("cover"_str);
@@ -156,7 +159,7 @@ TEST(SceneUserProperty, AppliesRegisteredImageColorBinding) {
     rstd::array<std::shared_ptr<owe::SceneMaterial>, 1> materials { material };
     scene.RegisterImageColorUserBinding(String::make("tint"_str), node, materials.as_slice());
 
-    auto property = rstd::json::from_str(R"({"type":"color","value":"0.2 0.4 0.6"})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"color","value":"0.2 0.4 0.6"})").unwrap();
     (void)owe::SceneUserPropertyApplier::Apply(scene, "tint", property);
 
     auto bindings = scene.ImageColorUserBindings("tint"_str);
@@ -181,7 +184,7 @@ TEST(SceneUserProperty, KeepsImageColorBindingTargetsAliveAfterParse) {
         scene.RegisterImageColorUserBinding(String::make("tint"_str), node, materials.as_slice());
     }
 
-    auto property = rstd::json::from_str(R"({"type":"color","value":"0.2 0.4 0.6"})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"color","value":"0.2 0.4 0.6"})").unwrap();
     (void)owe::SceneUserPropertyApplier::Apply(scene, "tint", property);
 
     auto bindings = scene.ImageColorUserBindings("tint"_str);
@@ -201,7 +204,7 @@ TEST(SceneUserProperty, KeepsImageAlphaBindingTargetsAliveAfterParse) {
         scene.RegisterImageAlphaUserBinding(String::make("fade"_str), node, materials.as_slice());
     }
 
-    auto property = rstd::json::from_str(R"({"type":"slider","value":0.25})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"slider","value":0.25})").unwrap();
     (void)owe::SceneUserPropertyApplier::Apply(scene, "fade", property);
 
     auto bindings = scene.ImageAlphaUserBindings("fade"_str);
@@ -217,9 +220,28 @@ TEST(SceneUserProperty, AppliesRegisteredParticleOverrideBinding) {
         Arc<dyn<owe::SceneParticleOverrideControl>>::make(
             FakeParticleOverrideControl { .observed = &observed }));
 
-    auto property = rstd::json::from_str(R"({"type":"slider","value":2.5})"_str).unwrap();
+    auto property = owe::ParseNJson(R"({"type":"slider","value":2.5})").unwrap();
     (void)owe::SceneUserPropertyApplier::Apply(scene, "rate", property);
 
     EXPECT_FLOAT_EQ(observed, 2.5f);
     EXPECT_EQ(scene.ParticleOverrideBindings("rate"_str).len(), usize(1));
+}
+
+// 可见性条件比较保持原 rstd 语义：数字种类不同（1 与 1.0）不相等，nlohmann 的 == 会把它们判成相等。
+TEST(SceneUserVisibility, ConditionEqualityKeepsNumberKinds) {
+    EXPECT_TRUE(owe::SceneJsonScalarEquals(owe::NJson(1u), owe::NJson(1u)));
+    EXPECT_FALSE(owe::SceneJsonScalarEquals(owe::NJson(1u), owe::NJson(1.0)));
+    EXPECT_FALSE(owe::SceneJsonScalarEquals(owe::ParseNJson("[1]").unwrap(), owe::ParseNJson("[1.0]").unwrap()));
+    EXPECT_TRUE(owe::SceneJsonScalarEquals(owe::NJson(true), owe::NJson("1")));
+    EXPECT_TRUE(owe::SceneJsonScalarEquals(owe::NJson("0"), owe::NJson(false)));
+
+    owe::SceneUserVisibilityBinding binding { .key = String::make("variant"_str) };
+    binding.condition     = std::make_shared<const owe::NJson>(2u);
+    binding.has_condition = true;
+    auto hit  = owe::ResolveSceneUserVisibilityBinding(binding, owe::ParseNJson(R"({"value":2})").unwrap());
+    auto miss = owe::ResolveSceneUserVisibilityBinding(binding, owe::ParseNJson(R"({"value":2.0})").unwrap());
+    ASSERT_TRUE(hit.is_some());
+    ASSERT_TRUE(miss.is_some());
+    EXPECT_TRUE(*hit);
+    EXPECT_FALSE(*miss);
 }

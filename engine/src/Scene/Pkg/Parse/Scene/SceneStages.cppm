@@ -77,13 +77,13 @@ constexpr auto ResolveTextRenderMode(TextSurfaceRequirements requirements) -> Te
 }
 
 // Compatibility entry for callers with an already-parsed raw value.
-Vec<SceneObjectVar> ExpandObjects(const Json&, fs::VFS&, wpscene::SceneVersion,
-                                  Option<ref<rstd::json::Map>> user_props = None());
+Vec<SceneObjectVar> ExpandObjects(const NJson&, fs::VFS&, wpscene::SceneVersion,
+                                  const NJson* user_props = nullptr);
 
 // Canonical cheap expansion path. SceneDocument owns authored object order
 // and schema classification; no Scene / glslang state is constructed.
 Vec<SceneObjectVar> ExpandObjects(ref<wpscene::SceneDocument>, mut_ref<fs::VFS>,
-                                  Option<ref<rstd::json::Map>> user_props = None());
+                                  const NJson* user_props = nullptr);
 
 // Resolves the effective width/height without mutating the parsed metadata.
 array<i32, 2> ResolveOrthoProjectionExtent(const wpscene::SceneMetadata&, slice<SceneObjectVar>);

@@ -429,7 +429,7 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
             auto node   = context.node_id_map.get(id);
             auto config = context.initial_layer_configs.get(id);
             if (node.is_none() || (**node).node.is_none() || config.is_none()) continue;
-            runtime.RegisterInitialLayerConfig((*(**node).node).as_ptr(), (**config).clone());
+            runtime.RegisterInitialLayerConfig((*(**node).node).as_ptr(), **config);
         }
         runtime.SetScene(context.scene.get());
         auto parallax_state = CopyableArcHold(context.uniform_state.clone());
@@ -457,7 +457,7 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
                 return node;
             }));
         runtime.SetLayerConfigFactory(script::JsRuntime::LayerConfigFactory::make(
-            [&context](SceneNode* owner, Json config) -> Option<Arc<SceneNode>> {
+            [&context](SceneNode* owner, NJson config) -> Option<Arc<SceneNode>> {
                 auto node = InstantiateLayerConfiguration(context, owner, config);
                 if (node.is_none()) rstd_error("layer configuration is unsupported or unavailable");
                 return node;
@@ -469,7 +469,7 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
         runtime.ClearLayerConfigFactory();
         auto* scene_ptr = context.scene.get();
         runtime.SetLayerConfigFactory(script::JsRuntime::LayerConfigFactory::make(
-            [scene_ptr](SceneNode* owner, Json config) -> Option<Arc<SceneNode>> {
+            [scene_ptr](SceneNode* owner, NJson config) -> Option<Arc<SceneNode>> {
                 auto context = scene_ptr->ExtensionMut<SceneParseContext>();
                 if (context.is_none()) return None();
                 const auto text_start    = (**context).text_uniform_configs.len();

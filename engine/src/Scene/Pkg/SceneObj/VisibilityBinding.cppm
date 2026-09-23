@@ -9,7 +9,7 @@ export namespace owe::wpscene
 
 struct VisibleUserBinding {
     std::string name;
-    owe::Json   condition; // 仍是 rstd：只有用户属性链（C 组）读，读取处 ToRstd（过渡桥）
+    owe::NJson  condition;
     bool        has_condition { false };
 
     bool empty() const { return name.empty(); }
@@ -17,7 +17,7 @@ struct VisibleUserBinding {
 
 struct UserValueBinding {
     std::string name;
-    owe::Json   condition; // 仍是 rstd：只有用户属性链（C 组）读，读取处 ToRstd（过渡桥）
+    owe::NJson  condition;
     bool        has_condition { false };
 
     bool empty() const { return name.empty(); }
@@ -40,7 +40,7 @@ inline void ReadVisibleUserBinding(const owe::NJson& json, VisibleUserBinding& o
         if (name->is_string()) out.name = name->get_ref<const std::string&>();
     }
     if (auto condition = owe::Find(*user, "condition"); condition != nullptr) {
-        out.condition     = owe::ToRstd(*condition);
+        out.condition     = *condition;
         out.has_condition = true;
     }
 }
@@ -90,7 +90,7 @@ inline void ReadUserValueBinding(const owe::NJson& json, std::string_view field,
         if (name->is_string()) out.name = name->get_ref<const std::string&>();
     }
     if (auto condition = owe::Find(*user, "condition"); condition != nullptr) {
-        out.condition     = owe::ToRstd(*condition);
+        out.condition     = *condition;
         out.has_condition = true;
     }
 }

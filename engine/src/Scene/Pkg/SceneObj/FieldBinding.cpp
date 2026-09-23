@@ -132,7 +132,7 @@ auto AnimCurve::clone() const -> AnimCurve {
 auto ScriptBinding::clone() const -> ScriptBinding {
     return ScriptBinding {
         .source        = source,
-        .initial_value = initial_value.clone(),
+        .initial_value = initial_value,
     };
 }
 
@@ -142,14 +142,14 @@ auto FieldBindingSpec::clone() const -> FieldBindingSpec {
         .field     = field.clone(),
         .animation = animation.is_some() ? Some(animation->clone()) : None(),
         .script_properties =
-            script_properties.is_some() ? Some(script_properties->clone()) : None(),
+            script_properties.is_some() ? Some(owe::NJson(*script_properties)) : None(),
         .script = script.is_some() ? Some(script->clone()) : None(),
         .user   = user.is_some() ? Some(user->clone()) : None(),
     };
 }
 
-auto FieldBindingSpec::ScriptProperties() const noexcept -> const owe::Json& {
-    static const auto empty = owe::Json::Null();
+auto FieldBindingSpec::ScriptProperties() const noexcept -> const owe::NJson& {
+    static const owe::NJson empty;
     return script_properties.is_some() ? *script_properties : empty;
 }
 
@@ -214,7 +214,7 @@ std::size_t AbsorbFieldBinding(std::string_view field, const owe::NJson& field_v
     }
     if (auto properties = owe::Find(field_value, "scriptproperties"); properties != nullptr) {
         out.Ensure(rstd::cppstd::as_str(field).unwrap())->script_properties =
-            Some(owe::ToRstd(*properties)); // 过渡桥：script_properties 仍是 rstd
+            Some(owe::NJson(*properties));
         ++count;
     }
     if (auto user = owe::Find(field_value, "user"); user != nullptr) {
@@ -229,7 +229,7 @@ std::size_t AbsorbFieldBinding(std::string_view field, const owe::NJson& field_v
         ScriptBinding binding;
         binding.source = script->get_ref<const std::string&>();
         if (auto value = owe::Find(field_value, "value"); value != nullptr)
-            binding.initial_value = owe::ToRstd(*value); // 过渡桥：同上
+            binding.initial_value = *value;
         out.Ensure(rstd::cppstd::as_str(field).unwrap())->script = Some(rstd::move(binding));
         ++count;
     }

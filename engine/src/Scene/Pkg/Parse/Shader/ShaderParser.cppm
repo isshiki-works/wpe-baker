@@ -219,7 +219,7 @@ public:
     // (color-blend mode, sprite-sheet flags, puppet bone count beyond
     // default, etc.) are NOT injected. Materials that hard-require them
     // will fail compile here; supply the right values via combos_override.
-    static CompileMaterialShaderResult CompileMaterialShader(const Json&      material_json,
+    static CompileMaterialShaderResult CompileMaterialShader(const NJson&     material_json,
                                                              fs::VFS&         vfs,
                                                              std::string_view scene_id = "test",
                                                              const Combos&    combos_override = {},

@@ -4,6 +4,8 @@ module;
 #include <cmath>
 #include <rstd/macro.hpp>
 
+#include "JsonNlohmann.hpp"
+
 module wescene.pkg.parse;
 import eigen;
 import owe.scene_audio_response;
@@ -45,15 +47,13 @@ constexpr T Clamp(T value, T minimum, T maximum) {
     return rstd::cmp::min(rstd::cmp::max(value, minimum), maximum);
 }
 
-auto UserScalar(const Json& property) -> Option<float> {
+auto UserScalar(const NJson& property) -> Option<float> {
     const auto& value = SceneUserPropertyPayload(property);
-    if (auto number = value.as_f64(); number.is_some()) {
-        return Some(static_cast<float>(number->to_primitive()));
-    }
-    if (auto boolean = value.as_bool(); boolean.is_some()) return Some(*boolean ? 1.0f : 0.0f);
-    if (auto string = value.as_str(); string.is_some()) {
+    if (value.is_number()) return Some(static_cast<float>(value.get<double>()));
+    if (value.is_boolean()) return Some(value.get<bool>() ? 1.0f : 0.0f);
+    if (value.is_string()) {
         try {
-            return Some(std::stof(rstd::cppstd::to_string(*string)));
+            return Some(std::stof(value.get<std::string>()));
         } catch (...) {
         }
     }
@@ -317,7 +317,7 @@ bool UniformSceneState::SetNodeParallaxDepth(const SceneNode& node, array<float,
     return owner.is_some() || state.is_some();
 }
 
-bool UniformSceneState::ApplyObjectParallaxDepth(i32 object_id, const Json& property) {
+bool UniformSceneState::ApplyObjectParallaxDepth(i32 object_id, const NJson& property) {
     const auto&     value = SceneUserPropertyPayload(property);
     array<float, 2> depth {};
     bool valid = false;
@@ -327,11 +327,11 @@ bool UniformSceneState::ApplyObjectParallaxDepth(i32 object_id, const Json& prop
             depth = { *scalar, *scalar };
             valid = true;
         }
-    } else if (auto string = value.as_str(); string.is_some()) {
+    } else if (value.is_string()) {
         // SceneScript Vec2(string) consumes X/Y, including a color property's
         // three-component string. Do not route that through fixed-array JSON
         // parsing or mistake its first component for a scalar broadcast.
-        auto text = rstd::cppstd::to_string(*string);
+        auto text = value.get<std::string>();
         const auto last = text.find_last_not_of(" \t\r\n\f\v");
         if (last != std::string::npos) text.resize(last + 1);
         std::istringstream components(std::move(text));
@@ -343,7 +343,7 @@ bool UniformSceneState::ApplyObjectParallaxDepth(i32 object_id, const Json& prop
                 valid = bool(components >> depth[usize(1)]);
             }
         }
-    } else if (auto values = value.as_array(); values.is_some() && (*values)->len() == usize(2)) {
+    } else if (value.is_array() && value.size() == 2) {
         valid = owe::GetJsonValue(value, depth);
     }
     if (! valid || ! std::isfinite(depth[usize()]) || ! std::isfinite(depth[usize(1)])) {
@@ -517,7 +517,7 @@ void UniformSceneState::Advance(const SceneFrame& frame) {
     }
 }
 
-void UniformSceneState::ApplyUserProperty(std::string_view field, const Json& property) {
+void UniformSceneState::ApplyUserProperty(std::string_view field, const NJson& property) {
     auto value = UserScalar(property);
     if (value.is_none()) return;
     if (field == "cameraparallax") {

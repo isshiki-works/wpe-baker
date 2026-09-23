@@ -248,7 +248,7 @@ public:
 
         // Preserve the authored animationlayers[].visible object so the scene
         // parser can wire its script to this exact puppet animation layer.
-        Option<Json> visible_binding;
+        Option<NJson> visible_binding;
         bool         visible_can_change { false };
 
         // Schema-only absorption (renderer reads only id/rate/blend/visible).

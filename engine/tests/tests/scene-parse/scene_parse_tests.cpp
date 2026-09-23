@@ -134,7 +134,7 @@ TEST(TextRenderMode, UsesDirectRenderingOnlyWithoutIndependentSurfaceRequirement
 }
 
 TEST(SceneObjectExpansion, PreservesHiddenTextLayers) {
-    auto parsed = owe::ParseJson(R"({
+    auto parsed = owe::ParseNJson(R"({
         "objects": [{
             "id": 7,
             "name": "Style1",
@@ -252,7 +252,7 @@ TEST(SceneObjectExpansion, IgnoresContainerWithoutAuthoredId) {
 }
 
 TEST(SceneObjectExpansion, PreservesHiddenSourceReferencedByContainer) {
-    auto parsed = owe::ParseJson(R"JSON({
+    auto parsed = owe::ParseNJson(R"JSON({
         "objects": [
             {"id": 7, "name": "Hidden Source", "sound": [], "visible": false},
             {"id": 8, "name": "Container", "dependencies": [7]}
@@ -289,12 +289,10 @@ TEST(SceneObjectExpansion, PreservesSoundHiddenByUserBoundParent) {
     ASSERT_TRUE(document.is_some());
 
     auto parse = [&](bool show_parent) {
-        auto properties = owe::ParseJson(show_parent ? R"({"show_parent":{"value":true}})"
-                                                       : R"({"show_parent":{"value":false}})");
+        auto properties = owe::ParseNJson(show_parent ? R"({"show_parent":{"value":true}})"
+                                                        : R"({"show_parent":{"value":false}})");
         EXPECT_TRUE(properties.is_ok());
-        auto property_json   = properties.unwrap();
-        auto user_properties = property_json.as_object();
-        EXPECT_TRUE(user_properties.is_some());
+        auto user_properties = properties.unwrap();
 
         owe::fs::VFS                vfs;
         wavsen::audio::SoundManager sound_manager;
@@ -304,7 +302,7 @@ TEST(SceneObjectExpansion, PreservesSoundHiddenByUserBoundParent) {
             rstd::ref<owe::wpscene::SceneDocument>::from_raw_parts(rstd::addressof(*document)),
             rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)),
             rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(rstd::addressof(sound_manager)),
-            owe::SceneParseOptions { .user_properties = rstd::Some(*user_properties) });
+            owe::SceneParseOptions { .user_properties = &user_properties });
     };
 
     auto hidden = parse(false);
