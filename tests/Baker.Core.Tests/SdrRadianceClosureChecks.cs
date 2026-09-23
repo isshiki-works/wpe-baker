@@ -267,9 +267,11 @@ internal static class SdrRadianceClosureChecks
             "a captured layer without runtime material evidence is undecidable and keeps the HDR blocker");
 
         check(!TextureContainer.IsEightBitUnsignedFormat(10) && TextureContainer.IsEightBitUnsignedFormat(0) &&
+            TextureContainer.IsEightBitUnsignedFormat(4) && TextureContainer.IsEightBitUnsignedFormat(6) &&
+            TextureContainer.IsEightBitUnsignedFormat(7) &&
             TextureContainer.TryReadHeader(Tex(0, 0x22), out var videoHeader) && videoHeader.IsVideo &&
             TextureContainer.TryReadHeader(Tex(0, 0x2), out var plainHeader) && !plainHeader.IsVideo &&
             !TextureContainer.TryReadHeader(Encoding.ASCII.GetBytes("TEXV0004\0TEXI0001\0................"), out _),
-            "tex preamble parsing reads format and the video flag and rejects other container versions");
+            "tex preamble parsing reads format and the video flag, counts RGBA8 and DXT1/3/5 as 8-bit UNORM and rejects other container versions");
     }
 }

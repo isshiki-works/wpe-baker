@@ -259,4 +259,15 @@ public class AnalysisStagesTests
         Assert.Empty(Run(dir, [random, Image(1)], [Mesh(2), Mesh(1)], []).Composer.OptionalForeground);
         return Task.CompletedTask;
     });
+
+    [Fact]
+    public Task EmptyTextDrawsOnlyWhenTheRendererBuiltAMesh() => TestTemp.Run(dir =>
+    {
+        // 空字面值的文字层（分隔线）：渲染器没建网格就不算可绘制，不进视频组；场景脚本写图层文字时渲染器建了动态网格，照常算可绘制。
+        JsonObject Text(int id, string text) => new() { ["id"] = id, ["name"] = "----------------", ["text"] = text };
+        Assert.False(Run(dir, [Image(1), Text(2, "")], [Mesh(1), Mesh(2, hasMesh: false)], []).Composer.Draws(2));
+        Assert.True(Run(dir, [Image(1), Text(2, "")], [Mesh(1), Mesh(2)], []).Composer.Draws(2));
+        Assert.True(Run(dir, [Image(1), Text(2, "caption")], [Mesh(1), Mesh(2, hasMesh: false)], []).Composer.Draws(2));
+        return Task.CompletedTask;
+    });
 }

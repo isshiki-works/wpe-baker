@@ -291,6 +291,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         async Task<JsonArray> PrefixCachesAsync()
         {
             // 只看整层初判拒因：路线与布局准入追加的 blockers 不影响前缀回退（与改写前读同一份局部数组的结果相同）。
+            // HDR 闭合拒因不挡：它是按整层初始分配求的，前缀采纳后按前缀捕获对象重求（Verdict.ApplyPrefixRadianceClosure）。
             if (verdict.PrefixSafetyBlocked) return new JsonArray();
             var proposed = EffectPrefixPlanner.Propose(scene, source, request.Assets, observation.Trace, properties, request, projection);
             var accepted = new JsonArray();
@@ -329,6 +330,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 AnnotateLoopCandidates(demotedLoop);
                 return demotedLoop;
             });
+        // 前缀路线不管是初判就走的、还是路线准入里改走的，blockers 都被清空过：这里按前缀实际捕获的对象重求 HDR 闭合，
+        // 不成立时拒因写回。路线到这里已定稿，后面的更小分配取证只看整层路线，不会再改道。
+        if (effectPrefixRoute)
+            Verdict.ApplyPrefixRadianceClosure(report, scene, properties, observation.Trace, source, request.Assets, project);
         // 探测过的前缀捕获点全部留档。被拒的原因只在整层循环本来就有未解机制时并进 loop.unresolved：这时前缀是
         // 整层循环的回退，拒绝原因正好说明回退为什么没走成。条目不带 owner_layer_id，免得分配回退把它当成要保留实时的
         // 未解层；原本没有未解项的循环也不凭空添一条，免得改变整层裁定。
@@ -354,7 +359,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     }
 
     /// <summary>
-    /// 整层路线在"零 blocker 却求不出循环"时，真的试一次更小的烘焙分配，并把走了什么、结果如何写进 plan。
+    /// 整层路线在"除 HDR 闭合外零 blocker 却求不出循环"时，真的试一次更小的烘焙分配，并把走了什么、结果如何写进 plan。
+    /// HDR 闭合是按当前分配求的：更小分配把未解机制所在的子树留实时，重查时 Verdict.Initial 对新分配重求，所以 HDR 拒因不挡这一步；
+    /// 重查的 HDR 结论记在 replanned_hdr_radiance_closure_status，重查仍不闭合就不算找到。
     /// 这里只取证，不替换用户没有要求的分配：真要改分配由 bake 的同名回退或显式 --retain-live 执行。
     /// </summary>
     private async Task RecordLoopAllocationFallbackAsync(JsonObject report, JsonObject scene, HybridAnalyzeRequest request,
@@ -364,7 +371,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 重查请求自己带着 retain_live_root_ids，绝不递归第二层。
         if ((request.RetainLiveRootIds ?? []).Length != 0 || report["route"]?.GetValue<string>() != "whole_layer" ||
             report["whole_layer"]?["status"]?.GetValue<string>() != "unavailable" ||
-            report["blockers"] is not JsonArray { Count: 0 }) return;
+            report["blockers"] is not JsonArray initialBlockers || !PlanBlockers.Codes(report).All(Verdict.IsRadianceCode)) return;
+        // 只剩 HDR 拒因而循环本身完整时，没有要留实时的未解机制：不试，也不往完整的循环里补"没试"的说明。
+        if (initialBlockers.Count > 0 && report["loop"] is JsonObject wholeLoop && Routes.WholeLoopComplete(wholeLoop)) return;
         JsonObject evidence = HybridLoopAllocation.Explain(report, scene);
         report["loop_allocation_fallback"] = evidence;
         if (evidence["status"]?.GetValue<string>() != "proposed")
@@ -386,6 +395,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             var replannedLoop = replanned["loop"]!.AsObject();
             // 留下的未解析项全部可由残差掩盖时也算找到：bake 会走残差掩盖路线（例如留实时水面之后剩下的平稳随机雨）。
             (bool resolved, string basis, JsonObject? residual) = HybridLoopAllocation.ReplannedResolution(replanned, sourceScene, readResource);
+            // 重查按更小分配重求了 HDR 闭合（走前缀路线时是前缀捕获对象那次）。前缀路线的 blockers 只剩 HDR 拒因时
+            // ReplannedResolution 仍按路线判"找到"，这里按重查的 HDR 结论改判，免得编排层采纳一份还被 HDR 挡着的分配。
+            bool replannedRadianceOpen = PlanBlockers.Codes(replanned).Any(Verdict.IsRadianceCode);
+            if (resolved && replannedRadianceOpen) (resolved, basis) = (false, "hdr_radiance_open");
             evidence["status"] = resolved ? "candidate_found" : "still_unavailable";
             evidence["resolution_basis"] = basis;
             if (residual is not null)
@@ -405,13 +418,19 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             evidence["replanned_video_group_count"] = (replanned["video_groups"] as JsonArray)?.Count;
             evidence["replanned_effect_prefix_cache_count"] = (replanned["effect_prefix_caches"] as JsonArray)?.Count;
             evidence["replanned_blockers"] = replanned["blockers"]!.DeepClone();
+            // 重查 plan 的 HDR 闭合结论（最终路线那次求值）。hdr 未开启时判据不运行（not_applicable），不写这个字段，plan 逐字不变。
+            if (replanned["hdr_radiance_closure"]?["status"] is JsonValue radianceStatus &&
+                radianceStatus.TryGetValue(out string? radiance) && radiance != "not_applicable")
+                evidence["replanned_hdr_radiance_closure_status"] = radiance;
             evidence["replanned_unresolved"] = replannedLoop["unresolved"]!.DeepClone();
             // 重查只被全幅布局挡住时，把冲突给出的保留做法按完整 --retain-live 列表记下来，结论行才能给出照做就能用的参数。
             if (!resolved && HybridLoopAllocation.ReplannedRetainLiveSuggestion(replanned, retained) is JsonObject suggestion)
                 evidence["replanned_retain_live_suggestion"] = suggestion;
             Verdict.AddLoopUnresolved(report, "loop_allocation_fallback", resolved
                 ? $"No loop covers every baked layer, but a smaller bake allocation does: keeping author roots {retainedText} live leaves content that resolves. Re-run analyze with --retain-live {retainedText} to plan that allocation."
-                : $"No loop covers every baked layer, and the smaller bake allocation that keeps author roots {retainedText} live establishes none either.");
+                : replannedRadianceOpen
+                    ? $"No loop covers every baked layer, and the smaller bake allocation that keeps author roots {retainedText} live is still blocked by the HDR radiance closure of the content it captures."
+                    : $"No loop covers every baked layer, and the smaller bake allocation that keeps author roots {retainedText} live establishes none either.");
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)

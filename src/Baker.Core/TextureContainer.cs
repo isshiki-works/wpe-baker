@@ -74,8 +74,18 @@ public static class TextureContainer
     /// <summary>写入端固化的 8bit 无符号格式取值。</summary>
     public const int FormatRgba8 = 0;
 
+    /// <summary>
+    /// 解码后为 8 位无符号归一化（UNORM）的 TEX 格式：0 RGBA8888、4 DXT5、6 DXT3、7 DXT1
+    /// （取值表与渲染器 TexImageParser.ToTexFormate 一致，渲染器把 4/6/7 上传为 VK_FORMAT_BC3/BC2/BC1_*_UNORM_BLOCK）。
+    /// DXT 放行的规范依据（Khronos Data Format Specification 1.3 "S3TC Compressed Texture Image Formats"；
+    /// Vulkan 规范 "Fixed-Point Data Conversions"）：BC1–BC3 的颜色端点是 RGB565 UNORM，块内其余颜色是两端点的
+    /// 凸组合（2/3·c0+1/3·c1 等）；BC2 alpha 是 4 位 UNORM，BC3 alpha 是两个 8 位 UNORM 端点的凸组合或字面 0/1。
+    /// 所以采样结果与 RGBA8 一样落在 [0,1]，不会带进超过 1 的辐射。
+    /// </summary>
+    private static readonly HashSet<int> UnsignedNormalizedFormats = [FormatRgba8, 4, 6, 7];
+
     /// <summary>只有已确证的 8bit 无符号格式才算已知；其余取值一律按未知处理。</summary>
-    public static bool IsEightBitUnsignedFormat(int format) => format == FormatRgba8;
+    public static bool IsEightBitUnsignedFormat(int format) => UnsignedNormalizedFormats.Contains(format);
 
     /// <summary>只读解析 TEXV0005/TEXI0001 前导；其它容器版本一律返回 false（未知不放行）。</summary>
     public static bool TryReadHeader(ReadOnlySpan<byte> preamble, out TextureHeader header)

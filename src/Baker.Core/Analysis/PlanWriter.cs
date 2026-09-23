@@ -219,6 +219,8 @@ internal static class PlanWriter
             ["source_script_errors"] = verdict.ScriptFaultEvidence ? verdict.SourceScriptErrors.DeepClone() : null,
             ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified" };
         // 初判拒因在这里渲染一次：整层路线写进 blockers（特效前缀路线为空），whole_layer 始终记整层的那一份。
+        // 特效前缀路线的 HDR 闭合不在这里写：路线准入还可能改走前缀，定稿后统一按前缀捕获对象重求（Verdict.ApplyPrefixRadianceClosure），
+        // 届时 hdr_radiance_closure 换成那次求值，这里的整层求值挪到 hdr_radiance_closure_initial。
         PlanBlockers.Set(report, effectPrefixRoute ? [] : verdict.Blockers);
         // 开关关着时不写这一段，plan 逐字不变。
         if (daytime is not null) report["daytime_split"] = daytime.ToJson();
