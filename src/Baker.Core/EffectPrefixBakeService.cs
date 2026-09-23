@@ -83,10 +83,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         JsonObject candidateMetadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
         JsonObject referenceMetadata = candidateMetadata.DeepClone().AsObject();
         HashSet<string> cachedPropertyKeys = EffectPrefixCache.FixedPropertyKeys(caches.OfType<JsonObject>());
-        var result = new JsonObject { ["schema_version"] = 2, ["artifact_kind"] = "hybrid_video_candidate",
-            ["status"] = "running", ["source_sha256"] = hash, ["source_digest_scope"] = ProjectSource.DigestScope,
-            ["plan"] = plan.DeepClone(), ["groups"] = new JsonArray(), ["source_start_frame"] = 0,
-            ["seam_policy"] = "source_period_no_repair", ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified" };
+        JsonObject result = BakeReportWriter.EffectPrefixRunning(hash, plan.DeepClone().AsObject());
         string reportPath = Path.Combine(output, "bake.json");
         async Task Save()
         {
