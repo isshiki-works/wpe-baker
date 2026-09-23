@@ -208,6 +208,47 @@ std::vector<std::uint8_t> MdlWithPlayMode(std::string_view mode, bool terminated
     return bytes;
 }
 
+// MDLA0006，两条无骨骼动画：第一条的 flags 由参数给（0x400 位带源动画引用尾块），第二条普通。
+std::vector<std::uint8_t> MdlaV6WithFirstFlags(std::uint32_t flags) {
+    auto bytes = MdlPrefix();
+    AppendEmptyMdls(bytes);
+    auto end_field = BeginMdlBlock(bytes, "MDLA0006");
+    AppendU32(bytes, 2); // animations
+    struct Clip {
+        std::uint32_t    id;
+        std::string_view name;
+        std::string_view mode;
+        std::uint32_t    flags;
+    };
+    for (const Clip& clip : { Clip { 46, "Glance", "", flags }, Clip { 47, "clip", "loop", 0 } }) {
+        AppendU32(bytes, clip.id);
+        AppendU32(bytes, 0);
+        AppendString(bytes, clip.name);
+        AppendString(bytes, clip.mode);
+        AppendFloat(bytes, 30.0f);
+        AppendU32(bytes, 1); // length
+        AppendU32(bytes, clip.flags);
+        AppendU32(bytes, 0); // bone tracks
+        AppendU32(bytes, 0); // trans_flag
+        bytes.push_back(0);  // no per-bone blend curves
+        bytes.push_back(0);  // no v4 events
+        for (float v : { -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f }) AppendFloat(bytes, v); // AABB
+        bytes.push_back(0); // no scalar curves
+        if (clip.flags & 0x400) {
+            AppendU32(bytes, 1); // 源动画序号
+            AppendU16(bytes, 0);
+            AppendU32(bytes, 1); // 帧数
+            AppendU32(bytes, 0);
+            AppendU32(bytes, 0xFFFFFFFFu);
+        }
+        AppendU32(bytes, 1); // events
+        AppendU32(bytes, 0);
+        AppendString(bytes, R"({"frame":0,"name":"e"})");
+    }
+    FinishMdlBlock(bytes, end_field);
+    return bytes;
+}
+
 bool ParseMdlBytes(const std::vector<std::uint8_t>& bytes, owe::OfflineExecutionContext& context,
                    owe::Mdl* parsed_mdl = nullptr) {
     static unsigned serial = 0;
@@ -396,6 +437,26 @@ TEST(MdlParser, BoundsPlayModeToMdlaBlock) {
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "unterminated animation play_mode"));
+}
+
+// flags 0x401（语料里唯一出现的非零值）：读掉源动画引用尾块，下一条动画和事件表不跑偏。
+// flags 0x2（未知位）：原样保留，不读尾块，不拒绝。
+TEST(MdlParser, ReadsMdlaAnimationFlagsAndSourceReference) {
+    for (std::uint32_t flags : { 0x401u, 0x2u }) {
+        auto                         bytes = MdlaV6WithFirstFlags(flags);
+        owe::OfflineExecutionContext context;
+        owe::Mdl                     mdl;
+        EXPECT_TRUE(ParseMdlBytes(bytes, context, &mdl)) << flags;
+        EXPECT_FALSE(context.failed) << flags;
+        ASSERT_TRUE(mdl.puppet.is_some());
+        const auto& anims = (**mdl.puppet).anims;
+        ASSERT_EQ(anims.len(), usize(2)) << flags;
+        EXPECT_EQ(anims[usize(0)].flags, flags);
+        ASSERT_EQ(anims[usize(0)].events.len(), usize(1)) << flags;
+        EXPECT_EQ(anims[usize(1)].id, 47) << flags;
+        EXPECT_EQ(anims[usize(1)].name.as_str(), "clip"_str) << flags;
+        EXPECT_EQ(anims[usize(1)].events.len(), usize(1)) << flags;
+    }
 }
 
 TEST(MdlParser, RejectsUnsupportedPlayModeWithoutAssertion) {
