@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Baker.Core;
 
-internal static class PresetCascadeChecks
+internal static class AnalysisOrchestratorChecks
 {
     internal static async Task RunAsync(Action<bool, string> check, string root)
     {
@@ -9,7 +9,7 @@ internal static class PresetCascadeChecks
         async Task<JsonObject> Run(string name, Func<HybridAnalyzeRequest, JsonObject> plan, string preset = "quality", bool custom = false, string interaction = "fixed")
         {
             calls.Clear();
-            return await PresetCascade.AnalyzeAsync(new(2, "unused", "unused", Path.Combine(root, name),
+            return await AnalysisOrchestrator.RunAsync(new(2, "unused", "unused", Path.Combine(root, name),
                 Preset: preset, CustomSettings: custom, Interaction: interaction), (request, _) => {
                 calls.Add(request);
                 return Task.FromResult(plan(request));
@@ -71,7 +71,7 @@ internal static class PresetCascadeChecks
         var outer = Plan(new(2, "s", "a", allocation), false, 5);
         outer["analysis_directory"] = allocation;
         outer["loop_allocation_fallback"] = new JsonObject { ["status"] = "candidate_found", ["resolution_basis"] = "residual_maskable" };
-        JsonObject adopted = await PresetCascade.AdoptAllocationAsync(outer, CancellationToken.None);
+        JsonObject adopted = await AnalysisOrchestrator.AdoptAllocationAsync(outer, CancellationToken.None);
         check(Admission.Accepted(adopted) && adopted["settings"]!["daytime_state"]!.GetValue<string>() == "morning" &&
             adopted["allocation_adopted"] is JsonObject, "a usable internal morning allocation reaches the outer result");
         var audio = new JsonObject { ["kind"] = "image", ["canvas_fraction"] = 1.0, ["tradeoff_kinds"] = new JsonArray("audio") };
@@ -81,9 +81,9 @@ internal static class PresetCascadeChecks
         check(!InteractionPolicy.ExpensiveAudio(audio, 10, 1), "audio text remains protected even with an expensive synthetic reading");
         static bool Custom(params string[] options) =>
             Baker.Cli.OptionTable.ReadAnalyze(Baker.Cli.OptionTable.Parse(["analyze", "src", .. options])).Custom;
-        check(!PresetCascade.MeasureSourceByDefault && !Custom("--out", "p", "--tools", "t", "--preset", "quality") &&
+        check(!Custom("--out", "p", "--tools", "t", "--preset", "quality") &&
             Custom("--video-layout", "full_frame") && Custom("--properties", "p.json"),
-            "source power defaults off and semantic overrides are distinguished from transport options");
+            "semantic overrides are distinguished from transport options");
 
         string cache = Path.Combine(root, "preset-cache");
         int computed = 0;
@@ -122,7 +122,7 @@ internal static class PresetCascadeChecks
         staticBudget["source"] = scenePath;
         staticBudget["runtime_evidence"] = trace;
         foreach (JsonObject group in staticBudget["video_groups"]!.AsArray().OfType<JsonObject>()) group["layer_ids"] = new JsonArray(1);
-        JsonObject verifiedStaticBudget = await PresetCascade.AdoptAllocationAsync(staticBudget, CancellationToken.None);
+        JsonObject verifiedStaticBudget = await AnalysisOrchestrator.AdoptAllocationAsync(staticBudget, CancellationToken.None);
         check(Admission.GroupCount(verifiedStaticBudget) == 0 && Admission.StaticGroupCount(verifiedStaticBudget) == 5 &&
             verifiedStaticBudget["static_group_budget"]?["status"]?.GetValue<string>() == "verified",
             "only an over-budget plan with source_static proof frees decoder slots for static caches");

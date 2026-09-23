@@ -122,9 +122,16 @@ try
         var request = AnalyzeRequestFactory.Build(analyzeOptions, sourcePath, assets, analysisDirectory, properties, propertiesOrigin,
             frameRate.Fps, (uint)OptionTable.Value("analyze", options, "--fps-den")!, frameRate.ToJson());
         var progress = new Progress<RenderProgress>(p => Console.Error.WriteLine(JsonSerializer.Serialize(p, jsonOptions)));
+        // 状态拆分（--daytime-split on）：识别成功时编排器每个状态按"只有这套图层可见"再规划一次，子 plan 落在 <out>.state-<名字>.json，
+        // 母 plan 的 daytime_split.states[] 记下各状态的 plan 路径、结论 key、阻断数、实时层数与视频组数。各状态的结论行排在视频外壳两行之后。
+        var stateLines = new List<string>();
+        StateExport? stateExport = request.DaytimeSplit ? new(stateName => options.TryGetValue("--out", out var planOut)
+                ? planOut + ".state-" + stateName + ".json" : Path.Combine(analysisDirectory, "state-" + stateName, "plan.json"),
+            (stateName, statePlan) => stateLines.Add($"[daytime-split] state {stateName}: {statePlan["summary"]?[language]?.GetValue<string>() ?? statePlan["summary"]?["en"]?.GetValue<string>()}"))
+            : null;
         JsonObject report;
         int analyzeExitCode = 0;
-        try { report = await new HybridScenePlanner(tools).AnalyzeAsync(request, progress, cancellation.Token); }
+        try { report = await new HybridScenePlanner(tools).AnalyzeAsync(request, progress, cancellation.Token, stateExport); }
         catch (AnalysisToolLimitationException limitation)
         {
             // 渲染器读不了作品里的素材文件：照常写出结论报告，但用单独的退出码，不和"不适用"(1) 混在一起。
@@ -140,31 +147,7 @@ try
             Console.Error.WriteLine(dominance["reason_en"]?.GetValue<string>());
             Console.Error.WriteLine(dominance["reason_zh"]?.GetValue<string>());
         }
-        // 状态拆分识别成功：每个状态按"只有这套图层可见"再规划一次，子 plan 落在 <out>.state-<名字>.json，
-        // 母 plan 的 daytime_split.states[] 记下各状态的 plan 路径、结论 key、阻断数、实时层数与视频组数。
-        if (analyzeExitCode == 0 && request.DaytimeSplit && report["daytime_split"] is JsonObject split && split["status"]?.GetValue<string>() == "recognized")
-        {
-            foreach (JsonObject state in split["states"]!.AsArray().OfType<JsonObject>())
-            {
-                string stateName = state["name"]!.GetValue<string>();
-                string stateDirectory = Path.Combine(analysisDirectory, "state-" + stateName);
-                JsonObject statePlan = await new HybridScenePlanner(tools).AnalyzeSingleAsync(
-                    request with { OutputDirectory = stateDirectory, DaytimeState = stateName }, progress, cancellation.Token);
-                // 子 plan 不经预设级联，生成准入要在这里补上，否则它会说能生成、bake 第一步才拒。
-                Admission.ApplyGenerationAdmission(statePlan);
-                string statePlanPath = options.TryGetValue("--out", out var planOut) ? planOut + ".state-" + stateName + ".json"
-                    : Path.Combine(stateDirectory, "plan.json");
-                await using (var stateFile = new FileStream(statePlanPath, FileMode.CreateNew, FileAccess.Write))
-                    await JsonSerializer.SerializeAsync(stateFile, statePlan, jsonOptions, cancellation.Token);
-                state["plan"] = statePlanPath;
-                state["status"] = statePlan["status"]?.DeepClone();
-                state["summary_key"] = statePlan["summary"]?["key"]?.DeepClone();
-                state["blocker_count"] = (statePlan["blockers"] as JsonArray)?.Count;
-                state["live_layer_count"] = (statePlan["live_layer_ids"] as JsonArray)?.Count;
-                state["video_group_count"] = (statePlan["video_groups"] as JsonArray)?.Count;
-                Console.Error.WriteLine($"[daytime-split] state {stateName}: {statePlan["summary"]?[language]?.GetValue<string>() ?? statePlan["summary"]?["en"]?.GetValue<string>()}");
-            }
-        }
+        foreach (string stateLine in stateLines) Console.Error.WriteLine(stateLine);
         string text = JsonSerializer.Serialize(report, jsonOptions);
         if (options.TryGetValue("--out", out var output))
         {

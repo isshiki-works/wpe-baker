@@ -170,12 +170,6 @@ public static class PlanBlockers
     }
 
     /// <summary>
-    /// 同上，给的是 owner 上的 blockers 数组（预设级联的旧调用形态，C2.2e 改成传 owner 后删，登记在 forwarders.txt）。
-    /// </summary>
-    public static void Add(JsonArray items, Blocker blocker) =>
-        Add(items.Parent as JsonObject ?? throw new InvalidOperationException("A blockers array must belong to a plan object."), blocker);
-
-    /// <summary>
     /// 写 plan 时把 blockers_localized 挪到 owner 末尾：v3 的字节顺序里它排在分析期间写下的所有字段之后
     /// （C2.2d2 之前由写 plan 前的 Finish 追加）。只由 <see cref="PlanWriter"/> 在挂双语字段之前调一次。
     /// </summary>

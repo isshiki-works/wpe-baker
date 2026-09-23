@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 using Baker.Core;
 using Xunit;
 
-// C1.3：生成准入单点。analyze、PresetCascade、bake 第一步都调 Admission.Evaluate，这里守住每类判据的结论。
+// C1.3：生成准入单点。analyze、分析编排（C2.2e 起 AnalysisOrchestrator）、bake 第一步都调 Admission.Evaluate，这里守住每类判据的结论。
 [Trait("Layer", "L0")]
 public class AdmissionTests
 {
@@ -144,7 +144,7 @@ public class AdmissionTests
 
     private static JsonObject Narrated(JsonObject plan)
     {
-        plan["suitability"] = HybridScenePlanner.Suitability(plan);
+        plan["suitability"] = HybridSuitability.Verdict(plan);
         PlanNarrative.Attach(plan);
         return plan;
     }

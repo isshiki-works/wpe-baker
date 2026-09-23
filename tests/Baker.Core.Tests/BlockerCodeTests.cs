@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Baker.Core;
@@ -8,9 +7,7 @@ using Xunit;
 [Trait("Layer", "L0")]
 public class BlockerTriageTests
 {
-    private static JsonObject Verdict(JsonObject plan) => (JsonObject)typeof(HybridBakeService).Assembly
-        .GetType("Baker.Core.HybridScenePlanner")!.GetMethod("Suitability", BindingFlags.Static | BindingFlags.NonPublic)!
-        .Invoke(null, [plan])!;
+    private static JsonObject Verdict(JsonObject plan) => HybridSuitability.Verdict(plan);
 
     private static JsonObject Plan(params Blocker[] blockers)
     {

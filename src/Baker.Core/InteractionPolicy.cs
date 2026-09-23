@@ -16,17 +16,8 @@ internal static class InteractionPolicy
     internal static async Task<(int[] Excluded, JsonArray Costs)> ExclusionsAsync(JsonObject plan, HybridAnalyzeRequest request,
         NativeTools? tools, string output, CancellationToken token)
     {
+        // plan 的图层清单来自已拒绝父链成环的 SceneGraph，子树判断直接用它的按对象表重载。
         var layers = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().ToDictionary(l => l["id"]!.GetValue<int>());
-        bool InTree(int id, int root)
-        {
-            var seen = new HashSet<int>();
-            while (layers.TryGetValue(id, out var layer) && seen.Add(id))
-            {
-                if (id == root) return true;
-                if (layer["parent"] is not JsonValue parent || !parent.TryGetValue<int>(out id)) break;
-            }
-            return false;
-        }
         var excluded = new List<int>();
         var costs = new JsonArray();
         JsonObject? runtime = plan["runtime_evidence"]?.GetValue<string>() is string path && File.Exists(path)
@@ -35,7 +26,7 @@ internal static class InteractionPolicy
             ? runtime["gpu_timing"]?["draw_ms"]?.GetValue<double>() : null;
         foreach (var (id, layer) in layers)
         {
-            if (Protected(layer) || layers.Any(pair => InTree(pair.Key, id) && Protected(pair.Value))) continue;
+            if (Protected(layer) || layers.Any(pair => SceneGraph.Within(layers, pair.Key, id) && Protected(pair.Value))) continue;
             if (Kinds(layer).Contains("pointer"))
             {
                 excluded.Add(id);
@@ -67,7 +58,7 @@ internal static class InteractionPolicy
                             InputTimeline: new JsonArray(new JsonObject { ["frame"] = 12, ["cursor_x"] = .25, ["cursor_y"] = .25, ["cursor_in_window"] = true },
                                 new JsonObject { ["frame"] = 24, ["cursor_x"] = .75, ["cursor_y"] = .75, ["mouse_buttons_down"] = 1 },
                                 new JsonObject { ["frame"] = 36, ["mouse_buttons_down"] = 0 }),
-                            LayerSelection: new(layers.Keys.Where(other => !InTree(other, id)).ToArray()), GpuTiming: true), token);
+                            LayerSelection: new(layers.Keys.Where(other => !SceneGraph.Within(layers, other, id)).ToArray()), GpuTiming: true), token);
                         JsonNode? timing = raw["native_result"]?["gpu_timing"];
                         if (timing?["supported"]?.GetValue<bool>() == true && timing["draw_ms"] is JsonValue value && value.TryGetValue<double>(out double after))
                         {

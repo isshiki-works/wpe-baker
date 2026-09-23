@@ -198,9 +198,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         catch (Exception) { return null; }
     }
 
+    /// <summary>门面：交给 <see cref="AnalysisOrchestrator"/> 在搜索空间里编排单次分析；<paramref name="states"/> 给了才逐状态导出子 plan。</summary>
     public async Task<JsonObject> AnalyzeAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
-        CancellationToken cancellationToken = default) =>
-        await PresetCascade.AnalyzeAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, progress, token), cancellationToken, tools);
+        CancellationToken cancellationToken = default, StateExport? states = null) =>
+        await AnalysisOrchestrator.RunAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, progress, token), cancellationToken, tools, states);
 
     /// <summary>
     /// 单次分析的编排：观测 → 实时判定 → 分配 → 构图 → 初判（<see cref="Verdict"/>）→ 循环与特效前缀 → 组 plan（<see cref="PlanWriter"/>）
@@ -429,8 +430,6 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     internal static int? Int(JsonNode? node) => SceneGraph.Int(node);
     internal static double Numeric(JsonNode? node, double fallback) => SceneGraph.Numeric(node, fallback);
     internal static JsonNode? Resolve(JsonNode? value, JsonObject properties) => SceneGraph.Resolve(value, properties);
-    internal static string CapabilityScanText(string code) => Liveness.CapabilityScanText(code);
-    internal static JsonObject Suitability(JsonObject plan) => HybridSuitability.Verdict(plan);
     internal static Blocker? FullFrameConflict(JsonObject plan) => LayoutAdmission.FullFrameConflict(plan);
     internal static Blocker? CompositionHierarchyConflict(JsonObject plan,
         IReadOnlyDictionary<int, JsonObject>? sourceObjects = null, JsonArray? dependencies = null) =>
