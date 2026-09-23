@@ -153,6 +153,8 @@ internal static class TradeoffOptionsChecks
 
         // 无独立组不足以证明主体只剩实时效果，不能把绘制层改标为 subject。
         var subject = Plan(Layer(10, null, "指针着色器", live: true, ["active_shader_pointer_input"]));
+        // v3 形态：blockers 英文原文与 blockers_localized 同下标成对；取舍清单按编号读，只有 blockers_localized 读不到。
+        subject["blockers"] = new JsonArray(MessageCatalog.RenderLegacy("blocker.no_input_independent_group"));
         subject["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.no_input_independent_group" });
         TradeoffOptions.Attach(subject);
         check(subject[TradeoffOptions.Field]!["status"]!.GetValue<string>() == "dependency_blocked" &&

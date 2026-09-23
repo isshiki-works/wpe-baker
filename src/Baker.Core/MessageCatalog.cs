@@ -865,8 +865,7 @@ public static class MessageCatalog
         // 原作采样仅描述本机；旧分档键继续可读，但不继续传播跨设备收益结论。
         ["source_power.observed"] = new(
             Zh: "已记录本机原作功耗；这不能单独判断生成收益或其他设备的负载。",
-            En: "Source power recorded on this device; this alone does not establish baking savings or load on other hardware.",
-            Legacy: "Source power recorded on this device; this alone does not establish baking savings or load on other hardware."),
+            En: "Source power recorded on this device; this alone does not establish baking savings or load on other hardware."),
 
         ["source_power.not_worth"] = new(
             Zh: "旧报告记录了较低的本机原作功耗；生成收益尚未由此确认。",
@@ -1003,8 +1002,7 @@ public static class MessageCatalog
 
         ["summary.not_suitable_current"] = new(
             Zh: "当前不适合生成：{0}",
-            En: "Currently unsuitable for baking: {0}",
-            Legacy: "Currently unsuitable for baking: {0}"),
+            En: "Currently unsuitable for baking: {0}"),
 
         ["summary.blocked"] = new(
             Zh: "不可生成：{0}（阻断原因共 {1} 条，详见 plan.json 的 blockers_localized）",
@@ -1413,7 +1411,7 @@ public static class MessageCatalog
         Table.GetValueOrDefault(key) is { } entry ? Render(entry.LegacyTemplate, args) : key;
 
     /// <summary>按 key 与中英各一套参数生成 {key, zh, en, params}。</summary>
-    public static JsonObject Localized(string key, object?[] chineseArgs, object?[] englishArgs) =>
+    internal static JsonObject Localized(string key, object?[] chineseArgs, object?[] englishArgs) =>
         Table.GetValueOrDefault(key) is { } entry
             ? Build(key, entry, englishArgs, chineseArgs)
             : new JsonObject { ["key"] = key, ["zh"] = key, ["en"] = key, ["params"] = new JsonArray() };

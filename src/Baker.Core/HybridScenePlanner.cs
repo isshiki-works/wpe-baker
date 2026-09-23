@@ -1234,8 +1234,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 item["property"]?.GetValue<string>()?.StartsWith("layer_", StringComparison.Ordinal) == true) &&
             CompositionHierarchyConflict(report, objects, dependencies) is Blocker publicQueryConflict)
         {
-            report["blockers"]!.AsArray().Add(publicQueryConflict.ToNode());
-            report["whole_layer"]!["blockers"]!.AsArray().Add(publicQueryConflict.ToNode());
+            PlanBlockers.Add(report["blockers"]!.AsArray(), publicQueryConflict);
+            PlanBlockers.Add(report["whole_layer"]!["blockers"]!.AsArray(), publicQueryConflict);
             report["whole_layer"]!["status"] = "unavailable";
             report["status"] = "requires_resolution";
         }

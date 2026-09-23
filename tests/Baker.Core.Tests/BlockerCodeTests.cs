@@ -109,7 +109,7 @@ public class BlockerCatalogTests
     public void EveryCodeIsProducedInSource()
     {
         // 编号表不养死编号：每个编号在产品代码里至少被构造一次。
-        string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src"));
+        string root = Path.Combine(LocalTools.RepositoryRoot, "src");
         string source = string.Join("\n", Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.EndsWith("Blocker.cs", StringComparison.Ordinal)).Select(File.ReadAllText));
         string[] unused = Enum.GetNames<BlockerCode>().Where(name => !source.Contains("BlockerCode." + name, StringComparison.Ordinal)).ToArray();

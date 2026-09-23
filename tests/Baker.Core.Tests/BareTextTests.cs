@@ -8,7 +8,7 @@ using Xunit;
 [Trait("Layer", "L2")]
 public class BareTextTests
 {
-    private static readonly string SourceRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src"));
+    private static readonly string SourceRoot = Path.Combine(LocalTools.RepositoryRoot, "src");
 
     private static IEnumerable<(string Path, string Text)> Sources() =>
         Directory.EnumerateFiles(SourceRoot, "*.cs", SearchOption.AllDirectories)

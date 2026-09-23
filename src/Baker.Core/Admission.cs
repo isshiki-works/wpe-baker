@@ -49,7 +49,7 @@ public static class Admission
         if (residual["status"]?.GetValue<string>() == "rejected")
         {
             // 无候选时 bake 先按"无循环"拒绝；分析照样记下残差不可掩盖，两边都拒。
-            string reason = residual["reason_en"]?.GetValue<string>() ?? residual["reason"]?.GetValue<string>() ?? "Unresolved content must remain live.";
+            string reason = residual["reason"]!.GetValue<string>();
             return new(hasCandidates ? AdmissionRejection.ResidualNotMaskable : AdmissionRejection.NoLoop, residual,
                 new Blocker(BlockerCode.BakeAllocation, [reason]), null);
         }
@@ -99,7 +99,7 @@ public static class Admission
         AdmissionVerdict verdict = Evaluate(plan, scene, readResource);
         plan["loop"]!["residual_masking"] = verdict.Residual;
         if (verdict.Blocker is not { Code: BlockerCode.BakeAllocation } blocker) return;
-        plan["blockers"]!.AsArray().Add(blocker.ToNode());
+        PlanBlockers.Add(plan["blockers"]!.AsArray(), blocker);
         plan["status"] = "requires_resolution";
         plan["suitability"] = HybridScenePlanner.Suitability(plan);
         PlanNarrative.Attach(plan);

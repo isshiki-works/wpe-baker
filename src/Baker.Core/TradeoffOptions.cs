@@ -122,9 +122,9 @@ public static class TradeoffOptions
         ArgumentNullException.ThrowIfNull(plan);
         var layers = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(layer => Number(layer["id"]) is not null).ToDictionary(layer => (int)Number(layer["id"])!.Value);
-        string[] blockerKeys = [.. (plan["blockers_localized"] as JsonArray ?? []).OfType<JsonObject>()
-            .Select(item => Text(item["key"])).OfType<string>()];
-        bool dependencyBlocked = blockerKeys.Any(key => key is "blocker.no_input_independent_group" or "blocker.no_input_independent_group_generic");
+        // 在 PlanNarrative.Attach 里 Finish 之后运行，plan 已编号：按编号判断，不比键字符串。
+        BlockerCode[] blockerCodes = [.. PlanBlockers.Codes(plan)];
+        bool dependencyBlocked = blockerCodes.Any(code => code is BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric);
         var record = new JsonObject {
             ["basis"] = "Read from this plan only: turning these off requires analyzing again; residual live layer counts are estimates.",
             ["retain_live_measured"] = "Keeping layers live measurably does not save power (laptop iGPU rail 11.63 -> 11.20 W, package +12% at 60 fps).",
@@ -198,7 +198,7 @@ public static class TradeoffOptions
         // 这张还卡着与实时元素无关的问题时先说清楚：画面本来就被切成几块，或者根本还没证明出可闭合的循环。
         // 关掉可取舍元素不一定解决这两种，别让清单看起来像保票。
         var caveats = new List<string>();
-        if (blockerKeys.Contains("blocker.fullframe_split_groups_options", StringComparer.Ordinal)) caveats.Add("tradeoff.caveat_structural");
+        if (blockerCodes.Contains(BlockerCode.FullframeSplitGroupsOptions)) caveats.Add("tradeoff.caveat_structural");
         if ((plan["loop"]?["candidates"] as JsonArray ?? []).Count == 0 &&
             Text(plan["loop"]?["no_candidate_reason"]?["kind"]) is not null) caveats.Add("tradeoff.caveat_no_loop");
         record["caveats"] = new JsonArray([.. caveats.Select(key => (JsonNode)JsonValue.Create(key))]);
