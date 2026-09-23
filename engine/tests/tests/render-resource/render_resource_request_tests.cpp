@@ -10,7 +10,7 @@ import wescene.scene;
 import wescene.types;
 import wescene.vulkan;
 import wescene.vulkan_render;
-import wescene.scene_wallpaper;
+import wescene.offline_session;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
