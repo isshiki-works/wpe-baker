@@ -7,7 +7,7 @@ namespace Periodica.Bench;
 /// <param name="IdleSeconds">大于 0 时在首尾各加一段空闲基线 I（WPE 暂停），功耗按两段空闲均值扣除。</param>
 internal sealed record AbbaOptions(string WallpaperEngine, string Original, string? Baked, string Output,
     string Order = "ABBA", int Monitor = 0, int Seconds = 45, int SettleSeconds = 20, double Fps = 60,
-    int IdleSeconds = 0, string? PresentMon = null);
+    int IdleSeconds = 0, string? PresentMon = null, string? Restore = null);
 
 /// <summary>
 /// 官方 WPE 播放功耗的 A/B/B/A 编排：记下该显示器当前壁纸，逐段打开原作/成品（或暂停作空闲基线）、等稳定、
@@ -34,7 +34,7 @@ internal static class Abba
         string output = Path.GetFullPath(options.Output);
         if (Directory.Exists(output) || File.Exists(output)) throw new IOException("--out must be a new directory.");
         var wpe = new WpeControl(options.WallpaperEngine);
-        string previous = await wpe.GetWallpaperAsync(options.Monitor, token);
+        string previous = options.Restore ?? await wpe.GetWallpaperAsync(options.Monitor, token);
         if (previous.Length == 0)
             throw new InvalidDataException($"Wallpaper Engine reports no wallpaper on monitor {options.Monitor}; nothing to restore to.");
         Directory.CreateDirectory(output);
