@@ -760,11 +760,11 @@ public class CommonLoopSolverCaseTests
 }
 
 [Trait("Layer", "L1")]
-public class HybridCompositionValidatorCaseTests
+public class CompositionReferenceCaseTests
 {
     [Fact]
     public async Task Run()
     {
-        await TestTemp.Run(dir => HybridCompositionValidatorCaseChecks.RunAsync(Assert.True, dir));
+        await TestTemp.Run(dir => CompositionReferenceCaseChecks.RunAsync(Assert.True, dir));
     }
 }
