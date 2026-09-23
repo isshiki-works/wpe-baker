@@ -7,7 +7,7 @@ namespace Periodica.Bench;
 /// <param name="IdleSeconds">大于 0 时在首尾各加一段空闲基线 I（WPE 暂停），功耗按两段空闲均值扣除。</param>
 internal sealed record AbbaOptions(string WallpaperEngine, string Original, string? Baked, string Output,
     string Order = "ABBA", int Monitor = 0, int Seconds = 45, int SettleSeconds = 20, double Fps = 60,
-    int IdleSeconds = 0, string? PresentMon = null);
+    int IdleSeconds = 0, string? PresentMon = null, string? Restore = null);
 
 /// <summary>
 /// 官方 WPE 播放功耗的 A/B/B/A 编排：记下该显示器当前壁纸，逐段打开原作/成品（或暂停作空闲基线）、等稳定、
@@ -27,14 +27,27 @@ internal static class Abba
         return idleSeconds > 0 ? "I" + order + "I" : order;
     }
 
+    static void RequireEntryFile(string project)
+    {
+        string json = Directory.Exists(project) ? Path.Combine(project, "project.json") : project;
+        if (!File.Exists(json)) throw new FileNotFoundException("project.json not found.", json);
+        string? entry = JsonNode.Parse(File.ReadAllText(json))?["file"]?.GetValue<string>();
+        string dir = Path.GetDirectoryName(json)!;   // 创意工坊原作的入口在 scene.pkg 里
+        if (entry is null || !File.Exists(Path.Combine(dir, entry)) && !File.Exists(Path.Combine(dir, "scene.pkg")))
+            throw new InvalidDataException($"{json}: entry file '{entry}' is missing; the wallpaper would render nothing.");
+    }
+
     internal static async Task<JsonObject> RunAsync(AbbaOptions options, IProgress<string> progress, CancellationToken token)
     {
         string phases = Phases(options.Order, options.IdleSeconds);
         if (phases.Contains('B') && options.Baked is null) throw new ArgumentException("--order uses B but --baked is missing.");
+        // 项目缺入口文件时 WPE 照样 60 fps 出空帧，功耗接近空闲，会被误读成"大幅节省"（9/24 Q4 三张静态成品即如此）
+        foreach (string? project in new[] { options.Original, options.Baked })
+            if (project is not null) RequireEntryFile(project);
         string output = Path.GetFullPath(options.Output);
         if (Directory.Exists(output) || File.Exists(output)) throw new IOException("--out must be a new directory.");
         var wpe = new WpeControl(options.WallpaperEngine);
-        string previous = await wpe.GetWallpaperAsync(options.Monitor, token);
+        string previous = options.Restore ?? await wpe.GetWallpaperAsync(options.Monitor, token);
         if (previous.Length == 0)
             throw new InvalidDataException($"Wallpaper Engine reports no wallpaper on monitor {options.Monitor}; nothing to restore to.");
         Directory.CreateDirectory(output);
