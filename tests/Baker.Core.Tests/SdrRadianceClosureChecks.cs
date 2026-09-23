@@ -74,7 +74,7 @@ internal static class SdrRadianceClosureChecks
             string tracePath = Path.Combine(root, "sdr-" + name + "-trace.json");
             await File.WriteAllTextAsync(tracePath, trace.ToJsonString());
             return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
-                new(2, directory, root, Path.Combine(root, "sdr-" + name + "-plan"), 64, 32, RuntimeTraceFile: tracePath));
+                new(2, directory, root, Path.Combine(root, "sdr-" + name + "-plan"), 64, 32, RuntimeTraceFile: tracePath, Postprocessing: "ultra"));
         }
         static JsonObject Closure(JsonObject plan) => plan["hdr_radiance_closure"]!.AsObject();
         static bool Blocked(JsonObject plan) => plan["blockers"]!.AsArray()
