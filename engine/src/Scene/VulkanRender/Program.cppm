@@ -29,14 +29,14 @@ using rstd::cppstd::as_str;
 
 export namespace owe::vulkan
 {
-class DeclaredShaderArtifactProvider {
+class DeclaredShaderArtifactProvider final : public resource::ShaderArtifactProvider {
 public:
     explicit DeclaredShaderArtifactProvider(const ResourceDeclarationContext& declarations)
         : m_declarations(rstd::ref<ResourceDeclarationContext>::from_raw_parts(
               rstd::addressof(declarations))) {}
 
     auto LoadShader(const resource::ShaderRequest& request)
-        -> rstd::Result<resource::ShaderArtifact, resource::ResourceError> {
+        -> rstd::Result<resource::ShaderArtifact, resource::ResourceError> override {
         auto artifact = m_declarations->ShaderArtifact(request);
         if (artifact.is_none()) {
             return rstd::Err(resource::ResourceError {
@@ -165,8 +165,8 @@ struct RenderProgram {
     rstd::vec::Vec<rstd::mut_ref<VulkanPass>>               frame_passes;
     rstd::Option<rstd::mut_ref<PrePass>>                    frame_prepass;
     rstd::Option<rstd::mut_ref<FinPass>>                    frame_finpass;
-    rstd::vec::Vec<Box<dyn<UniformBufferUpdate>>>           uniform_update_owners;
-    rstd::vec::Vec<ref<dyn<UniformBufferUpdate>>>           uniform_updates;
+    rstd::vec::Vec<std::unique_ptr<UniformBufferUpdate>>           uniform_update_owners;
+    rstd::vec::Vec<const UniformBufferUpdate*>           uniform_updates;
     resource_registry::DescriptorBindingRecordState         descriptor_record_state;
     PipelineLayoutAssignments                               pipeline_layout_assignments;
     Option<resource::DescriptorBindingHandle>               global_descriptor_binding;
@@ -704,22 +704,21 @@ struct RenderProgram {
 
         SnapshotImportedTextureProvider imported_textures(
             render_scene, ref<Scene>::from_raw_parts(rstd::addressof(scene)));
-        auto content =
-            rstd::dyn<owe::resource::TextureContentProvider>::from_ref(imported_textures);
-        auto buffer_content =
-            rstd::dyn<owe::resource::BufferContentProvider>::from_ref(declarations);
+        owe::resource::TextureContentProvider* content =
+            &imported_textures;
+        owe::resource::BufferContentProvider* buffer_content =
+            &declarations;
         DeclaredShaderArtifactProvider declared_shaders(declarations);
-        auto                           shader_artifacts =
-            rstd::dyn<owe::resource::ShaderArtifactProvider>::from_ref(declared_shaders);
+        owe::resource::ShaderArtifactProvider*                           shader_artifacts =
+            &declared_shaders;
         auto started =
             rr.resources.BeginPreparePlan(resource_plan,
                                           owe::resource_registry::ResourceContentProviders {
                                               .texture = rstd::Some(content),
-                                              .buffer  = rstd::Some(buffer_content.as_mut_ref()),
-                                              .shader  = rstd::Some(shader_artifacts.as_mut_ref()),
+                                              .buffer  = rstd::Some(buffer_content),
+                                              .shader  = rstd::Some(shader_artifacts),
                                           },
-                                          sections,
-                                          None());
+                                          sections);
         if (started.is_err()) {
             auto error = rstd::move(started).unwrap_err_unchecked();
             rstd_error("prepare resource plan failed: {}", error.message);
@@ -732,7 +731,7 @@ struct RenderProgram {
     auto continuePrepare(owe::Scene& scene, const Device& device, RenderingResources& rr)
         -> RenderProgramPrepareStatus {
         if (resource_prepare_session.is_none()) return RenderProgramPrepareStatus::Failed;
-        auto progress = rr.resources.ContinuePreparePlan(*resource_prepare_session, None());
+        auto progress = rr.resources.ContinuePreparePlan(*resource_prepare_session);
         if (progress.is_err()) {
             auto error = rstd::move(progress).unwrap_err_unchecked();
             rstd_error("prepare resource plan failed: {}", error.message);
@@ -954,13 +953,13 @@ struct RenderProgram {
         uniform_updates.clear();
         uniform_update_owners.clear();
         SceneUniformBindingPrepareContext uniform_prepare_impl(scene);
-        auto uniform_prepare = dyn<UniformBindingPrepareContext>::from_ref(uniform_prepare_impl);
+        const UniformBindingPrepareContext* uniform_prepare = &uniform_prepare_impl;
         Vec<resource::BufferUseHandle> prepared_uniform_buffers;
         for (auto& record : pass_records) {
             auto pass = resolve(record);
             if (pass.is_none()) continue;
             PreparedPassResources resources(rr.resources.Prepared(), record.resources);
-            auto created = pass->createUniformBufferUpdates(uniform_prepare.as_ref(), resources);
+            auto created = pass->createUniformBufferUpdates(uniform_prepare, resources);
             if (created.is_err()) {
                 auto error = rstd::move(created).unwrap_err_unchecked();
                 rstd_error("prepare uniform binding failed for {}: {}",
@@ -984,7 +983,7 @@ struct RenderProgram {
         }
         uniform_updates.reserve(uniform_update_owners.len());
         for (const auto& binding : uniform_update_owners) {
-            uniform_updates.push(binding.as_ref());
+            uniform_updates.push(binding.get());
         }
         global_descriptor_binding = next_global_descriptor_binding;
         return RenderProgramPrepareStatus::Complete;
@@ -1112,15 +1111,15 @@ struct RenderProgram {
     }
 
     bool update(const SceneFrame& frame, VkExtent2D extent,
-                ref<dyn<SceneTextureAnimationView>> textures, RenderingResources& rr) {
-        auto buffer_writer = rstd::dyn<resource::BufferContentWriter>::from_ref(rr.resources);
+                const SceneTextureAnimationView* textures, RenderingResources& rr) {
+        resource::BufferContentWriter* buffer_writer = &rr.resources;
         ProgramUniformFrameContext frame_context(
             frame,
             { static_cast<float>(extent.width), static_cast<float>(extent.height) },
             textures);
-        auto context = dyn<UniformBufferFrameContext>::from_ref(frame_context);
+        const UniformBufferFrameContext* context = &frame_context;
         for (auto& binding : uniform_updates) {
-            auto result = binding->Update(context.as_ref(), buffer_writer.as_mut_ref());
+            auto result = binding->Update(context, buffer_writer);
             if (result.is_err()) {
                 auto error = rstd::move(result).unwrap_err_unchecked();
                 rstd_error("update uniform buffer failed: {}", error.message.as_str());
@@ -1133,7 +1132,7 @@ struct RenderProgram {
             if (! pass || ! pass->prepared()) continue;
             PreparedPassResources resources(rr.resources.Prepared(), record.resources);
             PassUpdateContext     update_context {
-                .buffers   = buffer_writer.as_mut_ref(),
+                .buffers   = buffer_writer,
                 .resources = ref<PreparedPassResources>::from_raw_parts(rstd::addressof(resources)),
                 .graphics  = graphics,
                 .textures  = textures,

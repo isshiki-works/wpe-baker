@@ -42,6 +42,15 @@ auto LoadJsonFile(fs::VFS& vfs, const std::string& path) -> Option<NJson> {
     return Some(rstd::move(parsed).unwrap_unchecked());
 }
 
+// libc++ 22 没有 std::move_only_function：把只可移动的闭包放进 shared_ptr，再交给 std::function。
+// 原来的 rstd 闭包句柄（Box/Arc 包 FnMut）从不复制闭包，这里各份拷贝共享同一个闭包，语义不变。
+template<typename F>
+auto ShareCallable(F callable) {
+    return [shared = std::make_shared<F>(rstd::move(callable))](auto&&... args) -> decltype(auto) {
+        return (*shared)(std::forward<decltype(args)>(args)...);
+    };
+}
+
 template<typename T>
 struct CopyableArcHold {
     Arc<T> value;
@@ -166,7 +175,7 @@ array<float, 2> Texture0UvScale(const SceneMaterial& material, bool nopadding) {
 
 void InstallImageAlignmentBinding(script::JsRuntime& runtime, SceneNode* node, ref<str> alignment,
                                   const SceneParseContext::ImageAlignmentSetter& setter) {
-    runtime.RegisterImageAlignmentSetter(node, alignment, setter.clone());
+    runtime.RegisterImageAlignmentSetter(node, alignment, setter);
 }
 
 void RegisterImageAlignmentBinding(SceneParseContext& context, SceneNode* node, ref<str> alignment,
@@ -399,7 +408,7 @@ void WireFieldScripts(SceneParseContext& context, const Arc<SceneNode>& node_sp,
         auto state = CopyableArcHold(context.uniform_state.clone());
         context.scene->RegisterUserPropertyBinding(
             (**parallax_binding).user->clone(),
-            Box<dyn<FnMut<void(ref<NJson>)>>>::make(
+            std::function<void(ref<NJson>)>(
                 [state, object_id = node->ID()](ref<NJson> property) mutable {
                     (void)state.value->ApplyObjectParallaxDepth(object_id, *property);
                 }));
@@ -519,13 +528,13 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
             auto hold = CopyableArcHold(puppet_layer.clone());
             context.scene->RegisterUserPropertyBinding(
                 user_binding->key.clone(),
-                Box<dyn<FnMut<void(ref<NJson>)>>>::make(
+                std::function<void(ref<NJson>)>(ShareCallable(
                     [hold, layer_id = authored.layer_id,
                      binding = rstd::move(*user_binding)](ref<NJson> property) mutable {
                         auto visible = ResolveSceneUserVisibilityBinding(binding, *property);
                         if (visible.is_some())
                             (void)hold.value->SetAnimationLayerVisible(layer_id, *visible);
-                    }));
+                    })));
         }
 
         wpscene::FieldBindings fields;

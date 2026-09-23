@@ -1,4 +1,5 @@
 module;
+#include <new>
 
 #include <rstd/macro.hpp>
 
@@ -175,31 +176,40 @@ Vec<float> ReadParticleOverride(const wpscene::ParticleInstanceoverride& state, 
     return {};
 }
 
-struct ParticleOverrideControl {
+struct ParticleOverrideControl final : SceneParticleOverrideControl {
+    ParticleOverrideControl(Arc<wpscene::ParticleInstanceoverride> override_state, String name)
+        : state(rstd::move(override_state)), field(rstd::move(name)) {}
+
     Arc<wpscene::ParticleInstanceoverride> state;
     String                                 field;
 
-    void Apply(slice<float> values) { ApplyParticleOverride(*state, field.as_str(), values); }
+    void Apply(slice<float> values) override {
+        ApplyParticleOverride(*state, field.as_str(), values);
+    }
 };
 
-struct ParticleNodeControl {
+struct ParticleNodeControl final : SceneParticleControl {
+    ParticleNodeControl(Arc<wpscene::ParticleInstanceoverride> override_state,
+                        Arc<ParticlePlaybackState>             playback_state)
+        : state(rstd::move(override_state)), playback(rstd::move(playback_state)) {}
+
     Arc<wpscene::ParticleInstanceoverride> state;
     Arc<ParticlePlaybackState>             playback;
 
-    Vec<float> Get(ref<str> field) const { return ReadParticleOverride(*state, field); }
-    void       Apply(ref<str> field, slice<float> values) {
+    Vec<float> Get(ref<str> field) const override { return ReadParticleOverride(*state, field); }
+    void       Apply(ref<str> field, slice<float> values) override {
         ApplyParticleOverride(*state, field, values);
     }
-    void Play() {
+    void Play() override {
         playback->playing.store(true, rstd::sync::atomic::Ordering::Release);
         playback->reset_sequence.fetch_add(u32(1), rstd::sync::atomic::Ordering::AcqRel);
     }
-    void Stop() {
+    void Stop() override {
         playback->playing.store(false, rstd::sync::atomic::Ordering::Release);
         playback->reset_sequence.fetch_add(u32(1), rstd::sync::atomic::Ordering::AcqRel);
     }
-    void Pause() { playback->playing.store(false, rstd::sync::atomic::Ordering::Release); }
-    bool IsPlaying() const { return playback->playing.load(rstd::sync::atomic::Ordering::Acquire); }
+    void Pause() override { playback->playing.store(false, rstd::sync::atomic::Ordering::Release); }
+    bool IsPlaying() const override { return playback->playing.load(rstd::sync::atomic::Ordering::Acquire); }
 };
 
 void LoadControlPoint(SceneParseContext& context, ParticleSubSystem& system,
@@ -563,10 +573,8 @@ void BuildParticleObjectNode(ParticleObjectParseServices& services,
         for (const auto& [field, key] : override.bindings) {
             services.scene->RegisterParticleOverrideBinding(
                 String::make(as_str(key).unwrap()),
-                Arc<dyn<SceneParticleOverrideControl>>::make(ParticleOverrideControl {
-                    .state = override_state.clone(),
-                    .field = String::make(as_str(field).unwrap()),
-                }));
+                std::shared_ptr<SceneParticleOverrideControl>(std::make_shared<ParticleOverrideControl>(
+                    override_state.clone(), String::make(as_str(field).unwrap()))));
         }
     }
 
@@ -609,10 +617,8 @@ void BuildParticleObjectNode(ParticleObjectParseServices& services,
         services.particle_runtime->Add(rstd::move(particleSub));
 
     if (! is_child) {
-        spNode->SetParticleControl(Arc<dyn<SceneParticleControl>>::make(ParticleNodeControl {
-            .state    = override_state.clone(),
-            .playback = playback_state.clone(),
-        }));
+        spNode->SetParticleControl(std::shared_ptr<SceneParticleControl>(
+            std::make_shared<ParticleNodeControl>(override_state.clone(), playback_state.clone())));
         AssignNodeFieldAnimations(
             *services.construction_context, *spNode.as_ptr(), wppartobj.field_bindings);
     }

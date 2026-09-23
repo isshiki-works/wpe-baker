@@ -1,3 +1,7 @@
+module;
+#include <memory>
+#include <new>
+
 export module wescene.scene:runtime;
 import rstd;
 
@@ -13,19 +17,11 @@ struct SceneFrame {
     u64 revision { 1 };
 };
 
+// 每帧推进的场景运行时系统。
 struct SceneRuntimeSystem {
-    using Trait                  = SceneRuntimeSystem;
-    static constexpr bool direct = false;
+    virtual ~SceneRuntimeSystem() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = SceneRuntimeSystem;
-
-        void Update(ref<SceneFrame> frame) { rstd::trait_call<0>(this, frame); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Update>;
+    virtual void Update(ref<SceneFrame> frame) = 0;
 };
 
 enum class SceneRuntimeSchedule
@@ -48,7 +44,7 @@ public:
         if (m_frame.revision == u64()) m_frame.revision = u64(1);
     }
 
-    void Register(Box<dyn<SceneRuntimeSystem>> system,
+    void Register(std::unique_ptr<SceneRuntimeSystem> system,
                   SceneRuntimeSchedule         schedule = SceneRuntimeSchedule::FrameAdvance) {
         if (schedule == SceneRuntimeSchedule::BeforeRender) {
             m_before_render.push(rstd::move(system));
@@ -60,7 +56,7 @@ public:
     template<typename T>
     void RegisterSystem(T                    system,
                         SceneRuntimeSchedule schedule = SceneRuntimeSchedule::FrameAdvance) {
-        Register(Box<dyn<SceneRuntimeSystem>>::make(rstd::move(system)), schedule);
+        Register(std::unique_ptr<SceneRuntimeSystem>(std::make_unique<T>(rstd::move(system))), schedule);
     }
 
     void Advance(f64 delta) {
@@ -80,14 +76,14 @@ public:
     void BeforeRender() { UpdateSystems(m_before_render); }
 
 private:
-    void UpdateSystems(rstd::vec::Vec<Box<dyn<SceneRuntimeSystem>>>& systems) {
+    void UpdateSystems(rstd::vec::Vec<std::unique_ptr<SceneRuntimeSystem>>& systems) {
         auto frame = ref<SceneFrame>::from_raw_parts(rstd::addressof(m_frame));
         for (auto& system : systems) system->Update(frame);
     }
 
     SceneFrame                                   m_frame;
-    rstd::vec::Vec<Box<dyn<SceneRuntimeSystem>>> m_frame_advance;
-    rstd::vec::Vec<Box<dyn<SceneRuntimeSystem>>> m_before_render;
+    rstd::vec::Vec<std::unique_ptr<SceneRuntimeSystem>> m_frame_advance;
+    rstd::vec::Vec<std::unique_ptr<SceneRuntimeSystem>> m_before_render;
 };
 
 } // namespace owe

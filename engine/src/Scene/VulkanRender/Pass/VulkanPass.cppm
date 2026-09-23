@@ -138,10 +138,10 @@ struct PassRecordContext {
 };
 
 struct PassUpdateContext {
-    rstd::mut_ref<rstd::dyn<resource::BufferContentWriter>>               buffers;
+    resource::BufferContentWriter*               buffers;
     rstd::ref<PreparedPassResources>                                      resources;
     resource_registry::GraphicsResourcePreparer*                          graphics;
-    rstd::ref<rstd::dyn<SceneTextureAnimationView>>                       textures;
+    const SceneTextureAnimationView*                       textures;
 };
 
 struct PassPrepareContext {
@@ -150,7 +150,7 @@ struct PassPrepareContext {
     rstd::ref<PipelineLayoutAssignments>                                  pipeline_layouts;
 };
 
-class ResourceDeclarationContext {
+class ResourceDeclarationContext final : public resource::BufferContentProvider {
 public:
     explicit ResourceDeclarationContext(resource::ResourcePlan& plan,
                                         ShaderReflectionCache&  shader_cache)
@@ -232,7 +232,7 @@ public:
     }
 
     auto LoadBuffer(const resource::BufferRequest& request)
-        -> rstd::Result<rstd::slice<rstd::u8>, resource::ResourceError> {
+        -> rstd::Result<rstd::slice<rstd::u8>, resource::ResourceError> override {
         auto content = m_buffers.get(request.name);
         if (content.is_none()) {
             return rstd::Err(resource::ResourceError {
@@ -300,10 +300,10 @@ public:
         -> Result<Vec<GlobalDescriptorBufferUse>, resource::ResourceError> {
         return Ok(Vec<GlobalDescriptorBufferUse>::make());
     }
-    virtual auto createUniformBufferUpdates(ref<dyn<UniformBindingPrepareContext>>,
+    virtual auto createUniformBufferUpdates(const UniformBindingPrepareContext*,
                                             const PreparedPassResources&)
-        -> Result<Vec<Box<dyn<UniformBufferUpdate>>>, UniformBufferUpdateError> {
-        return Ok(Vec<Box<dyn<UniformBufferUpdate>>>::make());
+        -> Result<Vec<std::unique_ptr<UniformBufferUpdate>>, UniformBufferUpdateError> {
+        return Ok(Vec<std::unique_ptr<UniformBufferUpdate>>::make());
     }
     virtual bool
     prepareResourceStates(resource_registry::TextureStatePreparer*) {

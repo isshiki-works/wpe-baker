@@ -68,7 +68,7 @@ public:
 
     Option<DrawBufferRefs> prepareDrawBuffers(const DrawBufferRequest&);
     static bool updateDynamicDrawBuffers(const DrawBufferRequest&, DrawBufferRefs&,
-                                         rstd::mut_ref<rstd::dyn<resource::BufferContentWriter>>);
+                                         resource::BufferContentWriter*);
 
 private:
     rstd::ref<resource_registry::PreparedResourceTable> m_resources;

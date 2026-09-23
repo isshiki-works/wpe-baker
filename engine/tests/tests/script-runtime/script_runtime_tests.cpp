@@ -56,29 +56,32 @@ struct ParticleControlState {
     int                  resets { 0 };
 };
 
-struct ParticleControlProbe {
+struct ParticleControlProbe final : owe::SceneParticleControl {
+    explicit ParticleControlProbe(Arc<ParticleControlState> probe_state)
+        : state(rstd::move(probe_state)) {}
+
     Arc<ParticleControlState> state;
 
-    Vec<float> Get(ref<str> field) const {
+    Vec<float> Get(ref<str> field) const override {
         Vec<float> out;
         if (field != "colorn"_str) return out;
         for (float value : state->colorn) out.push(float(value));
         return out;
     }
-    void Apply(ref<str> field, slice<float> values) {
+    void Apply(ref<str> field, slice<float> values) override {
         if (field != "colorn"_str || values.len() < usize(3)) return;
         state->colorn = { values[usize()], values[usize(1)], values[usize(2)] };
     }
-    void Play() {
+    void Play() override {
         state->playing = true;
         state->resets++;
     }
-    void Stop() {
+    void Stop() override {
         state->playing = false;
         state->resets++;
     }
-    void Pause() { state->playing = false; }
-    bool IsPlaying() const { return state->playing; }
+    void Pause() override { state->playing = false; }
+    bool IsPlaying() const override { return state->playing; }
 };
 
 struct SoundControlState {
@@ -86,14 +89,16 @@ struct SoundControlState {
     bool  playing { true };
 };
 
-struct SoundControlProbe {
+struct SoundControlProbe final : owe::SceneSoundControl {
+    explicit SoundControlProbe(Arc<SoundControlState> probe_state): state(rstd::move(probe_state)) {}
+
     Arc<SoundControlState> state;
 
-    void Play() { state->playing = true; }
-    void Stop() { state->playing = false; }
-    void Pause() { state->playing = false; }
-    bool IsPlaying() const { return state->playing; }
-    void SetVolume(float volume) { state->volume = volume; }
+    void Play() override { state->playing = true; }
+    void Stop() override { state->playing = false; }
+    void Pause() override { state->playing = false; }
+    bool IsPlaying() const override { return state->playing; }
+    void SetVolume(float volume) override { state->volume = volume; }
 };
 
 } // namespace
@@ -652,7 +657,7 @@ TEST(ScriptNodeSoftMutation, ImageAlignmentDispatchesRegisteredSetter) {
     rt.RegisterImageAlignmentSetter(
         &node,
         "center"_str,
-        JsRuntime::ImageAlignmentSetter::make([&](owe::SceneNode* node, ref<str> value) {
+        std::make_shared<JsRuntime::ImageAlignmentSetter::element_type>([&](owe::SceneNode* node, ref<str> value) {
             target    = node;
             alignment = String::make(value);
         }));
@@ -683,10 +688,10 @@ TEST(ScriptNodeSoftMutation, ParallaxDepthDispatchesRegisteredAccessors) {
     Vec2Value       depth { .x = 1.0, .y = 1.0 };
     owe::SceneNode* target { nullptr };
     rt.SetNodeParallaxDepthAccessors(
-        JsRuntime::NodeParallaxDepthGetter::make([&depth](owe::SceneNode*) -> Option<Vec2Value> {
+        std::make_shared<JsRuntime::NodeParallaxDepthGetter::element_type>([&depth](owe::SceneNode*) -> Option<Vec2Value> {
             return Some(depth);
         }),
-        JsRuntime::NodeParallaxDepthSetter::make(
+        std::make_shared<JsRuntime::NodeParallaxDepthSetter::element_type>(
             [&depth, &target](owe::SceneNode* node, Vec2Value value) {
                 target = node;
                 depth  = value;
@@ -758,7 +763,7 @@ TEST(ScriptNodeSoftMutation, ImageAlignmentBindingClonesForDynamicLayer) {
     rt.RegisterImageAlignmentSetter(
         &source,
         "center"_str,
-        JsRuntime::ImageAlignmentSetter::make([&](owe::SceneNode* node, ref<str> value) {
+        std::make_shared<JsRuntime::ImageAlignmentSetter::element_type>([&](owe::SceneNode* node, ref<str> value) {
             target    = node;
             alignment = String::make(value);
         }));
@@ -788,10 +793,10 @@ TEST(ScriptNodeSoftMutation, OriginDispatchesRegisteredAccessors) {
     Vec3Value      logical_origin { .x = 10.0, .y = 20.0, .z = 0.0 };
     rt.RegisterNodeOriginAccessors(
         &node,
-        JsRuntime::NodeOriginGetter::make([&logical_origin]() {
+        std::make_shared<JsRuntime::NodeOriginGetter::element_type>([&logical_origin]() {
             return logical_origin;
         }),
-        JsRuntime::NodeOriginSetter::make([&node, &logical_origin](Vec3Value origin) {
+        std::make_shared<JsRuntime::NodeOriginSetter::element_type>([&node, &logical_origin](Vec3Value origin) {
             logical_origin = origin;
             node.SetTranslate({ static_cast<float>(origin.x + 50.0),
                                 static_cast<float>(origin.y),
@@ -2386,7 +2391,7 @@ TEST(ScriptScene, CreateLayerRoutesConfigurationAndLayerCloneToFactory) {
     rt.RegisterInitialLayerConfig(
         style.as_ptr(),
         owe::ParseNJson(R"({"name":"Style1","text":"template"})").unwrap());
-    rt.SetLayerConfigFactory(JsRuntime::LayerConfigFactory::make(
+    rt.SetLayerConfigFactory(std::make_shared<JsRuntime::LayerConfigFactory::element_type>(
         [&root, &configs, &created](owe::SceneNode*,
                                     owe::NJson config) -> Option<Arc<owe::SceneNode>> {
             auto node = Arc<owe::SceneNode>::make();
@@ -2448,7 +2453,7 @@ TEST(ScriptScene, CreatedLayersCanBeSortedBeforeAnExistingLayer) {
     rt.SetScene(&scene);
     rt.RegisterInitialLayerConfig(ring.as_ptr(), owe::ParseNJson(R"({})").unwrap());
     rt.RegisterInitialLayerConfig(body.as_ptr(), owe::ParseNJson(R"({})").unwrap());
-    rt.SetLayerFactory(JsRuntime::LayerFactory::make(
+    rt.SetLayerFactory(std::make_shared<JsRuntime::LayerFactory::element_type>(
         [&scene, &created](owe::SceneNode*, LayerAssetReference) -> Option<Arc<owe::SceneNode>> {
             auto node = Arc<owe::SceneNode>::make();
             scene.AttachRuntimeNode(*scene.RootMut(), node.clone());
@@ -2529,7 +2534,7 @@ TEST(ScriptScene, PublicLayerQueriesUseAuthoredOrderAndTrackRuntimeLayers) {
     rt.RegisterInitialLayerConfig(c.as_ptr(), owe::ParseNJson(R"({})").unwrap());
     rt.RegisterInitialLayerConfig(hidden.as_ptr(), owe::ParseNJson(R"({})").unwrap());
     rt.RegisterInitialLayerConfig(reporter.as_ptr(), owe::ParseNJson(R"({})").unwrap());
-    rt.SetLayerConfigFactory(JsRuntime::LayerConfigFactory::make(
+    rt.SetLayerConfigFactory(std::make_shared<JsRuntime::LayerConfigFactory::element_type>(
         [&scene](owe::SceneNode*, owe::NJson config) -> Option<Arc<owe::SceneNode>> {
             auto node = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
                                                    Eigen::Vector3f::Ones(),
@@ -2629,7 +2634,7 @@ TEST(ScriptScene, RegisteredAssetFactoryCreatesAndReusesDestroyedLayer) {
     Vec<Arc<owe::SceneNode>> created;
 
     JsRuntime rt;
-    rt.SetLayerFactory(JsRuntime::LayerFactory::make(
+    rt.SetLayerFactory(std::make_shared<JsRuntime::LayerFactory::element_type>(
         [&root, &created](owe::SceneNode*,
                           LayerAssetReference asset) -> Option<Arc<owe::SceneNode>> {
             if (asset.path != "models/prism.mdl"_str) return None();
@@ -2681,7 +2686,7 @@ TEST(ScriptScene, DirectWorkshopAssetUsesLayerFactoryWithoutFixedCloneCapacity) 
     Vec<String>              workshop_ids;
 
     JsRuntime rt;
-    rt.SetLayerFactory(JsRuntime::LayerFactory::make(
+    rt.SetLayerFactory(std::make_shared<JsRuntime::LayerFactory::element_type>(
         [&root, &created, &paths, &workshop_ids](
             owe::SceneNode*, LayerAssetReference asset) -> Option<Arc<owe::SceneNode>> {
             paths.push(String::make(asset.path));
@@ -2728,7 +2733,7 @@ TEST(ScriptScene, ParticleInstanceAndPlaybackUseNodeCapability) {
     auto layer = Arc<owe::SceneNode>::make();
     auto state = Arc<ParticleControlState>::make();
     layer->SetParticleControl(
-        Arc<dyn<owe::SceneParticleControl>>::make(ParticleControlProbe { state.clone() }));
+        std::shared_ptr<owe::SceneParticleControl>(std::make_shared<ParticleControlProbe>(state.clone())));
     root->AppendChild(layer.clone());
 
     JsRuntime rt;
@@ -2764,7 +2769,7 @@ TEST(SceneNodeSound, VisibilityStartsAndStopsTheSoundControl) {
     auto layer = Arc<owe::SceneNode>::make();
     auto state = Arc<SoundControlState>::make();
     layer->SetSoundControl(
-        Arc<dyn<owe::SceneSoundControl>>::make(SoundControlProbe { state.clone() }));
+        std::shared_ptr<owe::SceneSoundControl>(std::make_shared<SoundControlProbe>(state.clone())));
     ASSERT_TRUE(state->playing);
 
     layer->SetVisible(false);
@@ -2779,7 +2784,7 @@ TEST(ScriptScene, SoundVolumeUsesSoundControl) {
     auto layer = Arc<owe::SceneNode>::make();
     auto state = Arc<SoundControlState>::make();
     layer->SetSoundControl(
-        Arc<dyn<owe::SceneSoundControl>>::make(SoundControlProbe { state.clone() }));
+        std::shared_ptr<owe::SceneSoundControl>(std::make_shared<SoundControlProbe>(state.clone())));
     root->AppendChild(layer.clone());
 
     JsRuntime rt;

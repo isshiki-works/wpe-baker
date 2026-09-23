@@ -151,7 +151,7 @@ struct SceneParseContext {
 
     Option<Box<owe::script::ScriptScene>> script_scene;
     owe::script::ScriptScene*             installed_script_scene { nullptr };
-    using ImageAlignmentSetter = Arc<dyn<FnMut<void(SceneNode*, ref<str>)>>>;
+    using ImageAlignmentSetter = std::shared_ptr<std::function<void(SceneNode*, ref<str>)>>;
     struct ImageAlignmentBinding {
         SceneNode*           node { nullptr };
         String               alignment;
@@ -177,7 +177,7 @@ struct SceneParseContext {
         Option<Arc<Puppet>>                            puppet;
         String                                         attachment;
         Option<Arc<PuppetLayer>>                       puppet_layer;
-        Option<Box<dyn<FnMut<void(Eigen::Vector3f)>>>> apply_attachment_offset;
+        Option<std::function<void(Eigen::Vector3f)>> apply_attachment_offset;
         Vec<Arc<SceneNode>>                            ordered_before_nodes;
     };
     HashMap<i32, NodeRef>       node_id_map;

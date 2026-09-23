@@ -46,9 +46,8 @@ auto ToTextureDesc(const TexNode& node) -> TextureDesc {
 }
 
 template<typename T>
-    requires rstd::Impled<T, Node>
 auto NodeGraphviz(const T& node) -> String {
-    return rstd::as<Node>(node).ToGraphviz();
+    return node.ToGraphviz();
 }
 
 auto Sorted(rstd::slice<NodeHandle> handles) -> rstd::vec::Vec<NodeHandle> {

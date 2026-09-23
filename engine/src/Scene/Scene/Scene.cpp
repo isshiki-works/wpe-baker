@@ -60,7 +60,7 @@ void AudioResponseDemand::Update(State& state, i32 delta) {
             fields->leases -= usize((-delta).to_primitive());
         active = fields->enabled && fields->leases != usize();
         if (active != before && fields->callback.is_some())
-            callback = Some((*fields->callback).clone());
+            callback = Some(Callback(*fields->callback));
     }
     if (callback.is_some()) (*callback)->operator()(active);
 }
@@ -80,7 +80,7 @@ void AudioResponseDemand::SetCallback(Option<Callback> callback) {
         auto fields      = m_state->fields.lock().unwrap_unchecked();
         fields->callback = rstd::move(callback);
         active           = fields->enabled && fields->leases != usize();
-        if (fields->callback.is_some()) notify = Some((*fields->callback).clone());
+        if (fields->callback.is_some()) notify = Some(Callback(*fields->callback));
     }
     if (notify.is_some()) (*notify)->operator()(active);
 }
@@ -94,7 +94,7 @@ void AudioResponseDemand::SetEnabled(bool enabled) {
         fields->enabled   = enabled;
         active            = fields->enabled && fields->leases != usize();
         if (active != before && fields->callback.is_some())
-            callback = Some((*fields->callback).clone());
+            callback = Some(Callback(*fields->callback));
     }
     if (callback.is_some()) (*callback)->operator()(active);
 }
@@ -1638,10 +1638,10 @@ auto Scene::RenderTargetMut(ref<str> name) -> Option<mut_ref<SceneRenderTarget>>
     return m_render_targets.get_mut(name);
 }
 
-void Scene::RegisterUserTextBinding(String key, Box<dyn<FnMut<void(ref<str>)>>> setter) {
+void Scene::RegisterUserTextBinding(String key, std::function<void(ref<str>)> setter) {
     auto setters = m_text_user_index.get_mut(key.as_str());
     if (setters.is_none()) {
-        (void)m_text_user_index.insert(key.clone(), Vec<Box<dyn<FnMut<void(ref<str>)>>>> {});
+        (void)m_text_user_index.insert(key.clone(), Vec<std::function<void(ref<str>)>> {});
         setters = m_text_user_index.get_mut(key.as_str());
     }
     (*setters)->push(rstd::move(setter));
@@ -1721,15 +1721,15 @@ bool Scene::ApplyUserTextBindings(ref<str> key, const NJson& property) {
     auto value = SceneJsonScalarString(SceneUserPropertyPayload(property));
     if (value.is_none()) return false;
     for (usize index {}; index < (*setters)->len(); ++index) {
-        (**setters)[index]->operator()(value->as_str());
+        (**setters)[index](value->as_str());
     }
     return true;
 }
 
-void Scene::RegisterUserPropertyBinding(String key, Box<dyn<FnMut<void(ref<NJson>)>>> setter) {
+void Scene::RegisterUserPropertyBinding(String key, std::function<void(ref<NJson>)> setter) {
     auto setters = m_user_property_index.get_mut(key.as_str());
     if (setters.is_none()) {
-        (void)m_user_property_index.insert(key.clone(), Vec<Box<dyn<FnMut<void(ref<NJson>)>>>> {});
+        (void)m_user_property_index.insert(key.clone(), Vec<std::function<void(ref<NJson>)>> {});
         setters = m_user_property_index.get_mut(key.as_str());
     }
     (*setters)->push(rstd::move(setter));
@@ -1740,12 +1740,12 @@ bool Scene::ApplyUserPropertyBindings(ref<str> key, const NJson& property) {
     if (setters.is_none()) return false;
     auto property_ref = ref<NJson>::from_raw_parts(rstd::addressof(property));
     for (usize index {}; index < (*setters)->len(); ++index) {
-        (**setters)[index]->operator()(property_ref);
+        (**setters)[index](property_ref);
     }
     return true;
 }
 
-void Scene::RegisterTransformUpdater(Box<dyn<FnMut<void(f64)>>> updater) {
+void Scene::RegisterTransformUpdater(std::function<void(f64)> updater) {
     m_transform_updaters.push(rstd::move(updater));
 }
 
@@ -3013,7 +3013,7 @@ auto Scene::ConsumeAnimationEvents() -> Vec<SceneAnimationEventDispatch> {
 
 void Scene::TickTransformUpdaters() {
     for (usize index {}; index < m_transform_updaters.len(); ++index) {
-        m_transform_updaters[index]->operator()(m_runtime.Frame().elapsed);
+        m_transform_updaters[index](m_runtime.Frame().elapsed);
     }
 }
 

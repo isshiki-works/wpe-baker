@@ -4400,7 +4400,7 @@ void JsRuntime::CloneImageAlignmentBinding(owe::SceneNode* source, owe::SceneNod
     (void)m_impl->host.image_alignment_hooks.insert(
         clone,
         EngineHostState::ImageAlignmentHook { .alignment = (**hook).alignment.clone(),
-                                              .setter    = (**hook).setter.clone() });
+                                              .setter    = (**hook).setter });
 }
 
 void JsRuntime::SetLayerFactory(LayerFactory factory) {

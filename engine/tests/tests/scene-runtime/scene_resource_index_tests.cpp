@@ -31,16 +31,16 @@ std::shared_ptr<owe::SceneMesh> MakeSingleSubmesh(std::string name) {
     return mesh;
 }
 
-class FakeImageParser {
+class FakeImageParser final : public owe::IImageParser {
 public:
-    auto Parse(ref<str>) const -> Result<Arc<owe::Image>, owe::ImageParseError> {
+    auto Parse(ref<str>) const -> Result<Arc<owe::Image>, owe::ImageParseError> override {
         return Err(owe::ImageParseError {
             .kind    = owe::ImageParseErrorKind::MissingContent,
             .message = String::make("missing fake image"_str),
         });
     }
     auto ParseMany(slice<String> names) const
-        -> Vec<Result<Arc<owe::Image>, owe::ImageParseError>> {
+        -> Vec<Result<Arc<owe::Image>, owe::ImageParseError>> override {
         auto images =
             Vec<Result<Arc<owe::Image>, owe::ImageParseError>>::with_capacity(names.len());
         for (usize index {}; index < names.len(); ++index) {
@@ -48,7 +48,7 @@ public:
         }
         return images;
     }
-    auto ParseHeader(ref<str>) const -> Result<owe::ImageHeader, owe::ImageParseError> {
+    auto ParseHeader(ref<str>) const -> Result<owe::ImageHeader, owe::ImageParseError> override {
         owe::ImageHeader header;
         header.width  = 64;
         header.height = 32;
@@ -747,7 +747,7 @@ TEST(SceneTextures, EnsureTextureDescriptorRegistersImportedTexture) {
     owe::Scene scene;
     EXPECT_FALSE(scene.EnsureTextureDescriptor("tex/runtime"));
 
-    scene.SetImageParser(Box<dyn<owe::IImageParser>>::make(FakeImageParser {}));
+    scene.SetImageParser(std::make_unique<FakeImageParser>(FakeImageParser {}));
     EXPECT_TRUE(scene.EnsureTextureDescriptor("tex/runtime"));
     auto texture = scene.Texture("tex/runtime"_str);
     ASSERT_TRUE(texture.is_some());
@@ -804,7 +804,7 @@ TEST(SceneTextures, SnapshotSeparatesLocatorGenerationFromContentRevision) {
 
 TEST(SceneTextures, RuntimeImageOverridesParserContent) {
     owe::Scene scene;
-    scene.SetImageParser(Box<dyn<owe::IImageParser>>::make(FakeImageParser {}));
+    scene.SetImageParser(std::make_unique<FakeImageParser>(FakeImageParser {}));
     auto image           = Arc<owe::Image>::make();
     image->header.width  = 128;
     image->header.height = 64;
@@ -855,7 +855,7 @@ TEST(SceneUserPropertyDiagnostics, StoresAndClearsByKey) {
 TEST(SceneMaterialRuntimeMutation, UpdatesShaderValuesAndTextureSlotsThroughSceneOwner) {
     owe::Scene scene;
     scene.RootMut()->ID() = rstd::i32(1);
-    scene.SetImageParser(Box<dyn<owe::IImageParser>>::make(FakeImageParser {}));
+    scene.SetImageParser(std::make_unique<FakeImageParser>(FakeImageParser {}));
 
     auto node  = rstd::sync::Arc<owe::SceneNode>::make();
     node->ID() = rstd::i32(2);

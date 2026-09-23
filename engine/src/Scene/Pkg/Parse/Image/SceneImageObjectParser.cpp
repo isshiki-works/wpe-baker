@@ -1132,7 +1132,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
         context,
         spImgNode.as_ptr(),
         rstd::cppstd::as_str(wpimgobj.alignment).unwrap(),
-        SceneParseContext::ImageAlignmentSetter::make([image_effect_layer,
+        std::make_shared<SceneParseContext::ImageAlignmentSetter::element_type>([image_effect_layer,
                                                        source_uses_framebuffer_space,
                                                        source_mesh = spMesh,
                                                        alignment_base_transform,

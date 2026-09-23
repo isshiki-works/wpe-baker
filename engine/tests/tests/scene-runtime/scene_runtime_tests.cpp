@@ -48,18 +48,18 @@ private:
     bool                 m_written { false };
 };
 
-class EmptyResources {
+class EmptyResources final : public owe::UniformResourceView {
 public:
-    auto Texture(rstd::usize) const -> rstd::Option<owe::UniformTextureView> {
+    auto Texture(rstd::usize) const -> rstd::Option<owe::UniformTextureView> override {
         return rstd::None();
     }
-    auto Viewport() const -> rstd::array<float, 2> { return { 1920.0f, 1080.0f }; }
-    auto TexelSize() const -> rstd::array<float, 2> { return { 1.0f / 1920.0f, 1.0f / 1080.0f }; }
+    auto Viewport() const -> rstd::array<float, 2> override { return { 1920.0f, 1080.0f }; }
+    auto TexelSize() const -> rstd::array<float, 2> override { return { 1.0f / 1920.0f, 1.0f / 1080.0f }; }
 };
 
-class StaticTextureResources {
+class StaticTextureResources final : public owe::UniformResourceView {
 public:
-    auto Texture(rstd::usize index) const -> rstd::Option<owe::UniformTextureView> {
+    auto Texture(rstd::usize index) const -> rstd::Option<owe::UniformTextureView> override {
         if (index != rstd::usize()) return rstd::None();
         return rstd::Some(owe::UniformTextureView {
             .has_extent    = true,
@@ -67,8 +67,8 @@ public:
             .sample_extent = { 512.0f, 512.0f },
         });
     }
-    auto Viewport() const -> rstd::array<float, 2> { return { 1920.0f, 1080.0f }; }
-    auto TexelSize() const -> rstd::array<float, 2> { return { 1.0f / 1920.0f, 1.0f / 1080.0f }; }
+    auto Viewport() const -> rstd::array<float, 2> override { return { 1920.0f, 1080.0f }; }
+    auto TexelSize() const -> rstd::array<float, 2> override { return { 1.0f / 1920.0f, 1.0f / 1080.0f }; }
 };
 
 class ShapeSink final : public owe::UniformBindingSink {
@@ -98,13 +98,12 @@ public:
 
 class UpdateContext final : public owe::UniformUpdateContext {
 public:
-    template<typename Resources>
-    UpdateContext(const owe::SceneFrame& frame, const Resources& resources)
+    UpdateContext(const owe::SceneFrame& frame, const owe::UniformResourceView& resources)
         : m_frame(rstd::ref<owe::SceneFrame>::from_raw_parts(rstd::addressof(frame))),
-          m_resources(rstd::dyn<owe::UniformResourceView>::from_ref(resources)) {}
+          m_resources(&resources) {}
 
     auto Frame() const -> rstd::ref<owe::SceneFrame> override { return m_frame; }
-    auto Resources() const -> rstd::ref<rstd::dyn<owe::UniformResourceView>> override {
+    auto Resources() const -> const owe::UniformResourceView* override {
         return m_resources;
     }
     auto RenderView() const -> owe::SceneRenderViewKind override {
@@ -113,7 +112,7 @@ public:
 
 private:
     rstd::ref<owe::SceneFrame>                     m_frame;
-    rstd::ref<rstd::dyn<owe::UniformResourceView>> m_resources;
+    const owe::UniformResourceView*                m_resources;
 };
 
 template<typename Source, typename Output>
@@ -781,11 +780,11 @@ TEST(SceneUserTextBinding, AppliesDescriptorPayloadToMatchingBindings) {
     std::string first;
     std::string second;
     scene.RegisterUserTextBinding(String::make("title"_str),
-                                  Box<dyn<FnMut<void(ref<str>)>>>::make([&](ref<str> value) {
+                                  std::function<void(ref<str>)>([&](ref<str> value) {
                                       first = to_string(value);
                                   }));
     scene.RegisterUserTextBinding(String::make("title"_str),
-                                  Box<dyn<FnMut<void(ref<str>)>>>::make([&](ref<str> value) {
+                                  std::function<void(ref<str>)>([&](ref<str> value) {
                                       second = to_string(value);
                                   }));
 
@@ -800,7 +799,7 @@ TEST(SceneUserTextBinding, AppliesEmptyString) {
     owe::Scene  scene;
     std::string value = "default";
     scene.RegisterUserTextBinding(String::make("title"_str),
-                                  Box<dyn<FnMut<void(ref<str>)>>>::make([&](ref<str> next) {
+                                  std::function<void(ref<str>)>([&](ref<str> next) {
                                       value = to_string(next);
                                   }));
 
@@ -814,7 +813,7 @@ TEST(SceneUserPropertyBinding, AppliesJsonPayloadToOwnedCallback) {
     bool       called = false;
     scene.RegisterUserPropertyBinding(
         String::make("camera"_str),
-        Box<dyn<FnMut<void(ref<owe::NJson>)>>>::make([&](ref<owe::NJson> property) {
+        std::function<void(ref<owe::NJson>)>([&](ref<owe::NJson> property) {
             called = property->is_object();
         }));
 
@@ -827,7 +826,7 @@ TEST(SceneUserPropertyBinding, AppliesJsonPayloadToOwnedCallback) {
 TEST(SceneTransformUpdater, ReceivesRuntimeElapsedTime) {
     owe::Scene scene;
     f64        observed;
-    scene.RegisterTransformUpdater(Box<dyn<FnMut<void(f64)>>>::make([&](f64 elapsed) {
+    scene.RegisterTransformUpdater(std::function<void(f64)>([&](f64 elapsed) {
         observed = elapsed;
     }));
 

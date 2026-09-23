@@ -224,23 +224,23 @@ public:
                                   std::function<void(std::string_view)> set_vertical,
                                   std::function<double()>               get_point_size = {},
                                   std::function<void(double)>           set_point_size = {});
-    using NodeOriginGetter = Arc<dyn<FnMut<Vec3Value()>>>;
-    using NodeOriginSetter = Arc<dyn<FnMut<void(Vec3Value)>>>;
+    using NodeOriginGetter = std::shared_ptr<std::function<Vec3Value()>>;
+    using NodeOriginSetter = std::shared_ptr<std::function<void(Vec3Value)>>;
     void RegisterNodeOriginAccessors(owe::SceneNode* node, NodeOriginGetter getter,
                                      NodeOriginSetter setter);
-    using NodeParallaxDepthGetter = Arc<dyn<FnMut<Option<Vec2Value>(owe::SceneNode*)>>>;
-    using NodeParallaxDepthSetter = Arc<dyn<FnMut<void(owe::SceneNode*, Vec2Value)>>>;
+    using NodeParallaxDepthGetter = std::shared_ptr<std::function<Option<Vec2Value>(owe::SceneNode*)>>;
+    using NodeParallaxDepthSetter = std::shared_ptr<std::function<void(owe::SceneNode*, Vec2Value)>>;
     void SetNodeParallaxDepthAccessors(NodeParallaxDepthGetter getter,
                                        NodeParallaxDepthSetter setter);
-    using ImageAlignmentSetter = Arc<dyn<FnMut<void(owe::SceneNode*, ref<str>)>>>;
+    using ImageAlignmentSetter = std::shared_ptr<std::function<void(owe::SceneNode*, ref<str>)>>;
     void RegisterImageAlignmentSetter(owe::SceneNode* node, ref<str> alignment,
                                       ImageAlignmentSetter setter);
     void CloneImageAlignmentBinding(owe::SceneNode* source, owe::SceneNode* clone);
 
     using LayerFactory =
-        Arc<dyn<FnMut<Option<Arc<owe::SceneNode>>(owe::SceneNode*, LayerAssetReference)>>>;
+        std::shared_ptr<std::function<Option<Arc<owe::SceneNode>>(owe::SceneNode*, LayerAssetReference)>>;
     void SetLayerFactory(LayerFactory factory);
-    using LayerConfigFactory = Arc<dyn<FnMut<Option<Arc<owe::SceneNode>>(owe::SceneNode*, NJson)>>>;
+    using LayerConfigFactory = std::shared_ptr<std::function<Option<Arc<owe::SceneNode>>(owe::SceneNode*, NJson)>>;
     void SetLayerConfigFactory(LayerConfigFactory factory);
     void ClearLayerFactory();
     void ClearLayerConfigFactory();

@@ -272,23 +272,14 @@ struct UniformTextureView {
     u64                   revision { 1 };
 };
 
+
+// uniform 源求值时可查询的纹理与视口信息。
 struct UniformResourceView {
-    using Trait                  = UniformResourceView;
-    static constexpr bool direct = false;
+    virtual ~UniformResourceView() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformResourceView;
-
-        auto Texture(usize texture_index) const -> Option<UniformTextureView> {
-            return rstd::trait_call<0>(this, texture_index);
-        }
-        auto Viewport() const -> rstd::array<float, 2> { return rstd::trait_call<1>(this); }
-        auto TexelSize() const -> rstd::array<float, 2> { return rstd::trait_call<2>(this); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Texture, &T::Viewport, &T::TexelSize>;
+    virtual auto Texture(usize texture_index) const -> Option<UniformTextureView> = 0;
+    virtual auto Viewport() const -> rstd::array<float, 2>                        = 0;
+    virtual auto TexelSize() const -> rstd::array<float, 2>                       = 0;
 };
 
 // uniform 源求值/取版本时可见的帧与资源上下文。
@@ -296,7 +287,7 @@ struct UniformUpdateContext {
     virtual ~UniformUpdateContext() = default;
 
     virtual auto Frame() const -> ref<SceneFrame>                     = 0;
-    virtual auto Resources() const -> ref<dyn<UniformResourceView>>   = 0;
+    virtual auto Resources() const -> const UniformResourceView*      = 0;
     virtual auto RenderView() const -> SceneRenderViewKind            = 0;
 };
 
@@ -305,110 +296,36 @@ struct UniformBindingLease {
     virtual ~UniformBindingLease() = default;
 };
 
+// 一个 uniform 数据源：声明输出槽、给出版本号、求值写出数值，可选持有绑定期租约。
 struct UniformSource {
-    using Trait                  = UniformSource;
-    static constexpr bool direct = false;
+    virtual ~UniformSource() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformSource;
-
-        auto Describe(UniformBindingSink* sink) const -> Result<empty, UniformError> {
-            return rstd::trait_call<0>(this, sink);
-        }
-        auto Version(const UniformUpdateContext* context) const -> u64 {
-            return rstd::trait_call<1>(this, context);
-        }
-        auto Evaluate(const UniformUpdateContext* context,
-                      UniformValueSink* sink) const -> Result<empty, UniformError> {
-            return rstd::trait_call<2>(this, context, sink);
-        }
-        auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> {
-            return rstd::trait_call<3>(this);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Describe, &T::Version, &T::Evaluate, &T::AcquireBindingLease>;
+    virtual auto Describe(UniformBindingSink* sink) const -> Result<empty, UniformError> = 0;
+    virtual auto Version(const UniformUpdateContext* context) const -> u64              = 0;
+    virtual auto Evaluate(const UniformUpdateContext* context, UniformValueSink* sink) const
+        -> Result<empty, UniformError>                                                  = 0;
+    virtual auto AcquireBindingLease() const
+        -> Option<std::unique_ptr<UniformBindingLease>> = 0;
 };
 
+// 注册 uniform 源，返回其 id。
 struct UniformSourceRegistrar {
-    using Trait                  = UniformSourceRegistrar;
-    static constexpr bool direct = false;
+    virtual ~UniformSourceRegistrar() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformSourceRegistrar;
-
-        auto Register(Box<dyn<UniformSource>> source) -> UniformSourceId {
-            return rstd::trait_call<0>(this, rstd::move(source));
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Register>;
+    virtual auto Register(std::unique_ptr<UniformSource> source) -> UniformSourceId = 0;
 };
 
+// 把已注册的 uniform 源挂到全局或某个节点上。
 struct UniformAttachmentWriter {
-    using Trait                  = UniformAttachmentWriter;
-    static constexpr bool direct = false;
+    virtual ~UniformAttachmentWriter() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformAttachmentWriter;
-
-        bool AttachGlobal(UniformSourceId source, i32 priority = i32()) {
-            return rstd::trait_call<0>(this, source, priority);
-        }
-        bool AttachNode(SceneNodeId node, UniformSourceId source, i32 priority = i32()) {
-            return rstd::trait_call<1>(this, node, source, priority);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::AttachGlobal, &T::AttachNode>;
-};
-
-struct UniformSourceCatalog {
-    using Trait                  = UniformSourceCatalog;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformSourceCatalog;
-
-        auto Resolve(UniformSourceId id) const -> Option<ref<dyn<UniformSource>>> {
-            return rstd::trait_call<0>(this, id);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Resolve>;
-};
-
-struct UniformAttachmentCatalog {
-    using Trait                  = UniformAttachmentCatalog;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformAttachmentCatalog;
-
-        auto GlobalSources() const -> slice<UniformSourceAttachment> {
-            return rstd::trait_call<0>(this);
-        }
-        auto NodeSources(SceneNodeId node) const -> slice<UniformSourceAttachment> {
-            return rstd::trait_call<1>(this, node);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::GlobalSources, &T::NodeSources>;
+    virtual bool AttachGlobal(UniformSourceId source, i32 priority = i32())                 = 0;
+    virtual bool AttachNode(SceneNodeId node, UniformSourceId source, i32 priority = i32()) = 0;
 };
 
 class SceneUniformRegistry {
 public:
-    auto Register(Box<dyn<UniformSource>> source) -> UniformSourceId {
+    auto Register(std::unique_ptr<UniformSource> source) -> UniformSourceId {
         auto id = UniformSourceId {
             .index      = rstd::as_cast<u32>(m_sources.len()),
             .generation = m_generation,
@@ -417,17 +334,12 @@ public:
         return id;
     }
 
-    template<typename T>
-    auto RegisterSource(T source) -> UniformSourceId {
-        return Register(Box<dyn<UniformSource>>::make(rstd::move(source)));
-    }
-
-    auto Resolve(UniformSourceId id) const -> Option<ref<dyn<UniformSource>>> {
+    auto Resolve(UniformSourceId id) const -> Option<const UniformSource*> {
         if (! id.Valid() || id.generation != m_generation ||
             rstd::as_cast<usize>(id.index) >= m_sources.len()) {
             return None();
         }
-        return Some(m_sources[rstd::as_cast<usize>(id.index)].as_ref());
+        return Some(static_cast<const UniformSource*>(m_sources[rstd::as_cast<usize>(id.index)].get()));
     }
 
     bool AttachGlobal(UniformSourceId source, i32 priority = i32()) {
@@ -508,7 +420,7 @@ private:
         return true;
     }
 
-    Vec<Box<dyn<UniformSource>>>               m_sources;
+    Vec<std::unique_ptr<UniformSource>>        m_sources;
     Vec<UniformSourceAttachment>               m_global_sources;
     HashMap<u64, Vec<UniformSourceAttachment>> m_node_sources;
     HashMap<u64, UniformBlockDefinition>       m_blocks;

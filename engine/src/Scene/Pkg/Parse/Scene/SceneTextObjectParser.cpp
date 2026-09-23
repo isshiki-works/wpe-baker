@@ -1039,11 +1039,11 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
         set_pointsize);
     script_runtime.RegisterNodeOriginAccessors(
         layer_node.as_ptr(),
-        script::JsRuntime::NodeOriginGetter::make([anchor_state]() {
+        std::make_shared<script::JsRuntime::NodeOriginGetter::element_type>([anchor_state]() {
             const auto& origin = anchor_state->origin;
             return script::Vec3Value { .x = origin.x(), .y = origin.y(), .z = origin.z() };
         }),
-        script::JsRuntime::NodeOriginSetter::make(
+        std::make_shared<script::JsRuntime::NodeOriginSetter::element_type>(
             [set_text_origin](script::Vec3Value origin) mutable {
                 set_text_origin(Vector3f { static_cast<float>(origin.x),
                                            static_cast<float>(origin.y),
@@ -1068,7 +1068,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
     if (has_text_user) {
         context.scene->RegisterUserTextBinding(
             String::make(as_str(obj.text_user.name).unwrap()),
-            Box<dyn<FnMut<void(ref<str>)>>>::make([set_text](ref<str> value) mutable {
+            std::function<void(ref<str>)>([set_text](ref<str> value) mutable {
                 set_text(as_string_view(value));
             }));
     }
@@ -1138,7 +1138,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
                         None(),
                         String::make(rstd::cppstd::as_str(obj.attachment).unwrap()),
                         None(),
-                        Some(Box<dyn<FnMut<void(Vector3f)>>>::make(
+                        Some(std::function<void(Vector3f)>(
                             [anchor_state, apply_text_anchor](Vector3f offset) {
                                 anchor_state->origin += offset;
                                 apply_text_anchor();

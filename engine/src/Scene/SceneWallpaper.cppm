@@ -22,7 +22,7 @@ export namespace owe
 {
 
 using FirstFrameCallback             = std::function<void()>;
-using AudioResponseDemandCallback    = Arc<dyn<rstd::Fn<void(bool)>>>;
+using AudioResponseDemandCallback    = std::shared_ptr<std::function<void(bool)>>;
 using UserPropertyDiagnosticCallback = std::function<void(Vec<SceneUserPropertyDiagnostic>)>;
 using RenderPassDiagnosticCallback =
     std::function<void(std::vector<vulkan::PreparedPassDiagnostic>)>;
@@ -158,7 +158,7 @@ public:
     void setAudioResponseDemandCallback(AudioResponseDemandCallback);
     template<typename Callback>
     void setAudioResponseDemandCallback(Callback callback) {
-        setAudioResponseDemandCallback(AudioResponseDemandCallback::make(rstd::move(callback)));
+        setAudioResponseDemandCallback(std::make_shared<AudioResponseDemandCallback::element_type>(rstd::move(callback)));
     }
     void setAudioResponseEnabled(bool);
     void setAudioPcmWindow(audio::PcmWindow window);

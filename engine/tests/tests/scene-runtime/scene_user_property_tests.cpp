@@ -18,10 +18,12 @@ using rstd::sync::Arc;
 namespace
 {
 
-struct FakeParticleOverrideControl {
+struct FakeParticleOverrideControl final : owe::SceneParticleOverrideControl {
+    explicit FakeParticleOverrideControl(float* target): observed(target) {}
+
     float* observed;
 
-    void Apply(slice<float> values) {
+    void Apply(slice<float> values) override {
         if (! values.is_empty()) *observed = values[usize()];
     }
 };
@@ -216,8 +218,8 @@ TEST(SceneUserProperty, AppliesRegisteredParticleOverrideBinding) {
     float      observed = 0.0f;
     scene.RegisterParticleOverrideBinding(
         String::make("rate"_str),
-        Arc<dyn<owe::SceneParticleOverrideControl>>::make(
-            FakeParticleOverrideControl { .observed = &observed }));
+        std::shared_ptr<owe::SceneParticleOverrideControl>(
+            std::make_shared<FakeParticleOverrideControl>(&observed)));
 
     auto property = owe::ParseNJson(R"({"type":"slider","value":2.5})").unwrap();
     (void)owe::SceneUserPropertyApplier::Apply(scene, "rate", property);
