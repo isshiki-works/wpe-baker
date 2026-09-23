@@ -3,6 +3,7 @@ add_library(owe-scene STATIC)
 target_sources(owe-scene PUBLIC FILE_SET CXX_MODULES BASE_DIRS ../.. FILES
   Audio/SceneAudioResponse.cppm
   Lighting/Lighting.cppm
+  OfflineSession.cppm
   Particle/Particle.cppm
   Particle/ParticleProgram.cppm
   Pkg/AssetVersion.cppm
@@ -73,13 +74,9 @@ target_sources(owe-scene PUBLIC FILE_SET CXX_MODULES BASE_DIRS ../.. FILES
   Scene/SceneVisibility.cppm
   Scene/Uniform.cppm
   SceneUserProperty.cppm
-  SceneWallpaper.cppm
   Script/Script.cppm
   SpecNames.cppm
   Text/Text.cppm
-  Timer/FrameTimer.cppm
-  Timer/ThreadTimer.cppm
-  Timer/Timer.cppm
   VulkanRender/BufferResolver.cppm
   VulkanRender/Pass/CopyPass.cppm
   VulkanRender/Pass/CustomShaderPass.cppm
@@ -95,6 +92,7 @@ target_sources(owe-scene PUBLIC FILE_SET CXX_MODULES BASE_DIRS ../.. FILES
   VulkanRender/VulkanRender.cppm)
 target_sources(owe-scene PRIVATE
   Audio/SceneAudioResponse.cpp
+  OfflineSession.cpp
   Pkg/Parse/Image/SceneImageObjectParser.cpp
   Pkg/Parse/Image/TexImageParser.cpp
   Pkg/Parse/Particle/ParticleEmitter.cpp
@@ -141,11 +139,8 @@ target_sources(owe-scene PRIVATE
   Scene/SceneShader.cpp
   Scene/SceneVertexArray.cpp
   SceneUserProperty.cpp
-  SceneWallpaper.cpp
   Script/Script.cpp
   Text/Text.cpp
-  Timer/FrameTimer.cpp
-  Timer/ThreadTimer.cpp
   VulkanRender/BufferResolver.cpp
   VulkanRender/Pass/CopyPass.cpp
   VulkanRender/Pass/CustomShaderPass.cpp

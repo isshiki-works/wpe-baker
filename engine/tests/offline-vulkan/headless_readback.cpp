@@ -17,7 +17,7 @@ import wescene.resource_registry;
 import wescene.rgraph;
 import wescene.vulkan;
 import wescene.vulkan_render;
-import wescene.scene_wallpaper;
+import wescene.offline_session;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
@@ -46,11 +46,10 @@ bool RunPropertyReplay(const char* path) {
         const auto output = std::filesystem::u8path(string_field("output_dir"));
         if (std::filesystem::exists(output)) throw std::runtime_error("replay output already exists");
         std::filesystem::create_directories(output);
-        owe::SceneWallpaperConfig config;
+        owe::SessionConfig config;
         config.source_pkg_path = string_field("source");
         config.assets_dir = string_field("assets");
         config.cache_dir = (output / "cache").string();
-        config.fps = 30;
         const auto& properties = field("user_properties");
         if (!properties.is_object()) throw std::runtime_error("properties must be an object");
         config.user_properties = properties;
@@ -63,9 +62,9 @@ bool RunPropertyReplay(const char* path) {
         options.fps_num = 30;
         options.fps_den = 1;
         options.trace_scene = true;
-        owe::SceneWallpaper wallpaper;
-        if (!wallpaper.initOffline(std::move(config), std::move(info), options))
-            throw std::runtime_error(wallpaper.offlineError());
+        owe::OfflineSession wallpaper;
+        if (!wallpaper.init(std::move(config), std::move(info), options))
+            throw std::runtime_error(wallpaper.error());
         const auto& events = field("events");
         if (!events.is_array()) throw std::runtime_error("events must be an array");
         if (events.size() != 6) throw std::runtime_error("replay requires six bounded property events");
@@ -77,19 +76,19 @@ bool RunPropertyReplay(const char* path) {
             if (frame % 24 == 0) {
                 const auto& event = events[frame / 24];
                 if (!event.is_object()) throw std::runtime_error("event must be an object");
-                for (const auto& [key, value] : event.items()) wallpaper.setUserPropertyJson(key, value);
+                for (const auto& [key, value] : event.items()) wallpaper.setUserProperty(key, value);
             }
-            if (!wallpaper.step(frame, 1.0 / 30, pointer)) throw std::runtime_error(wallpaper.offlineError());
+            if (!wallpaper.step(frame, 1.0 / 30, pointer)) throw std::runtime_error(wallpaper.error());
             const auto& pixels = wallpaper.readback();
             if (!pixels.completed() || pixels.width != 640 || pixels.height != 360 || pixels.row_pitch != 640*4)
                 throw std::runtime_error("unexpected replay frame");
             raw.write(reinterpret_cast<const char*>(pixels.pixels.data()), pixels.pixels.size());
             if (frame % 24 == 0 || frame % 24 == 23)
-                std::ofstream(output / (std::to_string(frame) + ".scene.json")) << wallpaper.offlineSceneDescription();
+                std::ofstream(output / (std::to_string(frame) + ".scene.json")) << wallpaper.sceneDescription();
         }
         if (!raw) throw std::runtime_error("write replay frames failed");
         std::printf("PASS: one session, 144 frames, six property events; source_script_errors=%zu\n",
-                    wallpaper.offlineSourceScriptErrors().size());
+                    wallpaper.sourceScriptErrors().size());
         return true;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "FAIL: property replay: %s\n", error.what());
