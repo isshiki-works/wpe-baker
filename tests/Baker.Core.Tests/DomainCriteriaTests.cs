@@ -96,4 +96,21 @@ public class DomainCriteriaTests
         JsonObject verdict = BakeValueAssessment.Evaluate(plan, runtime, null!, null);
         Assert.Equal((status, rule), (verdict["status"]!.GetValue<string>(), verdict["rule"]!.GetValue<string>()));
     }
+
+    // 按分析请求解析档位（CLI、界面、bake 前重分析共用）：覆盖优先于档位，没选档走旧默认；逐项带来源。
+    [Theory]
+    [InlineData(null, null, null, 2.0, null, 2.0, 600.0, "default", "default")]
+    [InlineData("balanced", null, null, 2.0, 3.0, 3.0, 600.0, "preset", "preset")]
+    [InlineData("balanced", 1.5, null, 2.0, 1.5, 1.5, 600.0, "override", "preset")]
+    [InlineData("quality", null, 1200.0, 0.0, null, 0.0, 1200.0, "preset", "override")]
+    [InlineData(null, 4.0, 60.0, 2.0, 4.0, 4.0, 60.0, "override", "override")]
+    public void RetimeProfileFromRequest(string? preset, double? budget, double? loopMaximum, double common,
+        double? expectedBudget, double expectedCommon, double expectedMaximum, string budgetSource, string maximumSource)
+    {
+        var request = new HybridAnalyzeRequest(3, "s", "a", "o", MaximumRetimePercent: common, LoopLengthMaximumSeconds: loopMaximum,
+            Preset: preset, RetimeBudgetPercent: budget);
+        RetimeProfile profile = RetimeProfile.Resolve(request);
+        Assert.Equal((preset, expectedBudget, expectedCommon, expectedMaximum, budgetSource, maximumSource),
+            (profile.Preset, profile.BudgetPercent, profile.CommonRetimePercent, profile.LoopMaximumSeconds, profile.BudgetSource, profile.LoopMaximumSource));
+    }
 }
