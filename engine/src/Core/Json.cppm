@@ -89,35 +89,11 @@ struct Impl<fmt::Display, owe::JsonFileError> : ImplBase<owe::JsonFileError> {
 };
 
 template<>
-struct Impl<fmt::Debug, owe::JsonFileError> : ImplBase<owe::JsonFileError> {
-    auto fmt(fmt::Formatter& formatter) const -> bool {
-        return formatter.write_fmt(fmt::Arguments::make("JsonFileError(kind={}, message={})",
-                                                        static_cast<int>(this->self().kind),
-                                                        this->self().message));
-    }
-};
-
-template<>
-struct Impl<error::Error, owe::JsonFileError> : DefaultInImpl<error::Error, owe::JsonFileError> {};
-
-template<>
 struct Impl<fmt::Display, owe::JsonParseError> : ImplBase<owe::JsonParseError> {
     auto fmt(fmt::Formatter& formatter) const -> bool {
         return formatter.write_fmt(fmt::Arguments::make("{}", this->self().message));
     }
 };
 
-template<>
-struct Impl<fmt::Debug, owe::JsonParseError> : ImplBase<owe::JsonParseError> {
-    auto fmt(fmt::Formatter& formatter) const -> bool {
-        return formatter.write_fmt(
-            fmt::Arguments::make("JsonParseError(message={})", this->self().message));
-    }
-};
-
-template<>
-struct Impl<error::Error, owe::JsonParseError> : DefaultInImpl<error::Error, owe::JsonParseError> {};
-
 } // namespace rstd
 
-static_assert(rstd::Impled<owe::JsonFileError, rstd::error::Error>);

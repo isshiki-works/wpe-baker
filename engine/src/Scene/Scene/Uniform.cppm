@@ -529,16 +529,5 @@ struct Impl<fmt::Display, owe::UniformError> : ImplBase<owe::UniformError> {
     }
 };
 
-template<>
-struct Impl<fmt::Debug, owe::UniformError> : ImplBase<owe::UniformError> {
-    auto fmt(fmt::Formatter& formatter) const -> bool {
-        return formatter.write_fmt(fmt::Arguments::make("UniformError({})", this->self().message));
-    }
-};
-
-template<>
-struct Impl<error::Error, owe::UniformError> : DefaultInImpl<error::Error, owe::UniformError> {};
-
 } // namespace rstd
 
-static_assert(rstd::Impled<owe::UniformError, rstd::error::Error>);

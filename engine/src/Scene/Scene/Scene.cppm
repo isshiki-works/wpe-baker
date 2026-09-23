@@ -3086,19 +3086,5 @@ struct Impl<fmt::Display, owe::ImageParseError> : ImplBase<owe::ImageParseError>
     }
 };
 
-template<>
-struct Impl<fmt::Debug, owe::ImageParseError> : ImplBase<owe::ImageParseError> {
-    auto fmt(fmt::Formatter& formatter) const -> bool {
-        return formatter.write_fmt(fmt::Arguments::make("ImageParseError(kind={}, message={})",
-                                                        static_cast<int>(this->self().kind),
-                                                        this->self().message));
-    }
-};
-
-template<>
-struct Impl<error::Error, owe::ImageParseError>
-    : DefaultInImpl<error::Error, owe::ImageParseError> {};
-
 } // namespace rstd
 
-static_assert(rstd::Impled<owe::ImageParseError, rstd::error::Error>);
