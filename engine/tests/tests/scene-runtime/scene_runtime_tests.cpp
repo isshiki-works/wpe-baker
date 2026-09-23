@@ -780,11 +780,11 @@ TEST(SceneUserTextBinding, AppliesDescriptorPayloadToMatchingBindings) {
     std::string first;
     std::string second;
     scene.RegisterUserTextBinding(String::make("title"_str),
-                                  Box<dyn<FnMut<void(ref<str>)>>>::make([&](ref<str> value) {
+                                  std::function<void(ref<str>)>([&](ref<str> value) {
                                       first = to_string(value);
                                   }));
     scene.RegisterUserTextBinding(String::make("title"_str),
-                                  Box<dyn<FnMut<void(ref<str>)>>>::make([&](ref<str> value) {
+                                  std::function<void(ref<str>)>([&](ref<str> value) {
                                       second = to_string(value);
                                   }));
 
@@ -799,7 +799,7 @@ TEST(SceneUserTextBinding, AppliesEmptyString) {
     owe::Scene  scene;
     std::string value = "default";
     scene.RegisterUserTextBinding(String::make("title"_str),
-                                  Box<dyn<FnMut<void(ref<str>)>>>::make([&](ref<str> next) {
+                                  std::function<void(ref<str>)>([&](ref<str> next) {
                                       value = to_string(next);
                                   }));
 
@@ -813,7 +813,7 @@ TEST(SceneUserPropertyBinding, AppliesJsonPayloadToOwnedCallback) {
     bool       called = false;
     scene.RegisterUserPropertyBinding(
         String::make("camera"_str),
-        Box<dyn<FnMut<void(ref<owe::NJson>)>>>::make([&](ref<owe::NJson> property) {
+        std::function<void(ref<owe::NJson>)>([&](ref<owe::NJson> property) {
             called = property->is_object();
         }));
 
@@ -826,7 +826,7 @@ TEST(SceneUserPropertyBinding, AppliesJsonPayloadToOwnedCallback) {
 TEST(SceneTransformUpdater, ReceivesRuntimeElapsedTime) {
     owe::Scene scene;
     f64        observed;
-    scene.RegisterTransformUpdater(Box<dyn<FnMut<void(f64)>>>::make([&](f64 elapsed) {
+    scene.RegisterTransformUpdater(std::function<void(f64)>([&](f64 elapsed) {
         observed = elapsed;
     }));
 

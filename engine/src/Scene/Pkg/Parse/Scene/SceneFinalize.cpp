@@ -30,6 +30,15 @@ using namespace Eigen;
 namespace owe
 {
 
+// libc++ 22 没有 std::move_only_function：把只可移动的闭包放进 shared_ptr，再交给 std::function。
+// 原来的 rstd 闭包句柄（Box/Arc 包 FnMut）从不复制闭包，这里各份拷贝共享同一个闭包，语义不变。
+template<typename F>
+auto ShareCallable(F callable) {
+    return [shared = std::make_shared<F>(rstd::move(callable))](auto&&... args) -> decltype(auto) {
+        return (*shared)(std::forward<decltype(args)>(args)...);
+    };
+}
+
 template<typename T>
 struct CopyableArcHold {
     Arc<T> value;
@@ -245,7 +254,7 @@ void FinalizeUniformSources(SceneParseContext& context) {
                                             ? Some((*context.particle_runtime).clone())
                                             : None<Arc<ParticleRuntime>>();
             auto  scene_ptr           = rstd::addressof(scene);
-            (**scripts).runtime().SetLayerFactory(script::JsRuntime::LayerFactory::make(
+            (**scripts).runtime().SetLayerFactory(std::make_shared<script::JsRuntime::LayerFactory::element_type>(ShareCallable(
                 [scene_ptr,
                  runtime,
                  image_prototypes     = rstd::move(image_prototypes),
@@ -341,7 +350,7 @@ void FinalizeUniformSources(SceneParseContext& context) {
                     auto workshop_path = WorkshopAssetPath(request);
                     if (workshop_path.is_none()) return None();
                     return instantiate(workshop_path->as_str());
-                }));
+                })));
         }
     }
 }
@@ -379,7 +388,7 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
                     auto anchor = puppet.attachmentBindTransform(*attachment_index);
                     if (anchor.is_none()) return;
                     if (ref.apply_attachment_offset.is_some()) {
-                        (*ref.apply_attachment_offset)->operator()(anchor->translation());
+                        (*ref.apply_attachment_offset)(anchor->translation());
                     } else {
                         (*ref.node)->SetLocalFrame(anchor->matrix().cast<double>() *
                                                    (*ref.node)->LocalFrame());
@@ -400,7 +409,7 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
                     };
                     update(context.scene->Runtime().Frame().elapsed);
                     context.scene->RegisterTransformUpdater(
-                        Box<dyn<FnMut<void(f64)>>>::make(rstd::move(update)));
+                        std::function<void(f64)>(rstd::move(update)));
                 } else {
                     apply_bind_offset();
                 }
@@ -435,7 +444,7 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
         runtime.SetScene(context.scene.get());
         auto parallax_state = CopyableArcHold(context.uniform_state.clone());
         runtime.SetNodeParallaxDepthAccessors(
-            script::JsRuntime::NodeParallaxDepthGetter::make(
+            std::make_shared<script::JsRuntime::NodeParallaxDepthGetter::element_type>(
                 [parallax_state](SceneNode* node) mutable -> Option<script::Vec2Value> {
                     if (node == nullptr) return None();
                     auto depth = parallax_state.value->NodeParallaxDepth(*node);
@@ -443,13 +452,13 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
                     return Some(
                         script::Vec2Value { .x = (*depth)[usize()], .y = (*depth)[usize(1)] });
                 }),
-            script::JsRuntime::NodeParallaxDepthSetter::make(
+            std::make_shared<script::JsRuntime::NodeParallaxDepthSetter::element_type>(
                 [parallax_state](SceneNode* node, script::Vec2Value depth) mutable {
                     if (node == nullptr) return;
                     (void)parallax_state.value->SetNodeParallaxDepth(
                         *node, { static_cast<float>(depth.x), static_cast<float>(depth.y) });
                 }));
-        runtime.SetLayerFactory(script::JsRuntime::LayerFactory::make(
+        runtime.SetLayerFactory(std::make_shared<script::JsRuntime::LayerFactory::element_type>(
             [&context](SceneNode*                  owner,
                        script::LayerAssetReference request) -> Option<Arc<SceneNode>> {
                 auto node = InstantiateRegisteredAsset(context, owner, request);
@@ -457,7 +466,7 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
                     rstd_error("layer asset '{}' is unsupported or unavailable", request.path);
                 return node;
             }));
-        runtime.SetLayerConfigFactory(script::JsRuntime::LayerConfigFactory::make(
+        runtime.SetLayerConfigFactory(std::make_shared<script::JsRuntime::LayerConfigFactory::element_type>(
             [&context](SceneNode* owner, NJson config) -> Option<Arc<SceneNode>> {
                 auto node = InstantiateLayerConfiguration(context, owner, config);
                 if (node.is_none()) rstd_error("layer configuration is unsupported or unavailable");
@@ -469,7 +478,7 @@ Box<Scene> FinalizeScene(SceneParseContext& context) {
         runtime.ClearLayerFactory();
         runtime.ClearLayerConfigFactory();
         auto* scene_ptr = context.scene.get();
-        runtime.SetLayerConfigFactory(script::JsRuntime::LayerConfigFactory::make(
+        runtime.SetLayerConfigFactory(std::make_shared<script::JsRuntime::LayerConfigFactory::element_type>(
             [scene_ptr](SceneNode* owner, NJson config) -> Option<Arc<SceneNode>> {
                 auto context = scene_ptr->ExtensionMut<SceneParseContext>();
                 if (context.is_none()) return None();

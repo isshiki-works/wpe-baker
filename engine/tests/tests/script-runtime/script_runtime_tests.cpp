@@ -657,7 +657,7 @@ TEST(ScriptNodeSoftMutation, ImageAlignmentDispatchesRegisteredSetter) {
     rt.RegisterImageAlignmentSetter(
         &node,
         "center"_str,
-        JsRuntime::ImageAlignmentSetter::make([&](owe::SceneNode* node, ref<str> value) {
+        std::make_shared<JsRuntime::ImageAlignmentSetter::element_type>([&](owe::SceneNode* node, ref<str> value) {
             target    = node;
             alignment = String::make(value);
         }));
@@ -688,10 +688,10 @@ TEST(ScriptNodeSoftMutation, ParallaxDepthDispatchesRegisteredAccessors) {
     Vec2Value       depth { .x = 1.0, .y = 1.0 };
     owe::SceneNode* target { nullptr };
     rt.SetNodeParallaxDepthAccessors(
-        JsRuntime::NodeParallaxDepthGetter::make([&depth](owe::SceneNode*) -> Option<Vec2Value> {
+        std::make_shared<JsRuntime::NodeParallaxDepthGetter::element_type>([&depth](owe::SceneNode*) -> Option<Vec2Value> {
             return Some(depth);
         }),
-        JsRuntime::NodeParallaxDepthSetter::make(
+        std::make_shared<JsRuntime::NodeParallaxDepthSetter::element_type>(
             [&depth, &target](owe::SceneNode* node, Vec2Value value) {
                 target = node;
                 depth  = value;
@@ -763,7 +763,7 @@ TEST(ScriptNodeSoftMutation, ImageAlignmentBindingClonesForDynamicLayer) {
     rt.RegisterImageAlignmentSetter(
         &source,
         "center"_str,
-        JsRuntime::ImageAlignmentSetter::make([&](owe::SceneNode* node, ref<str> value) {
+        std::make_shared<JsRuntime::ImageAlignmentSetter::element_type>([&](owe::SceneNode* node, ref<str> value) {
             target    = node;
             alignment = String::make(value);
         }));
@@ -793,10 +793,10 @@ TEST(ScriptNodeSoftMutation, OriginDispatchesRegisteredAccessors) {
     Vec3Value      logical_origin { .x = 10.0, .y = 20.0, .z = 0.0 };
     rt.RegisterNodeOriginAccessors(
         &node,
-        JsRuntime::NodeOriginGetter::make([&logical_origin]() {
+        std::make_shared<JsRuntime::NodeOriginGetter::element_type>([&logical_origin]() {
             return logical_origin;
         }),
-        JsRuntime::NodeOriginSetter::make([&node, &logical_origin](Vec3Value origin) {
+        std::make_shared<JsRuntime::NodeOriginSetter::element_type>([&node, &logical_origin](Vec3Value origin) {
             logical_origin = origin;
             node.SetTranslate({ static_cast<float>(origin.x + 50.0),
                                 static_cast<float>(origin.y),
@@ -2391,7 +2391,7 @@ TEST(ScriptScene, CreateLayerRoutesConfigurationAndLayerCloneToFactory) {
     rt.RegisterInitialLayerConfig(
         style.as_ptr(),
         owe::ParseNJson(R"({"name":"Style1","text":"template"})").unwrap());
-    rt.SetLayerConfigFactory(JsRuntime::LayerConfigFactory::make(
+    rt.SetLayerConfigFactory(std::make_shared<JsRuntime::LayerConfigFactory::element_type>(
         [&root, &configs, &created](owe::SceneNode*,
                                     owe::NJson config) -> Option<Arc<owe::SceneNode>> {
             auto node = Arc<owe::SceneNode>::make();
@@ -2453,7 +2453,7 @@ TEST(ScriptScene, CreatedLayersCanBeSortedBeforeAnExistingLayer) {
     rt.SetScene(&scene);
     rt.RegisterInitialLayerConfig(ring.as_ptr(), owe::ParseNJson(R"({})").unwrap());
     rt.RegisterInitialLayerConfig(body.as_ptr(), owe::ParseNJson(R"({})").unwrap());
-    rt.SetLayerFactory(JsRuntime::LayerFactory::make(
+    rt.SetLayerFactory(std::make_shared<JsRuntime::LayerFactory::element_type>(
         [&scene, &created](owe::SceneNode*, LayerAssetReference) -> Option<Arc<owe::SceneNode>> {
             auto node = Arc<owe::SceneNode>::make();
             scene.AttachRuntimeNode(*scene.RootMut(), node.clone());
@@ -2534,7 +2534,7 @@ TEST(ScriptScene, PublicLayerQueriesUseAuthoredOrderAndTrackRuntimeLayers) {
     rt.RegisterInitialLayerConfig(c.as_ptr(), owe::ParseNJson(R"({})").unwrap());
     rt.RegisterInitialLayerConfig(hidden.as_ptr(), owe::ParseNJson(R"({})").unwrap());
     rt.RegisterInitialLayerConfig(reporter.as_ptr(), owe::ParseNJson(R"({})").unwrap());
-    rt.SetLayerConfigFactory(JsRuntime::LayerConfigFactory::make(
+    rt.SetLayerConfigFactory(std::make_shared<JsRuntime::LayerConfigFactory::element_type>(
         [&scene](owe::SceneNode*, owe::NJson config) -> Option<Arc<owe::SceneNode>> {
             auto node = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
                                                    Eigen::Vector3f::Ones(),
@@ -2634,7 +2634,7 @@ TEST(ScriptScene, RegisteredAssetFactoryCreatesAndReusesDestroyedLayer) {
     Vec<Arc<owe::SceneNode>> created;
 
     JsRuntime rt;
-    rt.SetLayerFactory(JsRuntime::LayerFactory::make(
+    rt.SetLayerFactory(std::make_shared<JsRuntime::LayerFactory::element_type>(
         [&root, &created](owe::SceneNode*,
                           LayerAssetReference asset) -> Option<Arc<owe::SceneNode>> {
             if (asset.path != "models/prism.mdl"_str) return None();
@@ -2686,7 +2686,7 @@ TEST(ScriptScene, DirectWorkshopAssetUsesLayerFactoryWithoutFixedCloneCapacity) 
     Vec<String>              workshop_ids;
 
     JsRuntime rt;
-    rt.SetLayerFactory(JsRuntime::LayerFactory::make(
+    rt.SetLayerFactory(std::make_shared<JsRuntime::LayerFactory::element_type>(
         [&root, &created, &paths, &workshop_ids](
             owe::SceneNode*, LayerAssetReference asset) -> Option<Arc<owe::SceneNode>> {
             paths.push(String::make(asset.path));

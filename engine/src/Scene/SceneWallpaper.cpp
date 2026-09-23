@@ -185,7 +185,7 @@ struct Overloaded : F... {
 auto CloneAudioResponseDemandCallback(const Option<AudioResponseDemandCallback>& callback)
     -> Option<AudioResponseDemandCallback> {
     if (callback.is_none()) return None();
-    return Some(callback->clone());
+    return Some(AudioResponseDemandCallback(*callback));
 }
 
 auto CloneUserPropertyDiagnostics(slice<SceneUserPropertyDiagnostic> diagnostics)

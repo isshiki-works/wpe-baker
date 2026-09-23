@@ -262,7 +262,7 @@ void InitContext(SceneParseContext& context, fs::VFS& vfs, const wpscene::SceneM
                 auto state =
                     mut_ref<UniformSceneState>::from_raw_parts(context.uniform_state.as_ptr());
                 scene.RegisterUserPropertyBinding(String::make(as_str(key).unwrap()),
-                                                  Box<dyn<FnMut<void(ref<NJson>)>>>::make(
+                                                  std::function<void(ref<NJson>)>(
                                                       [state, field](ref<NJson> property) mutable {
                                                           state->ApplyUserProperty(field,
                                                                                    *property);
@@ -283,7 +283,7 @@ void InitContext(SceneParseContext& context, fs::VFS& vfs, const wpscene::SceneM
                 auto state =
                     mut_ref<UniformSceneState>::from_raw_parts(context.uniform_state.as_ptr());
                 scene.RegisterUserPropertyBinding(String::make(as_str(key).unwrap()),
-                                                  Box<dyn<FnMut<void(ref<NJson>)>>>::make(
+                                                  std::function<void(ref<NJson>)>(
                                                       [state, field](ref<NJson> property) mutable {
                                                           state->ApplyUserProperty(field,
                                                                                    *property);

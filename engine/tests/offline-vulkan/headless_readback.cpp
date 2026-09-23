@@ -180,7 +180,7 @@ bool RunAnimationLayerBinding() {
     };
     user_scene.RegisterUserPropertyBinding(
         user_binding.key.clone(),
-        Box<dyn<FnMut<void(ref<owe::NJson>)>>>::make(
+        std::function<void(ref<owe::NJson>)>(
             [layer = layers.as_ptr(), binding = &user_binding](ref<owe::NJson> property) {
                 auto visible = owe::ResolveSceneUserVisibilityBinding(*binding, *property);
                 if (visible.is_some())

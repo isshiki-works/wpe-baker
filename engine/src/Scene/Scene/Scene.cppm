@@ -2517,7 +2517,7 @@ struct SceneUserPropertyDiagnostic {
 
 class AudioResponseDemand : NoCopy, NoMove {
 public:
-    using Callback = Arc<dyn<rstd::Fn<void(bool)>>>;
+    using Callback = std::shared_ptr<std::function<void(bool)>>;
 
     AudioResponseDemand();
     ~AudioResponseDemand();
@@ -2526,7 +2526,7 @@ public:
     void SetCallback(Option<Callback> callback);
     template<typename F>
     void SetCallback(F callback) {
-        SetCallback(Some(Callback::make(rstd::move(callback))));
+        SetCallback(Some(std::make_shared<Callback::element_type>(rstd::move(callback))));
     }
     void SetEnabled(bool enabled);
     bool Active() const;
@@ -2690,10 +2690,10 @@ public:
     auto ImageColorUserBindings(ref<str> key) const -> slice<ImagePropertyBinding>;
     auto ImageAlphaUserBindings(ref<str> key) const -> slice<ImagePropertyBinding>;
 
-    void RegisterUserTextBinding(String key, Box<dyn<FnMut<void(ref<str>)>>> setter);
+    void RegisterUserTextBinding(String key, std::function<void(ref<str>)> setter);
     bool ApplyUserTextBindings(ref<str> key, const NJson& property);
 
-    void RegisterUserPropertyBinding(String key, Box<dyn<FnMut<void(ref<NJson>)>>> setter);
+    void RegisterUserPropertyBinding(String key, std::function<void(ref<NJson>)> setter);
     bool ApplyUserPropertyBindings(ref<str> key, const NJson& property);
 
     struct MaterialTextureUserBinding {
@@ -2898,7 +2898,7 @@ public:
     void PassFrameTime(double delta) { m_runtime.Advance(f64(delta)); }
     void TickNodeFieldAnimations();
     auto ConsumeAnimationEvents() -> Vec<SceneAnimationEventDispatch>;
-    void RegisterTransformUpdater(Box<dyn<FnMut<void(f64)>>> updater);
+    void RegisterTransformUpdater(std::function<void(f64)> updater);
     void TickTransformUpdaters();
 
     void RegisterLinkedCamera(String source, String linked);
@@ -2986,9 +2986,9 @@ private:
     Vec<Box<SceneLight>>          m_lights;
     Vec<Box<ScenePostProcess>>    m_post_processes;
     Vec<SceneShadowDefinition>    m_shadow_definitions;
-    HashMap<String, Vec<Box<dyn<FnMut<void(ref<str>)>>>>>        m_text_user_index;
-    HashMap<String, Vec<Box<dyn<FnMut<void(ref<NJson>)>>>>>       m_user_property_index;
-    Vec<Box<dyn<FnMut<void(f64)>>>>                              m_transform_updaters;
+    HashMap<String, Vec<std::function<void(ref<str>)>>>        m_text_user_index;
+    HashMap<String, Vec<std::function<void(ref<NJson>)>>>       m_user_property_index;
+    Vec<std::function<void(f64)>>                              m_transform_updaters;
     HashMap<String, Vec<ShaderUserBinding>>                      m_shader_user_index;
     HashMap<String, Vec<ShaderComboUserBinding>>                 m_shader_combo_user_index;
     HashMap<String, Vec<MaterialTextureUserBinding>>             m_material_texture_user_index;
