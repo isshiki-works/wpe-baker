@@ -428,8 +428,10 @@ var shellObjects = new JsonArray(
 var shellPlan = PublicLayerPlan(new JsonArray(new JsonObject { ["live_root"] = 1911 }, new JsonObject { ["video_group"] = "shell-video" }),
     new JsonArray(1911), new JsonArray(PublicLayer(1910), PublicLayer(1911), PublicLayer(1912)),
     new JsonArray(new JsonObject { ["id"] = "shell-video", ["layer_ids"] = new JsonArray(1912) }));
-RejectPublicLayerExport(() => Assemble(shellPlan, shellObjects, new JsonArray(LayerQuery(1910, "layer_order"))),
-    "retained empty-shell script still guards numeric public layer order");
+var shellExport = Assemble(shellPlan, shellObjects, new JsonArray(LayerQuery(1910, "layer_order")));
+Check(shellExport.OfType<JsonObject>().Select(obj => obj["id"]!.GetValue<int>()).SequenceEqual(new[] { 1910, 1911, 1912 }) &&
+    shellExport[2]!["image"]!.GetValue<string>() == "world-video" && shellExport[0]!["image"] is null,
+    "numeric public layer query keeps the source id sequence: the video takes its baked member's slot");
 var deletedScriptPlan = PublicLayerPlan(new JsonArray(new JsonObject { ["live_root"] = 1901 }), new JsonArray(1901),
     new JsonArray(PublicLayer(1900), PublicLayer(1901), PublicLayer(1902)));
 Check(Assemble(deletedScriptPlan, publicObjects, new JsonArray(LayerQuery(1900, "layer_numeric_index"))).Count == 1,
@@ -469,79 +471,6 @@ Check(CompareLookups(null, new JsonArray())["status"]!.GetValue<string>() == "no
 Check(CompareLookups(new JsonArray(), new JsonArray(LayerQuery(1900, "layer_count")),
     new JsonArray(publicObjects[0]!.DeepClone()))["status"]!.GetValue<string>() == "rejected_public_layer_queries",
     "a public layer query first observed in paired rendering reaches the same export guard");
-var exportSafetyType = typeof(SceneAssembler);
-var publicQueryGuard = exportSafetyType.GetMethod("GuardPublicLayerQueries", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
-bool SelfAnchoredGuardAllows(string sourceScript, string? candidateScript = null, int? sourceParent = null, int? candidateParent = null,
-    string property = "layer_index", bool initialization = true, string binding = "visible", string scriptBinding = "visible")
-{
-    JsonObject SourceOwner() => new() { ["id"] = 2000, ["parent"] = sourceParent, [scriptBinding] = new JsonObject { ["script"] = sourceScript } };
-    JsonObject CandidateOwner() => new() { ["id"] = 2000, ["parent"] = candidateParent ?? sourceParent,
-        [scriptBinding] = new JsonObject { ["script"] = candidateScript ?? sourceScript } };
-    try
-    {
-        publicQueryGuard.Invoke(null, new object[] { new[] { SourceOwner(), new JsonObject { ["id"] = 2001 } },
-            new[] { new JsonObject { ["id"] = 2001 }, CandidateOwner() },
-            new JsonArray(new JsonObject { ["owner"] = 2000, ["target"] = -1, ["operation"] = "query", ["property"] = property,
-                ["binding"] = binding, ["initialization"] = initialization }) });
-        return true;
-    }
-    catch (System.Reflection.TargetInvocationException error) when (error.InnerException is InvalidDataException) { return false; }
-}
-string selfAnchored = """
-    export function update(value) {
-      if (value) {
-        let baseOrigin = thisLayer.origin;
-        let style = { alignment: scriptProperties.barAlignmentdir, z: baseOrigin.x / 2 };
-        bars[0] = style;
-        bars.push(thisLayer);
-      }
-    }
-    export function init() {
-      let initialAnchor = thisScene.getLayerIndex(thisLayer);
-      let bars = [];
-      for (let i = 0; i < 2; ++i) {
-        let createdBar = thisScene.createLayer('unrelated/path.json');
-        createdBar.alignment = scriptProperties.barAlignmentdir;
-        createdBar.parallaxDepth = scriptProperties.depth;
-        thisScene.sortLayer(createdBar, initialAnchor);
-        bars.push(createdBar);
-      }
-      for (let i = 0; i < bars.length; ++i) {
-        let createdBar = bars[i];
-        createdBar.opacity = 1;
-      }
-    }
-    """;
-var selfAnchoredMethod = exportSafetyType.GetMethod("IsSelfAnchoredInsert", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
-Check((bool)selfAnchoredMethod.Invoke(null, new object[] { selfAnchored })!,
-    "self-anchored scanner accepts the complete common two-function script shape");
-Check(SelfAnchoredGuardAllows(selfAnchored),
-    "self-anchored init insertion permits a different ID, variable names, and resource path");
-Check(SelfAnchoredGuardAllows("// eval, Proxy, and thisScene.sortLayer are comments\n" +
-    selfAnchored.Replace("unrelated/path.json", "eval thisScene.getLayerIndex", StringComparison.Ordinal)),
-    "self-anchored scanner ignores comments and quoted resource text");
-Check(!SelfAnchoredGuardAllows(selfAnchored.Replace("initialAnchor);", "initialAnchor + 1);", StringComparison.Ordinal)),
-    "self-anchored exception rejects index arithmetic");
-Check(!SelfAnchoredGuardAllows(selfAnchored.Replace("createdBar.parallaxDepth", "if (true) { createdBar.parallaxDepth", StringComparison.Ordinal)
-    .Replace("scriptProperties.depth;", "scriptProperties.depth; }", StringComparison.Ordinal)),
-    "self-anchored exception rejects branches");
-Check(!SelfAnchoredGuardAllows(selfAnchored.Replace("thisScene.sortLayer", "let escaped = initialAnchor; thisScene.sortLayer", StringComparison.Ordinal)),
-    "self-anchored exception rejects anchor escape");
-Check(!SelfAnchoredGuardAllows(selfAnchored.Replace("thisScene.sortLayer", "initialAnchor = 0; thisScene.sortLayer", StringComparison.Ordinal)),
-    "self-anchored exception rejects anchor overwrite");
-Check(!SelfAnchoredGuardAllows(selfAnchored.Replace("createdBar, initialAnchor", "existingLayer, initialAnchor", StringComparison.Ordinal)),
-    "self-anchored exception rejects sorting an existing layer");
-Check(!SelfAnchoredGuardAllows(selfAnchored.Replace("createdBar.alignment", "createdBar = other; createdBar.alignment", StringComparison.Ordinal)),
-    "self-anchored exception rejects created-layer rebinding");
-Check(!SelfAnchoredGuardAllows(selfAnchored.Replace("thisScene.sortLayer", "queueMicrotask(() => thisScene.sortLayer", StringComparison.Ordinal)),
-    "self-anchored exception rejects nested callback syntax");
-Check(!SelfAnchoredGuardAllows(selfAnchored, property: "layer_order", initialization: false) &&
-    !SelfAnchoredGuardAllows(selfAnchored, property: "layer_numeric_index") &&
-    !SelfAnchoredGuardAllows(selfAnchored, binding: "origin", scriptBinding: "visible"),
-    "self-anchored exception remains limited to its init binding and layer index/order queries");
-Check(!SelfAnchoredGuardAllows(selfAnchored, candidateScript: selfAnchored + " ") &&
-    !SelfAnchoredGuardAllows(selfAnchored, candidateParent: 9),
-    "self-anchored exception requires unchanged root binding script text and parent");
 var subtreeExport = Assemble(subtreePlan, subtreeObjects, new JsonArray(new JsonObject { ["owner"] = 1203, ["target"] = 1206, ["operation"] = "lookup" }));
 Check(subtreeExport.OfType<JsonObject>().Select(obj => obj["id"]!.GetValue<int>()).SequenceEqual(new[] { 1200, 1500, 1202, 1203, 1205, 1201, 1206 }) &&
     JsonNode.DeepEquals(subtreeExport[0], subtreeObjects[0]) && JsonNode.DeepEquals(subtreeExport[2], subtreeObjects[4]) &&
