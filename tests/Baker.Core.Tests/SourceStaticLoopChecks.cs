@@ -121,7 +121,7 @@ internal static class SourceStaticLoopChecks
             !Analyze(Scene(), Runtime("lz4video"))["source_static"]!.GetValue<bool>(),
             "an LZ4-compressed mip is judged by its decoded prefix: plain pixels are still, a compressed video container header is not");
 
-        var rejectionMethod = typeof(HybridScenePlanner).GetMethod("RequireTraceableRejection",
+        var rejectionMethod = typeof(Verdict).GetMethod("RequireTraceableRejection",
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
         void Require(JsonObject plan)
         {
@@ -156,7 +156,7 @@ internal static class SourceStaticLoopChecks
 
         // fix/narrative-rc10：求解器给出结构化空候选原因、却没有未解析机制（3757825891 layered 的重查、3661249043 --retain-live）
         // 不再掉进内部错误，而是写成 blocker。
-        var solverMethod = typeof(HybridScenePlanner).GetMethod("RecordSolverNoCandidateBlocker",
+        var solverMethod = typeof(Verdict).GetMethod("RecordSolverNoCandidateBlocker",
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
         JsonObject SolverPlan(string kind, JsonArray? unresolved = null)
         {

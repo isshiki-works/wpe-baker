@@ -1,5 +1,5 @@
 using System.Text.Json.Nodes;
-using static Baker.Core.HybridScenePlanner;
+using static Baker.Core.SceneGraph;
 
 namespace Baker.Core;
 
@@ -68,14 +68,13 @@ internal sealed class LayoutAdmission
     internal void Record(bool effectPrefix)
     {
         if (Conflict is not null) Plan["whole_layer"]!.AsObject()["layout_conflict"] = Conflict.Text;
-        Plan["video_layout_admission"] = new JsonObject {
-            ["requested"] = requested,
-            ["status"] = effectPrefix ? "not_applicable_to_effect_prefix" :
+        Plan["video_layout_admission"] = AdmissionRecord(requested,
+            effectPrefix ? "not_applicable_to_effect_prefix" :
                 groupCount == 0 ? "not_applicable_no_video_group" :
                 Conflict is not null ? ConflictStatus(Plan) :
                 Demoted ? DemotedStatus : AllowedStatus,
-            ["reason"] = Conflict?.Text ?? (Demoted ? Plan["layout_admission_demotion"]?["reason"]?.GetValue<string>() : null),
-            ["scope"] = effectPrefix ? EffectPrefixScope : WholeLayerScope };
+            Conflict?.Text ?? (Demoted ? Plan["layout_admission_demotion"]?["reason"]?.GetValue<string>() : null),
+            effectPrefix ? EffectPrefixScope : WholeLayerScope);
         if (Conflict is null || effectPrefix) return;
         PlanBlockers.Add(Plan["blockers"]!.AsArray(), Conflict);
         Plan["status"] = "requires_resolution";
@@ -83,8 +82,56 @@ internal sealed class LayoutAdmission
 
     /// <summary>
     /// 冲突的准入状态：full_frame 的唯一视频组排在搬不走的实时绘制之后时，这不是用户能选出来的布局，而是不可达。
-    /// （HybridScenePlanner.ApplyAllocation 里还有一份同样的私有判定，归 C2.2d2 改调这里后删掉，已登记。）
+    /// 分析（<see cref="Record"/>）与 bake 侧前景分配（<see cref="PlanTransforms.ApplyAllocation"/>）共用这一份。
     /// </summary>
     internal static string ConflictStatus(JsonObject plan) =>
         SingleShotAllocation.UnreachableBlockingRoots(plan).Length > 0 ? "full_frame_unreachable" : "requires_user_choice";
+
+    /// <summary>video_layout_admission 记录（四个字段、固定顺序）；分析的准入与 bake 侧前景分配都经这里写。</summary>
+    internal static JsonObject AdmissionRecord(string requested, string status, string? reason, string scope) =>
+        new() { ["requested"] = requested, ["status"] = status, ["reason"] = reason, ["scope"] = scope };
+
+    /// <summary>布局准入通过时的记录（分配与分析同一句 scope）。</summary>
+    internal static JsonObject AllowedRecord(string requested) => AdmissionRecord(requested, AllowedStatus, null, WholeLayerScope);
+
+    internal static Blocker? FullFrameConflict(JsonObject plan)
+    {
+        string layout = PlanSettings.Of(plan).VideoLayout;
+        if (layout == "layered") return null;
+        if (layout != "full_frame") throw new InvalidDataException("Unknown video layout; use full_frame or layered.");
+        JsonArray groups = plan["video_groups"]?.AsArray() ?? throw new InvalidDataException("Video groups are missing.");
+        if (groups.Count == 1 && groups[0]?["include_scene_clear"]?.GetValue<bool>() == true) return null;
+        // 唯一一组被不可搬动的实时绘制挡在后面时，这个布局对该场景不可达：报出阻挡者，不提建议。
+        if (SingleShotAllocation.UnreachableBlockingRoots(plan) is { Length: > 0 } blocking)
+            return SingleShotAllocation.UnreachableReason(plan, blocking);
+        var composition = (plan["composition"]?.AsArray() ?? []).OfType<JsonObject>().ToArray();
+        string[] LiveNames(IEnumerable<JsonObject> entries) => entries
+            .Where(item => item["live_root"] is not null).Select(item => item["live_root"]!.GetValue<int>())
+            .SelectMany(id => plan["layers"]?.AsArray().OfType<JsonObject>().Where(layer => Int(layer["allocation_root"] ?? layer["root"]) == id &&
+                layer["visible"] is JsonValue visible && visible.TryGetValue<bool>(out bool shown) && shown &&
+                layer["drawable"] is JsonValue drawable && drawable.TryGetValue<bool>(out bool draws) && draws)
+                .Select(layer => layer["name"]?.GetValue<string>()) ?? [])
+            .Where(name => !string.IsNullOrWhiteSpace(name)).Cast<string>().Distinct().ToArray();
+        string[] names = LiveNames(composition
+            .SkipWhile(item => item["video_group"] is null).Reverse().SkipWhile(item => item["video_group"] is null).Reverse());
+        // 排在第一组视频之前先画的可见实时层：只进文案，用来点名"挡在前面"的是谁。
+        string[] leading = composition.Any(item => item["video_group"] is not null)
+            ? LiveNames(composition.TakeWhile(item => item["video_group"] is null)) : [];
+        // 文案两边意图取并集：分类与双语来自文案表，本场景真正可执行的选项来自全幅降级的取证。
+        return PlanNarrative.FullFrameConflict(groups, names, FullFrameDemotion.ConflictOptions(plan), leading);
+    }
+
+    internal static Blocker? CompositionHierarchyConflict(JsonObject plan,
+        IReadOnlyDictionary<int, JsonObject>? sourceObjects = null, JsonArray? dependencies = null)
+    {
+        HybridPlanFormat.Validate(plan);
+        JsonArray layers = plan["layers"]!.AsArray();
+        var objects = sourceObjects ?? layers.OfType<JsonObject>().ToDictionary(Id, layer => new JsonObject {
+            ["id"] = layer["id"]!.DeepClone(), ["parent"] = layer["parent"]?.DeepClone() });
+        int nextId = checked(objects.Keys.Max() + 1);
+        var replacements = plan["video_groups"]!.AsArray().OfType<JsonObject>().ToDictionary(
+            group => group["id"]!.GetValue<string>(), group => new JsonObject { ["id"] = nextId++, ["parent"] = group["parent_id"]?.DeepClone() });
+        try { _ = HybridBakeService.AssembleAllocationObjects(objects, plan, replacements, dependencies ?? new JsonArray()); return null; }
+        catch (InvalidDataException error) when (Blocker.Of(error) is Blocker blocker) { return blocker; }
+    }
 }

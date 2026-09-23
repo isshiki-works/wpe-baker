@@ -34,9 +34,6 @@ public class BlockerTriageTests
         Assert.Equal(rule, verdict["rule"]!.GetValue<string>());
     }
 
-    private static readonly MethodInfo PrefixSafetyBlocked = typeof(HybridBakeService).Assembly
-        .GetType("Baker.Core.HybridScenePlanner")!.GetMethod("PrefixSafetyBlocked", BindingFlags.Static | BindingFlags.NonPublic)!;
-
     /// <summary>效果前缀回退只在拒因全是"无独立组"（两种形态）时才试；混进任何别的拒因就不试。</summary>
     [Theory]
     [InlineData(new[] { BlockerCode.NoInputIndependentGroup }, false)]
@@ -46,9 +43,8 @@ public class BlockerTriageTests
     [InlineData(new[] { BlockerCode.HdrRadianceOpen }, true)]
     public void PrefixFallbackOnlyForNoIndependentGroup(BlockerCode[] codes, bool blocked)
     {
-        var blockers = new JsonArray(codes.Select(code => (JsonNode)new Blocker(code,
-            Enumerable.Repeat<object?>("x", BlockerCatalogTests.Arity(BlockerCodes.Key(code))).ToArray()).ToNode()).ToArray());
-        Assert.Equal(blocked, (bool)PrefixSafetyBlocked.Invoke(null, [blockers])!);
+        // 初判拒因在内存里是 Blocker 列表（C2.2d2），前缀回退只看编号。
+        Assert.Equal(blocked, Baker.Core.Verdict.PrefixSafetyBlockedBy(codes));
     }
 
     [Fact]

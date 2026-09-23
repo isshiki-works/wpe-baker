@@ -101,7 +101,7 @@ public static class Admission
         if (verdict.Blocker is not { Code: BlockerCode.BakeAllocation } blocker) return;
         PlanBlockers.Add(plan["blockers"]!.AsArray(), blocker);
         plan["status"] = "requires_resolution";
-        plan["suitability"] = HybridScenePlanner.Suitability(plan);
+        plan["suitability"] = HybridSuitability.Verdict(plan);
         PlanNarrative.Attach(plan);
     }
 

@@ -222,7 +222,7 @@ internal static class WallpaperEnginePropertiesChecks
             "panel marks follow the plan's applied keys, or unedited WPE values before analysis, with a note on the source");
 
         static void HybridScenePlannerAttach(JsonObject report, JsonObject originRecord) =>
-            typeof(HybridScenePlanner).GetMethod("AttachPropertiesSource", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            typeof(PlanWriter).GetMethod("AttachPropertiesSource", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
                 .Invoke(null, [report, originRecord]);
     }
 
@@ -255,7 +255,7 @@ internal static class WallpaperEnginePropertiesChecks
     }
 
     private static JsonObject Snapshot(JsonObject project, JsonObject? properties) =>
-        (JsonObject)typeof(HybridScenePlanner).GetMethod("SnapshotProperties", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+        (JsonObject)typeof(SceneGraph).GetMethod("SnapshotProperties", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
             .Invoke(null, [project, properties])!;
 
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;

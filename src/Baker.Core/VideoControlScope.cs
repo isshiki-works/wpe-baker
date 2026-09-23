@@ -40,21 +40,21 @@ internal sealed class VideoControlScope
         JsonObject[] dependencies = runtime["runtime_dependencies"]?.AsArray().OfType<JsonObject>().ToArray() ?? [];
         var videoOwners = new HashSet<int>((runtime["runtime_animation_periods"]?.AsArray().OfType<JsonObject>() ?? [])
             .Where(trace => string.Equals(trace["mechanism"]?.GetValue<string>(), "video", StringComparison.OrdinalIgnoreCase))
-            .Select(trace => HybridScenePlanner.Int(trace["source_owner_layer_id"])).OfType<int>());
+            .Select(trace => SceneGraph.Int(trace["source_owner_layer_id"])).OfType<int>());
         // 整个判定都锚在"含视频控制调用的脚本"上，和今天的全场景连坐同一个触发条件：
         // 场景里一段控制脚本都没有时结论与今天完全一致，有控制脚本时只锁它解析到的目标。
         // 读到 videoTexture 却不做任何播放控制的脚本不构成受控证据——今天也不构成。
         var controlOwners = (scene["objects"]?.AsArray().OfType<JsonObject>() ?? [])
-            .Where(ControlsVideoPlayback).Select(owner => HybridScenePlanner.Int(owner["id"])).OfType<int>().ToArray();
+            .Where(ControlsVideoPlayback).Select(owner => SceneGraph.Int(owner["id"])).OfType<int>().ToArray();
         var resolved = new HashSet<int>();
         var unknown = new List<int>();
         foreach (int id in controlOwners)
         {
             resolved.Add(id);
             JsonObject[] reads = dependencies.Where(dependency => IsVideoTextureRead(dependency) &&
-                HybridScenePlanner.Int(dependency["owner"]) == id).ToArray();
+                SceneGraph.Int(dependency["owner"]) == id).ToArray();
             foreach (JsonObject read in reads)
-                if (HybridScenePlanner.Int(read["target"]) is int target && target >= 0) resolved.Add(target);
+                if (SceneGraph.Int(read["target"]) is int target && target >= 0) resolved.Add(target);
             // 自身就是那条视频轨时，脚本不必解析别的目标：控制面已经完备。
             if (videoOwners.Contains(id)) continue;
             if (!reads.Any(read => read["initialization"]?.GetValue<bool>() == true)) unknown.Add(id);

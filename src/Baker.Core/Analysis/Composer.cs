@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using static Baker.Core.HybridScenePlanner;
+using static Baker.Core.SceneGraph;
 
 namespace Baker.Core;
 

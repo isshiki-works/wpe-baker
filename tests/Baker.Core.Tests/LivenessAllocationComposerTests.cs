@@ -24,7 +24,7 @@ public class DependencyClosureTests
             if (!list.Contains(reason)) list.Add(reason);
             return set.Add(id);
         }
-        Liveness.Close(dependencies, set.Contains, Mark, ownerPerRule, severedRead ?? (_ => false), severedWrite ?? (_ => false));
+        Liveness.Close(dependencies.OfType<JsonObject>(), set.Contains, Mark, ownerPerRule, severedRead ?? (_ => false), severedWrite ?? (_ => false));
         return reasons;
     }
 

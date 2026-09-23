@@ -46,7 +46,13 @@ internal static class Routes
         JsonObject wholeLayer = plan["whole_layer"]!.AsObject();
         wholeLayer["blockers"] = plan["blockers"]!.DeepClone();
         wholeLayer["loop"] = plan["loop"]!.DeepClone();
-        wholeLayer["status"] = wholeLayer["blockers"]!.AsArray().Count == 0 &&
-            WholeLoopComplete(wholeLayer["loop"]!.AsObject()) ? "available" : "unavailable";
+        wholeLayer["status"] = WholeLayerStatus(wholeLayer["blockers"]!.AsArray(), wholeLayer["loop"]!.AsObject());
     }
+
+    /// <summary>新建 whole_layer 副本（写 plan 时）：blockers 由调用方给一份新数组，loop 拷一份，状态规则同 <see cref="RefreshWholeLayer"/>。</summary>
+    internal static JsonObject WholeLayer(JsonArray blockers, JsonObject loop) => new() {
+        ["blockers"] = blockers, ["loop"] = loop.DeepClone(), ["status"] = WholeLayerStatus(blockers, loop) };
+
+    private static string WholeLayerStatus(JsonArray blockers, JsonObject loop) =>
+        blockers.Count == 0 && WholeLoopComplete(loop) ? "available" : "unavailable";
 }

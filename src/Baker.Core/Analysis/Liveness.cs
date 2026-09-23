@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using static Baker.Core.HybridScenePlanner;
+using static Baker.Core.SceneGraph;
 
 namespace Baker.Core;
 
@@ -110,7 +110,7 @@ internal sealed class Liveness
         }
         // Runtime writes by a live controller make their targets live. Reads of a live mutable
         // target make the consuming animation live too. Initialization-only transforms stay snapshots.
-        Close(observation.Dependencies, liveness.Ids.Contains, liveness.Mark, ownerPerRule: true, severedRead, severedWrite);
+        Close(observation.Dependencies.OfType<JsonObject>(), liveness.Ids.Contains, liveness.Mark, ownerPerRule: true, severedRead, severedWrite);
         return liveness;
     }
 
@@ -125,14 +125,14 @@ internal sealed class Liveness
     /// false = 整条依赖用开头的判定（按单元判的旧写法）。两者闭包结果相同，只改变某个对象 reasons 里原因的先后；
     /// 为 plan v3 逐字节不变而保留两种写法，C3 统一后删掉这个参数（登记在 runs/C2-plan/forwarders.txt）。
     /// </param>
-    internal static void Close(JsonArray dependencies, Func<int, bool> isLive, Func<int, string, bool> mark, bool ownerPerRule,
+    internal static void Close(IEnumerable<JsonObject> dependencies, Func<int, bool> isLive, Func<int, string, bool> mark, bool ownerPerRule,
         Func<JsonObject, bool> severedRead, Func<JsonObject, bool> severedWrite)
     {
         bool changed;
         do
         {
             changed = false;
-            foreach (var dependency in dependencies.OfType<JsonObject>())
+            foreach (var dependency in dependencies)
             {
                 if (severedRead(dependency)) continue;
                 int owner = dependency["owner"]!.GetValue<int>(), target = dependency["target"]!.GetValue<int>();
@@ -147,5 +147,19 @@ internal sealed class Liveness
                     changed |= mark(target, "live_runtime_resource_dependency");
             }
         } while (changed);
+    }
+
+    /// <summary>
+    /// 能力扫描用的脚本文本：去掉注释、保留字符串与正则字面量（否则 URL 里的 // 会把同一行后面的实时/共享 API 调用藏起来）。
+    /// 含模板字符串的脚本原样返回，宁可多判实时。
+    /// </summary>
+    internal static string CapabilityScanText(string code)
+    {
+        // Keep template expressions conservative. Quotes and regex literals must protect embedded
+        // comment markers, otherwise a URL can hide the remaining live/shared API calls on its line.
+        if (code.Contains('`')) return code;
+        return Regex.Replace(code,
+            "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|(?<comment>/\\*[\\s\\S]*?\\*/|//[^\\r\\n]*)|/(?:\\\\.|[^/\\\\\\r\\n])+/[a-z]*",
+            match => match.Groups["comment"].Success ? "" : match.Value);
     }
 }
