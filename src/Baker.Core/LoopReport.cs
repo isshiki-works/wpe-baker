@@ -136,12 +136,17 @@ internal sealed record LoopVideoRatePatch(string ComponentId, int OwnerLayerId, 
 
 /// <summary>
 /// plan.loop.unresolved[] 的一项：证明不了周期的时间机制。分析过程中按类型读（粒子默认长度读 <see cref="RuntimeTrackUnresolved.Particle"/>，
-/// 摆动改频按 <see cref="ShaderLoopUnresolved.Source"/> 移出已建模项），写 plan 时渲染一次。带文案键的条目照旧写 detail 与
-/// detail_localized（后者是临时字段：plan.loop 要经 AnalysisCache 与 HybridScenePlanner 才到 PlanNarrative.Attach，由它搬进 unresolved_localized）。
+/// 摆动改频按 <see cref="ShaderLoopUnresolved.Source"/> 移出已建模项），写 plan 时渲染一次。<see cref="ToJson"/> 只出 v3 字段；
+/// detail 的文案（<see cref="DetailMessage"/>）与静止证明点名的图层（<see cref="StaticLayer"/>）不进这份 JSON，
+/// 由 <see cref="UnresolvedNotes"/> 类型化带到写 plan（unresolved_localized 与一行结论）。
 /// </summary>
 internal abstract record LoopUnresolved
 {
     public abstract string Kind { get; }
+    /// <summary>detail 的键与参数；null = 只有英文原文（unresolved_localized 里 key 为 null、中英都是原文）。</summary>
+    public virtual Message? DetailMessage => null;
+    /// <summary>静止证明失败时点名的被烘图层；只有 <see cref="SourceStaticUnresolved"/> 可能有。</summary>
+    public virtual StaticLayerNaming? StaticLayer => null;
     public abstract JsonObject ToJson();
 }
 
@@ -149,13 +154,15 @@ internal abstract record LoopUnresolved
 internal sealed record ShaderLoopUnresolved(ShaderTemporalUnresolved Source) : LoopUnresolved
 {
     public override string Kind => Source.Kind.ToString();
+    public override Message? DetailMessage => Source.Message;
     public override JsonObject ToJson()
     {
         var json = new JsonObject { ["kind"] = Kind, ["owner_layer_id"] = Source.OwnerLayerId,
             ["effect_index"] = Source.EffectIndex, ["pass_index"] = Source.PassIndex, ["resource"] = Source.Resource, ["detail"] = Source.Detail,
             // 机制知识按结构化字段下传，残差掩盖据此判定，不再按资源名匹配字样。
             ["bounded_displacement"] = Source.BoundedDisplacement, ["mechanism"] = Source.Mechanism.Length == 0 ? null : Source.Mechanism };
-        return Source.Message?.Write(json, "detail") ?? json;
+        if (Source.Message is Message message) json["detail"] = message.Text;
+        return json;
     }
 }
 
@@ -163,15 +170,17 @@ internal sealed record ShaderLoopUnresolved(ShaderTemporalUnresolved Source) : L
 internal sealed record ScriptTimeUnresolved(int OwnerLayerId, JsonNode? Binding, JsonNode? Clock) : LoopUnresolved
 {
     public override string Kind => "script_time";
-    public override JsonObject ToJson() => new Message("unresolved.script_time").Write(new JsonObject {
-        ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId, ["binding"] = Binding?.DeepClone(), ["clock"] = Clock?.DeepClone() }, "detail");
+    public override Message DetailMessage => new("unresolved.script_time");
+    public override JsonObject ToJson() => new() {
+        ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId, ["binding"] = Binding?.DeepClone(), ["clock"] = Clock?.DeepClone(), ["detail"] = DetailMessage.Text };
 }
 
 /// <summary>运行时材质里没被建模的时钟 uniform 或读不懂的材质条目。</summary>
 internal sealed record RuntimeMaterialUnresolved(int OwnerLayerId, Message Detail) : LoopUnresolved
 {
     public override string Kind => "runtime_material";
-    public override JsonObject ToJson() => Detail.Write(new JsonObject { ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId }, "detail");
+    public override Message DetailMessage => Detail;
+    public override JsonObject ToJson() => new() { ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId, ["detail"] = Detail.Text };
 }
 
 /// <summary>求解器留下的约束（search_budget = 搜索预算用尽，没有 component 键）。</summary>
@@ -184,18 +193,14 @@ internal sealed record SolverUnresolved(bool SearchBudget, string? ComponentId, 
 }
 
 /// <summary>
-/// 静止证明失败的理由。<see cref="Layer"/> 点名被烘图层时另写 static_layer 临时字段（层名与是否粒子系统），
-/// PlanNarrative 的一行中文结论据此说，不从英文明细里抠；Attach 之后去掉。
+/// 静止证明失败的理由。<see cref="Layer"/> 点名被烘图层（层名与是否粒子系统）时，PlanNarrative 的一行中文结论据此说，
+/// 不从英文明细里抠；它经 <see cref="UnresolvedNotes"/> 带到写 plan，不进 plan。
 /// </summary>
 internal sealed record SourceStaticUnresolved(string Detail, int? OwnerLayerId, StaticLayerNaming? Layer) : LoopUnresolved
 {
     public override string Kind => "source_static";
-    public override JsonObject ToJson()
-    {
-        var json = new JsonObject { ["kind"] = Kind, ["detail"] = Detail, ["owner_layer_id"] = OwnerLayerId };
-        if (Layer is not null) json[PlanNarrative.StaticLayer] = new JsonObject { ["name"] = Layer.Name, ["particle"] = Layer.Particle };
-        return json;
-    }
+    public override StaticLayerNaming? StaticLayer => Layer;
+    public override JsonObject ToJson() => new() { ["kind"] = Kind, ["detail"] = Detail, ["owner_layer_id"] = OwnerLayerId };
 }
 
 internal sealed record StaticLayerNaming(string? Name, bool Particle);
@@ -204,13 +209,13 @@ internal sealed record StaticLayerNaming(string? Name, bool Particle);
 internal sealed record SpriteSeamUnresolved(int RejectedCandidateCount) : LoopUnresolved
 {
     public override string Kind => "sprite_float32_seam";
-    public override JsonObject ToJson() => new Message("unresolved.sprite_float32_seam_mismatch").Write(
-        new JsonObject { ["kind"] = Kind, ["rejected_candidate_count"] = RejectedCandidateCount }, "detail");
+    public override Message DetailMessage => new("unresolved.sprite_float32_seam_mismatch");
+    public override JsonObject ToJson() => new() { ["kind"] = Kind, ["rejected_candidate_count"] = RejectedCandidateCount, ["detail"] = DetailMessage.Text };
 }
 
 /// <summary>
 /// 运行时轨道（动画、视频、粒子）证明不了周期。键序：kind, owner_layer_id, [track_name], [particle_nonperiodic_reason],
-/// [mechanism], [particle_stationarity], [random_restart], detail, detail_localized。
+/// [mechanism], [particle_stationarity], [random_restart], detail。
 /// <see cref="Particle"/> 是粒子判据结论：粒子默认循环长度读它，锁定周期退回拒绝时整条换新。
 /// </summary>
 internal sealed record RuntimeTrackUnresolved(bool Video, int OwnerLayerId, Message Detail) : LoopUnresolved
@@ -224,6 +229,7 @@ internal sealed record RuntimeTrackUnresolved(bool Video, int OwnerLayerId, Mess
     public ParticleStationarity.Result? Particle { get; init; }
     /// <summary>脚本控制条目上的随机重启证明（残差掩盖读 plan 里的这个字段）；null = 不是脚本控制条目。</summary>
     public bool? RandomRestart { get; init; }
+    public override Message DetailMessage => Detail;
 
     public override JsonObject ToJson()
     {
@@ -233,6 +239,64 @@ internal sealed record RuntimeTrackUnresolved(bool Video, int OwnerLayerId, Mess
         if (Mechanism is not null) json["mechanism"] = Mechanism;
         if (Particle is not null) json["particle_stationarity"] = Particle.ToJson();
         if (RandomRestart is bool random) json["random_restart"] = random;
-        return Detail.Write(json, "detail");
+        json["detail"] = Detail.Text;
+        return json;
+    }
+}
+
+/// <summary>
+/// plan.loop.unresolved 同下标每一条在 v3 JSON 之外的两样东西：detail 的文案 {key, zh, en, params}（写 unresolved_localized）
+/// 与静止证明点名的被烘图层（一行结论）。从 <see cref="LoopReport"/> 取出，随循环分析缓存落盘，经分析编排带到
+/// <see cref="PlanNarrative.Attach(JsonObject, UnresolvedNotes?)"/>；plan 里 loop 与 whole_layer.loop 两份副本共用一份。
+/// 取用时核对同下标条目与记下的 v3 渲染逐项相同，对不上（被改过或不是同一份报告）就当没有：文案退回英文原文、层名退回通用说明。
+/// </summary>
+internal sealed class UnresolvedNotes
+{
+    internal sealed record Note(JsonObject Item, JsonObject? Localized, StaticLayerNaming? Layer);
+
+    private readonly List<Note> notes;
+
+    private UnresolvedNotes(List<Note> notes) => this.notes = notes;
+
+    /// <summary>还没有任何条目（全部由 <see cref="Add"/> 追加）。</summary>
+    internal UnresolvedNotes() : this([]) { }
+
+    /// <summary>追加一条（与追加进 loop.unresolved 的条目同步）。</summary>
+    internal void Add(JsonObject item, JsonObject? localized) =>
+        notes.Add(new(item.DeepClone().AsObject(), localized?.DeepClone().AsObject(), null));
+
+    /// <summary>owner.unresolved 第 index 条对应的记录；条目与记录不一致时为 null。</summary>
+    internal Note? At(JsonObject? owner, int index) =>
+        owner?["unresolved"] is JsonArray items && index >= 0 && index < items.Count && index < notes.Count &&
+        JsonNode.DeepEquals(items[index], notes[index].Item) ? notes[index] : null;
+
+    internal Note? Of(JsonObject? owner, JsonObject item) =>
+        owner?["unresolved"] is JsonArray items ? At(owner, items.IndexOf(item)) : null;
+
+    /// <summary>循环分析缓存的两段：plan 形态的 loop（只有 v3 字段）+ 同下标的文案与点名图层。</summary>
+    internal static JsonObject Pack(LoopReport report) => new() { ["loop"] = report.ToJson(), ["notes"] = PackNotes(report.Unresolved) };
+
+    /// <summary>缓存第二段：每条的文案（detail 的 {key, zh, en, params}，渲染一次）与点名图层。</summary>
+    internal static JsonArray PackNotes(IEnumerable<LoopUnresolved> unresolved) =>
+        new([.. unresolved.Select(item => (JsonNode)new JsonObject {
+            ["localized"] = item.DetailMessage?.Localized(),
+            ["layer"] = item.StaticLayer is StaticLayerNaming layer ? new JsonObject { ["name"] = layer.Name, ["particle"] = layer.Particle } : null })]);
+
+    /// <summary>拆开 <see cref="Pack"/> 的两段；loop 从外壳上摘下来交给调用方。</summary>
+    internal static (JsonObject Loop, UnresolvedNotes Notes) Unpack(JsonObject packed)
+    {
+        JsonObject loop = packed["loop"]!.AsObject();
+        packed.Remove("loop");
+        var items = loop["unresolved"] as JsonArray ?? [];
+        var notes = new List<Note>();
+        var packedNotes = packed["notes"] as JsonArray ?? [];
+        for (int index = 0; index < packedNotes.Count && index < items.Count; ++index)
+        {
+            if (packedNotes[index] is not JsonObject note || items[index] is not JsonObject item) break;
+            StaticLayerNaming? layer = note["layer"] is JsonObject named
+                ? new(named["name"]?.GetValue<string>(), named["particle"]?.GetValue<bool>() == true) : null;
+            notes.Add(new(item.DeepClone().AsObject(), note["localized"]?.DeepClone().AsObject(), layer));
+        }
+        return (loop, new UnresolvedNotes(notes));
     }
 }

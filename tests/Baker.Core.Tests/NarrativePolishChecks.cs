@@ -139,11 +139,16 @@ internal static class NarrativePolishChecks
             "an unknown plan whose smaller allocation still has no loop says so without suggesting --retain-live");
 
         JsonObject staticPlan = UnresolvedPlan("not_applicable");
-        staticPlan["loop"]!["unresolved"] = new JsonArray(
-            new JsonObject { ["kind"] = "source_static", ["detail"] = "Baked layer 542 \"背景\": material texture \"背景\" is not a proven still image.",
-                [PlanNarrative.StaticLayer] = new JsonObject { ["name"] = "背景", ["particle"] = false } },
-            new JsonObject { ["kind"] = "loop_allocation_fallback", ["detail"] = "A smaller bake allocation was not attempted: no reason recorded." });
-        JsonObject staticSummary = PlanNarrative.Summarize(staticPlan);
+        // 点名图层不在条目里，经类型化记录（UnresolvedNotes）带到结论。
+        var staticItem = new SourceStaticUnresolved("Baked layer 542 \"背景\": material texture \"背景\" is not a proven still image.", null,
+            new StaticLayerNaming("背景", false));
+        staticPlan["loop"]!["unresolved"] = new JsonArray(staticItem.ToJson());
+        var (_, staticNotes) = UnresolvedNotes.Unpack(new JsonObject {
+            ["loop"] = staticPlan["loop"]!.DeepClone(), ["notes"] = UnresolvedNotes.PackNotes([staticItem]) });
+        Verdict.AddLoopUnresolved(staticPlan, "loop_allocation_fallback", "A smaller bake allocation was not attempted: no reason recorded.", staticNotes);
+        JsonObject staticSummary = PlanNarrative.Summarize(staticPlan, staticNotes);
+        check(!PlanNarrative.Summarize(staticPlan)["zh"]!.GetValue<string>().Contains("\"背景\"", StringComparison.Ordinal),
+            "without the typed notes (a plan attached again) the still-image failure falls back to the generic wording");
         check(staticSummary["key"]!.GetValue<string>() == "summary.loop_unresolved" &&
             staticSummary["zh"]!.GetValue<string>().Contains("\"背景\"", StringComparison.Ordinal) &&
             !Leaks(staticSummary["zh"]!.GetValue<string>()),

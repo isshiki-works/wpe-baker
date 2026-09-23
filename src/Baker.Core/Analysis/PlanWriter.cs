@@ -229,7 +229,9 @@ internal static class PlanWriter
     /// 落盘（原 X 段末尾）：来源记录插回固定位置，挂双语字段与一行结论，写 plan.json。
     /// 双语字段与一行结论只读已经定好的 blockers / loop / candidates，不参与任何判定。
     /// </summary>
-    internal static async Task WriteAsync(JsonObject report, HybridAnalyzeRequest request, string output, CancellationToken cancellationToken)
+    /// <param name="notes">loop.unresolved 各条的文案与点名图层（分析编排带来，渲染进 unresolved_localized 与一行结论）。</param>
+    internal static async Task WriteAsync(JsonObject report, HybridAnalyzeRequest request, string output, UnresolvedNotes? notes,
+        CancellationToken cancellationToken)
     {
         // 属性来源紧跟在 snapshot_properties 后面：没有来源记录的请求（测试、内部重分析）plan 不变。
         if (request.PropertiesOrigin is JsonObject propertiesOrigin) AttachPropertiesSource(report, propertiesOrigin);
@@ -237,7 +239,7 @@ internal static class PlanWriter
         if (request.FrameRateOrigin is JsonObject frameRateOrigin) AttachFrameRate(report, frameRateOrigin);
         PlanBlockers.PlaceLocalizedLast(report);
         if (report["whole_layer"] is JsonObject wholeLayer) PlanBlockers.PlaceLocalizedLast(wholeLayer);
-        PlanNarrative.Attach(report);
+        PlanNarrative.Attach(report, notes);
         await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "plan.json"), report, cancellationToken);
     }
 
