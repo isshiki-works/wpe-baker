@@ -1,9 +1,9 @@
 module;
+#include <rstd/macro.hpp>
 
 #include <random>
 #include <chrono>
 #include <cstdlib>
-#include <rstd/enum.hpp>
 
 #include "JsonNlohmann.hpp"
 
@@ -41,44 +41,146 @@ using rstd::sync::atomic::Atomic;
 namespace owe
 {
 
-class RenderMsg final {
-    RSTD_ENUM(RenderMsg,
-              (Init, (Box<RenderInitInfo> info;)),
-              (SetScene, (Box<Scene> scene; Arc<UniformRuntimeInput> uniform_input;
-                          Option<u64> random_seed;)),
-              (SetFillMode, (FillMode mode;)), (SetSpeed, (f32 speed;)),
-              (SetUserProperty, (std::string key; NJson property;)),
-              (SetMediaStatus, (MediaStatus status;)),
-              (SetAudioResponseDemandCallback, (AudioResponseDemandCallback callback;)),
-              (SetAudioResponseEnabled, (bool enabled;)),
-              (SetAudioPcmWindow, (audio::PcmWindow window;)), (EndAudioResponse),
-              (Stop, (bool stop;)), (Draw), (SwapchainReady, (bool ready; u32 width; u32 height;)),
-              (RequestPreparedPassDiagnostics, (RenderPassDiagnosticCallback cb;)), (Shutdown))
+// 渲染线程消息：每种消息一个结构体，RenderMsg 是它们的 std::variant。
+namespace render_msg
+{
+struct Init {
+    Box<RenderInitInfo> info;
 };
+struct SetScene {
+    Box<Scene>               scene;
+    Arc<UniformRuntimeInput> uniform_input;
+    Option<u64>              random_seed;
+};
+struct SetFillMode {
+    FillMode mode;
+};
+struct SetSpeed {
+    f32 speed;
+};
+struct SetUserProperty {
+    std::string key;
+    NJson       property;
+};
+struct SetMediaStatus {
+    MediaStatus status;
+};
+struct SetAudioResponseDemandCallback {
+    AudioResponseDemandCallback callback;
+};
+struct SetAudioResponseEnabled {
+    bool enabled;
+};
+struct SetAudioPcmWindow {
+    audio::PcmWindow window;
+};
+struct EndAudioResponse {};
+struct Stop {
+    bool stop;
+};
+struct Draw {};
+struct SwapchainReady {
+    bool ready;
+    u32  width;
+    u32  height;
+};
+struct RequestPreparedPassDiagnostics {
+    RenderPassDiagnosticCallback cb;
+};
+struct Shutdown {};
+} // namespace render_msg
+using RenderMsg =
+    std::variant<render_msg::Init, render_msg::SetScene, render_msg::SetFillMode,
+                 render_msg::SetSpeed, render_msg::SetUserProperty, render_msg::SetMediaStatus,
+                 render_msg::SetAudioResponseDemandCallback, render_msg::SetAudioResponseEnabled,
+                 render_msg::SetAudioPcmWindow, render_msg::EndAudioResponse, render_msg::Stop,
+                 render_msg::Draw, render_msg::SwapchainReady,
+                 render_msg::RequestPreparedPassDiagnostics, render_msg::Shutdown>;
 
-class MainMsg final {
-    RSTD_ENUM(MainMsg, (LoadScene, (vulkan::DeviceCapabilities capabilities;)),
-              (Configure, (SceneWallpaperConfig config;)), (SetFps, (u32 fps;)),
-              (SetVolume, (f32 volume;)), (SetVolumeScale, (f32 scale; u32 fade_ms { 0 };)),
-              (SetMuted, (bool muted;)),
-              (SetAudioClientIdentity, (SceneAudioClientIdentity identity;)),
-              (AudioDeviceEvent, (wavsen::audio::AudioDeviceEvent event;)),
-              (SetFillMode, (FillMode mode;)), (SetSpeed, (f32 speed;)),
-              (SetUserProperty, (std::string key; NJson value;)),
-              (SetFirstFrameCallback, (FirstFrameCallback cb;)),
-              (SetUserPropertyDiagnosticCallback, (UserPropertyDiagnosticCallback cb;)),
-              (UserPropertyDiagnostics, (Vec<SceneUserPropertyDiagnostic> diagnostics;)),
-              (SceneClearColorChanged, (f32 r; f32 g; f32 b;)),
-              (PreparedPassDiagnostics, (RenderPassDiagnosticCallback                cb;
-                                         std::vector<vulkan::PreparedPassDiagnostic> diagnostics;)),
-              (Stop, (bool stop; u32 fade_ms { 0 }; bool scale_audio { false };)),
-              (PauseAudio, (u64 generation { 0 };)),
-              (FirstFrame),
-              (Shutdown))
+// 主线程消息：同上。
+namespace main_msg
+{
+struct LoadScene {
+    vulkan::DeviceCapabilities capabilities;
 };
+struct Configure {
+    SceneWallpaperConfig config;
+};
+struct SetFps {
+    u32 fps;
+};
+struct SetVolume {
+    f32 volume;
+};
+struct SetVolumeScale {
+    f32 scale;
+    u32 fade_ms { 0 };
+};
+struct SetMuted {
+    bool muted;
+};
+struct SetAudioClientIdentity {
+    SceneAudioClientIdentity identity;
+};
+struct AudioDeviceEvent {
+    wavsen::audio::AudioDeviceEvent event;
+};
+struct SetFillMode {
+    FillMode mode;
+};
+struct SetSpeed {
+    f32 speed;
+};
+struct SetUserProperty {
+    std::string key;
+    NJson       value;
+};
+struct SetFirstFrameCallback {
+    FirstFrameCallback cb;
+};
+struct SetUserPropertyDiagnosticCallback {
+    UserPropertyDiagnosticCallback cb;
+};
+struct UserPropertyDiagnostics {
+    Vec<SceneUserPropertyDiagnostic> diagnostics;
+};
+struct SceneClearColorChanged {
+    f32 r;
+    f32 g;
+    f32 b;
+};
+struct PreparedPassDiagnostics {
+    RenderPassDiagnosticCallback                cb;
+    std::vector<vulkan::PreparedPassDiagnostic> diagnostics;
+};
+struct Stop {
+    bool stop;
+    u32  fade_ms { 0 };
+    bool scale_audio { false };
+};
+struct PauseAudio {
+    u64 generation { 0 };
+};
+struct FirstFrame {};
+struct Shutdown {};
+} // namespace main_msg
+using MainMsg =
+    std::variant<main_msg::LoadScene, main_msg::Configure, main_msg::SetFps, main_msg::SetVolume,
+                 main_msg::SetVolumeScale, main_msg::SetMuted, main_msg::SetAudioClientIdentity,
+                 main_msg::AudioDeviceEvent, main_msg::SetFillMode, main_msg::SetSpeed,
+                 main_msg::SetUserProperty, main_msg::SetFirstFrameCallback,
+                 main_msg::SetUserPropertyDiagnosticCallback, main_msg::UserPropertyDiagnostics,
+                 main_msg::SceneClearColorChanged, main_msg::PreparedPassDiagnostics,
+                 main_msg::Stop, main_msg::PauseAudio, main_msg::FirstFrame, main_msg::Shutdown>;
 
 namespace
 {
+
+// std::visit 用的多 lambda 合并器。
+template<typename... F>
+struct Overloaded : F... {
+    using F::operator()...;
+};
 
 auto CloneAudioResponseDemandCallback(const Option<AudioResponseDemandCallback>& callback)
     -> Option<AudioResponseDemandCallback> {
@@ -246,24 +348,24 @@ public:
     bool dispatch(MainMsg);
 
     void onLoadScene();
-    void on(MainMsg::LoadScene_payload&&);
-    void on(MainMsg::Configure_payload&&);
-    void on(MainMsg::SetFps_payload&&);
-    void on(MainMsg::SetVolume_payload&&);
-    void on(MainMsg::SetVolumeScale_payload&&);
-    void on(MainMsg::SetMuted_payload&&);
-    void on(MainMsg::SetAudioClientIdentity_payload&&);
-    void on(MainMsg::AudioDeviceEvent_payload&&);
-    void on(MainMsg::SetFillMode_payload&&);
-    void on(MainMsg::SetSpeed_payload&&);
-    void on(MainMsg::SetUserProperty_payload&&);
-    void on(MainMsg::SetFirstFrameCallback_payload&&);
-    void on(MainMsg::SetUserPropertyDiagnosticCallback_payload&&);
-    void on(MainMsg::UserPropertyDiagnostics_payload&&);
-    void on(MainMsg::SceneClearColorChanged_payload&&);
-    void on(MainMsg::PreparedPassDiagnostics_payload&&);
-    void on(MainMsg::Stop_payload&&);
-    void on(MainMsg::PauseAudio_payload&&);
+    void on(main_msg::LoadScene&&);
+    void on(main_msg::Configure&&);
+    void on(main_msg::SetFps&&);
+    void on(main_msg::SetVolume&&);
+    void on(main_msg::SetVolumeScale&&);
+    void on(main_msg::SetMuted&&);
+    void on(main_msg::SetAudioClientIdentity&&);
+    void on(main_msg::AudioDeviceEvent&&);
+    void on(main_msg::SetFillMode&&);
+    void on(main_msg::SetSpeed&&);
+    void on(main_msg::SetUserProperty&&);
+    void on(main_msg::SetFirstFrameCallback&&);
+    void on(main_msg::SetUserPropertyDiagnosticCallback&&);
+    void on(main_msg::UserPropertyDiagnostics&&);
+    void on(main_msg::SceneClearColorChanged&&);
+    void on(main_msg::PreparedPassDiagnostics&&);
+    void on(main_msg::Stop&&);
+    void on(main_msg::PauseAudio&&);
     void onFirstFrame();
 
     bool isGenGraphviz() const { return m_config.graphviz; }
@@ -353,19 +455,19 @@ public:
     }
     auto sender() const -> RenderSender;
 
-    void on(RenderMsg::Init_payload&&);
-    void on(RenderMsg::SetScene_payload&&);
-    void on(RenderMsg::SetFillMode_payload&&);
-    void on(RenderMsg::SetSpeed_payload&&);
-    void on(RenderMsg::SetUserProperty_payload&&);
-    void on(RenderMsg::SetMediaStatus_payload&&);
-    void on(RenderMsg::SetAudioResponseDemandCallback_payload&&);
-    void on(RenderMsg::SetAudioResponseEnabled_payload&&);
-    void on(RenderMsg::SetAudioPcmWindow_payload&&);
-    void on(RenderMsg::Stop_payload&&);
+    void on(render_msg::Init&&);
+    void on(render_msg::SetScene&&);
+    void on(render_msg::SetFillMode&&);
+    void on(render_msg::SetSpeed&&);
+    void on(render_msg::SetUserProperty&&);
+    void on(render_msg::SetMediaStatus&&);
+    void on(render_msg::SetAudioResponseDemandCallback&&);
+    void on(render_msg::SetAudioResponseEnabled&&);
+    void on(render_msg::SetAudioPcmWindow&&);
+    void on(render_msg::Stop&&);
     void onDraw();
-    void on(RenderMsg::SwapchainReady_payload&&);
-    void on(RenderMsg::RequestPreparedPassDiagnostics_payload&&);
+    void on(render_msg::SwapchainReady&&);
+    void on(render_msg::RequestPreparedPassDiagnostics&&);
 
     ExSwapchain* exSwapchain() const { return m_render->exSwapchain(); }
     int          takeLastFrameSyncFd() { return m_render->takeLastFrameSyncFd(); }
@@ -465,24 +567,25 @@ void SceneRenderController::post(RenderMsg msg) {
 }
 
 bool SceneRenderController::dispatch(RenderMsg message) {
-    RSTD_MATCH(rstd::move(message)) {
-        RSTD_CASE_PAYLOAD(Init, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetScene, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetFillMode, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetSpeed, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetUserProperty, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetMediaStatus, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetAudioResponseDemandCallback, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetAudioResponseEnabled, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetAudioPcmWindow, value) { on(rstd::move(value)); }
-        RSTD_CASE(EndAudioResponse) { m_audio_response_engine.end(); m_scene_audio_response.end(); }
-        RSTD_CASE_PAYLOAD(Stop, value) { on(rstd::move(value)); }
-        RSTD_CASE(Draw) { if (!m_main.offline()) onDraw(); }
-        RSTD_CASE_PAYLOAD(SwapchainReady, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(RequestPreparedPassDiagnostics, value) { on(rstd::move(value)); }
-        RSTD_CASE(Shutdown) { return true; }
-    }
-    return false;
+    return std::visit(Overloaded {
+                          [this](render_msg::EndAudioResponse&&) -> bool {
+                              m_audio_response_engine.end();
+                              m_scene_audio_response.end();
+                              return false;
+                          },
+                          [this](render_msg::Draw&&) -> bool {
+                              if (! m_main.offline()) onDraw();
+                              return false;
+                          },
+                          [](render_msg::Shutdown&&) -> bool {
+                              return true;
+                          },
+                          [this](auto&& value) -> bool {
+                              on(rstd::move(value));
+                              return false;
+                          },
+                      },
+                      rstd::move(message));
 }
 
 void SceneRenderController::detachSceneAudioResponseDemandCallback() {
@@ -502,33 +605,29 @@ void SceneRenderController::start() {
             if (received.is_err()) break;
 
             auto message  = rstd::move(received).unwrap();
-            bool shutdown = false;
-            RSTD_MATCH(rstd::move(message)) {
-                RSTD_CASE_PAYLOAD(Init, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetScene, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetFillMode, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetSpeed, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetUserProperty, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetMediaStatus, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetAudioResponseDemandCallback, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetAudioResponseEnabled, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetAudioPcmWindow, value) { on(rstd::move(value)); }
-                RSTD_CASE(EndAudioResponse) {
-                    m_audio_response_engine.end();
-                    m_scene_audio_response.end();
-                }
-                RSTD_CASE_PAYLOAD(Stop, value) { on(rstd::move(value)); }
-                RSTD_CASE(Draw) { onDraw(); }
-                RSTD_CASE_PAYLOAD(SwapchainReady, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(RequestPreparedPassDiagnostics, value) { on(rstd::move(value)); }
-                RSTD_CASE(Shutdown) {
-                    frame_timer.Stop();
-                    frame_timer.SetCallback([] {
-                    });
-                    m_swapchain_tx.reset();
-                    shutdown = true;
-                }
-            }
+            bool shutdown = std::visit(Overloaded {
+                                           [this](render_msg::EndAudioResponse&&) -> bool {
+                                               m_audio_response_engine.end();
+                                               m_scene_audio_response.end();
+                                               return false;
+                                           },
+                                           [this](render_msg::Draw&&) -> bool {
+                                               onDraw();
+                                               return false;
+                                           },
+                                           [this](render_msg::Shutdown&&) -> bool {
+                                               frame_timer.Stop();
+                                               frame_timer.SetCallback([] {
+                                               });
+                                               m_swapchain_tx.reset();
+                                               return true;
+                                           },
+                                           [this](auto&& value) -> bool {
+                                               on(rstd::move(value));
+                                               return false;
+                                           },
+                                       },
+                                       rstd::move(message));
             if (shutdown) break;
         }
         rstd_info("render loop stopped");
@@ -551,7 +650,7 @@ void SceneRenderController::stop() {
         rstd::panic { "SceneRenderController destroyed from render thread" };
     }
 
-    post(RenderMsg::Shutdown());
+    post(render_msg::Shutdown());
     auto thread = rstd::move(m_thread.take()).unwrap_unchecked();
     rstd::move(thread).join().unwrap();
     m_tx      = None();
@@ -560,7 +659,7 @@ void SceneRenderController::stop() {
 
 // ---- SceneRenderController message handlers ---------------------------------
 
-void SceneRenderController::on(RenderMsg::Stop_payload&& m) {
+void SceneRenderController::on(render_msg::Stop&& m) {
     m_stopped = m.stop;
     if (m_main.offline()) return;
     if (m.stop)
@@ -683,7 +782,7 @@ void SceneRenderController::onDraw() {
         if (first_draw) {
             m_first_frame_ok = true;
             if (m_main_tx) {
-                (void)m_main_tx->send(MainMsg::FirstFrame());
+                (void)m_main_tx->send(main_msg::FirstFrame());
             }
         }
     }
@@ -707,7 +806,7 @@ bool SceneRenderController::stepOffline(uint64_t index, double dt, const Offline
     m_buttons_down.store(u32(input.mouse_buttons_down));
     m_buttons_pressed.store(u32(input.mouse_buttons_down & ~previous));
     m_buttons_released.store(u32(previous & ~input.mouse_buttons_down));
-    if (input.media.is_some()) on(RenderMsg::SetMediaStatus_payload { *input.media });
+    if (input.media.is_some()) on(render_msg::SetMediaStatus { *input.media });
     if (input.pcm.is_some()) {
         audio::ResponseFrame response {};
         if (!m_audio_response_engine.analyze(*input.pcm, response)) {
@@ -726,7 +825,7 @@ bool SceneRenderController::stepOffline(uint64_t index, double dt, const Offline
     return m_cpu_frame.completed() || m_cpu_frame.submitted();
 }
 
-void SceneRenderController::on(RenderMsg::SetFillMode_payload&& m) {
+void SceneRenderController::on(render_msg::SetFillMode&& m) {
     m_fillmode = m.mode;
     if (m_scene && renderInited()) {
         m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
@@ -825,7 +924,7 @@ void SceneRenderController::refreshPreparedMaterialDirtyEvents() {
     }
 }
 
-void SceneRenderController::on(RenderMsg::SetScene_payload&& m) {
+void SceneRenderController::on(render_msg::SetScene&& m) {
     if (!m_main.offline() && m.random_seed.is_some()) {
         using Seed = decltype(Random::max());
         Random::seed(static_cast<Seed>(m.random_seed->to_primitive()));
@@ -848,9 +947,9 @@ void SceneRenderController::on(RenderMsg::SetScene_payload&& m) {
         vulkan::RenderGraphResourceRetention::ReleaseSceneTextures, true);
 }
 
-void SceneRenderController::on(RenderMsg::SetSpeed_payload&& m) { m_speed = m.speed; }
+void SceneRenderController::on(render_msg::SetSpeed&& m) { m_speed = m.speed; }
 
-void SceneRenderController::on(RenderMsg::SetUserProperty_payload&& m) {
+void SceneRenderController::on(render_msg::SetUserProperty&& m) {
     if (! m_scene) return;
 
     SceneUserPropertyMutation mutation;
@@ -860,11 +959,11 @@ void SceneRenderController::on(RenderMsg::SetUserProperty_payload&& m) {
 
     if (mutation.diagnostics_changed && m_main_tx) {
         auto diagnostics = CollectSceneUserPropertyDiagnostics(*m_scene, m.key);
-        (void)m_main_tx->send(MainMsg::UserPropertyDiagnostics(rstd::move(diagnostics)));
+        (void)m_main_tx->send(main_msg::UserPropertyDiagnostics(rstd::move(diagnostics)));
     }
     if (mutation.clear_color.is_some() && m_main_tx) {
         const auto color = *mutation.clear_color;
-        (void)m_main_tx->send(MainMsg::SceneClearColorChanged(
+        (void)m_main_tx->send(main_msg::SceneClearColorChanged(
             f32(color[usize()]), f32(color[usize(1)]), f32(color[usize(2)])));
     }
     if (mutation.graph_changed) {
@@ -877,7 +976,7 @@ void SceneRenderController::on(RenderMsg::SetUserProperty_payload&& m) {
     }
 }
 
-void SceneRenderController::on(RenderMsg::SetMediaStatus_payload&& m) {
+void SceneRenderController::on(render_msg::SetMediaStatus&& m) {
     if (! m_scene) return;
 
     owe::script::SetSceneMediaStatus(*m_scene, ToScriptMediaStatus(m.status));
@@ -889,7 +988,7 @@ void SceneRenderController::on(RenderMsg::SetMediaStatus_payload&& m) {
     if (renderInited() && m_rg.is_some()) refreshPreparedMaterialDirtyEvents();
 }
 
-void SceneRenderController::on(RenderMsg::SetAudioResponseDemandCallback_payload&& m) {
+void SceneRenderController::on(render_msg::SetAudioResponseDemandCallback&& m) {
     m_audio_response_demand_callback = Some(rstd::move(m.callback));
     if (m_scene) {
         m_scene->AudioDemandMut()->SetCallback(
@@ -897,7 +996,7 @@ void SceneRenderController::on(RenderMsg::SetAudioResponseDemandCallback_payload
     }
 }
 
-void SceneRenderController::on(RenderMsg::SetAudioResponseEnabled_payload&& m) {
+void SceneRenderController::on(render_msg::SetAudioResponseEnabled&& m) {
     m_audio_response_enabled = m.enabled;
     if (m_scene) m_scene->AudioDemandMut()->SetEnabled(m.enabled);
     if (! m.enabled) {
@@ -906,13 +1005,13 @@ void SceneRenderController::on(RenderMsg::SetAudioResponseEnabled_payload&& m) {
     }
 }
 
-void SceneRenderController::on(RenderMsg::SetAudioPcmWindow_payload&& m) {
+void SceneRenderController::on(render_msg::SetAudioPcmWindow&& m) {
     audio::ResponseFrame response {};
     if (! m_audio_response_engine.analyze(m.window, response)) return;
     m_scene_audio_response.submit(rstd::move(response));
 }
 
-void SceneRenderController::on(RenderMsg::Init_payload&& m) {
+void SceneRenderController::on(render_msg::Init&& m) {
     if (! m_render->init(rstd::move(*m.info))) return;
 
     // Subscribe to ExSwapchain ready/extent/format changes. The
@@ -928,7 +1027,8 @@ void SceneRenderController::on(RenderMsg::Init_payload&& m) {
             std::weak_ptr<RenderSender> weak = m_swapchain_tx;
             sw->setOnReadyChanged([weak](const ExSwapchainReadyEvent& e) {
                 if (auto tx = weak.lock()) {
-                    (void)tx->send(RenderMsg::SwapchainReady(e.ready, u32(e.width), u32(e.height)));
+                    (void)tx->send(
+                        render_msg::SwapchainReady(e.ready, u32(e.width), u32(e.height)));
                 }
             });
         }
@@ -936,13 +1036,13 @@ void SceneRenderController::on(RenderMsg::Init_payload&& m) {
 
     // inited, callback to load scene
     if (m_main.offline()) {
-        m_main.post(MainMsg::LoadScene(m_render->deviceCapabilities()));
+        m_main.post(main_msg::LoadScene(m_render->deviceCapabilities()));
     } else if (m_main_tx) {
-        (void)m_main_tx->send(MainMsg::LoadScene(m_render->deviceCapabilities()));
+        (void)m_main_tx->send(main_msg::LoadScene(m_render->deviceCapabilities()));
     }
 }
 
-void SceneRenderController::on(RenderMsg::SwapchainReady_payload&& m) {
+void SceneRenderController::on(render_msg::SwapchainReady&& m) {
     if (! m.ready) {
         frame_timer.Stop();
         return;
@@ -959,7 +1059,7 @@ void SceneRenderController::on(RenderMsg::SwapchainReady_payload&& m) {
         frame_timer.Run();
 }
 
-void SceneRenderController::on(RenderMsg::RequestPreparedPassDiagnostics_payload&& m) {
+void SceneRenderController::on(render_msg::RequestPreparedPassDiagnostics&& m) {
     if (m_main.offline()) {
         if (m.cb) m.cb(m_render->preparedPassDiagnostics());
         return;
@@ -967,7 +1067,7 @@ void SceneRenderController::on(RenderMsg::RequestPreparedPassDiagnostics_payload
     if (! m_main_tx) return;
     auto diagnostics = m_render->preparedPassDiagnostics();
     (void)m_main_tx->send(
-        MainMsg::PreparedPassDiagnostics(rstd::move(m.cb), rstd::move(diagnostics)));
+        main_msg::PreparedPassDiagnostics(rstd::move(m.cb), rstd::move(diagnostics)));
 }
 
 auto SceneRuntimeController::sender() const -> MainSender {
@@ -981,29 +1081,20 @@ void SceneRuntimeController::post(MainMsg msg) {
 }
 
 bool SceneRuntimeController::dispatch(MainMsg message) {
-    RSTD_MATCH(rstd::move(message)) {
-        RSTD_CASE_PAYLOAD(LoadScene, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(Configure, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetFps, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetVolume, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetVolumeScale, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetMuted, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetAudioClientIdentity, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(AudioDeviceEvent, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetFillMode, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetSpeed, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetUserProperty, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetFirstFrameCallback, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SetUserPropertyDiagnosticCallback, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(UserPropertyDiagnostics, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(SceneClearColorChanged, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(PreparedPassDiagnostics, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(Stop, value) { on(rstd::move(value)); }
-        RSTD_CASE_PAYLOAD(PauseAudio, value) { on(rstd::move(value)); }
-        RSTD_CASE(FirstFrame) { onFirstFrame(); }
-        RSTD_CASE(Shutdown) { return true; }
-    }
-    return false;
+    return std::visit(Overloaded {
+                          [this](main_msg::FirstFrame&&) -> bool {
+                              onFirstFrame();
+                              return false;
+                          },
+                          [](main_msg::Shutdown&&) -> bool {
+                              return true;
+                          },
+                          [this](auto&& value) -> bool {
+                              on(rstd::move(value));
+                              return false;
+                          },
+                      },
+                      rstd::move(message));
 }
 
 void SceneRuntimeController::post(RenderMsg msg) { m_render_controller->post(rstd::move(msg)); }
@@ -1032,34 +1123,21 @@ void SceneRuntimeController::startMainLoop() {
             if (received.is_err()) break;
 
             auto message  = rstd::move(received).unwrap();
-            bool shutdown = false;
-            RSTD_MATCH(rstd::move(message)) {
-                RSTD_CASE_PAYLOAD(LoadScene, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(Configure, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetFps, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetVolume, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetVolumeScale, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetMuted, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetAudioClientIdentity, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(AudioDeviceEvent, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetFillMode, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetSpeed, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetUserProperty, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetFirstFrameCallback, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SetUserPropertyDiagnosticCallback, value) {
-                    on(rstd::move(value));
-                }
-                RSTD_CASE_PAYLOAD(UserPropertyDiagnostics, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(SceneClearColorChanged, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(PreparedPassDiagnostics, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(Stop, value) { on(rstd::move(value)); }
-                RSTD_CASE_PAYLOAD(PauseAudio, value) { on(rstd::move(value)); }
-                RSTD_CASE(FirstFrame) { onFirstFrame(); }
-                RSTD_CASE(Shutdown) {
-                    m_sound_manager->shutdown();
-                    shutdown = true;
-                }
-            }
+            bool shutdown = std::visit(Overloaded {
+                                           [this](main_msg::FirstFrame&&) -> bool {
+                                               onFirstFrame();
+                                               return false;
+                                           },
+                                           [this](main_msg::Shutdown&&) -> bool {
+                                               m_sound_manager->shutdown();
+                                               return true;
+                                           },
+                                           [this](auto&& value) -> bool {
+                                               on(rstd::move(value));
+                                               return false;
+                                           },
+                                       },
+                                       rstd::move(message));
             if (shutdown) break;
         }
         rstd_info("main loop stopped");
@@ -1077,7 +1155,7 @@ void SceneRuntimeController::stopMainLoop() {
         rstd::panic { "SceneRuntimeController destroyed from main thread" };
     }
 
-    post(MainMsg::Shutdown());
+    post(main_msg::Shutdown());
     auto thread = rstd::move(m_main_thread.take()).unwrap_unchecked();
     rstd::move(thread).join().unwrap();
     m_main_tx = None();
@@ -1091,7 +1169,7 @@ void SceneRuntimeController::onLoadScene() {
             auto tx = sender();
             m_sound_manager->activate(
                 [tx = rstd::move(tx)](wavsen::audio::AudioDeviceEvent event) mutable {
-                    (void)tx.send(MainMsg::AudioDeviceEvent(rstd::move(event)));
+                    (void)tx.send(main_msg::AudioDeviceEvent(rstd::move(event)));
                 });
             m_audio_activated = true;
         }
@@ -1099,24 +1177,24 @@ void SceneRuntimeController::onLoadScene() {
     }
 }
 
-void SceneRuntimeController::on(MainMsg::LoadScene_payload&& m) {
+void SceneRuntimeController::on(main_msg::LoadScene&& m) {
     m_render_capabilities = Some(m.capabilities);
     onLoadScene();
 }
 
-void SceneRuntimeController::on(MainMsg::Configure_payload&& m) {
+void SceneRuntimeController::on(main_msg::Configure&& m) {
     m_config = rstd::move(m.config);
     m_user_properties = NormalizeUserProperties(m_config.user_properties);
-    on(MainMsg::SetFps_payload { u32(m_config.fps) });
-    on(MainMsg::SetVolume_payload { f32(m_config.volume) });
-    on(MainMsg::SetVolumeScale_payload { f32(m_config.volume_scale) });
-    on(MainMsg::SetMuted_payload { m_config.muted });
-    on(MainMsg::SetFillMode_payload { m_config.fill_mode });
-    on(MainMsg::SetSpeed_payload { f32(m_config.speed) });
+    on(main_msg::SetFps { u32(m_config.fps) });
+    on(main_msg::SetVolume { f32(m_config.volume) });
+    on(main_msg::SetVolumeScale { f32(m_config.volume_scale) });
+    on(main_msg::SetMuted { m_config.muted });
+    on(main_msg::SetFillMode { m_config.fill_mode });
+    on(main_msg::SetSpeed { f32(m_config.speed) });
     onLoadScene();
 }
 
-void SceneRuntimeController::on(MainMsg::SetFps_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetFps&& m) {
     m_config.fps = m.fps.to_primitive();
     if (m_offline) return; // step(dt) is authoritative and has no timer FPS cap.
     if (m.fps >= u32(5)) {
@@ -1124,21 +1202,21 @@ void SceneRuntimeController::on(MainMsg::SetFps_payload&& m) {
     }
 }
 
-void SceneRuntimeController::on(MainMsg::SetVolume_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetVolume&& m) {
     m_config.volume = m.volume.to_primitive();
     m_sound_manager->set_volume(m.volume);
 }
 
-void SceneRuntimeController::on(MainMsg::SetVolumeScale_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetVolumeScale&& m) {
     m_sound_manager->set_volume_scale(m.scale, m.fade_ms);
 }
 
-void SceneRuntimeController::on(MainMsg::SetMuted_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetMuted&& m) {
     m_config.muted = m.muted;
     m_sound_manager->set_muted(m.muted);
 }
 
-void SceneRuntimeController::on(MainMsg::SetAudioClientIdentity_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetAudioClientIdentity&& m) {
     auto identity = wavsen::audio::AudioClientIdentity {
         .application_name =
             String::make(rstd::cppstd::as_str(m.identity.application_name).unwrap()),
@@ -1153,25 +1231,25 @@ void SceneRuntimeController::on(MainMsg::SetAudioClientIdentity_payload&& m) {
     }
 }
 
-void SceneRuntimeController::on(MainMsg::AudioDeviceEvent_payload&& m) {
+void SceneRuntimeController::on(main_msg::AudioDeviceEvent&& m) {
     m_sound_manager->on_device_event(rstd::move(m.event));
 }
 
-void SceneRuntimeController::on(MainMsg::SetFillMode_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetFillMode&& m) {
     m_config.fill_mode = m.mode;
-    m_render_controller->post(RenderMsg::SetFillMode(m.mode));
+    m_render_controller->post(render_msg::SetFillMode(m.mode));
 }
 
-void SceneRuntimeController::on(MainMsg::SetSpeed_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetSpeed&& m) {
     if (! m.speed.is_finite() || m.speed <= f32()) {
         rstd_warn("SceneWallpaper: invalid playback speed {}; ignoring", m.speed);
         return;
     }
     m_config.speed = m.speed.to_primitive();
-    m_render_controller->post(RenderMsg::SetSpeed(m.speed));
+    m_render_controller->post(render_msg::SetSpeed(m.speed));
 }
 
-void SceneRuntimeController::on(MainMsg::SetUserProperty_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetUserProperty&& m) {
     const std::string property = CanonicalSceneUserPropertyKey(m.key);
     const auto*       current  = Find(m_user_properties, property);
     NJson             prop     = current != nullptr ? MergeUserPropertyDescriptor(*current, m.value)
@@ -1185,33 +1263,36 @@ void SceneRuntimeController::on(MainMsg::SetUserProperty_payload&& m) {
             m_clear_color_cb(value[usize()], value[usize(1)], value[usize(2)]);
         }
     }
-    m_render_controller->post(RenderMsg::SetUserProperty(property, rstd::move(prop)));
+    m_render_controller->post(render_msg::SetUserProperty(property, rstd::move(prop)));
 }
 
-void SceneRuntimeController::on(MainMsg::SetFirstFrameCallback_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetFirstFrameCallback&& m) {
     m_first_frame_callback = rstd::move(m.cb);
 }
 
-void SceneRuntimeController::on(MainMsg::SetUserPropertyDiagnosticCallback_payload&& m) {
+void SceneRuntimeController::on(main_msg::SetUserPropertyDiagnosticCallback&& m) {
     m_user_property_diagnostic_cb = rstd::move(m.cb);
 }
 
-void SceneRuntimeController::on(MainMsg::UserPropertyDiagnostics_payload&& m) {
+void SceneRuntimeController::on(main_msg::UserPropertyDiagnostics&& m) {
     if (m_user_property_diagnostic_cb) m_user_property_diagnostic_cb(rstd::move(m.diagnostics));
 }
 
-void SceneRuntimeController::on(MainMsg::SceneClearColorChanged_payload&& m) {
+void SceneRuntimeController::on(main_msg::SceneClearColorChanged&& m) {
     if (schemeColor().is_none() && m_clear_color_cb) {
         m_clear_color_cb(m.r.to_primitive(), m.g.to_primitive(), m.b.to_primitive());
     }
 }
 
-void SceneRuntimeController::on(MainMsg::PreparedPassDiagnostics_payload&& m) {
+void SceneRuntimeController::on(main_msg::PreparedPassDiagnostics&& m) {
     if (m.cb) m.cb(rstd::move(m.diagnostics));
 }
 
-void SceneRuntimeController::on(MainMsg::Stop_payload&& m) {
-    if (m_offline) { m_render_controller->post(RenderMsg::Stop(m.stop)); return; }
+void SceneRuntimeController::on(main_msg::Stop&& m) {
+    if (m_offline) {
+        m_render_controller->post(render_msg::Stop(m.stop));
+        return;
+    }
     const u64 generation = ++m_audio_pause_generation;
     if (m.stop) {
         if (m.scale_audio) m_sound_manager->set_volume_scale(f32(), m.fade_ms);
@@ -1222,17 +1303,17 @@ void SceneRuntimeController::on(MainMsg::Stop_payload&& m) {
             auto delay = m.fade_ms.to_primitive();
             std::thread([tx = rstd::move(tx), generation, delay]() mutable {
                 std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-                (void)tx.send(MainMsg::PauseAudio(u64(generation)));
+                (void)tx.send(main_msg::PauseAudio(u64(generation)));
             }).detach();
         }
     } else {
         m_sound_manager->play();
         if (m.scale_audio) m_sound_manager->set_volume_scale(f32(1.0f), m.fade_ms);
     }
-    m_render_controller->post(RenderMsg::Stop(m.stop));
+    m_render_controller->post(render_msg::Stop(m.stop));
 }
 
-void SceneRuntimeController::on(MainMsg::PauseAudio_payload&& m) {
+void SceneRuntimeController::on(main_msg::PauseAudio&& m) {
     if (m.generation == m_audio_pause_generation) m_sound_manager->pause();
 }
 
@@ -1368,18 +1449,18 @@ void SceneRuntimeController::loadScene() {
 
     auto parsed = rstd::move(parsed_scene).unwrap();
     if (m_offline) {
-        m_render_controller->post(RenderMsg::SetScene(rstd::move(parsed.scene),
-            rstd::move(parsed.runtime_input), m_config.random_seed));
+        m_render_controller->post(render_msg::SetScene(
+            rstd::move(parsed.scene), rstd::move(parsed.runtime_input), m_config.random_seed));
         return;
     }
     auto rtx    = m_render_controller->sender();
-    if (rtx.send(RenderMsg::SetScene(rstd::move(parsed.scene),
-                                     rstd::move(parsed.runtime_input),
-                                     m_config.random_seed))
+    if (rtx.send(render_msg::SetScene(rstd::move(parsed.scene),
+                                      rstd::move(parsed.runtime_input),
+                                      m_config.random_seed))
             .is_err()) {
         return;
     }
-    (void)rtx.send(RenderMsg::Draw());
+    (void)rtx.send(render_msg::Draw());
 }
 
 bool SceneRuntimeController::init() {
@@ -1397,7 +1478,7 @@ bool SceneRuntimeController::init() {
         auto& frameTimer = m_render_controller->frame_timer;
         auto  rtx        = m_render_controller->sender();
         frameTimer.SetCallback([rtx]() mutable {
-            (void)rtx.send(RenderMsg::Draw());
+            (void)rtx.send(render_msg::Draw());
         });
         frameTimer.SetRequiredFps(u16(15));
         frameTimer.Run();
@@ -1444,8 +1525,8 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
     info.video_hwdec = "none";
     info.redraw_callback = {};
     info.ex_swapchain_factory = {};
-    on(MainMsg::Configure_payload { rstd::move(config) });
-    m_render_controller->post(RenderMsg::Init(Box<RenderInitInfo>::make(rstd::move(info))));
+    on(main_msg::Configure { rstd::move(config) });
+    m_render_controller->post(render_msg::Init(Box<RenderInitInfo>::make(rstd::move(info))));
     if (!m_render_controller->renderInited()) m_offline_error = "Offline Vulkan initialization failed";
     else if (!m_render_controller->hasScene()) m_offline_error = "Offline scene loading failed; see engine diagnostics";
     else if (m_offline_context.failed) m_offline_error = "Offline script initialization failed";
@@ -1758,18 +1839,18 @@ std::string SceneRenderController::describeOfflineScene() const {
 void SceneWallpaper::initVulkan(RenderInitInfo info) {
     m_offscreen = info.offscreen;
     auto boxed  = Box<RenderInitInfo>::make(rstd::move(info));
-    m_runtime->post(RenderMsg::Init(rstd::move(boxed)));
+    m_runtime->post(render_msg::Init(rstd::move(boxed)));
 }
 
-void SceneWallpaper::play() { m_runtime->post(MainMsg::Stop(false)); }
+void SceneWallpaper::play() { m_runtime->post(main_msg::Stop(false)); }
 void SceneWallpaper::play(uint32_t fade_ms) {
-    m_runtime->post(MainMsg::Stop(false, u32(fade_ms), true));
+    m_runtime->post(main_msg::Stop(false, u32(fade_ms), true));
 }
-void SceneWallpaper::pause() { m_runtime->post(MainMsg::Stop(true)); }
+void SceneWallpaper::pause() { m_runtime->post(main_msg::Stop(true)); }
 void SceneWallpaper::pause(uint32_t fade_ms) {
-    m_runtime->post(MainMsg::Stop(true, u32(fade_ms), true));
+    m_runtime->post(main_msg::Stop(true, u32(fade_ms), true));
 }
-void SceneWallpaper::requestFrame() { m_runtime->post(RenderMsg::Draw()); }
+void SceneWallpaper::requestFrame() { m_runtime->post(render_msg::Draw()); }
 
 void SceneWallpaper::mouseInput(double x, double y) {
     m_runtime->renderController()->setMousePos(x, y);
@@ -1784,53 +1865,53 @@ void SceneWallpaper::mouseEnter(bool in_window) {
 }
 
 void SceneWallpaper::configure(SceneWallpaperConfig config) {
-    m_runtime->post(MainMsg::Configure(rstd::move(config)));
+    m_runtime->post(main_msg::Configure(rstd::move(config)));
 }
 
-void SceneWallpaper::setFps(uint32_t fps) { m_runtime->post(MainMsg::SetFps(u32(fps))); }
+void SceneWallpaper::setFps(uint32_t fps) { m_runtime->post(main_msg::SetFps(u32(fps))); }
 
-void SceneWallpaper::setVolume(float volume) { m_runtime->post(MainMsg::SetVolume(f32(volume))); }
+void SceneWallpaper::setVolume(float volume) { m_runtime->post(main_msg::SetVolume(f32(volume))); }
 
 void SceneWallpaper::setVolumeScale(float scale) { setVolumeScale(scale, 0); }
 
 void SceneWallpaper::setVolumeScale(float scale, uint32_t fade_ms) {
-    m_runtime->post(MainMsg::SetVolumeScale(f32(scale), u32(fade_ms)));
+    m_runtime->post(main_msg::SetVolumeScale(f32(scale), u32(fade_ms)));
 }
 
-void SceneWallpaper::setMuted(bool muted) { m_runtime->post(MainMsg::SetMuted(muted)); }
+void SceneWallpaper::setMuted(bool muted) { m_runtime->post(main_msg::SetMuted(muted)); }
 
-void SceneWallpaper::setFillMode(FillMode mode) { m_runtime->post(MainMsg::SetFillMode(mode)); }
+void SceneWallpaper::setFillMode(FillMode mode) { m_runtime->post(main_msg::SetFillMode(mode)); }
 
-void SceneWallpaper::setSpeed(float speed) { m_runtime->post(MainMsg::SetSpeed(f32(speed))); }
+void SceneWallpaper::setSpeed(float speed) { m_runtime->post(main_msg::SetSpeed(f32(speed))); }
 
 void SceneWallpaper::setMediaStatus(MediaStatus status) {
-    m_runtime->post(RenderMsg::SetMediaStatus(rstd::move(status)));
+    m_runtime->post(render_msg::SetMediaStatus(rstd::move(status)));
 }
 
 void SceneWallpaper::setAudioClientIdentity(SceneAudioClientIdentity identity) {
-    m_runtime->post(MainMsg::SetAudioClientIdentity(rstd::move(identity)));
+    m_runtime->post(main_msg::SetAudioClientIdentity(rstd::move(identity)));
 }
 
 void SceneWallpaper::setAudioResponseDemandCallback(AudioResponseDemandCallback callback) {
-    m_runtime->post(RenderMsg::SetAudioResponseDemandCallback(rstd::move(callback)));
+    m_runtime->post(render_msg::SetAudioResponseDemandCallback(rstd::move(callback)));
 }
 
 void SceneWallpaper::setAudioResponseEnabled(bool enabled) {
-    m_runtime->post(RenderMsg::SetAudioResponseEnabled(enabled));
+    m_runtime->post(render_msg::SetAudioResponseEnabled(enabled));
 }
 
 void SceneWallpaper::setAudioPcmWindow(audio::PcmWindow window) {
-    m_runtime->post(RenderMsg::SetAudioPcmWindow(rstd::move(window)));
+    m_runtime->post(render_msg::SetAudioPcmWindow(rstd::move(window)));
 }
 
-void SceneWallpaper::endAudioResponse() { m_runtime->post(RenderMsg::EndAudioResponse()); }
+void SceneWallpaper::endAudioResponse() { m_runtime->post(render_msg::EndAudioResponse()); }
 
 void SceneWallpaper::setUserPropertyRaw(std::string_view name, std::string value) {
-    m_runtime->post(MainMsg::SetUserProperty(std::string(name), RawUserProperty(value)));
+    m_runtime->post(main_msg::SetUserProperty(std::string(name), RawUserProperty(value)));
 }
 
 void SceneWallpaper::setUserPropertyJson(std::string_view name, NJson value) {
-    m_runtime->post(MainMsg::SetUserProperty(std::string(name), rstd::move(value)));
+    m_runtime->post(main_msg::SetUserProperty(std::string(name), rstd::move(value)));
 }
 
 void SceneWallpaper::setOnClearColor(ClearColorCallback cb) {
@@ -1838,15 +1919,15 @@ void SceneWallpaper::setOnClearColor(ClearColorCallback cb) {
 }
 
 void SceneWallpaper::setOnFirstFrame(FirstFrameCallback cb) {
-    m_runtime->post(MainMsg::SetFirstFrameCallback(rstd::move(cb)));
+    m_runtime->post(main_msg::SetFirstFrameCallback(rstd::move(cb)));
 }
 
 void SceneWallpaper::setOnUserPropertyDiagnostics(UserPropertyDiagnosticCallback cb) {
-    m_runtime->post(MainMsg::SetUserPropertyDiagnosticCallback(rstd::move(cb)));
+    m_runtime->post(main_msg::SetUserPropertyDiagnosticCallback(rstd::move(cb)));
 }
 
 void SceneWallpaper::requestPreparedPassDiagnostics(RenderPassDiagnosticCallback cb) {
-    m_runtime->post(RenderMsg::RequestPreparedPassDiagnostics(rstd::move(cb)));
+    m_runtime->post(render_msg::RequestPreparedPassDiagnostics(rstd::move(cb)));
 }
 
 int SceneWallpaper::takeLastFrameSyncFd() {

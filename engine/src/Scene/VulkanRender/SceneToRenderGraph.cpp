@@ -831,13 +831,13 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
         (selection == nullptr || selection->include_postprocessing); ++index) {
         const auto& pp = post_processes[index];
         for (auto& step : pp->steps) {
-            if (step.is_Pass()) {
-                auto&            sp     = step.as_Pass().value;
+            if (std::holds_alternative<ScenePostProcessPass>(step)) {
+                auto&            sp     = std::get<ScenePostProcessPass>(step);
                 std::string_view target = sp.output.empty() ? as_string_view(SpecTex_Default)
                                                             : std::string_view(sp.output);
                 ToGraphPass(sp.node.as_ptr(), target, extra);
             } else {
-                auto& cp = step.as_Copy().value;
+                auto& cp = std::get<ScenePostProcessCopy>(step);
                 AddCopyPass(extra, MakeTextureDesc(extra, cp.src), MakeTextureDesc(extra, cp.dst));
             }
         }

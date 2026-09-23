@@ -130,7 +130,7 @@ TEST(SceneResourceIndex, ResolvesDrawItemsAndNamedResources) {
     post_node->AddMesh(post_mesh);
 
     auto post = rstd::boxed::Box<owe::ScenePostProcess>::make();
-    post->steps.push(owe::ScenePostProcessStep::Pass(
+    post->steps.push(owe::ScenePostProcessStep(
         owe::ScenePostProcessPass { .node = post_node.clone(), .output = "_rt_post" }));
     (void)scene.RegisterPostProcess(rstd::move(post));
     ASSERT_EQ(scene.PostProcesses().len(), usize(1));

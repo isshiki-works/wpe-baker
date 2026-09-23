@@ -1,6 +1,5 @@
 module;
-
-#include <rstd/enum.hpp>
+#include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
 import eigen;
@@ -383,47 +382,15 @@ struct OverrideSpawnProgram {
     }
 };
 
-class ParticleSpawnInstructionValue {
-    RSTD_ENUM(ParticleSpawnInstructionValue, (Noop, (NoopSpawnProgram value;)),
-              (ColorRandom, (ColorRandomProgram value;)),
-              (LifetimeRandom, (LifetimeRandomProgram value;)),
-              (SizeRandom, (SizeRandomProgram value;)), (AlphaRandom, (AlphaRandomProgram value;)),
-              (VectorRandom, (VectorRandomProgram value;)),
-              (TurbulentVelocityRandom, (TurbulentVelocityRandomProgram value;)),
-              (MapSequenceAroundControlPoint, (MapSequenceAroundControlPointProgram value;)),
-              (MapSequenceBetweenControlPoints, (MapSequenceBetweenControlPointsProgram value;)),
-              (Override, (OverrideSpawnProgram value;)))
-};
-
-template<typename T>
-auto MakeParticleSpawnInstructionValue(T value) -> ParticleSpawnInstructionValue {
-    if constexpr (same<T, NoopSpawnProgram>)
-        return ParticleSpawnInstructionValue::Noop(rstd::move(value));
-    else if constexpr (same<T, ColorRandomProgram>)
-        return ParticleSpawnInstructionValue::ColorRandom(rstd::move(value));
-    else if constexpr (same<T, LifetimeRandomProgram>)
-        return ParticleSpawnInstructionValue::LifetimeRandom(rstd::move(value));
-    else if constexpr (same<T, SizeRandomProgram>)
-        return ParticleSpawnInstructionValue::SizeRandom(rstd::move(value));
-    else if constexpr (same<T, AlphaRandomProgram>)
-        return ParticleSpawnInstructionValue::AlphaRandom(rstd::move(value));
-    else if constexpr (same<T, VectorRandomProgram>)
-        return ParticleSpawnInstructionValue::VectorRandom(rstd::move(value));
-    else if constexpr (same<T, TurbulentVelocityRandomProgram>)
-        return ParticleSpawnInstructionValue::TurbulentVelocityRandom(rstd::move(value));
-    else if constexpr (same<T, MapSequenceAroundControlPointProgram>)
-        return ParticleSpawnInstructionValue::MapSequenceAroundControlPoint(rstd::move(value));
-    else if constexpr (same<T, MapSequenceBetweenControlPointsProgram>)
-        return ParticleSpawnInstructionValue::MapSequenceBetweenControlPoints(rstd::move(value));
-    else {
-        static_assert(same<T, OverrideSpawnProgram>);
-        return ParticleSpawnInstructionValue::Override(rstd::move(value));
-    }
-}
+using ParticleSpawnInstructionValue =
+    std::variant<NoopSpawnProgram, ColorRandomProgram, LifetimeRandomProgram, SizeRandomProgram,
+                 AlphaRandomProgram, VectorRandomProgram, TurbulentVelocityRandomProgram,
+                 MapSequenceAroundControlPointProgram, MapSequenceBetweenControlPointsProgram,
+                 OverrideSpawnProgram>;
 
 struct ParticleSpawnInstruction::Impl {
     template<typename T>
-    explicit Impl(T value): value(MakeParticleSpawnInstructionValue(rstd::move(value))) {}
+    explicit Impl(T value): value(rstd::move(value)) {}
 
     ParticleSpawnInstructionValue value;
 };
@@ -435,21 +402,10 @@ auto ParticleSpawnInstruction::operator=(ParticleSpawnInstruction&&) noexcept
 ParticleSpawnInstruction::~ParticleSpawnInstruction() = default;
 
 auto ParticleSpawnInstruction::SequenceCount() const -> Option<u32> {
-    RSTD_MATCH(m_impl->value) {
-        RSTD_CASE(Noop) { return None(); }
-        RSTD_CASE(ColorRandom) { return None(); }
-        RSTD_CASE(LifetimeRandom) { return None(); }
-        RSTD_CASE(SizeRandom) { return None(); }
-        RSTD_CASE(AlphaRandom) { return None(); }
-        RSTD_CASE(VectorRandom) { return None(); }
-        RSTD_CASE(TurbulentVelocityRandom) { return None(); }
-        RSTD_CASE(MapSequenceAroundControlPoint) { return None(); }
-        RSTD_CASE(MapSequenceBetweenControlPoints, instruction) {
-            return Some(rstd::as_cast<u32>(instruction.config.count));
-        }
-        RSTD_CASE(Override) { return None(); }
-    }
-    rstd::unreachable();
+    if (const auto* instruction =
+            std::get_if<MapSequenceBetweenControlPointsProgram>(&m_impl->value))
+        return Some(rstd::as_cast<u32>(instruction->config.count));
+    return None();
 }
 
 template<typename T>
@@ -460,24 +416,11 @@ auto ParticleSpawnInstruction::Make(T value) -> ParticleSpawnInstruction {
 void ParticleSpawnInstruction::Initialize(ParticleSpawnColumns&          columns,
                                           particle::ParticleSpawnRequest request,
                                           ref<dyn<rstd::any::Any>>       frame) {
-    RSTD_MATCH(m_impl->value) {
-        RSTD_CASE(Noop, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(ColorRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(LifetimeRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(SizeRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(AlphaRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(VectorRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(TurbulentVelocityRandom, instruction) {
+    std::visit(
+        [&](auto& instruction) {
             instruction.Initialize(columns, request, frame);
-        }
-        RSTD_CASE(MapSequenceAroundControlPoint, instruction) {
-            instruction.Initialize(columns, request, frame);
-        }
-        RSTD_CASE(MapSequenceBetweenControlPoints, instruction) {
-            instruction.Initialize(columns, request, frame);
-        }
-        RSTD_CASE(Override, instruction) { instruction.Initialize(columns, request, frame); }
-    }
+        },
+        m_impl->value);
 }
 
 ParticleSpawnInstruction ParticleParser::GenInitializer(const NJson& wpj,

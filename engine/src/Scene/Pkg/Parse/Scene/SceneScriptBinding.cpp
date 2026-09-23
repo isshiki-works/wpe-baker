@@ -1,6 +1,6 @@
 module;
+#include <rstd/macro.hpp>
 
-#include <rstd/enum.hpp>
 
 #include "JsonNlohmann.hpp"
 
@@ -69,18 +69,11 @@ bool FieldBindingsWriteLayerText(const wpscene::FieldBindings& fb) {
 }
 
 const wpscene::FieldBindings& SceneObjectFieldBindings(const SceneObjectVar& object) {
-    RSTD_MATCH(object) {
-        RSTD_CASE(Container, value) { return value.field_bindings; }
-        RSTD_CASE(Image, value) { return value.field_bindings; }
-        RSTD_CASE(Shape, value) { return value.field_bindings; }
-        RSTD_CASE(Particle, value) { return value.field_bindings; }
-        RSTD_CASE(Sound, value) { return value.field_bindings; }
-        RSTD_CASE(Light, value) { return value.field_bindings; }
-        RSTD_CASE(Text, value) { return value.field_bindings; }
-        RSTD_CASE(Model, value) { return value.field_bindings; }
-        RSTD_CASE(Camera, value) { return value.field_bindings; }
-    }
-    rstd::unreachable();
+    return std::visit(
+        [](const auto& value) -> const wpscene::FieldBindings& {
+            return value.field_bindings;
+        },
+        object);
 }
 
 bool SceneWritesLayerText(slice<SceneObjectVar> scene_objs) {

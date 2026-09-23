@@ -116,7 +116,7 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
         pp_node->SetCamera("effect");
         SetUniformConfig(context, pp_node, rstd::move(svData));
 
-        pp->steps.push(ScenePostProcessStep::Pass(ScenePostProcessPass {
+        pp->steps.push(ScenePostProcessStep(ScenePostProcessPass {
             .node   = rstd::move(pp_node),
             .output = std::move(output_rt),
         }));
@@ -153,7 +153,7 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
                    "_rt_bloom_combine"))
         return;
 
-    pp->steps.push(ScenePostProcessStep::Copy(ScenePostProcessCopy {
+    pp->steps.push(ScenePostProcessStep(ScenePostProcessCopy {
         .src = "_rt_bloom_combine",
         .dst = rstd::cppstd::to_string(SpecTex_Default),
     }));

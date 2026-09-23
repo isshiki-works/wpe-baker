@@ -1,5 +1,5 @@
 module;
-#include <rstd/enum.hpp>
+#include <rstd/macro.hpp>
 
 export module wescene.scene;
 import eigen;
@@ -2191,10 +2191,7 @@ struct ScenePostProcessCopy {
     std::string dst;
 };
 
-class ScenePostProcessStep {
-    RSTD_ENUM(ScenePostProcessStep, (Pass, (ScenePostProcessPass value;)),
-              (Copy, (ScenePostProcessCopy value;)))
-};
+using ScenePostProcessStep = std::variant<ScenePostProcessPass, ScenePostProcessCopy>;
 
 struct ScenePostProcess {
     std::string               name;

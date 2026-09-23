@@ -183,8 +183,8 @@ TEST(SceneObjectExpansion, PreservesHiddenTextLayers) {
     auto objects = owe::ExpandObjects(parsed.unwrap(), vfs, owe::wpscene::kSceneVersionUnknown);
 
     ASSERT_EQ(objects.len(), rstd::usize(1));
-    ASSERT_TRUE(objects[rstd::usize()].is_Text());
-    EXPECT_FALSE(objects[rstd::usize()].as_Text().value.visible);
+    ASSERT_TRUE(std::holds_alternative<owe::wpscene::TextObject>(objects[rstd::usize()]));
+    EXPECT_FALSE(std::get<owe::wpscene::TextObject>(objects[rstd::usize()]).visible);
 }
 
 TEST(SceneDocumentObjects, PreservesDeclarationOrderAndObjectKinds) {
@@ -256,7 +256,7 @@ TEST(SceneObjectExpansion, AutoOrthoExtentUsesDecodedImageSize) {
     owe::wpscene::ImageObject image;
     image.size = { 1920.0f, 1080.0f };
     rstd::vec::Vec<owe::SceneObjectVar> objects;
-    objects.push(owe::SceneObjectVar::Image(rstd::move(image)));
+    objects.push(owe::SceneObjectVar(rstd::move(image)));
 
     auto extent = owe::ResolveOrthoProjectionExtent(metadata, objects.as_slice());
     EXPECT_EQ(extent[rstd::usize()], rstd::i32(1920));
@@ -282,8 +282,8 @@ TEST(SceneObjectExpansion, IgnoresContainerWithoutAuthoredId) {
         rstd::mut_ref<owe::fs::VFS>::from_raw_parts(rstd::addressof(vfs)));
 
     ASSERT_EQ(objects.len(), rstd::usize(1));
-    ASSERT_TRUE(objects[rstd::usize()].is_Container());
-    EXPECT_EQ(objects[rstd::usize()].as_Container().value.id, rstd::i32(7));
+    ASSERT_TRUE(std::holds_alternative<owe::wpscene::ContainerObject>(objects[rstd::usize()]));
+    EXPECT_EQ(std::get<owe::wpscene::ContainerObject>(objects[rstd::usize()]).id, rstd::i32(7));
 }
 
 TEST(SceneObjectExpansion, PreservesHiddenSourceReferencedByContainer) {
@@ -299,9 +299,9 @@ TEST(SceneObjectExpansion, PreservesHiddenSourceReferencedByContainer) {
     auto objects = owe::ExpandObjects(parsed.unwrap(), vfs, owe::wpscene::kSceneVersionUnknown);
 
     ASSERT_EQ(objects.len(), rstd::usize(2));
-    ASSERT_TRUE(objects[rstd::usize()].is_Sound());
-    EXPECT_TRUE(objects[rstd::usize()].as_Sound().value.visible);
-    EXPECT_TRUE(objects[rstd::usize(1)].is_Container());
+    ASSERT_TRUE(std::holds_alternative<owe::wpscene::SoundObject>(objects[rstd::usize()]));
+    EXPECT_TRUE(std::get<owe::wpscene::SoundObject>(objects[rstd::usize()]).visible);
+    EXPECT_TRUE(std::holds_alternative<owe::wpscene::ContainerObject>(objects[rstd::usize(1)]));
 }
 
 TEST(SceneObjectExpansion, PreservesSoundHiddenByUserBoundParent) {
