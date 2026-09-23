@@ -25,6 +25,27 @@ internal sealed class SceneGraph
         Roots = SourceOrder.Where(id => RootOf[id] == id).ToArray();
     }
 
+    /// <summary><paramref name="id"/> 是否就是 <paramref name="ancestor"/> 或在它的子树里（父指向场景外即止）。</summary>
+    internal bool Within(int id, int ancestor)
+    {
+        while (Objects.TryGetValue(id, out var item))
+        {
+            if (id == ancestor) return true;
+            if (HybridScenePlanner.Int(item["parent"]) is not int parent || !Objects.ContainsKey(parent)) return false;
+            id = parent;
+        }
+        return false;
+    }
+
+    /// <summary>绑定节点由动画驱动（animation / animations）。</summary>
+    internal static bool Animated(JsonObject node) => node.ContainsKey("animation") || node.ContainsKey("animations");
+
+    /// <summary>绑定节点的值随运行时变（脚本或动画驱动），快照里的常量不算数。</summary>
+    internal static bool Dynamic(JsonObject node) => node.ContainsKey("script") || Animated(node);
+
+    /// <summary>对象的 visible 绑了脚本或动画：快照里是隐藏的也可能在运行时显示。</summary>
+    internal bool DynamicVisibility(int id) => Objects[id]["visible"] is JsonObject binding && Dynamic(binding);
+
     private int RootFor(int id)
     {
         var seen = new HashSet<int>();
