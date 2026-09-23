@@ -71,8 +71,10 @@ internal static class FullFrameDemotionChecks
         JsonObject reallocated = Allocate(wide, [LabelA], new JsonArray());
         check(reallocated["video_groups"]!.AsArray().Count == 1 &&
             reallocated["video_groups"]![0]!["include_scene_clear"]!.GetValue<bool>() &&
-            Conflict(reallocated) is null && reallocated["full_frame_retention"] is null,
-            "the retention advice applies cleanly through ApplyAllocation and drops the stale admission record");
+            Conflict(reallocated) is null && reallocated["full_frame_retention"] is null &&
+            reallocated["video_layout_admission"]?["status"]?.GetValue<string>() == "planned_layout_allowed" &&
+            reallocated["video_layout_admission"]?["reason"] is null,
+            "the retention advice applies cleanly through ApplyAllocation, drops the stale admission record and records the layout as allowed");
 
         JsonObject unknown = await AnalyzeAsync(root, "unknown", Scene(4, 2, sizeLabelB: false), true, new JsonArray());
         check(unknown["video_groups"]!.AsArray().Count == 2 &&
