@@ -46,22 +46,9 @@ public sealed partial class NativeRenderRunner
                     .Contains("capture-force-visible-owner-v1", StringComparison.Ordinal))
                 throw new InvalidDataException("Renderer does not support capturing a visibility-controlled effect owner.");
             string native = Path.Combine(output, "native");
-            var job = new JsonObject { ["schema_version"] = 1, ["source"] = source.SourcePath, ["assets"] = Path.GetFullPath(request.Assets),
-                ["output_dir"] = native, ["width"] = request.Width, ["height"] = request.Height,
-                ["fps_num"] = request.FpsNumerator, ["fps_den"] = request.FpsDenominator, ["frames"] = request.Frames,
-                ["warmup_frames"] = request.WarmupFrames, ["seed"] = request.Seed, ["raw_stdout"] = false };
-            if (request.CaptureTarget is not null) job["capture_target"] = JsonSerializer.SerializeToNode(request.CaptureTarget, JsonOptions);
-            if (request.OrthographicCaptureViewport is not null) job["orthographic_capture_viewport"] = JsonSerializer.SerializeToNode(request.OrthographicCaptureViewport, JsonOptions);
-            if (request.LayerSelection is not null) job["layer_selection"] = JsonSerializer.SerializeToNode(request.LayerSelection, JsonOptions);
-            if (request.Input is not null) job["input"] = request.Input.DeepClone();
-            if (request.InputTimeline is not null) job["input_timeline"] = request.InputTimeline.DeepClone();
-            if (request.UserProperties is not null) job["user_properties"] = request.UserProperties.DeepClone();
-            if (request.OfflineVideoRateOverrides is not null) job["offline_video_rate_overrides"] = request.OfflineVideoRateOverrides.DeepClone();
-            if (request.DeviceUuid is not null) job["device_uuid"] = request.DeviceUuid;
-            if (request.GpuTiming) job["gpu_timing"] = true;
-            if (request.TraceScene) job["trace_scene"] = true;
+            RenderJob job = RenderJob.From(request, source.SourcePath, native, rawStdout: false);
             string jobPath = Path.Combine(output, "renderer-job.json");
-            await WriteJsonAsync(jobPath, job, cancellationToken);
+            await WriteJsonAsync(jobPath, JsonSerializer.SerializeToNode(job, JsonOptions)!, cancellationToken);
             try
             {
                 _ = await RunTextAsync(tools.Renderer, ["render", "--job", jobPath], Path.Combine(output, "renderer.stderr.log"), cancellationToken);
@@ -70,25 +57,24 @@ public sealed partial class NativeRenderRunner
             {
                 throw RendererFailure(Path.Combine(native, "result.json"), error.Message, error);
             }
-            var result = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(native, "result.json"), cancellationToken))!.AsObject();
-            if (result["status"]?.GetValue<string>() != "complete" || result["written_frames"]?.GetValue<ulong>() != request.Frames ||
-                result["renderer_error_count"]?.GetValue<ulong>() != 0)
+            RenderResult result = RenderResult.Parse(await File.ReadAllTextAsync(Path.Combine(native, "result.json"), cancellationToken));
+            if (!result.Confirms(request.Frames))
                 throw new InvalidDataException("Native raw render did not confirm every requested frame.");
             ConfirmVideoRateOverrides(request, result);
-            if (request.CaptureTarget is not null && string.IsNullOrWhiteSpace(result["capture_source"]?["render_target"]?.GetValue<string>()))
+            if (request.CaptureTarget is not null && string.IsNullOrWhiteSpace(result.CaptureSource?.RenderTarget))
                 throw new InvalidDataException("Renderer did not confirm its actual capture target.");
-            if (request.OrthographicCaptureViewport is not null && !JsonNode.DeepEquals(result["orthographic_capture_viewport"], JsonSerializer.SerializeToNode(request.OrthographicCaptureViewport, JsonOptions)))
+            if (request.OrthographicCaptureViewport is not null && !JsonNode.DeepEquals(result.OrthographicCaptureViewport, JsonSerializer.SerializeToNode(request.OrthographicCaptureViewport, JsonOptions)))
                 throw new InvalidDataException("Renderer did not confirm the requested orthographic capture viewport.");
-            if (request.LayerSelection is not null && !JsonNode.DeepEquals(result["layer_selection"], JsonSerializer.SerializeToNode(request.LayerSelection, JsonOptions)))
+            if (request.LayerSelection is not null && !JsonNode.DeepEquals(result.LayerSelection, JsonSerializer.SerializeToNode(request.LayerSelection, JsonOptions)))
                 throw new InvalidDataException("Renderer did not confirm its layer selection.");
-            if (request.TraceScene && (result["runtime_layers"] is not JsonArray || result["runtime_dependencies"] is not JsonArray))
+            if (request.TraceScene && (result.RuntimeLayers is null || result.RuntimeDependencies is null))
                 throw new InvalidDataException("Renderer did not return requested runtime scene information.");
-            if (request.DeviceUuid is not null && !request.DeviceUuid.Equals(result["device_uuid"]?.GetValue<string>(), StringComparison.OrdinalIgnoreCase))
+            if (request.DeviceUuid is not null && !request.DeviceUuid.Equals(result.DeviceUuid, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Renderer did not use the requested GPU.");
             if ((ulong)new FileInfo(Path.Combine(native, "frames.rgba")).Length != expected)
                 throw new InvalidDataException("Raw output length does not match the frame contract.");
             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during raw rendering.");
-            manifest["native_result"] = result;
+            manifest["native_result"] = result.Json;
             manifest["status"] = "completed";
             manifest["rgba_path"] = Path.Combine(native, "frames.rgba");
             await WriteJsonAsync(manifestPath, manifest, cancellationToken);

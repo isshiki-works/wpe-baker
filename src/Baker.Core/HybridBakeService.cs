@@ -433,22 +433,24 @@ public sealed class HybridBakeService(NativeTools tools)
         async Task<JsonObject> NoLoopReportAsync(JsonArray? unresolved, JsonObject? residual = null,
             string status = "candidate_rejected_no_loop")
         {
-            Directory.CreateDirectory(output);
             bool layoutRejected = status == ResidualMasking.LayoutRejectedStatus;
-            var rejected = new JsonObject { ["schema_version"] = 2, ["artifact_kind"] = "hybrid_video_candidate",
-                ["status"] = status, ["source_sha256"] = sourceHash,
-                ["source_digest_scope"] = ProjectSource.DigestScope, ["plan"] = plan.DeepClone(),
-                ["effect_render_scale"] = request.EffectRenderScale, ["match_effect_resolution"] = request.MatchEffectResolution,
-                ["frames"] = 0, ["groups"] = new JsonArray(), ["loop_validation"] = layoutRejected ? "not_performed" : "no_suitable_loop",
-                ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified" };
-            if (residual?["reason"]?.GetValue<string>() is string residualReason) rejected["reason"] = residualReason;
-            else new Message(unresolved is { Count: > 0 } ? "bake.loop_unresolved" : "bake.no_loop_candidate").Write(rejected, "reason");
+            var trailer = new JsonObject();
+            if (residual?["reason"]?.GetValue<string>() is string residualReason) trailer["reason"] = residualReason;
+            else new Message(unresolved is { Count: > 0 } ? "bake.loop_unresolved" : "bake.no_loop_candidate").Write(trailer, "reason");
             if (layoutRejected)
             {
-                rejected["reason_zh"] = residual?["reason_zh"]?.DeepClone();
-                rejected["reason_en"] = residual?["reason_en"]?.DeepClone();
+                trailer["reason_zh"] = residual?["reason_zh"]?.DeepClone();
+                trailer["reason_en"] = residual?["reason_en"]?.DeepClone();
             }
-            if (residual is not null) rejected["residual_masking"] = residual.DeepClone();
+            if (residual is not null) trailer["residual_masking"] = residual.DeepClone();
+            return await RejectAsync(new(status, sourceHash, plan.DeepClone().AsObject(), request.EffectRenderScale,
+                request.MatchEffectResolution, layoutRejected ? "not_performed" : "no_suitable_loop", new(), trailer));
+        }
+        // 拒绝出口共用：写出报告、带上计划来源与阶段计时。
+        async Task<JsonObject> RejectAsync(BakeRejection rejection)
+        {
+            Directory.CreateDirectory(output);
+            JsonObject rejected = rejection.ToJson();
             AttachPlanProvenance(rejected, plan);
             timing.Stamp(rejected);
             await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "bake.json"), rejected, cancellationToken);
@@ -496,24 +498,10 @@ public sealed class HybridBakeService(NativeTools tools)
         // 探针只有几十帧，不值得为它拦一次；真正的量在主渲染上。
         if (request.ProbeFrames == 0 &&
             BakeDiskBudget.Reject(plan, frames, request.GroupParallel, output) is JsonObject diskRejection)
-        {
-            Directory.CreateDirectory(output);
-            var rejected = new JsonObject
-            {
-                ["schema_version"] = 2, ["artifact_kind"] = "hybrid_video_candidate", ["status"] = BakeDiskBudget.RejectedBakeStatus,
-                ["source_sha256"] = sourceHash, ["source_digest_scope"] = ProjectSource.DigestScope, ["plan"] = plan,
-                ["effect_render_scale"] = request.EffectRenderScale, ["match_effect_resolution"] = request.MatchEffectResolution,
-                ["reason"] = diskRejection["reason"]?.DeepClone(),
-                ["reason_localized"] = diskRejection["reason_localized"]?.DeepClone(),
-                ["disk_budget"] = diskRejection,
-                ["frames"] = 0, ["groups"] = new JsonArray(), ["loop_validation"] = "not_performed",
-                ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified"
-            };
-            AttachPlanProvenance(rejected, plan);
-            timing.Stamp(rejected);
-            await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "bake.json"), rejected, cancellationToken);
-            return rejected;
-        }
+            return await RejectAsync(new(BakeDiskBudget.RejectedBakeStatus, sourceHash, plan, request.EffectRenderScale,
+                request.MatchEffectResolution, "not_performed", new() {
+                    ["reason"] = diskRejection["reason"]?.DeepClone(), ["reason_localized"] = diskRejection["reason_localized"]?.DeepClone(),
+                    ["disk_budget"] = diskRejection }, new()));
         // 锁定周期的粒子层（封顶 + 确定寿命）只在循环长度是替换周期的整数倍时同相位：analyze 的求解器已保证，这里防御旧版或改过的计划。
         if (request.ProbeFrames == 0 && residualMasking is not null &&
             ResidualMasking.LockedCycleMismatch(residualMasking, frames, settings.FpsNumerator, settings.FpsDenominator) is JsonObject cycleMismatch)
@@ -531,15 +519,9 @@ public sealed class HybridBakeService(NativeTools tools)
                 compositionValidation = await ValidateCompositionAsync(request, plan, settings, source, output, progress, cancellationToken);
             if (compositionValidation["status"]?.GetValue<string>() != "composition_pass")
             {
-                Directory.CreateDirectory(output);
                 bool scriptErrorsRejected = compositionValidation["status"]?.GetValue<string>() == CandidateScriptErrorGate.RejectedCompositionStatus;
-                var rejected = new JsonObject
+                var evidence = new JsonObject
                 {
-                    ["schema_version"] = 2, ["artifact_kind"] = "hybrid_video_candidate",
-                    ["status"] = scriptErrorsRejected ? CandidateScriptErrorGate.RejectedBakeStatus : "candidate_rejected_composition",
-                    ["source_sha256"] = sourceHash,
-                    ["source_digest_scope"] = ProjectSource.DigestScope, ["plan"] = plan,
-                    ["effect_render_scale"] = request.EffectRenderScale, ["match_effect_resolution"] = request.MatchEffectResolution,
                     ["reason"] = compositionValidation["reason"]?.DeepClone(),
                     ["metrics"] = compositionValidation["metrics"]?.DeepClone(),
                     ["composition_validation"] = compositionValidation,
@@ -550,19 +532,16 @@ public sealed class HybridBakeService(NativeTools tools)
                         ["reference"] = compositionValidation["comparison_reference_path"]?.DeepClone(),
                         ["project"] = compositionValidation["probe_project_path"]?.DeepClone(),
                         ["comparison"] = compositionValidation["comparison_report_path"]?.DeepClone()
-                    },
-                    ["frames"] = 0, ["groups"] = new JsonArray(), ["loop_validation"] = "not_performed",
-                    ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified"
+                    }
                 };
+                var trailer = new JsonObject();
                 if (scriptErrorsRejected)
                 {
-                    rejected["reason_zh"] = compositionValidation["reason_zh"]?.DeepClone();
-                    rejected["reason_en"] = compositionValidation["reason_en"]?.DeepClone();
+                    trailer["reason_zh"] = compositionValidation["reason_zh"]?.DeepClone();
+                    trailer["reason_en"] = compositionValidation["reason_en"]?.DeepClone();
                 }
-                AttachPlanProvenance(rejected, plan);
-                timing.Stamp(rejected);
-                await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "bake.json"), rejected, cancellationToken);
-                return rejected;
+                return await RejectAsync(new(scriptErrorsRejected ? CandidateScriptErrorGate.RejectedBakeStatus : "candidate_rejected_composition",
+                    sourceHash, plan, request.EffectRenderScale, request.MatchEffectResolution, "not_performed", evidence, trailer));
             }
         }
         // 内嵌视频大小（WPE 实测 2 GiB 上限，见 EmbeddedVideoBudget）：起点搜索与主渲染之前按试编码外推，超限就干净拒绝，
@@ -573,22 +552,11 @@ public sealed class HybridBakeService(NativeTools tools)
             embeddedVideoEstimate = await EstimateEmbeddedVideoAsync(compositionValidation, frames, settings, cancellationToken);
             if (embeddedVideoEstimate["status"]?.GetValue<string>() == "predicted_over_limit")
             {
-                Directory.CreateDirectory(output);
-                var rejected = new JsonObject
-                {
-                    ["schema_version"] = 2, ["artifact_kind"] = "hybrid_video_candidate", ["status"] = EmbeddedVideoBudget.RejectedBakeStatus,
-                    ["source_sha256"] = sourceHash, ["source_digest_scope"] = ProjectSource.DigestScope, ["plan"] = plan,
-                    ["effect_render_scale"] = request.EffectRenderScale, ["match_effect_resolution"] = request.MatchEffectResolution,
-                    ["reason"] = embeddedVideoEstimate["reason"]?.DeepClone(),
-                    ["reason_localized"] = embeddedVideoEstimate["reason_localized"]?.DeepClone(),
-                    ["composition_validation"] = compositionValidation, ["embedded_video_estimate"] = embeddedVideoEstimate,
-                    ["frames"] = 0, ["groups"] = new JsonArray(), ["loop_validation"] = "not_performed",
-                    ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified"
-                };
-                AttachPlanProvenance(rejected, plan);
-                timing.Stamp(rejected);
-                await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "bake.json"), rejected, cancellationToken);
-                return rejected;
+                return await RejectAsync(new(EmbeddedVideoBudget.RejectedBakeStatus, sourceHash, plan, request.EffectRenderScale,
+                    request.MatchEffectResolution, "not_performed", new() {
+                        ["reason"] = embeddedVideoEstimate["reason"]?.DeepClone(),
+                        ["reason_localized"] = embeddedVideoEstimate["reason_localized"]?.DeepClone(),
+                        ["composition_validation"] = compositionValidation, ["embedded_video_estimate"] = embeddedVideoEstimate }, new()));
             }
         }
         var original = source.ReadJson(source.SceneResource);
