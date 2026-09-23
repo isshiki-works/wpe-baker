@@ -112,9 +112,9 @@ struct VideoSource::Impl {
 
     auto open(std::uint32_t width, std::uint32_t height) -> bool {
         if (width == 0 || height == 0) return fail("target dimensions must be non-zero");
-        // NV12 色度减半 → 两个维度都得是偶数。
-        target_width  = width + (width % 2);
-        target_height = height + (height % 2);
+        // 奇数宽高照原样解码（不补成偶数再缩放）：NV12 色度按向上取整打包，见 next_frame。
+        target_width  = width;
+        target_height = height;
 
         auto* buffer = static_cast<unsigned char*>(av_malloc(kAvioBuf));
         if (! buffer) return fail("av_malloc(avio buffer) failed");
@@ -246,8 +246,11 @@ struct VideoSource::Impl {
     auto next_frame(Nv12Frame& out) -> std::optional<NextFrame> {
         bool looped = false;
 
-        // 输出缓冲按 NV12 尺寸定长（解码器生命周期内尺寸固定）。
-        const std::size_t want = std::size_t(target_width) * target_height * 3 / 2;
+        // 输出缓冲按 NV12 尺寸定长（解码器生命周期内尺寸固定）。4:2:0 色度向上取整：
+        // UV 平面 ceil(w/2) × ceil(h/2) 个 (U,V) 对，行距 2×ceil(w/2)（奇数宽高时 swscale 就写这么多）。
+        const std::size_t uv_pitch = std::size_t((target_width + 1) / 2) * 2;
+        const std::size_t want =
+            std::size_t(target_width) * target_height + uv_pitch * ((target_height + 1) / 2);
         if (out.data.size() != want) out.data.resize(want, 0);
 
         while (true) {
@@ -265,7 +268,7 @@ struct VideoSource::Impl {
                                                  nullptr,
                                                  nullptr };
                 int           dst_strides[4] = { static_cast<int>(target_width),
-                                                 static_cast<int>(target_width), // NV12 的 UV 行距 = 宽
+                                                 static_cast<int>(uv_pitch),
                                                  0,
                                                  0 };
                 if (sws_scale(sws, feed.data, feed.linesize, 0, feed.height, dst_planes, dst_strides) <= 0) {

@@ -7,9 +7,12 @@ module;
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <sstream>
+#include <unordered_map>
 #include <vulkan/vulkan.h>
 #include "GpuVideoEncoder.hpp"
+#include "PassTiming.hpp"
 
 module wescene.vulkan_render;
 import wescene.core;
@@ -115,12 +118,12 @@ public:
     TimestampQueryPool& operator=(const TimestampQueryPool&) = delete;
     ~TimestampQueryPool() { reset(); }
 
-    VkResult create(const vvk::Device& device) noexcept {
+    VkResult create(const vvk::Device& device, std::uint32_t count = timestamp_query_count) noexcept {
         reset();
         const VkQueryPoolCreateInfo info {
             .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
             .queryType = VK_QUERY_TYPE_TIMESTAMP,
-            .queryCount = timestamp_query_count,
+            .queryCount = count,
         };
         VkQueryPool pool = VK_NULL_HANDLE;
         const auto result = device.Dispatch().vkCreateQueryPool(*device, &info, nullptr, &pool);
@@ -156,6 +159,54 @@ private:
     const vvk::DeviceDispatch* m_dispatch { nullptr };
     bool m_in_flight { false };
 };
+
+// 逐 pass GPU 计时（WPE_PASS_TIMING，格式与口径见 PassTiming.hpp）；不设环境变量时不创建。
+struct PassTiming {
+    TimestampQueryPool                          queries;
+    std::uint32_t                               capacity { 0 };
+    std::uint32_t                               valid_bits { 0 };
+    double                                      period_ns { 0.0 };
+    std::ofstream                               out;
+    PassTimestampWriter                         writer;
+    std::vector<owe::vulkan::pass_timing::Pass> passes; // 已录制、未读回那一帧的标注
+    std::uint64_t                               frame { 0 };
+};
+
+// 场景节点 → 所属图层与效果（只给计时标注用）。
+struct PassTimingNode {
+    std::int32_t layer { -1 };
+    const char*  role { "" };
+    std::string  effect;
+    std::int64_t effect_index { -1 };
+};
+
+void CollectPassTimingNodes(owe::SceneNode* node, std::int32_t inherited,
+                            std::unordered_map<const owe::SceneNode*, PassTimingNode>& out) {
+    if (node == nullptr) return;
+    // 归属同 SceneToRenderGraph 的捕获归属：生成者图层优先（如带效果文字的离屏节点），否则作者图层，否则继承父节点
+    const auto         generator = node->GeneratorIdentity();
+    const std::int32_t id        = node->ID().to_primitive();
+    const std::int32_t layer = generator.is_some() ? generator->value.to_primitive() : id >= 0 ? id : inherited;
+    out[node]                = PassTimingNode { .layer = layer, .role = "draw" };
+    if (node->HasLayer()) {
+        auto& effect_layer = node->Layer();
+        for (auto& prefill : effect_layer->PrefillNodes())
+            out[prefill.sceneNode.as_ptr()] = PassTimingNode { .layer = layer, .role = "prefill" };
+        auto collect = [&](const std::shared_ptr<owe::SceneImageEffect>& effect, const char* role,
+                           std::int64_t effect_index) {
+            if (! effect) return;
+            for (auto& effect_node : effect->nodes)
+                out[effect_node.sceneNode.as_ptr()] = PassTimingNode {
+                    .layer = layer, .role = role, .effect = effect->name, .effect_index = effect_index };
+        };
+        for (usize i {}; i < effect_layer->EffectCount(); ++i)
+            collect(effect_layer->GetEffect(i), "effect", static_cast<std::int64_t>(i.to_primitive()));
+        collect(effect_layer->FinalResolveEffect(), "final-resolve", -1);
+        collect(effect_layer->PublishedEffect(), "published", -1);
+        collect(effect_layer->VisibleResolveEffect(), "visible-resolve", -1);
+    }
+    for (auto& child : node->GetChildren()) CollectPassTimingNodes(child.as_ptr(), layer, out);
+}
 
 struct CaptureBinding {
     std::string render_target;
@@ -318,6 +369,9 @@ struct VulkanRender::Impl {
     bool initCpuReadback(const RenderInitInfo&);
     bool initSamplePipeline();
     void initGpuTiming(const RenderInitInfo&);
+    void initPassTiming();
+    void beginPassTiming(Scene&, vvk::CommandBuffer&);
+    void flushPassTiming();
 
     bool CreateRenderingResource(RenderingResources&);
     void DestroyRenderingResource(RenderingResources&);
@@ -410,6 +464,7 @@ struct VulkanRender::Impl {
     std::optional<double> m_timestamp_period_ns;
     VkResult m_gpu_timing_error_code { VK_SUCCESS };
     std::string m_gpu_timing_message;
+    std::unique_ptr<PassTiming> m_pass_timing;
 
     // MSAA sample count for the screen RT only. 1bit = disabled.
     // Resolved against device's framebufferColorSampleCounts in init().
@@ -846,6 +901,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     // Allocate last: no later initialization failure can strand query objects.
     // Timestamp failure is diagnostic only; ordinary rendering remains usable.
     initGpuTiming(info);
+    initPassTiming();
     m_inited = true;
     return m_inited;
 }
@@ -1108,12 +1164,81 @@ void VulkanRender::Impl::initGpuTiming(const RenderInitInfo& info) {
     }
 }
 
+void VulkanRender::Impl::initPassTiming() {
+    const char* path = std::getenv("WPE_PASS_TIMING");
+    if (path == nullptr) return;
+    auto disabled = [](const char* why) { rstd_error("WPE_PASS_TIMING disabled: {}", why); };
+    const auto bits =
+        m_device->gpu().GetQueueFamilyProperties()[usize(m_device->graphics_queue().family_index)].timestampValidBits;
+    if (bits == 0) return disabled("graphics queue does not support timestamps");
+    auto timing = std::make_unique<PassTiming>();
+    timing->out.open(path, std::ios::binary | std::ios::trunc);
+    if (! timing->out) return disabled("cannot open the output file");
+    timing->valid_bits = bits;
+    timing->period_ns  = m_device->limits().timestampPeriod;
+    m_pass_timing      = std::move(timing);
+}
+
+// 录制前：记下本帧各 pass 的标注；查询池不够大就重建（上一帧此时已完成）；复位并写起点时间戳。
+void VulkanRender::Impl::beginPassTiming(Scene& scene, vvk::CommandBuffer& command) {
+    auto& timing = *m_pass_timing;
+    // 起点、上传、每个 pass 一个
+    const auto needed = static_cast<std::uint32_t>(2 + m_program.pass_records.len().to_primitive());
+    if (needed > timing.capacity) {
+        if (timing.queries.create(m_device->handle(), needed) != VK_SUCCESS) {
+            rstd_error("WPE_PASS_TIMING disabled: create timestamp query pool failed");
+            m_pass_timing.reset();
+            return;
+        }
+        timing.capacity    = needed;
+        timing.writer.pool = timing.queries.get();
+    }
+    std::unordered_map<const owe::SceneNode*, PassTimingNode> nodes;
+    CollectPassTimingNodes(scene.RootMut().as_raw_ptr(), -1, nodes);
+    timing.passes.clear();
+    for (auto& [name, target] : m_program.timingTargets(m_rendering_resources)) {
+        PassTimingNode node;
+        if (auto it = nodes.find(target.node); it != nodes.end()) node = it->second;
+        timing.passes.push_back(pass_timing::Pass {
+            .name = std::move(name), .layer = node.layer, .role = node.role, .effect = std::move(node.effect),
+            .effect_index = node.effect_index, .rt = std::move(target.output),
+            .width = target.width, .height = target.height });
+    }
+    timing.frame = m_cpu_frame_index;
+    timing.writer.labels.clear();
+    command.ResetQueryPool(timing.writer.pool, 0, timing.capacity);
+    command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timing.writer.pool, 0);
+}
+
+// 帧栅栏之后：读回时间戳，写一行。
+void VulkanRender::Impl::flushPassTiming() {
+    if (! m_pass_timing) return;
+    auto& timing     = *m_pass_timing;
+    const auto count = static_cast<std::uint32_t>(timing.writer.labels.size() + 1);
+    std::vector<std::uint64_t> ticks(count);
+    const auto result = m_device->handle().Dispatch().vkGetQueryPoolResults(
+        *m_device->handle(), timing.writer.pool, 0, count, count * sizeof(std::uint64_t), ticks.data(),
+        sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
+    if (result != VK_SUCCESS) {
+        rstd_error("WPE_PASS_TIMING stopped: reading timestamps returned VkResult {}", static_cast<int>(result));
+        m_pass_timing.reset();
+        return;
+    }
+    std::vector<std::uint64_t> intervals(count - 1);
+    for (std::uint32_t q = 1; q < count; ++q)
+        intervals[q - 1] = TimestampDelta(ticks[q - 1], ticks[q], timing.valid_bits);
+    timing.out << pass_timing::FrameLine(timing.frame, timing.passes, timing.writer.labels, intervals,
+                                         timing.period_ns)
+               << '\n' << std::flush;
+}
+
 void VulkanRender::Impl::destroy() {
     if (! m_inited) return;
     if (m_device->handle()) {
         VVK_CHECK(m_device->handle().WaitIdle());
         m_timestamp_queries.completed();
         m_timestamp_queries.reset();
+        m_pass_timing.reset();
 
         // res
         m_program.destroyPasses(*m_device);
@@ -1277,6 +1402,7 @@ std::string VulkanRender::Impl::finishPendingFrame() {
             throw std::runtime_error("queued render resource completion was unavailable");
         m_pending_cpu_submission = {};
         m_timestamp_queries.completed();
+        flushPassTiming();
         ReleaseCompletedRetiredResources(*m_device, rr);
         return {};
     } catch (const std::exception& error) {
@@ -1426,8 +1552,9 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         rr.command.ResetQueryPool(m_timestamp_queries.get(), 0, timestamp_query_count);
         rr.command.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestamp_queries.get(), 0);
     }
+    if (m_pass_timing) beginPassTiming(scene, rr.command);
     RecordedBufferUploads recorded_uploads;
-    if (! m_program.record(rr, recorded_uploads)) {
+    if (! m_program.record(rr, recorded_uploads, m_pass_timing ? &m_pass_timing->writer : nullptr)) {
         (void)rr.command.End();
         return fail(VK_ERROR_INITIALIZATION_FAILED, "record render program");
     }
@@ -1568,6 +1695,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     // in flight. The failed renderer retains its resources until destruction.
     if (result != VK_SUCCESS) return fail(result, "wait for CPU frame fence");
     if (!defer_completion) m_timestamp_queries.completed();
+    if (!defer_completion) flushPassTiming();
     if (m_timestamp_queries) {
         struct QueryValue { std::uint64_t ticks; std::uint64_t available; };
         std::array<QueryValue, timestamp_query_count> queries {};
