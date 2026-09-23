@@ -135,6 +135,7 @@ target_include_directories(wpe-cli11 INTERFACE "${WPE_DEPS}/cli11")
 # 各包的源文件清单与用法（原 lito.toml）。
 add_subdirectory(src/Core)
 add_subdirectory(src/Audio)
+add_subdirectory(src/Media)
 add_subdirectory(src/Scene/types)
 add_subdirectory(src/Scene/Utils)
 add_subdirectory(src/Vulkan)
