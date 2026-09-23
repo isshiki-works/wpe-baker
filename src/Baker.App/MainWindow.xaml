@@ -111,10 +111,7 @@
                                 <ComboBoxItem Tag="固定视角|Fixed view" IsSelected="True"/>
                                 <ComboBoxItem Tag="关闭|Off"/>
                             </ComboBox>
-                            <TextBlock x:Name="InteractionNote" Style="{StaticResource Note}" Margin="0,0,0,12"/>
-                            <CheckBox x:Name="MeasureSourceBox" Margin="0,0,0,16"
-                                ToolTip="在 Wallpaper Engine 中播放原作并实测核显功耗，约 60 s；无功耗计数器的机器跳过该步骤。‖Plays the original in Wallpaper Engine and measures iGPU power for about 60 s; machines without a power counter skip this step.">
-                                <TextBlock Tag="测原作功耗（约 60 秒，可选）|Measure original power (about 60 s, optional)"/></CheckBox>
+                            <TextBlock x:Name="InteractionNote" Style="{StaticResource Note}" Margin="0,0,0,16"/>
                             <TextBlock Style="{StaticResource Group}" Tag="输出|Output"/>
                             <DockPanel Margin="0,0,0,4">
                                 <Button x:Name="OutputEditButton" DockPanel.Dock="Right" Content="✎" MinWidth="38" Padding="8,6" Margin="8,0,0,0"
@@ -263,7 +260,6 @@
                         <TextBlock Style="{StaticResource Group}" Margin="0,6,0,8" Tag="校验|Verification"/>
                         <WrapPanel><Button x:Name="OfficialPreviewButton" Tag="在 Wallpaper Engine 中预览|Preview in Wallpaper Engine" Click="OfficialPreviewClicked"/>
                             <Button x:Name="ValidateButton" Tag="查看自动校验结果|View automatic checks" Click="ValidateClicked"/>
-                            <Button x:Name="MeasurePlaybackButton" Tag="实测功耗收益（原作对比成品，约 5 min）|Measure power saving (original vs result, about 5 min)" Click="MeasurePlaybackClicked"/>
                             <Button x:Name="ReportButton" Tag="打开报告|Open report" Click="OpenReportClicked"/></WrapPanel>
                         <Expander Tag="应用到桌面|Apply to desktop" Margin="0,8,0,0" FontSize="12" x:Name="DesktopExpander" Header="应用到桌面" IsExpanded="True">
                             <StackPanel Margin="0,10,0,0" TextElement.FontWeight="Normal">

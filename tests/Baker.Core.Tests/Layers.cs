@@ -251,16 +251,6 @@ public class PlainLanguageTests
     }
 }
 
-[Trait("Layer", "L0")]
-public class SourcePowerVerdictTests
-{
-    [Fact]
-    public void Run()
-    {
-        SourcePowerVerdictChecks.Run(Assert.True);
-    }
-}
-
 [Trait("Layer", "L1")]
 public class FullFrameDemotionTests
 {
@@ -701,16 +691,6 @@ public class ReferenceSeamTests
     {
         Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
         await TestTemp.Run(dir => ReferenceSeamChecks.RunAsync(Assert.True, dir));
-    }
-}
-
-[Trait("Layer", "L0")]
-public class OfficialTraceLossTests
-{
-    [Fact]
-    public void Run()
-    {
-        OfficialTraceLossChecks.Run(Assert.True);
     }
 }
 

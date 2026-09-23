@@ -30,7 +30,7 @@ try
     // 骨架是英文；个别说明（如 bake 的 --encoder）按 --lang 出中文或英文，帮助路径里 --lang 放在哪都认。
     var usage = CliUsage.Sections(CliUsage.HelpLanguage(args, language));
     string[] primaryCommands = ["analyze", "bake", "export", "targets", "apply", "rollback"];
-    string[] diagnosticCommands = ["inspect", "extract", "render", "validate", "measure-official",
+    string[] diagnosticCommands = ["inspect", "extract", "render", "validate",
         "decode-check", "devices", "pack-video", "pack-rgba"];
     // 子命令带 --help/-h 时只讲这个子命令，并以 0 退出；以前 --help 被当成壁纸路径，报"源不存在"。
     if (args.Length > 1 && usage.ContainsKey(args[0]) && args.Skip(1).Any(value => value is "--help" or "-h"))
@@ -62,7 +62,6 @@ try
             a full-frame video: what disappears with them and how much stays live.
             Bake accepts a saved plan with --out, or a request containing its output directory.
             Legacy effect-cache and Video/Web compression plans are no longer supported.
-            Measure-official reads an existing process without changing playback or desktop state.
             Apply and rollback affect only the location explicitly recorded in the request.
             Request paths are relative to the working directory; tool paths to TOOLS.json.
             """);
@@ -82,11 +81,11 @@ try
     }
     if (args.Length < 2) throw new ArgumentException("Source path is required.");
     string[] allowed = args[0] switch {
-        "analyze" => ["--assets", "--out", "--tools", "--properties", "--properties-source", "--width", "--height", "--fps", "--fps-den", "--video-layout", "--live-overlays", "--text-effects", "--audio-effects", "--exclude-layers", "--preset", "--retime-budget", "--video-shell", "--sway-retime", "--loop-max-seconds", "--trace", "--retain-live", "--device", "--lang", "--measure-source", "--wallpaper-engine", "--present-mon", "--daytime-split", "--interaction"],
+        "analyze" => ["--assets", "--out", "--tools", "--properties", "--properties-source", "--width", "--height", "--fps", "--fps-den", "--video-layout", "--live-overlays", "--text-effects", "--audio-effects", "--exclude-layers", "--preset", "--retime-budget", "--video-shell", "--sway-retime", "--loop-max-seconds", "--trace", "--retain-live", "--device", "--lang", "--daytime-split", "--interaction"],
         "inspect" => ["--assets", "--out"],
         "decode-check" => ["--tools", "--out"],
         "extract" => ["--out"], "bake" => ["--tools", "--out", "--encoder", "--encode-slots", "--group-parallel", "--keep-intermediates", "--effect-render-scale", "--effect-resolution", "--lang"], "render" or "validate" => ["--tools"],
-        "measure-official" or "targets" or "export" => [],
+        "targets" or "export" => [],
         "apply" or "rollback" => ["--wallpaper-engine"],
         "pack-video" or "pack-rgba" => ["--width", "--height", "--out"], _ => [] };
     foreach (var key in options.Keys)
@@ -196,31 +195,6 @@ try
             CustomSettings: PresetCascade.IsCustom(options.Keys), Interaction: interaction,
             LayoutExplicit: options.ContainsKey("--video-layout"));
         var progress = new Progress<RenderProgress>(p => Console.Error.WriteLine(JsonSerializer.Serialize(p, jsonOptions)));
-        // 分析前先实测原作功耗：在官方 Wallpaper Engine 里播原作、等稳定、采样、还原，读数写进 plan 的 source_power，
-        // 结论第一行按实测分档。命令行默认 off（界面默认开），测不了的平台跳过并说明，绝不因此让分析失败。
-        string measureSource = options.GetValueOrDefault("--measure-source", PresetCascade.MeasureSourceByDefault ? "on" : "off");
-        if (measureSource is not ("on" or "off")) throw new ArgumentException("--measure-source must be on or off.");
-        JsonObject? sourcePower = null;
-        if (measureSource == "on")
-        {
-            string wallpaperEngine = options.TryGetValue("--wallpaper-engine", out string? givenExecutable)
-                ? givenExecutable : NativeEnvironment.FindWallpaperExecutable(assets);
-            try
-            {
-                if (!File.Exists(wallpaperEngine))
-                    throw new FileNotFoundException("Wallpaper Engine was not found; pass --wallpaper-engine with its path.");
-                JsonObject sample = await OfficialPerformanceSampler.SampleAsync(
-                    new(1, 0, "source power", SourcePowerVerdict.SampleDirectory(analysisDirectory), Seconds: 30,
-                        TargetFps: frameRate.Fps, PresentMonPath: options.GetValueOrDefault("--present-mon"),
-                        SourceProject: sourcePath, WallpaperEngineExecutable: wallpaperEngine), progress, cancellation.Token);
-                sourcePower = SourcePowerVerdict.FromSample(sample);
-            }
-            catch (Exception error) when (error is not OperationCanceledException)
-            {
-                sourcePower = SourcePowerVerdict.Skipped(error.Message);
-                Console.Error.WriteLine(MessageCatalog.Get(SourcePowerVerdict.Unavailable, language));
-            }
-        }
         JsonObject report;
         int analyzeExitCode = 0;
         try { report = await new HybridScenePlanner(tools).AnalyzeAsync(request, progress, cancellation.Token); }
@@ -264,8 +238,6 @@ try
                 Console.Error.WriteLine($"[daytime-split] state {stateName}: {statePlan["summary"]?[language]?.GetValue<string>() ?? statePlan["summary"]?["en"]?.GetValue<string>()}");
             }
         }
-        // 实测过就把读数挂进 plan，并把"值不值得烘"顶到结论第一行；没测过 plan 逐字不变。
-        if (sourcePower is not null) SourcePowerVerdict.Apply(report, sourcePower);
         string text = JsonSerializer.Serialize(report, jsonOptions);
         if (options.TryGetValue("--out", out var output))
         {
@@ -400,14 +372,6 @@ try
         var progress = new Progress<RenderProgress>(p => Console.Error.WriteLine(JsonSerializer.Serialize(p, jsonOptions)));
         var request = JsonSerializer.Deserialize<ValidationRequest>(text, jsonOptions) ?? throw new InvalidDataException("Invalid validation request.");
         Console.WriteLine((await new CandidateValidation(tools).ValidateAsync(request, progress, cancellation.Token)).ToJsonString(jsonOptions));
-    }
-    else if (args[0] == "measure-official")
-    {
-        var request = JsonSerializer.Deserialize<OfficialPerformanceRequest>(
-            await File.ReadAllTextAsync(args[1], cancellation.Token), jsonOptions)
-            ?? throw new InvalidDataException("Invalid official performance request.");
-        var progress = new Progress<RenderProgress>(p => Console.Error.WriteLine(JsonSerializer.Serialize(p, jsonOptions)));
-        Console.WriteLine((await OfficialPerformanceSampler.SampleAsync(request, progress, cancellation.Token)).ToJsonString(jsonOptions));
     }
     else if (args[0] == "targets")
     {

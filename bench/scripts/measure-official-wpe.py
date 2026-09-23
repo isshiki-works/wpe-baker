@@ -166,7 +166,7 @@ def main():
     output = Path(args.output).resolve()
     if output.exists():
         raise FileExistsError("--output must be a new directory: " + str(output))
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]  # bench/scripts/ → 仓库根
     presentmon = Path(args.presentmon).resolve() if args.presentmon else root / ".tools/presentmon/PresentMon-2.5.1-x64.exe"
     if not presentmon.is_file():
         raise FileNotFoundError("PresentMon executable is missing: " + str(presentmon))

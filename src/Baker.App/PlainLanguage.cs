@@ -64,7 +64,7 @@ internal static class PlainLanguage
     }
 
     /// <summary>
-    /// 结论的依据一句：功耗读数、路线说明或拒绝原因。只进"详情"面板，不进结论前两行。
+    /// 结论的依据一句：路线说明或拒绝原因。只进"详情"面板，不进结论前两行。
     /// </summary>
     public static string Basis(JsonObject? plan, bool english)
     {
@@ -73,10 +73,7 @@ internal static class PlainLanguage
             return L(english, "不可生成：", "Cannot generate: ") + reason;
         if (plan[BakeValueAssessment.Field]?[english ? "reason_en" : "reason_zh"]?.GetValue<string>() is { Length: > 0 } valueReason)
             return valueReason;
-        // 旧报告只有原作读数或静态状态时，保留其事实，不沿用旧的收益推断。
-        if (plan[SourcePowerVerdict.Field] is JsonObject)
-            return L(english, "原作功耗仅代表本机读数；实际收益需对照原作与生成结果。",
-                "Source power describes this device only; actual benefit requires comparing the source and generated result.");
+        // 旧报告只有静态状态时，保留其事实，不沿用旧的收益推断。
         if (StaticResult(plan))
             return L(english, "当前方案输出静态图；收益取决于省去的特效计算、绘制和纹理开销，尚待确认。",
                 "The output is a still image; benefit depends on removed effects, drawing and texture costs and remains unconfirmed.");
@@ -359,9 +356,5 @@ internal static class PlainLanguage
         "setup.tools_config_missing", "setup.tool_file_missing", "setup.runtime_directory_missing",
         "setup.tool_renderer", "setup.tool_ffmpeg", "setup.tool_ffprobe",
         "apply.wallpaper_engine_not_running", "apply.location_missing",
-        // fix/verdict-flow：分析结论第一行与烘完实测那一句，界面与命令行原样显示，一并纳入扫描。
-        SourcePowerVerdict.NotWorth, SourcePowerVerdict.Limited, SourcePowerVerdict.Worth,
-        SourcePowerVerdict.RouteLimited, SourcePowerVerdict.Unavailable,
-        "measured_gain.saved", "measured_gain.same", "measured_gain.worse", "measured_gain.unavailable",
         "summary.static_only_route"];
 }

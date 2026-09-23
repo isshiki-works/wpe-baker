@@ -716,27 +716,6 @@ public static class MessageCatalog
         ["reason.allocation_nothing_left"] = new(
             Zh: "把所有未解析层和粒子层的作者子树都保留实时后，没有内容可以转成视频，缩小分配没有意义。",
             En: "Retaining the author subtrees of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help."),
-        ["reason.power_counters_missing"] = new(
-            Zh: "这台机器没有提供 Energy Meter（RAPL）功耗计数器，这里测不了壁纸功耗。",
-            En: "This machine publishes no Energy Meter (RAPL) power counters, so wallpaper power cannot be measured here."),
-        ["reason.presentmon_no_csv"] = new(
-            Zh: "PresentMon 没有产出 CSV，目标可能没有在呈现画面。",
-            En: "PresentMon produced no CSV; the target may have had no active presentation."),
-        ["reason.presentmon_no_rows"] = new(
-            Zh: "PresentMon 的 CSV 里没有呈现记录。",
-            En: "PresentMon CSV has no presentation rows."),
-        ["reason.presentmon_columns_missing"] = new(
-            Zh: "PresentMon v1 必需的列不全。",
-            En: "Required PresentMon v1 columns are unavailable."),
-        ["reason.presentmon_swapchain_missing"] = new(
-            Zh: "CSV 里没有指定的 SwapChainAddress。",
-            En: "Requested SwapChainAddress was not present in the CSV."),
-        ["reason.presentmon_no_intervals"] = new(
-            Zh: "PresentMon 的 CSV 里没有有效的呈现间隔。",
-            En: "PresentMon CSV contained no valid presentation intervals."),
-        ["reason.presentmon_incomplete"] = new(
-            Zh: "PresentMon 的 CSV 里交换链数据不完整或格式有误。",
-            En: "PresentMon CSV contained incomplete or malformed swap-chain evidence."),
         ["hardware_decode.owner_unreadable"] = new(
             Zh: "读不到缓存所属图层的模型、材质或底图纹理。",
             En: "The cache owner's model, material or base texture could not be read."),
@@ -839,58 +818,6 @@ public static class MessageCatalog
             Zh: "该方案产出单帧静态图；收益取决于省去的特效计算、绘制和纹理开销，需另行确认。",
             En: "This route yields a still image; benefit depends on removed effects, drawing and texture costs and needs separate verification.",
             Legacy: "This way leaves only a still image and saves no power; making the picture in separate layers is what can capture the moving part."),
-
-        // ---- 烘完实测省了多少电（fix/verdict-flow）：判定口径同 abba-heavy-rc11.md，降幅 >=30% 才算省电 ----
-        // {0}=降幅百分比（整数）
-        ["measured_gain.saved"] = new(
-            Zh: "已验证收益：成品核显功耗较原作降低 {0}%。",
-            En: "Measured: output iGPU power {0}% below the original.",
-            Legacy: "Measured and it does save: what was made uses {0}% less than the original."),
-
-        ["measured_gain.same"] = new(
-            Zh: "实测：成品核显功耗与原作持平，无明显降低。",
-            En: "Measured: output iGPU power is level with the original, with no meaningful reduction.",
-            Legacy: "Measured, and it comes out much the same as the original: it saves little."),
-
-        ["measured_gain.worse"] = new(
-            Zh: "实测：成品核显功耗高于原作。",
-            En: "Measured: output iGPU power is above the original.",
-            Legacy: "Measured, and it uses more than the original."),
-
-        ["measured_gain.unavailable"] = new(
-            Zh: "未评估：本机无核显功耗计数器，无法实测功耗降幅。",
-            En: "Not evaluated: no iGPU power counter on this machine; the power reduction cannot be measured.",
-            Legacy: "This machine cannot measure how much power it saves."),
-
-        // 原作采样仅描述本机；旧分档键继续可读，但不继续传播跨设备收益结论。
-        ["source_power.observed"] = new(
-            Zh: "已记录本机原作功耗；这不能单独判断生成收益或其他设备的负载。",
-            En: "Source power recorded on this device; this alone does not establish baking savings or load on other hardware."),
-
-        ["source_power.not_worth"] = new(
-            Zh: "旧报告记录了较低的本机原作功耗；生成收益尚未由此确认。",
-            En: "The older report records low source power on that device; this does not establish the benefit of generation.",
-            Legacy: "Not worth baking: the original barely uses any power."),
-
-        ["source_power.limited"] = new(
-            Zh: "旧报告记录了本机原作功耗；实际功耗降幅仍需原作与生成结果对照。",
-            En: "The older report records local source power; power reduction still requires comparing the source and generated result.",
-            Legacy: "It can be baked, but it will not save much: the original does not use much power to begin with."),
-
-        ["source_power.worth"] = new(
-            Zh: "旧报告记录了较高的本机原作功耗；这不能单独证明生成后功耗会降低。",
-            En: "The older report records high source power on that device; this alone does not prove lower power after generation.",
-            Legacy: "Worth baking: the original really does use power, and recording the whole picture takes that away."),
-
-        ["source_power.route_limited"] = new(
-            Zh: "当前方案保留部分实时计算；功耗降幅仍需原作与生成结果对照。",
-            En: "The current route retains some live work; power reduction still requires comparing the source and generated result.",
-            Legacy: "It can be baked, but this way saves little power; turn the things below off and the whole picture can be recorded instead."),
-
-        ["source_power.unavailable"] = new(
-            Zh: "未评估：本机无核显功耗计数器，无法实测原作功耗。",
-            En: "Not evaluated: no iGPU power counter on this machine; the original's power cannot be measured.",
-            Legacy: "This machine cannot measure what the original uses, so it is up to you whether to bake it."),
 
         // ---- 一行结论 ----
         ["summary.bakeable"] = new(
