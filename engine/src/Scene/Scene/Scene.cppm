@@ -248,6 +248,8 @@ struct SceneRenderTarget {
     // Later graph versions of this RT keep earlier color content. Use this
     // for composition targets, not transient effect outputs.
     bool preserve_on_write { false };
+    // 颜色 RT 用 RGBA16F（HDR 管线，由场景 HdrScale 决定）。
+    bool hdr { false };
 
     i32 PhysicalWidth() const { return physical_width > i32() ? physical_width : width; }
     i32 PhysicalHeight() const { return physical_height > i32() ? physical_height : height; }
@@ -2758,6 +2760,9 @@ public:
     bool SetImageEffectRuntimeVisible(const SceneImageEffectRef& ref, bool visible);
     void EnablePlanarReflection();
     bool PlanarReflectionEnabled() const { return m_planar_reflection_enabled; }
+    // 作业 hdr_scale：>0 时走 HDR 管线（浮点 RT、brightness 生效），捕获前 rgb 除以它。
+    float HdrScale() const { return m_hdr_scale; }
+    void  SetHdrScale(float v) { m_hdr_scale = v; }
     bool ConsumeRenderGraphDirty();
     bool ApplyUserNodeVisibilityBindings(std::string_view key, const NJson& property);
     bool ApplyUserImageEffectVisibilityBindings(std::string_view key, const NJson& property);
@@ -3041,6 +3046,7 @@ private:
     SceneResourceIndex                           m_resource_index;
     bool                                         m_render_graph_dirty { false };
     bool                                         m_planar_reflection_enabled { false };
+    float                                        m_hdr_scale { 0.0f };
     HashMap<i32, String>                         m_render_group_cameras;
     HashMap<String, Vec<String>>                 m_linked_cameras;
     HashMap<i32, SceneNodeId>                    m_layer_link_source_ids;

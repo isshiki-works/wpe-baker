@@ -40,6 +40,7 @@ struct SessionConfig {
     FillMode                                fill_mode { FillMode::ASPECTCROP };
     float                                   speed { 1.0f };
     bool                                    graphviz { false };
+    float                                   hdr_scale { 0.0f }; // >0：HDR 管线，见 Scene::HdrScale
 };
 
 struct OfflineOptions {

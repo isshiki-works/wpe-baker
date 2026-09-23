@@ -357,6 +357,6 @@ void ProcessObjects(SceneParseContext&, mut_ref<SceneObjectVar[]>, owe::media::O
                     ProcessOpts opts = {});
 
 Box<Scene> FinalizeScene(SceneParseContext&);
-void       BuildBloomPostProcess(SceneParseContext&, fs::VFS&, const wpscene::SceneGeneral&);
+void       BuildBloomPostProcess(SceneParseContext&, fs::VFS&, const wpscene::SceneGeneral&, float hdr_scale);
 
 } // namespace owe

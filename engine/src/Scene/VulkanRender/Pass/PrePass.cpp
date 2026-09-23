@@ -141,6 +141,8 @@ void PrePass::prepare(Scene& scene, const Device& device, PassPrepareContext& co
                 *m_desc.render_pass_use,
                 device,
                 RenderPassResourceDesc {
+                    .color_format           = (**target).hdr ? VK_FORMAT_R16G16B16A16_SFLOAT
+                                                             : VK_FORMAT_R8G8B8A8_UNORM,
                     .samples                = m_desc.samples,
                     .color_initial_layout   = VK_IMAGE_LAYOUT_UNDEFINED,
                     .color_final_layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,

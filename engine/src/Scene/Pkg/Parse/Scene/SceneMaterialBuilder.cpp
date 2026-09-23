@@ -368,6 +368,7 @@ auto BuildMaterial(fs::VFS& vfs, ShaderCache& shader_cache,
         shader_info_ref.combos["ALPHATOCOVERAGE"] = "1";
     }
     ApplySceneFogCombos(environment, shader_info_ref);
+    if (scene.HdrScale() > 0.0f) shader_info_ref.combos["HDR"] = "1";
     ApplyLegacyAtmosphereLightCombo(wpmat, shader_info_ref);
 
     auto textures = wpmat.textures;

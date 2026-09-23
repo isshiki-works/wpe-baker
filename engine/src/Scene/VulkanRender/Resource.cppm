@@ -170,7 +170,8 @@ inline TextureDefinition RenderTargetTextureDefinition(owe::SceneRenderTarget rt
         .height     = rt.PhysicalHeight(),
         .usage      = depth_sampled ? TextureUsage::DepthAttachment | TextureUsage::Sampled
                                     : TextureUsage::Color,
-        .format     = depth_sampled ? owe::TextureFormat::D32F : owe::TextureFormat::RGBA8,
+        .format     = depth_sampled ? owe::TextureFormat::D32F
+                    : rt.hdr ? owe::TextureFormat::RGBA16F : owe::TextureFormat::RGBA8,
         .sample     = rt.sample,
         .mip_levels = u32(rt.mipmap_level),
     };
@@ -183,7 +184,8 @@ inline TextureDefinition RenderTargetTextureDefinitionNoMip(owe::SceneRenderTarg
         .height = rt.PhysicalHeight(),
         .usage  = depth_sampled ? TextureUsage::DepthAttachment | TextureUsage::Sampled
                                 : TextureUsage::Color,
-        .format = depth_sampled ? owe::TextureFormat::D32F : owe::TextureFormat::RGBA8,
+        .format = depth_sampled ? owe::TextureFormat::D32F
+                    : rt.hdr ? owe::TextureFormat::RGBA16F : owe::TextureFormat::RGBA8,
         .sample = rt.sample,
     };
 }

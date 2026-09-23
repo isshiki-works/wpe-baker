@@ -39,6 +39,7 @@ struct SceneParseOptions {
     Option<rstd::path::PathBuf> shader_cache_dir;
     SceneParseCapabilities      capabilities;
     Services*                   services { nullptr }; // 离线作业的服务；空 = 不在离线作业里
+    float                       hdr_scale { 0.0f };   // 作业 hdr_scale；0 = 现有 LDR 管线
 };
 
 struct ParsedScene {

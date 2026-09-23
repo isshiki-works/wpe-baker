@@ -29,6 +29,14 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
         });
     }
 
+    // 官方只在场景 hdr 且 bloom 开时走 HDR 管线；缩放通道挂在 bloom 链末尾。
+    if (options.hdr_scale > 0.0f && ! (metadata.general.hdr && metadata.general.bloom)) {
+        return Err(SceneParseError {
+            .kind    = SceneParseErrorKind::Document,
+            .message = String::make("hdr_scale requires scene general.hdr and general.bloom"_str),
+        });
+    }
+
     auto expanded = [&] {
         return ExpandSceneObjects(document, vfs, options.user_properties);
     }();
@@ -63,6 +71,7 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
                      },
                      options.capabilities.directional_shadow && has_directional_shadow_light &&
                          has_directional_shadow_caster);
+    context.scene->SetHdrScale(options.hdr_scale);
     auto runtime_input             = Arc<UniformRuntimeInput>::make(context.uniform_state.clone());
     context.hidden_link_source_ids = rstd::move(expanded.hidden_link_source_ids);
     context.linked_source_ids      = rstd::move(expanded.linked_source_ids);
@@ -74,7 +83,7 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
             context, objects.as_mut_slice().as_mut_ref(), &sound_owner, {});
     }
     {
-        if (metadata.general.bloom) BuildBloomPostProcess(context, vfs_owner, metadata.general);
+        if (metadata.general.bloom) BuildBloomPostProcess(context, vfs_owner, metadata.general, options.hdr_scale);
     }
 
     const bool retain_context = context.script_scene.is_some();
