@@ -138,10 +138,10 @@ struct PassRecordContext {
 };
 
 struct PassUpdateContext {
-    rstd::mut_ref<rstd::dyn<resource::BufferContentWriter>>               buffers;
+    resource::BufferContentWriter*               buffers;
     rstd::ref<PreparedPassResources>                                      resources;
     resource_registry::GraphicsResourcePreparer*                          graphics;
-    rstd::ref<rstd::dyn<SceneTextureAnimationView>>                       textures;
+    const SceneTextureAnimationView*                       textures;
 };
 
 struct PassPrepareContext {
@@ -300,10 +300,10 @@ public:
         -> Result<Vec<GlobalDescriptorBufferUse>, resource::ResourceError> {
         return Ok(Vec<GlobalDescriptorBufferUse>::make());
     }
-    virtual auto createUniformBufferUpdates(ref<dyn<UniformBindingPrepareContext>>,
+    virtual auto createUniformBufferUpdates(const UniformBindingPrepareContext*,
                                             const PreparedPassResources&)
-        -> Result<Vec<Box<dyn<UniformBufferUpdate>>>, UniformBufferUpdateError> {
-        return Ok(Vec<Box<dyn<UniformBufferUpdate>>>::make());
+        -> Result<Vec<std::unique_ptr<UniformBufferUpdate>>, UniformBufferUpdateError> {
+        return Ok(Vec<std::unique_ptr<UniformBufferUpdate>>::make());
     }
     virtual bool
     prepareResourceStates(resource_registry::TextureStatePreparer*) {

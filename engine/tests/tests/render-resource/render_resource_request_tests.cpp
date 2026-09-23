@@ -41,10 +41,10 @@ struct StaticSourceState {
     rstd::u64 version { 1 };
 };
 
-class BufferWriter {
+class BufferWriter final : public owe::resource::BufferContentWriter {
 public:
     auto UpdateBuffer(owe::resource::BufferUseHandle use, rstd::slice<rstd::u8> content)
-        -> rstd::Result<rstd::empty, owe::resource::ResourceError> {
+        -> rstd::Result<rstd::empty, owe::resource::ResourceError> override {
         last_use = use;
         ++update_count;
         bytes.clear();
@@ -509,17 +509,17 @@ TEST(UniformBufferBinding, UpdatesGenericSceneThroughBufferWriterTrait) {
     const auto buffer =
         owe::resource::BufferUseHandle { .index = rstd::u64(3), .generation = rstd::u64(1) };
     owe::vulkan::SceneUniformBindingPrepareContext prepare_impl(scene);
-    auto prepare = rstd::dyn<owe::vulkan::UniformBindingPrepareContext>::from_ref(prepare_impl);
-    auto binding = owe::vulkan::MakeUniformBufferBinding(prepare.as_ref(), *draw_id, buffer, block);
+    const owe::vulkan::UniformBindingPrepareContext* prepare = &prepare_impl;
+    auto binding = owe::vulkan::MakeUniformBufferBinding(prepare, *draw_id, buffer, block);
     ASSERT_TRUE(binding.is_ok());
 
     uniform_test::BufferWriter writer;
-    auto writer_trait   = rstd::dyn<owe::resource::BufferContentWriter>::from_ref(writer);
-    auto texture_frames = rstd::dyn<owe::SceneTextureAnimationView>::from_ref(scene);
+    owe::resource::BufferContentWriter* writer_trait   = &writer;
+    const owe::SceneTextureAnimationView* texture_frames = &scene;
     owe::vulkan::ProgramUniformFrameContext frame_impl(
-        scene.Runtime().Frame(), { 1920.0f, 1080.0f }, texture_frames.as_ref());
-    auto frame   = rstd::dyn<owe::vulkan::UniformBufferFrameContext>::from_ref(frame_impl);
-    auto updated = binding.unwrap_unchecked()->Update(frame.as_ref(), writer_trait.as_mut_ref());
+        scene.Runtime().Frame(), { 1920.0f, 1080.0f }, texture_frames);
+    const owe::vulkan::UniformBufferFrameContext* frame   = &frame_impl;
+    auto updated = binding.unwrap_unchecked()->Update(frame, writer_trait);
 
     ASSERT_TRUE(updated.is_ok());
     EXPECT_EQ(writer.last_use, buffer);
@@ -554,7 +554,7 @@ TEST(UniformBufferBinding, HoldsDemandOnlyForAReflectedLiveOutput) {
     auto draw_id = scene.ResourceIndex().drawItemFor(*node_id, rstd::u32());
     ASSERT_TRUE(draw_id.is_some());
     owe::vulkan::SceneUniformBindingPrepareContext prepare_impl(scene);
-    auto prepare = rstd::dyn<owe::vulkan::UniformBindingPrepareContext>::from_ref(prepare_impl);
+    const owe::vulkan::UniformBindingPrepareContext* prepare = &prepare_impl;
 
     auto make_block = [](std::string_view name) {
         auto members = rstd::vec::Vec<owe::resource::ShaderArtifactUniformMember>::make();
@@ -572,7 +572,7 @@ TEST(UniformBufferBinding, HoldsDemandOnlyForAReflectedLiveOutput) {
 
     {
         auto unbound = owe::vulkan::MakeUniformBufferBinding(
-            prepare.as_ref(),
+            prepare,
             *draw_id,
             owe::resource::BufferUseHandle { .index = rstd::u64(1), .generation = rstd::u64(1) },
             make_block("unrelated"));
@@ -581,7 +581,7 @@ TEST(UniformBufferBinding, HoldsDemandOnlyForAReflectedLiveOutput) {
     }
     {
         auto bound = owe::vulkan::MakeUniformBufferBinding(
-            prepare.as_ref(),
+            prepare,
             *draw_id,
             owe::resource::BufferUseHandle { .index = rstd::u64(2), .generation = rstd::u64(1) },
             make_block("audio_signal"));
@@ -628,9 +628,9 @@ TEST(UniformBufferBinding, ProvidesPreparedTextureMetadataToGenericSource) {
         .revision      = rstd::u64(4),
     });
     owe::vulkan::SceneUniformBindingPrepareContext prepare_impl(scene);
-    auto prepare = rstd::dyn<owe::vulkan::UniformBindingPrepareContext>::from_ref(prepare_impl);
+    const owe::vulkan::UniformBindingPrepareContext* prepare = &prepare_impl;
     auto binding = owe::vulkan::MakeUniformBufferBinding(
-        prepare.as_ref(),
+        prepare,
         *draw_id,
         owe::resource::BufferUseHandle { .index = rstd::u64(3), .generation = rstd::u64(1) },
         block,
@@ -638,13 +638,13 @@ TEST(UniformBufferBinding, ProvidesPreparedTextureMetadataToGenericSource) {
     ASSERT_TRUE(binding.is_ok());
 
     uniform_test::BufferWriter writer;
-    auto writer_trait   = rstd::dyn<owe::resource::BufferContentWriter>::from_ref(writer);
-    auto texture_frames = rstd::dyn<owe::SceneTextureAnimationView>::from_ref(scene);
+    owe::resource::BufferContentWriter* writer_trait   = &writer;
+    const owe::SceneTextureAnimationView* texture_frames = &scene;
     owe::vulkan::ProgramUniformFrameContext frame_impl(
-        scene.Runtime().Frame(), { 1920.0f, 1080.0f }, texture_frames.as_ref());
-    auto frame = rstd::dyn<owe::vulkan::UniformBufferFrameContext>::from_ref(frame_impl);
+        scene.Runtime().Frame(), { 1920.0f, 1080.0f }, texture_frames);
+    const owe::vulkan::UniformBufferFrameContext* frame = &frame_impl;
     ASSERT_TRUE(
-        binding.unwrap_unchecked()->Update(frame.as_ref(), writer_trait.as_mut_ref()).is_ok());
+        binding.unwrap_unchecked()->Update(frame, writer_trait).is_ok());
 
     ASSERT_EQ(writer.bytes.size(), 16u);
     std::array<float, 4> values {};
@@ -694,28 +694,28 @@ TEST(UniformBufferBinding, OrdersSourcesAndSkipsUnchangedVersions) {
         .members = rstd::move(members),
     };
     owe::vulkan::SceneUniformBindingPrepareContext prepare_impl(scene);
-    auto prepare = rstd::dyn<owe::vulkan::UniformBindingPrepareContext>::from_ref(prepare_impl);
+    const owe::vulkan::UniformBindingPrepareContext* prepare = &prepare_impl;
     auto binding = owe::vulkan::MakeUniformBufferBinding(
-        prepare.as_ref(),
+        prepare,
         *draw_id,
         owe::resource::BufferUseHandle { .index = rstd::u64(3), .generation = rstd::u64(1) },
         block);
     ASSERT_TRUE(binding.is_ok());
 
     uniform_test::BufferWriter writer;
-    auto writer_trait   = rstd::dyn<owe::resource::BufferContentWriter>::from_ref(writer);
+    owe::resource::BufferContentWriter* writer_trait   = &writer;
     auto update         = binding.unwrap_unchecked();
-    auto texture_frames = rstd::dyn<owe::SceneTextureAnimationView>::from_ref(scene);
+    const owe::SceneTextureAnimationView* texture_frames = &scene;
     owe::vulkan::ProgramUniformFrameContext frame_impl(
-        scene.Runtime().Frame(), { 1920.0f, 1080.0f }, texture_frames.as_ref());
-    auto frame = rstd::dyn<owe::vulkan::UniformBufferFrameContext>::from_ref(frame_impl);
-    ASSERT_TRUE(update->Update(frame.as_ref(), writer_trait.as_mut_ref()).is_ok());
-    ASSERT_TRUE(update->Update(frame.as_ref(), writer_trait.as_mut_ref()).is_ok());
+        scene.Runtime().Frame(), { 1920.0f, 1080.0f }, texture_frames);
+    const owe::vulkan::UniformBufferFrameContext* frame = &frame_impl;
+    ASSERT_TRUE(update->Update(frame, writer_trait).is_ok());
+    ASSERT_TRUE(update->Update(frame, writer_trait).is_ok());
 
     EXPECT_EQ(writer.update_count, rstd::u64(1));
     low_state->value = 5.0f;
     ++low_state->version;
-    ASSERT_TRUE(update->Update(frame.as_ref(), writer_trait.as_mut_ref()).is_ok());
+    ASSERT_TRUE(update->Update(frame, writer_trait).is_ok());
 
     EXPECT_EQ(writer.update_count, rstd::u64(2));
     ASSERT_EQ(writer.bytes.size(), 4u);
@@ -758,9 +758,9 @@ TEST(UniformBufferBinding, UpdatesRegisteredSharedBlockOncePerVersion) {
     const auto buffer =
         owe::resource::BufferUseHandle { .index = rstd::u64(8), .generation = rstd::u64(1) };
     owe::vulkan::SceneUniformBindingPrepareContext prepare_impl(scene);
-    auto prepare = rstd::dyn<owe::vulkan::UniformBindingPrepareContext>::from_ref(prepare_impl);
+    const owe::vulkan::UniformBindingPrepareContext* prepare = &prepare_impl;
     auto update =
-        owe::vulkan::MakeSharedUniformBufferBinding(prepare.as_ref(),
+        owe::vulkan::MakeSharedUniformBufferBinding(prepare,
                                                     buffer,
                                                     block,
                                                     owe::ShaderMatrixConvention::ColumnVector,
@@ -768,14 +768,14 @@ TEST(UniformBufferBinding, UpdatesRegisteredSharedBlockOncePerVersion) {
     ASSERT_TRUE(update.is_ok());
 
     uniform_test::BufferWriter writer;
-    auto writer_trait   = rstd::dyn<owe::resource::BufferContentWriter>::from_ref(writer);
-    auto texture_frames = rstd::dyn<owe::SceneTextureAnimationView>::from_ref(scene);
+    owe::resource::BufferContentWriter* writer_trait   = &writer;
+    const owe::SceneTextureAnimationView* texture_frames = &scene;
     owe::vulkan::ProgramUniformFrameContext frame_impl(
-        scene.Runtime().Frame(), { 1.0f, 1.0f }, texture_frames.as_ref());
-    auto frame = rstd::dyn<owe::vulkan::UniformBufferFrameContext>::from_ref(frame_impl);
+        scene.Runtime().Frame(), { 1.0f, 1.0f }, texture_frames);
+    const owe::vulkan::UniformBufferFrameContext* frame = &frame_impl;
     auto owner = rstd::move(update).unwrap_unchecked();
-    ASSERT_TRUE(owner->Update(frame.as_ref(), writer_trait.as_mut_ref()).is_ok());
-    ASSERT_TRUE(owner->Update(frame.as_ref(), writer_trait.as_mut_ref()).is_ok());
+    ASSERT_TRUE(owner->Update(frame, writer_trait).is_ok());
+    ASSERT_TRUE(owner->Update(frame, writer_trait).is_ok());
     EXPECT_EQ(owner->Buffer(), buffer);
     EXPECT_EQ(writer.update_count, rstd::u64(1));
     ASSERT_EQ(writer.bytes.size(), 4u);

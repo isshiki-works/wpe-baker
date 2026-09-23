@@ -96,7 +96,7 @@ struct ExternalResourcePreparer {
     using Funcs = TraitFuncs<&T::PrepareExternal>;
 };
 
-class RenderResourceSystem final : public GraphicsResourcePreparer {
+class RenderResourceSystem final : public GraphicsResourcePreparer, public resource::BufferContentWriter {
 public:
     bool Initialize(const vulkan::Device& device) { return m_registries.Initialize(device); }
 
@@ -430,7 +430,7 @@ public:
     }
 
     auto UpdateBuffer(resource::BufferUseHandle use, slice<u8> content)
-        -> Result<empty, resource::ResourceError> {
+        -> Result<empty, resource::ResourceError> override {
         auto prepared = m_prepared.Resolve(use);
         if (prepared.is_none()) {
             return Err(resource::ResourceError {
@@ -605,13 +605,5 @@ struct Impl<owe::resource_registry::ExternalResourcePreparer,
     }
 };
 
-template<>
-struct Impl<owe::resource::BufferContentWriter, owe::resource_registry::RenderResourceSystem>
-    : ImplBase<owe::resource_registry::RenderResourceSystem> {
-    auto UpdateBuffer(owe::resource::BufferUseHandle use, slice<u8> content)
-        -> Result<empty, owe::resource::ResourceError> {
-        return this->self().UpdateBuffer(use, content);
-    }
-};
 
 } // namespace rstd

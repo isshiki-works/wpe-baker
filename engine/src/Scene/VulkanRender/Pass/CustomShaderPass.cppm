@@ -106,9 +106,9 @@ public:
         -> Result<Option<PipelineLayoutRequirement>, resource::ResourceError> override;
     auto globalDescriptorBufferUses(const PreparedPassResources&) const
         -> Result<Vec<GlobalDescriptorBufferUse>, resource::ResourceError> override;
-    auto createUniformBufferUpdates(ref<dyn<UniformBindingPrepareContext>>,
+    auto createUniformBufferUpdates(const UniformBindingPrepareContext*,
                                     const PreparedPassResources&)
-        -> Result<Vec<Box<dyn<UniformBufferUpdate>>>, UniformBufferUpdateError> override;
+        -> Result<Vec<std::unique_ptr<UniformBufferUpdate>>, UniformBufferUpdateError> override;
     bool prepareResourceStates(
         resource_registry::TextureStatePreparer*) override;
     Option<RenderItemId>                      renderItemId() const override;

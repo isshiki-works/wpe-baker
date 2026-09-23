@@ -1411,8 +1411,8 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
                                      m_device->capabilities(), queue_family)) {
         return fail(VK_ERROR_INITIALIZATION_FAILED, "prepare CPU output image");
     }
-    auto texture_frames = rstd::dyn<SceneTextureAnimationView>::from_ref(scene);
-    if (! m_program.update(scene.Runtime().Frame(), extent, texture_frames.as_ref(), rr)) {
+    const SceneTextureAnimationView* texture_frames = &scene;
+    if (! m_program.update(scene.Runtime().Frame(), extent, texture_frames, rr)) {
         return fail(VK_ERROR_INITIALIZATION_FAILED, "update render program");
     }
     auto result = rr.command.Reset();
@@ -1723,9 +1723,9 @@ void VulkanRender::Impl::drawFrameSwapchain(Scene& scene) {
         return;
     }
     if (! waitForPreparedUploads(rr)) return;
-    auto texture_frames = rstd::dyn<SceneTextureAnimationView>::from_ref(scene);
+    const SceneTextureAnimationView* texture_frames = &scene;
     if (! m_program.update(
-            scene.Runtime().Frame(), m_device->out_extent(), texture_frames.as_ref(), rr))
+            scene.Runtime().Frame(), m_device->out_extent(), texture_frames, rr))
         return;
 
     (void)rr.command.Begin(VkCommandBufferBeginInfo {
@@ -1842,9 +1842,9 @@ void VulkanRender::Impl::drawFrameOffscreen(Scene& scene) {
         return;
     }
     if (! waitForPreparedUploads(rr)) return;
-    auto texture_frames = rstd::dyn<SceneTextureAnimationView>::from_ref(scene);
+    const SceneTextureAnimationView* texture_frames = &scene;
     if (! m_program.update(
-            scene.Runtime().Frame(), m_device->out_extent(), texture_frames.as_ref(), rr))
+            scene.Runtime().Frame(), m_device->out_extent(), texture_frames, rr))
         return;
 
     (void)rr.command.Begin(VkCommandBufferBeginInfo {

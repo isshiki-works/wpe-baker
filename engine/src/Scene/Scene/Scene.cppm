@@ -2315,22 +2315,12 @@ struct SceneTextureFrameView {
     u64                   revision { 1 };
 };
 
+// 按绘制项与纹理槽查询当前纹理动画帧。
 struct SceneTextureAnimationView {
-    using Trait                  = SceneTextureAnimationView;
-    static constexpr bool direct = false;
+    virtual ~SceneTextureAnimationView() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = SceneTextureAnimationView;
-
-        auto TextureFrame(SceneDrawItemId draw, usize texture_index) const
-            -> Option<SceneTextureFrameView> {
-            return rstd::trait_call<0>(this, draw, texture_index);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::TextureFrame>;
+    virtual auto TextureFrame(SceneDrawItemId draw, usize texture_index) const
+        -> Option<SceneTextureFrameView> = 0;
 };
 
 class SceneTextureAnimationRegistry : NoCopy, NoMove {
@@ -2686,7 +2676,11 @@ struct SceneExtensionHolder final : SceneExtensionSlot {
     Box<T> value;
 };
 
-class Scene : NoCopy, NoMove, public UniformSourceRegistrar, public UniformAttachmentWriter {
+class Scene : NoCopy,
+              NoMove,
+              public UniformSourceRegistrar,
+              public UniformAttachmentWriter,
+              public SceneTextureAnimationView {
 public:
     Scene();
     ~Scene();
@@ -2903,7 +2897,7 @@ public:
     SceneRuntime&       Runtime() noexcept { return m_runtime; }
     const SceneRuntime& Runtime() const noexcept { return m_runtime; }
     auto                TextureFrame(SceneDrawItemId draw, usize texture_index) const
-        -> Option<SceneTextureFrameView> {
+        -> Option<SceneTextureFrameView> override {
         return m_texture_animations.Frame(draw, texture_index);
     }
 

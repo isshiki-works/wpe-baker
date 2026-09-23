@@ -577,10 +577,10 @@ CustomShaderPass::refreshMaterialTextureBindings(const RenderSceneSnapshot& rend
     return result;
 }
 
-auto CustomShaderPass::createUniformBufferUpdates(ref<dyn<UniformBindingPrepareContext>> prepare,
+auto CustomShaderPass::createUniformBufferUpdates(const UniformBindingPrepareContext* prepare,
                                                   const PreparedPassResources&           resources)
-    -> Result<Vec<Box<dyn<UniformBufferUpdate>>>, UniformBufferUpdateError> {
-    auto updates = Vec<Box<dyn<UniformBufferUpdate>>>::make();
+    -> Result<Vec<std::unique_ptr<UniformBufferUpdate>>, UniformBufferUpdateError> {
+    auto updates = Vec<std::unique_ptr<UniformBufferUpdate>>::make();
     if (m_desc.uniform_block_uses.is_empty() || m_desc.shader_use.is_none()) {
         return Ok(rstd::move(updates));
     }

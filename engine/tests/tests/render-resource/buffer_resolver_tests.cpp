@@ -8,10 +8,10 @@ import wescene.vulkan_render;
 namespace
 {
 
-class BufferWriter {
+class BufferWriter final : public owe::resource::BufferContentWriter {
 public:
     auto UpdateBuffer(owe::resource::BufferUseHandle, rstd::slice<rstd::u8>)
-        -> rstd::Result<rstd::empty, owe::resource::ResourceError> {
+        -> rstd::Result<rstd::empty, owe::resource::ResourceError> override {
         ++update_count;
         return rstd::Ok(rstd::empty {});
     }
@@ -166,12 +166,12 @@ TEST(DynamicDrawBuffer, UpdatesEveryViewBeforeDirtyDataIsConsumed) {
         .submesh_index = rstd::u32(),
     };
     BufferWriter writer;
-    auto         writer_trait = rstd::dyn<owe::resource::BufferContentWriter>::from_ref(writer);
+    owe::resource::BufferContentWriter*         writer_trait = &writer;
 
     EXPECT_TRUE(owe::vulkan::RenderBufferResolver::updateDynamicDrawBuffers(
-        request, reflection_buffers, writer_trait.as_mut_ref()));
+        request, reflection_buffers, writer_trait));
     EXPECT_TRUE(owe::vulkan::RenderBufferResolver::updateDynamicDrawBuffers(
-        request, primary_buffers, writer_trait.as_mut_ref()));
+        request, primary_buffers, writer_trait));
     EXPECT_EQ(reflection_buffers.draw_count, rstd::u32(2));
     EXPECT_EQ(primary_buffers.draw_count, rstd::u32(2));
     EXPECT_EQ(writer.update_count, rstd::u32(4));

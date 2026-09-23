@@ -1,4 +1,5 @@
 module;
+#include <new>
 
 #include <rstd/macro.hpp>
 
@@ -217,7 +218,7 @@ private:
 
 class ResourceSnapshot final : public UniformResourceView {
 public:
-    ResourceSnapshot(ref<dyn<UniformBufferFrameContext>> frame, SceneDrawItemId draw,
+    ResourceSnapshot(const UniformBufferFrameContext* frame, SceneDrawItemId draw,
                      slice<PreparedUniformTextureMetadata> textures)
         : m_frame(frame), m_draw(draw), m_textures(textures) {}
 
@@ -256,7 +257,7 @@ public:
     }
 
 private:
-    mutable ref<dyn<UniformBufferFrameContext>> m_frame;
+    const UniformBufferFrameContext* m_frame;
     SceneDrawItemId                             m_draw;
     slice<PreparedUniformTextureMetadata>       m_textures;
 };
@@ -589,8 +590,8 @@ auto UniformBufferBinding::WriteName(std::string_view name, const UniformValue& 
     return Ok(false);
 }
 
-auto UniformBufferBinding::Update(ref<dyn<UniformBufferFrameContext>>         frame_context,
-                                  mut_ref<dyn<resource::BufferContentWriter>> buffers) const
+auto UniformBufferBinding::Update(const UniformBufferFrameContext*         frame_context,
+                                  resource::BufferContentWriter* buffers) const
     -> Result<empty, UniformBufferUpdateError> {
     auto&      material = *m_material;
     const bool force    = ! m_uploaded || m_material_version != material.customShader.value_version;
@@ -672,8 +673,8 @@ auto SharedUniformBufferBinding::WriteSlot(usize slot_index, UniformValueView va
     return Ok(true);
 }
 
-auto SharedUniformBufferBinding::Update(ref<dyn<UniformBufferFrameContext>>         frame_context,
-                                        mut_ref<dyn<resource::BufferContentWriter>> buffers) const
+auto SharedUniformBufferBinding::Update(const UniformBufferFrameContext*         frame_context,
+                                        resource::BufferContentWriter* buffers) const
     -> Result<empty, UniformBufferUpdateError> {
     detail::EmptyResourceView resources_impl;
     detail::UpdateContext     context_impl(
@@ -713,12 +714,12 @@ auto SharedUniformBufferBinding::Update(ref<dyn<UniformBufferFrameContext>>     
     return Ok(empty {});
 }
 
-auto MakeSharedUniformBufferBinding(ref<dyn<UniformBindingPrepareContext>>      prepare,
+auto MakeSharedUniformBufferBinding(const UniformBindingPrepareContext*      prepare,
                                     resource::BufferUseHandle                   buffer,
                                     const resource::ShaderArtifactUniformBlock& block,
                                     ShaderMatrixConvention                      matrix_convention,
                                     ShaderMatrixAbi                             matrix_abi)
-    -> Result<Box<dyn<UniformBufferUpdate>>, UniformBufferUpdateError> {
+    -> Result<std::unique_ptr<UniformBufferUpdate>, UniformBufferUpdateError> {
     auto definition = prepare->ResolveBlock(block.identity);
     if (definition.is_none() || (**definition).scope != UniformBlockScope::Shared) {
         return Err(UniformBufferUpdateError {
@@ -754,17 +755,18 @@ auto MakeSharedUniformBufferBinding(ref<dyn<UniformBindingPrepareContext>>      
     }
     SharedUniformBufferBinding binding(
         buffer, rstd::move(layout), rstd::move(sources), matrix_convention, matrix_abi);
-    return Ok(Box<dyn<UniformBufferUpdate>>::make(rstd::move(binding)));
+    return Ok(std::unique_ptr<UniformBufferUpdate>(
+        std::make_unique<SharedUniformBufferBinding>(rstd::move(binding))));
 }
 
-auto MakeUniformBufferBinding(ref<dyn<UniformBindingPrepareContext>> prepare,
+auto MakeUniformBufferBinding(const UniformBindingPrepareContext* prepare,
                               SceneDrawItemId draw_item, resource::BufferUseHandle buffer,
                               const resource::ShaderArtifactUniformBlock& block,
                               Vec<PreparedUniformTextureMetadata>         textures,
                               SceneRenderViewKind                         render_view,
                               ShaderMatrixConvention matrix_convention, ShaderMatrixAbi matrix_abi,
                               Option<ref<SceneMaterial>> material_override)
-    -> Result<Box<dyn<UniformBufferUpdate>>, UniformBufferUpdateError> {
+    -> Result<std::unique_ptr<UniformBufferUpdate>, UniformBufferUpdateError> {
     auto draw = prepare->ResolveDraw(draw_item);
     if (draw.is_none()) {
         return Err(UniformBufferUpdateError {
@@ -867,7 +869,8 @@ auto MakeUniformBufferBinding(ref<dyn<UniformBindingPrepareContext>> prepare,
                                  render_view,
                                  matrix_convention,
                                  matrix_abi);
-    return Ok(Box<dyn<UniformBufferUpdate>>::make(rstd::move(binding)));
+    return Ok(std::unique_ptr<UniformBufferUpdate>(
+        std::make_unique<UniformBufferBinding>(rstd::move(binding))));
 }
 
 } // namespace owe::vulkan

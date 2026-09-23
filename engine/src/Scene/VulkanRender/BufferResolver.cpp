@@ -129,7 +129,7 @@ Option<DrawBufferRefs> RenderBufferResolver::prepareDrawBuffers(const DrawBuffer
 
 bool RenderBufferResolver::updateDynamicDrawBuffers(
     const DrawBufferRequest& request, DrawBufferRefs& buffers,
-    rstd::mut_ref<rstd::dyn<resource::BufferContentWriter>> writer) {
+    resource::BufferContentWriter* writer) {
     if (! buffers.dynamic) return true;
     if (request.mesh == nullptr) return false;
     SceneMesh&        mesh                 = *request.mesh;
