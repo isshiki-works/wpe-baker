@@ -1,6 +1,4 @@
-using System.Text.Json.Nodes;
-
-namespace Baker.Core;
+namespace Periodica.Domain;
 
 /// <summary>
 /// 槽位常满（maxcount 封顶）且寿命确定的粒子系统：按渲染器（engine ce30024）的离散推进逐帧复刻"死一个补一个"的计数动力学，
@@ -34,9 +32,12 @@ internal static class ParticleCappedReplacement
 
     /// <summary>
     /// 推导结果。PeriodFrames / CycleStartFrame 成立时 FailureCode 为 null；否则 FailureCode 是稳定代号。
-    /// Evidence 是写进判据快照的取证（周期帧数、起点、模拟步数等）。
+    /// 其余字段是写进判据快照的取证，推到哪一步就有哪几个：子系统步长与 float 寿命总有；周期超上限时有上限帧数；
+    /// 数出寿命帧数 N 之后有 N 与 starttime 预跑步数；最后是模拟步数。Baker.Core 的 ParticleStationarity 按这个顺序写成 JSON。
     /// </summary>
-    internal sealed record Outcome(ulong? PeriodFrames, ulong? CycleStartFrame, string? FailureCode, JsonObject Evidence);
+    internal sealed record Outcome(ulong? PeriodFrames, ulong? CycleStartFrame, string? FailureCode,
+        double SubsystemStepSeconds, float AuthoredLifetime, ulong? MaximumPeriodFrames = null, ulong? ReplacementFrames = null,
+        ulong? StartTimePrerunSteps = null, long? SimulatedSteps = null);
 
     /// <summary>找周期态起点时最多看多少个周期：一般一到两代就进入，看到 16 代仍不回归就判算不准。</summary>
     internal const int CycleStartSearchPeriods = 16;
@@ -45,15 +46,12 @@ internal static class ParticleCappedReplacement
     {
         ArgumentNullException.ThrowIfNull(input);
         if (input.FpsNumerator == 0 || input.FpsDenominator == 0) throw new ArgumentException("帧率必须是正的有理数。", nameof(input));
-        var evidence = new JsonObject();
         double dt = (double)input.FpsDenominator / input.FpsNumerator;
         double delta = dt * input.RateScale;
-        evidence["subsystem_step_seconds"] = delta;
-        evidence["authored_lifetime_float"] = input.Lifetime;
         if (!(delta > 0) || !double.IsFinite(delta) || input.MaxCount == 0 || input.Emitters.Count == 0 ||
             input.Emitters.Any(emitter => !(emitter.Speed > 0) || !float.IsFinite(emitter.Speed)) || !float.IsFinite(input.Lifetime) ||
             !(input.StartTime >= 0) || !float.IsFinite(input.StartTime))
-            return new(null, null, "lifetime_capped_parameters_unverified", evidence);
+            return new(null, null, "lifetime_capped_parameters_unverified", delta, input.Lifetime);
 
         // 一个主步出生的粒子在第 N 次 lifecycle 减到 ≤ 0 被杀。
         ulong period = 0;
@@ -63,12 +61,8 @@ internal static class ParticleCappedReplacement
             remaining = (float)(remaining - delta);
             ++period;
             if (period > maximumPeriodFrames)
-            {
-                evidence["maximum_period_frames"] = maximumPeriodFrames;
-                return new(null, null, "lifetime_capped_period_exceeds_ceiling", evidence);
-            }
+                return new(null, null, "lifetime_capped_period_exceeds_ceiling", delta, input.Lifetime, maximumPeriodFrames);
         } while (remaining > 0f);
-        evidence["period_frames"] = period;
 
         int n = checked((int)period);
         int emitterCount = input.Emitters.Count;
@@ -125,7 +119,6 @@ internal static class ParticleCappedReplacement
                 if (born > 0) warmupCohorts.Add((input.Lifetime, born));
             }
         }
-        evidence["starttime_prerun_steps"] = warmupSteps;
 
         // 主步：ring[k mod N] 是出生于第 k − N 步的批次，第 k 步 lifecycle 杀掉它、emit 后写入本步出生数。
         var ring = new long[n];
@@ -156,13 +149,8 @@ internal static class ParticleCappedReplacement
             }
             long cycleStart = step - n;
             if (run >= n && timersMatch && lastWarmupDeath >= 0 && cycleStart >= lastWarmupDeath)
-            {
-                evidence["cycle_start_frame"] = cycleStart;
-                evidence["simulated_steps"] = step;
-                return new(period, (ulong)cycleStart, null, evidence);
-            }
+                return new(period, (ulong)cycleStart, null, delta, input.Lifetime, null, period, warmupSteps, step);
         }
-        evidence["simulated_steps"] = limit;
-        return new(null, null, "lifetime_capped_cycle_not_reached", evidence);
+        return new(null, null, "lifetime_capped_cycle_not_reached", delta, input.Lifetime, null, period, warmupSteps, limit);
     }
 }

@@ -12,6 +12,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
   </ItemGroup>
   <ItemGroup><ProjectReference Include="../../src/Baker.Core/Baker.Core.csproj" /></ItemGroup>
+  <ItemGroup><Using Include="Periodica.Domain" /></ItemGroup>
   <ItemGroup><Compile Include="../../src/Baker.App/AppJsonPresentation.cs" Link="AppJsonPresentation.cs" />
     <Compile Include="../../src/Baker.App/PlainLanguage.cs" Link="PlainLanguage.cs" />
     <Compile Include="../../src/Baker.App/ProgressPresentation.cs" Link="ProgressPresentation.cs" /></ItemGroup>
