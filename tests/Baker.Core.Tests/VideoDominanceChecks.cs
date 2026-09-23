@@ -79,6 +79,13 @@ internal static class VideoDominanceChecks
             "a clip that does not cover the centred canvas is not a video shell");
 
         JsonObject runtime = JsonNode.Parse(await File.ReadAllTextAsync(shellTrace))!.AsObject();
+        JsonObject unplaced = shell.DeepClone().AsObject();
+        unplaced["layers"]![0]!["canvas_center_x"] = null;
+        JsonObject unplacedVerdict = VideoDominance.Evaluate(unplaced, runtime, VideoDominance.RejectChoice);
+        check(unplacedVerdict["status"]!.GetValue<string>() == VideoDominance.NotShellStatus &&
+            string.Join(" | ", unplacedVerdict["evidence"]!.AsArray().Select(item => item!.GetValue<string>()))
+                .Contains("clip_layer_canvas_fraction=1 centre=(absent),0.5", StringComparison.Ordinal),
+            "a full-size clip layer whose centre is unknown is not proven to fill the centred canvas");
         JsonObject reduced = allowed.DeepClone().AsObject();
         reduced["output_resolution"]!["width"] = 1920; reduced["output_resolution"]!["height"] = 1080;
         reduced["settings"]!["fps_numerator"] = 60;
@@ -123,6 +130,10 @@ internal static class VideoDominanceChecks
             still["loop"]!["source_static"] = true;
             check(BakeValueAssessment.Evaluate(still, runtime, source, root)["status"]!.GetValue<string>() == "low_value",
                 "one unchanged plain still texture has low identified benefit");
+            JsonObject stillUnplaced = still.DeepClone().AsObject();
+            stillUnplaced["layers"]![0]!["canvas_center_y"] = null;
+            check(BakeValueAssessment.Evaluate(stillUnplaced, runtime, source, root)["rule"]!.GetValue<string>() == "needs_work_comparison",
+                "a plain still texture whose centre is unknown is not called low value");
             still["output_resolution"]!["width"] = 32; still["output_resolution"]!["height"] = 16;
             check(BakeValueAssessment.Evaluate(still, runtime, source, root)["status"]!.GetValue<string>() == "potential_gain",
                 "a still texture larger than output retains potential residency or sampling benefit");
