@@ -166,142 +166,6 @@ VkResult TransImgLayout(const vvk::Queue& queue, vvk::CommandBuffer& cmd,
     return result;
 }
 
-Option<vvk::DeviceMemory> AllocateMemory(const vvk::Device& device, vvk::PhysicalDevice gpu,
-                                         VkMemoryRequirements reqs, VkMemoryPropertyFlags property,
-                                         void* pNext = nullptr) {
-    VkPhysicalDeviceMemoryProperties pros = gpu.GetMemoryProperties().memoryProperties;
-    for (rstd::uint32_t i = 0; i < pros.memoryTypeCount; ++i) {
-        if ((reqs.memoryTypeBits & (1u << i)) && (pros.memoryTypes[i].propertyFlags & property)) {
-            VkMemoryAllocateInfo memory_allocate_info { .sType =
-                                                            VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                                                        .pNext           = pNext,
-                                                        .allocationSize  = reqs.size,
-                                                        .memoryTypeIndex = i };
-            vvk::DeviceMemory    mem;
-            VkResult             res = device.AllocateMemory(memory_allocate_info, mem);
-            if (res == VK_SUCCESS) {
-                return Some(rstd::move(mem));
-            } else {
-                VVK_CHECK(res);
-                return None();
-            }
-        }
-    }
-    rstd_error("vulkan allocate memory failed, no memory match requires");
-    return None();
-}
-
-// DRM fourcc codes we emit. We currently only render R8G8B8A8_UNORM and
-// B8G8R8A8_UNORM into the ExSwapchain, so those are the only mappings.
-// Vulkan component order X-Y-Z-W maps to the *first-byte-in-memory* ordering
-// used by DRM fourccs ('AB24' = little-endian 'AB24' bytes = A, B, 2, 4 →
-// DRM_FORMAT_ABGR8888).
-static rstd::uint32_t VkFormatToDrmFourcc(VkFormat fmt) {
-    switch (fmt) {
-    case VK_FORMAT_R8G8B8A8_UNORM: return 0x34324241u; // DRM_FORMAT_ABGR8888
-    case VK_FORMAT_B8G8R8A8_UNORM: return 0x34324152u; // DRM_FORMAT_ARGB8888
-    default: return 0u;
-    }
-}
-
-Option<ExImageParameters> CreateExImage(rstd::uint32_t width, rstd::uint32_t height,
-                                        VkFormat format, VkImageTiling tiling,
-                                        VkSamplerCreateInfo sampler_info, VkImageUsageFlags usage,
-                                        const vvk::Device& device, const vvk::PhysicalDevice& gpu) {
-    ExImageParameters image;
-    do {
-        // Iteration 1a: switch the external handle type from OPAQUE_FD to
-        // real Linux DMA-BUF so the FD is importable outside this Vulkan
-        // instance. The OPTIMAL code path would additionally use
-        // VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT and pick a modifier from
-        // a queried list; we keep LINEAR-only for now so that consumers
-        // can mmap the buffer directly (the iteration 4 milestone).
-        if (tiling != VK_IMAGE_TILING_LINEAR) {
-            rstd_info("[ex-image] OPTIMAL tiling requested; downgrading to LINEAR "
-                      "because the DRM-format-modifier path is not yet wired up");
-            tiling = VK_IMAGE_TILING_LINEAR;
-        }
-
-        VkExternalMemoryImageCreateInfo ex_info {
-            .sType       = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-            .pNext       = nullptr,
-            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-        };
-        VkExportMemoryAllocateInfo ex_mem_info {
-            .sType       = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
-            .pNext       = nullptr,
-            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-        };
-        VkImageCreateInfo info {
-            .sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .pNext                 = &ex_info,
-            .imageType             = VK_IMAGE_TYPE_2D,
-            .format                = format,
-            .extent                = VkExtent3D { .width = width, .height = height, .depth = 1 },
-            .mipLevels             = 1,
-            .arrayLayers           = 1,
-            .samples               = VK_SAMPLE_COUNT_1_BIT,
-            .tiling                = tiling,
-            .usage                 = usage,
-            .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED,
-        };
-        image.extent = info.extent;
-
-        VVK_CHECK_ACT(break, device.CreateImage(info, image.handle));
-
-        image.mem_reqs = device.GetImageMemoryRequirements(*image.handle);
-
-        if (auto opt = AllocateMemory(
-                device, gpu, image.mem_reqs, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &ex_mem_info);
-            opt.is_some()) {
-            image.mem = rstd::move(opt).unwrap();
-        } else
-            break;
-
-        VVK_CHECK_ACT(break, image.handle.BindMemory(*image.mem, 0));
-        {
-            VkImageViewCreateInfo createinfo {
-                .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .pNext    = nullptr,
-                .image    = *image.handle,
-                .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                .format   = format,
-                .subresourceRange =
-                    VkImageSubresourceRange {
-                        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-                        .baseMipLevel   = 0,
-                        .levelCount     = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount     = 1,
-                    },
-            };
-            VVK_CHECK_ACT(break, device.CreateImageView(createinfo, image.view));
-        }
-        VVK_CHECK_ACT(break, device.CreateSampler(sampler_info, image.sampler));
-        VVK_CHECK_ACT(break, image.mem.GetMemoryFdKHR(&image.fd));
-
-        // Populate the DRM metadata so LocalExSwapchain → ExHandle (and
-        // eventually the waywallen-host process) can forward it to external
-        // consumers without re-querying Vulkan.
-        VkImageSubresource subres {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .mipLevel   = 0,
-            .arrayLayer = 0,
-        };
-        VkSubresourceLayout layout = device.GetImageSubresourceLayout(*image.handle, subres);
-        image.plane0_offset        = layout.offset;
-        image.plane0_stride        = static_cast<rstd::uint32_t>(layout.rowPitch);
-        image.drm_modifier         = 0; // DRM_FORMAT_MOD_LINEAR
-        image.drm_fourcc           = VkFormatToDrmFourcc(format);
-
-        return Some(rstd::move(image));
-
-    } while (false);
-    return None();
-}
-
 inline Option<VmaImageParameters>
 CreateImage(const Device& device, VkExtent3D extent, rstd::uint32_t miplevel, VkFormat format,
             VkSamplerCreateInfo sampler_info, VkImageUsageFlags usage,
@@ -389,50 +253,6 @@ usize TextureKey::HashValue(const TextureKey& k) {
     utils::hash_combine(seed, (int)k.sample.border_color);
     utils::hash_combine(seed, (int)k.samples);
     return usize(seed);
-}
-
-Option<ExImageParameters> TextureCache::CreateExTex(u32 width, u32 height, VkFormat format,
-                                                    VkImageTiling tiling) {
-    VkSamplerCreateInfo sampler_info {
-        .sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .pNext                   = nullptr,
-        .magFilter               = VK_FILTER_NEAREST,
-        .minFilter               = VK_FILTER_NEAREST,
-        .mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-        .addressModeU            = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
-        .addressModeV            = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
-        .addressModeW            = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
-        .anisotropyEnable        = false,
-        .maxAnisotropy           = 1.0f,
-        .compareEnable           = false,
-        .compareOp               = VK_COMPARE_OP_NEVER,
-        .minLod                  = 0.0f,
-        .maxLod                  = 1.0f,
-        .borderColor             = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-        .unnormalizedCoordinates = false,
-    };
-
-    auto opt = CreateExImage(width.to_primitive(),
-                             height.to_primitive(),
-                             format,
-                             tiling,
-                             sampler_info,
-                             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                                 VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                             m_device.device(),
-                             m_device.gpu());
-    if (opt.is_some()) {
-        AssignImageGeneration(*opt);
-        const auto& eximg = *opt;
-
-        if (! m_tex_cmd) allocateCmd();
-        TransImgLayout(m_device.graphics_queue().handle,
-                       m_tex_cmd,
-                       ToImageParameters(eximg),
-                       VK_IMAGE_LAYOUT_GENERAL);
-        VVK_CHECK(m_device.handle().WaitIdle());
-    }
-    return opt;
 }
 
 Option<rstd::sync::Arc<TextureAllocation>>
@@ -1134,10 +954,6 @@ TextureCache::~TextureCache() = default;
 u64 TextureCache::nextImageGeneration() { return m_next_image_generation++; }
 
 void TextureCache::AssignImageGeneration(VmaImageParameters& image) {
-    image.generation = nextImageGeneration();
-}
-
-void TextureCache::AssignImageGeneration(ExImageParameters& image) {
     image.generation = nextImageGeneration();
 }
 
