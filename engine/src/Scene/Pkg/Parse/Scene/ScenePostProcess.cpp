@@ -158,20 +158,23 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
         .dst = rstd::cppstd::to_string(SpecTex_Default),
     }));
 
+    (void)scene.RegisterPostProcess(rstd::move(pp));
+
     // hdr_scale=k：给 RGBA8 捕获前把浮点结果 rgb 除以 k。在 _rt_default 上叠一层黑色、
     // alpha=1-1/k 的 translucent，dst*(1-a) 正好是 rgb/k；不写 alpha，alpha 不变。
-    if (hdr_scale > 1.0f &&
-        ! add_pass("materials/util/fade.json",
-                   {},
-                   rstd::cppstd::to_string(SpecTex_Default),
-                   [&](wpscene::Material& m, ShaderInfo& info) {
-                       m.constantshadervalues["tint"] = { 0.0f, 0.0f, 0.0f };
-                       m.alphawriting                 = "disabled";
-                       info.baseConstSvs[rstd::cppstd::to_string(G_ALPHA)] = 1.0f - 1.0f / hdr_scale;
-                   }))
-        return;
-
-    (void)scene.RegisterPostProcess(rstd::move(pp));
+    // 单独注册为 "__hdr_scale"：组捕获不含后处理时也照做（见 SceneToRenderGraph）。
+    if (hdr_scale <= 1.0f) return;
+    pp       = Box<ScenePostProcess>::make();
+    pp->name = "__hdr_scale";
+    if (add_pass("materials/util/fade.json",
+                 {},
+                 rstd::cppstd::to_string(SpecTex_Default),
+                 [&](wpscene::Material& m, ShaderInfo& info) {
+                     m.constantshadervalues["tint"] = { 0.0f, 0.0f, 0.0f };
+                     m.alphawriting                 = "disabled";
+                     info.baseConstSvs[rstd::cppstd::to_string(G_ALPHA)] = 1.0f - 1.0f / hdr_scale;
+                 }))
+        (void)scene.RegisterPostProcess(rstd::move(pp));
 }
 
 } // namespace owe
