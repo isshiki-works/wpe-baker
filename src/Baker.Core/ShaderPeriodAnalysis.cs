@@ -69,6 +69,8 @@ public static class ShaderPeriodAnalysis
     /// 只在已算出精确周期、而周期超出循环上限时用这个名字记为未解析。
     /// </summary>
     public const string WaterRippleScrollMechanism = "uv_normal_scroll";
+    /// <summary>waterripple 滚动开且方向非零：两次查表速率比含 sin(方向)，是无理数，没有精确周期（位移同样有上界）。</summary>
+    public const string WaterRippleIncommensurateScrollMechanism = "uv_incommensurate_scroll";
 
     /// <summary>lightshafts.frag:101-102 两次噪声查表的四条 UV 速率系数，实际速率是它们各自乘以 rayspeed（每秒）。</summary>
     public static readonly double[] LightShaftDriftRates = [0.003, 0.000375111, 0.0047111, 0.0007399];
@@ -744,6 +746,17 @@ public static class ShaderPeriodAnalysis
         if (!UsesStaticRepeatTexture(pass, 2, c.Project, c.Assets))
             return c.Refuse(ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
                 "Water-ripple normal lookups repeat only when texture slot 2 is a still texture with repeat addressing; that is not proven for this pass.");
+        // 滚动开、a ≠ 0、方向 d 是非零有限浮点（有理数）时：两次查表 x 轴速率比 (a² − s²·sin d)/(−a² − s²·sin d) 若是有理数，
+        // sin d 就是有理数；而非零有理 d 的 sin d 是超越数（Lindemann–Weierstrass），所以永不同时回到整数圈，统一调速不改比值。
+        if (drift != 0 && animation != 0 &&
+            RippleConstant("scrolldirection", authoredOnly: false, out double direction, out _, out string directionToken) && direction != 0)
+            return c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
+                $"Water-ripple scroll is on (scrollspeed {scrollToken}, scrolldirection {directionToken}, animationspeed {speedToken}). " +
+                "Along x the two normal lookups translate at rates proportional to a² − s²·sin d and −a² − s²·sin d (a = animationspeed, " +
+                "s = scrollspeed, d = scrolldirection). Their ratio is rational only if sin d is rational, but sin d is transcendental for every " +
+                "nonzero rational d (Lindemann–Weierstrass), so the two lookups never return to whole texture repeats together: the pass has no " +
+                "exact period, and a retime scales both rates equally.",
+                bounded: true, mechanism: WaterRippleIncommensurateScrollMechanism);
         if (drift != 0)
             return c.Refuse(ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
                 $"Water-ripple scroll is on (scrollspeed {scrollToken}). Both normal lookups then also translate by t*scrollspeed²*(-sin, cos)(direction) " +
