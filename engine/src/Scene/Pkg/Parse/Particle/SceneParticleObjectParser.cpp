@@ -248,7 +248,8 @@ void LoadInitializer(ParticleSubSystem& system, const wpscene::Particle& particl
         }
     }
     for (const auto& initializer : particle.initializers) {
-        auto instruction = ParticleParser::GenInitializer(initializer, implicit_sequence_count);
+        auto instruction = ParticleParser::GenInitializer(
+            initializer, implicit_sequence_count, system.OfflineServices());
         auto count       = instruction.SequenceCount();
         if (count.is_some()) system.SetRopeSequenceCount(*count);
         system.AddInitializer(rstd::move(instruction));
@@ -518,6 +519,7 @@ void BuildParticleObjectNode(ParticleObjectParseServices& services,
         static_cast<std::uint32_t>(std::max(child_data.maxcount.to_primitive(), std::int32_t(0))));
     auto particleSub = Box<ParticleSubSystem>::make(
         *services.scene,
+        services.offline,
         spMesh,
         maxcount,
         f64(modifiers.Rate()),
@@ -656,6 +658,7 @@ void ParseParticleObjImpl(SceneParseContext& context, wpscene::ParticleObject& p
         .ortho_w                = context.ortho_w,
         .ortho_h                = context.ortho_h,
         .construction_context   = &context,
+        .offline                = context.services,
     };
     auto output = BuildParticleObject(services, particle);
     if (output.root.is_none()) return;

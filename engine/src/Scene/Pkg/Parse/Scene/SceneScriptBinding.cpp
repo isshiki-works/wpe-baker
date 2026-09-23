@@ -117,9 +117,9 @@ bool AppendLayerCompositePassthroughEffect(fs::VFS& vfs, wpscene::ImageObject& i
     return true;
 }
 
-Arc<PuppetLayer> MakePuppetLayer(Arc<Puppet>                            puppet,
-                                 std::span<PuppetLayer::AnimationLayer> layers) {
-    auto out = Arc<PuppetLayer>::make(rstd::move(puppet));
+Arc<PuppetLayer> MakePuppetLayer(Arc<Puppet> puppet, std::span<PuppetLayer::AnimationLayer> layers,
+                                 Services* services) {
+    auto out = Arc<PuppetLayer>::make(rstd::move(puppet), services);
     out->prepared(
         slice<PuppetLayer::AnimationLayer>::from_raw_parts(layers.data(), usize(layers.size())));
     return out;
@@ -208,8 +208,8 @@ Option<Arc<PuppetLayer>> FindPuppetLayerWithBone(const Arc<PuppetLayerRegistry>&
 script::ScriptScene& EnsureScriptScene(SceneParseContext& context) {
     if (context.installed_script_scene != nullptr) return *context.installed_script_scene;
     if (context.script_scene.is_none()) {
-        context.script_scene =
-            Some(Box<script::ScriptScene>::make(Some(context.audio_response_demand.clone())));
+        context.script_scene = Some(Box<script::ScriptScene>::make(
+            Some(context.audio_response_demand.clone()), context.services));
         auto layers = CopyableArcHold(context.puppet_layers.clone());
         (*context.script_scene)
             ->runtime()

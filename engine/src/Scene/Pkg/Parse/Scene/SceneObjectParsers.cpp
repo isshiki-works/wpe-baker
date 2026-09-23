@@ -305,7 +305,7 @@ void ParseSoundObjImpl(SceneParseContext& context, wpscene::SoundObject& obj,
     if (! obj.visible_user.empty())
         node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(obj.visible_user));
 
-    auto control = SoundParser::Parse(obj, *context.vfs, sm, context.scene.get());
+    auto control = SoundParser::Parse(obj, *context.vfs, sm, context.scene.get(), context.services);
     if (! obj.volume_user_key.empty()) {
         context.scene->RegisterSoundVolumeBinding(
             rstd::cppstd::as_str(obj.volume_user_key).unwrap(), control);
@@ -368,7 +368,8 @@ void ParseModelObjImpl(SceneParseContext& context, wpscene::ModelObject& model_o
     auto& vfs = *context.vfs;
 
     Mdl mdl;
-    if (! MdlParser::Parse(rstd::cppstd::as_str(model_obj.model).unwrap(), vfs, mdl)) {
+    if (! MdlParser::Parse(
+            rstd::cppstd::as_str(model_obj.model).unwrap(), vfs, mdl, context.services)) {
         rstd_error("parse model failed: {}", model_obj.model);
         return;
     }
@@ -405,7 +406,8 @@ void ParseModelObjImpl(SceneParseContext& context, wpscene::ModelObject& model_o
     if (mdl.puppet.is_some() && ! (*mdl.puppet)->bones.is_empty()) {
         model_puppet_layer =
             Some(MakePuppetLayer((*mdl.puppet).clone(),
-                                 std::span<PuppetLayer::AnimationLayer>(model_obj.puppet_layers)));
+                                 std::span<PuppetLayer::AnimationLayer>(model_obj.puppet_layers),
+                                 context.services));
         RegisterPuppetLayer(context, node.as_ptr(), (*model_puppet_layer).clone());
     }
 
@@ -576,10 +578,12 @@ void IndexSceneDocument(SceneParseContext& context, ref<wpscene::SceneDocument> 
 
 SceneParseContext BuildContext(fs::VFS& vfs, ref<str> scene_id, const wpscene::SceneMetadata& sc,
                                array<i32, 2>                ortho_extent,
+                               Services*                   services,
                                const NJson*                user_properties,
                                Option<rstd::path::PathBuf> shader_cache_dir,
                                GeometryShaderLimits geometry_limits, bool directional_shadow) {
     SceneParseContext context;
+    context.services = services;
     PrepareAnimationBindings(context, sc.general.field_bindings);
     InitContext(context, vfs, sc, ortho_extent);
     ParseCamera(context, sc);

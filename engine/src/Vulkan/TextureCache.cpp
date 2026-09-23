@@ -21,6 +21,24 @@ using namespace owe;
 using namespace owe::vulkan;
 using namespace rstd::prelude;
 
+// ---- R4 过渡 ------------------------------------------------------------------
+// 视频段（TextureCache::VideoRegistry 与 PumpVideoTextures）R4 不动，仍按旧名
+// active_offline_execution 读取离线作业。注入的 Services 只在一次 PumpVideoTextures
+// 调用期间挂到这个文件内指针上；视频段改为直接接收 Services* 后删掉指针和这个包装。
+namespace owe::vulkan
+{
+namespace
+{
+Services* active_offline_execution = nullptr;
+}
+
+void TextureCache::PumpVideoTextures(double dt_seconds, Services* services) {
+    active_offline_execution = services;
+    PumpVideoTextures(dt_seconds);
+    active_offline_execution = nullptr;
+}
+} // namespace owe::vulkan
+
 namespace owe
 {
 namespace vulkan

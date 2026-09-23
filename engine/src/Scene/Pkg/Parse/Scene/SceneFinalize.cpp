@@ -254,23 +254,25 @@ void FinalizeUniformSources(SceneParseContext& context) {
                                             ? Some((*context.particle_runtime).clone())
                                             : None<Arc<ParticleRuntime>>();
             auto  scene_ptr           = rstd::addressof(scene);
-            (**scripts).runtime().SetLayerFactory(std::make_shared<script::JsRuntime::LayerFactory::element_type>(ShareCallable(
-                [scene_ptr,
-                 runtime,
-                 image_prototypes     = rstd::move(image_prototypes),
-                 particle_prototypes  = rstd::move(particle_prototypes),
-                 particle_runtime     = rstd::move(particle_runtime),
-                 shader_cache         = context.shader_cache.clone(),
-                 shader_environment   = context.shader_environment,
-                 geometry_limits      = context.geometry_shader_limits,
-                 global_base_uniforms = context.global_base_uniforms,
-                 ortho_w              = context.ortho_w,
-                 ortho_h              = context.ortho_h,
-                 next_object_id       = context.next_synthetic_object_id,
-                 uniform_state        = context.uniform_state.clone(),
-                 camera_resolver      = (*camera_resolver).clone()](
-                    SceneNode*                  owner,
-                    script::LayerAssetReference request) mutable -> Option<Arc<SceneNode>> {
+            (**scripts).runtime().SetLayerFactory(std::make_shared<
+                                                  script::JsRuntime::LayerFactory::element_type>(
+                ShareCallable([scene_ptr,
+                               runtime,
+                               image_prototypes     = rstd::move(image_prototypes),
+                               particle_prototypes  = rstd::move(particle_prototypes),
+                               particle_runtime     = rstd::move(particle_runtime),
+                               shader_cache         = context.shader_cache.clone(),
+                               shader_environment   = context.shader_environment,
+                               geometry_limits      = context.geometry_shader_limits,
+                               global_base_uniforms = context.global_base_uniforms,
+                               ortho_w              = context.ortho_w,
+                               ortho_h              = context.ortho_h,
+                               next_object_id       = context.next_synthetic_object_id,
+                               uniform_state        = context.uniform_state.clone(),
+                               camera_resolver      = (*camera_resolver).clone(),
+                               offline              = context.services](
+                                  SceneNode* owner, script::LayerAssetReference request) mutable
+                                  -> Option<Arc<SceneNode>> {
                     SceneNode* parent = owner && owner->Parent()
                                             ? owner->Parent()
                                             : scene_ptr->RootMut().as_raw_ptr();
@@ -325,6 +327,7 @@ void FinalizeUniformSources(SceneParseContext& context) {
                             .particle_runtime       = (*particle_runtime).clone(),
                             .ortho_w                = ortho_w,
                             .ortho_h                = ortho_h,
+                            .offline                = offline,
                         };
                         auto parsed = BuildParticleObject(particle_services, particle);
                         if (parsed.root.is_none()) return None();

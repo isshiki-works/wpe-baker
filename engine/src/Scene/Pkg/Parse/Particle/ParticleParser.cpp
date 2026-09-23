@@ -23,16 +23,17 @@ namespace
 constexpr float  kTau   = rstd::f32::consts::TAU.to_primitive();
 constexpr double kTau64 = rstd::f64::consts::TAU.to_primitive();
 
-inline Vector3d GenRandomVec3(const std::array<float, 3>& min, const std::array<float, 3>& max) {
+inline Vector3d GenRandomVec3(Services* services, const std::array<float, 3>& min,
+                              const std::array<float, 3>& max) {
     Vector3d result(3);
     for (int32_t i = 0; i < 3; i++) {
-        result[i] = Random::get(min[i], max[i]);
+        result[i] = RandomRange(services, min[i], max[i]);
     }
     return result;
 }
 
-inline float GenRandom(float min, float max, float exponent) {
-    auto random = Random::get(0.0f, 1.0f);
+inline float GenRandom(Services* services, float min, float max, float exponent) {
+    auto random = RandomRange(services, 0.0f, 1.0f);
     if (exponent != 1.0f) random = std::pow(random, exponent);
     return static_cast<float>(algorism::lerp(random, min, max));
 }
@@ -124,7 +125,8 @@ struct MapSequenceAroundControlPointProgram {
             (center + parallel + radius * (std::cos(angle) * basis + std::sin(angle) * tangent))
                 .cast<float>();
 
-        auto velocity = GenRandomVec3(config.speed_min, config.speed_max);
+        auto velocity =
+            GenRandomVec3(frame->subsystem->OfflineServices(), config.speed_min, config.speed_max);
         if (velocity.squaredNorm() > 1e-12) {
             columns.velocities[slot.index] = (columns.velocities[slot.index].cast<double>() +
                                               Eigen::AngleAxisd(-angle, axis) * velocity)
@@ -250,8 +252,8 @@ struct ColorRandomProgram {
     std::array<float, 3> max;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    const particle::ParticleFrameContext*) {
-        auto            random = Random::get(0.0, 1.0);
+                    const particle::ParticleFrameContext* frame) {
+        auto            random = RandomRange(FrameServices(frame), 0.0, 1.0);
         Eigen::Vector3f value;
         for (usize component {}; component < usize(3); ++component) {
             auto raw   = component.to_primitive();
@@ -266,8 +268,8 @@ struct LifetimeRandomProgram {
     SingleRandom config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    const particle::ParticleFrameContext*) {
-        auto value                            = GenRandom(config.min, config.max, config.exponent);
+                    const particle::ParticleFrameContext* frame) {
+        auto value = GenRandom(FrameServices(frame), config.min, config.max, config.exponent);
         columns.lifetimes[request.slot.index] = value;
         columns.initial_lifetimes[request.slot.index] = value;
     }
@@ -277,8 +279,8 @@ struct SizeRandomProgram {
     SingleRandom config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    const particle::ParticleFrameContext*) {
-        auto value                        = GenRandom(config.min, config.max, config.exponent);
+                    const particle::ParticleFrameContext* frame) {
+        auto value = GenRandom(FrameServices(frame), config.min, config.max, config.exponent);
         columns.sizes[request.slot.index] = value;
         columns.initial_sizes[request.slot.index] = value;
     }
@@ -288,8 +290,8 @@ struct AlphaRandomProgram {
     SingleRandom config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    const particle::ParticleFrameContext*) {
-        auto value                         = GenRandom(config.min, config.max, config.exponent);
+                    const particle::ParticleFrameContext* frame) {
+        auto value = GenRandom(FrameServices(frame), config.min, config.max, config.exponent);
         columns.alphas[request.slot.index] = value;
         columns.initial_alphas[request.slot.index] = value;
     }
@@ -307,11 +309,12 @@ struct VectorRandomProgram {
     Target    target { Target::Velocity };
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    const particle::ParticleFrameContext*) {
+                    const particle::ParticleFrameContext* frame) {
+        auto*           services = FrameServices(frame);
         Eigen::Vector3f value;
         for (usize component {}; component < usize(3); ++component) {
             auto raw   = component.to_primitive();
-            value[raw] = GenRandom(config.min[raw], config.max[raw], config.exponent);
+            value[raw] = GenRandom(services, config.min[raw], config.max[raw], config.exponent);
         }
         if (target == Target::Velocity) {
             columns.velocities[request.slot.index] += value;
@@ -330,10 +333,11 @@ struct TurbulentVelocityRandomProgram {
     Eigen::Vector3f position;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    const particle::ParticleFrameContext*) {
+                    const particle::ParticleFrameContext* frame) {
+        auto* services = FrameServices(frame);
         auto  duration = request.emitter_duration;
-        float speed    = Random::get(config.speedmin, config.speedmax);
-        float phase    = Random::get(config.phasemin, config.phasemax);
+        float speed    = RandomRange(services, config.speedmin, config.speedmax);
+        float phase    = RandomRange(services, config.phasemin, config.phasemax);
         if (duration > f64(10.0)) {
             position[0] += speed;
             duration = f64();
@@ -424,8 +428,8 @@ void ParticleSpawnInstruction::Initialize(ParticleSpawnColumns&                 
         m_impl->value);
 }
 
-ParticleSpawnInstruction ParticleParser::GenInitializer(const NJson& wpj,
-                                                        u32         implicit_sequence_count) {
+ParticleSpawnInstruction
+ParticleParser::GenInitializer(const NJson& wpj, u32 implicit_sequence_count, Services* services) {
     do {
         if (Find(wpj, "name") == nullptr) break;
         std::string name;
@@ -497,10 +501,11 @@ ParticleSpawnInstruction ParticleParser::GenInitializer(const NJson& wpj,
             forward.normalize();
 
             return ParticleSpawnInstruction::Make(TurbulentVelocityRandomProgram {
-                .config   = r,
-                .normal   = normal,
-                .forward  = forward,
-                .position = GenRandomVec3({ 0, 0, 0 }, { 10.0f, 10.0f, 10.0f }).cast<float>(),
+                .config  = r,
+                .normal  = normal,
+                .forward = forward,
+                .position =
+                    GenRandomVec3(services, { 0, 0, 0 }, { 10.0f, 10.0f, 10.0f }).cast<float>(),
             });
         } else if (name == "mapsequencearoundcontrolpoint") {
             return ParticleSpawnInstruction::Make(MapSequenceAroundControlPointProgram {
@@ -595,13 +600,13 @@ struct FrequencyValue {
         owe::GetJsonValue(j, "mask", v.mask, false);
         return v;
     };
-    inline void GenFrequency(bool lifetime_ok, OscillationStateRef st) {
+    inline void GenFrequency(Services* services, bool lifetime_ok, OscillationStateRef st) {
         if (! lifetime_ok) st.reset = true;
         if (st.reset) {
-            st.frequency = Random::get(frequencymin, frequencymax);
-            st.scale     = Random::get(scalemin, scalemax);
-            st.phase =
-                static_cast<float>(Random::get(static_cast<double>(phasemin), phasemax + kTau64));
+            st.frequency = RandomRange(services, frequencymin, frequencymax);
+            st.scale     = RandomRange(services, scalemin, scalemax);
+            st.phase     = static_cast<float>(
+                RandomRange(services, static_cast<double>(phasemin), phasemax + kTau64));
             st.reset = false;
         }
     }
@@ -1071,12 +1076,13 @@ struct OscillateScalarOperator {
 
     template<typename Values>
     void Apply(Values values, particle::ParticleUpdateContext& context) {
-        auto lifetimes = context.view.Read(lifetime);
-        auto initial   = context.view.Read(initial_lifetime);
-        auto states    = state.Bind(context.view);
+        auto* services  = FrameServices(context.frame);
+        auto  lifetimes = context.view.Read(lifetime);
+        auto  initial   = context.view.Read(initial_lifetime);
+        auto  states    = state.Bind(context.view);
         for (auto slot : context.slots) {
             auto oscillator = states.At(slot.index);
-            frequency.GenFrequency(lifetimes[slot.index] > 0.0f, oscillator);
+            frequency.GenFrequency(services, lifetimes[slot.index] > 0.0f, oscillator);
             values[slot.index] *= frequency.GetScale(
                 oscillator, LifetimePassed(lifetimes[slot.index], initial[slot.index]));
         }
@@ -1108,6 +1114,7 @@ struct OscillatePositionOperator {
     }
 
     void Update(particle::ParticleUpdateContext& context) {
+        auto*                             services  = FrameServices(context.frame);
         auto                              positions = context.view.PositionsMut();
         auto                              lifetimes = context.view.Read(lifetime);
         auto                              initial   = context.view.Read(initial_lifetime);
@@ -1123,7 +1130,8 @@ struct OscillatePositionOperator {
                 auto raw = component.to_primitive();
                 if (frequencies[usize()].mask[raw] < 0.01f) continue;
                 auto oscillator = values[component].At(slot.index);
-                frequencies[component].GenFrequency(lifetimes[slot.index] > 0.0f, oscillator);
+                frequencies[component].GenFrequency(
+                    services, lifetimes[slot.index] > 0.0f, oscillator);
                 offset[raw] = frequencies[component].GetMove(oscillator, time, context.delta);
             }
             positions[slot.index] = (positions[slot.index].cast<double>() + offset).cast<float>();
@@ -1432,8 +1440,10 @@ ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifier
                     .attributes = attributes,
                     .config     = config,
                     .modifiers  = modifiers.Clone(),
-                    .phase      = Random::get(config.phasemin, config.phasemax),
-                    .speed      = Random::get(config.speedmin, config.speedmax),
+                    .phase =
+                        RandomRange(subsystem.OfflineServices(), config.phasemin, config.phasemax),
+                    .speed =
+                        RandomRange(subsystem.OfflineServices(), config.speedmin, config.speedmax),
                 });
         } else if (name == "vortex") {
             return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(VortexOperator {

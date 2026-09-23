@@ -281,6 +281,10 @@ auto owe::ParticleFrameFrom(const particle::ParticleFrameContext* frame) -> ref<
     return ref<ParticleFrame>::from_raw_parts(value);
 }
 
+auto owe::FrameServices(const particle::ParticleFrameContext* frame) -> Services* {
+    return ParticleFrameFrom(frame)->subsystem->OfflineServices();
+}
+
 void ParticleSpawnPipeline::Compile(particle::ParticleViewCompiler& compiler) {
     if (m_compiled) return;
     compiler.WriteBase(m_attributes.position);
@@ -322,7 +326,7 @@ auto ParticleSpawnPipeline::Bind(particle::ParticleWriteView view) -> ParticleSp
 void ParticleSpawnPipeline::Initialize(ParticleSpawnColumns&                 columns,
                                        particle::ParticleSpawnRequest        request,
                                        const particle::ParticleFrameContext* frame) {
-    columns.randoms[request.slot.index] = Random::get(0.0f, 1.0f);
+    columns.randoms[request.slot.index] = RandomRange(FrameServices(frame), 0.0f, 1.0f);
     for (auto& instruction : m_instructions) instruction.Initialize(columns, request, frame);
     if (! m_world_space) return;
     auto            wp_frame = ParticleFrameFrom(frame);
@@ -339,13 +343,15 @@ void ParticleSpawnPipeline::Initialize(ParticleSpawnColumns&                 col
                                     .cast<float>();
 }
 
-ParticleSubSystem::ParticleSubSystem(Scene& scene, std::shared_ptr<SceneMesh> mesh, u32 max_count,
-                                     f64 rate, u32 max_instance_count, f64 probability,
-                                     SpawnType spawn_type, ParticleAnimationSpec animation_spec,
+ParticleSubSystem::ParticleSubSystem(Scene& scene, Services* services,
+                                     std::shared_ptr<SceneMesh> mesh, u32 max_count, f64 rate,
+                                     u32 max_instance_count, f64 probability, SpawnType spawn_type,
+                                     ParticleAnimationSpec animation_spec,
                                      ParticleFollowAnchor follow_anchor, u32 trail_length,
                                      f64 trail_duration, f64 start_time, bool world_space,
                                      Option<Arc<ParticleTrailUniformState>> trail_uniform_state)
     : m_scene(scene),
+      m_services(services),
       m_mesh(rstd::move(mesh)),
       m_attributes(ParticleAttributes::Register(m_schema_builder)),
       m_spawn_pipeline(m_attributes),
@@ -376,15 +382,18 @@ ParticleSubSystem::ParticleSubSystem(Scene& scene, std::shared_ptr<SceneMesh> me
 ParticleSubSystem::~ParticleSubSystem() = default;
 
 void ParticleSubSystem::TraceExternalInput(ref<str> property) const {
-    if (active_offline_execution == nullptr || !active_offline_execution->trace_scene) return;
+    if (m_services == nullptr || ! m_services->trace_scene) return;
     auto* node = m_owner_node;
     while (node != nullptr) {
         auto identity = node->GeneratorIdentity();
         if (identity.is_none()) identity = node->WallpaperIdentity();
         if (identity.is_some()) {
-            active_offline_execution->trace(
-                { identity->value.to_primitive(), -1, "input", rstd::cppstd::to_string(property),
-                  "particle_emitter", true });
+            m_services->trace({ identity->value.to_primitive(),
+                                -1,
+                                "input",
+                                rstd::cppstd::to_string(property),
+                                "particle_emitter",
+                                true });
             return;
         }
         node = node->Parent();
@@ -438,7 +447,7 @@ auto ParticleSubSystem::System() noexcept -> particle::ParticleSystem& {
 }
 
 auto ParticleSubSystem::QueryNewInstance() -> Option<ParticleInstanceRef> {
-    if (Random::get(0.0, 1.0) > m_probability.to_primitive()) return None();
+    if (RandomRange(m_services, 0.0, 1.0) > m_probability.to_primitive()) return None();
 
     auto& system = System();
     for (usize index {}; index < system.InstanceCount(); ++index) {

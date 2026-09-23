@@ -739,7 +739,7 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err) {
         Mdl  mdl;
         bool ok = false;
         try {
-            ok = owe::MdlParser::Parse(rstd::cppstd::as_str(rel).unwrap(), vfs, mdl);
+            ok = owe::MdlParser::Parse(rstd::cppstd::as_str(rel).unwrap(), vfs, mdl, nullptr);
         } catch (const std::exception&) {
             ok = false;
         }

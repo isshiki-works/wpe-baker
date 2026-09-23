@@ -550,9 +550,9 @@ void VulkanRender::deviceUuid(std::uint8_t out[16]) const {
     std::memcpy(out, id.deviceUUID, 16);
 }
 
-void VulkanRender::pumpVideoTextures(double dt_seconds) {
+void VulkanRender::pumpVideoTextures(double dt_seconds, Services* services) {
     if (! pImpl->m_inited) return;
-    pImpl->m_rendering_resources.resources.PumpVideoTextures(dt_seconds);
+    pImpl->m_rendering_resources.resources.PumpVideoTextures(dt_seconds, services);
 }
 
 void VulkanRender::pumpFontAtlases(Scene& scene) {

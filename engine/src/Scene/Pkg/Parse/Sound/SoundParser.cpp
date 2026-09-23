@@ -81,12 +81,14 @@ public:
         PlaybackMode mode { PlaybackMode::Loop };
     };
     SoundStream(const std::vector<std::string>& paths, fs::VFS& vfs, Config c,
-                Arc<SoundState> state, Option<Arc<SceneAudioAverage>> audio_average)
+                Arc<SoundState> state, Option<Arc<SceneAudioAverage>> audio_average,
+                Services* services)
         : vfs(vfs),
           m_config(c),
           m_state(rstd::move(state)),
           m_soundPaths(paths),
-          m_audio_average(rstd::move(audio_average)) {};
+          m_audio_average(rstd::move(audio_average)),
+          m_services(services) {};
     virtual ~SoundStream() = default;
 
     std::uint32_t next_pcm(float* pData, std::uint32_t frameCount) override {
@@ -167,10 +169,10 @@ public:
     u32 SelectStartIndex(u32 n) {
         if (n == u32()) return u32();
         if (m_config.mode == PlaybackMode::Random) {
-            return u32(Random::get<uint32_t>(0, (n - u32(1)).to_primitive()));
+            return u32(RandomRange<uint32_t>(m_services, 0, (n - u32(1)).to_primitive()));
         }
         if (m_config.mode == PlaybackMode::Single) {
-            return u32(Random::get<uint32_t>(0, (n - u32(1)).to_primitive()));
+            return u32(RandomRange<uint32_t>(m_services, 0, (n - u32(1)).to_primitive()));
         }
         u32 idx    = m_curIndex;
         m_curIndex = (m_curIndex + u32(1)) % n;
@@ -181,7 +183,7 @@ private:
     void Fail(std::string message) {
         m_dead = true;
         m_error = message;
-        if (active_offline_execution) active_offline_execution->diagnose("sound layer: " + message, true);
+        if (m_services) m_services->diagnose("sound layer: " + message, true);
         rstd::log::error("SoundStream: {}", m_error);
     }
 
@@ -238,10 +240,12 @@ private:
     const std::vector<std::string>          m_soundPaths;
     std::optional<owe::media::AudioDecoder> m_curActive;
     Option<Arc<SceneAudioAverage>>          m_audio_average;
+    Services*                               m_services;
 };
 
 std::shared_ptr<SceneSoundControl> SoundParser::Parse(const wpscene::SoundObject& obj, fs::VFS& vfs,
-                                               owe::media::OfflineMixer& sm, Scene* scene) {
+                                                      owe::media::OfflineMixer& sm, Scene* scene,
+                                                      Services* services) {
     SoundStream::Config config { .maxtime = f32(obj.maxtime),
                                  .mintime = f32(obj.mintime),
                                  .volume  = f32(obj.volume).clamp(f32(), f32(1.0f)),
@@ -259,7 +263,7 @@ std::shared_ptr<SceneSoundControl> SoundParser::Parse(const wpscene::SoundObject
     auto control = std::shared_ptr<SceneSoundControl>(std::make_shared<SoundControl>(state.clone()));
     if (! state->disabled) {
         auto ss = std::make_unique<SoundStream>(
-            obj.sound, vfs, config, rstd::move(state), rstd::move(audio_average));
+            obj.sound, vfs, config, rstd::move(state), rstd::move(audio_average), services);
         sm.mount(std::move(ss));
     }
     return control;

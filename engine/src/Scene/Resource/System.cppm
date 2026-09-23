@@ -5,6 +5,7 @@ module;
 export module wescene.resource_registry:system;
 import rstd;
 import rstd.cppstd;
+import wescene.core;
 import wescene.resource;
 import wescene.vulkan;
 
@@ -520,7 +521,9 @@ public:
         m_registries.ImageUploads().Trim();
     }
 
-    void PumpVideoTextures(double seconds) { m_registries.Textures().PumpVideoTextures(seconds); }
+    void PumpVideoTextures(double seconds, Services* services) {
+        m_registries.Textures().PumpVideoTextures(seconds, services);
+    }
     vulkan::VideoDecoderInventory ObserveVideoDecoders() { return m_registries.Textures().ObserveVideoDecoders(); }
     void SetVideoDecodeOptions(vulkan::TextureCache::VideoDecodeOptions options) {
         m_registries.Textures().SetVideoDecodeOptions(std::move(options));

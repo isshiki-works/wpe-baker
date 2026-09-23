@@ -113,7 +113,8 @@ public:
     // over the whole corpus even on mdls that would hang full Parse.
     static bool ParseHeader(ref<str> path, fs::VFS&, MdlHeader&);
 
-    static bool                      Parse(ref<str> path, fs::VFS&, Mdl&, bool* missing = nullptr);
+    // services 非空即离线作业：解析失败记为致命诊断。
+    static bool Parse(ref<str> path, fs::VFS&, Mdl&, Services* services, bool* missing = nullptr);
     static Option<wpscene::Material> ParseMaterial(ref<str> material_ref, fs::VFS&);
     static Option<usize>             FindMeshByMaterial(const Mdl&, ref<str> material_ref);
 

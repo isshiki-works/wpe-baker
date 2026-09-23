@@ -53,6 +53,7 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
                      scene_id,
                      metadata,
                      ResolveOrthoProjectionExtent(metadata, objects.as_slice()),
+                     options.services,
                      options.user_properties,
                      rstd::move(options.shader_cache_dir),
                      GeometryShaderLimits {

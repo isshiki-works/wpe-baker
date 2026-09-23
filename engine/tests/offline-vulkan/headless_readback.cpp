@@ -119,7 +119,7 @@ bool RunAnimationLayerBinding() {
         owe::PuppetLayer::AnimationLayer { .id = 701, .layer_id = 9001 },
         owe::PuppetLayer::AnimationLayer { .id = 702, .layer_id = 9002 },
     };
-    auto layers = rstd::sync::Arc<owe::PuppetLayer>::make(puppet.clone());
+    auto layers = rstd::sync::Arc<owe::PuppetLayer>::make(puppet.clone(), nullptr);
     layers->prepared(slice<owe::PuppetLayer::AnimationLayer>::from_raw_parts(authored.data(),
                                                                              usize(2)));
     auto first  = layers->AnimationPlayback(9001);

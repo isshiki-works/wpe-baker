@@ -108,27 +108,31 @@ auto ActiveAxisCount(const Eigen::Vector3d& directions) noexcept -> u32 {
     return rstd::cmp::max(u32(1), count);
 }
 
-auto RandomRadius(double min_distance, double max_distance, u32 dimensions) -> double {
+auto RandomRadius(Services* services, double min_distance, double max_distance, u32 dimensions)
+    -> double {
     min_distance = std::max(0.0, min_distance);
     max_distance = std::max(min_distance, max_distance);
     if (dimensions <= u32(1)) {
-        return algorism::lerp(Random::get(0.0, 1.0), min_distance, max_distance);
+        return algorism::lerp(RandomRange(services, 0.0, 1.0), min_distance, max_distance);
     }
 
     double dimension = static_cast<double>(dimensions.to_primitive());
     double low       = std::pow(min_distance, dimension);
     double high      = std::pow(max_distance, dimension);
-    return std::pow(algorism::lerp(Random::get(0.0, 1.0), low, high), 1.0 / dimension);
+    return std::pow(algorism::lerp(RandomRange(services, 0.0, 1.0), low, high), 1.0 / dimension);
 }
 
-auto RandomDirectedUnit(const Eigen::Vector3d& directions) -> Eigen::Vector3d {
+auto RandomDirectedUnit(Services* services, const Eigen::Vector3d& directions) -> Eigen::Vector3d {
     Eigen::Vector3d unit { 0.0, 0.0, 0.0 };
     for (usize retry {}; retry < usize(8); ++retry) {
         for (usize index {}; index < usize(3); ++index) {
             auto component  = index.to_primitive();
-            unit[component] = std::abs(directions[component]) > 1e-6
-                                  ? Random::get<std::normal_distribution<>>(0.0, 1.0)
-                                  : 0.0;
+            unit[component] =
+                std::abs(directions[component]) > 1e-6
+                    ? (services != nullptr
+                           ? services->random.get<std::normal_distribution<>>(0.0, 1.0)
+                           : Random::get<std::normal_distribution<>>(0.0, 1.0))
+                    : 0.0;
         }
         double norm = unit.norm();
         if (norm > 1e-6) return unit / norm;
@@ -149,6 +153,7 @@ void BoxEmitterProgram::Compile(particle::ParticleViewCompiler& compiler) {
 void BoxEmitterProgram::Emit(particle::ParticleEmitterContext& context) {
     auto frame = ParticleFrameFrom(context.Frame());
     if (! InstanceCanEmit(frame)) return;
+    auto* services = frame->subsystem->OfflineServices();
 
     auto& emitter = frame->subsystem->InstanceStateMut(frame->instance_index).Emitter(m_index);
     emitter.elapsed += frame->emitter_delta;
@@ -166,7 +171,7 @@ void BoxEmitterProgram::Emit(particle::ParticleEmitterContext& context) {
     for (auto request : requests) {
         Eigen::Vector3d position;
         for (usize component {}; component < usize(3); ++component) {
-            position[component.to_primitive()] = algorism::lerp(Random::get(-1.0, 1.0),
+            position[component.to_primitive()] = algorism::lerp(RandomRange(services, -1.0, 1.0),
                                                                 m_args.min_distance[component],
                                                                 m_args.max_distance[component]);
         }
@@ -175,7 +180,7 @@ void BoxEmitterProgram::Emit(particle::ParticleEmitterContext& context) {
         columns.positions[request.slot.index] = position.cast<float>();
         columns.positions[request.slot.index] =
             (columns.positions[request.slot.index].cast<double>() + origin).cast<float>();
-        double speed = Random::get(m_args.min_speed, m_args.max_speed);
+        double speed = RandomRange(services, m_args.min_speed, m_args.max_speed);
         if (speed != 0.0 && position.squaredNorm() > 1e-12) {
             columns.velocities[request.slot.index] =
                 (columns.velocities[request.slot.index].cast<double>() +
@@ -195,6 +200,7 @@ void SphereEmitterProgram::Compile(particle::ParticleViewCompiler& compiler) {
 void SphereEmitterProgram::Emit(particle::ParticleEmitterContext& context) {
     auto frame = ParticleFrameFrom(context.Frame());
     if (! InstanceCanEmit(frame)) return;
+    auto* services = frame->subsystem->OfflineServices();
 
     auto& emitter = frame->subsystem->InstanceStateMut(frame->instance_index).Emitter(m_index);
     emitter.elapsed += frame->emitter_delta;
@@ -212,15 +218,16 @@ void SphereEmitterProgram::Emit(particle::ParticleEmitterContext& context) {
     auto requests = context.Acquire(rstd::as_cast<usize>(emit_count), EmitDuration(emit_speed));
     auto columns  = m_pipeline->Bind(context.View());
     for (auto request : requests) {
-        double          radius = RandomRadius(m_args.min_distance, m_args.max_distance, dimensions);
-        Eigen::Vector3d unit   = RandomDirectedUnit(directions);
+        double radius =
+            RandomRadius(services, m_args.min_distance, m_args.max_distance, dimensions);
+        Eigen::Vector3d unit     = RandomDirectedUnit(services, directions);
         Eigen::Vector3d position = radius * unit.cwiseProduct(directions.cwiseAbs());
         ApplySign(position, m_args.sign[usize()], m_args.sign[usize(1)], m_args.sign[usize(2)]);
 
         columns.positions[request.slot.index] = position.cast<float>();
         columns.positions[request.slot.index] =
             (columns.positions[request.slot.index].cast<double>() + origin).cast<float>();
-        double speed = Random::get(m_args.min_speed, m_args.max_speed);
+        double speed = RandomRange(services, m_args.min_speed, m_args.max_speed);
         if (speed != 0.0 && position.squaredNorm() > 1e-12) {
             columns.velocities[request.slot.index] =
                 (columns.velocities[request.slot.index].cast<double>() +

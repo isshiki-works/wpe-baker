@@ -18,10 +18,9 @@ using namespace rstd::prelude;
 using namespace rstd::literals;
 using rstd::sync::Arc;
 
-static void DiagnosePuppetIk(const char* reason) {
-    if (active_offline_execution != nullptr)
-        active_offline_execution->diagnose("puppet IK runtime failed: " + std::string(reason),
-                                           true);
+static void DiagnosePuppetIk(Services* services, const char* reason) {
+    if (services != nullptr)
+        services->diagnose("puppet IK runtime failed: " + std::string(reason), true);
 }
 
 static double SampleBoneCurve(const Vec<Puppet::BoneFrameCurve>& curves, usize bone_index,
@@ -358,7 +357,7 @@ slice<Eigen::Affine3f> Puppet::genFrame(PuppetLayer& puppet_layer, double time) 
     for (const auto& chain : ik_chains) {
         if (chain.bones.len() != usize(3) ||
             usize(chain.target_controller_index) >= ik_controllers.len()) {
-            DiagnosePuppetIk("invalid three-node chain schema");
+            DiagnosePuppetIk(puppet_layer.m_services, "invalid three-node chain schema");
             continue;
         }
         const usize start_index(chain.bones[usize()]);
@@ -368,14 +367,14 @@ slice<Eigen::Affine3f> Puppet::genFrame(PuppetLayer& puppet_layer, double time) 
             joint_index >= ik_nodes.len() || end_index >= ik_nodes.len() ||
             bones[joint_index].anim_parent != start_index.to_primitive() ||
             bones[end_index].anim_parent != joint_index.to_primitive()) {
-            DiagnosePuppetIk("invalid chain hierarchy");
+            DiagnosePuppetIk(puppet_layer.m_services, "invalid chain hierarchy");
             continue;
         }
 
         const usize target_index(chain.target_controller_index);
         const auto& target_controller = ik_controllers[target_index];
         if (target_controller.type != 0 || usize(target_controller.bone_index) != end_index) {
-            DiagnosePuppetIk("invalid target controller");
+            DiagnosePuppetIk(puppet_layer.m_services, "invalid target controller");
             continue;
         }
 
@@ -392,7 +391,8 @@ slice<Eigen::Affine3f> Puppet::genFrame(PuppetLayer& puppet_layer, double time) 
         if (! has_pole || ik_nodes[joint_index].length <= 0.0f ||
             ik_nodes[end_index].length <= 0.0f || ! std::isfinite(ik_nodes[joint_index].length) ||
             ! std::isfinite(ik_nodes[end_index].length)) {
-            DiagnosePuppetIk("missing pole controller or invalid bind length");
+            DiagnosePuppetIk(puppet_layer.m_services,
+                             "missing pole controller or invalid bind length");
             continue;
         }
 
@@ -405,7 +405,7 @@ slice<Eigen::Affine3f> Puppet::genFrame(PuppetLayer& puppet_layer, double time) 
         if (! target.active) continue;
         const auto pole = sample_controller_position(pole_index);
         if (! target.valid || ! pole.valid || ! pole.active) {
-            DiagnosePuppetIk("invalid animated controller track");
+            DiagnosePuppetIk(puppet_layer.m_services, "invalid animated controller track");
             continue;
         }
         // IkNode lengths describe the bind pose. Preserve parent/animation scaling by solving with
@@ -420,14 +420,13 @@ slice<Eigen::Affine3f> Puppet::genFrame(PuppetLayer& puppet_layer, double time) 
                                                            lower_length,
                                                            std::addressof(pole.position));
         if (! solution.valid) {
-            DiagnosePuppetIk("non-finite or degenerate animated pose");
+            DiagnosePuppetIk(puppet_layer.m_services, "non-finite or degenerate animated pose");
             continue;
         }
 
         rotate_subtree(start_index, start, solution.start_rotation);
         rotate_subtree(joint_index, solution.joint, solution.joint_rotation);
-        if (active_offline_execution != nullptr)
-            ++active_offline_execution->runtime_ik_chain_solves;
+        if (puppet_layer.m_services != nullptr) ++puppet_layer.m_services->runtime_ik_chain_solves;
     }
 
     for (usize i {}; i < m_final_affines.len(); ++i) {
@@ -735,5 +734,6 @@ void PuppetLayer::updateInterpolation(double) noexcept {
     }
 }
 
-PuppetLayer::PuppetLayer(Arc<Puppet> pup): m_puppet(rstd::move(pup)) {}
+PuppetLayer::PuppetLayer(Arc<Puppet> pup, Services* services)
+    : m_puppet(rstd::move(pup)), m_services(services) {}
 PuppetLayer::~PuppetLayer() = default;

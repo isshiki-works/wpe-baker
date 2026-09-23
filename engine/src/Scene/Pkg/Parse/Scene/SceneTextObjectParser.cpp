@@ -314,7 +314,8 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
         if (auto cached = context.font_sources.get(key); cached.is_some()) {
             resolved = **cached;
         } else {
-            resolved = text::FontCache::ResolveSystemFont(font_name, /*fallback_to_any=*/true);
+            resolved = text::FontCache::ResolveSystemFont(
+                font_name, /*fallback_to_any=*/true, context.services);
         }
     }
     if (! resolved.bytes) {
