@@ -2,6 +2,8 @@ module;
 
 #include <rstd/macro.hpp>
 
+#include "JsonNlohmann.hpp"
+
 module wescene.json;
 import rstd.cppstd;
 import rstd.json;
@@ -340,12 +342,53 @@ OWE_IMPL_GET_JSON(RstdFloatArray3);
 
 #undef OWE_IMPL_GET_JSON
 
-auto ParseJson(std::string_view source, rstd::json::ParseOptions options)
-    -> rstd::json::ParseResult {
-    return rstd::json::from_str(rstd::cppstd::as_str(source).unwrap(), options);
+namespace
+{
+
+// 过渡桥：调用点仍按 rstd::json::Value 读取；调用点迁到 nlohmann 后删除。
+auto ToRstd(const nljson::Value& value) -> Json {
+    using Kind = nljson::Value::value_t;
+    switch (value.type()) {
+    case Kind::boolean: return rstd::into<Json>(value.get<bool>());
+    case Kind::number_unsigned:
+        return rstd::into<Json>(rstd::json::Number::from_u64(u64(value.get<std::uint64_t>())));
+    case Kind::number_integer:
+        return rstd::into<Json>(rstd::json::Number::from_i64(i64(value.get<std::int64_t>())));
+    case Kind::number_float:
+        return rstd::into<Json>(*rstd::json::Number::from_f64(f64(value.get<double>())));
+    case Kind::string: return JsonFromStd(value.get_ref<const std::string&>());
+    case Kind::array: {
+        auto array = rstd::json::Array::make();
+        for (const auto& item : value) array.push(ToRstd(item));
+        return rstd::into<Json>(rstd::move(array));
+    }
+    case Kind::object: {
+        auto object = rstd::json::Map::make();
+        for (const auto& [key, item] : value.items())
+            static_cast<void>(
+                object.insert(String::make(rstd::cppstd::as_str(key).unwrap()), ToRstd(item)));
+        return rstd::into<Json>(rstd::move(object));
+    }
+    default: return rstd::into<Json>(rstd::empty {});
+    }
 }
 
-auto ReadJsonFile(fs::VFS& vfs, fs::Path path, rstd::json::ParseOptions options)
+} // namespace
+
+auto ParseJson(std::string_view source, JsonParseOptions options)
+    -> rstd::Result<Json, JsonParseError> {
+    nljson::Value parsed;
+    std::string   error;
+    if (! nljson::Parse(source,
+                        { .allow_comments        = options.allow_comments,
+                          .allow_trailing_commas = options.allow_trailing_commas },
+                        parsed,
+                        error))
+        return Err(JsonParseError { String::make(rstd::cppstd::as_str(error).unwrap()) });
+    return Ok(ToRstd(parsed));
+}
+
+auto ReadJsonFile(fs::VFS& vfs, fs::Path path, JsonParseOptions options)
     -> rstd::Result<Json, JsonFileError> {
     auto io_error = [](auto error) {
         return JsonFileError { JsonFileErrorKind::Io, rstd::format("{}", error) };
@@ -362,7 +405,7 @@ auto ReadJsonFile(fs::VFS& vfs, fs::Path path, rstd::json::ParseOptions options)
     return Ok(rstd::move(parsed));
 }
 
-auto ReadAssetJsonFile(fs::VFS& vfs, std::string_view path, rstd::json::ParseOptions options)
+auto ReadAssetJsonFile(fs::VFS& vfs, std::string_view path, JsonParseOptions options)
     -> rstd::Result<Json, JsonFileError> {
     auto resolved = fs::ResolveAssetPath(path);
     if (resolved.is_err()) {

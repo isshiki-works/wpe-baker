@@ -94,3 +94,7 @@ target_sources(shader-parse-tests PRIVATE
   tests/shader-parse/shader_parse_tests.cpp)
 target_link_libraries(shader-parse-tests PRIVATE owe-test-support owe-core owe-audio owe-scene owe-vulkan rstd.std rstd.cppstd rstd.json rstd.log rstd.argparse rstd.bench rstd.test wavsen vvk::vvk spirv-reflect)
 target_compile_options(shader-parse-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
+
+# T2-3 过渡期 JSON 语义差分（rstd.json 对 nlohmann），rstd 摘除时删。
+add_executable(json-semantic-diff EXCLUDE_FROM_ALL src/bin/json_semantic_diff.cpp)
+target_link_libraries(json-semantic-diff PRIVATE owe-core rstd.std rstd.cppstd rstd.json)

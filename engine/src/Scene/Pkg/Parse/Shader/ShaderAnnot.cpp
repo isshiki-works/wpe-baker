@@ -27,7 +27,7 @@ using shader_lex::Cursor;
 using shader_lex::LineWalker;
 
 bool TryParseAnnotationJson(std::string_view source, Json& result) {
-    auto parsed = rstd::json::from_str(rstd::cppstd::as_str(source).unwrap());
+    auto parsed = ParseJson(source);
     if (parsed.is_err()) return false;
     result = parsed.unwrap();
     return true;
