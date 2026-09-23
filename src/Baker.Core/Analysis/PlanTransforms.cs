@@ -32,8 +32,6 @@ internal static class PlanTransforms
             plan["video_groups"]!.AsArray().OfType<JsonObject>().SelectMany(g => g["layer_ids"]!.AsArray().Select(n => n!.GetValue<int>())).ToArray(),
             settings, plan["projection"] as JsonObject ?? new JsonObject(), plan["video_groups"] as JsonArray);
         HybridScenePlanner.AnnotateLoopCandidates(plan["loop"]!.AsObject());
-        // bake 侧重算的 loop 直接进 bake.json 的 plan 副本，不再 Attach，临时字段当场去掉。
-        PlanNarrative.StripTransient(plan["loop"]);
     }
 
     /// <summary>Returns a plan clone with one selected foreground suffix retained as whole live roots.</summary>

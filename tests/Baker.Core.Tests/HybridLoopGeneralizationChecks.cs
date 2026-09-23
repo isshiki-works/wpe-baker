@@ -65,9 +65,15 @@ internal static class HybridLoopGeneralizationChecks
             "particle lifetime and sequence timing are not replaced by the material sprite texture period");
 
         // 具名理由是结构化字段，而写给用户的那句话走文案表：同一条 detail 带着自己的键与中英两版。
-        JsonObject particleReason = particle["unresolved"]!.AsArray().OfType<JsonObject>()
+        // 文案不在条目里：走循环分析缓存的两段（plan 形态 loop + 同下标文案），按条目取回。
+        var (particleLoop, particleNotes) = UnresolvedNotes.Unpack(UnresolvedNotes.Pack(LoopAnalysis.Analyze(
+            new JsonObject { ["objects"] = new JsonArray { new JsonObject { ["id"] = 1, ["particle"] = "particles/test.json" } } }, source, null,
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray { Sprite(1) } }, [1], 60, 1, 2, CommonLoopPreference.Balanced, null, null, null)));
+        JsonObject particleReason = particleLoop["unresolved"]!.AsArray().OfType<JsonObject>()
             .Single(x => x["particle_nonperiodic_reason"] is not null);
-        JsonObject particleLocalized = particleReason[PlanNarrative.DetailLocalized]!.AsObject();
+        check(!particleLoop.ToJsonString().Contains("detail_localized", StringComparison.Ordinal) &&
+            JsonNode.DeepEquals(particleLoop, particle), "plan 形态的 loop 与门面渲染逐字相同，条目里没有文案临时字段");
+        JsonObject particleLocalized = particleNotes.Of(particleLoop, particleReason)!.Localized!;
         check(particleReason["particle_nonperiodic_reason"]!.GetValue<string>() == "particle_definition_unavailable" &&
             particleLocalized["key"]?.GetValue<string>() == "unresolved.particle_definition_unreadable" &&
             particleLocalized["en"]!.GetValue<string>().Contains("particle definition \"", StringComparison.Ordinal) &&

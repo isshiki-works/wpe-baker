@@ -375,7 +375,7 @@ internal static class ParticleStationarityChecks
         check(dropletItems.Length == 1 && dropletItems[0]["kind"]!.GetValue<string>() == "runtime_animation" &&
             dropletItems[0]["mechanism"]!.GetValue<string>() == "particle_system" && Stationary(dropletItems[0]["particle_stationarity"]!.AsObject()) &&
             dropletItems[0]["detail"]!.GetValue<string>() == MessageCatalog.RenderLegacy("unresolved.particle_stationary_random") &&
-            dropletItems[0][PlanNarrative.DetailLocalized]?["key"]?.GetValue<string>() == "unresolved.particle_stationary_random",
+            !mixed.ToJsonString().Contains("detail_localized", StringComparison.Ordinal),
             "没有精灵轨道的粒子层也产生一条 particle_system 未解析项：通过判据的标 stationary=true，文案走 MessageCatalog 双语");
         check(trailItems.Length == 1 && !Stationary(trailItems[0]["particle_stationarity"]!.AsObject()) &&
             trailItems[0]["detail"]!.GetValue<string>().Contains("C4 controlpoint_follows_cursor", StringComparison.Ordinal),

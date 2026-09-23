@@ -108,11 +108,9 @@ internal static class EffectPrefixPlanner
             if (owner["animationlayers"] is JsonArray) owner.Remove("animationlayers");
             return prefixScene;
         }
-        // 前缀循环只进缓存描述（bake 侧逐字节比对），不出 unresolved_localized，临时字段当场去掉。
-        JsonObject loop = HybridScenePlanner.AnalyzeLoopForProfile(PrefixScene, source, assets, analysisRuntime, [ownerId],
+        // 前缀循环只进缓存描述（bake 侧逐字节比对），不出 unresolved_localized。
+        return HybridScenePlanner.AnalyzeLoopForProfile(PrefixScene, source, assets, analysisRuntime, [ownerId],
             request, projection, videoGroups: null);
-        PlanNarrative.StripTransient(loop);
-        return loop;
     }
 
     /// <summary>该层 effects 里每个对象效果用到的材质 shader（与 <see cref="ShaderPeriodAnalysis.EffectMaterialShaders"/> 同序）。</summary>

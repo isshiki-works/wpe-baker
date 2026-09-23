@@ -383,18 +383,18 @@ public class LoopItemContractTests
     public void RuntimeTrackItemsKeepPerVariantKeyOrder()
     {
         var particle = new ParticleStationarity.Result(true, [], 1, 2);
-        Assert.Equal("kind,owner_layer_id,mechanism,particle_stationarity,detail,detail_localized",
+        Assert.Equal("kind,owner_layer_id,mechanism,particle_stationarity,detail",
             Keys(new RuntimeTrackUnresolved(false, 3, new Message("unresolved.particle_stationary_random")) { Mechanism = "particle_system", Particle = particle }.ToJson()));
-        Assert.Equal("kind,owner_layer_id,track_name,particle_nonperiodic_reason,particle_stationarity,detail,detail_localized",
+        Assert.Equal("kind,owner_layer_id,track_name,particle_nonperiodic_reason,particle_stationarity,detail",
             Keys(new RuntimeTrackUnresolved(false, 3, new Message("unresolved.particle_stationary_random")) {
                 HasTrackName = true, TrackName = "t", ParticleNonperiodicReason = "particle_audio_input", Particle = particle }.ToJson()));
-        Assert.Equal("kind,owner_layer_id,track_name,mechanism,random_restart,detail,detail_localized",
+        Assert.Equal("kind,owner_layer_id,track_name,mechanism,random_restart,detail",
             Keys(new RuntimeTrackUnresolved(false, 3, new Message("unresolved.script_random_restart")) {
                 HasTrackName = true, Mechanism = "sprite", RandomRestart = true }.ToJson()));
         JsonObject video = new RuntimeTrackUnresolved(true, 3, new Message("unresolved.video_rate_not_one")) { HasTrackName = true }.ToJson();
         Assert.Equal("runtime_video", video["kind"]!.GetValue<string>());
         Assert.True(video.ContainsKey("track_name") && video["track_name"] is null);
-        Assert.Equal("kind,owner_layer_id,detail,detail_localized",
+        Assert.Equal("kind,owner_layer_id,detail",
             Keys(new RuntimeTrackUnresolved(false, 3, new Message("unresolved.owner_or_duration_unresolved")).ToJson()));
     }
 
@@ -467,7 +467,48 @@ public class LoopItemContractTests
         RuntimeTrackReader.Read(scene, null!, null, runtime, [1], items, VideoControlScope.Resolve(scene, runtime),
             new ParticleStationarity.FrameClock(60, 1, 60), out _);
         JsonObject video = Assert.Single(items).ToJson();
-        Assert.Equal("kind,owner_layer_id,track_name,detail,detail_localized", string.Join(",", video.Select(x => x.Key)));
+        Assert.Equal("kind,owner_layer_id,track_name,detail", string.Join(",", video.Select(x => x.Key)));
+    }
+
+    [Fact]
+    public void UnresolvedNotesCarryMessagesAndStaticLayerOutsideThePlan()
+    {
+        LoopUnresolved[] items = [
+            new RuntimeTrackUnresolved(false, 3, new Message("unresolved.particle_stationary_random")) { Mechanism = "particle_system" },
+            new SourceStaticUnresolved("d", 2, new StaticLayerNaming("背景", true)),
+            new SolverUnresolved(true, null, "budget")];
+        var loop = new JsonObject { ["unresolved"] = new JsonArray([.. items.Select(x => (JsonNode)x.ToJson())]) };
+        JsonObject packed = JsonNode.Parse(new JsonObject { ["loop"] = loop.DeepClone(), ["notes"] = UnresolvedNotes.PackNotes(items) }.ToJsonString())!.AsObject();
+        var (unpacked, notes) = UnresolvedNotes.Unpack(packed);
+        // 缓存往返后：loop 只有 v3 字段，文案与点名图层按下标取回。
+        Assert.True(JsonNode.DeepEquals(loop, unpacked) && unpacked.Parent is null);
+        Assert.Equal("unresolved.particle_stationary_random", notes.At(unpacked, 0)!.Localized!["key"]!.GetValue<string>());
+        Assert.Equal(new StaticLayerNaming("背景", true), notes.At(unpacked, 1)!.Layer);
+        Assert.Null(notes.At(unpacked, 2)!.Localized);
+        // 同下标条目被改过就不认。
+        unpacked["unresolved"]![0]!["detail"] = "changed";
+        Assert.Null(notes.At(unpacked, 0));
+        Assert.Null(notes.At(unpacked, 3));
+    }
+
+    [Fact]
+    public void AddLoopUnresolvedKeepsNotesInStepAndDedupesOnTextAndMessage()
+    {
+        var plan = new JsonObject { ["loop"] = new JsonObject { ["unresolved"] = new JsonArray() },
+            ["whole_layer"] = new JsonObject { ["loop"] = new JsonObject { ["unresolved"] = new JsonArray() } } };
+        var notes = new UnresolvedNotes();
+        var first = new Message("unresolved.particle_stationary_random").Localized();
+        Verdict.AddLoopUnresolved(plan, "k", "same", notes, first);
+        Verdict.AddLoopUnresolved(plan, "k", "same", notes, first);
+        Assert.Single(plan["loop"]!["unresolved"]!.AsArray());
+        // 同一句英文、不同文案不算重复（与原来"整条结构相等"同义）。
+        Verdict.AddLoopUnresolved(plan, "k", "same", notes, new Message("unresolved.script_time").Localized());
+        Assert.Equal(2, plan["loop"]!["unresolved"]!.AsArray().Count);
+        Assert.Equal(2, plan["whole_layer"]!["loop"]!["unresolved"]!.AsArray().Count);
+        PlanNarrative.Attach(plan, notes);
+        Assert.Equal(["unresolved.particle_stationary_random", "unresolved.script_time"],
+            plan["whole_layer"]!["loop"]!["unresolved_localized"]!.AsArray().Select(x => x!["key"]!.GetValue<string>()));
+        Assert.Equal("unresolved_localized", plan["loop"]!.AsObject().Last().Key);
     }
 
     [Fact]
@@ -476,11 +517,12 @@ public class LoopItemContractTests
         Assert.Equal("""{"kind":"search_budget","detail":"d"}""", new SolverUnresolved(true, null, "d").ToJson().ToJsonString());
         Assert.Equal("""{"kind":"solver","component":null,"detail":"d"}""", new SolverUnresolved(false, null, "d").ToJson().ToJsonString());
         Assert.Equal("""{"kind":"source_static","detail":"d","owner_layer_id":null}""", new SourceStaticUnresolved("d", null, null).ToJson().ToJsonString());
-        Assert.Equal("""{"kind":"source_static","detail":"d","owner_layer_id":2,"static_layer":{"name":null,"particle":false}}""",
+        // 点名图层只走类型化记录，不进条目。
+        Assert.Equal("""{"kind":"source_static","detail":"d","owner_layer_id":2}""",
             new SourceStaticUnresolved("d", 2, new StaticLayerNaming(null, false)).ToJson().ToJsonString());
-        Assert.Equal("kind,owner_layer_id,binding,clock,detail,detail_localized",
+        Assert.Equal("kind,owner_layer_id,binding,clock,detail",
             Keys(new ScriptTimeUnresolved(1, JsonValue.Create("b"), JsonValue.Create("time")).ToJson()));
-        Assert.Equal("kind,rejected_candidate_count,detail,detail_localized", Keys(new SpriteSeamUnresolved(2).ToJson()));
+        Assert.Equal("kind,rejected_candidate_count,detail", Keys(new SpriteSeamUnresolved(2).ToJson()));
         var shader = new ShaderTemporalUnresolved(1, 0, 0, "r", ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "d");
         Assert.Equal("""{"kind":"UnsupportedShaderMechanism","owner_layer_id":1,"effect_index":0,"pass_index":0,"resource":"r","detail":"d","bounded_displacement":false,"mechanism":null}""",
             new ShaderLoopUnresolved(shader).ToJson().ToJsonString());

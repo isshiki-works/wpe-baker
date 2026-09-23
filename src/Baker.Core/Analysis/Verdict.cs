@@ -102,16 +102,26 @@ internal sealed class Verdict
         report["suitability"] = HybridSuitability.Verdict(report);
     }
 
-    /// <summary>plan 里的 loop 与 whole_layer.loop 是两份独立副本，追加理由时必须同时写。</summary>
-    internal static void AddLoopUnresolved(JsonObject report, string kind, string detail, JsonNode? localized = null)
+    /// <summary>
+    /// plan 里的 loop 与 whole_layer.loop 是两份独立副本，追加理由时必须同时写。条目本身只有 v3 字段；
+    /// <paramref name="localized"/> 是 detail 的 {key, zh, en, params}（例如捕获点探测的理由），与条目同步记进
+    /// <paramref name="notes"/>，写 plan 时渲染进 unresolved_localized。只有英文原文的理由不带。
+    /// 去重看条目与它的文案两样都相同（与原来"整条结构相等"同义）。
+    /// </summary>
+    internal static void AddLoopUnresolved(JsonObject report, string kind, string detail, UnresolvedNotes? notes = null, JsonObject? localized = null)
     {
-        // localized 是 detail 的 {key, zh, en, params}（例如捕获点探测的理由）；只有英文原文的理由不带。
         var entry = new JsonObject { ["kind"] = kind, ["detail"] = detail };
-        if (localized is not null) entry[PlanNarrative.DetailLocalized] = localized.DeepClone();
+        bool noted = false;
         foreach (JsonNode? node in new JsonNode?[] { report["loop"], report["whole_layer"]?["loop"] })
-            if (node is JsonObject loop && loop["unresolved"] is JsonArray unresolved &&
-                !unresolved.Any(item => JsonNode.DeepEquals(item, entry)))
-                unresolved.Add(entry.DeepClone());
+        {
+            if (node is not JsonObject loop || loop["unresolved"] is not JsonArray unresolved ||
+                Enumerable.Range(0, unresolved.Count).Any(index => JsonNode.DeepEquals(unresolved[index], entry) &&
+                    JsonNode.DeepEquals(notes?.At(loop, index)?.Localized, localized))) continue;
+            unresolved.Add(entry.DeepClone());
+            // 两份副本同下标，文案只记一次。
+            if (!noted) notes?.Add(entry, localized);
+            noted = true;
+        }
     }
 
     /// <summary>

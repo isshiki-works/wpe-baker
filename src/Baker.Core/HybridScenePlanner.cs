@@ -97,31 +97,40 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     /// </summary>
     /// <param name="scene">每次求解取一份新的、已冻结时间属性的场景副本（求解会写候选与未解析项，不能共用）。</param>
     public static JsonObject AnalyzeLoopForProfile(Func<JsonObject> scene, ProjectSource source, string? assets, JsonObject runtime,
-        int[] bakedLayerIds, HybridAnalyzeRequest request, JsonObject projection, JsonArray? videoGroups)
+        int[] bakedLayerIds, HybridAnalyzeRequest request, JsonObject projection, JsonArray? videoGroups) =>
+        AnalyzeLoopWithNotes(scene, source, assets, runtime, bakedLayerIds, request, projection, videoGroups).Loop;
+
+    /// <summary>
+    /// 同 <see cref="AnalyzeLoopForProfile"/>，另给出 loop.unresolved 各条的文案与点名图层（<see cref="UnresolvedNotes"/>，不进 plan）：
+    /// analyze 把它带到写 plan；前缀缓存与 bake 前刷新只要 plan 形态的 loop。
+    /// </summary>
+    internal static (JsonObject Loop, UnresolvedNotes Notes) AnalyzeLoopWithNotes(Func<JsonObject> scene, ProjectSource source, string? assets,
+        JsonObject runtime, int[] bakedLayerIds, HybridAnalyzeRequest request, JsonObject projection, JsonArray? videoGroups)
     {
         RetimeProfile profile = RetimeProfile.Resolve(request);
-        JsonObject Solve(double? ceilingOverride)
+        (JsonObject Loop, UnresolvedNotes Notes) Solve(double? ceilingOverride)
         {
             JsonObject input = scene();
-            // 缓存内容带 unresolved 的文案键（detail_localized），格式变了就换前缀，旧缓存不再命中。
-            string key = "loop-v2-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
+            // 缓存两段：plan 形态的 loop + unresolved 各条的文案与点名图层（UnresolvedNotes.Pack）。格式变了就换前缀，旧缓存不再命中。
+            string key = "loop-v3-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
                 request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.SwayRetime, request.LoopPreference, ceilingOverride);
-            return AnalysisCache.Get(request.AnalysisCacheDirectory, key, () => HybridLoopService.Analyze(input, source, assets, runtime, bakedLayerIds,
+            return UnresolvedNotes.Unpack(AnalysisCache.Get(request.AnalysisCacheDirectory, key, () => UnresolvedNotes.Pack(LoopAnalysis.Analyze(
+                input, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
                 SwayRetimeOptionsOf(request, projection, videoGroups, ceilingOverride),
-                LoopLengthMaximumOf(request, videoGroups, ceilingOverride), EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride)));
+                LoopLengthMaximumOf(request, videoGroups, ceilingOverride), EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride)))));
         }
-        JsonObject atPreset = Solve(null);
+        var atPreset = Solve(null);
         // 判定用的是这一案的生效上限（含内嵌视频 2 GiB 收紧），不是档位名义上限：4K 不透明组的生效上限只有 558 s，
         // 两个上限解出来是同一次求解，再跑一遍纯属白跑，还会写出"600 s 那侧循环更短所以胜出"的误导记录。
         double presetCeiling = LoopLengthMaximumOf(request, videoGroups);
         double comparisonCeiling = LoopLengthMaximumOf(request, videoGroups, RetimeProfile.QualityComparisonSeconds);
         if (!profile.ComparesQualityCeilings(presetCeiling) || Math.Abs(presetCeiling - comparisonCeiling) <= 1e-9) return atPreset;
-        JsonObject atComparison = Solve(RetimeProfile.QualityComparisonSeconds);
-        RetimeProfile.QualityCeilingReading presetReading = ReadCeiling(atPreset), comparisonReading = ReadCeiling(atComparison);
+        var atComparison = Solve(RetimeProfile.QualityComparisonSeconds);
+        RetimeProfile.QualityCeilingReading presetReading = ReadCeiling(atPreset.Loop), comparisonReading = ReadCeiling(atComparison.Loop);
         RetimeProfile.QualityCeilingChoice choice = RetimeProfile.ChooseQualityCeiling(presetReading, comparisonReading);
-        JsonObject chosen = choice.UsePresetCeiling ? atPreset : atComparison;
-        chosen["quality_ceiling_used"] = new JsonObject
+        var chosen = choice.UsePresetCeiling ? atPreset : atComparison;
+        chosen.Loop["quality_ceiling_used"] = new JsonObject
         {
             ["seconds"] = choice.UsePresetCeiling ? presetReading.CeilingSeconds : comparisonReading.CeilingSeconds,
             ["source"] = choice.UsePresetCeiling ? "preset" : "quality_comparison",
@@ -273,7 +282,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         }
         int[] BakedLayerIds(JsonArray groups) =>
             groups.OfType<JsonObject>().SelectMany(group => group["layer_ids"]!.AsArray().Select(node => node!.GetValue<int>())).ToArray();
-        var loop = AnalyzeLoopForProfile(LoopScene, source, request.Assets, observation.Trace, BakedLayerIds(composer.Groups),
+        var (loop, loopNotes) = AnalyzeLoopWithNotes(LoopScene, source, request.Assets, observation.Trace, BakedLayerIds(composer.Groups),
             request, projection, composer.Groups);
         AnnotateLoopCandidates(loop);
         // 三处回退都可能要前缀缓存，同一个终端捕获点只问一次渲染器。
@@ -312,7 +321,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         (report, effectPrefixRoute) = await Routes.SettleAsync(report, effectPrefixRoute, request.VideoLayout, composer.Groups.Count,
             observation.Dependencies, PrefixCachesAsync, demoted =>
             {
-                JsonObject demotedLoop = AnalyzeLoopForProfile(LoopScene, source, request.Assets, observation.Trace,
+                // 降级后的 plan 一定采用这份重算的 loop（LayoutAdmission.Evaluate），文案随之换成它的。
+                (JsonObject demotedLoop, loopNotes) = AnalyzeLoopWithNotes(LoopScene, source, request.Assets, observation.Trace,
                     BakedLayerIds(demoted["video_groups"]!.AsArray()),
                     request, demoted["projection"] as JsonObject ?? new JsonObject(), demoted["video_groups"] as JsonArray);
                 AnnotateLoopCandidates(demotedLoop);
@@ -327,7 +337,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             if (report["loop"]?["unresolved"] is JsonArray { Count: > 0 })
                 foreach (JsonObject probe in captureProbes.Recorded.Where(probe =>
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus))
-                    Verdict.AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>(), probe["reason_localized"]);
+                    Verdict.AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>(), loopNotes,
+                        probe["reason_localized"] as JsonObject);
         }
         // README 的承诺：解析周期不完整时，把未解决机制与粒子所在的完整作者子树保留实时，再重查一次周期与构图。
         // 这条路以前只在 bake 阶段跑，analyze 既没走也没记录，用户拿到的就是一个没有任何理由的 unavailable。
@@ -336,7 +347,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         await RecordLoopAllocationFallbackAsync(report, scene, request, output, residualScene, residualResources, progress, cancellationToken);
         // 收尾裁定（原 X 段）：残差布局闸门 → 求解器空候选 → 可追溯不变量 → 视频外壳 → 硬解预检 → 公共查询冲突 → suitability。
         Verdict.Conclude(report, request, source, graph, observation, projection, effectPrefixRoute, residualScene, residualResources);
-        await PlanWriter.WriteAsync(report, request, output, cancellationToken);
+        await PlanWriter.WriteAsync(report, request, output, loopNotes, cancellationToken);
         if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during analysis.");
         return report;
     }

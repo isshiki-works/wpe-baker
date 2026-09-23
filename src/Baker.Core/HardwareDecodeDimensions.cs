@@ -285,6 +285,8 @@ public static class HardwareDecodeDimensions
                 ["basis"] = "Source texture image extent with the bake's own fit rule; the bake re-plans from the actual capture extent before encoding." };
             var unresolved = new JsonArray();
             entry["unresolved"] = unresolved;
+            // unresolved 各条的文案：条目只写 v3 字段，文案在本条目收尾时渲染成 unresolved_localized（v3 里它是条目最后一个键）。
+            var localized = new JsonArray();
             predictions.Add(entry);
             try
             {
@@ -317,18 +319,16 @@ public static class HardwareDecodeDimensions
                 if (opaque.Rejected)
                 {
                     entry["status"] = "predicted_rejected";
-                    unresolved.Add(new Message("unresolved.hardware_decode_dimensions_predicted",
+                    unresolved.Add(Unresolved(new Message("unresolved.hardware_decode_dimensions_predicted",
                             [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(MessageCatalog.English), opaque.ViolationText(MessageCatalog.English), opaque.Limits.BasisEn],
-                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(MessageCatalog.Chinese), opaque.ViolationText(MessageCatalog.Chinese), opaque.Limits.BasisZh])
-                        .Write(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner }, "detail"));
+                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(MessageCatalog.Chinese), opaque.ViolationText(MessageCatalog.Chinese), opaque.Limits.BasisZh]), owner, localized));
                 }
                 else if (transparent.Rejected)
                 {
                     entry["status"] = "predicted_rejected_if_transparent";
-                    unresolved.Add(new Message("unresolved.hardware_decode_dimensions_if_transparent",
+                    unresolved.Add(Unresolved(new Message("unresolved.hardware_decode_dimensions_if_transparent",
                             [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(MessageCatalog.English), transparent.ViolationText(MessageCatalog.English), transparent.Limits.BasisEn, Extent(opaque.StoredWidth, opaque.StoredHeight)],
-                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(MessageCatalog.Chinese), transparent.ViolationText(MessageCatalog.Chinese), transparent.Limits.BasisZh, Extent(opaque.StoredWidth, opaque.StoredHeight)])
-                        .Write(new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner }, "detail"));
+                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(MessageCatalog.Chinese), transparent.ViolationText(MessageCatalog.Chinese), transparent.Limits.BasisZh, Extent(opaque.StoredWidth, opaque.StoredHeight)]), owner, localized));
                 }
                 else entry["status"] = opaque.Padded || transparent.Padded ? "predicted_padding" : "predicted_pass";
             }
@@ -338,7 +338,15 @@ public static class HardwareDecodeDimensions
                 entry["status"] = "not_predicted";
                 entry["reason"] = error.Message;
             }
+            entry["unresolved_localized"] = localized;
         }
         return predictions;
+    }
+
+    /// <summary>一条预检未解析项：条目写 kind/owner_layer_id/detail，文案记进同下标的 <paramref name="localized"/>。</summary>
+    private static JsonObject Unresolved(Message detail, int owner, JsonArray localized)
+    {
+        localized.Add(detail.Localized());
+        return new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner, ["detail"] = detail.Text };
     }
 }
