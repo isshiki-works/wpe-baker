@@ -14,47 +14,6 @@ using rstd::sync::Arc;
 using rstd::sync::atomic::Atomic;
 using rstd::sync::atomic::Ordering;
 
-namespace
-{
-
-// wavsen 在 T5 前仍收 rstd::io::ReadSeekHandle；这里把 owe::io::RangeReader 包一层。
-// wavsen 只看 is_err（读失败回 EIO、定位失败回 -1），所以错误一律报 Other。
-struct WavsenRangeReader {
-    owe::io::RangeReader reader;
-};
-
-auto WavsenError() -> rstd::io::error::Error {
-    return rstd::io::error::Error::from_kind(
-        rstd::io::error::ErrorKind { rstd::io::error::ErrorKind::Other });
-}
-
-} // namespace
-
-template<>
-struct rstd::Impl<rstd::io::Read, WavsenRangeReader> : rstd::ImplBase<WavsenRangeReader> {
-    auto read(rstd::mut_ref<u8[]> buf) -> rstd::io::Result<usize> {
-        auto result = this->self().reader.read(reinterpret_cast<std::uint8_t*>(buf.as_raw_ptr()),
-                                               buf.len().to_primitive());
-        if (result.is_err()) return rstd::Err(WavsenError());
-        return rstd::Ok(usize(*result));
-    }
-};
-
-template<>
-struct rstd::Impl<rstd::io::Seek, WavsenRangeReader> : rstd::ImplBase<WavsenRangeReader> {
-    auto seek(rstd::io::SeekFrom pos) -> rstd::io::Result<u64> {
-        auto from = owe::io::SeekFrom::from_start(pos.start.to_primitive());
-        if (pos.which == rstd::io::SeekFrom::Which::Current) {
-            from = owe::io::SeekFrom::from_current(pos.offset.to_primitive());
-        } else if (pos.which == rstd::io::SeekFrom::Which::End) {
-            from = owe::io::SeekFrom::from_end(pos.offset.to_primitive());
-        }
-        auto result = this->self().reader.seek(from);
-        if (result.is_err()) return rstd::Err(WavsenError());
-        return rstd::Ok(u64(*result));
-    }
-};
-
 enum class PlaybackMode
 {
     Random,
@@ -113,7 +72,7 @@ private:
 
 } // namespace
 
-class SoundStream : public wavsen::audio::SoundStream {
+class SoundStream : public owe::media::PcmSource {
 public:
     struct Config {
         f32          maxtime { 10.0f };
@@ -130,30 +89,30 @@ public:
           m_audio_average(rstd::move(audio_average)) {};
     virtual ~SoundStream() = default;
 
-    u64 next_pcm(void* pData, u32 frameCount) override {
+    std::uint32_t next_pcm(float* pData, std::uint32_t frameCount) override {
         SyncControl();
-        if (m_dead) return u64();
-        if (! m_state->playing.load(Ordering::Acquire)) return u64();
-        u64 frameReads {};
+        if (m_dead) return 0;
+        if (! m_state->playing.load(Ordering::Acquire)) return 0;
+        std::uint32_t frameReads {};
         size_t empty_sources = 0;
-        while (frameReads < u64(frameCount.to_primitive()) && !m_dead) {
+        while (frameReads < frameCount && !m_dead) {
             if (!m_curActive) Switch();
             if (!m_curActive) break;
-            const auto remaining = u32(frameCount.to_primitive() - frameReads.to_primitive());
-            auto* output = static_cast<float*>(pData) + frameReads.to_primitive() * m_desc.channels.to_primitive();
+            const auto remaining = frameCount - frameReads;
+            auto* output = pData + std::size_t(frameReads) * m_desc.channels;
             const auto count = m_curActive->next_pcm(output, remaining);
-            if (auto failure = m_curActive->error(); failure.is_some()) {
-                Fail(rstd::cppstd::to_string(*failure));
+            if (auto failure = m_curActive->last_error(); ! failure.empty()) {
+                Fail(std::string(failure));
                 break;
             }
-            if (count > u64(remaining.to_primitive())) {
+            if (count > remaining) {
                 Fail("sound decoder returned more sample frames than requested");
                 break;
             }
             frameReads += count;
-            if (count == u64()) ++empty_sources;
+            if (count == 0) ++empty_sources;
             else empty_sources = 0;
-            if (count < u64(remaining.to_primitive())) {
+            if (count < remaining) {
                 m_curActive.reset();
                 if (m_config.mode == PlaybackMode::Single) {
                     m_state->playing.store(false, Ordering::Release);
@@ -165,11 +124,10 @@ public:
                 }
             }
         }
-        UpdateAudioAverage(pData, frameReads);
+        UpdateAudioAverage(pData, u64(std::uint64_t(frameReads)));
         {
-            float*     pData_float = static_cast<float*>(pData);
-            const auto num =
-                usize(frameReads.to_primitive()) * usize(m_desc.channels.to_primitive());
+            float*     pData_float = pData;
+            const auto num = usize(std::size_t(frameReads)) * usize(std::size_t(m_desc.channels));
             const auto volume = m_state->volume.load(Ordering::Acquire).to_primitive();
             for (usize i {}; i < num; ++i, ++pData_float) {
                 (*pData_float) *= volume;
@@ -177,10 +135,8 @@ public:
         }
         return frameReads;
     };
-    void pass_desc(const Desc& d) override { m_desc = d; }
-    auto error() const -> Option<ref<str>> override {
-        return m_error.is_empty() ? None() : Some(m_error.as_str());
-    }
+    void pass_desc(const owe::media::PcmDesc& d) override { m_desc = d; }
+    auto last_error() const -> std::string_view override { return m_error; }
 
     // Walk paths until one opens. If all fail, disable the stream so the
     // audio callback stops re-trying every tick (which spammed FFmpeg's
@@ -197,13 +153,12 @@ public:
             const std::string& path   = m_soundPaths[((base + tried) % n).to_primitive()];
             auto               source = vfs.open_read(fs::ToPath("/assets/" + path));
             if (source.is_err()) continue;
-            auto handle = rstd::io::ReadSeekHandle::make(
-                WavsenRangeReader { rstd::move(source).unwrap_unchecked().into_reader() });
-            auto stream = wavsen::audio::make_stream(rstd::move(handle), m_desc);
-            if (stream) {
-                m_curActive = std::move(stream);
+            owe::media::AudioDecoder decoder;
+            if (decoder.open(rstd::move(source).unwrap_unchecked().into_reader(), m_desc)) {
+                m_curActive = std::move(decoder);
                 return;
             }
+            rstd::log::error("SoundStream: {}: {}", path, std::string(decoder.last_error()));
         }
         m_dead = true;
         m_state->playing.store(false, Ordering::Release);
@@ -225,7 +180,7 @@ public:
 private:
     void Fail(std::string message) {
         m_dead = true;
-        m_error = String::make(rstd::cppstd::as_str(message).unwrap());
+        m_error = message;
         if (active_offline_execution) active_offline_execution->diagnose("sound layer: " + message, true);
         rstd::log::error("SoundStream: {}", m_error);
     }
@@ -248,10 +203,10 @@ private:
     }
 
     void UpdateAudioAverage(const void* pData, u64 frameReads) {
-        if (m_audio_average.is_none() || frameReads == u64() || m_desc.channels == u32()) return;
+        if (m_audio_average.is_none() || frameReads == u64() || m_desc.channels == 0) return;
 
         const float* samples = static_cast<const float*>(pData);
-        const auto total = usize(frameReads.to_primitive()) * usize(m_desc.channels.to_primitive());
+        const auto total = usize(frameReads.to_primitive()) * usize(std::size_t(m_desc.channels));
         if (total == usize()) return;
 
         const usize bin_count = (*m_audio_average)->Len();
@@ -272,21 +227,21 @@ private:
 
     fs::VFS&        vfs;
     Config          m_config;
-    Desc            m_desc;
+    owe::media::PcmDesc m_desc;
     Arc<SoundState> m_state;
     u32             m_curIndex {};
     u32             m_seenPlaySeq {};
     u32             m_seenStopSeq {};
     bool            m_dead { false };
-    String          m_error;
+    std::string     m_error;
 
-    const std::vector<std::string>              m_soundPaths;
-    std::unique_ptr<wavsen::audio::SoundStream> m_curActive;
-    Option<Arc<SceneAudioAverage>>              m_audio_average;
+    const std::vector<std::string>          m_soundPaths;
+    std::optional<owe::media::AudioDecoder> m_curActive;
+    Option<Arc<SceneAudioAverage>>          m_audio_average;
 };
 
 std::shared_ptr<SceneSoundControl> SoundParser::Parse(const wpscene::SoundObject& obj, fs::VFS& vfs,
-                                               wavsen::audio::SoundManager& sm, Scene* scene) {
+                                               owe::media::OfflineMixer& sm, Scene* scene) {
     SoundStream::Config config { .maxtime = f32(obj.maxtime),
                                  .mintime = f32(obj.mintime),
                                  .volume  = f32(obj.volume).clamp(f32(), f32(1.0f)),

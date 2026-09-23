@@ -2,7 +2,6 @@ export module wescene.pkg.parse;
 
 import wescene.json;
 import wescene.fs;
-import wavsen.audio;
 
 export import :shader_lex;
 export import wescene.pkg.scene_obj;

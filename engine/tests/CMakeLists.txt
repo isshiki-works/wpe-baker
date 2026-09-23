@@ -87,3 +87,27 @@ target_sources(version-corpus-tests PRIVATE
   tests/version-corpus/version_tests.cpp)
 target_link_libraries(version-corpus-tests PRIVATE owe-test-support owe-core owe-audio owe-scene owe-vulkan rstd.std rstd.cppstd rstd.log gtest_main wavsen vvk::vvk spirv-reflect)
 target_compile_options(version-corpus-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
+
+# owe-media 单测（含从 wavsen 移植的三组音频测试）。
+add_executable(media-tests EXCLUDE_FROM_ALL)
+target_sources(media-tests PRIVATE
+  tests/media/audio_decoder_tests.cpp
+  tests/media/offline_mixer_tests.cpp
+  tests/media/volume_ramp_tests.cpp)
+target_link_libraries(media-tests PRIVATE owe-media gtest_main)
+target_compile_options(media-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
+
+# T5a 对拍：wavsen 旧音频路径 vs owe-media，逐字节比较。T5b 删 wavsen 时连同 tests/media/media_parity_tests.cpp 一起删。
+# 夹具目录由环境变量 OWE_MEDIA_PARITY_DIR 指定（语料音频不进仓库），没设时跳过。
+add_executable(media-parity-tests EXCLUDE_FROM_ALL)
+target_sources(media-parity-tests PRIVATE
+  tests/media/media_parity_tests.cpp)
+target_link_libraries(media-parity-tests PRIVATE owe-media gtest_main wavsen::audio)
+target_compile_options(media-parity-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
+
+# wescene.vk 薄层单测（T4a）：不需要 GPU；Vulkan 入口由测试注入，VK_CHECK 的失败处理由测试提供。
+add_executable(vk-tests EXCLUDE_FROM_ALL)
+target_sources(vk-tests PRIVATE
+  tests/vk/vk_tests.cpp)
+target_link_libraries(vk-tests PRIVATE owe-vk gtest_main)
+target_compile_options(vk-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)

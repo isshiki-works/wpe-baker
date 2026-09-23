@@ -1,6 +1,6 @@
 export module wescene.pkg.parse:scene_parser;
 import rstd;
-import wavsen.audio;
+import owe.media;
 import wescene.fs;
 import wescene.json;
 import wescene.scene;
@@ -47,7 +47,7 @@ struct ParsedScene {
 class SceneParser {
 public:
     auto Parse(ref<str> scene_id, ref<wpscene::SceneDocument> document, mut_ref<fs::VFS> vfs,
-               mut_ref<wavsen::audio::SoundManager> sound, SceneParseOptions options = {})
+               mut_ref<owe::media::OfflineMixer> sound, SceneParseOptions options = {})
         -> Result<ParsedScene, SceneParseError>;
 };
 

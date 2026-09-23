@@ -1,6 +1,10 @@
+module;
+// 先让全局 operator new 声明可见，避免 clang 22 合成第二个重载后在代码生成时崩溃（同 types.cppm）。
+// 原来靠 import wavsen.audio 间接带进来，去掉该 import 后必须显式包含。
+#include <new>
+
 export module wescene.pkg.scene_obj:sound_object;
 import rstd.cppstd;
-import wavsen.audio;
 import wescene.fs;
 
 import wescene.json;

@@ -2,7 +2,7 @@ export module wescene.pkg.parse:scene_context;
 import eigen;
 
 import rstd;
-import wavsen.audio;
+import owe.media;
 import wescene.fs;
 import wescene.json;
 import wescene.scene;
@@ -198,7 +198,7 @@ struct SceneParseContext {
     };
     HashMap<String, DynamicImagePrototype>   dynamic_image_prototypes;
     HashMap<String, wpscene::ParticleObject> dynamic_particle_prototypes;
-    wavsen::audio::SoundManager*             sound_manager { nullptr };
+    owe::media::OfflineMixer*                sound_manager { nullptr };
 
     HashMap<i32, String> system_media_image_fallbacks;
     HashSet<i32>         linked_source_ids;
@@ -290,7 +290,7 @@ void ResolveRegisteredAssets(SceneParseContext&);
 void ParseImageObj(SceneParseContext&, wpscene::ImageObject&);
 void ParseShapeObj(SceneParseContext&, wpscene::ShapeObject&);
 void ParseParticleObj(SceneParseContext&, wpscene::ParticleObject&);
-void ParseSoundObj(SceneParseContext&, wpscene::SoundObject&, wavsen::audio::SoundManager&);
+void ParseSoundObj(SceneParseContext&, wpscene::SoundObject&, owe::media::OfflineMixer&);
 void ParseModelObj(SceneParseContext&, wpscene::ModelObject&);
 void ParseTextObj(SceneParseContext&, wpscene::TextObject&);
 
@@ -347,7 +347,7 @@ SceneParseContext BuildContext(fs::VFS&, ref<str> scene_id, const wpscene::Scene
 void IndexSceneDocument(SceneParseContext&, ref<wpscene::SceneDocument>, slice<SceneObjectVar>);
 void ProcessContainers(SceneParseContext&, mut_ref<SceneObjectVar[]>);
 
-void ProcessObjects(SceneParseContext&, mut_ref<SceneObjectVar[]>, wavsen::audio::SoundManager* sm,
+void ProcessObjects(SceneParseContext&, mut_ref<SceneObjectVar[]>, owe::media::OfflineMixer* sm,
                     ProcessOpts opts = {});
 
 Box<Scene> FinalizeScene(SceneParseContext&);
