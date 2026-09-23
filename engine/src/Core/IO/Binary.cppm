@@ -27,7 +27,6 @@ enum class ErrorKind : std::uint8_t
     NotADirectory,
     InvalidInput,
     InvalidData,
-    InvalidFilename,
     UnexpectedEof,
     Other,
     Uncategorized,
@@ -37,16 +36,14 @@ class Error {
 public:
     static auto from_kind(ErrorKind kind) noexcept -> Error { return Error(kind, -1); }
 
-    // Windows 错误码到种类的映射取 rstd decode_error_kind 中文件操作能遇到的几项。
+    // Windows 错误码到种类：只保留行为依赖的 NotFound（VFS 叠加查找）与探针能测到的 PermissionDenied；
+    // 其余码显示为 uncategorized（rstd 对 87/13/206 另有名字，只影响日志文字）。
     static auto from_os(DWORD code) noexcept -> Error {
         auto kind = ErrorKind::Uncategorized;
         switch (code) {
         case ERROR_FILE_NOT_FOUND:
         case ERROR_PATH_NOT_FOUND: kind = ErrorKind::NotFound; break;
         case ERROR_ACCESS_DENIED: kind = ErrorKind::PermissionDenied; break;
-        case ERROR_INVALID_PARAMETER:
-        case ERROR_INVALID_DATA: kind = ErrorKind::InvalidInput; break;
-        case ERROR_FILENAME_EXCED_RANGE: kind = ErrorKind::InvalidFilename; break;
         default: break;
         }
         return Error(kind, static_cast<std::int32_t>(code));
@@ -65,7 +62,6 @@ public:
         case ErrorKind::NotADirectory: text = "not a directory"; break;
         case ErrorKind::InvalidInput: text = "invalid input parameter"; break;
         case ErrorKind::InvalidData: text = "invalid data"; break;
-        case ErrorKind::InvalidFilename: text = "invalid filename"; break;
         case ErrorKind::UnexpectedEof: text = "unexpected end of file"; break;
         case ErrorKind::Other: text = "other error"; break;
         case ErrorKind::Uncategorized: text = "uncategorized error"; break;
@@ -198,15 +194,15 @@ public:
 
     auto info() const -> Result<FileInfo> { return file_info(m_handle); }
 
-    // 同步句柄上的定位读（OVERLAPPED 偏移），与 rstd read_at 相同：单次最多 0x7ffff000 字节，
-    // ERROR_HANDLE_EOF 视为读到 0 字节。
+    // 同步句柄上的定位读（OVERLAPPED 偏移），ERROR_HANDLE_EOF 视为读到 0 字节（同 rstd）。
+    // 调用方单次请求都小于 4 GiB（pkg 条目长度是 int32），不做 DWORD 截断保护。
     auto read_at(std::uint8_t* buffer, std::size_t size, std::uint64_t offset) const
         -> Result<std::size_t> override {
         OVERLAPPED overlapped {};
         overlapped.Offset     = static_cast<DWORD>(offset);
         overlapped.OffsetHigh = static_cast<DWORD>(offset >> 32);
         DWORD count {};
-        auto  length = size > 0x7ffff000u ? DWORD(0x7ffff000u) : static_cast<DWORD>(size);
+        auto  length = static_cast<DWORD>(size);
         if (! ReadFile(m_handle, buffer, length, &count, &overlapped)) {
             auto error = GetLastError();
             if (error == ERROR_HANDLE_EOF) return Ok(std::size_t {});
