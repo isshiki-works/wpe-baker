@@ -80,7 +80,7 @@ public class RendererClientTests
     public async Task ProcessFailureAndTimeoutPaths() => await TestTemp.Run(async dir =>
     {
         string failing = Cmd(dir, "fail.cmd", "echo out\r\necho boom 1>&2\r\nexit /b 3");
-        string slow = Cmd(dir, "slow.cmd", ":spin\r\ngoto spin");
+        string slow = Cmd(dir, "slow.cmd", "\"%SystemRoot%\\System32\\ping.exe\" -n 30 127.0.0.1 >nul");
         var tool = new FfmpegTool(Tools(dir, ffmpeg: Cmd(dir, "bytes.cmd", "echo ABCD")));
         var logged = await Assert.ThrowsAsync<IOException>(() => tool.RunTextAsync(failing, [], Path.Combine(dir, "fail.log"), CancellationToken.None));
         Assert.Contains("exited 3", logged.Message);
@@ -89,7 +89,7 @@ public class RendererClientTests
         Assert.Contains("boom", captured.Message);
         Assert.Equal(3, await tool.RunToFilesAsync(failing, [], Path.Combine(dir, "o.txt"), Path.Combine(dir, "e.txt"), CancellationToken.None));
         Assert.Equal("out", File.ReadAllText(Path.Combine(dir, "o.txt")).Trim());
-        // 超时就是调用方给的 token：到点杀进程树并以取消结束，不会等死循环的批处理自己结束。
+        // 超时就是调用方给的 token：到点杀进程树并以取消结束，不等 30 秒的 ping 自己结束。
         using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
         var started = System.Diagnostics.Stopwatch.StartNew();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tool.RunToFilesAsync(slow, [], Path.Combine(dir, "so.txt"), Path.Combine(dir, "se.txt"), timeout.Token));
