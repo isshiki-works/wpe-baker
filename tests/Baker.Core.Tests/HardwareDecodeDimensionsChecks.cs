@@ -65,8 +65,8 @@ internal static class HardwareDecodeDimensionsChecks
         // ---- 奇数 ----
         var odd = HardwareDecodeDimensions.Evaluate(1001, 501, false, 60, 1);
         check(odd.Status == HardwareDecodeDimensions.PaddedStatus && odd.PaddedWidth == 1002 && odd.PaddedHeight == 502 &&
-            odd.OffsetX == 0 && odd.OffsetY == 0 && HardwareDecodeDimensions.Grow(1001, 1001) == (1002u, 0u) &&
-            HardwareDecodeDimensions.Grow(6, 64) == (66u, 30u) && HardwareDecodeDimensions.Grow(64, 48) == (64u, 0u),
+            odd.OffsetX == 0 && odd.OffsetY == 0 && DecodeDimensions.Grow(1001, 1001) == (1002u, 0u) &&
+            DecodeDimensions.Grow(6, 64) == (66u, 30u) && DecodeDimensions.Grow(64, 48) == (64u, 0u),
             "odd content is aligned to even 4:2:0 dimensions by padding at the far edge only");
         check(PlaybackEncodeProfileSelect(3840, 2160) == "libx264" && PlaybackEncodeProfileSelect(4097, 2) == "libx265" &&
             PlaybackEncodeProfileSelect(2, 4097) == "libx265" && PlaybackEncodeProfileSelect(4096, 2320) == "libx265",

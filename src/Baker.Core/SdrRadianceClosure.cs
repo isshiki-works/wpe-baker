@@ -8,33 +8,13 @@ namespace Baker.Core;
 /// 而被 RGBA8 组捕获 clip"。当且仅当组内每个可见绘制层的材质来源（R1）、混合模式（R2）、纹理输入（R3）、
 /// 颜色/亮度/alpha 标量（R4）与反馈路径（R5）全部落在可判定的 SDR 闭合集合内，才认定捕获无损。
 /// 任何一条未知都判不通过——判据只回答"会不会被 clip"，不回答画面、循环或回放收益。
+/// 白名单与数值区间在 Domain 的 <see cref="SdrRadianceCriteria"/>；这里逐层读 JSON 与资源、写 checks 与说明文字。
 /// </summary>
 public static class SdrRadianceClosure
 {
     /// <summary>证明不成立时给用户的拒绝理由前缀；点名失败层与判据的说明会追加在后面。</summary>
     public const string HdrBlocker = "HDR intermediate compositing is not supported by the current RGBA8 group capture; " +
         "its radiance range must not be silently clipped into an SDR video.";
-
-    /// <summary>内置 SDR 着色器：输出值域不超过输入值域，没有放大路径。工坊自定义着色器一律不在其中。</summary>
-    private static readonly HashSet<string> SdrShaders = new(StringComparer.Ordinal)
-        { "flat", "genericimage", "genericimage2", "genericimage3", "genericimage4", "solidlayer" };
-    /// <summary>
-    /// 已知不改变值域的 combo 键；出现任何其它键即判未知。键按大小写不敏感比较：渲染器
-    /// （engine ShaderParser::PreShaderHeader）把每个 combo 键 toupper 后才写成 <c>#define</c>，
-    /// 所以官方 materials/util/solidlayer_instance_*.json 里的小写 "version" 与 "VERSION" 是同一个宏。
-    /// VERSION 在 genericimage/genericimage2 里只切换 g_Brightness·g_UserAlpha 与 g_Color4 两组标量乘法，
-    /// genericimage3/4 不引用它；两条路径的值域都由 R4 的标量判据兜住。
-    /// </summary>
-    private static readonly HashSet<string> SafeCombos = new(StringComparer.OrdinalIgnoreCase) { "VERSION" };
-    /// <summary>alpha 凸组合，上界不升；additive 等一律不通过。</summary>
-    private static readonly HashSet<string> SdrBlending = new(StringComparer.Ordinal) { "normal", "translucent" };
-    /// <summary>8bit 无符号解码格式；10bit/PQ/HLG 及任何未列出的格式都算未知。</summary>
-    private static readonly HashSet<string> EightBitPixelFormats = new(StringComparer.Ordinal) {
-        "yuv420p", "yuvj420p", "yuv422p", "yuvj422p", "yuv444p", "yuvj444p", "yuva420p",
-        "nv12", "nv21", "gray", "rgb24", "bgr24", "rgba", "bgra", "argb", "abgr", "rgb0", "bgr0", "0rgb", "0bgr" };
-    /// <summary>采样当前帧缓冲的保留纹理名：组输出会反馈进自身，值域不可判。</summary>
-    private static readonly HashSet<string> FeedbackTextures = new(StringComparer.Ordinal)
-        { "_rt_default", "_rt_FullFrameBuffer", "_rt_Backbuffer" };
 
     private const string Scope = "The closure proof only states that this group's own output stays within [0,1], " +
         "so the RGBA8 group capture does not clip it. Capture is sampled before postprocessing, leaving bloom and tone mapping " +
@@ -292,7 +272,7 @@ public static class SdrRadianceClosure
             foreach (var material in materials.OfType<JsonObject>())
             {
                 string? shader = Text(material["shader"]);
-                if (shader is null || !SdrShaders.Contains(shader))
+                if (!SdrRadianceCriteria.IsBuiltInSdrShader(shader))
                 {
                     checks.Add(Check("R1", false, $"runtime shader \"{shader ?? "unknown"}\" is not a built-in SDR shader"));
                     return;
@@ -343,14 +323,14 @@ public static class SdrRadianceClosure
         foreach (var pass in passes.OfType<JsonObject>())
         {
             string? shader = Text(pass["shader"]);
-            if (shader is null || !SdrShaders.Contains(shader))
+            if (!SdrRadianceCriteria.IsBuiltInSdrShader(shader))
             {
                 checks.Add(Check("R1", false, $"material shader \"{shader ?? "unknown"}\" is not a built-in SDR shader"));
                 return;
             }
             if (pass["combos"] is JsonObject combos)
                 foreach (var (key, _) in combos)
-                    if (!SafeCombos.Contains(key))
+                    if (!SdrRadianceCriteria.IsRangePreservingCombo(key))
                     {
                         checks.Add(Check("R1", false, $"material combo \"{key}\" is not a known range-preserving combo"));
                         return;
@@ -362,14 +342,14 @@ public static class SdrRadianceClosure
         foreach (var pass in passes.OfType<JsonObject>())
         {
             string? blending = Text(pass["blending"]);
-            if (blending is null || !SdrBlending.Contains(blending))
+            if (!SdrRadianceCriteria.IsRangePreservingBlend(blending))
             {
                 checks.Add(Check("R2", false, $"pass blending \"{blending ?? "unset"}\" is not a range-preserving blend"));
                 return;
             }
         }
         JsonNode? blendMode = HybridScenePlanner.Resolve(Field(obj, "colorBlendMode"), properties);
-        if (blendMode is not null && !(Number(blendMode, out double modeValue) && modeValue == 0))
+        if (blendMode is not null && !(Number(blendMode, out double modeValue) && SdrRadianceCriteria.IsNormalColorBlendMode(modeValue)))
         {
             checks.Add(Check("R2", false, $"colorBlendMode {blendMode.ToJsonString()} is not the normal (0) mode"));
             return;
@@ -378,12 +358,13 @@ public static class SdrRadianceClosure
         // R3 输入封闭 / R5 无反馈路径。
         foreach (string texture in textures.Distinct(StringComparer.Ordinal))
         {
-            if (FeedbackTextures.Contains(texture))
+            TextureFeedback feedback = SdrRadianceCriteria.Feedback(texture);
+            if (feedback == TextureFeedback.Framebuffer)
             {
                 checks.Add(Check("R5", false, $"the layer samples the current framebuffer through \"{texture}\""));
                 return;
             }
-            if (texture.StartsWith("_rt_", StringComparison.Ordinal))
+            if (feedback == TextureFeedback.RenderTarget)
             {
                 checks.Add(Check("R5", false, $"the layer samples a render target \"{texture}\" whose range is not decidable"));
                 return;
@@ -441,7 +422,7 @@ public static class SdrRadianceClosure
             return false;
         }
         string? pixelFormat = Text(stream["pixel_format"]);
-        if (pixelFormat is null || !EightBitPixelFormats.Contains(pixelFormat))
+        if (!SdrRadianceCriteria.IsEightBitSdrPixelFormat(pixelFormat))
         {
             detail = $"video texture \"{texture}\" decodes as \"{pixelFormat ?? "unknown"}\", which is not a known 8-bit SDR pixel format";
             return false;
@@ -468,17 +449,11 @@ public static class SdrRadianceClosure
         }
         var components = new List<double>();
         if (Number(value, out double number)) components.Add(number);
-        else if (value is JsonValue text && text.TryGetValue<string>(out string? literal))
+        else if (value is JsonValue text && text.TryGetValue<string>(out string? literal) &&
+            !SdrRadianceCriteria.TryParseComponents(literal, components))
         {
-            foreach (string token in literal.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                if (!double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out double component))
-                {
-                    detail = $"{label} value \"{literal}\" is not a numeric literal";
-                    return false;
-                }
-                components.Add(component);
-            }
+            detail = $"{label} value \"{literal}\" is not a numeric literal";
+            return false;
         }
         if (components.Count == 0)
         {
@@ -486,7 +461,7 @@ public static class SdrRadianceClosure
             return false;
         }
         foreach (double component in components)
-            if (!double.IsFinite(component) || component < -1e-9 || component > 1 + 1e-9)
+            if (!SdrRadianceCriteria.IsWithinUnitRange(component))
             {
                 detail = $"{label} component {component.ToString("R", CultureInfo.InvariantCulture)} is outside [0,1]";
                 return false;
