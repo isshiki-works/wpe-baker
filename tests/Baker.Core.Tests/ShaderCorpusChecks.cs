@@ -69,18 +69,20 @@ internal static class ShaderCorpusChecks
         Write("scene.json", scene.ToJsonString());
         int[] ids = [.. objects.Select(item => item!["id"]!.GetValue<int>())];
         using var source = new ProjectSource(directory);
-        var analyses = new Dictionary<double, ShaderPeriodAnalysisResult>();
+        // 同一 (上限, 调速预算) 只分析一次；expect 的 retime_percent 是交给 Analyze 的调速预算（百分比），缺省用 Analyze 自己的缺省。
+        var analyses = new Dictionary<(double, double), ShaderPeriodAnalysisResult>();
         double? defaultCeiling = suite["ceiling"]?.GetValue<double>();
-        ShaderPeriodAnalysisResult Analyze(double? ceiling)
+        ShaderPeriodAnalysisResult Analyze(double? ceiling, double? retimePercent)
         {
-            double key = ceiling ?? defaultCeiling ?? double.NaN;
+            var key = (ceiling ?? defaultCeiling ?? double.NaN, retimePercent ?? ShaderPeriodAnalysis.DefaultRetimePercent);
             if (!analyses.TryGetValue(key, out ShaderPeriodAnalysisResult? result))
-                analyses[key] = result = ShaderPeriodAnalysis.Analyze(scene, source, null, ids, ceiling ?? defaultCeiling);
+                analyses[key] = result = ShaderPeriodAnalysis.Analyze(scene, source, null, ids, ceiling ?? defaultCeiling, key.Item2);
             return result;
         }
         foreach (JsonObject expect in suite["expect"]!.AsArray().OfType<JsonObject>())
-            check(Holds(Analyze(expect["ceiling"]?.GetValue<double>()), expect), expect["message"]!.GetValue<string>());
-        return new(Analyze(null), directory, scene);
+            check(Holds(Analyze(expect["ceiling"]?.GetValue<double>(), expect["retime_percent"]?.GetValue<double>()), expect),
+                expect["message"]!.GetValue<string>());
+        return new(Analyze(null, null), directory, scene);
     }
 
     /// <summary>

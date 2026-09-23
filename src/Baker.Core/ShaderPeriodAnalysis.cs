@@ -82,10 +82,17 @@ public static class ShaderPeriodAnalysis
     private static ClockRuleTable Table => ClockRuleTable.Default;
 
     /// <param name="loopCeilingSeconds">循环时长上限（秒，= --loop-max-seconds，缺省 600），只进拒绝文案，不改判定。</param>
+    /// <param name="maximumRetimePercent">
+    /// 本次求解允许的单个分量最大调速（百分比，0–5）：即 <see cref="LoopAnalysis"/> 交给求解器的同一个数
+    /// （档位预算 RetimeProfile.CommonRetimePercent：效率 5、平衡 3、质量无预算时回落到请求的 2，关通用调速时 0；--retime-budget 覆盖）。
+    /// 缺省 2 与 HybridLoopService.Analyze、CommonLoopRequest 的缺省一致。
+    /// </param>
     public static ShaderPeriodAnalysisResult Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory,
-        IReadOnlyCollection<int> selectedLayerIds, double? loopCeilingSeconds = null)
+        IReadOnlyCollection<int> selectedLayerIds, double? loopCeilingSeconds = null, double maximumRetimePercent = DefaultRetimePercent)
     {
         double ceiling = loopCeilingSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
+        if (!double.IsFinite(maximumRetimePercent) || maximumRetimePercent < 0 || maximumRetimePercent > CommonLoopSolver.MaximumRetimePercent)
+            throw new ArgumentOutOfRangeException(nameof(maximumRetimePercent), "Retiming must be between zero and five percent.");
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(selectedLayerIds);
@@ -169,7 +176,7 @@ public static class ShaderPeriodAnalysis
                         continue;
                     }
                     ShaderVerdict verdict = Judge(new(ownerId, effectIndex, authoredPassIndex, effectivePass, shader, shaderResource,
-                        new ShaderSource(shaderText), owner, objectsById, source, assetsDirectory, ceiling));
+                        new ShaderSource(shaderText), owner, objectsById, source, assetsDirectory, ceiling, maximumRetimePercent));
                     components.AddRange(verdict.Components);
                     unresolved.AddRange(verdict.Unresolved);
                 }
@@ -181,7 +188,7 @@ public static class ShaderPeriodAnalysis
     /// <summary>一个进入规则链的 pass：定位、合并后的分析 pass、索引过的源码，以及个别规则要的场景上下文。</summary>
     private sealed record PassContext(int OwnerId, int EffectIndex, int PassIndex, JsonObject Pass, string Shader, string Resource,
         ShaderSource Source, JsonObject Owner, IReadOnlyDictionary<int, JsonObject> ObjectsById, ProjectSource Project, string? Assets,
-        double Ceiling)
+        double Ceiling, double RetimePercent)
     {
         public ShaderVerdict Refuse(ShaderTemporalUnresolvedKind kind, string detail, bool bounded = false, string mechanism = "",
             SwayModel? sway = null) =>
@@ -716,11 +723,12 @@ public static class ShaderPeriodAnalysis
             $"{period.ToString("0.###", CultureInfo.InvariantCulture)} s";
         // 最大调速也够不进上限的精确周期不交给求解器：作为分量它只会让整张壁纸无候选，而作为未解析项，
         // 分配回退还能把这一层留实时、让其余图层照常找循环。
-        // 上限是本次分析实际用的循环时长上限（--loop-max-seconds，含内嵌视频收紧），由 Analyze 传入，不取求解器缺省值。
-        if (period > c.Ceiling * (1 + MaximumRetimeFraction))
+        // 上限是本次分析实际用的循环时长上限（--loop-max-seconds，含内嵌视频收紧），由 Analyze 传入，不取求解器缺省值；
+        // 调速余量同理是本次求解实际允许的调速预算（档位预算），不再写死 2%。
+        if (period > c.Ceiling * (1 + c.RetimePercent / 100))
             return c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
                 $"Water-ripple scroll is off, so its {equation}. That is past the {CeilingText(c.Ceiling)}-second loop ceiling " +
-                "even with the largest retime, and a retime scales both axes equally.",
+                $"even with the largest retime this analysis allows ({CeilingText(c.RetimePercent)}%), and a retime scales both axes equally.",
                 bounded: true, mechanism: WaterRippleScrollMechanism);
         return ShaderVerdict.Of(new ShaderPeriodComponent(new(c.Id("animationspeed"),
             new CommonLoopPeriod(period, CommonLoopPeriodEvidence.Analytic), AllowRetime: true),
@@ -738,8 +746,8 @@ public static class ShaderPeriodAnalysis
         }
     }
 
-    /// <summary>求解器允许的单个分量最大调速比例；与 HybridLoopService 的 0–2% 入参上限一致。</summary>
-    private const double MaximumRetimeFraction = 0.02;
+    /// <summary>调用方没给调速预算时的缺省（百分比）：与 HybridLoopService.Analyze、CommonLoopRequest 的缺省 2% 一致。</summary>
+    public const double DefaultRetimePercent = 2;
 
     /// <summary>
     /// 图层效果链输入 rt 的像素尺寸，即效果 pass 里 g_Texture0Resolution.xy。原生渲染器按图层 size 截断取整
