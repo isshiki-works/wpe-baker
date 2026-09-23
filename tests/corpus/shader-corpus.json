@@ -442,6 +442,1908 @@
      "period": "2pi/2"
     }
    ]
+  },
+  {
+   "name": "split-period",
+   "from": "ShaderSplitPeriodChecks",
+   "shaders": {
+    "filmgrain": {
+     "frag": [
+      "uniform sampler2D g_Texture1; // {\"label\":\"ui_editor_properties_noise\",\"default\":\"util/noise\"}",
+      "void main() {",
+      "\tvec3 noise = texSample2D(g_Texture1, v_TexCoordNoise.xy).rgb;",
+      "\tgl_FragColor = vec4(noise, 1.0);",
+      "}"
+     ],
+     "vert": [
+      "uniform float g_Time;",
+      "uniform float g_NoiseScale; // {\"material\":\"scale\",\"label\":\"ui_editor_properties_scale\",\"default\":10,\"range\":[0.0, 20.0]}",
+      "void main() {",
+      "\tfloat t = frac(g_Time);",
+      "\tv_TexCoord = a_TexCoord.xyxy;",
+      "\tv_TexCoordNoise.xy = (a_TexCoord.xy + t) * g_NoiseScale;",
+      "\tv_TexCoordNoise.zw = (a_TexCoord.xy - t * 2.5) * g_NoiseScale * 0.52;",
+      "\tv_TexCoordNoise *= vec4(aspect, 1.0, aspect, 1.0);",
+      "}"
+     ]
+    },
+    "filmgrain-extra": {
+     "frag": [
+      "uniform sampler2D g_Texture1; // {\"label\":\"ui_editor_properties_noise\",\"default\":\"util/noise\"}",
+      "void main() {",
+      "\tvec3 noise = texSample2D(g_Texture1, v_TexCoordNoise.xy).rgb;",
+      "\tgl_FragColor = vec4(noise, 1.0);",
+      "}"
+     ],
+     "vert": [
+      "uniform float g_Time;",
+      "uniform float g_NoiseScale; // {\"material\":\"scale\",\"label\":\"ui_editor_properties_scale\",\"default\":10,\"range\":[0.0, 20.0]}",
+      "void main() {",
+      "\tfloat t = frac(g_Time);",
+      "\tv_TexCoord = a_TexCoord.xyxy;",
+      "\tv_TexCoordNoise.xy = (a_TexCoord.xy + t) * g_NoiseScale;",
+      "\tv_TexCoordNoise.zw = (a_TexCoord.xy - t * 2.5) * g_NoiseScale * 0.52;",
+      "\tv_TexCoordNoise *= vec4(aspect, 1.0, aspect, 1.0);",
+      "}",
+      "v_TexCoord.x += g_Time * 0.125;"
+     ]
+    },
+    "crt_screen": {
+     "frag": [
+      "// [COMBO] {\"material\":\"Frequency artifacts\",\"combo\":\"ARTIFACTS\",\"type\":\"options\",\"default\":1}",
+      "uniform float u_frequency; // {\"material\":\"Frequency\",\"default\":10,\"range\":[-30,30],\"group\":\"Screen\"}",
+      "uniform float g_Time;",
+      "void main() {",
+      "#if ARTIFACTS",
+      "        float speed = g_Time * u_frequency;",
+      "        albedo.rgb *= 1.0 - min(1.0, mod(1.0 - uv.y * u_amount1 + speed, 1.0) * u_size1) * u_strength1; //Scan line",
+      "        albedo.rgb *= 1.0 - abs(mod(1.0 - (uv.y + u_offset2) * u_amount2 + speed, 2.0) - 1.0) * u_strength2; //Flicker",
+      "#endif",
+      "}"
+     ],
+     "vert": [
+      "uniform mat4 g_ModelViewProjectionMatrix;"
+     ]
+    },
+    "lightshafts": {
+     "frag": [
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"rayspeed\",\"label\":\"ui_editor_properties_speed\",\"default\":0.2,\"range\":[0.1, 1.0],\"group\":\"ui_editor_properties_shape\"}",
+      "void main() {",
+      "\tfxCoord.xy += g_Time * g_Speed * vec2(0.003, 0.000375111);",
+      "\tfxCoord2.xy -= g_Time * g_Speed * vec2(0.0047111, 0.0007399);",
+      "\tfloat fx0 = texSample2D(g_Texture1, fxCoord).r;",
+      "}"
+     ],
+     "vert": [
+      "uniform mat4 g_ModelViewProjectionMatrix;"
+     ]
+    },
+    "iris": {
+     "frag": [
+      "void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord.xy); }"
+     ],
+     "vert": [
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"label\":\"ui_editor_properties_speed\",\"default\":1,\"range\":[0.01, 2.0]}",
+      "void main() {",
+      "\tfloat time = (g_Time * g_Speed) + g_PhaseOffset;",
+      "\tfloat lowDt = floor(time);",
+      "\tvec2 motion2 = sin(1.9 * (lowDt + vec2(0, 1)));",
+      "\tvec4 motion4 = sin(2.5 * (lowDt + vec4(0, 0, 1, 1)) + vec4(1, 2, 1, 2));",
+      "\tvec2 da = mix(moveStart, moveEnd, smoothstep(1 - g_Rough, 1, cos(frac(time) * M_PI) * -0.5 + 0.5));",
+      "\tda.x += sin(time) * g_NoiseAmount;",
+      "\tda.y += cos(time) * g_NoiseAmount;",
+      "}"
+     ]
+    },
+    "foliagesway": {
+     "frag": [
+      "uniform float g_Speed; // {\"material\":\"speeduv\",\"label\":\"ui_editor_properties_speed\",\"default\":5,\"range\":[0.01, 20]}",
+      "uniform float g_Time;",
+      "void main() {",
+      "\tvec4 sines = phase + g_Speed * g_Time * vec4(1, -0.16161616, 0.0083333, -0.00019841);",
+      "\tvec4 csines = 0.4 + phase + g_Speed * g_Time * vec4(-0.5, 0.041666666, -0.0013888889, 0.000024801587);",
+      "}"
+     ],
+     "vert": [
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"label\":\"ui_editor_properties_speed\",\"default\":1,\"range\":[0.01, 10]}",
+      "void main() {",
+      "\tvec4 sines = g_Phase + g_Speed * g_Time * vec4(1, -0.16161616, 0.0083333, -0.00019841);",
+      "\tvec4 csines = 0.4 + g_Phase + g_Speed * g_Time * vec4(-0.5, 0.041666666, -0.0013888889, 0.000024801587);",
+      "}"
+     ]
+    },
+    "shadow_map": {
+     "frag": [
+      "uniform float g_Time;",
+      "uniform float u_noise; // {\"material\":\"Static noise\",\"default\":0.5,\"range\":[0,1],\"group\":\"Imperfections\"}",
+      "float hash(vec2 p){",
+      "\tvec3 p3 = frac(CAST3(p.xyx) * 0.1031);",
+      "    p3 += dot(p3, p3.yzx + 33.33);",
+      "    return frac((p3.x + p3.y) * p3.z);",
+      "}",
+      "void main() {",
+      "        albedo.rgb *= 1.0 - hash(round(uv) + g_Time) * u_noise; //Static noise",
+      "}"
+     ],
+     "vert": [
+      "uniform mat4 g_ModelViewProjectionMatrix;"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "filmgrain",
+     "constants": {
+      "scale": 10.0,
+      "exponent": 0.44999999
+     },
+     "combos": {
+      "GREYSCALE": 0
+     }
+    },
+    {
+     "id": 2,
+     "shader": "filmgrain-extra",
+     "constants": {
+      "scale": 10.0
+     }
+    },
+    {
+     "id": 3,
+     "shader": "crt_screen",
+     "constants": {
+      "Frequency": -30.0,
+      "Scan line count": 0.28
+     }
+    },
+    {
+     "id": 4,
+     "shader": "crt_screen",
+     "constants": {
+      "Frequency": -30.0
+     },
+     "combos": {
+      "ARTIFACTS": 0
+     }
+    },
+    {
+     "id": 5,
+     "shader": "lightshafts",
+     "constants": {
+      "rayspeed": 0.2,
+      "raysmoothness": 0.58999997
+     }
+    },
+    {
+     "id": 6,
+     "shader": "iris",
+     "constants": {
+      "speed": 1.0,
+      "phase": 0.0,
+      "rough": 0.2,
+      "noiseamount": 0.5
+     }
+    },
+    {
+     "id": 7,
+     "shader": "foliagesway",
+     "constants": {
+      "speeduv": 5.0,
+      "phase": 0.5,
+      "power": 1.0
+     }
+    },
+    {
+     "id": 8,
+     "shader": "shadow_map",
+     "constants": {
+      "Static noise": 0.15000001,
+      "Vignette": 1.0700001
+     }
+    },
+    {
+     "id": 9,
+     "shader": "shadow_map",
+     "constants": {
+      "Static noise": 0.0
+     }
+    },
+    {
+     "id": 10,
+     "shader": "foliagesway",
+     "constants": {
+      "speeduv": 5.0,
+      "strength": 0.0
+     }
+    },
+    {
+     "id": 11,
+     "shader": "foliagesway",
+     "constants": {
+      "speeduv": 0.0,
+      "strength": 0.52999997
+     }
+    },
+    {
+     "id": 12,
+     "shader": "foliagesway",
+     "constants": {
+      "speed": 5.0,
+      "strength": 0.52999997,
+      "directionweights": "0 0"
+     },
+     "combos": {
+      "MODE": 1
+     }
+    },
+    {
+     "id": 13,
+     "shader": "foliagesway",
+     "constants": {
+      "speed": 5.0,
+      "strength": 0.52999997,
+      "directionweights": "1 0.2"
+     },
+     "combos": {
+      "MODE": 1
+     }
+    },
+    {
+     "id": 14,
+     "shader": "crt_screen",
+     "constants": {
+      "Frequency": -30.0
+     },
+     "combos": {
+      "ARTIFACTS": true
+     }
+    },
+    {
+     "id": 15,
+     "shader": "crt_screen",
+     "constants": {
+      "Frequency": -30.0
+     },
+     "combos": {
+      "ARTIFACTS": false
+     }
+    },
+    {
+     "id": 16,
+     "shader": "crt_screen",
+     "constants": {
+      "Frequency": -30.0
+     },
+     "combos": {
+      "ARTIFACTS": 1.0
+     }
+    },
+    {
+     "id": 17,
+     "shader": "crt_screen",
+     "constants": {
+      "Frequency": -30.0
+     },
+     "combos": {
+      "ARTIFACTS": "1"
+     }
+    },
+    {
+     "id": 18,
+     "shader": "crt_screen",
+     "constants": {
+      "Frequency": -30.0
+     },
+     "combos": {
+      "ARTIFACTS": "on"
+     }
+    },
+    {
+     "id": 19,
+     "shader": "foliagesway",
+     "constants": {
+      "speed": 5.0,
+      "strength": 0.52999997,
+      "directionweights": "0 0"
+     },
+     "combos": {
+      "MODE": true
+     }
+    },
+    {
+     "id": 20,
+     "shader": "foliagesway",
+     "constants": {
+      "speed": 5.0,
+      "strength": 0.52999997,
+      "directionweights": "0 0"
+     },
+     "combos": {
+      "MODE": "vertex"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "the real filmgrain frac(g_Time) clock is an exact one-second fixed period with no retimable constant",
+     "layer": 1,
+     "components": 1,
+     "allow_retime": false,
+     "evidence": "Analytic",
+     "exact_seconds": "1",
+     "period_seconds": 1,
+     "tolerance": 0,
+     "key": ""
+    },
+    {
+     "message": "a second film-grain clock term leaves the verified frac(g_Time) family",
+     "layer": 2,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism",
+     "detail": "Shader source does not match a verified periodic equation."
+    },
+    {
+     "message": "the real crt_screen scan line and flicker share the period 2/abs(Frequency) through the Frequency constant",
+     "layer": 3,
+     "components": 1,
+     "allow_retime": true,
+     "period": "2/30",
+     "key": "Frequency",
+     "exponent": 1,
+     "old_value": -30,
+     "evidence_contains": [
+      "2/abs(-30)"
+     ]
+    },
+    {
+     "message": "a disabled ARTIFACTS branch leaves crt_screen with no clock and no refusal",
+     "layer": 4,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "a JSON true, 1.0 or \"1\" ARTIFACTS combo (layer 14) enables the same crt_screen clock as int 1",
+     "layer": 14,
+     "components": 1,
+     "unresolved": 0,
+     "period": "2/30",
+     "key": "Frequency"
+    },
+    {
+     "message": "a JSON true, 1.0 or \"1\" ARTIFACTS combo (layer 16) enables the same crt_screen clock as int 1",
+     "layer": 16,
+     "components": 1,
+     "unresolved": 0,
+     "period": "2/30",
+     "key": "Frequency"
+    },
+    {
+     "message": "a JSON true, 1.0 or \"1\" ARTIFACTS combo (layer 17) enables the same crt_screen clock as int 1",
+     "layer": 17,
+     "components": 1,
+     "unresolved": 0,
+     "period": "2/30",
+     "key": "Frequency"
+    },
+    {
+     "message": "a JSON false ARTIFACTS combo disables the crt_screen branch exactly like int 0",
+     "layer": 15,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "an unreadable ARTIFACTS combo refuses the pass instead of silently treating the clock branch as disabled",
+     "layer": 18,
+     "unresolved": 1,
+     "components": 0,
+     "kind": "UnsupportedShaderMechanism",
+     "detail_contains": [
+      "ARTIFACTS combo value is neither an integer nor a boolean"
+     ]
+    },
+    {
+     "message": "lightshafts states its four UV rates and the joint return that stays past the loop ceiling",
+     "layer": 5,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "0.0047111",
+      "1061.3 s",
+      "joint return inside the 600-second loop ceiling"
+     ]
+    },
+    {
+     "message": "lightshafts quotes the loop ceiling the caller passed instead of a fixed number",
+     "ceiling": 3600,
+     "layer": 5,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "3600-second loop ceiling"
+     ],
+     "detail_not_contains": [
+      " 600-second"
+     ]
+    },
+    {
+     "message": "iris names the integer step index and the irrational sine frequencies that prevent any period",
+     "layer": 6,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "floor(g_Time * g_Speed + phase)",
+      "irrational"
+     ]
+    },
+    {
+     "message": "foliage sway names the slowest of its eight sway terms and its out-of-range period",
+     "layer": 7,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "speeduv * (1, -0.16161616",
+      "0.000024801587"
+     ]
+    },
+    {
+     "message": "foliage sway states the common base of all eight terms rather than an unsourced bound",
+     "layer": 7,
+     "unresolved": 1,
+     "detail_contains": [
+      "2*pi*443520/speeduv",
+      "557343.7 s"
+     ]
+    },
+    {
+     "message": "a zero foliage-sway strength scales every sine to no motion instead of refusing the pass",
+     "layer": 10,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "a zero foliage-sway speeduv stops the clock instead of refusing the pass",
+     "layer": 11,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "zero foliage-sway directionweights gate both vertex axes instead of refusing the pass",
+     "layer": 12,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "a swaying MODE 1 pass still refuses through its own 'speed' constant",
+     "layer": 13,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "speed * (1, -0.16161616"
+     ]
+    },
+    {
+     "message": "a JSON true foliage-sway MODE reads as the vertex branch instead of throwing on GetValue<int>",
+     "layer": 19,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "an unreadable foliage-sway MODE refuses the pass instead of taking its zero-amplitude exemption",
+     "layer": 20,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism",
+     "detail_contains": [
+      "MODE combo value is neither an integer nor a boolean"
+     ]
+    },
+    {
+     "message": "the shadow_map hash reports its proven 10000/1031-second period and why that period is unusable",
+     "layer": 8,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism",
+     "detail_contains": [
+      "10000/1031 s",
+      "600000 frames"
+     ]
+    },
+    {
+     "message": "a zero static-noise amount removes the shadow_map clock instead of refusing the pass",
+     "layer": 9,
+     "components": 0,
+     "unresolved": 0
+    }
+   ]
+  },
+  {
+   "name": "pulse",
+   "from": "ShaderAdditionalPeriodChecks",
+   "shaders": {
+    "single": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
+      "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
+      "pulse += noise;"
+     ]
+    },
+    "dual": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
+      "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
+      "pulse += noise;"
+     ],
+     "vert": [
+      "uniform float g_Time;",
+      "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
+      "value = sin(g_Time * g_PulseSpeed + otherPhase);"
+     ]
+    },
+    "noise": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
+      "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
+      "pulse += noise;"
+     ]
+    },
+    "audio": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
+      "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
+      "pulse += noise;"
+     ]
+    },
+    "drift": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "uniform float g_PulseSpeed; // {\"material\":\"speed\",\"default\":3}",
+      "uniform float g_NoiseSpeed; // {\"material\":\"noisespeed\",\"default\":0.5}",
+      "uniform float g_NoiseAmount; // {\"material\":\"noiseamount\",\"default\":0}pulse = sin(g_Time * g_PulseSpeed + phase);",
+      "float noise = texSample2D(g_Texture1, vec2(g_Time * 0.08333333, g_Time * 0.02777777) * g_NoiseSpeed).r * g_NoiseAmount;",
+      "pulse += noise;",
+      "uv += g_Time * 0.125;"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "single",
+     "constants": {
+      "speed": 2,
+      "noiseamount": 0
+     }
+    },
+    {
+     "id": 2,
+     "shader": "dual",
+     "constants": {
+      "speed": 1.5,
+      "noiseamount": 0
+     }
+    },
+    {
+     "id": 3,
+     "shader": "noise",
+     "constants": {
+      "speed": 2,
+      "noiseamount": 0.1
+     }
+    },
+    {
+     "id": 4,
+     "shader": "audio",
+     "constants": {
+      "speed": 2,
+      "noiseamount": 0
+     },
+     "combos": {
+      "AUDIOPROCESSING": 1
+     }
+    },
+    {
+     "id": 5,
+     "shader": "drift",
+     "constants": {
+      "speed": 2,
+      "noiseamount": 0
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "one- and two-stage pulse shaders with disabled noise yield the same reciprocal-speed sine mechanism",
+     "components_total": 2
+    },
+    {
+     "message": "one- and two-stage pulse shaders with disabled noise yield the same reciprocal-speed sine mechanism",
+     "layer": 1,
+     "components": 1,
+     "allow_retime": true,
+     "period": "2pi/2"
+    },
+    {
+     "message": "one- and two-stage pulse shaders with disabled noise yield the same reciprocal-speed sine mechanism",
+     "layer": 2,
+     "components": 1,
+     "allow_retime": true,
+     "period": "2pi/1.5"
+    },
+    {
+     "message": "pulse noise drift and external audio remain unresolved",
+     "layer": 3,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism"
+    },
+    {
+     "message": "pulse noise drift and external audio remain unresolved",
+     "layer": 4,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism"
+    },
+    {
+     "message": "an additional pulse time input is not hidden by the noise-disabled mechanism",
+     "layer": 5,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    }
+   ]
+  },
+  {
+   "name": "dual-wave",
+   "from": "ShaderAdditionalPeriodChecks",
+   "shaders": {
+    "dual-wave": {
+     "frag": [
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"default\":5}",
+      "uniform float g_Speed2; // {\"material\":\"speed2\",\"default\":3}",
+      "uniform float g_Offset2; // {\"material\":\"offset2\",\"default\":0}",
+      "float distance = g_Time * g_Speed + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "float distance2 = (g_Time + g_Offset2) * g_Speed2 + dot(texCoordMotion, v_Direction2) * g_Scale2;",
+      "float val1 = sin(distance);",
+      "float val2 = sin(distance2);",
+      "texCoord += val1 * s1 * val2 * s2 * offset * strength * mask;"
+     ],
+     "vert": [
+      "uniform float g_Time;"
+     ]
+    },
+    "dual-wave-drift": {
+     "frag": [
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"default\":5}",
+      "uniform float g_Speed2; // {\"material\":\"speed2\",\"default\":3}",
+      "uniform float g_Offset2; // {\"material\":\"offset2\",\"default\":0}",
+      "float distance = g_Time * g_Speed + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "float distance2 = (g_Time + g_Offset2) * g_Speed2 + dot(texCoordMotion, v_Direction2) * g_Scale2;",
+      "float val1 = sin(distance);",
+      "float val2 = sin(distance2);",
+      "texCoord += val1 * s1 * val2 * s2 * offset * strength * mask;",
+      "uv += g_Time * 0.125;"
+     ],
+     "vert": [
+      "uniform float g_Time;"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 6,
+     "shader": "dual-wave",
+     "constants": {
+      "speed": 7,
+      "speed2": 2,
+      "offset2": 0.0
+     },
+     "combos": {
+      "DUALWAVES": 1
+     }
+    },
+    {
+     "id": 7,
+     "shader": "dual-wave",
+     "constants": {
+      "speed": 4,
+      "speed2": 3,
+      "offset2": -5.0
+     },
+     "combos": {
+      "DUALWAVES": 1
+     }
+    },
+    {
+     "id": 8,
+     "shader": "dual-wave",
+     "constants": {
+      "speed": 1.4142135623730951,
+      "speed2": 1,
+      "offset2": 0.0
+     },
+     "combos": {
+      "DUALWAVES": 1
+     }
+    },
+    {
+     "id": 9,
+     "shader": "dual-wave-drift",
+     "constants": {
+      "speed": 5,
+      "speed2": 4,
+      "offset2": 0.0
+     },
+     "combos": {
+      "DUALWAVES": 1
+     }
+    },
+    {
+     "id": 10,
+     "shader": "dual-wave",
+     "constants": {
+      "speed": 1,
+      "speed2": 1,
+      "offset2": {
+       "script": "return 0",
+       "value": 0.0
+      }
+     },
+     "combos": {
+      "DUALWAVES": 1
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "simple-rational dual speeds share one gcd period and only nonzero phase gets a companion patch",
+     "layer": 6,
+     "components": 2,
+     "period": "2pi/1",
+     "tolerance": 0,
+     "companion": null
+    },
+    {
+     "message": "simple-rational dual speeds share one gcd period and only nonzero phase gets a companion patch",
+     "layer": 7,
+     "components": 2,
+     "period": "2pi/1",
+     "tolerance": 0
+    },
+    {
+     "message": "simple-rational dual speeds share one gcd period and only nonzero phase gets a companion patch",
+     "layer": 7,
+     "key_filter": "speed2",
+     "components": 1,
+     "companion": "offset2"
+    },
+    {
+     "message": "non-simple speed, extra clock, and unknown second phase remain unresolved",
+     "layer": 8,
+     "unresolved": 1,
+     "kind": "MissingOrInvalidSpeed"
+    },
+    {
+     "message": "non-simple speed, extra clock, and unknown second phase remain unresolved",
+     "layer": 9,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "non-simple speed, extra clock, and unknown second phase remain unresolved",
+     "layer": 10,
+     "unresolved": 1,
+     "kind": "MissingOrInvalidSpeed"
+    }
+   ]
+  },
+  {
+   "name": "shimmer",
+   "from": "ShaderAdditionalPeriodChecks",
+   "shaders": {
+    "shimmer": {
+     "frag": [
+      "// [COMBO] {\"material\":\"ui_editor_properties_style\",\"combo\":\"MODE\",\"default\":0,\"options\":{\"ui_editor_properties_linear\":0,\"ui_editor_properties_mirror\":1}}",
+      "uniform float g_Time;",
+      "uniform float u_scale; // {\"material\":\"ui_editor_properties_granularity\",\"default\":1,\"range\":[1,5]}",
+      "uniform float u_speed; // {\"material\":\"ui_editor_properties_speed\",\"default\":1,\"range\":[0,5]}",
+      "uniform float u_delay; // {\"material\":\"ui_editor_properties_delay\",\"default\":2,\"range\":[1,5]}",
+      "vec2 shimmerCoord = rotateVec2(v_TexCoord, -u_direction + 1.57079632679) * u_scale;",
+      "#if MODE == 1",
+      "shimmerCoord.x += u_offset + u_width * sin(u_speed * g_Time + offset);",
+      "#else",
+      "shimmerCoord.x += u_offset + u_speed * (g_Time + offset);",
+      "#endif",
+      "shimmerCoord.x = saturate(frac(shimmerCoord.x / (u_scale * u_delay)) * u_scale * u_delay);"
+     ],
+     "vert": [
+      "attribute vec3 a_Position;"
+     ]
+    },
+    "shimmer-mode": {
+     "frag": [
+      "// [COMBO] {\"material\":\"ui_editor_properties_style\",\"combo\":\"MODE\",\"default\":0,\"options\":{\"ui_editor_properties_linear\":0,\"ui_editor_properties_mirror\":1}}",
+      "uniform float g_Time;",
+      "uniform float u_scale; // {\"material\":\"ui_editor_properties_granularity\",\"default\":1,\"range\":[1,5]}",
+      "uniform float u_speed; // {\"material\":\"ui_editor_properties_speed\",\"default\":1,\"range\":[0,5]}",
+      "uniform float u_delay; // {\"material\":\"ui_editor_properties_delay\",\"default\":2,\"range\":[1,5]}",
+      "vec2 shimmerCoord = rotateVec2(v_TexCoord, -u_direction + 1.57079632679) * u_scale;",
+      "#if MODE == 1",
+      "shimmerCoord.x += u_offset + u_width * sin(u_speed * g_Time + offset);",
+      "#else",
+      "shimmerCoord.x += u_offset + u_speed * (g_Time + offset);",
+      "#endif",
+      "shimmerCoord.x = saturate(frac(shimmerCoord.x / (u_scale * u_delay)) * u_scale * u_delay);"
+     ]
+    },
+    "shimmer-formula": {
+     "frag": [
+      "// [COMBO] {\"material\":\"ui_editor_properties_style\",\"combo\":\"MODE\",\"default\":0,\"options\":{\"ui_editor_properties_linear\":0,\"ui_editor_properties_mirror\":1}}",
+      "uniform float g_Time;",
+      "uniform float u_scale; // {\"material\":\"ui_editor_properties_granularity\",\"default\":1,\"range\":[1,5]}",
+      "uniform float u_speed; // {\"material\":\"ui_editor_properties_speed\",\"default\":1,\"range\":[0,5]}",
+      "uniform float u_delay; // {\"material\":\"ui_editor_properties_delay\",\"default\":2,\"range\":[1,5]}",
+      "vec2 shimmerCoord = rotateVec2(v_TexCoord, -u_direction + 1.57079632679) * u_scale;",
+      "#if MODE == 1",
+      "shimmerCoord.x += u_offset + u_width * sin(u_speed * g_Time - offset);",
+      "#else",
+      "shimmerCoord.x += u_offset + u_speed * (g_Time - offset);",
+      "#endif",
+      "shimmerCoord.x = saturate(frac(shimmerCoord.x / (u_scale * u_delay)) * u_scale * u_delay);"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 11,
+     "shader": "shimmer",
+     "constants": {
+      "ui_editor_properties_granularity": 1.0,
+      "ui_editor_properties_delay": 1.77,
+      "ui_editor_properties_speed": 0.44
+     }
+    },
+    {
+     "id": 12,
+     "shader": "shimmer-mode",
+     "constants": {
+      "ui_editor_properties_granularity": 1.0,
+      "ui_editor_properties_delay": 1.77,
+      "ui_editor_properties_speed": 0.44
+     },
+     "combos": {
+      "MODE": 1
+     }
+    },
+    {
+     "id": 13,
+     "shader": "shimmer-formula",
+     "constants": {
+      "ui_editor_properties_granularity": 1.0,
+      "ui_editor_properties_delay": 1.77,
+      "ui_editor_properties_speed": 0.44
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "the real linear shimmer source default MODE=0 branch yields granularity*delay/speed",
+     "components_total": 1
+    },
+    {
+     "message": "the real linear shimmer source default MODE=0 branch yields granularity*delay/speed",
+     "layer": 11,
+     "components": 1,
+     "key": "ui_editor_properties_speed",
+     "allow_retime": true,
+     "period": "1.77/0.44"
+    },
+    {
+     "message": "mirror MODE and a changed shimmer time formula remain outside the verified linear family",
+     "unresolved_total": 2
+    },
+    {
+     "message": "mirror MODE and a changed shimmer time formula remain outside the verified linear family",
+     "layer": 12,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "mirror MODE and a changed shimmer time formula remain outside the verified linear family",
+     "layer": 13,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    }
+   ]
+  },
+  {
+   "name": "water-ripple",
+   "from": "WaterRippleSineClockChecks",
+   "textures": {
+    "materials/effects/repeatnormal.tex": 0,
+    "materials/effects/clampnormal.tex": 2
+   },
+   "shaders": {
+    "ripple": {
+     "frag": [
+      "uniform sampler2D g_Texture2; // {\"label\":\"ui_editor_properties_water_normal\"}",
+      "#if PERSPECTIVE == 0",
+      "varying vec4 v_TexCoordRipple;",
+      "#else",
+      "uniform vec4 g_Texture0Resolution;",
+      "uniform float g_Time;",
+      "uniform float g_AnimationSpeed; // {\"material\":\"animationspeed\",\"default\":0.15}",
+      "uniform float g_Scale; // {\"material\":\"scale\",\"default\":1}",
+      "uniform float g_ScrollSpeed; // {\"material\":\"scrollspeed\",\"default\":0}",
+      "uniform float g_Direction; // {\"material\":\"scrolldirection\",\"default\":0}",
+      "uniform float g_Ratio; // {\"material\":\"ratio\",\"default\":1}",
+      "varying vec3 v_TexCoordPerspective;",
+      "#endif",
+      "void main() {",
+      "\tvec4 rippleCoords;",
+      "#if PERSPECTIVE == 0",
+      "\trippleCoords = v_TexCoordRipple;",
+      "#else",
+      "\tvec2 coordsRotated = v_TexCoordPerspective.xy / v_TexCoordPerspective.z;",
+      "\tvec2 coordsRotated2 = coordsRotated * 1.333;",
+      "\tvec2 scroll = rotateVec2(vec2(0, 1), g_Direction) * g_ScrollSpeed * g_ScrollSpeed * g_Time;",
+      "\trippleCoords.xy = coordsRotated + g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll;",
+      "\trippleCoords.zw = coordsRotated2 - g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll;",
+      "\trippleCoords *= g_Scale;",
+      "\tfloat rippleTextureAdjustment = (g_Texture0Resolution.x / g_Texture0Resolution.y);",
+      "\trippleCoords.xz *= rippleTextureAdjustment;",
+      "\trippleCoords.yw *= g_Ratio;",
+      "#endif",
+      "\tvec3 n1 = texSample2D(g_Texture2, rippleCoords.xy).xyz * 2 - 1;",
+      "\tvec3 n2 = texSample2D(g_Texture2, rippleCoords.zw).xyz * 2 - 1;",
+      "}"
+     ],
+     "vert": [
+      "#if PERSPECTIVE == 0",
+      "varying vec4 v_TexCoordRipple;",
+      "uniform vec4 g_Texture0Resolution;",
+      "uniform float g_Time;",
+      "uniform float g_AnimationSpeed; // {\"material\":\"animationspeed\",\"default\":0.15}",
+      "uniform float g_Scale; // {\"material\":\"scale\",\"default\":1}",
+      "uniform float g_ScrollSpeed; // {\"material\":\"scrollspeed\",\"default\":0}",
+      "uniform float g_Direction; // {\"material\":\"scrolldirection\",\"default\":0}",
+      "uniform float g_Ratio; // {\"material\":\"ratio\",\"default\":1}",
+      "#endif",
+      "void main() {",
+      "#if PERSPECTIVE == 0",
+      "\tvec2 coordsRotated = v_TexCoord.xy;",
+      "\tvec2 coordsRotated2 = v_TexCoord.xy * 1.333;",
+      "\tvec2 scroll = rotateVec2(vec2(0, 1), g_Direction) * g_ScrollSpeed * g_ScrollSpeed * g_Time;",
+      "\tv_TexCoordRipple.xy = coordsRotated + g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll;",
+      "\tv_TexCoordRipple.zw = coordsRotated2 - g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll;",
+      "\tv_TexCoordRipple *= g_Scale;",
+      "\tfloat rippleTextureAdjustment = (g_Texture0Resolution.x / g_Texture0Resolution.y);",
+      "\tv_TexCoordRipple.xz *= rippleTextureAdjustment;",
+      "\tv_TexCoordRipple.yw *= g_Ratio;",
+      "#endif",
+      "}"
+     ]
+    },
+    "ripple-extra-clock": {
+     "frag": [
+      "uniform sampler2D g_Texture2; // {\"label\":\"ui_editor_properties_water_normal\"}",
+      "#if PERSPECTIVE == 0",
+      "varying vec4 v_TexCoordRipple;",
+      "#else",
+      "uniform vec4 g_Texture0Resolution;",
+      "uniform float g_Time;",
+      "uniform float g_AnimationSpeed; // {\"material\":\"animationspeed\",\"default\":0.15}",
+      "uniform float g_Scale; // {\"material\":\"scale\",\"default\":1}",
+      "uniform float g_ScrollSpeed; // {\"material\":\"scrollspeed\",\"default\":0}",
+      "uniform float g_Direction; // {\"material\":\"scrolldirection\",\"default\":0}",
+      "uniform float g_Ratio; // {\"material\":\"ratio\",\"default\":1}",
+      "varying vec3 v_TexCoordPerspective;",
+      "#endif",
+      "void main() {",
+      "\tvec4 rippleCoords;",
+      "#if PERSPECTIVE == 0",
+      "\trippleCoords = v_TexCoordRipple;",
+      "#else",
+      "\tvec2 coordsRotated = v_TexCoordPerspective.xy / v_TexCoordPerspective.z;",
+      "\tvec2 coordsRotated2 = coordsRotated * 1.333;",
+      "\tvec2 scroll = rotateVec2(vec2(0, 1), g_Direction) * g_ScrollSpeed * g_ScrollSpeed * g_Time;",
+      "\trippleCoords.xy = coordsRotated + g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll;",
+      "\trippleCoords.zw = coordsRotated2 - g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll;",
+      "\trippleCoords *= g_Scale;",
+      "\tfloat rippleTextureAdjustment = (g_Texture0Resolution.x / g_Texture0Resolution.y);",
+      "\trippleCoords.xz *= rippleTextureAdjustment;",
+      "\trippleCoords.yw *= g_Ratio;",
+      "#endif",
+      "\tvec3 n1 = texSample2D(g_Texture2, rippleCoords.xy).xyz * 2 - 1;",
+      "\tfloat extra = g_Time; vec3 n2 = texSample2D(g_Texture2, rippleCoords.zw).xyz * 2 - 1;",
+      "}"
+     ],
+     "vert": [
+      "#if PERSPECTIVE == 0",
+      "varying vec4 v_TexCoordRipple;",
+      "uniform vec4 g_Texture0Resolution;",
+      "uniform float g_Time;",
+      "uniform float g_AnimationSpeed; // {\"material\":\"animationspeed\",\"default\":0.15}",
+      "uniform float g_Scale; // {\"material\":\"scale\",\"default\":1}",
+      "uniform float g_ScrollSpeed; // {\"material\":\"scrollspeed\",\"default\":0}",
+      "uniform float g_Direction; // {\"material\":\"scrolldirection\",\"default\":0}",
+      "uniform float g_Ratio; // {\"material\":\"ratio\",\"default\":1}",
+      "#endif",
+      "void main() {",
+      "#if PERSPECTIVE == 0",
+      "\tvec2 coordsRotated = v_TexCoord.xy;",
+      "\tvec2 coordsRotated2 = v_TexCoord.xy * 1.333;",
+      "\tvec2 scroll = rotateVec2(vec2(0, 1), g_Direction) * g_ScrollSpeed * g_ScrollSpeed * g_Time;",
+      "\tv_TexCoordRipple.xy = coordsRotated + g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll;",
+      "\tv_TexCoordRipple.zw = coordsRotated2 - g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll;",
+      "\tv_TexCoordRipple *= g_Scale;",
+      "\tfloat rippleTextureAdjustment = (g_Texture0Resolution.x / g_Texture0Resolution.y);",
+      "\tv_TexCoordRipple.xz *= rippleTextureAdjustment;",
+      "\tv_TexCoordRipple.yw *= g_Ratio;",
+      "#endif",
+      "}"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "ripple",
+     "constants": {
+      "animationspeed": 0.5,
+      "scrollspeed": 0,
+      "scale": 2,
+      "ratio": 0.5,
+      "scrolldirection": -1.019874
+     },
+     "size": "1000.00000 1000.00000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/repeatnormal"
+     ]
+    },
+    {
+     "id": 2,
+     "shader": "ripple",
+     "constants": {
+      "animationspeed": 0.07,
+      "scrollspeed": 0,
+      "scale": 1,
+      "ratio": 1,
+      "scrolldirection": -1.019874
+     },
+     "size": "5120.00000 1340.00000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/repeatnormal"
+     ]
+    },
+    {
+     "id": 3,
+     "shader": "ripple",
+     "constants": {
+      "animationspeed": 0.05,
+      "scrollspeed": 0.05,
+      "scale": 2,
+      "ratio": 1,
+      "scrolldirection": -1.019874
+     },
+     "size": "1920.00000 1080.00000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/repeatnormal"
+     ]
+    },
+    {
+     "id": 4,
+     "shader": "ripple",
+     "constants": {
+      "animationspeed": 0.5,
+      "scrollspeed": 0,
+      "scale": 2,
+      "ratio": 0.5,
+      "scrolldirection": -1.019874
+     },
+     "size": "1000.00000 1000.00000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/clampnormal"
+     ]
+    },
+    {
+     "id": 5,
+     "shader": "ripple",
+     "constants": {
+      "animationspeed": 0.5,
+      "scrollspeed": 0,
+      "scale": 2,
+      "ratio": 0.5,
+      "scrolldirection": -1.019874
+     },
+     "size": "1000.00000 1000.00000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/repeatnormal"
+     ],
+     "fullscreen": true
+    },
+    {
+     "id": 6,
+     "shader": "ripple",
+     "constants": {
+      "animationspeed": 0.5,
+      "scrollspeed": 0,
+      "scale": 2,
+      "ratio": 1.4142135623730951,
+      "scrolldirection": -1.019874
+     },
+     "size": "1000.00000 1000.00000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/repeatnormal"
+     ]
+    },
+    {
+     "id": 7,
+     "shader": "ripple",
+     "constants": {
+      "animationspeed": 0,
+      "scrollspeed": 0,
+      "scale": 2,
+      "ratio": 0.5,
+      "scrolldirection": -1.019874
+     },
+     "size": "1000.00000 1000.00000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/repeatnormal"
+     ]
+    },
+    {
+     "id": 8,
+     "shader": "ripple-extra-clock",
+     "constants": {
+      "animationspeed": 0.5,
+      "scrollspeed": 0,
+      "scale": 2,
+      "ratio": 0.5,
+      "scrolldirection": -1.019874
+     },
+     "size": "1000.00000 1000.00000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/repeatnormal"
+     ]
+    },
+    {
+     "id": 9,
+     "shader": "ripple",
+     "constants": {
+      "animationspeed": 0.5,
+      "scrollspeed": 0,
+      "scale": 1,
+      "ratio": 1,
+      "scrolldirection": -1.019874
+     },
+     "size": "1000.70000 500.20000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/repeatnormal"
+     ]
+    },
+    {
+     "id": 10,
+     "shader": "ripple",
+     "constants": {
+      "animationspeed": 0.05,
+      "scrollspeed": 0,
+      "scale": 1,
+      "ratio": 1,
+      "scrolldirection": -1.019874
+     },
+     "size": "1000.00000 1000.00000",
+     "pass_textures": [
+      null,
+      null,
+      "effects/repeatnormal"
+     ]
+    }
+   ],
+   "expect": [
+    {
+     "message": "water ripple with scroll off yields 1/(animationspeed²·scale·gcd(W/H, ratio)) retimed through animationspeed²",
+     "layer": 1,
+     "components": 1,
+     "period_seconds": 4,
+     "tolerance": 1e-09,
+     "allow_retime": true,
+     "key": "animationspeed",
+     "exponent": 2
+    },
+    {
+     "message": "an exact water-ripple period past the loop ceiling stays a bounded-displacement unresolved item, not a solver component",
+     "layer": 2,
+     "unresolved": 1,
+     "components": 0,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "bounded": true,
+     "mechanism": "uv_normal_scroll",
+     "detail_contains": [
+      "13673"
+     ]
+    },
+    {
+     "message": "water ripple with scroll on names the scroll term instead of claiming a period",
+     "layer": 3,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism",
+     "detail_contains": [
+      "scrollspeed 0.05"
+     ]
+    },
+    {
+     "message": "clamped normal texture, fullscreen render target and a non-simple ratio are not given a period",
+     "layer": 4,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "clamped normal texture, fullscreen render target and a non-simple ratio are not given a period",
+     "layer": 5,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "clamped normal texture, fullscreen render target and a non-simple ratio are not given a period",
+     "layer": 6,
+     "unresolved": 1,
+     "kind": "MissingOrInvalidSpeed"
+    },
+    {
+     "message": "water ripple with both speeds zero has no motion and constrains no loop",
+     "layer": 7,
+     "components": 0,
+     "unresolved": 0
+    },
+    {
+     "message": "an extra clock use falls back to the unverified shader verdict",
+     "layer": 8,
+     "unresolved": 1,
+     "message_key": "unresolved.shader_not_verified_periodic"
+    },
+    {
+     "message": "the effect render-target size is the truncated layer size",
+     "layer": 9,
+     "components": 1,
+     "period_seconds": 4,
+     "tolerance": 1e-09
+    },
+    {
+     "message": "the water-ripple period is compared with the loop ceiling this analysis was given, not a fixed default",
+     "ceiling": 180,
+     "layer": 10,
+     "components": 0,
+     "unresolved": 1,
+     "mechanism": "uv_normal_scroll",
+     "detail_contains": [
+      "180-second loop ceiling"
+     ]
+    },
+    {
+     "message": "the water-ripple period is compared with the loop ceiling this analysis was given, not a fixed default",
+     "ceiling": 600,
+     "layer": 10,
+     "unresolved": 0,
+     "components": 1,
+     "period_seconds": 400,
+     "tolerance": 1e-06
+    }
+   ]
+  },
+  {
+   "name": "structured-sine",
+   "from": "WaterRippleSineClockChecks",
+   "shaders": {
+    "offset-wave": {
+     "frag": [
+      "// [COMBO] {\"material\":\"Standardized time unit\",\"combo\":\"STD_TIME\",\"type\":\"options\",\"default\":0}",
+      "#include \"common.h\"",
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"default\":5}",
+      "uniform float g_Offset; // {\"material\":\"offset\",\"default\":0}",
+      "uniform float u_PhaseOffset; // {\"material\":\"globleTimeOffset\",\"default\":0}",
+      "void main() {",
+      "#if MASK",
+      "\tfloat mask = texSample2D(g_Texture1, v_TexCoord.zw).r;",
+      "#else",
+      "\tfloat mask = 1.0;",
+      "#endif",
+      "#if STD_TIME",
+      "\tfloat distance = g_Time * g_Speed * M_PI + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "#else",
+      "\tfloat distance = g_Time * g_Speed + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "#endif",
+      "#if DUALWAVES == 1",
+      "\tfloat distance2 = (g_Time + g_Offset2) * g_Speed2 + dot(texCoordMotion, v_Direction2) * g_Scale2;",
+      "#endif",
+      "#if PERSPECTIVE == 1",
+      "\tdistance *= step(0.0, v_TexCoordPerspective.z);",
+      "#endif",
+      "#if TIMEOFFSET",
+      "\tfloat timeOffset = texSample2D(g_Texture2, v_TexCoord.zw).r * M_PI_2;",
+      "\tdistance += timeOffset;",
+      "#endif",
+      "\tdistance += u_PhaseOffset * M_PI_2;",
+      "\tfloat val1 = sin(distance) + g_Offset;",
+      "\tfloat s1 = sign(val1);",
+      "\ttexCoord += val1 * s1 * offset * mask;",
+      "}"
+     ],
+     "vert": [
+      "// [COMBO] {\"material\":\"ui_editor_properties_perspective\",\"combo\":\"PERSPECTIVE\",\"type\":\"options\",\"default\":0}",
+      "// [COMBO] {\"material\":\"ui_editor_properties_dual_waves\",\"combo\":\"DUALWAVES\",\"type\":\"options\",\"default\":0}",
+      "#include \"common.h\"",
+      "uniform float g_Time;"
+     ]
+    },
+    "offset-wave-cos": {
+     "frag": [
+      "// [COMBO] {\"material\":\"Standardized time unit\",\"combo\":\"STD_TIME\",\"type\":\"options\",\"default\":0}",
+      "#include \"common.h\"",
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"default\":5}",
+      "uniform float g_Offset; // {\"material\":\"offset\",\"default\":0}",
+      "uniform float u_PhaseOffset; // {\"material\":\"globleTimeOffset\",\"default\":0}",
+      "void main() {",
+      "#if MASK",
+      "\tfloat mask = texSample2D(g_Texture1, v_TexCoord.zw).r;",
+      "#else",
+      "\tfloat mask = 1.0;",
+      "#endif",
+      "#if STD_TIME",
+      "\tfloat distance = g_Time * g_Speed * M_PI + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "#else",
+      "\tfloat distance = g_Time * g_Speed + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "#endif",
+      "#if DUALWAVES == 1",
+      "\tfloat distance2 = (g_Time + g_Offset2) * g_Speed2 + dot(texCoordMotion, v_Direction2) * g_Scale2;",
+      "#endif",
+      "#if PERSPECTIVE == 1",
+      "\tdistance *= step(0.0, v_TexCoordPerspective.z);",
+      "#endif",
+      "#if TIMEOFFSET",
+      "\tfloat timeOffset = texSample2D(g_Texture2, v_TexCoord.zw).r * M_PI_2;",
+      "\tdistance += timeOffset;",
+      "#endif",
+      "\tdistance += u_PhaseOffset * M_PI_2;",
+      "\tfloat val1 = sin(distance) + g_Offset;",
+      "\tfloat s1 = cos(distance);",
+      "\ttexCoord += val1 * s1 * offset * mask;",
+      "}"
+     ],
+     "vert": [
+      "// [COMBO] {\"material\":\"ui_editor_properties_perspective\",\"combo\":\"PERSPECTIVE\",\"type\":\"options\",\"default\":0}",
+      "// [COMBO] {\"material\":\"ui_editor_properties_dual_waves\",\"combo\":\"DUALWAVES\",\"type\":\"options\",\"default\":0}",
+      "#include \"common.h\"",
+      "uniform float g_Time;"
+     ]
+    },
+    "offset-wave-drift": {
+     "frag": [
+      "// [COMBO] {\"material\":\"Standardized time unit\",\"combo\":\"STD_TIME\",\"type\":\"options\",\"default\":0}",
+      "#include \"common.h\"",
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"default\":5}",
+      "uniform float g_Offset; // {\"material\":\"offset\",\"default\":0}",
+      "uniform float u_PhaseOffset; // {\"material\":\"globleTimeOffset\",\"default\":0}",
+      "void main() {",
+      "#if MASK",
+      "\tfloat mask = texSample2D(g_Texture1, v_TexCoord.zw).r;",
+      "#else",
+      "\tfloat mask = 1.0;",
+      "#endif",
+      "#if STD_TIME",
+      "\tfloat distance = g_Time * g_Speed * M_PI + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "#else",
+      "\tfloat distance = g_Time * g_Speed + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "#endif",
+      "#if DUALWAVES == 1",
+      "\tfloat distance2 = (g_Time + g_Offset2) * g_Speed2 + dot(texCoordMotion, v_Direction2) * g_Scale2;",
+      "#endif",
+      "#if PERSPECTIVE == 1",
+      "\tdistance *= step(0.0, v_TexCoordPerspective.z);",
+      "#endif",
+      "#if TIMEOFFSET",
+      "\tfloat timeOffset = texSample2D(g_Texture2, v_TexCoord.zw).r * M_PI_2;",
+      "\tdistance += timeOffset;",
+      "#endif",
+      "\tdistance += g_Time * 0.125;",
+      "\tfloat val1 = sin(distance) + g_Offset;",
+      "\tfloat s1 = sign(val1);",
+      "\ttexCoord += val1 * s1 * offset * mask;",
+      "}"
+     ],
+     "vert": [
+      "// [COMBO] {\"material\":\"ui_editor_properties_perspective\",\"combo\":\"PERSPECTIVE\",\"type\":\"options\",\"default\":0}",
+      "// [COMBO] {\"material\":\"ui_editor_properties_dual_waves\",\"combo\":\"DUALWAVES\",\"type\":\"options\",\"default\":0}",
+      "#include \"common.h\"",
+      "uniform float g_Time;"
+     ]
+    },
+    "offset-wave-undeclared": {
+     "frag": [
+      "",
+      "#include \"common.h\"",
+      "uniform float g_Time;",
+      "uniform float g_Speed; // {\"material\":\"speed\",\"default\":5}",
+      "uniform float g_Offset; // {\"material\":\"offset\",\"default\":0}",
+      "uniform float u_PhaseOffset; // {\"material\":\"globleTimeOffset\",\"default\":0}",
+      "void main() {",
+      "#if MASK",
+      "\tfloat mask = texSample2D(g_Texture1, v_TexCoord.zw).r;",
+      "#else",
+      "\tfloat mask = 1.0;",
+      "#endif",
+      "#if STD_TIME",
+      "\tfloat distance = g_Time * g_Speed * M_PI + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "#else",
+      "\tfloat distance = g_Time * g_Speed + dot(texCoordMotion, v_Direction) * g_Scale;",
+      "#endif",
+      "#if DUALWAVES == 1",
+      "\tfloat distance2 = (g_Time + g_Offset2) * g_Speed2 + dot(texCoordMotion, v_Direction2) * g_Scale2;",
+      "#endif",
+      "#if PERSPECTIVE == 1",
+      "\tdistance *= step(0.0, v_TexCoordPerspective.z);",
+      "#endif",
+      "#if TIMEOFFSET",
+      "\tfloat timeOffset = texSample2D(g_Texture2, v_TexCoord.zw).r * M_PI_2;",
+      "\tdistance += timeOffset;",
+      "#endif",
+      "\tdistance += u_PhaseOffset * M_PI_2;",
+      "\tfloat val1 = sin(distance) + g_Offset;",
+      "\tfloat s1 = sign(val1);",
+      "\ttexCoord += val1 * s1 * offset * mask;",
+      "}"
+     ],
+     "vert": [
+      "// [COMBO] {\"material\":\"ui_editor_properties_perspective\",\"combo\":\"PERSPECTIVE\",\"type\":\"options\",\"default\":0}",
+      "// [COMBO] {\"material\":\"ui_editor_properties_dual_waves\",\"combo\":\"DUALWAVES\",\"type\":\"options\",\"default\":0}",
+      "#include \"common.h\"",
+      "uniform float g_Time;"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 11,
+     "shader": "offset-wave",
+     "constants": {
+      "speed": 3,
+      "globleTimeOffset": 0.35
+     }
+    },
+    {
+     "id": 12,
+     "shader": "offset-wave",
+     "constants": {
+      "speed": 2,
+      "globleTimeOffset": 0.35
+     },
+     "combos": {
+      "STD_TIME": 1
+     }
+    },
+    {
+     "id": 13,
+     "shader": "offset-wave",
+     "constants": {
+      "speed": 3,
+      "globleTimeOffset": 0.35
+     },
+     "combos": {
+      "DUALWAVES": 1
+     }
+    },
+    {
+     "id": 14,
+     "shader": "offset-wave",
+     "constants": {
+      "speed": 3,
+      "globleTimeOffset": 0.35
+     },
+     "combos": {
+      "STD_TIME": "on"
+     }
+    },
+    {
+     "id": 15,
+     "shader": "offset-wave-cos",
+     "constants": {
+      "speed": 3,
+      "globleTimeOffset": 0.35
+     }
+    },
+    {
+     "id": 16,
+     "shader": "offset-wave-drift",
+     "constants": {
+      "speed": 3,
+      "globleTimeOffset": 0.35
+     }
+    },
+    {
+     "id": 17,
+     "shader": "offset-wave-undeclared",
+     "constants": {
+      "speed": 3,
+      "globleTimeOffset": 0.35
+     }
+    },
+    {
+     "id": 18,
+     "shader": "offset-wave",
+     "constants": {
+      "speed": 0,
+      "globleTimeOffset": 0.35
+     }
+    },
+    {
+     "id": 19,
+     "shader": "offset-wave",
+     "constants": {
+      "speed": 3,
+      "globleTimeOffset": 0.35
+     },
+     "combos": {
+      "MASK": 1,
+      "TIMEOFFSET": 1,
+      "PERSPECTIVE": 1
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "a sine clock with static phase offsets, an output bias, a step gate and a texture phase keeps period 2π/speed",
+     "layer": 11,
+     "components": 1,
+     "period": "2pi/3",
+     "key": "speed"
+    },
+    {
+     "message": "a sine clock with static phase offsets, an output bias, a step gate and a texture phase keeps period 2π/speed",
+     "layer": 19,
+     "components": 1,
+     "period": "2pi/3"
+    },
+    {
+     "message": "the standardized time unit multiplies the clock by π, so the period becomes 2/speed",
+     "layer": 12,
+     "components": 1,
+     "period_seconds": 1
+    },
+    {
+     "message": "dual waves, unreadable or undeclared time-unit combos, a non-sine clock use and a clock-driven offset stay unresolved",
+     "layers": [
+      13,
+      14,
+      15,
+      16,
+      17
+     ],
+     "unresolved_total": 5,
+     "components_total": 0
+    },
+    {
+     "message": "dual waves, unreadable or undeclared time-unit combos, a non-sine clock use and a clock-driven offset stay unresolved",
+     "layer": 13,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "dual waves, unreadable or undeclared time-unit combos, a non-sine clock use and a clock-driven offset stay unresolved",
+     "layer": 14,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "dual waves, unreadable or undeclared time-unit combos, a non-sine clock use and a clock-driven offset stay unresolved",
+     "layer": 15,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "dual waves, unreadable or undeclared time-unit combos, a non-sine clock use and a clock-driven offset stay unresolved",
+     "layer": 16,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "dual waves, unreadable or undeclared time-unit combos, a non-sine clock use and a clock-driven offset stay unresolved",
+     "layer": 17,
+     "unresolved": 1,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "a zero-speed sine clock constrains no loop",
+     "layer": 18,
+     "components": 0,
+     "unresolved": 0
+    }
+   ]
+  },
+  {
+   "name": "effective-pass",
+   "from": "ShaderEffectivePassChecks",
+   "shaders": {},
+   "files": {
+    "materials/noisy.json": [
+     "{\"passes\":[{\"shader\":\"sine\",\"combos\":{\"NOISE\":1}}]}"
+    ],
+    "materials/definition-only.json": [
+     "{\"passes\":[{\"shader\":\"sine\",\"combos\":{\"NOISE\":0},\"constantshadervalues\":{\"speed\":2.0}}]}"
+    ],
+    "effects/definition-wins.json": [
+     "{\"passes\":[{\"material\":\"materials/noisy.json\",\"combos\":{\"NOISE\":0}}]}"
+    ],
+    "effects/material-wins.json": [
+     "{\"passes\":[{\"material\":\"materials/noisy.json\"}]}"
+    ],
+    "effects/definition-only.json": [
+     "{\"passes\":[{\"material\":\"materials/definition-only.json\"}]}"
+    ],
+    "effects/shine.json": [
+     "{\"passes\":[{\"material\":\"materials/shine-down.json\"},{\"material\":\"materials/shine-cast.json\"},{\"material\":\"materials/shine-extra.json\"}]}"
+    ],
+    "materials/shine-down.json": [
+     "{\"passes\":[{\"shader\":\"shine_downsample2\"}]}"
+    ],
+    "materials/shine-cast.json": [
+     "{\"passes\":[{\"shader\":\"shine_cast\"}]}"
+    ],
+    "materials/shine-extra.json": [
+     "{\"passes\":[{\"shader\":\"shine_extra\"}]}"
+    ],
+    "shaders/shine_downsample2.vert": [
+     "varying vec4 v_NoiseTexCoord; uniform float g_Time; uniform float g_NoiseSpeed; uniform float g_NoiseScale; void main(){v_NoiseTexCoord.xy = a_TexCoord + g_Time * g_NoiseSpeed; v_NoiseTexCoord.wz = vec2(a_TexCoord.y, -a_TexCoord.x) * 0.633 + vec2(-g_Time, g_Time) * 0.5 * g_NoiseSpeed; v_NoiseTexCoord *= g_NoiseScale;}"
+    ],
+    "shaders/shine_downsample2.frag": [
+     "varying vec4 v_NoiseTexCoord; uniform sampler2D g_Texture2; // {\"default\":\"util/clouds_256\"} void main(){float x=texSample2D(g_Texture2, v_NoiseTexCoord.xy).r * texSample2D(g_Texture2, v_NoiseTexCoord.zw).r;}"
+    ],
+    "shaders/shine_cast.vert": [
+     "// [COMBO] {\"combo\":\"EDGES\",\"default\":4}",
+     "uniform float g_Time; uniform float g_Speed; void main(){vec2 baseDirection = rotateVec2(vec2(0, 0.5), g_Time * g_Speed); #if EDGES == 3 vec2 x=rotateVec2(baseDirection, 0); #endif #if EDGES == 4 vec2 y=rotateVec2(vec2(-baseDirection.y, baseDirection.x), 0); #endif}"
+    ],
+    "shaders/shine_cast.frag": [
+     "void main(){}"
+    ],
+    "shaders/shine_extra.frag": [
+     "uniform float g_Time; void main(){ float unknown = g_Time; }"
+    ],
+    "shaders/sine.frag": [
+     "// [COMBO] {\"combo\":\"NOISE\",\"type\":\"options\",\"default\":0}",
+     "#if NOISE",
+     "#endif",
+     "uniform float g_Time; uniform float g_Speed; uniform float g_Phase; uniform float g_Amount;",
+     "void main(){float x=sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;}"
+    ]
+   },
+   "textures": {
+    "materials/util/clouds_256.tex": 0
+   },
+   "objects": [
+    {
+     "id": 1,
+     "raw": {
+      "id": 1,
+      "effects": [
+       {
+        "file": "effects/definition-wins.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "speed": 2.0
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": 2,
+     "raw": {
+      "id": 2,
+      "effects": [
+       {
+        "file": "effects/material-wins.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "speed": 2.0
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": 3,
+     "raw": {
+      "id": 3,
+      "effects": [
+       {
+        "file": "effects/definition-only.json",
+        "passes": null
+       }
+      ]
+     }
+    },
+    {
+     "id": 4,
+     "raw": {
+      "id": 4,
+      "effects": [
+       {
+        "file": "effects/definition-wins.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "speed": 2.0
+          },
+          "combos": {
+           "NOISE": 1
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": 5,
+     "raw": {
+      "id": 5,
+      "effects": [
+       {
+        "file": "effects/shine.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "noisespeed": 0.2,
+           "noisescale": 5.0
+          }
+         },
+         {
+          "combos": {
+           "EDGES": 3
+          },
+          "constantshadervalues": {
+           "speed": 0.0
+          }
+         },
+         {}
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": 6,
+     "raw": {
+      "id": 6,
+      "effects": [
+       {
+        "file": "effects/shine.json",
+        "passes": [
+         {
+          "constantshadervalues": {
+           "noisespeed": 0.2,
+           "noisescale": 5.0
+          }
+         },
+         {
+          "combos": {
+           "EDGES": 4
+          },
+          "constantshadervalues": {
+           "speed": 0.0
+          }
+         },
+         {}
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "definition combos override material defaults for an authored patchable period",
+     "layers": [
+      1,
+      2,
+      3,
+      4
+     ],
+     "components_total": 1
+    },
+    {
+     "message": "definition combos override material defaults for an authored patchable period",
+     "layer": 1,
+     "components": 1
+    },
+    {
+     "message": "material combos are inherited and authored combos remain the final override",
+     "layer": 2,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism"
+    },
+    {
+     "message": "material combos are inherited and authored combos remain the final override",
+     "layer": 4,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism"
+    },
+    {
+     "message": "a definition-only time pass is reported but an inherited speed is not exposed as an unpatchable component",
+     "layer": 3,
+     "unresolved": 1,
+     "kind": "MissingOrInvalidSpeed"
+    },
+    {
+     "message": "a source-verified static shine cast emits only the complete repeat-noise period and still rejects a later unmodeled time pass",
+     "layer": 5,
+     "components": 1,
+     "id_suffix": "noise-speed",
+     "period_seconds": 2
+    },
+    {
+     "message": "a source-verified static shine cast emits only the complete repeat-noise period and still rejects a later unmodeled time pass",
+     "layer": 5,
+     "pass_index": 2,
+     "kind": "UnsupportedShaderMechanism"
+    },
+    {
+     "message": "the same static shine cast rule accepts EDGES=4 without emitting a ray-speed period",
+     "layer": 6,
+     "components": 1,
+     "id_suffix": "noise-speed",
+     "period_seconds": 2
+    },
+    {
+     "message": "the same static shine cast rule accepts EDGES=4 without emitting a ray-speed period",
+     "layer": 6,
+     "pass_index": 2,
+     "kind": "UnsupportedShaderMechanism"
+    }
+   ]
   }
  ]
 }
