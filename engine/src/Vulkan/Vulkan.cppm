@@ -684,8 +684,8 @@ private:
     u64                        nextImageGeneration();
     void                       AssignImageGeneration(VmaImageParameters&);
     void                       AssignImageGeneration(ExImageParameters&);
-    /* VIDEO-typed Image branch of AllocateImportedTexture: registers a wavsen
-     * VideoDecoder + stable RGBA8 VkImage and returns an ImageSlotsRef
+    /* VIDEO-typed Image branch of AllocateImportedTexture: registers an
+     * owe::media::VideoSource + stable RGBA8 VkImage and returns an ImageSlotsRef
      * pointing at that same VkImage so material binding is transparent. */
     rstd::Option<rstd::sync::Arc<TextureAllocation>>
          CreateVideoTex(const Image&, Option<rstd::sync::Arc<VideoPlaybackState>> playback);
