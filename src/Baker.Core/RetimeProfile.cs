@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace Baker.Core;
@@ -104,12 +103,6 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
         return Resolve(request.Preset, request.RetimeBudgetPercent, request.LoopLengthMaximumSeconds, request.MaximumRetimePercent);
     }
 
-    /// <summary>
-    /// 命令行上与档位有关的值：档位本身、两个高级覆盖（没给时为 null），以及摆动改频开关
-    /// （默认 <see cref="SwayRetimeOptions.OnByDefault"/>，档位的观感预算管的就是它）。
-    /// </summary>
-    public sealed record Arguments(string Preset, double? BudgetPercent, double? LoopMaximumSeconds, bool SwayRetime);
-
     /// <summary>一次求解在某个上限下的读数：生效上限秒数、选中候选的可见摆动改动（没有摆动解时为 null）与帧数。</summary>
     public readonly record struct QualityCeilingReading(double CeilingSeconds, double? VisibleChangePercent, ulong? Frames);
 
@@ -140,35 +133,6 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
             return new(preset < comparison, QualityCeilingChoice.SmallerVisibleChange);
         ulong presetFrames = atPreset.Frames ?? ulong.MaxValue, comparisonFrames = atComparison.Frames ?? ulong.MaxValue;
         return new(presetFrames < comparisonFrames, QualityCeilingChoice.ShorterLoop);
-    }
-
-    /// <summary>从已解析的命令行选项里读档位、两个高级覆盖与摆动改频开关。</summary>
-    public static Arguments ReadArguments(IReadOnlyDictionary<string, string> options)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-        string preset = options.TryGetValue("--preset", out string? name) ? name : Balanced;
-        if (!IsKnownPreset(preset)) throw new ArgumentException("--preset must be efficiency, balanced, or quality.");
-        double? budget = null;
-        if (options.TryGetValue("--retime-budget", out string? budgetText))
-        {
-            if (!double.TryParse(budgetText, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) ||
-                !double.IsFinite(parsed) || parsed < 0 || parsed > MaximumBudgetPercent)
-                throw new ArgumentException("--retime-budget must be a percentage from 0 to 5.");
-            budget = parsed;
-        }
-        double? maximum = null;
-        if (options.TryGetValue("--loop-max-seconds", out string? lengthText))
-        {
-            if (!double.TryParse(lengthText, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) ||
-                !double.IsFinite(parsed) || parsed <= 0 || parsed > SwayRetimeOptions.MaximumLoopLengthSeconds)
-                throw new ArgumentException("--loop-max-seconds must be a number of seconds above 0 and at most 3600.");
-            maximum = parsed;
-        }
-        // 摆动改频默认开（三档的观感预算管的就是摆动求解），只有显式 --sway-retime off 才关。
-        string sway = options.TryGetValue("--sway-retime", out string? swayText)
-            ? swayText : SwayRetimeOptions.OnByDefault ? "on" : "off";
-        if (sway is not ("off" or "on")) throw new ArgumentException("--sway-retime must be off or on.");
-        return new(preset, budget, maximum, sway == "on");
     }
 
     /// <summary>写进 plan 的 profile 记录：每个值带来源，用户改过哪一项一看便知。</summary>

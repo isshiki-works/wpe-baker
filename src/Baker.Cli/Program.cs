@@ -1,7 +1,7 @@
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
+using Baker.Cli;
 using Baker.Core;
 
 var jsonOptions = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -26,25 +26,24 @@ using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
 try
 {
-    // 每个子命令一段用法：顶层帮助由它们拼出，`<命令> --help` 只打印自己那一段，两处永远同步。
+    // 每个子命令一段用法，全由选项表生成：顶层帮助由它们拼出，`<命令> --help` 只打印自己那一段，两处永远同步。
     // 骨架是英文；个别说明（如 bake 的 --encoder）按 --lang 出中文或英文，帮助路径里 --lang 放在哪都认。
-    var usage = CliUsage.Sections(CliUsage.HelpLanguage(args, language));
-    string[] primaryCommands = ["analyze", "bake", "export", "targets", "apply", "rollback"];
-    string[] diagnosticCommands = ["inspect", "extract", "render", "validate",
-        "decode-check", "devices", "pack-video", "pack-rgba"];
+    string helpLanguage = OptionTable.HelpLanguage(args, language);
     // 子命令带 --help/-h 时只讲这个子命令，并以 0 退出；以前 --help 被当成壁纸路径，报"源不存在"。
-    if (args.Length > 1 && usage.ContainsKey(args[0]) && args.Skip(1).Any(value => value is "--help" or "-h"))
+    if (args.Length > 1 && OptionTable.Commands.Any(command => command.Name == args[0]) && args.Skip(1).Any(value => value is "--help" or "-h"))
     {
-        Console.WriteLine(usage[args[0]]);
+        Console.WriteLine(OptionTable.Usage(args[0], helpLanguage));
         Console.WriteLine($"Run `wpe-baker --help` for every command. Paths are relative to the working directory; tool paths to TOOLS.json.");
         return 0;
     }
     if (args.Length == 0 || args[0] is "--help" or "-h" or "help")
     {
-        Console.WriteLine(string.Join(Environment.NewLine, primaryCommands.Select(name => usage[name])));
+        string Sections(bool diagnostic) => string.Join(Environment.NewLine,
+            OptionTable.Commands.Where(command => command.Diagnostic == diagnostic).Select(command => OptionTable.Usage(command.Name, helpLanguage)));
+        Console.WriteLine(Sections(false));
         Console.WriteLine();
         Console.WriteLine("Diagnostics:");
-        Console.WriteLine(string.Join(Environment.NewLine, diagnosticCommands.Select(name => usage[name])));
+        Console.WriteLine(Sections(true));
         Console.WriteLine();
         Console.WriteLine("""
             Scene projects only. Analyze creates a version 3 video-plus-live plan.
@@ -73,28 +72,9 @@ try
         Console.WriteLine(JsonSerializer.Serialize(VulkanDevices.Enumerate(), jsonOptions));
         return 0;
     }
-    var options = new Dictionary<string, string>(StringComparer.Ordinal);
-    for (int i = 2; i < args.Length; i += 2)
-    {
-        if (i + 1 >= args.Length || !args[i].StartsWith("--", StringComparison.Ordinal) || !options.TryAdd(args[i], args[i + 1]))
-            throw new ArgumentException("Options require a unique name and value.");
-    }
-    if (args.Length < 2) throw new ArgumentException("Source path is required.");
-    string[] allowed = args[0] switch {
-        "analyze" => ["--assets", "--out", "--tools", "--properties", "--properties-source", "--width", "--height", "--fps", "--fps-den", "--video-layout", "--live-overlays", "--text-effects", "--audio-effects", "--exclude-layers", "--preset", "--retime-budget", "--video-shell", "--sway-retime", "--loop-max-seconds", "--trace", "--retain-live", "--device", "--lang", "--daytime-split", "--interaction"],
-        "inspect" => ["--assets", "--out"],
-        "decode-check" => ["--tools", "--out"],
-        "extract" => ["--out"], "bake" => ["--tools", "--out", "--encoder", "--encode-slots", "--group-parallel", "--keep-intermediates", "--effect-render-scale", "--effect-resolution", "--lang"], "render" or "validate" => ["--tools"],
-        "targets" or "export" => [],
-        "apply" or "rollback" => ["--wallpaper-engine"],
-        "pack-video" or "pack-rgba" => ["--width", "--height", "--out"], _ => [] };
-    foreach (var key in options.Keys)
-        if (!allowed.Contains(key)) throw new ArgumentException($"Unknown option for {args[0]}: {key}");
-    if (options.TryGetValue("--lang", out string? requestedLanguage))
-    {
-        if (requestedLanguage is not ("zh" or "en")) throw new ArgumentException("--lang must be zh or en.");
-        language = requestedLanguage;
-    }
+    // 选项名字按选项表检查（成对、不重复、这个子命令认得）；取值在各子命令走到那一步时按表校验。
+    Dictionary<string, string> options = OptionTable.Parse(args);
+    if (options.ContainsKey("--lang")) language = (string)OptionTable.Value(args[0], options, "--lang")!;
     if (args[0] == "decode-check")
     {
         if (!options.TryGetValue("--out", out string? output)) throw new ArgumentException("--out is required.");
@@ -122,78 +102,25 @@ try
         NativeTools tools = options.TryGetValue("--tools", out string? toolPath) ? await ReadTools(toolPath, cancellation.Token) : NativeEnvironment.FindTools();
         string assets = options.TryGetValue("--assets", out string? suppliedAssets) ? Path.GetFullPath(suppliedAssets) : NativeEnvironment.FindAssets();
         if (!NativeEnvironment.AssetsValid(assets)) throw new Message("setup.assets_missing").Error(text => new DirectoryNotFoundException(text));
-        uint Number(string option, uint fallback) => options.TryGetValue(option, out string? value) ? uint.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : fallback;
-        // 没给 --fps 时按 min(WPE 帧率上限, 主屏刷新率) 就近取标准档；--fps-den 是分子的配套，单独给没有意义。
-        if (!options.ContainsKey("--fps") && options.ContainsKey("--fps-den"))
-            throw new ArgumentException("--fps-den only applies together with --fps; omit both to take the frame rate from the Wallpaper Engine limit and the display refresh rate.");
-        var frameRate = OutputFrameRate.Choose(Number("--fps", 0),
+        // 选项取值按选项表校验并填进 AnalyzeOptions；请求由 AnalyzeRequestFactory 生成，与界面同一出处。
+        AnalyzeOptions analyzeOptions = OptionTable.ReadAnalyze(options);
+        var frameRate = OutputFrameRate.Choose((uint)OptionTable.Value("analyze", options, "--fps")!,
             () => WallpaperEngineProperties.ReadFrameRateLimit(WallpaperEngineProperties.LocateConfig(Path.GetDirectoryName(assets))),
             OutputFrameRate.PrimaryDisplayRefreshHz);
-        // 档位给观感改动预算与长度上限兜底；--retime-budget / --loop-max-seconds 是高级覆盖。
-        RetimeProfile.Arguments retimeArguments = RetimeProfile.ReadArguments(options);
-        string interaction = options.GetValueOrDefault("--interaction", "fixed");
-        if (interaction is not ("keep" or "fixed" or "off")) throw new ArgumentException("--interaction must be keep, fixed, or off.");
-        string liveOverlayPlacement = options.GetValueOrDefault("--live-overlays", "foreground");
-        if (liveOverlayPlacement is not ("preserve" or "foreground"))
-            throw new ArgumentException("--live-overlays must be preserve or foreground.");
-        string liveTextEffects = options.GetValueOrDefault("--text-effects", "preserve");
-        if (liveTextEffects is not ("preserve" or "simple"))
-            throw new ArgumentException("--text-effects must be preserve or simple.");
-        string audioEffects = options.GetValueOrDefault("--audio-effects", "preserve");
-        if (audioEffects is not ("preserve" or "omit"))
-            throw new ArgumentException("--audio-effects must be preserve or omit.");
-        // 循环取向跟着档位走。
-        string loopPreference = RetimeProfile.LoopPreferenceForPreset(retimeArguments.Preset);
-        string videoShell = options.GetValueOrDefault("--video-shell", VideoDominance.RejectChoice);
-        if (videoShell is not (VideoDominance.RejectChoice or VideoDominance.AllowChoice))
-            throw new ArgumentException("--video-shell must be reject or allow.");
-        // feat/daytime-split：昼夜/时段壁纸的状态拆分，默认关；开着时识别到状态选择器就每个状态各出一份 plan。
-        string daytimeSplit = options.GetValueOrDefault("--daytime-split", "off");
-        if (daytimeSplit is not ("on" or "off")) throw new ArgumentException("--daytime-split must be on or off.");
-        // 摆动改频默认开，与 GUI 一致（解析在 RetimeProfile.ReadArguments，默认值取 SwayRetimeOptions.OnByDefault）；
-        // 循环时长上限（秒）由档位兜底（效率/平衡 600、质量 1200），--loop-max-seconds 可覆盖，与改频开关无关。
-        double? loopLengthMaximum = retimeArguments.LoopMaximumSeconds;
         JsonObject? explicitProperties = options.TryGetValue("--properties", out string? propertiesPath)
             ? JsonNode.Parse(await File.ReadAllTextAsync(propertiesPath, cancellation.Token))?.AsObject()
                 ?? throw new InvalidDataException("--properties must contain a JSON object.") : null;
         // 属性底值默认取用户在 Wallpaper Engine 里为这张壁纸设的值（只读 config.json），--properties 再覆盖在上；
         // 读不到就回退壁纸默认值，原因写进 plan 的 wpe_properties。
-        string propertiesSource = options.GetValueOrDefault("--properties-source", WallpaperEngineProperties.SourceWpe);
-        if (!WallpaperEngineProperties.IsKnownMode(propertiesSource))
-            throw new ArgumentException("--properties-source must be wpe or defaults.");
+        string propertiesSource = (string)OptionTable.Value("analyze", options, "--properties-source")!;
         JsonObject sourceProject = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
         var wpeProperties = WallpaperEngineProperties.Resolve(propertiesSource, source.DirectoryPath, source.SourcePath, sourceProject,
             propertiesSource == WallpaperEngineProperties.SourceWpe ? WallpaperEngineProperties.LocateConfig(Path.GetDirectoryName(assets)) : null);
         var (properties, propertiesOrigin) = WallpaperEngineProperties.Merge(wpeProperties, sourceProject, explicitProperties);
-        // 宽高要么一起给，要么都不给：都不给时由分析按场景画布铺满本机屏幕取值，0 表示未指定。
-        if (options.ContainsKey("--width") != options.ContainsKey("--height"))
-            throw new ArgumentException("--width and --height must be given together; omit both to size the output from the scene canvas and this machine's primary display.");
         string analysisDirectory = options.TryGetValue("--out", out var planPath)
             ? Path.GetFullPath(planPath) + ".work" : Path.Combine(Path.GetTempPath(), "WpeBaker", "analysis-" + Guid.NewGuid().ToString("N"));
-        var request = new HybridAnalyzeRequest(2, sourcePath, assets, analysisDirectory,
-            Number("--width", 0), Number("--height", 0), frameRate.Fps, Number("--fps-den", 1), properties,
-            // 质量档不设百分比预算（取改动最小的解），通用分量调速这时仍要一个上限，沿用旧默认 2%。
-            MaximumRetimePercent: 2, AllowLocalSeamRepair: false,
-            RuntimeTraceFile: options.GetValueOrDefault("--trace"),
-            DeviceUuid: options.GetValueOrDefault("--device"),
-            RetainLiveRootIds: options.TryGetValue("--retain-live", out string? keep) ? keep.Split(',').Select(int.Parse).ToArray() : null,
-            VideoLayout: options.GetValueOrDefault("--video-layout", "full_frame"),
-            LiveOverlayPlacement: liveOverlayPlacement,
-            LiveTextEffects: liveTextEffects,
-            AudioEffects: audioEffects,
-            ExcludedLayerIds: options.TryGetValue("--exclude-layers", out string? excludedLayers)
-                ? excludedLayers.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(int.Parse).ToArray() : null,
-            LoopPreference: loopPreference,
-            VideoShell: videoShell,
-            SwayRetime: retimeArguments.SwayRetime,
-            LoopLengthMaximumSeconds: loopLengthMaximum,
-            PropertiesOrigin: propertiesOrigin,
-            FrameRateOrigin: frameRate.ToJson(),
-            Preset: retimeArguments.Preset,
-            RetimeBudgetPercent: retimeArguments.BudgetPercent,
-            DaytimeSplit: daytimeSplit == "on",
-            CustomSettings: PresetCascade.IsCustom(options.Keys), Interaction: interaction,
-            LayoutExplicit: options.ContainsKey("--video-layout"));
+        var request = AnalyzeRequestFactory.Build(analyzeOptions, sourcePath, assets, analysisDirectory, properties, propertiesOrigin,
+            frameRate.Fps, (uint)OptionTable.Value("analyze", options, "--fps-den")!, frameRate.ToJson());
         var progress = new Progress<RenderProgress>(p => Console.Error.WriteLine(JsonSerializer.Serialize(p, jsonOptions)));
         JsonObject report;
         int analyzeExitCode = 0;
@@ -299,51 +226,19 @@ try
         if (input["schema_version"]?.GetValue<int>() != 2 || input["plan"]?["kind"]?.GetValue<string>() != "hybrid_video")
             throw new InvalidDataException("A version 2 Scene bake request with a supported plan is required. Legacy effect-cache and media plans were removed; analyze the Scene source again.");
         HybridPlanFormat.Validate(input["plan"]!.AsObject());
-        // 播放版编码路径；支持的 Vulkan 路径直接生成成品，无需无损 master。
-        if (options.TryGetValue("--encoder", out string? encoderChoice))
+        // bake 选项 → 请求字段，取值按选项表校验；给了哪个才写哪个、才重写请求文本，没给的按请求里的默认。
+        // encoder：播放版编码路径，支持的 Vulkan 路径直接生成成品；encode_slots：成品编码的跨进程槽位配额（0 不限）；
+        // group_parallel：单案内同时在飞的组主渲染数（1 与逐组串行一致）；keep_intermediates：开发用，保留中间产物。
+        foreach (var (option, field) in new[] { ("--encoder", "playback_encoder"), ("--effect-resolution", "match_effect_resolution"),
+            ("--effect-render-scale", "effect_render_scale"), ("--encode-slots", "encode_slots"), ("--group-parallel", "group_parallel"),
+            ("--keep-intermediates", "keep_intermediates") })
         {
-            input["playback_encoder"] = PlaybackEncoderSelection.Normalize(encoderChoice);
-            text = input.ToJsonString();
-        }
-        if (options.TryGetValue("--effect-resolution", out string? effectResolution))
-        {
-            if (effectResolution is not ("original" or "output"))
-                throw new ArgumentException("--effect-resolution must be original or output.");
-            input["match_effect_resolution"] = effectResolution == "output";
-            text = input.ToJsonString();
-        }
-        if (options.TryGetValue("--effect-render-scale", out string? scaleChoice))
-        {
-            if (!double.TryParse(scaleChoice, NumberStyles.Float, CultureInfo.InvariantCulture, out double scale) ||
-                !double.IsFinite(scale) || scale is <= 0 or > 1)
-                throw new ArgumentException("--effect-render-scale must be in (0, 1]; default 1 preserves the original effect resolution.");
-            input["effect_render_scale"] = scale;
-            text = input.ToJsonString();
-        }
-        // 成品编码的跨进程槽位配额：0（默认）不限。多槽并行跑批时用它压住 ffmpeg 抢核，渲染阶段不受限制。
-        if (options.TryGetValue("--encode-slots", out string? encodeSlotsChoice))
-        {
-            if (!int.TryParse(encodeSlotsChoice, NumberStyles.Integer, CultureInfo.InvariantCulture, out int encodeSlots) ||
-                encodeSlots < 0 || encodeSlots > EncodeSlots.MaximumQuota)
-                throw new ArgumentException($"--encode-slots must be an integer from 0 to {EncodeSlots.MaximumQuota}; 0 means no limit.");
-            input["encode_slots"] = encodeSlots;
-            text = input.ToJsonString();
-        }
-        // 单案内同时在飞的组主渲染数：1（默认）与逐组串行完全一致；组的判定、编码与写入始终按组序串行。
-        if (options.TryGetValue("--group-parallel", out string? groupParallelChoice))
-        {
-            if (!int.TryParse(groupParallelChoice, NumberStyles.Integer, CultureInfo.InvariantCulture, out int groupParallel) ||
-                groupParallel < 1 || groupParallel > 64)
-                throw new ArgumentException("--group-parallel must be an integer from 1 to 64; 1 renders one group at a time.");
-            input["group_parallel"] = groupParallel;
-            text = input.ToJsonString();
-        }
-        // 开发用：保留中间产物（捕获副本、各组无损 master、合成探针与参照、分析刷新目录）。默认删，磁盘峰值按此设计。
-        if (options.TryGetValue("--keep-intermediates", out string? keepIntermediates))
-        {
-            if (keepIntermediates is not ("true" or "false"))
-                throw new ArgumentException("--keep-intermediates must be true or false.");
-            input["keep_intermediates"] = keepIntermediates == "true";
+            if (!options.ContainsKey(option)) continue;
+            input[field] = OptionTable.Value("bake", options, option) switch
+            {
+                bool flag => JsonValue.Create(flag), int count => JsonValue.Create(count), double scale => JsonValue.Create(scale),
+                var value => JsonValue.Create((string)value!)
+            };
             text = input.ToJsonString();
         }
         var tools = options.TryGetValue("--tools", out string? toolsPath) ? await ReadTools(toolsPath, cancellation.Token) : NativeEnvironment.FindTools();

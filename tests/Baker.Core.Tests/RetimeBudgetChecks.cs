@@ -130,30 +130,30 @@ internal static class RetimeBudgetChecks
 
     private static void ArgumentChecks(Action<bool, string> check)
     {
-        RetimeProfile.Arguments defaults = RetimeProfile.ReadArguments(new Dictionary<string, string>());
-        check(defaults is { Preset: "balanced", BudgetPercent: null, LoopMaximumSeconds: null, SwayRetime: true },
+        // 档位、两个高级覆盖与摆动改频开关的命令行解析已移到 Baker.Cli/OptionTable（C2.5a）。
+        static AnalyzeOptions Read(params string[] options) =>
+            Baker.Cli.OptionTable.ReadAnalyze(Baker.Cli.OptionTable.Parse(["analyze", "src", .. options]));
+        AnalyzeOptions defaults = Read();
+        check(defaults is { Preset: "balanced", RetimeBudgetPercent: null, LoopMaximumSeconds: null, SwayRetime: true },
             "retime arguments: analyze defaults to the balanced preset, no overrides and sway retime on");
         // 摆动改频默认开（设计 §3：三档都开），只有显式 off 才关；默认值与界面共用 SwayRetimeOptions.OnByDefault。
-        check(SwayRetimeOptions.OnByDefault &&
-            RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--sway-retime"] = "on" }).SwayRetime &&
-            !RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--sway-retime"] = "off" }).SwayRetime,
+        check(SwayRetimeOptions.OnByDefault && Read("--sway-retime", "on").SwayRetime && !Read("--sway-retime", "off").SwayRetime,
             "retime arguments: sway retime is on by default and only an explicit --sway-retime off turns it off");
         bool badSway = false;
-        try { RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--sway-retime"] = "yes" }); }
+        try { Read("--sway-retime", "yes"); }
         catch (ArgumentException) { badSway = true; }
         check(badSway, "retime arguments: --sway-retime only accepts on or off");
-        string analyzeHelp = CliUsage.Sections("zh")["analyze"];
-        check(analyzeHelp.Contains("[--sway-retime on|off (default on)]", StringComparison.Ordinal) &&
-            analyzeHelp.Contains("摆动改频三档都开", StringComparison.Ordinal),
-            "retime arguments: analyze --help states that sway retime defaults to on for all three presets");
-        RetimeProfile.Arguments modern = RetimeProfile.ReadArguments(new Dictionary<string, string>
-            { ["--preset"] = "quality", ["--retime-budget"] = "4.5", ["--loop-max-seconds"] = "900" });
-        check(modern is { Preset: "quality", BudgetPercent: 4.5, LoopMaximumSeconds: 900 },
+        // 帮助里的默认值由选项表生成（结构断言，不锁措辞）。
+        check(Baker.Cli.OptionTable.Usage("analyze", "zh").Split(Environment.NewLine)
+                .Any(line => line.Contains("--sway-retime", StringComparison.Ordinal) && line.EndsWith("(default on)", StringComparison.Ordinal)),
+            "retime arguments: analyze --help states that sway retime defaults to on");
+        AnalyzeOptions modern = Read("--preset", "quality", "--retime-budget", "4.5", "--loop-max-seconds", "900");
+        check(modern is { Preset: "quality", RetimeBudgetPercent: 4.5, LoopMaximumSeconds: 900 },
             "retime arguments: --preset, --retime-budget and --loop-max-seconds are read as given");
         bool tooLarge = false, badPreset = false;
-        try { RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--retime-budget"] = "6" }); }
+        try { Read("--retime-budget", "6"); }
         catch (ArgumentException) { tooLarge = true; }
-        try { RetimeProfile.ReadArguments(new Dictionary<string, string> { ["--preset"] = "fast" }); }
+        try { Read("--preset", "fast"); }
         catch (ArgumentException) { badPreset = true; }
         check(tooLarge && badPreset,
             "retime arguments: a budget above 5% and an unknown preset are rejected");

@@ -6,12 +6,7 @@ namespace Baker.Core;
 public static class PresetCascade
 {
     public const bool MeasureSourceByDefault = false;
-    public static bool IsCustom(IEnumerable<string> options) => options.Any(option => option is
-        "--properties" or "--properties-source" or "--width" or "--height" or "--fps" or "--fps-den" or
-        "--video-layout" or "--live-overlays" or "--text-effects" or "--audio-effects" or
-        "--exclude-layers" or "--retime-budget" or "--video-shell" or
-        "--sway-retime" or "--loop-max-seconds" or
-        "--retain-live" or "--daytime-split" or "--trace");
+    // CLI 哪些选项算"自定义"已移到 Baker.Cli/OptionTable 的 Custom 列；界面按高级区是否改过算。两边都经 AnalyzeOptions.Custom 进请求。
 
     internal static async Task<JsonObject> AdoptAllocationAsync(JsonObject plan, CancellationToken token)
     {

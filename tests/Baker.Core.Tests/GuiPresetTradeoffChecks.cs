@@ -14,14 +14,17 @@ internal static class GuiPresetTradeoffChecks
 
     private static void TwoAxes(Action<bool, string> check)
     {
-        var original = new HybridAnalyzeRequest(2, "s", "a", "o", SwayRetime: true);
-        var fixedQuality = AppJsonPresentation.ConfigureAnalysis(original, "quality", "fixed", false, false);
-        var offEfficiency = AppJsonPresentation.ConfigureAnalysis(original, "efficiency", "off", false, false);
-        check(fixedQuality is { Preset: "quality", Interaction: "fixed", ViewMode: "fixed_view", CustomSettings: false } &&
-            offEfficiency is { Preset: "efficiency", Interaction: "off", CustomSettings: false } &&
+        // 界面控件经 AnalyzeOptions.ForDesktop → AnalyzeRequestFactory 生成请求（C2.5a，与 CLI 选项表同一个工厂）。
+        static HybridAnalyzeRequest Gui(string preset, string interaction, bool custom, bool layered) =>
+            AnalyzeRequestFactory.Build(AnalyzeOptions.ForDesktop(preset, interaction, true, layered, false, [], null, true, custom, 0, 0, null),
+                "s", "a", "o", null, null, 60, 1, new JsonObject());
+        var fixedQuality = Gui("quality", "fixed", false, false);
+        var offEfficiency = Gui("efficiency", "off", false, false);
+        check(fixedQuality is { Preset: "quality", Interaction: "fixed", LoopPreference: "quality", CustomSettings: false } &&
+            offEfficiency is { Preset: "efficiency", Interaction: "off", LoopPreference: "performance", CustomSettings: false } &&
             fixedQuality.UserProperties is null && offEfficiency.ExcludedLayerIds is null,
             "GUI axes map independently to Core without implicitly excluding content or marking custom");
-        check(AppJsonPresentation.ConfigureAnalysis(original, "quality", "fixed", true, true) is { CustomSettings: true, LayoutExplicit: true },
+        check(Gui("quality", "fixed", true, true) is { CustomSettings: true, LayoutExplicit: true, VideoLayout: "layered" },
             "GUI advanced overrides are recorded separately from the preset");
         var plan = new JsonObject { ["preset_applied"] = "balanced", ["applied_tradeoffs"] = new JsonObject {
             ["turn_off_kinds"] = new JsonArray("parallax", "parallax"), ["daytime_state"] = "morning" },
