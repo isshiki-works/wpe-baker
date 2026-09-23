@@ -2463,10 +2463,12 @@
      ]
     },
     {
-     "message": "water ripple with scroll on names the scroll term instead of claiming a period",
+     "message": "water ripple with scroll on and a nonzero direction is proven non-periodic (sin of the direction is transcendental)",
      "layer": 3,
      "unresolved": 1,
-     "kind": "UnsupportedShaderMechanism",
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "bounded": true,
+     "mechanism": "uv_incommensurate_scroll",
      "detail_contains": [
       "scrollspeed 0.05"
      ]
