@@ -768,3 +768,24 @@ public class CompositionReferenceCaseTests
         await TestTemp.Run(dir => CompositionReferenceCaseChecks.RunAsync(Assert.True, dir));
     }
 }
+
+[Trait("Layer", "L1")]
+public class EffectPrefixLightingMaterialTests
+{
+    [Fact]
+    public async Task Run()
+    {
+        await TestTemp.Run(dir => EffectPrefixLightingChecks.RunMaterialAsync(Assert.True, dir));
+    }
+}
+
+[Trait("Layer", "L3"), Collection("L3 本机工具")]
+public class EffectPrefixLightingRenderTests
+{
+    [Fact]
+    public async Task Run()
+    {
+        Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
+        await TestTemp.Run(dir => EffectPrefixLightingChecks.RunRenderAsync(Assert.True, dir));
+    }
+}
