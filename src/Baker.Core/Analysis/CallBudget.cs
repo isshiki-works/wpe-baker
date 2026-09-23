@@ -8,10 +8,6 @@ internal sealed class CallBudget(int fixedCalls, int perState)
 {
     private readonly HashSet<string> cells = new(StringComparer.Ordinal);
 
-    internal int FixedCalls => fixedCalls;
-    internal int PerState => perState;
-    internal int Used => cells.Count;
-
     internal int Limit(int states) => fixedCalls + perState * states;
 
     internal void Charge(string cell, int states)

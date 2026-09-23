@@ -46,10 +46,10 @@ public class SearchSpaceTests
     {
         // fixed/off × balanced/efficiency × 两种布局 = 8，off 的取舍测量再 2；fixed、off 都按状态展开，每个状态 8。
         CallBudget standard = SearchSpace.Of(new(2, "s", "a", "o"), false).Budget();
-        Assert.Equal((10, 8), (standard.FixedCalls, standard.PerState));
+        Assert.Equal((10, 8), (standard.Limit(0), standard.Limit(1) - standard.Limit(0)));
         // keep/fixed/off × 三档 × 两种布局 = 18 + 2；keep 不展开，fixed、off 每个状态 12，逐状态导出每个状态再 1。
         CallBudget widest = SearchSpace.Of(new(2, "s", "a", "o", Preset: "quality", Interaction: "keep", DaytimeSplit: true), true).Budget();
-        Assert.Equal((20, 13), (widest.FixedCalls, widest.PerState));
+        Assert.Equal((20, 13), (widest.Limit(0), widest.Limit(1) - widest.Limit(0)));
         Assert.Equal(72, widest.Limit(4));
     }
 
@@ -63,7 +63,7 @@ public class SearchSpaceTests
         var grown = new CallBudget(1, 1);
         grown.Charge("a", 0);
         grown.Charge("b", 1);
-        Assert.Equal(2, grown.Used);
+        Assert.Throws<InvalidOperationException>(() => grown.Charge("c", 1));
     }
 }
 
@@ -103,7 +103,6 @@ public class AnalysisOrchestratorTests
             await AnalysisOrchestrator.RunAsync(request, (r, _) => { calls++; return Task.FromResult(Plan(r, false, Day)); }, CancellationToken.None,
                 export: new(name => Path.Combine(root, "worst-" + name + ".json")), budget: budget);
             Assert.Equal(budget.Limit(Day.Length), calls);
-            Assert.Equal(calls, budget.Used);
         });
     }
 
@@ -117,7 +116,7 @@ public class AnalysisOrchestratorTests
             int calls = 0;
             await Assert.ThrowsAsync<InvalidOperationException>(() => AnalysisOrchestrator.RunAsync(request,
                 (r, _) => { calls++; return Task.FromResult(Plan(r, false, Day)); }, CancellationToken.None,
-                export: new(name => Path.Combine(root, "short-" + name + ".json")), budget: new CallBudget(full.FixedCalls - 1, full.PerState)));
+                export: new(name => Path.Combine(root, "short-" + name + ".json")), budget: new CallBudget(full.Limit(0) - 1, full.Limit(1) - full.Limit(0))));
             Assert.Equal(full.Limit(Day.Length) - 1, calls);
         });
     }

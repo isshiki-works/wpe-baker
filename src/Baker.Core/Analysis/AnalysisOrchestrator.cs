@@ -44,7 +44,7 @@ internal sealed class AnalysisOrchestrator
         this.token = token;
     }
 
-    /// <param name="budget">省略时用 <see cref="SearchSpace.Budget"/> 的现状最坏上限；测试传入自己的预算读 <see cref="CallBudget.Used"/>。</param>
+    /// <param name="budget">省略时用 <see cref="SearchSpace.Budget"/> 的现状最坏上限；测试传入别的预算验证超出时的内部错误。</param>
     internal static async Task<JsonObject> RunAsync(HybridAnalyzeRequest request,
         Func<HybridAnalyzeRequest, CancellationToken, Task<JsonObject>> analyze, CancellationToken token, NativeTools? tools = null,
         StateExport? export = null, CallBudget? budget = null)
