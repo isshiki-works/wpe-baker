@@ -28,8 +28,11 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
     public const string FromOverride = "override";
     public const string FromDefault = "default";
 
-    /// <summary>--retime-budget 允许的最大值（百分比）：效率档 5% 是扫描过的最高档，再往上没有数据支持。</summary>
-    public const double MaximumBudgetPercent = 5;
+    /// <summary>
+    /// --retime-budget 允许的最大值（百分比）：效率档 5% 是扫描过的最高档，再往上没有数据支持。
+    /// 与通用求解器的分量调速预算上限是同一个数，只在 Domain 的 <see cref="CommonLoopSolver.MaximumRetimePercent"/> 定义一次。
+    /// </summary>
+    public const double MaximumBudgetPercent = CommonLoopSolver.MaximumRetimePercent;
 
     /// <summary>没选档时的循环长度上限（秒），与 --loop-max-seconds 的默认一致。</summary>
     public const double DefaultLoopMaximumSeconds = SwayRetimeOptions.DefaultLoopLengthMaximumSeconds;

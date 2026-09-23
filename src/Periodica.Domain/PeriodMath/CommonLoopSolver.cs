@@ -80,7 +80,7 @@ public static class CommonLoopSolver
     /// <summary>--loop-max-seconds 允许的上限（秒）。</summary>
     public const double MaximumLoopLengthSeconds = 3600;
 
-    /// <summary>分量调速预算的上限（百分比）。与 RetimeProfile.MaximumBudgetPercent 同值；C2.1c 把 RetimeProfile 搬进 Domain 时合成一个。</summary>
+    /// <summary>分量调速预算的上限（百分比），也是 --retime-budget 的上限：Baker.Core 的 RetimeProfile.MaximumBudgetPercent 引用这一个定义。</summary>
     public const double MaximumRetimePercent = 5;
 
     private static readonly CommonLoopRational DefaultMinimum = new(10);
