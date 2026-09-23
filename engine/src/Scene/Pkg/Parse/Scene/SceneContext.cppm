@@ -137,8 +137,8 @@ struct SceneParseContext {
     bool                                           orthographic_scene { false };
     wpscene::SceneVersion                          pkg_version { wpscene::kSceneVersionUnknown };
     fs::VFS*                                       vfs { nullptr };
-    Option<ref<rstd::json::Map>>                   user_properties;
-    Option<Box<rstd::json::Map>>                   owned_user_properties;
+    const NJson*                                   user_properties { nullptr };
+    Option<Box<NJson>>                             owned_user_properties;
     Arc<ShaderCache>                               shader_cache { Arc<ShaderCache>::make() };
     HashMap<String, text::FontCache::ResolvedBlob> font_sources;
 
@@ -185,7 +185,7 @@ struct SceneParseContext {
     HashSet<i32>                solid_layer_ids;
     Vec<i32>                    node_id_order;
     HashMap<i32, std::uint64_t> script_initialization_orders;
-    HashMap<i32, Json>          initial_layer_configs;
+    HashMap<i32, NJson>         initial_layer_configs;
     HashSet<i32>                parallax_depth_user_binding_ids;
     HashSet<i32>                ride_parent_parallax_ids;
 
@@ -284,7 +284,7 @@ auto CloneRegisteredNode(Scene&, ref<SceneNode>, ref<str>) -> Arc<SceneNode>;
 auto WorkshopAssetPath(const script::LayerAssetReference&) -> Option<String>;
 auto InstantiateRegisteredAsset(SceneParseContext&, SceneNode*, const script::LayerAssetReference&)
     -> Option<Arc<SceneNode>>;
-auto InstantiateLayerConfiguration(SceneParseContext&, SceneNode*, const Json&)
+auto InstantiateLayerConfiguration(SceneParseContext&, SceneNode*, const NJson&)
     -> Option<Arc<SceneNode>>;
 void ResolveRegisteredAssets(SceneParseContext&);
 void ParseImageObj(SceneParseContext&, wpscene::ImageObject&);
@@ -300,7 +300,7 @@ struct ExpandedSceneObjects {
     HashSet<i32>        hidden_link_source_ids;
 };
 
-auto ExpandSceneObjects(ref<wpscene::SceneDocument>, mut_ref<fs::VFS>, Option<ref<rstd::json::Map>>)
+auto ExpandSceneObjects(ref<wpscene::SceneDocument>, mut_ref<fs::VFS>, const NJson*)
     -> ExpandedSceneObjects;
 
 void PrepareAnimationBindings(SceneParseContext&, const wpscene::FieldBindings&);
@@ -339,10 +339,10 @@ struct ProcessOpts {
 
 SceneParseContext BuildContext(fs::VFS&, ref<str> scene_id, const wpscene::SceneMetadata&,
                                array<i32, 2>                ortho_extent,
-                               Option<ref<rstd::json::Map>> user_properties    = None(),
-                               Option<rstd::path::PathBuf>  shader_cache_dir   = None(),
-                               GeometryShaderLimits         geometry_limits    = {},
-                               bool                         directional_shadow = false);
+                               const NJson*                user_properties    = nullptr,
+                               Option<rstd::path::PathBuf> shader_cache_dir   = None(),
+                               GeometryShaderLimits        geometry_limits    = {},
+                               bool                        directional_shadow = false);
 
 void IndexSceneDocument(SceneParseContext&, ref<wpscene::SceneDocument>, slice<SceneObjectVar>);
 void ProcessContainers(SceneParseContext&, mut_ref<SceneObjectVar[]>);

@@ -2,6 +2,8 @@ module;
 
 #include <rstd/macro.hpp>
 
+#include "JsonNlohmann.hpp"
+
 module wescene.scene;
 import eigen;
 import rstd;
@@ -1645,7 +1647,74 @@ void Scene::RegisterUserTextBinding(String key, Box<dyn<FnMut<void(ref<str>)>>> 
     (*setters)->push(rstd::move(setter));
 }
 
-bool Scene::ApplyUserTextBindings(ref<str> key, const Json& property) {
+namespace
+{
+
+// 原 rstd 的 == 区分数字种类（1 与 1.0 不等）；nlohmann 的 == 跨种类按数值比，这里逐层补回种类判断。
+bool SceneJsonStrictEquals(const NJson& a, const NJson& b) {
+    if (a.type() != b.type()) return false;
+    if (a.is_array()) {
+        if (a.size() != b.size()) return false;
+        for (std::size_t i = 0; i < a.size(); ++i)
+            if (! SceneJsonStrictEquals(a[i], b[i])) return false;
+        return true;
+    }
+    if (a.is_object()) {
+        if (a.size() != b.size()) return false;
+        for (auto x = a.begin(), y = b.begin(); x != a.end(); ++x, ++y)
+            if (x.key() != y.key() || ! SceneJsonStrictEquals(x.value(), y.value())) return false;
+        return true;
+    }
+    return a == b;
+}
+
+} // namespace
+
+const NJson& SceneUserPropertyPayload(const NJson& property) {
+    if (const auto* value = Find(property, "value"); value != nullptr) return *value;
+    return property;
+}
+
+auto SceneJsonScalarString(const NJson& value) -> Option<String> {
+    if (value.is_string())
+        return Some(String::make(rstd::cppstd::as_str(value.get_ref<const std::string&>()).unwrap()));
+    if (value.is_boolean()) return Some(String::make(value.get<bool>() ? "true"_str : "false"_str));
+    if (value.is_number()) return Some(String::make(rstd::cppstd::as_str(Dump(value)).unwrap()));
+    return None();
+}
+
+bool SceneJsonScalarEquals(const NJson& a, const NJson& b) {
+    if (SceneJsonStrictEquals(a, b)) return true;
+    auto as = SceneJsonScalarString(a);
+    auto bs = SceneJsonScalarString(b);
+    if (! as || ! bs) return false;
+    if (as->as_str() == bs->as_str()) return true;
+    if (a.is_boolean() && b.is_string()) {
+        const auto& s = b.get_ref<const std::string&>();
+        return (a.get<bool>() && s == "1") || (! a.get<bool>() && s == "0");
+    }
+    if (a.is_string() && b.is_boolean()) {
+        const auto& s = a.get_ref<const std::string&>();
+        return (b.get<bool>() && s == "1") || (! b.get<bool>() && s == "0");
+    }
+    return false;
+}
+
+Option<bool> ResolveSceneUserVisibilityBinding(const SceneUserVisibilityBinding& binding,
+                                               const NJson&                      property) {
+    if (binding.empty()) return None();
+    const auto& value = SceneUserPropertyPayload(property);
+    if (binding.has_condition) return Some(SceneJsonScalarEquals(value, *binding.condition));
+    return value.is_boolean() ? Some(value.get<bool>()) : None();
+}
+
+Option<bool> ResolveSceneUserVisibilityBinding(const SceneUserVisibilityBinding& binding,
+                                               ref<str> key, const NJson& property) {
+    if (binding.key.as_str() != key) return None();
+    return ResolveSceneUserVisibilityBinding(binding, property);
+}
+
+bool Scene::ApplyUserTextBindings(ref<str> key, const NJson& property) {
     auto setters = m_text_user_index.get_mut(key);
     if (setters.is_none()) return false;
 
@@ -1657,19 +1726,19 @@ bool Scene::ApplyUserTextBindings(ref<str> key, const Json& property) {
     return true;
 }
 
-void Scene::RegisterUserPropertyBinding(String key, Box<dyn<FnMut<void(ref<Json>)>>> setter) {
+void Scene::RegisterUserPropertyBinding(String key, Box<dyn<FnMut<void(ref<NJson>)>>> setter) {
     auto setters = m_user_property_index.get_mut(key.as_str());
     if (setters.is_none()) {
-        (void)m_user_property_index.insert(key.clone(), Vec<Box<dyn<FnMut<void(ref<Json>)>>>> {});
+        (void)m_user_property_index.insert(key.clone(), Vec<Box<dyn<FnMut<void(ref<NJson>)>>>> {});
         setters = m_user_property_index.get_mut(key.as_str());
     }
     (*setters)->push(rstd::move(setter));
 }
 
-bool Scene::ApplyUserPropertyBindings(ref<str> key, const Json& property) {
+bool Scene::ApplyUserPropertyBindings(ref<str> key, const NJson& property) {
     auto setters = m_user_property_index.get_mut(key);
     if (setters.is_none()) return false;
-    auto property_ref = ref<Json>::from_raw_parts(rstd::addressof(property));
+    auto property_ref = ref<NJson>::from_raw_parts(rstd::addressof(property));
     for (usize index {}; index < (*setters)->len(); ++index) {
         (**setters)[index]->operator()(property_ref);
     }
@@ -2583,7 +2652,7 @@ bool Scene::SetNodeVisible(SceneNode& node, bool visible) {
     return was_elidable != is_elidable;
 }
 
-bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const Json& property) {
+bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const NJson& property) {
     bool requires_graph_rebuild = false;
     if (m_resource_index.Empty()) RebuildResourceIndex();
     auto nodes = m_resource_index.Nodes();
@@ -2660,7 +2729,7 @@ bool Scene::SetImageEffectRuntimeVisible(const SceneImageEffectRef& ref, bool vi
     return true;
 }
 
-bool Scene::ApplyUserImageEffectVisibilityBindings(std::string_view key, const Json& property) {
+bool Scene::ApplyUserImageEffectVisibilityBindings(std::string_view key, const NJson& property) {
     if (m_resource_index.Empty()) RebuildResourceIndex();
 
     bool                                  requires_graph_rebuild = false;
@@ -2686,7 +2755,7 @@ bool Scene::ApplyUserImageEffectVisibilityBindings(std::string_view key, const J
     return requires_graph_rebuild;
 }
 
-bool Scene::ApplyUserLightVisibilityBindings(std::string_view key, const Json& property) {
+bool Scene::ApplyUserLightVisibilityBindings(std::string_view key, const NJson& property) {
     bool changed = false;
     for (auto& light : m_lights) {
         auto visible = ResolveSceneUserVisibilityBinding(
@@ -2722,7 +2791,7 @@ auto Scene::ShadowDefinitions() const -> slice<SceneShadowDefinition> {
     return m_shadow_definitions.as_slice();
 }
 
-bool Scene::ApplyUserCameraPathVisibilityBindings(std::string_view key, const Json& property) {
+bool Scene::ApplyUserCameraPathVisibilityBindings(std::string_view key, const NJson& property) {
     auto paths = m_camera_path_user_index.get(rstd::cppstd::as_str(key).unwrap());
     if (paths.is_none()) return false;
 

@@ -34,9 +34,9 @@ struct SceneParseCapabilities {
 };
 
 struct SceneParseOptions {
-    Option<ref<rstd::json::Map>> user_properties;
-    Option<rstd::path::PathBuf>  shader_cache_dir;
-    SceneParseCapabilities       capabilities;
+    const NJson*                user_properties { nullptr };
+    Option<rstd::path::PathBuf> shader_cache_dir;
+    SceneParseCapabilities      capabilities;
 };
 
 struct ParsedScene {

@@ -56,7 +56,7 @@ struct SceneWallpaperConfig {
     std::string                             assets_dir;
     std::string                             cache_dir;
     std::shared_ptr<wpscene::SceneDocument> scene_document;
-    rstd::json::Map                         user_properties;
+    NJson                                   user_properties;
     uint32_t                                fps { 30 };
     float                                   volume { 1.0f };
     float                                   volume_scale { 1.0f };
@@ -164,7 +164,7 @@ public:
     void setAudioPcmWindow(audio::PcmWindow window);
     void endAudioResponse();
     void setUserPropertyRaw(std::string_view, std::string);
-    void setUserPropertyJson(std::string_view, Json);
+    void setUserPropertyJson(std::string_view, NJson);
     void setOnFirstFrame(FirstFrameCallback);
     void setOnUserPropertyDiagnostics(UserPropertyDiagnosticCallback);
     void requestPreparedPassDiagnostics(RenderPassDiagnosticCallback);

@@ -80,9 +80,6 @@ public static class CommonLoopSolver
     /// <summary>--loop-max-seconds 允许的上限（秒）。</summary>
     public const double MaximumLoopLengthSeconds = 3600;
 
-    /// <summary>分量调速预算的上限（百分比）。与 RetimeProfile.MaximumBudgetPercent 同值；C2.1c 把 RetimeProfile 搬进 Domain 时合成一个。</summary>
-    public const double MaximumRetimePercent = 5;
-
     private static readonly CommonLoopRational DefaultMinimum = new(10);
     private static readonly CommonLoopRational DefaultMaximum = Ceiling(DefaultLoopLengthMaximumSeconds);
 
@@ -299,7 +296,7 @@ public static class CommonLoopSolver
     {
         if (request.FpsNumerator == 0 || request.FpsDenominator == 0 || request.Components is null || request.Components.Count == 0 ||
             request.MaximumCandidates <= 0 || request.MaximumFrameCandidates == 0 || !double.IsFinite(request.MaximumRetimePercent) ||
-            request.MaximumRetimePercent < 0 || request.MaximumRetimePercent > MaximumRetimePercent)
+            request.MaximumRetimePercent < 0 || request.MaximumRetimePercent > RetimeProfile.MaximumBudgetPercent)
             throw new ArgumentException("Use positive rational FPS and components, a positive bounded search, and a retime limit from 0 to 5 percent.", nameof(request));
         CommonLoopRational minimum = request.MinimumDuration ?? DefaultMinimum, maximum = request.MaximumDuration ?? DefaultMaximum;
         if ((Int128)minimum.Numerator * maximum.Denominator > (Int128)maximum.Numerator * minimum.Denominator ||

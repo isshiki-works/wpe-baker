@@ -809,27 +809,20 @@ void ApplyTextureBindsImpl(wpscene::Material&                             wpmat,
 }
 
 std::string ResolveSceneTextureProperty(const SceneParseContext& context, std::string_view key) {
-    if (context.user_properties.is_none()) return {};
-    auto prop = (*context.user_properties)->get(rstd::cppstd::as_str(key).unwrap());
-    if (prop.is_none()) return {};
-    const auto& payload = **prop;
-    if (payload.is_string()) {
-        auto text = rstd::cppstd::to_string(*payload.as_str());
-        return text.empty() ? std::string {} : text;
-    }
+    if (context.user_properties == nullptr) return {};
+    const auto* prop = Find(*context.user_properties, key);
+    if (prop == nullptr) return {};
+    const auto& payload = *prop;
+    if (payload.is_string()) return payload.get<std::string>();
     if (! payload.is_object()) return {};
 
     std::string type;
-    if (auto value = payload.get("type"_str); value.is_some()) {
-        auto string = (*value)->as_str();
-        if (string.is_some()) type = rstd::cppstd::to_string(*string);
-    }
+    if (const auto* value = Find(payload, "type"); value != nullptr && value->is_string())
+        type = value->get<std::string>();
     if (! type.empty() && type != "scenetexture" && type != "texture" && type != "replacetexture")
         return {};
-    auto value = payload.get("value"_str);
-    if (value.is_none()) return {};
-    auto string = (*value)->as_str();
-    return string.is_none() ? std::string {} : rstd::cppstd::to_string(*string);
+    const auto* value = Find(payload, "value");
+    return value != nullptr && value->is_string() ? value->get<std::string>() : std::string {};
 }
 
 std::string ResolveUserTextureProperty(const SceneParseContext& context, const NJson& binding) {

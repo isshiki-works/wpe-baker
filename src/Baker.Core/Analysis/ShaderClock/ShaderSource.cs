@@ -12,6 +12,8 @@ internal sealed class ShaderSource(string text)
 {
     private string? normalized;
     private Dictionary<string, JsonNode?>? uniformDefaults;
+    private List<(string Name, JsonObject Annotation)>? uniformAnnotations;
+    private List<(string Name, JsonObject Annotation)>? comboAnnotations;
 
     public string Raw { get; } = text;
 
@@ -22,6 +24,18 @@ internal sealed class ShaderSource(string text)
 
     /// <summary>shader uniform 注释里 material 名 → default 值（frag 在前，同名取先出现的）。</summary>
     public IReadOnlyDictionary<string, JsonNode?> UniformDefaults => uniformDefaults ??= ReadUniformDefaults(Raw);
+
+    /// <summary>
+    /// 每个带注释 JSON 的 uniform 声明：uniform 名 → 注释对象（同名多次声明各记一条）。注释在归一化文本里已被去掉，
+    /// 规则要核对的 material / default / range 从这里按解析后的 JSON 比，与注释里的空白写法无关。
+    /// </summary>
+    public IReadOnlyList<(string Name, JsonObject Annotation)> UniformAnnotations => uniformAnnotations ??= ReadAnnotations(Raw,
+        @"uniform\s+\w+\s+(?<name>\w+)\s*;\s*//\s*(?<json>\{[^\r\n]*\})", annotation => null);
+
+    /// <summary>每个 // [COMBO] 注释：combo 名 → 注释对象（同上，按解析后的 JSON 比）。</summary>
+    public IReadOnlyList<(string Name, JsonObject Annotation)> ComboAnnotations => comboAnnotations ??= ReadAnnotations(Raw,
+        @"//\s*\[COMBO\]\s*(?<json>\{[^\r\n]*\})",
+        annotation => annotation["combo"] is JsonValue combo && combo.TryGetValue(out string? name) ? name : null);
 
     public static string Normalize(string shaderText) => Regex.Replace(
         Regex.Replace(shaderText, @"//[^\r\n]*|/\*.*?\*/", "", RegexOptions.CultureInvariant | RegexOptions.Singleline),
@@ -55,6 +69,22 @@ internal sealed class ShaderSource(string text)
         int count = 0;
         for (int index = 0; (index = source.IndexOf(value, index, StringComparison.Ordinal)) >= 0; index += value.Length) ++count;
         return count;
+    }
+
+    private static List<(string, JsonObject)> ReadAnnotations(string shaderText, string pattern, Func<JsonObject, string?> nameOf)
+    {
+        var annotations = new List<(string, JsonObject)>();
+        foreach (Match match in Regex.Matches(shaderText, pattern, RegexOptions.CultureInvariant))
+        {
+            try
+            {
+                if (JsonNode.Parse(match.Groups["json"].Value) is JsonObject annotation &&
+                    (match.Groups["name"].Success ? match.Groups["name"].Value : nameOf(annotation)) is string name)
+                    annotations.Add((name, annotation));
+            }
+            catch (System.Text.Json.JsonException) { }
+        }
+        return annotations;
     }
 
     private static Dictionary<string, JsonNode?> ReadUniformDefaults(string shaderText)

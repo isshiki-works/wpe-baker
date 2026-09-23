@@ -99,32 +99,6 @@ struct MediaStatus {
     std::string previous_art_url;
 };
 
-// --- script properties (configuration) --------------------------------------
-
-// One descriptor produced by createScriptProperties().addX() calls inside
-// the JS module. Captured at module-load time and then merged with the
-// per-binding `scriptproperties` config from scene.json before exposing
-// the resulting `scriptProperties.<name>` accessors back to the script.
-struct PropDescriptor {
-    enum class Kind
-    {
-        Slider,
-        Checkbox,
-        Text,
-        Combo,
-        Color,
-        Delimiter,
-        Other
-    };
-    Kind        kind { Kind::Other };
-    std::string name;
-    std::string label;
-    Json        default_value; // captured verbatim
-    double      min { 0.0 };
-    double      max { 1.0 };
-    bool        integer { false };
-};
-
 // --- runtime ----------------------------------------------------------------
 
 class FieldScript;
@@ -184,8 +158,8 @@ public:
     // inside init/update. When null, `thisLayer` falls back to a generic
     // stub (the JS-side default created at bootstrap).
     FieldScript* MakeFieldScript(std::string_view source, std::string_view script_sha,
-                                 FieldKind field_kind, const Json& properties_config,
-                                 const Json& initial_value, ScriptBindingContext context = {});
+                                 FieldKind field_kind, const NJson& properties_config,
+                                 const NJson& initial_value, ScriptBindingContext context = {});
 
     // Pending scripts initialize in ascending owner order when SetSceneRoot
     // completes scene assembly. Equal orders retain creation order.
@@ -193,7 +167,7 @@ public:
 
     // Preserve the authored scene.json object for getInitialLayerConfig().
     // The package parser supplies this snapshot before pending initializers run.
-    void RegisterInitialLayerConfig(owe::SceneNode* node, Json config);
+    void RegisterInitialLayerConfig(owe::SceneNode* node, NJson config);
 
     // Install the Scene root that backs `thisScene`. `thisScene.getLayer(name)`
     // searches from this node. Call once per scene after parsing finishes.
@@ -213,7 +187,7 @@ public:
     // Patch one Wallpaper Engine user property into engine.userProperties.
     // `property` should be the descriptor object shape used by project.json
     // (`{value: ...}` plus optional metadata).
-    void SetUserProperty(std::string_view key, const Json& property);
+    void SetUserProperty(std::string_view key, const NJson& property);
 
     // Dispatch Wallpaper Engine media callbacks for the current media
     // snapshot. Call from the renderer owner thread.
@@ -266,7 +240,7 @@ public:
     using LayerFactory =
         Arc<dyn<FnMut<Option<Arc<owe::SceneNode>>(owe::SceneNode*, LayerAssetReference)>>>;
     void SetLayerFactory(LayerFactory factory);
-    using LayerConfigFactory = Arc<dyn<FnMut<Option<Arc<owe::SceneNode>>(owe::SceneNode*, Json)>>>;
+    using LayerConfigFactory = Arc<dyn<FnMut<Option<Arc<owe::SceneNode>>(owe::SceneNode*, NJson)>>>;
     void SetLayerConfigFactory(LayerConfigFactory factory);
     void ClearLayerFactory();
     void ClearLayerConfigFactory();
@@ -360,7 +334,7 @@ void TickSceneScripts(owe::Scene& scene, const FrameInputs& fi);
 
 // Patch `engine.userProperties` on the ScriptScene attached to `scene`.
 // No-op when the scene has no script runtime.
-void SetSceneUserProperty(owe::Scene& scene, std::string_view key, const Json& property);
+void SetSceneUserProperty(owe::Scene& scene, std::string_view key, const NJson& property);
 
 void SetSceneMediaStatus(owe::Scene& scene, const MediaStatus& status);
 

@@ -3,6 +3,9 @@
 #include <filesystem>
 #include <fstream>
 
+#include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
+#include "JsonNlohmann.hpp"
+
 import rstd;
 import rstd.cppstd;
 import owe.user_property;
@@ -115,38 +118,39 @@ TEST(JsonAdapter, ClonesSubtreesExplicitly) {
 
 TEST(UserProperty, TextInputWireValuesStayStrings) {
     auto schema =
-        owe::ParseJson(R"({"type":"textinput","text":"Text","order":7,"value":"default"})")
+        owe::ParseNJson(R"({"type":"textinput","text":"Text","order":7,"value":"default"})")
             .unwrap();
 
     for (const auto& raw :
          { std::string("12"), std::string("true"), std::string("提醒喝水"), std::string() }) {
         auto patch  = owe::MakeUserPropertyWirePatch(raw);
         auto merged = owe::MergeUserPropertyDescriptor(schema, patch);
-        auto value  = merged.get("value"_str);
-        ASSERT_TRUE(value.is_some());
-        ASSERT_TRUE((**value).is_string());
-        EXPECT_EQ(rstd::cppstd::as_string_view(*(**value).as_str()), raw);
-        EXPECT_TRUE(merged.get("text"_str).is_some());
-        EXPECT_TRUE(merged.get("order"_str).is_some());
+        const auto* value = owe::Find(merged, "value");
+        ASSERT_NE(value, nullptr);
+        ASSERT_TRUE(value->is_string());
+        EXPECT_EQ(value->get<std::string>(), raw);
+        EXPECT_NE(owe::Find(merged, "text"), nullptr);
+        EXPECT_NE(owe::Find(merged, "order"), nullptr);
     }
 }
 
 TEST(UserProperty, NonTextWireValuesKeepExistingJsonCoercion) {
-    auto schema = owe::ParseJson(R"({"type":"slider","value":0})").unwrap();
+    auto schema = owe::ParseNJson(R"({"type":"slider","value":0})").unwrap();
     auto patch  = owe::MakeUserPropertyWirePatch("1.5");
     auto merged = owe::MergeUserPropertyDescriptor(schema, patch);
-    auto value  = merged.get("value"_str);
-    ASSERT_TRUE(value.is_some());
-    EXPECT_DOUBLE_EQ((**value).as_f64().unwrap_or(rstd::f64()).to_primitive(), 1.5);
+    const auto* value = owe::Find(merged, "value");
+    ASSERT_NE(value, nullptr);
+    ASSERT_TRUE(value->is_number());
+    EXPECT_DOUBLE_EQ(value->get<double>(), 1.5);
 }
 
 TEST(UserProperty, UnknownTypeDefersWireValueCoercion) {
     auto patch  = owe::MakeUserPropertyWirePatch("12");
-    auto merged = owe::MergeUserPropertyDescriptor(owe::JsonFromStd(""), patch);
-    auto value  = merged.get("value"_str);
-    ASSERT_TRUE(value.is_some());
-    ASSERT_TRUE((**value).is_string());
-    EXPECT_EQ(rstd::cppstd::as_string_view(*(**value).as_str()), "12");
+    auto merged = owe::MergeUserPropertyDescriptor(owe::NJson(""), patch);
+    const auto* value = owe::Find(merged, "value");
+    ASSERT_NE(value, nullptr);
+    ASSERT_TRUE(value->is_string());
+    EXPECT_EQ(value->get<std::string>(), "12");
 }
 
 TEST(JsonAdapter, NativeProjectionsPreserveOptions) {

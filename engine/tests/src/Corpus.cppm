@@ -747,7 +747,7 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
                 continue;
             }
             const std::string text            = stream->ReadAllStr();
-            auto              parsed_material = owe::ParseJson(text);
+            auto              parsed_material = owe::ParseNJson(text);
             if (parsed_material.is_err()) {
                 SetSnapshot(jm, "ok", false);
                 SetSnapshot(jm, "error", "invalid JSON");

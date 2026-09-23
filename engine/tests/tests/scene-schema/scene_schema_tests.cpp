@@ -30,6 +30,9 @@
 
 #include <gtest/gtest.h>
 
+#include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
+#include "JsonNlohmann.hpp"
+
 import rstd.cppstd;
 import wescene.json;
 import wescene.pkg.scene_obj;
@@ -364,31 +367,22 @@ const std::map<std::string, std::set<std::string>>& kParsedNestedKeys() {
     return m;
 }
 
-const owe::Json& Report() {
-    static const owe::Json r = owe::testing::ScanSceneKeys(WAYWALLEN_WORKSHOP_DIR);
+const owe::NJson& Report() {
+    static const owe::NJson r = owe::testing::ScanSceneKeys(WAYWALLEN_WORKSHOP_DIR);
     return r;
 }
 
 template<typename F>
 void ForEachVersion(F&& function) {
-    auto object = Report().as_object();
-    if (object.is_none()) return;
-    (*object)->iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        function(rstd::cppstd::as_string_view(entry_key->as_str()), *entry_value);
-    });
+    if (! Report().is_object()) return;
+    for (const auto& [key, value] : Report().items()) function(std::string_view(key), value);
 }
 
 template<typename F>
-void ForEachKey(const owe::Json& version, F&& function) {
-    auto keys = version.get("keys"_str);
-    if (keys.is_none()) return;
-    auto object = (*keys)->as_object();
-    if (object.is_none()) return;
-    (*object)->iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        function(rstd::cppstd::as_string_view(entry_key->as_str()), *entry_value);
-    });
+void ForEachKey(const owe::NJson& version, F&& function) {
+    const auto* keys = owe::Find(version, "keys");
+    if (keys == nullptr || ! keys->is_object()) return;
+    for (const auto& [key, value] : keys->items()) function(std::string_view(key), value);
 }
 
 // Print top-N unparsed direct-child keys per pkg version for the given
@@ -401,27 +395,27 @@ void PrintUnparsedReport(std::string_view prefix, std::string_view scope_label,
               << top_n << " by present_in count) ===\n";
 
     std::vector<std::pair<unsigned, std::string>> stamps;
-    ForEachVersion([&](std::string_view stamp, const owe::Json&) {
+    ForEachVersion([&](std::string_view stamp, const owe::NJson&) {
         stamps.emplace_back(PkgIntFromStamp(stamp), stamp);
     });
     std::sort(stamps.begin(), stamps.end());
 
     for (const auto& [v, stamp] : stamps) {
-        auto ver_data = (Report()).get(rstd::cppstd::as_str(stamp).unwrap());
-        if (ver_data.is_none()) continue;
+        const auto* ver_data = owe::Find(Report(), stamp);
+        if (ver_data == nullptr) continue;
 
         struct Entry {
             std::string   key;
             std::uint64_t present_in;
         };
         std::vector<Entry> miss;
-        ForEachKey(**ver_data, [&](std::string_view path, const owe::Json& info) {
+        ForEachKey(*ver_data, [&](std::string_view path, const owe::NJson& info) {
             if (! IsDirectChildOf(prefix, path)) return;
             const std::string k { path.substr(prefix.size()) };
             if (parsed.contains(k)) return;
             std::uint64_t present_in = 0;
-            if (auto value = info.get("present_in"_str); value.is_some())
-                present_in = (*value)->as_u64().unwrap_or(rstd::u64()).to_primitive();
+            if (const auto* value = owe::Find(info, "present_in"); value != nullptr)
+                present_in = value->is_number_unsigned() ? value->get<std::uint64_t>() : 0;
             miss.push_back({ k, present_in });
         });
         std::sort(miss.begin(), miss.end(), [](auto& a, auto& b) {
@@ -447,8 +441,8 @@ void PrintUnparsedReport(std::string_view prefix, std::string_view scope_label,
 
 TEST(SceneSchema, EveryParsedGeneralKeyIsObservedSomewhere) {
     std::set<std::string> observed;
-    ForEachVersion([&](std::string_view, const owe::Json& ver_data) {
-        ForEachKey(ver_data, [&](std::string_view path, const owe::Json&) {
+    ForEachVersion([&](std::string_view, const owe::NJson& ver_data) {
+        ForEachKey(ver_data, [&](std::string_view path, const owe::NJson&) {
             if (! IsDirectChildOf(kGeneralPrefix, path)) return;
             observed.insert(std::string(path.substr(kGeneralPrefix.size())));
         });
@@ -467,9 +461,9 @@ TEST(SceneSchema, ParsedKeyDeclarationLowerBoundIsRespected) {
     // some scene whose pkg version >= min_v. Catches off-by-one in the
     // version gating (e.g. listing a v21 field as v22).
     std::map<std::string, unsigned /*earliest_observed_pkg*/> earliest;
-    ForEachVersion([&](std::string_view stamp, const owe::Json& ver_data) {
+    ForEachVersion([&](std::string_view stamp, const owe::NJson& ver_data) {
         const unsigned v = PkgIntFromStamp(stamp);
-        ForEachKey(ver_data, [&](std::string_view path, const owe::Json&) {
+        ForEachKey(ver_data, [&](std::string_view path, const owe::NJson&) {
             if (! IsDirectChildOf(kGeneralPrefix, path)) return;
             const std::string k { path.substr(kGeneralPrefix.size()) };
             auto              it = earliest.find(k);
@@ -493,8 +487,8 @@ TEST(SceneSchema, ParsedKeyDeclarationLowerBoundIsRespected) {
 
 TEST(SceneSchema, EveryParsedObjectKeyIsObservedSomewhere) {
     std::set<std::string> observed;
-    ForEachVersion([&](std::string_view, const owe::Json& ver_data) {
-        ForEachKey(ver_data, [&](std::string_view path, const owe::Json&) {
+    ForEachVersion([&](std::string_view, const owe::NJson& ver_data) {
+        ForEachKey(ver_data, [&](std::string_view path, const owe::NJson&) {
             if (! IsDirectChildOf(kObjectsPrefix, path)) return;
             observed.insert(std::string(path.substr(kObjectsPrefix.size())));
         });
@@ -524,8 +518,8 @@ TEST(SceneSchema, EveryParsedNestedKeyIsObservedSomewhere) {
     // sub-struct field names exactly the same way as the top-level test.
     for (const auto& [parent, parsed] : kParsedNestedKeys()) {
         std::set<std::string> observed;
-        ForEachVersion([&](std::string_view, const owe::Json& ver_data) {
-            ForEachKey(ver_data, [&](std::string_view path, const owe::Json&) {
+        ForEachVersion([&](std::string_view, const owe::NJson& ver_data) {
+            ForEachKey(ver_data, [&](std::string_view path, const owe::NJson&) {
                 if (! IsDirectChildOf(parent, path)) return;
                 observed.insert(std::string(path.substr(parent.size())));
             });
@@ -552,13 +546,13 @@ TEST(SceneSchema, ReportTopUnparsedNestedKeys) {
             std::uint64_t present_in;
         };
         std::map<std::string, std::uint64_t> agg;
-        ForEachVersion([&](std::string_view, const owe::Json& ver_data) {
-            ForEachKey(ver_data, [&](std::string_view path, const owe::Json& info) {
+        ForEachVersion([&](std::string_view, const owe::NJson& ver_data) {
+            ForEachKey(ver_data, [&](std::string_view path, const owe::NJson& info) {
                 if (! IsDirectChildOf(parent, path)) return;
                 const std::string k { path.substr(parent.size()) };
                 if (parsed.contains(k)) return;
-                if (auto value = info.get("present_in"_str); value.is_some())
-                    agg[k] += (*value)->as_u64().unwrap_or(rstd::u64()).to_primitive();
+                if (const auto* value = owe::Find(info, "present_in"); value != nullptr)
+                    agg[k] += value->is_number_unsigned() ? value->get<std::uint64_t>() : 0;
             });
         });
         std::vector<Entry> miss;

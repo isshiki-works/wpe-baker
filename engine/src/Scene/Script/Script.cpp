@@ -9,6 +9,8 @@ module;
 #include <rstd/enum.hpp>
 #include "quickjs.h"
 
+#include "JsonNlohmann.hpp"
+
 module wescene.script;
 import eigen;
 import owe.scene_audio_response;
@@ -252,47 +254,35 @@ JSValue ScriptValueToJs(JSContext* ctx, const ScriptValue& value) {
 
 // JSON → JSValue conversion for the initial-value seed. Recursive but
 // scenescript values are tiny (numbers, short strings, small objects).
-JSValue JsonToJs(JSContext* ctx, const Json& value) {
-    RSTD_MATCH(value) {
-        RSTD_CASE(Null) { return JS_NULL; }
-        RSTD_CASE(Bool, boolean) { return JS_NewBool(ctx, boolean); }
-        RSTD_CASE(Number, number) {
-            if (auto integer = number.as_i64(); integer.is_some())
-                return JS_NewInt64(ctx, integer->to_primitive());
-            if (auto integer = number.as_u64(); integer.is_some())
-                return JS_NewInt64(ctx, static_cast<std::int64_t>(integer->to_primitive()));
-            return JS_NewFloat64(ctx, number.as_f64()->to_primitive());
-        }
-        RSTD_CASE(String, string) {
-            const auto view = rstd::cppstd::as_string_view(string.as_str());
-            return JS_NewStringLen(ctx, view.data(), view.size());
-        }
-        RSTD_CASE(Array, values) {
-            JSValue  array = JS_NewArray(ctx);
-            uint32_t index = 0;
-            for (const auto& item : values) {
-                JS_DefinePropertyValueUint32(
-                    ctx, array, index++, JsonToJs(ctx, item), JS_PROP_C_W_E);
-            }
-            return array;
-        }
-        RSTD_CASE(Object, values) {
-            JSValue object = JS_NewObject(ctx);
-            values.iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
-                const auto  key_view          = rstd::cppstd::as_string_view(entry_key->as_str());
-                std::string owned_key(key_view);
-                JS_DefinePropertyValueStr(
-                    ctx, object, owned_key.c_str(), JsonToJs(ctx, *entry_value), JS_PROP_C_W_E);
-            });
-            return object;
-        }
+JSValue JsonToJs(JSContext* ctx, const NJson& value) {
+    if (value.is_boolean()) return JS_NewBool(ctx, value.get<bool>());
+    // 无符号超过 INT64_MAX 时按位转成有符号，同原 rstd 版。
+    if (value.is_number_integer()) return JS_NewInt64(ctx, value.get<std::int64_t>());
+    if (value.is_number_float()) return JS_NewFloat64(ctx, value.get<double>());
+    if (value.is_string()) {
+        const auto& text = value.get_ref<const std::string&>();
+        return JS_NewStringLen(ctx, text.data(), text.size());
     }
-    rstd::unreachable();
+    if (value.is_array()) {
+        JSValue  array = JS_NewArray(ctx);
+        uint32_t index = 0;
+        for (const auto& item : value) {
+            JS_DefinePropertyValueUint32(ctx, array, index++, JsonToJs(ctx, item), JS_PROP_C_W_E);
+        }
+        return array;
+    }
+    if (value.is_object()) {
+        JSValue object = JS_NewObject(ctx);
+        for (const auto& [key, item] : value.items()) {
+            JS_DefinePropertyValueStr(ctx, object, key.c_str(), JsonToJs(ctx, item), JS_PROP_C_W_E);
+        }
+        return object;
+    }
+    return JS_NULL;
 }
 
-JSValue UserPropertyValueToJs(JSContext* ctx, const Json& property) {
-    if (auto value = property.get("value"_str); value.is_some()) return JsonToJs(ctx, **value);
+JSValue UserPropertyValueToJs(JSContext* ctx, const NJson& property) {
+    if (const auto* value = Find(property, "value"); value != nullptr) return JsonToJs(ctx, *value);
     return JsonToJs(ctx, property);
 }
 
@@ -300,7 +290,7 @@ JSValue UserPropertyValueToJs(JSContext* ctx, const Json& property) {
 // bootstrap getter resolves it lazily against engine.userProperties at
 // access time, so SetUserProperty calls after parse propagate.
 // Everything else passes through.
-JSValue ResolveConfigValue(JSContext* ctx, const Json& v) { return JsonToJs(ctx, v); }
+JSValue ResolveConfigValue(JSContext* ctx, const NJson& v) { return JsonToJs(ctx, v); }
 
 // Coerce a binding's initial-value JSON into the JS shape the script's
 // `init(value)` expects, given the bound field kind. Audio-response,
@@ -315,7 +305,7 @@ JSValue ResolveConfigValue(JSContext* ctx, const Json& v) { return JsonToJs(ctx,
 //
 // Falls back to JsonToJs for unknown shapes; better to pass garbage than
 // to fail to call init().
-JSValue CoerceInitialValue(JSContext* ctx, const Json& v, FieldKind kind) {
+JSValue CoerceInitialValue(JSContext* ctx, const NJson& v, FieldKind kind) {
     auto parse_floats = [](const std::string& s) -> std::vector<double> {
         std::vector<double> out;
         const char*         p   = s.c_str();
@@ -332,55 +322,44 @@ JSValue CoerceInitialValue(JSContext* ctx, const Json& v, FieldKind kind) {
     switch (kind) {
     case FieldKind::Vec2: {
         if (v.is_string()) {
-            auto source = rstd::cppstd::to_string(*v.as_str());
+            auto source = v.get<std::string>();
             auto fs     = parse_floats(source);
             return MakeVecValue(
                 ctx, fs.size() > 0 ? fs[0] : 0.0, fs.size() > 1 ? fs[1] : 0.0, 0.0, 2);
         }
-        if (auto values = v.as_array(); values.is_some() && (*values)->len() >= usize(2)) {
-            auto x = (**values)[usize(0)].as_f64();
-            auto y = (**values)[usize(1)].as_f64();
-            if (x.is_some() && y.is_some())
-                return MakeVecValue(ctx, x->to_primitive(), y->to_primitive(), 0.0, 2);
+        if (v.is_array() && v.size() >= 2) {
+            if (v[0].is_number() && v[1].is_number())
+                return MakeVecValue(ctx, v[0].get<double>(), v[1].get<double>(), 0.0, 2);
         }
         if (v.is_number()) {
-            auto number = v.as_f64();
-            if (number.is_some()) {
-                const auto scalar = number->to_primitive();
-                return MakeVecValue(ctx, scalar, scalar, 0.0, 2);
-            }
+            const auto scalar = v.get<double>();
+            return MakeVecValue(ctx, scalar, scalar, 0.0, 2);
         }
         break;
     }
     case FieldKind::Vec3: {
         if (v.is_string()) {
-            auto   source = rstd::cppstd::to_string(*v.as_str());
+            auto   source = v.get<std::string>();
             auto   fs     = parse_floats(source);
             double x      = fs.size() > 0 ? fs[0] : 0.0;
             double y      = fs.size() > 1 ? fs[1] : x; // splat single scalar
             double z      = fs.size() > 2 ? fs[2] : (fs.size() > 1 ? 0.0 : x);
             return MakeVecValue(ctx, x, y, z, 3);
         }
-        if (auto values = v.as_array(); values.is_some() && (*values)->len() >= usize(3)) {
-            auto x = (**values)[usize(0)].as_f64();
-            auto y = (**values)[usize(1)].as_f64();
-            auto z = (**values)[usize(2)].as_f64();
-            if (x.is_some() && y.is_some() && z.is_some())
+        if (v.is_array() && v.size() >= 3) {
+            if (v[0].is_number() && v[1].is_number() && v[2].is_number())
                 return MakeVecValue(
-                    ctx, x->to_primitive(), y->to_primitive(), z->to_primitive(), 3);
+                    ctx, v[0].get<double>(), v[1].get<double>(), v[2].get<double>(), 3);
         }
         if (v.is_number()) {
-            auto number = v.as_f64();
-            if (number.is_some()) {
-                const auto scalar = number->to_primitive();
-                return MakeVecValue(ctx, scalar, scalar, scalar, 3);
-            }
+            const auto scalar = v.get<double>();
+            return MakeVecValue(ctx, scalar, scalar, scalar, 3);
         }
         break;
     }
     case FieldKind::Vec4: {
         if (v.is_string()) {
-            auto   source = rstd::cppstd::to_string(*v.as_str());
+            auto   source = v.get<std::string>();
             auto   fs     = parse_floats(source);
             double x      = fs.size() > 0 ? fs[0] : 0.0;
             double y      = fs.size() > 1 ? fs[1] : x;
@@ -388,30 +367,23 @@ JSValue CoerceInitialValue(JSContext* ctx, const Json& v, FieldKind kind) {
             double w      = fs.size() > 3 ? fs[3] : x;
             return MakeVec4Value(ctx, x, y, z, w);
         }
-        if (auto values = v.as_array(); values.is_some() && (*values)->len() >= usize(4)) {
-            auto x = (**values)[usize(0)].as_f64();
-            auto y = (**values)[usize(1)].as_f64();
-            auto z = (**values)[usize(2)].as_f64();
-            auto w = (**values)[usize(3)].as_f64();
-            if (x.is_some() && y.is_some() && z.is_some() && w.is_some())
+        if (v.is_array() && v.size() >= 4) {
+            if (v[0].is_number() && v[1].is_number() && v[2].is_number() && v[3].is_number())
                 return MakeVec4Value(ctx,
-                                     x->to_primitive(),
-                                     y->to_primitive(),
-                                     z->to_primitive(),
-                                     w->to_primitive());
+                                     v[0].get<double>(),
+                                     v[1].get<double>(),
+                                     v[2].get<double>(),
+                                     v[3].get<double>());
         }
         if (v.is_number()) {
-            auto number = v.as_f64();
-            if (number.is_some()) {
-                const auto scalar = number->to_primitive();
-                return MakeVec4Value(ctx, scalar, scalar, scalar, scalar);
-            }
+            const auto scalar = v.get<double>();
+            return MakeVec4Value(ctx, scalar, scalar, scalar, scalar);
         }
         break;
     }
     case FieldKind::Color: {
         if (v.is_string()) {
-            auto    source = rstd::cppstd::to_string(*v.as_str());
+            auto    source = v.get<std::string>();
             auto    fs     = parse_floats(source);
             JSValue arr    = JS_NewArray(ctx);
             for (uint32_t i = 0; i < fs.size() && i < 3; ++i)
@@ -523,7 +495,7 @@ struct EngineHostState {
         JsRuntime::ImageAlignmentSetter setter;
     };
     HashMap<owe::SceneNode*, ImageAlignmentHook> image_alignment_hooks;
-    HashMap<owe::SceneNode*, Json>               initial_layer_configs;
+    HashMap<owe::SceneNode*, NJson>              initial_layer_configs;
     std::vector<owe::SceneNode*>                  public_layers;
     JsRuntime::BoneIndexResolver                 bone_index_resolver;
     JsRuntime::BoneTransformResolver             bone_transform_resolver;
@@ -976,11 +948,8 @@ struct PersistedLocalStorage {};
 
 void FlushLocalStorage(EngineHostState* host) {
     if (host->ls_path.empty()) return;
-    auto object = rstd::json::Map::make();
-    for (const auto& [k, v] : host->ls_data)
-        object.insert(::alloc::string::String::make(rstd::cppstd::as_str(k).unwrap()),
-                      JsonFromStd(v));
-    auto out = Json::Object(rstd::move(object));
+    NJson out = NJson::object();
+    for (const auto& [k, v] : host->ls_data) out[k] = v;
     // ofstream defaults to ios_base::out | trunc, which is what we want.
     std::ofstream f(host->ls_path);
     if (! f) {
@@ -996,21 +965,16 @@ void LoadLocalStorage(EngineHostState* host) {
     std::ifstream f(host->ls_path);
     if (! f) return;
     std::string source(std::istreambuf_iterator<char>(f), {});
-    auto        parsed = ParseJson(source);
+    auto        parsed = ParseNJson(source);
     if (parsed.is_err()) {
         rstd_warn("localStorage parse failed: {}", parsed.unwrap_err());
         return;
     }
-    auto doc    = parsed.unwrap();
-    auto object = doc.as_object();
-    if (object.is_none()) return;
-    (*object)->iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        const auto  key               = rstd::cppstd::as_string_view(entry_key->as_str());
-        const auto& value             = *entry_value;
-        if (auto stored = value.as_str(); stored.is_some())
-            host->ls_data[std::string(key)] = rstd::cppstd::to_string(*stored);
-    });
+    auto doc = parsed.unwrap();
+    if (! doc.is_object()) return;
+    for (const auto& [key, value] : doc.items()) {
+        if (value.is_string()) host->ls_data[key] = value.get<std::string>();
+    }
 }
 
 JSValue LocalStorageGet(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -2984,10 +2948,10 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
             JS_FreeCString(ctx, asset);
         }
     } else if (argc > 0 && JS_IsObject(argv[0]) && host->layer_config_factory.is_some()) {
-        Option<Json> config;
+        Option<NJson> config;
         if (auto* source_node = GetLayerNode(argv[0]); source_node != nullptr) {
             auto initial = host->initial_layer_configs.get(source_node);
-            if (initial.is_some()) config = Some((**initial).clone());
+            if (initial.is_some()) config = Some(NJson(**initial));
         } else {
             JSValue global    = JS_GetGlobalObject(ctx);
             JSValue serialize = JS_GetPropertyStr(ctx, global, "__wwSerializeLayerConfig");
@@ -3000,7 +2964,7 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
             }
             const char* source = JS_ToCString(ctx, encoded);
             if (source != nullptr) {
-                auto parsed = ParseJson(source);
+                auto parsed = ParseNJson(source);
                 JS_FreeCString(ctx, source);
                 if (parsed.is_ok()) config = Some(rstd::move(parsed).unwrap_unchecked());
             }
@@ -3009,7 +2973,7 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
                 return JS_ThrowTypeError(ctx, "createLayer configuration is not serializable");
         }
         if (config.is_some()) {
-            auto initial = (*config).clone();
+            auto initial = *config;
             auto created = (**host->layer_config_factory)(fs->m_impl->node, rstd::move(*config));
             if (created.is_some()) {
                 node = (*created).as_ptr();
@@ -4097,7 +4061,7 @@ void JsRuntime::SetAudioResponseDemand(Option<Arc<AudioResponseDemand>> demand) 
     }
 }
 
-void JsRuntime::SetUserProperty(std::string_view key, const Json& property) {
+void JsRuntime::SetUserProperty(std::string_view key, const NJson& property) {
     if (! m_impl || ! m_impl->ctx) return;
     std::string key_str { key };
     JSContext*  ctx    = m_impl->ctx;
@@ -4213,7 +4177,7 @@ void JsRuntime::SetInitializationOrder(FieldScript& script, std::uint64_t order)
     script.m_impl->initialization_order = order;
 }
 
-void JsRuntime::RegisterInitialLayerConfig(owe::SceneNode* node, Json config) {
+void JsRuntime::RegisterInitialLayerConfig(owe::SceneNode* node, NJson config) {
     if (! m_impl || node == nullptr) return;
     (void)m_impl->host.initial_layer_configs.insert(node, rstd::move(config));
     AppendPublicLayer(m_impl->host, node);
@@ -4529,8 +4493,8 @@ JSValue AwaitModuleEvaluation(JSContext* ctx, JSValue value) {
 } // namespace
 
 FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_view script_sha,
-                                        FieldKind field_kind_in, const Json& properties_config,
-                                        const Json& initial_value, ScriptBindingContext context) {
+                                        FieldKind field_kind_in, const NJson& properties_config,
+                                        const NJson& initial_value, ScriptBindingContext context) {
     JSContext* ctx = m_impl->ctx;
     if (! ctx) return nullptr;
     struct LoadingScope {
@@ -4662,14 +4626,10 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
     if (! JS_IsUndefined(sp)) {
         JSValue hv = JS_GetPropertyStr(ctx, sp, "__hostValues");
         if (JS_IsObject(hv) && properties_config.is_object()) {
-            auto object = properties_config.as_object();
-            (*object)->iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
-                auto        owned_key         = rstd::cppstd::to_string(entry_key->as_str());
-                const auto& value             = *entry_value;
+            for (const auto& [key, value] : properties_config.items()) {
                 JS_DefinePropertyValueStr(
-                    ctx, hv, owned_key.c_str(), ResolveConfigValue(ctx, value), JS_PROP_C_W_E);
-            });
+                    ctx, hv, key.c_str(), ResolveConfigValue(ctx, value), JS_PROP_C_W_E);
+            }
         }
         JS_FreeValue(ctx, hv);
     }
@@ -4886,7 +4846,7 @@ void TickSceneScripts(owe::Scene& scene, const FrameInputs& fi) {
     (**script_scene).Tick(fi, events.as_slice());
 }
 
-void SetSceneUserProperty(owe::Scene& scene, std::string_view key, const Json& property) {
+void SetSceneUserProperty(owe::Scene& scene, std::string_view key, const NJson& property) {
     auto script_scene = scene.ExtensionMut<ScriptScene>();
     if (script_scene.is_some()) (**script_scene).runtime().SetUserProperty(key, property);
     scene.ApplyUserLightVisibilityBindings(key, property);

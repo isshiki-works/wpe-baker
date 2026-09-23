@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
+#include "JsonNlohmann.hpp"
+
 import rstd;
 import rstd.cppstd;
 import eigen;
@@ -1242,11 +1245,11 @@ TEST(SceneVisibility, UserBindingVisibilityChangesRequireGraphRebuild) {
     });
     EXPECT_TRUE(scene.IsLayerVisibilityElidable(owe::WallpaperLayerId { .value = i32(7) }));
     EXPECT_TRUE(scene.IsLayerElidable(owe::WallpaperLayerId { .value = i32(7) }));
-    EXPECT_TRUE(scene.ApplyUserNodeVisibilityBindings("variant", rstd::into<owe::Json>(true)));
+    EXPECT_TRUE(scene.ApplyUserNodeVisibilityBindings("variant", owe::NJson(true)));
     EXPECT_TRUE(node->Visible());
     EXPECT_FALSE(scene.IsLayerElidable(owe::WallpaperLayerId { .value = i32(7) }));
-    EXPECT_FALSE(scene.ApplyUserNodeVisibilityBindings("variant", rstd::into<owe::Json>(true)));
-    EXPECT_TRUE(scene.ApplyUserNodeVisibilityBindings("variant", rstd::into<owe::Json>(false)));
+    EXPECT_FALSE(scene.ApplyUserNodeVisibilityBindings("variant", owe::NJson(true)));
+    EXPECT_TRUE(scene.ApplyUserNodeVisibilityBindings("variant", owe::NJson(false)));
     EXPECT_FALSE(node->Visible());
     EXPECT_TRUE(scene.IsLayerElidable(owe::WallpaperLayerId { .value = i32(7) }));
 }

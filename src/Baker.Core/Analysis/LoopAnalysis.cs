@@ -26,7 +26,8 @@ internal static class LoopAnalysis
             throw new ArgumentException("The embedded video loop length limit must equal the solver loop length ceiling.");
         CommonLoopRational ceiling = CommonLoopSolver.Ceiling(ceilingSeconds);
         ceilingSeconds = ceiling.ToSeconds();
-        var shader = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, bakedLayerIds, ceilingSeconds);
+        // 着色器裁定用的调速余量与求解器同一个预算（maximumRetimePercent = 档位预算），不各写各的。
+        var shader = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, bakedLayerIds, ceilingSeconds, maximumRetimePercent);
         List<LoopUnresolved> unresolved = [.. shader.Unresolved.Select(item => (LoopUnresolved)new ShaderLoopUnresolved(item))];
         RuntimeTrackReader.AddMaterialClockUnresolved(runtime, bakedLayerIds, unresolved, shader.RuledMaterials);
         // A model/shader period does not also prove the state advanced by an authored script.

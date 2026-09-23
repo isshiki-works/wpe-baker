@@ -2734,10 +2734,10 @@ public:
     auto ImageAlphaUserBindings(ref<str> key) const -> slice<ImagePropertyBinding>;
 
     void RegisterUserTextBinding(String key, Box<dyn<FnMut<void(ref<str>)>>> setter);
-    bool ApplyUserTextBindings(ref<str> key, const Json& property);
+    bool ApplyUserTextBindings(ref<str> key, const NJson& property);
 
-    void RegisterUserPropertyBinding(String key, Box<dyn<FnMut<void(ref<Json>)>>> setter);
-    bool ApplyUserPropertyBindings(ref<str> key, const Json& property);
+    void RegisterUserPropertyBinding(String key, Box<dyn<FnMut<void(ref<NJson>)>>> setter);
+    bool ApplyUserPropertyBindings(ref<str> key, const NJson& property);
 
     struct MaterialTextureUserBinding {
         std::shared_ptr<SceneMaterial> material;
@@ -2782,10 +2782,10 @@ public:
     void EnablePlanarReflection();
     bool PlanarReflectionEnabled() const { return m_planar_reflection_enabled; }
     bool ConsumeRenderGraphDirty();
-    bool ApplyUserNodeVisibilityBindings(std::string_view key, const Json& property);
-    bool ApplyUserImageEffectVisibilityBindings(std::string_view key, const Json& property);
-    bool ApplyUserLightVisibilityBindings(std::string_view key, const Json& property);
-    bool ApplyUserCameraPathVisibilityBindings(std::string_view key, const Json& property);
+    bool ApplyUserNodeVisibilityBindings(std::string_view key, const NJson& property);
+    bool ApplyUserImageEffectVisibilityBindings(std::string_view key, const NJson& property);
+    bool ApplyUserLightVisibilityBindings(std::string_view key, const NJson& property);
+    bool ApplyUserCameraPathVisibilityBindings(std::string_view key, const NJson& property);
 
     void RegisterSoundVolumeBinding(ref<str> key, Arc<dyn<SceneSoundControl>> control) {
         auto controls = m_sound_volume_user_index.get_mut(key);
@@ -3028,7 +3028,7 @@ private:
     Vec<Box<ScenePostProcess>>    m_post_processes;
     Vec<SceneShadowDefinition>    m_shadow_definitions;
     HashMap<String, Vec<Box<dyn<FnMut<void(ref<str>)>>>>>        m_text_user_index;
-    HashMap<String, Vec<Box<dyn<FnMut<void(ref<Json>)>>>>>       m_user_property_index;
+    HashMap<String, Vec<Box<dyn<FnMut<void(ref<NJson>)>>>>>       m_user_property_index;
     Vec<Box<dyn<FnMut<void(f64)>>>>                              m_transform_updaters;
     HashMap<String, Vec<ShaderUserBinding>>                      m_shader_user_index;
     HashMap<String, Vec<ShaderComboUserBinding>>                 m_shader_combo_user_index;

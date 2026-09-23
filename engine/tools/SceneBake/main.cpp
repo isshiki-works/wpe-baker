@@ -10,6 +10,9 @@
 #include <cstdio>
 #include <filesystem>
 #include <CLI11.hpp>
+#include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
+
+#include "JsonNlohmann.hpp"
 #ifndef WPE_RENDER_SOURCE_DIGEST
 #define WPE_RENDER_SOURCE_DIGEST "unrecorded"
 #endif
@@ -54,7 +57,7 @@ void RequireNoLoggedErrors() {
 }
 
 std::string Quote(std::string_view value) {
-    return owe::Dump(owe::JsonFromStd(value));
+    return owe::Dump(owe::NJson(std::string(value)));
 }
 
 std::string OptionalReal(const std::optional<double>& value) {
@@ -84,20 +87,18 @@ std::string ReadText(const fs::path& path) {
     return text;
 }
 
-const owe::Json* Field(const owe::Json& object, std::string_view key) {
-    auto field = object.get(rstd::cppstd::as_str(key).unwrap());
-    return field.is_some() ? &**field : nullptr;
+const owe::NJson* Field(const owe::NJson& object, std::string_view key) {
+    return owe::Find(object, key);
 }
 
-uint64_t Uint(const owe::Json& object, std::string_view key, uint64_t fallback) {
+uint64_t Uint(const owe::NJson& object, std::string_view key, uint64_t fallback) {
     auto* field = Field(object, key);
     if (!field) return fallback;
-    auto value = field->as_u64();
-    if (value.is_none()) throw std::runtime_error(std::string(key) + " must be an unsigned integer");
-    return value->to_primitive();
+    if (!field->is_number_unsigned()) throw std::runtime_error(std::string(key) + " must be an unsigned integer");
+    return field->get<uint64_t>();
 }
 
-double Number(const owe::Json& object, std::string_view key, double fallback) {
+double Number(const owe::NJson& object, std::string_view key, double fallback) {
     auto* field = Field(object, key);
     if (!field) return fallback;
     double value {};
@@ -106,20 +107,18 @@ double Number(const owe::Json& object, std::string_view key, double fallback) {
     return value;
 }
 
-bool Bool(const owe::Json& object, std::string_view key, bool fallback) {
+bool Bool(const owe::NJson& object, std::string_view key, bool fallback) {
     auto* field = Field(object, key);
     if (!field) return fallback;
-    auto value = field->as_bool();
-    if (value.is_none()) throw std::runtime_error(std::string(key) + " must be a boolean");
-    return *value;
+    if (!field->is_boolean()) throw std::runtime_error(std::string(key) + " must be a boolean");
+    return field->get<bool>();
 }
 
-std::string String(const owe::Json& object, std::string_view key, std::string fallback = {}) {
+std::string String(const owe::NJson& object, std::string_view key, std::string fallback = {}) {
     auto* field = Field(object, key);
     if (!field) return fallback;
-    auto value = field->as_str();
-    if (value.is_none()) throw std::runtime_error(std::string(key) + " must be a string");
-    return rstd::cppstd::to_string(*value);
+    if (!field->is_string()) throw std::runtime_error(std::string(key) + " must be a string");
+    return field->get<std::string>();
 }
 
 std::vector<std::string> Arguments(int argc, char** argv) {
@@ -188,7 +187,7 @@ uint64_t Gcd(uint64_t lhs, uint64_t rhs) {
     return lhs;
 }
 
-PointerInput ReadInput(const owe::Json& json, PointerInput input = {}) {
+PointerInput ReadInput(const owe::NJson& json, PointerInput input = {}) {
     if (!json.is_object()) throw std::runtime_error("input must be an object");
     input.cursor_x = Number(json, "cursor_x", input.cursor_x);
     input.cursor_y = Number(json, "cursor_y", input.cursor_y);
@@ -219,7 +218,7 @@ uint64_t AudioBoundary(uint64_t frame, uint32_t fps_num, uint32_t fps_den) {
     return static_cast<uint64_t>(samples);
 }
 
-Job ReadJob(const owe::Json& json, const fs::path& base) {
+Job ReadJob(const owe::NJson& json, const fs::path& base) {
     if (!json.is_object() || Uint(json, "schema_version", 0) != 1)
         throw std::runtime_error("unsupported job schema_version (expected 1)");
     auto resolve = [&](std::string_view key) {
@@ -310,14 +309,13 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
         options.collect_bounds = Bool(*encode, "collect_bounds", false);
         options.bounds_include_rgb = Bool(*encode, "bounds_include_rgb", false);
         if (auto* retained = Field(*encode, "retain_frames")) {
-            auto array = retained->as_array();
-            if (array.is_none()) throw std::runtime_error("GPU retain_frames must be an array");
-            for (const auto& item : **array) {
-                auto index = item.as_u64();
-                if (index.is_none() || index->to_primitive() >= job.frames || options.retain_frames.size() >= 32 ||
-                    (!options.retain_frames.empty() && index->to_primitive() <= options.retain_frames.back()))
+            auto array = retained;
+            if (!array->is_array()) throw std::runtime_error("GPU retain_frames must be an array");
+            for (const auto& item : *array) {
+                if (!item.is_number_unsigned() || item.get<uint64_t>() >= job.frames || options.retain_frames.size() >= 32 ||
+                    (!options.retain_frames.empty() && item.get<uint64_t>() <= options.retain_frames.back()))
                     throw std::runtime_error("GPU retained frames must be up to 32 increasing indices inside the render");
-                options.retain_frames.push_back(index->to_primitive());
+                options.retain_frames.push_back(item.get<uint64_t>());
             }
         }
         job.gpu_encode = std::move(options);
@@ -327,10 +325,9 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     job.trace_scene = Bool(json, "trace_scene", false);
     job.write_audio = Bool(json, "write_audio", true);
     if (auto* overrides = Field(json, "offline_video_rate_overrides")) {
-        auto array = overrides->as_array();
-        if (array.is_none())
+        if (!overrides->is_array())
             throw std::runtime_error("offline_video_rate_overrides must be an array");
-        for (const auto& item : *array.unwrap()) {
+        for (const auto& item : *overrides) {
             if (!item.is_object() || Field(item, "owner_layer_id") == nullptr ||
                 Field(item, "rate_numerator") == nullptr || Field(item, "rate_denominator") == nullptr)
                 throw std::runtime_error("offline video rate override requires owner_layer_id, rate_numerator, and rate_denominator");
@@ -362,13 +359,12 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
         job.layer_selection.transparent_background = Bool(*selection, "transparent_background", false);
         job.layer_selection.include_postprocessing = Bool(*selection, "include_postprocessing", true);
         auto* ids = Field(*selection, "include_layers");
-        if (ids == nullptr || ids->as_array().is_none())
+        if (ids == nullptr || !ids->is_array())
             throw std::runtime_error("layer_selection.include_layers must be an integer array");
-        for (const auto& id : *ids->as_array().unwrap()) {
-            auto number = id.as_u64();
-            if (number.is_none() || number->to_primitive() > std::numeric_limits<int32_t>::max())
+        for (const auto& id : *ids) {
+            if (!id.is_number_unsigned() || id.get<uint64_t>() > std::numeric_limits<int32_t>::max())
                 throw std::runtime_error("capture layer IDs must be non-negative int32 values");
-            job.layer_selection.include_layers.push_back(static_cast<int32_t>(number->to_primitive()));
+            job.layer_selection.include_layers.push_back(static_cast<int32_t>(id.get<uint64_t>()));
         }
         if (job.layer_selection.include_layers.empty()) throw std::runtime_error("capture layer selection is empty");
     }
@@ -394,11 +390,11 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
     if (auto* input = Field(json, "input")) initial_input = ReadInput(*input);
     ApplyPointerInput(job.input, initial_input);
     if (auto* timeline = Field(json, "input_timeline")) {
-        auto array = timeline->as_array();
-        if (array.is_none()) throw std::runtime_error("input_timeline must be an array");
+        auto array = timeline;
+        if (!array->is_array()) throw std::runtime_error("input_timeline must be an array");
         auto input = initial_input;
-        for (std::size_t i = 0; i < (*array)->len().to_primitive(); ++i) {
-            const auto& event = (**array)[rstd::usize(i)];
+        for (std::size_t i = 0; i < array->size(); ++i) {
+            const auto& event = (*array)[i];
             const auto frame = Uint(event, "frame", std::numeric_limits<uint64_t>::max());
             if (!event.is_object() || frame >= job.warmup + job.frames ||
                 (!job.input_timeline.empty() && frame <= job.input_timeline.back().first))
@@ -452,7 +448,7 @@ Job ReadJob(const owe::Json& json, const fs::path& base) {
 
 int Render(const fs::path& job_path) {
     const auto text = ReadText(job_path);
-    auto parsed = owe::ParseJson(text);
+    auto parsed = owe::ParseNJson(text);
     if (parsed.is_err()) throw std::runtime_error("invalid job JSON");
     auto json = parsed.unwrap();
     auto job = ReadJob(json, fs::absolute(job_path).parent_path());
@@ -617,12 +613,8 @@ int Render(const fs::path& job_path) {
         config.fps = static_cast<uint32_t>(std::max<uint64_t>(1, (uint64_t(job.fps_num) + job.fps_den - 1) / job.fps_den));
         config.muted = false; // Offline mode has no host audio device; preserve authored audio.
         if (auto* properties = Field(json, "user_properties")) {
-            auto object = properties->as_object();
-            if (object.is_none()) throw std::runtime_error("user_properties must be an object");
-            (*object)->iter().for_each([&](auto entry) {
-                auto [key, value] = entry;
-                config.user_properties.insert(key->clone(), value->clone());
-            });
+            if (!properties->is_object()) throw std::runtime_error("user_properties must be an object");
+            config.user_properties = *properties;
         }
         owe::RenderInitInfo info;
         info.width = static_cast<uint16_t>(job.width);
