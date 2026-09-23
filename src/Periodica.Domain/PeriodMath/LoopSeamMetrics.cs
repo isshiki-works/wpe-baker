@@ -1,4 +1,4 @@
-namespace Baker.Core;
+namespace Periodica.Domain;
 
 /// <summary>One wrap's residual between the start frame and the frame exactly one period later.</summary>
 public sealed record LoopWrapResidual(double GlobalRgbMae, double WorstTileRgbMae, int WorstTileX, int WorstTileY,

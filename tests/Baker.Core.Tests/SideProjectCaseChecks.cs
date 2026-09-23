@@ -22,7 +22,7 @@ var fable = new CommonLoopSolveRequest(60, 1,
     new("fixed-4", new(4, CommonLoopPeriodEvidence.Analytic, new(4))),
     new("fixed-20/9", new(20d / 9, CommonLoopPeriodEvidence.Analytic, new(20, 9)))
 ]);
-var at100 = CommonLoopSolver.EvaluateAtDuration(fable, new(100));
+var at100 = CommonLoopSolver.EvaluateAtFrames(fable, 6000);
 Check(at100.Candidate is not null && at100.Frames == 6000, "100 seconds is an exact 60 FPS grid duration");
 var waterA = at100.Candidate!.Components.Single(x => x.ComponentId == "waterwave-a");
 var waterB = at100.Candidate.Components.Single(x => x.ComponentId == "waterwave-b");

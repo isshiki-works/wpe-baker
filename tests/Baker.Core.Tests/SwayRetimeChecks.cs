@@ -126,7 +126,7 @@ internal static class SwayRetimeChecks
                       Math.Sign(term.CoefficientNew) == Math.Sign(term.CoefficientOld)));
                 check(exact, $"sway solver {item.Id} Lmax {maximum:0}: every retimed term closes on whole cycles and every frozen term is zero");
                 // 规则 v2：可见项不冻结；慢项取冻结（2πa/T）与改到最近整数圈（2πa·|n/L − 1/T|）里偏差小的，偏差 ≤ 0.1 px/s。
-                bool v2 = solution.Admissible && solution.Layers.All(layer => layer.Terms.Where(term => term.CoefficientOld != 0).All(term =>
+                bool v2 = solution.Layers.All(layer => layer.Terms.Where(term => term.CoefficientOld != 0).All(term =>
                 {
                     double rate = 2 * Math.PI / term.OldPeriodSeconds, a = term.AmplitudePixels;
                     if (term.Visible) return !term.Frozen;
@@ -164,7 +164,7 @@ internal static class SwayRetimeChecks
             actual.Zip(expected).All(pair => Math.Abs(pair.First - pair.Second) <= 2e-9 * Math.Max(1, Math.Abs(pair.Second)));
         SwayRetimeSolution amiya2500 = SwayRecurrenceSolver.Detail(Inputs(Cases[5]), 6000, 25, 60, 1);
         SwayRetimeLayer fast = amiya2500.Layers[0], slow = amiya2500.Layers[1];
-        check(amiya2500.Admissible && Near(fast.Terms.Select(term => term.CoefficientNew), 0.9997804461, -0.1618548535, 0.008545132018, 0.0,
+        check(Near(fast.Terms.Select(term => term.CoefficientNew), 0.9997804461, -0.1618548535, 0.008545132018, 0.0,
                   -0.5001415505, 0.04172035044, -0.001507964474, 0.0) &&
               Near(slow.Terms.Select(term => term.CoefficientNew), 1.000283101, -0.1621061809, 0.00879645943, 0.0,
                   -0.5001415505, 0.04146902303, -0.001256637061, 0.0),
@@ -201,8 +201,8 @@ internal static class SwayRetimeChecks
             SwayRetimeInput[] inputs = Inputs(Cases[caseIndex]);
             SwayRetimeSolution oldPick = SwayRecurrenceSolver.Detail(inputs, 1, 1, 60, 1);
             SwayRetimeSolution? still = SwayRecurrenceSolver.Solve(inputs, 1, 60, 1, 600);
-            check(oldPick.FrozenCount == 8 * inputs.Length && oldPick.FrozenMinimumPeriodSeconds < 5 && !oldPick.Admissible &&
-                still is { Frames: > 1, Admissible: true } && still.FrozenTerms.All(frozen => !frozen.Term.Visible) &&
+            check(oldPick.FrozenCount == 8 * inputs.Length && oldPick.FrozenMinimumPeriodSeconds < 5 &&
+                still is { Frames: > 1 } && still.FrozenTerms.All(frozen => !frozen.Term.Visible) &&
                 still.Layers.All(layer => layer.Terms.Where(term => term.Name is "1" or "1/2").All(term => !term.Frozen)),
                 $"sway static guard {Cases[caseIndex].Id}: a one-frame base candidate no longer freezes the visible sway into a still image");
         }
@@ -481,7 +481,7 @@ internal static class SwayRetimeChecks
         ulong planned = twoSpeeds["candidates"]![0]!["frames"]!.GetValue<ulong>();
         SwayRetimeSolution again = SwayRecurrenceSolver.Solve(reread.Select(item => new SwayRetimeInput(item, 1, 1)).ToArray(),
             twoSpeeds["candidates"]![0]!["sway_retime"]!["base_frames"]!.GetValue<ulong>(), 60, 1, 600)!;
-        check(reread.Length == 3 && !reread[0].HasCanonicalCoefficients && again.MaximumChangePercent < 1e-4 && planned % again.Frames == 0 &&
+        check(reread.Length == 3 && !reread[0].Coefficients.SequenceEqual(SwayModel.CanonicalCoefficients) && again.MaximumChangePercent < 1e-4 && planned % again.Frames == 0 &&
             reanalysis.Unresolved.Single(item => item.OwnerLayerId == 3).Detail.Contains("not the stock foliagesway literals", StringComparison.Ordinal),
             "sway model: a retimed shader parses back, needs no further change on the same base period, and closes on a divisor of the planned L");
 

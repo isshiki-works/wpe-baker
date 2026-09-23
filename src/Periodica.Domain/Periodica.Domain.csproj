@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 纯领域层：周期数学与判据。不做文件/进程 IO，不引用 JSON；Baker.Core 引用它并全局 using，调用方写法不变。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Baker.Core" />
+    <InternalsVisibleTo Include="Baker.Core.Tests" />
+  </ItemGroup>
+</Project>

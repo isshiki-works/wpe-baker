@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace Baker.Core;
+namespace Periodica.Domain;
 
 /// <summary>
 /// 精灵动画在离线渲染帧网格上的接缝相位。

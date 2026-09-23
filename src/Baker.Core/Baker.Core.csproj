@@ -6,4 +6,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup><InternalsVisibleTo Include="Baker.Core.Tests" /></ItemGroup>
+  <!-- 周期数学与判据在 Periodica.Domain；全局 using 让 Baker.Core 里的调用方写法不变。 -->
+  <ItemGroup><ProjectReference Include="../Periodica.Domain/Periodica.Domain.csproj" /></ItemGroup>
+  <ItemGroup><Using Include="Periodica.Domain" /></ItemGroup>
 </Project>

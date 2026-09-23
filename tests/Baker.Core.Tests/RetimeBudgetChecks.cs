@@ -218,13 +218,17 @@ internal static class RetimeBudgetChecks
         double looseDeviation = loose.MaximumVisibleSpeedDeviationPixelsPerSecond!.Value;
         double tightDeviation = tight.MaximumVisibleSpeedDeviationPixelsPerSecond!.Value;
         check(Math.Abs(looseDeviation - 20 * 0.0078539816) < 1e-6 && Math.Abs(tightDeviation - 30 * 0.0078539816) < 1e-6 &&
-            looseDeviation is > 0.1 and <= 0.2 && tightDeviation > 0.2 && loose.Admissible && !tight.Admissible,
+            looseDeviation is > 0.1 and <= 0.2 && tightDeviation > 0.2 &&
+            // 只容 k = 1（P = L = 160 s）时，求解器收下 0.157 px/s 的那版、拒掉 0.236 px/s 的那版：闸门只在 Choose 里判。
+            SwayRecurrenceSolver.Solve([Single(50, 20)], 9600, 60, 1, 160) is { Frames: 9600 } &&
+            SwayRecurrenceSolver.Solve([Single(50, 30)], 9600, 60, 1, 160) is null,
             "retime second gate: a visible term may deviate past the slow-term 0.1 px/s line but not past 0.2 px/s");
         // 求解器跳过被第二道闸挡下的 L：振幅 30 px 那一版在 L = 126 s 上改 19%、偏差 0.72 px/s，预算 5% 与第二道闸都不收，
         // 于是继续往长里走，直到偏差回到 0.2 px/s 以内。
         SwayRetimeSolution picked = SwayRecurrenceSolver.Solve([Single(50, 30)], 60, 60, 1, 200, 5)!;
         SwayRetimeSolution skipped = SwayRecurrenceSolver.Detail([Single(50, 30)], 60, 126, 60, 1);
-        check(!skipped.Admissible && skipped.MaximumVisibleSpeedDeviationPixelsPerSecond > 0.2 && picked.Seconds > skipped.Seconds &&
+        check(SwayRecurrenceSolver.Solve([Single(50, 30)], 7560, 60, 1, 126) is null &&
+            skipped.MaximumVisibleSpeedDeviationPixelsPerSecond > 0.2 && picked.Seconds > skipped.Seconds &&
             picked.MaximumVisibleSpeedDeviationPixelsPerSecond <= 0.2 && picked.MaximumVisibleChangePercent <= 5 &&
             picked.SlowestVisibleCycles >= SwayRecurrenceSolver.MinimumVisibleCycles,
             "retime second gate: the solver walks on to the next L instead of accepting one that breaks the visible speed gate");

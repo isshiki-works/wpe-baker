@@ -1,27 +1,4 @@
-namespace Baker.Core;
-
-/// <summary>A positive rational duration, used where an exact frame-grid calculation is required.</summary>
-public readonly record struct CommonLoopRational
-{
-    public long Numerator { get; }
-    public long Denominator { get; }
-
-    public CommonLoopRational(long numerator, long denominator = 1)
-    {
-        if (numerator <= 0 || denominator <= 0) throw new ArgumentOutOfRangeException(nameof(numerator), "A duration must be positive.");
-        long divisor = GreatestCommonDivisor(numerator, denominator);
-        Numerator = numerator / divisor;
-        Denominator = denominator / divisor;
-    }
-
-    public double ToSeconds() => (double)Numerator / Denominator;
-
-    private static long GreatestCommonDivisor(long left, long right)
-    {
-        while (right != 0) (left, right) = (right, left % right);
-        return left;
-    }
-}
+namespace Periodica.Domain;
 
 public enum CommonLoopPeriodEvidence { Analytic, Observed, Unknown, NonPeriodic }
 
@@ -45,7 +22,6 @@ public enum CommonLoopConstraintKind
     FixedPeriodDoesNotClose,
     RetimeOutsideLimit,
     DurationOutsideRange,
-    NotOnOutputFrameGrid,
     SearchBudgetExceeded,
     ArithmeticOverflow
 }
@@ -98,8 +74,17 @@ public sealed record CommonLoopSearchResult(IReadOnlyList<CommonLoopCandidate> C
 /// </summary>
 public static class CommonLoopSolver
 {
+    /// <summary>--loop-max-seconds 的默认值（秒）。</summary>
+    public const double DefaultLoopLengthMaximumSeconds = 600;
+
+    /// <summary>--loop-max-seconds 允许的上限（秒）。</summary>
+    public const double MaximumLoopLengthSeconds = 3600;
+
+    /// <summary>分量调速预算的上限（百分比）。与 RetimeProfile.MaximumBudgetPercent 同值；C2.1c 把 RetimeProfile 搬进 Domain 时合成一个。</summary>
+    public const double MaximumRetimePercent = 5;
+
     private static readonly CommonLoopRational DefaultMinimum = new(10);
-    private static readonly CommonLoopRational DefaultMaximum = Ceiling(SwayRetimeOptions.DefaultLoopLengthMaximumSeconds);
+    private static readonly CommonLoopRational DefaultMaximum = Ceiling(DefaultLoopLengthMaximumSeconds);
 
     /// <summary>
     /// 请求没带上限时使用的循环时长上限（秒），等于 --loop-max-seconds 的默认值。
@@ -113,7 +98,7 @@ public static class CommonLoopSolver
     /// </summary>
     public static CommonLoopRational Ceiling(double seconds)
     {
-        if (!double.IsFinite(seconds) || seconds <= 0 || seconds > SwayRetimeOptions.MaximumLoopLengthSeconds)
+        if (!double.IsFinite(seconds) || seconds <= 0 || seconds > MaximumLoopLengthSeconds)
             throw new ArgumentOutOfRangeException(nameof(seconds), "The loop length ceiling must be above 0 and at most 3600 seconds.");
         long micros = (long)Math.Round(seconds * 1_000_000, MidpointRounding.AwayFromZero);
         return new(Math.Max(1, micros), 1_000_000);
@@ -197,7 +182,7 @@ public static class CommonLoopSolver
     }
 
     private static double FrameSeconds(ulong frames, CommonLoopSolveRequest request) =>
-        (double)frames * request.FpsDenominator / request.FpsNumerator;
+        FrameGrid.Seconds(frames, request.FpsNumerator, request.FpsDenominator);
 
     /// <summary>Evaluates one exact output-frame duration, including useful reasons it cannot close.</summary>
     public static CommonLoopEvaluation EvaluateAtFrames(CommonLoopSolveRequest request, ulong frames)
@@ -207,23 +192,9 @@ public static class CommonLoopSolver
         return EvaluatePrepared(request, setup, frames, true);
     }
 
-    /// <summary>Evaluates an explicit rational duration only when it lies on the output frame grid.</summary>
-    public static CommonLoopEvaluation EvaluateAtDuration(CommonLoopSolveRequest request, CommonLoopRational duration)
-    {
-        ValidateRequest(request);
-        UInt128 numerator = (UInt128)duration.Numerator * request.FpsNumerator;
-        UInt128 denominator = (UInt128)duration.Denominator * request.FpsDenominator;
-        if (numerator % denominator != 0 || numerator / denominator > ulong.MaxValue)
-        {
-            return new(0, duration.ToSeconds(), null,
-                [new("frame-grid", CommonLoopConstraintKind.NotOnOutputFrameGrid, "The requested duration is not an integer number of output frames.")]);
-        }
-        return EvaluateAtFrames(request, (ulong)(numerator / denominator));
-    }
-
     private static CommonLoopEvaluation EvaluatePrepared(CommonLoopSolveRequest request, Setup setup, ulong frames, bool enforceRange)
     {
-        double seconds = (double)frames * request.FpsDenominator / request.FpsNumerator;
+        double seconds = FrameSeconds(frames, request);
         var constraints = new List<CommonLoopConstraint>(setup.Constraints);
         if (enforceRange && (CompareFrameToDuration(frames, request.FpsNumerator, request.FpsDenominator, setup.Minimum) < 0 ||
             CompareFrameToDuration(frames, request.FpsNumerator, request.FpsDenominator, setup.Maximum) > 0))
@@ -314,7 +285,7 @@ public static class CommonLoopSolver
             try
             {
                 ulong componentStep = FixedFrameStep(period.ExactSeconds.Value, request.FpsNumerator, request.FpsDenominator);
-                step = LeastCommonMultiple(step.Value, componentStep);
+                step = FrameGrid.LeastCommonMultiple(step.Value, componentStep);
             }
             catch (OverflowException)
             {
@@ -328,11 +299,11 @@ public static class CommonLoopSolver
     {
         if (request.FpsNumerator == 0 || request.FpsDenominator == 0 || request.Components is null || request.Components.Count == 0 ||
             request.MaximumCandidates <= 0 || request.MaximumFrameCandidates == 0 || !double.IsFinite(request.MaximumRetimePercent) ||
-            request.MaximumRetimePercent < 0 || request.MaximumRetimePercent > RetimeProfile.MaximumBudgetPercent)
+            request.MaximumRetimePercent < 0 || request.MaximumRetimePercent > MaximumRetimePercent)
             throw new ArgumentException("Use positive rational FPS and components, a positive bounded search, and a retime limit from 0 to 5 percent.", nameof(request));
         CommonLoopRational minimum = request.MinimumDuration ?? DefaultMinimum, maximum = request.MaximumDuration ?? DefaultMaximum;
         if ((Int128)minimum.Numerator * maximum.Denominator > (Int128)maximum.Numerator * minimum.Denominator ||
-            maximum.ToSeconds() > SwayRetimeOptions.MaximumLoopLengthSeconds)
+            maximum.ToSeconds() > MaximumLoopLengthSeconds)
             throw new ArgumentException("Duration range must be positive, ordered, and no longer than 3600 seconds.", nameof(request));
     }
 
@@ -359,15 +330,8 @@ public static class CommonLoopSolver
     {
         UInt128 denominator = (UInt128)fpsNumerator * (ulong)period.Numerator;
         UInt128 numerator = (UInt128)fpsDenominator * (ulong)period.Denominator;
-        UInt128 result = denominator / GreatestCommonDivisor(denominator, numerator);
+        UInt128 result = denominator / FrameGrid.GreatestCommonDivisor(denominator, numerator);
         if (result == 0 || result > ulong.MaxValue) throw new OverflowException();
-        return (ulong)result;
-    }
-
-    private static ulong LeastCommonMultiple(ulong left, ulong right)
-    {
-        UInt128 result = (UInt128)(left / GreatestCommonDivisor(left, right)) * right;
-        if (result > ulong.MaxValue) throw new OverflowException();
         return (ulong)result;
     }
 
@@ -377,18 +341,6 @@ public static class CommonLoopSolver
         if (remainder == 0) return value;
         if (value > ulong.MaxValue - (step - remainder)) throw new OverflowException();
         return value + step - remainder;
-    }
-
-    private static UInt128 GreatestCommonDivisor(UInt128 left, UInt128 right)
-    {
-        while (right != 0) (left, right) = (right, left % right);
-        return left;
-    }
-
-    private static ulong GreatestCommonDivisor(ulong left, ulong right)
-    {
-        while (right != 0) (left, right) = (right, left % right);
-        return left;
     }
 
     private sealed record Setup(CommonLoopRational Minimum, CommonLoopRational Maximum, ulong? FixedFrameStep,

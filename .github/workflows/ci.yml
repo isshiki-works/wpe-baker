@@ -21,6 +21,10 @@ jobs:
           global-json-file: global.json
 
       # 测试工程只引用 Baker.Core 并链接 Baker.App 的 3 个文件，App 和 Cli 的编译错误得单独构建才看得到
+      # 纯领域层（周期数学与判据）单独构建一次：它不依赖 Baker.Core，编译错误在这里先暴露
+      - name: 构建 Periodica.Domain
+        run: dotnet build src/Periodica.Domain -c Release
+
       - name: 构建 Baker.App
         run: dotnet build src/Baker.App -c Release
 
