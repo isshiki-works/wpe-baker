@@ -73,8 +73,8 @@ def main():
     def plain(r):
         return {k: (round(v, 6) if isinstance(v, float) else v) for k, v in r.items() if k != "first_seen"}
 
-    out = Path(a.out)
-    with open(out.with_suffix(".passes.csv"), "w", newline="", encoding="utf-8") as fh:
+    # 前缀直接拼后缀：with_suffix 会把带点的前缀（如 run.v1）截掉一段
+    with open(a.out + ".passes.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=list(plain(rows[0])))
         w.writeheader()
         w.writerows(plain(r) for r in rows)
@@ -98,8 +98,8 @@ def main():
                          for k, v in sorted(by_effect.items(), key=lambda kv: -kv[1])[:25]],
         "top15": [plain(r) for r in top],
     }
-    out.with_suffix(".summary.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False) + "\n",
-                                                encoding="utf-8")
+    Path(a.out + ".summary.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False) + "\n",
+                                             encoding="utf-8")
     print(f"帧 {n}/{len(frames)}（丢前 {a.warmup}），整帧中位 {summary['total_ms']['median']:.3f} ms，"
           f"p95 {summary['total_ms']['p95']:.3f}，pass {len(rows)} 个")
     print(f"{'pass':58s} {'layer':>5s} {'RT':>10s} {'中位ms':>8s} {'p95':>8s} {'占比':>6s}")
