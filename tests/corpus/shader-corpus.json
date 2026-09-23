@@ -1,0 +1,77 @@
+{
+  "about": "着色器时钟规则的数据驱动测试语料。每个 suite 合成一个工程：shaders 下每个名字各生成 effects/<名>.json → materials/<名>.json → shaders/<名>.frag|.vert；objects 每项是一个图层，引用 shader 名并给出作者 pass 的常量与 combo。expect 每项对应原 Shader*Checks 的一条断言（message 保留原文），按图层过滤后核对裁定、周期、补丁与明细。",
+  "suites": [
+    {
+      "name": "water-flow",
+      "from": "WaterFlowPeriodChecks",
+      "shaders": {
+        "flow": { "frag": [
+          "uniform float g_Time;",
+          "uniform float g_FlowSpeed; // {\"material\":\"speed\",\"default\":1}",
+          "float flowPhase = texSample2D(g_Texture2, v_TexCoord.xy * g_FlowPhaseScale).r;",
+          "vec4 cycles = vec4(frac(g_Time * g_FlowSpeed),",
+          "                   frac(g_Time * g_FlowSpeed + 0.5),",
+          "                   frac(0.25 + g_Time * g_FlowSpeed),",
+          "                   frac(0.25 + g_Time * g_FlowSpeed + 0.5));",
+          "float outputPhase = flowPhase + cycles.x;" ] },
+        "flow-drift": { "same_as": "flow", "append": [ "uv += g_Time * 0.125;" ] },
+        "flow-conditional": { "same_as": "flow", "prepend": [ "#if MODE" ], "append": [ "#endif" ] }
+      },
+      "objects": [
+        { "id": 1, "shader": "flow", "constants": { "speed": 0.19 } },
+        { "id": 2, "shader": "flow-drift", "constants": { "speed": 0.19 } },
+        { "id": 3, "shader": "flow-conditional", "constants": { "speed": 0.19 } }
+      ],
+      "expect": [
+        { "message": "four water-flow frac phases yield one analytic reciprocal-speed period",
+          "components_total": 1,
+          "layer": 1, "components": 1, "allow_retime": true, "key": "speed", "period": "1/0.19" },
+        { "message": "extra time drift and an effective preprocessor branch keep water-flow-like shaders unresolved",
+          "unresolved_total": 2 },
+        { "message": "extra time drift and an effective preprocessor branch keep water-flow-like shaders unresolved",
+          "layer": 2, "unresolved": 1, "kind": "UnsupportedShaderMechanism" },
+        { "message": "extra time drift and an effective preprocessor branch keep water-flow-like shaders unresolved",
+          "layer": 3, "unresolved": 1, "kind": "UnsupportedShaderMechanism" }
+      ]
+    },
+    {
+      "name": "shake",
+      "from": "ShaderPeriodGeneralizationChecks",
+      "shaders": {
+        "shake": { "frag": [
+          "uniform float g_Time;",
+          "// [COMBO] {\"combo\":\"NOISE\",\"type\":\"options\",\"default\":0}",
+          "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+          "#if AUDIOPROCESSING == 0",
+          "float flowPhase = 0.0;",
+          "flowPhase = texSample2D(g_Texture2, v_TexCoord.zw).r * M_PI_2;",
+          "#if NOISE",
+          "vec4 sines = flowPhase + frac(g_Speed * g_Time / M_PI_2 * vec4(1, -0.16161616, 0.0083333, -0.00019841)) * M_PI_2;",
+          "#else",
+          "float time = g_Speed * g_Time + flowPhase;",
+          "offset = sin(frac(time / M_PI_2) * M_PI_2);",
+          "float base = step(0.0, cos(time));",
+          "#endif",
+          "#endif" ] },
+        "shake-drift": { "same_as": "shake", "append": [ "uv += g_Time * 0.125;" ] }
+      },
+      "objects": [
+        { "id": 1, "shader": "shake", "constants": { "speed": 1.25 } },
+        { "id": 2, "shader": "shake", "constants": { "speed": 0.5 }, "combos": { "NOISE": 1 } },
+        { "id": 3, "shader": "shake", "constants": { "speed": 0.75 }, "combos": { "AUDIOPROCESSING": 1 } },
+        { "id": 4, "shader": "shake-drift", "constants": { "speed": 1 } }
+      ],
+      "expect": [
+        { "message": "wrapped shake sin/cos timing yields one analytic retimable speed component",
+          "components_total": 1,
+          "layer": 1, "components": 1, "allow_retime": true, "key": "speed", "period": "2pi/1.25" },
+        { "message": "shake noise and audio variants remain unresolved",
+          "layer": 2, "unresolved": 1, "kind": "NonPeriodicOrDriftingMechanism", "detail_contains": [ "NOISE" ] },
+        { "message": "shake noise and audio variants remain unresolved",
+          "layer": 3, "unresolved": 1, "kind": "NonPeriodicOrDriftingMechanism", "detail_contains_ignore_case": [ "audio" ] },
+        { "message": "a shake-like shader with an additional time drift is not reduced to the wrapped period",
+          "layer": 4, "unresolved": 1, "kind": "UnsupportedShaderMechanism" }
+      ]
+    }
+  ]
+}

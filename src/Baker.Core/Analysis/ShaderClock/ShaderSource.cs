@@ -5,14 +5,13 @@ namespace Baker.Core.Analysis.ShaderClock;
 
 /// <summary>
 /// 一段着色器源码（frag + "\n" + vert）的一次性索引：原文、去注释压空白后的归一化文本（第一次用到时算一次）、
-/// 按（视图, 计数种类, 标识符）缓存的计数，以及 uniform 注释里 material 名 → default 的表。
+/// 按视图计数的函数，以及 uniform 注释里 material 名 → default 的表。
 /// 规则表里的每条指纹都在这里求值；同一段源码不再被每条规则各自归一化、各自数一遍。
 /// </summary>
 internal sealed class ShaderSource(string text)
 {
     private string? normalized;
     private Dictionary<string, JsonNode?>? uniformDefaults;
-    private readonly Dictionary<(bool Normalize, string Kind, string Identifier), int> counts = [];
 
     public string Raw { get; } = text;
 
@@ -34,10 +33,9 @@ internal sealed class ShaderSource(string text)
     /// </summary>
     public int Count(bool normalize, string kind, string identifier)
     {
-        if (counts.TryGetValue((normalize, kind, identifier), out int cached)) return cached;
         string view = View(normalize);
         string word = Regex.Escape(identifier);
-        int count = kind switch
+        return kind switch
         {
             "word" => Regex.Matches(view, $@"\b{word}\b", RegexOptions.CultureInvariant).Count,
             "assign" => Regex.Matches(view, $@"\b{word}\s*(?:\+=|-=|\*=|/=|=(?!=))", RegexOptions.CultureInvariant).Count,
@@ -47,8 +45,6 @@ internal sealed class ShaderSource(string text)
             "substr" => CountSubstring(view, identifier),
             _ => throw new InvalidDataException($"Unknown shader count kind '{kind}'."),
         };
-        counts[(normalize, kind, identifier)] = count;
-        return count;
     }
 
     public static bool HasAlternateClock(string view) => Regex.IsMatch(view,
