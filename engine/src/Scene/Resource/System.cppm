@@ -539,11 +539,6 @@ public:
         return m_registries.Textures().UploadFontAtlasRegion(
             (**physical).allocation.deref(), atlas, atlas_width, x, y, width, height);
     }
-    auto CreateLocalSwapchain(const vulkan::Device& device, unsigned width, unsigned height,
-                              VkImageTiling tiling) -> std::shared_ptr<vulkan::LocalExSwapchain> {
-        return vulkan::CreateLocalExSwapchain(
-            device, m_registries.Textures(), width, height, tiling);
-    }
     void ClearTextures() {
         m_prepare_rollback = None();
         m_prepared         = PreparedResourceTable {};

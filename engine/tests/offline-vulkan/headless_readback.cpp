@@ -377,11 +377,6 @@ bool Run(unsigned source_width, unsigned source_height, unsigned width, unsigned
         std::fprintf(stderr, "FAIL: headless Vulkan initialization\n");
         return false;
     }
-    if (renderer.exSwapchain() != nullptr) {
-        std::fprintf(stderr, "FAIL: CPU path created an external swapchain\n");
-        renderer.destroy();
-        return false;
-    }
     const auto get_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
         vkGetInstanceProcAddr(renderer.vkInstance(), "vkGetPhysicalDeviceProperties"));
     if (!get_properties) {

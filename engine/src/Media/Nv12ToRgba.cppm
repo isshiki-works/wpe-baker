@@ -4,7 +4,6 @@ module;
 
 export module owe.media:nv12_to_rgba;
 import rstd.cppstd;
-import wescene.vk;
 
 // NV12 → RGBA8 转换（T5b，迁自 wavsen yuv_to_rgba.cpp 的软件路径）。
 // 只有软件解码帧这一条路：硬解帧的导入、BridgeForeign 的导出信号量不在这里。
@@ -64,32 +63,33 @@ private:
     std::uint32_t m_max_h {};
     std::string   m_error;
 
-    owe::vk::Unique<VkShaderModule>        m_shader;
-    owe::vk::Unique<VkDescriptorSetLayout> m_set_layout;
-    owe::vk::Unique<VkPipelineLayout>      m_pipeline_layout;
-    owe::vk::Unique<VkPipeline>            m_pipeline;
-    owe::vk::Unique<VkSampler>             m_sampler;
+    // 句柄都由析构函数按创建的逆序销毁。
+    VkShaderModule        m_shader { VK_NULL_HANDLE };
+    VkDescriptorSetLayout m_set_layout { VK_NULL_HANDLE };
+    VkPipelineLayout      m_pipeline_layout { VK_NULL_HANDLE };
+    VkPipeline            m_pipeline { VK_NULL_HANDLE };
+    VkSampler             m_sampler { VK_NULL_HANDLE };
 
-    // 内存先声明：析构时先销毁图像/缓冲再释放内存。
-    owe::vk::Unique<VkDeviceMemory> m_y_memory;
-    owe::vk::Unique<VkImage>        m_y_image;
-    owe::vk::Unique<VkImageView>    m_y_view;
-    owe::vk::Unique<VkDeviceMemory> m_uv_memory;
-    owe::vk::Unique<VkImage>        m_uv_image;
-    owe::vk::Unique<VkImageView>    m_uv_view;
-    owe::vk::Unique<VkDeviceMemory> m_staging_memory;
-    owe::vk::Unique<VkBuffer>       m_staging;
-    std::uint8_t*                   m_staging_map { nullptr };
+    VkDeviceMemory m_y_memory { VK_NULL_HANDLE };
+    VkImage        m_y_image { VK_NULL_HANDLE };
+    VkImageView    m_y_view { VK_NULL_HANDLE };
+    VkDeviceMemory m_uv_memory { VK_NULL_HANDLE };
+    VkImage        m_uv_image { VK_NULL_HANDLE };
+    VkImageView    m_uv_view { VK_NULL_HANDLE };
+    VkDeviceMemory m_staging_memory { VK_NULL_HANDLE };
+    VkBuffer       m_staging { VK_NULL_HANDLE };
+    std::uint8_t*  m_staging_map { nullptr };
 
-    owe::vk::DescriptorSetLease m_set;
+    VkDescriptorPool m_descriptor_pool { VK_NULL_HANDLE };
+    VkDescriptorSet  m_set { VK_NULL_HANDLE };
 
-    owe::vk::Unique<VkCommandPool> m_command_pool;
-    VkCommandBuffer                m_command { VK_NULL_HANDLE };
-    owe::vk::Unique<VkFence>       m_fence;
-    bool                           m_fence_pending { false };
+    VkCommandPool   m_command_pool { VK_NULL_HANDLE };
+    VkCommandBuffer m_command { VK_NULL_HANDLE };
+    VkFence         m_fence { VK_NULL_HANDLE };
+    bool            m_fence_pending { false };
 
     // 上一次提交写的目标视图：GPU 可能还在用，等下一次 Convert 等过栅栏再换掉。
-    owe::vk::Unique<VkImageView> m_target_view;
+    VkImageView m_target_view { VK_NULL_HANDLE };
 };
 
 } // namespace owe::media
