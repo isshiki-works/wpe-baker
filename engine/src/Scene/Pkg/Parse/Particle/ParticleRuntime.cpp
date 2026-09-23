@@ -1,4 +1,5 @@
 module;
+#include <typeindex>
 
 #include <rstd/macro.hpp>
 
@@ -189,14 +190,6 @@ auto TrailHistoryAttribute::Descriptor() const -> ref<particle::ParticleAttribut
         rstd::addressof(m_descriptor));
 }
 
-auto TrailHistoryAttribute::ConcreteType() const noexcept -> rstd::any::TypeId {
-    return m_descriptor.concrete_type;
-}
-
-auto TrailHistoryAttribute::ValueType() const noexcept -> rstd::any::TypeId {
-    return m_descriptor.value_type;
-}
-
 auto TrailHistoryAttribute::Len() const noexcept -> usize { return m_states.len(); }
 auto TrailHistoryAttribute::Capacity() const noexcept -> usize { return m_states.capacity(); }
 
@@ -282,10 +275,10 @@ void TrailHistoryAttribute::SetPreviousPosition(particle::ParticleSlot slot,
     state.has_previous_position = true;
 }
 
-auto owe::ParticleFrameFrom(ref<dyn<rstd::any::Any>> frame) -> ref<ParticleFrame> {
-    auto value = rstd::any::downcast_ref<ParticleFrame>(frame);
-    if (value.is_none()) rstd::panic { "unexpected particle frame context" };
-    return *value;
+auto owe::ParticleFrameFrom(const particle::ParticleFrameContext* frame) -> ref<ParticleFrame> {
+    const auto* value = dynamic_cast<const ParticleFrame*>(frame);
+    if (value == nullptr) rstd::panic { "unexpected particle frame context" };
+    return ref<ParticleFrame>::from_raw_parts(value);
 }
 
 void ParticleSpawnPipeline::Compile(particle::ParticleViewCompiler& compiler) {
@@ -326,9 +319,9 @@ auto ParticleSpawnPipeline::Bind(particle::ParticleWriteView view) -> ParticleSp
     };
 }
 
-void ParticleSpawnPipeline::Initialize(ParticleSpawnColumns&          columns,
-                                       particle::ParticleSpawnRequest request,
-                                       ref<dyn<rstd::any::Any>>       frame) {
+void ParticleSpawnPipeline::Initialize(ParticleSpawnColumns&                 columns,
+                                       particle::ParticleSpawnRequest        request,
+                                       const particle::ParticleFrameContext* frame) {
     columns.randoms[request.slot.index] = Random::get(0.0f, 1.0f);
     for (auto& instruction : m_instructions) instruction.Initialize(columns, request, frame);
     if (! m_world_space) return;
@@ -401,15 +394,16 @@ void ParticleSubSystem::TraceExternalInput(ref<str> property) const {
 void ParticleSubSystem::Finalize() {
     if (m_system.is_some()) return;
     if (m_world_space) m_spawn_pipeline.EnableWorldSpace();
-    m_program.AddLifecycle(
-        Box<dyn<particle::ParticleLifecycleProgram>>::make(LifecycleProgram(m_attributes)));
-    m_program.AddEvent(Box<dyn<particle::ParticleEventProgram>>::make(ChildEventProgram(*this)));
+    m_program.AddLifecycle(particle::MakeParticleProgram<particle::ParticleLifecycleProgram>(
+        LifecycleProgram(m_attributes)));
+    m_program.AddEvent(
+        particle::MakeParticleProgram<particle::ParticleEventProgram>(ChildEventProgram(*this)));
     if (m_trail_key.is_some()) {
-        m_program.AddPostUpdate(Box<dyn<particle::ParticleUpdateProgram>>::make(
+        m_program.AddPostUpdate(particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
             TrailUpdateProgram(m_attributes, *m_trail_key, m_trail_sample_interval)));
     }
-    m_program.AddExtractor(
-        Box<dyn<particle::ParticleExtractProgram>>::make(ParticleRawGenerator(*this)));
+    m_program.AddExtractor(particle::MakeParticleProgram<particle::ParticleExtractProgram>(
+        ParticleRawGenerator(*this)));
 
     auto definition = particle::ParticleDefinition::Prepare(rstd::move(m_schema_builder).Build(),
                                                             rstd::move(m_program),
@@ -422,7 +416,7 @@ void ParticleSubSystem::Finalize() {
     m_system = Some(Box<particle::ParticleSystem>::make(rstd::move(definition).unwrap()));
 }
 
-void ParticleSubSystem::AddEmitter(Box<dyn<particle::ParticleEmitterProgram>> emitter) {
+void ParticleSubSystem::AddEmitter(std::unique_ptr<particle::ParticleEmitterProgram> emitter) {
     m_program.AddEmitter(rstd::move(emitter));
 }
 
@@ -430,7 +424,7 @@ void ParticleSubSystem::AddInitializer(ParticleSpawnInstruction initializer) {
     m_spawn_pipeline.Add(rstd::move(initializer));
 }
 
-void ParticleSubSystem::AddOperator(Box<dyn<particle::ParticleUpdateProgram>> update) {
+void ParticleSubSystem::AddOperator(std::unique_ptr<particle::ParticleUpdateProgram> update) {
     m_program.AddUpdate(rstd::move(update));
 }
 
@@ -713,7 +707,7 @@ void ParticleSubSystem::Advance(f64 frame_time, f64 child_frame_time, bool updat
         m_instance_states.emplace_back();
     }
 
-    auto frame_ref = rstd::dyn<rstd::any::Any>::from_ref(m_frame).as_ref();
+    const particle::ParticleFrameContext* frame_ref = &m_frame;
     for (usize index {}; index < System().InstanceCount(); ++index) {
         ParticleInstanceRef current {
             .instance = rstd::addressof(System().Instance(index)),
@@ -751,7 +745,8 @@ void ParticleSubSystem::Advance(f64 frame_time, f64 child_frame_time, bool updat
     }
 }
 
-void ParticleSubSystem::Warmup(ParticleInstanceRef current, ref<dyn<rstd::any::Any>> frame_ref) {
+void ParticleSubSystem::Warmup(ParticleInstanceRef                   current,
+                               const particle::ParticleFrameContext* frame_ref) {
     if (! current.state->warmup_pending) return;
     current.state->warmup_pending = false;
     if (m_start_time <= f64()) return;
@@ -799,7 +794,7 @@ bool ParticleSubSystem::SyncPlayback() {
 
 void ParticleSubSystem::ExtractCurrentMesh() {
     UpdateFrameInput(f64());
-    auto frame_ref = rstd::dyn<rstd::any::Any>::from_ref(m_frame).as_ref();
+    const particle::ParticleFrameContext* frame_ref = &m_frame;
     System().Extract(frame_ref);
     m_mesh->SetDirty();
 }

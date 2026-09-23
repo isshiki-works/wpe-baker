@@ -1,6 +1,5 @@
 module;
-
-#include <rstd/enum.hpp>
+#include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
 import :scene_context;
@@ -679,7 +678,8 @@ void ParseContainerObj(SceneParseContext& context, const wpscene::ContainerObjec
 void ProcessContainers(SceneParseContext& context, mut_ref<SceneObjectVar[]> scene_objs) {
     for (usize index {}; index < scene_objs.len(); ++index) {
         auto& object = scene_objs[index];
-        if (object.is_Container()) ParseContainerObj(context, object.as_Container().value);
+        if (auto* container = std::get_if<wpscene::ContainerObject>(&object))
+            ParseContainerObj(context, *container);
     }
 }
 
@@ -690,40 +690,36 @@ void ProcessObjects(SceneParseContext& context, mut_ref<SceneObjectVar[]> scene_
 
     for (usize index {}; index < scene_objs.len(); ++index) {
         auto& object = scene_objs[index];
-        RSTD_MATCH(object) {
-            RSTD_CASE(Container) { continue; }
-            RSTD_CASE(Image, value) {
-                if (! (opts.kinds & ProcessOpts::Image)) continue;
-                ParseImageObj(context, value);
-            }
-            RSTD_CASE(Shape, value) {
-                if (! (opts.kinds & ProcessOpts::Image)) continue;
-                ParseShapeObj(context, value);
-            }
-            RSTD_CASE(Particle, value) {
-                if (! (opts.kinds & ProcessOpts::Particle)) continue;
-                ParseParticleObj(context, value);
-            }
-            RSTD_CASE(Sound, value) {
-                if (! (opts.kinds & ProcessOpts::Sound) || ! sm) continue;
-                ParseSoundObj(context, value, *sm);
-            }
-            RSTD_CASE(Light, value) {
-                if (! (opts.kinds & ProcessOpts::Light)) continue;
-                ParseLightObj(context, value);
-            }
-            RSTD_CASE(Text, value) {
-                if (! (opts.kinds & ProcessOpts::Text)) continue;
-                ParseTextObj(context, value);
-            }
-            RSTD_CASE(Model, value) {
-                if (! (opts.kinds & ProcessOpts::Model)) continue;
-                ParseModelObj(context, value);
-            }
-            RSTD_CASE(Camera, value) {
-                ParseCameraObj(context, value);
-            }
-        }
+        std::visit(
+            [&]<typename T>(T& value) {
+                if constexpr (std::is_same_v<T, wpscene::ContainerObject>) {
+                    return;
+                } else if constexpr (std::is_same_v<T, wpscene::ImageObject>) {
+                    if (! (opts.kinds & ProcessOpts::Image)) return;
+                    ParseImageObj(context, value);
+                } else if constexpr (std::is_same_v<T, wpscene::ShapeObject>) {
+                    if (! (opts.kinds & ProcessOpts::Image)) return;
+                    ParseShapeObj(context, value);
+                } else if constexpr (std::is_same_v<T, wpscene::ParticleObject>) {
+                    if (! (opts.kinds & ProcessOpts::Particle)) return;
+                    ParseParticleObj(context, value);
+                } else if constexpr (std::is_same_v<T, wpscene::SoundObject>) {
+                    if (! (opts.kinds & ProcessOpts::Sound) || ! sm) return;
+                    ParseSoundObj(context, value, *sm);
+                } else if constexpr (std::is_same_v<T, wpscene::LightObject>) {
+                    if (! (opts.kinds & ProcessOpts::Light)) return;
+                    ParseLightObj(context, value);
+                } else if constexpr (std::is_same_v<T, wpscene::TextObject>) {
+                    if (! (opts.kinds & ProcessOpts::Text)) return;
+                    ParseTextObj(context, value);
+                } else if constexpr (std::is_same_v<T, wpscene::ModelObject>) {
+                    if (! (opts.kinds & ProcessOpts::Model)) return;
+                    ParseModelObj(context, value);
+                } else if constexpr (std::is_same_v<T, wpscene::CameraObject>) {
+                    ParseCameraObj(context, value);
+                }
+            },
+            object);
     }
 
     ResolveRegisteredAssets(context);

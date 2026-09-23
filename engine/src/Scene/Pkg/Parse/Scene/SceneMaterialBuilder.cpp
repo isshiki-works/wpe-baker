@@ -891,8 +891,8 @@ void IndexSystemMediaImageFallbacks(SceneParseContext& context, slice<SceneObjec
     context.system_media_image_fallbacks.clear();
     for (usize index {}; index < scene_objs.len(); ++index) {
         const auto& object = scene_objs[index];
-        if (! object.is_Image()) continue;
-        const auto& image = object.as_Image().value;
+        if (! std::holds_alternative<wpscene::ImageObject>(object)) continue;
+        const auto& image = std::get<wpscene::ImageObject>(object);
         if (! CanUseImageAsSystemMediaFallback(image)) continue;
 
         auto texture = ResolveMaterialTextureSlot(context, image.material, usize(0));

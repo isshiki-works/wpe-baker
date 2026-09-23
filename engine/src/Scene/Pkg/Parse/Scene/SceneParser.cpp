@@ -5,6 +5,7 @@ module;
 module wescene.pkg.parse;
 import :scene_context;
 import rstd;
+import rstd.cppstd;
 import rstd.log;
 
 using namespace rstd::prelude;
@@ -35,15 +36,15 @@ auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> docu
     bool has_directional_shadow_light { false };
     bool has_directional_shadow_caster { false };
     for (const auto& object : objects) {
-        if (object.is_Light()) {
-            const auto& light = object.as_Light().value;
+        if (std::holds_alternative<wpscene::LightObject>(object)) {
+            const auto& light = std::get<wpscene::LightObject>(object);
             has_directional_shadow_light =
                 has_directional_shadow_light ||
                 ((light.light == "directional" || light.light == "ldirectional") &&
                  light.castshadow);
-        } else if (object.is_Model()) {
+        } else if (std::holds_alternative<wpscene::ModelObject>(object)) {
             has_directional_shadow_caster =
-                has_directional_shadow_caster || object.as_Model().value.castshadow;
+                has_directional_shadow_caster || std::get<wpscene::ModelObject>(object).castshadow;
         }
     }
 

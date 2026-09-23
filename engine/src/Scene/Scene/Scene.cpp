@@ -369,8 +369,9 @@ void collect_linked_ids_from_scene(Scene& scene, BTreeSet<i32>& out) {
     for (usize index {}; index < post_processes.len(); ++index) {
         const auto& pp = post_processes[index];
         for (auto& step : pp->steps) {
-            if (step.is_Pass()) {
-                collect_linked_ids_from_node(step.as_Pass().value.node.as_ptr(), scene, out);
+            if (std::holds_alternative<ScenePostProcessPass>(step)) {
+                collect_linked_ids_from_node(
+                    std::get<ScenePostProcessPass>(step).node.as_ptr(), scene, out);
             }
         }
     }
@@ -539,8 +540,8 @@ void SceneResourceIndex::Rebuild(Scene& scene, u32 generation) {
     for (usize index {}; index < post_processes.len(); ++index) {
         const auto& pp = post_processes[index];
         for (auto& step : pp->steps) {
-            if (step.is_Pass()) {
-                collect_node(collect_node, step.as_Pass().value.node.as_ptr());
+            if (std::holds_alternative<ScenePostProcessPass>(step)) {
+                collect_node(collect_node, std::get<ScenePostProcessPass>(step).node.as_ptr());
             }
         }
     }

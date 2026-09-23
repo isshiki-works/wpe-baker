@@ -1,8 +1,9 @@
 module;
-#include <rstd/enum.hpp>
+#include <rstd/macro.hpp>
 
 export module wescene.pkg.scene_obj:object;
 import rstd;
+import rstd.cppstd;
 import wescene.fs;
 import wescene.json;
 import :scene_document;
@@ -37,13 +38,9 @@ struct ContainerObject {
     FieldBindings        field_bindings;
 };
 
-class SceneObject {
-    RSTD_ENUM(SceneObject, (Container, (ContainerObject value;)), (Image, (ImageObject value;)),
-              (Shape, (ShapeObject value;)), (Particle, (ParticleObject value;)),
-              (Sound, (SoundObject value;)), (Light, (LightObject value;)),
-              (Text, (TextObject value;)), (Model, (ModelObject value;)),
-              (Camera, (CameraObject value;)))
-};
+// 场景对象：各类对象的 std::variant。
+using SceneObject = std::variant<ContainerObject, ImageObject, ShapeObject, ParticleObject,
+                                 SoundObject, LightObject, TextObject, ModelObject, CameraObject>;
 
 Vec<SceneObject> DecodeSceneObjects(ref<SceneDocument>, mut_ref<fs::VFS>);
 

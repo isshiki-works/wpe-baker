@@ -1,5 +1,3 @@
-module;
-
 export module wescene.pkg.parse:particle_parser;
 import rstd;
 import rstd.cppstd;
@@ -17,10 +15,10 @@ export namespace owe
 class ParticleParser {
 public:
     static ParticleSpawnInstruction GenInitializer(const NJson&, u32 implicit_sequence_count);
-    static Box<dyn<particle::ParticleUpdateProgram>>
+    static std::unique_ptr<particle::ParticleUpdateProgram>
     GenOperator(const NJson&, ParticleInstanceModifiers, ParticleSubSystem&, usize operator_index);
-    static Box<dyn<particle::ParticleEmitterProgram>> GenEmitter(const wpscene::Emitter&,
-                                                                 ParticleSubSystem&, usize);
+    static std::unique_ptr<particle::ParticleEmitterProgram> GenEmitter(const wpscene::Emitter&,
+                                                                        ParticleSubSystem&, usize);
     static ParticleSpawnInstruction                   GenOverride(ParticleInstanceModifiers);
 };
 } // namespace owe

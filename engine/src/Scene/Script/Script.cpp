@@ -6,7 +6,6 @@ module;
 #include <cstdio>
 #include <limits>
 #include <rstd/macro.hpp>
-#include <rstd/enum.hpp>
 #include "quickjs.h"
 
 #include "JsonNlohmann.hpp"

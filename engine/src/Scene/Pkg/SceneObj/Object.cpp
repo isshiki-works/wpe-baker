@@ -4,6 +4,7 @@ module;
 
 module wescene.pkg.scene_obj;
 import rstd;
+import rstd.cppstd;
 import rstd.log;
 import wescene.core;
 
@@ -57,56 +58,55 @@ Vec<SceneObject> DecodeSceneObjects(ref<SceneDocument> document, mut_ref<fs::VFS
         case SceneObjectKind::Container: {
             if (! record.metadata.has_id) break;
             ContainerObject value;
-            if (value.FromJson(record.authored))
-                objects.push(SceneObject::Container(rstd::move(value)));
+            if (value.FromJson(record.authored)) objects.push(SceneObject(rstd::move(value)));
             break;
         }
         case SceneObjectKind::Image:
             DecodeObject<ImageObject>(
                 objects, record, *vfs, document->metadata.pkg_version, [](ImageObject value) {
-                    return SceneObject::Image(rstd::move(value));
+                    return SceneObject(rstd::move(value));
                 });
             break;
         case SceneObjectKind::Shape:
             DecodeObject<ShapeObject>(
                 objects, record, *vfs, document->metadata.pkg_version, [](ShapeObject value) {
-                    return SceneObject::Shape(rstd::move(value));
+                    return SceneObject(rstd::move(value));
                 });
             break;
         case SceneObjectKind::Particle:
             DecodeObject<ParticleObject>(
                 objects, record, *vfs, document->metadata.pkg_version, [](ParticleObject value) {
-                    return SceneObject::Particle(rstd::move(value));
+                    return SceneObject(rstd::move(value));
                 });
             break;
         case SceneObjectKind::Sound:
             DecodeObject<SoundObject>(
                 objects, record, *vfs, document->metadata.pkg_version, [](SoundObject value) {
-                    return SceneObject::Sound(rstd::move(value));
+                    return SceneObject(rstd::move(value));
                 });
             break;
         case SceneObjectKind::Light:
             DecodeObject<LightObject>(
                 objects, record, *vfs, document->metadata.pkg_version, [](LightObject value) {
-                    return SceneObject::Light(rstd::move(value));
+                    return SceneObject(rstd::move(value));
                 });
             break;
         case SceneObjectKind::Text:
             DecodeObject<TextObject>(
                 objects, record, *vfs, document->metadata.pkg_version, [](TextObject value) {
-                    return SceneObject::Text(rstd::move(value));
+                    return SceneObject(rstd::move(value));
                 });
             break;
         case SceneObjectKind::Model:
             DecodeObject<ModelObject>(
                 objects, record, *vfs, document->metadata.pkg_version, [](ModelObject value) {
-                    return SceneObject::Model(rstd::move(value));
+                    return SceneObject(rstd::move(value));
                 });
             break;
         case SceneObjectKind::Camera:
             DecodeObject<CameraObject>(
                 objects, record, *vfs, document->metadata.pkg_version, [](CameraObject value) {
-                    return SceneObject::Camera(rstd::move(value));
+                    return SceneObject(rstd::move(value));
                 });
             break;
         case SceneObjectKind::Unknown: break;

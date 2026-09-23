@@ -1,6 +1,5 @@
 module;
-
-#include <rstd/enum.hpp>
+#include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
 import :scene_context;
@@ -99,55 +98,49 @@ HashSet<i32> CollectLinkedSourceIds(slice<SceneObjectVar> objects) {
     HashSet<i32> out;
     for (usize index {}; index < objects.len(); ++index) {
         const auto& object = objects[index];
-        RSTD_MATCH(object) {
-            RSTD_CASE(Container, value) {
-                CollectExternalDependencies(value.dependencies, i32(value.id), out);
-                CollectLinkedSourceIdsFromValue(value.instance, out);
-            }
-            RSTD_CASE(Image, value) {
-                CollectExternalDependencies(value.dependencies, i32(value.id), out);
-                CollectLinkedSourceIds(value.material, out);
-                for (const auto& effect : value.effects)
-                    CollectLinkedSourceIds(effect, out, Some(i32(value.id)));
-                for (const auto& texture : value.instance.textures)
-                    CollectLinkedSourceId(texture, out);
-                for (const auto& binding : value.instance.usertextures)
-                    CollectLinkedSourceIdsFromValue(binding, out);
-            }
-            RSTD_CASE(Shape, value) {
-                CollectExternalDependencies(value.dependencies, i32(value.id), out);
-                for (const auto& effect : value.effects)
-                    CollectLinkedSourceIds(effect, out, Some(i32(value.id)));
-            }
-            RSTD_CASE(Particle, value) {
-                CollectExternalDependencies(value.dependencies, i32(value.id), out);
-                CollectLinkedSourceIds(value.particleObj, out);
-                CollectLinkedSourceIdsFromValue(value.instance, out);
-                CollectLinkedSourceIdsFromValue(value.particlesrc, out);
-            }
-            RSTD_CASE(Sound, value) {
-                CollectExternalDependencies(value.dependencies, i32(value.id), out);
-                CollectLinkedSourceIdsFromValue(value.instance, out);
-            }
-            RSTD_CASE(Light, value) {
-                CollectExternalDependencies(value.dependencies, i32(value.id), out);
-                CollectLinkedSourceIdsFromValue(value.instance, out);
-            }
-            RSTD_CASE(Text, value) {
-                CollectExternalDependencies(value.dependencies, i32(value.id), out);
-                CollectLinkedSourceIdsFromValue(value.instance, out);
-                for (const auto& effect : value.effects)
-                    CollectLinkedSourceIds(effect, out, Some(i32(value.id)));
-            }
-            RSTD_CASE(Model, value) {
-                CollectExternalDependencies(value.dependencies, i32(value.id), out);
-                CollectLinkedSourceIdsFromValue(value.instance, out);
-            }
-            RSTD_CASE(Camera, value) {
-                CollectExternalDependencies(value.dependencies, i32(value.id), out);
-                CollectLinkedSourceIdsFromValue(value.instance, out);
-            }
-        }
+        std::visit(
+            [&]<typename T>(const T& value) {
+                if constexpr (std::is_same_v<T, wpscene::ContainerObject>) {
+                    CollectExternalDependencies(value.dependencies, i32(value.id), out);
+                    CollectLinkedSourceIdsFromValue(value.instance, out);
+                } else if constexpr (std::is_same_v<T, wpscene::ImageObject>) {
+                    CollectExternalDependencies(value.dependencies, i32(value.id), out);
+                    CollectLinkedSourceIds(value.material, out);
+                    for (const auto& effect : value.effects)
+                        CollectLinkedSourceIds(effect, out, Some(i32(value.id)));
+                    for (const auto& texture : value.instance.textures)
+                        CollectLinkedSourceId(texture, out);
+                    for (const auto& binding : value.instance.usertextures)
+                        CollectLinkedSourceIdsFromValue(binding, out);
+                } else if constexpr (std::is_same_v<T, wpscene::ShapeObject>) {
+                    CollectExternalDependencies(value.dependencies, i32(value.id), out);
+                    for (const auto& effect : value.effects)
+                        CollectLinkedSourceIds(effect, out, Some(i32(value.id)));
+                } else if constexpr (std::is_same_v<T, wpscene::ParticleObject>) {
+                    CollectExternalDependencies(value.dependencies, i32(value.id), out);
+                    CollectLinkedSourceIds(value.particleObj, out);
+                    CollectLinkedSourceIdsFromValue(value.instance, out);
+                    CollectLinkedSourceIdsFromValue(value.particlesrc, out);
+                } else if constexpr (std::is_same_v<T, wpscene::SoundObject>) {
+                    CollectExternalDependencies(value.dependencies, i32(value.id), out);
+                    CollectLinkedSourceIdsFromValue(value.instance, out);
+                } else if constexpr (std::is_same_v<T, wpscene::LightObject>) {
+                    CollectExternalDependencies(value.dependencies, i32(value.id), out);
+                    CollectLinkedSourceIdsFromValue(value.instance, out);
+                } else if constexpr (std::is_same_v<T, wpscene::TextObject>) {
+                    CollectExternalDependencies(value.dependencies, i32(value.id), out);
+                    CollectLinkedSourceIdsFromValue(value.instance, out);
+                    for (const auto& effect : value.effects)
+                        CollectLinkedSourceIds(effect, out, Some(i32(value.id)));
+                } else if constexpr (std::is_same_v<T, wpscene::ModelObject>) {
+                    CollectExternalDependencies(value.dependencies, i32(value.id), out);
+                    CollectLinkedSourceIdsFromValue(value.instance, out);
+                } else if constexpr (std::is_same_v<T, wpscene::CameraObject>) {
+                    CollectExternalDependencies(value.dependencies, i32(value.id), out);
+                    CollectLinkedSourceIdsFromValue(value.instance, out);
+                }
+            },
+            object);
     }
     return out;
 }
@@ -251,17 +244,18 @@ Vec<SceneObjectVar> FilterSceneObjects(Vec<SceneObjectVar>          decoded,
         auto force_invisible = [&](i32 id) {
             return HasHiddenUserAncestor(rstd::as_cast<u32>(id), visibility);
         };
-        bool keep = object.visit_mut([&]<auto Tag>(rstd::choice_tag<Tag>, auto& payload) {
-            auto& value = payload.value;
-            if constexpr (Tag == SceneObjectVar::Tag::Container) {
-                ResolveVisibleUserBinding(value.visible, value.visible_user, user_properties);
-                if (force_invisible(value.id)) value.visible = false;
-                return true;
-            } else {
-                return PrepareSceneObject(
-                    value, user_properties, linked_source_ids, force_invisible(value.id));
-            }
-        });
+        bool keep = std::visit(
+            [&]<typename T>(T& value) {
+                if constexpr (std::is_same_v<T, wpscene::ContainerObject>) {
+                    ResolveVisibleUserBinding(value.visible, value.visible_user, user_properties);
+                    if (force_invisible(value.id)) value.visible = false;
+                    return true;
+                } else {
+                    return PrepareSceneObject(
+                        value, user_properties, linked_source_ids, force_invisible(value.id));
+                }
+            },
+            object);
         if (keep) result.push(rstd::move(object));
     }
     return result;
@@ -313,8 +307,8 @@ array<i32, 2> ResolveOrthoProjectionExtent(const wpscene::SceneMetadata& metadat
     height = i32();
     for (usize index {}; index < objects.len(); ++index) {
         const auto& object = objects[index];
-        if (! object.is_Image()) continue;
-        const auto& image = object.as_Image().value;
+        if (! std::holds_alternative<wpscene::ImageObject>(object)) continue;
+        const auto& image = std::get<wpscene::ImageObject>(object);
         const auto  area  = rstd::as_cast<i32>(image.size[0] * image.size[1]);
         if (area > width * height) {
             width  = rstd::as_cast<i32>(image.size[0]);

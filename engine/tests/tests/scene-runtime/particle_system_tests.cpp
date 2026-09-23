@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <typeindex>
 
 import rstd;
 import rstd.cppstd;
@@ -25,7 +26,7 @@ auto Register(particle::ParticleSchemaBuilder& builder, ref<str> name, ref<str> 
     return result.unwrap();
 }
 
-struct TemperatureAttribute {
+struct TemperatureAttribute : particle::ParticleAttribute {
     using Value = float;
 
     static inline usize values_mut_calls {};
@@ -33,17 +34,15 @@ struct TemperatureAttribute {
     TemperatureAttribute(particle::ParticleAttributeDescriptor descriptor, Value default_value)
         : storage(rstd::move(descriptor), default_value) {}
 
-    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> {
+    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> override {
         return storage.Descriptor();
     }
-    auto ConcreteType() const noexcept -> rstd::any::TypeId { return storage.ConcreteType(); }
-    auto ValueType() const noexcept -> rstd::any::TypeId { return storage.ValueTypeId(); }
-    auto Len() const noexcept -> usize { return storage.Len(); }
-    auto Capacity() const noexcept -> usize { return storage.Capacity(); }
-    void Reserve(usize total_slots) { storage.Reserve(total_slots); }
-    void AppendDefaults(usize count) { storage.AppendDefaults(count); }
-    void ResetSlots(slice<particle::ParticleSlot> slots) { storage.ResetSlots(slots); }
-    void Clear() { storage.Clear(); }
+    auto Len() const noexcept -> usize override { return storage.Len(); }
+    auto Capacity() const noexcept -> usize override { return storage.Capacity(); }
+    void Reserve(usize total_slots) override { storage.Reserve(total_slots); }
+    void AppendDefaults(usize count) override { storage.AppendDefaults(count); }
+    void ResetSlots(slice<particle::ParticleSlot> slots) override { storage.ResetSlots(slots); }
+    void Clear() override { storage.Clear(); }
     auto Values() const noexcept -> slice<Value> { return storage.Values(); }
     auto ValuesMut() noexcept -> mut_ref<Value[]> {
         ++values_mut_calls;
@@ -167,7 +166,7 @@ struct InvalidKeyProgram {
     void Update(particle::ParticleUpdateContext&) {}
 };
 
-struct EmptyFrame {};
+struct EmptyFrame : owe::particle::ParticleFrameContext {};
 
 } // namespace
 
@@ -226,13 +225,14 @@ TEST(ParticleSchema, RejectsMissingProgramRequirementsDuringPrepare) {
     particle::ParticleSchemaBuilder builder;
     auto                            position = builder.PositionKey();
     particle::ParticleProgram       program;
-    program.AddUpdate(Box<dyn<particle::ParticleUpdateProgram>>::make(InvalidKeyProgram {
-        .key =
-            particle::ParticleAttributeKey<particle::ColorAttribute> {
-                .id          = position.id,
-                .schema_slot = position.schema_slot,
-            },
-    }));
+    program.AddUpdate(
+        particle::MakeParticleProgram<particle::ParticleUpdateProgram>(InvalidKeyProgram {
+            .key =
+                particle::ParticleAttributeKey<particle::ColorAttribute> {
+                    .id          = position.id,
+                    .schema_slot = position.schema_slot,
+                },
+        }));
 
     auto definition = particle::ParticleDefinition::Prepare(
         rstd::move(builder).Build(), rstd::move(program), usize(4));
@@ -291,19 +291,19 @@ TEST(ParticleProgram, RunsPreparedProgramsInContractOrder) {
     usize               spawned {};
 
     particle::ParticleProgram program;
-    program.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    program.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         TraceEmitter { .trace = rstd::addressof(trace) }));
-    program.AddSpawn(Box<dyn<particle::ParticleSpawnProgram>>::make(
+    program.AddSpawn(particle::MakeParticleProgram<particle::ParticleSpawnProgram>(
         TraceSpawn { .trace = rstd::addressof(trace), .temperature = temperature }));
-    program.AddLifecycle(Box<dyn<particle::ParticleLifecycleProgram>>::make(
+    program.AddLifecycle(particle::MakeParticleProgram<particle::ParticleLifecycleProgram>(
         TraceLifecycle { .trace = rstd::addressof(trace) }));
-    program.AddEvent(Box<dyn<particle::ParticleEventProgram>>::make(
+    program.AddEvent(particle::MakeParticleProgram<particle::ParticleEventProgram>(
         TraceEvent { .trace = rstd::addressof(trace), .spawned = rstd::addressof(spawned) }));
-    program.AddUpdate(Box<dyn<particle::ParticleUpdateProgram>>::make(
+    program.AddUpdate(particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
         TraceUpdate { .trace = rstd::addressof(trace), .value = i32(5) }));
-    program.AddPostUpdate(Box<dyn<particle::ParticleUpdateProgram>>::make(
+    program.AddPostUpdate(particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
         TraceUpdate { .trace = rstd::addressof(trace), .value = i32(6) }));
-    program.AddExtractor(Box<dyn<particle::ParticleExtractProgram>>::make(
+    program.AddExtractor(particle::MakeParticleProgram<particle::ParticleExtractProgram>(
         TraceExtract { .trace = rstd::addressof(trace) }));
 
     auto definition = particle::ParticleDefinition::Prepare(
@@ -312,7 +312,7 @@ TEST(ParticleProgram, RunsPreparedProgramsInContractOrder) {
     particle::ParticleSystem system(rstd::move(definition).unwrap());
     auto&                    instance = system.CreateInstance();
     EmptyFrame               frame;
-    auto                     frame_ref = rstd::dyn<rstd::any::Any>::from_ref(frame).as_ref();
+    const owe::particle::ParticleFrameContext* frame_ref = &frame;
     system.Advance(instance, frame_ref, f64(1.0 / 60.0), f64(1.0 / 60.0));
     system.Extract(frame_ref);
 
@@ -333,12 +333,13 @@ TEST(ParticleProgram, ReusesExpiredCapacityWithoutAnEmptyFrame) {
     rstd::vec::Vec<i32> transitions;
 
     particle::ParticleProgram program;
-    program.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(ContinuousEmitter {}));
-    program.AddSpawn(
-        Box<dyn<particle::ParticleSpawnProgram>>::make(LifetimeSpawn { .lifetime = lifetime }));
-    program.AddLifecycle(Box<dyn<particle::ParticleLifecycleProgram>>::make(
+    program.AddEmitter(
+        particle::MakeParticleProgram<particle::ParticleEmitterProgram>(ContinuousEmitter {}));
+    program.AddSpawn(particle::MakeParticleProgram<particle::ParticleSpawnProgram>(
+        LifetimeSpawn { .lifetime = lifetime }));
+    program.AddLifecycle(particle::MakeParticleProgram<particle::ParticleLifecycleProgram>(
         ExpiringLifecycle { .lifetime = lifetime }));
-    program.AddEvent(Box<dyn<particle::ParticleEventProgram>>::make(
+    program.AddEvent(particle::MakeParticleProgram<particle::ParticleEventProgram>(
         TransitionTraceEvent { .trace = rstd::addressof(transitions) }));
 
     auto definition = particle::ParticleDefinition::Prepare(
@@ -347,7 +348,7 @@ TEST(ParticleProgram, ReusesExpiredCapacityWithoutAnEmptyFrame) {
     particle::ParticleSystem system(rstd::move(definition).unwrap());
     auto&                    instance = system.CreateInstance();
     EmptyFrame               frame;
-    auto                     frame_ref = rstd::dyn<rstd::any::Any>::from_ref(frame).as_ref();
+    const owe::particle::ParticleFrameContext* frame_ref = &frame;
 
     system.Advance(instance, frame_ref, f64(1.0), f64(1.0));
     EXPECT_TRUE(instance.Storage().Values(instance.Storage().SlotStateKey())[usize()].active);
@@ -394,7 +395,7 @@ TEST(ParticleSubSystem, PlaybackResetClearsAndRestartsIndependentStorage) {
     subsystem.SetPlaybackState(playback.clone());
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
         owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(4)));
-    subsystem.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    subsystem.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(subsystem.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
                                       .directions    = { 1.0f, 1.0f, 0.0f },
@@ -444,7 +445,7 @@ TEST(ParticleSubSystem, ConvertsWorldSpaceFollowAnchorsIntoChildLocalSpace) {
     parent.SetOwnerNode(parent_node.as_ptr());
     parent.AddInitializer(owe::ParticleParser::GenInitializer(
         owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
-    parent.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    parent.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(parent.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
                                       .origin        = { 5.0f, 6.0f, 0.0f },
@@ -618,7 +619,7 @@ TEST(ParticleSubSystem, AppliesVortexAroundWorldSpaceOwner) {
     subsystem.SetInstanceModifiers(modifiers.Clone());
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
         owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
-    subsystem.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    subsystem.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::BoxEmitterProgram(subsystem.SpawnPipeline(),
                                owe::ParticleBoxEmitterArgs {
                                    .origin        = { 200.0f, 0.0f, 0.0f },
@@ -667,7 +668,7 @@ TEST(ParticleSubSystem, UsesEmitterPeriodLimitForImplicitControlpointSequenceCou
         owe::ParseNJson(R"({"name":"mapsequencebetweencontrolpoints","count":3})").unwrap(), u32(4));
     EXPECT_EQ(explicit_sequence.SequenceCount(), Some(u32(3)));
     EXPECT_EQ(subsystem.RopeSequenceCount(), Some(u32(4)));
-    subsystem.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    subsystem.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(subsystem.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
                                       .directions    = { 1.0f, 1.0f, 0.0f },
@@ -698,7 +699,7 @@ TEST(ParticleSubSystem, MapsParentParticlesIntoStaticChildControlpoints) {
                                   owe::ParticleAnimationSpec {});
     parent.AddInitializer(owe::ParticleParser::GenInitializer(
         owe::ParseNJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(2)));
-    parent.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    parent.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(parent.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
                                       .origin        = { 50.0f, 0.0f, 0.0f },

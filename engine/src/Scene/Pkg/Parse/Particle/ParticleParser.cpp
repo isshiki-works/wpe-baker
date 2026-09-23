@@ -1,6 +1,6 @@
 module;
-
-#include <rstd/enum.hpp>
+#include <rstd/macro.hpp>
+#include <typeindex>
 
 module wescene.pkg.parse;
 import eigen;
@@ -99,7 +99,7 @@ struct MapSequenceAroundControlPointProgram {
     MapSequenceAroundControlPoint config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>> frame_context) {
+                    const particle::ParticleFrameContext* frame_context) {
         auto frame         = ParticleFrameFrom(frame_context);
         auto controlpoints = frame->subsystem->Controlpoints();
         auto controlpoint  = rstd::as_cast<usize>(config.controlpoint % i32(8));
@@ -158,7 +158,7 @@ struct MapSequenceBetweenControlPointsProgram {
     MapSequenceBetweenControlPoints config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>> frame_context) {
+                    const particle::ParticleFrameContext* frame_context) {
         auto frame         = ParticleFrameFrom(frame_context);
         auto controlpoints = frame->subsystem->Controlpoints();
         auto start_index   = rstd::as_cast<usize>(config.controlpoint_start % i32(8));
@@ -242,7 +242,7 @@ std::array<float, N> mapVertex(const std::array<float, N>& v, float (*oper)(floa
 
 struct NoopSpawnProgram {
     void Initialize(ParticleSpawnColumns&, particle::ParticleSpawnRequest,
-                    ref<dyn<rstd::any::Any>>) {}
+                    const particle::ParticleFrameContext*) {}
 };
 
 struct ColorRandomProgram {
@@ -250,7 +250,7 @@ struct ColorRandomProgram {
     std::array<float, 3> max;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto            random = Random::get(0.0, 1.0);
         Eigen::Vector3f value;
         for (usize component {}; component < usize(3); ++component) {
@@ -266,7 +266,7 @@ struct LifetimeRandomProgram {
     SingleRandom config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto value                            = GenRandom(config.min, config.max, config.exponent);
         columns.lifetimes[request.slot.index] = value;
         columns.initial_lifetimes[request.slot.index] = value;
@@ -277,7 +277,7 @@ struct SizeRandomProgram {
     SingleRandom config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto value                        = GenRandom(config.min, config.max, config.exponent);
         columns.sizes[request.slot.index] = value;
         columns.initial_sizes[request.slot.index] = value;
@@ -288,7 +288,7 @@ struct AlphaRandomProgram {
     SingleRandom config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto value                         = GenRandom(config.min, config.max, config.exponent);
         columns.alphas[request.slot.index] = value;
         columns.initial_alphas[request.slot.index] = value;
@@ -307,7 +307,7 @@ struct VectorRandomProgram {
     Target    target { Target::Velocity };
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         Eigen::Vector3f value;
         for (usize component {}; component < usize(3); ++component) {
             auto raw   = component.to_primitive();
@@ -330,7 +330,7 @@ struct TurbulentVelocityRandomProgram {
     Eigen::Vector3f position;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto  duration = request.emitter_duration;
         float speed    = Random::get(config.speedmin, config.speedmax);
         float phase    = Random::get(config.phasemin, config.phasemax);
@@ -360,7 +360,7 @@ struct OverrideSpawnProgram {
     ParticleInstanceModifiers modifiers;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto index = request.slot.index;
         columns.lifetimes[index] *= modifiers.Lifetime();
         columns.initial_lifetimes[index] = columns.lifetimes[index];
@@ -383,47 +383,15 @@ struct OverrideSpawnProgram {
     }
 };
 
-class ParticleSpawnInstructionValue {
-    RSTD_ENUM(ParticleSpawnInstructionValue, (Noop, (NoopSpawnProgram value;)),
-              (ColorRandom, (ColorRandomProgram value;)),
-              (LifetimeRandom, (LifetimeRandomProgram value;)),
-              (SizeRandom, (SizeRandomProgram value;)), (AlphaRandom, (AlphaRandomProgram value;)),
-              (VectorRandom, (VectorRandomProgram value;)),
-              (TurbulentVelocityRandom, (TurbulentVelocityRandomProgram value;)),
-              (MapSequenceAroundControlPoint, (MapSequenceAroundControlPointProgram value;)),
-              (MapSequenceBetweenControlPoints, (MapSequenceBetweenControlPointsProgram value;)),
-              (Override, (OverrideSpawnProgram value;)))
-};
-
-template<typename T>
-auto MakeParticleSpawnInstructionValue(T value) -> ParticleSpawnInstructionValue {
-    if constexpr (same<T, NoopSpawnProgram>)
-        return ParticleSpawnInstructionValue::Noop(rstd::move(value));
-    else if constexpr (same<T, ColorRandomProgram>)
-        return ParticleSpawnInstructionValue::ColorRandom(rstd::move(value));
-    else if constexpr (same<T, LifetimeRandomProgram>)
-        return ParticleSpawnInstructionValue::LifetimeRandom(rstd::move(value));
-    else if constexpr (same<T, SizeRandomProgram>)
-        return ParticleSpawnInstructionValue::SizeRandom(rstd::move(value));
-    else if constexpr (same<T, AlphaRandomProgram>)
-        return ParticleSpawnInstructionValue::AlphaRandom(rstd::move(value));
-    else if constexpr (same<T, VectorRandomProgram>)
-        return ParticleSpawnInstructionValue::VectorRandom(rstd::move(value));
-    else if constexpr (same<T, TurbulentVelocityRandomProgram>)
-        return ParticleSpawnInstructionValue::TurbulentVelocityRandom(rstd::move(value));
-    else if constexpr (same<T, MapSequenceAroundControlPointProgram>)
-        return ParticleSpawnInstructionValue::MapSequenceAroundControlPoint(rstd::move(value));
-    else if constexpr (same<T, MapSequenceBetweenControlPointsProgram>)
-        return ParticleSpawnInstructionValue::MapSequenceBetweenControlPoints(rstd::move(value));
-    else {
-        static_assert(same<T, OverrideSpawnProgram>);
-        return ParticleSpawnInstructionValue::Override(rstd::move(value));
-    }
-}
+using ParticleSpawnInstructionValue =
+    std::variant<NoopSpawnProgram, ColorRandomProgram, LifetimeRandomProgram, SizeRandomProgram,
+                 AlphaRandomProgram, VectorRandomProgram, TurbulentVelocityRandomProgram,
+                 MapSequenceAroundControlPointProgram, MapSequenceBetweenControlPointsProgram,
+                 OverrideSpawnProgram>;
 
 struct ParticleSpawnInstruction::Impl {
     template<typename T>
-    explicit Impl(T value): value(MakeParticleSpawnInstructionValue(rstd::move(value))) {}
+    explicit Impl(T value): value(rstd::move(value)) {}
 
     ParticleSpawnInstructionValue value;
 };
@@ -435,21 +403,10 @@ auto ParticleSpawnInstruction::operator=(ParticleSpawnInstruction&&) noexcept
 ParticleSpawnInstruction::~ParticleSpawnInstruction() = default;
 
 auto ParticleSpawnInstruction::SequenceCount() const -> Option<u32> {
-    RSTD_MATCH(m_impl->value) {
-        RSTD_CASE(Noop) { return None(); }
-        RSTD_CASE(ColorRandom) { return None(); }
-        RSTD_CASE(LifetimeRandom) { return None(); }
-        RSTD_CASE(SizeRandom) { return None(); }
-        RSTD_CASE(AlphaRandom) { return None(); }
-        RSTD_CASE(VectorRandom) { return None(); }
-        RSTD_CASE(TurbulentVelocityRandom) { return None(); }
-        RSTD_CASE(MapSequenceAroundControlPoint) { return None(); }
-        RSTD_CASE(MapSequenceBetweenControlPoints, instruction) {
-            return Some(rstd::as_cast<u32>(instruction.config.count));
-        }
-        RSTD_CASE(Override) { return None(); }
-    }
-    rstd::unreachable();
+    if (const auto* instruction =
+            std::get_if<MapSequenceBetweenControlPointsProgram>(&m_impl->value))
+        return Some(rstd::as_cast<u32>(instruction->config.count));
+    return None();
 }
 
 template<typename T>
@@ -457,27 +414,14 @@ auto ParticleSpawnInstruction::Make(T value) -> ParticleSpawnInstruction {
     return ParticleSpawnInstruction(Box<Impl>::make(rstd::move(value)));
 }
 
-void ParticleSpawnInstruction::Initialize(ParticleSpawnColumns&          columns,
-                                          particle::ParticleSpawnRequest request,
-                                          ref<dyn<rstd::any::Any>>       frame) {
-    RSTD_MATCH(m_impl->value) {
-        RSTD_CASE(Noop, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(ColorRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(LifetimeRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(SizeRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(AlphaRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(VectorRandom, instruction) { instruction.Initialize(columns, request, frame); }
-        RSTD_CASE(TurbulentVelocityRandom, instruction) {
+void ParticleSpawnInstruction::Initialize(ParticleSpawnColumns&                 columns,
+                                          particle::ParticleSpawnRequest        request,
+                                          const particle::ParticleFrameContext* frame) {
+    std::visit(
+        [&](auto& instruction) {
             instruction.Initialize(columns, request, frame);
-        }
-        RSTD_CASE(MapSequenceAroundControlPoint, instruction) {
-            instruction.Initialize(columns, request, frame);
-        }
-        RSTD_CASE(MapSequenceBetweenControlPoints, instruction) {
-            instruction.Initialize(columns, request, frame);
-        }
-        RSTD_CASE(Override, instruction) { instruction.Initialize(columns, request, frame); }
-    }
+        },
+        m_impl->value);
 }
 
 ParticleSpawnInstruction ParticleParser::GenInitializer(const NJson& wpj,
@@ -814,24 +758,22 @@ struct MaintainDistanceState {
     bool  initialized { false };
 };
 
-class MaintainDistanceAttribute {
+class MaintainDistanceAttribute : public particle::ParticleAttribute {
 public:
     using Value = MaintainDistanceState;
 
     MaintainDistanceAttribute(particle::ParticleAttributeDescriptor descriptor, Value default_value)
         : m_storage(rstd::move(descriptor), rstd::move(default_value)) {}
 
-    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> {
+    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> override {
         return m_storage.Descriptor();
     }
-    auto ConcreteType() const noexcept -> rstd::any::TypeId { return m_storage.ConcreteType(); }
-    auto ValueType() const noexcept -> rstd::any::TypeId { return m_storage.ValueTypeId(); }
-    auto Len() const noexcept -> usize { return m_storage.Len(); }
-    auto Capacity() const noexcept -> usize { return m_storage.Capacity(); }
-    void Reserve(usize total_slots) { m_storage.Reserve(total_slots); }
-    void AppendDefaults(usize count) { m_storage.AppendDefaults(count); }
-    void ResetSlots(slice<particle::ParticleSlot> slots) { m_storage.ResetSlots(slots); }
-    void Clear() { m_storage.Clear(); }
+    auto Len() const noexcept -> usize override { return m_storage.Len(); }
+    auto Capacity() const noexcept -> usize override { return m_storage.Capacity(); }
+    void Reserve(usize total_slots) override { m_storage.Reserve(total_slots); }
+    void AppendDefaults(usize count) override { m_storage.AppendDefaults(count); }
+    void ResetSlots(slice<particle::ParticleSlot> slots) override { m_storage.ResetSlots(slots); }
+    void Clear() override { m_storage.Clear(); }
     auto Values() const noexcept -> slice<Value> { return m_storage.Values(); }
     auto ValuesMut() noexcept -> mut_ref<Value[]> { return m_storage.ValuesMut(); }
     auto CloneEmpty() const -> MaintainDistanceAttribute {
@@ -1391,7 +1333,7 @@ struct NoopUpdateOperator {
     void Update(particle::ParticleUpdateContext&) {}
 };
 
-Box<dyn<particle::ParticleUpdateProgram>>
+std::unique_ptr<particle::ParticleUpdateProgram>
 ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifiers,
                             ParticleSubSystem& subsystem, usize operator_index) {
     auto attributes = subsystem.Attributes();
@@ -1404,7 +1346,7 @@ ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifier
             std::array<float, 3> gravity { 0, 0, 0 };
             owe::GetJsonValue(wpj, "drag", drag, false);
             owe::GetJsonValue(wpj, "gravity", gravity, false);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(MovementOperator {
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(MovementOperator {
                 .attributes = attributes,
                 .drag       = drag,
                 .gravity    = Vector3f(gravity.data()).cast<double>(),
@@ -1415,58 +1357,65 @@ ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifier
             std::array<float, 3> force { 0, 0, 0 };
             owe::GetJsonValue(wpj, "drag", drag, false);
             owe::GetJsonValue(wpj, "force", force, false);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(AngularMovementOperator {
-                .attributes = attributes,
-                .drag       = drag,
-                .force      = Vector3f(force.data()).cast<double>(),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                AngularMovementOperator {
+                    .attributes = attributes,
+                    .drag       = drag,
+                    .force      = Vector3f(force.data()).cast<double>(),
+                });
         } else if (name == "sizechange") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(ScalarChangeOperator {
-                .attributes = attributes,
-                .change     = ValueChange::ReadFromJson(wpj),
-                .target     = ScalarChangeOperator::Target::Size,
-                .modifiers  = modifiers.Clone(),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                ScalarChangeOperator {
+                    .attributes = attributes,
+                    .change     = ValueChange::ReadFromJson(wpj),
+                    .target     = ScalarChangeOperator::Target::Size,
+                    .modifiers  = modifiers.Clone(),
+                });
         } else if (name == "alphafade") {
             float fadeintime { 0.5f }, fadeouttime { 0.5f };
             owe::GetJsonValue(wpj, "fadeintime", fadeintime, false);
             owe::GetJsonValue(wpj, "fadeouttime", fadeouttime, false);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(AlphaFadeOperator {
-                .attributes = attributes,
-                .fade_in    = fadeintime,
-                .fade_out   = fadeouttime,
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                AlphaFadeOperator {
+                    .attributes = attributes,
+                    .fade_in    = fadeintime,
+                    .fade_out   = fadeouttime,
+                });
         } else if (name == "alphachange") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(ScalarChangeOperator {
-                .attributes = attributes,
-                .change     = ValueChange::ReadFromJson(wpj),
-                .target     = ScalarChangeOperator::Target::Alpha,
-                .modifiers  = modifiers.Clone(),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                ScalarChangeOperator {
+                    .attributes = attributes,
+                    .change     = ValueChange::ReadFromJson(wpj),
+                    .target     = ScalarChangeOperator::Target::Alpha,
+                    .modifiers  = modifiers.Clone(),
+                });
         } else if (name == "colorchange") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(ColorChangeOperator {
-                .attributes = attributes,
-                .change     = VecChange::ReadFromJson(wpj),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                ColorChangeOperator {
+                    .attributes = attributes,
+                    .change     = VecChange::ReadFromJson(wpj),
+                });
         } else if (name == "oscillatealpha") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(OscillateScalarOperator {
-                .attributes = attributes,
-                .state_attributes =
-                    RegisterOscillationAttributes(subsystem, operator_index, "alpha"),
-                .frequency = FrequencyValue::ReadFromJson(wpj, name),
-                .target    = OscillateScalarOperator::Target::Alpha,
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                OscillateScalarOperator {
+                    .attributes = attributes,
+                    .state_attributes =
+                        RegisterOscillationAttributes(subsystem, operator_index, "alpha"),
+                    .frequency = FrequencyValue::ReadFromJson(wpj, name),
+                    .target    = OscillateScalarOperator::Target::Alpha,
+                });
         } else if (name == "oscillatesize") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(OscillateScalarOperator {
-                .attributes = attributes,
-                .state_attributes =
-                    RegisterOscillationAttributes(subsystem, operator_index, "size"),
-                .frequency = FrequencyValue::ReadFromJson(wpj, name),
-                .target    = OscillateScalarOperator::Target::Size,
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                OscillateScalarOperator {
+                    .attributes = attributes,
+                    .state_attributes =
+                        RegisterOscillationAttributes(subsystem, operator_index, "size"),
+                    .frequency = FrequencyValue::ReadFromJson(wpj, name),
+                    .target    = OscillateScalarOperator::Target::Size,
+                });
         } else if (name == "oscillateposition") {
             auto frequency = FrequencyValue::ReadFromJson(wpj, name);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
                 OscillatePositionOperator {
                     .attributes  = attributes,
                     .frequencies = { frequency, frequency, frequency },
@@ -1478,43 +1427,46 @@ ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifier
                 });
         } else if (name == "turbulence") {
             auto config = Turbulence::ReadFromJson(wpj);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(TurbulenceOperator {
-                .attributes = attributes,
-                .config     = config,
-                .modifiers  = modifiers.Clone(),
-                .phase      = Random::get(config.phasemin, config.phasemax),
-                .speed      = Random::get(config.speedmin, config.speedmax),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                TurbulenceOperator {
+                    .attributes = attributes,
+                    .config     = config,
+                    .modifiers  = modifiers.Clone(),
+                    .phase      = Random::get(config.phasemin, config.phasemax),
+                    .speed      = Random::get(config.speedmin, config.speedmax),
+                });
         } else if (name == "vortex") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(VortexOperator {
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(VortexOperator {
                 .attributes = attributes,
                 .config     = Vortex::ReadFromJson(wpj),
             });
         } else if (name == "vortex_v2") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(VortexOperator {
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(VortexOperator {
                 .attributes = attributes,
                 .config     = Vortex::ReadFromJson(wpj),
                 .extended   = true,
             });
         } else if (name == "maintaindistancetocontrolpoint") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(MaintainDistanceOperator {
-                .attributes = attributes,
-                .config     = MaintainDistance::ReadFromJson(wpj),
-                .state_key  = RegisterMaintainDistanceAttribute(subsystem, operator_index),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                MaintainDistanceOperator {
+                    .attributes = attributes,
+                    .config     = MaintainDistance::ReadFromJson(wpj),
+                    .state_key  = RegisterMaintainDistanceAttribute(subsystem, operator_index),
+                });
         } else if (name == "controlpointattract") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(ControlPointAttractOperator {
-                .attributes = attributes,
-                .config     = ControlPointForce::ReadFromJson(wpj),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                ControlPointAttractOperator {
+                    .attributes = attributes,
+                    .config     = ControlPointForce::ReadFromJson(wpj),
+                });
         }
     } while (false);
-    return Box<dyn<particle::ParticleUpdateProgram>>::make(NoopUpdateOperator {});
+    return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(NoopUpdateOperator {});
 }
 
-Box<dyn<particle::ParticleEmitterProgram>> ParticleParser::GenEmitter(const wpscene::Emitter& wpe,
-                                                                      ParticleSubSystem& subsystem,
-                                                                      usize emitter_index) {
+std::unique_ptr<particle::ParticleEmitterProgram>
+ParticleParser::GenEmitter(const wpscene::Emitter& wpe, ParticleSubSystem& subsystem,
+                           usize emitter_index) {
     ParticleAudioResponse audio_response {
         .enable    = wpe.audioprocessingmode != u32(),
         .amount    = wpe.audioamount,
@@ -1537,7 +1489,7 @@ Box<dyn<particle::ParticleEmitterProgram>> ParticleParser::GenEmitter(const wpsc
         box.duration       = wpe.duration;
         box.controlpoint   = wpe.controlpoint;
         box.audio_response = audio_response;
-        return Box<dyn<particle::ParticleEmitterProgram>>::make(
+        return particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
             BoxEmitterProgram(subsystem.SpawnPipeline(), rstd::move(box), emitter_index));
     } else if (wpe.name == "sphererandom") {
         ParticleSphereEmitterArgs sphere;
@@ -1554,7 +1506,7 @@ Box<dyn<particle::ParticleEmitterProgram>> ParticleParser::GenEmitter(const wpsc
         sphere.duration       = wpe.duration;
         sphere.controlpoint   = wpe.controlpoint;
         sphere.audio_response = audio_response;
-        return Box<dyn<particle::ParticleEmitterProgram>>::make(
+        return particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
             SphereEmitterProgram(subsystem.SpawnPipeline(), rstd::move(sphere), emitter_index));
     }
 
@@ -1562,5 +1514,5 @@ Box<dyn<particle::ParticleEmitterProgram>> ParticleParser::GenEmitter(const wpsc
         void Compile(particle::ParticleViewCompiler&) {}
         void Emit(particle::ParticleEmitterContext&) {}
     };
-    return Box<dyn<particle::ParticleEmitterProgram>>::make(NoopEmitter {});
+    return particle::MakeParticleProgram<particle::ParticleEmitterProgram>(NoopEmitter {});
 }

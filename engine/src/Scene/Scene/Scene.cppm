@@ -1,5 +1,5 @@
 module;
-#include <rstd/enum.hpp>
+#include <rstd/macro.hpp>
 
 export module wescene.scene;
 import eigen;
@@ -20,7 +20,6 @@ export import :uniform;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
-using rstd::any::Any;
 using rstd::collections::BTreeMap;
 using rstd::collections::BTreeSet;
 using rstd::collections::HashMap;
@@ -2191,10 +2190,7 @@ struct ScenePostProcessCopy {
     std::string dst;
 };
 
-class ScenePostProcessStep {
-    RSTD_ENUM(ScenePostProcessStep, (Pass, (ScenePostProcessPass value;)),
-              (Copy, (ScenePostProcessCopy value;)))
-};
+using ScenePostProcessStep = std::variant<ScenePostProcessPass, ScenePostProcessCopy>;
 
 struct ScenePostProcess {
     std::string               name;
@@ -2678,6 +2674,18 @@ struct OfflineVideoPlaybackRateOverrideApplication {
     bool ok() const { return error.empty(); }
 };
 
+// Scene 扩展槽：按类型挂一个扩展对象；查找用 dynamic_cast 比对具体持有者类型。
+struct SceneExtensionSlot {
+    virtual ~SceneExtensionSlot() = default;
+};
+
+template<typename T>
+struct SceneExtensionHolder final : SceneExtensionSlot {
+    explicit SceneExtensionHolder(Box<T> extension): value(rstd::move(extension)) {}
+
+    Box<T> value;
+};
+
 class Scene : NoCopy, NoMove {
 public:
     Scene();
@@ -2841,18 +2849,20 @@ public:
     template<typename T>
     void InstallExtension(Box<T> extension) {
         for (usize index {}; index < m_extensions.len(); ++index) {
-            if (! rstd::any::is<Box<T>>(m_extensions[index].as_ref())) continue;
-            m_extensions[index] = Box<dyn<Any>>::make(rstd::move(extension));
+            if (dynamic_cast<SceneExtensionHolder<T>*>(m_extensions[index].get()) == nullptr)
+                continue;
+            m_extensions[index] = std::make_unique<SceneExtensionHolder<T>>(rstd::move(extension));
             return;
         }
-        m_extensions.push(Box<dyn<Any>>::make(rstd::move(extension)));
+        m_extensions.push(std::make_unique<SceneExtensionHolder<T>>(rstd::move(extension)));
     }
 
     template<typename T>
     auto Extension() const -> Option<ref<T>> {
         for (usize index {}; index < m_extensions.len(); ++index) {
-            auto holder = rstd::any::downcast_ref<Box<T>>(m_extensions[index].as_ref());
-            if (holder.is_some()) return Some((**holder).as_ref());
+            const auto* holder =
+                dynamic_cast<const SceneExtensionHolder<T>*>(m_extensions[index].get());
+            if (holder != nullptr) return Some(holder->value.as_ref());
         }
         return None();
     }
@@ -2860,8 +2870,8 @@ public:
     template<typename T>
     auto ExtensionMut() -> Option<mut_ref<T>> {
         for (usize index {}; index < m_extensions.len(); ++index) {
-            auto holder = rstd::any::downcast_mut<Box<T>>(m_extensions[index].deref_mut());
-            if (holder.is_some()) return Some((**holder).deref_mut());
+            auto* holder = dynamic_cast<SceneExtensionHolder<T>*>(m_extensions[index].get());
+            if (holder != nullptr) return Some(holder->value.deref_mut());
         }
         return None();
     }
@@ -3030,7 +3040,7 @@ private:
     HashMap<String, Vec<Arc<dyn<SceneParticleOverrideControl>>>> m_particle_override_user_index;
     HashMap<String, Vec<Arc<dyn<SceneSoundControl>>>>            m_sound_volume_user_index;
     Option<Box<dyn<IImageParser>>>                               m_image_parser;
-    Vec<Box<dyn<Any>>>                                           m_extensions;
+    Vec<std::unique_ptr<SceneExtensionSlot>>                      m_extensions;
     HashMap<String, Arc<Image>>                                  m_runtime_images;
     HashMap<String, SceneTexture>                                m_textures;
     HashMap<String, u64>                                         m_texture_content_revisions;
