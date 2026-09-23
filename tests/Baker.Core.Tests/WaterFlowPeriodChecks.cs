@@ -5,7 +5,7 @@ internal static class WaterFlowPeriodChecks
 {
     internal static void Run(Action<bool, string> check, string root)
     {
-        ShaderPeriodAnalysisResult analysis = ShaderCorpusChecks.Run(check, root, "water-flow");
+        ShaderPeriodAnalysisResult analysis = ShaderCorpusChecks.Run(check, root, "water-flow").Analysis;
         ShaderPeriodComponent flow = analysis.Components.Single();
         var sprite = new CommonLoopComponent("sprite", new CommonLoopPeriod(4.53,
             CommonLoopPeriodEvidence.Observed, new CommonLoopRational(453, 100)));

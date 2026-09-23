@@ -1,14 +1,3 @@
-namespace Baker.Core.Analysis.ShaderClock;
-
-/// <summary>
-/// 着色器时钟规则表（clock-rules.json 的内容）。Baker.Core.csproj 不在本步可改文件之内，不能挂 EmbeddedResource，
-/// 所以 JSON 以原样字符串放在这里；C3 改工程时移成独立的 clock-rules.json 嵌入资源，内容不动。
-/// 指纹串是官方 shader 源码的原行，normalize 为 false 的指纹按原文逐字比较（空白、注释 JSON 都算在内），
-/// 这是现有口径，统一口径另开 PR。
-/// </summary>
-internal static class ClockRules
-{
-    internal const string Json = """"
 {
   "patterns": {
     "dual_waves": { "normalize": false,
@@ -242,6 +231,4 @@ internal static class ClockRules
     { "id": "water_ripple", "action": "water_ripple", "match": [ "water_ripple_gate", "water_ripple" ] },
     { "id": "structured_sine", "action": "structured_sine", "match": [ "structured_sine" ] }
   ]
-}
-"""";
 }

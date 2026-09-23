@@ -5,13 +5,25 @@ using System.Text.RegularExpressions;
 namespace Baker.Core.Analysis.ShaderClock;
 
 /// <summary>
-/// 着色器时钟规则表：<see cref="ClockRules.Json"/> 解析后的只读视图。
+/// 着色器时钟规则表：嵌入资源 clock-rules.json 解析后的只读视图。
 /// patterns 是具名指纹（在哪个视图上查、必须含哪些官方源码行、每个标识符恰好出现几次）；
 /// rules 按试探顺序排列，第一条认领的规则给出裁定。每个指纹带 normalize 属性，保持各规则现有的空白敏感性口径。
 /// </summary>
 internal sealed class ClockRuleTable
 {
-    public static ClockRuleTable Default { get; } = Parse(ClockRules.Json);
+    public static ClockRuleTable Default { get; } = Parse(ReadEmbedded());
+
+    /// <summary>
+    /// 规则表随程序集嵌入（Baker.Core.csproj 的 EmbeddedResource）。指纹串是官方 shader 源码的原行，normalize 为 false
+    /// 的指纹按原文逐字比较（空白、注释 JSON 都算在内），这是现有口径，统一口径另开 PR。
+    /// </summary>
+    private static string ReadEmbedded()
+    {
+        using Stream stream = typeof(ClockRuleTable).Assembly.GetManifestResourceStream("Baker.Core.clock-rules.json")
+            ?? throw new InvalidDataException("Shader clock rule table resource is missing.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 
     private readonly Dictionary<string, ClockPattern> patterns;
 
