@@ -280,6 +280,8 @@ public sealed class HybridBakeService(NativeTools tools)
             report["full_capture_source_script_errors"] = fullCaptureScriptErrors;
         }
         Task Save() => BakeReportWriter.SaveAsync(layout.Report, report, timing, CancellationToken.None);
+        // 阶段计时占在这个位置（串行时第一次写盘就在这里），合成校验道放行后第一次写盘才落到磁盘上。
+        timing.Stamp(report);
         // 主道这一段（SetupAsync）在合成校验放行前就开跑，产物全部落在这一案新建的输出目录里。
         // 它在另一线程上写报告与下面这些局部量；主线程等它结束后才读。
         var runner = new NativeRenderRunner(tools);
