@@ -2,11 +2,13 @@ export module owe.media;
 
 import rstd.cppstd;
 import wescene.io;
+export import :nv12_to_rgba;
 
-// 引擎自己的媒体层（T5a：音频；T5b：视频解码）。
+// 引擎自己的媒体层（T5a：音频；T5b：视频解码与 NV12→RGBA 转换）。
 // 语义逐项照搬 wavsen::audio 的离线路径：StreamDecoder → AudioDecoder，
 // SoundStream → PcmSource，SoundManager 的离线混音 → OfflineMixer；
-// 视频照搬 wavsen::video::VideoDecoder 的软件解码路径 → VideoSource。
+// 视频照搬 wavsen::video::VideoDecoder 的软件解码路径 → VideoSource，
+// YuvToRgba 的软件路径 → Nv12ToRgba（分区 :nv12_to_rgba）。
 // libav 的头只进 .cpp，接口里不出现任何 libav 类型。
 export namespace owe::media
 {

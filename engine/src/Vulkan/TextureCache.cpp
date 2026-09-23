@@ -15,7 +15,6 @@ import rstd.cppstd;
 
 import wescene.types;
 import wescene.fs;
-import wavsen.video;
 import owe.media;
 
 using namespace owe;
@@ -564,7 +563,7 @@ Option<rstd::sync::Arc<TextureAllocation>> TextureCache::AllocateTexture(Texture
  *      decodes in software too (the offline renderer forces none).
  *   3. Each render tick PumpVideoTextures advances PTS, pulls the NV12
  *      frame due, and writes the stable RGBA8 VkImage through
- *      wavsen::video::YuvToRgba.
+ *      owe::media::Nv12ToRgba.
  *
  * ========================================================================= */
 
@@ -577,17 +576,13 @@ auto ToOption(const std::optional<U>& value) -> Option<T> {
     return Some(T(*value));
 }
 
-void CloseSyncFd(int fd) {
-    CloseExternalFileDescriptor(fd);
-}
-
 } // anonymous namespace
 
 struct TextureCache::VideoRegistry {
-    TextureCache::VideoDecodeOptions      options;
-    Option<Box<wavsen::video::YuvToRgba>> yuv;
-    rstd::uint32_t                        yuv_max_width { 0 };
-    rstd::uint32_t                        yuv_max_height { 0 };
+    TextureCache::VideoDecodeOptions        options;
+    std::unique_ptr<owe::media::Nv12ToRgba> yuv;
+    rstd::uint32_t                          yuv_max_width { 0 };
+    rstd::uint32_t                          yuv_max_height { 0 };
 
     struct Runtime final : TextureAllocationRuntime {
         VideoRegistry*                              registry { nullptr };
@@ -638,27 +633,39 @@ struct TextureCache::VideoRegistry {
         peak_active_instances = std::max(peak_active_instances, active);
     }
 
-    wavsen::video::YuvToRgba* ensureYuv(const Device& device, rstd::uint32_t width,
-                                        rstd::uint32_t height) {
-        if (yuv.is_some() && width <= yuv_max_width && height <= yuv_max_height) return yuv->get();
+    // 按见过的最大视频尺寸建转换器，更大的视频来了就重建（建失败时保留旧的）。
+    owe::media::Nv12ToRgba* ensureYuv(const Device& device, rstd::uint32_t width,
+                                      rstd::uint32_t height) {
+        if (yuv && width <= yuv_max_width && height <= yuv_max_height) return yuv.get();
         auto next_w = std::max(width, yuv_max_width);
         auto next_h = std::max(height, yuv_max_height);
-        auto r      = wavsen::video::YuvToRgba::create(device.instance_handle(),
-                                                       *device.gpu(),
-                                                       *device.handle(),
-                                                       u32(device.graphics_queue().family_index),
-                                                       *device.graphics_queue().handle,
-                                                       u32(next_w),
-                                                       u32(next_h));
-        if (r.is_err()) {
-            rstd_error("CreateVideoTex: YuvToRgba create failed: {}",
-                       std::move(r).unwrap_err().message);
+        // 目标 Vulkan 1.0：编出的 SPIR-V 与 wavsen 构建时内嵌的逐字节相同。
+        const ShaderCompUnit unit {
+            ShaderType::COMPUTE, std::string(owe::media::Nv12ToRgba::ShaderSource()), "main"
+        };
+        std::vector<Uni_ShaderSpv>              spv;
+        std::string                             error = "nv12_to_rgba shader compile failed";
+        std::unique_ptr<owe::media::Nv12ToRgba> created;
+        if (CompileAndLinkShaderUnits(
+                std::span(&unit, 1), ShaderCompOpt { .target = VulkanTarget::Vulkan_1_0 }, spv) &&
+            spv.size() == 1) {
+            created = owe::media::Nv12ToRgba::Create(*device.gpu(),
+                                                     *device.handle(),
+                                                     device.graphics_queue().family_index,
+                                                     *device.graphics_queue().handle,
+                                                     next_w,
+                                                     next_h,
+                                                     spv.front()->spirv,
+                                                     error);
+        }
+        if (! created) {
+            rstd_error("CreateVideoTex: YuvToRgba create failed: {}", error);
             return nullptr;
         }
-        yuv            = rstd::Some(rstd::move(r).unwrap());
+        yuv            = std::move(created);
         yuv_max_width  = next_w;
         yuv_max_height = next_h;
-        return yuv->get();
+        return yuv.get();
     }
 };
 
@@ -987,25 +994,16 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         return;
     }
 
-    const auto color_matrix = wavsen::video::make_color_matrix(
-        static_cast<wavsen::video::ColorSpace>(s.nv12_scratch.colorspace),
-        static_cast<wavsen::video::ColorRange>(s.nv12_scratch.color_range));
-
-    auto cv = yuv->convert_nv12(ip.handle,
-                                u32(s.width),
-                                u32(s.height),
-                                s.nv12_scratch.data.data(),
-                                usize(s.nv12_scratch.data.size()),
-                                color_matrix,
-                                wavsen::video::ConvertTarget::SampledLocal);
-    if (cv.is_err()) {
-        rstd_error("PumpVideoTextures[{}]: yuv conversion sw: {}",
-                   s.key.as_str(),
-                   std::move(cv).unwrap_err().message);
+    if (! yuv->Convert(ip.handle,
+                       s.width,
+                       s.height,
+                       s.nv12_scratch.data,
+                       owe::media::MakeYuvColorMatrix(s.nv12_scratch.colorspace,
+                                                      s.nv12_scratch.color_range))) {
+        rstd_error("PumpVideoTextures[{}]: yuv conversion sw: {}", s.key.as_str(), yuv->last_error());
         publish_time();
         return;
     }
-    CloseSyncFd(std::move(cv).unwrap());
     s.have_frame = true;
     publish_time();
 }
@@ -1118,16 +1116,8 @@ bool TextureCache::UploadFontAtlasRegion(ref<TextureAllocation> texture, const r
 
 TextureCache::TextureCache(const Device& device): m_device(device) {}
 
-TextureCache::~TextureCache() {
-    if (m_video_registry.is_none() || m_video_registry->get()->yuv.is_none()) return;
-    auto* yuv = m_video_registry->get()->yuv->get();
-    if (auto drained = yuv->drain_submissions(u64(1'000'000'000)); drained.is_err()) {
-        rstd_warn("TextureCache: conversion drain failed during shutdown: {}",
-                  rstd::move(drained).unwrap_err().message);
-        (void)m_device.handle().WaitIdle();
-        (void)yuv->reclaim_submissions();
-    }
-}
+// 转换器析构时自己等设备空闲（原 wavsen 的 drain_submissions 对软件帧本就是空操作）。
+TextureCache::~TextureCache() = default;
 
 u64 TextureCache::nextImageGeneration() { return m_next_image_generation++; }
 
