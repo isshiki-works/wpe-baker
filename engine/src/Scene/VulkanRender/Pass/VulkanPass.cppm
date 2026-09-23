@@ -140,13 +140,13 @@ struct PassRecordContext {
 struct PassUpdateContext {
     rstd::mut_ref<rstd::dyn<resource::BufferContentWriter>>               buffers;
     rstd::ref<PreparedPassResources>                                      resources;
-    rstd::mut_ref<rstd::dyn<resource_registry::GraphicsResourcePreparer>> graphics;
+    resource_registry::GraphicsResourcePreparer*                          graphics;
     rstd::ref<rstd::dyn<SceneTextureAnimationView>>                       textures;
 };
 
 struct PassPrepareContext {
     rstd::ref<resource_registry::PreparedResourceTable>                   resources;
-    rstd::mut_ref<rstd::dyn<resource_registry::GraphicsResourcePreparer>> graphics;
+    resource_registry::GraphicsResourcePreparer*                          graphics;
     rstd::ref<PipelineLayoutAssignments>                                  pipeline_layouts;
 };
 
@@ -306,7 +306,7 @@ public:
         return Ok(Vec<Box<dyn<UniformBufferUpdate>>>::make());
     }
     virtual bool
-    prepareResourceStates(rstd::mut_ref<rstd::dyn<resource_registry::TextureStatePreparer>>) {
+    prepareResourceStates(resource_registry::TextureStatePreparer*) {
         return true;
     }
     virtual Option<RenderItemId>        renderItemId() const { return None(); }

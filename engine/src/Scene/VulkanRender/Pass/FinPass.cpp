@@ -81,7 +81,7 @@ std::vector<PassTextureRequestDiagnostic> FinPass::textureRequestDiagnostics() c
 }
 
 bool FinPass::prepareResourceStates(
-    rstd::mut_ref<rstd::dyn<resource_registry::TextureStatePreparer>> states) {
+    resource_registry::TextureStatePreparer* states) {
     m_desc.result_barrier.Clear();
     if (m_desc.result_use.is_none()) return false;
     auto barrier =

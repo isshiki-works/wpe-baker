@@ -84,7 +84,7 @@ public:
     }
 
     bool prepareResourceStates(
-        mut_ref<dyn<owe::resource_registry::TextureStatePreparer>> states) override {
+        owe::resource_registry::TextureStatePreparer* states) override {
         auto before = states->Prepare(
             m_output, owe::resource_registry::TextureStateKind::TransferDestination, {}, true);
         auto after = states->Prepare(m_output, owe::resource_registry::TextureStateKind::Sampled);

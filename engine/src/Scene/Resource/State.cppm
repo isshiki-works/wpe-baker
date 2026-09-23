@@ -11,30 +11,17 @@ export namespace owe::resource_registry
 
 using namespace rstd::prelude;
 
+// 渲染 pass 准备纹理布局转换的接口（ResourceStateTracker 实现；GPU 单测可替身）。
 struct TextureStatePreparer {
-    using Trait                  = TextureStatePreparer;
-    static constexpr bool direct = false;
+    virtual ~TextureStatePreparer() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = TextureStatePreparer;
-
-        auto Prepare(resource::TextureUseHandle use, TextureStateKind target,
-                     TextureSubresourceRange range = {}, bool discard = false)
-            -> Option<PreparedImageBarrier> {
-            return rstd::trait_call<0>(this, use, target, range, discard);
-        }
-
-        bool Set(resource::TextureUseHandle use, TextureStateKind state) {
-            return rstd::trait_call<1>(this, use, state);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Prepare, &T::Set>;
+    virtual auto Prepare(resource::TextureUseHandle use, TextureStateKind target,
+                         TextureSubresourceRange range = {}, bool discard = false)
+        -> Option<PreparedImageBarrier>                                             = 0;
+    virtual bool Set(resource::TextureUseHandle use, TextureStateKind state) = 0;
 };
 
-class ResourceStateTracker {
+class ResourceStateTracker final : public TextureStatePreparer {
 public:
     bool Compile(const resource::ResourcePlan& plan, const PreparedResourceTable& resources) {
         m_textures.clear();
@@ -75,7 +62,7 @@ public:
 
     auto Prepare(resource::TextureUseHandle use, TextureStateKind target,
                  TextureSubresourceRange range = {}, bool discard = false)
-        -> Option<PreparedImageBarrier> {
+        -> Option<PreparedImageBarrier> override {
         auto texture = m_uses.get(use);
         if (texture.is_none()) return None();
         auto tracked = m_textures.get_mut(**texture);
@@ -111,7 +98,7 @@ public:
         return Some(rstd::move(prepared));
     }
 
-    bool Set(resource::TextureUseHandle use, TextureStateKind state) {
+    bool Set(resource::TextureUseHandle use, TextureStateKind state) override {
         auto texture = m_uses.get(use);
         if (texture.is_none()) return false;
         auto tracked = m_textures.get_mut(**texture);
@@ -200,23 +187,3 @@ private:
 
 } // namespace owe::resource_registry
 
-export namespace rstd
-{
-
-template<>
-struct Impl<owe::resource_registry::TextureStatePreparer,
-            owe::resource_registry::ResourceStateTracker>
-    : ImplBase<owe::resource_registry::ResourceStateTracker> {
-    auto Prepare(owe::resource::TextureUseHandle                 use,
-                 owe::resource_registry::TextureStateKind        target,
-                 owe::resource_registry::TextureSubresourceRange range, bool discard)
-        -> Option<owe::resource_registry::PreparedImageBarrier> {
-        return this->self().Prepare(use, target, range, discard);
-    }
-
-    bool Set(owe::resource::TextureUseHandle use, owe::resource_registry::TextureStateKind state) {
-        return this->self().Set(use, state);
-    }
-};
-
-} // namespace rstd

@@ -110,7 +110,7 @@ public:
                                     const PreparedPassResources&)
         -> Result<Vec<Box<dyn<UniformBufferUpdate>>>, UniformBufferUpdateError> override;
     bool prepareResourceStates(
-        rstd::mut_ref<rstd::dyn<resource_registry::TextureStatePreparer>>) override;
+        resource_registry::TextureStatePreparer*) override;
     Option<RenderItemId>                      renderItemId() const override;
     Option<PipelineCacheKey>                  pipelineCacheKey() const override;
     bool                                      pipelineCacheHit() const override;

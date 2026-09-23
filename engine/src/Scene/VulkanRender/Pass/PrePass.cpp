@@ -69,7 +69,7 @@ PassResourceUses PrePass::resourceUses() const {
 }
 
 bool PrePass::prepareResourceStates(
-    rstd::mut_ref<rstd::dyn<resource_registry::TextureStatePreparer>> states) {
+    resource_registry::TextureStatePreparer* states) {
     m_desc.before_clear.Clear();
     m_desc.after_clear.Clear();
     if (m_desc.result_use.is_none()) return false;

@@ -32,7 +32,7 @@ public:
     PassInvalidationFlags finalizeResourceRequests(Scene&) override;
     PassResourceUses      resourceUses() const override;
     bool                  prepareResourceStates(
-        rstd::mut_ref<rstd::dyn<resource_registry::TextureStatePreparer>>) override;
+        resource_registry::TextureStatePreparer*) override;
     std::vector<PassTextureRequestDiagnostic> textureRequestDiagnostics() const override;
 
     void prepare(Scene&, const Device&, PassPrepareContext&) override;

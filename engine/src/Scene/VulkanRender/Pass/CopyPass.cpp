@@ -73,7 +73,7 @@ std::vector<PassTextureRequestDiagnostic> CopyPass::textureRequestDiagnostics() 
 }
 
 bool CopyPass::prepareResourceStates(
-    rstd::mut_ref<rstd::dyn<resource_registry::TextureStatePreparer>> states) {
+    resource_registry::TextureStatePreparer* states) {
     m_desc.before_barriers.Clear();
     m_desc.after_barriers.Clear();
     if (m_desc.src_use.is_none() || m_desc.dst_use.is_none()) return false;

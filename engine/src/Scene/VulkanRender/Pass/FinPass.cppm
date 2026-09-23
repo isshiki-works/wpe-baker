@@ -42,7 +42,7 @@ public:
     PassResourceUses                          resourceUses() const override;
     std::vector<PassTextureRequestDiagnostic> textureRequestDiagnostics() const override;
     bool                                      prepareResourceStates(
-        rstd::mut_ref<rstd::dyn<resource_registry::TextureStatePreparer>>) override;
+        resource_registry::TextureStatePreparer*) override;
 
     void prepare(Scene&, const Device&, PassPrepareContext&) override;
     void record(PassRecordContext&) override;
