@@ -476,8 +476,8 @@ public class LoopItemContractTests
         Assert.Equal("""{"kind":"search_budget","detail":"d"}""", new SolverUnresolved(true, null, "d").ToJson().ToJsonString());
         Assert.Equal("""{"kind":"solver","component":null,"detail":"d"}""", new SolverUnresolved(false, null, "d").ToJson().ToJsonString());
         Assert.Equal("""{"kind":"source_static","detail":"d","owner_layer_id":null}""", new SourceStaticUnresolved("d", null, null).ToJson().ToJsonString());
-        Assert.Equal("""{"name":null,"particle":true}""",
-            new SourceStaticUnresolved("d", 2, new StaticLayerNaming(null, true)).ToJson()[PlanNarrative.StaticLayer]!.ToJsonString());
+        Assert.Equal("""{"kind":"source_static","detail":"d","owner_layer_id":2,"static_layer":{"name":null,"particle":false}}""",
+            new SourceStaticUnresolved("d", 2, new StaticLayerNaming(null, false)).ToJson().ToJsonString());
         Assert.Equal("kind,owner_layer_id,binding,clock,detail,detail_localized",
             Keys(new ScriptTimeUnresolved(1, JsonValue.Create("b"), JsonValue.Create("time")).ToJson()));
         Assert.Equal("kind,rejected_candidate_count,detail,detail_localized", Keys(new SpriteSeamUnresolved(2).ToJson()));
