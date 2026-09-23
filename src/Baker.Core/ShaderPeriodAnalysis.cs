@@ -109,7 +109,9 @@ public static class ShaderPeriodAnalysis
         {
             JsonObject owner = node?.AsObject() ?? throw new InvalidDataException("Scene object must be an object.");
             int ownerId = owner["id"]?.GetValue<int>() ?? throw new InvalidDataException("Scene object lacks an id.");
-            if (!selected.Contains(ownerId) || owner["effects"] is not JsonArray effects) continue;
+            if (!selected.Contains(ownerId)) continue;
+            AnalyzeBaseMaterial(owner, ownerId, objectsById, source, assetsDirectory, ceiling, maximumRetimePercent, components, unresolved, ruled);
+            if (owner["effects"] is not JsonArray effects) continue;
             for (int effectIndex = 0; effectIndex < effects.Count; ++effectIndex)
             {
                 JsonObject effect = effects[effectIndex]?.AsObject() ?? throw new InvalidDataException("Effect entry must be an object.");
@@ -157,10 +159,12 @@ public static class ShaderPeriodAnalysis
                         unresolved.Add(new(ownerId, effectIndex, authoredPassIndex, shader, ShaderTemporalUnresolvedKind.ResourceUnavailable, reason));
                         continue;
                     }
-                    // 时钟预筛按原文子串：含备用时钟字样的 pass 不进规则链，所以规则链里原文视图上的备用时钟检查都是多余的。
-                    bool wallClock = shaderText.Contains("g_Time", StringComparison.Ordinal);
-                    bool alternateClock = shaderText.Contains("g_Runtime", StringComparison.Ordinal) ||
-                        shaderText.Contains("g_Frametime", StringComparison.Ordinal) || shaderText.Contains("g_DeltaTime", StringComparison.Ordinal);
+                    // 时钟预筛按"被用到"判：去注释后的整词，且不算 uniform 声明。只声明不用的时钟不是时钟输入
+                    // （例如 glitter_combine 声明了 g_Time 却不读它），不进规则链，也就不会落到"未证明周期"。
+                    // 用到备用时钟的 pass 不进规则链，所以规则链里原文视图上的备用时钟检查都是多余的。
+                    var shaderSource = new ShaderSource(shaderText);
+                    bool wallClock = shaderSource.Uses("g_Time");
+                    bool alternateClock = AlternateClocks.Any(shaderSource.Uses);
                     if (!wallClock)
                     {
                         if (alternateClock) unresolved.Add(new(ownerId, effectIndex, authoredPassIndex, shaderResource,
@@ -176,7 +180,7 @@ public static class ShaderPeriodAnalysis
                         continue;
                     }
                     ShaderVerdict verdict = Judge(new(ownerId, effectIndex, authoredPassIndex, effectivePass, shader, shaderResource,
-                        new ShaderSource(shaderText), owner, objectsById, source, assetsDirectory, ceiling, maximumRetimePercent));
+                        shaderSource, owner, objectsById, source, assetsDirectory, ceiling, maximumRetimePercent));
                     components.AddRange(verdict.Components);
                     unresolved.AddRange(verdict.Unresolved);
                 }
@@ -190,6 +194,9 @@ public static class ShaderPeriodAnalysis
         ShaderSource Source, JsonObject Owner, IReadOnlyDictionary<int, JsonObject> ObjectsById, ProjectSource Project, string? Assets,
         double Ceiling, double RetimePercent)
     {
+        /// <summary>这是图层自身的基底材质，不是作者效果：常量在材质资源文件里，没有可改写的捕获场景值。</summary>
+        public bool BaseMaterial { get; init; }
+
         public ShaderVerdict Refuse(ShaderTemporalUnresolvedKind kind, string detail, bool bounded = false, string mechanism = "",
             SwayModel? sway = null) =>
             ShaderVerdict.Of(new ShaderTemporalUnresolved(OwnerId, EffectIndex, PassIndex, Resource, kind, detail, bounded, mechanism, sway));
@@ -206,7 +213,43 @@ public static class ShaderPeriodAnalysis
         foreach (ClockRule rule in Table.Rules)
         {
             if (!rule.Match.All(name => Table.Matches(name, c.Source))) continue;
-            ShaderVerdict? verdict = rule.Action switch
+            if (Dispatch(c, rule) is ShaderVerdict verdict) return verdict;
+        }
+        return ShaderVerdict.Of(new ShaderTemporalUnresolved(c.OwnerId, c.EffectIndex, c.PassIndex, c.Resource,
+            ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, new Message("unresolved.shader_not_verified_periodic")));
+    }
+
+    /// <summary>
+    /// 图层自身的基底材质（image → model → material 的第一个 pass）只试规则表里标了 base_material 的规则：
+    /// 这些规则只产出锁定分量（常量在材质资源文件里，捕获场景里没有可改写的值）。有规则认领才登记为已裁定，
+    /// 运行时材质便不再以"未建模时钟"重复计一次；没有规则认领就什么都不做，仍由运行时材质那条路径判。
+    /// </summary>
+    private static void AnalyzeBaseMaterial(JsonObject owner, int ownerId, IReadOnlyDictionary<int, JsonObject> objectsById,
+        ProjectSource source, string? assetsDirectory, double ceiling, double retimePercent,
+        List<ShaderPeriodComponent> components, List<ShaderTemporalUnresolved> unresolved, HashSet<(int OwnerLayerId, string Shader)> ruled)
+    {
+        if (owner["image"] is not JsonValue image || !image.TryGetValue(out string? model) || string.IsNullOrWhiteSpace(model) ||
+            TryReadResource(source, assetsDirectory, model)?["material"] is not JsonValue materialValue ||
+            !materialValue.TryGetValue(out string? material) || string.IsNullOrWhiteSpace(material) ||
+            !TryReadMaterialShader(source, assetsDirectory, material, out string shader, out JsonObject pass, out _) ||
+            !TryReadShader(source, assetsDirectory, shader, out string resource, out string text, out _)) return;
+        var shaderSource = new ShaderSource(text);
+        if (!shaderSource.Uses("g_Time") || AlternateClocks.Any(shaderSource.Uses)) return;
+        var c = new PassContext(ownerId, BaseMaterialEffectIndex, 0, pass, shader, resource, shaderSource, owner, objectsById, source,
+            assetsDirectory, ceiling, retimePercent) { BaseMaterial = true };
+        foreach (ClockRule rule in Table.Rules)
+        {
+            if (rule.Data["base_material"] is not JsonValue flag || !flag.GetValue<bool>() ||
+                !rule.Match.All(name => Table.Matches(name, shaderSource)) || Dispatch(c, rule) is not ShaderVerdict verdict) continue;
+            ruled.Add((ownerId, shader));
+            components.AddRange(verdict.Components);
+            unresolved.AddRange(verdict.Unresolved);
+            return;
+        }
+    }
+
+    private static ShaderVerdict? Dispatch(PassContext c, ClockRule rule) =>
+            rule.Action switch
             {
                 "scalar_period" => ScalarPeriod(c, rule),
                 "dual_waves" => DualWaterWave(c, rule),
@@ -221,13 +264,11 @@ public static class ShaderPeriodAnalysis
                 "auto_sway" => AutoSway(c, rule),
                 "water_ripple" => WaterRipple(c),
                 "structured_sine" => StructuredSineClock(c),
+                "glitter" => Glitter(c),
+                "frac_linear" => FracLinearClock(c),
+                "literal_step" => LiteralStepClock(c),
                 _ => throw new InvalidDataException($"Unknown shader clock action '{rule.Action}'."),
             };
-            if (verdict is not null) return verdict;
-        }
-        return ShaderVerdict.Of(new ShaderTemporalUnresolved(c.OwnerId, c.EffectIndex, c.PassIndex, c.Resource,
-            ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, new Message("unresolved.shader_not_verified_periodic")));
-    }
 
     /// <summary>
     /// 规则表里的门控，按顺序求值：combo_off = 分支启用或未证明关闭就拒；combo_on = 分支关闭即无运动、值读不出就拒；
@@ -862,6 +903,135 @@ public static class ShaderPeriodAnalysis
             c.Patch("speed", valueIndex, speed), c.Resource,
             $"Verified every g_Time use is float v = g_Time * g_Speed{unit} + static phase, and v reaches the output only through sin(v) " +
             $"after static offsets or a step(0, x) gate; period 2π/({(k == 1 ? "" : "π*")}abs(speed)) with source speed token {numericText}."));
+    }
+
+    /// <summary>基底材质在 pass 定位（effect_index）里用的下标：它不是任何作者效果。</summary>
+    public const int BaseMaterialEffectIndex = -1;
+
+    private static readonly string[] AlternateClocks = ["g_Runtime", "g_Frametime", "g_DeltaTime"];
+
+    /// <summary>
+    /// 官方 glitter_prepare：g_Time 只经 <c>time = g_Time * g_Speed * density</c>（density = g_Density²）进入
+    /// <c>frac(静态噪声 * 100 + time)</c>，其后全是 timer0 的函数，所以严格以 1/|speed·density²| 为周期（指纹见规则表 glitter）。
+    /// 补丁改 speed（指数 1）；density 没写时取 shader 注释默认值，它不参与补丁。
+    /// </summary>
+    private static ShaderVerdict Glitter(PassContext c)
+    {
+        if (!TryScalar(c.Pass, "speed", out double speed, out int speedIndex, out string speedToken))
+            return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, "Verified glitter timing needs a finite scalar 'speed' constant.");
+        if (!AuthoredOrDefault(c, "density", out double density, out string densityToken))
+            return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, "Verified glitter timing needs a finite 'density' constant or shader default.");
+        double rate = speed * density * density;
+        if (rate == 0) return ShaderVerdict.NoMotion;
+        double period = 1 / Math.Abs(rate);
+        string equation = $"glitter twinkle: g_Time enters only through frac(static noise*100 + g_Time*speed*density²), so the pass repeats every " +
+            $"1/abs(speed*density²) = {period.ToString("0.###", CultureInfo.InvariantCulture)} s with speed {speedToken} and density {densityToken}";
+        if (period > c.Ceiling * (1 + c.RetimePercent / 100))
+            return c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
+                $"Verified {equation}. That is past the {CeilingText(c.Ceiling)}-second loop ceiling even with the largest retime this analysis allows ({CeilingText(c.RetimePercent)}%).");
+        return ShaderVerdict.Of(new ShaderPeriodComponent(new(c.Id("speed"),
+            new CommonLoopPeriod(period, CommonLoopPeriodEvidence.Analytic), AllowRetime: true),
+            c.Patch("speed", speedIndex, speed), c.Resource, $"Verified {equation}."));
+    }
+
+    /// <summary>
+    /// frac 线性时钟：去注释后每一处 g_Time（不算 uniform 声明）都恰好是 <c>frac(g_Time * U)</c> 或 <c>frac(g_Time * U + 静态项)</c>
+    /// 的开头，全场只有一个速率 uniform U，静态项里没有别的 g_Time。输出只经这些 frac 值依赖时间，每个都以 1/|U| 为周期，
+    /// 所以整个 pass 严格以 1/|U| 为周期（flowmap 两相、四相混合都是这个形态）。U 的材质键取 uniform 注释的 material。
+    /// 作者效果上常量写在场景里时可调速（补丁改该键）；基底材质或常量没写（取 shader 默认值）时没有可改写的值，
+    /// 作为锁定分量交出，这时要求十进制常量能恢复成精确有理周期。
+    /// </summary>
+    private static ShaderVerdict? FracLinearClock(PassContext c)
+    {
+        if (ClockCode(c, ["frac"]) is not string code) return null;
+        var uses = Regex.Matches(code, @"\bg_Time\b", RegexOptions.CultureInvariant);
+        var fracs = Regex.Matches(code, @"(?<![\w.])frac\(\s*g_Time\s*\*\s*(?<u>\w+)\s*(?:\)|\+)", RegexOptions.CultureInvariant);
+        if (fracs.Count == 0 || fracs.Count != uses.Count || fracs.Select(m => m.Groups["u"].Value).Distinct().Count() != 1) return null;
+        // 带静态项的 frac：从 frac( 数到配对的右括号，括号里只许有这一个 g_Time。
+        foreach (Match frac in fracs)
+        {
+            int open = frac.Index + "frac".Length, depth = 0, close = -1;
+            for (int i = open; i < code.Length && close < 0; ++i)
+                if (code[i] == '(') ++depth;
+                else if (code[i] == ')' && --depth == 0) close = i;
+            if (close < 0 || Regex.Matches(code[open..close], @"\bg_Time\b", RegexOptions.CultureInvariant).Count != 1) return null;
+        }
+        string uniform = fracs[0].Groups["u"].Value;
+        if (c.Source.UniformAnnotations.FirstOrDefault(item => item.Name == uniform).Annotation?["material"] is not JsonValue keyValue ||
+            !keyValue.TryGetValue(out string? key) || string.IsNullOrEmpty(key)) return null;
+        bool authored = c.Pass["constantshadervalues"]?[key] is not null;
+        int valueIndex = 0;
+        double speed;
+        string token;
+        if (!(authored ? TryScalar(c.Pass, key, out speed, out valueIndex, out token) : AuthoredOrDefault(c, key, out speed, out token)))
+            return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, $"Verified frac(g_Time * {uniform}) clock needs a finite scalar '{key}' constant.");
+        if (speed == 0) return ShaderVerdict.NoMotion;
+        double period = 1 / Math.Abs(speed);
+        string equation = $"every g_Time use is frac(g_Time * {uniform} [+ static phase]) with material '{key}' {token}, so the pass repeats every 1/abs({key}) = " +
+            $"{period.ToString("0.###", CultureInfo.InvariantCulture)} s";
+        if (period > c.Ceiling * (1 + c.RetimePercent / 100))
+            return c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
+                $"Verified {equation}. That is past the {CeilingText(c.Ceiling)}-second loop ceiling even with the largest retime this analysis allows ({CeilingText(c.RetimePercent)}%).");
+        if (authored && !c.BaseMaterial)
+            return ShaderVerdict.Of(new ShaderPeriodComponent(new(c.Id(key), new CommonLoopPeriod(period, CommonLoopPeriodEvidence.Analytic), AllowRetime: true),
+                c.Patch(key, valueIndex, speed), c.Resource, $"Verified {equation}."));
+        if (!TryReciprocalRational(token.Split(' ')[0], out CommonLoopRational exact))
+            return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed,
+                $"Verified {equation}, but '{key}' is not a scene constant this analysis can retime and is not a simple decimal, so no exact fixed period is established.");
+        return ShaderVerdict.Of(new ShaderPeriodComponent(new(c.Id(key), new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact),
+            AllowRetime: false), c.Patch("", 0, 0), c.Resource,
+            $"Verified {equation}. The rate is not a scene constant (material resource or shader default), so it is a locked exact period."));
+    }
+
+    /// <summary>
+    /// 字面值步进时钟：去注释后每一处 g_Time（不算 uniform 声明）都恰好是 <c>mod(floor(g_Time * A), B)</c>，A、B 是同一对正十进制字面值，
+    /// B 为整数。floor 每 1/A 秒加一，对整数 B 取模后 B 步一圈，所以周期严格是 B/A（序列帧动画的常见写法）。速率写死在 shader 里，
+    /// 没有可改写的常量，作为锁定分量交出。
+    /// </summary>
+    private static ShaderVerdict? LiteralStepClock(PassContext c)
+    {
+        if (ClockCode(c, ["mod", "floor"]) is not string code) return null;
+        const string literal = @"\d+(?:\.\d*)?";
+        var steps = Regex.Matches(code, $@"(?<![\w.])mod\(\s*floor\(\s*g_Time\s*\*\s*(?<a>{literal})\s*\)\s*,\s*(?<b>{literal})\s*\)", RegexOptions.CultureInvariant);
+        if (steps.Count == 0 || steps.Count != Regex.Matches(code, @"\bg_Time\b", RegexOptions.CultureInvariant).Count) return null;
+        var pairs = steps.Select(m => (A: decimal.Parse(m.Groups["a"].Value, CultureInfo.InvariantCulture), B: decimal.Parse(m.Groups["b"].Value, CultureInfo.InvariantCulture)))
+            .Distinct().ToArray();
+        if (pairs.Length != 1 || pairs[0].A <= 0 || pairs[0].B <= 0 || pairs[0].B != decimal.Truncate(pairs[0].B)) return null;
+        (decimal a, decimal b) = pairs[0];
+        // A = 分子/10^scale，周期 B/A = B·10^scale/分子。
+        int scale = (decimal.GetBits(a)[3] >> 16) & 0x7f;
+        decimal power = 1;
+        for (int i = 0; i < scale; ++i) power *= 10;
+        decimal numerator = b * power, denominator = a * power;
+        if (numerator > long.MaxValue || denominator > long.MaxValue) return null;
+        var exact = new CommonLoopRational((long)numerator, (long)denominator);
+        return ShaderVerdict.Of(new ShaderPeriodComponent(new(c.Id("frame-step"),
+            new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact), AllowRetime: false),
+            c.Patch("", 0, 0), c.Resource,
+            $"Verified every g_Time use is mod(floor(g_Time * {a.ToString(CultureInfo.InvariantCulture)}), {b.ToString(CultureInfo.InvariantCulture)}): " +
+            $"the step counter wraps every {exact.Numerator}/{exact.Denominator} s. The rate is a shader literal, so the pass has no retimable material constant."));
+    }
+
+    /// <summary>
+    /// 结构化时钟规则的公共前提：去注释压空白后的全文（所有预处理分支都在，所以结论对任一分支组合成立），去掉 g_Time 的
+    /// uniform 声明。用到备用时钟、或有 #define 改写 g_Time 与规则依赖的函数名时返回 null（不裁定）。
+    /// </summary>
+    private static string? ClockCode(PassContext c, string[] functions)
+    {
+        string text = c.Source.Normalized;
+        if (ShaderSource.HasAlternateClock(text) ||
+            Regex.IsMatch(text, $@"#\s*define\s+(?:g_Time|{string.Join('|', functions)})\b", RegexOptions.CultureInvariant)) return null;
+        return Regex.Replace(text, @"\buniform\s+\w+\s+g_Time\s*;", " ", RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>pass 上写了就按写的读（必须是有限标量），没写取 shader uniform 注释的默认值（材质键 → default）。</summary>
+    private static bool AuthoredOrDefault(PassContext c, string key, out double value, out string token)
+    {
+        if (c.Pass["constantshadervalues"]?[key] is not null) return TryScalar(c.Pass, key, out value, out _, out token);
+        (value, token) = (0, "");
+        if (c.Source.UniformDefaults.GetValueOrDefault(key) is not JsonValue json || !json.TryGetValue(out value) || !double.IsFinite(value)) return false;
+        token = json.ToJsonString() + " (shader default)";
+        return true;
     }
 
     /// <summary>
