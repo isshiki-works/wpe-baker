@@ -261,15 +261,15 @@ internal static class PlaybackEncodeProfileChecks
             "the vendor tiers escalate their own quantizer options together");
 
         // ---- 画质判据 ----
-        ulong[] sampled = PlaybackQualityGate.SampleFrames(3372);
-        check(sampled.Length >= PlaybackQualityGate.MinimumSamples && sampled[0] == 0 && sampled[^1] == 3371 &&
+        ulong[] sampled = QualityGate.SampleFrames(3372);
+        check(sampled.Length >= QualityGate.MinimumSamples && sampled[0] == 0 && sampled[^1] == 3371 &&
             sampled.Distinct().Count() == sampled.Length && sampled.SequenceEqual(sampled.OrderBy(n => n)),
             "the quality gate samples at least nine ascending distinct frames including the first and the last");
 
-        check(PlaybackQualityGate.SampleFrames(4).SequenceEqual([0ul, 1ul, 2ul, 3ul]) &&
-            PlaybackQualityGate.SampleFrames(0).Length == 0 &&
-            PlaybackQualityGate.SampleFrames(1).SequenceEqual([0ul]) &&
-            PlaybackQualityGate.SampleFrames(3372, 20).Length == 20,
+        check(QualityGate.SampleFrames(4).SequenceEqual([0ul, 1ul, 2ul, 3ul]) &&
+            QualityGate.SampleFrames(0).Length == 0 &&
+            QualityGate.SampleFrames(1).SequenceEqual([0ul]) &&
+            QualityGate.SampleFrames(3372, 20).Length == 20,
             "a short clip samples every frame, an empty clip samples nothing and a larger request is honoured");
 
         const string SsimLog = """
@@ -280,49 +280,48 @@ internal static class PlaybackEncodeProfileChecks
             [Parsed_psnr_5 @ 0] n:1 psnr_avg:30.00
             [Parsed_psnr_5 @ 0] PSNR y:44.12 u:48.30 v:48.55 average:45.21 min:40.01 max:50.12
             """;
-        check(PlaybackQualityGate.ParseSsim(SsimLog) == 0.9968 && PlaybackQualityGate.ParsePsnr(PsnrLog) == 45.21 &&
-            PlaybackQualityGate.ParseSsim("nothing here") is null && PlaybackQualityGate.ParsePsnr("") is null &&
-            PlaybackQualityGate.ParsePsnr("PSNR average:inf") == double.PositiveInfinity,
+        check(FfmpegQualityComparer.ParseSsim(SsimLog) == 0.9968 && FfmpegQualityComparer.ParsePsnr(PsnrLog) == 45.21 &&
+            FfmpegQualityComparer.ParseSsim("nothing here") is null && FfmpegQualityComparer.ParsePsnr("") is null &&
+            FfmpegQualityComparer.ParsePsnr("PSNR average:inf") == double.PositiveInfinity,
             "the gate reads the summary SSIM and PSNR lines rather than the per-frame ones");
 
-        double threshold = PlaybackQualityGate.Threshold(0.9948, 0.98);
+        double threshold = QualityGate.Threshold(0.9948, 0.98);
         check(Math.Abs(threshold - 0.9948 * 0.98) < 1e-12 &&
-            PlaybackQualityGate.Passes(0.9948, 0.9948, 0.98) && PlaybackQualityGate.Passes(threshold, 0.9948, 0.98) &&
-            !PlaybackQualityGate.Passes(threshold - 1e-6, 0.9948, 0.98) && !PlaybackQualityGate.Passes(null, 0.9948, 0.98),
+            QualityGate.Passes(0.9948, 0.9948, 0.98) && QualityGate.Passes(threshold, 0.9948, 0.98) &&
+            !QualityGate.Passes(threshold - 1e-6, 0.9948, 0.98) && !QualityGate.Passes(null, 0.9948, 0.98),
             "the gate threshold is the reference SSIM times the ratio and an unmeasurable SSIM never passes");
 
-        string graph = PlaybackQualityGate.CompareGraph(
-            "[0:v]crop=8:8:0:0,format=yuv420p[packed]", [0ul, 5ul], "ssim");
+        string[] metricArguments = FfmpegQualityComparer.MasterArguments("cache.partial.mp4", "preview.mp4",
+            "[0:v]crop=8:8:0:0,format=yuv420p[packed]", [0ul, 5ul]);
+        string graph = metricArguments[Array.IndexOf(metricArguments, "-filter_complex") + 1];
         check(graph.StartsWith("[1:v]select='eq(n\\,0)+eq(n\\,5)',setpts=N/TB,crop=8:8:0:0", StringComparison.Ordinal) &&
-            graph.Contains("[gatemaster]", StringComparison.Ordinal) && graph.EndsWith("[gatemaster]ssim", StringComparison.Ordinal) &&
+            graph.Contains("[gatemaster]", StringComparison.Ordinal) &&
             graph.Contains("[0:v]select='eq(n\\,0)+eq(n\\,5)',setpts=N/TB[gateproduct]", StringComparison.Ordinal) &&
             !graph.Contains("[packed]", StringComparison.Ordinal) && !graph.Contains("[0:v]crop", StringComparison.Ordinal),
             "the compare graph pushes the master through the same crop filter and samples both sides identically");
 
-        check(PlaybackQualityGate.MetricArguments("psnr", "cache.partial.mp4", "preview.mp4", "[0:v]null[packed]", [0ul])
-                .SequenceEqual(["-hide_banner", "-nostdin", "-i", "cache.partial.mp4", "-i", "preview.mp4", "-filter_complex",
-                    PlaybackQualityGate.CompareGraph("[0:v]null[packed]", [0ul], "psnr"), "-c:v", "rawvideo", "-f", "null", "-"]),
+        check(metricArguments[..7].SequenceEqual(["-hide_banner", "-nostdin", "-nostats", "-i", "cache.partial.mp4", "-i", "preview.mp4"]),
             "the gate measures the product against the master and discards the decoded output");
 
-        var accepted = PlaybackQualityGate.Summarize([0ul, 9ul], 0.9948, 0.98, 0.9950, 45.2, 0,
-            PlaybackQualityGate.ActionAccepted);
-        check(accepted["metric"]!.GetValue<string>() == PlaybackQualityGate.MetricName &&
+        var accepted = QualityGate.Summarize([0ul, 9ul], 0.9948, 0.98, 0.9950, 45.2, 0,
+            QualityGate.ActionAccepted);
+        check(accepted["metric"]!.GetValue<string>() == QualityGate.MetricName &&
             accepted["sampled_frames"]!.AsArray().Count == 2 && accepted["passed"]!.GetValue<bool>() &&
-            accepted["action"]!.GetValue<string>() == PlaybackQualityGate.ActionAccepted &&
+            accepted["action"]!.GetValue<string>() == QualityGate.ActionAccepted &&
             accepted["quality_step"]!.GetValue<int>() == 0 &&
             accepted["measured_ssim"]!.GetValue<double>() == 0.995 &&
             accepted["reference_ssim"]!.GetValue<double>() == 0.9948 &&
             accepted["threshold"]!.GetValue<double>() == Math.Round(threshold, 6),
             "bake.json records the gate metric, sampling, reference, threshold and verdict");
 
-        var fellBackGate = PlaybackQualityGate.Summarize([0ul], 0.9948, 0.98, 0.90, double.PositiveInfinity, 2,
-            PlaybackQualityGate.ActionFellBack, "回退软件编码");
+        var fellBackGate = QualityGate.Summarize([0ul], 0.9948, 0.98, 0.90, double.PositiveInfinity, 2,
+            QualityGate.ActionFellBack, "回退软件编码");
         check(!fellBackGate["passed"]!.GetValue<bool>() &&
-            fellBackGate["action"]!.GetValue<string>() == PlaybackQualityGate.ActionFellBack &&
+            fellBackGate["action"]!.GetValue<string>() == QualityGate.ActionFellBack &&
             fellBackGate["measured_psnr"] is null && fellBackGate["measured_psnr_infinite"]!.GetValue<bool>() &&
             fellBackGate["note"]!.GetValue<string>() == "回退软件编码" &&
-            PlaybackQualityGate.Summarize([0ul], 0.9948, 0.98, null, null, 1,
-                PlaybackQualityGate.ActionEscalated)["measured_ssim"] is null,
+            QualityGate.Summarize([0ul], 0.9948, 0.98, null, null, 1,
+                QualityGate.ActionEscalated)["measured_ssim"] is null,
             "a failed gate is recorded as not passed with its reason and an infinite PSNR is flagged rather than rounded");
     }
 }

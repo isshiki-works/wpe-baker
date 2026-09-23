@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Baker.Core;
@@ -58,21 +57,6 @@ internal static class NativeGpuEncodeChecks
         await runner.ApplyLoopCrossfadeAsync(Path.Combine(output,"reference"),31,6,timeout.Token);
         string filter = "[0:v]split=2[c][a];[c]crop=100:78:16:10[rgb];[a]crop=100:78:146:10[alpha];" +
             "[rgb][alpha]hstack=inputs=2,scale=in_range=full:out_range=limited:out_color_matrix=bt709,format=yuv420p[packed]";
-        async Task<string> Metrics(string[] arguments)
-        {
-            var info = new ProcessStartInfo(tools.Ffmpeg) { UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardError = true, RedirectStandardOutput = true };
-            foreach (string arg in arguments) info.ArgumentList.Add(arg);
-            using var process = new Process { StartInfo = info };
-            process.Start();
-            using var cancelled = timeout.Token.Register(() => { try { process.Kill(true); } catch (InvalidOperationException) { } });
-            Task<string> stderr = process.StandardError.ReadToEndAsync(), stdout = process.StandardOutput.ReadToEndAsync();
-            await process.WaitForExitAsync(timeout.Token);
-            await stdout;
-            string result = await stderr;
-            if (process.ExitCode != 0) throw new InvalidDataException(result);
-            return result;
-        }
         string product = Path.Combine(output, "gpu/preview.mp4"), master = Path.Combine(output, "reference/preview.mp4");
         byte[] wrap = await LoopClosureCheck.ReadRetainedFrameAsync(gpu, 31, timeout.Token);
         JsonObject closure = LoopClosureCheck.Evaluate(await LoopClosureCheck.ReadRetainedFrameAsync(gpu, 0, timeout.Token),
@@ -96,29 +80,52 @@ internal static class NativeGpuEncodeChecks
         if (withAudio["native_result"]?["audio_output_requested"]?.GetValue<bool>() != true ||
             new FileInfo(Path.Combine(output,"audio/native/audio.f32le")).Length == 0)
             throw new InvalidDataException("Explicitly requested audio was not written.");
-        ulong[] qualityFrames = PlaybackQualityGate.SampleFrames(31);
-        string log = await Metrics(PlaybackQualityGate.MetricsArguments(product, master, filter, qualityFrames));
-        await File.WriteAllTextAsync(Path.Combine(output, "quality.stderr.log"), log);
-        double? ssim = PlaybackQualityGate.ParseSsim(log), psnr = PlaybackQualityGate.ParsePsnr(log);
-        double seekSsim = 0, seekMse = 0;
-        foreach (ulong frame in qualityFrames)
-        {
-            string sample = await Metrics(PlaybackQualityGate.SampleMetricArguments(product, master, filter, frame, 30000, 1001));
-            seekSsim += PlaybackQualityGate.ParseSsim(sample) ?? throw new InvalidDataException("Missing sampled SSIM.");
-            seekMse += Math.Pow(10, -(PlaybackQualityGate.ParsePsnr(sample) ?? throw new InvalidDataException("Missing sampled PSNR.")) / 10);
-        }
-        seekSsim /= qualityFrames.Length;
-        double seekPsnr = -10 * Math.Log10(seekMse / qualityFrames.Length);
-        if (ssim is null || psnr is null || Math.Abs(seekSsim - ssim.Value) > 0.000002 || Math.Abs(seekPsnr - psnr.Value) > 0.002)
+        ulong[] qualityFrames = QualityGate.SampleFrames(31);
+        var comparer = new FfmpegQualityComparer(new FfmpegTool(tools));
+        string qualityDirectory = Path.Combine(output, "quality");
+        Directory.CreateDirectory(qualityDirectory);
+        ulong longLoop = QualityGate.SingleDecodeMaximumFrames + 1;
+        QualityRequest MasterRequest(ulong loopFrames, string stem) => new(product, loopFrames, qualityFrames, 30000, 1001,
+            new MasterQualityReference(master, filter), qualityDirectory, stem);
+        QualityReport single = await comparer.CompareAsync(MasterRequest(31, "master-single"), timeout.Token);
+        // 同一批抽样帧按长循环的取法（逐帧 seek 窗口、各算各的再合成）再量一次：总帧数只决定取法，读数只差汇总时的舍入。
+        QualityReport windows = await comparer.CompareAsync(MasterRequest(longLoop, "master-windows"), timeout.Token);
+        double? ssim = single.Ssim, psnr = single.Psnr;
+        if (ssim is null || psnr is null || windows.Ssim is not double seekSsim || windows.Psnr is not double seekPsnr ||
+            single.DecodeScope != QualityGate.SingleDecodeScope || windows.DecodeScope != QualityGate.FrameWindowsScope ||
+            Math.Abs(seekSsim - ssim.Value) > 0.000002 || Math.Abs(seekPsnr - psnr.Value) > 0.002)
             throw new InvalidDataException("Bounded quality seeks changed the selected-frame metrics.");
+        // GPU 直编路线同理，而且两种取法进同一个比对进程：解出的抽样帧必须逐字节相同，读数逐位相同（P1a 的前提）。
+        byte[] referenceFrames = await new FfmpegTool(tools).RunBytesAsync(["-hide_banner", "-nostdin",
+            "-v", "error", "-i", master, "-vf", FfmpegQualityComparer.Select(qualityFrames) +
+            ",split=2[c][a];[c]crop=100:78:16:10[rgb];[a]crop=100:78:146:10[alpha];[rgb][alpha]hstack=inputs=2",
+            "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"], 9L * 200 * 78 * 3, timeout.Token);
+        var framesReference = new FramesQualityReference((stream, cancel) => stream.WriteAsync(referenceFrames, cancel).AsTask(), 200, 78);
+        QualityRequest FramesRequest(ulong loopFrames, string stem) => new(product, loopFrames, qualityFrames, 30000, 1001,
+            framesReference, qualityDirectory, stem);
+        QualityReport framesSingle = await comparer.CompareAsync(FramesRequest(31, "frames-single"), timeout.Token);
+        QualityReport framesWindows = await comparer.CompareAsync(FramesRequest(longLoop, "frames-windows"), timeout.Token);
+        if (framesSingle.Ssim is null || framesSingle.Ssim != framesWindows.Ssim || framesSingle.Psnr != framesWindows.Psnr ||
+            framesSingle.DecodeScope != QualityGate.SingleDecodeScope || framesWindows.DecodeScope != QualityGate.FrameWindowsScope ||
+            !File.ReadAllBytes(Path.Combine(qualityDirectory, "frames-single-product.yuv")).AsSpan().SequenceEqual(
+                File.ReadAllBytes(Path.Combine(qualityDirectory, "frames-windows-product.yuv"))))
+            throw new InvalidDataException("Decoding the sampled product frames in one pass changed the GPU quality measurement.");
+        // 成品比抽样帧短（select 取不满）必须报错，不能只拿取到的那几帧去量。
+        try
+        {
+            await comparer.CompareAsync(new(product, 31, [0ul, 40ul], 30000, 1001,
+                framesReference, qualityDirectory, "frames-short"), timeout.Token);
+            throw new InvalidOperationException("A product shorter than the sampled frames was measured anyway.");
+        }
+        catch (InvalidDataException) { }
         if (gpu["frame_count_validation"]?["full_decode_performed"]?.GetValue<bool>() != false ||
             reference["frame_count_validation"]?["full_decode_performed"]?.GetValue<bool>() != false)
             throw new InvalidDataException("A completed native or software render was unnecessarily decoded for counting.");
         var fallback = await VerifyEncoded.FrameCountAsync(new FfmpegTool(tools), product, new JsonObject { ["nb_frames"] = "999" }, 31, timeout.Token);
         if (fallback.Count != 31 || fallback.Source != "full_decode")
             throw new InvalidDataException("Inconsistent container metadata did not trigger the existing decode fallback.");
-        if (!PlaybackQualityGate.Passes(ssim,
-            PlaybackQualityGate.DefaultReferenceSsim, PlaybackQualityGate.DefaultRatio) || psnr is null or < 40)
+        if (!QualityGate.Passes(ssim,
+            QualityGate.DefaultReferenceSsim, QualityGate.DefaultRatio) || psnr is null or < 40)
             throw new InvalidDataException("GPU conversion/encoding differs excessively from the lossless reference; see quality log.");
         try
         {
@@ -167,7 +174,7 @@ internal static class NativeGpuEncodeChecks
             ["encoded_frames"] = 31, ["full_frame_cpu_readbacks"] = 19, ["residual_decision_matches_lossless"]=true,
             ["gpu_crossfade_frames"] = 6, ["gpu_crop"] = gpu["gpu_crop"]!.DeepClone(),
             ["gpu_bounds_equal_cpu"] = true, ["retained_frames_identical"] = true,
-            ["ssim"] = ssim, ["psnr"] = psnr, ["seek_ssim"] = seekSsim, ["seek_psnr"] = seekPsnr,
+            ["ssim"] = ssim, ["psnr"] = psnr, ["seek_ssim"] = windows.Ssim, ["seek_psnr"] = windows.Psnr,
             ["bounded_quality_matches_full_decode"] = true, ["frame_count_fallback_verified"] = true,
             ["retained_quality"] = retainedQuality, ["resize_quality"] = resizeQuality,
             ["resize_metadata"] = resized["gpu_resize"]!.DeepClone(),

@@ -69,9 +69,9 @@ public static class EncodedLoopValidator
             : $"crop={crop.Width}:{crop.Height}:{crop.X}:{crop.Y}";
         int width = crop.Width * (packedAlpha ? 2 : 1);
         string video = Path.Combine(master, "preview.mp4");
-        byte[] first = (await EncodedQualityValidator.DecodeExactFramesAsync(video, tools, 0, 1, width, crop.Height,
+        byte[] first = (await FrameAccess.DecodeExactFramesAsync(video, new FfmpegTool(tools), 0, 1, width, crop.Height,
             numerator, denominator, filter, cancellationToken))[0];
-        byte[] last = (await EncodedQualityValidator.DecodeExactFramesAsync(video, tools, loopFrames - 1, 1, width, crop.Height,
+        byte[] last = (await FrameAccess.DecodeExactFramesAsync(video, new FfmpegTool(tools), loopFrames - 1, 1, width, crop.Height,
             numerator, denominator, filter, cancellationToken))[0];
         byte[] wrap = LoopClosureCheck.EncodedLayout(wrapRgba, captureWidth, captureHeight, crop.X, crop.Y, crop.Width, crop.Height, packedAlpha);
         return new(first, last, wrap, width, crop.Height, crossfadeFrames, closure,
@@ -153,11 +153,23 @@ public static class EncodedLoopValidator
             throw new InvalidDataException("Retained frame indices and positive scaled dimensions are required.");
         int scaledBytes = checked(encodeWidth * encodeHeight * 4);
         string cropFilter = crop is null ? "" : $"crop={crop.Width}:{crop.Height}:{crop.X}:{crop.Y},";
-        byte[] scaled = await EncodedQualityValidator.RunFfmpegBytesAsync(tools, ["-hide_banner", "-nostdin", "-v", "error",
-            "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", $"{width}x{height}", "-framerate", "1", "-i", path,
-            "-vf", $"{cropFilter}scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba", "-frames:v", indices.Length.ToString(CultureInfo.InvariantCulture),
-            "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"], checked((long)scaledBytes * indices.Length), cancellationToken);
-        return (indices, scaled);
+        // 缩放结果让 ffmpeg 直接写在原帧旁边再读回，不经 stdout：.NET 读子进程管道只有约 60 MB/s，
+        // 8K 原帧缩到 4K 的 10 帧有 331 MB，经管道 5 s、写文件 0.9 s。读回后删掉；日志只在失败时留下。
+        string scaledPath = path + FormattableString.Invariant($".scaled-{encodeWidth}x{encodeHeight}.rgba");
+        string log = scaledPath + ".stderr.log";
+        try
+        {
+            await new FfmpegTool(tools).RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-v", "error",
+                "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", $"{width}x{height}", "-framerate", "1", "-i", path,
+                "-vf", $"{cropFilter}scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba", "-frames:v", indices.Length.ToString(CultureInfo.InvariantCulture),
+                "-f", "rawvideo", "-pix_fmt", "rgba", "-n", scaledPath], log, cancellationToken);
+            byte[] scaled = await File.ReadAllBytesAsync(scaledPath, cancellationToken);
+            if (scaled.Length != (long)scaledBytes * indices.Length)
+                throw new InvalidDataException("Scaled retained frames do not match the requested frame count and size.");
+            File.Delete(log);
+            return (indices, scaled);
+        }
+        finally { File.Delete(scaledPath); }
     }
 
     public static Task<JsonObject> ValidateAsync(string videoFile, NativeTools tools, ulong loopFrames, uint fpsNumerator,
@@ -203,9 +215,9 @@ public static class EncodedLoopValidator
         if (reference is not null)
         {
             byte[] Measure(byte[] frame) => content is null ? frame : content.Extract(frame, halves);
-            List<byte[]> head = await EncodedQualityValidator.DecodeExactFramesAsync(videoFile, tools, 0, 2, width, height,
+            List<byte[]> head = await FrameAccess.DecodeExactFramesAsync(videoFile, new FfmpegTool(tools), 0, 2, width, height,
                 actualNum, actualDen, null, cancellationToken);
-            List<byte[]> tail = await EncodedQualityValidator.DecodeExactFramesAsync(videoFile, tools, last - 2, 2, width, height,
+            List<byte[]> tail = await FrameAccess.DecodeExactFramesAsync(videoFile, new FfmpegTool(tools), last - 2, 2, width, height,
                 actualNum, actualDen, null, cancellationToken);
             byte[] enc0 = Measure(head[0]), enc1 = Measure(head[1]), encBefore = Measure(tail[0]), encLast = Measure(tail[1]);
             if (new[] { reference.First, reference.Last, reference.Wrap }.Any(frame => frame.Length != enc0.Length))
