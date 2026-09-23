@@ -234,131 +234,17 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         OutputResolution.Choice resolution = OutputResolution.Choose(scene, properties, request.Width, request.Height,
             request.ResolutionSource, display ?? OutputResolution.PrimaryDisplay);
         request = request with { Width = resolution.Width, Height = resolution.Height, ResolutionSource = resolution.Source };
-        var objects = scene["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(Id);
-        var sourceOrder = objects.Keys.ToArray();
-        int Root(int id)
-        {
-            var seen = new HashSet<int>();
-            while (objects.TryGetValue(id, out var item) && Int(item["parent"]) is int parent && objects.ContainsKey(parent))
-            {
-                if (!seen.Add(id)) throw new InvalidDataException("Scene parent cycle.");
-                id = parent;
-            }
-            return id;
-        }
-        var rootOf = objects.Keys.ToDictionary(id => id, Root);
-        var roots = sourceOrder.Where(id => rootOf[id] == id).ToArray();
+        var graph = new SceneGraph(scene);
+        var objects = graph.Objects;
+        var sourceOrder = graph.SourceOrder;
+        var rootOf = graph.RootOf;
+        var roots = graph.Roots;
         Directory.CreateDirectory(output);
         progress?.Report(new("analyzing", null, "Observing real script inputs, object accesses and scene hierarchy."));
-        async Task<JsonObject> ObserveAsync(string renderSource, string directory)
-        {
-            JsonObject? daytimeScene = request.DaytimeSplit && request.DaytimeState is string state
-                ? DaytimeSplit.PrepareVideoObservation(scene, properties, state) : null;
-            uint probeWidth = Math.Min(512, request.Width);
-            uint probeHeight = Math.Max(2, (uint)Math.Round((double)request.Height * probeWidth / request.Width));
-            var events = new JsonArray(
-                new JsonObject { ["frame"] = 12, ["cursor_x"] = .25, ["cursor_y"] = .25, ["cursor_in_window"] = true },
-                new JsonObject { ["frame"] = 24, ["cursor_x"] = .75, ["cursor_y"] = .75, ["mouse_buttons_down"] = 1 },
-                new JsonObject { ["frame"] = 36, ["mouse_buttons_down"] = 0 });
-            string probeOutput = Path.Combine(output, directory);
-            JsonObject observed = new();
-            // 缓存按实际观测场景区分状态，不能让每个状态重用原作在当前时钟下的同一份视频元数据。
-            string key = "runtime-" + AnalysisCache.Key(source.SourcePath, daytimeScene ?? scene, properties, request.Assets, tools,
-                File.Exists(tools.Renderer) ? File.GetLastWriteTimeUtc(tools.Renderer).Ticks : 0,
-                probeWidth, probeHeight, request.FpsNumerator, request.FpsDenominator, request.DeviceUuid, directory, request.Interaction is not null);
-            if (AnalysisCache.Read(request.AnalysisCacheDirectory, key) is JsonObject cached) return cached;
-            try
-            {
-                if (daytimeScene is not null)
-                {
-                    // renderSource 不是原作时已经是本次分析创建的音频选择副本，直接复用。
-                    if (renderSource.Equals(source.SourcePath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        renderSource = Path.Combine(output, directory + "-daytime-source");
-                        await source.ExtractAsync(renderSource, cancellationToken);
-                    }
-                    await File.WriteAllTextAsync(ProjectSource.ContainedPath(renderSource, source.SceneResource), daytimeScene.ToJsonString(), cancellationToken);
-                    var observedProject = project.DeepClone().AsObject();
-                    observedProject["file"] = source.SceneResource;
-                    await File.WriteAllTextAsync(Path.Combine(renderSource, "project.json"), observedProject.ToJsonString(), cancellationToken);
-                }
-                var raw = await new NativeRenderRunner(tools).RenderRawAsync(new(renderSource, request.Assets,
-                    probeOutput, probeWidth, probeHeight, request.FpsNumerator, request.FpsDenominator,
-                    48, Seed: 17, InputTimeline: events, UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true,
-                    GpuTiming: request.Interaction is not null), cancellationToken);
-                observed = raw["native_result"]!.DeepClone().AsObject();
-                AnalysisCache.Write(request.AnalysisCacheDirectory, key, observed);
-                return observed;
-            }
-            // 渲染器读不了某个素材文件时观测根本起不来：这是工具局限，不是壁纸不适用，交给调用方给出结构化结论。
-            catch (IOException error) when (error is not AnalysisToolLimitationException &&
-                AnalysisToolLimitation.Classify(error.Message) is { Count: > 0 } findings)
-            {
-                throw new AnalysisToolLimitationException(AnalysisToolLimitation.BuildReport(findings, scene, source.SourcePath,
-                    sourceHash, probeOutput, error.Message), error);
-            }
-            finally
-            {
-                TemporaryCaptureFiles.Delete(observed, probeOutput, "native/frames.rgba", "native/frames.rgba.partial",
-                    "native/audio.f32le", "native/audio.f32le.partial");
-            }
-        }
-        JsonObject trace;
-        if (request.RuntimeTraceFile is not null)
-        {
-            trace = JsonNode.Parse(await File.ReadAllTextAsync(request.RuntimeTraceFile, cancellationToken))!.AsObject();
-            if (!Path.GetFullPath(trace["source"]!.GetValue<string>()).Equals(Path.GetFullPath(source.SourcePath), StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Runtime trace belongs to another source.");
-            // A precomputed trace is only an explicit developer input, never an automatic cache hit.
-        }
-        else trace = await ObserveAsync(source.SourcePath, "runtime-probe");
-        if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray dependencies ||
-            trace["runtime_layers"] is not JsonArray runtimeLayers)
-            throw new InvalidDataException("A complete runtime dependency observation is required.");
-        var audioEffectChoice = DescribeAudioEffectChoice(scene, source, request.Assets, properties, trace, request.AudioEffects);
-        if (audioEffectChoice["status"]?.GetValue<string>() == "applied")
-        {
-            string beforePath = Path.Combine(output, "runtime-before-audio-choice.json");
-            await VideoSceneBuilder.WriteJsonAsync(beforePath, trace, cancellationToken);
-            audioEffectChoice["original_runtime_evidence"] = beforePath;
-            ApplyAudioEffectChoice(scene, new JsonObject { ["audio_effects_choice"] = audioEffectChoice.DeepClone() });
-            string chosenSource = Path.Combine(output, "audio-choice-source");
-            await source.ExtractAsync(chosenSource, cancellationToken);
-            await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(chosenSource, source.SceneResource), scene, cancellationToken);
-            var chosenProject = project.DeepClone().AsObject();
-            chosenProject["file"] = source.SceneResource;
-            await VideoSceneBuilder.WriteJsonAsync(Path.Combine(chosenSource, "project.json"), chosenProject, cancellationToken);
-            progress?.Report(new("analyzing", null, "Observing the selected scene after omitting the listed fixed audio effects."));
-            trace = await ObserveAsync(chosenSource, "audio-choice-runtime-probe");
-            if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray chosenDependencies ||
-                trace["runtime_layers"] is not JsonArray chosenLayers)
-                throw new InvalidDataException("Audio-effect omission requires a complete new runtime observation.");
-            dependencies = chosenDependencies; runtimeLayers = chosenLayers;
-            audioEffectChoice["runtime_evidence"] = Path.Combine(output, "runtime.json");
-        }
-        // The runtime exposes linked layer composites only as material texture names. Promote
-        // observed, authored producers into the same dependency graph used for capture and export.
-        var compositeProducers = runtimeLayers.OfType<JsonObject>().Select(layer => Int(layer["owner"])).OfType<int>()
-            .Where(objects.ContainsKey).ToHashSet();
-        foreach (var layer in runtimeLayers.OfType<JsonObject>())
-        {
-            if (Int(layer["owner"]) is not int owner || !objects.ContainsKey(owner)) continue;
-            if (layer["materials"] is not JsonArray materials) continue;
-            foreach (string texture in materials.OfType<JsonObject>()
-                .SelectMany(material => material["textures"]?.AsArray().OfType<JsonValue>() ?? [])
-                .Select(textureValue => textureValue.TryGetValue<string>(out string? value) ? value : null).OfType<string>())
-            {
-                var match = Regex.Match(texture, @"^_rt_link_(\d+)$", RegexOptions.CultureInvariant);
-                if (!match.Success || !int.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int target) ||
-                    !compositeProducers.Contains(target) || owner == target || dependencies.OfType<JsonObject>().Any(dependency =>
-                        Int(dependency["owner"]) == owner && Int(dependency["target"]) == target &&
-                        dependency["operation"]?.GetValue<string>() == "read" && dependency["property"]?.GetValue<string>() == "layerComposite" &&
-                        dependency["initialization"]?.GetValue<bool>() != true)) continue;
-                dependencies.Add(new JsonObject { ["owner"] = owner, ["target"] = target, ["operation"] = "read",
-                    ["property"] = "layerComposite", ["initialization"] = false });
-            }
-        }
-        await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "runtime.json"), trace, cancellationToken);
+        RuntimeObservation observation = await RuntimeObservation.ObserveAsync(request, source, sourceHash, scene, project, properties,
+            graph, output, new NativeRuntimeObserver(tools), progress, cancellationToken);
+        JsonObject trace = observation.Trace, audioEffectChoice = observation.AudioEffectChoice;
+        JsonArray dependencies = observation.Dependencies, runtimeLayers = observation.RuntimeLayers;
         // feat/daytime-split：开关开着才识别状态选择器；识别失败只记原因，判定照旧。同名图层靠观测到的可见性写消歧。
         DaytimeSplit.Detection? daytime = request.DaytimeSplit ? DaytimeSplit.Detect(objects, dependencies, properties) : null;
         if (request.DaytimeState is not null && daytime?.IsRecognized != true)
@@ -378,21 +264,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             Int(dependency["owner"]) == selector && dependency["binding"]?.GetValue<string>() == "visible" &&
             dependency["operation"]?.GetValue<string>() == "read" && dependency["property"]?.GetValue<string>() == "videoTexture" &&
             Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
-        bool scriptErrorEvidenceAvailable = trace["source_script_error_count"] is not null || trace["source_script_errors"] is not null;
-        int? scriptErrorCount = null;
-        JsonArray sourceScriptErrors = [];
-        if (scriptErrorEvidenceAvailable)
-        {
-            if (trace["source_script_error_count"] is not JsonValue scriptErrorCountValue ||
-                !scriptErrorCountValue.TryGetValue<int>(out int count) || count < 0 ||
-                trace["source_script_errors"] is not JsonArray errors || errors.Count != count ||
-                errors.Any(error => error is not JsonObject))
-                throw new InvalidDataException("Runtime source script fault metadata is incomplete or malformed; collect a fresh trace.");
-            scriptErrorCount = count;
-            sourceScriptErrors = errors;
-        }
-        else if (request.RuntimeTraceFile is null)
-            throw new InvalidDataException("The current renderer omitted source script fault metadata.");
+        var (scriptErrorEvidenceAvailable, scriptErrorCount, sourceScriptErrors) = observation.ScriptFaults(request.RuntimeTraceFile is not null);
         var live = new HashSet<int>();
         bool parallax = Resolve(scene["general"]?["cameraparallax"], properties)?.ToJsonString() == "true";
         var reasons = objects.Keys.ToDictionary(id => id, _ => new HashSet<string>());
