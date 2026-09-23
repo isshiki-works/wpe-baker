@@ -384,6 +384,7 @@ TEST(ParticleSubSystem, PlaybackResetClearsAndRestartsIndependentStorage) {
     owe::Scene             scene;
     auto                   mesh = std::make_shared<owe::SceneMesh>();
     owe::ParticleSubSystem subsystem(scene,
+                                     nullptr,
                                      mesh,
                                      u32(4),
                                      f64(1.0),
@@ -394,7 +395,9 @@ TEST(ParticleSubSystem, PlaybackResetClearsAndRestartsIndependentStorage) {
     auto                   playback = rstd::sync::Arc<owe::ParticlePlaybackState>::make();
     subsystem.SetPlaybackState(playback.clone());
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(4)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(),
+        u32(4),
+        nullptr));
     subsystem.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(subsystem.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
@@ -430,6 +433,7 @@ TEST(ParticleSubSystem, ConvertsWorldSpaceFollowAnchorsIntoChildLocalSpace) {
     parent_node->AppendChild(child_node.clone());
 
     owe::ParticleSubSystem parent(scene,
+                                  nullptr,
                                   std::make_shared<owe::SceneMesh>(),
                                   u32(1),
                                   f64(),
@@ -444,7 +448,9 @@ TEST(ParticleSubSystem, ConvertsWorldSpaceFollowAnchorsIntoChildLocalSpace) {
                                   true);
     parent.SetOwnerNode(parent_node.as_ptr());
     parent.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(),
+        u32(1),
+        nullptr));
     parent.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(parent.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
@@ -454,6 +460,7 @@ TEST(ParticleSubSystem, ConvertsWorldSpaceFollowAnchorsIntoChildLocalSpace) {
                                   usize())));
 
     auto child = Box<owe::ParticleSubSystem>::make(scene,
+                                                   nullptr,
                                                    std::make_shared<owe::SceneMesh>(),
                                                    u32(1),
                                                    f64(),
@@ -527,6 +534,7 @@ TEST(ParticleSubSystem, ResolvesWorldControlpointOverridesThroughOwnerTransform)
     owe::Scene             scene;
     auto                   mesh = std::make_shared<owe::SceneMesh>();
     owe::ParticleSubSystem subsystem(scene,
+                                     nullptr,
                                      mesh,
                                      u32(1),
                                      f64(),
@@ -565,6 +573,7 @@ TEST(ParticleSubSystem, ResolvesWorldSpaceControlpointsForSimulation) {
     owe::Scene             scene;
     auto                   mesh = std::make_shared<owe::SceneMesh>();
     owe::ParticleSubSystem subsystem(scene,
+                                     nullptr,
                                      mesh,
                                      u32(1),
                                      f64(),
@@ -595,6 +604,7 @@ TEST(ParticleSubSystem, AppliesVortexAroundWorldSpaceOwner) {
     owe::Scene             scene;
     auto                   mesh = std::make_shared<owe::SceneMesh>();
     owe::ParticleSubSystem subsystem(scene,
+                                     nullptr,
                                      mesh,
                                      u32(1),
                                      f64(),
@@ -618,7 +628,9 @@ TEST(ParticleSubSystem, AppliesVortexAroundWorldSpaceOwner) {
         override.clone(), owe::wpscene::Particle::EFlags { 0 }, true);
     subsystem.SetInstanceModifiers(modifiers.Clone());
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(),
+        u32(1),
+        nullptr));
     subsystem.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::BoxEmitterProgram(subsystem.SpawnPipeline(),
                                owe::ParticleBoxEmitterArgs {
@@ -648,6 +660,7 @@ TEST(ParticleSubSystem, UsesEmitterPeriodLimitForImplicitControlpointSequenceCou
     owe::Scene             scene;
     auto                   mesh = std::make_shared<owe::SceneMesh>();
     owe::ParticleSubSystem subsystem(scene,
+                                     nullptr,
                                      mesh,
                                      u32(4),
                                      f64(),
@@ -658,14 +671,16 @@ TEST(ParticleSubSystem, UsesEmitterPeriodLimitForImplicitControlpointSequenceCou
 
     subsystem.ControlpointsMut()[usize(1)].base_offset = Eigen::Vector3d { 300.0, 0.0, 0.0 };
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseNJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(4)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(4), nullptr));
     auto sequence = owe::ParticleParser::GenInitializer(
-        owe::ParseNJson(R"({"name":"mapsequencebetweencontrolpoints"})").unwrap(), u32(4));
+        owe::ParseNJson(R"({"name":"mapsequencebetweencontrolpoints"})").unwrap(), u32(4), nullptr);
     ASSERT_EQ(sequence.SequenceCount(), Some(u32(4)));
     subsystem.SetRopeSequenceCount(*sequence.SequenceCount());
     subsystem.AddInitializer(rstd::move(sequence));
     auto explicit_sequence = owe::ParticleParser::GenInitializer(
-        owe::ParseNJson(R"({"name":"mapsequencebetweencontrolpoints","count":3})").unwrap(), u32(4));
+        owe::ParseNJson(R"({"name":"mapsequencebetweencontrolpoints","count":3})").unwrap(),
+        u32(4),
+        nullptr);
     EXPECT_EQ(explicit_sequence.SequenceCount(), Some(u32(3)));
     EXPECT_EQ(subsystem.RopeSequenceCount(), Some(u32(4)));
     subsystem.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
@@ -690,6 +705,7 @@ TEST(ParticleSubSystem, MapsParentParticlesIntoStaticChildControlpoints) {
     owe::Scene             scene;
     auto                   parent_mesh = std::make_shared<owe::SceneMesh>();
     owe::ParticleSubSystem parent(scene,
+                                  nullptr,
                                   parent_mesh,
                                   u32(1),
                                   f64(),
@@ -698,7 +714,7 @@ TEST(ParticleSubSystem, MapsParentParticlesIntoStaticChildControlpoints) {
                                   owe::ParticleSubSystem::SpawnType::STATIC,
                                   owe::ParticleAnimationSpec {});
     parent.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseNJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(2)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(2), nullptr));
     parent.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(parent.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
@@ -709,6 +725,7 @@ TEST(ParticleSubSystem, MapsParentParticlesIntoStaticChildControlpoints) {
 
     auto child =
         Box<owe::ParticleSubSystem>::make(scene,
+                                          nullptr,
                                           std::make_shared<owe::SceneMesh>(),
                                           u32(1),
                                           f64(),

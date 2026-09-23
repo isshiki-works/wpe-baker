@@ -2,6 +2,7 @@ export module wescene.pkg.parse:scene_context;
 import eigen;
 
 import rstd;
+import wescene.core;
 import owe.media;
 import wescene.fs;
 import wescene.json;
@@ -131,6 +132,7 @@ private:
 
 struct SceneParseContext {
     ParseSceneHandle                               scene;
+    Services*                                      services { nullptr };
     Option<Arc<ParticleRuntime>>                   particle_runtime;
     i32                                            ortho_w { 0 };
     i32                                            ortho_h { 0 };
@@ -222,7 +224,8 @@ bool SceneWritesLayerText(slice<SceneObjectVar>);
 bool SceneHasScripts(slice<SceneObjectVar>);
 auto LoadJsonFile(fs::VFS&, const std::string&) -> Option<NJson>;
 bool AppendLayerCompositePassthroughEffect(fs::VFS&, wpscene::ImageObject&);
-auto MakePuppetLayer(Arc<Puppet>, std::span<PuppetLayer::AnimationLayer>) -> Arc<PuppetLayer>;
+auto MakePuppetLayer(Arc<Puppet>, std::span<PuppetLayer::AnimationLayer>, Services*)
+    -> Arc<PuppetLayer>;
 void RegisterPuppetLayer(SceneParseContext&, SceneNode*, Arc<PuppetLayer>);
 void MarkHiddenLinkSource(SceneParseContext&, i32);
 auto ToSceneUserVisibilityBinding(const wpscene::VisibleUserBinding&) -> SceneUserVisibilityBinding;
@@ -270,6 +273,7 @@ struct ParticleObjectParseServices {
     i32                    ortho_w { 0 };
     i32                    ortho_h { 0 };
     SceneParseContext*     construction_context { nullptr };
+    Services*              offline { nullptr };
 };
 
 struct ParticleObjectParseOutput {
@@ -337,8 +341,10 @@ struct ProcessOpts {
     unsigned kinds { All };
 };
 
+// services 在建上下文的第一步就放进去：建上下文时相机字段脚本已经会创建脚本运行时。
 SceneParseContext BuildContext(fs::VFS&, ref<str> scene_id, const wpscene::SceneMetadata&,
                                array<i32, 2>                ortho_extent,
+                               Services*                   services,
                                const NJson*                user_properties    = nullptr,
                                Option<rstd::path::PathBuf> shader_cache_dir   = None(),
                                GeometryShaderLimits        geometry_limits    = {},

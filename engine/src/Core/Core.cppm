@@ -143,10 +143,10 @@ struct EqualVisitor {
 } // namespace visitor
 
 // Random
+// 上游的线程随机数。离线作业不用它（见 Services::random），只剩不在离线作业里的调用方：
+// 单测和待 R5 删除的实时路径。
 using Random = effolkronium::random_thread_local;
 
-// An offline job owns its RNG and clock. The scope restores the caller's RNG
-// so two jobs stepped alternately on one thread do not affect one another.
 struct OfflineDependency {
     std::int32_t owner { -1 }, target { -1 };
     std::string operation, property, binding;
@@ -166,11 +166,13 @@ struct OfflineSourceScriptError {
     std::string   stack;
 };
 
-struct OfflineExecutionContext {
-    Random::engine_type random { 0 };
+// 一个离线作业的执行服务：随机数、时钟、诊断与依赖追踪。作业所有者（离线运行时）持有，
+// 显式传给场景解析、脚本、粒子、Puppet、文本与纹理缓存。拿到空指针的调用方就是不在离线作业里。
+struct Services {
+    // 作业自己的引擎，所有随机数消费者共用；离线渲染的随机序列只由作业种子和消费顺序决定。
+    effolkronium::random_local random;
     double epoch_ms { 946684800000.0 }; // 2000-01-01 UTC
     double elapsed { 0.0 };
-    double delta { 0.0 };
     bool failed { false };
     bool trace_scene { false };
     uint64_t runtime_ik_chain_solves { 0 };
@@ -193,24 +195,11 @@ struct OfflineExecutionContext {
     }
 };
 
-inline thread_local OfflineExecutionContext* active_offline_execution = nullptr;
-
-class OfflineExecutionScope : NoCopy, NoMove {
-public:
-    explicit OfflineExecutionScope(OfflineExecutionContext& context)
-        : m_context(context), m_previous(active_offline_execution), m_random(Random::get_engine()) {
-        active_offline_execution = &context;
-        Random::engine() = context.random;
-    }
-    ~OfflineExecutionScope() {
-        m_context.random = Random::get_engine();
-        Random::engine() = m_random;
-        active_offline_execution = m_previous;
-    }
-private:
-    OfflineExecutionContext& m_context;
-    OfflineExecutionContext* m_previous;
-    Random::engine_type m_random;
-};
+// 区间随机数：离线作业用作业引擎，不在作业里用上游线程引擎。两边是同一个库的同一套分布实现，
+// 所以离线作业的序列与原先"作用域把作业引擎换进线程引擎"时逐个相同。
+template<typename T>
+T RandomRange(Services* services, T from, T to) {
+    return services != nullptr ? services->random.get(from, to) : Random::get(from, to);
+}
 
 } // namespace owe

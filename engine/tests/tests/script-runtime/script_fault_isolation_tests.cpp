@@ -17,9 +17,8 @@ using rstd::sync::Arc;
 using namespace owe::script;
 
 TEST(ScriptFaultIsolation, UpdateFaultKeepsLastValueAndOtherBindingsRunning) {
-    owe::OfflineExecutionContext offline;
-    owe::OfflineExecutionScope   scope(offline);
-    JsRuntime                    runtime;
+    owe::Services offline;
+    JsRuntime     runtime(&offline);
 
     auto faulty_owner = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
                                                    Eigen::Vector3f::Ones(),
@@ -95,9 +94,8 @@ TEST(ScriptFaultIsolation, UpdateFaultKeepsLastValueAndOtherBindingsRunning) {
 }
 
 TEST(ScriptFaultIsolation, InitFaultRecordsAndStillRunsUpdates) {
-    owe::OfflineExecutionContext offline;
-    owe::OfflineExecutionScope   scope(offline);
-    JsRuntime                    runtime;
+    owe::Services offline;
+    JsRuntime     runtime(&offline);
     auto root = Arc<owe::SceneNode>::make();
     auto faulty = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
                                             Eigen::Vector3f::Ones(),
@@ -159,9 +157,8 @@ TEST(ScriptFaultIsolation, InitFaultRecordsAndStillRunsUpdates) {
 }
 
 TEST(ScriptFaultIsolation, ModuleFaultKeepsPeerRunningAndPreservesUnsupportedFatal) {
-    owe::OfflineExecutionContext offline;
-    owe::OfflineExecutionScope   scope(offline);
-    JsRuntime                    runtime;
+    owe::Services offline;
+    JsRuntime     runtime(&offline);
     auto root = Arc<owe::SceneNode>::make();
     auto faulty = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
                                             Eigen::Vector3f::Ones(),
@@ -205,9 +202,8 @@ TEST(ScriptFaultIsolation, ModuleFaultKeepsPeerRunningAndPreservesUnsupportedFat
     EXPECT_NE(offline.source_script_errors.front().message.find("scene is not defined"),
               std::string::npos);
 
-    owe::OfflineExecutionContext unsupported_offline;
-    owe::OfflineExecutionScope   unsupported_scope(unsupported_offline);
-    JsRuntime                    unsupported_runtime;
+    owe::Services unsupported_offline;
+    JsRuntime     unsupported_runtime(&unsupported_offline);
     EXPECT_NE(unsupported_runtime.MakeFieldScript(
                   "engine.notImplementedOffline();",
                   "test/module_unsupported_fatal",
@@ -220,9 +216,8 @@ TEST(ScriptFaultIsolation, ModuleFaultKeepsPeerRunningAndPreservesUnsupportedFat
 }
 
 TEST(ScriptFaultIsolation, CompileFaultPreservesInitialValueAndPeer) {
-    owe::OfflineExecutionContext offline;
-    owe::OfflineExecutionScope   scope(offline);
-    JsRuntime                    runtime;
+    owe::Services offline;
+    JsRuntime     runtime(&offline);
     auto root = Arc<owe::SceneNode>::make();
     auto faulty = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
                                             Eigen::Vector3f::Ones(),

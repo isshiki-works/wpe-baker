@@ -222,7 +222,7 @@ TEST(PuppetTwoBoneIkRuntime, LeavesPoseAloneWithoutActiveControllerLayer) {
     auto puppet = MakeIkPuppet(target, start + Eigen::Vector3f { 0.0f, 5.0f, 0.0f });
     puppet->prepared();
     const Eigen::Vector3f bind_end = puppet->bones[usize(2)].world_bind.translation();
-    owe::PuppetLayer      layer(puppet.clone());
+    owe::PuppetLayer      layer(puppet.clone(), nullptr);
     layer.prepared(slice<owe::PuppetLayer::AnimationLayer> {});
 
     const auto            skin     = layer.genFrame(0.0);
@@ -242,14 +242,13 @@ TEST(PuppetTwoBoneIkRuntime, SamplesControllerReplacementIndependentOfBoneCurve)
     AddControllerAnimation(*puppet, bind_target, bind_pole, target, pole);
     puppet->prepared();
 
-    owe::PuppetLayer                 layer(puppet.clone());
+    owe::Services                    context;
+    owe::PuppetLayer                 layer(puppet.clone(), &context);
     owe::PuppetLayer::AnimationLayer authored { .id = 7 };
     layer.prepared(slice<owe::PuppetLayer::AnimationLayer>::from_raw_parts(&authored, usize(1)));
     layer.AnimationPlaybacks()[usize()]->SetFrame(rstd::i32(1));
     layer.AnimationPlaybacks()[usize()]->Pause();
 
-    owe::OfflineExecutionContext context;
-    owe::OfflineExecutionScope   scope(context);
     const auto            skin       = layer.genFrame(0.0);
     const Eigen::Affine3f joint_pose = skin[usize(1)] * puppet->bones[usize(1)].world_bind;
     const Eigen::Affine3f end_pose   = skin[usize(2)] * puppet->bones[usize(2)].world_bind;
@@ -272,7 +271,7 @@ TEST(PuppetTwoBoneIkRuntime, ZeroControllerWeightLeavesPoseAlone) {
     puppet->prepared();
     const Eigen::Vector3f bind_end = puppet->bones[usize(2)].world_bind.translation();
 
-    owe::PuppetLayer                 layer(puppet.clone());
+    owe::PuppetLayer                 layer(puppet.clone(), nullptr);
     owe::PuppetLayer::AnimationLayer authored { .id = 7, .blend = 0.0 };
     layer.prepared(slice<owe::PuppetLayer::AnimationLayer>::from_raw_parts(&authored, usize(1)));
     layer.AnimationPlaybacks()[usize()]->SetFrame(rstd::i32(1));
@@ -292,14 +291,11 @@ TEST(PuppetTwoBoneIkRuntime, ReportsDegenerateAnimatedPoseOffline) {
     puppet->bones[usize(1)].local_bind.translation().setZero();
     puppet->prepared();
 
-    owe::PuppetLayer                 layer(puppet.clone());
+    owe::Services                    context;
+    owe::PuppetLayer                 layer(puppet.clone(), &context);
     owe::PuppetLayer::AnimationLayer authored { .id = 7 };
     layer.prepared(slice<owe::PuppetLayer::AnimationLayer>::from_raw_parts(&authored, usize(1)));
-    owe::OfflineExecutionContext context;
-    {
-        owe::OfflineExecutionScope scope(context);
-        (void)layer.genFrame(0.0);
-    }
+    (void)layer.genFrame(0.0);
 
     ASSERT_TRUE(context.failed);
     EXPECT_EQ(context.runtime_ik_chain_solves, 0u);

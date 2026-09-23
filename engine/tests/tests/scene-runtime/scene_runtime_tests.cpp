@@ -586,7 +586,7 @@ TEST(SceneParserSound, LoopRestartsTruncatedFileFromStart) {
     object.sound        = { "owe-sound-loop-tail.wav" };
     object.playbackmode = "loop";
     owe::media::OfflineMixer mixer;
-    ASSERT_NE(owe::SoundParser::Parse(object, vfs, mixer, nullptr), nullptr);
+    ASSERT_NE(owe::SoundParser::Parse(object, vfs, mixer, nullptr, nullptr), nullptr);
     mixer.play();
 
     // 按 60 fps 的块拉 2.5 遍以上。
@@ -990,19 +990,19 @@ TEST(SceneCameraPath, SequentialQueueSamplesClipAndHoldsEmptyClip) {
     });
     path.queue.push(owe::SceneCameraPathClip { .fps = 30.0f, .length = i32(30) });
 
-    ASSERT_TRUE(path.Tick(0.0));
+    ASSERT_TRUE(path.Tick(0.0, nullptr));
     EXPECT_DOUBLE_EQ(camera->Transforms().eye.z(), 5.0);
     EXPECT_DOUBLE_EQ(camera->Fov(), 45.0);
 
-    ASSERT_TRUE(path.Tick(0.5));
+    ASSERT_TRUE(path.Tick(0.5, nullptr));
     EXPECT_DOUBLE_EQ(camera->Transforms().eye.z(), 6.0);
     EXPECT_DOUBLE_EQ(camera->Fov(), 52.5);
 
-    ASSERT_TRUE(path.Tick(1.0));
+    ASSERT_TRUE(path.Tick(1.0, nullptr));
     EXPECT_DOUBLE_EQ(camera->Transforms().eye.z(), 7.0);
     EXPECT_DOUBLE_EQ(camera->Fov(), 60.0);
 
-    ASSERT_TRUE(path.Tick(1.5));
+    ASSERT_TRUE(path.Tick(1.5, nullptr));
     EXPECT_DOUBLE_EQ(camera->Transforms().eye.z(), 7.0);
     EXPECT_DOUBLE_EQ(camera->Fov(), 60.0);
 }

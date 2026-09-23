@@ -1442,13 +1442,14 @@ public:
 
     void CaptureViewport();
     void SetEnabled(bool value);
-    bool Tick(double runtime);
+    // services：离线作业的服务（不在离线作业里为空），随机队列从它取随机数。
+    bool Tick(double runtime, Services* services);
     bool ApplyDefault();
 
 private:
     void ResetQueue();
-    bool TickQueue(double runtime);
-    void SelectQueueClip(bool initial);
+    bool TickQueue(double runtime, Services* services);
+    void SelectQueueClip(bool initial, Services* services);
     void CaptureQueueBase();
     bool ApplyQueueClip(float frame);
 
@@ -2904,7 +2905,7 @@ public:
     void RegisterLinkedCamera(String source, String linked);
     void UpdateLinkedCamera(ref<str> name);
 
-    void        TickCameraPaths();
+    void        TickCameraPaths(Services* services);
     void        TickMaterialShaderAnimations();
     void        CaptureCameraPathViewports();
     std::string EnsureLinkRenderTarget(WallpaperLayerId source_layer, const SceneNode& source_node);

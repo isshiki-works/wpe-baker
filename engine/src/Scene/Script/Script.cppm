@@ -150,7 +150,9 @@ struct LayerAssetReference {
 // tick is the single owner.
 class JsRuntime : NoCopy, NoMove {
 public:
-    JsRuntime();
+    // offline 非空即离线作业：装离线全局（Date/performance/Math.random
+    // 走作业时钟与引擎），诊断记进作业。
+    explicit JsRuntime(Services* offline = nullptr);
     ~JsRuntime();
 
     // Returns nullptr on hard compile/init failure (logs once).
@@ -308,7 +310,8 @@ std::function<void(const ScriptValue&)> MakeNodeColorApply(rstd::sync::Arc<owe::
 // populated by the parser, then installed as a Scene extension.
 class ScriptScene : NoCopy, NoMove {
 public:
-    explicit ScriptScene(Option<Arc<AudioResponseDemand>> demand = rstd::None());
+    explicit ScriptScene(Option<Arc<AudioResponseDemand>> demand  = rstd::None(),
+                         Services*                        offline = nullptr);
     ~ScriptScene();
 
     JsRuntime& runtime() noexcept;

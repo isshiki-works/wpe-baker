@@ -427,7 +427,7 @@ struct AudioBufferSlot {
 };
 
 struct EngineHostState {
-    OfflineExecutionContext* offline { nullptr };
+    Services*                       offline { nullptr };
     FrameInputs                     inputs;
     MediaStatus                     media;
     bool                            media_initialized { false };
@@ -3482,6 +3482,11 @@ VideoPlaybackState* GetVideoPlayback(JSValueConst value) {
     return handle != nullptr ? handle->playback.as_ptr().as_raw_ptr() : nullptr;
 }
 
+// 离线作业的服务；不在离线作业里为空。
+Services* OfflineServices(JSContext* ctx) {
+    return static_cast<EngineHostState*>(JS_GetContextOpaque(ctx))->offline;
+}
+
 JSValue VideoTextureGetDuration(JSContext* ctx, JSValueConst this_val) {
     auto* playback = GetVideoPlayback(this_val);
     auto  duration = playback != nullptr ? playback->Duration() : None<f64>();
@@ -3499,9 +3504,10 @@ JSValue VideoTextureSetRate(JSContext* ctx, JSValueConst this_val, JSValueConst 
     auto parsed_rate = f64(rate);
     if (parsed_rate.is_finite() && parsed_rate > f64()) {
         if (auto* playback = GetVideoPlayback(this_val)) {
-            if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+            auto* offline = OfflineServices(ctx);
+            if (offline) playback->AdvanceOffline(f64(offline->elapsed));
             playback->SetRate(parsed_rate);
-            if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+            if (offline) playback->AdvanceOffline(f64(offline->elapsed));
         }
     }
     return JS_UNDEFINED;
@@ -3510,29 +3516,32 @@ JSValue VideoTextureSetRate(JSContext* ctx, JSValueConst this_val, JSValueConst 
 JSValue VideoTextureGetVolume(JSContext* ctx, JSValueConst) { return JS_NewFloat64(ctx, 1.0); }
 JSValue VideoTextureSetVolume(JSContext*, JSValueConst, JSValueConst) { return JS_UNDEFINED; }
 
-JSValue VideoTexturePlay(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+JSValue VideoTexturePlay(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     if (auto* playback = GetVideoPlayback(this_val)) {
-        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        auto* offline = OfflineServices(ctx);
+        if (offline) playback->AdvanceOffline(f64(offline->elapsed));
         playback->Play();
-        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        if (offline) playback->AdvanceOffline(f64(offline->elapsed));
     }
     return JS_UNDEFINED;
 }
 
-JSValue VideoTextureStop(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+JSValue VideoTextureStop(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     if (auto* playback = GetVideoPlayback(this_val)) {
-        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        auto* offline = OfflineServices(ctx);
+        if (offline) playback->AdvanceOffline(f64(offline->elapsed));
         playback->Stop();
-        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        if (offline) playback->AdvanceOffline(f64(offline->elapsed));
     }
     return JS_UNDEFINED;
 }
 
-JSValue VideoTexturePause(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+JSValue VideoTexturePause(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     if (auto* playback = GetVideoPlayback(this_val)) {
-        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        auto* offline = OfflineServices(ctx);
+        if (offline) playback->AdvanceOffline(f64(offline->elapsed));
         playback->Pause();
-        if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+        if (offline) playback->AdvanceOffline(f64(offline->elapsed));
     }
     return JS_UNDEFINED;
 }
@@ -3545,9 +3554,10 @@ JSValue VideoTextureSetCurrentTime(JSContext* ctx, JSValueConst this_val, int ar
     auto parsed_seconds = f64(seconds);
     if (parsed_seconds.is_finite() && parsed_seconds >= f64()) {
         if (auto* playback = GetVideoPlayback(this_val)) {
-            if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+            auto* offline = OfflineServices(ctx);
+            if (offline) playback->AdvanceOffline(f64(offline->elapsed));
             playback->Seek(parsed_seconds);
-            if (active_offline_execution) playback->AdvanceOffline(f64(active_offline_execution->elapsed));
+            if (offline) playback->AdvanceOffline(f64(offline->elapsed));
         }
     }
     return JS_UNDEFINED;
@@ -3555,10 +3565,11 @@ JSValue VideoTextureSetCurrentTime(JSContext* ctx, JSValueConst this_val, int ar
 
 JSValue VideoTextureGetCurrentTime(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* playback = GetVideoPlayback(this_val);
-    if (playback != nullptr && active_offline_execution != nullptr) {
+    auto* offline  = OfflineServices(ctx);
+    if (playback != nullptr && offline != nullptr) {
         // Hidden textures have no decoder Pump. The script-visible clock still
         // advances, while its published value is a phase within the video loop.
-        double current = playback->AdvanceOffline(f64(active_offline_execution->elapsed)).to_primitive();
+        double current = playback->AdvanceOffline(f64(offline->elapsed)).to_primitive();
         auto duration = playback->Duration();
         if (duration.is_some() && duration->is_finite() && *duration > f64())
             current = std::fmod(current, duration->to_primitive());
@@ -3865,8 +3876,9 @@ JSValue OfflineRandom(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     TraceDependency(ctx, "random", "Math.random");
     // Exact 53 random bits mapped into [0,1), sharing the job's seeded engine
     // with particles. std::uniform_real_distribution may include endpoint 1.
-    const uint64_t hi = uint64_t(Random::engine()() >> 5);
-    const uint64_t lo = uint64_t(Random::engine()() >> 6);
+    auto&          engine = OfflineServices(ctx)->random.engine();
+    const uint64_t hi     = uint64_t(engine() >> 5);
+    const uint64_t lo     = uint64_t(engine() >> 6);
     return JS_NewFloat64(ctx, double((hi << 26) | lo) / 9007199254740992.0);
 }
 
@@ -3961,8 +3973,8 @@ void InstallOfflineGlobals(JSContext* ctx) {
 
 } // namespace
 
-JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
-    m_impl->host.offline = active_offline_execution;
+JsRuntime::JsRuntime(Services* offline): m_impl(std::make_unique<Impl>()) {
+    m_impl->host.offline = offline;
     if (m_impl->host.offline) {
         double seconds = std::fmod(m_impl->host.offline->epoch_ms / 1000.0, 86400.0);
         if (seconds < 0.0) seconds += 86400.0;
@@ -4685,12 +4697,13 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
 // ---------------------------------------------------------------------------
 
 struct ScriptScene::Impl {
+    explicit Impl(Services* offline): rt(offline) {}
     JsRuntime             rt;
     std::vector<Actuator> actuators;
 };
 
-ScriptScene::ScriptScene(Option<Arc<AudioResponseDemand>> demand)
-    : m_impl(std::make_unique<Impl>()) {
+ScriptScene::ScriptScene(Option<Arc<AudioResponseDemand>> demand, Services* offline)
+    : m_impl(std::make_unique<Impl>(offline)) {
     m_impl->rt.SetAudioResponseDemand(rstd::move(demand));
 }
 ScriptScene::~ScriptScene() = default;

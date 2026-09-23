@@ -1284,11 +1284,11 @@ void SceneCameraPath::CaptureQueueBase() {
         queue_base_zoom = static_cast<float>(default_width / value.Width());
 }
 
-void SceneCameraPath::SelectQueueClip(bool initial) {
+void SceneCameraPath::SelectQueueClip(bool initial, Services* services) {
     if (queue.is_empty()) return;
     if (queue_mode == SceneCameraPathQueueMode::Random) {
-        queue_index =
-            usize(Random::get<unsigned>(0, rstd::as_cast<unsigned>(queue.len() - usize(1))));
+        queue_index = usize(
+            RandomRange<unsigned>(services, 0, rstd::as_cast<unsigned>(queue.len() - usize(1))));
     } else if (initial) {
         queue_index = usize();
     } else {
@@ -1333,10 +1333,10 @@ bool SceneCameraPath::ApplyQueueClip(float frame) {
     return true;
 }
 
-bool SceneCameraPath::TickQueue(double runtime) {
+bool SceneCameraPath::TickQueue(double runtime, Services* services) {
     if (queue.is_empty()) return false;
     if (queue_last_runtime.is_none() || runtime < *queue_last_runtime) {
-        SelectQueueClip(true);
+        SelectQueueClip(true, services);
         queue_last_runtime = Some(runtime);
         return ApplyQueueClip(0.0f);
     }
@@ -1361,7 +1361,7 @@ bool SceneCameraPath::TickQueue(double runtime) {
             ++zero_duration;
             if (zero_duration >= queue.len()) break;
         }
-        SelectQueueClip(false);
+        SelectQueueClip(false, services);
     }
 
     const auto& clip = queue[queue_index];
@@ -1388,12 +1388,12 @@ bool SceneCameraPath::ApplyDefault() {
     return true;
 }
 
-bool SceneCameraPath::Tick(double runtime) {
+bool SceneCameraPath::Tick(double runtime, Services* services) {
     if (camera.is_none()) return false;
     auto& value = **camera;
     if (! enabled) return ApplyDefault();
 
-    if (! queue.is_empty()) return TickQueue(runtime);
+    if (! queue.is_empty()) return TickQueue(runtime, services);
 
     if (! lookat_tracks.is_empty()) {
         auto key = eval_lookat_tracks(lookat_tracks.as_slice(), runtime, lookat_fps);
@@ -2956,7 +2956,7 @@ Vec<SceneMaterialDirtyEvent> Scene::ConsumePreparedMaterialDirtyEvents() {
     return events;
 }
 
-void Scene::TickCameraPaths() {
+void Scene::TickCameraPaths(Services* services) {
     if (m_camera_paths.is_empty()) return;
 
     HashSet<String> has_enabled;
@@ -2968,7 +2968,7 @@ void Scene::TickCameraPaths() {
     HashSet<String> reset;
     for (const auto& path : m_camera_paths) {
         if (! path->enabled) continue;
-        if (path->Tick(m_runtime.Frame().elapsed.to_primitive()))
+        if (path->Tick(m_runtime.Frame().elapsed.to_primitive(), services))
             touched.insert(path->camera_name.clone());
     }
     for (const auto& path : m_camera_paths) {

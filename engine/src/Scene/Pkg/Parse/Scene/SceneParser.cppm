@@ -1,5 +1,6 @@
 export module wescene.pkg.parse:scene_parser;
 import rstd;
+import wescene.core;
 import owe.media;
 import wescene.fs;
 import wescene.json;
@@ -37,6 +38,7 @@ struct SceneParseOptions {
     const NJson*                user_properties { nullptr };
     Option<rstd::path::PathBuf> shader_cache_dir;
     SceneParseCapabilities      capabilities;
+    Services*                   services { nullptr }; // 离线作业的服务；空 = 不在离线作业里
 };
 
 struct ParsedScene {

@@ -87,13 +87,14 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
         if (! MdlParser::Parse(rstd::cppstd::as_str(wpimgobj.puppet).unwrap(),
                                vfs,
                                *parsed_puppet,
+                               context.services,
                                &missing_puppet)) {
             if (missing_puppet) {
                 const std::string message =
                     "puppet unavailable: " + wpimgobj.puppet +
                     "; using image plane";
                 rstd_warn("{}", message);
-                if (active_offline_execution) active_offline_execution->diagnose(message);
+                if (context.services) context.services->diagnose(message);
             } else {
                 rstd_error("parse puppet failed: {}", wpimgobj.puppet);
             }
@@ -196,8 +197,8 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
     };
     Option<Arc<PuppetLayer>> image_puppet_layer;
     if (puppet.is_some() && has_bones) {
-        image_puppet_layer =
-            Some(MakePuppetLayer((*(*puppet)->puppet).clone(), wpimgobj.puppet_layers));
+        image_puppet_layer = Some(MakePuppetLayer(
+            (*(*puppet)->puppet).clone(), wpimgobj.puppet_layers, context.services));
         RegisterPuppetLayer(context, spImgNode.as_ptr(), (*image_puppet_layer).clone());
     }
 
@@ -852,7 +853,8 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                             image_puppet_layer.is_some()
                                 ? (*image_puppet_layer).clone()
                                 : MakePuppetLayer((*(*puppet)->puppet).clone(),
-                                                  wpimgobj.puppet_layers);
+                                                  wpimgobj.puppet_layers,
+                                                  context.services);
                         RegisterPuppetLayer(
                             context, spEffNode.as_ptr(), rstd::move(effect_puppet_layer));
                     }

@@ -2,6 +2,7 @@ module;
 
 export module wescene.text;
 import rstd;
+import wescene.core;
 import wescene.types;
 import rstd.cppstd;
 import wescene.scene;
@@ -155,7 +156,9 @@ public:
     //   3. first available .ttf/.otf in /usr/share/fonts as last-resort
     //      fallback (when fallback_to_any == true)
     // Returns {nullptr, ""} if nothing matches.
-    static ResolvedBlob ResolveSystemFont(std::string_view name, bool fallback_to_any = true);
+    // services 非空即离线作业：找不到字体记诊断，且不退到任意系统字体。
+    static ResolvedBlob ResolveSystemFont(std::string_view name, bool fallback_to_any,
+                                          Services* services);
 
 private:
     struct Impl;

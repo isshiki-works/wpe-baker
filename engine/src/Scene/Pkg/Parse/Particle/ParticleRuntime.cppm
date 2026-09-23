@@ -247,6 +247,8 @@ struct ParticleFrame : particle::ParticleFrameContext {
 };
 
 auto ParticleFrameFrom(const particle::ParticleFrameContext*) -> ref<ParticleFrame>;
+// 粒子程序所在子系统的离线作业服务；不在离线作业里为空。
+auto FrameServices(const particle::ParticleFrameContext*) -> Services*;
 
 struct ParticleSpawnColumns {
     mut_ref<particle::ParticleSlotState[]> states;
@@ -453,10 +455,10 @@ public:
         return max_count.checked_mul(EffectiveInstanceCapacity(max_instance_count, spawn_type));
     }
 
-    ParticleSubSystem(Scene&, std::shared_ptr<SceneMesh>, u32 max_count, f64 rate,
-                      u32 max_instance_count, f64    probability, SpawnType, ParticleAnimationSpec,
-                      ParticleFollowAnchor = {}, u32 trail_length = {}, f64 trail_duration = {},
-                      f64 start_time = {}, bool world_space = false,
+    ParticleSubSystem(Scene&, Services* services, std::shared_ptr<SceneMesh>, u32 max_count,
+                      f64 rate, u32 max_instance_count, f64                 probability, SpawnType,
+                      ParticleAnimationSpec, ParticleFollowAnchor = {}, u32 trail_length = {},
+                      f64 trail_duration = {}, f64 start_time = {}, bool world_space = false,
                       Option<Arc<ParticleTrailUniformState>> trail_uniform_state = None());
     ~ParticleSubSystem();
 
@@ -491,6 +493,7 @@ public:
         m_controlpoints[index].angle_track = Some(rstd::move(track));
     }
     void SetOwnerNode(SceneNode* node) noexcept { m_owner_node = node; }
+    auto OfflineServices() const noexcept -> Services* { return m_services; }
     void TraceExternalInput(ref<str> property) const;
     void SetPlaybackState(Arc<ParticlePlaybackState> state) {
         m_playback_state = Some(rstd::move(state));
@@ -544,6 +547,7 @@ private:
                     Eigen::Vector3f position = Eigen::Vector3f::Zero(), bool fixed = false);
 
     Scene&                                                        m_scene;
+    Services*                                                     m_services;
     std::shared_ptr<SceneMesh>                                    m_mesh;
     SceneNode*                                                    m_owner_node { nullptr };
     particle::ParticleSchemaBuilder                               m_schema_builder;

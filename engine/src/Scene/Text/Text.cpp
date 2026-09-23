@@ -500,7 +500,8 @@ static SystemFontLocation ResolveSystemFamily(std::string_view name) {
 #endif
 }
 
-FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool fallback_to_any) {
+FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool fallback_to_any,
+                                                     owe::Services* services) {
     namespace fs = std::filesystem;
 
     auto try_load = [](const fs::path& p, std::uint32_t index = 0) -> ResolvedBlob {
@@ -510,8 +511,8 @@ FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool
         return { std::move(bytes), PathUtf8(p), index };
     };
     auto unavailable = [&]() -> ResolvedBlob {
-        if (owe::active_offline_execution && ! name.empty()) {
-            owe::active_offline_execution->diagnose("font unavailable: " + std::string(name), true);
+        if (services && ! name.empty()) {
+            services->diagnose("font unavailable: " + std::string(name), true);
         }
         return { nullptr, {} };
     };
@@ -571,22 +572,22 @@ FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool
         auto arial = ResolveSystemFamily("systemfont_arial");
         if (! arial.path.empty()) {
             if (auto rb = try_load(arial.path, arial.face_index); rb.bytes) {
-                if (owe::active_offline_execution) {
-                    owe::active_offline_execution->diagnose(
-                        "font unavailable: " + std::string(name) + "; using systemfont_arial");
+                if (services) {
+                    services->diagnose("font unavailable: " + std::string(name) +
+                                       "; using systemfont_arial");
                 }
                 return rb;
             }
         }
-        if (owe::active_offline_execution) {
-            owe::active_offline_execution->diagnose(
+        if (services) {
+            services->diagnose(
                 "font fallback unavailable: systemfont_arial for " + std::string(name), true);
         }
         return { nullptr, {} };
     }
 #endif
 
-    if (owe::active_offline_execution && ! name.empty()) return unavailable();
+    if (services && ! name.empty()) return unavailable();
     if (! fallback_to_any) return { nullptr, {} };
 
     // Last-resort fallback: any .ttf/.otf in the system roots.

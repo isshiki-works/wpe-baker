@@ -237,7 +237,8 @@ class PuppetLayer {
     friend class Puppet;
 
 public:
-    explicit PuppetLayer(Arc<Puppet>);
+    // services 非空即离线作业：IK 求解失败记为致命诊断，并计数成功求解的链。
+    PuppetLayer(Arc<Puppet>, Services* services);
     ~PuppetLayer();
 
     struct AnimationLayer {
@@ -294,6 +295,7 @@ private:
     Vec<Arc<SceneAnimationPlayback>> m_playbacks;
     Vec<float>                       m_texture_channel_blend_map;
     Arc<Puppet>                      m_puppet;
+    Services*                        m_services;
 };
 
 } // namespace owe

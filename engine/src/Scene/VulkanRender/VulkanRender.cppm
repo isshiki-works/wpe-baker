@@ -2,6 +2,7 @@ module;
 
 export module wescene.vulkan_render;
 import wescene.types;
+import wescene.core;
 import rstd;
 import rstd.cppstd;
 import wescene.vulkan;
@@ -297,7 +298,8 @@ public:
     /* Tick all registered video-tex decoders. No-op when no scene
      * texture has been recognised as a VIDEO container. Invoked from
      * SceneWallpaper's per-frame RenderDraw handler. */
-    void pumpVideoTextures(double dt_seconds);
+    // services：离线作业的服务（不在离线作业里为空），视频按作业时钟选帧。
+    void pumpVideoTextures(double dt_seconds, Services* services);
 
     /* For every FontFace in the Scene font-cache extension with non-empty DirtyRects,
      * coalesce to one AABB and vkCmdCopyBufferToImage into the face's

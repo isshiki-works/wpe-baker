@@ -12,8 +12,8 @@ import wescene.types;
 
 TEST(FontCache, WindowsSansSerifSystemAliasResolvesWithoutFallback) {
 #ifdef _WIN32
-    auto font =
-        owe::text::FontCache::ResolveSystemFont("systemfont_sansserif", /*fallback_to_any=*/false);
+    auto font = owe::text::FontCache::ResolveSystemFont(
+        "systemfont_sansserif", /*fallback_to_any=*/false, nullptr);
     ASSERT_NE(font.bytes, nullptr);
     EXPECT_FALSE(font.source.empty());
 #else
@@ -23,10 +23,11 @@ TEST(FontCache, WindowsSansSerifSystemAliasResolvesWithoutFallback) {
 
 TEST(FontCache, WindowsMissingNamedFontFallsBackToArial) {
 #ifdef _WIN32
-    auto arial =
-        owe::text::FontCache::ResolveSystemFont("systemfont_arial", /*fallback_to_any=*/false);
+    auto arial = owe::text::FontCache::ResolveSystemFont(
+        "systemfont_arial", /*fallback_to_any=*/false, nullptr);
     auto missing = owe::text::FontCache::ResolveSystemFont("WpeBaker Missing Font 9F73E1.ttf",
-                                                           /*fallback_to_any=*/true);
+                                                           /*fallback_to_any=*/true,
+                                                           nullptr);
     ASSERT_NE(arial.bytes, nullptr);
     ASSERT_NE(missing.bytes, nullptr);
     EXPECT_EQ(missing.source, arial.source);
@@ -38,7 +39,8 @@ TEST(FontCache, WindowsMissingNamedFontFallsBackToArial) {
 }
 
 TEST(FontFace, TabHasNoLayoutOrRasterizedGlyph) {
-    auto font = owe::text::FontCache::ResolveSystemFont("systemfont_monospace");
+    auto font = owe::text::FontCache::ResolveSystemFont(
+        "systemfont_monospace", /*fallback_to_any=*/true, nullptr);
     ASSERT_NE(font.bytes, nullptr);
 
     owe::text::FontCache cache;
@@ -56,7 +58,8 @@ TEST(FontFace, TabHasNoLayoutOrRasterizedGlyph) {
 }
 
 TEST(TextLayouter, TabIsIgnoredWithoutAControlQuad) {
-    auto font = owe::text::FontCache::ResolveSystemFont("systemfont_monospace");
+    auto font = owe::text::FontCache::ResolveSystemFont(
+        "systemfont_monospace", /*fallback_to_any=*/true, nullptr);
     ASSERT_NE(font.bytes, nullptr);
 
     owe::text::FontCache cache;

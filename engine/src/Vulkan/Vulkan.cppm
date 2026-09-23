@@ -672,6 +672,8 @@ public:
      * convert NV12→RGBA on the CPU, and upload to the slot's stable
      * VkImage. No-op if no video textures are registered. */
     void PumpVideoTextures(double dt_seconds);
+    // R4 过渡：注入离线作业服务（不在离线作业里为空）后调上面那个；T5b 合并后两者合一。
+    void                  PumpVideoTextures(double dt_seconds, Services* services);
     VideoDecoderInventory ObserveVideoDecoders();
 
     /* vkCmdCopyBufferToImage a sub-rect of `atlas` into the supplied texture. */

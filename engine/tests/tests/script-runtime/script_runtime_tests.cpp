@@ -104,9 +104,8 @@ struct SoundControlProbe final : owe::SceneSoundControl {
 } // namespace
 
 TEST(OfflineClock, DateNowMatchesDateTimeClipAtFractionalFrameTimes) {
-    owe::OfflineExecutionContext clock;
-    owe::OfflineExecutionScope scope(clock);
-    JsRuntime rt;
+    owe::Services clock;
+    JsRuntime     rt(&clock);
     auto* probe = MakeProbe(rt, "test/offline_date_integer", R"JS(
         export function update() {
             const now = Date.now();
@@ -131,9 +130,8 @@ TEST(OfflineClock, DateNowMatchesDateTimeClipAtFractionalFrameTimes) {
 TEST(OfflineClock, HundredMillisecondIntervalFiresThirdTimeAtFrame36Of120Fps) {
     // IEngine documents delay in milliseconds; EngineSetTimerImpl divides by
     // 1000. https://docs.wallpaperengine.io/en/scene/scenescript/reference/class/IEngine.html
-    owe::OfflineExecutionContext clock;
-    owe::OfflineExecutionScope scope(clock);
-    JsRuntime rt;
+    owe::Services clock;
+    JsRuntime     rt(&clock);
     auto* probe = MakeProbe(rt, "test/offline_interval_boundary", R"JS(
         let count = 0;
         engine.setInterval(() => { ++count; }, 100);
@@ -1357,10 +1355,9 @@ TEST(ScriptTexAnim, ReadsAndControlsBoundSpriteAnimation) {
     scene.RegisterTexture(String::make("tex/script-sprite"_str), rstd::move(texture));
     scene.RebuildResourceIndex();
 
-    owe::OfflineExecutionContext offline;
+    owe::Services offline;
     offline.trace_scene = true;
-    owe::OfflineExecutionScope scope(offline);
-    JsRuntime   rt;
+    JsRuntime   rt(&offline);
     FrameInputs fi {};
     rt.SetFrameInputs(fi);
     auto* fs = rt.MakeFieldScript(
@@ -1491,14 +1488,13 @@ TEST(ScriptVideoTexture, OfflineClockSurvivesRendererLifetime) {
 }
 
 TEST(ScriptVideoTexture, HiddenOfflineControlsSyncClockAtMutation) {
-    owe::OfflineExecutionContext offline;
-    owe::OfflineExecutionScope   scope(offline);
+    owe::Services                offline;
     owe::SceneNode               node;
     auto                         playback = Arc<owe::VideoPlaybackState>::make();
     node.SetVideoControl(playback.clone());
     EXPECT_EQ(playback->AdvanceOffline(f64(0.5)), f64());
 
-    JsRuntime   rt;
+    JsRuntime   rt(&offline);
     FrameInputs fi {};
     rt.SetFrameInputs(fi);
     auto* fs = rt.MakeFieldScript(
@@ -1527,14 +1523,13 @@ TEST(ScriptVideoTexture, HiddenOfflineControlsSyncClockAtMutation) {
 }
 
 TEST(ScriptVideoTexture, HiddenOfflineGetterAdvancesAndWrapsWithoutDecoder) {
-    owe::OfflineExecutionContext offline;
-    owe::OfflineExecutionScope scope(offline);
+    owe::Services  offline;
     owe::SceneNode node;
     auto playback = Arc<owe::VideoPlaybackState>::make();
     node.SetVideoControl(playback.clone());
     playback->PublishTime(f64(), Some(f64(3.0)));
     EXPECT_EQ(playback->AdvanceOffline(f64(0.5)), f64());
-    JsRuntime rt;
+    JsRuntime   rt(&offline);
     FrameInputs fi {};
     rt.SetFrameInputs(fi);
     auto* fs = rt.MakeFieldScript(
@@ -1565,9 +1560,8 @@ TEST(SceneNodeVisibility, CaptureForcePreservesAuthoredAlpha) {
 }
 
 TEST(ScriptVideoTexture, StillImageIsNullAndContainerIsOrdinaryTypeError) {
-    owe::OfflineExecutionContext offline;
+    owe::Services offline;
     offline.trace_scene = true;
-    owe::OfflineExecutionScope   scope(offline);
     auto still = Arc<owe::SceneNode>::make();
     still->SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = rstd::i32(713) }));
     auto mesh = std::make_shared<owe::SceneMesh>();
@@ -1575,7 +1569,7 @@ TEST(ScriptVideoTexture, StillImageIsNullAndContainerIsOrdinaryTypeError) {
     mesh->Submeshes().push_back(owe::SceneMesh::Submesh { .material_slot = rstd::u32() });
     still->AddMesh(std::move(mesh));
 
-    JsRuntime still_runtime;
+    JsRuntime still_runtime(&offline);
     auto* still_script = still_runtime.MakeFieldScript(
         "const video = thisLayer.getVideoTexture(); export function update() { return video === null ? 1 : 0; }",
         "test/video_texture_still_image",
@@ -1609,9 +1603,8 @@ TEST(ScriptVideoTexture, StillImageIsNullAndContainerIsOrdinaryTypeError) {
                                        dependency.property == "videoTexture";
                             }));
 
-    owe::OfflineExecutionContext container_offline;
-    owe::OfflineExecutionScope   container_scope(container_offline);
-    JsRuntime                     container_runtime;
+    owe::Services                 container_offline;
+    JsRuntime                     container_runtime(&container_offline);
     owe::SceneNode                container;
     container.SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = rstd::i32(714) }));
     auto* container_script = container_runtime.MakeFieldScript(
@@ -2523,10 +2516,9 @@ TEST(ScriptScene, PublicLayerQueriesUseAuthoredOrderAndTrackRuntimeLayers) {
     scene.AttachRuntimeNode(*scene.RootMut(), reporter.clone());
     scene.AttachRuntimeNode(*scene.RootMut(), internal.clone());
 
-    owe::OfflineExecutionContext offline;
+    owe::Services offline;
     offline.trace_scene = true;
-    owe::OfflineExecutionScope scope(offline);
-    JsRuntime                   rt;
+    JsRuntime rt(&offline);
     rt.SetScene(&scene);
     rt.RegisterInitialLayerConfig(
         a.as_ptr(), owe::ParseNJson(R"({"name":"A"})").unwrap());
@@ -3237,9 +3229,8 @@ TEST(ScriptAnimation, SeparatesLayerAndCurrentPropertyLookup) {
 
 TEST(ScriptAnimation, TracesCachedPlaybackControlsAndInitialization) {
     for (const char* operation : { "play()", "pause()", "stop()", "setFrame(4)", "rate = 2" }) {
-        owe::OfflineExecutionContext offline;
+        owe::Services offline;
         offline.trace_scene = true;
-        owe::OfflineExecutionScope scope(offline);
         owe::SceneNode layer;
         layer.SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = i32(711) }));
         auto clip = Arc<owe::SceneAnimationClip>::make(owe::SceneAnimationClipSpec {
@@ -3247,7 +3238,7 @@ TEST(ScriptAnimation, TracesCachedPlaybackControlsAndInitialization) {
             .fps = 6.0f, .end = i32(12),
         });
         auto playback = Arc<owe::SceneAnimationPlayback>::make(rstd::move(clip));
-        JsRuntime rt;
+        JsRuntime   rt(&offline);
         std::string code = "let animation; let ticks = 0; export function init(value) { "
                            "animation = thisObject.getAnimation(); animation.";
         code += operation;
@@ -3282,9 +3273,8 @@ TEST(ScriptAnimation, TracesCachedPlaybackControlsAndInitialization) {
 }
 
 TEST(ScriptAnimation, LayerLookupUsesTargetFieldAndCallingBinding) {
-    owe::OfflineExecutionContext offline;
+    owe::Services offline;
     offline.trace_scene = true;
-    owe::OfflineExecutionScope   scope(offline);
     auto target = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
                                             Eigen::Vector3f::Ones(),
                                             Eigen::Vector3f::Zero(),
@@ -3309,7 +3299,7 @@ TEST(ScriptAnimation, LayerLookupUsesTargetFieldAndCallingBinding) {
     auto root = Arc<owe::SceneNode>::make();
     root->AppendChild(target.clone());
     root->AppendChild(reporter.clone());
-    JsRuntime rt;
+    JsRuntime rt(&offline);
     auto* alpha_script = rt.MakeFieldScript(
         R"JS(export function update() {
             const layer = thisLayer.getAnimation();

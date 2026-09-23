@@ -249,7 +249,7 @@ std::vector<std::uint8_t> MdlaV6WithFirstFlags(std::uint32_t flags) {
     return bytes;
 }
 
-bool ParseMdlBytes(const std::vector<std::uint8_t>& bytes, owe::OfflineExecutionContext& context,
+bool ParseMdlBytes(const std::vector<std::uint8_t>& bytes, owe::Services& context,
                    owe::Mdl* parsed_mdl = nullptr) {
     static unsigned serial = 0;
     auto root = std::filesystem::temp_directory_path() /
@@ -276,10 +276,9 @@ bool ParseMdlBytes(const std::vector<std::uint8_t>& bytes, owe::OfflineExecution
             auto mounted = vfs.mount("/assets"_str, rstd::move(physical).unwrap_unchecked());
             EXPECT_TRUE(mounted.is_ok());
             if (mounted.is_ok()) {
-                owe::OfflineExecutionScope scope(context);
-                owe::Mdl                   local_mdl;
-                auto&                      mdl = parsed_mdl == nullptr ? local_mdl : *parsed_mdl;
-                parsed                         = owe::MdlParser::Parse("fixture.mdl"_str, vfs, mdl);
+                owe::Mdl local_mdl;
+                auto&    mdl = parsed_mdl == nullptr ? local_mdl : *parsed_mdl;
+                parsed       = owe::MdlParser::Parse("fixture.mdl"_str, vfs, mdl, &context);
             }
         }
     }
@@ -288,7 +287,7 @@ bool ParseMdlBytes(const std::vector<std::uint8_t>& bytes, owe::OfflineExecution
     return parsed;
 }
 
-bool HasDiagnostic(const owe::OfflineExecutionContext& context, std::string_view text) {
+bool HasDiagnostic(const owe::Services& context, std::string_view text) {
     return std::any_of(
         context.diagnostics.begin(), context.diagnostics.end(), [&](const auto& message) {
             return message.find(text) != std::string::npos;
@@ -322,7 +321,7 @@ std::uint32_t CountUvSeamTriangles(const owe::Mdl::Mesh& mesh) {
 TEST(MdlParser, AcceptsKnownEmptyMdlsMetadata) {
     auto bytes = MdlPrefix();
     AppendEmptyMdls(bytes);
-    owe::OfflineExecutionContext context;
+    owe::Services context;
     EXPECT_TRUE(ParseMdlBytes(bytes, context));
     EXPECT_FALSE(context.failed);
 }
@@ -331,14 +330,14 @@ TEST(MdlParser, DistinguishesMissingFileFromParseFailure) {
     owe::fs::VFS vfs;
     owe::Mdl     mdl;
     bool         missing = false;
-    EXPECT_FALSE(owe::MdlParser::Parse("missing-puppet.mdl"_str, vfs, mdl, &missing));
+    EXPECT_FALSE(owe::MdlParser::Parse("missing-puppet.mdl"_str, vfs, mdl, nullptr, &missing));
     EXPECT_TRUE(missing);
 }
 
 TEST(MdlParser, RejectsTruncatedMdlsIkControllerTable) {
     auto bytes = MdlPrefix();
     AppendEmptyMdls(bytes, 8);
-    owe::OfflineExecutionContext context;
+    owe::Services context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "fixture.mdl"));
@@ -347,7 +346,7 @@ TEST(MdlParser, RejectsTruncatedMdlsIkControllerTable) {
 
 TEST(MdlParser, ParsesSupportedIkRigAndControllerTracks) {
     auto                         bytes = MdlWithIkRig();
-    owe::OfflineExecutionContext context;
+    owe::Services                context;
     owe::Mdl                     mdl;
     EXPECT_TRUE(ParseMdlBytes(bytes, context, &mdl));
     EXPECT_FALSE(context.failed);
@@ -393,7 +392,7 @@ TEST(MdlParser, ParsesSupportedIkRigAndControllerTracks) {
 
 TEST(MdlParser, RejectsNonFiniteIkBoneLength) {
     auto                         bytes = MdlWithIkRig(std::numeric_limits<float>::quiet_NaN());
-    owe::OfflineExecutionContext context;
+    owe::Services                context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "invalid MDLS IK bone length"));
@@ -402,7 +401,7 @@ TEST(MdlParser, RejectsNonFiniteIkBoneLength) {
 TEST(MdlParser, RejectsInvalidUtf8MaterialName) {
     auto bytes = MdlPrefix(1);
     bytes.insert(bytes.end(), { 0xff, 0 });
-    owe::OfflineExecutionContext context;
+    owe::Services context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "invalid UTF-8 in material name"));
@@ -416,7 +415,7 @@ TEST(MdlParser, BoundsBoneNameToMdlsBlock) {
     bytes.insert(bytes.end(), { 'b', 'o', 'n', 'e' });
     FinishMdlBlock(bytes, end_field);
     bytes.push_back(0); // outside the declared MDLS block
-    owe::OfflineExecutionContext context;
+    owe::Services context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "unterminated bone name"));
@@ -425,7 +424,7 @@ TEST(MdlParser, BoundsBoneNameToMdlsBlock) {
 
 TEST(MdlParser, PropagatesInvalidUtf8PlayMode) {
     auto                         bytes = MdlWithPlayMode(std::string_view("\xff", 1), true);
-    owe::OfflineExecutionContext context;
+    owe::Services                context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "invalid UTF-8 in animation play_mode"));
@@ -433,7 +432,7 @@ TEST(MdlParser, PropagatesInvalidUtf8PlayMode) {
 
 TEST(MdlParser, BoundsPlayModeToMdlaBlock) {
     auto                         bytes = MdlWithPlayMode("loop", false);
-    owe::OfflineExecutionContext context;
+    owe::Services                context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "unterminated animation play_mode"));
@@ -444,7 +443,7 @@ TEST(MdlParser, BoundsPlayModeToMdlaBlock) {
 TEST(MdlParser, ReadsMdlaAnimationFlagsAndSourceReference) {
     for (std::uint32_t flags : { 0x401u, 0x2u }) {
         auto                         bytes = MdlaV6WithFirstFlags(flags);
-        owe::OfflineExecutionContext context;
+        owe::Services                context;
         owe::Mdl                     mdl;
         EXPECT_TRUE(ParseMdlBytes(bytes, context, &mdl)) << flags;
         EXPECT_FALSE(context.failed) << flags;
@@ -461,7 +460,7 @@ TEST(MdlParser, ReadsMdlaAnimationFlagsAndSourceReference) {
 
 TEST(MdlParser, RejectsUnsupportedPlayModeWithoutAssertion) {
     auto                         bytes = MdlWithPlayMode("unknown", true);
-    owe::OfflineExecutionContext context;
+    owe::Services                context;
     EXPECT_FALSE(ParseMdlBytes(bytes, context));
     EXPECT_TRUE(context.failed);
     EXPECT_TRUE(HasDiagnostic(context, "unsupported animation play_mode"));
@@ -474,7 +473,7 @@ TEST(Puppet, ArcOwnedLayerExposesBorrowedTransforms) {
     puppet->bones.push(rstd::move(bone));
     puppet->prepared();
 
-    owe::PuppetLayer layer(puppet.clone());
+    owe::PuppetLayer layer(puppet.clone(), nullptr);
     layer.prepared(slice<owe::PuppetLayer::AnimationLayer> {});
 
     EXPECT_EQ(layer.boneIndex("root"_str), 1u);
@@ -503,7 +502,7 @@ TEST(Puppet, SamplesTextureChannelBlendMapFromAnimationPlayback) {
     second.push(0.0f);
     puppet->prepared();
 
-    owe::PuppetLayer                 layer(puppet.clone());
+    owe::PuppetLayer                 layer(puppet.clone(), nullptr);
     owe::PuppetLayer::AnimationLayer authored {
         .id      = 781,
         .visible = true,
@@ -573,7 +572,7 @@ TEST(MdlMesh, Mdlv23LargeStaticMeshUsesUint32GlobalIndices) {
     ASSERT_TRUE(vfs.mount("/assets"_str, pkg_fs->mount_handle()).is_ok());
 
     owe::Mdl mdl;
-    ASSERT_TRUE(owe::MdlParser::Parse("models/球体01/球体01.mdl"_str, vfs, mdl));
+    ASSERT_TRUE(owe::MdlParser::Parse("models/球体01/球体01.mdl"_str, vfs, mdl, nullptr));
     ASSERT_FALSE(mdl.meshes.is_empty());
 
     const auto& mesh = mdl.meshes[usize()];
@@ -621,7 +620,7 @@ TEST(MdlMesh, Mdlv23ReadsPerMeshMaterialSkins) {
     ASSERT_TRUE(vfs.mount("/assets"_str, pkg_fs->mount_handle()).is_ok());
 
     owe::Mdl mdl;
-    ASSERT_TRUE(owe::MdlParser::Parse("models/prism/prism.mdl"_str, vfs, mdl));
+    ASSERT_TRUE(owe::MdlParser::Parse("models/prism/prism.mdl"_str, vfs, mdl, nullptr));
     ASSERT_EQ(mdl.header.mdlv, 23);
     ASSERT_EQ(mdl.header.skin_count, 2u);
     ASSERT_EQ(mdl.header.mesh_count, 1u);
@@ -652,7 +651,7 @@ TEST(MdlPuppet, Mdlv23ReadsMultiCurveMorphEvents) {
     ASSERT_TRUE(vfs.mount("/assets"_str, pkg_fs->mount_handle()).is_ok());
 
     owe::Mdl mdl;
-    ASSERT_TRUE(owe::MdlParser::Parse("models/sheet_puppet.mdl"_str, vfs, mdl));
+    ASSERT_TRUE(owe::MdlParser::Parse("models/sheet_puppet.mdl"_str, vfs, mdl, nullptr));
     ASSERT_EQ(mdl.mdla, 6);
     ASSERT_TRUE(mdl.puppet.is_some());
 

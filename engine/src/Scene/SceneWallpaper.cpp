@@ -308,7 +308,9 @@ public:
     bool step(uint64_t, double, const OfflineFrameInput&);
     bool offline() const { return m_offline; }
     bool profileOfflineFrame() const { return m_offline_profile; }
-    const OfflineExecutionContext& offlineContext() const { return m_offline_context; }
+    const Services& offlineContext() const { return m_services; }
+    // 离线作业的执行服务；实时路径返回空（实时路径待 R5 删除）。
+    Services* offlineServices() { return m_offline ? &m_services : nullptr; }
     bool readsOfflineFrame(uint64_t index) const { return m_offline_options.readsFrame(index); }
     std::string offlineError() const { return m_offline_error; }
     std::string offlineVideoRateOverrides() const {
@@ -376,7 +378,7 @@ private:
     bool m_offline_failed { false };
     uint64_t m_next_frame { 0 };
     double m_offline_dt { 0.0 };
-    OfflineExecutionContext m_offline_context;
+    Services m_services;
     std::vector<OfflineVideoPlaybackRateOverrideResult> m_offline_video_rate_overrides;
     std::string m_offline_error;
     OfflineAudioFrame m_audio_frame;
@@ -709,7 +711,7 @@ void SceneRenderController::onDraw() {
             const auto script_started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             owe::script::TickSceneScripts(*m_scene, fi);
             if (profile) script_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-script_started).count();
-            m_scene->TickCameraPaths();
+            m_scene->TickCameraPaths(m_main.offlineServices());
             m_scene->TickMaterialShaderAnimations();
             m_scene->TickTransformUpdaters();
         }
@@ -734,7 +736,7 @@ void SceneRenderController::onDraw() {
 
         /* Advance video textures (no-op if none) before drawFrame so
          * the new RGBA frame is sampled by the same render pass. */
-        m_render->pumpVideoTextures(delta * m_speed.to_primitive());
+        m_render->pumpVideoTextures(delta * m_speed.to_primitive(), m_main.offlineServices());
 
         /* Upload any glyph rects the actuators added this tick. Runs after
          * TickSceneScripts (which calls FontFace::Populate) and before
@@ -756,7 +758,7 @@ void SceneRenderController::onDraw() {
             const auto check_started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             if (const auto pass = m_render->firstUnpreparedPass()) {
                 const std::string message = "Offline frame omitted an unprepared render pass: " + *pass;
-                if (active_offline_execution) active_offline_execution->diagnose(message, true);
+                m_main.offlineServices()->diagnose(message, true);
                 invalidateOfflineFrame(m_step_index, message);
                 return;
             }
@@ -1377,6 +1379,7 @@ void SceneRuntimeController::loadScene() {
                         .max_geometry_total_output_components =
                             u32(m_render_capabilities->max_geometry_total_output_components),
                     },
+                .services = offlineServices(),
             });
         if (parsed.is_err()) {
             rstd_error("scene parse failed: {}", parsed.unwrap_err().message.as_str());
@@ -1467,11 +1470,10 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
     m_offline_profile = info.gpu_timing;
     m_offline_layers = info.layer_selection;
     m_offline_capture_target = info.capture_target;
-    m_offline_context.epoch_ms = options.epoch_ms;
-    m_offline_context.trace_scene = options.trace_scene;
+    m_services.epoch_ms = options.epoch_ms;
+    m_services.trace_scene = options.trace_scene;
     std::seed_seq seed { uint32_t(options.seed), uint32_t(options.seed >> 32) };
-    m_offline_context.random.seed(seed);
-    OfflineExecutionScope scope(m_offline_context);
+    m_services.random.seed(seed);
     info.offscreen = true;
     info.output_mode = RenderOutputMode::CpuReadback;
     info.video_hwdec = "none";
@@ -1481,7 +1483,7 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
     m_render_controller->post(render_msg::Init(Box<RenderInitInfo>::make(rstd::move(info))));
     if (!m_render_controller->renderInited()) m_offline_error = "Offline Vulkan initialization failed";
     else if (!m_render_controller->hasScene()) m_offline_error = "Offline scene loading failed; see engine diagnostics";
-    else if (m_offline_context.failed) m_offline_error = "Offline script initialization failed";
+    else if (m_services.failed) m_offline_error = "Offline script initialization failed";
     else {
         auto applied = m_render_controller->applyOfflineVideoPlaybackRateOverrides(
             std::span<const OfflineVideoPlaybackRateOverride>(
@@ -1514,16 +1516,14 @@ bool SceneRuntimeController::step(uint64_t index, double dt, const OfflineFrameI
         return false;
     }
     m_offline_dt = dt;
-    m_offline_context.elapsed = offlineFrameTime(index) * m_config.speed;
-    m_offline_context.delta = dt * m_config.speed;
-    OfflineExecutionScope scope(m_offline_context);
-    if (!m_render_controller->stepOffline(index, dt, input) || m_offline_context.failed) {
+    m_services.elapsed = offlineFrameTime(index) * m_config.speed;
+    if (!m_render_controller->stepOffline(index, dt, input) || m_services.failed) {
         // Scripts/particles may have mutated before a GPU error. Retrying the
         // same index is unsafe; require a fresh load and replay instead.
         m_offline_failed = true;
         m_offline_error = m_render_controller->readback().message;
-        if (m_offline_context.failed && !m_offline_context.diagnostics.empty())
-            m_offline_error = m_offline_context.diagnostics.back();
+        if (m_services.failed && !m_services.diagnostics.empty())
+            m_offline_error = m_services.diagnostics.back();
         if (m_offline_error.empty()) m_offline_error = "Offline frame failed; reload and replay required";
         if (m_render_controller->readback().completed() || m_render_controller->readback().message.empty())
             m_render_controller->invalidateOfflineFrame(index, m_offline_error);
@@ -1555,9 +1555,9 @@ bool SceneRuntimeController::step(uint64_t index, double dt, const OfflineFrameI
     m_audio_frame.frame_count = static_cast<uint32_t>(end - start);
     m_audio_frame.samples.resize(static_cast<size_t>(m_audio_frame.frame_count) * 2);
     const bool mixed = m_sound_manager->mix(m_audio_frame.samples);
-    if (!mixed || m_offline_context.failed) {
+    if (!mixed || m_services.failed) {
         m_offline_error = !mixed ? m_sound_manager->last_error() :
-            (m_offline_context.diagnostics.empty() ? "Offline audio source failed" : m_offline_context.diagnostics.back());
+            (m_services.diagnostics.empty() ? "Offline audio source failed" : m_services.diagnostics.back());
         m_offline_failed = true;
         m_audio_frame = OfflineAudioFrame {};
         m_render_controller->invalidateOfflineFrame(index, m_offline_error);
@@ -1727,11 +1727,6 @@ std::string SceneRenderController::describeOfflineScene() const {
                 const bool uses_system_media_thumbnail =
                     m_scene->MaterialHasTextureUserBinding(*material, "$mediaThumbnail"_str) ||
                     m_scene->MaterialHasTextureUserBinding(*material, "$mediaPreviousThumbnail"_str);
-                if (uses_system_media_thumbnail && active_offline_execution &&
-                    active_offline_execution->trace_scene && owner >= 0) {
-                    active_offline_execution->trace(
-                        { owner, -1, "input", "media", "system_media_texture", false });
-                }
                 auto is_audio_spectrum = [](std::string_view name) {
                     return name == "g_AudioSpectrum16Left" ||
                            name == "g_AudioSpectrum16Right" ||
