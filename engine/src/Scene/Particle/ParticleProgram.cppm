@@ -1,6 +1,7 @@
 export module wescene.particle.program;
 
 import rstd;
+import rstd.cppstd;
 import wescene.particle;
 
 using namespace rstd::prelude;
@@ -16,100 +17,104 @@ struct ParticleUpdateContext;
 struct ParticleExtractContext;
 
 struct ParticleEmitterProgram {
-    using Trait                  = ParticleEmitterProgram;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ParticleEmitterProgram;
-
-        void Compile(ParticleViewCompiler& compiler) { rstd::trait_call<0>(this, compiler); }
-        void Emit(ParticleEmitterContext& context) { rstd::trait_call<1>(this, context); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Compile, &T::Emit>;
+    virtual ~ParticleEmitterProgram()                    = default;
+    virtual void Compile(ParticleViewCompiler& compiler) = 0;
+    virtual void Emit(ParticleEmitterContext& context)   = 0;
 };
 
 struct ParticleSpawnProgram {
-    using Trait                  = ParticleSpawnProgram;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ParticleSpawnProgram;
-
-        void Compile(ParticleViewCompiler& compiler) { rstd::trait_call<0>(this, compiler); }
-        void Initialize(ParticleSpawnContext& context) { rstd::trait_call<1>(this, context); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Compile, &T::Initialize>;
+    virtual ~ParticleSpawnProgram()                        = default;
+    virtual void Compile(ParticleViewCompiler& compiler)   = 0;
+    virtual void Initialize(ParticleSpawnContext& context) = 0;
 };
 
 struct ParticleLifecycleProgram {
-    using Trait                  = ParticleLifecycleProgram;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ParticleLifecycleProgram;
-
-        void Compile(ParticleViewCompiler& compiler) { rstd::trait_call<0>(this, compiler); }
-        void Update(ParticleLifecycleContext& context) { rstd::trait_call<1>(this, context); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Compile, &T::Update>;
+    virtual ~ParticleLifecycleProgram()                    = default;
+    virtual void Compile(ParticleViewCompiler& compiler)   = 0;
+    virtual void Update(ParticleLifecycleContext& context) = 0;
 };
 
 struct ParticleEventProgram {
-    using Trait                  = ParticleEventProgram;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ParticleEventProgram;
-
-        void Compile(ParticleViewCompiler& compiler) { rstd::trait_call<0>(this, compiler); }
-        void Process(ParticleEventContext& context) { rstd::trait_call<1>(this, context); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Compile, &T::Process>;
+    virtual ~ParticleEventProgram()                      = default;
+    virtual void Compile(ParticleViewCompiler& compiler) = 0;
+    virtual void Process(ParticleEventContext& context)  = 0;
 };
 
 struct ParticleUpdateProgram {
-    using Trait                  = ParticleUpdateProgram;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ParticleUpdateProgram;
-
-        void Compile(ParticleViewCompiler& compiler) { rstd::trait_call<0>(this, compiler); }
-        void Update(ParticleUpdateContext& context) { rstd::trait_call<1>(this, context); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Compile, &T::Update>;
+    virtual ~ParticleUpdateProgram()                     = default;
+    virtual void Compile(ParticleViewCompiler& compiler) = 0;
+    virtual void Update(ParticleUpdateContext& context)  = 0;
 };
 
 struct ParticleExtractProgram {
-    using Trait                  = ParticleExtractProgram;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ParticleExtractProgram;
-
-        void Compile(ParticleViewCompiler& compiler) { rstd::trait_call<0>(this, compiler); }
-        void Extract(ParticleExtractContext& context) { rstd::trait_call<1>(this, context); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Compile, &T::Extract>;
+    virtual ~ParticleExtractProgram()                     = default;
+    virtual void Compile(ParticleViewCompiler& compiler)  = 0;
+    virtual void Extract(ParticleExtractContext& context) = 0;
 };
+
+// 粒子程序持有者：把带 Compile 与阶段函数的具体程序对象（多为聚合体，用指定初始化器构造）
+// 装进对应虚基类，调用直接转发。每个接口一个特化。
+template<typename Interface, typename T>
+struct ParticleProgramOf;
+
+template<typename T>
+struct ParticleProgramOf<ParticleEmitterProgram, T> final : ParticleEmitterProgram {
+    explicit ParticleProgramOf(T program): program(rstd::move(program)) {}
+    void Compile(ParticleViewCompiler& compiler) override { program.Compile(compiler); }
+    void Emit(ParticleEmitterContext& context) override { program.Emit(context); }
+
+    T program;
+};
+
+template<typename T>
+struct ParticleProgramOf<ParticleSpawnProgram, T> final : ParticleSpawnProgram {
+    explicit ParticleProgramOf(T program): program(rstd::move(program)) {}
+    void Compile(ParticleViewCompiler& compiler) override { program.Compile(compiler); }
+    void Initialize(ParticleSpawnContext& context) override { program.Initialize(context); }
+
+    T program;
+};
+
+template<typename T>
+struct ParticleProgramOf<ParticleLifecycleProgram, T> final : ParticleLifecycleProgram {
+    explicit ParticleProgramOf(T program): program(rstd::move(program)) {}
+    void Compile(ParticleViewCompiler& compiler) override { program.Compile(compiler); }
+    void Update(ParticleLifecycleContext& context) override { program.Update(context); }
+
+    T program;
+};
+
+template<typename T>
+struct ParticleProgramOf<ParticleEventProgram, T> final : ParticleEventProgram {
+    explicit ParticleProgramOf(T program): program(rstd::move(program)) {}
+    void Compile(ParticleViewCompiler& compiler) override { program.Compile(compiler); }
+    void Process(ParticleEventContext& context) override { program.Process(context); }
+
+    T program;
+};
+
+template<typename T>
+struct ParticleProgramOf<ParticleUpdateProgram, T> final : ParticleUpdateProgram {
+    explicit ParticleProgramOf(T program): program(rstd::move(program)) {}
+    void Compile(ParticleViewCompiler& compiler) override { program.Compile(compiler); }
+    void Update(ParticleUpdateContext& context) override { program.Update(context); }
+
+    T program;
+};
+
+template<typename T>
+struct ParticleProgramOf<ParticleExtractProgram, T> final : ParticleExtractProgram {
+    explicit ParticleProgramOf(T program): program(rstd::move(program)) {}
+    void Compile(ParticleViewCompiler& compiler) override { program.Compile(compiler); }
+    void Extract(ParticleExtractContext& context) override { program.Extract(context); }
+
+    T program;
+};
+
+template<typename Interface, typename T>
+auto MakeParticleProgram(T program) -> std::unique_ptr<Interface> {
+    return std::make_unique<ParticleProgramOf<Interface, T>>(rstd::move(program));
+}
 
 struct ParticleSlotTransition {
     ParticleSlot slot;
@@ -208,19 +213,25 @@ struct ParticleUpdateContext {
 
 class ParticleProgram {
 public:
-    void AddEmitter(Box<dyn<ParticleEmitterProgram>> program) {
+    void AddEmitter(std::unique_ptr<ParticleEmitterProgram> program) {
         m_emitters.push(rstd::move(program));
     }
-    void AddSpawn(Box<dyn<ParticleSpawnProgram>> program) { m_spawn.push(rstd::move(program)); }
-    void AddLifecycle(Box<dyn<ParticleLifecycleProgram>> program) {
+    void AddSpawn(std::unique_ptr<ParticleSpawnProgram> program) {
+        m_spawn.push(rstd::move(program));
+    }
+    void AddLifecycle(std::unique_ptr<ParticleLifecycleProgram> program) {
         m_lifecycle.push(rstd::move(program));
     }
-    void AddEvent(Box<dyn<ParticleEventProgram>> program) { m_events.push(rstd::move(program)); }
-    void AddUpdate(Box<dyn<ParticleUpdateProgram>> program) { m_updates.push(rstd::move(program)); }
-    void AddPostUpdate(Box<dyn<ParticleUpdateProgram>> program) {
+    void AddEvent(std::unique_ptr<ParticleEventProgram> program) {
+        m_events.push(rstd::move(program));
+    }
+    void AddUpdate(std::unique_ptr<ParticleUpdateProgram> program) {
+        m_updates.push(rstd::move(program));
+    }
+    void AddPostUpdate(std::unique_ptr<ParticleUpdateProgram> program) {
         m_post_updates.push(rstd::move(program));
     }
-    void AddExtractor(Box<dyn<ParticleExtractProgram>> program) {
+    void AddExtractor(std::unique_ptr<ParticleExtractProgram> program) {
         m_extractors.push(rstd::move(program));
     }
 
@@ -229,13 +240,13 @@ private:
     friend class ParticleSystem;
     friend struct ParticleDefinition;
 
-    rstd::vec::Vec<Box<dyn<ParticleEmitterProgram>>>   m_emitters;
-    rstd::vec::Vec<Box<dyn<ParticleSpawnProgram>>>     m_spawn;
-    rstd::vec::Vec<Box<dyn<ParticleLifecycleProgram>>> m_lifecycle;
-    rstd::vec::Vec<Box<dyn<ParticleEventProgram>>>     m_events;
-    rstd::vec::Vec<Box<dyn<ParticleUpdateProgram>>>    m_updates;
-    rstd::vec::Vec<Box<dyn<ParticleUpdateProgram>>>    m_post_updates;
-    rstd::vec::Vec<Box<dyn<ParticleExtractProgram>>>   m_extractors;
+    rstd::vec::Vec<std::unique_ptr<ParticleEmitterProgram>>   m_emitters;
+    rstd::vec::Vec<std::unique_ptr<ParticleSpawnProgram>>     m_spawn;
+    rstd::vec::Vec<std::unique_ptr<ParticleLifecycleProgram>> m_lifecycle;
+    rstd::vec::Vec<std::unique_ptr<ParticleEventProgram>>     m_events;
+    rstd::vec::Vec<std::unique_ptr<ParticleUpdateProgram>>    m_updates;
+    rstd::vec::Vec<std::unique_ptr<ParticleUpdateProgram>>    m_post_updates;
+    rstd::vec::Vec<std::unique_ptr<ParticleExtractProgram>>   m_extractors;
 };
 
 struct ParticleDefinition {
@@ -358,8 +369,8 @@ private:
     friend class ParticleSystem;
 
     ParticleEmitterContext(ParticleStorage& storage, ParticleViewBinding& binding,
-                           ParticleSlotEvents&                             events,
-                           rstd::vec::Vec<Box<dyn<ParticleSpawnProgram>>>& spawn,
+                           ParticleSlotEvents&                                    events,
+                           rstd::vec::Vec<std::unique_ptr<ParticleSpawnProgram>>& spawn,
                            const ParticleFrameContext* frame, usize max_slots, f64 delta,
                            f64 elapsed)
         : m_storage(rstd::addressof(storage)),
@@ -374,7 +385,7 @@ private:
     ParticleStorage*                                m_storage;
     ParticleViewBinding*                            m_binding;
     ParticleSlotEvents*                             m_events;
-    rstd::vec::Vec<Box<dyn<ParticleSpawnProgram>>>* m_spawn;
+    rstd::vec::Vec<std::unique_ptr<ParticleSpawnProgram>>* m_spawn;
     const ParticleFrameContext*                     m_frame;
     usize                                           m_max_slots;
     f64                                             m_delta;

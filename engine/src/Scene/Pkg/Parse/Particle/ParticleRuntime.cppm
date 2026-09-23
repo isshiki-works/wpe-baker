@@ -468,9 +468,9 @@ public:
     void Tick(f64 frame_time, bool update_mesh = true);
     auto QueryNewInstance() -> Option<ParticleInstanceRef>;
 
-    void AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>);
+    void AddEmitter(std::unique_ptr<particle::ParticleEmitterProgram>);
     void AddInitializer(ParticleSpawnInstruction);
-    void AddOperator(Box<dyn<particle::ParticleUpdateProgram>>);
+    void AddOperator(std::unique_ptr<particle::ParticleUpdateProgram>);
     void AddChild(Box<ParticleSubSystem>);
 
     auto SchemaBuilder() noexcept -> particle::ParticleSchemaBuilder& { return m_schema_builder; }

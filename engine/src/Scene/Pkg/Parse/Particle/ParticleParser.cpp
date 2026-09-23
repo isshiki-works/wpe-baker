@@ -1335,7 +1335,7 @@ struct NoopUpdateOperator {
     void Update(particle::ParticleUpdateContext&) {}
 };
 
-Box<dyn<particle::ParticleUpdateProgram>>
+std::unique_ptr<particle::ParticleUpdateProgram>
 ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifiers,
                             ParticleSubSystem& subsystem, usize operator_index) {
     auto attributes = subsystem.Attributes();
@@ -1348,7 +1348,7 @@ ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifier
             std::array<float, 3> gravity { 0, 0, 0 };
             owe::GetJsonValue(wpj, "drag", drag, false);
             owe::GetJsonValue(wpj, "gravity", gravity, false);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(MovementOperator {
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(MovementOperator {
                 .attributes = attributes,
                 .drag       = drag,
                 .gravity    = Vector3f(gravity.data()).cast<double>(),
@@ -1359,58 +1359,65 @@ ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifier
             std::array<float, 3> force { 0, 0, 0 };
             owe::GetJsonValue(wpj, "drag", drag, false);
             owe::GetJsonValue(wpj, "force", force, false);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(AngularMovementOperator {
-                .attributes = attributes,
-                .drag       = drag,
-                .force      = Vector3f(force.data()).cast<double>(),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                AngularMovementOperator {
+                    .attributes = attributes,
+                    .drag       = drag,
+                    .force      = Vector3f(force.data()).cast<double>(),
+                });
         } else if (name == "sizechange") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(ScalarChangeOperator {
-                .attributes = attributes,
-                .change     = ValueChange::ReadFromJson(wpj),
-                .target     = ScalarChangeOperator::Target::Size,
-                .modifiers  = modifiers.Clone(),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                ScalarChangeOperator {
+                    .attributes = attributes,
+                    .change     = ValueChange::ReadFromJson(wpj),
+                    .target     = ScalarChangeOperator::Target::Size,
+                    .modifiers  = modifiers.Clone(),
+                });
         } else if (name == "alphafade") {
             float fadeintime { 0.5f }, fadeouttime { 0.5f };
             owe::GetJsonValue(wpj, "fadeintime", fadeintime, false);
             owe::GetJsonValue(wpj, "fadeouttime", fadeouttime, false);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(AlphaFadeOperator {
-                .attributes = attributes,
-                .fade_in    = fadeintime,
-                .fade_out   = fadeouttime,
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                AlphaFadeOperator {
+                    .attributes = attributes,
+                    .fade_in    = fadeintime,
+                    .fade_out   = fadeouttime,
+                });
         } else if (name == "alphachange") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(ScalarChangeOperator {
-                .attributes = attributes,
-                .change     = ValueChange::ReadFromJson(wpj),
-                .target     = ScalarChangeOperator::Target::Alpha,
-                .modifiers  = modifiers.Clone(),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                ScalarChangeOperator {
+                    .attributes = attributes,
+                    .change     = ValueChange::ReadFromJson(wpj),
+                    .target     = ScalarChangeOperator::Target::Alpha,
+                    .modifiers  = modifiers.Clone(),
+                });
         } else if (name == "colorchange") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(ColorChangeOperator {
-                .attributes = attributes,
-                .change     = VecChange::ReadFromJson(wpj),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                ColorChangeOperator {
+                    .attributes = attributes,
+                    .change     = VecChange::ReadFromJson(wpj),
+                });
         } else if (name == "oscillatealpha") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(OscillateScalarOperator {
-                .attributes = attributes,
-                .state_attributes =
-                    RegisterOscillationAttributes(subsystem, operator_index, "alpha"),
-                .frequency = FrequencyValue::ReadFromJson(wpj, name),
-                .target    = OscillateScalarOperator::Target::Alpha,
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                OscillateScalarOperator {
+                    .attributes = attributes,
+                    .state_attributes =
+                        RegisterOscillationAttributes(subsystem, operator_index, "alpha"),
+                    .frequency = FrequencyValue::ReadFromJson(wpj, name),
+                    .target    = OscillateScalarOperator::Target::Alpha,
+                });
         } else if (name == "oscillatesize") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(OscillateScalarOperator {
-                .attributes = attributes,
-                .state_attributes =
-                    RegisterOscillationAttributes(subsystem, operator_index, "size"),
-                .frequency = FrequencyValue::ReadFromJson(wpj, name),
-                .target    = OscillateScalarOperator::Target::Size,
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                OscillateScalarOperator {
+                    .attributes = attributes,
+                    .state_attributes =
+                        RegisterOscillationAttributes(subsystem, operator_index, "size"),
+                    .frequency = FrequencyValue::ReadFromJson(wpj, name),
+                    .target    = OscillateScalarOperator::Target::Size,
+                });
         } else if (name == "oscillateposition") {
             auto frequency = FrequencyValue::ReadFromJson(wpj, name);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
                 OscillatePositionOperator {
                     .attributes  = attributes,
                     .frequencies = { frequency, frequency, frequency },
@@ -1422,43 +1429,46 @@ ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifier
                 });
         } else if (name == "turbulence") {
             auto config = Turbulence::ReadFromJson(wpj);
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(TurbulenceOperator {
-                .attributes = attributes,
-                .config     = config,
-                .modifiers  = modifiers.Clone(),
-                .phase      = Random::get(config.phasemin, config.phasemax),
-                .speed      = Random::get(config.speedmin, config.speedmax),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                TurbulenceOperator {
+                    .attributes = attributes,
+                    .config     = config,
+                    .modifiers  = modifiers.Clone(),
+                    .phase      = Random::get(config.phasemin, config.phasemax),
+                    .speed      = Random::get(config.speedmin, config.speedmax),
+                });
         } else if (name == "vortex") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(VortexOperator {
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(VortexOperator {
                 .attributes = attributes,
                 .config     = Vortex::ReadFromJson(wpj),
             });
         } else if (name == "vortex_v2") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(VortexOperator {
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(VortexOperator {
                 .attributes = attributes,
                 .config     = Vortex::ReadFromJson(wpj),
                 .extended   = true,
             });
         } else if (name == "maintaindistancetocontrolpoint") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(MaintainDistanceOperator {
-                .attributes = attributes,
-                .config     = MaintainDistance::ReadFromJson(wpj),
-                .state_key  = RegisterMaintainDistanceAttribute(subsystem, operator_index),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                MaintainDistanceOperator {
+                    .attributes = attributes,
+                    .config     = MaintainDistance::ReadFromJson(wpj),
+                    .state_key  = RegisterMaintainDistanceAttribute(subsystem, operator_index),
+                });
         } else if (name == "controlpointattract") {
-            return Box<dyn<particle::ParticleUpdateProgram>>::make(ControlPointAttractOperator {
-                .attributes = attributes,
-                .config     = ControlPointForce::ReadFromJson(wpj),
-            });
+            return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
+                ControlPointAttractOperator {
+                    .attributes = attributes,
+                    .config     = ControlPointForce::ReadFromJson(wpj),
+                });
         }
     } while (false);
-    return Box<dyn<particle::ParticleUpdateProgram>>::make(NoopUpdateOperator {});
+    return particle::MakeParticleProgram<particle::ParticleUpdateProgram>(NoopUpdateOperator {});
 }
 
-Box<dyn<particle::ParticleEmitterProgram>> ParticleParser::GenEmitter(const wpscene::Emitter& wpe,
-                                                                      ParticleSubSystem& subsystem,
-                                                                      usize emitter_index) {
+std::unique_ptr<particle::ParticleEmitterProgram>
+ParticleParser::GenEmitter(const wpscene::Emitter& wpe, ParticleSubSystem& subsystem,
+                           usize emitter_index) {
     ParticleAudioResponse audio_response {
         .enable    = wpe.audioprocessingmode != u32(),
         .amount    = wpe.audioamount,
@@ -1481,7 +1491,7 @@ Box<dyn<particle::ParticleEmitterProgram>> ParticleParser::GenEmitter(const wpsc
         box.duration       = wpe.duration;
         box.controlpoint   = wpe.controlpoint;
         box.audio_response = audio_response;
-        return Box<dyn<particle::ParticleEmitterProgram>>::make(
+        return particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
             BoxEmitterProgram(subsystem.SpawnPipeline(), rstd::move(box), emitter_index));
     } else if (wpe.name == "sphererandom") {
         ParticleSphereEmitterArgs sphere;
@@ -1498,7 +1508,7 @@ Box<dyn<particle::ParticleEmitterProgram>> ParticleParser::GenEmitter(const wpsc
         sphere.duration       = wpe.duration;
         sphere.controlpoint   = wpe.controlpoint;
         sphere.audio_response = audio_response;
-        return Box<dyn<particle::ParticleEmitterProgram>>::make(
+        return particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
             SphereEmitterProgram(subsystem.SpawnPipeline(), rstd::move(sphere), emitter_index));
     }
 
@@ -1506,5 +1516,5 @@ Box<dyn<particle::ParticleEmitterProgram>> ParticleParser::GenEmitter(const wpsc
         void Compile(particle::ParticleViewCompiler&) {}
         void Emit(particle::ParticleEmitterContext&) {}
     };
-    return Box<dyn<particle::ParticleEmitterProgram>>::make(NoopEmitter {});
+    return particle::MakeParticleProgram<particle::ParticleEmitterProgram>(NoopEmitter {});
 }

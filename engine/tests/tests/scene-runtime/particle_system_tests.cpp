@@ -227,13 +227,14 @@ TEST(ParticleSchema, RejectsMissingProgramRequirementsDuringPrepare) {
     particle::ParticleSchemaBuilder builder;
     auto                            position = builder.PositionKey();
     particle::ParticleProgram       program;
-    program.AddUpdate(Box<dyn<particle::ParticleUpdateProgram>>::make(InvalidKeyProgram {
-        .key =
-            particle::ParticleAttributeKey<particle::ColorAttribute> {
-                .id          = position.id,
-                .schema_slot = position.schema_slot,
-            },
-    }));
+    program.AddUpdate(
+        particle::MakeParticleProgram<particle::ParticleUpdateProgram>(InvalidKeyProgram {
+            .key =
+                particle::ParticleAttributeKey<particle::ColorAttribute> {
+                    .id          = position.id,
+                    .schema_slot = position.schema_slot,
+                },
+        }));
 
     auto definition = particle::ParticleDefinition::Prepare(
         rstd::move(builder).Build(), rstd::move(program), usize(4));
@@ -292,19 +293,19 @@ TEST(ParticleProgram, RunsPreparedProgramsInContractOrder) {
     usize               spawned {};
 
     particle::ParticleProgram program;
-    program.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    program.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         TraceEmitter { .trace = rstd::addressof(trace) }));
-    program.AddSpawn(Box<dyn<particle::ParticleSpawnProgram>>::make(
+    program.AddSpawn(particle::MakeParticleProgram<particle::ParticleSpawnProgram>(
         TraceSpawn { .trace = rstd::addressof(trace), .temperature = temperature }));
-    program.AddLifecycle(Box<dyn<particle::ParticleLifecycleProgram>>::make(
+    program.AddLifecycle(particle::MakeParticleProgram<particle::ParticleLifecycleProgram>(
         TraceLifecycle { .trace = rstd::addressof(trace) }));
-    program.AddEvent(Box<dyn<particle::ParticleEventProgram>>::make(
+    program.AddEvent(particle::MakeParticleProgram<particle::ParticleEventProgram>(
         TraceEvent { .trace = rstd::addressof(trace), .spawned = rstd::addressof(spawned) }));
-    program.AddUpdate(Box<dyn<particle::ParticleUpdateProgram>>::make(
+    program.AddUpdate(particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
         TraceUpdate { .trace = rstd::addressof(trace), .value = i32(5) }));
-    program.AddPostUpdate(Box<dyn<particle::ParticleUpdateProgram>>::make(
+    program.AddPostUpdate(particle::MakeParticleProgram<particle::ParticleUpdateProgram>(
         TraceUpdate { .trace = rstd::addressof(trace), .value = i32(6) }));
-    program.AddExtractor(Box<dyn<particle::ParticleExtractProgram>>::make(
+    program.AddExtractor(particle::MakeParticleProgram<particle::ParticleExtractProgram>(
         TraceExtract { .trace = rstd::addressof(trace) }));
 
     auto definition = particle::ParticleDefinition::Prepare(
@@ -334,12 +335,13 @@ TEST(ParticleProgram, ReusesExpiredCapacityWithoutAnEmptyFrame) {
     rstd::vec::Vec<i32> transitions;
 
     particle::ParticleProgram program;
-    program.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(ContinuousEmitter {}));
-    program.AddSpawn(
-        Box<dyn<particle::ParticleSpawnProgram>>::make(LifetimeSpawn { .lifetime = lifetime }));
-    program.AddLifecycle(Box<dyn<particle::ParticleLifecycleProgram>>::make(
+    program.AddEmitter(
+        particle::MakeParticleProgram<particle::ParticleEmitterProgram>(ContinuousEmitter {}));
+    program.AddSpawn(particle::MakeParticleProgram<particle::ParticleSpawnProgram>(
+        LifetimeSpawn { .lifetime = lifetime }));
+    program.AddLifecycle(particle::MakeParticleProgram<particle::ParticleLifecycleProgram>(
         ExpiringLifecycle { .lifetime = lifetime }));
-    program.AddEvent(Box<dyn<particle::ParticleEventProgram>>::make(
+    program.AddEvent(particle::MakeParticleProgram<particle::ParticleEventProgram>(
         TransitionTraceEvent { .trace = rstd::addressof(transitions) }));
 
     auto definition = particle::ParticleDefinition::Prepare(
@@ -395,7 +397,7 @@ TEST(ParticleSubSystem, PlaybackResetClearsAndRestartsIndependentStorage) {
     subsystem.SetPlaybackState(playback.clone());
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
         owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(4)));
-    subsystem.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    subsystem.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(subsystem.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
                                       .directions    = { 1.0f, 1.0f, 0.0f },
@@ -445,7 +447,7 @@ TEST(ParticleSubSystem, ConvertsWorldSpaceFollowAnchorsIntoChildLocalSpace) {
     parent.SetOwnerNode(parent_node.as_ptr());
     parent.AddInitializer(owe::ParticleParser::GenInitializer(
         owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
-    parent.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    parent.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(parent.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
                                       .origin        = { 5.0f, 6.0f, 0.0f },
@@ -619,7 +621,7 @@ TEST(ParticleSubSystem, AppliesVortexAroundWorldSpaceOwner) {
     subsystem.SetInstanceModifiers(modifiers.Clone());
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
         owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
-    subsystem.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    subsystem.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::BoxEmitterProgram(subsystem.SpawnPipeline(),
                                owe::ParticleBoxEmitterArgs {
                                    .origin        = { 200.0f, 0.0f, 0.0f },
@@ -668,7 +670,7 @@ TEST(ParticleSubSystem, UsesEmitterPeriodLimitForImplicitControlpointSequenceCou
         owe::ParseNJson(R"({"name":"mapsequencebetweencontrolpoints","count":3})").unwrap(), u32(4));
     EXPECT_EQ(explicit_sequence.SequenceCount(), Some(u32(3)));
     EXPECT_EQ(subsystem.RopeSequenceCount(), Some(u32(4)));
-    subsystem.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    subsystem.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(subsystem.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
                                       .directions    = { 1.0f, 1.0f, 0.0f },
@@ -699,7 +701,7 @@ TEST(ParticleSubSystem, MapsParentParticlesIntoStaticChildControlpoints) {
                                   owe::ParticleAnimationSpec {});
     parent.AddInitializer(owe::ParticleParser::GenInitializer(
         owe::ParseNJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(2)));
-    parent.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
+    parent.AddEmitter(particle::MakeParticleProgram<particle::ParticleEmitterProgram>(
         owe::SphereEmitterProgram(parent.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
                                       .origin        = { 50.0f, 0.0f, 0.0f },
