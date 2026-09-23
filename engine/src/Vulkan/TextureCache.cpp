@@ -575,41 +575,36 @@ namespace
 
 class RangeInputStream {
 public:
-    explicit RangeInputStream(rstd::io::ReadRange source)
-        : m_length(static_cast<rstd::int64_t>(source.len().to_primitive())),
-          m_reader(rstd::move(source).into_reader()) {}
+    explicit RangeInputStream(owe::io::ReadRange source)
+        : m_length(static_cast<rstd::int64_t>(source.len())),
+          m_reader(std::move(source).into_reader()) {}
 
-    int read(rstd::uint8_t* buf, int size) {
+    int read(rstd::uint8_t* buffer, int size) {
         if (size <= 0) return 0;
-        auto bytes = rstd::mut_ref<rstd::byte[]>::from_raw_parts(
-            reinterpret_cast<rstd::byte*>(buf), usize(static_cast<std::size_t>(size)));
-        auto result = m_reader.read(rstd::as_u8_slice_mut(bytes));
-        if (result.is_err()) return -1;
-        return static_cast<int>(rstd::move(result).unwrap_unchecked().to_primitive());
+        auto result = m_reader.read(buffer, static_cast<std::size_t>(size));
+        return result.is_ok() ? static_cast<int>(*result) : -1;
     }
 
     rstd::int64_t seek(rstd::int64_t offset, int whence) {
         constexpr int AVSEEK_SIZE = 0x10000;
         if (whence == AVSEEK_SIZE) return m_length;
-        rstd::io::SeekFrom from;
+        owe::io::SeekFrom from;
         switch (whence) {
         case 0:
             if (offset < 0) return -1;
-            from = rstd::io::SeekFrom::from_start(u64(static_cast<rstd::uint64_t>(offset)));
+            from = owe::io::SeekFrom::from_start(static_cast<std::uint64_t>(offset));
             break;
-        case 1: from = rstd::io::SeekFrom::from_current(i64(offset)); break;
-        case 2: from = rstd::io::SeekFrom::from_end(i64(offset)); break;
+        case 1: from = owe::io::SeekFrom::from_current(offset); break;
+        case 2: from = owe::io::SeekFrom::from_end(offset); break;
         default: return -1;
         }
         auto result = m_reader.seek(from);
-        return result.is_ok() ? static_cast<rstd::int64_t>(
-                                    rstd::move(result).unwrap_unchecked().to_primitive())
-                              : -1;
+        return result.is_ok() ? static_cast<rstd::int64_t>(*result) : -1;
     }
 
 private:
-    rstd::int64_t         m_length { 0 };
-    rstd::io::RangeReader m_reader;
+    rstd::int64_t        m_length { 0 };
+    owe::io::RangeReader m_reader;
 };
 
 wavsen::video::HwAccel ParseHwdec(std::string_view value) {

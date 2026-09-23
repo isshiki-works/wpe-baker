@@ -23,16 +23,15 @@ public:
     WPPkgFs(WPPkgFs&&) noexcept                    = default;
     auto operator=(WPPkgFs&&) noexcept -> WPPkgFs& = default;
 
-    static auto open(Path pkg_path) -> rstd::io::Result<PkgMount>;
+    static auto open(Path pkg_path) -> Result<PkgMount>;
 
-    auto open_read(Path path) const -> rstd::io::Result<ReadRange>;
-    auto open_write(Path path, WriteOptions options) const -> rstd::io::Result<WriteSeekHandle>;
-    auto metadata(Path path) const -> rstd::io::Result<FileMetadata>;
+    auto open_read(Path path) const -> Result<ReadRange>;
+    auto metadata(Path path) const -> Result<FileMetadata>;
 
 private:
     struct PkgFile {
-        u64 offset { 0 };
-        u64 length { 0 };
+        std::uint64_t offset { 0 };
+        std::uint64_t length { 0 };
     };
 
     WPPkgFs(ReadRange source, String version, HashMap<String, PkgFile> files)
@@ -53,9 +52,7 @@ public:
     auto operator=(PkgMount&&) noexcept -> PkgMount& = default;
 
     auto mount_handle() const -> MountHandle { return m_mount.clone(); }
-    auto open_read(Path path) const -> rstd::io::Result<ReadRange> {
-        return m_mount->open_read(path);
-    }
+    auto open_read(Path path) const -> Result<ReadRange> { return m_mount->open_read(path); }
     auto pkg_version_stamp() const noexcept -> rstd::ref<rstd::str> {
         return m_pkg_version.as_str();
     }
@@ -77,16 +74,11 @@ namespace rstd
 
 template<>
 struct Impl<owe::fs::MountFs, owe::fs::WPPkgFs> : ImplBase<owe::fs::WPPkgFs> {
-    auto open_read(owe::fs::Path path) const -> io::Result<io::ReadRange> {
+    auto open_read(owe::fs::Path path) const -> owe::io::Result<owe::io::ReadRange> {
         return this->self().open_read(path);
     }
 
-    auto open_write(owe::fs::Path path, owe::fs::WriteOptions options) const
-        -> io::Result<io::WriteSeekHandle> {
-        return this->self().open_write(path, options);
-    }
-
-    auto metadata(owe::fs::Path path) const -> io::Result<owe::fs::FileMetadata> {
+    auto metadata(owe::fs::Path path) const -> owe::io::Result<owe::fs::FileMetadata> {
         return this->self().metadata(path);
     }
 };

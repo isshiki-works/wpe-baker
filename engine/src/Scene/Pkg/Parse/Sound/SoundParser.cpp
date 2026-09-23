@@ -11,6 +11,47 @@ using rstd::sync::Arc;
 using rstd::sync::atomic::Atomic;
 using rstd::sync::atomic::Ordering;
 
+namespace
+{
+
+// wavsen 在 T5 前仍收 rstd::io::ReadSeekHandle；这里把 owe::io::RangeReader 包一层。
+// wavsen 只看 is_err（读失败回 EIO、定位失败回 -1），所以错误一律报 Other。
+struct WavsenRangeReader {
+    owe::io::RangeReader reader;
+};
+
+auto WavsenError() -> rstd::io::error::Error {
+    return rstd::io::error::Error::from_kind(
+        rstd::io::error::ErrorKind { rstd::io::error::ErrorKind::Other });
+}
+
+} // namespace
+
+template<>
+struct rstd::Impl<rstd::io::Read, WavsenRangeReader> : rstd::ImplBase<WavsenRangeReader> {
+    auto read(rstd::mut_ref<u8[]> buf) -> rstd::io::Result<usize> {
+        auto result = this->self().reader.read(reinterpret_cast<std::uint8_t*>(buf.as_raw_ptr()),
+                                               buf.len().to_primitive());
+        if (result.is_err()) return rstd::Err(WavsenError());
+        return rstd::Ok(usize(*result));
+    }
+};
+
+template<>
+struct rstd::Impl<rstd::io::Seek, WavsenRangeReader> : rstd::ImplBase<WavsenRangeReader> {
+    auto seek(rstd::io::SeekFrom pos) -> rstd::io::Result<u64> {
+        auto from = owe::io::SeekFrom::from_start(pos.start.to_primitive());
+        if (pos.which == rstd::io::SeekFrom::Which::Current) {
+            from = owe::io::SeekFrom::from_current(pos.offset.to_primitive());
+        } else if (pos.which == rstd::io::SeekFrom::Which::End) {
+            from = owe::io::SeekFrom::from_end(pos.offset.to_primitive());
+        }
+        auto result = this->self().reader.seek(from);
+        if (result.is_err()) return rstd::Err(WavsenError());
+        return rstd::Ok(u64(*result));
+    }
+};
+
 enum class PlaybackMode
 {
     Random,
@@ -153,8 +194,8 @@ public:
             const std::string& path   = m_soundPaths[((base + tried) % n).to_primitive()];
             auto               source = vfs.open_read(fs::ToPath("/assets/" + path));
             if (source.is_err()) continue;
-            auto handle =
-                rstd::io::ReadSeekHandle::make(rstd::move(source).unwrap_unchecked().into_reader());
+            auto handle = rstd::io::ReadSeekHandle::make(
+                WavsenRangeReader { rstd::move(source).unwrap_unchecked().into_reader() });
             auto stream = wavsen::audio::make_stream(rstd::move(handle), m_desc);
             if (stream) {
                 m_curActive = std::move(stream);

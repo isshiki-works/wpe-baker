@@ -6,6 +6,7 @@ module;
 
 export module wescene.types;
 import wescene.core;
+import wescene.io;
 import rstd;
 import rstd.cppstd;
 
@@ -516,7 +517,7 @@ struct ImageData {
     std::int32_t                      height { 0 };
     isize                             size { 0 };
     ImageDataPtr                      data {};
-    rstd::Option<rstd::io::ReadRange> video_source;
+    rstd::Option<owe::io::ReadRange> video_source;
     ImageData() = default;
 };
 
