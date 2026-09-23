@@ -17,7 +17,6 @@ target_include_directories(owe-core PUBLIC ${PROJECT_SOURCE_DIR}/third_party ${P
 target_compile_definitions(owe-core PUBLIC "FT_SIZEOF_LONG=4" NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(owe-core PUBLIC rstd.std)
 target_link_libraries(owe-core PUBLIC rstd.cppstd)
-target_link_libraries(owe-core PUBLIC rstd.json)
 target_link_libraries(owe-core PUBLIC rstd.log)
 target_link_libraries(owe-core PUBLIC wpe-eigen)
 target_link_libraries(owe-core PUBLIC nlohmann-json)

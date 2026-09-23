@@ -29,6 +29,41 @@ import wescene.types;
 
 using namespace rstd::literals;
 
+TEST(CameraPathDocument, ParsesClipCurvesAndInheritedOptions) {
+    auto json = owe::ParseNJson(R"({
+        "paths": [{
+            "id": 7,
+            "name": "Orbit",
+            "visible": true,
+            "options": {"fps": 24.0, "length": 120, "mode": "single"},
+            "eye": {
+                "c0": [{"frame": 0, "value": 1.0}],
+                "c1": [{"frame": 0, "value": 2.0}],
+                "c2": [{"frame": 0, "value": 3.0}]
+            },
+            "fov": [{"frame": 0, "value": 45.0}],
+            "zoom": null
+        }]
+    })")
+                    .unwrap();
+
+    owe::wpscene::CameraPathDocument document;
+    ASSERT_TRUE(document.FromJson(json));
+    ASSERT_EQ(document.paths.len(), rstd::usize(1));
+    const auto& clip = document.paths[rstd::usize()];
+    EXPECT_EQ(clip.id, rstd::i32(7));
+    EXPECT_FLOAT_EQ(clip.options.fps, 24.0f);
+    EXPECT_EQ(clip.options.length, rstd::i32(120));
+    ASSERT_TRUE(clip.eye.is_some());
+    EXPECT_EQ(clip.eye->c0.size(), 1u);
+    EXPECT_EQ(clip.eye->c1.size(), 1u);
+    EXPECT_EQ(clip.eye->c2.size(), 1u);
+    EXPECT_EQ(clip.eye->options.length, rstd::i32(120));
+    ASSERT_TRUE(clip.fov.is_some());
+    EXPECT_EQ(clip.fov->c0.size(), 1u);
+    EXPECT_TRUE(clip.zoom.is_none());
+}
+
 TEST(FieldBindingJson, CompatibilityReaderPopulatesAnimationMetadata) {
     auto parsed = owe::ParseNJson(R"({"enabled":true,"x":{"value":1.5},"y":-2.0,"magic":7})");
     ASSERT_TRUE(parsed.is_ok());

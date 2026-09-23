@@ -10,6 +10,9 @@
 module;
 
 #include <cstdio>
+#include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
+
+#include "JsonNlohmann.hpp"
 
 export module wescene.testing.corpus;
 
@@ -21,7 +24,6 @@ import wescene.pkg_fs;
 import wescene.fs;
 import wescene.types;
 import wescene.testing.pkg_header;
-import wescene.testing.json_builder;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
@@ -32,7 +34,7 @@ export namespace owe::testing
 struct WorkshopEntry {
     std::string id;
     std::string dir;
-    owe::Json   snapshot;
+    owe::NJson  snapshot;
 };
 
 class Corpus {
@@ -60,11 +62,11 @@ public:
     };
     struct TexRef {
         const WorkshopEntry* workshop;
-        const owe::Json*     tex;
+        const owe::NJson*    tex;
     };
     struct MdlRef {
         const WorkshopEntry* workshop;
-        const owe::Json*     mdl;
+        const owe::NJson*    mdl;
     };
 
     std::vector<PkgRef> workshops_with_pkg(const std::string& pkgv) const;
@@ -93,22 +95,11 @@ private:
     std::set<int>              mdla_versions_;
 };
 
-// Gates which sections DumpWorkshop emits. Defaults preserve the historic
-// "do everything except shader compile" behavior so Corpus/version_tests
-// fixtures don't shift.
-struct DumpFlags {
-    bool tex { true };      // emit "textures" array (ReadTexMeta)
-    bool shader { false };  // emit "shaders" array (CompileMaterialShader)
-    bool mdl { true };      // emit "puppets" array
-    bool mdl_full { true }; // puppets entries via full MdlParser::Parse;
-                            // false ⇒ just the MdlHeader fields
-};
-
-// Per-workshop JSON snapshot used by `wescene-test valid`, by
-// `wescene-test scan --json-dir`, and by Corpus to index versions.
+// Per-workshop JSON snapshot used by Corpus to index versions
+// (textures via ReadTexMeta, puppets via full MdlParser::Parse).
 // On failure returns a json object with `{"error": "..."}` and `err`
 // is set to the same message.
-owe::Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags flags = {});
+owe::NJson DumpWorkshop(const std::string& workshop_dir, std::string& err);
 
 } // namespace owe::testing
 
@@ -119,57 +110,83 @@ namespace
 {
 
 namespace fs = std::filesystem;
-using Json   = owe::Json;
+using Json   = owe::NJson;
 
+// 原 rstd as_i64：有符号整数、或不超过 INT64_MAX 的无符号整数才有值（浮点、布尔都没有）。
 rstd::int64_t JsonI64Or(const Json& value, rstd::int64_t fallback) {
-    auto parsed = value.as_i64();
-    return parsed.is_some() ? parsed->to_primitive() : fallback;
+    if (! value.is_number_integer()) return fallback;
+    if (value.is_number_unsigned() &&
+        value.get<std::uint64_t>() > std::uint64_t(std::numeric_limits<std::int64_t>::max()))
+        return fallback;
+    return value.get<std::int64_t>();
 }
 
+auto JsonBoolOr(const Json* value, bool fallback) -> bool {
+    return value != nullptr && value->is_boolean() ? value->get<bool>() : fallback;
+}
+
+auto JsonStringOr(const Json* value, std::string_view fallback) -> std::string_view {
+    return value != nullptr && value->is_string()
+               ? std::string_view(value->get_ref<const std::string&>())
+               : fallback;
+}
+
+// 数字种类与原 JsonBuilder::IntoJson 相同：有符号→整数，无符号→无符号，浮点（含 f32）→double。
 template<typename T>
 Json SnapshotValue(const T& value) {
-    return owe::IntoJson(value);
+    if constexpr (requires { value.to_primitive(); })
+        return SnapshotValue(value.to_primitive());
+    else if constexpr (std::is_same_v<T, bool>)
+        return Json(value);
+    else if constexpr (std::is_integral_v<T> && std::is_signed_v<T>)
+        return Json(static_cast<std::int64_t>(value));
+    else if constexpr (std::is_integral_v<T>)
+        return Json(static_cast<std::uint64_t>(value));
+    else if constexpr (std::is_floating_point_v<T>)
+        return Json(static_cast<double>(value));
+    else
+        return Json(std::string(std::string_view(value)));
 }
 
-inline Json SnapshotValue(const Json& value) { return value.clone(); }
+inline Json SnapshotValue(const Json& value) { return value; }
 
 inline Json SnapshotValue(ref<str> value) {
-    return owe::IntoJson(rstd::cppstd::as_string_view(value));
+    return Json(std::string(rstd::cppstd::as_string_view(value)));
 }
 
 inline Json SnapshotValue(const String& value) { return SnapshotValue(value.as_str()); }
 
 template<typename T>
 Json SnapshotValue(const std::vector<T>& values) {
-    auto out = owe::MakeArray();
-    for (const auto& value : values) owe::AppendJson(out, SnapshotValue(value));
+    auto out = Json::array();
+    for (const auto& value : values) out.push_back(SnapshotValue(value));
     return out;
 }
 
 template<typename T, std::size_t N>
 Json SnapshotValue(const std::array<T, N>& values) {
-    auto out = owe::MakeArray();
-    for (const auto& value : values) owe::AppendJson(out, SnapshotValue(value));
+    auto out = Json::array();
+    for (const auto& value : values) out.push_back(SnapshotValue(value));
     return out;
 }
 
 template<typename T>
 Json SnapshotValue(const Vec<T>& values) {
-    auto out = owe::MakeArray();
-    for (const auto& value : values) owe::AppendJson(out, SnapshotValue(value));
+    auto out = Json::array();
+    for (const auto& value : values) out.push_back(SnapshotValue(value));
     return out;
 }
 
 template<typename T, rstd::size_t N>
 Json SnapshotValue(const array<T, N>& values) {
-    auto out = owe::MakeArray();
-    for (const auto& value : values) owe::AppendJson(out, SnapshotValue(value));
+    auto out = Json::array();
+    for (const auto& value : values) out.push_back(SnapshotValue(value));
     return out;
 }
 
 template<typename T>
 void SetSnapshot(Json& object, std::string_view key, const T& value) {
-    owe::SetJson(object, key, SnapshotValue(value));
+    object[std::string(key)] = SnapshotValue(value);
 }
 
 // Workshops that hang or crash the dumper.
@@ -281,43 +298,29 @@ bool ends_with(std::string_view s, std::string_view suffix) {
 }
 
 void sort_by_path(Json& value) {
-    auto array = value.as_array();
-    if (array.is_none()) return;
+    if (! value.is_array()) return;
     std::vector<std::size_t> ordered;
-    ordered.reserve((*array)->len().to_primitive());
-    for (std::size_t index = 0; index < (*array)->len().to_primitive(); ++index)
-        ordered.push_back(index);
+    ordered.reserve(value.size());
+    for (std::size_t index = 0; index < value.size(); ++index) ordered.push_back(index);
     std::sort(ordered.begin(), ordered.end(), [&](std::size_t a_index, std::size_t b_index) {
-        const auto&      a      = (**array)[usize(a_index)];
-        const auto&      b      = (**array)[usize(b_index)];
-        auto             a_path = a.get("path"_str);
-        auto             b_path = b.get("path"_str);
-        std::string_view a_view;
-        std::string_view b_view;
-        if (a_path.is_some()) {
-            auto string = (*a_path)->as_str();
-            if (string.is_some()) a_view = rstd::cppstd::as_string_view(*string);
-        }
-        if (b_path.is_some()) {
-            auto string = (*b_path)->as_str();
-            if (string.is_some()) b_view = rstd::cppstd::as_string_view(*string);
-        }
+        const auto a_view = JsonStringOr(owe::Find(value[a_index], "path"), {});
+        const auto b_view = JsonStringOr(owe::Find(value[b_index], "path"), {});
         return a_view.compare(b_view) < 0;
     });
-    auto sorted = owe::MakeArray();
-    for (auto index : ordered) owe::AppendJson(sorted, (**array)[usize(index)].clone());
+    auto sorted = Json::array();
+    for (auto index : ordered) sorted.push_back(value[index]);
     value = std::move(sorted);
 }
 
 template<typename Map>
 Json map_to_json(const Map& m) {
-    auto o = owe::MakeObject();
+    auto o = Json::object();
     for (const auto& [k, v] : m) SetSnapshot(o, k, v);
     return o;
 }
 
 Json dump_material(const owe::wpscene::Material& m) {
-    auto out = owe::MakeObject();
+    auto out = Json::object();
     SetSnapshot(out, "shader", m.shader);
     SetSnapshot(out, "blending", m.blending);
     SetSnapshot(out, "cullmode", m.cullmode);
@@ -325,30 +328,30 @@ Json dump_material(const owe::wpscene::Material& m) {
     SetSnapshot(out, "depthwrite", m.depthwrite);
     SetSnapshot(out, "use_puppet", m.use_puppet);
     SetSnapshot(out, "textures", m.textures);
-    owe::SetJson(out, "combos", map_to_json(m.combos));
-    owe::SetJson(out, "constantshadervalues", map_to_json(m.constantshadervalues));
+    out["combos"] = map_to_json(m.combos);
+    out["constantshadervalues"] = map_to_json(m.constantshadervalues);
     return out;
 }
 
 Json dump_material_pass(const owe::wpscene::MaterialPass& p) {
-    auto bind = owe::MakeArray();
+    auto bind = Json::array();
     for (const auto& b : p.bind) {
-        auto item = owe::MakeObject();
+        auto item = Json::object();
         SetSnapshot(item, "name", b.name);
         SetSnapshot(item, "index", b.index);
-        owe::AppendJson(bind, std::move(item));
+        bind.push_back(std::move(item));
     }
-    auto out = owe::MakeObject();
+    auto out = Json::object();
     SetSnapshot(out, "target", p.target);
     SetSnapshot(out, "textures", p.textures);
-    owe::SetJson(out, "combos", map_to_json(p.combos));
-    owe::SetJson(out, "constantshadervalues", map_to_json(p.constantshadervalues));
-    owe::SetJson(out, "bind", std::move(bind));
+    out["combos"] = map_to_json(p.combos);
+    out["constantshadervalues"] = map_to_json(p.constantshadervalues);
+    out["bind"] = std::move(bind);
     return out;
 }
 
 Json dump_effect_fbo(const owe::wpscene::EffectFbo& f) {
-    auto out = owe::MakeObject();
+    auto out = Json::object();
     SetSnapshot(out, "name", f.name);
     SetSnapshot(out, "format", f.format);
     SetSnapshot(out, "scale", f.scale);
@@ -359,31 +362,24 @@ Json dump_effect_fbo(const owe::wpscene::EffectFbo& f) {
 // array of floats or a "x y z" string), so we copy the raw value through
 // instead of forcing a particular C++ type.
 Json dump_object_common(const Json& obj) {
-    auto o  = owe::MakeObject();
-    auto id = obj.get("id"_str);
-    SetSnapshot(o, "id", id.is_some() ? static_cast<int>(JsonI64Or(**id, -1)) : -1);
-    auto name = obj.get("name"_str);
-    SetSnapshot(o,
-                "name",
-                name.is_some() && (*name)->as_str().is_some()
-                    ? rstd::cppstd::to_string(*(*name)->as_str())
-                    : "");
+    auto        o  = Json::object();
+    const auto* id = owe::Find(obj, "id");
+    SetSnapshot(o, "id", id != nullptr ? static_cast<int>(JsonI64Or(*id, -1)) : -1);
+    SetSnapshot(o, "name", JsonStringOr(owe::Find(obj, "name"), ""));
     // `visible` is sometimes a {script, value} object (scripted property);
     // json::value<bool> would throw type_error on that shape and tear down
     // the entire scene dump. Unwrap when present, default to true.
     bool visible = true;
-    if (auto value = obj.get("visible"_str); value.is_some()) {
-        auto initial = (*value)->get("value"_str);
-        visible =
-            (initial.is_some() ? (*initial)->as_bool() : (*value)->as_bool()).unwrap_or(visible);
+    if (const auto* value = owe::Find(obj, "visible"); value != nullptr) {
+        const auto* initial = owe::Find(*value, "value");
+        visible             = JsonBoolOr(initial != nullptr ? initial : value, visible);
     }
     SetSnapshot(o, "visible", visible);
-    constexpr rstd::array<ref<str>, 6> keys {
-        "origin"_str, "scale"_str, "angles"_str, "size"_str, "parallaxDepth"_str, "alignment"_str,
+    constexpr std::array<std::string_view, 6> keys {
+        "origin", "scale", "angles", "size", "parallaxDepth", "alignment",
     };
     for (auto key : keys) {
-        if (auto value = obj.get(key); value.is_some())
-            owe::SetJson(o, rstd::cppstd::as_string_view(key), (*value)->clone());
+        if (const auto* value = owe::Find(obj, key); value != nullptr) o[std::string(key)] = *value;
     }
     return o;
 }
@@ -394,7 +390,7 @@ Json dump_light_object(const Json& obj, owe::fs::VFS& vfs) {
     owe::wpscene::LightObject lo;
     bool                      ok = false;
     try {
-        ok = lo.FromJson(owe::FromRstd(obj), vfs);
+        ok = lo.FromJson(obj, vfs);
     } catch (const std::exception&) {
         ok = false;
     }
@@ -417,7 +413,7 @@ Json dump_particle_object(const Json& obj, owe::fs::VFS& vfs) {
     owe::wpscene::ParticleObject po;
     bool                         ok = false;
     try {
-        ok = po.FromJson(owe::FromRstd(obj), vfs);
+        ok = po.FromJson(obj, vfs);
     } catch (const std::exception&) {
         ok = false;
     }
@@ -449,7 +445,7 @@ Json dump_sound_object(const Json& obj, owe::fs::VFS& vfs) {
     owe::wpscene::SoundObject so;
     bool                      ok = false;
     try {
-        ok = so.FromJson(owe::FromRstd(obj), vfs);
+        ok = so.FromJson(obj, vfs);
     } catch (const std::exception&) {
         ok = false;
     }
@@ -470,7 +466,7 @@ Json dump_image_object(const Json& obj, owe::fs::VFS& vfs) {
     owe::wpscene::ImageObject img;
     bool                      ok = false;
     try {
-        ok = img.FromJson(owe::FromRstd(obj), vfs);
+        ok = img.FromJson(obj, vfs);
     } catch (const std::exception&) {
         ok = false;
     }
@@ -490,31 +486,31 @@ Json dump_image_object(const Json& obj, owe::fs::VFS& vfs) {
     SetSnapshot(out, "visible_parsed", img.visible);
     SetSnapshot(out, "alignment_parsed", img.alignment);
     SetSnapshot(out, "puppet", img.puppet);
-    owe::SetJson(out, "material", dump_material(img.material));
+    out["material"] = dump_material(img.material);
     SetSnapshot(out, "effect_count", static_cast<int>(img.effects.size()));
     // ImageEffect::id and ::version are left uninitialised by the
     // parser when the source json omits them, so dumping their raw value
     // produces stack garbage. Skip them.
-    auto effs = owe::MakeArray();
+    auto effs = Json::array();
     for (const auto& e : img.effects) {
-        auto je = owe::MakeObject();
+        auto je = Json::object();
         SetSnapshot(je, "name", e.name);
         SetSnapshot(je, "visible", e.visible);
-        auto mats = owe::MakeArray();
-        for (const auto& mm : e.materials) owe::AppendJson(mats, dump_material(mm));
-        owe::SetJson(je, "materials", std::move(mats));
-        auto passes = owe::MakeArray();
-        for (const auto& p : e.passes) owe::AppendJson(passes, dump_material_pass(p));
-        owe::SetJson(je, "passes", std::move(passes));
-        auto fbos = owe::MakeArray();
-        for (const auto& f : e.fbos) owe::AppendJson(fbos, dump_effect_fbo(f));
-        owe::SetJson(je, "fbos", std::move(fbos));
+        auto mats = Json::array();
+        for (const auto& mm : e.materials) mats.push_back(dump_material(mm));
+        je["materials"] = std::move(mats);
+        auto passes = Json::array();
+        for (const auto& p : e.passes) passes.push_back(dump_material_pass(p));
+        je["passes"] = std::move(passes);
+        auto fbos = Json::array();
+        for (const auto& f : e.fbos) fbos.push_back(dump_effect_fbo(f));
+        je["fbos"] = std::move(fbos);
         SetSnapshot(je, "material_count", static_cast<int>(e.materials.size()));
         SetSnapshot(je, "pass_count", static_cast<int>(e.passes.size()));
         SetSnapshot(je, "fbo_count", static_cast<int>(e.fbos.size()));
-        owe::AppendJson(effs, std::move(je));
+        effs.push_back(std::move(je));
     }
-    owe::SetJson(out, "effects", std::move(effs));
+    out["effects"] = std::move(effs);
     return out;
 }
 
@@ -522,13 +518,10 @@ template<typename Predicate>
 std::vector<Corpus::TexRef> tex_filter(const std::vector<WorkshopEntry>& es, Predicate pred) {
     std::vector<Corpus::TexRef> out;
     for (const auto& e : es) {
-        auto textures = e.snapshot.get("textures"_str);
-        if (textures.is_none()) continue;
-        auto array = (*textures)->as_array();
-        if (array.is_none()) continue;
-        for (const auto& t : **array) {
-            auto ok = t.get("ok"_str);
-            if (ok.is_none() || ! (*ok)->as_bool().unwrap_or(false)) continue;
+        const auto* textures = owe::Find(e.snapshot, "textures");
+        if (textures == nullptr || ! textures->is_array()) continue;
+        for (const auto& t : *textures) {
+            if (! JsonBoolOr(owe::Find(t, "ok"), false)) continue;
             if (pred(t)) out.push_back({ &e, &t });
         }
     }
@@ -539,11 +532,9 @@ template<typename Predicate>
 std::vector<Corpus::MdlRef> mdl_filter(const std::vector<WorkshopEntry>& es, Predicate pred) {
     std::vector<Corpus::MdlRef> out;
     for (const auto& e : es) {
-        auto puppets = e.snapshot.get("puppets"_str);
-        if (puppets.is_none()) continue;
-        auto array = (*puppets)->as_array();
-        if (array.is_none()) continue;
-        for (const auto& m : **array) {
+        const auto* puppets = owe::Find(e.snapshot, "puppets");
+        if (puppets == nullptr || ! puppets->is_array()) continue;
+        for (const auto& m : *puppets) {
             if (pred(m)) out.push_back({ &e, &m });
         }
     }
@@ -552,11 +543,10 @@ std::vector<Corpus::MdlRef> mdl_filter(const std::vector<WorkshopEntry>& es, Pre
 
 } // namespace
 
-Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags flags) {
+Json DumpWorkshop(const std::string& workshop_dir, std::string& err) {
     err.clear();
-    auto out = owe::MakeObject();
+    auto out = Json::object();
     SetSnapshot(out, "workshop_dir", fs::path(workshop_dir).filename().string());
-    const std::string pkg_id = fs::path(workshop_dir).filename().string();
 
     const std::string pkg_path = workshop_dir + "/scene.pkg";
     if (! fs::exists(pkg_path)) {
@@ -580,11 +570,11 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
             break;
         }
 
-    auto jpkg = owe::MakeObject();
+    auto jpkg = Json::object();
     SetSnapshot(jpkg, "version", pkg_version);
     SetSnapshot(jpkg, "file_count", static_cast<int>(pkg_entries.size()));
     SetSnapshot(jpkg, "has_scene_json", has_scene_json);
-    owe::SetJson(out, "pkg", std::move(jpkg));
+    out["pkg"] = std::move(jpkg);
 
     owe::fs::VFS vfs;
     auto         afs = owe::fs::make_physical_fs(owe::fs::ToPath(kAssetsDirMacro));
@@ -607,28 +597,28 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
         auto stream = owe::fs::OpenBinary(vfs, "/assets/scene.json");
         if (stream.is_ok()) {
             std::string text        = stream->ReadAllStr();
-            auto        parsed_json = owe::ParseJson(text);
+            auto        parsed_json = owe::ParseNJson(text);
             if (parsed_json.is_ok()) {
                 auto                        j = parsed_json.unwrap();
                 owe::wpscene::SceneMetadata scene;
-                bool                        parsed = scene.FromJson(owe::FromRstd(j));
-                auto                        jscene = owe::MakeObject();
+                bool                        parsed = scene.FromJson(j);
+                auto                        jscene = Json::object();
                 SetSnapshot(jscene, "parsed", parsed);
                 SetSnapshot(jscene, "is_ortho", scene.general.isOrtho);
-                auto ortho = owe::MakeObject();
+                auto ortho = Json::object();
                 SetSnapshot(ortho, "width", scene.general.orthogonalprojection.width);
                 SetSnapshot(ortho, "height", scene.general.orthogonalprojection.height);
-                owe::SetJson(jscene, "ortho", std::move(ortho));
-                auto camera = owe::MakeObject();
+                jscene["ortho"] = std::move(ortho);
+                auto camera = Json::object();
                 SetSnapshot(camera, "center", scene.camera.center);
                 SetSnapshot(camera, "eye", scene.camera.eye);
                 SetSnapshot(camera, "up", scene.camera.up);
-                owe::SetJson(jscene, "camera", std::move(camera));
+                jscene["camera"] = std::move(camera);
                 // cameraparallaxamount/delay/mouseinfluence are undefaulted
                 // floats in SceneGeneral, so when the source scene.json
                 // omits them the parser leaves stack garbage. Only emit them
                 // when cameraparallax is enabled.
-                auto jgen = owe::MakeObject();
+                auto jgen = Json::object();
                 SetSnapshot(jgen, "clearcolor", scene.general.clearcolor);
                 SetSnapshot(jgen, "ambientcolor", scene.general.ambientcolor);
                 SetSnapshot(jgen, "skylightcolor", scene.general.skylightcolor);
@@ -644,64 +634,59 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
                                 "cameraparallaxmouseinfluence",
                                 scene.general.cameraparallaxmouseinfluence);
                 }
-                owe::SetJson(jscene, "general", std::move(jgen));
-                auto jobjects = owe::MakeArray();
-                if (auto objects = j.get("objects"_str); objects.is_some()) {
-                    auto object_array = (*objects)->as_array();
-                    if (object_array.is_some())
-                        for (const auto& obj : **object_array) {
-                            if (obj.get("image"_str).is_some())
-                                owe::AppendJson(jobjects, dump_image_object(obj, vfs));
-                            else if (obj.get("light"_str).is_some())
-                                owe::AppendJson(jobjects, dump_light_object(obj, vfs));
-                            else if (obj.get("particle"_str).is_some())
-                                owe::AppendJson(jobjects, dump_particle_object(obj, vfs));
-                            else if (obj.get("sound"_str).is_some())
-                                owe::AppendJson(jobjects, dump_sound_object(obj, vfs));
-                            else {
-                                Json o = dump_object_common(obj);
-                                SetSnapshot(o, "kind", "unknown");
-                                owe::AppendJson(jobjects, std::move(o));
-                            }
+                jscene["general"] = std::move(jgen);
+                auto jobjects = Json::array();
+                if (const auto* objects = owe::Find(j, "objects");
+                    objects != nullptr && objects->is_array())
+                    for (const auto& obj : *objects) {
+                        if (owe::Find(obj, "image") != nullptr)
+                            jobjects.push_back(dump_image_object(obj, vfs));
+                        else if (owe::Find(obj, "light") != nullptr)
+                            jobjects.push_back(dump_light_object(obj, vfs));
+                        else if (owe::Find(obj, "particle") != nullptr)
+                            jobjects.push_back(dump_particle_object(obj, vfs));
+                        else if (owe::Find(obj, "sound") != nullptr)
+                            jobjects.push_back(dump_sound_object(obj, vfs));
+                        else {
+                            Json o = dump_object_common(obj);
+                            SetSnapshot(o, "kind", "unknown");
+                            jobjects.push_back(std::move(o));
                         }
-                }
-                auto                     values = jobjects.as_array();
+                    }
                 std::vector<std::size_t> ordered;
-                ordered.reserve((*values)->len().to_primitive());
-                for (std::size_t index = 0; index < (*values)->len().to_primitive(); ++index)
+                ordered.reserve(jobjects.size());
+                for (std::size_t index = 0; index < jobjects.size(); ++index)
                     ordered.push_back(index);
+                auto object_id = [&](std::size_t index) {
+                    const auto* id = owe::Find(jobjects[index], "id");
+                    return id != nullptr ? JsonI64Or(*id, -1) : -1;
+                };
                 std::sort(
                     ordered.begin(), ordered.end(), [&](std::size_t a_index, std::size_t b_index) {
-                        const auto& a    = (**values)[usize(a_index)];
-                        const auto& b    = (**values)[usize(b_index)];
-                        auto        a_id = a.get("id"_str);
-                        auto        b_id = b.get("id"_str);
-                        return (a_id.is_some() ? JsonI64Or(**a_id, -1) : -1) <
-                               (b_id.is_some() ? JsonI64Or(**b_id, -1) : -1);
+                        return object_id(a_index) < object_id(b_index);
                     });
-                auto sorted_objects = owe::MakeArray();
-                for (auto index : ordered)
-                    owe::AppendJson(sorted_objects, (**values)[usize(index)].clone());
+                auto sorted_objects = Json::array();
+                for (auto index : ordered) sorted_objects.push_back(jobjects[index]);
                 SetSnapshot(jscene, "object_count", static_cast<int>(ordered.size()));
-                owe::SetJson(jscene, "objects", std::move(sorted_objects));
-                owe::SetJson(out, "scene", std::move(jscene));
+                jscene["objects"] = std::move(sorted_objects);
+                out["scene"] = std::move(jscene);
             } else {
-                auto error = owe::MakeObject();
+                auto error = Json::object();
                 SetSnapshot(error, "parsed", false);
                 SetSnapshot(error, "error", "invalid JSON");
-                owe::SetJson(out, "scene", std::move(error));
+                out["scene"] = std::move(error);
             }
         }
     }
 
-    if (flags.tex) {
-        auto jtex = owe::MakeArray();
+    {
+        auto jtex = Json::array();
         for (const auto& e : pkg_entries) {
             if (! ends_with(e.path, ".tex")) continue;
             if (e.path.rfind("/materials/", 0) != 0) continue;
             std::string vfs_path = "/assets" + e.path;
             TexMeta     m        = ReadTexMeta(vfs, e.path);
-            auto        jm       = owe::MakeObject();
+            auto        jm       = Json::object();
             SetSnapshot(jm, "path", e.path);
             SetSnapshot(jm, "ok", m.ok);
             SetSnapshot(jm, "texv", m.texv);
@@ -726,95 +711,25 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
             SetSnapshot(jm, "wrap_t", m.wrap_t);
             SetSnapshot(jm, "min_filter", m.min_filter);
             SetSnapshot(jm, "mag_filter", m.mag_filter);
-            owe::AppendJson(jtex, std::move(jm));
+            jtex.push_back(std::move(jm));
         }
         sort_by_path(jtex);
-        owe::SetJson(out, "textures", std::move(jtex));
+        out["textures"] = std::move(jtex);
     }
-
-    if (flags.shader) {
-        auto jsh = owe::MakeArray();
-        for (const auto& e : pkg_entries) {
-            if (e.path.rfind("/materials/", 0) != 0) continue;
-            if (! ends_with(e.path, ".json")) continue;
-            auto jm = owe::MakeObject();
-            SetSnapshot(jm, "path", e.path);
-            auto stream = owe::fs::OpenBinary(vfs, "/assets" + e.path);
-            if (stream.is_err()) {
-                SetSnapshot(jm, "ok", false);
-                SetSnapshot(jm, "error", "cannot open");
-                owe::AppendJson(jsh, std::move(jm));
-                continue;
-            }
-            const std::string text            = stream->ReadAllStr();
-            auto              parsed_material = owe::ParseNJson(text);
-            if (parsed_material.is_err()) {
-                SetSnapshot(jm, "ok", false);
-                SetSnapshot(jm, "error", "invalid JSON");
-                owe::AppendJson(jsh, std::move(jm));
-                continue;
-            }
-            auto                             jmat = parsed_material.unwrap();
-            owe::CompileMaterialShaderResult r;
-            try {
-                r = owe::ShaderParser::CompileMaterialShader(jmat, vfs, pkg_id);
-            } catch (const std::exception& ex) {
-                r.ok    = false;
-                r.error = ex.what();
-            } catch (...) {
-                r.ok    = false;
-                r.error = "unknown exception";
-            }
-            SetSnapshot(jm, "ok", r.ok);
-            SetSnapshot(jm, "shader_name", r.shader_name);
-            if (! r.ok) SetSnapshot(jm, "error", r.error);
-            owe::AppendJson(jsh, std::move(jm));
-        }
-        sort_by_path(jsh);
-        owe::SetJson(out, "shaders", std::move(jsh));
-    }
-
-    if (! flags.mdl) return out;
 
     auto emit_flag = [](uint32_t flag) {
-        auto flag_arr = owe::MakeArray();
+        auto flag_arr = Json::array();
         for (int byte_idx = 0; byte_idx < 4; ++byte_idx) {
             uint8_t     b = static_cast<uint8_t>((flag >> (byte_idx * 8)) & 0xFFu);
             std::string bits(8, '0');
             for (int i = 0; i < 8; ++i)
                 if (b & (1u << (7 - i))) bits[i] = '1';
-            owe::AppendElement(flag_arr, std::move(bits));
+            flag_arr.push_back(std::move(bits));
         }
         return flag_arr;
     };
 
-    auto jmdl = owe::MakeArray();
-    if (! flags.mdl_full) {
-        for (const auto& e : pkg_entries) {
-            if (! ends_with(e.path, ".mdl")) continue;
-            std::string rel = e.path;
-            if (! rel.empty() && rel.front() == '/') rel.erase(0, 1);
-            MdlHeader h;
-            bool      ok = false;
-            try {
-                ok = owe::MdlParser::ParseHeader(rstd::cppstd::as_str(rel).unwrap(), vfs, h);
-            } catch (const std::exception&) {
-                ok = false;
-            }
-            auto jm = owe::MakeObject();
-            SetSnapshot(jm, "path", e.path);
-            SetSnapshot(jm, "ok", ok);
-            SetSnapshot(jm, "mdlv", h.mdlv);
-            owe::SetJson(jm, "flag", emit_flag(h.mdl_flag));
-            SetSnapshot(jm, "skin_count", static_cast<int64_t>(h.skin_count));
-            SetSnapshot(jm, "mesh_count", static_cast<int64_t>(h.mesh_count));
-            owe::AppendJson(jmdl, std::move(jm));
-        }
-        sort_by_path(jmdl);
-        owe::SetJson(out, "puppets", std::move(jmdl));
-        return out;
-    }
-
+    auto jmdl = Json::array();
     for (const auto& e : pkg_entries) {
         if (! ends_with(e.path, ".mdl")) continue;
         // MdlParser::Parse expects a path relative to /assets without the
@@ -828,11 +743,11 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
         } catch (const std::exception&) {
             ok = false;
         }
-        auto jm = owe::MakeObject();
+        auto jm = Json::object();
         SetSnapshot(jm, "path", e.path);
         SetSnapshot(jm, "ok", ok);
         SetSnapshot(jm, "mdlv", mdl.header.mdlv);
-        owe::SetJson(jm, "flag", emit_flag(mdl.header.mdl_flag));
+        jm["flag"] = emit_flag(mdl.header.mdl_flag);
         SetSnapshot(jm, "skin_count", static_cast<int64_t>(mdl.header.skin_count));
         SetSnapshot(jm, "mesh_count", static_cast<int64_t>(mdl.header.mesh_count));
         SetSnapshot(jm, "mdls", mdl.mdls);
@@ -848,17 +763,17 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
         SetSnapshot(
             jm, "vert_extra_count", m0 ? static_cast<int>(m0->part_uv2.len().to_primitive()) : 0);
         SetSnapshot(jm, "part_count", m0 ? static_cast<int>(m0->parts.len().to_primitive()) : 0);
-        auto parts_arr = owe::MakeArray();
+        auto parts_arr = Json::array();
         if (m0) {
             for (const auto& pt : m0->parts) {
-                auto part = owe::MakeObject();
+                auto part = Json::object();
                 SetSnapshot(part, "id", static_cast<int64_t>(pt.id));
                 SetSnapshot(part, "start", static_cast<int64_t>(pt.start));
                 SetSnapshot(part, "size", static_cast<int64_t>(pt.size));
-                owe::AppendJson(parts_arr, std::move(part));
+                parts_arr.push_back(std::move(part));
             }
         }
-        owe::SetJson(jm, "parts", std::move(parts_arr));
+        jm["parts"] = std::move(parts_arr);
         SetSnapshot(jm,
                     "bones",
                     ok && mdl.puppet.is_some()
@@ -870,9 +785,9 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
                         ? static_cast<int>((*mdl.puppet)->anims.len().to_primitive())
                         : 0);
         if (ok && mdl.puppet.is_some()) {
-            auto bones = owe::MakeArray();
+            auto bones = Json::array();
             for (const auto& b : (*mdl.puppet)->bones) {
-                auto jb = owe::MakeObject();
+                auto jb = Json::object();
                 SetSnapshot(jb, "name", b.name);
                 SetSnapshot(jb, "bind_parent", static_cast<int64_t>(b.bind_parent));
                 SetSnapshot(jb, "anim_parent", static_cast<int64_t>(b.anim_parent));
@@ -888,23 +803,23 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
                     for (int r = 0; r < 4; ++r)
                         col_sums[static_cast<std::size_t>(c)] += b.local_bind.matrix()(r, c);
                 SetSnapshot(jb, "transform_col_sums", col_sums);
-                owe::AppendJson(bones, std::move(jb));
+                bones.push_back(std::move(jb));
             }
-            owe::SetJson(jm, "bone_tree", std::move(bones));
+            jm["bone_tree"] = std::move(bones);
             SetSnapshot(jm,
                         "attachment_count",
                         static_cast<int>((*mdl.puppet)->attachments.len().to_primitive()));
-            auto atts = owe::MakeArray();
+            auto atts = Json::array();
             for (const auto& a : (*mdl.puppet)->attachments) {
-                auto attachment = owe::MakeObject();
+                auto attachment = Json::object();
                 SetSnapshot(attachment, "name", a.name);
-                owe::AppendJson(atts, std::move(attachment));
+                atts.push_back(std::move(attachment));
             }
-            owe::SetJson(jm, "attachments", std::move(atts));
+            jm["attachments"] = std::move(atts);
 
-            auto anims = owe::MakeArray();
+            auto anims = Json::array();
             for (const auto& a : (*mdl.puppet)->anims) {
-                auto ja = owe::MakeObject();
+                auto ja = Json::object();
                 SetSnapshot(ja, "id", a.id);
                 SetSnapshot(ja, "fps", a.fps);
                 SetSnapshot(ja, "length", a.length);
@@ -927,7 +842,7 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
                 for (const auto& bt : a.bone_tracks)
                     total_frames += static_cast<int>(bt.frames.len().to_primitive());
                 SetSnapshot(ja, "total_bone_frames", total_frames);
-                auto moved = owe::MakeArray();
+                auto moved = Json::array();
                 for (usize ti {}; ti < a.bone_tracks.len(); ++ti) {
                     const auto& tk = a.bone_tracks[ti];
                     if (tk.frames.is_empty()) continue;
@@ -939,23 +854,23 @@ Json DumpWorkshop(const std::string& workshop_dir, std::string& err, DumpFlags f
                         if ((fr.angle - f0.angle).norm() > 0.001f) any_an = true;
                     }
                     if (any_pos || any_sc || any_an) {
-                        auto item = owe::MakeObject();
+                        auto item = Json::object();
                         SetSnapshot(item, "i", static_cast<int>(ti.to_primitive()));
                         SetSnapshot(item, "p", any_pos);
                         SetSnapshot(item, "s", any_sc);
                         SetSnapshot(item, "a", any_an);
-                        owe::AppendJson(moved, std::move(item));
+                        moved.push_back(std::move(item));
                     }
                 }
-                owe::SetJson(ja, "moved_bones", std::move(moved));
-                owe::AppendJson(anims, std::move(ja));
+                ja["moved_bones"] = std::move(moved);
+                anims.push_back(std::move(ja));
             }
-            owe::SetJson(jm, "anim_tracks", std::move(anims));
+            jm["anim_tracks"] = std::move(anims);
         }
-        owe::AppendJson(jmdl, std::move(jm));
+        jmdl.push_back(std::move(jm));
     }
     sort_by_path(jmdl);
-    owe::SetJson(out, "puppets", std::move(jmdl));
+    out["puppets"] = std::move(jmdl);
 
     return out;
 }
@@ -970,7 +885,7 @@ Corpus::Corpus() { build(); }
 void Corpus::build() {
     fs::path root { kWorkshopDirMacro };
     if (! fs::exists(root) || ! fs::is_directory(root)) {
-        std::fprintf(stderr, "corpus: workshop dir %s missing\n", root.c_str());
+        std::fprintf(stderr, "corpus: workshop dir %s missing\n", root.string().c_str());
         return;
     }
 
@@ -996,41 +911,33 @@ void Corpus::build() {
 
         WorkshopEntry e { std::move(id), d.string(), std::move(snap) };
 
-        if (auto pkg = e.snapshot.get("pkg"_str); pkg.is_some()) {
-            auto version = (*pkg)->get("version"_str);
-            if (version.is_some() && (*version)->as_str().is_some())
-                pkg_versions_.insert(rstd::cppstd::to_string(*(*version)->as_str()));
+        if (const auto* pkg = owe::Find(e.snapshot, "pkg"); pkg != nullptr) {
+            const auto* version = owe::Find(*pkg, "version");
+            if (version != nullptr && version->is_string())
+                pkg_versions_.insert(version->get<std::string>());
         }
-        if (auto textures = e.snapshot.get("textures"_str); textures.is_some()) {
-            auto array = (*textures)->as_array();
-            if (array.is_some())
-                for (const auto& t : **array) {
-                    auto ok = t.get("ok"_str);
-                    if (ok.is_none() || ! (*ok)->as_bool().unwrap_or(false)) continue;
-                    if (auto value = t.get("texv"_str); value.is_some())
-                        texv_versions_.insert(static_cast<int>(JsonI64Or(**value, 0)));
-                    if (auto value = t.get("texi"_str); value.is_some())
-                        texi_versions_.insert(static_cast<int>(JsonI64Or(**value, 0)));
-                    if (auto value = t.get("texb"_str); value.is_some())
-                        texb_versions_.insert(static_cast<int>(JsonI64Or(**value, 0)));
-                    if (auto value = t.get("texs"_str); value.is_some())
-                        texs_versions_.insert(static_cast<int>(JsonI64Or(**value, 0)));
-                    if (auto value = t.get("format"_str); value.is_some())
-                        tex_formats_.insert(static_cast<int>(JsonI64Or(**value, -1)));
-                }
-        }
-        if (auto puppets = e.snapshot.get("puppets"_str); puppets.is_some()) {
-            auto array = (*puppets)->as_array();
-            if (array.is_some())
-                for (const auto& m : **array) {
-                    if (auto value = m.get("mdlv"_str); value.is_some())
-                        mdlv_versions_.insert(static_cast<int>(JsonI64Or(**value, 0)));
-                    if (auto value = m.get("mdls"_str); value.is_some())
-                        mdls_versions_.insert(static_cast<int>(JsonI64Or(**value, 0)));
-                    if (auto value = m.get("mdla"_str); value.is_some())
-                        mdla_versions_.insert(static_cast<int>(JsonI64Or(**value, 0)));
-                }
-        }
+        auto insert_stamp = [](std::set<int>& into, const Json& from, std::string_view key,
+                               rstd::int64_t fallback) {
+            if (const auto* value = owe::Find(from, key); value != nullptr)
+                into.insert(static_cast<int>(JsonI64Or(*value, fallback)));
+        };
+        if (const auto* textures = owe::Find(e.snapshot, "textures");
+            textures != nullptr && textures->is_array())
+            for (const auto& t : *textures) {
+                if (! JsonBoolOr(owe::Find(t, "ok"), false)) continue;
+                insert_stamp(texv_versions_, t, "texv", 0);
+                insert_stamp(texi_versions_, t, "texi", 0);
+                insert_stamp(texb_versions_, t, "texb", 0);
+                insert_stamp(texs_versions_, t, "texs", 0);
+                insert_stamp(tex_formats_, t, "format", -1);
+            }
+        if (const auto* puppets = owe::Find(e.snapshot, "puppets");
+            puppets != nullptr && puppets->is_array())
+            for (const auto& m : *puppets) {
+                insert_stamp(mdlv_versions_, m, "mdlv", 0);
+                insert_stamp(mdls_versions_, m, "mdls", 0);
+                insert_stamp(mdla_versions_, m, "mdla", 0);
+            }
         entries_.push_back(std::move(e));
     }
 
@@ -1052,61 +959,60 @@ void Corpus::build() {
 std::vector<Corpus::PkgRef> Corpus::workshops_with_pkg(const std::string& v) const {
     std::vector<PkgRef> out;
     for (const auto& e : entries_) {
-        const auto version = e.snapshot.pointer("/pkg/version"_str);
-        if (version.is_some()) {
-            auto value = (*version)->as_str();
-            if (value.is_some() && rstd::cppstd::as_string_view(*value) == v) out.push_back({ &e });
-        }
+        const auto* pkg     = owe::Find(e.snapshot, "pkg");
+        const auto* version = pkg != nullptr ? owe::Find(*pkg, "version") : nullptr;
+        if (version != nullptr && version->is_string() && version->get_ref<const std::string&>() == v)
+            out.push_back({ &e });
     }
     return out;
 }
 
 std::vector<Corpus::TexRef> Corpus::textures_with_texv(int v) const {
     return tex_filter(entries_, [v](const Json& t) {
-        auto value = t.get("texv"_str);
-        return value.is_some() && JsonI64Or(**value, -1) == v;
+        const auto* value = owe::Find(t, "texv");
+        return value != nullptr && JsonI64Or(*value, -1) == v;
     });
 }
 std::vector<Corpus::TexRef> Corpus::textures_with_texi(int v) const {
     return tex_filter(entries_, [v](const Json& t) {
-        auto value = t.get("texi"_str);
-        return value.is_some() && JsonI64Or(**value, -1) == v;
+        const auto* value = owe::Find(t, "texi");
+        return value != nullptr && JsonI64Or(*value, -1) == v;
     });
 }
 std::vector<Corpus::TexRef> Corpus::textures_with_texb(int v) const {
     return tex_filter(entries_, [v](const Json& t) {
-        auto value = t.get("texb"_str);
-        return value.is_some() && JsonI64Or(**value, -1) == v;
+        const auto* value = owe::Find(t, "texb");
+        return value != nullptr && JsonI64Or(*value, -1) == v;
     });
 }
 std::vector<Corpus::TexRef> Corpus::textures_with_texs(int v) const {
     return tex_filter(entries_, [v](const Json& t) {
-        auto value = t.get("texs"_str);
-        return value.is_some() && JsonI64Or(**value, -1) == v;
+        const auto* value = owe::Find(t, "texs");
+        return value != nullptr && JsonI64Or(*value, -1) == v;
     });
 }
 std::vector<Corpus::TexRef> Corpus::textures_with_format(int v) const {
     return tex_filter(entries_, [v](const Json& t) {
-        auto value = t.get("format"_str);
-        return value.is_some() && JsonI64Or(**value, -1) == v;
+        const auto* value = owe::Find(t, "format");
+        return value != nullptr && JsonI64Or(*value, -1) == v;
     });
 }
 std::vector<Corpus::MdlRef> Corpus::mdls_with_mdlv(int v) const {
     return mdl_filter(entries_, [v](const Json& m) {
-        auto value = m.get("mdlv"_str);
-        return value.is_some() && JsonI64Or(**value, -1) == v;
+        const auto* value = owe::Find(m, "mdlv");
+        return value != nullptr && JsonI64Or(*value, -1) == v;
     });
 }
 std::vector<Corpus::MdlRef> Corpus::mdls_with_mdls(int v) const {
     return mdl_filter(entries_, [v](const Json& m) {
-        auto value = m.get("mdls"_str);
-        return value.is_some() && JsonI64Or(**value, -1) == v;
+        const auto* value = owe::Find(m, "mdls");
+        return value != nullptr && JsonI64Or(*value, -1) == v;
     });
 }
 std::vector<Corpus::MdlRef> Corpus::mdls_with_mdla(int v) const {
     return mdl_filter(entries_, [v](const Json& m) {
-        auto value = m.get("mdla"_str);
-        return value.is_some() && JsonI64Or(**value, -1) == v;
+        const auto* value = owe::Find(m, "mdla");
+        return value != nullptr && JsonI64Or(*value, -1) == v;
     });
 }
 

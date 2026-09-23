@@ -5,7 +5,6 @@ target_sources(wpe-render PRIVATE
 target_link_libraries(wpe-render PRIVATE owe-core)
 target_link_libraries(wpe-render PRIVATE owe-scene)
 target_link_libraries(wpe-render PRIVATE rstd.cppstd)
-target_link_libraries(wpe-render PRIVATE rstd.json)
 target_link_libraries(wpe-render PRIVATE rstd.log)
 target_link_libraries(wpe-render PRIVATE shell32)
 target_link_libraries(wpe-render PRIVATE wpe-cli11)
