@@ -155,6 +155,11 @@ enum class ParticleEventPhase
     AfterEmit,
 };
 
+// 粒子帧上下文：宿主每帧传给各粒子程序的只读上下文的基类；程序按需 dynamic_cast 回具体类型。
+struct ParticleFrameContext {
+    virtual ~ParticleFrameContext() = default;
+};
+
 struct ParticleSpawnRequest {
     ParticleSlot slot;
     f64          emitter_duration {};
@@ -163,14 +168,14 @@ struct ParticleSpawnRequest {
 struct ParticleSpawnContext {
     ParticleWriteView           view;
     slice<ParticleSpawnRequest> particles;
-    ref<dyn<rstd::any::Any>>    frame;
+    const ParticleFrameContext* frame;
 };
 
 struct ParticleLifecycleContext {
     ParticleWriteView        view;
     slice<ParticleSlot>      slots;
     ParticleSlotEvents&      events;
-    ref<dyn<rstd::any::Any>> frame;
+    const ParticleFrameContext* frame;
     f64                      delta {};
     f64                      elapsed {};
 
@@ -187,7 +192,7 @@ struct ParticleLifecycleContext {
 struct ParticleEventContext {
     ParticleReadView         view;
     ref<ParticleSlotEvents>  events;
-    ref<dyn<rstd::any::Any>> frame;
+    const ParticleFrameContext* frame;
     ParticleEventPhase       phase;
     f64                      delta {};
     f64                      elapsed {};
@@ -196,7 +201,7 @@ struct ParticleEventContext {
 struct ParticleUpdateContext {
     ParticleWriteView        view;
     slice<ParticleSlot>      slots;
-    ref<dyn<rstd::any::Any>> frame;
+    const ParticleFrameContext* frame;
     f64                      delta {};
     f64                      elapsed {};
 };
@@ -314,13 +319,13 @@ struct ParticleExtractInstance {
 
 struct ParticleExtractContext {
     slice<ParticleExtractInstance> instances;
-    ref<dyn<rstd::any::Any>>       frame;
+    const ParticleFrameContext*    frame;
 };
 
 class ParticleEmitterContext {
 public:
     bool Empty() const noexcept { return m_storage->Len() == usize(); }
-    auto Frame() const noexcept -> ref<dyn<rstd::any::Any>> { return m_frame; }
+    auto Frame() const noexcept -> const ParticleFrameContext* { return m_frame; }
     f64  Delta() const noexcept { return m_delta; }
     f64  Elapsed() const noexcept { return m_elapsed; }
 
@@ -355,7 +360,8 @@ private:
     ParticleEmitterContext(ParticleStorage& storage, ParticleViewBinding& binding,
                            ParticleSlotEvents&                             events,
                            rstd::vec::Vec<Box<dyn<ParticleSpawnProgram>>>& spawn,
-                           ref<dyn<rstd::any::Any>> frame, usize max_slots, f64 delta, f64 elapsed)
+                           const ParticleFrameContext* frame, usize max_slots, f64 delta,
+                           f64 elapsed)
         : m_storage(rstd::addressof(storage)),
           m_binding(rstd::addressof(binding)),
           m_events(rstd::addressof(events)),
@@ -369,7 +375,7 @@ private:
     ParticleViewBinding*                            m_binding;
     ParticleSlotEvents*                             m_events;
     rstd::vec::Vec<Box<dyn<ParticleSpawnProgram>>>* m_spawn;
-    ref<dyn<rstd::any::Any>>                        m_frame;
+    const ParticleFrameContext*                     m_frame;
     usize                                           m_max_slots;
     f64                                             m_delta;
     f64                                             m_elapsed;
@@ -402,7 +408,7 @@ public:
     ParticleDefinition&       Definition() noexcept { return m_definition; }
     const ParticleDefinition& Definition() const noexcept { return m_definition; }
 
-    void Advance(ParticleInstance& instance, ref<dyn<rstd::any::Any>> frame, f64 delta,
+    void Advance(ParticleInstance& instance, const ParticleFrameContext* frame, f64 delta,
                  f64 elapsed) {
         if (! instance.Active()) return;
 
@@ -460,7 +466,7 @@ public:
         for (auto& update : m_definition.program.m_post_updates) update->Update(update_context);
     }
 
-    void Extract(ref<dyn<rstd::any::Any>> frame) {
+    void Extract(const ParticleFrameContext* frame) {
         auto instances = rstd::vec::Vec<ParticleExtractInstance>::with_capacity(m_instances.len());
         for (usize index {}; index < m_instances.len(); ++index) {
             auto& instance = *m_instances[index];
@@ -480,7 +486,7 @@ public:
 
 private:
     void ProcessEvents(ParticleViewBinding& binding, ParticleSlotEvents& events,
-                       ref<dyn<rstd::any::Any>> frame, ParticleEventPhase phase, f64 delta,
+                       const ParticleFrameContext* frame, ParticleEventPhase phase, f64 delta,
                        f64 elapsed, bool force) {
         if (! force && events.spawned.is_empty() && events.died.is_empty()) return;
         ParticleEventContext context {

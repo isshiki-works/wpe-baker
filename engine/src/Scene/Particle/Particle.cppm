@@ -1,3 +1,7 @@
+module;
+#include <typeindex>
+#include <typeinfo>
+
 export module wescene.particle;
 
 import eigen;
@@ -32,8 +36,8 @@ struct ParticleAttributeDescriptor {
     ParticleAttributeId          id;
     String                       debug_name;
     String                       owner;
-    rstd::any::TypeId            concrete_type;
-    rstd::any::TypeId            value_type;
+    std::type_index              concrete_type;
+    std::type_index              value_type;
     usize                        value_size {};
     usize                        value_alignment {};
     ParticleAttributeResetPolicy reset_policy { ParticleAttributeResetPolicy::DefaultValue };
@@ -63,10 +67,8 @@ struct ParticleAttribute {
         auto Descriptor() const -> ref<ParticleAttributeDescriptor> {
             return rstd::trait_call<0>(this);
         }
-        auto ConcreteType() const noexcept -> rstd::any::TypeId {
-            return rstd::trait_call<1>(this);
-        }
-        auto ValueType() const noexcept -> rstd::any::TypeId { return rstd::trait_call<2>(this); }
+        auto ConcreteType() const noexcept -> std::type_index { return rstd::trait_call<1>(this); }
+        auto ValueType() const noexcept -> std::type_index { return rstd::trait_call<2>(this); }
         auto Len() const noexcept -> usize { return rstd::trait_call<3>(this); }
         auto Capacity() const noexcept -> usize { return rstd::trait_call<4>(this); }
         void Reserve(usize total_slots) { rstd::trait_call<5>(this, total_slots); }
@@ -112,7 +114,7 @@ struct ParticleAttributeKey {
 struct ParticleAttributeRequirement {
     ParticleAttributeId id;
     usize               schema_slot { usize::MAX };
-    rstd::any::TypeId   concrete_type;
+    std::type_index     concrete_type;
 };
 
 template<typename Attribute>
@@ -120,7 +122,7 @@ auto RequireParticleAttribute(ParticleAttributeKey<Attribute> key) -> ParticleAt
     return {
         .id            = key.id,
         .schema_slot   = key.schema_slot,
-        .concrete_type = rstd::any::TypeId::of<Attribute>(),
+        .concrete_type = std::type_index(typeid(Attribute)),
     };
 }
 
@@ -139,8 +141,8 @@ public:
     auto Descriptor() const -> ref<ParticleAttributeDescriptor> {
         return ref<ParticleAttributeDescriptor>::from_raw_parts(rstd::addressof(m_descriptor));
     }
-    auto ConcreteType() const noexcept -> rstd::any::TypeId { return m_descriptor.concrete_type; }
-    auto ValueTypeId() const noexcept -> rstd::any::TypeId { return m_descriptor.value_type; }
+    auto ConcreteType() const noexcept -> std::type_index { return m_descriptor.concrete_type; }
+    auto ValueTypeId() const noexcept -> std::type_index { return m_descriptor.value_type; }
     auto Len() const noexcept -> usize { return m_values.len(); }
     auto Capacity() const noexcept -> usize { return m_values.capacity(); }
     void Reserve(usize total_slots) {
@@ -165,31 +167,31 @@ private:
     rstd::vec::Vec<Value>       m_values;
 };
 
-#define OWE_PARTICLE_VALUE_ATTRIBUTE(Name, Type)                                                   \
-    struct Name {                                                                                  \
-        using Value = Type;                                                                        \
-                                                                                                   \
-        Name(ParticleAttributeDescriptor descriptor, Value default_value)                          \
-            : storage(rstd::move(descriptor), rstd::move(default_value)) {}                        \
-                                                                                                   \
-        auto Descriptor() const -> ref<ParticleAttributeDescriptor> {                              \
-            return storage.Descriptor();                                                           \
-        }                                                                                          \
-        auto ConcreteType() const noexcept -> rstd::any::TypeId { return storage.ConcreteType(); } \
-        auto ValueType() const noexcept -> rstd::any::TypeId { return storage.ValueTypeId(); }     \
-        auto Len() const noexcept -> usize { return storage.Len(); }                               \
-        auto Capacity() const noexcept -> usize { return storage.Capacity(); }                     \
-        void Reserve(usize total_slots) { storage.Reserve(total_slots); }                          \
-        void AppendDefaults(usize count) { storage.AppendDefaults(count); }                        \
-        void ResetSlots(slice<ParticleSlot> slots) { storage.ResetSlots(slots); }                  \
-        void Clear() { storage.Clear(); }                                                          \
-        auto Values() const noexcept -> slice<Value> { return storage.Values(); }                  \
-        auto ValuesMut() noexcept -> mut_ref<Value[]> { return storage.ValuesMut(); }              \
-        auto CloneEmpty() const -> Name {                                                          \
-            return Name(storage.CloneDescriptor(), storage.DefaultValue());                        \
-        }                                                                                          \
-                                                                                                   \
-        ParticleValueAttributeStorage<Value> storage;                                              \
+#define OWE_PARTICLE_VALUE_ATTRIBUTE(Name, Type)                                                 \
+    struct Name {                                                                                \
+        using Value = Type;                                                                      \
+                                                                                                 \
+        Name(ParticleAttributeDescriptor descriptor, Value default_value)                        \
+            : storage(rstd::move(descriptor), rstd::move(default_value)) {}                      \
+                                                                                                 \
+        auto Descriptor() const -> ref<ParticleAttributeDescriptor> {                            \
+            return storage.Descriptor();                                                         \
+        }                                                                                        \
+        auto ConcreteType() const noexcept -> std::type_index { return storage.ConcreteType(); } \
+        auto ValueType() const noexcept -> std::type_index { return storage.ValueTypeId(); }     \
+        auto Len() const noexcept -> usize { return storage.Len(); }                             \
+        auto Capacity() const noexcept -> usize { return storage.Capacity(); }                   \
+        void Reserve(usize total_slots) { storage.Reserve(total_slots); }                        \
+        void AppendDefaults(usize count) { storage.AppendDefaults(count); }                      \
+        void ResetSlots(slice<ParticleSlot> slots) { storage.ResetSlots(slots); }                \
+        void Clear() { storage.Clear(); }                                                        \
+        auto Values() const noexcept -> slice<Value> { return storage.Values(); }                \
+        auto ValuesMut() noexcept -> mut_ref<Value[]> { return storage.ValuesMut(); }            \
+        auto CloneEmpty() const -> Name {                                                        \
+            return Name(storage.CloneDescriptor(), storage.DefaultValue());                      \
+        }                                                                                        \
+                                                                                                 \
+        ParticleValueAttributeStorage<Value> storage;                                            \
     }
 
 struct ParticleSlotState {
@@ -318,8 +320,8 @@ public:
             .id              = id,
             .debug_name      = String::make(name),
             .owner           = String::make(owner),
-            .concrete_type   = rstd::any::TypeId::of<Attribute>(),
-            .value_type      = rstd::any::TypeId::of<typename Attribute::Value>(),
+            .concrete_type   = std::type_index(typeid(Attribute)),
+            .value_type      = std::type_index(typeid(typename Attribute::Value)),
             .value_size      = usize(sizeof(typename Attribute::Value)),
             .value_alignment = usize(alignof(typename Attribute::Value)),
             .reset_policy    = reset_policy,
@@ -525,7 +527,7 @@ private:
         }
         auto descriptor = m_attributes[key.schema_slot]->Descriptor();
         if (descriptor->id != key.id ||
-            descriptor->concrete_type != rstd::any::TypeId::of<Attribute>()) {
+            descriptor->concrete_type != std::type_index(typeid(Attribute))) {
             rstd::panic { "particle attribute key does not match storage" };
         }
     }
@@ -626,7 +628,7 @@ struct ParticleBoundColumn {
 struct ParticleViewColumnLayout {
     ParticleAttributeId id;
     usize               schema_slot { usize::MAX };
-    rstd::any::TypeId   concrete_type;
+    std::type_index     concrete_type;
     ParticleBoundColumn (*bind)(ParticleStorage&, usize) { nullptr };
     bool readable { false };
     bool writable { false };
@@ -635,7 +637,7 @@ struct ParticleViewColumnLayout {
 struct ParticleViewObjectLayout {
     ParticleAttributeId id;
     usize               schema_slot { usize::MAX };
-    rstd::any::TypeId   concrete_type;
+    std::type_index     concrete_type;
     void* (*bind)(ParticleStorage&, usize) { nullptr };
     bool readable { false };
     bool writable { false };
@@ -746,7 +748,7 @@ private:
         return {
             .id            = key.id,
             .schema_slot   = key.schema_slot,
-            .concrete_type = rstd::any::TypeId::of<Attribute>(),
+            .concrete_type = std::type_index(typeid(Attribute)),
             .bind          = &BindColumn<Attribute>,
         };
     }
@@ -814,7 +816,7 @@ private:
         m_layout.m_objects.emplace_back(ParticleViewObjectLayout {
             .id            = key.id,
             .schema_slot   = key.schema_slot,
-            .concrete_type = rstd::any::TypeId::of<Attribute>(),
+            .concrete_type = std::type_index(typeid(Attribute)),
             .bind          = &BindObject<Attribute>,
             .readable      = true,
             .writable      = write,

@@ -131,31 +131,31 @@ struct ParticleAttributes {
     static auto Register(particle::ParticleSchemaBuilder&) -> ParticleAttributes;
 };
 
-#define OWE_WP_OSCILLATION_ATTRIBUTE(Name, Type)                                                   \
-    struct Name {                                                                                  \
-        using Value = Type;                                                                        \
-                                                                                                   \
-        Name(particle::ParticleAttributeDescriptor descriptor, Value default_value)                \
-            : storage(rstd::move(descriptor), rstd::move(default_value)) {}                        \
-                                                                                                   \
-        auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> {                    \
-            return storage.Descriptor();                                                           \
-        }                                                                                          \
-        auto ConcreteType() const noexcept -> rstd::any::TypeId { return storage.ConcreteType(); } \
-        auto ValueType() const noexcept -> rstd::any::TypeId { return storage.ValueTypeId(); }     \
-        auto Len() const noexcept -> usize { return storage.Len(); }                               \
-        auto Capacity() const noexcept -> usize { return storage.Capacity(); }                     \
-        void Reserve(usize total_slots) { storage.Reserve(total_slots); }                          \
-        void AppendDefaults(usize count) { storage.AppendDefaults(count); }                        \
-        void ResetSlots(slice<particle::ParticleSlot>) {}                                          \
-        void Clear() { storage.Clear(); }                                                          \
-        auto Values() const noexcept -> slice<Value> { return storage.Values(); }                  \
-        auto ValuesMut() noexcept -> mut_ref<Value[]> { return storage.ValuesMut(); }              \
-        auto CloneEmpty() const -> Name {                                                          \
-            return Name(storage.CloneDescriptor(), storage.DefaultValue());                        \
-        }                                                                                          \
-                                                                                                   \
-        particle::ParticleValueAttributeStorage<Value> storage;                                    \
+#define OWE_WP_OSCILLATION_ATTRIBUTE(Name, Type)                                                 \
+    struct Name {                                                                                \
+        using Value = Type;                                                                      \
+                                                                                                 \
+        Name(particle::ParticleAttributeDescriptor descriptor, Value default_value)              \
+            : storage(rstd::move(descriptor), rstd::move(default_value)) {}                      \
+                                                                                                 \
+        auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> {                  \
+            return storage.Descriptor();                                                         \
+        }                                                                                        \
+        auto ConcreteType() const noexcept -> std::type_index { return storage.ConcreteType(); } \
+        auto ValueType() const noexcept -> std::type_index { return storage.ValueTypeId(); }     \
+        auto Len() const noexcept -> usize { return storage.Len(); }                             \
+        auto Capacity() const noexcept -> usize { return storage.Capacity(); }                   \
+        void Reserve(usize total_slots) { storage.Reserve(total_slots); }                        \
+        void AppendDefaults(usize count) { storage.AppendDefaults(count); }                      \
+        void ResetSlots(slice<particle::ParticleSlot>) {}                                        \
+        void Clear() { storage.Clear(); }                                                        \
+        auto Values() const noexcept -> slice<Value> { return storage.Values(); }                \
+        auto ValuesMut() noexcept -> mut_ref<Value[]> { return storage.ValuesMut(); }            \
+        auto CloneEmpty() const -> Name {                                                        \
+            return Name(storage.CloneDescriptor(), storage.DefaultValue());                      \
+        }                                                                                        \
+                                                                                                 \
+        particle::ParticleValueAttributeStorage<Value> storage;                                  \
     }
 
 OWE_WP_OSCILLATION_ATTRIBUTE(OscillationResetAttribute, bool);
@@ -209,8 +209,8 @@ struct TrailHistoryAttribute {
     TrailHistoryAttribute(particle::ParticleAttributeDescriptor descriptor, usize sample_capacity);
 
     auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor>;
-    auto ConcreteType() const noexcept -> rstd::any::TypeId;
-    auto ValueType() const noexcept -> rstd::any::TypeId;
+    auto ConcreteType() const noexcept -> std::type_index;
+    auto ValueType() const noexcept -> std::type_index;
     auto Len() const noexcept -> usize;
     auto Capacity() const noexcept -> usize;
     void Reserve(usize total_slots);
@@ -233,7 +233,7 @@ private:
     rstd::vec::Vec<Eigen::Vector3f>       m_positions;
 };
 
-struct ParticleFrame {
+struct ParticleFrame : particle::ParticleFrameContext {
     class ParticleSubSystem* subsystem { nullptr };
     usize                    instance_index {};
     rstd::array<float, 16>   audio_average {};
@@ -250,7 +250,7 @@ struct ParticleFrame {
     bool                     world_space { false };
 };
 
-auto ParticleFrameFrom(ref<dyn<rstd::any::Any>>) -> ref<ParticleFrame>;
+auto ParticleFrameFrom(const particle::ParticleFrameContext*) -> ref<ParticleFrame>;
 
 struct ParticleSpawnColumns {
     mut_ref<particle::ParticleSlotState[]> states;
@@ -278,7 +278,7 @@ public:
     ~ParticleSpawnInstruction();
 
     void Initialize(ParticleSpawnColumns&, particle::ParticleSpawnRequest,
-                    ref<dyn<rstd::any::Any>>);
+                    const particle::ParticleFrameContext*);
     auto SequenceCount() const -> Option<u32>;
 
 private:
@@ -302,7 +302,7 @@ public:
     void Compile(particle::ParticleViewCompiler&);
     auto Bind(particle::ParticleWriteView) -> ParticleSpawnColumns;
     void Initialize(ParticleSpawnColumns&, particle::ParticleSpawnRequest,
-                    ref<dyn<rstd::any::Any>>);
+                    const particle::ParticleFrameContext*);
 
 private:
     ParticleAttributes                                               m_attributes;
@@ -533,7 +533,7 @@ public:
     void ProcessChildEvents(particle::ParticleEventContext&);
 
 private:
-    void Warmup(ParticleInstanceRef, ref<dyn<rstd::any::Any>>);
+    void Warmup(ParticleInstanceRef, const particle::ParticleFrameContext*);
     bool SyncPlayback();
     void ExtractCurrentMesh();
     void Advance(f64 frame_time, f64 child_frame_time, bool update_mesh);

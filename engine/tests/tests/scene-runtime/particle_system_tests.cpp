@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <typeindex>
 
 import rstd;
 import rstd.cppstd;
@@ -36,8 +37,8 @@ struct TemperatureAttribute {
     auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> {
         return storage.Descriptor();
     }
-    auto ConcreteType() const noexcept -> rstd::any::TypeId { return storage.ConcreteType(); }
-    auto ValueType() const noexcept -> rstd::any::TypeId { return storage.ValueTypeId(); }
+    auto ConcreteType() const noexcept -> std::type_index { return storage.ConcreteType(); }
+    auto ValueType() const noexcept -> std::type_index { return storage.ValueTypeId(); }
     auto Len() const noexcept -> usize { return storage.Len(); }
     auto Capacity() const noexcept -> usize { return storage.Capacity(); }
     void Reserve(usize total_slots) { storage.Reserve(total_slots); }
@@ -167,7 +168,7 @@ struct InvalidKeyProgram {
     void Update(particle::ParticleUpdateContext&) {}
 };
 
-struct EmptyFrame {};
+struct EmptyFrame : owe::particle::ParticleFrameContext {};
 
 } // namespace
 
@@ -312,7 +313,7 @@ TEST(ParticleProgram, RunsPreparedProgramsInContractOrder) {
     particle::ParticleSystem system(rstd::move(definition).unwrap());
     auto&                    instance = system.CreateInstance();
     EmptyFrame               frame;
-    auto                     frame_ref = rstd::dyn<rstd::any::Any>::from_ref(frame).as_ref();
+    const owe::particle::ParticleFrameContext* frame_ref = &frame;
     system.Advance(instance, frame_ref, f64(1.0 / 60.0), f64(1.0 / 60.0));
     system.Extract(frame_ref);
 
@@ -347,7 +348,7 @@ TEST(ParticleProgram, ReusesExpiredCapacityWithoutAnEmptyFrame) {
     particle::ParticleSystem system(rstd::move(definition).unwrap());
     auto&                    instance = system.CreateInstance();
     EmptyFrame               frame;
-    auto                     frame_ref = rstd::dyn<rstd::any::Any>::from_ref(frame).as_ref();
+    const owe::particle::ParticleFrameContext* frame_ref = &frame;
 
     system.Advance(instance, frame_ref, f64(1.0), f64(1.0));
     EXPECT_TRUE(instance.Storage().Values(instance.Storage().SlotStateKey())[usize()].active);

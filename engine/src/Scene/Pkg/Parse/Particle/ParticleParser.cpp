@@ -1,5 +1,6 @@
 module;
 #include <rstd/macro.hpp>
+#include <typeindex>
 
 module wescene.pkg.parse;
 import eigen;
@@ -98,7 +99,7 @@ struct MapSequenceAroundControlPointProgram {
     MapSequenceAroundControlPoint config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>> frame_context) {
+                    const particle::ParticleFrameContext* frame_context) {
         auto frame         = ParticleFrameFrom(frame_context);
         auto controlpoints = frame->subsystem->Controlpoints();
         auto controlpoint  = rstd::as_cast<usize>(config.controlpoint % i32(8));
@@ -157,7 +158,7 @@ struct MapSequenceBetweenControlPointsProgram {
     MapSequenceBetweenControlPoints config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>> frame_context) {
+                    const particle::ParticleFrameContext* frame_context) {
         auto frame         = ParticleFrameFrom(frame_context);
         auto controlpoints = frame->subsystem->Controlpoints();
         auto start_index   = rstd::as_cast<usize>(config.controlpoint_start % i32(8));
@@ -241,7 +242,7 @@ std::array<float, N> mapVertex(const std::array<float, N>& v, float (*oper)(floa
 
 struct NoopSpawnProgram {
     void Initialize(ParticleSpawnColumns&, particle::ParticleSpawnRequest,
-                    ref<dyn<rstd::any::Any>>) {}
+                    const particle::ParticleFrameContext*) {}
 };
 
 struct ColorRandomProgram {
@@ -249,7 +250,7 @@ struct ColorRandomProgram {
     std::array<float, 3> max;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto            random = Random::get(0.0, 1.0);
         Eigen::Vector3f value;
         for (usize component {}; component < usize(3); ++component) {
@@ -265,7 +266,7 @@ struct LifetimeRandomProgram {
     SingleRandom config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto value                            = GenRandom(config.min, config.max, config.exponent);
         columns.lifetimes[request.slot.index] = value;
         columns.initial_lifetimes[request.slot.index] = value;
@@ -276,7 +277,7 @@ struct SizeRandomProgram {
     SingleRandom config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto value                        = GenRandom(config.min, config.max, config.exponent);
         columns.sizes[request.slot.index] = value;
         columns.initial_sizes[request.slot.index] = value;
@@ -287,7 +288,7 @@ struct AlphaRandomProgram {
     SingleRandom config;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto value                         = GenRandom(config.min, config.max, config.exponent);
         columns.alphas[request.slot.index] = value;
         columns.initial_alphas[request.slot.index] = value;
@@ -306,7 +307,7 @@ struct VectorRandomProgram {
     Target    target { Target::Velocity };
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         Eigen::Vector3f value;
         for (usize component {}; component < usize(3); ++component) {
             auto raw   = component.to_primitive();
@@ -329,7 +330,7 @@ struct TurbulentVelocityRandomProgram {
     Eigen::Vector3f position;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto  duration = request.emitter_duration;
         float speed    = Random::get(config.speedmin, config.speedmax);
         float phase    = Random::get(config.phasemin, config.phasemax);
@@ -359,7 +360,7 @@ struct OverrideSpawnProgram {
     ParticleInstanceModifiers modifiers;
 
     void Initialize(ParticleSpawnColumns& columns, particle::ParticleSpawnRequest request,
-                    ref<dyn<rstd::any::Any>>) {
+                    const particle::ParticleFrameContext*) {
         auto index = request.slot.index;
         columns.lifetimes[index] *= modifiers.Lifetime();
         columns.initial_lifetimes[index] = columns.lifetimes[index];
@@ -413,9 +414,9 @@ auto ParticleSpawnInstruction::Make(T value) -> ParticleSpawnInstruction {
     return ParticleSpawnInstruction(Box<Impl>::make(rstd::move(value)));
 }
 
-void ParticleSpawnInstruction::Initialize(ParticleSpawnColumns&          columns,
-                                          particle::ParticleSpawnRequest request,
-                                          ref<dyn<rstd::any::Any>>       frame) {
+void ParticleSpawnInstruction::Initialize(ParticleSpawnColumns&                 columns,
+                                          particle::ParticleSpawnRequest        request,
+                                          const particle::ParticleFrameContext* frame) {
     std::visit(
         [&](auto& instruction) {
             instruction.Initialize(columns, request, frame);
@@ -767,8 +768,8 @@ public:
     auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> {
         return m_storage.Descriptor();
     }
-    auto ConcreteType() const noexcept -> rstd::any::TypeId { return m_storage.ConcreteType(); }
-    auto ValueType() const noexcept -> rstd::any::TypeId { return m_storage.ValueTypeId(); }
+    auto ConcreteType() const noexcept -> std::type_index { return m_storage.ConcreteType(); }
+    auto ValueType() const noexcept -> std::type_index { return m_storage.ValueTypeId(); }
     auto Len() const noexcept -> usize { return m_storage.Len(); }
     auto Capacity() const noexcept -> usize { return m_storage.Capacity(); }
     void Reserve(usize total_slots) { m_storage.Reserve(total_slots); }

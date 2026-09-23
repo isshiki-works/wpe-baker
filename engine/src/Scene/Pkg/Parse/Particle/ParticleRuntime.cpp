@@ -1,4 +1,5 @@
 module;
+#include <typeindex>
 
 #include <rstd/macro.hpp>
 
@@ -189,11 +190,11 @@ auto TrailHistoryAttribute::Descriptor() const -> ref<particle::ParticleAttribut
         rstd::addressof(m_descriptor));
 }
 
-auto TrailHistoryAttribute::ConcreteType() const noexcept -> rstd::any::TypeId {
+auto TrailHistoryAttribute::ConcreteType() const noexcept -> std::type_index {
     return m_descriptor.concrete_type;
 }
 
-auto TrailHistoryAttribute::ValueType() const noexcept -> rstd::any::TypeId {
+auto TrailHistoryAttribute::ValueType() const noexcept -> std::type_index {
     return m_descriptor.value_type;
 }
 
@@ -282,10 +283,10 @@ void TrailHistoryAttribute::SetPreviousPosition(particle::ParticleSlot slot,
     state.has_previous_position = true;
 }
 
-auto owe::ParticleFrameFrom(ref<dyn<rstd::any::Any>> frame) -> ref<ParticleFrame> {
-    auto value = rstd::any::downcast_ref<ParticleFrame>(frame);
-    if (value.is_none()) rstd::panic { "unexpected particle frame context" };
-    return *value;
+auto owe::ParticleFrameFrom(const particle::ParticleFrameContext* frame) -> ref<ParticleFrame> {
+    const auto* value = dynamic_cast<const ParticleFrame*>(frame);
+    if (value == nullptr) rstd::panic { "unexpected particle frame context" };
+    return ref<ParticleFrame>::from_raw_parts(value);
 }
 
 void ParticleSpawnPipeline::Compile(particle::ParticleViewCompiler& compiler) {
@@ -326,9 +327,9 @@ auto ParticleSpawnPipeline::Bind(particle::ParticleWriteView view) -> ParticleSp
     };
 }
 
-void ParticleSpawnPipeline::Initialize(ParticleSpawnColumns&          columns,
-                                       particle::ParticleSpawnRequest request,
-                                       ref<dyn<rstd::any::Any>>       frame) {
+void ParticleSpawnPipeline::Initialize(ParticleSpawnColumns&                 columns,
+                                       particle::ParticleSpawnRequest        request,
+                                       const particle::ParticleFrameContext* frame) {
     columns.randoms[request.slot.index] = Random::get(0.0f, 1.0f);
     for (auto& instruction : m_instructions) instruction.Initialize(columns, request, frame);
     if (! m_world_space) return;
@@ -713,7 +714,7 @@ void ParticleSubSystem::Advance(f64 frame_time, f64 child_frame_time, bool updat
         m_instance_states.emplace_back();
     }
 
-    auto frame_ref = rstd::dyn<rstd::any::Any>::from_ref(m_frame).as_ref();
+    const particle::ParticleFrameContext* frame_ref = &m_frame;
     for (usize index {}; index < System().InstanceCount(); ++index) {
         ParticleInstanceRef current {
             .instance = rstd::addressof(System().Instance(index)),
@@ -751,7 +752,8 @@ void ParticleSubSystem::Advance(f64 frame_time, f64 child_frame_time, bool updat
     }
 }
 
-void ParticleSubSystem::Warmup(ParticleInstanceRef current, ref<dyn<rstd::any::Any>> frame_ref) {
+void ParticleSubSystem::Warmup(ParticleInstanceRef                   current,
+                               const particle::ParticleFrameContext* frame_ref) {
     if (! current.state->warmup_pending) return;
     current.state->warmup_pending = false;
     if (m_start_time <= f64()) return;
@@ -799,7 +801,7 @@ bool ParticleSubSystem::SyncPlayback() {
 
 void ParticleSubSystem::ExtractCurrentMesh() {
     UpdateFrameInput(f64());
-    auto frame_ref = rstd::dyn<rstd::any::Any>::from_ref(m_frame).as_ref();
+    const particle::ParticleFrameContext* frame_ref = &m_frame;
     System().Extract(frame_ref);
     m_mesh->SetDirty();
 }
