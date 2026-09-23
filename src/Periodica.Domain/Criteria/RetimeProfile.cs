@@ -1,6 +1,4 @@
-using System.Text.Json.Nodes;
-
-namespace Baker.Core;
+namespace Periodica.Domain;
 
 /// <summary>
 /// 三档预设：档位给的是"允许多大的观感改动"，循环长度是求解结果（用户 2026-09-18 03:15 定，样片见 sway-budget-scan.md §3）。
@@ -30,12 +28,12 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
 
     /// <summary>
     /// --retime-budget 允许的最大值（百分比）：效率档 5% 是扫描过的最高档，再往上没有数据支持。
-    /// 与通用求解器的分量调速预算上限是同一个数，只在 Domain 的 <see cref="CommonLoopSolver.MaximumRetimePercent"/> 定义一次。
+    /// 同时是通用求解器分量调速预算的上限（<see cref="CommonLoopSolver"/> 的请求校验读这一个常量）。
     /// </summary>
-    public const double MaximumBudgetPercent = CommonLoopSolver.MaximumRetimePercent;
+    public const double MaximumBudgetPercent = 5;
 
     /// <summary>没选档时的循环长度上限（秒），与 --loop-max-seconds 的默认一致。</summary>
-    public const double DefaultLoopMaximumSeconds = SwayRetimeOptions.DefaultLoopLengthMaximumSeconds;
+    public const double DefaultLoopMaximumSeconds = CommonLoopSolver.DefaultLoopLengthMaximumSeconds;
 
     /// <summary>
     /// 质量档要额外试一次的循环长度上限（秒）。
@@ -99,13 +97,6 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
         return new(preset, budget, budget ?? commonFallbackPercent, maximum, budgetSource, maximumSource);
     }
 
-    /// <summary>按分析请求解析（CLI、界面与 bake 前重分析共用这一条路径，三处结果一致）。</summary>
-    public static RetimeProfile Resolve(HybridAnalyzeRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return Resolve(request.Preset, request.RetimeBudgetPercent, request.LoopLengthMaximumSeconds, request.MaximumRetimePercent);
-    }
-
     /// <summary>一次求解在某个上限下的读数：生效上限秒数、选中候选的可见摆动改动（没有摆动解时为 null）与帧数。</summary>
     public readonly record struct QualityCeilingReading(double CeilingSeconds, double? VisibleChangePercent, ulong? Frames);
 
@@ -137,19 +128,4 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
         ulong presetFrames = atPreset.Frames ?? ulong.MaxValue, comparisonFrames = atComparison.Frames ?? ulong.MaxValue;
         return new(presetFrames < comparisonFrames, QualityCeilingChoice.ShorterLoop);
     }
-
-    /// <summary>写进 plan 的 profile 记录：每个值带来源，用户改过哪一项一看便知。</summary>
-    public JsonObject ToJson() => new()
-    {
-        ["preset"] = Preset,
-        ["retime_budget_percent"] = BudgetPercent,
-        ["retime_budget_source"] = BudgetSource,
-        ["common_retime_percent"] = CommonRetimePercent,
-        ["loop_max_seconds"] = LoopMaximumSeconds,
-        ["loop_max_seconds_source"] = LoopMaximumSource,
-        ["minimum_visible_cycles"] = SwayRecurrenceSolver.MinimumVisibleCycles,
-        ["minimum_loop_seconds"] = SwayRecurrenceSolver.MinimumLoopSeconds,
-        ["slow_speed_deviation_limit_pixels_per_second"] = SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond,
-        ["visible_speed_deviation_limit_pixels_per_second"] = SwayRecurrenceSolver.MaximumVisibleSpeedDeviationPixelsPerSecond
-    };
 }

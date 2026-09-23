@@ -1,12 +1,10 @@
-using System.Globalization;
-using System.Text.Json.Nodes;
-
-namespace Baker.Core;
+namespace Periodica.Domain;
 
 /// <summary>
 /// Wallpaper Engine 内嵌视频（TEX 容器 TEXB0004 里的 MP4）的大小上限，以及成品视频大小的两种预估：
 /// analyze 按参考码率收紧摆动改频的循环长度上限；bake 在主渲染前按短段试编码（composition probe）外推，超限就干净拒绝；
 /// 编码后仍超限（外推低估）时在接缝校验前拒绝，不再跑到装配才失败。
+/// 这里只放数值判据；写 plan/bake JSON、拒绝文案与 ffprobe 读包在 Baker.Core 的 EmbeddedVideoBudgetJson（静态扩展挂回本类名下）。
 /// </summary>
 public static class EmbeddedVideoBudget
 {
@@ -103,79 +101,6 @@ public static class EmbeddedVideoBudget
     /// <summary>试编码里一个视频组的包表。</summary>
     public sealed record ProbeGroup(string Id, bool PackedAlpha, uint EncodedWidth, uint EncodedHeight, ulong ProbeFrames,
         long ProbeBytes, IReadOnlyList<VideoPacket> Packets);
-
-    /// <summary>主渲染前的判定：任一视频组外推超限就是 predicted_over_limit，带中英理由；没有样本时 not_estimated，不拒绝。</summary>
-    public static JsonObject EvaluateProbe(IReadOnlyList<ProbeGroup> groups, ulong frames, uint fpsNumerator, uint fpsDenominator,
-        Message? notEstimatedReason = null)
-    {
-        ArgumentNullException.ThrowIfNull(groups);
-        var result = new JsonObject { ["maximum_bytes"] = MaximumBytes, ["frames"] = frames,
-            ["assumed_key_frame_interval"] = AssumedKeyFrameInterval,
-            ["basis"] = "Composition-probe packets extrapolated with one largest key frame per interval and the mean non-key packet; on five existing bakes this was 0.77-1.38x the real size, so it only rejects over-limit loops and never raises the analyze limit." };
-        if (groups.Count == 0)
-        {
-            result["status"] = "not_estimated";
-            (notEstimatedReason ?? new Message("bake.probe_no_encoded_group")).Write(result, "reason");
-            return result;
-        }
-        var records = new JsonArray();
-        ProbeGroup? worst = null;
-        double worstBytes = 0;
-        ulong worstMaximum = 0;
-        foreach (ProbeGroup group in groups)
-        {
-            double predicted = ExtrapolateBytes(group.Packets, frames);
-            ulong maximum = ExtrapolatedMaximumFrames(group.Packets);
-            bool over = predicted > MaximumBytes;
-            double[] nonKey = group.Packets.Where(packet => !packet.Key).Select(packet => (double)packet.Size).ToArray();
-            records.Add(new JsonObject { ["id"] = group.Id, ["packed_alpha"] = group.PackedAlpha,
-                ["encoded_width"] = group.EncodedWidth, ["encoded_height"] = group.EncodedHeight,
-                ["probe_frames"] = group.ProbeFrames, ["probe_bytes"] = group.ProbeBytes, ["probe_packets"] = group.Packets.Count,
-                ["key_frame_bytes"] = group.Packets.Where(packet => packet.Key).Select(packet => packet.Size).DefaultIfEmpty(0).Max(),
-                ["mean_non_key_frame_bytes"] = nonKey.Length == 0 ? null : Math.Round(nonKey.Average(), 1),
-                ["predicted_bytes"] = (long)Math.Round(predicted), ["maximum_frames"] = maximum,
-                ["maximum_seconds"] = WholeSeconds(maximum, fpsNumerator, fpsDenominator), ["over_limit"] = over });
-            if (over && (worst is null || predicted > worstBytes)) { worst = group; worstBytes = predicted; worstMaximum = maximum; }
-        }
-        result["groups"] = records;
-        result["status"] = worst is null ? "within_limit" : "predicted_over_limit";
-        if (worst is not null)
-        {
-            object?[] args = [worst.Id, frames, Seconds(frames, fpsNumerator, fpsDenominator), Gibibytes(worstBytes),
-                WholeSeconds(worstMaximum, fpsNumerator, fpsDenominator).ToString("0", CultureInfo.InvariantCulture)];
-            new Message("bake.embedded_video_size_predicted", args).Write(result, "reason");
-        }
-        return result;
-    }
-
-    /// <summary>编码后的实际字节超限时的拒绝理由（外推低估时的兜底）。</summary>
-    public static Message EncodedRejection(string groupId, long bytes, ulong frames, uint fpsNumerator, uint fpsDenominator)
-    {
-        ulong maximum = bytes <= 0 ? frames : (ulong)Math.Floor((double)frames * MaximumBytes / bytes);
-        return new Message("bake.embedded_video_size_rejected", [groupId, Gibibytes(bytes), frames,
-            Seconds(frames, fpsNumerator, fpsDenominator), WholeSeconds(maximum, fpsNumerator, fpsDenominator).ToString("0", CultureInfo.InvariantCulture)]);
-    }
-
-    /// <summary>用 ffprobe 读出视频流全部包的大小与关键帧标记（试编码只有几十个包）。</summary>
-    internal static async Task<IReadOnlyList<VideoPacket>> ReadPacketsAsync(NativeTools tools, string video, CancellationToken cancellationToken)
-    {
-        string text = await EncodedQualityValidator.RunAsync(tools.Ffprobe, tools, ["-v", "error", "-select_streams", "v:0",
-            "-show_entries", "packet=size,flags", "-of", "csv=p=0", video], cancellationToken);
-        var packets = new List<VideoPacket>();
-        foreach (string line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            string[] fields = line.Split(',');
-            if (fields.Length < 2 || !long.TryParse(fields[0], NumberStyles.None, CultureInfo.InvariantCulture, out long size))
-                throw new InvalidDataException("ffprobe returned an unreadable packet line.");
-            packets.Add(new(size, fields[1].Contains('K', StringComparison.Ordinal)));
-        }
-        return packets;
-    }
-
-    private static string Seconds(ulong frames, uint fpsNumerator, uint fpsDenominator) =>
-        ((double)frames * fpsDenominator / fpsNumerator).ToString("0.#", CultureInfo.InvariantCulture);
-
-    private static string Gibibytes(double bytes) => (bytes / (1L << 30)).ToString("0.00", CultureInfo.InvariantCulture);
 }
 
 /// <summary>analyze 对摆动改频循环长度上限的收紧记录。</summary>
@@ -187,14 +112,4 @@ public sealed record EmbeddedVideoLoopLimit(double RequestedSeconds, double FitS
 
     /// <summary>生效的循环长度上限（秒）。</summary>
     public double EffectiveSeconds => Math.Min(RequestedSeconds, FitSeconds);
-
-    public JsonObject ToJson() => new() {
-        ["applied"] = Applied, ["requested_loop_length_maximum_seconds"] = RequestedSeconds, ["fit_seconds"] = FitSeconds,
-        ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes, ["encoded_width"] = EncodedWidth, ["encoded_height"] = EncodedHeight,
-        ["packed_alpha"] = PackedAlpha, ["fps_numerator"] = FpsNumerator, ["fps_denominator"] = FpsDenominator,
-        ["reference_bytes_per_frame"] = Math.Round(ReferenceBytesPerFrame),
-        ["basis"] = "Wallpaper Engine 2.8.42 did not display a 2,922,466,521-byte embedded video and played 2,104,622,403 bytes; the reference bitrate is the highest per-frame size among existing long full-frame bakes (3572877776), scaled by pixels^0.537." };
-
-    /// <summary>"该分辨率下最长约 x 秒"一句（结论行与无解原因共用同一格式）；没有收紧时为空串。</summary>
-    public string Sentence(string language) => PlanNarrative.EmbeddedVideoLimitLine(ToJson(), language) ?? "";
 }
