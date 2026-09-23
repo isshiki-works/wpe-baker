@@ -5,8 +5,6 @@
 build/
 dist/
 **/bin/
-# engine/tests/src/bin 是测试工具源码目录，不是构建输出；9/23 json_semantic_diff.cpp 因上一行被挡在仓库外，干净检出配置即失败
-!engine/tests/src/bin/
 **/obj/
 **/__pycache__/
 *.pyc

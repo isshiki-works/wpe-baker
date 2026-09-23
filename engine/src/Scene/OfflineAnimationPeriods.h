@@ -9,7 +9,7 @@ namespace owe
 {
 
 inline std::string OfflineAnimationPeriodJsonString(std::string_view value) {
-    return owe::Dump(owe::JsonFromStd(value));
+    return owe::Dump(owe::NJson(std::string(value)));
 }
 
 inline i32 OfflineAnimationPeriodOwner(const SceneNode& node) {

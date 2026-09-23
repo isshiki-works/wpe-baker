@@ -11,42 +11,41 @@ import rstd.cppstd;
 import owe.user_property;
 import wescene.fs;
 import wescene.json;
-import wescene.testing.json_builder;
 
 using namespace rstd::literals;
 
-TEST(JsonAdapter, ParsesDumpsAndReportsMembers) {
-    auto parsed = owe::ParseJson(R"({"z":[true,null],"a":1.0})");
+// 原 json_adapter_tests 里与值类型无关的语义用例，rstd 版删除后改读 NJson；
+// 只测 rstd API 本身的用例（clone、as_object_mut、rstd 投影、JsonBuilder）随 rstd 版删掉。
+
+TEST(Json, ParsesDumpsAndReportsMembers) {
+    auto parsed = owe::ParseNJson(R"({"z":[true,null],"a":1.0})");
     ASSERT_TRUE(parsed.is_ok());
     auto value = parsed.unwrap();
-    EXPECT_TRUE(value.get("a"_str).is_some());
-    EXPECT_TRUE(value.get("missing"_str).is_none());
-    const std::string dynamic_key = "a";
-    EXPECT_TRUE(value.get(rstd::cppstd::as_str(dynamic_key).unwrap()).is_some());
-    const std::string_view mutable_key = "z";
-    EXPECT_TRUE(value.get_mut(rstd::cppstd::as_str(mutable_key).unwrap()).is_some());
-    auto z = value.get("z"_str);
-    ASSERT_TRUE(z.is_some());
-    EXPECT_TRUE((*z)->is_array());
+    EXPECT_NE(owe::Find(value, "a"), nullptr);
+    EXPECT_EQ(owe::Find(value, "missing"), nullptr);
+    const auto* z = owe::Find(value, "z");
+    ASSERT_NE(z, nullptr);
+    EXPECT_TRUE(z->is_array());
     EXPECT_EQ(owe::Dump(value), R"({"a":1.0,"z":[true,null]})");
-    EXPECT_EQ(owe::Dump(value, std::size_t { 2 }),
+    EXPECT_EQ(owe::Dump(value, rstd::usize(2)),
               "{\n  \"a\": 1.0,\n  \"z\": [\n    true,\n    null\n  ]\n}");
 }
 
-TEST(JsonAdapter, CommentsRequireExplicitOption) {
-    EXPECT_TRUE(owe::ParseJson("/* comment */ null").is_err());
+TEST(Json, CommentsRequireExplicitOption) {
+    EXPECT_TRUE(owe::ParseNJson("/* comment */ null").is_err());
     auto parsed =
-        owe::ParseJson("{/* comment */ \"value\": 1 // line\n}", { .allow_comments = true });
+        owe::ParseNJson("{/* comment */ \"value\": 1 // line\n}", { .allow_comments = true });
     ASSERT_TRUE(parsed.is_ok());
-    auto value  = parsed.unwrap();
-    auto member = value.get("value"_str);
-    ASSERT_TRUE(member.is_some());
-    EXPECT_EQ((*member)->as_i64().unwrap_or(rstd::i64()).to_primitive(), 1);
+    auto        value  = parsed.unwrap();
+    const auto* member = owe::Find(value, "value");
+    ASSERT_NE(member, nullptr);
+    ASSERT_TRUE(member->is_number_integer());
+    EXPECT_EQ(member->get<std::int64_t>(), 1);
 }
 
-TEST(JsonAdapter, WpeVfsJsonAllowsTrailingCommasWithoutRelaxingDirectParse) {
-    EXPECT_TRUE(owe::ParseJson("[1,]").is_err());
-    EXPECT_TRUE(owe::ParseJson("{\"value\":1,}").is_err());
+TEST(Json, WpeVfsJsonAllowsTrailingCommasWithoutRelaxingDirectParse) {
+    EXPECT_TRUE(owe::ParseNJson("[1,]").is_err());
+    EXPECT_TRUE(owe::ParseNJson("{\"value\":1,}").is_err());
 
     const auto root = std::filesystem::temp_directory_path() /
                       ("owe-json-trailing-" + std::to_string(rstd::process::id().to_primitive()));
@@ -63,24 +62,22 @@ TEST(JsonAdapter, WpeVfsJsonAllowsTrailingCommasWithoutRelaxingDirectParse) {
         ASSERT_TRUE(physical.is_ok());
         ASSERT_TRUE(vfs.mount("/assets"_str, std::move(physical).unwrap_unchecked()).is_ok());
 
-        auto parsed = owe::ReadJsonFile(vfs, "/assets/trailing.json");
+        auto parsed = owe::ReadNJsonFile(vfs, "/assets/trailing.json");
         ASSERT_TRUE(parsed.is_ok());
-        auto value = parsed.unwrap();
-        const auto items = value.get("items"_str);
-        ASSERT_TRUE(items.is_some());
-        ASSERT_TRUE((*items)->is_array());
-        const auto array = (*items)->as_array();
-        ASSERT_TRUE(array.is_some());
-        EXPECT_EQ((**array).len(), rstd::usize(2));
-        const auto nested = (**array)[rstd::usize(1)].get("nested"_str);
-        ASSERT_TRUE(nested.is_some());
-        EXPECT_EQ(*(*nested)->as_str(), "comma,] remains text"_str);
+        auto        value = parsed.unwrap();
+        const auto* items = owe::Find(value, "items");
+        ASSERT_NE(items, nullptr);
+        ASSERT_TRUE(items->is_array());
+        EXPECT_EQ(items->size(), 2u);
+        const auto* nested = owe::Find((*items)[1], "nested");
+        ASSERT_NE(nested, nullptr);
+        EXPECT_EQ(nested->get<std::string>(), "comma,] remains text");
     }
 
     std::filesystem::remove_all(root);
 }
 
-TEST(JsonAdapter, WpeVfsJsonStillRejectsConsecutiveCommas) {
+TEST(Json, WpeVfsJsonStillRejectsConsecutiveCommas) {
     const auto root = std::filesystem::temp_directory_path() /
                       ("owe-json-double-comma-" + std::to_string(rstd::process::id().to_primitive()));
     std::filesystem::remove_all(root);
@@ -95,25 +92,10 @@ TEST(JsonAdapter, WpeVfsJsonStillRejectsConsecutiveCommas) {
         auto physical = owe::fs::make_physical_fs(owe::fs::ToPath(root.string()));
         ASSERT_TRUE(physical.is_ok());
         ASSERT_TRUE(vfs.mount("/assets"_str, std::move(physical).unwrap_unchecked()).is_ok());
-        EXPECT_TRUE(owe::ReadJsonFile(vfs, "/assets/invalid.json").is_err());
+        EXPECT_TRUE(owe::ReadNJsonFile(vfs, "/assets/invalid.json").is_err());
     }
 
     std::filesystem::remove_all(root);
-}
-
-TEST(JsonAdapter, ClonesSubtreesExplicitly) {
-    auto parsed = owe::ParseJson(R"({"nested":{"value":1}})");
-    ASSERT_TRUE(parsed.is_ok());
-    auto original = parsed.unwrap();
-    auto clone    = original.clone();
-    auto nested   = clone.get_mut("nested"_str);
-    ASSERT_TRUE(nested.is_some());
-    auto object = (*nested)->as_object_mut();
-    ASSERT_TRUE(object.is_some());
-    (*object)->insert(::alloc::string::String::make("value"_str),
-                      rstd::into<owe::Json>(rstd::i32(2)));
-    EXPECT_EQ(owe::Dump(original), R"({"nested":{"value":1}})");
-    EXPECT_EQ(owe::Dump(clone), R"({"nested":{"value":2}})");
 }
 
 TEST(UserProperty, TextInputWireValuesStayStrings) {
@@ -153,55 +135,21 @@ TEST(UserProperty, UnknownTypeDefersWireValueCoercion) {
     EXPECT_EQ(value->get<std::string>(), "12");
 }
 
-TEST(JsonAdapter, NativeProjectionsPreserveOptions) {
-    auto parsed = owe::ParseJson(R"({"number":1.75,"bool":true,"text":"value"})");
-    ASSERT_TRUE(parsed.is_ok());
-    auto value  = parsed.unwrap();
-    auto number = value.get("number"_str);
-    ASSERT_TRUE(number.is_some());
-    EXPECT_DOUBLE_EQ((*number)->as_f64().unwrap_or(rstd::f64()).to_primitive(), 1.75);
-    auto boolean = value.get("bool"_str);
-    ASSERT_TRUE(boolean.is_some());
-    EXPECT_TRUE((*boolean)->as_bool().unwrap_or(false));
-    EXPECT_TRUE((*boolean)->as_i64().is_none());
-    auto text = value.get("text"_str);
-    ASSERT_TRUE(text.is_some());
-    EXPECT_EQ(rstd::cppstd::as_string_view(*(*text)->as_str()), "value");
-    EXPECT_TRUE(value.get("missing"_str).is_none());
-}
-
-TEST(JsonAdapter, BuildsObjectsArraysAndIteratesWithoutKeyCopies) {
-    auto array  = owe::MakeArray(1, true, "text");
-    auto object = owe::MakeObject();
-    ASSERT_TRUE(owe::SetMember(object, "items", std::move(array)));
-    ASSERT_TRUE(owe::SetMember(object, "name", std::string("demo")));
-
-    std::vector<std::string> keys;
-    auto                     object_values = object.as_object();
-    ASSERT_TRUE(object_values.is_some());
-    (*object_values)->iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        keys.push_back(rstd::cppstd::to_string(entry_key->as_str()));
-    });
-    EXPECT_EQ(keys, (std::vector<std::string> { "items", "name" }));
-    EXPECT_EQ(owe::Dump(object), R"({"items":[1,true,"text"],"name":"demo"})");
-}
-
-TEST(JsonAdapter, ProductionOutputContractsRoundTrip) {
-    auto property = owe::MakeObject();
-    ASSERT_TRUE(owe::SetMember(property, "dynamic\"\\", "line\n\t"));
+TEST(Json, ProductionOutputContractsRoundTrip) {
+    owe::NJson property = owe::NJson::object();
+    property["dynamic\"\\"] = "line\n\t";
 
     const auto compact = owe::Dump(property);
     EXPECT_EQ(compact, R"({"dynamic\"\\":"line\n\t"})");
 
-    auto parsed = owe::ParseJson(compact);
+    auto parsed = owe::ParseNJson(compact);
     ASSERT_TRUE(parsed.is_ok());
     auto reparsed = parsed.unwrap();
     EXPECT_EQ(owe::Dump(reparsed), compact);
 }
 
-TEST(JsonAdapter, LegacyGetJsonValueReadsScalarAndNamedValues) {
-    auto parsed = owe::ParseJson(
+TEST(Json, GetJsonValueReadsScalarAndNamedValues) {
+    auto parsed = owe::ParseNJson(
         R"({"bound":{"value":12.75},"plain":7,"text":"hello","flag":true,"null":null})");
     ASSERT_TRUE(parsed.is_ok());
     auto json = parsed.unwrap();
@@ -229,29 +177,29 @@ TEST(JsonAdapter, LegacyGetJsonValueReadsScalarAndNamedValues) {
     EXPECT_EQ(unchanged, 41);
 }
 
-TEST(JsonAdapter, LegacyGetJsonValuePreservesNumericConversions) {
-    auto floating = owe::ParseJson("3.75");
+TEST(Json, GetJsonValuePreservesNumericConversions) {
+    auto floating = owe::ParseNJson("3.75");
     ASSERT_TRUE(floating.is_ok());
     std::int32_t integer = 0;
     EXPECT_TRUE(owe::GetJsonValue(floating.unwrap(), integer));
     EXPECT_EQ(integer, 3);
 
-    auto negative = owe::ParseJson("-1");
+    auto negative = owe::ParseNJson("-1");
     ASSERT_TRUE(negative.is_ok());
     std::uint32_t unsigned_integer = 0;
     EXPECT_TRUE(owe::GetJsonValue(negative.unwrap(), unsigned_integer));
     EXPECT_EQ(unsigned_integer, std::numeric_limits<std::uint32_t>::max());
 
-    auto boolean = owe::ParseJson("true");
+    auto boolean = owe::ParseNJson("true");
     ASSERT_TRUE(boolean.is_ok());
     double numeric_boolean = 0.0;
     EXPECT_TRUE(owe::GetJsonValue(boolean.unwrap(), numeric_boolean));
     EXPECT_DOUBLE_EQ(numeric_boolean, 1.0);
 }
 
-TEST(JsonAdapter, LegacyGetJsonValueReadsArrayFormats) {
+TEST(Json, GetJsonValueReadsArrayFormats) {
     auto parsed =
-        owe::ParseJson(R"({"vector":"1.5 2.5 3.5","pair":"8 9","single":4,"ints":"1 -2 3"})");
+        owe::ParseNJson(R"({"vector":"1.5 2.5 3.5","pair":"8 9","single":4,"ints":"1 -2 3"})");
     ASSERT_TRUE(parsed.is_ok());
     auto json = parsed.unwrap();
 
@@ -279,14 +227,14 @@ TEST(JsonAdapter, LegacyGetJsonValueReadsArrayFormats) {
     EXPECT_EQ(integers, (std::vector<std::int32_t> { 1, -2, 3 }));
 }
 
-TEST(JsonAdapter, LegacyGetJsonValueReportsConversionFailure) {
-    auto wrong_size = owe::ParseJson(R"("1 2")");
+TEST(Json, GetJsonValueReportsConversionFailure) {
+    auto wrong_size = owe::ParseNJson(R"("1 2")");
     ASSERT_TRUE(wrong_size.is_ok());
     std::array<float, 3> fixed { 7.0f, 8.0f, 9.0f };
     EXPECT_FALSE(owe::GetJsonValue(wrong_size.unwrap(), fixed));
     EXPECT_EQ(fixed, (std::array<float, 3> { 7.0f, 8.0f, 9.0f }));
 
-    auto wrong_type = owe::ParseJson(R"("not a number")");
+    auto wrong_type = owe::ParseNJson(R"("not a number")");
     ASSERT_TRUE(wrong_type.is_ok());
     double number = 2.0;
     EXPECT_FALSE(owe::GetJsonValue(wrong_type.unwrap(), number));
