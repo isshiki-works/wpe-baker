@@ -183,8 +183,10 @@ struct PassTimingNode {
 void CollectPassTimingNodes(owe::SceneNode* node, std::int32_t inherited,
                             std::unordered_map<const owe::SceneNode*, PassTimingNode>& out) {
     if (node == nullptr) return;
-    const std::int32_t id    = node->ID().to_primitive();
-    const std::int32_t layer = id >= 0 ? id : inherited;
+    // 归属同 SceneToRenderGraph 的捕获归属：生成者图层优先（如带效果文字的离屏节点），否则作者图层，否则继承父节点
+    const auto         generator = node->GeneratorIdentity();
+    const std::int32_t id        = node->ID().to_primitive();
+    const std::int32_t layer = generator.is_some() ? generator->value.to_primitive() : id >= 0 ? id : inherited;
     out[node]                = PassTimingNode { .layer = layer, .role = "draw" };
     if (node->HasLayer()) {
         auto& effect_layer = node->Layer();
@@ -1180,8 +1182,8 @@ void VulkanRender::Impl::initPassTiming() {
 // 录制前：记下本帧各 pass 的标注；查询池不够大就重建（上一帧此时已完成）；复位并写起点时间戳。
 void VulkanRender::Impl::beginPassTiming(Scene& scene, vvk::CommandBuffer& command) {
     auto& timing = *m_pass_timing;
-    // 起点 + 上传 + 每个 pass 至多两个（合并 scope 里的 draw 与 scope 结束）
-    const auto needed = static_cast<std::uint32_t>(2 + 2 * m_program.pass_records.len().to_primitive());
+    // 起点、上传、每个 pass 一个
+    const auto needed = static_cast<std::uint32_t>(2 + m_program.pass_records.len().to_primitive());
     if (needed > timing.capacity) {
         if (timing.queries.create(m_device->handle(), needed) != VK_SUCCESS) {
             rstd_error("WPE_PASS_TIMING disabled: create timestamp query pool failed");

@@ -29,14 +29,14 @@ TEST(PassTimingLine, AttributesIntervalsToTheRecordedPasses) {
     std::vector<Pass> passes { Named("a"), Named("b"), Named("c"), Named("never-recorded") };
     passes[2] = Pass { .name = "c", .layer = 32, .role = "effect", .effect = "shine", .effect_index = 1,
                        .rt = "_rt_x", .width = 640, .height = 360 };
-    // 上传，单独录制的 a，然后合并 scope 里 b、c 两次 draw 与 scope 结束（记在 c 名下）；第 4 个 pass 没录制。
-    const std::vector<std::int64_t>  labels { -1, 0, 1, 2, 2 };
-    const std::vector<std::uint64_t> ticks { 10, 20, 30, 40, 50 };
+    // 上传，然后 a、b、c 各一个区间；第 4 个 pass 没录制，不出现。
+    const std::vector<std::int64_t>  labels { -1, 0, 1, 2 };
+    const std::vector<std::uint64_t> ticks { 10, 20, 30, 40 };
     const auto line = nlohmann::json::parse(FrameLine(7, passes, labels, ticks, 2.0));
 
     EXPECT_EQ(line["schema"], "pass-timing/1");
     EXPECT_EQ(line["frame"], 7);
-    EXPECT_EQ(line["gpu_ns"], 300);
+    EXPECT_EQ(line["gpu_ns"], 200);
     EXPECT_EQ(line["uploads_ns"], 20);
     const auto& out = line["passes"];
     ASSERT_EQ(out.size(), 3u);
@@ -45,7 +45,7 @@ TEST(PassTimingLine, AttributesIntervalsToTheRecordedPasses) {
     EXPECT_EQ(out[1]["pass"], "b");
     EXPECT_EQ(out[1]["gpu_ns"], 60);
     EXPECT_EQ(out[2]["pass"], "c");
-    EXPECT_EQ(out[2]["gpu_ns"], 180);
+    EXPECT_EQ(out[2]["gpu_ns"], 80);
     EXPECT_EQ(out[2]["layer"], 32);
     EXPECT_EQ(out[2]["role"], "effect");
     EXPECT_EQ(out[2]["effect"], "shine");

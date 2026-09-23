@@ -18,14 +18,15 @@
 //   passes       本帧实际录制的 pass，按渲染程序的 pass 顺序（也就是录制顺序）；未就绪、没录制的不出现
 // pass 字段：
 //   pass         pass 名（着色器名或内部名，如 frame/pre、copy）
-//   layer        所属图层 id（场景对象 id；效果节点记宿主图层）；无对应场景节点时 -1
+//   layer        所属图层 id：生成者图层优先（如带效果文字的离屏节点），否则场景对象 id，否则继承父节点；
+//                效果节点记宿主图层；无对应场景节点（全局 bloom、copy 等）时 -1
 //   role         draw | effect | prefill | final-resolve | published | visible-resolve；无场景节点时 ""
 //   effect       效果名（效果类 role）；否则 ""
 //   effect_index 效果在图层效果列表里的序号；role 不是 effect 时 -1
 //   rt           输出渲染目标名；w、h 是它的像素尺寸（copy pass 取源图尺寸）；无输出目标时 ""、0、0
 //   gpu_ns       该 pass 的 GPU 时间
-// 时间口径：每录完一个 pass（合并 render pass 里每次 draw 与 scope 结束各算一次）写一个 BOTTOM_OF_PIPE
-// 时间戳，相邻两个时间戳之差记在后者名下，scope 结束的 store 记在该 scope 最后一个 pass 名下。
+// 时间口径：每录完一个 pass（合并 render pass 里是每次 draw 之后）写一个 BOTTOM_OF_PIPE 时间戳，相邻两个
+// 时间戳之差记在后者名下；合并 render pass 结束时的 store 因此记在其后第一个 pass 名下。
 // GPU 可以让相邻 pass 重叠执行，所以单个 pass 的值是"完成时刻之差"，不是独占执行时间。
 // 纳秒按累计时刻取整后再相减，所以各 pass 的 gpu_ns 与 uploads_ns 之和恰好等于帧的 gpu_ns。
 // 汇总工具：tools/pass-timing/pass_timing.py。

@@ -1248,8 +1248,6 @@ struct RenderProgram {
                               [](VulkanPass& target, PassRecordContext& context) {
                                   target.endRenderScope(context);
                               });
-            // scope 结束（附件 store）记在 scope 最后一个 pass 名下
-            mark(scoped_passes[scoped_passes.len() - rstd::usize(1)]);
         }
         return true;
     }
