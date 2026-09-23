@@ -1763,6 +1763,52 @@
      "components": 1,
      "period_seconds": 400,
      "tolerance": 1e-06
+    },
+    {
+     "message": "the water-ripple past-ceiling refusal uses the retime budget this analysis was given (preset budget), not a fixed 2%",
+     "ceiling": 390,
+     "retime_percent": 0,
+     "layer": 10,
+     "components": 0,
+     "unresolved": 1,
+     "mechanism": "uv_normal_scroll",
+     "detail_contains": [
+      "390-second loop ceiling",
+      "(0%)"
+     ]
+    },
+    {
+     "message": "the water-ripple past-ceiling refusal uses the retime budget this analysis was given (preset budget), not a fixed 2%",
+     "ceiling": 390,
+     "retime_percent": 2,
+     "layer": 10,
+     "components": 0,
+     "unresolved": 1,
+     "mechanism": "uv_normal_scroll",
+     "detail_contains": [
+      "390-second loop ceiling",
+      "(2%)"
+     ]
+    },
+    {
+     "message": "the water-ripple past-ceiling refusal uses the retime budget this analysis was given (preset budget), not a fixed 2%",
+     "ceiling": 390,
+     "retime_percent": 3,
+     "layer": 10,
+     "unresolved": 0,
+     "components": 1,
+     "period_seconds": 400,
+     "tolerance": 1e-06
+    },
+    {
+     "message": "the water-ripple past-ceiling refusal uses the retime budget this analysis was given (preset budget), not a fixed 2%",
+     "ceiling": 390,
+     "retime_percent": 5,
+     "layer": 10,
+     "unresolved": 0,
+     "components": 1,
+     "period_seconds": 400,
+     "tolerance": 1e-06
     }
    ]
   },
