@@ -15,7 +15,6 @@ import rstd.cppstd;
 import wescene.utils;
 import wescene.scene;
 import wescene.pkg_asset_version;
-import wavsen.video;
 
 using namespace owe;
 using namespace rstd::prelude;
@@ -39,40 +38,6 @@ using TexFlags = BitFlags<TexFlagEnum>;
 
 namespace
 {
-class RangeInputStream {
-public:
-    explicit RangeInputStream(owe::io::ReadRange source)
-        : m_length(static_cast<rstd::int64_t>(source.len())),
-          m_reader(std::move(source).into_reader()) {}
-
-    int read(rstd::uint8_t* buffer, int size) {
-        if (size <= 0) return 0;
-        auto result = m_reader.read(buffer, static_cast<std::size_t>(size));
-        return result.is_ok() ? static_cast<int>(*result) : -1;
-    }
-
-    rstd::int64_t seek(rstd::int64_t offset, int whence) {
-        constexpr int AVSEEK_SIZE = 0x10000;
-        if (whence == AVSEEK_SIZE) return m_length;
-        owe::io::SeekFrom from;
-        switch (whence) {
-        case 0:
-            if (offset < 0) return -1;
-            from = owe::io::SeekFrom::from_start(static_cast<std::uint64_t>(offset));
-            break;
-        case 1: from = owe::io::SeekFrom::from_current(offset); break;
-        case 2: from = owe::io::SeekFrom::from_end(offset); break;
-        default: return -1;
-        }
-        auto result = m_reader.seek(from);
-        return result.is_ok() ? static_cast<rstd::int64_t>(*result) : -1;
-    }
-
-private:
-    rstd::int64_t        m_length { 0 };
-    owe::io::RangeReader m_reader;
-};
-
 char* Lz4Decompress(const char* src, int size, int decompressed_size) {
     char* dst       = new char[static_cast<std::size_t>(decompressed_size)];
     int   load_size = LZ4_decompress_safe(src, dst, size, decompressed_size);
@@ -102,7 +67,7 @@ ImageType DetectEmbeddedImageType(const unsigned char* data, std::size_t size) {
         return ImageType::TIFF;
     // ISO BMFF / MP4 / MOV / 3GP — "....ftyp...." at offset 4. WE's scene
     // wallpapers can inline an H.264/AAC mp4 here; the renderer side
-    // hands the bytes to wavsen::video::VideoDecoder.
+    // hands the bytes to owe::media::VideoSource.
     if (size >= 12 && std::memcmp(data + 4, "ftyp", 4) == 0) return ImageType::VIDEO;
     // Matroska / WebM EBML header.
     if (size >= 4 && data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3)
@@ -310,24 +275,18 @@ auto owe::ProbeVideoDuration(fs::VFS& vfs, ref<str> name) -> Option<f64> {
         return None<f64>();
     }
     const auto& mip = parsed->slots[0].mipmaps[0];
-    auto factory = Box<dyn<FnMut<Box<dyn<wavsen::video::InputStream>>()>>>::make(
-        [source = (*mip.video_source).clone()]() -> Box<dyn<wavsen::video::InputStream>> {
-            return Box<dyn<wavsen::video::InputStream>>::make(RangeInputStream(source.clone()));
-        });
-    auto decoder = wavsen::video::VideoDecoder::open_from_stream(
-        rstd::move(factory), u32(mip.width), u32(mip.height), true, nullptr,
-        wavsen::video::OpenOpts { wavsen::video::HwAccel::None, String {} });
-    if (decoder.is_err()) {
-        auto error = rstd::move(decoder).unwrap_err();
-        rstd_warn("video duration probe {} open failed: {}", name, error.message);
+    owe::media::VideoSource decoder;
+    if (! decoder.open((*mip.video_source).clone().into_reader(), static_cast<std::uint32_t>(mip.width),
+                       static_cast<std::uint32_t>(mip.height))) {
+        rstd_warn("video duration probe {} open failed: {}", name, decoder.last_error());
         return None<f64>();
     }
-    auto duration = rstd::move(decoder).unwrap_unchecked()->duration();
-    if (duration.is_none() || ! duration->is_finite() || *duration <= f64()) {
+    auto duration = decoder.duration();
+    if (! duration || ! std::isfinite(*duration) || *duration <= 0.0) {
         rstd_warn("video duration probe {} returned no finite positive duration", name);
         return None<f64>();
     }
-    return duration;
+    return Some(f64(*duration));
 }
 
 auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParseError> {

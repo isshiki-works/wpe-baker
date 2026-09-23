@@ -3,9 +3,10 @@ export module owe.media;
 import rstd.cppstd;
 import wescene.io;
 
-// 引擎自己的媒体层（T5a：音频；视频在 T5b 迁入）。
+// 引擎自己的媒体层（T5a：音频；T5b：视频解码）。
 // 语义逐项照搬 wavsen::audio 的离线路径：StreamDecoder → AudioDecoder，
-// SoundStream → PcmSource，SoundManager 的离线混音 → OfflineMixer。
+// SoundStream → PcmSource，SoundManager 的离线混音 → OfflineMixer；
+// 视频照搬 wavsen::video::VideoDecoder 的软件解码路径 → VideoSource。
 // libav 的头只进 .cpp，接口里不出现任何 libav 类型。
 export namespace owe::media
 {
@@ -96,6 +97,76 @@ private:
     float                                   m_volume { 1.0f };
     bool                                    m_muted {};
     bool                                    m_playing {};
+};
+
+// ---- 视频（T5b）：原 wavsen::video::VideoDecoder 的软件解码路径 ----
+
+// 一帧 NV12（尺寸 = 解码器的目标尺寸）：Y 平面 w*h 字节，后接交错 UV 平面 w*h/2 字节。
+struct Nv12Frame {
+    std::vector<std::uint8_t> data;
+    double                    pts_seconds { -1.0 };
+    // 产出这帧的 swscale 所用矩阵与范围，编号同 wavsen：
+    // colorspace 0 = BT.709、1 = BT.601、2 = BT.2020；color_range 0 = limited、1 = full。
+    std::uint32_t colorspace {};
+    std::uint32_t color_range {};
+};
+
+// 选中视频流的元数据（缩放、转 NV12 之前）。
+struct VideoStreamMetadata {
+    std::string                  codec;
+    std::optional<std::uint32_t> coded_width;
+    std::optional<std::uint32_t> coded_height;
+    std::string                  pixel_format;
+    std::optional<std::int32_t>  fps_num;
+    std::optional<std::int32_t>  fps_den;
+    std::string                  fps_source;
+    // 流自身的时长，保留有理数形式。
+    std::optional<std::int64_t>  duration_ticks;
+    std::optional<std::int32_t>  time_base_num;
+    std::optional<std::int32_t>  time_base_den;
+    std::optional<std::uint64_t> frame_count;
+};
+
+// Looped：这一帧是读到结尾、回到开头之后解出的第一帧。
+enum class NextFrame
+{
+    Ok,
+    Looped,
+};
+
+// libav 实际采用的解码线程设置（只供日志）。
+struct DecodeThreads {
+    int count {};
+    int type {};
+};
+
+// 软件解码 + swscale 到固定尺寸的 NV12。读到结尾自动回到开头（引擎的调用方都循环播放）。
+// 解码线程数取环境变量 WAVSEN_VIDEO_DECODE_THREADS（不设/0/非法 = libavcodec 自动，1 = 单线程，
+// n = n 个，上限 64），名字沿用 wavsen 以免改动部署脚本。
+class VideoSource {
+public:
+    VideoSource();
+    ~VideoSource();
+    VideoSource(VideoSource&&) noexcept;
+
+    // 目标尺寸为奇数时各加 1（NV12 色度减半）。打开失败返回 false，原因见 last_error()。
+    // 其余成员都只能在 open() 成功之后调用。
+    auto open(owe::io::RangeReader source, std::uint32_t target_width, std::uint32_t target_height)
+        -> bool;
+
+    // 失败返回 nullopt，原因见 last_error()；错误不锁存，下次调用照常再试。
+    auto next_frame(Nv12Frame& out) -> std::optional<NextFrame>;
+    // 跳到不超过 seconds 的关键帧（超出时长按时长算）；失败返回 false。
+    auto seek(double seconds) -> bool;
+    auto duration() const -> std::optional<double>;
+    auto stream_metadata() const -> VideoStreamMetadata;
+    auto decode_threads() const -> DecodeThreads;
+
+    auto last_error() const -> std::string_view;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
 };
 
 } // namespace owe::media

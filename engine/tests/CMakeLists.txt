@@ -105,6 +105,14 @@ target_sources(media-parity-tests PRIVATE
 target_link_libraries(media-parity-tests PRIVATE owe-media gtest_main wavsen::audio)
 target_compile_options(media-parity-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
 
+# T5b 对拍：wavsen 旧视频解码 vs owe::media::VideoSource，逐帧 NV12 字节比较。T5b 删 wavsen 时连同
+# tests/media/video_parity_tests.cpp 一起删。夹具目录由环境变量 OWE_VIDEO_PARITY_DIR 指定，没设时跳过。
+add_executable(video-parity-tests EXCLUDE_FROM_ALL)
+target_sources(video-parity-tests PRIVATE
+  tests/media/video_parity_tests.cpp)
+target_link_libraries(video-parity-tests PRIVATE owe-media gtest_main wavsen::video)
+target_compile_options(video-parity-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
+
 # wescene.vk 薄层单测（T4a）：不需要 GPU；Vulkan 入口由测试注入，VK_CHECK 的失败处理由测试提供。
 add_executable(vk-tests EXCLUDE_FROM_ALL)
 target_sources(vk-tests PRIVATE

@@ -16,6 +16,7 @@ import rstd.cppstd;
 import wescene.types;
 import wescene.fs;
 import wavsen.video;
+import owe.media;
 
 using namespace owe;
 using namespace owe::vulkan;
@@ -558,116 +559,22 @@ Option<rstd::sync::Arc<TextureAllocation>> TextureCache::AllocateTexture(Texture
  *      and register it in m_tex_map under the Image's key so the rest
  *      of the renderer (descriptor sets, sprite-anim fallback, etc.)
  *      sees an ordinary single-slot texture.
- *   2. Each decoder trial creates an independent reader over that range.
- *   3. We spin up a wavsen::video::VideoDecoder via open_from_stream.
- *      When hwdec is enabled, a lazily-created wavsen Producer supplies
- *      the hwdevice; otherwise the decoder stays sw-only. On Linux the
- *      avformat probe is happy with ftyp/EBML at the head of the stream.
- *   4. Each render tick PumpVideoTextures advances PTS, pulls the
- *      correct frame view for the active decoder kind, and writes the
- *      stable RGBA8 VkImage through wavsen::video::YuvToRgba. Hardware
- *      decode uses OWE's own VkDevice via Producer::from_external so
- *      conversion and material sampling stay on the same device.
+ *   2. We open an owe::media::VideoSource (software decode) over that
+ *      range. The hardware decode pipeline was not ported: hwdec≠none
+ *      decodes in software too (the offline renderer forces none).
+ *   3. Each render tick PumpVideoTextures advances PTS, pulls the NV12
+ *      frame due, and writes the stable RGBA8 VkImage through
+ *      wavsen::video::YuvToRgba.
  *
  * ========================================================================= */
 
 namespace
 {
 
-class RangeInputStream {
-public:
-    explicit RangeInputStream(owe::io::ReadRange source)
-        : m_length(static_cast<rstd::int64_t>(source.len())),
-          m_reader(std::move(source).into_reader()) {}
-
-    int read(rstd::uint8_t* buffer, int size) {
-        if (size <= 0) return 0;
-        auto result = m_reader.read(buffer, static_cast<std::size_t>(size));
-        return result.is_ok() ? static_cast<int>(*result) : -1;
-    }
-
-    rstd::int64_t seek(rstd::int64_t offset, int whence) {
-        constexpr int AVSEEK_SIZE = 0x10000;
-        if (whence == AVSEEK_SIZE) return m_length;
-        owe::io::SeekFrom from;
-        switch (whence) {
-        case 0:
-            if (offset < 0) return -1;
-            from = owe::io::SeekFrom::from_start(static_cast<std::uint64_t>(offset));
-            break;
-        case 1: from = owe::io::SeekFrom::from_current(offset); break;
-        case 2: from = owe::io::SeekFrom::from_end(offset); break;
-        default: return -1;
-        }
-        auto result = m_reader.seek(from);
-        return result.is_ok() ? static_cast<rstd::int64_t>(*result) : -1;
-    }
-
-private:
-    rstd::int64_t        m_length { 0 };
-    owe::io::RangeReader m_reader;
-};
-
-wavsen::video::HwAccel ParseHwdec(std::string_view value) {
-    if (value == "vulkan") return wavsen::video::HwAccel::Vulkan;
-    if (value == "vaapi") return wavsen::video::HwAccel::Vaapi;
-    if (value == "none") return wavsen::video::HwAccel::None;
-    return wavsen::video::HwAccel::Auto;
-}
-
-const char* HwdecLabel(wavsen::video::HwAccel h) {
-    switch (h) {
-    case wavsen::video::HwAccel::Auto: return "auto";
-    case wavsen::video::HwAccel::Vulkan: return "vulkan";
-    case wavsen::video::HwAccel::Vaapi: return "vaapi";
-    case wavsen::video::HwAccel::None: return "none";
-    }
-    return "?";
-}
-
-const char* FrameKindLabel(wavsen::video::FrameKind k) {
-    switch (k) {
-    case wavsen::video::FrameKind::Sw: return "sw";
-    case wavsen::video::FrameKind::VulkanShared: return "vulkan-shared";
-    case wavsen::video::FrameKind::VaapiDrm: return "vaapi-drm";
-    }
-    return "?";
-}
-
-rstd::vec::Vec<const char*> ExtensionPtrs(std::span<const std::string> names) {
-    auto out = rstd::vec::Vec<const char*>::with_capacity(usize(names.size()));
-    for (const auto& name : names) out.push(name.c_str());
-    return out;
-}
-
-rstd::vec::Vec<wavsen::video::QueueFamily> QueueFamiliesForFfmpeg(const Device& device) {
-    auto props = device.gpu().GetQueueFamilyProperties();
-    auto out   = rstd::vec::Vec<wavsen::video::QueueFamily>::with_capacity(props.len());
-    for (rstd::uint32_t i = 0; i < props.len().to_primitive(); ++i) {
-        out.push(wavsen::video::QueueFamily {
-            .index      = u32(i),
-            .flags      = props[usize(i)].queueFlags,
-            .video_caps = u32(),
-        });
-    }
-    return out;
-}
-
-wavsen::video::Producer::ExternalDeviceInfo
-MakeExternalProducerInfo(const Device& device, rstd::uint32_t width, rstd::uint32_t height) {
-    return wavsen::video::Producer::ExternalDeviceInfo {
-        .instance                    = device.instance_handle(),
-        .physical_device             = *device.gpu(),
-        .device                      = *device.handle(),
-        .queue                       = *device.graphics_queue().handle,
-        .queue_family_index          = u32(device.graphics_queue().family_index),
-        .queue_families              = QueueFamiliesForFfmpeg(device),
-        .enabled_instance_extensions = ExtensionPtrs(device.enabled_instance_extensions()),
-        .enabled_device_extensions   = ExtensionPtrs(device.enabled_device_extensions()),
-        .api_version                 = u32(device.instance_api_version()),
-        .width                       = u32(width),
-        .height                      = u32(height),
-    };
+template<typename T, typename U>
+auto ToOption(const std::optional<U>& value) -> Option<T> {
+    if (! value) return None();
+    return Some(T(*value));
 }
 
 void CloseSyncFd(int fd) {
@@ -678,7 +585,6 @@ void CloseSyncFd(int fd) {
 
 struct TextureCache::VideoRegistry {
     TextureCache::VideoDecodeOptions      options;
-    Option<Box<wavsen::video::Producer>>  producer;
     Option<Box<wavsen::video::YuvToRgba>> yuv;
     rstd::uint32_t                        yuv_max_width { 0 };
     rstd::uint32_t                        yuv_max_height { 0 };
@@ -691,8 +597,8 @@ struct TextureCache::VideoRegistry {
         rstd::uint32_t                              height { 0 };
         ImageParameters                             target;
         Option<rstd::sync::Arc<VideoPlaybackState>> playback;
-        Option<Box<wavsen::video::VideoDecoder>>    decoder;
-        wavsen::video::Nv12Frame                    nv12_scratch;
+        owe::media::VideoSource                     decoder;
+        owe::media::Nv12Frame                       nv12_scratch;
         f64                                         pts_acc {};
         f64                                         last_pts { -1.0 };
         bool                                        have_frame { false };
@@ -703,7 +609,7 @@ struct TextureCache::VideoRegistry {
         VideoPlaybackSnapshot                       offline_control;
         double                                      offline_cycle { -1.0 };
         bool                                        offline_drained { false };
-        Option<wavsen::video::Nv12Frame>            offline_pending;
+        Option<owe::media::Nv12Frame>               offline_pending;
 
         void Pump(double dt_seconds) override;
     };
@@ -730,21 +636,6 @@ struct TextureCache::VideoRegistry {
             }
         }
         peak_active_instances = std::max(peak_active_instances, active);
-    }
-
-    const wavsen::video::Producer* ensureProducer(const Device& device, rstd::uint32_t width,
-                                                  rstd::uint32_t height) {
-        if (producer.is_some()) return producer->get();
-        auto r =
-            wavsen::video::Producer::from_external(MakeExternalProducerInfo(device, width, height));
-        if (r.is_err()) {
-            rstd_warn(
-                "CreateVideoTex: shared-device producer unavailable; falling back to sw decode: {}",
-                std::move(r).unwrap_err().message);
-            return nullptr;
-        }
-        producer = rstd::Some(std::move(r).unwrap());
-        return producer->get();
     }
 
     wavsen::video::YuvToRgba* ensureYuv(const Device& device, rstd::uint32_t width,
@@ -893,67 +784,40 @@ TextureCache::CreateVideoTex(const Image&                                image,
         VVK_CHECK(m_device.handle().WaitIdle());
     }
 
-    /* 3) Open the decoder. Each backend trial gets its own range cursor. */
-    auto factory =
-        rstd::boxed::Box<dyn<FnMut<rstd::boxed::Box<dyn<wavsen::video::InputStream>>()>>>::make(
-            [source =
-                 rstd::move(video_source)]() -> rstd::boxed::Box<dyn<wavsen::video::InputStream>> {
-                return rstd::boxed::Box<dyn<wavsen::video::InputStream>>::make(
-                    RangeInputStream(source.clone()));
-            });
-    const auto              requested_hwdec = ParseHwdec(registry->options.hwdec);
-    wavsen::video::OpenOpts opts {
-        requested_hwdec,
-        String::make(rstd::cppstd::as_str(registry->options.render_node).unwrap()),
-    };
-    const wavsen::video::Producer* producer = nullptr;
-    if (requested_hwdec != wavsen::video::HwAccel::None) {
-        producer = registry->ensureProducer(m_device, runtime.width, runtime.height);
-        if (! producer) opts.hwaccel = wavsen::video::HwAccel::None;
-    }
-    auto dec_r = wavsen::video::VideoDecoder::open_from_stream(std::move(factory),
-                                                               u32(runtime.width),
-                                                               u32(runtime.height),
-                                                               /*loop=*/true,
-                                                               producer,
-                                                               opts);
-    if (dec_r.is_err()) {
-        rstd_error("CreateVideoTex: open_from_stream failed for {}: {}",
-                   image.key,
-                   dec_r.unwrap_err().message);
+    /* 3) Open the software decoder (it loops: EOF seeks back to zero). */
+    if (! runtime.decoder.open(std::move(video_source).into_reader(), runtime.width, runtime.height)) {
+        rstd_error("CreateVideoTex: video open failed for {}: {}", image.key, runtime.decoder.last_error());
         return None();
     }
-    runtime.decoder = rstd::Some(std::move(dec_r).unwrap());
+    const auto threads = runtime.decoder.decode_threads();
+    rstd_info("VideoDecoder: sw decode threads={} type={}.", threads.count, threads.type);
     if (runtime.playback.is_some()) {
         (*runtime.playback)->PublishTime((*runtime.playback)->CurrentTime(),
-                                         (*runtime.decoder)->duration());
+                                         ToOption<f64>(runtime.decoder.duration()));
     }
-    rstd_info("CreateVideoTex: {} hwdec={} decoder kind={}",
-              image.key,
-              HwdecLabel(requested_hwdec),
-              FrameKindLabel((*runtime.decoder)->kind()));
+    rstd_info("CreateVideoTex: {} hwdec={} decoder kind=sw", image.key, registry->options.hwdec);
 
-    auto metadata = (*runtime.decoder)->stream_metadata();
+    auto metadata = runtime.decoder.stream_metadata();
     if (runtime.playback.is_some()) {
         (*runtime.playback)->PublishPeriodMetadata(VideoPlaybackPeriodMetadata {
-            .duration_ticks = metadata.duration_ticks,
-            .time_base_num  = metadata.time_base_num,
-            .time_base_den  = metadata.time_base_den,
-            .frame_count    = metadata.frame_count,
-            .loops          = true, // open_from_stream above enables EOF seek-to-zero.
+            .duration_ticks = ToOption<rstd::int64_t>(metadata.duration_ticks),
+            .time_base_num  = ToOption<i32>(metadata.time_base_num),
+            .time_base_den  = ToOption<i32>(metadata.time_base_den),
+            .frame_count    = ToOption<u64>(metadata.frame_count),
+            .loops          = true, // VideoSource always seeks back to zero at EOF.
         });
     }
     VideoDecoderObservation observation;
     observation.resource_key = image.key;
     observation.instance_id = registry->next_instance_id++;
-    observation.codec = rstd::cppstd::to_string(metadata.codec.as_str());
-    if (metadata.coded_width.is_some()) observation.coded_width = metadata.coded_width->to_primitive();
-    if (metadata.coded_height.is_some()) observation.coded_height = metadata.coded_height->to_primitive();
-    observation.pixel_format = rstd::cppstd::to_string(metadata.pixel_format.as_str());
-    if (metadata.fps_num.is_some()) observation.fps_num = metadata.fps_num->to_primitive();
-    if (metadata.fps_den.is_some()) observation.fps_den = metadata.fps_den->to_primitive();
-    observation.fps_source = rstd::cppstd::to_string(metadata.fps_source.as_str());
-    observation.decoder_kind = FrameKindLabel((*runtime.decoder)->kind());
+    observation.codec = metadata.codec;
+    observation.coded_width = metadata.coded_width;
+    observation.coded_height = metadata.coded_height;
+    observation.pixel_format = metadata.pixel_format;
+    observation.fps_num = metadata.fps_num;
+    observation.fps_den = metadata.fps_den;
+    observation.fps_source = metadata.fps_source;
+    observation.decoder_kind = "sw";
     observation.metadata_unknown = observation.codec.empty() || observation.codec == "unknown_codec" ||
         !observation.coded_width.has_value() || !observation.coded_height.has_value() ||
         observation.pixel_format.empty() || !observation.fps_num.has_value() || !observation.fps_den.has_value();
@@ -975,23 +839,21 @@ TextureCache::CreateVideoTex(const Image&                                image,
 }
 
 void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
-    if (registry == nullptr || device == nullptr || decoder.is_none()) return;
+    if (registry == nullptr || device == nullptr) return;
     auto& s            = *this;
     auto  publish_time = [&] {
         if (s.playback.is_some()) {
-            (*s.playback)->PublishTime(s.pts_acc, (*s.decoder)->duration());
+            (*s.playback)->PublishTime(s.pts_acc, ToOption<f64>(s.decoder.duration()));
         }
     };
     const bool offline = active_offline_execution != nullptr;
     if (!offline && s.playback.is_some()) {
         auto state = (*s.playback)->Snapshot();
         if (state.seek_sequence != s.applied_seek_sequence) {
-            auto seeked             = (*s.decoder)->seek(state.seek_seconds);
+            const bool seeked       = s.decoder.seek(state.seek_seconds.to_primitive());
             s.applied_seek_sequence = state.seek_sequence;
-            if (seeked.is_err()) {
-                rstd_error("PumpVideoTextures[{}]: seek: {}",
-                           s.key.as_str(),
-                           rstd::move(seeked).unwrap_err().message);
+            if (! seeked) {
+                rstd_error("PumpVideoTextures[{}]: seek: {}", s.key.as_str(), s.decoder.last_error());
             } else {
                 s.pts_acc    = state.seek_seconds;
                 s.last_pts   = f64(-1.0);
@@ -1013,10 +875,6 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
 
     ImageParameters ip = s.target;
 
-    const auto                             fkind = (*s.decoder)->kind();
-    Option<wavsen::video::VkFrameLease>    vulkan_frame;
-    Option<wavsen::video::VaapiFrameLease> vaapi_frame;
-
     bool got_new = false;
     if (offline) {
         auto fail = [&](const std::string& message) {
@@ -1024,10 +882,6 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
                 "video[" + rstd::cppstd::to_string(s.key.as_str()) + "]: " + message, true);
             rstd_error("PumpVideoTextures[{}]: {}", s.key.as_str(), message);
         };
-        if (fkind != wavsen::video::FrameKind::Sw) {
-            fail("offline timestamp selection requires the configured software decoder");
-            return;
-        }
         const double now = active_offline_execution->elapsed;
         const bool first = !s.offline_clock_initialized;
         auto control = s.playback.is_some() ? (*s.playback)->Snapshot() : VideoPlaybackSnapshot {};
@@ -1049,13 +903,13 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         }
         s.offline_clock_initialized = true;
         s.applied_seek_sequence = control.seek_sequence;
-        const auto duration = (*s.decoder)->duration();
-        if (duration.is_none() || !duration->is_finite() || *duration <= f64() ||
+        const auto duration = s.decoder.duration();
+        if (!duration || !std::isfinite(*duration) || *duration <= 0.0 ||
             !std::isfinite(media_time) || media_time < 0.0) {
             fail("offline video sampling requires a finite timestamp and positive video duration");
             return;
         }
-        const double duration_s = duration->to_primitive();
+        const double duration_s = *duration;
         double quotient = media_time / duration_s;
         const double nearest = std::round(quotient);
         if (std::abs(quotient - nearest) <= 4.0 * std::numeric_limits<double>::epsilon() *
@@ -1064,9 +918,8 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         const double cycle_start = cycle * duration_s;
         s.pts_acc = f64(std::max(0.0, media_time - cycle_start));
         if (first || seek_changed || cycle != s.offline_cycle) {
-            auto seeked = (*s.decoder)->seek(s.pts_acc);
-            if (seeked.is_err()) {
-                fail(rstd::cppstd::to_string(seeked.unwrap_err().message.as_str()));
+            if (! s.decoder.seek(s.pts_acc.to_primitive())) {
+                fail(std::string(s.decoder.last_error()));
                 return;
             }
             s.offline_pending = None();
@@ -1080,31 +933,31 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         // the source's sampling rate. Offline catch-up must not drop work.
         while (!s.offline_drained) {
             if (s.offline_pending.is_none()) {
-                wavsen::video::Nv12Frame candidate;
-                auto pulled = (*s.decoder)->next_frame(candidate);
-                if (pulled.is_err()) {
-                    fail(rstd::cppstd::to_string(pulled.unwrap_err().message.as_str()));
+                owe::media::Nv12Frame candidate;
+                auto pulled = s.decoder.next_frame(candidate);
+                if (!pulled) {
+                    fail(std::string(s.decoder.last_error()));
                     return;
                 }
-                if (*pulled != wavsen::video::NextFrame::Ok) {
+                if (*pulled != owe::media::NextFrame::Ok) {
                     // The decoder's eager loop has consumed the next cycle's
                     // first frame. Seek again only when scene time wraps.
                     s.offline_drained = true;
                     break;
                 }
-                if (!candidate.pts_seconds.is_finite() || candidate.pts_seconds < f64()) {
+                if (!std::isfinite(candidate.pts_seconds) || candidate.pts_seconds < 0.0) {
                     fail("decoded video frame has no usable presentation timestamp");
                     return;
                 }
                 s.offline_pending = Some(rstd::move(candidate));
             }
-            const double deadline = cycle_start + s.offline_pending->pts_seconds.to_primitive();
+            const double deadline = cycle_start + s.offline_pending->pts_seconds;
             const double tolerance = 4.0 * std::numeric_limits<double>::epsilon() *
                 std::max(1.0, std::max(std::abs(deadline), std::abs(media_time)));
             if (deadline - media_time > tolerance) break;
             s.nv12_scratch = rstd::move(*s.offline_pending);
             s.offline_pending = None();
-            s.last_pts = s.nv12_scratch.pts_seconds;
+            s.last_pts = f64(s.nv12_scratch.pts_seconds);
             got_new = true;
         }
     } else {
@@ -1112,69 +965,13 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
     for (int i = 0; i < 4; ++i) {
         if (s.last_pts >= f64() && s.last_pts > s.pts_acc) break;
 
-        rstd::Result<wavsen::video::NextFrame, wavsen::video::Error> r =
-            rstd::Ok(wavsen::video::NextFrame::Ok);
-        switch (fkind) {
-        case wavsen::video::FrameKind::VulkanShared: {
-            auto pulled = (*s.decoder)->next_vk_frame();
-            if (pulled.is_err()) {
-                r = Err(rstd::move(pulled).unwrap_err());
-            } else {
-                auto value = rstd::move(pulled).unwrap();
-                r          = Ok(value.status);
-                if (value.frame.is_some()) vulkan_frame = rstd::move(value.frame);
-            }
+        auto pulled = s.decoder.next_frame(s.nv12_scratch);
+        if (!pulled) {
+            rstd_error("PumpVideoTextures[{}]: decode sw: {}", s.key.as_str(), s.decoder.last_error());
             break;
         }
-        case wavsen::video::FrameKind::VaapiDrm: {
-            auto pulled = (*s.decoder)->next_vaapi_frame();
-            if (pulled.is_err()) {
-                r = Err(rstd::move(pulled).unwrap_err());
-            } else {
-                auto value  = rstd::move(pulled).unwrap();
-                r           = Ok(value.status);
-                vaapi_frame = rstd::move(value.frame);
-            }
-            break;
-        }
-        case wavsen::video::FrameKind::Sw: r = (*s.decoder)->next_frame(s.nv12_scratch); break;
-        }
-        if (r.is_err()) {
-            rstd_error("PumpVideoTextures[{}]: decode {}: {}",
-                       s.key.as_str(),
-                       FrameKindLabel(fkind),
-                       std::move(r).unwrap_err().message);
-            break;
-        }
-        auto kind = r.unwrap();
-        if (kind == wavsen::video::NextFrame::Eof) {
-            s.pts_acc  = f64();
-            s.last_pts = f64(-1.0);
-            break;
-        }
-        const bool decoder_looped = kind == wavsen::video::NextFrame::Looped;
-        f64        frame_pts { -1.0 };
-        switch (fkind) {
-        case wavsen::video::FrameKind::VulkanShared:
-            if (vulkan_frame.is_none()) {
-                rstd_error("PumpVideoTextures[{}]: Vulkan decode returned no frame lease",
-                           s.key.as_str());
-                publish_time();
-                return;
-            }
-            frame_pts = vulkan_frame->info().pts_seconds;
-            break;
-        case wavsen::video::FrameKind::VaapiDrm:
-            if (vaapi_frame.is_none()) {
-                rstd_error("PumpVideoTextures[{}]: VAAPI decode returned no surface lease",
-                           s.key.as_str());
-                publish_time();
-                return;
-            }
-            frame_pts = vaapi_frame->view().pts_seconds;
-            break;
-        case wavsen::video::FrameKind::Sw: frame_pts = s.nv12_scratch.pts_seconds; break;
-        }
+        const bool decoder_looped = *pulled == owe::media::NextFrame::Looped;
+        const f64  frame_pts(s.nv12_scratch.pts_seconds);
         if (decoder_looped) s.pts_acc = frame_pts.max(f64());
         s.last_pts = frame_pts;
         got_new    = true;
@@ -1190,108 +987,20 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         return;
     }
 
-    u32 cs_id;
-    u32 cr_id;
-    switch (fkind) {
-    case wavsen::video::FrameKind::VulkanShared:
-        cs_id = vulkan_frame->info().colorspace;
-        cr_id = vulkan_frame->info().color_range;
-        break;
-    case wavsen::video::FrameKind::VaapiDrm:
-        cs_id = vaapi_frame->view().colorspace;
-        cr_id = vaapi_frame->view().color_range;
-        break;
-    case wavsen::video::FrameKind::Sw:
-        cs_id = s.nv12_scratch.colorspace;
-        cr_id = s.nv12_scratch.color_range;
-        break;
-    }
     const auto color_matrix = wavsen::video::make_color_matrix(
-        static_cast<wavsen::video::ColorSpace>(cs_id.to_primitive()),
-        static_cast<wavsen::video::ColorRange>(cr_id.to_primitive()));
+        static_cast<wavsen::video::ColorSpace>(s.nv12_scratch.colorspace),
+        static_cast<wavsen::video::ColorRange>(s.nv12_scratch.color_range));
 
-    rstd::Result<int, wavsen::video::Error> cv = rstd::Ok(-1);
-    switch (fkind) {
-    case wavsen::video::FrameKind::VulkanShared: {
-        auto reserved = yuv->reserve({
-            .target = {
-                .image  = ip.handle,
-                .view   = ip.view,
-                .width  = u32(s.width),
-                .height = u32(s.height),
-                .kind   = wavsen::video::ConvertTarget::SampledLocal,
-            },
-        });
-        if (reserved.is_err()) {
-            cv = Err(rstd::move(reserved).unwrap_err());
-            break;
-        }
-        auto reservation = rstd::move(reserved).unwrap();
-        if (reservation.is_none()) {
-            publish_time();
-            return;
-        }
-        auto submitted = yuv->submit_av_vk_frame(
-            rstd::move(*reservation), rstd::move(*vulkan_frame), color_matrix);
-        if (submitted.is_err()) {
-            cv = Err(rstd::move(submitted).unwrap_err());
-        } else {
-            cv = Ok(rstd::move(submitted).unwrap().sync_fd);
-        }
-        break;
-    }
-    case wavsen::video::FrameKind::VaapiDrm: {
-        auto reserved = yuv->reserve({
-            .target = {
-                .image  = ip.handle,
-                .view   = ip.view,
-                .width  = u32(s.width),
-                .height = u32(s.height),
-                .kind   = wavsen::video::ConvertTarget::SampledLocal,
-            },
-        });
-        if (reserved.is_err()) {
-            cv = Err(rstd::move(reserved).unwrap_err());
-            break;
-        }
-        auto reservation = rstd::move(reserved).unwrap();
-        if (reservation.is_none()) {
-            publish_time();
-            return;
-        }
-        auto mapped = rstd::move(*vaapi_frame).into_drm();
-        if (mapped.is_err()) {
-            cv = Err(rstd::move(mapped).unwrap_err());
-            break;
-        }
-        auto submitted = yuv->submit_drm_prime(
-            rstd::move(*reservation), rstd::move(mapped).unwrap(), color_matrix);
-        if (submitted.is_err()) {
-            cv = Err(rstd::move(submitted).unwrap_err());
-            break;
-        }
-        auto value = rstd::move(submitted).unwrap();
-        if (value.is_none()) {
-            publish_time();
-            return;
-        }
-        cv = Ok(value->sync_fd);
-        break;
-    }
-    case wavsen::video::FrameKind::Sw:
-        cv = yuv->convert_nv12(ip.handle,
-                               u32(s.width),
-                               u32(s.height),
-                               s.nv12_scratch.data.data(),
-                               s.nv12_scratch.data.len(),
-                               color_matrix,
-                               wavsen::video::ConvertTarget::SampledLocal);
-        break;
-    }
+    auto cv = yuv->convert_nv12(ip.handle,
+                                u32(s.width),
+                                u32(s.height),
+                                s.nv12_scratch.data.data(),
+                                usize(s.nv12_scratch.data.size()),
+                                color_matrix,
+                                wavsen::video::ConvertTarget::SampledLocal);
     if (cv.is_err()) {
-        rstd_error("PumpVideoTextures[{}]: yuv conversion {}: {}",
+        rstd_error("PumpVideoTextures[{}]: yuv conversion sw: {}",
                    s.key.as_str(),
-                   FrameKindLabel(fkind),
                    std::move(cv).unwrap_err().message);
         publish_time();
         return;
@@ -1432,15 +1141,7 @@ void TextureCache::AssignImageGeneration(ExImageParameters& image) {
 
 void TextureCache::SetVideoDecodeOptions(VideoDecodeOptions options) {
     m_video_decode_options = std::move(options);
-    if (m_video_registry.is_some()) {
-        auto* registry    = m_video_registry->get();
-        registry->options = m_video_decode_options;
-        registry->runtimes.retain(
-            [](const std::weak_ptr<TextureAllocationRuntime>& runtime) {
-                return ! runtime.expired();
-            });
-        if (registry->runtimes.is_empty()) (void)registry->producer.take();
-    }
+    if (m_video_registry.is_some()) m_video_registry->get()->options = m_video_decode_options;
 }
 
 void TextureCache::Clear() {
