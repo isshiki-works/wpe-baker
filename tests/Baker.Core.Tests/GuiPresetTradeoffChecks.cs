@@ -63,7 +63,7 @@ internal static class GuiPresetTradeoffChecks
     private static void ProfileLine(Action<bool, string> check)
     {
         JsonObject Plan(RetimeProfile profile, double? drift) => new() {
-            ["retime_profile"] = profile.ToJson(),
+            ["retime_profile"] = profile.ToJson(1),
             ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject {
                 ["seconds"] = 120.5, ["frames"] = 7230,
                 ["sway_retime"] = drift is null ? null : new JsonObject { ["phase_drift_cycles"] = drift } }) } };

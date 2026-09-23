@@ -165,6 +165,17 @@
         "swizzle:v_TexCoordRipple": 5, "swizzle:rippleCoords": 6 } },
     "structured_sine": { "normalize": true, "contains": [ "uniform float g_Speed;", "sin(" ],
       "uniforms": [ [ "g_Speed", { "material": "speed" } ] ] },
+    "glitter": { "normalize": true, "forbid_alternate_clock": true,
+      "contains": [
+        "uniform float g_Speed;",
+        "uniform float g_Density;",
+        "float density = g_Density * g_Density;",
+        "float time = g_Time * g_Speed * density;",
+        "float timer0 = frac(noise0.r * 100 + time);" ],
+      "uniforms": [ [ "g_Speed", { "material": "speed" } ], [ "g_Density", { "material": "density" } ] ],
+      "count": { "use:g_Time": 1, "use:g_Speed": 1, "use:g_Density": 2, "word:time": 2, "assign:time": 1, "word:timer0": 3, "assign:timer0": 1 } },
+    "frac_clock": { "normalize": true, "regex": [ [ "(?<![\\w.])frac\\(\\s*g_Time\\b", ">0" ] ] },
+    "literal_step_clock": { "normalize": true, "regex": [ [ "(?<![\\w.])mod\\(\\s*floor\\(\\s*g_Time\\b", ">0" ] ] },
     "noise_default_off": { "normalize": true, "combos": [ [ "NOISE", { "default": 0 } ] ] },
     "audio_default_off": { "normalize": true, "combos": [ [ "AUDIOPROCESSING", { "default": 0 } ] ] },
     "artifacts_default_on": { "normalize": true, "combos": [ [ "ARTIFACTS", { "default": 1 } ] ] }
@@ -239,6 +250,9 @@
           "kind": "NonPeriodicOrDriftingMechanism",
           "detail": "Auto-sway noise is enabled, so the simple speed period does not prove closure." } ] },
     { "id": "water_ripple", "action": "water_ripple", "match": [ "water_ripple_gate", "water_ripple" ] },
-    { "id": "structured_sine", "action": "structured_sine", "match": [ "structured_sine" ] }
+    { "id": "structured_sine", "action": "structured_sine", "match": [ "structured_sine" ] },
+    { "id": "glitter", "action": "glitter", "match": [ "glitter" ] },
+    { "id": "frac_linear", "action": "frac_linear", "match": [ "frac_clock" ], "base_material": true },
+    { "id": "literal_step", "action": "literal_step", "match": [ "literal_step_clock" ], "base_material": true }
   ]
 }

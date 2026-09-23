@@ -65,14 +65,15 @@ internal static class SwayRetimeApplier
         {
             ulong baseFrames = candidates[index].Frames;
             solutions[index] = SwayRecurrenceSolver.Solve(inputs, baseFrames, fpsNumerator, fpsDenominator,
-                options.LoopLengthMaximumSeconds, options.BudgetPercent);
+                options.LoopLengthMaximumSeconds, options.BudgetPercent, speedLimitScale: options.SpeedLimitScale);
             // 上限内取得到 kP、却没有一个 L 合规（可见项走不满整圈或速度偏差超限、慢项速度偏差超限、圈数不够、只剩 1 帧静止）：
             // 记下来，别当成"上限内没有 kP"。预算档再分一层：不设预算时有解，就是预算太紧卡的，原因要讲成预算。
             if (solutions[index] is null && SwayRecurrenceSolver.MaximumMultiple(baseFrames, fpsNumerator, fpsDenominator, options.LoopLengthMaximumSeconds) > 0)
             {
                 ++limitRejected;
                 if (options.BudgetPercent is not null &&
-                    SwayRecurrenceSolver.Solve(inputs, baseFrames, fpsNumerator, fpsDenominator, options.LoopLengthMaximumSeconds) is not null)
+                    SwayRecurrenceSolver.Solve(inputs, baseFrames, fpsNumerator, fpsDenominator, options.LoopLengthMaximumSeconds,
+                        speedLimitScale: options.SpeedLimitScale) is not null)
                     ++budgetRejected;
             }
             // 精灵 float32 接缝按 P 判过；L = kP 上漂移累积 k 倍，要在 L 上重新逐帧判定（与候选生成同一判据）。
@@ -95,7 +96,7 @@ internal static class SwayRetimeApplier
             string maximum = options.LoopLengthMaximumSeconds.ToString("0.###", CultureInfo.InvariantCulture);
             string limit = status == "no_multiple_within_budget"
                 ? (options.BudgetPercent ?? 0).ToString("0.###", CultureInfo.InvariantCulture)
-                : SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond.ToString("0.###", CultureInfo.InvariantCulture);
+                : SwayRecurrenceSolver.SlowSpeedDeviationLimit(options.SpeedLimitScale).ToString("0.###", CultureInfo.InvariantCulture);
             // 上限是被内嵌视频大小收紧的，原因后面补一句说明收紧依据，否则用户看到的秒数和自己给的对不上。
             string limitZh = options.VideoLimit is { Applied: true } appliedLimit ? appliedLimit.Sentence(MessageCatalog.Chinese) : "";
             string limitEn = options.VideoLimit is { Applied: true } appliedLimitEn ? " " + appliedLimitEn.Sentence(MessageCatalog.English) : "";

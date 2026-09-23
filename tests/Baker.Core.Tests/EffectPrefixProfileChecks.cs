@@ -180,5 +180,16 @@ internal static class EffectPrefixProfileChecks
             profiles[3]["retime_profile"]!["loop_max_seconds"]!.GetValue<double>() == RetimeProfile.DefaultLoopMaximumSeconds &&
             profiles[3]["loop"]!["quality_ceiling_used"] is null,
             "effect prefix profile: each proposed cache records the preset, its budget and its source, and no preset keeps the old unbudgeted behaviour");
+
+        // fix-j：速度门限按输出短边换算，前缀路线与整层路线同一口径。4K 输出下缓存记录与前缀循环的 sway_retime 都写生效门限（×2），
+        // 1080p 仍是 0.1 / 0.2。
+        JsonObject fourK = ((JsonArray)Propose.Invoke(null, [Scene(), source, sourceDirectory, new JsonObject(), new JsonObject(),
+            Request(RetimeProfile.Balanced) with { Width = 3840, Height = 2160 }, new JsonObject()])!).OfType<JsonObject>().First();
+        static double Limit(JsonNode? record, string kind) => record![kind + "_speed_deviation_limit_pixels_per_second"]!.GetValue<double>();
+        JsonNode? fourKRetime = fourK["loop"]!["candidates"]![0]!["sway_retime"];
+        check(Limit(profiles[1]["retime_profile"], "slow") == 0.1 && Limit(profiles[1]["retime_profile"], "visible") == 0.2 &&
+            Limit(fourK["retime_profile"], "slow") == 0.2 && Limit(fourK["retime_profile"], "visible") == 0.4 &&
+            Limit(fourKRetime, "slow") == 0.2 && Limit(fourKRetime, "visible") == 0.4,
+            "effect prefix profile: the cached profile and the prefix sway record carry the speed limits scaled by the output short edge");
     }
 }

@@ -43,7 +43,7 @@ internal static class EffectPrefixPlanner
                     // 这个前缀循环是在哪一档下求出来的：与 plan 顶层的 retime_profile 同一份值，
                     // 单看一条缓存记录就能知道 preset 与 retime_budget_percent；phase_drift_cycles 在 loop 的 sway_retime 里，
                     // 质量档两个上限的取舍在 loop 的 quality_ceiling_used 里。
-                    ["retime_profile"] = profile.ToJson(),
+                    ["retime_profile"] = profile.ToJson(SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height)),
                     ["retained_puppet_animation"] = retainedPuppetAnimation,
                     ["prefix_capture_scope"] = retainedPuppetAnimation ? "pre_puppet_authored_effect_terminal" : "flat_authored_effect_terminal"
                 };
