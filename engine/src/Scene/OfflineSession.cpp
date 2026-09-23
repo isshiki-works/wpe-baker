@@ -686,9 +686,6 @@ bool OfflineSession::Impl::init(SessionConfig config, RenderInitInfo info, Offli
     m_services.trace_scene = options.trace_scene;
     std::seed_seq seed { uint32_t(options.seed), uint32_t(options.seed >> 32) };
     m_services.random.seed(seed);
-    info.offscreen = true;
-    info.output_mode = RenderOutputMode::CpuReadback;
-    info.video_hwdec = "none";
 
     m_config = rstd::move(config);
     m_user_properties = NormalizeUserProperties(m_config.user_properties);

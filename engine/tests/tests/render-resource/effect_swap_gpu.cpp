@@ -236,7 +236,6 @@ bool RunCapture(std::string_view selected, bool validation) {
                                                         "_rt_swap_c_scratch" };
 
     owe::RenderInitInfo init;
-    init.output_mode        = owe::RenderOutputMode::CpuReadback;
     init.width              = 1;
     init.height             = 1;
     init.max_readback_bytes = 4;

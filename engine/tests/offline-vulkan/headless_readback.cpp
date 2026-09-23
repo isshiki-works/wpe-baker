@@ -54,7 +54,6 @@ bool RunPropertyReplay(const char* path) {
         if (!properties.is_object()) throw std::runtime_error("properties must be an object");
         config.user_properties = properties;
         owe::RenderInitInfo info;
-        info.output_mode = owe::RenderOutputMode::CpuReadback;
         info.width = 640;
         info.height = 360;
         owe::OfflineOptions options;
@@ -367,7 +366,6 @@ bool Run(unsigned source_width, unsigned source_height, unsigned width, unsigned
     owe::rg::RenderGraph graph;
     VulkanRender renderer;
     owe::RenderInitInfo init;
-    init.output_mode = owe::RenderOutputMode::CpuReadback;
     init.width = static_cast<std::uint16_t>(width);
     init.height = static_cast<std::uint16_t>(height);
     init.enable_valid_layer = validation;
@@ -535,7 +533,6 @@ bool RunCapture(int version, bool authored_selector, bool invalid_selector, bool
     const auto key = rstd::cppstd::to_string(scene.EffectResourceKey(effect_id, "_rt_capture"_str).as_str());
 
     owe::RenderInitInfo init;
-    init.output_mode = owe::RenderOutputMode::CpuReadback;
     init.width = width;
     init.height = height;
     init.enable_valid_layer = validation;

@@ -30,12 +30,6 @@ export namespace owe
 {
 
 
-enum class RenderOutputMode
-{
-    Legacy,
-    CpuReadback,
-};
-
 enum class CpuFrameStatus
 {
     Completed,
@@ -161,11 +155,9 @@ struct GpuEncodeOptions {
 
 struct RenderInitInfo {
     bool enable_valid_layer { false };
-    bool offscreen { false };
 
     // CpuReadback always creates a device without a window/surface or external
     // memory handles. The budget is configurable per job, not an image-size cap.
-    RenderOutputMode output_mode { RenderOutputMode::Legacy };
     VkFormat         cpu_format { VK_FORMAT_R8G8B8A8_UNORM };
     std::uint64_t    max_readback_bytes { 256ull * 1024 * 1024 };
     std::uint64_t    readback_timeout_ns { 10'000'000'000ull };
@@ -187,8 +179,6 @@ struct RenderInitInfo {
 
     std::uint16_t width { 1920 };
     std::uint16_t height { 1080 };
-    std::string   video_hwdec { "auto" };
-    std::string   video_render_node;
     // MSAA samples for the screen RT only. 1 disables. Clamped down to
     // device's framebufferColorSampleCounts at init.
     std::uint32_t msaa_samples { 1 };
