@@ -14,6 +14,7 @@ import rstd.log;
 import rstd.cppstd;
 import wescene.utils;
 import wescene.scene;
+import wescene.json;
 import wescene.pkg_asset_version;
 
 using namespace owe;
@@ -155,7 +156,7 @@ TexFormatVersion LoadHeader(fs::BinaryReader& file, ImageHeader& header) {
     header.count = file.ReadInt32();
 
     if (v.body_has_image_type()) header.type = static_cast<ImageType>(file.ReadInt32());
-    if (v.body_has_reserved_slot()) file.ReadInt32(); // reserved (always 0 in corpus)
+    if (v.body_has_variant_table()) v.variant_count = file.ReadUint32();
 
     if (v.texv != 5 || v.texi != 1 || v.texb < 1 || v.texb > 4) {
         rstd_error(
@@ -168,6 +169,186 @@ void SetHeaderPow2(ImageHeader& header, std::int32_t mip_0_w, std::int32_t mip_0
     header.mipmap_pow2   = algorism::IsPowOfTwo(u32(static_cast<std::uint32_t>(mip_0_w))) ||
                            algorism::IsPowOfTwo(u32(static_cast<std::uint32_t>(mip_0_h)));
     header.mipmap_larger = mip_0_w * mip_0_h > header.mapWidth * header.mapHeight;
+}
+
+// ---- TEXB0004 贴图变体 ----
+// 布局与语义取自官方 wallpaper64.exe 的 .tex 读取器（静态反汇编）：
+//   - 条件表：头部之后 variant_count 条 { group, id, flags, JSON 条件 }。条件按文件顺序求值，
+//     同一 group 只取第一条命中的；都不命中就用基础图。
+//   - 补丁块：每个 mip 的字节之后一块，条目 { id, x, y, w, h, FreeImage 格式, size, 字节 }。
+//     命中的 id 按块内顺序贴到该 mip 的 (x, y)；像素格式与贴图相同，mip 是 LZ4 时补丁也是 LZ4。
+//   - flags 第 0 位是 alpha 混合、第 1 位是整块替换；这两种以及容器编码（image_type 有效）
+//     的补丁语料里没有，这里不实现，记日志并保留基础图。
+struct TexVariantCondition {
+    std::uint32_t group { 0 };
+    std::uint32_t id { 0 };
+    std::uint32_t flags { 0 };
+    std::string   json;
+};
+
+struct TexVariantPatch {
+    std::uint32_t  id { 0 };
+    std::uint32_t  x { 0 };
+    std::uint32_t  y { 0 };
+    std::uint32_t  w { 0 };
+    std::uint32_t  h { 0 };
+    std::uint32_t  size { 0 };
+    std::ptrdiff_t body { 0 };
+};
+
+std::ptrdiff_t Remaining(const fs::BinaryReader& file) { return file.Size() - file.Tell(); }
+
+bool ReadVariantConditions(fs::BinaryReader& file, std::uint32_t count,
+                           std::vector<TexVariantCondition>& out) {
+    for (std::uint32_t i = 0; i < count; ++i) {
+        if (Remaining(file) < 12) return false;
+        TexVariantCondition condition;
+        condition.group = file.ReadUint32();
+        condition.id    = file.ReadUint32();
+        condition.flags = file.ReadUint32();
+        for (;;) {
+            if (Remaining(file) < 1) return false;
+            const auto ch = static_cast<char>(file.ReadUint8());
+            if (ch == '\0') break;
+            condition.json.push_back(ch);
+        }
+        out.push_back(rstd::move(condition));
+    }
+    return true;
+}
+
+// 读一个 mip 之后的补丁块，只记位置不读字节，读完停在块尾。
+bool ReadVariantBlock(fs::BinaryReader& file, std::vector<TexVariantPatch>& out) {
+    if (Remaining(file) < 4) return false;
+    const std::uint32_t groups = file.ReadUint32();
+    for (std::uint32_t g = 0; g < groups; ++g) {
+        if (Remaining(file) < 4) return false;
+        const std::uint32_t count = file.ReadUint32();
+        for (std::uint32_t i = 0; i < count; ++i) {
+            if (Remaining(file) < 32) return false;
+            (void)file.ReadUint32(); // 官方读取器跳过不用（语料里恒为 1）
+            TexVariantPatch patch;
+            patch.id = file.ReadUint32();
+            patch.x  = file.ReadUint32();
+            patch.y  = file.ReadUint32();
+            patch.w  = file.ReadUint32();
+            patch.h  = file.ReadUint32();
+            (void)file.ReadUint32(); // FreeImage 格式，只用于容器编码的补丁
+            patch.size = file.ReadUint32();
+            patch.body = file.Tell();
+            if (Remaining(file) < static_cast<std::ptrdiff_t>(patch.size)) return false;
+            file.SeekCur(patch.size);
+            out.push_back(patch);
+        }
+    }
+    return true;
+}
+
+// 条件 JSON 是 {"condition": "<bool 属性名>"} 或 {"condition": {"name": 属性名, "condition": 取值}}，
+// 和 scene.json 里 visible 的用户属性绑定是同一种写法，所以复用同一个求值函数。
+// 官方要求属性值是字符串且逐字节相等；这里 combo 属性的值在合并 project.json 时会被解析成数字
+// （MergeUserPropertyDescriptor），所以沿用 visible 绑定的宽松比较（1 与 "1" 相等）。
+// 返回命中的 { id, flags }。
+auto SelectVariants(const std::vector<TexVariantCondition>& conditions, const NJson* user_properties,
+                    std::string_view name) -> std::vector<std::pair<std::uint32_t, std::uint32_t>> {
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> selected;
+    std::vector<std::uint32_t>                           taken_groups;
+    for (const auto& condition : conditions) {
+        if (std::ranges::find(taken_groups, condition.group) != taken_groups.end()) continue;
+        auto parsed = ParseNJson(condition.json);
+        if (parsed.is_err()) {
+            rstd_warn("TexImageParser: {} variant {} condition is not JSON: {}", name, condition.id,
+                      condition.json);
+            continue;
+        }
+        const auto        root = rstd::move(parsed).unwrap();
+        const auto*       cond = Find(root, "condition");
+        std::string       key;
+        SceneUserVisibilityBinding binding;
+        if (cond != nullptr && cond->is_string()) {
+            key = cond->get<std::string>();
+        } else if (cond != nullptr && cond->is_object()) {
+            const auto* prop  = Find(*cond, "name");
+            const auto* value = Find(*cond, "condition");
+            if (prop != nullptr && prop->is_string() && value != nullptr) {
+                key                   = prop->get<std::string>();
+                binding.condition     = std::make_shared<const NJson>(*value);
+                binding.has_condition = true;
+            }
+        }
+        if (key.empty()) {
+            rstd_warn("TexImageParser: {} variant {} has an unrecognized condition: {}", name,
+                      condition.id, condition.json);
+            continue;
+        }
+        binding.key           = String::make(rstd::cppstd::as_str(key).unwrap());
+        const NJson* property = user_properties != nullptr ? Find(*user_properties, key) : nullptr;
+        if (property == nullptr) continue;
+        auto matched = ResolveSceneUserVisibilityBinding(binding, *property);
+        if (! matched || ! *matched) continue;
+        taken_groups.push_back(condition.group);
+        selected.emplace_back(condition.id, condition.flags);
+        rstd_info("TexImageParser: {} uses variant {} ({})", name, condition.id, condition.json);
+    }
+    return selected;
+}
+
+struct TexBlockLayout {
+    std::size_t w;
+    std::size_t h;
+    std::size_t bytes;
+};
+
+TexBlockLayout BlockLayoutOf(TextureFormat format) {
+    switch (format) {
+    case TextureFormat::BC1: return { 4, 4, 8 };
+    case TextureFormat::BC2:
+    case TextureFormat::BC3: return { 4, 4, 16 };
+    case TextureFormat::RG8: return { 1, 1, 2 };
+    case TextureFormat::R8: return { 1, 1, 1 };
+    default: return { 1, 1, 4 }; // RGBA8；ToTexFormate 只产出这六种
+    }
+}
+
+// 官方 blit 的普通复制：逐行（块压缩格式逐块行）把补丁拷进 mip 的 (x, y) 处。
+// 越界、空补丁、字节不够时不贴，记日志。
+void ApplyVariantPatch(fs::BinaryReader& file, const TexVariantPatch& patch, bool lz4,
+                       TextureFormat format, ImageData& mip, std::string_view name) {
+    const auto        layout = BlockLayoutOf(format);
+    const std::size_t W = static_cast<std::size_t>(std::max(mip.width, 0));
+    const std::size_t H = static_cast<std::size_t>(std::max(mip.height, 0));
+    const std::size_t x = patch.x, y = patch.y, w = patch.w, h = patch.h;
+    const std::size_t row  = w * layout.bytes / layout.w;
+    const std::size_t rows = (h + layout.h - 1) / layout.h;
+    const std::size_t last = (y + (rows - 1) * layout.h) * W * layout.bytes / (layout.w * layout.h) +
+                             x * layout.bytes / layout.w + row;
+    const auto skip = [&](std::string_view why) {
+        rstd_warn("TexImageParser: {} variant {} not applied: {}", name, patch.id, why);
+    };
+    if (w == 0 || h == 0 || patch.size == 0 || x > W || w > W - x || y > H || h > H - y)
+        return skip("patch rect is empty or outside the mip");
+    if (last > static_cast<std::size_t>(mip.size.to_primitive())) return skip("mip data too small");
+
+    std::vector<std::uint8_t> bytes(patch.size);
+    file.SeekSet(patch.body);
+    file.Read(bytes.data(), bytes.size());
+    if (lz4) {
+        // 官方按 4*w*h 的容量解压，不核对实际长度。
+        std::vector<std::uint8_t> out(4 * w * h);
+        const int n = LZ4_decompress_safe(reinterpret_cast<const char*>(bytes.data()),
+                                          reinterpret_cast<char*>(out.data()),
+                                          static_cast<int>(bytes.size()),
+                                          static_cast<int>(out.size()));
+        if (n < 0) return skip("lz4 decompress failed");
+        out.resize(static_cast<std::size_t>(n));
+        bytes = rstd::move(out);
+    }
+    if (bytes.size() < row * rows) return skip("patch bytes too short");
+    for (std::size_t r = 0; r < h; r += layout.h) {
+        const std::size_t dst = (y + r) * W * layout.bytes / (layout.w * layout.h) +
+                                x * layout.bytes / layout.w;
+        std::memcpy(mip.data.get() + dst, bytes.data() + r / layout.h * row, row);
+    }
 }
 
 Option<uint8_t> HexValue(char c) {
@@ -309,6 +490,14 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
     auto tex_source = rstd::move(source).unwrap_unchecked();
     auto file       = fs::BinaryReader(tex_source.clone());
     auto ver        = LoadHeader(file, img.header);
+    std::vector<TexVariantCondition> conditions;
+    if (! ReadVariantConditions(file, ver.variant_count, conditions)) {
+        return Err(ImageParseError {
+            .kind    = ImageParseErrorKind::InvalidData,
+            .message = rstd::format("texture {} has a truncated variant table", name),
+        });
+    }
+    const auto selected = SelectVariants(conditions, m_user_properties.get(), name_view);
 
     // image
     std::int32_t _image_count = img.header.count;
@@ -441,6 +630,28 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
             }
             mipmap.size = isize(static_cast<std::ptrdiff_t>(src_size * sizeof(uint8_t)));
             delete[] result;
+
+            if (conditions.empty()) continue;
+            std::vector<TexVariantPatch> patches;
+            if (! ReadVariantBlock(file, patches)) {
+                return Err(ImageParseError {
+                    .kind    = ImageParseErrorKind::InvalidData,
+                    .message = rstd::format("texture {} has a truncated variant block", name),
+                });
+            }
+            const auto block_end = file.Tell();
+            for (const auto& patch : patches) {
+                auto hit = std::ranges::find(selected, patch.id, &std::pair<std::uint32_t, std::uint32_t>::first);
+                if (hit == selected.end()) continue;
+                if (hit->second != 0 || embedded != ImageType::UNKNOWN) {
+                    rstd_warn("TexImageParser: {} variant {} (flags={}, image_type={}) is not "
+                              "supported, keeping the base image",
+                              name, patch.id, hit->second, (int)embedded);
+                    continue;
+                }
+                ApplyVariantPatch(file, patch, LZ4_compressed, img.header.format, mipmap, name_view);
+            }
+            file.SeekSet(block_end);
         }
     }
     return Ok(rstd::move(img_ptr));
@@ -502,6 +713,13 @@ auto TexImageParser::ParseHeader(ref<str> name) const -> Result<ImageHeader, Ima
     auto file = fs::BinaryReader(rstd::move(source).unwrap_unchecked());
 
     auto ver = LoadHeader(file, header);
+    std::vector<TexVariantCondition> conditions;
+    if (! ReadVariantConditions(file, ver.variant_count, conditions)) {
+        return Err(ImageParseError {
+            .kind    = ImageParseErrorKind::InvalidData,
+            .message = rstd::format("texture {} has a truncated variant table", name),
+        });
+    }
     if (header.count < 0) {
         return Err(ImageParseError {
             .kind    = ImageParseErrorKind::InvalidData,
@@ -538,7 +756,9 @@ auto TexImageParser::ParseHeader(ref<str> name) const -> Result<ImageHeader, Ima
                     (void)decompressed_size;
                 }
                 std::int32_t src_size = file.ReadInt32();
-                if (src_size < 0 || ! file.SeekCur(src_size)) {
+                std::vector<TexVariantPatch> patches;
+                if (src_size < 0 || ! file.SeekCur(src_size) ||
+                    (! conditions.empty() && ! ReadVariantBlock(file, patches))) {
                     return Err(ImageParseError {
                         .kind    = ImageParseErrorKind::InvalidData,
                         .message = rstd::format("texture {} has an invalid sprite mip body", name),
