@@ -5,6 +5,7 @@ namespace Baker.Core;
 
 /// <summary>
 /// 裁定阶段：初判拒因（脚本故障证据、无独立组、HDR 闭合、投影、相机）在内存里按 <see cref="Blocker"/> 持有，
+/// HDR 闭合按初始分配求，路线换成特效前缀时由 <see cref="ApplyPrefixRadianceClosure"/> 按前缀捕获对象重求，
 /// 写 plan 时由 <see cref="PlanWriter"/> 渲染一次；路线定稿之后的收尾裁定（残差布局闸门、求解器空候选、可追溯不变量、
 /// 视频外壳、公共图层查询冲突、suitability）按固定顺序在 <see cref="Conclude"/> 里跑。
 /// 收尾裁定读写的是已组好的 plan：Routes/LayoutAdmission 与 bake 侧也往同一份 blockers 里追加，这部分的类型化留给 C3 的 plan v4。
@@ -50,14 +51,84 @@ internal sealed class Verdict
         return new(blockers, radianceClosure, scriptFaults.Available, scriptFaults.Count, scriptFaults.Errors);
     }
 
-    /// <summary>整层初判拒因里有"无独立组"以外的拒因：这时不试特效前缀回退。</summary>
+    /// <summary>整层初判拒因里有"无独立组"与 HDR 闭合以外的拒因：这时不试特效前缀回退。</summary>
     internal bool PrefixSafetyBlocked => PrefixSafetyBlockedBy(Blockers.Select(blocker => blocker.Code));
 
     /// <summary>
-    /// 效果前缀回退只救"没有与输入无关的可烘组"这一种拒因（含通用形态）；拒因里还有别的时不试前缀。
+    /// HDR 闭合的两种拒因。它们只对"当前分配/路线实际捕获的对象"成立：捕获对象换了就要重求，
+    /// 不能拿整层初始分配的结论去挡前缀回退或更小分配回退。
+    /// </summary>
+    internal static bool IsRadianceCode(BlockerCode code) =>
+        code is BlockerCode.HdrRadianceOpen or BlockerCode.HdrRadianceOpenProperty;
+
+    /// <summary>
+    /// 效果前缀回退救"没有与输入无关的可烘组"（含通用形态）与 HDR 闭合不成立两类拒因；拒因里还有别的时不试前缀。
+    /// HDR 拒因是按整层初始分配求的，前缀路线捕获的是另一批对象：采纳前缀后由 <see cref="ApplyPrefixRadianceClosure"/> 对前缀捕获对象重求。
     /// </summary>
     internal static bool PrefixSafetyBlockedBy(IEnumerable<BlockerCode> codes) =>
-        codes.Any(code => code is not (BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric));
+        codes.Any(code => code is not (BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric) && !IsRadianceCode(code));
+
+    /// <summary>最终路线换了捕获对象时，plan 里保留整层初始分配那次 HDR 闭合求值的字段（紧跟 hdr_radiance_closure）。</summary>
+    internal const string InitialRadianceClosureField = "hdr_radiance_closure_initial";
+
+    /// <summary>
+    /// 特效前缀路线定稿后，对前缀实际捕获的对象重求 HDR 闭合。每份缓存捕获的是 owner 层连同它的前 prefix_effect_count 个特效，
+    /// 按 owner 层一组求值：场景副本里截掉前缀之外的特效（它们留实时），运行时证据里去掉只属于被截特效的材质（与前缀循环分析同一投影）。
+    /// hdr_radiance_closure 换成这次求值（capture_scope = effect_prefix），整层初始分配那次挪到 <see cref="InitialRadianceClosureField"/> 备查；
+    /// 闭合不成立时 HDR 拒因写回 blockers、状态回到 requires_resolution。whole_layer 副本仍记整层那一份，不动。
+    /// hdr 未开启时判据不运行，plan 逐字不变。
+    /// </summary>
+    internal static void ApplyPrefixRadianceClosure(JsonObject report, JsonObject scene, JsonObject properties, JsonObject trace,
+        ProjectSource source, string? assets, JsonObject? project, Analysis.EffectRange.EffectRangeRules? effectRules = null)
+    {
+        if (report["route"]?.GetValue<string>() != "effect_prefix" || report["effect_prefix_caches"] is not JsonArray { Count: > 0 } caches ||
+            report["hdr_radiance_closure"] is not JsonObject initial ||
+            initial["hdr"] is not JsonValue flag || !flag.TryGetValue(out bool hdr) || !hdr) return;
+        JsonObject captureScene = scene.DeepClone().AsObject();
+        JsonObject captureTrace = trace.DeepClone().AsObject();
+        var groups = new JsonArray();
+        foreach (JsonObject cache in caches.OfType<JsonObject>())
+        {
+            if (Int(cache["owner_layer_id"]) is not int owner) continue;
+            TrimToEffectPrefix(captureScene, captureTrace, owner, Int(cache["prefix_effect_count"]) ?? 0, source, assets);
+            groups.Add(new JsonObject {
+                ["id"] = "effect_prefix_" + owner.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["layer_ids"] = new JsonArray(owner) });
+        }
+        JsonObject closure = SdrRadianceClosure.Describe(captureScene, properties, captureTrace, groups, source, assets, hdr, project,
+            effectRules ?? Analysis.EffectRange.EffectRangeRules.Default, out Blocker? blocker);
+        closure["capture_scope"] = "effect_prefix";
+        JsonObject initialCopy = initial.DeepClone().AsObject();
+        report["hdr_radiance_closure"] = closure;
+        report.Remove(InitialRadianceClosureField);
+        report.Insert(report.IndexOf("hdr_radiance_closure") + 1, InitialRadianceClosureField, initialCopy);
+        if (blocker is null) return;
+        PlanBlockers.Add(report, blocker);
+        report["status"] = "requires_resolution";
+    }
+
+    /// <summary>
+    /// 把场景副本与运行时证据副本裁到 owner 的前 <paramref name="prefixCount"/> 个特效：截掉其后的特效，
+    /// 去掉只属于被截特效的材质 shader（前缀里也用到的同名 shader 保留）。读不出的特效资源当作不在集合里，不做裁定。
+    /// </summary>
+    private static void TrimToEffectPrefix(JsonObject scene, JsonObject trace, int ownerId, int prefixCount, ProjectSource source, string? assets)
+    {
+        JsonObject? owner = (scene["objects"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault(item => Int(item["id"]) == ownerId);
+        if (owner?["effects"] is not JsonArray effects || effects.Count <= prefixCount) return;
+        string[][] shaders = [.. effects.OfType<JsonObject>().Select(effect => ShaderPeriodAnalysis.EffectMaterialShaders(source, assets, effect).ToArray())];
+        var kept = new HashSet<string>(shaders.Take(prefixCount).SelectMany(names => names), StringComparer.Ordinal);
+        var dropped = new HashSet<string>(shaders.Skip(prefixCount).SelectMany(names => names).Where(entry => !kept.Contains(entry)), StringComparer.Ordinal);
+        while (effects.Count > prefixCount) effects.RemoveAt(effects.Count - 1);
+        if (dropped.Count == 0 || trace["runtime_layers"] is not JsonArray layers) return;
+        foreach (JsonObject layer in layers.OfType<JsonObject>())
+        {
+            if (Int(layer["owner"]) != ownerId || layer["materials"] is not JsonArray materials) continue;
+            foreach (JsonNode? node in materials.ToArray())
+                if (node is JsonObject material && material["shader"] is JsonValue shader &&
+                    shader.TryGetValue(out string? name) && name is not null && dropped.Contains(name))
+                    materials.Remove(node);
+        }
+    }
 
     /// <summary>
     /// 收尾裁定（原 X 段，顺序不可换）：残差布局闸门 → 求解器空候选 blocker → 可追溯不变量 → 视频外壳与烘焙价值 →

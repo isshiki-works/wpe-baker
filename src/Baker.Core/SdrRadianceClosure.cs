@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using Baker.Core.Analysis.EffectRange;
 
 namespace Baker.Core;
 
@@ -26,7 +27,12 @@ public static class SdrRadianceClosure
     /// <paramref name="project"/> 只用于文案：报出壁纸自带的 HDR 开关叫什么，传 null 时那半句略去。
     /// </summary>
     public static JsonObject Describe(JsonObject scene, JsonObject properties, JsonObject? trace, JsonArray groups,
-        ProjectSource source, string? assets, bool hdrEnabled, JsonObject? project, out Blocker? blocker)
+        ProjectSource source, string? assets, bool hdrEnabled, JsonObject? project, out Blocker? blocker) =>
+        Describe(scene, properties, trace, groups, source, assets, hdrEnabled, project, EffectRangeRules.Default, out blocker);
+
+    /// <summary>同上，特效值域规则表可替换（测试用自带着色器的夹具表）。</summary>
+    internal static JsonObject Describe(JsonObject scene, JsonObject properties, JsonObject? trace, JsonArray groups,
+        ProjectSource source, string? assets, bool hdrEnabled, JsonObject? project, EffectRangeRules effectRules, out Blocker? blocker)
     {
         blocker = null;
         ArgumentNullException.ThrowIfNull(scene);
@@ -53,7 +59,7 @@ public static class SdrRadianceClosure
         var evaluated = new JsonArray();
         foreach (var group in groups.OfType<JsonObject>())
         {
-            JsonObject verdict = Evaluate(scene, properties, runtimeLayers, decoders, group, source, assets);
+            JsonObject verdict = Evaluate(scene, properties, runtimeLayers, decoders, group, source, assets, effectRules);
             evaluated.Add(verdict);
             if (verdict["status"]?.GetValue<string>() == "closed") continue;
             closed = false;
@@ -107,6 +113,7 @@ public static class SdrRadianceClosure
         (Detail("^particle layers have no decidable output range$"), "粒子层的输出值域无法判定"),
         (Detail("^text layers have no decidable output range$"), "文字层的输出值域无法判定"),
         (Detail("^the layer carries authored effect layers$"), "这一层带有作者添加的特效"),
+        (Detail("^the layer carries authored effect layers: effect (\"[^\"]*\") .*$"), "这一层的作者特效 $1 证明不了输出不超出 [0,1]"),
         (Detail("^the runtime trace has no observed material for this layer$"), "运行时观测里没有这一层的材质"),
         (Detail("^the renderer reported an effect layer on this layer$"), "渲染器报告这一层带有特效"),
         (Detail("^the runtime trace reported no material for this layer$"), "运行时观测报告这一层没有材质"),
@@ -163,7 +170,12 @@ public static class SdrRadianceClosure
 
     /// <summary>对单个被捕获组求值：任一可见绘制层未通过，整组即判 open。</summary>
     public static JsonObject Evaluate(JsonObject scene, JsonObject properties, JsonArray? runtimeLayers,
-        JsonArray? videoDecoders, JsonObject group, ProjectSource source, string? assets)
+        JsonArray? videoDecoders, JsonObject group, ProjectSource source, string? assets) =>
+        Evaluate(scene, properties, runtimeLayers, videoDecoders, group, source, assets, EffectRangeRules.Default);
+
+    /// <summary>同上，特效值域规则表可替换（测试用自带着色器的夹具表）。</summary>
+    internal static JsonObject Evaluate(JsonObject scene, JsonObject properties, JsonArray? runtimeLayers,
+        JsonArray? videoDecoders, JsonObject group, ProjectSource source, string? assets, EffectRangeRules effectRules)
     {
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(properties);
@@ -213,8 +225,18 @@ public static class SdrRadianceClosure
                     ["checks"] = new JsonArray(Check("R0", true, "Layer has no drawable image, particle or text.")) });
                 continue;
             }
+            // 字面值为空、又没绑脚本的文字层画不出任何像素（name 常是分隔线），不参与判据。
+            // 场景里有脚本写图层文字时，渲染器给每个文字层都建动态网格、运行时可能被写进文字：观测到网格就照常判，与 Composer.Draws 同口径。
+            if (!obj.ContainsKey("image") && !obj.ContainsKey("particle") && Composer.EmptyText(obj, properties) &&
+                runtimeLayers?.OfType<JsonObject>().Any(layer => HybridScenePlanner.Int(layer["id"]) == id &&
+                    layer["has_mesh"] is JsonValue mesh && mesh.TryGetValue(out bool hasMesh) && hasMesh) != true)
+            {
+                perLayer.Add(new JsonObject { ["layer_id"] = id, ["layer_name"] = name, ["status"] = "not_drawn",
+                    ["checks"] = new JsonArray(Check("R0", true, "Text layer has an empty literal value, no script binding and no runtime mesh.")) });
+                continue;
+            }
             var checks = new JsonArray();
-            EvaluateLayer(obj, properties, runtimeLayers, videoDecoders, source, assets, checks);
+            EvaluateLayer(obj, properties, runtimeLayers, videoDecoders, source, assets, effectRules, checks);
             bool layerClosed = checks.OfType<JsonObject>().All(check => check["status"]?.GetValue<string>() == "pass");
             perLayer.Add(new JsonObject { ["layer_id"] = id, ["layer_name"] = name,
                 ["status"] = layerClosed ? "closed" : "open", ["checks"] = checks });
@@ -233,7 +255,7 @@ public static class SdrRadianceClosure
 
     /// <summary>逐层跑五条判据；每条都把通过/不通过与原因写进 checks。</summary>
     private static void EvaluateLayer(JsonObject obj, JsonObject properties, JsonArray? runtimeLayers,
-        JsonArray? videoDecoders, ProjectSource source, string? assets, JsonArray checks)
+        JsonArray? videoDecoders, ProjectSource source, string? assets, EffectRangeRules effectRules, JsonArray checks)
     {
         int id = HybridScenePlanner.Int(obj["id"]) ?? -1;
         var textures = new List<string>();
@@ -245,9 +267,14 @@ public static class SdrRadianceClosure
                 : "text layers have no decidable output range"));
             return;
         }
-        if (obj["effects"] is JsonArray { Count: > 0 })
+        // 作者特效：可见的每一个都须被特效值域规则表证明为输入的凸组合采样，否则整层判未知。
+        var provenEffectShaders = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var effect in (obj["effects"] as JsonArray ?? []).OfType<JsonObject>())
         {
-            checks.Add(Check("R1", false, "the layer carries authored effect layers"));
+            if (HybridScenePlanner.Resolve(effect["visible"], properties) is JsonValue effectVisible &&
+                effectVisible.TryGetValue<bool>(out bool effectShown) && !effectShown) continue;
+            if (effectRules.IsRangeClosed(effect, properties, source, assets, provenEffectShaders, out string effectDetail)) continue;
+            checks.Add(Check("R1", false, "the layer carries authored effect layers: " + effectDetail));
             return;
         }
         var observed = runtimeLayers?.OfType<JsonObject>()
@@ -259,7 +286,8 @@ public static class SdrRadianceClosure
         }
         foreach (var layer in observed)
         {
-            if (layer["has_effect_layer"] is JsonValue effectFlag && effectFlag.TryGetValue<bool>(out bool hasEffect) && hasEffect)
+            if (layer["has_effect_layer"] is JsonValue effectFlag && effectFlag.TryGetValue<bool>(out bool hasEffect) && hasEffect &&
+                provenEffectShaders.Count == 0)
             {
                 checks.Add(Check("R1", false, "the renderer reported an effect layer on this layer"));
                 return;
@@ -272,6 +300,11 @@ public static class SdrRadianceClosure
             foreach (var material in materials.OfType<JsonObject>())
             {
                 string? shader = Text(material["shader"]);
+                // 特效链上的材质：已证明的特效着色器，或把特效链合回层的内置 SDR 着色器。
+                // 它们的纹理是特效链自己的中间缓冲与权重遮罩，值域已由规则表的证明覆盖，不再进 R3/R5。
+                if (Text(material["role"]) == "effect" && provenEffectShaders.Count > 0 && shader is not null &&
+                    (provenEffectShaders.Contains(shader) || SdrRadianceCriteria.IsBuiltInSdrShader(shader)))
+                    continue;
                 if (!SdrRadianceCriteria.IsBuiltInSdrShader(shader))
                 {
                     checks.Add(Check("R1", false, $"runtime shader \"{shader ?? "unknown"}\" is not a built-in SDR shader"));
@@ -337,7 +370,9 @@ public static class SdrRadianceClosure
                     }
             textures.AddRange(Strings(pass["textures"]));
         }
-        checks.Add(Check("R1", true, "built-in SDR shaders only, no effect layer and no unknown combo"));
+        checks.Add(Check("R1", true, provenEffectShaders.Count == 0
+            ? "built-in SDR shaders only, no effect layer and no unknown combo"
+            : "built-in SDR shaders only, effect layers are proven convex resamplings, no unknown combo"));
         // R2 混合封闭：alpha 凸组合，上界不升。
         foreach (var pass in passes.OfType<JsonObject>())
         {

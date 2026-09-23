@@ -200,8 +200,26 @@ internal sealed class Composer
     internal bool Visible(int id) => LocallyVisible(id) &&
         (Int(objects[id]["parent"]) is not int parent || !objects.ContainsKey(parent) || Visible(parent));
 
-    /// <summary>对象会画出东西（图像、文字、粒子、模型或观测到网格），且没被省略。</summary>
-    internal bool Draws(int id) => !omittedIds.Contains(id) && (objects[id].ContainsKey("image") || objects[id].ContainsKey("text") ||
+    /// <summary>对象会画出东西（图像、非空文字、粒子、模型或观测到网格），且没被省略。</summary>
+    internal bool Draws(int id) => !omittedIds.Contains(id) && (objects[id].ContainsKey("image") ||
+        objects[id].ContainsKey("text") && !EmptyText(objects[id], properties) ||
         objects[id].ContainsKey("particle") || objects[id].ContainsKey("model") ||
         observed.GetValueOrDefault(id)?["has_mesh"]?.GetValue<bool>() == true);
+
+    /// <summary>
+    /// 文字层的字面值是否为空串且没有脚本或动画绑定（绑了用户属性的按解析后的值判）。这种层画不出任何像素：
+    /// 不进视频组，HDR 闭合按 R0 不绘制处理。
+    /// </summary>
+    internal static bool EmptyText(JsonObject obj, JsonObject properties)
+    {
+        if (obj["text"] is not JsonNode raw) return false;
+        if (raw is JsonObject binding && (binding.ContainsKey("script") || binding.ContainsKey("animation"))) return false;
+        JsonNode? value = HybridScenePlanner.Resolve(raw, properties);
+        if (value is JsonObject resolved)
+        {
+            if (resolved.ContainsKey("script") || resolved.ContainsKey("animation")) return false;
+            value = resolved["value"];
+        }
+        return value is JsonValue text && text.TryGetValue<string>(out string? literal) && literal.Length == 0;
+    }
 }

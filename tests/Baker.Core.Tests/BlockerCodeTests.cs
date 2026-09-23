@@ -35,13 +35,14 @@ public class BlockerTriageTests
         Assert.Equal(rule, verdict["rule"]!.GetValue<string>());
     }
 
-    /// <summary>效果前缀回退只在拒因全是"无独立组"（两种形态）时才试；混进任何别的拒因就不试。</summary>
+    /// <summary>效果前缀回退只在拒因全是"无独立组"（两种形态）或 HDR 闭合（按前缀捕获重新求值）时才试；混进任何别的拒因就不试。</summary>
     [Theory]
     [InlineData(new[] { BlockerCode.NoInputIndependentGroup }, false)]
     [InlineData(new[] { BlockerCode.NoInputIndependentGroupGeneric }, false)]
     [InlineData(new[] { BlockerCode.NoInputIndependentGroup, BlockerCode.NoInputIndependentGroupGeneric }, false)]
     [InlineData(new[] { BlockerCode.NoInputIndependentGroupGeneric, BlockerCode.CameraPathNeedsEnvelope }, true)]
-    [InlineData(new[] { BlockerCode.HdrRadianceOpen }, true)]
+    [InlineData(new[] { BlockerCode.HdrRadianceOpen }, false)]
+    [InlineData(new[] { BlockerCode.HdrRadianceOpen, BlockerCode.CameraPathNeedsEnvelope }, true)]
     public void PrefixFallbackOnlyForNoIndependentGroup(BlockerCode[] codes, bool blocked)
     {
         // 初判拒因在内存里是 Blocker 列表（C2.2d2），前缀回退只看编号。
