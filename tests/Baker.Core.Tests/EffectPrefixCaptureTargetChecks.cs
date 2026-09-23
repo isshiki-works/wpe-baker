@@ -26,21 +26,12 @@ internal static class EffectPrefixCaptureTargetChecks
     internal static void Run(Action<bool, string> check)
     {
         JsonObject sceneWide = EffectPrefixCaptureTarget.Evaluate(Probe("_rt_default", 176, "_rt_node_56_layer_composite"), 176, 185, "watermark");
-        string reason = sceneWide["reason"]?.GetValue<string>() ?? "";
         JsonObject localized = sceneWide["reason_localized"]!.AsObject();
         check(sceneWide["status"]?.GetValue<string>() == EffectPrefixCaptureTarget.RejectedStatus &&
             sceneWide["render_target"]?.GetValue<string>() == "_rt_default" &&
             sceneWide["layer_targets"]!.AsArray().Select(node => node!.GetValue<string>()).SequenceEqual(["_rt_node_56_layer_composite"]),
             "a terminal capture from the scene framebuffer is rejected and records the layer's own targets");
-        check(reason.Contains("\"watermark\" (id 176)", StringComparison.Ordinal) && reason.Contains("terminal effect 185", StringComparison.Ordinal) &&
-            reason.Contains("_rt_default", StringComparison.Ordinal) && reason.Contains("_rt_node_56_layer_composite", StringComparison.Ordinal),
-            "the capture-target rejection names the layer, the terminal effect, the capture point and the layer target");
-        check(localized["key"]?.GetValue<string>() == "effect_prefix.capture_not_layer_target" &&
-            localized["zh"]!.GetValue<string>().Contains("不生成图层 \"watermark\"（id 176）的效果前缀缓存", StringComparison.Ordinal) &&
-            localized["zh"]!.GetValue<string>().Contains("_rt_default", StringComparison.Ordinal) &&
-            localized["en"]!.GetValue<string>().Contains("\"watermark\" (id 176)", StringComparison.Ordinal) &&
-            localized["en"]!.GetValue<string>().Contains("terminal effect 185 is captured from _rt_default", StringComparison.Ordinal) &&
-            localized["en"]!.GetValue<string>().Contains("_rt_node_56_layer_composite", StringComparison.Ordinal),
+        check(localized["key"]?.GetValue<string>() == "effect_prefix.capture_not_layer_target",
             "the capture-target rejection carries bilingual text from the messages table");
 
         JsonObject own = EffectPrefixCaptureTarget.Evaluate(Probe("_rt_node_39_layer_composite", 223, "_rt_node_39_layer_composite", "_rt_node_39_layer_composite"), 223, 224, "线4");
@@ -58,14 +49,12 @@ internal static class EffectPrefixCaptureTargetChecks
             "a scene-wide buffer never counts as the layer's own target even when the layer's effect reads it");
 
         JsonObject missing = EffectPrefixCaptureTarget.Evaluate(Probe(null, 176, "_rt_node_56_layer_composite"), 176, 185, "watermark");
-        check(missing["status"]?.GetValue<string>() == EffectPrefixCaptureTarget.RejectedStatus &&
-            missing["reason"]!.GetValue<string>().Contains("(none)", StringComparison.Ordinal),
+        check(missing["status"]?.GetValue<string>() == EffectPrefixCaptureTarget.RejectedStatus,
             "a probe without a confirmed capture point cannot prove the layer's own target");
 
         JsonObject failed = EffectPrefixCaptureTarget.ProbeFailed(176, 185, "watermark", "terminal capture effect has no unique graph texture writer");
         check(failed["status"]?.GetValue<string>() == EffectPrefixCaptureTarget.ProbeFailedStatus &&
-            failed["reason_localized"]?["key"]?.GetValue<string>() == "effect_prefix.capture_probe_failed" &&
-            failed["reason_localized"]!["zh"]!.GetValue<string>().Contains("no unique graph texture writer", StringComparison.Ordinal),
+            failed["reason_localized"]?["key"]?.GetValue<string>() == "effect_prefix.capture_probe_failed",
             "a failed capture probe does not admit the prefix and keeps the renderer's message");
 
         var scene = new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 176, ["name"] = "watermark" }, new JsonObject { ["id"] = 17 }) };

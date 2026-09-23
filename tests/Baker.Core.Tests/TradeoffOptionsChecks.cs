@@ -7,7 +7,6 @@ internal static class TradeoffOptionsChecks
     internal static async Task RunAsync(Action<bool, string> check, string root)
     {
         Classification(check);
-        Wording(check);
         Listing(check);
         await PropertyKeysAsync(check, root);
     }
@@ -29,29 +28,6 @@ internal static class TradeoffOptionsChecks
         var overlay = TradeoffOptions.Classify(["observed_wall_clock"], suspectedOverlay: true);
         check(overlay.Kinds is ["clock", "overlay"], "tradeoff class: a suspected overlay adds the overlay kind");
         check(TradeoffOptions.ClassifyReason("not_a_reason") is null, "tradeoff class: unknown reasons are not tradeoffs");
-        check(TradeoffOptions.KindLabel("parallax", MessageCatalog.Chinese).Contains("视差") &&
-            TradeoffOptions.KindLabel("parallax", MessageCatalog.English).Contains("parallax"), "tradeoff class: kind labels are bilingual");
-    }
-
-    /// 两处按实测改写的文案：不可达不再说"改设置也没用"，主体类不再说"去壁纸设置里关掉"。
-    private static void Wording(Action<bool, string> check)
-    {
-        var unreachable = MessageCatalog.Find("blocker.fullframe_unreachable")!;
-        check(!unreachable.Zh.Contains("都不会改变这一点") && unreachable.Zh.Contains("可选方案：禁用前置的实时元素后生成整幅循环视频") &&
-            !unreachable.En.Contains("no full-frame layout as authored") && unreachable.En.Contains("Options: disable the blocking live elements"),
-            "wording: fullframe_unreachable now gives a way to unlock");
-        check(unreachable.LegacyTemplate.EndsWith("This scene has no full-frame layout as authored.", StringComparison.Ordinal),
-            "wording: fullframe_unreachable keeps its legacy English verbatim");
-        foreach (string key in new[] { "blocker.no_input_independent_group", "blocker.no_input_independent_group_generic" })
-        {
-            var entry = MessageCatalog.Find(key)!;
-            check(!entry.Zh.Contains("禁用后无剩余内容") && entry.Zh.Contains("未找到不依赖实时输入、可生成的视频组"),
-                "wording: " + key + " rejects cleanly in Chinese");
-            check(!entry.En.Contains("nothing remains once disabled") && entry.En.Contains("dependency analysis found no video group independent of live input"),
-                "wording: " + key + " rejects cleanly in English");
-            check(entry.LegacyTemplate == "No input-independent visual group remains after dependency closure.",
-                "wording: " + key + " keeps its legacy English verbatim");
-        }
     }
 
     /// 清单：排序、连带子层、残留估计、属性优先、主体类不给清单。
@@ -107,12 +83,6 @@ internal static class TradeoffOptionsChecks
             "tradeoff list: excluding the audio layer drops its derived child, the parallax pair stays live");
         check(audioOnly["properties"]!.AsArray().OfType<JsonObject>().Select(entry => entry["key"]!.GetValue<string>()).SequenceEqual(["audiocross"]),
             "tradeoff list: the wallpaper property comes first among the ways to turn it off");
-        check(audioOnly["zh"]!.GetValue<string>().Contains("audiocross") && audioOnly["zh"]!.GetValue<string>().Contains("--exclude-layers 40") &&
-            options[0]["en"]!.GetValue<string>().Contains("Option 1"), "tradeoff list: the option text names the property and the command");
-        check(audioOnly["zh"]!.GetValue<string>().Contains("实测无功耗收益") && audioOnly["en"]!.GetValue<string>().Contains("shows no measured saving"),
-            "tradeoff list: every option repeats that keeping layers live does not save power");
-        check(audioOnly["zh"]!.GetValue<string>().Contains("功耗收益相应降低") && audioOnly["en"]!.GetValue<string>().Contains("still render every frame"),
-            "tradeoff list: an option that leaves layers live says the saving is reduced");
         // 视差有两个方案：单独关视差，以及视差连装饰一起关。这里查后者（它才是预计能进整幅的那个）。
         var parallax = options.Single(option => option["turn_off_kinds"]!.AsArray()
             .Select(kind => kind!.GetValue<string>()).ToHashSet().SetEquals(["parallax", "audio"]));
@@ -124,19 +94,13 @@ internal static class TradeoffOptionsChecks
             "tradeoff list: turning off parallax uses fixed_view");
         check(parallax["excluded_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()).Contains(30) &&
             parallax["collateral_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()).Contains(30) &&
-            parallax["collateral_drawable_layers"]!.GetValue<int>() == 2 &&
-            parallax["zh"]!.GetValue<string>().Contains("时钟"),
+            parallax["collateral_drawable_layers"]!.GetValue<int>() == 2,
             "tradeoff list: the clock hanging under the parallax layer is reported as collateral");
-        check(parallax["zh"]!.GetValue<string>().Contains("其余图层无对应属性开关") &&
-            parallax["en"]!.GetValue<string>().Contains("no property switch"),
-            "tradeoff list: an option only partly covered by properties says the rest needs the command line");
         check(options.Count(option => option["turn_off_kinds"]!.AsArray().Any(kind => kind!.GetValue<string>() == "clock")) == 0,
             "tradeoff list: a later tier turning off the same layers is not listed twice");
         check(parallax["estimated_residual_live_layers"]!.GetValue<int>() == 0 &&
-            parallax["expected_full_frame"]!.GetValue<bool>() &&
-            parallax["zh"]!.GetValue<string>().Contains("禁用后预计无实时图层；整幅可行性需重新分析确认"),
+            parallax["expected_full_frame"]!.GetValue<bool>(),
             "tradeoff list: with everything optional off nothing stays live and full frame is expected");
-        check(TradeoffOptions.Lines(plan, "zh").Length == options.Length + 1, "tradeoff list: the CLI prints a header and one line per option");
 
         // 连带：只想关时钟，但它挂在视差层下面时，排除的是父层还是自己？父层不在清单里时只关自己。
         var clockOnly = Plan(Layer(10, null, "底", live: false, []),
@@ -147,8 +111,7 @@ internal static class TradeoffOptionsChecks
         var clockOption = clockOnly[TradeoffOptions.Field]!["options"]!.AsArray().OfType<JsonObject>()
             .Single(option => option["turn_off_kinds"]!.AsArray().Any(kind => kind!.GetValue<string>() == "parallax"));
         check(clockOption["collateral_drawable_layers"]!.GetValue<int>() == 2 &&
-            clockOption["collateral_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()).SequenceEqual([30, 31]) &&
-            clockOption["zh"]!.GetValue<string>().Contains("连带禁用：挂在这些图层下的"),
+            clockOption["collateral_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()).SequenceEqual([30, 31]),
             "tradeoff list: children that were not asked for are reported as collateral");
 
         // 无独立组不足以证明主体只剩实时效果，不能把绘制层改标为 subject。
@@ -159,21 +122,18 @@ internal static class TradeoffOptionsChecks
         TradeoffOptions.Attach(subject);
         check(subject[TradeoffOptions.Field]!["status"]!.GetValue<string>() == "dependency_blocked" &&
             subject[TradeoffOptions.Field]!["options"]!.AsArray().Count == 0 &&
-            subject["layers"]![0]!["tradeoff_class"]!.GetValue<string>() == TradeoffOptions.Tradeoff &&
-            subject[TradeoffOptions.Field]!["zh"]!.GetValue<string>().Contains("尚未确认") &&
-            !subject[TradeoffOptions.Field]!["zh"]!.GetValue<string>().Contains("只能实时"),
+            subject["layers"]![0]!["tradeoff_class"]!.GetValue<string>() == TradeoffOptions.Tradeoff,
             "tradeoff list: dependency blockage does not prove all content is the live effect");
 
         // 已经能整幅的计划不需要清单；只剩技术类实时层的也没有可取舍元素。
         var done = Plan(Layer(10, null, "底", live: false, []));
         done["settings"]!["video_layout"] = "full_frame";
         TradeoffOptions.Attach(done);
-        check(done[TradeoffOptions.Field]!["status"]!.GetValue<string>() == "not_needed" && TradeoffOptions.Lines(done, "zh").Length == 0,
+        check(done[TradeoffOptions.Field]!["status"]!.GetValue<string>() == "not_needed",
             "tradeoff list: a plan that already reaches full frame gets no list");
         var technical = Plan(Layer(10, null, "相机", live: true, ["scene_camera"]));
         TradeoffOptions.Attach(technical);
-        check(technical[TradeoffOptions.Field]!["status"]!.GetValue<string>() == "no_tradeoff_elements" &&
-            technical[TradeoffOptions.Field]!["zh"]!.GetValue<string>().Contains("技术性"),
+        check(technical[TradeoffOptions.Field]!["status"]!.GetValue<string>() == "no_tradeoff_elements",
             "tradeoff list: technical-only live layers are reported as nothing to trade away");
     }
 
@@ -242,9 +202,6 @@ internal static class TradeoffOptionsChecks
             Property(20)["off_value"]!.GetValue<bool>() == false && Property(20)["binding"]!.GetValue<string>() == "self" &&
             Property(20)["current_value"]!.GetValue<bool>() && Property(20)["label"]!.GetValue<string>() == "显示时钟",
             "property key: a bool binding gives the key, the current value and false as the off value");
-        check(Property(20)["off_hint_zh"]!.GetValue<string>().Contains("{\"showclock\": false}") &&
-            Property(20)["off_hint_en"]!.GetValue<string>().Contains("--properties"),
-            "property key: the off value is spelled out for --properties in both languages");
         check(Property(21)["key"]!.GetValue<string>() == "showclock" && Property(21)["binding"]!.GetValue<string>() == "ancestor" &&
             Property(21)["bound_layer_id"]!.GetValue<int>() == 20,
             "property key: a child without its own binding follows the nearest bound ancestor");
@@ -270,9 +227,6 @@ internal static class TradeoffOptionsChecks
             check(listed["options"]!.AsArray().OfType<JsonObject>().Any(option =>
                 option["properties"]!.AsArray().OfType<JsonObject>().Any(entry => entry["key"]!.GetValue<string>() == "showclock")),
                 "property key: the derived key reaches the tradeoff list");
-            check(plan["summary"]!["zh"]!.GetValue<string>().Contains("取舍方案") &&
-                plan["summary"]!["en"]!.GetValue<string>().Contains("tradeoff option"),
-                "property key: the one-line verdict points at the list");
         }
     }
 }

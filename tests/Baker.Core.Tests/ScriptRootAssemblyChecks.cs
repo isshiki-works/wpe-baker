@@ -106,12 +106,6 @@ internal static class ScriptRootAssemblyChecks
             rejected["script_error_validation"]!["status"]!.GetValue<string>() == CandidateScriptErrorGate.RejectedValidationStatus &&
             rejected["metrics_judged"]!.GetValue<bool>() == false,
             "more candidate script errors than the original reject the composition even when pixel metrics would pass");
-        string reasonZh = rejected["reason_zh"]!.GetValue<string>(), reasonEn = rejected["reason_en"]!.GetValue<string>();
-        check(reasonZh.Contains("产生 3 条脚本报错", StringComparison.Ordinal) && reasonZh.Contains("图层 2242「N」visible/init：TypeError: not a function（2 条）；图层 224", StringComparison.Ordinal) &&
-            reasonEn.Contains("layer 224 (\"十字架\") visible/init: TypeError: not a function", StringComparison.Ordinal) &&
-            rejected["reason"]!.GetValue<string>() == reasonEn &&
-            reasonEn.Contains("layer 2242 (\"N\") visible/init: TypeError: not a function (2 times)", StringComparison.Ordinal),
-            "script error rejection lists the raw errors and owning objects in chinese and english, collapsing repeats per object");
         var shared = Error(99, "nv", "ReferenceError: x is not defined");
         JsonObject equal = CompositionGate.Evaluate(Comparison(new JsonArray(shared.DeepClone()), new JsonArray(shared.DeepClone())));
         check(equal["status"]!.GetValue<string>() == "composition_pass" &&

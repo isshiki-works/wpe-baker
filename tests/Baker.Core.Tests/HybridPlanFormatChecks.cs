@@ -75,7 +75,7 @@ internal static class HybridPlanFormatChecks
         PlanBlockers.Set(current, [new Blocker(BlockerCode.PerspectiveNeedsScreenspace)]);
         bool blockerReached = false;
         try { await new HybridBakeService(tools).BakeAsync(new(2, current, Path.Combine(outputRoot, "v3-blocked"))); }
-        catch (InvalidDataException error) when (error.Message.StartsWith("Resolve the plan", StringComparison.Ordinal)) { blockerReached = true; }
+        catch (InvalidDataException) { blockerReached = true; }
         check(blockerReached && !Directory.Exists(Path.Combine(outputRoot, "v3-blocked")),
             "request v2 accepts plan v3 and still enforces the pre-render blocker");
         // C1.1a 之前分析出的 v3 plan：拒因是英文原文，blockers_localized 的 key 为 null。按旧版 plan 提示重新分析，

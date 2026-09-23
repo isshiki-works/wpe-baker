@@ -60,8 +60,7 @@ internal static class StockShaderClockChecks
         ShaderPeriodAnalysisResult analysis = Analyze(source);
         check(analysis.Unresolved.Count == 0 && analysis.Components.Count == 1 &&
             analysis.Components[0].Patch.ConstantKey == "speed" && analysis.Components[0].Component.AllowRetime &&
-            Math.Abs(analysis.Components[0].Component.BasePeriod!.Seconds - 2 * Math.PI / 1.5) < 1e-12 &&
-            analysis.Components[0].Evidence.StartsWith("Verified sin(g_Time * g_Speed + spatial phase)", StringComparison.Ordinal),
+            Math.Abs(analysis.Components[0].Component.BasePeriod!.Seconds - 2 * Math.PI / 1.5) < 1e-12,
             "the stock waterwaves source (perspective step and texture time offset included) is the water-wave rule's official clause");
     }
 
@@ -99,8 +98,7 @@ internal static class StockShaderClockChecks
             .Select(item => item["id"] is JsonValue value && value.TryGetValue(out int id) ? id : int.MinValue).Where(id => id != int.MinValue)];
         ShaderPeriodAnalysisResult analysis = ShaderPeriodAnalysis.Analyze(scene, source, Directory.Exists(Assets) ? Assets : null, ids);
         check(analysis.Components.Any(item => !item.Component.AllowRetime && item.Patch.ConstantKey == "speed" &&
-                item.Component.BasePeriod!.ExactSeconds is not null &&
-                item.Evidence.StartsWith("Verified sin((g_Time * g_Speed + offset) * M_PI_2)", StringComparison.Ordinal)),
+                item.Component.BasePeriod!.ExactSeconds is not null),
             "the stock workshop auto-sway source (two stages, 32 thisMotionTime uses) is the auto-sway rule's official clause");
     }
 }

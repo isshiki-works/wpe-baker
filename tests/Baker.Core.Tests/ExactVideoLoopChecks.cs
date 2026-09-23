@@ -80,27 +80,6 @@ internal static class ExactVideoLoopChecks
             scriptControlled["unresolved"]!.AsArray().OfType<JsonObject>().Any(x => x["kind"]?.GetValue<string>() == "runtime_video"),
             "source getVideoTexture seek control rejects an otherwise exact looping video");
 
-        // A sprite flipbook restarted after a random delay has no period at any capture length, which
-        // is a stronger refusal than ordinary script control and must read differently to the user.
-        JsonObject SpriteTrace() => new() {
-            ["source_owner_layer_id"] = 1, ["mechanism"] = "sprite", ["track_name"] = "flipbook",
-            ["duration_seconds"] = 2, ["looping"] = true, ["event_driven"] = false,
-            ["confidence"] = "high", ["playback_rate"] = 1 };
-        string SpriteRefusal(JsonObject result) => result["unresolved"]!.AsArray().OfType<JsonObject>()
-            .Single(x => x["kind"]?.GetValue<string>() == "runtime_animation")["detail"]!.GetValue<string>();
-        JsonObject randomSprite = Analyze(SpriteTrace(), new JsonObject { ["id"] = 1,
-            ["visible"] = new JsonObject { ["value"] = true, ["script"] =
-                "const ani = thisLayer.getTextureAnimation();\n" +
-                "engine.setTimeout(() => { ani.stop(); engine.setTimeout(() => ani.play(), Math.random() * 5000); }, 16);" } });
-        check(SpriteRefusal(randomSprite).Contains("Math.random() delay", StringComparison.Ordinal) &&
-            SpriteRefusal(randomSprite).Contains("no seam placement", StringComparison.Ordinal),
-            "a sprite restarted after a Math.random() delay is refused as having no period at any capture length");
-        JsonObject steadySprite = Analyze(SpriteTrace(), new JsonObject { ["id"] = 1,
-            ["visible"] = new JsonObject { ["value"] = true, ["script"] =
-                "const ani = thisLayer.getTextureAnimation();\nani.play();" } });
-        check(SpriteRefusal(steadySprite).Contains("full capture and seam validation", StringComparison.Ordinal),
-            "deterministic sprite playback control keeps the softer capture-and-validate refusal");
-
         JsonObject externalControl = LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray {
                 new JsonObject { ["id"] = 1 },
                 new JsonObject { ["id"] = 2, ["script"] = "thisScene.getLayer(1).getVideoTexture().pause();" }

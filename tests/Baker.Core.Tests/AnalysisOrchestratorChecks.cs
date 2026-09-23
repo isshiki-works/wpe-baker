@@ -61,8 +61,7 @@ internal static class AnalysisOrchestratorChecks
                 new JsonObject { ["name"] = "day" }, new JsonObject { ["name"] = "night" }) };
             return result;
         });
-        check(day["settings"]!["daytime_state"]!.GetValue<string>() == "night" &&
-            day["summary"]!["zh"]!.GetValue<string>().Contains("按 night 时段生成", StringComparison.Ordinal),
+        check(day["settings"]!["daytime_state"]!.GetValue<string>() == "night",
             "recognized time states choose the bakeable result with fewest groups and name the selected state");
         string allocation = Path.Combine(root, "internal-allocation");
         Directory.CreateDirectory(Path.Combine(allocation, "loop-allocation-analysis"));

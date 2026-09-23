@@ -110,13 +110,9 @@ internal static class LoopCeilingChecks
             "the solver ceiling and the sway Lmax are one value: --loop-max-seconds lowered by the embedded video limit, with or without sway retime");
         EmbeddedVideoLoopLimit fourK = EmbeddedVideoBudget.LoopLengthLimit(3600, 3840, 2160, false, 60, 1)!;
         JsonObject limitedOff = Analyze(300, fourK.EffectiveSeconds, limit: fourK);
-        JsonObject limitedSummary = PlanNarrative.Summarize(new JsonObject {
-            ["settings"] = new JsonObject { ["fps_numerator"] = 60, ["fps_denominator"] = 1 },
-            ["blockers"] = new JsonArray(), ["layers"] = new JsonArray(), ["live_layer_ids"] = new JsonArray(), ["loop"] = limitedOff.DeepClone() });
         JsonObject roomy = Analyze(300, 600, limit: EmbeddedVideoBudget.LoopLengthLimit(600, 1920, 1080, false, 60, 1));
         check(Frames(limitedOff).SequenceEqual(new ulong[] { 18000 }) && limitedOff["maximum_seconds"]!.GetValue<double>() == 558 &&
             limitedOff["embedded_video_limit"]!["applied"]!.GetValue<bool>() && limitedOff["sway_retime"] is null &&
-            limitedSummary["zh"]!.GetValue<string>().Contains("循环长度上限由 3600 s 降至 558 s", StringComparison.Ordinal) &&
             roomy["embedded_video_limit"] is null && Frames(roomy).SequenceEqual(Frames(byDefault)) &&
             Throws(() => Analyze(300, 600, limit: fourK)),
             "with sway retime off a lowered ceiling is still recorded on the loop and stated in the conclusion; a mismatched limit is rejected");

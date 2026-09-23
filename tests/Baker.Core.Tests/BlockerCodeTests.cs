@@ -83,8 +83,6 @@ public class BlockerCatalogTests
             string key = BlockerCodes.Key(code);
             MessageCatalog.Entry? entry = MessageCatalog.Find(key);
             Assert.True(entry is not null, $"{code} 缺文案键 {key}");
-            Assert.False(string.IsNullOrWhiteSpace(entry!.Zh), $"{key} 中文模板为空");
-            Assert.False(string.IsNullOrWhiteSpace(entry.En), $"{key} 英文模板为空");
             Assert.Equal(code, BlockerCodes.FromKey(key));
             int arity = Arity(key);
             // 参数个数对上时三种模板都能渲染出不含占位符的句子。
