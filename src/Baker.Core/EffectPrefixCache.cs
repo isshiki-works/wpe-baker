@@ -44,7 +44,12 @@ internal static class EffectPrefixCache
         else await TextureContainer.WriteVideoAsync(texturePath, cacheFile, width, height, cancellationToken);
 
         JsonObject cachedMaterial = material.DeepClone().AsObject();
-        cachedMaterial["passes"]!.AsArray()[0]!.AsObject()["textures"]!.AsArray()[0] = textureResource;
+        JsonObject cachedPass = cachedMaterial["passes"]!.AsArray()[0]!.AsObject();
+        cachedPass["textures"]!.AsArray()[0] = textureResource;
+        // 缓存截在前缀末个特效之后，基础 pass（genericimage3/4 按这些组合开关做的光照、反射、雾、精灵帧等逐像素运算）
+        // 已经烘在里面；替代材质的基础 pass 只能原样取样，否则会再算一遍。作者写的组合开关全部去掉，
+        // 两个着色器里唯一默认开启的 FOG 显式关掉。
+        cachedPass["combos"] = new JsonObject { ["FOG"] = 0 };
         JsonObject cachedModel = model.DeepClone().AsObject();
         cachedModel["material"] = materialResource;
         if (sourceWidth is uint logicalWidth) {
