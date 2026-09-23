@@ -1,7 +1,5 @@
-# owe-media：引擎自己的媒体层（T5a 音频；T5b 迁入视频后 wavsen 整个退出）。
-# FFmpeg 从 WPE_FFMPEG_ROOT 的 pkg-config 取（PKG_CONFIG_PATH 在顶层 CMakeLists 里设好）。
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(OWE_FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswresample libswscale)
+# owe-media：引擎自己的媒体层（音频 T5a、视频 T5b，移植自 wavsen，MIT）。
+# FFmpeg 的导入目标 PkgConfig::OWE_FFMPEG 在顶层 CMakeLists 里定义。
 
 add_library(owe-media STATIC)
 target_sources(owe-media PUBLIC FILE_SET CXX_MODULES BASE_DIRS . FILES

@@ -14,7 +14,7 @@ import rstd.cppstd;
 import wescene.io;
 
 // 逐语句照搬 wavsen src/audio/file.cpp 的离线路径（不含 seek、变速、retarget：引擎不用）。
-// 对拍测试 media-parity-tests 逐字节比对两边输出。唯一有意的不同是流末尾的解码错误不锁存
+// T5a 对拍（随 wavsen 删除）逐字节核过两边输出。唯一有意的不同是流末尾的解码错误不锁存
 // （见 defer_decode_error），对拍里这类文件只比到 wavsen 报错为止。
 namespace owe::media
 {

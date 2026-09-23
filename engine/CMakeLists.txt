@@ -94,7 +94,7 @@ else()
   endif()
 endif()
 
-# FFmpeg 开发前缀（wavsen 与 owe-media 经 pkg-config 找它）。
+# FFmpeg 开发前缀（owe-media 经 pkg-config 找它）。
 set(WPE_FFMPEG_ROOT "${WPE_DEPS}/ffmpeg-lgpl21/prefix" CACHE PATH "FFmpeg development prefix")
 get_filename_component(WPE_FFMPEG_ROOT "${WPE_FFMPEG_ROOT}" ABSOLUTE BASE_DIR "${WPE_ROOT}")
 foreach(_wpe_ffmpeg_lib avcodec avformat avutil swscale swresample)
@@ -105,8 +105,11 @@ endforeach()
 set(ENV{PKG_CONFIG_PATH} "${WPE_FFMPEG_ROOT}/lib/pkgconfig;${WPE_DEPS}/install/lib/pkgconfig")
 set(ENV{PKG_CONFIG_LIBDIR} "$ENV{PKG_CONFIG_PATH}")
 message(STATUS "FFmpeg development prefix: ${WPE_FFMPEG_ROOT}")
+# owe-media 解码、owe-scene 的 GpuVideoEncoder 编码都直接用它。
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(OWE_FFMPEG REQUIRED IMPORTED_TARGET GLOBAL libavformat libavcodec libavutil libswresample libswscale)
 
-# 带模块的依赖（rstd/vvk/wavsen）的 BMI 与编译器、选项绑定，留在主构建里编。
+# 带模块的依赖（rstd/vvk）的 BMI 与编译器、选项绑定，留在主构建里编。
 set(RSTD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(RSTD_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WPE_DEPS}/rstd" dependencies/rstd EXCLUDE_FROM_ALL)
@@ -114,13 +117,6 @@ target_link_libraries(rstd.std PRIVATE synchronization)
 
 set(VVK_FETCH_MISSING_DEPENDENCIES OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WPE_DEPS}/vvk" dependencies/vvk EXCLUDE_FROM_ALL)
-
-set(WAVSEN_AUDIO_BACKEND offline CACHE STRING "Deterministic offline audio" FORCE)
-set(WAVSEN_BUILD_TESTS ON CACHE BOOL "Real offline audio/video regression targets" FORCE)
-add_subdirectory("${WPE_DEPS}/wavsen" dependencies/wavsen EXCLUDE_FROM_ALL)
-# 音频已迁到 owe-media（T5a），引擎只剩视频走 wavsen；wavsen::audio 只给 media-parity-tests 对拍用。
-add_library(wavsen INTERFACE)
-target_link_libraries(wavsen INTERFACE wavsen::video wavsen::decode)
 
 add_library(wpe-eigen INTERFACE)
 target_include_directories(wpe-eigen INTERFACE "${WPE_DEPS}/eigen")
