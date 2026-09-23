@@ -140,10 +140,8 @@ struct VideoSource::Impl {
         AVCodecParameters* par = st->codecpar;
         stream_tb              = st->time_base;
 
-        // FFmpeg 自带的 av1 解码器没有软件路径（只是 hwaccel 分派），软件解码用 libdav1d。
-        const AVCodec* dec = nullptr;
-        if (par->codec_id == AV_CODEC_ID_AV1) dec = avcodec_find_decoder_by_name("libdav1d");
-        if (! dec) dec = avcodec_find_decoder(par->codec_id);
+        // AV1 取到的是 libdav1d：FFmpeg 自带的 av1 解码器只做 hwaccel 分派，本构建注册顺序里 libdav1d 在前。
+        const AVCodec* dec = avcodec_find_decoder(par->codec_id);
         if (! dec) return fail(std::string("no decoder for codec ") + avcodec_get_name(par->codec_id));
         cctx = avcodec_alloc_context3(dec);
         if (! cctx) return fail("avcodec_alloc_context3 failed");
