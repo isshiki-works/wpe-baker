@@ -95,6 +95,8 @@ target_sources(media-tests PRIVATE
   tests/media/offline_mixer_tests.cpp
   tests/media/volume_ramp_tests.cpp)
 target_link_libraries(media-tests PRIVATE owe-media gtest_main)
+# 合成夹具（lavfi 正弦波截断/损坏，见 audio_decoder_tests.cpp 开头）。
+target_compile_definitions(media-tests PRIVATE "OWE_MEDIA_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/media/fixtures\"")
 target_compile_options(media-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
 
 # T5a 对拍：wavsen 旧音频路径 vs owe-media，逐字节比较。T5b 删 wavsen 时连同 tests/media/media_parity_tests.cpp 一起删。

@@ -14,7 +14,8 @@ import rstd.cppstd;
 import wescene.io;
 
 // 逐语句照搬 wavsen src/audio/file.cpp 的离线路径（不含 seek、变速、retarget：引擎不用）。
-// 对拍测试 media-parity-tests 逐字节比对两边输出。
+// 对拍测试 media-parity-tests 逐字节比对两边输出。唯一有意的不同是流末尾的解码错误不锁存
+// （见 defer_decode_error），对拍里这类文件只比到 wavsen 报错为止。
 namespace owe::media
 {
 
@@ -175,7 +176,10 @@ struct AudioDecoder::Impl {
     auto pull_decoded_frame() -> bool {
         for (;;) {
             int code = avcodec_receive_frame(codec, frame);
-            if (code == 0) return true;
+            if (code == 0) {
+                decoded_any = true;
+                return true;
+            }
             if (code == AVERROR(EAGAIN)) {
                 code = av_read_frame(format, packet);
                 if (code == AVERROR_EOF) {
@@ -191,21 +195,39 @@ struct AudioDecoder::Impl {
                     av_packet_unref(packet);
                     continue;
                 }
-                const int sent = avcodec_send_packet(codec, packet);
-                av_packet_unref(packet);
-                if (sent < 0) {
-                    fail("avcodec_send_packet", sent);
+                if (deferred_operation) {
+                    // 出错的包后面还有本流的包：错误在流中间，锁存。
+                    av_packet_unref(packet);
+                    fail(deferred_operation, deferred_code);
                     return false;
                 }
+                const int sent = avcodec_send_packet(codec, packet);
+                av_packet_unref(packet);
+                if (sent < 0 && ! defer_decode_error("avcodec_send_packet", sent)) return false;
                 continue;
             }
             if (code == AVERROR_EOF) {
                 eof = true;
                 return false;
             }
-            fail("avcodec_receive_frame", code);
+            if (! defer_decode_error("avcodec_receive_frame", code)) return false;
+        }
+    }
+
+    // 解码错误（send_packet / receive_frame）是否算"流末尾的错误"，判定只在这里和上面读到下一个包的分支：
+    // 出错前已成功解出过帧，且出错的包是本流最后一个包（或出错时已在 EOF 冲洗），就按正常读完处理——
+    // 已解出的帧照常输出、重采样器照常冲洗，last_error() 为空，循环播放可以从头重开。
+    // 这对应 ffmpeg 命令行跳过解码错误继续读的做法，但只放过末尾：出错之后本流又读到包，
+    // 说明错误在文件中间，照旧锁存这个错误。一帧都没解出就出错也锁存（文件整个不可解）。
+    // 解复用错误（av_read_frame）不在此列，照旧锁存。
+    auto defer_decode_error(const char* operation, int code) -> bool {
+        if (! decoded_any) {
+            fail(operation, code);
             return false;
         }
+        deferred_operation = operation;
+        deferred_code      = code;
+        return true;
     }
 
     auto build_resampler() -> bool {
@@ -248,6 +270,9 @@ struct AudioDecoder::Impl {
     std::uint32_t             pending_frames {};
     bool                      eof {};
     bool                      drained {};
+    bool                      decoded_any {};
+    const char*               deferred_operation {}; // 暂不锁存的解码错误，见 defer_decode_error
+    int                       deferred_code {};
     std::string               error;
 };
 
