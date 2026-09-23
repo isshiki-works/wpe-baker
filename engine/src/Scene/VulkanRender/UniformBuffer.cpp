@@ -82,14 +82,14 @@ MatrixCoordinate SceneMatrixCoordinate(u32 row, u32 column, ShaderMatrixConventi
 namespace detail
 {
 
-class SourceBindingCompiler {
+class SourceBindingCompiler final : public UniformBindingSink {
 public:
     SourceBindingCompiler(const UniformBufferLayout& layout, BoundUniformSource& source,
                           ShaderMatrixConvention convention, ShaderMatrixAbi matrix_abi)
         : m_layout(layout), m_source(source), m_convention(convention), m_matrix_abi(matrix_abi) {}
 
     auto Bind(UniformOutputId output, ref<str> shader_member, UniformValueShape shape)
-        -> Result<bool, UniformError> {
+        -> Result<bool, UniformError> override {
         bool matched = false;
         for (usize index {}; index < m_layout.slots.len(); ++index) {
             const auto& slot = m_layout.slots[index];
@@ -177,19 +177,20 @@ private:
 };
 
 template<typename Binding>
-class SourceValueWriter {
+class SourceValueWriter final : public UniformValueSink {
 public:
     SourceValueWriter(const Binding& binding, const BoundUniformSource& source)
         : m_binding(binding), m_source(source) {}
 
-    bool Wants(UniformOutputId output) const {
+    bool Wants(UniformOutputId output) const override {
         for (const auto& binding : m_source.outputs) {
             if (binding.output == output) return true;
         }
         return false;
     }
 
-    auto Write(UniformOutputId output, UniformValueView value) -> Result<empty, UniformError> {
+    auto Write(UniformOutputId output, UniformValueView value)
+        -> Result<empty, UniformError> override {
         bool wrote = false;
         for (const auto& binding : m_source.outputs) {
             if (binding.output != output) continue;
@@ -260,7 +261,7 @@ private:
     slice<PreparedUniformTextureMetadata>       m_textures;
 };
 
-class UpdateContext {
+class UpdateContext final : public UniformUpdateContext {
 public:
     UpdateContext(ref<SceneFrame> frame, const ResourceSnapshot& resources,
                   SceneRenderViewKind render_view)
@@ -271,9 +272,9 @@ public:
                   SceneRenderViewKind render_view)
         : m_frame(frame), m_resources(resources), m_render_view(render_view) {}
 
-    auto Frame() const -> ref<SceneFrame> { return m_frame; }
-    auto Resources() const -> ref<dyn<UniformResourceView>> { return m_resources; }
-    auto RenderView() const -> SceneRenderViewKind { return m_render_view; }
+    auto Frame() const -> ref<SceneFrame> override { return m_frame; }
+    auto Resources() const -> ref<dyn<UniformResourceView>> override { return m_resources; }
+    auto RenderView() const -> SceneRenderViewKind override { return m_render_view; }
 
 private:
     ref<SceneFrame>               m_frame;
@@ -609,12 +610,12 @@ auto UniformBufferBinding::Update(ref<dyn<UniformBufferFrameContext>>         fr
     detail::ResourceSnapshot resources(frame_context, m_draw_item, m_textures.as_slice());
 
     detail::UpdateContext context_impl(frame_context->Frame(), resources, m_render_view);
-    auto                  context = dyn<UniformUpdateContext>::from_ref(context_impl);
+    const UniformUpdateContext* context = &context_impl;
 
     auto versions = Vec<u64>::with_capacity(m_sources.len());
     bool changed  = force;
     for (auto& bound : m_sources) {
-        u64 version = bound.source->Version(context.as_ref());
+        u64 version = bound.source->Version(context);
         versions.push(rstd::move(version));
         changed = changed || ! bound.evaluated || bound.version != version;
     }
@@ -624,8 +625,8 @@ auto UniformBufferBinding::Update(ref<dyn<UniformBufferFrameContext>>         fr
     usize source_index {};
     for (auto& bound : m_sources) {
         detail::SourceValueWriter writer_impl(*this, bound);
-        auto                      writer = dyn<UniformValueSink>::from_ref(writer_impl);
-        auto evaluated = bound.source->Evaluate(context.as_ref(), writer.as_mut_ref());
+        UniformValueSink*         writer = &writer_impl;
+        auto evaluated = bound.source->Evaluate(context, writer);
         if (evaluated.is_err()) {
             return Err(UniformBufferUpdateError {
                 .message = rstd::move(evaluated).unwrap_err_unchecked().message,
@@ -678,12 +679,12 @@ auto SharedUniformBufferBinding::Update(ref<dyn<UniformBufferFrameContext>>     
     auto                      resources = dyn<UniformResourceView>::from_ref(resources_impl);
     detail::UpdateContext     context_impl(
         frame_context->Frame(), resources.as_ref(), SceneRenderViewKind::Primary);
-    auto context = dyn<UniformUpdateContext>::from_ref(context_impl);
+    const UniformUpdateContext* context = &context_impl;
 
     auto versions = Vec<u64>::with_capacity(m_sources.len());
     bool changed  = ! m_uploaded;
     for (auto& bound : m_sources) {
-        auto version = bound.source->Version(context.as_ref());
+        auto version = bound.source->Version(context);
         versions.push(rstd::move(version));
         changed = changed || ! bound.evaluated || bound.version != version;
     }
@@ -693,8 +694,8 @@ auto SharedUniformBufferBinding::Update(ref<dyn<UniformBufferFrameContext>>     
     usize source_index {};
     for (auto& bound : m_sources) {
         detail::SourceValueWriter writer_impl(*this, bound);
-        auto                      writer = dyn<UniformValueSink>::from_ref(writer_impl);
-        auto evaluated = bound.source->Evaluate(context.as_ref(), writer.as_mut_ref());
+        UniformValueSink*         writer = &writer_impl;
+        auto evaluated = bound.source->Evaluate(context, writer);
         if (evaluated.is_err()) {
             return Err(UniformBufferUpdateError {
                 .message = rstd::move(evaluated).unwrap_err_unchecked().message,
@@ -741,8 +742,8 @@ auto MakeSharedUniformBufferBinding(ref<dyn<UniformBindingPrepareContext>>      
             .priority = attachment.priority,
         };
         detail::SourceBindingCompiler compiler_impl(layout, bound, matrix_convention, matrix_abi);
-        auto                          compiler  = dyn<UniformBindingSink>::from_ref(compiler_impl);
-        auto                          described = bound.source->Describe(compiler.as_mut_ref());
+        UniformBindingSink*           compiler  = &compiler_impl;
+        auto                          described = bound.source->Describe(compiler);
         if (described.is_err()) {
             return Err(UniformBufferUpdateError {
                 .message = rstd::move(described).unwrap_err_unchecked().message,
@@ -832,8 +833,8 @@ auto MakeUniformBufferBinding(ref<dyn<UniformBindingPrepareContext>> prepare,
             .priority = candidate.priority,
         };
         detail::SourceBindingCompiler compiler_impl(layout, bound, matrix_convention, matrix_abi);
-        auto                          compiler  = dyn<UniformBindingSink>::from_ref(compiler_impl);
-        auto                          described = bound.source->Describe(compiler.as_mut_ref());
+        UniformBindingSink*           compiler  = &compiler_impl;
+        auto                          described = bound.source->Describe(compiler);
         if (described.is_err()) {
             return Err(UniformBufferUpdateError {
                 .message = rstd::move(described).unwrap_err_unchecked().message,

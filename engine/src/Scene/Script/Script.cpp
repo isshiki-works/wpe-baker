@@ -439,7 +439,7 @@ struct EngineHostState {
         AudioBufferSlot { .resolution = 64 },
     };
     Option<Arc<AudioResponseDemand>>      audio_response_demand;
-    Option<Box<dyn<UniformBindingLease>>> audio_response_lease;
+    Option<std::unique_ptr<UniformBindingLease>> audio_response_lease;
     // Cached `globalThis.Vec3` ctor, populated lazily on first node access.
     // Used by the SceneNode wrapper to hand back Vec3 instances so scripts
     // can call `.add` / `.subtract` on `thisLayer.origin`.

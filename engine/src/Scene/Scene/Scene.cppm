@@ -2581,7 +2581,7 @@ public:
     AudioResponseDemand();
     ~AudioResponseDemand();
 
-    auto Acquire() -> Box<dyn<UniformBindingLease>>;
+    auto Acquire() -> std::unique_ptr<UniformBindingLease>;
     void SetCallback(Option<Callback> callback);
     template<typename F>
     void SetCallback(F callback) {

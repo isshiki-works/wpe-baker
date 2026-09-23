@@ -119,7 +119,7 @@ struct BoundUniformSource {
     ref<dyn<UniformSource>>               source;
     i32                                   priority {};
     Vec<BoundUniformOutput>               outputs;
-    Option<Box<dyn<UniformBindingLease>>> lease;
+    Option<std::unique_ptr<UniformBindingLease>> lease;
     u64                                   version { 0 };
     bool                                  evaluated { false };
 };

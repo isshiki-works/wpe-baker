@@ -72,7 +72,7 @@ public:
         m_demand = rstd::Some(rstd::move(demand));
     }
 
-    auto Describe(rstd::mut_ref<rstd::dyn<owe::UniformBindingSink>> sink) const
+    auto Describe(owe::UniformBindingSink* sink) const
         -> rstd::Result<rstd::empty, owe::UniformError> {
         auto result = sink->Bind(m_output,
                                  rstd::cppstd::as_str(m_name).unwrap(),
@@ -80,18 +80,18 @@ public:
         if (result.is_err()) return rstd::Err(std::move(result).unwrap_err_unchecked());
         return rstd::Ok(rstd::empty {});
     }
-    auto Version(rstd::ref<rstd::dyn<owe::UniformUpdateContext>>) const -> rstd::u64 {
+    auto Version(const owe::UniformUpdateContext*) const -> rstd::u64 {
         return m_state->version;
     }
-    auto Evaluate(rstd::ref<rstd::dyn<owe::UniformUpdateContext>>,
-                  rstd::mut_ref<rstd::dyn<owe::UniformValueSink>> sink) const
+    auto Evaluate(const owe::UniformUpdateContext*,
+                  owe::UniformValueSink* sink) const
         -> rstd::Result<rstd::empty, owe::UniformError> {
         if (! sink->Wants(m_output)) return rstd::Ok(rstd::empty {});
         auto value = owe::UniformValue(m_state->value);
         return sink->Write(m_output, value.View());
     }
     auto AcquireBindingLease() const
-        -> rstd::Option<rstd::boxed::Box<rstd::dyn<owe::UniformBindingLease>>> {
+        -> rstd::Option<std::unique_ptr<owe::UniformBindingLease>> {
         if (m_demand.is_none()) return rstd::None();
         return rstd::Some((*m_demand)->Acquire());
     }
@@ -105,18 +105,18 @@ private:
 
 class TextureMetadataSource {
 public:
-    auto Describe(rstd::mut_ref<rstd::dyn<owe::UniformBindingSink>> sink) const
+    auto Describe(owe::UniformBindingSink* sink) const
         -> rstd::Result<rstd::empty, owe::UniformError> {
         auto result =
             sink->Bind(m_output, "texture_extent"_str, owe::UniformValueShape::Float(rstd::u32(4)));
         if (result.is_err()) return rstd::Err(rstd::move(result).unwrap_err_unchecked());
         return rstd::Ok(rstd::empty {});
     }
-    auto Version(rstd::ref<rstd::dyn<owe::UniformUpdateContext>> context) const -> rstd::u64 {
+    auto Version(const owe::UniformUpdateContext* context) const -> rstd::u64 {
         return context->Frame()->revision;
     }
-    auto Evaluate(rstd::ref<rstd::dyn<owe::UniformUpdateContext>> context,
-                  rstd::mut_ref<rstd::dyn<owe::UniformValueSink>> sink) const
+    auto Evaluate(const owe::UniformUpdateContext* context,
+                  owe::UniformValueSink* sink) const
         -> rstd::Result<rstd::empty, owe::UniformError> {
         if (! sink->Wants(m_output)) return rstd::Ok(rstd::empty {});
         auto texture = context->Resources()->Texture(rstd::usize());
@@ -130,7 +130,7 @@ public:
         return sink->Write(m_output, value.View());
     }
     auto AcquireBindingLease() const
-        -> rstd::Option<rstd::boxed::Box<rstd::dyn<owe::UniformBindingLease>>> {
+        -> rstd::Option<std::unique_ptr<owe::UniformBindingLease>> {
         return rstd::None();
     }
 

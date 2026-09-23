@@ -1,4 +1,5 @@
 module;
+#include <new>
 
 #include <rstd/macro.hpp>
 
@@ -33,7 +34,7 @@ struct AudioResponseDemand::State {
     Mutex<Fields> fields { Fields {} };
 };
 
-struct AudioResponseDemand::Lease {
+struct AudioResponseDemand::Lease final : UniformBindingLease {
     Weak<State> state;
 
     explicit Lease(Weak<State> value): state(rstd::move(value)) {}
@@ -46,7 +47,7 @@ struct AudioResponseDemand::Lease {
         if (owner) AudioResponseDemand::Update(*owner, i32(-1));
     }
 
-    void KeepAlive() const {}
+    void KeepAlive() const override {}
 };
 
 void AudioResponseDemand::Update(State& state, i32 delta) {
@@ -69,9 +70,9 @@ void AudioResponseDemand::Update(State& state, i32 delta) {
 AudioResponseDemand::AudioResponseDemand(): m_state(Arc<State>::make()) {}
 AudioResponseDemand::~AudioResponseDemand() = default;
 
-auto AudioResponseDemand::Acquire() -> Box<dyn<UniformBindingLease>> {
+auto AudioResponseDemand::Acquire() -> std::unique_ptr<UniformBindingLease> {
     Update(*m_state, i32(1));
-    return Box<dyn<UniformBindingLease>>::make(Lease(m_state.downgrade()));
+    return std::make_unique<Lease>(m_state.downgrade());
 }
 
 void AudioResponseDemand::SetCallback(Option<Callback> callback) {

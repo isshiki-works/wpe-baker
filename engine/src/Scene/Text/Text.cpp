@@ -792,7 +792,7 @@ std::shared_ptr<owe::SceneShader> GetTextCopyBackgroundSceneShader() {
     return shader;
 }
 
-auto TextUniformSource::Describe(rstd::mut_ref<rstd::dyn<UniformBindingSink>> sink) const
+auto TextUniformSource::Describe(UniformBindingSink* sink) const
     -> rstd::Result<rstd::empty, UniformError> {
     auto bind = [&](TextUniformOutput output, ref<str> name) {
         return sink->Bind(
@@ -809,13 +809,13 @@ auto TextUniformSource::Describe(rstd::mut_ref<rstd::dyn<UniformBindingSink>> si
     return rstd::Ok(rstd::empty {});
 }
 
-auto TextUniformSource::Version(rstd::ref<rstd::dyn<UniformUpdateContext>> context) const
+auto TextUniformSource::Version(const UniformUpdateContext* context) const
     -> rstd::u64 {
     return context->Frame()->revision;
 }
 
-auto TextUniformSource::Evaluate(rstd::ref<rstd::dyn<UniformUpdateContext>>,
-                                 rstd::mut_ref<rstd::dyn<UniformValueSink>> sink) const
+auto TextUniformSource::Evaluate(const UniformUpdateContext*,
+                                 UniformValueSink* sink) const
     -> rstd::Result<rstd::empty, UniformError> {
     if (! m_state || m_state->camera.is_none()) return rstd::Ok(rstd::empty {});
 

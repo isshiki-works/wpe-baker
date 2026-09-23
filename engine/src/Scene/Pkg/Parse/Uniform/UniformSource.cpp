@@ -1,4 +1,5 @@
 module;
+#include <new>
 
 #include <algorithm>
 #include <cmath>
@@ -28,16 +29,18 @@ namespace
 {
 
 template<typename T>
-struct ArcUniformBindingLease {
+struct ArcUniformBindingLease final : UniformBindingLease {
+    explicit ArcUniformBindingLease(Arc<T> value): state(rstd::move(value)) {}
+
     Arc<T> state;
 
-    void KeepAlive() const {}
+    void KeepAlive() const override {}
 };
 
 template<typename T>
-auto MakeArcUniformBindingLease(const Arc<T>& state) -> Option<Box<dyn<UniformBindingLease>>> {
-    return Some(
-        Box<dyn<UniformBindingLease>>::make(ArcUniformBindingLease<T> { .state = state.clone() }));
+auto MakeArcUniformBindingLease(const Arc<T>& state) -> Option<std::unique_ptr<UniformBindingLease>> {
+    return Some(std::unique_ptr<UniformBindingLease>(
+        std::make_unique<ArcUniformBindingLease<T>>(state.clone())));
 }
 
 float Smooth(float value) { return value * value * (3.0f - 2.0f * value); }
@@ -104,7 +107,7 @@ Vector2f ShakeOffset(float x, float roughness) {
 
 class UniformWriter {
 public:
-    explicit UniformWriter(mut_ref<dyn<UniformValueSink>> sink): m_sink(sink) {}
+    explicit UniformWriter(UniformValueSink* sink): m_sink(sink) {}
 
     template<typename Output>
     bool Wants(Output output) {
@@ -142,27 +145,27 @@ public:
     }
 
 private:
-    mut_ref<dyn<UniformValueSink>> m_sink;
+    UniformValueSink* m_sink;
     String                         m_error;
     bool                           m_failed { false };
 };
 
 template<typename Output>
-auto Bind(mut_ref<dyn<UniformBindingSink>> sink, Output output, ref<str> name,
+auto Bind(UniformBindingSink* sink, Output output, ref<str> name,
           UniformValueShape shape) -> Result<empty, UniformError> {
     auto result = sink->Bind(ToUniformOutput(output), name, shape);
     if (result.is_err()) return Err(rstd::move(result).unwrap_err_unchecked());
     return Ok(empty {});
 }
 
-auto Bind(mut_ref<dyn<UniformBindingSink>> sink, UniformOutputId output, ref<str> name,
+auto Bind(UniformBindingSink* sink, UniformOutputId output, ref<str> name,
           UniformValueShape shape) -> Result<empty, UniformError> {
     auto result = sink->Bind(output, name, shape);
     if (result.is_err()) return Err(rstd::move(result).unwrap_err_unchecked());
     return Ok(empty {});
 }
 
-auto BindGlobalProducer(mut_ref<dyn<UniformBindingSink>> sink, GlobalUniformProducer producer)
+auto BindGlobalProducer(UniformBindingSink* sink, GlobalUniformProducer producer)
     -> Result<empty, UniformError> {
     for (const auto& field : GlobalUniformFields()) {
         if (field.producer != producer) continue;
@@ -184,7 +187,7 @@ struct BindingEntry {
 };
 
 template<typename Output, std::size_t N>
-auto BindEntries(mut_ref<dyn<UniformBindingSink>>            sink,
+auto BindEntries(UniformBindingSink*            sink,
                  const rstd::array<BindingEntry<Output>, N>& entries)
     -> Result<empty, UniformError> {
     for (const auto& entry : entries) {
@@ -539,7 +542,7 @@ void UniformSceneState::ApplyUserProperty(std::string_view field, const NJson& p
     }
 }
 
-auto TransformUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
+auto TransformUniformSource::Describe(UniformBindingSink* sink) const
     -> Result<empty, UniformError> {
     using Output = TransformUniformOutput;
     auto model   = Bind(sink, Output::Model, G_M, UniformValueShape::Matrix(u32(4), u32(4)));
@@ -579,12 +582,12 @@ auto TransformUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) con
     return BindEntries(sink, entries);
 }
 
-auto TransformUniformSource::Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+auto TransformUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
     return context->Frame()->revision;
 }
 
-auto TransformUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
-                                      mut_ref<dyn<UniformValueSink>> sink) const
+auto TransformUniformSource::Evaluate(const UniformUpdateContext* context,
+                                      UniformValueSink* sink) const
     -> Result<empty, UniformError> {
     auto camera_ref = m_node->camera_resolver->Resolve(*m_node->node);
     if (camera_ref.is_none()) return Ok(empty {});
@@ -727,7 +730,7 @@ auto TransformUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
     return writer.Finish();
 }
 
-auto FrameUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
+auto FrameUniformSource::Describe(UniformBindingSink* sink) const
     -> Result<empty, UniformError> {
     using Output = FrameUniformOutput;
     auto global  = BindGlobalProducer(sink, GlobalUniformProducer::Frame);
@@ -741,12 +744,12 @@ auto FrameUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
     return BindEntries(sink, entries);
 }
 
-auto FrameUniformSource::Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+auto FrameUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
     return context->Frame()->revision;
 }
 
-auto FrameUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
-                                  mut_ref<dyn<UniformValueSink>> sink) const
+auto FrameUniformSource::Evaluate(const UniformUpdateContext* context,
+                                  UniformValueSink* sink) const
     -> Result<empty, UniformError> {
     using Output = FrameUniformOutput;
     UniformWriter writer(sink);
@@ -784,26 +787,26 @@ auto FrameUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
     return writer.Finish();
 }
 
-auto AudioUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
+auto AudioUniformSource::Describe(UniformBindingSink* sink) const
     -> Result<empty, UniformError> {
     return BindGlobalProducer(sink, GlobalUniformProducer::Audio);
 }
 
-auto AudioUniformSource::Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+auto AudioUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
     return context->Frame()->revision;
 }
 
-auto AudioUniformSource::AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>> {
+auto AudioUniformSource::AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> {
     return Some(m_state->AcquireAudioResponse());
 }
 
 auto ParticleTrailUniformSource::AcquireBindingLease() const
-    -> Option<Box<dyn<UniformBindingLease>>> {
+    -> Option<std::unique_ptr<UniformBindingLease>> {
     return MakeArcUniformBindingLease(m_state);
 }
 
-auto AudioUniformSource::Evaluate(ref<dyn<UniformUpdateContext>>,
-                                  mut_ref<dyn<UniformValueSink>> sink) const
+auto AudioUniformSource::Evaluate(const UniformUpdateContext*,
+                                  UniformValueSink* sink) const
     -> Result<empty, UniformError> {
     using Output = AudioUniformOutput;
     UniformWriter writer(sink);
@@ -821,7 +824,7 @@ auto AudioUniformSource::Evaluate(ref<dyn<UniformUpdateContext>>,
     return writer.Finish();
 }
 
-auto ColorUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
+auto ColorUniformSource::Describe(UniformBindingSink* sink) const
     -> Result<empty, UniformError> {
     using Output = ColorUniformOutput;
     const rstd::array<BindingEntry<Output>, 5> entries {
@@ -834,12 +837,12 @@ auto ColorUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
     return BindEntries(sink, entries);
 }
 
-auto ColorUniformSource::Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+auto ColorUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
     return context->Frame()->revision;
 }
 
-auto ColorUniformSource::Evaluate(ref<dyn<UniformUpdateContext>>,
-                                  mut_ref<dyn<UniformValueSink>> sink) const
+auto ColorUniformSource::Evaluate(const UniformUpdateContext*,
+                                  UniformValueSink* sink) const
     -> Result<empty, UniformError> {
     using Output = ColorUniformOutput;
     UniformWriter writer(sink);
@@ -875,17 +878,17 @@ auto ColorUniformSource::Evaluate(ref<dyn<UniformUpdateContext>>,
     return writer.Finish();
 }
 
-auto LightUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
+auto LightUniformSource::Describe(UniformBindingSink* sink) const
     -> Result<empty, UniformError> {
     return BindGlobalProducer(sink, GlobalUniformProducer::Light);
 }
 
-auto LightUniformSource::Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+auto LightUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
     return context->Frame()->revision;
 }
 
-auto LightUniformSource::Evaluate(ref<dyn<UniformUpdateContext>>,
-                                  mut_ref<dyn<UniformValueSink>> sink) const
+auto LightUniformSource::Evaluate(const UniformUpdateContext*,
+                                  UniformValueSink* sink) const
     -> Result<empty, UniformError> {
     using Output = LightUniformOutput;
     UniformWriter          writer(sink);
@@ -943,17 +946,17 @@ auto LightUniformSource::Evaluate(ref<dyn<UniformUpdateContext>>,
     return writer.Finish();
 }
 
-auto ShadowUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
+auto ShadowUniformSource::Describe(UniformBindingSink* sink) const
     -> Result<empty, UniformError> {
     return BindGlobalProducer(sink, GlobalUniformProducer::Shadow);
 }
 
-auto ShadowUniformSource::Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+auto ShadowUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
     return context->Frame()->revision;
 }
 
-auto ShadowUniformSource::Evaluate(ref<dyn<UniformUpdateContext>>,
-                                   mut_ref<dyn<UniformValueSink>> sink) const
+auto ShadowUniformSource::Evaluate(const UniformUpdateContext*,
+                                   UniformValueSink* sink) const
     -> Result<empty, UniformError> {
     using Output = ShadowUniformOutput;
     UniformWriter writer(sink);
@@ -1029,7 +1032,7 @@ auto ShadowUniformSource::Evaluate(ref<dyn<UniformUpdateContext>>,
     return writer.Finish();
 }
 
-auto TextureUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
+auto TextureUniformSource::Describe(UniformBindingSink* sink) const
     -> Result<empty, UniformError> {
     for (usize index {}; index < WE_GLTEX_NAMES.len(); ++index) {
         auto resolution = Bind(sink,
@@ -1061,12 +1064,12 @@ auto TextureUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
     return Ok(empty {});
 }
 
-auto TextureUniformSource::Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+auto TextureUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
     return context->Frame()->revision;
 }
 
-auto TextureUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
-                                    mut_ref<dyn<UniformValueSink>> sink) const
+auto TextureUniformSource::Evaluate(const UniformUpdateContext* context,
+                                    UniformValueSink* sink) const
     -> Result<empty, UniformError> {
     UniformWriter writer(sink);
     auto          resources = context->Resources();
@@ -1096,7 +1099,7 @@ auto TextureUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
     return writer.Finish();
 }
 
-auto ParticleTrailUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
+auto ParticleTrailUniformSource::Describe(UniformBindingSink* sink) const
     -> Result<empty, UniformError> {
     return Bind(sink,
                 ParticleTrailUniformOutput::RenderVar0,
@@ -1104,19 +1107,19 @@ auto ParticleTrailUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink)
                 UniformValueShape::Float(u32(4)));
 }
 
-auto ParticleTrailUniformSource::Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+auto ParticleTrailUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
     return context->Frame()->revision;
 }
 
-auto ParticleTrailUniformSource::Evaluate(ref<dyn<UniformUpdateContext>>,
-                                          mut_ref<dyn<UniformValueSink>> sink) const
+auto ParticleTrailUniformSource::Evaluate(const UniformUpdateContext*,
+                                          UniformValueSink* sink) const
     -> Result<empty, UniformError> {
     UniformWriter writer(sink);
     writer.Write(ParticleTrailUniformOutput::RenderVar0, m_state->render_var);
     return writer.Finish();
 }
 
-auto PuppetUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
+auto PuppetUniformSource::Describe(UniformBindingSink* sink) const
     -> Result<empty, UniformError> {
     auto bones = Bind(sink,
                       PuppetUniformOutput::Bones,
@@ -1129,12 +1132,12 @@ auto PuppetUniformSource::Describe(mut_ref<dyn<UniformBindingSink>> sink) const
                 UniformValueShape::FloatRange(u32(4), u32(1024)));
 }
 
-auto PuppetUniformSource::Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+auto PuppetUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
     return context->Frame()->revision;
 }
 
-auto PuppetUniformSource::Evaluate(ref<dyn<UniformUpdateContext>> context,
-                                   mut_ref<dyn<UniformValueSink>> sink) const
+auto PuppetUniformSource::Evaluate(const UniformUpdateContext* context,
+                                   UniformValueSink* sink) const
     -> Result<empty, UniformError> {
     UniformWriter writer(sink);
     const double  time = context->Frame()->elapsed.to_primitive();

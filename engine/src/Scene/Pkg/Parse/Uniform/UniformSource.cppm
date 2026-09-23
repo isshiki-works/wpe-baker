@@ -247,7 +247,7 @@ public:
     void SetAudioSpectrum(const scene_audio::Buffers&);
     void Advance(const SceneFrame&);
     void ApplyUserProperty(std::string_view, const NJson&);
-    auto AcquireAudioResponse() const -> Box<dyn<UniformBindingLease>> {
+    auto AcquireAudioResponse() const -> std::unique_ptr<UniformBindingLease> {
         return m_audio_demand->Acquire();
     }
 
@@ -309,11 +309,11 @@ public:
     TransformUniformSource(Arc<UniformSceneState> state, Arc<UniformNodeState> node)
         : m_state(rstd::move(state)), m_node(rstd::move(node)) {}
 
-    auto Describe(mut_ref<dyn<UniformBindingSink>>) const -> Result<empty, UniformError>;
-    auto Version(ref<dyn<UniformUpdateContext>>) const -> u64;
-    auto Evaluate(ref<dyn<UniformUpdateContext>>, mut_ref<dyn<UniformValueSink>>) const
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
+    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>> { return None(); }
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
 
 private:
     Arc<UniformSceneState> m_state;
@@ -324,11 +324,11 @@ class FrameUniformSource {
 public:
     explicit FrameUniformSource(Arc<UniformSceneState> state): m_state(rstd::move(state)) {}
 
-    auto Describe(mut_ref<dyn<UniformBindingSink>>) const -> Result<empty, UniformError>;
-    auto Version(ref<dyn<UniformUpdateContext>>) const -> u64;
-    auto Evaluate(ref<dyn<UniformUpdateContext>>, mut_ref<dyn<UniformValueSink>>) const
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
+    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>> { return None(); }
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
 
 private:
     Arc<UniformSceneState> m_state;
@@ -338,11 +338,11 @@ class AudioUniformSource {
 public:
     explicit AudioUniformSource(Arc<UniformSceneState> state): m_state(rstd::move(state)) {}
 
-    auto Describe(mut_ref<dyn<UniformBindingSink>>) const -> Result<empty, UniformError>;
-    auto Version(ref<dyn<UniformUpdateContext>>) const -> u64;
-    auto Evaluate(ref<dyn<UniformUpdateContext>>, mut_ref<dyn<UniformValueSink>>) const
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
+    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>>;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>>;
 
 private:
     Arc<UniformSceneState> m_state;
@@ -352,11 +352,11 @@ class ColorUniformSource {
 public:
     explicit ColorUniformSource(Arc<SceneNode> node): m_node(rstd::move(node)) {}
 
-    auto Describe(mut_ref<dyn<UniformBindingSink>>) const -> Result<empty, UniformError>;
-    auto Version(ref<dyn<UniformUpdateContext>>) const -> u64;
-    auto Evaluate(ref<dyn<UniformUpdateContext>>, mut_ref<dyn<UniformValueSink>>) const
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
+    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>> { return None(); }
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
 
 private:
     Arc<SceneNode> m_node;
@@ -366,11 +366,11 @@ class LightUniformSource {
 public:
     explicit LightUniformSource(Vec<ref<SceneLight>> lights): m_lights(rstd::move(lights)) {}
 
-    auto Describe(mut_ref<dyn<UniformBindingSink>>) const -> Result<empty, UniformError>;
-    auto Version(ref<dyn<UniformUpdateContext>>) const -> u64;
-    auto Evaluate(ref<dyn<UniformUpdateContext>>, mut_ref<dyn<UniformValueSink>>) const
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
+    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>> { return None(); }
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
 
 private:
     Vec<ref<SceneLight>> m_lights;
@@ -381,11 +381,11 @@ public:
     ShadowUniformSource(Arc<SceneCamera> camera, ref<SceneLight> light)
         : m_camera(rstd::move(camera)), m_light(light) {}
 
-    auto Describe(mut_ref<dyn<UniformBindingSink>>) const -> Result<empty, UniformError>;
-    auto Version(ref<dyn<UniformUpdateContext>>) const -> u64;
-    auto Evaluate(ref<dyn<UniformUpdateContext>>, mut_ref<dyn<UniformValueSink>>) const
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
+    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>> { return None(); }
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
 
 private:
     Arc<SceneCamera> m_camera;
@@ -394,11 +394,11 @@ private:
 
 class TextureUniformSource {
 public:
-    auto Describe(mut_ref<dyn<UniformBindingSink>>) const -> Result<empty, UniformError>;
-    auto Version(ref<dyn<UniformUpdateContext>>) const -> u64;
-    auto Evaluate(ref<dyn<UniformUpdateContext>>, mut_ref<dyn<UniformValueSink>>) const
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
+    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>> { return None(); }
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
 };
 
 class ParticleTrailUniformSource {
@@ -406,11 +406,11 @@ public:
     explicit ParticleTrailUniformSource(Arc<ParticleTrailUniformState> state)
         : m_state(rstd::move(state)) {}
 
-    auto Describe(mut_ref<dyn<UniformBindingSink>>) const -> Result<empty, UniformError>;
-    auto Version(ref<dyn<UniformUpdateContext>>) const -> u64;
-    auto Evaluate(ref<dyn<UniformUpdateContext>>, mut_ref<dyn<UniformValueSink>>) const
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
+    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>>;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>>;
 
 private:
     Arc<ParticleTrailUniformState> m_state;
@@ -420,11 +420,11 @@ class PuppetUniformSource {
 public:
     explicit PuppetUniformSource(Arc<PuppetLayer> layer): m_layer(rstd::move(layer)) {}
 
-    auto Describe(mut_ref<dyn<UniformBindingSink>>) const -> Result<empty, UniformError>;
-    auto Version(ref<dyn<UniformUpdateContext>>) const -> u64;
-    auto Evaluate(ref<dyn<UniformUpdateContext>>, mut_ref<dyn<UniformValueSink>>) const
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
+    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>> { return None(); }
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
 
 private:
     Arc<PuppetLayer> m_layer;
