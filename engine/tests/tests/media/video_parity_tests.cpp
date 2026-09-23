@@ -94,6 +94,7 @@ struct Pair {
     owe::media::VideoSource          new_decoder;
     wavsen::video::Nv12Frame         old_reused;
     owe::media::Nv12Frame            new_reused;
+    std::uint32_t                    width {}, height {};
 
     auto pull_old(bool reuse) -> Pull {
         wavsen::video::Nv12Frame fresh;
@@ -145,6 +146,8 @@ struct Pair {
         EXPECT_EQ(std::memcmp(&a.pts, &b.pts, sizeof(double)), 0) << where << " pts " << a.pts << " vs " << b.pts;
         EXPECT_EQ(a.colorspace, b.colorspace) << where;
         EXPECT_EQ(a.color_range, b.color_range) << where;
+        // 奇数目标尺寸：wavsen 先补成偶数再缩放，VideoSource 按原尺寸解码（T5b-B），像素不可比，只比上面几项。
+        if (((width | height) & 1u) != 0) return a.status;
         EXPECT_EQ(a.data.size(), b.data.size()) << where;
         if (a.data.size() == b.data.size() && a.data != b.data) {
             std::size_t i = 0;
@@ -198,7 +201,7 @@ TEST(VideoParity, DecodeSeekLoopMetadata) {
                         std::string(new_decoder.last_error()).c_str());
             continue;
         }
-        Pair pair { std::move(old_open).unwrap(), std::move(new_decoder), {}, {} };
+        Pair pair { std::move(old_open).unwrap(), std::move(new_decoder), {}, {}, fx.width, fx.height };
 
         // 时长与元数据（runtime_video_decoders、PublishPeriodMetadata 都从这里来）。
         const auto old_duration = pair.old_decoder->duration();

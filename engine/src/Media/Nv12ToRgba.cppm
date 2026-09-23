@@ -8,7 +8,8 @@ import wescene.vk;
 
 // NV12 → RGBA8 转换（T5b，迁自 wavsen yuv_to_rgba.cpp 的软件路径）。
 // 只有软件解码帧这一条路：硬解帧的导入、BridgeForeign 的导出信号量不在这里。
-// 计算着色器、采样器、上传与屏障逐项照旧，输出与 wavsen 逐字节相同（对拍：media-nv12-parity-tests）。
+// 计算着色器、采样器、上传与屏障逐项照旧，偶数尺寸输出与 wavsen 逐字节相同（对拍：media-nv12-parity-tests）；
+// 奇数尺寸 wavsen 拒绝，这里支持（media-nv12-tests）。
 export namespace owe::media
 {
 
@@ -26,8 +27,7 @@ auto MakeYuvColorMatrix(std::uint32_t colorspace, std::uint32_t range) -> YuvCol
 
 class Nv12ToRgba {
 public:
-    // 计算着色器 GLSL 源码。调用方用引擎的着色器编译路径编成 SPIR-V 交给 Create；
-    // 传 ShaderCompOpt{.target = Vulkan_1_0} 得到的 SPIR-V 与 wavsen 构建时内嵌的逐字节相同。
+    // 计算着色器 GLSL 源码。调用方用引擎的着色器编译路径编成 SPIR-V 交给 Create。
     static auto ShaderSource() -> std::string_view;
 
     // 上传用的 Y/UV 平面与暂存缓冲按 max_w × max_h（奇数先补成偶数）一次分配，之后的帧都不能超过它。
@@ -41,7 +41,8 @@ public:
     Nv12ToRgba& operator=(const Nv12ToRgba&) = delete;
     ~Nv12ToRgba();
 
-    // 把 width × height 的 NV12（Y 平面行距 width，其后 UV 交错平面行距 width）写进 dst 左上角。
+    // 把 width × height 的 NV12 写进 dst 左上角。宽高可以是奇数：Y 平面 width × height 紧密排列，
+    // 其后 UV 交错平面 ceil(width/2) × ceil(height/2) 个 (U,V) 对紧密排列（行距 2×ceil(width/2) 字节）。
     // dst：RGBA8、带 STORAGE 用途，调用前后都在 SHADER_READ_ONLY_OPTIMAL（片元着色器读）。
     // 提交到构造时给的队列后即返回，不等 GPU；下一次 Convert 或析构才等上一次完成。
     // 失败返回 false，原因见 last_error()。
