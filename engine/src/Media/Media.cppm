@@ -101,11 +101,9 @@ private:
 
 // ---- 视频（T5b）：原 wavsen::video::VideoDecoder 的软件解码路径 ----
 
-// 一帧 NV12：Y 平面 width*height 字节，后接交错 UV 平面 width*height/2 字节。
+// 一帧 NV12（尺寸 = 解码器的目标尺寸）：Y 平面 w*h 字节，后接交错 UV 平面 w*h/2 字节。
 struct Nv12Frame {
     std::vector<std::uint8_t> data;
-    std::uint32_t             width {};
-    std::uint32_t             height {};
     double                    pts_seconds { -1.0 };
     // 产出这帧的 swscale 所用矩阵与范围，编号同 wavsen：
     // colorspace 0 = BT.709、1 = BT.601、2 = BT.2020；color_range 0 = limited、1 = full。
@@ -150,7 +148,6 @@ public:
     VideoSource();
     ~VideoSource();
     VideoSource(VideoSource&&) noexcept;
-    auto operator=(VideoSource&&) noexcept -> VideoSource&;
 
     // 目标尺寸为奇数时各加 1（NV12 色度减半）。打开失败返回 false，原因见 last_error()。
     // 其余成员都只能在 open() 成功之后调用。

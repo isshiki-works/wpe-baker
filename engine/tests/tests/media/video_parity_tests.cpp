@@ -85,7 +85,6 @@ struct Pull {
     int                       status {};
     std::string               error;
     std::vector<std::uint8_t> data;
-    std::uint32_t             width {}, height {};
     double                    pts {};
     std::uint32_t             colorspace {}, color_range {};
 };
@@ -109,8 +108,6 @@ struct Pair {
         EXPECT_NE(*r, wavsen::video::NextFrame::Eof);
         p.status      = *r == wavsen::video::NextFrame::Looped ? 1 : 0;
         p.data.assign(frame.data.data(), frame.data.data() + frame.data.len().to_primitive());
-        p.width       = frame.width.to_primitive();
-        p.height      = frame.height.to_primitive();
         p.pts         = frame.pts_seconds.to_primitive();
         p.colorspace  = frame.colorspace.to_primitive();
         p.color_range = frame.color_range.to_primitive();
@@ -129,8 +126,6 @@ struct Pair {
         }
         p.status      = *r == owe::media::NextFrame::Looped ? 1 : 0;
         p.data        = frame.data;
-        p.width       = frame.width;
-        p.height      = frame.height;
         p.pts         = frame.pts_seconds;
         p.colorspace  = frame.colorspace;
         p.color_range = frame.color_range;
@@ -147,8 +142,6 @@ struct Pair {
         if (a.status == 1) ++loops;
         EXPECT_EQ(a.status, b.status) << where;
         EXPECT_EQ(a.error, b.error) << where;
-        EXPECT_EQ(a.width, b.width) << where;
-        EXPECT_EQ(a.height, b.height) << where;
         EXPECT_EQ(std::memcmp(&a.pts, &b.pts, sizeof(double)), 0) << where << " pts " << a.pts << " vs " << b.pts;
         EXPECT_EQ(a.colorspace, b.colorspace) << where;
         EXPECT_EQ(a.color_range, b.color_range) << where;

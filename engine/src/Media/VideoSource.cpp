@@ -2,9 +2,6 @@ module;
 // make_unique 之前先包含 <new>，避开 clang 22 的 operator new 歧义。
 #include <new>
 
-#include <math.h>
-#include <stdlib.h>
-
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -36,9 +33,8 @@ auto av_err_str(int rc) -> std::string {
 }
 
 // 与 TextureCache 原来的 RangeInputStream + wavsen avio_read_shim 合起来的语义：
-// 读错回 EIO、读到 0 字节回 EOF；AVSEEK_SIZE 回区间长度；带其他标志位的 whence 一律失败。
+// 读错回 EIO、读到 0 字节回 EOF；AVSEEK_SIZE 回区间长度。
 int avio_read_cb(void* opaque, std::uint8_t* buf, int size) {
-    if (size <= 0) return AVERROR_EOF;
     auto* source = static_cast<owe::io::RangeReader*>(opaque);
     auto  result = source->read(buf, static_cast<std::size_t>(size));
     if (result.is_err()) return AVERROR(EIO);
@@ -49,17 +45,9 @@ int avio_read_cb(void* opaque, std::uint8_t* buf, int size) {
 std::int64_t avio_seek_cb(void* opaque, std::int64_t offset, int whence) {
     auto* source = static_cast<owe::io::RangeReader*>(opaque);
     if (whence == AVSEEK_SIZE) return static_cast<std::int64_t>(source->len());
-    owe::io::SeekFrom from;
-    switch (whence) {
-    case SEEK_SET:
-        if (offset < 0) return -1;
-        from = owe::io::SeekFrom::from_start(static_cast<std::uint64_t>(offset));
-        break;
-    case SEEK_CUR: from = owe::io::SeekFrom::from_current(offset); break;
-    case SEEK_END: from = owe::io::SeekFrom::from_end(offset); break;
-    default: return -1;
-    }
-    auto result = source->seek(from);
+    // avio 只以 SEEK_SET 回调（avio_seek 先把 SEEK_CUR 换算成绝对位置；AVSEEK_SIZE 有值就不走 SEEK_END）。
+    if (whence != SEEK_SET) return -1;
+    auto result = source->seek(owe::io::SeekFrom::from_start(static_cast<std::uint64_t>(offset)));
     return result.is_ok() ? static_cast<std::int64_t>(*result) : -1;
 }
 
@@ -260,11 +248,7 @@ struct VideoSource::Impl {
 
         // 输出缓冲按 NV12 尺寸定长（解码器生命周期内尺寸固定）。
         const std::size_t want = std::size_t(target_width) * target_height * 3 / 2;
-        if (out.width != target_width || out.height != target_height || out.data.size() != want) {
-            out.width  = target_width;
-            out.height = target_height;
-            out.data.resize(want, 0);
-        }
+        if (out.data.size() != want) out.data.resize(want, 0);
 
         while (true) {
             int rc = avcodec_receive_frame(cctx, src_frame);
@@ -369,7 +353,6 @@ struct VideoSource::Impl {
 VideoSource::VideoSource()                                           = default;
 VideoSource::~VideoSource()                                          = default;
 VideoSource::VideoSource(VideoSource&&) noexcept                     = default;
-auto VideoSource::operator=(VideoSource&&) noexcept -> VideoSource& = default;
 
 auto VideoSource::open(owe::io::RangeReader source, std::uint32_t target_width,
                        std::uint32_t target_height) -> bool {
@@ -382,7 +365,7 @@ auto VideoSource::next_frame(Nv12Frame& out) -> std::optional<NextFrame> { retur
 auto VideoSource::seek(double seconds) -> bool {
     if (! std::isfinite(seconds) || seconds < 0.0)
         return m_impl->fail("seek time must be finite and non-negative");
-    if (auto limit = duration()) seconds = ::fmin(seconds, *limit);
+    if (auto limit = duration()) seconds = std::min(seconds, *limit);
     const double time_base = av_q2d(m_impl->stream_tb);
     if (time_base <= 0.0) return m_impl->fail("video stream has an invalid time base");
     const auto timestamp = static_cast<std::int64_t>(seconds / time_base);
