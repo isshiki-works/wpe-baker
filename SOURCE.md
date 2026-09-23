@@ -45,10 +45,12 @@ this repository is under the root `LICENSE` (MIT).
 `engine/LICENSE`（GPL v2，无 "or later"）**只适用于 `engine/` 目录**；本仓库其余部分按根目录
 `LICENSE`（MIT）。
 
-Three of the renderer's dependencies carry our fixes: rstd, vvk and wavsen. The patches and
+Two of the renderer's dependencies carry our fixes: rstd and vvk (wavsen used to be the third;
+its audio/video decoding now lives, ported, in `engine/src/Media/`). The patches and
 their checksums are in `scripts/dependency-patches/` (`manifest.json`) and are applied by
 `scripts/apply-dependency-patches.py`.
-渲染器有三个依赖带我们的修改：rstd、vvk、wavsen。补丁与校验值在
+渲染器有两个依赖带我们的修改：rstd、vvk（原先的第三个 wavsen，其音视频解码已移植进
+`engine/src/Media/`）。补丁与校验值在
 `scripts/dependency-patches/`（`manifest.json`），由 `scripts/apply-dependency-patches.py` 应用。
 
 ## Which binaries need source / 哪些二进制需要对应源码
@@ -105,7 +107,7 @@ python scripts/fetch-native-extras.py
 python scripts/fetch-ffmpeg-lgpl21-inputs.py
 python scripts/build-ffmpeg-lgpl21.py --stage all
 
-# 2) 把依赖补丁应用到 .deps（rstd / vvk / wavsen）
+# 2) 把依赖补丁应用到 .deps（rstd / vvk）
 python scripts/apply-dependency-patches.py
 
 # 3) 构建渲染器（源码取自 engine/）

@@ -27,5 +27,5 @@
 
 ## 依赖
 
-渲染器用到的第三方库按 `scripts/native-inputs.lock.json` 锁定，我们对 rstd、vvk、wavsen 的改动
+渲染器用到的第三方库按 `scripts/native-inputs.lock.json` 锁定，我们对 rstd、vvk 的改动
 以补丁形式放在 `scripts/dependency-patches/`；许可与来源见仓库根目录 `THIRD-PARTY-NOTICES.md`。
