@@ -163,9 +163,9 @@ Add-Row 'GPL/LGPL 二进制' 'SHA 能在验证记录中找到' (($unmatched.Coun
 # ---------- 5. 源码包必须包含 / 必须排除 ----------
 $required = @('engine', 'engine-upstream.bundle', 'patches', 'scripts\dependency-patches\manifest.json',
     'scripts\dependency-patches\rstd.patch', 'scripts\dependency-patches\vvk.patch',
-    'scripts\dependency-patches\wavsen.patch', 'THIRD-PARTY-NOTICES.md', 'SOURCE.md', 'REBUILD.md',
+    'THIRD-PARTY-NOTICES.md', 'SOURCE.md', 'REBUILD.md',
     '.deps\ffmpeg-lgpl21\sources\ffmpeg', '.deps\ffmpeg-encoder-gpl2\sources\x264',
-    '.deps\ffmpeg-encoder-gpl2\sources\x265', '.deps\vvk', '.deps\wavsen', '.deps\rstd', '.deps\eigen',
+    '.deps\ffmpeg-encoder-gpl2\sources\x265', '.deps\vvk', '.deps\rstd', '.deps\eigen',
     '.deps\freetype', '.deps\glslang', 'src', 'tests', 'scripts', 'LICENSE')
 $missingRequired = $required | Where-Object { -not (Test-Path (Join-Path $src $_)) }
 Add-Row '源码包' '必备条目齐备' (($missingRequired.Count -eq 0) ? 'PASS' : 'FAIL') ($missingRequired.Count -eq 0 ? "$($required.Count) 项都在" : "缺 $($missingRequired -join ', ')")

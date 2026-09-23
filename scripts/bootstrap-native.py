@@ -35,7 +35,6 @@ TOOLS_INPUTS = [
 SOURCES = [
     ("rstd", "https://github.com/litocpp/rstd", "456fec5cc2b87acdb56800e298b5712ea69cdd47"),
     ("vvk", "https://github.com/litocpp/vvk", "f53d60cc70938d0485802750deeb15d18ba033ea"),
-    ("wavsen", "https://github.com/hypengw/wavsen", "77dfd33d07112c05df4682e08b98e19153ebe3ab"),
     ("spirv-reflect", "https://github.com/hypengw/SPIRV-Reflect", "355785128c1b6ba808e3a7d0e344814fe6cff502"),
     ("glslang", "https://github.com/KhronosGroup/glslang", "275822a6261ee689aadb1da5f09a0ec2f058685c"),
     ("quickjs", "https://github.com/quickjs-ng/quickjs", "3c051980ab7e783dfbfb1c70c014ce5e05ecf24c"),

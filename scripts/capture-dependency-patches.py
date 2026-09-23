@@ -8,7 +8,7 @@ import pathlib
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-NAMES = ["rstd", "vvk", "wavsen", "spirv-reflect", "glslang", "quickjs", "vma", "lz4", "freetype", "vulkan-headers", "vulkan-loader", "eigen"]
+NAMES = ["rstd", "vvk", "spirv-reflect", "glslang", "quickjs", "vma", "lz4", "freetype", "vulkan-headers", "vulkan-loader", "eigen"]
 
 def main() -> None:
     output = ROOT / "scripts/dependency-patches"

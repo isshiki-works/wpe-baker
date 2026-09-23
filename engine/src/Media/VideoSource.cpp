@@ -110,6 +110,13 @@ struct VideoSource::Impl {
         return false;
     }
 
+    // 解码错误先交给 tail 判定是否可能在流末尾；不是就锁存。
+    // 帧线程解码时错误要等后面几个包送进去才在 receive_frame 冒出来：离结尾不到"线程数"个包的中途错误
+    // 会在冲洗阶段才出现，于是按末尾处理（THREADS=1 时照旧锁存）。
+    auto defer_decode_error(const char* operation, int code) -> bool {
+        return tail.defer(operation, code) || fail(std::string(operation) + ": " + av_err_str(code));
+    }
+
     auto open(std::uint32_t width, std::uint32_t height) -> bool {
         if (width == 0 || height == 0) return fail("target dimensions must be non-zero");
         // 奇数宽高照原样解码（不补成偶数再缩放）：NV12 色度按向上取整打包，见 next_frame。
@@ -140,10 +147,8 @@ struct VideoSource::Impl {
         AVCodecParameters* par = st->codecpar;
         stream_tb              = st->time_base;
 
-        // FFmpeg 自带的 av1 解码器没有软件路径（只是 hwaccel 分派），软件解码用 libdav1d。
-        const AVCodec* dec = nullptr;
-        if (par->codec_id == AV_CODEC_ID_AV1) dec = avcodec_find_decoder_by_name("libdav1d");
-        if (! dec) dec = avcodec_find_decoder(par->codec_id);
+        // AV1 取到的是 libdav1d：FFmpeg 自带的 av1 解码器只做 hwaccel 分派，本构建注册顺序里 libdav1d 在前。
+        const AVCodec* dec = avcodec_find_decoder(par->codec_id);
         if (! dec) return fail(std::string("no decoder for codec ") + avcodec_get_name(par->codec_id));
         cctx = avcodec_alloc_context3(dec);
         if (! cctx) return fail("avcodec_alloc_context3 failed");
@@ -241,6 +246,7 @@ struct VideoSource::Impl {
         av_packet_unref(pkt);
         av_frame_unref(src_frame);
         flushing = false;
+        tail.reset();
     }
 
     auto next_frame(Nv12Frame& out) -> std::optional<NextFrame> {
@@ -256,6 +262,7 @@ struct VideoSource::Impl {
         while (true) {
             int rc = avcodec_receive_frame(cctx, src_frame);
             if (rc == 0) {
+                tail.frame_decoded();
                 const AVFrame& feed    = *src_frame;
                 const auto     src_fmt = static_cast<AVPixelFormat>(feed.format);
                 if (feed.width <= 0 || feed.height <= 0 || src_fmt == AV_PIX_FMT_NONE) {
@@ -293,8 +300,8 @@ struct VideoSource::Impl {
                 continue;
             }
             if (rc != AVERROR(EAGAIN)) {
-                fail("avcodec_receive_frame: " + av_err_str(rc));
-                return std::nullopt;
+                if (! defer_decode_error("avcodec_receive_frame", rc)) return std::nullopt;
+                continue;
             }
             if (flushing) continue;
 
@@ -312,12 +319,18 @@ struct VideoSource::Impl {
                 av_packet_unref(pkt);
                 continue;
             }
-            rc = avcodec_send_packet(cctx, pkt);
-            av_packet_unref(pkt);
-            if (rc < 0 && rc != AVERROR(EAGAIN)) {
-                fail("avcodec_send_packet: " + av_err_str(rc));
+            const char* operation {};
+            int         deferred {};
+            if (tail.take_mid_stream(operation, deferred)) {
+                // 出错的包后面还有本流的包：错误在流中间，锁存。
+                av_packet_unref(pkt);
+                fail(std::string(operation) + ": " + av_err_str(deferred));
                 return std::nullopt;
             }
+            rc = avcodec_send_packet(cctx, pkt);
+            av_packet_unref(pkt);
+            if (rc < 0 && rc != AVERROR(EAGAIN) && ! defer_decode_error("avcodec_send_packet", rc))
+                return std::nullopt;
         }
     }
 
@@ -348,6 +361,7 @@ struct VideoSource::Impl {
     int                  video_idx { -1 };
     AVRational           stream_tb { 0, 1 };
     bool                 flushing { false };
+    detail::DecodeTailGate tail;
     std::uint32_t        target_width {};
     std::uint32_t        target_height {};
     std::string          error;
