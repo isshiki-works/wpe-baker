@@ -105,7 +105,7 @@ struct Lockstep {
     std::string   error_new;
     std::uint64_t frames_old {};
     std::uint64_t frames_new {};
-    bool          same_bytes { true };
+    bool          same_bytes { true }; // 两边都输出了的帧逐字节相同
 };
 
 auto DecodeBoth(const std::filesystem::path& path) -> Lockstep {
@@ -126,8 +126,8 @@ auto DecodeBoth(const std::filesystem::path& path) -> Lockstep {
         const auto new_got = decoder.next_pcm(new_pcm.data(), chunk);
         out.frames_old += old_got;
         out.frames_new += new_got;
-        if (old_got != new_got ||
-            std::memcmp(old_pcm.data(), new_pcm.data(), std::size_t(new_got) * kChannels * sizeof(float)) != 0) {
+        const auto common = std::min<std::uint64_t>(old_got, new_got);
+        if (std::memcmp(old_pcm.data(), new_pcm.data(), std::size_t(common) * kChannels * sizeof(float)) != 0) {
             out.same_bytes = false;
             break;
         }
@@ -136,6 +136,13 @@ auto DecodeBoth(const std::filesystem::path& path) -> Lockstep {
         if (! out.error_old.empty() || ! out.error_new.empty() || new_got < chunk) break;
     }
     return out;
+}
+
+// 有意的不同：wavsen 在流末尾锁存解码错误，新实现正常读完；wavsen 报错前两边输出逐字节相同，
+// 新实现多出的只是 wavsen 丢掉的最后几帧。
+auto TailOnlyDifference(const Lockstep& r) -> bool {
+    return r.opened_old && r.opened_new && ! r.error_old.empty() && r.error_new.empty() && r.same_bytes &&
+           r.frames_new >= r.frames_old;
 }
 
 auto SameBytes(const std::vector<float>& a, const std::vector<float>& b) -> bool {
@@ -181,15 +188,18 @@ TEST(MediaParity, DecoderMatchesWavsenByteForByte) {
         const auto r    = DecodeBoth(file);
         const bool same = r.opened_old == r.opened_new && r.error_old == r.error_new &&
                           r.frames_old == r.frames_new && r.same_bytes;
-        std::printf("PARITY decode %s opened=%d frames=%llu error=\"%s\" %s\n",
+        const bool tail = TailOnlyDifference(r);
+        std::printf("PARITY decode %s opened=%d frames=%llu/%llu error=\"%s\"/\"%s\" %s\n",
                     file.filename().string().c_str(),
                     int(r.opened_new),
+                    static_cast<unsigned long long>(r.frames_old),
                     static_cast<unsigned long long>(r.frames_new),
+                    r.error_old.c_str(),
                     r.error_new.c_str(),
-                    same ? "same" : "DIFF");
-        EXPECT_TRUE(same) << file.string() << " opened " << r.opened_old << "/" << r.opened_new << " frames "
-                          << r.frames_old << "/" << r.frames_new << " error \"" << r.error_old << "\" / \""
-                          << r.error_new << "\"";
+                    same ? "same" : tail ? "tail" : "DIFF");
+        EXPECT_TRUE(same || tail) << file.string() << " opened " << r.opened_old << "/" << r.opened_new
+                                  << " frames " << r.frames_old << "/" << r.frames_new << " error \""
+                                  << r.error_old << "\" / \"" << r.error_new << "\"";
     }
 }
 

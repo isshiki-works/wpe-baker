@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdio>
 
 import eigen;
 import rstd;
@@ -528,6 +529,77 @@ TEST(SceneParserSound, EmptyPlaylistIsAStableSilentControl) {
     EXPECT_FALSE(empty->IsPlaying());
     empty->Stop();
     EXPECT_FALSE(empty->IsPlaying());
+}
+
+// 尾部截断的文件循环播放：最后一个包只剩半帧（pcm 解码器报 Invalid data），按读完处理，
+// SoundStream 从头重开；混音不报错，第二遍、第三遍开头与第一遍逐样本相同（AudioDecoder.cpp defer_decode_error）。
+TEST(SceneParserSound, LoopRestartsTruncatedFileFromStart) {
+    constexpr std::uint32_t kFrames = 1000;
+    // 48 kHz 双声道 s16 WAV（与混音器格式相同，不重采样），data 块声明多 100 帧，实际 kFrames 帧后再跟 2 字节。
+    std::vector<std::int16_t> samples;
+    for (std::uint32_t index = 0; index < kFrames; ++index) {
+        const int value = int(index * 37u % 30000u) - 15000;
+        samples.push_back(std::int16_t(value));
+        samples.push_back(std::int16_t(-value));
+    }
+    std::vector<std::uint8_t> wav;
+    auto put16 = [&](std::uint32_t value) {
+        wav.push_back(std::uint8_t(value & 0xffu));
+        wav.push_back(std::uint8_t((value >> 8u) & 0xffu));
+    };
+    auto put32 = [&](std::uint32_t value) {
+        put16(value & 0xffffu);
+        put16(value >> 16u);
+    };
+    auto tag = [&](const char* text) { wav.insert(wav.end(), text, text + 4); };
+    const std::uint32_t claimed = (kFrames + 100) * 4;
+    tag("RIFF");
+    put32(36 + claimed);
+    tag("WAVE");
+    tag("fmt ");
+    put32(16);
+    put16(1);
+    put16(2);
+    put32(48000);
+    put32(48000 * 4);
+    put16(4);
+    put16(16);
+    tag("data");
+    put32(claimed);
+    for (const auto sample : samples) put16(std::uint16_t(sample));
+    wav.resize(wav.size() + 2, 0);
+
+    std::string dir = ::testing::TempDir();
+    for (auto& ch : dir) if (ch == '\\') ch = '/';
+    while (dir.size() > 3 && dir.back() == '/') dir.pop_back();
+    std::FILE* file = std::fopen((dir + "/owe-sound-loop-tail.wav").c_str(), "wb");
+    ASSERT_NE(file, nullptr);
+    std::fwrite(wav.data(), 1, wav.size(), file);
+    std::fclose(file);
+
+    auto assets = owe::fs::make_physical_fs(owe::fs::ToPath(dir));
+    ASSERT_TRUE(assets.is_ok());
+    owe::fs::VFS vfs;
+    ASSERT_TRUE(vfs.mount("/assets"_str, rstd::move(assets).unwrap_unchecked()).is_ok());
+
+    owe::wpscene::SoundObject object;
+    object.sound        = { "owe-sound-loop-tail.wav" };
+    object.playbackmode = "loop";
+    owe::media::OfflineMixer mixer;
+    ASSERT_NE(owe::SoundParser::Parse(object, vfs, mixer, nullptr), nullptr);
+    mixer.play();
+
+    // 按 60 fps 的块拉 2.5 遍以上。
+    std::vector<float> mixed;
+    std::vector<float> block(std::size_t(800) * 2);
+    while (mixed.size() < samples.size() * 5 / 2) {
+        ASSERT_TRUE(mixer.mix(block)) << mixer.last_error();
+        mixed.insert(mixed.end(), block.begin(), block.end());
+    }
+    for (std::size_t index = 0; index < mixed.size(); ++index) {
+        const float expected = float(samples[index % samples.size()]) * (1.0f / 32768.0f);
+        ASSERT_EQ(mixed[index], expected) << "sample " << index;
+    }
 }
 
 TEST(SceneParserScript, DynamicObjectsUseSceneIdentity) {

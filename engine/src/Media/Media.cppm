@@ -42,7 +42,7 @@ public:
     auto open(owe::io::RangeReader source, PcmDesc target) -> bool;
 
     // 拉 frames 帧；少于 frames 只发生在读完（已 drain 重采样器）或出错时。
-    // 出错后错误锁存，之后一律返回 0。
+    // 出错后错误锁存，之后一律返回 0。流末尾的解码错误（最后一个包解不出）按读完处理，不算出错。
     auto next_pcm(float* dst, std::uint32_t frames) -> std::uint32_t;
 
     auto last_error() const -> std::string_view;
