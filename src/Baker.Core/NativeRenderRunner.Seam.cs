@@ -348,11 +348,6 @@ public sealed partial class NativeRenderRunner
         }
     }
 
-    /// <summary>接缝交叉淡化，实现见 <see cref="MasterRewrite.CrossfadeAsync"/>（C2.4c 转发器，调用方 HybridBakeService）。</summary>
-    public Task<JsonObject> ApplyLoopCrossfadeAsync(string masterDirectory, ulong loopFrames, uint crossfadeFrames,
-        CancellationToken cancellationToken = default) =>
-        new MasterRewrite(ff).CrossfadeAsync(masterDirectory, loopFrames, crossfadeFrames, cancellationToken);
-
     /// <summary>
     /// 导出接缝预览（见 <see cref="SeamPreview"/>）：循环末尾 N 帧接开头 N 帧，原速一遍、0.25 倍速一遍，顶部标签条写帧号。
     /// 只按时间段 seek 解码这 2N 帧；输入可以是编码好的候选视频，也可以是残差被拒时尚未清理的无损 master

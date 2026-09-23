@@ -5,8 +5,8 @@ namespace Baker.Core;
 
 public sealed partial class NativeRenderRunner
 {
-    /// <summary>画质门的比对后端（<see cref="IQualityComparer"/>）；R10 在这里换成渲染器内比对。</summary>
-    private readonly IQualityComparer qualityComparer = new FfmpegQualityComparer(new FfmpegTool(tools));
+    /// <summary>画质门的比对后端；R10 在这里换成渲染器内比对。</summary>
+    private readonly FfmpegQualityComparer qualityComparer = new FfmpegQualityComparer(new FfmpegTool(tools));
 
     /// <summary>
     /// GPU 直编成品的画质门：没有无损 master，参照取渲染时留下的原帧（按同一套整数交叉淡化、裁剪、透明打包复原；

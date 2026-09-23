@@ -28,7 +28,7 @@ public class SwaySpeedLimitScaleTests
     public void ProfileRecordCarriesTheEffectiveLimits()
     {
         RetimeProfile profile = RetimeProfile.Resolve(RetimeProfile.Balanced, null, null, 2);
-        JsonObject Record(uint width, uint height) => profile.ToJson(SwayRecurrenceSolver.SpeedLimitScale(width, height));
+        JsonObject Record(uint width, uint height) => RetimeProfileJson.ToJson(profile, SwayRecurrenceSolver.SpeedLimitScale(width, height));
         static double Limit(JsonObject record, string kind) => record[kind + "_speed_deviation_limit_pixels_per_second"]!.GetValue<double>();
         // 1080p：与旧版常量逐位相同，序列化文本也不变。
         JsonObject fullHd = Record(1920, 1080);

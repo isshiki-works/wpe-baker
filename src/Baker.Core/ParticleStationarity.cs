@@ -40,7 +40,7 @@ internal static class ParticleStationarity
     /// 锁定周期超过它就算不出可用循环，维持拒绝。不给时按 --loop-max-seconds 的默认值。
     /// </summary>
     internal readonly record struct FrameClock(uint FpsNumerator, uint FpsDenominator,
-        double LoopCeilingSeconds = SwayRetimeOptions.DefaultLoopLengthMaximumSeconds);
+        double LoopCeilingSeconds = CommonLoopSolver.DefaultLoopLengthMaximumSeconds);
 
     /// <summary>
     /// 封顶 + 确定寿命的粒子层按周期锁定：计数状态从 CycleStartFrame 起严格以 PeriodFrames 帧为周期，画面是按该周期的统计平稳过程。
@@ -262,7 +262,7 @@ internal static class ParticleStationarity
                     foreach (var (key, value) in outcome.Evidence) snapshot[key] = value?.DeepClone();
                     if (outcome.PeriodFrames is ulong periodFrames && outcome.CycleStartFrame is ulong cycleStart)
                     {
-                        string component = $"particle_cycle/{HybridScenePlanner.Int(owner["id"])?.ToString(CultureInfo.InvariantCulture) ?? "?"}/{periodFrames}";
+                        string component = $"particle_cycle/{SceneGraph.Int(owner["id"])?.ToString(CultureInfo.InvariantCulture) ?? "?"}/{periodFrames}";
                         cycle = new(component, periodFrames, cycleStart, frame.FpsNumerator, frame.FpsDenominator, snapshot, null);
                     }
                     else Fail("C2", outcome.FailureCode!, "maxcount", snapshot);
@@ -318,8 +318,8 @@ internal static class ParticleStationarity
             {
                 bool initialization = dependency["initialization"] is JsonValue flag && flag.TryGetValue(out bool once) && once;
                 string operation = Text(dependency["operation"]);
-                int? scriptOwner = HybridScenePlanner.Int(dependency["owner"]);
-                int? target = HybridScenePlanner.Int(dependency["target"]);
+                int? scriptOwner = SceneGraph.Int(dependency["owner"]);
+                int? target = SceneGraph.Int(dependency["target"]);
                 string summary = $"{operation}:{Text(dependency["property"])}";
                 // 挂在本对象或祖先上的脚本：逐帧运行，或读外部输入（音频、鼠标等，初始化时注册也算）。
                 if (scriptOwner is int host && chain.Contains(host) && (!initialization || operation == "input"))
@@ -553,10 +553,10 @@ internal static class ParticleStationarity
     {
         var chain = new List<int>();
         JsonObject? current = owner;
-        while (current is not null && HybridScenePlanner.Int(current["id"]) is int id && !chain.Contains(id))
+        while (current is not null && SceneGraph.Int(current["id"]) is int id && !chain.Contains(id))
         {
             chain.Add(id);
-            current = HybridScenePlanner.Int(current["parent"]) is int parent && objects.TryGetValue(parent, out JsonObject? next) ? next : null;
+            current = SceneGraph.Int(current["parent"]) is int parent && objects.TryGetValue(parent, out JsonObject? next) ? next : null;
         }
         return [.. chain];
     }

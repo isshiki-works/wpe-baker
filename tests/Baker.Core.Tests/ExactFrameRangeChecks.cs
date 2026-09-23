@@ -87,7 +87,7 @@ internal static class ExactFrameRangeChecks
             string rate = $"{numerator}/{denominator}";
             string periodic =Path.Combine(directory, $"crossfade-closed-{numerator}_{denominator}");
             _ = await EncodeMasterAsync(tools!, periodic, null, total, numerator, denominator, n => n % Period);
-            JsonObject record = await runner.ApplyLoopCrossfadeAsync(periodic, Period, Crossfade);
+            JsonObject record = await new MasterRewrite(new FfmpegTool(tools!)).CrossfadeAsync(periodic, Period, Crossfade);
             ulong[] sequence = await DecodeNumbersAsync(tools!, Path.Combine(periodic, "preview.mp4"), 0, Period + 4, numerator, denominator);
             check(record["status"]!.GetValue<string>() == "applied" && sequence.Length == (int)Period &&
                 sequence.SequenceEqual(Enumerable.Range(0, (int)Period).Select(i => (ulong)i)),
@@ -98,7 +98,7 @@ internal static class ExactFrameRangeChecks
             // 帧号不回卷时，淡化第 i 帧必须是 (1-w)·f[i] + w·f[P+i]；混进 f[P-1+i] 在帧号位上会差出整条色块。
             string open = Path.Combine(directory, $"crossfade-open-{numerator}_{denominator}");
             _ = await EncodeMasterAsync(tools!, open, null, total, numerator, denominator, n => n);
-            _ = await runner.ApplyLoopCrossfadeAsync(open, Period, Crossfade);
+            _ = await new MasterRewrite(new FfmpegTool(tools!)).CrossfadeAsync(open, Period, Crossfade);
             byte[] faded = await DecodeRawAsync(tools!, Path.Combine(open, "preview.mp4"), 0, Crossfade, numerator, denominator);
             bool matchesWrap = true, matchesShifted = true;
             foreach (uint i in new uint[] { 0, Crossfade / 2, Crossfade - 1 })
@@ -181,7 +181,7 @@ internal static class ExactFrameRangeChecks
             passRow["coverage_global_mae_255"]!.GetValue<double>() == 0.75 && passRow["color_mask_fraction"]!.GetValue<double>() == 0.125,
             "透明组 master 两半分别算：预乘色半 20 级、覆盖度半 12 级各自读出，掩码覆盖 1/8，第一层取更大的一半通过");
 
-        JsonObject fade = await runner.ApplyLoopCrossfadeAsync(passing, Period, Crossfade);
+        JsonObject fade = await new MasterRewrite(new FfmpegTool(tools!)).CrossfadeAsync(passing, Period, Crossfade);
         byte[] faded = await DecodeRawAsync(tools, Path.Combine(passing, "preview.mp4"), 12, 1, 60, 1);
         double w = (double)(Crossfade - 12) / (Crossfade + 1);
         int coverage = faded[((10 * Half * 2) + Half + 80) * 3], color = faded[(10 * Half * 2 + 10) * 3];

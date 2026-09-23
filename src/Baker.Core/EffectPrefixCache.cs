@@ -151,7 +151,7 @@ internal static class EffectPrefixCache
     }
 
     private static JsonObject Owner(JsonObject scene, int ownerId) => scene["objects"]?.AsArray().OfType<JsonObject>()
-        .SingleOrDefault(obj => HybridScenePlanner.Id(obj) == ownerId)
+        .SingleOrDefault(obj => SceneGraph.Id(obj) == ownerId)
         ?? throw new InvalidDataException("Effect-prefix cache owner is absent from the scene.");
 
     private static bool HasScriptOrAnimation(JsonNode node) => SceneAnalyzer.Walk(node).OfType<JsonObject>()

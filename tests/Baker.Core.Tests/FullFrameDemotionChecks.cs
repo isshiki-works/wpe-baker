@@ -10,9 +10,9 @@ internal static class FullFrameDemotionChecks
     private static readonly Type DemotionType = typeof(HybridPlanFormat).Assembly.GetType("Baker.Core.FullFrameDemotion")!;
     private static readonly MethodInfo RetentionMethod = DemotionType.GetMethod("FullFrameSingleGroupRetention",
         BindingFlags.Static | BindingFlags.NonPublic, null, [typeof(JsonObject)], null)!;
-    private static readonly MethodInfo ConflictMethod = typeof(HybridScenePlanner).GetMethod("FullFrameConflict",
+    private static readonly MethodInfo ConflictMethod = typeof(LayoutAdmission).GetMethod("FullFrameConflict",
         BindingFlags.Static | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo AllocationMethod = typeof(HybridScenePlanner).GetMethod("ApplyAllocation",
+    private static readonly MethodInfo AllocationMethod = typeof(PlanTransforms).GetMethod("ApplyAllocation",
         BindingFlags.Static | BindingFlags.NonPublic)!;
 
     internal static async Task RunAsync(Action<bool, string> check, string root)

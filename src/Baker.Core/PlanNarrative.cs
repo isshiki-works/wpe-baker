@@ -357,7 +357,7 @@ public static class PlanNarrative
     public static string SwayRetimeLine(JsonObject retime, string language)
     {
         ArgumentNullException.ThrowIfNull(retime);
-        var (drift, cycles, visible, deviation, frozen) = SwayRecurrenceSolver.SummaryNumbers(retime);
+        var (drift, cycles, visible, deviation, frozen) = SwayRetimeJson.SummaryNumbers(retime);
         string seconds = Number(retime["seconds"]) is double length ? length.ToString("0.##", CultureInfo.InvariantCulture) : "?";
         // 预算是求解参数：质量档与旧 plan 没有预算，讲"按改动最小求解"。
         string budget = Number(retime["retime_budget_percent"]) is double percent

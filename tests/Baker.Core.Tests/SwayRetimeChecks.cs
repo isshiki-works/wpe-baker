@@ -363,14 +363,14 @@ internal static class SwayRetimeChecks
             "sway model: the analysis attaches the structured equation (float32 speed, coefficients, geometry) and keeps the old detail text");
 
         // 开关关闭：plan 里不出现任何改频字段，未解析项的字段集合与旧版一样。
-        JsonObject off = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1);
+        JsonObject off = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1).ToJson();
         JsonObject offSway = off["unresolved"]!.AsArray().OfType<JsonObject>().Single(item => item["owner_layer_id"]!.GetValue<int>() == 2);
         check(!off.ToJsonString().Contains("sway_retime", StringComparison.Ordinal) && !off.ToJsonString().Contains("sway_model", StringComparison.Ordinal) &&
             offSway.Select(pair => pair.Key).SequenceEqual(["kind", "owner_layer_id", "effect_index", "pass_index", "resource", "detail", "bounded_displacement", "mechanism"]) &&
             off["candidates"]!.AsArray().OfType<JsonObject>().All(candidate => candidate["frames"]!.GetValue<ulong>() <= 180 * 60),
             "sway retime off: the loop report carries no retime fields and the sway item keeps exactly the old keys");
-        JsonObject offAgain = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, null);
+        JsonObject offAgain = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, null).ToJson();
         check(offAgain.ToJsonString() == off.ToJsonString(), "sway retime off: passing no options is byte-identical to the default call");
 
         // feat/retime-budget：质量档在档位上限（1200 s，1080p60 被内嵌视频 2 GiB 收到 1175 s）与 600 s 下各求一次，
@@ -392,8 +392,8 @@ internal static class SwayRetimeChecks
             balancedLoop["quality_ceiling_used"] is null,
             "quality ceiling: the quality preset solves under both ceilings, keeps the smaller visible change and records both readings; other presets solve once");
 
-        JsonObject on = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, options);
+        JsonObject on = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, options).ToJson();
         JsonObject[] candidates = on["candidates"]!.AsArray().OfType<JsonObject>().ToArray();
         JsonObject first = candidates[0];
         JsonObject retime = first["sway_retime"]!.AsObject();
@@ -412,8 +412,8 @@ internal static class SwayRetimeChecks
             retime["layers"]![0]!["deltas_percent"]!.AsArray().Count == 8,
             "sway retime record: L, multiple, per-layer deltas, frozen set and the per-shader speed table are written to the plan");
 
-        JsonObject tooShort = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, new SwayRetimeOptions(0.5, 0.5, 0.5));
+        JsonObject tooShort = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, new SwayRetimeOptions(0.5, 0.5, 0.5)).ToJson();
         // --loop-max-seconds 同时是求解器上限：0.5 秒装不下 1 秒的颗粒周期，其余分量就没有基础候选，摆动项照旧留在未解析项里。
         check(tooShort["unresolved"]!.AsArray().Count == 1 && tooShort["sway_retime"]!["status"]!.GetValue<string>() == "no_base_candidate" &&
             tooShort["candidates"]!.AsArray().Count == 0 && tooShort["maximum_seconds"]!.GetValue<double>() == 0.5 &&
@@ -425,11 +425,11 @@ internal static class SwayRetimeChecks
         // 慢项速度上限：strength 1 时 1/120 项（212 s）振幅约 19.7 px，冻结偏差约 0.58 px/s；上限 100 s 内它走不满半圈只能冻结，
         // 每个 kP 都超限，整体按未解析处理。strength 0.2 时同一项冻结偏差只有 0.023 px/s，上限 100 s 照样给解。
         var strongScene = new JsonObject { ["objects"] = new JsonArray(Grain(1), Sway(2, 3.55, 1.0)) };
-        JsonObject overLimit = HybridLoopService.Analyze(strongScene, source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, new SwayRetimeOptions(100, 0.5, 0.5));
+        JsonObject overLimit = LoopAnalysis.Analyze(strongScene, source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, new SwayRetimeOptions(100, 0.5, 0.5)).ToJson();
         // faint 用 200 s 上限：同一张场景最慢的可见项是 42.5 s 的 1/24 项，100 s 内它只走得了 2 圈，先被圈数下限挡掉（见下一条）。
-        JsonObject faint = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, new SwayRetimeOptions(200, 0.5, 0.5));
+        JsonObject faint = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, new SwayRetimeOptions(200, 0.5, 0.5)).ToJson();
         check(overLimit["unresolved"]!.AsArray().Count == 1 &&
             overLimit["sway_retime"]!["status"]!.GetValue<string>() == "no_multiple_meets_speed_limit" &&
             overLimit["sway_retime"]!["speed_limit_rejected_candidate_count"]!.GetValue<int>() > 0 &&
@@ -443,10 +443,10 @@ internal static class SwayRetimeChecks
         // fix-j：同两张场景放到 4 倍边长的画布（输出/场景比 ×4，8K 对 1080p），门限随短边 ×4：faint 解出同一个 L，
         // 记录写生效门限 0.4 / 0.8；strong 仍超限，原因里的数字是生效门限 0.4 px/s。
         double eightK = SwayRecurrenceSolver.SpeedLimitScale(7680, 4320);
-        JsonObject faint8K = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, new SwayRetimeOptions(200, 2, 2, SpeedLimitScale: eightK));
-        JsonObject overLimit8K = HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray(Grain(1), Sway(2, 3.55, 1.0)) }, source, null,
-            new JsonObject(), [1, 2], 60, 1, 2, CommonLoopPreference.Balanced, new SwayRetimeOptions(100, 2, 2, SpeedLimitScale: eightK));
+        JsonObject faint8K = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, new SwayRetimeOptions(200, 2, 2, SpeedLimitScale: eightK)).ToJson();
+        JsonObject overLimit8K = LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray(Grain(1), Sway(2, 3.55, 1.0)) }, source, null,
+            new JsonObject(), [1, 2], 60, 1, 2, CommonLoopPreference.Balanced, new SwayRetimeOptions(100, 2, 2, SpeedLimitScale: eightK)).ToJson();
         JsonObject faintRetime = faint["candidates"]![0]!["sway_retime"]!.AsObject(), faint8KRetime = faint8K["candidates"]![0]!["sway_retime"]!.AsObject();
         static double Limit(JsonObject record, string kind) => record[kind + "_speed_deviation_limit_pixels_per_second"]!.GetValue<double>();
         check(faint8K["sway_retime"]!["status"]!.GetValue<string>() == "applied" &&
@@ -461,9 +461,9 @@ internal static class SwayRetimeChecks
         // 预算诊断同一口径：预算卡死（0%）时，"不设预算能不能解"的重解也要按生效门限判，否则大画布上会把"预算太紧"误报成"速度超限"。
         // 用 64 倍边长的画布（振幅 ×64，精确）让旧口径的门限一定咬住：不换算时报速度超限，换算后与原画布同样报预算太紧。
         RetimeProfile zeroBudget = RetimeProfile.Resolve(RetimeProfile.Balanced, 0, 200, 2);
-        string BudgetStatus(double outputPerScene, double speedLimitScale) => HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null,
+        string BudgetStatus(double outputPerScene, double speedLimitScale) => LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null,
             new JsonObject(), [1, 2], 60, 1, 2, CommonLoopPreference.Balanced,
-            new SwayRetimeOptions(200, outputPerScene, outputPerScene, Profile: zeroBudget, SpeedLimitScale: speedLimitScale))["sway_retime"]!["status"]!.GetValue<string>();
+            new SwayRetimeOptions(200, outputPerScene, outputPerScene, Profile: zeroBudget, SpeedLimitScale: speedLimitScale)).ToJson()["sway_retime"]!["status"]!.GetValue<string>();
         check(BudgetStatus(0.5, 1) == "no_multiple_within_budget" && BudgetStatus(32, 64) == "no_multiple_within_budget" &&
             BudgetStatus(32, 1) == "no_multiple_meets_speed_limit",
             "sway budget diagnosis on a large canvas: the no-budget re-solve uses the same scaled speed limits, so a budget rejection is not reported as a speed-limit rejection");
@@ -473,7 +473,7 @@ internal static class SwayRetimeChecks
         sizeless.Remove("size");
         var sizelessScene = new JsonObject { ["objects"] = new JsonArray(Grain(1), sizeless) };
         bool sizeUnknown = ShaderPeriodAnalysis.Analyze(sizelessScene, source, null, [1, 2]).Unresolved.Single(item => item.OwnerLayerId == 2).Sway?.LayerWidth is null;
-        JsonObject unknown = HybridLoopService.Analyze(sizelessScene, source, null, new JsonObject(), [1, 2], 60, 1, 2, CommonLoopPreference.Balanced, options);
+        JsonObject unknown = LoopAnalysis.Analyze(sizelessScene, source, null, new JsonObject(), [1, 2], 60, 1, 2, CommonLoopPreference.Balanced, options).ToJson();
         check(sizeUnknown && unknown["sway_retime"]!["status"]!.GetValue<string>() == "amplitude_unknown" &&
             unknown["unresolved"]!.AsArray().Count == 1 && unknown["candidates"]!.AsArray().OfType<JsonObject>().All(candidate => candidate["sway_retime"] is null) &&
             unknown["sway_retime"]!["reason_zh"]!.GetValue<string>().Contains("图层 2 ", StringComparison.Ordinal),
@@ -481,7 +481,7 @@ internal static class SwayRetimeChecks
 
         // 只有摆动：以 1 帧作 P，但不产出 1 帧静止候选（旧版这里 L = 1 帧、8 项全冻结，结论报"静止画面只需 1 帧"）。
         var swayOnlyScene = new JsonObject { ["objects"] = new JsonArray(Sway(2, 3.55)) };
-        JsonObject swayOnly = HybridLoopService.Analyze(swayOnlyScene, source, null, new JsonObject(), [2], 60, 1, 2, CommonLoopPreference.Balanced, options);
+        JsonObject swayOnly = LoopAnalysis.Analyze(swayOnlyScene, source, null, new JsonObject(), [2], 60, 1, 2, CommonLoopPreference.Balanced, options).ToJson();
         JsonObject swayOnlyRetime = swayOnly["candidates"]![0]!["sway_retime"]!.AsObject();
         check(swayOnly["candidates"]!.AsArray().Count == 1 && swayOnlyRetime["base_frames"]!.GetValue<ulong>() == 1 &&
             swayOnly["candidates"]![0]!["frames"]!.GetValue<ulong>() > 1 &&
@@ -497,7 +497,7 @@ internal static class SwayRetimeChecks
             "sway static guard: a sway-only scene is not summarized as a still image");
 
         var twoSpeedScene = new JsonObject { ["objects"] = new JsonArray(Grain(1), Sway(2, 5.0), Sway(3, 2.0), Sway(4, 5.0)) };
-        JsonObject twoSpeeds = HybridLoopService.Analyze(twoSpeedScene, source, null, new JsonObject(), [1, 2, 3, 4], 60, 1, 2, CommonLoopPreference.Balanced, options);
+        JsonObject twoSpeeds = LoopAnalysis.Analyze(twoSpeedScene, source, null, new JsonObject(), [1, 2, 3, 4], 60, 1, 2, CommonLoopPreference.Balanced, options).ToJson();
         JsonArray speedTable = twoSpeeds["candidates"]![0]!["sway_retime"]!["shaders"]![0]!["speeds"]!.AsArray();
         check(speedTable.Count == 2 && speedTable[0]!["speed"]!.GetValue<double>() == 2 && speedTable[1]!["speed"]!.GetValue<double>() == 5 &&
             speedTable[1]!["owner_layer_ids"]!.AsArray().Select(node => node!.GetValue<int>()).SequenceEqual([2, 4]),
@@ -547,7 +547,7 @@ internal static class SwayRetimeChecks
         };
         JsonObject summaryOn = PlanNarrative.Summarize(Report(on));
         JsonObject summaryOff = PlanNarrative.Summarize(Report(off));
-        var (drift, cycles, visible, deviation, frozen) = SwayRecurrenceSolver.SummaryNumbers(retime);
+        var (drift, cycles, visible, deviation, frozen) = SwayRetimeJson.SummaryNumbers(retime);
         check(deviation is not null && cycles is not null &&
             summaryOn["zh"]!.GetValue<string>().Contains($"单个循环内相位最大偏差 {drift} 圈，最慢可见摆动项运行 {cycles} 圈（可见项周期 < 60 s，改频 {visible}%，按最小改动求解）；慢项（周期 ≥ 60 s）峰值速度偏差最大 {deviation} px/s，其中冻结 {frozen} 项", StringComparison.Ordinal) &&
             summaryOn["en"]!.GetValue<string>().Contains($"maximum phase drift {drift} cycle per loop; slowest visible sway term runs {cycles} cycles (visible terms period < 60 s, retimed {visible}%, minimum-change solution); slow terms (period ≥ 60 s) peak speed deviation at most {deviation} px/s, {frozen} frozen", StringComparison.Ordinal) &&
@@ -570,8 +570,8 @@ internal static class SwayRetimeChecks
         check(retime["max_change_visible_percent"]!.GetValue<double>() == TermWorst(period => period < 60) &&
             retime["max_change_envelope_percent"]!.GetValue<double>() == TermWorst(period => period >= 60) &&
             retime["slow_speed_deviation_limit_pixels_per_second"]!.GetValue<double>() == 0.1 && retime["visible_period_threshold_seconds"]!.GetValue<double>() == 60 &&
-            Math.Abs(SwayRecurrenceSolver.RecordedSlowSpeedDeviation(legacy)!.Value - plannedDeviation) <= 1e-12 * Math.Max(1, plannedDeviation) &&
-            SwayRecurrenceSolver.SummaryNumbers(legacy) == SwayRecurrenceSolver.SummaryNumbers(retime),
+            Math.Abs(SwayRetimeJson.RecordedSlowSpeedDeviation(legacy)!.Value - plannedDeviation) <= 1e-12 * Math.Max(1, plannedDeviation) &&
+            SwayRetimeJson.SummaryNumbers(legacy) == SwayRetimeJson.SummaryNumbers(retime),
             "sway change tiers: the plan records the visible change, the slow-term speed deviation and the limit; old records recompute the same numbers from their terms");
 
         // settings：默认值不写进 plan，开启时写出并能读回。
@@ -590,8 +590,8 @@ internal static class SwayRetimeChecks
 
         // 内嵌视频 2 GiB（fix/embedded-video-size）：循环长度上限被收紧时写进 plan，结论行与无解原因说明"该分辨率下最长约 x 秒"。
         EmbeddedVideoLoopLimit fourK = EmbeddedVideoBudget.LoopLengthLimit(3600, 3840, 2160, false, 60, 1)!;
-        JsonObject limited = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, options with { LoopLengthMaximumSeconds = fourK.EffectiveSeconds, VideoLimit = fourK });
+        JsonObject limited = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, options with { LoopLengthMaximumSeconds = fourK.EffectiveSeconds, VideoLimit = fourK }).ToJson();
         JsonObject limitedSummary = PlanNarrative.Summarize(Report(limited));
         check(fourK.Applied && fourK.EffectiveSeconds == 558 &&
             limited["sway_retime"]!["loop_length_maximum_seconds"]!.GetValue<double>() == 558 &&
@@ -603,15 +603,15 @@ internal static class SwayRetimeChecks
             !NarrativePolishChecks.Leaks(limitedSummary["zh"]!.GetValue<string>()),
             "embedded video limit: a lowered loop-length maximum bounds every candidate and the conclusion states the longest loop at this resolution");
         EmbeddedVideoLoopLimit roomy = EmbeddedVideoBudget.LoopLengthLimit(600, 1920, 1080, false, 60, 1)!;
-        JsonObject unlimited = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, options with { VideoLimit = roomy });
+        JsonObject unlimited = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, options with { VideoLimit = roomy }).ToJson();
         check(!roomy.Applied && unlimited["sway_retime"]!["embedded_video_limit"]!["applied"]!.GetValue<bool>() == false &&
             unlimited["candidates"]!.ToJsonString() == on["candidates"]!.ToJsonString() &&
             !PlanNarrative.Summarize(Report(unlimited))["zh"]!.GetValue<string>().Contains("最长约", StringComparison.Ordinal),
             "embedded video limit: a maximum that already fits changes no candidate and adds no sentence");
         var squeezed = new EmbeddedVideoLoopLimit(600, 0.5, 3840, 2160, false, 60, 1, 64102);
-        JsonObject squeezedLoop = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, options with { LoopLengthMaximumSeconds = squeezed.EffectiveSeconds, VideoLimit = squeezed });
+        JsonObject squeezedLoop = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
+            CommonLoopPreference.Balanced, options with { LoopLengthMaximumSeconds = squeezed.EffectiveSeconds, VideoLimit = squeezed }).ToJson();
         // 合并 fix/loop-ceiling 后求解器与改频共用同一个收紧后的上限：0.5 秒上限下求解器先就没有基础候选，状态是 no_base_candidate。
         check(squeezedLoop["sway_retime"]!["status"]!.GetValue<string>() == "no_base_candidate" &&
             squeezedLoop["sway_retime"]!["reason_zh"]!.GetValue<string>().Contains("循环长度上限由 600 s 降至", StringComparison.Ordinal) &&

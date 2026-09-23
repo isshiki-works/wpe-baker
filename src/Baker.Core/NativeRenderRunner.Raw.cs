@@ -13,7 +13,7 @@ public sealed partial class NativeRenderRunner
     /// 同上；给了 <paramref name="frameSink"/> 时渲染器从 stdout 逐帧交出、不落 frames.rgba（manifest 不写 rgba_path），
     /// 其余回执核对不变。null 时与上面的重载逐字节相同。
     /// </summary>
-    internal async Task<JsonObject> RenderRawAsync(RenderRequest request, IFrameSink? frameSink, CancellationToken cancellationToken)
+    internal async Task<JsonObject> RenderRawAsync(RenderRequest request, CandidateValidation.Lockstep.Side? frameSink, CancellationToken cancellationToken)
     {
         if (request.SchemaVersion != 1) throw new InvalidDataException("Unsupported render request version.");
         if (request.Width == 0 || request.Height == 0 || request.Width > ushort.MaxValue || request.Height > ushort.MaxValue ||
@@ -103,7 +103,7 @@ public sealed partial class NativeRenderRunner
     }
 
     /// <summary>渲染器 stdout 上的整帧 RGBA 按序交给接收器；帧数必须正好等于请求，多一个字节、少半帧都算失败（IOException，走渲染器失败归因）。</summary>
-    private async Task RenderToSinkAsync(string jobPath, string logPath, int frameBytes, ulong frames, IFrameSink sink,
+    private async Task RenderToSinkAsync(string jobPath, string logPath, int frameBytes, ulong frames, CandidateValidation.Lockstep.Side sink,
         CancellationToken token)
     {
         await using var log = new FileStream(logPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);

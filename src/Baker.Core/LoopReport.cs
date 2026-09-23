@@ -30,7 +30,7 @@ internal sealed record LoopReport(uint FpsNum, uint FpsDen, string RetimeMode, C
         if (SwayRetime is not null) json["sway_retime"] = SwayRetime;
         if (LoopLengthDefault is not null) json["loop_length_default"] = LoopLengthDefault;
         // 上限被内嵌视频 2 GiB 收紧时才写（maximum_seconds 已是收紧后的值）；没收紧时 plan 不变。
-        if (EmbeddedVideoLimit is { Applied: true }) json["embedded_video_limit"] = EmbeddedVideoLimit.ToJson();
+        if (EmbeddedVideoLimit is { Applied: true }) json["embedded_video_limit"] = EmbeddedVideoBudgetJson.ToJson(EmbeddedVideoLimit);
         return json;
     }
 }
@@ -99,7 +99,7 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
             json["sprite_seam_phase"] = new JsonObject { ["origin"] = "undetermined",
                 ["basis"] = "a sample lies within the renderer's double accumulation error of a sprite boundary" };
         if (LoopLengthSource is not null) json["loop_length_source"] = LoopLengthSource;
-        if (SwayRetime is not null) json["sway_retime"] = SwayRecurrenceSolver.ToJson(SwayRetime.Solution,
+        if (SwayRetime is not null) json["sway_retime"] = SwayRetimeJson.ToJson(SwayRetime.Solution,
             SwayRetime.LoopLengthMaximumSeconds, SwayRetime.FpsNumerator, SwayRetime.FpsDenominator, SwayRetime.Profile);
         return json;
     }

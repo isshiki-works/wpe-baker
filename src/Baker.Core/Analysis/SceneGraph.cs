@@ -61,7 +61,7 @@ internal sealed class SceneGraph
         return id;
     }
 
-    // 以下是场景 JSON 的读取工具（C2.2d2 从 HybridScenePlanner 工具段搬来；HSP 留同名转发器给 bake 侧，登记在 forwarders.txt）。
+    // 以下是场景 JSON 的读取工具。
     internal static int Id(JsonObject obj) => obj["id"]!.GetValue<int>();
     internal static int? Int(JsonNode? node) => node is JsonValue value && value.TryGetValue<int>(out int n) ? n : null;
     internal static double Numeric(JsonNode? node, double fallback) => node is JsonValue value && value.TryGetValue<double>(out double n) ? n : fallback;

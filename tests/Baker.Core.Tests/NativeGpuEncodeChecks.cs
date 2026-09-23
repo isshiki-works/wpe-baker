@@ -54,7 +54,7 @@ internal static class NativeGpuEncodeChecks
         var cpuResidual=await runner.MeasureSeamResidualAsync(Path.Combine(output,"reference"),31,6,timeout.Token);
         if (!JsonNode.DeepEquals(gpuResidual["first_layer"],cpuResidual["first_layer"]))
             throw new InvalidDataException("GPU original loop window changed the residual decision.");
-        await runner.ApplyLoopCrossfadeAsync(Path.Combine(output,"reference"),31,6,timeout.Token);
+        await new MasterRewrite(new FfmpegTool(tools)).CrossfadeAsync(Path.Combine(output,"reference"),31,6,timeout.Token);
         string filter = "[0:v]split=2[c][a];[c]crop=100:78:16:10[rgb];[a]crop=100:78:146:10[alpha];" +
             "[rgb][alpha]hstack=inputs=2,scale=in_range=full:out_range=limited:out_color_matrix=bt709,format=yuv420p[packed]";
         string product = Path.Combine(output, "gpu/preview.mp4"), master = Path.Combine(output, "reference/preview.mp4");

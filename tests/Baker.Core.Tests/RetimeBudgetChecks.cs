@@ -113,13 +113,13 @@ internal static class RetimeBudgetChecks
         check(RetimeProfile.Resolve(null, null, null, 2) is
                 { Preset: null, BudgetPercent: null, CommonRetimePercent: 2, LoopMaximumSeconds: 600,
                   BudgetSource: RetimeProfile.FromDefault, LoopMaximumSource: RetimeProfile.FromDefault } &&
-            RetimeProfile.Resolve(new HybridAnalyzeRequest(2, "s", "a", "o")).BudgetPercent is null,
+            RetimeProfileJson.Resolve(new HybridAnalyzeRequest(2, "s", "a", "o")).BudgetPercent is null,
             "retime preset: a request without a preset keeps the old behaviour (smallest change, 600 s, --max-retime as the common budget)");
         bool rejected = false;
         try { RetimeProfile.Resolve("ultra", null, null, 2); } catch (InvalidDataException) { rejected = true; }
         check(rejected && !RetimeProfile.IsKnownPreset("ultra") && RetimeProfile.MaximumBudgetPercent == 5,
             "retime preset: an unknown preset name is rejected and the budget tops out at 5%");
-        JsonObject record = RetimeProfile.Resolve(RetimeProfile.Efficiency, null, 300, 2).ToJson(1);
+        JsonObject record = RetimeProfileJson.ToJson(RetimeProfile.Resolve(RetimeProfile.Efficiency, null, 300, 2), 1);
         check(record["preset"]!.GetValue<string>() == "efficiency" && record["retime_budget_percent"]!.GetValue<double>() == 5 &&
             record["retime_budget_source"]!.GetValue<string>() == "preset" && record["loop_max_seconds"]!.GetValue<double>() == 300 &&
             record["loop_max_seconds_source"]!.GetValue<string>() == "override" &&
@@ -252,8 +252,8 @@ internal static class RetimeBudgetChecks
             Math.Abs(budget3.MaximumPhaseDriftCycles - Recomputed(budget3)) < 1e-12,
             "retime phase drift: it equals the per-term recomputation and always stays under half a cycle");
         // plan 记录与结论行：报相位差、最慢可见项圈数与预算，百分比只是其中一项。
-        JsonObject record = SwayRecurrenceSolver.ToJson(budget3, 600, 60, 1, RetimeProfile.Resolve(RetimeProfile.Balanced, null, null, 2));
-        var (driftText, cyclesText, visibleText, deviationText, frozen) = SwayRecurrenceSolver.SummaryNumbers(record);
+        JsonObject record = SwayRetimeJson.ToJson(budget3, 600, 60, 1, RetimeProfile.Resolve(RetimeProfile.Balanced, null, null, 2));
+        var (driftText, cyclesText, visibleText, deviationText, frozen) = SwayRetimeJson.SummaryNumbers(record);
         check(record["preset"]!.GetValue<string>() == "balanced" && record["retime_budget_percent"]!.GetValue<double>() == 3 &&
             record["retime_budget_source"]!.GetValue<string>() == "preset" &&
             Math.Abs(record["phase_drift_cycles"]!.GetValue<double>() - budget3.MaximumPhaseDriftCycles) < 1e-12 &&
@@ -270,7 +270,7 @@ internal static class RetimeBudgetChecks
             en.Contains($"retimed {visibleText}%, budget 3%", StringComparison.Ordinal),
             "retime conclusion line: both languages lead with the phase drift and cycle count, then the change and the budget it came from");
         // 质量档与旧记录没有预算：结论行说"按改动最小求解"，不编一个百分比出来。
-        JsonObject minimizedRecord = SwayRecurrenceSolver.ToJson(minimized, 600, 60, 1, RetimeProfile.Resolve(RetimeProfile.Quality, null, null, 2));
+        JsonObject minimizedRecord = SwayRetimeJson.ToJson(minimized, 600, 60, 1, RetimeProfile.Resolve(RetimeProfile.Quality, null, null, 2));
         check(minimizedRecord["retime_budget_percent"] is null &&
             PlanNarrative.SwayRetimeLine(minimizedRecord, MessageCatalog.Chinese).Contains("按最小改动求解", StringComparison.Ordinal) &&
             PlanNarrative.SwayRetimeLine(minimizedRecord, MessageCatalog.English).Contains("minimum-change solution", StringComparison.Ordinal),

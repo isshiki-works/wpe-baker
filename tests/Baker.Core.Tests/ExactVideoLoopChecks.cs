@@ -16,9 +16,9 @@ internal static class ExactVideoLoopChecks
             ["duration_seconds"] = "3.336666666666666666666", ["duration_numerator"] = 1001,
             ["duration_denominator"] = 300, ["looping"] = true, ["event_driven"] = false,
             ["confidence"] = "high", ["playback_rate"] = 1 };
-        JsonObject Analyze(JsonObject trace, JsonObject? owner = null) => HybridLoopService.Analyze(
+        JsonObject Analyze(JsonObject trace, JsonObject? owner = null) => LoopAnalysis.Analyze(
             new JsonObject { ["objects"] = new JsonArray { owner?.DeepClone() ?? new JsonObject { ["id"] = 1 } } }, source, null,
-            new JsonObject { ["runtime_animation_periods"] = new JsonArray { trace.DeepClone() } }, [1], 30000, 1001);
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray { trace.DeepClone() } }, [1], 30000, 1001).ToJson();
 
         JsonObject exact = Analyze(Trace());
         JsonObject candidate = exact["candidates"]!.AsArray().First()!.AsObject();
@@ -27,8 +27,8 @@ internal static class ExactVideoLoopChecks
             "a video uses rational native duration metadata on the output frame grid and emits no layer-rate patch");
 
         JsonObject shortVideo = Trace(); shortVideo["duration_numerator"] = 344; shortVideo["duration_denominator"] = 60;
-        JsonObject shortResult = HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) },
-            source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray(shortVideo) }, [1], 60, 1);
+        JsonObject shortResult = LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) },
+            source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray(shortVideo) }, [1], 60, 1).ToJson();
         check(shortResult["candidates"]![0]!["frames"]!.GetValue<ulong>() == 344,
             "a 344-frame source video is captured at its one-cycle period rather than an arbitrary ten-second multiple");
 
@@ -40,15 +40,15 @@ internal static class ExactVideoLoopChecks
 
         JsonObject ordinary = Trace(); ordinary["duration_numerator"] = 1199; ordinary["duration_denominator"] = 60;
         ordinary["confidence"] = "medium"; ordinary["event_driven"] = null; ordinary["dynamic_controlled"] = null;
-        JsonObject ordinaryResult = HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) },
-            source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray(ordinary) }, [1], 60, 1);
+        JsonObject ordinaryResult = LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) },
+            source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray(ordinary) }, [1], 60, 1).ToJson();
         check(ordinaryResult["candidates"]![0]!["frames"]!.GetValue<ulong>() == 1199 &&
             ordinaryResult["candidates"]![0]!["patches"]!.AsArray().Count == 0,
             "an uncontrolled 1199-frame video selects its source period without an unnecessary rate override");
 
         JsonObject hacker = Trace(); hacker["duration_numerator"] = 493493; hacker["duration_denominator"] = 24000;
-        JsonObject hackerResult = HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) },
-            source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray(hacker) }, [1], 60, 1);
+        JsonObject hackerResult = LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) },
+            source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray(hacker) }, [1], 60, 1).ToJson();
         JsonObject hackerCandidate = hackerResult["candidates"]!.AsArray().Single()!.AsObject();
         JsonObject hackerPatch = hackerCandidate["patches"]!.AsArray().OfType<JsonObject>().Single();
         check(hackerCandidate["frames"]!.GetValue<ulong>() == 1234 && hackerPatch["kind"]!.GetValue<string>() == "video_rate" &&
@@ -65,8 +65,8 @@ internal static class ExactVideoLoopChecks
         check(Analyze(controlled)["candidates"]!.AsArray().Count == 0,
             "a dynamically controlled video remains unresolved even with exact timing metadata");
         JsonObject hackerControlled = hacker.DeepClone().AsObject(); hackerControlled["dynamic_controlled"] = true;
-        check(HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) }, source, null,
-            new JsonObject { ["runtime_animation_periods"] = new JsonArray(hackerControlled) }, [1], 60, 1)["candidates"]!.AsArray().Count == 0,
+        check(LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) }, source, null,
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray(hackerControlled) }, [1], 60, 1).ToJson()["candidates"]!.AsArray().Count == 0,
             "a video forbidden from retiming does not receive a nearest-frame override");
 
         JsonObject missingRate = Trace(); missingRate.Remove("playback_rate");
@@ -101,10 +101,10 @@ internal static class ExactVideoLoopChecks
         check(SpriteRefusal(steadySprite).Contains("full capture and seam validation", StringComparison.Ordinal),
             "deterministic sprite playback control keeps the softer capture-and-validate refusal");
 
-        JsonObject externalControl = HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray {
+        JsonObject externalControl = LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray {
                 new JsonObject { ["id"] = 1 },
                 new JsonObject { ["id"] = 2, ["script"] = "thisScene.getLayer(1).getVideoTexture().pause();" }
-            } }, source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray { Trace() } }, [1], 30000, 1001);
+            } }, source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray { Trace() } }, [1], 30000, 1001).ToJson();
         check(externalControl["candidates"]!.AsArray().Count == 0 &&
             externalControl["unresolved"]!.AsArray().OfType<JsonObject>().Any(x => x["kind"]?.GetValue<string>() == "runtime_video"),
             "a different source layer's video playback control rejects the target video");
@@ -145,9 +145,9 @@ internal static class ExactVideoLoopChecks
             ["duration_seconds"] = 30.0, ["duration_numerator"] = 30, ["duration_denominator"] = 1,
             ["frame_count"] = frameCount, ["playback_rate"] = 1, ["looping"] = true, ["playback_mode"] = "loop",
             ["event_driven"] = null, ["confidence"] = "medium" };
-        JsonObject Cadence(int? frameCount) => HybridLoopService.Analyze(
+        JsonObject Cadence(int? frameCount) => LoopAnalysis.Analyze(
             new JsonObject { ["objects"] = new JsonArray { new JsonObject { ["id"] = 17 } } }, source, null,
-            new JsonObject { ["runtime_animation_periods"] = new JsonArray { Clip(frameCount) } }, [17], 60, 1);
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray { Clip(frameCount) } }, [17], 60, 1).ToJson();
 
         JsonObject divides = Cadence(900);
         check(divides["candidates"]!.AsArray().First()!["frames"]!.GetValue<ulong>() == 1800 &&

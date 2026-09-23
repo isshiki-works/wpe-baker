@@ -47,7 +47,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     internal Dictionary<string, JsonObject> StartSearches { get; } = new(StringComparer.Ordinal);
 
     /// <summary>起点搜索与 master 共用的预热基准（精灵整周期预热 + 粒子预热），样本第 s 帧就是 master 起点取 s 时的第 0 帧。</summary>
-    internal ulong SearchWarmupFrames => LoopWarmup.BaseFrames(LoopWarmup.CandidateSourcePeriodWarmupFrames(loopCandidates), frames, warmupFrames);
+    internal ulong SearchWarmupFrames => LoopWarmup.BaseFrames(LoopWarmupJson.CandidateSourcePeriodWarmupFrames(loopCandidates), frames, warmupFrames);
 
     /// <summary>组的捕获几何，并核对像素尺寸与组 id（组 id 要当目录名用）。</summary>
     internal GroupCapture Capture(JsonObject group)
@@ -70,7 +70,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         bool residual = !probe && residualGroupIndexes.Contains(index);
         bool closureJudged = !probe && !residual;
         ulong rendered = residual ? checked(frames + crossfadeFrames) : closureJudged ? checked(frames + 1) : frames;
-        ulong sourcePeriodWarmup = probe ? 0 : LoopWarmup.CandidateSourcePeriodWarmupFrames(loopCandidates);
+        ulong sourcePeriodWarmup = probe ? 0 : LoopWarmupJson.CandidateSourcePeriodWarmupFrames(loopCandidates);
         return new(residual, closureJudged, rendered, sourcePeriodWarmup,
             LoopWarmup.MasterFrames(sourcePeriodWarmup, frames, warmupFrames, StartFrame));
     }

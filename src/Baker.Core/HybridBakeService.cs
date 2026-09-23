@@ -206,9 +206,9 @@ public sealed class HybridBakeService(NativeTools tools)
                 if (previousCodes[i] == BlockerCode.MissingScriptFaultEvidence) previousBlockers.RemoveAt(i);
         }
         if (plan["blockers"] is JsonArray { Count: > 0 }) throw new InvalidDataException("Resolve the plan's listed blockers before generating it.");
-        if (HybridScenePlanner.FullFrameConflict(plan) is Blocker initialLayoutConflict)
+        if (LayoutAdmission.FullFrameConflict(plan) is Blocker initialLayoutConflict)
             throw initialLayoutConflict.ToException();
-        if (HybridScenePlanner.CompositionHierarchyConflict(plan) is Blocker initialHierarchyConflict)
+        if (LayoutAdmission.CompositionHierarchyConflict(plan) is Blocker initialHierarchyConflict)
             throw initialHierarchyConflict.ToException();
         if (request.DeviceUuid is not null)
         {
@@ -249,9 +249,9 @@ public sealed class HybridBakeService(NativeTools tools)
             finally { timing.AddOverlapped(StageTiming.CompositionValidation, Stopwatch.GetElapsedTime(started).TotalSeconds); }
         });
         var original = source.ReadJson(source.SceneResource);
-        HybridScenePlanner.ApplyAudioEffectChoice(original, plan);
+        PlanTransforms.ApplyAudioEffectChoice(original, plan);
         var metadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
-        var originalObjects = original["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(HybridScenePlanner.Id);
+        var originalObjects = original["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(SceneGraph.Id);
         var groups = plan["video_groups"]!.AsArray().OfType<JsonObject>().ToArray();
         var plannedLiveIds = (plan["live_layer_ids"] as JsonArray ?? []).Select(node => node!.GetValue<int>()).ToHashSet();
         // 组内并行只提前跑主渲染：最多这么多个组的渲染同时在飞，判定、编码与写入仍严格按组序串行。
@@ -497,7 +497,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 "在接缝处做固定窗口的整帧交叉淡化。"));
                             using (timing.Measure(StageTiming.Crossfade))
                                 groupCrossfade = gpuDirect ? master["loop_crossfade"]!.DeepClone().AsObject()
-                                    : await runner.ApplyLoopCrossfadeAsync(masterPath, frames, crossfadeFrames, cancellationToken);
+                                    : await new MasterRewrite(new FfmpegTool(tools)).CrossfadeAsync(masterPath, frames, crossfadeFrames, cancellationToken);
                             groupCrossfade["group_id"] = id;
                             // 顶层 loop_crossfade 记第一个残差组；每组自己的淡化记录（含自检）在组记录里。
                             if (report["loop_crossfade"] is null) report["loop_crossfade"] = groupCrossfade.DeepClone();
@@ -572,7 +572,7 @@ public sealed class HybridBakeService(NativeTools tools)
                             groupScheduler.CenterX, groupScheduler.CenterY,
                             crop.Width * capture.Width / capture.PixelWidth, crop.Height * capture.Height / capture.PixelHeight,
                             cancellationToken, packedAlpha, depthX, depthY, x, y, isStatic,
-                            capturedColor: HybridScenePlanner.Int(group["parent_id"]) is not null);
+                            capturedColor: SceneGraph.Int(group["parent_id"]) is not null);
                         HybridVideoProjection.AttachToParent(layer, group);
                         if (daytimeExport is not null)
                             daytimeExport.BindReplacement(layer, originalObjects[daytimeExport.ReplacementTargets[id]], isStatic);
@@ -699,7 +699,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 bool packed = group["packed_alpha"]?.GetValue<bool>() == true;
                 uint width = group["crop"]?["width"]?.GetValue<uint>() ?? 0, height = group["crop"]?["height"]?.GetValue<uint>() ?? 0;
                 samples.Add(new(group["id"]!.GetValue<string>(), packed, width * (packed ? 2u : 1u), height, probeFrames,
-                    new FileInfo(video).Length, await EmbeddedVideoBudget.ReadPacketsAsync(tools, video, cancellationToken)));
+                    new FileInfo(video).Length, await EmbeddedVideoBudgetJson.ReadPacketsAsync(tools, video, cancellationToken)));
             }
             if (samples.Count == 0) reason = new Message("bake.probe_all_static");
         }
@@ -709,7 +709,7 @@ public sealed class HybridBakeService(NativeTools tools)
             samples.Clear();
             reason = new Message("bake.probe_unreadable", [error.Message]);
         }
-        return EmbeddedVideoBudget.EvaluateProbe(samples, frames, settings.FpsNumerator, settings.FpsDenominator, reason);
+        return EmbeddedVideoBudgetJson.EvaluateProbe(samples, frames, settings.FpsNumerator, settings.FpsDenominator, reason);
     }
 
     internal static void EnsureNewDerivedOutput(ProjectSource source, string destination, string description)
@@ -731,7 +731,7 @@ public sealed class HybridBakeService(NativeTools tools)
         foreach (JsonObject patch in candidate["patches"]?.AsArray().OfType<JsonObject>() ?? [])
         {
             if (patch["kind"]?.GetValue<string>() != "video_rate") continue;
-            int? owner = HybridScenePlanner.Int(patch["owner_layer_id"]);
+            int? owner = SceneGraph.Int(patch["owner_layer_id"]);
             if (owner is null || !groupLayerIds.Contains(owner.Value)) continue;
             if (!owners.Add(owner.Value) || patch["rate_numerator"] is null || patch["rate_denominator"] is null)
                 throw new InvalidDataException("Video rate patches must provide one exact override per captured owner.");

@@ -16,7 +16,7 @@ internal static class HybridExportSafety
         var externalLiveErrors = new JsonArray();
         foreach (var error in errors.OfType<JsonObject>())
         {
-            if (HybridScenePlanner.Int(error["owner_layer_id"]) is not int owner || !sourceObjects.ContainsKey(owner))
+            if (SceneGraph.Int(error["owner_layer_id"]) is not int owner || !sourceObjects.ContainsKey(owner))
                 throw new InvalidDataException("A full capture source script fault lacks a known authored owner.");
             string? reason = groupLayers.Contains(owner) ? "source_script_fault_in_baked_layer" :
                 protectedLayers.Contains(owner) ? "source_script_fault_in_retained_ancestor" :
@@ -37,7 +37,7 @@ internal static class HybridExportSafety
         var unsafeDependencies = new JsonArray();
         foreach (var dependency in dependencies.OfType<JsonObject>())
         {
-            int? owner = HybridScenePlanner.Int(dependency["owner"]), target = HybridScenePlanner.Int(dependency["target"]);
+            int? owner = SceneGraph.Int(dependency["owner"]), target = SceneGraph.Int(dependency["target"]);
             string? operation = dependency["operation"]?.GetValue<string>();
             string? reason = null;
             if (operation == "input" && owner is int inputOwner && protectedLayers.Contains(inputOwner) &&
@@ -67,7 +67,7 @@ internal static class HybridExportSafety
         {
             int id = layer;
             var seen = new HashSet<int>();
-            while (sourceObjects.TryGetValue(id, out var obj) && HybridScenePlanner.Int(obj["parent"]) is int parent && sourceObjects.ContainsKey(parent))
+            while (sourceObjects.TryGetValue(id, out var obj) && SceneGraph.Int(obj["parent"]) is int parent && sourceObjects.ContainsKey(parent))
             {
                 if (!seen.Add(id)) throw new InvalidDataException("Scene parent cycle during capture dependency validation.");
                 protectedLayers.Add(parent);

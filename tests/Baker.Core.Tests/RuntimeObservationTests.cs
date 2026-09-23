@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 using Baker.Core;
 using Xunit;
 
-// C2.2a：场景层级（SceneGraph）与运行时观测阶段（RuntimeObservation / IRuntimeObserver / ObservationKey）。
+// C2.2a：场景层级（SceneGraph）与运行时观测阶段（RuntimeObservation / NativeRuntimeObserver / ObservationKey）。
 [Trait("Layer", "L0")]
 public class SceneGraphTests
 {
@@ -103,87 +103,13 @@ public class ScriptFaultEvidenceTests
 }
 
 [Trait("Layer", "L1")]
-public class RuntimeObservationStageTests
-{
-    /// <summary>假观测器：记下每次请求，返回一份完整 trace，或按要求抛错。</summary>
-    private sealed class FakeObserver(string identity = "fake", Exception? failure = null) : IRuntimeObserver
-    {
-        public List<ObservationRequest> Requests { get; } = [];
-        public string Identity => identity;
-        public Task<JsonObject> ObserveAsync(ObservationRequest request, CancellationToken cancellationToken)
-        {
-            Requests.Add(request);
-            if (failure is not null) throw failure;
-            return Task.FromResult(new JsonObject
-            {
-                ["status"] = "complete", ["runtime_dependencies"] = new JsonArray(), ["runtime_layers"] = new JsonArray(),
-                ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray()
-            });
-        }
-    }
-
-    private static async Task<RuntimeObservation> Observe(string root, string name, FakeObserver observer, string? device, string? interaction)
-    {
-        string sourceDirectory = Path.Combine(root, "source");
-        if (!Directory.Exists(sourceDirectory))
-        {
-            Directory.CreateDirectory(sourceDirectory);
-            File.WriteAllText(Path.Combine(sourceDirectory, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
-            File.WriteAllText(Path.Combine(sourceDirectory, "scene.json"), "{\"objects\":[{\"id\":1}]}");
-        }
-        using var source = new ProjectSource(sourceDirectory);
-        var scene = source.ReadJson(source.SceneResource);
-        string output = Path.Combine(root, name);
-        Directory.CreateDirectory(output);
-        var request = new HybridAnalyzeRequest(2, sourceDirectory, "assets", output, 1920, 1080, DeviceUuid: device,
-            Interaction: interaction, AnalysisCacheDirectory: Path.Combine(root, "cache"));
-        return await RuntimeObservation.ObserveAsync(request, source, "hash", scene, new JsonObject(), new JsonObject(),
-            new SceneGraph(scene), output, observer, null, CancellationToken.None);
-    }
-
-    [Fact]
-    public async Task CacheKeyIgnoresOutputAndDeviceWithoutGpuTiming() => await TestTemp.Run(async root =>
-    {
-        var observer = new FakeObserver();
-        await Observe(root, "first", observer, device: "a", interaction: null);
-        var second = await Observe(root, "second", observer, device: "b", interaction: null);
-        var request = Assert.Single(observer.Requests);
-        Assert.Equal((512u, 288u), (request.Key.Width, request.Key.Height));
-        Assert.Equal("complete", second.Trace["status"]!.GetValue<string>());
-        Assert.True(File.Exists(Path.Combine(root, "second", "runtime.json")));
-    });
-
-    [Fact]
-    public async Task GpuTimingKeysOnDeviceAndRendererIdentity() => await TestTemp.Run(async root =>
-    {
-        var observer = new FakeObserver();
-        await Observe(root, "first", observer, device: "a", interaction: "fixed");
-        await Observe(root, "second", observer, device: "b", interaction: "fixed");
-        await Observe(root, "third", new FakeObserver("other-renderer"), device: "b", interaction: "fixed");
-        Assert.Equal(2, observer.Requests.Count);
-        Assert.True(observer.Requests[0].Key.GpuTiming);
-        Assert.Equal("b", observer.Requests[1].DeviceUuid);
-        Assert.Equal(3, Directory.GetFiles(Path.Combine(root, "cache"), "runtime-*.json").Length);
-    });
-
-    [Fact]
-    public async Task UnreadableAssetBecomesAToolLimitation() => await TestTemp.Run(async root =>
-    {
-        var observer = new FakeObserver(failure: new IOException("MDL parse failed: models/a.mdl: unsupported header"));
-        await Assert.ThrowsAsync<AnalysisToolLimitationException>(() => Observe(root, "first", observer, null, null));
-        var plain = new FakeObserver(failure: new IOException("disk on fire"));
-        await Assert.ThrowsAsync<IOException>(() => Observe(root, "second", plain, null, null));
-    });
-}
-
-[Trait("Layer", "L1")]
 public class NativeRuntimeObserverIdentityTests
 {
     [Fact]
     public async Task IdentityFollowsRendererContentNotTimestamp() => await TestTemp.Run(root =>
     {
         string renderer = Path.Combine(root, "wpe-render.exe");
-        IRuntimeObserver Observer() => new NativeRuntimeObserver(new NativeTools(renderer, "ffmpeg", "ffprobe", []));
+        NativeRuntimeObserver Observer() => new NativeRuntimeObserver(new NativeTools(renderer, "ffmpeg", "ffprobe", []));
         Assert.Equal("missing", Observer().Identity);
         File.WriteAllText(renderer, "build-1");
         string first = Observer().Identity;

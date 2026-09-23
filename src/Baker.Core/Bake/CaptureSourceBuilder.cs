@@ -41,8 +41,8 @@ internal static class CaptureSourceBuilder
     private static JsonObject Scene(JsonObject original, JsonObject snapshot, JsonObject plan, HybridAnalyzeRequest settings, bool probe)
     {
         var scene = original.DeepClone().AsObject();
-        HybridScenePlanner.FreezeTemporalProperties(scene, snapshot);
-        HybridScenePlanner.ApplySnapshotOmissions(scene, plan);
+        PlanTransforms.FreezeTemporalProperties(scene, snapshot);
+        PlanTransforms.ApplySnapshotOmissions(scene, plan);
         DaytimeSplit.ApplyState(scene, plan);
         if (settings.ViewMode == "fixed_view") scene["general"]!["cameraparallax"] = false;
         scene["general"]!["camerashake"] = false;

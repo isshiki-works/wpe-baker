@@ -98,7 +98,7 @@ internal static class GroupVerdicts
             ["late_dependency_validation"] = lateDependency,
             ["encoded_loop_validation"] = null, ["hardware_decode"] = null });
         report["status"] = EmbeddedVideoBudget.RejectedBakeStatus;
-        EmbeddedVideoBudget.EncodedRejection(id, encodedBytes, frames, settings.FpsNumerator, settings.FpsDenominator).Write(report, "reason");
+        EmbeddedVideoBudgetJson.EncodedRejection(id, encodedBytes, frames, settings.FpsNumerator, settings.FpsDenominator).Write(report, "reason");
     }
 
     /// <summary>

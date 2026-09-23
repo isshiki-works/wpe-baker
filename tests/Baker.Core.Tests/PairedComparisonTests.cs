@@ -134,7 +134,7 @@ public class PairedComparisonTests
     }
 
     /// <summary>假渲染器：按帧号填满同一块缓冲区交给接收器，交出后立刻涂掉，比较时读到的必须是交出那一刻的内容。</summary>
-    private static Func<IFrameSink, CancellationToken, Task<JsonObject>> FakeRenderer(byte side, int frames, int failAt = -1, int delayMs = 0) =>
+    private static Func<CandidateValidation.Lockstep.Side, CancellationToken, Task<JsonObject>> FakeRenderer(byte side, int frames, int failAt = -1, int delayMs = 0) =>
         async (sink, token) =>
         {
             byte[] buffer = new byte[16];

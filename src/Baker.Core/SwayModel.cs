@@ -17,10 +17,4 @@ public sealed record SwayRetimeOptions(double LoopLengthMaximumSeconds, double O
     /// 要关掉就显式传 `--sway-retime off` 或取消勾选。
     /// </summary>
     public const bool OnByDefault = true;
-
-    /// <summary>--loop-max-seconds 的默认值（秒）。定义在 Domain 的 CommonLoopSolver，这里是同值别名（转发器清单登记，C3 删）。</summary>
-    public const double DefaultLoopLengthMaximumSeconds = CommonLoopSolver.DefaultLoopLengthMaximumSeconds;
-
-    /// <summary>--loop-max-seconds 允许的上限（秒）。同上，别名。</summary>
-    public const double MaximumLoopLengthSeconds = CommonLoopSolver.MaximumLoopLengthSeconds;
 }

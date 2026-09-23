@@ -5,7 +5,7 @@ namespace Baker.Core;
 /// <summary>
 /// 播放版成品的唯一画质门（C2.4b 把 master 路线的两种解码与 GPU 直编路线合成这一处）：抽样若干帧，算成品对参照的
 /// SSIM/PSNR，与「同一 master 的 libx264 fast crf16 成品」的 SSIM 参照值按比例比较。master 路线不达标先升一档质量重编、
-/// 升满仍不达标回退软件编码；GPU 直编路线不达标直接拒绝。比对本身交给 <see cref="IQualityComparer"/>。
+/// 升满仍不达标回退软件编码；GPU 直编路线不达标直接拒绝。比对本身交给 <see cref="FfmpegQualityComparer"/>。
 /// 这是新增判据，不替换也不放宽任何既有判据（接缝、帧数、时基、哈希那些照旧各自把关）。
 /// </summary>
 public static class QualityGate

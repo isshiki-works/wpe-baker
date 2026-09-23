@@ -12,7 +12,7 @@ internal static class EffectPrefixProfileChecks
 {
     private static readonly MethodInfo AnalyzePrefix = typeof(HybridLoopService).Assembly
         .GetType("Baker.Core.EffectPrefixPlanner")!
-        .GetMethod("AnalyzePrefix", BindingFlags.Static | BindingFlags.NonPublic)!;
+        .GetMethod("AnalyzeIndexedPrefix", BindingFlags.Static | BindingFlags.NonPublic)!;
     private static readonly MethodInfo Propose = typeof(HybridLoopService).Assembly
         .GetType("Baker.Core.EffectPrefixPlanner")!
         .GetMethod("Propose", BindingFlags.Static | BindingFlags.NonPublic)!;
@@ -69,7 +69,7 @@ internal static class EffectPrefixProfileChecks
         static HybridAnalyzeRequest Request(string? preset) =>
             new(2, "s", "a", "o", 1920, 1080, 60, 1, SwayRetime: true, Preset: preset);
         JsonObject Prefix(string? preset) => (JsonObject)AnalyzePrefix.Invoke(null,
-            [Scene(), source, null, new JsonObject(), new JsonObject(), 7, 2, Request(preset), new JsonObject()])!;
+            [Scene(), source, null, new JsonObject(), new JsonObject(), 7, 2, Request(preset), new JsonObject(), null])!;
         JsonArray Proposals(string? preset) => (JsonArray)Propose.Invoke(null,
             [Scene(), source, sourceDirectory, new JsonObject(), new JsonObject(), Request(preset), new JsonObject()])!;
 

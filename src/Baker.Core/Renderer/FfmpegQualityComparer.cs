@@ -4,11 +4,11 @@ using System.Text.RegularExpressions;
 namespace Baker.Core;
 
 /// <summary>
-/// 用包内 ffmpeg 的 ssim/psnr 滤镜量画质（<see cref="IQualityComparer"/> 的 C2.4b 实现）。抽样帧怎么解由
+/// 用包内 ffmpeg 的 ssim/psnr 滤镜量画质。抽样帧怎么解由
 /// <see cref="QualityGate.UsesFrameWindows"/> 定：短循环一遍顺序解、select 取帧、不限线程（P1a）；长循环按抽样帧逐个 seek 取窗口。
 /// 两种取法解出的帧逐字节相同，比对滤镜图也与改前一致，所以同一对输入量出的 SSIM/PSNR 不随取法变。
 /// </summary>
-internal sealed partial class FfmpegQualityComparer(FfmpegTool ff) : IQualityComparer
+internal sealed partial class FfmpegQualityComparer(FfmpegTool ff)
 {
     /// <summary>成品分支与 master 分支在滤镜图里的标签，取得够怪以免和编码滤镜里的标签撞名。</summary>
     private const string ProductLabel = "gateproduct";

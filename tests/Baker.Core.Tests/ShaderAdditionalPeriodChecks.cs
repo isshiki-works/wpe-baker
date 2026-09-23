@@ -25,7 +25,7 @@ internal static class ShaderAdditionalPeriodChecks
         ShaderCorpusRun dual = ShaderCorpusChecks.Run(check, root, "dual-wave");
         using var dualSource = new ProjectSource(dual.Directory);
         JsonObject dualScene = dual.Scene;
-        JsonObject dualReport = HybridLoopService.Analyze(dualScene, dualSource, null, new JsonObject(), [7], 60, 1);
+        JsonObject dualReport = LoopAnalysis.Analyze(dualScene, dualSource, null, new JsonObject(), [7], 60, 1).ToJson();
         JsonObject dualCandidate = dualReport["candidates"]!.AsArray().First()!.AsObject();
         JsonObject[] dualCycles = dualCandidate["components"]!.AsArray().OfType<JsonObject>().ToArray();
         JsonObject[] dualPatches = dualCandidate["patches"]!.AsArray().OfType<JsonObject>().ToArray();
@@ -53,7 +53,7 @@ internal static class ShaderAdditionalPeriodChecks
         var singleValues = singleCycleScene["objects"]![0]!["effects"]![0]!["passes"]![0]!["constantshadervalues"]!.AsObject();
         singleValues["ui_editor_properties_delay"] = 4.3699999;
         singleValues["ui_editor_properties_speed"] = .69999999;
-        JsonObject singleCycle = HybridLoopService.Analyze(singleCycleScene, shimmerSource, null, new JsonObject(), [11], 60, 1);
+        JsonObject singleCycle = LoopAnalysis.Analyze(singleCycleScene, shimmerSource, null, new JsonObject(), [11], 60, 1).ToJson();
         check(singleCycle["candidates"]![0]!["frames"]!.GetValue<ulong>() == 375 &&
             singleCycle["candidates"]![0]!["components"]![0]!["cycles"]!.GetValue<ulong>() == 1,
             "one retimable 6.24-second source cycle uses 375 frames instead of seven traversals to avoid a tiny retime");

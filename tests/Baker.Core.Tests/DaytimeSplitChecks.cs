@@ -395,7 +395,7 @@ internal static class DaytimeSplitChecks
         check(rejectedUnknownState, "脚本枚举不出的状态名被拒绝，不静默退回整幅实时");
 
         JsonObject videoPlan = await PlanAsync("indexed-video", split: true, state: "day", indexedVideo: true);
-        check(HybridScenePlanner.CompositionHierarchyConflict(videoPlan) is null,
+        check(LayoutAdmission.CompositionHierarchyConflict(videoPlan) is null,
             "昼夜计划的纯层级骨架检查不把缺少源脚本的骨架误交给动态成品重验");
         check(videoPlan["daytime_split"]?["controls_video_playback"]?.GetValue<bool>() == true && Allocation(videoPlan, 11) == "video" &&
             Allocation(videoPlan, 10) == "inactive" && Allocation(videoPlan, 22) == "inactive" &&

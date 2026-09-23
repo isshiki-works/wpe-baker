@@ -3,19 +3,10 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// <summary>
-/// 循环分析的门面。分析本体在 <see cref="LoopAnalysis"/>（C2.2c 拆出），这里只把类型化报告渲染成 plan.loop；
-/// <see cref="ApplyPatches"/> 是 bake 侧按 plan 里的候选改写捕获场景。
+/// bake 侧按 plan 里的候选改写捕获场景（<see cref="ApplyPatches"/>）。循环分析本体在 <see cref="LoopAnalysis"/>。
 /// </summary>
 public static class HybridLoopService
 {
-    /// <summary>转发器（登记于 runs/C2-plan/forwarders.txt，C3 删）：调用方改为直接用 <see cref="LoopAnalysis.Analyze"/>。</summary>
-    public static JsonObject Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory, JsonObject runtime,
-        IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent = 2,
-        CommonLoopPreference preference = CommonLoopPreference.Balanced, SwayRetimeOptions? swayRetime = null,
-        double? loopLengthMaximumSeconds = null, EmbeddedVideoLoopLimit? loopLengthLimit = null) =>
-        LoopAnalysis.Analyze(scene, source, assetsDirectory, runtime, bakedLayerIds, fpsNumerator, fpsDenominator, maximumRetimePercent,
-            preference, swayRetime, loopLengthMaximumSeconds, loopLengthLimit).ToJson();
-
     /// <summary>Applies only the selected report candidate's rate patches to a temporary capture scene.</summary>
     public static void ApplyPatches(JsonObject captureScene, JsonObject loopReport, int candidateIndex = 0)
     {

@@ -4,7 +4,7 @@ namespace Periodica.Domain;
 /// Wallpaper Engine 内嵌视频（TEX 容器 TEXB0004 里的 MP4）的大小上限，以及成品视频大小的两种预估：
 /// analyze 按参考码率收紧摆动改频的循环长度上限；bake 在主渲染前按短段试编码（composition probe）外推，超限就干净拒绝；
 /// 编码后仍超限（外推低估）时在接缝校验前拒绝，不再跑到装配才失败。
-/// 这里只放数值判据；写 plan/bake JSON、拒绝文案与 ffprobe 读包在 Baker.Core 的 EmbeddedVideoBudgetJson（静态扩展挂回本类名下）。
+/// 这里只放数值判据；写 plan/bake JSON、拒绝文案与 ffprobe 读包在 Baker.Core 的 EmbeddedVideoBudgetJson。
 /// </summary>
 public static class EmbeddedVideoBudget
 {

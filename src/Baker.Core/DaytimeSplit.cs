@@ -372,7 +372,7 @@ internal static class DaytimeSplit
         internal void BindReplacement(JsonObject replacement, JsonObject original, bool isStatic)
         {
             if (isStatic) throw new InvalidDataException("A dynamic daytime replacement must remain a playable video texture.");
-            if (HybridScenePlanner.Int(replacement["parent"]) != HybridScenePlanner.Int(original["parent"]))
+            if (SceneGraph.Int(replacement["parent"]) != SceneGraph.Int(original["parent"]))
                 throw new InvalidDataException("A dynamic daytime replacement must preserve its source parent.");
             replacement["id"] = original["id"]!.DeepClone();
             replacement["name"] = original["name"]!.DeepClone();
@@ -404,21 +404,21 @@ internal static class DaytimeSplit
                 throw new InvalidDataException("Dynamic daytime export requires one selected controlled source per video group; mixed or repeated groups are not supported.");
             int target = ids[0];
             if (!objects.TryGetValue(target, out JsonObject? original) || original["image"] is null ||
-                objects.Values.Any(obj => HybridScenePlanner.Int(obj["parent"]) == target) ||
-                HybridScenePlanner.Int(group["parent_id"]) != HybridScenePlanner.Int(original["parent"]))
+                objects.Values.Any(obj => SceneGraph.Int(obj["parent"]) == target) ||
+                SceneGraph.Int(group["parent_id"]) != SceneGraph.Int(original["parent"]))
                 throw new InvalidDataException("Dynamic daytime export requires a leaf image layer with its original parent.");
             if (SceneAnalyzer.Walk(original).OfType<JsonObject>().Any(node => node.ContainsKey("script") ||
                 !ReferenceEquals(node, original["visible"]) && PlanNarrative.BoundProperty(node) is { } property &&
                 detection.Selection.PropertyKeys.Contains(property.Name, StringComparer.Ordinal)))
                 throw new InvalidDataException("The replacement's drawing or scripts also depend on the preserved daytime controls.");
-            foreach (JsonObject dependency in dependencies.OfType<JsonObject>().Where(dependency => HybridScenePlanner.Int(dependency["target"]) == target &&
+            foreach (JsonObject dependency in dependencies.OfType<JsonObject>().Where(dependency => SceneGraph.Int(dependency["target"]) == target &&
                 dependency["operation"]?.GetValue<string>() is "read" or "write"))
             {
                 string? operation = dependency["operation"]?.GetValue<string>(), property = dependency["property"]?.GetValue<string>();
-                bool selectorAccess = HybridScenePlanner.Int(dependency["owner"]) == detection.ControllerId &&
+                bool selectorAccess = SceneGraph.Int(dependency["owner"]) == detection.ControllerId &&
                     dependency["binding"]?.GetValue<string>() == "visible" &&
                     (operation == "read" && property == "videoTexture" || operation == "write" && property == "visible");
-                bool captureInitialization = HybridScenePlanner.Int(dependency["owner"]) == target &&
+                bool captureInitialization = SceneGraph.Int(dependency["owner"]) == target &&
                     dependency["initialization"]?.GetValue<bool>() == true && operation == "read" && property == "videoTexture";
                 if (!selectorAccess && !captureInitialization)
                     throw new InvalidDataException("Another script accesses the daytime replacement's source fields or resources.");
@@ -442,7 +442,7 @@ internal static class DaytimeSplit
             if (replacement is not null)
             {
                 if (obj["id"]?.GetValue<int>() != id || obj["name"]?.GetValue<string>() != original["name"]?.GetValue<string>() ||
-                    HybridScenePlanner.Int(obj["parent"]) != HybridScenePlanner.Int(original["parent"]))
+                    SceneGraph.Int(obj["parent"]) != SceneGraph.Int(original["parent"]))
                     throw new InvalidDataException("The daytime replacement lost its source identity or parent.");
                 obj["visible"] = original["visible"]?.DeepClone() ?? JsonValue.Create(true);
             }
@@ -461,7 +461,7 @@ internal static class DaytimeSplit
             properties: properties);
         if (!detection.IsRecognized || !detection.ControlsVideoPlayback || detection.StateNamed(stateName) is not State state) return null;
         JsonObject copy = scene.DeepClone().AsObject();
-        HybridScenePlanner.FreezeTemporalProperties(copy, properties);
+        PlanTransforms.FreezeTemporalProperties(copy, properties);
         ApplyState(copy, detection, state);
         return copy;
     }

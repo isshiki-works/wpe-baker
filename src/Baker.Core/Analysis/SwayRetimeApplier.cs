@@ -22,7 +22,7 @@ internal static class SwayRetimeApplier
             ["preset"] = options.Profile?.Preset, ["retime_budget_percent"] = options.BudgetPercent,
             ["retime_budget_source"] = options.Profile?.BudgetSource };
         // 循环长度上限按内嵌视频 2 GiB 收紧的记录；loop_length_maximum_seconds 已是收紧后的生效值。
-        if (options.VideoLimit is EmbeddedVideoLoopLimit videoLimit) record["embedded_video_limit"] = videoLimit.ToJson();
+        if (options.VideoLimit is EmbeddedVideoLoopLimit videoLimit) record["embedded_video_limit"] = EmbeddedVideoBudgetJson.ToJson(videoLimit);
         int[] swayIndexes = shaderUnresolved.Select((item, index) => (item, index))
             .Where(pair => pair.item.Mechanism == ShaderPeriodAnalysis.FoliageSwayMechanism).Select(pair => pair.index).ToArray();
         int[] modeled = swayIndexes.Where(index => shaderUnresolved[index].Sway is not null).ToArray();
@@ -98,8 +98,8 @@ internal static class SwayRetimeApplier
                 ? (options.BudgetPercent ?? 0).ToString("0.###", CultureInfo.InvariantCulture)
                 : SwayRecurrenceSolver.SlowSpeedDeviationLimit(options.SpeedLimitScale).ToString("0.###", CultureInfo.InvariantCulture);
             // 上限是被内嵌视频大小收紧的，原因后面补一句说明收紧依据，否则用户看到的秒数和自己给的对不上。
-            string limitZh = options.VideoLimit is { Applied: true } appliedLimit ? appliedLimit.Sentence(MessageCatalog.Chinese) : "";
-            string limitEn = options.VideoLimit is { Applied: true } appliedLimitEn ? " " + appliedLimitEn.Sentence(MessageCatalog.English) : "";
+            string limitZh = options.VideoLimit is { Applied: true } appliedLimit ? EmbeddedVideoBudgetJson.Sentence(appliedLimit, MessageCatalog.Chinese) : "";
+            string limitEn = options.VideoLimit is { Applied: true } appliedLimitEn ? " " + EmbeddedVideoBudgetJson.Sentence(appliedLimitEn, MessageCatalog.English) : "";
             record["status"] = status;
             record["reason_zh"] = MessageCatalog.Get("sway_retime." + status, MessageCatalog.Chinese, maximum, limit) + limitZh;
             record["reason_en"] = MessageCatalog.Get("sway_retime." + status, MessageCatalog.English, maximum, limit) + limitEn;

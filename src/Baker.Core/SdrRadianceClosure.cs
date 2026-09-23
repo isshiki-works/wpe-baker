@@ -101,7 +101,7 @@ public static class SdrRadianceClosure
         foreach (var layer in (verdict["per_layer"] as JsonArray ?? []).OfType<JsonObject>())
         {
             if (Text(layer["status"]) != "open") continue;
-            string id = HybridScenePlanner.Int(layer["layer_id"])?.ToString(CultureInfo.InvariantCulture) ?? "?";
+            string id = SceneGraph.Int(layer["layer_id"])?.ToString(CultureInfo.InvariantCulture) ?? "?";
             string label = Text(layer["layer_name"]) is string name ? $"{groupId} 的图层 {id} \"{name}\"" : $"{groupId} 的图层 {id}";
             foreach (var check in (layer["checks"] as JsonArray ?? []).OfType<JsonObject>().Where(check => Text(check["status"]) != "pass"))
                 yield return $"{label}：{ChineseDetail(Text(check["rule"]), Text(check["detail"]))}（{Text(check["rule"])}）";
@@ -183,7 +183,7 @@ public static class SdrRadianceClosure
         ArgumentNullException.ThrowIfNull(source);
         var objects = new Dictionary<int, JsonObject>();
         foreach (var obj in scene["objects"]?.AsArray().OfType<JsonObject>() ?? [])
-            if (HybridScenePlanner.Int(obj["id"]) is int id) objects[id] = obj;
+            if (SceneGraph.Int(obj["id"]) is int id) objects[id] = obj;
         string groupId = Text(group["id"]) ?? "group";
         var reasons = new JsonArray();
         var perLayer = new JsonArray();
@@ -212,7 +212,7 @@ public static class SdrRadianceClosure
             }
             string name = Text(obj["name"]) ?? id.ToString(CultureInfo.InvariantCulture);
             // 明确解析为不可见、且没有任何动态绑定的层不参与绘制；其余一律参与判据。
-            if (HybridScenePlanner.Resolve(obj["visible"], properties) is JsonValue visible &&
+            if (SceneGraph.Resolve(obj["visible"], properties) is JsonValue visible &&
                 visible.TryGetValue<bool>(out bool shown) && !shown)
             {
                 perLayer.Add(new JsonObject { ["layer_id"] = id, ["layer_name"] = name, ["status"] = "not_drawn",
@@ -228,7 +228,7 @@ public static class SdrRadianceClosure
             // 字面值为空、又没绑脚本的文字层画不出任何像素（name 常是分隔线），不参与判据。
             // 场景里有脚本写图层文字时，渲染器给每个文字层都建动态网格、运行时可能被写进文字：观测到网格就照常判，与 Composer.Draws 同口径。
             if (!obj.ContainsKey("image") && !obj.ContainsKey("particle") && Composer.EmptyText(obj, properties) &&
-                runtimeLayers?.OfType<JsonObject>().Any(layer => HybridScenePlanner.Int(layer["id"]) == id &&
+                runtimeLayers?.OfType<JsonObject>().Any(layer => SceneGraph.Int(layer["id"]) == id &&
                     layer["has_mesh"] is JsonValue mesh && mesh.TryGetValue(out bool hasMesh) && hasMesh) != true)
             {
                 perLayer.Add(new JsonObject { ["layer_id"] = id, ["layer_name"] = name, ["status"] = "not_drawn",
@@ -257,7 +257,7 @@ public static class SdrRadianceClosure
     private static void EvaluateLayer(JsonObject obj, JsonObject properties, JsonArray? runtimeLayers,
         JsonArray? videoDecoders, ProjectSource source, string? assets, EffectRangeRules effectRules, JsonArray checks)
     {
-        int id = HybridScenePlanner.Int(obj["id"]) ?? -1;
+        int id = SceneGraph.Int(obj["id"]) ?? -1;
         var textures = new List<string>();
         // R1 材质封闭：只接受内置 SDR 着色器，且没有作者特效层或运行时 effect 材质。
         if (obj.ContainsKey("particle") || obj.ContainsKey("text"))
@@ -271,14 +271,14 @@ public static class SdrRadianceClosure
         var provenEffectShaders = new HashSet<string>(StringComparer.Ordinal);
         foreach (var effect in (obj["effects"] as JsonArray ?? []).OfType<JsonObject>())
         {
-            if (HybridScenePlanner.Resolve(effect["visible"], properties) is JsonValue effectVisible &&
+            if (SceneGraph.Resolve(effect["visible"], properties) is JsonValue effectVisible &&
                 effectVisible.TryGetValue<bool>(out bool effectShown) && !effectShown) continue;
             if (effectRules.IsRangeClosed(effect, properties, source, assets, provenEffectShaders, out string effectDetail)) continue;
             checks.Add(Check("R1", false, "the layer carries authored effect layers: " + effectDetail));
             return;
         }
         var observed = runtimeLayers?.OfType<JsonObject>()
-            .Where(layer => HybridScenePlanner.Int(layer["owner"]) == id).ToArray() ?? [];
+            .Where(layer => SceneGraph.Int(layer["owner"]) == id).ToArray() ?? [];
         if (observed.Length == 0)
         {
             checks.Add(Check("R1", false, "the runtime trace has no observed material for this layer"));
@@ -324,7 +324,7 @@ public static class SdrRadianceClosure
             }
         }
         // 材质定义：着色器、combos 与混合模式必须可读且落在白名单内。
-        string? image = Text(HybridScenePlanner.Resolve(obj["image"], properties));
+        string? image = Text(SceneGraph.Resolve(obj["image"], properties));
         if (image is null)
         {
             checks.Add(Check("R1", false, "the layer has no readable image model reference"));
@@ -383,7 +383,7 @@ public static class SdrRadianceClosure
                 return;
             }
         }
-        JsonNode? blendMode = HybridScenePlanner.Resolve(Field(obj, "colorBlendMode"), properties);
+        JsonNode? blendMode = SceneGraph.Resolve(Field(obj, "colorBlendMode"), properties);
         if (blendMode is not null && !(Number(blendMode, out double modeValue) && SdrRadianceCriteria.IsNormalColorBlendMode(modeValue)))
         {
             checks.Add(Check("R2", false, $"colorBlendMode {blendMode.ToJsonString()} is not the normal (0) mode"));
@@ -469,7 +469,7 @@ public static class SdrRadianceClosure
     /// <summary>标量是否为字面量且落在 [0,1]；script 或 animation 绑定一律判未知。</summary>
     private static bool ScalarClosed(JsonNode? raw, JsonObject properties, string label, out string detail)
     {
-        JsonNode? value = HybridScenePlanner.Resolve(raw, properties);
+        JsonNode? value = SceneGraph.Resolve(raw, properties);
         if (value is null)
         {
             detail = $"{label} is unset";
@@ -533,7 +533,7 @@ public static class SdrRadianceClosure
         node is JsonValue value && value.TryGetValue<string>(out string? text) ? text : null;
 
     private static IEnumerable<int> Ids(JsonNode? node) =>
-        (node as JsonArray)?.Select(item => HybridScenePlanner.Int(item)).OfType<int>() ?? [];
+        (node as JsonArray)?.Select(item => SceneGraph.Int(item)).OfType<int>() ?? [];
 
     private static IEnumerable<string> Strings(JsonNode? node) =>
         (node as JsonArray)?.Select(Text).OfType<string>().Where(text => text.Length > 0) ?? [];

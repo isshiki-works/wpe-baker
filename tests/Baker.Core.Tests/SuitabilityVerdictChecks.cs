@@ -210,12 +210,12 @@ internal static class SuitabilityVerdictChecks
                         "g_Texture0Rotation", "g_Texture0Translation", "g_Texture0Resolution", "g_LightsAmbient"),
                     ["textures"] = new JsonArray("static", "", "", "", "", "", "", "") }) }) };
 
-        JsonObject proven = HybridLoopService.Analyze(Scene(), source, null, Runtime("g_ModelViewProjectionMatrix"), [1], 60, 1);
+        JsonObject proven = LoopAnalysis.Analyze(Scene(), source, null, Runtime("g_ModelViewProjectionMatrix"), [1], 60, 1).ToJson();
         check(proven["candidates"]!.AsArray().Count == 1 && proven["no_candidate_reason"] is null &&
             proven["maximum_seconds"]!.GetValue<double>() == CommonLoopSolver.DefaultMaximumSeconds,
             "a scene that yields a candidate reports no no_candidate_reason and still publishes the solver ceiling");
 
-        JsonObject silent = HybridLoopService.Analyze(Scene(), source, null, Runtime("g_CustomInput"), [1], 60, 1);
+        JsonObject silent = LoopAnalysis.Analyze(Scene(), source, null, Runtime("g_CustomInput"), [1], 60, 1).ToJson();
         check(silent["candidates"]!.AsArray().Count == 0 && !silent["source_static"]!.GetValue<bool>() &&
             silent["no_candidate_reason"]!["kind"]!.GetValue<string>() == nameof(CommonLoopNoCandidateKind.NoTemporalMechanism) &&
             silent["no_candidate_reason"]!["ceiling_seconds"]!.GetValue<double>() == CommonLoopSolver.DefaultMaximumSeconds &&
@@ -223,7 +223,7 @@ internal static class SuitabilityVerdictChecks
             silent["no_candidate_reason"]!["runtime_period_count"]!.GetValue<int>() == 0,
             "a scene with no temporal mechanism at all reports NoTemporalMechanism instead of a silent empty candidate list");
 
-        JsonObject clocked = HybridLoopService.Analyze(Scene(), source, null, Runtime("g_Time"), [1], 60, 1);
+        JsonObject clocked = LoopAnalysis.Analyze(Scene(), source, null, Runtime("g_Time"), [1], 60, 1).ToJson();
         check(clocked["no_candidate_reason"]!["runtime_clock_uniform_count"]!.GetValue<int>() == 1,
             "an active runtime clock uniform is counted in the no-candidate evidence");
     }
