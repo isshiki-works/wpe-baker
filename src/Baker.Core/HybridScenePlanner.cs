@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
@@ -278,50 +277,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             request, projection, composer.Groups);
         AnnotateLoopCandidates(loop);
         // 三处回退都可能要前缀缓存，同一个终端捕获点只问一次渲染器。
-        var captureProbes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
-        async Task<JsonObject?> PrefixCaptureTargetAsync(JsonObject cache)
-        {
-            // 离线 trace 是开发者输入，没有渲染器可问；bake 的元数据探测会做同一裁定。
-            if (request.RuntimeTraceFile is not null) return null;
-            int owner = cache["owner_layer_id"]!.GetValue<int>(), terminal = cache["terminal_effect_id"]!.GetValue<int>();
-            bool forceVisibleOwner = cache["preserve_external_visibility"]?.GetValue<bool>() == true;
-            string key = owner.ToString(CultureInfo.InvariantCulture) + ":" + terminal.ToString(CultureInfo.InvariantCulture);
-            if (forceVisibleOwner) key += ":visible-control";
-            if (captureProbes.TryGetValue(key, out JsonObject? known)) return known;
-            string persistentKey = "capture-" + AnalysisCache.Key(source.SourcePath, properties, request.Assets, tools,
-                File.Exists(tools.Renderer) ? File.GetLastWriteTimeUtc(tools.Renderer).Ticks : 0,
-                request.FpsNumerator, request.FpsDenominator, request.DeviceUuid, key);
-            if (AnalysisCache.Read(request.AnalysisCacheDirectory, persistentKey) is JsonObject cachedProbe)
-                return captureProbes[key] = cachedProbe;
-            string? name = EffectPrefixCaptureTarget.LayerName(scene, owner);
-            string probeOutput = Path.Combine(output, $"effect-prefix-capture-probe-{owner}-{terminal}" + (forceVisibleOwner ? "-visible" : ""));
-            JsonObject observed = new(), probeVerdict;
-            try
-            {
-                // 与 bake 的元数据探测同一个捕获选择：原始源、快照属性、1 帧，只看渲染器实际从哪个目标取帧。
-                var raw = await new NativeRenderRunner(tools).RenderRawAsync(new(source.SourcePath, request.Assets, probeOutput, 64, 64,
-                    request.FpsNumerator, request.FpsDenominator, 1, Seed: 17,
-                    CaptureTarget: new RenderCaptureSelection(owner, terminal, EffectTerminal: true, ExactExtent: false,
-                        ForceVisibleOwner: forceVisibleOwner ? true : null),
-                    UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true), cancellationToken);
-                observed = raw["native_result"]!.AsObject();
-                probeVerdict = EffectPrefixCaptureTarget.Evaluate(observed, owner, terminal, name);
-            }
-            catch (Exception error) when (error is IOException or InvalidDataException)
-            {
-                probeVerdict = EffectPrefixCaptureTarget.ProbeFailed(owner, terminal, name, error.Message);
-            }
-            finally
-            {
-                TemporaryCaptureFiles.Delete(observed, probeOutput, "native/frames.rgba", "native/frames.rgba.partial",
-                    "native/audio.f32le", "native/audio.f32le.partial");
-            }
-            probeVerdict["probe_output"] = probeOutput;
-            captureProbes[key] = probeVerdict;
-            if (probeVerdict["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.ProbeFailedStatus)
-                AnalysisCache.Write(request.AnalysisCacheDirectory, persistentKey, probeVerdict);
-            return probeVerdict;
-        }
+        var captureProbes = new PrefixCaptureProbes(tools, request, source, scene, properties, output);
         async Task<JsonArray> PrefixCachesAsync()
         {
             // 只看整层初判拒因：路线与布局准入追加的 blockers 不影响前缀回退（与改写前读同一份局部数组的结果相同）。
@@ -338,7 +294,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 try { EffectPrefixBakeService.ValidateSource(source, scene, cache); }
                 catch (InvalidDataException) { continue; }
                 // 捕获点落在共用缓冲上的前缀录到的是整幅场景，这个候选不生成。
-                if (await PrefixCaptureTargetAsync(cache) is { } probe &&
+                if (await captureProbes.TargetAsync(cache, cancellationToken) is { } probe &&
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus) continue;
                 accepted.Add(cache.DeepClone());
                 settled.Add(ownerId);
@@ -365,11 +321,11 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 探测过的前缀捕获点全部留档。被拒的原因只在整层循环本来就有未解机制时并进 loop.unresolved：这时前缀是
         // 整层循环的回退，拒绝原因正好说明回退为什么没走成。条目不带 owner_layer_id，免得分配回退把它当成要保留实时的
         // 未解层；原本没有未解项的循环也不凭空添一条，免得改变整层裁定。
-        if (captureProbes.Count > 0)
+        if (captureProbes.Recorded.Count > 0)
         {
-            report["effect_prefix_capture_probes"] = new JsonArray(captureProbes.Values.Select(probe => (JsonNode)probe.DeepClone()).ToArray());
+            report["effect_prefix_capture_probes"] = new JsonArray(captureProbes.Recorded.Select(probe => (JsonNode)probe.DeepClone()).ToArray());
             if (report["loop"]?["unresolved"] is JsonArray { Count: > 0 })
-                foreach (JsonObject probe in captureProbes.Values.Where(probe =>
+                foreach (JsonObject probe in captureProbes.Recorded.Where(probe =>
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus))
                     Verdict.AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>(), probe["reason_localized"]);
         }
