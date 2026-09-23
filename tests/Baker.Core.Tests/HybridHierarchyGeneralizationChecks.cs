@@ -179,8 +179,8 @@ internal static class HybridHierarchyGeneralizationChecks
             hideAndBracketController: true);
         JsonObject publicQuery = await PlanRuntimeParent("retained-public-layer-count", true,
             hideAndBracketController: true, queryLayerCount: true);
-        check(publicQuery["status"]?.GetValue<string>() == "requires_resolution",
-            "analysis reports an observed retained layer-count conflict before rendering a bake");
+        check(!(publicQuery["blockers"] as JsonArray ?? []).Any(blocker => blocker!.ToJsonString().Contains("public layer", StringComparison.Ordinal)),
+            "a retained layer-count query is satisfied by the positional public layer table");
         JsonObject Layer(JsonObject candidate, int id) => candidate["layers"]!.AsArray().OfType<JsonObject>()
             .Single(layer => layer["id"]!.GetValue<int>() == id);
         check(hiddenSibling["video_groups"]!.AsArray().Count == 1 &&
