@@ -49,8 +49,9 @@ public static class SwayRetimeJson
                 ["frames"] = solution.Frames, ["seconds"] = solution.Seconds,
                 ["fps_num"] = fpsNumerator, ["fps_den"] = fpsDenominator,
                 ["visible_period_threshold_seconds"] = SwayRecurrenceSolver.VisiblePeriodSeconds,
-                ["slow_speed_deviation_limit_pixels_per_second"] = SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond,
-                ["visible_speed_deviation_limit_pixels_per_second"] = SwayRecurrenceSolver.MaximumVisibleSpeedDeviationPixelsPerSecond,
+                // 生效门限：1080p 口径的常量按输出短边换算（求解时的倍率随解记下）。
+                ["slow_speed_deviation_limit_pixels_per_second"] = SwayRecurrenceSolver.SlowSpeedDeviationLimit(solution.SpeedLimitScale),
+                ["visible_speed_deviation_limit_pixels_per_second"] = SwayRecurrenceSolver.VisibleSpeedDeviationLimit(solution.SpeedLimitScale),
                 ["minimum_visible_cycles"] = SwayRecurrenceSolver.MinimumVisibleCycles,
                 ["minimum_loop_seconds"] = SwayRecurrenceSolver.MinimumLoopSeconds,
                 // 档位与预算：档位给观感改动预算，循环长度是求解结果；预算为 null 表示质量档（不设门槛，取改动最小）。

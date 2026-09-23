@@ -19,9 +19,12 @@ public sealed record SwayRetimeTerm(int Index, string Name, double CoefficientOl
 
 public sealed record SwayRetimeLayer(SwayModel Model, double? AmplitudeXPixels, double? AmplitudeYPixels, IReadOnlyList<SwayRetimeTerm> Terms);
 
-/// <summary>一个候选周期 P 上的最优方案：L = Multiple·P 帧，所有摆动层逐项精确闭合。</summary>
+/// <summary>
+/// 一个候选周期 P 上的最优方案：L = Multiple·P 帧，所有摆动层逐项精确闭合。
+/// SpeedLimitScale 是求解时的速度门限倍率（输出短边 / 1080，见 <see cref="SwayRecurrenceSolver.SpeedLimitScale"/>），plan 记录按它写生效门限。
+/// </summary>
 public sealed record SwayRetimeSolution(ulong BaseFrames, ulong Multiple, ulong Frames, double Seconds,
-    double MaximumChangePercent, double FrozenDrift10MinutesPixels, IReadOnlyList<SwayRetimeLayer> Layers)
+    double MaximumChangePercent, double FrozenDrift10MinutesPixels, IReadOnlyList<SwayRetimeLayer> Layers, double SpeedLimitScale = 1)
 {
     private IEnumerable<SwayRetimeTerm> Moving => Layers.SelectMany(layer => layer.Terms).Where(term => term.CoefficientOld != 0);
 
@@ -74,7 +77,7 @@ public sealed record SwayRetimeSolution(ulong BaseFrames, ulong Multiple, ulong 
 /// 规则 v2（fix/sway-guards，主线程裁定）：
 /// - 可见项（原周期 T &lt; 60 s）不许冻结，只能改到 round(x) 整数圈；round(x) = 0 时这个 L 放弃。
 /// - 慢项（T ≥ 60 s）在冻结（偏差 2πa/T）与改到 n = round(x) 圈（偏差 2πa·|n/L − 1/T|）里取峰值速度偏差小的；
-///   偏差超过 0.1 px/s 时这个 L 放弃。慢项的百分比改动不是合适的观感量：905 s 的包络改到 600 s 是 50%，速度差却可能远小于察觉阈值。
+///   偏差超过 0.1 px/s（1080p 口径，按输出短边等比换算，见 <see cref="SpeedLimitScale"/>）时这个 L 放弃。慢项的百分比改动不是合适的观感量：905 s 的包络改到 600 s 是 50%，速度差却可能远小于察觉阈值。
 /// - L = 1 帧时只要还有项在动就放弃，不产出 1 帧静止候选（旧规则在 P = 1 帧上 k = 1 把全部项冻结、改动为 0，恒胜出）。
 /// - 合规的 L 里按 (可见项最大 |δ| 取 6 位, 慢项最大速度偏差取 6 位, k) 升序取第一个。
 /// </summary>
@@ -84,16 +87,40 @@ public static class SwayRecurrenceSolver
     public const double VisiblePeriodSeconds = 60;
 
     /// <summary>
-    /// 慢项允许的峰值速度偏差（输出像素/秒）：约 10 秒 1 像素，远低于慢漂移的可察觉量级。临时值，等用户看样片后可能调。
+    /// 慢项允许的峰值速度偏差（1080p 输出像素/秒，其它尺寸按 <see cref="SpeedLimitScale"/> 换算）：约 10 秒 1 像素，远低于慢漂移的可察觉量级。临时值，等用户看样片后可能调。
     /// </summary>
     public const double MaximumSlowSpeedDeviationPixelsPerSecond = 0.1;
 
     /// <summary>
-    /// 可见摆动项允许的峰值速度偏差（输出像素/秒）：百分比预算之外的第二道闸。
+    /// 可见摆动项允许的峰值速度偏差（1080p 输出像素/秒，其它尺寸同样换算）：百分比预算之外的第二道闸。
     /// 理由（sway-budget-scan.md §4 第 4 条）：百分比不完全代表观感，3% 预算下有 3 案的可见项偏差冲到 0.126–0.223 px/s，
     /// 是慢项标准的 1.3–2.2 倍，而规则 v2 的现状 27 案全部 ≤ 0.057。振幅大、可见项周期偏长的案要靠这道闸兜住。
     /// </summary>
     public const double MaximumVisibleSpeedDeviationPixelsPerSecond = 0.2;
+
+    /// <summary>
+    /// 上面两个速度门限对应的输出短边（像素）。速度偏差与振幅都按输出像素计，同样的运动在 8K 下是 1080p 的 4 倍，
+    /// 而看不看得出取决于它占画面的比例，所以门限按输出短边等比放大：门限 = 常量 × 短边 / 1080。
+    /// 取短边不取对角线：视距惯例按画面高度（ITU-R BT.500/BT.710 以画面高度的倍数定视距），同像素密度的 3440×1440 与 2560×1440
+    /// 高度相同、可见性相同，按对角线会把带鱼屏放宽约 27%；竖屏同理取短边。16:9 下两者等价。
+    /// </summary>
+    public const double ReferenceShortEdgePixels = 1080;
+
+    /// <summary>
+    /// 输出画布上的速度门限倍率 = min(宽, 高) / 1080；尺寸未知（非正或非有限）时为 1，按 1080p 口径。
+    /// 短边恰为 1080 时倍率精确为 1.0，门限与旧版逐位相同。
+    /// </summary>
+    public static double SpeedLimitScale(double outputWidth, double outputHeight)
+    {
+        double shortEdge = Math.Min(outputWidth, outputHeight);
+        return double.IsFinite(shortEdge) && shortEdge > 0 ? shortEdge / ReferenceShortEdgePixels : 1;
+    }
+
+    /// <summary>按倍率换算后的慢项门限（输出像素/秒）。求解、plan 记录与未解析原因共用这一个算式。</summary>
+    public static double SlowSpeedDeviationLimit(double speedLimitScale) => MaximumSlowSpeedDeviationPixelsPerSecond * speedLimitScale;
+
+    /// <summary>按倍率换算后的可见项门限（输出像素/秒）。</summary>
+    public static double VisibleSpeedDeviationLimit(double speedLimitScale) => MaximumVisibleSpeedDeviationPixelsPerSecond * speedLimitScale;
 
     /// <summary>
     /// 最慢的可见摆动项在一个循环内至少要走的圈数。防的是"循环比摆动周期还短"：不加下限时 2% 以上的预算会把 L 压到
@@ -111,8 +138,8 @@ public static class SwayRecurrenceSolver
     /// <summary>一项在 L 秒上的处置。Deviation 为 NaN 表示振幅读不到。</summary>
     private readonly record struct Choice(bool Frozen, long Cycles, double Delta, double Deviation, bool Visible, bool Admissible);
 
-    /// <summary>规则 v2 的逐项判定（Solve 的标量循环与 Detail 共用）；amplitude 为 NaN 表示读不到。</summary>
-    private static Choice Choose(double omega, double amplitude, double seconds)
+    /// <summary>规则 v2 的逐项判定（Solve 的标量循环与 Detail 共用）；amplitude 为 NaN 表示读不到。两个门限已按输出短边换算。</summary>
+    private static Choice Choose(double omega, double amplitude, double seconds, double slowLimit, double visibleLimit)
     {
         double cycles = omega * seconds / (2 * Math.PI);
         long whole = (long)Math.Round(cycles);
@@ -120,16 +147,16 @@ public static class SwayRecurrenceSolver
         // 改到 whole 圈后的角频率与原角频率之差乘振幅，就是峰值速度偏差。
         double retime = whole == 0 ? double.PositiveInfinity : amplitude * Math.Abs(2 * Math.PI * whole / seconds - omega);
         if (visible)
-            // 可见项只能改到整数圈；改完还要过第二道闸（峰值速度偏差 ≤ 0.2 px/s），振幅读不到时（NaN）同样不合规。
+            // 可见项只能改到整数圈；改完还要过第二道闸（峰值速度偏差 ≤ 0.2 px/s，按输出短边换算），振幅读不到时（NaN）同样不合规。
             return whole == 0 ? new(true, 0, 0, amplitude * omega, true, false)
-                : new(false, whole, whole / cycles - 1, retime, true, retime <= MaximumVisibleSpeedDeviationPixelsPerSecond);
+                : new(false, whole, whole / cycles - 1, retime, true, retime <= visibleLimit);
         if (double.IsNaN(amplitude))
             return whole == 0 ? new(true, 0, 0, double.NaN, false, false) : new(false, whole, whole / cycles - 1, double.NaN, false, false);
         double freeze = amplitude * omega;
         // 相等时保留运动（改频），不冻结。
         bool frozen = freeze < retime;
         double deviation = frozen ? freeze : retime;
-        return new(frozen, frozen ? 0 : whole, frozen ? 0 : whole / cycles - 1, deviation, false, deviation <= MaximumSlowSpeedDeviationPixelsPerSecond);
+        return new(frozen, frozen ? 0 : whole, frozen ? 0 : whole / cycles - 1, deviation, false, deviation <= slowLimit);
     }
 
     /// <summary>k 的上限：⌊Lmax / P⌋（与原型同样加 1e-9 防浮点误差）。</summary>
@@ -147,9 +174,10 @@ public static class SwayRecurrenceSolver
     /// </summary>
     /// <param name="minimumSeconds">循环长度下限（秒）；测试可以放宽来单测其它护栏。</param>
     /// <param name="minimumVisibleCycles">最慢可见项的圈数下限。</param>
+    /// <param name="speedLimitScale">速度门限倍率（<see cref="SpeedLimitScale"/>，输出短边 / 1080）；1080p 为 1。</param>
     public static SwayRetimeSolution? Solve(IReadOnlyList<SwayRetimeInput> layers, ulong baseFrames, uint fpsNumerator,
         uint fpsDenominator, double maximumSeconds, double? budgetPercent = null,
-        double minimumSeconds = MinimumLoopSeconds, long minimumVisibleCycles = MinimumVisibleCycles)
+        double minimumSeconds = MinimumLoopSeconds, long minimumVisibleCycles = MinimumVisibleCycles, double speedLimitScale = 1)
     {
         ArgumentNullException.ThrowIfNull(layers);
         if (layers.Count == 0) return null;
@@ -157,6 +185,7 @@ public static class SwayRecurrenceSolver
             throw new ArgumentException("Each sway layer needs eight coefficients and a nonzero finite speed.", nameof(layers));
         ulong maximumMultiple = MaximumMultiple(baseFrames, fpsNumerator, fpsDenominator, maximumSeconds);
         if (maximumMultiple == 0) return null;
+        double slowLimit = SlowSpeedDeviationLimit(speedLimitScale), visibleLimit = VisibleSpeedDeviationLimit(speedLimitScale);
         // 预算每层每项的角频率与振幅，内层循环只做标量运算。
         int count = layers.Count * 8;
         var omega = new double[count];
@@ -180,7 +209,7 @@ public static class SwayRecurrenceSolver
             for (int index = 0; index < count && admissible; ++index)
             {
                 if (omega[index] == 0) continue;
-                Choice choice = Choose(omega[index], amplitude[index], seconds);
+                Choice choice = Choose(omega[index], amplitude[index], seconds, slowLimit, visibleLimit);
                 admissible = choice.Admissible;
                 if (!choice.Frozen) moving = true;
                 if (choice.Visible)
@@ -198,19 +227,22 @@ public static class SwayRecurrenceSolver
             if (budgetPercent is double budget)
             {
                 if (100 * change > budget + 1e-9) continue;
-                return Detail(layers, baseFrames, multiple, fpsNumerator, fpsDenominator);
+                return Detail(layers, baseFrames, multiple, fpsNumerator, fpsDenominator, speedLimitScale);
             }
             (double Change, double Deviation, ulong Multiple) key = (Math.Round(change, 6), Math.Round(deviation, 6), multiple);
             if (key.Change < best.Change || key.Change == best.Change && (key.Deviation < best.Deviation || key.Deviation == best.Deviation && key.Multiple < best.Multiple))
                 best = key;
         }
         // 上限内有 kP 但都不合规时同样返回 null；调用方用 MaximumMultiple 区分两种原因。
-        return best.Multiple == 0 ? null : Detail(layers, baseFrames, best.Multiple, fpsNumerator, fpsDenominator);
+        return best.Multiple == 0 ? null : Detail(layers, baseFrames, best.Multiple, fpsNumerator, fpsDenominator, speedLimitScale);
     }
 
-    /// <summary>在指定 k 上按规则 v2 给出逐项结果，不检查是否合规（合规只由 Choose 判，Solve 只返回合规解）。求解器与测试共用。</summary>
+    /// <summary>
+    /// 在指定 k 上按规则 v2 给出逐项结果，不检查是否合规（合规只由 Choose 判，Solve 只返回合规解）。求解器与测试共用。
+    /// 冻结与否不看门限，<paramref name="speedLimitScale"/> 只随解记下，供 plan 写生效门限。
+    /// </summary>
     public static SwayRetimeSolution Detail(IReadOnlyList<SwayRetimeInput> layers, ulong baseFrames, ulong multiple,
-        uint fpsNumerator, uint fpsDenominator)
+        uint fpsNumerator, uint fpsDenominator, double speedLimitScale = 1)
     {
         ulong frames = checked(multiple * baseFrames);
         double seconds = Seconds(frames, fpsNumerator, fpsDenominator);
@@ -234,7 +266,7 @@ public static class SwayRecurrenceSolver
                 }
                 double cycles = rate * seconds / (2 * Math.PI);
                 double period = 2 * Math.PI / rate;
-                Choice choice = Choose(rate, known ?? double.NaN, seconds);
+                Choice choice = Choose(rate, known ?? double.NaN, seconds, SlowSpeedDeviationLimit(speedLimitScale), VisibleSpeedDeviationLimit(speedLimitScale));
                 double? deviation = double.IsNaN(choice.Deviation) ? null : choice.Deviation;
                 if (choice.Frozen)
                 {
@@ -253,7 +285,7 @@ public static class SwayRecurrenceSolver
             }
             results.Add(new(model, input.AmplitudeXPixels, input.AmplitudeYPixels, terms));
         }
-        return new(baseFrames, multiple, frames, seconds, 100 * maximumChange, maximumDrift, results);
+        return new(baseFrames, multiple, frames, seconds, 100 * maximumChange, maximumDrift, results, speedLimitScale);
     }
 
     /// <summary>不冻结时该项在 dt 秒内的最大位移变化：2A·sin(min(ω·dt/2, π/2))。</summary>
