@@ -116,7 +116,7 @@ struct BoundUniformOutput {
 };
 
 struct BoundUniformSource {
-    ref<dyn<UniformSource>>               source;
+    const UniformSource*                  source;
     i32                                   priority {};
     Vec<BoundUniformOutput>               outputs;
     Option<std::unique_ptr<UniformBindingLease>> lease;
@@ -160,7 +160,7 @@ struct UniformBindingPrepareContext {
         auto NodeSources(SceneNodeId node) const -> slice<UniformSourceAttachment> {
             return rstd::trait_call<3>(this, node);
         }
-        auto ResolveSource(UniformSourceId source) const -> Option<ref<dyn<UniformSource>>> {
+        auto ResolveSource(UniformSourceId source) const -> Option<const UniformSource*> {
             return rstd::trait_call<4>(this, source);
         }
         auto ResolveBlock(u64 identity) const -> Option<ref<UniformBlockDefinition>> {
@@ -182,7 +182,7 @@ public:
     auto DrawItemFor(ref<SceneNode>, u32 submesh_index) const -> Option<SceneDrawItemId>;
     auto GlobalSources() const -> slice<UniformSourceAttachment>;
     auto NodeSources(SceneNodeId) const -> slice<UniformSourceAttachment>;
-    auto ResolveSource(UniformSourceId) const -> Option<ref<dyn<UniformSource>>>;
+    auto ResolveSource(UniformSourceId) const -> Option<const UniformSource*>;
     auto ResolveBlock(u64 identity) const -> Option<ref<UniformBlockDefinition>>;
 
 private:

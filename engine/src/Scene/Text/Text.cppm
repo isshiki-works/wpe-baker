@@ -205,19 +205,19 @@ struct TextUniformState {
     explicit TextUniformState(Arc<SceneNode> value): node(rstd::move(value)) {}
 };
 
-class TextUniformSource {
+class TextUniformSource final : public UniformSource {
 public:
     explicit TextUniformSource(std::shared_ptr<TextUniformState> state)
         : m_state(rstd::move(state)) {}
 
     auto Describe(UniformBindingSink*) const
-        -> rstd::Result<rstd::empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> rstd::u64;
+        -> rstd::Result<rstd::empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> rstd::u64 override;
     auto Evaluate(const UniformUpdateContext*,
                   UniformValueSink*) const
-        -> rstd::Result<rstd::empty, UniformError>;
+        -> rstd::Result<rstd::empty, UniformError> override;
     auto AcquireBindingLease() const
-        -> rstd::Option<std::unique_ptr<UniformBindingLease>> {
+        -> rstd::Option<std::unique_ptr<UniformBindingLease>> override {
         return rstd::None();
     }
 

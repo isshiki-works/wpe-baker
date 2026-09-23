@@ -1,4 +1,5 @@
 module;
+#include <new>
 
 #include <rstd/macro.hpp>
 
@@ -59,14 +60,14 @@ bool RegisterUniformNodeSources(Scene& scene, const Arc<UniformSceneState>& unif
         state->effect_projection_node = Some((*config.effect_projection_node).clone());
     uniform_state->SetNodeState(*node_id, state.clone());
 
-    auto       registrar = dyn<UniformSourceRegistrar>::from_ref(scene);
-    auto       writer    = dyn<UniformAttachmentWriter>::from_ref(scene);
-    const auto transform = registrar->Register(Box<dyn<UniformSource>>::make(
+    UniformSourceRegistrar*       registrar = &scene;
+    UniformAttachmentWriter*       writer    = &scene;
+    const auto transform = registrar->Register(std::make_unique<TransformUniformSource>(
         TransformUniformSource { uniform_state.clone(), rstd::move(state) }));
     const auto color =
-        registrar->Register(Box<dyn<UniformSource>>::make(ColorUniformSource { node.clone() }));
+        registrar->Register(std::make_unique<ColorUniformSource>(ColorUniformSource { node.clone() }));
     const auto texture =
-        registrar->Register(Box<dyn<UniformSource>>::make(TextureUniformSource {}));
+        registrar->Register(std::make_unique<TextureUniformSource>(TextureUniformSource {}));
     (void)writer->AttachNode(*node_id, transform, i32());
     (void)writer->AttachNode(*node_id, color, i32());
     (void)writer->AttachNode(*node_id, texture, i32());
@@ -77,10 +78,10 @@ bool RegisterParticleTrailUniformSource(Scene& scene, const Arc<SceneNode>& node
                                         const Arc<ParticleTrailUniformState>& state) {
     auto node_id = scene.ResourceIndex().nodeId(*node);
     if (node_id.is_none()) return false;
-    auto       registrar = dyn<UniformSourceRegistrar>::from_ref(scene);
-    auto       writer    = dyn<UniformAttachmentWriter>::from_ref(scene);
+    UniformSourceRegistrar*       registrar = &scene;
+    UniformAttachmentWriter*       writer    = &scene;
     const auto source    = registrar->Register(
-        Box<dyn<UniformSource>>::make(ParticleTrailUniformSource { state.clone() }));
+        std::make_unique<ParticleTrailUniformSource>(ParticleTrailUniformSource { state.clone() }));
     (void)writer->AttachNode(*node_id, source, i32(10));
     return true;
 }
@@ -106,8 +107,8 @@ Option<Arc<UniformCameraResolver>> FinalizeRuntimeLayerSources(SceneParseContext
     auto resolver = RuntimeCameraResolver(scene);
     if (resolver.is_none()) return None();
     auto active    = scene.ActiveCameraHandle();
-    auto registrar = dyn<UniformSourceRegistrar>::from_ref(scene);
-    auto writer    = dyn<UniformAttachmentWriter>::from_ref(scene);
+    UniformSourceRegistrar* registrar = &scene;
+    UniformAttachmentWriter* writer    = &scene;
     auto camera_for = [&](const SceneNode& node) -> Option<Arc<SceneCamera>> {
         if (! node.Camera().empty())
             return scene.CameraHandle(rstd::cppstd::as_str(node.Camera()).unwrap());
@@ -123,7 +124,7 @@ Option<Arc<UniformCameraResolver>> FinalizeRuntimeLayerSources(SceneParseContext
         state->active_camera     = Some((*active).clone());
         state->effect_projection = draft.effect_projection;
         const auto source = registrar->Register(
-            Box<dyn<UniformSource>>::make(text::TextUniformSource { rstd::move(state) }));
+            std::make_unique<text::TextUniformSource>(text::TextUniformSource { rstd::move(state) }));
         (void)writer->AttachNode(*node_id, source, i32());
     }
     for (usize i = uniform_start; i < context.uniform_configs.len(); ++i) {
@@ -155,13 +156,13 @@ void FinalizeUniformSources(SceneParseContext& context) {
     scene.Runtime().RegisterSystem(UniformRuntimeSystem { context.uniform_state.clone() },
                                    SceneRuntimeSchedule::BeforeRender);
 
-    auto registrar = dyn<UniformSourceRegistrar>::from_ref(scene);
-    auto writer    = dyn<UniformAttachmentWriter>::from_ref(scene);
+    UniformSourceRegistrar* registrar = &scene;
+    UniformAttachmentWriter* writer    = &scene;
 
     const auto frame_source = registrar->Register(
-        Box<dyn<UniformSource>>::make(FrameUniformSource { context.uniform_state.clone() }));
+        std::make_unique<FrameUniformSource>(FrameUniformSource { context.uniform_state.clone() }));
     const auto audio_source = registrar->Register(
-        Box<dyn<UniformSource>>::make(AudioUniformSource { context.uniform_state.clone() }));
+        std::make_unique<AudioUniformSource>(AudioUniformSource { context.uniform_state.clone() }));
     (void)writer->AttachGlobal(frame_source, i32());
 
     auto frame_sources = Vec<UniformSourceAttachment>::make();
@@ -195,11 +196,11 @@ void FinalizeUniformSources(SceneParseContext& context) {
         }
     }
     const auto light_source = registrar->Register(
-        Box<dyn<UniformSource>>::make(LightUniformSource { rstd::move(lights) }));
+        std::make_unique<LightUniformSource>(LightUniformSource { rstd::move(lights) }));
     auto lighting_sources = Vec<UniformSourceAttachment>::make();
     lighting_sources.push(UniformSourceAttachment { .source = light_source });
     if (context.shader_environment.directional_shadow && shadow_light.is_some()) {
-        const auto shadow_source = registrar->Register(Box<dyn<UniformSource>>::make(
+        const auto shadow_source = registrar->Register(std::make_unique<ShadowUniformSource>(
             ShadowUniformSource { (*active_camera).clone(), *shadow_light }));
         lighting_sources.push(UniformSourceAttachment { .source = shadow_source });
     }
@@ -225,7 +226,7 @@ void FinalizeUniformSources(SceneParseContext& context) {
         auto  source = puppet_sources.get(key);
         if (source.is_none()) {
             auto registered = registrar->Register(
-                Box<dyn<UniformSource>>::make(PuppetUniformSource { layer.clone() }));
+                std::make_unique<PuppetUniformSource>(PuppetUniformSource { layer.clone() }));
             (void)puppet_sources.insert(key, registered);
             (void)writer->AttachNode(*node_id, registered, i32(10));
         } else {

@@ -304,127 +304,127 @@ private:
     Arc<UniformSceneState> m_state;
 };
 
-class TransformUniformSource {
+class TransformUniformSource final : public UniformSource {
 public:
     TransformUniformSource(Arc<UniformSceneState> state, Arc<UniformNodeState> node)
         : m_state(rstd::move(state)), m_node(rstd::move(node)) {}
 
-    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
-        -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
+        -> Result<empty, UniformError> override;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }
 
 private:
     Arc<UniformSceneState> m_state;
     Arc<UniformNodeState>  m_node;
 };
 
-class FrameUniformSource {
+class FrameUniformSource final : public UniformSource {
 public:
     explicit FrameUniformSource(Arc<UniformSceneState> state): m_state(rstd::move(state)) {}
 
-    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
-        -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
+        -> Result<empty, UniformError> override;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }
 
 private:
     Arc<UniformSceneState> m_state;
 };
 
-class AudioUniformSource {
+class AudioUniformSource final : public UniformSource {
 public:
     explicit AudioUniformSource(Arc<UniformSceneState> state): m_state(rstd::move(state)) {}
 
-    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
-        -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>>;
+        -> Result<empty, UniformError> override;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override;
 
 private:
     Arc<UniformSceneState> m_state;
 };
 
-class ColorUniformSource {
+class ColorUniformSource final : public UniformSource {
 public:
     explicit ColorUniformSource(Arc<SceneNode> node): m_node(rstd::move(node)) {}
 
-    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
-        -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
+        -> Result<empty, UniformError> override;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }
 
 private:
     Arc<SceneNode> m_node;
 };
 
-class LightUniformSource {
+class LightUniformSource final : public UniformSource {
 public:
     explicit LightUniformSource(Vec<ref<SceneLight>> lights): m_lights(rstd::move(lights)) {}
 
-    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
-        -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
+        -> Result<empty, UniformError> override;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }
 
 private:
     Vec<ref<SceneLight>> m_lights;
 };
 
-class ShadowUniformSource {
+class ShadowUniformSource final : public UniformSource {
 public:
     ShadowUniformSource(Arc<SceneCamera> camera, ref<SceneLight> light)
         : m_camera(rstd::move(camera)), m_light(light) {}
 
-    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
-        -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
+        -> Result<empty, UniformError> override;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }
 
 private:
     Arc<SceneCamera> m_camera;
     ref<SceneLight>  m_light;
 };
 
-class TextureUniformSource {
+class TextureUniformSource final : public UniformSource {
 public:
-    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
-        -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
+        -> Result<empty, UniformError> override;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }
 };
 
-class ParticleTrailUniformSource {
+class ParticleTrailUniformSource final : public UniformSource {
 public:
     explicit ParticleTrailUniformSource(Arc<ParticleTrailUniformState> state)
         : m_state(rstd::move(state)) {}
 
-    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
-        -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>>;
+        -> Result<empty, UniformError> override;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override;
 
 private:
     Arc<ParticleTrailUniformState> m_state;
 };
 
-class PuppetUniformSource {
+class PuppetUniformSource final : public UniformSource {
 public:
     explicit PuppetUniformSource(Arc<PuppetLayer> layer): m_layer(rstd::move(layer)) {}
 
-    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError>;
-    auto Version(const UniformUpdateContext*) const -> u64;
+    auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
+    auto Version(const UniformUpdateContext*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
-        -> Result<empty, UniformError>;
-    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> { return None(); }
+        -> Result<empty, UniformError> override;
+    auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }
 
 private:
     Arc<PuppetLayer> m_layer;

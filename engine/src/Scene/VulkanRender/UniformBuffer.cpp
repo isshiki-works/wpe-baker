@@ -51,7 +51,7 @@ auto SceneUniformBindingPrepareContext::NodeSources(SceneNodeId node) const
 }
 
 auto SceneUniformBindingPrepareContext::ResolveSource(UniformSourceId source) const
-    -> Option<ref<dyn<UniformSource>>> {
+    -> Option<const UniformSource*> {
     return m_scene->Resolve(source);
 }
 
@@ -215,13 +215,13 @@ private:
     const BoundUniformSource& m_source;
 };
 
-class ResourceSnapshot {
+class ResourceSnapshot final : public UniformResourceView {
 public:
     ResourceSnapshot(ref<dyn<UniformBufferFrameContext>> frame, SceneDrawItemId draw,
                      slice<PreparedUniformTextureMetadata> textures)
         : m_frame(frame), m_draw(draw), m_textures(textures) {}
 
-    auto Texture(usize index) const -> Option<UniformTextureView> {
+    auto Texture(usize index) const -> Option<UniformTextureView> override {
         UniformTextureView view;
         bool               available = false;
         if (index < m_textures.len() && m_textures[index].available) {
@@ -248,8 +248,8 @@ public:
         }
         return available ? Some(view) : None<UniformTextureView>();
     }
-    auto Viewport() const -> rstd::array<float, 2> { return m_frame->Viewport(); }
-    auto TexelSize() const -> rstd::array<float, 2> {
+    auto Viewport() const -> rstd::array<float, 2> override { return m_frame->Viewport(); }
+    auto TexelSize() const -> rstd::array<float, 2> override {
         const auto viewport = m_frame->Viewport();
         return { viewport[usize(0)] > 0.0f ? 1.0f / viewport[usize(0)] : 0.0f,
                  viewport[usize(1)] > 0.0f ? 1.0f / viewport[usize(1)] : 0.0f };
@@ -266,27 +266,27 @@ public:
     UpdateContext(ref<SceneFrame> frame, const ResourceSnapshot& resources,
                   SceneRenderViewKind render_view)
         : m_frame(frame),
-          m_resources(dyn<UniformResourceView>::from_ref(resources)),
+          m_resources(&resources),
           m_render_view(render_view) {}
-    UpdateContext(ref<SceneFrame> frame, ref<dyn<UniformResourceView>> resources,
+    UpdateContext(ref<SceneFrame> frame, const UniformResourceView* resources,
                   SceneRenderViewKind render_view)
         : m_frame(frame), m_resources(resources), m_render_view(render_view) {}
 
     auto Frame() const -> ref<SceneFrame> override { return m_frame; }
-    auto Resources() const -> ref<dyn<UniformResourceView>> override { return m_resources; }
+    auto Resources() const -> const UniformResourceView* override { return m_resources; }
     auto RenderView() const -> SceneRenderViewKind override { return m_render_view; }
 
 private:
     ref<SceneFrame>               m_frame;
-    ref<dyn<UniformResourceView>> m_resources;
+    const UniformResourceView*    m_resources;
     SceneRenderViewKind           m_render_view;
 };
 
-class EmptyResourceView {
+class EmptyResourceView final : public UniformResourceView {
 public:
-    auto Texture(usize) const -> Option<UniformTextureView> { return None(); }
-    auto Viewport() const -> rstd::array<float, 2> { return { 0.0f, 0.0f }; }
-    auto TexelSize() const -> rstd::array<float, 2> { return { 0.0f, 0.0f }; }
+    auto Texture(usize) const -> Option<UniformTextureView> override { return None(); }
+    auto Viewport() const -> rstd::array<float, 2> override { return { 0.0f, 0.0f }; }
+    auto TexelSize() const -> rstd::array<float, 2> override { return { 0.0f, 0.0f }; }
 };
 
 } // namespace detail
@@ -676,9 +676,8 @@ auto SharedUniformBufferBinding::Update(ref<dyn<UniformBufferFrameContext>>     
                                         mut_ref<dyn<resource::BufferContentWriter>> buffers) const
     -> Result<empty, UniformBufferUpdateError> {
     detail::EmptyResourceView resources_impl;
-    auto                      resources = dyn<UniformResourceView>::from_ref(resources_impl);
     detail::UpdateContext     context_impl(
-        frame_context->Frame(), resources.as_ref(), SceneRenderViewKind::Primary);
+        frame_context->Frame(), &resources_impl, SceneRenderViewKind::Primary);
     const UniformUpdateContext* context = &context_impl;
 
     auto versions = Vec<u64>::with_capacity(m_sources.len());

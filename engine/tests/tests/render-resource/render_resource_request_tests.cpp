@@ -60,7 +60,7 @@ public:
     std::vector<rstd::u8>          bytes;
 };
 
-class StaticSource {
+class StaticSource final : public owe::UniformSource {
 public:
     StaticSource(std::string name, float value)
         : StaticSource(std::move(name),
@@ -73,25 +73,25 @@ public:
     }
 
     auto Describe(owe::UniformBindingSink* sink) const
-        -> rstd::Result<rstd::empty, owe::UniformError> {
+        -> rstd::Result<rstd::empty, owe::UniformError> override {
         auto result = sink->Bind(m_output,
                                  rstd::cppstd::as_str(m_name).unwrap(),
                                  owe::UniformValueShape::FloatRange(rstd::u32(1), rstd::u32(4)));
         if (result.is_err()) return rstd::Err(std::move(result).unwrap_err_unchecked());
         return rstd::Ok(rstd::empty {});
     }
-    auto Version(const owe::UniformUpdateContext*) const -> rstd::u64 {
+    auto Version(const owe::UniformUpdateContext*) const -> rstd::u64 override {
         return m_state->version;
     }
     auto Evaluate(const owe::UniformUpdateContext*,
                   owe::UniformValueSink* sink) const
-        -> rstd::Result<rstd::empty, owe::UniformError> {
+        -> rstd::Result<rstd::empty, owe::UniformError> override {
         if (! sink->Wants(m_output)) return rstd::Ok(rstd::empty {});
         auto value = owe::UniformValue(m_state->value);
         return sink->Write(m_output, value.View());
     }
     auto AcquireBindingLease() const
-        -> rstd::Option<std::unique_ptr<owe::UniformBindingLease>> {
+        -> rstd::Option<std::unique_ptr<owe::UniformBindingLease>> override {
         if (m_demand.is_none()) return rstd::None();
         return rstd::Some((*m_demand)->Acquire());
     }
@@ -103,21 +103,21 @@ private:
     owe::UniformOutputId                                    m_output { .value = rstd::u32() };
 };
 
-class TextureMetadataSource {
+class TextureMetadataSource final : public owe::UniformSource {
 public:
     auto Describe(owe::UniformBindingSink* sink) const
-        -> rstd::Result<rstd::empty, owe::UniformError> {
+        -> rstd::Result<rstd::empty, owe::UniformError> override {
         auto result =
             sink->Bind(m_output, "texture_extent"_str, owe::UniformValueShape::Float(rstd::u32(4)));
         if (result.is_err()) return rstd::Err(rstd::move(result).unwrap_err_unchecked());
         return rstd::Ok(rstd::empty {});
     }
-    auto Version(const owe::UniformUpdateContext* context) const -> rstd::u64 {
+    auto Version(const owe::UniformUpdateContext* context) const -> rstd::u64 override {
         return context->Frame()->revision;
     }
     auto Evaluate(const owe::UniformUpdateContext* context,
                   owe::UniformValueSink* sink) const
-        -> rstd::Result<rstd::empty, owe::UniformError> {
+        -> rstd::Result<rstd::empty, owe::UniformError> override {
         if (! sink->Wants(m_output)) return rstd::Ok(rstd::empty {});
         auto texture = context->Resources()->Texture(rstd::usize());
         if (texture.is_none() || ! texture->has_extent) return rstd::Ok(rstd::empty {});
@@ -130,7 +130,7 @@ public:
         return sink->Write(m_output, value.View());
     }
     auto AcquireBindingLease() const
-        -> rstd::Option<std::unique_ptr<owe::UniformBindingLease>> {
+        -> rstd::Option<std::unique_ptr<owe::UniformBindingLease>> override {
         return rstd::None();
     }
 
@@ -478,9 +478,9 @@ TEST(UniformBufferBinding, UpdatesGenericSceneThroughBufferWriterTrait) {
     scene.RegisterCamera(String::make("default"_str), camera.clone());
     ASSERT_TRUE(scene.SetActiveCamera("default"_str));
 
-    auto registrar   = rstd::dyn<owe::UniformSourceRegistrar>::from_ref(scene);
-    auto attachments = rstd::dyn<owe::UniformAttachmentWriter>::from_ref(scene);
-    auto source      = registrar->Register(rstd::boxed::Box<rstd::dyn<owe::UniformSource>>::make(
+    owe::UniformSourceRegistrar* registrar   = &scene;
+    owe::UniformAttachmentWriter* attachments = &scene;
+    auto source      = registrar->Register(std::make_unique<uniform_test::StaticSource>(
         uniform_test::StaticSource("scene_time", 2.5f)));
     ASSERT_TRUE(attachments->AttachGlobal(source));
 
@@ -539,9 +539,9 @@ TEST(UniformBufferBinding, HoldsDemandOnlyForAReflectedLiveOutput) {
     demand->SetCallback([&active](bool next) {
         active = next;
     });
-    auto registrar   = rstd::dyn<owe::UniformSourceRegistrar>::from_ref(scene);
-    auto attachments = rstd::dyn<owe::UniformAttachmentWriter>::from_ref(scene);
-    auto source      = registrar->Register(rstd::boxed::Box<rstd::dyn<owe::UniformSource>>::make(
+    owe::UniformSourceRegistrar* registrar   = &scene;
+    owe::UniformAttachmentWriter* attachments = &scene;
+    auto source      = registrar->Register(std::make_unique<uniform_test::StaticSource>(
         uniform_test::StaticSource("audio_signal", 0.0f, demand.clone())));
     ASSERT_TRUE(attachments->AttachGlobal(source));
 
@@ -593,9 +593,9 @@ TEST(UniformBufferBinding, HoldsDemandOnlyForAReflectedLiveOutput) {
 
 TEST(UniformBufferBinding, ProvidesPreparedTextureMetadataToGenericSource) {
     owe::Scene scene;
-    auto       registrar   = rstd::dyn<owe::UniformSourceRegistrar>::from_ref(scene);
-    auto       attachments = rstd::dyn<owe::UniformAttachmentWriter>::from_ref(scene);
-    auto       source = registrar->Register(rstd::boxed::Box<rstd::dyn<owe::UniformSource>>::make(
+    owe::UniformSourceRegistrar*       registrar   = &scene;
+    owe::UniformAttachmentWriter*       attachments = &scene;
+    auto       source = registrar->Register(std::make_unique<uniform_test::TextureMetadataSource>(
         uniform_test::TextureMetadataSource {}));
     ASSERT_TRUE(attachments->AttachGlobal(source));
 
@@ -661,13 +661,13 @@ TEST(UniformBufferBinding, OrdersSourcesAndSkipsUnchangedVersions) {
     scene.RegisterCamera(String::make("default"_str), camera.clone());
     ASSERT_TRUE(scene.SetActiveCamera("default"_str));
 
-    auto registrar   = rstd::dyn<owe::UniformSourceRegistrar>::from_ref(scene);
-    auto attachments = rstd::dyn<owe::UniformAttachmentWriter>::from_ref(scene);
+    owe::UniformSourceRegistrar* registrar   = &scene;
+    owe::UniformAttachmentWriter* attachments = &scene;
     auto low_state   = std::make_shared<uniform_test::StaticSourceState>(
         uniform_test::StaticSourceState { .value = 3.0f });
-    auto high_priority = registrar->Register(rstd::boxed::Box<rstd::dyn<owe::UniformSource>>::make(
+    auto high_priority = registrar->Register(std::make_unique<uniform_test::StaticSource>(
         uniform_test::StaticSource("static_value", 7.0f)));
-    auto low_priority  = registrar->Register(rstd::boxed::Box<rstd::dyn<owe::UniformSource>>::make(
+    auto low_priority  = registrar->Register(std::make_unique<uniform_test::StaticSource>(
         uniform_test::StaticSource("static_value", low_state)));
     auto shader        = std::make_shared<owe::SceneShader>();
     auto node          = rstd::sync::Arc<owe::SceneNode>::make();
@@ -726,10 +726,10 @@ TEST(UniformBufferBinding, OrdersSourcesAndSkipsUnchangedVersions) {
 
 TEST(UniformBufferBinding, UpdatesRegisteredSharedBlockOncePerVersion) {
     owe::Scene scene;
-    auto       registrar = rstd::dyn<owe::UniformSourceRegistrar>::from_ref(scene);
+    owe::UniformSourceRegistrar*       registrar = &scene;
     auto       state     = std::make_shared<uniform_test::StaticSourceState>(
         uniform_test::StaticSourceState { .value = 4.0f });
-    auto source  = registrar->Register(rstd::boxed::Box<rstd::dyn<owe::UniformSource>>::make(
+    auto source  = registrar->Register(std::make_unique<uniform_test::StaticSource>(
         uniform_test::StaticSource("shared_value", state)));
     auto sources = rstd::vec::Vec<owe::UniformSourceAttachment>::make();
     sources.push(owe::UniformSourceAttachment { .source = source });

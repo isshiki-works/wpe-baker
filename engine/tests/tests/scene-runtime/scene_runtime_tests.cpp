@@ -48,18 +48,18 @@ private:
     bool                 m_written { false };
 };
 
-class EmptyResources {
+class EmptyResources final : public owe::UniformResourceView {
 public:
-    auto Texture(rstd::usize) const -> rstd::Option<owe::UniformTextureView> {
+    auto Texture(rstd::usize) const -> rstd::Option<owe::UniformTextureView> override {
         return rstd::None();
     }
-    auto Viewport() const -> rstd::array<float, 2> { return { 1920.0f, 1080.0f }; }
-    auto TexelSize() const -> rstd::array<float, 2> { return { 1.0f / 1920.0f, 1.0f / 1080.0f }; }
+    auto Viewport() const -> rstd::array<float, 2> override { return { 1920.0f, 1080.0f }; }
+    auto TexelSize() const -> rstd::array<float, 2> override { return { 1.0f / 1920.0f, 1.0f / 1080.0f }; }
 };
 
-class StaticTextureResources {
+class StaticTextureResources final : public owe::UniformResourceView {
 public:
-    auto Texture(rstd::usize index) const -> rstd::Option<owe::UniformTextureView> {
+    auto Texture(rstd::usize index) const -> rstd::Option<owe::UniformTextureView> override {
         if (index != rstd::usize()) return rstd::None();
         return rstd::Some(owe::UniformTextureView {
             .has_extent    = true,
@@ -67,8 +67,8 @@ public:
             .sample_extent = { 512.0f, 512.0f },
         });
     }
-    auto Viewport() const -> rstd::array<float, 2> { return { 1920.0f, 1080.0f }; }
-    auto TexelSize() const -> rstd::array<float, 2> { return { 1.0f / 1920.0f, 1.0f / 1080.0f }; }
+    auto Viewport() const -> rstd::array<float, 2> override { return { 1920.0f, 1080.0f }; }
+    auto TexelSize() const -> rstd::array<float, 2> override { return { 1.0f / 1920.0f, 1.0f / 1080.0f }; }
 };
 
 class ShapeSink final : public owe::UniformBindingSink {
@@ -98,13 +98,12 @@ public:
 
 class UpdateContext final : public owe::UniformUpdateContext {
 public:
-    template<typename Resources>
-    UpdateContext(const owe::SceneFrame& frame, const Resources& resources)
+    UpdateContext(const owe::SceneFrame& frame, const owe::UniformResourceView& resources)
         : m_frame(rstd::ref<owe::SceneFrame>::from_raw_parts(rstd::addressof(frame))),
-          m_resources(rstd::dyn<owe::UniformResourceView>::from_ref(resources)) {}
+          m_resources(&resources) {}
 
     auto Frame() const -> rstd::ref<owe::SceneFrame> override { return m_frame; }
-    auto Resources() const -> rstd::ref<rstd::dyn<owe::UniformResourceView>> override {
+    auto Resources() const -> const owe::UniformResourceView* override {
         return m_resources;
     }
     auto RenderView() const -> owe::SceneRenderViewKind override {
@@ -113,7 +112,7 @@ public:
 
 private:
     rstd::ref<owe::SceneFrame>                     m_frame;
-    rstd::ref<rstd::dyn<owe::UniformResourceView>> m_resources;
+    const owe::UniformResourceView*                m_resources;
 };
 
 template<typename Source, typename Output>

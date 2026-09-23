@@ -2686,7 +2686,7 @@ struct SceneExtensionHolder final : SceneExtensionSlot {
     Box<T> value;
 };
 
-class Scene : NoCopy, NoMove {
+class Scene : NoCopy, NoMove, public UniformSourceRegistrar, public UniformAttachmentWriter {
 public:
     Scene();
     ~Scene();
@@ -2876,16 +2876,16 @@ public:
         return None();
     }
 
-    auto Register(Box<dyn<UniformSource>> source) -> UniformSourceId {
+    auto Register(std::unique_ptr<UniformSource> source) -> UniformSourceId override {
         return m_uniforms.Register(rstd::move(source));
     }
-    bool AttachGlobal(UniformSourceId source, i32 priority = i32()) {
+    bool AttachGlobal(UniformSourceId source, i32 priority = i32()) override {
         return m_uniforms.AttachGlobal(source, priority);
     }
-    bool AttachNode(SceneNodeId node, UniformSourceId source, i32 priority = i32()) {
+    bool AttachNode(SceneNodeId node, UniformSourceId source, i32 priority = i32()) override {
         return m_uniforms.AttachNode(node, source, priority);
     }
-    auto Resolve(UniformSourceId source) const -> Option<ref<dyn<UniformSource>>> {
+    auto Resolve(UniformSourceId source) const -> Option<const UniformSource*> {
         return m_uniforms.Resolve(source);
     }
     auto GlobalSources() const -> slice<UniformSourceAttachment> {
