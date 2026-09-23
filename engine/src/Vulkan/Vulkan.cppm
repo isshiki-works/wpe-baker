@@ -561,32 +561,24 @@ struct ImageSlotsRef {
     ImageSlotsRef(const ImageSlots&);
 };
 
+// 纹理分配附带的运行时（视频纹理解码推进），随分配对象存活。
 struct TextureAllocationRuntime {
-    using Trait                  = TextureAllocationRuntime;
-    static constexpr bool direct = false;
+    virtual ~TextureAllocationRuntime() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = TextureAllocationRuntime;
-
-        void Pump(double seconds) { rstd::trait_call<0>(this, seconds); }
-    };
-
-    template<typename T>
-    using Funcs = rstd::TraitFuncs<&T::Pump>;
+    virtual void Pump(double seconds) = 0;
 };
 
 class TextureAllocation {
 public:
     explicit TextureAllocation(
-        ImageSlots slots, Option<rstd::sync::Arc<dyn<TextureAllocationRuntime>>> runtime = None())
+        ImageSlots slots, std::shared_ptr<TextureAllocationRuntime> runtime = {})
         : m_slots(rstd::move(slots)), m_runtime(rstd::move(runtime)) {}
 
     auto View() const -> ImageSlotsRef { return ImageSlotsRef(m_slots); }
 
 private:
-    ImageSlots                                             m_slots;
-    Option<rstd::sync::Arc<dyn<TextureAllocationRuntime>>> m_runtime;
+    ImageSlots                                m_slots;
+    std::shared_ptr<TextureAllocationRuntime> m_runtime;
 };
 
 // ---------- Swapchain.hpp ----------
@@ -791,48 +783,33 @@ private:
     Box<Impl> m_impl;
 };
 
-class ImagePrepareContext {
+// 资源准备阶段创建/分配纹理的后端。
+struct ImagePrepareBackend {
+    virtual ~ImagePrepareBackend() = default;
+
+    virtual auto CreateImportedTexture(rstd::ref<Image>                            image,
+                                       Option<rstd::sync::Arc<VideoPlaybackState>> playback)
+        -> rstd::Option<PreparedImageAllocation> = 0;
+    virtual auto AllocateTexture(TextureKey key)
+        -> rstd::Option<rstd::sync::Arc<TextureAllocation>> = 0;
+    virtual auto AllocateTransparentTexture(TextureKey key)
+        -> rstd::Option<PreparedImageAllocation> = 0;
+};
+
+class ImagePrepareContext final : public ImagePrepareBackend {
 public:
     ImagePrepareContext(TextureCache& textures, ImageUploadManager& uploads)
         : m_textures(textures), m_uploads(uploads) {}
 
     auto CreateImportedTexture(ref<Image>                                  image,
                                Option<rstd::sync::Arc<VideoPlaybackState>> playback)
-        -> Option<PreparedImageAllocation>;
-    auto AllocateTexture(TextureKey key) -> Option<rstd::sync::Arc<TextureAllocation>>;
-    auto AllocateTransparentTexture(TextureKey key) -> Option<PreparedImageAllocation>;
+        -> Option<PreparedImageAllocation> override;
+    auto AllocateTexture(TextureKey key) -> Option<rstd::sync::Arc<TextureAllocation>> override;
+    auto AllocateTransparentTexture(TextureKey key) -> Option<PreparedImageAllocation> override;
 
 private:
     TextureCache&       m_textures;
     ImageUploadManager& m_uploads;
-};
-
-struct ImagePrepareBackend {
-    using Trait                  = ImagePrepareBackend;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ImagePrepareBackend;
-
-        auto CreateImportedTexture(rstd::ref<Image>                            image,
-                                   Option<rstd::sync::Arc<VideoPlaybackState>> playback)
-            -> rstd::Option<PreparedImageAllocation> {
-            return rstd::trait_call<0>(this, image, rstd::move(playback));
-        }
-
-        auto AllocateTexture(TextureKey key) -> rstd::Option<rstd::sync::Arc<TextureAllocation>> {
-            return rstd::trait_call<1>(this, key);
-        }
-
-        auto AllocateTransparentTexture(TextureKey key) -> rstd::Option<PreparedImageAllocation> {
-            return rstd::trait_call<2>(this, key);
-        }
-    };
-
-    template<typename T>
-    using Funcs = rstd::TraitFuncs<&T::CreateImportedTexture, &T::AllocateTexture,
-                                   &T::AllocateTransparentTexture>;
 };
 
 void RecordGenerateMipmaps(vvk::CommandBuffer&, const ImageParameters&);
@@ -874,24 +851,16 @@ struct MemoryBudgetSnapshot {
     VkDeviceSize available() const noexcept { return budget > usage ? budget - usage : 0; }
 };
 
+// 显存预算来源（Device 实现）。
 struct MemoryBudgetSource {
-    using Trait                  = MemoryBudgetSource;
-    static constexpr bool direct = false;
+    virtual ~MemoryBudgetSource() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = MemoryBudgetSource;
-
-        auto MemoryBudget() const -> MemoryBudgetSnapshot { return rstd::trait_call<0>(this); }
-    };
-
-    template<typename T>
-    using Funcs = rstd::TraitFuncs<&T::MemoryBudget>;
+    virtual auto MemoryBudget() const -> MemoryBudgetSnapshot = 0;
 };
 
 struct PipelineParameters;
 
-class Device : NoCopy, NoMove {
+class Device : NoCopy, NoMove, public MemoryBudgetSource {
 public:
     Device();
     ~Device();
@@ -926,7 +895,7 @@ public:
     bool supportExt(std::string_view) const;
 
     VkDeviceSize GetUsage() const;
-    auto         MemoryBudget() const -> MemoryBudgetSnapshot;
+    auto         MemoryBudget() const -> MemoryBudgetSnapshot override;
 
 private:
     std::vector<VkDeviceQueueCreateInfo> ChooseDeviceQueue(VkSurfaceKHR = {});
@@ -1065,10 +1034,34 @@ private:
     std::shared_ptr<RecordedBufferUploads::State> m_state;
 };
 
-class BufferManager : NoCopy, NoMove {
+// 资源注册表分配/写入缓冲的后端（BufferManager 实现；单测可替身）。
+struct BufferBackend {
+    virtual ~BufferBackend() = default;
+
+    virtual auto AllocateBuffer(const BufferAllocationRequest& request)
+        -> rstd::Option<BufferAllocation> = 0;
+    virtual auto QueueBufferWrite(rstd::mut_ref<BufferAllocation> allocation,
+                                  rstd::slice<rstd::u8> content, VkDeviceSize destination_offset = 0)
+        -> rstd::Option<BufferUploadTicket> = 0;
+};
+
+class BufferManager : NoCopy, NoMove, public BufferBackend {
 public:
     explicit BufferManager(const Device&);
     ~BufferManager();
+
+    auto AllocateBuffer(const BufferAllocationRequest& request)
+        -> Option<BufferAllocation> override {
+        return Allocate(request);
+    }
+    auto QueueBufferWrite(rstd::mut_ref<BufferAllocation> allocation, rstd::slice<rstd::u8> content,
+                          VkDeviceSize destination_offset) -> Option<BufferUploadTicket> override {
+        return QueueWrite(*allocation,
+                          std::span<const rstd::uint8_t>(
+                              reinterpret_cast<const rstd::uint8_t*>(content.as_raw_ptr()),
+                              content.len().to_primitive()),
+                          destination_offset);
+    }
 
     bool init();
     void destroy();
@@ -1087,30 +1080,6 @@ public:
 private:
     struct Impl;
     Box<Impl> m_impl;
-};
-
-struct BufferBackend {
-    using Trait                  = BufferBackend;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = BufferBackend;
-
-        auto AllocateBuffer(const BufferAllocationRequest& request)
-            -> rstd::Option<BufferAllocation> {
-            return rstd::trait_call<0>(this, request);
-        }
-
-        auto QueueBufferWrite(rstd::mut_ref<BufferAllocation> allocation,
-                              rstd::slice<rstd::u8> content, VkDeviceSize destination_offset = 0)
-            -> rstd::Option<BufferUploadTicket> {
-            return rstd::trait_call<1>(this, allocation, content, destination_offset);
-        }
-    };
-
-    template<typename T>
-    using Funcs = rstd::TraitFuncs<&T::AllocateBuffer, &T::QueueBufferWrite>;
 };
 
 // ---------- GraphicsPipeline.hpp ----------
@@ -1388,61 +1357,3 @@ inline std::shared_ptr<LocalExSwapchain> CreateLocalExSwapchain(const Device& de
 
 } // namespace vulkan
 } // namespace owe
-
-export namespace rstd
-{
-
-template<>
-struct Impl<Copy, owe::vulkan::ImageUploadTicket> {};
-
-template<>
-struct Impl<Copy, owe::vulkan::BufferUploadTicket> {};
-
-template<>
-struct Impl<owe::vulkan::MemoryBudgetSource, owe::vulkan::Device> : ImplBase<owe::vulkan::Device> {
-    auto MemoryBudget() const -> owe::vulkan::MemoryBudgetSnapshot {
-        return this->self().MemoryBudget();
-    }
-};
-
-template<>
-struct Impl<owe::vulkan::BufferBackend, owe::vulkan::BufferManager>
-    : ImplBase<owe::vulkan::BufferManager> {
-    auto AllocateBuffer(const owe::vulkan::BufferAllocationRequest& request)
-        -> Option<owe::vulkan::BufferAllocation> {
-        return this->self().Allocate(request);
-    }
-
-    auto QueueBufferWrite(mut_ref<owe::vulkan::BufferAllocation> allocation, slice<u8> content,
-                          VkDeviceSize destination_offset)
-        -> Option<owe::vulkan::BufferUploadTicket> {
-        return this->self().QueueWrite(
-            *allocation,
-            std::span<const rstd::uint8_t>(
-                reinterpret_cast<const rstd::uint8_t*>(content.as_raw_ptr()),
-                content.len().to_primitive()),
-            destination_offset);
-    }
-};
-
-template<>
-struct Impl<owe::vulkan::ImagePrepareBackend, owe::vulkan::ImagePrepareContext>
-    : ImplBase<owe::vulkan::ImagePrepareContext> {
-    auto CreateImportedTexture(ref<owe::Image>                            image,
-                               Option<sync::Arc<owe::VideoPlaybackState>> playback)
-        -> Option<owe::vulkan::PreparedImageAllocation> {
-        return this->self().CreateImportedTexture(image, rstd::move(playback));
-    }
-
-    auto AllocateTexture(owe::vulkan::TextureKey key)
-        -> Option<sync::Arc<owe::vulkan::TextureAllocation>> {
-        return this->self().AllocateTexture(rstd::move(key));
-    }
-
-    auto AllocateTransparentTexture(owe::vulkan::TextureKey key)
-        -> Option<owe::vulkan::PreparedImageAllocation> {
-        return this->self().AllocateTransparentTexture(rstd::move(key));
-    }
-};
-
-} // namespace rstd

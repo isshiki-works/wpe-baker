@@ -45,11 +45,3 @@ private:
 };
 
 } // namespace owe::fft
-
-export namespace rstd
-{
-
-template<>
-struct Impl<Copy, owe::fft::Complex32> {};
-
-} // namespace rstd

@@ -210,14 +210,14 @@ public:
     explicit TextUniformSource(std::shared_ptr<TextUniformState> state)
         : m_state(rstd::move(state)) {}
 
-    auto Describe(rstd::mut_ref<rstd::dyn<UniformBindingSink>>) const
+    auto Describe(UniformBindingSink*) const
         -> rstd::Result<rstd::empty, UniformError>;
-    auto Version(rstd::ref<rstd::dyn<UniformUpdateContext>>) const -> rstd::u64;
-    auto Evaluate(rstd::ref<rstd::dyn<UniformUpdateContext>>,
-                  rstd::mut_ref<rstd::dyn<UniformValueSink>>) const
+    auto Version(const UniformUpdateContext*) const -> rstd::u64;
+    auto Evaluate(const UniformUpdateContext*,
+                  UniformValueSink*) const
         -> rstd::Result<rstd::empty, UniformError>;
     auto AcquireBindingLease() const
-        -> rstd::Option<rstd::boxed::Box<rstd::dyn<UniformBindingLease>>> {
+        -> rstd::Option<std::unique_ptr<UniformBindingLease>> {
         return rstd::None();
     }
 

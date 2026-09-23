@@ -41,57 +41,33 @@ struct RenderPassPreparation {
     u64                        cache_observed_count { 0 };
 };
 
+// 渲染 pass 准备管线/帧缓冲/渲染通道/描述符的接口（RenderResourceSystem 实现）。
 struct GraphicsResourcePreparer {
-    using Trait                  = GraphicsResourcePreparer;
-    static constexpr bool direct = false;
+    virtual ~GraphicsResourcePreparer() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = GraphicsResourcePreparer;
-
-        auto PreparePipeline(resource::PipelineUseHandle   pipeline_use,
-                             resource::RenderPassUseHandle render_pass_use,
-                             const vulkan::Device& device, vulkan::PipelineResourceRequest request)
-            -> Result<PipelinePreparation, resource::ResourceError> {
-            return rstd::trait_call<0>(
-                this, pipeline_use, render_pass_use, device, rstd::move(request));
-        }
-
-        auto PrepareFramebuffer(resource::FramebufferUseHandle                 framebuffer_use,
-                                resource::RenderPassUseHandle                  render_pass_use,
-                                const vulkan::Device&                          device,
-                                std::vector<vulkan::FramebufferAttachmentDesc> attachments,
-                                VkExtent2D                                     extent)
-            -> Result<FramebufferPreparation, resource::ResourceError> {
-            return rstd::trait_call<1>(
-                this, framebuffer_use, render_pass_use, device, rstd::move(attachments), extent);
-        }
-
-        auto PrepareRenderPass(resource::RenderPassUseHandle use, const vulkan::Device& device,
-                               const vulkan::RenderPassResourceDesc& desc)
-            -> Result<RenderPassPreparation, resource::ResourceError> {
-            return rstd::trait_call<2>(this, use, device, desc);
-        }
-
-        auto PrepareDescriptor(const vulkan::Device&          device,
-                               resource::PipelineLayoutHandle pipeline_layout, u32 set_index,
-                               slice<DescriptorImageBinding>  images,
-                               slice<DescriptorBufferBinding> buffers, DescriptorBindingReuse reuse)
-            -> Result<resource::DescriptorBindingHandle, resource::ResourceError> {
-            return rstd::trait_call<3>(
-                this, device, pipeline_layout, set_index, images, buffers, reuse);
-        }
-
-        auto UpdateDescriptorImages(resource::DescriptorBindingHandle handle,
-                                    slice<DescriptorImageBinding>     images)
-            -> Result<empty, resource::ResourceError> {
-            return rstd::trait_call<4>(this, handle, images);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::PreparePipeline, &T::PrepareFramebuffer, &T::PrepareRenderPass,
-                             &T::PrepareDescriptor, &T::UpdateDescriptorImages>;
+    virtual auto PreparePipeline(resource::PipelineUseHandle   pipeline_use,
+                                 resource::RenderPassUseHandle render_pass_use,
+                                 const vulkan::Device&         device,
+                                 vulkan::PipelineResourceRequest request)
+        -> Result<PipelinePreparation, resource::ResourceError> = 0;
+    virtual auto PrepareFramebuffer(resource::FramebufferUseHandle                 framebuffer_use,
+                                    resource::RenderPassUseHandle                  render_pass_use,
+                                    const vulkan::Device&                          device,
+                                    std::vector<vulkan::FramebufferAttachmentDesc> attachments,
+                                    VkExtent2D                                     extent)
+        -> Result<FramebufferPreparation, resource::ResourceError> = 0;
+    virtual auto PrepareRenderPass(resource::RenderPassUseHandle use, const vulkan::Device& device,
+                                   const vulkan::RenderPassResourceDesc& desc)
+        -> Result<RenderPassPreparation, resource::ResourceError> = 0;
+    virtual auto PrepareDescriptor(const vulkan::Device&          device,
+                                   resource::PipelineLayoutHandle pipeline_layout, u32 set_index,
+                                   slice<DescriptorImageBinding>  images,
+                                   slice<DescriptorBufferBinding> buffers,
+                                   DescriptorBindingReuse         reuse)
+        -> Result<resource::DescriptorBindingHandle, resource::ResourceError> = 0;
+    virtual auto UpdateDescriptorImages(resource::DescriptorBindingHandle handle,
+                                        slice<DescriptorImageBinding>     images)
+        -> Result<empty, resource::ResourceError> = 0;
 };
 
 struct ExternalResourcePreparer {
@@ -120,7 +96,7 @@ struct ExternalResourcePreparer {
     using Funcs = TraitFuncs<&T::PrepareExternal>;
 };
 
-class RenderResourceSystem {
+class RenderResourceSystem final : public GraphicsResourcePreparer {
 public:
     bool Initialize(const vulkan::Device& device) { return m_registries.Initialize(device); }
 
@@ -167,12 +143,10 @@ public:
         }
         vulkan::ImagePrepareContext image_context(m_registries.Textures(),
                                                   m_registries.ImageUploads());
-        auto image_backend  = dyn<vulkan::ImagePrepareBackend>::from_ref(image_context);
-        auto buffer_backend = dyn<vulkan::BufferBackend>::from_ref(m_registries.BufferManager());
         ResourcePrepareService service(m_registries.TextureEntries(),
-                                       Some(image_backend.as_mut_ref()),
+                                       &image_context,
                                        m_registries.Buffers(),
-                                       buffer_backend.as_mut_ref(),
+                                       &m_registries.BufferManager(),
                                        m_registries.Shaders());
         auto started = service.Begin(plan, rstd::move(providers), sections, texture_observer);
         if (started.is_err()) {
@@ -188,12 +162,10 @@ public:
         -> Result<ResourcePrepareProgress, resource::ResourceError> {
         vulkan::ImagePrepareContext image_context(m_registries.Textures(),
                                                   m_registries.ImageUploads());
-        auto image_backend  = dyn<vulkan::ImagePrepareBackend>::from_ref(image_context);
-        auto buffer_backend = dyn<vulkan::BufferBackend>::from_ref(m_registries.BufferManager());
         ResourcePrepareService service(m_registries.TextureEntries(),
-                                       Some(image_backend.as_mut_ref()),
+                                       &image_context,
                                        m_registries.Buffers(),
-                                       buffer_backend.as_mut_ref(),
+                                       &m_registries.BufferManager(),
                                        m_registries.Shaders());
         auto                   progress = service.Continue(session, texture_observer);
         if (progress.is_err()) {
@@ -278,7 +250,7 @@ public:
     auto PreparePipeline(resource::PipelineUseHandle   pipeline_use,
                          resource::RenderPassUseHandle render_pass_use,
                          const vulkan::Device& device, vulkan::PipelineResourceRequest request)
-        -> Result<PipelinePreparation, resource::ResourceError> {
+        -> Result<PipelinePreparation, resource::ResourceError> override {
         PipelineResourceSystem system(device,
                                       m_registries.PipelineLayouts(),
                                       m_registries.PipelineCache(),
@@ -324,7 +296,7 @@ public:
                             const vulkan::Device&                          device,
                             std::vector<vulkan::FramebufferAttachmentDesc> attachments,
                             VkExtent2D                                     extent)
-        -> Result<FramebufferPreparation, resource::ResourceError> {
+        -> Result<FramebufferPreparation, resource::ResourceError> override {
         auto render_pass = m_prepared.Resolve(render_pass_use);
         if (render_pass.is_none()) {
             return Err(resource::ResourceError {
@@ -366,7 +338,7 @@ public:
 
     auto PrepareRenderPass(resource::RenderPassUseHandle use, const vulkan::Device& device,
                            const vulkan::RenderPassResourceDesc& desc)
-        -> Result<RenderPassPreparation, resource::ResourceError> {
+        -> Result<RenderPassPreparation, resource::ResourceError> override {
         auto result = m_registries.RenderPasses().Ensure(device, desc);
         if (result.is_none()) {
             return Err(resource::ResourceError {
@@ -397,7 +369,7 @@ public:
                            resource::PipelineLayoutHandle pipeline_layout, u32 set_index,
                            slice<DescriptorImageBinding>  images,
                            slice<DescriptorBufferBinding> buffers, DescriptorBindingReuse reuse)
-        -> Result<resource::DescriptorBindingHandle, resource::ResourceError> {
+        -> Result<resource::DescriptorBindingHandle, resource::ResourceError> override {
         auto layout_resource = m_registries.PipelineLayouts().Resolve(pipeline_layout);
         if (layout_resource.is_none() ||
             rstd::as_cast<usize>(set_index) >= (**layout_resource).descriptor_layouts.len()) {
@@ -430,7 +402,7 @@ public:
 
     auto UpdateDescriptorImages(resource::DescriptorBindingHandle handle,
                                 slice<DescriptorImageBinding>     images)
-        -> Result<empty, resource::ResourceError> {
+        -> Result<empty, resource::ResourceError> override {
         auto prepared = m_prepared.ResolveMut(handle);
         if (prepared.is_none()) {
             return Err(resource::ResourceError {
@@ -466,9 +438,8 @@ public:
                 .message = rstd::format("prepared buffer use {} is unavailable", use.index),
             });
         }
-        auto backend = dyn<vulkan::BufferBackend>::from_ref(m_registries.BufferManager());
         return m_registries.Buffers().Update(
-            (**prepared).buffer.resource, content, backend.as_mut_ref());
+            (**prepared).buffer.resource, content, &m_registries.BufferManager());
     }
 
     auto ReserveUpload() -> resource::ReadyToken { return m_registries.Uploads().Reserve(); }
@@ -553,12 +524,12 @@ public:
         return Ok(empty {});
     }
 
-    void Collect(mut_ref<dyn<vulkan::MemoryBudgetSource>> memory) {
+    void Collect(vulkan::MemoryBudgetSource* memory) {
         m_registries.PipelineCache().PruneExpired();
         m_registries.PipelineLayouts().PruneExpired();
         m_registries.RenderPassCache().PruneExpired();
         m_registries.FramebufferCache().PruneExpired();
-        m_registries.Memory().Refresh(memory.as_ref());
+        m_registries.Memory().Refresh(memory);
         if (! m_registries.Memory().ShouldEvictTransient()) return;
         m_registries.TextureEntries().EvictUnused();
         m_registries.Buffers().EvictUnused();
@@ -619,53 +590,6 @@ private:
 
 export namespace rstd
 {
-
-template<>
-struct Impl<owe::resource_registry::GraphicsResourcePreparer,
-            owe::resource_registry::RenderResourceSystem>
-    : ImplBase<owe::resource_registry::RenderResourceSystem> {
-    auto PreparePipeline(owe::resource::PipelineUseHandle     pipeline_use,
-                         owe::resource::RenderPassUseHandle   render_pass_use,
-                         const owe::vulkan::Device&           device,
-                         owe::vulkan::PipelineResourceRequest request)
-        -> Result<owe::resource_registry::PipelinePreparation, owe::resource::ResourceError> {
-        return this->self().PreparePipeline(
-            pipeline_use, render_pass_use, device, rstd::move(request));
-    }
-
-    auto PrepareFramebuffer(owe::resource::FramebufferUseHandle                 framebuffer_use,
-                            owe::resource::RenderPassUseHandle                  render_pass_use,
-                            const owe::vulkan::Device&                          device,
-                            std::vector<owe::vulkan::FramebufferAttachmentDesc> attachments,
-                            VkExtent2D                                          extent)
-        -> Result<owe::resource_registry::FramebufferPreparation, owe::resource::ResourceError> {
-        return this->self().PrepareFramebuffer(
-            framebuffer_use, render_pass_use, device, rstd::move(attachments), extent);
-    }
-
-    auto PrepareRenderPass(owe::resource::RenderPassUseHandle         use,
-                           const owe::vulkan::Device&                 device,
-                           const owe::vulkan::RenderPassResourceDesc& desc)
-        -> Result<owe::resource_registry::RenderPassPreparation, owe::resource::ResourceError> {
-        return this->self().PrepareRenderPass(use, device, desc);
-    }
-
-    auto PrepareDescriptor(const owe::vulkan::Device&          device,
-                           owe::resource::PipelineLayoutHandle pipeline_layout, u32 set_index,
-                           slice<owe::resource_registry::DescriptorImageBinding>  images,
-                           slice<owe::resource_registry::DescriptorBufferBinding> buffers,
-                           owe::resource_registry::DescriptorBindingReuse         reuse)
-        -> Result<owe::resource::DescriptorBindingHandle, owe::resource::ResourceError> {
-        return this->self().PrepareDescriptor(
-            device, pipeline_layout, set_index, images, buffers, reuse);
-    }
-
-    auto UpdateDescriptorImages(owe::resource::DescriptorBindingHandle                handle,
-                                slice<owe::resource_registry::DescriptorImageBinding> images)
-        -> Result<empty, owe::resource::ResourceError> {
-        return this->self().UpdateDescriptorImages(handle, images);
-    }
-};
 
 template<>
 struct Impl<owe::resource_registry::ExternalResourcePreparer,

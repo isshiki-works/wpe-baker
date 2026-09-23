@@ -1,4 +1,5 @@
 module;
+#include <new>
 
 #include <cmath>
 #include <limits>
@@ -682,7 +683,7 @@ struct TextureCache::VideoRegistry {
     rstd::uint32_t                        yuv_max_width { 0 };
     rstd::uint32_t                        yuv_max_height { 0 };
 
-    struct Runtime {
+    struct Runtime final : TextureAllocationRuntime {
         VideoRegistry*                              registry { nullptr };
         const Device*                               device { nullptr };
         String                                      key;
@@ -704,12 +705,12 @@ struct TextureCache::VideoRegistry {
         bool                                        offline_drained { false };
         Option<wavsen::video::Nv12Frame>            offline_pending;
 
-        void Pump(double dt_seconds);
+        void Pump(double dt_seconds) override;
     };
-    Vec<rstd::sync::Weak<dyn<TextureAllocationRuntime>>> runtimes;
+    Vec<std::weak_ptr<TextureAllocationRuntime>> runtimes;
     struct ObservedRuntime {
         VideoDecoderObservation observation;
-        rstd::sync::Weak<dyn<TextureAllocationRuntime>> runtime;
+        std::weak_ptr<TextureAllocationRuntime> runtime;
     };
     // Keep the union of actual successful opens, including allocations that later expire.
     // Multiple material uses of one shared allocation do not create more records.
@@ -769,18 +770,6 @@ struct TextureCache::VideoRegistry {
         return yuv->get();
     }
 };
-
-namespace rstd
-{
-
-template<>
-struct Impl<owe::vulkan::TextureAllocationRuntime,
-            owe::vulkan::TextureCache::VideoRegistry::Runtime>
-    : ImplBase<owe::vulkan::TextureCache::VideoRegistry::Runtime> {
-    void Pump(double seconds) { this->self().Pump(seconds); }
-};
-
-} // namespace rstd
 
 Option<rstd::sync::Arc<TextureAllocation>>
 TextureCache::CreateVideoTex(const Image&                                image,
@@ -974,12 +963,12 @@ TextureCache::CreateVideoTex(const Image&                                image,
     ImageSlots img_slots {};
     img_slots.slots.resize(1);
     img_slots.slots[0] = std::move(target_image);
-    auto runtime_owner = rstd::sync::Arc<dyn<TextureAllocationRuntime>>::make(rstd::move(runtime));
-    auto allocation    = rstd::sync::Arc<TextureAllocation>::make(rstd::move(img_slots),
-                                                                  Some(runtime_owner.clone()));
-    registry->runtimes.push(runtime_owner.downgrade());
+    std::shared_ptr<TextureAllocationRuntime> runtime_owner =
+        std::make_shared<VideoRegistry::Runtime>(rstd::move(runtime));
+    auto allocation = rstd::sync::Arc<TextureAllocation>::make(rstd::move(img_slots), runtime_owner);
+    registry->runtimes.push(std::weak_ptr<TextureAllocationRuntime>(runtime_owner));
     registry->observed_runtimes.push_back(VideoRegistry::ObservedRuntime {
-        .observation = std::move(observation), .runtime = runtime_owner.downgrade(),
+        .observation = std::move(observation), .runtime = runtime_owner,
     });
     registry->Observe(m_video_observation_tick);
     return Some(rstd::move(allocation));
@@ -1317,11 +1306,11 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
     if (m_video_registry.is_none()) return;
     auto* registry = m_video_registry->get();
     registry->Observe(m_video_observation_tick);
-    registry->runtimes.retain([](const rstd::sync::Weak<dyn<TextureAllocationRuntime>>& runtime) {
+    registry->runtimes.retain([](const std::weak_ptr<TextureAllocationRuntime>& runtime) {
         return ! runtime.expired();
     });
     for (const auto& weak : registry->runtimes) {
-        auto runtime = weak.upgrade();
+        auto runtime = weak.lock();
         if (runtime) runtime->Pump(dt_seconds);
     }
 }
@@ -1447,7 +1436,7 @@ void TextureCache::SetVideoDecodeOptions(VideoDecodeOptions options) {
         auto* registry    = m_video_registry->get();
         registry->options = m_video_decode_options;
         registry->runtimes.retain(
-            [](const rstd::sync::Weak<dyn<TextureAllocationRuntime>>& runtime) {
+            [](const std::weak_ptr<TextureAllocationRuntime>& runtime) {
                 return ! runtime.expired();
             });
         if (registry->runtimes.is_empty()) (void)registry->producer.take();

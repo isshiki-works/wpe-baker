@@ -16,7 +16,7 @@ export namespace owe::fs
 
 class PkgMount;
 
-class WPPkgFs {
+class WPPkgFs final : public MountFs {
 public:
     WPPkgFs(const WPPkgFs&)                        = delete;
     auto operator=(const WPPkgFs&) -> WPPkgFs&     = delete;
@@ -25,8 +25,8 @@ public:
 
     static auto open(Path pkg_path) -> Result<PkgMount>;
 
-    auto open_read(Path path) const -> Result<ReadRange>;
-    auto metadata(Path path) const -> Result<FileMetadata>;
+    auto open_read(Path path) const -> Result<ReadRange> override;
+    auto metadata(Path path) const -> Result<FileMetadata> override;
 
 private:
     struct PkgFile {
@@ -51,7 +51,7 @@ public:
     PkgMount(PkgMount&&) noexcept                    = default;
     auto operator=(PkgMount&&) noexcept -> PkgMount& = default;
 
-    auto mount_handle() const -> MountHandle { return m_mount.clone(); }
+    auto mount_handle() const -> MountHandle { return m_mount; }
     auto open_read(Path path) const -> Result<ReadRange> { return m_mount->open_read(path); }
     auto pkg_version_stamp() const noexcept -> rstd::ref<rstd::str> {
         return m_pkg_version.as_str();
@@ -69,18 +69,3 @@ private:
 
 } // namespace owe::fs
 
-namespace rstd
-{
-
-template<>
-struct Impl<owe::fs::MountFs, owe::fs::WPPkgFs> : ImplBase<owe::fs::WPPkgFs> {
-    auto open_read(owe::fs::Path path) const -> owe::io::Result<owe::io::ReadRange> {
-        return this->self().open_read(path);
-    }
-
-    auto metadata(owe::fs::Path path) const -> owe::io::Result<owe::fs::FileMetadata> {
-        return this->self().metadata(path);
-    }
-};
-
-} // namespace rstd

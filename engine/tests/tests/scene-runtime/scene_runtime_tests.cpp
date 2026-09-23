@@ -21,14 +21,14 @@ using rstd::sync::Arc;
 namespace scene_test
 {
 
-class UniformSink {
+class UniformSink final : public owe::UniformValueSink {
 public:
     explicit UniformSink(owe::UniformOutputId output): m_output(output) {}
 
-    bool Wants(owe::UniformOutputId output) const { return output == m_output; }
+    bool Wants(owe::UniformOutputId output) const override { return output == m_output; }
 
     auto Write(owe::UniformOutputId output, owe::UniformValueView value)
-        -> rstd::Result<rstd::empty, owe::UniformError> {
+        -> rstd::Result<rstd::empty, owe::UniformError> override {
         if (! Wants(output)) {
             return rstd::Err(owe::UniformError {
                 .message = rstd::string::String::make("unexpected uniform output"_str),
@@ -71,10 +71,10 @@ public:
     auto TexelSize() const -> rstd::array<float, 2> { return { 1.0f / 1920.0f, 1.0f / 1080.0f }; }
 };
 
-class ShapeSink {
+class ShapeSink final : public owe::UniformBindingSink {
 public:
     auto Bind(owe::UniformOutputId, ref<str> name, owe::UniformValueShape shape)
-        -> rstd::Result<bool, owe::UniformError> {
+        -> rstd::Result<bool, owe::UniformError> override {
         if (name == "g_ModelMatrix"_str) {
             model_shape = shape;
             found_model = true;
@@ -96,16 +96,18 @@ public:
     bool                   found_light_position { false };
 };
 
-class UpdateContext {
+class UpdateContext final : public owe::UniformUpdateContext {
 public:
     template<typename Resources>
     UpdateContext(const owe::SceneFrame& frame, const Resources& resources)
         : m_frame(rstd::ref<owe::SceneFrame>::from_raw_parts(rstd::addressof(frame))),
           m_resources(rstd::dyn<owe::UniformResourceView>::from_ref(resources)) {}
 
-    auto Frame() const -> rstd::ref<owe::SceneFrame> { return m_frame; }
-    auto Resources() const -> rstd::ref<rstd::dyn<owe::UniformResourceView>> { return m_resources; }
-    auto RenderView() const -> owe::SceneRenderViewKind {
+    auto Frame() const -> rstd::ref<owe::SceneFrame> override { return m_frame; }
+    auto Resources() const -> rstd::ref<rstd::dyn<owe::UniformResourceView>> override {
+        return m_resources;
+    }
+    auto RenderView() const -> owe::SceneRenderViewKind override {
         return owe::SceneRenderViewKind::Primary;
     }
 
@@ -120,9 +122,9 @@ auto Capture(const owe::SceneFrame& frame, const Source& source, Output output)
     EmptyResources resources;
     UpdateContext  context_impl(frame, resources);
     UniformSink    sink_impl(owe::ToUniformOutput(output));
-    auto           context = rstd::dyn<owe::UniformUpdateContext>::from_ref(context_impl);
-    auto           sink    = rstd::dyn<owe::UniformValueSink>::from_ref(sink_impl);
-    auto           result  = source.Evaluate(context.as_ref(), sink.as_mut_ref());
+    auto           context = &context_impl;
+    auto           sink    = &sink_impl;
+    auto           result  = source.Evaluate(context, sink);
     EXPECT_TRUE(result.is_ok());
     EXPECT_TRUE(sink_impl.Written());
     return sink_impl.Value();
@@ -139,9 +141,9 @@ TEST(TransformUniformSource, DescribesModelAsMat4) {
     auto node = Arc<owe::UniformNodeState>::make(rstd::move(scene_node), rstd::move(resolver));
     owe::TransformUniformSource source(rstd::move(state), rstd::move(node));
     scene_test::ShapeSink       sink_impl;
-    auto                        sink = rstd::dyn<owe::UniformBindingSink>::from_ref(sink_impl);
+    auto                        sink = &sink_impl;
 
-    auto result = source.Describe(sink.as_mut_ref());
+    auto result = source.Describe(sink);
 
     ASSERT_TRUE(result.is_ok());
     ASSERT_TRUE(sink_impl.found_model);
@@ -243,8 +245,8 @@ TEST(AudioUniformSource, ExposesLogicalSpectrumValues) {
     owe::AudioUniformSource source(state.clone());
 
     scene_test::ShapeSink shape_sink_impl;
-    auto shape_sink = rstd::dyn<owe::UniformBindingSink>::from_ref(shape_sink_impl);
-    auto described  = source.Describe(shape_sink.as_mut_ref());
+    auto shape_sink = &shape_sink_impl;
+    auto described  = source.Describe(shape_sink);
 
     ASSERT_TRUE(described.is_ok());
     ASSERT_TRUE(shape_sink_impl.found_spectrum);
@@ -265,8 +267,8 @@ TEST(LightUniformSource, ExposesLogicalVec3Array) {
     auto                    lights = Vec<ref<owe::SceneLight>>::make();
     owe::LightUniformSource source(rstd::move(lights));
     scene_test::ShapeSink   shape_sink_impl;
-    auto shape_sink = rstd::dyn<owe::UniformBindingSink>::from_ref(shape_sink_impl);
-    auto described  = source.Describe(shape_sink.as_mut_ref());
+    auto shape_sink = &shape_sink_impl;
+    auto described  = source.Describe(shape_sink);
 
     ASSERT_TRUE(described.is_ok());
     ASSERT_TRUE(shape_sink_impl.found_light_position);
@@ -369,10 +371,10 @@ TEST(TextureUniformSource, StaticTextureUsesIdentityTransform) {
     scene_test::UpdateContext          context_impl(frame, resources);
     owe::TextureUniformSource          source;
     scene_test::UniformSink            sink_impl(owe::TextureRotationOutput(0));
-    auto context = rstd::dyn<owe::UniformUpdateContext>::from_ref(context_impl);
-    auto sink    = rstd::dyn<owe::UniformValueSink>::from_ref(sink_impl);
+    auto context = &context_impl;
+    auto sink    = &sink_impl;
 
-    auto result = source.Evaluate(context.as_ref(), sink.as_mut_ref());
+    auto result = source.Evaluate(context, sink);
 
     ASSERT_TRUE(result.is_ok());
     ASSERT_TRUE(sink_impl.Written());
@@ -390,10 +392,10 @@ TEST(TextureUniformSource, PublishesSampleTexelExtent) {
     scene_test::UpdateContext          context_impl(frame, resources);
     owe::TextureUniformSource          source;
     scene_test::UniformSink            sink_impl(owe::TextureTexelOutput(0));
-    auto context = rstd::dyn<owe::UniformUpdateContext>::from_ref(context_impl);
-    auto sink    = rstd::dyn<owe::UniformValueSink>::from_ref(sink_impl);
+    auto context = &context_impl;
+    auto sink    = &sink_impl;
 
-    auto result = source.Evaluate(context.as_ref(), sink.as_mut_ref());
+    auto result = source.Evaluate(context, sink);
 
     ASSERT_TRUE(result.is_ok());
     ASSERT_TRUE(sink_impl.Written());

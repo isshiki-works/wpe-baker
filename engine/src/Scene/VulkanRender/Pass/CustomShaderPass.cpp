@@ -674,7 +674,7 @@ auto CustomShaderPass::createUniformBufferUpdates(ref<dyn<UniformBindingPrepareC
 }
 
 bool CustomShaderPass::prepareResourceStates(
-    rstd::mut_ref<rstd::dyn<resource_registry::TextureStatePreparer>> states) {
+    resource_registry::TextureStatePreparer* states) {
     m_desc.sampled_barriers.Clear();
     for (const auto& binding : m_desc.texture_bindings) {
         if (binding.use.is_none()) continue;

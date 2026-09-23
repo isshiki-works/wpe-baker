@@ -748,12 +748,11 @@ struct RenderProgram {
 
     auto finishPrepare(owe::Scene& scene, const Device& device, RenderingResources& rr)
         -> RenderProgramPrepareStatus {
-        auto state_preparer = rstd::dyn<owe::resource_registry::TextureStatePreparer>::from_ref(
-            rr.resources.States());
+        owe::resource_registry::TextureStatePreparer* state_preparer = &rr.resources.States();
         for (auto& record : pass_records) {
             auto pass = resolve(record);
             if (pass.is_none()) continue;
-            if (! pass->prepareResourceStates(state_preparer.as_mut_ref())) {
+            if (! pass->prepareResourceStates(state_preparer)) {
                 rstd_error("prepare resource states failed for {}", record.pass_name);
                 return RenderProgramPrepareStatus::Failed;
             }
@@ -829,8 +828,7 @@ struct RenderProgram {
         }
         if (layout_assignment_changed) loaded = false;
         pipeline_layout_assignments = rstd::move(next_layout_assignments);
-        auto graphics =
-            rstd::dyn<owe::resource_registry::GraphicsResourcePreparer>::from_ref(rr.resources);
+        owe::resource_registry::GraphicsResourcePreparer* graphics = &rr.resources;
 
         auto global_uses = Vec<GlobalDescriptorBufferUse>::make();
         for (auto& record : pass_records) {
@@ -931,7 +929,7 @@ struct RenderProgram {
         PassPrepareContext prepare_context {
             .resources = rstd::ref<owe::resource_registry::PreparedResourceTable>::from_raw_parts(
                 rstd::addressof(rr.resources.Prepared())),
-            .graphics         = graphics.as_mut_ref(),
+            .graphics         = graphics,
             .pipeline_layouts = rstd::ref<PipelineLayoutAssignments>::from_raw_parts(
                 rstd::addressof(pipeline_layout_assignments)),
         };
@@ -1129,7 +1127,7 @@ struct RenderProgram {
                 return false;
             }
         }
-        auto graphics = dyn<resource_registry::GraphicsResourcePreparer>::from_ref(rr.resources);
+        resource_registry::GraphicsResourcePreparer* graphics = &rr.resources;
         for (auto& record : pass_records) {
             auto pass = resolve(record);
             if (! pass || ! pass->prepared()) continue;
@@ -1137,7 +1135,7 @@ struct RenderProgram {
             PassUpdateContext     update_context {
                 .buffers   = buffer_writer.as_mut_ref(),
                 .resources = ref<PreparedPassResources>::from_raw_parts(rstd::addressof(resources)),
-                .graphics  = graphics.as_mut_ref(),
+                .graphics  = graphics,
                 .textures  = textures,
             };
             if (! pass->update(update_context)) {

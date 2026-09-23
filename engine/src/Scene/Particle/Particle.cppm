@@ -1117,19 +1117,5 @@ struct Impl<fmt::Display, owe::particle::ParticleSchemaError>
     }
 };
 
-template<>
-struct Impl<fmt::Debug, owe::particle::ParticleSchemaError>
-    : ImplBase<owe::particle::ParticleSchemaError> {
-    auto fmt(fmt::Formatter& formatter) const -> bool {
-        return formatter.write_fmt(
-            fmt::Arguments::make("ParticleSchemaError({})", this->self().message));
-    }
-};
-
-template<>
-struct Impl<error::Error, owe::particle::ParticleSchemaError>
-    : DefaultInImpl<error::Error, owe::particle::ParticleSchemaError> {};
-
 } // namespace rstd
 
-static_assert(rstd::Impled<owe::particle::ParticleSchemaError, rstd::error::Error>);

@@ -46,14 +46,6 @@ struct PipelinePushConstantSchema {
 
 } // namespace owe::resource_registry
 
-export namespace rstd
-{
-
-template<>
-struct Impl<Copy, owe::resource_registry::PipelinePushConstantSchema> {};
-
-} // namespace rstd
-
 export namespace owe::resource_registry
 {
 

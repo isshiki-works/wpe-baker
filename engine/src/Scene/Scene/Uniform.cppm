@@ -243,40 +243,21 @@ enum class SceneRenderViewKind
     Reflection,
 };
 
+// uniform 源声明输出槽：按着色器成员名绑定输出。
 struct UniformBindingSink {
-    using Trait                  = UniformBindingSink;
-    static constexpr bool direct = false;
+    virtual ~UniformBindingSink() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformBindingSink;
-
-        auto Bind(UniformOutputId output, ref<str> shader_member, UniformValueShape shape = {})
-            -> Result<bool, UniformError> {
-            return rstd::trait_call<0>(this, output, shader_member, shape);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Bind>;
+    virtual auto Bind(UniformOutputId output, ref<str> shader_member, UniformValueShape shape = {})
+        -> Result<bool, UniformError> = 0;
 };
 
+// uniform 源求值时写出数值。
 struct UniformValueSink {
-    using Trait                  = UniformValueSink;
-    static constexpr bool direct = false;
+    virtual ~UniformValueSink() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformValueSink;
-
-        bool Wants(UniformOutputId output) const { return rstd::trait_call<0>(this, output); }
-        auto Write(UniformOutputId output, UniformValueView value) -> Result<empty, UniformError> {
-            return rstd::trait_call<1>(this, output, value);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Wants, &T::Write>;
+    virtual bool Wants(UniformOutputId output) const                              = 0;
+    virtual auto Write(UniformOutputId output, UniformValueView value)
+        -> Result<empty, UniformError>                                            = 0;
 };
 
 struct UniformTextureView {
@@ -310,38 +291,18 @@ struct UniformResourceView {
     using Funcs = TraitFuncs<&T::Texture, &T::Viewport, &T::TexelSize>;
 };
 
+// uniform 源求值/取版本时可见的帧与资源上下文。
 struct UniformUpdateContext {
-    using Trait                  = UniformUpdateContext;
-    static constexpr bool direct = false;
+    virtual ~UniformUpdateContext() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformUpdateContext;
-
-        auto Frame() const -> ref<SceneFrame> { return rstd::trait_call<0>(this); }
-        auto Resources() const -> ref<dyn<UniformResourceView>> {
-            return rstd::trait_call<1>(this);
-        }
-        auto RenderView() const -> SceneRenderViewKind { return rstd::trait_call<2>(this); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Frame, &T::Resources, &T::RenderView>;
+    virtual auto Frame() const -> ref<SceneFrame>                     = 0;
+    virtual auto Resources() const -> ref<dyn<UniformResourceView>>   = 0;
+    virtual auto RenderView() const -> SceneRenderViewKind            = 0;
 };
 
+// 绑定期间保持某项运行时需求（如音频响应）存活的租约；只靠析构释放，没有其它操作。
 struct UniformBindingLease {
-    using Trait                  = UniformBindingLease;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = UniformBindingLease;
-
-        void KeepAlive() const { rstd::trait_call<0>(this); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::KeepAlive>;
+    virtual ~UniformBindingLease() = default;
 };
 
 struct UniformSource {
@@ -352,17 +313,17 @@ struct UniformSource {
     struct Api {
         using Trait = UniformSource;
 
-        auto Describe(mut_ref<dyn<UniformBindingSink>> sink) const -> Result<empty, UniformError> {
+        auto Describe(UniformBindingSink* sink) const -> Result<empty, UniformError> {
             return rstd::trait_call<0>(this, sink);
         }
-        auto Version(ref<dyn<UniformUpdateContext>> context) const -> u64 {
+        auto Version(const UniformUpdateContext* context) const -> u64 {
             return rstd::trait_call<1>(this, context);
         }
-        auto Evaluate(ref<dyn<UniformUpdateContext>> context,
-                      mut_ref<dyn<UniformValueSink>> sink) const -> Result<empty, UniformError> {
+        auto Evaluate(const UniformUpdateContext* context,
+                      UniformValueSink* sink) const -> Result<empty, UniformError> {
             return rstd::trait_call<2>(this, context, sink);
         }
-        auto AcquireBindingLease() const -> Option<Box<dyn<UniformBindingLease>>> {
+        auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> {
             return rstd::trait_call<3>(this);
         }
     };
@@ -566,16 +527,5 @@ struct Impl<fmt::Display, owe::UniformError> : ImplBase<owe::UniformError> {
     }
 };
 
-template<>
-struct Impl<fmt::Debug, owe::UniformError> : ImplBase<owe::UniformError> {
-    auto fmt(fmt::Formatter& formatter) const -> bool {
-        return formatter.write_fmt(fmt::Arguments::make("UniformError({})", this->self().message));
-    }
-};
-
-template<>
-struct Impl<error::Error, owe::UniformError> : DefaultInImpl<error::Error, owe::UniformError> {};
-
 } // namespace rstd
 
-static_assert(rstd::Impled<owe::UniformError, rstd::error::Error>);

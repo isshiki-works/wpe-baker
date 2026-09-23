@@ -25,14 +25,6 @@ struct DescriptorBindingSchema {
 
 } // namespace owe::resource_registry
 
-export namespace rstd
-{
-
-template<>
-struct Impl<Copy, owe::resource_registry::DescriptorBindingSchema> {};
-
-} // namespace rstd
-
 export namespace owe::resource_registry
 {
 
@@ -235,17 +227,6 @@ struct DescriptorBufferBinding {
 };
 
 } // namespace owe::resource_registry
-
-export namespace rstd
-{
-
-template<>
-struct Impl<Copy, owe::resource_registry::DescriptorImageBinding> {};
-
-template<>
-struct Impl<Copy, owe::resource_registry::DescriptorBufferBinding> {};
-
-} // namespace rstd
 
 export namespace owe::resource_registry
 {

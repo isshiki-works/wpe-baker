@@ -16,7 +16,7 @@ enum class MemoryPressure
 
 class MemoryBudgetPolicy {
 public:
-    void Refresh(ref<dyn<vulkan::MemoryBudgetSource>> source) { Refresh(source->MemoryBudget()); }
+    void Refresh(const vulkan::MemoryBudgetSource* source) { Refresh(source->MemoryBudget()); }
 
     void Refresh(vulkan::MemoryBudgetSnapshot snapshot) {
         m_snapshot = snapshot;

@@ -63,19 +63,5 @@ struct Impl<fmt::Display, owe::SceneParseError> : ImplBase<owe::SceneParseError>
     }
 };
 
-template<>
-struct Impl<fmt::Debug, owe::SceneParseError> : ImplBase<owe::SceneParseError> {
-    auto fmt(fmt::Formatter& formatter) const -> bool {
-        return formatter.write_fmt(fmt::Arguments::make("SceneParseError(kind={}, message={})",
-                                                        static_cast<int>(this->self().kind),
-                                                        this->self().message));
-    }
-};
-
-template<>
-struct Impl<error::Error, owe::SceneParseError>
-    : DefaultInImpl<error::Error, owe::SceneParseError> {};
-
 } // namespace rstd
 
-static_assert(rstd::Impled<owe::SceneParseError, rstd::error::Error>);
