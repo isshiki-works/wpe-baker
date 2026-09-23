@@ -179,12 +179,15 @@ public static class EncodedLoopValidator
         if (!File.Exists(videoFile)) throw new FileNotFoundException("Encoded video is missing.", videoFile);
         foreach (string executable in new[] { tools.Ffmpeg, tools.Ffprobe }) if (!File.Exists(executable)) throw new FileNotFoundException("Required native tool is missing.", executable);
         if (loopFrames < 2 || fpsNumerator == 0 || fpsDenominator == 0) throw new ArgumentException("Loop frames and FPS must be positive.");
-        JsonObject stream = await EncodedQualityValidator.ProbeStreamAsync(videoFile, tools, cancellationToken);
+        // 探流与帧数（容器头优先、不符才全解码）走唯一的 VerifyEncoded；这里只取读数，裁决仍在下面。
+        EncodedStream probed = await VerifyEncoded.ProbeAsync(new FfmpegTool(tools), videoFile,
+            "stream=width,height,avg_frame_rate,r_frame_rate,nb_frames", loopFrames, logPath: null, cancellationToken, threads: false);
+        JsonObject stream = probed.Stream;
         int width = RequiredInt(stream, "width"), height = RequiredInt(stream, "height");
         (uint actualNum, uint actualDen, string actualFps) = ReadFps(stream);
         if (packedAlpha && width % 2 != 0) throw new InvalidDataException("Packed alpha requires an even encoded width.");
         (ulong decoded, string frameCountSource, string? frameCountFallbackReason) =
-            await FrameCountAsync(videoFile, tools, stream, loopFrames, cancellationToken);
+            (probed.Frames, probed.CountSource, probed.FallbackReason);
         bool framesMatch = decoded == loopFrames;
         bool fpsMatch = SameRate(actualNum, actualDen, fpsNumerator, fpsDenominator);
         bool closed = LoopClosureCheck.Allows(closure);
@@ -284,21 +287,6 @@ public static class EncodedLoopValidator
                 ["width"] = content.Width, ["height"] = content.Height,
                 ["measured_width"] = measuredWidth, ["measured_height"] = measuredHeight };
         return result;
-    }
-
-    /// <summary>
-    /// 本工具成功写出的成品先核容器帧数；缺失或不一致时才解码确认，并保留实际计数来源。
-    /// </summary>
-    internal static async Task<(ulong Count, string Source, string? FallbackReason)> FrameCountAsync(string videoFile,
-        NativeTools tools, JsonObject stream, ulong loopFrames, CancellationToken token)
-    {
-        if (!EncodedQualityValidator.TryContainerFrameCount(stream, out ulong declared))
-            return (await EncodedQualityValidator.CountFramesAsync(videoFile, tools, token), "full_decode",
-                "The container header did not declare a positive nb_frames, so the frames were counted by decoding.");
-        if (declared == loopFrames) return (declared, "container_header", null);
-        return (await EncodedQualityValidator.CountFramesAsync(videoFile, tools, token), "full_decode",
-            $"The container header declared {declared.ToString(CultureInfo.InvariantCulture)} frames instead of the expected " +
-            $"{loopFrames.ToString(CultureInfo.InvariantCulture)}, so the frames were counted by decoding before judging.");
     }
 
     /// <summary>拒绝理由里的一段：点名是闭合、帧数还是帧率没过，带上读数。</summary>

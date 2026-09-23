@@ -282,7 +282,7 @@ public sealed partial class NativeRenderRunner
         try
         {
             // ffmpeg 失败、取消或磁盘告急时帧包已经开始写了，放在 try 里让 finally 一并清掉。
-            if (gpuWindow is null) _ = await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", .. head.Arguments, .. wrapWindow.Arguments,
+            if (gpuWindow is null) _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", .. head.Arguments, .. wrapWindow.Arguments,
                 "-filter_complex", filter, "-map", "[pair]", "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", pack],
                 Path.Combine(master, "seam-frames.stderr.log"), cancellationToken);
             if (new FileInfo(pack).Length != expected) throw new InvalidDataException("接缝帧包的长度与 master 尺寸不一致。");
@@ -462,7 +462,7 @@ public sealed partial class NativeRenderRunner
                 "-filter_complex", filter, "-map", "[out]", "-an",
                 "-frames:v", cut.ToString(CultureInfo.InvariantCulture),
                 .. profile.OutputArguments(numerator, denominator, headSegment)];
-            _ = await RunTextAsync(tools.Ffmpeg, headArguments, Path.Combine(master, "crossfade.stderr.log"), cancellationToken);
+            _ = await ff.RunTextAsync(tools.Ffmpeg, headArguments, Path.Combine(master, "crossfade.stderr.log"), cancellationToken);
             verification = await VerifyCrossfadeWeightsAsync(video, headSegment, loopFrames, crossfadeFrames,
                 width, height, numerator, denominator, master, cancellationToken);
             ulong copied = loopFrames - cut;
@@ -472,7 +472,7 @@ public sealed partial class NativeRenderRunner
                 // -c copy 全程不解码，没法用帧号窗口，只能靠 -ss 正好落在第 cut 帧的时间戳上命中那个 IDR。
                 // 原来的 cut+0.25 帧在 59.94 这类细时基下会把 IDR 当成 seek 点之前的包丢掉，所以改成整帧边界，
                 // 再把尾段首帧和 master 第 cut 帧逐字节比一次：seek 语义以后再变，这里会直接失败而不是悄悄错位。
-                _ = await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n",
+                _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n",
                     "-ss", InputSeconds(cut, numerator, denominator), "-i", video,
                     "-map", "0:v:0", "-an", "-c", "copy", "-frames:v", copied.ToString(CultureInfo.InvariantCulture),
                     // 尾段与拼接结果都是本地中间文件、只被顺序整读，faststart 会把接近整个 master 再读写一遍，纯浪费。
@@ -481,7 +481,7 @@ public sealed partial class NativeRenderRunner
                 await RequireTailStartsAtCutAsync(video, tailSegment, cut, numerator, denominator, master, cancellationToken);
                 await File.WriteAllTextAsync(concatList,
                     $"file '{ConcatEntry(headSegment)}'\nfile '{ConcatEntry(tailSegment)}'\n", cancellationToken);
-                _ = await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", "-f", "concat", "-safe", "0",
+                _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", "-f", "concat", "-safe", "0",
                     "-i", concatList, "-map", "0:v:0", "-an", "-c", "copy", "-fps_mode", "passthrough",
                     "-movie_timescale", numerator.ToString(CultureInfo.InvariantCulture),
                     "-video_track_timescale", numerator.ToString(CultureInfo.InvariantCulture), partial],
@@ -489,16 +489,13 @@ public sealed partial class NativeRenderRunner
                 finished = partial;
             }
             // 本进程刚完成重封装，只核容器帧数/尺寸/时基；异常才解码确认。
-            string probeText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-threads", "4", "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,nb_frames,avg_frame_rate,time_base,duration_ts",
-                "-of", "json", finished], Path.Combine(master, "crossfade.ffprobe.stderr.log"), cancellationToken);
-            JsonObject stream = JsonNode.Parse(probeText)!["streams"]!.AsArray().Single()!.AsObject();
-            var count = await EncodedLoopValidator.FrameCountAsync(finished, tools, stream, loopFrames, cancellationToken);
-            if (stream["width"]!.GetValue<uint>() != width || stream["height"]!.GetValue<uint>() != height ||
-                count.Count != loopFrames)
+            EncodedStream verified = await VerifyEncoded.ProbeAsync(ff, finished,
+                "stream=width,height,nb_frames,avg_frame_rate,time_base,duration_ts", loopFrames,
+                Path.Combine(master, "crossfade.ffprobe.stderr.log"), cancellationToken);
+            if (!verified.Has(width, height, loopFrames))
                 throw new InvalidDataException("交叉淡化后的 master 没有给出请求的尺寸与帧数。");
             // 拼接是容器层操作，时间戳漂了不会报错，所以这里连时基和总时长一起核。
-            ConfirmEncodedDuration(stream, loopFrames, numerator, denominator);
+            ConfirmEncodedDuration(verified, loopFrames, numerator, denominator);
             // 淡化实现自检：拿拼好的成品对原 master 逐步核恒等式，超出推导上界 + 取整余量就抛内部错误。
             // 放在删除原 master 之前，失败时原 master 还在。
             JsonObject stepCheck = await VerifyCrossfadeStepsAsync(video, finished, loopFrames, crossfadeFrames,
@@ -550,7 +547,7 @@ public sealed partial class NativeRenderRunner
         uint numerator, uint denominator, string logDirectory, CancellationToken token)
     {
         ulong window = Math.Min(limit, minimum + KeyFrameProbeFrames);
-        string text = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-select_streams", "v:0",
+        string text = await ff.RunTextAsync(tools.Ffprobe, ["-v", "error", "-select_streams", "v:0",
             "-show_entries", "packet=pts_time,flags", "-read_intervals", $"%+#{window}", "-of", "csv=p=0", video],
             Path.Combine(logDirectory, "crossfade-keyframes.stderr.log"), token);
         foreach (string line in text.Split('\n'))
@@ -575,10 +572,10 @@ public sealed partial class NativeRenderRunner
         string master, CancellationToken token)
     {
         ExactFrameRange.FfmpegInput expected = ExactFrameRange.Build(video, cut, 1, numerator, denominator);
-        string sourceHash = (await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", .. expected.Arguments,
+        string sourceHash = (await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", .. expected.Arguments,
             "-map", "0:v:0", "-vf", expected.Filter, "-frames:v", "1", "-an", "-pix_fmt", "rgb24", "-f", "md5", "-"],
             Path.Combine(master, "crossfade-tail-check-master.stderr.log"), token)).Trim();
-        string copiedHash = (await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-i", tailSegment,
+        string copiedHash = (await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-i", tailSegment,
             "-map", "0:v:0", "-frames:v", "1", "-an", "-pix_fmt", "rgb24", "-f", "md5", "-"],
             Path.Combine(master, "crossfade-tail-check-copy.stderr.log"), token)).Trim();
         if (!sourceHash.StartsWith("MD5=", StringComparison.Ordinal) || sourceHash != copiedHash)
@@ -590,7 +587,7 @@ public sealed partial class NativeRenderRunner
     /// 回读淡化窗口两端的整帧，和「用 master 原帧算出来的期望混合值」逐像素比。ffmpeg 的 blend
     /// 表达式帧号从 1 开始，这种偏移不会报错、只会悄悄把权重错开一帧，所以用真实像素把公式钉死。
     /// 源帧故意不用淡化本身的取帧办法（<see cref="ExactFrameRange"/>：整帧边界 seek + 时间戳窗口），
-    /// 而走 <see cref="EncodedQualityValidator"/> 的逐帧选取（整秒锚点 + 帧序号计数）。两套定位互相独立，
+    /// 而走 <see cref="FrameAccess.DecodeSelectedRgb24Async"/> 的逐帧选取（整秒锚点 + 帧序号计数）。两套定位互相独立，
     /// 任何一边错开一帧都会在这里失败；以前两边用同一个 -ss 写法、同偏同错，这道校验查不出来。
     /// 只取四帧，开销与 master 长度无关。
     /// </summary>
@@ -605,7 +602,7 @@ public sealed partial class NativeRenderRunner
         try
         {
             // 成片的淡化段从第 0 帧开始，按帧序号选取不需要 seek。
-            _ = await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", "-i", headSegment,
+            _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", "-i", headSegment,
                 "-vf", select, "-map", "0:v:0", "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", fadedPack],
                 Path.Combine(master, "crossfade-verify-faded.stderr.log"), token);
             int samples = last == 0 ? 1 : 2;
@@ -618,7 +615,7 @@ public sealed partial class NativeRenderRunner
             uint worstFrame = 0;
             int compared = 0;
             await using (var mixed = new FileStream(fadedPack, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, true))
-                await foreach ((ulong index, byte[] frame) in EncodedQualityValidator.DecodeSelectedRgb24Async(video, tools,
+                await foreach ((ulong index, byte[] frame) in FrameAccess.DecodeSelectedRgb24Async(video, ff,
                     (int)width, (int)height, indices, null, Path.Combine(master, "crossfade-verify-source.stderr.log"), token))
                 {
                     token.ThrowIfCancellationRequested();
@@ -684,11 +681,11 @@ public sealed partial class NativeRenderRunner
             ulong side = crossfadeFrames + 1UL;
             ExactFrameRange.FfmpegInput head = ExactFrameRange.Build(sourceVideo, 0, side, numerator, denominator);
             ExactFrameRange.FfmpegInput wrap = ExactFrameRange.Build(sourceVideo, loopFrames - 1, side, numerator, denominator);
-            _ = await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", .. head.Arguments, .. wrap.Arguments,
+            _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", .. head.Arguments, .. wrap.Arguments,
                 "-filter_complex", $"[0:v]{head.Filter}[head];[1:v]{wrap.Filter}[wrap];[head][wrap]concat=n=2:v=1:a=0[pair]",
                 "-map", "[pair]", "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", sourcePack], sourceLog, cancellationToken);
             ExactFrameRange.FfmpegInput faded = ExactFrameRange.Build(fadedVideo, 0, side, numerator, denominator);
-            _ = await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", .. faded.Arguments, "-map", "0:v:0",
+            _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", .. faded.Arguments, "-map", "0:v:0",
                 "-vf", faded.Filter, "-fps_mode", "passthrough", "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", fadedPack], fadedLog, cancellationToken);
             if (new FileInfo(sourcePack).Length != sourceBytes || new FileInfo(fadedPack).Length != fadedBytes)
                 throw new InvalidDataException("淡化自检的帧包长度与 master 尺寸或帧数不一致。");
@@ -774,7 +771,7 @@ public sealed partial class NativeRenderRunner
         try
         {
             // 只读容器头拿尺寸，不数帧、不解码。
-            string probeText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-select_streams", "v:0",
+            string probeText = await ff.RunTextAsync(tools.Ffprobe, ["-v", "error", "-select_streams", "v:0",
                 "-show_entries", "stream=width,height", "-of", "json", video], probeLog, cancellationToken);
             JsonObject stream = JsonNode.Parse(probeText)?["streams"]?.AsArray().OfType<JsonObject>().SingleOrDefault()
                 ?? throw new InvalidDataException("ffprobe 没有报告接缝预览输入的视频流。");
@@ -783,24 +780,20 @@ public sealed partial class NativeRenderRunner
             TemporaryCaptureFiles.RequireFreeSpace(labels, checked((ulong)plan.LabelWidth * SeamPreview.LabelRows * 3 * (ulong)plan.OutputFrames));
             await using (var labelStream = new FileStream(labels, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16, true))
                 await SeamPreview.WriteLabelsAsync(plan, labelStream, cancellationToken);
-            _ = await RunTextAsync(tools.Ffmpeg, SeamPreview.FfmpegArguments(plan), encodeLog, cancellationToken);
-            string verifyText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,nb_frames", "-of", "json", partial], verifyLog, cancellationToken);
-            JsonObject encoded = JsonNode.Parse(verifyText)?["streams"]?.AsArray().OfType<JsonObject>().SingleOrDefault()
-                ?? throw new InvalidDataException("ffprobe 没有报告接缝预览的视频流。");
+            _ = await ff.RunTextAsync(tools.Ffmpeg, SeamPreview.FfmpegArguments(plan), encodeLog, cancellationToken);
+            EncodedStream preview = await VerifyEncoded.ProbeAsync(ff, partial, "stream=width,height,nb_frames",
+                (ulong)plan.OutputFrames, verifyLog, cancellationToken, threads: false);
             int expectedHeight = plan.OutputHeight + plan.LabelHeight;
-            var previewCount = await EncodedLoopValidator.FrameCountAsync(partial, tools, encoded, (ulong)plan.OutputFrames, cancellationToken);
-            if (encoded["width"]?.GetValue<int>() != plan.OutputWidth || encoded["height"]?.GetValue<int>() != expectedHeight ||
-                previewCount.Count != (ulong)plan.OutputFrames)
+            if (!preview.Has(plan.OutputWidth, expectedHeight, (ulong)plan.OutputFrames))
                 throw new InvalidDataException($"接缝预览应为 {plan.OutputWidth}x{expectedHeight}、{plan.OutputFrames} 帧，" +
-                    $"实际 {encoded["width"]}x{encoded["height"]}、{previewCount.Count} 帧。");
+                    $"实际 {preview.Stream["width"]}x{preview.Stream["height"]}、{preview.Frames} 帧。");
             File.Move(partial, output);
             ulong n = plan.WindowFrames;
             return new JsonObject
             {
                 ["status"] = "exported",
-                ["frame_count_source"] = previewCount.Source,
-                ["frame_count_fallback_reason"] = previewCount.FallbackReason,
+                ["frame_count_source"] = preview.CountSource,
+                ["frame_count_fallback_reason"] = preview.FallbackReason,
                 ["path"] = output,
                 ["source_video"] = video,
                 ["source_kind"] = sourceKind,

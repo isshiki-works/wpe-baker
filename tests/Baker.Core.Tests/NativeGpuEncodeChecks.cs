@@ -114,7 +114,7 @@ internal static class NativeGpuEncodeChecks
         if (gpu["frame_count_validation"]?["full_decode_performed"]?.GetValue<bool>() != false ||
             reference["frame_count_validation"]?["full_decode_performed"]?.GetValue<bool>() != false)
             throw new InvalidDataException("A completed native or software render was unnecessarily decoded for counting.");
-        var fallback = await EncodedLoopValidator.FrameCountAsync(product, tools, new JsonObject { ["nb_frames"] = "999" }, 31, timeout.Token);
+        var fallback = await VerifyEncoded.FrameCountAsync(new FfmpegTool(tools), product, new JsonObject { ["nb_frames"] = "999" }, 31, timeout.Token);
         if (fallback.Count != 31 || fallback.Source != "full_decode")
             throw new InvalidDataException("Inconsistent container metadata did not trigger the existing decode fallback.");
         if (!PlaybackQualityGate.Passes(ssim,

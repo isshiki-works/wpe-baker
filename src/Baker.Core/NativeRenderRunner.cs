@@ -57,74 +57,9 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 
-    private ProcessStartInfo StartInfo(string executable, IEnumerable<string> arguments)
-    {
-        var info = new ProcessStartInfo(Path.GetFullPath(executable)) { UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (string argument in arguments) info.ArgumentList.Add(argument);
-        info.Environment["PATH"] = string.Join(Path.PathSeparator, tools.RuntimeDirectories.Select(Path.GetFullPath)) +
-            Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
-        return info;
-    }
-
-    private static void Stop(Process? process)
-    {
-        if (process is null) return;
-        try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-        catch (InvalidOperationException) { }
-    }
-
-    internal static async Task StopAndWaitAsync(Process process)
-    {
-        Stop(process);
-        try { await process.WaitForExitAsync(CancellationToken.None); }
-        catch (InvalidOperationException) { } // The second process may never have started.
-    }
-
-    private async Task<string> RunTextAsync(string executable, string[] arguments, string logPath, CancellationToken token,
-        Action<string>? stderrLine = null)
-    {
-        if (!string.Equals(executable, tools.Ffprobe, StringComparison.OrdinalIgnoreCase))
-            TemporaryCaptureFiles.RequireFreeSpace(logPath);
-        using var process = new Process { StartInfo = StartInfo(executable, arguments) };
-        await using var log = new FileStream(logPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        if (!process.Start()) throw new IOException($"Could not start {executable}");
-        using var cancelled = token.Register(() => Stop(process));
-        async Task DrainErrorsAsync()
-        {
-            try
-            {
-                if (stderrLine is null) await process.StandardError.BaseStream.CopyToAsync(log, CancellationToken.None);
-                else
-                {
-                    await using var writer = new StreamWriter(log, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-                    while (await process.StandardError.ReadLineAsync(CancellationToken.None) is { } line)
-                    {
-                        await writer.WriteLineAsync(line);
-                        stderrLine(line);
-                    }
-                }
-            }
-            catch { Stop(process); throw; }
-        }
-        Task stderr = DrainErrorsAsync();
-        Task<string> stdout = process.StandardOutput.ReadToEndAsync(token);
-        try
-        {
-            Task completed = Task.WhenAll(process.WaitForExitAsync(token), stderr, stdout);
-            if (string.Equals(executable, tools.Ffprobe, StringComparison.OrdinalIgnoreCase)) await completed;
-            else await TemporaryCaptureFiles.WaitWhileWritingAsync(completed, logPath, token);
-            if (process.ExitCode != 0) throw new IOException($"{Path.GetFileName(executable)} exited {process.ExitCode}; see {logPath}");
-            return stdout.Result;
-        }
-        catch
-        {
-            Stop(process);
-            try { await Task.WhenAll(stderr, stdout); } catch { }
-            throw;
-        }
-        finally { await StopAndWaitAsync(process); }
-    }
+    // 进程一律走 FfmpegTool；和渲染器打交道（握手、render --job、读回执）走 RendererClient。
+    private readonly FfmpegTool ff = new(tools);
+    private readonly RendererClient client = new(new FfmpegTool(tools));
 
     public async Task<JsonObject> RenderAsync(RenderRequest request, IProgress<RenderProgress>? progress = null,
         CancellationToken cancellationToken = default)
@@ -263,16 +198,17 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             // checks still require their original complete input. Older renderers keep that path.
             bool sampleConsumer = request.FrameSamplesOnly && !request.CollectAlphaBounds && !request.RequireOpaquePixels &&
                 request.RetainFrames is not { Length: > 0 };
-            string rendererVersion = sampleConsumer || request.GpuEncoding is not null || request.EffectRenderScale != 1.0 || request.MatchEffectResolution || request.CaptureTarget?.ForceVisibleOwner == true ? await RunTextAsync(tools.Renderer, ["--version"],
-                Path.Combine(output, "renderer-capabilities.stderr.log"), cancellationToken) : "";
-            if (request.EffectRenderScale != 1.0 && !rendererVersion.Contains("effect-render-scale-v1", StringComparison.Ordinal))
+            // 只在要按能力分支时才握手；同一个渲染器文件在进程内只跑一次 --version（RendererClient 缓存）。
+            RendererCapabilities capabilities = sampleConsumer || request.GpuEncoding is not null || request.EffectRenderScale != 1.0 || request.MatchEffectResolution || request.CaptureTarget?.ForceVisibleOwner == true
+                ? await client.CapabilitiesAsync(Path.Combine(output, "renderer-capabilities.stderr.log"), cancellationToken) : new([]);
+            if (request.EffectRenderScale != 1.0 && !capabilities.Has("effect-render-scale-v1"))
                 throw new InvalidDataException("Renderer does not support internal effect scaling.");
-            if (request.MatchEffectResolution && !rendererVersion.Contains("adaptive-effect-resolution-v1", StringComparison.Ordinal))
+            if (request.MatchEffectResolution && !capabilities.Has("adaptive-effect-resolution-v1"))
                 throw new InvalidDataException("Renderer does not support adaptive effect resolution.");
-            if (request.CaptureTarget?.ForceVisibleOwner == true && !rendererVersion.Contains("capture-force-visible-owner-v1", StringComparison.Ordinal))
+            if (request.CaptureTarget?.ForceVisibleOwner == true && !capabilities.Has("capture-force-visible-owner-v1"))
                 throw new InvalidDataException("Renderer does not support capturing a visibility-controlled effect owner.");
-            bool sparseInput = sampleConsumer && rendererVersion.Contains("features=sparse-readback-v1", StringComparison.Ordinal);
-            bool nativeSamples = sparseInput && rendererVersion.Contains("gpu-samples-v1", StringComparison.Ordinal);
+            bool sparseInput = sampleConsumer && capabilities.SparseReadback;
+            bool nativeSamples = sparseInput && capabilities.Has("gpu-samples-v1");
             RenderRequest streamRequest = request;
             if (sparseInput)
             {
@@ -285,23 +221,23 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 uint sampleHeight = (uint)Math.Max(1, Math.Round((double)request.Height * sampleWidth / request.Width));
                 job = job with { OutputSampleWidth = sampleWidth, OutputSampleHeight = sampleHeight,
                     CollectSamplingCoverage = request.CollectSamplingCoverage &&
-                        rendererVersion.Contains("gpu-sampling-coverage-v1", StringComparison.Ordinal) ? true : null };
+                        capabilities.Has("gpu-sampling-coverage-v1") ? true : null };
                 streamRequest = request with { Width = sampleWidth, Height = sampleHeight, FrameSampleWidth = sampleWidth };
             }
             manifest["native_frame_transport"] = nativeSamples ? "sampled_rgba" : sparseInput ? "sparse_rgba" : "full_rgba";
             if (request.GpuEncoding is { } encoding)
             {
-                if (encodeSizeRequested && !rendererVersion.Contains("gpu-encode-resize-v1", StringComparison.Ordinal))
+                if (encodeSizeRequested && !capabilities.Has("gpu-encode-resize-v1"))
                     throw new GpuEncodeUnavailableException("GPU encode initialization: renderer cannot resize texture captures on the GPU.");
-                if (encoding.RetainQualitySamples && !rendererVersion.Contains("gpu-quality-samples-v1", StringComparison.Ordinal))
+                if (encoding.RetainQualitySamples && !capabilities.Has("gpu-quality-samples-v1"))
                     throw new GpuEncodeUnavailableException("GPU encode initialization: renderer cannot retain the required quality samples.");
-                if (!rendererVersion.Contains("gpu-encode-v1", StringComparison.Ordinal))
+                if (!capabilities.Has("gpu-encode-v1"))
                     throw new InvalidDataException("Renderer does not support same-device GPU encoding.");
                 if ((request.CollectAlphaBounds || request.RetainFrames is not null || request.EncodedFrames is not null) &&
-                    !rendererVersion.Contains("gpu-capture-v1", StringComparison.Ordinal))
+                    !capabilities.Has("gpu-capture-v1"))
                     throw new InvalidDataException("Renderer does not support GPU capture statistics and retained frames.");
                 if ((encoding.CrossfadeFrames != 0 || encoding.Crop is not null) &&
-                    !rendererVersion.Contains("gpu-loop-encode-v1", StringComparison.Ordinal))
+                    !capabilities.Has("gpu-loop-encode-v1"))
                     throw new InvalidDataException("Renderer does not support GPU crop and loop encoding.");
                 job = job with { RawStdout = false, GpuEncode = new(encoding.Codec, encoding.Qp,
                     PackedAlpha: request.PixelPacking == "rgba_side_by_side", EncodedFrames: encodedFrames,
@@ -315,11 +251,10 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             await WriteJsonAsync(jobPath, JsonSerializer.SerializeToNode(job, JsonOptions)!, cancellationToken);
             if (request.FrameSamplesOnly)
             {
-                using var sampleRenderer = new Process { StartInfo = StartInfo(tools.Renderer, ["render", "--job", jobPath]) };
                 await using var sampleRenderLog = new FileStream(Path.Combine(output, "renderer.stderr.log"), FileMode.CreateNew,
                     FileAccess.Write, FileShare.Read);
-                if (!sampleRenderer.Start()) throw new IOException("Could not start renderer.");
-                using var cancelled = cancellationToken.Register(() => Stop(sampleRenderer));
+                await using NativeProcess sampleRun = client.StartRender(jobPath, cancellationToken);
+                Process sampleRenderer = sampleRun.Process;
                 Task stderr = sampleRenderer.StandardError.BaseStream.CopyToAsync(sampleRenderLog, CancellationToken.None);
                 FrameStreamSummary captured;
                 try
@@ -332,7 +267,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
                                               error is not OperationCanceledException)
                 {
-                    Stop(sampleRenderer);
+                    sampleRun.Stop();
                     await sampleRenderer.WaitForExitAsync(CancellationToken.None);
                     string resultPath = Path.Combine(renderDirectory, "result.json");
                     if (File.Exists(resultPath))
@@ -342,13 +277,12 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                     }
                     throw;
                 }
-                catch { Stop(sampleRenderer); throw; }
-                finally { await StopAndWaitAsync(sampleRenderer); await stderr; }
+                catch { sampleRun.Stop(); throw; }
+                finally { await sampleRun.StopAndWaitAsync(); await stderr; }
                 if (sampleRenderer.ExitCode != 0)
                     throw RendererFailure(Path.Combine(renderDirectory, "result.json"),
                         $"Renderer exited {sampleRenderer.ExitCode}; original stderr log is retained.");
-                RenderResult sampleNativeResult = RenderResult.Parse(await File.ReadAllTextAsync(
-                    Path.Combine(renderDirectory, "result.json"), cancellationToken));
+                RenderResult sampleNativeResult = await RendererClient.ReadResultAsync(renderDirectory, cancellationToken);
                 manifest["native_result"] = sampleNativeResult.Json;
                 ConfirmRenderOptions(request, sampleNativeResult);
                 if (request.CollectSamplingCoverage)
@@ -425,8 +359,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 long gpuStarted = Stopwatch.GetTimestamp();
                 try
                 {
-                    _ = await RunTextAsync(tools.Renderer, ["render", "--job", jobPath],
-                        Path.Combine(output, "renderer.stderr.log"), cancellationToken, line =>
+                    await client.RenderAsync(jobPath, Path.Combine(output, "renderer.stderr.log"), cancellationToken, line =>
                         {
                             const string prefix = "wpe-render: ";
                             int slash = line.IndexOf('/');
@@ -468,71 +401,64 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 if (request.ForceKeyFrameFrame is { } keyFrame)
                     encoderArguments.AddRange(["-force_key_frames", $"expr:eq(n,{keyFrame.ToString(CultureInfo.InvariantCulture)})"]);
                 encoderArguments.AddRange(profile.OutputArguments(request.FpsNumerator, request.FpsDenominator, partialVideo));
-                var encoderInfo = StartInfo(tools.Ffmpeg, encoderArguments);
-                encoderInfo.RedirectStandardInput = true;
-                manifest["encoder_command"] = JsonSerializer.SerializeToNode(new { executable = encoderInfo.FileName, arguments = encoderInfo.ArgumentList.ToArray() });
+                manifest["encoder_command"] = JsonSerializer.SerializeToNode(new { executable = Path.GetFullPath(tools.Ffmpeg), arguments = encoderArguments.ToArray() });
                 await WriteJsonAsync(manifestPath, manifest, cancellationToken);
-                using var encoder = new Process { StartInfo = encoderInfo };
-                using var renderer = new Process { StartInfo = StartInfo(tools.Renderer, ["render", "--job", jobPath]) };
                 await using var renderLog = new FileStream(Path.Combine(output, "renderer.stderr.log"), FileMode.CreateNew, FileAccess.Write, FileShare.Read);
                 await using var encodeLog = new FileStream(Path.Combine(output, "encoder.stderr.log"), FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-                if (!encoder.Start()) throw new IOException("Could not start encoder.");
-                try
+                // 先起编码器再起渲染器；任一步失败或取消，两个进程都在释放时杀掉并等退出。
+                await using NativeProcess encoderRun = ff.Start(tools.Ffmpeg, encoderArguments, cancellationToken, redirectInput: true);
+                await using NativeProcess rendererRun = client.StartRender(jobPath, cancellationToken);
+                Process encoder = encoderRun.Process, renderer = rendererRun.Process;
+                void StopBoth() { rendererRun.Stop(); encoderRun.Stop(); }
+                async Task DrainAsync(Stream from, Stream to)
                 {
-                    if (!renderer.Start()) throw new IOException("Could not start renderer.");
-                    using var cancelled = cancellationToken.Register(() => { Stop(renderer); Stop(encoder); });
-                    async Task DrainAsync(Stream from, Stream to)
-                    {
-                        try
-                        {
-                            await from.CopyToAsync(to, CancellationToken.None);
-                            await to.FlushAsync(CancellationToken.None);
-                        }
-                        catch { Stop(renderer); Stop(encoder); throw; }
-                    }
-                    var errors = new[] { DrainAsync(renderer.StandardError.BaseStream, renderLog),
-                        DrainAsync(encoder.StandardError.BaseStream, encodeLog),
-                        DrainAsync(encoder.StandardOutput.BaseStream, Stream.Null) };
-                    progress?.Report(new("rendering", 0, "Rendering each requested frame and encoding with backpressure."));
-                    async Task PipeFramesAsync()
-                    {
-                        try
-                        {
-                            var captured = await CopyFrameStreamAsync(renderer.StandardOutput.BaseStream,
-                                encoder.StandardInput.BaseStream, request, output, progress, cancellationToken);
-                            if (captured.Bounds is not null) manifest["alpha_bounds"] = captured.Bounds;
-                            if (captured.Samples is not null) manifest["frame_samples"] = captured.Samples;
-                            if (captured.OpaquePixels is not null) manifest["opaque_pixels"] = captured.OpaquePixels;
-                            if (captured.Retained is not null) manifest["retained_frames"] = captured.Retained;
-                            manifest["stream_timing"] = StreamTiming(captured);
-                        }
-                        finally { encoder.StandardInput.Close(); }
-                    }
                     try
                     {
-                        Phase("process_start");
-                        await PipeFramesAsync();
-                        Phase("pipeline");
-                        progress?.Report(new("finishing_encode", null, "Finishing the video encoding."));
-                        await Task.WhenAll(renderer.WaitForExitAsync(cancellationToken), encoder.WaitForExitAsync(cancellationToken));
-                        Phase("wait_exit");
+                        await from.CopyToAsync(to, CancellationToken.None);
+                        await to.FlushAsync(CancellationToken.None);
                     }
-                    catch (Exception error) when (!cancellationToken.IsCancellationRequested && error is not OperationCanceledException)
-                    {
-                        Stop(renderer); Stop(encoder);
-                        await Task.WhenAll(errors);
-                        throw RendererFailure(Path.Combine(renderDirectory, "result.json"), error.Message, error);
-                    }
-                    catch { Stop(renderer); Stop(encoder); throw; }
-                    finally { await Task.WhenAll(errors); }
-                    if (renderer.ExitCode != 0 || encoder.ExitCode != 0)
-                        throw RendererFailure(Path.Combine(renderDirectory, "result.json"),
-                            $"Renderer exited {renderer.ExitCode}, encoder exited {encoder.ExitCode}; original stderr logs are retained.");
-
+                    catch { StopBoth(); throw; }
                 }
-                finally { await Task.WhenAll(StopAndWaitAsync(renderer), StopAndWaitAsync(encoder)); }
+                var errors = new[] { DrainAsync(renderer.StandardError.BaseStream, renderLog),
+                    DrainAsync(encoder.StandardError.BaseStream, encodeLog),
+                    DrainAsync(encoder.StandardOutput.BaseStream, Stream.Null) };
+                progress?.Report(new("rendering", 0, "Rendering each requested frame and encoding with backpressure."));
+                async Task PipeFramesAsync()
+                {
+                    try
+                    {
+                        var captured = await CopyFrameStreamAsync(renderer.StandardOutput.BaseStream,
+                            encoder.StandardInput.BaseStream, request, output, progress, cancellationToken);
+                        if (captured.Bounds is not null) manifest["alpha_bounds"] = captured.Bounds;
+                        if (captured.Samples is not null) manifest["frame_samples"] = captured.Samples;
+                        if (captured.OpaquePixels is not null) manifest["opaque_pixels"] = captured.OpaquePixels;
+                        if (captured.Retained is not null) manifest["retained_frames"] = captured.Retained;
+                        manifest["stream_timing"] = StreamTiming(captured);
+                    }
+                    finally { encoder.StandardInput.Close(); }
+                }
+                try
+                {
+                    Phase("process_start");
+                    await PipeFramesAsync();
+                    Phase("pipeline");
+                    progress?.Report(new("finishing_encode", null, "Finishing the video encoding."));
+                    await Task.WhenAll(renderer.WaitForExitAsync(cancellationToken), encoder.WaitForExitAsync(cancellationToken));
+                    Phase("wait_exit");
+                }
+                catch (Exception error) when (!cancellationToken.IsCancellationRequested && error is not OperationCanceledException)
+                {
+                    StopBoth();
+                    await Task.WhenAll(errors);
+                    throw RendererFailure(Path.Combine(renderDirectory, "result.json"), error.Message, error);
+                }
+                catch { StopBoth(); throw; }
+                finally { await Task.WhenAll(errors); }
+                if (renderer.ExitCode != 0 || encoder.ExitCode != 0)
+                    throw RendererFailure(Path.Combine(renderDirectory, "result.json"),
+                        $"Renderer exited {renderer.ExitCode}, encoder exited {encoder.ExitCode}; original stderr logs are retained.");
             }
-            RenderResult nativeResult = RenderResult.Parse(await File.ReadAllTextAsync(Path.Combine(renderDirectory, "result.json"), cancellationToken));
+            RenderResult nativeResult = await RendererClient.ReadResultAsync(renderDirectory, cancellationToken);
             if (!nativeResult.Confirms(request.Frames))
                 throw new InvalidDataException("Renderer result did not confirm the requested frame sequence.");
             manifest["native_result"] = nativeResult.Json;
@@ -630,7 +556,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             if (request.IncludeAudio)
             {
                 string pcm = Path.Combine(renderDirectory, "audio.f32le");
-                _ = await RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", "-i", partialVideo, "-f", "f32le", "-ar", "48000",
+                _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", "-i", partialVideo, "-f", "f32le", "-ar", "48000",
                     "-ac", "2", "-i", pcm, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                     "-movie_timescale", request.FpsNumerator.ToString(CultureInfo.InvariantCulture),
                     "-video_track_timescale", request.FpsNumerator.ToString(CultureInfo.InvariantCulture), "-movflags", "+faststart", finalVideo],
@@ -644,28 +570,21 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             bool nativePacketCount = request.GpuEncoding is not null &&
                 nativeResult.GpuCapture?.EncodedPackets == encodedFrames;
             string colorEntries = request.PlaybackEncoderKind is null && request.GpuEncoding is null ? "" : ",pix_fmt,color_space,color_range";
-            string probeText = await RunTextAsync(tools.Ffprobe, ["-v", "error", "-threads", "4", "-select_streams", "v:0",
-                "-show_entries", $"stream=codec_name,width,height,avg_frame_rate,nb_frames,duration,duration_ts,time_base{colorEntries}", "-of", "json", finalVideo],
+            EncodedStream verified = await VerifyEncoded.ProbeAsync(ff, finalVideo,
+                $"stream=codec_name,width,height,avg_frame_rate,nb_frames,duration,duration_ts,time_base{colorEntries}", encodedFrames,
                 Path.Combine(output, "ffprobe.stderr.log"), cancellationToken);
-            var probe = JsonNode.Parse(probeText)!.AsObject();
-            var stream = probe["streams"]?.AsArray().Single()?.AsObject() ?? throw new InvalidDataException("Encoded video has no video stream.");
-            var videoCount = await EncodedLoopValidator.FrameCountAsync(finalVideo, tools, stream, encodedFrames, cancellationToken);
-            Phase(videoCount.Source == "full_decode" ? "ffprobe_count_fallback" : "ffprobe_header");
-            var encodedRate = (stream["avg_frame_rate"]?.GetValue<string>() ?? "0/1").Split('/');
-            if (stream["width"]?.GetValue<uint>() != encodedWidth || stream["height"]?.GetValue<uint>() != encodedHeight ||
-                videoCount.Count != encodedFrames ||
-                encodedRate.Length != 2 || !ulong.TryParse(encodedRate[0], out var rateNumerator) || !ulong.TryParse(encodedRate[1], out var rateDenominator) ||
-                rateDenominator == 0 || (UInt128)rateNumerator * request.FpsDenominator != (UInt128)rateDenominator * request.FpsNumerator)
+            Phase(verified.CountSource == "full_decode" ? "ffprobe_count_fallback" : "ffprobe_header");
+            if (!verified.Has(encodedWidth, encodedHeight, encodedFrames) || !verified.RateIs(request.FpsNumerator, request.FpsDenominator))
                 throw new InvalidDataException("Encoded video dimensions, frame count or exact FPS differ from the request.");
-            ConfirmEncodedDuration(stream, encodedFrames, request.FpsNumerator, request.FpsDenominator);
+            ConfirmEncodedDuration(verified, encodedFrames, request.FpsNumerator, request.FpsDenominator);
             manifest["frame_count_validation"] = new JsonObject {
-                ["source"] = nativePacketCount && videoCount.Source == "container_header"
-                    ? "container_header_and_native_encoder_packets" : videoCount.Source,
-                ["full_decode_performed"] = videoCount.Source == "full_decode", ["fallback_reason"] = videoCount.FallbackReason };
+                ["source"] = nativePacketCount && verified.CountSource == "container_header"
+                    ? "container_header_and_native_encoder_packets" : verified.CountSource,
+                ["full_decode_performed"] = verified.CountSource == "full_decode", ["fallback_reason"] = verified.FallbackReason };
             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during render; artifact is invalid.");
             // 只在确实少编码了帧时记录；残差路线的交叉淡化会把 request.frames 改写成 P，这里不能留一个过期的数。
             if (request.EncodedFrames is not null) manifest["encoded_frames"] = encodedFrames;
-            manifest["encoded_stream"] = probe;
+            manifest["encoded_stream"] = verified.Probe;
             await using var videoFile = File.OpenRead(finalVideo);
             manifest["video_sha256"] = Convert.ToHexStringLower(await SHA256.HashDataAsync(videoFile, cancellationToken));
             Phase("video_sha256");
@@ -841,11 +760,9 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         manifest["encoded_frames"] is JsonValue encoded && encoded.TryGetValue(out ulong count) ? count
             : manifest["request"]?["frames"]?.GetValue<ulong>() ?? 0;
 
-    private static void ConfirmEncodedDuration(JsonObject stream, ulong frames, uint numerator, uint denominator)
+    private static void ConfirmEncodedDuration(EncodedStream stream, ulong frames, uint numerator, uint denominator)
     {
-        if (stream["time_base"]?.GetValue<string>() != $"1/{numerator}" ||
-            stream["duration_ts"] is not JsonValue duration || !duration.TryGetValue<ulong>(out ulong ticks) ||
-            (UInt128)ticks != (UInt128)frames * denominator)
+        if (!stream.DurationIs(frames, numerator, denominator))
             throw new InvalidDataException("MP4 duration is not the exact requested number of frame intervals.");
     }
 }

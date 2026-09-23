@@ -64,7 +64,7 @@ public sealed partial class NativeRenderRunner
             report["ffprobe_stderr_log_path"] = probeLog;
             using var inspectTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             inspectTimeout.CancelAfter(TimeSpan.FromSeconds(30));
-            string metadata = await RunTextAsync(tools.Ffprobe,
+            string metadata = await ff.RunTextAsync(tools.Ffprobe,
                 ["-v", "error", "-select_streams", "v:0", "-show_streams", "-of", "json", videoFile], probeLog, inspectTimeout.Token);
             var streams = JsonNode.Parse(metadata)?["streams"]?.AsArray();
             if (streams is null || streams.Count != 1) throw new InvalidDataException("Expected a first video stream.");
@@ -105,7 +105,7 @@ public sealed partial class NativeRenderRunner
                 timeout.CancelAfter(TimeSpan.FromSeconds(30));
                 try
                 {
-                    int exitCode = await RunHardwareDecodeProcessAsync(arguments, stdoutPath, stderrPath, timeout.Token);
+                    int exitCode = await ff.RunToFilesAsync(tools.Ffmpeg, arguments, stdoutPath, stderrPath, timeout.Token);
                     adapter["exit_code"] = exitCode;
                     string progressText = await File.ReadAllTextAsync(stdoutPath, CancellationToken.None);
                     ulong? decoded = null;
@@ -234,23 +234,6 @@ public sealed partial class NativeRenderRunner
         foreach (string key in keys)
             if (stream?[key] is JsonValue value && value.TryGetValue(out int number) && number > 0) return (uint)number;
         return 0;
-    }
-
-    private async Task<int> RunHardwareDecodeProcessAsync(string[] arguments, string stdoutPath, string stderrPath, CancellationToken token)
-    {
-        using var process = new Process { StartInfo = StartInfo(tools.Ffmpeg, arguments) };
-        await using var stdout = new FileStream(stdoutPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        await using var stderr = new FileStream(stderrPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        token.ThrowIfCancellationRequested();
-        if (!process.Start()) throw new IOException("Could not start FFmpeg hardware probe.");
-        using var cancelled = token.Register(() => Stop(process));
-        try
-        {
-            await Task.WhenAll(process.StandardOutput.BaseStream.CopyToAsync(stdout, CancellationToken.None),
-                process.StandardError.BaseStream.CopyToAsync(stderr, CancellationToken.None), process.WaitForExitAsync(token));
-            return process.ExitCode;
-        }
-        finally { await StopAndWaitAsync(process); }
     }
 
     private static List<JsonObject> EnumerateDecodeAdapters(JsonArray skippedSoftware)
