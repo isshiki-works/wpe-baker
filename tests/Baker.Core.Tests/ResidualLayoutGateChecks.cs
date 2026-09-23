@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Baker.Core;
@@ -16,8 +15,7 @@ internal static class ResidualLayoutGateChecks
 
     internal static async Task RunAsync(Action<bool, string> check, string root)
     {
-        var suitability = typeof(HybridScenePlanner).GetMethod("Suitability", BindingFlags.Static | BindingFlags.NonPublic)!;
-        JsonObject Verdict(JsonObject plan) => (JsonObject)suitability.Invoke(null, [plan])!;
+        static JsonObject Verdict(JsonObject plan) => HybridSuitability.Verdict(plan);
 
         // 可掩盖的随机重启精灵（层 3，作者根 30）+ analyze 追加的说明性条目。
         JsonObject RandomSprite() => new()

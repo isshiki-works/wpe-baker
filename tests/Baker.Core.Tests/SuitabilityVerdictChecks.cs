@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json.Nodes;
 using Baker.Core;
 
@@ -10,9 +9,7 @@ internal static class SuitabilityVerdictChecks
 {
     internal static void Run(Action<bool, string> check, string outputRoot)
     {
-        var method = typeof(HybridBakeService).Assembly.GetType("Baker.Core.HybridScenePlanner")!
-            .GetMethod("Suitability", BindingFlags.Static | BindingFlags.NonPublic)!;
-        JsonObject Verdict(JsonObject plan) => (JsonObject)method.Invoke(null, [plan])!;
+        static JsonObject Verdict(JsonObject plan) => HybridSuitability.Verdict(plan);
         static string Text(JsonObject verdict, string key) => verdict[key]!.GetValue<string>();
         static string[] Notes(JsonObject verdict) => verdict["notes"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
 

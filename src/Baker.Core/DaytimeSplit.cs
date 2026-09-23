@@ -103,6 +103,13 @@ internal static class DaytimeSplit
         new(FallbackStatus, controller, name, [], [], reason, null);
 
     /// <summary>
+    /// 分析编排读的状态维：plan 的 daytime_split 已识别时返回它的 states[] 条目（同一批节点，逐状态导出往里写子 plan 记录），否则 null。
+    /// </summary>
+    internal static JsonObject[]? RecognizedStates(JsonObject plan) =>
+        plan["daytime_split"] is JsonObject split && split["status"]?.GetValue<string>() == Recognized
+            ? split["states"]!.AsArray().OfType<JsonObject>().ToArray() : null;
+
+    /// <summary>
     /// 在场景对象里找状态选择器。候选只看 visible 绑定上读时钟的脚本：文字时钟、按时段改着色器常量的脚本都不是状态选择器。
     /// <paramref name="dependencies"/> 是运行时观测到的对象访问：同名图层靠"选择器实际写过 visible 的那一个"消歧（getLayer 取的就是它）。
     /// </summary>
@@ -113,7 +120,7 @@ internal static class DaytimeSplit
         {
             if (obj["visible"] is not JsonObject binding || binding["script"] is not JsonValue value ||
                 !value.TryGetValue<string>(out string? text)) continue;
-            string code = HybridScenePlanner.CapabilityScanText(text);
+            string code = Liveness.CapabilityScanText(text);
             if (ClockRead.IsMatch(code)) candidates.Add((id, code));
         }
         if (candidates.Count == 0) return Fallback("no_visibility_script_reads_clock");
@@ -138,9 +145,9 @@ internal static class DaytimeSplit
     {
         // 选择器在观测里写过 visible 的目标：同名图层时 getLayer 取到的就是这一个。
         var writtenByController = (dependencies ?? []).OfType<JsonObject>()
-            .Where(d => HybridScenePlanner.Int(d["owner"]) == id && d["operation"]?.GetValue<string>() == "write" &&
+            .Where(d => SceneGraph.Int(d["owner"]) == id && d["operation"]?.GetValue<string>() == "write" &&
                 d["property"]?.GetValue<string>() == "visible")
-            .Select(d => HybridScenePlanner.Int(d["target"])).OfType<int>().ToHashSet();
+            .Select(d => SceneGraph.Int(d["target"])).OfType<int>().ToHashSet();
         if (!HoursRead.IsMatch(code)) return Fallback("clock_value_not_hour_branches", id, name);
         if (LiveInput.IsMatch(code)) return Fallback("reads_other_live_input", id, name);
         if (MethodCall.Match(code) is { Success: true } call)
@@ -334,8 +341,7 @@ internal static class DaytimeSplit
         if (!result.IsRecognized) return result;
         if (result.ControlledLayerIds.Length != layerLiterals.Length || result.ControlledLayerIds.Contains(id))
             return Reject("repeated_or_self_video_target");
-        if (result.ControlledLayerIds.Any(target => objects[target]["visible"] is JsonObject visible &&
-            (visible.ContainsKey("script") || visible.ContainsKey("animation") || visible.ContainsKey("animations"))))
+        if (result.ControlledLayerIds.Any(target => objects[target]["visible"] is JsonObject visible && SceneGraph.Dynamic(visible)))
             return Reject("controlled_visibility_has_script_or_animation");
         var namesByGroup = Enumerable.Range(0, stateNames.Length).ToDictionary(index => StateName(Group(index)), index => stateNames[index]);
         int[] indexedIds = layerLiterals.Select(literal => objects.Single(pair => result.ControlledLayerIds.Contains(pair.Key) &&

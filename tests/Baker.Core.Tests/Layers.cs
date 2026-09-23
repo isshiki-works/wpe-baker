@@ -22,12 +22,12 @@ public class MessagesTests
 }
 
 [Trait("Layer", "L1")]
-public class PresetCascadeTests
+public class AnalysisOrchestratorCascadeTests
 {
     [Fact]
     public async Task Run()
     {
-        await TestTemp.Run(dir => PresetCascadeChecks.RunAsync(Assert.True, dir));
+        await TestTemp.Run(dir => AnalysisOrchestratorChecks.RunAsync(Assert.True, dir));
     }
 }
 
