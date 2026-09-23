@@ -34,7 +34,7 @@ internal sealed record CliCommand(string Name, string Operand, bool Diagnostic, 
 internal static class OptionTable
 {
     private const string Analyze = "analyze", Bake = "bake";
-    private static readonly AnalyzeOptions D = AnalyzeOptions.Defaults;
+    private static readonly AnalyzeOptions D = new();
 
     private static object UInt(string text) => uint.Parse(text, CultureInfo.InvariantCulture);
 
@@ -148,16 +148,15 @@ internal static class OptionTable
         // ---- bake ----
         new("--out", [Bake], "NEW_DIRECTORY", Help: ["Only with a PLAN.json."]),
         new("--encoder", [Bake], string.Join("|", PlaybackEncoderSelection.Choices), Parse: PlaybackEncoderSelection.Normalize,
-            Default: PlaybackEncoderSelection.Software, HelpKey: "cli.bake_encoder_help"),
+            HelpKey: "cli.bake_encoder_help"),
         new("--encode-slots", [Bake], "N", Parse: text =>
             int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int slots) && slots >= 0 && slots <= EncodeSlots.MaximumQuota
-                ? slots : throw new ArgumentException($"--encode-slots must be an integer from 0 to {EncodeSlots.MaximumQuota}; 0 means no limit."),
-            Default: "0"),
+                ? slots : throw new ArgumentException($"--encode-slots must be an integer from 0 to {EncodeSlots.MaximumQuota}; 0 means no limit.")),
         new("--group-parallel", [Bake], "N", Parse: text =>
             int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int groups) && groups >= 1 && groups <= 64
                 ? groups : throw new ArgumentException("--group-parallel must be an integer from 1 to 64; 1 renders one group at a time."),
-            Default: "1", HelpKey: "cli.bake_parallel_help"),
-        new("--keep-intermediates", [Bake], Choices: ["true", "false"], Parse: text => text == "true", Default: "false",
+            HelpKey: "cli.bake_parallel_help"),
+        new("--keep-intermediates", [Bake], Choices: ["true", "false"], Parse: text => text == "true",
             HelpKey: "cli.bake_keep_intermediates_help"),
         new("--effect-resolution", [Bake], Choices: ["original", "output"], Parse: text => text == "output", Default: "original",
             Help: ["output matches the output and layer dimensions (whole-layer baking only)."]),

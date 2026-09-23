@@ -2,12 +2,10 @@ namespace Baker.Core;
 
 /// <summary>
 /// 一次分析里用户能选的全部东西，带类型。CLI 由选项表（Baker.Cli/OptionTable）填，界面由控件填（<see cref="ForDesktop"/>），
-/// 再统一交给 <see cref="AnalyzeRequestFactory"/> 生成请求。默认值只写在这里：CLI 帮助里的 "(default …)" 也读这里。
+/// 再统一交给 <see cref="AnalyzeRequestFactory"/> 生成请求。默认值只写在这里：CLI 帮助里的 "(default …)" 也读 new AnalyzeOptions()。
 /// </summary>
 public sealed record AnalyzeOptions
 {
-    public static readonly AnalyzeOptions Defaults = new();
-
     public string Preset { get; init; } = RetimeProfile.Balanced;
     public string Interaction { get; init; } = "fixed";
     /// <summary>观感改动预算的高级覆盖（百分比）；null = 跟档位。</summary>

@@ -84,7 +84,7 @@ public class CliOptionTableTests
         ["--fps"] = [["--fps", "60"], ["--fps", "144"]],
         ["--fps-den"] = [["--fps", "60000", "--fps-den", "1001"], ["--fps", "30", "--fps-den", "1"]],
         ["--device"] = [["--device", "b22adf1f455b2bcc8bdbefd93eab85ee"]],
-        ["--exclude-layers"] = [["--exclude-layers", "12,34"], ["--exclude-layers", "34, 12,"], ["--exclude-layers", ""]],
+        ["--exclude-layers"] = [["--exclude-layers", "12,34"], ["--exclude-layers", "34, ,12,"], ["--exclude-layers", ""]],
         ["--retain-live"] = [["--retain-live", "5"], ["--retain-live", "7,5"]],
         ["--retime-budget"] = [["--retime-budget", "0"], ["--retime-budget", "4.5"], ["--retime-budget", "5"]],
         ["--loop-max-seconds"] = [["--loop-max-seconds", "1"], ["--loop-max-seconds", "900"], ["--loop-max-seconds", "3600"]],
@@ -172,8 +172,8 @@ public class CliOptionTableTests
     [Fact]
     public void DesktopOnlyRetimeSwitchTurnsCommonRetimeOff()
     {
-        HybridAnalyzeRequest on = AnalyzeRequestFactory.Build(AnalyzeOptions.Defaults, Source, Assets, Output, null, null, 60, 1, FrameRate);
-        HybridAnalyzeRequest off = AnalyzeRequestFactory.Build(AnalyzeOptions.Defaults with { CommonRetime = false },
+        HybridAnalyzeRequest on = AnalyzeRequestFactory.Build(new AnalyzeOptions(), Source, Assets, Output, null, null, 60, 1, FrameRate);
+        HybridAnalyzeRequest off = AnalyzeRequestFactory.Build(new AnalyzeOptions { CommonRetime = false },
             Source, Assets, Output, null, null, 60, 1, FrameRate);
         Assert.Equal(2, on.MaximumRetimePercent);
         Assert.Equal(0, off.MaximumRetimePercent);
@@ -254,6 +254,8 @@ public class CliOptionTableTests
             // 帮助里出现这个选项（按语言各生成一次）；有默认值的写明默认值。
             string usage = OptionTable.Usage(command, "en");
             Assert.Contains(option.Name + " ", usage, StringComparison.Ordinal);
+            // 必填项不加方括号，可选项加。
+            Assert.Equal(option.Required, !usage.Contains("[" + option.Name + " ", StringComparison.Ordinal));
             if (option.Default is not null)
                 Assert.Contains(option.Name + " " + (option.Choices is null ? option.Value : string.Join("|", option.Choices)) + "] (default " + option.Default + ")",
                     usage, StringComparison.Ordinal);
