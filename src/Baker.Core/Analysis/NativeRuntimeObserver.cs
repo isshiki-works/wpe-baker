@@ -8,7 +8,7 @@ namespace Baker.Core;
 /// 用本机渲染器做运行时观测：48 帧、固定种子、一条固定的指针输入时间线，打开场景 trace；
 /// 渲染器的临时帧与音频文件用完即删（删不掉记进结果的 temporary_cleanup_errors）。经 <see cref="NativeRenderRunner"/> 调用，不改其接口。
 /// </summary>
-internal sealed class NativeRuntimeObserver(NativeTools tools) : IRuntimeObserver
+internal sealed class NativeRuntimeObserver(NativeTools tools)
 {
     // 进程内按 (路径, 长度, 修改时间) 记住渲染器摘要：mtime 只用来判断要不要重算摘要，本身不进缓存键。
     private static readonly ConcurrentDictionary<(string Path, long Length, DateTime Modified), string> Digests = new();

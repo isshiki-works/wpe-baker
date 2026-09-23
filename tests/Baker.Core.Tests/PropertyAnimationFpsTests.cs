@@ -123,8 +123,8 @@ public class PropertyAnimationFpsTests
             File.WriteAllText(Path.Combine(root, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
             File.WriteAllText(Path.Combine(root, "scene.json"), scene.ToJsonString());
             using var source = new ProjectSource(root);
-            return HybridLoopService.Analyze(scene, source, null, new JsonObject { ["runtime_animation_periods"] = traces },
-                Enumerable.Range(1, periods.Length).ToArray(), 30, 1, maximumRetimePercent);
+            return LoopAnalysis.Analyze(scene, source, null, new JsonObject { ["runtime_animation_periods"] = traces },
+                Enumerable.Range(1, periods.Length).ToArray(), 30, 1, maximumRetimePercent).ToJson();
         }
         finally { Directory.Delete(root, true); }
     }

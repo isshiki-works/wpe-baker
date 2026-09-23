@@ -37,10 +37,10 @@ internal static class LoopFixChecks
         };
         JsonObject Write(int owner, string property) => new()
         { ["owner"] = owner, ["target"] = owner, ["operation"] = "write", ["property"] = property, ["initialization"] = false };
-        JsonObject Analyze(JsonObject owner, JsonArray traces, JsonArray dependencies) => HybridLoopService.Analyze(
+        JsonObject Analyze(JsonObject owner, JsonArray traces, JsonArray dependencies) => LoopAnalysis.Analyze(
             new JsonObject { ["objects"] = new JsonArray { owner } }, source, null,
             new JsonObject { ["runtime_animation_periods"] = traces, ["runtime_dependencies"] = dependencies },
-            [owner["id"]!.GetValue<int>()], 60, 1);
+            [owner["id"]!.GetValue<int>()], 60, 1).ToJson();
 
         JsonObject dual = Analyze(Owner(5, randomRestartScript), new JsonArray { SpriteTrace(5, "flip"), BoneTrace(5, "sway") },
             new JsonArray { Write(5, "animation") });

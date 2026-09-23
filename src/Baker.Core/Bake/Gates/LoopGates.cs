@@ -14,7 +14,7 @@ internal sealed class LoopAdmissionGate : IBakeGate
         ProjectSource source = context.Source;
         var runtime = JsonNode.Parse(await File.ReadAllTextAsync(plan["runtime_evidence"]!.GetValue<string>(), cancellationToken))!.AsObject();
         // Rebuild from source and current runtime evidence; never accept a saved observed cut or start.
-        HybridScenePlanner.RefreshLoop(plan, source, runtime, context.Settings);
+        PlanTransforms.RefreshLoop(plan, source, runtime, context.Settings);
         JsonArray? unresolved = plan["loop"]?["unresolved"] as JsonArray;
         context.ResidualMasking = null;
         AdmissionVerdict admission = Admission.Evaluate(plan, source.ReadJson(source.SceneResource),

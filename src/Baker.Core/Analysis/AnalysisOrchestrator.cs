@@ -263,8 +263,8 @@ internal sealed class AnalysisOrchestrator
             {
                 int[] layers = (group["layer_ids"] as JsonArray)?.Select(node => node!.GetValue<int>()).ToArray() ?? [];
                 if (layers.Length == 0) continue;
-                JsonObject proof = HybridLoopService.Analyze(scene.DeepClone().AsObject(), source, assets, runtime, layers,
-                    fpsNumerator, fpsDenominator);
+                JsonObject proof = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, assets, runtime, layers,
+                    fpsNumerator, fpsDenominator).ToJson();
                 if (proof["source_static"]?.GetValue<bool>() != true) continue;
                 group["static_verified"] = true;
                 group["static_verification"] = new JsonObject { ["basis"] = "source_and_runtime_static_proof",

@@ -1,14 +1,5 @@
 namespace Baker.Core;
 
-/// <summary>
-/// 画质门的比对后端（C2-PLAN §5 预留接口）：给成品与参照，量抽样帧上的 SSIM/PSNR。判不判过归 <see cref="QualityGate"/>。
-/// C2.4b 只有 <see cref="FfmpegQualityComparer"/>；R10 在这里接渲染器内比对（<c>wpe-render compare --job</c>，帧留在 GPU 上）。
-/// </summary>
-internal interface IQualityComparer
-{
-    Task<QualityReport> CompareAsync(QualityRequest request, CancellationToken token);
-}
-
 /// <param name="Product">成品视频。</param>
 /// <param name="LoopFrames">成品的总帧数，决定一遍顺序解还是按抽样帧取窗口（<see cref="QualityGate.UsesFrameWindows"/>）。</param>
 /// <param name="Samples">抽样帧号，升序（<see cref="QualityGate.SampleFrames"/>）。</param>

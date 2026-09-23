@@ -214,7 +214,7 @@ internal sealed class Composer
     {
         if (obj["text"] is not JsonNode raw) return false;
         if (raw is JsonObject binding && (binding.ContainsKey("script") || binding.ContainsKey("animation"))) return false;
-        JsonNode? value = HybridScenePlanner.Resolve(raw, properties);
+        JsonNode? value = SceneGraph.Resolve(raw, properties);
         if (value is JsonObject resolved)
         {
             if (resolved.ContainsKey("script") || resolved.ContainsKey("animation")) return false;

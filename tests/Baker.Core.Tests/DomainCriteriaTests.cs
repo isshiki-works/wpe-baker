@@ -121,7 +121,7 @@ public class DomainCriteriaTests
     {
         var request = new HybridAnalyzeRequest(3, "s", "a", "o", MaximumRetimePercent: common, LoopLengthMaximumSeconds: loopMaximum,
             Preset: preset, RetimeBudgetPercent: budget);
-        RetimeProfile profile = RetimeProfile.Resolve(request);
+        RetimeProfile profile = RetimeProfileJson.Resolve(request);
         Assert.Equal((preset, expectedBudget, expectedCommon, expectedMaximum, budgetSource, maximumSource),
             (profile.Preset, profile.BudgetPercent, profile.CommonRetimePercent, profile.LoopMaximumSeconds, profile.BudgetSource, profile.LoopMaximumSource));
     }

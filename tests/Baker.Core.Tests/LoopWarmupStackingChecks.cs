@@ -44,9 +44,9 @@ internal static class LoopWarmupStackingChecks
             new JsonObject { ["frames"] = 672 });
         var withoutWarmup = new JsonArray(new JsonObject { ["frames"] = 672 },
             new JsonObject { ["frames"] = 336, ["source_period_warmup_frames"] = 336UL });
-        check(LoopWarmup.CandidateSourcePeriodWarmupFrames(withWarmup) == 336 &&
-              LoopWarmup.CandidateSourcePeriodWarmupFrames(withoutWarmup) == 0 &&
-              LoopWarmup.CandidateSourcePeriodWarmupFrames(new JsonArray()) == 0,
+        check(LoopWarmupJson.CandidateSourcePeriodWarmupFrames(withWarmup) == 336 &&
+              LoopWarmupJson.CandidateSourcePeriodWarmupFrames(withoutWarmup) == 0 &&
+              LoopWarmupJson.CandidateSourcePeriodWarmupFrames(new JsonArray()) == 0,
             "warmup stacking: sprite warmup is read from the first candidate only");
     }
 }

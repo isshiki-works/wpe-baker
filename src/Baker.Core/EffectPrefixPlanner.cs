@@ -13,7 +13,7 @@ internal static class EffectPrefixPlanner
         JsonObject snapshotProperties, HybridAnalyzeRequest request, JsonObject projection)
     {
         ArgumentNullException.ThrowIfNull(request);
-        RetimeProfile profile = RetimeProfile.Resolve(request);
+        RetimeProfile profile = RetimeProfileJson.Resolve(request);
         if (request.FpsNumerator == 0 || request.FpsDenominator == 0 || !double.IsFinite(profile.CommonRetimePercent) ||
             profile.CommonRetimePercent < 0 || profile.CommonRetimePercent > RetimeProfile.MaximumBudgetPercent)
             throw new ArgumentException("Use positive rational FPS and a retime limit from zero to five percent.");
@@ -43,7 +43,7 @@ internal static class EffectPrefixPlanner
                     // 这个前缀循环是在哪一档下求出来的：与 plan 顶层的 retime_profile 同一份值，
                     // 单看一条缓存记录就能知道 preset 与 retime_budget_percent；phase_drift_cycles 在 loop 的 sway_retime 里，
                     // 质量档两个上限的取舍在 loop 的 quality_ceiling_used 里。
-                    ["retime_profile"] = profile.ToJson(SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height)),
+                    ["retime_profile"] = RetimeProfileJson.ToJson(profile, SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height)),
                     ["retained_puppet_animation"] = retainedPuppetAnimation,
                     ["prefix_capture_scope"] = retainedPuppetAnimation ? "pre_puppet_authored_effect_terminal" : "flat_authored_effect_terminal"
                 };
@@ -65,12 +65,8 @@ internal static class EffectPrefixPlanner
     /// 与 analyze 的整层路线、bake 前刷新同一口径：档位预算、圈数下限、可见项第二闸与质量档双上限取优都在这里生效。
     /// 缓存尺寸在规划时还不知道，videoGroups 传 null，长度上限按不透明整幅输出估算（与 <see cref="HybridScenePlanner.LoopLengthMaximumOf"/> 的约定一致）。
     /// </summary>
-    internal static JsonObject AnalyzePrefix(JsonObject originalScene, ProjectSource source, string assets, JsonObject runtime,
-        JsonObject snapshot, int ownerId, int prefixCount, HybridAnalyzeRequest request, JsonObject projection) =>
-        AnalyzeIndexedPrefix(originalScene, source, assets, runtime, snapshot, ownerId, prefixCount, request, projection, null);
-
     /// <param name="effectShaders">该层每个效果（按 effects 里的对象顺序）用到的材质 shader；null 时当场建（bake 侧单个前缀复算）。</param>
-    private static JsonObject AnalyzeIndexedPrefix(JsonObject originalScene, ProjectSource source, string assets, JsonObject runtime,
+    internal static JsonObject AnalyzeIndexedPrefix(JsonObject originalScene, ProjectSource source, string assets, JsonObject runtime,
         JsonObject snapshot, int ownerId, int prefixCount, HybridAnalyzeRequest request, JsonObject projection,
         IReadOnlyList<string[]>? effectShaders)
     {
@@ -93,14 +89,14 @@ internal static class EffectPrefixPlanner
                     dependencies.Remove(dependency);
         if (authoredOwner["animationlayers"] is JsonArray && analysisRuntime["runtime_animation_periods"] is JsonArray periods)
             foreach (JsonNode? period in periods.ToArray())
-                if (period is JsonObject value && HybridScenePlanner.Int(value["source_owner_layer_id"]) == ownerId &&
+                if (period is JsonObject value && SceneGraph.Int(value["source_owner_layer_id"]) == ownerId &&
                     value["mechanism"] is JsonValue mechanism && mechanism.TryGetValue<string>(out string? kind) &&
                     kind == "puppet_bone") periods.Remove(period);
         // 质量档要在两个上限下各求一次，求解会往场景副本上写：每次求解都重新裁一份前缀场景，不共用。
         JsonObject PrefixScene()
         {
             JsonObject prefixScene = originalScene.DeepClone().AsObject();
-            HybridScenePlanner.FreezeTemporalProperties(prefixScene, snapshot);
+            PlanTransforms.FreezeTemporalProperties(prefixScene, snapshot);
             JsonObject owner = prefixScene["objects"]!.AsArray().OfType<JsonObject>()
                 .Single(item => item["id"]!.GetValue<int>() == ownerId);
             JsonArray prefixEffects = owner["effects"]!.AsArray();
@@ -124,7 +120,7 @@ internal static class EffectPrefixPlanner
         if (droppedShaders.Count == 0 || runtime["runtime_layers"] is not JsonArray layers) return;
         foreach (JsonObject layer in layers.OfType<JsonObject>())
         {
-            if (HybridScenePlanner.Int(layer["owner"]) != ownerId || layer["materials"] is not JsonArray materials) continue;
+            if (SceneGraph.Int(layer["owner"]) != ownerId || layer["materials"] is not JsonArray materials) continue;
             foreach (JsonNode? node in materials.ToArray())
                 if (node is JsonObject material && material["shader"] is JsonValue shader &&
                     shader.TryGetValue(out string? name) && name is not null && droppedShaders.Contains(name))
@@ -198,8 +194,8 @@ internal static class EffectPrefixPlanner
     }
 
     private static bool IsExternalVisibilityDependency(JsonObject dependency, int ownerId) =>
-        HybridScenePlanner.Int(dependency["owner"]) is int caller && caller >= 0 && caller != ownerId &&
-        HybridScenePlanner.Int(dependency["target"]) == ownerId &&
+        SceneGraph.Int(dependency["owner"]) is int caller && caller >= 0 && caller != ownerId &&
+        SceneGraph.Int(dependency["target"]) == ownerId &&
         (dependency["operation"]?.GetValue<string>() == "lookup" ||
          dependency["property"]?.GetValue<string>() == "visible" &&
          dependency["operation"]?.GetValue<string>() is "read" or "write");
@@ -211,11 +207,11 @@ internal static class EffectPrefixPlanner
         // syntax, computed members and other host APIs retain the existing guard.
         var callers = (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(d => IsExternalVisibilityDependency(d, ownerId))
-            .Select(d => HybridScenePlanner.Int(d["owner"])!.Value).Distinct();
+            .Select(d => SceneGraph.Int(d["owner"])!.Value).Distinct();
         foreach (int caller in callers)
         {
             var controller = (scene["objects"] as JsonArray ?? []).OfType<JsonObject>()
-                .FirstOrDefault(node => HybridScenePlanner.Int(node["id"]) == caller);
+                .FirstOrDefault(node => SceneGraph.Int(node["id"]) == caller);
             if (controller is null) return false;
             string[] scripts = SceneAnalyzer.Walk(controller).OfType<JsonObject>()
                 .Select(node => node["script"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
@@ -244,9 +240,9 @@ internal static class EffectPrefixPlanner
     {
         if (runtime["runtime_dependencies"] is JsonArray dependencies && dependencies.OfType<JsonObject>().Any(dependency =>
             dependency["initialization"]?.GetValue<bool>() != true &&
-            (HybridScenePlanner.Int(dependency["owner"]) == ownerId || HybridScenePlanner.Int(dependency["target"]) == ownerId) &&
+            (SceneGraph.Int(dependency["owner"]) == ownerId || SceneGraph.Int(dependency["target"]) == ownerId) &&
             !IsExternalVisibilityDependency(dependency, ownerId))) return true;
-        return runtime["runtime_layers"] is JsonArray layers && layers.OfType<JsonObject>().Where(layer => HybridScenePlanner.Int(layer["owner"]) == ownerId)
+        return runtime["runtime_layers"] is JsonArray layers && layers.OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["owner"]) == ownerId)
             .SelectMany(layer => layer["materials"]?.AsArray().OfType<JsonObject>() ?? []).Any(material =>
                 material["uses_audio_spectrum"]?.GetValue<bool>() == true || material["uses_system_media_thumbnail"]?.GetValue<bool>() == true ||
                 material["active_uniforms"]?.AsArray().Any(uniform => uniform?.GetValue<string>() is "g_PointerPosition" or "g_PointerPositionLast" or "g_ParallaxPosition") == true);

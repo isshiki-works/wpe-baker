@@ -31,7 +31,7 @@ internal static class SourceStaticLoopChecks
                     ["active_uniforms"] = new JsonArray(uniform, "g_ModelMatrix", "g_ViewProjectionMatrix", "g_EyePosition", "g_Color4",
                         "g_Texture0Rotation", "g_Texture0Translation", "g_Texture0Resolution", "g_LightsAmbient"),
                     ["textures"] = new JsonArray(texture, "", "", "", "", "", "", "") }) }) };
-        JsonObject Analyze(JsonObject scene, JsonObject runtime) => HybridLoopService.Analyze(scene, source, null, runtime, [1], 60, 1);
+        JsonObject Analyze(JsonObject scene, JsonObject runtime) => LoopAnalysis.Analyze(scene, source, null, runtime, [1], 60, 1).ToJson();
 
         JsonObject staticReport = Analyze(Scene(), Runtime());
         check(staticReport["source_static"]!.GetValue<bool>() && staticReport["candidates"]!.AsArray().Count == 1 &&

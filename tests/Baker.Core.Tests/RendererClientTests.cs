@@ -3,7 +3,7 @@ using Baker.Core;
 using Xunit;
 
 // C2.4a：渲染器能力握手（解析 + 每个渲染器文件只握一次）、唯一进程封装 FfmpegTool 的失败/超时路径、
-// 唯一探流核对 VerifyEncoded、RenderRawAsync 的 IFrameSink。假工具都是 .cmd 批处理，不需要真渲染器与 ffmpeg。
+// 唯一探流核对 VerifyEncoded。假工具都是 .cmd 批处理，不需要真渲染器与 ffmpeg。
 
 [Trait("Layer", "L0")]
 public class RendererCapabilitiesTests
@@ -130,89 +130,4 @@ public class RendererClientTests
         var missing = await VerifyEncoded.FrameCountAsync(tool, video, new JsonObject(), 10, CancellationToken.None);
         Assert.Equal(("full_decode", 12UL), (missing.Source, missing.Count));
     });
-
-    private sealed class CollectingSink : IFrameSink
-    {
-        public readonly List<ulong> Indices = [];
-        public readonly MemoryStream Bytes = new();
-        public ValueTask WriteFrameAsync(ulong index, ReadOnlyMemory<byte> rgba, CancellationToken token)
-        {
-            Indices.Add(index);
-            Bytes.Write(rgba.Span);
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private static readonly string Fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
-
-    [Fact]
-    public async Task FrameSinkReceivesExactlyTheFileBytes() => await TestTemp.Run(async dir =>
-    {
-        // 3x2 的奇数宽度、4 帧；字节取可打印字母，批处理 type 原样吐到 stdout。
-        const int width = 3, height = 2, frames = 4;
-        byte[] rgba = new byte[width * height * 4 * frames];
-        for (int i = 0; i < rgba.Length; ++i) rgba[i] = (byte)('A' + (i * 7 + i / 24) % 26);
-        string tools = Path.Combine(dir, "tools");
-        Directory.CreateDirectory(tools);
-        File.WriteAllBytes(Path.Combine(tools, "frames.bin"), rgba);
-        File.WriteAllText(Path.Combine(tools, "result.json"), "{\"schema_version\":1,\"status\":\"complete\",\"written_frames\":4,\"renderer_error_count\":0}");
-        string renderer = Cmd(tools, "render.cmd", """
-            set native=%~dp3native
-            mkdir "%native%" 2>nul
-            copy /y "%~dp0result.json" "%native%\result.json" >nul
-            "%SystemRoot%\System32\findstr.exe" /c:"\"raw_stdout\": true" "%~3" >nul
-            if errorlevel 1 (
-              copy /b /y "%~dp0frames.bin" "%native%\frames.rgba" >nul
-              exit /b 0
-            )
-            type "%~dp0frames.bin"
-            """);
-        var runner = new NativeRenderRunner(Tools(tools, renderer));
-        var request = new RenderRequest(Fixture, Fixture, Path.Combine(dir, "file"), width, height, 60, 1, frames);
-        JsonObject file = await runner.RenderRawAsync(request);
-        byte[] onDisk = File.ReadAllBytes(file["rgba_path"]!.GetValue<string>());
-        Assert.Equal(rgba, onDisk);
-
-        var sink = new CollectingSink();
-        JsonObject streamed = await runner.RenderRawAsync(request with { OutputDirectory = Path.Combine(dir, "sink") }, sink, CancellationToken.None);
-        Assert.Equal(onDisk, sink.Bytes.ToArray());
-        Assert.Equal([0UL, 1UL, 2UL, 3UL], sink.Indices);
-        Assert.Null(streamed["rgba_path"]);
-        Assert.False(File.Exists(Path.Combine(dir, "sink", "native", "frames.rgba")));
-        Assert.Contains("\"raw_stdout\": true", File.ReadAllText(Path.Combine(dir, "sink", "renderer-job.json")));
-        Assert.Contains("\"raw_stdout\": false", File.ReadAllText(Path.Combine(dir, "file", "renderer-job.json")));
-        // 渲染器少给一帧：接收器路径必须失败，不能把半截帧序列当完成。
-        var shortRun = await Assert.ThrowsAnyAsync<IOException>(() => runner.RenderRawAsync(
-            request with { OutputDirectory = Path.Combine(dir, "short"), Frames = frames + 1 }, new CollectingSink(), CancellationToken.None));
-        Assert.Contains("ended after 4 of 5", shortRun.Message);
-    });
-}
-
-[Trait("Layer", "L3"), Collection("L3 本机工具")]
-public class RendererFrameSinkL3Tests
-{
-    [Fact]
-    public async Task RealRendererStdoutMatchesFramesFile() => await TestTemp.Run(async dir =>
-    {
-        Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
-        string fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
-        var runner = new NativeRenderRunner(LocalTools.Tools!);
-        var request = new RenderRequest(fixture, fixture, Path.Combine(dir, "file"), 67, 41, 60, 1, 5, WarmupFrames: 3, Seed: 17);
-        JsonObject file = await runner.RenderRawAsync(request);
-        var sink = new MemoryStream();
-        var collector = new StreamSink(sink);
-        await runner.RenderRawAsync(request with { OutputDirectory = Path.Combine(dir, "sink") }, collector, CancellationToken.None);
-        Assert.Equal(5UL, collector.Count);
-        Assert.Equal(File.ReadAllBytes(file["rgba_path"]!.GetValue<string>()), sink.ToArray());
-    });
-
-    private sealed class StreamSink(Stream target) : IFrameSink
-    {
-        public ulong Count;
-        public ValueTask WriteFrameAsync(ulong index, ReadOnlyMemory<byte> rgba, CancellationToken token)
-        {
-            Assert.Equal(Count++, index);
-            return target.WriteAsync(rgba, token);
-        }
-    }
 }

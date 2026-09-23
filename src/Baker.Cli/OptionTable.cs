@@ -132,7 +132,7 @@ internal static class OptionTable
             Help: ["0..5, advanced override of the preset's look budget."]),
         new("--loop-max-seconds", [Analyze], "SECONDS", Custom: true, Parse: text =>
             double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) &&
-            double.IsFinite(parsed) && parsed > 0 && parsed <= SwayRetimeOptions.MaximumLoopLengthSeconds
+            double.IsFinite(parsed) && parsed > 0 && parsed <= CommonLoopSolver.MaximumLoopLengthSeconds
                 ? parsed : throw new ArgumentException("--loop-max-seconds must be a number of seconds above 0 and at most 3600."),
             Help: ["Advanced override of the preset's loop ceiling, at most 3600."]),
         new("--video-shell", [Analyze], Choices: [VideoDominance.RejectChoice, VideoDominance.AllowChoice], Default: D.VideoShell, Custom: true),

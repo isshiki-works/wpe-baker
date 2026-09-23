@@ -8,7 +8,7 @@ namespace Baker.Core;
 /// <summary>
 /// 从已编码视频按帧号取帧的唯一去处：主路是 <see cref="ExactFrameRange"/>（<see cref="DecodeExactFramesAsync"/>）；
 /// <see cref="DecodeSelectedRgb24Async"/> 是交叉淡化权重核对专用的独立取帧方式（整秒锚点 + select 计数），两者互为交叉验证。
-/// 进程一律走 <see cref="FfmpegTool"/>。原来住在 EncodedQualityValidator，那里只留转发器（C3 删）。
+/// 进程一律走 <see cref="FfmpegTool"/>。
 /// </summary>
 internal static class FrameAccess
 {

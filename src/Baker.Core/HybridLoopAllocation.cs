@@ -23,14 +23,14 @@ internal static class HybridLoopAllocation
         if (baked.Count == 0) return NotApplicable("reason.allocation_nothing_baked");
         var objects = (scene["objects"]?.AsArray()
             ?? throw new InvalidDataException("Loop allocation requires source objects."))
-            .OfType<JsonObject>().ToDictionary(HybridScenePlanner.Id);
+            .OfType<JsonObject>().ToDictionary(SceneGraph.Id);
         if (baked.Any(id => !objects.ContainsKey(id)))
             throw new InvalidDataException("A baked loop layer is absent from the source scene.");
 
         int AuthorRoot(int id)
         {
             var seen = new HashSet<int>();
-            while (HybridScenePlanner.Int(objects[id]["parent"]) is int parent && objects.ContainsKey(parent))
+            while (SceneGraph.Int(objects[id]["parent"]) is int parent && objects.ContainsKey(parent))
             {
                 if (!seen.Add(id)) throw new InvalidDataException("Scene parent cycle.");
                 id = parent;
@@ -51,7 +51,7 @@ internal static class HybridLoopAllocation
         foreach (var report in SceneAnalyzer.Walk(plan["loop"]).OfType<JsonObject>())
             foreach (var unresolved in (report["unresolved"] as JsonArray ?? []).OfType<JsonObject>())
             {
-                if (HybridScenePlanner.Int(unresolved["owner_layer_id"] ?? unresolved["source_owner_layer_id"]) is not int owner ||
+                if (SceneGraph.Int(unresolved["owner_layer_id"] ?? unresolved["source_owner_layer_id"]) is not int owner ||
                     !baked.Contains(owner)) continue;
                 if (unresolved["particle_stationarity"] is JsonObject verdict && objects[owner].ContainsKey("particle"))
                     particleStationary[owner] = particleStationary.GetValueOrDefault(owner, true) &&
@@ -127,5 +127,5 @@ internal static class HybridLoopAllocation
     }
 
     private static IEnumerable<int> ReadIds(JsonNode? node) => (node?.AsArray() ?? []).Select(value =>
-        HybridScenePlanner.Int(value) ?? throw new InvalidDataException("A loop allocation layer id is invalid."));
+        SceneGraph.Int(value) ?? throw new InvalidDataException("A loop allocation layer id is invalid."));
 }

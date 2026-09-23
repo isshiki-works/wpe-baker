@@ -16,7 +16,7 @@ internal static class LoopCeilingChecks
             try { action(); return false; }
             catch (ArgumentException) { return true; }
         }
-        check(CommonLoopSolver.DefaultMaximumSeconds == SwayRetimeOptions.DefaultLoopLengthMaximumSeconds &&
+        check(CommonLoopSolver.DefaultMaximumSeconds == CommonLoopSolver.DefaultLoopLengthMaximumSeconds &&
             CommonLoopSolver.Ceiling(3600) == new CommonLoopRational(3600) && CommonLoopSolver.Ceiling(45.5) == new CommonLoopRational(91, 2) &&
             Throws(() => CommonLoopSolver.Ceiling(0)) && Throws(() => CommonLoopSolver.Ceiling(3600.5)) && Throws(() => CommonLoopSolver.Ceiling(double.NaN)),
             "the solver ceiling defaults to the --loop-max-seconds default and accepts exactly the (0, 3600] range");
@@ -67,12 +67,12 @@ internal static class LoopCeilingChecks
         File.WriteAllText(Path.Combine(sourceDirectory, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
         File.WriteAllText(Path.Combine(sourceDirectory, "scene.json"), "{\"objects\":[]}");
         using var source = new ProjectSource(sourceDirectory);
-        JsonObject Analyze(double seconds, double? ceiling, SwayRetimeOptions? sway = null, EmbeddedVideoLoopLimit? limit = null) => HybridLoopService.Analyze(
+        JsonObject Analyze(double seconds, double? ceiling, SwayRetimeOptions? sway = null, EmbeddedVideoLoopLimit? limit = null) => LoopAnalysis.Analyze(
             new JsonObject { ["objects"] = new JsonArray { new JsonObject { ["id"] = 1 } } }, source, null,
             new JsonObject { ["runtime_animation_periods"] = new JsonArray { new JsonObject {
                 ["source_owner_layer_id"] = 1, ["mechanism"] = "authored_track", ["track_name"] = null, ["duration_seconds"] = seconds,
                 ["playback_rate"] = 1, ["looping"] = true, ["event_driven"] = false, ["confidence"] = "high" } } },
-            [1], 60, 1, 2, CommonLoopPreference.Balanced, sway, ceiling, limit);
+            [1], 60, 1, 2, CommonLoopPreference.Balanced, sway, ceiling, limit).ToJson();
         static ulong[] Frames(JsonObject loop) => loop["candidates"]!.AsArray().Select(candidate => candidate!["frames"]!.GetValue<ulong>()).ToArray();
         JsonObject byDefault = Analyze(300, null), legacy180 = Analyze(300, 180), wide = Analyze(300, 1200);
         check(Frames(byDefault).SequenceEqual(new ulong[] { 18000, 36000 }) && byDefault["maximum_seconds"]!.GetValue<double>() == 600 &&

@@ -10,9 +10,9 @@ internal static class HybridVideoProjection
     {
         try
         {
-            var angles = Vector3(HybridScenePlanner.Resolve(obj["angles"], properties), (0, 0, 0));
-            var scale = Vector3(HybridScenePlanner.Resolve(obj["scale"], properties), (1, 1, 1));
-            _ = Vector3(HybridScenePlanner.Resolve(obj["origin"], properties), (0, 0, 0));
+            var angles = Vector3(SceneGraph.Resolve(obj["angles"], properties), (0, 0, 0));
+            var scale = Vector3(SceneGraph.Resolve(obj["scale"], properties), (1, 1, 1));
+            _ = Vector3(SceneGraph.Resolve(obj["origin"], properties), (0, 0, 0));
             return angles == (0d, 0d, 0d) && Math.Abs(scale.X) > 1e-9 && Math.Abs(scale.Y) > 1e-9 && Math.Abs(scale.Z) > 1e-9;
         }
         catch (InvalidDataException) { return false; }
@@ -28,14 +28,14 @@ internal static class HybridVideoProjection
             if (!seen.Add(id) || !SupportsStaticParent(obj, properties))
                 throw new InvalidDataException("Video parent mapping requires a static axis-aligned, non-singular parent chain.");
             chain.Push(obj);
-            if (HybridScenePlanner.Int(obj["parent"]) is not int next || !objects.ContainsKey(next)) break;
+            if (SceneGraph.Int(obj["parent"]) is not int next || !objects.ContainsKey(next)) break;
             id = next;
         }
         (double X, double Y, double Z) origin = (0, 0, 0), scale = (1, 1, 1);
         foreach (var obj in chain)
         {
-            var localOrigin = Vector3(HybridScenePlanner.Resolve(obj["origin"], properties), (0, 0, 0));
-            var localScale = Vector3(HybridScenePlanner.Resolve(obj["scale"], properties), (1, 1, 1));
+            var localOrigin = Vector3(SceneGraph.Resolve(obj["origin"], properties), (0, 0, 0));
+            var localScale = Vector3(SceneGraph.Resolve(obj["scale"], properties), (1, 1, 1));
             origin = (origin.X + scale.X * localOrigin.X, origin.Y + scale.Y * localOrigin.Y, origin.Z + scale.Z * localOrigin.Z);
             scale = (scale.X * localScale.X, scale.Y * localScale.Y, scale.Z * localScale.Z);
         }
@@ -47,7 +47,7 @@ internal static class HybridVideoProjection
 
     internal static void AttachToParent(JsonObject layer, JsonObject group)
     {
-        if (HybridScenePlanner.Int(group["parent_id"]) is not int parent) return;
+        if (SceneGraph.Int(group["parent_id"]) is not int parent) return;
         var transform = group["parent_transform"]?.AsObject() ?? throw new InvalidDataException("Video parent transform is missing.");
         var origin = Vector3(transform["origin"], (0, 0, 0));
         var scale = Vector3(transform["scale"], (1, 1, 1));
@@ -120,13 +120,13 @@ internal static class HybridVideoProjection
         if (ortho["auto"]?.GetValue<bool>() == true && scene["objects"] is JsonArray objects)
         {
             var largest = objects.OfType<JsonObject>().Where(o => o.ContainsKey("image"))
-                .Select(o => Vector(HybridScenePlanner.Resolve(o["size"], properties), (0, 0)))
+                .Select(o => Vector(SceneGraph.Resolve(o["size"], properties), (0, 0)))
                 .OrderByDescending(size => size.X * size.Y).FirstOrDefault();
             if (largest.X > 0 && largest.Y > 0) return (largest.X, largest.Y, CanvasBasisAutoLargestImage);
         }
         double? Dimension(JsonNode? node)
         {
-            JsonNode? value = HybridScenePlanner.Resolve(node, properties);
+            JsonNode? value = SceneGraph.Resolve(node, properties);
             if (value is JsonObject binding) value = binding["value"];
             // 解析出来的数字按 double 读得到；代码里构造的节点保留写入时的整数类型，按整数再读一次。
             if (value is not JsonValue number) return null;
@@ -144,14 +144,14 @@ internal static class HybridVideoProjection
         var ortho = general?["orthogonalprojection"];
         var authored = AuthoredCanvas(scene, properties);
         double cw = authored.Width ?? 1920, ch = authored.Height ?? 1080;
-        double zoom = HybridScenePlanner.Numeric(HybridScenePlanner.Resolve(general?["zoom"], properties), 1);
+        double zoom = SceneGraph.Numeric(SceneGraph.Resolve(general?["zoom"], properties), 1);
         if (zoom <= 0 || !double.IsFinite(zoom) || cw <= 0 || ch <= 0) throw new InvalidDataException("Invalid orthographic projection extent.");
         double scale = Math.Max(width / (cw / zoom), height / (ch / zoom));
         var report = new JsonObject { ["status"] = ortho is null ? "perspective" : "orthographic",
             ["canvas_width"] = cw, ["canvas_height"] = ch, ["center_x"] = cw / 2, ["center_y"] = ch / 2,
             ["visible_width"] = width / scale, ["visible_height"] = height / scale,
-            ["parallax_amount"] = HybridScenePlanner.Numeric(HybridScenePlanner.Resolve(general?["cameraparallaxamount"], properties), .5),
-            ["parallax_mouse_influence"] = HybridScenePlanner.Numeric(HybridScenePlanner.Resolve(general?["cameraparallaxmouseinfluence"], properties), 0) };
+            ["parallax_amount"] = SceneGraph.Numeric(SceneGraph.Resolve(general?["cameraparallaxamount"], properties), .5),
+            ["parallax_mouse_influence"] = SceneGraph.Numeric(SceneGraph.Resolve(general?["cameraparallaxmouseinfluence"], properties), 0) };
         if (runtime is not null)
         {
             var canvas = Vector(runtime["scene_ortho"], (cw, ch));

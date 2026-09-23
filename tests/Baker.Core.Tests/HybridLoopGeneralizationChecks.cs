@@ -22,8 +22,8 @@ internal static class HybridLoopGeneralizationChecks
         {
             var owner = new JsonObject { ["id"] = 1 };
             if (particle) owner["particle"] = "particles/test.json";
-            return HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray { owner } }, source, null,
-                new JsonObject { ["runtime_animation_periods"] = new JsonArray { trace } }, [1], fpsNumerator, fpsDenominator);
+            return LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray { owner } }, source, null,
+                new JsonObject { ["runtime_animation_periods"] = new JsonArray { trace } }, [1], fpsNumerator, fpsDenominator).ToJson();
         }
 
         JsonObject anonymous = Analyze(AnonymousTrack(60), 60, 1);
@@ -33,9 +33,9 @@ internal static class HybridLoopGeneralizationChecks
 
         var scriptClock = new JsonObject { ["owner"] = 1, ["operation"] = "time", ["property"] = "frametime",
             ["binding"] = "origin", ["initialization"] = false };
-        JsonObject ScriptLoop() => HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) },
+        JsonObject ScriptLoop() => LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) },
             source, null, new JsonObject { ["runtime_animation_periods"] = new JsonArray(AnonymousTrack(3)),
-                ["runtime_dependencies"] = new JsonArray(scriptClock.DeepClone()) }, [1], 60, 1);
+                ["runtime_dependencies"] = new JsonArray(scriptClock.DeepClone()) }, [1], 60, 1).ToJson();
         check(ScriptLoop()["unresolved"]!.AsArray().OfType<JsonObject>().Any(item =>
                 item["kind"]?.GetValue<string>() == "script_time" && item["owner_layer_id"]?.GetValue<int>() == 1),
             "a three-second authored animation does not certify a script advancing the same layer's position with frametime");
@@ -87,7 +87,7 @@ internal static class HybridLoopGeneralizationChecks
             ["script"] = "export function update(v) { const a = thisLayer.getTextureAnimation(); engine.setTimeout(() => a.stop(), Math.random() * 8000); return v; }" } };
         var mixedScene = new JsonObject { ["objects"] = new JsonArray { controlledOwner, new JsonObject { ["id"] = 2 } } };
         var mixedRuntime = new JsonObject { ["runtime_animation_periods"] = new JsonArray { Sprite(1.68), fixedHundred } };
-        JsonObject Mixed() => HybridLoopService.Analyze(mixedScene, source, null, mixedRuntime, [1, 2], 60, 1);
+        JsonObject Mixed() => LoopAnalysis.Analyze(mixedScene, source, null, mixedRuntime, [1, 2], 60, 1).ToJson();
         var controlled = Mixed();
         // 上限是 --loop-max-seconds（默认 600 秒）：100 秒定长轨在上限内有 100、200 … 600 秒六个候选，选中的仍是 100 秒。
         check(controlled["fixed_frame_step"]!.GetValue<ulong>() == 6000 &&
@@ -114,9 +114,9 @@ internal static class HybridLoopGeneralizationChecks
         var authoredRuntime = new JsonObject { ["runtime_animation_periods"] = new JsonArray { AnonymousTrack(60) },
             ["runtime_dependencies"] = new JsonArray { authoredControl } };
         var authoredScene = new JsonObject { ["objects"] = new JsonArray { new JsonObject { ["id"] = 1 } } };
-        var initialPhase = HybridLoopService.Analyze(authoredScene, source, null, authoredRuntime, [1], 60, 1);
+        var initialPhase = LoopAnalysis.Analyze(authoredScene, source, null, authoredRuntime, [1], 60, 1).ToJson();
         authoredControl["initialization"] = false;
-        var ongoingControl = HybridLoopService.Analyze(authoredScene, source, null, authoredRuntime, [1], 60, 1);
+        var ongoingControl = LoopAnalysis.Analyze(authoredScene, source, null, authoredRuntime, [1], 60, 1).ToJson();
         check(initialPhase["candidates"]!.AsArray().First()!["frames"]!.GetValue<ulong>() == 3600 &&
             ongoingControl["candidates"]!.AsArray().Count == 0 &&
             ongoingControl["unresolved"]!.AsArray().OfType<JsonObject>().Any(x => x["owner_layer_id"]?.GetValue<int>() == 1),
@@ -126,15 +126,15 @@ internal static class HybridLoopGeneralizationChecks
             new JsonObject { ["id"] = 30, ["name"] = "float32-rate", ["rate"] = authoredRate } } };
         JsonObject roundedTrace = AnonymousTrack(7); roundedTrace["source_owner_layer_id"] = 3;
         roundedTrace["track_name"] = "float32-rate"; roundedTrace["playback_rate"] = .29;
-        JsonObject rounded = HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray { RoundedRate(.28999999) } }, source, null,
-            new JsonObject { ["runtime_animation_periods"] = new JsonArray { roundedTrace } }, [3], 60, 1);
+        JsonObject rounded = LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray { RoundedRate(.28999999) } }, source, null,
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray { roundedTrace } }, [3], 60, 1).ToJson();
         JsonObject roundedPatch = rounded["candidates"]!.AsArray().First()!["patches"]!.AsArray().OfType<JsonObject>().Single();
         check(roundedPatch["kind"]?.GetValue<string>() == "animation_rate" &&
             Math.Abs(roundedPatch["old_value"]!.GetValue<double>() - .28999999) < 1e-12,
             "source and runtime rates with the same finite float32 value retime using the authored source value");
 
-        JsonObject distinct = HybridLoopService.Analyze(new JsonObject { ["objects"] = new JsonArray { RoundedRate(.29000004) } }, source, null,
-            new JsonObject { ["runtime_animation_periods"] = new JsonArray { roundedTrace.DeepClone() } }, [3], 60, 1);
+        JsonObject distinct = LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray { RoundedRate(.29000004) } }, source, null,
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray { roundedTrace.DeepClone() } }, [3], 60, 1).ToJson();
         check(distinct["unresolved"]!.AsArray().OfType<JsonObject>().Any(x =>
                 x["detail"]?.GetValue<string>()?.Contains("No exact authored animation rate patch", StringComparison.Ordinal) == true),
             "genuinely different float32 source and runtime rates remain unresolved");
@@ -163,7 +163,7 @@ internal static class HybridLoopGeneralizationChecks
             ["visible"] = new JsonObject { ["value"] = true, ["script"] = Controller } };
         JsonObject Scene(params JsonNode[] objects) => new() { ["objects"] = new JsonArray(objects) };
         JsonObject Analyze(JsonObject scene, JsonObject runtime, int bakedOwner) =>
-            HybridLoopService.Analyze(scene, source, null, runtime, [bakedOwner], 120, 1);
+            LoopAnalysis.Analyze(scene, source, null, runtime, [bakedOwner], 120, 1).ToJson();
         static bool Unresolved(JsonObject loop, int ownerId) => loop["unresolved"]!.AsArray().OfType<JsonObject>()
             .Any(x => x["kind"]?.GetValue<string>() == "runtime_video" && x["owner_layer_id"]?.GetValue<int>() == ownerId);
         static int[] Ids(JsonObject loop, string field) => loop["video_control_scope"]![field]!.AsArray()

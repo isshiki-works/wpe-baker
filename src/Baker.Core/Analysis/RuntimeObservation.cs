@@ -15,7 +15,7 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
     /// 观测按 <see cref="ObservationKey"/> 缓存；渲染器读不了素材时转成工具局限结论抛出。
     /// </summary>
     internal static async Task<RuntimeObservation> ObserveAsync(HybridAnalyzeRequest request, ProjectSource source, string sourceHash,
-        JsonObject scene, JsonObject project, JsonObject properties, SceneGraph graph, string output, IRuntimeObserver observer,
+        JsonObject scene, JsonObject project, JsonObject properties, SceneGraph graph, string output, NativeRuntimeObserver observer,
         IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
     {
         async Task<JsonObject> ProbeAsync(string renderSource, string directory)

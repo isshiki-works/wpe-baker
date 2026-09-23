@@ -12,7 +12,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
     {
         int owner = cache["owner_layer_id"]?.GetValue<int>() ?? throw new InvalidDataException("Effect-prefix cache owner_layer_id is missing.");
         int prefix = cache["prefix_effect_count"]?.GetValue<int>() ?? 0;
-        JsonObject node = scene["objects"]?.AsArray().OfType<JsonObject>().SingleOrDefault(x => HybridScenePlanner.Id(x) == owner)
+        JsonObject node = scene["objects"]?.AsArray().OfType<JsonObject>().SingleOrDefault(x => SceneGraph.Id(x) == owner)
             ?? throw new InvalidDataException("Effect-prefix cache owner is absent from the source scene.");
         if (prefix <= 0 || node["effects"] is not JsonArray effects || prefix > effects.Count ||
             effects[prefix - 1]?["id"]?.GetValue<int>() != cache["terminal_effect_id"]?.GetValue<int>() ||
@@ -27,7 +27,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         string? assets, JsonObject pristine, JsonObject snapshot, JsonObject loop, CancellationToken cancellationToken)
     {
         JsonObject scene = pristine.DeepClone().AsObject();
-        HybridScenePlanner.FreezeTemporalProperties(scene, snapshot);
+        PlanTransforms.FreezeTemporalProperties(scene, snapshot);
         HybridLoopService.ApplyPatches(scene, loop);
         await source.ExtractAsync(captureProject, cancellationToken);
         await File.WriteAllTextAsync(ProjectSource.ContainedPath(captureProject, source.SceneResource), scene.ToJsonString(), cancellationToken);
@@ -59,7 +59,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             ?? throw new InvalidDataException("Runtime evidence is invalid.");
         JsonObject pristine = source.ReadJson(source.SceneResource);
         JsonObject snapshot = plan["snapshot_properties"]?.AsObject() ?? throw new InvalidDataException("Effect-prefix snapshot properties are missing.");
-        // 前缀循环在 bake 侧按同一个入口重算，投影记录取 plan 里那一份（与 HybridScenePlanner.RefreshLoop 同样的取法）：
+        // 前缀循环在 bake 侧按同一个入口重算，投影记录取 plan 里那一份（与 PlanTransforms.RefreshLoop 同样的取法）：
         // 缓存描述要和 analyze 逐字节相同，档位口径一有出入这里就会判成 stale。
         JsonObject projection = plan["projection"] as JsonObject ?? new JsonObject();
         JsonArray proposed = EffectPrefixPlanner.Propose(pristine, source, settings.Assets, runtime, snapshot, settings, projection);
@@ -102,8 +102,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int owner = cache["owner_layer_id"]!.GetValue<int>(), prefix = cache["prefix_effect_count"]!.GetValue<int>();
-                JsonObject loop = EffectPrefixPlanner.AnalyzePrefix(pristine, source, settings.Assets, runtime, snapshot,
-                    owner, prefix, settings, projection);
+                JsonObject loop = EffectPrefixPlanner.AnalyzeIndexedPrefix(pristine, source, settings.Assets, runtime, snapshot,
+                    owner, prefix, settings, projection, null);
                 if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 })
                     throw new InvalidDataException($"Effect-prefix owner {owner} has no complete source-derived period.");
                 ulong frames = loop["candidates"]!.AsArray()[0]!["frames"]!.GetValue<ulong>();
@@ -177,7 +177,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 if (decodePlan.Rejected)
                 {
                     string layer = $"L{owner.ToString(System.Globalization.CultureInfo.InvariantCulture)} \"{MessageCatalog.EscapeName(pristine["objects"]?.AsArray().OfType<JsonObject>()
-                        .FirstOrDefault(value => HybridScenePlanner.Id(value) == owner)?["name"] is JsonValue name && name.TryGetValue(out string? text) ? text : null)}\"";
+                        .FirstOrDefault(value => SceneGraph.Id(value) == owner)?["name"] is JsonValue name && name.TryGetValue(out string? text) ? text : null)}\"";
                     string extent = HardwareDecodeDimensions.Extent(storedWidth, storedHeight);
                     var reason = new Message("bake.hardware_decode_dimensions_rejected",
                         [layer, extent, decodePlan.PackingText(MessageCatalog.English), decodePlan.ViolationText(MessageCatalog.English), decodePlan.Limits.BasisEn],
@@ -425,7 +425,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         ulong frames, uint sourceWidth, uint sourceHeight, JsonObject loop, JsonObject evidence)
     {
         string? name = scene["objects"]?.AsArray().OfType<JsonObject>()
-            .FirstOrDefault(node => HybridScenePlanner.Id(node) == owner)?["name"] is JsonValue value &&
+            .FirstOrDefault(node => SceneGraph.Id(node) == owner)?["name"] is JsonValue value &&
             value.TryGetValue<string>(out string? text) ? text : null;
         // 证据里的数是内存里直接建的 byte/int/ulong 值，TryGetValue<int> 跨类型会失败；按 JSON 文本解析最稳。
         int Number(string key) => evidence[key] is JsonValue number && int.TryParse(number.ToJsonString(),

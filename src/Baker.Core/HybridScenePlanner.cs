@@ -63,7 +63,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         double visibleHeight = projection["visible_height"] is JsonValue height && height.TryGetValue(out double h) && h > 0 ? h : request.Height;
         // 速度门限按最终输出画布（OutputResolution 定下的 request 宽高，与振幅换算同一个画布）的短边换算。
         return new(LoopLengthMaximumOf(request, videoGroups, ceilingOverride), request.Width / visibleWidth, request.Height / visibleHeight,
-            EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride), RetimeProfile.Resolve(request),
+            EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride), RetimeProfileJson.Resolve(request),
             SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height));
     }
 
@@ -74,7 +74,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     internal static EmbeddedVideoLoopLimit? EmbeddedVideoLimitOf(HybridAnalyzeRequest request, JsonArray? videoGroups,
         double? ceilingOverride = null)
     {
-        double requested = ceilingOverride ?? RetimeProfile.Resolve(request).LoopMaximumSeconds;
+        double requested = ceilingOverride ?? RetimeProfileJson.Resolve(request).LoopMaximumSeconds;
         bool packedAlpha = videoGroups?.OfType<JsonObject>().Any(group =>
             group["transparent"] is JsonValue transparent && transparent.TryGetValue(out bool value) && value) == true;
         return EmbeddedVideoBudget.LoopLengthLimit(requested, request.Width, request.Height, packedAlpha,
@@ -89,7 +89,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     /// </summary>
     internal static double LoopLengthMaximumOf(HybridAnalyzeRequest request, JsonArray? videoGroups, double? ceilingOverride = null) =>
         EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride)?.EffectiveSeconds
-        ?? ceilingOverride ?? RetimeProfile.Resolve(request).LoopMaximumSeconds;
+        ?? ceilingOverride ?? RetimeProfileJson.Resolve(request).LoopMaximumSeconds;
 
     /// <summary>
     /// 循环分析的唯一入口：质量档在档位上限与 <see cref="RetimeProfile.QualityComparisonSeconds"/> 下各求一次，
@@ -109,7 +109,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     internal static (JsonObject Loop, UnresolvedNotes Notes) AnalyzeLoopWithNotes(Func<JsonObject> scene, ProjectSource source, string? assets,
         JsonObject runtime, int[] bakedLayerIds, HybridAnalyzeRequest request, JsonObject projection, JsonArray? videoGroups)
     {
-        RetimeProfile profile = RetimeProfile.Resolve(request);
+        RetimeProfile profile = RetimeProfileJson.Resolve(request);
         (JsonObject Loop, UnresolvedNotes Notes) Solve(double? ceilingOverride)
         {
             JsonObject input = scene();
@@ -223,7 +223,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             request.LoopPreference is not "performance" and not "balanced" and not "quality" ||
             request.VideoShell is not VideoDominance.RejectChoice and not VideoDominance.AllowChoice ||
             request.LoopLengthMaximumSeconds is double loopLengthMaximum && (!double.IsFinite(loopLengthMaximum) || loopLengthMaximum <= 0 ||
-                loopLengthMaximum > SwayRetimeOptions.MaximumLoopLengthSeconds))
+                loopLengthMaximum > CommonLoopSolver.MaximumLoopLengthSeconds))
             throw new InvalidDataException("Invalid version 2 scene analysis settings.");
         string output = Path.GetFullPath(request.OutputDirectory);
         ProjectSource.EnsureNoReparsePoints(output);
@@ -445,23 +445,4 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         }
     }
 
-    // ---- C2.2d2 转发器：实现已搬到 SceneGraph / Liveness / LayoutAdmission / PlanTransforms / HybridSuitability。
-    // bake 侧（HybridBakeService、Bake/*、EffectPrefix*、DaytimeSplit 等本步不改的文件）经这里进来；登记在 forwarders.txt，C3 改调新位置后删。
-    internal static int Id(JsonObject obj) => SceneGraph.Id(obj);
-    internal static int? Int(JsonNode? node) => SceneGraph.Int(node);
-    internal static double Numeric(JsonNode? node, double fallback) => SceneGraph.Numeric(node, fallback);
-    internal static JsonNode? Resolve(JsonNode? value, JsonObject properties) => SceneGraph.Resolve(value, properties);
-    internal static Blocker? FullFrameConflict(JsonObject plan) => LayoutAdmission.FullFrameConflict(plan);
-    internal static Blocker? CompositionHierarchyConflict(JsonObject plan,
-        IReadOnlyDictionary<int, JsonObject>? sourceObjects = null, JsonArray? dependencies = null) =>
-        LayoutAdmission.CompositionHierarchyConflict(plan, sourceObjects, dependencies);
-    internal static void RefreshLoop(JsonObject plan, ProjectSource source, JsonObject runtime, HybridAnalyzeRequest settings) =>
-        PlanTransforms.RefreshLoop(plan, source, runtime, settings);
-    internal static JsonObject ApplyAllocation(JsonObject plan, IReadOnlyCollection<int> extraLiveRoots, JsonArray runtimeDependencies) =>
-        PlanTransforms.ApplyAllocation(plan, extraLiveRoots, runtimeDependencies);
-    internal static void FreezeTemporalProperties(JsonObject scene, JsonObject properties) => PlanTransforms.FreezeTemporalProperties(scene, properties);
-    internal static void ApplySnapshotOmissions(JsonObject scene, JsonObject plan) => PlanTransforms.ApplySnapshotOmissions(scene, plan);
-    internal static void ApplyOverlayPlacement(JsonObject scene, JsonObject plan) => PlanTransforms.ApplyOverlayPlacement(scene, plan);
-    internal static void ApplyTextEffectChoice(JsonObject scene, JsonObject plan) => PlanTransforms.ApplyTextEffectChoice(scene, plan);
-    internal static void ApplyAudioEffectChoice(JsonObject scene, JsonObject plan) => PlanTransforms.ApplyAudioEffectChoice(scene, plan);
 }

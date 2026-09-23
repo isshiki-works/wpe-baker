@@ -122,12 +122,12 @@ public sealed class CandidateValidation(NativeTools tools)
     /// 被连带取消的一边结束为 Canceled、不带异常，所以抛出的是失败那边的原始错误。
     /// </summary>
     internal static async Task<(JsonObject Source, JsonObject Candidate)> RenderLockstepAsync(
-        Func<IFrameSink, CancellationToken, Task<JsonObject>> source, Func<IFrameSink, CancellationToken, Task<JsonObject>> candidate,
+        Func<Lockstep.Side, CancellationToken, Task<JsonObject>> source, Func<Lockstep.Side, CancellationToken, Task<JsonObject>> candidate,
         Func<ulong, ReadOnlyMemory<byte>, ReadOnlyMemory<byte>, CancellationToken, ValueTask> compare, CancellationToken token)
     {
         using var pair = CancellationTokenSource.CreateLinkedTokenSource(token);
         var lockstep = new Lockstep(compare);
-        async Task<JsonObject> Side(Func<IFrameSink, CancellationToken, Task<JsonObject>> render, IFrameSink sink)
+        async Task<JsonObject> Side(Func<Lockstep.Side, CancellationToken, Task<JsonObject>> render, Lockstep.Side sink)
         {
             try { return await render(sink, pair.Token); }
             catch { await pair.CancelAsync(); throw; }
@@ -138,7 +138,7 @@ public sealed class CandidateValidation(NativeTools tools)
     }
 
     /// <summary>两个接收器共用的汇合点：同一时刻最多一边在等（它交出的帧没比完之前，它的渲染器交不出下一帧）。</summary>
-    private sealed class Lockstep
+    internal sealed class Lockstep
     {
         private readonly Func<ulong, ReadOnlyMemory<byte>, ReadOnlyMemory<byte>, CancellationToken, ValueTask> compare;
         private readonly Lock gate = new();
@@ -151,8 +151,8 @@ public sealed class CandidateValidation(NativeTools tools)
             Candidate = new Side(this, isSource: false);
         }
 
-        internal IFrameSink Source { get; }
-        internal IFrameSink Candidate { get; }
+        internal Lockstep.Side Source { get; }
+        internal Lockstep.Side Candidate { get; }
 
         private async ValueTask ArriveAsync(bool isSource, ulong index, ReadOnlyMemory<byte> frame, CancellationToken token)
         {
@@ -173,7 +173,7 @@ public sealed class CandidateValidation(NativeTools tools)
             other.Done.SetResult();
         }
 
-        private sealed class Side(Lockstep owner, bool isSource) : IFrameSink
+        internal sealed class Side(Lockstep owner, bool isSource)
         {
             public ValueTask WriteFrameAsync(ulong index, ReadOnlyMemory<byte> rgba, CancellationToken token) =>
                 owner.ArriveAsync(isSource, index, rgba, token);
@@ -202,21 +202,21 @@ public sealed class CandidateValidation(NativeTools tools)
             return report;
         }
         var sourceIds = sourceObjects.OfType<JsonObject>().Where(obj => Scripts(obj).Count > 0)
-            .Select(HybridScenePlanner.Id).ToHashSet();
+            .Select(SceneGraph.Id).ToHashSet();
         var retained = candidateObjects.OfType<JsonObject>()
-            .Where(obj => sourceIds.Contains(HybridScenePlanner.Id(obj)) && Scripts(obj).Count > 0)
-            .Select(HybridScenePlanner.Id).ToHashSet();
+            .Where(obj => sourceIds.Contains(SceneGraph.Id(obj)) && Scripts(obj).Count > 0)
+            .Select(SceneGraph.Id).ToHashSet();
         Dictionary<(int Owner, string Binding, bool Initialization, string Property), HashSet<int>> Lookups(JsonArray dependencies)
         {
             var result = new Dictionary<(int, string, bool, string), HashSet<int>>();
             foreach (var dependency in dependencies.OfType<JsonObject>())
             {
                 if (dependency["operation"]?.GetValue<string>() != "lookup" ||
-                    HybridScenePlanner.Int(dependency["owner"]) is not int owner || !retained.Contains(owner)) continue;
+                    SceneGraph.Int(dependency["owner"]) is not int owner || !retained.Contains(owner)) continue;
                 var key = (owner, dependency["binding"]?.GetValue<string>() ?? "",
                     dependency["initialization"]?.GetValue<bool>() == true, dependency["property"]?.GetValue<string>() ?? "");
                 if (!result.TryGetValue(key, out var targets)) result.Add(key, targets = []);
-                targets.Add(HybridScenePlanner.Int(dependency["target"]) ?? -1);
+                targets.Add(SceneGraph.Int(dependency["target"]) ?? -1);
             }
             return result;
         }

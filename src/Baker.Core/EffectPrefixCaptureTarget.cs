@@ -22,7 +22,7 @@ public static class EffectPrefixCaptureTarget
     /// <summary>这一层在运行时证据里自己读写的渲染目标：它的效果材质引用的 _rt_ 纹理，去掉全场景缓冲。</summary>
     public static string[] LayerTargets(JsonObject nativeResult, int ownerLayerId) =>
         (nativeResult["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(layer => HybridScenePlanner.Int(layer["owner"]) == ownerLayerId)
+            .Where(layer => SceneGraph.Int(layer["owner"]) == ownerLayerId)
             .SelectMany(layer => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>())
             .Where(material => Text(material["role"]) == "effect")
             .SelectMany(material => (material["textures"] as JsonArray ?? []).Select(Text))
@@ -60,7 +60,7 @@ public static class EffectPrefixCaptureTarget
     /// <summary>作者给图层起的名字，文案点名用；没有就返回 null。</summary>
     public static string? LayerName(JsonObject scene, int ownerLayerId) =>
         Text((scene["objects"] as JsonArray ?? []).OfType<JsonObject>()
-            .FirstOrDefault(node => HybridScenePlanner.Int(node["id"]) == ownerLayerId)?["name"]);
+            .FirstOrDefault(node => SceneGraph.Int(node["id"]) == ownerLayerId)?["name"]);
 
     private static JsonObject Describe(int ownerLayerId, int terminalEffectId, string? layerName, string status) => new()
     {

@@ -295,7 +295,7 @@ Check(groupingPlan["source_root_order"]!.AsArray().Select(node => node!.GetValue
     groupingPlan["root_roles"]!.AsArray().OfType<JsonObject>().Single(role => role["root_id"]!.GetValue<int>() == 906)
         ["role"]!.GetValue<string>() == "video",
     "plan preserves author-root order and separately records split allocation order and roles");
-var allocationMethod = typeof(HybridScenePlanner).GetMethod("ApplyAllocation",
+var allocationMethod = typeof(PlanTransforms).GetMethod("ApplyAllocation",
     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 JsonObject Allocate(JsonObject plan, int[] roots, JsonArray dependencies) =>
     (JsonObject)allocationMethod.Invoke(null, new object[] { plan, roots, dependencies })!;
@@ -673,7 +673,7 @@ var foregroundSubtree = new JsonArray(subtreeObjects[0]!.DeepClone(), subtreeObj
     subtreeObjects[4]!.DeepClone(), subtreeObjects[2]!.DeepClone(), subtreeObjects[5]!.DeepClone(),
     subtreeObjects[3]!.DeepClone(), subtreeObjects[6]!.DeepClone(), subtreeObjects[7]!.DeepClone());
 var foregroundSubtreePlan = await PlanSubtrees("subtree-foreground", foregroundSubtree, placement: "foreground");
-var placementMethod = typeof(HybridScenePlanner).GetMethod("ApplyOverlayPlacement", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+var placementMethod = typeof(PlanTransforms).GetMethod("ApplyOverlayPlacement", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 var foregroundSubtreeScene = new JsonObject { ["objects"] = foregroundSubtree.DeepClone() };
 placementMethod.Invoke(null, new object[] { foregroundSubtreeScene, foregroundSubtreePlan });
 Check(foregroundSubtreePlan["video_groups"]!.AsArray().Count == 1 && foregroundSubtreePlan["blockers"]!.AsArray().Count == 0 &&
@@ -701,7 +701,7 @@ try
 catch (InvalidDataException error) when (Message.Of(error)?.Key == "plan.legacy_version") { }
 Check(!Directory.Exists(Path.Combine(root, "must-not-be-generated")),
     "a legacy multigroup plan is rejected as an older plan before opening source files or starting generation");
-var layoutMethod = typeof(HybridScenePlanner).GetMethod("FullFrameConflict",
+var layoutMethod = typeof(LayoutAdmission).GetMethod("FullFrameConflict",
     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 string conflictNames = ((Blocker)layoutMethod.Invoke(null, [interleavedPlan])!).Text;
 Check(conflictNames.Contains("Visible overlay", StringComparison.Ordinal) &&
@@ -807,9 +807,9 @@ Check(preservedOverlay["occlusion_tradeoff"]!["status"]!.GetValue<string>() == "
     "preserve reports an available text overlay while foreground moves only its root order");
 Check(promotedOverlayRoots.SequenceEqual(new[] { 1000 }) && !promotedOverlayRoots.Contains(1003) && !promotedOverlayRoots.Contains(1004),
     "framebuffer consumers and real visible image roots are not foreground-overlay candidates");
-var snapshotOmissionMethod = typeof(HybridScenePlanner).GetMethod("ApplySnapshotOmissions",
+var snapshotOmissionMethod = typeof(PlanTransforms).GetMethod("ApplySnapshotOmissions",
     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
-var overlayPlacementMethod = typeof(HybridScenePlanner).GetMethod("ApplyOverlayPlacement",
+var overlayPlacementMethod = typeof(PlanTransforms).GetMethod("ApplyOverlayPlacement",
     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 JsonObject placedScene = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(overlaySource, "scene.json")))!.AsObject();
 snapshotOmissionMethod.Invoke(null, new object[] { placedScene, foregroundOverlay });
@@ -837,7 +837,7 @@ Check(preservedOverlay["text_effects_choice"]!["status"]!.GetValue<string>() == 
     simplifiedText["effect_count"]!.GetValue<int>() == 2 &&
     simpleTextPlan["text_effects_choice"]!["protected_layer_ids"]!.AsArray().Any(id => id!.GetValue<int>() == 1006),
     "text-effect choice reports the fixed live-text effects and protects an animated effect");
-var textEffectMethod = typeof(HybridScenePlanner).GetMethod("ApplyTextEffectChoice",
+var textEffectMethod = typeof(PlanTransforms).GetMethod("ApplyTextEffectChoice",
     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 JsonObject preservedTextScene = JsonNode.Parse(overlaySourceBeforeTextChoice)!.AsObject();
 textEffectMethod.Invoke(null, new object[] { preservedTextScene, preservedOverlay });

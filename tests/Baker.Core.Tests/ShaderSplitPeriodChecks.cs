@@ -24,7 +24,7 @@ internal static class ShaderSplitPeriodChecks
         // The fixed-period grain must reach the solver as a locked constraint with no scene patch.
         var grainScene = new JsonObject { ["objects"] = new JsonArray(
             Owner(1, "filmgrain", new JsonObject { ["scale"] = 10.0 })) };
-        JsonObject report = HybridLoopService.Analyze(grainScene, source, null, new JsonObject(), [1], 60, 1);
+        JsonObject report = LoopAnalysis.Analyze(grainScene, source, null, new JsonObject(), [1], 60, 1).ToJson();
         JsonObject candidate = report["candidates"]!.AsArray().First()!.AsObject();
         ulong grainFrames = candidate["frames"]!.GetValue<ulong>();
         check(grainFrames % 60 == 0 && candidate["patches"]!.AsArray().Count == 0 &&
@@ -55,9 +55,9 @@ internal static class ShaderSplitPeriodChecks
             new JsonObject { ["DIRECTDRAW"] = 1, ["RAYCORNER"] = 1, ["RAYMODE"] = 2 });
         directDrawOwner["shape"] = "quad";
         var directDrawScene = new JsonObject { ["objects"] = new JsonArray(directDrawOwner) };
-        JsonObject directDraw = HybridLoopService.Analyze(directDrawScene, source, null,
+        JsonObject directDraw = LoopAnalysis.Analyze(directDrawScene, source, null,
             Runtime(RuntimeLayer(83, Material("lightshafts", "source", "g_Speed", "g_Time"),
-                Material("lightshafts", "effect", "g_Speed", "g_Time"))), [83], 60, 1);
+                Material("lightshafts", "effect", "g_Speed", "g_Time"))), [83], 60, 1).ToJson();
         JsonObject[] directDrawUnresolved = directDraw["unresolved"]!.AsArray().OfType<JsonObject>().ToArray();
         check(directDrawUnresolved.Length == 1 &&
             directDrawUnresolved[0]["kind"]?.GetValue<string>() == "NonPeriodicOrDriftingMechanism" &&
@@ -67,9 +67,9 @@ internal static class ShaderSplitPeriodChecks
             "a direct-draw effect layer instantiated as both source and effect materials reports exactly one unresolved component");
 
         // 反例一：同一层有个时钟材质，但它的 shader 从没被方程规则裁定过——必须照旧报 runtime_material。
-        JsonObject unanalysed = HybridLoopService.Analyze(directDrawScene, source, null,
+        JsonObject unanalysed = LoopAnalysis.Analyze(directDrawScene, source, null,
             Runtime(RuntimeLayer(83, Material("lightshafts", "effect", "g_Time"),
-                Material("workshop/custom_clock", "source", "g_Time"))), [83], 60, 1);
+                Material("workshop/custom_clock", "source", "g_Time"))), [83], 60, 1).ToJson();
         check(unanalysed["unresolved"]!.AsArray().OfType<JsonObject>().Count(item =>
                 item["kind"]?.GetValue<string>() == "runtime_material" && item["owner_layer_id"]?.GetValue<int>() == 83) == 1,
             "a runtime material whose shader carries no shader-analysis verdict still reports its unmodeled clock");
@@ -78,9 +78,9 @@ internal static class ShaderSplitPeriodChecks
         // 83 层的裁定不能借给它。
         JsonObject crossLayerScene = new JsonObject { ["objects"] = new JsonArray(directDrawOwner.DeepClone(),
             new JsonObject { ["id"] = 84, ["shape"] = "quad" }) };
-        JsonObject crossLayer = HybridLoopService.Analyze(crossLayerScene, source, null,
+        JsonObject crossLayer = LoopAnalysis.Analyze(crossLayerScene, source, null,
             Runtime(RuntimeLayer(83, Material("lightshafts", "source", "g_Time"), Material("lightshafts", "effect", "g_Time")),
-                RuntimeLayer(84, Material("lightshafts", "effect", "g_Time"))), [83, 84], 60, 1);
+                RuntimeLayer(84, Material("lightshafts", "effect", "g_Time"))), [83, 84], 60, 1).ToJson();
         JsonObject[] crossUnresolved = crossLayer["unresolved"]!.AsArray().OfType<JsonObject>().ToArray();
         check(crossUnresolved.Count(item => item["kind"]?.GetValue<string>() == "runtime_material" &&
                 item["owner_layer_id"]?.GetValue<int>() == 84) == 1 &&
@@ -100,12 +100,12 @@ internal static class ShaderSplitPeriodChecks
                     ["passes"] = new JsonArray(new JsonObject { ["constantshadervalues"] = new JsonObject { ["rayspeed"] = 0.2 } }) })
         };
         var analyzePrefix = typeof(HybridLoopService).Assembly.GetType("Baker.Core.EffectPrefixPlanner")!
-            .GetMethod("AnalyzePrefix", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+            .GetMethod("AnalyzeIndexedPrefix", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
         // 前缀分析现在按请求走统一入口；这一组断言只看运行时证据的投影，请求取"没选档"的旧行为（60 fps、2% 通用预算、600 s）。
         var prefixRequest = new HybridAnalyzeRequest(2, "source", "assets", "output", FpsNumerator: 60, FpsDenominator: 1);
         JsonObject Prefix(JsonObject prefixRuntime, int prefixCount) => (JsonObject)analyzePrefix.Invoke(null, [
             new JsonObject { ["objects"] = new JsonArray(prefixOwner.DeepClone()) }, source, null, prefixRuntime,
-            new JsonObject(), 30, prefixCount, prefixRequest, new JsonObject()])!;
+            new JsonObject(), 30, prefixCount, prefixRequest, new JsonObject(), null])!;
         JsonObject prefixRuntime = Runtime(RuntimeLayer(30, Material("filmgrain", "effect", "g_Time"),
             Material("lightshafts", "effect", "g_Speed", "g_Time")));
         JsonObject firstEffectOnly = Prefix(prefixRuntime, 1);

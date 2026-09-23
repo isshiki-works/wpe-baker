@@ -94,9 +94,9 @@ public static class VideoDominance
         var result = new JsonObject { ["status"] = "unknown" };
         JsonObject workload = HybridVideoWorkload.Summarize(runtime);
         if (!HybridVideoWorkload.Complete(workload)) return result;
-        int? owner = HybridScenePlanner.Int(plan["loop"]?["content_cadence"]?["clips"]?[0]?["owner_layer_id"]);
+        int? owner = SceneGraph.Int(plan["loop"]?["content_cadence"]?["clips"]?[0]?["owner_layer_id"]);
         var textures = (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(layer => HybridScenePlanner.Int(layer["owner"]) == owner)
+            .Where(layer => SceneGraph.Int(layer["owner"]) == owner)
             .SelectMany(layer => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>())
             .Where(material => material["role"]?.GetValue<string>() == "source")
             .SelectMany(material => (material["textures"] as JsonArray ?? []).Select(value => value?.GetValue<string>()))
@@ -167,7 +167,7 @@ public static class VideoDominance
                 "选中的候选要靠改写作者速率才闭合，成品的时序与原作不同。");
         JsonArray? clips = loop["content_cadence"]?["clips"] as JsonArray;
         if (clips is not { Count: 1 } || clips[0] is not JsonObject clip ||
-            HybridScenePlanner.Int(clip["owner_layer_id"]) is not int owner ||
+            SceneGraph.Int(clip["owner_layer_id"]) is not int owner ||
             clip["component"]?.GetValue<string>() is not string clipComponent ||
             !components.Contains(clipComponent, StringComparer.Ordinal))
             return ("The plan does not name exactly one fixed-rate clip that owns the selected period.",
@@ -185,24 +185,24 @@ public static class VideoDominance
         if (opaque.Length != 1)
             return ("The plan does not bake exactly one opaque group, so the clip is not the whole opaque picture.",
                 "计划烘的不透明组不止一个（或一个都没有），那段片源撑不起整幅不透明画面。");
-        int[] opaqueLayers = ((opaque[0]["layer_ids"] as JsonArray) ?? []).Select(HybridScenePlanner.Int).OfType<int>().ToArray();
+        int[] opaqueLayers = ((opaque[0]["layer_ids"] as JsonArray) ?? []).Select(SceneGraph.Int).OfType<int>().ToArray();
         evidence.Add("opaque_group=" + (opaque[0]["id"]?.GetValue<string>() ?? "(unnamed)") +
             " layers=" + Join(opaqueLayers.Select(id => id.ToString(CultureInfo.InvariantCulture))));
         if (opaqueLayers.Length != 1 || opaqueLayers[0] != owner)
             return ("The opaque group bakes layers other than the clip layer, so other content draws inside the same pixels.",
                 "不透明组里除了那层片源还有别的图层，同一片像素里还画着别的东西。");
         JsonObject? clipLayer = (plan["layers"] as JsonArray)?.OfType<JsonObject>()
-            .FirstOrDefault(layer => HybridScenePlanner.Int(layer["id"]) == owner);
-        double fraction = HybridScenePlanner.Numeric(clipLayer?["canvas_fraction"], double.NaN);
-        double centreX = HybridScenePlanner.Numeric(clipLayer?["canvas_center_x"], double.NaN);
-        double centreY = HybridScenePlanner.Numeric(clipLayer?["canvas_center_y"], double.NaN);
+            .FirstOrDefault(layer => SceneGraph.Int(layer["id"]) == owner);
+        double fraction = SceneGraph.Numeric(clipLayer?["canvas_fraction"], double.NaN);
+        double centreX = SceneGraph.Numeric(clipLayer?["canvas_center_x"], double.NaN);
+        double centreY = SceneGraph.Numeric(clipLayer?["canvas_center_y"], double.NaN);
         evidence.Add("clip_layer_canvas_fraction=" + Text(fraction) + " centre=" + Text(centreX) + "," + Text(centreY));
         if (!WorkloadValue.FillsCentredCanvas(fraction, centreX, centreY))
             return ("The clip layer does not cover the whole centred canvas, so the wallpaper is not that clip played back.",
                 "承载片源的图层没有铺满居中的整幅画布，这张壁纸不只是把那段视频播出来而已。");
         int[] baked = (plan["layers"] as JsonArray)?.OfType<JsonObject>()
             .Where(layer => layer["allocation"]?.GetValue<string>() == "video")
-            .Select(layer => HybridScenePlanner.Int(layer["id"])).OfType<int>().ToArray() ?? [];
+            .Select(layer => SceneGraph.Int(layer["id"])).OfType<int>().ToArray() ?? [];
         evidence.Add("baked_layers=" + Join(baked.Select(id => id.ToString(CultureInfo.InvariantCulture))));
         if (runtime["runtime_layers"] is not JsonArray observed)
             return ("The runtime observation carries no layer table, so the baked layers' effect passes are unknown.",
@@ -212,7 +212,7 @@ public static class VideoDominance
         bool clipLayerObserved = false, effectEvidenceMissing = false;
         foreach (var entry in observed.OfType<JsonObject>())
         {
-            if (HybridScenePlanner.Int(entry["owner"]) is not int ownerId || !bakedSet.Contains(ownerId)) continue;
+            if (SceneGraph.Int(entry["owner"]) is not int ownerId || !bakedSet.Contains(ownerId)) continue;
             if (ownerId == owner) clipLayerObserved = true;
             if (entry["has_effect_layer"] is not JsonValue flag || !flag.TryGetValue<bool>(out bool hasEffectLayer))
             { effectEvidenceMissing = true; continue; }

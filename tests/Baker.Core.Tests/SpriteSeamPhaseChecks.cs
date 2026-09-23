@@ -66,11 +66,11 @@ internal static class SpriteSeamPhaseChecks
         File.WriteAllBytes(Path.Combine(sourceDirectory, "materials", "Long.tex"), SpriteTex(0.07f, 16));
         File.WriteAllBytes(Path.Combine(sourceDirectory, "materials", "Short.tex"), SpriteTex(0.04f, 12));
         using var source = new ProjectSource(sourceDirectory);
-        JsonObject Analyze(string texture, double duration) => HybridLoopService.Analyze(
+        JsonObject Analyze(string texture, double duration) => LoopAnalysis.Analyze(
             new JsonObject { ["objects"] = new JsonArray { new JsonObject { ["id"] = 1 } } }, source, null,
             new JsonObject { ["runtime_animation_periods"] = new JsonArray { new JsonObject {
                 ["source_owner_layer_id"] = 1, ["mechanism"] = "sprite", ["track_name"] = texture, ["duration_seconds"] = duration,
-                ["looping"] = true, ["event_driven"] = false, ["confidence"] = "high" } } }, [1], 60, 1);
+                ["looping"] = true, ["event_driven"] = false, ["confidence"] = "high" } } }, [1], 60, 1).ToJson();
 
         JsonObject longPlan = Analyze("Long", 1.12);
         JsonObject longFirst = longPlan["candidates"]!.AsArray()[0]!.AsObject();

@@ -7,8 +7,7 @@ namespace Baker.Core;
 
 /// <summary>
 /// 按 plan 改写场景与 plan 本身的变换：bake 前刷新循环、前景分配、冻结时间属性、快照剔除、叠加层上移、文字效果与音频效果取舍。
-/// 分析（<see cref="HybridScenePlanner"/>、<see cref="RuntimeObservation"/>、<see cref="LayoutAdmission"/>）与 bake 共用同一份；
-/// bake 侧的旧调用经 HybridScenePlanner 的同名转发器进来（登记在 forwarders.txt，C3 删）。
+/// 分析（<see cref="HybridScenePlanner"/>、<see cref="RuntimeObservation"/>、<see cref="LayoutAdmission"/>）与 bake 共用同一份。
 /// </summary>
 internal static class PlanTransforms
 {

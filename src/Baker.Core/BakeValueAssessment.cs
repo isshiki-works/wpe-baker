@@ -42,10 +42,10 @@ public static class BakeValueAssessment
             plan["video_dominant"]?["status"]?.GetValue<string>() is VideoDominance.ShellStatus or VideoDominance.OverrideStatus)
             return Result(WorkloadValue.UnchangedVideoPlayback);
         int[] owners = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
-            .SelectMany(group => (group["layer_ids"] as JsonArray ?? []).Select(HybridScenePlanner.Int).OfType<int>()).Distinct().ToArray();
+            .SelectMany(group => (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()).Distinct().ToArray();
         var selected = owners.ToHashSet();
         JsonObject[] observed = (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(layer => HybridScenePlanner.Int(layer["owner"]) is int id && selected.Contains(id)).ToArray();
+            .Where(layer => SceneGraph.Int(layer["owner"]) is int id && selected.Contains(id)).ToArray();
         int effects = observed.SelectMany(layer => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>())
             .Count(material => material["role"]?.GetValue<string>() == "effect");
         if (effects > 0)
@@ -63,7 +63,7 @@ public static class BakeValueAssessment
                 double width = Number(plan["output_resolution"]?["width"] ?? plan["settings"]?["width"]);
                 double height = Number(plan["output_resolution"]?["height"] ?? plan["settings"]?["height"]);
                 var layer = (plan["layers"] as JsonArray)?.OfType<JsonObject>()
-                    .FirstOrDefault(x => HybridScenePlanner.Int(x["id"]) == owners[0]);
+                    .FirstOrDefault(x => SceneGraph.Int(x["id"]) == owners[0]);
                 if (double.IsFinite(width * height) && width > 0 && height > 0 && TextureContainer.TryReadHeader(source, assets, resource, out var header, out _) &&
                     (header.Flags & 0x24) == 0 && TextureContainer.TryReadImageExtent(source, assets, resource, out uint iw, out uint ih, out _))
                 {
@@ -71,9 +71,9 @@ public static class BakeValueAssessment
                         ["output_width"] = width, ["output_height"] = height, ["source_format"] = header.Format };
                     if (WorkloadValue.TextureExceedsOutput(iw, ih, width, height))
                         return Result(WorkloadValue.StaticTextureFootprint, facts);
-                    if (WorkloadValue.FillsCentredCanvas(HybridScenePlanner.Numeric(layer?["canvas_fraction"], 0),
-                        HybridScenePlanner.Numeric(layer?["canvas_center_x"], double.NaN),
-                        HybridScenePlanner.Numeric(layer?["canvas_center_y"], double.NaN)))
+                    if (WorkloadValue.FillsCentredCanvas(SceneGraph.Numeric(layer?["canvas_fraction"], 0),
+                        SceneGraph.Numeric(layer?["canvas_center_x"], double.NaN),
+                        SceneGraph.Numeric(layer?["canvas_center_y"], double.NaN)))
                         return Result(WorkloadValue.OneStillTextureUnchanged, facts);
                 }
             }

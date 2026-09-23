@@ -22,17 +22,17 @@ internal sealed class ScriptEvidenceGate(NativeTools tools) : IBakeGate
             HybridPlanFormat.Validate(plan);
             if (plan["blockers"] is JsonArray { Count: > 0 })
                 throw new InvalidDataException("The refreshed analysis requires resolution before generation.");
-            if (HybridScenePlanner.FullFrameConflict(plan) is Blocker refreshedLayoutConflict)
+            if (LayoutAdmission.FullFrameConflict(plan) is Blocker refreshedLayoutConflict)
                 throw refreshedLayoutConflict.ToException();
-            if (HybridScenePlanner.CompositionHierarchyConflict(plan) is Blocker refreshedHierarchyConflict)
+            if (LayoutAdmission.CompositionHierarchyConflict(plan) is Blocker refreshedHierarchyConflict)
                 throw refreshedHierarchyConflict.ToException();
             context.Plan = plan;
             context.Settings = PlanSettings.Of(plan);
             errors = HybridBakeService.PlannedSourceScriptErrors(plan)
                 ?? throw new InvalidDataException("The refreshed analysis omitted source script fault evidence.");
         }
-        var plannedIds = context.Plan["layers"]!.AsArray().OfType<JsonObject>().Select(HybridScenePlanner.Id).ToHashSet();
-        if (errors.OfType<JsonObject>().Any(error => HybridScenePlanner.Int(error["owner_layer_id"]) is not int owner || !plannedIds.Contains(owner)))
+        var plannedIds = context.Plan["layers"]!.AsArray().OfType<JsonObject>().Select(SceneGraph.Id).ToHashSet();
+        if (errors.OfType<JsonObject>().Any(error => SceneGraph.Int(error["owner_layer_id"]) is not int owner || !plannedIds.Contains(owner)))
             throw new InvalidDataException("A source script fault lacks a known authored owner; analyze the source again before generation.");
         return null;
     }

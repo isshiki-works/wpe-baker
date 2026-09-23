@@ -79,9 +79,9 @@ internal static class ParticleStationarityChecks
                 ["runtime_layers"] = new JsonArray() };
             if (withDependencies) runtime["runtime_dependencies"] = dependencies ?? new JsonArray();
             using var source = new ProjectSource(root);
-            return HybridLoopService.Analyze(scene, source, null, runtime,
+            return LoopAnalysis.Analyze(scene, source, null, runtime,
                 [.. layers.Select(layer => layer.Object["id"]!.GetValue<int>()), .. extraBaked ?? []], fps, fpsDenominator,
-                loopLengthMaximumSeconds: loopLengthMaximum);
+                loopLengthMaximumSeconds: loopLengthMaximum).ToJson();
         }
         static JsonObject[] ParticleItems(JsonObject report, int owner) => report["unresolved"]!.AsArray().OfType<JsonObject>()
             .Where(item => item["owner_layer_id"]?.GetValue<int>() == owner && item["particle_stationarity"] is JsonObject).ToArray();

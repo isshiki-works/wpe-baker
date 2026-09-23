@@ -170,7 +170,7 @@ internal sealed class EffectRangeRules
         {
             JsonNode? raw = ConstantValue(authoredPass, name) ?? ConstantValue(materialPass, name) ?? bound.Default;
             var components = new List<double>();
-            bool literal = HybridScenePlanner.Resolve(raw, properties) switch
+            bool literal = SceneGraph.Resolve(raw, properties) switch
             {
                 JsonValue number when number.TryGetValue(out double single) => Add(components, single),
                 JsonValue text when text.TryGetValue(out string? list) => Periodica.Domain.SdrRadianceCriteria.TryParseComponents(list, components),
