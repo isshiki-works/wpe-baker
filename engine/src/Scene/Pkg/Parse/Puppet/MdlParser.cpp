@@ -66,20 +66,49 @@ bool CheckBlockEnd(fs::BinaryReader& reader, uint32_t end_offset, std::string_vi
     return true;
 }
 
+// end_offset 为 0 表示没有块边界（网格段在所有块之前），以文件末尾为界，与 ReadOwnedString 一致。
 bool RequireBytes(fs::BinaryReader& reader, uint64_t byte_count, uint32_t end_offset,
                   std::string_view path, Services* services, std::string_view field) {
     const auto start    = reader.Tell();
-    const auto boundary = static_cast<rstd::ptrdiff_t>(end_offset);
+    const auto boundary = end_offset ? static_cast<rstd::ptrdiff_t>(end_offset) : reader.Size();
     if (start < 0 || boundary < start || byte_count > static_cast<uint64_t>(boundary - start))
         return ParseFailure(path, services, "truncated " + std::string(field), start, boundary);
     return true;
 }
 
+// 文件里读出的计数只能经这里变成容器长度：先按块内剩余字节核对 count 条记录（每条至少
+// record_bytes 字节）装得下，装不下就是截断或读错位，返回解析失败（带偏移与字段名），不分配。
+// 以前直接按计数 reserve，错位读出的巨大计数会让分配失败、进程以 0xC0000409 崩溃。
 template<typename T>
-void ResetDefault(Vec<T>& values, usize length) {
+bool ResizeCounted(fs::BinaryReader& reader, Vec<T>& values, uint64_t count, uint64_t record_bytes,
+                   uint32_t end_offset, std::string_view path, Services* services,
+                   std::string_view field) {
+    if (! RequireBytes(reader, count * record_bytes, end_offset, path, services, field))
+        return false;
     values.clear();
-    values.reserve(length);
-    for (usize i {}; i < length; ++i) values.emplace_back();
+    values.reserve(usize(count));
+    for (uint64_t i {}; i < count; ++i) values.emplace_back();
+    return true;
+}
+
+// MDAT/MDLA/MDMP/MDLE 标签 "MDxx0006" 里的版本号。不是四位数字就是读错位，按解析失败返回
+// （以前用 std::stoi，非数字会抛异常直接终止进程）。
+bool ParseTagVersion(std::string_view tag, int32_t& version, rstd::ptrdiff_t offset,
+                     std::string_view path, Services* services) {
+    const auto digits = tag.substr(4, 4);
+    const auto end    = digits.data() + digits.size();
+    auto [ptr, ec]    = std::from_chars(digits.data(), end, version);
+    (void)ptr;
+    if (ec != std::errc())
+        return ParseFailure(path, services, "invalid block version tag", offset, offset);
+    return true;
+}
+
+// MDAT/MDLA/MDLE 挂在 MDLS 建的 puppet 上；没有 MDLS 就出现这些块是读错位，按解析失败返回。
+bool RequirePuppet(const Mdl& mdl, std::string_view block, rstd::ptrdiff_t offset,
+                   std::string_view path, Services* services) {
+    if (mdl.puppet.is_some()) return true;
+    return ParseFailure(path, services, std::string(block) + " block without MDLS", offset, offset);
 }
 
 // Vertex layout bits (mirror imhex/mdl.hexpat MdlFlagBit).
@@ -229,7 +258,9 @@ bool UsesUint32Indices(const MdlHeader& header, uint32_t vertex_num) {
 //   + u32 indices_size + Triangle[] + (if MdlV>=21: Parts) + (if MdlV>21: Masks)
 bool ParseMesh(fs::BinaryReader& f, const MdlHeader& header, Mdl::Mesh& mesh, std::string_view path,
                Services* services) {
-    ResetDefault(mesh.mat_json_files, usize(header.skin_count));
+    if (! ResizeCounted(
+            f, mesh.mat_json_files, header.skin_count, 1, 0, path, services, "mesh material names"))
+        return false;
     for (auto& material : mesh.mat_json_files)
         if (! ReadOwnedString(f, material, path, services, "material name")) return false;
     mesh.flag_a = f.ReadUint32();
@@ -258,16 +289,19 @@ bool ParseMesh(fs::BinaryReader& f, const MdlHeader& header, Mdl::Mesh& mesh, st
     }
 
     uint32_t vertex_num = vertex_size / stride;
-    ResetDefault(mesh.positions, usize(vertex_num));
-    if (mesh_flag & MDL_FLAG_NORMAL) ResetDefault(mesh.normals, usize(vertex_num));
-    if (mesh_flag & MDL_FLAG_TANGENT) ResetDefault(mesh.tangents, usize(vertex_num));
-    if (mesh_flag & MDL_FLAG_EXTRA4) ResetDefault(mesh.extra4, usize(vertex_num));
-    if (mesh_flag & MDL_FLAG_SKIN_BLEND) ResetDefault(mesh.blend_indices, usize(vertex_num));
-    if (mesh_flag & MDL_FLAG_SKIN_WEIGHT) ResetDefault(mesh.blend_weights, usize(vertex_num));
-    if (mesh_flag & (MDL_FLAG_UV | MDL_FLAG_UV2)) {
-        ResetDefault(mesh.texcoords, usize(vertex_num));
-    }
-    if (mesh_flag & MDL_FLAG_UV2) ResetDefault(mesh.texcoord2, usize(vertex_num));
+    auto     attribute  = [&](auto& values, bool present) {
+        return ! present ||
+               ResizeCounted(f, values, vertex_num, stride, 0, path, services, "mesh vertices");
+    };
+    if (! attribute(mesh.positions, true) ||
+        ! attribute(mesh.normals, mesh_flag & MDL_FLAG_NORMAL) ||
+        ! attribute(mesh.tangents, mesh_flag & MDL_FLAG_TANGENT) ||
+        ! attribute(mesh.extra4, mesh_flag & MDL_FLAG_EXTRA4) ||
+        ! attribute(mesh.blend_indices, mesh_flag & MDL_FLAG_SKIN_BLEND) ||
+        ! attribute(mesh.blend_weights, mesh_flag & MDL_FLAG_SKIN_WEIGHT) ||
+        ! attribute(mesh.texcoords, mesh_flag & (MDL_FLAG_UV | MDL_FLAG_UV2)) ||
+        ! attribute(mesh.texcoord2, mesh_flag & MDL_FLAG_UV2))
+        return false;
 
     for (uint32_t i = 0; i < vertex_num; ++i) {
         const usize index(i);
@@ -306,7 +340,9 @@ bool ParseMesh(fs::BinaryReader& f, const MdlHeader& header, Mdl::Mesh& mesh, st
         return false;
     }
     uint32_t indices_num = indices_size / index_stride;
-    ResetDefault(mesh.indices, usize(indices_num));
+    if (! ResizeCounted(
+            f, mesh.indices, indices_num, index_stride, 0, path, services, "mesh indices"))
+        return false;
     for (auto& id : mesh.indices) {
         for (auto& v : id) v = use_u32_indices ? f.ReadUint32() : f.ReadUint16();
     }
@@ -331,8 +367,11 @@ bool ParseMesh(fs::BinaryReader& f, const MdlHeader& header, Mdl::Mesh& mesh, st
                                vertex_num);
                     return false;
                 }
-                ResetDefault(mesh.part_uv2, usize(vertex_num));
-                ResetDefault(mesh.part_uv2_pad, usize(vertex_num));
+                if (! ResizeCounted(
+                        f, mesh.part_uv2, vertex_num, 12, 0, path, services, "mesh part uv2") ||
+                    ! ResizeCounted(
+                        f, mesh.part_uv2_pad, vertex_num, 12, 0, path, services, "mesh part uv2"))
+                    return false;
                 for (uint32_t i = 0; i < vertex_num; ++i) {
                     const usize index(i);
                     mesh.part_uv2[index][usize(0)] = f.ReadFloat();
@@ -352,7 +391,8 @@ bool ParseMesh(fs::BinaryReader& f, const MdlHeader& header, Mdl::Mesh& mesh, st
                 return false;
             }
             uint32_t parts_num = parts_bytes / 16;
-            ResetDefault(mesh.parts, usize(parts_num));
+            if (! ResizeCounted(f, mesh.parts, parts_num, 16, 0, path, services, "mesh parts"))
+                return false;
             for (auto& part : mesh.parts) {
                 part.id = f.ReadUint32();
                 (void)f.ReadUint32(); // reserved 0
@@ -372,14 +412,15 @@ bool ParseIkRig(fs::BinaryReader& f, Mdl& mdl, uint16_t controller_count, uint16
     auto& puppet = **mdl.puppet;
 
     constexpr uint64_t controller_size = 1 + 4 + 4 + 16 * 4;
-    if (! RequireBytes(f,
-                       uint64_t(controller_count) * controller_size,
-                       end_offset,
-                       path,
-                       services,
-                       "MDLS IK controller table"))
+    if (! ResizeCounted(f,
+                        puppet.ik_controllers,
+                        controller_count,
+                        controller_size,
+                        end_offset,
+                        path,
+                        services,
+                        "MDLS IK controller table"))
         return false;
-    ResetDefault(puppet.ik_controllers, usize(controller_count));
     for (auto& controller : puppet.ik_controllers) {
         const auto record_offset = f.Tell();
         uint8_t    reserved      = f.ReadUint8();
@@ -418,10 +459,15 @@ bool ParseIkRig(fs::BinaryReader& f, Mdl& mdl, uint16_t controller_count, uint16
         return ParseFailure(
             path, services, "unsupported MDLS IK graph header", f.Tell() - 7, end_offset);
 
-    if (! RequireBytes(
-            f, uint64_t(length_count) * 4, end_offset, path, services, "MDLS IK bone lengths"))
+    if (! ResizeCounted(f,
+                        puppet.ik_nodes,
+                        length_count,
+                        4,
+                        end_offset,
+                        path,
+                        services,
+                        "MDLS IK bone lengths"))
         return false;
-    ResetDefault(puppet.ik_nodes, usize(length_count));
     for (auto& node : puppet.ik_nodes) {
         const auto length_offset = f.Tell();
         node.length              = f.ReadFloat();
@@ -433,11 +479,10 @@ bool ParseIkRig(fs::BinaryReader& f, Mdl& mdl, uint16_t controller_count, uint16
     for (uint32_t parent = 0; parent < bones_num; ++parent) {
         if (! RequireBytes(f, 2, end_offset, path, services, "MDLS IK child count")) return false;
         uint16_t child_count = f.ReadUint16();
-        if (! RequireBytes(
-                f, uint64_t(child_count) * 16, end_offset, path, services, "MDLS IK child table"))
-            return false;
         auto& children = puppet.ik_nodes[usize(parent)].children;
-        ResetDefault(children, usize(child_count));
+        if (! ResizeCounted(
+                f, children, child_count, 16, end_offset, path, services, "MDLS IK child table"))
+            return false;
         for (auto& child : children) {
             const auto child_offset = f.Tell();
             child.bone_index        = f.ReadUint32();
@@ -458,7 +503,9 @@ bool ParseIkRig(fs::BinaryReader& f, Mdl& mdl, uint16_t controller_count, uint16
     if (uint32_t(chain_count) * 2 != controller_count)
         return ParseFailure(
             path, services, "MDLS IK controller/chain count mismatch", f.Tell() - 2, end_offset);
-    ResetDefault(puppet.ik_chains, usize(chain_count));
+    if (! ResizeCounted(
+            f, puppet.ik_chains, chain_count, 38, end_offset, path, services, "MDLS IK chain"))
+        return false;
     for (auto& chain : puppet.ik_chains) {
         const auto chain_offset = f.Tell();
         if (! RequireBytes(f, 38, end_offset, path, services, "MDLS IK chain")) return false;
@@ -478,10 +525,9 @@ bool ParseIkRig(fs::BinaryReader& f, Mdl& mdl, uint16_t controller_count, uint16
             chain.length <= 0.0f)
             return ParseFailure(
                 path, services, "unsupported MDLS IK chain record", chain_offset, end_offset);
-        if (! RequireBytes(
-                f, uint64_t(path_count) * 4, end_offset, path, services, "MDLS IK chain path"))
+        if (! ResizeCounted(
+                f, chain.bones, path_count, 4, end_offset, path, services, "MDLS IK chain path"))
             return false;
-        ResetDefault(chain.bones, usize(path_count));
         for (auto& bone_index : chain.bones) bone_index = f.ReadUint32();
         if (chain.start_bone >= bones_num || chain.end_bone >= bones_num ||
             chain.bones[usize(1)] >= bones_num || chain.bones[usize(0)] != chain.start_bone ||
@@ -529,7 +575,9 @@ bool ParseMDLS(fs::BinaryReader& f, Mdl& mdl, std::string_view path, Services* s
     mdl.puppet  = Some(Arc<Puppet>::make());
     auto& bones = (*mdl.puppet)->bones;
 
-    ResetDefault(bones, usize(bones_num));
+    // 每根骨骼至少：名字 1 + sim_type 4 + parent 4 + size 4 + 矩阵 64 + 模拟 JSON 1。
+    if (! ResizeCounted(f, bones, bones_num, 78, end_offset, path, services, "MDLS bones"))
+        return false;
     for (unsigned i = 0; i < bones_num; ++i) {
         auto& bone = bones[usize(i)];
         if (! ReadOwnedString(f, bone.name, path, services, "bone name", end_offset)) return false;
@@ -575,6 +623,13 @@ bool ParseMDLS(fs::BinaryReader& f, Mdl& mdl, std::string_view path, Services* s
                                     end_offset);
             uint8_t has_world_binds = f.ReadUint8();
             if (has_world_binds) {
+                if (! RequireBytes(f,
+                                   uint64_t(bones_num) * 64,
+                                   end_offset,
+                                   path,
+                                   services,
+                                   "MDLS world binds"))
+                    return false;
                 // Per-bone world-bind mat4 inline (mdls v2 only).
                 for (unsigned i = 0; i < bones_num; ++i)
                     for (unsigned j = 0; j < 16; ++j) f.ReadFloat();
@@ -685,11 +740,15 @@ bool ParseMDLS(fs::BinaryReader& f, Mdl& mdl, std::string_view path, Services* s
 }
 
 bool ParseMDAT(fs::BinaryReader& f, Mdl& mdl, std::string_view path, Services* services) {
+    if (! RequirePuppet(mdl, "MDAT", f.Tell(), path, services)) return false;
     uint32_t end_offset = f.ReadUint32();
     if (! CheckBlockEnd(f, end_offset, path, services, "MDAT")) return false;
     uint32_t num_attachments = f.ReadUint16();
     auto&    attachments     = (*mdl.puppet)->attachments;
-    ResetDefault(attachments, usize(num_attachments));
+    // 每个挂点至少：骨骼序号 2 + 名字 1 + 矩阵 64。
+    if (! ResizeCounted(
+            f, attachments, num_attachments, 67, end_offset, path, services, "MDAT attachments"))
+        return false;
     for (auto& att : attachments) {
         att.bone_index = f.ReadUint16();
         if (! ReadOwnedString(f, att.name, path, services, "attachment name", end_offset))
@@ -709,11 +768,12 @@ bool ParseMDAT(fs::BinaryReader& f, Mdl& mdl, std::string_view path, Services* s
 
 // hexpat AnimBoneCurves: u8 has_curves; if(has_curves) BoneFrameCurve[bone_count].
 // Each BoneFrameCurve = u32 zero + u32 byte_size + float[byte_size/4].
-bool ParseAnimBoneCurves(fs::BinaryReader& f, Vec<Puppet::BoneFrameCurve>& out,
-                         uint32_t bone_count) {
+bool ParseAnimBoneCurves(fs::BinaryReader& f, Vec<Puppet::BoneFrameCurve>& out, uint32_t bone_count,
+                         uint32_t end_offset, std::string_view path, Services* services) {
     uint8_t has_curves = f.ReadUint8();
     if (! has_curves) return true;
-    ResetDefault(out, usize(bone_count));
+    if (! ResizeCounted(f, out, bone_count, 8, end_offset, path, services, "MDLA bone curves"))
+        return false;
     for (auto& curve : out) {
         uint32_t zero_a = f.ReadUint32();
         if (zero_a != 0) {
@@ -724,14 +784,22 @@ bool ParseAnimBoneCurves(fs::BinaryReader& f, Vec<Puppet::BoneFrameCurve>& out,
             rstd_error("BoneFrameCurve byte_size {} not %% 4", byte_size);
             return false;
         }
-        ResetDefault(curve.values, usize(byte_size / 4));
+        if (! ResizeCounted(f,
+                            curve.values,
+                            byte_size / 4,
+                            4,
+                            end_offset,
+                            path,
+                            services,
+                            "MDLA bone curve values"))
+            return false;
         for (auto& v : curve.values) v = f.ReadFloat();
     }
     return true;
 }
 
 bool ParseAnimTransMainTrack(fs::BinaryReader& f, Vec<float>& out, int32_t length,
-                             std::string_view path) {
+                             uint32_t end_offset, std::string_view path, Services* services) {
     uint32_t byte_size = f.ReadUint32();
     if (! is_anim_trans_main_size(byte_size, length)) {
         rstd_error("AnimTransMain byte_size {} does not match animation length {} in {}",
@@ -740,7 +808,9 @@ bool ParseAnimTransMainTrack(fs::BinaryReader& f, Vec<float>& out, int32_t lengt
                    std::string(path));
         return false;
     }
-    ResetDefault(out, usize(byte_size / 4));
+    if (! ResizeCounted(
+            f, out, byte_size / 4, 4, end_offset, path, services, "MDLA translation track"))
+        return false;
     for (auto& v : out) v = f.ReadFloat();
     return true;
 }
@@ -758,10 +828,16 @@ bool ParseControllerTrack(fs::BinaryReader& f, Puppet::BoneTrack& out, uint32_t 
                    std::string(path));
         return false;
     }
-    if (! RequireBytes(f, byte_size, end_offset, path, services, "MDLA IK controller track"))
-        return false;
     out.bone_index = index;
-    ResetDefault(out.frames, usize(byte_size / singile_bone_frame));
+    if (! ResizeCounted(f,
+                        out.frames,
+                        byte_size / singile_bone_frame,
+                        singile_bone_frame,
+                        end_offset,
+                        path,
+                        services,
+                        "MDLA IK controller track"))
+        return false;
     for (auto& frame : out.frames) {
         const auto frame_offset = f.Tell();
         for (auto& value : frame.position) value = f.ReadFloat();
@@ -816,7 +892,9 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
     }
 
     uint32_t b_num = f.ReadUint32();
-    ResetDefault(anim.bone_tracks, usize(b_num));
+    if (! ResizeCounted(
+            f, anim.bone_tracks, b_num, 8, mdla_end_offset, path, services, "MDLA bone tracks"))
+        return false;
     for (uint32_t ti = 0; ti < b_num; ++ti) {
         auto& track        = anim.bone_tracks[usize(ti)];
         track.bone_index   = ti; // dense: slot i animates bone i
@@ -827,7 +905,15 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
             return false;
         }
         uint32_t num = byte_size / singile_bone_frame;
-        ResetDefault(track.frames, usize(num));
+        if (! ResizeCounted(f,
+                            track.frames,
+                            num,
+                            singile_bone_frame,
+                            mdla_end_offset,
+                            path,
+                            services,
+                            "MDLA bone track frames"))
+            return false;
         for (auto& frame : track.frames) {
             for (auto& v : frame.position) v = f.ReadFloat();
             for (auto& v : frame.angle) v = f.ReadFloat();
@@ -851,7 +937,15 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
                     rstd_error("UnkAnimTrans extra_size {} not %% 4", extra_size);
                     return false;
                 }
-                ResetDefault(tr.extra_track, usize(extra_size / 4));
+                if (! ResizeCounted(f,
+                                    tr.extra_track,
+                                    extra_size / 4,
+                                    4,
+                                    mdla_end_offset,
+                                    path,
+                                    services,
+                                    "MDLA translation extra track"))
+                    return false;
                 for (auto& v : tr.extra_track) v = f.ReadFloat();
                 uint32_t extra_zero = f.ReadUint32();
                 if (extra_zero != 0) {
@@ -863,7 +957,15 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
                 rstd_error("UnkAnimTrans main_size {} not %% 4", main_size);
                 return false;
             }
-            ResetDefault(tr.main_track, usize(main_size / 4));
+            if (! ResizeCounted(f,
+                                tr.main_track,
+                                main_size / 4,
+                                4,
+                                mdla_end_offset,
+                                path,
+                                services,
+                                "MDLA translation track"))
+                return false;
             for (auto& v : tr.main_track) v = f.ReadFloat();
             if (extra_size > 0) {
                 uint32_t trail_zero = f.ReadUint32();
@@ -898,7 +1000,9 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
                         } else {
                             track = std::addressof((*anim.trans).tail_tracks.emplace_back());
                         }
-                        if (! ParseAnimTransMainTrack(f, *track, anim.length, path)) return false;
+                        if (! ParseAnimTransMainTrack(
+                                f, *track, anim.length, mdla_end_offset, path, services))
+                            return false;
                     }
                     first = false;
                 } while (next_after_zero_is_anim_trans_main(f, anim.length));
@@ -929,14 +1033,24 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
                                     trailer_offset,
                                     mdla_end_offset);
         }
-        if (! ParseAnimBoneCurves(f, anim.blend_curves, b_num)) return false;
+        if (! ParseAnimBoneCurves(f, anim.blend_curves, b_num, mdla_end_offset, path, services))
+            return false;
     }
 
     if (mdla_ver >= 4) {
         uint8_t has_v4_events = f.ReadUint8();
         if (has_v4_events == 1) {
             uint32_t v4_count = f.ReadUint32();
-            ResetDefault(anim.v4_events, usize(v4_count));
+            // 每个事件至少：时间 4 + 曲线数 2 + flags 2 + 首条曲线长度 4。
+            if (! ResizeCounted(f,
+                                anim.v4_events,
+                                v4_count,
+                                12,
+                                mdla_end_offset,
+                                path,
+                                services,
+                                "MDLA v4 events"))
+                return false;
             for (auto& ev : anim.v4_events) {
                 ev.time              = f.ReadFloat();
                 uint16_t curve_count = f.ReadUint16();
@@ -945,7 +1059,15 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
                     rstd_error("AnimV4Event curve_count is zero in {}", std::string(path));
                     return false;
                 }
-                ResetDefault(ev.curves, usize(curve_count));
+                if (! ResizeCounted(f,
+                                    ev.curves,
+                                    curve_count,
+                                    4,
+                                    mdla_end_offset,
+                                    path,
+                                    services,
+                                    "MDLA v4 event curves"))
+                    return false;
                 for (uint16_t curve_index = 0; curve_index < curve_count; ++curve_index) {
                     auto& curve = ev.curves[usize(curve_index)];
                     curve.id    = curve_index == 0 ? 0 : f.ReadUint16();
@@ -954,7 +1076,15 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
                         rstd_error("AnimV4Curve byte_size {} not %% 4", bs);
                         return false;
                     }
-                    ResetDefault(curve.values, usize(bs / 4));
+                    if (! ResizeCounted(f,
+                                        curve.values,
+                                        bs / 4,
+                                        4,
+                                        mdla_end_offset,
+                                        path,
+                                        services,
+                                        "MDLA v4 event curve values"))
+                        return false;
                     for (auto& v : curve.values) v = f.ReadFloat();
                 }
             }
@@ -971,7 +1101,9 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
 
     if (mdla_ver == 6) {
         if (next_is_anim_bone_curves(f)) {
-            if (! ParseAnimBoneCurves(f, anim.scalar_curves, b_num)) return false;
+            if (! ParseAnimBoneCurves(
+                    f, anim.scalar_curves, b_num, mdla_end_offset, path, services))
+                return false;
         }
     }
 
@@ -998,7 +1130,10 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
     // Trailing event list — present on every animation regardless of mdla
     // version. Pre-mdla>=3 anims start here directly.
     uint32_t event_count = f.ReadUint32();
-    ResetDefault(anim.events, usize(event_count));
+    // 每条事件至少：时间 4 + JSON 1。
+    if (! ResizeCounted(
+            f, anim.events, event_count, 5, mdla_end_offset, path, services, "animation events"))
+        return false;
     for (auto& ev : anim.events) {
         ev.time_value = f.ReadUint32();
         if (! ReadOwnedString(
@@ -1018,15 +1153,19 @@ bool ParseAnimation(fs::BinaryReader& f, Puppet::Animation& anim, int mdla_ver,
 
 bool ParseMDLA(fs::BinaryReader& f, Mdl& mdl, std::string_view tag, std::string_view path,
                Services* services) {
-    mdl.mdla = std::stoi(std::string(tag.substr(4, 4)));
+    if (! ParseTagVersion(tag, mdl.mdla, f.Tell() - 9, path, services)) return false;
     if (mdl.mdla == 0) return true;
+    if (! RequirePuppet(mdl, "MDLA", f.Tell(), path, services)) return false;
 
     uint32_t end_offset = f.ReadUint32();
     if (! CheckBlockEnd(f, end_offset, path, services, "MDLA")) return false;
 
     uint32_t anim_num = f.ReadUint32();
     auto&    anims    = (*mdl.puppet)->anims;
-    ResetDefault(anims, usize(anim_num));
+    // 每条动画至少：id 4 + 4 + 名字 1 + play_mode 1 + fps 4 + length 4 + flags 4 + 骨骼轨数 4 +
+    // 事件数 4。
+    if (! ResizeCounted(f, anims, anim_num, 30, end_offset, path, services, "MDLA animations"))
+        return false;
     for (auto& anim : anims) {
         if (! ParseAnimation(
                 f,
@@ -1059,7 +1198,9 @@ bool ParseMDLA(fs::BinaryReader& f, Mdl& mdl, std::string_view tag, std::string_
 
 bool ParseMasks(fs::BinaryReader& f, Mdl::Mesh& mesh, std::string_view path, Services* services) {
     uint32_t mask_count = f.ReadUint32();
-    ResetDefault(mesh.masks, usize(mask_count));
+    // 每个遮罩至少：4 + 4 + 材质名 1 + 4 + 两个表长 4 + 4。
+    if (! ResizeCounted(f, mesh.masks, mask_count, 21, 0, path, services, "mesh masks"))
+        return false;
     for (auto& m : mesh.masks) {
         m.leading_a     = f.ReadUint32();
         uint32_t zero_a = f.ReadUint32();
@@ -1068,10 +1209,12 @@ bool ParseMasks(fs::BinaryReader& f, Mdl::Mesh& mesh, std::string_view path, Ser
         uint32_t zero_pad = f.ReadUint32();
         if (zero_pad != 0) rstd_info("MaskBlock zero_pad expected 0, got {}", zero_pad);
         uint32_t a_count = f.ReadUint32();
-        ResetDefault(m.part_ids_a, usize(a_count));
+        if (! ResizeCounted(f, m.part_ids_a, a_count, 4, 0, path, services, "mesh mask part ids"))
+            return false;
         for (auto& v : m.part_ids_a) v = f.ReadUint32();
         uint32_t b_count = f.ReadUint32();
-        ResetDefault(m.part_ids_b, usize(b_count));
+        if (! ResizeCounted(f, m.part_ids_b, b_count, 4, 0, path, services, "mesh mask part ids"))
+            return false;
         for (auto& v : m.part_ids_b) v = f.ReadUint32();
     }
     return true;
@@ -1079,7 +1222,7 @@ bool ParseMasks(fs::BinaryReader& f, Mdl::Mesh& mesh, std::string_view path, Ser
 
 bool ParseMDMP(fs::BinaryReader& f, Mdl& mdl, std::string_view tag, std::string_view path,
                Services* services) {
-    mdl.mdmp            = std::stoi(std::string(tag.substr(4, 4)));
+    if (! ParseTagVersion(tag, mdl.mdmp, f.Tell() - 9, path, services)) return false;
     uint32_t end_offset = f.ReadUint32();
     if (! CheckBlockEnd(f, end_offset, path, services, "MDMP")) return false;
     while (f.Tell() < end_offset) {
@@ -1091,7 +1234,10 @@ bool ParseMDMP(fs::BinaryReader& f, Mdl& mdl, std::string_view tag, std::string_
         if (zero_a != 0) {
             rstd_info("MDMPSection zero_a expected 0, got {}", zero_a);
         }
-        ResetDefault(sec.sections, usize(count));
+        // 每段至少：shape_id 4 + 4 + 标签 1 + 长度 4 + hash 4。
+        if (! ResizeCounted(
+                f, sec.sections, count, 17, end_offset, path, services, "MDMP section data"))
+            return false;
         for (auto& sd : sec.sections) {
             sd.shape_id      = f.ReadUint32();
             uint32_t sd_zero = f.ReadUint32();
@@ -1107,15 +1253,27 @@ bool ParseMDMP(fs::BinaryReader& f, Mdl& mdl, std::string_view tag, std::string_
                 return false;
             }
             uint32_t vcount = length / 6;
-            ResetDefault(sd.vertices, usize(vcount));
+            if (! ResizeCounted(
+                    f, sd.vertices, vcount, 6, end_offset, path, services, "MDMP vertices"))
+                return false;
             for (auto& v : sd.vertices) {
                 for (auto& x : v) x = f.ReadUint16();
             }
             if (sd.shape_id == 0) {
-                ResetDefault(sd.trailer, usize(length));
+                if (! ResizeCounted(
+                        f, sd.trailer, length, 1, end_offset, path, services, "MDMP trailer"))
+                    return false;
                 for (auto& b : sd.trailer) b = f.ReadUint8();
             } else {
-                ResetDefault(sd.vertex_trailers, usize(vcount));
+                if (! ResizeCounted(f,
+                                    sd.vertex_trailers,
+                                    vcount,
+                                    2,
+                                    end_offset,
+                                    path,
+                                    services,
+                                    "MDMP vertex trailers"))
+                    return false;
                 for (auto& v : sd.vertex_trailers) v = f.ReadUint16();
             }
         }
@@ -1130,9 +1288,12 @@ bool ParseMDMP(fs::BinaryReader& f, Mdl& mdl, std::string_view tag, std::string_
     return true;
 }
 
-bool ParseMDLE(fs::BinaryReader& f, Mdl& mdl, std::string_view tag) {
-    mdl.mdle                   = std::stoi(std::string(tag.substr(4, 4)));
-    uint32_t     end_offset    = f.ReadUint32();
+bool ParseMDLE(fs::BinaryReader& f, Mdl& mdl, std::string_view tag, std::string_view path,
+               Services* services) {
+    if (! ParseTagVersion(tag, mdl.mdle, f.Tell() - 9, path, services)) return false;
+    if (! RequirePuppet(mdl, "MDLE", f.Tell(), path, services)) return false;
+    uint32_t end_offset = f.ReadUint32();
+    if (! CheckBlockEnd(f, end_offset, path, services, "MDLE")) return false;
     uint32_t     payload_bytes = f.ReadUint32();
     const size_t nbones        = (*mdl.puppet)->bones.len().to_primitive();
     const size_t expected      = nbones * 64;
@@ -1140,6 +1301,8 @@ bool ParseMDLE(fs::BinaryReader& f, Mdl& mdl, std::string_view tag) {
         rstd_error("MDLE payload_bytes {} != bones_num*64 {}", payload_bytes, expected);
         return false;
     }
+    if (! RequireBytes(f, payload_bytes, end_offset, path, services, "MDLE world binds"))
+        return false;
     for (auto& bone : (*mdl.puppet)->bones) {
         bone.file_world_bind = Eigen::Affine3f::Identity();
         for (auto col : bone.file_world_bind.matrix().colwise()) {
@@ -1282,7 +1445,9 @@ bool MdlParser::Parse(ref<str> path, fs::VFS& vfs, Mdl& mdl, Services* services,
 
     if (! ReadHeaderFromStream(f, mdl.header, str_path)) return false;
 
-    ResetDefault(mdl.meshes, usize(mdl.header.mesh_count));
+    // 每个网格至少：flag_a 4 + 顶点段长度 4 + 索引段长度 4。
+    if (! ResizeCounted(f, mdl.meshes, mdl.header.mesh_count, 12, 0, str_path, "meshes"))
+        return false;
     for (auto& m : mdl.meshes) {
         if (! ParseMesh(f, mdl.header, m, str_path, services)) return false;
     }
@@ -1312,7 +1477,7 @@ bool MdlParser::Parse(ref<str> path, fs::VFS& vfs, Mdl& mdl, Services* services,
     }
     if (peek_block_magic(f, "MDLE")) {
         std::string tag = consume_tag();
-        if (! ParseMDLE(f, mdl, tag)) return false;
+        if (! ParseMDLE(f, mdl, tag, str_path, services)) return false;
     }
 
     // hexpat Body: u8 trailing_nul (mdlv>=14). mdlv==13 file end is padded
