@@ -1434,6 +1434,153 @@
    ]
   },
   {
+   "name": "gate-parsed",
+   "from": "gate 口径统一：directive / absent_enabled_* 改为规则表指纹名，预处理行按归一化文本找，combo 缺省值按 [COMBO] 注释解析后的 JSON 比",
+   "shaders": {
+    "sine-annotated": {
+     "frag": [
+      "// [COMBO] { \"default\" : 0.0, \"type\" : \"options\", \"combo\" : \"NOISE\" }",
+      "uniform float g_Time;",
+      "#if NOISE",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-spaced-directive": {
+     "frag": [
+      "// [COMBO] {\"combo\":\"NOISE\",\"type\":\"options\",\"default\":0}",
+      "uniform float g_Time;",
+      "#if  \tNOISE",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-commented-directive": {
+     "frag": [
+      "// [COMBO] {\"combo\":\"NOISE\",\"type\":\"options\",\"default\":0}",
+      "uniform float g_Time;",
+      "// #if NOISE",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-lowercase-combo": {
+     "frag": [
+      "// [COMBO] {\"combo\":\"noise\",\"type\":\"options\",\"default\":0}",
+      "uniform float g_Time;",
+      "#if NOISE",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "crt-annotated": {
+     "frag": [
+      "// [COMBO] { \"material\": \"Frequency artifacts\", \"combo\": \"ARTIFACTS\", \"type\": \"options\", \"default\": 1.0 }",
+      "uniform float u_frequency; // {\"material\":\"Frequency\",\"default\":10,\"range\":[-30,30],\"group\":\"Screen\"}",
+      "uniform float g_Time;",
+      "void main() {",
+      "#if ARTIFACTS",
+      "        float speed = g_Time * u_frequency;",
+      "        albedo.rgb *= 1.0 - min(1.0, mod(1.0 - uv.y * u_amount1 + speed, 1.0) * u_size1) * u_strength1; //Scan line",
+      "        albedo.rgb *= 1.0 - abs(mod(1.0 - (uv.y + u_offset2) * u_amount2 + speed, 2.0) - 1.0) * u_strength2; //Flicker",
+      "#endif",
+      "}"
+     ],
+     "vert": [
+      "uniform mat4 g_ModelViewProjectionMatrix;"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "sine-annotated",
+     "constants": {
+      "speed": 2
+     }
+    },
+    {
+     "id": 2,
+     "shader": "sine-spaced-directive",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 3,
+     "shader": "sine-commented-directive",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 4,
+     "shader": "sine-lowercase-combo",
+     "constants": {
+      "speed": 2
+     }
+    },
+    {
+     "id": 5,
+     "shader": "crt-annotated",
+     "constants": {
+      "Frequency": -30.0
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "a NOISE [COMBO] default written with spaces, reordered keys and 0.0 still proves NOISE off when the pass omits it",
+     "layer": 1,
+     "components": 1,
+     "unresolved": 0,
+     "key": "speed",
+     "period": "2pi/2"
+    },
+    {
+     "message": "an #if NOISE line with extra spaces and a tab is still the NOISE branch, so NOISE=1 is refused",
+     "layer": 2,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "NOISE"
+     ]
+    },
+    {
+     "message": "an #if NOISE that sits only in a // comment is not a NOISE branch, so NOISE=1 does not gate the sine",
+     "layer": 3,
+     "components": 1,
+     "unresolved": 0,
+     "key": "speed",
+     "period": "2pi/2"
+    },
+    {
+     "message": "combo names are case-sensitive: a [COMBO] for noise does not declare the NOISE default, so an omitted NOISE stays unproven",
+     "layer": 4,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "NOISE"
+     ]
+    },
+    {
+     "message": "an ARTIFACTS [COMBO] default written as 1.0 with spaces enables the crt_screen clock like the int 1 default",
+     "layer": 5,
+     "components": 1,
+     "unresolved": 0,
+     "key": "Frequency",
+     "period": "2/30"
+    }
+   ]
+  },
+  {
    "name": "dual-wave",
    "from": "ShaderAdditionalPeriodChecks",
    "shaders": {

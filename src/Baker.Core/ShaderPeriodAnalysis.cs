@@ -232,6 +232,8 @@ public static class ShaderPeriodAnalysis
     /// <summary>
     /// 规则表里的门控，按顺序求值：combo_off = 分支启用或未证明关闭就拒；combo_on = 分支关闭即无运动、值读不出就拒；
     /// constant_zero = 常量必须写明且为零。都通过返回 null。
+    /// directive / absent_enabled_unless / absent_enabled_if 是规则表里的指纹名，与规则的 match 同一套求值：
+    /// 预处理行在归一化文本上找，combo 缺省值按 [COMBO] 注释解析后的 JSON 比（数字按数值，1 与 1.0 相同）。
     /// </summary>
     private static ShaderVerdict? Gates(PassContext c, ClockRule rule)
     {
@@ -243,8 +245,8 @@ public static class ShaderPeriodAnalysis
             {
                 case "combo_off":
                     bool absentEnabled = gate["absent_enabled_unless"] is JsonValue unless &&
-                        !c.Source.Raw.Contains(unless.GetValue<string>(), StringComparison.Ordinal);
-                    if ((gate["directive"] is not JsonValue directive || c.Source.Raw.Contains(directive.GetValue<string>(), StringComparison.Ordinal)) &&
+                        !Table.Matches(unless.GetValue<string>(), c.Source);
+                    if ((gate["directive"] is not JsonValue directive || Table.Matches(directive.GetValue<string>(), c.Source)) &&
                         ComboEnabledOrUnproven(c.Pass, Text("combo"), absentEnabled))
                         return c.Refuse(kind, Text("detail"));
                     break;
@@ -253,7 +255,7 @@ public static class ShaderPeriodAnalysis
                     // 读不出来时既不能当启用也不能当关闭，只能按未证明处理。
                     ComboRead read = ReadCombo(c.Pass, Text("combo"), out int value);
                     if (read == ComboRead.Unreadable) return c.Refuse(kind, Text("detail"));
-                    bool enabled = read == ComboRead.Value ? value != 0 : c.Source.Raw.Contains(Text("absent_enabled_if"), StringComparison.Ordinal);
+                    bool enabled = read == ComboRead.Value ? value != 0 : Table.Matches(Text("absent_enabled_if"), c.Source);
                     // 时钟全在这个分支里，分支关闭就没有时钟。
                     if (!enabled) return ShaderVerdict.NoMotion;
                     break;
