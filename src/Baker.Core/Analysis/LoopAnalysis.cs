@@ -129,6 +129,11 @@ internal static class LoopAnalysis
                     candidatePatches.Add(new LoopValuePatch(clip.LockedComponent.Id, "animation_rate", clip.OwnerLayerId, -1, -1,
                         "rate", 0, animationLayerId, oldRate, oldRate * cycle.SpeedMultiplier));
                 }
+                // 属性动画轨道改 options.fps：周期 = End/fps，fps 乘倍率与 rate 乘倍率等价。倍率为 1 不写，
+                // 锁定求解成功时 plan 与改前逐字节相同。
+                if (clip.AuthoredFps is { } fps && cycle.SpeedMultiplier != 1)
+                    candidatePatches.Add(new LoopValuePatch(clip.LockedComponent.Id, "animation_fps", clip.OwnerLayerId, -1, -1,
+                        "fps", 0, null, fps.Fps, fps.Fps * cycle.SpeedMultiplier) { AnimationPath = fps.AnimationPath });
             }
             candidates.Add(new LoopCandidate(candidate.Frames, candidate.Seconds, candidate.TotalRetimeCostPercent,
                 candidate.Components, candidatePatches) { SpriteSeam = spriteSeam });
