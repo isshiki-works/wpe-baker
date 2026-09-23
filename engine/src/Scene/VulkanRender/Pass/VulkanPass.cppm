@@ -130,6 +130,14 @@ private:
     rstd::ref<PassResourceUses>                         m_uses;
 };
 
+// X3 逐 pass 计时的标注信息：输出目标名、尺寸、绘制所用场景节点（用来反查图层与效果）。
+struct PassTimingTarget {
+    std::string      output;
+    std::uint32_t    width { 0 };
+    std::uint32_t    height { 0 };
+    const SceneNode* node { nullptr };
+};
+
 struct PassRecordContext {
     rstd::mut_ref<vvk::CommandBuffer>                              command;
     rstd::ref<PreparedPassResources>                               resources;
@@ -333,6 +341,8 @@ public:
     virtual void beginRenderScope(PassRecordContext&) {}
     virtual void recordRenderScopeDraw(PassRecordContext&) {}
     virtual void endRenderScope(PassRecordContext&) {}
+    // X3 逐 pass 计时（只在设了 WPE_PASS_TIMING 时调用）：报告本 pass 的输出目标与尺寸。
+    virtual PassTimingTarget timingTarget(PassRecordContext&) { return {}; }
 
     bool prepared() const { return m_prepared; }
     void resetPrepared() { setPrepared(false); }

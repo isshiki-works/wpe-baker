@@ -175,4 +175,14 @@ void CopyPass::record(PassRecordContext& context) {
         RecordGenerateMipmaps(cmd, dst);
     }
 };
+PassTimingTarget CopyPass::timingTarget(PassRecordContext& context) {
+    PassTimingTarget target { .output = m_desc.dst };
+    if (m_desc.src_use.is_none()) return target;
+    auto prepared_src = context.resources->Resolve(*m_desc.src_use);
+    if (prepared_src.is_none()) return target;
+    auto& src     = (**prepared_src).image.getActive();
+    target.width  = src.extent.width;
+    target.height = src.extent.height;
+    return target;
+}
 void CopyPass::destory(const Device&) {}

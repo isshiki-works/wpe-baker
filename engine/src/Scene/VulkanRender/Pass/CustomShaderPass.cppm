@@ -138,6 +138,7 @@ public:
     void beginRenderScope(PassRecordContext&) override;
     void recordRenderScopeDraw(PassRecordContext&) override;
     void endRenderScope(PassRecordContext&) override;
+    PassTimingTarget timingTarget(PassRecordContext&) override;
 
 private:
     Desc m_desc;

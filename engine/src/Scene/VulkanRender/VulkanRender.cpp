@@ -7,7 +7,10 @@ module;
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
+#include <fstream>
 #include <sstream>
+#include <unordered_map>
 #include <vulkan/vulkan.h>
 #include "GpuVideoEncoder.hpp"
 
@@ -115,12 +118,13 @@ public:
     TimestampQueryPool& operator=(const TimestampQueryPool&) = delete;
     ~TimestampQueryPool() { reset(); }
 
-    VkResult create(const vvk::Device& device) noexcept {
+    VkResult create(const vvk::Device& device,
+                    std::uint32_t count = timestamp_query_count) noexcept {
         reset();
         const VkQueryPoolCreateInfo info {
             .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
             .queryType = VK_QUERY_TYPE_TIMESTAMP,
-            .queryCount = timestamp_query_count,
+            .queryCount = count,
         };
         VkQueryPool pool = VK_NULL_HANDLE;
         const auto result = device.Dispatch().vkCreateQueryPool(*device, &info, nullptr, &pool);
@@ -318,6 +322,8 @@ struct VulkanRender::Impl {
     bool initCpuReadback(const RenderInitInfo&);
     bool initSamplePipeline();
     void initGpuTiming(const RenderInitInfo&);
+    void initPassTiming();
+    void writePassTiming(Scene&, const PassTimestampWriter&);
 
     bool CreateRenderingResource(RenderingResources&);
     void DestroyRenderingResource(RenderingResources&);
@@ -410,6 +416,15 @@ struct VulkanRender::Impl {
     std::optional<double> m_timestamp_period_ns;
     VkResult m_gpu_timing_error_code { VK_SUCCESS };
     std::string m_gpu_timing_message;
+
+    // X3 逐 pass GPU 计时（环境变量 WPE_PASS_TIMING=<输出 jsonl 路径>；不设时全部不启用）。
+    static constexpr std::uint32_t pass_timing_capacity = 1024;
+    TimestampQueryPool m_pass_queries;
+    std::ofstream m_pass_timing_out;
+    std::uint32_t m_pass_timing_valid_bits { 0 };
+    double m_pass_timing_period_ns { 0.0 };
+    std::uint64_t m_pass_timing_table { 0 };
+    std::vector<std::string> m_pass_timing_keys;
 
     // MSAA sample count for the screen RT only. 1bit = disabled.
     // Resolved against device's framebufferColorSampleCounts in init().
@@ -846,6 +861,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     // Allocate last: no later initialization failure can strand query objects.
     // Timestamp failure is diagnostic only; ordinary rendering remains usable.
     initGpuTiming(info);
+    initPassTiming();
     m_inited = true;
     return m_inited;
 }
@@ -1108,12 +1124,170 @@ void VulkanRender::Impl::initGpuTiming(const RenderInitInfo& info) {
     }
 }
 
+namespace {
+std::string PassTimingJsonQuote(std::string_view text) {
+    std::string out = "\"";
+    for (unsigned char c : text) {
+        if (c == '"' || c == '\\') {
+            out.push_back('\\');
+            out.push_back(static_cast<char>(c));
+        } else if (c < 0x20) {
+            char buffer[8];
+            std::snprintf(buffer, sizeof(buffer), "\\u%04x", c);
+            out += buffer;
+        } else {
+            out.push_back(static_cast<char>(c));
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
+// 场景节点 → 所属图层与效果（只给计时标注用）。
+struct PassTimingNodeInfo {
+    std::int32_t layer { -1 };
+    std::string  role;
+    std::string  effect;
+    std::int64_t effect_index { -1 };
+    std::int64_t effect_pass { -1 };
+};
+
+void CollectPassTimingNodes(owe::SceneNode* node, std::int32_t inherited,
+                            std::unordered_map<const owe::SceneNode*, PassTimingNodeInfo>& out) {
+    if (node == nullptr) return;
+    const std::int32_t id = node->ID().to_primitive();
+    const std::int32_t layer = id >= 0 ? id : inherited;
+    out[node] = PassTimingNodeInfo { .layer = layer, .role = "draw" };
+    if (node->HasLayer()) {
+        auto& effect_layer = node->Layer();
+        for (auto& prefill : effect_layer->PrefillNodes())
+            out[prefill.sceneNode.as_ptr()] = PassTimingNodeInfo { .layer = layer, .role = "prefill" };
+        auto collect = [&](const std::shared_ptr<owe::SceneImageEffect>& effect, const char* role,
+                           std::int64_t effect_index) {
+            if (! effect) return;
+            std::int64_t j = 0;
+            for (auto& effect_node : effect->nodes) {
+                out[effect_node.sceneNode.as_ptr()] = PassTimingNodeInfo {
+                    .layer = layer, .role = role, .effect = effect->name,
+                    .effect_index = effect_index, .effect_pass = j++ };
+            }
+        };
+        for (usize i {}; i < effect_layer->EffectCount(); ++i)
+            collect(effect_layer->GetEffect(i), "effect", static_cast<std::int64_t>(i.to_primitive()));
+        collect(effect_layer->FinalResolveEffect(), "final-resolve", -1);
+        collect(effect_layer->PublishedEffect(), "published", -1);
+        collect(effect_layer->VisibleResolveEffect(), "visible-resolve", -1);
+    }
+    for (auto& child : node->GetChildren()) CollectPassTimingNodes(child.as_ptr(), layer, out);
+}
+} // namespace
+
+void VulkanRender::Impl::initPassTiming() {
+    const char* path = std::getenv("WPE_PASS_TIMING");
+    if (path == nullptr || *path == '\0') return;
+    auto disabled = [&](const char* why) {
+        rstd_error("WPE_PASS_TIMING disabled: {}", why);
+    };
+    if (! m_cpu_readback) return disabled("requires CpuReadback mode");
+    const auto family = m_device->graphics_queue().family_index;
+    const auto properties = m_device->gpu().GetQueueFamilyProperties();
+    if (usize(family) >= properties.len()) return disabled("no queue family properties");
+    const auto bits = properties[usize(family)].timestampValidBits;
+    const double period = m_device->limits().timestampPeriod;
+    if (bits == 0 || bits > 64) return disabled("graphics queue has no usable timestamps");
+    if (!(period > 0.0) || !std::isfinite(period)) return disabled("timestampPeriod is not finite and positive");
+    if (m_pass_queries.create(m_device->handle(), pass_timing_capacity) != VK_SUCCESS)
+        return disabled("create query pool failed");
+    m_pass_timing_out.open(path, std::ios::binary | std::ios::trunc);
+    if (! m_pass_timing_out) {
+        m_pass_queries.reset();
+        return disabled("cannot open output file");
+    }
+    m_pass_timing_valid_bits = bits;
+    m_pass_timing_period_ns = period;
+    const auto extent = m_device->out_extent();
+    m_pass_timing_out << "{\"type\":\"meta\",\"schema\":\"x3-pass-timing-v1\",\"timestamp_valid_bits\":" << bits
+                      << ",\"timestamp_period_ns\":" << period << ",\"capacity\":" << pass_timing_capacity
+                      << ",\"stage\":\"BOTTOM_OF_PIPE\",\"out_width\":" << extent.width
+                      << ",\"out_height\":" << extent.height << "}\n";
+    m_pass_timing_out.flush();
+}
+
+void VulkanRender::Impl::writePassTiming(Scene& scene, const PassTimestampWriter& writer) {
+    const auto count = static_cast<std::uint32_t>(writer.labels.size());
+    if (count < 2) return;
+    // 标注表：pass 列表变了才重写一次。
+    auto infos = m_program.timingInfo(m_rendering_resources);
+    std::vector<std::string> keys;
+    keys.reserve(infos.size());
+    for (const auto& info : infos) {
+        keys.push_back(info.name + "|" + info.target.output + "|" + std::to_string(info.target.width) + "x" +
+                       std::to_string(info.target.height) + "|" +
+                       std::to_string(reinterpret_cast<std::uintptr_t>(info.target.node)));
+    }
+    if (keys != m_pass_timing_keys || m_pass_timing_table == 0) {
+        std::unordered_map<const owe::SceneNode*, PassTimingNodeInfo> nodes;
+        CollectPassTimingNodes(scene.RootMut().as_raw_ptr(), -1, nodes);
+        ++m_pass_timing_table;
+        m_pass_timing_keys = std::move(keys);
+        std::ostringstream table;
+        table << "{\"type\":\"table\",\"table\":" << m_pass_timing_table << ",\"frame\":" << m_cpu_frame_index
+              << ",\"passes\":[";
+        for (std::size_t i = 0; i < infos.size(); ++i) {
+            const auto& info = infos[i];
+            PassTimingNodeInfo node;
+            if (auto it = nodes.find(info.target.node); it != nodes.end()) node = it->second;
+            table << (i ? "," : "") << "{\"i\":" << i << ",\"name\":" << PassTimingJsonQuote(info.name)
+                  << ",\"frame_pass\":" << (info.frame_pass ? "true" : "false")
+                  << ",\"pass_type\":" << info.pass_type << ",\"output\":" << PassTimingJsonQuote(info.target.output)
+                  << ",\"w\":" << info.target.width << ",\"h\":" << info.target.height
+                  << ",\"has_node\":" << (info.target.node ? "true" : "false") << ",\"layer\":" << node.layer
+                  << ",\"role\":" << PassTimingJsonQuote(node.role) << ",\"effect\":" << PassTimingJsonQuote(node.effect)
+                  << ",\"effect_index\":" << node.effect_index << ",\"effect_pass\":" << node.effect_pass << "}";
+        }
+        table << "]}\n";
+        m_pass_timing_out << table.str();
+    }
+
+    struct QueryValue { std::uint64_t ticks; std::uint64_t available; };
+    std::vector<QueryValue> queries(count);
+    const auto result = m_device->handle().Dispatch().vkGetQueryPoolResults(
+        *m_device->handle(), m_pass_queries.get(), 0, count, sizeof(QueryValue) * count, queries.data(),
+        sizeof(QueryValue), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    std::ostringstream line;
+    line.precision(9);
+    line << "{\"type\":\"frame\",\"frame\":" << m_cpu_frame_index << ",\"table\":" << m_pass_timing_table
+         << ",\"result\":" << static_cast<std::int32_t>(result) << ",\"overflow\":" << (writer.overflow ? "true" : "false");
+    bool available = result == VK_SUCCESS;
+    for (const auto& query : queries) available = available && query.available != 0;
+    if (available) {
+        const double ms_per_tick = m_pass_timing_period_ns / 1'000'000.0;
+        line << ",\"total_ms\":"
+             << TimestampDelta(queries.front().ticks, queries.back().ticks, m_pass_timing_valid_bits) * ms_per_tick
+             << ",\"labels\":[";
+        for (std::uint32_t q = 1; q < count; ++q) line << (q > 1 ? "," : "") << writer.labels[q];
+        line << "],\"ms\":[";
+        for (std::uint32_t q = 1; q < count; ++q) {
+            line << (q > 1 ? "," : "")
+                 << TimestampDelta(queries[q - 1].ticks, queries[q].ticks, m_pass_timing_valid_bits) * ms_per_tick;
+        }
+        line << "],\"raw_first\":" << queries.front().ticks << ",\"raw_last\":" << queries.back().ticks;
+    } else {
+        line << ",\"available\":false";
+    }
+    line << "}\n";
+    m_pass_timing_out << line.str();
+    m_pass_timing_out.flush();
+}
+
 void VulkanRender::Impl::destroy() {
     if (! m_inited) return;
     if (m_device->handle()) {
         VVK_CHECK(m_device->handle().WaitIdle());
         m_timestamp_queries.completed();
         m_timestamp_queries.reset();
+        m_pass_queries.completed();
+        m_pass_queries.reset();
 
         // res
         m_program.destroyPasses(*m_device);
@@ -1426,8 +1600,15 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         rr.command.ResetQueryPool(m_timestamp_queries.get(), 0, timestamp_query_count);
         rr.command.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestamp_queries.get(), 0);
     }
+    PassTimestampWriter pass_timing;
+    if (m_pass_queries) {
+        pass_timing.pool = m_pass_queries.get();
+        pass_timing.capacity = pass_timing_capacity;
+        rr.command.ResetQueryPool(pass_timing.pool, 0, pass_timing_capacity);
+        pass_timing.mark(rr.command, PassTimestampWriter::start_label);
+    }
     RecordedBufferUploads recorded_uploads;
-    if (! m_program.record(rr, recorded_uploads)) {
+    if (! m_program.record(rr, recorded_uploads, m_pass_queries ? &pass_timing : nullptr)) {
         (void)rr.command.End();
         return fail(VK_ERROR_INITIALIZATION_FAILED, "record render program");
     }
@@ -1549,6 +1730,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         .pCommandBuffers = rr.command.address(),
     };
     m_timestamp_queries.submitted();
+    m_pass_queries.submitted();
     result = m_device->graphics_queue().handle.Submit(submit, *rr.fence_frame);
     if (result != VK_SUCCESS) return fail(result, "submit CPU frame");
     auto completion = rr.resources.BeginSubmission(rstd::move(recorded_uploads));
@@ -1568,6 +1750,10 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     // in flight. The failed renderer retains its resources until destruction.
     if (result != VK_SUCCESS) return fail(result, "wait for CPU frame fence");
     if (!defer_completion) m_timestamp_queries.completed();
+    if (!defer_completion && m_pass_queries) {
+        m_pass_queries.completed();
+        writePassTiming(scene, pass_timing);
+    }
     if (m_timestamp_queries) {
         struct QueryValue { std::uint64_t ticks; std::uint64_t available; };
         std::array<QueryValue, timestamp_query_count> queries {};
