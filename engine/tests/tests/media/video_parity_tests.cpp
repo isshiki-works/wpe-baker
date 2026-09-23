@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -136,10 +137,14 @@ struct Pair {
         return p;
     }
 
+    int frames {}, loops {}, errors {};
+
     // 两边各拉一帧并比较；返回状态（-1/0/1）。
     auto step(const std::string& where, bool reuse) -> int {
         auto a = pull_old(reuse);
         auto b = pull_new(reuse);
+        ++(a.status < 0 ? errors : frames);
+        if (a.status == 1) ++loops;
         EXPECT_EQ(a.status, b.status) << where;
         EXPECT_EQ(a.error, b.error) << where;
         EXPECT_EQ(a.width, b.width) << where;
@@ -196,6 +201,8 @@ TEST(VideoParity, DecodeSeekLoopMetadata) {
         ASSERT_EQ(old_open.is_ok(), new_ok);
         if (! new_ok) {
             EXPECT_EQ(rstd::cppstd::to_string(old_open.unwrap_err().message.as_str()), new_decoder.last_error());
+            std::printf("parity %s %ux%u: open failed: %s\n", fx.file.c_str(), fx.width, fx.height,
+                        std::string(new_decoder.last_error()).c_str());
             continue;
         }
         Pair pair { std::move(old_open).unwrap(), std::move(new_decoder), {}, {} };
@@ -241,5 +248,8 @@ TEST(VideoParity, DecodeSeekLoopMetadata) {
         pair.seek("seek-negative", -1.0);
         pair.seek("seek-nan", std::nan(""));
         for (int i = 0; i < 3; ++i) pair.step("after-bad-seek#" + std::to_string(i), false);
+        std::printf("parity %s %ux%u: %s %s duration=%.6f frames=%d loops=%d errors=%d\n", fx.file.c_str(),
+                    fx.width, fx.height, nm.codec.c_str(), nm.pixel_format.c_str(), duration, pair.frames, pair.loops,
+                    pair.errors);
     }
 }
