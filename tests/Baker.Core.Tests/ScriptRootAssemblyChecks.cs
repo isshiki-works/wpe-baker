@@ -12,7 +12,7 @@ internal static class ScriptRootAssemblyChecks
 
     internal static void Run(Action<bool, string> check)
     {
-        var assemble = typeof(HybridBakeService).GetMethod("AssembleObjects", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var assemble = typeof(SceneAssembler).GetMethod("AssembleObjects", BindingFlags.Static | BindingFlags.NonPublic)!;
         JsonArray Assemble(JsonArray objects, JsonObject plan, Dictionary<string, JsonObject> replacements) =>
             (JsonArray)assemble.Invoke(null, [objects.OfType<JsonObject>().ToDictionary(obj => obj["id"]!.GetValue<int>()),
                 plan, replacements, new JsonArray()])!;
@@ -91,40 +91,16 @@ internal static class ScriptRootAssemblyChecks
             ["binding_id"] = 0, ["owner_layer_id"] = owner, ["owner_name"] = name, ["property"] = "visible",
             ["phase"] = "init", ["script_sha"] = "0", ["message"] = message, ["stack"] = "    at init (scripts/0-0.js:1:1)\n"
         };
-        JsonObject Comparison(JsonArray? sourceErrors, JsonArray? candidateErrors)
+        PairedComparison Comparison(JsonArray? sourceErrors, JsonArray? candidateErrors)
         {
-            const uint width = 128, height = 65;
-            const ulong frames = HybridCompositionValidator.RequiredFrames;
-            var tiles = new JsonArray();
-            for (uint y = 0; y < height; y += HybridCompositionValidator.RequiredTileSize)
-            for (uint x = 0; x < width; x += HybridCompositionValidator.RequiredTileSize)
-            {
-                uint tileWidth = Math.Min(HybridCompositionValidator.RequiredTileSize, width - x);
-                uint tileHeight = Math.Min(HybridCompositionValidator.RequiredTileSize, height - y);
-                tiles.Add(new JsonObject
-                {
-                    ["x"] = x, ["y"] = y, ["width"] = tileWidth, ["height"] = tileHeight,
-                    ["metrics"] = new JsonObject { ["pixels"] = (ulong)tileWidth * tileHeight * frames, ["rgb_mae_255"] = 1.0, ["alpha_mae_255"] = 0.0 }
-                });
-            }
             JsonObject Native(JsonArray? errors) => errors is null ? new JsonObject { ["status"] = "rendered" }
                 : new JsonObject { ["status"] = "rendered", ["source_script_error_count"] = errors.Count, ["source_script_errors"] = errors };
-            return new JsonObject
-            {
-                ["schema_version"] = 1, ["status"] = "compared", ["report_path"] = "comparison.json",
-                ["request"] = new JsonObject
-                {
-                    ["width"] = width, ["height"] = height, ["fps_numerator"] = 60U, ["fps_denominator"] = 1U,
-                    ["frames"] = frames, ["warmup_frames"] = 0UL, ["seed"] = 17UL, ["tile_size"] = HybridCompositionValidator.RequiredTileSize
-                },
-                ["source_native_result"] = Native(sourceErrors),
-                ["candidate_native_result"] = Native(candidateErrors),
-                ["frames_compared"] = frames,
-                ["metrics"] = new JsonObject { ["pixels"] = (ulong)width * height * frames, ["rgb_mae_255"] = 1.0, ["alpha_mae_255"] = 0.0 },
-                ["tiles"] = tiles
-            };
+            // 像素指标都在限值内（RGB 平均误差 1），只看脚本报错门。
+            var errors = new PixelErrors { Pixels = 1, RgbSum = 3 };
+            return PairedComparisonTests.Comparison(errors, [errors],
+                new JsonObject { ["source_native_result"] = Native(sourceErrors), ["candidate_native_result"] = Native(candidateErrors) });
         }
-        JsonObject rejected = HybridCompositionValidator.Evaluate(Comparison(new JsonArray(),
+        JsonObject rejected = CompositionGate.Evaluate(Comparison(new JsonArray(),
             new JsonArray(Error(2242, "N", "TypeError: not a function"), Error(2242, "N", "TypeError: not a function"), Error(224, "十字架", "TypeError: not a function"))));
         check(rejected["status"]!.GetValue<string>() == CandidateScriptErrorGate.RejectedCompositionStatus &&
             rejected["script_error_validation"]!["status"]!.GetValue<string>() == CandidateScriptErrorGate.RejectedValidationStatus &&
@@ -137,16 +113,16 @@ internal static class ScriptRootAssemblyChecks
             reasonEn.Contains("layer 2242 (\"N\") visible/init: TypeError: not a function (2 times)", StringComparison.Ordinal),
             "script error rejection lists the raw errors and owning objects in chinese and english, collapsing repeats per object");
         var shared = Error(99, "nv", "ReferenceError: x is not defined");
-        JsonObject equal = HybridCompositionValidator.Evaluate(Comparison(new JsonArray(shared.DeepClone()), new JsonArray(shared.DeepClone())));
+        JsonObject equal = CompositionGate.Evaluate(Comparison(new JsonArray(shared.DeepClone()), new JsonArray(shared.DeepClone())));
         check(equal["status"]!.GetValue<string>() == "composition_pass" &&
             equal["script_error_validation"]!["status"]!.GetValue<string>() == "script_errors_not_increased",
             "equal script error counts pass the script error gate");
         JsonObject listedOnlyAdded = CandidateScriptErrorGate.Evaluate(Comparison(new JsonArray(shared.DeepClone()),
-            new JsonArray(shared.DeepClone(), Error(2242, "N", "TypeError: not a function"))));
+            new JsonArray(shared.DeepClone(), Error(2242, "N", "TypeError: not a function"))).Report);
         check(listedOnlyAdded["added_script_error_count"]!.GetValue<int>() == 1 &&
             listedOnlyAdded["listed_script_errors"]!.AsArray().Single()!["owner_layer_id"]!.GetValue<int>() == 2242,
             "the script error reason lists the errors the candidate added, not ones the original already had");
-        JsonObject unavailable = HybridCompositionValidator.Evaluate(Comparison(null, new JsonArray(shared.DeepClone())));
+        JsonObject unavailable = CompositionGate.Evaluate(Comparison(null, new JsonArray(shared.DeepClone())));
         check(unavailable["status"]!.GetValue<string>() == "composition_pass" &&
             unavailable["script_error_validation"]!["status"]!.GetValue<string>() == "not_available",
             "a missing script error count is recorded as unavailable and left to the remaining composition checks");

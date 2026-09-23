@@ -105,7 +105,7 @@ internal static class HybridHierarchyGeneralizationChecks
             noLoop["source_script_errors"]![0]!["stack"]!.GetValue<string>() == "update@test:1",
             "a malicious saved observed loop is re-parsed and rejected while source script faults remain without GPU work");
 
-        var classifyLateFaults = typeof(HybridBakeService).GetMethod("ClassifyLateSourceScriptErrors",
+        var classifyLateFaults = typeof(HybridExportSafety).GetMethod("ClassifyLateSourceScriptErrors",
             BindingFlags.Static | BindingFlags.NonPublic)!;
         JsonObject Fault(int owner, int binding) => new() {
             ["binding_id"] = binding, ["owner_layer_id"] = owner, ["owner_name"] = "late", ["property"] = "text",

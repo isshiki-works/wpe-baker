@@ -37,6 +37,7 @@ add_executable(render-resource-tests EXCLUDE_FROM_ALL)
 target_sources(render-resource-tests PRIVATE
   tests/render-resource/buffer_resolver_tests.cpp
   tests/render-resource/effect_command_tests.cpp
+  tests/render-resource/pass_timing_tests.cpp
   tests/render-resource/render_graph_debug_tests.cpp
   tests/render-resource/render_resource_request_tests.cpp
   tests/render-resource/resource_model_tests.cpp

@@ -104,152 +104,6 @@ public sealed class HybridBakeService(NativeTools tools)
         if (plan["analysis_device"] is JsonNode device) report["analysis_device"] = device.DeepClone();
     }
 
-    internal static JsonObject ClassifyLateSourceScriptErrors(JsonArray errors, IReadOnlySet<int> groupLayers,
-        IReadOnlySet<int> liveLayerIds, IReadOnlyDictionary<int, JsonObject> sourceObjects)
-        => HybridExportSafety.ClassifyLateSourceScriptErrors(errors, groupLayers, liveLayerIds, sourceObjects);
-
-    // 非实时对象保留下来时要去掉的绘制相关键。
-    private static readonly string[] NonLiveDrawKeys = ["image", "model", "text", "particle", "sound", "effects", "puppet"];
-
-    private static bool HasScriptCode(JsonNode? node) =>
-        node is JsonValue value && value.TryGetValue<string>(out string? code) && !string.IsNullOrWhiteSpace(code);
-
-    /// <summary>
-    /// 去掉绘制键之后，对象自身或它的某个属性绑定上还带 script 字段。
-    /// 只看对象这一层和它的直接属性，不按壁纸或脚本内容做特判。
-    /// </summary>
-    internal static bool CarriesRetainableScript(JsonObject obj) =>
-        HasScriptCode(obj["script"]) ||
-        obj.Where(property => !NonLiveDrawKeys.Contains(property.Key))
-            .Any(property => property.Value is JsonObject binding && HasScriptCode(binding["script"]));
-
-    /// <summary>
-    /// 原作里"不绘制但带脚本"的根对象：计划里不是实时、不在视频组、没被省略或排除，也不绘制，
-    /// 整棵子树里没有实时层、视频层或视频组的挂载父级（那些情况已经由父级保留路径按原位置输出）。
-    /// 它们的脚本可能经 shared 之类的全局对象给保留的实时脚本提供函数，查找记录抓不到这种依赖，
-    /// 所以按源顺序原样保留（去掉绘制键）。
-    /// </summary>
-    internal static int[] ScriptRootIds(IReadOnlyDictionary<int, JsonObject> originalObjects, JsonObject plan)
-    {
-        var layerInfo = plan["layers"]!.AsArray().OfType<JsonObject>().ToDictionary(HybridScenePlanner.Id);
-        var liveIds = plan["live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).ToHashSet();
-        var omitted = (plan["omitted_snapshot_layer_ids"] as JsonArray ?? []).Select(n => n!.GetValue<int>()).ToHashSet();
-        var excluded = (plan["excluded_layer_ids"] as JsonArray ?? []).Select(n => HybridScenePlanner.Int(n)).OfType<int>().ToHashSet();
-        var groups = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
-        var videoIds = groups.SelectMany(group => (group["layer_ids"] as JsonArray ?? []).Select(n => HybridScenePlanner.Int(n)).OfType<int>()).ToHashSet();
-        var groupParents = groups.Select(group => HybridScenePlanner.Int(group["parent_id"])).OfType<int>().ToHashSet();
-        bool IsRoot(JsonObject obj) => HybridScenePlanner.Int(obj["parent"]) is not int parent || !originalObjects.ContainsKey(parent);
-        bool SubtreeRetainedElsewhere(int id) =>
-            liveIds.Contains(id) || videoIds.Contains(id) || groupParents.Contains(id) ||
-            originalObjects.Where(pair => HybridScenePlanner.Int(pair.Value["parent"]) == id).Any(pair => SubtreeRetainedElsewhere(pair.Key));
-        var roots = new List<int>();
-        foreach (var (id, obj) in originalObjects)
-        {
-            if (!IsRoot(obj) || !layerInfo.TryGetValue(id, out var layer)) continue;
-            if (omitted.Contains(id) || excluded.Contains(id)) continue;
-            if (layer["allocation"] is JsonValue allocation && allocation.GetValue<string>() != "inactive") continue;
-            if (layer["drawable"] is not JsonValue drawable || !drawable.TryGetValue(out bool draws) || draws) continue;
-            if (CarriesRetainableScript(obj) && !SubtreeRetainedElsewhere(id)) roots.Add(id);
-        }
-        return roots.ToArray();
-    }
-
-    internal static JsonArray AssembleObjects(IReadOnlyDictionary<int, JsonObject> originalObjects, JsonObject plan,
-        IReadOnlyDictionary<string, JsonObject> replacements, JsonArray dependencies)
-    {
-        if (DaytimeSplit.PrepareDynamicExport(originalObjects, plan, dependencies) is { } daytime)
-        {
-            JsonArray dynamicObjects = DaytimeSplit.AssembleDynamic(originalObjects, daytime, replacements);
-            GuardPublicLayerQueries(originalObjects.Values, dynamicObjects.OfType<JsonObject>(), dependencies);
-            return dynamicObjects;
-        }
-        return AssembleAllocationObjects(originalObjects, plan, replacements, dependencies);
-    }
-
-    // 纯分配/层级装配也供只有 id/parent 的几何骨架检查使用；真实成品仍从 AssembleObjects 做完整昼夜重验。
-    internal static JsonArray AssembleAllocationObjects(IReadOnlyDictionary<int, JsonObject> originalObjects, JsonObject plan,
-        IReadOnlyDictionary<string, JsonObject> replacements, JsonArray dependencies)
-    {
-        var layerInfo = plan["layers"]!.AsArray().OfType<JsonObject>().ToDictionary(HybridScenePlanner.Id);
-        var liveIds = plan["live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).ToHashSet();
-        var omitted = (plan["omitted_snapshot_layer_ids"] as JsonArray ?? []).Select(n => n!.GetValue<int>()).ToHashSet();
-        var finalObjects = new JsonArray();
-        var emitted = new HashSet<int>();
-        var expected = new List<int>();
-        var sourceDrawOrder = new List<int>();
-        void SourceOrder(int id)
-        {
-            sourceDrawOrder.Add(id);
-            foreach (var (child, obj) in originalObjects.Where(pair => HybridScenePlanner.Int(pair.Value["parent"]) == id)) SourceOrder(child);
-        }
-        foreach (var (id, obj) in originalObjects.Where(pair => HybridScenePlanner.Int(pair.Value["parent"]) is not int parent || !originalObjects.ContainsKey(parent))) SourceOrder(id);
-        void Emit(int id)
-        {
-            if (!originalObjects.TryGetValue(id, out var original) || !emitted.Add(id)) return;
-            if (omitted.Contains(id)) throw new Blocker(BlockerCode.OmittedSnapshotDependency).ToException();
-            if (HybridScenePlanner.Int(original["parent"]) is int parent && originalObjects.ContainsKey(parent)) Emit(parent);
-            var obj = original.DeepClone().AsObject();
-            if (!liveIds.Contains(id))
-                foreach (string key in NonLiveDrawKeys) obj.Remove(key);
-            finalObjects.Add(obj);
-        }
-        // 不绘制但带脚本的根对象按源顺序放在最前：保证它们的 init 先于保留的实时脚本执行。
-        // 它们不绘制，不进 expected，不影响下面的视频/实时绘制顺序校验。
-        foreach (int id in ScriptRootIds(originalObjects, plan)) Emit(id);
-        foreach (var entry in plan["composition"]!.AsArray().OfType<JsonObject>())
-        {
-            if (entry["video_group"] is JsonValue groupName && replacements.TryGetValue(groupName.GetValue<string>(), out var replacement))
-            {
-                var group = plan["video_groups"]!.AsArray().OfType<JsonObject>().Single(g => g["id"]!.GetValue<string>() == groupName.GetValue<string>());
-                if (HybridScenePlanner.Int(replacement["parent"]) != HybridScenePlanner.Int(group["parent_id"]))
-                    throw new Blocker(BlockerCode.ReplacementParentMismatch).ToException();
-                if (HybridScenePlanner.Int(replacement["parent"]) is int parent) Emit(parent);
-                finalObjects.Add(replacement.DeepClone());
-                expected.Add(HybridScenePlanner.Id(replacement));
-            }
-            else if (HybridScenePlanner.Int(entry["live_root"]) is int unit)
-                foreach (int id in sourceDrawOrder)
-                    if (liveIds.Contains(id) && HybridScenePlanner.Int(layerInfo[id]["allocation_root"] ?? layerInfo[id]["root"]) == unit)
-                    {
-                        Emit(id);
-                        if (layerInfo[id]["drawable"]?.GetValue<bool>() == true) expected.Add(id);
-                    }
-        }
-        foreach (var dependency in dependencies.OfType<JsonObject>())
-            if (HybridScenePlanner.Int(dependency["owner"]) is int owner && liveIds.Contains(owner) &&
-                HybridScenePlanner.Int(dependency["target"]) is int target && originalObjects.ContainsKey(target)) Emit(target);
-
-        // Native FinalizeScene appends siblings in declaration order; EmitSceneNode traverses them
-        // depth first. Verify parented videos occupy the planned sibling positions.
-        var all = finalObjects.OfType<JsonObject>().ToArray();
-        var ids = all.Select(HybridScenePlanner.Id).ToHashSet();
-        var expectedIds = expected.ToHashSet();
-        var actual = new List<int>();
-        void Visit(int id)
-        {
-            if (expectedIds.Contains(id)) actual.Add(id);
-            foreach (var child in all.Where(obj => HybridScenePlanner.Int(obj["parent"]) == id)) Visit(HybridScenePlanner.Id(child));
-        }
-        foreach (var obj in all.Where(obj => HybridScenePlanner.Int(obj["parent"]) is not int parent || !ids.Contains(parent)))
-            Visit(HybridScenePlanner.Id(obj));
-        if (!actual.SequenceEqual(expected))
-            throw new Blocker(BlockerCode.HierarchyChangesDrawOrder).ToException();
-        GuardPublicLayerQueries(originalObjects.Values, all, dependencies);
-        return finalObjects;
-    }
-
-    internal static void GuardPublicLayerQueries(IEnumerable<JsonObject> originalObjects,
-        IEnumerable<JsonObject> finalObjects, JsonArray dependencies)
-        => HybridExportSafety.GuardPublicLayerQueries(originalObjects, finalObjects, dependencies);
-
-    internal static JsonArray MergeRuntimeDependencies(JsonArray first, JsonArray second)
-        => HybridExportSafety.MergeRuntimeDependencies(first, second);
-
-    // Kept for the existing reflection-based Core test; production calls the shared helper directly.
-    private static JsonArray LateExternalDependencies(JsonObject master, IReadOnlySet<int> groupLayers,
-        IReadOnlyDictionary<int, JsonObject> sourceObjects) =>
-        HybridExportSafety.LateExternalDependencies(master, groupLayers, sourceObjects);
-
     /// <summary>
     /// 一次烘焙的外层入口。中间产物（捕获副本、各组无损 master、合成探针与参照、分析刷新目录等，登记表见 WorkLayout）在这里统一清理：
     /// 成功、拒绝、失败、取消都清，只留成品工程、bake.json、接缝预览与日志。
@@ -370,8 +224,8 @@ public sealed class HybridBakeService(NativeTools tools)
         var preflight = new BakeGateContext(request, source, sourceHash, layout, progress, timing)
             { Plan = plan, Settings = PlanSettings.Of(plan) };
         if (request.ProbeFrames == 0 && await BakeGates.FirstRejectionAsync(BakeGates.Preflight(tools,
-                (context, token) => ValidateCompositionAsync(context.Request, context.Plan, context.Settings, context.Source,
-                    context.Layout.Output, context.Progress, token),
+                (context, token) => new ProbeBake(tools).ValidateAsync(this, context.Request, context.Plan, context.Settings,
+                    context.Source, context.Layout.Output, context.Progress, token),
                 EstimateEmbeddedVideoAsync), preflight, cancellationToken) is BakeRejection rejection)
         {
             JsonObject rejected = rejection.ToJson();
@@ -435,7 +289,7 @@ public sealed class HybridBakeService(NativeTools tools)
             var runtimeDependencies = initialRuntime["runtime_dependencies"]?.AsArray()
                 ?? throw new InvalidDataException("Runtime dependencies are missing.");
             DaytimeSplit.DynamicExport? daytimeExport = DaytimeSplit.PrepareDynamicExport(originalObjects, plan, runtimeDependencies);
-            var finalDependencies = MergeRuntimeDependencies(runtimeDependencies, new JsonArray());
+            var finalDependencies = SceneAssembler.MergeRuntimeDependencies(runtimeDependencies, new JsonArray());
             string captureProject = layout.CaptureSource;
             using (timing.Measure(StageTiming.SourceCapture)) await source.ExtractAsync(captureProject, cancellationToken);
             var snapshot = plan["snapshot_properties"]!.DeepClone().AsObject();
@@ -460,7 +314,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     report["sway_shader_patches"] = await ShaderTextPatch.WriteSwayRetimeAsync(captureProject, source, settings.Assets,
                         plan["loop"]!.AsObject(), cancellationToken);
                 }
-                ApplyPropertySnapshot(metadata, snapshot);
+                ProjectWriter.ApplyPropertySnapshot(metadata, snapshot);
                 metadata["file"] = source.SceneResource;
                 await File.WriteAllTextAsync(Path.Combine(captureProject, "project.json"), metadata.ToJsonString(), cancellationToken);
             }
@@ -762,7 +616,7 @@ public sealed class HybridBakeService(NativeTools tools)
                         JsonArray captureErrors = master["native_result"] is JsonObject nativeResult ?
                             SourceScriptErrors(nativeResult) ?? throw new InvalidDataException("A full group capture omitted source script fault metadata.") :
                             throw new InvalidDataException("A full group capture omitted its native result.");
-                        finalDependencies = MergeRuntimeDependencies(finalDependencies, nativeResult["runtime_dependencies"]!.AsArray());
+                        finalDependencies = SceneAssembler.MergeRuntimeDependencies(finalDependencies, nativeResult["runtime_dependencies"]!.AsArray());
                         foreach (var error in captureErrors.OfType<JsonObject>())
                             if (fullCaptureScriptErrorKeys.Add(error.ToJsonString())) fullCaptureScriptErrors.Add(error.DeepClone());
                         report["full_capture_source_script_error_count"] = fullCaptureScriptErrors.Count;
@@ -1030,7 +884,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     }
                     JsonObject layer;
                     using (timing.Measure(StageTiming.ProjectAssembly))
-                    layer = await VideoSceneBuilder.WriteLayerAsync(project, id, video,
+                    layer = await ProjectWriter.WriteLayerAsync(project, id, video,
                         (uint)crop.Width * (packedAlpha && !isStatic ? 2u : 1u), (uint)crop.Height, nextId++, centerX, centerY,
                         crop.Width * captureWidth / pixelWidth, crop.Height * captureHeight / pixelHeight,
                         cancellationToken, packedAlpha, depthX, depthY, x, y, isStatic,
@@ -1092,39 +946,20 @@ public sealed class HybridBakeService(NativeTools tools)
             JsonArray finalObjects;
             using (timing.Measure(StageTiming.ProjectAssembly))
             {
-            finalObjects = AssembleObjects(originalObjects, plan, replacements, finalDependencies);
-            // 记下按"不绘制但带脚本"规则额外保留的根对象，事后核对用。
-            report["retained_script_root_ids"] = JsonSerializer.SerializeToNode(ScriptRootIds(originalObjects, plan));
-            if (daytimeExport is not null)
-                report["daytime_dynamic_export"] = new JsonObject {
-                    ["status"] = "preserved", ["captured_state"] = daytimeExport.State.Name,
-                    ["replaced_source_layer_ids"] = JsonSerializer.SerializeToNode(daytimeExport.ReplacementTargets.Values),
-                    ["retained_original_state_layer_ids"] = JsonSerializer.SerializeToNode(daytimeExport.Detection.ControlledLayerIds.Except(daytimeExport.ReplacementTargets.Values)),
-                    ["adjustable_property_keys"] = JsonSerializer.SerializeToNode(daytimeExport.PropertyKeys) };
-            scene["objects"] = finalObjects;
-            HybridScenePlanner.ApplyTextEffectChoice(scene, plan);
-            ApplyVisibilityFallbacks(scene, snapshot);
-            if (replacements.Count == 0) throw new InvalidDataException("No video group produced visible output; this is not a hybrid candidate.");
-            await File.WriteAllTextAsync(ProjectSource.ContainedPath(project, source.SceneResource), scene.ToJsonString(), cancellationToken);
-            metadata["title"] = (metadata["title"]?.GetValue<string>() ?? "Wallpaper") + " · Video + live";
-            metadata.Remove("workshopid"); metadata.Remove("publishedfileid");
-            metadata["type"] = "scene"; metadata["file"] = source.SceneResource;
-            if (metadata["general"]?["properties"] is JsonObject exportedProperties)
-            {
-                // Display conditions hide controls without removing the values read by live scripts.
-                HideFixedPropertyControls(exportedProperties, daytimeExport?.PropertyKeys);
-                string noticeKey = "wpebakersnapshotnotice";
-                while (exportedProperties.ContainsKey(noticeKey)) noticeKey += "0";
-                exportedProperties[noticeKey] = new JsonObject { ["type"] = "text", ["value"] = "", ["order"] = -1, ["index"] = -1,
-                    ["text"] = daytimeExport is null
-                        ? "画面设置已固定；在 WPE Baker 中改设置后重新生成。 / Settings are fixed; change them in WPE Baker and generate again."
-                        : "昼夜和时段选择仍可调整；其他画面设置已固定。 / Daytime and manual selection remain adjustable; other visual settings are fixed." };
-            }
-            metadata["description"] = (metadata["description"]?.GetValue<string>() ?? "") +
-                (daytimeExport is null
-                    ? "\nGenerated for the selected settings. Change omitted styles or baked visual settings in WPE Baker and generate again."
-                    : "\nAutomatic daytime changes and manual selection are preserved. Unreplaced states retain their original videos; other visual settings use the selected snapshot.");
-            await File.WriteAllTextAsync(Path.Combine(project, "project.json"), metadata.ToJsonString(), cancellationToken);
+                finalObjects = SceneAssembler.AssembleObjects(originalObjects, plan, replacements, finalDependencies);
+                // 记下按"不绘制但带脚本"规则额外保留的根对象，事后核对用。
+                report["retained_script_root_ids"] = JsonSerializer.SerializeToNode(SceneAssembler.ScriptRootIds(originalObjects, plan));
+                if (daytimeExport is not null)
+                    report["daytime_dynamic_export"] = new JsonObject {
+                        ["status"] = "preserved", ["captured_state"] = daytimeExport.State.Name,
+                        ["replaced_source_layer_ids"] = JsonSerializer.SerializeToNode(daytimeExport.ReplacementTargets.Values),
+                        ["retained_original_state_layer_ids"] = JsonSerializer.SerializeToNode(daytimeExport.Detection.ControlledLayerIds.Except(daytimeExport.ReplacementTargets.Values)),
+                        ["adjustable_property_keys"] = JsonSerializer.SerializeToNode(daytimeExport.PropertyKeys) };
+                scene["objects"] = finalObjects;
+                PlanTransforms.ApplyTextEffectChoice(scene, plan);
+                ProjectWriter.ApplyVisibilityFallbacks(scene, snapshot);
+                if (replacements.Count == 0) throw new InvalidDataException("No video group produced visible output; this is not a hybrid candidate.");
+                await ProjectWriter.WriteAsync(project, source.SceneResource, scene, metadata, daytimeExport, cancellationToken);
             }
             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
             JsonObject[] encodedGroups = report["groups"]!.AsArray().OfType<JsonObject>()
@@ -1198,92 +1033,7 @@ public sealed class HybridBakeService(NativeTools tools)
         return EmbeddedVideoBudget.EvaluateProbe(samples, frames, settings.FpsNumerator, settings.FpsDenominator, reason);
     }
 
-    private async Task<JsonObject> ValidateCompositionAsync(HybridBakeRequest request, JsonObject plan,
-        HybridAnalyzeRequest settings, ProjectSource source, string output, IProgress<RenderProgress>? progress,
-        CancellationToken cancellationToken)
-    {
-        string probeOutput = output + ".composition-probe";
-        EnsureNewDerivedOutput(source, probeOutput, "Composition probe output");
-        string? selectedDevice = request.DeviceUuid ?? settings.DeviceUuid;
-        progress?.Report(new("checking_composition", 0, "Generating a short candidate to check complete scene composition."));
-        JsonObject probe = await BakeAsync(new(2, plan, probeOutput, HybridCompositionValidator.RequiredFrames,
-            selectedDevice, EffectRenderScale: request.EffectRenderScale,
-            MatchEffectResolution: request.MatchEffectResolution), progress, cancellationToken);
-        return await ValidateProbeCompositionAsync(plan, probe, output, progress, cancellationToken);
-    }
-
-    internal async Task<JsonObject> ValidateProbeCompositionAsync(JsonObject plan, JsonObject probe,
-        string outputPrefix, IProgress<RenderProgress>? progress = null, CancellationToken cancellationToken = default,
-        JsonObject? input = null, JsonArray? inputTimeline = null)
-    {
-        var settings = PlanSettings.Of(plan);
-        using var source = new ProjectSource(plan["source"]?.GetValue<string>()
-            ?? throw new InvalidDataException("Hybrid plan source is missing."));
-        if (await source.SourceHashAsync(cancellationToken) != plan["source_sha256"]?.GetValue<string>())
-            throw new InvalidDataException("Source changed; analyze it again.");
-        string comparisonReference = outputPrefix + ".composition-reference";
-        string comparisonOutput = outputPrefix + ".composition-validation";
-        EnsureNewDerivedOutput(source, comparisonReference, "Composition reference output");
-        EnsureNewDerivedOutput(source, comparisonOutput, "Composition validation output");
-        if (probe["status"]?.GetValue<string>() != "probe_generated")
-            throw new InvalidDataException("The short composition probe did not produce a project for paired comparison.");
-        string project = Path.GetFullPath(probe["project_path"]?.GetValue<string>()
-            ?? throw new InvalidDataException("The short composition probe omitted its project path."));
-        string probeOutput = Path.GetDirectoryName(project)
-            ?? throw new InvalidDataException("The short composition probe project path has no parent directory.");
-        string captureSource = Path.Combine(probeOutput, "capture-source");
-        JsonObject comparisonProperties = plan["snapshot_properties"]!.DeepClone().AsObject();
-        if (plan["daytime_split"]?["controls_video_playback"]?.GetValue<bool>() == true && settings.DaytimeState is not null)
-        {
-            JsonObject referenceScene = source.ReadJson(source.SceneResource);
-            HybridScenePlanner.ApplyAudioEffectChoice(referenceScene, plan);
-            var runtime = JsonNode.Parse(await File.ReadAllTextAsync(plan["runtime_evidence"]!.GetValue<string>(), cancellationToken))!.AsObject();
-            var daytime = DaytimeSplit.PrepareDynamicExport(referenceScene["objects"]!.AsArray().OfType<JsonObject>()
-                .ToDictionary(HybridScenePlanner.Id), plan, runtime["runtime_dependencies"]!.AsArray())!;
-            comparisonProperties = daytime.ComparisonProperties(comparisonProperties);
-        }
-        await CreateCompositionReferenceAsync(source, comparisonReference, comparisonProperties,
-            settings.ViewMode, plan, cancellationToken);
-        var comparison = await new CandidateValidation(tools).ValidateAsync(new ValidationRequest(
-            1, comparisonReference, project, settings.Assets, comparisonOutput, settings.Width, settings.Height,
-            settings.FpsNumerator, settings.FpsDenominator, HybridCompositionValidator.RequiredFrames,
-            WarmupFrames: 0, Seed: 17, DeviceUuid: settings.DeviceUuid,
-            UserProperties: comparisonProperties,
-            Input: input ?? new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
-            InputTimeline: inputTimeline,
-            TileSize: HybridCompositionValidator.RequiredTileSize, RetainRawFrames: false), progress, cancellationToken);
-        JsonObject validation = HybridCompositionValidator.Evaluate(comparison);
-        validation["probe_output_path"] = probeOutput;
-        validation["probe_capture_source_path"] = captureSource;
-        validation["comparison_reference_path"] = comparisonReference;
-        validation["probe_project_path"] = project;
-        validation["comparison_output_path"] = comparisonOutput;
-        validation["occlusion_tradeoff"] = plan["occlusion_tradeoff"]?.DeepClone();
-        validation["text_effects_choice"] = plan["text_effects_choice"]?.DeepClone();
-        validation["audio_effects_choice"] = plan["audio_effects_choice"]?.DeepClone();
-        if (plan["daytime_split"]?["controls_video_playback"]?.GetValue<bool>() == true)
-            validation["daytime_state_under_test"] = settings.DaytimeState;
-        return validation;
-    }
-
-    private static async Task CreateCompositionReferenceAsync(ProjectSource source, string destination,
-        JsonObject snapshot, string viewMode, JsonObject plan, CancellationToken cancellationToken)
-    {
-        JsonObject scene = source.ReadJson(source.SceneResource);
-        JsonObject metadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
-        HybridScenePlanner.ApplyAudioEffectChoice(scene, plan);
-        if (viewMode == "fixed_view") scene["general"]!["cameraparallax"] = false;
-        HybridScenePlanner.ApplyOverlayPlacement(scene, plan);
-        HybridScenePlanner.ApplyTextEffectChoice(scene, plan);
-        ApplyPropertySnapshot(metadata, snapshot);
-        metadata["file"] = source.SceneResource;
-        await source.ExtractAsync(destination, cancellationToken);
-        await File.WriteAllTextAsync(ProjectSource.ContainedPath(destination, source.SceneResource),
-            scene.ToJsonString(), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(destination, "project.json"), metadata.ToJsonString(), cancellationToken);
-    }
-
-    private static void EnsureNewDerivedOutput(ProjectSource source, string destination, string description)
+    internal static void EnsureNewDerivedOutput(ProjectSource source, string destination, string description)
     {
         destination = Path.GetFullPath(destination);
         ProjectSource.EnsureNoReparsePoints(destination);
@@ -1291,21 +1041,6 @@ public sealed class HybridBakeService(NativeTools tools)
         string sourcePrefix = Path.TrimEndingDirectorySeparator(source.DirectoryPath) + Path.DirectorySeparatorChar;
         if (destination.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
             throw new IOException($"{description} must be outside the source project.");
-    }
-
-
-    internal static void ApplyPropertySnapshot(JsonObject project, JsonObject snapshot)
-    {
-        if (project["general"]?["properties"] is not JsonObject properties) return;
-        foreach (var (key, value) in snapshot)
-            if (properties[key] is JsonObject property) property["value"] = value?.DeepClone();
-    }
-
-    internal static void HideFixedPropertyControls(JsonObject properties, IReadOnlyCollection<string>? adjustableKeys)
-    {
-        foreach (var (key, value) in properties)
-            if (value is JsonObject property && !(adjustableKeys?.Contains(key, StringComparer.Ordinal) ?? false))
-                property["condition"] = "false";
     }
 
     internal static JsonArray? SelectVideoRateOverrides(JsonObject loop, IReadOnlySet<int> groupLayerIds)
@@ -1326,14 +1061,5 @@ public sealed class HybridBakeService(NativeTools tools)
                 ["rate_denominator"] = patch["rate_denominator"]!.DeepClone() });
         }
         return overrides.Count == 0 ? null : overrides;
-    }
-
-    internal static void ApplyVisibilityFallbacks(JsonObject scene, JsonObject snapshot)
-    {
-        // The player can instantiate visibility before applying properties. Only synchronize
-        // boolean fallbacks: a scalar slider must not replace a serialized vector such as scale.
-        foreach (var binding in SceneAnalyzer.Walk(scene).OfType<JsonObject>().Where(n => n.ContainsKey("user") &&
-            n["value"] is JsonValue value && value.TryGetValue<bool>(out _)).ToArray())
-            binding["value"] = HybridScenePlanner.Resolve(binding, snapshot);
     }
 }
