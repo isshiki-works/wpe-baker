@@ -9,10 +9,6 @@ internal static class AnalysisCache
     internal static string Key(params object?[] values) => Convert.ToHexStringLower(SHA256.HashData(
         Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(values))));
 
-    /// <summary>类型化键：按声明类型序列化一条键记录再取 SHA-256，键里有哪些成分由记录类型写明。</summary>
-    internal static string KeyOf<T>(T value) where T : notnull => Convert.ToHexStringLower(SHA256.HashData(
-        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value)));
-
     internal static JsonObject? Read(string? directory, string key)
     {
         if (directory is null) return null;

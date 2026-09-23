@@ -25,14 +25,11 @@ internal sealed class SceneGraph
         Roots = SourceOrder.Where(id => RootOf[id] == id).ToArray();
     }
 
-    /// <summary>场景内的父对象；没写父、或父不在场景里时为 null。</summary>
-    internal int? Parent(int id) => Objects.TryGetValue(id, out var item) && HybridScenePlanner.Int(item["parent"]) is int parent &&
-        Objects.ContainsKey(parent) ? parent : null;
-
     private int RootFor(int id)
     {
         var seen = new HashSet<int>();
-        while (Parent(id) is int parent)
+        // 父不在场景里按没有父处理。
+        while (Objects.TryGetValue(id, out var item) && HybridScenePlanner.Int(item["parent"]) is int parent && Objects.ContainsKey(parent))
         {
             if (!seen.Add(id)) throw new InvalidDataException("Scene parent cycle.");
             id = parent;

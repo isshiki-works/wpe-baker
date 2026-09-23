@@ -26,5 +26,5 @@ internal sealed record ObservationRequest(ObservationKey Key, string RenderSourc
 internal sealed record ObservationKey(string SourceSha256, JsonObject Scene, JsonObject Properties, string Assets,
     uint Width, uint Height, uint FpsNumerator, uint FpsDenominator, bool GpuTiming, string? TimingDevice, string Renderer)
 {
-    internal string Hash() => AnalysisCache.KeyOf(this);
+    internal string Hash() => AnalysisCache.Key(this);
 }

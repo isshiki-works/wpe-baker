@@ -20,8 +20,6 @@ public class SceneGraphTests
         Assert.Equal(1, graph.RootOf[2]);
         Assert.Equal(4, graph.RootOf[4]);
         Assert.Equal(new[] { 5, 1, 4 }, graph.Roots);
-        Assert.Equal(2, graph.Parent(3));
-        Assert.Null(graph.Parent(4));
     }
 
     [Fact]
