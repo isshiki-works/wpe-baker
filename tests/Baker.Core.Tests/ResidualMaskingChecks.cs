@@ -498,8 +498,8 @@ internal static class ResidualMaskingChecks
     }
 
     /// <summary>
-    /// 起点回退：按 bake 的调用顺序驱动 <see cref="ResidualStartFallback"/>——每轮用 <see cref="ResidualMasking.FirstLayer"/>
-    /// 判全 k 读数、记尝试、问下一步。第一层读数用真实 WrapResidual 算出来的瓦片值，不手填 passed。
+    /// 起点复核的记录：<see cref="LoopStartSelector"/> 的尝试顺序、每次尝试的记录、选中记录与全部被拒时的理由。
+    /// 第一层读数用真实 WrapResidual 算出来的瓦片值，不手填 passed。
     /// </summary>
     private static void StartFallbackChecks(Action<bool, string> check, byte[] flat, int width, int height)
     {
@@ -534,18 +534,19 @@ internal static class ResidualMaskingChecks
             ["start_attempt_order"] = new JsonArray([.. starts.Take(ResidualMasking.MaximumStartAttempts).Select((start, index) => (JsonNode)new JsonObject
                 { ["start_frame"] = start, ["sampled_sort_key"] = 20 + index, ["sampled_global_rgb_mae_255"] = 1.0 })])
         };
-        (ResidualStartStep Step, int Attempt, JsonArray Attempts) Drive(JsonObject search, Func<int, ResidualFirstLayer> measure)
+        // 按排序顺序逐个起点记尝试，直到第一层通过或清单用完。
+        JsonArray Records(JsonObject search, Func<int, ResidualFirstLayer> measure)
         {
-            JsonObject[] order = ResidualStartFallback.Order(search);
+            JsonObject[] order = LoopStartSelector.Order(search);
             var attempts = new JsonArray();
-            for (int attempt = 0; ; ++attempt)
+            for (int attempt = 0; attempt < order.Length; ++attempt)
             {
                 ResidualFirstLayer layer = measure(attempt);
-                ulong start = order[attempt]["start_frame"]!.GetValue<ulong>();
-                attempts.Add(ResidualStartFallback.Attempt(attempt, start, order[attempt], [("group-1", Seam(layer))]));
-                ResidualStartStep step = ResidualStartFallback.Next(attempt, layer.Passed, order.Length);
-                if (step != ResidualStartStep.RetryNextStart) return (step, attempt, attempts);
+                attempts.Add(LoopStartSelector.Attempt(attempt, order[attempt]["start_frame"]!.GetValue<ulong>(), order[attempt],
+                    [("group-1", Seam(layer))]));
+                if (layer.Passed) break;
             }
+            return attempts;
         }
 
         ResidualFirstLayer spike = Spike(), steady = Steady();
@@ -553,40 +554,36 @@ internal static class ResidualMaskingChecks
             "start fallback fixture: a single-frame spike at k=22 fails the first layer while a steady 33-level window passes");
 
         // 第一个候选全 k 超限、第二个通过 → 选第二个，两次都记下。
-        var second = Drive(Search(2688, 2848, 1024), attempt => attempt == 0 ? spike : steady);
-        JsonObject[] secondRows = second.Attempts.OfType<JsonObject>().ToArray();
-        JsonObject selected = ResidualStartFallback.Selected(second.Attempt, 2848);
-        check(second.Step == ResidualStartStep.Accept && second.Attempt == 1 && secondRows.Length == 2 &&
+        JsonObject[] secondRows = Records(Search(2688, 2848, 1024), attempt => attempt == 0 ? spike : steady).OfType<JsonObject>().ToArray();
+        JsonObject selected = LoopStartSelector.Selected(1, 2848);
+        check(secondRows.Length == 2 &&
             secondRows[0]["start_frame"]!.GetValue<ulong>() == 2688 && secondRows[0]["status"]!.GetValue<string>() == "rejected_seam_residual" &&
             secondRows[0]["groups"]![0]!["maximum_worst_tile_frame"]!.GetValue<int>() == 22 &&
             secondRows[0]["sampled_sort_key"]!.GetValue<int>() == 20 &&
             secondRows[1]["start_frame"]!.GetValue<ulong>() == 2848 && secondRows[1]["status"]!.GetValue<string>() == "passed_first_layer" &&
             Math.Abs(secondRows[1]["groups"]![0]!["maximum_worst_tile_rgb_mae_255"]!.GetValue<double>() - 33) < 1e-9 &&
             selected["attempt_index"]!.GetValue<int>() == 1 && selected["start_frame"]!.GetValue<ulong>() == 2848,
-            "when the best-ranked start fails the first layer on any k, the next start in sort order is re-rendered and selected once it passes");
+            "a start failing the first layer on any k is recorded as rejected with its k, a passing one as passed, and the selection names its position");
 
-        // 排序里有 10 个候选、全部超限 → 恰好试 8 个就拒绝，理由逐个列出起点与 max_k。
+        // 排序里有 10 个候选、全部超限 → 清单只取前 8 个，理由逐个列出起点与 max_k。
         ulong[] ten = [.. Enumerable.Range(0, 10).Select(index => (ulong)(index * 16))];
-        var exhausted = Drive(Search(ten), _ => spike);
-        Message message = ResidualStartFallback.RejectionReason(exhausted.Attempts, 375, window);
+        JsonArray exhausted = Records(Search(ten), _ => spike);
+        Message message = LoopStartSelector.RejectionReason(exhausted, 375, window);
         string reason = message.Text;
         JsonObject localized = message.Localized();
-        check(exhausted.Step == ResidualStartStep.Reject && exhausted.Attempts.Count == ResidualMasking.MaximumStartAttempts &&
-            exhausted.Attempts.OfType<JsonObject>().All(row => row["status"]!.GetValue<string>() == "rejected_seam_residual") &&
-            ResidualStartFallback.Order(Search(ten)).Length == 8 &&
+        check(exhausted.Count == ResidualMasking.MaximumStartAttempts &&
+            exhausted.OfType<JsonObject>().All(row => row["status"]!.GetValue<string>() == "rejected_seam_residual") &&
+            LoopStartSelector.Order(Search(ten)).Length == 8 &&
             reason.Contains("8 candidate start frame(s) (of 375)", StringComparison.Ordinal) &&
             reason.Contains("start 112: group-1 worst tile 54/255 (k = 22)", StringComparison.Ordinal) &&
             !reason.Contains("start 128", StringComparison.Ordinal) &&
             localized["key"]?.GetValue<string>() == "bake.residual_start_attempts_rejected" &&
             localized["zh"]!.GetValue<string>().Contains("起点 0：group-1 瓦片最大 54/255（k = 22）", StringComparison.Ordinal) &&
             localized["zh"]!.GetValue<string>().Contains("k = 0..23", StringComparison.Ordinal),
-            "when all eight re-checked starts exceed the first layer the bake is rejected and every start is recorded with its max_k");
-        // 候选不足 8 个时试完就拒绝；清单缺失（旧记录）时退回选中的那一个。
-        var three = Drive(Search(0, 16, 32), _ => spike);
-        check(three.Step == ResidualStartStep.Reject && three.Attempts.Count == 3 &&
-            ResidualStartFallback.Order(new JsonObject { ["selected"] = new JsonObject { ["start_frame"] = 96UL } })
-                .Single()["start_frame"]!.GetValue<ulong>() == 96 &&
-            ResidualStartFallback.Next(0, true, 1) == ResidualStartStep.Accept && ResidualStartFallback.Next(0, false, 1) == ResidualStartStep.Reject,
-            "fewer than eight candidates are all tried before rejecting, and a record without an attempt order falls back to the selected start");
+            "the attempt order keeps at most eight starts and the rejection reason lists every recorded start with its max_k");
+        // 清单缺失（旧记录）时退回选中的那一个。
+        check(LoopStartSelector.Order(new JsonObject { ["selected"] = new JsonObject { ["start_frame"] = 96UL } })
+                .Single()["start_frame"]!.GetValue<ulong>() == 96,
+            "a record without an attempt order falls back to the selected start");
     }
 }

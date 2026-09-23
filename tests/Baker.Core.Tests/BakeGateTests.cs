@@ -43,7 +43,7 @@ public class BakeGateTests : IDisposable
 
     private BakeGateContext Context(JsonObject plan, uint fpsNumerator = 60) =>
         new(new HybridBakeRequest(2, plan, Path.Combine(root, "out"), EffectRenderScale: 0.5), source, "hash",
-            new WorkLayout(Path.Combine(root, "out")), null, new StageTiming())
+            new WorkLayout(Path.Combine(root, "out")), null)
         {
             Plan = plan,
             Settings = new HybridAnalyzeRequest(1, source.SourcePath, "", Path.Combine(root, "analysis"), 1920, 1080, fpsNumerator, 1)
@@ -62,8 +62,8 @@ public class BakeGateTests : IDisposable
     [Fact]
     public void EveryGateImplementationIsOnThePreflightChainInOrder()
     {
-        IBakeGate[] chain = BakeGates.Preflight(new("r", "f", "p", []), (_, _) => Task.FromResult(new JsonObject()),
-            (_, _, _, _) => Task.FromResult(new JsonObject()));
+        IBakeGate[] chain = [.. BakeGates.Preflight(new("r", "f", "p", [])), .. BakeGates.Validation((_, _) => Task.FromResult(new JsonObject()),
+            (_, _, _, _) => Task.FromResult(new JsonObject()))];
         Type[] implementations = typeof(IBakeGate).Assembly.GetTypes()
             .Where(type => typeof(IBakeGate).IsAssignableFrom(type) && !type.IsInterface).ToArray();
         Assert.Equal(implementations.OrderBy(type => type.Name), chain.Select(gate => gate.GetType()).OrderBy(type => type.Name));
