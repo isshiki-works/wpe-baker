@@ -1,4 +1,5 @@
 module;
+#include <memory>
 
 export module wescene.pkg.parse:sound_parser;
 import rstd;
@@ -14,7 +15,7 @@ using rstd::sync::Arc;
 
 class SoundParser {
 public:
-    static Arc<rstd::dyn<SceneSoundControl>> Parse(const wpscene::SoundObject&, fs::VFS&,
+    static std::shared_ptr<SceneSoundControl> Parse(const wpscene::SoundObject&, fs::VFS&,
                                                    wavsen::audio::SoundManager&, Scene*);
 };
 

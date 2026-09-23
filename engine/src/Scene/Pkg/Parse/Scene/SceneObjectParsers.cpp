@@ -1,4 +1,6 @@
 module;
+#include <new>
+
 #include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
@@ -197,7 +199,7 @@ void InitContext(SceneParseContext& context, fs::VFS& vfs, const wpscene::SceneM
                  array<i32, 2> ortho_extent) {
     context.vfs = &vfs;
     auto& scene = *context.scene;
-    scene.SetImageParser(Box<dyn<IImageParser>>::make(TexImageParser(&vfs)));
+    scene.SetImageParser(std::make_unique<TexImageParser>(TexImageParser(&vfs)));
     context.particle_runtime = Some(Arc<ParticleRuntime>::make());
     GenCardMesh(*scene.DefaultEffectMeshMut(), { 2.0f, 2.0f });
 
@@ -306,7 +308,7 @@ void ParseSoundObjImpl(SceneParseContext& context, wpscene::SoundObject& obj,
     auto control = SoundParser::Parse(obj, *context.vfs, sm, context.scene.get());
     if (! obj.volume_user_key.empty()) {
         context.scene->RegisterSoundVolumeBinding(
-            rstd::cppstd::as_str(obj.volume_user_key).unwrap(), control.clone());
+            rstd::cppstd::as_str(obj.volume_user_key).unwrap(), control);
     }
     node->SetSoundControl(rstd::move(control));
     node->SetVolume(obj.volume);

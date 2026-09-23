@@ -487,7 +487,7 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
     return Ok(rstd::move(img_ptr));
 }
 
-auto owe::ParseImages(ref<dyn<IImageParser>> parser, slice<String> names, usize max_workers)
+auto owe::ParseImages(const IImageParser* parser, slice<String> names, usize max_workers)
     -> Vec<Result<Arc<Image>, ImageParseError>> {
     auto parse_sequential = [parser, names]() mutable {
         auto images = Vec<Result<Arc<Image>, ImageParseError>>::with_capacity(names.len());
@@ -513,8 +513,7 @@ auto owe::ParseImages(ref<dyn<IImageParser>> parser, slice<String> names, usize 
 
 auto TexImageParser::ParseMany(slice<String> names) const
     -> Vec<Result<Arc<Image>, ImageParseError>> {
-    auto parser = dyn<IImageParser>::from_ref(*this);
-    return ParseImages(parser, names);
+    return ParseImages(this, names);
 }
 
 auto TexImageParser::ParseHeader(ref<str> name) const -> Result<ImageHeader, ImageParseError> {

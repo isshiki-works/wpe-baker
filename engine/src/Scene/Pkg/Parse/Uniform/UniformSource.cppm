@@ -294,11 +294,11 @@ private:
     Arc<UniformSceneState> m_state;
 };
 
-class UniformRuntimeSystem {
+class UniformRuntimeSystem final : public SceneRuntimeSystem {
 public:
     explicit UniformRuntimeSystem(Arc<UniformSceneState> state): m_state(rstd::move(state)) {}
 
-    void Update(ref<SceneFrame> frame) { m_state->Advance(*frame); }
+    void Update(ref<SceneFrame> frame) override { m_state->Advance(*frame); }
 
 private:
     Arc<UniformSceneState> m_state;

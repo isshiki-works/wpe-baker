@@ -1,3 +1,6 @@
+module;
+#include <new>
+
 module wescene.pkg.parse;
 import wescene.core;
 import wescene.scene;
@@ -80,27 +83,27 @@ struct SoundState {
     bool         disabled { false };
 };
 
-class SoundControl final {
+class SoundControl final : public SceneSoundControl {
 public:
     explicit SoundControl(Arc<SoundState> state): m_state(rstd::move(state)) {}
 
-    void Play() {
+    void Play() override {
         if (m_state->disabled) return;
         m_state->playing.store(true, Ordering::Release);
         m_state->play_seq.fetch_add(u32(1), Ordering::AcqRel);
     }
-    void Stop() {
+    void Stop() override {
         if (m_state->disabled) return;
         m_state->playing.store(false, Ordering::Release);
         m_state->stop_seq.fetch_add(u32(1), Ordering::AcqRel);
     }
-    void Pause() {
+    void Pause() override {
         if (! m_state->disabled) m_state->playing.store(false, Ordering::Release);
     }
-    bool IsPlaying() const {
+    bool IsPlaying() const override {
         return ! m_state->disabled && m_state->playing.load(Ordering::Acquire);
     }
-    void SetVolume(float volume) {
+    void SetVolume(float volume) override {
         m_state->volume.store(f32(volume).clamp(f32(), f32(1.0f)), Ordering::Release);
     }
 
@@ -282,7 +285,7 @@ private:
     Option<Arc<SceneAudioAverage>>              m_audio_average;
 };
 
-Arc<dyn<SceneSoundControl>> SoundParser::Parse(const wpscene::SoundObject& obj, fs::VFS& vfs,
+std::shared_ptr<SceneSoundControl> SoundParser::Parse(const wpscene::SoundObject& obj, fs::VFS& vfs,
                                                wavsen::audio::SoundManager& sm, Scene* scene) {
     SoundStream::Config config { .maxtime = f32(obj.maxtime),
                                  .mintime = f32(obj.mintime),
@@ -298,7 +301,7 @@ Arc<dyn<SceneSoundControl>> SoundParser::Parse(const wpscene::SoundObject& obj, 
     state->disabled = obj.sound.empty();
     state->playing.store(! state->disabled && obj.visible && ! obj.startsilent, Ordering::Release);
     state->volume.store(config.volume, Ordering::Release);
-    auto control = Arc<dyn<SceneSoundControl>>::make(SoundControl(state.clone()));
+    auto control = std::shared_ptr<SceneSoundControl>(std::make_shared<SoundControl>(state.clone()));
     if (! state->disabled) {
         auto ss = std::make_unique<SoundStream>(
             obj.sound, vfs, config, rstd::move(state), rstd::move(audio_average));

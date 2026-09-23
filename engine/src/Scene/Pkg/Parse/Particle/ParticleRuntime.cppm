@@ -598,10 +598,13 @@ private:
     rstd::vec::Vec<Box<ParticleSubSystem>> m_subsystems;
 };
 
-struct ParticleRuntimeSystem {
+struct ParticleRuntimeSystem final : SceneRuntimeSystem {
+    explicit ParticleRuntimeSystem(Arc<ParticleRuntime> particle_runtime)
+        : runtime(rstd::move(particle_runtime)) {}
+
     Arc<ParticleRuntime> runtime;
 
-    void Update(ref<SceneFrame> frame) { runtime->Update(frame); }
+    void Update(ref<SceneFrame> frame) override { runtime->Update(frame); }
 };
 
 class ParticleRawGenerator {

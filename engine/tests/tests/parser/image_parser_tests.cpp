@@ -17,9 +17,9 @@ using rstd::sync::Arc;
 namespace
 {
 
-class TrackingImageParser {
+class TrackingImageParser final : public owe::IImageParser {
 public:
-    auto Parse(ref<str> name) const -> Result<Arc<owe::Image>, owe::ImageParseError> {
+    auto Parse(ref<str> name) const -> Result<Arc<owe::Image>, owe::ImageParseError> override {
         auto current  = m_active.fetch_add(1) + 1;
         auto observed = m_peak.load();
         while (current > observed && ! m_peak.compare_exchange_weak(observed, current)) {
@@ -32,14 +32,13 @@ public:
         return Ok(rstd::move(image));
     }
 
-    auto ParseHeader(ref<str>) const -> Result<owe::ImageHeader, owe::ImageParseError> {
+    auto ParseHeader(ref<str>) const -> Result<owe::ImageHeader, owe::ImageParseError> override {
         return Ok(owe::ImageHeader {});
     }
 
     auto ParseMany(slice<String> names) const
-        -> Vec<Result<Arc<owe::Image>, owe::ImageParseError>> {
-        auto parser = dyn<owe::IImageParser>::from_ref(*this);
-        return owe::ParseImages(parser.as_ref(), names);
+        -> Vec<Result<Arc<owe::Image>, owe::ImageParseError>> override {
+        return owe::ParseImages(this, names);
     }
 
     int peak() const { return m_peak.load(); }
@@ -49,9 +48,9 @@ private:
     mutable std::atomic<int> m_peak { 0 };
 };
 
-class MixedImageParser {
+class MixedImageParser final : public owe::IImageParser {
 public:
-    auto Parse(ref<str> name) const -> Result<Arc<owe::Image>, owe::ImageParseError> {
+    auto Parse(ref<str> name) const -> Result<Arc<owe::Image>, owe::ImageParseError> override {
         if (rstd::cppstd::as_string_view(name) == "bad") {
             return Err(owe::ImageParseError {
                 .kind    = owe::ImageParseErrorKind::DecodeFailed,
@@ -63,14 +62,13 @@ public:
         return Ok(rstd::move(image));
     }
 
-    auto ParseHeader(ref<str>) const -> Result<owe::ImageHeader, owe::ImageParseError> {
+    auto ParseHeader(ref<str>) const -> Result<owe::ImageHeader, owe::ImageParseError> override {
         return Ok(owe::ImageHeader {});
     }
 
     auto ParseMany(slice<String> names) const
-        -> Vec<Result<Arc<owe::Image>, owe::ImageParseError>> {
-        auto parser = dyn<owe::IImageParser>::from_ref(*this);
-        return owe::ParseImages(parser.as_ref(), names);
+        -> Vec<Result<Arc<owe::Image>, owe::ImageParseError>> override {
+        return owe::ParseImages(this, names);
     }
 };
 
@@ -84,8 +82,7 @@ TEST(ImageParser, BatchPreservesOrderAndBoundsConcurrency) {
     for (const char* name : { "0", "1", "2", "3", "4", "5", "6", "7" })
         names.push(String::make(rstd::cppstd::as_str(name).unwrap()));
 
-    auto image_parser = dyn<owe::IImageParser>::from_ref(parser);
-    auto images       = owe::ParseImages(image_parser.as_ref(), names.as_slice());
+    auto images = owe::ParseImages(&parser, names.as_slice());
 
     ASSERT_EQ(images.len(), names.len());
     for (usize index {}; index < names.len(); ++index) {
@@ -139,7 +136,7 @@ TEST(ImageParser, TextureHeaderExposesFourthPackedComponent) {
 
 TEST(ImageParser, SceneBatchPreservesRuntimeParserAndErrorPositions) {
     owe::Scene scene;
-    scene.SetImageParser(Box<dyn<owe::IImageParser>>::make(MixedImageParser {}));
+    scene.SetImageParser(std::make_unique<MixedImageParser>(MixedImageParser {}));
     auto runtime = Arc<owe::Image>::make();
     runtime->key = "runtime-value";
     scene.RegisterRuntimeImage(String::make("runtime"_str), runtime.clone());

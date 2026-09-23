@@ -91,18 +91,18 @@ struct TexFormatVersion {
     constexpr bool valid() const noexcept { return texv != 0 && texi != 0 && texb != 0; }
 };
 
-auto ParseImages(ref<dyn<IImageParser>> parser, slice<String> names, usize max_workers = usize(4))
+auto ParseImages(const IImageParser* parser, slice<String> names, usize max_workers = usize(4))
     -> Vec<Result<Arc<Image>, ImageParseError>>;
 
 auto ProbeVideoDuration(fs::VFS&, ref<str>) -> Option<f64>;
 
-class TexImageParser {
+class TexImageParser final : public IImageParser {
 public:
     TexImageParser(fs::VFS* vfs): m_vfs(vfs) {}
 
-    auto Parse(ref<str> name) const -> Result<Arc<Image>, ImageParseError>;
-    auto ParseMany(slice<String> names) const -> Vec<Result<Arc<Image>, ImageParseError>>;
-    auto ParseHeader(ref<str> name) const -> Result<ImageHeader, ImageParseError>;
+    auto Parse(ref<str> name) const -> Result<Arc<Image>, ImageParseError> override;
+    auto ParseMany(slice<String> names) const -> Vec<Result<Arc<Image>, ImageParseError>> override;
+    auto ParseHeader(ref<str> name) const -> Result<ImageHeader, ImageParseError> override;
 
 private:
     fs::VFS* m_vfs;

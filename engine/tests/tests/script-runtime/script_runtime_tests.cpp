@@ -56,29 +56,32 @@ struct ParticleControlState {
     int                  resets { 0 };
 };
 
-struct ParticleControlProbe {
+struct ParticleControlProbe final : owe::SceneParticleControl {
+    explicit ParticleControlProbe(Arc<ParticleControlState> probe_state)
+        : state(rstd::move(probe_state)) {}
+
     Arc<ParticleControlState> state;
 
-    Vec<float> Get(ref<str> field) const {
+    Vec<float> Get(ref<str> field) const override {
         Vec<float> out;
         if (field != "colorn"_str) return out;
         for (float value : state->colorn) out.push(float(value));
         return out;
     }
-    void Apply(ref<str> field, slice<float> values) {
+    void Apply(ref<str> field, slice<float> values) override {
         if (field != "colorn"_str || values.len() < usize(3)) return;
         state->colorn = { values[usize()], values[usize(1)], values[usize(2)] };
     }
-    void Play() {
+    void Play() override {
         state->playing = true;
         state->resets++;
     }
-    void Stop() {
+    void Stop() override {
         state->playing = false;
         state->resets++;
     }
-    void Pause() { state->playing = false; }
-    bool IsPlaying() const { return state->playing; }
+    void Pause() override { state->playing = false; }
+    bool IsPlaying() const override { return state->playing; }
 };
 
 struct SoundControlState {
@@ -86,14 +89,16 @@ struct SoundControlState {
     bool  playing { true };
 };
 
-struct SoundControlProbe {
+struct SoundControlProbe final : owe::SceneSoundControl {
+    explicit SoundControlProbe(Arc<SoundControlState> probe_state): state(rstd::move(probe_state)) {}
+
     Arc<SoundControlState> state;
 
-    void Play() { state->playing = true; }
-    void Stop() { state->playing = false; }
-    void Pause() { state->playing = false; }
-    bool IsPlaying() const { return state->playing; }
-    void SetVolume(float volume) { state->volume = volume; }
+    void Play() override { state->playing = true; }
+    void Stop() override { state->playing = false; }
+    void Pause() override { state->playing = false; }
+    bool IsPlaying() const override { return state->playing; }
+    void SetVolume(float volume) override { state->volume = volume; }
 };
 
 } // namespace
@@ -2728,7 +2733,7 @@ TEST(ScriptScene, ParticleInstanceAndPlaybackUseNodeCapability) {
     auto layer = Arc<owe::SceneNode>::make();
     auto state = Arc<ParticleControlState>::make();
     layer->SetParticleControl(
-        Arc<dyn<owe::SceneParticleControl>>::make(ParticleControlProbe { state.clone() }));
+        std::shared_ptr<owe::SceneParticleControl>(std::make_shared<ParticleControlProbe>(state.clone())));
     root->AppendChild(layer.clone());
 
     JsRuntime rt;
@@ -2764,7 +2769,7 @@ TEST(SceneNodeSound, VisibilityStartsAndStopsTheSoundControl) {
     auto layer = Arc<owe::SceneNode>::make();
     auto state = Arc<SoundControlState>::make();
     layer->SetSoundControl(
-        Arc<dyn<owe::SceneSoundControl>>::make(SoundControlProbe { state.clone() }));
+        std::shared_ptr<owe::SceneSoundControl>(std::make_shared<SoundControlProbe>(state.clone())));
     ASSERT_TRUE(state->playing);
 
     layer->SetVisible(false);
@@ -2779,7 +2784,7 @@ TEST(ScriptScene, SoundVolumeUsesSoundControl) {
     auto layer = Arc<owe::SceneNode>::make();
     auto state = Arc<SoundControlState>::make();
     layer->SetSoundControl(
-        Arc<dyn<owe::SceneSoundControl>>::make(SoundControlProbe { state.clone() }));
+        std::shared_ptr<owe::SceneSoundControl>(std::make_shared<SoundControlProbe>(state.clone())));
     root->AppendChild(layer.clone());
 
     JsRuntime rt;

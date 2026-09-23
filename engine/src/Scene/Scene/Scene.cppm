@@ -1460,61 +1460,37 @@ private:
     float                 queue_base_zoom { 1.0f };
 };
 
+// 声音图层的播放控制。
 class SceneSoundControl {
 public:
-    using Trait                  = SceneSoundControl;
-    static constexpr bool direct = false;
+    virtual ~SceneSoundControl() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = SceneSoundControl;
-
-        void Play() { rstd::trait_call<0>(this); }
-        void Stop() { rstd::trait_call<1>(this); }
-        void Pause() { rstd::trait_call<2>(this); }
-        bool IsPlaying() const { return rstd::trait_call<3>(this); }
-        void SetVolume(float volume) { rstd::trait_call<4>(this, volume); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Play, &T::Stop, &T::Pause, &T::IsPlaying, &T::SetVolume>;
+    virtual void Play()                  = 0;
+    virtual void Stop()                  = 0;
+    virtual void Pause()                 = 0;
+    virtual bool IsPlaying() const       = 0;
+    virtual void SetVolume(float volume) = 0;
 };
 
+// 用户属性驱动的粒子 instanceoverride 单字段写入。
 class SceneParticleOverrideControl {
 public:
-    using Trait                  = SceneParticleOverrideControl;
-    static constexpr bool direct = false;
+    virtual ~SceneParticleOverrideControl() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = SceneParticleOverrideControl;
-
-        void Apply(slice<float> value) { rstd::trait_call<0>(this, value); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Apply>;
+    virtual void Apply(slice<float> value) = 0;
 };
 
+// 脚本可见的粒子图层控制（读写 instanceoverride 字段、播放状态）。
 class SceneParticleControl {
 public:
-    using Trait                  = SceneParticleControl;
-    static constexpr bool direct = false;
+    virtual ~SceneParticleControl() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = SceneParticleControl;
-
-        Vec<float> Get(ref<str> field) const { return rstd::trait_call<0>(this, field); }
-        void Apply(ref<str> field, slice<float> value) { rstd::trait_call<1>(this, field, value); }
-        void Play() { rstd::trait_call<2>(this); }
-        void Stop() { rstd::trait_call<3>(this); }
-        void Pause() { rstd::trait_call<4>(this); }
-        bool IsPlaying() const { return rstd::trait_call<5>(this); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Get, &T::Apply, &T::Play, &T::Stop, &T::Pause, &T::IsPlaying>;
+    virtual Vec<float> Get(ref<str> field) const                 = 0;
+    virtual void       Apply(ref<str> field, slice<float> value) = 0;
+    virtual void       Play()                                    = 0;
+    virtual void       Stop()                                    = 0;
+    virtual void       Pause()                                   = 0;
+    virtual bool       IsPlaying() const                         = 0;
 };
 
 // ============================================================================
@@ -1793,28 +1769,28 @@ public:
         if (m_video_control) return (*m_video_control)->Snapshot().playing;
         return m_layer_playing;
     }
-    void SetSoundControl(Arc<dyn<SceneSoundControl>> control) {
+    void SetSoundControl(std::shared_ptr<SceneSoundControl> control) {
         m_sound_control = Some(rstd::move(control));
     }
-    Option<ref<dyn<SceneSoundControl>>> SoundControl() const {
+    Option<const SceneSoundControl*> SoundControl() const {
         if (m_sound_control.is_none()) return None();
-        return Some(m_sound_control->deref());
+        return Some(static_cast<const SceneSoundControl*>(m_sound_control->get()));
     }
     float Volume() const { return m_volume; }
     void  SetVolume(float volume) {
         m_volume = rstd::f32(volume).clamp(rstd::f32(), rstd::f32(1.0f)).to_primitive();
         if (m_sound_control) (*m_sound_control)->SetVolume(m_volume);
     }
-    void SetParticleControl(Arc<dyn<SceneParticleControl>> control) {
+    void SetParticleControl(std::shared_ptr<SceneParticleControl> control) {
         m_particle_control = Some(rstd::move(control));
     }
-    Option<ref<dyn<SceneParticleControl>>> ParticleControl() const {
+    Option<const SceneParticleControl*> ParticleControl() const {
         if (m_particle_control.is_none()) return None();
-        return Some(m_particle_control->deref());
+        return Some(static_cast<const SceneParticleControl*>(m_particle_control->get()));
     }
-    Option<Arc<dyn<SceneParticleControl>>> ParticleControlHandle() const {
+    Option<std::shared_ptr<SceneParticleControl>> ParticleControlHandle() const {
         if (m_particle_control.is_none()) return None();
-        return Some((*m_particle_control).clone());
+        return Some(std::shared_ptr<SceneParticleControl>(*m_particle_control));
     }
     void SetVideoControl(Arc<VideoPlaybackState> control) {
         m_video_control = Some(rstd::move(control));
@@ -1929,8 +1905,8 @@ private:
     SceneTextureAnimationRegistry*         m_texture_animation_registry { nullptr };
     bool                                   m_layer_playing { true };
     float                                  m_volume { 1.0f };
-    Option<Arc<dyn<SceneSoundControl>>>    m_sound_control;
-    Option<Arc<dyn<SceneParticleControl>>> m_particle_control;
+    Option<std::shared_ptr<SceneSoundControl>>    m_sound_control;
+    Option<std::shared_ptr<SceneParticleControl>> m_particle_control;
     Option<Arc<VideoPlaybackState>>        m_video_control;
 
     std::shared_ptr<SceneMesh> m_mesh;
@@ -2218,27 +2194,14 @@ struct ImageParseError {
     String              message;
 };
 
+// 按名字解析图片（单个、批量、只读头）。
 struct IImageParser {
-    using Trait                  = IImageParser;
-    static constexpr bool direct = false;
+    virtual ~IImageParser() = default;
 
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = IImageParser;
-
-        auto Parse(ref<str> name) const -> Result<Arc<Image>, ImageParseError> {
-            return rstd::trait_call<0>(this, name);
-        }
-        auto ParseMany(slice<String> names) const -> Vec<Result<Arc<Image>, ImageParseError>> {
-            return rstd::trait_call<1>(this, names);
-        }
-        auto ParseHeader(ref<str> name) const -> Result<ImageHeader, ImageParseError> {
-            return rstd::trait_call<2>(this, name);
-        }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Parse, &T::ParseMany, &T::ParseHeader>;
+    virtual auto Parse(ref<str> name) const -> Result<Arc<Image>, ImageParseError> = 0;
+    virtual auto ParseMany(slice<String> names) const
+        -> Vec<Result<Arc<Image>, ImageParseError>>                                = 0;
+    virtual auto ParseHeader(ref<str> name) const -> Result<ImageHeader, ImageParseError> = 0;
 };
 
 struct SceneDrawItemRecord {
@@ -2391,12 +2354,12 @@ private:
     HashMap<u64, Entry>        m_entries;
 };
 
-class SceneTextureAnimationRuntime {
+class SceneTextureAnimationRuntime final : public SceneRuntimeSystem {
 public:
     explicit SceneTextureAnimationRuntime(SceneTextureAnimationRegistry& animations)
         : m_animations(rstd::addressof(animations)) {}
 
-    void Update(ref<SceneFrame> frame) { m_animations->Advance(frame->delta); }
+    void Update(ref<SceneFrame> frame) override { m_animations->Advance(frame->delta); }
 
 private:
     SceneTextureAnimationRegistry* m_animations;
@@ -2781,32 +2744,32 @@ public:
     bool ApplyUserLightVisibilityBindings(std::string_view key, const NJson& property);
     bool ApplyUserCameraPathVisibilityBindings(std::string_view key, const NJson& property);
 
-    void RegisterSoundVolumeBinding(ref<str> key, Arc<dyn<SceneSoundControl>> control) {
+    void RegisterSoundVolumeBinding(ref<str> key, std::shared_ptr<SceneSoundControl> control) {
         auto controls = m_sound_volume_user_index.get_mut(key);
         if (controls.is_none()) {
             (void)m_sound_volume_user_index.insert(String::make(key),
-                                                   Vec<Arc<dyn<SceneSoundControl>>> {});
+                                                   Vec<std::shared_ptr<SceneSoundControl>> {});
             controls = m_sound_volume_user_index.get_mut(key);
         }
         (*controls)->push(rstd::move(control));
     }
-    auto SoundVolumeBindings(ref<str> key) const -> slice<Arc<dyn<SceneSoundControl>>> {
+    auto SoundVolumeBindings(ref<str> key) const -> slice<std::shared_ptr<SceneSoundControl>> {
         auto controls = m_sound_volume_user_index.get(key);
         if (controls.is_none()) return {};
         return (*controls)->as_slice();
     }
     void RegisterParticleOverrideBinding(String                                 key,
-                                         Arc<dyn<SceneParticleOverrideControl>> control) {
+                                         std::shared_ptr<SceneParticleOverrideControl> control) {
         auto controls = m_particle_override_user_index.get_mut(key.as_str());
         if (controls.is_none()) {
             (void)m_particle_override_user_index.insert(
-                key.clone(), Vec<Arc<dyn<SceneParticleOverrideControl>>> {});
+                key.clone(), Vec<std::shared_ptr<SceneParticleOverrideControl>> {});
             controls = m_particle_override_user_index.get_mut(key.as_str());
         }
         (*controls)->push(rstd::move(control));
     }
     auto ParticleOverrideBindings(ref<str> key) const
-        -> slice<Arc<dyn<SceneParticleOverrideControl>>> {
+        -> slice<std::shared_ptr<SceneParticleOverrideControl>> {
         auto controls = m_particle_override_user_index.get(key);
         if (controls.is_none()) return {};
         return (*controls)->as_slice();
@@ -2832,7 +2795,7 @@ public:
         return m_audio_response_demand.clone();
     }
 
-    void SetImageParser(Box<dyn<IImageParser>> parser) {
+    void SetImageParser(std::unique_ptr<IImageParser> parser) {
         m_image_parser = Some(rstd::move(parser));
     }
     auto ParseImage(ref<str> name) const -> Result<Arc<Image>, ImageParseError>;
@@ -3031,10 +2994,10 @@ private:
     HashMap<String, Vec<MaterialTextureUserBinding>>             m_material_texture_user_index;
     HashMap<String, Vec<ImagePropertyBinding>>                   m_image_color_user_index;
     HashMap<String, Vec<ImagePropertyBinding>>                   m_image_alpha_user_index;
-    HashMap<String, Vec<Arc<dyn<SceneParticleOverrideControl>>>> m_particle_override_user_index;
-    HashMap<String, Vec<Arc<dyn<SceneSoundControl>>>>            m_sound_volume_user_index;
-    Option<Box<dyn<IImageParser>>>                               m_image_parser;
-    Vec<std::unique_ptr<SceneExtensionSlot>>                      m_extensions;
+    HashMap<String, Vec<std::shared_ptr<SceneParticleOverrideControl>>> m_particle_override_user_index;
+    HashMap<String, Vec<std::shared_ptr<SceneSoundControl>>>            m_sound_volume_user_index;
+    Option<std::unique_ptr<IImageParser>>                               m_image_parser;
+    Vec<std::unique_ptr<SceneExtensionSlot>>                            m_extensions;
     HashMap<String, Arc<Image>>                                  m_runtime_images;
     HashMap<String, SceneTexture>                                m_textures;
     HashMap<String, u64>                                         m_texture_content_revisions;
