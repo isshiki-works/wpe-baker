@@ -22,14 +22,6 @@
     "revision": "456fec5cc2b87acdb56800e298b5712ea69cdd47"
   },
   {
-    "name": "wavsen",
-    "url": "https://codeload.github.com/hypengw/wavsen/zip/77dfd33d07112c05df4682e08b98e19153ebe3ab",
-    "sha256": "9a995b26031edb0315de6767cb7eed0ee5b2fa2e34fe4bd71717b7d061e43d9a",
-    "path": ".deps\\wavsen",
-    "repository": "https://github.com/hypengw/wavsen",
-    "revision": "77dfd33d07112c05df4682e08b98e19153ebe3ab"
-  },
-  {
     "name": "spirv-reflect",
     "url": "https://codeload.github.com/hypengw/SPIRV-Reflect/zip/355785128c1b6ba808e3a7d0e344814fe6cff502",
     "sha256": "5c1e3e81802518e60679247907e6253510ae6d3721ccf2a12aebc4ca29afaa6c",

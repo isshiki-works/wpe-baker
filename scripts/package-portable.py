@@ -20,7 +20,8 @@ provenance_spec.loader.exec_module(provenance)
 # binary. The authoritative copy is the one that took part in the build, under .deps; the
 # licenses-extra/ copies (downloaded from each upstream at the pinned revision) are the
 # fallback, and the only source for wavsen and vvk, whose pinned revisions predate their license files
-# (the author confirmed on 2026-09-18 that the terms cover those revisions).
+# (the author confirmed on 2026-09-18 that the terms cover those revisions). wavsen is no longer
+# built, but engine/src/Media ports its audio/video decoding code, so its notice still ships.
 STATIC_LICENSES = {
     "freetype.LICENSE.TXT": ".deps/freetype/LICENSE.TXT",
     "freetype.FTL.TXT": ".deps/freetype/docs/FTL.TXT",

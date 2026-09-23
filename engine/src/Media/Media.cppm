@@ -152,12 +152,13 @@ public:
     ~VideoSource();
     VideoSource(VideoSource&&) noexcept;
 
-    // 目标尺寸为奇数时各加 1（NV12 色度减半）。打开失败返回 false，原因见 last_error()。
+    // 奇数宽高照原样解码（NV12 色度按向上取整打包）。打开失败返回 false，原因见 last_error()。
     // 其余成员都只能在 open() 成功之后调用。
     auto open(owe::io::RangeReader source, std::uint32_t target_width, std::uint32_t target_height)
         -> bool;
 
     // 失败返回 nullopt，原因见 last_error()；错误不锁存，下次调用照常再试。
+    // 最后一个包的解码错误按读完处理，照常回到开头（见 detail::DecodeTailGate）。
     auto next_frame(Nv12Frame& out) -> std::optional<NextFrame>;
     // 跳到不超过 seconds 的关键帧（超出时长按时长算）；失败返回 false。
     auto seek(double seconds) -> bool;
@@ -173,3 +174,45 @@ private:
 };
 
 } // namespace owe::media
+
+// ---- 模块内部（不导出）----
+namespace owe::media::detail
+{
+
+// 流末尾解码错误的判定，AudioDecoder 与 VideoSource 共用。
+// 解码错误（send_packet / receive_frame）出现前已成功解出过帧，且出错的包是本流最后一个包
+// （或出错时已在 EOF 冲洗），就按正常读完处理：已解出的帧照常输出，last_error() 为空，循环播放从头重开。
+// 这对应 ffmpeg 命令行跳过解码错误继续读的做法，但只放过末尾：出错之后本流又读到包，
+// 说明错误在文件中间，照旧锁存这个错误。一帧都没解出就出错也锁存（文件整个不可解）。
+// 解复用错误（av_read_frame）不在此列，照旧锁存。
+class DecodeTailGate {
+public:
+    void frame_decoded() noexcept { m_decoded_any = true; }
+
+    // 解码出错：返回 true 表示先暂缓（等看后面还有没有本流的包），false 表示调用方立刻锁存。
+    [[nodiscard]] auto defer(const char* operation, int code) noexcept -> bool {
+        if (! m_decoded_any) return false;
+        m_operation = operation;
+        m_code      = code;
+        return true;
+    }
+
+    // 读到本流的下一个包时调用：有暂缓的错误就说明它在流中间，取走并返回 true，调用方锁存 operation / code。
+    [[nodiscard]] auto take_mid_stream(const char*& operation, int& code) noexcept -> bool {
+        if (! m_operation) return false;
+        operation   = m_operation;
+        code        = m_code;
+        m_operation = nullptr;
+        return true;
+    }
+
+    // 回到开头或跳转之后，暂缓的错误作废。
+    void reset() noexcept { m_operation = nullptr; }
+
+private:
+    bool        m_decoded_any {};
+    const char* m_operation {};
+    int         m_code {};
+};
+
+} // namespace owe::media::detail

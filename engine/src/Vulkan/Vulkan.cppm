@@ -701,7 +701,7 @@ private:
     std::uint64_t      m_video_observation_tick { 0 };
 
     /* Opaque pImpl for the active video-tex set. Defined inside
-     * TextureCache.cpp to keep wavsen.video out of the public
+     * TextureCache.cpp to keep the video decoding types out of the public
      * wescene.vulkan module interface. */
     Option<Box<VideoRegistry>> m_video_registry;
 };

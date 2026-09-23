@@ -8,7 +8,7 @@ import wescene.vk;
 
 // NV12 → RGBA8 转换（T5b，迁自 wavsen yuv_to_rgba.cpp 的软件路径）。
 // 只有软件解码帧这一条路：硬解帧的导入、BridgeForeign 的导出信号量不在这里。
-// 计算着色器、采样器、上传与屏障逐项照旧，偶数尺寸输出与 wavsen 逐字节相同（对拍：media-nv12-parity-tests）；
+// 计算着色器、采样器、上传与屏障逐项照旧，偶数尺寸输出与 wavsen 逐字节相同（T5b 对拍核过，对拍目标随 wavsen 一起删了）；
 // 奇数尺寸 wavsen 拒绝，这里支持（media-nv12-tests）。
 export namespace owe::media
 {
