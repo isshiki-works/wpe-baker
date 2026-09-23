@@ -36,6 +36,7 @@ STATIC_LICENSES = {
     "vulkan-headers.Apache-2.0.txt": ".deps/vulkan-headers/LICENSES/Apache-2.0.txt",
     "vulkan-headers.MIT.txt": ".deps/vulkan-headers/LICENSES/MIT.txt",
     "vulkan-loader.LICENSE.txt": ".deps/vulkan-loader/LICENSE.txt",
+    "nlohmann-json.LICENSE.MIT": ".deps/nlohmann-json/LICENSE.MIT",
     "rstd.LICENSE-MIT": ".deps/rstd/LICENSE-MIT",
     "rstd.LICENSE-APACHE": ".deps/rstd/LICENSE-APACHE",
     "wavsen.LICENSE-MIT": None,

@@ -10,7 +10,7 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ENGINE_BASE = "b866e8e711fdd7762385b23601affa1ea5539e3b"
-SOURCE_DEPENDENCIES = ["rstd", "vvk", "wavsen", "spirv-reflect", "glslang", "quickjs", "vma", "lz4", "freetype", "vulkan-headers", "vulkan-loader", "eigen"]
+SOURCE_DEPENDENCIES = ["rstd", "vvk", "wavsen", "spirv-reflect", "glslang", "quickjs", "vma", "lz4", "freetype", "vulkan-headers", "vulkan-loader", "eigen", "nlohmann-json"]
 
 def digest_file(path: pathlib.Path) -> str:
     with path.open("rb") as stream:

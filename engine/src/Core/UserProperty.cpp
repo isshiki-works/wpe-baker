@@ -33,8 +33,7 @@ Json ParseWireValue(const Json& schema, const Json& value) {
     if (type.is_empty() || type == "textinput"_str) return value.clone();
 
     auto raw = rstd::cppstd::as_string_view(*value.as_str());
-    auto parsed =
-        rstd::json::from_str(rstd::cppstd::as_str(raw).unwrap(), { .allow_comments = true });
+    auto parsed = ParseJson(raw, { .allow_comments = true });
     return parsed.is_ok() ? parsed.unwrap() : value.clone();
 }
 

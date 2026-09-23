@@ -132,6 +132,10 @@ target_link_libraries(wavsen INTERFACE wavsen::video wavsen::audio wavsen::decod
 add_library(wpe-eigen INTERFACE)
 target_include_directories(wpe-eigen INTERFACE "${WPE_DEPS}/eigen")
 
+# nlohmann/json 3.12（header-only）：取代 rstd::json 的解析与写出（T2-3）。
+add_library(nlohmann-json INTERFACE)
+target_include_directories(nlohmann-json INTERFACE "${WPE_DEPS}/nlohmann-json/single_include")
+
 # 各包的源文件清单与用法（原 lito.toml）。
 add_subdirectory(src/Core)
 add_subdirectory(src/Audio)

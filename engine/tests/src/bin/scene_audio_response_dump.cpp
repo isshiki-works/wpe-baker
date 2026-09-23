@@ -14,6 +14,7 @@ import rstd;
 import rstd.argparse;
 import rstd.cppstd;
 import rstd.json;
+import wescene.json;
 import wavsen.audio;
 import wescene.cli;
 
@@ -323,7 +324,7 @@ auto LoadWebCapture(const DumpArgs& args) -> Option<Vec<CaptureFrame>> {
         ++line_number;
         if (line.empty()) continue;
 
-        auto parsed = rstd::json::from_str(rstd::cppstd::as_str(line).unwrap());
+        auto parsed = owe::ParseJson(line);
         if (parsed.is_err()) {
             std::fprintf(stderr, "invalid Web JSON row at line %zu\n", line_number);
             return None();

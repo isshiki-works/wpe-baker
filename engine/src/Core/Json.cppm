@@ -23,6 +23,16 @@ struct JsonFileError {
     String            message;
 };
 
+// 解析走 nlohmann（见 JsonNlohmann.hpp）；重复键一律后者覆盖，原 reject_duplicate_keys 无调用方，已删。
+struct JsonParseOptions {
+    bool allow_comments { false };
+    bool allow_trailing_commas { false };
+};
+
+struct JsonParseError {
+    String message;
+};
+
 template<typename T>
 struct JsonTemplateTypeCheck {
     using type = bool;
@@ -39,15 +49,15 @@ typename JsonTemplateTypeCheck<T>::type
 GetJsonValue(const Json& json, std::string_view name, T& value, bool warn = true,
              std::source_location loc = std::source_location::current());
 
-auto ParseJson(std::string_view source, rstd::json::ParseOptions options = {})
-    -> rstd::json::ParseResult;
-auto ReadJsonFile(fs::VFS& vfs, fs::Path path, rstd::json::ParseOptions options = {})
+auto ParseJson(std::string_view source, JsonParseOptions options = {})
+    -> rstd::Result<Json, JsonParseError>;
+auto ReadJsonFile(fs::VFS& vfs, fs::Path path, JsonParseOptions options = {})
     -> rstd::Result<Json, JsonFileError>;
-inline auto ReadJsonFile(fs::VFS& vfs, std::string_view path, rstd::json::ParseOptions options = {})
+inline auto ReadJsonFile(fs::VFS& vfs, std::string_view path, JsonParseOptions options = {})
     -> rstd::Result<Json, JsonFileError> {
     return ReadJsonFile(vfs, fs::ToPath(path), options);
 }
-auto ReadAssetJsonFile(fs::VFS& vfs, std::string_view path, rstd::json::ParseOptions options = {})
+auto ReadAssetJsonFile(fs::VFS& vfs, std::string_view path, JsonParseOptions options = {})
     -> rstd::Result<Json, JsonFileError>;
 auto Dump(const Json& value, Option<usize> indent = None()) -> std::string;
 auto DumpString(const Json& value, Option<usize> indent = None()) -> String;
@@ -87,6 +97,24 @@ struct Impl<fmt::Debug, owe::JsonFileError> : ImplBase<owe::JsonFileError> {
 
 template<>
 struct Impl<error::Error, owe::JsonFileError> : DefaultInImpl<error::Error, owe::JsonFileError> {};
+
+template<>
+struct Impl<fmt::Display, owe::JsonParseError> : ImplBase<owe::JsonParseError> {
+    auto fmt(fmt::Formatter& formatter) const -> bool {
+        return formatter.write_fmt(fmt::Arguments::make("{}", this->self().message));
+    }
+};
+
+template<>
+struct Impl<fmt::Debug, owe::JsonParseError> : ImplBase<owe::JsonParseError> {
+    auto fmt(fmt::Formatter& formatter) const -> bool {
+        return formatter.write_fmt(
+            fmt::Arguments::make("JsonParseError(message={})", this->self().message));
+    }
+};
+
+template<>
+struct Impl<error::Error, owe::JsonParseError> : DefaultInImpl<error::Error, owe::JsonParseError> {};
 
 } // namespace rstd
 

@@ -29,6 +29,7 @@ GPL v2 第 3 条要求二进制与对应完整源码一起提供 —— 两个 z
 | VulkanMemoryAllocator | `3aa921224c154a0d2c43912bc88e1c42ce1f7607` | MIT | https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator | 否 | — | `vma.LICENSE.txt` |
 | SPIRV-Reflect（hypengw fork） | `355785128c1b6ba808e3a7d0e344814fe6cff502` | Apache-2.0 | https://github.com/hypengw/SPIRV-Reflect | 否 | — | `spirv-reflect.LICENSE` |
 | Eigen | `bc3b39870ecb690a623a3f49149a358b95c5781d` | MPL-2.0 为主，个别文件 BSD 等 MPL2 兼容许可 | https://gitlab.com/libeigen/eigen | 否 | — | `eigen.COPYING.MPL2` + `eigen.COPYING.README` |
+| nlohmann/json | `v3.12.0`（发布包 `include.zip`，SHA256 `b8cb0ef2…59372`） | MIT | https://github.com/nlohmann/json | 否 | — | `nlohmann-json.LICENSE.MIT` |
 | Vulkan-Headers | `v1.4.321` | Apache-2.0 OR MIT | https://github.com/KhronosGroup/Vulkan-Headers | 否 | — | `vulkan-headers.LICENSE.md` + `vulkan-headers.Apache-2.0.txt` + `vulkan-headers.MIT.txt` |
 | Vulkan-Loader | `v1.4.321` | Apache-2.0 | https://github.com/KhronosGroup/Vulkan-Loader | 否 | — | `vulkan-loader.LICENSE.txt` |
 | rstd | `456fec5cc2b87acdb56800e298b5712ea69cdd47` | MIT OR Apache-2.0 | https://github.com/litocpp/rstd | **是** | `scripts\dependency-patches\rstd.patch`（4 个文件：`src/core/src/convert.cppm`、`src/json/src/parser.cppm`、`src/json/src/reader.cpp`、`tests/main/json/parser.cpp`） | `rstd.LICENSE-MIT` + `rstd.LICENSE-APACHE` |
@@ -118,6 +119,7 @@ GPL-2.0-only 的引擎静态链接 Apache-2.0-only 的组件（SPIRV-Reflect、V
 | vulkan-headers-LICENSES-Apache-2.0.txt | `cfc7749b96f63bd3` |
 | vulkan-headers-LICENSES-MIT.txt | `1ca3502222d967f3` |
 | vulkan-loader-LICENSE.txt | `43c0a37e6a0fa7ff` |
+| nlohmann-json-LICENSE.MIT | `46a65cffd1ea9551` |
 | rstd-LICENSE-MIT | `dc69d4de4e50e20b` |
 | rstd-LICENSE-APACHE | `cfc7749b96f63bd3` |
 | wavsen-LICENSE-MIT | `2d1edaf74e77c63e` |
@@ -131,4 +133,4 @@ GPL-2.0-only 的引擎静态链接 Apache-2.0-only 的组件（SPIRV-Reflect、V
 | x265-COPYING | `d8afb1bcc7a2cfc6` |
 
 打包时优先从构建机 `.deps\<组件>\` 里的原始许可文件拷贝（那是真正参与构建的副本）；
-本目录的 23 份下载件是台式机 `.deps` 为空时的兜底与核对基准。
+本目录的 21 份下载件是台式机 `.deps` 为空时的兜底与核对基准。
