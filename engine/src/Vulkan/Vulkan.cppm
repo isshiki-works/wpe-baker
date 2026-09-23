@@ -1357,14 +1357,3 @@ inline std::shared_ptr<LocalExSwapchain> CreateLocalExSwapchain(const Device& de
 
 } // namespace vulkan
 } // namespace owe
-
-export namespace rstd
-{
-
-template<>
-struct Impl<Copy, owe::vulkan::ImageUploadTicket> {};
-
-template<>
-struct Impl<Copy, owe::vulkan::BufferUploadTicket> {};
-
-} // namespace rstd

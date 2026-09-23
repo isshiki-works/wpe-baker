@@ -2484,14 +2484,6 @@ struct SceneShadowViewport {
 
 } // namespace owe
 
-export namespace rstd
-{
-
-template<>
-struct Impl<Copy, owe::SceneShadowViewport> {};
-
-} // namespace rstd
-
 export namespace owe
 {
 

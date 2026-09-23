@@ -20,9 +20,6 @@ export namespace rstd
 {
 
 template<>
-struct Impl<Copy, owe::rg::NodeHandle> {};
-
-template<>
 struct Impl<hash::Hash, owe::rg::NodeHandle> : ImplBase<owe::rg::NodeHandle> {
     template<typename H>
         requires Impled<H, hash::Hasher>

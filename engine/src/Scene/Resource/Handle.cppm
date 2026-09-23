@@ -58,9 +58,6 @@ export namespace rstd
 {
 
 template<typename Tag>
-struct Impl<Copy, owe::resource::ResourceHandle<Tag>> {};
-
-template<typename Tag>
 struct Impl<hash::Hash, owe::resource::ResourceHandle<Tag>>
     : ImplBase<owe::resource::ResourceHandle<Tag>> {
     template<typename H>
