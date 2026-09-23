@@ -1,6 +1,8 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 module wescene.pkg.parse;
 import :scene_context;
-import rstd;
 
 using namespace rstd::prelude;
 

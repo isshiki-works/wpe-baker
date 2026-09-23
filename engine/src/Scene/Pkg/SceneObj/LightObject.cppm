@@ -1,7 +1,8 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.pkg.scene_obj:light_object;
-import rstd.cppstd;
 import wescene.fs;
 
 export import :field_binding;

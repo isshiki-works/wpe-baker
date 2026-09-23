@@ -1,7 +1,8 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.spec_names;
 export import wescene.spec_names;
-import rstd;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;

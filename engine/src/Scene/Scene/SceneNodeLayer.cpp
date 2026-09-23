@@ -1,13 +1,12 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 module wescene.scene;
 import wescene.spec_names;
 import wescene.core;
 import wescene.types;
-import rstd;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 using namespace owe;

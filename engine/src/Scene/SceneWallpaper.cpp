@@ -1,5 +1,6 @@
 module;
-#include <rstd/macro.hpp>
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <random>
 #include <chrono>
@@ -16,9 +17,6 @@ import eigen;
 import owe.audio_response;
 import owe.scene_audio_response;
 import owe.user_property;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 import wavsen.audio;
 import wescene.fs;
 import wescene.timer;

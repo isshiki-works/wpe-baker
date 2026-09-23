@@ -1,10 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include "effolkronium/random.hpp"
 
 export module wescene.core;
-import rstd;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 

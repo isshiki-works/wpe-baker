@@ -1,7 +1,9 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.parse:scene_context;
 import eigen;
 
-import rstd;
 import wavsen.audio;
 import wescene.fs;
 import wescene.json;

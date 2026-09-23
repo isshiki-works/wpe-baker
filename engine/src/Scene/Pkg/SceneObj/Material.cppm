@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.scene_obj:material;
-import rstd.cppstd;
 import wescene.fs;
 import :scene_document;
 export import :field_binding;

@@ -1,7 +1,8 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.scene_obj:image_object;
 import wescene.core;
-import rstd;
-import rstd.cppstd;
 import wescene.fs;
 
 export import :animation_layer;

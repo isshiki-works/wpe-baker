@@ -1,4 +1,6 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <cstdio>
 #ifdef _WIN32
@@ -11,7 +13,6 @@ module;
 #endif
 
 module wescene.types;
-import rstd.cppstd;
 
 namespace owe
 {

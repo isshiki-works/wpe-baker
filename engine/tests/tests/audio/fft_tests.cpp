@@ -1,9 +1,10 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <cmath>
 #include <cstdio>
 #include <gtest/gtest.h>
 
 import owe.fft;
-import rstd;
 
 using namespace rstd::prelude;
 

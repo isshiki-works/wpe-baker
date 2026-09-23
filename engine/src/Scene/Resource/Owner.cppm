@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.resource_registry:owner;
-import rstd;
 import wescene.vulkan;
 
 import :texture_registry;

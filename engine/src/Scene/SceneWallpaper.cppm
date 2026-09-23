@@ -1,12 +1,12 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <vulkan/vulkan.h>
 
 export module wescene.scene_wallpaper;
-import rstd;
 
 export import wescene.core;
 export import wescene.json;
-export import rstd.cppstd;
 export import wescene.scene;
 export import wescene.vulkan_render;
 export import wescene.vulkan;

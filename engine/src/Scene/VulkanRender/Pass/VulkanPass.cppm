@@ -1,6 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.vulkan_render:vulkan_pass;
-import rstd;
-import rstd.cppstd;
 import wescene.rgraph;
 import wescene.vulkan;
 import wescene.scene;

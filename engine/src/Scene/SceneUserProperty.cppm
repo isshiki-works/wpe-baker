@@ -1,9 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.scene_user_property;
 
-import rstd;
-import rstd.cppstd;
 import wescene.json;
 import wescene.scene;
 

@@ -1,9 +1,8 @@
 module;
-#include <rstd/macro.hpp>
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.pkg.scene_obj:object;
-import rstd;
-import rstd.cppstd;
 import wescene.fs;
 import wescene.json;
 import :scene_document;

@@ -1,11 +1,12 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <cmath>
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <limits>
-#include <rstd/macro.hpp>
 #include "quickjs.h"
 
 #include "JsonNlohmann.hpp"
@@ -13,9 +14,6 @@ module;
 module wescene.script;
 import eigen;
 import owe.scene_audio_response;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 import wescene.types;
 import wescene.pkg.puppet;
 import wescene.scene;

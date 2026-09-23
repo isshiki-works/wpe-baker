@@ -1,10 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include "JsonNlohmann.hpp"
 
 export module wescene.json;
-export import rstd;
-import rstd.cppstd;
 import wescene.fs;
 
 using namespace rstd::prelude;
@@ -78,7 +78,7 @@ inline auto Dump(const NJson& value, usize indent) -> std::string {
 
 } // namespace owe
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

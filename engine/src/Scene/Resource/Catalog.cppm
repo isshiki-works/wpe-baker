@@ -1,8 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <memory>
 
 export module wescene.resource:catalog;
-import rstd;
 import wescene.types;
 import :error;
 import :texture;

@@ -1,4 +1,6 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 module wescene.pkg.scene_obj;
 

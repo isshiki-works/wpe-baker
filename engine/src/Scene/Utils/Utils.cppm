@@ -1,6 +1,7 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 // Sha.hpp stays classic — utils::genSha1 is consumed by impl units that
 // need to spill blobs to /tmp for post-mortem inspection (Vulkan/Shader.cpp).
@@ -9,9 +10,6 @@ module;
 export module wescene.utils;
 import wescene.core;
 import eigen;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 export import wescene.types;
 
 using namespace rstd::prelude;

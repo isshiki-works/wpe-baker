@@ -1,12 +1,11 @@
 module;
-#include <rstd/macro.hpp>
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.scene;
 import eigen;
-import rstd;
 import wescene.core;
 import wescene.json;
-import rstd.cppstd;
 import wescene.types;
 import wescene.spec_names;
 
@@ -3043,7 +3042,7 @@ private:
 
 } // namespace owe
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.scene:id;
-import rstd;
 
 using namespace rstd::prelude;
 

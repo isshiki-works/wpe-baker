@@ -1,3 +1,5 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 
 #include "../../../src/Scene/Pkg/Parse/Puppet/TwoBoneIk.hpp"
@@ -5,7 +7,6 @@
 #include <array>
 #include <string>
 
-import rstd;
 import wescene.core;
 import wescene.pkg.puppet;
 

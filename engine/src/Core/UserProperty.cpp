@@ -1,11 +1,11 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include "JsonNlohmann.hpp"
 
 module owe.user_property;
 
-import rstd;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 

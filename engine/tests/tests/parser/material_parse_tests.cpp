@@ -1,7 +1,7 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 
-import rstd.cppstd;
-import rstd;
 import wescene.json;
 import wescene.pkg.parse;
 

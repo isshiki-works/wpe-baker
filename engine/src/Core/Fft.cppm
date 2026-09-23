@@ -1,6 +1,8 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module owe.fft;
 
-import rstd;
 
 export namespace owe::fft
 {

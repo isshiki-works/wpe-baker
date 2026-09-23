@@ -1,4 +1,6 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 // Make the global aligned allocation declarations visible before importing
 // standard-library templates, so Clang does not synthesize a second overload.
@@ -7,8 +9,6 @@ module;
 export module wescene.types;
 import wescene.core;
 import wescene.io;
-import rstd;
-import rstd.cppstd;
 
 export namespace owe
 {

@@ -1,7 +1,8 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.pkg.parse:shader_lex;
-import rstd;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;

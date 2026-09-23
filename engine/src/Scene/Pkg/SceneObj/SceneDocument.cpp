@@ -1,11 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 #include "JsonNlohmann.hpp"
 
 module wescene.pkg.scene_obj;
-import rstd.log;
-import rstd.cppstd;
 import wescene.json;
 import wescene.pkg_fs;
 

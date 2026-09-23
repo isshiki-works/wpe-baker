@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.vulkan_render:pipeline_layout;
-import rstd;
 import wescene.resource_registry;
 import wescene.vulkan;
 

@@ -1,17 +1,16 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 // 先让全局对齐分配声明可见，避免 Clang 合成第二个 operator new 重载（同 types.cppm）。
 #include <new>
-#include <rstd/macro.hpp>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 
 export module wescene.io;
-import rstd;
-import rstd.cppstd;
 
-using ::alloc::vec::Vec;
+using owe::compat::Vec;
 using namespace rstd::prelude;
 
 // 文件句柄与二进制读取（T2 Fs/IO 块：替换 rstd::io/fs）。

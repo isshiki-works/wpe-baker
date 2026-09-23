@@ -1,6 +1,7 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -15,9 +16,6 @@ import eigen;
 import wescene.pkg.spec_names;
 import wescene.core;
 import wescene.types;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 import wescene.scene;
 import wescene.shader_compile;
 

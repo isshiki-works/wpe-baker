@@ -1,3 +1,5 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 // Unit coverage for the WE shader annotation collector
 // (ShaderParser_Pegtl.cpp). The collector is `#if`-agnostic by design —
 // dead-branch GLSL stripping is glslang's job downstream. These tests assert
@@ -11,8 +13,6 @@
 #include <filesystem>
 #include <fstream>
 
-import rstd.cppstd;
-import rstd;
 import wescene.fs;
 import wescene.pkg.parse;
 import wescene.scene;

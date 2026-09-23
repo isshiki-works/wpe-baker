@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.parse:scene_parser;
-import rstd;
 import wavsen.audio;
 import wescene.fs;
 import wescene.json;
@@ -53,7 +55,7 @@ public:
 
 } // namespace owe
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

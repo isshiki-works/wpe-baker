@@ -1,9 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.pkg.parse:mdl_parser;
 import eigen;
 import wescene.core;
-import rstd;
 import wescene.fs;
 import wescene.scene;
 import wescene.pkg.scene_obj;

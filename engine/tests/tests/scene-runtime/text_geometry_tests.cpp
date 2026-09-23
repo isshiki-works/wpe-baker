@@ -1,11 +1,11 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <memory>
 #include <vector>
 
-import rstd;
-import rstd.cppstd;
 import wescene.scene;
 import wescene.text;
 import wescene.types;

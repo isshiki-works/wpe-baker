@@ -1,3 +1,5 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 // SPDX-License-Identifier: MIT
 // Offline CLI. The OWE libraries keep their upstream license.
 #ifdef _WIN32
@@ -17,9 +19,6 @@
 #define WPE_RENDER_SOURCE_DIGEST "unrecorded"
 #endif
 
-import rstd;
-import rstd.cppstd;
-import rstd.log;
 import wescene.scene_wallpaper;
 import wescene.pkg.parse;
 import wescene.json;
@@ -28,24 +27,16 @@ namespace fs = std::filesystem;
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
-struct DiagnosticLogger {
+struct DiagnosticLogger : rstd::log::Log {
     rstd::log::EnvLogger sink { "info"_str };
     mutable std::atomic<uint64_t> errors { 0 };
-    bool enabled(const rstd::log::Metadata& metadata) const { return sink.enabled(metadata); }
-    void log(const rstd::log::Record& record) const {
+    bool enabled(const rstd::log::Metadata& metadata) const override { return sink.enabled(metadata); }
+    void log(const rstd::log::Record& record) const override {
         if (record.lvl() == rstd::log::Level::Error) errors.fetch_add(1);
         sink.log(record);
     }
-    void flush() const { sink.flush(); }
+    void flush() const override { sink.flush(); }
 };
-
-namespace rstd {
-template<> struct Impl<log::Log, DiagnosticLogger> : ImplBase<DiagnosticLogger> {
-    bool enabled(log::Metadata const& value) const { return this->self().enabled(value); }
-    void log(log::Record const& value) const { this->self().log(value); }
-    void flush() const { this->self().flush(); }
-};
-}
 
 namespace {
 constexpr const char* kBase = "b866e8e711fdd7762385b23601affa1ea5539e3b";

@@ -1,10 +1,11 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <cstdint>
 #include <span>
 
 export module wescene.resource_registry:buffer_registry;
-import rstd;
 import wescene.resource;
 import wescene.vulkan;
 

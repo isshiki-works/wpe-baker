@@ -1,6 +1,7 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 
-import rstd.cppstd;
 import wescene.types;
 import wescene.scene;
 import wescene.vulkan_render;

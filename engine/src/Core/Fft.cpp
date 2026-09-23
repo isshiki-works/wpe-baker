@@ -1,4 +1,6 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <cmath>
 
@@ -10,7 +12,6 @@ module;
 
 module owe.fft;
 
-import rstd;
 
 namespace owe::fft
 {

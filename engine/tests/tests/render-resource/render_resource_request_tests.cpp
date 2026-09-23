@@ -1,11 +1,11 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <vulkan/vulkan_core.h>
 
 #include <cstring>
 
 #include <gtest/gtest.h>
 
-import rstd;
-import rstd.cppstd;
 import wescene.scene;
 import wescene.types;
 import wescene.vulkan;

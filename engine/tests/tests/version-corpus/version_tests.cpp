@@ -1,3 +1,5 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 // Per-version corpus tests.
 //
 // Each category walks the version stamps harvested by the corpus singleton,
@@ -15,7 +17,6 @@
 #include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
 #include "JsonNlohmann.hpp"
 
-import rstd.cppstd;
 import wescene.json;
 import wescene.testing.corpus;
 

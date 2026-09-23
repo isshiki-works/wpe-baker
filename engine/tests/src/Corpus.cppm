@@ -8,6 +8,8 @@
 // in kSkipIds and never parsed.
 
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <cstdio>
 #include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
@@ -16,8 +18,6 @@ module;
 
 export module wescene.testing.corpus;
 
-import rstd;
-import rstd.cppstd;
 import wescene.json;
 import wescene.pkg.parse;
 import wescene.pkg_fs;

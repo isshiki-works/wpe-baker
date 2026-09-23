@@ -1,7 +1,8 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.scene_obj:particle_object;
-import rstd;
 import wescene.core;
-import rstd.cppstd;
 import wescene.utils;
 import wescene.fs;
 

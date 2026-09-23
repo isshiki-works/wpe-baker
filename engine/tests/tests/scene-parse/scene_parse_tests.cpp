@@ -1,3 +1,5 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 // scene.json parse regression net.
 //
 // For each observed PKGV version, every matching workshop is re-opened,
@@ -15,8 +17,6 @@
 
 #include <cmath>
 
-import rstd.cppstd;
-import rstd;
 import wavsen.audio;
 import wescene.fs;
 import wescene.json;

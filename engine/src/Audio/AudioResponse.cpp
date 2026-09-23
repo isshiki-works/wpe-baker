@@ -1,11 +1,12 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <cmath>
 
 module owe.audio_response;
 
 import owe.fft;
-import rstd;
 
 namespace owe::audio
 {

@@ -1,7 +1,8 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include "Sha.hpp"
 #include <vog/sha1.hpp>
 
-import rstd.cppstd;
 
 std::string utils::genSha1(std::span<const char> in) {
     SHA1 sha1;

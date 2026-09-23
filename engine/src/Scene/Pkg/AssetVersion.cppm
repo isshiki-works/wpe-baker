@@ -1,12 +1,11 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 #include <cstdio>
 
 export module wescene.pkg_asset_version;
 import wescene.core;
-import rstd.log;
-import rstd.cppstd;
 
 import wescene.fs;
 

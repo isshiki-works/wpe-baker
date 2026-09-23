@@ -1,7 +1,8 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.particle.program;
 
-import rstd;
-import rstd.cppstd;
 import wescene.particle;
 
 using namespace rstd::prelude;

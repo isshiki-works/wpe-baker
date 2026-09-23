@@ -1,10 +1,10 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 
 #include <cmath>
 
 import eigen;
-import rstd;
-import rstd.cppstd;
 import wavsen.audio;
 import wescene.fs;
 import wescene.json;

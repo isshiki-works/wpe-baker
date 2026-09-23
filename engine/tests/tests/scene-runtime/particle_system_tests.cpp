@@ -1,8 +1,8 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 #include <typeindex>
 
-import rstd;
-import rstd.cppstd;
 import eigen;
 import wescene.json;
 import wescene.particle;

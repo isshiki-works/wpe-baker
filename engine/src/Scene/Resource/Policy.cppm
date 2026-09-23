@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.resource_registry:policy;
-import rstd;
 import wescene.vulkan;
 
 export namespace owe::resource_registry

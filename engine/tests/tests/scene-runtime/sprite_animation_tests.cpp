@@ -1,11 +1,11 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 
-import rstd;
-import rstd.cppstd;
 import wescene.types;
 
 namespace

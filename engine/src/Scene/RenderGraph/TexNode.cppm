@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.rgraph:tex_node;
-import rstd;
 import wescene.resource;
 import :dependency_graph;
 

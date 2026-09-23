@@ -1,8 +1,8 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.pkg.scene_obj:animation_layer;
-import rstd;
-import rstd.cppstd;
 import wescene.json;
 export import wescene.pkg.puppet;
 

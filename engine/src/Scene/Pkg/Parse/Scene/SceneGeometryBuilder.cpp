@@ -1,11 +1,11 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 module wescene.pkg.parse;
 import :scene_context;
 import eigen;
 import wescene.pkg.spec_names;
-import rstd;
-import rstd.cppstd;
 import wescene.scene;
 
 using namespace rstd::prelude;

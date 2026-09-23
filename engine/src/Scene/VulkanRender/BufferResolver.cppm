@@ -1,9 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.vulkan_render:buffer_resolver;
 import wescene.core;
-import rstd;
-import rstd.cppstd;
 import wescene.resource_registry;
 import wescene.vulkan;
 import wescene.scene;

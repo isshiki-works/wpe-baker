@@ -1,9 +1,9 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <string_view>
 
 #include <gtest/gtest.h>
 
-import rstd;
-import rstd.cppstd;
 import wescene.resource;
 import wescene.rgraph;
 import wescene.scene;

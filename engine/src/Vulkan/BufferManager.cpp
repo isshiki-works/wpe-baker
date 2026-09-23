@@ -1,12 +1,11 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 #include "vvk/macros.hpp"
 
 module wescene.vulkan;
 
-import rstd.cppstd;
-import rstd.log;
 
 using namespace rstd::prelude;
 

@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.resource:shader;
-import rstd;
 import wescene.types;
 import :handle;
 
@@ -35,7 +37,7 @@ struct ShaderRequest {
 
 } // namespace owe::resource
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

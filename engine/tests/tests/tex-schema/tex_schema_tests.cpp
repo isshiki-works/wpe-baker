@@ -1,11 +1,11 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 // .tex format schema reverse-coverage report.
 
 #include <gtest/gtest.h>
 
 #include <ios>
 
-import rstd;
-import rstd.cppstd;
 import wescene.pkg.parse;
 import wescene.pkg_fs;
 import wescene.fs;

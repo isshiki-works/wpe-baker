@@ -1,7 +1,7 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.parse:tex_image_parser;
-import rstd;
-import rstd.cppstd;
 import wescene.types;
 import wescene.scene;
 import wescene.fs;

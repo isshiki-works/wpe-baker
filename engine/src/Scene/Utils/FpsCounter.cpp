@@ -1,9 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 module wescene.utils;
 import wescene.core;
-import rstd;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 using namespace owe;

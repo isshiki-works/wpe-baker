@@ -1,11 +1,12 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.pkg.puppet;
 import eigen;
 import wescene.core;
 import wescene.json;
 import wescene.scene;
-import rstd;
 
 using namespace rstd::prelude;
 using rstd::sync::Arc;

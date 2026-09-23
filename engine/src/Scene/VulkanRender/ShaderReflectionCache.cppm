@@ -1,10 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.vulkan_render:shader_reflection_cache;
 import wescene.core;
 import wescene.types;
-import rstd;
-import rstd.cppstd;
 import wescene.resource;
 import wescene.vulkan;
 import wescene.scene;
@@ -21,7 +21,7 @@ struct ShaderReflectionKey {
 
 } // namespace owe::vulkan
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

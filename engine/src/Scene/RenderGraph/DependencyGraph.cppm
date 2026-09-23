@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.rgraph:dependency_graph;
-import rstd;
 
 using namespace rstd::prelude;
 
@@ -16,7 +18,7 @@ struct NodeHandle {
 
 } // namespace owe::rg
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

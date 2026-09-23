@@ -1,15 +1,13 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include "JsonNlohmann.hpp"
 
-#include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
 import :scene_context;
 import eigen;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;

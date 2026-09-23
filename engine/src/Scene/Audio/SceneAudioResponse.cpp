@@ -1,4 +1,6 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #if defined(__SSE__)
 #    include <xmmintrin.h>
@@ -7,7 +9,6 @@ module;
 module owe.scene_audio_response;
 
 import owe.audio_response;
-import rstd;
 
 namespace owe::scene_audio
 {

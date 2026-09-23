@@ -1,9 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <span>
 
 export module wescene.resource_registry:texture_registry;
-import rstd;
 import wescene.resource;
 import wescene.vulkan;
 
@@ -74,7 +75,7 @@ struct TextureRegistryIdentity {
 
 } // namespace owe::resource
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

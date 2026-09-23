@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.resource:handle;
-import rstd;
 
 export namespace owe::resource
 {
@@ -54,7 +56,7 @@ using DescriptorBindingHandle = ResourceHandle<DescriptorBindingHandleTag>;
 
 } // namespace owe::resource
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<typename Tag>

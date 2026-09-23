@@ -1,3 +1,5 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -7,8 +9,6 @@
 #include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
 #include "JsonNlohmann.hpp"
 
-import rstd;
-import rstd.cppstd;
 import wescene.json;
 import wescene.pkg.parse;
 import wescene.scene;

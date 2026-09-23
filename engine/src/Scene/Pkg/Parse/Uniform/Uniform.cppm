@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.parse:uniform;
-import rstd;
 import wescene.json;
 
 using namespace rstd::prelude;

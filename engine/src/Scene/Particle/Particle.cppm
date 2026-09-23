@@ -1,12 +1,12 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <typeindex>
 #include <typeinfo>
 
 export module wescene.particle;
 
 import eigen;
-import rstd;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
@@ -1077,7 +1077,7 @@ inline auto ParticleSchema::CreateStorage() const -> ParticleStorage {
 
 } // namespace owe::particle
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

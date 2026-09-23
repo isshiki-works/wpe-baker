@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.scene_obj:sound_object;
-import rstd.cppstd;
 import wavsen.audio;
 import wescene.fs;
 

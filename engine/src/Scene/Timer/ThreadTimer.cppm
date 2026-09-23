@@ -1,8 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.timer:thread_timer;
 import wescene.core;
-import rstd.cppstd;
 
 export namespace owe
 {

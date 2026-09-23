@@ -1,9 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.vulkan_render:custom_shader_pass;
 import wescene.core;
-import rstd;
-import rstd.cppstd;
 import wescene.vulkan;
 import wescene.scene;
 

@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.rgraph:render_graph;
-import rstd;
 import cppstd;
 import wescene.resource;
 

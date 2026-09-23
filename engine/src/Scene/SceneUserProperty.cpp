@@ -1,15 +1,13 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 #include "JsonNlohmann.hpp"
 
 module wescene.scene_user_property;
 
 import eigen;
-import rstd;
-import rstd.cppstd;
-import rstd.log;
 import wescene.fs;
 import wescene.pkg.parse;
 import wescene.script;

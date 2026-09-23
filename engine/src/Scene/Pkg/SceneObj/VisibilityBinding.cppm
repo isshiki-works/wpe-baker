@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.scene_obj:visibility_binding;
-import rstd.cppstd;
 import wescene.json;
 
 using namespace rstd::literals;

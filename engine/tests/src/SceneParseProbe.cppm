@@ -1,10 +1,11 @@
 // Per-workshop probe of root scene.json parsing with explicit pkg version.
 
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.testing.scene_parse_probe;
 
-import rstd.cppstd;
 import wescene.pkg.parse;
 import wescene.fs;
 

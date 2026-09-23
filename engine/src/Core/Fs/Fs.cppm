@@ -1,16 +1,15 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 // 先让全局对齐分配声明可见，避免 Clang 合成第二个 operator new 重载（同 Binary.cppm）。
 #include <new>
-#include <rstd/macro.hpp>
 
 export module wescene.vfs;
-import rstd;
-import rstd.cppstd;
 export import wescene.io;
 
-using ::alloc::string::String;
-using ::alloc::sync::Arc;
-using ::alloc::vec::Vec;
+using owe::compat::string::String;
+using owe::compat::Arc;
+using owe::compat::Vec;
 using namespace rstd::prelude;
 using namespace rstd::literals;
 

@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.resource:plan;
-import rstd;
 import :handle;
 import :error;
 import :texture;

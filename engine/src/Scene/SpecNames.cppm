@@ -1,11 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 export module wescene.spec_names;
-import rstd;
-import rstd.cppstd;
-import rstd.log;
 import wescene.types;
 
 using namespace rstd::prelude;

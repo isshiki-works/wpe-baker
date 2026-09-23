@@ -1,8 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 module wescene.vulkan;
 import wescene.types;
-import rstd.cppstd;
 
 namespace owe
 {

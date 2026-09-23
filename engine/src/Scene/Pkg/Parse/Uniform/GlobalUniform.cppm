@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.parse:global_uniform;
-import rstd;
 import wescene.scene;
 import wescene.pkg.spec_names;
 

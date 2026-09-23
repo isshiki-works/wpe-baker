@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.rgraph:pass;
-import rstd;
 
 using namespace rstd::prelude;
 
@@ -31,7 +33,7 @@ struct VirtualPass : Pass {
 
 } // namespace owe::rg
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

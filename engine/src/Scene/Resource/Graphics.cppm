@@ -1,6 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.resource_registry:graphics;
-import rstd;
-import rstd.cppstd;
 import wescene.resource;
 import wescene.vulkan;
 
@@ -78,7 +79,7 @@ struct PipelineLayoutResult {
 
 } // namespace owe::resource_registry
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

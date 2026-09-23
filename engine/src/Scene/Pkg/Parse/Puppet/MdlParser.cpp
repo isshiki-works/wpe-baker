@@ -1,13 +1,12 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <cmath>
-#include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
 import wescene.pkg.spec_names;
 import wescene.core;
 import wescene.types;
-import rstd.log;
-import rstd.cppstd;
 import wescene.scene;
 import wescene.pkg_asset_version;
 

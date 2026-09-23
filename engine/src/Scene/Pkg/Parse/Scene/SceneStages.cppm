@@ -1,6 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.parse:scene_stages;
-import rstd;
-import rstd.cppstd;
 import wescene.json;
 import wescene.fs;
 import wescene.pkg.scene_obj;

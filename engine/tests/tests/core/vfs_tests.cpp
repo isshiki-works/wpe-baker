@@ -1,9 +1,9 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <algorithm>
 
 #include <gtest/gtest.h>
 
-import rstd;
-import rstd.cppstd;
 import wescene.fs;
 import wescene.pkg_fs;
 

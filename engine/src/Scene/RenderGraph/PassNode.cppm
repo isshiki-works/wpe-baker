@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.rgraph:pass_node;
-import rstd;
 
 import :dependency_graph;
 import :pass;

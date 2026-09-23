@@ -1,12 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <new>
 
-#include <rstd/macro.hpp>
 
 module wescene.vulkan_render;
-import rstd;
-import rstd.cppstd;
-import rstd.log;
 import wescene.resource;
 import wescene.scene;
 

@@ -1,11 +1,11 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.script;
 export import owe.scene_audio_response;
 import wescene.core;
 import wescene.json;
-import rstd;
-import rstd.cppstd;
 import wescene.pkg.puppet;
 import wescene.scene;
 

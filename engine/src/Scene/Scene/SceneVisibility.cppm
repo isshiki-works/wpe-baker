@@ -1,9 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <memory>
 
 export module wescene.scene:visibility;
-import rstd;
 import wescene.json;
 
 using namespace rstd::prelude;

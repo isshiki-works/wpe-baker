@@ -1,18 +1,16 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <new>
-#include <rstd/macro.hpp>
 
 module wescene.pkg_fs;
 import wescene.core;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 
 import wescene.fs;
 
-using ::alloc::collections::HashMap;
-using ::alloc::string::String;
+using owe::compat::collections::HashMap;
+using owe::compat::string::String;
 using namespace owe;
 using namespace owe::fs;
 using namespace rstd::prelude;
@@ -72,7 +70,7 @@ auto WPPkgFs::open(Path pkg_path) -> Result<PkgMount> {
         std::uint64_t offset;
         std::uint64_t length;
     };
-    auto files = ::alloc::vec::Vec<PendingFile>::make();
+    auto files = owe::compat::vec::Vec<PendingFile>::make();
 
     auto entry_count = pkg.ReadInt32();
     if (entry_count < 0) {

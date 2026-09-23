@@ -1,10 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <Core/OrderedTaskPool.hpp>
 
 export module wescene.resource_registry:prepared;
-import rstd;
-import rstd.cppstd;
 import wescene.resource;
 import wescene.vulkan;
 

@@ -1,11 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 module wescene.scene;
 import eigen;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 import wescene.utils;
 
 using namespace owe;

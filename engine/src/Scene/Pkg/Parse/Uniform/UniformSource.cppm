@@ -1,7 +1,8 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.parse:uniform_source;
 export import owe.scene_audio_response;
-import rstd;
-import rstd.cppstd;
 import wescene.json;
 import wescene.pkg.puppet;
 import wescene.scene;

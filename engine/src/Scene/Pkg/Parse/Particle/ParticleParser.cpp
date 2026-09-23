@@ -1,12 +1,11 @@
 module;
-#include <rstd/macro.hpp>
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <typeindex>
 
 module wescene.pkg.parse;
 import eigen;
 import wescene.core;
-import rstd.log;
-import rstd.cppstd;
 import wescene.utils;
 import wescene.scene;
 import wescene.particle;

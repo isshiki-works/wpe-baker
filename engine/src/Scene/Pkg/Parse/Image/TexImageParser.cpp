@@ -1,6 +1,7 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 #include <lz4.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -9,9 +10,6 @@ module;
 module wescene.pkg.parse;
 import wescene.core;
 import wescene.types;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 import wescene.utils;
 import wescene.scene;
 import wescene.pkg_asset_version;

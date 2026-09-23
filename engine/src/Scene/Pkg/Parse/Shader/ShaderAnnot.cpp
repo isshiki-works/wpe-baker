@@ -1,13 +1,11 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include "JsonNlohmann.hpp"
 
-#include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
-import rstd;
-import rstd.cppstd;
-import rstd.log;
 import :shader_lex;
 
 using namespace rstd::prelude;

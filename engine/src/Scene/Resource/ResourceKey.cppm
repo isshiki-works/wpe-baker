@@ -1,10 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <vulkan/vulkan_core.h>
 
 export module wescene.resource_registry:resource_key;
-import rstd;
-import rstd.cppstd;
 import wescene.resource;
 import wescene.types;
 import wescene.vulkan;
@@ -639,7 +639,7 @@ inline FramebufferCacheKey MakeFramebufferCacheKey(const FramebufferResourceRequ
 
 } // namespace owe::vulkan
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

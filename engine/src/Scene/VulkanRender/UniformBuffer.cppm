@@ -1,6 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.vulkan_render:uniform_buffer;
-import rstd;
-import rstd.cppstd;
 import wescene.resource;
 import wescene.scene;
 import wescene.types;
@@ -222,7 +223,7 @@ auto MakeSharedUniformBufferBinding(const UniformBindingPrepareContext*,
 
 } // namespace owe::vulkan
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

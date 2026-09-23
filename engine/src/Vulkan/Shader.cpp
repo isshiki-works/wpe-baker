@@ -1,6 +1,7 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 #include <spirv_reflect.h>
 
 #include <glslang/Public/ShaderLang.h>
@@ -16,9 +17,6 @@ module;
 module wescene.shader_compile;
 import wescene.core;
 import wescene.types;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 using namespace owe;

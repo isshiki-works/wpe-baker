@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.resource:error;
-import rstd;
 
 export namespace owe::resource
 {
@@ -20,7 +22,7 @@ struct ResourceError {
 
 } // namespace owe::resource
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

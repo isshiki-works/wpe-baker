@@ -1,6 +1,7 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 
-import rstd;
 import wescene.pkg.parse;
 
 using namespace rstd::prelude;

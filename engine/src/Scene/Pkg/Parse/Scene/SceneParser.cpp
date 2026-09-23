@@ -1,12 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
 import :scene_context;
-import rstd;
-import rstd.cppstd;
-import rstd.log;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;

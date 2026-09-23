@@ -1,9 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 module wescene.scene;
 import eigen;
-import rstd;
-import rstd.cppstd;
 
 using namespace owe;
 using namespace Eigen;

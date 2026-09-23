@@ -1,3 +1,5 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <atomic>
@@ -5,8 +7,6 @@
 #include <string>
 #include <vector>
 
-import rstd;
-import rstd.cppstd;
 import wescene.resource_registry;
 import wescene.types;
 import wescene.vulkan;

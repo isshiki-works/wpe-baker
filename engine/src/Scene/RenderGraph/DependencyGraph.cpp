@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 module wescene.rgraph;
-import rstd;
 import cppstd;
 
 using namespace rstd::prelude;

@@ -1,8 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include "JsonNlohmann.hpp"
 
-#include <rstd/macro.hpp>
 #include <filesystem>
 
 module wescene.pkg.parse;
@@ -11,9 +12,6 @@ import eigen;
 import wescene.pkg.spec_names;
 import wescene.core;
 import wescene.types;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 import wescene.utils;
 import wescene.scene;
 import wescene.text;

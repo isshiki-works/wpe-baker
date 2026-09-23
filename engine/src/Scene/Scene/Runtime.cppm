@@ -1,9 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <memory>
 #include <new>
 
 export module wescene.scene:runtime;
-import rstd;
 
 using namespace rstd::prelude;
 

@@ -1,4 +1,6 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #ifdef _WIN32
 #include <io.h>
@@ -12,9 +14,6 @@ module;
 
 export module wescene.vulkan;
 import wescene.core;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 import wescene.types;
 
 // Vulkan FFI: vvk::ffi::vulkan exposes the full Vk symbol surface as

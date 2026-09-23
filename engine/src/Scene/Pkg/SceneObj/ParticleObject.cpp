@@ -1,11 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 module wescene.pkg.scene_obj;
 import wescene.core;
-import rstd.log;
-import rstd.cppstd;
 
 using namespace owe::wpscene;
 using namespace rstd::prelude;

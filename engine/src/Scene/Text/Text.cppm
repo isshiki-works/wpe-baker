@@ -1,9 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.text;
-import rstd;
 import wescene.types;
-import rstd.cppstd;
 import wescene.scene;
 
 using namespace rstd::prelude;

@@ -1,12 +1,11 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 #include "JsonNlohmann.hpp"
 
 module wescene.json;
-import rstd.cppstd;
-import rstd.log;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;

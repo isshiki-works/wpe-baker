@@ -1,8 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.scene:lighting;
 import eigen;
-import rstd;
 import :visibility;
 
 using namespace rstd::prelude;

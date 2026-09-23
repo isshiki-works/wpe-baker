@@ -1,14 +1,14 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.pkg_fs;
 import wescene.core;
-import rstd;
-import rstd.cppstd;
 
 export import wescene.fs;
 
-using ::alloc::collections::HashMap;
-using ::alloc::string::String;
+using owe::compat::collections::HashMap;
+using owe::compat::string::String;
 using namespace rstd::prelude;
 
 export namespace owe::fs

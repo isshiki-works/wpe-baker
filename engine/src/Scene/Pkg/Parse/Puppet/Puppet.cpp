@@ -1,6 +1,7 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 #include "TwoBoneIk.hpp"
 
 #include <string>
@@ -9,8 +10,6 @@ module wescene.pkg.puppet;
 import eigen;
 import wescene.core;
 import wescene.scene;
-import rstd;
-import rstd.cppstd;
 
 using namespace owe;
 using namespace Eigen;

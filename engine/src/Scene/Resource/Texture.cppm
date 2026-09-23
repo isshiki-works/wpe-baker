@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.resource:texture;
-import rstd;
 import wescene.types;
 import :handle;
 

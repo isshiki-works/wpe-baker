@@ -1,5 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.resource:buffer;
-import rstd;
 import :handle;
 
 export namespace owe::resource

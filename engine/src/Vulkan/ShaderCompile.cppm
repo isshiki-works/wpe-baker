@@ -1,4 +1,6 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 // Vulkan headers only — no dispatch / loader. ShaderReflected exposes
 // VkDescriptorSetLayoutBinding and VkFormat, which SPIRV-Reflect produces
@@ -10,8 +12,6 @@ export module wescene.shader_compile;
 import wescene.core;
 export import vvk;
 import wescene.types;
-import rstd;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 

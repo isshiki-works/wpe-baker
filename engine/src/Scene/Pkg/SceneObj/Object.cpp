@@ -1,11 +1,9 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 module wescene.pkg.scene_obj;
-import rstd;
-import rstd.cppstd;
-import rstd.log;
 import wescene.core;
 
 using namespace rstd::prelude;

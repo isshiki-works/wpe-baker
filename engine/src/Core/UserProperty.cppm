@@ -1,6 +1,8 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module owe.user_property;
 
-import rstd.cppstd;
 import wescene.json;
 
 export namespace owe

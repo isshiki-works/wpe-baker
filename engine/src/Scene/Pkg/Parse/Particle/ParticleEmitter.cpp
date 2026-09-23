@@ -1,8 +1,9 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 module wescene.pkg.parse;
 
 import eigen;
-import rstd;
-import rstd.cppstd;
 import wescene.core;
 import wescene.particle;
 import wescene.particle.program;

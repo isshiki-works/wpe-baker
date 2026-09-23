@@ -1,10 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include "JsonNlohmann.hpp"
 
 module wescene.pkg.scene_obj;
-import rstd;
-import rstd.cppstd;
 
 using namespace rstd::literals;
 using rstd::sync::atomic::Atomic;

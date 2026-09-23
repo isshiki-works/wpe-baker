@@ -1,6 +1,7 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 #include <type_traits>
 #include <vulkan/vulkan.h>
 
@@ -9,9 +10,6 @@ module;
 module wescene.vulkan;
 import wescene.core;
 import wescene.types;
-import rstd;
-import rstd.log;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 using namespace owe::vulkan;

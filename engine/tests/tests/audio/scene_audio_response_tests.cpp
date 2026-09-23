@@ -1,9 +1,10 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <cmath>
 #include <gtest/gtest.h>
 
 import owe.audio_response;
 import owe.scene_audio_response;
-import rstd;
 
 using namespace owe;
 using namespace rstd::prelude;

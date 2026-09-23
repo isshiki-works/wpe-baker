@@ -1,12 +1,11 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
-#include <rstd/macro.hpp>
 
 export module wescene.fs;
 export import wescene.io;
 export import wescene.vfs;
-import rstd;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 

@@ -1,6 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.scene_obj:field_binding;
-import rstd;
-import rstd.cppstd;
 import wescene.json;
 
 using namespace rstd::prelude;

@@ -1,9 +1,10 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.scene:uniform;
 import :id;
 import :runtime;
 import eigen;
-import rstd;
-import rstd.cppstd;
 import wescene.core;
 
 using namespace rstd::prelude;
@@ -429,7 +430,7 @@ private:
 
 } // namespace owe
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

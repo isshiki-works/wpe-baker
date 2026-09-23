@@ -1,10 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 export module wescene.pkg.parse:shader_parser;
 import wescene.core;
 import wescene.types;
-import rstd;
-import rstd.cppstd;
 import wescene.shader_compile;
 import wescene.scene;
 import wescene.fs;

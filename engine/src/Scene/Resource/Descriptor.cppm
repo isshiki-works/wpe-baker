@@ -1,10 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 
 #include <algorithm>
 
 export module wescene.resource_registry:descriptor;
-import rstd;
-import rstd.cppstd;
 import wescene.resource;
 import wescene.vulkan;
 
@@ -53,7 +53,7 @@ struct DescriptorSetSchema {
 
 } // namespace owe::resource_registry
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>
@@ -252,7 +252,7 @@ struct DescriptorSetPacketKey {
 
 } // namespace owe::resource_registry
 
-export namespace rstd
+namespace owe::compat
 {
 
 template<>

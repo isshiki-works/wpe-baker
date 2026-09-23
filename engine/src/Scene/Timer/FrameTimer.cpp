@@ -1,9 +1,10 @@
 module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <new>
 
 module wescene.timer;
 import wescene.core;
-import rstd.cppstd;
 
 using namespace owe;
 using micros = std::chrono::microseconds;

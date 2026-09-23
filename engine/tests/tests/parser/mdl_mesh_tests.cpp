@@ -1,3 +1,5 @@
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 #include <gtest/gtest.h>
 
 #include <bit>
@@ -6,7 +8,6 @@
 #include <vector>
 
 import eigen;
-import rstd.cppstd;
 import wescene.core;
 import wescene.fs;
 import wescene.pkg_fs;

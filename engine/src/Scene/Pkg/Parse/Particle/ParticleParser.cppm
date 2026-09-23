@@ -1,6 +1,7 @@
+module;
+#include <owe/compat.hpp>
+#include <owe/std.hpp>
 export module wescene.pkg.parse:particle_parser;
-import rstd;
-import rstd.cppstd;
 import wescene.json;
 import wescene.scene;
 import wescene.fs;
