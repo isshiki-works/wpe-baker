@@ -297,7 +297,7 @@ public:
 
     /* Tick all registered video-tex decoders. No-op when no scene
      * texture has been recognised as a VIDEO container. Invoked from
-     * SceneWallpaper's per-frame RenderDraw handler. */
+     * OfflineSession's per-frame draw step. */
     // services：离线作业的服务（不在离线作业里为空），视频按作业时钟选帧。
     void pumpVideoTextures(double dt_seconds, Services* services);
 

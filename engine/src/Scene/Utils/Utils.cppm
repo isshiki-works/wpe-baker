@@ -21,20 +21,6 @@ using namespace rstd::prelude;
 export namespace owe
 {
 
-// FpsCounter — was Utils/FpsCounter.h. Implementation in Utils/FpsCounter.cpp.
-class FpsCounter {
-public:
-    FpsCounter();
-    u32  Fps() const { return m_fps; }
-    u32  FrameCount() const { return m_frameCount; }
-    void RegisterFrame();
-
-private:
-    u32                 m_fps;
-    u32                 m_frameCount;
-    rstd::time::Instant m_startTime;
-};
-
 namespace algorism
 {
 // Was Utils/Algorism.h. Out-of-line in Utils/Algorism.cpp module impl unit.
