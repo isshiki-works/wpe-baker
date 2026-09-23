@@ -36,13 +36,13 @@ private:
 namespace
 {
 
-class TestMount {
+class TestMount final : public owe::fs::MountFs {
 public:
     explicit TestMount(std::unordered_map<std::string, std::string> files,
                        std::string                                  invalid_path = {})
         : m_files(std::move(files)), m_invalid_path(std::move(invalid_path)) {}
 
-    auto open_read(owe::fs::Path path) const -> owe::io::Result<owe::fs::ReadRange> {
+    auto open_read(owe::fs::Path path) const -> owe::io::Result<owe::fs::ReadRange> override {
         auto key = owe::fs::ToStdString(path);
         if (key == m_invalid_path) {
             return rstd::Err(FsError(owe::io::ErrorKind::InvalidData));
@@ -55,7 +55,7 @@ public:
             std::make_shared<MemorySource>(file->second), 0, file->second.size());
     }
 
-    auto metadata(owe::fs::Path path) const -> owe::io::Result<owe::fs::FileMetadata> {
+    auto metadata(owe::fs::Path path) const -> owe::io::Result<owe::fs::FileMetadata> override {
         auto key  = owe::fs::ToStdString(path);
         auto file = m_files.find(key);
         if (file == m_files.end()) {
@@ -117,23 +117,12 @@ public:
 
 } // namespace
 
-template<>
-struct rstd::Impl<owe::fs::MountFs, TestMount> : rstd::ImplBase<TestMount> {
-    auto open_read(owe::fs::Path path) const -> owe::io::Result<owe::fs::ReadRange> {
-        return this->self().open_read(path);
-    }
-
-    auto metadata(owe::fs::Path path) const -> owe::io::Result<owe::fs::FileMetadata> {
-        return this->self().metadata(path);
-    }
-};
-
 namespace
 {
 
 auto MakeMount(std::unordered_map<std::string, std::string> files, std::string invalid_path)
     -> owe::fs::MountHandle {
-    return owe::fs::MountHandle::make(TestMount(std::move(files), std::move(invalid_path)));
+    return std::make_shared<TestMount>(std::move(files), std::move(invalid_path));
 }
 
 TEST(Vfs, OverlayAndUnmountKeepOpenedRangeAlive) {

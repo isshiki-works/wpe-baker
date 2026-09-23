@@ -1,4 +1,6 @@
 module;
+// 先让全局对齐分配声明可见，避免 Clang 合成第二个 operator new 重载（同 Binary.cppm）。
+#include <new>
 #include <rstd/macro.hpp>
 
 export module wescene.vfs;
@@ -170,7 +172,7 @@ private:
     std::string m_text;
 };
 
-using MountHandle = Arc<rstd::dyn<struct MountFs>>;
+using MountHandle = std::shared_ptr<struct MountFs>;
 
 struct FileMetadata {
     u64  len {};
@@ -185,25 +187,12 @@ struct MountId {
     friend bool operator==(MountId lhs, MountId rhs) noexcept { return lhs.value == rhs.value; }
 };
 
+// 挂载到 VFS 的只读文件系统接口。
 struct MountFs {
-    using Trait                  = MountFs;
-    static constexpr bool direct = false;
+    virtual ~MountFs() = default;
 
-    template<typename Self, typename Delegate = void>
-    struct Api {
-        using Trait = MountFs;
-
-        auto open_read(Path path) const -> Result<ReadRange> {
-            return rstd::trait_call<0>(this, path);
-        }
-
-        auto metadata(Path path) const -> Result<FileMetadata> {
-            return rstd::trait_call<1>(this, path);
-        }
-    };
-
-    template<typename T>
-    using Funcs = rstd::TraitFuncs<&T::open_read, &T::metadata>;
+    virtual auto open_read(Path path) const -> Result<ReadRange>   = 0;
+    virtual auto metadata(Path path) const -> Result<FileMetadata> = 0;
 };
 
 namespace detail
@@ -267,7 +256,7 @@ auto resolve_beneath(Path root, Path path) -> Result<PathBuf> {
     return Ok(rstd::move(output));
 }
 
-class PhysicalFs {
+class PhysicalFs final : public MountFs {
 public:
     PhysicalFs(const PhysicalFs&)                        = delete;
     auto operator=(const PhysicalFs&) -> PhysicalFs&     = delete;
@@ -280,14 +269,14 @@ public:
         return Ok(PhysicalFs(rstd_try(owe::io::canonicalize(root.as_str()))));
     }
 
-    auto open_read(Path path) const -> Result<ReadRange> {
+    auto open_read(Path path) const -> Result<ReadRange> override {
         auto resolved = rstd_try(resolve_existing(path));
         auto opened   = rstd_try(owe::io::File::open(resolved));
         auto info     = rstd_try(opened->info());
         return ReadRange::make(rstd::move(opened), 0, info.len);
     }
 
-    auto metadata(Path path) const -> Result<FileMetadata> {
+    auto metadata(Path path) const -> Result<FileMetadata> override {
         auto resolved = rstd_try(resolve_existing(path));
         auto value    = rstd_try(owe::io::path_info(resolved));
         return Ok(FileMetadata { .len          = u64(value.len),
@@ -396,7 +385,7 @@ private:
         MountHandle fs;
 
         auto clone() const -> MountedFs {
-            return MountedFs { .id = id, .name = name.clone(), .mount_point = mount_point, .fs = fs.clone() };
+            return MountedFs { .id = id, .name = name.clone(), .mount_point = mount_point, .fs = fs };
         }
     };
 
@@ -419,29 +408,13 @@ private:
 
 } // namespace owe::fs
 
-namespace rstd
-{
-
-template<>
-struct Impl<owe::fs::MountFs, owe::fs::PhysicalFs> : ImplBase<owe::fs::PhysicalFs> {
-    auto open_read(owe::fs::Path path) const -> owe::io::Result<owe::io::ReadRange> {
-        return this->self().open_read(path);
-    }
-
-    auto metadata(owe::fs::Path path) const -> owe::io::Result<owe::fs::FileMetadata> {
-        return this->self().metadata(path);
-    }
-};
-
-} // namespace rstd
-
 export namespace owe::fs
 {
 
 auto make_physical_fs(Path root) -> Result<MountHandle> {
     auto fs = PhysicalFs::make(root);
     if (fs.is_err()) return Err(rstd::move(fs).unwrap_err_unchecked());
-    return Ok(MountHandle::make(rstd::move(fs).unwrap_unchecked()));
+    return Ok(MountHandle(std::make_shared<PhysicalFs>(rstd::move(fs).unwrap_unchecked())));
 }
 
 } // namespace owe::fs

@@ -1,5 +1,6 @@
 module;
 
+#include <new>
 #include <rstd/macro.hpp>
 
 module wescene.pkg_fs;
@@ -110,8 +111,8 @@ auto WPPkgFs::open(Path pkg_path) -> Result<PkgMount> {
 
     auto version_string = String::make(rstd::cppstd::as_str(*version).unwrap());
     auto mount_version  = version_string.clone();
-    auto mount          = MountHandle::make(
-        WPPkgFs(rstd::move(pkg_source), rstd::move(version_string), rstd::move(entries)));
+    auto mount          = MountHandle(std::make_shared<WPPkgFs>(
+        WPPkgFs(rstd::move(pkg_source), rstd::move(version_string), rstd::move(entries))));
     return rstd::Ok(PkgMount(rstd::move(mount), rstd::move(mount_version)));
 }
 
