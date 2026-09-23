@@ -38,6 +38,7 @@ public:
     void prepare(Scene&, const Device&, PassPrepareContext&) override;
     void record(PassRecordContext&) override;
     void destory(const Device&) override;
+    PassTimingTarget timingTarget(const PreparedPassResources&) const override;
 
 private:
     Desc m_desc;

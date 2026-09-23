@@ -1372,6 +1372,15 @@ void CustomShaderPass::record(PassRecordContext& context) {
     endRenderScope(context);
 }
 
+PassTimingTarget CustomShaderPass::timingTarget(const PreparedPassResources&) const {
+    return PassTimingTarget {
+        .output = m_desc.output,
+        .width  = m_desc.output_extent.width,
+        .height = m_desc.output_extent.height,
+        .node   = m_desc.node.is_some() ? m_desc.node->as_raw_ptr() : nullptr,
+    };
+}
+
 void CustomShaderPass::destory(const Device&) {
     m_desc.descriptor_bindings.clear();
     m_desc.pipeline_cache_key               = None();
