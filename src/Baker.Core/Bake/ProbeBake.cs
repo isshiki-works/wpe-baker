@@ -4,8 +4,8 @@ namespace Baker.Core;
 
 /// <summary>
 /// 合成探针：同一计划先烘 48 帧短探针工程，再从原作造参照工程，两边在同一组输入下成对渲染比较，最后过
-/// <see cref="CompositionGate"/>。短烘焙仍递归走 <see cref="HybridBakeService.BakeAsync"/>（ProbeFrames = 48）；
-/// 组流水线拆出来（C2.3b）以后再换成自己的小流程。
+/// <see cref="CompositionGate"/>。短烘焙仍递归走 <see cref="HybridBakeService.BakeAsync"/>（ProbeFrames = 48），
+/// 与成品共用同一条组流水线（捕获副本、组主渲染调度、组成品编码）。
 /// </summary>
 internal sealed class ProbeBake(NativeTools tools)
 {

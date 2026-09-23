@@ -34,6 +34,7 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
     private readonly Dictionary<string, double> seconds = new(StringComparer.Ordinal);
     private readonly Stopwatch total = Stopwatch.StartNew();
     private readonly object gate = new();
+    private readonly Dictionary<string, double> overlapped = new(StringComparer.Ordinal);
     private double? readback, encodeMaster, rendererWall;
     private string? deviceUuid, deviceName;
 
@@ -61,6 +62,15 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
     {
         if (!double.IsFinite(elapsedSeconds) || elapsedSeconds < 0) return;
         lock (gate) seconds[stage] = seconds.GetValueOrDefault(stage) + elapsedSeconds;
+    }
+
+    /// <summary>
+    /// 与互斥阶段并行跑的一道（P4 的合成校验道）自己的墙钟，不参与求和。互斥阶段里的同名项只记主道做完后还在等它的那段。
+    /// </summary>
+    public void AddOverlapped(string stage, double elapsedSeconds)
+    {
+        if (!double.IsFinite(elapsedSeconds) || elapsedSeconds < 0) return;
+        lock (gate) overlapped[stage] = overlapped.GetValueOrDefault(stage) + elapsedSeconds;
     }
 
     /// <summary>用 using 包住一段代码，把它的墙钟累加到这个阶段。</summary>
@@ -140,10 +150,15 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
                     [EncodeMaster] = Round(encodeMaster),
                     ["renderer_wall_seconds"] = Round(rendererWall)
                 },
+                ["overlapped"] = new JsonObject
+                {
+                    [CompositionValidation] = Round(overlapped.TryGetValue(CompositionValidation, out double validation) ? validation : null)
+                },
                 ["basis"] = "每一项都是本进程测得的墙钟秒。stages 的各项互斥，它们与 other 相加等于 total_seconds；" +
                     "没有发生过的阶段是 null，不是 0。master_render_breakdown 是 master_render 内部与渲染重叠的分量" +
                     "（readback 是等渲染器交出帧的时间，encode_master 是等待编码管道接收帧的背压时间，" +
-                    "renderer_wall_seconds 是渲染器自己在 result.json 里报的墙钟），它们不参与求和。"
+                    "renderer_wall_seconds 是渲染器自己在 result.json 里报的墙钟），它们不参与求和。" +
+                    "overlapped 是与互斥阶段并行的合成校验道自己的墙钟，也不参与求和；stages 里的 composition_validation 只记主道做完后还在等它的那段。"
             };
         }
     }
