@@ -5,7 +5,7 @@ namespace Baker.Core;
 /// <summary>
 /// 烘焙前闸门链的一道。放行返回 null；拒绝返回 <see cref="BakeRejection"/>，由调用方写成 bake.json 后结束这一案；
 /// 输入本身不合法（旧计划刷新失败、缺证据）时直接抛异常，与拒绝区分开。闸门可以改写上下文里的 plan 与判定结果，
-/// 后一道看到的是前一道留下的状态，所以顺序是契约的一部分（见 <see cref="BakeGates.Preflight"/>）。
+/// 后一道看到的是前一道留下的状态，所以顺序是契约的一部分（见 <see cref="BakeGates.Preflight"/> 与 <see cref="BakeGates.Validation"/>）。
 /// </summary>
 internal interface IBakeGate
 {
@@ -14,13 +14,12 @@ internal interface IBakeGate
 
 /// <summary>闸门之间传递的状态。只读部分是这一案的输入；可写部分由闸门填好，全部放行后交给主渲染。</summary>
 internal sealed class BakeGateContext(HybridBakeRequest request, ProjectSource source, string sourceHash, WorkLayout layout,
-    IProgress<RenderProgress>? progress, StageTiming timing)
+    IProgress<RenderProgress>? progress)
 {
     internal HybridBakeRequest Request => request;
     internal ProjectSource Source => source;
     internal WorkLayout Layout => layout;
     internal IProgress<RenderProgress>? Progress => progress;
-    internal StageTiming Timing => timing;
 
     /// <summary>这一案的计划：旧计划刷新脚本报错证据时整份换掉，循环复核时就地改写。</summary>
     internal required JsonObject Plan { get; set; }
@@ -60,15 +59,20 @@ internal sealed class BakeGateContext(HybridBakeRequest request, ProjectSource s
 internal static class BakeGates
 {
     /// <summary>
-    /// 成品烘焙（非探针）在任何渲染之前依次过的闸门：旧计划补脚本报错证据 → 循环从源与运行时证据重建并准入 →
-    /// 定帧数 → 磁盘峰值 → 锁定周期粒子相位 → 合成校验（含候选脚本报错门）→ 内嵌视频 2 GiB 外推。
-    /// 合成校验要跑短探针，所以排在所有只读判定之后；内嵌视频外推读的是探针的试编码。
+    /// 成品烘焙（非探针）在任何渲染之前依次过的只读闸门：旧计划补脚本报错证据 → 循环从源与运行时证据重建并准入 →
+    /// 定帧数 → 磁盘峰值 → 锁定周期粒子相位。全部放行后才定得下主道要用的计划、帧数与残差判定。
     /// </summary>
-    internal static IBakeGate[] Preflight(NativeTools tools, CompositionGate.Validator validate, EmbeddedVideoGate.Estimator estimate) =>
+    internal static IBakeGate[] Preflight(NativeTools tools) =>
     [
-        new ScriptEvidenceGate(tools), new LoopAdmissionGate(), new LoopFramesGate(), new DiskBudgetGate(),
-        new ParticleCycleGate(), new CompositionGate(validate), new EmbeddedVideoGate(estimate)
+        new ScriptEvidenceGate(tools), new LoopAdmissionGate(), new LoopFramesGate(), new DiskBudgetGate(), new ParticleCycleGate()
     ];
+
+    /// <summary>
+    /// 合成校验道（P4）：合成校验（短探针与原作参照配对比较，含候选脚本报错门）→ 内嵌视频 2 GiB 外推（读探针的试编码）。
+    /// 排在 <see cref="Preflight"/> 之后、与捕获副本准备、起点搜索和组主渲染并行；它的结论优先于主道这段时间的任何结果。
+    /// </summary>
+    internal static IBakeGate[] Validation(CompositionGate.Validator validate, EmbeddedVideoGate.Estimator estimate) =>
+        [new CompositionGate(validate), new EmbeddedVideoGate(estimate)];
 
     /// <summary>依次过闸，第一道拒绝即停；全部放行返回 null。</summary>
     internal static async Task<BakeRejection?> FirstRejectionAsync(IEnumerable<IBakeGate> gates, BakeGateContext context,

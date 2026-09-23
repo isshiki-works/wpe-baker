@@ -91,9 +91,7 @@ internal sealed class CompositionGate(CompositionGate.Validator validate) : IBak
 
     public async Task<BakeRejection?> CheckAsync(BakeGateContext context, CancellationToken cancellationToken)
     {
-        JsonObject compositionValidation;
-        using (context.Timing.Measure(StageTiming.CompositionValidation))
-            compositionValidation = await validate(context, cancellationToken);
+        JsonObject compositionValidation = await validate(context, cancellationToken);
         context.CompositionValidation = compositionValidation;
         if (compositionValidation["status"]?.GetValue<string>() == "composition_pass") return null;
         bool scriptErrorsRejected = compositionValidation["status"]?.GetValue<string>() == CandidateScriptErrorGate.RejectedCompositionStatus;
