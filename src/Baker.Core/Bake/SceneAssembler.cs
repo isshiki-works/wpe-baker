@@ -143,7 +143,8 @@ internal static class SceneAssembler
             return actual.SequenceEqual(order);
         }
         // 保留的脚本查询过公开图层表时，按原作声明顺序逐位重排：没保留的对象留同 id、同名、不绘制的占位，
-        // 每个视频组占用组内一个没保留的成员（或它在组父级下的祖先）的位置和 id。找不到槽位或绘制顺序变了就不重排，交给下面的检查。
+        // 每个视频组占用组内一个成员（或它在组父级下的祖先）的位置、id 和名字：优先没保留的；只剩因查找被保留、又没有保留子对象的成员时，
+        // 视频顶替它。视频放在成员的源位置，只要求实时层之间的先后与计划相同。找不到槽位就不重排，交给下面的检查。
         var moved = new Dictionary<int, int>();
         JsonArray? PublicLayerTable()
         {
@@ -164,10 +165,13 @@ internal static class SceneAssembler
                     return null;
                 }
                 var members = group["layer_ids"]!.AsArray().Select(n => Int(n)).OfType<int>().ToHashSet();
-                if (sourceDrawOrder.Where(members.Contains).Select(SlotOf)
-                    .FirstOrDefault(slot => slot is int id && !kept.ContainsKey(id) && !bySlot.ContainsKey(id)) is not int free) return null;
+                if (sourceDrawOrder.Where(members.Contains).Select(SlotOf).OfType<int>()
+                    .Where(id => !bySlot.ContainsKey(id) && !kept.Values.Any(obj => Int(obj["parent"]) == id))
+                    .OrderBy(kept.ContainsKey).Cast<int?>().FirstOrDefault() is not int free) return null;
                 var placed = video.DeepClone().AsObject();
                 placed["id"] = free;
+                placed["name"] = originalObjects[free]["name"]?.DeepClone();
+                kept.Remove(free);
                 bySlot[free] = placed;
                 moved[Id(video)] = free;
             }
@@ -179,8 +183,8 @@ internal static class SceneAssembler
         }
         if (PublicLayerQueries(finalObjects.OfType<JsonObject>(), dependencies).Any() && PublicLayerTable() is JsonArray table)
         {
-            var remapped = expected.Select(id => moved.GetValueOrDefault(id, id)).ToList();
-            if (KeepsDrawOrder(table, remapped)) (finalObjects, expected) = (table, remapped);
+            var liveOrder = expected.Where(id => !moved.ContainsKey(id)).ToList();
+            if (KeepsDrawOrder(table, liveOrder)) (finalObjects, expected) = (table, liveOrder);
         }
         if (!KeepsDrawOrder(finalObjects, expected))
             throw new Blocker(BlockerCode.HierarchyChangesDrawOrder).ToException();
