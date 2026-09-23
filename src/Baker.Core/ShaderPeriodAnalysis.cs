@@ -1039,7 +1039,8 @@ public static class ShaderPeriodAnalysis
         try
         {
             byte[] header;
-            if (source.Contains(resource)) header = source.Read(resource, 1024);
+            // 只要头部：工程自带的真实 clouds_256（256×256，约 200 KB）也只读前 64 字节，与 WE 资源目录一侧同一口径。
+            if (source.Contains(resource)) header = source.ReadPrefix(resource, 64);
             else
             {
                 if (assetsDirectory is null) return false;
