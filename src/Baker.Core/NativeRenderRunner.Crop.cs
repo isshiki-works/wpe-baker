@@ -231,8 +231,8 @@ public sealed partial class NativeRenderRunner
             try { File.Delete(probeVideo); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
         // 画质判据的抽样帧号在编码前定下来，升档重编时保持同一批帧，前后可直接横比。
-        ulong[] gateFrames = PlaybackQualityGate.SampleFrames(frames);
-        double gateReference = PlaybackQualityGate.DefaultReferenceSsim, gateRatio = PlaybackQualityGate.DefaultRatio;
+        ulong[] gateFrames = QualityGate.SampleFrames(frames);
+        double gateReference = QualityGate.DefaultReferenceSsim, gateRatio = QualityGate.DefaultRatio;
         string[] EncodeArguments(PlaybackEncodeProfile current) =>
             ["-hide_banner", "-nostdin", "-n", "-i", inputPath, "-filter_complex", filter, "-map", "[packed]", "-an",
                 .. current.OutputArguments(numerator, denominator, partial)];
@@ -276,56 +276,28 @@ public sealed partial class NativeRenderRunner
                 ConfirmEncodedDuration(verified, frames, numerator, denominator);
                 // 软件档位本身就是画质判据的参照，不自己跟自己比，也保持原来的零额外进程。
                 if (profile.Kind == PlaybackEncoderSelection.Software || gateFrames.Length == 0) break;
-                string qualityLog = Path.Combine(output, $"quality{suffix}.stderr.log");
-                double? ssim, psnr;
-                // For short clips a single decode is cheaper than launching nine seeks.
-                // Long loops retain the same nine samples and metrics, using bounded reads.
-                bool sparseQuality = frames > 4096;
-                if (sparseQuality)
+                QualityReport measured = await qualityComparer.CompareAsync(new(partial, frames, gateFrames, numerator, denominator,
+                    new MasterQualityReference(inputPath, filter), output, $"quality{suffix}"), cancellationToken);
+                double? ssim = measured.Ssim, psnr = measured.Psnr;
+                report["quality_decode_scope"] = measured.DecodeScope;
+                if (QualityGate.Passes(ssim, gateReference, gateRatio))
                 {
-                    double totalSsim = 0, totalNormalizedMse = 0;
-                    bool complete = true;
-                    foreach (ulong frame in gateFrames)
-                    {
-                        string sampleLog = Path.Combine(output, $"quality{suffix}-{frame}.stderr.log");
-                        await ff.RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.SampleMetricArguments(partial, inputPath, filter,
-                            frame, numerator, denominator), sampleLog, cancellationToken);
-                        string metrics = await File.ReadAllTextAsync(sampleLog, cancellationToken);
-                        double? sampleSsim = PlaybackQualityGate.ParseSsim(metrics), samplePsnr = PlaybackQualityGate.ParsePsnr(metrics);
-                        if (sampleSsim is null || samplePsnr is null) { complete = false; break; }
-                        totalSsim += sampleSsim.Value;
-                        totalNormalizedMse += Math.Pow(10, -samplePsnr.Value / 10);
-                    }
-                    ssim = complete ? totalSsim / gateFrames.Length : null;
-                    psnr = complete ? -10 * Math.Log10(totalNormalizedMse / gateFrames.Length) : null;
-                }
-                else
-                {
-                    await ff.RunTextAsync(tools.Ffmpeg, PlaybackQualityGate.MetricsArguments(partial, inputPath, filter, gateFrames),
-                        qualityLog, cancellationToken);
-                    string metrics = await File.ReadAllTextAsync(qualityLog, cancellationToken);
-                    ssim = PlaybackQualityGate.ParseSsim(metrics);
-                    psnr = PlaybackQualityGate.ParsePsnr(metrics);
-                }
-                report["quality_decode_scope"] = sparseQuality ? "selected_frame_windows" : "short_clip_single_decode";
-                if (PlaybackQualityGate.Passes(ssim, gateReference, gateRatio))
-                {
-                    qualityGate = PlaybackQualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
-                        profile.QualityStep, PlaybackQualityGate.ActionAccepted);
+                    qualityGate = QualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
+                        profile.QualityStep, QualityGate.ActionAccepted);
                     break;
                 }
                 if (profile.CanEscalate)
                 {
-                    qualityGate = PlaybackQualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
-                        profile.QualityStep, PlaybackQualityGate.ActionEscalated, "SSIM 低于阈值，升一档质量重编。");
+                    qualityGate = QualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
+                        profile.QualityStep, QualityGate.ActionEscalated, "SSIM 低于阈值，升一档质量重编。");
                     profile = profile.Escalate();
                 }
                 else
                 {
                     encoderFallbackReason = $"{profile.Kind} 升到质量上限仍未达到 SSIM 阈值 " +
-                        $"{PlaybackQualityGate.Threshold(gateReference, gateRatio).ToString("0.######", CultureInfo.InvariantCulture)}，回退软件编码。";
-                    qualityGate = PlaybackQualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
-                        profile.QualityStep, PlaybackQualityGate.ActionFellBack, encoderFallbackReason);
+                        $"{QualityGate.Threshold(gateReference, gateRatio).ToString("0.######", CultureInfo.InvariantCulture)}，回退软件编码。";
+                    qualityGate = QualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
+                        profile.QualityStep, QualityGate.ActionFellBack, encoderFallbackReason);
                     encoderKind = PlaybackEncoderSelection.Software;
                     profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)region.Height, numerator, denominator,
                         losslessTest: false, PlaybackEncoderSelection.Software);

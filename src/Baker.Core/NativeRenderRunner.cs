@@ -94,7 +94,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         ulong encodedFrames = request.EncodedFrames ?? request.Frames;
         if (request.GpuEncoding is { RetainQualitySamples: true } quality)
             request = request with {
-                RetainFrames = (request.RetainFrames ?? []).Concat(PlaybackQualityGate.SampleFrames(encodedFrames)).Distinct().Order().ToArray(),
+                RetainFrames = (request.RetainFrames ?? []).Concat(QualityGate.SampleFrames(encodedFrames)).Distinct().Order().ToArray(),
                 GpuEncoding = quality with { RetainLoopWindow = quality.RetainLoopWindow || quality.CrossfadeFrames > 0 } };
         if (request.GpuEncoding is { CrossfadeFrames: > 0 } fade &&
             (fade.CrossfadeFrames >= encodedFrames || encodedFrames > request.Frames ||

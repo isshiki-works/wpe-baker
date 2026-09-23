@@ -5,24 +5,29 @@ namespace Baker.Core;
 
 public sealed partial class NativeRenderRunner
 {
+    /// <summary>画质门的比对后端（<see cref="IQualityComparer"/>）；R10 在这里换成渲染器内比对。</summary>
+    private readonly IQualityComparer qualityComparer = new FfmpegQualityComparer(new FfmpegTool(tools));
+
+    /// <summary>
+    /// GPU 直编成品的画质门：没有无损 master，参照取渲染时留下的原帧（按同一套整数交叉淡化、裁剪、透明打包复原；
+    /// 编码时缩放过的用 FFmpeg Lanczos 缩到编码尺寸），与成品在抽样帧上比。不达标直接拒绝，不升档。
+    /// </summary>
     internal async Task<JsonObject> GpuPlaybackQualityAsync(JsonObject render, string video, CacheRegion crop,
         bool packed, string output, CancellationToken token)
     {
         var request = render["request"]!.Deserialize<RenderRequest>(JsonOptions)!;
-        ulong[] samples = PlaybackQualityGate.SampleFrames(EncodedFrameCount(render));
+        ulong frames = EncodedFrameCount(render);
+        ulong[] samples = QualityGate.SampleFrames(frames);
         int colorWidth = (int)(request.EncodeWidth ?? (uint)crop.Width);
         int height = (int)(request.EncodeHeight ?? (uint)crop.Height);
         int width = colorWidth * (packed ? 2 : 1);
         bool resized = colorWidth != crop.Width || height != crop.Height;
-        (ulong[] Indices, byte[] Rgba)? scaled = resized
-            ? await EncodedLoopValidator.ScaleRetainedFramesAsync(tools, render, colorWidth, height, crop, token) : null;
         uint fade = request.GpuEncoding?.CrossfadeFrames ?? 0;
-        string referencePath = Path.Combine(output, "quality-reference.rgb");
-        string productPath = Path.Combine(output, "quality-product.yuv");
-        await using (var reference = new FileStream(referencePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        await using (var product = new FileStream(productPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        await using (FileStream? window = fade > 0 ? File.OpenRead(render["gpu_loop_window"]!["path"]!.GetValue<string>()) : null)
+        async Task WriteReferenceAsync(Stream reference, CancellationToken cancel)
         {
+            (ulong[] Indices, byte[] Rgba)? scaled = resized
+                ? await EncodedLoopValidator.ScaleRetainedFramesAsync(tools, render, colorWidth, height, crop, cancel) : null;
+            await using FileStream? window = fade > 0 ? File.OpenRead(render["gpu_loop_window"]!["path"]!.GetValue<string>()) : null;
             foreach (ulong index in samples)
             {
                 byte[] rgb;
@@ -36,49 +41,30 @@ public sealed partial class NativeRenderRunner
                 }
                 else
                 {
-                    byte[] rgba = await LoopClosureCheck.ReadRetainedFrameAsync(render, index, token);
+                    byte[] rgba = await LoopClosureCheck.ReadRetainedFrameAsync(render, index, cancel);
                     if (index < fade)
                     {
                         byte[] wrap = new byte[rgba.Length];
                         window!.Position = checked((long)(fade + index) * rgba.Length);
-                        await window.ReadExactlyAsync(wrap, token);
+                        await window.ReadExactlyAsync(wrap, cancel);
                         for (int i = 0; i < rgba.Length; i++)
                             rgba[i] = (byte)(((ulong)rgba[i] * (index + 1) + (ulong)wrap[i] * (fade - index)) / (fade + 1UL));
                     }
                     rgb = LoopClosureCheck.EncodedLayout(rgba, (int)request.Width, (int)request.Height,
                         crop.X, crop.Y, crop.Width, crop.Height, packed);
                 }
-                await reference.WriteAsync(rgb, token);
-                var range = ExactFrameRange.Build(video, index, 1, request.FpsNumerator, request.FpsDenominator);
-                byte[] yuv = await ff.RunBytesAsync(
-                    ["-hide_banner", "-nostdin", "-v", "error", "-threads", "2", .. range.Arguments,
-                     "-map", "0:v:0", "-vf", range.Filter, "-fps_mode", "passthrough", "-frames:v", "1",
-                     "-an", "-sn", "-dn", "-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"],
-                    checked((long)width * height * 3 / 2), token);
-                await product.WriteAsync(yuv, token);
+                await reference.WriteAsync(rgb, cancel);
             }
         }
-        string size = FormattableString.Invariant($"{width}x{height}");
-        // Raw YUV has lost the MP4's tags. Restore them before framesync so FFmpeg
-        // does not reinterpret the product through a different color matrix/range.
-        string graph = $"[1:v]format=gbrp,{PlaybackEncodeProfile.Bt709Filter},split=2[r1][r2];" +
-            "[0:v]setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709,split=2[p1][p2];" +
-            "[p1][r1]ssim[ss];[p2][r2]psnr[ps]";
-        string log = Path.Combine(output, "quality.stderr.log");
-        await ff.RunTextAsync(tools.Ffmpeg,
-            ["-hide_banner", "-nostdin", "-nostats", "-f", "rawvideo", "-pixel_format", "yuv420p", "-video_size", size,
-             "-framerate", "1", "-i", productPath, "-f", "rawvideo", "-pixel_format", "rgb24", "-video_size", size,
-             "-framerate", "1", "-i", referencePath, "-filter_complex_threads", "1", "-filter_complex", graph,
-             "-map", "[ss]", "-map", "[ps]", "-an", "-c:v", "rawvideo", "-f", "null", "-"], log, token);
-        string metrics = await File.ReadAllTextAsync(log, token);
-        double? ssim = PlaybackQualityGate.ParseSsim(metrics), psnr = PlaybackQualityGate.ParsePsnr(metrics);
-        bool pass = PlaybackQualityGate.Passes(ssim, PlaybackQualityGate.DefaultReferenceSsim, PlaybackQualityGate.DefaultRatio);
-        var result = PlaybackQualityGate.Summarize(samples, PlaybackQualityGate.DefaultReferenceSsim, PlaybackQualityGate.DefaultRatio,
-            ssim, psnr, 0, pass ? PlaybackQualityGate.ActionAccepted : PlaybackQualityGate.ActionRejected);
+        QualityReport measured = await qualityComparer.CompareAsync(new(video, frames, samples, request.FpsNumerator, request.FpsDenominator,
+            new FramesQualityReference(WriteReferenceAsync, width, height), output, "quality"), token);
+        bool pass = QualityGate.Passes(measured.Ssim, QualityGate.DefaultReferenceSsim, QualityGate.DefaultRatio);
+        var result = QualityGate.Summarize(samples, QualityGate.DefaultReferenceSsim, QualityGate.DefaultRatio,
+            measured.Ssim, measured.Psnr, 0, pass ? QualityGate.ActionAccepted : QualityGate.ActionRejected);
         result["reference_source"] = resized
             ? "Retained original renderer RGBA resized with FFmpeg Lanczos, then alpha-packed and converted to BT.709."
             : "Retained renderer RGBA with the same integer loop crossfade, crop, packing and BT.709 conversion.";
-        result["decode_scope"] = "selected_frame_windows";
+        result["decode_scope"] = measured.DecodeScope;
         result["qp"] = request.GpuEncoding!.Qp;
         if (pass) TemporaryCaptureFiles.Delete(result, output, "quality-reference.rgb", "quality-product.yuv");
         return result;
