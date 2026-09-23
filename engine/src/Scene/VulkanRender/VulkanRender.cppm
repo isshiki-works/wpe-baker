@@ -29,12 +29,6 @@ using namespace rstd::prelude;
 export namespace owe
 {
 
-using ReDrawCB = std::function<void()>;
-
-struct VulkanSurfaceInfo {
-    std::function<VkResult(VkInstance, VkSurfaceKHR*)> createSurfaceOp;
-    std::vector<std::string>                           instanceExts;
-};
 
 enum class RenderOutputMode
 {
@@ -190,13 +184,6 @@ struct RenderInitInfo {
     RenderLayerSelection layer_selection;
 
     std::span<const rstd::uint8_t> uuid;
-    TexTiling                      offscreen_tiling { TexTiling::OPTIMAL };
-    /* When true, allocate the offscreen ExSwapchain images out of
-     * HOST_VISIBLE && !DEVICE_LOCAL (true GTT) so the exported dmabuf
-     * fds are importable by a foreign GPU (cross-GPU PRIME). Ignored
-     * when offscreen == false. */
-    bool              offscreen_host_visible { false };
-    VulkanSurfaceInfo surface_info;
 
     std::uint16_t width { 1920 };
     std::uint16_t height { 1080 };
@@ -205,22 +192,6 @@ struct RenderInitInfo {
     // MSAA samples for the screen RT only. 1 disables. Clamped down to
     // device's framebufferColorSampleCounts at init.
     std::uint32_t msaa_samples { 1 };
-    ReDrawCB      redraw_callback;
-
-    /* When set AND `offscreen == true`, VulkanRender invokes this factory
-     * after picking the GPU and creating the VkDevice, and adopts the
-     * returned swapchain instead of allocating its own LocalExSwapchain.
-     * Used by the waywallen-wescene host to construct a BridgeExSwapchain
-     * around a ww_bridge_pool created with the just-picked device.
-     * Ignored on the on-screen path. */
-    struct ExSwapchainHandles {
-        VkInstance       instance;
-        VkPhysicalDevice physical_device;
-        VkDevice         device;
-        VkQueue          graphics_queue;
-        rstd::uint32_t   graphics_queue_family;
-    };
-    std::function<std::unique_ptr<ExSwapchain>(const ExSwapchainHandles&)> ex_swapchain_factory;
 };
 
 Box<rg::RenderGraph> sceneToRenderGraph(Scene&);
@@ -246,8 +217,6 @@ public:
     bool init(RenderInitInfo);
 
     void destroy();
-
-    void drawFrame(Scene&);
 
     // Synchronous backpressure: one submission, one fenced readback, no drops.
     // A timeout/device error poisons this renderer; destroy it before retrying.
@@ -285,14 +254,8 @@ public:
     void evictUnusedMeshes();
     void UpdateCameraFillMode(Scene&, owe::FillMode);
 
-    bool onSwapchainReady(unsigned width, unsigned height);
-
-    ExSwapchain* exSwapchain() const;
     bool         inited() const;
 
-    int takeLastFrameSyncFd();
-
-    bool               getDrmRenderNode(std::uint32_t& out_major, std::uint32_t& out_minor) const;
     DeviceCapabilities deviceCapabilities() const;
 
     /* Tick all registered video-tex decoders. No-op when no scene
@@ -311,12 +274,9 @@ public:
 
     VkInstance       vkInstance() const;
     VkPhysicalDevice vkPhysicalDevice() const;
-    VkDevice         vkDevice() const;
-    VkQueue          vkGraphicsQueue() const;
     std::uint32_t    vkGraphicsQueueFamily() const;
 
     void deviceUuid(std::uint8_t out[16]) const;
-    void driverUuid(std::uint8_t out[16]) const;
 
 private:
     struct Impl;

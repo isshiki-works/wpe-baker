@@ -436,8 +436,6 @@ private:
 struct RenderingResources {
     vvk::CommandBuffer command;
 
-    vvk::Semaphore sem_swap_wait_image;
-    vvk::Semaphore sem_export;
     vvk::Semaphore sem_upload;
     vvk::Fence     fence_frame;
 

@@ -689,8 +689,6 @@ bool OfflineSession::Impl::init(SessionConfig config, RenderInitInfo info, Offli
     info.offscreen = true;
     info.output_mode = RenderOutputMode::CpuReadback;
     info.video_hwdec = "none";
-    info.redraw_callback = {};
-    info.ex_swapchain_factory = {};
 
     m_config = rstd::move(config);
     m_user_properties = NormalizeUserProperties(m_config.user_properties);

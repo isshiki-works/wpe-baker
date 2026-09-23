@@ -362,7 +362,6 @@ struct VulkanRender::Impl {
     bool init(RenderInitInfo);
     void destroy();
 
-    void drawFrame(Scene&);
     CpuFrameResult drawFrameCpu(Scene&, bool read_pixels);
     std::string finishPendingFrame();
     void recycleCpuPixels(std::vector<std::uint8_t>&&);
@@ -404,15 +403,11 @@ struct VulkanRender::Impl {
     bool                      commitPreparedUploads();
     bool prepareProgram(Scene&, const RenderSceneSnapshot&, resource::ResourcePlanSections);
     bool waitForPreparedUploads(RenderingResources&);
-    void drawFrameSwapchain(Scene&);
-    void drawFrameOffscreen(Scene&);
-    bool onSwapchainReady(unsigned width, unsigned height);
 
     Instance     m_instance;
     Box<Device>  m_device { Box<Device>::make() };
     Box<PrePass> m_prepass { Box<PrePass>::make(PrePass::Desc {}) };
     Box<FinPass> m_finpass { Box<FinPass>::make(FinPass::Desc {}) };
-    ReDrawCB     m_redraw_cb;
 
     ShaderReflectionCache      m_shader_reflection_cache;
 
@@ -422,7 +417,6 @@ struct VulkanRender::Impl {
     std::size_t                     m_next_upload_cmd { 0 };
     vvk::CommandBuffer              m_render_cmd;
 
-    bool m_with_surface { false };
     bool m_inited { false };
     bool m_cpu_readback { false };
     bool m_cpu_failed { false };
@@ -470,12 +464,7 @@ struct VulkanRender::Impl {
     // Resolved against device's framebufferColorSampleCounts in init().
     VkSampleCountFlagBits m_msaa_samples { VK_SAMPLE_COUNT_1_BIT };
 
-    std::shared_ptr<ExSwapchain> m_ex_swapchain;
     RenderingResources           m_rendering_resources;
-    u64                          m_next_surface_acquire_serial { 1 };
-
-    // for VUID-vkQueueSubmit-pSignalSemaphores-00067
-    std::vector<vvk::Semaphore> m_sem_swap_finish_per_image;
 
     RenderProgram m_program;
 };
@@ -484,29 +473,6 @@ VulkanRender::VulkanRender(): pImpl(Box<Impl>::make()) {}
 VulkanRender::~VulkanRender() {};
 
 bool VulkanRender::inited() const { return pImpl->m_inited; }
-
-int VulkanRender::takeLastFrameSyncFd() {
-    return pImpl->m_ex_swapchain ? pImpl->m_ex_swapchain->takeLastFrameSyncFd() : -1;
-}
-
-bool VulkanRender::getDrmRenderNode(std::uint32_t& out_major, std::uint32_t& out_minor) const {
-    if (! pImpl->m_inited) return false;
-    VkPhysicalDeviceDrmPropertiesEXT drm {};
-    drm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT;
-    VkPhysicalDeviceProperties2KHR props {};
-    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR;
-    props.pNext = &drm;
-    pImpl->m_device->gpu().GetProperties2KHR(props);
-    if (! drm.hasRender) return false;
-    if (drm.renderMajor < 0 || drm.renderMinor < 0 ||
-        static_cast<std::uint64_t>(drm.renderMajor) > UINT32_MAX ||
-        static_cast<std::uint64_t>(drm.renderMinor) > UINT32_MAX) {
-        return false;
-    }
-    out_major = static_cast<std::uint32_t>(drm.renderMajor);
-    out_minor = static_cast<std::uint32_t>(drm.renderMinor);
-    return true;
-}
 
 DeviceCapabilities VulkanRender::deviceCapabilities() const {
     if (! pImpl->m_inited) return {};
@@ -521,16 +487,6 @@ VkInstance VulkanRender::vkInstance() const {
 VkPhysicalDevice VulkanRender::vkPhysicalDevice() const {
     if (! pImpl->m_inited) return VK_NULL_HANDLE;
     return *pImpl->m_device->gpu();
-}
-
-VkDevice VulkanRender::vkDevice() const {
-    if (! pImpl->m_inited) return VK_NULL_HANDLE;
-    return *pImpl->m_device->handle();
-}
-
-VkQueue VulkanRender::vkGraphicsQueue() const {
-    if (! pImpl->m_inited) return VK_NULL_HANDLE;
-    return *pImpl->m_device->graphics_queue().handle;
 }
 
 std::uint32_t VulkanRender::vkGraphicsQueueFamily() const {
@@ -594,21 +550,8 @@ void VulkanRender::pumpFontAtlases(Scene& scene) {
     }
 }
 
-void VulkanRender::driverUuid(std::uint8_t out[16]) const {
-    std::memset(out, 0, 16);
-    if (! pImpl->m_inited) return;
-    VkPhysicalDeviceIDPropertiesKHR id {};
-    id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES_KHR;
-    VkPhysicalDeviceProperties2KHR props {};
-    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR;
-    props.pNext = &id;
-    pImpl->m_device->gpu().GetProperties2KHR(props);
-    std::memcpy(out, id.driverUUID, 16);
-}
-
 bool VulkanRender::init(RenderInitInfo info) { return pImpl->init(rstd::move(info)); }
 void VulkanRender::destroy() { pImpl->destroy(); }
-void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
 owe::CpuFrameResult VulkanRender::drawFrameCpu(Scene& scene, bool read_pixels) {
     return pImpl->drawFrameCpu(scene, read_pixels);
 }
@@ -677,12 +620,6 @@ void VulkanRender::UpdateCameraFillMode(Scene& scene, owe::FillMode fill) {
     pImpl->UpdateCameraFillMode(scene, fill);
 };
 
-bool VulkanRender::onSwapchainReady(unsigned width, unsigned height) {
-    return pImpl->onSwapchainReady(width, height);
-}
-
-owe::ExSwapchain* VulkanRender::exSwapchain() const { return pImpl->m_ex_swapchain.get(); };
-
 bool VulkanRender::Impl::init(RenderInitInfo info) {
     if (m_inited) return true;
 
@@ -725,7 +662,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     if (m_cpu_readback) {
         info.offscreen = true;
         info.video_hwdec = "none";
-        if (info.ex_swapchain_factory || info.width == 0 || info.height == 0 ||
+        if (info.width == 0 || info.height == 0 ||
             info.cpu_format != VK_FORMAT_R8G8B8A8_UNORM || info.readback_timeout_ns == 0) {
             rstd_error("CPU readback requires nonzero dimensions/timeout, RGBA8, and no external swapchain");
             return false;
@@ -739,31 +676,17 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
         m_cpu_format = info.cpu_format;
         m_readback_timeout_ns = info.readback_timeout_ns;
     }
-#ifdef _WIN32
     if (! m_cpu_readback) {
         rstd_error("this Windows renderer requires CpuReadback output mode");
         return false;
     }
-#endif
 
-    m_redraw_cb = info.redraw_callback;
     VkExtent2D extent { info.width, info.height };
-    if (! m_cpu_readback && extent.width * extent.height < 500 * 500) {
-        rstd_error("too small swapchain image size: {}x{}", extent.width, extent.height);
-    } else {
-        rstd_info("set swapchain image size: {}x{}", extent.width, extent.height);
-    }
+    rstd_info("set swapchain image size: {}x{}", extent.width, extent.height);
 
     std::vector<Extension> inst_exts;
     std::vector<Extension> device_exts;
-    if (m_cpu_readback) {
-        inst_exts.push_back({ true, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME });
-    } else {
-        for (const auto& extension : base_inst_exts) inst_exts.push_back(extension);
-        device_exts.push_back({ true, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME });
-        device_exts.push_back({ true, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME });
-        device_exts.push_back({ false, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME });
-    }
+    inst_exts.push_back({ true, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME });
     for (const auto& extension : base_device_exts) device_exts.push_back(extension);
     if (info.gpu_encode) {
         device_exts.push_back({ true, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME });
@@ -776,27 +699,6 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     }
     if (info.video_hwdec != "none") {
         AppendVideoDeviceExtensions(device_exts);
-    }
-
-    if (! info.offscreen) {
-        std::transform(info.surface_info.instanceExts.begin(),
-                       info.surface_info.instanceExts.end(),
-                       std::back_inserter(inst_exts),
-                       [](const auto& s) {
-                           return Extension { true, s.c_str() };
-                       });
-        device_exts.push_back({ true, VK_KHR_SWAPCHAIN_EXTENSION_NAME });
-    } else if (! m_cpu_readback) {
-        // Iteration 1a: offscreen FDs are real Linux DMA-BUFs so they can be
-        // imported by arbitrary external consumers. These extensions are
-        // strictly required on the offscreen path; if a driver lacks them
-        // we fail fast in Device::CheckGPU.
-        device_exts.push_back({ true, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME });
-        // Required by VK_EXT_image_drm_format_modifier on Vulkan 1.1 (promoted
-        // to core in 1.2). Validation layer rejects the device otherwise.
-        device_exts.push_back({ true, VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME });
-        device_exts.push_back({ true, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME });
-        device_exts.push_back({ true, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME });
     }
 
     std::vector<InstanceLayer> inst_layers;
@@ -812,17 +714,6 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
         if (! Instance::Create(m_instance, inst_exts, inst_layers, instance_api_version)) {
             rstd_error("init vulkan failed");
             return false;
-        }
-        if (! info.offscreen) {
-            VkSurfaceKHR surface;
-            VVK_CHECK_ACT(
-                {
-                    rstd_error("create vulkan surface failed");
-                    return false;
-                },
-                info.surface_info.createSurfaceOp(*m_instance.inst(), &surface));
-            m_instance.setSurface(VkSurfaceKHR(surface));
-            m_with_surface = true;
         }
         auto surface   = *m_instance.surface();
         auto check_gpu = [&device_exts, surface](const vvk::PhysicalDevice& gpu) {
@@ -869,29 +760,6 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
 
     if (m_cpu_readback) {
         if (! initCpuReadback(info)) return false;
-    } else if (info.offscreen) {
-        if (info.ex_swapchain_factory) {
-            RenderInitInfo::ExSwapchainHandles h {
-                *m_instance.inst(),
-                *m_device->gpu(),
-                *m_device->handle(),
-                *m_device->graphics_queue().handle,
-                m_device->graphics_queue().family_index,
-            };
-            m_ex_swapchain = info.ex_swapchain_factory(h);
-            if (! m_ex_swapchain) {
-                rstd_error("ex_swapchain_factory returned null");
-                return false;
-            }
-        } else {
-            m_ex_swapchain = m_rendering_resources.resources.CreateLocalSwapchain(
-                *m_device,
-                extent.width,
-                extent.height,
-                (info.offscreen_tiling == TexTiling::OPTIMAL ? VK_IMAGE_TILING_OPTIMAL
-                                                             : VK_IMAGE_TILING_LINEAR));
-        }
-        m_with_surface = false;
     }
 
     {
@@ -1287,37 +1155,6 @@ bool VulkanRender::Impl::CreateRenderingResource(RenderingResources& rr) {
         VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, rr.sem_upload));
     }
 
-    if (m_with_surface) {
-        VkSemaphoreCreateInfo ci { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-                                   .pNext = nullptr };
-        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, rr.sem_swap_wait_image));
-
-        const std::size_t n_images = m_device->swapchain().images().size();
-        m_sem_swap_finish_per_image.clear();
-        m_sem_swap_finish_per_image.resize(n_images);
-        for (auto& s : m_sem_swap_finish_per_image) {
-            VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, s));
-        }
-    }
-
-    // Exportable SYNC_FD semaphore used by the waywallen-renderer host
-    // to ship a dma_fence sync_file to display clients on each
-    // FrameReady event. CPU readback uses its submission fence and never
-    // creates an exportable semaphore.
-    if (! m_cpu_readback) {
-        VkExportSemaphoreCreateInfo export_info {
-            .sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
-            .pNext       = nullptr,
-            .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR,
-        };
-        VkSemaphoreCreateInfo ci {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = &export_info,
-            .flags = 0,
-        };
-        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, rr.sem_export));
-    }
-
     rr.shader_reflection_cache = rstd::Some(rstd::mut_ref<ShaderReflectionCache>::from_raw_parts(
         rstd::addressof(m_shader_reflection_cache)));
     return true;
@@ -1372,22 +1209,6 @@ bool VulkanRender::Impl::waitForPreparedUploads(RenderingResources& rr) {
     }
     rr.resources.CompleteUploadsThrough(pending->value);
     return true;
-}
-
-void VulkanRender::Impl::drawFrame(Scene& scene) {
-    if (! (m_inited && m_program.loaded)) return;
-    if (m_cpu_readback) {
-        rstd_error("CPU output requires drawFrameCpu to consume each completed frame");
-        return;
-    }
-
-    if (m_instance.offscreen()) {
-        drawFrameOffscreen(scene);
-    } else {
-        drawFrameSwapchain(scene);
-    }
-
-    if (m_redraw_cb) m_redraw_cb();
 }
 
 std::string VulkanRender::Impl::finishPendingFrame() {
@@ -1804,296 +1625,6 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
 
 void VulkanRender::Impl::recycleCpuPixels(std::vector<std::uint8_t>&& buffer) {
     if (buffer.capacity() >= m_cpu_pixels_pool.capacity()) m_cpu_pixels_pool = rstd::move(buffer);
-}
-
-void VulkanRender::Impl::drawFrameSwapchain(Scene& scene) {
-    static std::size_t resource_index = 0;
-
-    RenderingResources& rr    = m_rendering_resources;
-    resource_index            = (resource_index + 1) % 3;
-    std::uint32_t image_index = 0;
-    {
-        VVK_CHECK_VOID_RE(m_device->handle().AcquireNextImageKHR(*m_device->swapchain().handle(),
-                                                                 vk_wait_time,
-                                                                 *rr.sem_swap_wait_image,
-                                                                 {},
-                                                                 &image_index));
-    }
-    const auto& image          = m_device->swapchain().images()[image_index];
-    const u64   acquire_serial = m_next_surface_acquire_serial++;
-    if (acquire_serial == u64()) {
-        rstd_error("window frame surface acquire serial overflow");
-        return;
-    }
-    owe::FrameSurfaceLease frame_surface {
-        .identity             = { .owner_generation = u64(1),
-                                  .image_index      = u32(image_index),
-                                  .acquire_serial   = acquire_serial },
-        .reuse                = { .kind = owe::FrameSurfaceReuseKind::PresentationAcquired },
-        .image                = image,
-        .format               = m_device->swapchain().format(),
-        .initial_layout       = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-        .initial_queue_family = m_device->graphics_queue().family_index,
-        .acquire              = { .kind      = owe::FrameSurfaceAcquireKind::BinarySemaphore,
-                                  .semaphore = *rr.sem_swap_wait_image },
-        .final_layout         = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-        .final_queue_family   = m_device->present_queue().family_index,
-        .discard_content      = true,
-    };
-    resource_registry::ExternalResourcePreparer* external_preparer = &rr.resources;
-    if (! m_finpass->setFrameSurface(std::move(frame_surface),
-                                     external_preparer,
-                                     m_device->capabilities(),
-                                     m_device->graphics_queue().family_index)) {
-        rstd_error("window frame surface lease rejected");
-        return;
-    }
-    if (! waitForPreparedUploads(rr)) return;
-    const SceneTextureAnimationView* texture_frames = &scene;
-    if (! m_program.update(
-            scene.Runtime().Frame(), m_device->out_extent(), texture_frames, rr))
-        return;
-
-    (void)rr.command.Begin(VkCommandBufferBeginInfo {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = nullptr,
-        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    });
-    RecordedBufferUploads recorded_uploads;
-    if (! m_program.record(rr, recorded_uploads)) {
-        (void)rr.command.End();
-        return;
-    }
-    (void)rr.command.End();
-
-    auto& sem_present_done = m_sem_swap_finish_per_image[image_index];
-
-    // Swapchain image is only written via FinPass blit/copy (TRANSFER).
-    // Waiting at COLOR_ATTACHMENT_OUTPUT lets the layout transition + transfer
-    // race the presentation engine's read → sync-validation WRITE_AFTER_READ.
-    auto                        pending_upload = rr.resources.PendingUpload();
-    const bool                  wait_upload    = pending_upload.is_some();
-    rstd::array<VkSemaphore, 2> wait_semaphores {
-        *rr.sem_swap_wait_image,
-        *rr.sem_upload,
-    };
-    rstd::array<VkPipelineStageFlags, 2> wait_stages {
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        vk_upload_wait_stages,
-    };
-    rstd::array<std::uint64_t, 2> wait_values {
-        std::uint64_t { 0 },
-        wait_upload ? pending_upload->value.to_primitive() : std::uint64_t { 0 },
-    };
-    rstd::array<std::uint64_t, 1> signal_values { std::uint64_t { 0 } };
-    VkTimelineSemaphoreSubmitInfo timeline_info {
-        .sType                     = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-        .pNext                     = nullptr,
-        .waitSemaphoreValueCount   = wait_upload ? 2u : 0u,
-        .pWaitSemaphoreValues      = wait_upload ? wait_values.data() : nullptr,
-        .signalSemaphoreValueCount = wait_upload ? 1u : 0u,
-        .pSignalSemaphoreValues    = wait_upload ? signal_values.data() : nullptr,
-    };
-    VkSubmitInfo sub_info {
-        .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .pNext                = wait_upload ? &timeline_info : nullptr,
-        .waitSemaphoreCount   = wait_upload ? 2u : 1u,
-        .pWaitSemaphores      = wait_semaphores.data(),
-        .pWaitDstStageMask    = wait_stages.data(),
-        .commandBufferCount   = 1,
-        .pCommandBuffers      = rr.command.address(),
-        .signalSemaphoreCount = 1,
-        .pSignalSemaphores    = sem_present_done.address(),
-    };
-
-    VVK_CHECK_VOID_RE(m_device->present_queue().handle.Submit(sub_info, *rr.fence_frame));
-    auto submission_completion = rr.resources.BeginSubmission(rstd::move(recorded_uploads));
-    if (! submission_completion.Valid()) {
-        rstd_error("track frame submission failed");
-    }
-    VkPresentInfoKHR present_info {
-        .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .pNext              = nullptr,
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores    = sem_present_done.address(),
-        .swapchainCount     = 1,
-        .pSwapchains        = m_device->swapchain().handle().address(),
-        .pImageIndices      = &image_index,
-    };
-    VVK_CHECK_VOID_RE(m_device->present_queue().handle.Present(present_info));
-
-    VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
-    if (submission_completion.Valid() &&
-        rr.resources.CompleteSubmission(submission_completion).is_some()) {
-        ReleaseCompletedRetiredResources(*m_device, rr);
-    }
-    if (pending_upload.is_some()) {
-        rr.resources.CompleteUploadsThrough(pending_upload->value);
-    }
-    VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
-}
-void VulkanRender::Impl::drawFrameOffscreen(Scene& scene) {
-    if (! m_ex_swapchain) return;
-
-    // Drain any pending bridge directive *before* committing to a slot.
-    // Previous frame's GPU work has fenced at the tail of the last
-    // drawFrameOffscreen, so the cmd pool is idle.
-    m_ex_swapchain->poll();
-
-    // Skip until both the swapchain has slots and the scene has loaded
-    // (FinPass.prepare runs from compileRenderGraph). FinPass itself is
-    // format-agnostic now — vkCmdBlitImage handles cross-format channel
-    // mapping, no rebuild needed on renegotiation.
-    if (! m_ex_swapchain->ready() || ! m_finpass->prepared()) {
-        return;
-    }
-
-    RenderingResources& rr                    = m_rendering_resources;
-    auto                frame_surface_acquire = m_ex_swapchain->acquireRenderTarget();
-    if (! frame_surface_acquire.acquired()) {
-        if (frame_surface_acquire.status == owe::FrameSurfaceAcquireStatus::ProtocolError) {
-            rstd_error("offscreen frame surface acquisition failed: {}",
-                       frame_surface_acquire.error_code);
-        }
-        return;
-    }
-
-    resource_registry::ExternalResourcePreparer* external_preparer = &rr.resources;
-    if (! m_finpass->setFrameSurface(frame_surface_acquire.lease,
-                                     external_preparer,
-                                     m_device->capabilities(),
-                                     m_device->graphics_queue().family_index)) {
-        rstd_error("offscreen frame surface lease rejected");
-        return;
-    }
-    if (! waitForPreparedUploads(rr)) return;
-    const SceneTextureAnimationView* texture_frames = &scene;
-    if (! m_program.update(
-            scene.Runtime().Frame(), m_device->out_extent(), texture_frames, rr))
-        return;
-
-    (void)rr.command.Begin(VkCommandBufferBeginInfo {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = nullptr,
-        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    });
-    RecordedBufferUploads recorded_uploads;
-    if (! m_program.record(rr, recorded_uploads)) {
-        (void)rr.command.End();
-        return;
-    }
-
-    (void)rr.command.End();
-
-    auto                        pending_upload = rr.resources.PendingUpload();
-    const bool                  wait_upload    = pending_upload.is_some();
-    rstd::array<VkSemaphore, 1> wait_semaphores {
-        *rr.sem_upload,
-    };
-    rstd::array<VkPipelineStageFlags, 1> wait_stages {
-        vk_upload_wait_stages,
-    };
-    rstd::array<std::uint64_t, 1> wait_values {
-        wait_upload ? pending_upload->value.to_primitive() : std::uint64_t { 0 },
-    };
-    rstd::array<std::uint64_t, 1> signal_values { std::uint64_t { 0 } };
-    VkTimelineSemaphoreSubmitInfo timeline_info {
-        .sType                     = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-        .pNext                     = nullptr,
-        .waitSemaphoreValueCount   = wait_upload ? 1u : 0u,
-        .pWaitSemaphoreValues      = wait_upload ? wait_values.data() : nullptr,
-        .signalSemaphoreValueCount = wait_upload ? 1u : 0u,
-        .pSignalSemaphoreValues    = wait_upload ? signal_values.data() : nullptr,
-    };
-    VkSubmitInfo sub_info {
-        .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .pNext                = wait_upload ? &timeline_info : nullptr,
-        .waitSemaphoreCount   = wait_upload ? 1u : 0u,
-        .pWaitSemaphores      = wait_upload ? wait_semaphores.data() : nullptr,
-        .pWaitDstStageMask    = wait_upload ? wait_stages.data() : nullptr,
-        .commandBufferCount   = 1,
-        .pCommandBuffers      = rr.command.address(),
-        .signalSemaphoreCount = 1,
-        .pSignalSemaphores    = rr.sem_export.address(),
-    };
-    VVK_CHECK_VOID_RE(m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
-    auto submission_completion = rr.resources.BeginSubmission(rstd::move(recorded_uploads));
-    if (! submission_completion.Valid()) {
-        rstd_error("track offscreen submission failed");
-    }
-
-    VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
-    if (submission_completion.Valid() &&
-        rr.resources.CompleteSubmission(submission_completion).is_some()) {
-        ReleaseCompletedRetiredResources(*m_device, rr);
-    }
-    if (pending_upload.is_some()) {
-        rr.resources.CompleteUploadsThrough(pending_upload->value);
-    }
-    VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
-
-    // Export the signaled semaphore as a dma_fence sync_file fd and hand
-    // it to the swapchain along with the slot. LocalExSwapchain stashes
-    // it for the host's takeLastFrameSyncFd; BridgeExSwapchain forwards
-    // it to ww_bridge_pool_submit_slot.
-    //
-    // Diagnostics: sync_fd export failure is silent in production but
-    // the result is the consumer reading a buffer the producer hasn't
-    // finished writing — exactly the "blank frame" symptom. We log the
-    // first failure loudly and rate-limit subsequent ones.
-    int sync_fd = -1;
-    {
-        VkSemaphoreGetFdInfoKHR gi {
-            .sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
-            .pNext      = nullptr,
-            .semaphore  = *rr.sem_export,
-            .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR,
-        };
-        VkResult vr = m_device->handle().GetSemaphoreFdKHR(gi, &sync_fd);
-        if (vr != VK_SUCCESS) {
-            static std::atomic<std::uint64_t> n_failed { 0 };
-            std::uint64_t                     k = n_failed.fetch_add(1, std::memory_order_relaxed);
-            if (k == 0 || (k & (k - 1)) == 0) { // 1st, 2nd, 4th, 8th...
-                rstd_error("VulkanRender: vkGetSemaphoreFdKHR failed (vr={}, count={})",
-                           (int)vr,
-                           (unsigned long long)(k + 1));
-            }
-            sync_fd = -1;
-        } else if (sync_fd < 0) {
-            // The driver returned VK_SUCCESS with fd=-1 — spec says this
-            // means "the semaphore was unsignaled". Should not happen
-            // because we just waited the fence; flag loudly.
-            static std::atomic<std::uint64_t> n_unsig { 0 };
-            std::uint64_t                     k = n_unsig.fetch_add(1, std::memory_order_relaxed);
-            if (k == 0 || (k & (k - 1)) == 0) {
-                rstd_error("VulkanRender: GetSemaphoreFdKHR returned fd=-1 "
-                           "(semaphore not signaled? count={})",
-                           (unsigned long long)(k + 1));
-            }
-        }
-    }
-
-    auto completion = frame_surface_acquire.completion.Submit(sync_fd);
-    if (completion.status != owe::FrameSurfaceCompletionStatus::Submitted &&
-        completion.status != owe::FrameSurfaceCompletionStatus::SessionLost) {
-        rstd_error("offscreen frame surface completion failed: status={}, error={}",
-                   static_cast<int>(completion.status),
-                   completion.error_code);
-    }
-}
-
-bool VulkanRender::Impl::onSwapchainReady(unsigned width, unsigned height) {
-    if (! m_inited) return false;
-    auto& cur            = m_device->out_extent();
-    bool  extent_changed = (width != cur.width) || (height != cur.height);
-    if (! extent_changed) {
-        // Format-only changes flow through ExSwapchain::format() and
-        // are handled by drawFrameOffscreen's head check.
-        return false;
-    }
-    if (! waitForPreparedUploads(m_rendering_resources)) return false;
-    m_device->set_out_extent(VkExtent2D { width, height });
-    return true;
 }
 
 void VulkanRender::Impl::UpdateCameraFillMode(owe::Scene& scene, owe::FillMode fillmode) {

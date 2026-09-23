@@ -12,5 +12,5 @@ target_sources(owe-media PRIVATE
   VideoSource.cpp)
 target_link_libraries(owe-media PUBLIC owe-core)
 target_link_libraries(owe-media PUBLIC rstd.cppstd)
-target_link_libraries(owe-media PUBLIC owe-vk)
+target_link_libraries(owe-media PUBLIC vvk::vvk)
 target_link_libraries(owe-media PRIVATE PkgConfig::OWE_FFMPEG)

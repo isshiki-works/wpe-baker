@@ -7,7 +7,7 @@ module;
 module owe.media;
 
 import rstd.cppstd;
-import wescene.vk;
+import vvk;
 
 // 逐项照搬 wavsen src/video/yuv_to_rgba.cpp 的软件路径（init + convert_nv12_）：
 // 采样器、平面格式、上传拷贝、屏障、推常量、分组数都不变，偶数尺寸像素与 wavsen 逐字节相同。
@@ -89,7 +89,7 @@ void main() {
 )glsl";
 
 auto VkError(std::string_view operation, VkResult result) -> std::string {
-    return std::string(operation) + ": " + owe::vk::ToString(result);
+    return std::string(operation) + ": " + vvk::ToString(result);
 }
 
 auto PickMemoryType(VkPhysicalDevice phys, std::uint32_t mask, VkMemoryPropertyFlags want)
@@ -119,8 +119,7 @@ void Barrier(VkCommandBuffer cmd, VkImage image, VkAccessFlags src_access, VkAcc
     vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
-auto CreateView(VkDevice device, VkImage image, VkFormat format,
-                owe::vk::Unique<VkImageView>& out) -> VkResult {
+auto CreateView(VkDevice device, VkImage image, VkFormat format, VkImageView& out) -> VkResult {
     const VkImageViewCreateInfo info {
         .sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image            = image,
@@ -132,7 +131,7 @@ auto CreateView(VkDevice device, VkImage image, VkFormat format,
     };
     VkImageView view = VK_NULL_HANDLE;
     const auto  r    = vkCreateImageView(device, &info, nullptr, &view);
-    if (r == VK_SUCCESS) out = owe::vk::Unique<VkImageView>(device, view);
+    if (r == VK_SUCCESS) out = view;
     return r;
 }
 
@@ -197,8 +196,27 @@ auto Nv12ToRgba::Create(VkPhysicalDevice phys, VkDevice device, std::uint32_t qu
 }
 
 Nv12ToRgba::~Nv12ToRgba() {
+    if (m_device == VK_NULL_HANDLE) return;
     // 照 wavsen 等整个设备空闲：上一次转换与之后引用目标图像的渲染都结束后才释放。
-    if (m_device != VK_NULL_HANDLE) (void)vkDeviceWaitIdle(m_device);
+    (void)vkDeviceWaitIdle(m_device);
+    // 按创建的逆序销毁，图像/缓冲先于其内存；空句柄是合法的空操作。命令缓冲、描述符集合随池释放。
+    vkDestroyImageView(m_device, m_target_view, nullptr);
+    vkDestroyFence(m_device, m_fence, nullptr);
+    vkDestroyCommandPool(m_device, m_command_pool, nullptr);
+    vkDestroyDescriptorPool(m_device, m_descriptor_pool, nullptr);
+    vkDestroyBuffer(m_device, m_staging, nullptr);
+    vkFreeMemory(m_device, m_staging_memory, nullptr);
+    vkDestroyImageView(m_device, m_uv_view, nullptr);
+    vkDestroyImage(m_device, m_uv_image, nullptr);
+    vkFreeMemory(m_device, m_uv_memory, nullptr);
+    vkDestroyImageView(m_device, m_y_view, nullptr);
+    vkDestroyImage(m_device, m_y_image, nullptr);
+    vkFreeMemory(m_device, m_y_memory, nullptr);
+    vkDestroySampler(m_device, m_sampler, nullptr);
+    vkDestroyPipeline(m_device, m_pipeline, nullptr);
+    vkDestroyPipelineLayout(m_device, m_pipeline_layout, nullptr);
+    vkDestroyDescriptorSetLayout(m_device, m_set_layout, nullptr);
+    vkDestroyShaderModule(m_device, m_shader, nullptr);
 }
 
 auto Nv12ToRgba::Fail(std::string message) -> bool {
@@ -225,13 +243,12 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
         VkSampler sampler = VK_NULL_HANDLE;
         if (auto r = vkCreateSampler(device, &info, nullptr, &sampler); r != VK_SUCCESS)
             return Fail(VkError("vkCreateSampler", r));
-        m_sampler = owe::vk::Unique<VkSampler>(device, sampler);
+        m_sampler = sampler;
     }
 
     // Y 平面 R8（max_w × max_h）与 UV 平面 R8G8（各减半），设备本地内存。
     auto plane = [&](VkFormat format, std::uint32_t w, std::uint32_t h,
-                     owe::vk::Unique<VkImage>& image, owe::vk::Unique<VkDeviceMemory>& memory,
-                     owe::vk::Unique<VkImageView>& view) -> bool {
+                     VkImage& image, VkDeviceMemory& memory, VkImageView& view) -> bool {
         const VkImageCreateInfo info {
             .sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .imageType     = VK_IMAGE_TYPE_2D,
@@ -248,7 +265,7 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
         VkImage handle = VK_NULL_HANDLE;
         if (auto r = vkCreateImage(device, &info, nullptr, &handle); r != VK_SUCCESS)
             return Fail(VkError("vkCreateImage", r));
-        image = owe::vk::Unique<VkImage>(device, handle);
+        image = handle;
         VkMemoryRequirements mr {};
         vkGetImageMemoryRequirements(device, handle, &mr);
         const auto type =
@@ -262,7 +279,7 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
         VkDeviceMemory mem = VK_NULL_HANDLE;
         if (auto r = vkAllocateMemory(device, &alloc, nullptr, &mem); r != VK_SUCCESS)
             return Fail(VkError("vkAllocateMemory(plane)", r));
-        memory = owe::vk::Unique<VkDeviceMemory>(device, mem);
+        memory = mem;
         if (auto r = vkBindImageMemory(device, handle, mem, 0); r != VK_SUCCESS)
             return Fail(VkError("vkBindImageMemory(plane)", r));
         if (auto r = CreateView(device, handle, format, view); r != VK_SUCCESS)
@@ -286,7 +303,7 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
         VkBuffer buffer = VK_NULL_HANDLE;
         if (auto r = vkCreateBuffer(device, &info, nullptr, &buffer); r != VK_SUCCESS)
             return Fail(VkError("vkCreateBuffer(stage)", r));
-        m_staging = owe::vk::Unique<VkBuffer>(device, buffer);
+        m_staging = buffer;
         VkMemoryRequirements mr {};
         vkGetBufferMemoryRequirements(device, buffer, &mr);
         const auto type = PickMemoryType(phys,
@@ -302,7 +319,7 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
         VkDeviceMemory mem = VK_NULL_HANDLE;
         if (auto r = vkAllocateMemory(device, &alloc, nullptr, &mem); r != VK_SUCCESS)
             return Fail(VkError("vkAllocateMemory(stage)", r));
-        m_staging_memory = owe::vk::Unique<VkDeviceMemory>(device, mem);
+        m_staging_memory = mem;
         if (auto r = vkBindBufferMemory(device, buffer, mem, 0); r != VK_SUCCESS)
             return Fail(VkError("vkBindBufferMemory(stage)", r));
         void* mapped = nullptr;
@@ -321,7 +338,7 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
         VkShaderModule module = VK_NULL_HANDLE;
         if (auto r = vkCreateShaderModule(device, &info, nullptr, &module); r != VK_SUCCESS)
             return Fail(VkError("vkCreateShaderModule", r));
-        m_shader = owe::vk::Unique<VkShaderModule>(device, module);
+        m_shader = module;
     }
 
     // 描述符布局：0/1 采样 Y/UV，2 写目标。
@@ -339,31 +356,30 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
         VkDescriptorSetLayout layout = VK_NULL_HANDLE;
         if (auto r = vkCreateDescriptorSetLayout(device, &info, nullptr, &layout); r != VK_SUCCESS)
             return Fail(VkError("vkCreateDescriptorSetLayout", r));
-        m_set_layout = owe::vk::Unique<VkDescriptorSetLayout>(device, layout);
+        m_set_layout = layout;
     }
 
     // 管线布局（推常量：目标尺寸 + 颜色矩阵）与计算管线。
     {
         const VkPushConstantRange range { VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                           sizeof(ShaderPushConstants) };
-        const VkDescriptorSetLayout set_layout = *m_set_layout;
         const VkPipelineLayoutCreateInfo info {
             .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .setLayoutCount         = 1,
-            .pSetLayouts            = &set_layout,
+            .pSetLayouts            = &m_set_layout,
             .pushConstantRangeCount = 1,
             .pPushConstantRanges    = &range,
         };
         VkPipelineLayout layout = VK_NULL_HANDLE;
         if (auto r = vkCreatePipelineLayout(device, &info, nullptr, &layout); r != VK_SUCCESS)
             return Fail(VkError("vkCreatePipelineLayout", r));
-        m_pipeline_layout = owe::vk::Unique<VkPipelineLayout>(device, layout);
+        m_pipeline_layout = layout;
 
         const VkComputePipelineCreateInfo pipeline_info {
             .sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
             .stage  = { .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                         .stage  = VK_SHADER_STAGE_COMPUTE_BIT,
-                        .module = *m_shader,
+                        .module = m_shader,
                         .pName  = "main" },
             .layout = layout,
         };
@@ -372,7 +388,7 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
                 device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline);
             r != VK_SUCCESS)
             return Fail(VkError("vkCreateComputePipelines", r));
-        m_pipeline = owe::vk::Unique<VkPipeline>(device, pipeline);
+        m_pipeline = pipeline;
     }
 
     // 描述符池（一套）与集合；0/1 两个采样绑定固定不变，这里一次写好。
@@ -381,22 +397,34 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
             { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 },
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
         };
-        auto arena = owe::vk::DescriptorArenaGeneration::Create(device, 1, sizes);
-        if (! arena.created()) return Fail(VkError("vkCreateDescriptorPool", arena.api_result));
-        auto allocation = owe::vk::DescriptorArenaGeneration::Allocate(arena.arena, *m_set_layout);
-        if (! allocation.allocated())
-            return Fail(VkError("vkAllocateDescriptorSets", allocation.api_result));
-        m_set = std::move(allocation.lease);
+        const VkDescriptorPoolCreateInfo pool_info {
+            .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets       = 1,
+            .poolSizeCount = 2,
+            .pPoolSizes    = sizes,
+        };
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        if (auto r = vkCreateDescriptorPool(device, &pool_info, nullptr, &pool); r != VK_SUCCESS)
+            return Fail(VkError("vkCreateDescriptorPool", r));
+        m_descriptor_pool = pool;
+        const VkDescriptorSetAllocateInfo alloc {
+            .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool     = pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts        = &m_set_layout,
+        };
+        if (auto r = vkAllocateDescriptorSets(device, &alloc, &m_set); r != VK_SUCCESS)
+            return Fail(VkError("vkAllocateDescriptorSets", r));
         WriteImageDescriptor(device,
-                             m_set.handle,
+                             m_set,
                              0,
                              VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                             { *m_sampler, *m_y_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
+                             { m_sampler, m_y_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
         WriteImageDescriptor(device,
-                             m_set.handle,
+                             m_set,
                              1,
                              VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                             { *m_sampler, *m_uv_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
+                             { m_sampler, m_uv_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
     }
 
     // 命令池 + 一个命令缓冲（随池释放）+ 每次提交的栅栏。
@@ -409,7 +437,7 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
         VkCommandPool pool = VK_NULL_HANDLE;
         if (auto r = vkCreateCommandPool(device, &info, nullptr, &pool); r != VK_SUCCESS)
             return Fail(VkError("vkCreateCommandPool", r));
-        m_command_pool = owe::vk::Unique<VkCommandPool>(device, pool);
+        m_command_pool = pool;
         const VkCommandBufferAllocateInfo alloc {
             .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .commandPool        = pool,
@@ -422,7 +450,7 @@ auto Nv12ToRgba::Init(VkPhysicalDevice phys, std::uint32_t queue_family,
         VkFence fence = VK_NULL_HANDLE;
         if (auto r = vkCreateFence(device, &fence_info, nullptr, &fence); r != VK_SUCCESS)
             return Fail(VkError("vkCreateFence", r));
-        m_fence = owe::vk::Unique<VkFence>(device, fence);
+        m_fence = fence;
     }
     return true;
 }
@@ -442,11 +470,10 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
 
     // 暂存缓冲、平面图像和命令缓冲都只有一份：先等上一次提交完成。
     if (m_fence_pending) {
-        const VkFence fence = *m_fence;
-        if (auto r = vkWaitForFences(m_device, 1, &fence, VK_TRUE, 1'000'000'000ull);
+        if (auto r = vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, 1'000'000'000ull);
             r != VK_SUCCESS)
             return Fail(VkError("vkWaitForFences", r));
-        if (auto r = vkResetFences(m_device, 1, &fence); r != VK_SUCCESS)
+        if (auto r = vkResetFences(m_device, 1, &m_fence); r != VK_SUCCESS)
             return Fail(VkError("vkResetFences", r));
         m_fence_pending = false;
     }
@@ -458,13 +485,14 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
     std::memcpy(m_staging_map, nv12.data(), y_bytes);
     std::memcpy(m_staging_map + uv_offset, nv12.data() + y_bytes, nv12.size() - y_bytes);
 
-    // 目标视图每次新建（调用方可能换目标图像），留到下一次等过栅栏后再销毁。
-    owe::vk::Unique<VkImageView> dst_view;
-    if (auto r = CreateView(m_device, dst, VK_FORMAT_R8G8B8A8_UNORM, dst_view); r != VK_SUCCESS)
+    // 目标视图每次新建（调用方可能换目标图像）。上一次的视图只有那次计算用过，已等过栅栏，此处换掉。
+    vkDestroyImageView(m_device, m_target_view, nullptr);
+    m_target_view = VK_NULL_HANDLE;
+    if (auto r = CreateView(m_device, dst, VK_FORMAT_R8G8B8A8_UNORM, m_target_view); r != VK_SUCCESS)
         return Fail(VkError("vkCreateImageView(dst)", r));
     WriteImageDescriptor(
-        m_device, m_set.handle, 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-        { VK_NULL_HANDLE, *dst_view, VK_IMAGE_LAYOUT_GENERAL });
+        m_device, m_set, 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        { VK_NULL_HANDLE, m_target_view, VK_IMAGE_LAYOUT_GENERAL });
 
     if (auto r = vkResetCommandBuffer(m_command, 0); r != VK_SUCCESS)
         return Fail(VkError("vkResetCommandBuffer", r));
@@ -475,9 +503,7 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
     if (auto r = vkBeginCommandBuffer(m_command, &begin); r != VK_SUCCESS)
         return Fail(VkError("vkBeginCommandBuffer", r));
 
-    const VkImage y_image  = *m_y_image;
-    const VkImage uv_image = *m_uv_image;
-    for (VkImage plane : { y_image, uv_image }) {
+    for (VkImage plane : { m_y_image, m_uv_image }) {
         Barrier(m_command,
                 plane,
                 0,
@@ -495,11 +521,11 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
             .imageExtent      = { w, h, 1 },
         };
         vkCmdCopyBufferToImage(
-            m_command, *m_staging, plane, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            m_command, m_staging, plane, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     };
-    copy(0, y_image, width, height);
-    copy(uv_offset, uv_image, chroma_w, chroma_h);
-    for (VkImage plane : { y_image, uv_image }) {
+    copy(0, m_y_image, width, height);
+    copy(uv_offset, m_uv_image, chroma_w, chroma_h);
+    for (VkImage plane : { m_y_image, m_uv_image }) {
         Barrier(m_command,
                 plane,
                 VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -519,13 +545,13 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
-    vkCmdBindPipeline(m_command, VK_PIPELINE_BIND_POINT_COMPUTE, *m_pipeline);
+    vkCmdBindPipeline(m_command, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(m_command,
                             VK_PIPELINE_BIND_POINT_COMPUTE,
-                            *m_pipeline_layout,
+                            m_pipeline_layout,
                             0,
                             1,
-                            &m_set.handle,
+                            &m_set,
                             0,
                             nullptr);
     ShaderPushConstants pc {};
@@ -540,7 +566,7 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
         pc.offset[i] = matrix.offset[i];
     }
     vkCmdPushConstants(
-        m_command, *m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        m_command, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(m_command, (width + 7) / 8, (height + 7) / 8, 1);
 
     // 目标：计算着色器写 → 片元着色器读。
@@ -560,10 +586,9 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
         .commandBufferCount = 1,
         .pCommandBuffers    = &m_command,
     };
-    if (auto r = vkQueueSubmit(m_queue, 1, &submit, *m_fence); r != VK_SUCCESS)
+    if (auto r = vkQueueSubmit(m_queue, 1, &submit, m_fence); r != VK_SUCCESS)
         return Fail(VkError("vkQueueSubmit", r));
     m_fence_pending = true;
-    m_target_view   = std::move(dst_view);
     return true;
 }
 
