@@ -24,7 +24,7 @@ internal static class Routes
             effectPrefix = true;
             target["route"] = "effect_prefix";
             target["effect_prefix_caches"] = fallback;
-            target["blockers"] = new JsonArray();
+            PlanBlockers.Set(target, []);
             target["status"] = "requires_loop_analysis";
         }
         // 整层被阻断：先看特效前缀能不能接手。
@@ -44,9 +44,20 @@ internal static class Routes
     internal static void RefreshWholeLayer(JsonObject plan)
     {
         JsonObject wholeLayer = plan["whole_layer"]!.AsObject();
-        wholeLayer["blockers"] = plan["blockers"]!.DeepClone();
+        PlanBlockers.CopyTo(plan, wholeLayer);
         wholeLayer["loop"] = plan["loop"]!.DeepClone();
-        wholeLayer["status"] = wholeLayer["blockers"]!.AsArray().Count == 0 &&
-            WholeLoopComplete(wholeLayer["loop"]!.AsObject()) ? "available" : "unavailable";
+        wholeLayer["status"] = WholeLayerStatus(wholeLayer["blockers"]!.AsArray(), wholeLayer["loop"]!.AsObject());
     }
+
+    /// <summary>新建 whole_layer 副本（组 plan 时）：拒因渲染一次，loop 拷一份，状态规则同 <see cref="RefreshWholeLayer"/>。</summary>
+    internal static JsonObject WholeLayer(IReadOnlyList<Blocker> blockers, JsonObject loop)
+    {
+        var wholeLayer = new JsonObject { ["blockers"] = new JsonArray(), ["loop"] = loop.DeepClone() };
+        PlanBlockers.Set(wholeLayer, blockers);
+        wholeLayer["status"] = WholeLayerStatus(wholeLayer["blockers"]!.AsArray(), loop);
+        return wholeLayer;
+    }
+
+    private static string WholeLayerStatus(JsonArray blockers, JsonObject loop) =>
+        blockers.Count == 0 && WholeLoopComplete(loop) ? "available" : "unavailable";
 }

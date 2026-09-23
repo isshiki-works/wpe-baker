@@ -57,13 +57,16 @@ public sealed record Blocker(BlockerCode Code, object?[] Args, object?[]? ZhArgs
     /// <summary>plan v3 的 blockers 字段写的英文原文（C3 切 plan v4 时随 Legacy 模板一起删）。</summary>
     public string Text => MessageCatalog.RenderLegacy(Key, Args);
 
+    /// <summary>plan v3 的 blockers_localized 条目：{key, zh, en, params}。</summary>
+    public JsonObject Localized() => MessageCatalog.Localized(Key, ZhArgs ?? Args, Args);
+
     /// <summary>
-    /// 分析过程中放进 plan 的 blockers 数组的节点：{key, zh, en, params, text}。
-    /// 写 plan 时 <see cref="PlanBlockers.Finish"/> 把 text 拆回 blockers、其余进 blockers_localized。
+    /// 独立节点 {key, zh, en, params, text}：给不经 plan 的报告（工具局限）先攒再用 <see cref="PlanBlockers.Finish"/> 拆，
+    /// 以及测试比对用。plan 里的拒因不用它，直接经 <see cref="PlanBlockers"/> 写成 v3 两个字段。
     /// </summary>
     public JsonObject ToNode()
     {
-        JsonObject node = MessageCatalog.Localized(Key, ZhArgs ?? Args, Args);
+        JsonObject node = Localized();
         node["text"] = Text;
         return node;
     }
@@ -100,24 +103,26 @@ public static class BlockerCodes
         string.Concat(name.Select((c, i) => char.IsUpper(c) ? (i > 0 ? "_" : "") + char.ToLowerInvariant(c) : c.ToString()));
 }
 
-/// <summary>plan 里 blockers 数组的读写：分析中是 <see cref="Blocker.ToNode"/> 节点，写 plan 时拆成 v3 字段。</summary>
+/// <summary>
+/// plan 里拒因的读写。plan JSON 只有一种形态（plan v3）：<c>blockers</c> 是英文原文数组，<c>blockers_localized</c> 是同下标的
+/// {key, zh, en, params}，追加时两边一起写、编号只从 blockers_localized 读。分析中的初判拒因在内存里是 <see cref="Blocker"/> 列表
+/// （<see cref="Verdict"/>），组 plan 时由 <see cref="Set"/> 渲染一次；v4 删字符串数组与 whole_layer 副本（C3）。
+/// </summary>
 public static class PlanBlockers
 {
-    /// <summary>
-    /// 数组里每一条的编号。分析中的节点直接读 key；已经 <see cref="Finish"/> 过的英文原文按下标读同级的
-    /// blockers_localized（它是 plan 自带的结构化字段，不是拿句子反查）。
-    /// </summary>
-    public static IEnumerable<BlockerCode> Codes(JsonObject? owner) =>
-        Codes(owner?["blockers"] as JsonArray, owner?["blockers_localized"] as JsonArray);
+    private const string Texts = "blockers", Localized = "blockers_localized";
 
-    /// <summary>同上，直接给数组（分析中的局部 blockers 没有 blockers_localized）。</summary>
-    public static IEnumerable<BlockerCode> Codes(JsonArray? items, JsonArray? localized = null)
+    /// <summary>owner 上每一条拒因的编号，按同下标的 blockers_localized 读（它是 plan 自带的结构化字段，不是拿句子反查）。</summary>
+    public static IEnumerable<BlockerCode> Codes(JsonObject? owner) =>
+        Codes(owner?[Texts] as JsonArray, owner?[Localized] as JsonArray);
+
+    /// <summary>同上，直接给两个同下标数组。</summary>
+    public static IEnumerable<BlockerCode> Codes(JsonArray? items, JsonArray? localized)
     {
         if (items is null) yield break;
         for (int i = 0; i < items.Count; ++i)
         {
-            string? key = items[i] is JsonObject node ? node["key"]?.GetValue<string>()
-                : localized is not null && i < localized.Count ? localized[i]?["key"]?.GetValue<string>() : null;
+            string? key = localized is not null && i < localized.Count ? localized[i]?["key"]?.GetValue<string>() : null;
             yield return BlockerCodes.FromKey(key) ?? throw UnnumberedPlan();
         }
     }
@@ -129,40 +134,74 @@ public static class PlanBlockers
     private static InvalidDataException UnnumberedPlan() =>
         new Message("plan.legacy_unnumbered_blocker").Error(text => new InvalidDataException(text));
 
-    /// <summary>追加一条；同编号同参数的已在数组里就不重复加。</summary>
-    public static void Add(JsonArray items, Blocker blocker)
+    /// <summary>把 owner 的拒因整体换成 <paramref name="blockers"/>（两个字段已存在时原位替换，不存在时追加在末尾）。</summary>
+    public static void Set(JsonObject owner, IEnumerable<Blocker> blockers)
     {
-        JsonObject node = blocker.ToNode();
-        if (!items.Any(item => JsonNode.DeepEquals(item, node))) items.Add(node);
+        var texts = new JsonArray();
+        var localized = new JsonArray();
+        foreach (Blocker blocker in blockers)
+        {
+            texts.Add(blocker.Text);
+            localized.Add(blocker.Localized());
+        }
+        owner[Texts] = texts;
+        owner[Localized] = localized;
+    }
+
+    /// <summary>把 <paramref name="from"/> 的拒因各拷一份给 <paramref name="to"/>（whole_layer 副本按 plan 当前拒因重写时用）。</summary>
+    public static void CopyTo(JsonObject from, JsonObject to)
+    {
+        to[Texts] = from[Texts]?.DeepClone() ?? new JsonArray();
+        to[Localized] = from[Localized]?.DeepClone() ?? new JsonArray();
+    }
+
+    /// <summary>追加一条；同编号同参数的已在 owner 里就不重复加。字段缺失时补上（追加在末尾）。</summary>
+    public static void Add(JsonObject owner, Blocker blocker)
+    {
+        if (owner[Texts] is not JsonArray texts) owner[Texts] = texts = new JsonArray();
+        if (owner[Localized] is not JsonArray localized) owner[Localized] = localized = new JsonArray();
+        string text = blocker.Text;
+        JsonObject entry = blocker.Localized();
+        for (int i = 0; i < texts.Count; ++i)
+            if (texts[i] is JsonValue value && value.TryGetValue(out string? existing) && existing == text &&
+                i < localized.Count && JsonNode.DeepEquals(localized[i], entry)) return;
+        texts.Add(text);
+        localized.Add(entry);
     }
 
     /// <summary>
-    /// 把 owner.blockers 写成 plan v3 形态：blockers 为英文原文数组，blockers_localized 为 {key, zh, en, params}。
-    /// 已经写过的条目（英文原文）沿用同下标的 blockers_localized，所以可以反复调用。
+    /// 同上，给的是 owner 上的 blockers 数组（预设级联的旧调用形态，C2.2e 改成传 owner 后删，登记在 forwarders.txt）。
+    /// </summary>
+    public static void Add(JsonArray items, Blocker blocker) =>
+        Add(items.Parent as JsonObject ?? throw new InvalidOperationException("A blockers array must belong to a plan object."), blocker);
+
+    /// <summary>
+    /// 写 plan 时把 blockers_localized 挪到 owner 末尾：v3 的字节顺序里它排在分析期间写下的所有字段之后
+    /// （C2.2d2 之前由写 plan 前的 Finish 追加）。只由 <see cref="PlanWriter"/> 在挂双语字段之前调一次。
+    /// </summary>
+    internal static void PlaceLocalizedLast(JsonObject owner)
+    {
+        if (owner[Localized] is not JsonArray localized) return;
+        owner.Remove(Localized);
+        owner[Localized] = localized;
+    }
+
+    /// <summary>
+    /// 在 plan 之外用 <see cref="Blocker.ToNode"/> 节点攒出的拒因数组（工具局限报告）拆成 v3 两个字段。
+    /// plan 本身从不持有节点，所以这里只认节点。
     /// </summary>
     public static void Finish(JsonObject owner)
     {
-        var items = owner["blockers"] as JsonArray;
-        var previous = owner["blockers_localized"] as JsonArray;
         var texts = new JsonArray();
         var localized = new JsonArray();
-        for (int i = 0; i < (items?.Count ?? 0); ++i)
+        foreach (JsonNode? item in owner[Texts] as JsonArray ?? [])
         {
-            if (items![i] is JsonObject node)
-            {
-                var entry = node.DeepClone().AsObject();
-                texts.Add(entry["text"]!.GetValue<string>());
-                entry.Remove("text");
-                localized.Add(entry);
-            }
-            else if (previous is not null && i < previous.Count && previous[i]?["key"] is not null)
-            {
-                texts.Add(items[i]!.DeepClone());
-                localized.Add(previous[i]!.DeepClone());
-            }
-            else throw UnnumberedPlan();
+            var entry = (item as JsonObject ?? throw UnnumberedPlan()).DeepClone().AsObject();
+            texts.Add(entry["text"]!.GetValue<string>());
+            entry.Remove("text");
+            localized.Add(entry);
         }
-        if (items is not null) owner["blockers"] = texts;
-        owner["blockers_localized"] = localized;
+        owner[Texts] = texts;
+        owner[Localized] = localized;
     }
 }

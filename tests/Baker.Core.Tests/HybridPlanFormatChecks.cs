@@ -72,7 +72,7 @@ internal static class HybridPlanFormatChecks
             check(rejected && !Directory.Exists(output), name + " rejects plan version before tools and output creation");
         }
         await RejectBeforeTools(async output => { await new HybridBakeService(tools).BakeAsync(new(2, unknown, output)); }, "bake-version-boundary");
-        current["blockers"] = new JsonArray(new Blocker(BlockerCode.PerspectiveNeedsScreenspace).ToNode());
+        PlanBlockers.Set(current, [new Blocker(BlockerCode.PerspectiveNeedsScreenspace)]);
         bool blockerReached = false;
         try { await new HybridBakeService(tools).BakeAsync(new(2, current, Path.Combine(outputRoot, "v3-blocked"))); }
         catch (InvalidDataException error) when (error.Message.StartsWith("Resolve the plan", StringComparison.Ordinal)) { blockerReached = true; }

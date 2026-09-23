@@ -55,6 +55,10 @@ internal static class HybridHierarchyGeneralizationChecks
             new(2, sourceDirectory, root, Path.Combine(root, "hierarchy-generalization-analysis"), 64, 32,
                 RuntimeTraceFile: tracePath, VideoLayout: "layered"));
         var layers = plan["layers"]!.AsArray().OfType<JsonObject>().ToDictionary(layer => layer["id"]!.GetValue<int>());
+        string[] keys = [.. plan.Select(pair => pair.Key)];
+        check(plan["suitability"]?["verdict"] is JsonValue && Array.IndexOf(keys, "summary") == Array.IndexOf(keys, "blockers_localized") + 1 &&
+            plan["whole_layer"]!.AsObject().Last().Key == "blockers_localized",
+            "the written plan carries a suitability verdict and blockers_localized sits where plan v3 puts it (right before summary, last in whole_layer)");
         check(layers[102]["allocation_root"]!.GetValue<int>() == 100 && layers[102]["live"]!.GetValue<bool>(),
             "an unresolved runtime target keeps static splitting fail-closed across the scene");
         check(layers[401]["allocation_root"]!.GetValue<int>() == 400 && layers[401]["live"]!.GetValue<bool>() &&

@@ -100,7 +100,7 @@ internal static class OutputFrameRateChecks
 
         // ---- plan 记录 ----
         var plan = new JsonObject { ["settings"] = new JsonObject(), ["output_resolution"] = new JsonObject(), ["projection"] = new JsonObject() };
-        typeof(HybridScenePlanner).GetMethod("AttachFrameRate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+        typeof(PlanWriter).GetMethod("AttachFrameRate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
             .Invoke(null, [plan, machine.ToJson()]);
         check(plan.Select(pair => pair.Key).ToArray() is ["settings", "output_resolution", "frame_rate", "projection"],
             "the frame rate record sits directly after output_resolution in the plan");

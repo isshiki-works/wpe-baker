@@ -74,8 +74,8 @@ public static class Admission
         AdmissionVerdict verdict = Evaluate(plan, scene, readResource);
         if (verdict.Rejection != AdmissionRejection.ResidualLayout) return null;
         plan["residual_layout_gate"] = verdict.LayoutGate;
-        foreach (JsonNode? node in new[] { plan["blockers"], plan["whole_layer"]?["blockers"] })
-            if (node is JsonArray blockers) PlanBlockers.Add(blockers, verdict.Blocker!);
+        foreach (JsonObject? owner in new[] { plan, plan["whole_layer"] as JsonObject })
+            if (owner?["blockers"] is JsonArray) PlanBlockers.Add(owner, verdict.Blocker!);
         plan["status"] = "requires_resolution";
         if (plan["whole_layer"] is JsonObject wholeLayer) wholeLayer["status"] = "unavailable";
         return verdict.LayoutGate;
@@ -99,9 +99,9 @@ public static class Admission
         AdmissionVerdict verdict = Evaluate(plan, scene, readResource);
         plan["loop"]!["residual_masking"] = verdict.Residual;
         if (verdict.Blocker is not { Code: BlockerCode.BakeAllocation } blocker) return;
-        PlanBlockers.Add(plan["blockers"]!.AsArray(), blocker);
+        PlanBlockers.Add(plan, blocker);
         plan["status"] = "requires_resolution";
-        plan["suitability"] = HybridScenePlanner.Suitability(plan);
+        plan["suitability"] = HybridSuitability.Verdict(plan);
         PlanNarrative.Attach(plan);
     }
 

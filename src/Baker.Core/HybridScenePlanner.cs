@@ -1,9 +1,5 @@
-using System.Globalization;
-using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 
 namespace Baker.Core;
 
@@ -42,12 +38,6 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
 /// <param name="display">未指定宽高时用来铺满的屏幕尺寸；省略时读本机主显示器物理分辨率，测试可注入固定值。</param>
 public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint Height)?>? display = null)
 {
-    // 只用于标注可疑的广告/二维码/水印图层，从不自动剔除任何东西。
-    private static readonly Regex OverlayVocabulary = new(
-        @"\b(ads?|advert\w*|qr\w*|donate|donation|watermark|logo|signature|credit)\b|广告|二维码|捐赠|打赏|水印|署名|关注",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    internal static readonly Blocker MissingScriptFaultEvidenceBlocker = new(BlockerCode.MissingScriptFaultEvidence);
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
     /// <summary>把命令行/界面上的三档名字翻成求解器的择优倾向；非法值在请求校验里已被挡下。</summary>
     public static CommonLoopPreference LoopPreferenceOf(string value) => value switch
@@ -203,6 +193,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         CancellationToken cancellationToken = default) =>
         await PresetCascade.AnalyzeAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, progress, token), cancellationToken, tools);
 
+    /// <summary>
+    /// 单次分析的编排：观测 → 实时判定 → 分配 → 构图 → 初判（<see cref="Verdict"/>）→ 循环与特效前缀 → 组 plan（<see cref="PlanWriter"/>）
+    /// → 路线与布局准入（<see cref="Routes"/>）→ 更小分配取证 → 收尾裁定 → 落盘。各阶段只按这个顺序各跑一次。
+    /// </summary>
     public async Task<JsonObject> AnalyzeSingleAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -229,23 +223,18 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             request = request with { AnalysisCacheDirectory = Path.Combine(cacheDirectory, sourceHash) };
         var scene = AnalysisCache.Get(request.AnalysisCacheDirectory, "scene", () => source.ReadJson(source.SceneResource));
         var project = AnalysisCache.Get(request.AnalysisCacheDirectory, "project", () => source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject());
-        var properties = SnapshotProperties(project, request.UserProperties);
+        var properties = SceneGraph.SnapshotProperties(project, request.UserProperties);
         // 未指定宽高时按场景画布铺满本机屏幕取尺寸；之后的探测、投影、plan.settings 与 bake 全部用这里定下的尺寸。
         OutputResolution.Choice resolution = OutputResolution.Choose(scene, properties, request.Width, request.Height,
             request.ResolutionSource, display ?? OutputResolution.PrimaryDisplay);
         request = request with { Width = resolution.Width, Height = resolution.Height, ResolutionSource = resolution.Source };
         var graph = new SceneGraph(scene);
-        var objects = graph.Objects;
-        var sourceOrder = graph.SourceOrder;
-        var rootOf = graph.RootOf;
         Directory.CreateDirectory(output);
         progress?.Report(new("analyzing", null, "Observing real script inputs, object accesses and scene hierarchy."));
         RuntimeObservation observation = await RuntimeObservation.ObserveAsync(request, source, sourceHash, scene, project, properties,
             graph, output, new NativeRuntimeObserver(tools), progress, cancellationToken);
-        JsonObject trace = observation.Trace, audioEffectChoice = observation.AudioEffectChoice;
-        JsonArray dependencies = observation.Dependencies, runtimeLayers = observation.RuntimeLayers;
         // feat/daytime-split：开关开着才识别状态选择器；识别失败只记原因，判定照旧。同名图层靠观测到的可见性写消歧。
-        DaytimeSplit.Detection? daytime = request.DaytimeSplit ? DaytimeSplit.Detect(objects, dependencies, properties) : null;
+        DaytimeSplit.Detection? daytime = request.DaytimeSplit ? DaytimeSplit.Detect(graph.Objects, observation.Dependencies, properties) : null;
         if (request.DaytimeState is not null && daytime?.IsRecognized != true)
             throw new InvalidDataException("A daytime state was requested but no daytime state selector was recognized.");
         DaytimeSplit.State? daytimeState = request.DaytimeState is null ? null
@@ -255,111 +244,45 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         HashSet<int> daytimeVisible = daytimeState is null ? new HashSet<int>() : daytimeState.VisibleLayerIds.ToHashSet();
         // 选择器对受控层的可见性写不再把目标连坐成实时：这就是状态拆分要摘掉的那条链。
         bool DaytimeVisibilityWrite(JsonObject dependency) => daytimeSelector is int selector &&
-            Int(dependency["owner"]) == selector && dependency["property"]?.GetValue<string>() == "visible" &&
-            Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
+            SceneGraph.Int(dependency["owner"]) == selector && dependency["property"]?.GetValue<string>() == "visible" &&
+            SceneGraph.Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
         // 完整匹配的视频选择器在所选状态里已冻结。只摘掉该 visible 脚本原有的视频读取，
         // 不能因选择器所在图层还承担实时后处理，就把受控视频重新连坐为实时。
         bool FrozenDaytimeVideoRead(JsonObject dependency) => daytimeSelector is int selector && daytime!.ControlsVideoPlayback &&
-            Int(dependency["owner"]) == selector && dependency["binding"]?.GetValue<string>() == "visible" &&
+            SceneGraph.Int(dependency["owner"]) == selector && dependency["binding"]?.GetValue<string>() == "visible" &&
             dependency["operation"]?.GetValue<string>() == "read" && dependency["property"]?.GetValue<string>() == "videoTexture" &&
-            Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
-        var (scriptErrorEvidenceAvailable, scriptErrorCount, sourceScriptErrors) = observation.ScriptFaults(request.RuntimeTraceFile is not null);
-        bool parallax = Resolve(scene["general"]?["cameraparallax"], properties)?.ToJsonString() == "true";
-        var liveness = Liveness.Analyze(request, source, graph, observation, sourceScriptErrors, parallax, daytimeSelector,
+            SceneGraph.Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
+        var scriptFaults = observation.ScriptFaults(request.RuntimeTraceFile is not null);
+        bool parallax = SceneGraph.Resolve(scene["general"]?["cameraparallax"], properties)?.ToJsonString() == "true";
+        var liveness = Liveness.Analyze(request, source, graph, observation, scriptFaults.Errors, parallax, daytimeSelector,
             FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
-        var projection = HybridVideoProjection.Describe(scene, properties, request.Width, request.Height, trace["runtime_projection"] as JsonObject);
+        var projection = HybridVideoProjection.Describe(scene, properties, request.Width, request.Height, observation.Trace["runtime_projection"] as JsonObject);
         var allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax, FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
         var composer = new Composer(request, source, scene, properties, graph, observation, liveness, allocation, parallax,
             daytimeControlled, daytimeVisible);
-        // C2.2b 别名：R 段以后原样读这些名字，C2.2d 改写那几段时直接读 liveness/allocation/composer 并删掉（登记在 forwarders.txt）。
-        var reasons = liveness.Reasons;
-        var (allocationOf, liveRoots, liveIds, omittedIds, rootDepths) =
-            (allocation.UnitOf, allocation.LiveUnits, allocation.LiveIds, allocation.OmittedIds, allocation.Depths);
-        var (excludedRoots, excludedIds, fixedProperties) = (allocation.ExcludedRoots, allocation.ExcludedIds, allocation.FixedProperties);
-        int[] authorRoots = graph.Roots, sourceRootOrder = allocation.Order, roots = composer.RootOrder, optionalForeground = composer.OptionalForeground;
-        JsonArray groups = composer.Groups, rootSequence = composer.Composition;
-        JsonObject occlusionTradeoff = composer.OcclusionTradeoff, textEffectChoice = composer.TextEffectChoice;
-        Func<int, bool> Visible = composer.Visible, Draws = composer.Draws;
         // A later parallax/occlusion group can stay live in its original place. Compare that
         // complete suffix before concluding that the user needs multiple transparent videos.
-        var blockers = new JsonArray();
-        if (!scriptErrorEvidenceAvailable) blockers.Add(MissingScriptFaultEvidenceBlocker.ToNode());
-        if (groups.Count == 0) blockers.Add(PlanNarrative.NoInputIndependentGroup(objects, reasons).ToNode());
-        // hdr 标志本身不是拒绝理由；拒绝理由是被捕获组的输出可能超出 [0,1] 而被 RGBA8 捕获 clip。
-        // 文案走 i18n：判据给出未通过的明细，legacy 英文逐字不变，中文另报壁纸自带的 HDR 开关。
-        JsonObject radianceClosure = SdrRadianceClosure.Describe(scene, properties, trace, groups, source, request.Assets,
-            Resolve(scene["general"]?["hdr"], properties)?.ToJsonString() == "true", project, out Blocker? radianceBlocker);
-        if (radianceBlocker is not null) blockers.Add(radianceBlocker.ToNode());
-        if (projection["status"]?.GetValue<string>() != "orthographic") blockers.Add(new Blocker(BlockerCode.PerspectiveNeedsScreenspace).ToNode());
-        foreach (var camera in objects.Values.Where(obj => obj.ContainsKey("camera")))
-        {
-            if (camera["path"] is JsonValue path && path.TryGetValue<string>(out string? file) &&
-                SceneAnalyzer.ReadResourceJson(source, request.Assets, file)["paths"] is JsonArray { Count: > 0 })
-                blockers.Add(new Blocker(BlockerCode.CameraPathNeedsEnvelope).ToNode());
-            if (trace["runtime_projection"] is not JsonObject) blockers.Add(new Blocker(BlockerCode.RuntimeProjectionRequired).ToNode());
-        }
-        double canvasWidth = projection["canvas_width"]!.GetValue<double>(), canvasHeight = projection["canvas_height"]!.GetValue<double>();
+        // 初判（原 R 段）：拒因在内存里按 Blocker 持有，写 plan 时渲染一次。
+        Verdict verdict = Verdict.Initial(request, source, scene, project, properties, graph, observation, liveness, composer, projection, scriptFaults);
         JsonObject LoopScene()
         {
             var copy = scene.DeepClone().AsObject();
-            FreezeTemporalProperties(copy, properties);
+            PlanTransforms.FreezeTemporalProperties(copy, properties);
             DaytimeSplit.ApplyState(copy, daytime, daytimeState, forAnalysis: true);
             return copy;
         }
-        var loop = AnalyzeLoopForProfile(LoopScene, source, request.Assets, trace,
-            groups.OfType<JsonObject>().SelectMany(g => g["layer_ids"]!.AsArray().Select(n => n!.GetValue<int>())).ToArray(),
-            request, projection, groups);
+        int[] BakedLayerIds(JsonArray groups) =>
+            groups.OfType<JsonObject>().SelectMany(group => group["layer_ids"]!.AsArray().Select(node => node!.GetValue<int>())).ToArray();
+        var loop = AnalyzeLoopForProfile(LoopScene, source, request.Assets, observation.Trace, BakedLayerIds(composer.Groups),
+            request, projection, composer.Groups);
         AnnotateLoopCandidates(loop);
-        bool WholeLoopComplete(JsonObject value) => value["unresolved"] is JsonArray { Count: 0 } && value["candidates"] is JsonArray { Count: > 0 };
         // 三处回退都可能要前缀缓存，同一个终端捕获点只问一次渲染器。
-        var captureProbes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
-        async Task<JsonObject?> PrefixCaptureTargetAsync(JsonObject cache)
-        {
-            // 离线 trace 是开发者输入，没有渲染器可问；bake 的元数据探测会做同一裁定。
-            if (request.RuntimeTraceFile is not null) return null;
-            int owner = cache["owner_layer_id"]!.GetValue<int>(), terminal = cache["terminal_effect_id"]!.GetValue<int>();
-            bool forceVisibleOwner = cache["preserve_external_visibility"]?.GetValue<bool>() == true;
-            string key = owner.ToString(CultureInfo.InvariantCulture) + ":" + terminal.ToString(CultureInfo.InvariantCulture);
-            if (forceVisibleOwner) key += ":visible-control";
-            if (captureProbes.TryGetValue(key, out JsonObject? known)) return known;
-            string persistentKey = "capture-" + AnalysisCache.Key(source.SourcePath, properties, request.Assets, tools,
-                File.Exists(tools.Renderer) ? File.GetLastWriteTimeUtc(tools.Renderer).Ticks : 0,
-                request.FpsNumerator, request.FpsDenominator, request.DeviceUuid, key);
-            if (AnalysisCache.Read(request.AnalysisCacheDirectory, persistentKey) is JsonObject cachedProbe)
-                return captureProbes[key] = cachedProbe;
-            string? name = EffectPrefixCaptureTarget.LayerName(scene, owner);
-            string probeOutput = Path.Combine(output, $"effect-prefix-capture-probe-{owner}-{terminal}" + (forceVisibleOwner ? "-visible" : ""));
-            JsonObject observed = new(), verdict;
-            try
-            {
-                // 与 bake 的元数据探测同一个捕获选择：原始源、快照属性、1 帧，只看渲染器实际从哪个目标取帧。
-                var raw = await new NativeRenderRunner(tools).RenderRawAsync(new(source.SourcePath, request.Assets, probeOutput, 64, 64,
-                    request.FpsNumerator, request.FpsDenominator, 1, Seed: 17,
-                    CaptureTarget: new RenderCaptureSelection(owner, terminal, EffectTerminal: true, ExactExtent: false,
-                        ForceVisibleOwner: forceVisibleOwner ? true : null),
-                    UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true), cancellationToken);
-                observed = raw["native_result"]!.AsObject();
-                verdict = EffectPrefixCaptureTarget.Evaluate(observed, owner, terminal, name);
-            }
-            catch (Exception error) when (error is IOException or InvalidDataException)
-            {
-                verdict = EffectPrefixCaptureTarget.ProbeFailed(owner, terminal, name, error.Message);
-            }
-            finally
-            {
-                TemporaryCaptureFiles.Delete(observed, probeOutput, "native/frames.rgba", "native/frames.rgba.partial",
-                    "native/audio.f32le", "native/audio.f32le.partial");
-            }
-            verdict["probe_output"] = probeOutput;
-            captureProbes[key] = verdict;
-            if (verdict["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.ProbeFailedStatus)
-                AnalysisCache.Write(request.AnalysisCacheDirectory, persistentKey, verdict);
-            return verdict;
-        }
+        var captureProbes = new PrefixCaptureProbes(tools, request, source, scene, properties, output);
         async Task<JsonArray> PrefixCachesAsync()
         {
-            if (PrefixSafetyBlocked(blockers)) return new JsonArray();
-            var proposed = EffectPrefixPlanner.Propose(scene, source, request.Assets, trace, properties, request, projection);
+            // 只看整层初判拒因：路线与布局准入追加的 blockers 不影响前缀回退（与改写前读同一份局部数组的结果相同）。
+            if (verdict.PrefixSafetyBlocked) return new JsonArray();
+            var proposed = EffectPrefixPlanner.Propose(scene, source, request.Assets, observation.Trace, properties, request, projection);
             var accepted = new JsonArray();
             // 提案按层分组、层内由长到短。每层只取第一个捕获点可用的前缀：最长的那个被拒时退一级，
             // 整层不因此退回实时（摆动改频进来以后，更长的前缀更容易把终端落在共用缓冲上）。
@@ -371,217 +294,26 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 try { EffectPrefixBakeService.ValidateSource(source, scene, cache); }
                 catch (InvalidDataException) { continue; }
                 // 捕获点落在共用缓冲上的前缀录到的是整幅场景，这个候选不生成。
-                if (await PrefixCaptureTargetAsync(cache) is { } probe &&
+                if (await captureProbes.TargetAsync(cache, cancellationToken) is { } probe &&
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus) continue;
                 accepted.Add(cache.DeepClone());
                 settled.Add(ownerId);
             }
             return accepted;
         }
-        JsonArray effectPrefixCaches = WholeLoopComplete(loop) ? new JsonArray() : await PrefixCachesAsync();
-        bool effectPrefixRoute = effectPrefixCaches.Count > 0;
-        var groupOfRoot = groups.OfType<JsonObject>().SelectMany(group => group["root_ids"]!.AsArray()
-            .Select(root => (Root: root!.GetValue<int>(), Group: group))).ToDictionary(item => item.Root, item => item.Group);
-        // 给用户看的图层清单：几何占比、可见性绑定与分配去向，外加只标注不改动的覆盖层嫌疑。
-        double centerX = Numeric(projection["center_x"], canvasWidth / 2), centerY = Numeric(projection["center_y"], canvasHeight / 2);
-        // 面积只由尺寸与整条缩放链决定，父链旋转不改变面积；位置需要完整的父变换，父链带旋转时位置写 null
-        // 而不是假的 0.5。算不出的量一律写 null：写 0 会让下游把"未知"当成"零面积"（残差掩盖的 25% 精灵占比闸门
-        // 就曾因此对旋转父链下的精灵失效）。
-        (double? Fraction, double? X, double? Y) Placement(int id)
-        {
-            double area = canvasWidth * canvasHeight;
-            if (!double.IsFinite(area) || area <= 0) return (null, null, null);
-            double? fraction = null, x = null, y = null;
-            try
-            {
-                var scale = HybridVideoProjection.Vector(Resolve(objects[id]["scale"], properties), (1, 1));
-                (double X, double Y) chainScale = (1, 1);
-                var seen = new HashSet<int> { id };
-                int? ancestor = Int(objects[id]["parent"]);
-                while (ancestor is int parentId && objects.TryGetValue(parentId, out JsonObject? parentObject) && seen.Add(parentId))
-                {
-                    var parentScale = HybridVideoProjection.Vector(Resolve(parentObject["scale"], properties), (1, 1));
-                    chainScale = (chainScale.X * parentScale.X, chainScale.Y * parentScale.Y);
-                    ancestor = Int(parentObject["parent"]);
-                }
-                if (objects[id]["size"] is not null)
-                {
-                    var size = HybridVideoProjection.Vector(Resolve(objects[id]["size"], properties), (0, 0));
-                    double coverage = Math.Abs(size.X * scale.X * chainScale.X * size.Y * scale.Y * chainScale.Y) / area;
-                    // 包围盒伸出画布的部分不可见，占比封顶 1。
-                    if (double.IsFinite(coverage)) fraction = Math.Min(1, coverage);
-                }
-            }
-            catch (InvalidDataException) { }
-            try
-            {
-                var origin = HybridVideoProjection.Vector(Resolve(objects[id]["origin"], properties), (0, 0));
-                JsonObject? inherited = Int(objects[id]["parent"]) is int parent && objects.ContainsKey(parent)
-                    ? HybridVideoProjection.ParentTransform(objects, parent, properties) : null;
-                var parentOrigin = HybridVideoProjection.Vector(inherited?["origin"], (0, 0));
-                var parentScale = HybridVideoProjection.Vector(inherited?["scale"], (1, 1));
-                double centreX = .5 + (parentOrigin.X + parentScale.X * origin.X - centerX) / canvasWidth;
-                double centreY = .5 + (parentOrigin.Y + parentScale.Y * origin.Y - centerY) / canvasHeight;
-                if (double.IsFinite(centreX) && double.IsFinite(centreY)) (x, y) = (centreX, centreY);
-            }
-            catch (InvalidDataException) { }
-            return (fraction, x, y);
-        }
-        var compositeTargets = dependencies.OfType<JsonObject>().Where(d => d["property"]?.GetValue<string>() == "layerComposite")
-            .Select(d => Int(d["target"])).OfType<int>().ToHashSet();
-        string Kind(int id) => objects[id].ContainsKey("particle") ? "particle" : objects[id].ContainsKey("text") ? "text" :
-            compositeTargets.Contains(id) ? "composite" : objects[id].ContainsKey("image") ? "image" : "other";
-        string VisibleBinding(int id) => objects[id]["visible"] is not JsonObject binding ? "constant" :
-            binding.ContainsKey("script") ? "script" :
-            binding.ContainsKey("animation") || binding.ContainsKey("animations") ? "animation" :
-            binding.ContainsKey("user") ? "user_property" : "constant";
-        string Name(int id) => objects[id]["name"] is JsonValue value && value.TryGetValue<string>(out string? text) ? text : "";
-        // 可取舍元素怎么关：这一层的显示开关绑在哪个壁纸属性上、当前值多少、给什么值算关。
-        // 本层没绑就沿父链找最近一个绑了属性的祖先——关掉祖先会连带关掉这一层，对用户同样是"在 WPE 里关一个开关"。
-        // 推不出来时写明原因（没绑属性 / project.json 没声明 / 属性不是开关），不猜。
-        JsonObject VisibleProperty(int id)
-        {
-            int owner = id;
-            (string Name, string? Condition)? bound = null;
-            var visited = new HashSet<int>();
-            for (int? cursor = id; cursor is int current && objects.ContainsKey(current) && visited.Add(current);
-                cursor = Int(objects[current]["parent"]))
-                if (PlanNarrative.BoundProperty(objects[current]["visible"]) is { } found) { (bound, owner) = (found, current); break; }
-            if (bound is not { } binding) return new JsonObject { ["status"] = "not_bound", ["visible_binding"] = VisibleBinding(id) };
-            string key = binding.Name;
-            var definition = project["general"]?["properties"]?[key] as JsonObject;
-            string type = definition?["type"] is JsonValue typeValue && typeValue.TryGetValue<string>(out string? typeText) ? typeText : "";
-            JsonNode? value = properties.TryGetPropertyValue(key, out JsonNode? saved) ? saved?.DeepClone() : definition?["value"]?.DeepClone();
-            var record = new JsonObject {
-                ["key"] = key, ["label"] = definition?["text"]?.DeepClone(), ["type"] = definition is null ? null : type,
-                ["declared"] = definition is not null, ["binding"] = owner == id ? "self" : "ancestor",
-                ["bound_layer_id"] = owner, ["condition"] = binding.Condition, ["current_value"] = value };
-            static string Scalar(JsonNode? node) => node is JsonValue text && text.TryGetValue<string>(out string? plain)
-                ? plain : node?.ToJsonString() ?? "null";
-            if (binding.Condition is string condition)
-            {
-                // 带 condition 的绑定：属性值等于 condition 时才显示，给它任何别的值都是关。
-                JsonNode? other = (definition?["options"] as JsonArray)?.OfType<JsonObject>()
-                    .Select(option => option["value"]).FirstOrDefault(option => Scalar(option) != condition);
-                record["off_value"] = other?.DeepClone();
-                record["status"] = "conditional";
-                record["off_hint_zh"] = other is null ? $"把 \"{key}\" 设成任何不等于 \"{condition}\" 的值"
-                    : $"把 \"{key}\" 设成 {other.ToJsonString()}";
-                record["off_hint_en"] = other is null ? $"give \"{key}\" any value other than \"{condition}\""
-                    : $"set \"{key}\" to {other.ToJsonString()}";
-                return record;
-            }
-            if (definition is not null && type != "bool")
-            {
-                // 显示直接取属性值，而这个属性不是开关：关闭值推不出来，如实写明。
-                record["status"] = "type_not_boolean";
-                record["off_hint_zh"] = $"属性 \"{key}\" 是 {type} 类型，不是开关，关闭值要自己判断";
-                record["off_hint_en"] = $"the \"{key}\" property is a {type}, not a switch; its off value must be judged manually";
-                return record;
-            }
-            record["off_value"] = false;
-            record["status"] = "resolved";
-            record["off_hint_zh"] = $"关闭值 false，--properties 文件写 {{\"{key}\": false}}";
-            record["off_hint_en"] = $"the off value is false; write {{\"{key}\": false}} in the --properties file";
-            return record;
-        }
-        string[] OverlaySuspicion(int id, double? fraction, double? x, double? y)
-        {
-            var found = new List<string>();
-            if (OverlayVocabulary.IsMatch(Name(id))) found.Add("name_matches_overlay_vocabulary");
-            if (objects[id].ContainsKey("image") && fraction is > 0 and < .12 &&
-                x is <= .2 or >= .8 && y is <= .2 or >= .8) found.Add("small_image_in_canvas_corner");
-            if (objects[id]["visible"] is JsonObject visibility && visibility["script"] is JsonValue script &&
-                script.TryGetValue<string>(out string? code) &&
-                Regex.IsMatch(CapabilityScanText(code), @"\b(setTimeout|setInterval|Date)\b")) found.Add("timer_driven_visibility");
-            return found.ToArray();
-        }
+        JsonArray effectPrefixCaches = Routes.WholeLoopComplete(loop) ? new JsonArray() : await PrefixCachesAsync();
         // 只记录这次分析实际用的是哪台设备；要不要烘是用户的事，不在这里裁决。
         JsonObject analysisDevice = DescribeAnalysisDevice(EnumerateDevicesOrNull(), request.DeviceUuid);
-        var report = new JsonObject {
-            ["schema_version"] = HybridPlanFormat.CurrentVersion, ["kind"] = "hybrid_video", ["route"] = effectPrefixRoute ? "effect_prefix" : "whole_layer",
-            ["status"] = effectPrefixRoute || blockers.Count == 0 ? "requires_loop_analysis" : "requires_resolution",
-            ["source"] = source.SourcePath, ["source_sha256"] = sourceHash, ["source_digest_scope"] = ProjectSource.DigestScope,
-            ["assets"] = Path.GetFullPath(request.Assets), ["analysis_directory"] = output,
-            ["settings"] = PlanSettings.ToJson(request),
-            // 档位与两个高级覆盖合成的生效值，每个值带来源（preset/override/default）；求解器与 bake 读的都是这一份。
-            ["retime_profile"] = RetimeProfile.Resolve(request).ToJson(),
-            ["output_resolution"] = resolution.ToJson(),
-            ["analysis_device"] = analysisDevice.DeepClone(),
-            ["canvas_width"] = canvasWidth, ["canvas_height"] = canvasHeight,
-            ["projection"] = projection,
-            ["snapshot_properties"] = properties, ["has_parallax"] = parallax,
-            ["video_groups"] = groups, ["composition"] = rootSequence,
-            ["live_layer_ids"] = JsonSerializer.SerializeToNode(sourceOrder.Where(liveIds.Contains)),
-            ["omitted_snapshot_layer_ids"] = JsonSerializer.SerializeToNode(sourceOrder.Where(omittedIds.Contains)),
-            ["excluded_layer_ids"] = JsonSerializer.SerializeToNode(excludedRoots),
-            ["fixed_user_properties"] = JsonSerializer.SerializeToNode(fixedProperties),
-            ["root_order"] = JsonSerializer.SerializeToNode(roots),
-            ["source_root_order"] = JsonSerializer.SerializeToNode(authorRoots),
-            ["source_allocation_order"] = JsonSerializer.SerializeToNode(sourceRootOrder),
-            ["occlusion_tradeoff"] = occlusionTradeoff,
-            ["text_effects_choice"] = textEffectChoice,
-            ["audio_effects_choice"] = audioEffectChoice,
-            ["root_roles"] = new JsonArray(roots.Select((root, index) => (JsonNode)new JsonObject {
-                ["root_id"] = root, ["source_order"] = index,
-                ["role"] = omittedIds.Contains(root) ? "omitted_snapshot" : liveRoots.Contains(root) ? "live" :
-                    groupOfRoot.ContainsKey(root) ? "video" : "inactive",
-                ["video_group"] = groupOfRoot.GetValueOrDefault(root)?["id"]?.DeepClone(),
-                ["parallax_depth"] = new JsonArray(rootDepths[root].X, rootDepths[root].Y) }).ToArray()),
-            ["layers"] = new JsonArray(sourceOrder.Select(id => {
-                var (fraction, x, y) = Placement(id);
-                string[] suspicion = OverlaySuspicion(id, fraction, x, y);
-                return (JsonNode)new JsonObject {
-                    ["id"] = id, ["root"] = rootOf[id], ["allocation_root"] = allocationOf[id],
-                    ["parent"] = objects[id]["parent"]?.DeepClone(), ["source_order"] = Array.IndexOf(sourceOrder, id),
-                    ["name"] = objects[id]["name"]?.DeepClone(),
-                    ["kind"] = Kind(id), ["has_image"] = objects[id].ContainsKey("image"),
-                    ["canvas_fraction"] = fraction is double coverage ? Math.Round(coverage, 6) : null,
-                    ["canvas_center_x"] = x is double centreX ? Math.Round(centreX, 6) : null,
-                    ["canvas_center_y"] = y is double centreY ? Math.Round(centreY, 6) : null,
-                    ["quadrant"] = x is not double qx || y is not double qy ? "unknown"
-                        : qx is > .4 and < .6 && qy is > .4 and < .6 ? "center"
-                        : (qy >= .5 ? "top_" : "bottom_") + (qx < .5 ? "left" : "right"),
-                    ["visible_binding"] = VisibleBinding(id),
-                    ["allocation"] = excludedIds.Contains(id) ? "excluded" : omittedIds.Contains(id) ? "omitted" :
-                        liveIds.Contains(id) ? "live" : groupOfRoot.ContainsKey(allocationOf[id]) ? "video" : "inactive",
-                    ["suspected_overlay"] = suspicion.Length > 0,
-                    ["suspected_overlay_reasons"] = JsonSerializer.SerializeToNode(suspicion),
-                    ["live"] = liveIds.Contains(id), ["reasons"] = JsonSerializer.SerializeToNode(reasons[id]),
-                    // 取舍清单用的两个标签与关闭办法：只给实时层，其余层这三个字段为 null。
-                    ["tradeoff_class"] = liveIds.Contains(id) ? TradeoffOptions.Classify(reasons[id], suspectedOverlay: suspicion.Length > 0).Class : null,
-                    ["tradeoff_kinds"] = liveIds.Contains(id)
-                        ? JsonSerializer.SerializeToNode(TradeoffOptions.Classify(reasons[id], suspectedOverlay: suspicion.Length > 0).Kinds) : null,
-                    ["visible_property"] = liveIds.Contains(id) ? VisibleProperty(id) : null,
-                    ["visible"] = Visible(id), ["drawable"] = Draws(id) };
-            }).ToArray()),
-            ["optional_realtime_roots"] = JsonSerializer.SerializeToNode(optionalForeground),
-            ["hdr_radiance_closure"] = radianceClosure,
-            ["composition_policy"] = "Keep adjacent input-independent content together; optional live foreground must not split a video group or change draw order.",
-            ["blockers"] = effectPrefixRoute ? new JsonArray() : blockers, ["loop"] = loop,
-            ["whole_layer"] = new JsonObject { ["blockers"] = blockers.DeepClone(), ["loop"] = loop.DeepClone(),
-                ["status"] = WholeLoopComplete(loop) && blockers.Count == 0 ? "available" : "unavailable" },
-            ["effect_prefix_caches"] = effectPrefixCaches,
-            ["encoding"] = new JsonObject { ["codec"] = "auto_h264_hevc", ["pixel_format"] = "yuv420p", ["crf"] = 16,
-                ["color_space"] = "bt709_sdr", ["transparent_groups"] = "rgb_contribution_and_coverage_side_by_side",
-                ["selection_basis"] = "H.264 within 4096 pixels and level 5.2 frame/rate limits; HEVC otherwise. Final cropped stream determines selection; target hardware decoding and playback still require verification." },
-            ["runtime_evidence"] = Path.Combine(output, "runtime.json"),
-            ["source_script_error_evidence"] = new JsonObject {
-                ["status"] = scriptErrorEvidenceAvailable ? "available" : "not_available",
-                ["reason"] = scriptErrorEvidenceAvailable ? null : MissingScriptFaultEvidenceBlocker.Text },
-            ["source_script_error_count"] = scriptErrorCount is int recordedErrorCount ? recordedErrorCount : null,
-            ["source_script_errors"] = scriptErrorEvidenceAvailable ? sourceScriptErrors.DeepClone() : null,
-            ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified" };
-        // 开关关着时不写这一段，plan 逐字不变。
-        if (daytime is not null) report["daytime_split"] = daytime.ToJson();
+        JsonObject report = PlanWriter.Compose(request, source, sourceHash, output, resolution, analysisDevice, project, properties, parallax,
+            projection, graph, observation, liveness, allocation, composer, verdict, loop, effectPrefixCaches, daytime);
+        bool effectPrefixRoute = effectPrefixCaches.Count > 0;
         // W 段（C2.2d1）：路线与布局准入交给 Routes / LayoutAdmission（整层 → 特效前缀 → 全幅准入与尾组降级 → 仍被挡再试前缀）。
         // 尾组降级按新分组重求循环，用的是与整层同一个 LoopScene。
         (report, effectPrefixRoute) = await Routes.SettleAsync(report, effectPrefixRoute, request.VideoLayout, composer.Groups.Count,
             observation.Dependencies, PrefixCachesAsync, demoted =>
             {
                 JsonObject demotedLoop = AnalyzeLoopForProfile(LoopScene, source, request.Assets, observation.Trace,
-                    demoted["video_groups"]!.AsArray().OfType<JsonObject>()
-                        .SelectMany(group => group["layer_ids"]!.AsArray().Select(node => node!.GetValue<int>())).ToArray(),
+                    BakedLayerIds(demoted["video_groups"]!.AsArray()),
                     request, demoted["projection"] as JsonObject ?? new JsonObject(), demoted["video_groups"] as JsonArray);
                 AnnotateLoopCandidates(demotedLoop);
                 return demotedLoop;
@@ -589,59 +321,22 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 探测过的前缀捕获点全部留档。被拒的原因只在整层循环本来就有未解机制时并进 loop.unresolved：这时前缀是
         // 整层循环的回退，拒绝原因正好说明回退为什么没走成。条目不带 owner_layer_id，免得分配回退把它当成要保留实时的
         // 未解层；原本没有未解项的循环也不凭空添一条，免得改变整层裁定。
-        if (captureProbes.Count > 0)
+        if (captureProbes.Recorded.Count > 0)
         {
-            report["effect_prefix_capture_probes"] = new JsonArray(captureProbes.Values.Select(probe => (JsonNode)probe.DeepClone()).ToArray());
+            report["effect_prefix_capture_probes"] = new JsonArray(captureProbes.Recorded.Select(probe => (JsonNode)probe.DeepClone()).ToArray());
             if (report["loop"]?["unresolved"] is JsonArray { Count: > 0 })
-                foreach (JsonObject probe in captureProbes.Values.Where(probe =>
+                foreach (JsonObject probe in captureProbes.Recorded.Where(probe =>
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus))
-                    AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>(), probe["reason_localized"]);
+                    Verdict.AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>(), probe["reason_localized"]);
         }
         // README 的承诺：解析周期不完整时，把未解决机制与粒子所在的完整作者子树保留实时，再重查一次周期与构图。
         // 这条路以前只在 bake 阶段跑，analyze 既没走也没记录，用户拿到的就是一个没有任何理由的 unavailable。
         JsonObject residualScene = source.ReadJson(source.SceneResource);
         Func<string, JsonObject?> residualResources = ResidualMasking.ResourceReader(source, request.Assets);
         await RecordLoopAllocationFallbackAsync(report, scene, request, output, residualScene, residualResources, progress, cancellationToken);
-        // 残差掩盖要在可掩盖分量所在的视频组里淡化（透明组、多组都可以）：分量不在任何视频组里时，在这里写 blocker，不留到 bake 才拒。
-        // 放在更小分配取证之后，blocker 才能给出重查过的 --retain-live id；判定读原始源场景，与 bake 第一步同一个 Admission.Evaluate。
-        Admission.ApplyResidualLayoutGate(report, residualScene, residualResources);
-        RecordSolverNoCandidateBlocker(report);
-        RequireTraceableRejection(report);
-        // 视频外壳判据放在最后：前面两处 effect_prefix 回退与布局裁决都已经定稿，这里只读结构、只追加，
-        // 不改 route、不改分组，免得新加的 blocker 反过来把计划改道。
-        JsonObject videoDominance = VideoDominance.Evaluate(report, observation.Trace, request.VideoShell);
-        report["video_dominant"] = videoDominance;
-        report[BakeValueAssessment.Field] = BakeValueAssessment.Evaluate(report, observation.Trace, source, request.Assets);
-        if (videoDominance["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
-        {
-            PlanBlockers.Add(report["blockers"]!.AsArray(), new Blocker(BlockerCode.VideoShell));
-            report["status"] = "requires_resolution";
-        }
-        // 特效前缀缓存的编码尺寸在 analyze 阶段就能按源纹理算出来：越过硬件解码上限的提前写 unresolved 提示。
-        // 只追加这一个字段，不改 effect_prefix_caches（bake 会逐字比对它），也不改 route 与裁决。
-        if (report["effect_prefix_caches"] is JsonArray { Count: > 0 })
-            report["effect_prefix_hardware_decode_preflight"] = HardwareDecodeDimensions.PredictEffectPrefixCaches(report, source,
-                request.Assets, request, report["projection"] as JsonObject ?? projection);
-        // These queries are already present in the analysis trace. Use the exporter's
-        // existing assembly rule before promising a whole-layer bake, without rendering again.
-        if (!effectPrefixRoute && observation.Dependencies.OfType<JsonObject>().Any(item =>
-                item["operation"]?.GetValue<string>() == "query" &&
-                item["property"]?.GetValue<string>()?.StartsWith("layer_", StringComparison.Ordinal) == true) &&
-            CompositionHierarchyConflict(report, graph.Objects, observation.Dependencies) is Blocker publicQueryConflict)
-        {
-            PlanBlockers.Add(report["blockers"]!.AsArray(), publicQueryConflict);
-            PlanBlockers.Add(report["whole_layer"]!["blockers"]!.AsArray(), publicQueryConflict);
-            report["whole_layer"]!["status"] = "unavailable";
-            report["status"] = "requires_resolution";
-        }
-        report["suitability"] = Suitability(report);
-        // 属性来源紧跟在 snapshot_properties 后面：没有来源记录的请求（测试、内部重分析）plan 不变。
-        if (request.PropertiesOrigin is JsonObject propertiesOrigin) AttachPropertiesSource(report, propertiesOrigin);
-        // 帧率来源紧跟在 output_resolution 后面：没有来源记录的请求（测试、内部重分析）plan 不变。
-        if (request.FrameRateOrigin is JsonObject frameRateOrigin) AttachFrameRate(report, frameRateOrigin);
-        // 双语字段与一行结论只读已经定好的 blockers / loop / candidates，不参与任何判定。
-        PlanNarrative.Attach(report);
-        await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "plan.json"), report, cancellationToken);
+        // 收尾裁定（原 X 段）：残差布局闸门 → 求解器空候选 → 可追溯不变量 → 视频外壳 → 硬解预检 → 公共查询冲突 → suitability。
+        Verdict.Conclude(report, request, source, graph, observation, projection, effectPrefixRoute, residualScene, residualResources);
+        await PlanWriter.WriteAsync(report, request, output, cancellationToken);
         if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during analysis.");
         return report;
     }
@@ -662,7 +357,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         report["loop_allocation_fallback"] = evidence;
         if (evidence["status"]?.GetValue<string>() != "proposed")
         {
-            AddLoopUnresolved(report, "loop_allocation_fallback",
+            Verdict.AddLoopUnresolved(report, "loop_allocation_fallback",
                 "A smaller bake allocation was not attempted: " + (evidence["reason"]?.GetValue<string>() ?? "no reason recorded."));
             return;
         }
@@ -702,7 +397,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // 重查只被全幅布局挡住时，把冲突给出的保留做法按完整 --retain-live 列表记下来，结论行才能给出照做就能用的参数。
             if (!resolved && HybridLoopAllocation.ReplannedRetainLiveSuggestion(replanned, retained) is JsonObject suggestion)
                 evidence["replanned_retain_live_suggestion"] = suggestion;
-            AddLoopUnresolved(report, "loop_allocation_fallback", resolved
+            Verdict.AddLoopUnresolved(report, "loop_allocation_fallback", resolved
                 ? $"No loop covers every baked layer, but a smaller bake allocation does: keeping author roots {retainedText} live leaves content that resolves. Re-run analyze with --retain-live {retainedText} to plan that allocation."
                 : $"No loop covers every baked layer, and the smaller bake allocation that keeps author roots {retainedText} live establishes none either.");
         }
@@ -712,595 +407,30 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             evidence["status"] = "failed";
             evidence["error_type"] = error.GetType().Name;
             evidence["error"] = error.Message;
-            AddLoopUnresolved(report, "loop_allocation_fallback",
+            Verdict.AddLoopUnresolved(report, "loop_allocation_fallback",
                 $"No loop covers every baked layer, and the smaller bake allocation keeping author roots {retainedText} live could not be analyzed: {error.Message}");
         }
     }
 
-    /// <summary>plan 里的 loop 与 whole_layer.loop 是两份独立副本，追加理由时必须同时写。</summary>
-    private static void AddLoopUnresolved(JsonObject report, string kind, string detail, JsonNode? localized = null)
-    {
-        // localized 是 detail 的 {key, zh, en, params}（例如捕获点探测的理由）；只有英文原文的理由不带。
-        var entry = new JsonObject { ["kind"] = kind, ["detail"] = detail };
-        if (localized is not null) entry[PlanNarrative.DetailLocalized] = localized.DeepClone();
-        foreach (JsonNode? node in new JsonNode?[] { report["loop"], report["whole_layer"]?["loop"] })
-            if (node is JsonObject loop && loop["unresolved"] is JsonArray unresolved &&
-                !unresolved.Any(item => JsonNode.DeepEquals(item, entry)))
-                unresolved.Add(entry.DeepClone());
-    }
-
-    /// <summary>
-    /// 整层不可用、没有阻断、也没有任何未解析机制，但求解器给出了结构化的空候选原因（公共步长上没有闭合帧、不可调速分量的周期超上限、
-    /// 单段视频调速落不到整数帧）：这就是分析结论，写成 blocker 讲给用户，而不是留给下面的不变量当内部错误抛出。
-    /// 典型路径是 --retain-live（包括补充分析的重查）把所有未解析机制的所有者留成实时，剩下的分量各有周期却凑不出公共循环。
-    /// 没有结构化原因、或原因是"没有时间机制"（那条路由静态证明负责记录）时不处理，仍由不变量兜底。
-    /// </summary>
-    internal static void RecordSolverNoCandidateBlocker(JsonObject report)
-    {
-        if (report["route"]?.GetValue<string>() != "whole_layer" || report["whole_layer"] is not JsonObject wholeLayer ||
-            wholeLayer["status"]?.GetValue<string>() != "unavailable" || wholeLayer["blockers"] is JsonArray { Count: > 0 } ||
-            wholeLayer["loop"] is not JsonObject loop || loop["candidates"] is JsonArray { Count: > 0 } ||
-            (loop["unresolved"] as JsonArray ?? []).OfType<JsonObject>().Any(item => item["kind"]?.GetValue<string>() != ResidualMasking.AllocationFallbackKind) ||
-            loop["no_candidate_reason"] is not JsonObject reason) return;
-        // 内存里刚写的 plan 是 int/double 各自装箱，从磁盘读回的是 JsonElement：两种都要读得出来。
-        static double Number(JsonNode? node) => node is not JsonValue value ? 0
-            : value.TryGetValue(out double number) ? number : value.TryGetValue(out long integer) ? integer : value.TryGetValue(out int small) ? small : 0;
-        static string Seconds(JsonNode? node) => Number(node).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-        string ceiling = Seconds(reason["ceiling_seconds"]), period = Seconds(reason["fixed_period_seconds"]);
-        int shaders = (int)Number(reason["shader_component_count"]), tracks = (int)Number(reason["runtime_period_count"]);
-        Blocker? blocker = reason["kind"]?.GetValue<string>() switch
-        {
-            nameof(CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents) => new Blocker(BlockerCode.LoopNoCommonFrame, [shaders, tracks, period, ceiling]),
-            nameof(CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling) => new Blocker(BlockerCode.LoopFixedPeriodExceedsCeiling, [tracks, period, ceiling]),
-            nameof(CommonLoopNoCandidateKind.NoExactVideoRetimeFrame) => new Blocker(BlockerCode.LoopNoExactVideoRetime),
-            _ => null
-        };
-        if (blocker is null) return;
-        foreach (JsonNode? node in new[] { report["blockers"], wholeLayer["blockers"] })
-            if (node is JsonArray blockers) PlanBlockers.Add(blockers, blocker);
-        report["status"] = "requires_resolution";
-    }
-
-    /// <summary>
-    /// 通用不变量：unavailable 一定要留下可追溯的理由。blockers、loop.unresolved 与求解器的结构化空候选原因
-    /// （loop.no_candidate_reason，HybridSuitability 据此裁定，RecordSolverNoCandidateBlocker 会把它写成 blocker）
-    /// 同时为空的 unavailable 是状态机漏写，属于内部错误——它对用户表现为"退出码 0、零产出、零解释"，比抛出异常更难处理。
-    /// 把粒子层留实时之后剩下的层常常只有一个空候选原因（手工轨道公共周期超上限、着色器分量没有公共帧），
-    /// 这不是漏写，是已经说清楚的拒绝。
-    /// </summary>
-    internal static void RequireTraceableRejection(JsonObject report)
-    {
-        // 结构化的空候选原因算可追溯（RecordSolverNoCandidateBlocker 会把它写成 blocker），但"没有时间机制"不算：
-        // 那条路由由静态证明负责记录理由，缺了就是状态机漏写。
-        static bool Traceable(JsonNode? loop) => loop?["no_candidate_reason"] is JsonObject reason &&
-            reason["kind"]?.GetValue<string>() != nameof(CommonLoopNoCandidateKind.NoTemporalMechanism);
-        if (report["whole_layer"] is not JsonObject wholeLayer || wholeLayer["status"]?.GetValue<string>() != "unavailable" ||
-            wholeLayer["blockers"] is JsonArray { Count: > 0 } || wholeLayer["loop"]?["unresolved"] is JsonArray { Count: > 0 } ||
-            Traceable(wholeLayer["loop"]) || Traceable(report["loop"]))
-            return;
-        // 特效前缀路线自带可烘方案，整层不可用不是这次分析的结局。
-        if (report["route"]?.GetValue<string>() == "effect_prefix" && report["effect_prefix_caches"] is JsonArray { Count: > 0 }) return;
-        string groups = string.Join("; ", (report["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
-            .Select(group => $"{group["id"]?.GetValue<string>() ?? "?"}=[{string.Join(",", (group["layer_ids"] as JsonArray ?? []).Select(id => id?.ToJsonString()))}]"));
-        throw new InvalidOperationException("Internal error: whole-layer analysis ended as unavailable without a single blocker or " +
-            $"unresolved loop mechanism. route={report["route"]?.GetValue<string>()}, loop.status={report["loop"]?["status"]?.GetValue<string>()}, " +
-            $"loop.candidates={(report["loop"]?["candidates"] as JsonArray)?.Count}, baked groups: {(groups.Length == 0 ? "(none)" : groups)}.");
-    }
-    /// <summary>纯函数裁定：只读 plan，给出 verdict/rule/reason_en/reason_zh/notes，不改任何既有字段。</summary>
+    // ---- C2.2d2 转发器：实现已搬到 SceneGraph / Liveness / LayoutAdmission / PlanTransforms / HybridSuitability。
+    // bake 侧（HybridBakeService、Bake/*、EffectPrefix*、DaytimeSplit 等本步不改的文件）经这里进来；登记在 forwarders.txt，C3 改调新位置后删。
+    internal static int Id(JsonObject obj) => SceneGraph.Id(obj);
+    internal static int? Int(JsonNode? node) => SceneGraph.Int(node);
+    internal static double Numeric(JsonNode? node, double fallback) => SceneGraph.Numeric(node, fallback);
+    internal static JsonNode? Resolve(JsonNode? value, JsonObject properties) => SceneGraph.Resolve(value, properties);
+    internal static string CapabilityScanText(string code) => Liveness.CapabilityScanText(code);
     internal static JsonObject Suitability(JsonObject plan) => HybridSuitability.Verdict(plan);
-
-    internal static int Id(JsonObject obj) => obj["id"]!.GetValue<int>();
-    internal static int? Int(JsonNode? node) => node is JsonValue value && value.TryGetValue<int>(out int n) ? n : null;
-    internal static double Numeric(JsonNode? node, double fallback) => node is JsonValue value && value.TryGetValue<double>(out double n) ? n : fallback;
-    /// <summary>把属性来源写成 plan 的 properties_source（wpe / defaults / wpe_unavailable）与 wpe_properties（原因、配置位置、生效键）。</summary>
-    internal static void AttachPropertiesSource(JsonObject report, JsonObject origin)
-    {
-        var detail = origin.DeepClone().AsObject();
-        JsonNode source = detail["source"]?.DeepClone() ?? WallpaperEngineProperties.SourceDefaults;
-        detail.Remove("source");
-        report.Remove("properties_source");
-        report.Remove("wpe_properties");
-        int at = report.IndexOf("snapshot_properties");
-        if (at < 0) { report["properties_source"] = source; report["wpe_properties"] = detail; return; }
-        report.Insert(at + 1, "properties_source", source);
-        report.Insert(at + 2, "wpe_properties", detail);
-    }
-
-    /// <summary>把帧率来源写成 plan 的 frame_rate（explicit / auto、两条依据与选中值），位置紧挨 output_resolution。</summary>
-    internal static void AttachFrameRate(JsonObject report, JsonObject origin)
-    {
-        var detail = origin.DeepClone().AsObject();
-        report.Remove("frame_rate");
-        int at = report.IndexOf("output_resolution");
-        if (at < 0) report["frame_rate"] = detail;
-        else report.Insert(at + 1, "frame_rate", detail);
-    }
-
-    internal static JsonObject SnapshotProperties(JsonObject project, JsonObject? overrides)
-    {
-        var output = new JsonObject();
-        if (project["general"]?["properties"] is JsonObject properties)
-            foreach (var (key, value) in properties) output[key] = (value is JsonObject entry ? entry["value"] : value)?.DeepClone();
-        if (overrides is not null)
-            foreach (var (key, value) in overrides) output[key] = (value is JsonObject entry && entry.ContainsKey("value") ? entry["value"] : value)?.DeepClone();
-        return output;
-    }
-
-    internal static JsonNode? Resolve(JsonNode? value, JsonObject properties)
-    {
-        if (value is not JsonObject binding || binding["user"] is not { } user) return value?.DeepClone();
-        string? name = user is JsonValue text && text.TryGetValue<string>(out string? key) ? key : user["name"]?.GetValue<string>();
-        if (name is null || !properties.TryGetPropertyValue(name, out var selected)) return binding["value"]?.DeepClone();
-        if (user is JsonObject condition && condition.ContainsKey("condition"))
-        {
-            static string Scalar(JsonNode? node) => node is JsonValue v && v.TryGetValue<string>(out string? s) ? s : node?.ToJsonString() ?? "null";
-            return JsonValue.Create(Scalar(selected) == Scalar(condition["condition"]));
-        }
-        return selected?.DeepClone();
-    }
-
-    /// <summary>
-    /// 按当前源码与运行时证据重新求解 plan 的循环，覆盖 plan["loop"]：bake 不接受计划里存着的周期与起点。
-    /// （原先住在 HybridCostProbe 里，成本探针删掉后搬到这里；它本来就只调 planner 与 HybridLoopService。）
-    /// 走 <see cref="AnalyzeLoopForProfile"/> 这一个入口，与 analyze、布局降级重算同一口径——
-    /// 否则质量档的双上限取优只在 analyze 侧生效，bake 会按另一个上限重算出别的循环。
-    /// </summary>
-    /// <summary>
-    /// 效果前缀回退只救"没有与输入无关的可烘组"这一种拒因（含通用形态）；blockers 里还有别的拒因时不试前缀。
-    /// </summary>
-    internal static bool PrefixSafetyBlocked(JsonArray blockers) => PlanBlockers.Codes(blockers)
-        .Any(code => code is not (BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric));
-
-    internal static void RefreshLoop(JsonObject plan, ProjectSource source, JsonObject runtime, HybridAnalyzeRequest settings)
-    {
-        // 每次求解都重新读一份场景：质量档要在两个上限下各求一次，求解会往场景副本上写，不能共用同一份。
-        JsonObject LoopScene()
-        {
-            var scene = source.ReadJson(source.SceneResource);
-            ApplyAudioEffectChoice(scene, plan);
-            FreezeTemporalProperties(scene, plan["snapshot_properties"]!.AsObject());
-            DaytimeSplit.ApplyState(scene, plan, forAnalysis: true);
-            return scene;
-        }
-        plan["loop"] = AnalyzeLoopForProfile(LoopScene, source, settings.Assets, runtime,
-            plan["video_groups"]!.AsArray().OfType<JsonObject>().SelectMany(g => g["layer_ids"]!.AsArray().Select(n => n!.GetValue<int>())).ToArray(),
-            settings, plan["projection"] as JsonObject ?? new JsonObject(), plan["video_groups"] as JsonArray);
-        AnnotateLoopCandidates(plan["loop"]!.AsObject());
-        // bake 侧重算的 loop 直接进 bake.json 的 plan 副本，不再 Attach，临时字段当场去掉。
-        PlanNarrative.StripTransient(plan["loop"]);
-    }
-
-    /// <summary>Returns a plan clone with one selected foreground suffix retained as whole live roots.</summary>
-    internal static JsonObject ApplyAllocation(JsonObject plan, IReadOnlyCollection<int> extraLiveRoots,
-        JsonArray runtimeDependencies)
-    {
-        ArgumentNullException.ThrowIfNull(plan);
-        ArgumentNullException.ThrowIfNull(extraLiveRoots);
-        ArgumentNullException.ThrowIfNull(runtimeDependencies);
-        HybridPlanFormat.Validate(plan);
-        var result = plan.DeepClone().AsObject();
-        FullFrameDemotion.ResetAdmissionRecords(result);
-        var layers = result["layers"]?.AsArray().OfType<JsonObject>().ToArray()
-            ?? throw new InvalidDataException("Hybrid plan layers are missing.");
-        var layerRoot = new Dictionary<int, int>();
-        var rootLayers = new Dictionary<int, List<int>>();
-        foreach (var layer in layers)
-        {
-            int id = Int(layer["id"]) ?? throw new InvalidDataException("Hybrid plan layer id is invalid.");
-            int root = Int(layer["allocation_root"] ?? layer["root"]) ?? throw new InvalidDataException("Hybrid plan layer root is invalid.");
-            if (!layerRoot.TryAdd(id, root)) throw new InvalidDataException("Hybrid plan contains duplicate layer ids.");
-            if (!rootLayers.TryGetValue(root, out var ids)) rootLayers[root] = ids = [];
-            ids.Add(id);
-        }
-        var omittedLayerIds = result["omitted_snapshot_layer_ids"]?.AsArray()
-            .Select(node => node?.GetValue<int>() ?? throw new InvalidDataException("Omitted snapshot layer id is invalid."))
-            .ToHashSet() ?? [];
-        if (omittedLayerIds.Any(id => !layerRoot.ContainsKey(id)))
-            throw new InvalidDataException("Omitted snapshot layer is missing from the plan layers.");
-        int[] rootOrder = result["root_order"] is JsonArray recordedOrder
-            ? recordedOrder.Select(node => node?.GetValue<int>() ?? throw new InvalidDataException("Hybrid root order is invalid.")).ToArray()
-            : layers.Where(layer => Int(layer["id"]) == Int(layer["allocation_root"] ?? layer["root"]))
-                .Select(layer => layer["id"]!.GetValue<int>()).ToArray();
-        if (rootOrder.Distinct().Count() != rootOrder.Length || rootOrder.Any(root => !rootLayers.ContainsKey(root)) ||
-            rootLayers.Keys.Any(root => !rootOrder.Contains(root)))
-            throw new InvalidDataException("Hybrid root order does not match the plan layers.");
-        var rootIndex = rootOrder.Select((root, index) => (root, index)).ToDictionary(item => item.root, item => item.index);
-        var groups = result["video_groups"]?.AsArray().OfType<JsonObject>().ToArray()
-            ?? throw new InvalidDataException("Hybrid video groups are missing.");
-        var groupRoots = new Dictionary<string, int[]>();
-        var videoRoots = new HashSet<int>();
-        foreach (var group in groups)
-        {
-            string id = group["id"]?.GetValue<string>() ?? throw new InvalidDataException("Hybrid video group id is missing.");
-            int[] roots = group["root_ids"]?.AsArray().Select(node => node?.GetValue<int>()
-                ?? throw new InvalidDataException("Hybrid video group root is invalid.")).ToArray()
-                ?? throw new InvalidDataException("Hybrid video group roots are missing.");
-            if (!groupRoots.TryAdd(id, roots) || roots.Any(root => !rootIndex.ContainsKey(root) || !videoRoots.Add(root)))
-                throw new InvalidDataException("Hybrid video group roots are missing, duplicated, or unknown.");
-        }
-        var optional = result["optional_realtime_roots"]?.AsArray().Select(node => node?.GetValue<int>()
-            ?? throw new InvalidDataException("Optional realtime root is invalid.")).ToHashSet() ?? [];
-        int[] requested = extraLiveRoots.Distinct().ToArray();
-        if (requested.Length != extraLiveRoots.Count || requested.Any(root => !optional.Contains(root) || !videoRoots.Contains(root)))
-            throw new InvalidDataException("Foreground allocation roots must be distinct optional realtime video roots.");
-
-        var existingLiveRoots = layers.Where(layer => layer["live"]?.GetValue<bool>() == true)
-            .Select(layer => layerRoot[layer["id"]!.GetValue<int>()]).ToHashSet();
-        if (result["composition"] is not JsonArray originalComposition)
-            throw new InvalidDataException("Hybrid composition is missing.");
-        foreach (var entry in originalComposition.OfType<JsonObject>())
-            if (Int(entry["live_root"]) is int root)
-            {
-                if (!rootIndex.ContainsKey(root)) throw new InvalidDataException("Hybrid composition contains an unknown live root.");
-                existingLiveRoots.Add(root);
-            }
-        int? suffixStart = requested.Length == 0 ? null : requested.Min(root => rootIndex[root]);
-        var suffixRoots = suffixStart is int start
-            ? rootOrder.Skip(start).Where(videoRoots.Contains).ToHashSet()
-            : [];
-        var liveRoots = existingLiveRoots.Concat(suffixRoots).ToHashSet();
-        var dependencyRoots = new HashSet<int>();
-        bool Promote(int layerId)
-        {
-            if (!layerRoot.TryGetValue(layerId, out int root) || !liveRoots.Add(root)) return false;
-            dependencyRoots.Add(root);
-            return true;
-        }
-        bool changed;
-        do
-        {
-            changed = false;
-            foreach (var dependency in runtimeDependencies.OfType<JsonObject>())
-            {
-                if (Int(dependency["owner"]) is not int owner || Int(dependency["target"]) is not int target) continue;
-                string? operation = dependency["operation"]?.GetValue<string>();
-                bool initialization = dependency["initialization"]?.GetValue<bool>() == true;
-                bool ownerLive = layerRoot.TryGetValue(owner, out int ownerRoot) && liveRoots.Contains(ownerRoot);
-                bool targetLive = layerRoot.TryGetValue(target, out int targetRoot) && liveRoots.Contains(targetRoot);
-                if (operation == "write" && ownerLive) changed |= Promote(target);
-                if (operation == "read" && !initialization && targetLive) changed |= Promote(owner);
-                if (operation == "read" && ownerLive && dependency["property"]?.GetValue<string>() is
-                    "boneTransform" or "animation" or "effect" or "videoTexture" or "textureAnimation" or "layerComposite") changed |= Promote(target);
-            }
-        } while (changed);
-
-        var allocation = new JsonObject {
-            ["status"] = "applied", ["requested_live_root_ids"] = JsonSerializer.SerializeToNode(requested),
-            ["suffix_start_root_id"] = suffixStart is int suffixIndex ? JsonValue.Create(rootOrder[suffixIndex]) : null,
-            ["foreground_live_root_ids"] = JsonSerializer.SerializeToNode(rootOrder.Where(suffixRoots.Contains)),
-            ["dependency_live_root_ids"] = JsonSerializer.SerializeToNode(rootOrder.Where(dependencyRoots.Contains)),
-            ["scope"] = "Whole allocation subtrees only; author parents, existing group order, parallax depths and scene-clear ownership are preserved."
-        };
-        result["allocation"] = allocation;
-        JsonObject RejectAllocation(Blocker blocker, string status = "requires_user_choice")
-        {
-            string reason = blocker.Text;
-            allocation["status"] = "requires_resolution";
-            allocation["reason"] = reason;
-            var blockers = result["blockers"] as JsonArray ?? new JsonArray();
-            result["blockers"] = blockers;
-            PlanBlockers.Add(blockers, blocker);
-            result["status"] = "requires_resolution";
-            result["video_layout_admission"] = new JsonObject { ["requested"] = PlanSettings.Of(result).VideoLayout,
-                ["status"] = status, ["reason"] = reason,
-                ["scope"] = "The allocation did not reorder roots, split a video group or change parallax settings." };
-            return result;
-        }
-        foreach (var group in groups)
-        {
-            bool removed = false;
-            foreach (int root in groupRoots[group["id"]!.GetValue<string>()])
-            {
-                if (liveRoots.Contains(root)) removed = true;
-                else if (removed)
-                    return RejectAllocation(new Blocker(BlockerCode.ForegroundSplitsVideoGroup));
-            }
-        }
-        if (dependencyRoots.Any(root => !videoRoots.Contains(root) && !existingLiveRoots.Contains(root)))
-            return RejectAllocation(new Blocker(BlockerCode.ForegroundOutsideComposition));
-
-        var remainingGroups = new HashSet<string>(StringComparer.Ordinal);
-        var promotedByGroup = new Dictionary<string, int[]>(StringComparer.Ordinal);
-        var rebuiltGroups = new JsonArray();
-        foreach (var group in groups)
-        {
-            string id = group["id"]!.GetValue<string>();
-            int[] promoted = groupRoots[id].Where(liveRoots.Contains).ToArray();
-            int[] remaining = groupRoots[id].Where(root => !liveRoots.Contains(root)).ToArray();
-            promotedByGroup[id] = promoted;
-            if (remaining.Length == 0) continue;
-            var rebuilt = group.DeepClone().AsObject();
-            rebuilt["root_ids"] = JsonSerializer.SerializeToNode(remaining);
-            rebuilt["layer_ids"] = new JsonArray(group["layer_ids"]!.AsArray()
-                .Where(node => !omittedLayerIds.Contains(node!.GetValue<int>()) &&
-                    !liveRoots.Contains(layerRoot[node!.GetValue<int>()])).Select(node => node!.DeepClone()).ToArray());
-            rebuiltGroups.Add(rebuilt);
-            remainingGroups.Add(id);
-        }
-        result["video_groups"] = rebuiltGroups;
-        var rebuiltComposition = new JsonArray();
-        var emittedLive = new HashSet<int>();
-        foreach (var entry in originalComposition.OfType<JsonObject>())
-        {
-            if (entry["video_group"] is JsonValue groupValue)
-            {
-                string id = groupValue.GetValue<string>();
-                if (!groupRoots.ContainsKey(id)) throw new InvalidDataException("Hybrid composition references an unknown video group.");
-                if (remainingGroups.Contains(id)) rebuiltComposition.Add(entry.DeepClone());
-                foreach (int root in promotedByGroup[id])
-                    if (emittedLive.Add(root)) rebuiltComposition.Add(new JsonObject { ["live_root"] = root });
-            }
-            else if (Int(entry["live_root"]) is int root && emittedLive.Add(root)) rebuiltComposition.Add(entry.DeepClone());
-        }
-        result["composition"] = rebuiltComposition;
-        result["live_layer_ids"] = JsonSerializer.SerializeToNode(layers.Select(layer => layer["id"]!.GetValue<int>())
-            .Where(id => !omittedLayerIds.Contains(id) && liveRoots.Contains(layerRoot[id])));
-        foreach (var layer in layers)
-        {
-            int id = layer["id"]!.GetValue<int>();
-            if (omittedLayerIds.Contains(id)) { layer["live"] = false; continue; }
-            int root = layerRoot[id];
-            if (!liveRoots.Contains(root)) continue;
-            layer["live"] = true;
-            if (layer["allocation"] is not null) layer["allocation"] = "live";
-            var reasons = layer["reasons"] as JsonArray ?? new JsonArray();
-            layer["reasons"] = reasons;
-            string reason = dependencyRoots.Contains(root) ? "required_by_foreground_dependency" :
-                suffixRoots.Contains(root) ? "retained_as_foreground_suffix" : "";
-            if (reason.Length > 0 && !reasons.Any(node => node?.GetValue<string>() == reason)) reasons.Add(reason);
-        }
-        var groupOfRoot = rebuiltGroups.OfType<JsonObject>().SelectMany(group => group["root_ids"]!.AsArray()
-            .Select(root => (Root: root!.GetValue<int>(), Group: group["id"]!.GetValue<string>())))
-            .ToDictionary(item => item.Root, item => item.Group);
-        var previousRoles = result["root_roles"]?.AsArray().OfType<JsonObject>()
-            .Where(role => Int(role["root_id"]) is int).ToDictionary(role => role["root_id"]!.GetValue<int>()) ?? [];
-        result["root_order"] = JsonSerializer.SerializeToNode(rootOrder);
-        result["root_roles"] = new JsonArray(rootOrder.Select((root, index) => {
-            var role = previousRoles.GetValueOrDefault(root)?.DeepClone().AsObject() ?? new JsonObject();
-            role["root_id"] = root; role["source_order"] = index;
-            role["role"] = dependencyRoots.Contains(root) ? "dependency_live" : suffixRoots.Contains(root) ? "foreground_live" :
-                existingLiveRoots.Contains(root) ? "live" : groupOfRoot.ContainsKey(root) ? "video" :
-                role["role"]?.GetValue<string>() == "omitted_snapshot" ? "omitted_snapshot" : "inactive";
-            role["video_group"] = groupOfRoot.TryGetValue(root, out string? group) ? group : null;
-            return (JsonNode)role;
-        }).ToArray());
-
-        Blocker? layoutConflict = FullFrameConflict(result) ?? CompositionHierarchyConflict(result);
-        if (layoutConflict is not null) return RejectAllocation(layoutConflict, LayoutConflictStatus(result));
-        result["video_layout_admission"] = new JsonObject { ["requested"] = PlanSettings.Of(result).VideoLayout,
-            ["status"] = "planned_layout_allowed", ["reason"] = null,
-            ["scope"] = "Layout permission is not proof of image correctness, looping, hardware decoding or playback benefit." };
-        return result;
-    }
-
-    // full_frame 的唯一视频组排在搬不走的实时绘制之后时，这不是用户能选出来的布局，而是不可达。
-    private static string LayoutConflictStatus(JsonObject plan) =>
-        SingleShotAllocation.UnreachableBlockingRoots(plan).Length > 0 ? "full_frame_unreachable" : "requires_user_choice";
-
-    internal static Blocker? FullFrameConflict(JsonObject plan)
-    {
-        string layout = PlanSettings.Of(plan).VideoLayout;
-        if (layout == "layered") return null;
-        if (layout != "full_frame") throw new InvalidDataException("Unknown video layout; use full_frame or layered.");
-        JsonArray groups = plan["video_groups"]?.AsArray() ?? throw new InvalidDataException("Video groups are missing.");
-        if (groups.Count == 1 && groups[0]?["include_scene_clear"]?.GetValue<bool>() == true) return null;
-        // 唯一一组被不可搬动的实时绘制挡在后面时，这个布局对该场景不可达：报出阻挡者，不提建议。
-        if (SingleShotAllocation.UnreachableBlockingRoots(plan) is { Length: > 0 } blocking)
-            return SingleShotAllocation.UnreachableReason(plan, blocking);
-        var composition = (plan["composition"]?.AsArray() ?? []).OfType<JsonObject>().ToArray();
-        string[] LiveNames(IEnumerable<JsonObject> entries) => entries
-            .Where(item => item["live_root"] is not null).Select(item => item["live_root"]!.GetValue<int>())
-            .SelectMany(id => plan["layers"]?.AsArray().OfType<JsonObject>().Where(layer => Int(layer["allocation_root"] ?? layer["root"]) == id &&
-                layer["visible"] is JsonValue visible && visible.TryGetValue<bool>(out bool shown) && shown &&
-                layer["drawable"] is JsonValue drawable && drawable.TryGetValue<bool>(out bool draws) && draws)
-                .Select(layer => layer["name"]?.GetValue<string>()) ?? [])
-            .Where(name => !string.IsNullOrWhiteSpace(name)).Cast<string>().Distinct().ToArray();
-        string[] names = LiveNames(composition
-            .SkipWhile(item => item["video_group"] is null).Reverse().SkipWhile(item => item["video_group"] is null).Reverse());
-        // 排在第一组视频之前先画的可见实时层：只进文案，用来点名"挡在前面"的是谁。
-        string[] leading = composition.Any(item => item["video_group"] is not null)
-            ? LiveNames(composition.TakeWhile(item => item["video_group"] is null)) : [];
-        // 文案两边意图取并集：分类与双语来自文案表，本场景真正可执行的选项来自全幅降级的取证。
-        return PlanNarrative.FullFrameConflict(groups, names, FullFrameDemotion.ConflictOptions(plan), leading);
-    }
-
+    internal static Blocker? FullFrameConflict(JsonObject plan) => LayoutAdmission.FullFrameConflict(plan);
     internal static Blocker? CompositionHierarchyConflict(JsonObject plan,
-        IReadOnlyDictionary<int, JsonObject>? sourceObjects = null, JsonArray? dependencies = null)
-    {
-        HybridPlanFormat.Validate(plan);
-        JsonArray layers = plan["layers"]!.AsArray();
-        var objects = sourceObjects ?? layers.OfType<JsonObject>().ToDictionary(Id, layer => new JsonObject {
-            ["id"] = layer["id"]!.DeepClone(), ["parent"] = layer["parent"]?.DeepClone() });
-        int nextId = checked(objects.Keys.Max() + 1);
-        var replacements = plan["video_groups"]!.AsArray().OfType<JsonObject>().ToDictionary(
-            group => group["id"]!.GetValue<string>(), group => new JsonObject { ["id"] = nextId++, ["parent"] = group["parent_id"]?.DeepClone() });
-        try { _ = HybridBakeService.AssembleAllocationObjects(objects, plan, replacements, dependencies ?? new JsonArray()); return null; }
-        catch (InvalidDataException error) when (Blocker.Of(error) is Blocker blocker) { return blocker; }
-    }
-
-    internal static void FreezeTemporalProperties(JsonObject scene, JsonObject properties)
-    {
-        void Freeze(JsonObject container, string key)
-        {
-            if (container[key] is JsonObject binding && binding.ContainsKey("user") &&
-                !binding.ContainsKey("script") && !binding.ContainsKey("animation") && !binding.ContainsKey("animations"))
-                container[key] = Resolve(binding, properties);
-        }
-        foreach (var obj in scene["objects"]!.AsArray().OfType<JsonObject>())
-        {
-            foreach (var effect in obj["effects"]?.AsArray().OfType<JsonObject>() ?? [])
-            {
-                Freeze(effect, "visible");
-                foreach (var pass in effect["passes"]?.AsArray().OfType<JsonObject>() ?? [])
-                    foreach (string field in new[] { "constantshadervalues", "combos" })
-                        if (pass[field] is JsonObject values)
-                            foreach (string key in values.Select(pair => pair.Key).ToArray()) Freeze(values, key);
-            }
-            foreach (var clip in obj["animationlayers"]?.AsArray().OfType<JsonObject>() ?? []) Freeze(clip, "rate");
-        }
-    }
-
-    internal static string CapabilityScanText(string code)
-    {
-        // Keep template expressions conservative. Quotes and regex literals must protect embedded
-        // comment markers, otherwise a URL can hide the remaining live/shared API calls on its line.
-        if (code.Contains('`')) return code;
-        return Regex.Replace(code,
-            "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|(?<comment>/\\*[\\s\\S]*?\\*/|//[^\\r\\n]*)|/(?:\\\\.|[^/\\\\\\r\\n])+/[a-z]*",
-            match => match.Groups["comment"].Success ? "" : match.Value);
-    }
-
-    internal static void ApplySnapshotOmissions(JsonObject scene, JsonObject plan)
-    {
-        if (plan["omitted_snapshot_layer_ids"] is not JsonArray { Count: > 0 } omittedIds) return;
-        var omitted = omittedIds.Select(n => n!.GetValue<int>()).ToHashSet();
-        var objects = scene["objects"]!.AsArray();
-        for (int i = objects.Count - 1; i >= 0; --i)
-            if (omitted.Contains(objects[i]!["id"]!.GetValue<int>())) objects.RemoveAt(i);
-    }
-
-    internal static void ApplyOverlayPlacement(JsonObject scene, JsonObject plan)
-    {
-        if (plan["occlusion_tradeoff"]?["status"]?.GetValue<string>() != "applied") return;
-        var promoted = plan["occlusion_tradeoff"]!["promoted_roots"]!.AsArray()
-            .Select(n => n!["root_id"]!.GetValue<int>()).ToHashSet();
-        var objects = scene["objects"]!.AsArray().OfType<JsonObject>().ToArray();
-        var byId = objects.ToDictionary(Id);
-        var layers = plan["layers"]!.AsArray().OfType<JsonObject>().ToArray();
-        bool Within(int id, int ancestor)
-        {
-            while (byId.TryGetValue(id, out var obj))
-            {
-                if (id == ancestor) return true;
-                if (Int(obj["parent"]) is not int parent || !byId.ContainsKey(parent)) return false;
-                id = parent;
-            }
-            return false;
-        }
-        // Lift a promoted child declaration to its wholly promoted structural branch. Merely moving
-        // the child to the end of the JSON cannot cross a sibling of its ancestor in the native tree.
-        var placement = new HashSet<int>();
-        foreach (int selected in promoted)
-        {
-            int id = selected;
-            while (Int(byId[id]["parent"]) is int parent && byId.ContainsKey(parent) &&
-                layers.Where(layer => Within(Id(layer), parent) && layer["drawable"]?.GetValue<bool>() == true)
-                    .All(layer => promoted.Contains(Int(layer["allocation_root"] ?? layer["root"])!.Value))) id = parent;
-            placement.Add(id);
-        }
-        scene["objects"] = new JsonArray(objects.Where(o => !placement.Contains(Id(o)))
-            .Concat(objects.Where(o => placement.Contains(Id(o)))).Select(o => (JsonNode)o.DeepClone()).ToArray());
-    }
-
-    internal static void ApplyTextEffectChoice(JsonObject scene, JsonObject plan)
-    {
-        if (plan["text_effects_choice"]?["status"]?.GetValue<string>() != "applied") return;
-        var selected = plan["text_effects_choice"]!["simplified_layers"]!.AsArray().Select(n => n!["id"]!.GetValue<int>()).ToHashSet();
-        foreach (var obj in scene["objects"]!.AsArray().OfType<JsonObject>().Where(obj => selected.Contains(Id(obj))))
-        {
-            if (!obj.ContainsKey("text")) throw new InvalidDataException("Text-effect choice refers to a non-text layer.");
-            obj["effects"] = new JsonArray();
-        }
-    }
-
-    internal static JsonObject DescribeAudioEffectChoice(JsonObject scene, ProjectSource source, string? assets,
-        JsonObject properties, JsonObject runtime, string selection)
-    {
-        if (selection is not "preserve" and not "omit") throw new InvalidDataException("Unknown audio-effect choice.");
-        var available = new JsonArray(); var protectedEffects = new JsonArray();
-        var objects = scene["objects"]!.AsArray().OfType<JsonObject>().ToArray();
-        bool scriptAccess = objects.SelectMany(obj => SceneAnalyzer.Walk(obj).OfType<JsonObject>())
-            .Where(n => n["script"] is JsonValue).Select(n => CapabilityScanText(n["script"]!.GetValue<string>()))
-            .Any(code => Regex.IsMatch(code, @"\b(getEffect|getEffects|findEffect|eval|Function|Reflect|Proxy|import)\b|\.\s*effects\b|\[\s*['""]effects['""]\s*\]"));
-        var dependencies = runtime["runtime_dependencies"]!.AsArray().OfType<JsonObject>().ToArray();
-        foreach (var obj in objects)
-        {
-            int id = Id(obj);
-            var observed = runtime["runtime_layers"]!.AsArray().OfType<JsonObject>().Where(n => Int(n["owner"]) == id).ToArray();
-            var audio = observed.SelectMany(n => n["materials"]?.AsArray().OfType<JsonObject>() ?? [])
-                .Where(m => m["uses_audio_spectrum"]?.GetValue<bool>() == true).ToArray();
-            if (audio.Length == 0) continue;
-            JsonObject Entry(int index, JsonObject? effect, string? reason = null) => new() {
-                ["layer_id"] = id, ["layer_name"] = obj["name"]?.DeepClone() ?? JsonValue.Create("Layer"),
-                ["effect_index"] = index, ["effect_id"] = effect?["id"]?.DeepClone(), ["file"] = effect?["file"]?.DeepClone(),
-                ["name"] = effect?["name"] is JsonValue name && name.TryGetValue<string>(out string? text) && !string.IsNullOrWhiteSpace(text)
-                    ? text : effect?["file"]?.GetValue<string>() ?? "Source audio material",
-                ["reason"] = reason };
-            if (audio.Any(m => m["role"]?.GetValue<string>() != "effect"))
-                protectedEffects.Add(Entry(-1, null, "intrinsic_audio_material"));
-            if (!audio.Any(m => m["role"]?.GetValue<string>() == "effect")) continue;
-            var effects = obj["effects"]?.AsArray().OfType<JsonObject>().ToArray() ?? [];
-            var materials = observed.SelectMany(n => n["materials"]?.AsArray().OfType<JsonObject>() ?? [])
-                .Where(m => m["role"]?.GetValue<string>() == "effect").ToArray();
-            bool mapped = observed.Length == 1 && effects.Length > 0 && effects.Length == materials.Length;
-            // ponytail: map only fixed-visible single-pass chains. Stable native effect identities
-            // are needed before supporting hidden, multipass or expanded render-node chains.
-            for (int index = 0; mapped && index < effects.Length; ++index)
-            {
-                var effect = effects[index];
-                if (effect["visible"] is JsonObject visibility && SceneAnalyzer.Walk(visibility).OfType<JsonObject>()
-                        .Any(n => n.ContainsKey("script") || n.ContainsKey("animation") || n.ContainsKey("animations")) ||
-                    Resolve(effect["visible"], properties)?.ToJsonString() is string shown && shown != "true" ||
-                    effect["passes"] is JsonArray { Count: > 1 })
-                { mapped = false; break; }
-                try
-                {
-                    string file = effect["file"]?.GetValue<string>() ?? "";
-                    JsonObject definition = SceneAnalyzer.ReadResourceJson(source, assets, file);
-                    if (definition["passes"] is not JsonArray { Count: 1 } passes || passes[0]?["material"] is not JsonValue materialFile)
-                    { mapped = false; break; }
-                    JsonObject material = SceneAnalyzer.ReadResourceJson(source, assets, materialFile.GetValue<string>());
-                    mapped = material["passes"] is JsonArray { Count: 1 } materialPasses &&
-                        materialPasses[0]?["shader"]?.GetValue<string>() == materials[index]["shader"]?.GetValue<string>();
-                }
-                catch (Exception error) when (error is IOException or InvalidDataException or JsonException)
-                { mapped = false; }
-            }
-            if (!mapped)
-            { protectedEffects.Add(Entry(-1, null, "audio_effect_mapping_unavailable")); continue; }
-            for (int index = 0; index < effects.Length; ++index)
-            {
-                if (materials[index]["uses_audio_spectrum"]?.GetValue<bool>() != true) continue;
-                var effect = effects[index];
-                string? reason = scriptAccess || dependencies.Any(d => Int(d["target"]) == id && d["property"]?.GetValue<string>() == "effect")
-                    ? "script_accessed_effect" : SceneAnalyzer.Walk(effect).OfType<JsonObject>()
-                        .Any(n => n.ContainsKey("script") || n.ContainsKey("animation") || n.ContainsKey("animations"))
-                    ? "scripted_or_animated_effect" : materials[index]["active_uniforms"] is JsonArray uniforms &&
-                        uniforms.Any(n => n?.GetValue<string>() is "g_PointerPosition" or "g_PointerPositionLast" or "g_ParallaxPosition")
-                    ? "other_live_effect_input" : materials[index]["textures"] is JsonArray textures &&
-                        textures.Any(n => n?.GetValue<string>() is "_rt_default" or "_rt_FullFrameBuffer")
-                    ? "framebuffer_effect" : null;
-                if (reason is not null) protectedEffects.Add(Entry(index, effect, reason));
-                else available.Add(Entry(index, effect));
-            }
-        }
-        return new JsonObject {
-            ["selection"] = selection,
-            ["status"] = selection == "omit" && available.Count > 0 ? "applied" : available.Count > 0 ? "available" :
-                protectedEffects.Count > 0 ? "protected" : "not_needed",
-            ["scope"] = "Explicit appearance tradeoff: remove only the listed fixed single-pass audio effects. Their lighting or other appearance changes no longer respond to music. Other effects, audio scripts, intrinsic audio materials, clocks and pointer interaction remain intact.",
-            ["available_effects"] = available, ["omitted_effects"] = selection == "omit" ? available.DeepClone() : new JsonArray(),
-            ["protected_effects"] = protectedEffects };
-    }
-
-    internal static void ApplyAudioEffectChoice(JsonObject scene, JsonObject plan)
-    {
-        if (plan["audio_effects_choice"]?["status"]?.GetValue<string>() != "applied") return;
-        var objects = scene["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(Id);
-        foreach (var layer in plan["audio_effects_choice"]!["omitted_effects"]!.AsArray().OfType<JsonObject>()
-            .GroupBy(item => item["layer_id"]!.GetValue<int>()))
-        {
-            if (!objects.TryGetValue(layer.Key, out var obj) || obj["effects"] is not JsonArray effects)
-                throw new InvalidDataException("Audio-effect choice refers to a missing effect layer.");
-            foreach (var item in layer.OrderByDescending(item => item["effect_index"]!.GetValue<int>()))
-            {
-                int index = item["effect_index"]!.GetValue<int>();
-                if (index < 0 || index >= effects.Count || effects[index] is not JsonObject effect ||
-                    !JsonNode.DeepEquals(effect["id"], item["effect_id"]) || !JsonNode.DeepEquals(effect["file"], item["file"]))
-                    throw new InvalidDataException("Audio-effect choice no longer matches its source effect.");
-                effects.RemoveAt(index);
-            }
-        }
-    }
-
+        IReadOnlyDictionary<int, JsonObject>? sourceObjects = null, JsonArray? dependencies = null) =>
+        LayoutAdmission.CompositionHierarchyConflict(plan, sourceObjects, dependencies);
+    internal static void RefreshLoop(JsonObject plan, ProjectSource source, JsonObject runtime, HybridAnalyzeRequest settings) =>
+        PlanTransforms.RefreshLoop(plan, source, runtime, settings);
+    internal static JsonObject ApplyAllocation(JsonObject plan, IReadOnlyCollection<int> extraLiveRoots, JsonArray runtimeDependencies) =>
+        PlanTransforms.ApplyAllocation(plan, extraLiveRoots, runtimeDependencies);
+    internal static void FreezeTemporalProperties(JsonObject scene, JsonObject properties) => PlanTransforms.FreezeTemporalProperties(scene, properties);
+    internal static void ApplySnapshotOmissions(JsonObject scene, JsonObject plan) => PlanTransforms.ApplySnapshotOmissions(scene, plan);
+    internal static void ApplyOverlayPlacement(JsonObject scene, JsonObject plan) => PlanTransforms.ApplyOverlayPlacement(scene, plan);
+    internal static void ApplyTextEffectChoice(JsonObject scene, JsonObject plan) => PlanTransforms.ApplyTextEffectChoice(scene, plan);
+    internal static void ApplyAudioEffectChoice(JsonObject scene, JsonObject plan) => PlanTransforms.ApplyAudioEffectChoice(scene, plan);
 }

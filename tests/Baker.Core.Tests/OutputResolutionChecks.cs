@@ -170,12 +170,13 @@ internal static class OutputResolutionChecks
             requested["summary"]!["zh"]!.GetValue<string>().EndsWith("输出分辨率取指定值 64×32（场景画布 128×32）。", StringComparison.Ordinal),
             "an explicit size is kept, recorded as explicit, and the conclusion names the differing scene canvas");
         static string Sentence(OutputResolution.Choice choice) =>
-            PlanNarrative.Summarize(new JsonObject { ["blockers"] = new JsonArray(new Blocker(BlockerCode.PerspectiveNeedsScreenspace).ToNode()), ["output_resolution"] = choice.ToJson() })["zh"]!.GetValue<string>();
+            PlanNarrative.Summarize(Blocked(new JsonObject { ["blockers"] = new JsonArray(), ["output_resolution"] = choice.ToJson() }))["zh"]!.GetValue<string>();
+        static JsonObject Blocked(JsonObject plan) { PlanBlockers.Set(plan, [new Blocker(BlockerCode.PerspectiveNeedsScreenspace)]); return plan; }
         check(Sentence(capped).EndsWith("输出分辨率 1920×1080，即场景画布原尺寸：画布不足以覆盖本机屏幕 3840×2160，不放大。", StringComparison.Ordinal) &&
             Sentence(canvas).EndsWith("本机屏幕分辨率不可读，输出分辨率取场景画布原尺寸 3840×2160。", StringComparison.Ordinal) &&
             Sentence(perspective).EndsWith("场景无可用正交画布（透视场景或画布缺失），输出分辨率取主显示器分辨率 3072×1920。", StringComparison.Ordinal),
             "capped, display-unavailable and perspective choices each get their own conclusion wording");
-        var legacy = new JsonObject { ["blockers"] = new JsonArray(new Blocker(BlockerCode.PerspectiveNeedsScreenspace).ToNode()) };
+        var legacy = Blocked(new JsonObject());
         check(!PlanNarrative.Summarize(legacy)["zh"]!.GetValue<string>().Contains("烘焙。", StringComparison.Ordinal),
             "a plan without output_resolution keeps its conclusion unchanged");
     }

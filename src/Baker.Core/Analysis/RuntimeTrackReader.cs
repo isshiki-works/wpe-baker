@@ -183,9 +183,9 @@ internal static class RuntimeTrackReader
         foreach (var dependency in (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(item => item["operation"]?.GetValue<string>() == "time" &&
                 item["initialization"]?.GetValue<bool>() != true &&
-                HybridScenePlanner.Int(item["owner"]) is int owner && bakedLayerIds.Contains(owner))
-            .DistinctBy(item => (HybridScenePlanner.Int(item["owner"]), item["binding"]?.GetValue<string>())))
-            unresolved.Add(new ScriptTimeUnresolved(HybridScenePlanner.Int(dependency["owner"])!.Value,
+                SceneGraph.Int(item["owner"]) is int owner && bakedLayerIds.Contains(owner))
+            .DistinctBy(item => (SceneGraph.Int(item["owner"]), item["binding"]?.GetValue<string>())))
+            unresolved.Add(new ScriptTimeUnresolved(SceneGraph.Int(dependency["owner"])!.Value,
                 dependency["binding"]?.DeepClone(), dependency["property"]?.DeepClone()));
     }
 
@@ -202,7 +202,7 @@ internal static class RuntimeTrackReader
         var selected = new HashSet<int>(bakedLayerIds);
         foreach (JsonObject layer in layers.OfType<JsonObject>())
         {
-            int? owner = HybridScenePlanner.Int(layer["owner"]);
+            int? owner = SceneGraph.Int(layer["owner"]);
             if (owner is null || !selected.Contains(owner.Value) || layer["materials"] is not JsonArray materials) continue;
             foreach (JsonNode? node in materials)
             {
@@ -255,7 +255,7 @@ internal static class RuntimeTrackReader
         int count = 0;
         foreach (JsonObject layer in layers.OfType<JsonObject>())
         {
-            int? owner = HybridScenePlanner.Int(layer["owner"]);
+            int? owner = SceneGraph.Int(layer["owner"]);
             if (owner is null || !selected.Contains(owner.Value) || layer["materials"] is not JsonArray materials) continue;
             foreach (JsonObject material in materials.OfType<JsonObject>())
             {

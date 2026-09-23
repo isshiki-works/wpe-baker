@@ -16,10 +16,11 @@ public class WholeLayerRefreshTests
     {
         var plan = new JsonObject
         {
-            ["blockers"] = new JsonArray(Enumerable.Range(0, blockers).Select(_ => (JsonNode)new Blocker(BlockerCode.VideoShell).ToNode()).ToArray()),
+            ["blockers"] = new JsonArray(),
             ["loop"] = Loop(unresolved, candidates),
             ["whole_layer"] = new JsonObject { ["status"] = "stale" }
         };
+        PlanBlockers.Set(plan, Enumerable.Repeat(new Blocker(BlockerCode.VideoShell), blockers));
         Routes.RefreshWholeLayer(plan);
         return plan;
     }
@@ -127,7 +128,8 @@ public class LayoutAdmissionTests
         Assert.Equal(admission.Conflict!.Text, Text(plan["whole_layer"]!["layout_conflict"]));
         Assert.Equal("requires_user_choice", Text(plan["video_layout_admission"]!["status"]));
         Assert.Equal(admission.Conflict.Text, Text(plan["video_layout_admission"]!["reason"]));
-        Assert.Contains(plan["blockers"]!.AsArray(), node => JsonNode.DeepEquals(node, admission.Conflict.ToNode()));
+        Assert.Contains(plan["blockers"]!.AsArray(), node => node!.GetValue<string>() == admission.Conflict.Text);
+        Assert.Contains(admission.Conflict.Code, PlanBlockers.Codes(plan));
         Assert.Equal("requires_resolution", Text(plan["status"]));
     });
 
@@ -205,7 +207,7 @@ public class RoutesTests
 
     private static void Block(JsonObject plan)
     {
-        plan["blockers"] = new JsonArray(new Blocker(BlockerCode.PerspectiveNeedsScreenspace).ToNode());
+        PlanBlockers.Set(plan, [new Blocker(BlockerCode.PerspectiveNeedsScreenspace)]);
         plan["status"] = "requires_resolution";
     }
 

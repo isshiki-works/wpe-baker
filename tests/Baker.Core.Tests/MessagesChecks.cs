@@ -126,7 +126,7 @@ internal static class MessagesChecks
         JsonObject attached = Plan(blockers: [Hdr], candidates: 0);
         PlanNarrative.Attach(attached);
         Check(attached["blockers"] is JsonArray { Count: 1 } blockerTexts && blockerTexts[0]!.GetValue<string>() == Hdr.Text,
-            "attaching writes the v3 english blockers array from the blocker codes");
+            "the plan carries the v3 english blockers array rendered from the blocker codes");
         Check(attached["blockers_localized"] is JsonArray { Count: 1 } &&
             attached["blockers_localized"]![0]!["key"]!.GetValue<string>() == "blocker.hdr_radiance_open",
             "blockers_localized is a parallel array keyed by the blocker code");
@@ -259,11 +259,13 @@ internal static class MessagesChecks
         var candidateArray = new JsonArray();
         for (int index = 0; index < candidates; ++index)
             candidateArray.Add(new JsonObject { ["frames"] = 5775UL, ["seconds"] = 48.125, ["total_retime_cost_percent"] = 0.405568644905163 });
-        return new JsonObject {
+        var plan = new JsonObject {
             ["settings"] = new JsonObject { ["fps_numerator"] = 120, ["fps_denominator"] = 1 },
             ["layers"] = new JsonArray(new JsonObject { ["id"] = 26, ["name"] = "Clock" }, new JsonObject { ["id"] = 27, ["name"] = "Spectrum" }),
             ["live_layer_ids"] = new JsonArray(26, 27),
-            ["blockers"] = new JsonArray(blockers.Select(blocker => (JsonNode)blocker.ToNode()).ToArray()),
+            ["blockers"] = new JsonArray(),
             ["loop"] = new JsonObject { ["candidates"] = candidateArray, ["unresolved"] = new JsonArray() } };
+        PlanBlockers.Set(plan, blockers);
+        return plan;
     }
 }

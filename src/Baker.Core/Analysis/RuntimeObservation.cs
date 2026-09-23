@@ -70,13 +70,13 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
         if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray dependencies ||
             trace["runtime_layers"] is not JsonArray runtimeLayers)
             throw new InvalidDataException("A complete runtime dependency observation is required.");
-        var audioEffectChoice = HybridScenePlanner.DescribeAudioEffectChoice(scene, source, request.Assets, properties, trace, request.AudioEffects);
+        var audioEffectChoice = PlanTransforms.DescribeAudioEffectChoice(scene, source, request.Assets, properties, trace, request.AudioEffects);
         if (audioEffectChoice["status"]?.GetValue<string>() == "applied")
         {
             string beforePath = Path.Combine(output, "runtime-before-audio-choice.json");
             await VideoSceneBuilder.WriteJsonAsync(beforePath, trace, cancellationToken);
             audioEffectChoice["original_runtime_evidence"] = beforePath;
-            HybridScenePlanner.ApplyAudioEffectChoice(scene, new JsonObject { ["audio_effects_choice"] = audioEffectChoice.DeepClone() });
+            PlanTransforms.ApplyAudioEffectChoice(scene, new JsonObject { ["audio_effects_choice"] = audioEffectChoice.DeepClone() });
             string chosenSource = Path.Combine(output, "audio-choice-source");
             await source.ExtractAsync(chosenSource, cancellationToken);
             await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(chosenSource, source.SceneResource), scene, cancellationToken);
@@ -103,11 +103,11 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
     internal static void LinkComposites(SceneGraph graph, JsonArray dependencies, JsonArray runtimeLayers)
     {
         var objects = graph.Objects;
-        var compositeProducers = runtimeLayers.OfType<JsonObject>().Select(layer => HybridScenePlanner.Int(layer["owner"])).OfType<int>()
+        var compositeProducers = runtimeLayers.OfType<JsonObject>().Select(layer => SceneGraph.Int(layer["owner"])).OfType<int>()
             .Where(objects.ContainsKey).ToHashSet();
         foreach (var layer in runtimeLayers.OfType<JsonObject>())
         {
-            if (HybridScenePlanner.Int(layer["owner"]) is not int owner || !objects.ContainsKey(owner)) continue;
+            if (SceneGraph.Int(layer["owner"]) is not int owner || !objects.ContainsKey(owner)) continue;
             if (layer["materials"] is not JsonArray materials) continue;
             foreach (string texture in materials.OfType<JsonObject>()
                 .SelectMany(material => material["textures"]?.AsArray().OfType<JsonValue>() ?? [])
@@ -116,7 +116,7 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
                 var match = Regex.Match(texture, @"^_rt_link_(\d+)$", RegexOptions.CultureInvariant);
                 if (!match.Success || !int.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int target) ||
                     !compositeProducers.Contains(target) || owner == target || dependencies.OfType<JsonObject>().Any(dependency =>
-                        HybridScenePlanner.Int(dependency["owner"]) == owner && HybridScenePlanner.Int(dependency["target"]) == target &&
+                        SceneGraph.Int(dependency["owner"]) == owner && SceneGraph.Int(dependency["target"]) == target &&
                         dependency["operation"]?.GetValue<string>() == "read" && dependency["property"]?.GetValue<string>() == "layerComposite" &&
                         dependency["initialization"]?.GetValue<bool>() != true)) continue;
                 dependencies.Add(new JsonObject { ["owner"] = owner, ["target"] = target, ["operation"] = "read",
