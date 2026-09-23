@@ -1388,6 +1388,52 @@
    ]
   },
   {
+   "name": "shimmer-decimal-defaults",
+   "from": "PLAN §8 登记缺夹具：注释元数据里的数字按解析后的数值比，1.0 与规则里的 1 相同",
+   "shaders": {
+    "shimmer-decimal": {
+     "frag": [
+      "// [COMBO] {\"material\":\"ui_editor_properties_style\",\"combo\":\"MODE\",\"default\":0.0,\"options\":{\"ui_editor_properties_linear\":0,\"ui_editor_properties_mirror\":1}}",
+      "uniform float g_Time;",
+      "uniform float u_scale; // {\"material\":\"ui_editor_properties_granularity\",\"default\":1.0,\"range\":[1,5]}",
+      "uniform float u_speed; // {\"material\":\"ui_editor_properties_speed\",\"default\":1.0,\"range\":[0,5]}",
+      "uniform float u_delay; // {\"material\":\"ui_editor_properties_delay\",\"default\":2.0,\"range\":[1,5]}",
+      "vec2 shimmerCoord = rotateVec2(v_TexCoord, -u_direction + 1.57079632679) * u_scale;",
+      "#if MODE == 1",
+      "shimmerCoord.x += u_offset + u_width * sin(u_speed * g_Time + offset);",
+      "#else",
+      "shimmerCoord.x += u_offset + u_speed * (g_Time + offset);",
+      "#endif",
+      "shimmerCoord.x = saturate(frac(shimmerCoord.x / (u_scale * u_delay)) * u_scale * u_delay);"
+     ],
+     "vert": [
+      "attribute vec3 a_Position;"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 11,
+     "shader": "shimmer-decimal",
+     "constants": {
+      "ui_editor_properties_granularity": 1.0,
+      "ui_editor_properties_delay": 1.77,
+      "ui_editor_properties_speed": 0.44
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "uniform defaults written as 1.0/2.0 and a MODE combo default written as 0.0 still match the shimmer rule's 1/2/0",
+     "layer": 11,
+     "components": 1,
+     "key": "ui_editor_properties_speed",
+     "allow_retime": true,
+     "period": "1.77/0.44"
+    }
+   ]
+  },
+  {
    "name": "dual-wave",
    "from": "ShaderAdditionalPeriodChecks",
    "shaders": {

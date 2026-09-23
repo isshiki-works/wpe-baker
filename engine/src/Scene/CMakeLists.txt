@@ -160,6 +160,7 @@ target_include_directories(owe-scene PUBLIC ${PROJECT_SOURCE_DIR}/third_party ${
 target_compile_definitions(owe-scene PUBLIC "WAYWALLEN_WORKSHOP_DIR=\"workshop\"" "WAYWALLEN_ASSETS_DIR=\"assets\"")
 target_link_libraries(owe-scene PUBLIC owe-core)
 target_link_libraries(owe-scene PUBLIC owe-audio)
+target_link_libraries(owe-scene PUBLIC owe-media)
 target_link_libraries(owe-scene PUBLIC owe-types)
 target_link_libraries(owe-scene PUBLIC owe-utils)
 target_link_libraries(owe-scene PUBLIC owe-vulkan)

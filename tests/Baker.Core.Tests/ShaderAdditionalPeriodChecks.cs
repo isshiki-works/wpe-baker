@@ -11,6 +11,8 @@ internal static class ShaderAdditionalPeriodChecks
         ShaderCorpusChecks.Run(check, root, "whitespace");
         ShaderCorpusChecks.Run(check, root, "shine-edges-default");
         ShaderCorpusChecks.Run(check, root, "shine-edges-default3");
+        // 注释元数据的数字按解析后的数值比：1.0 / 2.0 / 0.0 与规则里的 1 / 2 / 0 相同。
+        ShaderCorpusChecks.Run(check, root, "shimmer-decimal-defaults");
         ShaderCorpusRun dual = ShaderCorpusChecks.Run(check, root, "dual-wave");
         using var dualSource = new ProjectSource(dual.Directory);
         JsonObject dualScene = dual.Scene;

@@ -168,8 +168,9 @@ internal static class FullFrameDemotionChecks
             ["composition"] = composition, ["layers"] = layers };
     }
 
+    /// <param name="animationPeriods">给了就写进 trace 的 runtime_animation_periods（不给时 trace 没有这个字段，与原来相同）。</param>
     internal static async Task<JsonObject> AnalyzeAsync(string root, string name, JsonArray objects, bool clearEnabled,
-        JsonArray dependencies, string layout = "full_frame")
+        JsonArray dependencies, string layout = "full_frame", JsonArray? animationPeriods = null)
     {
         string directory = Path.Combine(root, "demotion-" + name);
         Directory.CreateDirectory(directory);
@@ -179,7 +180,7 @@ internal static class FullFrameDemotionChecks
                 ["clearenabled"] = clearEnabled },
             ["objects"] = objects.DeepClone() }.ToJsonString());
         string trace = Path.Combine(root, "demotion-" + name + "-trace.json");
-        await File.WriteAllTextAsync(trace, new JsonObject {
+        var traceJson = new JsonObject {
             ["source"] = Path.Combine(directory, "scene.json"), ["status"] = "complete",
             ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray(),
             ["runtime_dependencies"] = dependencies.DeepClone(),
@@ -188,7 +189,9 @@ internal static class FullFrameDemotionChecks
                 ["has_mesh"] = true, ["effective_parallax_depth"] = new JsonArray(0, 0),
                 ["materials"] = new JsonArray(new JsonObject {
                     ["uses_audio_spectrum"] = layer["id"]!.GetValue<int>() == Spectrum,
-                    ["textures"] = new JsonArray() }) }).ToArray()) }.ToJsonString());
+                    ["textures"] = new JsonArray() }) }).ToArray()) };
+        if (animationPeriods is not null) traceJson["runtime_animation_periods"] = animationPeriods.DeepClone();
+        await File.WriteAllTextAsync(trace, traceJson.ToJsonString());
         return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
             new(2, directory, root, Path.Combine(root, "demotion-analysis-" + name), 64, 32,
                 RuntimeTraceFile: trace, VideoLayout: layout));
