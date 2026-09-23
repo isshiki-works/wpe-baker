@@ -13,8 +13,9 @@ internal static class ShaderAdditionalPeriodChecks
         ShaderCorpusChecks.Run(check, root, "shine-edges-default3");
         // 注释元数据的数字按解析后的数值比：1.0 / 2.0 / 0.0 与规则里的 1 / 2 / 0 相同。
         ShaderCorpusChecks.Run(check, root, "shimmer-decimal-defaults");
-        // 门控与指纹同一套求值：#if 行按归一化文本找，[COMBO] 缺省值按解析后的 JSON 比。
+        // 门控：[COMBO] 缺省值与指纹同一套求值（按解析后的 JSON 比）；directive 按预处理指令词法找。
         ShaderCorpusChecks.Run(check, root, "gate-parsed");
+        ShaderCorpusChecks.Run(check, root, "gate-directive");
         ShaderCorpusRun dual = ShaderCorpusChecks.Run(check, root, "dual-wave");
         using var dualSource = new ProjectSource(dual.Directory);
         JsonObject dualScene = dual.Scene;

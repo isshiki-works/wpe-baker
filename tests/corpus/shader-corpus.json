@@ -1435,7 +1435,7 @@
   },
   {
    "name": "gate-parsed",
-   "from": "gate 口径统一：directive / absent_enabled_* 改为规则表指纹名，预处理行按归一化文本找，combo 缺省值按 [COMBO] 注释解析后的 JSON 比",
+   "from": "gate 口径统一：absent_enabled_* 改为规则表指纹名，combo 缺省值按 [COMBO] 注释解析后的 JSON 比；directive 按预处理指令词法找（多空白、tab 照认，注释里的不算）",
    "shaders": {
     "sine-annotated": {
      "frag": [
@@ -1577,6 +1577,297 @@
      "unresolved": 0,
      "key": "Frequency",
      "period": "2/30"
+    }
+   ]
+  },
+  {
+   "name": "gate-directive",
+   "from": "gate 的 directive 按预处理指令词法匹配：行首与 # 后可有空白（空格或 tab），记号之间空白任意；指令名、宏名整词匹配、区分大小写；#ifdef、#if defined(...) 不是规则表要求的 #if NAME；注释里的不算",
+   "shaders": {
+    "sine-noise-suffix": {
+     "frag": [
+      "uniform float g_Time;",
+      "#if NOISE_X",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-space-after-hash": {
+     "frag": [
+      "uniform float g_Time;",
+      "# if NOISE",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-indented": {
+     "frag": [
+      "uniform float g_Time;",
+      "    #if NOISE",
+      "    #endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-tabs": {
+     "frag": [
+      "uniform float g_Time;",
+      "\t#\tif\tNOISE",
+      "\t#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-ifdef": {
+     "frag": [
+      "uniform float g_Time;",
+      "#ifdef NOISE",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-defined": {
+     "frag": [
+      "uniform float g_Time;",
+      "#if defined(NOISE)",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-lowercase-macro": {
+     "frag": [
+      "uniform float g_Time;",
+      "#if noise",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "sine-block-comment": {
+     "frag": [
+      "uniform float g_Time;",
+      "/*",
+      "#if NOISE",
+      "#endif",
+      "*/",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    },
+    "shake-compact-audio": {
+     "frag": [
+      "uniform float g_Time;",
+      "// [COMBO] {\"combo\":\"NOISE\",\"type\":\"options\",\"default\":0}",
+      "// [COMBO] {\"combo\":\"AUDIOPROCESSING\",\"type\":\"audioprocessingoptions\",\"default\":0}",
+      "#if AUDIOPROCESSING==0",
+      "float flowPhase = 0.0;",
+      "flowPhase = texSample2D(g_Texture2, v_TexCoord.zw).r * M_PI_2;",
+      "#if NOISE",
+      "vec4 sines = flowPhase + frac(g_Speed * g_Time / M_PI_2 * vec4(1, -0.16161616, 0.0083333, -0.00019841)) * M_PI_2;",
+      "#else",
+      "float time = g_Speed * g_Time + flowPhase;",
+      "offset = sin(frac(time / M_PI_2) * M_PI_2);",
+      "float base = step(0.0, cos(time));",
+      "#endif",
+      "#endif"
+     ]
+    },
+    "sine-trailing-condition": {
+     "frag": [
+      "uniform float g_Time;",
+      "#if NOISE == 1",
+      "#endif",
+      "float v = sin(g_Time * g_Speed + g_Phase * 6.28318530718) * g_Amount;"
+     ]
+    }
+   },
+   "objects": [
+    {
+     "id": 1,
+     "shader": "sine-noise-suffix",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 2,
+     "shader": "sine-space-after-hash",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 3,
+     "shader": "sine-indented",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 4,
+     "shader": "sine-tabs",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 5,
+     "shader": "sine-ifdef",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 6,
+     "shader": "sine-defined",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 7,
+     "shader": "sine-lowercase-macro",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 8,
+     "shader": "sine-block-comment",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    },
+    {
+     "id": 9,
+     "shader": "shake-compact-audio",
+     "constants": {
+      "speed": 0.75
+     },
+     "combos": {
+      "AUDIOPROCESSING": 1
+     }
+    },
+    {
+     "id": 10,
+     "shader": "sine-trailing-condition",
+     "constants": {
+      "speed": 2
+     },
+     "combos": {
+      "NOISE": 1
+     }
+    }
+   ],
+   "expect": [
+    {
+     "message": "#if NOISE_X is a different macro: the NOISE gate matches the macro name as a whole word, so NOISE=1 does not gate the sine",
+     "layer": 1,
+     "components": 1,
+     "unresolved": 0,
+     "key": "speed",
+     "period": "2pi/2"
+    },
+    {
+     "message": "# if NOISE (whitespace after #) is still the NOISE branch, so NOISE=1 is refused",
+     "layer": 2,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "NOISE"
+     ]
+    },
+    {
+     "message": "an indented #if NOISE is still the NOISE branch, so NOISE=1 is refused",
+     "layer": 3,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "NOISE"
+     ]
+    },
+    {
+     "message": "tabs before #, after # and before the macro still make the NOISE branch, so NOISE=1 is refused",
+     "layer": 4,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "NOISE"
+     ]
+    },
+    {
+     "message": "the rule table asks for #if NOISE; #ifdef NOISE is a different directive and does not gate the sine",
+     "layer": 5,
+     "components": 1,
+     "unresolved": 0,
+     "key": "speed",
+     "period": "2pi/2"
+    },
+    {
+     "message": "the rule table asks for #if NOISE; #if defined(NOISE) is a different condition and does not gate the sine",
+     "layer": 6,
+     "components": 1,
+     "unresolved": 0,
+     "key": "speed",
+     "period": "2pi/2"
+    },
+    {
+     "message": "macro names are case-sensitive: #if noise is not the NOISE branch, so NOISE=1 does not gate the sine",
+     "layer": 7,
+     "components": 1,
+     "unresolved": 0,
+     "key": "speed",
+     "period": "2pi/2"
+    },
+    {
+     "message": "an #if NOISE inside a /* */ block comment is not a NOISE branch, so NOISE=1 does not gate the sine",
+     "layer": 8,
+     "components": 1,
+     "unresolved": 0,
+     "key": "speed",
+     "period": "2pi/2"
+    },
+    {
+     "message": "#if AUDIOPROCESSING==0 without spaces is the same directive as #if AUDIOPROCESSING == 0, so AUDIOPROCESSING=1 is refused",
+     "layer": 9,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains_ignore_case": [
+      "audio"
+     ]
+    },
+    {
+     "message": "#if NOISE == 1 starts with the #if NOISE tokens, so it is still the NOISE branch and NOISE=1 is refused",
+     "layer": 10,
+     "components": 0,
+     "unresolved": 1,
+     "kind": "NonPeriodicOrDriftingMechanism",
+     "detail_contains": [
+      "NOISE"
+     ]
     }
    ]
   },

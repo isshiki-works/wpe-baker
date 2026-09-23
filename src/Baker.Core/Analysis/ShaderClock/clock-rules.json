@@ -165,8 +165,6 @@
         "swizzle:v_TexCoordRipple": 5, "swizzle:rippleCoords": 6 } },
     "structured_sine": { "normalize": true, "contains": [ "uniform float g_Speed;", "sin(" ],
       "uniforms": [ [ "g_Speed", { "material": "speed" } ] ] },
-    "noise_branch": { "normalize": true, "contains": [ "#if NOISE" ] },
-    "audio_off_branch": { "normalize": true, "contains": [ "#if AUDIOPROCESSING == 0" ] },
     "noise_default_off": { "normalize": true, "combos": [ [ "NOISE", { "default": 0 } ] ] },
     "audio_default_off": { "normalize": true, "combos": [ [ "AUDIOPROCESSING", { "default": 0 } ] ] },
     "artifacts_default_on": { "normalize": true, "combos": [ [ "ARTIFACTS", { "default": 1 } ] ] }
@@ -188,11 +186,11 @@
     { "id": "shimmer", "action": "shimmer", "match": [ "shimmer" ] },
     { "id": "shake", "action": "scalar_period", "match": [ "shake" ],
       "gates": [
-        { "type": "combo_off", "combo": "NOISE", "directive": "noise_branch",
+        { "type": "combo_off", "combo": "NOISE", "directive": "#if NOISE",
           "absent_enabled_unless": "noise_default_off",
           "kind": "NonPeriodicOrDriftingMechanism",
           "detail": "Shake NOISE is enabled or unproven; its multiple time coefficients do not establish a short exact loop." },
-        { "type": "combo_off", "combo": "AUDIOPROCESSING", "directive": "audio_off_branch",
+        { "type": "combo_off", "combo": "AUDIOPROCESSING", "directive": "#if AUDIOPROCESSING == 0",
           "absent_enabled_unless": "audio_default_off",
           "kind": "NonPeriodicOrDriftingMechanism",
           "detail": "Shake is driven by enabled or unproven external audio instead of its periodic time equation." } ],
@@ -214,7 +212,7 @@
       "evidence": "Verified all active g_Time terms reduce to sin(g_Time * g_PulseSpeed + static phase) when authored noiseamount is zero; source speed token is {speed}." },
     { "id": "sine", "action": "scalar_period", "match": [ "sine" ],
       "gates": [
-        { "type": "combo_off", "combo": "NOISE", "directive": "noise_branch",
+        { "type": "combo_off", "combo": "NOISE", "directive": "#if NOISE",
           "absent_enabled_unless": "noise_default_off",
           "kind": "NonPeriodicOrDriftingMechanism",
           "detail": "Verified sine timing has enabled or unproven NOISE, so its simple speed period does not prove closure." } ],
@@ -237,7 +235,7 @@
     { "id": "shadow_hash", "action": "shadow_hash", "match": [ "shadow_hash" ] },
     { "id": "auto_sway", "action": "auto_sway", "match": [ "auto_sway" ],
       "gates": [
-        { "type": "combo_off", "combo": "NOISE", "directive": "noise_branch",
+        { "type": "combo_off", "combo": "NOISE", "directive": "#if NOISE",
           "kind": "NonPeriodicOrDriftingMechanism",
           "detail": "Auto-sway noise is enabled, so the simple speed period does not prove closure." } ] },
     { "id": "water_ripple", "action": "water_ripple", "match": [ "water_ripple_gate", "water_ripple" ] },
