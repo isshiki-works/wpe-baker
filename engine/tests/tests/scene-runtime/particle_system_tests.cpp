@@ -393,7 +393,7 @@ TEST(ParticleSubSystem, PlaybackResetClearsAndRestartsIndependentStorage) {
     auto                   playback = rstd::sync::Arc<owe::ParticlePlaybackState>::make();
     subsystem.SetPlaybackState(playback.clone());
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(4)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(4)));
     subsystem.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
         owe::SphereEmitterProgram(subsystem.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
@@ -443,7 +443,7 @@ TEST(ParticleSubSystem, ConvertsWorldSpaceFollowAnchorsIntoChildLocalSpace) {
                                   true);
     parent.SetOwnerNode(parent_node.as_ptr());
     parent.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
     parent.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
         owe::SphereEmitterProgram(parent.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {
@@ -617,7 +617,7 @@ TEST(ParticleSubSystem, AppliesVortexAroundWorldSpaceOwner) {
         override.clone(), owe::wpscene::Particle::EFlags { 0 }, true);
     subsystem.SetInstanceModifiers(modifiers.Clone());
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":10,"max":10})").unwrap(), u32(1)));
     subsystem.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
         owe::BoxEmitterProgram(subsystem.SpawnPipeline(),
                                owe::ParticleBoxEmitterArgs {
@@ -626,9 +626,9 @@ TEST(ParticleSubSystem, AppliesVortexAroundWorldSpaceOwner) {
                                },
                                usize())));
     subsystem.AddOperator(owe::ParticleParser::GenOperator(
-        owe::ParseJson(R"({"name":"movement"})").unwrap(), modifiers.Clone(), subsystem, usize()));
+        owe::ParseNJson(R"({"name":"movement"})").unwrap(), modifiers.Clone(), subsystem, usize()));
     subsystem.AddOperator(owe::ParticleParser::GenOperator(
-        owe::ParseJson(
+        owe::ParseNJson(
             R"({"name":"vortex_v2","controlpoint":1,"flags":2,"ringpulldistance":250,"ringradius":256,"ringwidth":5,"speedinner":0,"speedouter":2500})")
             .unwrap(),
         modifiers.Clone(),
@@ -657,14 +657,14 @@ TEST(ParticleSubSystem, UsesEmitterPeriodLimitForImplicitControlpointSequenceCou
 
     subsystem.ControlpointsMut()[usize(1)].base_offset = Eigen::Vector3d { 300.0, 0.0, 0.0 };
     subsystem.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(4)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(4)));
     auto sequence = owe::ParticleParser::GenInitializer(
-        owe::ParseJson(R"({"name":"mapsequencebetweencontrolpoints"})").unwrap(), u32(4));
+        owe::ParseNJson(R"({"name":"mapsequencebetweencontrolpoints"})").unwrap(), u32(4));
     ASSERT_EQ(sequence.SequenceCount(), Some(u32(4)));
     subsystem.SetRopeSequenceCount(*sequence.SequenceCount());
     subsystem.AddInitializer(rstd::move(sequence));
     auto explicit_sequence = owe::ParticleParser::GenInitializer(
-        owe::ParseJson(R"({"name":"mapsequencebetweencontrolpoints","count":3})").unwrap(), u32(4));
+        owe::ParseNJson(R"({"name":"mapsequencebetweencontrolpoints","count":3})").unwrap(), u32(4));
     EXPECT_EQ(explicit_sequence.SequenceCount(), Some(u32(3)));
     EXPECT_EQ(subsystem.RopeSequenceCount(), Some(u32(4)));
     subsystem.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
@@ -697,7 +697,7 @@ TEST(ParticleSubSystem, MapsParentParticlesIntoStaticChildControlpoints) {
                                   owe::ParticleSubSystem::SpawnType::STATIC,
                                   owe::ParticleAnimationSpec {});
     parent.AddInitializer(owe::ParticleParser::GenInitializer(
-        owe::ParseJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(2)));
+        owe::ParseNJson(R"({"name":"lifetimerandom","min":1,"max":1})").unwrap(), u32(2)));
     parent.AddEmitter(Box<dyn<particle::ParticleEmitterProgram>>::make(
         owe::SphereEmitterProgram(parent.SpawnPipeline(),
                                   owe::ParticleSphereEmitterArgs {

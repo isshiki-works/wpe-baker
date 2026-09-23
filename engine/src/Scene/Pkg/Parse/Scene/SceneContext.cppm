@@ -220,7 +220,7 @@ auto ResolveImageAssetSize(SceneParseContext&, ref<str>) -> Option<array<float, 
 
 bool SceneWritesLayerText(slice<SceneObjectVar>);
 bool SceneHasScripts(slice<SceneObjectVar>);
-auto LoadJsonFile(fs::VFS&, const std::string&) -> Option<Json>;
+auto LoadJsonFile(fs::VFS&, const std::string&) -> Option<NJson>;
 bool AppendLayerCompositePassthroughEffect(fs::VFS&, wpscene::ImageObject&);
 auto MakePuppetLayer(Arc<Puppet>, std::span<PuppetLayer::AnimationLayer>) -> Arc<PuppetLayer>;
 void RegisterPuppetLayer(SceneParseContext&, SceneNode*, Arc<PuppetLayer>);

@@ -30,7 +30,6 @@ using DefaultTexs = std::vector<std::pair<i32, std::string>>;
 struct UserVarRecord {
     String material;      // project.json key (== shader annotation's material)
     String name;          // GLSL identifier (e.g. "u_Brightness")
-    Json   default_value; // raw default from annotation; may be null
 };
 
 struct ShaderInfo {

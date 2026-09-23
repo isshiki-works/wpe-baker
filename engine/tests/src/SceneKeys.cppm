@@ -7,6 +7,7 @@
 module;
 
 #include <cstdio>
+#include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
 #include <rstd/enum.hpp>
 
 export module wescene.testing.scene_keys;

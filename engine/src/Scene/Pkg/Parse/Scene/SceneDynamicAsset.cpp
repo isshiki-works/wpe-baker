@@ -254,9 +254,10 @@ Option<Arc<SceneNode>> AttachCreatedLayer(SceneParseContext& context, SceneNode*
 
 Option<Arc<SceneNode>> InstantiateLayerConfiguration(SceneParseContext& context, SceneNode* owner,
                                                      const Json& config) {
-    const i32 id = context.NextSyntheticObjectId();
+    const i32   id      = context.NextSyntheticObjectId();
+    const NJson nconfig = FromRstd(config);
 
-    if (config.get("text"_str).is_some()) {
+    if (Find(nconfig, "text") != nullptr) {
         wpscene::TextObject text;
         if (! text.FromJson(config, *context.vfs, context.pkg_version)) return None();
         text.id      = id;
@@ -265,7 +266,7 @@ Option<Arc<SceneNode>> InstantiateLayerConfiguration(SceneParseContext& context,
         return AttachCreatedLayer(context, owner, id);
     }
 
-    if (config.get("image"_str).is_some()) {
+    if (Find(nconfig, "image") != nullptr) {
         wpscene::ImageObject image;
         if (! image.FromJson(config, *context.vfs, context.pkg_version)) return None();
         image.id      = id;
@@ -275,7 +276,7 @@ Option<Arc<SceneNode>> InstantiateLayerConfiguration(SceneParseContext& context,
     }
 
     Vec<float> requested_size;
-    owe::GetJsonValue(config, "size", requested_size, false);
+    owe::GetJsonValue(nconfig, "size", requested_size, false);
     array<float, 2> size { 2.0f, 2.0f };
     if (requested_size.len() >= usize(2)) {
         size[usize()]  = requested_size[usize()];
@@ -292,16 +293,16 @@ Option<Arc<SceneNode>> InstantiateLayerConfiguration(SceneParseContext& context,
     image.size    = { size[usize()], size[usize(1)] };
     image.solid   = true;
     image.parent  = u32();
-    owe::GetJsonValue(config, "name", image.name, false);
-    owe::GetJsonValue(config, "visible", image.visible, false);
-    owe::GetJsonValue(config, "origin", image.origin, false);
-    owe::GetJsonValue(config, "angles", image.angles, false);
-    owe::GetJsonValue(config, "scale", image.scale, false);
-    owe::GetJsonValue(config, "color", image.color, false);
-    owe::GetJsonValue(config, "alpha", image.alpha, false);
-    owe::GetJsonValue(config, "brightness", image.brightness, false);
-    owe::GetJsonValue(config, "alignment", image.alignment, false);
-    owe::GetJsonValue(config, "perspective", image.perspective, false);
+    owe::GetJsonValue(nconfig, "name", image.name, false);
+    owe::GetJsonValue(nconfig, "visible", image.visible, false);
+    owe::GetJsonValue(nconfig, "origin", image.origin, false);
+    owe::GetJsonValue(nconfig, "angles", image.angles, false);
+    owe::GetJsonValue(nconfig, "scale", image.scale, false);
+    owe::GetJsonValue(nconfig, "color", image.color, false);
+    owe::GetJsonValue(nconfig, "alpha", image.alpha, false);
+    owe::GetJsonValue(nconfig, "brightness", image.brightness, false);
+    owe::GetJsonValue(nconfig, "alignment", image.alignment, false);
+    owe::GetJsonValue(nconfig, "perspective", image.perspective, false);
     image.alpha = wpscene::NormalizeLayerAlpha(image.alpha);
     context.solid_layer_ids.insert(i32(id));
     ParseImageObj(context, image);

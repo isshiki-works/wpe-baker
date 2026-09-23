@@ -238,7 +238,7 @@ void LoadInitializer(ParticleSubSystem& system, const wpscene::Particle& particl
         }
     }
     for (const auto& initializer : particle.initializers) {
-        auto instruction = ParticleParser::GenInitializer(initializer, implicit_sequence_count);
+        auto instruction = ParticleParser::GenInitializer(FromRstd(initializer), implicit_sequence_count);
         auto count       = instruction.SequenceCount();
         if (count.is_some()) system.SetRopeSequenceCount(*count);
         system.AddInitializer(rstd::move(instruction));
@@ -252,7 +252,7 @@ void LoadOperator(ParticleSubSystem& system, const wpscene::Particle& particle,
     usize index {};
     for (const auto& operation : particle.operators) {
         system.AddOperator(
-            ParticleParser::GenOperator(operation, modifiers.Clone(), system, index++));
+            ParticleParser::GenOperator(FromRstd(operation), modifiers.Clone(), system, index++));
     }
 }
 void LoadEmitter(ParticleSubSystem& system, const wpscene::Particle& particle,

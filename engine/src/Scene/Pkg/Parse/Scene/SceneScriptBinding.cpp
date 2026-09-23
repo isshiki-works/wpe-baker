@@ -30,8 +30,8 @@ using namespace Eigen;
 namespace owe
 {
 
-auto LoadJsonFile(fs::VFS& vfs, const std::string& path) -> Option<Json> {
-    auto parsed = owe::ReadJsonFile(vfs, path);
+auto LoadJsonFile(fs::VFS& vfs, const std::string& path) -> Option<NJson> {
+    auto parsed = owe::ReadNJsonFile(vfs, path);
     if (parsed.is_err()) {
         auto error = rstd::move(parsed).unwrap_err_unchecked();
         rstd_error("Can't load json {}: {}", path, error.message.as_str());
@@ -100,7 +100,7 @@ bool SceneHasScripts(slice<SceneObjectVar> scene_objs) {
 bool AppendLayerCompositePassthroughEffect(fs::VFS& vfs, wpscene::ImageObject& image) {
     wpscene::Material material;
     auto              json = LoadJsonFile(vfs, "/assets/materials/util/effectpassthrough.json");
-    if (! json || ! material.FromJson(*json)) {
+    if (! json || ! material.FromJson(ToRstd(*json))) {
         rstd_error("parse effectpassthrough.json failed for '{}'", image.name);
         return false;
     }

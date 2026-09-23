@@ -44,7 +44,7 @@ enum class SequenceLimitBehavior
     Clamp,
 };
 
-auto ParseSequenceLimitBehavior(const Json& json) -> SequenceLimitBehavior {
+auto ParseSequenceLimitBehavior(const NJson& json) -> SequenceLimitBehavior {
     std::string value { "repeat" };
     owe::GetJsonValue(json, "limitbehavior", value, false);
     if (value == "mirror") return SequenceLimitBehavior::Mirror;
@@ -82,7 +82,7 @@ struct MapSequenceAroundControlPoint {
     std::array<float, 3>  speed_max { 0.0f, 0.0f, 0.0f };
     SequenceLimitBehavior limit_behavior { SequenceLimitBehavior::Repeat };
 
-    static auto ReadFromJson(const Json& json) -> MapSequenceAroundControlPoint {
+    static auto ReadFromJson(const NJson& json) -> MapSequenceAroundControlPoint {
         MapSequenceAroundControlPoint value;
         owe::GetJsonValue(json, "controlpoint", value.controlpoint, false);
         owe::GetJsonValue(json, "count", value.count, false);
@@ -139,13 +139,13 @@ struct MapSequenceBetweenControlPoints {
     u32                   count { 2 };
     SequenceLimitBehavior limit_behavior { SequenceLimitBehavior::Repeat };
 
-    static auto ReadFromJson(const Json& json, u32 implicit_count)
+    static auto ReadFromJson(const NJson& json, u32 implicit_count)
         -> MapSequenceBetweenControlPoints {
         MapSequenceBetweenControlPoints value;
         value.count = rstd::cmp::max(implicit_count, u32(2));
         owe::GetJsonValue(json, "controlpointstart", value.controlpoint_start, false);
         owe::GetJsonValue(json, "controlpointend", value.controlpoint_end, false);
-        if (json.get("count"_str).is_some()) {
+        if (Find(json, "count") != nullptr) {
             owe::GetJsonValue(json, "count", value.count, false);
             value.count = rstd::cmp::max(value.count, u32(2));
         }
@@ -191,7 +191,7 @@ struct SingleRandom {
     float       min { 0.0f };
     float       max { 0.0f };
     float       exponent { 1.0f };
-    static void ReadFromJson(const Json& j, SingleRandom& r) {
+    static void ReadFromJson(const NJson& j, SingleRandom& r) {
         owe::GetJsonValue(j, "min", r.min, false);
         owe::GetJsonValue(j, "max", r.max, false);
         owe::GetJsonValue(j, "exponent", r.exponent, false);
@@ -202,7 +202,7 @@ struct VecRandom {
     std::array<float, 3> max { 0.0f, 0.0f, 0.0f };
     float                exponent { 1.0f };
 
-    static void ReadFromJson(const Json& j, VecRandom& r) {
+    static void ReadFromJson(const NJson& j, VecRandom& r) {
         owe::GetJsonValue(j, "min", r.min, false);
         owe::GetJsonValue(j, "max", r.max, false);
         owe::GetJsonValue(j, "exponent", r.exponent, false);
@@ -220,7 +220,7 @@ struct TurbulentRandom {
     std::array<float, 3> forward { 0.0f, 1.0f, 0.0f };
     std::array<float, 3> normal { 0.0f, 0.0f, 1.0f };
 
-    static void ReadFromJson(const Json& j, TurbulentRandom& r) {
+    static void ReadFromJson(const NJson& j, TurbulentRandom& r) {
         owe::GetJsonValue(j, "scale", r.scale, false);
         owe::GetJsonValue(j, "timescale", r.timescale, false);
         owe::GetJsonValue(j, "offset", r.offset, false);
@@ -480,10 +480,10 @@ void ParticleSpawnInstruction::Initialize(ParticleSpawnColumns&          columns
     }
 }
 
-ParticleSpawnInstruction ParticleParser::GenInitializer(const Json& wpj,
+ParticleSpawnInstruction ParticleParser::GenInitializer(const NJson& wpj,
                                                         u32         implicit_sequence_count) {
     do {
-        if (wpj.get("name"_str).is_none()) break;
+        if (Find(wpj, "name") == nullptr) break;
         std::string name;
         owe::GetJsonValue(wpj, "name", name);
 
@@ -594,7 +594,7 @@ struct ValueChange {
     float startvalue { 1.0f };
     float endvalue { 0.0f };
 
-    static auto ReadFromJson(const Json& j) {
+    static auto ReadFromJson(const NJson& j) {
         ValueChange v;
         owe::GetJsonValue(j, "starttime", v.starttime, false);
         owe::GetJsonValue(j, "endtime", v.endtime, false);
@@ -613,7 +613,7 @@ struct VecChange {
     std::array<float, 3> startvalue { 1.0f, 1.0f, 1.0f };
     std::array<float, 3> endvalue { 0.0f, 0.0f, 0.0f };
 
-    static auto ReadFromJson(const Json& j) {
+    static auto ReadFromJson(const NJson& j) {
         VecChange v;
         owe::GetJsonValue(j, "starttime", v.starttime, false);
         owe::GetJsonValue(j, "endtime", v.endtime, false);
@@ -633,7 +633,7 @@ struct FrequencyValue {
     float phasemin { 0.0f };
     float phasemax { kTau };
 
-    static auto ReadFromJson(const Json& j, std::string_view name) {
+    static auto ReadFromJson(const NJson& j, std::string_view name) {
         FrequencyValue v;
         if (name == "oscillatesize") {
             v.scalemin = 0.8f;
@@ -689,7 +689,7 @@ struct Turbulence {
 
     std::array<int32_t, 3> mask { 1, 1, 0 };
 
-    static auto ReadFromJson(const Json& j) {
+    static auto ReadFromJson(const NJson& j) {
         Turbulence v;
         owe::GetJsonValue(j, "phasemin", v.phasemin, false);
         owe::GetJsonValue(j, "phasemax", v.phasemax, false);
@@ -733,7 +733,7 @@ struct Vortex {
     float ringwidth {};
     float ringpulldistance {};
 
-    static auto ReadFromJson(const Json& j) {
+    static auto ReadFromJson(const NJson& j) {
         Vortex v;
         owe::GetJsonValue(j, "controlpoint", v.controlpoint, false);
         if (v.controlpoint >= i32(8)) rstd_error("wrong contropoint index {}", v.controlpoint);
@@ -795,7 +795,7 @@ struct ControlPointForce {
     // positional offset from the center of the control point.
     std::array<float, 3> origin { 0.0f, 0.0f, 0.0f };
 
-    static auto ReadFromJson(const Json& j) {
+    static auto ReadFromJson(const NJson& j) {
         ControlPointForce v;
         owe::GetJsonValue(j, "controlpoint", v.controlpoint, false);
         if (v.controlpoint >= i32(8)) rstd_error("wrong contropoint index {}", v.controlpoint);
@@ -846,7 +846,7 @@ struct MaintainDistance {
     i32   controlpoint {};
     float variable_strength { 5.0f };
 
-    static auto ReadFromJson(const Json& json) -> MaintainDistance {
+    static auto ReadFromJson(const NJson& json) -> MaintainDistance {
         MaintainDistance value;
         owe::GetJsonValue(json, "controlpoint", value.controlpoint, false);
         owe::GetJsonValue(json, "variablestrength", value.variable_strength, false);
@@ -1392,11 +1392,11 @@ struct NoopUpdateOperator {
 };
 
 Box<dyn<particle::ParticleUpdateProgram>>
-ParticleParser::GenOperator(const Json& wpj, ParticleInstanceModifiers modifiers,
+ParticleParser::GenOperator(const NJson& wpj, ParticleInstanceModifiers modifiers,
                             ParticleSubSystem& subsystem, usize operator_index) {
     auto attributes = subsystem.Attributes();
     do {
-        if (wpj.get("name"_str).is_none()) break;
+        if (Find(wpj, "name") == nullptr) break;
         std::string name;
         owe::GetJsonValue(wpj, "name", name);
         if (name == "movement") {

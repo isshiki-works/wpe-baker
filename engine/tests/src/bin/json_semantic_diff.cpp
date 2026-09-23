@@ -3,6 +3,7 @@
 // rstd 摘除时随 rstd.json 一起删。
 //   json-semantic-diff files <清单> <输出.tsv>   清单每行一个 UTF-8 路径
 //   json-semantic-diff floats <个数> <种子>       随机 double：写出与读回逐字节比较
+//   json-semantic-diff getvalue <清单> <输出.tsv> 新旧读取接口（GetJsonValue/查找/桥）逐节点差分
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -11,6 +12,8 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <typeinfo>
+#include <vector>
 
 #include "JsonNlohmann.hpp"
 
@@ -126,10 +129,150 @@ int Floats(long count, unsigned seed) {
     return written == 0 && parsed == 0 ? 0 : 1;
 }
 
+
+// T2-3b：新旧读取接口差分。同一文件分别解析成 rstd 值（ParseJson）与 nlohmann 值（ParseNJson），
+// 平行遍历全部节点；每个节点、每个对象成员都用 GetJsonValue 的全部实例类型各读一次，
+// 比较返回值与读出的值；另比对成员查找（get/Find）、FromRstd∘ToRstd 往返与写出字节。
+template<typename T>
+auto Show(const T& value) -> std::string {
+    std::ostringstream out;
+    if constexpr (requires { value.to_primitive(); }) {
+        out << +value.to_primitive();
+    } else if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(T));
+        out << bits;
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        out << value;
+    } else if constexpr (requires { value.begin(); }) {
+        out << '[';
+        for (const auto& item : value) out << Show(item) << ',';
+        out << ']';
+    } else {
+        out << +value;
+    }
+    return out.str();
+}
+
+struct ReadStats {
+    long nodes = 0, members = 0, reads = 0, mismatches = 0;
+};
+
+template<typename T>
+void CompareOne(const owe::Json& a, const owe::NJson& b, const char* key, ReadStats& stats,
+                std::ostream& out, const std::string& path) {
+    T    va {}, vb {};
+    bool ra = key ? owe::GetJsonValue(a, key, va, false) : owe::GetJsonValue(a, va);
+    bool rb = key ? owe::GetJsonValue(b, key, vb, false) : owe::GetJsonValue(b, vb);
+    ++stats.reads;
+    if (ra != rb || Show(va) != Show(vb)) {
+        ++stats.mismatches;
+        out << path << '\t' << (key ? key : "<self>") << '\t' << typeid(T).name() << '\t' << ra
+            << rb << '\t' << Show(va) << '\t' << Show(vb) << '\n';
+    }
+}
+
+void CompareAll(const owe::Json& a, const owe::NJson& b, const char* key, ReadStats& stats,
+                std::ostream& out, const std::string& path) {
+    CompareOne<bool>(a, b, key, stats, out, path);
+    CompareOne<i32>(a, b, key, stats, out, path);
+    CompareOne<u32>(a, b, key, stats, out, path);
+    CompareOne<rstd::int32_t>(a, b, key, stats, out, path);
+    CompareOne<rstd::uint32_t>(a, b, key, stats, out, path);
+    CompareOne<float>(a, b, key, stats, out, path);
+    CompareOne<double>(a, b, key, stats, out, path);
+    CompareOne<std::string>(a, b, key, stats, out, path);
+    CompareOne<std::vector<float>>(a, b, key, stats, out, path);
+    CompareOne<std::vector<std::int32_t>>(a, b, key, stats, out, path);
+    CompareOne<std::vector<i32>>(a, b, key, stats, out, path);
+    CompareOne<std::vector<u32>>(a, b, key, stats, out, path);
+    CompareOne<Vec<float>>(a, b, key, stats, out, path);
+    CompareOne<Vec<std::int32_t>>(a, b, key, stats, out, path);
+    CompareOne<Vec<i32>>(a, b, key, stats, out, path);
+    CompareOne<Vec<u32>>(a, b, key, stats, out, path);
+    CompareOne<std::array<int, 3>>(a, b, key, stats, out, path);
+    CompareOne<std::array<i32, 3>>(a, b, key, stats, out, path);
+    CompareOne<std::array<float, 2>>(a, b, key, stats, out, path);
+    CompareOne<std::array<float, 3>>(a, b, key, stats, out, path);
+    CompareOne<rstd::array<int, 3>>(a, b, key, stats, out, path);
+    CompareOne<rstd::array<float, 2>>(a, b, key, stats, out, path);
+    CompareOne<rstd::array<float, 3>>(a, b, key, stats, out, path);
+}
+
+void Walk(const owe::Json& a, const owe::NJson& b, ReadStats& stats, std::ostream& out,
+          const std::string& path) {
+    ++stats.nodes;
+    CompareAll(a, b, nullptr, stats, out, path);
+    if (b.is_object()) {
+        for (const auto& [key, item] : b.items()) {
+            ++stats.members;
+            auto ra = a.get(rstd::cppstd::as_str(key).unwrap());
+            if (ra.is_none() || owe::Find(b, key) != &item) {
+                ++stats.mismatches;
+                out << path << '\t' << key << "\tlookup\n";
+                continue;
+            }
+            CompareAll(a, b, key.c_str(), stats, out, path);
+            Walk(**ra, item, stats, out, path + "/" + key);
+        }
+        // 缺键：两边都要读失败
+        CompareAll(a, b, "__t2_missing__", stats, out, path);
+    } else if (b.is_array()) {
+        auto ra = a.as_array();
+        if (ra.is_none() || (*ra)->len().to_primitive() != b.size()) {
+            ++stats.mismatches;
+            out << path << "\t\tarray\n";
+            return;
+        }
+        for (std::size_t i = 0; i < b.size(); ++i)
+            Walk((**ra)[usize(i)], b[i], stats, out, path + "/" + std::to_string(i));
+    }
+}
+
+int GetValue(const char* list_path, const char* out_path) {
+    std::ifstream list(list_path, std::ios::binary);
+    std::ofstream out(out_path, std::ios::binary);
+    std::string   path;
+    ReadStats     stats;
+    long          files = 0, parsed = 0, other = 0;
+    while (std::getline(list, path)) {
+        if (! path.empty() && path.back() == '\r') path.pop_back();
+        if (path.empty()) continue;
+        std::ifstream      input(std::filesystem::u8path(path), std::ios::binary);
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        const auto text = buffer.str();
+        ++files;
+        if (rstd::cppstd::as_str(text).is_err()) continue;
+        const owe::JsonParseOptions options { .allow_trailing_commas = true };
+        auto a = owe::ParseJson(text, options);
+        auto b = owe::ParseNJson(text, options);
+        if (a.is_ok() != b.is_ok()) {
+            ++other;
+            out << path << "\t\tparse_ok_differs\n";
+            continue;
+        }
+        if (a.is_err()) continue;
+        ++parsed;
+        const auto& ra = *a;
+        const auto& nb = *b;
+        if (owe::Dump(ra) != owe::Dump(nb) || owe::Dump(ra, usize(4)) != owe::Dump(nb, usize(4)) ||
+            owe::FromRstd(owe::ToRstd(nb)) != nb || owe::Dump(owe::FromRstd(ra)) != owe::Dump(ra)) {
+            ++other;
+            out << path << "\t\tdump_or_bridge_differs\n";
+        }
+        Walk(ra, nb, stats, out, path);
+    }
+    std::printf("getvalue files=%ld parsed=%ld nodes=%ld members=%ld reads=%ld mismatches=%ld other=%ld\n",
+                files, parsed, stats.nodes, stats.members, stats.reads, stats.mismatches, other);
+    return stats.mismatches == 0 && other == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc == 4 && std::string_view(argv[1]) == "files") return Files(argv[2], argv[3]);
+    if (argc == 4 && std::string_view(argv[1]) == "getvalue") return GetValue(argv[2], argv[3]);
     if (argc == 4 && std::string_view(argv[1]) == "floats") return Floats(std::atol(argv[2]), unsigned(std::atol(argv[3])));
     std::fprintf(stderr, "usage: json-semantic-diff files <list> <out.tsv> | floats <count> <seed>\n");
     return 2;

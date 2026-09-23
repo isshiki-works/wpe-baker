@@ -1,5 +1,7 @@
 module;
 
+#include "JsonNlohmann.hpp"
+
 #include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
@@ -26,8 +28,8 @@ namespace
 using shader_lex::Cursor;
 using shader_lex::LineWalker;
 
-bool TryParseAnnotationJson(std::string_view source, Json& result) {
-    auto parsed = ParseJson(source);
+bool TryParseAnnotationJson(std::string_view source, NJson& result) {
+    auto parsed = ParseNJson(source);
     if (parsed.is_err()) return false;
     result = parsed.unwrap();
     return true;
@@ -97,7 +99,7 @@ Option<std::string> NormalizeAnnotationNumbers(std::string_view source) {
     return Some(rstd::move(out));
 }
 
-bool ParseAnnotationJson(std::string_view source, Json& result) {
+bool ParseAnnotationJson(std::string_view source, NJson& result) {
     if (TryParseAnnotationJson(source, result)) return true;
     auto normalized = NormalizeAnnotationNumbers(source);
     return normalized && TryParseAnnotationJson(*normalized, result);
@@ -106,9 +108,9 @@ bool ParseAnnotationJson(std::string_view source, Json& result) {
 void HandleComboLine(ShaderInfo* info, std::string_view line) {
     auto brace = line.find('{');
     if (brace == std::string_view::npos) return;
-    Json j;
+    NJson j;
     if (! ParseAnnotationJson(line.substr(brace), j)) return;
-    if (j.get("combo"_str).is_none()) return;
+    if (Find(j, "combo") == nullptr) return;
     wpscene::Combo combo;
     combo.FromJson(j);
     if (combo.combo.is_empty()) return;
@@ -147,7 +149,7 @@ void HandleUniformLine(ShaderInfo* info, std::span<const ShaderTexInfo> texinfos
     if (! c.MatchPunct("//"_str)) return;
     while (! c.Eof() && c.Peek() != '{') c.Advance();
     if (c.Eof()) return;
-    Json sv_json;
+    NJson sv_json;
     if (! ParseAnnotationJson(line.substr(c.Pos().to_primitive()), sv_json)) return;
 
     auto name = rstd::cppstd::as_string_view(tn->name);
@@ -194,19 +196,19 @@ void HandleUniformLine(ShaderInfo* info, std::span<const ShaderTexInfo> texinfos
     } else {
         wpscene::UniformVar var;
         var.FromJson(sv_json, String::make(tn->name));
-        if (auto value = sv_json.get("default"_str); value.is_some()) {
+        if (auto value = Find(sv_json, "default"); value != nullptr) {
             ShaderValue sv;
-            if ((*value)->is_string()) {
+            if (value->is_string()) {
                 std::vector<float> values;
-                GetJsonValue(**value, values);
+                GetJsonValue(*value, values);
                 sv = std::span<const float>(values);
-            } else if ((*value)->is_number()) {
+            } else if (value->is_number()) {
                 sv.setSize(usize(1));
-                GetJsonValue(**value, sv[usize()]);
+                GetJsonValue(*value, sv[usize()]);
             }
             info->svs[std::string(name)] = sv;
         }
-        if (auto combo = sv_json.get("combo"_str); combo.is_some()) {
+        if (Find(sv_json, "combo") != nullptr) {
             std::string cname;
             GetJsonValue(sv_json, "combo", cname);
             if (! cname.empty()) info->combos[cname] = "1";
