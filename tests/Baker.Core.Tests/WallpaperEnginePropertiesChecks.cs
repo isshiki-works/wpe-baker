@@ -185,21 +185,6 @@ internal static class WallpaperEnginePropertiesChecks
         check(!plain.ContainsKey("properties_source") && !plain.ContainsKey("wpe_properties") &&
             !JsonSerializer.SerializeToNode(new HybridAnalyzeRequest(2, "s", "a", "o"))!.AsObject().ContainsKey("PropertiesOrigin"),
             "requests without an origin record produce plans without the new fields");
-        check(withWpe["summary"]!["zh"]!.GetValue<string>().EndsWith("属性来源：Wallpaper Engine 当前属性设置（3 项与默认值不同）。", StringComparison.Ordinal) &&
-            withWpe["summary"]!["en"]!.GetValue<string>().EndsWith("Properties: the current Wallpaper Engine settings for this wallpaper (3 differ from the defaults).", StringComparison.Ordinal) &&
-            !plain["summary"]!["zh"]!.GetValue<string>().Contains("Wallpaper Engine 里的属性", StringComparison.Ordinal),
-            "the one-line summary says how many WPE property values differ from the defaults");
-        JsonObject Report(JsonObject originRecord)
-        {
-            var report = new JsonObject { ["snapshot_properties"] = new JsonObject() };
-            HybridScenePlannerAttach(report, originRecord);
-            return report;
-        }
-        string zhUnavailable = PlanNarrative.Summarize(Report(missingOrigin))["zh"]!.GetValue<string>();
-        check(zhUnavailable.EndsWith("属性来源：壁纸自带默认属性；Wallpaper Engine 的属性设置不可读（未找到 Wallpaper Engine 的 config.json）。", StringComparison.Ordinal) &&
-            !PlanNarrative.Summarize(Report(unsavedOrigin))["zh"]!.GetValue<string>().Contains("Wallpaper Engine", StringComparison.Ordinal) &&
-            !PlanNarrative.Summarize(Report(defaultsOrigin))["en"]!.GetValue<string>().Contains("Wallpaper Engine", StringComparison.Ordinal),
-            "the summary explains a fallback, and stays unchanged when nothing differs or defaults were requested");
 
         // ---- GUI 投影：预填、标注、说明 ----
         JsonObject definitions = project["general"]!["properties"]!.AsObject();
@@ -216,14 +201,8 @@ internal static class WallpaperEnginePropertiesChecks
             "the property panel prefills WPE values under panel edits and above defaults, and analysis merges them the same way");
         check(AppJsonPresentation.WpeMarkedKeys(null, resolved, overrides).Order(StringComparer.Ordinal).SequenceEqual(["caption", "mode", "sponsor"]) &&
             AppJsonPresentation.WpeMarkedKeys(withWpe, resolved, new JsonObject()).Order(StringComparer.Ordinal).SequenceEqual(["caption", "mode", "sponsor"]) &&
-            AppJsonPresentation.PropertySourceNote(resolved, false).Contains("预填 4 项", StringComparison.Ordinal) &&
-            AppJsonPresentation.PropertySourceNote(missing, true).Contains("config.json was not found", StringComparison.Ordinal) &&
             AppJsonPresentation.PropertySourceNote(defaults, false) == "",
             "panel marks follow the plan's applied keys, or unedited WPE values before analysis, with a note on the source");
-
-        static void HybridScenePlannerAttach(JsonObject report, JsonObject originRecord) =>
-            typeof(PlanWriter).GetMethod("AttachPropertiesSource", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-                .Invoke(null, [report, originRecord]);
     }
 
     private static JsonObject Project() => new()

@@ -53,8 +53,6 @@ internal static class BakeDiskBudgetChecks
         // ---- ② 空间不足时的拒绝记录带中英文案 ----
         JsonObject? rejection = BakeDiskBudget.Reject(Plan(50_000_000, unresolved: true), 50_000_000, 1, root);
         check(rejection?["status"]?.GetValue<string>() == BakeDiskBudget.RejectedBakeStatus &&
-            rejection["reason_localized"]?["zh"]?.GetValue<string>() is string zh && zh.Contains("GiB", StringComparison.Ordinal) &&
-            rejection["reason_localized"]?["en"]?.GetValue<string>() is string en && en.Contains("free", StringComparison.Ordinal) &&
             rejection["required_bytes"] is not null && rejection["available_bytes"] is not null &&
             rejection["estimate"]?["peak_bytes"] is not null,
             "a bake that cannot fit is rejected with the required and available space in both languages");

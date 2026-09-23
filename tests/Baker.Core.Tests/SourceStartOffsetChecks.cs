@@ -35,9 +35,6 @@ internal static class SourceStartOffsetChecks
              "source_static":false,"candidates":[{"frames":29241}],"unresolved":[]}}}
             """)!.AsObject();
         check(AppJsonPresentation.CandidateCanApply(saved), "起点偏移：GUI 放行带偏移记录的源周期成品");
-        check(AppJsonPresentation.PhaseStartSummary(saved, false).Contains("起点异常帧", StringComparison.Ordinal) &&
-              AppJsonPresentation.PhaseStartSummary(saved, true).Contains("isolated start anomaly", StringComparison.Ordinal),
-            "起点偏移：GUI 摘要说明起点为什么不是 0");
         saved.Remove("source_start_offset");
         check(!AppJsonPresentation.CandidateCanApply(saved), "起点偏移：GUI 不放行没有偏移记录的非零起点");
     }

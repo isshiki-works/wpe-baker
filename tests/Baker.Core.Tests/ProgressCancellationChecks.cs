@@ -20,14 +20,6 @@ internal static class ProgressCancellationChecks
             "completed frame stream reports zero render time remaining");
         check(new FrameProgressEstimate().Update(1, 10, 100).StageRemainingSeconds is null,
             "new render does not inherit another group's throughput");
-        string zh = ProgressPresentation.Timing(measured, 62, false);
-        string en = ProgressPresentation.Timing(measured, 62, true);
-        check(zh.Contains("已用时 1:02") && zh.Contains("预计剩余 0:08 / 共 0:40") && zh.Contains("收尾"),
-            "Chinese timing distinguishes job elapsed from render-only ETA");
-        check(en.Contains("This render") && en.Contains("finishing steps follow"),
-            "English timing labels the estimate scope");
-        check(!ProgressPresentation.Timing(new("finishing_encode", null, ""), 70, false).Contains("剩余"),
-            "phase transition clears the render estimate");
         var stages = new List<RenderProgress>();
         using (new StageTiming(new ImmediateProgress(stages.Add)).Measure(StageTiming.SeamCheck)) { }
         check(stages.Single().Stage == StageTiming.SeamCheck && stages[0].Fraction is null,

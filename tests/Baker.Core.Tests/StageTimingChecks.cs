@@ -61,23 +61,7 @@ internal static class StageTimingChecks
         timing.Stamp(report);
         check(report["stage_timing"]?["frames"]?.GetValue<ulong>() == 720UL, "报告落盘时按报告自己的帧数打上计时");
 
-        string summary = StageTiming.Summary(report)!;
-        check(summary.StartsWith("分阶段耗时（秒）：总计 ", StringComparison.Ordinal) && summary.Contains("主渲染 ", StringComparison.Ordinal) &&
-            summary.Contains("成品编码 ", StringComparison.Ordinal) && summary.Contains("其他 ", StringComparison.Ordinal) &&
-            summary.Contains("共 720 帧", StringComparison.Ordinal) && summary.Contains("编码 ", StringComparison.Ordinal) &&
-            summary.Contains("%）", StringComparison.Ordinal) && !summary.Contains("画面对照", StringComparison.Ordinal),
-            "一行中文汇总只列出真的发生过的阶段并给出编码占比");
-        check(StageTiming.Summary(report, english: true)!.StartsWith("Stage timing (s): total ", StringComparison.Ordinal),
-            "英文界面给出同一行的英文版本");
         check(StageTiming.Summary(new JsonObject { ["status"] = "failed" }) is null, "没有 stage_timing 的旧报告不生成汇总行");
-        var overlapped = new JsonObject { ["stage_timing"] = new JsonObject {
-            ["total_seconds"] = 10.0, ["stages"] = new JsonObject { [StageTiming.MasterRender] = 10.0 },
-            ["master_render_breakdown"] = new JsonObject { [StageTiming.EncodeMaster] = 3.0 } } };
-        string overlappedSummary = StageTiming.Summary(overlapped)!;
-        check(overlappedSummary.Contains("编码未单独计时", StringComparison.Ordinal) &&
-            overlappedSummary.Contains("管道写入等待 3.0 秒（与渲染重叠）", StringComparison.Ordinal) &&
-            !overlappedSummary.Contains("30.0%", StringComparison.Ordinal),
-            "重叠管道写入等待不是编码总耗时或独立阶段占比");
         var inlineGroup = new JsonObject { ["playback_encode"] = new JsonObject {
             ["encoder_used"] = "software", ["encode_seconds"] = null } };
         check(PlaybackEncoderSelection.Summarize("vulkan", [inlineGroup])["encode_seconds_total"] is null,

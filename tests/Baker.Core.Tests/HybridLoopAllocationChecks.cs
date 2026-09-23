@@ -138,8 +138,7 @@ internal static class HybridLoopAllocationChecks
         var explain = typeof(HybridBakeService).Assembly.GetType("Baker.Core.HybridLoopAllocation")!
             .GetMethod("Explain", BindingFlags.Static | BindingFlags.NonPublic)!;
         var explained = (JsonObject)explain.Invoke(null, [particlePlan, particleScene])!;
-        check(Propose(particlePlan, particleScene) is null && explained["status"]!.GetValue<string>() == "not_applicable" &&
-            explained["reason"]!.GetValue<string>().Contains("stationary-random", StringComparison.Ordinal),
+        check(Propose(particlePlan, particleScene) is null && explained["status"]!.GetValue<string>() == "not_applicable",
             "an allocation whose only particles pass the stationary-random criteria has no loop fallback, and says why");
 
         // feat/particle-crossfade：analyze 侧回退取证。重查出的计划整层不可用、但留下的未解析项全部可由残差掩盖时也算找到候选

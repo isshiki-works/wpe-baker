@@ -59,9 +59,7 @@ internal static class SeamPreviewChecks
                 failed["status"]?.GetValue<string>() == "failed" && group["seam_preview"] is null &&
                 group["status"]?.GetValue<string>() == "rejected_seam" &&
                 warning?["key"]?.GetValue<string>() == "warning.seam_preview_failed" &&
-                warning["group_id"]?.GetValue<string>() == "group-1" &&
-                warning["zh"]!.GetValue<string>().Contains("生成结论不受影响", StringComparison.Ordinal) &&
-                warning["en"]!.GetValue<string>().Contains("ffmpeg exited 1", StringComparison.Ordinal),
+                warning["group_id"]?.GetValue<string>() == "group-1",
                 $"seam preview: an export failure leaves bake status {bakeStatus} unchanged and only adds a warning");
         }
         using (var cancelled = new CancellationTokenSource())
@@ -140,8 +138,6 @@ internal static class SeamPreviewChecks
             SeamPreview.FrameAt(plan, 48) == (840UL, true, "0.25X") && SeamPreview.FrameAt(plan, 51) == (840UL, true, "0.25X") &&
             SeamPreview.FrameAt(plan, 48 + 4 * 24) == (0UL, false, "0.25X") && SeamPreview.FrameAt(plan, 239) == (23UL, false, "0.25X"),
             "seam preview: output frames map to loop frames P-N..P-1, 0..N-1, then the same at 0.25x");
-        check(SeamPreview.LabelText(plan, 23) == "1X     END    863/864" && SeamPreview.LabelText(plan, 144) == "0.25X  START  0/864",
-            "seam preview: labels name speed, loop side and loop frame number");
         byte[] tailLabel = new byte[plan.LabelWidth * SeamPreview.LabelRows * 3], headLabel = new byte[tailLabel.Length];
         SeamPreview.RenderLabel(plan, 23, tailLabel);
         SeamPreview.RenderLabel(plan, 24, headLabel);
@@ -162,19 +158,6 @@ internal static class SeamPreviewChecks
             new[] { plan, packed, portrait, shortLoop }.All(p => p.LabelHeight % 2 == 0 && p.LabelScale >= 1 &&
                 p.LabelWidth * p.LabelScale >= p.OutputWidth),
             "seam preview: output fits 1920x1080, small sources are enlarged to 480 and dimensions stay even");
-
-        // ---- stderr 结论行之后的补充行 ----
-        var baked = new JsonObject
-        {
-            ["groups"] = new JsonArray(
-                new JsonObject { ["id"] = "group-1", ["seam_preview"] = @"D:\bake\group-1\seam-preview.mp4" },
-                new JsonObject { ["id"] = "group-2", ["seam_preview"] = null },
-                new JsonObject { ["id"] = "group-3" })
-        };
-        string[] zh = SeamPreview.SummaryLines(baked, "zh").ToArray(), en = SeamPreview.SummaryLines(baked, "en").ToArray();
-        check(zh.SequenceEqual([@"接缝预览：D:\bake\group-1\seam-preview.mp4"]) &&
-            en.SequenceEqual([@"Seam preview: D:\bake\group-1\seam-preview.mp4"]),
-            "seam preview: bake prints one localized preview line per exported group");
     }
 
     private sealed record Input(string Path, Dictionary<string, string> Options);

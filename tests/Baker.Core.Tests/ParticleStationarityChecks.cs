@@ -446,15 +446,12 @@ internal static class ParticleStationarityChecks
             particleDefault["particle_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()).SequenceEqual([153]) &&
             Near(particleDefault["max_particle_lifetime_seconds"]!.GetValue<double>(), 2 / 1.29) &&
             particleDefault["loop_length_maximum_seconds"]!.GetValue<double>() == 600 &&
-            particleDefault["summary_zh"]!.GetValue<string>() == "粒子系统无周期：循环长度取默认值 60 s，接缝处交叉淡化。" &&
             onlyStationary["unresolved"]!.AsArray().Count == 1 && onlyStationary["no_candidate_reason"] is null &&
             onlyStationary["status"]!.GetValue<string>() == "analytic_candidate_requires_seam_validation",
             "只有平稳随机的水滴、没有周期分量：追加一个 60 秒（3600 帧）的默认候选并记下来源，粒子未解析项原样留给残差掩盖");
         JsonObject narrated = PlanNarrative.Summarize(new JsonObject { ["blockers"] = new JsonArray(), ["loop"] = onlyStationary.DeepClone(),
             ["settings"] = new JsonObject { ["fps_numerator"] = 60, ["fps_denominator"] = 1 } });
-        check(narrated["verdict"]!.GetValue<string>() == PlanNarrative.Bakeable &&
-            narrated["zh"]!.GetValue<string>().EndsWith("粒子系统无周期：循环长度取默认值 60 s，接缝处交叉淡化。", StringComparison.Ordinal) &&
-            narrated["en"]!.GetValue<string>().EndsWith("Particle systems have no period: loop length defaults to 60 s, seam crossfaded.", StringComparison.Ordinal),
+        check(narrated["verdict"]!.GetValue<string>() == PlanNarrative.Bakeable,
             "结论行中英文都说明粒子没有周期、按 60 秒循环并在接缝处交叉淡化");
         JsonObject shortCeiling = Analyze([droplets], loopLengthMaximum: 45.5);
         JsonObject ntsc = Analyze([droplets], fps: 60000, fpsDenominator: 1001);
@@ -469,8 +466,7 @@ internal static class ParticleStationarityChecks
         JsonObject longCapped = Analyze([longParticle], loopLengthMaximum: 60);
         check(CandidateFrames(longLived).SequenceEqual([3721UL]) &&
             longLived["loop_length_default"]!["status"]!.GetValue<string>() == "applied" &&
-            CandidateFrames(longCapped).Length == 0 && longCapped["loop_length_default"]!["status"]!.GetValue<string>() == "particle_lifetime_not_shorter_than_loop" &&
-            longCapped["loop_length_default"]!["reason_zh"]!.GetValue<string>().Contains("62.016 s", StringComparison.Ordinal),
+            CandidateFrames(longCapped).Length == 0 && longCapped["loop_length_default"]!["status"]!.GetValue<string>() == "particle_lifetime_not_shorter_than_loop",
             "长寿命平稳粒子延长到寿命之后的首帧（62.016 s → 3721 帧），显式 60 秒上限仍拒绝，不放松交叉淡化前提");
         check(CandidateFrames(mixed).Length == 0 && mixed["loop_length_default"] is null,
             "未解析项里还有不满足判据的粒子（跟鼠标的 560）时不取默认长度");

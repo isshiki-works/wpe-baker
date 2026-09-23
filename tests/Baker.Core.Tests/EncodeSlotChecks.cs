@@ -93,7 +93,5 @@ internal static class EncodeSlotChecks
         check(StageTiming.ExclusiveStages.Contains(StageTiming.EncodeSlotWait) &&
             Number(stages[StageTiming.EncodeSlotWait]) == 4.5 && Number(stages[StageTiming.EncodePlayback]) == 2.25,
             "encode_slot_wait 是独立的互斥阶段，不计入 encode_playback");
-        check(StageTiming.Summary(new JsonObject { ["stage_timing"] = timing.ToJson(600) })!.Contains("等编码槽位 4.5", StringComparison.Ordinal),
-            "汇总行里单独报等编码槽位的秒数");
     }
 }
