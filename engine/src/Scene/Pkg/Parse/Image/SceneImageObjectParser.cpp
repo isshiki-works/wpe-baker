@@ -1,5 +1,10 @@
 module;
 
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <functional>
+#include <optional>
 #include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
@@ -50,6 +55,262 @@ array<float, 2> ImageEffectTargetSize(const SceneParseContext&    context,
         return { static_cast<float>((**camera).Width()), static_cast<float>((**camera).Height()) };
     }
     return { obj.size[0], obj.size[1] };
+}
+
+// ---------- M2 遮罩支撑区（证明与方案见 runs/M2/design.json） ----------
+// 白名单（内置效果）：按规范化源码哈希钉住（vert+frag+直接 #include 的头文件，去注释与空白差异，
+// 见 m2::NormalizedSourceHash）。工坊包里规范化后逐字相同的副本按内容继承资格，不看文件名。
+// 注解里的默认值不参与比对：参数前提一律按实际载入的着色器信息取有效值核对。
+enum class M2Kind { Waterwaves, Twirl, Iris };
+struct M2WhitelistEntry {
+    std::string_view name;
+    std::uint64_t    normalized_hash;
+    std::size_t      mask_slot;
+    M2Kind           kind;
+};
+constexpr M2WhitelistEntry kM2Whitelist[] = {
+    { "effects/waterwaves", 0x835d51ef1c25c7e2ull, 1, M2Kind::Waterwaves },
+    { "effects/twirl", 0x2bc421417779cf60ull, 1, M2Kind::Twirl },
+    { "effects/iris", 0xb41c16b9a239c04dull, 1, M2Kind::Iris },
+};
+
+bool M2Enabled() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("WPE_M2");
+        return ! (env != nullptr && std::string_view(env) == "0");
+    }();
+    return enabled;
+}
+
+bool M2ComboIs(const ShaderInfo& info, const char* name, std::string_view value) {
+    auto it = info.combos.find(name);
+    return it != info.combos.end() && it->second == value;
+}
+
+// uniform 的有效静态值："名字" 或 "名字.分量"。材质常量（经 alias 反查 material 键）优先，
+// 否则取着色器注解默认值；有动画/脚本/用户属性绑定、u_* 直连用户属性、或查不到 → 空。
+Option<std::vector<float>> M2StaticUniform(const wpscene::Material& wpmat, const ShaderInfo& info,
+                                           const std::string& ref) {
+    const auto        dot  = ref.find('.');
+    const std::string name = ref.substr(0, dot);
+    if (name.rfind("u_", 0) == 0) return None();
+    std::vector<float> value;
+    bool               found = false;
+    if (auto sv = info.svs.find(name); sv != info.svs.end()) {
+        const float* data = sv->second.data();
+        value.assign(data, data + sv->second.size().to_primitive());
+        found = true;
+    }
+    for (const auto& [key, glname] : info.alias) {
+        if (glname != name) continue;
+        if (wpmat.constantshadervalues_bindings.Get(rstd::cppstd::as_str(key).unwrap()).is_some())
+            return None();
+        for (const auto& [prop, target] : wpmat.user_shader_values) {
+            if (target == key) return None();
+        }
+        auto it = wpmat.constantshadervalues.find(key);
+        if (it != wpmat.constantshadervalues.end() && ! it->second.empty()) {
+            value.assign(it->second.begin(), it->second.end());
+            found = true;
+        }
+    }
+    if (! found || value.empty()) return None();
+    for (float v : value)
+        if (! std::isfinite(v)) return None();
+    if (dot == std::string::npos) return Some(rstd::move(value));
+    const std::string swz = ref.substr(dot + 1);
+    if (swz.size() != 1) return None();
+    const std::string_view comps[] = { "xr", "yg", "zb", "wa" };
+    for (std::size_t i = 0; i < 4; i++) {
+        if (comps[i].find(swz[0]) != std::string_view::npos) {
+            if (i >= value.size()) return None();
+            return Some(std::vector<float> { value[i] });
+        }
+    }
+    return None();
+}
+
+bool M2UniformPositive(const wpscene::Material& wpmat, const ShaderInfo& info, const std::string& ref) {
+    auto v = M2StaticUniform(wpmat, info, ref);
+    if (v.is_none()) return false;
+    for (float x : *v)
+        if (! (x > 0.0f)) return false;
+    return true;
+}
+
+// 结构识别给出的数值前提逐条核对；不过返回原因。
+Option<std::string> M2CheckGuards(const wpscene::Material& wpmat, const ShaderInfo& info,
+                                  const m2::Guards& guards) {
+    for (const auto& ref : guards.positive)
+        if (! M2UniformPositive(wpmat, info, ref)) return Some("pow 指数 " + ref + " 不是静态正数");
+    for (const auto& ref : guards.nonzero) {
+        auto v = M2StaticUniform(wpmat, info, ref);
+        if (v.is_none()) return Some("除数 " + ref + " 不是静态值");
+        for (float x : *v)
+            if (x == 0.0f) return Some("除数 " + ref + " 为 0");
+    }
+    for (const auto& [a, b] : guards.distinct) {
+        auto value = [&](const std::string& ref) -> Option<std::vector<float>> {
+            if (m2::IsNumber(ref)) {
+                auto n = m2::NumberValue(ref);
+                if (! n) return None();
+                return Some(std::vector<float> { float(*n) });
+            }
+            return M2StaticUniform(wpmat, info, ref);
+        };
+        auto va = value(a);
+        auto vb = value(b);
+        if (va.is_none() || vb.is_none() || va->size() != vb->size())
+            return Some("smoothstep 端点 " + a + "/" + b + " 不是静态值");
+        for (std::size_t i = 0; i < va->size(); i++)
+            if ((*va)[i] == (*vb)[i]) return Some("smoothstep 端点 " + a + "/" + b + " 相等");
+    }
+    return None();
+}
+
+std::int64_t M2FloorDiv(std::int64_t a, std::int64_t b) {
+    return a >= 0 ? a / b : -((-a + b - 1) / b);
+}
+
+// 资格判定 + 从遮罩纹理算支撑区格子；任一条件不满足返回空（该 pass 全画）。
+// 资格两条路：规范化源码与白名单内置效果相同（继承该效果的前提），或结构识别（m2::Recognize）。
+std::shared_ptr<const EffectMaskSupport> BuildEffectMaskSupport(fs::VFS& vfs, Scene& scene,
+                                                                const wpscene::Material& wpmat,
+                                                                const ShaderInfo&        info,
+                                                                std::string              label) {
+    if (! M2Enabled()) return nullptr;
+    if (! M2ComboIs(info, "MASK", "1")) return nullptr;
+    auto reject = [&](std::string_view why) -> std::shared_ptr<const EffectMaskSupport> {
+        rstd_info("m2: {} 全画：{}", label, why);
+        return nullptr;
+    };
+    const std::string base = "/assets/shaders/" + wpmat.shader;
+    auto              vert = fs::ReadFileContent(vfs, base + ".vert");
+    auto              frag = fs::ReadFileContent(vfs, base + ".frag");
+    if (vert.is_err() || frag.is_err()) return reject("读不到着色器源码");
+    const std::string vert_src = rstd::move(vert).unwrap_unchecked();
+    const std::string frag_src = rstd::move(frag).unwrap_unchecked();
+    auto              hash     = m2::NormalizedSourceHash(
+        vert_src, frag_src, [&](const std::string& inc) -> std::optional<std::string> {
+            auto loaded = fs::ReadFileContent(vfs, "/assets/shaders/" + inc);
+            if (loaded.is_err()) return std::nullopt;
+            return std::string(rstd::move(loaded).unwrap_unchecked());
+        });
+    const M2WhitelistEntry* entry = nullptr;
+    for (const auto& e : kM2Whitelist) {
+        if (hash && *hash == e.normalized_hash) entry = &e;
+    }
+    std::size_t slot = 0;
+    std::string how;
+    if (entry != nullptr) {
+        if (entry->kind == M2Kind::Waterwaves) {
+            if (! M2UniformPositive(wpmat, info, "g_Exponent")) return reject("exponent 前提不成立");
+            if (M2ComboIs(info, "DUALWAVES", "1") && ! M2UniformPositive(wpmat, info, "g_Exponent2"))
+                return reject("exponent2 前提不成立");
+        } else if (entry->kind == M2Kind::Iris) {
+            auto bg = info.combos.find("BACKGROUND");
+            if (bg != info.combos.end() && bg->second != "0") return reject("BACKGROUND combo 开启");
+            if (! M2UniformPositive(wpmat, info, "g_Rough")) return reject("rough 前提不成立");
+        }
+        slot = entry->mask_slot;
+        how  = "内容同 " + std::string(entry->name);
+    } else {
+        m2::ComboLookup combo = [&](const std::string& name) -> std::optional<long> {
+            auto it = info.combos.find(name);
+            if (it == info.combos.end()) return std::nullopt;
+            char* end = nullptr;
+            long  v   = std::strtol(it->second.c_str(), &end, 10);
+            if (end == nullptr || *end != '\0') return 0x7fffffffL; // 非整数：当作非 0
+            return v;
+        };
+        auto av = m2::ActiveTokens(m2::Tokenize(vert_src), combo);
+        auto af = m2::ActiveTokens(m2::Tokenize(frag_src), combo);
+        if (! av || ! af) return reject("预处理条件不认识");
+        auto rec = m2::Recognize(*av, *af);
+        if (! rec.ok) return reject("结构不识别：" + rec.reason);
+        if (auto why = M2CheckGuards(wpmat, info, rec.guards); why.is_some()) return reject(*why);
+        slot = rec.mask_slot;
+        how  = rec.form == m2::Form::Warp ? "结构 warp" : "结构 mix";
+    }
+    if (slot >= wpmat.textures.size() || wpmat.textures[slot].empty()) return reject("没有遮罩纹理");
+    const std::string& mask_name = wpmat.textures[slot];
+    if (IsSpecTex(as_str(mask_name).unwrap())) return reject("遮罩是渲染目标");
+    if (wpmat.usertextures.size() > slot && ! wpmat.usertextures[slot].is_null())
+        return reject("遮罩槽有 usertexture 绑定");
+    auto parsed = scene.ParseImage(as_str(mask_name).unwrap());
+    if (parsed.is_err()) return reject("遮罩读不到");
+    auto        image  = rstd::move(parsed).unwrap_unchecked();
+    const auto& header = (*image).header;
+    if (header.isSprite || header.count > 1 || (*image).slots.size() != 1 || ! (*image).slots[0])
+        return reject("遮罩是 sprite/多帧");
+    std::int64_t bpp = 0;
+    switch (header.format) {
+    case TextureFormat::R8: bpp = 1; break;
+    case TextureFormat::RG8: bpp = 2; break;
+    case TextureFormat::RGB8: bpp = 3; break;
+    case TextureFormat::RGBA8: bpp = 4; break;
+    default: return reject("遮罩是压缩格式");
+    }
+    // 与 SceneMaterialBuilder 填 g_TextureNResolution 的规则一致。
+    const float res_x = header.mipmap_larger ? float(header.width) : float(header.mapWidth);
+    const float res_y = header.mipmap_larger ? float(header.height) : float(header.mapHeight);
+    const float scale_x = res_x > 0.0f ? float(header.mapWidth) / res_x : 0.0f;
+    const float scale_y = res_y > 0.0f ? float(header.mapHeight) / res_y : 0.0f;
+    if (! (scale_x > 0.0f && scale_x <= 1.0f && scale_y > 0.0f && scale_y <= 1.0f))
+        return reject("遮罩 UV 缩放超出 (0,1]");
+
+    const auto&        mips = (*image).slots[0].mipmaps;
+    const std::int64_t w0   = mips[0].width;
+    const std::int64_t h0   = mips[0].height;
+    constexpr std::int64_t kCell = 8;
+    if (w0 <= 0 || h0 <= 0) return reject("遮罩尺寸为 0");
+    auto support          = std::make_shared<EffectMaskSupport>();
+    support->grid_w       = std::uint32_t((w0 + kCell - 1) / kCell);
+    support->grid_h       = std::uint32_t((h0 + kCell - 1) / kCell);
+    support->uv_scale_x   = scale_x;
+    support->uv_scale_y   = scale_y;
+    support->cells_per_u  = float(w0) / float(kCell);
+    support->cells_per_v  = float(h0) / float(kCell);
+    support->label        = label;
+    support->cells.assign(std::size_t(support->grid_w) * support->grid_h, 0);
+    const std::int64_t gw = support->grid_w, gh = support->grid_h;
+    auto mark = [&](std::int64_t cx0, std::int64_t cx1, std::int64_t cy0, std::int64_t cy1) {
+        if (cx1 - cx0 + 1 >= gw) cx0 = 0, cx1 = gw - 1;
+        if (cy1 - cy0 + 1 >= gh) cy0 = 0, cy1 = gh - 1;
+        for (std::int64_t cy = cy0; cy <= cy1; cy++) {
+            const std::int64_t y = ((cy % gh) + gh) % gh;
+            for (std::int64_t cx = cx0; cx <= cx1; cx++) {
+                support->cells[std::size_t(y * gw + ((cx % gw) + gw) % gw)] = 1;
+            }
+        }
+    };
+    // 每级 mip：非 0 texel x 影响的 u 区间 ⊂ [(x-1)/Wm, (x+2)/Wm)，换算到 0 级 texel 再落格（环绕标对边）。
+    for (const auto& mip : mips) {
+        const std::int64_t wm = mip.width, hm = mip.height;
+        if (wm <= 0 || hm <= 0 || ! mip.data || mip.size.to_primitive() != wm * hm * bpp)
+            return reject("遮罩 mip 数据尺寸不符");
+        const std::uint8_t* data = mip.data.get();
+        for (std::int64_t y = 0; y < hm; y++) {
+            const std::int64_t cy0 = M2FloorDiv((y - 1) * h0, hm * kCell);
+            const std::int64_t cy1 = M2FloorDiv((y + 2) * h0 - 1, hm * kCell);
+            const std::uint8_t* row = data + y * wm * bpp;
+            for (std::int64_t x = 0; x < wm; x++) {
+                if (row[x * bpp] == 0) continue;
+                std::int64_t xe = x;
+                while (xe + 1 < wm && row[(xe + 1) * bpp] != 0) xe++;
+                mark(M2FloorDiv((x - 1) * w0, wm * kCell),
+                     M2FloorDiv((xe + 2) * w0 - 1, wm * kCell),
+                     cy0,
+                     cy1);
+                x = xe;
+            }
+        }
+    }
+    std::size_t on = 0;
+    for (auto c : support->cells) on += c;
+    rstd_info("m2: {} 受限候选（{}）：遮罩 {}x{} {} 级 mip，支撑格 {}/{}",
+              label, how, w0, h0, mips.size(), on, support->cells.size());
+    return support;
 }
 
 void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj,
@@ -962,6 +1223,24 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                     last_effect_can_composite_final = CanCompositeFinalEffectMaterial(
                         mat->name, wpEffShaderInfo, allow_transparent_previous_final);
                 }
+                // M2：单 pass、无 fbo/命令、写 LayerNext、无 puppet/遮罩附加材质的白名单效果才算支撑区。
+                std::shared_ptr<const EffectMaskSupport> mask_support;
+                if (wpeffobj.materials.size() == 1 && wpeffobj.fbos.empty() &&
+                    ! wpmat.textures.empty() && wpmat.textures[0] == inRT &&
+                    imgEffect->commands.empty() &&
+                    matOutRT.kind == SceneEffectTargetKind::LayerNext && ! wpmat.use_puppet &&
+                    spMesh->MaterialSlots().size() == 1) {
+                    mask_support = BuildEffectMaskSupport(
+                        vfs,
+                        *context.scene,
+                        wpmat,
+                        wpEffShaderInfo,
+                        rstd::cppstd::to_string(rstd::format("layer {} effect {} ({})",
+                                                             wpimgobj.id,
+                                                             effect_ordinal,
+                                                             wpmat.shader)
+                                                    .as_str()));
+                }
                 spEffNode->AddMesh(spMesh);
 
                 SetUniformConfig(context, spEffNode, rstd::move(svData));
@@ -970,6 +1249,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                     .sceneNode                = spEffNode.clone(),
                     .uses_unit_final_quad     = UsesUnitFinalQuad(wpmat),
                     .final_quad_shader_values = std::move(final_quad_shader_values),
+                    .mask_support             = rstd::move(mask_support),
                 });
             }
 

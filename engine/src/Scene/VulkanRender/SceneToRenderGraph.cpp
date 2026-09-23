@@ -1,5 +1,8 @@
 module;
 
+#include <map>
+#include <memory>
+#include <vector>
 #include <rstd/macro.hpp>
 
 module wescene.vulkan_render;
@@ -80,6 +83,15 @@ struct ExtraInfo {
     Option<rg::TextureNodeRef> mip_framebuffer_history;
     const RenderSceneSnapshot* render_scene { nullptr };
     const RenderLayerSelection* selection { nullptr };
+    // M2：每个输出 key 最近两次写入（版本号、use、变化集；change 为空 = 变化集 FULL）。
+    struct M2Write {
+        usize                                    version;
+        rstd::Option<resource::TextureUseHandle> use;
+        std::shared_ptr<const EffectMaskSupport> change;
+    };
+    std::map<std::string, std::vector<M2Write>> m2_writes;
+    // LoadGraphEffects 在生成写 composite 的白名单效果 pass 前填上，调完清空。
+    std::shared_ptr<const EffectMaskSupport> m2_candidate;
 };
 
 static Option<vulkan::TextureRequest> BuildGraphTextureRequest(ExtraInfo&       extra,
@@ -360,8 +372,12 @@ static void LoadGraphEffects(SceneNodeLayer* effs, ExtraInfo& extra) {
             emit_commands();
             auto target = effs->ResolvedTarget(n);
             n.graph_pass_index = None();
+            // 直接最终输出（合成到场景）的 pass 目标不是 LayerNext，永远全画。
+            extra.m2_candidate =
+                target.kind == SceneEffectTargetKind::LayerNext ? n.mask_support : nullptr;
             ToGraphPass(n.sceneNode.as_ptr(), ResolveEffectTarget(*effs, target), extra,
                         false, SceneRenderViewKind::Primary, &n);
+            extra.m2_candidate = nullptr;
             nodePos++;
         }
         emit_commands();
@@ -404,6 +420,8 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
         }
     }
 
+    std::shared_ptr<const EffectMaskSupport> m2_candidate =
+        effect_node != nullptr && mesh->Submeshes().size() == 1 ? extra.m2_candidate : nullptr;
     const bool draw_source = imgeff == nullptr || imgeff->RequiresSourceDraw();
     for (std::size_t smi = 0; draw_source && smi < mesh->Submeshes().size(); smi++) {
         const auto& submesh       = mesh->Submeshes()[smi];
@@ -436,6 +454,7 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
              preserve_output = submesh.preserve_output,
              render_view,
              effect_node,
+             m2_candidate,
              &scene,
              &extra](rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
                 const auto& pass        = builder.workPassNode();
@@ -533,6 +552,30 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                 } else if (pdesc.clear_output || output_target.force_clear) {
                     extra.depth_initialized_outputs.erase(pass_output_s);
                 }
+                // M2：本 pass 的输出版本 V_i 要与 V_{i-2} 同物理纹理（prepare 核验），
+                // 画 tiles(M_i) ∪ tiles(C_{i-1})。前两个版本都必须是这里记录过的写入。
+                auto& m2_writes = extra.m2_writes[pass_output_s];
+                const usize version = output_state->version;
+                if (m2_candidate && ! reuses_previous_output && ! preserve_output &&
+                    ! material_override && output_target.sample_count == 1 && ! uses_depth &&
+                    ! pdesc.clear_output && m2_writes.size() == 2 &&
+                    m2_writes[1].version + usize(1) == version &&
+                    m2_writes[0].version + usize(2) == version && m2_writes[1].change) {
+                    pdesc.m2_support     = m2_candidate;
+                    pdesc.m2_prev_change = m2_writes[1].change;
+                    pdesc.m2_prev_use    = m2_writes[1].use;
+                    pdesc.m2_alias_use   = m2_writes[0].use;
+                }
+                // 变化集只取决于效果本身（C_i ⊆ M_i），与本 pass 最后是否受限无关。
+                m2_writes.push_back(ExtraInfo::M2Write {
+                    .version = version,
+                    .use     = Some(output_state->use),
+                    .change  = (m2_candidate && ! material_override && ! reuses_previous_output &&
+                               ! preserve_output && output_target.sample_count == 1)
+                                   ? m2_candidate
+                                   : nullptr,
+                });
+                if (m2_writes.size() > 2) m2_writes.erase(m2_writes.begin());
                 builder.write(output_node);
             });
     }
