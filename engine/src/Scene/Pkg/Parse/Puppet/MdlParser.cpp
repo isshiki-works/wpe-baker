@@ -91,15 +91,12 @@ bool ResizeCounted(fs::BinaryReader& reader, Vec<T>& values, uint64_t count, uin
     return true;
 }
 
-// MDAT/MDLA/MDMP/MDLE 标签 "MDxx0006" 里的版本号。不是四位数字就是读错位，按解析失败返回
+// MDAT/MDLA/MDMP/MDLE 标签 "MDxx0006" 里的版本号。不以数字开头就是读错位，按解析失败返回
 // （以前用 std::stoi，非数字会抛异常直接终止进程）。
 bool ParseTagVersion(std::string_view tag, int32_t& version, rstd::ptrdiff_t offset,
                      std::string_view path, Services* services) {
     const auto digits = tag.substr(4, 4);
-    const auto end    = digits.data() + digits.size();
-    auto [ptr, ec]    = std::from_chars(digits.data(), end, version);
-    (void)ptr;
-    if (ec != std::errc())
+    if (std::from_chars(digits.data(), digits.data() + digits.size(), version).ec != std::errc())
         return ParseFailure(path, services, "invalid block version tag", offset, offset);
     return true;
 }
@@ -368,15 +365,13 @@ bool ParseMesh(fs::BinaryReader& f, const MdlHeader& header, Mdl::Mesh& mesh, st
                     return false;
                 }
                 if (! ResizeCounted(
-                        f, mesh.part_uv2, vertex_num, 12, 0, path, services, "mesh part uv2") ||
-                    ! ResizeCounted(
-                        f, mesh.part_uv2_pad, vertex_num, 12, 0, path, services, "mesh part uv2"))
+                        f, mesh.part_uv2, vertex_num, 12, 0, path, services, "mesh part uv2"))
                     return false;
-                for (uint32_t i = 0; i < vertex_num; ++i) {
-                    const usize index(i);
-                    mesh.part_uv2[index][usize(0)] = f.ReadFloat();
-                    mesh.part_uv2[index][usize(1)] = f.ReadFloat();
-                    mesh.part_uv2_pad[index]       = f.ReadUint32();
+                mesh.part_uv2_pad.clear();
+                for (auto& uv : mesh.part_uv2) {
+                    uv[usize(0)] = f.ReadFloat();
+                    uv[usize(1)] = f.ReadFloat();
+                    mesh.part_uv2_pad.push(f.ReadUint32());
                 }
             }
         } else if (unk_a != 0) {
@@ -503,10 +498,9 @@ bool ParseIkRig(fs::BinaryReader& f, Mdl& mdl, uint16_t controller_count, uint16
     if (uint32_t(chain_count) * 2 != controller_count)
         return ParseFailure(
             path, services, "MDLS IK controller/chain count mismatch", f.Tell() - 2, end_offset);
-    if (! ResizeCounted(
-            f, puppet.ik_chains, chain_count, 38, end_offset, path, services, "MDLS IK chain"))
-        return false;
-    for (auto& chain : puppet.ik_chains) {
+    puppet.ik_chains.clear();
+    for (uint16_t chain_index = 0; chain_index < chain_count; ++chain_index) {
+        auto&      chain        = puppet.ik_chains.emplace_back();
         const auto chain_offset = f.Tell();
         if (! RequireBytes(f, 38, end_offset, path, services, "MDLS IK chain")) return false;
         chain.start_bone              = f.ReadUint32();
@@ -1446,7 +1440,7 @@ bool MdlParser::Parse(ref<str> path, fs::VFS& vfs, Mdl& mdl, Services* services,
     if (! ReadHeaderFromStream(f, mdl.header, str_path)) return false;
 
     // 每个网格至少：flag_a 4 + 顶点段长度 4 + 索引段长度 4。
-    if (! ResizeCounted(f, mdl.meshes, mdl.header.mesh_count, 12, 0, str_path, "meshes"))
+    if (! ResizeCounted(f, mdl.meshes, mdl.header.mesh_count, 12, 0, str_path, services, "meshes"))
         return false;
     for (auto& m : mdl.meshes) {
         if (! ParseMesh(f, mdl.header, m, str_path, services)) return false;
