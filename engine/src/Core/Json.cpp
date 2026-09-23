@@ -377,14 +377,19 @@ auto ToRstd(const nljson::Value& value) -> Json {
 
 auto ParseJson(std::string_view source, JsonParseOptions options)
     -> rstd::Result<Json, JsonParseError> {
+    // 保持原行为：非 UTF-8 输入与原 rstd 路径一样在这里中止（T2 集成时随 as_str 校验取消一起登记）。
+    static_cast<void>(rstd::cppstd::as_str(source).unwrap());
     nljson::Value parsed;
     std::string   error;
     if (! nljson::Parse(source,
                         { .allow_comments        = options.allow_comments,
                           .allow_trailing_commas = options.allow_trailing_commas },
                         parsed,
-                        error))
+                        error)) {
+        // nlohmann 的报错会原样带出读到的字节（可能是多字节字符的半截），不能直接当 str 用。
+        if (rstd::cppstd::as_str(error).is_err()) error = "invalid JSON";
         return Err(JsonParseError { String::make(rstd::cppstd::as_str(error).unwrap()) });
+    }
     return Ok(ToRstd(parsed));
 }
 
