@@ -295,7 +295,7 @@ void InitContext(SceneParseContext& context, fs::VFS& vfs, const wpscene::SceneM
 }
 
 void ParseSoundObjImpl(SceneParseContext& context, wpscene::SoundObject& obj,
-                       wavsen::audio::SoundManager& sm) {
+                       owe::media::OfflineMixer& sm) {
     auto node  = Arc<SceneNode>::make(Vector3f(obj.origin.data()),
                                       Vector3f(obj.scale.data()),
                                       Vector3f(obj.angles.data()),
@@ -548,7 +548,7 @@ namespace owe
 {
 
 void ParseSoundObj(SceneParseContext& context, wpscene::SoundObject& sound,
-                   wavsen::audio::SoundManager& manager) {
+                   owe::media::OfflineMixer& manager) {
     PrepareAnimationBindings(context, sound);
     ParseSoundObjImpl(context, sound, manager);
 }
@@ -686,7 +686,7 @@ void ProcessContainers(SceneParseContext& context, mut_ref<SceneObjectVar[]> sce
 }
 
 void ProcessObjects(SceneParseContext& context, mut_ref<SceneObjectVar[]> scene_objs,
-                    wavsen::audio::SoundManager* sm, ProcessOpts opts) {
+                    owe::media::OfflineMixer* sm, ProcessOpts opts) {
     context.sound_manager = sm;
     IndexSystemMediaImageFallbacks(context, scene_objs.as_ref());
 

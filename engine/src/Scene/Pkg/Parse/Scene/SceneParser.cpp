@@ -13,7 +13,7 @@ using namespace rstd::literals;
 using rstd::sync::Arc;
 
 auto owe::SceneParser::Parse(ref<str> scene_id, ref<wpscene::SceneDocument> document,
-                             mut_ref<fs::VFS> vfs, mut_ref<wavsen::audio::SoundManager> sound,
+                             mut_ref<fs::VFS> vfs, mut_ref<owe::media::OfflineMixer> sound,
                              SceneParseOptions options) -> Result<ParsedScene, SceneParseError> {
     auto&       vfs_owner   = *vfs.as_raw_ptr();
     auto&       sound_owner = *sound.as_raw_ptr();

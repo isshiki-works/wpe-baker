@@ -19,7 +19,7 @@ import owe.user_property;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
-import wavsen.audio;
+import owe.media;
 import wescene.fs;
 import wescene.timer;
 import wescene.pkg.parse;
@@ -119,12 +119,6 @@ struct SetVolumeScale {
 struct SetMuted {
     bool muted;
 };
-struct SetAudioClientIdentity {
-    SceneAudioClientIdentity identity;
-};
-struct AudioDeviceEvent {
-    wavsen::audio::AudioDeviceEvent event;
-};
 struct SetFillMode {
     FillMode mode;
 };
@@ -166,8 +160,7 @@ struct Shutdown {};
 } // namespace main_msg
 using MainMsg =
     std::variant<main_msg::LoadScene, main_msg::Configure, main_msg::SetFps, main_msg::SetVolume,
-                 main_msg::SetVolumeScale, main_msg::SetMuted, main_msg::SetAudioClientIdentity,
-                 main_msg::AudioDeviceEvent, main_msg::SetFillMode, main_msg::SetSpeed,
+                 main_msg::SetVolumeScale, main_msg::SetMuted, main_msg::SetFillMode, main_msg::SetSpeed,
                  main_msg::SetUserProperty, main_msg::SetFirstFrameCallback,
                  main_msg::SetUserPropertyDiagnosticCallback, main_msg::UserPropertyDiagnostics,
                  main_msg::SceneClearColorChanged, main_msg::PreparedPassDiagnostics,
@@ -354,8 +347,6 @@ public:
     void on(main_msg::SetVolume&&);
     void on(main_msg::SetVolumeScale&&);
     void on(main_msg::SetMuted&&);
-    void on(main_msg::SetAudioClientIdentity&&);
-    void on(main_msg::AudioDeviceEvent&&);
     void on(main_msg::SetFillMode&&);
     void on(main_msg::SetSpeed&&);
     void on(main_msg::SetUserProperty&&);
@@ -398,12 +389,11 @@ private:
     NJson                              m_user_properties;
     Option<vulkan::DeviceCapabilities> m_render_capabilities;
 
-    Box<wavsen::audio::SoundManager> m_sound_manager;
-    FirstFrameCallback               m_first_frame_callback;
-    UserPropertyDiagnosticCallback   m_user_property_diagnostic_cb;
-    ClearColorCallback               m_clear_color_cb;
-    u64                              m_audio_pause_generation {};
-    bool                             m_audio_activated {};
+    Box<owe::media::OfflineMixer>  m_sound_manager;
+    FirstFrameCallback             m_first_frame_callback;
+    UserPropertyDiagnosticCallback m_user_property_diagnostic_cb;
+    ClearColorCallback             m_clear_color_cb;
+    u64                            m_audio_pause_generation {};
 
 
     Option<MainSender>                     m_main_tx;
@@ -1128,10 +1118,7 @@ void SceneRuntimeController::startMainLoop() {
                                                onFirstFrame();
                                                return false;
                                            },
-                                           [this](main_msg::Shutdown&&) -> bool {
-                                               m_sound_manager->shutdown();
-                                               return true;
-                                           },
+                                           [](main_msg::Shutdown&&) -> bool { return true; },
                                            [this](auto&& value) -> bool {
                                                on(rstd::move(value));
                                                return false;
@@ -1164,17 +1151,7 @@ void SceneRuntimeController::stopMainLoop() {
 // ---- SceneRuntimeController message handlers --------------------------------
 
 void SceneRuntimeController::onLoadScene() {
-    if (m_render_capabilities.is_some() && m_render_controller->renderInited()) {
-        if (! m_offline && ! m_audio_activated) {
-            auto tx = sender();
-            m_sound_manager->activate(
-                [tx = rstd::move(tx)](wavsen::audio::AudioDeviceEvent event) mutable {
-                    (void)tx.send(main_msg::AudioDeviceEvent(rstd::move(event)));
-                });
-            m_audio_activated = true;
-        }
-        loadScene();
-    }
+    if (m_render_capabilities.is_some() && m_render_controller->renderInited()) loadScene();
 }
 
 void SceneRuntimeController::on(main_msg::LoadScene&& m) {
@@ -1204,35 +1181,16 @@ void SceneRuntimeController::on(main_msg::SetFps&& m) {
 
 void SceneRuntimeController::on(main_msg::SetVolume&& m) {
     m_config.volume = m.volume.to_primitive();
-    m_sound_manager->set_volume(m.volume);
+    m_sound_manager->set_volume(m.volume.to_primitive());
 }
 
 void SceneRuntimeController::on(main_msg::SetVolumeScale&& m) {
-    m_sound_manager->set_volume_scale(m.scale, m.fade_ms);
+    m_sound_manager->set_volume_scale(m.scale.to_primitive(), m.fade_ms.to_primitive());
 }
 
 void SceneRuntimeController::on(main_msg::SetMuted&& m) {
     m_config.muted = m.muted;
     m_sound_manager->set_muted(m.muted);
-}
-
-void SceneRuntimeController::on(main_msg::SetAudioClientIdentity&& m) {
-    auto identity = wavsen::audio::AudioClientIdentity {
-        .application_name =
-            String::make(rstd::cppstd::as_str(m.identity.application_name).unwrap()),
-        .application_id = String::make(rstd::cppstd::as_str(m.identity.application_id).unwrap()),
-        .stream_prefix  = String::make(rstd::cppstd::as_str(m.identity.stream_prefix).unwrap()),
-        .component      = String::make(rstd::cppstd::as_str(m.identity.component).unwrap()),
-        .media_name     = String::make(rstd::cppstd::as_str(m.identity.media_name).unwrap()),
-        .media_role     = String::make(rstd::cppstd::as_str(m.identity.media_role).unwrap()),
-    };
-    if (! m_sound_manager->set_identity(rstd::move(identity))) {
-        rstd_warn("audio identity cannot change after audio shutdown");
-    }
-}
-
-void SceneRuntimeController::on(main_msg::AudioDeviceEvent&& m) {
-    m_sound_manager->on_device_event(rstd::move(m.event));
 }
 
 void SceneRuntimeController::on(main_msg::SetFillMode&& m) {
@@ -1295,7 +1253,7 @@ void SceneRuntimeController::on(main_msg::Stop&& m) {
     }
     const u64 generation = ++m_audio_pause_generation;
     if (m.stop) {
-        if (m.scale_audio) m_sound_manager->set_volume_scale(f32(), m.fade_ms);
+        if (m.scale_audio) m_sound_manager->set_volume_scale(0.0f, m.fade_ms.to_primitive());
         if (m.fade_ms == u32() || ! m.scale_audio) {
             m_sound_manager->pause();
         } else {
@@ -1308,7 +1266,7 @@ void SceneRuntimeController::on(main_msg::Stop&& m) {
         }
     } else {
         m_sound_manager->play();
-        if (m.scale_audio) m_sound_manager->set_volume_scale(f32(1.0f), m.fade_ms);
+        if (m.scale_audio) m_sound_manager->set_volume_scale(1.0f, m.fade_ms.to_primitive());
     }
     m_render_controller->post(render_msg::Stop(m.stop));
 }
@@ -1407,7 +1365,7 @@ void SceneRuntimeController::loadScene() {
             rstd::cppstd::as_str(scene_id).unwrap(),
             rstd::ref<wpscene::SceneDocument>::from_raw_parts(scene_doc.get()),
             rstd::mut_ref<fs::VFS>::from_raw_parts(&vfs),
-            rstd::mut_ref<wavsen::audio::SoundManager>::from_raw_parts(m_sound_manager.get()),
+            rstd::mut_ref<owe::media::OfflineMixer>::from_raw_parts(m_sound_manager.get()),
             SceneParseOptions {
                 .user_properties  = &m_user_properties,
                 .shader_cache_dir = rstd::move(shader_cache_dir),
@@ -1514,12 +1472,6 @@ bool SceneRuntimeController::initOffline(SceneWallpaperConfig config, RenderInit
     std::seed_seq seed { uint32_t(options.seed), uint32_t(options.seed >> 32) };
     m_offline_context.random.seed(seed);
     OfflineExecutionScope scope(m_offline_context);
-    auto audio_configured = m_sound_manager->configure_offline({ u32(2), u32(48000) });
-    if (audio_configured.is_err()) {
-        m_offline_error = rstd::cppstd::to_string(audio_configured.unwrap_err().as_str());
-        m_offline_failed = true;
-        return false;
-    }
     info.offscreen = true;
     info.output_mode = RenderOutputMode::CpuReadback;
     info.video_hwdec = "none";
@@ -1602,10 +1554,9 @@ bool SceneRuntimeController::step(uint64_t index, double dt, const OfflineFrameI
     m_audio_frame.sample_start = static_cast<uint64_t>(start);
     m_audio_frame.frame_count = static_cast<uint32_t>(end - start);
     m_audio_frame.samples.resize(static_cast<size_t>(m_audio_frame.frame_count) * 2);
-    auto mixed = m_sound_manager->mix_pcm(mut_ref<float[]>::from_raw_parts(
-        m_audio_frame.samples.data(), usize(m_audio_frame.samples.size())));
-    if (mixed.is_err() || m_offline_context.failed) {
-        m_offline_error = mixed.is_err() ? rstd::cppstd::to_string(mixed.unwrap_err().as_str()) :
+    const bool mixed = m_sound_manager->mix(m_audio_frame.samples);
+    if (!mixed || m_offline_context.failed) {
+        m_offline_error = !mixed ? m_sound_manager->last_error() :
             (m_offline_context.diagnostics.empty() ? "Offline audio source failed" : m_offline_context.diagnostics.back());
         m_offline_failed = true;
         m_audio_frame = OfflineAudioFrame {};
@@ -1617,7 +1568,7 @@ bool SceneRuntimeController::step(uint64_t index, double dt, const OfflineFrameI
 }
 
 SceneRuntimeController::SceneRuntimeController()
-    : m_sound_manager(Box<wavsen::audio::SoundManager>::make()),
+    : m_sound_manager(Box<owe::media::OfflineMixer>::make()),
       m_render_controller(Box<SceneRenderController>::make(*this)) {
     auto [tx, rx] = rstd::sync::mpmc::channel<MainMsg>();
     m_main_tx     = Some(rstd::move(tx));
@@ -1886,10 +1837,6 @@ void SceneWallpaper::setSpeed(float speed) { m_runtime->post(main_msg::SetSpeed(
 
 void SceneWallpaper::setMediaStatus(MediaStatus status) {
     m_runtime->post(render_msg::SetMediaStatus(rstd::move(status)));
-}
-
-void SceneWallpaper::setAudioClientIdentity(SceneAudioClientIdentity identity) {
-    m_runtime->post(main_msg::SetAudioClientIdentity(rstd::move(identity)));
 }
 
 void SceneWallpaper::setAudioResponseDemandCallback(AudioResponseDemandCallback callback) {

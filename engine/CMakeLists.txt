@@ -94,7 +94,7 @@ else()
   endif()
 endif()
 
-# FFmpeg 开发前缀（wavsen 的解码后端经 pkg-config 找它）。
+# FFmpeg 开发前缀（wavsen 与 owe-media 经 pkg-config 找它）。
 set(WPE_FFMPEG_ROOT "${WPE_DEPS}/ffmpeg-lgpl21/prefix" CACHE PATH "FFmpeg development prefix")
 get_filename_component(WPE_FFMPEG_ROOT "${WPE_FFMPEG_ROOT}" ABSOLUTE BASE_DIR "${WPE_ROOT}")
 foreach(_wpe_ffmpeg_lib avcodec avformat avutil swscale swresample)
@@ -118,8 +118,9 @@ add_subdirectory("${WPE_DEPS}/vvk" dependencies/vvk EXCLUDE_FROM_ALL)
 set(WAVSEN_AUDIO_BACKEND offline CACHE STRING "Deterministic offline audio" FORCE)
 set(WAVSEN_BUILD_TESTS ON CACHE BOOL "Real offline audio/video regression targets" FORCE)
 add_subdirectory("${WPE_DEPS}/wavsen" dependencies/wavsen EXCLUDE_FROM_ALL)
+# 音频已迁到 owe-media（T5a），引擎只剩视频走 wavsen；wavsen::audio 只给 media-parity-tests 对拍用。
 add_library(wavsen INTERFACE)
-target_link_libraries(wavsen INTERFACE wavsen::video wavsen::audio wavsen::decode)
+target_link_libraries(wavsen INTERFACE wavsen::video wavsen::decode)
 
 add_library(wpe-eigen INTERFACE)
 target_include_directories(wpe-eigen INTERFACE "${WPE_DEPS}/eigen")
@@ -135,6 +136,7 @@ target_include_directories(wpe-cli11 INTERFACE "${WPE_DEPS}/cli11")
 # 各包的源文件清单与用法（原 lito.toml）。
 add_subdirectory(src/Core)
 add_subdirectory(src/Audio)
+add_subdirectory(src/Media)
 add_subdirectory(src/Scene/types)
 add_subdirectory(src/Scene/Utils)
 add_subdirectory(src/Vulkan)

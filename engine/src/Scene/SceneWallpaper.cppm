@@ -42,15 +42,6 @@ struct MediaStatus {
     std::string previous_art_url;
 };
 
-struct SceneAudioClientIdentity {
-    std::string application_name;
-    std::string application_id;
-    std::string stream_prefix;
-    std::string component;
-    std::string media_name;
-    std::string media_role { "music" };
-};
-
 struct SceneWallpaperConfig {
     std::string                             source_pkg_path;
     std::string                             assets_dir;
@@ -154,7 +145,6 @@ public:
     void setFillMode(FillMode);
     void setSpeed(float);
     void setMediaStatus(MediaStatus);
-    void setAudioClientIdentity(SceneAudioClientIdentity);
     void setAudioResponseDemandCallback(AudioResponseDemandCallback);
     template<typename Callback>
     void setAudioResponseDemandCallback(Callback callback) {
