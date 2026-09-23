@@ -45,12 +45,12 @@ this repository is under the root `LICENSE` (MIT).
 `engine/LICENSE`（GPL v2，无 "or later"）**只适用于 `engine/` 目录**；本仓库其余部分按根目录
 `LICENSE`（MIT）。
 
-Two of the renderer's dependencies carry our fixes: rstd and vvk (wavsen used to be the third;
-its audio/video decoding now lives, ported, in `engine/src/Media/`). The patches and
+Two of the renderer's dependencies carry our fixes: rstd and vvk. The audio/video decoding in
+`engine/src/Media/` is ported from wavsen (MIT), which is no longer built as a dependency. The patches and
 their checksums are in `scripts/dependency-patches/` (`manifest.json`) and are applied by
 `scripts/apply-dependency-patches.py`.
-渲染器有两个依赖带我们的修改：rstd、vvk（原先的第三个 wavsen，其音视频解码已移植进
-`engine/src/Media/`）。补丁与校验值在
+渲染器有两个依赖带我们的修改：rstd、vvk。`engine/src/Media/` 的音视频解码移植自 wavsen（MIT），
+wavsen 不再作为依赖构建。补丁与校验值在
 `scripts/dependency-patches/`（`manifest.json`），由 `scripts/apply-dependency-patches.py` 应用。
 
 ## Which binaries need source / 哪些二进制需要对应源码
