@@ -17,6 +17,8 @@ PREFIX = DEST / "prefix"
 TOOLS = ROOT / ".tools"
 LLVM = TOOLS / "llvm-mingw-22/bin"
 BASH = pathlib.Path(r"C:\Program Files\Git\bin\bash.exe")
+# 源码补丁打在 sources/ffmpeg 上，源码包随之带上改动；内容见补丁里的注释
+PATCH = ROOT / "scripts/ffmpeg-lgpl21.patch"
 
 def environment():
     values = dict(os.environ)
@@ -84,6 +86,10 @@ def main():
     configuration = {"source_commit": "38b88335f99e76ed89ff3c93f877fdefce736c13", "source_tag": "n8.1.2", "dav1d_commit": "54706fc6bc0cdecab7e9593974a4039cc038fca7", "dav1d_version": "1.5.4", "dav1d_license": "BSD-2-Clause", "shell": str(BASH), "flags": flags}
     (DEST / "build-configuration.json").write_text(json.dumps(configuration, indent=2) + "\n", encoding="utf-8")
     if options.stage in ("configure", "all"):
+        patch = [BASH.parents[1] / "usr/bin/patch.exe", "-p1", "-s", "-f", "-d", DEST / "sources/ffmpeg", "-i", PATCH]
+        # 反向试打能成功说明已打过；否则正向打，打不上（源码不是 n8.1.2 原样）就停
+        if subprocess.run(list(map(str, patch + ["-R", "--dry-run"])), capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).returncode:
+            run(patch, ROOT, "ffmpeg-patch")
         run([BASH, "--noprofile", "--norc", (DEST / "sources/ffmpeg/configure").as_posix(), *flags], ff_build, "ffmpeg-configure")
     if options.stage in ("build", "all"):
         # POSIX make resolves configure's /c/... paths using the Git Bash

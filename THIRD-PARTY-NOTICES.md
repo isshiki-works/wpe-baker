@@ -61,7 +61,7 @@ vvk 在 `220116d` 加入 MIT OR Apache-2.0，并说明同样适用于此前的�
 
 | 组件 | 版本 / 提交 | 许可 | 来源 | 修改 |
 |---|---|---|---|---|
-| FFmpeg | `n8.1.2` = `38b88335f99e76ed89ff3c93f877fdefce736c13`，`--disable-gpl --disable-version3 --disable-nonfree` | LGPL-2.1-or-later | https://github.com/FFmpeg/FFmpeg | 否（无源码补丁） |
+| FFmpeg | `n8.1.2` = `38b88335f99e76ed89ff3c93f877fdefce736c13`，`--disable-gpl --disable-version3 --disable-nonfree` | LGPL-2.1-or-later | https://github.com/FFmpeg/FFmpeg | 是：`scripts/ffmpeg-lgpl21.patch` 改 `libavcodec/vulkan_encode.c` 两处（Vulkan 编码器收尾时释放残留图片的视图与码流缓冲；会话复位后的强制 IDR 帧开始编码时也声明码率控制状态），由 `build-ffmpeg-lgpl21.py` 打在源码树上 |
 | dav1d | `54706fc6bc0cdecab7e9593974a4039cc038fca7`（1.5.4，静态进 avcodec） | BSD-2-Clause | https://github.com/videolan/dav1d | 否 |
 
 许可文本：`licenses\renderer-codecs\ffmpeg\COPYING.LGPLv2.1`、
