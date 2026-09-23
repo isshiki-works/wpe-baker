@@ -5,7 +5,7 @@ using Baker.Core;
 /// <summary>全幅准入的尾组降级：可达性判定、采纳条件、记录字段与冲突文案。</summary>
 internal static class FullFrameDemotionChecks
 {
-    private const int Base = 801, Spectrum = 802, LabelA = 803, LabelB = 804;
+    internal const int Base = 801, Spectrum = 802, LabelA = 803, LabelB = 804;
 
     private static readonly Type DemotionType = typeof(HybridPlanFormat).Assembly.GetType("Baker.Core.FullFrameDemotion")!;
     private static readonly MethodInfo RetentionMethod = DemotionType.GetMethod("FullFrameSingleGroupRetention",
@@ -134,7 +134,7 @@ internal static class FullFrameDemotionChecks
         (JsonObject)AllocationMethod.Invoke(null, [plan, roots, dependencies])!;
 
     /// <summary>不透明底图 + 可见的 image 型音频频谱实时层 + 两个小文本视频 root。</summary>
-    private static JsonArray Scene(double labelWidth = 4, double labelHeight = 2, bool sizeLabelB = true)
+    internal static JsonArray Scene(double labelWidth = 4, double labelHeight = 2, bool sizeLabelB = true)
     {
         var labelB = new JsonObject { ["id"] = LabelB, ["name"] = "Tiny label B", ["text"] = "b" };
         if (sizeLabelB) labelB["size"] = new JsonArray(labelWidth, labelHeight);
@@ -166,7 +166,7 @@ internal static class FullFrameDemotionChecks
             ["composition"] = composition, ["layers"] = layers };
     }
 
-    private static async Task<JsonObject> AnalyzeAsync(string root, string name, JsonArray objects, bool clearEnabled,
+    internal static async Task<JsonObject> AnalyzeAsync(string root, string name, JsonArray objects, bool clearEnabled,
         JsonArray dependencies, string layout = "full_frame")
     {
         string directory = Path.Combine(root, "demotion-" + name);

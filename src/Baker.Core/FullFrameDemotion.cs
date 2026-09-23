@@ -11,9 +11,6 @@ namespace Baker.Core;
 /// </remarks>
 internal static class FullFrameDemotion
 {
-    /// <summary>降级生效后的布局准入状态。</summary>
-    internal const string DemotedAdmissionStatus = "planned_layout_allowed_after_demotion";
-
     private const string Scope = "Whole video roots only: the demoted roots keep their position, author parents, draw order and parallax depth. " +
         "Layout permission is not proof of image correctness, looping, hardware decoding or playback benefit.";
 

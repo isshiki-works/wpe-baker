@@ -574,95 +574,18 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             ["official_playback"] = "not_verified", ["measured_gain"] = "not_verified" };
         // 开关关着时不写这一段，plan 逐字不变。
         if (daytime is not null) report["daytime_split"] = daytime.ToJson();
-        JsonObject wholeLayer = report["whole_layer"]!.AsObject();
-        if (!effectPrefixRoute) wholeLayer["blockers"] = report["blockers"]!.DeepClone();
-        wholeLayer["loop"] = report["loop"]!.DeepClone();
-        wholeLayer["status"] = wholeLayer["blockers"]!.AsArray().Count == 0 &&
-            WholeLoopComplete(wholeLayer["loop"]!.AsObject()) ? "available" : "unavailable";
-        if (!effectPrefixRoute && report["status"]?.GetValue<string>() == "requires_resolution")
-        {
-            JsonArray fallback = await PrefixCachesAsync();
-            if (fallback.Count > 0)
+        // W 段（C2.2d1）：路线与布局准入交给 Routes / LayoutAdmission（整层 → 特效前缀 → 全幅准入与尾组降级 → 仍被挡再试前缀）。
+        // 尾组降级按新分组重求循环，用的是与整层同一个 LoopScene。
+        (report, effectPrefixRoute) = await Routes.SettleAsync(report, effectPrefixRoute, request.VideoLayout, composer.Groups.Count,
+            observation.Dependencies, PrefixCachesAsync, demoted =>
             {
-                effectPrefixRoute = true;
-                report["route"] = "effect_prefix";
-                report["effect_prefix_caches"] = fallback;
-                report["blockers"] = new JsonArray();
-                report["status"] = "requires_loop_analysis";
-            }
-        }
-        // 全幅准入：先把"单不透明组可达性"写进 plan，冲突文案才能给出本场景真正可执行的指令。
-        if (request.VideoLayout == "full_frame" && !effectPrefixRoute && groups.Count > 1)
-            report["full_frame_retention"] = FullFrameDemotion.Describe(report, dependencies);
-        // 一个视频组都没有时无从谈布局：blockers 已经说明依赖闭包之后没有输入无关的可视组，再追加一条
-        // "改设置或选分层后重新分析"只会把用户引向无效操作。分配路径仍用这条冲突报告不透明视频的丢失。
-        Blocker? layoutConflict = (groups.Count == 0 ? null : FullFrameConflict(report)) ?? CompositionHierarchyConflict(report);
-        bool layoutDemoted = false;
-        // 尾组降级：把底组之上的视频 root 整体退回实时，是全幅被拒时唯一允许的自动补救。
-        if (layoutConflict is not null && !effectPrefixRoute && request.VideoLayout == "full_frame" && groups.Count > 1)
-        {
-            JsonObject? demotedPlan = FullFrameDemotion.TryDemote(report, dependencies, out JsonObject demotion);
-            if (demotedPlan is null) report["layout_admission_demotion"] = demotion;
-            else
-            {
-                demotedPlan["layout_admission_demotion"] = demotion;
-                if (report["full_frame_retention"]?.DeepClone() is JsonObject retention)
-                {
-                    retention["status"] = "applied";
-                    demotedPlan["full_frame_retention"] = retention;
-                }
-                // 视频组少了被退回的层，循环必须按新的组重算，否则 plan 的周期仍引用已退出视频的分量。
-                JsonObject DemotedLoopScene()
-                {
-                    var copy = scene.DeepClone().AsObject();
-                    FreezeTemporalProperties(copy, properties);
-                    DaytimeSplit.ApplyState(copy, daytime, daytimeState, forAnalysis: true);
-                    return copy;
-                }
-                demotedPlan["loop"] = AnalyzeLoopForProfile(DemotedLoopScene, source, request.Assets, trace,
-                    demotedPlan["video_groups"]!.AsArray().OfType<JsonObject>()
+                JsonObject demotedLoop = AnalyzeLoopForProfile(LoopScene, source, request.Assets, observation.Trace,
+                    demoted["video_groups"]!.AsArray().OfType<JsonObject>()
                         .SelectMany(group => group["layer_ids"]!.AsArray().Select(node => node!.GetValue<int>())).ToArray(),
-                    request, demotedPlan["projection"] as JsonObject ?? new JsonObject(), demotedPlan["video_groups"] as JsonArray);
-                AnnotateLoopCandidates(demotedPlan["loop"]!.AsObject());
-                JsonObject demotedWholeLayer = demotedPlan["whole_layer"]!.AsObject();
-                demotedWholeLayer.Remove("layout_conflict");
-                demotedWholeLayer["blockers"] = demotedPlan["blockers"]!.DeepClone();
-                demotedWholeLayer["loop"] = demotedPlan["loop"]!.DeepClone();
-                demotedWholeLayer["status"] = demotedWholeLayer["blockers"]!.AsArray().Count == 0 &&
-                    WholeLoopComplete(demotedWholeLayer["loop"]!.AsObject()) ? "available" : "unavailable";
-                report = demotedPlan;
-                layoutConflict = null;
-                layoutDemoted = true;
-            }
-        }
-        if (layoutConflict is not null && !effectPrefixRoute)
-        {
-            JsonArray fallback = await PrefixCachesAsync();
-            if (fallback.Count > 0)
-            {
-                effectPrefixRoute = true;
-                report["route"] = "effect_prefix";
-                report["effect_prefix_caches"] = fallback;
-                report["blockers"] = new JsonArray();
-                report["status"] = "requires_loop_analysis";
-            }
-        }
-        if (layoutConflict is not null) report["whole_layer"]!.AsObject()["layout_conflict"] = layoutConflict.Text;
-        report["video_layout_admission"] = new JsonObject {
-            ["requested"] = request.VideoLayout,
-            ["status"] = effectPrefixRoute ? "not_applicable_to_effect_prefix" :
-                groups.Count == 0 ? "not_applicable_no_video_group" :
-                layoutConflict is not null ? LayoutConflictStatus(report) :
-                layoutDemoted ? FullFrameDemotion.DemotedAdmissionStatus : "planned_layout_allowed",
-            ["reason"] = layoutConflict?.Text ?? (layoutDemoted ? report["layout_admission_demotion"]?["reason"]?.GetValue<string>() : null),
-            ["scope"] = effectPrefixRoute ? "Effect-prefix caching retains the authored layer and suffix; it does not reorder whole-layer groups." :
-                "Layout permission is not proof of image correctness, looping, hardware decoding or playback benefit." };
-        if (layoutConflict is not null && !effectPrefixRoute)
-        {
-            var finalBlockers = report["blockers"]!.AsArray();
-            PlanBlockers.Add(finalBlockers, layoutConflict);
-            report["status"] = "requires_resolution";
-        }
+                    request, demoted["projection"] as JsonObject ?? new JsonObject(), demoted["video_groups"] as JsonArray);
+                AnnotateLoopCandidates(demotedLoop);
+                return demotedLoop;
+            });
         // 探测过的前缀捕获点全部留档。被拒的原因只在整层循环本来就有未解机制时并进 loop.unresolved：这时前缀是
         // 整层循环的回退，拒绝原因正好说明回退为什么没走成。条目不带 owner_layer_id，免得分配回退把它当成要保留实时的
         // 未解层；原本没有未解项的循环也不凭空添一条，免得改变整层裁定。
@@ -686,9 +609,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         RequireTraceableRejection(report);
         // 视频外壳判据放在最后：前面两处 effect_prefix 回退与布局裁决都已经定稿，这里只读结构、只追加，
         // 不改 route、不改分组，免得新加的 blocker 反过来把计划改道。
-        JsonObject videoDominance = VideoDominance.Evaluate(report, trace, request.VideoShell);
+        JsonObject videoDominance = VideoDominance.Evaluate(report, observation.Trace, request.VideoShell);
         report["video_dominant"] = videoDominance;
-        report[BakeValueAssessment.Field] = BakeValueAssessment.Evaluate(report, trace, source, request.Assets);
+        report[BakeValueAssessment.Field] = BakeValueAssessment.Evaluate(report, observation.Trace, source, request.Assets);
         if (videoDominance["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
         {
             PlanBlockers.Add(report["blockers"]!.AsArray(), new Blocker(BlockerCode.VideoShell));
@@ -701,10 +624,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 request.Assets, request, report["projection"] as JsonObject ?? projection);
         // These queries are already present in the analysis trace. Use the exporter's
         // existing assembly rule before promising a whole-layer bake, without rendering again.
-        if (!effectPrefixRoute && dependencies.OfType<JsonObject>().Any(item =>
+        if (!effectPrefixRoute && observation.Dependencies.OfType<JsonObject>().Any(item =>
                 item["operation"]?.GetValue<string>() == "query" &&
                 item["property"]?.GetValue<string>()?.StartsWith("layer_", StringComparison.Ordinal) == true) &&
-            CompositionHierarchyConflict(report, objects, dependencies) is Blocker publicQueryConflict)
+            CompositionHierarchyConflict(report, graph.Objects, observation.Dependencies) is Blocker publicQueryConflict)
         {
             PlanBlockers.Add(report["blockers"]!.AsArray(), publicQueryConflict);
             PlanBlockers.Add(report["whole_layer"]!["blockers"]!.AsArray(), publicQueryConflict);
