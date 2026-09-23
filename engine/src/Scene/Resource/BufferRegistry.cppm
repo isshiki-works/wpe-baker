@@ -58,7 +58,7 @@ public:
     }
 
     auto Ensure(resource::BufferRequest request, slice<u8> content,
-                mut_ref<dyn<vulkan::BufferBackend>> backend)
+                vulkan::BufferBackend* backend)
         -> Result<PreparedBuffer, resource::ResourceError> {
         auto handle = Register(request.clone());
         if (! handle.Valid()) {
@@ -125,7 +125,7 @@ public:
     }
 
     auto Update(resource::BufferHandle handle, slice<u8> content,
-                mut_ref<dyn<vulkan::BufferBackend>> backend)
+                vulkan::BufferBackend* backend)
         -> Result<empty, resource::ResourceError> {
         auto entry    = m_entries.get_mut(handle);
         auto physical = m_resources.get_mut(handle);
@@ -176,7 +176,7 @@ public:
 
 private:
     auto QueueWrite(rstd::sync::Arc<BufferPhysical> physical, slice<u8> content,
-                    u64 source_generation, mut_ref<dyn<vulkan::BufferBackend>> backend)
+                    u64 source_generation, vulkan::BufferBackend* backend)
         -> Result<empty, resource::ResourceError> {
         if (physical->source_generation == source_generation) return Ok(empty {});
         auto allocation =

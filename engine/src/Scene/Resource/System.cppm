@@ -167,12 +167,10 @@ public:
         }
         vulkan::ImagePrepareContext image_context(m_registries.Textures(),
                                                   m_registries.ImageUploads());
-        auto image_backend  = dyn<vulkan::ImagePrepareBackend>::from_ref(image_context);
-        auto buffer_backend = dyn<vulkan::BufferBackend>::from_ref(m_registries.BufferManager());
         ResourcePrepareService service(m_registries.TextureEntries(),
-                                       Some(image_backend.as_mut_ref()),
+                                       &image_context,
                                        m_registries.Buffers(),
-                                       buffer_backend.as_mut_ref(),
+                                       &m_registries.BufferManager(),
                                        m_registries.Shaders());
         auto started = service.Begin(plan, rstd::move(providers), sections, texture_observer);
         if (started.is_err()) {
@@ -188,12 +186,10 @@ public:
         -> Result<ResourcePrepareProgress, resource::ResourceError> {
         vulkan::ImagePrepareContext image_context(m_registries.Textures(),
                                                   m_registries.ImageUploads());
-        auto image_backend  = dyn<vulkan::ImagePrepareBackend>::from_ref(image_context);
-        auto buffer_backend = dyn<vulkan::BufferBackend>::from_ref(m_registries.BufferManager());
         ResourcePrepareService service(m_registries.TextureEntries(),
-                                       Some(image_backend.as_mut_ref()),
+                                       &image_context,
                                        m_registries.Buffers(),
-                                       buffer_backend.as_mut_ref(),
+                                       &m_registries.BufferManager(),
                                        m_registries.Shaders());
         auto                   progress = service.Continue(session, texture_observer);
         if (progress.is_err()) {
@@ -466,9 +462,8 @@ public:
                 .message = rstd::format("prepared buffer use {} is unavailable", use.index),
             });
         }
-        auto backend = dyn<vulkan::BufferBackend>::from_ref(m_registries.BufferManager());
         return m_registries.Buffers().Update(
-            (**prepared).buffer.resource, content, backend.as_mut_ref());
+            (**prepared).buffer.resource, content, &m_registries.BufferManager());
     }
 
     auto ReserveUpload() -> resource::ReadyToken { return m_registries.Uploads().Reserve(); }
@@ -553,12 +548,12 @@ public:
         return Ok(empty {});
     }
 
-    void Collect(mut_ref<dyn<vulkan::MemoryBudgetSource>> memory) {
+    void Collect(vulkan::MemoryBudgetSource* memory) {
         m_registries.PipelineCache().PruneExpired();
         m_registries.PipelineLayouts().PruneExpired();
         m_registries.RenderPassCache().PruneExpired();
         m_registries.FramebufferCache().PruneExpired();
-        m_registries.Memory().Refresh(memory.as_ref());
+        m_registries.Memory().Refresh(memory);
         if (! m_registries.Memory().ShouldEvictTransient()) return;
         m_registries.TextureEntries().EvictUnused();
         m_registries.Buffers().EvictUnused();

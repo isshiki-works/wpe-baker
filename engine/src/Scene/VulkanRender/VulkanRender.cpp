@@ -92,8 +92,7 @@ void AppendVideoDeviceExtensions(std::vector<Extension>& device_exts) {
 }
 
 void ReleaseCompletedRetiredResources(Device& device, RenderingResources& rr) {
-    auto memory = rstd::dyn<owe::vulkan::MemoryBudgetSource>::from_ref(device);
-    rr.resources.Collect(memory.as_mut_ref());
+    rr.resources.Collect(&device);
 }
 
 namespace {

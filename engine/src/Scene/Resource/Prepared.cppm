@@ -570,9 +570,9 @@ private:
 class ResourcePrepareService {
 public:
     ResourcePrepareService(resource::TextureRegistry&                        textures,
-                           Option<mut_ref<dyn<vulkan::ImagePrepareBackend>>> textures_backend,
+                           vulkan::ImagePrepareBackend*                      textures_backend,
                            BufferRegistry&                                   buffers,
-                           mut_ref<dyn<vulkan::BufferBackend>>               buffer_backend,
+                           vulkan::BufferBackend*                            buffer_backend,
                            ShaderRegistry&                                   shaders)
         : m_textures(textures),
           m_textures_backend(textures_backend),
@@ -811,7 +811,7 @@ public:
             if (item.image.is_err()) {
                 return Err(rstd::move(item.image).unwrap_err_unchecked());
             }
-            if (m_textures_backend.is_none()) {
+            if (m_textures_backend == nullptr) {
                 return Err(resource::ResourceError {
                     .kind    = resource::ResourceErrorKind::BackendFailure,
                     .message = String::make("texture backend unavailable"_str),
@@ -824,8 +824,8 @@ public:
                 auto playback = session.m_pending[item.index].playback.is_some()
                                     ? Some(session.m_pending[item.index].playback->clone())
                                     : None<rstd::sync::Arc<VideoPlaybackState>>();
-                auto created  = (*m_textures_backend)
-                                    ->CreateImportedTexture(image.deref(), rstd::move(playback));
+                auto created  = m_textures_backend->CreateImportedTexture(image.deref(),
+                                                                          rstd::move(playback));
                 if (created.is_none()) {
                     return Err(resource::ResourceError {
                         .kind    = resource::ResourceErrorKind::BackendFailure,
@@ -881,7 +881,7 @@ private:
 
     auto AllocateTexture(const resource::TextureRequest& request)
         -> Result<rstd::sync::Arc<vulkan::TextureAllocation>, resource::ResourceError> {
-        if (m_textures_backend.is_none()) {
+        if (m_textures_backend == nullptr) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
                 .message = rstd::format("texture backend unavailable"),
@@ -893,7 +893,7 @@ private:
                 .message = rstd::format("texture definition {} unavailable", request.name.as_str()),
             });
         }
-        auto image = (*m_textures_backend)->AllocateTexture(ToTextureKey(*request.definition));
+        auto image = m_textures_backend->AllocateTexture(ToTextureKey(*request.definition));
         if (image.is_none()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
@@ -905,7 +905,7 @@ private:
 
     auto AllocateTransparentTexture(const resource::TextureRequest& request)
         -> Result<vulkan::PreparedImageAllocation, resource::ResourceError> {
-        if (m_textures_backend.is_none()) {
+        if (m_textures_backend == nullptr) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
                 .message = rstd::format("texture backend unavailable"),
@@ -918,7 +918,7 @@ private:
             });
         }
         auto image =
-            (*m_textures_backend)->AllocateTransparentTexture(ToTextureKey(*request.definition));
+            m_textures_backend->AllocateTransparentTexture(ToTextureKey(*request.definition));
         if (image.is_none()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
@@ -1046,9 +1046,9 @@ private:
     }
 
     resource::TextureRegistry&                        m_textures;
-    Option<mut_ref<dyn<vulkan::ImagePrepareBackend>>> m_textures_backend;
+    vulkan::ImagePrepareBackend*                      m_textures_backend;
     BufferRegistry&                                   m_buffers;
-    mut_ref<dyn<vulkan::BufferBackend>>               m_buffer_backend;
+    vulkan::BufferBackend*                            m_buffer_backend;
     ShaderRegistry&                                   m_shaders;
 };
 

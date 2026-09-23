@@ -13,20 +13,9 @@ import wescene.vulkan;
 
 using namespace rstd::literals;
 
-struct TextureRuntimeProbe {
-    void Pump(double) {}
+struct TextureRuntimeProbe final : owe::vulkan::TextureAllocationRuntime {
+    void Pump(double) override {}
 };
-
-namespace rstd
-{
-
-template<>
-struct Impl<owe::vulkan::TextureAllocationRuntime, TextureRuntimeProbe>
-    : ImplBase<TextureRuntimeProbe> {
-    void Pump(double seconds) { this->self().Pump(seconds); }
-};
-
-} // namespace rstd
 
 namespace
 {
@@ -60,14 +49,14 @@ struct BufferContentProvider {
     }
 };
 
-struct BufferBackend {
+struct BufferBackend final : owe::vulkan::BufferBackend {
     rstd::usize                          allocations { 0 };
     rstd::usize                          writes { 0 };
     rstd::u64                            next_ticket { 0 };
     owe::vulkan::BufferAllocationRequest last_request;
 
     auto AllocateBuffer(const owe::vulkan::BufferAllocationRequest& request)
-        -> rstd::Option<owe::vulkan::BufferAllocation> {
+        -> rstd::Option<owe::vulkan::BufferAllocation> override {
         ++allocations;
         last_request = request;
         if (request.size == 0) return rstd::None();
@@ -75,7 +64,7 @@ struct BufferBackend {
     }
 
     auto QueueBufferWrite(rstd::mut_ref<owe::vulkan::BufferAllocation>, rstd::slice<rstd::u8>,
-                          VkDeviceSize) -> rstd::Option<owe::vulkan::BufferUploadTicket> {
+                          VkDeviceSize) -> rstd::Option<owe::vulkan::BufferUploadTicket> override {
         ++writes;
         ++next_ticket;
         return rstd::Some(owe::vulkan::BufferUploadTicket { .value = next_ticket });
@@ -131,14 +120,14 @@ struct TextureContentProvider {
     }
 };
 
-struct ImageBackend {
+struct ImageBackend final : owe::vulkan::ImagePrepareBackend {
     rstd::usize creates { 0 };
     rstd::usize transparent_creates { 0 };
     rstd::u64   generation { 0 };
 
     auto CreateImportedTexture(rstd::ref<owe::Image>,
                                rstd::Option<rstd::sync::Arc<owe::VideoPlaybackState>>)
-        -> rstd::Option<owe::vulkan::PreparedImageAllocation> {
+        -> rstd::Option<owe::vulkan::PreparedImageAllocation> override {
         ++creates;
         ++generation;
         return rstd::Some(owe::vulkan::PreparedImageAllocation {
@@ -150,14 +139,14 @@ struct ImageBackend {
     }
 
     auto AllocateTexture(owe::vulkan::TextureKey)
-        -> rstd::Option<rstd::sync::Arc<owe::vulkan::TextureAllocation>> {
+        -> rstd::Option<rstd::sync::Arc<owe::vulkan::TextureAllocation>> override {
         ++creates;
         ++generation;
         return rstd::Some(TextureAllocation(generation.to_primitive()));
     }
 
     auto AllocateTransparentTexture(owe::vulkan::TextureKey)
-        -> rstd::Option<owe::vulkan::PreparedImageAllocation> {
+        -> rstd::Option<owe::vulkan::PreparedImageAllocation> override {
         ++creates;
         ++transparent_creates;
         ++generation;
@@ -365,14 +354,14 @@ TEST(TextureRegistry, ReleasesPhysicalResourcesOutsideTheActivePlan) {
 }
 
 TEST(TextureAllocation, OwnsAttachedRuntimeForItsWholeLeaseLifetime) {
-    auto weak = rstd::sync::Weak<rstd::dyn<owe::vulkan::TextureAllocationRuntime>>::make();
+    std::weak_ptr<owe::vulkan::TextureAllocationRuntime> weak;
     {
-        auto runtime = rstd::sync::Arc<rstd::dyn<owe::vulkan::TextureAllocationRuntime>>::make(
-            TextureRuntimeProbe {});
-        weak = runtime.downgrade();
+        std::shared_ptr<owe::vulkan::TextureAllocationRuntime> runtime =
+            std::make_shared<TextureRuntimeProbe>();
+        weak = runtime;
         owe::vulkan::ImageSlots slots;
         auto                    allocation = rstd::sync::Arc<owe::vulkan::TextureAllocation>::make(
-            rstd::move(slots), rstd::Some(runtime.clone()));
+            rstd::move(slots), runtime);
         runtime.reset();
         EXPECT_FALSE(weak.expired());
         EXPECT_TRUE(static_cast<bool>(allocation));
@@ -381,17 +370,17 @@ TEST(TextureAllocation, OwnsAttachedRuntimeForItsWholeLeaseLifetime) {
 }
 
 TEST(TextureAllocation, SubmissionLeaseDelaysRuntimeReleaseAfterActivePlanRemoval) {
-    auto weak = rstd::sync::Weak<rstd::dyn<owe::vulkan::TextureAllocationRuntime>>::make();
+    std::weak_ptr<owe::vulkan::TextureAllocationRuntime> weak;
     owe::resource_registry::SubmissionTracker submissions;
     owe::resource::CompletionToken            completion;
     {
-        auto runtime = rstd::sync::Arc<rstd::dyn<owe::vulkan::TextureAllocationRuntime>>::make(
-            TextureRuntimeProbe {});
-        weak = runtime.downgrade();
+        std::shared_ptr<owe::vulkan::TextureAllocationRuntime> runtime =
+            std::make_shared<TextureRuntimeProbe>();
+        weak = runtime;
         owe::vulkan::ImageSlots slots;
         slots.slots.resize(1);
         auto allocation = rstd::sync::Arc<owe::vulkan::TextureAllocation>::make(
-            rstd::move(slots), rstd::Some(runtime.clone()));
+            rstd::move(slots), runtime);
 
         owe::resource::TextureRegistry registry;
         auto                           handle = registry.RegisterImported(
@@ -555,7 +544,7 @@ TEST(BufferRegistry, OwnsLogicalDefinitionsBehindStableHandles) {
 TEST(BufferRegistry, UpdatesDynamicContentWithoutReplacingItsPlannedCapacity) {
     owe::resource_registry::BufferRegistry registry;
     BufferBackend                          upload_backend;
-    auto upload  = rstd::dyn<owe::vulkan::BufferBackend>::from_ref(upload_backend);
+    owe::vulkan::BufferBackend* upload = &upload_backend;
     auto content = rstd::vec::Vec<rstd::u8>::make();
     content.push(rstd::u8(1));
     content.push(rstd::u8(2));
@@ -567,7 +556,7 @@ TEST(BufferRegistry, UpdatesDynamicContentWithoutReplacingItsPlannedCapacity) {
         .lifetime   = owe::resource::BufferLifetimeClass::Dynamic,
     };
 
-    auto prepared = registry.Ensure(request.clone(), content.as_slice(), upload.as_mut_ref());
+    auto prepared = registry.Ensure(request.clone(), content.as_slice(), upload);
     ASSERT_TRUE(prepared.is_ok());
     auto buffer = rstd::move(prepared).unwrap_unchecked();
     EXPECT_EQ(upload_backend.last_request.size, 128u);
@@ -575,7 +564,7 @@ TEST(BufferRegistry, UpdatesDynamicContentWithoutReplacingItsPlannedCapacity) {
     EXPECT_EQ(upload_backend.last_request.usage, owe::vulkan::BufferUploadClass::Vertex);
 
     content.push(rstd::u8(3));
-    auto updated = registry.Update(buffer.resource, content.as_slice(), upload.as_mut_ref());
+    auto updated = registry.Update(buffer.resource, content.as_slice(), upload);
     ASSERT_TRUE(updated.is_ok());
     EXPECT_EQ(upload_backend.allocations, rstd::usize(1));
     EXPECT_EQ(upload_backend.writes, rstd::usize(2));
@@ -585,12 +574,12 @@ TEST(BufferRegistry, UpdatesDynamicContentWithoutReplacingItsPlannedCapacity) {
 
     request.content_version = rstd::u64(7);
     content[rstd::usize()]  = rstd::u8(4);
-    auto prepared_again = registry.Ensure(request.clone(), content.as_slice(), upload.as_mut_ref());
+    auto prepared_again = registry.Ensure(request.clone(), content.as_slice(), upload);
     ASSERT_TRUE(prepared_again.is_ok());
     EXPECT_EQ(upload_backend.allocations, rstd::usize(1));
     EXPECT_EQ(upload_backend.writes, rstd::usize(2));
 
-    updated = registry.Update(buffer.resource, content.as_slice(), upload.as_mut_ref());
+    updated = registry.Update(buffer.resource, content.as_slice(), upload);
     ASSERT_TRUE(updated.is_ok());
     EXPECT_EQ(upload_backend.writes, rstd::usize(3));
     physical = registry.Resolve(buffer.resource);
@@ -601,7 +590,7 @@ TEST(BufferRegistry, UpdatesDynamicContentWithoutReplacingItsPlannedCapacity) {
 TEST(BufferRegistry, ReusesPhysicalAllocationAcrossPreparedContentVersions) {
     owe::resource_registry::BufferRegistry registry;
     BufferBackend                          backend;
-    auto buffer_backend = rstd::dyn<owe::vulkan::BufferBackend>::from_ref(backend);
+    owe::vulkan::BufferBackend* buffer_backend = &backend;
     auto content        = rstd::vec::Vec<rstd::u8>::make();
     content.push(rstd::u8(1));
     auto request = owe::resource::BufferRequest {
@@ -610,13 +599,13 @@ TEST(BufferRegistry, ReusesPhysicalAllocationAcrossPreparedContentVersions) {
         .content_version = rstd::u64(1),
     };
 
-    auto first = registry.Ensure(request.clone(), content.as_slice(), buffer_backend.as_mut_ref());
+    auto first = registry.Ensure(request.clone(), content.as_slice(), buffer_backend);
     ASSERT_TRUE(first.is_ok());
     auto first_physical = rstd::move(first).unwrap_unchecked().physical;
 
     request.content_version = rstd::u64(2);
     content[rstd::usize()]  = rstd::u8(2);
-    auto second = registry.Ensure(request.clone(), content.as_slice(), buffer_backend.as_mut_ref());
+    auto second = registry.Ensure(request.clone(), content.as_slice(), buffer_backend);
     ASSERT_TRUE(second.is_ok());
     auto second_physical = rstd::move(second).unwrap_unchecked().physical;
     EXPECT_EQ(first_physical.as_ptr().as_raw_ptr(), second_physical.as_ptr().as_raw_ptr());
@@ -626,7 +615,7 @@ TEST(BufferRegistry, ReusesPhysicalAllocationAcrossPreparedContentVersions) {
     request.definition.size = rstd::usize(128);
     request.content_version = rstd::u64(3);
     auto replaced =
-        registry.Ensure(rstd::move(request), content.as_slice(), buffer_backend.as_mut_ref());
+        registry.Ensure(rstd::move(request), content.as_slice(), buffer_backend);
     ASSERT_TRUE(replaced.is_ok());
     auto replacement = rstd::move(replaced).unwrap_unchecked().physical;
     EXPECT_NE(first_physical.as_ptr().as_raw_ptr(), replacement.as_ptr().as_raw_ptr());
@@ -641,7 +630,7 @@ TEST(ResourcePrepareService, VisitsBufferAndShaderPlansThroughTypedProviders) {
     BufferBackend                          upload_backend;
     BufferContentProvider                  buffer_provider;
     ShaderArtifactProvider                 shader_provider;
-    auto upload = rstd::dyn<owe::vulkan::BufferBackend>::from_ref(upload_backend);
+    owe::vulkan::BufferBackend* upload = &upload_backend;
     auto buffer = rstd::dyn<owe::resource::BufferContentProvider>::from_ref(buffer_provider);
     auto shader = rstd::dyn<owe::resource::ShaderArtifactProvider>::from_ref(shader_provider);
 
@@ -665,9 +654,9 @@ TEST(ResourcePrepareService, VisitsBufferAndShaderPlansThroughTypedProviders) {
 
     owe::resource_registry::ResourcePrepareService service(
         textures,
-        rstd::None<rstd::mut_ref<rstd::dyn<owe::vulkan::ImagePrepareBackend>>>(),
+        nullptr,
         buffers,
-        upload.as_mut_ref(),
+        upload,
         shaders);
     auto prepared = service.Prepare(plan,
                                     owe::resource_registry::ResourceContentProviders {
@@ -705,8 +694,8 @@ TEST(ResourcePrepareService, InitializesRetainedHistoryTextureOnce) {
     owe::resource_registry::ShaderRegistry shaders;
     BufferBackend                          buffer_backend;
     ImageBackend                           image_backend;
-    auto buffer = rstd::dyn<owe::vulkan::BufferBackend>::from_ref(buffer_backend);
-    auto image  = rstd::dyn<owe::vulkan::ImagePrepareBackend>::from_ref(image_backend);
+    owe::vulkan::BufferBackend* buffer = &buffer_backend;
+    owe::vulkan::ImagePrepareBackend* image = &image_backend;
 
     owe::resource::ResourcePlan plan { .generation = rstd::u64(20) };
     plan.textures.push(owe::resource::TexturePlanEntry {
@@ -731,7 +720,7 @@ TEST(ResourcePrepareService, InitializesRetainedHistoryTextureOnce) {
     });
 
     owe::resource_registry::ResourcePrepareService service(
-        textures, rstd::Some(image.as_mut_ref()), buffers, buffer.as_mut_ref(), shaders);
+        textures, image, buffers, buffer, shaders);
     auto first = service.Prepare(plan);
     ASSERT_TRUE(first.is_ok());
     EXPECT_EQ(first->TextureCount(), rstd::usize(1));
@@ -749,8 +738,8 @@ TEST(ResourcePrepareService, MapsLogicalTextureUsesToPlannedPhysicalSlots) {
     owe::resource_registry::ShaderRegistry shaders;
     BufferBackend                          buffer_backend;
     ImageBackend                           image_backend;
-    auto buffer = rstd::dyn<owe::vulkan::BufferBackend>::from_ref(buffer_backend);
-    auto image  = rstd::dyn<owe::vulkan::ImagePrepareBackend>::from_ref(image_backend);
+    owe::vulkan::BufferBackend* buffer = &buffer_backend;
+    owe::vulkan::ImagePrepareBackend* image = &image_backend;
 
     owe::resource::ResourcePlan plan { .generation = rstd::u64(22) };
     for (rstd::uint64_t index = 0; index < 3; ++index) {
@@ -776,7 +765,7 @@ TEST(ResourcePrepareService, MapsLogicalTextureUsesToPlannedPhysicalSlots) {
     }
 
     owe::resource_registry::ResourcePrepareService service(
-        textures, rstd::Some(image.as_mut_ref()), buffers, buffer.as_mut_ref(), shaders);
+        textures, image, buffers, buffer, shaders);
     auto prepared = service.Prepare(plan);
     ASSERT_TRUE(prepared.is_ok());
     ASSERT_EQ(prepared->TextureCount(), rstd::usize(3));
@@ -801,8 +790,8 @@ TEST(ResourcePrepareService, BatchesDeduplicatesAndCachesImportedTextures) {
     BufferBackend                          buffer_backend;
     ImageBackend                           image_backend;
     TextureContentProvider                 content_provider;
-    auto buffer  = rstd::dyn<owe::vulkan::BufferBackend>::from_ref(buffer_backend);
-    auto image   = rstd::dyn<owe::vulkan::ImagePrepareBackend>::from_ref(image_backend);
+    owe::vulkan::BufferBackend* buffer = &buffer_backend;
+    owe::vulkan::ImagePrepareBackend* image = &image_backend;
     auto content = rstd::dyn<owe::resource::TextureContentProvider>::from_ref(content_provider);
 
     owe::resource::ResourcePlan plan { .generation = rstd::u64(21) };
@@ -821,7 +810,7 @@ TEST(ResourcePrepareService, BatchesDeduplicatesAndCachesImportedTextures) {
     }
 
     owe::resource_registry::ResourcePrepareService service(
-        textures, rstd::Some(image.as_mut_ref()), buffers, buffer.as_mut_ref(), shaders);
+        textures, image, buffers, buffer, shaders);
     auto started = service.Begin(plan,
                                  owe::resource_registry::ResourceContentProviders {
                                      .texture = rstd::Some(content.as_mut_ref()),
