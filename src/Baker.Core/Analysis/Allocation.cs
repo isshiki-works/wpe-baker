@@ -35,7 +35,6 @@ internal sealed class Allocation
     private Allocation(SceneGraph graph) =>
         Scripts = graph.Objects.ToDictionary(pair => pair.Key, pair => SceneAnalyzer.Walk(pair.Value).OfType<JsonObject>()
             .Where(n => n["script"] is JsonValue).Select(n => CapabilityScanText(n["script"]!.GetValue<string>())).ToArray());
-    }
 
     /// <param name="severedRead">与 <see cref="Liveness.Analyze"/> 同一对昼夜过滤，用于按单元的依赖闭包。</param>
     internal static Allocation Plan(SceneGraph graph, RuntimeObservation observation, Liveness liveness, HybridAnalyzeRequest request,
