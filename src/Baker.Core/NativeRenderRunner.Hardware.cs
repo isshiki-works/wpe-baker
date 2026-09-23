@@ -186,7 +186,7 @@ public sealed partial class NativeRenderRunner
         JsonObject[] passed = [.. adapters.Where(Passed)];
         var parts = new JsonArray();
         void Add(string key, object?[] chineseArgs, object?[] englishArgs) =>
-            parts.Add(MessageCatalog.Localized(key, chineseArgs, englishArgs));
+            parts.Add(new Message(key, englishArgs, chineseArgs).Localized());
 
         if (adapters.Length == 0) Add("hardware_decode.no_adapters_on_baking_machine", [], []);
         else if (passed.Length == 0)

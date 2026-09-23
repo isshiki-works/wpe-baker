@@ -166,7 +166,7 @@ public static class PresetCascade
             }
             if (Admission.Bakeable(result) && Admission.GroupCount(result) > Admission.MaxVideoGroups)
             {
-                result["blockers"]!.AsArray().Add(new Blocker(BlockerCode.TooManyVideoGroups, [Admission.MaxVideoGroups]).ToNode());
+                PlanBlockers.Add(result["blockers"]!.AsArray(), new Blocker(BlockerCode.TooManyVideoGroups, [Admission.MaxVideoGroups]));
                 result["status"] = "requires_resolution";
                 result["preset_rejection_reason"] = "too_many_video_groups";
                 result["suitability"] = HybridScenePlanner.Suitability(result);

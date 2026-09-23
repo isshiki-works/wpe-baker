@@ -223,6 +223,8 @@ internal static class PlainLanguageChecks
 
         // 主体类：整张画面就是那个实时效果画出来的。
         var subject = Plan(Layer(10, null, "指针着色器", live: true, ["active_shader_pointer_input"]));
+        // v3 形态：blockers 英文原文与 blockers_localized 同下标成对；取舍清单按编号读，只有 blockers_localized 读不到。
+        subject["blockers"] = new JsonArray(MessageCatalog.RenderLegacy("blocker.no_input_independent_group"));
         subject["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.no_input_independent_group" });
         TradeoffOptions.Attach(subject);
         check(PlainLanguage.Verdict(subject, false) == "无法生成" && PlainLanguage.NextAction(subject, false) == "原因见\"详情\"" &&
