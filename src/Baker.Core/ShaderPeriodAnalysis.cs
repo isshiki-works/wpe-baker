@@ -91,7 +91,7 @@ public static class ShaderPeriodAnalysis
         IReadOnlyCollection<int> selectedLayerIds, double? loopCeilingSeconds = null, double maximumRetimePercent = DefaultRetimePercent)
     {
         double ceiling = loopCeilingSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
-        if (!double.IsFinite(maximumRetimePercent) || maximumRetimePercent < 0 || maximumRetimePercent > CommonLoopSolver.MaximumRetimePercent)
+        if (!double.IsFinite(maximumRetimePercent) || maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumBudgetPercent)
             throw new ArgumentOutOfRangeException(nameof(maximumRetimePercent), "Retiming must be between zero and five percent.");
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(source);
