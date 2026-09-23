@@ -33,22 +33,6 @@ struct Impl<hash::Hash, owe::rg::NodeHandle> : ImplBase<owe::rg::NodeHandle> {
 export namespace owe::rg
 {
 
-struct Node {
-    using Trait                  = Node;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = Node;
-
-        auto Handle() const noexcept -> NodeHandle { return rstd::trait_call<0>(this); }
-        auto ToGraphviz() const -> String { return rstd::trait_call<1>(this); }
-    };
-
-    template<typename T>
-    using Funcs = rstd::TraitFuncs<&T::Handle, &T::ToGraphviz>;
-};
-
 struct NodeLinks {
     rstd::vec::Vec<NodeHandle> incoming;
     rstd::vec::Vec<NodeHandle> outgoing;
