@@ -26,7 +26,7 @@ auto Register(particle::ParticleSchemaBuilder& builder, ref<str> name, ref<str> 
     return result.unwrap();
 }
 
-struct TemperatureAttribute {
+struct TemperatureAttribute : particle::ParticleAttribute {
     using Value = float;
 
     static inline usize values_mut_calls {};
@@ -34,17 +34,15 @@ struct TemperatureAttribute {
     TemperatureAttribute(particle::ParticleAttributeDescriptor descriptor, Value default_value)
         : storage(rstd::move(descriptor), default_value) {}
 
-    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> {
+    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> override {
         return storage.Descriptor();
     }
-    auto ConcreteType() const noexcept -> std::type_index { return storage.ConcreteType(); }
-    auto ValueType() const noexcept -> std::type_index { return storage.ValueTypeId(); }
-    auto Len() const noexcept -> usize { return storage.Len(); }
-    auto Capacity() const noexcept -> usize { return storage.Capacity(); }
-    void Reserve(usize total_slots) { storage.Reserve(total_slots); }
-    void AppendDefaults(usize count) { storage.AppendDefaults(count); }
-    void ResetSlots(slice<particle::ParticleSlot> slots) { storage.ResetSlots(slots); }
-    void Clear() { storage.Clear(); }
+    auto Len() const noexcept -> usize override { return storage.Len(); }
+    auto Capacity() const noexcept -> usize override { return storage.Capacity(); }
+    void Reserve(usize total_slots) override { storage.Reserve(total_slots); }
+    void AppendDefaults(usize count) override { storage.AppendDefaults(count); }
+    void ResetSlots(slice<particle::ParticleSlot> slots) override { storage.ResetSlots(slots); }
+    void Clear() override { storage.Clear(); }
     auto Values() const noexcept -> slice<Value> { return storage.Values(); }
     auto ValuesMut() noexcept -> mut_ref<Value[]> {
         ++values_mut_calls;

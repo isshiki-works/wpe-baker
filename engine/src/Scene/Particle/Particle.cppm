@@ -6,6 +6,7 @@ export module wescene.particle;
 
 import eigen;
 import rstd;
+import rstd.cppstd;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
@@ -37,7 +38,6 @@ struct ParticleAttributeDescriptor {
     String                       debug_name;
     String                       owner;
     std::type_index              concrete_type;
-    std::type_index              value_type;
     usize                        value_size {};
     usize                        value_alignment {};
     ParticleAttributeResetPolicy reset_policy { ParticleAttributeResetPolicy::DefaultValue };
@@ -48,7 +48,6 @@ struct ParticleAttributeDescriptor {
             .debug_name      = debug_name.clone(),
             .owner           = owner.clone(),
             .concrete_type   = concrete_type,
-            .value_type      = value_type,
             .value_size      = value_size,
             .value_alignment = value_alignment,
             .reset_policy    = reset_policy,
@@ -57,47 +56,20 @@ struct ParticleAttributeDescriptor {
 };
 
 struct ParticleAttribute {
-    using Trait                  = ParticleAttribute;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ParticleAttribute;
-
-        auto Descriptor() const -> ref<ParticleAttributeDescriptor> {
-            return rstd::trait_call<0>(this);
-        }
-        auto ConcreteType() const noexcept -> std::type_index { return rstd::trait_call<1>(this); }
-        auto ValueType() const noexcept -> std::type_index { return rstd::trait_call<2>(this); }
-        auto Len() const noexcept -> usize { return rstd::trait_call<3>(this); }
-        auto Capacity() const noexcept -> usize { return rstd::trait_call<4>(this); }
-        void Reserve(usize total_slots) { rstd::trait_call<5>(this, total_slots); }
-        void AppendDefaults(usize count) { rstd::trait_call<6>(this, count); }
-        void ResetSlots(slice<ParticleSlot> slots) { rstd::trait_call<7>(this, slots); }
-        void Clear() { rstd::trait_call<8>(this); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Descriptor, &T::ConcreteType, &T::ValueType, &T::Len, &T::Capacity,
-                             &T::Reserve, &T::AppendDefaults, &T::ResetSlots, &T::Clear>;
+    virtual ~ParticleAttribute()                                        = default;
+    virtual auto Descriptor() const -> ref<ParticleAttributeDescriptor> = 0;
+    virtual auto Len() const noexcept -> usize                          = 0;
+    virtual auto Capacity() const noexcept -> usize                     = 0;
+    virtual void Reserve(usize total_slots)                             = 0;
+    virtual void AppendDefaults(usize count)                            = 0;
+    virtual void ResetSlots(slice<ParticleSlot> slots)                  = 0;
+    virtual void Clear()                                                = 0;
 };
 
 struct ParticleAttributeFactory {
-    using Trait                  = ParticleAttributeFactory;
-    static constexpr bool direct = false;
-
-    template<typename Self, typename = void>
-    struct Api {
-        using Trait = ParticleAttributeFactory;
-
-        auto Descriptor() const -> ref<ParticleAttributeDescriptor> {
-            return rstd::trait_call<0>(this);
-        }
-        auto Create() const -> Box<dyn<ParticleAttribute>> { return rstd::trait_call<1>(this); }
-    };
-
-    template<typename T>
-    using Funcs = TraitFuncs<&T::Descriptor, &T::Create>;
+    virtual ~ParticleAttributeFactory()                                 = default;
+    virtual auto Descriptor() const -> ref<ParticleAttributeDescriptor> = 0;
+    virtual auto Create() const -> std::unique_ptr<ParticleAttribute>   = 0;
 };
 
 template<typename Attribute>
@@ -141,8 +113,6 @@ public:
     auto Descriptor() const -> ref<ParticleAttributeDescriptor> {
         return ref<ParticleAttributeDescriptor>::from_raw_parts(rstd::addressof(m_descriptor));
     }
-    auto ConcreteType() const noexcept -> std::type_index { return m_descriptor.concrete_type; }
-    auto ValueTypeId() const noexcept -> std::type_index { return m_descriptor.value_type; }
     auto Len() const noexcept -> usize { return m_values.len(); }
     auto Capacity() const noexcept -> usize { return m_values.capacity(); }
     void Reserve(usize total_slots) {
@@ -167,31 +137,29 @@ private:
     rstd::vec::Vec<Value>       m_values;
 };
 
-#define OWE_PARTICLE_VALUE_ATTRIBUTE(Name, Type)                                                 \
-    struct Name {                                                                                \
-        using Value = Type;                                                                      \
-                                                                                                 \
-        Name(ParticleAttributeDescriptor descriptor, Value default_value)                        \
-            : storage(rstd::move(descriptor), rstd::move(default_value)) {}                      \
-                                                                                                 \
-        auto Descriptor() const -> ref<ParticleAttributeDescriptor> {                            \
-            return storage.Descriptor();                                                         \
-        }                                                                                        \
-        auto ConcreteType() const noexcept -> std::type_index { return storage.ConcreteType(); } \
-        auto ValueType() const noexcept -> std::type_index { return storage.ValueTypeId(); }     \
-        auto Len() const noexcept -> usize { return storage.Len(); }                             \
-        auto Capacity() const noexcept -> usize { return storage.Capacity(); }                   \
-        void Reserve(usize total_slots) { storage.Reserve(total_slots); }                        \
-        void AppendDefaults(usize count) { storage.AppendDefaults(count); }                      \
-        void ResetSlots(slice<ParticleSlot> slots) { storage.ResetSlots(slots); }                \
-        void Clear() { storage.Clear(); }                                                        \
-        auto Values() const noexcept -> slice<Value> { return storage.Values(); }                \
-        auto ValuesMut() noexcept -> mut_ref<Value[]> { return storage.ValuesMut(); }            \
-        auto CloneEmpty() const -> Name {                                                        \
-            return Name(storage.CloneDescriptor(), storage.DefaultValue());                      \
-        }                                                                                        \
-                                                                                                 \
-        ParticleValueAttributeStorage<Value> storage;                                            \
+#define OWE_PARTICLE_VALUE_ATTRIBUTE(Name, Type)                                           \
+    struct Name : ParticleAttribute {                                                      \
+        using Value = Type;                                                                \
+                                                                                           \
+        Name(ParticleAttributeDescriptor descriptor, Value default_value)                  \
+            : storage(rstd::move(descriptor), rstd::move(default_value)) {}                \
+                                                                                           \
+        auto Descriptor() const -> ref<ParticleAttributeDescriptor> override {             \
+            return storage.Descriptor();                                                   \
+        }                                                                                  \
+        auto Len() const noexcept -> usize override { return storage.Len(); }              \
+        auto Capacity() const noexcept -> usize override { return storage.Capacity(); }    \
+        void Reserve(usize total_slots) override { storage.Reserve(total_slots); }         \
+        void AppendDefaults(usize count) override { storage.AppendDefaults(count); }       \
+        void ResetSlots(slice<ParticleSlot> slots) override { storage.ResetSlots(slots); } \
+        void Clear() override { storage.Clear(); }                                         \
+        auto Values() const noexcept -> slice<Value> { return storage.Values(); }          \
+        auto ValuesMut() noexcept -> mut_ref<Value[]> { return storage.ValuesMut(); }      \
+        auto CloneEmpty() const -> Name {                                                  \
+            return Name(storage.CloneDescriptor(), storage.DefaultValue());                \
+        }                                                                                  \
+                                                                                           \
+        ParticleValueAttributeStorage<Value> storage;                                      \
     }
 
 struct ParticleSlotState {
@@ -220,14 +188,16 @@ OWE_PARTICLE_VALUE_ATTRIBUTE(InitialLifetimeAttribute, float);
 #undef OWE_PARTICLE_VALUE_ATTRIBUTE
 
 template<typename Attribute>
-class ConcreteParticleAttributeFactory {
+class ConcreteParticleAttributeFactory final : public ParticleAttributeFactory {
 public:
     explicit ConcreteParticleAttributeFactory(Attribute prototype)
         : m_prototype(rstd::move(prototype)) {}
 
-    auto Descriptor() const -> ref<ParticleAttributeDescriptor> { return m_prototype.Descriptor(); }
-    auto Create() const -> Box<dyn<ParticleAttribute>> {
-        return Box<dyn<ParticleAttribute>>::make(m_prototype.CloneEmpty());
+    auto Descriptor() const -> ref<ParticleAttributeDescriptor> override {
+        return m_prototype.Descriptor();
+    }
+    auto Create() const -> std::unique_ptr<ParticleAttribute> override {
+        return std::make_unique<Attribute>(m_prototype.CloneEmpty());
     }
 
 private:
@@ -285,16 +255,16 @@ private:
     friend class ParticleSchemaBuilder;
     friend class ParticleStorage;
 
-    ParticleSchema(rstd::vec::Vec<Box<dyn<ParticleAttributeFactory>>> factories,
-                   rstd::collections::HashMap<u64, usize>             id_slots,
-                   ParticleAttributeKey<SlotStateAttribute>           slot_state_key,
-                   ParticleAttributeKey<PositionAttribute>            position_key)
+    ParticleSchema(rstd::vec::Vec<std::unique_ptr<ParticleAttributeFactory>> factories,
+                   rstd::collections::HashMap<u64, usize>                    id_slots,
+                   ParticleAttributeKey<SlotStateAttribute>                  slot_state_key,
+                   ParticleAttributeKey<PositionAttribute>                   position_key)
         : m_factories(rstd::move(factories)),
           m_id_slots(rstd::move(id_slots)),
           m_slot_state_key(slot_state_key),
           m_position_key(position_key) {}
 
-    rstd::vec::Vec<Box<dyn<ParticleAttributeFactory>>> m_factories;
+    rstd::vec::Vec<std::unique_ptr<ParticleAttributeFactory>> m_factories;
     rstd::collections::HashMap<u64, usize>             m_id_slots;
     ParticleAttributeKey<SlotStateAttribute>           m_slot_state_key;
     ParticleAttributeKey<PositionAttribute>            m_position_key;
@@ -321,7 +291,6 @@ public:
             .debug_name      = String::make(name),
             .owner           = String::make(owner),
             .concrete_type   = std::type_index(typeid(Attribute)),
-            .value_type      = std::type_index(typeid(typename Attribute::Value)),
             .value_size      = usize(sizeof(typename Attribute::Value)),
             .value_alignment = usize(alignof(typename Attribute::Value)),
             .reset_policy    = reset_policy,
@@ -329,7 +298,8 @@ public:
         Attribute prototype(rstd::move(descriptor), rstd::forward<Args>(args)...);
         auto      slot    = m_factories.len();
         auto      factory = ConcreteParticleAttributeFactory<Attribute>(rstd::move(prototype));
-        m_factories.push(Box<dyn<ParticleAttributeFactory>>::make(rstd::move(factory)));
+        m_factories.push(
+            std::make_unique<ConcreteParticleAttributeFactory<Attribute>>(rstd::move(factory)));
         (void)m_id_slots.insert(id.value, slot);
         return Ok(ParticleAttributeKey<Attribute> { .id = id, .schema_slot = slot });
     }
@@ -355,7 +325,7 @@ public:
 
 private:
     u64                                                m_next_id { 1 };
-    rstd::vec::Vec<Box<dyn<ParticleAttributeFactory>>> m_factories;
+    rstd::vec::Vec<std::unique_ptr<ParticleAttributeFactory>> m_factories;
     rstd::collections::HashMap<u64, usize>             m_id_slots;
     ParticleAttributeKey<SlotStateAttribute>           m_slot_state_key;
     ParticleAttributeKey<PositionAttribute>            m_position_key;
@@ -485,15 +455,15 @@ public:
     template<typename Attribute>
     auto AttributeRef(ParticleAttributeKey<Attribute> key) const -> ref<Attribute> {
         ValidateKey(key);
-        auto erased = m_attributes[key.schema_slot].as_ref();
-        return ref<Attribute>::from_raw_parts(static_cast<const Attribute*>(erased.as_raw_ptr()));
+        return ref<Attribute>::from_raw_parts(
+            static_cast<const Attribute*>(m_attributes[key.schema_slot].get()));
     }
 
     template<typename Attribute>
     auto AttributeMut(ParticleAttributeKey<Attribute> key) -> mut_ref<Attribute> {
         ValidateKey(key);
-        auto erased = m_attributes[key.schema_slot].as_mut_ptr();
-        return mut_ref<Attribute>::from_raw_parts(static_cast<Attribute*>(erased.as_raw_ptr()));
+        return mut_ref<Attribute>::from_raw_parts(
+            static_cast<Attribute*>(m_attributes[key.schema_slot].get()));
     }
 
     template<typename Attribute>
@@ -511,9 +481,9 @@ private:
     friend class ParticleViewCompiler;
     friend class ParticleViewBinding;
 
-    ParticleStorage(rstd::vec::Vec<Box<dyn<ParticleAttribute>>> attributes,
-                    ParticleAttributeKey<SlotStateAttribute>    slot_state_key,
-                    ParticleAttributeKey<PositionAttribute>     position_key)
+    ParticleStorage(rstd::vec::Vec<std::unique_ptr<ParticleAttribute>> attributes,
+                    ParticleAttributeKey<SlotStateAttribute>           slot_state_key,
+                    ParticleAttributeKey<PositionAttribute>            position_key)
         : m_attributes(rstd::move(attributes)),
           m_slot_state_key(slot_state_key),
           m_position_key(position_key) {
@@ -552,7 +522,7 @@ private:
     u64                                         m_next_spawn_sequence {};
     u64                                         m_structure_version { 1 };
     u64                                         m_column_version { 1 };
-    rstd::vec::Vec<Box<dyn<ParticleAttribute>>> m_attributes;
+    rstd::vec::Vec<std::unique_ptr<ParticleAttribute>> m_attributes;
     ParticleAttributeKey<SlotStateAttribute>    m_slot_state_key;
     ParticleAttributeKey<PositionAttribute>     m_position_key;
 };
@@ -728,8 +698,7 @@ private:
 
     template<typename Attribute>
     static auto BindColumn(ParticleStorage& storage, usize schema_slot) -> ParticleBoundColumn {
-        auto erased = storage.m_attributes[schema_slot].as_mut_ptr();
-        auto object = static_cast<Attribute*>(erased.as_raw_ptr());
+        auto object = static_cast<Attribute*>(storage.m_attributes[schema_slot].get());
         return ParticleBoundColumn {
             .object = object,
             .read   = &ReadValues<Attribute>,
@@ -739,8 +708,7 @@ private:
 
     template<typename Attribute>
     static auto BindObject(ParticleStorage& storage, usize schema_slot) -> void* {
-        auto erased = storage.m_attributes[schema_slot].as_mut_ptr();
-        return static_cast<Attribute*>(erased.as_raw_ptr());
+        return static_cast<Attribute*>(storage.m_attributes[schema_slot].get());
     }
 
     template<typename Attribute>
@@ -1101,7 +1069,8 @@ inline ParticleSchemaBuilder::ParticleSchemaBuilder() {
 }
 
 inline auto ParticleSchema::CreateStorage() const -> ParticleStorage {
-    auto attributes = rstd::vec::Vec<Box<dyn<ParticleAttribute>>>::with_capacity(m_factories.len());
+    auto attributes =
+        rstd::vec::Vec<std::unique_ptr<ParticleAttribute>>::with_capacity(m_factories.len());
     for (const auto& factory : m_factories) attributes.push(factory->Create());
     return ParticleStorage(rstd::move(attributes), m_slot_state_key, m_position_key);
 }

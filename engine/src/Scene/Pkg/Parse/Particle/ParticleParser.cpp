@@ -758,24 +758,22 @@ struct MaintainDistanceState {
     bool  initialized { false };
 };
 
-class MaintainDistanceAttribute {
+class MaintainDistanceAttribute : public particle::ParticleAttribute {
 public:
     using Value = MaintainDistanceState;
 
     MaintainDistanceAttribute(particle::ParticleAttributeDescriptor descriptor, Value default_value)
         : m_storage(rstd::move(descriptor), rstd::move(default_value)) {}
 
-    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> {
+    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> override {
         return m_storage.Descriptor();
     }
-    auto ConcreteType() const noexcept -> std::type_index { return m_storage.ConcreteType(); }
-    auto ValueType() const noexcept -> std::type_index { return m_storage.ValueTypeId(); }
-    auto Len() const noexcept -> usize { return m_storage.Len(); }
-    auto Capacity() const noexcept -> usize { return m_storage.Capacity(); }
-    void Reserve(usize total_slots) { m_storage.Reserve(total_slots); }
-    void AppendDefaults(usize count) { m_storage.AppendDefaults(count); }
-    void ResetSlots(slice<particle::ParticleSlot> slots) { m_storage.ResetSlots(slots); }
-    void Clear() { m_storage.Clear(); }
+    auto Len() const noexcept -> usize override { return m_storage.Len(); }
+    auto Capacity() const noexcept -> usize override { return m_storage.Capacity(); }
+    void Reserve(usize total_slots) override { m_storage.Reserve(total_slots); }
+    void AppendDefaults(usize count) override { m_storage.AppendDefaults(count); }
+    void ResetSlots(slice<particle::ParticleSlot> slots) override { m_storage.ResetSlots(slots); }
+    void Clear() override { m_storage.Clear(); }
     auto Values() const noexcept -> slice<Value> { return m_storage.Values(); }
     auto ValuesMut() noexcept -> mut_ref<Value[]> { return m_storage.ValuesMut(); }
     auto CloneEmpty() const -> MaintainDistanceAttribute {

@@ -131,31 +131,29 @@ struct ParticleAttributes {
     static auto Register(particle::ParticleSchemaBuilder&) -> ParticleAttributes;
 };
 
-#define OWE_WP_OSCILLATION_ATTRIBUTE(Name, Type)                                                 \
-    struct Name {                                                                                \
-        using Value = Type;                                                                      \
-                                                                                                 \
-        Name(particle::ParticleAttributeDescriptor descriptor, Value default_value)              \
-            : storage(rstd::move(descriptor), rstd::move(default_value)) {}                      \
-                                                                                                 \
-        auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> {                  \
-            return storage.Descriptor();                                                         \
-        }                                                                                        \
-        auto ConcreteType() const noexcept -> std::type_index { return storage.ConcreteType(); } \
-        auto ValueType() const noexcept -> std::type_index { return storage.ValueTypeId(); }     \
-        auto Len() const noexcept -> usize { return storage.Len(); }                             \
-        auto Capacity() const noexcept -> usize { return storage.Capacity(); }                   \
-        void Reserve(usize total_slots) { storage.Reserve(total_slots); }                        \
-        void AppendDefaults(usize count) { storage.AppendDefaults(count); }                      \
-        void ResetSlots(slice<particle::ParticleSlot>) {}                                        \
-        void Clear() { storage.Clear(); }                                                        \
-        auto Values() const noexcept -> slice<Value> { return storage.Values(); }                \
-        auto ValuesMut() noexcept -> mut_ref<Value[]> { return storage.ValuesMut(); }            \
-        auto CloneEmpty() const -> Name {                                                        \
-            return Name(storage.CloneDescriptor(), storage.DefaultValue());                      \
-        }                                                                                        \
-                                                                                                 \
-        particle::ParticleValueAttributeStorage<Value> storage;                                  \
+#define OWE_WP_OSCILLATION_ATTRIBUTE(Name, Type)                                         \
+    struct Name : particle::ParticleAttribute {                                          \
+        using Value = Type;                                                              \
+                                                                                         \
+        Name(particle::ParticleAttributeDescriptor descriptor, Value default_value)      \
+            : storage(rstd::move(descriptor), rstd::move(default_value)) {}              \
+                                                                                         \
+        auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> override { \
+            return storage.Descriptor();                                                 \
+        }                                                                                \
+        auto Len() const noexcept -> usize override { return storage.Len(); }            \
+        auto Capacity() const noexcept -> usize override { return storage.Capacity(); }  \
+        void Reserve(usize total_slots) override { storage.Reserve(total_slots); }       \
+        void AppendDefaults(usize count) override { storage.AppendDefaults(count); }     \
+        void ResetSlots(slice<particle::ParticleSlot>) override {}                       \
+        void Clear() override { storage.Clear(); }                                       \
+        auto Values() const noexcept -> slice<Value> { return storage.Values(); }        \
+        auto ValuesMut() noexcept -> mut_ref<Value[]> { return storage.ValuesMut(); }    \
+        auto CloneEmpty() const -> Name {                                                \
+            return Name(storage.CloneDescriptor(), storage.DefaultValue());              \
+        }                                                                                \
+                                                                                         \
+        particle::ParticleValueAttributeStorage<Value> storage;                          \
     }
 
 OWE_WP_OSCILLATION_ATTRIBUTE(OscillationResetAttribute, bool);
@@ -203,20 +201,18 @@ struct TrailSlotState {
     bool            has_previous_position { false };
 };
 
-struct TrailHistoryAttribute {
+struct TrailHistoryAttribute : particle::ParticleAttribute {
     using Value = TrailSlotState;
 
     TrailHistoryAttribute(particle::ParticleAttributeDescriptor descriptor, usize sample_capacity);
 
-    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor>;
-    auto ConcreteType() const noexcept -> std::type_index;
-    auto ValueType() const noexcept -> std::type_index;
-    auto Len() const noexcept -> usize;
-    auto Capacity() const noexcept -> usize;
-    void Reserve(usize total_slots);
-    void AppendDefaults(usize count);
-    void ResetSlots(slice<particle::ParticleSlot> slots);
-    void Clear();
+    auto Descriptor() const -> ref<particle::ParticleAttributeDescriptor> override;
+    auto Len() const noexcept -> usize override;
+    auto Capacity() const noexcept -> usize override;
+    void Reserve(usize total_slots) override;
+    void AppendDefaults(usize count) override;
+    void ResetSlots(slice<particle::ParticleSlot> slots) override;
+    void Clear() override;
     auto CloneEmpty() const -> TrailHistoryAttribute;
 
     void Push(particle::ParticleSlot slot, const Eigen::Vector3f& position);

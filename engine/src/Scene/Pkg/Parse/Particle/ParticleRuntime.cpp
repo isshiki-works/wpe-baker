@@ -190,14 +190,6 @@ auto TrailHistoryAttribute::Descriptor() const -> ref<particle::ParticleAttribut
         rstd::addressof(m_descriptor));
 }
 
-auto TrailHistoryAttribute::ConcreteType() const noexcept -> std::type_index {
-    return m_descriptor.concrete_type;
-}
-
-auto TrailHistoryAttribute::ValueType() const noexcept -> std::type_index {
-    return m_descriptor.value_type;
-}
-
 auto TrailHistoryAttribute::Len() const noexcept -> usize { return m_states.len(); }
 auto TrailHistoryAttribute::Capacity() const noexcept -> usize { return m_states.capacity(); }
 
