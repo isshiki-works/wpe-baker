@@ -68,30 +68,14 @@ internal sealed partial class FfmpegQualityComparer(FfmpegTool ff) : IQualityCom
         long frameBytes = checked((long)width * height * 3 / 2);
         string productPath = Path.Combine(request.WorkDirectory, request.Stem + "-product.yuv");
         string referencePath = Path.Combine(request.WorkDirectory, request.Stem + "-reference.rgb");
-        using (var failed = CancellationTokenSource.CreateLinkedTokenSource(token))
+        // 成品解码是外部进程，参照准备是本进程里的读帧与缩放，两边同时跑。
+        Task decode = DecodeProductAsync(request, productPath, frameBytes, windows, token);
+        Task write = Task.Run(async () =>
         {
-            // 一边失败就取消另一边；报出去的是先失败的那个，不是被连带取消的那个。
-            async Task Together(Func<CancellationToken, Task> body)
-            {
-                try { await body(failed.Token); }
-                catch { failed.Cancel(); throw; }
-            }
-            Task decode = Together(cancel => DecodeProductAsync(request, productPath, frameBytes, windows, cancel));
-            Task write = Task.Run(() => Together(async cancel =>
-            {
-                await using var stream = new FileStream(referencePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                await reference.WriteRgb24(stream, cancel);
-            }), CancellationToken.None);
-            try { await Task.WhenAll(decode, write); }
-            catch
-            {
-                token.ThrowIfCancellationRequested();
-                Exception cause = new[] { decode, write }.Select(task => task.Exception?.InnerException)
-                    .FirstOrDefault(error => error is not null and not OperationCanceledException)
-                    ?? decode.Exception?.InnerException ?? write.Exception!.InnerException!;
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(cause);
-            }
-        }
+            await using var stream = new FileStream(referencePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            await reference.WriteRgb24(stream, token);
+        }, token);
+        await Task.WhenAll(decode, write);
         if (new FileInfo(productPath).Length != frameBytes * request.Samples.Count)
             throw new InvalidDataException("Quality product decode did not return exactly the sampled frames.");
         string size = FormattableString.Invariant($"{width}x{height}");
