@@ -1269,7 +1269,7 @@ bool MdlParser::Parse(ref<str> path, fs::VFS& vfs, Mdl& mdl, bool* missing) {
 
 Option<wpscene::Material> MdlParser::ParseMaterial(ref<str> material_ref, fs::VFS& vfs) {
     const auto path   = ResolveMdlMaterialPath(rstd::cppstd::as_string_view(material_ref));
-    auto       parsed = owe::ReadJsonFile(vfs, path, { .allow_comments = true });
+    auto       parsed = owe::ReadNJsonFile(vfs, path, { .allow_comments = true });
     if (parsed.is_err()) {
         auto error = rstd::move(parsed).unwrap_err_unchecked();
         rstd_error("load mdl material '{}' failed: {}", path, error.message.as_str());
@@ -1282,7 +1282,7 @@ Option<wpscene::Material> MdlParser::ParseMaterial(ref<str> material_ref, fs::VF
     material.depthtest  = "enabled";
     material.depthwrite = "enabled";
     material.cullmode   = "back";
-    if (! material.FromJson(json)) {
+    if (! material.FromJson(owe::ToRstd(json))) {
         rstd_error("parse mdl material '{}' failed", path);
         return None();
     }

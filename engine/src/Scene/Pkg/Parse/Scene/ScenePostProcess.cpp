@@ -64,14 +64,14 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
                         std::function<void(wpscene::Material&)> mutate = nullptr) -> bool {
         std::string material_path { "/assets/" };
         material_path.append(mat_relpath);
-        auto loaded = ReadJsonFile(vfs, material_path);
+        auto loaded = ReadNJsonFile(vfs, material_path);
         if (loaded.is_err()) {
             rstd_error("bloom: parse material json failed {}", mat_relpath);
             return false;
         }
         auto              material_json = rstd::move(loaded).unwrap_unchecked();
         wpscene::Material wpmat;
-        if (! wpmat.FromJson(material_json)) {
+        if (! wpmat.FromJson(ToRstd(material_json))) {
             rstd_error("bloom: Material::FromJson failed: {}", mat_relpath);
             return false;
         }

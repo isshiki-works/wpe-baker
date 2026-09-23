@@ -61,8 +61,57 @@ struct WrongArraySize : std::exception {
     auto what() const noexcept -> const char* override { return "Wrong size of the array"; }
 };
 
-auto InitialJsonValue(const Json& json) -> const Json& {
-    if (auto value = json.get("value"_str); value.is_some()) return **value;
+// rstd 与 nlohmann 两种值的最小读取适配：GetJsonValue 两套重载共用下面同一份语义。
+auto Member(const Json& json, std::string_view key) -> const Json* {
+    auto member = json.get(rstd::cppstd::as_str(key).unwrap());
+    return member.is_some() ? &**member : nullptr;
+}
+auto Member(const NJson& json, std::string_view key) -> const NJson* { return Find(json, key); }
+
+auto IsNull(const Json& json) -> bool { return json.is_null(); }
+auto IsNull(const NJson& json) -> bool { return json.is_null(); }
+auto IsNumber(const Json& json) -> bool { return json.is_number(); }
+auto IsNumber(const NJson& json) -> bool { return json.is_number(); }
+
+auto AsBool(const Json& json) -> std::optional<bool> {
+    auto boolean = json.as_bool();
+    return boolean.is_some() ? std::optional<bool>(*boolean) : std::nullopt;
+}
+auto AsBool(const NJson& json) -> std::optional<bool> {
+    return json.is_boolean() ? std::optional<bool>(json.get<bool>()) : std::nullopt;
+}
+
+auto AsString(const Json& json) -> std::optional<std::string_view> {
+    auto string = json.as_str();
+    return string.is_some() ? std::optional(rstd::cppstd::as_string_view(*string)) : std::nullopt;
+}
+auto AsString(const NJson& json) -> std::optional<std::string_view> {
+    return json.is_string() ? std::optional<std::string_view>(json.get_ref<const std::string&>())
+                            : std::nullopt;
+}
+
+// 回调 f(元素个数, 按下标取元素)；不是数组返回 false。
+template<typename F>
+auto WithArray(const Json& json, F&& f) -> bool {
+    auto array = json.as_array();
+    if (array.is_none()) return false;
+    f((*array)->len().to_primitive(),
+      [&](std::size_t index) -> const Json& { return (**array)[usize(index)]; });
+    return true;
+}
+template<typename F>
+auto WithArray(const NJson& json, F&& f) -> bool {
+    if (! json.is_array()) return false;
+    f(json.size(), [&](std::size_t index) -> const NJson& { return json[index]; });
+    return true;
+}
+
+auto DumpForLog(const Json& json) -> std::string { return Dump(json, usize(4)); }
+auto DumpForLog(const NJson& json) -> std::string { return nljson::Dump(json, 4); }
+
+template<typename V>
+auto InitialJsonValue(const V& json) -> const V& {
+    if (auto value = Member(json, "value"); value != nullptr) return *value;
     return json;
 }
 
@@ -93,6 +142,15 @@ auto ConvertNumber(const Json& json) -> T {
     if ((*number)->is_f64()) return rstd::as_cast<T>(*(*number)->as_f64());
     if ((*number)->is_u64()) return rstd::as_cast<T>(*(*number)->as_u64());
     return rstd::as_cast<T>(*(*number)->as_i64());
+}
+
+// nlohmann 的数字种类与 rstd 一一对应：number_float↔f64，number_unsigned↔u64，number_integer↔i64。
+template<typename T>
+auto ConvertNumber(const NJson& json) -> T {
+    if (! json.is_number()) throw WrongJsonType {};
+    if (json.is_number_float()) return rstd::as_cast<T>(f64(json.get<double>()));
+    if (json.is_number_unsigned()) return rstd::as_cast<T>(u64(json.get<std::uint64_t>()));
+    return rstd::as_cast<T>(i64(json.get<std::int64_t>()));
 }
 
 template<typename T>
@@ -169,12 +227,12 @@ auto ConvertArray(std::string_view value, rstd::array<T, N>& target) -> bool {
     return true;
 }
 
-template<typename T>
-auto ReadJsonValue(const Json& json, T& value) -> bool {
+template<typename V, typename T>
+auto ReadJsonValue(const V& json, T& value) -> bool {
     const auto& input = InitialJsonValue(json);
     if constexpr (JsonArrayTarget<T>::enabled) {
         using Value = typename JsonArrayTarget<T>::value_type;
-        if (input.is_number()) {
+        if (IsNumber(input)) {
             if constexpr (JsonArrayTarget<T>::dynamic) {
                 value.clear();
                 value.push_back(ConvertNumber<Value>(input));
@@ -187,48 +245,49 @@ auto ReadJsonValue(const Json& json, T& value) -> bool {
             }
             return true;
         }
-        if (auto array = input.as_array(); array.is_some()) {
+        const bool is_array = WithArray(input, [&](std::size_t len, auto at) {
             if constexpr (JsonArrayTarget<T>::dynamic) {
                 value.clear();
-                for (const auto& item : **array) value.push_back(ConvertNumber<Value>(item));
+                for (std::size_t index = 0; index < len; ++index)
+                    value.push_back(ConvertNumber<Value>(at(index)));
             } else {
-                usize count {};
+                std::size_t count {};
                 for (auto& item : value) {
-                    if (count >= (*array)->len()) throw WrongArraySize {};
-                    item = ConvertNumber<Value>((**array)[count]);
+                    if (count >= len) throw WrongArraySize {};
+                    item = ConvertNumber<Value>(at(count));
                     ++count;
                 }
-                if (count != (*array)->len()) throw WrongArraySize {};
+                if (count != len) throw WrongArraySize {};
             }
-            return true;
-        }
-        auto string = input.as_str();
-        if (string.is_none()) throw WrongJsonType {};
-        return ConvertArray(rstd::cppstd::as_string_view(*string), value);
+        });
+        if (is_array) return true;
+        auto string = AsString(input);
+        if (! string) throw WrongJsonType {};
+        return ConvertArray(*string, value);
     } else if constexpr (same<T, bool>) {
-        auto boolean = input.as_bool();
-        if (boolean.is_none()) throw WrongJsonType {};
+        auto boolean = AsBool(input);
+        if (! boolean) throw WrongJsonType {};
         value = *boolean;
         return true;
     } else if constexpr (rstd::num::Numeric<T>) {
-        auto boolean = input.as_bool();
-        value        = boolean.is_some() ? rstd::as_cast<T>(static_cast<rstd::uint8_t>(*boolean))
-                                         : ConvertNumber<T>(input);
+        auto boolean = AsBool(input);
+        value        = boolean ? rstd::as_cast<T>(static_cast<rstd::uint8_t>(*boolean))
+                               : ConvertNumber<T>(input);
         return true;
     } else if constexpr (is_arithmetic<T>) {
-        auto boolean = input.as_bool();
-        value        = boolean.is_some() ? static_cast<T>(*boolean) : ConvertNumber<T>(input);
+        auto boolean = AsBool(input);
+        value        = boolean ? static_cast<T>(*boolean) : ConvertNumber<T>(input);
         return true;
     } else if constexpr (same<T, std::string>) {
-        auto string = input.as_str();
-        if (string.is_none()) throw WrongJsonType {};
-        value = rstd::cppstd::to_string(*string);
+        auto string = AsString(input);
+        if (! string) throw WrongJsonType {};
+        value = std::string(*string);
         return true;
     }
 }
 
-template<typename T>
-auto ReadJsonValue(const Json& json, T& value, const char* name, std::source_location loc) -> bool {
+template<typename V, typename T>
+auto ReadJsonValue(const V& json, T& value, const char* name, std::source_location loc) -> bool {
     std::string name_info;
     if (name != nullptr) name_info = std::string("(key: ") + name + ")";
     try {
@@ -240,7 +299,7 @@ auto ReadJsonValue(const Json& json, T& value, const char* name, std::source_loc
                   std::string_view(loc.function_name()),
                   std::string_view(loc.file_name()),
                   loc.line(),
-                  Dump(json, usize(4)));
+                  DumpForLog(json));
     } catch (const std::invalid_argument& error) {
         rstd_error("{} {} at {} {}:{}",
                    std::string_view(error.what()),
@@ -268,6 +327,37 @@ auto ReadJsonValue(const Json& json, T& value, const char* name, std::source_loc
 
 } // namespace
 
+namespace
+{
+
+template<typename V, typename T>
+auto ReadMember(const V& json, std::string_view name_view, T& value, bool warn,
+                std::source_location loc) -> bool {
+    auto member = Member(json, name_view);
+    if (member == nullptr) {
+        if (warn)
+            rstd_info("read json \"{}\" not a key at {}({}:{})",
+                      name_view,
+                      std::string_view(loc.function_name()),
+                      std::string_view(loc.file_name()),
+                      loc.line());
+        return false;
+    }
+    if (IsNull(*member)) {
+        if (warn)
+            rstd_info("read json \"{}\" is null at {}({}:{})",
+                      name_view,
+                      std::string_view(loc.function_name()),
+                      std::string_view(loc.file_name()),
+                      loc.line());
+        return false;
+    }
+    std::string name { name_view };
+    return ReadJsonValue(*member, value, name.c_str(), loc);
+}
+
+} // namespace
+
 template<typename T>
 typename JsonTemplateTypeCheck<T>::type GetJsonValue(const Json& json, T& value,
                                                      std::source_location loc) {
@@ -278,34 +368,31 @@ template<typename T>
 typename JsonTemplateTypeCheck<T>::type GetJsonValue(const Json& json, std::string_view name_view,
                                                      T& value, bool warn,
                                                      std::source_location loc) {
-    auto member = json.get(rstd::cppstd::as_str(name_view).unwrap());
-    if (member.is_none()) {
-        if (warn)
-            rstd_info("read json \"{}\" not a key at {}({}:{})",
-                      name_view,
-                      std::string_view(loc.function_name()),
-                      std::string_view(loc.file_name()),
-                      loc.line());
-        return false;
-    }
-    if ((*member)->is_null()) {
-        if (warn)
-            rstd_info("read json \"{}\" is null at {}({}:{})",
-                      name_view,
-                      std::string_view(loc.function_name()),
-                      std::string_view(loc.file_name()),
-                      loc.line());
-        return false;
-    }
-    std::string name { name_view };
-    return ReadJsonValue(**member, value, name.c_str(), loc);
+    return ReadMember(json, name_view, value, warn, loc);
+}
+
+template<typename T>
+typename JsonTemplateTypeCheck<T>::type GetJsonValue(const NJson& json, T& value,
+                                                     std::source_location loc) {
+    return ReadJsonValue(json, value, nullptr, loc);
+}
+
+template<typename T>
+typename JsonTemplateTypeCheck<T>::type GetJsonValue(const NJson& json, std::string_view name_view,
+                                                     T& value, bool warn,
+                                                     std::source_location loc) {
+    return ReadMember(json, name_view, value, warn, loc);
 }
 
 #define OWE_IMPL_GET_JSON(TYPE)                                    \
     template JsonTemplateTypeCheck<TYPE>::type GetJsonValue<TYPE>( \
         const Json&, TYPE&, std::source_location);                 \
     template JsonTemplateTypeCheck<TYPE>::type GetJsonValue<TYPE>( \
-        const Json&, std::string_view, TYPE&, bool, std::source_location)
+        const Json&, std::string_view, TYPE&, bool, std::source_location); \
+    template JsonTemplateTypeCheck<TYPE>::type GetJsonValue<TYPE>( \
+        const NJson&, TYPE&, std::source_location);                \
+    template JsonTemplateTypeCheck<TYPE>::type GetJsonValue<TYPE>( \
+        const NJson&, std::string_view, TYPE&, bool, std::source_location)
 
 OWE_IMPL_GET_JSON(bool);
 OWE_IMPL_GET_JSON(i32);
@@ -342,11 +429,8 @@ OWE_IMPL_GET_JSON(RstdFloatArray3);
 
 #undef OWE_IMPL_GET_JSON
 
-namespace
-{
-
-// 过渡桥：调用点仍按 rstd::json::Value 读取；调用点迁到 nlohmann 后删除。
-auto ToRstd(const nljson::Value& value) -> Json {
+// 过渡桥：未迁的调用点仍按 rstd::json::Value 读取；B、C 组迁完后删除。
+auto ToRstd(const NJson& value) -> Json {
     using Kind = nljson::Value::value_t;
     switch (value.type()) {
     case Kind::boolean: return rstd::into<Json>(value.get<bool>());
@@ -373,10 +457,31 @@ auto ToRstd(const nljson::Value& value) -> Json {
     }
 }
 
-} // namespace
+auto FromRstd(const Json& value) -> NJson {
+    if (value.is_null()) return NJson();
+    if (auto boolean = value.as_bool(); boolean.is_some()) return NJson(bool(*boolean));
+    if (auto number = value.as_number(); number.is_some()) {
+        if ((*number)->is_f64()) return NJson((*(*number)->as_f64()).to_primitive());
+        if ((*number)->is_u64()) return NJson((*(*number)->as_u64()).to_primitive());
+        return NJson((*(*number)->as_i64()).to_primitive());
+    }
+    if (auto string = value.as_str(); string.is_some())
+        return NJson(rstd::cppstd::to_string(*string));
+    if (auto array = value.as_array(); array.is_some()) {
+        auto out = NJson::array();
+        for (const auto& item : **array) out.push_back(FromRstd(item));
+        return out;
+    }
+    auto out = NJson::object();
+    (*value.as_object())->iter().for_each([&](auto entry) {
+        auto [key, item] = entry;
+        out.emplace(rstd::cppstd::to_string(*key), FromRstd(*item));
+    });
+    return out;
+}
 
-auto ParseJson(std::string_view source, JsonParseOptions options)
-    -> rstd::Result<Json, JsonParseError> {
+auto ParseNJson(std::string_view source, JsonParseOptions options)
+    -> rstd::Result<NJson, JsonParseError> {
     // 保持原行为：非 UTF-8 输入与原 rstd 路径一样在这里中止（T2 集成时随 as_str 校验取消一起登记）。
     static_cast<void>(rstd::cppstd::as_str(source).unwrap());
     nljson::Value parsed;
@@ -390,7 +495,14 @@ auto ParseJson(std::string_view source, JsonParseOptions options)
         if (rstd::cppstd::as_str(error).is_err()) error = "invalid JSON";
         return Err(JsonParseError { String::make(rstd::cppstd::as_str(error).unwrap()) });
     }
-    return Ok(ToRstd(parsed));
+    return Ok(rstd::move(parsed));
+}
+
+auto ParseJson(std::string_view source, JsonParseOptions options)
+    -> rstd::Result<Json, JsonParseError> {
+    auto parsed = ParseNJson(source, options);
+    if (parsed.is_err()) return Err(rstd::move(parsed).unwrap_err_unchecked());
+    return Ok(ToRstd(*parsed));
 }
 
 auto ReadJsonFile(fs::VFS& vfs, fs::Path path, JsonParseOptions options)
@@ -410,6 +522,21 @@ auto ReadJsonFile(fs::VFS& vfs, fs::Path path, JsonParseOptions options)
     return Ok(rstd::move(parsed));
 }
 
+auto ReadNJsonFile(fs::VFS& vfs, fs::Path path, JsonParseOptions options)
+    -> rstd::Result<NJson, JsonFileError> {
+    auto io_error = [](auto error) {
+        return JsonFileError { JsonFileErrorKind::Io, rstd::format("{}", error) };
+    };
+    auto parse_error = [](auto error) {
+        return JsonFileError { JsonFileErrorKind::Parse, rstd::format("{}", error) };
+    };
+    // 与 ReadJsonFile 相同：VFS 读来的 WPE json 放开尾逗号。
+    options.allow_trailing_commas = true;
+    auto content = rstd_try(fs::ReadFileContent(vfs, path), io_error);
+    auto parsed  = rstd_try(ParseNJson(content, options), parse_error);
+    return Ok(rstd::move(parsed));
+}
+
 auto ReadAssetJsonFile(fs::VFS& vfs, std::string_view path, JsonParseOptions options)
     -> rstd::Result<Json, JsonFileError> {
     auto resolved = fs::ResolveAssetPath(path);
@@ -418,6 +545,16 @@ auto ReadAssetJsonFile(fs::VFS& vfs, std::string_view path, JsonParseOptions opt
         return Err(JsonFileError { JsonFileErrorKind::Io, rstd::format("{}", error) });
     }
     return ReadJsonFile(vfs, resolved->as_path(), options);
+}
+
+auto ReadAssetNJsonFile(fs::VFS& vfs, std::string_view path, JsonParseOptions options)
+    -> rstd::Result<NJson, JsonFileError> {
+    auto resolved = fs::ResolveAssetPath(path);
+    if (resolved.is_err()) {
+        auto error = rstd::move(resolved).unwrap_err_unchecked();
+        return Err(JsonFileError { JsonFileErrorKind::Io, rstd::format("{}", error) });
+    }
+    return ReadNJsonFile(vfs, resolved->as_path(), options);
 }
 
 auto Dump(const Json& value, Option<usize> indent) -> std::string {
@@ -431,6 +568,10 @@ auto DumpString(const Json& value, Option<usize> indent) -> String {
         options.indent = *indent;
     }
     return rstd::json::to_string(value, options);
+}
+
+auto Dump(const NJson& value, Option<usize> indent) -> std::string {
+    return indent ? nljson::Dump(value, (*indent).to_primitive()) : nljson::Dump(value);
 }
 
 } // namespace owe

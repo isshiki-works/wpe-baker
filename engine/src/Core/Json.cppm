@@ -1,3 +1,7 @@
+module;
+
+#include "JsonNlohmann.hpp"
+
 export module wescene.json;
 export import rstd;
 import rstd.cppstd;
@@ -11,6 +15,10 @@ export namespace owe
 {
 
 using Json = rstd::json::Value;
+
+// T2-3b：nlohmann 值（键按字节序，与 rstd BTreeMap 同序）。调用点全部迁完后改名为 Json，rstd 版删除。
+// 用它的调用单元要在全局模块片段里 #include "JsonNlohmann.hpp"，才能调 nlohmann 的成员函数。
+using NJson = nljson::Value;
 
 enum class JsonFileErrorKind : rstd::uint8_t
 {
@@ -48,6 +56,43 @@ template<typename T>
 typename JsonTemplateTypeCheck<T>::type
 GetJsonValue(const Json& json, std::string_view name, T& value, bool warn = true,
              std::source_location loc = std::source_location::current());
+
+// nlohmann 版读取：语义与上面两个逐项一致（取 "value" 包装、数字/布尔互转、空格分隔数串、报错与日志文本）。
+template<typename T>
+typename JsonTemplateTypeCheck<T>::type
+GetJsonValue(const NJson& json, T& value,
+             std::source_location loc = std::source_location::current());
+
+template<typename T>
+typename JsonTemplateTypeCheck<T>::type
+GetJsonValue(const NJson& json, std::string_view name, T& value, bool warn = true,
+             std::source_location loc = std::source_location::current());
+
+// 对象成员查找：不是对象或没有这个键返回 nullptr（对应 json.get("k"_str) 的 None）。
+inline auto Find(const NJson& json, std::string_view key) -> const NJson* {
+    const auto found = json.find(key);
+    return found == json.end() ? nullptr : &*found;
+}
+
+// 过渡桥（T2-3 期间）：ToRstd 把 nlohmann 值交给还没迁的 rstd 调用点；FromRstd 反向，
+// 读还存在未迁结构体里的 rstd 值。两边数字种类一一对应（浮点/无符号/有符号），往返无损。
+auto ToRstd(const NJson& value) -> Json;
+auto FromRstd(const Json& value) -> NJson;
+
+auto ParseNJson(std::string_view source, JsonParseOptions options = {})
+    -> rstd::Result<NJson, JsonParseError>;
+auto ReadNJsonFile(fs::VFS& vfs, fs::Path path, JsonParseOptions options = {})
+    -> rstd::Result<NJson, JsonFileError>;
+inline auto ReadNJsonFile(fs::VFS& vfs, std::string_view path, JsonParseOptions options = {})
+    -> rstd::Result<NJson, JsonFileError> {
+    return ReadNJsonFile(vfs, fs::ToPath(path), options);
+}
+auto ReadAssetNJsonFile(fs::VFS& vfs, std::string_view path, JsonParseOptions options = {})
+    -> rstd::Result<NJson, JsonFileError>;
+auto Dump(const NJson& value, Option<usize> indent = None()) -> std::string;
+inline auto Dump(const NJson& value, usize indent) -> std::string {
+    return Dump(value, Some(indent));
+}
 
 auto ParseJson(std::string_view source, JsonParseOptions options = {})
     -> rstd::Result<Json, JsonParseError>;

@@ -1,5 +1,7 @@
 module;
 
+#include "JsonNlohmann.hpp"
+
 #include <rstd/macro.hpp>
 #include <filesystem>
 
@@ -226,15 +228,13 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
     const bool copy_background_seed = has_text_effect || obj.copybackground || linked_source;
 
     std::string s_text;
-    if (obj.text.is_string()) {
-        s_text = rstd::cppstd::to_string(*obj.text.as_str());
-    } else if (obj.text.is_object()) {
-        auto value = obj.text.get("value"_str);
-        if (value.is_none()) value = obj.text.get("text"_str);
-        if (value.is_some()) {
-            auto string = (*value)->as_str();
-            if (string.is_some()) s_text = rstd::cppstd::to_string(*string);
-        }
+    // obj.text 来自 B 组 wpscene::TextObject（rstd），读取走 NJson。
+    if (const auto text = FromRstd(obj.text); text.is_string()) {
+        s_text = text.get<std::string>();
+    } else if (text.is_object()) {
+        auto value = Find(text, "value");
+        if (value == nullptr) value = Find(text, "text");
+        if (value != nullptr && value->is_string()) s_text = value->get<std::string>();
     }
     if (has_text_user) {
         auto value = UserPropertyValue(context.user_properties, obj.text_user.name);
@@ -273,13 +273,11 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
     // --- font resolution: VFS first (WE shared /assets + pkg overlay),
     //     then host system font dirs.
     std::string font_name;
-    if (obj.font.is_string()) {
-        font_name = rstd::cppstd::to_string(*obj.font.as_str());
-    } else if (obj.font.is_object()) {
-        if (auto value = obj.font.get("value"_str); value.is_some()) {
-            auto string = (*value)->as_str();
-            if (string.is_some()) font_name = rstd::cppstd::to_string(*string);
-        }
+    if (const auto font = FromRstd(obj.font); font.is_string()) {
+        font_name = font.get<std::string>();
+    } else if (font.is_object()) {
+        if (auto value = Find(font, "value"); value != nullptr && value->is_string())
+            font_name = value->get<std::string>();
     }
 
     text::FontCache::ResolvedBlob resolved;
@@ -653,7 +651,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
                 return None();
             }
             wpscene::Material pt_mat;
-            if (! pt_mat.FromJson(*pt_json)) {
+            if (! pt_mat.FromJson(ToRstd(*pt_json))) {
                 rstd_error("text '{}': Material::FromJson failed", obj.name);
                 return None();
             }

@@ -1,5 +1,7 @@
 module;
 
+#include "JsonNlohmann.hpp"
+
 #include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
@@ -85,7 +87,7 @@ auto BuildSceneAnimationClip(const owe::wpscene::AnimCurve& curve, i32 end)
     });
 }
 
-Option<SceneCameraLookAtKey> ParseLookAtKey(const owe::Json& json) {
+Option<SceneCameraLookAtKey> ParseLookAtKey(const owe::NJson& json) {
     if (! json.is_object()) return None();
     SceneCameraLookAtKey key;
     std::array<float, 3> eye {};
@@ -102,15 +104,13 @@ Option<SceneCameraLookAtKey> ParseLookAtKey(const owe::Json& json) {
     return Some(rstd::move(key));
 }
 
-Option<SceneCameraLookAtTrack> ParseLookAtTrack(const owe::Json& json) {
-    auto transforms = json.get("transforms"_str);
-    if (transforms.is_none()) return None();
-    auto values = (*transforms)->as_array();
-    if (values.is_none()) return None();
+Option<SceneCameraLookAtTrack> ParseLookAtTrack(const owe::NJson& json) {
+    auto values = owe::Find(json, "transforms");
+    if (values == nullptr || ! values->is_array()) return None();
 
     SceneCameraLookAtTrack track;
     owe::GetJsonValue(json, "duration", track.duration, false);
-    for (const auto& raw_key : **values) {
+    for (const auto& raw_key : *values) {
         auto key = ParseLookAtKey(raw_key);
         if (key.is_some()) track.keys.push(rstd::move(*key));
     }
@@ -561,14 +561,14 @@ void owe::LoadCameraObjectPath(SceneParseContext& context, const wpscene::Camera
         rstd_warn("Can't open camera path {}", object.path);
         return;
     }
-    auto parsed = ParseJson(file->ReadAllStr());
+    auto parsed = ParseNJson(file->ReadAllStr());
     if (parsed.is_err()) {
         rstd_warn("Can't parse camera path json {}: {}", object.path, parsed.unwrap_err());
         return;
     }
 
     wpscene::CameraPathDocument document;
-    if (! document.FromJson(parsed.unwrap())) {
+    if (! document.FromJson(ToRstd(*parsed))) {
         rstd_warn("Invalid camera path document {}", object.path);
         return;
     }
@@ -638,17 +638,15 @@ void owe::LoadRootCameraPaths(SceneParseContext& context, const wpscene::SceneMe
     for (const auto& relative_path : metadata.camera.paths) {
         auto file = fs::OpenBinary(*context.vfs, "/assets/" + relative_path);
         if (file.is_err()) continue;
-        auto parsed = ParseJson(file->ReadAllStr());
+        auto parsed = ParseNJson(file->ReadAllStr());
         if (parsed.is_err()) {
             rstd_warn("Can't parse camera path json {}: {}", relative_path, parsed.unwrap_err());
             continue;
         }
         auto json   = parsed.unwrap();
-        auto tracks = json.get("paths"_str);
-        if (tracks.is_none()) continue;
-        auto values = (*tracks)->as_array();
-        if (values.is_none()) continue;
-        for (const auto& raw_track : **values) {
+        auto values = Find(json, "paths");
+        if (values == nullptr || ! values->is_array()) continue;
+        for (const auto& raw_track : *values) {
             auto track = ParseLookAtTrack(raw_track);
             if (track.is_some()) path->lookat_tracks.push(rstd::move(*track));
         }

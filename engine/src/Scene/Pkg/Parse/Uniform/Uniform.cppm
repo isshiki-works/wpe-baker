@@ -45,7 +45,7 @@ struct UniformTex {
     String conversion; // "startdelta" etc.
     i32    order {};
 
-    bool FromJson(const Json&);
+    bool FromJson(const NJson&);
 
     auto clone() const -> UniformTex {
         Vec<Component> cloned_components;
@@ -90,11 +90,7 @@ struct UniformVar {
     array<float, 2> range { 0.0f, 1.0f };
     bool            has_range { false };
 
-    // Default value as raw JSON. Host coerces to float / vec2 / vec3 / vec4
-    // depending on uniform type at upload time.
-    Json default_value;
-
-    bool FromJson(const Json&, String uniform_name);
+    bool FromJson(const NJson&, String uniform_name);
 
     auto clone() const -> UniformVar {
         return {
@@ -109,7 +105,6 @@ struct UniformVar {
             .is_user       = is_user,
             .range         = range,
             .has_range     = has_range,
-            .default_value = default_value.clone(),
         };
     }
 };
@@ -125,7 +120,7 @@ struct Combo {
     HashMap<String, i32> options; // label → value (combo box mode)
     HashMap<String, i32> require; // gating combos
 
-    bool FromJson(const Json&);
+    bool FromJson(const NJson&);
 
     auto clone() const -> Combo {
         return {

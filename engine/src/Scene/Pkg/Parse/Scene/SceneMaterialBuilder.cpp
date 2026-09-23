@@ -1,5 +1,7 @@
 module;
 
+#include "JsonNlohmann.hpp"
+
 #include <rstd/macro.hpp>
 
 module wescene.pkg.parse;
@@ -542,7 +544,6 @@ auto BuildMaterial(fs::VFS& vfs, ShaderCache& shader_cache,
         shader_info_ref.user_var_staging.push(UserVarRecord {
             .material      = var.material.clone(),
             .name          = var.name.clone(),
-            .default_value = var.default_value.clone(),
         });
         if (auto value = shader->default_uniforms.find(uniform_name);
             value != shader->default_uniforms.end()) {
@@ -711,27 +712,25 @@ void RegisterShaderUserVarIndexImpl(Scene* pScene, const std::shared_ptr<SceneMa
     }
 }
 
-Option<String> UserTexturePropertyKey(const Json& binding) {
+Option<String> UserTexturePropertyKey(const NJson& binding) {
     if (binding.is_string()) {
-        auto key = *binding.as_str();
-        if (key.is_empty()) return None();
-        return Some(String::make(key));
+        const auto& key = binding.get_ref<const std::string&>();
+        if (key.empty()) return None();
+        return Some(String::make(as_str(key).unwrap()));
     }
     if (! binding.is_object()) return None();
-    auto type  = binding.get("type"_str);
-    auto value = binding.get("name"_str);
-    if (type.is_none() || value.is_none()) return None();
-    auto type_string  = (*type)->as_str();
-    auto value_string = (*value)->as_str();
-    if (type_string.is_none() || value_string.is_none() ||
-        rstd::cppstd::as_string_view(*type_string) != "system")
+    auto type  = Find(binding, "type");
+    auto value = Find(binding, "name");
+    if (type == nullptr || value == nullptr) return None();
+    if (! type->is_string() || ! value->is_string() ||
+        type->get_ref<const std::string&>() != "system")
         return None();
-    auto name = rstd::cppstd::as_string_view(*value_string);
+    const auto& name = value->get_ref<const std::string&>();
     if (name != "$mediaThumbnail" && name != "$mediaPreviousThumbnail") return None();
-    return Some(String::make(*value_string));
+    return Some(String::make(as_str(name).unwrap()));
 }
 
-bool IsSystemMediaTextureBinding(const Json& binding) {
+bool IsSystemMediaTextureBinding(const NJson& binding) {
     return UserTexturePropertyKey(binding).is_some() && binding.is_object();
 }
 
@@ -759,11 +758,12 @@ void RegisterMaterialUserTextureIndex(Scene*                                pSce
                                       const ShaderInfo&                     shader_info) {
     if (! pScene || ! stable_mat) return;
     for (usize i {}; i < fallback_material.usertextures.len(); ++i) {
-        auto key = UserTexturePropertyKey(fallback_material.usertextures[i]);
+        const auto binding = FromRstd(fallback_material.usertextures[i]);
+        auto       key     = UserTexturePropertyKey(binding);
         if (key.is_none()) continue;
         std::string fallback =
             ResolveMaterialTextureFallback(*pScene, fallback_material, shader_info, i);
-        if (IsSystemMediaTextureBinding(fallback_material.usertextures[i]) &&
+        if (IsSystemMediaTextureBinding(binding) &&
             i.to_primitive() < stable_mat->textures.size()) {
             fallback = stable_mat->textures[i.to_primitive()];
         }
@@ -832,9 +832,9 @@ std::string ResolveSceneTextureProperty(const SceneParseContext& context, std::s
     return string.is_none() ? std::string {} : rstd::cppstd::to_string(*string);
 }
 
-std::string ResolveUserTextureProperty(const SceneParseContext& context, const Json& binding) {
+std::string ResolveUserTextureProperty(const SceneParseContext& context, const NJson& binding) {
     if (! binding.is_string()) return {};
-    auto key = rstd::cppstd::to_string(*binding.as_str());
+    auto key = binding.get<std::string>();
     return ResolveSceneTextureProperty(context, key);
 }
 
@@ -846,7 +846,7 @@ std::string ResolveMaterialTextureSlot(const SceneParseContext& context,
     }
     if (slot >= material.usertextures.len()) return fallback;
 
-    if (auto prop = ResolveUserTextureProperty(context, material.usertextures[slot]);
+    if (auto prop = ResolveUserTextureProperty(context, FromRstd(material.usertextures[slot]));
         ! prop.empty())
         return prop;
     return fallback;
@@ -878,7 +878,7 @@ std::string ResolveSystemMediaFallback(const SceneParseContext& context,
 
 void ApplyUserTextureBindings(SceneParseContext& context, wpscene::Material& material) {
     for (usize i {}; i < material.usertextures.len(); ++i) {
-        const auto& binding = material.usertextures[i];
+        const auto binding = FromRstd(material.usertextures[i]);
         if (binding.is_null()) continue;
 
         std::string resolved = ResolveUserTextureProperty(context, binding);
