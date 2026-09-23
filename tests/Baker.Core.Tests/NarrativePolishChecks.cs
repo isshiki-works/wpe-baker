@@ -181,7 +181,7 @@ internal static class NarrativePolishChecks
         StationaryParticleNarrative(check);
 
         // ---- ④ bake --help 的 --encoder 说明按 --lang 出 ----
-        string bakeEn = CliUsage.Sections("en")["bake"], bakeZh = CliUsage.Sections("zh")["bake"];
+        string bakeEn = Baker.Cli.OptionTable.Usage("bake", "en"), bakeZh = Baker.Cli.OptionTable.Usage("bake", "zh");
         static bool Indented(string section, string language) => MessageCatalog.Get("cli.bake_encoder_help", language).Split('\n')
             .All(line => section.Contains("  " + line.TrimEnd('\r'), StringComparison.Ordinal));
         check(Indented(bakeEn, "en") && !Regex.IsMatch(bakeEn, @"\p{IsCJKUnifiedIdeographs}"),
@@ -191,12 +191,12 @@ internal static class NarrativePolishChecks
                 .SequenceEqual(bakeEn.Split(Environment.NewLine).Where(line => line.StartsWith("wpe-baker", StringComparison.Ordinal))) &&
             bakeZh.Split(Environment.NewLine).All(line => line.StartsWith("wpe-baker", StringComparison.Ordinal) || line.StartsWith("  ", StringComparison.Ordinal)),
             "bake --help in chinese keeps the english usage skeleton and indents the chinese encoder note");
-        check(CliUsage.HelpLanguage(["bake", "--help", "--lang", "en"], "zh") == "en" &&
-            CliUsage.HelpLanguage(["bake", "--lang", "zh", "--help"], "en") == "zh" &&
-            CliUsage.HelpLanguage(["bake", "--help"], "zh") == "zh" &&
-            CliUsage.HelpLanguage(["bake", "--help", "--lang", "fr"], "en") == "en",
+        check(Baker.Cli.OptionTable.HelpLanguage(["bake", "--help", "--lang", "en"], "zh") == "en" &&
+            Baker.Cli.OptionTable.HelpLanguage(["bake", "--lang", "zh", "--help"], "en") == "zh" &&
+            Baker.Cli.OptionTable.HelpLanguage(["bake", "--help"], "zh") == "zh" &&
+            Baker.Cli.OptionTable.HelpLanguage(["bake", "--help", "--lang", "fr"], "en") == "en",
             "help output language follows --lang wherever it appears and otherwise the interface language");
-        check(CliUsage.Sections("zh")["analyze"] == CliUsage.Sections("en")["analyze"],
+        check(Baker.Cli.OptionTable.Usage("analyze", "zh") == Baker.Cli.OptionTable.Usage("analyze", "en"),
             "analyze --help stays the same english skeleton in both languages");
     }
 

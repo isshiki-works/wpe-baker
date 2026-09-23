@@ -476,28 +476,15 @@ public partial class MainWindow : Window
                 throw new InvalidDataException("Frame width and height must both be positive integers, or both empty to use the scene canvas size.");
             // 属性底值是用户在 Wallpaper Engine 里的设置，面板里的改动覆盖在上；来源记录写进 plan。
             var (properties, propertiesOrigin) = AppJsonPresentation.MergeWpeProperties(sourceWpeProperties, sourcePropertyDefinitions, analysisPreviewOverrides);
-            var request = new HybridAnalyzeRequest(2, source, assets, output, width, height, numerator, denominator,
-                properties, SelectedInteraction() != "keep" ? "fixed_view" : "preserve", RetimeBox.IsChecked == true ? 2 : 0,
-                AllowLocalSeamRepair: false, DeviceUuid: gpu?.DeviceUuid,
-                VideoLayout: LayeredVideoBox.IsChecked == true ? "layered" : "full_frame",
-                // 剩余实时图层置顶界面已移除，始终传 foreground；简化文字效果固定为原默认值（preserve）。
-                LiveOverlayPlacement: "foreground",
-                LiveTextEffects: "preserve",
-                AudioEffects: AudioEffectsBox.IsChecked == true ? "omit" : "preserve",
-                ExcludedLayerIds: excludedLayerIds.Count == 0 ? null : excludedLayerIds.Order().ToArray(),
-                LoopPreference: SelectedLoopPreference(),
-                PropertiesOrigin: propertiesOrigin,
+            // 控件 → AnalyzeOptions → 请求，与 CLI 的选项表同一个工厂。档位走同一条 RetimeProfile 路径；摆动改频三档都开（设计 §3），
+            // 高级区的勾选框默认勾上、取消勾选才关；剩余实时图层置顶固定 foreground、简化文字效果固定 preserve（界面已移除这两个开关）。
+            var options = AnalyzeOptions.ForDesktop(SelectedPreset(), SelectedInteraction(), RetimeBox.IsChecked == true,
+                LayeredVideoBox.IsChecked == true, AudioEffectsBox.IsChecked == true, excludedLayerIds, RetimeBudgetOverride(),
+                SwayRetimeBox.IsChecked == true, AdvancedIsCustom(), width, height, gpu?.DeviceUuid);
+            var request = AnalyzeRequestFactory.Build(options, source, assets, output, properties, propertiesOrigin, numerator, denominator,
                 // 帧率框还是启动时算出的默认值就记 auto（连同依据），用户改过就记 explicit。
-                FrameRateOrigin: (autoFrameRate is { } automatic && denominator == 1 && numerator == automatic.Fps
-                    ? automatic : OutputFrameRate.Requested(numerator)).ToJson(),
-                // 档位与高级区的覆盖：界面上选的档走同一条 RetimeProfile 路径，与 CLI 的 --preset 一致。
-                Preset: SelectedPreset(),
-                RetimeBudgetPercent: RetimeBudgetOverride(),
-                // 摆动改频三档都开（设计 §3），高级区的勾选框默认勾上，取消勾选才关；与 CLI 的 --sway-retime 默认一致。
-                SwayRetime: SwayRetimeBox.IsChecked == true);
-            request = AppJsonPresentation.ConfigureAnalysis(request, SelectedPreset(), SelectedInteraction(),
-                AdvancedIsCustom(), LayeredVideoBox.IsChecked == true) with
-                { AnalysisCacheDirectory = analysisCacheDirectory };
+                (autoFrameRate is { } automatic && denominator == 1 && numerator == automatic.Fps
+                    ? automatic : OutputFrameRate.Requested(numerator)).ToJson(), analysisCacheDirectory);
             StatusText.Text = L("正在分析…", "Analyzing…");
             var found = await Task.Run(() => new HybridScenePlanner(tools).AnalyzeAsync(request, null, analysisCancellation.Token));
             analysisCancellation.Token.ThrowIfCancellationRequested();

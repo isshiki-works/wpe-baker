@@ -79,8 +79,10 @@ internal static class PresetCascadeChecks
             !InteractionPolicy.ExpensiveAudio(audio, null, null), "full-screen audio is removed only with measured costly contribution");
         audio["kind"] = "text";
         check(!InteractionPolicy.ExpensiveAudio(audio, 10, 1), "audio text remains protected even with an expensive synthetic reading");
-        check(!PresetCascade.MeasureSourceByDefault && !PresetCascade.IsCustom(["--out", "--tools", "--preset"]) &&
-            PresetCascade.IsCustom(["--video-layout"]) && PresetCascade.IsCustom(["--properties"]),
+        static bool Custom(params string[] options) =>
+            Baker.Cli.OptionTable.ReadAnalyze(Baker.Cli.OptionTable.Parse(["analyze", "src", .. options])).Custom;
+        check(!PresetCascade.MeasureSourceByDefault && !Custom("--out", "p", "--tools", "t", "--preset", "quality") &&
+            Custom("--video-layout", "full_frame") && Custom("--properties", "p.json"),
             "source power defaults off and semantic overrides are distinguished from transport options");
 
         string cache = Path.Combine(root, "preset-cache");
