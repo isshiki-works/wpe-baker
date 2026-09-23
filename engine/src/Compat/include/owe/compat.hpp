@@ -61,6 +61,7 @@ using std::addressof;
 using std::forward;
 using std::move;
 using std::swap;
+using std::exchange;
 using std::int16_t;
 using std::int32_t;
 using std::int64_t;
@@ -151,6 +152,7 @@ template<typename T>
 struct ref;
 template<typename T>
 struct mut_ref;
+struct str;
 
 namespace detail
 {
@@ -318,12 +320,15 @@ public:
     auto clone() const -> Option<R> { return static_cast<Option<R> const&>(*this); }
 };
 
+// 切片与 ref<str> 是胖指针，不走单指针利基存储，用主模板（std::optional）。
 template<typename T>
+    requires(! std::is_array_v<T> && ! std::same_as<T, str>)
 class Option<ref<T>> : public OptionPtrRef<ref<T>, T const> {
 public:
     using OptionPtrRef<ref<T>, T const>::OptionPtrRef;
 };
 template<typename T>
+    requires(! std::is_array_v<T>)
 class Option<mut_ref<T>> : public OptionPtrRef<mut_ref<T>, T> {
 public:
     using OptionPtrRef<mut_ref<T>, T>::OptionPtrRef;
@@ -778,17 +783,28 @@ template<typename T>
 constexpr auto min(T v1, T v2) noexcept -> T { return v1 < v2 ? v1 : v2; }
 } // namespace cmp
 
-// ── 引用与切片 ──
+// ── 指针、引用与切片（rstd 的 ptr/mut_ptr、ref/mut_ref、ref<T[]>/mut_ref<T[]> 语义）──
+template<typename T>
+struct ptr;
+template<typename T>
+struct mut_ptr;
+
 template<typename T>
 struct ref {
     T const* p = nullptr;
     constexpr ref() noexcept = default;
     constexpr ref(T const& v) noexcept: p(std::addressof(v)) {}
     static constexpr auto from_raw(T const* raw) noexcept -> ref { ref r; r.p = raw; return r; }
+    static constexpr auto from_raw_parts(T const* raw) noexcept -> ref { return from_raw(raw); }
     constexpr auto get() const noexcept -> T const& { return *p; }
     constexpr auto operator*() const noexcept -> T const& { return *p; }
     constexpr auto operator->() const noexcept -> T const* { return p; }
     constexpr auto as_raw_ptr() const noexcept -> T const* { return p; }
+    constexpr auto as_ptr() const noexcept -> ptr<T>;
+    constexpr auto deref() const noexcept -> T const& { return *p; }
+    // rstd：ref 之间按地址比较，与元素比较时按值。
+    friend constexpr auto operator==(ref a, ref b) noexcept -> bool { return a.p == b.p; }
+    friend constexpr auto operator<=>(ref a, ref b) noexcept { return a.p <=> b.p; }
 };
 template<typename T>
 struct mut_ref {
@@ -796,11 +812,148 @@ struct mut_ref {
     constexpr mut_ref() noexcept = default;
     constexpr mut_ref(T& v) noexcept: p(std::addressof(v)) {}
     static constexpr auto from_raw(T* raw) noexcept -> mut_ref { mut_ref r; r.p = raw; return r; }
+    static constexpr auto from_raw_parts(T* raw) noexcept -> mut_ref { return from_raw(raw); }
+    constexpr auto get() const noexcept -> T& { return *p; }
     constexpr auto get_mut() const noexcept -> T& { return *p; }
     constexpr auto operator*() const noexcept -> T& { return *p; }
     constexpr auto operator->() const noexcept -> T* { return p; }
     constexpr auto as_raw_ptr() const noexcept -> T* { return p; }
+    constexpr auto as_ref() const noexcept -> ref<T> { return ref<T>::from_raw(p); }
+    constexpr operator ref<T>() const noexcept { return ref<T>::from_raw(p); }
+    constexpr auto as_ptr() const noexcept -> ptr<T>;
+    constexpr auto as_mut_ptr() const noexcept -> mut_ptr<T>;
+    constexpr auto deref() const noexcept -> T& { return *p; }
+    constexpr auto deref_mut() const noexcept -> T& { return *p; }
+    friend constexpr auto operator==(mut_ref a, mut_ref b) noexcept -> bool { return a.p == b.p; }
+    friend constexpr auto operator<=>(mut_ref a, mut_ref b) noexcept { return a.p <=> b.p; }
 };
+
+// 原始指针包装：可隐式退化为裸指针，另带 rstd 的 add/get/as_ref/as_raw_ptr。
+template<typename T>
+struct ptr {
+    T const* p = nullptr;
+    static constexpr auto from_raw_parts(T const* raw) noexcept -> ptr { return ptr { raw }; }
+    constexpr auto as_raw_ptr() const noexcept -> T const* { return p; }
+    constexpr operator T const*() const noexcept { return p; }
+    constexpr auto is_null() const noexcept -> bool { return p == nullptr; }
+    constexpr auto add(usize n) const noexcept -> ptr;
+    constexpr auto get() const noexcept -> T const& { return *p; }
+    constexpr auto as_ref() const noexcept -> ref<T> { return ref<T>::from_raw(p); }
+    template<typename U>
+    auto cast() const noexcept -> ptr<U> { return ptr<U> { reinterpret_cast<U const*>(p) }; }
+};
+template<typename T>
+struct mut_ptr {
+    T* p = nullptr;
+    static constexpr auto from_raw_parts(T* raw) noexcept -> mut_ptr { return mut_ptr { raw }; }
+    constexpr auto as_raw_ptr() const noexcept -> T* { return p; }
+    constexpr operator T*() const noexcept { return p; }
+    constexpr operator ptr<T>() const noexcept { return ptr<T> { p }; }
+    constexpr auto is_null() const noexcept -> bool { return p == nullptr; }
+    constexpr auto add(usize n) const noexcept -> mut_ptr;
+    constexpr auto get() const noexcept -> T& { return *p; }
+    constexpr auto as_ref() const noexcept -> ref<T> { return ref<T>::from_raw(p); }
+    constexpr auto as_mut_ref() const noexcept -> mut_ref<T> { return mut_ref<T>::from_raw(p); }
+    template<typename U>
+    auto cast() const noexcept -> mut_ptr<U> { return mut_ptr<U> { reinterpret_cast<U*>(p) }; }
+};
+
+// 切片：ref<T[]>（只读）/ mut_ref<T[]>（可写），下标不查越界（与 rstd 的 element_at 相同），== 逐元素比较。
+template<typename T>
+struct ref<T[]> {
+    T const* p = nullptr;
+    size_t   n = 0;
+    using value_type = T;
+    constexpr ref() noexcept = default;
+    constexpr ref(std::span<T const> s) noexcept: p(s.data()), n(s.size()) {}
+    template<size_t N>
+    constexpr ref(T const (&a)[N]) noexcept: p(a), n(N) {}
+    static constexpr auto from_raw_parts(T const* data, usize len) noexcept -> ref {
+        ref r;
+        r.p = data;
+        r.n = len.to_primitive();
+        return r;
+    }
+    constexpr auto len() const noexcept -> usize { return usize(n); }
+    constexpr auto is_empty() const noexcept -> bool { return n == 0; }
+    constexpr auto size() const noexcept -> size_t { return n; }
+    constexpr auto empty() const noexcept -> bool { return n == 0; }
+    constexpr auto data() const noexcept -> T const* { return p; }
+    constexpr auto begin() const noexcept -> T const* { return p; }
+    constexpr auto end() const noexcept -> T const* { return p + n; }
+    constexpr auto operator[](usize i) const noexcept -> T const& { return p[i.to_primitive()]; }
+    constexpr auto as_raw_ptr() const noexcept -> T const* { return p; }
+    constexpr auto as_ptr() const noexcept -> ptr<T> { return ptr<T> { p }; }
+    constexpr auto deref() const noexcept -> ref { return *this; }
+    constexpr operator std::span<T const>() const noexcept { return { p, n }; }
+    friend constexpr auto operator==(ref a, ref b) noexcept(noexcept(std::declval<T const&>() == std::declval<T const&>())) -> bool
+        requires requires(T const& x) { x == x; }
+    {
+        if (a.n != b.n) return false;
+        for (size_t i = 0; i < a.n; ++i)
+            if (! (a.p[i] == b.p[i])) return false;
+        return true;
+    }
+};
+template<typename T>
+struct mut_ref<T[]> {
+    T*     p = nullptr;
+    size_t n = 0;
+    using value_type = T;
+    constexpr mut_ref() noexcept = default;
+    constexpr mut_ref(std::span<T> s) noexcept: p(s.data()), n(s.size()) {}
+    template<size_t N>
+    constexpr mut_ref(T (&a)[N]) noexcept: p(a), n(N) {}
+    static constexpr auto from_raw_parts(T* data, usize len) noexcept -> mut_ref {
+        mut_ref r;
+        r.p = data;
+        r.n = len.to_primitive();
+        return r;
+    }
+    constexpr auto len() const noexcept -> usize { return usize(n); }
+    constexpr auto is_empty() const noexcept -> bool { return n == 0; }
+    constexpr auto size() const noexcept -> size_t { return n; }
+    constexpr auto empty() const noexcept -> bool { return n == 0; }
+    constexpr auto data() const noexcept -> T* { return p; }
+    constexpr auto begin() const noexcept -> T* { return p; }
+    constexpr auto end() const noexcept -> T* { return p + n; }
+    constexpr auto operator[](usize i) const noexcept -> T& { return p[i.to_primitive()]; }
+    constexpr auto as_raw_ptr() const noexcept -> T* { return p; }
+    constexpr auto as_ptr() const noexcept -> ptr<T> { return ptr<T> { p }; }
+    constexpr auto as_mut_ptr() const noexcept -> mut_ptr<T> { return mut_ptr<T> { p }; }
+    constexpr auto as_ref() const noexcept -> ref<T[]> { return ref<T[]>::from_raw_parts(p, usize(n)); }
+    constexpr operator ref<T[]>() const noexcept { return as_ref(); }
+    constexpr operator std::span<T>() const noexcept { return { p, n }; }
+    constexpr auto deref() const noexcept -> ref<T[]> { return as_ref(); }
+    constexpr auto deref_mut() const noexcept -> mut_ref { return *this; }
+};
+template<typename T>
+using slice = ref<T[]>;
+
+template<typename T>
+constexpr auto ref<T>::as_ptr() const noexcept -> ptr<T> { return ptr<T> { p }; }
+template<typename T>
+constexpr auto mut_ref<T>::as_ptr() const noexcept -> ptr<T> { return ptr<T> { p }; }
+template<typename T>
+constexpr auto mut_ref<T>::as_mut_ptr() const noexcept -> mut_ptr<T> { return mut_ptr<T> { p }; }
+template<typename T>
+constexpr auto ptr<T>::add(usize k) const noexcept -> ptr { return ptr { p + k.to_primitive() }; }
+template<typename T>
+constexpr auto mut_ptr<T>::add(usize k) const noexcept -> mut_ptr { return mut_ptr { p + k.to_primitive() }; }
+namespace detail
+{
+// rstd 的切片本身没有 get/first/last，array 与 Vec 有；共用这两个帮助函数。
+template<typename T>
+constexpr auto slice_get(T const* p, size_t n, usize i) noexcept -> Option<ref<T>> {
+    if (i.to_primitive() >= n) return {};
+    return Option<ref<T>>(ref<T>::from_raw(p + i.to_primitive()));
+}
+template<typename T>
+constexpr auto slice_get_mut(T* p, size_t n, usize i) noexcept -> Option<mut_ref<T>> {
+    if (i.to_primitive() >= n) return {};
+    return Option<mut_ref<T>>(mut_ref<T>::from_raw(p + i.to_primitive()));
+}
+} // namespace detail
 
 struct str {};
 
@@ -811,19 +964,81 @@ struct ref<str> : std::string_view {
     constexpr ref(std::string_view s) noexcept: std::string_view(s) {}
     constexpr auto len() const noexcept -> usize { return usize(std::string_view::size()); }
     constexpr auto is_empty() const noexcept -> bool { return std::string_view::empty(); }
+    // rstd：size()/find() 等用 usize，查找失败返回 None。
+    constexpr auto size() const noexcept -> usize { return usize(std::string_view::size()); }
+    constexpr auto view() const noexcept -> std::string_view { return *this; }
+    // rstd：按字节下标取 u8，不查越界。
+    constexpr auto operator[](usize i) const noexcept -> u8 { return u8(static_cast<std::uint8_t>(view()[i.to_primitive()])); }
+    constexpr auto find(ref<str> pat) const noexcept -> Option<usize> {
+        auto i = view().find(pat.view());
+        if (i == std::string_view::npos) return {};
+        return Option<usize>(std::in_place, usize(i));
+    }
+    constexpr auto get(usize a, usize b) const noexcept -> Option<ref<str>> {
+        if (a.to_primitive() > b.to_primitive() || b.to_primitive() > view().size()) return {};
+        return Option<ref<str>>(std::in_place, view().substr(a.to_primitive(), b.to_primitive() - a.to_primitive()));
+    }
+    constexpr auto strip_prefix(ref<str> pat) const noexcept -> Option<ref<str>> {
+        if (! view().starts_with(pat.view())) return {};
+        return Option<ref<str>>(std::in_place, view().substr(pat.view().size()));
+    }
+    constexpr auto split_at(usize i) const noexcept -> std::tuple<ref<str>, ref<str>> {
+        return { view().substr(0, i.to_primitive()), view().substr(i.to_primitive()) };
+    }
+    constexpr auto split_once(ref<str> pat) const noexcept -> Option<std::tuple<ref<str>, ref<str>>> {
+        auto i = view().find(pat.view());
+        if (i == std::string_view::npos) return {};
+        return Option<std::tuple<ref<str>, ref<str>>>(std::in_place, view().substr(0, i), view().substr(i + pat.view().size()));
+    }
+    constexpr auto trim_ascii() const noexcept -> ref<str> {
+        auto v = view();
+        auto ws = [](char c) { return c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d || c == 0x0c; };
+        while (! v.empty() && ws(v.front())) v.remove_prefix(1);
+        while (! v.empty() && ws(v.back())) v.remove_suffix(1);
+        return v;
+    }
+    auto as_bytes() const noexcept -> ref<u8[]>;
 };
+inline auto ref<str>::as_bytes() const noexcept -> ref<u8[]> {
+    return ref<u8[]>::from_raw_parts(reinterpret_cast<u8 const*>(data()), len());
+}
 
-// slice<T> = std::span<const T>，补 rstd 的 len/is_empty。
-template<typename T>
-struct slice : std::span<T const> {
-    using std::span<T const>::span;
-    constexpr slice(std::span<T const> s) noexcept: std::span<T const>(s) {}
-    constexpr auto len() const noexcept -> usize { return usize(this->size()); }
-    constexpr auto is_empty() const noexcept -> bool { return this->empty(); }
-};
-
+// array：std::array + rstd 的 usize 下标（越界 panic）、len/as_slice/get/first/last；
+// 变参构造按直接初始化（与 rstd 相同，允许 array<f32, 3> { 1.0f, 2.0f, 3.0f }）。
 template<typename T, size_t N>
-using array = std::array<T, N>;
+struct array : std::array<T, N> {
+    using base = std::array<T, N>;
+    constexpr array() = default;
+    template<typename... Us>
+        requires(N > 0 && sizeof...(Us) == N && (std::constructible_from<T, Us &&> && ...))
+    constexpr array(Us&&... v): base { { T(std::forward<Us>(v))... } } {}
+    constexpr auto len() const noexcept -> usize { return usize(N); }
+    constexpr auto is_empty() const noexcept -> bool { return N == 0; }
+    constexpr auto at(usize i) -> T& {
+        if (i.to_primitive() >= N) detail::panic_at(std::source_location::current(), "array index out of bounds");
+        return base::operator[](i.to_primitive());
+    }
+    constexpr auto at(usize i) const -> T const& {
+        if (i.to_primitive() >= N) detail::panic_at(std::source_location::current(), "array index out of bounds");
+        return base::operator[](i.to_primitive());
+    }
+    constexpr auto operator[](usize i) -> T& { return at(i); }
+    constexpr auto operator[](usize i) const -> T const& { return at(i); }
+    constexpr auto as_ptr() const noexcept -> ptr<T> { return ptr<T> { base::data() }; }
+    constexpr auto as_mut_ptr() noexcept -> mut_ptr<T> { return mut_ptr<T> { base::data() }; }
+    constexpr auto as_slice() const noexcept -> ref<T[]> { return ref<T[]>::from_raw_parts(base::data(), usize(N)); }
+    constexpr auto as_mut_slice() noexcept -> mut_ref<T[]> { return mut_ref<T[]>::from_raw_parts(base::data(), usize(N)); }
+    constexpr auto deref() const noexcept -> ref<T[]> { return as_slice(); }
+    constexpr auto deref_mut() noexcept -> mut_ref<T[]> { return as_mut_slice(); }
+    constexpr auto get(usize i) const noexcept -> Option<ref<T>> { return detail::slice_get(base::data(), N, i); }
+    constexpr auto get_mut(usize i) noexcept -> Option<mut_ref<T>> { return detail::slice_get_mut(base::data(), N, i); }
+    constexpr auto first() const noexcept -> Option<ref<T>> { return get(usize(0)); }
+    constexpr auto last() const noexcept -> Option<ref<T>> {
+        if constexpr (N == 0) return {};
+        else return get(usize(N - 1));
+    }
+    constexpr auto clone() const -> array { return *this; }
+};
 
 // ── String / format ──
 struct String : std::string {
@@ -836,7 +1051,13 @@ struct String : std::string {
     auto len() const noexcept -> usize { return usize(std::string::size()); }
     auto is_empty() const noexcept -> bool { return std::string::empty(); }
     auto capacity() const noexcept -> usize { return usize(std::string::capacity()); }
-    void push_str(ref<str> s) { std::string::append(s.data(), s.size()); }
+    void push_str(ref<str> s) { std::string::append(s.data(), s.view().size()); }
+    void push(char c) { std::string::push_back(c); }
+    auto size() const noexcept -> usize { return usize(std::string::size()); }
+    void reserve(usize n) { std::string::reserve(std::string::size() + n.to_primitive()); }
+    auto find(ref<str> pat) const noexcept -> Option<usize> { return as_str().find(pat); }
+    auto get(usize a, usize b) const noexcept -> Option<ref<str>> { return as_str().get(a, b); }
+    auto as_bytes() const noexcept -> ref<u8[]> { return as_str().as_bytes(); }
     auto clone() const -> String { return *this; }
 };
 
@@ -863,9 +1084,16 @@ struct Vec : std::vector<T> {
     using std::vector<T>::vector;
     Vec() = default;
     static auto make() -> Vec { return {}; }
+    auto capacity() const noexcept -> usize { return usize(std::vector<T>::capacity()); }
+    // rstd：reserve(additional) 按“再多容纳 additional 个”计。
+    void reserve(usize additional) { std::vector<T>::reserve(this->size() + additional.to_primitive()); }
+    void extend_from_slice(T const* data, usize n) {
+        this->reserve(usize(n));
+        for (size_t i = 0; i < n.to_primitive(); ++i) this->push_back(detail::clone_value(data[i]));
+    }
     static auto with_capacity(usize n) -> Vec {
         Vec v;
-        v.reserve(n.to_primitive());
+        static_cast<std::vector<T>&>(v).reserve(n.to_primitive());
         return v;
     }
     auto len() const noexcept -> usize { return usize(this->size()); }
@@ -885,13 +1113,36 @@ struct Vec : std::vector<T> {
         if (i.to_primitive() >= this->size()) detail::panic_at(std::source_location::current(), "Vec index out of bounds");
         return std::vector<T>::operator[](i.to_primitive());
     }
-    auto as_slice() const noexcept -> slice<T> { return slice<T>(std::span<T const>(this->data(), this->size())); }
-    auto as_mut_slice() noexcept -> std::span<T> { return std::span<T>(this->data(), this->size()); }
-    auto as_ptr() const noexcept -> T const* { return this->data(); }
-    auto as_mut_ptr() noexcept -> T* { return this->data(); }
+    auto as_slice() const noexcept -> ref<T[]> { return ref<T[]>::from_raw_parts(this->data(), usize(this->size())); }
+    auto as_mut_slice() noexcept -> mut_ref<T[]> { return mut_ref<T[]>::from_raw_parts(this->data(), usize(this->size())); }
+    auto deref() const noexcept -> ref<T[]> { return as_slice(); }
+    auto deref_mut() noexcept -> mut_ref<T[]> { return as_mut_slice(); }
+    auto as_ptr() const noexcept -> ptr<T> { return ptr<T> { this->data() }; }
+    auto as_mut_ptr() noexcept -> mut_ptr<T> { return mut_ptr<T> { this->data() }; }
+    auto get(usize i) const noexcept -> Option<ref<T>> { return detail::slice_get(this->data(), this->size(), i); }
+    auto get_mut(usize i) noexcept -> Option<mut_ref<T>> { return detail::slice_get_mut(this->data(), this->size(), i); }
+    auto first() const noexcept -> Option<ref<T>> { return get(usize(0)); }
+    auto last() const noexcept -> Option<ref<T>> { return this->empty() ? Option<ref<T>>() : get(usize(this->size() - 1)); }
+    void truncate(usize n) {
+        if (n.to_primitive() < this->size()) this->erase(this->begin() + static_cast<std::ptrdiff_t>(n.to_primitive()), this->end());
+    }
+    template<typename F>
+    void retain(F&& keep) {
+        std::erase_if(static_cast<std::vector<T>&>(*this), [&](T const& v) { return ! keep(v); });
+    }
+    void extend_from_slice(ref<T[]> s) {
+        std::vector<T>::reserve(this->size() + s.size());
+        for (auto const& v : s) this->push_back(detail::clone_value(v));
+    }
+    void push(T const& v)
+        requires std::is_trivially_copyable_v<T>
+    {
+        this->push_back(v);
+    }
+    void clear() noexcept { std::vector<T>::clear(); }
     auto clone() const -> Vec {
         Vec out;
-        out.reserve(this->size());
+        static_cast<std::vector<T>&>(out).reserve(this->size());
         for (auto const& v : *this) out.push_back(detail::clone_value(v));
         return out;
     }
@@ -910,6 +1161,7 @@ struct Arc : std::shared_ptr<T> {
     auto clone() const noexcept -> Arc { return *this; }
     auto strong_count() const noexcept -> usize { return usize(static_cast<size_t>(this->use_count())); }
     auto downgrade() const noexcept -> Weak<T>;
+    auto as_ptr() const noexcept -> ptr<T> { return ptr<T> { this->get() }; }
 };
 template<typename T>
 struct Weak : std::weak_ptr<T> {
@@ -1220,6 +1472,87 @@ struct EnvLogger : Log {
 };
 } // namespace log
 
+// ── mtp：rstd 的类型谓词（引擎只用这几个）──
+namespace mtp
+{
+template<typename T>
+inline constexpr bool is_const = std::is_const_v<T>;
+template<typename T>
+inline constexpr bool is_ptr = std::is_pointer_v<T>;
+template<typename T>
+inline constexpr bool is_arithmetic = std::is_arithmetic_v<T>;
+template<typename T>
+inline constexpr bool triv_copy = std::is_trivially_copyable_v<T>;
+template<typename A, typename B>
+concept same = std::same_as<A, B>;
+template<typename T, typename... Us>
+concept any = (std::same_as<T, Us> || ...);
+} // namespace mtp
+
+// ── char_：UTF-8 解码（照抄 rstd::char_::decode_utf8，非法序列返回 U+FFFD 与宽度 1）──
+namespace char_
+{
+inline constexpr char32_t REPLACEMENT = 0xFFFD;
+constexpr auto decode_utf8(char const* p, usize len) noexcept -> std::tuple<char32_t, usize> {
+    auto const available = len.to_primitive();
+    if (available == 0) return { REPLACEMENT, usize() };
+    auto const b0 = static_cast<std::uint8_t>(p[0]);
+    if (b0 <= 0x7F) return { static_cast<char32_t>(b0), usize(1) };
+    size_t   seq_len;
+    char32_t cp;
+    if ((b0 & 0xE0) == 0xC0) {
+        seq_len = 2;
+        cp      = b0 & 0x1F;
+    } else if ((b0 & 0xF0) == 0xE0) {
+        seq_len = 3;
+        cp      = b0 & 0x0F;
+    } else if ((b0 & 0xF8) == 0xF0) {
+        seq_len = 4;
+        cp      = b0 & 0x07;
+    } else {
+        return { REPLACEMENT, usize(1) };
+    }
+    if (seq_len > available) return { REPLACEMENT, usize(1) };
+    for (size_t i = 1; i < seq_len; ++i) {
+        auto const b = static_cast<std::uint8_t>(p[i]);
+        if ((b & 0xC0) != 0x80) return { REPLACEMENT, usize(1) };
+        cp = (cp << 6) | (b & 0x3F);
+    }
+    if (seq_len == 2 && cp < 0x80) return { REPLACEMENT, usize(1) };
+    if (seq_len == 3 && cp < 0x800) return { REPLACEMENT, usize(1) };
+    if (seq_len == 4 && cp < 0x10000) return { REPLACEMENT, usize(1) };
+    if (cp >= 0xD800 && cp <= 0xDFFF) return { REPLACEMENT, usize(1) };
+    if (cp > 0x10FFFF) return { REPLACEMENT, usize(1) };
+    return { cp, usize(seq_len) };
+}
+} // namespace char_
+
+// ── time：Instant/Duration（单调时钟），只覆盖引擎用到的成员 ──
+namespace time
+{
+struct Duration {
+    std::chrono::nanoseconds d {};
+    static auto from_millis(u64 ms) noexcept -> Duration { return { std::chrono::milliseconds(ms.to_primitive()) }; }
+    static auto from_secs_f64(f64 s) noexcept -> Duration {
+        return { std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(s.to_primitive())) };
+    }
+    auto as_secs_f64() const noexcept -> f64 { return f64(std::chrono::duration<double>(d).count()); }
+    auto as_secs_f32() const noexcept -> f32 { return f32(static_cast<float>(std::chrono::duration<double>(d).count())); }
+    auto as_millis() const noexcept -> u64 { return u64(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(d).count())); }
+    auto as_nanos() const noexcept -> u64 { return u64(static_cast<std::uint64_t>(d.count())); }
+    friend auto operator<=>(Duration, Duration) = default;
+};
+struct Instant {
+    std::chrono::steady_clock::time_point t {};
+    static auto now() noexcept -> Instant { return { std::chrono::steady_clock::now() }; }
+    auto elapsed() const noexcept -> Duration { return { now().t - t }; }
+    friend auto operator-(Instant a, Instant b) noexcept -> Duration { return { a.t - b.t }; }
+    friend auto operator+(Instant a, Duration b) noexcept -> Instant { return { a.t + std::chrono::duration_cast<std::chrono::steady_clock::duration>(b.d) }; }
+    friend auto operator<=>(Instant, Instant) = default;
+};
+inline constexpr u64 NANOS_PER_SEC = u64(1000000000ull);
+} // namespace time
+
 // ── 字面量 ──
 namespace literals
 {
@@ -1316,6 +1649,117 @@ struct std::hash<T> {
 };
 template<>
 struct std::hash<owe::compat::String> : std::hash<std::string> {};
+
+// ── trait 残留：Impl<hash::Hash, T> / Impl<fmt::Display, T>（T2-6：保持引擎写法，T3 改成 std::hash / std::formatter 特化）──
+namespace owe::compat
+{
+struct Copy {};
+template<typename T>
+struct ImplBase {
+    T const* self_ = nullptr;
+    constexpr auto self() const noexcept -> T const& { return *self_; }
+};
+template<typename Trait, typename T>
+struct Impl;
+
+namespace hash
+{
+struct Hash {};
+struct Hasher {};
+// 只决定 unordered 容器的分桶，不进输出；FNV-1a 64 位。
+struct DefaultHasher {
+    std::uint64_t h = 14695981039346656037ull;
+    constexpr void write_u64(std::uint64_t v) noexcept {
+        for (int i = 0; i < 8; ++i) {
+            h ^= (v >> (8 * i)) & 0xffu;
+            h *= 1099511628211ull;
+        }
+    }
+    constexpr auto finish() const noexcept -> std::uint64_t { return h; }
+};
+template<typename T, typename H>
+constexpr void hash_into(T const& v, H& state) noexcept;
+} // namespace hash
+
+template<typename T, typename Trait>
+concept Impled = (std::same_as<Trait, hash::Hasher> && requires(T& h, std::uint64_t v) { h.write_u64(v); }) ||
+                 (std::same_as<Trait, Copy> && std::is_trivially_copyable_v<T>) ||
+                 requires { sizeof(Impl<Trait, T>); };
+
+namespace hash
+{
+template<typename T, typename H>
+constexpr void hash_into(T const& v, H& state) noexcept {
+    if constexpr (requires(Impl<Hash, T> i) { i.hash(state); }) {
+        Impl<Hash, T> i;
+        i.self_ = std::addressof(v);
+        i.hash(state);
+    } else if constexpr (detail::IntegerWrapper<T>) {
+        state.write_u64(static_cast<std::uint64_t>(v.to_primitive()));
+    } else if constexpr (std::is_enum_v<T>) {
+        state.write_u64(static_cast<std::uint64_t>(std::to_underlying(v)));
+    } else if constexpr (std::is_integral_v<T>) {
+        state.write_u64(static_cast<std::uint64_t>(v));
+    } else if constexpr (std::is_pointer_v<T>) {
+        state.write_u64(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(v)));
+    } else if constexpr (std::is_convertible_v<T const&, std::string_view>) {
+        state.write_u64(std::hash<std::string_view> {}(std::string_view(v)));
+    } else {
+        state.write_u64(std::hash<T> {}(v));
+    }
+}
+} // namespace hash
+
+namespace fmt
+{
+struct Display {};
+struct Arguments {
+    std::string text;
+    template<typename... A>
+    static auto make(std::format_string<A...> f, A&&... a) -> Arguments {
+        return Arguments { detail::rstd_format<A...>(f, std::forward<A>(a)...) };
+    }
+};
+struct Formatter {
+    std::string* out;
+    auto write_raw(char const* p, size_t n) -> bool {
+        out->append(p, n);
+        return true;
+    }
+    auto write_str(std::string_view s) -> bool {
+        out->append(s);
+        return true;
+    }
+    auto write_fmt(Arguments const& a) -> bool {
+        out->append(a.text);
+        return true;
+    }
+};
+} // namespace fmt
+} // namespace owe::compat
+
+template<typename T>
+    requires requires(owe::compat::Impl<owe::compat::hash::Hash, T> i, owe::compat::hash::DefaultHasher& h) { i.hash(h); }
+struct std::hash<T> {
+    auto operator()(T const& v) const noexcept -> std::size_t {
+        owe::compat::hash::DefaultHasher h;
+        owe::compat::hash::hash_into(v, h);
+        return static_cast<std::size_t>(h.finish());
+    }
+};
+template<typename T, typename C>
+    requires requires(owe::compat::Impl<owe::compat::fmt::Display, T> i, owe::compat::fmt::Formatter& f) { i.fmt(f); }
+struct std::formatter<T, C> {
+    constexpr auto parse(auto& ctx) { return ctx.begin(); }
+    auto format(T const& v, auto& ctx) const {
+        std::string s;
+        owe::compat::Impl<owe::compat::fmt::Display, T> i;
+        i.self_ = std::addressof(v);
+        owe::compat::fmt::Formatter f { &s };
+        i.fmt(f);
+        return std::ranges::copy(s, ctx.out()).out;
+    }
+};
 
 // ── 宏：与 rstd/macro.hpp 同名 ──
 #define OWE_COMPAT_TRY_1(EXPR)                                                                    \

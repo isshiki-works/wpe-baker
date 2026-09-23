@@ -428,6 +428,63 @@ std::string die_float_clamp() { return std::format("{}", f32(1.0f).clamp(f32(2.0
 std::string die_panic_fmt() { rstd::panic("value {} and {}", 42, "x"); }
 std::string die_assert() { volatile int a = 1; rstd_assert(a == 2); return "unreachable"; }
 std::string die_vec_oob() { auto v = Vec<int>::make(); v.push(1); return std::to_string(v[usize(5)]); }
+// ── T2-6 补的 API：切片/数组/指针、Vec 其余成员、str 的 usize 接口、UTF-8 解码 ──
+std::string slice_array() {
+    Out o;
+    rstd::array<int, 3> a { 1, 2, 3 };
+    o("len", a.len().to_primitive())("idx", a[usize(2)]);
+    auto s = a.as_slice();
+    o("s_len", s.len().to_primitive())("s_idx", s[usize(1)])("a_first", *a.first().unwrap())("a_last", *a.last().unwrap());
+    o("a_get_oob", a.get(usize(3)).is_none())("a_get", *a.get(usize(0)).unwrap());
+    auto m = a.as_mut_slice();
+    m[usize(0)] = 7;
+    o("mut", a[usize(0)]);
+    auto raw = rstd::slice<int>::from_raw_parts(s.as_raw_ptr(), usize(2));
+    o("raw_len", raw.len().to_primitive())("eq_self", raw == rstd::slice<int>::from_raw_parts(s.as_raw_ptr(), usize(2)));
+    int sum = 0;
+    for (auto v : s) sum += v;
+    o("sum", sum)("ptr_add", *a.as_ptr().add(usize(1)).as_raw_ptr());
+    rstd::array<int, 2> z {};
+    o("zero", z[usize(0)] + z[usize(1)]);
+    return o.s;
+}
+std::string vec_more() {
+    Out o;
+    auto v = Vec<int>::make();
+    for (int i = 0; i < 6; ++i) v.push(int(i));
+    v.retain([](int const& x) { return x % 2 == 0; });
+    o("retain_len", v.len().to_primitive())("retain_1", v[usize(1)]);
+    v.truncate(usize(2));
+    o("trunc_len", v.len().to_primitive());
+    int extra[] = { 8, 9 };
+    v.extend_from_slice(rstd::slice<int>::from_raw_parts(extra, usize(2)));
+    v.extend_from_slice(extra, usize(1));
+    o("ext_len", v.len().to_primitive())("ext_last", v[usize(4)]);
+    v.reserve(usize(100));
+    o("cap_ge", v.capacity().to_primitive() >= 105)("deref_len", v.deref().len().to_primitive());
+    auto ms = v.deref_mut();
+    ms[usize(0)] = 42;
+    o("deref_mut", v[usize(0)]);
+    return o.s;
+}
+std::string str_more() {
+    Out o;
+    ref<str> s = "  key=value  "_str;
+    auto t = s.trim_ascii();
+    o("trim", rstd::cppstd::to_string(t))("size", s.size().to_primitive());
+    o("find", t.find("="_str).unwrap().to_primitive())("find_none", t.find("#"_str).is_none());
+    auto g = t.get(usize(0), usize(3));
+    o("get", rstd::cppstd::to_string(g.unwrap()))("get_oob", t.get(usize(2), usize(99)).is_none());
+    o("strip", t.strip_prefix("key"_str).is_some())("strip_none", t.strip_prefix("x"_str).is_none());
+    o("byte", t[usize(3)].to_primitive());
+    ref<str> u = "中"_str;
+    auto [cp, w] = rstd::char_::decode_utf8(u.data(), u.size());
+    o("utf8_cp", static_cast<unsigned>(cp))("utf8_w", w.to_primitive());
+    auto [bad, bw] = rstd::char_::decode_utf8(u.data() + 1, usize(2));
+    o("bad_cp", static_cast<unsigned>(bad))("bad_w", bw.to_primitive());
+    return o.s;
+}
+std::string die_array_oob() { rstd::array<int, 2> a { 1, 2 }; return std::to_string(a[usize(2)]); }
 } // namespace
 
 auto cases() -> std::vector<DiffCase> const& {
@@ -466,6 +523,10 @@ auto cases() -> std::vector<DiffCase> const& {
         { "die_panic_fmt", die_panic_fmt },
         { "die_assert", die_assert },
         { "die_vec_oob", die_vec_oob },
+        { "slice_array", slice_array },
+        { "vec_more", vec_more },
+        { "str_more", str_more },
+        { "die_array_oob", die_array_oob },
     };
     return table;
 }
