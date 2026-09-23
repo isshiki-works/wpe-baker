@@ -5,8 +5,13 @@ using Baker.Core;
 internal static class SpriteSeamPhaseChecks
 {
     // 最小精灵 .tex：TEXV0005/TEXI0001 头、TEXB0003 单图单 mip、TEXS0003 帧表；badFrame 额外插一帧坏 imageId。
-    internal static byte[] SpriteTex(float frameTime, int frames, bool badFrame = false)
+    internal static byte[] SpriteTex(float frameTime, int frames, bool badFrame = false) =>
+        SpriteTex(Enumerable.Repeat(frameTime, frames).ToArray(), badFrame);
+
+    // 同上，帧时长逐帧给出（坏帧插在第 1 位，不占 frameTimes 的位置）。
+    internal static byte[] SpriteTex(float[] frameTimes, bool badFrame = false)
     {
+        int frames = frameTimes.Length;
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         void Stamp(string text) { writer.Write(Encoding.ASCII.GetBytes(text)); writer.Write((byte)0); }
@@ -15,9 +20,9 @@ internal static class SpriteSeamPhaseChecks
         Stamp("TEXB0003"); writer.Write(1); writer.Write(-1);
         writer.Write(1); writer.Write(64); writer.Write(64); writer.Write(0); writer.Write(4); writer.Write(4); writer.Write(new byte[4]);
         Stamp("TEXS0003"); writer.Write(frames + (badFrame ? 1 : 0)); writer.Write(64); writer.Write(64);
-        for (int i = 0; i < frames + (badFrame ? 1 : 0); ++i)
+        for (int i = 0, next = 0; i < frames + (badFrame ? 1 : 0); ++i)
         {
-            writer.Write(badFrame && i == 1 ? 7 : 0); writer.Write(badFrame && i == 1 ? 9f : frameTime);
+            writer.Write(badFrame && i == 1 ? 7 : 0); writer.Write(badFrame && i == 1 ? 9f : frameTimes[next++]);
             for (int j = 0; j < 6; ++j) writer.Write(0f);
         }
         writer.Flush();
