@@ -75,8 +75,7 @@ bool ParseAnimCurve(const owe::NJson&, AnimCurve&);
 
 struct ScriptBinding {
     std::string source;
-    // 仍是 rstd：只有脚本运行时（C 组）读，AbsorbFieldBinding 处 ToRstd（过渡桥）。
-    owe::Json initial_value;
+    owe::NJson initial_value;
 
     auto clone() const -> ScriptBinding;
 };
@@ -85,13 +84,12 @@ struct FieldBindingSpec {
     u64                   identity {};
     String                field;
     Option<AnimCurve>     animation;
-    // 同 ScriptBinding::initial_value，仍是 rstd。
-    Option<owe::Json>     script_properties;
+    Option<owe::NJson>    script_properties;
     Option<ScriptBinding> script;
     Option<String>        user;
 
     auto clone() const -> FieldBindingSpec;
-    auto ScriptProperties() const noexcept -> const owe::Json&;
+    auto ScriptProperties() const noexcept -> const owe::NJson&;
 };
 
 struct FieldBindings {

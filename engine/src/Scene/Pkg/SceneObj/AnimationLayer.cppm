@@ -23,8 +23,7 @@ inline void ReadPuppetAnimationLayers(const owe::NJson&                         
         owe::GetJsonValue(jLayer, "blend", layer.blend);
         owe::GetJsonValue(jLayer, "rate", layer.rate);
         if (auto visible = owe::Find(jLayer, "visible"); visible != nullptr) {
-            // 过渡桥：PuppetLayer::AnimationLayer::visible_binding 仍是 rstd（C 组迁）。
-            layer.visible_binding = Some(owe::ToRstd(*visible));
+            layer.visible_binding = Some(owe::NJson(*visible));
             if (visible->is_boolean()) {
                 layer.visible = visible->get<bool>();
             } else if (visible->is_object()) {

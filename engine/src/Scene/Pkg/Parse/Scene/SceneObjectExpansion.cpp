@@ -28,7 +28,7 @@ SceneUserVisibilityBinding
 ToSceneUserVisibilityBinding(const wpscene::VisibleUserBinding& binding) {
     return SceneUserVisibilityBinding {
         .key           = String::make(rstd::cppstd::as_str(binding.name).unwrap()),
-        .condition     = std::make_shared<const NJson>(FromRstd(binding.condition)),
+        .condition     = std::make_shared<const NJson>(binding.condition),
         .has_condition = binding.has_condition,
     };
 }
@@ -288,11 +288,11 @@ auto ExpandSceneObjects(ref<wpscene::SceneDocument> document, mut_ref<fs::VFS> v
     };
 }
 
-Vec<SceneObjectVar> ExpandObjects(const Json& json, fs::VFS& vfs, wpscene::SceneVersion version,
+Vec<SceneObjectVar> ExpandObjects(const NJson& json, fs::VFS& vfs, wpscene::SceneVersion version,
                                   const NJson* user_properties) {
     wpscene::SceneDocument document;
     document.metadata.pkg_version = version;
-    document.objects = wpscene::ParseSceneObjectRecords(FromRstd(json), document.objects_are_array);
+    document.objects = wpscene::ParseSceneObjectRecords(json, document.objects_are_array);
     if (! document.objects_are_array) return {};
     return ExpandObjects(ref<wpscene::SceneDocument>::from_raw_parts(rstd::addressof(document)),
                          mut_ref<fs::VFS>::from_raw_parts(rstd::addressof(vfs)),

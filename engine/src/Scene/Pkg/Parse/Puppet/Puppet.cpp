@@ -509,7 +509,7 @@ auto PuppetLayer::AnimationLayer::Clone() const -> AnimationLayer {
         .visible   = visible,
         .cur_time  = cur_time,
         .visible_binding =
-            visible_binding.is_some() ? Some(visible_binding->clone()) : None(),
+            visible_binding.is_some() ? Some(NJson(*visible_binding)) : None(),
         .visible_can_change = visible_can_change,
         .layer_id  = layer_id,
         .name      = name.clone(),

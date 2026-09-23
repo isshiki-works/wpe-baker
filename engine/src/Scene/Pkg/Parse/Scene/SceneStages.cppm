@@ -77,7 +77,7 @@ constexpr auto ResolveTextRenderMode(TextSurfaceRequirements requirements) -> Te
 }
 
 // Compatibility entry for callers with an already-parsed raw value.
-Vec<SceneObjectVar> ExpandObjects(const Json&, fs::VFS&, wpscene::SceneVersion,
+Vec<SceneObjectVar> ExpandObjects(const NJson&, fs::VFS&, wpscene::SceneVersion,
                                   const NJson* user_props = nullptr);
 
 // Canonical cheap expansion path. SceneDocument owns authored object order

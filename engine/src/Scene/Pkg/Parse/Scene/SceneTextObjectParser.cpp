@@ -1081,8 +1081,8 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
             sb.source,
             sha,
             script::FieldKind::String,
-            FromRstd(binding.ScriptProperties()),
-            FromRstd(sb.initial_value),
+            binding.ScriptProperties(),
+            sb.initial_value,
             script::ScriptBindingContext::ForLayer(
                 layer_node.as_ptr(), "text"_str, layer_node->FieldAnimation("text"_str)));
         if (fs) {
@@ -1105,8 +1105,8 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
             sb.source,
             sha,
             script::FieldKind::Scalar,
-            FromRstd(binding.ScriptProperties()),
-            FromRstd(sb.initial_value),
+            binding.ScriptProperties(),
+            sb.initial_value,
             script::ScriptBindingContext::ForLayer(
                 layer_node.as_ptr(), "pointsize"_str, layer_node->FieldAnimation("pointsize"_str)));
         if (fs) {

@@ -155,7 +155,7 @@ SceneUserVisibilityBinding
 ToSceneUserVisibilityBinding(const wpscene::VisibleUserBinding& binding) {
     SceneUserVisibilityBinding out;
     out.key           = String::make(rstd::cppstd::as_str(binding.name).unwrap());
-    out.condition     = std::make_shared<const NJson>(FromRstd(binding.condition));
+    out.condition     = std::make_shared<const NJson>(binding.condition);
     out.has_condition = binding.has_condition;
     return out;
 }
@@ -456,8 +456,8 @@ void WireFieldScripts(SceneParseContext& context, const Arc<SceneNode>& node_sp,
         }
         std::string sha = utils::genSha1(std::span<const char>(sb.source));
         auto props =
-            ScriptPropertiesForField(context, field, FromRstd(binding.ScriptProperties()), sb);
-        auto initial_value = ScriptInitialValueForField(field, FromRstd(sb.initial_value));
+            ScriptPropertiesForField(context, field, binding.ScriptProperties(), sb);
+        auto initial_value = ScriptInitialValueForField(field, sb.initial_value);
         Option<Arc<SceneAnimationPlayback>> animation;
         if (binding.animation.is_some())
             animation = Some(ResolveAnimationTrack(context, binding).playback.clone());
@@ -511,7 +511,7 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
     for (const auto& authored : authored_layers) {
         if (authored.visible_binding.is_none() || ! authored.visible_binding->is_object()) continue;
 
-        auto user_binding = AnimationLayerVisibleUserBinding(FromRstd(*authored.visible_binding));
+        auto user_binding = AnimationLayerVisibleUserBinding(*authored.visible_binding);
         const bool user_controls_visibility = user_binding.is_some();
         if (user_binding.is_some()) {
             if (context.user_properties != nullptr) {
@@ -536,7 +536,7 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
         }
 
         wpscene::FieldBindings fields;
-        (void)wpscene::AbsorbFieldBinding("visible", FromRstd(*authored.visible_binding), fields);
+        (void)wpscene::AbsorbFieldBinding("visible", *authored.visible_binding, fields);
         auto binding = fields.Get("visible"_str);
         if (binding.is_none() || (**binding).script.is_none()) continue;
 
@@ -551,7 +551,7 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
         const auto& script_binding = *(**binding).script;
         auto&       scripts        = EnsureScriptScene(context);
         auto&       runtime        = scripts.runtime();
-        NJson initial_value = FromRstd(script_binding.initial_value);
+        NJson initial_value = script_binding.initial_value;
         if (user_controls_visibility) {
             auto visible = puppet_layer->AnimationLayerVisible(authored.layer_id);
             if (visible.is_some()) initial_value = bool(*visible);
@@ -561,7 +561,7 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
             script_binding.source,
             sha,
             script::FieldKind::Bool,
-            FromRstd((**binding).ScriptProperties()),
+            (**binding).ScriptProperties(),
             initial_value,
             script::ScriptBindingContext::ForAnimationLayer(owner.as_ptr(),
                                                              puppet_layer.clone(),
@@ -613,8 +613,8 @@ void WireImageEffectVisibilityScript(SceneParseContext& context, SceneNode* node
         rt.MakeFieldScript(sb.source,
                            sha,
                            script::FieldKind::Bool,
-                           FromRstd(binding->ScriptProperties()),
-                           FromRstd(sb.initial_value),
+                           binding->ScriptProperties(),
+                           sb.initial_value,
                            script::ScriptBindingContext::ForEffect(
                                node, { .id = effect_id }, "visible"_str, rstd::move(animation)));
     if (! fs) return;
@@ -657,8 +657,8 @@ void WireCameraShakeScripts(SceneParseContext& context, const wpscene::FieldBind
         auto* fs = rt.MakeFieldScript(sb.source,
                                       sha,
                                       kind,
-                                      FromRstd(binding.ScriptProperties()),
-                                      FromRstd(sb.initial_value),
+                                      binding.ScriptProperties(),
+                                      sb.initial_value,
                                       script::ScriptBindingContext::ForLayer(
                                           nullptr, binding.field.as_str(), rstd::move(animation)));
         if (! fs) continue;
@@ -702,12 +702,12 @@ void WireCameraFieldScripts(SceneParseContext& context, const Arc<SceneNode>& no
         }
 
         std::string sha           = utils::genSha1(std::span<const char>(sb.source));
-        auto        initial_value = ScriptInitialValueForField(field, FromRstd(sb.initial_value));
+        auto        initial_value = ScriptInitialValueForField(field, sb.initial_value);
         auto*       fs            = rt.MakeFieldScript(
             sb.source,
             sha,
             kind,
-            FromRstd(binding.ScriptProperties()),
+            binding.ScriptProperties(),
             initial_value,
             script::ScriptBindingContext::ForLayer(
                 node, binding.field.as_str(), node->FieldAnimation(binding.field.as_str())));

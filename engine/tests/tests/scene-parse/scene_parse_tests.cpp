@@ -134,7 +134,7 @@ TEST(TextRenderMode, UsesDirectRenderingOnlyWithoutIndependentSurfaceRequirement
 }
 
 TEST(SceneObjectExpansion, PreservesHiddenTextLayers) {
-    auto parsed = owe::ParseJson(R"({
+    auto parsed = owe::ParseNJson(R"({
         "objects": [{
             "id": 7,
             "name": "Style1",
@@ -252,7 +252,7 @@ TEST(SceneObjectExpansion, IgnoresContainerWithoutAuthoredId) {
 }
 
 TEST(SceneObjectExpansion, PreservesHiddenSourceReferencedByContainer) {
-    auto parsed = owe::ParseJson(R"JSON({
+    auto parsed = owe::ParseNJson(R"JSON({
         "objects": [
             {"id": 7, "name": "Hidden Source", "sound": [], "visible": false},
             {"id": 8, "name": "Container", "dependencies": [7]}

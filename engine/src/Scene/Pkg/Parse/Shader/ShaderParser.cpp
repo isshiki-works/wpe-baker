@@ -3300,7 +3300,7 @@ ShaderParser::CompileSceneShaderVariant(const SceneShaderVariantDesc& desc, fs::
     return result;
 }
 
-CompileMaterialShaderResult ShaderParser::CompileMaterialShader(const Json&      material_json,
+CompileMaterialShaderResult ShaderParser::CompileMaterialShader(const NJson&     material_json,
                                                                 fs::VFS&         vfs,
                                                                 std::string_view scene_id,
                                                                 const Combos&    combos_override,
@@ -3308,7 +3308,7 @@ CompileMaterialShaderResult ShaderParser::CompileMaterialShader(const Json&     
     CompileMaterialShaderResult r;
 
     wpscene::Material mat;
-    if (! mat.FromJson(FromRstd(material_json))) {
+    if (! mat.FromJson(material_json)) {
         r.error = "Material::FromJson failed";
         return r;
     }
