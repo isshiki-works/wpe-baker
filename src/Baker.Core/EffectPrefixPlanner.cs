@@ -25,12 +25,15 @@ internal static class EffectPrefixPlanner
             if (!VisibilityControllersProven(originalScene, runtime, ownerId)) continue;
             JsonArray effects = owner["effects"]!.AsArray();
             var closed = new List<JsonObject>();
+            // 同层各前缀共用一份"每个效果用到哪些材质 shader"的索引：在第一次分析前缀时建，后面的前缀只切片不重读。
+            string[][]? effectShaders = null;
             for (int count = 1; count <= effects.Count; ++count)
             {
                 if (effects[count - 1] is not JsonObject effect || !SafeEffect(effect, source, retainedPuppetAnimation)) break;
                 if (effect["id"] is null) continue;
-                JsonObject loop = AnalyzePrefix(originalScene, source, assets, runtime, snapshotProperties,
-                    ownerId, count, request, projection);
+                effectShaders ??= EffectShaderIndex(originalScene, source, assets, ownerId);
+                JsonObject loop = AnalyzeIndexedPrefix(originalScene, source, assets, runtime, snapshotProperties,
+                    ownerId, count, request, projection, effectShaders);
                 if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 } candidates ||
                     candidates[0]?["components"] is not JsonArray { Count: > 0 }) continue;
                 var cache = new JsonObject {
@@ -63,18 +66,22 @@ internal static class EffectPrefixPlanner
     /// 缓存尺寸在规划时还不知道，videoGroups 传 null，长度上限按不透明整幅输出估算（与 <see cref="HybridScenePlanner.LoopLengthMaximumOf"/> 的约定一致）。
     /// </summary>
     internal static JsonObject AnalyzePrefix(JsonObject originalScene, ProjectSource source, string assets, JsonObject runtime,
-        JsonObject snapshot, int ownerId, int prefixCount, HybridAnalyzeRequest request, JsonObject projection)
+        JsonObject snapshot, int ownerId, int prefixCount, HybridAnalyzeRequest request, JsonObject projection) =>
+        AnalyzeIndexedPrefix(originalScene, source, assets, runtime, snapshot, ownerId, prefixCount, request, projection, null);
+
+    /// <param name="effectShaders">该层每个效果（按 effects 里的对象顺序）用到的材质 shader；null 时当场建（bake 侧单个前缀复算）。</param>
+    private static JsonObject AnalyzeIndexedPrefix(JsonObject originalScene, ProjectSource source, string assets, JsonObject runtime,
+        JsonObject snapshot, int ownerId, int prefixCount, HybridAnalyzeRequest request, JsonObject projection,
+        IReadOnlyList<string[]>? effectShaders)
     {
         ArgumentNullException.ThrowIfNull(request);
         // 证据要跟着分析范围走：被截掉的效果不在这次前缀里，它们的运行时材质也就没有对应的方程裁定，
         // 留在证据里只会以「未建模时钟」的名义反过来否掉这个前缀。留在前缀里的同名 shader 不受影响。
         JsonObject authoredOwner = originalScene["objects"]!.AsArray().OfType<JsonObject>()
             .Single(item => item["id"]!.GetValue<int>() == ownerId);
-        JsonArray authoredEffects = authoredOwner["effects"]!.AsArray();
-        var kept = new HashSet<string>(authoredEffects.OfType<JsonObject>().Take(prefixCount)
-            .SelectMany(effect => ShaderPeriodAnalysis.EffectMaterialShaders(source, assets, effect)), StringComparer.Ordinal);
-        var dropped = new HashSet<string>(authoredEffects.OfType<JsonObject>().Skip(prefixCount)
-            .SelectMany(effect => ShaderPeriodAnalysis.EffectMaterialShaders(source, assets, effect)), StringComparer.Ordinal);
+        effectShaders ??= EffectShaderIndex(originalScene, source, assets, ownerId);
+        var kept = new HashSet<string>(effectShaders.Take(prefixCount).SelectMany(shaders => shaders), StringComparer.Ordinal);
+        var dropped = new HashSet<string>(effectShaders.Skip(prefixCount).SelectMany(shaders => shaders), StringComparer.Ordinal);
         dropped.ExceptWith(kept);
         JsonObject analysisRuntime = runtime.DeepClone().AsObject();
         RemoveDroppedEffectMaterials(analysisRuntime, ownerId, dropped);
@@ -107,6 +114,11 @@ internal static class EffectPrefixPlanner
         PlanNarrative.StripTransient(loop);
         return loop;
     }
+
+    /// <summary>该层 effects 里每个对象效果用到的材质 shader（与 <see cref="ShaderPeriodAnalysis.EffectMaterialShaders"/> 同序）。</summary>
+    private static string[][] EffectShaderIndex(JsonObject originalScene, ProjectSource source, string assets, int ownerId) =>
+        [.. originalScene["objects"]!.AsArray().OfType<JsonObject>().Single(item => item["id"]!.GetValue<int>() == ownerId)["effects"]!
+            .AsArray().OfType<JsonObject>().Select(effect => ShaderPeriodAnalysis.EffectMaterialShaders(source, assets, effect).ToArray())];
 
     /// <summary>把该层运行时材质里属于被截掉效果的条目去掉，其余（作者材质与前缀内效果）原样保留。</summary>
     private static void RemoveDroppedEffectMaterials(JsonObject runtime, int ownerId, IReadOnlySet<string> droppedShaders)

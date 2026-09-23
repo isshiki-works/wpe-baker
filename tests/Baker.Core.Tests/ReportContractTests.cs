@@ -301,7 +301,7 @@ public class RenderResultContractTests
 [Trait("Layer", "L0")]
 public class LoopReportContractTests
 {
-    private static LoopReport Report(JsonArray candidates, LoopNoCandidateReason? reason = null, EmbeddedVideoLoopLimit? limit = null,
+    private static LoopReport Report(IReadOnlyList<LoopCandidate> candidates, LoopNoCandidateReason? reason = null, EmbeddedVideoLoopLimit? limit = null,
         JsonObject? sway = null, JsonObject? particle = null, long cadence = 1) =>
         new(30000, 1001, "locked_clip_rates", CommonLoopPreference.Balanced, 2, false, null, 60, reason, candidates, [], false,
             VideoControlScope.Resolve(new JsonObject { ["objects"] = new JsonArray() }, new JsonObject()),
@@ -318,7 +318,7 @@ public class LoopReportContractTests
         Assert.Equal("balanced", json["loop_preference"]!.GetValue<string>());
         Assert.Equal("""{"kind":"FixedPeriodExceedsCeiling","ceiling_seconds":60,"fixed_period_seconds":null,"shader_component_count":1""" +
             ""","runtime_period_count":2,"particle_cycle_count":3,"runtime_clock_uniform_count":4}""", json["no_candidate_reason"]!.ToJsonString());
-        JsonObject withCandidate = Report([new JsonObject { ["frames"] = 1 }]).ToJson();
+        JsonObject withCandidate = Report([new LoopCandidate(1, 1d / 30, 0d, [], [])]).ToJson();
         Assert.Equal("analytic_candidate_requires_seam_validation", withCandidate["status"]!.GetValue<string>());
         Assert.True(withCandidate.ContainsKey("no_candidate_reason") && withCandidate["no_candidate_reason"] is null);
         Assert.True(withCandidate.ContainsKey("fixed_frame_step") && withCandidate["fixed_frame_step"] is null);
@@ -343,6 +343,72 @@ public class LoopReportContractTests
         Assert.StartsWith("No proven clip cadence", single["basis"]!.GetValue<string>());
         Assert.Equal("""[{"component":"video:1","owner_layer_id":1,"track_name":"clip","clip_fps_numerator":30,"clip_fps_denominator":1}]""",
             single["clips"]!.ToJsonString());
+    }
+}
+
+// C2.2c：plan.loop.candidates / unresolved 在分析中是类型化对象，写 plan 时渲染一次；这里守住每种条目的键序与缺省写法。
+[Trait("Layer", "L0")]
+public class LoopItemContractTests
+{
+    private static string Keys(JsonObject json) => string.Join(",", json.Select(x => x.Key));
+    private static readonly CommonLoopComponentCycle Cycle = new("c", CommonLoopPeriodEvidence.Analytic, 3, 1, 1, 1, 0, false);
+
+    [Fact]
+    public void CandidateWritesOptionalFieldsInV3Order()
+    {
+        var warm = new LoopCandidate(120, 2, 0.5, [Cycle], [new LoopVideoRatePatch("v", 4, new CommonLoopRational(25, 24))]) {
+            SpriteSeam = new SpriteSeamPhase.Selection(7, SpriteSeamPhase.Verdict.Mismatch, SpriteSeamPhase.Verdict.Closed),
+            LoopLengthSource = "stationary_particle_default" };
+        JsonObject json = warm.ToJson();
+        Assert.Equal("frames,seconds,total_retime_cost_percent,components,patches,source_period_warmup_frames,sprite_seam_phase,loop_length_source", Keys(json));
+        Assert.Equal("""{"origin":"mismatch","after_one_period":"closed","basis":"float32 sprite frame table; frame 0 sits on the sprite frame-0 start boundary"}""",
+            json["sprite_seam_phase"]!.ToJsonString());
+        Assert.Contains("re-checked on the sway-retimed", (warm with { SpriteSeamOnSwayLength = true }).ToJson()["sprite_seam_phase"]!["basis"]!.GetValue<string>());
+        Assert.Equal("""[{"id":"c","cycles":3,"old_period_seconds":1,"new_period_seconds":1,"speed_multiplier":1,"delta_percent":0}]""", json["components"]!.ToJsonString());
+        Assert.Equal("""[{"component":"v","kind":"video_rate","owner_layer_id":4,"rate_numerator":25,"rate_denominator":24,"old_value":1,"new_value":1.0416666666666667,"delta_percent":4.166666666666674}]""",
+            json["patches"]!.ToJsonString());
+        JsonObject undetermined = (warm with { SpriteSeam = new(null, SpriteSeamPhase.Verdict.Undetermined, null), LoopLengthSource = null }).ToJson();
+        Assert.Equal("frames,seconds,total_retime_cost_percent,components,patches,sprite_seam_phase", Keys(undetermined));
+        Assert.Equal("origin,basis", Keys(undetermined["sprite_seam_phase"]!.AsObject()));
+        Assert.Equal("frames,seconds,total_retime_cost_percent,components,patches",
+            Keys((warm with { SpriteSeam = new(0, SpriteSeamPhase.Verdict.Closed, null), LoopLengthSource = null }).ToJson()));
+        Assert.Equal("""{"component":"s","kind":"shader_speed","owner_layer_id":1,"effect_index":0,"pass_index":0,"constant_key":"speed","value_index":0,"animation_layer_id":null,"old_value":2,"new_value":3,"speed_exponent":1,"delta_percent":50}""",
+            new LoopValuePatch("s", "shader_speed", 1, 0, 0, "speed", 0, null, 2, 3).ToJson().ToJsonString());
+    }
+
+    [Fact]
+    public void RuntimeTrackItemsKeepPerVariantKeyOrder()
+    {
+        var particle = new ParticleStationarity.Result(true, [], 1, 2);
+        Assert.Equal("kind,owner_layer_id,mechanism,particle_stationarity,detail,detail_localized",
+            Keys(new RuntimeTrackUnresolved(false, 3, new Message("unresolved.particle_stationary_random")) { Mechanism = "particle_system", Particle = particle }.ToJson()));
+        Assert.Equal("kind,owner_layer_id,track_name,particle_nonperiodic_reason,particle_stationarity,detail,detail_localized",
+            Keys(new RuntimeTrackUnresolved(false, 3, new Message("unresolved.particle_stationary_random")) {
+                HasTrackName = true, TrackName = "t", ParticleNonperiodicReason = "particle_audio_input", Particle = particle }.ToJson()));
+        Assert.Equal("kind,owner_layer_id,track_name,mechanism,random_restart,detail,detail_localized",
+            Keys(new RuntimeTrackUnresolved(false, 3, new Message("unresolved.script_random_restart")) {
+                HasTrackName = true, Mechanism = "sprite", RandomRestart = true }.ToJson()));
+        JsonObject video = new RuntimeTrackUnresolved(true, 3, new Message("unresolved.video_rate_not_one")) { HasTrackName = true }.ToJson();
+        Assert.Equal("runtime_video", video["kind"]!.GetValue<string>());
+        Assert.True(video.ContainsKey("track_name") && video["track_name"] is null);
+        Assert.Equal("kind,owner_layer_id,detail,detail_localized",
+            Keys(new RuntimeTrackUnresolved(false, 3, new Message("unresolved.owner_or_duration_unresolved")).ToJson()));
+    }
+
+    [Fact]
+    public void OtherUnresolvedItemsKeepKeyOrder()
+    {
+        Assert.Equal("""{"kind":"search_budget","detail":"d"}""", new SolverUnresolved(true, null, "d").ToJson().ToJsonString());
+        Assert.Equal("""{"kind":"solver","component":null,"detail":"d"}""", new SolverUnresolved(false, null, "d").ToJson().ToJsonString());
+        Assert.Equal("""{"kind":"source_static","detail":"d","owner_layer_id":null}""", new SourceStaticUnresolved("d", null, null).ToJson().ToJsonString());
+        Assert.Equal("""{"name":null,"particle":true}""",
+            new SourceStaticUnresolved("d", 2, new StaticLayerNaming(null, true)).ToJson()[PlanNarrative.StaticLayer]!.ToJsonString());
+        Assert.Equal("kind,owner_layer_id,binding,clock,detail,detail_localized",
+            Keys(new ScriptTimeUnresolved(1, JsonValue.Create("b"), JsonValue.Create("time")).ToJson()));
+        Assert.Equal("kind,rejected_candidate_count,detail,detail_localized", Keys(new SpriteSeamUnresolved(2).ToJson()));
+        var shader = new ShaderTemporalUnresolved(1, 0, 0, "r", ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "d");
+        Assert.Equal("""{"kind":"UnsupportedShaderMechanism","owner_layer_id":1,"effect_index":0,"pass_index":0,"resource":"r","detail":"d","bounded_displacement":false,"mechanism":null}""",
+            new ShaderLoopUnresolved(shader).ToJson().ToJsonString());
     }
 }
 
