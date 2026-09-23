@@ -1,7 +1,3 @@
-module;
-
-#include "JsonNlohmann.hpp"
-
 export module wescene.pkg.scene_obj:visibility_binding;
 import rstd.cppstd;
 import wescene.json;

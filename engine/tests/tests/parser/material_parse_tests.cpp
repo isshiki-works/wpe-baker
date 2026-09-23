@@ -1,7 +1,5 @@
 #include <gtest/gtest.h>
 
-#include "JsonNlohmann.hpp"
-
 import rstd.cppstd;
 import rstd;
 import wescene.json;

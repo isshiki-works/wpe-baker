@@ -1,7 +1,3 @@
-module;
-
-#include "JsonNlohmann.hpp"
-
 export module wescene.pkg.scene_obj:sound_object;
 import rstd.cppstd;
 import wavsen.audio;

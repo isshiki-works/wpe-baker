@@ -1,7 +1,3 @@
-module;
-
-#include "JsonNlohmann.hpp"
-
 export module wescene.pkg.scene_obj:misc_object;
 import rstd;
 import rstd.cppstd;

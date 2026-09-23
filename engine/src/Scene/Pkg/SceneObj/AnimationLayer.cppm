@@ -1,7 +1,5 @@
 module;
 
-#include "JsonNlohmann.hpp"
-
 export module wescene.pkg.scene_obj:animation_layer;
 import rstd;
 import rstd.cppstd;
