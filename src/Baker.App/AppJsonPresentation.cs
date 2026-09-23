@@ -43,7 +43,7 @@ internal static class AppJsonPresentation
             result["plan"] is not JsonObject plan)
             return false;
         // 残差掩盖的候选允许非零起点与非空 unresolved，但每一条都必须已被判定为可掩盖，
-        // 并且接缝残差在第一层限内、固定窗口的交叉淡化已经应用且通过了淡化实现自检。
+        // 并且接缝残差在第一层限内、固定窗口的交叉淡化已经应用（应用即已过权重核对与尾段 MD5，失败会直接抛出）。
         bool residualMasked = result["seam_policy"]?.GetValue<string>() == ResidualMasking.SeamPolicy;
         // 源周期路线的非零起点只能是起点偏移（第 0 帧孤立异常，顺延 1 帧，见 SourceStartOffset），并且记录要对得上。
         if (!residualMasked && Number(result["source_start_frame"]) != 0 && !SourceStartOffset.Allows(result)) return false;
@@ -61,16 +61,14 @@ internal static class AppJsonPresentation
                 result["seam_residual"]?["status"]?.GetValue<string>() != "observed_within_residual_limits" ||
                 result["seam_residual"]?["first_layer"]?["passed"]?.GetValue<bool>() != true ||
                 result["loop_crossfade"]?["status"]?.GetValue<string>() != "applied" ||
-                result["loop_crossfade"]?["step_self_check"]?["status"]?.GetValue<string>() != "verified_within_derived_bound" ||
                 Number(result["crossfade_frames"]) is not > 0 ||
                 loop["unresolved"] is not JsonArray { Count: > 0 })
                 return false;
-            // 多组时每个含残差层的组都各自测第一层并淡化：组记录里带了读数的，淡化与自检也必须都在。
+            // 多组时每个含残差层的组都各自测第一层并淡化：组记录里带了读数的，淡化也必须已应用。
             if (result["groups"] is JsonArray residualGroups && residualGroups.OfType<JsonObject>().Any(group =>
                     group["seam_residual"] is JsonObject &&
                     (group["seam_residual"]?["first_layer"]?["passed"]?.GetValue<bool>() != true ||
-                     group["loop_crossfade"]?["status"]?.GetValue<string>() != "applied" ||
-                     group["loop_crossfade"]?["step_self_check"]?["status"]?.GetValue<string>() != "verified_within_derived_bound")))
+                     group["loop_crossfade"]?["status"]?.GetValue<string>() != "applied")))
                 return false;
         }
         else if (loop["unresolved"] is not JsonArray { Count: 0 }) return false;

@@ -21,6 +21,16 @@ internal static class SavedLoopApplyChecks
         check(!AppJsonPresentation.CandidateCanApply(report), "a saved nonzero capture origin cannot be applied");
         report.Remove("source_start_frame");
         check(!AppJsonPresentation.CandidateCanApply(report), "a saved report without an explicit source origin requires regeneration");
+        var masked = JsonNode.Parse("""
+            {"schema_version":2,"artifact_kind":"hybrid_video_candidate","status":"candidate_generated",
+             "seam_policy":"analytic_period_with_residual_masking","source_start_frame":37,"crossfade_frames":24,
+             "residual_masking":{"status":"residual_maskable","blocking_components":[]},
+             "seam_residual":{"status":"observed_within_residual_limits","first_layer":{"passed":true}},
+             "loop_crossfade":{"status":"applied","weight_verification":{"status":"verified_against_source_frames"}},
+             "plan":{"loop":{"status":"analytic_candidate_requires_seam_validation","source_static":false,
+             "candidates":[{"frames":1199}],"unresolved":[{"kind":"random_sprite"}]}}}
+            """)!.AsObject();
+        check(AppJsonPresentation.CandidateCanApply(masked), "a residual-masked candidate with an applied, weight-verified crossfade is applicable");
 
         static JsonObject Period(ulong frames, double seconds) => new()
         {

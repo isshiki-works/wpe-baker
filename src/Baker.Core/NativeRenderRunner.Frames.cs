@@ -174,8 +174,7 @@ public sealed partial class NativeRenderRunner
                 if (sampleThis)
                 {
                     long sampleStarted = Stopwatch.GetTimestamp();
-                    if (request.FrameSampleIncludeAlpha) DownsamplePackedRgba(rgba, width, height, thumbnail, sampleWidth, sampleHeight);
-                    else DownsampleRgb(rgba, width, height, thumbnail, sampleWidth, sampleHeight);
+                    Downsample(rgba, width, height, thumbnail, sampleWidth, sampleHeight, request.FrameSampleIncludeAlpha);
                     sampleSeconds += Stopwatch.GetElapsedTime(sampleStarted).TotalSeconds;
                 }
             }, token);
@@ -218,26 +217,6 @@ public sealed partial class NativeRenderRunner
             opaqueSeconds, boundsSeconds, identicalSeconds, sampleSeconds, retainSeconds, loopSeconds, stallSeconds);
     }
 
-    private static void DownsamplePackedRgba(ReadOnlySpan<byte> rgba, int width, int height, Span<byte> rgb, int sw, int sh)
-    {
-        for (int sy = 0; sy < sh; ++sy)
-            for (int sx = 0; sx < sw; ++sx)
-            {
-                int left = sx * width / sw, right = Math.Max(left + 1, (sx + 1) * width / sw);
-                int top = sy * height / sh, bottom = Math.Max(top + 1, (sy + 1) * height / sh);
-                long r = 0, g = 0, b = 0, a = 0;
-                for (int y = top; y < bottom; ++y)
-                    for (int x = left; x < right; ++x)
-                    {
-                        int p = (y * width + x) * 4;
-                        r += rgba[p]; g += rgba[p + 1]; b += rgba[p + 2]; a += rgba[p + 3];
-                    }
-                int n = (right - left) * (bottom - top), pixel = (sy * sw * 2 + sx) * 3, alpha = pixel + sw * 3;
-                rgb[pixel] = (byte)((r + n / 2) / n); rgb[pixel + 1] = (byte)((g + n / 2) / n); rgb[pixel + 2] = (byte)((b + n / 2) / n);
-                rgb[alpha] = rgb[alpha + 1] = rgb[alpha + 2] = (byte)((a + n / 2) / n);
-            }
-    }
-
     private sealed class FrameBounds
     {
         private readonly int width, height;
@@ -262,22 +241,30 @@ public sealed partial class NativeRenderRunner
             ["pixel_identity_scope"] = "Every full-resolution native RGBA frame in this generated interval was compared with the retained first frame; this is not a claim about ungenerated frames or mathematical periodicity." };
     }
 
-    private static void DownsampleRgb(ReadOnlySpan<byte> rgba, int width, int height, Span<byte> rgb, int sampleWidth, int sampleHeight)
+    /// <summary>
+    /// 面积平均降采样到 <paramref name="sw"/>×<paramref name="sh"/>，四舍五入到整数。<paramref name="packed"/> 时每行宽 2×sw：
+    /// 左半 RGB，右半是覆盖度（三通道同值）；否则只出 RGB。
+    /// </summary>
+    private static void Downsample(ReadOnlySpan<byte> rgba, int width, int height, Span<byte> rgb, int sw, int sh, bool packed)
     {
-        for (int sy = 0; sy < sampleHeight; ++sy)
-            for (int sx = 0; sx < sampleWidth; ++sx)
+        int row = packed ? sw * 2 : sw;
+        for (int sy = 0; sy < sh; ++sy)
+            for (int sx = 0; sx < sw; ++sx)
             {
-                int left = sx * width / sampleWidth, right = Math.Max(left + 1, (sx + 1) * width / sampleWidth);
-                int top = sy * height / sampleHeight, bottom = Math.Max(top + 1, (sy + 1) * height / sampleHeight);
-                long r = 0, g = 0, b = 0;
+                int left = sx * width / sw, right = Math.Max(left + 1, (sx + 1) * width / sw);
+                int top = sy * height / sh, bottom = Math.Max(top + 1, (sy + 1) * height / sh);
+                long r = 0, g = 0, b = 0, a = 0;
                 for (int y = top; y < bottom; ++y)
                     for (int x = left; x < right; ++x)
                     {
-                        int i = (y * width + x) * 4;
-                        r += rgba[i]; g += rgba[i + 1]; b += rgba[i + 2];
+                        int p = (y * width + x) * 4;
+                        r += rgba[p]; g += rgba[p + 1]; b += rgba[p + 2]; a += rgba[p + 3];
                     }
-                int count = (right - left) * (bottom - top), target = (sy * sampleWidth + sx) * 3;
-                rgb[target] = (byte)((r + count / 2) / count); rgb[target + 1] = (byte)((g + count / 2) / count); rgb[target + 2] = (byte)((b + count / 2) / count);
+                int n = (right - left) * (bottom - top), pixel = (sy * row + sx) * 3;
+                rgb[pixel] = (byte)((r + n / 2) / n); rgb[pixel + 1] = (byte)((g + n / 2) / n); rgb[pixel + 2] = (byte)((b + n / 2) / n);
+                if (!packed) continue;
+                int alpha = pixel + sw * 3;
+                rgb[alpha] = rgb[alpha + 1] = rgb[alpha + 2] = (byte)((a + n / 2) / n);
             }
     }
 }

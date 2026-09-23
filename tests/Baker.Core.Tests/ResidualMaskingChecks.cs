@@ -406,9 +406,6 @@ internal static class ResidualMaskingChecks
         StartFallbackChecks(check, flat, width, height);
         PackedChecks(check);
 
-        // 淡化实现自检（纯函数）：Δ_k 逐帧变化的合成帧，正确的 g[k] 不抛；权重错一帧、混入 f[P−1+k] 都抛内部错误。
-        CrossfadeSelfCheck(check);
-
         // 4. plan 字段齐全：阈值、策略名、淡化窗口与每层的证明摘要都必须能被核对。
         JsonObject thresholds = maskable["thresholds"]!.AsObject();
         check(maskable["policy"]?.GetValue<string>() == "analytic_period_with_residual_masking" &&
@@ -584,82 +581,5 @@ internal static class ResidualMaskingChecks
                 .Single()["start_frame"]!.GetValue<ulong>() == 96 &&
             ResidualStartFallback.Next(0, true, 1) == ResidualStartStep.Accept && ResidualStartFallback.Next(0, false, 1) == ResidualStartStep.Reject,
             "fewer than eight candidates are all tried before rejecting, and a record without an attempt order falls back to the selected start");
-    }
-
-    /// <summary>
-    /// 淡化实现自检的纯函数检查。合成帧：原作内容逐帧移动，残差左半块随 k 线性增大（到 120 级）、右半块逐帧乱变，
-    /// 这样一阶项与二阶项都不为零。成品按 8 位截断混合（与 ffmpeg blend 表达式写回整数的方式一致）。
-    /// </summary>
-    private static void CrossfadeSelfCheck(Action<bool, string> check)
-    {
-        const int width = 128, height = 64, tileSize = 64;
-        const uint crossfade = 24;
-        int c = (int)crossfade;
-        byte[] Frame(Func<int, int, int> level)
-        {
-            var frame = new byte[width * height * 3];
-            for (int y = 0; y < height; ++y)
-                for (int x = 0; x < width; ++x)
-                    for (int channel = 0; channel < 3; ++channel)
-                        frame[(y * width + x) * 3 + channel] = checked((byte)level(x, channel));
-            return frame;
-        }
-        int Content(int i, int x, int channel) => 60 + ((i * 3 + x + channel * 5) % 40 + 40) % 40;
-        int Delta(int j, int x, int channel) => x < tileSize ? 120 * j / c : (x * 7 + j * 11 + channel) % 31 - 15;
-        byte[][] head = [.. Enumerable.Range(0, c + 1).Select(i => Frame((x, channel) => Content(i, x, channel)))];
-        // wrap[j + 1] = f[P + j]，j 从 -1 到 C。
-        byte[][] wrap = [.. Enumerable.Range(-1, c + 2).Select(j => Frame((x, channel) => Content(j, x, channel) + Delta(j, x, channel)))];
-        byte[] Blend(double weight, byte[] original, byte[] late)
-        {
-            var mixed = new byte[original.Length];
-            for (int p = 0; p < mixed.Length; ++p) mixed[p] = (byte)Math.Floor((1 - weight) * original[p] + weight * late[p]);
-            return mixed;
-        }
-        byte[][] Faded(Func<int, double> weight, int wrapShift) =>
-            [.. Enumerable.Range(0, c + 1).Select(k => k == c ? head[k] : Blend(weight(k), head[k], wrap[k + 1 + wrapShift]))];
-        (double Excess, InvalidOperationException? Error, CrossfadeStepReading? Middle) Run(byte[][] faded)
-        {
-            double excess = double.NegativeInfinity;
-            CrossfadeStepReading? middle = null;
-            try
-            {
-                for (int k = 0; k <= c; ++k)
-                {
-                    CrossfadeStepReading reading = CrossfadeStepCheck.Verify(k, crossfade, width, height, tileSize,
-                        k == 0 ? wrap[0] : faded[k - 1], faded[k], k > 0 ? head[k - 1] : [], head[k], wrap[k], k < c ? wrap[k + 1] : []);
-                    excess = Math.Max(excess, reading.MaximumExcessOverBound);
-                    if (k == c / 2) middle = reading;
-                }
-                return (excess, null, middle);
-            }
-            catch (InvalidOperationException error) { return (excess, error, middle); }
-        }
-        var correct = Run(Faded(k => (double)(c - k) / (c + 1), 0));
-        check(correct.Error is null && correct.Excess <= ResidualMasking.CrossfadeSelfCheckRounding255 &&
-            correct.Middle is { FirstOrderWorstTile: > 0, SecondOrderWorstTile: > 0, StepWorstTile: > 0 },
-            "the crossfade self-check accepts the correct w = (C-k)/(C+1) blend of f[P+k] on a residual that grows and churns inside the window");
-        var shiftedWeight = Run(Faded(k => Math.Min(1, (double)(c - k + 1) / (c + 1)), 0));
-        check(shiftedWeight.Error?.Message.Contains("内部错误", StringComparison.Ordinal) == true,
-            "a blend weight shifted by one frame breaks the derived step bound and is thrown as an internal error");
-        var shiftedFrame = Run(Faded(k => (double)(c - k) / (c + 1), -1));
-        check(shiftedFrame.Error?.Message.Contains("内部错误", StringComparison.Ordinal) == true,
-            "blending f[P-1+k] instead of f[P+k] breaks the derived step bound and is thrown as an internal error");
-        CrossfadeStepReading still = CrossfadeStepCheck.Measure(0, crossfade, width, height, tileSize, head[0], head[0], [], head[0], head[0], head[0]);
-        check(still.MaximumExcessOverBound == 0 && still.FirstOrderWorstTile == 0 && still.StepWorstTile == 0 && still.WithinRounding,
-            "with no residual and no motion every self-check quantity is exactly zero");
-
-        // 取整余量含边界、按整数判：k=23 时 Δ_22=0、Δ_23=25，延续线上界是 25/25 + 23/25·25 = 24 级；
-        // 整块瓦片实测多出 25 级（正好顶到 +1）要通过，再多一个通道差一级就要抛。
-        byte[] Flat(byte level) { var frame = new byte[width * height * 3]; Array.Fill(frame, level); return frame; }
-        byte[] level100 = Flat(100), level125 = Flat(125);
-        CrossfadeStepReading edge = CrossfadeStepCheck.Verify(c - 1, crossfade, width, height, tileSize,
-            level100, level100, level100, level100, level100, level125);
-        byte[] beyond = level100.ToArray();
-        beyond[0] = 99;
-        InvalidOperationException? beyondError = null;
-        try { _ = CrossfadeStepCheck.Verify(c - 1, crossfade, width, height, tileSize, level100, beyond, level100, level100, level100, level125); }
-        catch (InvalidOperationException error) { beyondError = error; }
-        check(edge.WithinRounding && Math.Abs(edge.MaximumExcessOverBound - 1) < 1e-9 && beyondError is not null,
-            "the rounding allowance is inclusive and exact: a tile exactly one level above the derived bound passes, one channel level more is an internal error");
     }
 }

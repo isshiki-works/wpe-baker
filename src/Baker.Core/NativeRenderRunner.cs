@@ -685,7 +685,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         return true;
     }
 
-    private static async Task WriteJsonAsync(string path, JsonNode value, CancellationToken token)
+    internal static async Task WriteJsonAsync(string path, JsonNode value, CancellationToken token)
     {
         string temporary = path + ".tmp";
         await File.WriteAllTextAsync(temporary, value.ToJsonString(JsonOptions), token);
@@ -760,7 +760,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         manifest["encoded_frames"] is JsonValue encoded && encoded.TryGetValue(out ulong count) ? count
             : manifest["request"]?["frames"]?.GetValue<ulong>() ?? 0;
 
-    private static void ConfirmEncodedDuration(EncodedStream stream, ulong frames, uint numerator, uint denominator)
+    internal static void ConfirmEncodedDuration(EncodedStream stream, ulong frames, uint numerator, uint denominator)
     {
         if (!stream.DurationIs(frames, numerator, denominator))
             throw new InvalidDataException("MP4 duration is not the exact requested number of frame intervals.");

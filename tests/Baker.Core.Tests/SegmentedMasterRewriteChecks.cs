@@ -15,12 +15,12 @@ internal static class SegmentedMasterRewriteChecks
         // 稀疏地撑到刚过闸门大小，不实际写 512 MiB 数据。
         string large = Path.Combine(directory, "large.mp4");
         using (var stream = new FileStream(large, FileMode.CreateNew, FileAccess.Write))
-            stream.SetLength(NativeRenderRunner.SegmentedRewriteMinimumBytes + 1);
+            stream.SetLength(MasterRewrite.SegmentedRewriteMinimumBytes + 1);
         try
         {
             static string? Rejected(string video, ulong total, ulong reencoded)
             {
-                try { NativeRenderRunner.RequireSegmentedMasterRewrite(video, total, reencoded, "接缝交叉淡化"); }
+                try { MasterRewrite.RequireSegmentedMasterRewrite(video, total, reencoded, "接缝交叉淡化"); }
                 catch (InvalidOperationException error) { return error.Message; }
                 return null;
             }
@@ -29,7 +29,7 @@ internal static class SegmentedMasterRewriteChecks
                 "小于闸门的 master 不受分段约束，短片仍可整片重编码");
             check(Rejected(large, 6024, 250) is null,
                 "大 master 上只重编码接缝所在的 GOP 是允许的");
-            check(Rejected(large, 6024, NativeRenderRunner.MaximumRewriteReencodedFrames) is null,
+            check(Rejected(large, 6024, MasterRewrite.MaximumRewriteReencodedFrames) is null,
                 "分段上限本身是允许值，不是越界值");
 
             // 事故当时的实际形状：6024 帧的 master 上重编码 6000 帧。
@@ -39,7 +39,7 @@ internal static class SegmentedMasterRewriteChecks
             string? full = Rejected(large, 6024, 6024);
             check(full is not null && full.Contains("全长重编码", StringComparison.Ordinal),
                 "大 master 上的全长重编码被单独报成全长重编码");
-            check(Rejected(large, 6024, NativeRenderRunner.MaximumRewriteReencodedFrames + 1) is not null,
+            check(Rejected(large, 6024, MasterRewrite.MaximumRewriteReencodedFrames + 1) is not null,
                 "超过分段上限一帧也要拒，闸门不是估算");
 
             // 强制关键帧是分段改写的前提，帧号必须真的落在这次编码的序列里。
