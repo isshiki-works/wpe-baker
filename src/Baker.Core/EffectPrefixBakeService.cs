@@ -36,7 +36,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         // pristine composition reference must continue to use the authored shaders.
         JsonArray patches = await ShaderTextPatch.WriteSwayRetimeAsync(captureProject, source, assets, loop, cancellationToken);
         JsonObject metadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
-        HybridBakeService.ApplyPropertySnapshot(metadata, snapshot); metadata["file"] = source.SceneResource;
+        ProjectWriter.ApplyPropertySnapshot(metadata, snapshot); metadata["file"] = source.SceneResource;
         await File.WriteAllTextAsync(Path.Combine(captureProject, "project.json"), metadata.ToJsonString(), cancellationToken);
         return patches;
     }
@@ -377,8 +377,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 SeamPreview.Attach(encodedGroup, seamPreview);
                 result["groups"]!.AsArray().Add(encodedGroup);
             }
-            HybridBakeService.ApplyPropertySnapshot(candidateMetadata, snapshot); candidateMetadata["file"] = source.SceneResource;
-            HybridBakeService.ApplyPropertySnapshot(referenceMetadata, snapshot); referenceMetadata["file"] = source.SceneResource;
+            ProjectWriter.ApplyPropertySnapshot(candidateMetadata, snapshot); candidateMetadata["file"] = source.SceneResource;
+            ProjectWriter.ApplyPropertySnapshot(referenceMetadata, snapshot); referenceMetadata["file"] = source.SceneResource;
             JsonObject propertyReport = ApplyCachedPropertyPresentation(candidateMetadata, candidateScene, cachedPropertyKeys);
             result["effect_prefix_fixed_properties"] = propertyReport;
             using (timing.Measure(StageTiming.ProjectAssembly))
@@ -388,13 +388,13 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 await File.WriteAllTextAsync(Path.Combine(candidateProject, "project.json"), candidateMetadata.ToJsonString(), cancellationToken);
                 await File.WriteAllTextAsync(Path.Combine(referenceProject, "project.json"), referenceMetadata.ToJsonString(), cancellationToken);
             }
-            JsonObject comparison;
+            PairedComparison comparison;
             using (timing.Measure(StageTiming.CompositionValidation))
-            comparison = await new CandidateValidation(tools).ValidateAsync(new(1, referenceProject, candidateProject, settings.Assets,
+            comparison = await new CandidateValidation(tools).CompareAsync(new(1, referenceProject, candidateProject, settings.Assets,
                 Path.Combine(output, "composition-validation"), settings.Width, settings.Height, settings.FpsNumerator, settings.FpsDenominator,
-                HybridCompositionValidator.RequiredFrames, 0, 17, request.DeviceUuid ?? settings.DeviceUuid,
-                snapshot, RetainRawFrames: false), progress, cancellationToken);
-            JsonObject composition = HybridCompositionValidator.Evaluate(comparison);
+                CompositionGate.RequiredFrames, 0, 17, request.DeviceUuid ?? settings.DeviceUuid,
+                snapshot), progress, cancellationToken);
+            JsonObject composition = CompositionGate.Evaluate(comparison);
             result["composition_validation"] = composition;
             if (composition["status"]?.GetValue<string>() == CandidateScriptErrorGate.RejectedCompositionStatus)
             {

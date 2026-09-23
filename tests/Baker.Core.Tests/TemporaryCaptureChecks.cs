@@ -49,29 +49,23 @@ internal static class TemporaryCaptureChecks
         check(noSpace && !Directory.Exists(oversized),
             "raw disk budget rejects oversized output before launching a renderer or creating capture files");
 
-        foreach (bool retain in new[] { false, true })
+        // 成对比较的一边在渲染前就失败：报告记 failed 与那一边的原始错误，另一边被连带取消，不顶替它。
+        string output = Path.Combine(root, "paired-failure");
+        var progress = new InlineProgress(value =>
         {
-            string output = Path.Combine(root, retain ? "retained-diagnostic-raw" : "released-internal-raw");
-            string partial = Path.Combine(output, "source", "native", "frames.rgba.partial");
-            var progress = new InlineProgress(value =>
-            {
-                if (value.Stage != "rendering_source") return;
-                Directory.CreateDirectory(Path.GetDirectoryName(partial)!);
-                File.WriteAllText(partial, "failed capture residue");
-            });
-            bool failedAsExpected = false;
-            try
-            {
-                await new CandidateValidation(tools).ValidateAsync(new(1, source, source, source, output,
-                    1, 1, Frames: 1, RetainRawFrames: retain), progress);
-            }
-            catch (IOException error) when (error.Message.Contains("Raw render output must be new", StringComparison.Ordinal))
-            { failedAsExpected = true; }
-            var comparison = JsonNode.Parse(File.ReadAllText(Path.Combine(output, "comparison.json")))!;
-            check(failedAsExpected && File.Exists(partial) == retain && comparison["status"]!.GetValue<string>() == "failed",
-                retain ? "explicit diagnostic comparison retains its raw output on failure" :
-                    "internal comparison clears partial raw output on failure without replacing the original error");
+            if (value.Stage == "rendering_pair") Directory.CreateDirectory(Path.Combine(output, "source"));
+        });
+        bool failedAsExpected = false;
+        try
+        {
+            await new CandidateValidation(tools).ValidateAsync(new(1, source, source, source, output, 1, 1, Frames: 1), progress);
         }
+        catch (IOException error) when (error.Message.Contains("Raw render output must be new", StringComparison.Ordinal))
+        { failedAsExpected = true; }
+        var comparison = JsonNode.Parse(File.ReadAllText(Path.Combine(output, "comparison.json")))!;
+        check(failedAsExpected && comparison["status"]!.GetValue<string>() == "failed" &&
+            comparison["error_type"]!.GetValue<string>() == nameof(IOException),
+            "a paired comparison that fails on one side reports that side's original error");
     }
 
     private sealed class InlineProgress(Action<RenderProgress> report) : IProgress<RenderProgress>

@@ -170,7 +170,7 @@ internal static class DaytimeSplitChecks
             var export = DaytimeSplit.PrepareDynamicExport(ById(originals), plan, [])!;
             JsonObject replacement = new() { ["id"] = 100, ["name"] = "Video group-1", ["image"] = "models/wpe_baker_video/group-1.json", ["visible"] = true };
             export.BindReplacement(replacement, ById(originals)[11], isStatic: false);
-            JsonArray output = HybridBakeService.AssembleObjects(ById(originals), plan, new Dictionary<string, JsonObject> { ["group-1"] = replacement }, []);
+            JsonArray output = SceneAssembler.AssembleObjects(ById(originals), plan, new Dictionary<string, JsonObject> { ["group-1"] = replacement }, []);
             var byId = ById(output);
             check(output.Select(obj => obj!["id"]!.GetValue<int>()).SequenceEqual(originals.Select(obj => obj!["id"]!.GetValue<int>())) &&
                 byId[1]["visible"]!["script"]!.GetValue<string>() == script && byId[11]["name"]!.GetValue<string>() == "day" &&
@@ -188,7 +188,7 @@ internal static class DaytimeSplitChecks
                 ["timevarying"] = new JsonObject { ["type"] = "bool" },
                 ["morningtime"] = new JsonObject { ["condition"] = "timevarying.value" },
                 ["brightness"] = new JsonObject { ["type"] = "slider" } };
-            HybridBakeService.HideFixedPropertyControls(controls, export.PropertyKeys);
+            ProjectWriter.HideFixedPropertyControls(controls, export.PropertyKeys);
             check(controls["display"]!["condition"]!.GetValue<string>() == "!timevarying.value" &&
                 controls["morningtime"]!["condition"]!.GetValue<string>() == "timevarying.value" &&
                 controls["timevarying"]!["condition"] is null && controls["brightness"]!["condition"]!.GetValue<string>() == "false",

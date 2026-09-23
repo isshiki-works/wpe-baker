@@ -55,6 +55,22 @@ inline bool SameProgramRenderItemId(owe::RenderItemId lhs, owe::RenderItemId rhs
     return lhs.index == rhs.index && lhs.generation == rhs.generation;
 }
 
+// 逐 pass 计时（WPE_PASS_TIMING，见 PassTiming.hpp）的时间戳写入器：查询池由 VulkanRender 建好并写入起点，
+// record() 在动态缓冲上传后与每个 pass 后各写一个。labels[k] 是第 k 个到第 k+1 个时间戳之间的区间归属：
+// pass_records 下标，或 uploads。
+struct PassTimestampWriter {
+    static constexpr std::int64_t uploads = -1;
+
+    VkQueryPool               pool {};
+    std::vector<std::int64_t> labels;
+
+    void mark(vvk::CommandBuffer& command, std::int64_t label) {
+        labels.push_back(label);
+        command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool,
+                               static_cast<std::uint32_t>(labels.size()));
+    }
+};
+
 struct PreparedPassDiagnostic {
     bool                                      frame_pass { false };
     Option<rg::NodeHandle>                    graph_node;
@@ -1150,12 +1166,30 @@ struct RenderProgram {
         return true;
     }
 
-    bool record(RenderingResources& rr, RecordedBufferUploads& recorded_uploads) {
+    // 逐 pass 计时的标注：每个 pass 的名字与输出目标，下标同 pass_records（即 record() 写的标签）。
+    std::vector<std::pair<std::string, PassTimingTarget>> timingTargets(RenderingResources& rr) const {
+        std::vector<std::pair<std::string, PassTimingTarget>> out;
+        out.reserve(pass_records.len().to_primitive());
+        for (const auto& record : pass_records) {
+            auto pass = resolve(record);
+            PreparedPassResources resources(rr.resources.Prepared(), record.resources);
+            out.emplace_back(rstd::cppstd::to_string(record.pass_name.as_str()),
+                             pass ? pass->timingTarget(resources) : PassTimingTarget {});
+        }
+        return out;
+    }
+
+    bool record(RenderingResources& rr, RecordedBufferUploads& recorded_uploads,
+                PassTimestampWriter* timing = nullptr) {
         descriptor_record_state.Reset();
         if (! rr.resources.RecordPendingUploads(rr.command, recorded_uploads)) {
             rstd_error("record dynamic buffer uploads failed");
             return false;
         }
+        auto mark = [&](rstd::usize pass_index) {
+            if (timing) timing->mark(rr.command, static_cast<std::int64_t>(pass_index.to_primitive()));
+        };
+        if (timing) timing->mark(rr.command, PassTimestampWriter::uploads);
 
         for (auto& scope : scopes) {
             if (scope.single) {
@@ -1166,6 +1200,7 @@ struct RenderProgram {
                         index, rr, [](VulkanPass& target, PassRecordContext& context) {
                             target.record(context);
                         });
+                    mark(index);
                 }
                 continue;
             }
@@ -1180,6 +1215,7 @@ struct RenderProgram {
                                       [](VulkanPass& target, PassRecordContext& context) {
                                           target.record(context);
                                       });
+                    mark(scoped_passes[rstd::usize()]);
                 }
                 continue;
             }
@@ -1205,6 +1241,7 @@ struct RenderProgram {
                 withRecordContext(index, rr, [](VulkanPass& target, PassRecordContext& context) {
                     target.recordRenderScopeDraw(context);
                 });
+                mark(index);
             }
             withRecordContext(scoped_passes[rstd::usize()],
                               rr,

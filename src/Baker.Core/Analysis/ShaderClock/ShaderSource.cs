@@ -37,9 +37,27 @@ internal sealed class ShaderSource(string text)
         @"//\s*\[COMBO\]\s*(?<json>\{[^\r\n]*\})",
         annotation => annotation["combo"] is JsonValue combo && combo.TryGetValue(out string? name) ? name : null);
 
+    /// <summary>注释：// 到行尾，/* */ 可跨行。归一化文本与预处理指令求值共用这一条。</summary>
+    private const string Comments = @"//[^\r\n]*|/\*.*?\*/";
+
     public static string Normalize(string shaderText) => Regex.Replace(
-        Regex.Replace(shaderText, @"//[^\r\n]*|/\*.*?\*/", "", RegexOptions.CultureInvariant | RegexOptions.Singleline),
+        Regex.Replace(shaderText, Comments, "", RegexOptions.CultureInvariant | RegexOptions.Singleline),
         @"\s+", " ", RegexOptions.CultureInvariant).Trim();
+
+    /// <summary>
+    /// 有一行的记号序列以 <paramref name="directive"/> 的记号开头（规则表写法，如 "#if NOISE"、"#if AUDIOPROCESSING == 0"）。
+    /// 按预处理指令的词法比：注释换成一个空格（同 C 预处理），空白只分隔记号，行首、# 后、记号之间有没有、有几个都一样；
+    /// 标识符与数字各是一个整记号，按原文比、区分大小写（GLSL 宏区分大小写）。所以 "#if NOISE" 认 "\t# if NOISE == 1"，
+    /// 不认 "#if NOISE_X"、"#ifdef NOISE"、"#if defined(NOISE)"、"#if noise"，也不认注释里的 #if。
+    /// </summary>
+    public bool HasDirective(string directive)
+    {
+        string[] wanted = Tokens(directive);
+        return Regex.Replace(Raw, Comments, " ", RegexOptions.CultureInvariant | RegexOptions.Singleline).Split('\n')
+            .Any(line => Tokens(line).Take(wanted.Length).SequenceEqual(wanted));
+    }
+
+    private static string[] Tokens(string line) => [.. Regex.Matches(line, @"\w+|\S", RegexOptions.CultureInvariant).Select(token => token.Value)];
 
     /// <summary>
     /// 计数种类：word = 整词出现次数；assign = 任一赋值（+= -= *= /= =）；direct = 直接赋值 =；

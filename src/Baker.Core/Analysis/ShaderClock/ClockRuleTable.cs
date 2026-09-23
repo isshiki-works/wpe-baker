@@ -105,17 +105,11 @@ internal sealed record ClockClause(IReadOnlyList<string> Contains, IReadOnlyList
     }
 
     /// <summary>
-    /// 有一条同名注释包含 subset 的全部键且值相等：数字按数值比（1 与 1.0 相同），其余按 JSON 结构比。
+    /// 有一条同名注释包含 subset 的全部键且值相等（JsonNode.DeepEquals：数字按数值比，1 与 1.0、1e0 相同，数组逐项同理）。
     /// 注释是解析后的 JSON，所以比较与注释里的空白、键序、其余键都无关。
     /// </summary>
     private static bool HasAnnotation(IReadOnlyList<(string Name, JsonObject Annotation)> annotations, string name, JsonObject subset) =>
-        annotations.Any(item => item.Name == name && subset.All(pair => SameValue(item.Annotation[pair.Key], pair.Value)));
-
-    private static bool SameValue(JsonNode? actual, JsonNode? expected) =>
-        actual is JsonValue a && expected is JsonValue e && a.GetValueKind() == System.Text.Json.JsonValueKind.Number &&
-        e.GetValueKind() == System.Text.Json.JsonValueKind.Number
-            ? a.GetValue<double>() == e.GetValue<double>()
-            : JsonNode.DeepEquals(actual, expected);
+        annotations.Any(item => item.Name == name && subset.All(pair => JsonNode.DeepEquals(item.Annotation[pair.Key], pair.Value)));
 
     private static bool Holds(int actual, string spec, IReadOnlyDictionary<string, int> values) => spec.StartsWith('>')
         ? actual > Sum(spec[1..], values)
