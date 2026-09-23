@@ -196,10 +196,12 @@ void ParseCameraObj(SceneParseContext& context, wpscene::CameraObject& cam) {
 }
 
 void InitContext(SceneParseContext& context, fs::VFS& vfs, const wpscene::SceneMetadata& sc,
-                 array<i32, 2> ortho_extent) {
+                 array<i32, 2> ortho_extent, const NJson* user_properties) {
     context.vfs = &vfs;
     auto& scene = *context.scene;
-    scene.SetImageParser(std::make_unique<TexImageParser>(TexImageParser(&vfs)));
+    // 贴图解析器活得比这次解析长，用户属性拷一份给它选贴图变体。
+    scene.SetImageParser(std::make_unique<TexImageParser>(TexImageParser(
+        &vfs, user_properties != nullptr ? std::make_shared<const NJson>(*user_properties) : nullptr)));
     context.particle_runtime = Some(Arc<ParticleRuntime>::make());
     GenCardMesh(*scene.DefaultEffectMeshMut(), { 2.0f, 2.0f });
 
@@ -585,7 +587,7 @@ SceneParseContext BuildContext(fs::VFS& vfs, ref<str> scene_id, const wpscene::S
     SceneParseContext context;
     context.services = services;
     PrepareAnimationBindings(context, sc.general.field_bindings);
-    InitContext(context, vfs, sc, ortho_extent);
+    InitContext(context, vfs, sc, ortho_extent, user_properties);
     ParseCamera(context, sc);
     context.pkg_version            = sc.pkg_version;
     context.user_properties        = user_properties;
