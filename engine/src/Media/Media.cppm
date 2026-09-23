@@ -103,7 +103,8 @@ private:
 
 // ---- 视频（T5b）：原 wavsen::video::VideoDecoder 的软件解码路径 ----
 
-// 一帧 NV12（尺寸 = 解码器的目标尺寸）：Y 平面 w*h 字节，后接交错 UV 平面 w*h/2 字节。
+// 一帧 NV12（尺寸 = 解码器的目标尺寸）：Y 平面 w×h 字节，后接交错 UV 平面 ceil(w/2)×ceil(h/2) 个 (U,V) 对
+// （行距 2×ceil(w/2)）；偶数宽高即 w*h/2 字节。
 struct Nv12Frame {
     std::vector<std::uint8_t> data;
     double                    pts_seconds { -1.0 };

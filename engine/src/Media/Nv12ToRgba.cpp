@@ -10,7 +10,8 @@ import rstd.cppstd;
 import wescene.vk;
 
 // 逐项照搬 wavsen src/video/yuv_to_rgba.cpp 的软件路径（init + convert_nv12_）：
-// 采样器、平面格式、上传拷贝、屏障、推常量、分组数都不变，保证像素逐字节相同。
+// 采样器、平面格式、上传拷贝、屏障、推常量、分组数都不变，偶数尺寸像素与 wavsen 逐字节相同。
+// 与 wavsen 不同的只有奇数宽高：wavsen 直接拒绝，这里按 4:2:0 色度向上取整处理。
 // 去掉的只有本路径用不到的东西：完成时间线信号量（软件帧的调用方只看栅栏，
 // drain_submissions 对软件帧本就是空操作）、BridgeForeign 的导出信号量、硬解帧的上下文池。
 namespace owe::media
@@ -32,8 +33,8 @@ struct alignas(16) ShaderPushConstants {
 };
 static_assert(sizeof(ShaderPushConstants) == 80, "PC size mismatch with shader");
 
-// 源码逐字取自 wavsen shaders/nv12_to_rgba.comp（只删了开头指向 waywallen 旧路径的注释）；
-// 标识符会进 SPIR-V 的 OpName，改名就不再与内嵌版本逐字节相同。
+// 源码取自 wavsen shaders/nv12_to_rgba.comp，只改了色度钳制上界（奇数宽高按 ceil(dst/2) 个色度样本）；
+// 偶数尺寸时新旧上界的 float 值逐位相同。
 constexpr std::string_view kShaderSource = R"glsl(#version 450
 
 // NV12 -> RGBA8. The YUV->RGB matrix and offset are pushed per frame so the
@@ -71,7 +72,7 @@ void main() {
         uv = (vec2(px) + 0.5) / vec2(pc.software_src_size);
         vec2 chroma_size = vec2(pc.software_src_size) * 0.5;
         vec2 chroma_min = vec2(0.5) / chroma_size;
-        vec2 chroma_max = (vec2(pc.dst_size) * 0.5 - 0.5) / chroma_size;
+        vec2 chroma_max = (vec2((pc.dst_size + 1u) / 2u) - 0.5) / chroma_size;
         Y = texture(y_tex, uv).r;
         CC = texture(uv_tex, clamp(uv, chroma_min, chroma_max)).rg;
     } else {
@@ -431,11 +432,12 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
     m_error.clear();
     if (dst == VK_NULL_HANDLE) return Fail("convert_nv12: dst VkImage null");
     if (width == 0 || height == 0) return Fail("convert_nv12: dst_w/h zero");
-    if ((width & 1u) || (height & 1u))
-        return Fail("convert_nv12: dst dims must be even (NV12 chroma)");
     if (width > m_max_w || height > m_max_h)
         return Fail("convert_nv12: dst exceeds configured max extent");
-    if (nv12.size() != std::size_t(width) * height * 3 / 2)
+    // 4:2:0 色度向上取整：奇数宽（高）时最后一列（行）像素独占一个色度样本。
+    const std::uint32_t chroma_w = (width + 1) / 2;
+    const std::uint32_t chroma_h = (height + 1) / 2;
+    if (nv12.size() != std::size_t(width) * height + std::size_t(chroma_w) * chroma_h * 2)
         return Fail("convert_nv12: nv12_size mismatch (expected NV12 layout)");
 
     // 暂存缓冲、平面图像和命令缓冲都只有一份：先等上一次提交完成。
@@ -449,7 +451,12 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
         m_fence_pending = false;
     }
 
-    std::memcpy(m_staging_map, nv12.data(), nv12.size());
+    // UV 平面在暂存区里放到 4 字节对齐处：R8G8 的拷贝要求 bufferOffset 是 2 的倍数，
+    // 宽高都是奇数时 W*H 是奇数。偶数宽高时 W*H 本就是 4 的倍数，布局不变。
+    const std::size_t y_bytes   = std::size_t(width) * height;
+    const std::size_t uv_offset = (y_bytes + 3) & ~std::size_t(3);
+    std::memcpy(m_staging_map, nv12.data(), y_bytes);
+    std::memcpy(m_staging_map + uv_offset, nv12.data() + y_bytes, nv12.size() - y_bytes);
 
     // 目标视图每次新建（调用方可能换目标图像），留到下一次等过栅栏后再销毁。
     owe::vk::Unique<VkImageView> dst_view;
@@ -480,7 +487,7 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT);
     }
-    // Y 在暂存区 [0, W*H)，UV 紧随其后；两块都按紧密排列拷进平面左上角。
+    // Y 在暂存区 [0, W*H)，UV 从 uv_offset 起；两块都按紧密排列拷进平面左上角。
     auto copy = [&](VkDeviceSize offset, VkImage plane, std::uint32_t w, std::uint32_t h) {
         const VkBufferImageCopy region {
             .bufferOffset     = offset,
@@ -491,7 +498,7 @@ auto Nv12ToRgba::Convert(VkImage dst, std::uint32_t width, std::uint32_t height,
             m_command, *m_staging, plane, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     };
     copy(0, y_image, width, height);
-    copy(VkDeviceSize(width) * height, uv_image, width / 2, height / 2);
+    copy(uv_offset, uv_image, chroma_w, chroma_h);
     for (VkImage plane : { y_image, uv_image }) {
         Barrier(m_command,
                 plane,

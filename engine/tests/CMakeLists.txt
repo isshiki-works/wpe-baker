@@ -115,13 +115,20 @@ target_sources(video-parity-tests PRIVATE
 target_link_libraries(video-parity-tests PRIVATE owe-media gtest_main wavsen::video)
 target_compile_options(video-parity-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
 
-# T5b 对拍：wavsen YuvToRgba 软件路径 vs owe::media::Nv12ToRgba，同一 NV12 回读 RGBA 逐字节比较；另比颜色矩阵与 SPIR-V。
-# 需要 GPU。T5b 删 wavsen 时连同 tests/media/nv12_parity_tests.cpp 一起删。
+# T5b 对拍：wavsen YuvToRgba 软件路径 vs owe::media::Nv12ToRgba，同一 NV12（偶数尺寸）回读 RGBA 逐字节比较；另比颜色矩阵。
+# 需要 GPU。T5b 删 wavsen 时连同 tests/media/nv12_parity_tests.cpp 一起删（nv12_gpu.hpp 留给 media-nv12-tests）。
 add_executable(media-nv12-parity-tests EXCLUDE_FROM_ALL)
 target_sources(media-nv12-parity-tests PRIVATE
   tests/media/nv12_parity_tests.cpp)
-target_link_libraries(media-nv12-parity-tests PRIVATE owe-media owe-vulkan gtest_main wavsen::video WavsenShader::nv12_to_rgba)
+target_link_libraries(media-nv12-parity-tests PRIVATE owe-media owe-vulkan gtest_main wavsen::video)
 target_compile_options(media-nv12-parity-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
+
+# Nv12ToRgba 的 GPU 单测（奇数尺寸）。需要 GPU；设 OWE_NV12_XCHECK_DIR 时另做 ffmpeg 交叉核对。
+add_executable(media-nv12-tests EXCLUDE_FROM_ALL)
+target_sources(media-nv12-tests PRIVATE
+  tests/media/nv12_tests.cpp)
+target_link_libraries(media-nv12-tests PRIVATE owe-media owe-vulkan gtest_main)
+target_compile_options(media-nv12-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
 
 # wescene.vk 薄层单测（T4a）：不需要 GPU；Vulkan 入口由测试注入，VK_CHECK 的失败处理由测试提供。
 add_executable(vk-tests EXCLUDE_FROM_ALL)

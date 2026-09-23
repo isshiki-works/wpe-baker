@@ -639,7 +639,7 @@ struct TextureCache::VideoRegistry {
         if (yuv && width <= yuv_max_width && height <= yuv_max_height) return yuv.get();
         auto next_w = std::max(width, yuv_max_width);
         auto next_h = std::max(height, yuv_max_height);
-        // 目标 Vulkan 1.0：编出的 SPIR-V 与 wavsen 构建时内嵌的逐字节相同。
+        // 目标 Vulkan 1.0，与 wavsen 构建时内嵌的 SPIR-V 同版本。
         const ShaderCompUnit unit {
             ShaderType::COMPUTE, std::string(owe::media::Nv12ToRgba::ShaderSource()), "main"
         };
@@ -693,15 +693,9 @@ TextureCache::CreateVideoTex(const Image&                                image,
     runtime.device   = &m_device;
     runtime.key      = String::make(rstd::cppstd::as_str(image.key).unwrap());
     runtime.playback = rstd::move(playback);
-    /* NV12 chroma is 4:2:0 → both dims even. */
-    const auto source_width  = static_cast<rstd::uint32_t>(mip.width);
-    const auto source_height = static_cast<rstd::uint32_t>(mip.height);
-    runtime.width            = source_width | (source_width & 1u);
-    runtime.height           = source_height | (source_height & 1u);
-    if (runtime.width != source_width) runtime.width = source_width + 1u;
-    if (runtime.height != source_height) {
-        runtime.height = source_height + 1u;
-    }
+    // 目标图像取纹理头尺寸；奇数宽高由解码与转换按 4:2:0 色度向上取整处理。
+    runtime.width  = static_cast<rstd::uint32_t>(mip.width);
+    runtime.height = static_cast<rstd::uint32_t>(mip.height);
 
     /* 1) Allocate the stable RGBA8 target. */
     VkSamplerCreateInfo sampler_info {
