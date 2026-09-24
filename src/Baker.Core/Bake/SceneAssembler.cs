@@ -210,7 +210,7 @@ internal static class SceneAssembler
     /// </summary>
     internal static JsonObject ApplyIntro(JsonArray finalObjects, IReadOnlyDictionary<int, JsonObject> originals, JsonObject plan,
         IReadOnlyDictionary<string, JsonObject> replacements, IReadOnlySet<int> staticIds, JsonArray dependencies, JsonObject snapshot,
-        ulong introFrames, ulong masterWarmupFrames, ulong loopFrames, uint fpsNumerator, uint fpsDenominator)
+        ulong introFrames, ulong masterWarmupFrames, Func<string, ulong> loopFrames, uint fpsNumerator, uint fpsDenominator)
     {
         static string Seconds(double value) => value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
         double frame = (double)fpsDenominator / fpsNumerator;
@@ -265,17 +265,23 @@ internal static class SceneAssembler
                 for (int i = clones.Count - 1; i >= 0; --i) finalObjects.Insert(at, clones[i]);
             }
         string on = skip is null ? threshold : Seconds(-.5 * frame);
-        // 落在帧中间（+¼ 帧），解码取帧不受取整方向影响。
-        string seek = Seconds(((switchFrame + loopFrames - masterWarmupFrames % loopFrames) % loopFrames + .25) * frame);
-        foreach (var video in replacements.Values.Select(r => finalObjects.OfType<JsonObject>().Single(obj => Id(obj) == Id(r)))
-            .Where(video => skip is null || !staticIds.Contains(Id(video))))
+        var seeks = new JsonObject();
+        foreach (var (groupId, replacement) in replacements)
+        {
+            var video = finalObjects.OfType<JsonObject>().Single(obj => Id(obj) == Id(replacement));
+            if (skip is not null && staticIds.Contains(Id(video))) continue;
+            // P 取本组录制帧数 P_g（各组按自身周期录制）；落在帧中间（+¼ 帧），解码取帧不受取整方向影响。
+            ulong period = loopFrames(groupId);
+            string seek = Seconds(((switchFrame + period - masterWarmupFrames % period) % period + .25) * frame);
+            if (!staticIds.Contains(Id(video))) seeks[groupId] = double.Parse(seek, System.Globalization.CultureInfo.InvariantCulture);
             video["visible"] = new JsonObject { ["value"] = skip is not null, ["script"] = staticIds.Contains(Id(video))
                 ? $"'use strict';\nexport function update(value) {{\n\treturn engine.runtime >= {on};\n}}\n"
                 : $"'use strict';\nlet started = false;\nexport function init() {{\n\tthisLayer.getVideoTexture().pause();\n}}\n" +
                   $"export function update(value) {{\n\tif (engine.runtime < {on}) return false;\n\tif (!started) {{\n\t\tstarted = true;\n" +
                   $"\t\tconst video = thisLayer.getVideoTexture();\n\t\tvideo.setCurrentTime({seek});\n\t\tvideo.play();\n\t}}\n\treturn true;\n}}\n" };
+        }
         var result = new JsonObject { ["intro_frames"] = introFrames, ["switch_frame"] = switchFrame,
-            ["switch_seconds"] = switchFrame * frame, ["video_seek_seconds"] = double.Parse(seek, System.Globalization.CultureInfo.InvariantCulture),
+            ["switch_seconds"] = switchFrame * frame, ["video_seek_seconds"] = seeks,
             ["status"] = skip is null ? "applied" : "skipped" };
         if (skip is null) result["cloned_object_count"] = inserts.Sum(insert => insert.Clones.Count);
         else result["reason"] = skip;

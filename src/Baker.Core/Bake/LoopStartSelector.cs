@@ -13,16 +13,17 @@ internal static class LoopStartSelector
     /// <summary>
     /// 跑各残差组的起点评分并合成共享起点，写进 <paramref name="scheduler"/> 的 <see cref="GroupRenderScheduler.StartFrame"/>
     /// 与各组搜索记录；返回合成后的搜索记录（bake.json 的 loop_start_search）。
-    /// 采样步长取 gcd(P, 16)：周期不是 16 的倍数时步长缩小、候选变多，不再因对齐问题抛异常。
+    /// 采样步长取 gcd(各残差组 P_g, 16)：周期不是 16 的倍数时步长缩小、候选变多，不再因对齐问题抛异常。
+    /// 各组周期不同时，每组仍按自己的 (s, s+P_g) 评分，共享起点只在最短周期内的相位里挑（合成时截到公共前缀）。
     /// </summary>
     internal static async Task<JsonObject> SearchAsync(NativeRenderRunner runner, GroupRenderScheduler scheduler, int parallel,
         IProgress<RenderProgress>? progress, StageTiming timing, CancellationToken cancellationToken)
     {
-        uint sampleStride = ResidualMasking.StartSearchStride(scheduler.Frames);
         int[] residualGroups = scheduler.ResidualGroupIndexes;
+        uint sampleStride = ResidualMasking.StartSearchStride(residualGroups.Aggregate(0UL, (gcd, index) => (ulong)System.Numerics.BigInteger.GreatestCommonDivisor(gcd, scheduler.Frames(index))));
         // 各组评分互不依赖：请求先按组序建好，最多 parallel 个同时跑；结果仍按组序登记与合成，与逐组串行逐字节相同。
-        var requests = residualGroups.Select(groupIndex => scheduler.Groups[groupIndex])
-            .Select(group => (Id: group["id"]!.GetValue<string>(), Request: scheduler.StartSearchRequest(group, scheduler.Capture(group), sampleStride)))
+        var requests = residualGroups.Select(groupIndex => (Id: scheduler.Groups[groupIndex]["id"]!.GetValue<string>(),
+                Request: scheduler.StartSearchRequest(groupIndex, sampleStride), Period: scheduler.Frames(groupIndex)))
             .ToArray();
         var searches = new (JsonObject Search, IReadOnlyList<ResidualStartCandidate> Candidates)[requests.Length];
         JsonObject startSearch;
@@ -35,7 +36,7 @@ internal static class LoopStartSelector
                         $"在锁定的解析周期内按接缝残差挑选起点帧（组 {requests[slot].Id}，预热 {scheduler.SearchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {ResidualMasking.SearchWindowPeriods} 个周期）。"));
                     var scores = new List<ResidualStartCandidate>();
                     JsonObject search = await runner.SearchLoopStartAsync(requests[slot].Request,
-                        scheduler.Frames, scheduler.CrossfadeFrames, scheduler.TileScale, progress, token, requests.Length > 1 ? scores : null);
+                        requests[slot].Period, scheduler.CrossfadeFrames, scheduler.TileScale, progress, token, requests.Length > 1 ? scores : null);
                     search["group_id"] = requests[slot].Id;
                     searches[slot] = (search, scores);
                 });

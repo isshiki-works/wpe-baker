@@ -8,7 +8,7 @@ internal readonly record struct GroupCapture(int[] Layers, bool SceneClear, doub
     double? HdrScale = null);
 
 /// <summary>
-/// 一个组的渲染帧数与预热。残差组多渲一个淡化窗口；其余成品组多渲 1 帧（第 P 帧原帧留作闭合检验与接缝参照）；探针只渲 P 帧。
+/// 一个组的渲染帧数与预热（P 是这个组自己的周期 P_g）。残差组多渲一个淡化窗口；其余成品组多渲 1 帧（第 P 帧原帧留作闭合检验与接缝参照）；探针只渲 P 帧。
 /// 录制前跳过的帧数 = 精灵 float32 整周期预热（0 或 P，见 SpriteSeamPhase）+ 粒子预热 W + 起点 S。
 /// </summary>
 internal readonly record struct GroupFraming(bool Residual, bool ClosureJudged, ulong RenderedFrames, ulong SourcePeriodWarmupFrames,
@@ -21,7 +21,7 @@ internal readonly record struct GroupFraming(bool Residual, bool ClosureJudged, 
 /// 任何出口都经 <see cref="DisposeAsync"/> 取消并等这些渲染器退出，不把进程留在后面。
 /// </summary>
 internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBakeRequest request, JsonObject plan,
-    HybridAnalyzeRequest settings, JsonObject[] groups, string captureProject, string output, JsonObject snapshot, ulong frames,
+    HybridAnalyzeRequest settings, JsonObject[] groups, string captureProject, string output, JsonObject snapshot, ulong frames, ulong[] groupFrames,
     uint crossfadeFrames, ulong warmupFrames, int[] residualGroupIndexes, int groupParallel, string playbackKind,
     IProgress<RenderProgress>? progress, CancellationToken cancellationToken) : IAsyncDisposable
 {
@@ -41,7 +41,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     internal JsonObject[] Groups => groups;
     /// <summary>按输出短边 / 1080 缩放像素口径（瓦片、样本宽）的倍率，1080p 下恰为 1。</summary>
     internal double TileScale => SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height);
-    internal ulong Frames => frames;
+    /// <summary>第 index 组录制的帧数 P_g（plan 候选的 group_frames，缺省为 L；探针为探针帧数）。</summary>
+    internal ulong Frames(int index) => groupFrames[index];
     internal uint CrossfadeFrames => crossfadeFrames;
     internal int[] ResidualGroupIndexes => residualGroupIndexes;
 
@@ -83,20 +84,24 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     {
         bool residual = !probe && residualGroupIndexes.Contains(index);
         bool closureJudged = !probe && !residual;
-        ulong rendered = residual ? checked(frames + crossfadeFrames) : closureJudged ? checked(frames + 1) : frames;
+        ulong period = groupFrames[index];
+        ulong rendered = residual ? checked(period + crossfadeFrames) : closureJudged ? checked(period + 1) : period;
         ulong sourcePeriodWarmup = probe ? 0 : LoopWarmupJson.CandidateSourcePeriodWarmupFrames(loopCandidates);
         return new(residual, closureJudged, rendered, sourcePeriodWarmup,
             LoopWarmup.MasterFrames(sourcePeriodWarmup, frames, warmupFrames, StartFrame));
     }
 
     /// <summary>
-    /// 残差组的低分辨率起点评分样本：搜索窗固定 <see cref="ResidualMasking.SearchWindowPeriods"/> 个周期（候选起点只有 P/stride 个，
+    /// 残差组的低分辨率起点评分样本：搜索窗固定 <see cref="ResidualMasking.SearchWindowPeriods"/> 个本组周期（候选起点只有 P/stride 个，
     /// 每个比较 (s, s+P)，全部落在前 2P 帧里）；透明组用带覆盖度的样本，两半分别算。
     /// </summary>
-    internal RenderRequest StartSearchRequest(JsonObject group, GroupCapture capture, uint sampleStride) =>
+    internal RenderRequest StartSearchRequest(int index, uint sampleStride) =>
+        StartSearchRequest(groups[index], Capture(groups[index]), sampleStride, groupFrames[index]);
+
+    private RenderRequest StartSearchRequest(JsonObject group, GroupCapture capture, uint sampleStride, ulong period) =>
         new(captureProject, settings.Assets,
             ProjectSource.ContainedPath(output, $"{group["id"]!.GetValue<string>()}.start-search"), capture.PixelWidth, capture.PixelHeight,
-            settings.FpsNumerator, settings.FpsDenominator, checked(frames * (ulong)ResidualMasking.SearchWindowPeriods),
+            settings.FpsNumerator, settings.FpsDenominator, checked(period * (ulong)ResidualMasking.SearchWindowPeriods),
             WarmupFrames: SearchWarmupFrames,
             Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side",
             DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid,
@@ -148,6 +153,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         string groupId = group["id"]!.GetValue<string>();
         var capture = Capture(group);
         var framing = Framing(index);
+        ulong period = groupFrames[index];
         bool direct = HybridBakeService.AllowsDirectPlayback(capture.SceneClear, framing.Residual, request.ProbeFrames);
         var render = new RenderRequest(captureProject, settings.Assets, Path.Combine(ProjectSource.ContainedPath(output, groupId), "master"),
             capture.PixelWidth, capture.PixelHeight, settings.FpsNumerator, settings.FpsDenominator,
@@ -156,7 +162,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             // 直编组是不透明整幅；硬件档位预判超 2 GiB 时改用软件编码（原因由 GroupEncoder 记）。
             LosslessTest: !direct, PlaybackEncoderKind: direct ?
                 playbackKind == PlaybackEncoderSelection.Vulkan ||
-                EmbeddedVideoBudget.HardwareOverBudget(frames, capture.PixelWidth, capture.PixelHeight, packedAlpha: false,
+                EmbeddedVideoBudget.HardwareOverBudget(period, capture.PixelWidth, capture.PixelHeight, packedAlpha: false,
                     PlaybackEncodeProfile.SelectPlaybackEncoder(capture.PixelWidth, capture.PixelHeight, settings.FpsNumerator, settings.FpsDenominator) == "libx265")
                     ? PlaybackEncoderSelection.Software : playbackKind : null,
             DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, CollectAlphaBounds: true, BoundsIncludeRgb: true,
@@ -168,8 +174,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             TraceScene: !probe,
             ForceKeyFrameFrame: framing.Residual ? crossfadeFrames : null,
             OfflineVideoRateOverrides: probe ? null : HybridBakeService.SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet()),
-            EncodedFrames: framing.ClosureJudged ? frames : null,
-            RetainFrames: probe ? null : LoopClosureCheck.ReferenceFrameIndices(frames));
+            EncodedFrames: framing.ClosureJudged ? period : null,
+            RetainFrames: probe ? null : LoopClosureCheck.ReferenceFrameIndices(period));
         if (allowGpu && playbackKind == PlaybackEncoderSelection.Vulkan && !probe &&
             render.Width % 2 == 0 && render.Height % 2 == 0)
         {
@@ -196,7 +202,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 // 不按固定码率系数预判 2 GiB：ARCH2 实测 Vulkan 成品相对参考码率 0.02–2.0 倍，随内容变、不随格式定。
                 // 成品实际超限时由 StartAsync 按软件档重渲。
                 render = render with { LosslessTest = false, PlaybackEncoderKind = null, ForceKeyFrameFrame = null,
-                    EncodedFrames = frames, PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb",
+                    EncodedFrames = period, PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb",
                     GpuEncoding = new(codec, Qp: 18, CrossfadeFrames: framing.Residual ? crossfadeFrames : 0,
                         Crop: crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
             }
