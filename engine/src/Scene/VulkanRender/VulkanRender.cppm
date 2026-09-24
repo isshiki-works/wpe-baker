@@ -186,7 +186,8 @@ struct RenderInitInfo {
 
 Box<rg::RenderGraph> sceneToRenderGraph(Scene&);
 Box<rg::RenderGraph> sceneToRenderGraph(Scene&, const RenderSceneSnapshot&, const RenderLayerSelection* = nullptr,
-                                        const RenderCaptureTarget* = nullptr);
+                                        const RenderCaptureTarget* = nullptr,
+                                        bool* reads_previous_frame = nullptr);
 
 namespace vulkan
 {
