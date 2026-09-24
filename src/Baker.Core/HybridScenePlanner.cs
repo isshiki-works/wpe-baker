@@ -40,7 +40,7 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     // 重查时并进这些层的 reasons，不只剩 retained_by_cost_trial；没有时不写进 settings，plan 逐字不变。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<int, string[]>? RetainLiveReasons = null,
     // 入场切换的退回（旧行为）：加载即播的单次轨所属层也判实时，bake 不做入场切换。分析引出新 blocker 或合成门拒绝切换时自动打开；
-    // 默认关，不写进 settings。
+    // 默认关时不写进 settings，plan 逐字不变。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SingleShotLive = false);
 
 /// <summary>Plans video replacement from source hierarchy and observed input dependencies.</summary>

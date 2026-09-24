@@ -699,6 +699,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 using (timing.Measure(StageTiming.ProjectAssembly))
                 {
                     finalObjects = SceneAssembler.AssembleObjects(originalObjects, plan, replacements, finalDependencies);
+                    // 切换后视频 seek 到 (s − master) mod P，P 取成品帧数：现在各组同一周期；各组按自身周期录制（#131）后要按组传 P_g。
                     if (introFrames > 0 && replacements.Count > 0)
                         report["intro_live"] = SceneAssembler.ApplyIntro(finalObjects, originalObjects, plan, replacements, staticIds,
                             finalDependencies, snapshot, introFrames, groupScheduler.Framing(0).MasterWarmupFrames, frames,
