@@ -178,7 +178,10 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         string sourceHash = await source.SourceHashAsync(cancellationToken);
         await using var executableFile = File.OpenRead(tools.Renderer);
         string rendererHash = Convert.ToHexStringLower(await SHA256.HashDataAsync(executableFile, cancellationToken));
-        TemporaryCaptureFiles.RequireFreeSpace(output);
+        // 无损 master 开写前按开烘闸门的同一口径量这一份（GPU 组回退软件档重渲也走这里）：不够就停，不写一半把盘写满。
+        TemporaryCaptureFiles.RequireFreeSpace(output, request.LosslessTest && !request.FrameSamplesOnly
+            ? BakeDiskBudget.MasterBytes(request.Frames, EmbeddedVideoBudget.EncodedPixels(request.Width, request.Height,
+                request.PixelPacking == "rgba_side_by_side")) : 0);
         Directory.CreateDirectory(output);
         var manifest = new JsonObject { ["schema_version"] = 1, ["status"] = "running", ["artifact_kind"] = request.FrameSamplesOnly ? "frame_samples" : request.CaptureTarget is null ? "offline_master" : "effect_cache_master",
             ["optimization_validated"] = false, ["source_sha256"] = sourceHash, ["renderer_sha256"] = rendererHash,
