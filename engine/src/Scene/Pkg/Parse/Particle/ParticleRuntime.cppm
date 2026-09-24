@@ -494,6 +494,8 @@ public:
     }
     void SetOwnerNode(SceneNode* node) noexcept { m_owner_node = node; }
     auto OfflineServices() const noexcept -> Services* { return m_services; }
+    void SetRandomOwner(std::int32_t id) noexcept { m_random_owner = id; }
+    auto RandomOwner() const noexcept -> std::int32_t { return m_random_owner; }
     void TraceExternalInput(ref<str> property) const;
     void SetPlaybackState(Arc<ParticlePlaybackState> state) {
         m_playback_state = Some(rstd::move(state));
@@ -550,6 +552,7 @@ private:
     Services*                                                     m_services;
     std::shared_ptr<SceneMesh>                                    m_mesh;
     SceneNode*                                                    m_owner_node { nullptr };
+    std::int32_t                                                  m_random_owner { -1 };
     particle::ParticleSchemaBuilder                               m_schema_builder;
     ParticleAttributes                                            m_attributes;
     ParticleSpawnPipeline                                         m_spawn_pipeline;

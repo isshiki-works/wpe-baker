@@ -171,6 +171,9 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
                  rstd::cppstd::to_string(SpecTex_Default),
                  [&](wpscene::Material& m, ShaderInfo& info) {
                      m.constantshadervalues["tint"] = { 0.0f, 0.0f, 0.0f };
+                     // fade.json 用 usershadervalues 把 tint 绑到工程属性 schemecolor；场景带这个属性时
+                     // 用户值会盖掉上面的黑色，捕获变成 rgb/k + (1-1/k)*0.7*schemecolor。缩放层必须是纯黑，去掉绑定。
+                     m.user_shader_values.clear();
                      m.alphawriting                 = "disabled";
                      info.baseConstSvs[rstd::cppstd::to_string(G_ALPHA)] = 1.0f - 1.0f / hdr_scale;
                  }))

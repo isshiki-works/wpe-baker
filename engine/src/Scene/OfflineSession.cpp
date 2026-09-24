@@ -687,6 +687,8 @@ bool OfflineSession::Impl::init(SessionConfig config, RenderInitInfo info, Offli
     m_services.trace_scene = options.trace_scene;
     std::seed_seq seed { uint32_t(options.seed), uint32_t(options.seed >> 32) };
     m_services.random.seed(seed);
+    m_services.seed = options.seed;
+    m_services.object_random.clear();
 
     m_config = rstd::move(config);
     m_user_properties = NormalizeUserProperties(m_config.user_properties);
