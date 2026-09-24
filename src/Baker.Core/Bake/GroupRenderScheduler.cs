@@ -317,11 +317,11 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     throw new GpuEncodeUnavailableException("GPU playback video exceeds the 2 GiB embedded-video limit; re-rendering on the software route.");
                 if (lower is not null)
                 {
-                    // 播放机就是本机：成品要在本机每块显卡上都能硬解（WPE 经 MF 放视频，扩展装了但显卡解不了一样放不动）。
+                    // 播放机就是本机：成品要在本机播放用的显卡上能硬解（WPE 经 MF 放视频，扩展装了但显卡解不了一样放不动）。
                     JsonObject decode = await runner.ProbeHardwareDecodeAsync(Path.Combine(render.OutputDirectory, "preview.mp4"),
-                        Path.Combine(render.OutputDirectory, "hardware-decode"), Math.Min(groupFrames[index], 5), renderCancellation.Token);
+                        Path.Combine(render.OutputDirectory, "hardware-decode"), Math.Min(groupFrames[index], 5), renderCancellation.Token, render.DeviceUuid);
                     if (decode["all_adapters_passed"]?.GetValue<bool>() != true)
-                        throw new GpuEncodeUnavailableException($"{render.GpuEncoding!.Codec} did not pass hardware decoding on every adapter of this machine.");
+                        throw new GpuEncodeUnavailableException($"{render.GpuEncoding!.Codec} did not pass hardware decoding on this machine's playback adapter.");
                     rendered["hardware_decode"] = decode;
                 }
                 rendered["gpu_bounds_prepass"] = coveragePass;
