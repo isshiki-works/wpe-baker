@@ -56,6 +56,7 @@ public static class TradeoffOptions
         ["shares_live_hierarchy"] = (Derived, "hierarchy"),
         ["written_by_live_controller"] = (Derived, "controller"),
         ["hidden_script_controller"] = (Derived, "controller"),
+        ["writes_shared_script_state"] = (Derived, "controller"),
         ["reads_live_object"] = (Derived, "controller"),
         ["retained_as_foreground_suffix"] = (Derived, "foreground"),
     };

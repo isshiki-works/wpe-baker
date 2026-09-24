@@ -45,7 +45,7 @@ internal sealed class GroupEncoder(NativeRenderRunner runner, HybridBakeRequest 
             bool overBudget = used == PlaybackEncoderSelection.Software &&
                 playbackKind is not (PlaybackEncoderSelection.Software or PlaybackEncoderSelection.Vulkan);
             encoded = await runner.AdoptDirectPlaybackAsync(master, masterPath, Path.Combine(work, "encoded"),
-                request.PlaybackEncoder ?? PlaybackEncoderSelection.Software, used,
+                request.PlaybackEncoder ?? PlaybackEncoderSelection.Auto, used,
                 master["gpu_pipeline_fallback_reason"]?.GetValue<string>() ??
                     (overBudget ? NativeRenderRunner.HardwareBudgetFallbackReason : playbackFallbackReason),
                 cancellationToken);
@@ -58,7 +58,7 @@ internal sealed class GroupEncoder(NativeRenderRunner runner, HybridBakeRequest 
             timing.Add(StageTiming.EncodeSlotWait, slot.WaitSeconds);
             using (timing.Measure(StageTiming.EncodePlayback))
                 encoded = await runner.EncodeCroppedRgbaAsync(masterPath, Path.Combine(work, "encoded"), cancellationToken,
-                    preserveAlpha: packedAlpha, playbackEncoder: request.PlaybackEncoder);
+                    preserveAlpha: packedAlpha, playbackEncoder: playbackKind);
         }
         return (encoded, encoded["crop"]!.Deserialize<CacheRegion>(JsonOptions)!, encoded["video_path"]!.GetValue<string>());
     }

@@ -88,6 +88,8 @@ internal sealed class Liveness
                     m["active_uniforms"] is JsonArray uniforms && uniforms.Any(u => u?.GetValue<string>() == "g_ParallaxPosition")))
                     Live(layer["owner"]!.GetValue<int>(), "active_shader_parallax_input");
             }
+        var sharedUsers = new HashSet<int>();
+        var sharedWriters = new HashSet<int>();
         foreach (var (id, obj) in objects)
         {
             if (obj.ContainsKey("sound")) Live(id, "soundtrack");
@@ -96,6 +98,10 @@ internal sealed class Liveness
             {
                 if (binding["script"] is not JsonValue value || !value.TryGetValue<string>(out string? text)) continue;
                 string code = CapabilityScanText(text);
+                if (Regex.IsMatch(code, @"\bshared\b")) sharedUsers.Add(id);
+                // 去掉字符串字面量再认写入：混淆脚本的键是 shared[_0x..('0x5',')#$]')] 这种，引号里可能有方括号。
+                if (Regex.IsMatch(Regex.Replace(code, "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'", "''"),
+                    @"\bshared\s*(\.\s*\w+|\[[^\]]*\])\s*(=(?!=)|[-+*/%&|^]=|\+\+|--)")) sharedWriters.Add(id);
                 if (Regex.IsMatch(code, @"\bnew\s+Date\b|\bDate\s*\.\s*now\b|\btimeOfDay\b") && id != daytimeSelector) Live(id, "wall_clock_api");
                 if (Regex.IsMatch(code, @"\bregisterAudioBuffers\s*\(")) Live(id, "audio_api");
                 if (Regex.IsMatch(code, @"\binput\s*[.\[]|\bfunction\s+cursor\w*\s*\(")) Live(id, "pointer_api");
@@ -114,6 +120,10 @@ internal sealed class Liveness
                 if (ParticleInputAnalysis.HasAudioInput(definition, obj)) Live(id, "particle_audio_input");
             }
         }
+        // 经 shared 全局对象给别的脚本传值的写者：这种读写不进依赖记录，层烘成视频后脚本就不再执行，
+        // 读它的实时脚本在成品里拿不到值（例如按 shared 值自检、不对就 destroyLayer 的防篡改脚本会把整个场景删空）。
+        // 官方 WPE 里所有脚本都在跑，所以只要别的对象的脚本也用 shared，写者就留实时。
+        foreach (int id in sharedWriters.Where(id => sharedUsers.Any(user => user != id))) Live(id, "writes_shared_script_state");
         // Runtime writes by a live controller make their targets live. Reads of a live mutable
         // target make the consuming animation live too. Initialization-only transforms stay snapshots.
         Close(observation.Dependencies.OfType<JsonObject>(), liveness.Ids.Contains, liveness.Mark, ownerPerRule: true, severedRead, severedWrite);
