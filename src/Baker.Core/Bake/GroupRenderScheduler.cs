@@ -182,13 +182,12 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
                     (uint)layout.Crop.Width * (layout.Packed ? 2u : 1u), (uint)layout.Crop.Height,
                     render.FpsNumerator, render.FpsDenominator), PlaybackEncoderSelection.Vulkan);
-                // 按硬件格式系数预判超 2 GiB 的组不走 GPU，回退软件档（软件码率更低）。
-                if (!EmbeddedVideoBudget.HardwareOverBudget(frames, (uint)layout.Crop.Width, (uint)layout.Crop.Height,
-                        layout.Packed, codec == "hevc_vulkan"))
-                    render = render with { LosslessTest = false, PlaybackEncoderKind = null, ForceKeyFrameFrame = null,
-                        EncodedFrames = frames, PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb",
-                        GpuEncoding = new(codec, Qp: coverage is null ? 18 : 12, CrossfadeFrames: framing.Residual ? crossfadeFrames : 0,
-                            Crop: layout.Crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
+                // 不按固定码率系数预判 2 GiB：ARCH2 实测 Vulkan 成品相对参考码率 0.02–2.0 倍，随内容变、不随格式定。
+                // 成品实际超限时由 StartAsync 按软件档重渲。
+                render = render with { LosslessTest = false, PlaybackEncoderKind = null, ForceKeyFrameFrame = null,
+                    EncodedFrames = frames, PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb",
+                    GpuEncoding = new(codec, Qp: 18, CrossfadeFrames: framing.Residual ? crossfadeFrames : 0,
+                        Crop: layout.Crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
             }
         }
         return render;
@@ -205,7 +204,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
             throw new IOException("A group master output must be new; existing files will not be cleaned.");
         JsonObject? coveragePass = null;
-        // 起点搜索已给出裁剪却没取 GPU 路线（预判超 2 GiB 或须上下并排）时，预通道的裁剪同样用不上，不跑。
+        // 起点搜索已给出裁剪却没取 GPU 路线（须上下并排）时，预通道的裁剪同样用不上，不跑。
         if (render.GpuEncoding is null && playbackKind == PlaybackEncoderSelection.Vulkan && !probe &&
             render.PixelPacking != "rgb" && render.Width % 2 == 0 && render.Height % 2 == 0 &&
             !(StartSearches.TryGetValue(groups[index]["id"]!.GetValue<string>(), out JsonObject? search) &&
@@ -251,6 +250,10 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 if (!await GpuQualityPassesAsync(rendered, render))
                     throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
             }
+            // 超内嵌视频上限的 GPU 成品不交出去：软件档码率更低，按 CPU 路线重渲（原来会被判为超限拒绝）。
+            if (render.GpuEncoding is not null &&
+                new FileInfo(Path.Combine(render.OutputDirectory, "preview.mp4")).Length > EmbeddedVideoBudget.MaximumBytes)
+                throw new GpuEncodeUnavailableException("GPU playback video exceeds the 2 GiB embedded-video limit; re-rendering on the software route.");
             rendered["gpu_bounds_prepass"] = coveragePass;
             return rendered;
         }
