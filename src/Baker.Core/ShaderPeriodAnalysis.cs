@@ -307,6 +307,14 @@ public static class ShaderPeriodAnalysis
                         return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, Text("missing"));
                     if (amount != 0) return c.Refuse(kind, Text("detail"));
                     break;
+                case "repeat_texture":
+                    // 线性漂移的 UV 只有落在 repeat 寻址的静止贴图上才回得来；pass 没写该槽时取 shader 注释里的默认贴图。
+                    int slot = gate["slot"]!.GetValue<int>();
+                    string? fallback = c.Source.UniformAnnotations.FirstOrDefault(u => u.Name == $"g_Texture{slot}").Annotation?["default"]
+                        is JsonValue named && named.TryGetValue(out string? texture) ? texture : null;
+                    if (!UsesStaticRepeatTexture(c.Pass, slot, c.Project, c.Assets, fallback))
+                        return c.Refuse(kind, Text("detail"), mechanism: LightShaftDriftMechanism);
+                    break;
                 default: throw new InvalidDataException($"Unknown shader clock gate '{Text("type")}'.");
             }
         }
@@ -831,10 +839,12 @@ public static class ShaderPeriodAnalysis
     /// 纹理槽 <paramref name="slot"/> 指向一张 repeat 寻址的静止贴图：TEXV0005/TEXI0001 头，flags 不含
     /// ClampUVs(0x2)、精灵(0x4)、视频(0x20)。读不到或头部不认识一律 false。
     /// </summary>
-    private static bool UsesStaticRepeatTexture(JsonObject pass, int slot, ProjectSource source, string? assetsDirectory)
+    private static bool UsesStaticRepeatTexture(JsonObject pass, int slot, ProjectSource source, string? assetsDirectory,
+        string? fallback = null)
     {
-        if (pass["textures"] is not JsonArray textures || textures.Count <= slot || textures[slot] is not JsonValue value ||
-            !value.TryGetValue(out string? name) || string.IsNullOrWhiteSpace(name)) return false;
+        string? name = pass["textures"] is JsonArray textures && textures.Count > slot && textures[slot] is JsonValue value &&
+            value.TryGetValue(out string? authored) ? authored : fallback;
+        if (string.IsNullOrWhiteSpace(name)) return false;
         string resource = "materials/" + name + ".tex";
         try
         {
