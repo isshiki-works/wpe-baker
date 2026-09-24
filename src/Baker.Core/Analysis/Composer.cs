@@ -82,10 +82,7 @@ internal sealed class Composer
         // A nested overlay cannot cross any external drawable tree, including another live tree:
         // retaining its author parent would pull it back inside that parent's DFS position.
         // Image/model trees and framebuffer effects keep their order and can still block full-frame mode.
-        // 脚本按下标/顺序查公开图层表时不置顶：置顶只能靠改声明顺序，成品必然过不了公开图层查询检查。
-        bool publicOrderQueried = dependencies.OfType<JsonObject>().Any(d => d["operation"]?.GetValue<string>() == "query" &&
-            d["property"]?.GetValue<string>() is "layer_numeric_index" or "layer_enumeration" or "layer_index" or "layer_order");
-        int[] overlayRoots = publicOrderQueried ? [] : roots.Take(Math.Max(0, lastBakedDraw)).Where(root => liveRoots.Contains(root) &&
+        int[] overlayRoots = roots.Take(Math.Max(0, lastBakedDraw)).Where(root => liveRoots.Contains(root) &&
             (rootOf[root] == root || !roots.Skip(Array.IndexOf(roots, root) + 1).Any(later =>
                 rootOf[later] != rootOf[root] &&
                 sourceOrder.Any(id => allocationOf[id] == later && MayBeVisible(id) && Contributes(id)))) &&
@@ -98,20 +95,17 @@ internal sealed class Composer
                 (!MayBeVisible(id) || !Contributes(id) || objects[id].ContainsKey("text") || objects[id].ContainsKey("particle")) &&
                 !reasons[id].Contains("reads_current_framebuffer"))).ToArray();
         bool moveOverlays = request.LiveOverlayPlacement == "foreground" && overlayRoots.Length > 0;
-        if (moveOverlays) roots = roots.Except(overlayRoots).Concat(overlayRoots).ToArray();
+        // 脚本按下标/顺序查公开图层表时声明顺序必须保持原作，不能整体置顶：覆盖层留在原位、不切断它所在的视频组，
+        // 组视频画在组内最早成员的槽位，覆盖层接在组后（只越过同组的后续成员）。
+        bool inPlace = moveOverlays && dependencies.OfType<JsonObject>().Any(d => d["operation"]?.GetValue<string>() == "query" &&
+            d["property"]?.GetValue<string>() is "layer_numeric_index" or "layer_enumeration" or "layer_index" or "layer_order");
+        if (moveOverlays && !inPlace) roots = roots.Except(overlayRoots).Concat(overlayRoots).ToArray();
         RootOrder = roots;
-        OcclusionTradeoff = new Message("reason.foreground_occlusion").Write(new JsonObject {
-            ["status"] = moveOverlays ? "applied" : overlayRoots.Length > 0 ? "available" : "not_needed",
-            ["selection"] = request.LiveOverlayPlacement,
-            ["promoted_roots"] = new JsonArray(overlayRoots.Select(root => (JsonNode)new JsonObject {
-                ["root_id"] = root, ["name"] = objects[root]["name"]?.DeepClone(),
-                ["layer_names"] = JsonSerializer.SerializeToNode(sourceOrder.Where(id => allocationOf[id] == root && MayBeVisible(id) && Contributes(id))
-                    .Select(id => objects[id]["name"]?.GetValue<string>() ?? id.ToString())),
-                ["crossed_root_ids"] = JsonSerializer.SerializeToNode(sourceRootOrder.Skip(Array.IndexOf(sourceRootOrder, root) + 1).Except(overlayRoots))
-            }).ToArray()) }, "reason");
         var groups = Groups;
         var current = new List<int>();
         var rootSequence = Composition;
+        var deferred = new List<(int Root, int MembersBefore)>();
+        var crossed = new Dictionary<int, int[]>();
         int? ParentOf(int root) => Int(objects[root]["parent"]) is int parent && objects.ContainsKey(parent) ? parent : null;
         // 一个根是否自己可见且有可见的绘制后代。它既决定视频组能不能承担场景清屏，
         // 也是 full_frame 冲突里真正的阻挡者判据。
@@ -141,6 +135,12 @@ internal sealed class Composer
                 group[SingleShotAllocation.PrecedingRootsField] = JsonSerializer.SerializeToNode(precedingVisibleLiveRoots);
             groups.Add(group);
             rootSequence.Add(new JsonObject { ["video_group"] = groupId });
+            foreach (var (overlay, membersBefore) in deferred)
+            {
+                rootSequence.Add(new JsonObject { ["live_root"] = overlay });
+                if (current.Count > membersBefore) crossed[overlay] = current.Skip(membersBefore).ToArray();
+            }
+            deferred.Clear();
             current.Clear();
         }
         foreach (int root in roots)
@@ -162,6 +162,7 @@ internal sealed class Composer
             }
             if (liveRoots.Contains(root))
             {
+                if (inPlace && current.Count > 0 && overlayRoots.Contains(root)) { deferred.Add((root, current.Count)); continue; }
                 Flush(); rootSequence.Add(new JsonObject { ["live_root"] = root });
             }
             else
@@ -172,6 +173,16 @@ internal sealed class Composer
             }
         }
         Flush();
+        OcclusionTradeoff = new Message("reason.foreground_occlusion").Write(new JsonObject {
+            ["status"] = inPlace ? (crossed.Count > 0 ? "applied" : "not_needed") : moveOverlays ? "applied" : overlayRoots.Length > 0 ? "available" : "not_needed",
+            ["selection"] = request.LiveOverlayPlacement,
+            ["promoted_roots"] = new JsonArray((inPlace ? overlayRoots.Where(crossed.ContainsKey) : overlayRoots).Select(root => (JsonNode)new JsonObject {
+                ["root_id"] = root, ["name"] = objects[root]["name"]?.DeepClone(),
+                ["layer_names"] = JsonSerializer.SerializeToNode(sourceOrder.Where(id => allocationOf[id] == root && MayBeVisible(id) && Contributes(id))
+                    .Select(id => objects[id]["name"]?.GetValue<string>() ?? id.ToString())),
+                ["crossed_root_ids"] = JsonSerializer.SerializeToNode(inPlace ? crossed[root] : sourceRootOrder.Skip(Array.IndexOf(sourceRootOrder, root) + 1).Except(overlayRoots))
+            }).ToArray()) }, "reason");
+        if (inPlace && crossed.Count > 0) OcclusionTradeoff["in_place"] = true;
         var optionalRoots = roots.Where(root => !liveRoots.Contains(root) &&
             sourceOrder.Any(id => allocationOf[id] == root && !omittedIds.Contains(id) && (objects[id].ContainsKey("particle") ||
                 SceneAnalyzer.Walk(objects[id]).OfType<JsonObject>().Any(n => n["script"] is JsonValue script &&
