@@ -1041,9 +1041,8 @@ public static class MessageCatalog
             Legacy: "The screen resolution is unavailable, so it is baked at the scene canvas size {0}."),
 
         ["summary.resolution_display"] = new(
-            Zh: "场景无可用正交画布（透视场景或画布缺失），输出分辨率取主显示器分辨率 {0}。",
-            En: "The scene has no usable orthographic canvas (perspective or missing); output resolution is the primary display resolution {0}.",
-            Legacy: "The scene has no usable orthographic canvas (perspective or missing), so it is baked at the primary display resolution {0}."),
+            Zh: "输出分辨率取本机主显示器分辨率 {0}，与 WPE 按屏幕分辨率实时渲染一致。",
+            En: "Output resolution is the primary display resolution {0}, as Wallpaper Engine renders at screen resolution."),
 
         ["summary.resolution_fallback"] = new(
             Zh: "场景无可用正交画布，主显示器分辨率不可读，输出分辨率取默认值 {0}。",

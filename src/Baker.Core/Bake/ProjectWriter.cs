@@ -14,7 +14,7 @@ internal static class ProjectWriter
         uint videoWidth, uint videoHeight, int id, double x, double y, double drawWidth, double drawHeight,
         CancellationToken cancellationToken = default, bool packedAlpha = false,
         double parallaxDepthX = 0, double parallaxDepthY = 0, double geometryOffsetX = 0, double geometryOffsetY = 0,
-        bool rgbaFrame = false, bool capturedColor = false, double hdrScale = 1)
+        bool rgbaFrame = false, bool capturedColor = false, double hdrScale = 1, bool alphaBelow = false)
     {
         string textureStem = "wpe_baker_video/" + stem;
         string texturePath = ProjectSource.ContainedPath(project, $"materials/{textureStem}.tex");
@@ -37,6 +37,15 @@ internal static class ProjectWriter
             if (!packedAlpha) fragment = "// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(texSample2D(g_Texture0, v_TexCoord).rgb, 1.0); }\n";
             else if (rgbaFrame) fragment = fragment.Replace("vec2(v_TexCoord.x * 0.5, v_TexCoord.y)", "v_TexCoord", StringComparison.Ordinal)
                 .Replace("texSample2D(g_Texture0, vec2(v_TexCoord.x * 0.5 + 0.5, v_TexCoord.y)).r", "texSample2D(g_Texture0, v_TexCoord).a", StringComparison.Ordinal);
+            else if (alphaBelow)
+            {
+                // 上下并排（HardwareDecodeDimensions.StackedVertically）：上半 RGB、下半 alpha，各自夹在自己那半幅内。
+                double halfTexel = .5 / videoHeight;
+                fragment = fragment.Replace("vec2(v_TexCoord.x * 0.5, v_TexCoord.y)",
+                    FormattableString.Invariant($"vec2(v_TexCoord.x, clamp(v_TexCoord.y * 0.5, {halfTexel:R}, {.5 - halfTexel:R}))"), StringComparison.Ordinal)
+                    .Replace("vec2(v_TexCoord.x * 0.5 + 0.5, v_TexCoord.y)",
+                    FormattableString.Invariant($"vec2(v_TexCoord.x, clamp(v_TexCoord.y * 0.5 + 0.5, {.5 + halfTexel:R}, {1 - halfTexel:R}))"), StringComparison.Ordinal);
+            }
             else
             {
                 // Each packed half needs its own texel boundary when the image is enlarged.

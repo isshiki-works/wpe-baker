@@ -19,7 +19,8 @@ internal static class EffectPrefixCache
     {
         if (paddedContent is { } declared && (rgbaFrame || declared.OffsetX < 0 || declared.OffsetY < 0 || declared.Width <= 0 || declared.Height <= 0 ||
             declared.OffsetX + declared.Width > declared.PaddedWidth || declared.OffsetY + declared.Height > declared.PaddedHeight ||
-            (long)declared.PaddedWidth * (packedAlpha ? 2 : 1) != width || declared.PaddedHeight != height))
+            (long)declared.PaddedWidth * (packedAlpha && !HardwareDecodeDimensions.StackedVertically(packedAlpha, declared.PaddedWidth) ? 2 : 1) != width ||
+            (long)declared.PaddedHeight * (HardwareDecodeDimensions.StackedVertically(packedAlpha, declared.PaddedWidth) ? 2 : 1) != height))
             throw new ArgumentException("Padded cache content must lie inside the stored video canvas.");
         ValidateSource(source, originalScene, derivedScene, ownerId, prefixEffectCount);
         JsonObject original = Owner(originalScene, ownerId), derived = Owner(derivedScene, ownerId);
@@ -83,13 +84,14 @@ internal static class EffectPrefixCache
             double edge = .5 / storedWidth;
             return FormattableString.Invariant($"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture0,vec2(clamp(v_TexCoord.x*0.5,{edge:R},{.5-edge:R}),v_TexCoord.y)).rgb; float a=texSample2D(g_Texture0,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+edge:R},{1-edge:R}),v_TexCoord.y)).r; gl_FragColor=vec4(rgb,a); }}\n");
         }
-        double half = packedAlpha ? .5 : 1;
-        double left = half * content.OffsetX / content.PaddedWidth, spanX = half * content.Width / content.PaddedWidth;
-        double top = (double)content.OffsetY / content.PaddedHeight, spanY = (double)content.Height / content.PaddedHeight;
+        bool below = HardwareDecodeDimensions.StackedVertically(packedAlpha, content.PaddedWidth);
+        double halfX = packedAlpha && !below ? .5 : 1, halfY = below ? .5 : 1;
+        double left = halfX * content.OffsetX / content.PaddedWidth, spanX = halfX * content.Width / content.PaddedWidth;
+        double top = halfY * content.OffsetY / content.PaddedHeight, spanY = halfY * content.Height / content.PaddedHeight;
         double edgeX = .5 / storedWidth, edgeY = .5 / storedHeight;
         string x = FormattableString.Invariant($"clamp({left:R}+v_TexCoord.x*{spanX:R},{left + edgeX:R},{left + spanX - edgeX:R})");
         string y = FormattableString.Invariant($"clamp({top:R}+v_TexCoord.y*{spanY:R},{top + edgeY:R},{top + spanY - edgeY:R})");
-        string alpha = packedAlpha ? FormattableString.Invariant($"texSample2D(g_Texture0,vec2(0.5+{x},{y})).r") : "1.0";
+        string alpha = !packedAlpha ? "1.0" : below ? $"texSample2D(g_Texture0,vec2({x},0.5+{y})).r" : $"texSample2D(g_Texture0,vec2(0.5+{x},{y})).r";
         return $"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture0,vec2({x},{y})).rgb; float a={alpha}; gl_FragColor=vec4(rgb,a); }}\n";
     }
 

@@ -52,16 +52,30 @@ public static class HardwareDecodeDimensions
 
     public static Limits For(string softwareEncoder) => softwareEncoder == "libx265" ? Hevc : H264;
 
+    /// <summary>ITU-T H.265 表 A.8 的 MaxLumaSr（每秒亮度样本数）：Level 6 是 8K30 量级，6.1 是 8K60 量级。</summary>
+    public const ulong HevcLevel6LumaSamplesPerSecond = 1_069_547_520, HevcLevel61LumaSamplesPerSecond = 2_139_095_040;
+
     /// <summary>
-    /// 内容尺寸越过 HEVC 硬解上限（宽、高、亮度样本；透明左右并排按两倍宽算）就等比缩小到上限内，回放按图层原尺寸放大，
-    /// 观感交给编码后的画质门与合成门判。没越限原样返回（输入须为偶数，与 Fit 一致）。
+    /// 透明打包的方向：左右并排的总宽越过 HEVC 宽度上限时改为上下并排（上半 RGB、下半 alpha）。只看每半幅宽度，
+    /// 编码端与解码端（着色器、接缝门）各自算出同一个结果，不另存字段。
+    /// </summary>
+    public static bool StackedVertically(bool packedAlpha, long halfWidth) => packedAlpha && halfWidth * 2 > Hevc.MaximumWidth;
+
+    /// <summary>
+    /// 内容尺寸越过 HEVC 硬解上限（宽、高、亮度样本；透明按两半幅算）就等比缩小到上限内，回放按图层原尺寸放大，
+    /// 观感交给编码后的画质门与合成门判。透明时左右、上下两种并排各算一次，取保留像素多的（打平取左右并排）。
+    /// 没越限原样返回（输入须为偶数，与 Fit 一致）。
     /// </summary>
     public static (uint Width, uint Height) FitCeiling(uint width, uint height, bool packedAlpha)
     {
         uint halves = packedAlpha ? 2u : 1u;
         double luma = Math.Sqrt(Hevc.MaximumLumaSamples!.Value / ((double)halves * width * height));
-        return EffectPrefixBakeService.Fit(width, height, (uint)Math.Min(Hevc.MaximumWidth / halves, width * luma),
-            (uint)Math.Min(Hevc.MaximumHeight, height * luma));
+        (uint Width, uint Height) Box(uint maximumWidth, uint maximumHeight) => EffectPrefixBakeService.Fit(width, height,
+            (uint)Math.Min(maximumWidth, width * luma), (uint)Math.Min(maximumHeight, height * luma));
+        var side = Box(Hevc.MaximumWidth / halves, Hevc.MaximumHeight);
+        if (!packedAlpha) return side;
+        var stacked = Box(Hevc.MaximumWidth, Hevc.MaximumHeight / 2);
+        return (ulong)stacked.Width * stacked.Height > (ulong)side.Width * side.Height ? stacked : side;
     }
 
     // ---------------------------------------------------------------------------------------
@@ -185,47 +199,59 @@ public static class HardwareDecodeDimensions
         uint PaddedWidth, uint PaddedHeight, uint OffsetX, uint OffsetY, IReadOnlyList<DecodeViolation> Violations)
     {
         public Limits Limits => For(SoftwareEncoder);
-        public uint StoredWidth => checked(PaddedWidth * (PackedAlpha ? 2u : 1u));
-        public uint StoredHeight => PaddedHeight;
+        public bool Vertical => StackedVertically(PackedAlpha, PaddedWidth);
+        public uint StoredWidth => checked(PaddedWidth * (PackedAlpha && !Vertical ? 2u : 1u));
+        public uint StoredHeight => checked(PaddedHeight * (Vertical ? 2u : 1u));
         public bool Padded => PaddedWidth != ContentWidth || PaddedHeight != ContentHeight;
+        /// <summary>编码后每秒亮度样本数（按实际编码尺寸 × 帧率）。</summary>
+        public double LumaSamplesPerSecond { get; init; }
         public bool Rejected => Status == RejectedStatus;
 
-        public JsonObject ToJson() => new()
+        public JsonObject ToJson()
         {
-            ["status"] = Status,
-            ["codec"] = Limits.Codec,
-            ["software_encoder"] = SoftwareEncoder,
-            ["pixel_packing"] = PackedAlpha ? "rgba_side_by_side" : "rgb",
-            ["content_extent"] = new JsonArray(ContentWidth, ContentHeight),
-            ["padded_extent"] = new JsonArray(PaddedWidth, PaddedHeight),
-            ["encoded_extent"] = new JsonArray(StoredWidth, StoredHeight),
-            ["padding"] = !Padded ? null : new JsonObject
-            {
-                ["left"] = OffsetX, ["top"] = OffsetY,
-                ["right"] = PaddedWidth - ContentWidth - OffsetX, ["bottom"] = PaddedHeight - ContentHeight - OffsetY,
-                ["applies_to"] = PackedAlpha ? "each half of the side-by-side RGB/alpha frame" : "the RGB frame",
-                ["fill"] = "transparent black (RGB 0, alpha 0)",
-                ["playback_sampling"] = "UV is remapped to the original content rectangle and clamped half a texel inside it, so the displayed rectangle does not change.",
-            },
-            ["limits"] = new JsonObject
-            {
-                ["codec"] = Limits.Codec, ["minimum_width"] = Limits.MinimumWidth, ["minimum_height"] = Limits.MinimumHeight,
-                ["maximum_width"] = Limits.MaximumWidth, ["maximum_height"] = Limits.MaximumHeight,
-                ["maximum_luma_samples"] = Limits.MaximumLumaSamples, ["alignment"] = DecodeDimensions.ChromaAlignment,
-                ["sources"] = new JsonArray(Limits.Sources.Select(source => (JsonNode?)JsonValue.Create(source)).ToArray()),
-            },
-            ["violations"] = new JsonArray(Violations.Select(violation => (JsonNode?)new JsonObject
-            {
-                ["measure"] = violation.Measure, ["actual"] = violation.Actual, ["limit"] = violation.Limit,
-            }).ToArray()),
-            ["scope"] = "Dimension preflight from published decoder limits and local D3D11VA measurements, applied before encoding. It does not replace the actual hardware decode probe of the encoded file.",
-        };
+            JsonObject json = new() {
+                ["status"] = Status,
+                ["codec"] = Limits.Codec,
+                ["software_encoder"] = SoftwareEncoder,
+                ["pixel_packing"] = PackedAlpha ? Vertical ? "rgba_top_bottom" : "rgba_side_by_side" : "rgb",
+                ["content_extent"] = new JsonArray(ContentWidth, ContentHeight),
+                ["padded_extent"] = new JsonArray(PaddedWidth, PaddedHeight),
+                ["encoded_extent"] = new JsonArray(StoredWidth, StoredHeight),
+                ["padding"] = !Padded ? null : new JsonObject
+                {
+                    ["left"] = OffsetX, ["top"] = OffsetY,
+                    ["right"] = PaddedWidth - ContentWidth - OffsetX, ["bottom"] = PaddedHeight - ContentHeight - OffsetY,
+                    ["applies_to"] = PackedAlpha ? "each half of the side-by-side RGB/alpha frame" : "the RGB frame",
+                    ["fill"] = "transparent black (RGB 0, alpha 0)",
+                    ["playback_sampling"] = "UV is remapped to the original content rectangle and clamped half a texel inside it, so the displayed rectangle does not change.",
+                },
+                ["limits"] = new JsonObject
+                {
+                    ["codec"] = Limits.Codec, ["minimum_width"] = Limits.MinimumWidth, ["minimum_height"] = Limits.MinimumHeight,
+                    ["maximum_width"] = Limits.MaximumWidth, ["maximum_height"] = Limits.MaximumHeight,
+                    ["maximum_luma_samples"] = Limits.MaximumLumaSamples, ["alignment"] = DecodeDimensions.ChromaAlignment,
+                    ["sources"] = new JsonArray(Limits.Sources.Select(source => (JsonNode?)JsonValue.Create(source)).ToArray()),
+                },
+                ["violations"] = new JsonArray(Violations.Select(violation => (JsonNode?)new JsonObject
+                {
+                    ["measure"] = violation.Measure, ["actual"] = violation.Actual, ["limit"] = violation.Limit,
+                }).ToArray()),
+                ["scope"] = "Dimension preflight from published decoder limits and local D3D11VA measurements, applied before encoding. It does not replace the actual hardware decode probe of the encoded file.",
+            };
+            // 只提示不拒绝：亮度样本率越过 HEVC Level 6（8K30 量级）就要 Level 6.1 以上的硬解，较老的硬件可能跟不上实时。
+            if (Limits == Hevc && LumaSamplesPerSecond > HevcLevel6LumaSamplesPerSecond)
+                json["luma_rate_hint"] = new JsonObject {
+                    ["luma_samples_per_second"] = Math.Round(LumaSamplesPerSecond),
+                    ["hevc_level_needed"] = LumaSamplesPerSecond > HevcLevel61LumaSamplesPerSecond ? "6.2" : "6.1",
+                    ["scope"] = "Advisory only: the luma sample rate exceeds HEVC Level 6 (ITU-T H.265 Table A.8 MaxLumaSr), so playback needs a Level 6.1+ hardware decoder; older decoders may not keep up in real time. Not a rejection." };
+            return json;
+        }
 
         public string ViolationText(string language) => HardwareDecodeDimensions.ViolationText(Violations, language);
 
         public string PackingText(string language) => MessageCatalog.NormalizeLanguage(language) == MessageCatalog.Chinese
-            ? Limits.DisplayName + (PackedAlpha ? "，透明通道左右并排" : "，不透明 RGB")
-            : Limits.DisplayName + (PackedAlpha ? ", alpha packed side by side" : ", opaque RGB");
+            ? Limits.DisplayName + (PackedAlpha ? Vertical ? "，透明通道上下并排" : "，透明通道左右并排" : "，不透明 RGB")
+            : Limits.DisplayName + (PackedAlpha ? Vertical ? ", alpha packed top and bottom" : ", alpha packed side by side" : ", opaque RGB");
     }
 
     public static string Extent(uint width, uint height) =>
@@ -240,24 +266,27 @@ public static class HardwareDecodeDimensions
         if (contentWidth == 0 || contentHeight == 0) throw new ArgumentException("Hardware decode preflight requires a positive content extent.");
         if (fpsNumerator == 0 || fpsDenominator == 0) throw new ArgumentException("Hardware decode preflight requires a positive rational frame rate.");
         uint halves = packedAlpha ? 2u : 1u;
+        (uint Width, uint Height) Stored(uint w, uint h) => StackedVertically(packedAlpha, w) ? (w, checked(h * 2)) : (checked(w * halves), h);
         (uint width, uint offsetX) = DecodeDimensions.Grow(contentWidth, contentWidth);
         (uint height, uint offsetY) = DecodeDimensions.Grow(contentHeight, contentHeight);
-        string encoder = PlaybackEncodeProfile.SelectPlaybackEncoder(checked(width * halves), height, fpsNumerator, fpsDenominator);
+        (uint storedWidth, uint storedHeight) = Stored(width, height);
+        string encoder = PlaybackEncodeProfile.SelectPlaybackEncoder(storedWidth, storedHeight, fpsNumerator, fpsDenominator);
         for (int pass = 0; ; ++pass)
         {
             Limits limits = For(encoder);
             (width, offsetX) = DecodeDimensions.Grow(contentWidth, (limits.MinimumWidth + halves - 1) / halves);
             (height, offsetY) = DecodeDimensions.Grow(contentHeight, limits.MinimumHeight);
-            string next = PlaybackEncodeProfile.SelectPlaybackEncoder(checked(width * halves), height, fpsNumerator, fpsDenominator);
+            (storedWidth, storedHeight) = Stored(width, height);
+            string next = PlaybackEncodeProfile.SelectPlaybackEncoder(storedWidth, storedHeight, fpsNumerator, fpsDenominator);
             if (next == encoder) break;
             if (pass >= 2) throw new InvalidOperationException("Hardware decode preflight did not converge on one encoder.");
             encoder = next;
         }
         Limits chosen = For(encoder);
-        uint storedWidth = checked(width * halves);
-        var violations = DecodeDimensions.Violations(storedWidth, height, chosen.MaximumWidth, chosen.MaximumHeight, chosen.MaximumLumaSamples);
+        var violations = DecodeDimensions.Violations(storedWidth, storedHeight, chosen.MaximumWidth, chosen.MaximumHeight, chosen.MaximumLumaSamples);
         string status = violations.Count > 0 ? RejectedStatus : width != contentWidth || height != contentHeight ? PaddedStatus : PassStatus;
-        return new(status, encoder, packedAlpha, contentWidth, contentHeight, width, height, offsetX, offsetY, violations);
+        return new(status, encoder, packedAlpha, contentWidth, contentHeight, width, height, offsetX, offsetY, violations)
+            { LumaSamplesPerSecond = (double)storedWidth * storedHeight * fpsNumerator / fpsDenominator };
     }
 
 

@@ -114,7 +114,11 @@ internal sealed class Allocation
         foreach (int root in request.RetainLiveRootIds ?? [])
         {
             if (!rootOf.TryGetValue(root, out int actualRoot) || actualRoot != root) throw new InvalidDataException("A requested live root is not a source root.");
-            foreach (int id in sourceOrder.Where(id => rootOf[id] == root)) Live(id, "retained_by_cost_trial");
+            foreach (int id in sourceOrder.Where(id => rootOf[id] == root))
+            {
+                Live(id, "retained_by_cost_trial");
+                foreach (string reason in request.RetainLiveReasons?.GetValueOrDefault(id) ?? []) Live(id, reason);
+            }
         }
         // Hidden script hosts can initialize fonts or other live layers without drawing a pixel.
         // Preserve those controllers instead of turning them into empty video groups.
