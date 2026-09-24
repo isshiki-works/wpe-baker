@@ -303,12 +303,8 @@ internal static class ParticleStationarityChecks
             "C2 反例：允许集合之外的初始化器不放行");
 
         // ---- C3 算子 ----
-        JsonObject stars = Verdict(Load("3363252053", 200));
-        check(Codes(stars).Contains("C3 oscillate_phase_basis_unverified"),
-            "C3 反例：Stars 200 的 oscillatealpha 只有 frequencymax，频率与相位都退化，相位基准未核，不放行");
-        check(NoCondition(Verdict(Mutate(Load("3363252053", 200), (_, definition, _) =>
-                Node(definition, "operator", "oscillatealpha")["frequencymin"] = 0.5)), "C3"),
-            "C3 正例：同一个 oscillatealpha 补上 frequencymin ≠ frequencymax 后每粒子随机频率，C3 放行");
+        check(NoCondition(Verdict(Load("3363252053", 200)), "C3"),
+            "C3 正例：Stars 200 的 oscillatealpha 只有 frequencymax 也放行：渲染器按粒子年龄摆动，不跟全局时钟同步");
         check(NoCondition(Verdict(Load("3151551777", 704)), "C3"),
             "C3 正例：Snow storm 704 的 oscillateposition 频率与相位都有随机区间");
         JsonObject drippingWater = Verdict(Load("3670813883", 431));
@@ -324,7 +320,15 @@ internal static class ParticleStationarityChecks
 
         // ---- C5 子系统 ----
         check(NoCondition(rainVerdict, "C5") && NoCondition(dropletsVerdict, "C5"), "C5 正例：children 缺省或为 null 放行");
-        check(Codes(rainScreenVerdict).Contains("C5 child_systems_not_recursed"), "C5 反例：Gouttes de pluie 4k 130 带子系统，v1 不递归，不放行");
+        check(Codes(rainScreenVerdict).Contains("C5 child_type_unverified"), "C5 反例：Gouttes de pluie 4k 130 的子系统没写 type（static，常驻系统），没有核过，不放行");
+        // 事件子系统递归：水滴 153 在出生时各带一个 352 实例（子寿命 0.5 × 覆盖 2.0 / 1.29）；实例上限按 maxcount 32 ×（2 + ⌊子寿命 / 父寿命下界⌋）判。
+        Fixture Spawner(JsonNode? cap) => Mutate(droplets, (_, definition, _) => definition["children"] = new JsonArray(new JsonObject
+            { ["type"] = "eventspawn", ["name"] = "particles/particle-352.json", ["maxcount"] = cap }));
+        JsonObject EventChild(JsonNode? cap) => ParticleItems(Analyze([Spawner(cap), rain]), 153).Single()["particle_stationarity"]!.AsObject();
+        JsonObject spawned = EventChild(1000.0);
+        check(Stationary(spawned) && Near(Seconds(spawned, "lifetime_max_seconds"), 2 / 1.29 + 1 / 1.29) &&
+                Near(Seconds(spawned, "warmup_seconds"), 4 / 1.29 + 1 / 1.29) && Only(EventChild(null), "C5 child_instance_cap_binds"),
+            "C5 正例：eventspawn 子系统按实例递归判（封顶只在实例内），寿命与预热各加子寿命 0.775194 s；反例：缺省实例上限 20 < 32 × 2，会触顶，不放行");
 
         // ---- C6 材质 ----
         check(NoCondition(rainVerdict, "C6"), "C6 正例：genericparticle 且不带 REFRACT 组合");
@@ -404,7 +408,7 @@ internal static class ParticleStationarityChecks
             ResidualMasking.ResidualOwners(mixedResidual).SequenceEqual([153, 352]) &&
             blockedParticles.Select(item => item["owner_layer_id"]!.GetValue<int>()).Order().SequenceEqual([130, 560]) &&
             residualReport["candidates"]!.AsArray().OfType<JsonObject>().All(candidate => candidate["frames"]!.GetValue<ulong>() % 48 == 0) &&
-            blockedParticles.Single(item => item["owner_layer_id"]!.GetValue<int>() == 130)["reason"]!.GetValue<string>().Contains("C5 child_systems_not_recursed", StringComparison.Ordinal) &&
+            blockedParticles.Single(item => item["owner_layer_id"]!.GetValue<int>() == 130)["reason"]!.GetValue<string>().Contains("C5 child_type_unverified", StringComparison.Ordinal) &&
             blockedParticles.Single(item => item["owner_layer_id"]!.GetValue<int>() == 560)["reason"]!.GetValue<string>().Contains("C4 controlpoint_follows_cursor", StringComparison.Ordinal),
             "残差掩盖读真实粒子定义的判据结论：水滴 153 与锁定周期的雨透视 352 可掩盖（候选全是 48 帧的倍数）；带子系统的 130 与跟鼠标的 560 不可掩盖，理由列出条件代号");
         JsonArray stationaryItems = new([.. residualReport["unresolved"]!.AsArray().OfType<JsonObject>()
