@@ -194,7 +194,7 @@ internal sealed record ScriptFrameStepUnresolved(int OwnerLayerId, string Bindin
 {
     public const string Mechanism = "script_frame_step_lcm_over_ceiling";
     public override string Kind => "script_frame_step";
-    public override Message DetailMessage => new("unresolved." + Mechanism, [PeriodFrames?.ToString(CultureInfo.InvariantCulture) ?? JointFrames,
+    public override Message DetailMessage => new("unresolved.script_frame_step_lcm_over_ceiling", [PeriodFrames?.ToString(CultureInfo.InvariantCulture) ?? JointFrames,
         ScriptCount.ToString(CultureInfo.InvariantCulture), JointFrames]);
     public override JsonObject ToJson() => new() {
         ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId, ["binding"] = Binding, ["mechanism"] = Mechanism,
