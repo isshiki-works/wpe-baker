@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// 两条结构/证据判据，与任何单张壁纸无关。
-/// 规则一：一次性动画轨不得进入循环视频组。
+/// 规则一：事件触发的一次性动画轨不得进入循环视频组；加载即播的按入场处理（IntroSeconds）。
 /// 规则二：唯一视频组被不可搬动的实时绘制挡在后面时，full_frame 布局不可达。
 internal static class SingleShotAllocation
 {
@@ -19,17 +19,33 @@ internal static class SingleShotAllocation
     private static int? Number(JsonNode? node) =>
         node is JsonValue value && value.TryGetValue(out int id) ? id : null;
 
-    /// 运行时证据里 confidence=high、looping=false、playback_mode=single 的 authored 轨，其所属层
-    /// 在分配阶段判为实时：循环视频每个周期都会把只播一次的动画重播一遍，而原作在 t>duration 之后
-    /// 不再跳变，两者画面不一致。视频轨有自己的循环与时长判据，不走这条规则；confidence 不是 high
-    /// 时证据不足，维持既有的 loop.unresolved 路径，不提前下结论。
+    /// 运行时证据里 confidence=high、looping=false、playback_mode=single 的 authored 轨（视频轨有自己的循环与时长判据，不算）。
+    internal static bool IsSingleShot(JsonObject track) =>
+        !string.Equals(Text(track["mechanism"]), "video", StringComparison.OrdinalIgnoreCase) &&
+        Flag(track["looping"]) == false &&
+        string.Equals(Text(track["playback_mode"]), "single", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(Text(track["confidence"]), "high", StringComparison.OrdinalIgnoreCase);
+
+    /// 事件触发的单次动画轨（播放时刻不定）所属层判为实时。场景加载即播的单次轨不在此列：
+    /// 视频按入场结束后的定格态录制，入场那几秒成品显示原作图层（SceneAssembler.ApplyIntro）。
     internal static IEnumerable<int> LiveOwners(JsonObject runtime) =>
         (runtime["runtime_animation_periods"]?.AsArray() ?? []).OfType<JsonObject>()
-            .Where(track => !string.Equals(Text(track["mechanism"]), "video", StringComparison.OrdinalIgnoreCase) &&
-                Flag(track["looping"]) == false &&
-                string.Equals(Text(track["playback_mode"]), "single", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(Text(track["confidence"]), "high", StringComparison.OrdinalIgnoreCase))
+            .Where(track => IsSingleShot(track) && Flag(track["event_driven"]) == true)
             .Select(track => Number(track["source_owner_layer_id"])).OfType<int>();
+
+    /// 入场秒数：相机入场（projection.camera_intro）与进了视频组的图层加载即播单次轨（时长 / 速率）取最大；没有为 0。
+    internal static double IntroSeconds(JsonObject plan, JsonObject runtime)
+    {
+        var baked = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .SelectMany(group => (group["layer_ids"] as JsonArray ?? []).Select(Number)).OfType<int>().ToHashSet();
+        double layers = (runtime["runtime_animation_periods"]?.AsArray() ?? []).OfType<JsonObject>()
+            .Where(track => IsSingleShot(track) && Flag(track["event_driven"]) != true &&
+                Number(track["source_owner_layer_id"]) is int owner && baked.Contains(owner))
+            .Select(track => SceneGraph.Numeric(track["duration_seconds"], 0) /
+                SceneGraph.Numeric(track["playback_rate"] ?? track["current_rate"], 1))
+            .Where(double.IsFinite).DefaultIfEmpty(0).Max();
+        return Math.Max(layers, SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0));
+    }
 
     /// 唯一视频组不承担场景清屏、且决定这一点的那批前置可见绘制 live 根没有一个属于可提前景集合
     /// （occlusion_tradeoff.promoted_roots）时，返回这批阻挡根；否则返回空，表示这不是不可达情形。

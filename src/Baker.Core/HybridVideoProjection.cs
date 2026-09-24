@@ -170,7 +170,7 @@ internal static class HybridVideoProjection
                 report["center_x"] = canvas.X / 2 + (minX + maxX) / 2; report["center_y"] = canvas.Y / 2 + (minY + maxY) / 2;
                 report["visible_width"] = width / fit; report["visible_height"] = height / fit;
                 report["camera_intro"] = new JsonObject { ["seconds"] = seconds,
-                    ["tradeoff"] = "取景与合成门按相机入场动画结束后的静止态；入场那几秒成品是放大的视频，会发糊。" };
+                    ["tradeoff"] = "取景按相机入场动画结束后的静止态；入场那几秒成品显示原作图层，结束后切到视频（bake.json 的 intro_live）。" };
             }
         }
         return report;

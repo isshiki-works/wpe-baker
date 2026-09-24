@@ -46,8 +46,7 @@ internal sealed class Liveness
                 throw new InvalidDataException("A source script fault lacks a known authored owner; its allocation cannot be inferred safely.");
             Live(owner, "source_script_error");
         }
-        // 一次性动画轨的所属层必须实时绘制：循环视频会让只播一次的动画每个周期重播，
-        // 与原作播完即定格的画面不一致。判据与 HybridLoopService 读的是同一份轨道证据。
+        // 事件触发的一次性动画轨所属层实时绘制：播放时刻不定，循环视频表达不了。加载即播的见 SingleShotAllocation.IntroSeconds。
         foreach (int owner in SingleShotAllocation.LiveOwners(observation.Trace)) Live(owner, SingleShotAllocation.LiveReason);
         foreach (var dependency in observation.Dependencies.OfType<JsonObject>())
         {

@@ -368,7 +368,7 @@ public sealed class HybridBakeService(NativeTools tools)
         // 残差掩盖打开时：起点帧由解析周期内的接缝残差决定，成品在接缝处做固定窗口的整帧交叉淡化。
         // 起点是预热之后、解析周期内的相位；渲染器实际跳过的帧数是 warmupFrames + 起点。
         uint crossfadeFrames = 0;
-        ulong warmupFrames = 0;
+        ulong warmupFrames = 0, introFrames = 0;
         int[] residualGroupIndexes = [];
         string playbackKind = PlaybackEncoderSelection.Software;
         string? playbackFallbackReason = null;
@@ -395,6 +395,10 @@ public sealed class HybridBakeService(NativeTools tools)
                 report["particle_warmup_frames"] = warmupFrames;
                 report["particle_warmup_seconds"] = residualMasking["max_warmup_seconds"]?.DeepClone();
             }
+            // 单次入场动画：视频从入场结束后录（定格态），入场那几秒成品显示原作图层（SceneAssembler.ApplyIntro）。
+            if (daytimeExport is null)
+                warmupFrames += introFrames = (ulong)Math.Ceiling(SingleShotAllocation.IntroSeconds(plan, initialRuntime) *
+                    settings.FpsNumerator / settings.FpsDenominator);
             report["full_render_attempt_limit"] = probe ? 0 : 1;
             report["automatic_full_render_retries"] = false;
             // 含可掩盖残差层的组：它们的 master 多渲一个淡化窗口、各自测第一层并淡化；其余组照常渲 P 帧，相位同样是 warmup + S。
@@ -457,7 +461,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 if (settings.ViewMode == "fixed_view") scene["general"]!["cameraparallax"] = false;
                 int nextId = checked(originalObjects.Keys.Max() + 1);
                 var replacements = new Dictionary<string, JsonObject>();
-                int staticLayers = 0;
+                var staticIds = new HashSet<int>();
                 var encoder = new GroupEncoder(runner, request, playbackKind, playbackFallbackReason, progress, timing);
                 var startAttempts = new JsonArray();
                 // 这一轮各残差组的第一层读数，组成本次起点尝试的记录。
@@ -590,7 +594,6 @@ public sealed class HybridBakeService(NativeTools tools)
                             throw new InvalidDataException("Full-frame output was not opaque. The candidate was stopped instead of switching to transparent video.");
                         var (encoded, crop, video) = await encoder.EncodeAsync(master, masterPath, work, capture, isStatic, directPlayback,
                             gpuDirect, packedAlpha, cancellationToken);
-                        if (isStatic) ++staticLayers;
                         long encodedBytes = isStatic ? 0 : new FileInfo(video).Length;
                         if (!probe && encodedBytes > EmbeddedVideoBudget.MaximumBytes)
                         {
@@ -654,6 +657,7 @@ public sealed class HybridBakeService(NativeTools tools)
                         if (daytimeExport is not null)
                             daytimeExport.BindReplacement(layer, originalObjects[daytimeExport.ReplacementTargets[id]], isStatic);
                         replacements[id] = layer;
+                        if (isStatic) staticIds.Add(SceneGraph.Id(layer));
                         report["groups"]!.AsArray().Add(GroupVerdicts.Encoded(id, layers, layer, isStatic, packedAlpha, encoded, video, capture,
                             lateDependencyValidation, seam, hardwareDecode, master, gpuDirect, directPlayback, groupSeamResidual, groupCrossfade,
                             seamPreview));
@@ -677,6 +681,10 @@ public sealed class HybridBakeService(NativeTools tools)
                 using (timing.Measure(StageTiming.ProjectAssembly))
                 {
                     finalObjects = SceneAssembler.AssembleObjects(originalObjects, plan, replacements, finalDependencies);
+                    if (introFrames > 0 && replacements.Count > 0)
+                        report["intro_live"] = SceneAssembler.ApplyIntro(finalObjects, originalObjects, plan, replacements, staticIds,
+                            finalDependencies, snapshot, introFrames, groupScheduler.Framing(0).MasterWarmupFrames, frames,
+                            settings.FpsNumerator, settings.FpsDenominator);
                     // 记下按"不绘制但带脚本"规则额外保留的根对象，事后核对用。
                     report["retained_script_root_ids"] = JsonSerializer.SerializeToNode(SceneAssembler.ScriptRootIds(originalObjects, plan));
                     if (daytimeExport is not null)
@@ -704,8 +712,8 @@ public sealed class HybridBakeService(NativeTools tools)
                     .Where(g => g["status"]?.GetValue<string>() == "encoded").ToArray();
                 bool seamsPass = !probe && encodedGroups.All(g =>
                     g["encoded_loop_validation"]?["status"]?.GetValue<string>() == "observed_seam_pass");
-                report["video_layers"] = replacements.Count - staticLayers;
-                report["static_layers"] = staticLayers;
+                report["video_layers"] = replacements.Count - staticIds.Count;
+                report["static_layers"] = staticIds.Count;
                 // 1 帧、0 个视频层的结果单列 static_only：candidate_generated 只给真的含视频循环的成品。
                 report["status"] = probe ? "probe_generated"
                     : !seamsPass ? "candidate_rejected_seam"
