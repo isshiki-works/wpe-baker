@@ -138,7 +138,7 @@ internal sealed class Composer
             foreach (var (overlay, membersBefore) in deferred)
             {
                 rootSequence.Add(new JsonObject { ["live_root"] = overlay });
-                if (current.Count > membersBefore) crossed[overlay] = current.Skip(membersBefore).ToArray();
+                if (current.Count > membersBefore && overlayRoots.Contains(overlay)) crossed[overlay] = current.Skip(membersBefore).ToArray();
             }
             deferred.Clear();
             current.Clear();
@@ -156,7 +156,9 @@ internal sealed class Composer
                 {
                     if (current.Count > 0 && (ParentOf(current[0]) != ParentOf(root) ||
                         sourceOrder.Any(id => Int(objects[id]["parent"]) == root))) Flush();
-                    rootSequence.Add(new JsonObject { ["live_root"] = root });
+                    // 原位模式下成品按声明顺序排，组视频在最早成员处：夹在组内的隐藏实时根也接在组后。
+                    if (inPlace && current.Count > 0) deferred.Add((root, current.Count));
+                    else rootSequence.Add(new JsonObject { ["live_root"] = root });
                 }
                 continue;
             }
