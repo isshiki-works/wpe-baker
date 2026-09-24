@@ -43,6 +43,16 @@ public static class EmbeddedVideoBudget
         return ReferenceLowBytesPerFrame * Math.Pow(encodedPixels / ReferenceLowPixels, ReferencePixelExponent);
     }
 
+    /// <summary>
+    /// 硬件编码成品相对参考码率（x264 crf16）的体积倍数：HW1b 实测 NVENC cq22 在参考作品 3572877776 上为 1.555 倍
+    /// （runs/hw1b）。analyze 不知道烘焙用哪个编码器，所以不收紧循环上限；bake 选硬件档位时按它预判，超限的组改用软件编码。
+    /// </summary>
+    public const double HardwareBytesRatio = 1.555;
+
+    /// <summary>按参考码率 × <see cref="HardwareBytesRatio"/> 外推，硬件编码 frames 帧会超过上限。</summary>
+    public static bool HardwareOverBudget(ulong frames, uint width, uint height, bool packedAlpha) =>
+        frames * ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)) * HardwareBytesRatio > MaximumBytes;
+
     /// <summary>参考码率下装得进上限的最多帧数。</summary>
     public static ulong ReferenceMaximumFrames(uint width, uint height, bool packedAlpha) =>
         (ulong)Math.Floor(MaximumBytes / ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)));
