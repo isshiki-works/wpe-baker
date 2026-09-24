@@ -33,7 +33,7 @@ internal static class LoopStartSelector
                     $"在锁定的解析周期内按接缝残差挑选起点帧（组 {searchId}，预热 {scheduler.SearchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {ResidualMasking.SearchWindowPeriods} 个周期）。"));
                 var scores = new List<ResidualStartCandidate>();
                 JsonObject search = await runner.SearchLoopStartAsync(scheduler.StartSearchRequest(group, capture, sampleStride),
-                    scheduler.Frames, scheduler.CrossfadeFrames, progress, cancellationToken, residualGroups.Length > 1 ? scores : null);
+                    scheduler.Frames, scheduler.CrossfadeFrames, scheduler.TileScale, progress, cancellationToken, residualGroups.Length > 1 ? scores : null);
                 search["group_id"] = searchId;
                 scheduler.StartSearches.Add(searchId, search);
                 searches.Add((search, scores));

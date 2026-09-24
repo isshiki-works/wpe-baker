@@ -529,7 +529,8 @@ public sealed class HybridBakeService(NativeTools tools)
                                 "在全分辨率下测量淡化窗口内每一帧的接缝残差。"));
                             JsonObject wrap;
                             using (timing.Measure(StageTiming.SeamCheck))
-                                wrap = await runner.MeasureSeamResidualAsync(masterPath, frames, crossfadeFrames, cancellationToken);
+                                wrap = await runner.MeasureSeamResidualAsync(masterPath, frames, crossfadeFrames, cancellationToken,
+                                    SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height));
                             wrap["limits"] = ResidualMasking.Thresholds();
                             bool firstLayer = wrap["first_layer"]!["passed"]!.GetValue<bool>();
                             wrap["group_id"] = id;
