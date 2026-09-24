@@ -15,29 +15,32 @@ internal static class LoopStartSelector
     /// 与各组搜索记录；返回合成后的搜索记录（bake.json 的 loop_start_search）。
     /// 采样步长取 gcd(P, 16)：周期不是 16 的倍数时步长缩小、候选变多，不再因对齐问题抛异常。
     /// </summary>
-    internal static async Task<JsonObject> SearchAsync(NativeRenderRunner runner, GroupRenderScheduler scheduler,
+    internal static async Task<JsonObject> SearchAsync(NativeRenderRunner runner, GroupRenderScheduler scheduler, int parallel,
         IProgress<RenderProgress>? progress, StageTiming timing, CancellationToken cancellationToken)
     {
         uint sampleStride = ResidualMasking.StartSearchStride(scheduler.Frames);
         int[] residualGroups = scheduler.ResidualGroupIndexes;
-        var searches = new List<(JsonObject Search, IReadOnlyList<ResidualStartCandidate> Candidates)>();
+        // 各组评分互不依赖：请求先按组序建好，最多 parallel 个同时跑；结果仍按组序登记与合成，与逐组串行逐字节相同。
+        var requests = residualGroups.Select(groupIndex => scheduler.Groups[groupIndex])
+            .Select(group => (Id: group["id"]!.GetValue<string>(), Request: scheduler.StartSearchRequest(group, scheduler.Capture(group), sampleStride)))
+            .ToArray();
+        var searches = new (JsonObject Search, IReadOnlyList<ResidualStartCandidate> Candidates)[requests.Length];
         JsonObject startSearch;
         using (timing.Measure(StageTiming.LoopStartSearch))
         {
-            foreach (int groupIndex in residualGroups)
-            {
-                JsonObject group = scheduler.Groups[groupIndex];
-                string searchId = group["id"]!.GetValue<string>();
-                GroupCapture capture = scheduler.Capture(group);
-                progress?.Report(new("searching_loop_start", 0,
-                    $"在锁定的解析周期内按接缝残差挑选起点帧（组 {searchId}，预热 {scheduler.SearchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {ResidualMasking.SearchWindowPeriods} 个周期）。"));
-                var scores = new List<ResidualStartCandidate>();
-                JsonObject search = await runner.SearchLoopStartAsync(scheduler.StartSearchRequest(group, capture, sampleStride),
-                    scheduler.Frames, scheduler.CrossfadeFrames, scheduler.TileScale, progress, cancellationToken, residualGroups.Length > 1 ? scores : null);
-                search["group_id"] = searchId;
-                scheduler.StartSearches.Add(searchId, search);
-                searches.Add((search, scores));
-            }
+            await Parallel.ForEachAsync(Enumerable.Range(0, requests.Length),
+                new ParallelOptions { MaxDegreeOfParallelism = parallel, CancellationToken = cancellationToken }, async (slot, token) =>
+                {
+                    progress?.Report(new("searching_loop_start", 0,
+                        $"在锁定的解析周期内按接缝残差挑选起点帧（组 {requests[slot].Id}，预热 {scheduler.SearchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {ResidualMasking.SearchWindowPeriods} 个周期）。"));
+                    var scores = new List<ResidualStartCandidate>();
+                    JsonObject search = await runner.SearchLoopStartAsync(requests[slot].Request,
+                        scheduler.Frames, scheduler.CrossfadeFrames, scheduler.TileScale, progress, token, requests.Length > 1 ? scores : null);
+                    search["group_id"] = requests[slot].Id;
+                    searches[slot] = (search, scores);
+                });
+            for (int slot = 0; slot < requests.Length; ++slot)
+                scheduler.StartSearches.Add(requests[slot].Id, searches[slot].Search);
             startSearch = NativeRenderRunner.CombineLoopStartSearches(searches);
         }
         scheduler.StartFrame = startSearch["selected_start_frame"]!.GetValue<ulong>();

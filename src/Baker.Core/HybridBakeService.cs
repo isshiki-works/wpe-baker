@@ -7,12 +7,13 @@ namespace Baker.Core;
 
 public sealed record HybridBakeRequest(int SchemaVersion, JsonObject Plan, string OutputDirectory,
     ulong ProbeFrames = 0, string? DeviceUuid = null, string? ProjectDirectory = null,
-    // 播放版编码档位：software（默认）/ vulkan / nvenc / qsv / amf / auto；Vulkan 可直接生成成品。
+    // 播放版编码档位：auto（默认，本机 GPU 路线优先）/ software / vulkan / mf / nvenc / qsv / amf；Vulkan 可直接生成成品。
     string? PlaybackEncoder = null,
     // 成品编码的跨进程槽位配额：0 = 不限。多槽并行跑批时用它压住 ffmpeg 抢核，渲染不受限制。
     int EncodeSlots = 0,
-    // 单案内同时在飞的组主渲染数：1 = 与逐组串行完全一致。组的判定、编码与写入始终按组序串行。
-    int GroupParallel = 1,
+    // 单案内同时在飞的组主渲染（及起点搜索）数：1 = 逐组串行；0 = 默认，GPU 路线取 min(组数, 3)，其余路线 1。
+    // 组的判定、编码与写入始终按组序串行，成品与逐组串行逐字节相同。
+    int GroupParallel = 0,
     // 开发用：保留中间产物（capture-source、各组 master、合成探针与参照、分析刷新目录）。
     // 默认 false —— 正常结束、拒绝与失败都会删掉它们，只留成品工程、bake.json、失败诊断与日志。
     // 开启时还记录编码接缝差分并导出成功任务的接缝预览。
@@ -407,11 +408,14 @@ public sealed class HybridBakeService(NativeTools tools)
             // 直编组要在渲染开始前就定下播放档位（编码器随渲染一起启动），所以档位解析提到所有渲染之前，整次烘焙只解析一次。
             // master 路线拿解析后的档位：auto 选了 vulkan 时，走 master 的组用软件编码，不再落到经管道的 ffmpeg 硬件档。
             (playbackKind, playbackFallbackReason) = await runner.ResolvePlaybackEncoderAsync(request.PlaybackEncoder, output, token);
+            // 没指定组并行时，GPU 路线的编码在显卡上、不抢 CPU，组、起点搜索与覆盖度预通道最多 3 路同时跑。
+            if (request.GroupParallel == 0 && playbackKind == PlaybackEncoderSelection.Vulkan)
+                report["group_parallel"] = groupParallel = Math.Clamp(3, 1, Math.Max(1, groups.Length));
             scheduler = new GroupRenderScheduler(runner, request, plan, settings, groups, captureProject, output, snapshot, frames,
                 crossfadeFrames, warmupFrames, residualGroupIndexes, groupParallel, playbackKind, progress, token);
             if (residualMasking is not null && !probe)
             {
-                startSearch = await LoopStartSelector.SearchAsync(runner, scheduler, progress, timing, token);
+                startSearch = await LoopStartSelector.SearchAsync(runner, scheduler, groupParallel, progress, timing, token);
                 startOrder = LoopStartSelector.Order(startSearch);
                 report["loop_start_search"] = startSearch.DeepClone();
                 report["source_start_frame"] = checked(warmupFrames + scheduler.StartFrame);
