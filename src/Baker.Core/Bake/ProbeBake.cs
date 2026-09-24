@@ -18,7 +18,10 @@ internal sealed class ProbeBake(NativeTools tools)
         HybridBakeService.EnsureNewDerivedOutput(source, probeOutput, "Composition probe output");
         string? selectedDevice = request.DeviceUuid ?? settings.DeviceUuid;
         progress?.Report(new("checking_composition", 0, "Generating a short candidate to check complete scene composition."));
-        JsonObject probe = await baker.BakeAsync(new(2, plan, probeOutput, CompositionGate.RequiredFrames,
+        // 相机入场动画期间成品是放大的视频（已知取舍，见 projection.camera_intro）：探针多烘这段，参照与成品都从入场结束后开始比。
+        ulong introFrames = (ulong)Math.Ceiling(SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0) *
+            settings.FpsNumerator / settings.FpsDenominator);
+        JsonObject probe = await baker.BakeAsync(new(2, plan, probeOutput, introFrames + CompositionGate.RequiredFrames,
             selectedDevice, EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution), progress, cancellationToken);
         // 探针跑完后与原来单独的比较段一样：按计划重新打开源、重读设置并复核哈希，短烘焙期间源被改过就不比了。
@@ -52,7 +55,7 @@ internal sealed class ProbeBake(NativeTools tools)
         PairedComparison comparison = await new CandidateValidation(tools).CompareAsync(new ValidationRequest(
             1, comparisonReference, project, planSettings.Assets, comparisonOutput, planSettings.Width, planSettings.Height,
             planSettings.FpsNumerator, planSettings.FpsDenominator, CompositionGate.RequiredFrames,
-            WarmupFrames: 0, Seed: 17, DeviceUuid: planSettings.DeviceUuid,
+            WarmupFrames: introFrames, Seed: 17, DeviceUuid: planSettings.DeviceUuid,
             UserProperties: comparisonProperties,
             Input: new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
             TileSize: (uint)Math.Round(CompositionGate.RequiredTileSize *
