@@ -138,9 +138,8 @@ public sealed class HybridBakeService(NativeTools tools)
                 $"Video group {groupId} did not close on its own {groupFrames}-frame period; recording it at the full loop length and baking once more."));
             return await RetryReplannedAsync(request, result, "group_period_fallback", $".{groupId}-own-period-attempt", new JsonObject {
                     ["group_id"] = groupId, ["group_frames"] = groupFrames, ["loop_frames"] = result["frames"]?.DeepClone(),
-                    ["full_loop_layer_ids"] = JsonSerializer.SerializeToNode(fullLoop),
-                    ["reason"] = $"{groupId} recorded its own {groupFrames}-frame period (shorter than the loop length) and failed the seam check; " +
-                        "this group is recorded at the full loop length instead." },
+                    // 原因码：按自身周期录的组被接缝门拒绝；拒绝原文见 first_reason_localized。
+                    ["full_loop_layer_ids"] = JsonSerializer.SerializeToNode(fullLoop), ["reason"] = "own_period_seam_rejected" },
                 settings => settings with { FullLoopLayerIds = fullLoop }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
         if (ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
