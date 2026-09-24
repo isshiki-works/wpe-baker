@@ -5,7 +5,7 @@
 
     <Style TargetType="Button">
         <Setter Property="Padding" Value="12,6"/><Setter Property="Margin" Value="0,0,8,8"/><Setter Property="MinHeight" Value="32"/>
-        <Setter Property="Background" Value="{DynamicResource Card}"/><Setter Property="BorderBrush" Value="{DynamicResource Stroke2}"/>
+        <Setter Property="Background" Value="{DynamicResource Field}"/><Setter Property="BorderBrush" Value="{DynamicResource Stroke2}"/>
         <Setter Property="Foreground" Value="{DynamicResource Ink}"/><Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
             <Border x:Name="Surface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
@@ -14,7 +14,9 @@
             </Border><ControlTemplate.Triggers>
                 <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Opacity" Value="0.85"/></Trigger>
                 <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Opacity" Value="0.7"/></Trigger>
-                <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.45"/></Trigger>
+                <!-- 禁用：换成中性底 + Ink3 字（整体降不透明度在玻璃上会糊成一片）。 -->
+                <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Field}"/>
+                    <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource Stroke}"/><Setter Property="Foreground" Value="{DynamicResource Ink3}"/></Trigger>
             </ControlTemplate.Triggers>
         </ControlTemplate></Setter.Value></Setter>
     </Style>
@@ -31,7 +33,7 @@
     </Style>
 
     <Style TargetType="TextBox">
-        <Setter Property="Padding" Value="8,6"/><Setter Property="Background" Value="{DynamicResource Card}"/>
+        <Setter Property="Padding" Value="8,6"/><Setter Property="Background" Value="{DynamicResource Field}"/>
         <Setter Property="Foreground" Value="{DynamicResource Ink}"/><Setter Property="BorderBrush" Value="{DynamicResource Stroke2}"/>
         <Setter Property="CaretBrush" Value="{DynamicResource Ink}"/><Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox">
@@ -57,14 +59,14 @@
     </Style>
     <Style TargetType="ComboBox">
         <Setter Property="MinHeight" Value="32"/><Setter Property="Foreground" Value="{DynamicResource Ink}"/>
-        <Setter Property="Background" Value="{DynamicResource Card}"/><Setter Property="BorderBrush" Value="{DynamicResource Stroke2}"/>
+        <Setter Property="Background" Value="{DynamicResource Field}"/><Setter Property="BorderBrush" Value="{DynamicResource Stroke2}"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ComboBox">
             <Grid>
                 <ToggleButton Focusable="False" ClickMode="Press" Cursor="Hand"
                               IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                     <ToggleButton.Template><ControlTemplate TargetType="ToggleButton">
-                        <Border x:Name="Frame" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Stroke2}" BorderThickness="1" CornerRadius="4">
+                        <Border x:Name="Frame" Background="{DynamicResource Field}" BorderBrush="{DynamicResource Stroke2}" BorderThickness="1" CornerRadius="4">
                             <TextBlock Text="&#xE70D;" FontFamily="{StaticResource Icons}" FontSize="10" Foreground="{DynamicResource Ink2}"
                                        HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"/>
                         </Border><ControlTemplate.Triggers>
@@ -85,7 +87,7 @@
                          VerticalContentAlignment="Center" IsReadOnly="{TemplateBinding IsReadOnly}"/>
                 <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True"
                        Focusable="False" PopupAnimation="Fade">
-                    <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Stroke2}" BorderThickness="1" CornerRadius="6"
+                    <Border Background="{DynamicResource Solid}" BorderBrush="{DynamicResource Stroke2}" BorderThickness="1" CornerRadius="6"
                             Padding="4" Margin="0,4,0,0" MaxHeight="{TemplateBinding MaxDropDownHeight}"
                             MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
                         <ScrollViewer><ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/></ScrollViewer>
@@ -108,7 +110,7 @@
             <Grid Background="Transparent">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
                 <Border x:Name="Box" Width="18" Height="18" CornerRadius="4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0"
-                        BorderBrush="{DynamicResource Ink2}" Background="{DynamicResource Card}">
+                        BorderBrush="{DynamicResource Ink2}" Background="{DynamicResource Field}">
                     <TextBlock x:Name="Mark" Text="&#xE73E;" FontFamily="{StaticResource Icons}" FontSize="12" Visibility="Collapsed"
                                Foreground="{DynamicResource AccentInk}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
@@ -183,10 +185,14 @@
     <Style x:Key="Group" TargetType="TextBlock"><Setter Property="FontSize" Value="14"/><Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="Margin" Value="0,0,0,8"/></Style>
     <Style x:Key="Note" TargetType="TextBlock"><Setter Property="FontSize" Value="12"/><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="Foreground" Value="{DynamicResource Ink2}"/></Style>
-    <!-- 窗格（80% 不透明）与卡片（不透明）：小字只放在这两种底上，不直接压在云母/亚克力上。 -->
-    <Style x:Key="PaneStyle" TargetType="Border"><Setter Property="Background" Value="{DynamicResource Pane}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource Stroke}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="8"/></Style>
-    <Style x:Key="CardStyle" TargetType="Border"><Setter Property="Background" Value="{DynamicResource Card}"/>
+    <!-- 玻璃卡片：窗口本身不铺底色，内容都放在这种半透明卡片上（文字只落在卡片或实色小底衬上）。
+         顶部渐变高光描边做玻璃边缘，下方柔和阴影做景深。 -->
+    <Style x:Key="Glass" TargetType="Border"><Setter Property="Background" Value="{DynamicResource Card}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Edge}"/><Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="10"/><Setter Property="Padding" Value="16"/>
+        <Setter Property="Effect"><Setter.Value><DropShadowEffect BlurRadius="18" ShadowDepth="3" Direction="270" Opacity="0.2"/></Setter.Value></Setter></Style>
+    <!-- 卡片里的内嵌块（预览卡、步骤标签）。 -->
+    <Style x:Key="Inset" TargetType="Border"><Setter Property="Background" Value="{DynamicResource Field}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource Stroke}"/><Setter Property="BorderThickness" Value="1"/>
         <Setter Property="CornerRadius" Value="8"/><Setter Property="Padding" Value="14"/></Style>
 </ResourceDictionary>

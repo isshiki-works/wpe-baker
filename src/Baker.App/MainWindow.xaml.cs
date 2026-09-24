@@ -283,7 +283,7 @@ public partial class MainWindow : Window
     private string SelectedPlaybackEncoder() =>
         PlaybackEncoderSelection.Normalize((EncoderBox.SelectedItem as ComboBoxItem)?.Content as string);
 
-    /// <summary>画面尺寸两格：都留空得 0×0（分析时按场景画布取值），都填正整数得指定尺寸，其余视为无效。</summary>
+    /// <summary>画面尺寸两格：都留空得 0×0（按屏幕分辨率），都填正整数得指定尺寸，其余视为无效。</summary>
     private bool TryFrameSize(out uint width, out uint height)
     {
         string widthText = WidthBox.Text.Trim(), heightText = HeightBox.Text.Trim();
@@ -296,7 +296,7 @@ public partial class MainWindow : Window
     private PresetSettings CurrentPresetSettings()
     {
         if (!TryFrameSize(out uint width, out uint height))
-            throw new InvalidDataException("Frame width and height must both be positive integers, or both empty to use the scene canvas size.");
+            throw new InvalidDataException("Frame width and height must both be positive integers, or both empty to use the screen resolution.");
         // 剩余实时图层置顶与简化文字效果两个开关已从界面移除：置顶固定为开（--live-overlays foreground），
         // 简化文字效果固定为原默认值（关，即 preserve）。
         return new(width, height, FpsBox.Text.Trim(),
@@ -457,7 +457,7 @@ public partial class MainWindow : Window
             {
                 sourcePropertyDefinitions = definitions;
                 analysisPreviewOverrides = preset.Properties.DeepClone().AsObject();
-                // 0×0 是"按场景画布"，界面上表现为两格留空。
+                // 0×0 是"按屏幕分辨率"，界面上表现为两格留空。
                 WidthBox.Text = preset.Settings.Width == 0 ? "" : preset.Settings.Width.ToString(CultureInfo.InvariantCulture);
                 HeightBox.Text = preset.Settings.Height == 0 ? "" : preset.Settings.Height.ToString(CultureInfo.InvariantCulture);
                 FpsBox.Text = preset.Settings.Fps;
@@ -504,7 +504,7 @@ public partial class MainWindow : Window
             var gpu = GpuBox.SelectedItem as VulkanDeviceInfo;
             string output = Path.Combine(Path.GetTempPath(), "WpeBaker", "analysis-" + Guid.NewGuid().ToString("N"));
             if (!TryFrameSize(out uint width, out uint height))
-                throw new InvalidDataException("Frame width and height must both be positive integers, or both empty to use the scene canvas size.");
+                throw new InvalidDataException("Frame width and height must both be positive integers, or both empty to use the screen resolution.");
             // 属性底值是用户在 Wallpaper Engine 里的设置，面板里的改动覆盖在上；来源记录写进 plan。
             var (properties, propertiesOrigin) = AppJsonPresentation.MergeWpeProperties(sourceWpeProperties, sourcePropertyDefinitions, analysisPreviewOverrides);
             // 控件 → AnalyzeOptions → 请求，与 CLI 的选项表同一个工厂。档位走同一条 RetimeProfile 路径；摆动改频三档都开（设计 §3），
@@ -1236,7 +1236,7 @@ public partial class MainWindow : Window
             var controller = new WallpaperController(executable);
             var targets = await controller.ReadTargetsAsync();
             if (WpeExeBox.Text.Trim() != executable) return;
-            TargetBox.ItemsSource = targets.Select(t => new TargetItem(t)).ToArray();
+            TargetBox.ItemsSource = targets.Select(t => new TargetItem(t, ScreenName(t.Location) + " · " + t.Profile)).ToArray();
             TargetBox.SelectedIndex = -1;
             var activeTargets = await controller.ReadCurrentTargetsAsync();
             var current = new List<CurrentWallpaperItem>();
@@ -1258,11 +1258,11 @@ public partial class MainWindow : Window
                     }
                     string evidence = observed.Evidence == "official_getWallpaper"
                         ? L("当前壁纸", "Current wallpaper") : L("当前屏幕的已保存设置", "Saved setting for the current screen");
-                    current.Add(new(target.Location + " · " + title, source, evidence + ": " + source, title, preview));
+                    current.Add(new(ScreenName(target.Location) + " · " + title, source, evidence + ": " + source, title, preview));
                 }
                 catch (Exception error)
                 {
-                    current.Add(new(target.Location + L(" · 无法导入", " · Cannot import"), null,
+                    current.Add(new(ScreenName(target.Location) + L(" · 无法导入", " · Cannot import"), null,
                         error.Message));
                 }
             }
@@ -1419,7 +1419,7 @@ public partial class MainWindow : Window
         {
             string executable = WpeExeBox.Text;
             var targets = Task.Run(() => new WallpaperController(executable).ReadTargetsAsync()).GetAwaiter().GetResult();
-            TargetBox.ItemsSource = targets.Select(t => new TargetItem(t)).ToArray(); TargetBox.SelectedIndex = -1;
+            TargetBox.ItemsSource = targets.Select(t => new TargetItem(t, ScreenName(t.Location) + " · " + t.Profile)).ToArray(); TargetBox.SelectedIndex = -1;
         }
         if (completedBake is not null)
         {
@@ -1459,7 +1459,7 @@ public partial class MainWindow : Window
     {
         internal static System.Windows.Media.Brush Ok => Token("AccentText");
         internal static System.Windows.Media.Brush Bad => Token("BadText");
-        internal static System.Windows.Media.Brush Busy => Token("AccentText");
+        internal static System.Windows.Media.Brush Busy => Token("BusyText");
         internal static System.Windows.Media.Brush Muted => Token("Ink2");
         private static System.Windows.Media.Brush Token(string key) => (System.Windows.Media.Brush)Application.Current.Resources[key];
     }
@@ -1490,8 +1490,10 @@ public partial class MainWindow : Window
     private static readonly bool BackdropSupported = Environment.OSVersion.Version.Build >= 22621;
     private void BackdropChanged(object sender, SelectionChangedEventArgs e) => ApplyBackdrop();
 
-    /// <summary>窗口背景：下拉 0 不透明 / 1 云母 / 2 亚克力，对应 DWMWA_SYSTEMBACKDROP_TYPE 的 1 无 / 2 云母 / 3 亚克力。
-    /// 系统关了透明效果、窗口失焦时 DWM 自己退回纯色；文字都在窗格（80%）和卡片（不透明）上，纯色底上同样成立。</summary>
+    /// <summary>窗口背景：下拉 0 不透明 / 1 云母（DWMSBT_MAINWINDOW）/ 2 亚克力。
+    /// 系统亚克力（DWMSBT_TRANSIENTWINDOW）色调不可调、偏不透明，桌面几乎透不过来；这里改用
+    /// SetWindowCompositionAttribute 的 ACCENT_ENABLE_ACRYLICBLURBEHIND（未公开 API），色调与不透明度取颜色键 Tint。
+    /// 文字都在半透明卡片上，对比度按卡片背后纯黑/纯白的最坏情况定（见 Tokens.*.xaml 顶部注释）。</summary>
     private void ApplyBackdrop()
     {
         int choice = BackdropSupported ? Math.Max(BackdropBox.SelectedIndex, 0) : 0;
@@ -1499,24 +1501,44 @@ public partial class MainWindow : Window
         else Background = System.Windows.Media.Brushes.Transparent;
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
-        int darkMode = dark ? 1 : 0, backdrop = choice + 1;
+        int darkMode = dark ? 1 : 0, backdrop = choice == 1 ? 2 : 1;
         DwmSetWindowAttribute(hwnd, 20, ref darkMode, sizeof(int)); // DWMWA_USE_IMMERSIVE_DARK_MODE：标题栏跟着明暗
-        if (BackdropSupported) DwmSetWindowAttribute(hwnd, 38, ref backdrop, sizeof(int));
+        if (!BackdropSupported) return;
+        DwmSetWindowAttribute(hwnd, 38, ref backdrop, sizeof(int));
+        // DWMWA_CAPTION_COLOR：不透明时标题栏与正文同色（COLORREF 0x00BBGGRR），其余交回系统（DWMWA_COLOR_DEFAULT）。
+        var bg = ((System.Windows.Media.SolidColorBrush)FindResource("Bg")).Color;
+        int caption = choice == 0 ? bg.R | bg.G << 8 | bg.B << 16 : -1;
+        DwmSetWindowAttribute(hwnd, 35, ref caption, sizeof(int));
+        var tint = (System.Windows.Media.Color)FindResource("Tint");
+        var accent = new AccentPolicy(choice == 2 ? 4 : 0, 2, tint.A << 24 | tint.B << 16 | tint.G << 8 | tint.R, 0); // 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND，颜色 0xAABBGGRR
+        IntPtr data = Marshal.AllocHGlobal(Marshal.SizeOf<AccentPolicy>());
+        try
+        {
+            Marshal.StructureToPtr(accent, data, false);
+            var attribute = new CompositionAttribute(19, data, Marshal.SizeOf<AccentPolicy>()); // 19 = WCA_ACCENT_POLICY
+            SetWindowCompositionAttribute(hwnd, ref attribute);
+        }
+        finally { Marshal.FreeHGlobal(data); }
     }
 
     private record struct Margins(int Left, int Right, int Top, int Bottom);
+    private record struct AccentPolicy(int State, int Flags, int Color, int AnimationId);
+    private record struct CompositionAttribute(int Attribute, IntPtr Data, nint Size);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref Margins margins);
+    [DllImport("user32.dll")] private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref CompositionAttribute attribute);
 
     private abstract class ObservableItem : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler? PropertyChanged;
         protected void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
     }
-    private sealed record TargetItem(WallpaperTarget Target)
-    {
-        public string Label => $"{Target.Location} · {Target.Profile}";
-    }
+    private sealed record TargetItem(WallpaperTarget Target, string Label);
+
+    /// <summary>Wallpaper Engine 的屏幕位置名 MonitorN（从 0 数）显示成"显示器 N+1"；认不出的原样显示。</summary>
+    private string ScreenName(string location) =>
+        location.StartsWith("Monitor", StringComparison.Ordinal) && int.TryParse(location.AsSpan(7), out int index)
+            ? L("显示器 ", "Display ") + (index + 1) : location;
     private sealed record CurrentWallpaperItem(string Label, string? Source, string Detail, string? Title = null,
         System.Windows.Media.ImageSource? Preview = null);
 
@@ -1550,8 +1572,15 @@ public partial class MainWindow : Window
         public uint FpsNumerator => PlanSettings.Of(Request.Plan).FpsNumerator;
         public uint FpsDenominator => PlanSettings.Of(Request.Plan).FpsDenominator;
         public string? DeviceUuid => Request.DeviceUuid ?? PlanSettings.Of(Request.Plan).DeviceUuid;
-        public string Title => Path.GetFileName(Directory.Exists(Source) ? Source.TrimEnd(Path.DirectorySeparatorChar) : Path.GetDirectoryName(Source)) ?? "Wallpaper";
-        public string Settings => $"{FpsNumerator}/{FpsDenominator} fps · {GpuName}";
+        public string Title { get; } = WallpaperTitle(request.Plan["source"]!.GetValue<string>());
+        // 壁纸名取 project.json 的 title，读不到就用目录名（工坊 ID）。
+        private static string WallpaperTitle(string source)
+        {
+            string folder = Directory.Exists(source) ? source.TrimEnd(Path.DirectorySeparatorChar) : Path.GetDirectoryName(source) ?? source;
+            try { return JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "project.json")))?["title"]?.GetValue<string>() ?? Path.GetFileName(folder); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return Path.GetFileName(folder); }
+        }
+        public string Settings => (FpsDenominator == 1 ? $"{FpsNumerator}" : $"{FpsNumerator / (double)FpsDenominator:0.##}") + $" fps · {GpuName}";
         public string State { get; set; } = "queued";
         public string StatusText { get; private set; } = "";
         // 队列里用颜色区分状态：完成绿、失败/取消红、进行中蓝、等待灰。
