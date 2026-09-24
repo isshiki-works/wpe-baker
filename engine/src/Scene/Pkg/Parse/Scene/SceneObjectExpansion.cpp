@@ -209,7 +209,7 @@ HashSet<i32> CollectHiddenLinkedSourceIds(ref<wpscene::SceneDocument>  document,
 }
 
 template<typename T>
-bool PrepareSceneObject(T& object, const NJson* user_properties,
+void PrepareSceneObject(T& object, const NJson* user_properties,
                         ref<HashSet<i32>> linked_source_ids, bool force_invisible) {
     ResolveVisibleUserBinding(object.visible, object.visible_user, user_properties);
     if constexpr (any<T, wpscene::ImageObject, wpscene::ShapeObject>) {
@@ -217,20 +217,10 @@ bool PrepareSceneObject(T& object, const NJson* user_properties,
             ResolveVisibleUserBinding(effect.visible, effect.visible_user, user_properties);
     }
     if (force_invisible) object.visible = false;
-    const bool linked         = ! object.visible && linked_source_ids->contains(object.id);
-    const bool user_bound     = ! object.visible && ! object.visible_user.empty();
-    const bool visible_script = ! object.visible && object.field_bindings.HasScript("visible"_str);
-    constexpr bool keep_text  = same<T, wpscene::TextObject>;
+    // 静态隐藏的图层不能剔除：官方 WPE 里它们仍占图层表的位置，脚本按 getLayerIndex/getLayer 能看到。
     if constexpr (! same<T, wpscene::ImageObject>) {
-        constexpr bool keep_user_visibility = ! same<T, wpscene::SoundObject>;
-        constexpr bool keep_hidden_sound    = same<T, wpscene::SoundObject>;
-        if (! object.visible && ! linked && ! keep_text &&
-            ! (keep_user_visibility && (user_bound || visible_script)) &&
-            ! (keep_hidden_sound && force_invisible))
-            return false;
-        if (linked) object.visible = true;
+        if (! object.visible && linked_source_ids->contains(object.id)) object.visible = true;
     }
-    return true;
 }
 
 Vec<SceneObjectVar> FilterSceneObjects(Vec<SceneObjectVar>          decoded,
@@ -244,19 +234,18 @@ Vec<SceneObjectVar> FilterSceneObjects(Vec<SceneObjectVar>          decoded,
         auto force_invisible = [&](i32 id) {
             return HasHiddenUserAncestor(rstd::as_cast<u32>(id), visibility);
         };
-        bool keep = std::visit(
+        std::visit(
             [&]<typename T>(T& value) {
                 if constexpr (std::is_same_v<T, wpscene::ContainerObject>) {
                     ResolveVisibleUserBinding(value.visible, value.visible_user, user_properties);
                     if (force_invisible(value.id)) value.visible = false;
-                    return true;
                 } else {
-                    return PrepareSceneObject(
+                    PrepareSceneObject(
                         value, user_properties, linked_source_ids, force_invisible(value.id));
                 }
             },
             object);
-        if (keep) result.push(rstd::move(object));
+        result.push(rstd::move(object));
     }
     return result;
 }
