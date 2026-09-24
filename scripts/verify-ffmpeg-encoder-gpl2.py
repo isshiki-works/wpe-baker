@@ -154,7 +154,7 @@ def main():
     encoder_list, _ = execute([ffmpeg, "-hide_banner", "-encoders"], "encoders", environment)
     (CHECKS / "encoders.stdout.txt").write_bytes(encoder_list)
     encoders = re.findall(r"^ [VAS][A-Z.]{5}\s+(\w+)", encoder_list.decode("utf-8"), re.MULTILINE)
-    expected_encoders = {"libx264", "libx264rgb", "libx265", "h264_mf", "hevc_mf", "av1_mf",
+    expected_encoders = {"libx264", "libx264rgb", "libx265", "h264_mf", "hevc_mf", "av1_mf", "h264_nvenc", "hevc_nvenc",
                          "rawvideo", "aac", "pcm_s16le", "pcm_f32le"}
     if set(encoders) != expected_encoders:
         raise RuntimeError("Unexpected active encoder set: " + repr(encoders))

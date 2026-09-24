@@ -24,7 +24,7 @@ public static partial class PlaybackEncoderSelection
     /// mf 排第一是因为它是 Windows 上唯一的厂商无关通道（Intel 落 QSV、AMD 落 VCE、NVIDIA 落 NVENC），
     /// 基准平台是核显，厂商专用档位只作附加。注意 mf 可用不等于硬件可用，见 ParseMfProbe。
     /// </summary>
-    private static readonly string[] AutoOrder = [Mf, Nvenc, Qsv, Amf];
+    internal static readonly string[] AutoOrder = [Mf, Nvenc, Qsv, Amf];
 
     /// <summary>每个硬件档位都要求 HEVC 与 H.264 两条都在，避免按分辨率切换编码器时半路没有可用档位。</summary>
     public static string[] RequiredEncoders(string kind) => kind switch

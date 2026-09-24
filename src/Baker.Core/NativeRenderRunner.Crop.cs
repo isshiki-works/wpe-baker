@@ -61,9 +61,38 @@ public sealed partial class NativeRenderRunner
             return capabilities.Has("gpu-loop-encode-v1") && capabilities.Has("gpu-sampling-coverage-v1")
                 ? (kind,null) : (PlaybackEncoderSelection.Software,"Renderer does not support the complete GPU pipeline.");
         }
-        return PlaybackEncoderSelection.Resolve(kind, PlaybackEncoderSelection.ParseEncoders(
-            await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-encoders"],
-                Path.Combine(logDirectory, "playback-encoders.stderr.log"), cancellationToken)));
+        return PlaybackEncoderSelection.Resolve(kind, await UsableEncodersAsync(kind, logDirectory, cancellationToken));
+    }
+
+    /// <summary>
+    /// ffmpeg 编码器表；auto 时再把打不开的硬件编码器剔掉：表里有不等于这台机器能用（没有 NVIDIA 驱动时 nvenc 打不开，
+    /// mf 常只落到软件 MFT）。按 auto 顺序逐档试编两帧空白画面，第一档全过就停。
+    /// </summary>
+    private async Task<HashSet<string>> UsableEncodersAsync(string kind, string logDirectory, CancellationToken cancellationToken)
+    {
+        HashSet<string> listed = PlaybackEncoderSelection.ParseEncoders(await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-encoders"],
+            Path.Combine(logDirectory, "playback-encoders.stderr.log"), cancellationToken));
+        if (kind != PlaybackEncoderSelection.Auto) return listed;
+        string blank = Path.Combine(logDirectory, "encoder-probe.yuv");
+        await File.WriteAllBytesAsync(blank, new byte[256 * 256 * 3], cancellationToken);
+        foreach (string candidate in PlaybackEncoderSelection.AutoOrder)
+        {
+            string[] names = PlaybackEncoderSelection.RequiredEncoders(candidate);
+            if (!names.All(listed.Contains)) continue;
+            bool opened = true;
+            foreach (string name in names)
+                try
+                {
+                    _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-f", "rawvideo", "-pix_fmt", "yuv420p",
+                        "-s", "256x256", "-i", blank, "-c:v", name, .. (candidate == PlaybackEncoderSelection.Mf ? new[] { "-hw_encoding", "true" } : []),
+                        "-f", "null", "-"], Path.Combine(logDirectory, $"encoder-probe-{name}.stderr.log"), cancellationToken);
+                }
+                catch (IOException) { cancellationToken.ThrowIfCancellationRequested(); opened = false; }
+            if (opened) break;
+            listed.ExceptWith(names);
+        }
+        File.Delete(blank);
+        return listed;
     }
 
     /// <summary>
@@ -131,7 +160,8 @@ public sealed partial class NativeRenderRunner
             ["video_sha256"] = render["video_sha256"]?.DeepClone(),
             ["encoded_stream"] = render["encoded_stream"]?.DeepClone(),
             ["validation_required"] = "Cropped-cache reinjection, encoded loop seam and official playback." };
-        if (gpu)
+        // 硬件直编（GPU 管线或 nvenc 等）没有 master 可比，拿渲染器保留的原帧跑同一个画质门；直编无法升档重编，不过就拒。
+        if (gpu || encoderKind != PlaybackEncoderSelection.Software)
         {
             JsonObject quality = await GpuPlaybackQualityAsync(render, video, region, packed, output, cancellationToken);
             report["playback_quality_gate"] = quality;
@@ -202,8 +232,7 @@ public sealed partial class NativeRenderRunner
             encoderFallbackReason = "This group requires the lossless path; using the software playback encoder.";
         else if (requestedEncoder != PlaybackEncoderSelection.Software)
             (encoderKind, encoderFallbackReason) = PlaybackEncoderSelection.Resolve(requestedEncoder,
-                PlaybackEncoderSelection.ParseEncoders(await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-encoders"],
-                    Path.Combine(output, "encoders.stderr.log"), cancellationToken)));
+                await UsableEncodersAsync(requestedEncoder, output, cancellationToken));
         var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)region.Height, numerator, denominator,
             losslessTest: false, encoderKind);
         // mf 档位要区分「真的落到厂商硬件 MFT」与「只有微软自带的软件 MFT」：能编不等于硬件在编。
