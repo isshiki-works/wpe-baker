@@ -57,11 +57,10 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        dark = Environment.GetEnvironmentVariable("PERIODICA_SHOT_THEME") is string shotTheme ? shotTheme == "dark" : SystemUsesDarkTheme(); // SHOT-HOOK
+        dark = SystemUsesDarkTheme();
         LoadThemeTokens();
         InitializeComponent();
         BackdropBox.IsEnabled = BackdropSupported;
-        if (Environment.GetEnvironmentVariable("PERIODICA_SHOT_BACKDROP") is string shotBackdrop) BackdropBox.SelectedIndex = int.Parse(shotBackdrop); // SHOT-HOOK
         SourceInitialized += (_, _) =>
         {
             // 系统背景要透到客户区：WPF 不刷底色 + 边框扩展到整个客户区；不透明模式由 Window.Background 自己盖住。
@@ -114,18 +113,6 @@ public partial class MainWindow : Window
         catch (Exception error) { setupError = error.Message; }
         RefreshControls();
         if (File.Exists(WpeExeBox.Text)) await LoadTargetsAsync(autoImport: true);
-        // SHOT-HOOK-BEGIN
-        if (Environment.GetEnvironmentVariable("PERIODICA_SHOT_JOBS") is string shotJobs)
-        {
-            string[] reports = shotJobs.Split(';');
-            var running = LoadCompletedResult(reports[0]); running.State = "running"; running.Detail = L("正在渲染：3120 / 7200 帧", "Rendering: 3120 / 7200 frames");
-            var done = LoadCompletedResult(reports[1]);
-            var failed = LoadCompletedResult(reports[2]); failed.State = "failed"; failed.Detail = L("未检出循环周期，生成中止；原因见报告文件。", "No loop period found; generation stopped. See the report.");
-            foreach (var job in new[] { running, done, failed }) Enqueue(job);
-            QueueList.SelectedItem = done;
-            RunProgress.Value = 0.43; StatusText.Text = running.Title + " · " + running.Detail;
-        }
-        // SHOT-HOOK-END
     }
 
     internal void SetLanguage(bool useEnglish)
