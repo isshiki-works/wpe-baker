@@ -41,7 +41,7 @@ internal static class SourceStaticLoopChecks
             "unknown active uniforms do not become static by omission");
         check(!Analyze(Scene(), Runtime("video"))["source_static"]!.GetValue<bool>(),
             "embedded video texture remains non-static even without a period trace");
-        JsonObject scriptedScene = Scene(new JsonObject { ["id"] = 1, ["script"] = "export function update() {}" });
+        JsonObject scriptedScene = Scene(new JsonObject { ["id"] = 1, ["script"] = "export function update(value) { value.x += engine.frametime; return value; }" });
         JsonObject scripted = Analyze(scriptedScene, Runtime());
         check(!scripted["source_static"]!.GetValue<bool>() &&
             scripted["unresolved"]!.AsArray().OfType<JsonObject>().Any(item =>

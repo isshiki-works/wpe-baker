@@ -90,7 +90,8 @@ internal static class StaticProof
     {
         foreach (JsonObject node in SceneAnalyzer.Walk(owner).OfType<JsonObject>())
         {
-            if (node["script"] is not null) return ("script", "a script binding whose behavior over time is not proven");
+            if (node["script"] is not null && !(node["script"] is JsonValue script && script.TryGetValue<string>(out string? code) && ConstantScript(code)))
+                return ("script", "a script binding whose behavior over time is not proven");
             foreach (var (key, description) in DynamicSourceMechanisms)
                 if (node.ContainsKey(key)) return (key, description);
         }
@@ -130,10 +131,42 @@ internal static class StaticProof
         return null;
     }
 
+    /// <summary>
+    /// 常量脚本：属性值只由字面值、脚本属性（烘焙时固定）与画布尺寸算出，不碰时钟、随机、输入、别的图层或跨帧状态，
+    /// 于是从第一帧起输出不变。白名单之外的任何名字（含自定义变量、函数）都不算证明；value 只许整体返回或按分量直接赋值，
+    /// 读它的分量就可能逐帧累积，不算证明。
+    /// </summary>
+    internal static bool ConstantScript(string code)
+    {
+        string text = Regex.Replace(Liveness.CapabilityScanText(code), "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'", "0");
+        if (text.Contains('`')) return false;
+        text = ConstantScriptValueUse.Replace(text, " ");
+        if (Regex.IsMatch(text, @"\bvalue\b")) return false;
+        foreach (Match word in Regex.Matches(text, @"(?<dot>\.\s*)?(?<name>[A-Za-z_$][\w$]*)"))
+        {
+            string name = word.Groups["name"].Value;
+            if (word.Groups["dot"].Success
+                ? !(ConstantScriptMembers.Contains(name) || Regex.IsMatch(text[..word.Index], @"\bscriptProperties\s*$"))
+                : !ConstantScriptNames.Contains(name)) return false;
+        }
+        return true;
+    }
+
+    // 对象字面量的键、update/init 的形参、return value、value 或其分量的直接赋值（非复合赋值）。
+    private static readonly Regex ConstantScriptValueUse = new(
+        @"(?<=[{,]\s*)[A-Za-z_$][\w$]*\s*:|\b(?:update|init)\s*\(\s*value\s*\)|\breturn\s+value\s*(?=[;}\r\n])|\bvalue\s*(?:\.\s*[xyzw]\s*)?=(?!=)",
+        RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> ConstantScriptNames = ["export", "let", "var", "const", "function", "return", "if", "else", "new",
+        "true", "false", "null", "undefined", "update", "init", "scriptProperties", "createScriptProperties", "engine", "Vec2", "Vec3", "Math", "__workshopId"];
+    private static readonly HashSet<string> ConstantScriptMembers = ["x", "y", "z", "w", "canvasSize", "addSlider", "addCheckbox", "addCombo",
+        "addColor", "addTextInput", "finish", "abs", "min", "max", "floor", "ceil", "round", "sqrt", "pow", "sin", "cos", "PI"];
+
     private static bool False(JsonNode? node) => node is JsonValue value && value.TryGetValue<bool>(out bool flag) && !flag;
 
+    // g_Color/g_Alpha/g_UserAlpha/g_Brightness 取自图层自身的 color/alpha/brightness：解析时是常量，运行中只有用户属性（烘焙时固定）
+    // 与脚本写入会改它；本层脚本、动画绑定由 DynamicSourceMechanism 拦下，别层脚本写入由运行时依赖检查拦下。
     private static bool StaticUniform(string name, bool noLights) => name is "g_ModelViewProjectionMatrix" or "g_EyePosition" or
-        "g_ModelMatrix" or "g_ViewProjectionMatrix" or "g_Color4" || Regex.IsMatch(name, @"^g_Texture\d+(?:Rotation|Translation|Resolution)$",
+        "g_ModelMatrix" or "g_ViewProjectionMatrix" or "g_Color4" or "g_Color" or "g_Alpha" or "g_UserAlpha" or "g_Brightness" || Regex.IsMatch(name, @"^g_Texture\d+(?:Rotation|Translation|Resolution)$",
             RegexOptions.CultureInvariant) || noLights && name.StartsWith("g_Lights", StringComparison.Ordinal);
 
     private static bool StaticTexture(ProjectSource source, string? assetsDirectory, string texture)
