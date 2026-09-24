@@ -125,6 +125,13 @@ internal sealed class Allocation
             if (visibility?.ToJsonString() == "false" && sourceOrder.Any(id => allocationOf[id] == root && scripts[id].Length > 0))
                 Live(root, "hidden_script_controller");
         }
+        // 透视场景的模型经相机绘制：可能可见的相机（或脚本 setCameraTransforms 的全局相机）本身或父链因场景相机以外的原因实时，模型画面随它变。
+        bool Moving(int id) => reasons[id].Any(reason => reason != "scene_camera") ||
+            Int(objects[id]["parent"]) is int parent && objects.ContainsKey(parent) && Moving(parent);
+        if (observation.Trace["runtime_projection"]?["active_camera_is_perspective"]?.GetValue<bool>() == true &&
+            objects.Keys.Any(id => Moving(id) && (objects[id].ContainsKey("camera") && PotentialVisibility(id) ||
+                scripts[id].Any(code => Regex.IsMatch(code, @"\bsetCameraTransforms\s*\(")))))
+            foreach (int id in objects.Keys.Where(id => objects[id].ContainsKey("model"))) Live(id, "reads_live_object");
         var liveRoots = allocation.LiveUnits = live.Select(id => allocationOf[id]).ToHashSet();
         // A protected subtree can make additional controllers live; close their cross-unit accesses too.
         bool MarkUnit(int id, string reason)

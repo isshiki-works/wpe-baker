@@ -63,11 +63,18 @@ internal sealed class Liveness
         }
         // These materials consume the already-composited scene. Their input must remain the
         // current video/live composition; their upstream drawing need not remain expensive.
+        // runtime_layers 按场景树深度优先（即绘制顺序）列出：在它之前没有任何网格的读取层只读到场景清屏色，输入是常量，不因此实时。
+        // _rt_MipMappedFrameBuffer（genericimage REFLECTION 的默认采样）是上一帧的整幅合成，不受绘制顺序豁免：
+        // 单独烘这一层只映出它自己，且从第 0 帧起要几帧才收敛，第 P 帧回不到第 0 帧。
+        bool drawnBefore = false;
         foreach (var layer in observation.RuntimeLayers.OfType<JsonObject>())
+        {
             if (layer["materials"] is JsonArray materials && materials.OfType<JsonObject>().Any(material =>
-                material["textures"] is JsonArray textures && textures.Any(texture => texture?.GetValue<string>() is
-                    "_rt_default" or "_rt_FullFrameBuffer")))
+                material["textures"] is JsonArray textures && textures.Any(texture => texture?.GetValue<string>() is string name &&
+                    (name == "_rt_MipMappedFrameBuffer" || drawnBefore && name is "_rt_default" or "_rt_FullFrameBuffer"))))
                 Live(layer["owner"]!.GetValue<int>(), "reads_current_framebuffer");
+            drawnBefore |= layer["has_mesh"]?.GetValue<bool>() == true;
+        }
         foreach (var layer in observation.RuntimeLayers.OfType<JsonObject>())
             if (layer["materials"] is JsonArray materials)
             {

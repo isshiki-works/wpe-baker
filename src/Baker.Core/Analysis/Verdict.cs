@@ -42,10 +42,12 @@ internal sealed class Verdict
             Resolve(scene["general"]?["bloom"], properties)?.ToJsonString() == "true";
         JsonObject radianceClosure = SdrRadianceClosure.Describe(scene, properties, observation.Trace, composer.Groups, source, request.Assets,
             hdrPipeline, project, out _);
-        if (projection["status"]?.GetValue<string>() != "orthographic") blockers.Add(new Blocker(BlockerCode.PerspectiveNeedsScreenspace));
+        // 没有视频组就没有要捕获的东西，透视捕获与相机路径包络都无从谈起。
+        bool capturing = composer.Groups.Count > 0;
+        if (capturing && projection["status"]?.GetValue<string>() != "orthographic") blockers.Add(new Blocker(BlockerCode.PerspectiveNeedsScreenspace));
         foreach (var camera in graph.Objects.Values.Where(obj => obj.ContainsKey("camera")))
         {
-            if (camera["path"] is JsonValue path && path.TryGetValue<string>(out string? file) &&
+            if (capturing && camera["path"] is JsonValue path && path.TryGetValue<string>(out string? file) &&
                 SceneAnalyzer.ReadResourceJson(source, request.Assets, file)["paths"] is JsonArray { Count: > 0 })
                 blockers.Add(new Blocker(BlockerCode.CameraPathNeedsEnvelope));
             if (observation.Trace["runtime_projection"] is not JsonObject) blockers.Add(new Blocker(BlockerCode.RuntimeProjectionRequired));
