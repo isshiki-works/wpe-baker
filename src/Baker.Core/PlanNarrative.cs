@@ -157,8 +157,6 @@ public static class PlanNarrative
         // 拒因已是 v3 两个字段（PlanBlockers 追加时两边一起写），这里不再拆分。
         if (report["loop"] is JsonObject loop) LocalizeUnresolved(loop, notes);
         if (report["whole_layer"]?["loop"] is JsonObject wholeLoop) LocalizeUnresolved(wholeLoop, notes);
-        foreach (JsonObject preflight in (report["effect_prefix_hardware_decode_preflight"] as JsonArray ?? []).OfType<JsonObject>())
-            LocalizeUnresolved(preflight, null);
         report["summary"] = Summarize(report, notes);
         // 取舍清单要读 blockers_localized 与 summary.key，所以排在它们之后；它只读 plan，不改任何判定。
         TradeoffOptions.Attach(report);
