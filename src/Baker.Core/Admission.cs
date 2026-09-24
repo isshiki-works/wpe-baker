@@ -28,8 +28,18 @@ public sealed record AdmissionVerdict(AdmissionRejection Rejection, JsonObject? 
 /// </summary>
 public static class Admission
 {
-    // 2–4 组省电；6 组核显功耗 +106%，9 组封装功耗 +10.9%。
-    public const int MaxVideoGroups = 4;
+    // 同时解码的视频数上限按解码量定：Arc B390 核显上 9 路 1080p60 分层视频实测解码占用 59%、照常播放
+    // （PERIODICA-NEXT/research-20260919/evidence/abba-wholelayer-rc11.md），输出像素率更高时按比例少放，但不低于旧政策的 4 路。
+    // 5 路起省不省电看作品（同一批实测 5、6、9 路都比原作费电），由功耗实测判，不在这里判。
+    private const double MeasuredVideoStreams = 9, MeasuredPixelsPerSecond = 1920d * 1080 * 60;
+
+    public static int MaxVideoGroups(JsonObject plan)
+    {
+        JsonNode? settings = plan["settings"];
+        double rate = (double)(settings?["width"]?.GetValue<uint>() ?? 0) * (settings?["height"]?.GetValue<uint>() ?? 0) *
+            (settings?["fps_numerator"]?.GetValue<uint>() ?? 0) / (settings?["fps_denominator"]?.GetValue<uint>() ?? 1);
+        return rate <= 0 ? (int)MeasuredVideoStreams : (int)Math.Clamp(Math.Floor(MeasuredVideoStreams * MeasuredPixelsPerSecond / rate), 4, MeasuredVideoStreams);
+    }
 
     /// <summary>
     /// 整层路线的循环准入：未解析分量（去掉说明性条目）逐条判定能否被接缝淡化掩盖，再看可掩盖分量是否都落在视频组里。
@@ -133,5 +143,5 @@ public static class Admission
         group["static_verification"]?["basis"]?.GetValue<string>() == "source_and_runtime_static_proof";
 
     /// <summary>预设级联的接受条件：可烘且动态视频数不超过上限。</summary>
-    public static bool Accepted(JsonObject plan) => Bakeable(plan) && GroupCount(plan) <= MaxVideoGroups;
+    public static bool Accepted(JsonObject plan) => Bakeable(plan) && GroupCount(plan) <= MaxVideoGroups(plan);
 }
