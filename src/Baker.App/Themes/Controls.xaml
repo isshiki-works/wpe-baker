@@ -74,7 +74,11 @@
                 </ToggleButton>
                 <ContentPresenter x:Name="Selection" IsHitTestVisible="False" Margin="12,0,30,0" VerticalAlignment="Center" HorizontalAlignment="Left"
                                   Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
-                                  ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
+                                  ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                  ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}">
+                    <!-- ContentTemplateSelector 让 DisplayMemberPath 在选中框里也生效；选中框只占一行，长名字截断。 -->
+                    <ContentPresenter.Resources><Style TargetType="TextBlock"><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style></ContentPresenter.Resources>
+                </ContentPresenter>
                 <!-- 可编辑的下拉（帧率）：内嵌一个无边框文本框。Style="{x:Null}" 避开上面的 TextBox 模板，只取系统默认外壳。 -->
                 <TextBox x:Name="PART_EditableTextBox" Style="{x:Null}" Visibility="Hidden" Margin="2,1,28,1" Padding="8,0,0,0"
                          Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Ink}" CaretBrush="{DynamicResource Ink}"
@@ -125,7 +129,8 @@
         <Setter Property="Foreground" Value="{DynamicResource Ink}"/><Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Expander">
             <StackPanel>
-                <ToggleButton Content="{TemplateBinding Header}" Cursor="Hand"
+                <!-- 显式传 Foreground：ToggleButton 走系统默认样式，会把字色钉成黑色，深色下标题看不见。 -->
+                <ToggleButton Content="{TemplateBinding Header}" Cursor="Hand" Foreground="{TemplateBinding Foreground}"
                               IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                     <ToggleButton.Template><ControlTemplate TargetType="ToggleButton">
                         <Border Background="Transparent" Padding="0,6">
