@@ -454,6 +454,17 @@ public class LoopItemContractTests
     }
 
     [Fact]
+    public void ConstantScriptProofRejectsClockAndAccumulation()
+    {
+        const string head = "'use strict';\nexport var scriptProperties = createScriptProperties().addSlider({ name: 'x', value: 0, min: -1 }).finish();\n";
+        Assert.True(StaticProof.ConstantScript(head + "export function update(value) {\n  value.x = scriptProperties.x * engine.canvasSize.x; // 定位\n  return value;\n}"));
+        Assert.False(StaticProof.ConstantScript(head + "export function update(value) {\n  value.x += scriptProperties.x;\n  return value;\n}"));
+        Assert.False(StaticProof.ConstantScript(head + "export function update(value) {\n  value.x = value.y + 1;\n  return value;\n}"));
+        Assert.False(StaticProof.ConstantScript(head + "export function update(value) {\n  value.x = engine.runtime;\n  return value;\n}"));
+        Assert.False(StaticProof.ConstantScript(head + "let t = 0;\nexport function update(value) {\n  value.x = t;\n  return value;\n}"));
+    }
+
+    [Fact]
     public void UnprovenVideoTrackWritesTrackNameKey()
     {
         var scene = new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 }) };
