@@ -133,15 +133,17 @@ public sealed partial class NativeRenderRunner
     {
         if (searches.Count == 0) throw new ArgumentException("A shared start needs at least one residual group.");
         if (searches.Count == 1) return searches[0].Search;
+        // 各组可按自己的周期 P_g 评分：相位网格从 0 起、同一步长，短周期组的候选是长周期组的前缀，合成只取公共前缀。
+        int shared = searches.Min(group => group.Candidates.Count);
+        searches = [.. searches.Select(group => (group.Search, (IReadOnlyList<ResidualStartCandidate>)[.. group.Candidates.Take(shared)]))];
         var first = searches[0];
         if (first.Candidates.Count == 0) throw new InvalidDataException("The shared phase grid is empty.");
         foreach (var group in searches.Skip(1))
         {
-            if (group.Candidates.Count != first.Candidates.Count ||
-                !group.Candidates.Select(candidate => candidate.Start).SequenceEqual(first.Candidates.Select(candidate => candidate.Start)) ||
-                new[] { "warmup_frames", "period_frames", "stride_frames", "crossfade_frames" }.Any(key =>
+            if (!group.Candidates.Select(candidate => candidate.Start).SequenceEqual(first.Candidates.Select(candidate => candidate.Start)) ||
+                new[] { "warmup_frames", "stride_frames", "crossfade_frames" }.Any(key =>
                     !JsonNode.DeepEquals(group.Search[key], first.Search[key])))
-                throw new InvalidDataException("Residual groups must use the same phase grid, period and warmup.");
+                throw new InvalidDataException("Residual groups must use the same phase grid and warmup.");
         }
         // max(global) <= limit iff every group meets the existing global admission rule.
         // The tile maxima reuse the existing minimax ranking, keeping all groups at one phase.

@@ -411,7 +411,10 @@ public sealed class HybridBakeService(NativeTools tools)
             // 没指定组并行时，GPU 路线的编码在显卡上、不抢 CPU，组、起点搜索与覆盖度预通道最多 3 路同时跑。
             if (request.GroupParallel == 0 && playbackKind == PlaybackEncoderSelection.Vulkan)
                 report["group_parallel"] = groupParallel = Math.Clamp(3, 1, Math.Max(1, groups.Length));
-            scheduler = new GroupRenderScheduler(runner, request, plan, settings, groups, captureProject, output, snapshot, frames,
+            // 各组按自己的周期 P_g 录（plan 候选的 group_frames，见 LoopAnalysis.GroupPeriods）；不在表里的组与探针照旧。
+            JsonObject? groupFrames = probe ? null : (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["group_frames"] as JsonObject;
+            ulong[] framesByGroup = [.. groups.Select(group => groupFrames?[group["id"]!.GetValue<string>()]?.GetValue<ulong>() ?? frames)];
+            scheduler = new GroupRenderScheduler(runner, request, plan, settings, groups, captureProject, output, snapshot, frames, framesByGroup,
                 crossfadeFrames, warmupFrames, residualGroupIndexes, groupParallel, playbackKind, progress, token);
             if (residualMasking is not null && !probe)
             {
@@ -483,6 +486,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     // 残差组（含可掩盖残差层）多渲一个淡化窗口，测第一层，通过后在接缝处淡化；不淡化的组多渲 1 帧，
                     // 编码只取前 P 帧，第 P 帧原帧留作闭合检验与接缝参照，接缝由闭合检验裁决。
                     GroupFraming framing = groupScheduler.Framing(i);
+                    ulong groupFrames = groupScheduler.Frames(i);
                     bool residualGroup = framing.Residual;
                     // 这个组的成品能不能在渲染时直接编出来，不写无损 master。
                     bool directPlayback = AllowsDirectPlayback(capture.SceneClear, residualGroup, request.ProbeFrames);
@@ -535,7 +539,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 "在全分辨率下测量淡化窗口内每一帧的接缝残差。"));
                             JsonObject wrap;
                             using (timing.Measure(StageTiming.SeamCheck))
-                                wrap = await runner.MeasureSeamResidualAsync(masterPath, frames, crossfadeFrames, cancellationToken,
+                                wrap = await runner.MeasureSeamResidualAsync(masterPath, groupFrames, crossfadeFrames, cancellationToken,
                                     SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height));
                             wrap["limits"] = ResidualMasking.Thresholds();
                             bool firstLayer = wrap["first_layer"]!["passed"]!.GetValue<bool>();
@@ -560,11 +564,11 @@ public sealed class HybridBakeService(NativeTools tools)
                                 JsonObject residualPreview;
                                 progress?.Report(new("exporting_seam_preview", (double)i / groups.Length,
                                     MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
-                                        SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
+                                        SeamPreview.WindowFrames(groupFrames, settings.FpsNumerator, settings.FpsDenominator))));
                                 using (timing.Measure(StageTiming.SeamCheck))
                                     residualPreview = await SeamPreview.ExportOrWarnAsync(report, id, SeamPreview.RejectedOutcome,
                                         token => runner.ExportSeamPreviewAsync(Path.Combine(masterPath, "preview.mp4"),
-                                            Path.Combine(work, SeamPreview.FileName), frames, settings.FpsNumerator, settings.FpsDenominator,
+                                            Path.Combine(work, SeamPreview.FileName), groupFrames, settings.FpsNumerator, settings.FpsDenominator,
                                             gpuDirect ? "gpu_candidate_after_crossfade" : "lossless_master_hard_cut", token), cancellationToken);
                                 // 选定起点被拒即停止；记录本次各组的残差，不启动整案重渲。
                                 GroupVerdicts.RejectResidual(report, id, layers, lateDependencyValidation, wrap, residualPreview, startAttempts,
@@ -577,7 +581,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 "在接缝处做固定窗口的整帧交叉淡化。"));
                             using (timing.Measure(StageTiming.Crossfade))
                                 groupCrossfade = gpuDirect ? master["loop_crossfade"]!.DeepClone().AsObject()
-                                    : await new MasterRewrite(new FfmpegTool(tools)).CrossfadeAsync(masterPath, frames, crossfadeFrames, cancellationToken);
+                                    : await new MasterRewrite(new FfmpegTool(tools)).CrossfadeAsync(masterPath, groupFrames, crossfadeFrames, cancellationToken);
                             groupCrossfade["group_id"] = id;
                             // 顶层 loop_crossfade 记第一个残差组；每组自己的淡化记录（含自检）在组记录里。
                             if (report["loop_crossfade"] is null) report["loop_crossfade"] = groupCrossfade.DeepClone();
@@ -599,7 +603,7 @@ public sealed class HybridBakeService(NativeTools tools)
                         if (!probe && encodedBytes > EmbeddedVideoBudget.MaximumBytes)
                         {
                             GroupVerdicts.RejectEmbeddedSize(report, id, layers, packedAlpha, encoded, video, encodedBytes,
-                                lateDependencyValidation, frames, settings);
+                                lateDependencyValidation, groupFrames, settings);
                             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
@@ -613,7 +617,7 @@ public sealed class HybridBakeService(NativeTools tools)
                         {
                             using (timing.Measure(StageTiming.SeamCheck))
                                 seam = await GroupVerdicts.SeamAsync(tools, master, masterPath, video, crop, capture, isStatic, packedAlpha,
-                                    directPlayback, residualGroup, request.KeepIntermediates, frames, crossfadeFrames, settings, cancellationToken);
+                                    directPlayback, residualGroup, request.KeepIntermediates, groupFrames, crossfadeFrames, settings, cancellationToken);
                         }
                         else if (isStatic) seam = GroupVerdicts.ProbeStatic();
                         // 成功任务仅在显式保留诊断时导出；拒绝仍提供预览帮助定位。
@@ -622,11 +626,11 @@ public sealed class HybridBakeService(NativeTools tools)
                         {
                             progress?.Report(new("exporting_seam_preview", (double)i / groups.Length,
                                 MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
-                                    SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
+                                    SeamPreview.WindowFrames(groupFrames, settings.FpsNumerator, settings.FpsDenominator))));
                             using (timing.Measure(StageTiming.SeamCheck))
                                 seamPreview = await SeamPreview.ExportOrWarnAsync(report, id,
                                     SeamPreview.Outcome(seam!["status"]?.GetValue<string>()),
-                                    token => runner.ExportSeamPreviewAsync(video, Path.Combine(work, SeamPreview.FileName), frames,
+                                    token => runner.ExportSeamPreviewAsync(video, Path.Combine(work, SeamPreview.FileName), groupFrames,
                                         settings.FpsNumerator, settings.FpsDenominator, "encoded_video", token), cancellationToken);
                         }
                         JsonObject? hardwareDecode = null;
@@ -643,7 +647,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 "Checking this actual video on the installed hardware decoders."));
                             using (timing.Measure(StageTiming.HardwareDecodeCheck))
                                 hardwareDecode = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(work, "hardware-decode"),
-                                    Math.Min(frames, 5), cancellationToken);
+                                    Math.Min(groupFrames, 5), cancellationToken);
                         }
                         JsonObject layer;
                         bool alphaBelow = HardwareDecodeDimensions.StackedVertically(packedAlpha && !isStatic, crop.Width);

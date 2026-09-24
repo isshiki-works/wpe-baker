@@ -13,7 +13,8 @@ internal static class LoopAnalysis
     internal static LoopReport Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory, JsonObject runtime,
         IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent = 2,
         CommonLoopPreference preference = CommonLoopPreference.Balanced, SwayRetimeOptions? swayRetime = null,
-        double? loopLengthMaximumSeconds = null, EmbeddedVideoLoopLimit? loopLengthLimit = null)
+        double? loopLengthMaximumSeconds = null, EmbeddedVideoLoopLimit? loopLengthLimit = null, JsonArray? videoGroups = null,
+        IReadOnlyCollection<ulong>? groupClockSteps = null)
     {
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
@@ -53,11 +54,17 @@ internal static class LoopAnalysis
         // 封顶 + 确定寿命的粒子层：替换周期（整数帧）作为锁定分量交给求解器，与着色器、轨道的锁定分量同等对待。
         CommonLoopComponent[] particleCycles = ParticleCycleComponents(particleVerdicts);
         CommonLoopComponent[] scriptCycles = ScriptFrameStepComponents(scene, bakedLayerIds, fpsNumerator, fpsDenominator, ceiling, unresolved);
-        LoopSolve solve = SolveLoop(shader, animation, [.. particleCycles, .. scriptCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+        // 组间共用时钟的组要求 L 是它自身周期的倍数（见 GroupPeriods）：每个这样的周期当一个锁定分量交给求解器，解完再从候选里去掉。
+        CommonLoopComponent[] stepCycles = [.. (groupClockSteps ?? []).Select(step =>
+        {
+            var exact = new CommonLoopRational(checked((long)step * fpsDenominator), fpsNumerator);
+            return new CommonLoopComponent($"{GroupStepPrefix}{step}", new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
+        })];
+        LoopSolve solve = SolveLoop(shader, animation, [.. particleCycles, .. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
         if (particleCycles.Length > 0 && solve.Result.Candidates.Count == 0)
         {
             // 锁定周期与其余分量在循环上限内没有公共循环，而不锁这些层时有：这些层退回拒绝（留实时），与判据收紧时的结论一致。
-            LoopSolve unlocked = SolveLoop(shader, animation, scriptCycles, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+            LoopSolve unlocked = SolveLoop(shader, animation, [.. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
             if (unlocked.Result.Candidates.Count > 0)
             {
                 var evidence = new JsonObject
@@ -78,6 +85,12 @@ internal static class LoopAnalysis
             or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling
             ? NoCommonLoopOwners(shader, animation, particleCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
             : null;
+        if (stepCycles.Length > 0)
+        {
+            static CommonLoopComponent[] Real(CommonLoopComponent[] list) => [.. list.Where(x => !x.Id.StartsWith(GroupStepPrefix, StringComparison.Ordinal))];
+            solve = solve with { Locked = Real(solve.Locked), Used = Real(solve.Used), Result = solve.Result with { Candidates = [.. solve.Result.Candidates
+                .Select(c => c with { Components = [.. c.Components.Where(x => !x.ComponentId.StartsWith(GroupStepPrefix, StringComparison.Ordinal))] })] } };
+        }
         var locked = solve.Locked;
         bool retimeClips = solve.RetimeClips, singleVideoRetime = solve.SingleVideoRetime;
         CommonLoopSearchResult result = solve.Result;
@@ -104,14 +117,24 @@ internal static class LoopAnalysis
         // 起点 0 不闭合但整周期预热后闭合，候选带上预热帧数；两者都不闭合，候选移除并写明理由。
         float[][] spriteTables = animation.Where(x => x.SpriteFrameTimes is not null).Select(x => x.SpriteFrameTimes!).ToArray();
         int spriteRejectedCandidates = 0;
-        foreach (CommonLoopCandidate candidate in result.Candidates)
+        (string Id, HashSet<int> Layers)[] groups = [.. (videoGroups ?? []).OfType<JsonObject>().Select(group => (group["id"]!.GetValue<string>(),
+            (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>().ToHashSet()))];
+        Dictionary<int, float[][]> spriteTablesByOwner = animation.Where(x => x.SpriteFrameTimes is not null).GroupBy(x => x.OwnerLayerId)
+            .ToDictionary(owner => owner.Key, owner => owner.Select(x => x.SpriteFrameTimes!).ToArray());
+        List<ulong>? clockSteps = null;
+        foreach (CommonLoopCandidate solved in result.Candidates)
         {
             SpriteSeamPhase.Selection? spriteSeam = null;
             if (spriteTables.Length > 0)
             {
-                spriteSeam = SpriteSeamPhase.Select(spriteTables, fpsNumerator, fpsDenominator, (ulong)candidate.Frames);
+                spriteSeam = SpriteSeamPhase.Select(spriteTables, fpsNumerator, fpsDenominator, (ulong)solved.Frames);
                 if (spriteSeam.AtOrigin == SpriteSeamPhase.Verdict.Mismatch && spriteSeam.WarmupFrames is null) { ++spriteRejectedCandidates; continue; }
             }
+            var (candidate, groupFrames, steps) = GroupPeriods(solved, groups, solve.Used, unresolved, spriteTablesByOwner,
+                // 精灵帧表从全局整周期预热之后起判（0 或 L）；摆动改频可能把 L 与预热改成 kL 时不缩短精灵组。
+                spriteSeam is null ? 0 : spriteSeam.WarmupFrames is ulong warmup && (warmup == 0 || swayRetime is null || shader.Unresolved.Count == 0) ? warmup : null,
+                fpsNumerator, fpsDenominator, maximumRetimePercent, preference, ceiling);
+            clockSteps ??= steps;
             var candidatePatches = new List<LoopPatch>();
             foreach (LoopValuePatch patch in patches)
             {
@@ -143,7 +166,7 @@ internal static class LoopAnalysis
                         "fps", 0, null, fps.Fps, fps.Fps * cycle.SpeedMultiplier) { AnimationPath = fps.AnimationPath });
             }
             candidates.Add(new LoopCandidate(candidate.Frames, candidate.Seconds, candidate.TotalRetimeCostPercent,
-                candidate.Components, candidatePatches) { SpriteSeam = spriteSeam });
+                candidate.Components, candidatePatches) { SpriteSeam = spriteSeam, GroupFrames = groupFrames });
         }
         if (spriteRejectedCandidates > 0)
             unresolved.Add(new SpriteSeamUnresolved(spriteRejectedCandidates));
@@ -168,7 +191,85 @@ internal static class LoopAnalysis
             candidates, unresolved, sourceStatic, videoControlScope,
             new LoopContentCadence(contentStep, animation.Where(x => x.IsVideo)
                 .Select(x => new LoopCadenceClip(x.LockedComponent.Id, x.OwnerLayerId, x.TrackName, x.ClipFrameRate)).ToArray()),
-            shader.Components, swayRecord, particleDefault, loopLengthLimit);
+            shader.Components, swayRecord, particleDefault, loopLengthLimit) { GroupClockSteps = clockSteps ?? [] };
+    }
+
+    private const string GroupStepPrefix = "group_period:";
+
+    /// <summary>
+    /// 各视频组按自己的周期 P_g 录制。分量按 id 里的所有者层归组（所有者不在任何组里的分量算各组共有）。
+    /// 组里有平稳粒子以外的未解析项（摆动改频等）：P_g = L，不动。含精灵帧表的组只走下面的整除规则，并要求 float32 帧表
+    /// 从录制起点（<paramref name="spriteStart"/>，即全局精灵预热 0 或 L）起在 P_g 上逐帧闭合；为 null 时这些组录 L。只有平稳粒子：按平稳粒子默认循环（60 s 起，
+    /// 必要时延长过最长寿命），不必整除 L（没有时钟可对）。有周期分量时，先取 P_g = L / gcd(L, 各分量圈数的最大公约数)：
+    /// 它整除 L，任一时刻的画面与整组录 L 帧完全相同；有平稳粒子时取满足默认长度下限的最小这种因子。
+    /// 分量的时钟被本组独占（别的组没有同一基准周期的分量）时，再用同一个求解器只解本组分量（上限取上面的 P_g）：
+    /// 更短就改用它，调速只落在本组的层上，别的组看不到。与别的组共用时钟、自身周期 L/G 却不整除 L 的组，
+    /// 返回 round(L/G) 作为给 L 加的约束（调用方据此重解一次）。
+    /// </summary>
+    private static (CommonLoopCandidate Candidate, Dictionary<string, ulong> Frames, List<ulong> ClockSteps) GroupPeriods(
+        CommonLoopCandidate candidate, (string Id, HashSet<int> Layers)[] groups, CommonLoopComponent[] used, List<LoopUnresolved> unresolved,
+        Dictionary<int, float[][]> spriteTables, ulong? spriteStart, uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent, CommonLoopPreference preference,
+        CommonLoopRational ceiling)
+    {
+        var frames = new Dictionary<string, ulong>(StringComparer.Ordinal);
+        var steps = new List<ulong>();
+        ulong loop = candidate.Frames;
+        HashSet<int> pinned = spriteStart is null ? [.. spriteTables.Keys] : [];
+        var lifetimes = new Dictionary<int, double>();
+        foreach (LoopUnresolved item in unresolved)
+        {
+            if (item is RuntimeTrackUnresolved { Video: false, Particle: { Stationary: true } particle } track &&
+                NonNegative(particle.LifetimeMaxSeconds, out double lifetime))
+                lifetimes[track.OwnerLayerId] = Math.Max(lifetime, lifetimes.GetValueOrDefault(track.OwnerLayerId));
+            else if (SceneGraph.Int(item.ToJson()["owner_layer_id"]) is int owner) pinned.Add(owner);
+            else return (candidate, frames, steps);
+        }
+        static int? Owner(string id) => id.Split('/', ':') is [_, string text, ..] &&
+            int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int owner) ? owner : null;
+        bool Grouped(int owner) => groups.Any(group => group.Layers.Contains(owner));
+        var components = candidate.Components.ToList();
+        foreach ((string id, HashSet<int> layers) in groups)
+        {
+            if (loop <= 1 || layers.Overlaps(pinned)) continue;
+            CommonLoopComponentCycle[] mine = [.. candidate.Components.Where(c => Owner(c.ComponentId) is not int owner || !Grouped(owner) || layers.Contains(owner))];
+            double[] lives = [.. layers.Where(lifetimes.ContainsKey).Select(owner => lifetimes[owner])];
+            ulong floor = lives.Length == 0 ? 1 : (ulong)UInt128.Min(DefaultLoopFrames(lives.Max(), fpsNumerator, fpsDenominator, ceiling), loop);
+            ulong period = loop;
+            if (mine.Length == 0)
+            {
+                if (lives.Length > 0 && floor > 0) period = floor;
+            }
+            else
+            {
+                ulong cycles = mine.Aggregate(0UL, (gcd, c) => (ulong)GreatestCommonDivisor(gcd, c.Cycles));
+                ulong own = loop / (ulong)GreatestCommonDivisor(loop, cycles);
+                for (ulong multiple = own; multiple < loop; multiple += own)
+                    if (loop % multiple == 0 && multiple >= floor) { period = multiple; break; }
+                bool exclusive = mine.All(c => Owner(c.ComponentId) is int owner && layers.Contains(owner) && !c.ComponentId.StartsWith("video/", StringComparison.Ordinal) &&
+                    !candidate.Components.Any(other => !mine.Contains(other) && other.OldPeriodSeconds == c.OldPeriodSeconds));
+                CommonLoopComponent[] basis = [.. used.Where(u => mine.Any(c => c.ComponentId == u.Id))];
+                float[][] sprites = [.. layers.Where(spriteTables.ContainsKey).SelectMany(owner => spriteTables[owner])];
+                if (sprites.Any(table => SpriteSeamPhase.Verify(table, fpsNumerator, fpsDenominator, spriteStart ?? 0, period) != SpriteSeamPhase.Verdict.Closed))
+                    period = loop;
+                if (exclusive && sprites.Length == 0 && basis.Length == mine.Length && period > 1)
+                {
+                    CommonLoopSearchResult alone = CommonLoopSolver.Suggest(new(fpsNumerator, fpsDenominator, basis,
+                        MinimumDuration: new(checked((long)Math.Max(floor, 1) * fpsDenominator), fpsNumerator),
+                        MaximumDuration: new(checked((long)period * fpsDenominator), fpsNumerator),
+                        MaximumRetimePercent: maximumRetimePercent, Preference: preference));
+                    if (alone.Candidates.FirstOrDefault() is { } best && best.Frames < period)
+                    {
+                        period = best.Frames;
+                        foreach (CommonLoopComponentCycle cycle in best.Components)
+                            components[components.FindIndex(c => c.ComponentId == cycle.ComponentId)] = cycle;
+                    }
+                }
+                else if (!exclusive && cycles > 1 && loop % cycles != 0 && (ulong)Math.Round((double)loop / cycles) is ulong step and > 0 && step < period)
+                    steps.Add(step);
+            }
+            if (period < loop) frames[id] = period;
+        }
+        return (candidate with { Components = components, TotalRetimeCostPercent = components.Sum(c => Math.Abs(c.DeltaPercent)) }, frames, steps);
     }
 
     /// <summary>粒子默认循环长度（秒）：长寿命粒子可在循环上限内延长到寿命之后。</summary>
@@ -194,14 +295,8 @@ internal static class LoopAnalysis
             longestLifetime = Math.Max(longestLifetime, lifetime);
             longestWarmup = Math.Max(longestWarmup, warmup);
         }
-        var target = new CommonLoopRational(StationaryParticleDefaultLoopSeconds);
-        if ((Int128)ceiling.Numerator * target.Denominator < (Int128)target.Numerator * ceiling.Denominator) target = ceiling;
-        UInt128 frames = (UInt128)target.Numerator * fpsNumerator / ((UInt128)target.Denominator * fpsDenominator);
-        if (frames == 0 || frames > ulong.MaxValue) return null;
-        UInt128 ceilingFrames = (UInt128)ceiling.Numerator * fpsNumerator / ((UInt128)ceiling.Denominator * fpsDenominator);
-        double lifetimeFrames = Math.Floor(longestLifetime * fpsNumerator / fpsDenominator) + 1;
-        if (double.IsFinite(lifetimeFrames) && lifetimeFrames <= (double)UInt128.Min(ceilingFrames, ulong.MaxValue))
-            frames = UInt128.Max(frames, (UInt128)lifetimeFrames);
+        UInt128 frames = DefaultLoopFrames(longestLifetime, fpsNumerator, fpsDenominator, ceiling);
+        if (frames == 0) return null;
         double seconds = (double)frames * fpsDenominator / fpsNumerator;
         var record = new JsonObject {
             ["kind"] = "stationary_particle_default", ["default_seconds"] = StationaryParticleDefaultLoopSeconds,
@@ -227,13 +322,28 @@ internal static class LoopAnalysis
         return record;
     }
 
+    /// <summary>平稳粒子默认循环帧数：min(60 秒, 上限)，必要时延长到最长寿命之后的首帧（不超过上限）；溢出时为 0。</summary>
+    private static UInt128 DefaultLoopFrames(double longestLifetime, uint fpsNumerator, uint fpsDenominator, CommonLoopRational ceiling)
+    {
+        var target = new CommonLoopRational(StationaryParticleDefaultLoopSeconds);
+        if ((Int128)ceiling.Numerator * target.Denominator < (Int128)target.Numerator * ceiling.Denominator) target = ceiling;
+        UInt128 frames = (UInt128)target.Numerator * fpsNumerator / ((UInt128)target.Denominator * fpsDenominator);
+        if (frames == 0 || frames > ulong.MaxValue) return 0;
+        UInt128 ceilingFrames = (UInt128)ceiling.Numerator * fpsNumerator / ((UInt128)ceiling.Denominator * fpsDenominator);
+        double lifetimeFrames = Math.Floor(longestLifetime * fpsNumerator / fpsDenominator) + 1;
+        if (double.IsFinite(lifetimeFrames) && lifetimeFrames <= (double)UInt128.Min(ceilingFrames, ulong.MaxValue))
+            frames = UInt128.Max(frames, (UInt128)lifetimeFrames);
+        return frames;
+    }
+
     private static bool NonNegative(double? number, out double value)
     {
         value = number ?? 0;
         return number is double finite && double.IsFinite(finite) && finite >= 0;
     }
 
-    private sealed record LoopSolve(CommonLoopComponent[] Locked, bool RetimeClips, bool SingleVideoRetime, CommonLoopSearchResult Result);
+    private sealed record LoopSolve(CommonLoopComponent[] Locked, CommonLoopComponent[] Used, bool RetimeClips, bool SingleVideoRetime,
+        CommonLoopSearchResult Result);
 
     /// <summary>
     /// 按所有者层贪心并入（分量多的先并，同数按出现顺序），并入后上限内无解的层记下返回。已有未解析项的所有者本来就留实时，不参与。
@@ -288,7 +398,7 @@ internal static class LoopAnalysis
                     MinimumDuration: MinimumFrameDuration(fpsNumerator, fpsDenominator), MaximumDuration: ceiling,
                     MaximumRetimePercent: maximumRetimePercent, Preference: preference))
                 : lockedResult;
-        return new(locked, retimeClips, singleVideoRetime, result);
+        return new(locked, singleVideoRetime ? [animation[0].RetimableComponent] : components, retimeClips, singleVideoRetime, result);
     }
 
     /// <summary>锁定周期的粒子层（按层 id 排序）→ 精确有理周期的锁定分量。</summary>
