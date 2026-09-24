@@ -129,6 +129,19 @@ public sealed class HybridBakeService(NativeTools tools)
             return await RetryReplannedAsync(request, result, "intro_fallback", ".intro-first-attempt", new JsonObject(),
                 settings => settings with { SingleShotLive = true }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
+        // 按自身周期 P_g（< L）录的组没过接缝门（含闭合检验）：这一组退回录全局 L 帧，重新分析再烘；别的组不变。
+        // 重烘走 BakeAsync，再有别的缩短组没闭合时逐组接着退回（每轮都比上一轮多一组录 L，组数有限）。
+        if (OwnPeriodSeamFailure(request.Plan, result) is (string groupId, int[] groupLayers, ulong groupFrames))
+        {
+            int[] fullLoop = [.. PlanSettings.Of(request.Plan).FullLoopLayerIds ?? [], .. groupLayers];
+            progress?.Report(new("group_full_loop_fallback", null,
+                $"Video group {groupId} did not close on its own {groupFrames}-frame period; recording it at the full loop length and baking once more."));
+            return await RetryReplannedAsync(request, result, "group_period_fallback", $".{groupId}-own-period-attempt", new JsonObject {
+                    ["group_id"] = groupId, ["group_frames"] = groupFrames, ["loop_frames"] = result["frames"]?.DeepClone(),
+                    // 原因码：按自身周期录的组被接缝门拒绝；拒绝原文见 first_reason_localized。
+                    ["full_loop_layer_ids"] = JsonSerializer.SerializeToNode(fullLoop), ["reason"] = "own_period_seam_rejected" },
+                settings => settings with { FullLoopLayerIds = fullLoop }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
+        }
         if (ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
         progress?.Report(new("retaining_residual_particles", null,
             "Seam residual from masked particles exceeded the first layer; keeping those particles live and baking once more."));
@@ -138,6 +151,18 @@ public sealed class HybridBakeService(NativeTools tools)
                     .Where(group => group["status"]?.GetValue<string>() == "rejected_seam_residual").Select(group => group["id"]?.DeepClone())]) },
             settings => settings with { RetainLiveRootIds = retain, RetainLiveReasons = reasons },
             retry => BakeCleanedAsync(retry, progress, cancellationToken), progress, cancellationToken);
+    }
+
+    /// <summary>接缝门拒绝的组若按自身周期（plan 候选的 group_frames，比 L 短）录制，返回它的 id、图层与帧数；其余情况 null。</summary>
+    private static (string GroupId, int[] Layers, ulong Frames)? OwnPeriodSeamFailure(JsonObject plan, JsonObject report)
+    {
+        if (report["status"]?.GetValue<string>() != "candidate_rejected_seam" ||
+            (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["group_frames"] is not JsonObject own) return null;
+        string? failed = (report["groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .FirstOrDefault(g => g["status"]?.GetValue<string>() == "rejected_seam")?["id"]?.GetValue<string>();
+        if (failed is null || own[failed] is not JsonNode frames) return null;
+        JsonObject group = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().Single(g => g["id"]?.GetValue<string>() == failed);
+        return (failed, [.. (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()], frames.GetValue<ulong>());
     }
 
     /// <summary>
