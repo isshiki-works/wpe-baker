@@ -7,7 +7,7 @@ namespace Baker.Core;
 
 /// <summary>
 /// 分配阶段：把作者根拆成分配单元（静态结构节点可以把子树拆开），定视差深度、保留实时的单元与依赖闭包，
-/// 再省略固定隐藏的自包含子树与用户剔除的子树。
+/// 再省略固定隐藏、固定画在取景框外的自包含子树与用户剔除的子树。
 /// </summary>
 internal sealed class Allocation
 {
@@ -21,7 +21,7 @@ internal sealed class Allocation
     internal Dictionary<int, (double X, double Y)> Depths { get; } = [];
     /// <summary>整单元保留实时的单元。</summary>
     internal HashSet<int> LiveUnits { get; private set; } = [];
-    /// <summary>不进视频、不留实时、不进静态纹理的对象（固定隐藏子树与用户剔除）。</summary>
+    /// <summary>不进视频、不留实时、不进静态纹理的对象（固定隐藏子树、固定在取景框外的子树与用户剔除）。</summary>
     internal HashSet<int> OmittedIds { get; } = [];
     /// <summary>用户剔除的根（升序去重）与它们的整棵子树。</summary>
     internal int[] ExcludedRoots { get; private set; } = [];
@@ -39,7 +39,7 @@ internal sealed class Allocation
 
     /// <param name="severedRead">与 <see cref="Liveness.Analyze"/> 同一对昼夜过滤，用于按单元的依赖闭包。</param>
     internal static Allocation Plan(SceneGraph graph, RuntimeObservation observation, Liveness liveness, HybridAnalyzeRequest request,
-        JsonObject properties, bool parallax, Func<JsonObject, bool> severedRead, Func<JsonObject, bool> severedWrite)
+        JsonObject properties, bool parallax, JsonObject projection, Func<JsonObject, bool> severedRead, Func<JsonObject, bool> severedWrite)
     {
         var allocation = new Allocation(graph);
         var (objects, sourceOrder, rootOf, authorRoots) = (graph.Objects, graph.SourceOrder, graph.RootOf, graph.Roots);
@@ -162,13 +162,46 @@ internal sealed class Allocation
                     operation is "lookup" or "read" or "write" &&
                     ((owner is int ownerId && subtree.Contains(ownerId)) != (target is int targetId && subtree.Contains(targetId)));
             });
+        // 捕获只取取景框（HybridVideoProjection.CaptureViewportForGroup），整个画在框外的组渲出来是空的，
+        // 以前要烘到最后才发现（全组皆空即抛异常）。位置证得住时在这里就与固定隐藏同样省略：无视差，
+        // 子树与父链的变换都是常量（无脚本、动画、属性绑定、运行时写入），子树每层都是居中、轴对齐的普通图片四边形，没有依赖连着它。
+        double viewX = Numeric(projection["center_x"], double.NaN), viewY = Numeric(projection["center_y"], double.NaN);
+        double halfWidth = Numeric(projection["visible_width"], double.NaN) / 2, halfHeight = Numeric(projection["visible_height"], double.NaN) / 2;
+        bool FixedTransform(int id) => scripts[id].Length == 0 && !SceneAnalyzer.Walk(objects[id]).OfType<JsonObject>().Any(Animated) &&
+            new[] { "origin", "scale", "angles", "size" }.All(key => objects[id][key] is not JsonObject) &&
+            !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write");
+        bool FixedChain(int id) => Int(objects[id]["parent"]) is not int parent || !objects.ContainsKey(parent) || FixedTransform(parent) && FixedChain(parent);
+        bool OutsideView(int id)
+        {
+            JsonObject obj = objects[id];
+            if (!FixedTransform(id) || obj["image"] is not JsonValue image || image.ToJsonString().Contains("fullscreen", StringComparison.OrdinalIgnoreCase) ||
+                obj["fullscreen"] is JsonNode fullscreen && fullscreen.ToJsonString() != "false" || obj.ContainsKey("attachment") ||
+                obj["alignment"] is JsonNode alignment && alignment.ToJsonString() != "\"center\"" || obj["size"] is null ||
+                !HybridVideoProjection.SupportsStaticParent(obj, properties)) return false;
+            try
+            {
+                JsonObject? inherited = Int(obj["parent"]) is int parent && objects.ContainsKey(parent)
+                    ? HybridVideoProjection.ParentTransform(objects, parent, properties) : null;
+                var parentOrigin = HybridVideoProjection.Vector(inherited?["origin"], (0, 0));
+                var parentScale = HybridVideoProjection.Vector(inherited?["scale"], (1, 1));
+                var origin = HybridVideoProjection.Vector(obj["origin"], (0, 0));
+                var scale = HybridVideoProjection.Vector(obj["scale"], (1, 1));
+                var size = HybridVideoProjection.Vector(obj["size"], (0, 0));
+                return Math.Abs(parentOrigin.X + parentScale.X * origin.X - viewX) - Math.Abs(size.X * scale.X * parentScale.X) / 2 >= halfWidth ||
+                    Math.Abs(parentOrigin.Y + parentScale.Y * origin.Y - viewY) - Math.Abs(size.Y * scale.Y * parentScale.Y) / 2 >= halfHeight;
+            }
+            catch (InvalidDataException) { return false; }
+        }
+        bool OffViewSubtree(int id, HashSet<int> subtree) => !parallax && !unresolvedObjectAccess && subtree.All(OutsideView) && FixedChain(id) &&
+            !dependencies.OfType<JsonObject>().Any(d => Int(d["owner"]) is int owner && subtree.Contains(owner) ||
+                Int(d["target"]) is int target && subtree.Contains(target));
         var omittedSubtreeRoots = new List<int>();
         var omittedIds = allocation.OmittedIds;
         foreach (int id in sourceOrder)
         {
             if (omittedIds.Contains(id)) continue;
             var subtree = sourceOrder.Where(layer => graph.Within(layer, id)).ToHashSet();
-            if (!SafeHiddenSubtree(id, subtree)) continue;
+            if (!SafeHiddenSubtree(id, subtree) && !OffViewSubtree(id, subtree)) continue;
             omittedSubtreeRoots.Add(id);
             omittedIds.UnionWith(subtree);
         }
