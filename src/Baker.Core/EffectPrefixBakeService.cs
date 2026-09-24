@@ -211,7 +211,30 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     // 编码尺寸（Fit/FitAtlas）只由捕获范围与投影决定，与帧数无关。
                     using (timing.Measure(StageTiming.MasterRender))
                     {
-                        try { rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken); }
+                        // GPU 成品先过画质门：不过降 QP 在 GPU 上重渲一次，还不过与编码器初始化失败一样按软件路线重渲。
+                        async Task<bool> GpuQualityPassesAsync()
+                        {
+                            string qualityOutput = Path.Combine(cacheOutput, $"quality-qp{renderRequest.GpuEncoding!.Qp}");
+                            Directory.CreateDirectory(qualityOutput);
+                            JsonObject gate = await runner.GpuPlaybackQualityAsync(rendered,
+                                rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4"),
+                                new((int)sourceWidth, (int)sourceHeight, 0, 0, (int)sourceWidth, (int)sourceHeight),
+                                packedAlpha, qualityOutput, cancellationToken);
+                            rendered["playback_quality_gate"] = gate;
+                            return gate["passed"]?.GetValue<bool>() == true;
+                        }
+                        try
+                        {
+                            rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken);
+                            if (renderRequest.GpuEncoding is { } gpu && !await GpuQualityPassesAsync())
+                            {
+                                renderOutput = Path.Combine(cacheOutput, $"encoded-qp{gpu.Qp - 6}");
+                                renderRequest = renderRequest with { OutputDirectory = renderOutput, GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
+                                rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken);
+                                if (!await GpuQualityPassesAsync())
+                                    throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
+                            }
+                        }
                         catch (GpuEncodeUnavailableException error) when (renderRequest.GpuEncoding is not null && !cancellationToken.IsCancellationRequested)
                         {
                             encoderFallback = error.Message;
@@ -281,14 +304,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                             seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator, settings.FpsDenominator,
                                 packedAlpha, reference, paddedContent, cancellationToken);
                         }
+                        // 门在渲染后就过了（见上面的降 QP 重试）；这里只在接缝过了时记下结果。
                         if (gpuDirect && seam["status"]?.GetValue<string>() == "observed_seam_pass")
-                        {
-                            string qualityOutput = Path.Combine(cacheOutput, "quality");
-                            Directory.CreateDirectory(qualityOutput);
-                            gpuQuality = await runner.GpuPlaybackQualityAsync(rendered, video,
-                                new((int)sourceWidth, (int)sourceHeight, 0, 0, (int)sourceWidth, (int)sourceHeight),
-                                packedAlpha, qualityOutput, cancellationToken);
-                        }
+                            gpuQuality = rendered["playback_quality_gate"]!.AsObject();
                     }
                     finally
                     {

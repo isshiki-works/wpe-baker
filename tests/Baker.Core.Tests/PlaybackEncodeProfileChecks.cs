@@ -91,7 +91,7 @@ internal static class PlaybackEncodeProfileChecks
         var amfOnly = PlaybackEncoderSelection.ParseEncoders(" V....D hevc_amf  x\n V....D h264_amf  x");
         var halfNvenc = PlaybackEncoderSelection.ParseEncoders(" V....D hevc_nvenc  x");
 
-        check(PlaybackEncoderSelection.Resolve(null, softwareOnly) == (PlaybackEncoderSelection.Software, null) &&
+        check(PlaybackEncoderSelection.Resolve("software", softwareOnly) == (PlaybackEncoderSelection.Software, null) &&
             PlaybackEncoderSelection.Resolve("software", withNvenc) == (PlaybackEncoderSelection.Software, null),
             "software stays software and never probes for a hardware fallback reason");
 
@@ -127,8 +127,8 @@ internal static class PlaybackEncodeProfileChecks
 
         bool rejected = false;
         try { PlaybackEncoderSelection.Normalize("vaapi"); } catch (ArgumentException) { rejected = true; }
-        check(rejected && PlaybackEncoderSelection.Normalize(null) == PlaybackEncoderSelection.Software &&
-            PlaybackEncoderSelection.Normalize("  ") == PlaybackEncoderSelection.Software &&
+        check(rejected && PlaybackEncoderSelection.Normalize(null) == PlaybackEncoderSelection.Auto &&
+            PlaybackEncoderSelection.Normalize("  ") == PlaybackEncoderSelection.Auto &&
             PlaybackEncoderSelection.Normalize(" NVENC ") == PlaybackEncoderSelection.Nvenc,
             "encoder choices are normalized and unknown kinds are refused");
 
@@ -166,7 +166,7 @@ internal static class PlaybackEncodeProfileChecks
         var mixed = PlaybackEncoderSelection.Summarize("auto", [Group("nvenc", 1, 1), Group("software", 2, 1)]);
         var staticOnly = PlaybackEncoderSelection.Summarize(null, [Group(null, null, 5)]);
         check(mixed["used"]!.GetValue<string>() == "mixed" && staticOnly["used"] is null &&
-            staticOnly["requested"]!.GetValue<string>() == PlaybackEncoderSelection.Software &&
+            staticOnly["requested"]!.GetValue<string>() == PlaybackEncoderSelection.Auto &&
             staticOnly["encode_seconds_total"]!.GetValue<double>() == 0 &&
             staticOnly["video_bytes_total"]!.GetValue<long>() == 0,
             "bake.json marks a disagreeing bake mixed and leaves an all-static bake without an encoder");
