@@ -624,7 +624,10 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     if (count > std::size(vk->qf)) throw std::runtime_error("Too many Vulkan queue families");
     for (std::uint32_t i = 0; i < count; ++i) {
         if (!families[i].queueFamilyProperties.queueCount) continue;
-        vk->qf[vk->nb_qf++] = { static_cast<int>(i), 1,
+        // Must match Device::ChooseDeviceQueue: up to two encode queues, which FFmpeg submits to in turn.
+        const auto& family = families[i].queueFamilyProperties;
+        const int queues = (family.queueFlags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) && family.queueCount > 1 ? 2 : 1;
+        vk->qf[vk->nb_qf++] = { static_cast<int>(i), queues,
             static_cast<VkQueueFlagBits>(families[i].queueFamilyProperties.queueFlags),
             static_cast<VkVideoCodecOperationFlagBitsKHR>(video[i].videoCodecOperations) };
     }

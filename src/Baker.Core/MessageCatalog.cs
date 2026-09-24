@@ -787,15 +787,15 @@ public static class MessageCatalog
 
         // bake --help 里 --encoder 的说明：用法骨架与 analyze --help 一样是英文，只有这段说明按 --lang 出中文或英文。
         ["cli.bake_encoder_help"] = new(
-            Zh: "vulkan 在支持的显卡上直接生成成品，减少中间文件和重复编码。不可用的路径使用\n软件，并在 bake.json 中记录原因；画质不达标时停止，不自动重新生成。",
-            En: "Vulkan generates playback video directly on supported GPUs, reducing intermediate files\nand repeated encoding. Unavailable paths use software and record why in bake.json.\nInsufficient quality stops generation without automatically rebaking the scene."),
+            Zh: "默认 auto：支持的显卡上走 vulkan，直接生成成品，减少中间文件和重复编码。不可用的路径使用\n软件，并在 bake.json 中记录原因；画质不达标时先降 QP 重渲这一组，仍不达标改用软件。",
+            En: "Default auto: Vulkan generates playback video directly on supported GPUs, reducing intermediate files\nand repeated encoding. Unavailable paths use software and record why in bake.json.\nA group below the quality gate is re-rendered once at a lower QP, then with software."),
         ["bake.gpu_quality_rejected"] = new(
             Zh: "GPU 编码的代表帧画质未达到既有限值。候选视频和报告已保留；可手动改用软件编码重试，本次不会自动重新生成。",
             En: "GPU encoding did not meet the existing sample quality limit. The candidate video and report are retained; retry manually with software encoding. This run will not automatically regenerate the scene."),
 
         ["cli.bake_parallel_help"] = new(
-            Zh: "--encode-slots N 限制本机同时做成品编码的 wpe-baker 进程数（0 = 默认，不限）。渲染不受限制，\n只卡成品编码：多案并行时吃满 CPU 的就是这一路 ffmpeg。等槽位的时间单独记在\nstage_timing.stages.encode_slot_wait，不混进 encode_playback。\n--group-parallel N 让一个壁纸最多同时渲染 N 个视频组（1 = 默认，逐组渲染）。组的判定、编码与\n写入报告的顺序始终按组序串行，成品与默认设置逐字节相同；峰值磁盘与内存按 N 倍算。",
-            En: "--encode-slots N limits how many wpe-baker processes on this machine encode the playback video at\nthe same time (0, the default, does not limit it). Rendering is never limited; only the playback\nencode is, because that ffmpeg is what saturates the CPU when several bakes run at once. Time spent\nwaiting for a slot is reported separately as stage_timing.stages.encode_slot_wait.\n--group-parallel N renders up to N video groups of one wallpaper at the same time (1, the default,\nrenders one group at a time). Group judgment, encoding and report order stay strictly sequential, so\nthe product is byte-identical to the default; peak disk and memory scale with N."),
+            Zh: "--encode-slots N 限制本机同时做成品编码的 wpe-baker 进程数（0 = 默认，不限）。渲染不受限制，\n只卡成品编码：多案并行时吃满 CPU 的就是这一路 ffmpeg。等槽位的时间单独记在\nstage_timing.stages.encode_slot_wait，不混进 encode_playback。\n--group-parallel N 让一个壁纸最多同时渲染 N 个视频组（默认：GPU 路线 3，其余 1 = 逐组渲染）。\n组的判定、编码与写入报告的顺序始终按组序串行，成品与逐组渲染逐字节相同；峰值磁盘与内存按 N 倍算。",
+            En: "--encode-slots N limits how many wpe-baker processes on this machine encode the playback video at\nthe same time (0, the default, does not limit it). Rendering is never limited; only the playback\nencode is, because that ffmpeg is what saturates the CPU when several bakes run at once. Time spent\nwaiting for a slot is reported separately as stage_timing.stages.encode_slot_wait.\n--group-parallel N renders up to N video groups of one wallpaper at the same time (default: 3 on the\nGPU path, otherwise 1, one group at a time). Group judgment, encoding and report order stay strictly\nsequential, so the product is byte-identical to one group at a time; peak disk and memory scale with N."),
 
         ["cli.bake_keep_intermediates_help"] = new(
             Zh: "--keep-intermediates true 保留中间产物：捕获副本 capture-source、各组的无损 master、合成探针与参照。\n默认 false——生成结束（含拒绝与失败）后删除，只保留成品工程、bake.json、接缝预览与日志。\n中间产物是磁盘峰值的主要来源（单案实测 47 GB），仅在排查渲染或编码问题时保留。",

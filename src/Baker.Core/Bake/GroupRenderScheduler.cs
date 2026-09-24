@@ -106,7 +106,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             FrameSamplesOnly: true,
             EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,
-            CollectSamplingCoverage: PlaybackEncoderSelection.Normalize(request.PlaybackEncoder) == PlaybackEncoderSelection.Vulkan,
+            CollectSamplingCoverage: playbackKind == PlaybackEncoderSelection.Vulkan,
             FrameSampleIncludeAlpha: !capture.SceneClear,
             OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet()));
 
@@ -182,9 +182,11 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
                     (uint)layout.Crop.Width * (layout.Packed ? 2u : 1u), (uint)layout.Crop.Height,
                     render.FpsNumerator, render.FpsDenominator), PlaybackEncoderSelection.Vulkan);
+                // 不按固定码率系数预判 2 GiB：ARCH2 实测 Vulkan 成品相对参考码率 0.02–2.0 倍，随内容变、不随格式定。
+                // 成品实际超限时由 StartAsync 按软件档重渲。
                 render = render with { LosslessTest = false, PlaybackEncoderKind = null, ForceKeyFrameFrame = null,
                     EncodedFrames = frames, PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb",
-                    GpuEncoding = new(codec, Qp: coverage is null ? 18 : 12, CrossfadeFrames: framing.Residual ? crossfadeFrames : 0,
+                    GpuEncoding = new(codec, Qp: 18, CrossfadeFrames: framing.Residual ? crossfadeFrames : 0,
                         Crop: layout.Crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
             }
         }
@@ -194,7 +196,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     /// <summary>
     /// 异步启动一个组的主渲染：构造请求时抛出的异常留在任务里，等轮到这个组时才浮出来，不会打乱前面组的判定顺序。
     /// Vulkan 透明组的裁剪未知时先跑一遍 GPU 覆盖度预通道拿全片裁剪，再直编；全片全零时直接走空组路径。
-    /// GPU 编码初始化失败时把 master 挪开，按 CPU 路线重渲一遍。
+    /// GPU 直编的画质门在这里过：不过先降 QP 在 GPU 上重渲一次，还不过与 GPU 编码初始化失败一样，把 master 挪开按 CPU 路线重渲。
     /// </summary>
     private async Task<JsonObject> StartAsync(int index)
     {
@@ -202,8 +204,11 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
             throw new IOException("A group master output must be new; existing files will not be cleaned.");
         JsonObject? coveragePass = null;
+        // 起点搜索已给出裁剪却没取 GPU 路线（须上下并排）时，预通道的裁剪同样用不上，不跑。
         if (render.GpuEncoding is null && playbackKind == PlaybackEncoderSelection.Vulkan && !probe &&
-            render.Width % 2 == 0 && render.Height % 2 == 0)
+            render.PixelPacking != "rgb" && render.Width % 2 == 0 && render.Height % 2 == 0 &&
+            !(StartSearches.TryGetValue(groups[index]["id"]!.GetValue<string>(), out JsonObject? search) &&
+                NativeRenderRunner.SamplingCrop(search["sampling_coverage"] as JsonObject, render) is not null))
         {
             // An unknown crop used to require a full RGBA lossless master
             // followed by decoding and encoding again. A GPU-only bounds
@@ -236,6 +241,19 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         try
         {
             JsonObject rendered = await runner.RenderAsync(render, progress, renderCancellation.Token);
+            if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render))
+            {
+                Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
+                    Path.GetDirectoryName(render.OutputDirectory)!, $"master.gpu-qp{gpu.Qp}"));
+                render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
+                rendered = await runner.RenderAsync(render, progress, renderCancellation.Token);
+                if (!await GpuQualityPassesAsync(rendered, render))
+                    throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
+            }
+            // 超内嵌视频上限的 GPU 成品不交出去：软件档码率更低，按 CPU 路线重渲（原来会被判为超限拒绝）。
+            if (render.GpuEncoding is not null &&
+                new FileInfo(Path.Combine(render.OutputDirectory, "preview.mp4")).Length > EmbeddedVideoBudget.MaximumBytes)
+                throw new GpuEncodeUnavailableException("GPU playback video exceeds the 2 GiB embedded-video limit; re-rendering on the software route.");
             rendered["gpu_bounds_prepass"] = coveragePass;
             return rendered;
         }
@@ -249,5 +267,14 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             fallback["gpu_bounds_prepass"] = coveragePass;
             return fallback;
         }
+    }
+
+    /// <summary>GPU 直编成品的画质门；结果挂在渲染结果上，GroupEncoder 接管成品时直接取用。</summary>
+    private async Task<bool> GpuQualityPassesAsync(JsonObject rendered, RenderRequest render)
+    {
+        JsonObject gate = await runner.GpuPlaybackQualityAsync(rendered, Path.Combine(render.OutputDirectory, "preview.mp4"),
+            render.GpuEncoding!.Crop!, render.PixelPacking == "rgba_side_by_side", render.OutputDirectory, renderCancellation.Token);
+        rendered["playback_quality_gate"] = gate;
+        return gate["passed"]?.GetValue<bool>() == true;
     }
 }

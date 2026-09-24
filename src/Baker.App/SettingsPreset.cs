@@ -70,7 +70,7 @@ internal sealed record SettingsPreset(string SourceSha256, PresetSettings Settin
 
 internal sealed record PresetSettings(uint Width, uint Height, string Fps, string? DeviceUuid, bool Retime, bool FixedView,
     bool LayeredVideo, bool ForegroundLive, bool SimpleTextEffects, bool AudioEffects, string LoopPreference = "balanced",
-    string Interaction = "fixed", string PlaybackEncoder = "software", bool MatchEffectResolution = false)
+    string Interaction = "fixed", string PlaybackEncoder = "auto", bool MatchEffectResolution = false)
 {
     public JsonObject ToJson() => new()
     {
