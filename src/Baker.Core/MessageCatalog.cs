@@ -389,6 +389,10 @@ public static class MessageCatalog
             Zh: "该层的脚本在运行中读取时间，其状态周期尚未建模；模型动画或材质的周期不能证明脚本状态也会闭合。需保持该层实时，或另行求解脚本状态的循环。",
             En: "This layer's script reads time during playback; a model or material period does not establish a loop for the script state. Keep the layer live or solve its script-state loop separately."),
 
+        ["unresolved.script_frame_step_lcm_over_ceiling"] = new(
+            Zh: "该层脚本每帧按常量步进、越界复位，按单精度逐帧模拟的周期为 {0} 帧；被烘的 {1} 条这类脚本合起来的公共周期为 {2} 帧，超过循环上限，没有能同时闭合它们的循环。",
+            En: "This layer's script steps by a constant every frame and resets past a bound; simulated in single precision its period is {0} frames. The {1} such scripts being baked share a joint period of {2} frames, beyond the loop ceiling, so no loop closes all of them."),
+
         ["unresolved.playback_rate_unresolved"] = new(
             Zh: "运行时 playback_rate 无法确定精确的正周期。",
             En: "The runtime playback_rate cannot establish an exact positive period.",
