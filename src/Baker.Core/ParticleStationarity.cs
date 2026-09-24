@@ -370,7 +370,7 @@ internal static class ParticleStationarity
             Fail("warmup", "starttime_unverified", "starttime", startNode);
         if (lifetimeMax is double authoredLifetime)
         {
-            // 事件子系统的实例在父粒子死后还要走完一个子寿命：相关跨度与预热各加子寿命上界。
+            // 事件子系统的实例在父粒子死后还要走完子寿命：相关跨度与预热各加尾长（CheckEventChild）。
             lifetime = ParticleCriteria.Round(authoredLifetime * lifetimeScale / rateScale + childTail);
             warmup = ParticleCriteria.WarmupSeconds(start, authoredLifetime, lifetimeScale, generations, periodicWarmup, rateScale) + childTail;
         }
@@ -483,9 +483,9 @@ internal static class ParticleStationarity
     /// 一个子系统（渲染器 ParticleObject.cpp / SceneParticleObjectParser.cpp / ParticleRuntime.cpp）。只核了事件类型：eventspawn / eventfollow
     /// 在父粒子出生、eventdeath 在父粒子死亡时取一个实例（按 probability 独立抽签）；实例的发射计时、槽位、starttime 预跑都从实例创建起算，
     /// 父粒子死后实例停发（InstanceCanEmit），余下粒子走完子寿命即回收。每个实例因此是父粒子标记、自身随机与事件后时间的函数，
-    /// 寿命有界：父层平稳时整体仍平稳，相关跨度与预热各多一个子寿命上界（返回值，真实秒；不满足时返回 0）。
+    /// 寿命有界：父层平稳时整体仍平稳，相关跨度与预热各多一段尾长（返回值，真实秒；不满足时返回 0）。
     /// 前提是实例上限（children[].maxcount，缺省 20）永不触顶，否则哪些事件拿到实例取决于历史：每个父槽位相邻两次出生或死亡至少隔
-    /// 父寿命下界，同时在世的实例 ≤ min(父 maxcount, 20000) × (2 + ⌊子寿命上界 / 父寿命下界⌋)。子定义按同一套条件递归判，
+    /// 父寿命下界，同时在世的实例 ≤ min(父 maxcount, 20000) × (2 + ⌊尾长 / 父寿命下界⌋)。子定义按同一套条件递归判，
     /// 只相对实例的几条（爆发、零发射率、有限时长、间歇、实例内封顶）不判。eventfollow 例外：父粒子死亡的同一帧槽位被补上时实例不释放、
     /// 接着跟新粒子（ProcessChildEvents），发射计时跨代延续，所以按常驻系统的全套条件判。static 子系统是另一个常驻系统，没有核过。
     /// </summary>
@@ -500,7 +500,8 @@ internal static class ParticleStationarity
         Result result = Evaluate(new JsonObject { ["particle"] = child["name"]?.DeepClone(), ["instanceoverride"] = overrides.DeepClone() },
             objects, runtime, readResource, childType: Text(child["type"]));
         failures.AddRange(result.Failures.Select(failure => failure with { Node = node + "." + failure.Node }));
-        if (!result.Stationary || result.LifetimeMaxSeconds is not double tail) return 0;
+        // 子定义的预热（≥ 子寿命上界，eventfollow 的常驻实例还含 starttime 与间歇）当作尾长：相关跨度按它从宽计。
+        if (!result.Stationary || result.WarmupSeconds is not double tail) return 0;
         double cap = 20;
         bool capReadable = child["maxcount"] is null || TryNonNegative(child["maxcount"], out cap);
         double? instances = TryNonNegative(definition["maxcount"], out double parentCount) && parentLifetimeMin is > 0
