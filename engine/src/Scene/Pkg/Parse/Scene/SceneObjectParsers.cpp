@@ -149,6 +149,11 @@ void ParseCameraObj(SceneParseContext& context, wpscene::CameraObject& cam) {
     if (! cam.visible) node->SetVisible(false);
     if (! cam.visible_user.empty())
         node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(cam.visible_user));
+    // 永远不会启用的隐藏相机只占图层表的位置：不碰相机、不注册路径，否则没有相机启用的帧里会套用它记下的默认视角。
+    if (! cam.visible && cam.visible_user.empty() && ! cam.field_bindings.HasScript("visible"_str)) {
+        RegisterNodeRef(context, cam.id, SceneParseContext::NodeRef { cam.parent, Some(node.clone()) });
+        return;
+    }
 
     if (cam.visible) camera_owner->AttatchNode(node.as_ptr());
     if (use_perspective) {
