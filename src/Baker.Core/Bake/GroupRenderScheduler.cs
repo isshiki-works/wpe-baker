@@ -151,8 +151,11 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             capture.PixelWidth, capture.PixelHeight, settings.FpsNumerator, settings.FpsDenominator,
             framing.RenderedFrames, WarmupFrames: framing.MasterWarmupFrames,
             Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side",
+            // 直编组是不透明整幅；硬件档位预判超 2 GiB 时改用软件编码（原因由 GroupEncoder 记）。
             LosslessTest: !direct, PlaybackEncoderKind: direct ?
-                playbackKind == PlaybackEncoderSelection.Vulkan ? PlaybackEncoderSelection.Software : playbackKind : null,
+                playbackKind == PlaybackEncoderSelection.Vulkan ||
+                EmbeddedVideoBudget.HardwareOverBudget(frames, capture.PixelWidth, capture.PixelHeight, packedAlpha: false)
+                    ? PlaybackEncoderSelection.Software : playbackKind : null,
             DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, CollectAlphaBounds: true, BoundsIncludeRgb: true,
             EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,

@@ -685,7 +685,15 @@ public sealed class HybridBakeService(NativeTools tools)
                     scene["objects"] = finalObjects;
                     PlanTransforms.ApplyTextEffectChoice(scene, plan);
                     ProjectWriter.ApplyVisibilityFallbacks(scene, snapshot);
-                    if (replacements.Count == 0) throw new InvalidDataException("No video group produced visible output; this is not a hybrid candidate.");
+                    // 所有组整段都渲空：不是混合候选，照常写 bake.json 给出拒因，不按内部错误抛出。
+                    if (replacements.Count == 0)
+                    {
+                        report["status"] = "candidate_rejected_no_visible_output";
+                        report["loop_validation"] = "not_performed";
+                        new Message("bake.no_visible_output").Write(report, "reason");
+                        await Save();
+                        return report;
+                    }
                     await ProjectWriter.WriteAsync(project, source.SceneResource, scene, metadata, daytimeExport, cancellationToken);
                 }
                 if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
