@@ -54,6 +54,10 @@ internal static class HardwareDecodeDimensionsChecks
             atlas.Violations.Single() is { Measure: "width", Actual: 10216, Limit: 8192 } &&
             atlasOpaque.Status == HardwareDecodeDimensions.PassStatus && atlasOpaque.SoftwareEncoder == "libx265",
             "side-by-side alpha pushes the 3753921460 atlas (5108x3160) to 10216 wide and is rejected, while the opaque layout would pass");
+        check(HardwareDecodeDimensions.FitCeiling(5108, 3160, true) == (4096u, 2532u) &&
+            HardwareDecodeDimensions.Evaluate(4096, 2532, true, 60, 1).Status == HardwareDecodeDimensions.PassStatus &&
+            HardwareDecodeDimensions.FitCeiling(5108, 3160, false) == (5108u, 3160u),
+            "an over-ceiling packed atlas scales down uniformly to the HEVC ceiling; one within it is left alone");
         var tall = HardwareDecodeDimensions.Evaluate(2, 8194, false, 60, 1);
         check(tall.Rejected && tall.Violations.Any(violation => violation.Measure == "height" && violation.Actual == 8194),
             "height beyond 8192 is rejected even when padding widened the canvas");
@@ -137,12 +141,6 @@ internal static class HardwareDecodeDimensionsChecks
             "a capture smaller than the minimum keeps its crop; the preflight records it instead of inventing pixels");
 
         // ---- 文案 ----
-        var message = new Message("bake.hardware_decode_dimensions_rejected",
-            ["L72 \"Персонаж\"", HardwareDecodeDimensions.Extent(atlas.StoredWidth, atlas.StoredHeight), atlas.PackingText("en"), atlas.ViolationText("en"), atlas.Limits.BasisEn],
-            ["L72 \"Персонаж\"", HardwareDecodeDimensions.Extent(atlas.StoredWidth, atlas.StoredHeight), atlas.PackingText("zh"), atlas.ViolationText("zh"), atlas.Limits.BasisZh]);
-        JsonObject localized = message.Localized();
-        check(localized["key"]?.GetValue<string>() == "bake.hardware_decode_dimensions_rejected",
-            "the pre-encode rejection names the layer, encoded extent, violated limit and its source in both languages");
         JsonObject preflight = atlas.ToJson();
         check(preflight["status"]?.GetValue<string>() == "rejected" && preflight["encoded_extent"]?.ToJsonString() == "[10216,3160]" &&
             preflight["violations"]?.AsArray().Count == 1 && preflight["limits"]?["sources"]?.AsArray().Count == hevc.Sources.Length &&

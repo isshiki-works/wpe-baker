@@ -521,10 +521,10 @@ public static class ResidualMasking
         double? speed = pass is null ? null : Scalar(pass, "rayspeed");
         if (speed is not double value || !double.IsFinite(value) || value == 0)
         {
-            verdict["user_guidance_zh"] = "这一层的光轴效果让两张噪声贴图沿四条轴匀速漂移，偏移随时间线性增长、不回头，" +
+            verdict["user_guidance_zh"] = "这一层的特效让噪声贴图沿四条轴匀速漂移，偏移随时间线性增长、不回头，" +
                 $"在 {ceiling} 秒的循环上限内没有可用循环；调速只会等比缩放这四条速率，救不回来。" +
                 "请在 Wallpaper Engine 里关掉这一层后重新烘焙，或接受该层保持实时渲染。";
-            verdict["user_guidance_en"] = "This layer's light-shaft effect drifts two noise textures along four axes at a constant rate, " +
+            verdict["user_guidance_en"] = "This layer's effect drifts noise textures along four axes at a constant rate, " +
                 $"so the offset grows without ever returning and no loop exists within the {ceiling}-second ceiling; " +
                 "retiming scales all four rates equally and cannot recover it. Switch that layer off before baking, or keep it rendering live.";
             return;

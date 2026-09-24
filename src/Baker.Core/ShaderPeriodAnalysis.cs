@@ -259,6 +259,7 @@ public static class ShaderPeriodAnalysis
                 "shimmer" => LinearShimmer(c),
                 "film_grain" => FrameFractionGrain(c),
                 "light_shafts" => LightShaftRays(c),
+                "caustics" => CausticsDrift(c),
                 "iris" => IrisSaccade(c),
                 "foliage_sway" => FoliageSway(c),
                 "shadow_hash" => ShadowMaskHash(c),
@@ -306,6 +307,14 @@ public static class ShaderPeriodAnalysis
                     if (!TryScalar(c.Pass, Text("key"), out double amount, out _, out _))
                         return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, Text("missing"));
                     if (amount != 0) return c.Refuse(kind, Text("detail"));
+                    break;
+                case "repeat_texture":
+                    // 线性漂移的 UV 只有落在 repeat 寻址的静止贴图上才回得来；pass 没写该槽时取 shader 注释里的默认贴图。
+                    int slot = gate["slot"]!.GetValue<int>();
+                    string? fallback = c.Source.UniformAnnotations.FirstOrDefault(u => u.Name == $"g_Texture{slot}").Annotation?["default"]
+                        is JsonValue named && named.TryGetValue(out string? texture) ? texture : null;
+                    if (!UsesStaticRepeatTexture(c.Pass, slot, c.Project, c.Assets, fallback))
+                        return c.Refuse(kind, Text("detail"), mechanism: LightShaftDriftMechanism);
                     break;
                 default: throw new InvalidDataException($"Unknown shader clock gate '{Text("type")}'.");
             }
@@ -570,6 +579,21 @@ public static class ShaderPeriodAnalysis
             bounded: false, mechanism: LightShaftDriftMechanism);
     }
 
+    // caustics.frag 用 time = g_Time·speed + offset 平移四次噪声查表，速率 time·(0.005, 0.004111, 0.003777, 0.01)。
+    // 同 lightshafts：四个十进制常量的公共分母使四轴同时回到整数纹理圈要 speed·t 为 1e6 的倍数，调速等比缩放，回不到上限内。
+    private static ShaderVerdict CausticsDrift(PassContext c)
+    {
+        if (!TryScalar(c.Pass, "ui_editor_properties_speed", out double speed, out _, out string numericText))
+            return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed,
+                "Verified caustics drift needs a finite scalar 'ui_editor_properties_speed' constant to state its period.");
+        if (speed == 0) return ShaderVerdict.NoMotion;
+        return c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
+            $"Caustics noise UVs translate at speed {numericText} * (0.005, 0.004111, 0.003777, 0.01) per second; all four close together only after " +
+            $"{(1e6 / Math.Abs(speed)).ToString("0.###E+00", CultureInfo.InvariantCulture)} s. Every rate is proportional to the speed, so a retime " +
+            $"scales them equally and cannot bring the joint return inside the {CeilingText(c.Ceiling)}-second loop ceiling.",
+            bounded: false, mechanism: LightShaftDriftMechanism);
+    }
+
     // iris.vert:31-41 drives the eye from floor(g_Time * g_Speed + phase). The per-step offsets are
     // sin(1.9*n) and sin(2.5*n + c) at integer n, whose frequencies are irrational multiples of 2π.
     private static ShaderVerdict IrisSaccade(PassContext c) => c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
@@ -831,10 +855,12 @@ public static class ShaderPeriodAnalysis
     /// 纹理槽 <paramref name="slot"/> 指向一张 repeat 寻址的静止贴图：TEXV0005/TEXI0001 头，flags 不含
     /// ClampUVs(0x2)、精灵(0x4)、视频(0x20)。读不到或头部不认识一律 false。
     /// </summary>
-    private static bool UsesStaticRepeatTexture(JsonObject pass, int slot, ProjectSource source, string? assetsDirectory)
+    private static bool UsesStaticRepeatTexture(JsonObject pass, int slot, ProjectSource source, string? assetsDirectory,
+        string? fallback = null)
     {
-        if (pass["textures"] is not JsonArray textures || textures.Count <= slot || textures[slot] is not JsonValue value ||
-            !value.TryGetValue(out string? name) || string.IsNullOrWhiteSpace(name)) return false;
+        string? name = pass["textures"] is JsonArray textures && textures.Count > slot && textures[slot] is JsonValue value &&
+            value.TryGetValue(out string? authored) ? authored : fallback;
+        if (string.IsNullOrWhiteSpace(name)) return false;
         string resource = "materials/" + name + ".tex";
         try
         {
