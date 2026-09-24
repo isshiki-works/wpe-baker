@@ -171,6 +171,9 @@ struct OfflineSourceScriptError {
 struct Services {
     // 作业自己的引擎，所有随机数消费者共用；离线渲染的随机序列只由作业种子和消费顺序决定。
     effolkronium::random_local random;
+    // 作业种子，以及每个对象自己的引擎（见 ObjectRandomScope）。
+    uint64_t seed { 0 };
+    std::unordered_map<std::int32_t, effolkronium::random_local> object_random;
     double epoch_ms { 946684800000.0 }; // 2000-01-01 UTC
     double elapsed { 0.0 };
     bool failed { false };
@@ -201,5 +204,24 @@ template<typename T>
 T RandomRange(Services* services, T from, T to) {
     return services != nullptr ? services->random.get(from, to) : Random::get(from, to);
 }
+
+// 作用域内把对象自己的引擎换进作业引擎的位置。它的种子只由作业种子和对象 id 决定，
+// 所以增删、重排别的对象不会改变这个对象取到的随机数。不在离线作业里或 id 无效时什么都不做。
+struct ObjectRandomScope {
+    Services* services { nullptr };
+    effolkronium::random_local* own { nullptr };
+    ObjectRandomScope(Services* s, std::int32_t id) : services(s) {
+        if (services == nullptr || id < 0) return;
+        auto [it, fresh] = services->object_random.try_emplace(id);
+        if (fresh) {
+            std::seed_seq seq { uint32_t(services->seed), uint32_t(services->seed >> 32), uint32_t(id) };
+            it->second.seed(seq);
+        }
+        own = &it->second;
+        std::swap(services->random, *own);
+    }
+    ObjectRandomScope(const ObjectRandomScope&) = delete;
+    ~ObjectRandomScope() { if (own != nullptr) std::swap(services->random, *own); }
+};
 
 } // namespace owe

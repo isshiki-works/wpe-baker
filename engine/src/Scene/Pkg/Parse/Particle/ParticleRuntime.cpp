@@ -944,6 +944,7 @@ void ParticleRuntime::Update(ref<SceneFrame> frame) { Tick(frame->delta); }
 
 void ParticleRuntime::Tick(f64 delta) {
     for (auto& subsystem : m_subsystems) {
+        ObjectRandomScope random_scope(subsystem->OfflineServices(), subsystem->RandomOwner());
         subsystem->Tick(delta);
     }
 }

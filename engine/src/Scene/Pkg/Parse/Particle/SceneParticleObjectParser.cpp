@@ -615,8 +615,10 @@ void BuildParticleObjectNode(ParticleObjectParseServices& services,
 
     if (is_child)
         child_ptr.particle_parent->AddChild(std::move(particleSub));
-    else
+    else {
+        particleSub->SetRandomOwner(wppartobj.id.to_primitive());
         services.particle_runtime->Add(rstd::move(particleSub));
+    }
 
     if (! is_child) {
         spNode->SetParticleControl(std::shared_ptr<SceneParticleControl>(
@@ -682,6 +684,8 @@ void ParseParticleObj(SceneParseContext& context, wpscene::ParticleObject& parti
 
 auto BuildParticleObject(ParticleObjectParseServices& services, wpscene::ParticleObject& particle)
     -> ParticleObjectParseOutput {
+    // 解析期的取数用对象自己的引擎（逐帧的见 ParticleRuntime::Tick）。
+    ObjectRandomScope random_scope(services.offline, particle.id.to_primitive());
     return BuildParticleObjectImpl(services, particle);
 }
 
