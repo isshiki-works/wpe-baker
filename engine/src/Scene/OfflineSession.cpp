@@ -228,6 +228,9 @@ struct OfflineSession::Impl {
     // Identity snapshot owned by the compiled render graph.
     RenderSceneSnapshot            m_render_scene;
     Option<Box<rg::RenderGraph>>   m_rg;
+    // 渲染图读上一帧像素（帧反馈）：预热也得真画。只增不减。
+    // ponytail: 反馈在预热中途才出现时，之前跳过的帧不补画
+    bool                           m_reads_previous_frame { false };
     audio::ResponseEngine          m_audio_response_engine;
     scene_audio::ResponseProcessor m_scene_audio_response;
     CpuFrameResult                 m_cpu_frame;
@@ -399,7 +402,9 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
     const auto resources_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     if (m_services.failed) return false;
-    m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_options.readsFrame(clock.index));
+    // 首个输出帧之前（预热）只模拟：上面的资源推进照做，跳过光栅、提交与读回；帧反馈场景照常画。
+    m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_options.readsFrame(clock.index),
+                                         clock.index >= m_options.readback_start || m_reads_previous_frame);
     if (m_profile) {
         m_cpu_frame.cpu_scene_ms = std::chrono::duration<double,std::milli>(profile.scene_finished-profile.scene_started).count();
         m_cpu_frame.cpu_script_ms = profile.script_ms;
@@ -435,8 +440,10 @@ void OfflineSession::Impl::rebuildRenderGraph(vulkan::RenderGraphResourceRetenti
     m_render->UpdateCameraFillMode(*m_scene, m_config.fill_mode);
     m_render->configureRenderTargets(*m_scene);
     m_render_scene = ExtractRenderSceneSnapshot(*m_scene);
+    bool reads_previous_frame = false;
     m_rg = Some(sceneToRenderGraph(*m_scene, m_render_scene, &m_layers,
-        m_capture_target.has_value() ? &*m_capture_target : nullptr));
+        m_capture_target.has_value() ? &*m_capture_target : nullptr, &reads_previous_frame));
+    m_reads_previous_frame |= reads_previous_frame;
 
     if (m_config.graphviz) (*m_rg)->ToGraphviz("graph.dot"_str);
     m_render->compileRenderGraph(*m_scene, **m_rg, m_render_scene);

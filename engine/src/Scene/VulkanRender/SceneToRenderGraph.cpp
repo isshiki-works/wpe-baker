@@ -83,6 +83,8 @@ struct ExtraInfo {
     Option<rg::TextureNodeRef> mip_framebuffer_history;
     const RenderSceneSnapshot* render_scene { nullptr };
     const RenderLayerSelection* selection { nullptr };
+    // 帧间反馈：本帧读到上一帧留下的像素（见 sceneToRenderGraph 的出参）
+    bool                       reads_previous_frame { false };
     // M2：每个输出 key 最近两次写入（版本号、use、变化集；change 为空 = 变化集 FULL）。
     struct M2Write {
         usize                                    version;
@@ -233,6 +235,7 @@ static rg::TextureNodeRef AddMipFramebufferHistory(ExtraInfo&              extra
     auto history      = builder.createTexture(history_desc);
     builder.markVirtualWrite(history);
     extra.mip_framebuffer_history = Some<rg::TextureNodeRef>(history);
+    extra.reads_previous_frame    = true;
     return history;
 }
 
@@ -524,6 +527,10 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                 pdesc.clear_output =
                     ! preserve_output &&
                     ((first_output_write && output_target.bind.screen) || pdesc.transparent_clear);
+                // 帧内首次写入却 LOAD（半透明/叠加且不清）= 叠在上一帧残留上
+                if (first_output_write && ! pdesc.clear_output && ! output_target.force_clear &&
+                    LoadsPreviousAttachment(pass_material->blenmode))
+                    extra.reads_previous_frame = true;
                 pdesc.preserve_output = output_state->version > usize() &&
                                         (output_target.preserve_on_write || preserve_output);
                 const bool uses_depth =
@@ -835,7 +842,8 @@ static void EmitShadowPasses(ExtraInfo& extra) {
 Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
                                              const RenderSceneSnapshot& render_scene,
                                              const RenderLayerSelection* selection,
-                                             const RenderCaptureTarget* capture_target) {
+                                             const RenderCaptureTarget* capture_target,
+                                             bool*                      reads_previous_frame) {
     auto      rgraph = Box<rg::RenderGraph>::make();
     ExtraInfo extra { .rgraph = rgraph.get(), .scene = &scene, .render_scene = &render_scene, .selection = selection };
 
@@ -892,6 +900,7 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
     }
 
     StoreMipFramebufferHistory(extra);
+    if (reads_previous_frame) *reads_previous_frame = extra.reads_previous_frame;
 
     scene.RebuildResourceIndex();
     return rgraph;

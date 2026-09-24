@@ -347,7 +347,7 @@ struct VulkanRender::Impl {
     bool init(RenderInitInfo);
     void destroy();
 
-    CpuFrameResult drawFrameCpu(Scene&, bool read_pixels);
+    CpuFrameResult drawFrameCpu(Scene&, bool read_pixels, bool raster);
     std::string finishPendingFrame();
     void recycleCpuPixels(std::vector<std::uint8_t>&&);
     bool initCpuReadback(const RenderInitInfo&);
@@ -536,8 +536,8 @@ void VulkanRender::pumpFontAtlases(Scene& scene) {
 
 bool VulkanRender::init(RenderInitInfo info) { return pImpl->init(rstd::move(info)); }
 void VulkanRender::destroy() { pImpl->destroy(); }
-owe::CpuFrameResult VulkanRender::drawFrameCpu(Scene& scene, bool read_pixels) {
-    return pImpl->drawFrameCpu(scene, read_pixels);
+owe::CpuFrameResult VulkanRender::drawFrameCpu(Scene& scene, bool read_pixels, bool raster) {
+    return pImpl->drawFrameCpu(scene, read_pixels, raster);
 }
 void VulkanRender::recycleCpuPixels(std::vector<std::uint8_t>&& buffer) {
     pImpl->recycleCpuPixels(rstd::move(buffer));
@@ -1195,7 +1195,7 @@ std::string VulkanRender::Impl::finishPendingFrame() {
     }
 }
 
-owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pixels) {
+owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pixels, bool raster) {
     const auto cpu_started = m_cpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (m_gpu_encoder) read_pixels = false;
     CpuFrameResult frame;
@@ -1227,6 +1227,14 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     }
     if (! m_inited || ! m_program.loaded || ! m_finpass->prepared()) {
         frame.message = "render graph or final pass is not ready";
+        return frame;
+    }
+    if (!raster) {
+        frame.width = m_readback_width;
+        frame.height = m_readback_height;
+        frame.row_pitch = m_readback_width * 4;
+        frame.status = CpuFrameStatus::Completed;
+        ++m_cpu_frame_index;
         return frame;
     }
     auto fail = [&](VkResult result, std::string operation) -> CpuFrameResult {
