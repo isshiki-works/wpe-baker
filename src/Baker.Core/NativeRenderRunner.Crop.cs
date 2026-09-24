@@ -54,12 +54,16 @@ public sealed partial class NativeRenderRunner
         string kind = PlaybackEncoderSelection.Normalize(requested);
         if (kind == PlaybackEncoderSelection.Software) return (PlaybackEncoderSelection.Software, null);
         Directory.CreateDirectory(logDirectory);
-        if (kind == PlaybackEncoderSelection.Vulkan)
+        if (kind is PlaybackEncoderSelection.Vulkan or PlaybackEncoderSelection.Auto)
         {
+            // auto 先取 GPU 路线：渲染器内裁切、打包、淡化、编码，C# 不碰逐帧数据；设备没有视频编码队列时由渲染器报
+            // GpuEncodeUnavailableException，按组回退 CPU 路线。
             RendererCapabilities capabilities = await client.CapabilitiesAsync(
                 Path.Combine(logDirectory, "gpu-renderer-capabilities.stderr.log"), cancellationToken);
-            return capabilities.Has("gpu-loop-encode-v1") && capabilities.Has("gpu-sampling-coverage-v1")
-                ? (kind,null) : (PlaybackEncoderSelection.Software,"Renderer does not support the complete GPU pipeline.");
+            if (capabilities.Has("gpu-loop-encode-v1") && capabilities.Has("gpu-sampling-coverage-v1"))
+                return (PlaybackEncoderSelection.Vulkan, null);
+            if (kind == PlaybackEncoderSelection.Vulkan)
+                return (PlaybackEncoderSelection.Software, "Renderer does not support the complete GPU pipeline.");
         }
         return PlaybackEncoderSelection.Resolve(kind, await UsableEncodersAsync(kind, logDirectory, cancellationToken));
     }
@@ -163,7 +167,9 @@ public sealed partial class NativeRenderRunner
         // 硬件直编（GPU 管线或 nvenc 等）没有 master 可比，拿渲染器保留的原帧跑同一个画质门；直编无法升档重编，不过就拒。
         if (gpu || encoderKind != PlaybackEncoderSelection.Software)
         {
-            JsonObject quality = await GpuPlaybackQualityAsync(render, video, region, packed, output, cancellationToken);
+            // GPU 组的门已在 GroupRenderScheduler 里过了（不过会降 QP 重渲或回退 CPU 路线），这里只取结果。
+            JsonObject quality = render["playback_quality_gate"]?.DeepClone().AsObject()
+                ?? await GpuPlaybackQualityAsync(render, video, region, packed, output, cancellationToken);
             report["playback_quality_gate"] = quality;
             if (quality["passed"]?.GetValue<bool>() != true)
             {

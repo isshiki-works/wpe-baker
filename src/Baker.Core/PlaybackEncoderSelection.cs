@@ -20,7 +20,8 @@ public static partial class PlaybackEncoderSelection
     public static readonly string[] Choices = [Software, Auto, Vulkan, Mf, Nvenc, Qsv, Amf];
 
     /// <summary>
-    /// auto 的硬件优先顺序；本机同时存在多种时按这个顺序挑第一个可用的。
+    /// auto 在渲染器支持整条 GPU 路线时先取 vulkan（见 NativeRenderRunner.ResolvePlaybackEncoderAsync）；
+    /// 不支持时按这个顺序挑第一个可用的 ffmpeg 硬件档位。
     /// mf 排第一是因为它是 Windows 上唯一的厂商无关通道（Intel 落 QSV、AMD 落 VCE、NVIDIA 落 NVENC），
     /// 基准平台是核显，厂商专用档位只作附加。注意 mf 可用不等于硬件可用，见 ParseMfProbe。
     /// </summary>
@@ -37,11 +38,11 @@ public static partial class PlaybackEncoderSelection
         _ => [],
     };
 
-    /// <summary>把请求值归一化；null 与空串表示沿用默认的软件编码。</summary>
+    /// <summary>把请求值归一化；null 与空串表示默认的 auto（本机 GPU 路线优先）。</summary>
     public static string Normalize(string? requested)
     {
-        string value = (requested ?? Software).Trim().ToLowerInvariant();
-        if (value.Length == 0) return Software;
+        string value = (requested ?? Auto).Trim().ToLowerInvariant();
+        if (value.Length == 0) return Auto;
         if (!Choices.Contains(value))
             throw new ArgumentException($"Playback encoder must be one of {string.Join(", ", Choices)}.");
         return value;

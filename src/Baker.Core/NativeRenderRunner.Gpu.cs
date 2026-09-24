@@ -10,7 +10,7 @@ public sealed partial class NativeRenderRunner
 
     /// <summary>
     /// GPU 直编成品的画质门：没有无损 master，参照取渲染时留下的原帧（按同一套整数交叉淡化、裁剪、透明打包复原；
-    /// 编码时缩放过的用 FFmpeg Lanczos 缩到编码尺寸），与成品在抽样帧上比。不达标直接拒绝，不升档。
+    /// 编码时缩放过的用 FFmpeg Lanczos 缩到编码尺寸），与成品在抽样帧上比。分组路线不达标时由 GroupRenderScheduler 降 QP 重渲或回退。
     /// </summary>
     internal async Task<JsonObject> GpuPlaybackQualityAsync(JsonObject render, string video, CacheRegion crop,
         bool packed, string output, CancellationToken token)

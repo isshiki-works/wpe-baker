@@ -186,7 +186,8 @@ struct RenderInitInfo {
 
 Box<rg::RenderGraph> sceneToRenderGraph(Scene&);
 Box<rg::RenderGraph> sceneToRenderGraph(Scene&, const RenderSceneSnapshot&, const RenderLayerSelection* = nullptr,
-                                        const RenderCaptureTarget* = nullptr);
+                                        const RenderCaptureTarget* = nullptr,
+                                        bool* reads_previous_frame = nullptr);
 
 namespace vulkan
 {
@@ -210,7 +211,8 @@ public:
 
     // Synchronous backpressure: one submission, one fenced readback, no drops.
     // A timeout/device error poisons this renderer; destroy it before retrying.
-    CpuFrameResult drawFrameCpu(Scene&, bool read_pixels = true);
+    // raster=false：只推进帧号与取景视口，不录制不提交（预热帧只模拟）。
+    CpuFrameResult drawFrameCpu(Scene&, bool read_pixels = true, bool raster = true);
 
     // Hand a consumed frame's pixel buffer back so the next drawFrameCpu
     // reuses its allocation. Without this every frame allocates and
