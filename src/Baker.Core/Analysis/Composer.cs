@@ -82,7 +82,10 @@ internal sealed class Composer
         // A nested overlay cannot cross any external drawable tree, including another live tree:
         // retaining its author parent would pull it back inside that parent's DFS position.
         // Image/model trees and framebuffer effects keep their order and can still block full-frame mode.
-        int[] overlayRoots = roots.Take(Math.Max(0, lastBakedDraw)).Where(root => liveRoots.Contains(root) &&
+        // 脚本按下标/顺序查公开图层表时不置顶：置顶只能靠改声明顺序，成品必然过不了公开图层查询检查。
+        bool publicOrderQueried = dependencies.OfType<JsonObject>().Any(d => d["operation"]?.GetValue<string>() == "query" &&
+            d["property"]?.GetValue<string>() is "layer_numeric_index" or "layer_enumeration" or "layer_index" or "layer_order");
+        int[] overlayRoots = publicOrderQueried ? [] : roots.Take(Math.Max(0, lastBakedDraw)).Where(root => liveRoots.Contains(root) &&
             (rootOf[root] == root || !roots.Skip(Array.IndexOf(roots, root) + 1).Any(later =>
                 rootOf[later] != rootOf[root] &&
                 sourceOrder.Any(id => allocationOf[id] == later && MayBeVisible(id) && Contributes(id)))) &&
