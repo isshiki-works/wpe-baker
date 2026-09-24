@@ -31,6 +31,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     private readonly JsonArray loopCandidates = plan["loop"]?["candidates"] as JsonArray ?? new JsonArray();
     private readonly bool probe = request.ProbeFrames > 0;
     private readonly Dictionary<int, Task<JsonObject>> renders = [];
+    private int nextStart;
+    private bool closed;
     private readonly CancellationTokenSource renderCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
     /// <summary>GPU 长组分段渲染时同时在跑的段进程上限（与组并行数相同），各组的段排同一个队。</summary>
     private readonly SemaphoreSlim segmentSlots = new(groupParallel);
@@ -117,27 +119,49 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             FrameSampleIncludeAlpha: !capture.SceneClear,
             OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet()));
 
-    /// <summary>这个组的主渲染是否已经提前启动（启动时它自己查过输出目录是新的）。</summary>
-    internal bool Started(int index) => renders.ContainsKey(index);
+    /// <summary>主渲染输出目录是新的：已启动的组启动时自己查过；没启动的在这里查，和补启动互斥，不会把刚补启动建的目录当成旧文件。</summary>
+    internal bool FreshOutput(int index, string masterPath)
+    {
+        lock (renders) return renders.ContainsKey(index) || !(Directory.Exists(masterPath) || File.Exists(masterPath));
+    }
 
-    /// <summary>取这个组的主渲染，并按 groupParallel 把后面几组的渲染提前挂上去。</summary>
+    /// <summary>取这个组的主渲染（没启动就现在启动），并把在飞的主渲染补到 groupParallel 个。</summary>
     internal Task<JsonObject> RenderAsync(int index)
     {
-        if (!renders.TryGetValue(index, out Task<JsonObject>? render))
-            renders[index] = render = StartAsync(index);
-        for (int ahead = index + 1; ahead < Math.Min(groups.Length, index + groupParallel); ++ahead)
-            if (!renders.ContainsKey(ahead)) renders[ahead] = StartAsync(ahead);
-        return render;
+        lock (renders)
+        {
+            if (!renders.ContainsKey(index)) Start(index);
+            Fill();
+            return renders[index];
+        }
+    }
+
+    /// <summary>
+    /// 在飞（未完成）的主渲染不足 groupParallel 个时按组序补启动，每个主渲染完成时再补一次。
+    /// 窗口按在飞数算、不按调用方读到第几组算：前面的大组还没被读走时后面的组不必干等
+    /// （3803167460 的 group-5 原来要等 group-2 编完被读走才启动，两个约 55 s 的编码串成了一条）。
+    /// </summary>
+    private void Fill()
+    {
+        for (; !closed && nextStart < groups.Length && renders.Values.Count(render => !render.IsCompleted) < groupParallel; ++nextStart)
+            if (!renders.ContainsKey(nextStart)) Start(nextStart);
+    }
+
+    private void Start(int index)
+    {
+        Task<JsonObject> render = renders[index] = StartAsync(index);
+        _ = render.ContinueWith(_ => { lock (renders) Fill(); }, TaskScheduler.Default);
     }
 
     /// <summary>取消还在飞的主渲染并等渲染器退出；这些结果已经不要了，取消、失败都咽掉（真正的失败早已从主流程抛出过一次）。</summary>
     public async ValueTask DisposeAsync()
     {
-        if (renders.Count > 0)
+        Task<JsonObject>[] pending;
+        lock (renders) { closed = true; pending = [.. renders.Values]; renders.Clear(); }
+        if (pending.Length > 0)
         {
             await renderCancellation.CancelAsync();
-            foreach (var pending in renders.Values) try { await pending; } catch { }
-            renders.Clear();
+            foreach (var render in pending) try { await render; } catch { }
         }
         renderCancellation.Dispose();
     }

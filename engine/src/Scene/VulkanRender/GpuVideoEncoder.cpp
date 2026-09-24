@@ -32,8 +32,20 @@ using namespace owe::vulkan;
 namespace {
 // FFmpeg 把同一个编码会话的帧轮流提交到编码族的每条队列；NVIDIA 上每条队列是一个 NVENC 引擎，
 // 一个会话跨两个引擎在多进程并发时报 VK_ERROR_DEVICE_LOST（ARCH6b：3757825891 三组并发必现，只给 FFmpeg 一条队列则不出）。
-// 所以 FFmpeg 只看到一条编码队列，取队列时换成本进程那条：进程按 PID 奇偶分到两个引擎，多进程并行仍能用上第二个引擎。
+// 所以 FFmpeg 只看到一条编码队列，取队列时换成本进程那条，多进程并行仍能用上第二个引擎。
 std::uint32_t pinned_encode_family = UINT32_MAX, pinned_encode_queue = 0;
+// 本进程用哪条编码队列：先占到哪条的命名互斥量就用哪条（句柄不关，进程退出时系统释放），两条都有人占时按 PID 奇偶。
+// 原来只按 PID 奇偶，两个并发编码进程有一半概率挤在同一个引擎上（PERFM 实测 1080p H.264：同队列各 0.96、异队列各 1.73 G 像素/s）。
+std::uint32_t EncodeQueueForThisProcess() {
+    for (std::uint32_t queue = 0; queue < 2; ++queue) {
+        HANDLE mutex = CreateMutexW(nullptr, FALSE, queue ? L"Local\\wpe-render-encode-queue-1" : L"Local\\wpe-render-encode-queue-0");
+        if (!mutex) continue;
+        const DWORD wait = WaitForSingleObject(mutex, 0);
+        if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) return queue;
+        CloseHandle(mutex);
+    }
+    return GetCurrentProcessId() / 4 % 2; // Windows 的 PID 都是 4 的倍数
+}
 PFN_vkGetDeviceQueue device_queue = nullptr;
 PFN_vkGetDeviceProcAddr device_proc = nullptr;
 VKAPI_ATTR void VKAPI_CALL PinnedDeviceQueue(VkDevice device, std::uint32_t family, std::uint32_t index, VkQueue* queue) {
@@ -651,7 +663,8 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
         const auto& family = families[i].queueFamilyProperties;
         if ((family.queueFlags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) && family.queueCount > 1) {
             pinned_encode_family = i;
-            pinned_encode_queue = GetCurrentProcessId() / 4 % 2; // Windows 的 PID 都是 4 的倍数
+            static const std::uint32_t queue = EncodeQueueForThisProcess();
+            pinned_encode_queue = queue;
         }
         vk->qf[vk->nb_qf++] = { static_cast<int>(i), 1,
             static_cast<VkQueueFlagBits>(families[i].queueFamilyProperties.queueFlags),
