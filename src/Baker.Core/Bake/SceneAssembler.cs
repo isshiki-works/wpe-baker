@@ -226,6 +226,9 @@ internal static class SceneAssembler
         var used = finalObjects.OfType<JsonObject>().Select(Id).ToHashSet();
         int next = used.Concat(originals.Keys).Max() + 1;
         var inserts = new List<(JsonObject Video, List<JsonObject> Clones)>();
+        // 按模型资源找视频：查公开图层表时装配会把视频挪到成员槽位、换掉 id（见 AssembleAllocationObjects）。
+        JsonObject Placed(JsonObject replacement) =>
+            finalObjects.OfType<JsonObject>().Single(obj => JsonNode.DeepEquals(obj["image"], replacement["image"]));
         string? skip = PublicLayerQueries(finalObjects.OfType<JsonObject>(), dependencies).Any() ? "public_layer_queries" : null;
         foreach (var group in plan["video_groups"]!.AsArray().OfType<JsonObject>())
         {
@@ -255,7 +258,7 @@ internal static class SceneAssembler
                     ["value"] = true, ["script"] = $"'use strict';\nexport function update(value) {{\n\treturn engine.runtime < {threshold};\n}}\n" };
                 clones.Add(clone);
             }
-            inserts.Add((finalObjects.OfType<JsonObject>().Single(obj => Id(obj) == Id(replacement)), clones));
+            inserts.Add((Placed(replacement), clones));
         }
         ulong switchFrame = skip is null ? introFrames : 0;
         if (skip is null)
@@ -268,13 +271,14 @@ internal static class SceneAssembler
         var seeks = new JsonObject();
         foreach (var (groupId, replacement) in replacements)
         {
-            var video = finalObjects.OfType<JsonObject>().Single(obj => Id(obj) == Id(replacement));
-            if (skip is not null && staticIds.Contains(Id(video))) continue;
+            var video = Placed(replacement);
+            bool isStatic = staticIds.Contains(Id(replacement));
+            if (skip is not null && isStatic) continue;
             // P 取本组录制帧数 P_g（各组按自身周期录制）；落在帧中间（+¼ 帧），解码取帧不受取整方向影响。
             ulong period = loopFrames(groupId);
             string seek = Seconds(((switchFrame + period - masterWarmupFrames % period) % period + .25) * frame);
-            if (!staticIds.Contains(Id(video))) seeks[groupId] = double.Parse(seek, System.Globalization.CultureInfo.InvariantCulture);
-            video["visible"] = new JsonObject { ["value"] = skip is not null, ["script"] = staticIds.Contains(Id(video))
+            if (!isStatic) seeks[groupId] = double.Parse(seek, System.Globalization.CultureInfo.InvariantCulture);
+            video["visible"] = new JsonObject { ["value"] = skip is not null, ["script"] = isStatic
                 ? $"'use strict';\nexport function update(value) {{\n\treturn engine.runtime >= {on};\n}}\n"
                 : $"'use strict';\nlet started = false;\nexport function init() {{\n\tthisLayer.getVideoTexture().pause();\n}}\n" +
                   $"export function update(value) {{\n\tif (engine.runtime < {on}) return false;\n\tif (!started) {{\n\t\tstarted = true;\n" +
