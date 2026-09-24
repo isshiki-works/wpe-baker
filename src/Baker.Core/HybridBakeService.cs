@@ -703,10 +703,11 @@ public sealed class HybridBakeService(NativeTools tools)
                 using (timing.Measure(StageTiming.ProjectAssembly))
                 {
                     finalObjects = SceneAssembler.AssembleObjects(originalObjects, plan, replacements, finalDependencies);
-                    // 切换后视频 seek 到 (s − master) mod P，P 取成品帧数：现在各组同一周期；各组按自身周期录制（#131）后要按组传 P_g。
+                    // 切换后视频 seek 到 (s − master) mod P_g，P_g 是该组录制帧数。
                     if (introFrames > 0 && replacements.Count > 0)
                         report["intro_live"] = SceneAssembler.ApplyIntro(finalObjects, originalObjects, plan, replacements, staticIds,
-                            finalDependencies, snapshot, introFrames, groupScheduler.Framing(0).MasterWarmupFrames, frames,
+                            finalDependencies, snapshot, introFrames, groupScheduler.Framing(0).MasterWarmupFrames,
+                            id => groupScheduler.Frames(Array.FindIndex(groupScheduler.Groups, group => group["id"]!.GetValue<string>() == id)),
                             settings.FpsNumerator, settings.FpsDenominator);
                     // 记下按"不绘制但带脚本"规则额外保留的根对象，事后核对用。
                     report["retained_script_root_ids"] = JsonSerializer.SerializeToNode(SceneAssembler.ScriptRootIds(originalObjects, plan));
