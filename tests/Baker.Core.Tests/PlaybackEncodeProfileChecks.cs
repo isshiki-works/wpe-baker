@@ -44,8 +44,8 @@ internal static class PlaybackEncodeProfileChecks
         // 硬件档位：编码器名、码率控制与像素格式，容器参数与软件档位保持一致。
         object nvencHevc = Create(4097, 2, false, PlaybackEncoderSelection.Nvenc);
         check(Value(nvencHevc, "Encoder") == "hevc_nvenc" && Value(nvencHevc, "PixelFormat") == "yuv420p" &&
-            Arguments(nvencHevc, "cache.partial.mp4").SequenceEqual(["-c:v", "hevc_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "16", "-b:v", "0", "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", "-enc_time_base", "1:60", "-movie_timescale", "60", "-video_track_timescale", "60", "-movflags", "+faststart", "cache.partial.mp4"]),
-            "nvenc playback profile maps HEVC to hevc_nvenc with constant-quality cq 16");
+            Arguments(nvencHevc, "cache.partial.mp4").SequenceEqual(["-c:v", "hevc_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "22", "-b:v", "0", "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", "-enc_time_base", "1:60", "-movie_timescale", "60", "-video_track_timescale", "60", "-movflags", "+faststart", "cache.partial.mp4"]),
+            "nvenc playback profile maps HEVC to hevc_nvenc with constant-quality cq 22");
 
         object nvencH264 = Create(1920, 1080, false, PlaybackEncoderSelection.Nvenc);
         check(Value(nvencH264, "Encoder") == "h264_nvenc", "nvenc playback profile maps the H.264 selection to h264_nvenc");
@@ -256,7 +256,7 @@ internal static class PlaybackEncodeProfileChecks
 
         object nvStep1 = Escalate(Create(1920, 1080, false, PlaybackEncoderSelection.Nvenc));
         object amfStep1 = Escalate(Create(4097, 2, false, PlaybackEncoderSelection.Amf));
-        check(Arguments(nvStep1, "o.mp4")[7] == "13" &&
+        check(Arguments(nvStep1, "o.mp4")[7] == "19" &&
             Arguments(amfStep1, "o.mp4").SequenceEqual(["-c:v", "hevc_amf", "-quality", "quality", "-rc", "cqp", "-qp_i", "13", "-qp_p", "13", "-qp_b", "13", "-pix_fmt", "nv12", "-fps_mode", "passthrough", "-enc_time_base", "1:60", "-movie_timescale", "60", "-video_track_timescale", "60", "-movflags", "+faststart", "o.mp4"]),
             "the vendor tiers escalate their own quantizer options together");
 

@@ -14,6 +14,12 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
     /// </summary>
     private static readonly int[] MfQualityLadder = [80, 90, 96];
 
+    /// <summary>
+    /// NVENC 起始 cq。cq16 的成品是 x264 crf16 的 1.8–2.7 倍；cq22 为 0.79–1.56 倍，画质门 SSIM 0.9918–0.9999（门限 0.9749），
+    /// cq19 为 1.55–2.16 倍（HW1b 实测，3572877776 / 3441873795 / 3000562427）。不达标仍按 22→19→16 升档。
+    /// </summary>
+    private const string NvencStartCq = "22";
+
     internal const string Bt709Filter =
         "scale=in_range=full:out_range=limited:out_color_matrix=bt709,format=yuv420p,setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709";
 
@@ -77,7 +83,8 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
         // 实测见 reports-20260916/perf-master-encode.md。
         if (losslessTest) return new("libx264rgb", "ultrafast", "0", "rgb24", "format=rgb24", Lossless: true);
         string software = SelectPlaybackEncoder(width, height, numerator, denominator);
-        return new(HardwareEncoder(software, kind), PresetFor(kind), "16", PixelFormatFor(kind), Bt709Filter, kind);
+        return new(HardwareEncoder(software, kind), PresetFor(kind), kind == PlaybackEncoderSelection.Nvenc ? NvencStartCq : "16",
+            PixelFormatFor(kind), Bt709Filter, kind);
     }
 
     /// <summary>
