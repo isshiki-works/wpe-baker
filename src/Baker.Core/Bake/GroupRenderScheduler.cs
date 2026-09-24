@@ -181,15 +181,20 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             // 渲染器内的 GPU 打包只有左右并排；越宽度上限要上下并排的透明组走 master 路线。
             if (known is { } layout && !HardwareDecodeDimensions.StackedVertically(layout.Packed, layout.Crop.Width))
             {
+                // Vulkan H.264 编码有最小宽度（驱动约 145）：72 宽的透明组打包后 144，编码器初始化失败、整组落到 CPU 无损路线
+                // （3757825891 group-4 读回约 200 s）。不足时在捕获范围内居中加宽裁剪，多出的是透明列。
+                int minimum = layout.Packed ? 74 : 146;
+                CacheRegion crop = layout.Crop.Width >= minimum || layout.Crop.CaptureWidth < minimum ? layout.Crop : layout.Crop with {
+                    X = Math.Clamp((layout.Crop.X - (minimum - layout.Crop.Width) / 2) & ~1, 0, layout.Crop.CaptureWidth - minimum), Width = minimum };
                 string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
-                    (uint)layout.Crop.Width * (layout.Packed ? 2u : 1u), (uint)layout.Crop.Height,
+                    (uint)crop.Width * (layout.Packed ? 2u : 1u), (uint)crop.Height,
                     render.FpsNumerator, render.FpsDenominator), PlaybackEncoderSelection.Vulkan);
                 // 不按固定码率系数预判 2 GiB：ARCH2 实测 Vulkan 成品相对参考码率 0.02–2.0 倍，随内容变、不随格式定。
                 // 成品实际超限时由 StartAsync 按软件档重渲。
                 render = render with { LosslessTest = false, PlaybackEncoderKind = null, ForceKeyFrameFrame = null,
                     EncodedFrames = frames, PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb",
                     GpuEncoding = new(codec, Qp: 18, CrossfadeFrames: framing.Residual ? crossfadeFrames : 0,
-                        Crop: layout.Crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
+                        Crop: crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
             }
         }
         return render;
