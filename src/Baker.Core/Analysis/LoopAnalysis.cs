@@ -52,11 +52,12 @@ internal static class LoopAnalysis
             new ParticleStationarity.FrameClock(fpsNumerator, fpsDenominator, ceilingSeconds), out var particleVerdicts);
         // 封顶 + 确定寿命的粒子层：替换周期（整数帧）作为锁定分量交给求解器，与着色器、轨道的锁定分量同等对待。
         CommonLoopComponent[] particleCycles = ParticleCycleComponents(particleVerdicts);
-        LoopSolve solve = SolveLoop(shader, animation, particleCycles, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+        CommonLoopComponent[] scriptCycles = ScriptFrameStepComponents(scene, bakedLayerIds, fpsNumerator, fpsDenominator, ceiling, unresolved);
+        LoopSolve solve = SolveLoop(shader, animation, [.. particleCycles, .. scriptCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
         if (particleCycles.Length > 0 && solve.Result.Candidates.Count == 0)
         {
             // 锁定周期与其余分量在循环上限内没有公共循环，而不锁这些层时有：这些层退回拒绝（留实时），与判据收紧时的结论一致。
-            LoopSolve unlocked = SolveLoop(shader, animation, [], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+            LoopSolve unlocked = SolveLoop(shader, animation, scriptCycles, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
             if (unlocked.Result.Candidates.Count > 0)
             {
                 var evidence = new JsonObject
@@ -84,7 +85,7 @@ internal static class LoopAnalysis
         bool sourceStatic = false;
         // 被烘集合为空时不走静态证明：没有要捕获的画面时，调用方已用 blocker
         // 说明依赖闭包后没剩下可烘组，这里再追一条 source_static 只是同一件事的重复描述。
-        if (shader.Components.Count == 0 && animation.Count == 0 && unresolved.Count == 0 && bakedLayerIds.Count > 0)
+        if (shader.Components.Count == 0 && animation.Count == 0 && scriptCycles.Length == 0 && unresolved.Count == 0 && bakedLayerIds.Count > 0)
         {
             // 没有任何已建模的时间机制时只剩两种结局：证明这一帧是静态的，或者说清楚为什么证明不了。
             // 旧实现在证明不了时一个字都不写，plan 里就出现零候选零理由的 unavailable（沉默拒绝）。
@@ -141,7 +142,7 @@ internal static class LoopAnalysis
         }
         if (spriteRejectedCandidates > 0)
             unresolved.Add(new SpriteSeamUnresolved(spriteRejectedCandidates));
-        long contentStep = ContentStepFrames(shader.Components.Count, animation, unresolved.Count, fpsNumerator, fpsDenominator);
+        long contentStep = ContentStepFrames(shader.Components.Count + scriptCycles.Length, animation, unresolved.Count, fpsNumerator, fpsDenominator);
         // 摆动改频（默认关）：在其余分量解出的每个候选 P 上找 L = kP，让摆动层逐项精确闭合；成立时摆动分量
         // 从未解析项里移出，候选帧数改成 L。开关关闭时这里什么都不做，plan 与旧版逐字节相同。
         JsonObject? swayRecord = swayRetime is null ? null : SwayRetimeApplier.Apply(shader.Unresolved, unresolved, candidates,
@@ -268,6 +269,31 @@ internal static class LoopAnalysis
             CommonLoopRational exact = cycle.PeriodSeconds;
             return new CommonLoopComponent(cycle.ComponentId, new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
         })];
+
+    /// <summary>
+    /// 逐帧步进脚本（<see cref="ScriptFrameStep"/>）的整数帧周期作锁定分量交给求解器。这类脚本合起来的最小公倍数超过
+    /// 循环上限时没有能同时闭合它们的循环：不给分量，每条记一个无界未解析项，由分配回退把这些层留实时。
+    /// </summary>
+    private static CommonLoopComponent[] ScriptFrameStepComponents(JsonObject scene, IReadOnlyCollection<int> bakedLayerIds,
+        uint fpsNumerator, uint fpsDenominator, CommonLoopRational ceiling, List<LoopUnresolved> unresolved)
+    {
+        UInt128 ceilingFrames = (UInt128)ceiling.Numerator * fpsNumerator / ((UInt128)ceiling.Denominator * fpsDenominator);
+        var scripts = ScriptFrameStep.Find(scene, bakedLayerIds, (ulong)UInt128.Min(ceilingFrames, ulong.MaxValue));
+        if (scripts.Count == 0) return [];
+        System.Numerics.BigInteger? joint = ScriptFrameStep.JointFrames(scripts);
+        if (joint is null || joint > (System.Numerics.BigInteger)ceilingFrames)
+        {
+            string text = joint?.ToString(CultureInfo.InvariantCulture) ?? $">{ceilingFrames}";
+            unresolved.AddRange(scripts.Select(item => new ScriptFrameStepUnresolved(item.OwnerLayerId, item.Binding, item.PeriodFrames, scripts.Count, text)));
+            return [];
+        }
+        return [.. scripts.Select(item =>
+        {
+            var exact = new CommonLoopRational(checked((long)item.PeriodFrames!.Value * fpsDenominator), fpsNumerator);
+            return new CommonLoopComponent($"script_frame_step:{item.OwnerLayerId}:{item.Binding}",
+                new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
+        })];
+    }
 
     private static CommonLoopSearchResult SuggestSingleVideoRetime(uint fpsNumerator, uint fpsDenominator,
         RuntimeTrack video, double maximumRetimePercent, CommonLoopRational ceiling, CommonLoopPreference preference = CommonLoopPreference.Balanced)

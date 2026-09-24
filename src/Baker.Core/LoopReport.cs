@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace Baker.Core;
@@ -183,6 +184,21 @@ internal sealed record ScriptTimeUnresolved(int OwnerLayerId, JsonNode? Binding,
     public override Message DetailMessage => new("unresolved.script_time");
     public override JsonObject ToJson() => new() {
         ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId, ["binding"] = Binding?.DeepClone(), ["clock"] = Clock?.DeepClone(), ["detail"] = DetailMessage.Text };
+}
+
+/// <summary>
+/// 被烘图层上的逐帧步进脚本（<see cref="ScriptFrameStep"/>）：各自有精确帧周期，但本次被烘的这类脚本合起来的最小公倍数
+/// 超过循环上限（或单条在上限内就不闭合），没有能同时闭合它们的循环。无界类，与 uv_incommensurate_scroll 同性质。
+/// </summary>
+internal sealed record ScriptFrameStepUnresolved(int OwnerLayerId, string Binding, ulong? PeriodFrames, int ScriptCount, string JointFrames) : LoopUnresolved
+{
+    public const string Mechanism = "script_frame_step_lcm_over_ceiling";
+    public override string Kind => "script_frame_step";
+    public override Message DetailMessage => new("unresolved." + Mechanism, [PeriodFrames?.ToString(CultureInfo.InvariantCulture) ?? JointFrames,
+        ScriptCount.ToString(CultureInfo.InvariantCulture), JointFrames]);
+    public override JsonObject ToJson() => new() {
+        ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId, ["binding"] = Binding, ["mechanism"] = Mechanism,
+        ["period_frames"] = PeriodFrames, ["joint_period_frames"] = JointFrames, ["detail"] = DetailMessage.Text };
 }
 
 /// <summary>运行时材质里没被建模的时钟 uniform 或读不懂的材质条目。</summary>
