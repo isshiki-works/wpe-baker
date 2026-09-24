@@ -33,6 +33,12 @@ internal static class EmbeddedVideoBudgetChecks
         double perFrame = EmbeddedVideoBudget.ReferenceBytesPerFrame(3840d * 2160);
         check(fitFrames * perFrame <= EmbeddedVideoBudget.MaximumBytes && (fitFrames + 1) * perFrame > EmbeddedVideoBudget.MaximumBytes,
             "embedded video budget: the reference frame count is the largest that stays within the limit");
+        // 硬件档位预判：参考码率 × 1.555 刚好不超的帧数仍用硬件，多一帧就改软件。
+        ulong hardwareFrames = (ulong)Math.Floor(EmbeddedVideoBudget.MaximumBytes / (perFrame * 1.555));
+        check(EmbeddedVideoBudget.HardwareBytesRatio == 1.555 &&
+            !EmbeddedVideoBudget.HardwareOverBudget(hardwareFrames, 3840, 2160, false) &&
+            EmbeddedVideoBudget.HardwareOverBudget(hardwareFrames + 1, 3840, 2160, false),
+            "embedded video budget: hardware encoding falls back to software exactly when reference bytes x 1.555 exceed the limit");
 
         // ---- 循环长度收紧 ----
         EmbeddedVideoLoopLimit amiya = EmbeddedVideoBudget.LoopLengthLimit(3600, 1920, 1080, false, 60, 1)!;

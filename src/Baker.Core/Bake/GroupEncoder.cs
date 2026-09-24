@@ -38,11 +38,18 @@ internal sealed class GroupEncoder(NativeRenderRunner runner, HybridBakeRequest 
         // 直编组的成品已经在渲染那一遍编好了：这里只把它接管进成品目录，不再解码重编，所以不计 encode_playback
         // （它的编码墙钟与渲染重叠，已含在 master_render 里），也不占编码槽配额（它是随渲染帧率的持续负载，不是尖峰）。
         if (directPlayback)
+        {
+            string used = gpuDirect ? PlaybackEncoderSelection.Vulkan
+                : master["request"]?["playback_encoder_kind"]?.GetValue<string>() ?? playbackKind;
+            // 硬件档位（非 Vulkan）的直编组只有 2 GiB 预判一种情况会落到软件编码（GroupRenderScheduler.MasterRequest）。
+            bool overBudget = used == PlaybackEncoderSelection.Software &&
+                playbackKind is not (PlaybackEncoderSelection.Software or PlaybackEncoderSelection.Vulkan);
             encoded = await runner.AdoptDirectPlaybackAsync(master, masterPath, Path.Combine(work, "encoded"),
-                request.PlaybackEncoder ?? PlaybackEncoderSelection.Software,
-                gpuDirect ? PlaybackEncoderSelection.Vulkan : master["request"]?["playback_encoder_kind"]?.GetValue<string>() ?? playbackKind,
-                master["gpu_pipeline_fallback_reason"]?.GetValue<string>() ?? playbackFallbackReason,
+                request.PlaybackEncoder ?? PlaybackEncoderSelection.Software, used,
+                master["gpu_pipeline_fallback_reason"]?.GetValue<string>() ??
+                    (overBudget ? NativeRenderRunner.HardwareBudgetFallbackReason : playbackFallbackReason),
                 cancellationToken);
+        }
         else
         {
             // master 路线照旧整片解码重编一遍。等槽位的时间单独计时，不混进 encode_playback。

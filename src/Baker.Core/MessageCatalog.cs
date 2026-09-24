@@ -742,6 +742,9 @@ public static class MessageCatalog
         ["bake.effect_prefix_opaque_unproven"] = new(
             Zh: "完整的末端截取没能证明每个编码源帧都是不透明像素。",
             En: "The full terminal capture did not prove opaque pixels for every encoded source frame."),
+        ["bake.no_visible_output"] = new(
+            Zh: "不可生成：所有视频组在生成区间内都没有可见像素，没有可替换成视频的内容。",
+            En: "Cannot generate: every video group was empty over the generated interval, so there is no content to replace with video."),
         ["bake.effect_prefix_composition_failed"] = new(
             Zh: "原始源 48 帧合成比对没通过。",
             En: "The pristine-source 48-frame composition comparison failed."),
