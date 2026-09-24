@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json.Nodes;
 
 namespace Baker.Core;
@@ -22,20 +23,23 @@ public static class BakeDiskBudget
     /// <summary>磁盘空间不足时的 bake 状态。不在界面的"已完成"白名单里，不会被当成结果展示。</summary>
     public const string RejectedBakeStatus = "candidate_rejected_disk_space";
 
-    /// <summary>GPU 直编组渲染器留在盘上的 RGBA 原帧上限：画质抽样与闭合参照最多 32 帧（NativeRenderRunner 的上限）加首帧。</summary>
-    private const ulong GpuRetainedFrames = 33;
+    /// <summary>GPU 直编组渲染器留在盘上的 RGBA 原帧：画质抽样 9 帧、闭合参照 3 帧与首帧。</summary>
+    private const ulong GpuRetainedFrames = QualityGate.MinimumSamples + 4;
 
     /// <summary>
     /// 一次烘焙的中间产物峰值预估，按实际路线算；各组按自己录的帧数 P_g（plan 候选的 group_frames）。
-    /// <para><see cref="IntermediateBytes"/>：同时在飞的组的中间文件。GPU 直编不落 master，只有渲染器留的几十帧原帧；
+    /// <para><see cref="IntermediateBytes"/>：同时在飞的组的中间文件。GPU 直编不落 master，只有渲染器留的十几帧原帧；
     /// 软件档的透明组与残差组落无损 master。</para>
+    /// <para><see cref="StartSearchBytes"/>：残差组起点搜索的缩略图样本，两条路线都有，留到烘完。周期不是 16 的倍数时步长变小、
+    /// 样本成倍增加（3803167460 两个残差组各 9.6 GB，是整案峰值的全部）。</para>
     /// <para><see cref="PlaybackBytes"/>：全部组的成品视频，按内嵌视频的参考码率估，要留到装配完成。</para>
     /// <para><see cref="CrossfadeBytes"/>：软件档残差组在接缝处淡化改写 master 时的那一份副本（GPU 路线在渲染器里淡化，没有）。</para>
     /// </summary>
-    public readonly record struct Estimate(ulong Frames, int Groups, bool Gpu, ulong IntermediateBytes, ulong PlaybackBytes, ulong CrossfadeBytes)
+    public readonly record struct Estimate(ulong Frames, int Groups, bool Gpu, ulong IntermediateBytes, ulong StartSearchBytes, ulong PlaybackBytes,
+        ulong CrossfadeBytes)
     {
         /// <summary>预估峰值（字节）。</summary>
-        public ulong PeakBytes => IntermediateBytes + PlaybackBytes + CrossfadeBytes;
+        public ulong PeakBytes => IntermediateBytes + StartSearchBytes + PlaybackBytes + CrossfadeBytes;
 
         /// <summary>峰值加固定余量：低于这个数就不开烘。</summary>
         public ulong RequiredBytes => PeakBytes + ReserveBytes;
@@ -49,6 +53,7 @@ public static class BakeDiskBudget
             ["frames"] = Frames,
             ["groups"] = Groups,
             ["intermediate_bytes"] = IntermediateBytes,
+            ["start_search_bytes"] = StartSearchBytes,
             ["playback_bytes"] = PlaybackBytes,
             ["crossfade_copy_bytes"] = CrossfadeBytes,
             ["peak_bytes"] = PeakBytes,
@@ -56,7 +61,9 @@ public static class BakeDiskBudget
             ["required_bytes"] = RequiredBytes,
             ["master_compression_ratio"] = MasterCompressionRatio,
             ["basis"] = "Each group records its own frame count (group_frames, else the loop length). Every group's playback video at the " +
-                "embedded-video reference bitrate, plus the intermediates of the groups in flight: on the GPU route up to 33 retained RGBA frames " +
+                "embedded-video reference bitrate, plus the residual groups' start-search samples (512-wide RGB thumbnails every stride frames over " +
+                "P_g + min(P_g, P_min + crossfade), colour and alpha for transparent groups), plus the intermediates of the groups in flight: " +
+                "on the GPU route 13 retained RGBA frames " +
                 "(plus the crossfade window on both sides for residual groups); on the software route a lossless master (frames x encoded pixels x 3 " +
                 "bytes / 5) for transparent and residual groups, plus one crossfade copy of the largest residual master."
         };
@@ -77,27 +84,42 @@ public static class BakeDiskBudget
         JsonObject? settings = plan["settings"] as JsonObject;
         uint width = Unsigned(settings?["width"]), height = Unsigned(settings?["height"]);
         JsonObject[] groups = (plan["video_groups"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? [];
-        if (frames == 0 || width == 0 || height == 0 || groups.Length == 0) return new(frames, groups.Length, gpu, 0, 0, 0);
+        if (frames == 0 || width == 0 || height == 0 || groups.Length == 0) return new(frames, groups.Length, gpu, 0, 0, 0, 0);
         JsonObject? groupFrames = (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["group_frames"] as JsonObject;
         uint fpsNumerator = Unsigned(settings?["fps_numerator"]), fpsDenominator = Unsigned(settings?["fps_denominator"]);
-        ulong fadeWindow = fpsNumerator > 0 && fpsDenominator > 0 ? 2UL * ResidualMasking.CrossfadeFrames(fpsNumerator, fpsDenominator) : 0;
+        uint crossfadeFrames = fpsNumerator > 0 && fpsDenominator > 0 ? ResidualMasking.CrossfadeFrames(fpsNumerator, fpsDenominator) : 0;
+        var recordedFrames = new ulong[groups.Length];
+        var transparentGroups = new bool[groups.Length];
         var intermediates = new List<ulong>();
         double playback = 0;
         ulong crossfade = 0;
         for (int i = 0; i < groups.Length; ++i)
         {
-            bool transparent = groups[i]["transparent"] is JsonValue value && value.TryGetValue(out bool packed) && packed;
+            bool transparent = transparentGroups[i] = groups[i]["transparent"] is JsonValue value && value.TryGetValue(out bool packed) && packed;
             bool residual = residualGroups.Contains(i);
-            ulong recorded = Unsigned(groupFrames?[groups[i]["id"]?.GetValue<string>() ?? ""]) is > 0 and var own ? own : frames;
+            ulong recorded = recordedFrames[i] = Unsigned(groupFrames?[groups[i]["id"]?.GetValue<string>() ?? ""]) is > 0 and var own ? own : frames;
             double pixels = EmbeddedVideoBudget.EncodedPixels(width, height, transparent);
             playback += recorded * EmbeddedVideoBudget.ReferenceBytesPerFrame(pixels);
             ulong master = HybridBakeService.AllowsDirectPlayback(!transparent, residual, 0) ? 0 : MasterBytes(recorded, pixels);
-            intermediates.Add(gpu ? (ulong)width * height * 4 * (GpuRetainedFrames + (residual ? fadeWindow : 0)) : master);
+            intermediates.Add(gpu ? (ulong)width * height * 4 * (GpuRetainedFrames + (residual ? 2UL * crossfadeFrames : 0)) : master);
             if (!gpu && residual) crossfade = Math.Max(crossfade, master);
+        }
+        // 起点搜索的窗口与步长照 LoopStartSelector.SearchAsync：步长 gcd(各残差组 P_g, 16)，窗口 P_g + min(P_g, P_min + 淡化取整到步长)。
+        double search = 0;
+        if (residualGroups.Count > 0)
+        {
+            ulong[] periods = [.. residualGroups.Select(i => recordedFrames[i])];
+            ulong stride = ResidualMasking.StartSearchStride(periods.Aggregate(0UL, (gcd, period) => (ulong)BigInteger.GreatestCommonDivisor(gcd, period)));
+            ulong tail = periods.Min() + (crossfadeFrames + stride - 1) / stride * stride;
+            double sampleWidth = Math.Round(ResidualMasking.StartSearchSampleWidth * SwayRecurrenceSolver.SpeedLimitScale(width, height));
+            double sampleBytes = sampleWidth * Math.Max(1, Math.Round(height * sampleWidth / width)) * 3;
+            foreach (int i in residualGroups)
+                search += (recordedFrames[i] + Math.Min(recordedFrames[i], tail) + stride - 1) / stride * sampleBytes *
+                    (transparentGroups[i] ? 2 : 1);
         }
         int inFlight = gpu ? groups.Length : Math.Clamp(groupParallel + 1, 1, groups.Length);
         ulong intermediate = intermediates.OrderDescending().Take(inFlight).Aggregate(0UL, (sum, bytes) => sum + bytes);
-        return new(frames, groups.Length, gpu, intermediate, Bytes(playback), crossfade);
+        return new(frames, groups.Length, gpu, intermediate, Bytes(search), Bytes(playback), crossfade);
     }
 
     /// <summary>
