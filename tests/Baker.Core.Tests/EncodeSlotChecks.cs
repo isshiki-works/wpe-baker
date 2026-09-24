@@ -29,10 +29,10 @@ internal static class EncodeSlotChecks
 
     internal static async Task RunAsync(Action<bool, string> check)
     {
-        // 参数解析：两项都不给时是默认值（不限并发、逐组渲染），给了就按给的走。
+        // 参数解析：两项都不给时是默认值（不限并发、组并行自动），给了就按给的走。
         var defaults = JsonSerializer.Deserialize<HybridBakeRequest>(RequestJson(""), JsonOptions)!;
-        check(defaults.EncodeSlots == 0 && defaults.GroupParallel == 1,
-            "bake 请求不写 encode_slots / group_parallel 时默认不限并发、逐组渲染");
+        check(defaults.EncodeSlots == 0 && defaults.GroupParallel == 0,
+            "bake 请求不写 encode_slots / group_parallel 时默认不限并发、组并行自动");
         var chosen = JsonSerializer.Deserialize<HybridBakeRequest>(
             RequestJson(",\n  \"encode_slots\": 3,\n  \"group_parallel\": 4"), JsonOptions)!;
         check(chosen.EncodeSlots == 3 && chosen.GroupParallel == 4,

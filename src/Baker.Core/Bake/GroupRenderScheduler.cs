@@ -205,8 +205,11 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
             throw new IOException("A group master output must be new; existing files will not be cleaned.");
         JsonObject? coveragePass = null;
+        // 起点搜索已给出裁剪却没取 GPU 路线（预判超 2 GiB 或须上下并排）时，预通道的裁剪同样用不上，不跑。
         if (render.GpuEncoding is null && playbackKind == PlaybackEncoderSelection.Vulkan && !probe &&
-            render.PixelPacking != "rgb" && render.Width % 2 == 0 && render.Height % 2 == 0)
+            render.PixelPacking != "rgb" && render.Width % 2 == 0 && render.Height % 2 == 0 &&
+            !(StartSearches.TryGetValue(groups[index]["id"]!.GetValue<string>(), out JsonObject? search) &&
+                NativeRenderRunner.SamplingCrop(search["sampling_coverage"] as JsonObject, render) is not null))
         {
             // An unknown crop used to require a full RGBA lossless master
             // followed by decoding and encoding again. A GPU-only bounds
