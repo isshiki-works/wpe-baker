@@ -44,6 +44,8 @@ internal static class CaptureSourceBuilder
         PlanTransforms.FreezeTemporalProperties(scene, snapshot);
         PlanTransforms.ApplySnapshotOmissions(scene, plan);
         DaytimeSplit.ApplyState(scene, plan);
+        // 与参照、候选工程同样把置顶的实时根挪到末尾：渲染器每个 job 只有一条全局 RNG，粒子按对象顺序取数，顺序不同就是另一次随机。
+        PlanTransforms.ApplyOverlayPlacement(scene, plan);
         if (settings.ViewMode == "fixed_view") scene["general"]!["cameraparallax"] = false;
         scene["general"]!["camerashake"] = false;
         if (!probe) HybridLoopService.ApplyPatches(scene, plan["loop"]!.AsObject());

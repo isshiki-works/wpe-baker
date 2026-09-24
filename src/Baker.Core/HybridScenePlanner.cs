@@ -254,6 +254,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             throw new InvalidDataException("A daytime state was requested but no daytime state selector was recognized.");
         DaytimeSplit.State? daytimeState = request.DaytimeState is null ? null
             : daytime!.StateNamed(request.DaytimeState) ?? throw new InvalidDataException("Unknown daytime state: " + request.DaytimeState);
+        // 时段常量型状态没有选择器层：状态内那些绑定就是常数，判定与合成直接看冻结后的场景（观测已在同样冻结的副本上跑）。
+        if (daytimeState is not null && daytime!.ControllerId is null) DaytimeSplit.ApplyState(scene, daytime, daytimeState);
         int? daytimeSelector = daytimeState is null ? null : daytime!.ControllerId;
         HashSet<int> daytimeControlled = daytimeState is null ? new HashSet<int>() : daytime!.ControlledLayerIds.ToHashSet();
         HashSet<int> daytimeVisible = daytimeState is null ? new HashSet<int>() : daytimeState.VisibleLayerIds.ToHashSet();

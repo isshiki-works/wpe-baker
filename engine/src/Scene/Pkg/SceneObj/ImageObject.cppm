@@ -78,10 +78,16 @@ public:
     // says nothing about whether the effect is ever needed.
     FieldBindings field_bindings;
 
-    // True when something other than the authored value can turn this effect
-    // on later: a user property, or a script bound to `visible`.
+    // True when a hidden effect must still be built: a user property or a script bound to
+    // `visible` can turn it on later, or its shader constants carry scripts. Official WPE runs
+    // those scripts on hidden effects too, and their init may write `shared` state that other
+    // layers check.
     bool visible_can_change() const {
-        return ! visible_user.empty() || field_bindings.HasScript("visible"_str);
+        if (! visible_user.empty() || field_bindings.HasScript("visible"_str)) return true;
+        for (const auto& pass : passes)
+            for (const auto& binding : pass.constantshadervalues_bindings.Entries())
+                if (binding.script.is_some()) return true;
+        return false;
     }
     const FieldBindingSpec* visible_binding() const {
         auto binding = field_bindings.Get("visible"_str);

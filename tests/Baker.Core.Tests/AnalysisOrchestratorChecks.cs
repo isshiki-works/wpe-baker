@@ -36,16 +36,16 @@ internal static class AnalysisOrchestratorChecks
         JsonObject efficiency = await Run("preset-efficiency", r => Plan(r, r.Preset == "efficiency", 2));
         check(efficiency["preset_applied"]!.GetValue<string>() == "efficiency" &&
             calls.All(r => r.ExcludedLayerIds is null), "efficiency only relaxes retiming and never removes clocks");
-        JsonObject fallback = await Run("preset-fallback", r => Plan(r, true, 6));
+        JsonObject fallback = await Run("preset-fallback", r => Plan(r, true, 11));
         check(fallback["route_fallback"] is null && fallback["preset_applied"]!.GetValue<string>() == "none" &&
-            calls.All(r => r.Interaction != "keep"), "six groups are rejected without silently restoring the legacy route");
+            calls.All(r => r.Interaction != "keep"), "eleven groups are rejected without silently restoring the legacy route");
         JsonObject none = await Run("preset-none", r => Plan(r, false, 5));
         check(none["preset_applied"]!.GetValue<string>() == "none", "unavailable across all tiers remains unavailable");
-        JsonObject overLimit = await Run("preset-over-limit", r => Plan(r, r.LiveOverlayPlacement == "foreground", 5));
+        JsonObject overLimit = await Run("preset-over-limit", r => Plan(r, r.LiveOverlayPlacement == "foreground", 10));
         check(overLimit["preset_applied"]!.GetValue<string>() == "none" &&
             overLimit["preset_rejection_reason"]!.GetValue<string>() == "too_many_video_groups" &&
             overLimit["blockers"]!.AsArray().Count == 1 && !Admission.Bakeable(overLimit),
-            "five groups remain rejected within the requested policy");
+            "ten groups remain rejected within the requested policy");
         JsonObject custom = await Run("preset-custom", r => Plan(r, true, 1), custom: true);
         check(calls.Count == 1 && custom["custom_settings"]!.GetValue<bool>() && custom["preset_applied"]!.GetValue<string>() == "quality",
             "advanced overrides do not replace the retiming preset with a custom label");
@@ -117,12 +117,12 @@ internal static class AnalysisOrchestratorChecks
                     ["uses_audio_spectrum"] = false, ["uses_system_media_thumbnail"] = false,
                     ["active_uniforms"] = new JsonArray("g_ModelViewProjectionMatrix"), ["textures"] = new JsonArray() }) })
         }.ToJsonString());
-        JsonObject staticBudget = Plan(new(2, source, assets, root), true, 5);
+        JsonObject staticBudget = Plan(new(2, source, assets, root), true, 10);
         staticBudget["source"] = scenePath;
         staticBudget["runtime_evidence"] = trace;
         foreach (JsonObject group in staticBudget["video_groups"]!.AsArray().OfType<JsonObject>()) group["layer_ids"] = new JsonArray(1);
         JsonObject verifiedStaticBudget = await AnalysisOrchestrator.AdoptAllocationAsync(staticBudget, CancellationToken.None);
-        check(Admission.GroupCount(verifiedStaticBudget) == 0 && Admission.StaticGroupCount(verifiedStaticBudget) == 5 &&
+        check(Admission.GroupCount(verifiedStaticBudget) == 0 && Admission.StaticGroupCount(verifiedStaticBudget) == 10 &&
             verifiedStaticBudget["static_group_budget"]?["status"]?.GetValue<string>() == "verified",
             "only an over-budget plan with source_static proof frees decoder slots for static caches");
         var planner = new HybridScenePlanner(new("not-started", "not-started", "not-started", []));

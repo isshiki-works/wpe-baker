@@ -64,6 +64,11 @@ internal static class DaytimeSplit
         \z
         """, Options | RegexOptions.IgnorePatternWhitespace);
 
+    // 时段常量脚本（压缩空白后）：只有数字常量声明和一条 return 表达式；表达式由 ClockConstantHours 自己求值，不执行源脚本。
+    private static readonly Regex ClockConstantScript = new(
+        @"\A(?:'use strict'|""use strict"");?(?:import\*asWEMathfrom'WEMath';)?(?<consts>(?:(?:const|let|var)\w+=\d+(?:\.\d+)?;)*)exportfunctionupdate\(\w*\)\{return(?<expr>[^;{}]+);?\}\z", Options);
+    private static readonly Regex ClockConstantToken = new(@"\G(?:\d+(?:\.\d+)?|[A-Za-z_]\w*(?:\.\w+)?)", Options);
+
     /// <summary>一个状态：名字、覆盖的小时段（[起, 止) 可跨午夜拆成多段）、该状态下选择器置为可见的受控层。</summary>
     internal sealed record State(string Name, int[][] Hours, int[] VisibleLayerIds);
 
@@ -110,7 +115,8 @@ internal static class DaytimeSplit
             ? split["states"]!.AsArray().OfType<JsonObject>().ToArray() : null;
 
     /// <summary>
-    /// 在场景对象里找状态选择器。候选只看 visible 绑定上读时钟的脚本：文字时钟、按时段改着色器常量的脚本都不是状态选择器。
+    /// 在场景对象里找状态选择器。候选只看 visible 绑定上读时钟的脚本：文字时钟不是状态选择器。
+    /// 没有识别出可见性选择器时，再看时段常量脚本（按时段改着色器常量等，见 <see cref="DetectClockConstants"/>）。
     /// <paramref name="dependencies"/> 是运行时观测到的对象访问：同名图层靠"选择器实际写过 visible 的那一个"消歧（getLayer 取的就是它）。
     /// </summary>
     internal static Detection Detect(IReadOnlyDictionary<int, JsonObject> objects, JsonArray? dependencies = null, JsonObject? properties = null)
@@ -123,7 +129,7 @@ internal static class DaytimeSplit
             string code = Liveness.CapabilityScanText(text);
             if (ClockRead.IsMatch(code)) candidates.Add((id, code));
         }
-        if (candidates.Count == 0) return Fallback("no_visibility_script_reads_clock");
+        if (candidates.Count == 0) return DetectClockConstants(objects) ?? Fallback("no_visibility_script_reads_clock");
         // 候选逐个试：识别失败的候选（按整点播语音之类）本来就该保持实时，不影响别的候选；
         // 恰好一个成功就用它，多个成功本轮不支持（几套状态集合相乘的组合先不做），都失败报第一个的原因。
         var recognized = new List<Detection>();
@@ -137,7 +143,105 @@ internal static class DaytimeSplit
         if (recognized.Count == 1) return recognized[0];
         if (recognized.Count > 1)
             return Fallback("multiple_state_selectors:" + string.Join(",", recognized.Select(d => d.ControllerId)), recognized[0].ControllerId, recognized[0].ControllerName);
-        return first!;
+        return DetectClockConstants(objects) ?? first!;
+    }
+
+    /// <summary>
+    /// 第二种状态来源：没有选择器层，若干非 visible 绑定（着色器常量等）的脚本是时段常量。状态 = 这些脚本逐小时输出的组合，
+    /// 名字取覆盖的小时段（如 07-18、00-07+18-24）。状态内这些绑定冻结成常数（<see cref="FreezeClockConstants"/>），不切显隐，ControllerId 为空。
+    /// </summary>
+    private static Detection? DetectClockConstants(IReadOnlyDictionary<int, JsonObject> objects)
+    {
+        double[][] outputs = ClockConstantBindings(objects).Select(binding => binding.Hours).ToArray();
+        State[] states = Enumerable.Range(0, 24)
+            .GroupBy(hour => string.Join(",", outputs.Select(hours => hours[hour].ToString("R", CultureInfo.InvariantCulture))))
+            .Select(group =>
+            {
+                var ranges = new List<int[]>();
+                foreach (int hour in group)
+                    if (ranges.Count > 0 && ranges[^1][1] == hour) ranges[^1][1] = hour + 1;
+                    else ranges.Add([hour, hour + 1]);
+                return new State(string.Join("+", ranges.Select(r => $"{r[0]:00}-{r[1]:00}")), ranges.ToArray(), []);
+            }).ToArray();
+        return states.Length < 2 ? null : new Detection(Recognized, null, null, states, [], null, "clock_constant_scripts");
+    }
+
+    private static IEnumerable<(JsonObject Binding, double[] Hours)> ClockConstantBindings(IReadOnlyDictionary<int, JsonObject> objects) =>
+        from pair in objects
+        from binding in SceneAnalyzer.Walk(pair.Value).OfType<JsonObject>()
+        where !ReferenceEquals(binding, pair.Value["visible"]) && binding["script"] is JsonValue script && script.TryGetValue<string>(out _)
+        let hours = ClockConstantHours(binding["script"]!.GetValue<string>())
+        where hours is not null
+        select (binding, hours);
+
+    /// <summary>
+    /// 时段常量脚本逐小时的输出（24 个）。表达式只认数字、脚本常量、engine.timeOfDay、四则、Math.max/min、WEMath.smoothStep（与引擎同式）。
+    /// 按分钟采样，每个整点小时内取值都不变（容差 1e-6），即跳变全落在整点上；不足一分钟的过渡（如 7:00 前 14 秒的 smoothStep）按硬切。
+    /// 模板不符或小时内有渐变返回 null，照旧实时。
+    /// </summary>
+    private static double[]? ClockConstantHours(string script)
+    {
+        Match match = ClockConstantScript.Match(Compact(Liveness.CapabilityScanText(script)));
+        if (!match.Success) return null;
+        var constants = new Dictionary<string, double>(StringComparer.Ordinal);
+        foreach (Match constant in Regex.Matches(match.Groups["consts"].Value, @"(?:const|let|var)(\w+)=([\d.]+);"))
+            constants[constant.Groups[1].Value] = double.Parse(constant.Groups[2].Value, CultureInfo.InvariantCulture);
+        string expr = match.Groups["expr"].Value;
+        int i = 0;
+        double t = 0;
+        void Expect(char c) { if (i >= expr.Length || expr[i] != c) throw new FormatException(); ++i; }
+        double Sum() { double a = Product(); while (i < expr.Length && expr[i] is '+' or '-') a = expr[i++] == '+' ? a + Product() : a - Product(); return a; }
+        double Product() { double a = Unary(); while (i < expr.Length && expr[i] is '*' or '/') a = expr[i++] == '*' ? a * Unary() : a / Unary(); return a; }
+        double Unary()
+        {
+            if (i < expr.Length && expr[i] == '-') { ++i; return -Unary(); }
+            if (i < expr.Length && expr[i] == '(') { ++i; double inner = Sum(); Expect(')'); return inner; }
+            Match token = ClockConstantToken.Match(expr, i);
+            if (!token.Success) throw new FormatException();
+            i += token.Length;
+            if (char.IsDigit(token.Value[0])) return double.Parse(token.Value, CultureInfo.InvariantCulture);
+            if (token.Value == "engine.timeOfDay") return t;
+            if (constants.TryGetValue(token.Value, out double value)) return value;
+            Expect('(');
+            var args = new List<double> { Sum() };
+            while (i < expr.Length && expr[i] == ',') { ++i; args.Add(Sum()); }
+            Expect(')');
+            double x = args.Count == 3 ? Math.Clamp((args[2] - args[0]) / (args[1] - args[0]), 0, 1) : 0;
+            return token.Value switch
+            {
+                "Math.max" => args.Max(),
+                "Math.min" => args.Min(),
+                "WEMath.smoothStep" or "WEMath.smoothstep" when args.Count == 3 => x * x * (3 - 2 * x),
+                _ => throw new FormatException()
+            };
+        }
+        var minutes = new double[24 * 60];
+        try
+        {
+            for (int minute = 0; minute < minutes.Length; ++minute)
+            {
+                (i, t) = (0, minute / (double)minutes.Length);
+                minutes[minute] = Sum();
+                if (i != expr.Length || !double.IsFinite(minutes[minute])) return null;
+            }
+        }
+        catch (FormatException) { return null; }
+        double[] hours = Enumerable.Range(0, 24).Select(hour => minutes[hour * 60 + 30]).ToArray();
+        return Enumerable.Range(0, minutes.Length).All(minute => Math.Abs(minutes[minute] - hours[minute / 60]) <= 1e-6) ? hours : null;
+    }
+
+    /// <summary>去掉字符串以外的全部空白（调用方先去注释）。</summary>
+    private static string Compact(string code) => Regex.Replace(code, "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|\\s+",
+        match => char.IsWhiteSpace(match.Value[0]) ? "" : match.Value);
+
+    /// <summary>把场景里全部时段常量绑定（与识别同一判据）换成该小时的输出常数；其余脚本不动。</summary>
+    private static void FreezeClockConstants(JsonObject scene, int hour)
+    {
+        foreach (var (binding, hours) in ClockConstantBindings(scene["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(SceneGraph.Id)).ToList())
+        {
+            binding.Remove("script");
+            binding["value"] = hours[hour];
+        }
     }
 
     private static Detection Analyze(int id, string? name, string code, IReadOnlyDictionary<int, JsonObject> objects, JsonArray? dependencies,
@@ -250,9 +354,7 @@ internal static class DaytimeSplit
     private static Detection? AnalyzeIndexedVideoSelector(int id, string? name, string code,
         IReadOnlyDictionary<int, JsonObject> objects, JsonArray? dependencies, JsonObject? properties)
     {
-        string compact = Regex.Replace(code, "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|\\s+",
-            match => char.IsWhiteSpace(match.Value[0]) ? "" : match.Value);
-        Match template = IndexedVideoSelector.Match(compact);
+        Match template = IndexedVideoSelector.Match(Compact(code));
         if (!template.Success) return null;
         Detection Reject(string reason) => Fallback(reason, id, name);
         string Part(string key) => template.Groups[key].Value;
@@ -459,9 +561,10 @@ internal static class DaytimeSplit
     {
         Detection detection = Detect(scene["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(obj => obj["id"]!.GetValue<int>()),
             properties: properties);
-        if (!detection.IsRecognized || !detection.ControlsVideoPlayback || detection.StateNamed(stateName) is not State state) return null;
+        if (!detection.IsRecognized || detection.ControllerId is not null && !detection.ControlsVideoPlayback ||
+            detection.StateNamed(stateName) is not State state) return null;
         JsonObject copy = scene.DeepClone().AsObject();
-        PlanTransforms.FreezeTemporalProperties(copy, properties);
+        if (detection.ControlsVideoPlayback) PlanTransforms.FreezeTemporalProperties(copy, properties);
         ApplyState(copy, detection, state);
         return copy;
     }
@@ -475,6 +578,12 @@ internal static class DaytimeSplit
     {
         if (plan["settings"]?["daytime_state"] is not JsonValue stateValue || !stateValue.TryGetValue<string>(out string? stateName)) return;
         if (plan["daytime_split"] is not JsonObject split || split["status"]?.GetValue<string>() != Recognized) return;
+        if (split["controller_layer_id"] is null)
+        {
+            FreezeClockConstants(scene, split["states"]!.AsArray().OfType<JsonObject>()
+                .First(state => state["name"]?.GetValue<string>() == stateName)["hours"]![0]![0]!.GetValue<int>());
+            return;
+        }
         int controller = split["controller_layer_id"]!.GetValue<int>();
         var controlled = (split["controlled_layer_ids"] as JsonArray ?? []).Select(node => node!.GetValue<int>()).ToHashSet();
         bool playback = split["controls_video_playback"]?.GetValue<bool>() == true;
@@ -487,6 +596,7 @@ internal static class DaytimeSplit
     internal static void ApplyState(JsonObject scene, Detection? detection, State? state, bool forAnalysis = false)
     {
         if (detection?.IsRecognized != true || state is null) return;
+        if (detection.ControllerId is null) { FreezeClockConstants(scene, state.Hours[0][0]); return; }
         ApplyState(scene, detection.ControllerId!.Value, detection.ControlledLayerIds.ToHashSet(), state.VisibleLayerIds.ToHashSet(),
             detection.ControlsVideoPlayback && !forAnalysis);
     }
