@@ -118,15 +118,16 @@ public sealed class HybridBakeService(NativeTools tools)
     {
         ArgumentNullException.ThrowIfNull(request);
         JsonObject result = await BakeCleanedAsync(request, progress, cancellationToken);
-        if (request.ProbeFrames > 0 || ResidualParticleRoots(request.Plan, result) is not int[] retain) return result;
-        return await RetryRetainingParticlesAsync(request, result, retain, progress, cancellationToken);
+        if (request.ProbeFrames > 0 || ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
+        return await RetryRetainingParticlesAsync(request, result, retain, reasons, progress, cancellationToken);
     }
 
     /// <summary>
     /// 残差掩盖组在全分辨率第一层被拒、失败组里有被掩盖的粒子系统时要留实时的作者根：计划原本保留的根 ∪ 这些粒子的作者根；
     /// 其余情况 null。粒子过了平稳随机判据才会被掩盖，但判据只证统计平稳：两次独立实现之差铺满画布时硬切残差照样超限，第一层才是裁决。
+    /// Reasons 是这些粒子层原来的未解析原因码（<see cref="HybridLoopAllocation.RetainReasons"/>），重查时写进它们的 reasons。
     /// </summary>
-    internal static int[]? ResidualParticleRoots(JsonObject plan, JsonObject report)
+    internal static (int[] Roots, Dictionary<int, string[]>? Reasons)? ResidualParticleRoots(JsonObject plan, JsonObject report)
     {
         if (report["status"]?.GetValue<string>() != "candidate_rejected_seam" ||
             report["loop_validation"]?.GetValue<string>() != "residual_above_limits") return null;
@@ -138,11 +139,11 @@ public sealed class HybridBakeService(NativeTools tools)
             if (SceneGraph.Int(layer["id"]) is int id) rootOf.TryAdd(id, SceneGraph.Int(layer["root"]) ?? id);
         int[] particles = (report["residual_masking"]?["residual_layers"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(item => item["mechanism"]?.GetValue<string>() == "particle_system")
-            .Select(item => SceneGraph.Int(item["owner_layer_id"])).OfType<int>().Where(failed.Contains)
-            .Select(owner => rootOf.GetValueOrDefault(owner, owner)).ToArray();
+            .Select(item => SceneGraph.Int(item["owner_layer_id"])).OfType<int>().Where(failed.Contains).ToArray();
         if (particles.Length == 0) return null;
-        return (plan["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()
-            .Concat(particles).Distinct().ToArray();
+        return ((plan["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()
+            .Concat(particles.Select(owner => rootOf.GetValueOrDefault(owner, owner))).Distinct().ToArray(),
+            HybridLoopAllocation.RetainReasons(plan, particles));
     }
 
     /// <summary>
@@ -150,7 +151,7 @@ public sealed class HybridBakeService(NativeTools tools)
     /// 无 blocker 就把首次产物挪到 &lt;输出&gt;.residual-first-attempt，再烘一次。首次结论、保留的根与耗时记在 residual_particle_retry。
     /// </summary>
     private async Task<JsonObject> RetryRetainingParticlesAsync(HybridBakeRequest request, JsonObject first, int[] retain,
-        IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
+        Dictionary<int, string[]>? reasons, IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
     {
         var layout = new WorkLayout(request.OutputDirectory);
         var record = new JsonObject {
@@ -163,7 +164,8 @@ public sealed class HybridBakeService(NativeTools tools)
             "Seam residual from masked particles exceeded the first layer; keeping those particles live and baking once more."));
         long started = Stopwatch.GetTimestamp();
         JsonObject plan = await new HybridScenePlanner(tools).AnalyzeAsync(PlanSettings.Of(request.Plan) with {
-            OutputDirectory = layout.AnalysisRefresh, RuntimeTraceFile = null, RetainLiveRootIds = retain }, progress, cancellationToken);
+            OutputDirectory = layout.AnalysisRefresh, RuntimeTraceFile = null, RetainLiveRootIds = retain, RetainLiveReasons = reasons },
+            progress, cancellationToken);
         record["replan_seconds"] = Math.Round(Stopwatch.GetElapsedTime(started).TotalSeconds, 1);
         if (plan["blockers"] is not JsonArray { Count: 0 })
         {
