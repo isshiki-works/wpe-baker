@@ -63,10 +63,12 @@ internal sealed class Liveness
         }
         // These materials consume the already-composited scene. Their input must remain the
         // current video/live composition; their upstream drawing need not remain expensive.
+        // _rt_MipMappedFrameBuffer（genericimage REFLECTION 的默认采样）是上一帧的整幅合成：单独烘这一层只映出它自己，
+        // 且从第 0 帧起要几帧才收敛，第 P 帧回不到第 0 帧（3737267090 的接缝失败）。
         foreach (var layer in observation.RuntimeLayers.OfType<JsonObject>())
             if (layer["materials"] is JsonArray materials && materials.OfType<JsonObject>().Any(material =>
                 material["textures"] is JsonArray textures && textures.Any(texture => texture?.GetValue<string>() is
-                    "_rt_default" or "_rt_FullFrameBuffer")))
+                    "_rt_default" or "_rt_FullFrameBuffer" or "_rt_MipMappedFrameBuffer")))
                 Live(layer["owner"]!.GetValue<int>(), "reads_current_framebuffer");
         foreach (var layer in observation.RuntimeLayers.OfType<JsonObject>())
             if (layer["materials"] is JsonArray materials)
