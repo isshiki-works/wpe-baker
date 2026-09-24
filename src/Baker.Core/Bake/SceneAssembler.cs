@@ -204,7 +204,7 @@ internal static class SceneAssembler
     /// 单次入场动画（相机 projection.camera_intro、图层加载即播的单次轨）：前 <paramref name="introFrames"/> 帧显示原作图层、隐藏视频，之后反过来。
     /// 每个视频前插入它那组成员（及到组父级之间的祖先，祖先去掉绘制键只给变换）的副本，id 在成品里没被占用就沿用原 id；
     /// 副本与视频各带 visible 脚本按 engine.runtime 切换，不依赖父级可见性是否传给子级。
-    /// 视频 init 里暂停，切换前半秒（仍隐藏）seek 到场景那一刻对应的帧开播：视频第 j 帧是源第 master+j 帧，场景第 f 帧播 (f − master) mod P，
+    /// 视频 init 里暂停，切换那一帧 seek 到场景此刻对应的帧再播：视频第 j 帧是源第 master+j 帧，切换帧 s 播 (s − master) mod P，
     /// 所以不管 WPE 隐藏的视频播不播，相位都对齐场景绝对时间。副本做不成（公开图层查询、跨对象依赖、脚本/动画可见性）时 s = 0：
     /// 视频从头可见（入场那几秒是定格态），只做相位对齐。返回 bake.json 的 intro_live。
     /// </summary>
@@ -265,19 +265,15 @@ internal static class SceneAssembler
                 for (int i = clones.Count - 1; i >= 0; --i) finalObjects.Insert(at, clones[i]);
             }
         string on = skip is null ? threshold : Seconds(-.5 * frame);
-        // 切换前半秒（仍隐藏）就 seek 并开播，切换那一帧解码器已经出帧（实测切换帧当场开播会有一帧没画面）。
-        // seek 落在帧中间（+¼ 帧），解码取帧不受取整方向影响。
-        ulong lead = Math.Min(switchFrame, (ulong)Math.Round(.5 / frame));
-        string start = Seconds((switchFrame - lead - .5) * frame);
-        string seek = Seconds(((switchFrame - lead + loopFrames - masterWarmupFrames % loopFrames) % loopFrames + .25) * frame);
+        // 落在帧中间（+¼ 帧），解码取帧不受取整方向影响。
+        string seek = Seconds(((switchFrame + loopFrames - masterWarmupFrames % loopFrames) % loopFrames + .25) * frame);
         foreach (var video in replacements.Values.Select(r => finalObjects.OfType<JsonObject>().Single(obj => Id(obj) == Id(r)))
             .Where(video => skip is null || !staticIds.Contains(Id(video))))
             video["visible"] = new JsonObject { ["value"] = skip is not null, ["script"] = staticIds.Contains(Id(video))
                 ? $"'use strict';\nexport function update(value) {{\n\treturn engine.runtime >= {on};\n}}\n"
                 : $"'use strict';\nlet started = false;\nexport function init() {{\n\tthisLayer.getVideoTexture().pause();\n}}\n" +
-                  $"export function update(value) {{\n\tif (!started && engine.runtime >= {start}) {{\n\t\tstarted = true;\n" +
-                  $"\t\tconst video = thisLayer.getVideoTexture();\n\t\tvideo.setCurrentTime({seek});\n\t\tvideo.play();\n\t}}\n" +
-                  $"\treturn engine.runtime >= {on};\n}}\n" };
+                  $"export function update(value) {{\n\tif (engine.runtime < {on}) return false;\n\tif (!started) {{\n\t\tstarted = true;\n" +
+                  $"\t\tconst video = thisLayer.getVideoTexture();\n\t\tvideo.setCurrentTime({seek});\n\t\tvideo.play();\n\t}}\n\treturn true;\n}}\n" };
         var result = new JsonObject { ["intro_frames"] = introFrames, ["switch_frame"] = switchFrame,
             ["switch_seconds"] = switchFrame * frame, ["video_seek_seconds"] = double.Parse(seek, System.Globalization.CultureInfo.InvariantCulture),
             ["status"] = skip is null ? "applied" : "skipped" };
