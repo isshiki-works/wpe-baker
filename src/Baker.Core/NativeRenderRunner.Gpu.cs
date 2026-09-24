@@ -65,7 +65,7 @@ public sealed partial class NativeRenderRunner
             ? "Retained original renderer RGBA resized with FFmpeg Lanczos, then alpha-packed and converted to BT.709."
             : "Retained renderer RGBA with the same integer loop crossfade, crop, packing and BT.709 conversion.";
         result["decode_scope"] = measured.DecodeScope;
-        result["qp"] = request.GpuEncoding?.Qp;
+        result["qp"] = request.GpuEncoding!.Qp;
         if (pass) TemporaryCaptureFiles.Delete(result, output, "quality-reference.rgb", "quality-product.yuv");
         return result;
     }

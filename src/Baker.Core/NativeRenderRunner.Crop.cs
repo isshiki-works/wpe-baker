@@ -160,8 +160,7 @@ public sealed partial class NativeRenderRunner
             ["video_sha256"] = render["video_sha256"]?.DeepClone(),
             ["encoded_stream"] = render["encoded_stream"]?.DeepClone(),
             ["validation_required"] = "Cropped-cache reinjection, encoded loop seam and official playback." };
-        // 硬件直编（GPU 管线或 nvenc 等）没有 master 可比，拿渲染器保留的原帧跑同一个画质门；直编无法升档重编，不过就拒。
-        if (gpu || encoderKind != PlaybackEncoderSelection.Software)
+        if (gpu)
         {
             JsonObject quality = await GpuPlaybackQualityAsync(render, video, region, packed, output, cancellationToken);
             report["playback_quality_gate"] = quality;
