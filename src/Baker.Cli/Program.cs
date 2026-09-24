@@ -212,7 +212,7 @@ try
         HybridPlanFormat.Validate(input["plan"]!.AsObject());
         // bake 选项 → 请求字段，取值按选项表校验；给了哪个才写哪个、才重写请求文本，没给的按请求里的默认。
         // encoder：播放版编码路径，支持的 Vulkan 路径直接生成成品；encode_slots：成品编码的跨进程槽位配额（0 不限）；
-        // group_parallel：单案内同时在飞的组主渲染数（1 与逐组串行一致）；keep_intermediates：开发用，保留中间产物。
+        // group_parallel：单案内同时在飞的组主渲染数（不给 = 按核数与磁盘自动；1 = 逐组串行）；keep_intermediates：开发用，保留中间产物。
         foreach (var (option, field) in new[] { ("--encoder", "playback_encoder"), ("--effect-resolution", "match_effect_resolution"),
             ("--effect-render-scale", "effect_render_scale"), ("--encode-slots", "encode_slots"), ("--group-parallel", "group_parallel"),
             ("--keep-intermediates", "keep_intermediates") })

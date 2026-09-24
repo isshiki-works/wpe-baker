@@ -56,6 +56,20 @@ public static class BakeDiskBudget
     }
 
     /// <summary>
+    /// 同时在飞的组主渲染数。给了（≥1）就照给的，不超过组数；0 = 自动：每组主渲染连同无损母版编码约吃 4 个逻辑核，
+    /// 按核数取、不超过组数，再按磁盘预估往下收（收到 1 仍不够由磁盘闸门拒绝）。
+    /// 逐组串行时 6 组的作品要把整场景模拟跑 6 遍，主渲染是单组的 6 倍（PERF1 实测 3757825891）。
+    /// </summary>
+    public static int GroupParallel(int requested, JsonObject plan, ulong frames, string outputDirectory)
+    {
+        int groups = Math.Max(1, (plan["video_groups"] as JsonArray)?.Count ?? 1);
+        if (requested > 0) return Math.Min(requested, groups);
+        int parallel = Math.Clamp(Environment.ProcessorCount / 4, 1, groups);
+        while (parallel > 1 && Reject(plan, frames, parallel, outputDirectory) is not null) --parallel;
+        return parallel;
+    }
+
+    /// <summary>
     /// 按计划预估中间产物峰值。<paramref name="groupParallel"/> 是同时在飞的组主渲染数；
     /// 当前组的 master 要等它自己编完才删，所以按 groupParallel + 1 份算。
     /// 尺寸或帧数未知时返回一个 <see cref="Estimate.Known"/> 为 false 的预估，调用方不做拦截。

@@ -11,8 +11,8 @@ public sealed record HybridBakeRequest(int SchemaVersion, JsonObject Plan, strin
     string? PlaybackEncoder = null,
     // 成品编码的跨进程槽位配额：0 = 不限。多槽并行跑批时用它压住 ffmpeg 抢核，渲染不受限制。
     int EncodeSlots = 0,
-    // 单案内同时在飞的组主渲染数：1 = 与逐组串行完全一致。组的判定、编码与写入始终按组序串行。
-    int GroupParallel = 1,
+    // 单案内同时在飞的组主渲染数：0 = 自动（见 BakeDiskBudget.GroupParallel）；1 = 逐组串行。组的判定、编码与写入始终按组序串行。
+    int GroupParallel = 0,
     // 开发用：保留中间产物（capture-source、各组 master、合成探针与参照、分析刷新目录）。
     // 默认 false —— 正常结束、拒绝与失败都会删掉它们，只留成品工程、bake.json、失败诊断与日志。
     // 开启时还记录编码接缝差分并导出成功任务的接缝预览。
@@ -327,9 +327,8 @@ public sealed class HybridBakeService(NativeTools tools)
         var originalObjects = original["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(SceneGraph.Id);
         var groups = plan["video_groups"]!.AsArray().OfType<JsonObject>().ToArray();
         var plannedLiveIds = (plan["live_layer_ids"] as JsonArray ?? []).Select(node => node!.GetValue<int>()).ToHashSet();
-        // 组内并行只提前跑主渲染：最多这么多个组的渲染同时在飞，判定、编码与写入仍严格按组序串行。
-        // 1 = 与改动前逐组串行完全一致，核显机器上默认不变。
-        int groupParallel = Math.Clamp(request.GroupParallel, 1, Math.Max(1, groups.Length));
+        // 组内并行只提前跑主渲染：最多这么多个组的渲染同时在飞，判定、编码与写入仍严格按组序串行，成品与逐组串行逐字节相同。
+        int groupParallel = BakeDiskBudget.GroupParallel(request.GroupParallel, plan, frames, output);
         Directory.CreateDirectory(output);
         var report = BakeReportWriter.Running(request, sourceHash, frames, plan.DeepClone().AsObject(), groupParallel,
             residualMasking is null ? "source_period_no_repair" : ResidualMasking.SeamPolicy);

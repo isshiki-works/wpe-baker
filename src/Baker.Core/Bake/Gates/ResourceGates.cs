@@ -10,7 +10,9 @@ internal sealed class DiskBudgetGate : IBakeGate
 {
     public Task<BakeRejection?> CheckAsync(BakeGateContext context, CancellationToken cancellationToken)
     {
-        if (BakeDiskBudget.Reject(context.Plan, context.Frames, context.Request.GroupParallel, context.Layout.Output)
+        if (BakeDiskBudget.Reject(context.Plan, context.Frames,
+                BakeDiskBudget.GroupParallel(context.Request.GroupParallel, context.Plan, context.Frames, context.Layout.Output),
+                context.Layout.Output)
             is not JsonObject diskRejection)
             return Task.FromResult<BakeRejection?>(null);
         return Task.FromResult<BakeRejection?>(context.Reject(BakeDiskBudget.RejectedBakeStatus, context.Plan, "not_performed", new() {
