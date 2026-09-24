@@ -115,6 +115,15 @@
         "fxCoord2.xy -= g_Time * g_Speed * vec2(0.0047111, 0.0007399);" ],
       "uniforms": [ [ "g_Speed", { "material": "rayspeed" } ] ],
       "count": { "word:g_Time": 3, "word:g_Speed": 3 } },
+    "caustics": { "normalize": true,
+      "contains": [
+        "float time = g_Time * u_speed + u_timeoffset;",
+        "noiseCoords.x += time * 0.005;",
+        "noiseCoords2.y += time * 0.004111;",
+        "blendCoords += time * 0.003777;",
+        "shiftCoords += time * 0.01;" ],
+      "uniforms": [ [ "u_speed", { "material": "ui_editor_properties_speed" } ] ],
+      "count": { "word:g_Time": 2, "word:u_speed": 2, "word:time": 5 } },
     "cloud_motion": { "normalize": true, "forbid_alternate_clock": true,
       "contains": [
         "vec3 noise = texSample2D(g_Texture2, v_NoiseCoord).rgb;",
@@ -247,6 +256,7 @@
       "missing": "Verified CRT scan-line timing needs a finite scalar 'Frequency' constant.",
       "evidence": "Verified scan-line mod(...,1.0) and flicker mod(...,2.0) over g_Time * u_frequency; joint period is 2/abs({speed})." },
     { "id": "light_shafts", "action": "light_shafts", "match": [ "light_shafts" ] },
+    { "id": "caustics", "action": "caustics", "match": [ "caustics" ] },
     { "id": "cloud_motion", "action": "scalar_period", "match": [ "cloud_motion" ],
       "gates": [ { "type": "repeat_texture", "slot": 2, "kind": "NonPeriodicOrDriftingMechanism",
         "detail": "Cloud-motion noise UV drifts linearly with g_Time, and texture slot 2 is not proven to be a still repeat-addressed texture (clamped, animated or unreadable), so the lookup never returns." } ],
