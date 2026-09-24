@@ -16,8 +16,8 @@ internal static class LoopAnalysis
         double? loopLengthMaximumSeconds = null, EmbeddedVideoLoopLimit? loopLengthLimit = null)
     {
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
-            maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumBudgetPercent)
-            throw new ArgumentException("FPS must be positive and retiming must be between zero and five percent.");
+            maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
+            throw new ArgumentException("FPS must be positive and retiming must be between zero and ten percent.");
         // 循环时长上限 = --loop-max-seconds 再按内嵌视频 2 GiB 收紧后的那一个值：所有周期分量共用。
         // 摆动改频的 Lmax 与收紧记录来自同一个请求字段，三者不许不一致。
         double ceilingSeconds = loopLengthMaximumSeconds ?? swayRetime?.LoopLengthMaximumSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;

@@ -85,7 +85,7 @@ public static class ShaderPeriodAnalysis
 
     /// <param name="loopCeilingSeconds">循环时长上限（秒，= --loop-max-seconds，缺省 600），只进拒绝文案，不改判定。</param>
     /// <param name="maximumRetimePercent">
-    /// 本次求解允许的单个分量最大调速（百分比，0–5）：即 <see cref="LoopAnalysis"/> 交给求解器的同一个数
+    /// 本次求解允许的单个分量最大调速（百分比，0–10）：即 <see cref="LoopAnalysis"/> 交给求解器的同一个数
     /// （档位预算 RetimeProfile.CommonRetimePercent：效率 5、平衡 3、质量无预算时回落到请求的 2，关通用调速时 0；--retime-budget 覆盖）。
     /// 缺省 2 与 HybridLoopService.Analyze、CommonLoopRequest 的缺省一致。
     /// </param>
@@ -93,8 +93,8 @@ public static class ShaderPeriodAnalysis
         IReadOnlyCollection<int> selectedLayerIds, double? loopCeilingSeconds = null, double maximumRetimePercent = DefaultRetimePercent)
     {
         double ceiling = loopCeilingSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
-        if (!double.IsFinite(maximumRetimePercent) || maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumBudgetPercent)
-            throw new ArgumentOutOfRangeException(nameof(maximumRetimePercent), "Retiming must be between zero and five percent.");
+        if (!double.IsFinite(maximumRetimePercent) || maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
+            throw new ArgumentOutOfRangeException(nameof(maximumRetimePercent), "Retiming must be between zero and ten percent.");
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(selectedLayerIds);

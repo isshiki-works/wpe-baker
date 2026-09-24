@@ -296,8 +296,8 @@ public static class CommonLoopSolver
     {
         if (request.FpsNumerator == 0 || request.FpsDenominator == 0 || request.Components is null || request.Components.Count == 0 ||
             request.MaximumCandidates <= 0 || request.MaximumFrameCandidates == 0 || !double.IsFinite(request.MaximumRetimePercent) ||
-            request.MaximumRetimePercent < 0 || request.MaximumRetimePercent > RetimeProfile.MaximumBudgetPercent)
-            throw new ArgumentException("Use positive rational FPS and components, a positive bounded search, and a retime limit from 0 to 5 percent.", nameof(request));
+            request.MaximumRetimePercent < 0 || request.MaximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
+            throw new ArgumentException("Use positive rational FPS and components, a positive bounded search, and a retime limit from 0 to 10 percent.", nameof(request));
         CommonLoopRational minimum = request.MinimumDuration ?? DefaultMinimum, maximum = request.MaximumDuration ?? DefaultMaximum;
         if ((Int128)minimum.Numerator * maximum.Denominator > (Int128)maximum.Numerator * minimum.Denominator ||
             maximum.ToSeconds() > MaximumLoopLengthSeconds)

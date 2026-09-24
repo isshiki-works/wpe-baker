@@ -17,9 +17,11 @@ internal sealed record SearchSpace(string[] Interactions, string[] Presets, stri
     {
         string requested = request.Preset ?? "balanced", interaction = request.Interaction ?? "fixed";
         int start = Array.IndexOf(Tiers, requested);
-        if (start < 0 || interaction is not ("keep" or "fixed" or "off")) throw new InvalidDataException("Invalid preset or interaction policy.");
+        if (start < 0 && requested != RetimeProfile.Compatibility || interaction is not ("keep" or "fixed" or "off")) throw new InvalidDataException("Invalid preset or interaction policy.");
+        // 兼容档只能手动选，只试它自己：不进自动回退链，默认运行的档位序列不变。
+        string[] tiers = start < 0 ? [requested] : Tiers[start..];
         return new(interaction switch { "keep" => ["keep", "fixed", "off"], "fixed" => ["fixed", "off"], _ => ["off"] },
-            request.RetimeBudgetPercent is null ? Tiers[start..] : [Tiers[start]],
+            request.RetimeBudgetPercent is null ? tiers : [tiers[0]],
             request.LayoutExplicit ? [request.VideoLayout] : ["full_frame", "layered"],
             request.DaytimeState is null, exportStates && request.DaytimeSplit);
     }
