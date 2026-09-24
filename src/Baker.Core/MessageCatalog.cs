@@ -787,8 +787,8 @@ public static class MessageCatalog
 
         // bake --help 里 --encoder 的说明：用法骨架与 analyze --help 一样是英文，只有这段说明按 --lang 出中文或英文。
         ["cli.bake_encoder_help"] = new(
-            Zh: "vulkan 在支持的显卡上直接生成成品，减少中间文件和重复编码。不可用的路径使用\n软件，并在 bake.json 中记录原因；画质不达标时停止，不自动重新生成。",
-            En: "Vulkan generates playback video directly on supported GPUs, reducing intermediate files\nand repeated encoding. Unavailable paths use software and record why in bake.json.\nInsufficient quality stops generation without automatically rebaking the scene."),
+            Zh: "默认 auto：支持的显卡上走 vulkan，直接生成成品，减少中间文件和重复编码。不可用的路径使用\n软件，并在 bake.json 中记录原因；画质不达标时先降 QP 重渲这一组，仍不达标改用软件。",
+            En: "Default auto: Vulkan generates playback video directly on supported GPUs, reducing intermediate files\nand repeated encoding. Unavailable paths use software and record why in bake.json.\nA group below the quality gate is re-rendered once at a lower QP, then with software."),
         ["bake.gpu_quality_rejected"] = new(
             Zh: "GPU 编码的代表帧画质未达到既有限值。候选视频和报告已保留；可手动改用软件编码重试，本次不会自动重新生成。",
             En: "GPU encoding did not meet the existing sample quality limit. The candidate video and report are retained; retry manually with software encoding. This run will not automatically regenerate the scene."),

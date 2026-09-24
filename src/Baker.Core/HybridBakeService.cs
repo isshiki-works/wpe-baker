@@ -405,7 +405,7 @@ public sealed class HybridBakeService(NativeTools tools)
             if (residualMasking is not null)
                 report["residual_group_ids"] = new JsonArray([.. residualGroupIndexes.Select(index => groups[index]["id"]!.DeepClone())]);
             // 直编组要在渲染开始前就定下播放档位（编码器随渲染一起启动），所以档位解析提到所有渲染之前，整次烘焙只解析一次。
-            // master 路线仍把原字符串交给 EncodeCroppedRgbaAsync 自己解析，行为不变。软件档位不起额外进程。
+            // master 路线拿解析后的档位：auto 选了 vulkan 时，走 master 的组用软件编码，不再落到经管道的 ffmpeg 硬件档。
             (playbackKind, playbackFallbackReason) = await runner.ResolvePlaybackEncoderAsync(request.PlaybackEncoder, output, token);
             scheduler = new GroupRenderScheduler(runner, request, plan, settings, groups, captureProject, output, snapshot, frames,
                 crossfadeFrames, warmupFrames, residualGroupIndexes, groupParallel, playbackKind, progress, token);
