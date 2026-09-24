@@ -274,7 +274,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         var liveness = Liveness.Analyze(request, source, graph, observation, scriptFaults.Errors, parallax, daytimeSelector,
             FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
         var projection = HybridVideoProjection.Describe(scene, properties, request.Width, request.Height, observation.Trace["runtime_projection"] as JsonObject);
-        var allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax, FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
+        var allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax, projection, FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
         var composer = new Composer(request, source, scene, properties, graph, observation, liveness, allocation, parallax,
             daytimeControlled, daytimeVisible);
         // A later parallax/occlusion group can stay live in its original place. Compare that
