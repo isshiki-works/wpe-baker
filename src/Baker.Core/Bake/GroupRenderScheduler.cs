@@ -32,6 +32,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     private readonly bool probe = request.ProbeFrames > 0;
     private readonly Dictionary<int, Task<JsonObject>> renders = [];
     private readonly CancellationTokenSource renderCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    /// <summary>GPU 长组分段渲染时同时在跑的段进程上限（与组并行数相同），各组的段排同一个队。</summary>
+    private readonly SemaphoreSlim segmentSlots = new(groupParallel);
 
     internal double CenterX => projection["center_x"]!.GetValue<double>();
     internal double CenterY => projection["center_y"]!.GetValue<double>();
@@ -185,15 +187,24 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             // 渲染器内的 GPU 打包只有左右并排；越宽度上限要上下并排的透明组走 master 路线。
             if (known is { } layout && !HardwareDecodeDimensions.StackedVertically(layout.Packed, layout.Crop.Width))
             {
+                // Vulkan 编码有最小编码尺寸：RTX 5090 驱动 610.62 报 H.264/HEVC minCodedExtent 160x64（vulkaninfo --show-video-props）。
+                // FFmpeg 拿按 16 对齐后的尺寸比：72 宽透明组打包成 144 被拒、整组落到 CPU 无损路线（3757825891 group-4 读回约 200 s）；
+                // 152 对齐成 160 放行，但实际尺寸低于下限。不足时在捕获范围内居中加宽/加高裁剪，多出的是透明像素；打包的每半幅算一半宽。
+                int minimum = layout.Packed ? 80 : 160;
+                CacheRegion crop = layout.Crop;
+                if (crop.Width < minimum && crop.CaptureWidth >= minimum)
+                    crop = crop with { X = Math.Clamp((crop.X - (minimum - crop.Width) / 2) & ~1, 0, crop.CaptureWidth - minimum), Width = minimum };
+                if (crop.Height < 64 && crop.CaptureHeight >= 64)
+                    crop = crop with { Y = Math.Clamp((crop.Y - (64 - crop.Height) / 2) & ~1, 0, crop.CaptureHeight - 64), Height = 64 };
                 string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
-                    (uint)layout.Crop.Width * (layout.Packed ? 2u : 1u), (uint)layout.Crop.Height,
+                    (uint)crop.Width * (layout.Packed ? 2u : 1u), (uint)crop.Height,
                     render.FpsNumerator, render.FpsDenominator), PlaybackEncoderSelection.Vulkan);
                 // 不按固定码率系数预判 2 GiB：ARCH2 实测 Vulkan 成品相对参考码率 0.02–2.0 倍，随内容变、不随格式定。
                 // 成品实际超限时由 StartAsync 按软件档重渲。
                 render = render with { LosslessTest = false, PlaybackEncoderKind = null, ForceKeyFrameFrame = null,
                     EncodedFrames = period, PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb",
                     GpuEncoding = new(codec, Qp: 18, CrossfadeFrames: framing.Residual ? crossfadeFrames : 0,
-                        Crop: layout.Crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
+                        Crop: crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
             }
         }
         return render;
@@ -246,13 +257,13 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         }
         try
         {
-            JsonObject rendered = await runner.RenderAsync(render, progress, renderCancellation.Token);
+            JsonObject rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
             if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render))
             {
                 Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
                     Path.GetDirectoryName(render.OutputDirectory)!, $"master.gpu-qp{gpu.Qp}"));
                 render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
-                rendered = await runner.RenderAsync(render, progress, renderCancellation.Token);
+                rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
                 if (!await GpuQualityPassesAsync(rendered, render))
                     throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
             }
