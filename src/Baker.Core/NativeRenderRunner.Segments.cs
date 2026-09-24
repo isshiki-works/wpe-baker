@@ -126,10 +126,8 @@ public sealed partial class NativeRenderRunner
             ["frames"] = part["request"]!["frames"]!.DeepClone(), ["wall_seconds"] = part["native_result"]!["wall_seconds"]!.DeepClone() })]);
         manifest["completed_utc"] = DateTimeOffset.UtcNow.ToString("O");
         await WriteJsonAsync(Path.Combine(output, "manifest.json"), manifest, cancellationToken);
-        // 段目录只留清单、作业与日志；已拼进组目录的大文件删掉。
-        foreach (string directory in partDirectories)
-            foreach (string big in new[] { "preview.mp4", Path.Combine("native", RetainedFramesFile), Path.Combine("native", "first-frame.rgba") })
-                File.Delete(Path.Combine(directory, big));
+        // 段目录删掉：画质门不过降 QP 重渲时要用同样的段目录名。
+        foreach (string directory in partDirectories) Directory.Delete(directory, true);
         return manifest;
 
         static bool Same(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
