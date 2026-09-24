@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Baker.Core;
 
-/// 规则一：confidence=high、looping=false、playback_mode=single 的 authored 轨，其所属层判实时。
+/// 规则一：confidence=high、looping=false、playback_mode=single 的事件触发 authored 轨，其所属层判实时；加载即播的按入场进视频组。
 /// 规则二：唯一视频组被搬不走的实时绘制挡在前面时，full_frame 布局不可达。
 internal static class SingleShotAllocationChecks
 {
@@ -34,7 +34,7 @@ internal static class SingleShotAllocationChecks
             }).ToArray());
 
         async Task<JsonObject> PlanAsync(string name, JsonArray periods, JsonArray sceneObjects,
-            JsonArray? dependencies = null, string layout = "full_frame")
+            JsonArray? dependencies = null, string layout = "full_frame", bool singleShotLive = false)
         {
             await File.WriteAllTextAsync(scenePath, new JsonObject {
                 ["general"] = new JsonObject {
@@ -50,13 +50,13 @@ internal static class SingleShotAllocationChecks
                 ["runtime_layers"] = RuntimeLayers(sceneObjects) }.ToJsonString());
             return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
                 new(2, sourceDirectory, root, Path.Combine(root, "single-shot-" + name), 64, 32,
-                    RuntimeTraceFile: tracePath, VideoLayout: layout));
+                    RuntimeTraceFile: tracePath, VideoLayout: layout, SingleShotLive: singleShotLive));
         }
 
-        static JsonObject Track(int owner, bool looping, string mode, string confidence) => new() {
+        static JsonObject Track(int owner, bool looping, string mode, string confidence, bool? eventDriven = null) => new() {
             ["source_owner_layer_id"] = owner, ["mechanism"] = "authored_track", ["track_name"] = null,
             ["duration_seconds"] = 17.0, ["playback_rate"] = 1.0, ["looping"] = looping,
-            ["playback_mode"] = mode, ["event_driven"] = null, ["confidence"] = confidence, ["event_marker_count"] = 0 };
+            ["playback_mode"] = mode, ["event_driven"] = eventDriven, ["confidence"] = confidence, ["event_marker_count"] = 0 };
         static string Allocation(JsonObject plan, int id) => plan["layers"]!.AsArray().OfType<JsonObject>()
             .Single(layer => layer["id"]!.GetValue<int>() == id)["allocation"]!.GetValue<string>();
         static string[] Reasons(JsonObject plan, int id) => plan["layers"]!.AsArray().OfType<JsonObject>()
@@ -65,11 +65,19 @@ internal static class SingleShotAllocationChecks
         static int[] GroupRoots(JsonObject plan) => plan["video_groups"]!.AsArray().OfType<JsonObject>()
             .SelectMany(group => group["root_ids"]!.AsArray().Select(id => id!.GetValue<int>())).ToArray();
 
-        JsonObject single = await PlanAsync("single", new JsonArray(Track(20, false, "single", "high")), objects);
+        JsonObject single = await PlanAsync("single", new JsonArray(Track(20, false, "single", "high", eventDriven: true)), objects);
         check(Allocation(single, 20) == "live" && Reasons(single, 20).Contains("single_shot_animation") &&
             !GroupRoots(single).Contains(20) && GroupRoots(single).Contains(10) &&
             single["loop"]!["unresolved"]!.AsArray().Count == 0,
-            "a high-confidence single-shot authored track keeps its layer live and out of every video group");
+            "an event-driven high-confidence single-shot authored track keeps its layer live and out of every video group");
+
+        // 加载即播的单次轨按入场处理：进视频组；入场切换退回旧行为（single_shot_live）时照旧判实时。
+        JsonObject intro = await PlanAsync("intro", new JsonArray(Track(20, false, "single", "high")), objects);
+        JsonObject introFallback = await PlanAsync("intro-fallback", new JsonArray(Track(20, false, "single", "high")), objects,
+            singleShotLive: true);
+        check(Allocation(intro, 20) == "video" && GroupRoots(intro).Contains(20) && !Reasons(intro, 20).Contains("single_shot_animation") &&
+            Allocation(introFallback, 20) == "live" && Reasons(introFallback, 20).Contains("single_shot_animation"),
+            "a load-played single-shot track joins the video group as an intro and stays live when the intro switch falls back");
 
         foreach (string mode in new[] { "loop", "mirror" })
         {
@@ -91,7 +99,7 @@ internal static class SingleShotAllocationChecks
                 ["script"] = "export function update() { return new Date(); }" }, ["origin"] = "32 16 0" },
             new JsonObject { ["id"] = 20, ["name"] = "提示框", ["image"] = "models/prompt.json",
                 ["size"] = "16 8", ["origin"] = "32 16 0" });
-        JsonObject onlySingle = await PlanAsync("only-single", new JsonArray(Track(20, false, "single", "high")), promptOnly);
+        JsonObject onlySingle = await PlanAsync("only-single", new JsonArray(Track(20, false, "single", "high", eventDriven: true)), promptOnly);
         check(onlySingle["video_groups"]!.AsArray().Count == 0 &&
             onlySingle["loop"]!["unresolved"]!.AsArray().Count == 0 &&
             onlySingle["loop"]!["candidates"]!.AsArray().Count == 0 &&
@@ -110,7 +118,7 @@ internal static class SingleShotAllocationChecks
         // 第二组根本留不下来。这里要对照的是"medium 置信度时 20 仍会自成一组"，与全幅准入无关。
         JsonObject splitBaseline = await PlanAsync("split-medium", new JsonArray(Track(20, false, "single", "medium")),
             sandwich, layout: "layered");
-        JsonObject splitSingle = await PlanAsync("split-single", new JsonArray(Track(20, false, "single", "high")), sandwich);
+        JsonObject splitSingle = await PlanAsync("split-single", new JsonArray(Track(20, false, "single", "high", eventDriven: true)), sandwich);
         var remainingGroup = splitSingle["video_groups"]!.AsArray().OfType<JsonObject>().Single();
         check(splitBaseline["video_groups"]!.AsArray().Count == 2 &&
             Allocation(splitSingle, 20) == "live" && splitSingle["video_groups"]!.AsArray().Count == 1 &&
