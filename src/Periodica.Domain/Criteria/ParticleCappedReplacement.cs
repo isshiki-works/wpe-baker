@@ -108,7 +108,7 @@ internal static class ParticleCappedReplacement
         if (input.StartTime > 0)
         {
             double start = input.StartTime;
-            const double frameTime = 1.0 / 60.0;
+            const double frameTime = 1.0 / 60.0; // 渲染器 Warmup 的 kFrameTime（ParticleRuntime.cpp）本身固定 1/60 s，不随输出帧率；复刻须同值
             warmupSteps = (ulong)Math.Min(240, Math.Max(1.0, Math.Ceiling(start / frameTime)));
             double warmupDelta = start / warmupSteps;
             for (ulong step = 0; step < warmupSteps; ++step)

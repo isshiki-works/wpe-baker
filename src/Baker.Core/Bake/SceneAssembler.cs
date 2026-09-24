@@ -100,6 +100,9 @@ internal static class SceneAssembler
         // 不绘制但带脚本的根对象按源顺序放在最前：保证它们的 init 先于保留的实时脚本执行。
         // 它们不绘制，不进 expected，不影响下面的视频/实时绘制顺序校验。
         foreach (int id in ScriptRootIds(originalObjects, plan)) Emit(id);
+        // 光源不绘制，却照亮开了 LIGHTING 的实时层；丢掉它，实时层在光源附近会变暗。原样保留，同样不进 expected。
+        foreach (var (id, obj) in originalObjects)
+            if (obj.ContainsKey("light") && !omitted.Contains(id)) Emit(id);
         foreach (var entry in plan["composition"]!.AsArray().OfType<JsonObject>())
         {
             if (entry["video_group"] is JsonValue groupName && replacements.TryGetValue(groupName.GetValue<string>(), out var replacement))
