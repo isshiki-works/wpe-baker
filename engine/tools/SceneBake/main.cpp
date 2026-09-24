@@ -275,8 +275,8 @@ Job ReadJob(const owe::NJson& json, const fs::path& base) {
         options.packed_alpha = Bool(*encode, "packed_alpha", false);
         auto qp = Uint(*encode, "qp", 18);
         if (qp > 51 || job.sample_width || job.raw_stdout || job.output_stride != 1 || job.output_phase ||
-            (options.codec != "h264_vulkan" && options.codec != "hevc_vulkan"))
-            throw std::runtime_error("GPU encoding requires full frames, Vulkan H.264/HEVC and QP 0..51");
+            (options.codec != "h264_vulkan" && options.codec != "hevc_vulkan" && options.codec != "av1_nvenc"))
+            throw std::runtime_error("GPU encoding requires full frames, Vulkan H.264/HEVC or NVENC AV1 and QP 0..51");
         options.qp = static_cast<int>(qp);
         options.fps_num = job.fps_num; options.fps_den = job.fps_den;
         options.first_frame = job.warmup; options.frames = job.frames;

@@ -39,7 +39,7 @@ public static class ExactFrameRange
         ulong lead = firstFrame - seekFrame;
         var arguments = new List<string>(6);
         if (seekFrame > 0) arguments.AddRange(["-ss", Seconds(seekFrame, numerator, denominator)]);
-        arguments.AddRange(["-t", Seconds(checked(lead + frameCount + ReadAheadFrames), numerator, denominator), "-i", video]);
+        arguments.AddRange(["-t", Seconds(checked(lead + frameCount + ReadAheadFrames), numerator, denominator), .. FfmpegTool.Input(video)]);
         // -ss 之后第 n 帧（原帧号 seekFrame+n）的 t 是 n 个帧长；窗口两端各让半帧，浮点与微秒截断都碰不到边。
         string filter = $"select='gte(t\\,{Seconds(lead - 0.5, numerator, denominator)})*" +
             $"lt(t\\,{Seconds(lead + frameCount - 0.5, numerator, denominator)})',setpts=PTS-STARTPTS";

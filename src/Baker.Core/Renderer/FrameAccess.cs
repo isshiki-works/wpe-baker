@@ -53,7 +53,7 @@ internal static class FrameAccess
         {
             arguments.Add("-ss"); arguments.Add(seek.ToString(CultureInfo.InvariantCulture)); arguments.Add("-accurate_seek");
         }
-        arguments.AddRange(["-i", file, "-map", "0:v:0", "-vf", filter, "-fps_mode", "passthrough",
+        arguments.AddRange([.. FfmpegTool.Input(file), "-map", "0:v:0", "-vf", filter, "-fps_mode", "passthrough",
             "-frames:v", indices.Count.ToString(CultureInfo.InvariantCulture), "-an", "-sn", "-dn", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]);
         await using NativeProcess run = tool.Start(tool.Tools.Ffmpeg, arguments, token);
         Process process = run.Process;
