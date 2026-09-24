@@ -30,6 +30,29 @@ import wescene.types;
 namespace owe {
 using namespace owe::vulkan;
 namespace {
+// FFmpeg 把同一个编码会话的帧轮流提交到编码族的每条队列；NVIDIA 上每条队列是一个 NVENC 引擎，
+// 一个会话跨两个引擎在多进程并发时报 VK_ERROR_DEVICE_LOST（ARCH6b：3757825891 三组并发必现，只给 FFmpeg 一条队列则不出）。
+// 所以 FFmpeg 只看到一条编码队列，取队列时换成本进程那条：进程按 PID 奇偶分到两个引擎，多进程并行仍能用上第二个引擎。
+std::uint32_t pinned_encode_family = UINT32_MAX, pinned_encode_queue = 0;
+PFN_vkGetDeviceQueue device_queue = nullptr;
+PFN_vkGetDeviceProcAddr device_proc = nullptr;
+VKAPI_ATTR void VKAPI_CALL PinnedDeviceQueue(VkDevice device, std::uint32_t family, std::uint32_t index, VkQueue* queue) {
+    device_queue(device, family, family == pinned_encode_family ? pinned_encode_queue : index, queue);
+}
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL PinnedDeviceProc(VkDevice device, const char* name) {
+    if (!std::strcmp(name, "vkGetDeviceQueue")) {
+        device_queue = reinterpret_cast<PFN_vkGetDeviceQueue>(device_proc(device, name));
+        return reinterpret_cast<PFN_vkVoidFunction>(PinnedDeviceQueue);
+    }
+    return device_proc(device, name);
+}
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL PinnedInstanceProc(VkInstance instance, const char* name) {
+    if (!std::strcmp(name, "vkGetDeviceProcAddr")) {
+        device_proc = reinterpret_cast<PFN_vkGetDeviceProcAddr>(vkGetInstanceProcAddr(instance, name));
+        return reinterpret_cast<PFN_vkVoidFunction>(PinnedDeviceProc);
+    }
+    return vkGetInstanceProcAddr(instance, name);
+}
 void Av(int result, const char* operation) {
     if (result >= 0) return;
     char error[AV_ERROR_MAX_STRING_SIZE] {};
@@ -603,7 +626,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     if (!p.hardware) throw std::bad_alloc();
     auto* hw = reinterpret_cast<AVHWDeviceContext*>(p.hardware->data);
     auto* vk = reinterpret_cast<AVVulkanDeviceContext*>(hw->hwctx);
-    vk->get_proc_addr = vkGetInstanceProcAddr;
+    vk->get_proc_addr = PinnedInstanceProc;
     vk->inst = instance; vk->phys_dev = gpu; vk->act_dev = device;
     for (auto& extension : instance_extensions) p.instance_extensions.push_back(extension.c_str());
     for (auto& extension : device_extensions) p.device_extensions.push_back(extension.c_str());
@@ -624,10 +647,13 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     if (count > std::size(vk->qf)) throw std::runtime_error("Too many Vulkan queue families");
     for (std::uint32_t i = 0; i < count; ++i) {
         if (!families[i].queueFamilyProperties.queueCount) continue;
-        // Must match Device::ChooseDeviceQueue: up to two encode queues, which FFmpeg submits to in turn.
+        // Device::ChooseDeviceQueue 给编码族建了两条队列；FFmpeg 只用本进程那一条（见 PinnedDeviceQueue）。
         const auto& family = families[i].queueFamilyProperties;
-        const int queues = (family.queueFlags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) && family.queueCount > 1 ? 2 : 1;
-        vk->qf[vk->nb_qf++] = { static_cast<int>(i), queues,
+        if ((family.queueFlags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) && family.queueCount > 1) {
+            pinned_encode_family = i;
+            pinned_encode_queue = GetCurrentProcessId() / 4 % 2; // Windows 的 PID 都是 4 的倍数
+        }
+        vk->qf[vk->nb_qf++] = { static_cast<int>(i), 1,
             static_cast<VkQueueFlagBits>(families[i].queueFamilyProperties.queueFlags),
             static_cast<VkVideoCodecOperationFlagBitsKHR>(video[i].videoCodecOperations) };
     }
