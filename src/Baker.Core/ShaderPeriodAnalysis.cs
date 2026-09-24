@@ -259,6 +259,7 @@ public static class ShaderPeriodAnalysis
                 "shimmer" => LinearShimmer(c),
                 "film_grain" => FrameFractionGrain(c),
                 "light_shafts" => LightShaftRays(c),
+                "caustics" => CausticsDrift(c),
                 "iris" => IrisSaccade(c),
                 "foliage_sway" => FoliageSway(c),
                 "shadow_hash" => ShadowMaskHash(c),
@@ -575,6 +576,21 @@ public static class ShaderPeriodAnalysis
             // 单轴周期可能落在上限内（rayspeed 1 时最快轴约 212 秒），说不回来的是四轴联合回归。
             $"scales them equally and cannot bring the joint return inside the {CeilingText(c.Ceiling)}-second loop ceiling.",
             // UV 偏移随 t 线性增长，没有幅度上界：接缝淡化盖不住它。
+            bounded: false, mechanism: LightShaftDriftMechanism);
+    }
+
+    // caustics.frag 用 time = g_Time·speed + offset 平移四次噪声查表，速率 time·(0.005, 0.004111, 0.003777, 0.01)。
+    // 同 lightshafts：四个十进制常量的公共分母使四轴同时回到整数纹理圈要 speed·t 为 1e6 的倍数，调速等比缩放，回不到上限内。
+    private static ShaderVerdict CausticsDrift(PassContext c)
+    {
+        if (!TryScalar(c.Pass, "ui_editor_properties_speed", out double speed, out _, out string numericText))
+            return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed,
+                "Verified caustics drift needs a finite scalar 'ui_editor_properties_speed' constant to state its period.");
+        if (speed == 0) return ShaderVerdict.NoMotion;
+        return c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
+            $"Caustics noise UVs translate at speed {numericText} * (0.005, 0.004111, 0.003777, 0.01) per second; all four close together only after " +
+            $"{(1e6 / Math.Abs(speed)).ToString("0.###E+00", CultureInfo.InvariantCulture)} s. Every rate is proportional to the speed, so a retime " +
+            $"scales them equally and cannot bring the joint return inside the {CeilingText(c.Ceiling)}-second loop ceiling.",
             bounded: false, mechanism: LightShaftDriftMechanism);
     }
 
