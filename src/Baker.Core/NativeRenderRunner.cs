@@ -97,6 +97,10 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             request = request with {
                 RetainFrames = (request.RetainFrames ?? []).Concat(QualityGate.SampleFrames(encodedFrames)).Distinct().Order().ToArray(),
                 GpuEncoding = quality with { RetainLoopWindow = quality.RetainLoopWindow || quality.CrossfadeFrames > 0 } };
+        // 硬件直编的画质门参照：同一批抽样帧的渲染器原帧。
+        if (request.PlaybackEncoderKind is { } hardwareKind && hardwareKind != PlaybackEncoderSelection.Software)
+            request = request with {
+                RetainFrames = (request.RetainFrames ?? []).Concat(QualityGate.SampleFrames(encodedFrames)).Distinct().Order().ToArray() };
         if (request.GpuEncoding is { CrossfadeFrames: > 0 } fade &&
             (fade.CrossfadeFrames >= encodedFrames || encodedFrames > request.Frames ||
              request.Frames - encodedFrames != fade.CrossfadeFrames))
