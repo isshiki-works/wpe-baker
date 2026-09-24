@@ -256,7 +256,8 @@ internal static class PlanTransforms
 
     internal static void ApplyOverlayPlacement(JsonObject scene, JsonObject plan)
     {
-        if (plan["occlusion_tradeoff"]?["status"]?.GetValue<string>() != "applied") return;
+        // in_place：公开图层查询要求声明顺序不变，成品按原顺序装配，捕获与参照也不挪。
+        if (plan["occlusion_tradeoff"]?["status"]?.GetValue<string>() != "applied" || plan["occlusion_tradeoff"]!["in_place"] is not null) return;
         var promoted = plan["occlusion_tradeoff"]!["promoted_roots"]!.AsArray()
             .Select(n => n!["root_id"]!.GetValue<int>()).ToHashSet();
         var objects = scene["objects"]!.AsArray().OfType<JsonObject>().ToArray();
