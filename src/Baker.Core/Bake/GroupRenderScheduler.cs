@@ -37,6 +37,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     internal double CenterY => projection["center_y"]!.GetValue<double>();
     internal bool PreserveParallax => plan["has_parallax"]?.GetValue<bool>() == true && settings.ViewMode == "preserve";
     internal JsonObject[] Groups => groups;
+    /// <summary>按输出短边 / 1080 缩放像素口径（瓦片、样本宽）的倍率，1080p 下恰为 1。</summary>
+    internal double TileScale => SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height);
     internal ulong Frames => frames;
     internal uint CrossfadeFrames => crossfadeFrames;
     internal int[] ResidualGroupIndexes => residualGroupIndexes;
@@ -100,7 +102,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             OrthographicCaptureViewport: new(CenterX, CenterY, capture.Width, capture.Height),
             LayerSelection: new(capture.Layers, TransparentBackground: !capture.SceneClear, IncludePostprocessing: false),
             FrameSampleStride: sampleStride,
-            FrameSampleWidth: ResidualMasking.StartSearchSampleWidth,
+            FrameSampleWidth: (uint)Math.Round(ResidualMasking.StartSearchSampleWidth * TileScale),
             FrameSamplesOnly: true,
             EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,

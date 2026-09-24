@@ -10,9 +10,10 @@ namespace Baker.Core;
 internal sealed class CompositionGate(CompositionGate.Validator validate) : IBakeGate
 {
     // ---- 阈值判定（原 HybridCompositionValidator）：对 48 帧成对比较套固定阈值。候选脚本报错多于原作时先拒绝、不判像素；
-    // 保留脚本的查找绑定不一致时拒绝；然后判全局 RGB、全局 alpha 与每个 64px 瓦片的 RGB 平均误差。
+    // 保留脚本的查找绑定不一致时拒绝；然后判全局 RGB、全局 alpha 与每个瓦片的 RGB 平均误差。
     // 返回的对象就是 bake.json 的 composition_validation（v2 形状）。----
     public const ulong RequiredFrames = 48;
+    /// <summary>1080p 短边下的瓦片边长；实际按输出短边等比缩放（ProbeBake），同一局部瑕疵在各分辨率下占瓦片的比例相同。</summary>
     public const uint RequiredTileSize = 64;
     public const double MaximumGlobalRgbMae255 = 8;
     public const double MaximumTileRgbMae255 = 25;
