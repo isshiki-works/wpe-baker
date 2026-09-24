@@ -376,7 +376,8 @@ struct GpuVideoEncoder::Impl {
     }
 
     // 加载驱动库、按 LUID 找到同一块卡并开 NVENC 会话；任何一步不可用返回 false，HEVC 改走 Vulkan Video，AV1 由调用方报初始化失败。
-    // AV1 用 p1（强制三条带约 5.9 GP/s），恒定 qindex 取 4×QP（QP 18 → 72，与 ARCHN 对照同档）。
+    // AV1 用 p1（强制三条带约 5.9 GP/s），恒定 qindex 取 QP×8/3（18 → 48）：3441873795 两组实测 qindex 72 比 H.264 QP 18
+    // 低 1.5–2.8 dB PSNR，48 在透明组与之相当（66.95 vs 67.12 dB，体积 −61%），见 runs/CODEC3/bench。
     // NVENC AV1 尺寸：本机 5090 实测 130×66 起可编（128 宽、64 高被拒），上限 8192×8192；NVDEC AV1 解码要高 ≥128。
     bool openNvenc(std::span<const std::string> device_extensions, bool hevc, bool av1, int qp) {
         if (!(hevc || av1) || std::find(device_extensions.begin(), device_extensions.end(),
@@ -406,7 +407,7 @@ struct GpuVideoEncoder::Impl {
         auto config = preset.presetCfg;
         config.gopLength = 250; config.frameIntervalP = 1;
         config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
-        const auto q = std::uint32_t(av1 ? qp * 4 : qp);
+        const auto q = std::uint32_t(av1 ? qp * 8 / 3 : qp);
         config.rcParams.constQP = { q, q, q };
         if (av1) {
             auto& av1_config = config.encodeCodecConfig.av1Config;
