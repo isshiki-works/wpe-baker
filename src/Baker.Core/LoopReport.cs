@@ -39,10 +39,18 @@ internal sealed record LoopReport(uint FpsNum, uint FpsDen, string RetimeMode, C
 internal sealed record LoopNoCandidateReason(CommonLoopNoCandidate Reason, int ShaderComponentCount, int RuntimePeriodCount,
     int ParticleCycleCount, int RuntimeClockUniformCount)
 {
-    public JsonObject ToJson() => new() {
-        ["kind"] = Reason.Kind.ToString(), ["ceiling_seconds"] = Reason.CeilingSeconds, ["fixed_period_seconds"] = Reason.FixedPeriodSeconds,
-        ["shader_component_count"] = ShaderComponentCount, ["runtime_period_count"] = RuntimePeriodCount,
-        ["particle_cycle_count"] = ParticleCycleCount, ["runtime_clock_uniform_count"] = RuntimeClockUniformCount };
+    /// <summary>各有周期却并不进上限内公共循环的所有者层（分配回退据此留实时）；null 不写。</summary>
+    public int[]? RetainLiveOwnerLayerIds { get; init; }
+
+    public JsonObject ToJson()
+    {
+        var json = new JsonObject {
+            ["kind"] = Reason.Kind.ToString(), ["ceiling_seconds"] = Reason.CeilingSeconds, ["fixed_period_seconds"] = Reason.FixedPeriodSeconds,
+            ["shader_component_count"] = ShaderComponentCount, ["runtime_period_count"] = RuntimePeriodCount,
+            ["particle_cycle_count"] = ParticleCycleCount, ["runtime_clock_uniform_count"] = RuntimeClockUniformCount };
+        if (RetainLiveOwnerLayerIds is not null) json["retain_live_owner_layer_ids"] = new JsonArray([.. RetainLiveOwnerLayerIds.Select(id => (JsonNode)id)]);
+        return json;
+    }
 }
 
 /// <summary>plan.loop.content_cadence：每个不同内容帧在捕获里重复几帧（定速视频片段整除输出帧率时大于 1）。</summary>

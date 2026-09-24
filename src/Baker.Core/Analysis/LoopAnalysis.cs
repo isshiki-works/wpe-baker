@@ -72,6 +72,11 @@ internal static class LoopAnalysis
                 particleCycles = [];
             }
         }
+        // 各分量都有周期证明、却在上限内凑不出公共循环：点名并不进的所有者层，由分配回退把它们的作者子树留实时，其余照常规划。
+        int[]? noCommonLoopOwners = solve.Result.NoCandidate?.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
+            or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling
+            ? NoCommonLoopOwners(shader, animation, particleCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
+            : null;
         var locked = solve.Locked;
         bool retimeClips = solve.RetimeClips, singleVideoRetime = solve.SingleVideoRetime;
         CommonLoopSearchResult result = solve.Result;
@@ -157,7 +162,7 @@ internal static class LoopAnalysis
             result.Preference, result.RetimeBudgetPercent, result.BudgetRelaxed, result.FixedFrameStep, ceilingSeconds,
             candidates.Count == 0 && result.NoCandidate is CommonLoopNoCandidate reason
                 ? new LoopNoCandidateReason(reason, shader.Components.Count, animation.Count, particleCycles.Length,
-                    RuntimeTrackReader.CountRuntimeClockUniforms(runtime, bakedLayerIds))
+                    RuntimeTrackReader.CountRuntimeClockUniforms(runtime, bakedLayerIds)) { RetainLiveOwnerLayerIds = noCommonLoopOwners }
                 : null,
             candidates, unresolved, sourceStatic, videoControlScope,
             new LoopContentCadence(contentStep, animation.Where(x => x.IsVideo)
@@ -228,6 +233,31 @@ internal static class LoopAnalysis
     }
 
     private sealed record LoopSolve(CommonLoopComponent[] Locked, bool RetimeClips, bool SingleVideoRetime, CommonLoopSearchResult Result);
+
+    /// <summary>
+    /// 按所有者层贪心并入（分量多的先并，同数按出现顺序），并入后上限内无解的层记下返回。已有未解析项的所有者本来就留实时，不参与。
+    /// 没有并不进的层、或一层都并不进时返回 null。
+    /// </summary>
+    private static int[]? NoCommonLoopOwners(ShaderPeriodAnalysisResult shader, IReadOnlyList<RuntimeTrack> animation,
+        CommonLoopComponent[] particleCycles, List<LoopUnresolved> unresolved, uint fpsNumerator, uint fpsDenominator,
+        double maximumRetimePercent, CommonLoopRational ceiling, CommonLoopPreference preference)
+    {
+        var live = unresolved.Select(item => SceneGraph.Int(item.ToJson()["owner_layer_id"])).OfType<int>().ToHashSet();
+        int[] owners = [.. shader.Components.Select(x => x.Patch.OwnerLayerId).Concat(animation.Select(x => x.OwnerLayerId))
+            .Where(id => !live.Contains(id)).GroupBy(id => id).OrderByDescending(group => group.Count()).Select(group => group.Key)];
+        var kept = new HashSet<int>();
+        var dropped = new List<int>();
+        foreach (int owner in owners)
+        {
+            kept.Add(owner);
+            if (SolveLoop(shader with { Components = [.. shader.Components.Where(x => kept.Contains(x.Patch.OwnerLayerId))] },
+                [.. animation.Where(x => kept.Contains(x.OwnerLayerId))], particleCycles, fpsNumerator, fpsDenominator,
+                maximumRetimePercent, ceiling, preference).Result.Candidates.Count > 0) continue;
+            kept.Remove(owner);
+            dropped.Add(owner);
+        }
+        return dropped.Count > 0 && kept.Count > 0 ? [.. dropped] : null;
+    }
 
     /// <summary>
     /// 一次完整的求解：先全部锁定求解；无解时有可调速轨道就放开轨道调速再解，只有一段视频时走单视频调速。

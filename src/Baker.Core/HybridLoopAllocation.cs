@@ -59,6 +59,8 @@ internal static class HybridLoopAllocation
                 else triggers.Add(owner);
             }
         triggers.UnionWith(baked.Where(id => objects[id].ContainsKey("particle") && !particleStationary.GetValueOrDefault(id)));
+        // 各分量有周期证明却凑不出上限内公共循环时，循环分析点名的并不进的所有者层同样留实时（LoopAnalysis.NoCommonLoopOwners）。
+        triggers.UnionWith(ReadIds(plan["loop"]?["no_candidate_reason"]?["retain_live_owner_layer_ids"]).Where(baked.Contains));
 
         var added = triggers.Select(id => rootOf[id]).Where(root => !retained.Contains(root)).ToHashSet();
         if (added.Count == 0) return NotApplicable("reason.allocation_no_trigger");

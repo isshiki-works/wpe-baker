@@ -13,7 +13,7 @@ namespace Baker.Core;
 /// </para>
 /// <para>
 /// 判据只从粒子定义、材质、场景对象与运行时依赖确定性读出，不看画面。说不清的一律判不满足：引擎缺省值未核的字段
-/// （寿命、maxcount）、位含义未核的控制点 flags、频率与相位都退化的 oscillate、没有递归判定的子系统。
+/// （寿命、maxcount）、位含义未核的控制点 flags、事件类型以外或嵌套的子系统。
 /// 每条不满足都写进 failed_conditions，写明是哪一条、哪个节点、什么值。
 /// </para>
 /// <para>
@@ -125,9 +125,10 @@ internal static class ParticleStationarity
     /// 判定一个粒子对象。<paramref name="objects"/> 用来找祖先链（脚本或关键帧移动祖先等于移动发射器）；
     /// <paramref name="runtime"/> 是运行时观测，读 runtime_dependencies；<paramref name="readResource"/> 读粒子定义与材质，读不到返回 null。
     /// <paramref name="clock"/> 是输出帧时钟：给出时，封顶 + 确定寿命的层按渲染器离散推进推出替换周期并锁定；不给时这类层照旧拒绝。
+    /// <paramref name="childType"/> 只供 <see cref="CheckEventChild"/> 递归用（子系统的 type）。
     /// </summary>
     internal static Result Evaluate(JsonObject owner, IReadOnlyDictionary<int, JsonObject> objects, JsonObject? runtime,
-        Func<string, JsonObject?> readResource, FrameClock? clock = null)
+        Func<string, JsonObject?> readResource, FrameClock? clock = null, string? childType = null)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(objects);
@@ -148,6 +149,8 @@ internal static class ParticleStationarity
             return new(false, failures, null, null);
         }
         JsonObject overrides = owner["instanceoverride"] as JsonObject ?? [];
+        // eventspawn / eventdeath 每个事件一个新实例，发射计时与槽位从实例创建起算：爆发、零发射率、有限时长、间歇、实例内封顶都只相对实例。
+        bool perInstance = childType is "eventspawn" or "eventdeath";
 
         // ---- 实例覆盖倍率：rate 是子系统的时间缩放，count 乘在发射率上，lifetime 乘在寿命上（渲染器语义，见类注释）----
         double rateScale = 1, countScale = 1, lifetimeScale = 1;
@@ -175,13 +178,13 @@ internal static class ParticleStationarity
             JsonObject emitter = emitters[index];
             string node = $"emitter[{index}]";
             if (!ParticleCriteria.Emitters.Contains(Name(emitter))) Fail("C1", "emitter_kind", node, emitter["name"]);
-            if (!TryScalar(emitter["rate"], ParticleCriteria.DefaultEmitterRate, out double rate) || rate <= 0)
+            if (!TryScalar(emitter["rate"], ParticleCriteria.DefaultEmitterRate, out double rate) || rate < 0 || (rate == 0 && !perInstance))
                 Fail("C1", "emitter_rate_not_constant_positive", node + ".rate", emitter["rate"]);
             else emissionRate += rate * countScale;
-            if (emitter["instantaneous"] is JsonNode burst && !IsZero(burst)) Fail("C1", "emitter_burst", node + ".instantaneous", burst);
-            if (emitter["duration"] is JsonNode duration && !IsZero(duration)) Fail("C1", "emitter_finite_duration", node + ".duration", duration);
+            if (!perInstance && emitter["instantaneous"] is JsonNode burst && !IsZero(burst)) Fail("C1", "emitter_burst", node + ".instantaneous", burst);
+            if (!perInstance && emitter["duration"] is JsonNode duration && !IsZero(duration)) Fail("C1", "emitter_finite_duration", node + ".duration", duration);
             if (ParticleInputAnalysis.AudioDriven(emitter)) Fail("C1", "emitter_audio_input", node + ".audioprocessingmode", emitter["audioprocessingmode"]);
-            if (ParticleCriteria.PeriodicKeys.Any(emitter.ContainsKey))
+            if (!perInstance && ParticleCriteria.PeriodicKeys.Any(emitter.ContainsKey))
             {
                 var values = new double[ParticleCriteria.PeriodicKeys.Length];
                 bool readable = true;
@@ -238,7 +241,8 @@ internal static class ParticleStationarity
         bool capped = false;
         int generations = 1;
         CyclostationaryLock? cycle = null;
-        if (definition["maxcount"] is null) Fail("C2", "maxcount_default_unverified", "maxcount");
+        if (perInstance) { } // 槽位只在实例内部，从实例创建起算，不影响平稳性
+        else if (definition["maxcount"] is null) Fail("C2", "maxcount_default_unverified", "maxcount");
         else if (!TryNonNegative(definition["maxcount"], out double maxCount)) Fail("C2", "maxcount_unreadable", "maxcount", definition["maxcount"]);
         else if (lifetimeMax is double authored && lifetimeMin is double authoredMin && emissionRate > 0)
         {
@@ -271,7 +275,7 @@ internal static class ParticleStationarity
             else if (capped) generations = ParticleCriteria.WarmupGenerations(authored, authoredMin);
         }
 
-        // ---- C3 算子：年龄函数或静止的确定性场；oscillate 必须每粒子随机频率或相位；turbulence 的场不得随时间推进 ----
+        // ---- C3 算子：年龄函数或静止的确定性场；turbulence 的场不得随时间推进 ----
         JsonObject[] operators = Entries(definition["operator"]);
         for (int index = 0; index < operators.Length; ++index)
         {
@@ -279,13 +283,9 @@ internal static class ParticleStationarity
             string node = $"operator[{index}]";
             string name = Name(item);
             if (ParticleInputAnalysis.AudioDriven(item)) Fail("C3", "operator_audio_input", node + ".audioprocessingmode", item["audioprocessingmode"]);
-            if (ParticleCriteria.OscillateOperators.Contains(name))
-            {
-                // 频率与相位都退化时，相位是按粒子年龄还是按全局时钟起算没有核过；全局时钟会让所有粒子同步摆动，是周期分量。
-                if (!RangeIsRandom(item["frequencymin"], item["frequencymax"]) && !RangeIsRandom(item["phasemin"], item["phasemax"]))
-                    Fail("C3", "oscillate_phase_basis_unverified", node, item["name"]);
-                continue;
-            }
+            // oscillate*（渲染器 ParticleParser.cpp FrequencyValue）的时间是粒子年龄 LifetimePassed = 初始寿命 − 剩余寿命，频率、幅度、
+            // 相位在粒子第一次更新时各抽一次（槽位复用时属性重置）：摆动只是年龄与每粒子标记的函数，频率与相位退化也不跟全局时钟同步。
+            if (ParticleCriteria.OscillateOperators.Contains(name)) continue;
             if (!ParticleCriteria.Operators.Contains(name)) Fail("C3", "operator_kind", node, item["name"]);
             if (name == "turbulence") CheckTurbulenceOperator(item, node, Fail);
         }
@@ -302,9 +302,17 @@ internal static class ParticleStationarity
             Fail("C4", cursor ? "controlpoint_follows_cursor" : "controlpoint_flags_unverified", $"controlpoint[{index}].flags", flags);
         }
 
-        // ---- C5 子系统：v1 不递归判定 ----
+        // ---- C5 子系统：事件子系统逐个递归判定（CheckEventChild）；非数组与嵌套的没有核过 ----
+        double childTail = 0;
         if (definition["children"] is JsonNode children && !(children is JsonArray { Count: 0 }))
-            Fail("C5", "child_systems_not_recursed", "children", children);
+        {
+            if (childType is not null || children is not JsonArray list || list.Any(entry => entry is not JsonObject))
+                Fail("C5", "child_systems_not_recursed", "children", children);
+            else
+                for (int index = 0; index < list.Count; ++index)
+                    childTail = Math.Max(childTail, CheckEventChild(list[index]!.AsObject(), $"children[{index}]", failures, definition,
+                        overrides, lifetimeMin * lifetimeScale / rateScale, objects, runtime, readResource));
+        }
 
         // ---- C6 材质：genericparticle 且不读帧缓冲 ----
         CheckMaterial(definition, readResource, Fail);
@@ -362,8 +370,9 @@ internal static class ParticleStationarity
             Fail("warmup", "starttime_unverified", "starttime", startNode);
         if (lifetimeMax is double authoredLifetime)
         {
-            lifetime = ParticleCriteria.Round(authoredLifetime * lifetimeScale / rateScale);
-            warmup = ParticleCriteria.WarmupSeconds(start, authoredLifetime, lifetimeScale, generations, periodicWarmup, rateScale);
+            // 事件子系统的实例在父粒子死后还要走完子寿命：相关跨度与预热各加尾长（CheckEventChild）。
+            lifetime = ParticleCriteria.Round(authoredLifetime * lifetimeScale / rateScale + childTail);
+            warmup = ParticleCriteria.WarmupSeconds(start, authoredLifetime, lifetimeScale, generations, periodicWarmup, rateScale) + childTail;
         }
         double? emitInterval = emissionRate > 0 ? ParticleCriteria.Round(1 / (emissionRate * rateScale)) : null;
         // 锁定周期只在其余条件全部满足时成立；预热换成进入周期态的帧（starttime 预跑已在推导里），按微秒向上取，
@@ -371,7 +380,7 @@ internal static class ParticleStationarity
         if (failures.Count == 0 && cycle is not null)
         {
             cycle = cycle with { ContinuousWarmupSeconds = warmup };
-            warmup = ParticleCriteria.CycleWarmupSeconds(cycle.CycleStartFrame, cycle.FpsNumerator, cycle.FpsDenominator);
+            warmup = ParticleCriteria.CycleWarmupSeconds(cycle.CycleStartFrame, cycle.FpsNumerator, cycle.FpsDenominator) + childTail;
         }
         else cycle = null;
         return new(failures.Count == 0, failures, warmup, lifetime, emitInterval, capped, generations, cycle);
@@ -468,6 +477,39 @@ internal static class ParticleStationarity
         else if (value.TryGetValue(out float single)) number = single;
         else return false;
         return double.IsFinite(number);
+    }
+
+    /// <summary>
+    /// 一个子系统（渲染器 ParticleObject.cpp / SceneParticleObjectParser.cpp / ParticleRuntime.cpp）。只核了事件类型：eventspawn / eventfollow
+    /// 在父粒子出生、eventdeath 在父粒子死亡时取一个实例（按 probability 独立抽签）；实例的发射计时、槽位、starttime 预跑都从实例创建起算，
+    /// 父粒子死后实例停发（InstanceCanEmit），余下粒子走完子寿命即回收。每个实例因此是父粒子标记、自身随机与事件后时间的函数，
+    /// 寿命有界：父层平稳时整体仍平稳，相关跨度与预热各多一段尾长（返回值，真实秒；不满足时返回 0）。
+    /// 前提是实例上限（children[].maxcount，缺省 20）永不触顶，否则哪些事件拿到实例取决于历史：每个父槽位相邻两次出生或死亡至少隔
+    /// 父寿命下界，同时在世的实例 ≤ min(父 maxcount, 20000) × (2 + ⌊尾长 / 父寿命下界⌋)。子定义按同一套条件递归判，
+    /// 只相对实例的几条（爆发、零发射率、有限时长、间歇、实例内封顶）不判。eventfollow 例外：父粒子死亡的同一帧槽位被补上时实例不释放、
+    /// 接着跟新粒子（ProcessChildEvents），发射计时跨代延续，所以按常驻系统的全套条件判。static 子系统是另一个常驻系统，没有核过。
+    /// </summary>
+    private static double CheckEventChild(JsonObject child, string node, List<Failure> failures, JsonObject definition, JsonObject overrides,
+        double? parentLifetimeMin, IReadOnlyDictionary<int, JsonObject> objects, JsonObject? runtime, Func<string, JsonObject?> readResource)
+    {
+        if (Text(child["type"]) is not ("eventspawn" or "eventfollow" or "eventdeath"))
+        {
+            failures.Add(new("C5", "child_type_unverified", node + ".type", child["type"]?.ToJsonString()));
+            return 0;
+        }
+        Result result = Evaluate(new JsonObject { ["particle"] = child["name"]?.DeepClone(), ["instanceoverride"] = overrides.DeepClone() },
+            objects, runtime, readResource, childType: Text(child["type"]));
+        failures.AddRange(result.Failures.Select(failure => failure with { Node = node + "." + failure.Node }));
+        // 子定义的预热（≥ 子寿命上界，eventfollow 的常驻实例还含 starttime 与间歇）当作尾长：相关跨度按它从宽计。
+        if (!result.Stationary || result.WarmupSeconds is not double tail) return 0;
+        double cap = 20;
+        bool capReadable = child["maxcount"] is null || TryNonNegative(child["maxcount"], out cap);
+        double? instances = TryNonNegative(definition["maxcount"], out double parentCount) && parentLifetimeMin is > 0
+            ? Math.Min(parentCount, 20000) * (2 + Math.Floor(tail / parentLifetimeMin.Value)) : null;
+        if (capReadable && instances <= cap) return tail;
+        failures.Add(new("C5", "child_instance_cap_binds", node + ".maxcount",
+            new JsonObject { ["cap"] = child["maxcount"]?.DeepClone(), ["instances_bound"] = instances }.ToJsonString()));
+        return 0;
     }
 
     /// <summary>
@@ -615,9 +657,5 @@ internal static class ParticleStationarity
 
     private static bool IsZero(JsonNode node) =>
         node is JsonValue value && value.TryGetValue(out bool flag) ? !flag : TryConstant(node, out double[] values) && values.All(item => item == 0);
-
-    /// <summary>min 与 max 都给出、都读得出，而且不相等，才算每粒子随机抽样；缺一个就要依赖未核的缺省值。</summary>
-    private static bool RangeIsRandom(JsonNode? minimum, JsonNode? maximum) =>
-        TryConstant(minimum, out double[] low) && TryConstant(maximum, out double[] high) && !low.SequenceEqual(high);
 
 }
