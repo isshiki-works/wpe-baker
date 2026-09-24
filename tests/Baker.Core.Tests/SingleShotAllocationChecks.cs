@@ -121,7 +121,10 @@ internal static class SingleShotAllocationChecks
             "a single-shot track that used to form its own transparent second group leaves one opaque group behind");
 
         // 规则二：唯一组排在一个读 framebuffer 的全屏层与一个图像树之后，两者都不能提前景。
+        // 30 是隐藏的底图：40 之前得有网格，读帧缓冲才读到真实内容而不是清屏色。
         var blocked = new JsonArray(
+            new JsonObject { ["id"] = 30, ["name"] = "底图", ["image"] = "models/background.json",
+                ["size"] = "64 32", ["origin"] = "32 16 0", ["visible"] = false },
             new JsonObject { ["id"] = 40, ["name"] = "后处理层", ["image"] = "models/util/fullscreenlayer.json",
                 ["size"] = "64 32", ["origin"] = "32 16 0", ["effects"] = new JsonArray(new JsonObject { ["name"] = "grade" }) },
             new JsonObject { ["id"] = 50, ["name"] = "时钟底板", ["image"] = "models/plate.json",
@@ -140,7 +143,7 @@ internal static class SingleShotAllocationChecks
             ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray(),
             ["runtime_animation_periods"] = new JsonArray(),
             ["runtime_layers"] = new JsonArray(blocked.OfType<JsonObject>().Select(obj => (JsonNode)new JsonObject {
-                ["id"] = obj["id"]!.DeepClone(), ["owner"] = obj["id"]!.DeepClone(), ["visible"] = true,
+                ["id"] = obj["id"]!.DeepClone(), ["owner"] = obj["id"]!.DeepClone(), ["visible"] = obj["id"]!.GetValue<int>() != 30,
                 ["has_mesh"] = true, ["effective_parallax_depth"] = new JsonArray(0, 0),
                 ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false,
                     ["textures"] = new JsonArray(obj["id"]!.GetValue<int>() == 40 ? "_rt_FullFrameBuffer" : "background") })

@@ -52,6 +52,18 @@ public static class HardwareDecodeDimensions
 
     public static Limits For(string softwareEncoder) => softwareEncoder == "libx265" ? Hevc : H264;
 
+    /// <summary>
+    /// 内容尺寸越过 HEVC 硬解上限（宽、高、亮度样本；透明左右并排按两倍宽算）就等比缩小到上限内，回放按图层原尺寸放大，
+    /// 观感交给编码后的画质门与合成门判。没越限原样返回（输入须为偶数，与 Fit 一致）。
+    /// </summary>
+    public static (uint Width, uint Height) FitCeiling(uint width, uint height, bool packedAlpha)
+    {
+        uint halves = packedAlpha ? 2u : 1u;
+        double luma = Math.Sqrt(Hevc.MaximumLumaSamples!.Value / ((double)halves * width * height));
+        return EffectPrefixBakeService.Fit(width, height, (uint)Math.Min(Hevc.MaximumWidth / halves, width * luma),
+            (uint)Math.Min(Hevc.MaximumHeight, height * luma));
+    }
+
     // ---------------------------------------------------------------------------------------
     // 目标播放机一侧。硬解只能在真正跑它的那台机器上验，烘焙机（常是独显）验过不等于播放机（常是核显）能放。
     // 下面这些数字只用来写提示文案与结果字段，一条判据都不参与。
@@ -274,19 +286,11 @@ public static class HardwareDecodeDimensions
     {
         var predictions = new JsonArray();
         static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
-        var names = new Dictionary<int, string?>();
-        foreach (JsonObject item in (report["layers"] as JsonArray ?? []).OfType<JsonObject>())
-            if (item["id"] is JsonValue id && id.TryGetValue(out int layerId)) names.TryAdd(layerId, Text(item["name"]));
         foreach (JsonObject cache in (report["effect_prefix_caches"] as JsonArray ?? []).OfType<JsonObject>())
         {
             if (cache["owner_layer_id"] is not JsonValue ownerValue || !ownerValue.TryGetValue(out int owner)) continue;
-            string layer = $"L{owner.ToString(CultureInfo.InvariantCulture)} \"{MessageCatalog.EscapeName(names.GetValueOrDefault(owner))}\"";
             var entry = new JsonObject { ["owner_layer_id"] = owner, ["source_image"] = cache["source_image"]?.DeepClone(),
                 ["basis"] = "Source texture image extent with the bake's own fit rule; the bake re-plans from the actual capture extent before encoding." };
-            var unresolved = new JsonArray();
-            entry["unresolved"] = unresolved;
-            // unresolved 各条的文案：条目只写 v3 字段，文案在本条目收尾时渲染成 unresolved_localized（v3 里它是条目最后一个键）。
-            var localized = new JsonArray();
             predictions.Add(entry);
             try
             {
@@ -308,29 +312,16 @@ public static class HardwareDecodeDimensions
                     ? EffectPrefixBakeService.FitAtlas(sourceWidth, sourceHeight, request.Width, request.Height,
                         projection["visible_width"]?.GetValue<double>() ?? 0, projection["visible_height"]?.GetValue<double>() ?? 0)
                     : EffectPrefixBakeService.Fit(sourceWidth, sourceHeight, request.Width, request.Height);
-                Plan opaque = Evaluate(encodeWidth, encodeHeight, false, request.FpsNumerator, request.FpsDenominator);
-                Plan transparent = Evaluate(encodeWidth, encodeHeight, true, request.FpsNumerator, request.FpsDenominator);
+                (uint opaqueWidth, uint opaqueHeight) = FitCeiling(encodeWidth, encodeHeight, false);
+                (uint packedWidth, uint packedHeight) = FitCeiling(encodeWidth, encodeHeight, true);
+                Plan opaque = Evaluate(opaqueWidth, opaqueHeight, false, request.FpsNumerator, request.FpsDenominator);
+                Plan transparent = Evaluate(packedWidth, packedHeight, true, request.FpsNumerator, request.FpsDenominator);
                 entry["texture"] = resource;
                 entry["predicted_source_extent"] = new JsonArray(sourceWidth, sourceHeight);
                 entry["sampling_basis"] = puppet ? "source_atlas_at_projected_canvas_density" : "source_image_fits_output";
                 entry["opaque"] = opaque.ToJson();
                 entry["transparent"] = transparent.ToJson();
-                string sourceExtent = Extent(sourceWidth, sourceHeight);
-                if (opaque.Rejected)
-                {
-                    entry["status"] = "predicted_rejected";
-                    unresolved.Add(Unresolved(new Message("unresolved.hardware_decode_dimensions_predicted",
-                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(MessageCatalog.English), opaque.ViolationText(MessageCatalog.English), opaque.Limits.BasisEn],
-                            [layer, sourceExtent, Extent(opaque.StoredWidth, opaque.StoredHeight), opaque.PackingText(MessageCatalog.Chinese), opaque.ViolationText(MessageCatalog.Chinese), opaque.Limits.BasisZh]), owner, localized));
-                }
-                else if (transparent.Rejected)
-                {
-                    entry["status"] = "predicted_rejected_if_transparent";
-                    unresolved.Add(Unresolved(new Message("unresolved.hardware_decode_dimensions_if_transparent",
-                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(MessageCatalog.English), transparent.ViolationText(MessageCatalog.English), transparent.Limits.BasisEn, Extent(opaque.StoredWidth, opaque.StoredHeight)],
-                            [layer, sourceExtent, Extent(transparent.StoredWidth, transparent.StoredHeight), transparent.PackingText(MessageCatalog.Chinese), transparent.ViolationText(MessageCatalog.Chinese), transparent.Limits.BasisZh, Extent(opaque.StoredWidth, opaque.StoredHeight)]), owner, localized));
-                }
-                else entry["status"] = opaque.Padded || transparent.Padded ? "predicted_padding" : "predicted_pass";
+                entry["status"] = opaque.Padded || transparent.Padded ? "predicted_padding" : "predicted_pass";
             }
             catch (Exception error) when (error is InvalidDataException or IOException or System.Text.Json.JsonException or
                 InvalidOperationException or FormatException or ArgumentException or UnauthorizedAccessException)
@@ -338,15 +329,7 @@ public static class HardwareDecodeDimensions
                 entry["status"] = "not_predicted";
                 entry["reason"] = error.Message;
             }
-            entry["unresolved_localized"] = localized;
         }
         return predictions;
-    }
-
-    /// <summary>一条预检未解析项：条目写 kind/owner_layer_id/detail，文案记进同下标的 <paramref name="localized"/>。</summary>
-    private static JsonObject Unresolved(Message detail, int owner, JsonArray localized)
-    {
-        localized.Add(detail.Localized());
-        return new JsonObject { ["kind"] = "hardware_decode_dimensions", ["owner_layer_id"] = owner, ["detail"] = detail.Text };
     }
 }

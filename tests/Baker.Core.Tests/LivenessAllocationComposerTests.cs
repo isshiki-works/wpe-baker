@@ -261,12 +261,13 @@ public class AnalysisStagesTests
     });
 
     [Fact]
-    public Task EmptyTextDrawsOnlyWhenTheRendererBuiltAMesh() => TestTemp.Run(dir =>
+    public Task EmptyTextDrawsOnlyWhenAScriptCanReachIt() => TestTemp.Run(dir =>
     {
-        // 空字面值的文字层（分隔线）：渲染器没建网格就不算可绘制，不进视频组；场景脚本写图层文字时渲染器建了动态网格，照常算可绘制。
+        // 空字面值的文字层（分隔线）不算可绘制、不进视频组，渲染器建了网格也一样；有脚本按名字拿到它（可能写进文字）才照常算可绘制。
         JsonObject Text(int id, string text) => new() { ["id"] = id, ["name"] = "----------------", ["text"] = text };
-        Assert.False(Run(dir, [Image(1), Text(2, "")], [Mesh(1), Mesh(2, hasMesh: false)], []).Composer.Draws(2));
-        Assert.True(Run(dir, [Image(1), Text(2, "")], [Mesh(1), Mesh(2)], []).Composer.Draws(2));
+        Assert.False(Run(dir, [Image(1), Text(2, "")], [Mesh(1), Mesh(2)], []).Composer.Draws(2));
+        var writer = Image(1); writer["origin"] = new JsonObject { ["script"] = "thisScene.getLayer('----------------').text = 'x';", ["value"] = "0 0 0" };
+        Assert.True(Run(dir, [writer, Text(2, "")], [Mesh(1), Mesh(2)], []).Composer.Draws(2));
         Assert.True(Run(dir, [Image(1), Text(2, "caption")], [Mesh(1), Mesh(2, hasMesh: false)], []).Composer.Draws(2));
         return Task.CompletedTask;
     });
