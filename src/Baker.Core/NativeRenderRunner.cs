@@ -97,6 +97,10 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             request = request with {
                 RetainFrames = (request.RetainFrames ?? []).Concat(QualityGate.SampleFrames(encodedFrames)).Distinct().Order().ToArray(),
                 GpuEncoding = quality with { RetainLoopWindow = quality.RetainLoopWindow || quality.CrossfadeFrames > 0 } };
+        // 硬件直编的画质门参照：同一批抽样帧的渲染器原帧。
+        if (request.PlaybackEncoderKind is { } hardwareKind && hardwareKind != PlaybackEncoderSelection.Software)
+            request = request with {
+                RetainFrames = (request.RetainFrames ?? []).Concat(QualityGate.SampleFrames(encodedFrames)).Distinct().Order().ToArray() };
         if (request.GpuEncoding is { CrossfadeFrames: > 0 } fade &&
             (fade.CrossfadeFrames >= encodedFrames || encodedFrames > request.Frames ||
              request.Frames - encodedFrames != fade.CrossfadeFrames))
@@ -106,9 +110,9 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         if (request.EncodedFrames is { } limit && (request.FrameSamplesOnly || request.IncludeAudio || limit == 0 || limit > request.Frames))
             throw new ArgumentException("Encoded frames must be a positive prefix of an ordinary silent video render.");
         if (request.RetainFrames is { } retain && (request.FrameSamplesOnly || retain.Length == 0 ||
-            retain.Length > (request.GpuEncoding is null ? 8 : 32) ||
+            retain.Length > 32 ||
             retain.Any(frame => frame >= request.Frames) || retain.Zip(retain.Skip(1)).Any(pair => pair.Second <= pair.First)))
-            throw new ArgumentException("Retained frames must be increasing indices inside the render (at most 8 CPU or 32 GPU frames).");
+            throw new ArgumentException("Retained frames must be increasing indices inside the render (at most 32 frames).");
         // 强制关键帧是给后面的分段改写用的切点：那一帧必须真的在这次编码的帧序列里。
         if (request.ForceKeyFrameFrame is { } forcedKeyFrame && (request.FrameSamplesOnly || forcedKeyFrame == 0 || forcedKeyFrame >= encodedFrames))
             throw new ArgumentException("Forced key frame must be a positive frame index inside an encoded video request.");

@@ -21,6 +21,10 @@ FFMPEG_REV = "38b88335f99e76ed89ff3c93f877fdefce736c13"
 FFMPEG_SHA = "c3453fbfc7ca25423f4984a83ceda01949d458a8bc04f9d68fab7c392f75b3ab"
 X265_URL = "https://download.videolan.org/pub/videolan/x265/x265_4.2.tar.gz"
 X265_SHA = "40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210"
+# NVENC 头文件（MIT，只含头文件，运行时动态加载驱动）：FFmpeg 8.1 configure 首选 ffnvcodec >= 12.1.14.0。
+# 发布包内容与 git 标签 n12.1.14.0 逐文件相同（9/24 核对）。
+NVCODEC_URL = "https://github.com/FFmpeg/nv-codec-headers/releases/download/n12.1.14.0/nv-codec-headers-12.1.14.0.tar.gz"
+NVCODEC_SHA = "62b30ab37e4e9be0d0c5b37b8fee4b094e38e570984d56e1135a6b6c2c164c9f"
 
 
 def sha256(path):
@@ -37,36 +41,41 @@ def git(arguments, directory=None):
     return result.stdout.strip()
 
 
+def pinned_tarball(url, digest, target):
+    archive = CACHE / url.rsplit("/", 1)[1]
+    if not archive.exists():
+        with urllib.request.urlopen(url, timeout=60) as response:
+            data = response.read()
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise RuntimeError("Downloaded source failed the pinned SHA256 check: " + url)
+        archive.write_bytes(data)
+    if sha256(archive) != digest:
+        raise RuntimeError("The pinned source archive has changed: " + archive.name)
+    with tarfile.open(archive) as tar:
+        for member in tar:
+            relative = pathlib.PurePosixPath(member.name)
+            if relative.is_absolute() or ".." in relative.parts or not (member.isfile() or member.isdir()):
+                raise RuntimeError("Unsafe source archive member: " + member.name)
+            path = target.joinpath(*relative.parts[1:])
+            if member.isdir():
+                path.mkdir(parents=True, exist_ok=True)
+            else:
+                with tar.extractfile(member) as source:
+                    data = source.read()
+                if path.exists() and path.read_bytes() != data:
+                    raise RuntimeError("Preserving locally changed source: " + str(path))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if not path.exists():
+                    path.write_bytes(data)
+    return archive
+
+
 def main():
     sources = DEST / "sources"
     sources.mkdir(parents=True, exist_ok=True)
     CACHE.mkdir(parents=True, exist_ok=True)
-    x265_archive = CACHE / "x265_4.2.tar.gz"
-    if not x265_archive.exists():
-        with urllib.request.urlopen(X265_URL, timeout=60) as response:
-            data = response.read()
-        if hashlib.sha256(data).hexdigest() != X265_SHA:
-            raise RuntimeError("Downloaded x265 source failed the upstream SHA256 check")
-        x265_archive.write_bytes(data)
-    if sha256(x265_archive) != X265_SHA:
-        raise RuntimeError("The pinned x265 source archive has changed")
-    x265 = sources / "x265"
-    with tarfile.open(x265_archive) as archive:
-        for member in archive:
-            relative = pathlib.PurePosixPath(member.name)
-            if relative.is_absolute() or ".." in relative.parts or not (member.isfile() or member.isdir()):
-                raise RuntimeError("Unsafe x265 source archive member: " + member.name)
-            path = x265.joinpath(*relative.parts[1:])
-            if member.isdir():
-                path.mkdir(parents=True, exist_ok=True)
-            else:
-                with archive.extractfile(member) as source:
-                    data = source.read()
-                if path.exists() and path.read_bytes() != data:
-                    raise RuntimeError("Preserving locally changed x265 source: " + str(path))
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if not path.exists():
-                    path.write_bytes(data)
+    x265_archive = pinned_tarball(X265_URL, X265_SHA, sources / "x265")
+    nvcodec_archive = pinned_tarball(NVCODEC_URL, NVCODEC_SHA, sources / "nv-codec-headers")
     x264 = sources / "x264"
     bundle = CACHE / f"x264-{X264_REV}.bundle"
     if not (x264 / ".git").exists():
@@ -132,6 +141,9 @@ def main():
                  "upstream_digest_url": "https://get.videolan.org/x265/x265_4.2.tar.gz",
                  "upstream_digest_verified": True, "license": "GPL-2.0-or-later",
                  "license_evidence": "COPYING and source/x265.h copyright header"},
+        "nv-codec-headers": {"tag": "n12.1.14.0", "url": NVCODEC_URL,
+                             "archive": nvcodec_archive.relative_to(ROOT).as_posix(), "sha256": NVCODEC_SHA,
+                             "license": "MIT", "license_evidence": "header comments in include/ffnvcodec/*.h"},
     }
     (ROOT / "scripts/encoder-inputs.lock.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
     print("Ready: pinned FFmpeg 8.1.2, x264", X264_REV, "and x265 4.2")

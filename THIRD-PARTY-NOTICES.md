@@ -77,9 +77,10 @@ vvk 在 `220116d` 加入 MIT OR Apache-2.0，并说明同样适用于此前的�
 | FFmpeg | 同上 `38b8833`，按 GPL 口径配置 | GPL-2.0-or-later | https://github.com/FFmpeg/FFmpeg | 否 |
 | x264 | `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`（r3222） | GPL-2.0-or-later | https://code.videolan.org/videolan/x264 | 否（`x264.patch` 为 0 字节空补丁） |
 | x265 | `4.2`（版本串 `4.2+1-e444744`） | GPL-2.0-or-later | https://download.videolan.org/pub/videolan/x265/x265_4.2.tar.gz | 否 |
+| nv-codec-headers（NVENC 头文件，驱动运行时动态加载） | `n12.1.14.0` | MIT | https://github.com/FFmpeg/nv-codec-headers | 否 |
 | MinGW-w64 runtime / LLVM 运行库 | `.tools\llvm-mingw-22`（Clang 22.1.8 UCRT） | MinGW-w64 runtime license / Apache-2.0 with LLVM exception | https://github.com/mstorsjo/llvm-mingw | 否 |
 
-许可文本：`encoder\licenses\{ffmpeg,x264,x265,llvm,mingw}\`（RC8 已在位）、
+许可文本：`encoder\licenses\{ffmpeg,x264,x265,nv-codec-headers,llvm,mingw}\`（RC8 已在位）、
 `licenses\llvm-mingw.LICENSE.txt`。源码在源码包 `.deps\ffmpeg-encoder-gpl2\sources\`。
 
 ## 5. vvk：许可已确认

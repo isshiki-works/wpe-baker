@@ -88,8 +88,8 @@ def main():
         "--enable-d3d11va",
         # FFmpeg's Makefile attaches the shared codec objects to the legacy names too.
         "--enable-hwaccel=h264_d3d11va,h264_d3d11va2,hevc_d3d11va,hevc_d3d11va2,av1_d3d11va,av1_d3d11va2",
-        "--disable-encoders", "--enable-encoder=libx264,libx264rgb,libx265,h264_mf,hevc_mf,av1_mf,aac,pcm_s16le,pcm_f32le,rawvideo",
-        "--enable-libx264", "--enable-libx265", "--enable-mediafoundation",
+        "--disable-encoders", "--enable-encoder=libx264,libx264rgb,libx265,h264_mf,hevc_mf,av1_mf,h264_nvenc,hevc_nvenc,aac,pcm_s16le,pcm_f32le,rawvideo",
+        "--enable-libx264", "--enable-libx265", "--enable-mediafoundation", "--enable-ffnvcodec", "--enable-nvenc",
     ]
     configuration = {"x264": x264_flags, "x265": x265_flags, "ffmpeg": ffmpeg_flags,
                      "ffmpeg_build": "build/ffmpeg-hevc", "shell": str(BASH), "make": str(MAKE),
@@ -109,6 +109,8 @@ def main():
     ffmpeg_build = DEST / "build/ffmpeg-hevc"
     ffmpeg_build.mkdir(parents=True, exist_ok=True)
     if options.stage in ("configure", "all"):
+        # NVENC 只需头文件与 ffnvcodec.pc，驱动在运行时动态加载。
+        run([MAKE, "install", "PREFIX=" + PREFIX.as_posix()], DEST / "sources/nv-codec-headers", "nv-codec-headers-install")
         run([BASH, "--noprofile", "--norc", (DEST / "sources/ffmpeg/configure").as_posix(), *ffmpeg_flags], ffmpeg_build, "ffmpeg-configure")
     if options.stage in ("build", "all"):
         run([MAKE, "-j", options.jobs], ffmpeg_build, "ffmpeg-build")
