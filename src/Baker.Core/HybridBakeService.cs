@@ -500,7 +500,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     progress?.Report(new("rendering_group", (double)i / groups.Length, $"Video group {i + 1}/{groups.Length}: {layers.Length} source layers"));
                     string masterPath = Path.Combine(work, "master");
                     // 提前启动的渲染已经建好这个目录并自己查过一次；没有提前启动时照旧在这里查。
-                    if (!groupScheduler.Started(i) && (Directory.Exists(masterPath) || File.Exists(masterPath)))
+                    if (!groupScheduler.FreshOutput(i, masterPath))
                         throw new IOException("A group master output must be new; existing files will not be cleaned.");
                     // 残差组（含可掩盖残差层）多渲一个淡化窗口，测第一层，通过后在接缝处淡化；不淡化的组多渲 1 帧，
                     // 编码只取前 P 帧，第 P 帧原帧留作闭合检验与接缝参照，接缝由闭合检验裁决。
