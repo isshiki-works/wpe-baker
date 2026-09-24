@@ -853,8 +853,8 @@ quoted anywhere.
   Three other structurally suitable candidates never reached it, because
   full-frame layout admission stopped them first.
 - Output uses BT.709 SDR H.264/HEVC, chosen by size and frame rate; every
-  full video gets a short hardware-decode check **on the machine that baked
-  it**, and the result now says so: `verified_on` lists each adapter with its
+  full video gets a short hardware-decode check **on the display GPU(s) of
+  the machine that baked it** (the render GPU when none drives a display), and the result now says so: `verified_on` lists each adapter with its
   vendor and whether it is integrated or discrete, and `target_caveat` states
   that the check covers this baking machine only. If you bake on a discrete
   GPU and play on an integrated one, copy the output over and run
