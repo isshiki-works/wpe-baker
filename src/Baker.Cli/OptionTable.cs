@@ -78,7 +78,7 @@ internal static class OptionTable
             "Clocks, dates and media text stay live. Unmeasured audio effects stay live."
         ]),
         new("--width", [Analyze], "W", Parse: UInt, Default: D.Width.ToString(CultureInfo.InvariantCulture), Custom: true,
-            Help: ["Give --width and --height together, or neither to fit the scene canvas to the primary display."]),
+            Help: ["Give --width and --height together, or neither to use the primary display resolution."]),
         new("--height", [Analyze], "H", Parse: UInt, Default: D.Height.ToString(CultureInfo.InvariantCulture), Custom: true,
             Help: ["See --width."]),
         new("--fps", [Analyze], "N", Parse: UInt, Default: "0", Custom: true, Help:
@@ -211,9 +211,9 @@ internal static class OptionTable
         // 没给 --fps 时按 min(WPE 帧率上限, 主屏刷新率) 就近取标准档；--fps-den 是分子的配套，单独给没有意义。
         if (!options.ContainsKey("--fps") && options.ContainsKey("--fps-den"))
             throw new ArgumentException("--fps-den only applies together with --fps; omit both to take the frame rate from the Wallpaper Engine limit and the display refresh rate.");
-        // 宽高要么一起给，要么都不给：都不给时由分析按场景画布铺满本机屏幕取值，0 表示未指定。
+        // 宽高要么一起给，要么都不给：都不给时由分析取本机主显示器分辨率，0 表示未指定。
         if (options.ContainsKey("--width") != options.ContainsKey("--height"))
-            throw new ArgumentException("--width and --height must be given together; omit both to size the output from the scene canvas and this machine's primary display.");
+            throw new ArgumentException("--width and --height must be given together; omit both to use this machine's primary display resolution.");
         var values = Options.Where(option => option.Commands.Contains(Analyze))
             .ToDictionary(option => option.Name, option => Value(Analyze, options, option.Name));
         return new AnalyzeOptions
