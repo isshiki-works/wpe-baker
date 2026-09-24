@@ -116,8 +116,8 @@ public static class SeamPreview
         return
         [
             "-hide_banner", "-nostdin", "-n",
-            "-ss", Seconds(plan.TailStartFrame - lead, plan), "-t", Seconds(lead + n + 2, plan), "-i", plan.VideoPath,
-            "-t", Seconds(n + 2, plan), "-i", plan.VideoPath,
+            "-ss", Seconds(plan.TailStartFrame - lead, plan), "-t", Seconds(lead + n + 2, plan), .. FfmpegTool.Input(plan.VideoPath),
+            "-t", Seconds(n + 2, plan), .. FfmpegTool.Input(plan.VideoPath),
             "-f", "rawvideo", "-pixel_format", "rgb24", "-video_size", $"{plan.LabelWidth}x{LabelRows}", "-framerate", fps,
             "-i", plan.LabelPath,
             "-filter_complex", graph, "-map", "[out]", "-an",

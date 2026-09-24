@@ -112,7 +112,7 @@ internal sealed partial class FfmpegQualityComparer(FfmpegTool ff)
         // P1a：一个进程顺序软解到最后一个抽样帧，select 按帧号放行，不限线程（解码器默认按核数开帧线程）。
         // 直接写文件而不经 stdout：.NET 读子进程管道只有约 60 MB/s，8K 的 9 帧 yuv 有 448 MB。
         await ff.RunTextAsync(ff.Tools.Ffmpeg,
-            ["-hide_banner", "-nostdin", "-v", "error", "-i", request.Product, "-map", "0:v:0", "-vf", Select(request.Samples),
+            ["-hide_banner", "-nostdin", "-v", "error", .. FfmpegTool.Input(request.Product), "-map", "0:v:0", "-vf", Select(request.Samples),
              "-fps_mode", "passthrough", "-frames:v", request.Samples.Count.ToString(CultureInfo.InvariantCulture),
              "-an", "-sn", "-dn", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-n", productPath],
             Path.Combine(request.WorkDirectory, request.Stem + "-decode.stderr.log"), token);
@@ -135,7 +135,7 @@ internal sealed partial class FfmpegQualityComparer(FfmpegTool ff)
             $"[{ProductLabel}]split=2[gateps][gatepp];[{MasterLabel}]split=2[gatems][gatemp];" +
             "[gateps][gatems]ssim[gatessim];[gatepp][gatemp]psnr[gatepsnr]";
         // The packaged FFmpeg omits wrapped_avframe, the null muxer's default encoder.
-        return ["-hide_banner", "-nostdin", "-nostats", "-i", product, "-i", master,
+        return ["-hide_banner", "-nostdin", "-nostats", .. FfmpegTool.Input(product), "-i", master,
             "-filter_complex", graph, "-map", "[gatessim]", "-map", "[gatepsnr]",
             "-an", "-c:v", "rawvideo", "-f", "null", "-"];
     }

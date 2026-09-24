@@ -17,6 +17,21 @@ internal sealed class FfmpegTool(NativeTools tools)
 
     public NativeTools Tools => tools;
 
+    /// <summary>
+    /// 解码一个视频的输入参数。打包的 FFmpeg 只有要硬件加速的原生 AV1 解码器（没有 dav1d），AV1 成品（ftyp 兼容品牌含 av01）
+    /// 走 D3D11VA 默认显卡解码；AV1 解码是规范性的，硬解输出与软解逐位相同。其余格式照旧软解。
+    /// </summary>
+    public static string[] Input(string video)
+    {
+        Span<byte> head = stackalloc byte[64];
+        int read = 0;
+        if (File.Exists(video))
+            using (FileStream stream = File.OpenRead(video)) read = stream.ReadAtLeast(head, head.Length, throwOnEndOfStream: false);
+        int size = read >= 8 ? (int)Math.Min((uint)System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(head), (uint)read) : 0;
+        bool av1 = size > 8 && head[4..8].SequenceEqual("ftyp"u8) && head[8..size].IndexOf("av01"u8) >= 0;
+        return av1 ? ["-hwaccel", "d3d11va", "-i", video] : ["-i", video];
+    }
+
     /// <summary>启动一个进程；token 取消时杀掉整棵进程树。释放时先杀（若还在跑）再等它退出。</summary>
     public NativeProcess Start(string executable, IEnumerable<string> arguments, CancellationToken token, bool redirectInput = false)
     {
