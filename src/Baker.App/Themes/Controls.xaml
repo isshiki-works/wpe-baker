@@ -25,7 +25,7 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentInk}"/><Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="FontSize" Value="14"/><Setter Property="MinHeight" Value="40"/><Setter Property="Margin" Value="0"/>
     </Style>
-    <!-- 文字链接式按钮（重新检测）：透明底、强调色字。 -->
+    <!-- 文字链接式按钮（刷新）：透明底、强调色字。 -->
     <Style x:Key="Link" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
         <Setter Property="Background" Value="Transparent"/><Setter Property="BorderBrush" Value="Transparent"/>
         <Setter Property="Foreground" Value="{DynamicResource AccentText}"/><Setter Property="Padding" Value="6,2"/>
@@ -175,7 +175,7 @@
 
     <Style TargetType="ProgressBar">
         <Setter Property="Height" Value="3"/><Setter Property="BorderThickness" Value="0"/>
-        <Setter Property="Foreground" Value="{DynamicResource Accent}"/><Setter Property="Background" Value="{DynamicResource Fill}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Accent}"/><Setter Property="Background" Value="{DynamicResource Stroke}"/>
     </Style>
 
     <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
@@ -186,11 +186,10 @@
         <Setter Property="Margin" Value="0,0,0,8"/></Style>
     <Style x:Key="Note" TargetType="TextBlock"><Setter Property="FontSize" Value="12"/><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="Foreground" Value="{DynamicResource Ink2}"/></Style>
     <!-- 玻璃卡片：窗口本身不铺底色，内容都放在这种半透明卡片上（文字只落在卡片或实色小底衬上）。
-         顶部渐变高光描边做玻璃边缘，下方柔和阴影做景深。 -->
+         顶部渐变高光描边做玻璃边缘。不加 DropShadowEffect：效果会作用到卡片里的每行字上，字边发虚。 -->
     <Style x:Key="Glass" TargetType="Border"><Setter Property="Background" Value="{DynamicResource Card}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource Edge}"/><Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="CornerRadius" Value="10"/><Setter Property="Padding" Value="16"/>
-        <Setter Property="Effect"><Setter.Value><DropShadowEffect BlurRadius="18" ShadowDepth="3" Direction="270" Opacity="0.2"/></Setter.Value></Setter></Style>
+        <Setter Property="CornerRadius" Value="10"/><Setter Property="Padding" Value="16"/></Style>
     <!-- 卡片里的内嵌块（预览卡、步骤标签）。 -->
     <Style x:Key="Inset" TargetType="Border"><Setter Property="Background" Value="{DynamicResource Field}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource Stroke}"/><Setter Property="BorderThickness" Value="1"/>

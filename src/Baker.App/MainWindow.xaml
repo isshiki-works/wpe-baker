@@ -10,7 +10,7 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <!-- 顶栏只放两个下拉；标题交给系统标题栏，不在玻璃上直接放字。 -->
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="12,4,12,8">
-            <ComboBox x:Name="BackdropBox" Width="110" Margin="0,0,8,0" SelectionChanged="BackdropChanged" ToolTip="窗口背景‖Window background">
+            <ComboBox x:Name="BackdropBox" Width="110" Margin="0,0,8,0" SelectionChanged="BackdropChanged" ToolTipService.ShowOnDisabled="True">
                 <ComboBoxItem Tag="不透明|Opaque"/><ComboBoxItem Tag="云母|Mica"/><ComboBoxItem Tag="亚克力|Acrylic" IsSelected="True"/>
             </ComboBox>
             <ComboBox x:Name="LanguageBox" Width="110" SelectionChanged="LanguageChanged">
@@ -28,8 +28,8 @@
                             <StackPanel>
                                 <TextBlock Style="{StaticResource Section}" Margin="0,0,0,10" Tag="生成方案|Generation setup"/>
                                 <DockPanel Margin="0,0,0,8">
-                                    <Button x:Name="DetectButton" DockPanel.Dock="Right" Style="{StaticResource Link}" Tag="重新检测|Re-detect" Click="DetectClicked"/>
-                                    <TextBlock Style="{StaticResource Group}" Margin="0" VerticalAlignment="Center" Tag="你桌面上正在放的这张|On your desktop now"/>
+                                    <Button x:Name="DetectButton" DockPanel.Dock="Right" Style="{StaticResource Link}" Tag="刷新|Refresh" Click="DetectClicked"/>
+                                    <TextBlock Style="{StaticResource Group}" Margin="0" VerticalAlignment="Center" Tag="当前壁纸|Current wallpaper"/>
                                 </DockPanel>
                                 <!-- 多块屏幕时在这里挑；一块都没检出就整行收起。 -->
                                 <ComboBox x:Name="CurrentWallpaperBox" DisplayMemberPath="Label" SelectionChanged="CurrentWallpaperChanged" Margin="0,0,0,8"
@@ -38,7 +38,7 @@
                                         <Trigger Property="HasItems" Value="False"><Setter Property="Visibility" Value="Collapsed"/></Trigger>
                                     </Style.Triggers></Style></ComboBox.Style>
                                 </ComboBox>
-                                <!-- 正在放的这张：预览图 + 标题；选中项没有可导入的来源时换成下面的拖入区。 -->
+                                <!-- 当前壁纸：预览图 + 标题；选中项没有可导入的来源时换成下面的拖入区。 -->
                                 <Border x:Name="CurrentWallpaperCard" DataContext="{Binding SelectedItem, ElementName=CurrentWallpaperBox}" Padding="0" ToolTip="{Binding Detail}">
                                     <Border.Style><Style TargetType="Border" BasedOn="{StaticResource Inset}"><Style.Triggers>
                                         <DataTrigger Binding="{Binding}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
@@ -52,7 +52,7 @@
                                             <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Margin="0,0,0,10"/>
                                             <Border Background="{DynamicResource AccentSoft}" CornerRadius="10" Padding="10,3" HorizontalAlignment="Left">
                                                 <TextBlock FontSize="12" Foreground="{DynamicResource AccentText}"
-                                                    Tag="读取自本机 Wallpaper Engine 设置|Read from the local Wallpaper Engine settings"/>
+                                                    Tag="来自 Wallpaper Engine|From Wallpaper Engine"/>
                                             </Border>
                                         </StackPanel>
                                     </StackPanel>
@@ -255,9 +255,9 @@
                                 Tag="队列为空。分析壁纸后开始生成。|Queue empty. Analyze a wallpaper, then start generating."/>
                             <!-- 新手三步：分析过就收起（UpdatePlanSummary 控制）。 -->
                             <WrapPanel x:Name="GettingStartedHint" HorizontalAlignment="Center" Margin="0,12,0,0">
-                                <Border Style="{StaticResource Inset}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="1 把壁纸文件夹拖进来|1 Drag in a wallpaper folder"/></Border>
-                                <Border Style="{StaticResource Inset}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="2 选择档位|2 Pick a preset"/></Border>
-                                <Border Style="{StaticResource Inset}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="3 点击生成开始|3 Click Generate"/></Border>
+                                <Border Style="{StaticResource Inset}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="1 选择壁纸|1 Choose a wallpaper"/></Border>
+                                <Border Style="{StaticResource Inset}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="2 分析|2 Analyze"/></Border>
+                                <Border Style="{StaticResource Inset}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="3 开始生成|3 Start generating"/></Border>
                             </WrapPanel>
                         </StackPanel>
                         </Border>
@@ -265,10 +265,9 @@
                                  HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="False">
                             <!-- 作业行：选中时下方 ActionsHost 展开，代码把同一块操作面板（JobActions）挪进来，即"原地展开"。 -->
                             <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem">
-                                <Setter Property="Margin" Value="0,0,0,10"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Margin" Value="0,0,0,10"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Foreground" Value="{DynamicResource Ink}"/>
                                 <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
                                     <Border x:Name="Row" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Edge}" BorderThickness="1" CornerRadius="10">
-                                        <Border.Effect><DropShadowEffect BlurRadius="18" ShadowDepth="3" Direction="270" Opacity="0.2"/></Border.Effect>
                                         <Grid>
                                             <StackPanel>
                                                 <ContentPresenter/>

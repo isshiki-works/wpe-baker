@@ -57,11 +57,9 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        dark = Environment.GetEnvironmentVariable("PERIODICA_SHOT_THEME") is string shotTheme ? shotTheme == "dark" : SystemUsesDarkTheme(); // SHOT-HOOK
+        dark = SystemUsesDarkTheme();
         LoadThemeTokens();
         InitializeComponent();
-        BackdropBox.IsEnabled = BackdropSupported;
-        if (Environment.GetEnvironmentVariable("PERIODICA_SHOT_BACKDROP") is string shotBackdrop) BackdropBox.SelectedIndex = int.Parse(shotBackdrop); // SHOT-HOOK
         SourceInitialized += (_, _) =>
         {
             // 系统背景要透到客户区：WPF 不刷底色 + 边框扩展到整个客户区；不透明模式由 Window.Background 自己盖住。
@@ -114,18 +112,6 @@ public partial class MainWindow : Window
         catch (Exception error) { setupError = error.Message; }
         RefreshControls();
         if (File.Exists(WpeExeBox.Text)) await LoadTargetsAsync(autoImport: true);
-        // SHOT-HOOK-BEGIN
-        if (Environment.GetEnvironmentVariable("PERIODICA_SHOT_JOBS") is string shotJobs)
-        {
-            string[] reports = shotJobs.Split(';');
-            var running = LoadCompletedResult(reports[0]); running.State = "running"; running.Detail = L("正在渲染：3120 / 7200 帧", "Rendering: 3120 / 7200 frames");
-            var done = LoadCompletedResult(reports[1]);
-            var failed = LoadCompletedResult(reports[2]); failed.State = "failed"; failed.Detail = L("未检出循环周期，生成中止；原因见报告文件。", "No loop period found; generation stopped. See the report.");
-            foreach (var job in new[] { running, done, failed }) Enqueue(job);
-            QueueList.SelectedItem = done;
-            RunProgress.Value = 0.43; StatusText.Text = running.Title + " · " + running.Detail;
-        }
-        // SHOT-HOOK-END
     }
 
     internal void SetLanguage(bool useEnglish)
@@ -159,6 +145,7 @@ public partial class MainWindow : Window
         UpdatePlanSummary();
         BuildPropertyEditors();
         RefreshControls();
+        ApplyBackdrop(); // 窗口背景下拉的提示跟着换语言
         if (!processing && !analyzing) StatusText.Text = hybridPlan is null
             ? L("未选择壁纸。选择壁纸后执行分析。", "No wallpaper selected. Select a wallpaper, then run analysis.")
             // 这张到底能不能做，结论区已经写得很清楚了，状态栏别在这里再下一次结论。
@@ -1478,8 +1465,10 @@ public partial class MainWindow : Window
     }
 
     // ---- 外观：明暗跟随系统，窗口背景可选不透明 / 云母 / 亚克力 ----
-    private static bool SystemUsesDarkTheme() =>
-        Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
+    private const string PersonalizeKey = @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+    private static bool SystemUsesDarkTheme() => Registry.GetValue(PersonalizeKey, "AppsUseLightTheme", 1) is 0;
+    /// <summary>Windows 设置里的"透明效果"。关着时系统不画任何云母/亚克力（只剩纯黑或纯白底），窗口改用不透明底色。</summary>
+    private static bool SystemTransparencyEnabled() => Registry.GetValue(PersonalizeKey, "EnableTransparency", 1) is not 0;
 
     /// <summary>颜色键放在 Application 级：控件样式全用 DynamicResource，换字典即换明暗。</summary>
     private void LoadThemeTokens()
@@ -1489,33 +1478,38 @@ public partial class MainWindow : Window
         dictionaries.Add(new ResourceDictionary { Source = new Uri(dark ? "/WpeBaker;component/Themes/Tokens.Dark.xaml" : "/WpeBaker;component/Themes/Tokens.Light.xaml", UriKind.Relative) });
     }
 
+    /// <summary>系统明暗或透明效果开关变了（两者都走 UserPreferenceChanged.General）。</summary>
     private void ThemeChanged()
     {
-        if (SystemUsesDarkTheme() == dark) return;
-        dark = !dark;
-        LoadThemeTokens();
+        if (SystemUsesDarkTheme() != dark)
+        {
+            dark = !dark;
+            LoadThemeTokens();
+            foreach (var job in jobs) job.Translate(english); // 让作业行的状态色按新明暗重取
+            RefreshControls();
+        }
         ApplyBackdrop();
-        foreach (var job in jobs) job.Translate(english); // 让作业行的状态色按新明暗重取
-        RefreshControls();
     }
 
     // DWMWA_SYSTEMBACKDROP_TYPE 从 Windows 11 22H2（build 22621）起才有；更早的系统开关禁用，固定不透明。
     private static readonly bool BackdropSupported = Environment.OSVersion.Version.Build >= 22621;
     private void BackdropChanged(object sender, SelectionChangedEventArgs e) => ApplyBackdrop();
 
-    /// <summary>窗口背景：下拉 0 不透明 / 1 云母（DWMSBT_MAINWINDOW）/ 2 亚克力。
-    /// 系统亚克力（DWMSBT_TRANSIENTWINDOW）色调不可调、偏不透明，桌面几乎透不过来；这里改用
-    /// SetWindowCompositionAttribute 的 ACCENT_ENABLE_ACRYLICBLURBEHIND（未公开 API），色调与不透明度取颜色键 Tint。
-    /// 文字都在半透明卡片上，对比度按卡片背后纯黑/纯白的最坏情况定（见 Tokens.*.xaml 顶部注释）。</summary>
+    /// <summary>窗口背景：下拉 0 不透明 / 1 云母（DWMSBT_MAINWINDOW）/ 2 亚克力（DWMSBT_TRANSIENTWINDOW，系统亚克力，实时模糊窗口背后的桌面）。
+    /// 材质全由系统画；窗口底只再压一层淡色（颜色键 Base），卡片叠半透明（同 WinUI 的 Card/Control 填充），亮壁纸下正文仍清楚。</summary>
     private void ApplyBackdrop()
     {
-        int choice = BackdropSupported ? Math.Max(BackdropBox.SelectedIndex, 0) : 0;
-        if (choice == 0) SetResourceReference(BackgroundProperty, "Bg");
-        else Background = System.Windows.Media.Brushes.Transparent;
+        bool transparency = SystemTransparencyEnabled();
+        BackdropBox.IsEnabled = BackdropSupported && transparency;
+        BackdropBox.ToolTip = !BackdropSupported ? L("需要 Windows 11 22H2 或更新版本。", "Requires Windows 11 22H2 or later.")
+            : transparency ? L("窗口背景", "Window background")
+            : L("Windows 透明效果已关闭，窗口使用不透明背景。开启：设置 > 个性化 > 颜色 > 透明效果。",
+                "Windows transparency effects are off, so the window is opaque. Turn on: Settings > Personalization > Colors > Transparency effects.");
+        int choice = BackdropBox.IsEnabled ? Math.Max(BackdropBox.SelectedIndex, 0) : 0;
+        SetResourceReference(BackgroundProperty, choice == 0 ? "Bg" : "Base");
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
-        // 系统背景类型：云母 2（DWMSBT_MAINWINDOW）；亚克力 0（AUTO，设成 1 NONE 会连同下面的 accent 模糊一起关掉、露出黑底）；不透明 1。
-        int darkMode = dark ? 1 : 0, backdrop = choice switch { 1 => 2, 2 => 0, _ => 1 };
+        int darkMode = dark ? 1 : 0, backdrop = choice switch { 1 => 2, 2 => 3, _ => 1 };
         DwmSetWindowAttribute(hwnd, 20, ref darkMode, sizeof(int)); // DWMWA_USE_IMMERSIVE_DARK_MODE：标题栏跟着明暗
         if (!BackdropSupported) return;
         DwmSetWindowAttribute(hwnd, 38, ref backdrop, sizeof(int));
@@ -1523,24 +1517,11 @@ public partial class MainWindow : Window
         var bg = ((System.Windows.Media.SolidColorBrush)FindResource("Bg")).Color;
         int caption = choice == 0 ? bg.R | bg.G << 8 | bg.B << 16 : -1;
         DwmSetWindowAttribute(hwnd, 35, ref caption, sizeof(int));
-        var tint = (System.Windows.Media.Color)FindResource("Tint");
-        var accent = new AccentPolicy(choice == 2 ? 4 : 0, 2, tint.A << 24 | tint.B << 16 | tint.G << 8 | tint.R, 0); // 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND，颜色 0xAABBGGRR
-        IntPtr data = Marshal.AllocHGlobal(Marshal.SizeOf<AccentPolicy>());
-        try
-        {
-            Marshal.StructureToPtr(accent, data, false);
-            var attribute = new CompositionAttribute(19, data, Marshal.SizeOf<AccentPolicy>()); // 19 = WCA_ACCENT_POLICY
-            SetWindowCompositionAttribute(hwnd, ref attribute);
-        }
-        finally { Marshal.FreeHGlobal(data); }
     }
 
     private record struct Margins(int Left, int Right, int Top, int Bottom);
-    private record struct AccentPolicy(int State, int Flags, int Color, int AnimationId);
-    private record struct CompositionAttribute(int Attribute, IntPtr Data, nint Size);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref Margins margins);
-    [DllImport("user32.dll")] private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref CompositionAttribute attribute);
 
     private abstract class ObservableItem : INotifyPropertyChanged
     {
