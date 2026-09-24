@@ -206,14 +206,20 @@ public class AdmissionTests
     [Fact]
     public void GroupBudgetCountsOnlyDynamicGroups()
     {
-        JsonObject plan = Plan(new JsonArray(), groups: [[1], [3], [30], [4], [5]]);
-        Assert.Equal(5, Admission.GroupCount(plan));
+        JsonObject plan = Plan(new JsonArray(), groups: [[1], [3], [30], [4], [5], [6], [7], [8], [9], [10]]);
+        plan["settings"] = new JsonObject { ["width"] = 1920u, ["height"] = 1080u, ["fps_numerator"] = 60u, ["fps_denominator"] = 1u };
+        Assert.Equal(10, Admission.GroupCount(plan));
         Assert.False(Admission.Accepted(plan));
-        plan["video_groups"]![4]!["static_verified"] = true;
-        plan["video_groups"]![4]!["static_verification"] = new JsonObject { ["basis"] = "source_and_runtime_static_proof" };
-        Assert.Equal(4, Admission.GroupCount(plan));
+        plan["video_groups"]![9]!["static_verified"] = true;
+        plan["video_groups"]![9]!["static_verification"] = new JsonObject { ["basis"] = "source_and_runtime_static_proof" };
+        Assert.Equal(9, Admission.GroupCount(plan));
         Assert.Equal(1, Admission.StaticGroupCount(plan));
         Assert.True(Admission.Accepted(plan));
+        // 解码量按输出像素率换算：1440p60 只放 5 路，4K60 不低于旧政策的 4 路。
+        plan["settings"]!["width"] = 2560u; plan["settings"]!["height"] = 1440u;
+        Assert.Equal(5, Admission.MaxVideoGroups(plan));
+        plan["settings"]!["width"] = 3840u; plan["settings"]!["height"] = 2160u;
+        Assert.Equal(4, Admission.MaxVideoGroups(plan));
     }
 }
 

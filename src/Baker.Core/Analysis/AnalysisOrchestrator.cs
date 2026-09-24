@@ -88,9 +88,9 @@ internal sealed class AnalysisOrchestrator
                     ["zh"] = MessageCatalog.Get(key, "zh"), ["en"] = MessageCatalog.Get(key, "en") };
                 break;
             }
-            if (Admission.Bakeable(result) && Admission.GroupCount(result) > Admission.MaxVideoGroups)
+            if (Admission.Bakeable(result) && Admission.GroupCount(result) > Admission.MaxVideoGroups(result))
             {
-                PlanBlockers.Add(result, new Blocker(BlockerCode.TooManyVideoGroups, [Admission.MaxVideoGroups]));
+                PlanBlockers.Add(result, new Blocker(BlockerCode.TooManyVideoGroups, [Admission.MaxVideoGroups(result)]));
                 result["status"] = "requires_resolution";
                 result["preset_rejection_reason"] = "too_many_video_groups";
                 result["suitability"] = HybridSuitability.Verdict(result);
@@ -146,7 +146,7 @@ internal sealed class AnalysisOrchestrator
                 (request.ExcludedLayerIds ?? []).Concat(off).Distinct().Order().ToArray() };
             last = await StatesAsync(current);
             if (Admission.Accepted(last)) return (last, reasons);
-            reasons.Add(preset + ": " + (Admission.GroupCount(last) > Admission.MaxVideoGroups ? "too_many_video_groups" : last["summary"]?["key"]?.GetValue<string>()));
+            reasons.Add(preset + ": " + (Admission.GroupCount(last) > Admission.MaxVideoGroups(last) ? "too_many_video_groups" : last["summary"]?["key"]?.GetValue<string>()));
         }
         return (last!, reasons);
     }
@@ -238,7 +238,7 @@ internal sealed class AnalysisOrchestrator
     private static async Task VerifyStaticGroupBudgetAsync(JsonObject plan, CancellationToken token)
     {
         if (!Admission.Bakeable(plan) || plan["route"]?.GetValue<string>() != "whole_layer" ||
-            plan["video_groups"] is not JsonArray { Count: > Admission.MaxVideoGroups } groups ||
+            plan["video_groups"] is not JsonArray groups || groups.Count <= Admission.MaxVideoGroups(plan) ||
             plan["source"]?.GetValue<string>() is not string sourcePath ||
             plan["runtime_evidence"]?.GetValue<string>() is not string runtimePath || !File.Exists(runtimePath)) return;
         string sourceKey = plan["source_sha256"]?.GetValue<string>() ?? sourcePath;
