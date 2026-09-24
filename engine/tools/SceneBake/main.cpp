@@ -646,8 +646,7 @@ int Render(const fs::path& job_path) {
         offline.trace_scene = job.trace_scene;
         offline.readback_stride = job.output_stride;
         offline.readback_phase = job.output_phase;
-        if (Field(json, "output_frame_stride") || job.gpu_encode || job.collect_sampling_coverage)
-            offline.readback_start = job.warmup;
+        offline.readback_start = job.warmup;
         offline.video_rate_overrides = job.video_rate_overrides;
         if (!wallpaper.init(std::move(config), std::move(info), offline))
             throw std::runtime_error(wallpaper.error());
