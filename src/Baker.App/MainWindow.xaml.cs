@@ -57,10 +57,11 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        dark = SystemUsesDarkTheme();
+        dark = Environment.GetEnvironmentVariable("PERIODICA_SHOT_THEME") is string shotTheme ? shotTheme == "dark" : SystemUsesDarkTheme(); // SHOT-HOOK
         LoadThemeTokens();
         InitializeComponent();
         BackdropBox.IsEnabled = BackdropSupported;
+        if (Environment.GetEnvironmentVariable("PERIODICA_SHOT_BACKDROP") is string shotBackdrop) BackdropBox.SelectedIndex = int.Parse(shotBackdrop); // SHOT-HOOK
         SourceInitialized += (_, _) =>
         {
             // 系统背景要透到客户区：WPF 不刷底色 + 边框扩展到整个客户区；不透明模式由 Window.Background 自己盖住。
@@ -113,6 +114,18 @@ public partial class MainWindow : Window
         catch (Exception error) { setupError = error.Message; }
         RefreshControls();
         if (File.Exists(WpeExeBox.Text)) await LoadTargetsAsync(autoImport: true);
+        // SHOT-HOOK-BEGIN
+        if (Environment.GetEnvironmentVariable("PERIODICA_SHOT_JOBS") is string shotJobs)
+        {
+            string[] reports = shotJobs.Split(';');
+            var running = LoadCompletedResult(reports[0]); running.State = "running"; running.Detail = L("正在渲染：3120 / 7200 帧", "Rendering: 3120 / 7200 frames");
+            var done = LoadCompletedResult(reports[1]);
+            var failed = LoadCompletedResult(reports[2]); failed.State = "failed"; failed.Detail = L("未检出循环周期，生成中止；原因见报告文件。", "No loop period found; generation stopped. See the report.");
+            foreach (var job in new[] { running, done, failed }) Enqueue(job);
+            QueueList.SelectedItem = done;
+            RunProgress.Value = 0.43; StatusText.Text = running.Title + " · " + running.Detail;
+        }
+        // SHOT-HOOK-END
     }
 
     internal void SetLanguage(bool useEnglish)
@@ -1501,7 +1514,8 @@ public partial class MainWindow : Window
         else Background = System.Windows.Media.Brushes.Transparent;
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
-        int darkMode = dark ? 1 : 0, backdrop = choice == 1 ? 2 : 1;
+        // 系统背景类型：云母 2（DWMSBT_MAINWINDOW）；亚克力 0（AUTO，设成 1 NONE 会连同下面的 accent 模糊一起关掉、露出黑底）；不透明 1。
+        int darkMode = dark ? 1 : 0, backdrop = choice switch { 1 => 2, 2 => 0, _ => 1 };
         DwmSetWindowAttribute(hwnd, 20, ref darkMode, sizeof(int)); // DWMWA_USE_IMMERSIVE_DARK_MODE：标题栏跟着明暗
         if (!BackdropSupported) return;
         DwmSetWindowAttribute(hwnd, 38, ref backdrop, sizeof(int));
