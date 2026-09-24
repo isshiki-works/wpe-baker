@@ -32,6 +32,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     private readonly bool probe = request.ProbeFrames > 0;
     private readonly Dictionary<int, Task<JsonObject>> renders = [];
     private readonly CancellationTokenSource renderCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    /// <summary>GPU 长组分段渲染时同时在跑的段进程上限（与组并行数相同），各组的段排同一个队。</summary>
+    private readonly SemaphoreSlim segmentSlots = new(groupParallel);
 
     internal double CenterX => projection["center_x"]!.GetValue<double>();
     internal double CenterY => projection["center_y"]!.GetValue<double>();
@@ -240,13 +242,13 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         }
         try
         {
-            JsonObject rendered = await runner.RenderAsync(render, progress, renderCancellation.Token);
+            JsonObject rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
             if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render))
             {
                 Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
                     Path.GetDirectoryName(render.OutputDirectory)!, $"master.gpu-qp{gpu.Qp}"));
                 render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
-                rendered = await runner.RenderAsync(render, progress, renderCancellation.Token);
+                rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
                 if (!await GpuQualityPassesAsync(rendered, render))
                     throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
             }
