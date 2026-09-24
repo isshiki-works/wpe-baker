@@ -530,7 +530,7 @@ public sealed class HybridBakeService(NativeTools tools)
                             JsonObject wrap;
                             using (timing.Measure(StageTiming.SeamCheck))
                                 wrap = await runner.MeasureSeamResidualAsync(masterPath, frames, crossfadeFrames, cancellationToken,
-                                    scheduler.TileScale);
+                                    SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height));
                             wrap["limits"] = ResidualMasking.Thresholds();
                             bool firstLayer = wrap["first_layer"]!["passed"]!.GetValue<bool>();
                             wrap["group_id"] = id;
