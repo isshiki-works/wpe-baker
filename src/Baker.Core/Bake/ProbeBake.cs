@@ -18,7 +18,7 @@ internal sealed class ProbeBake(NativeTools tools)
         HybridBakeService.EnsureNewDerivedOutput(source, probeOutput, "Composition probe output");
         string? selectedDevice = request.DeviceUuid ?? settings.DeviceUuid;
         progress?.Report(new("checking_composition", 0, "Generating a short candidate to check complete scene composition."));
-        // 相机入场动画期间成品是放大的视频（已知取舍，见 projection.camera_intro）：探针多烘这段，参照与成品都从入场结束后开始比。
+        // 相机入场动画：探针多烘这段。成品没做入场切换（退回旧行为、昼夜导出、副本做不成）时参照与成品都从入场结束后开始比。
         ulong introFrames = (ulong)Math.Ceiling(SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0) *
             settings.FpsNumerator / settings.FpsDenominator);
         JsonObject probe = await baker.BakeAsync(new(2, plan, probeOutput, introFrames + CompositionGate.RequiredFrames,
@@ -51,16 +51,21 @@ internal sealed class ProbeBake(NativeTools tools)
                 .ToDictionary(SceneGraph.Id), plan, runtime["runtime_dependencies"]!.AsArray())!;
             comparisonProperties = daytime.ComparisonProperties(comparisonProperties);
         }
+        // 单次入场动画（bake.json 的 intro_live）：入场段显示原作图层时从第 0 帧比到切换后 48 帧；没做成就只比入场结束后。
+        introFrames = probe["intro_live"]?["intro_frames"]?.GetValue<ulong>() ?? introFrames;
+        bool introLive = probe["intro_live"]?["status"]?.GetValue<string>() == "applied";
         await CreateReferenceAsync(planSource, comparisonReference, comparisonProperties, planSettings.ViewMode, plan, cancellationToken);
         PairedComparison comparison = await new CandidateValidation(tools).CompareAsync(new ValidationRequest(
             1, comparisonReference, project, planSettings.Assets, comparisonOutput, planSettings.Width, planSettings.Height,
-            planSettings.FpsNumerator, planSettings.FpsDenominator, CompositionGate.RequiredFrames,
-            WarmupFrames: introFrames, Seed: 17, DeviceUuid: planSettings.DeviceUuid,
+            planSettings.FpsNumerator, planSettings.FpsDenominator, CompositionGate.RequiredFrames + (introLive ? introFrames : 0),
+            WarmupFrames: introLive ? 0 : introFrames, Seed: 17, DeviceUuid: planSettings.DeviceUuid,
             UserProperties: comparisonProperties,
             Input: new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
             TileSize: (uint)Math.Round(CompositionGate.RequiredTileSize *
                 SwayRecurrenceSolver.SpeedLimitScale(planSettings.Width, planSettings.Height))), progress, cancellationToken);
         JsonObject validation = CompositionGate.Evaluate(comparison);
+        // 入场切换做成了却没过闸门时，HybridBakeService.BakeAsync 据此退回旧行为重烘。
+        validation["intro_live"] = probe["intro_live"]?.DeepClone();
         validation["probe_output_path"] = probeDirectory;
         validation["probe_capture_source_path"] = captureSource;
         validation["comparison_reference_path"] = comparisonReference;

@@ -78,6 +78,8 @@ internal static class RuntimeTrackReader
                     TryClipFrameRate(trace, videoDuration, out CommonLoopRational clipRate) ? clipRate : null);
                 continue;
             }
+            // 加载即播的单次轨入场后定格，不参与周期；视频从入场结束后录（SingleShotAllocation.IntroSeconds）。
+            if (SingleShotAllocation.IsSingleShot(trace) && trace["event_driven"]?.GetValue<bool>() != true) continue;
             if (trace["looping"]?.GetValue<bool>() != true || trace["event_driven"]?.GetValue<bool>() == true ||
                 !string.Equals(trace["confidence"]?.GetValue<string>(), "high", StringComparison.OrdinalIgnoreCase))
             { unresolved.Add(Animation(ownerId, "unresolved.animation_not_high_confidence")); continue; }
