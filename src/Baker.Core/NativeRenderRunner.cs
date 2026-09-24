@@ -27,7 +27,8 @@ public sealed record RenderRequest(string Source, string Assets, string OutputDi
     ulong? ForceKeyFrameFrame = null, RenderEncodePadding? EncodePadding = null,
     ulong? EncodedFrames = null, ulong[]? RetainFrames = null, string? PlaybackEncoderKind = null,
     GpuEncodeRequest? GpuEncoding = null, bool CollectSamplingCoverage = false,
-    double EffectRenderScale = 1.0, bool MatchEffectResolution = false, double? HdrScale = null);
+    double EffectRenderScale = 1.0, bool MatchEffectResolution = false, double? HdrScale = null, CacheRegion? MasterCrop = null);
+// MasterCrop：透明组无损 master 只编捕获里的这块（GPU 覆盖度预通道给出，块外逐帧全零）；覆盖范围也只在块内统计。
 // HdrScale：官方 HDR 管线下闭合不成立的组。渲染器按浮点中间目标合成，出帧为 rgb/k；成品图层着色器再乘回 k。
 public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
     uint CrossfadeFrames = 0, CacheRegion? Crop = null, bool RetainLoopWindow = false,
@@ -123,6 +124,12 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             directKind == PlaybackEncoderSelection.Auto))
             throw new ArgumentException("Direct playback encoding needs a resolved encoder kind on an opaque full-frame lossy render.");
         bool encodeSizeRequested = request.EncodeWidth.HasValue || request.EncodeHeight.HasValue;
+        if (request.MasterCrop is { } masterCrop && (!request.LosslessTest || request.PixelPacking != "rgba_side_by_side" ||
+            !request.CollectAlphaBounds || !request.BoundsIncludeRgb || request.GpuEncoding is not null || request.FrameSamplesOnly ||
+            encodeSizeRequested || request.EncodePadding is not null ||
+            masterCrop.CaptureWidth != request.Width || masterCrop.CaptureHeight != request.Height))
+            throw new ArgumentException("A master crop applies only to a packed lossless master of the same capture.");
+        request.MasterCrop?.Validate();
         if (encodeSizeRequested && (!request.EncodeWidth.HasValue || !request.EncodeHeight.HasValue))
             throw new ArgumentException("EncodeWidth and EncodeHeight must be specified together.");
         uint encodeWidth = request.EncodeWidth ?? request.Width;
@@ -142,10 +149,10 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             ? FormattableString.Invariant($"pad={pad.Width}:{pad.Height}:{pad.OffsetX}:{pad.OffsetY}:color=black@0,") : null;
         uint canvasWidth = request.GpuEncoding is not null
             ? request.EncodeWidth ?? (uint)(request.GpuEncoding.Crop?.Width ?? (int)request.Width)
-            : request.EncodePadding?.Width ?? encodeWidth;
+            : (uint?)request.MasterCrop?.Width ?? request.EncodePadding?.Width ?? encodeWidth;
         uint encodedHeight = request.GpuEncoding is not null
             ? request.EncodeHeight ?? (uint)(request.GpuEncoding.Crop?.Height ?? (int)request.Height)
-            : request.EncodePadding?.Height ?? encodeHeight;
+            : (uint?)request.MasterCrop?.Height ?? request.EncodePadding?.Height ?? encodeHeight;
         uint encodedWidth = checked(canvasWidth * (request.PixelPacking == "rgba_side_by_side" ? 2u : 1u));
         if (request.Width == 0 || request.Height == 0 ||
             (!request.FrameSamplesOnly && !request.LosslessTest && (encodedWidth % 2 != 0 || encodedHeight % 2 != 0)))
@@ -396,7 +403,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 if (request.PlaybackEncoderKind is not null)
                     colorFilter = FormattableString.Invariant($"format=gbrp,crop={encodedWidth}:{encodedHeight}:0:0,") + colorFilter;
                 var encoderArguments = new List<string> { "-hide_banner", "-nostdin", "-n", "-f", "rawvideo", "-pixel_format", "rgba",
-                    "-video_size", $"{request.Width}x{request.Height}", "-framerate", fps, "-i", "pipe:0", "-an" };
+                    "-video_size", request.MasterCrop is { } inputCrop ? $"{inputCrop.Width}x{inputCrop.Height}" : $"{request.Width}x{request.Height}", "-framerate", fps, "-i", "pipe:0", "-an" };
                 // 补边放在缩放之后、拆 RGB/alpha 之前：两半幅用同一张透明黑画布，alphaextract 得到的补边 alpha 为 0。
                 if (request.PixelPacking == "rgba_side_by_side")
                     encoderArguments.AddRange(["-filter_complex", $"[0:v]{(encodeSizeRequested ? $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba," : "")}{padFilter}split=2[color][mask];[color]format=rgb24[rgb];[mask]alphaextract,format=rgb24[alpha];[rgb][alpha]hstack=inputs=2,{colorFilter}[packed]", "-map", "[packed]"]);

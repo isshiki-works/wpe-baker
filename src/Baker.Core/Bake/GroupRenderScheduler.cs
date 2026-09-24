@@ -186,12 +186,16 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                         Crop: layout.Crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
             }
         }
+        // 其余档位的透明组：无损 master 只编覆盖度预通道给出的内容框（与成品裁剪同一套取整与硬件解码扩边）。
+        else if (render.LosslessTest && NativeRenderRunner.SamplingCrop(coverage, render) is ({ } crop, true) &&
+                 (crop.Width != crop.CaptureWidth || crop.Height != crop.CaptureHeight))
+            render = render with { MasterCrop = crop };
         return render;
     }
 
     /// <summary>
     /// 异步启动一个组的主渲染：构造请求时抛出的异常留在任务里，等轮到这个组时才浮出来，不会打乱前面组的判定顺序。
-    /// Vulkan 透明组的裁剪未知时先跑一遍 GPU 覆盖度预通道拿全片裁剪，再直编；全片全零时直接走空组路径。
+    /// 透明组的裁剪未知时先跑一遍 GPU 覆盖度预通道拿全片裁剪：Vulkan 档再直编（全片全零时直接走空组路径），其余档位的无损 master 只编内容框。
     /// GPU 编码初始化失败时把 master 挪开，按 CPU 路线重渲一遍。
     /// </summary>
     private async Task<JsonObject> StartAsync(int index)
@@ -200,8 +204,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
             throw new IOException("A group master output must be new; existing files will not be cleaned.");
         JsonObject? coveragePass = null;
-        if (render.GpuEncoding is null && playbackKind == PlaybackEncoderSelection.Vulkan && !probe &&
-            render.Width % 2 == 0 && render.Height % 2 == 0)
+        if (render.GpuEncoding is null && !probe && render.Width % 2 == 0 && render.Height % 2 == 0 &&
+            (playbackKind == PlaybackEncoderSelection.Vulkan || render is { LosslessTest: true, PixelPacking: "rgba_side_by_side" }))
         {
             // An unknown crop used to require a full RGBA lossless master
             // followed by decoding and encoding again. A GPU-only bounds
@@ -218,7 +222,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 ["manifest_path"] = Path.Combine(boundsOutput, "manifest.json"),
                 ["frames"] = render.Frames, ["readback_frames"] = measured["readback_frames"]?.DeepClone(),
                 ["renderer_wall_seconds"] = measured["native_result"]?["wall_seconds"]?.DeepClone() };
-            if (measured["sampling_coverage"] is JsonObject emptyCoverage &&
+            if (playbackKind == PlaybackEncoderSelection.Vulkan && measured["sampling_coverage"] is JsonObject emptyCoverage &&
                 emptyCoverage["has_content"]?.GetValue<bool>() == false)
             {
                 // Every full-resolution RGBA pixel was zero over the

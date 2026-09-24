@@ -96,6 +96,9 @@ public sealed partial class NativeRenderRunner
         byte[][] buffers = [new byte[frameBytes], new byte[frameBytes]];
         int thumbnailBytes = checked(storedSampleWidth * sampleHeight * 3);
         byte[][] thumbnails = [new byte[thumbnailBytes], new byte[thumbnailBytes]];
+        // 先裁后编：只把 master_crop 那块送进编码器、在块内统计覆盖范围。处理按帧串行，一块缓冲够用。
+        CacheRegion? crop = request.MasterCrop;
+        byte[]? cropped = crop is null ? null : new byte[checked(crop.Width * crop.Height * 4)];
         Task pending = Task.CompletedTask;
         long loopStarted = Stopwatch.GetTimestamp();
         var estimate = new FrameProgressEstimate();
@@ -168,7 +171,13 @@ public sealed partial class NativeRenderRunner
                         identicalSeconds += Stopwatch.GetElapsedTime(identicalStarted).TotalSeconds;
                     }
                     long boundsStarted = Stopwatch.GetTimestamp();
-                    bounds.Add(rgba, request.BoundsIncludeRgb);
+                    if (crop is null) bounds.Add(rgba, request.BoundsIncludeRgb);
+                    else
+                    {
+                        for (int y = 0; y < crop.Height; ++y)
+                            Buffer.BlockCopy(rgba, ((crop.Y + y) * width + crop.X) * 4, cropped!, y * crop.Width * 4, crop.Width * 4);
+                        bounds.Add(cropped, request.BoundsIncludeRgb, crop);
+                    }
                     boundsSeconds += Stopwatch.GetElapsedTime(boundsStarted).TotalSeconds;
                 }
                 if (sampleThis)
@@ -188,7 +197,7 @@ public sealed partial class NativeRenderRunner
             if (first) await File.WriteAllBytesAsync(firstFramePath!, reference!, token);
             if (sampleThis) { await samples!.WriteAsync(thumbnail, token); ++sampleCount; }
             long writeStarted = Stopwatch.GetTimestamp();
-            await destination.WriteAsync(rgba, token);
+            await destination.WriteAsync(cropped ?? rgba, token);
             writeSeconds += Stopwatch.GetElapsedTime(writeStarted).TotalSeconds;
         }
 
@@ -224,12 +233,16 @@ public sealed partial class NativeRenderRunner
         private byte minAlpha = 255, maxAlpha;
         public FrameBounds(int width, int height) { this.width = width; this.height = height; minX = width; minY = height; }
         /// <summary>并入一帧：向量化分块扫描（FrameScan），结果与逐像素扫描逐位相同。</summary>
-        public void Add(ReadOnlyMemory<byte> rgba, bool includeRgb)
+        /// <param name="region">rgba 只是捕获里的这一块；块外像素全零，所以整帧 alpha 最小值是 0，坐标按块原点平移。</param>
+        public void Add(ReadOnlyMemory<byte> rgba, bool includeRgb, CacheRegion? region = null)
         {
-            var frame = FrameScan.Bounds(rgba, width, height, includeRgb, FrameScan.Threads);
-            minAlpha = Math.Min(minAlpha, frame.MinAlpha); maxAlpha = Math.Max(maxAlpha, frame.MaxAlpha);
-            minX = Math.Min(minX, frame.MinX); maxX = Math.Max(maxX, frame.MaxX);
-            minY = Math.Min(minY, frame.MinY); maxY = Math.Max(maxY, frame.MaxY);
+            var frame = FrameScan.Bounds(rgba, region?.Width ?? width, region?.Height ?? height, includeRgb, FrameScan.Threads);
+            bool partial = region is not null && (region.Width != width || region.Height != height);
+            minAlpha = Math.Min(minAlpha, partial ? (byte)0 : frame.MinAlpha); maxAlpha = Math.Max(maxAlpha, frame.MaxAlpha);
+            if (frame.MaxX < 0) return;
+            int x = region?.X ?? 0, y = region?.Y ?? 0;
+            minX = Math.Min(minX, frame.MinX + x); maxX = Math.Max(maxX, frame.MaxX + x);
+            minY = Math.Min(minY, frame.MinY + y); maxY = Math.Max(maxY, frame.MaxY + y);
         }
         public JsonObject ToJson(bool includesRgb, string firstFramePath, bool pixelIdentical) => new() {
             ["has_content"] = maxX >= 0, ["x"] = maxX >= 0 ? minX : 0, ["y"] = maxY >= 0 ? minY : 0,

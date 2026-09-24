@@ -64,8 +64,7 @@ public static class EncodedLoopValidator
             NativeRenderRunner.EncodedFrameCount(manifest) != loopFrames)
             throw new InvalidDataException("接缝参照的裁剪区或周期与 master 不一致。");
         string filter = packedAlpha
-            ? $"split=2[r][a];[r]crop={crop.Width}:{crop.Height}:{crop.X}:{crop.Y}[rgb];" +
-              $"[a]crop={crop.Width}:{crop.Height}:{crop.CaptureWidth + crop.X}:{crop.Y}[alpha];[rgb][alpha]hstack=inputs=2"
+            ? NativeRenderRunner.PackedMasterRegion(manifest, crop)
             : $"crop={crop.Width}:{crop.Height}:{crop.X}:{crop.Y}";
         int width = crop.Width * (packedAlpha ? 2 : 1);
         string video = Path.Combine(master, "preview.mp4");

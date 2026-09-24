@@ -228,7 +228,10 @@ public sealed partial class NativeRenderRunner
         // 不要让一个输入从头解码到第 P 帧——那是整片解码，master 越长越慢。
         ExactFrameRange.FfmpegInput head = ExactFrameRange.Build(video, 0, crossfadeFrames, numerator, denominator);
         ExactFrameRange.FfmpegInput wrapWindow = ExactFrameRange.Build(video, loopFrames, crossfadeFrames, numerator, denominator);
-        string filter = $"[0:v]{head.Filter}[head];[1:v]{wrapWindow.Filter}[wrap];[head][wrap]concat=n=2:v=1:a=0[pair]";
+        // 先裁后编的 master 只有内容框：补零还原整幅，瓦片网格与整幅均值照旧按捕获坐标算。
+        string restore = manifest["request"]?["master_crop"] is null ? "" : "," + PackedMasterRegion(manifest,
+            new CacheRegion(halfWidth, height, 0, 0, halfWidth, height));
+        string filter = $"[0:v]{head.Filter}[head];[1:v]{wrapWindow.Filter}[wrap];[head][wrap]concat=n=2:v=1:a=0{restore}[pair]";
         try
         {
             // ffmpeg 失败、取消或磁盘告急时帧包已经开始写了，放在 try 里让 finally 一并清掉。

@@ -60,8 +60,10 @@ internal sealed class MasterRewrite(FfmpegTool ff)
         // 合成 out = C + (1−α)·B 对 (C, α) 线性，这就是预乘空间里正确的淡化，与不透明组同一个公式；权重校验也逐像素照做。
         string packing = manifest["pixel_packing"]?.GetValue<string>() ?? "rgb";
         if (packing is not ("rgb" or "rgba_side_by_side")) throw new InvalidDataException("交叉淡化不认识这个 master 的像素打包方式。");
-        uint width = checked(request["width"]!.GetValue<uint>() * (packing == "rgba_side_by_side" ? 2u : 1u));
-        uint height = request["height"]!.GetValue<uint>();
+        // 先裁后编的 master 只有内容框那么大；淡化逐像素，按 master 实际尺寸做即可。
+        JsonNode? crop = request["master_crop"];
+        uint width = checked((crop ?? request)["width"]!.GetValue<uint>() * (packing == "rgba_side_by_side" ? 2u : 1u));
+        uint height = (crop ?? request)["height"]!.GetValue<uint>();
         uint numerator = request["fps_numerator"]!.GetValue<uint>(), denominator = request["fps_denominator"]!.GetValue<uint>();
         ulong captured = request["frames"]!.GetValue<ulong>();
         if (crossfadeFrames == 0 || loopFrames == 0 || captured != checked(loopFrames + crossfadeFrames))

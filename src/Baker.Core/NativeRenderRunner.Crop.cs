@@ -33,6 +33,21 @@ public sealed record CacheRegion(int CaptureWidth, int CaptureHeight, int X, int
 
 public sealed partial class NativeRenderRunner
 {
+    /// <summary>
+    /// 从左右并排的无损 master 取捕获坐标里的区域 <paramref name="want"/>（左预乘色、右覆盖度）。master 若只编了
+    /// request.master_crop 那块（先裁后编），块外逐帧全零：取交集、不够的补零，像素与整幅 master 上直接裁出来的逐个相同。
+    /// </summary>
+    internal static string PackedMasterRegion(JsonObject master, CacheRegion want)
+    {
+        CacheRegion m = master["request"]?["master_crop"] is JsonObject crop ? System.Text.Json.JsonSerializer.Deserialize<CacheRegion>(crop, JsonOptions)!
+            : new(want.CaptureWidth, want.CaptureHeight, 0, 0, want.CaptureWidth, want.CaptureHeight);
+        int x0 = Math.Max(want.X, m.X), y0 = Math.Max(want.Y, m.Y);
+        int x1 = Math.Min(want.X + want.Width, m.X + m.Width), y1 = Math.Min(want.Y + want.Height, m.Y + m.Height);
+        string pad = x1 - x0 == want.Width && y1 - y0 == want.Height ? "" : $",pad={want.Width}:{want.Height}:{x0 - want.X}:{y0 - want.Y}";
+        string Half(int left) => $"crop={x1 - x0}:{y1 - y0}:{left + x0 - m.X}:{y0 - m.Y}{pad}";
+        return $"split=2[color][mask];[color]{Half(0)}[rgb];[mask]{Half(m.Width)}[alpha];[rgb][alpha]hstack=inputs=2";
+    }
+
     private static JsonObject HardwareDecodePreflightReport(HardwareDecodeDimensions.Plan plan, CacheRegion alphaRegion, CacheRegion region)
     {
         JsonObject report = plan.ToJson();
@@ -218,9 +233,7 @@ public sealed partial class NativeRenderRunner
         if (File.Exists(output) || Directory.Exists(output)) throw new IOException("Crop output must be a new directory.");
         Directory.CreateDirectory(output);
         string partial = Path.Combine(output, "cache.partial.mp4");
-        string filter = $"[0:v]split=2[color][mask];[color]crop={region.Width}:{region.Height}:{region.X}:{region.Y}[rgb];" +
-            $"[mask]crop={region.Width}:{region.Height}:{region.CaptureWidth + region.X}:{region.Y}[alpha];" +
-            $"[rgb][alpha]hstack=inputs=2,{PlaybackEncodeProfile.Bt709Filter}[packed]";
+        string filter = $"[0:v]{PackedMasterRegion(master, region)},{PlaybackEncodeProfile.Bt709Filter}[packed]";
         if (!preserveAlpha)
         {
             if (master["alpha_bounds"]?["minimum_alpha"]?.GetValue<int>() != 255)
