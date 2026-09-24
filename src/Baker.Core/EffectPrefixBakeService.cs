@@ -306,7 +306,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         }
                         // 门在渲染后就过了（见上面的降 QP 重试）；这里只在接缝过了时记下结果。
                         if (gpuDirect && seam["status"]?.GetValue<string>() == "observed_seam_pass")
-                            gpuQuality = rendered["playback_quality_gate"]!.AsObject();
+                            gpuQuality = rendered["playback_quality_gate"]!.DeepClone().AsObject();
                     }
                     finally
                     {
