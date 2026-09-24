@@ -181,11 +181,15 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             // 渲染器内的 GPU 打包只有左右并排；越宽度上限要上下并排的透明组走 master 路线。
             if (known is { } layout && !HardwareDecodeDimensions.StackedVertically(layout.Packed, layout.Crop.Width))
             {
-                // Vulkan H.264 编码有最小宽度（驱动约 145）：72 宽的透明组打包后 144，编码器初始化失败、整组落到 CPU 无损路线
-                // （3757825891 group-4 读回约 200 s）。不足时在捕获范围内居中加宽裁剪，多出的是透明列。
-                int minimum = layout.Packed ? 74 : 146;
-                CacheRegion crop = layout.Crop.Width >= minimum || layout.Crop.CaptureWidth < minimum ? layout.Crop : layout.Crop with {
-                    X = Math.Clamp((layout.Crop.X - (minimum - layout.Crop.Width) / 2) & ~1, 0, layout.Crop.CaptureWidth - minimum), Width = minimum };
+                // Vulkan 编码有最小编码尺寸：RTX 5090 驱动 610.62 报 H.264/HEVC minCodedExtent 160x64（vulkaninfo --show-video-props）。
+                // FFmpeg 拿按 16 对齐后的尺寸比：72 宽透明组打包成 144 被拒、整组落到 CPU 无损路线（3757825891 group-4 读回约 200 s）；
+                // 152 对齐成 160 放行，但实际尺寸低于下限。不足时在捕获范围内居中加宽/加高裁剪，多出的是透明像素；打包的每半幅算一半宽。
+                int minimum = layout.Packed ? 80 : 160;
+                CacheRegion crop = layout.Crop;
+                if (crop.Width < minimum && crop.CaptureWidth >= minimum)
+                    crop = crop with { X = Math.Clamp((crop.X - (minimum - crop.Width) / 2) & ~1, 0, crop.CaptureWidth - minimum), Width = minimum };
+                if (crop.Height < 64 && crop.CaptureHeight >= 64)
+                    crop = crop with { Y = Math.Clamp((crop.Y - (64 - crop.Height) / 2) & ~1, 0, crop.CaptureHeight - 64), Height = 64 };
                 string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
                     (uint)crop.Width * (layout.Packed ? 2u : 1u), (uint)crop.Height,
                     render.FpsNumerator, render.FpsDenominator), PlaybackEncoderSelection.Vulkan);
