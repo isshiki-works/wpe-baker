@@ -180,6 +180,10 @@ public sealed partial class NativeRenderRunner
     /// <summary>成品是渲染时直接编出来的（不透明整幅组），没有写过无损 master。</summary>
     public const string DirectPlaybackCaptureMode = "direct_playback";
 
+    /// <summary>硬件档位按 <see cref="EmbeddedVideoBudget.HardwareOverBudget"/> 预判会超 2 GiB、这一组改用软件编码时记的原因。</summary>
+    internal const string HardwareBudgetFallbackReason =
+        "按参考码率 × 硬件体积倍数（h264_nvenc 1.555、hevc_nvenc 1.12）外推，硬件编码成品会超过内嵌视频 2 GiB 上限，这一组改用软件编码。";
+
     /// <summary>成品是从无损 master 裁切重编出来的。</summary>
     public const string LosslessMasterCaptureMode = "lossless_master";
 
@@ -235,6 +239,9 @@ public sealed partial class NativeRenderRunner
         else if (requestedEncoder != PlaybackEncoderSelection.Software)
             (encoderKind, encoderFallbackReason) = PlaybackEncoderSelection.Resolve(requestedEncoder,
                 await UsableEncodersAsync(requestedEncoder, output, cancellationToken));
+        if (encoderKind != PlaybackEncoderSelection.Software &&
+            EmbeddedVideoBudget.HardwareOverBudget(frames, (uint)region.Width, (uint)region.Height, preserveAlpha, decodePlan.SoftwareEncoder == "libx265"))
+            (encoderKind, encoderFallbackReason) = (PlaybackEncoderSelection.Software, HardwareBudgetFallbackReason);
         var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
             losslessTest: false, encoderKind);
         // mf 档位要区分「真的落到厂商硬件 MFT」与「只有微软自带的软件 MFT」：能编不等于硬件在编。
