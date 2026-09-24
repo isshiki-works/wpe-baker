@@ -46,9 +46,7 @@ internal static class StaticProof
             if (node is not JsonObject period || period["source_owner_layer_id"] is not JsonValue owner ||
                 !owner.TryGetValue<int>(out int id) || period["mechanism"] is not JsonValue)
                 return Unproven("A runtime animation period entry is malformed, so the observation cannot establish a still image.");
-            // 加载即播的单次轨入场后定格：静止图从入场结束后录（SingleShotAllocation.IntroSeconds），与 RuntimeTrackReader 同一口径。
-            if (selected.Contains(id) && !(SingleShotAllocation.IsSingleShot(period) && period["event_driven"]?.GetValue<bool>() != true))
-                return Unproven($"Runtime observation recorded an animation period on baked {Describe(id)}.", id);
+            if (selected.Contains(id)) return Unproven($"Runtime observation recorded an animation period on baked {Describe(id)}.", id);
         }
         foreach (JsonNode? node in dependencies)
         {

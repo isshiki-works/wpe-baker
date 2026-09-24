@@ -71,11 +71,11 @@ internal static class SingleShotAllocationChecks
             single["loop"]!["unresolved"]!.AsArray().Count == 0,
             "an event-driven high-confidence single-shot authored track keeps its layer live and out of every video group");
 
-        // 加载即播的单次轨按入场处理：进视频组、不算未解析；入场切换退回旧行为（single_shot_live）时照旧判实时。
+        // 加载即播的单次轨按入场处理：进视频组；入场切换退回旧行为（single_shot_live）时照旧判实时。
         JsonObject intro = await PlanAsync("intro", new JsonArray(Track(20, false, "single", "high")), objects);
         JsonObject introFallback = await PlanAsync("intro-fallback", new JsonArray(Track(20, false, "single", "high")), objects,
             singleShotLive: true);
-        check(Allocation(intro, 20) == "video" && GroupRoots(intro).Contains(20) && intro["loop"]!["unresolved"]!.AsArray().Count == 0 &&
+        check(Allocation(intro, 20) == "video" && GroupRoots(intro).Contains(20) && !Reasons(intro, 20).Contains("single_shot_animation") &&
             Allocation(introFallback, 20) == "live" && Reasons(introFallback, 20).Contains("single_shot_animation"),
             "a load-played single-shot track joins the video group as an intro and stays live when the intro switch falls back");
 
