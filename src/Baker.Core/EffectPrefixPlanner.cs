@@ -15,8 +15,8 @@ internal static class EffectPrefixPlanner
         ArgumentNullException.ThrowIfNull(request);
         RetimeProfile profile = RetimeProfileJson.Resolve(request);
         if (request.FpsNumerator == 0 || request.FpsDenominator == 0 || !double.IsFinite(profile.CommonRetimePercent) ||
-            profile.CommonRetimePercent < 0 || profile.CommonRetimePercent > RetimeProfile.MaximumBudgetPercent)
-            throw new ArgumentException("Use positive rational FPS and a retime limit from zero to five percent.");
+            profile.CommonRetimePercent < 0 || profile.CommonRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
+            throw new ArgumentException("Use positive rational FPS and a retime limit from zero to ten percent.");
         var proposals = new JsonArray();
         foreach (JsonObject owner in originalScene["objects"]?.AsArray().OfType<JsonObject>() ?? [])
         {

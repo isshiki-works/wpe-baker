@@ -20,6 +20,11 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
     public const string Efficiency = "efficiency";
     public const string Balanced = "balanced";
     public const string Quality = "quality";
+    /// <summary>
+    /// 兼容档（实验性，只能手动选，不进自动回退链）：效率档翻倍，预算 10%、循环上限 1200 s。
+    /// 10% 没有扫描数据支持，观感变化未验证；接缝、合成、画质门不放宽，生效上限仍按内嵌视频 2 GiB 收紧。
+    /// </summary>
+    public const string Compatibility = "compatibility";
 
     /// <summary>值的来源：档位给的、用户覆盖的，或调用方没选档时的旧默认。</summary>
     public const string FromPreset = "preset";
@@ -28,9 +33,11 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
 
     /// <summary>
     /// --retime-budget 允许的最大值（百分比）：效率档 5% 是扫描过的最高档，再往上没有数据支持。
-    /// 同时是通用求解器分量调速预算的上限（<see cref="CommonLoopSolver"/> 的请求校验读这一个常量）。
     /// </summary>
     public const double MaximumBudgetPercent = 5;
+
+    /// <summary>通用求解器分量调速预算的上限（兼容档的 10%；<see cref="CommonLoopSolver"/> 的请求校验读这一个常量）。</summary>
+    public const double MaximumCommonRetimePercent = 10;
 
     /// <summary>没选档时的循环长度上限（秒），与 --loop-max-seconds 的默认一致。</summary>
     public const double DefaultLoopMaximumSeconds = CommonLoopSolver.DefaultLoopLengthMaximumSeconds;
@@ -54,15 +61,15 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
     public bool ComparesQualityCeilings(double effectiveMaximumSeconds) =>
         Preset == Quality && effectiveMaximumSeconds > QualityComparisonSeconds + 1e-9;
 
-    public static bool IsKnownPreset(string value) => value is Efficiency or Balanced or Quality;
+    public static bool IsKnownPreset(string value) => value is Efficiency or Balanced or Quality or Compatibility;
 
     /// <summary>档位对应的循环取向（求解器认的还是这三个名字）。</summary>
     public static string LoopPreferenceForPreset(string preset) => preset switch
     {
-        Efficiency => "performance",
+        Efficiency or Compatibility => "performance",
         Balanced => "balanced",
         Quality => "quality",
-        _ => throw new InvalidDataException("A preset must be efficiency, balanced, or quality.")
+        _ => throw new InvalidDataException("A preset must be efficiency, balanced, quality, or compatibility.")
     };
 
     /// <summary>档位的观感改动预算（百分比）；质量档为 null（不设门槛，取改动最小）。</summary>
@@ -71,7 +78,8 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
         Efficiency => 5,
         Balanced => 3,
         Quality => null,
-        _ => throw new InvalidDataException("A preset must be efficiency, balanced, or quality.")
+        Compatibility => MaximumCommonRetimePercent,
+        _ => throw new InvalidDataException("A preset must be efficiency, balanced, quality, or compatibility.")
     };
 
     /// <summary>档位的循环长度上限（秒，兜底值）；实际上限还要按内嵌视频 2 GiB 收紧。</summary>
@@ -80,7 +88,8 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
         Efficiency => 600,
         Balanced => 600,
         Quality => 600,
-        _ => throw new InvalidDataException("A preset must be efficiency, balanced, or quality.")
+        Compatibility => 1200,
+        _ => throw new InvalidDataException("A preset must be efficiency, balanced, quality, or compatibility.")
     };
 
     /// <summary>
@@ -89,7 +98,7 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
     /// </summary>
     public static RetimeProfile Resolve(string? preset, double? budgetOverride, double? loopMaximumOverride, double commonFallbackPercent)
     {
-        if (preset is not null && !IsKnownPreset(preset)) throw new InvalidDataException("A preset must be efficiency, balanced, or quality.");
+        if (preset is not null && !IsKnownPreset(preset)) throw new InvalidDataException("A preset must be efficiency, balanced, quality, or compatibility.");
         double? budget = budgetOverride ?? (preset is null ? null : PresetBudgetPercent(preset));
         double maximum = loopMaximumOverride ?? (preset is null ? DefaultLoopMaximumSeconds : PresetLoopMaximumSeconds(preset));
         string budgetSource = budgetOverride is not null ? FromOverride : preset is null ? FromDefault : FromPreset;
