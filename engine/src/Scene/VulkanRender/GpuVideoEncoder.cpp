@@ -18,6 +18,11 @@ extern "C" {
 #include <libavutil/opt.h>
 #include <libavutil/mathematics.h>
 }
+#define NOMINMAX
+#define FFNV_LOG_FUNC(logctx, msg, ...)
+#define FFNV_DEBUG_LOG_FUNC(logctx, msg, ...)
+#include <ffnvcodec/dynlink_loader.h>
+#include <vulkan/vulkan_win32.h>
 
 import wescene.shader_compile;
 import wescene.types;
@@ -124,10 +129,43 @@ struct GpuVideoEncoder::Impl {
     bool finished {};
     bool conversion_pending {};
     std::int64_t quality_level {}, async_depth {};
+    // NVIDIA 上换 NVENC SDK 编码（ARCHN）：Vulkan Video 在 5090 上只用到 1 个编码引擎（ARCH4 实测 HEVC 0.52 GP/s，
+    // 多进程也不涨）。转换着色器把 NV12 写进可导出的显存环形缓冲，经 CUDA 外部内存交给 NVENC，帧不回 CPU；
+    // HEVC 用分条编码（splitEncodeMode）把一帧切给多个引擎。其他厂商与加载失败时仍走 FFmpeg 的 Vulkan 编码器。
+    static constexpr std::uint32_t nv_ring = 8;
+    CudaFunctions* cu {};
+    NvencFunctions* nvenc_dl {};
+    NV_ENCODE_API_FUNCTION_LIST nv { NV_ENCODE_API_FUNCTION_LIST_VER };
+    CUcontext cuda {};
+    CUexternalMemory cuda_memory {};
+    CUdeviceptr cuda_base {};
+    void* nvenc {};
+    std::array<NV_ENC_REGISTERED_PTR, nv_ring> nv_registered {};
+    std::array<NV_ENC_OUTPUT_PTR, nv_ring> nv_bitstreams {};
+    std::array<NV_ENC_INPUT_PTR, nv_ring> nv_inputs {};
+    VkDeviceSize nv_slot_bytes {};
+    std::uint64_t nv_sent {}, nv_collected {};
+    bool nv_pending {}, nv_pending_idr {};
+    std::int64_t nv_pending_pts {};
 
     ~Impl() {
         // On cancellation/error, queued codec work must finish before its resources/device disappear.
         if (device) vkDeviceWaitIdle(device);
+        if (nvenc) {
+            for (auto input : nv_inputs) if (input) nv.nvEncUnmapInputResource(nvenc, input);
+            for (auto resource : nv_registered) if (resource) nv.nvEncUnregisterResource(nvenc, resource);
+            for (auto bitstream : nv_bitstreams) if (bitstream) nv.nvEncDestroyBitstreamBuffer(nvenc, bitstream);
+            nv.nvEncDestroyEncoder(nvenc);
+        }
+        if (cuda) {
+            cu->cuCtxPushCurrent(cuda);
+            if (cuda_base) cu->cuMemFree(cuda_base);
+            if (cuda_memory) cu->cuDestroyExternalMemory(cuda_memory);
+            cu->cuCtxPopCurrent(nullptr);
+            cu->cuCtxDestroy(cuda);
+        }
+        nvenc_free_functions(&nvenc_dl);
+        cuda_free_functions(&cu);
         av_packet_free(&packet);
         av_frame_free(&frame);
         avcodec_free_context(&codec);
@@ -187,6 +225,12 @@ struct GpuVideoEncoder::Impl {
             int result = avcodec_receive_packet(codec, packet);
             if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) return;
             Av(result, "receive Vulkan encoded packet");
+            writePacket();
+        }
+    }
+
+    void writePacket() {
+        {
             // Native Vulkan encoders may omit the last packet's duration.
             // Every submitted frame occupies exactly one rational time-base tick.
             if (!packet->duration) packet->duration = 1;
@@ -296,6 +340,159 @@ struct GpuVideoEncoder::Impl {
         if (!conversion_pending) return;
         Vk(vkWaitForFences(device, 1, &fence, VK_TRUE, timeout_ns), "wait before reusing GPU conversion resources");
         conversion_pending = false;
+        if (nv_pending) nvSubmit();
+    }
+
+    void Nv(NVENCSTATUS status, const char* operation) {
+        if (status != NV_ENC_SUCCESS)
+            throw std::runtime_error(std::string(operation) + ": NVENCSTATUS=" + std::to_string(status) + " " +
+                                     (nvenc ? nv.nvEncGetLastErrorString(nvenc) : ""));
+    }
+    void Cu(CUresult result, const char* operation) {
+        if (result != CUDA_SUCCESS) throw std::runtime_error(std::string(operation) + ": CUresult=" + std::to_string(result));
+    }
+
+    // 加载驱动库、按 LUID 找到同一块卡并开 NVENC 会话；任何一步不可用返回 false，调用方改走 Vulkan Video。
+    bool openNvenc(std::span<const std::string> device_extensions, bool hevc, int qp) {
+        if (!hevc || std::find(device_extensions.begin(), device_extensions.end(),
+                               VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME) == device_extensions.end() ||
+            cuda_load_functions(&cu, nullptr) || nvenc_load_functions(&nvenc_dl, nullptr) || cu->cuInit(0) != CUDA_SUCCESS)
+            return false;
+        VkPhysicalDeviceIDProperties id { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES };
+        VkPhysicalDeviceProperties2 properties { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &id };
+        vkGetPhysicalDeviceProperties2(gpu, &properties);
+        int count = 0;
+        if (!id.deviceLUIDValid || cu->cuDeviceGetCount(&count) != CUDA_SUCCESS) return false;
+        for (int i = 0; i < count && !cuda; ++i) {
+            CUdevice candidate {}; char luid[8] {}; unsigned mask {};
+            if (cu->cuDeviceGet(&candidate, i) == CUDA_SUCCESS && cu->cuDeviceGetLuid(luid, &mask, candidate) == CUDA_SUCCESS &&
+                std::memcmp(luid, id.deviceLUID, 8) == 0 && cu->cuCtxCreate(&cuda, 0, candidate) == CUDA_SUCCESS)
+                cu->cuCtxPopCurrent(nullptr);
+        }
+        NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS open { .version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER,
+            .deviceType = NV_ENC_DEVICE_TYPE_CUDA, .device = cuda, .apiVersion = NVENCAPI_VERSION };
+        if (!cuda || nvenc_dl->NvEncodeAPICreateInstance(&nv) != NV_ENC_SUCCESS ||
+            nv.nvEncOpenEncodeSessionEx(&open, &nvenc) != NV_ENC_SUCCESS) { nvenc = nullptr; return false; }
+        NV_ENC_PRESET_CONFIG preset { .version = NV_ENC_PRESET_CONFIG_VER, .presetCfg = { .version = NV_ENC_CONFIG_VER } };
+        Nv(nv.nvEncGetEncodePresetConfigEx(nvenc, NV_ENC_CODEC_HEVC_GUID, NV_ENC_PRESET_P3_GUID, NV_ENC_TUNING_INFO_HIGH_QUALITY, &preset),
+           "read NVENC preset");
+        auto config = preset.presetCfg;
+        config.gopLength = 250; config.frameIntervalP = 1;
+        config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
+        config.rcParams.constQP = { std::uint32_t(qp), std::uint32_t(qp), std::uint32_t(qp) };
+        auto& hevc_config = config.encodeCodecConfig.hevcConfig;
+        hevc_config.idrPeriod = 250;
+        auto& vui = hevc_config.hevcVUIParameters;
+        vui.videoSignalTypePresentFlag = 1; vui.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED; vui.videoFullRangeFlag = 0;
+        vui.colourDescriptionPresentFlag = 1; vui.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+        vui.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709; vui.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+        NV_ENC_INITIALIZE_PARAMS init { .version = NV_ENC_INITIALIZE_PARAMS_VER, .encodeGUID = NV_ENC_CODEC_HEVC_GUID,
+            .presetGUID = NV_ENC_PRESET_P3_GUID, .encodeWidth = output_width, .encodeHeight = output_height,
+            .darWidth = output_width, .darHeight = output_height,
+            .frameRateNum = std::uint32_t(codec->framerate.num), .frameRateDen = std::uint32_t(codec->framerate.den),
+            .enablePTD = 1, .encodeConfig = &config, .maxEncodeWidth = output_width, .maxEncodeHeight = output_height,
+            .tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY };
+        // 强制三条带：4K HEVC p3 单会话 2.3 → 5.7 GP/s（runs/ARCHN/bench.json）；驱动不收（如极扁的尺寸）就退回自动
+        init.splitEncodeMode = NV_ENC_SPLIT_THREE_FORCED_MODE;
+        if (nv.nvEncInitializeEncoder(nvenc, &init) != NV_ENC_SUCCESS) {
+            init.splitEncodeMode = NV_ENC_SPLIT_AUTO_MODE;
+            Nv(nv.nvEncInitializeEncoder(nvenc, &init), "initialize NVENC HEVC");
+        }
+        std::array<std::uint8_t, 1024> header {};
+        std::uint32_t header_size = 0;
+        NV_ENC_SEQUENCE_PARAM_PAYLOAD sequence { .version = NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER,
+            .inBufferSize = header.size(), .spsppsBuffer = header.data(), .outSPSPPSPayloadSize = &header_size };
+        Nv(nv.nvEncGetSequenceParams(nvenc, &sequence), "read NVENC parameter sets");
+        codec->extradata = static_cast<std::uint8_t*>(av_mallocz(header_size + AV_INPUT_BUFFER_PADDING_SIZE));
+        if (!codec->extradata) throw std::bad_alloc();
+        std::memcpy(codec->extradata, header.data(), header_size);
+        codec->extradata_size = static_cast<int>(header_size);
+        stride = (output_width + 255u) & ~255u;
+        return true;
+    }
+
+    // 转换输出的环形缓冲：一块可导出的专用显存，导入 CUDA 后每槽登记为 NVENC 输入。
+    void exportRing() {
+        nv_slot_bytes = (VkDeviceSize(stride) * output_height * 3 / 2 + 255) & ~VkDeviceSize(255);
+        VkExternalMemoryBufferCreateInfo external { .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT };
+        VkBufferCreateInfo info { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &external,
+            .size = nv_slot_bytes * nv_ring, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE };
+        Vk(vkCreateBuffer(device, &info, nullptr, &nv12), "create NVENC input ring");
+        VkMemoryRequirements requirements;
+        vkGetBufferMemoryRequirements(device, nv12, &requirements);
+        VkPhysicalDeviceMemoryProperties properties;
+        vkGetPhysicalDeviceMemoryProperties(gpu, &properties);
+        std::uint32_t type = 0;
+        while (type < properties.memoryTypeCount && (!(requirements.memoryTypeBits & (1u << type)) ||
+               !(properties.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))) ++type;
+        VkExportMemoryAllocateInfo exported { .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT };
+        VkMemoryDedicatedAllocateInfo dedicated { .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+            .pNext = &exported, .buffer = nv12 };
+        VkMemoryAllocateInfo allocation { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &dedicated,
+            .allocationSize = requirements.size, .memoryTypeIndex = type };
+        Vk(vkAllocateMemory(device, &allocation, nullptr, &memory), "allocate NVENC input ring");
+        Vk(vkBindBufferMemory(device, nv12, memory, 0), "bind NVENC input ring");
+        auto get_handle = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(vkGetDeviceProcAddr(device, "vkGetMemoryWin32HandleKHR"));
+        VkMemoryGetWin32HandleInfoKHR handle_info { .sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR,
+            .memory = memory, .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT };
+        HANDLE handle {};
+        Vk(get_handle ? get_handle(device, &handle_info, &handle) : VK_ERROR_EXTENSION_NOT_PRESENT, "export NVENC input ring");
+        Cu(cu->cuCtxPushCurrent(cuda), "bind CUDA context");
+        CUDA_EXTERNAL_MEMORY_HANDLE_DESC imported {};
+        imported.type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32; imported.handle.win32.handle = handle;
+        imported.size = requirements.size; imported.flags = 1; // CUDA_EXTERNAL_MEMORY_DEDICATED
+        CUresult result = cu->cuImportExternalMemory(&cuda_memory, &imported);
+        CloseHandle(handle);
+        CUDA_EXTERNAL_MEMORY_BUFFER_DESC mapped_ring {};
+        mapped_ring.size = nv_slot_bytes * nv_ring;
+        if (result == CUDA_SUCCESS) result = cu->cuExternalMemoryGetMappedBuffer(&cuda_base, cuda_memory, &mapped_ring);
+        cu->cuCtxPopCurrent(nullptr);
+        Cu(result, "import NVENC input ring into CUDA");
+        for (std::uint32_t slot = 0; slot < nv_ring; ++slot) {
+            NV_ENC_REGISTER_RESOURCE resource { .version = NV_ENC_REGISTER_RESOURCE_VER,
+                .resourceType = NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR, .width = output_width, .height = output_height,
+                .pitch = stride, .resourceToRegister = reinterpret_cast<void*>(cuda_base + slot * nv_slot_bytes),
+                .bufferFormat = NV_ENC_BUFFER_FORMAT_NV12, .bufferUsage = NV_ENC_INPUT_IMAGE };
+            Nv(nv.nvEncRegisterResource(nvenc, &resource), "register NVENC input");
+            nv_registered[slot] = resource.registeredResource;
+            NV_ENC_CREATE_BITSTREAM_BUFFER bitstream { .version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER };
+            Nv(nv.nvEncCreateBitstreamBuffer(nvenc, &bitstream), "create NVENC bitstream buffer");
+            nv_bitstreams[slot] = bitstream.bitstreamBuffer;
+        }
+    }
+
+    void nvSubmit() {
+        nv_pending = false;
+        const auto slot = nv_sent % nv_ring;
+        NV_ENC_MAP_INPUT_RESOURCE map { .version = NV_ENC_MAP_INPUT_RESOURCE_VER, .registeredResource = nv_registered[slot] };
+        Nv(nv.nvEncMapInputResource(nvenc, &map), "map NVENC input");
+        nv_inputs[slot] = map.mappedResource;
+        NV_ENC_PIC_PARAMS picture { .version = NV_ENC_PIC_PARAMS_VER, .inputWidth = output_width, .inputHeight = output_height,
+            .inputPitch = stride, .encodePicFlags = nv_pending_idr ? std::uint32_t(NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS) : 0u,
+            .inputTimeStamp = std::uint64_t(nv_pending_pts), .inputBuffer = map.mappedResource,
+            .outputBitstream = nv_bitstreams[slot], .bufferFmt = NV_ENC_BUFFER_FORMAT_NV12,
+            .pictureStruct = NV_ENC_PIC_STRUCT_FRAME };
+        Nv(nv.nvEncEncodePicture(nvenc, &picture), "submit NVENC frame");
+        ++nv_sent;
+    }
+
+    // 取回最早一帧的码流（阻塞到它编完）并放回它的输入槽
+    void nvCollect() {
+        const auto slot = nv_collected % nv_ring;
+        NV_ENC_LOCK_BITSTREAM lock { .version = NV_ENC_LOCK_BITSTREAM_VER, .outputBitstream = nv_bitstreams[slot] };
+        Nv(nv.nvEncLockBitstream(nvenc, &lock), "lock NVENC bitstream");
+        const int result = av_new_packet(packet, static_cast<int>(lock.bitstreamSizeInBytes));
+        if (result >= 0) std::memcpy(packet->data, lock.bitstreamBufferPtr, lock.bitstreamSizeInBytes);
+        nv.nvEncUnlockBitstream(nvenc, nv_bitstreams[slot]);
+        Av(result, "allocate NVENC packet");
+        packet->pts = packet->dts = static_cast<std::int64_t>(lock.outputTimeStamp);
+        if (lock.pictureType == NV_ENC_PIC_TYPE_IDR) packet->flags |= AV_PKT_FLAG_KEY;
+        Nv(nv.nvEncUnmapInputResource(nvenc, nv_inputs[slot]), "unmap NVENC input");
+        nv_inputs[slot] = nullptr;
+        ++nv_collected;
+        writePacket();
     }
 
     void beginCapture() {
@@ -459,7 +656,8 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     Av(av_opt_set_int(p.codec->priv_data, "qp", qp, 0), "set Vulkan encoder QP");
     Av(av_opt_get_int(p.codec->priv_data, "quality", 0, &p.quality_level), "read Vulkan encoder quality level");
     Av(av_opt_get_int(p.codec->priv_data, "async_depth", 0, &p.async_depth), "read Vulkan encoder depth");
-    Av(avcodec_open2(p.codec, encoder, nullptr), "open Vulkan encoder");
+    if (!p.openNvenc(device_extensions, codec_name == "hevc_vulkan", qp))
+        Av(avcodec_open2(p.codec, encoder, nullptr), "open Vulkan encoder");
     if (p.capture.crossfade_frames) {
         p.body_path=path+".body.mp4"; p.head_path=path+".head.mp4";
         p.openMux(p.body_path,p.mux,p.stream);
@@ -477,7 +675,8 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.frame = av_frame_alloc(); p.packet = av_packet_alloc();
     if (!p.frame || !p.packet) throw std::bad_alloc();
 
-    p.makeBuffer(std::max<std::uint64_t>(32,std::uint64_t(p.stride) * p.output_height * 3 / 2),
+    if (p.nvenc) p.exportRing();
+    else p.makeBuffer(std::max<std::uint64_t>(32,std::uint64_t(p.stride) * p.output_height * 3 / 2),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, p.nv12, p.memory);
     if (p.capture.collect_bounds || !p.capture.retain_frames.empty() || p.capture.retain_loop_window) {
@@ -717,14 +916,19 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
     const bool blend_head=fade && index>=p.capture.encoded_frames;
     const auto head_index=blend_head ? index-p.capture.encoded_frames : cache_head ? index : 0;
     ++p.observed_frames;
-    av_frame_unref(p.frame);
-    Av(av_hwframe_get_buffer(p.frames, p.frame, 0), "get GPU encoder surface");
-    auto* vkframe = reinterpret_cast<AVVkFrame*>(p.frame->data[0]);
+    AVVkFrame* vkframe {};
     auto* frames = reinterpret_cast<AVHWFramesContext*>(p.frames->data);
     auto* vkframes = reinterpret_cast<AVVulkanFramesContext*>(frames->hwctx);
-    // FFmpeg allocates shared graphics/encode images with CONCURRENT ownership.
-    if (vkframe->img[1] || vkframe->queue_family[0] != VK_QUEUE_FAMILY_IGNORED)
-        throw std::runtime_error("GPU encoder surface requires concurrent multiplane NV12");
+    if (p.nvenc) {
+        while (p.nv_sent - p.nv_collected >= p.nv_ring) p.nvCollect();
+    } else {
+        av_frame_unref(p.frame);
+        Av(av_hwframe_get_buffer(p.frames, p.frame, 0), "get GPU encoder surface");
+        vkframe = reinterpret_cast<AVVkFrame*>(p.frame->data[0]);
+        // FFmpeg allocates shared graphics/encode images with CONCURRENT ownership.
+        if (vkframe->img[1] || vkframe->queue_family[0] != VK_QUEUE_FAMILY_IGNORED)
+            throw std::runtime_error("GPU encoder surface requires concurrent multiplane NV12");
+    }
     if (rgba != p.source_image) {
         if (p.source_view) vkDestroyImageView(p.device, p.source_view, nullptr);
         p.source_view = VK_NULL_HANDLE;
@@ -734,7 +938,7 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
         Vk(vkCreateImageView(p.device, &view_info, nullptr, &p.source_view), "view rendered RGBA image");
         p.source_image = rgba;
     }
-    vkframes->lock_frame(frames, vkframe);
+    if (vkframe) vkframes->lock_frame(frames, vkframe);
     try {
         Vk(vkResetCommandBuffer(p.command, 0), "reset GPU conversion command");
         VkCommandBufferBeginInfo begin { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -782,7 +986,8 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
         vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &source);
         VkDescriptorImageInfo image { .imageView = p.source_view, .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
-        VkDescriptorBufferInfo buffer { .buffer = p.nv12, .offset = 0, .range = VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo buffer { .buffer = p.nv12, .offset = (p.nv_sent % p.nv_ring) * p.nv_slot_bytes,
+            .range = p.nvenc ? p.nv_slot_bytes : VK_WHOLE_SIZE };
         VkDescriptorImageInfo first { .imageView=p.first_view ? p.first_view : p.source_view, .imageLayout=VK_IMAGE_LAYOUT_GENERAL };
         VkDescriptorBufferInfo stats { .buffer=p.statistics ? p.statistics : p.nv12, .offset=0, .range=32 };
         VkDescriptorBufferInfo loop { .buffer=p.loop_head ? p.loop_head : p.nv12,
@@ -854,36 +1059,39 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
             .buffer = p.nv12, .offset = 0, .size = VK_WHOLE_SIZE };
         vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
             0, 0, nullptr, 1, &ready, 0, nullptr);
-        VkImageMemoryBarrier target { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .oldLayout = vkframe->layout[0], .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = vkframe->img[0], .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 } };
-        vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0, 0, nullptr, 0, nullptr, 1, &target);
-        std::array<VkBufferImageCopy, 2> copies {{
-            { .bufferOffset = 0, .bufferRowLength = p.stride, .bufferImageHeight = p.output_height,
-              .imageSubresource = { VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1 }, .imageExtent = { p.output_width, p.output_height, 1 } },
-            { .bufferOffset = std::uint64_t(p.stride) * p.output_height, .bufferRowLength = p.stride / 2,
-              .bufferImageHeight = p.output_height / 2, .imageSubresource = { VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1 },
-              .imageExtent = { p.output_width / 2, p.output_height / 2, 1 } } }};
-        if (!cache_head)
-            vkCmdCopyBufferToImage(p.command, p.nv12, vkframe->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies.data());
+        if (vkframe) {
+            VkImageMemoryBarrier target { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = vkframe->layout[0], .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = vkframe->img[0], .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 } };
+            vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &target);
+            std::array<VkBufferImageCopy, 2> copies {{
+                { .bufferOffset = 0, .bufferRowLength = p.stride, .bufferImageHeight = p.output_height,
+                  .imageSubresource = { VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1 }, .imageExtent = { p.output_width, p.output_height, 1 } },
+                { .bufferOffset = std::uint64_t(p.stride) * p.output_height, .bufferRowLength = p.stride / 2,
+                  .bufferImageHeight = p.output_height / 2, .imageSubresource = { VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1 },
+                  .imageExtent = { p.output_width / 2, p.output_height / 2, 1 } } }};
+            if (!cache_head)
+                vkCmdCopyBufferToImage(p.command, p.nv12, vkframe->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies.data());
+        }
         source.srcAccessMask = VK_ACCESS_SHADER_READ_BIT; source.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         source.oldLayout = VK_IMAGE_LAYOUT_GENERAL; source.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &source);
         Vk(vkEndCommandBuffer(p.command), "end GPU conversion command");
         Vk(vkResetFences(p.device, 1, &p.fence), "reset GPU conversion fence");
-        std::uint64_t before = vkframe->sem_value[0], after = before + 1;
+        std::uint64_t before = vkframe ? vkframe->sem_value[0] : 0, after = before + 1;
         VkTimelineSemaphoreSubmitInfo timeline { .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
             .waitSemaphoreValueCount = 1, .pWaitSemaphoreValues = &before,
             .signalSemaphoreValueCount = 1, .pSignalSemaphoreValues = &after };
         VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
         VkSubmitInfo submit { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .pNext = &timeline,
-            .waitSemaphoreCount = 1, .pWaitSemaphores = &vkframe->sem[0], .pWaitDstStageMask = &wait_stage,
-            .commandBufferCount = 1, .pCommandBuffers = &p.command,
-            .signalSemaphoreCount = 1, .pSignalSemaphores = &vkframe->sem[0] };
+            .waitSemaphoreCount = vkframe ? 1u : 0u, .pWaitSemaphores = vkframe ? &vkframe->sem[0] : nullptr,
+            .pWaitDstStageMask = &wait_stage, .commandBufferCount = 1, .pCommandBuffers = &p.command,
+            .signalSemaphoreCount = vkframe ? 1u : 0u, .pSignalSemaphores = vkframe ? &vkframe->sem[0] : nullptr };
+        if (!vkframe) submit.pNext = nullptr;
         auto* hw = reinterpret_cast<AVHWDeviceContext*>(p.hardware->data);
         auto* vk = reinterpret_cast<AVVulkanDeviceContext*>(hw->hwctx);
         vk->lock_queue(hw, p.family, 0);
@@ -891,17 +1099,23 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
         vk->unlock_queue(hw, p.family, 0);
         Vk(submitted, "submit GPU conversion");
         p.conversion_pending = true;
-        vkframe->sem_value[0] = after;
-        vkframe->layout[0] = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        vkframe->access[0] = VK_ACCESS_TRANSFER_WRITE_BIT;
+        if (vkframe) {
+            vkframe->sem_value[0] = after;
+            vkframe->layout[0] = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            vkframe->access[0] = VK_ACCESS_TRANSFER_WRITE_BIT;
+        } else if (!cache_head) {
+            // 等本帧转换完成（下次 waitConversion）再交给 NVENC，渲染与转换仍可重叠
+            p.nv_pending = true; p.nv_pending_pts = static_cast<std::int64_t>(index-fade);
+            p.nv_pending_idr = blend_head && head_index==0;
+        }
         if (!asynchronous) p.waitConversion();
     } catch (...) {
-        vkframes->unlock_frame(frames, vkframe);
+        if (vkframe) vkframes->unlock_frame(frames, vkframe);
         vkDeviceWaitIdle(p.device);
         throw;
     }
-    vkframes->unlock_frame(frames, vkframe);
-    if (cache_head) { p.retain(rgba,index); return; }
+    if (vkframe) vkframes->unlock_frame(frames, vkframe);
+    if (cache_head || p.nvenc) { p.retain(rgba,index); return; }
     p.frame->pts = static_cast<std::int64_t>(index-fade);
     if (blend_head && head_index==0) p.frame->pict_type=AV_PICTURE_TYPE_I;
     p.frame->duration = 1;
@@ -915,8 +1129,13 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
 void GpuVideoEncoder::finish() {
     auto& p = *impl;
     if (p.finished) return;
-    Av(avcodec_send_frame(p.codec, nullptr), "flush Vulkan encoder");
-    p.packets();
+    if (p.nvenc) {
+        p.waitConversion();
+        while (p.nv_collected < p.nv_sent) p.nvCollect();
+    } else {
+        Av(avcodec_send_frame(p.codec, nullptr), "flush Vulkan encoder");
+        p.packets();
+    }
     if (p.encoded_packets != p.capture.encoded_frames) throw std::runtime_error("Incomplete GPU encoded frame sequence");
     Av(av_write_trailer(p.mux), "finish GPU video");
     Av(avio_closep(&p.mux->pb), "close GPU video");
@@ -957,7 +1176,8 @@ std::string GpuVideoEncoder::captureMetadata() const {
     std::ostringstream out;
     out << "{\"readback_frames\":" << p.readbacks
         << ",\"encoded_packets\":" << p.encoded_packets
-        << ",\"quality_level\":" << p.quality_level << ",\"async_depth\":" << p.async_depth;
+        << ",\"quality_level\":" << p.quality_level << ",\"async_depth\":" << p.async_depth
+        << ",\"encoder\":\"" << (p.nvenc ? "nvenc_sdk" : "vulkan_video") << '"';
     if (p.capture.retain_loop_window)
         out << ",\"loop_window\":{\"path\":\"loop-window.rgba\",\"format\":\"rgba\",\"width\":" << p.width
             << ",\"height\":" << p.height << ",\"crossfade_frames\":" << p.capture.crossfade_frames

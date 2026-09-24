@@ -670,6 +670,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
             ? VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME : VK_KHR_VIDEO_ENCODE_H264_EXTENSION_NAME });
         device_exts.push_back({ true, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME });
         device_exts.push_back({ true, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME });
+        device_exts.push_back({ false, "VK_KHR_external_memory_win32" }); // NVIDIA 上把 NV12 交给 NVENC SDK
     }
     std::vector<InstanceLayer> inst_layers;
     // valid layer
