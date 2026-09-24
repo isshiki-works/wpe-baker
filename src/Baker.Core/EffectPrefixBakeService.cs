@@ -175,7 +175,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 HardwareDecodeDimensions.Plan decodePlan = HardwareDecodeDimensions.Evaluate(encodeWidth, encodeHeight, packedAlpha,
                     settings.FpsNumerator, settings.FpsDenominator);
                 uint storedWidth = decodePlan.StoredWidth, storedHeight = decodePlan.StoredHeight;
-                EncodedContentRegion? paddedContent = decodePlan.Padded
+                // 上下并排也走补边描述：解码端要从 PaddedWidth 得知每半幅宽，才能认出打包方向。
+                EncodedContentRegion? paddedContent = decodePlan.Padded || decodePlan.Vertical
                     ? new((int)decodePlan.PaddedWidth, (int)decodePlan.PaddedHeight, (int)decodePlan.OffsetX, (int)decodePlan.OffsetY,
                         (int)encodeWidth, (int)encodeHeight)
                     : null;

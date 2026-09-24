@@ -214,9 +214,11 @@ public sealed partial class NativeRenderRunner
         if (File.Exists(output) || Directory.Exists(output)) throw new IOException("Crop output must be a new directory.");
         Directory.CreateDirectory(output);
         string partial = Path.Combine(output, "cache.partial.mp4");
+        // 左右并排越过 HEVC 宽度上限时上下并排（HardwareDecodeDimensions.StackedVertically）；master 仍是左右并排。
+        bool below = HardwareDecodeDimensions.StackedVertically(preserveAlpha, region.Width);
         string filter = $"[0:v]split=2[color][mask];[color]crop={region.Width}:{region.Height}:{region.X}:{region.Y}[rgb];" +
             $"[mask]crop={region.Width}:{region.Height}:{region.CaptureWidth + region.X}:{region.Y}[alpha];" +
-            $"[rgb][alpha]hstack=inputs=2,{PlaybackEncodeProfile.Bt709Filter}[packed]";
+            $"[rgb][alpha]{(below ? "vstack" : "hstack")}=inputs=2,{PlaybackEncodeProfile.Bt709Filter}[packed]";
         if (!preserveAlpha)
         {
             if (master["alpha_bounds"]?["minimum_alpha"]?.GetValue<int>() != 255)
@@ -224,7 +226,7 @@ public sealed partial class NativeRenderRunner
             filter = $"[0:v]crop={region.Width}:{region.Height}:{region.X}:{region.Y}," +
                 $"{PlaybackEncodeProfile.Bt709Filter}[packed]";
         }
-        int encodedWidth = region.Width * (preserveAlpha ? 2 : 1);
+        int encodedWidth = region.Width * (preserveAlpha && !below ? 2 : 1), encodedHeight = region.Height * (below ? 2 : 1);
         // 只有请求了硬件档位才去问一次 ffmpeg 支持哪些编码器；软件档位保持原来的零额外进程。
         string encoderKind = PlaybackEncoderSelection.Software;
         string? encoderFallbackReason = null;
@@ -233,7 +235,7 @@ public sealed partial class NativeRenderRunner
         else if (requestedEncoder != PlaybackEncoderSelection.Software)
             (encoderKind, encoderFallbackReason) = PlaybackEncoderSelection.Resolve(requestedEncoder,
                 await UsableEncodersAsync(requestedEncoder, output, cancellationToken));
-        var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)region.Height, numerator, denominator,
+        var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
             losslessTest: false, encoderKind);
         // mf 档位要区分「真的落到厂商硬件 MFT」与「只有微软自带的软件 MFT」：能编不等于硬件在编。
         JsonObject? mediaFoundation = null;
@@ -300,7 +302,7 @@ public sealed partial class NativeRenderRunner
                 report["frame_count_validation"] = new JsonObject {
                     ["source"] = verified.CountSource, ["full_decode_performed"] = verified.CountSource == "full_decode",
                     ["fallback_reason"] = verified.FallbackReason };
-                if (!verified.Has(encodedWidth, region.Height, frames) || !verified.RateIs(numerator, denominator))
+                if (!verified.Has(encodedWidth, encodedHeight, frames) || !verified.RateIs(numerator, denominator))
                     throw new InvalidDataException("Cropped video violates dimensions, frame count or rational FPS.");
                 ConfirmEncodedDuration(verified, frames, numerator, denominator);
                 // 软件档位本身就是画质判据的参照，不自己跟自己比，也保持原来的零额外进程。
@@ -328,7 +330,7 @@ public sealed partial class NativeRenderRunner
                     qualityGate = QualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
                         profile.QualityStep, QualityGate.ActionFellBack, encoderFallbackReason);
                     encoderKind = PlaybackEncoderSelection.Software;
-                    profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)region.Height, numerator, denominator,
+                    profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
                         losslessTest: false, PlaybackEncoderSelection.Software);
                     report["encoder_used"] = encoderKind;
                     report["encoder_fallback_reason"] = encoderFallbackReason;

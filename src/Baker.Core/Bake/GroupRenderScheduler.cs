@@ -170,7 +170,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 : (StartSearches.TryGetValue(groupId, out JsonObject? groupSearch)
                     ? NativeRenderRunner.SamplingCrop(groupSearch["sampling_coverage"] as JsonObject, render) : null)
                     ?? NativeRenderRunner.SamplingCrop(coverage, render);
-            if (known is { } layout)
+            // 渲染器内的 GPU 打包只有左右并排；越宽度上限要上下并排的透明组走 master 路线。
+            if (known is { } layout && !HardwareDecodeDimensions.StackedVertically(layout.Packed, layout.Crop.Width))
             {
                 string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
                     (uint)layout.Crop.Width * (layout.Packed ? 2u : 1u), (uint)layout.Crop.Height,
