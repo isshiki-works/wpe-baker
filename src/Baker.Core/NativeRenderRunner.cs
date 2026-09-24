@@ -146,7 +146,11 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         uint encodedHeight = request.GpuEncoding is not null
             ? request.EncodeHeight ?? (uint)(request.GpuEncoding.Crop?.Height ?? (int)request.Height)
             : request.EncodePadding?.Height ?? encodeHeight;
-        uint encodedWidth = checked(canvasWidth * (request.PixelPacking == "rgba_side_by_side" ? 2u : 1u));
+        // 播放版的软件打包越 HEVC 宽度上限时上下并排（master 与 GPU 直编仍左右并排）。
+        bool below = request.GpuEncoding is null && !request.LosslessTest &&
+            HardwareDecodeDimensions.StackedVertically(request.PixelPacking == "rgba_side_by_side", canvasWidth);
+        uint encodedWidth = checked(canvasWidth * (request.PixelPacking == "rgba_side_by_side" && !below ? 2u : 1u));
+        if (below) encodedHeight = checked(encodedHeight * 2);
         if (request.Width == 0 || request.Height == 0 ||
             (!request.FrameSamplesOnly && !request.LosslessTest && (encodedWidth % 2 != 0 || encodedHeight % 2 != 0)))
             throw new ArgumentException("4:2:0 encoding requires positive even encoded dimensions.");
@@ -399,7 +403,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                     "-video_size", $"{request.Width}x{request.Height}", "-framerate", fps, "-i", "pipe:0", "-an" };
                 // 补边放在缩放之后、拆 RGB/alpha 之前：两半幅用同一张透明黑画布，alphaextract 得到的补边 alpha 为 0。
                 if (request.PixelPacking == "rgba_side_by_side")
-                    encoderArguments.AddRange(["-filter_complex", $"[0:v]{(encodeSizeRequested ? $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba," : "")}{padFilter}split=2[color][mask];[color]format=rgb24[rgb];[mask]alphaextract,format=rgb24[alpha];[rgb][alpha]hstack=inputs=2,{colorFilter}[packed]", "-map", "[packed]"]);
+                    encoderArguments.AddRange(["-filter_complex", $"[0:v]{(encodeSizeRequested ? $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba," : "")}{padFilter}split=2[color][mask];[color]format=rgb24[rgb];[mask]alphaextract,format=rgb24[alpha];[rgb][alpha]{(below ? "vstack" : "hstack")}=inputs=2,{colorFilter}[packed]", "-map", "[packed]"]);
                 else encoderArguments.AddRange(["-vf", encodeSizeRequested
                     ? $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,{padFilter}{colorFilter}"
                     : padFilter + colorFilter]);

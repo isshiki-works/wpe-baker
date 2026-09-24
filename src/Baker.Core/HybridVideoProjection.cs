@@ -162,8 +162,43 @@ internal static class HybridVideoProjection
             report["visible_height"] = runtime["active_camera_height"]?.DeepClone();
             report["status"] = runtime["active_camera_is_perspective"]?.GetValue<bool>() == true ? "perspective" : "orthographic";
             report["runtime_evidence"] = runtime.DeepClone();
+            // 相机带单次播放的入场动画时，分析时刻的观测停在入场途中：取景改按入场结束后的静止态（之后仍循环的通道取全程范围的并集）。
+            if (CameraIntro(scene, properties) is var (seconds, settled, minX, maxX, minY, maxY))
+            {
+                double still = Math.Max(width / (canvas.X / settled), height / (canvas.Y / settled));
+                double w = width / still + maxX - minX, h = height / still + maxY - minY, fit = Math.Min(width / w, height / h);
+                report["center_x"] = canvas.X / 2 + (minX + maxX) / 2; report["center_y"] = canvas.Y / 2 + (minY + maxY) / 2;
+                report["visible_width"] = width / fit; report["visible_height"] = height / fit;
+                report["camera_intro"] = new JsonObject { ["seconds"] = seconds,
+                    ["tradeoff"] = "取景与合成门按相机入场动画结束后的静止态；入场那几秒成品是放大的视频，会发糊。" };
+            }
         }
         return report;
+    }
+
+    /// <summary>
+    /// 场景相机（general.zoom、相机对象的 origin/zoom）带单次播放动画时：入场秒数、之后的最小缩放和相机偏移范围。
+    /// 单次动画取末关键帧，循环动画取全部关键帧，没动画取当前值。没有单次动画返回 null（取景照旧用运行时观测）。
+    /// </summary>
+    static (double Seconds, double Zoom, double MinX, double MaxX, double MinY, double MaxY)? CameraIntro(JsonObject scene, JsonObject properties)
+    {
+        double seconds = 0;
+        double[][] Values(JsonNode? node, double[] still)
+        {
+            if (SceneGraph.Resolve(node, properties) is not JsonObject { } holder || holder["animation"] is not JsonObject animation)
+                return still.Select(v => new[] { v }).ToArray();
+            bool single = animation["options"]?["mode"]?.GetValue<string>() == "single";
+            if (single) seconds = Math.Max(seconds, SceneGraph.Numeric(animation["options"]?["length"], 0) / SceneGraph.Numeric(animation["options"]?["fps"], 30));
+            return still.Select((v, i) => animation[$"c{i}"] is JsonArray { Count: > 0 } keys
+                ? (single ? keys.TakeLast(1) : keys).Select(key => key!["value"]!.GetValue<double>()).ToArray() : [v]).ToArray();
+        }
+        double Scalar(JsonNode? node) => SceneGraph.Numeric(SceneGraph.Resolve(node, properties), 1);
+        double zoom = Values(scene["general"]?["zoom"], [Scalar(scene["general"]?["zoom"])])[0].Min();
+        var camera = (scene["objects"] as JsonArray ?? []).OfType<JsonObject>().FirstOrDefault(obj => obj.ContainsKey("camera"));
+        zoom *= Values(camera?["zoom"], [Scalar(camera?["zoom"])])[0].Min();
+        var still = Vector(SceneGraph.Resolve(camera?["origin"], properties), (0, 0));
+        var origin = Values(camera?["origin"], [still.X, still.Y]);
+        return seconds > 0 && zoom > 0 ? (seconds, zoom, origin[0].Min(), origin[0].Max(), origin[1].Min(), origin[1].Max()) : null;
     }
 
     internal static (double X, double Y) Vector(JsonNode? node, (double X, double Y) fallback)

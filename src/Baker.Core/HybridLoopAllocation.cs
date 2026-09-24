@@ -128,6 +128,31 @@ internal static class HybridLoopAllocation
         };
     }
 
+    /// <summary>
+    /// 触发留实时的原因码，供重查写进层的 reasons：<paramref name="owners"/> 各层在 plan 循环分析里的未解析项
+    /// （每条取 particle_nonperiodic_reason / mechanism / key / kind 中第一个有的），被"凑不出公共循环"点名的记 no_candidate_reason.kind，
+    /// 再并上 plan 设置里已带的（上一轮留实时的原因）。都没有时 null。
+    /// </summary>
+    internal static Dictionary<int, string[]>? RetainReasons(JsonObject plan, IEnumerable<int> owners)
+    {
+        var wanted = owners.ToHashSet();
+        var reasons = plan["settings"]?["retain_live_reasons"]?.Deserialize<Dictionary<int, string[]>>()
+            ?.ToDictionary(pair => pair.Key, pair => pair.Value.ToList()) ?? [];
+        void Add(int id, JsonNode? code)
+        {
+            if (!wanted.Contains(id) || code is not JsonValue value || !value.TryGetValue(out string? text)) return;
+            var list = reasons.TryGetValue(id, out var found) ? found : reasons[id] = [];
+            if (!list.Contains(text)) list.Add(text);
+        }
+        foreach (var report in SceneAnalyzer.Walk(plan["loop"]).OfType<JsonObject>())
+            foreach (var item in (report["unresolved"] as JsonArray ?? []).OfType<JsonObject>())
+                if (SceneGraph.Int(item["owner_layer_id"] ?? item["source_owner_layer_id"]) is int owner)
+                    Add(owner, item["particle_nonperiodic_reason"] ?? item["mechanism"] ?? item["key"] ?? item["kind"]);
+        foreach (int owner in ReadIds(plan["loop"]?["no_candidate_reason"]?["retain_live_owner_layer_ids"]))
+            Add(owner, plan["loop"]!["no_candidate_reason"]!["kind"]);
+        return reasons.Count == 0 ? null : reasons.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray());
+    }
+
     private static IEnumerable<int> ReadIds(JsonNode? node) => (node?.AsArray() ?? []).Select(value =>
         SceneGraph.Int(value) ?? throw new InvalidDataException("A loop allocation layer id is invalid."));
 }

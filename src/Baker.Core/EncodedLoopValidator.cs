@@ -198,6 +198,15 @@ public static class EncodedLoopValidator
         int width = RequiredInt(stream, "width"), height = RequiredInt(stream, "height");
         (uint actualNum, uint actualDen, string actualFps) = ReadFps(stream);
         if (packedAlpha && width % 2 != 0) throw new InvalidDataException("Packed alpha requires an even encoded width.");
+        // 上下并排的成品（HardwareDecodeDimensions.StackedVertically）解码时拼回左右并排，后面的测量布局不变。
+        int halfWidth = content?.PaddedWidth ?? referenceWidth / 2;
+        string? unstack = null;
+        if (HardwareDecodeDimensions.StackedVertically(packedAlpha, halfWidth))
+        {
+            if (width != halfWidth || height % 2 != 0) throw new InvalidDataException("Encoded video dimensions differ from the declared padded canvas.");
+            (width, height) = (width * 2, height / 2);
+            unstack = $"split=2[c][a];[c]crop={halfWidth}:{height}:0:0[rgb];[a]crop={halfWidth}:{height}:0:{height}[alpha];[rgb][alpha]hstack=inputs=2";
+        }
         (ulong decoded, string frameCountSource, string? frameCountFallbackReason) =
             (probed.Frames, probed.CountSource, probed.FallbackReason);
         bool framesMatch = decoded == loopFrames;
@@ -216,9 +225,9 @@ public static class EncodedLoopValidator
         {
             byte[] Measure(byte[] frame) => content is null ? frame : content.Extract(frame, halves);
             List<byte[]> head = await FrameAccess.DecodeExactFramesAsync(videoFile, new FfmpegTool(tools), 0, 2, width, height,
-                actualNum, actualDen, null, cancellationToken);
+                actualNum, actualDen, unstack, cancellationToken);
             List<byte[]> tail = await FrameAccess.DecodeExactFramesAsync(videoFile, new FfmpegTool(tools), last - 2, 2, width, height,
-                actualNum, actualDen, null, cancellationToken);
+                actualNum, actualDen, unstack, cancellationToken);
             byte[] enc0 = Measure(head[0]), enc1 = Measure(head[1]), encBefore = Measure(tail[0]), encLast = Measure(tail[1]);
             if (new[] { reference.First, reference.Last, reference.Wrap }.Any(frame => frame.Length != enc0.Length))
                 throw new InvalidDataException("接缝参照帧与成品的测量布局不一致。");
@@ -311,7 +320,7 @@ public static class EncodedLoopValidator
         {
             JsonNode? rgb = closure["rgb"]?["tile_64"];
             parts.Add(MessageCatalog.Get("bake.loop_not_closed", language, closure["loop_frames"]?.ToJsonString() ?? "?",
-                LoopClosureCheck.TileSize, rgb?["worst_x"]?.ToJsonString() ?? "?", rgb?["worst_y"]?.ToJsonString() ?? "?",
+                closure["tile_size"]?.ToJsonString() ?? "?", rgb?["worst_x"]?.ToJsonString() ?? "?", rgb?["worst_y"]?.ToJsonString() ?? "?",
                 Number(rgb?["worst"]),
                 closure["alpha"] is JsonObject alpha ? MessageCatalog.Get("bake.loop_not_closed_alpha", language, Number(alpha["tile_64"]?["worst"])) : "",
                 LoopClosureCheck.MaximumTileMae255.ToString("0.0", CultureInfo.InvariantCulture)));

@@ -17,7 +17,7 @@ public sealed partial class NativeRenderRunner
     /// 周期本身不因此改变，这里只决定相位。样本目录在算完之后立即删除。
     /// </summary>
     public async Task<JsonObject> SearchLoopStartAsync(RenderRequest sampleRequest, ulong periodFrames,
-        uint crossfadeFrames, IProgress<RenderProgress>? progress = null, CancellationToken cancellationToken = default,
+        uint crossfadeFrames, double tileScale, IProgress<RenderProgress>? progress = null, CancellationToken cancellationToken = default,
         ICollection<ResidualStartCandidate>? scoredCandidates = null)
     {
         if (!sampleRequest.FrameSamplesOnly || sampleRequest.FrameSampleStride == 0)
@@ -64,7 +64,7 @@ public sealed partial class NativeRenderRunner
             // packed 样本的瓦片边长按单半幅（logical_width）相对画布宽度换算。
             int logicalWidth = packed ? samples["logical_width"]!.GetValue<int>() : width;
             if (packed && logicalWidth * 2 != width) throw new InvalidDataException("带覆盖度的帧样本宽度不是逻辑宽度的两倍。");
-            tileSize = Math.Max(4, (int)Math.Round((double)ResidualMasking.SeamTileSize * logicalWidth /
+            tileSize = Math.Max(4, (int)Math.Round(ResidualMasking.SeamTileSize * tileScale * logicalWidth /
                 Math.Max(1, sampleRequest.Width)));
             // 样本文件是 2 个周期 ÷ 步长 × 采样帧大小，高窄画布上能到几个 GB，所以按需读两帧，不整份载入。
             await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, true);
@@ -190,8 +190,9 @@ public sealed partial class NativeRenderRunner
     /// 所以这里不统计普通步进。淡化成品的实现核对（权重核对 + 尾段 MD5）在 <see cref="MasterRewrite.CrossfadeAsync"/> 里做。
     /// </summary>
     public async Task<JsonObject> MeasureSeamResidualAsync(string masterDirectory, ulong loopFrames,
-        uint crossfadeFrames, CancellationToken cancellationToken = default)
+        uint crossfadeFrames, CancellationToken cancellationToken = default, double tileScale = 1)
     {
+        int tile = (int)Math.Round(ResidualMasking.SeamTileSize * tileScale);
         string master = Path.GetFullPath(masterDirectory);
         JsonObject manifest = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(master, "manifest.json"), cancellationToken))?.AsObject()
             ?? throw new InvalidDataException("master 清单无效。");
@@ -259,9 +260,9 @@ public sealed partial class NativeRenderRunner
                     right = LoopClosureCheck.EncodedLayout(rgba,halfWidth,height,0,0,halfWidth,height,packed);
                 }
                 PackedWrapResidual? halves = packed
-                    ? LoopSeamMetrics.PackedResidual(left, right, halfWidth, height, ResidualMasking.SeamTileSize) : null;
+                    ? LoopSeamMetrics.PackedResidual(left, right, halfWidth, height, tile) : null;
                 LoopWrapResidual residual = halves is not null ? halves.Combined(halfWidth)
-                    : LoopSeamMetrics.WrapResidual(left, right, width, height, ResidualMasking.SeamTileSize);
+                    : LoopSeamMetrics.WrapResidual(left, right, width, height, tile);
                 residuals.Add(residual);
                 // 重影：g[k] 离最近一条原作时间线的距离是 min(w_k, 1−w_k)·|Δ_k|，w_k 是标量，瓦片 MAE 直接按比例缩。
                 double weight = (double)(crossfadeFrames - (uint)k) / (crossfadeFrames + 1);
@@ -300,7 +301,7 @@ public sealed partial class NativeRenderRunner
                 ["width"] = halfWidth,
                 ["height"] = height,
                 ["pixel_packing"] = packing,
-                ["tile_size"] = ResidualMasking.SeamTileSize,
+                ["tile_size"] = tile,
                 ["packed_measurement"] = !packed ? null : new JsonObject
                 {
                     ["maximum_color_mask_fraction"] = Math.Round(maskFraction, 6),

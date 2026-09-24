@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 using Baker.Core;
 
 /// <summary>
-/// 默认输出分辨率：画布取值与属性求值、按本机屏幕铺满缩放（缩放、封顶、宽高比不同时取大者）、透视退回、显式优先、
+/// 默认输出分辨率：画布取值与属性求值、按本机屏幕分辨率取值（允许放大）、读不到屏幕时退回画布、显式优先、
 /// 大尺寸的 H.264→HEVC 选择，以及 plan 与一行结论里的记录。
 /// </summary>
 internal static class OutputResolutionChecks
@@ -24,7 +24,7 @@ internal static class OutputResolutionChecks
 
         // ---- 画布取值（读不到屏幕时按画布原尺寸，便于单看取值） ----
         var canvas = OutputResolution.Choose(Scene(Ortho(3840, 2160)), none, 0, 0, null, NoDisplay);
-        check(canvas is { Width: 3840, Height: 2160, Source: OutputResolution.SceneCanvas, CanvasWidth: 3840, CanvasHeight: 2160, FitScale: null } &&
+        check(canvas is { Width: 3840, Height: 2160, Source: OutputResolution.SceneCanvas, CanvasWidth: 3840, CanvasHeight: 2160 } &&
             canvas.CanvasBasis == "orthogonalprojection" && canvas.DisplayWidth is null &&
             canvas.ToJson()["scene_canvas"]!.ToJsonString() == "[3840,2160]" && canvas.ToJson()["display"] is null,
             "without a readable display the unspecified size is the scene's orthogonalprojection canvas (3840x2160)");
@@ -50,33 +50,20 @@ internal static class OutputResolutionChecks
         check(boundProjection["canvas_width"]!.GetValue<double>() == 2560 && boundProjection["canvas_height"]!.GetValue<double>() == 1440,
             "the projection description reads the same evaluated canvas as the resolution choice");
 
-        // ---- 按屏幕铺满：缩放、封顶、宽高比不同时取大者 ----
-        var fit = OutputResolution.Choose(Scene(Ortho(3840, 2160)), none, 0, 0, null, Screen(2880, 1800));
-        check(fit is { Width: 3200, Height: 1800, Source: OutputResolution.SceneCanvasFitDisplay, DisplayWidth: 2880, DisplayHeight: 1800 } &&
-            Math.Abs(fit.FitScale!.Value - 1800d / 2160) < 1e-12 && !fit.CappedAtCanvas,
-            "a 3840x2160 canvas on a 2880x1800 screen scales by max(0.75, 0.8333) to 3200x1800, covering the screen in both directions");
+        // ---- 按屏幕分辨率：允许放大；宽高比不同也取屏幕，画布由渲染器按 WPE 的铺满居中映射 ----
+        var upscaled = OutputResolution.Choose(Scene(Ortho(1920, 1080)), none, 0, 0, null, Screen(3840, 2160));
+        check(upscaled is { Width: 3840, Height: 2160, Source: OutputResolution.Display, CanvasWidth: 1920, CanvasHeight: 1080,
+            DisplayWidth: 3840, DisplayHeight: 2160 },
+            "a 1920x1080 canvas on a 3840x2160 display is baked at 3840x2160, upscaled like WPE rendering at screen resolution");
         var eightK = OutputResolution.Choose(Scene(Ortho(7680, 4320)), none, 0, 0, null, Screen(3840, 2160));
-        check(eightK is { Width: 3840, Height: 2160, Source: OutputResolution.SceneCanvasFitDisplay, FitScale: 0.5 },
+        check(eightK is { Width: 3840, Height: 2160, Source: OutputResolution.Display },
             "the 3669681034 8K canvas (7680x4320) on a 3840x2160 screen is baked at 3840x2160, not 8K");
-        var leoFit = OutputResolution.Choose(Scene(Ortho(4096, 2892)), none, 0, 0, null, Screen(3840, 2160));
-        check(leoFit is { Width: 3840, Height: 2710, FitScale: 0.9375 } && leoFit.Width >= 3840 && leoFit.Height >= 2160,
-            "a canvas wider in aspect than the screen (4096x2892 on 3840x2160) takes the larger ratio 0.9375 so both sides still cover the screen");
-        var tallFit = OutputResolution.Choose(Scene(Ortho(3840, 2160)), none, 0, 0, null, Screen(2560, 1600));
-        check(tallFit is { Width: 2844, Height: 1600 } && Math.Abs(tallFit.FitScale!.Value - 1600d / 2160) < 1e-12 && tallFit.Width >= 2560,
-            "a 16:9 canvas on a 16:10 screen takes the height ratio, the larger one, and crops nothing the screen shows");
-        var capped = OutputResolution.Choose(Scene(Ortho(1920, 1080)), none, 0, 0, null, Screen(3840, 2160));
-        check(capped is { Width: 1920, Height: 1080, Source: OutputResolution.SceneCanvasFitDisplay, FitScale: 1 } && capped.CappedAtCanvas &&
-            capped.ToJson()["capped_at_canvas"]!.GetValue<bool>(),
-            "a canvas smaller than the screen is capped at s=1 and never upscaled");
-        var exact = OutputResolution.Choose(Scene(Ortho(3840, 2160)), none, 0, 0, null, Screen(3840, 2160));
-        check(exact is { Width: 3840, Height: 2160, FitScale: 1 } && !exact.CappedAtCanvas,
-            "a canvas equal to the screen keeps its size and is not reported as capped");
 
         // ---- 透视与缺失画布退回 ----
         int displayQueries = 0;
         var perspective = OutputResolution.Choose(Scene(null), none, 0, 0, null, () => { ++displayQueries; return (3072u, 1920u); });
         check(perspective is { Width: 3072, Height: 1920, Source: OutputResolution.Display, CanvasWidth: null, CanvasHeight: null,
-            DisplayWidth: 3072, DisplayHeight: 1920, FitScale: null } && perspective.CanvasBasis == "perspective_no_orthogonalprojection" && displayQueries == 1,
+            DisplayWidth: 3072, DisplayHeight: 1920 } && perspective.CanvasBasis == "perspective_no_orthogonalprojection" && displayQueries == 1,
             "a perspective scene (no orthogonalprojection) uses the primary display's physical resolution directly");
         var noDisplay = OutputResolution.Choose(Scene(null), none, 0, 0, null, NoDisplay);
         check(noDisplay is { Width: OutputResolution.FallbackWidth, Height: OutputResolution.FallbackHeight, Source: OutputResolution.Fallback } &&
@@ -126,13 +113,13 @@ internal static class OutputResolutionChecks
             "the same output at 120 fps exceeds the H.264 macroblock rate and switches to HEVC");
         check(Encode(eightK.Width, eightK.Height, true, 60) is { Status: HardwareDecodeDimensions.PassStatus, SoftwareEncoder: "libx265", StoredWidth: 7680, StoredHeight: 2160 },
             "the fitted 3669681034 output (3840x2160) with alpha packed side by side is 7680 wide, beyond H.264, and passes as HEVC");
-        check(Encode(leoFit.Width, leoFit.Height, false, 60) is { Status: HardwareDecodeDimensions.PassStatus, SoftwareEncoder: "libx265" } &&
-            Encode(leoFit.Width, leoFit.Height, true, 60) is { Status: HardwareDecodeDimensions.PassStatus, SoftwareEncoder: "libx265", StoredWidth: 7680 },
+        check(Encode(3840, 2710, false, 60) is { Status: HardwareDecodeDimensions.PassStatus, SoftwareEncoder: "libx265" } &&
+            Encode(3840, 2710, true, 60) is { Status: HardwareDecodeDimensions.PassStatus, SoftwareEncoder: "libx265", StoredWidth: 7680 },
             "the fitted 3685247684 output (3840x2710) exceeds the H.264 frame-size limit and uses HEVC, opaque and packed");
         var fullEightK = Encode(auto.Width, auto.Height, true, 60);
         check(Encode(auto.Width, auto.Height, false, 60) is { Status: HardwareDecodeDimensions.PassStatus, SoftwareEncoder: "libx265" } &&
-            fullEightK.Rejected && fullEightK.Violations.Any(v => v is { Measure: "width", Actual: 15360, Limit: 8192 }),
-            "an unscaled 7680x4320 output passes opaque as HEVC, and packed alpha (15360 wide) is rejected by the existing HEVC width rule");
+            fullEightK.Rejected && fullEightK.Vertical && fullEightK.Violations.Any(v => v is { Measure: "height", Actual: 8640, Limit: 8192 }),
+            "an unscaled 7680x4320 output passes opaque as HEVC; packed alpha stacks top and bottom (7680x8640) and is still rejected on height");
 
         // ---- plan 与一行结论 ----
         string source = Path.Combine(root, "canvas-resolution-source");
@@ -156,11 +143,11 @@ internal static class OutputResolutionChecks
             await new HybridScenePlanner(new("not-started", "not-started", "not-started", []), Screen(96, 16)).AnalyzeSingleAsync(
                 new(2, source, root, Path.Combine(root, name), width, height, RuntimeTraceFile: trace));
         JsonObject planned = await AnalyzeAsync("canvas-resolution-default", 0, 0);
-        check(planned["settings"]!["width"]!.GetValue<uint>() == 96 && planned["settings"]!["height"]!.GetValue<uint>() == 24 &&
-            planned["settings"]!["resolution_source"]!.GetValue<string>() == OutputResolution.SceneCanvasFitDisplay &&
-            planned["output_resolution"]!["source"]!.GetValue<string>() == OutputResolution.SceneCanvasFitDisplay &&
+        check(planned["settings"]!["width"]!.GetValue<uint>() == 96 && planned["settings"]!["height"]!.GetValue<uint>() == 16 &&
+            planned["settings"]!["resolution_source"]!.GetValue<string>() == OutputResolution.Display &&
+            planned["output_resolution"]!["source"]!.GetValue<string>() == OutputResolution.Display &&
             planned["output_resolution"]!["display"]!.ToJsonString() == "[96,16]" && planned["canvas_width"]!.GetValue<double>() == 128,
-            "analyze without a size fits the property-evaluated canvas (128x32) to the injected 96x16 screen as 96x24 (s = max(0.75, 0.5)) and records it in plan.settings");
+            "analyze without a size takes the injected 96x16 screen (canvas 128x32 still recorded) and records it in plan.settings");
         JsonObject requested = await AnalyzeAsync("canvas-resolution-explicit", 64, 32);
         check(requested["settings"]!["width"]!.GetValue<uint>() == 64 &&
             requested["settings"]!["resolution_source"]!.GetValue<string>() == OutputResolution.Explicit,

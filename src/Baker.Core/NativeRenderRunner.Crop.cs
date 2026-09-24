@@ -54,12 +54,16 @@ public sealed partial class NativeRenderRunner
         string kind = PlaybackEncoderSelection.Normalize(requested);
         if (kind == PlaybackEncoderSelection.Software) return (PlaybackEncoderSelection.Software, null);
         Directory.CreateDirectory(logDirectory);
-        if (kind == PlaybackEncoderSelection.Vulkan)
+        if (kind is PlaybackEncoderSelection.Vulkan or PlaybackEncoderSelection.Auto)
         {
+            // auto 先取 GPU 路线：渲染器内裁切、打包、淡化、编码，C# 不碰逐帧数据；设备没有视频编码队列时由渲染器报
+            // GpuEncodeUnavailableException，按组回退 CPU 路线。
             RendererCapabilities capabilities = await client.CapabilitiesAsync(
                 Path.Combine(logDirectory, "gpu-renderer-capabilities.stderr.log"), cancellationToken);
-            return capabilities.Has("gpu-loop-encode-v1") && capabilities.Has("gpu-sampling-coverage-v1")
-                ? (kind,null) : (PlaybackEncoderSelection.Software,"Renderer does not support the complete GPU pipeline.");
+            if (capabilities.Has("gpu-loop-encode-v1") && capabilities.Has("gpu-sampling-coverage-v1"))
+                return (PlaybackEncoderSelection.Vulkan, null);
+            if (kind == PlaybackEncoderSelection.Vulkan)
+                return (PlaybackEncoderSelection.Software, "Renderer does not support the complete GPU pipeline.");
         }
         return PlaybackEncoderSelection.Resolve(kind, await UsableEncodersAsync(kind, logDirectory, cancellationToken));
     }
@@ -163,7 +167,9 @@ public sealed partial class NativeRenderRunner
         // 硬件直编（GPU 管线或 nvenc 等）没有 master 可比，拿渲染器保留的原帧跑同一个画质门；直编无法升档重编，不过就拒。
         if (gpu || encoderKind != PlaybackEncoderSelection.Software)
         {
-            JsonObject quality = await GpuPlaybackQualityAsync(render, video, region, packed, output, cancellationToken);
+            // GPU 组的门已在 GroupRenderScheduler 里过了（不过会降 QP 重渲或回退 CPU 路线），这里只取结果。
+            JsonObject quality = render["playback_quality_gate"]?.DeepClone().AsObject()
+                ?? await GpuPlaybackQualityAsync(render, video, region, packed, output, cancellationToken);
             report["playback_quality_gate"] = quality;
             if (quality["passed"]?.GetValue<bool>() != true)
             {
@@ -179,6 +185,10 @@ public sealed partial class NativeRenderRunner
 
     /// <summary>成品是渲染时直接编出来的（不透明整幅组），没有写过无损 master。</summary>
     public const string DirectPlaybackCaptureMode = "direct_playback";
+
+    /// <summary>硬件档位按 <see cref="EmbeddedVideoBudget.HardwareOverBudget"/> 预判会超 2 GiB、这一组改用软件编码时记的原因。</summary>
+    internal const string HardwareBudgetFallbackReason =
+        "按参考码率 × 硬件体积倍数（h264_nvenc 1.555、hevc_nvenc 1.12）外推，硬件编码成品会超过内嵌视频 2 GiB 上限，这一组改用软件编码。";
 
     /// <summary>成品是从无损 master 裁切重编出来的。</summary>
     public const string LosslessMasterCaptureMode = "lossless_master";
@@ -214,9 +224,11 @@ public sealed partial class NativeRenderRunner
         if (File.Exists(output) || Directory.Exists(output)) throw new IOException("Crop output must be a new directory.");
         Directory.CreateDirectory(output);
         string partial = Path.Combine(output, "cache.partial.mp4");
+        // 左右并排越过 HEVC 宽度上限时上下并排（HardwareDecodeDimensions.StackedVertically）；master 仍是左右并排。
+        bool below = HardwareDecodeDimensions.StackedVertically(preserveAlpha, region.Width);
         string filter = $"[0:v]split=2[color][mask];[color]crop={region.Width}:{region.Height}:{region.X}:{region.Y}[rgb];" +
             $"[mask]crop={region.Width}:{region.Height}:{region.CaptureWidth + region.X}:{region.Y}[alpha];" +
-            $"[rgb][alpha]hstack=inputs=2,{PlaybackEncodeProfile.Bt709Filter}[packed]";
+            $"[rgb][alpha]{(below ? "vstack" : "hstack")}=inputs=2,{PlaybackEncodeProfile.Bt709Filter}[packed]";
         if (!preserveAlpha)
         {
             if (master["alpha_bounds"]?["minimum_alpha"]?.GetValue<int>() != 255)
@@ -224,7 +236,7 @@ public sealed partial class NativeRenderRunner
             filter = $"[0:v]crop={region.Width}:{region.Height}:{region.X}:{region.Y}," +
                 $"{PlaybackEncodeProfile.Bt709Filter}[packed]";
         }
-        int encodedWidth = region.Width * (preserveAlpha ? 2 : 1);
+        int encodedWidth = region.Width * (preserveAlpha && !below ? 2 : 1), encodedHeight = region.Height * (below ? 2 : 1);
         // 只有请求了硬件档位才去问一次 ffmpeg 支持哪些编码器；软件档位保持原来的零额外进程。
         string encoderKind = PlaybackEncoderSelection.Software;
         string? encoderFallbackReason = null;
@@ -233,7 +245,10 @@ public sealed partial class NativeRenderRunner
         else if (requestedEncoder != PlaybackEncoderSelection.Software)
             (encoderKind, encoderFallbackReason) = PlaybackEncoderSelection.Resolve(requestedEncoder,
                 await UsableEncodersAsync(requestedEncoder, output, cancellationToken));
-        var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)region.Height, numerator, denominator,
+        if (encoderKind != PlaybackEncoderSelection.Software &&
+            EmbeddedVideoBudget.HardwareOverBudget(frames, (uint)region.Width, (uint)region.Height, preserveAlpha, decodePlan.SoftwareEncoder == "libx265"))
+            (encoderKind, encoderFallbackReason) = (PlaybackEncoderSelection.Software, HardwareBudgetFallbackReason);
+        var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
             losslessTest: false, encoderKind);
         // mf 档位要区分「真的落到厂商硬件 MFT」与「只有微软自带的软件 MFT」：能编不等于硬件在编。
         JsonObject? mediaFoundation = null;
@@ -300,7 +315,7 @@ public sealed partial class NativeRenderRunner
                 report["frame_count_validation"] = new JsonObject {
                     ["source"] = verified.CountSource, ["full_decode_performed"] = verified.CountSource == "full_decode",
                     ["fallback_reason"] = verified.FallbackReason };
-                if (!verified.Has(encodedWidth, region.Height, frames) || !verified.RateIs(numerator, denominator))
+                if (!verified.Has(encodedWidth, encodedHeight, frames) || !verified.RateIs(numerator, denominator))
                     throw new InvalidDataException("Cropped video violates dimensions, frame count or rational FPS.");
                 ConfirmEncodedDuration(verified, frames, numerator, denominator);
                 // 软件档位本身就是画质判据的参照，不自己跟自己比，也保持原来的零额外进程。
@@ -328,7 +343,7 @@ public sealed partial class NativeRenderRunner
                     qualityGate = QualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
                         profile.QualityStep, QualityGate.ActionFellBack, encoderFallbackReason);
                     encoderKind = PlaybackEncoderSelection.Software;
-                    profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)region.Height, numerator, denominator,
+                    profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
                         losslessTest: false, PlaybackEncoderSelection.Software);
                     report["encoder_used"] = encoderKind;
                     report["encoder_fallback_reason"] = encoderFallbackReason;

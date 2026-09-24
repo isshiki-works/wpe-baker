@@ -200,7 +200,7 @@
                                         <TextBlock Grid.Row="2" Style="{StaticResource Label}" Tag="播放版编码器|Playback encoder"/>
                                         <ComboBox x:Name="EncoderBox" Grid.Row="2" Grid.Column="1" SelectionChanged="SettingsChanged"
                                             ToolTip="vulkan 可在支持的显卡上直接生成视频，减少生成等待；不可用时使用软件路径。‖Vulkan can generate video directly on supported GPUs to reduce generation time; unavailable paths use software.">
-                                            <ComboBoxItem Content="software" IsSelected="True"/><ComboBoxItem Content="auto"/><ComboBoxItem Content="vulkan"/><ComboBoxItem Content="mf"/><ComboBoxItem Content="nvenc"/><ComboBoxItem Content="qsv"/><ComboBoxItem Content="amf"/>
+                                            <ComboBoxItem Content="software"/><ComboBoxItem Content="auto" IsSelected="True"/><ComboBoxItem Content="vulkan"/><ComboBoxItem Content="mf"/><ComboBoxItem Content="nvenc"/><ComboBoxItem Content="qsv"/><ComboBoxItem Content="amf"/>
                                         </ComboBox>
                                     </Grid>
                                     <CheckBox x:Name="MatchEffectResolutionBox" Checked="SettingsChanged" Unchecked="SettingsChanged" Margin="0,0,0,8"

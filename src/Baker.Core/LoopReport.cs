@@ -32,7 +32,28 @@ internal sealed record LoopReport(uint FpsNum, uint FpsDen, string RetimeMode, C
         if (LoopLengthDefault is not null) json["loop_length_default"] = LoopLengthDefault;
         // 上限被内嵌视频 2 GiB 收紧时才写（maximum_seconds 已是收紧后的值）；没收紧时 plan 不变。
         if (EmbeddedVideoLimit is { Applied: true }) json["embedded_video_limit"] = EmbeddedVideoBudgetJson.ToJson(EmbeddedVideoLimit);
+        if (FrameRateHint() is { } hint) json["frame_rate_hint"] = hint;
         return json;
+    }
+
+    /// <summary>
+    /// 整数帧率的视频片段（如 30/60 fps）不整除输出帧率（如 144）时，片段帧格每 f/gcd(f,F) 个片段周期才与输出帧格重合，
+    /// 循环被拉长。只提示并建议不超过所选值的最大整倍数帧率（144 → 120），不改用户的选择；整除时不写。
+    /// </summary>
+    private JsonObject? FrameRateHint()
+    {
+        static ulong Gcd(ulong a, ulong b) => (ulong)System.Numerics.BigInteger.GreatestCommonDivisor(a, b);
+        ulong[] rates = ContentCadence.Clips.Select(x => x.ClipFrameRate).OfType<CommonLoopRational>()
+            .Where(x => x.Denominator == 1 && x.Numerator > 0).Select(x => (ulong)x.Numerator).Distinct().Order().ToArray();
+        if (rates.Length == 0 || FpsDen != 1) return null;
+        ulong multiple = rates.Aggregate(1UL, (lcm, rate) => lcm / Gcd(lcm, rate) * rate);
+        if (FpsNum % multiple == 0) return null;
+        return new JsonObject {
+            ["kind"] = "output_fps_not_multiple_of_video_fps", ["output_fps"] = FpsNum,
+            ["video_fps"] = new JsonArray(rates.Select(x => (JsonNode?)x).ToArray()),
+            ["alignment_video_cycles"] = rates.Max(rate => rate / Gcd(rate, FpsNum)),
+            ["suggested_fps"] = Math.Max(multiple, FpsNum / multiple * multiple),
+            ["scope"] = "Advisory only; the requested frame rate is kept." };
     }
 }
 

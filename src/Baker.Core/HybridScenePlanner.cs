@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Baker.Core;
 
-/// <remarks>Width/Height 同为 0 表示未指定：分析时按 <see cref="OutputResolution"/> 取场景画布，结果与来源写回 plan.settings。</remarks>
+/// <remarks>Width/Height 同为 0 表示未指定：分析时按 <see cref="OutputResolution"/> 取主显示器分辨率，结果与来源写回 plan.settings。</remarks>
 public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, string Assets, string OutputDirectory,
     uint Width = 0, uint Height = 0, uint FpsNumerator = 120, uint FpsDenominator = 1,
     JsonObject? UserProperties = null, string ViewMode = "preserve", double MaximumRetimePercent = 2,
@@ -35,7 +35,10 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     [property: JsonIgnore] bool LayoutExplicit = false,
     // WPE 设置里的后处理画质档（config.json general.user.postprocessing）。只有它是 ultra/displayhdr 且场景 hdr、bloom 都开时，
     // 官方走浮点 HDR 管线；plan 的 settings 只在这种场景里记它，其余 plan 逐字不变。
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Postprocessing = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Postprocessing = null,
+    // 自动留实时（分配回退、残差粒子重试）时触发留实时的原因码：图层 id → 原来的未解析原因（HybridLoopAllocation.RetainReasons）。
+    // 重查时并进这些层的 reasons，不只剩 retained_by_cost_trial；没有时不写进 settings，plan 逐字不变。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<int, string[]>? RetainLiveReasons = null);
 
 /// <summary>Plans video replacement from source hierarchy and observed input dependencies.</summary>
 /// <param name="display">未指定宽高时用来铺满的屏幕尺寸；省略时读本机主显示器物理分辨率，测试可注入固定值。</param>
@@ -80,8 +83,11 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         double requested = ceilingOverride ?? RetimeProfileJson.Resolve(request).LoopMaximumSeconds;
         bool packedAlpha = videoGroups?.OfType<JsonObject>().Any(group =>
             group["transparent"] is JsonValue transparent && transparent.TryGetValue(out bool value) && value) == true;
+        // 编码格式按左右并排的双宽选（与成品一致；上下并排只在越 8192 时出现，那时本来就是 HEVC）。
+        bool hevc = request.Width > 0 && request.Height > 0 && PlaybackEncodeProfile.SelectPlaybackEncoder(request.Width * (packedAlpha ? 2u : 1u),
+            request.Height, request.FpsNumerator, request.FpsDenominator) == "libx265";
         return EmbeddedVideoBudget.LoopLengthLimit(requested, request.Width, request.Height, packedAlpha,
-            request.FpsNumerator, request.FpsDenominator);
+            request.FpsNumerator, request.FpsDenominator, hevc);
     }
 
     /// <summary>
@@ -239,7 +245,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         var scene = AnalysisCache.Get(request.AnalysisCacheDirectory, "scene", () => source.ReadJson(source.SceneResource));
         var project = AnalysisCache.Get(request.AnalysisCacheDirectory, "project", () => source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject());
         var properties = SceneGraph.SnapshotProperties(project, request.UserProperties);
-        // 未指定宽高时按场景画布铺满本机屏幕取尺寸；之后的探测、投影、plan.settings 与 bake 全部用这里定下的尺寸。
+        // 未指定宽高时取本机主显示器分辨率；之后的探测、投影、plan.settings 与 bake 全部用这里定下的尺寸。
         OutputResolution.Choice resolution = OutputResolution.Choose(scene, properties, request.Width, request.Height,
             request.ResolutionSource, display ?? OutputResolution.PrimaryDisplay);
         request = request with { Width = resolution.Width, Height = resolution.Height, ResolutionSource = resolution.Source };
@@ -398,7 +404,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         try
         {
             JsonObject replanned = await AnalyzeSingleAsync(request with {
-                OutputDirectory = analysisOutput, RuntimeTraceFile = null, RetainLiveRootIds = retained }, progress, cancellationToken);
+                OutputDirectory = analysisOutput, RuntimeTraceFile = null, RetainLiveRootIds = retained,
+                RetainLiveReasons = HybridLoopAllocation.RetainReasons(report, evidence["trigger_layer_ids"]!.AsArray().Select(node => node!.GetValue<int>())) },
+                progress, cancellationToken);
             var replannedLoop = replanned["loop"]!.AsObject();
             // 留下的未解析项全部可由残差掩盖时也算找到：bake 会走残差掩盖路线（例如留实时水面之后剩下的平稳随机雨）。
             (bool resolved, string basis, JsonObject? residual) = HybridLoopAllocation.ReplannedResolution(replanned, sourceScene, readResource);

@@ -16,10 +16,10 @@ public static class LoopClosureCheck
     /// <summary>闭合判据：64px 瓦片 MAE 上限，8 位取整。</summary>
     public const double MaximumTileMae255 = 1.0;
 
-    /// <summary>判定用的瓦片边长。</summary>
+    /// <summary>判定用的瓦片边长（1080p 短边下；<see cref="Evaluate"/> 按输出短边等比缩放，JSON 键名 tile_64 不变）。</summary>
     public const int TileSize = 64;
 
-    /// <summary>只记录、不判定的细瓦片边长。</summary>
+    /// <summary>只记录、不判定的细瓦片边长（同上缩放，键名 tile_32）。</summary>
     public const int RecordTileSize = 32;
 
     public const string ClosedStatus = "closed";
@@ -56,18 +56,20 @@ public static class LoopClosureCheck
     /// 闭合检验。<paramref name="first"/> 与 <paramref name="wrap"/> 是渲染器原始 RGBA 的第 0 帧与第 P 帧。
     /// <paramref name="withAlpha"/> 为真（透明组）时 RGB 只在两帧任一 alpha &gt; 0 的像素上算（alpha = 0 处 RGB 没有定义），
     /// alpha 单独再判一次。<paramref name="judged"/> 为假（残差掩盖路线，硬切残差由第一层判）时只记录。
+    /// <paramref name="tileScale"/> 是输出画布短边 / 1080（<see cref="SwayRecurrenceSolver.SpeedLimitScale"/>），瓦片边长按它缩放。
     /// </summary>
     public static JsonObject Evaluate(ReadOnlySpan<byte> first, ReadOnlySpan<byte> wrap, int width, int height, bool withAlpha,
-        ulong loopFrames, bool judged)
+        ulong loopFrames, bool judged, double tileScale = 1)
     {
         if (width <= 0 || height <= 0 || first.Length != checked(width * height * 4) || wrap.Length != first.Length)
             throw new ArgumentException("闭合检验需要两帧同尺寸的 RGBA。");
         byte[] firstRgb = Rgb(first), wrapRgb = Rgb(wrap);
         byte[] mask = withAlpha ? AlphaMask(first, wrap, 4, 3) : [];
-        JsonObject rgb = Plane(firstRgb, wrapRgb, width, height, mask, out double rgbWorst);
+        int tile = (int)Math.Round(TileSize * tileScale), recordTile = (int)Math.Round(RecordTileSize * tileScale);
+        JsonObject rgb = Plane(firstRgb, wrapRgb, width, height, mask, tile, recordTile, out double rgbWorst);
         JsonObject? alpha = null;
         double alphaWorst = 0;
-        if (withAlpha) alpha = Plane(Alpha(first), Alpha(wrap), width, height, [], out alphaWorst);
+        if (withAlpha) alpha = Plane(Alpha(first), Alpha(wrap), width, height, [], tile, recordTile, out alphaWorst);
         bool passed = rgbWorst <= MaximumTileMae255 && alphaWorst <= MaximumTileMae255;
         return new JsonObject
         {
@@ -80,7 +82,7 @@ public static class LoopClosureCheck
             ["width"] = width,
             ["height"] = height,
             ["pixel_identical"] = first.SequenceEqual(wrap),
-            ["tile_size"] = TileSize,
+            ["tile_size"] = tile,
             ["limit_tile_mae_255"] = MaximumTileMae255,
             ["rgb"] = rgb,
             ["alpha"] = alpha,
@@ -91,23 +93,6 @@ public static class LoopClosureCheck
                 ? "The renderer played on continuously to frame P. A true period leaves frame P equal to frame 0; the only allowance is 8-bit rounding (1/255 per pixel, so 1.0 per 64px tile)."
                 : "Residual-masking route: the hard-cut residual f[P] - f[0] is judged by the residual layer, not here; recorded only."
         };
-    }
-
-    /// <summary>
-    /// 与 <see cref="Evaluate"/> 同一把尺子的数值读数：两帧 RGBA 的 64px 瓦片 MAE 最差值（0..255）；透明组取
-    /// "按 alpha 掩码的 RGB 最差"与"alpha 最差"中较大的那个。不取整，与闭合判据直接比较。
-    /// </summary>
-    public static double WorstTileMae(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b, int width, int height, bool withAlpha)
-    {
-        if (width <= 0 || height <= 0 || a.Length != checked(width * height * 4) || b.Length != a.Length)
-            throw new ArgumentException("瓦片读数需要两帧同尺寸的 RGBA。");
-        byte[] mask = withAlpha ? AlphaMask(a, b, 4, 3) : [];
-        double worst = LoopSeamMetrics.Summarize(LoopSeamMetrics.TileMae(Rgb(a), Rgb(b), width, height, TileSize, mask),
-            width, height, TileSize).Worst;
-        if (withAlpha)
-            worst = Math.Max(worst, LoopSeamMetrics.Summarize(LoopSeamMetrics.TileMae(Alpha(a), Alpha(b), width, height, TileSize),
-                width, height, TileSize).Worst);
-        return worst;
     }
 
     /// <summary>闭合记录是否放行：只有判定过且超限才算不放行。</summary>
@@ -161,16 +146,17 @@ public static class LoopClosureCheck
         return mask;
     }
 
-    private static JsonObject Plane(byte[] first, byte[] wrap, int width, int height, byte[] mask, out double worst)
+    private static JsonObject Plane(byte[] first, byte[] wrap, int width, int height, byte[] mask, int tile, int recordTile,
+        out double worst)
     {
-        double[] coarse = LoopSeamMetrics.TileMae(first, wrap, width, height, TileSize, mask, out int maximum);
-        double[] fine = LoopSeamMetrics.TileMae(first, wrap, width, height, RecordTileSize, mask);
-        TileMapSummary summary = LoopSeamMetrics.Summarize(coarse, width, height, TileSize);
+        double[] coarse = LoopSeamMetrics.TileMae(first, wrap, width, height, tile, mask, out int maximum);
+        double[] fine = LoopSeamMetrics.TileMae(first, wrap, width, height, recordTile, mask);
+        TileMapSummary summary = LoopSeamMetrics.Summarize(coarse, width, height, tile);
         worst = summary.Worst;
         return new JsonObject
         {
             ["tile_64"] = Json(summary),
-            ["tile_32"] = Json(LoopSeamMetrics.Summarize(fine, width, height, RecordTileSize)),
+            ["tile_32"] = Json(LoopSeamMetrics.Summarize(fine, width, height, recordTile)),
             ["tiles_above_limit"] = coarse.Count(value => value > MaximumTileMae255),
             ["maximum_channel_difference"] = maximum
         };
