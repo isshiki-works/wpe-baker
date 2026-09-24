@@ -65,13 +65,13 @@ public static class ResidualMasking
     /// <summary>随机精灵"两端同一静止状态"的替代判据：该层可定位区域内的残差上限。</summary>
     public const double MaximumSpriteRestRgbMae255 = 1.0;
 
-    /// <summary>接缝残差评估使用的瓦片边长。</summary>
+    /// <summary>接缝残差评估使用的瓦片边长（1080p 短边下；实际按输出短边等比缩放，见 GroupRenderScheduler.TileScale）。</summary>
     public const int SeamTileSize = 64;
 
     /// <summary>接缝整帧交叉淡化窗口，固定 0.4 秒。</summary>
     public const double CrossfadeSeconds = 0.4;
 
-    /// <summary>起点搜索的采样步长上限（源帧）与样本宽度（像素）。实际步长见 <see cref="StartSearchStride"/>。</summary>
+    /// <summary>起点搜索的采样步长上限（源帧）与样本宽度（像素，1080p 短边下，同上缩放）。实际步长见 <see cref="StartSearchStride"/>。</summary>
     public const uint StartSearchSampleStride = 16;
     public const uint StartSearchSampleWidth = 512;
 

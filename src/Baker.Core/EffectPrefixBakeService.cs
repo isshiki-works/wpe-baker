@@ -267,7 +267,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                                 ["basis"] = "Native-size GPU alpha reduction on all encoded source frames, plus the retained original P frame." };
                         }
                         JsonObject closure = LoopClosureCheck.Evaluate(firstFrame, wrapFrame,
-                            (int)sourceWidth, (int)sourceHeight, withAlpha: packedAlpha, frames, judged: true);
+                            (int)sourceWidth, (int)sourceHeight, withAlpha: packedAlpha, frames, judged: true,
+                            SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height));
                         if (!request.KeepIntermediates && LoopClosureCheck.Allows(closure))
                             seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator,
                                 settings.FpsDenominator, packedAlpha, closure, (int)encodeWidth * (packedAlpha ? 2 : 1),

@@ -55,7 +55,8 @@ internal sealed class ProbeBake(NativeTools tools)
             WarmupFrames: 0, Seed: 17, DeviceUuid: planSettings.DeviceUuid,
             UserProperties: comparisonProperties,
             Input: new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
-            TileSize: CompositionGate.RequiredTileSize), progress, cancellationToken);
+            TileSize: (uint)Math.Round(CompositionGate.RequiredTileSize *
+                SwayRecurrenceSolver.SpeedLimitScale(planSettings.Width, planSettings.Height))), progress, cancellationToken);
         JsonObject validation = CompositionGate.Evaluate(comparison);
         validation["probe_output_path"] = probeDirectory;
         validation["probe_capture_source_path"] = captureSource;
