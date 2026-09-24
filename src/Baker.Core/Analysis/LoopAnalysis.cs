@@ -61,10 +61,11 @@ internal static class LoopAnalysis
             return new CommonLoopComponent($"{GroupStepPrefix}{step}", new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
         })];
         LoopSolve solve = SolveLoop(shader, animation, [.. particleCycles, .. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
-        if (particleCycles.Length > 0 && solve.Result.Candidates.Count == 0)
+        // 组周期步长只是可选约束：带步长重解时不为它拆粒子锁，无解就由调用方保持原解（否则锁定粒子会被改判留实时）。
+        if (particleCycles.Length > 0 && stepCycles.Length == 0 && solve.Result.Candidates.Count == 0)
         {
             // 锁定周期与其余分量在循环上限内没有公共循环，而不锁这些层时有：这些层退回拒绝（留实时），与判据收紧时的结论一致。
-            LoopSolve unlocked = SolveLoop(shader, animation, [.. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+            LoopSolve unlocked = SolveLoop(shader, animation, scriptCycles, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
             if (unlocked.Result.Candidates.Count > 0)
             {
                 var evidence = new JsonObject
