@@ -53,11 +53,18 @@ internal static class HardwareDecodeDimensionsChecks
         check(atlas.Status == HardwareDecodeDimensions.PassStatus && atlas.Vertical && atlas.StoredWidth == 5108 && atlas.StoredHeight == 6320 &&
             !atlas.Padded && atlasOpaque.Status == HardwareDecodeDimensions.PassStatus && atlasOpaque.SoftwareEncoder == "libx265",
             "the 3753921460 atlas (5108x3160) would be 10216 wide side by side, so its alpha stacks below at 5108x6320 and passes");
-        (uint eightKWidth, uint eightKHeight) = HardwareDecodeDimensions.FitCeiling(7680, 4320, true);
-        check(HardwareDecodeDimensions.FitCeiling(5108, 3160, true) == (5108u, 3160u) && eightKWidth > 5500 &&
-            HardwareDecodeDimensions.Evaluate(eightKWidth, eightKHeight, true, 60, 1) is { Status: HardwareDecodeDimensions.PassStatus, Vertical: true } &&
+        // 上下并排后总高越过核显 HEVC 高度上限（4320）的，退回左右并排缩小；不越的（宽而矮）仍上下并排
+        uint integratedHeight = HardwareDecodeDimensions.IntegratedHevc.MaximumHeight;
+        var (eightKWidth, eightKHeight) = HardwareDecodeDimensions.FitCeiling(7680, 4320, true);
+        var (atlasFitWidth, atlasFitHeight) = HardwareDecodeDimensions.FitCeiling(5108, 3160, true);
+        var eightKPlan = HardwareDecodeDimensions.Evaluate(eightKWidth, eightKHeight, true, 60, 1);
+        var atlasPlan = HardwareDecodeDimensions.Evaluate(atlasFitWidth, atlasFitHeight, true, 60, 1);
+        check(eightKPlan is { Status: HardwareDecodeDimensions.PassStatus, Vertical: false } && eightKPlan.StoredHeight <= integratedHeight &&
+            atlasPlan is { Status: HardwareDecodeDimensions.PassStatus, Vertical: false } && atlasPlan.StoredHeight <= integratedHeight &&
+            HardwareDecodeDimensions.FitCeiling(7680, 2160, true) == (7680u, 2160u) &&
+            HardwareDecodeDimensions.Evaluate(7680, 2160, true, 60, 1) is { Status: HardwareDecodeDimensions.PassStatus, Vertical: true, StoredHeight: 4320 } &&
             HardwareDecodeDimensions.FitCeiling(4096, 3160, true) == (4096u, 3160u) && HardwareDecodeDimensions.FitCeiling(5108, 3160, false) == (5108u, 3160u),
-            "a packed 8K layer scales only to the top-and-bottom luma ceiling (about 0.73x, not 0.53x); ones within a ceiling are left alone");
+            "a packed layer whose top-and-bottom canvas would be taller than the integrated HEVC ceiling scales side by side instead; wide short ones still stack and ones within a ceiling are left alone");
         var tall = HardwareDecodeDimensions.Evaluate(2, 8194, false, 60, 1);
         check(tall.Rejected && tall.Violations.Any(violation => violation.Measure == "height" && violation.Actual == 8194),
             "height beyond 8192 is rejected even when padding widened the canvas");
