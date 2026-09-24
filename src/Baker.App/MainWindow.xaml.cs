@@ -5,12 +5,14 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using Baker.Core;
 using Microsoft.Win32;
 
@@ -25,7 +27,7 @@ public partial class MainWindow : Window
     // 工具缺失是独立一条：setupError 是单字段五处写入，后写者赢，GPU 或源属性的错误会把"生成工具未就绪"
     // 顶掉，界面就会指着错误的原因（实测显示 No Vulkan device found，而真因是 tools 为 null）。
     private string toolsError = "";
-    private bool initialized, english, analyzing, processing, closeRequested, detecting, updatingInstallation, audioEffectsChoiceKnown, presetBusy, suppressSettingsChanges;
+    private bool dark, initialized, english, analyzing, processing, closeRequested, detecting, updatingInstallation, audioEffectsChoiceKnown, presetBusy, suppressSettingsChanges;
     // 高级区调速预算框里上一次由档位写进去的文本：与框里的内容一致就说明用户没自己填，换档时跟着换。
     private string presetBudgetText = "";
     private int settingsRevision;
@@ -55,7 +57,24 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        dark = Environment.GetEnvironmentVariable("PERIODICA_SHOT_THEME") is string shotTheme ? shotTheme == "dark" : SystemUsesDarkTheme(); // SHOT-HOOK
+        LoadThemeTokens();
         InitializeComponent();
+        BackdropBox.IsEnabled = BackdropSupported;
+        if (Environment.GetEnvironmentVariable("PERIODICA_SHOT_BACKDROP") is string shotBackdrop) BackdropBox.SelectedIndex = int.Parse(shotBackdrop); // SHOT-HOOK
+        SourceInitialized += (_, _) =>
+        {
+            // 系统背景要透到客户区：WPF 不刷底色 + 边框扩展到整个客户区；不透明模式由 Window.Background 自己盖住。
+            var hwnd = new WindowInteropHelper(this).Handle;
+            HwndSource.FromHwnd(hwnd).CompositionTarget.BackgroundColor = System.Windows.Media.Colors.Transparent;
+            var margins = new Margins(-1, -1, -1, -1);
+            DwmExtendFrameIntoClientArea(hwnd, ref margins);
+            ApplyBackdrop();
+        };
+        SystemEvents.UserPreferenceChanged += (_, e) =>
+        {
+            if (e.Category == UserPreferenceCategory.General) Dispatcher.BeginInvoke(ThemeChanged);
+        };
         progressTimer.Tick += (_, _) => RefreshProgressTiming();
         QueueList.ItemsSource = jobs;
         OutputBox.Text = defaultOutputDirectory;
@@ -95,6 +114,18 @@ public partial class MainWindow : Window
         catch (Exception error) { setupError = error.Message; }
         RefreshControls();
         if (File.Exists(WpeExeBox.Text)) await LoadTargetsAsync(autoImport: true);
+        // SHOT-HOOK-BEGIN
+        if (Environment.GetEnvironmentVariable("PERIODICA_SHOT_JOBS") is string shotJobs)
+        {
+            string[] reports = shotJobs.Split(';');
+            var running = LoadCompletedResult(reports[0]); running.State = "running"; running.Detail = L("正在渲染：3120 / 7200 帧", "Rendering: 3120 / 7200 frames");
+            var done = LoadCompletedResult(reports[1]);
+            var failed = LoadCompletedResult(reports[2]); failed.State = "failed"; failed.Detail = L("未检出循环周期，生成中止；原因见报告文件。", "No loop period found; generation stopped. See the report.");
+            foreach (var job in new[] { running, done, failed }) Enqueue(job);
+            QueueList.SelectedItem = done;
+            RunProgress.Value = 0.43; StatusText.Text = running.Title + " · " + running.Detail;
+        }
+        // SHOT-HOOK-END
     }
 
     internal void SetLanguage(bool useEnglish)
@@ -123,6 +154,7 @@ public partial class MainWindow : Window
                 if (child is DependencyObject dependency) Translate(dependency);
         }
         Translate((DependencyObject)Content);
+        Translate(JobActions); // 选中作业时它挂在作业行模板里，不在窗口逻辑树上
         foreach (var job in jobs) job.Translate(useEnglish);
         UpdatePlanSummary();
         BuildPropertyEditors();
@@ -246,7 +278,19 @@ public partial class MainWindow : Window
         UpdatePlanSummary(); RefreshControls();
     }
     private void FpsEdited(object sender, KeyEventArgs e) => SettingsChanged(sender, e);
-    private void QueueSelectionChanged(object sender, SelectionChangedEventArgs e) { if (initialized) BuildPropertyEditors(); RefreshControls(); }
+    private void QueueSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (initialized) BuildPropertyEditors();
+        RefreshControls();
+        // 选中作业原地展开：同一块操作面板挪进选中行模板里的 ActionsHost；行容器可能还没生成，等布局后再挪。
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (JobActions.Parent is Border old) old.Child = null;
+            var row = QueueList.SelectedItem is null ? null : QueueList.ItemContainerGenerator.ContainerFromItem(QueueList.SelectedItem) as ListBoxItem;
+            row?.ApplyTemplate();
+            (row?.Template.FindName("ActionsHost", row) as Border ?? ActionsParking).Child = JobActions;
+        }, System.Windows.Threading.DispatcherPriority.Loaded);
+    }
 
     /// <summary>播放版编码路径；支持的 Vulkan 路径直接生成视频。</summary>
     private string SelectedPlaybackEncoder() =>
@@ -556,8 +600,7 @@ public partial class MainWindow : Window
         NumbersTable.Children.Clear();
         foreach (var (label, value) in AppJsonPresentation.NumberRows(hybridPlan, english))
             NumbersTable.Children.Add(new TextBlock {
-                Text = label + (english ? ": " : "：") + value, FontSize = 12,
-                Foreground = (System.Windows.Media.Brush)FindResource("Ink"), Margin = new Thickness(0, 0, 0, 4) });
+                Text = label + (english ? ": " : "：") + value, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
     }
 
     /// <summary>输出那一行：帧率与画面大小；没自己填尺寸时写"自动"，分析完就把实际出片尺寸摆上去。</summary>
@@ -992,10 +1035,8 @@ public partial class MainWindow : Window
                 "user_property" => L("可见性由壁纸属性控制", "visibility controlled by a wallpaper property"), _ => L("始终可见", "always visible") };
             double fraction = AppJsonPresentation.Number(layer["canvas_fraction"]) ?? 0;
             string hints = AppJsonPresentation.LayerHints(layer, english);
-            var title = new TextBlock { Text = name, TextWrapping = TextWrapping.Wrap, FontWeight = FontWeights.Normal,
-                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x20, 0x2A, 0x38)) };
-            var detail = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0),
-                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x74, 0x82, 0x99)),
+            var title = new TextBlock { Text = name, TextWrapping = TextWrapping.Wrap, FontWeight = FontWeights.Normal };
+            var detail = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0), Opacity = .7,
                 Text = $"{kind} · {allocation} · {quadrant} · {fraction:P1} · {binding}" +
                     (hints.Length == 0 ? "" : L(" · 备注：", " · notes: ") + hints) };
             var row = new StackPanel();
@@ -1219,12 +1260,18 @@ public partial class MainWindow : Window
                     var observed = await controller.ObserveAsync(target.Location);
                     string source = await Task.Run(() => AppEnvironment.ValidateSource(observed.File));
                     string title = Path.GetFileName(Directory.Exists(source) ? source : Path.GetDirectoryName(source)) ?? source;
-                    string projectFile = Path.Combine(Directory.Exists(source) ? source : Path.GetDirectoryName(source)!, "project.json");
+                    string folder = Directory.Exists(source) ? source : Path.GetDirectoryName(source)!;
+                    string projectFile = Path.Combine(folder, "project.json");
+                    System.Windows.Media.Imaging.BitmapImage? preview = null;
                     if (File.Exists(projectFile))
-                        title = JsonNode.Parse(await File.ReadAllTextAsync(projectFile))?["title"]?.GetValue<string>() ?? title;
+                    {
+                        JsonNode? project = JsonNode.Parse(await File.ReadAllTextAsync(projectFile));
+                        title = project?["title"]?.GetValue<string>() ?? title;
+                        if (project?["preview"]?.GetValue<string>() is string previewFile) preview = LoadPreview(Path.Combine(folder, previewFile));
+                    }
                     string evidence = observed.Evidence == "official_getWallpaper"
                         ? L("当前壁纸", "Current wallpaper") : L("当前屏幕的已保存设置", "Saved setting for the current screen");
-                    current.Add(new(target.Location + " · " + title, source, evidence + ": " + source));
+                    current.Add(new(target.Location + " · " + title, source, evidence + ": " + source, title, preview));
                 }
                 catch (Exception error)
                 {
@@ -1420,20 +1467,59 @@ public partial class MainWindow : Window
     }
 
 
+    // 状态色取当前明暗的颜色键；换明暗后 ThemeChanged 让作业行和校验行重取。
     private static class StateBrushes
     {
-        internal static readonly System.Windows.Media.Brush Ok = Freeze("#157347");
-        internal static readonly System.Windows.Media.Brush Bad = Freeze("#C0392B");
-        internal static readonly System.Windows.Media.Brush Busy = Freeze("#3465D9");
-        internal static readonly System.Windows.Media.Brush Muted = Freeze("#5A6A80");
-        private static System.Windows.Media.Brush Freeze(string hex)
-        {
-            var brush = new System.Windows.Media.SolidColorBrush(
-                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex));
-            brush.Freeze();
-            return brush;
-        }
+        internal static System.Windows.Media.Brush Ok => Token("AccentText");
+        internal static System.Windows.Media.Brush Bad => Token("BadText");
+        internal static System.Windows.Media.Brush Busy => Token("AccentText");
+        internal static System.Windows.Media.Brush Muted => Token("Ink2");
+        private static System.Windows.Media.Brush Token(string key) => (System.Windows.Media.Brush)Application.Current.Resources[key];
     }
+
+    // ---- 外观：明暗跟随系统，窗口背景可选不透明 / 云母 / 亚克力 ----
+    private static bool SystemUsesDarkTheme() =>
+        Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
+
+    /// <summary>颜色键放在 Application 级：控件样式全用 DynamicResource，换字典即换明暗。</summary>
+    private void LoadThemeTokens()
+    {
+        var dictionaries = Application.Current.Resources.MergedDictionaries;
+        dictionaries.Clear();
+        dictionaries.Add(new ResourceDictionary { Source = new Uri(dark ? "/WpeBaker;component/Themes/Tokens.Dark.xaml" : "/WpeBaker;component/Themes/Tokens.Light.xaml", UriKind.Relative) });
+    }
+
+    private void ThemeChanged()
+    {
+        if (SystemUsesDarkTheme() == dark) return;
+        dark = !dark;
+        LoadThemeTokens();
+        ApplyBackdrop();
+        foreach (var job in jobs) job.Translate(english); // 让作业行的状态色按新明暗重取
+        RefreshControls();
+    }
+
+    // DWMWA_SYSTEMBACKDROP_TYPE 从 Windows 11 22H2（build 22621）起才有；更早的系统开关禁用，固定不透明。
+    private static readonly bool BackdropSupported = Environment.OSVersion.Version.Build >= 22621;
+    private void BackdropChanged(object sender, SelectionChangedEventArgs e) => ApplyBackdrop();
+
+    /// <summary>窗口背景：下拉 0 不透明 / 1 云母 / 2 亚克力，对应 DWMWA_SYSTEMBACKDROP_TYPE 的 1 无 / 2 云母 / 3 亚克力。
+    /// 系统关了透明效果、窗口失焦时 DWM 自己退回纯色；文字都在窗格（80%）和卡片（不透明）上，纯色底上同样成立。</summary>
+    private void ApplyBackdrop()
+    {
+        int choice = BackdropSupported ? Math.Max(BackdropBox.SelectedIndex, 0) : 0;
+        if (choice == 0) SetResourceReference(BackgroundProperty, "Bg");
+        else Background = System.Windows.Media.Brushes.Transparent;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+        int darkMode = dark ? 1 : 0, backdrop = choice + 1;
+        DwmSetWindowAttribute(hwnd, 20, ref darkMode, sizeof(int)); // DWMWA_USE_IMMERSIVE_DARK_MODE：标题栏跟着明暗
+        if (BackdropSupported) DwmSetWindowAttribute(hwnd, 38, ref backdrop, sizeof(int));
+    }
+
+    private record struct Margins(int Left, int Right, int Top, int Bottom);
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+    [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref Margins margins);
 
     private abstract class ObservableItem : INotifyPropertyChanged
     {
@@ -1444,7 +1530,26 @@ public partial class MainWindow : Window
     {
         public string Label => $"{Target.Location} · {Target.Profile}";
     }
-    private sealed record CurrentWallpaperItem(string Label, string? Source, string Detail);
+    private sealed record CurrentWallpaperItem(string Label, string? Source, string Detail, string? Title = null,
+        System.Windows.Media.ImageSource? Preview = null);
+
+    /// <summary>壁纸自带的预览图（project.json 的 preview）；一次读进内存，不占着工坊目录里的文件。读不了就不显示。</summary>
+    private static System.Windows.Media.Imaging.BitmapImage? LoadPreview(string path)
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var image = new System.Windows.Media.Imaging.BitmapImage();
+            image.BeginInit();
+            image.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            image.DecodePixelWidth = 480;
+            image.UriSource = new Uri(path);
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch (Exception error) when (error is IOException or NotSupportedException or UnauthorizedAccessException) { return null; }
+    }
     private sealed record PropertyOption(string Label, JsonNode Value);
     private sealed class JobItem(HybridBakeRequest request, NativeTools tools, string gpuName, JsonObject? definitions = null) : ObservableItem
     {

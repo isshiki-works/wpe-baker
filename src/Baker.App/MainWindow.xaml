@@ -1,181 +1,173 @@
 <Window x:Class="Baker.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Periodica · WPE Baker" Width="1240" Height="950"
-        MinWidth="980" MinHeight="720" Background="#F3F5F8" FontFamily="Segoe UI, Microsoft YaHei UI"
-        FontSize="13" Foreground="#1E293B" Loaded="WindowLoaded" Closing="WindowClosing"
+        MinWidth="980" MinHeight="720" Background="{DynamicResource Bg}" Foreground="{DynamicResource Ink}"
+        FontFamily="Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI" FontSize="13" Loaded="WindowLoaded" Closing="WindowClosing"
         AllowDrop="True" PreviewDragOver="SourceDragOver" PreviewDrop="SourceDropped">
     <Window.Resources>
-        <SolidColorBrush x:Key="Ink" Color="#1E293B"/>
-        <SolidColorBrush x:Key="Muted" Color="#5A6A80"/>
-        <SolidColorBrush x:Key="Hint" Color="#7C8AA0"/>
-        <SolidColorBrush x:Key="Line" Color="#E2E7EF"/>
-        <SolidColorBrush x:Key="Accent" Color="#3465D9"/>
-        <SolidColorBrush x:Key="Ok" Color="#157347"/>
-        <SolidColorBrush x:Key="Bad" Color="#C0392B"/>
-        <Style TargetType="Button">
-            <Setter Property="Padding" Value="14,8"/><Setter Property="Margin" Value="0,0,8,8"/>
-            <Setter Property="Background" Value="White"/><Setter Property="BorderBrush" Value="#D6DDE7"/>
-            <Setter Property="Foreground" Value="#26354B"/><Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
-                <Border x:Name="Surface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                        BorderThickness="1" CornerRadius="6" Padding="{TemplateBinding Padding}">
-                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border><ControlTemplate.Triggers>
-                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Opacity" Value="0.82"/></Trigger>
-                    <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.4"/></Trigger>
-                </ControlTemplate.Triggers>
-            </ControlTemplate></Setter.Value></Setter>
-        </Style>
-        <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#3465D9"/><Setter Property="BorderBrush" Value="#3465D9"/>
-            <Setter Property="Foreground" Value="White"/><Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="15,11"/><Setter Property="Margin" Value="0"/>
-        </Style>
-        <Style TargetType="TextBox"><Setter Property="Padding" Value="9,7"/><Setter Property="BorderBrush" Value="#D6DDE7"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/></Style>
-        <Style TargetType="ComboBox"><Setter Property="Padding" Value="8,6"/><Setter Property="VerticalContentAlignment" Value="Center"/></Style>
-        <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
-        <Style TargetType="CheckBox"><Setter Property="Margin" Value="0,0,0,8"/><Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/></Style>
-        <Style TargetType="Expander"><Setter Property="Foreground" Value="#3B4A60"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
-        <Style x:Key="Label" TargetType="TextBlock"><Setter Property="Foreground" Value="{StaticResource Muted}"/>
-            <Setter Property="TextWrapping" Value="Wrap"/>
-            <Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="0,0,12,0"/></Style>
-        <Style x:Key="Section" TargetType="TextBlock"><Setter Property="FontSize" Value="18"/>
-            <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Foreground" Value="{StaticResource Ink}"/></Style>
-        <Style x:Key="Group" TargetType="TextBlock"><Setter Property="FontSize" Value="12"/>
-            <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Foreground" Value="#46566E"/>
-            <Setter Property="Margin" Value="0,0,0,8"/></Style>
-        <Style x:Key="Note" TargetType="TextBlock"><Setter Property="FontSize" Value="11"/>
-            <Setter Property="Foreground" Value="{StaticResource Hint}"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
-        <Style x:Key="Card" TargetType="Border"><Setter Property="Background" Value="White"/>
-            <Setter Property="CornerRadius" Value="10"/><Setter Property="Padding" Value="20"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Line}"/><Setter Property="BorderThickness" Value="1"/></Style>
+        <ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Themes/Controls.xaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary>
     </Window.Resources>
-    <Grid Margin="24">
-        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <DockPanel Margin="0,0,0,16">
-            <ComboBox x:Name="LanguageBox" DockPanel.Dock="Right" Width="115" Height="34" VerticalAlignment="Center" SelectionChanged="LanguageChanged">
+    <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <!-- 顶栏直接压在窗口背景上（云母/亚克力时透出系统材质）：这里只放 ≥ 20 px 的标题和自带不透明底的下拉。 -->
+        <DockPanel Margin="20,8,12,8">
+            <ComboBox x:Name="LanguageBox" DockPanel.Dock="Right" Width="110" VerticalAlignment="Center" SelectionChanged="LanguageChanged">
                 <ComboBoxItem Content="中文" IsSelected="True"/><ComboBoxItem Content="English"/>
             </ComboBox>
-            <TextBlock Text="Periodica · WPE Baker" FontSize="26" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <ComboBox x:Name="BackdropBox" DockPanel.Dock="Right" Width="110" Margin="0,0,8,0" VerticalAlignment="Center"
+                      SelectionChanged="BackdropChanged" ToolTip="窗口背景‖Window background">
+                <ComboBoxItem Tag="不透明|Opaque"/><ComboBoxItem Tag="云母|Mica" IsSelected="True"/><ComboBoxItem Tag="亚克力|Acrylic"/>
+            </ComboBox>
+            <TextBlock Text="Periodica · WPE Baker" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
         </DockPanel>
-        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,16">
-            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="106"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="12"/><RowDefinition Height="Auto"/><RowDefinition Height="10"/>
-                    <RowDefinition Height="Auto"/><RowDefinition Height="10"/><RowDefinition Height="Auto"/><RowDefinition Height="10"/>
-                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <TextBlock Grid.ColumnSpan="3" Style="{StaticResource Group}" Tag="壁纸来源与输出位置|Wallpaper source and output location"/>
-                <TextBlock Grid.Row="2" Style="{StaticResource Label}" Tag="当前桌面壁纸|Current desktop wallpaper"/>
-                <ComboBox x:Name="CurrentWallpaperBox" Grid.Row="2" Grid.Column="1" DisplayMemberPath="Label" SelectionChanged="CurrentWallpaperChanged"
-                    ToolTip="{Binding SelectedItem.Detail, RelativeSource={RelativeSource Self}}"/>
-                <Button x:Name="DetectButton" Grid.Row="2" Grid.Column="2" Margin="10,0,0,0" MinWidth="146" Tag="重新检测|Re-detect" Click="DetectClicked"/>
-                <TextBlock Grid.Row="4" Style="{StaticResource Label}" Tag="壁纸来源|Wallpaper source"/>
-                <TextBox x:Name="SourceBox" Grid.Row="4" Grid.Column="1" TextChanged="SourceChanged"
-                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                <StackPanel Grid.Row="4" Grid.Column="2" Orientation="Horizontal" Margin="10,0,0,0">
-                    <Button Tag="选文件…|File…" Click="ChooseSourceFile" Padding="9,8" Margin="0,0,6,0" MinWidth="70"/>
-                    <Button Tag="选文件夹…|Folder…" Click="ChooseSource" Padding="9,8" Margin="0" MinWidth="70"/>
-                </StackPanel>
-                <TextBlock Grid.Row="6" Style="{StaticResource Label}" Tag="Wallpaper Engine assets 目录|Wallpaper Engine assets directory"/>
-                <TextBox x:Name="AssetsBox" Grid.Row="6" Grid.Column="1" TextChanged="SourceChanged"
-                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                <Button Grid.Row="6" Grid.Column="2" Margin="10,0,0,0" MinWidth="146" Tag="选择…|Browse…" Click="ChooseAssets"/>
-                <TextBlock Grid.Row="8" Style="{StaticResource Label}" Tag="输出目录|Output directory"/>
-                <TextBox x:Name="OutputBox" Grid.Row="8" Grid.Column="1" TextChanged="SettingsChanged"
-                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                <Button Grid.Row="8" Grid.Column="2" Margin="10,0,0,0" MinWidth="146" Tag="选择…|Browse…" Click="ChooseOutput"/>
-                <TextBlock Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,8,0,0" Style="{StaticResource Note}"
-                    Tag="支持将壁纸目录拖入窗口。|Wallpaper directories can be dropped onto this window."/>
-            </Grid>
-        </Border>
-        <Grid Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-            <Border Style="{StaticResource Card}">
+        <Grid Grid.Row="1" Margin="12,0,12,12">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="440"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <!-- 左：这张怎么烘 -->
+            <Border Style="{StaticResource PaneStyle}">
                 <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <DockPanel Margin="0,0,0,14">
-                        <Button x:Name="AnalyzeButton" DockPanel.Dock="Right" Tag="分析|Analyze"
-                            Click="AnalyzeClicked" Margin="0" VerticalAlignment="Center"/>
-                        <TextBlock Style="{StaticResource Section}" VerticalAlignment="Center" Tag="生成方案|Generation setup"/>
-                    </DockPanel>
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,0">
-                        <StackPanel>
-                            <TextBlock Style="{StaticResource Group}" Tag="动画精度|Animation precision"/>
-                            <ComboBox x:Name="PresetBox" SelectionChanged="PresetChanged" Margin="0,0,0,6">
-                                <ComboBoxItem Tag="效率|Efficiency"/>
-                                <ComboBoxItem Tag="平衡|Balanced" IsSelected="True"/>
-                                <ComboBoxItem Tag="质量|Quality"/>
-                            </ComboBox>
-                            <TextBlock x:Name="PresetNote" Style="{StaticResource Note}" Margin="0,0,0,8"/>
-                            <TextBlock Style="{StaticResource Group}" Tag="交互处理|Interaction"/>
-                            <ComboBox x:Name="InteractionBox" SelectionChanged="SettingsChanged" Margin="0,0,0,6">
-                                <ComboBoxItem Tag="保留|Keep"/>
-                                <ComboBoxItem Tag="固定视角|Fixed view" IsSelected="True"/>
-                                <ComboBoxItem Tag="关闭|Off"/>
-                            </ComboBox>
-                            <TextBlock x:Name="InteractionNote" Style="{StaticResource Note}" Margin="0,0,0,16"/>
-                            <TextBlock Style="{StaticResource Group}" Tag="输出|Output"/>
-                            <DockPanel Margin="0,0,0,4">
-                                <Button x:Name="OutputEditButton" DockPanel.Dock="Right" Content="✎" MinWidth="38" Padding="8,6" Margin="8,0,0,0"
-                                    Click="ToggleOutputEditor" ToolTip="输出帧率与分辨率。‖Output frame rate and resolution."/>
-                                <TextBlock x:Name="OutputSummary" VerticalAlignment="Center" Foreground="{StaticResource Ink}"/>
+                    <TextBlock Margin="20,16,20,10" Style="{StaticResource Section}" Tag="生成方案|Generation setup"/>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="20,0,14,0">
+                        <StackPanel Margin="0,0,0,12">
+                            <DockPanel Margin="0,0,0,8">
+                                <Button x:Name="DetectButton" DockPanel.Dock="Right" Style="{StaticResource Link}" Tag="重新检测|Re-detect" Click="DetectClicked"/>
+                                <TextBlock Style="{StaticResource Group}" Margin="0" VerticalAlignment="Center" Tag="你桌面上正在放的这张|On your desktop now"/>
                             </DockPanel>
-                            <Grid x:Name="OutputEditor" Visibility="Collapsed" Margin="0,8,0,0">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="10"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                                <TextBlock Style="{StaticResource Label}" Tag="帧率|Frame rate"/>
-                                <ComboBox x:Name="FpsBox" Grid.Column="1" IsEditable="True" Text="60" LostFocus="SettingsChanged" SelectionChanged="SettingsChanged" KeyUp="FpsEdited">
-                                    <ComboBoxItem Content="60"/><ComboBoxItem Content="120"/><ComboBoxItem Content="144"/><ComboBoxItem Content="165"/><ComboBoxItem Content="240"/><ComboBoxItem Content="60000/1001"/>
-                                </ComboBox>
-                                <TextBlock Grid.Row="2" Style="{StaticResource Label}" Tag="分辨率|Resolution"/>
-                                <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
-                                    <TextBox x:Name="WidthBox" Width="76" Text="" TextChanged="SettingsChanged" LostFocus="SettingsChanged"
-                                        ToolTip="两项留空按当前屏幕分辨率确定；指定分辨率需两项都填。‖Leave both empty to follow the current screen resolution, or fill both in to set one."/>
-                                    <TextBlock Text=" × " VerticalAlignment="Center" Foreground="{StaticResource Muted}"/>
-                                    <TextBox x:Name="HeightBox" Width="76" Text="" TextChanged="SettingsChanged" LostFocus="SettingsChanged"
-                                        ToolTip="两项留空按当前屏幕分辨率确定；指定分辨率需两项都填。‖Leave both empty to follow the current screen resolution, or fill both in to set one."/>
+                            <!-- 多块屏幕时在这里挑；一块都没检出就整行收起。 -->
+                            <ComboBox x:Name="CurrentWallpaperBox" DisplayMemberPath="Label" SelectionChanged="CurrentWallpaperChanged" Margin="0,0,0,8"
+                                ToolTip="{Binding SelectedItem.Detail, RelativeSource={RelativeSource Self}}">
+                                <ComboBox.Style><Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}"><Style.Triggers>
+                                    <Trigger Property="HasItems" Value="False"><Setter Property="Visibility" Value="Collapsed"/></Trigger>
+                                </Style.Triggers></Style></ComboBox.Style>
+                            </ComboBox>
+                            <!-- 正在放的这张：预览图 + 标题；选中项没有可导入的来源时换成下面的拖入区。 -->
+                            <Border x:Name="CurrentWallpaperCard" DataContext="{Binding SelectedItem, ElementName=CurrentWallpaperBox}" Padding="0">
+                                <Border.Style><Style TargetType="Border" BasedOn="{StaticResource CardStyle}"><Style.Triggers>
+                                    <DataTrigger Binding="{Binding}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                    <DataTrigger Binding="{Binding Source}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                </Style.Triggers></Style></Border.Style>
+                                <StackPanel>
+                                    <Border Height="200" CornerRadius="7,7,0,0" Background="{DynamicResource Fill}">
+                                        <Border CornerRadius="7,7,0,0"><Border.Background><ImageBrush ImageSource="{Binding Preview}" Stretch="UniformToFill"/></Border.Background></Border>
+                                    </Border>
+                                    <StackPanel Margin="14,12,14,14">
+                                        <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                                        <TextBlock Text="{Binding Detail}" ToolTip="{Binding Detail}" Style="{StaticResource Note}" TextWrapping="NoWrap"
+                                            TextTrimming="CharacterEllipsis" Margin="0,2,0,10"/>
+                                        <Border Background="{DynamicResource AccentSoft}" CornerRadius="10" Padding="10,3" HorizontalAlignment="Left">
+                                            <TextBlock FontSize="12" Foreground="{DynamicResource AccentText}"
+                                                Tag="读取自本机 Wallpaper Engine 设置|Read from the local Wallpaper Engine settings"/>
+                                        </Border>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                            <Grid>
+                                <Grid.Style><Style TargetType="Grid"><Style.Triggers>
+                                    <DataTrigger Binding="{Binding Visibility, ElementName=CurrentWallpaperCard}" Value="Visible"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                </Style.Triggers></Style></Grid.Style>
+                                <Rectangle RadiusX="8" RadiusY="8" Stroke="{DynamicResource Stroke2}" StrokeDashArray="4 3" Fill="{DynamicResource Card}"/>
+                                <StackPanel Margin="16,26" HorizontalAlignment="Center">
+                                    <TextBlock Text="&#xE8B7;" FontFamily="{StaticResource Icons}" FontSize="28" Foreground="{DynamicResource AccentText}" HorizontalAlignment="Center"/>
+                                    <TextBlock FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,4"
+                                        Tag="把壁纸文件夹拖进来|Drag in a wallpaper folder"/>
+                                    <TextBlock Style="{StaticResource Note}" HorizontalAlignment="Center" TextAlignment="Center"
+                                        Tag="支持将壁纸目录拖入窗口。|Wallpaper directories can be dropped onto this window."/>
                                 </StackPanel>
                             </Grid>
-                            <Border BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,16,0,12" Background="#F8FAFD">
+                            <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="SourceBox" TextChanged="SourceChanged" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                <Button Grid.Column="1" Tag="选文件…|File…" Click="ChooseSourceFile" Margin="6,0,0,0"/>
+                                <Button Grid.Column="2" Tag="选文件夹…|Folder…" Click="ChooseSource" Margin="6,0,0,0"/>
+                            </Grid>
+                            <!-- 结论框：分析前整块收起（跟着 VerdictLine 的可见性走）。 -->
+                            <Border Background="{DynamicResource AccentSoft}" CornerRadius="8" Padding="14" Margin="0,12,0,0"
+                                    Visibility="{Binding Visibility, ElementName=VerdictLine}">
                                 <StackPanel>
-                                    <StackPanel x:Name="GettingStartedHint">
-                                        <TextBlock Tag="1 把壁纸文件夹拖进来|1 Drag in a wallpaper folder" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,0,4"/>
-                                        <TextBlock Tag="2 选择档位|2 Pick a preset" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,0,4"/>
-                                        <TextBlock Tag="3 点击生成开始|3 Click Generate" Foreground="{StaticResource Muted}" FontSize="12"/>
-                                    </StackPanel>
-                                    <TextBlock x:Name="VerdictLine" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Ink}"/>
-                                    <TextBlock x:Name="NumbersLine" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,6,0,0"/>
+                                    <TextBlock x:Name="VerdictLine" FontSize="15" FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="NumbersLine" Foreground="{DynamicResource Ink2}" FontSize="13" Margin="0,4,0,0"/>
                                     <Button x:Name="SuggestionButton" Visibility="Collapsed" Tag="按建议重新分析|Re-analyze with suggestion"
                                             Click="ApplySuggestionClicked" Margin="0,8,0,0" HorizontalAlignment="Left"/>
-                                    <TextBlock x:Name="PresetAppliedLine" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,4,0,0"/>
+                                    <TextBlock x:Name="PresetAppliedLine" Style="{StaticResource Note}" Margin="0,6,0,0"/>
                                     <!-- plain-language:tech-begin 折叠的技术细节：纯数字表，禁用词扫描跳过这一段。 -->
-                                    <Expander x:Name="DetailsExpander" Tag="技术细节|Technical details" Header="技术细节" Margin="0,8,0,0" FontSize="12" FontWeight="Normal">
-                                        <StackPanel x:Name="NumbersTable" Margin="0,8,0,0"/>
+                                    <Expander x:Name="DetailsExpander" Tag="技术细节|Technical details" Header="技术细节" Margin="0,4,0,0" FontSize="12" FontWeight="Normal">
+                                        <StackPanel x:Name="NumbersTable" Margin="0,4,0,0"/>
                                     </Expander>
                                     <!-- plain-language:tech-end -->
                                 </StackPanel>
                             </Border>
-                            <Border x:Name="TurnOffCard" Visibility="Collapsed" BorderBrush="{StaticResource Line}" BorderThickness="1"
-                                    CornerRadius="8" Padding="14" Margin="0,0,0,12">
+                            <Grid Margin="0,18,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <TextBlock Style="{StaticResource Label}" Tag="动画精度|Animation precision"/>
+                                <ComboBox x:Name="PresetBox" Grid.Column="1" SelectionChanged="PresetChanged">
+                                    <ComboBoxItem Tag="效率|Efficiency"/>
+                                    <ComboBoxItem Tag="平衡|Balanced" IsSelected="True"/>
+                                    <ComboBoxItem Tag="质量|Quality"/>
+                                </ComboBox>
+                                <TextBlock x:Name="PresetNote" Grid.Row="1" Grid.Column="1" Style="{StaticResource Note}" Margin="0,4,0,10"/>
+                                <TextBlock Grid.Row="2" Style="{StaticResource Label}" Tag="交互处理|Interaction"/>
+                                <ComboBox x:Name="InteractionBox" Grid.Row="2" Grid.Column="1" SelectionChanged="SettingsChanged">
+                                    <ComboBoxItem Tag="保留|Keep"/>
+                                    <ComboBoxItem Tag="固定视角|Fixed view" IsSelected="True"/>
+                                    <ComboBoxItem Tag="关闭|Off"/>
+                                </ComboBox>
+                                <TextBlock x:Name="InteractionNote" Grid.Row="3" Grid.Column="1" Style="{StaticResource Note}" Margin="0,4,0,10"/>
+                                <TextBlock Grid.Row="4" Style="{StaticResource Label}" Tag="输出|Output"/>
+                                <DockPanel Grid.Row="4" Grid.Column="1">
+                                    <Button x:Name="OutputEditButton" DockPanel.Dock="Right" Content="&#xE70F;" FontFamily="{StaticResource Icons}" MinWidth="32" Padding="8,6" Margin="8,0,0,0"
+                                        Click="ToggleOutputEditor" ToolTip="输出帧率与分辨率。‖Output frame rate and resolution."/>
+                                    <TextBlock x:Name="OutputSummary" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <Grid x:Name="OutputEditor" Grid.Row="5" Grid.ColumnSpan="2" Visibility="Collapsed" Margin="0,10,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                    <TextBlock Style="{StaticResource Label}" Tag="帧率|Frame rate"/>
+                                    <ComboBox x:Name="FpsBox" Grid.Column="1" IsEditable="True" Text="60" LostFocus="SettingsChanged" SelectionChanged="SettingsChanged" KeyUp="FpsEdited">
+                                        <ComboBoxItem Content="60"/><ComboBoxItem Content="120"/><ComboBoxItem Content="144"/><ComboBoxItem Content="165"/><ComboBoxItem Content="240"/><ComboBoxItem Content="60000/1001"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Row="2" Style="{StaticResource Label}" Tag="分辨率|Resolution"/>
+                                    <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
+                                        <TextBox x:Name="WidthBox" Width="76" Text="" TextChanged="SettingsChanged" LostFocus="SettingsChanged"
+                                            ToolTip="两项留空按当前屏幕分辨率确定；指定分辨率需两项都填。‖Leave both empty to follow the current screen resolution, or fill both in to set one."/>
+                                        <TextBlock Text=" × " VerticalAlignment="Center" Foreground="{DynamicResource Ink2}"/>
+                                        <TextBox x:Name="HeightBox" Width="76" Text="" TextChanged="SettingsChanged" LostFocus="SettingsChanged"
+                                            ToolTip="两项留空按当前屏幕分辨率确定；指定分辨率需两项都填。‖Leave both empty to follow the current screen resolution, or fill both in to set one."/>
+                                    </StackPanel>
+                                </Grid>
+                            </Grid>
+                            <Border x:Name="TurnOffCard" Visibility="Collapsed" Style="{StaticResource CardStyle}" Margin="0,14,0,0">
                                 <StackPanel>
                                     <TextBlock Style="{StaticResource Group}" FontSize="13" Tag="本次未包含|Not included in this bake"/>
                                     <StackPanel x:Name="TurnOffList"/>
                                 </StackPanel>
                             </Border>
-                            <Expander x:Name="AdvancedExpander" Tag="高级|Advanced" Header="高级" Margin="0,4,0,8">
-                                <StackPanel Margin="0,10,0,0" TextElement.FontWeight="Normal">
+                            <!-- 专业选项：在左栏原地展开，Windows 设置式分组。 -->
+                            <Border Style="{StaticResource CardStyle}" Padding="14,4" Margin="0,14,0,0">
+                            <Expander x:Name="AdvancedExpander" Tag="高级|Advanced" Header="高级">
+                                <StackPanel Margin="0,6,0,10" TextElement.FontWeight="Normal">
                                     <TextBlock Style="{StaticResource Note}" Margin="0,0,0,10"
                                         Tag="高级设置，默认值适用于多数壁纸。|Advanced settings; the defaults apply to most wallpapers."/>
-                                    <WrapPanel Margin="0,0,0,10">
-                                        <Button x:Name="LoadPresetButton" Tag="载入设置…|Load settings…" Click="LoadPresetClicked" Margin="0,0,6,0"/>
-                                        <Button x:Name="SavePresetButton" Tag="保存设置…|Save settings…" Click="SavePresetClicked" Margin="0"/>
+                                    <WrapPanel Margin="0,0,0,6">
+                                        <Button x:Name="LoadPresetButton" Tag="载入设置…|Load settings…" Click="LoadPresetClicked"/>
+                                        <Button x:Name="SavePresetButton" Tag="保存设置…|Save settings…" Click="SavePresetClicked"/>
                                     </WrapPanel>
-                                    <TextBlock Style="{StaticResource Group}" Tag="画面取舍|Visual tradeoffs"/>
+                                    <TextBlock Style="{StaticResource Group}" FontSize="13" Tag="壁纸来源与输出位置|Wallpaper source and output location"/>
+                                    <TextBlock Style="{StaticResource Label}" Margin="0,0,0,4" Tag="Wallpaper Engine assets 目录|Wallpaper Engine assets directory"/>
+                                    <DockPanel Margin="0,0,0,8">
+                                        <Button DockPanel.Dock="Right" Margin="6,0,0,0" Tag="选择…|Browse…" Click="ChooseAssets"/>
+                                        <TextBox x:Name="AssetsBox" TextChanged="SourceChanged" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                    </DockPanel>
+                                    <TextBlock Style="{StaticResource Label}" Margin="0,0,0,4" Tag="输出目录|Output directory"/>
+                                    <DockPanel Margin="0,0,0,12">
+                                        <Button DockPanel.Dock="Right" Margin="6,0,0,0" Tag="选择…|Browse…" Click="ChooseOutput"/>
+                                        <TextBox x:Name="OutputBox" TextChanged="SettingsChanged" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                    </DockPanel>
+                                    <TextBlock Style="{StaticResource Group}" FontSize="13" Tag="画面取舍|Visual tradeoffs"/>
                                     <CheckBox x:Name="LayeredVideoBox" Checked="SettingsChanged" Unchecked="SettingsChanged"
                                         ToolTip="部分壁纸仅在分层模式下可生成；分层成品的功耗收益需单独实测。‖Some wallpapers can only be generated in layered mode; the power saving of a layered result must be measured separately.">
                                         <TextBlock Tag="允许分层视频|Allow layered video"/></CheckBox>
                                     <CheckBox x:Name="AudioEffectsBox" Visibility="Collapsed" Checked="SettingsChanged" Unchecked="SettingsChanged"
                                         ToolTip="禁用音频响应。‖Disables audio response.">
                                         <TextBlock Tag="禁用音频响应光效|Disable audio-driven lighting"/></CheckBox>
-                                    <TextBlock Style="{StaticResource Group}" Margin="0,8,0,8" Tag="循环周期调节|Loop period tuning"/>
+                                    <TextBlock Style="{StaticResource Group}" FontSize="13" Margin="0,8,0,8" Tag="循环周期调节|Loop period tuning"/>
                                     <TextBlock Style="{StaticResource Note}" Margin="0,0,0,8"
                                         Tag="以下两项默认取自预设；手动填写后以填写值为准。|Both default to the preset; a value entered here overrides it."/>
                                     <CheckBox x:Name="RetimeBox" IsChecked="True" Checked="SettingsChanged" Unchecked="SettingsChanged"
@@ -193,9 +185,9 @@
                                         <TextBlock x:Name="RetimeBudgetOrigin" DockPanel.Dock="Right" Style="{StaticResource Note}" VerticalAlignment="Center" Margin="8,0,0,0"/>
                                         <TextBox x:Name="RetimeBudgetBox" Width="88" HorizontalAlignment="Left" TextChanged="RetimeBudgetEdited" LostFocus="SettingsChanged"/>
                                     </DockPanel>
-                                    <TextBlock Style="{StaticResource Group}" Margin="0,14,0,8" Tag="显卡与编码器|Graphics card and encoder"/>
+                                    <TextBlock Style="{StaticResource Group}" FontSize="13" Margin="0,14,0,8" Tag="显卡与编码器|Graphics card and encoder"/>
                                     <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="10"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                         <TextBlock Style="{StaticResource Label}" Tag="渲染显卡|Render GPU"/>
                                         <ComboBox x:Name="GpuBox" Grid.Column="1" DisplayMemberPath="Name" SelectionChanged="SettingsChanged"/>
                                         <TextBlock Grid.Row="2" Style="{StaticResource Label}" Tag="播放版编码器|Playback encoder"/>
@@ -208,81 +200,139 @@
                                         ToolTip="按输出尺寸和图层实际大小调整特效纹理；关闭时保留原作分辨率。‖Adjust effect textures to the output and actual layer dimensions; leave off to keep the original resolution.">
                                         <TextBlock Tag="内部特效分辨率匹配输出|Match internal effect resolution to output"/>
                                     </CheckBox>
-                                    <Expander x:Name="LayersExpander" Tag="图层清单|Layer list" Header="图层清单" Margin="0,4,0,0" IsEnabled="False" FontSize="12">
+                                    <Expander x:Name="LayersExpander" Tag="图层清单|Layer list" Header="图层清单" Margin="0,4,0,0" IsEnabled="False" FontSize="13">
                                         <StackPanel Margin="0,8,0,0" TextElement.FontWeight="Normal">
                                             <TextBlock Style="{StaticResource Note}" Margin="0,0,0,8"
                                                 Tag="勾选的图层将被排除，修改后需重新分析。壁纸自带开关在壁纸属性或 Wallpaper Engine 中调整。|Ticked layers are excluded; re-analyze after changing. The wallpaper's own switches are under wallpaper properties, or in Wallpaper Engine."/>
                                             <ScrollViewer MaxHeight="230" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel x:Name="LayersEditor"/></ScrollViewer>
                                         </StackPanel>
                                     </Expander>
-                                    <Expander x:Name="PropertiesExpander" Tag="壁纸属性|Wallpaper properties" Header="壁纸属性" Margin="0,8,0,0" FontSize="12">
+                                    <Expander x:Name="PropertiesExpander" Tag="壁纸属性|Wallpaper properties" Header="壁纸属性" Margin="0,4,0,0" FontSize="13">
                                         <StackPanel Margin="0,8,0,0" TextElement.FontWeight="Normal"><TextBlock x:Name="PropertyScopeText" Style="{StaticResource Note}" Margin="0,0,0,8"/>
                                             <ScrollViewer MaxHeight="230" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel x:Name="PropertiesEditor"/></ScrollViewer>
                                         </StackPanel>
                                     </Expander>
                                 </StackPanel>
                             </Expander>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
-                    <StackPanel Grid.Row="2" Margin="0,16,0,0">
-                        <Button x:Name="GenerateButton" Style="{StaticResource Primary}" Tag="开始生成|Start generating" Click="GenerateClicked"/>
-                        <TextBlock x:Name="ValidationText" Foreground="{StaticResource Hint}" FontSize="11" Margin="0,8,0,0"/>
-                    </StackPanel>
+                    <Border Grid.Row="2" BorderBrush="{DynamicResource Stroke}" BorderThickness="0,1,0,0" Padding="20,14,20,16">
+                        <StackPanel>
+                            <DockPanel>
+                                <Button x:Name="AnalyzeButton" DockPanel.Dock="Left" Tag="分析|Analyze" Click="AnalyzeClicked" MinHeight="40" Margin="0,0,8,0"/>
+                                <Button x:Name="GenerateButton" Style="{StaticResource Primary}" Tag="开始生成|Start generating" Click="GenerateClicked"/>
+                            </DockPanel>
+                            <TextBlock x:Name="ValidationText" FontSize="12" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </Border>
                 </Grid>
             </Border>
-            <Border Grid.Column="2" Style="{StaticResource Card}">
+            <!-- 右：烘得怎样 -->
+            <Border Grid.Column="2" Style="{StaticResource PaneStyle}">
                 <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <DockPanel Margin="0,0,0,14">
-                        <Button x:Name="LoadResultButton" DockPanel.Dock="Right" Tag="打开已有成品…|Open an existing result…" Click="LoadResultClicked" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    <DockPanel Margin="20,16,20,10">
+                        <Button x:Name="LoadResultButton" DockPanel.Dock="Right" Tag="打开已有成品…|Open an existing result…" Click="LoadResultClicked" Margin="0" VerticalAlignment="Center"/>
                         <TextBlock Style="{StaticResource Section}" VerticalAlignment="Center" Tag="任务|Tasks"/>
                     </DockPanel>
-                    <Grid Grid.Row="1"><TextBlock x:Name="QueueEmpty" Tag="队列为空。分析壁纸后开始生成。|Queue empty. Analyze a wallpaper, then start generating." Foreground="{StaticResource Hint}" Margin="16,24" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"/>
-                        <ListBox x:Name="QueueList" SelectionChanged="QueueSelectionChanged" BorderThickness="0" Background="Transparent" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                            <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0,0,0,9"/>
-                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListBox.ItemContainerStyle>
-                            <ListBox.ItemTemplate><DataTemplate><Border BorderBrush="#DDE5EF" BorderThickness="1" CornerRadius="7" Padding="12">
-                                <StackPanel><TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTip="{Binding Title}"/>
-                                    <TextBlock Text="{Binding Settings}" FontSize="11" Foreground="#7B899B" Margin="0,4,0,8"/>
-                                    <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontSize="12" FontWeight="SemiBold"/>
-                                    <TextBlock Text="{Binding Detail}" ToolTip="{Binding Detail}" Foreground="#5A6A80" FontSize="11" Margin="0,5,0,0" MaxHeight="120" TextTrimming="CharacterEllipsis"/>
-                                </StackPanel>
-                            </Border></DataTemplate></ListBox.ItemTemplate>
+                    <Grid Grid.Row="1">
+                        <StackPanel x:Name="QueueEmpty" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16,24">
+                            <Grid Width="88" Height="88" Margin="0,0,0,14">
+                                <Ellipse Fill="{DynamicResource AccentSoft}"/>
+                                <TextBlock Text="&#xE8EE;" FontFamily="{StaticResource Icons}" FontSize="34" Foreground="{DynamicResource AccentText}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Grid>
+                            <TextBlock FontSize="15" Foreground="{DynamicResource Ink2}" HorizontalAlignment="Center" TextAlignment="Center"
+                                Tag="队列为空。分析壁纸后开始生成。|Queue empty. Analyze a wallpaper, then start generating."/>
+                            <!-- 新手三步：分析过就收起（UpdatePlanSummary 控制）。 -->
+                            <WrapPanel x:Name="GettingStartedHint" HorizontalAlignment="Center" Margin="0,12,0,0">
+                                <Border Style="{StaticResource CardStyle}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="1 把壁纸文件夹拖进来|1 Drag in a wallpaper folder"/></Border>
+                                <Border Style="{StaticResource CardStyle}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="2 选择档位|2 Pick a preset"/></Border>
+                                <Border Style="{StaticResource CardStyle}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="3 点击生成开始|3 Click Generate"/></Border>
+                            </WrapPanel>
+                        </StackPanel>
+                        <ListBox x:Name="QueueList" SelectionChanged="QueueSelectionChanged" BorderThickness="0" Background="Transparent" Margin="12,0,12,0" Padding="8,0"
+                                 HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="False">
+                            <!-- 作业行：选中时下方 ActionsHost 展开，代码把同一块操作面板（JobActions）挪进来，即"原地展开"。 -->
+                            <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem">
+                                <Setter Property="Margin" Value="0,0,0,6"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
+                                    <Border x:Name="Row" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Stroke}" BorderThickness="1" CornerRadius="6">
+                                        <Grid>
+                                            <StackPanel>
+                                                <ContentPresenter/>
+                                                <Border x:Name="ActionsHost" BorderBrush="{DynamicResource Stroke}" BorderThickness="0,1,0,0" Padding="14,12,14,6" Visibility="Collapsed"/>
+                                            </StackPanel>
+                                            <Border x:Name="Mark" Width="3" Height="18" CornerRadius="0,2,2,0" Background="{DynamicResource Accent}"
+                                                    HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,14,0,0" Visibility="Collapsed"/>
+                                        </Grid>
+                                    </Border><ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Row" Property="BorderBrush" Value="{DynamicResource Stroke2}"/></Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter TargetName="ActionsHost" Property="Visibility" Value="Visible"/>
+                                            <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate></Setter.Value></Setter>
+                            </Style></ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate><DataTemplate>
+                                <Grid Margin="14,12">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTip="{Binding Title}"/>
+                                        <TextBlock Text="{Binding Settings}" FontSize="12" Foreground="{DynamicResource Ink2}" Margin="0,2,0,0"/>
+                                        <TextBlock Text="{Binding Detail}" ToolTip="{Binding Detail}" Foreground="{DynamicResource Ink2}" FontSize="13" Margin="0,6,0,0"
+                                                   MaxHeight="120" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontSize="13" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                                </Grid>
+                            </DataTemplate></ListBox.ItemTemplate>
                         </ListBox>
-                    </Grid>
-                    <StackPanel Grid.Row="2" Margin="0,14,0,0">
-                        <TextBlock Style="{StaticResource Group}" Tag="选中任务|Selected task"/>
-                        <WrapPanel><Button x:Name="CancelButton" Tag="取消|Cancel" Click="CancelClicked"/>
-                            <Button x:Name="RetryButton" Tag="重新生成|Regenerate" Click="RetryClicked"
-                                ToolTip="重新执行生成，结果写入新目录。‖Runs generation again and writes the result to a new directory."/>
-                            <Button x:Name="ResultButton" Tag="打开输出目录|Open output directory" Click="OpenResultClicked"/>
-                            <Button x:Name="ExportButton" Tag="导出 ZIP|Export ZIP" Click="ExportClicked"/>
-                            <Button x:Name="ErrorButton" Tag="打开错误日志|Open error log" Click="OpenErrorClicked"/></WrapPanel>
-                        <TextBlock Style="{StaticResource Group}" Margin="0,6,0,8" Tag="校验|Verification"/>
-                        <WrapPanel><Button x:Name="OfficialPreviewButton" Tag="在 Wallpaper Engine 中预览|Preview in Wallpaper Engine" Click="OfficialPreviewClicked"/>
-                            <Button x:Name="ValidateButton" Tag="查看自动校验结果|View automatic checks" Click="ValidateClicked"/>
-                            <Button x:Name="ReportButton" Tag="打开报告|Open report" Click="OpenReportClicked"/></WrapPanel>
-                        <Expander Tag="应用到桌面|Apply to desktop" Margin="0,8,0,0" FontSize="12" x:Name="DesktopExpander" Header="应用到桌面" IsExpanded="True">
-                            <StackPanel Margin="0,10,0,0" TextElement.FontWeight="Normal">
-                                <TextBlock Style="{StaticResource Label}" HorizontalAlignment="Left" Margin="0,0,0,5" Tag="Wallpaper Engine 可执行文件|Wallpaper Engine executable"/>
-                                <DockPanel><Button DockPanel.Dock="Right" Tag="选择…|Browse…" Click="ChooseWallpaperExecutable" Margin="6,0,0,0" Padding="10,6"/>
-                                    <TextBox x:Name="WpeExeBox" TextChanged="WallpaperExecutableChanged" FontSize="11" Padding="7,5"
-                                        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/></DockPanel>
-                                <TextBlock Style="{StaticResource Label}" HorizontalAlignment="Left" Margin="0,10,0,5" Tag="目标屏幕|Target screen"/>
-                                <DockPanel><Button x:Name="RefreshTargetsButton" DockPanel.Dock="Right" Tag="刷新|Refresh" Click="RefreshTargetsClicked" Margin="6,0,0,0" Padding="10,6"/>
-                                    <ComboBox x:Name="TargetBox" DisplayMemberPath="Label" SelectionChanged="SettingsChanged" ToolTip="{Binding SelectedItem.Target.CurrentFile, RelativeSource={RelativeSource Self}}"/></DockPanel>
-                                <WrapPanel Margin="0,12,0,0"><Button x:Name="ApplyButton" Tag="应用到桌面|Apply to desktop" Click="ApplyClicked"/>
-                                    <Button x:Name="RollbackButton" Tag="回滚到上一张|Roll back to the previous one" Click="RollbackClicked"/>
-                                    <Button x:Name="RollbackFileButton" Tag="从回滚记录还原…|Restore from a rollback record…" Click="RollbackClicked"/></WrapPanel>
+                        <!-- 没有选中作业时操作面板停在这里（不显示），仍留在逻辑树里好跟着切语言。 -->
+                        <Border x:Name="ActionsParking" Visibility="Collapsed">
+                            <StackPanel x:Name="JobActions">
+                                <WrapPanel>
+                                    <Button x:Name="RetryButton" Tag="重新生成|Regenerate" Click="RetryClicked"
+                                        ToolTip="重新执行生成，结果写入新目录。‖Runs generation again and writes the result to a new directory."/>
+                                    <Button x:Name="ResultButton" Tag="打开输出目录|Open output directory" Click="OpenResultClicked"/>
+                                    <Button x:Name="ExportButton" Tag="导出 ZIP|Export ZIP" Click="ExportClicked"/>
+                                    <Button x:Name="ErrorButton" Tag="打开错误日志|Open error log" Click="OpenErrorClicked"/>
+                                </WrapPanel>
+                                <TextBlock Style="{StaticResource Group}" FontSize="13" Margin="0,4,0,8" Tag="校验|Verification"/>
+                                <WrapPanel><Button x:Name="OfficialPreviewButton" Tag="在 Wallpaper Engine 中预览|Preview in Wallpaper Engine" Click="OfficialPreviewClicked"/>
+                                    <Button x:Name="ValidateButton" Tag="查看自动校验结果|View automatic checks" Click="ValidateClicked"/>
+                                    <Button x:Name="ReportButton" Tag="打开报告|Open report" Click="OpenReportClicked"/></WrapPanel>
+                                <Expander Tag="应用到桌面|Apply to desktop" Margin="0,2,0,6" FontSize="13" x:Name="DesktopExpander" Header="应用到桌面" IsExpanded="True">
+                                    <StackPanel Margin="0,8,0,0" TextElement.FontWeight="Normal">
+                                        <TextBlock Style="{StaticResource Label}" HorizontalAlignment="Left" Margin="0,0,0,4" Tag="Wallpaper Engine 可执行文件|Wallpaper Engine executable"/>
+                                        <DockPanel><Button DockPanel.Dock="Right" Tag="选择…|Browse…" Click="ChooseWallpaperExecutable" Margin="6,0,0,0"/>
+                                            <TextBox x:Name="WpeExeBox" TextChanged="WallpaperExecutableChanged" FontSize="12"
+                                                ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/></DockPanel>
+                                        <TextBlock Style="{StaticResource Label}" HorizontalAlignment="Left" Margin="0,10,0,4" Tag="目标屏幕|Target screen"/>
+                                        <DockPanel><Button x:Name="RefreshTargetsButton" DockPanel.Dock="Right" Tag="刷新|Refresh" Click="RefreshTargetsClicked" Margin="6,0,0,0"/>
+                                            <ComboBox x:Name="TargetBox" DisplayMemberPath="Label" SelectionChanged="SettingsChanged" ToolTip="{Binding SelectedItem.Target.CurrentFile, RelativeSource={RelativeSource Self}}"/></DockPanel>
+                                        <WrapPanel Margin="0,12,0,0"><Button x:Name="ApplyButton" Style="{StaticResource Primary}" MinHeight="32" FontSize="13" Margin="0,0,8,8"
+                                                Tag="应用到桌面|Apply to desktop" Click="ApplyClicked"/>
+                                            <Button x:Name="RollbackButton" Tag="回滚到上一张|Roll back to the previous one" Click="RollbackClicked"/>
+                                            <Button x:Name="RollbackFileButton" Tag="从回滚记录还原…|Restore from a rollback record…" Click="RollbackClicked"/></WrapPanel>
+                                    </StackPanel>
+                                </Expander>
                             </StackPanel>
-                        </Expander>
-                    </StackPanel>
+                        </Border>
+                    </Grid>
+                    <!-- 状态栏：进度、状态、耗时；"取消"对分析和选中作业都生效，所以放在这里而不是作业行里。 -->
+                    <Border Grid.Row="2" BorderBrush="{DynamicResource Stroke}" BorderThickness="0,1,0,0" Padding="20,10,20,12">
+                        <DockPanel>
+                            <Button x:Name="CancelButton" DockPanel.Dock="Right" Tag="取消|Cancel" Click="CancelClicked" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            <StackPanel>
+                                <ProgressBar x:Name="RunProgress" Maximum="1" Margin="0,0,0,8"/>
+                                <TextBlock x:Name="StatusText" Foreground="{DynamicResource Ink2}" FontSize="12"/>
+                                <TextBlock x:Name="RunTimingText" Foreground="{DynamicResource Ink2}" FontSize="12"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
                 </Grid>
             </Border>
         </Grid>
-        <StackPanel Grid.Row="3" Margin="0,16,0,0">
-            <ProgressBar x:Name="RunProgress" Height="4" Maximum="1" BorderThickness="0" Foreground="{StaticResource Accent}" Background="#E0E6F0"/>
-            <TextBlock x:Name="StatusText" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,8,0,0"/>
-            <TextBlock x:Name="RunTimingText" Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap"/>
-        </StackPanel>
     </Grid>
 </Window>

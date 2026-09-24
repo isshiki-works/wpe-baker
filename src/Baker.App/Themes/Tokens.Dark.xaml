@@ -1,0 +1,19 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 深色颜色键。键名与 Tokens.Light.xaml 一一对应；控件样式（Controls.xaml）一律用 DynamicResource 引用。 -->
+    <SolidColorBrush x:Key="Bg" Color="#202020"/> <!-- 窗口底色（不透明模式）；云母/亚克力时窗口底透明，由系统画 -->
+    <SolidColorBrush x:Key="Pane" Color="#CC272727"/> <!-- 左右两个窗格：80% 不透明，云母/亚克力只透 20% -->
+    <SolidColorBrush x:Key="Card" Color="#2D2D2D"/> <!-- 卡片、作业行、输入框：不透明，文字都放在这上面 -->
+    <SolidColorBrush x:Key="Fill" Color="#1B1B1B"/> <!-- 分段底、悬停 -->
+    <SolidColorBrush x:Key="Stroke" Color="#393939"/> <!-- 卡片描边 -->
+    <SolidColorBrush x:Key="Stroke2" Color="#4A4A4A"/> <!-- 输入框与按钮描边 -->
+    <SolidColorBrush x:Key="Ink" Color="#FFFFFF"/> <!-- 主文字 -->
+    <SolidColorBrush x:Key="Ink2" Color="#C8C8C8"/> <!-- 次要文字（最坏情况对比度 ≥ 4.5:1） -->
+    <SolidColorBrush x:Key="Ink3" Color="#9B9B9B"/> <!-- 仅禁用与占位 -->
+    <SolidColorBrush x:Key="Accent" Color="#4CC2AE"/> <!-- 强调填充 -->
+    <SolidColorBrush x:Key="AccentInk" Color="#062520"/> <!-- 强调填充上的字 -->
+    <SolidColorBrush x:Key="AccentText" Color="#5FD4BF"/> <!-- 强调色文字 -->
+    <SolidColorBrush x:Key="AccentSoft" Color="#1E3632"/> <!-- 强调淡底 -->
+    <SolidColorBrush x:Key="BadText" Color="#FFA3AD"/> <!-- 失败文字 -->
+    <SolidColorBrush x:Key="BadSoft" Color="#442726"/> <!-- 失败淡底 -->
+</ResourceDictionary>
