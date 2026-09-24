@@ -225,14 +225,11 @@ public static class SdrRadianceClosure
                     ["checks"] = new JsonArray(Check("R0", true, "Layer has no drawable image, particle or text.")) });
                 continue;
             }
-            // 字面值为空、又没绑脚本的文字层画不出任何像素（name 常是分隔线），不参与判据。
-            // 场景里有脚本写图层文字时，渲染器给每个文字层都建动态网格、运行时可能被写进文字：观测到网格就照常判，与 Composer.Draws 同口径。
-            if (!obj.ContainsKey("image") && !obj.ContainsKey("particle") && Composer.EmptyText(obj, properties) &&
-                runtimeLayers?.OfType<JsonObject>().Any(layer => SceneGraph.Int(layer["id"]) == id &&
-                    layer["has_mesh"] is JsonValue mesh && mesh.TryGetValue(out bool hasMesh) && hasMesh) != true)
+            // 字面值为空、又没有脚本能写进文字的文字层画不出任何像素（name 常是分隔线），不参与判据；与 Composer.Draws 同口径。
+            if (!obj.ContainsKey("image") && !obj.ContainsKey("particle") && Composer.EmptyText(obj, properties, scene))
             {
                 perLayer.Add(new JsonObject { ["layer_id"] = id, ["layer_name"] = name, ["status"] = "not_drawn",
-                    ["checks"] = new JsonArray(Check("R0", true, "Text layer has an empty literal value, no script binding and no runtime mesh.")) });
+                    ["checks"] = new JsonArray(Check("R0", true, "Text layer has an empty literal value and no script can reach it to write text.")) });
                 continue;
             }
             var checks = new JsonArray();

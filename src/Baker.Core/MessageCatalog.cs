@@ -492,24 +492,6 @@ public static class MessageCatalog
             En: "No effect-prefix cache for layer \"{0}\" (id {1}): the probe confirming where terminal effect {2} is captured did not complete ({3}), so recording this layer's own texture cannot be shown.",
             Legacy: "No effect-prefix cache for layer \"{0}\" (id {1}): the probe that confirms where terminal effect {2} is captured did not complete ({3}), so it cannot be shown to record this layer's own texture."),
 
-        // ---- 硬件解码尺寸预检（HardwareDecodeDimensions）----
-        // {0}=层（L<id> "名字"） {1}=源纹理尺寸 {2}=预估编码尺寸 {3}=编解码与打包（分语言） {4}=越限项（分语言） {5}=限制依据（分语言） {6}=不透明时的编码尺寸
-        ["unresolved.hardware_decode_dimensions_predicted"] = new(
-            Zh: "按源纹理尺寸 {1} 预估，图层 {0} 的特效前缀缓存编码尺寸为 {2}（{3}），超出硬件解码上限：{4}（依据：{5}）。生成阶段将在编码前拒绝。",
-            En: "Estimated from the source texture extent {1}, the effect-prefix cache for layer {0} would encode at {2} ({3}), beyond the hardware decode limits: {4} (basis: {5}). Generation rejects it before encoding.",
-            Legacy: "Estimated from the source texture extent {1}, the effect-prefix cache for layer {0} would be encoded at {2} ({3}), beyond the hardware decode limits: {4} (basis: {5}). The bake will reject it before encoding."),
-
-        ["unresolved.hardware_decode_dimensions_if_transparent"] = new(
-            Zh: "按源纹理尺寸 {1} 预估，图层 {0} 的特效前缀缓存若含透明像素，需左右并排打包透明通道，编码尺寸为 {2}（{3}），超出硬件解码上限：{4}（依据：{5}）；生成阶段确认含透明像素后将在编码前拒绝。不透明时编码尺寸为 {6}，在上限之内。",
-            En: "Estimated from the source texture extent {1}, if the effect-prefix cache for layer {0} contains transparent pixels its alpha must be packed side by side, giving {2} ({3}), beyond the hardware decode limits: {4} (basis: {5}); once generation confirms transparency it rejects the cache before encoding. An opaque cache would encode at {6}, within the limits.",
-            Legacy: "Estimated from the source texture extent {1}, if the effect-prefix cache for layer {0} contains transparent pixels its alpha must be packed side by side, giving {2} ({3}), beyond the hardware decode limits: {4} (basis: {5}); once the bake confirms transparency it rejects the cache before encoding. An opaque cache would be {6}, within the limits."),
-
-        // {0}=层 {1}=编码尺寸 {2}=编解码与打包 {3}=越限项 {4}=限制依据
-        ["bake.hardware_decode_dimensions_rejected"] = new(
-            Zh: "不可生成：图层 {0} 的特效前缀缓存编码尺寸为 {1}（{2}），超出硬件解码上限：{3}（依据：{4}）。补边仅解决尺寸过小；透明通道当前只有左右并排一种打包方式，无上下并排可选。已在编码前停止，未产出候选工程。",
-            En: "Cannot generate: the effect-prefix cache for layer {0} would encode at {1} ({2}), beyond the hardware decode limits: {3} (basis: {4}). Padding only fixes undersized canvases, and alpha is packed side by side only, with no top-bottom layout available. Stopped before encoding; no candidate project was created.",
-            Legacy: "The effect-prefix cache for layer {0} would be encoded at {1} ({2}), beyond the hardware decode limits: {3} (basis: {4}). Padding fixes only undersized canvases, and alpha is only packed side by side, with no top-bottom layout to switch to. Stopped before encoding; no candidate project was generated."),
-
         // ---- 硬件解码实测的适用范围（NativeRenderRunner.ProbeHardwareDecodeAsync 的结论文案）----
         // 实测只在烘焙机上做，用户在播放机上播；这几条只写进结果与界面文案，不参与任何判定。
         // {0}=硬解通过的显卡名单

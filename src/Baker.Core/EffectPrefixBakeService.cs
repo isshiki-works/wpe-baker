@@ -170,29 +170,11 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 (uint encodeWidth, uint encodeHeight) = puppetAtlas
                     ? FitAtlas(sourceWidth, sourceHeight, settings, plan)
                     : Fit(sourceWidth, sourceHeight, settings.Width, settings.Height);
-                // 编码尺寸与透明打包在这里定稿：先按硬件解码限制表预检，过小就居中补边，补边后仍越上限就在编码前拒绝。
+                (encodeWidth, encodeHeight) = HardwareDecodeDimensions.FitCeiling(encodeWidth, encodeHeight, packedAlpha);
+                // 编码尺寸与透明打包在这里定稿：越硬解上限已在上一行等比缩进上限，这里只剩过小时居中补边。
                 HardwareDecodeDimensions.Plan decodePlan = HardwareDecodeDimensions.Evaluate(encodeWidth, encodeHeight, packedAlpha,
                     settings.FpsNumerator, settings.FpsDenominator);
                 uint storedWidth = decodePlan.StoredWidth, storedHeight = decodePlan.StoredHeight;
-                if (decodePlan.Rejected)
-                {
-                    string layer = $"L{owner.ToString(System.Globalization.CultureInfo.InvariantCulture)} \"{MessageCatalog.EscapeName(pristine["objects"]?.AsArray().OfType<JsonObject>()
-                        .FirstOrDefault(value => SceneGraph.Id(value) == owner)?["name"] is JsonValue name && name.TryGetValue(out string? text) ? text : null)}\"";
-                    string extent = HardwareDecodeDimensions.Extent(storedWidth, storedHeight);
-                    var reason = new Message("bake.hardware_decode_dimensions_rejected",
-                        [layer, extent, decodePlan.PackingText(MessageCatalog.English), decodePlan.ViolationText(MessageCatalog.English), decodePlan.Limits.BasisEn],
-                        [layer, extent, decodePlan.PackingText(MessageCatalog.Chinese), decodePlan.ViolationText(MessageCatalog.Chinese), decodePlan.Limits.BasisZh]);
-                    result["groups"]!.AsArray().Add(new JsonObject { ["id"] = "effect-prefix-" + owner,
-                        ["status"] = "rejected_hardware_decode_dimensions", ["owner_layer_id"] = owner, ["frames"] = frames,
-                        ["source_extent"] = new JsonArray(sourceWidth, sourceHeight), ["encoded_extent"] = new JsonArray(storedWidth, storedHeight),
-                        ["logical_encoded_extent"] = new JsonArray(encodeWidth, encodeHeight),
-                        ["sampling_basis"] = puppetAtlas ? "source_atlas_at_projected_canvas_density" : "source_image_fits_output",
-                        ["packed_alpha"] = packedAlpha, ["period"] = loop, ["hardware_decode_preflight"] = decodePlan.ToJson(),
-                        ["encoded_loop_validation"] = null, ["hardware_decode"] = null });
-                    result["status"] = "candidate_rejected_hardware_decode";
-                    reason.Write(result, "reason");
-                    await Save(); return result;
-                }
                 EncodedContentRegion? paddedContent = decodePlan.Padded
                     ? new((int)decodePlan.PaddedWidth, (int)decodePlan.PaddedHeight, (int)decodePlan.OffsetX, (int)decodePlan.OffsetY,
                         (int)encodeWidth, (int)encodeHeight)

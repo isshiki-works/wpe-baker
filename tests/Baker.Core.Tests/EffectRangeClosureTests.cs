@@ -222,10 +222,10 @@ public class EffectRangeClosureTests
         Assert.Equal("closed", Status(closed));
         Assert.Equal("not_drawn", closed["per_layer"]![0]!["status"]!.GetValue<string>());
         Assert.Equal("open", Status(Evaluate(root, [filled], [], 31)));
-        // 场景脚本写图层文字时渲染器给空文字层也建了动态网格：运行时可能被写进文字，照常判（文字层值域不可判 → open）。
-        var dynamicMesh = new JsonObject { ["id"] = 30, ["owner"] = 30, ["has_mesh"] = true,
-            ["materials"] = new JsonArray(new JsonObject { ["shader"] = "text", ["role"] = "source", ["textures"] = new JsonArray("_text_atlas_0") }) };
-        Assert.Equal("open", Status(Evaluate(root, [(JsonObject)empty.DeepClone()], [dynamicMesh], 30)));
+        // 有脚本按名字拿到这层（可能写进文字）才照常判（文字层值域不可判 → open）；渲染器建的网格不作数。
+        var writer = new JsonObject { ["id"] = 32, ["name"] = "ctl",
+            ["origin"] = new JsonObject { ["script"] = "thisScene.getLayer('----------------').text = 'x';", ["value"] = "0 0 0" } };
+        Assert.Equal("open", Status(Evaluate(root, [(JsonObject)empty.DeepClone(), writer], [], 30)));
         return Task.CompletedTask;
     });
 
@@ -235,7 +235,7 @@ public class EffectRangeClosureTests
     [InlineData("{\"value\":\"\",\"script\":\"export function update(v){return 'x';}\"}", false)]
     [InlineData("{\"value\":\"\"}", true)]
     public void EmptyTextNeedsEmptyLiteralAndNoScript(string text, bool empty) =>
-        Assert.Equal(empty, Composer.EmptyText(new JsonObject { ["text"] = JsonNode.Parse(text) }, new JsonObject()));
+        Assert.Equal(empty, Composer.EmptyText(new JsonObject { ["text"] = JsonNode.Parse(text) }, new JsonObject(), new JsonObject()));
 
     [Fact]
     public Task PrefixRouteReevaluatesClosureOnCapturedPrefix() => TestTemp.Run(root =>
