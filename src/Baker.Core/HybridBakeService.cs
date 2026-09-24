@@ -667,7 +667,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 // AV1/HEVC 直编组在调度器里已按同一实测过闸（成品同一份字节），直接取用。
                                 hardwareDecode = master["hardware_decode"]?.DeepClone() as JsonObject ??
                                     await runner.ProbeHardwareDecodeAsync(video, Path.Combine(work, "hardware-decode"),
-                                    Math.Min(groupFrames, 5), cancellationToken);
+                                    Math.Min(groupFrames, 5), cancellationToken, plan["settings"]?["device_uuid"]?.GetValue<string>());
                         }
                         JsonObject layer;
                         bool alphaBelow = HardwareDecodeDimensions.StackedVertically(packedAlpha && !isStatic, crop.Width);

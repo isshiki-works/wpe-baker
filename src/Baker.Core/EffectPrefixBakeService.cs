@@ -338,7 +338,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 JsonObject hardware = new() { ["status"] = "not_performed" };
                 if (seamPassed && gpuQuality?["passed"]?.GetValue<bool>() != false && opaquePass)
                     using (timing.Measure(StageTiming.HardwareDecodeCheck))
-                        hardware = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(cacheOutput, "hardware-decode"), Math.Min(frames, 5), cancellationToken);
+                        hardware = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(cacheOutput, "hardware-decode"), Math.Min(frames, 5), cancellationToken,
+                            request.DeviceUuid ?? settings.DeviceUuid);
                 string? rejection = !seamPassed ? "seam" : gpuQuality?["passed"]?.GetValue<bool>() == false ? "quality" :
                     !opaquePass ? "opaque_capture" : hardware["all_adapters_passed"]?.GetValue<bool>() != true ? "hardware_decode" : null;
                 if (rejection is not null)
