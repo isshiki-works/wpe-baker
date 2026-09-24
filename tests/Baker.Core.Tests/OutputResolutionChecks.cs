@@ -131,8 +131,8 @@ internal static class OutputResolutionChecks
             "the fitted 3685247684 output (3840x2710) exceeds the H.264 frame-size limit and uses HEVC, opaque and packed");
         var fullEightK = Encode(auto.Width, auto.Height, true, 60);
         check(Encode(auto.Width, auto.Height, false, 60) is { Status: HardwareDecodeDimensions.PassStatus, SoftwareEncoder: "libx265" } &&
-            fullEightK.Rejected && fullEightK.Violations.Any(v => v is { Measure: "width", Actual: 15360, Limit: 8192 }),
-            "an unscaled 7680x4320 output passes opaque as HEVC, and packed alpha (15360 wide) is rejected by the existing HEVC width rule");
+            fullEightK.Rejected && fullEightK.Vertical && fullEightK.Violations.Any(v => v is { Measure: "height", Actual: 8640, Limit: 8192 }),
+            "an unscaled 7680x4320 output passes opaque as HEVC; packed alpha stacks top and bottom (7680x8640) and is still rejected on height");
 
         // ---- plan 与一行结论 ----
         string source = Path.Combine(root, "canvas-resolution-source");

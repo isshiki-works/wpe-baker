@@ -141,8 +141,8 @@ internal static class HardwareDecodeDimensionsChecks
             "a capture smaller than the minimum keeps its crop; the preflight records it instead of inventing pixels");
 
         // ---- 文案 ----
-        JsonObject preflight = atlas.ToJson();
-        check(preflight["status"]?.GetValue<string>() == "rejected" && preflight["encoded_extent"]?.ToJsonString() == "[10216,3160]" &&
+        JsonObject preflight = HardwareDecodeDimensions.Evaluate(8192, 3160, true, 60, 1).ToJson();
+        check(preflight["status"]?.GetValue<string>() == "rejected" && preflight["encoded_extent"]?.ToJsonString() == "[8192,6320]" &&
             preflight["violations"]?.AsArray().Count == 1 && preflight["limits"]?["sources"]?.AsArray().Count == hevc.Sources.Length &&
             strip.ToJson()["padding"]?["top"]?.GetValue<uint>() == strip.OffsetY &&
             strip.ToJson()["padding"]?["bottom"]?.GetValue<uint>() == strip.OffsetY,
