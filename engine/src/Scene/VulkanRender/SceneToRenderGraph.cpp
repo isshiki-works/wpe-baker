@@ -83,7 +83,7 @@ struct ExtraInfo {
     Option<rg::TextureNodeRef> mip_framebuffer_history;
     const RenderSceneSnapshot* render_scene { nullptr };
     const RenderLayerSelection* selection { nullptr };
-    // 帧间反馈：本帧读到上一帧留下的像素（见 sceneToRenderGraph 的出参）
+    // 帧间反馈之一：帧内首次写入 LOAD 叠在上一帧残留上。先读后写的纹理见 RenderGraph::frameBoundaries。
     bool                       reads_previous_frame { false };
     // M2：每个输出 key 最近两次写入（版本号、use、变化集；change 为空 = 变化集 FULL）。
     struct M2Write {
@@ -235,7 +235,6 @@ static rg::TextureNodeRef AddMipFramebufferHistory(ExtraInfo&              extra
     auto history      = builder.createTexture(history_desc);
     builder.markVirtualWrite(history);
     extra.mip_framebuffer_history = Some<rg::TextureNodeRef>(history);
-    extra.reads_previous_frame    = true;
     return history;
 }
 
@@ -900,7 +899,9 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
     }
 
     StoreMipFramebufferHistory(extra);
-    if (reads_previous_frame) *reads_previous_frame = extra.reads_previous_frame;
+    // 读上一帧：LOAD 叠加，或有纹理本帧先读后写（_rt_MipMappedFrameBuffer 历史、动态模糊累积缓冲、排在后面的链接图层）
+    if (reads_previous_frame)
+        *reads_previous_frame = extra.reads_previous_frame || ! rgraph->frameBoundaries().is_empty();
 
     scene.RebuildResourceIndex();
     return rgraph;
