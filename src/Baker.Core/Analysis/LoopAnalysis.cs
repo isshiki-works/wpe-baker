@@ -14,7 +14,7 @@ internal static class LoopAnalysis
         IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent = 2,
         CommonLoopPreference preference = CommonLoopPreference.Balanced, SwayRetimeOptions? swayRetime = null,
         double? loopLengthMaximumSeconds = null, EmbeddedVideoLoopLimit? loopLengthLimit = null, JsonArray? videoGroups = null,
-        IReadOnlyCollection<ulong>? groupClockSteps = null)
+        IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null)
     {
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
@@ -134,7 +134,7 @@ internal static class LoopAnalysis
             var (candidate, groupFrames, steps) = GroupPeriods(solved, groups, solve.Used, unresolved, spriteTablesByOwner,
                 // 精灵帧表从全局整周期预热之后起判（0 或 L）；摆动改频可能把 L 与预热改成 kL 时不缩短精灵组。
                 spriteSeam is null ? 0 : spriteSeam.WarmupFrames is ulong warmup && (warmup == 0 || swayRetime is null || shader.Unresolved.Count == 0) ? warmup : null,
-                fpsNumerator, fpsDenominator, maximumRetimePercent, preference, ceiling);
+                fpsNumerator, fpsDenominator, maximumRetimePercent, preference, ceiling, fullLoopLayerIds);
             clockSteps ??= steps;
             var candidatePatches = new List<LoopPatch>();
             foreach (LoopValuePatch patch in patches)
@@ -205,17 +205,18 @@ internal static class LoopAnalysis
     /// 它整除 L，任一时刻的画面与整组录 L 帧完全相同；有平稳粒子时取满足默认长度下限的最小这种因子。
     /// 分量的时钟被本组独占（别的组没有同一基准周期的分量）时，再用同一个求解器只解本组分量（上限取上面的 P_g）：
     /// 更短就改用它，调速只落在本组的层上，别的组看不到。与别的组共用时钟、自身周期 L/G 却不整除 L 的组，
-    /// 返回 round(L/G) 作为给 L 加的约束（调用方据此重解一次）。
+    /// 返回 round(L/G) 作为给 L 加的约束（调用方据此重解一次）。含 <paramref name="fullLoopLayerIds"/> 的组录 L（烘焙时自身周期没闭合的退回）。
     /// </summary>
     private static (CommonLoopCandidate Candidate, Dictionary<string, ulong> Frames, List<ulong> ClockSteps) GroupPeriods(
         CommonLoopCandidate candidate, (string Id, HashSet<int> Layers)[] groups, CommonLoopComponent[] used, List<LoopUnresolved> unresolved,
         Dictionary<int, float[][]> spriteTables, ulong? spriteStart, uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent, CommonLoopPreference preference,
-        CommonLoopRational ceiling)
+        CommonLoopRational ceiling, IReadOnlyCollection<int>? fullLoopLayerIds)
     {
         var frames = new Dictionary<string, ulong>(StringComparer.Ordinal);
         var steps = new List<ulong>();
         ulong loop = candidate.Frames;
-        HashSet<int> pinned = spriteStart is null ? [.. spriteTables.Keys] : [];
+        HashSet<int> pinned = [.. fullLoopLayerIds ?? []];
+        if (spriteStart is null) pinned.UnionWith(spriteTables.Keys);
         var lifetimes = new Dictionary<int, double>();
         foreach (LoopUnresolved item in unresolved)
         {

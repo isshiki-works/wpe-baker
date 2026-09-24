@@ -41,7 +41,10 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<int, string[]>? RetainLiveReasons = null,
     // 入场切换的退回（旧行为）：加载即播的单次轨所属层也判实时，bake 不做入场切换。分析引出新 blocker 或合成门拒绝切换时自动打开；
     // 默认关时不写进 settings，plan 逐字不变。
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SingleShotLive = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SingleShotLive = false,
+    // 组周期的退回：含这些图层的视频组不按自身周期缩短，录全局 L 帧（LoopAnalysis.GroupPeriods）。按自身周期录的组在接缝门上
+    // 没闭合时由烘焙自动加上；默认空时不写进 settings，plan 逐字不变。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int[]? FullLoopLayerIds = null);
 
 /// <summary>Plans video replacement from source hierarchy and observed input dependencies.</summary>
 /// <param name="display">未指定宽高时用来铺满的屏幕尺寸；省略时读本机主显示器物理分辨率，测试可注入固定值。</param>
@@ -127,13 +130,14 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             JsonObject input = scene();
             // 缓存两段：plan 形态的 loop + unresolved 各条的文案与点名图层（UnresolvedNotes.Pack）。格式变了就换前缀，旧缓存不再命中。
             string key = "loop-v4-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
-                request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.SwayRetime, request.LoopPreference, ceilingOverride);
+                request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.SwayRetime, request.LoopPreference, ceilingOverride,
+                request.FullLoopLayerIds);
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
                 scene, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
                 SwayRetimeOptionsOf(request, projection, videoGroups, ceilingOverride),
                 LoopLengthMaximumOf(request, videoGroups, ceilingOverride), EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride),
-                videoGroups, steps);
+                videoGroups, steps, request.FullLoopLayerIds);
             return UnresolvedNotes.Unpack(AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
             {
                 LoopReport loop = Analyze(input, null);
