@@ -83,7 +83,7 @@ std::vector<VkDeviceQueueCreateInfo> Device::ChooseDeviceQueue(VkSurfaceKHR surf
         index++;
     }
     m_graphics_queue.family_index           = graphic_indexs.front();
-    const static float defaultQueuePriority = 0.0f;
+    const static float defaultQueuePriority[2] = {};
     m_present_queue.family_index            = graphic_indexs.front();
     if (surface) {
         index = 0;
@@ -105,8 +105,13 @@ std::vector<VkDeviceQueueCreateInfo> Device::ChooseDeviceQueue(VkSurfaceKHR surf
         VkDeviceQueueCreateInfo info {
             .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .queueFamilyIndex = i,
-            .queueCount       = 1,
-            .pQueuePriorities = &defaultQueuePriority,
+            // NVIDIA exposes one encode queue per NVENC engine; with only queue 0 every encoder
+            // process shares one engine (two processes: 4K total x1.9-2.0, ARCH4b).
+            .queueCount       = (props[usize(i)].queueFlags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) &&
+                                        props[usize(i)].queueCount > 1
+                                    ? 2u
+                                    : 1u,
+            .pQueuePriorities = defaultQueuePriority,
         };
         queues.push_back(info);
     }
