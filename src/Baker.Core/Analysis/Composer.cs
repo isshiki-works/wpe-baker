@@ -14,6 +14,7 @@ internal sealed class Composer
     private readonly JsonObject properties;
     private readonly HashSet<int> omittedIds, daytimeHidden, daytimeVisible;
     private readonly Dictionary<int, JsonObject> observed;
+    private readonly HashSet<int> emptyText;
 
     /// <summary>视频组（plan.video_groups）。</summary>
     internal JsonArray Groups { get; } = new();
@@ -37,6 +38,7 @@ internal sealed class Composer
         var (allocationOf, liveRoots, liveIds, rootDepths, scripts) =
             (allocation.UnitOf, allocation.LiveUnits, allocation.LiveIds, allocation.Depths, allocation.Scripts);
         omittedIds = allocation.OmittedIds;
+        emptyText = objects.Keys.Where(id => EmptyText(objects[id], properties, scene)).ToHashSet();
         JsonArray dependencies = observation.Dependencies;
         int[] roots = allocation.Order;
         observed = observation.RuntimeLayers.OfType<JsonObject>().Where(n => Int(n["id"]) is int id && objects.ContainsKey(id))
@@ -201,16 +203,15 @@ internal sealed class Composer
         (Int(objects[id]["parent"]) is not int parent || !objects.ContainsKey(parent) || Visible(parent));
 
     /// <summary>对象会画出东西（图像、非空文字、粒子、模型或观测到网格），且没被省略。</summary>
-    internal bool Draws(int id) => !omittedIds.Contains(id) && (objects[id].ContainsKey("image") ||
-        objects[id].ContainsKey("text") && !EmptyText(objects[id], properties) ||
-        objects[id].ContainsKey("particle") || objects[id].ContainsKey("model") ||
+    internal bool Draws(int id) => !omittedIds.Contains(id) && !emptyText.Contains(id) && (objects[id].ContainsKey("image") ||
+        objects[id].ContainsKey("text") || objects[id].ContainsKey("particle") || objects[id].ContainsKey("model") ||
         observed.GetValueOrDefault(id)?["has_mesh"]?.GetValue<bool>() == true);
 
     /// <summary>
-    /// 文字层的字面值是否为空串且没有脚本或动画绑定（绑了用户属性的按解析后的值判）。这种层画不出任何像素：
-    /// 不进视频组，HDR 闭合按 R0 不绘制处理。
+    /// 文字层的字面值是否为空串且没有脚本或动画绑定（绑了用户属性的按解析后的值判），且没有脚本能拿到它写字。
+    /// 这种层画不出任何像素：不进视频组，HDR 闭合按 R0 不绘制处理。渲染器此时仍可能给它建网格（has_mesh），不作数。
     /// </summary>
-    internal static bool EmptyText(JsonObject obj, JsonObject properties)
+    internal static bool EmptyText(JsonObject obj, JsonObject properties, JsonNode scene)
     {
         if (obj["text"] is not JsonNode raw) return false;
         if (raw is JsonObject binding && (binding.ContainsKey("script") || binding.ContainsKey("animation"))) return false;
@@ -220,6 +221,12 @@ internal sealed class Composer
             if (resolved.ContainsKey("script") || resolved.ContainsKey("animation")) return false;
             value = resolved["value"];
         }
-        return value is JsonValue text && text.TryGetValue<string>(out string? literal) && literal.Length == 0;
+        if (value is not JsonValue text || !text.TryGetValue<string>(out string? literal) || literal.Length != 0) return false;
+        // 脚本要往这层写字得先拿到它：本层自己的脚本，按名字 getLayer，或按变量/枚举/父子关系取图层。
+        string name = obj["name"]?.GetValue<string>() ?? "";
+        return !SceneAnalyzer.Walk(obj).OfType<JsonObject>().Any(n => n["script"] is JsonValue) &&
+            !SceneAnalyzer.Walk(scene).OfType<JsonObject>().Any(n => n["script"] is JsonValue script && script.TryGetValue<string>(out string? code) &&
+                ("'\"`".Any(q => code.Contains($"{q}{name}{q}")) ||
+                 Regex.IsMatch(code, @"getLayer\s*\(\s*[^'""`\s]|(enumerateLayers|getChildren|getParent|getLayerByIndex)")));
     }
 }
