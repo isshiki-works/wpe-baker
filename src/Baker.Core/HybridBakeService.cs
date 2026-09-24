@@ -155,7 +155,7 @@ public sealed class HybridBakeService(NativeTools tools)
     }
 
     /// <summary>接缝门拒绝的组若按自身周期（plan 候选的 group_frames，比 L 短）录制，返回它的 id、图层与帧数；其余情况 null。</summary>
-    internal static (string GroupId, int[] Layers, ulong Frames)? OwnPeriodSeamFailure(JsonObject plan, JsonObject report)
+    private static (string GroupId, int[] Layers, ulong Frames)? OwnPeriodSeamFailure(JsonObject plan, JsonObject report)
     {
         if (report["status"]?.GetValue<string>() != "candidate_rejected_seam" ||
             (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["group_frames"] is not JsonObject own) return null;
