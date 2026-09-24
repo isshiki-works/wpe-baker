@@ -46,18 +46,18 @@ internal static class HardwareDecodeDimensionsChecks
         check(maximum.Status == HardwareDecodeDimensions.PassStatus && maximum.SoftwareEncoder == "libx265" && maximum.StoredWidth == 8192,
             "a packed HEVC canvas exactly 8192 wide passes");
         var justOver = HardwareDecodeDimensions.Evaluate(4098, 3160, true, 60, 1);
-        check(justOver.Rejected && justOver.Violations.Count == 1 && justOver.Violations[0] is { Measure: "width", Actual: 8196, Limit: 8192 },
-            "a packed HEVC canvas 8196 wide is rejected on width alone");
+        check(justOver.Status == HardwareDecodeDimensions.PassStatus && justOver.Vertical && justOver.StoredWidth == 4098 && justOver.StoredHeight == 6320,
+            "a packed HEVC canvas that would be 8196 wide side by side stacks top and bottom instead");
         var atlas = HardwareDecodeDimensions.Evaluate(5108, 3160, true, 60, 1);
         var atlasOpaque = HardwareDecodeDimensions.Evaluate(5108, 3160, false, 60, 1);
-        check(atlas.Rejected && atlas.StoredWidth == 10216 && atlas.StoredHeight == 3160 && !atlas.Padded &&
-            atlas.Violations.Single() is { Measure: "width", Actual: 10216, Limit: 8192 } &&
-            atlasOpaque.Status == HardwareDecodeDimensions.PassStatus && atlasOpaque.SoftwareEncoder == "libx265",
-            "side-by-side alpha pushes the 3753921460 atlas (5108x3160) to 10216 wide and is rejected, while the opaque layout would pass");
-        check(HardwareDecodeDimensions.FitCeiling(5108, 3160, true) == (4096u, 2532u) &&
-            HardwareDecodeDimensions.Evaluate(4096, 2532, true, 60, 1).Status == HardwareDecodeDimensions.PassStatus &&
-            HardwareDecodeDimensions.FitCeiling(5108, 3160, false) == (5108u, 3160u),
-            "an over-ceiling packed atlas scales down uniformly to the HEVC ceiling; one within it is left alone");
+        check(atlas.Status == HardwareDecodeDimensions.PassStatus && atlas.Vertical && atlas.StoredWidth == 5108 && atlas.StoredHeight == 6320 &&
+            !atlas.Padded && atlasOpaque.Status == HardwareDecodeDimensions.PassStatus && atlasOpaque.SoftwareEncoder == "libx265",
+            "the 3753921460 atlas (5108x3160) would be 10216 wide side by side, so its alpha stacks below at 5108x6320 and passes");
+        (uint eightKWidth, uint eightKHeight) = HardwareDecodeDimensions.FitCeiling(7680, 4320, true);
+        check(HardwareDecodeDimensions.FitCeiling(5108, 3160, true) == (5108u, 3160u) && eightKWidth > 5500 &&
+            HardwareDecodeDimensions.Evaluate(eightKWidth, eightKHeight, true, 60, 1) is { Status: HardwareDecodeDimensions.PassStatus, Vertical: true } &&
+            HardwareDecodeDimensions.FitCeiling(4096, 3160, true) == (4096u, 3160u) && HardwareDecodeDimensions.FitCeiling(5108, 3160, false) == (5108u, 3160u),
+            "a packed 8K layer scales only to the top-and-bottom luma ceiling (about 0.73x, not 0.53x); ones within a ceiling are left alone");
         var tall = HardwareDecodeDimensions.Evaluate(2, 8194, false, 60, 1);
         check(tall.Rejected && tall.Violations.Any(violation => violation.Measure == "height" && violation.Actual == 8194),
             "height beyond 8192 is rejected even when padding widened the canvas");
@@ -141,8 +141,8 @@ internal static class HardwareDecodeDimensionsChecks
             "a capture smaller than the minimum keeps its crop; the preflight records it instead of inventing pixels");
 
         // ---- 文案 ----
-        JsonObject preflight = atlas.ToJson();
-        check(preflight["status"]?.GetValue<string>() == "rejected" && preflight["encoded_extent"]?.ToJsonString() == "[10216,3160]" &&
+        JsonObject preflight = HardwareDecodeDimensions.Evaluate(8192, 3160, true, 60, 1).ToJson();
+        check(preflight["status"]?.GetValue<string>() == "rejected" && preflight["encoded_extent"]?.ToJsonString() == "[8192,6320]" &&
             preflight["violations"]?.AsArray().Count == 1 && preflight["limits"]?["sources"]?.AsArray().Count == hevc.Sources.Length &&
             strip.ToJson()["padding"]?["top"]?.GetValue<uint>() == strip.OffsetY &&
             strip.ToJson()["padding"]?["bottom"]?.GetValue<uint>() == strip.OffsetY,

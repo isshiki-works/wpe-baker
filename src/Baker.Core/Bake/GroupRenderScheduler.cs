@@ -154,7 +154,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             // 直编组是不透明整幅；硬件档位预判超 2 GiB 时改用软件编码（原因由 GroupEncoder 记）。
             LosslessTest: !direct, PlaybackEncoderKind: direct ?
                 playbackKind == PlaybackEncoderSelection.Vulkan ||
-                EmbeddedVideoBudget.HardwareOverBudget(frames, capture.PixelWidth, capture.PixelHeight, packedAlpha: false)
+                EmbeddedVideoBudget.HardwareOverBudget(frames, capture.PixelWidth, capture.PixelHeight, packedAlpha: false,
+                    PlaybackEncodeProfile.SelectPlaybackEncoder(capture.PixelWidth, capture.PixelHeight, settings.FpsNumerator, settings.FpsDenominator) == "libx265")
                     ? PlaybackEncoderSelection.Software : playbackKind : null,
             DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, CollectAlphaBounds: true, BoundsIncludeRgb: true,
             EffectRenderScale: request.EffectRenderScale,
@@ -175,7 +176,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 : (StartSearches.TryGetValue(groupId, out JsonObject? groupSearch)
                     ? NativeRenderRunner.SamplingCrop(groupSearch["sampling_coverage"] as JsonObject, render) : null)
                     ?? NativeRenderRunner.SamplingCrop(coverage, render);
-            if (known is { } layout)
+            // 渲染器内的 GPU 打包只有左右并排；越宽度上限要上下并排的透明组走 master 路线。
+            if (known is { } layout && !HardwareDecodeDimensions.StackedVertically(layout.Packed, layout.Crop.Width))
             {
                 string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
                     (uint)layout.Crop.Width * (layout.Packed ? 2u : 1u), (uint)layout.Crop.Height,

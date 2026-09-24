@@ -232,14 +232,17 @@ internal static class AppJsonPresentation
             return english ? "Legacy image-derived loop; re-analyze using source periods."
                 : "旧版画面推断循环；请按源周期重新分析。";
         JsonObject? candidate = loop?["candidates"]?.AsArray().FirstOrDefault() as JsonObject;
-        if (candidate is null) return "";
+        string rateHint = loop?["frame_rate_hint"] is not JsonObject hint ? "" : english
+            ? $"; {hint["output_fps"]} fps is not a multiple of the {string.Join("/", hint["video_fps"]!.AsArray())} fps video layers, so the loop must span {hint["alignment_video_cycles"]} video cycles; {hint["suggested_fps"]} fps is suggested"
+            : $"；输出 {hint["output_fps"]} fps 不是视频层 {string.Join("/", hint["video_fps"]!.AsArray())} fps 的整数倍，循环要跨 {hint["alignment_video_cycles"]} 个视频周期才能对齐，建议改用 {hint["suggested_fps"]} fps";
+        if (candidate is null) return rateHint.TrimStart(';', '；', ' ');
         string seconds = Number(candidate["seconds"])?.ToString("0.###", CultureInfo.InvariantCulture) ?? "?";
         string duration = english ? $"{seconds} seconds ({candidate["frames"]} frames)" : $"{seconds} 秒（{candidate["frames"]} 帧）";
         int unresolved = (loop?["unresolved"] as JsonArray)?.Count ?? 0;
         string pending = unresolved == 0 ? "" : english
             ? $"; {unresolved} unresolved mechanism(s), cannot generate a complete loop"
             : $"；另有 {unresolved} 项未解决机制，不能生成完整循环";
-        return (english ? "source-period candidate " : "源周期候选 ") + duration + pending;
+        return (english ? "source-period candidate " : "源周期候选 ") + duration + pending + rateHint;
     }
 
     private static string EffectPrefixLoopSummary(JsonObject plan, bool english)

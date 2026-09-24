@@ -642,13 +642,14 @@ public sealed class HybridBakeService(NativeTools tools)
                                     Math.Min(frames, 5), cancellationToken);
                         }
                         JsonObject layer;
+                        bool alphaBelow = HardwareDecodeDimensions.StackedVertically(packedAlpha && !isStatic, crop.Width);
                         using (timing.Measure(StageTiming.ProjectAssembly))
                         layer = await ProjectWriter.WriteLayerAsync(project, id, video,
-                            (uint)crop.Width * (packedAlpha && !isStatic ? 2u : 1u), (uint)crop.Height, nextId++,
+                            (uint)crop.Width * (packedAlpha && !isStatic && !alphaBelow ? 2u : 1u), (uint)crop.Height * (alphaBelow ? 2u : 1u), nextId++,
                             groupScheduler.CenterX, groupScheduler.CenterY,
                             crop.Width * capture.Width / capture.PixelWidth, crop.Height * capture.Height / capture.PixelHeight,
                             cancellationToken, packedAlpha, depthX, depthY, x, y, isStatic,
-                            capturedColor: SceneGraph.Int(group["parent_id"]) is not null, hdrScale: capture.HdrScale ?? 1);
+                            capturedColor: SceneGraph.Int(group["parent_id"]) is not null, hdrScale: capture.HdrScale ?? 1, alphaBelow: alphaBelow);
                         HybridVideoProjection.AttachToParent(layer, group);
                         if (daytimeExport is not null)
                             daytimeExport.BindReplacement(layer, originalObjects[daytimeExport.ReplacementTargets[id]], isStatic);

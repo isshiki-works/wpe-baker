@@ -83,8 +83,11 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         double requested = ceilingOverride ?? RetimeProfileJson.Resolve(request).LoopMaximumSeconds;
         bool packedAlpha = videoGroups?.OfType<JsonObject>().Any(group =>
             group["transparent"] is JsonValue transparent && transparent.TryGetValue(out bool value) && value) == true;
+        // 编码格式按左右并排的双宽选（与成品一致；上下并排只在越 8192 时出现，那时本来就是 HEVC）。
+        bool hevc = request.Width > 0 && request.Height > 0 && PlaybackEncodeProfile.SelectPlaybackEncoder(request.Width * (packedAlpha ? 2u : 1u),
+            request.Height, request.FpsNumerator, request.FpsDenominator) == "libx265";
         return EmbeddedVideoBudget.LoopLengthLimit(requested, request.Width, request.Height, packedAlpha,
-            request.FpsNumerator, request.FpsDenominator);
+            request.FpsNumerator, request.FpsDenominator, hevc);
     }
 
     /// <summary>
