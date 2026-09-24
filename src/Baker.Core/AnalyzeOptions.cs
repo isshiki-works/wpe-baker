@@ -23,7 +23,7 @@ public sealed record AnalyzeOptions
     public int[]? ExcludedLayerIds { get; init; }
     public string VideoShell { get; init; } = VideoDominance.RejectChoice;
     public bool DaytimeSplit { get; init; }
-    /// <summary>0×0 = 未指定，分析时按场景画布铺满本机屏幕取值。</summary>
+    /// <summary>0×0 = 未指定，分析时取本机主显示器分辨率。</summary>
     public uint Width { get; init; }
     public uint Height { get; init; }
     public string? DeviceUuid { get; init; }

@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Baker.Core;
 
-/// <remarks>Width/Height 同为 0 表示未指定：分析时按 <see cref="OutputResolution"/> 取场景画布，结果与来源写回 plan.settings。</remarks>
+/// <remarks>Width/Height 同为 0 表示未指定：分析时按 <see cref="OutputResolution"/> 取主显示器分辨率，结果与来源写回 plan.settings。</remarks>
 public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, string Assets, string OutputDirectory,
     uint Width = 0, uint Height = 0, uint FpsNumerator = 120, uint FpsDenominator = 1,
     JsonObject? UserProperties = null, string ViewMode = "preserve", double MaximumRetimePercent = 2,
@@ -239,7 +239,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         var scene = AnalysisCache.Get(request.AnalysisCacheDirectory, "scene", () => source.ReadJson(source.SceneResource));
         var project = AnalysisCache.Get(request.AnalysisCacheDirectory, "project", () => source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject());
         var properties = SceneGraph.SnapshotProperties(project, request.UserProperties);
-        // 未指定宽高时按场景画布铺满本机屏幕取尺寸；之后的探测、投影、plan.settings 与 bake 全部用这里定下的尺寸。
+        // 未指定宽高时取本机主显示器分辨率；之后的探测、投影、plan.settings 与 bake 全部用这里定下的尺寸。
         OutputResolution.Choice resolution = OutputResolution.Choose(scene, properties, request.Width, request.Height,
             request.ResolutionSource, display ?? OutputResolution.PrimaryDisplay);
         request = request with { Width = resolution.Width, Height = resolution.Height, ResolutionSource = resolution.Source };
