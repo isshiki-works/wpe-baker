@@ -30,6 +30,11 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     private readonly JsonObject projection = plan["projection"]!.AsObject();
     private readonly JsonArray loopCandidates = plan["loop"]?["candidates"] as JsonArray ?? new JsonArray();
     private readonly bool probe = request.ProbeFrames > 0;
+    /// <summary>NVIDIA 上 GPU 直编按本机偏好先试的格式（AV1 → HEVC），见 <see cref="PlaybackEncoderSelection.PreferredGpuCodecs"/>。</summary>
+    internal string[] PreferredCodecs { get; } = playbackKind == PlaybackEncoderSelection.Vulkan && request.ProbeFrames == 0
+        ? PlaybackEncoderSelection.PreferredGpuCodecs(request.DeviceUuid ?? settings.DeviceUuid) : [];
+    /// <summary>渲染器报这块卡开不了 NVENC AV1（如没有 AV1 编码单元）后，其余组不再试 AV1。</summary>
+    private volatile bool av1Unavailable;
     private readonly Dictionary<int, Task<JsonObject>> renders = [];
     private readonly CancellationTokenSource renderCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
     /// <summary>GPU 长组分段渲染时同时在跑的段进程上限（与组并行数相同），各组的段排同一个队。</summary>
@@ -142,7 +147,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     /// <see cref="HybridBakeService.AllowsDirectPlayback"/>）；Vulkan 档位在裁剪已知时改走 GPU 编码整条管线。
     /// 淡化窗口末尾的强制 IDR、源周期路线多留的原帧都在这里定。
     /// </summary>
-    private RenderRequest MasterRequest(int index, bool allowGpu = true, JsonObject? coverage = null)
+    private RenderRequest MasterRequest(int index, bool allowGpu = true, JsonObject? coverage = null,
+        IReadOnlySet<string>? failedCodecs = null)
     {
         var group = groups[index];
         string groupId = group["id"]!.GetValue<string>();
@@ -184,13 +190,18 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 // Vulkan 编码有最小编码尺寸：RTX 5090 驱动 610.62 报 H.264/HEVC minCodedExtent 160x64（vulkaninfo --show-video-props）。
                 // FFmpeg 拿按 16 对齐后的尺寸比：72 宽透明组打包成 144 被拒、整组落到 CPU 无损路线（3757825891 group-4 读回约 200 s）；
                 // 152 对齐成 160 放行，但实际尺寸低于下限。不足时在捕获范围内居中加宽/加高裁剪，多出的是透明像素；打包的每半幅算一半宽。
-                int minimum = layout.Packed ? 80 : 160;
+                // NVIDIA 上先取本机偏好里这一组还没失败过的第一档（AV1 → HEVC），都用完或没有偏好时照原规则取 H.264/HEVC。
+                string? preferred = PreferredCodecs.FirstOrDefault(c => failedCodecs?.Contains(c) != true &&
+                    !(c == PlaybackEncoderSelection.Av1Nvenc && av1Unavailable));
+                // NVDEC 解 AV1 要高 ≥128（本机 5090 D3D11VA 实测 96 高失败、128 通过）；NVENC AV1 要宽 >128，下面的 160 已满足。
+                int minimum = layout.Packed ? 80 : 160, minimumHeight = preferred == PlaybackEncoderSelection.Av1Nvenc ? 128 : 64;
                 CacheRegion crop = layout.Crop;
                 if (crop.Width < minimum && crop.CaptureWidth >= minimum)
                     crop = crop with { X = Math.Clamp((crop.X - (minimum - crop.Width) / 2) & ~1, 0, crop.CaptureWidth - minimum), Width = minimum };
-                if (crop.Height < 64 && crop.CaptureHeight >= 64)
-                    crop = crop with { Y = Math.Clamp((crop.Y - (64 - crop.Height) / 2) & ~1, 0, crop.CaptureHeight - 64), Height = 64 };
-                string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
+                if (crop.Height < minimumHeight && crop.CaptureHeight >= minimumHeight)
+                    crop = crop with { Y = Math.Clamp((crop.Y - (minimumHeight - crop.Height) / 2) & ~1, 0, crop.CaptureHeight - minimumHeight),
+                        Height = minimumHeight };
+                string codec = preferred ?? PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
                     (uint)crop.Width * (layout.Packed ? 2u : 1u), (uint)crop.Height,
                     render.FpsNumerator, render.FpsDenominator), PlaybackEncoderSelection.Vulkan);
                 // 不按固定码率系数预判 2 GiB：ARCH2 实测 Vulkan 成品相对参考码率 0.02–2.0 倍，随内容变、不随格式定。
@@ -208,13 +219,14 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     /// 异步启动一个组的主渲染：构造请求时抛出的异常留在任务里，等轮到这个组时才浮出来，不会打乱前面组的判定顺序。
     /// Vulkan 透明组的裁剪未知时先跑一遍 GPU 覆盖度预通道拿全片裁剪，再直编；全片全零时直接走空组路径。
     /// GPU 直编的画质门在这里过：不过先降 QP 在 GPU 上重渲一次，还不过与 GPU 编码初始化失败一样，把 master 挪开按 CPU 路线重渲。
+    /// 按本机偏好选的 AV1/HEVC 下面还有一档时，另过一次本机硬解实测；开不了编码器、任一道门不过都降一档重编，末档照原样。
     /// </summary>
     private async Task<JsonObject> StartAsync(int index)
     {
         RenderRequest render = MasterRequest(index);
         if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
             throw new IOException("A group master output must be new; existing files will not be cleaned.");
-        JsonObject? coveragePass = null;
+        JsonObject? coveragePass = null, coverage = null;
         // 起点搜索已给出裁剪却没取 GPU 路线（须上下并排）时，预通道的裁剪同样用不上，不跑。
         if (render.GpuEncoding is null && playbackKind == PlaybackEncoderSelection.Vulkan && !probe &&
             render.PixelPacking != "rgb" && render.Width % 2 == 0 && render.Height % 2 == 0 &&
@@ -231,7 +243,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 FrameSamplesOnly = true, FrameSampleStride = checked((uint)render.Frames),
                 FrameSampleWidth = 64, FrameSampleIncludeAlpha = true, CollectSamplingCoverage = true };
             JsonObject measured = await runner.RenderAsync(boundsRequest, progress, renderCancellation.Token);
-            render = MasterRequest(index, coverage: measured["sampling_coverage"] as JsonObject);
+            coverage = measured["sampling_coverage"] as JsonObject;
+            render = MasterRequest(index, coverage: coverage);
             coveragePass = new JsonObject { ["status"] = measured["sampling_coverage_status"]?.DeepClone(),
                 ["manifest_path"] = Path.Combine(boundsOutput, "manifest.json"),
                 ["frames"] = render.Frames, ["readback_frames"] = measured["readback_frames"]?.DeepClone(),
@@ -249,34 +262,64 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 return measured;
             }
         }
-        try
+        var failedCodecs = new HashSet<string>();
+        var codecFallbacks = new JsonArray();
+        for (; ; )
         {
-            JsonObject rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
-            if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render))
+            RenderRequest? lower = render.GpuEncoding is { } current &&
+                MasterRequest(index, coverage: coverage, failedCodecs: new HashSet<string>(failedCodecs) { current.Codec }) is
+                    { GpuEncoding.Codec: var next } candidate && next != current.Codec ? candidate : null;
+            try
             {
-                Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
-                    Path.GetDirectoryName(render.OutputDirectory)!, $"master.gpu-qp{gpu.Qp}"));
-                render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
-                rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
-                if (!await GpuQualityPassesAsync(rendered, render))
-                    throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
+                JsonObject rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
+                if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render))
+                {
+                    Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
+                        Path.GetDirectoryName(render.OutputDirectory)!, $"master.{gpu.Codec}-qp{gpu.Qp}"));
+                    render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
+                    rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
+                    if (!await GpuQualityPassesAsync(rendered, render))
+                        throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
+                }
+                // 超内嵌视频上限的 GPU 成品不交出去：软件档码率更低，按 CPU 路线重渲（原来会被判为超限拒绝）。
+                if (render.GpuEncoding is not null &&
+                    new FileInfo(Path.Combine(render.OutputDirectory, "preview.mp4")).Length > EmbeddedVideoBudget.MaximumBytes)
+                    throw new GpuEncodeUnavailableException("GPU playback video exceeds the 2 GiB embedded-video limit; re-rendering on the software route.");
+                if (lower is not null)
+                {
+                    // 播放机就是本机：成品要在本机每块显卡上都能硬解（WPE 经 MF 放视频，扩展装了但显卡解不了一样放不动）。
+                    JsonObject decode = await runner.ProbeHardwareDecodeAsync(Path.Combine(render.OutputDirectory, "preview.mp4"),
+                        Path.Combine(render.OutputDirectory, "hardware-decode"), Math.Min(frames, 5), renderCancellation.Token);
+                    if (decode["all_adapters_passed"]?.GetValue<bool>() != true)
+                        throw new GpuEncodeUnavailableException($"{render.GpuEncoding!.Codec} did not pass hardware decoding on every adapter of this machine.");
+                    rendered["hardware_decode"] = decode;
+                }
+                rendered["gpu_bounds_prepass"] = coveragePass;
+                if (codecFallbacks.Count > 0) rendered["gpu_codec_fallbacks"] = codecFallbacks;
+                return rendered;
             }
-            // 超内嵌视频上限的 GPU 成品不交出去：软件档码率更低，按 CPU 路线重渲（原来会被判为超限拒绝）。
-            if (render.GpuEncoding is not null &&
-                new FileInfo(Path.Combine(render.OutputDirectory, "preview.mp4")).Length > EmbeddedVideoBudget.MaximumBytes)
-                throw new GpuEncodeUnavailableException("GPU playback video exceeds the 2 GiB embedded-video limit; re-rendering on the software route.");
-            rendered["gpu_bounds_prepass"] = coveragePass;
-            return rendered;
-        }
-        catch (GpuEncodeUnavailableException error) when (render.GpuEncoding is not null && !renderCancellation.IsCancellationRequested)
-        {
-            string parent = Path.GetDirectoryName(render.OutputDirectory)!;
-            string failed = ProjectSource.ContainedPath(parent, "master.gpu-unavailable");
-            Directory.Move(render.OutputDirectory, failed);
-            JsonObject fallback = await runner.RenderAsync(MasterRequest(index, allowGpu: false), progress, renderCancellation.Token);
-            fallback["gpu_pipeline_fallback_reason"] = error.Message;
-            fallback["gpu_bounds_prepass"] = coveragePass;
-            return fallback;
+            catch (GpuEncodeUnavailableException error) when (render.GpuEncoding is not null && !renderCancellation.IsCancellationRequested)
+            {
+                string parent = Path.GetDirectoryName(render.OutputDirectory)!;
+                if (lower is not null)
+                {
+                    string codec = render.GpuEncoding.Codec;
+                    if (error.Message.Contains("NVENC AV1 is unavailable", StringComparison.Ordinal)) av1Unavailable = true;
+                    if (Directory.Exists(render.OutputDirectory))
+                        Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(parent, $"master.{codec}-failed"));
+                    codecFallbacks.Add(new JsonObject { ["codec"] = codec, ["reason"] = error.Message });
+                    failedCodecs.Add(codec);
+                    render = lower;
+                    continue;
+                }
+                string failed = ProjectSource.ContainedPath(parent, "master.gpu-unavailable");
+                Directory.Move(render.OutputDirectory, failed);
+                JsonObject fallback = await runner.RenderAsync(MasterRequest(index, allowGpu: false), progress, renderCancellation.Token);
+                fallback["gpu_pipeline_fallback_reason"] = error.Message;
+                fallback["gpu_bounds_prepass"] = coveragePass;
+                if (codecFallbacks.Count > 0) fallback["gpu_codec_fallbacks"] = codecFallbacks;
+                return fallback;
+            }
         }
     }
 

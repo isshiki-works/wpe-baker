@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -8,6 +9,56 @@ namespace Baker.Core;
 /// </summary>
 public static partial class PlaybackEncoderSelection
 {
+    /// <summary>渲染器内经 NVENC SDK 编 AV1 的编码名；没有 FFmpeg/Vulkan 回退，开不了就由调用方降一档。</summary>
+    public const string Av1Nvenc = "av1_nvenc";
+
+    /// <summary>
+    /// NVIDIA 上 GPU 直编的格式偏好（用户定 AV1 → HEVC → H.264，末档 H.264/HEVC 仍按宽度规则，不在这里）。只列 Media Foundation
+    /// 能解的格式：WPE 经 MF 放视频，AV1、HEVC 靠商店扩展（9MVZQVXJBQ9V、9N4WGH0Z6VHQ）。显卡能否编 AV1 由渲染器开 NVENC 时实测。
+    /// 非 NVIDIA 或查询失败返回空，维持原规则。
+    /// </summary>
+    public static string[] PreferredGpuCodecs(string? deviceUuid)
+    {
+        try
+        {
+            IReadOnlyList<VulkanDeviceInfo> devices = VulkanDevices.Enumerate();
+            VulkanDeviceInfo? target = deviceUuid is null
+                ? devices.FirstOrDefault(d => d.DeviceType == VulkanDeviceType.DiscreteGpu) ?? devices.FirstOrDefault()
+                : devices.FirstOrDefault(d => string.Equals(d.DeviceUuid, deviceUuid, StringComparison.OrdinalIgnoreCase));
+            if (target?.VendorId != 0x10DE) return [];
+            // 子类型 FOURCC：'AV01'、'HEVC'。
+            return [.. new[] { (Codec: Av1Nvenc, FourCc: 0x31305641u), (Codec: "hevc_vulkan", FourCc: 0x43564548u) }
+                .Where(c => MediaFoundationDecoders(c.FourCc) > 0).Select(c => c.Codec)];
+        }
+        catch (Exception error) when (error is not OperationCanceledException) { return []; }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MftTypeInfo { public Guid Major, Sub; }
+    [DllImport("mfplat.dll")] private static extern int MFStartup(uint version, uint flags);
+    [DllImport("mfplat.dll")] private static extern int MFShutdown();
+    [DllImport("mfplat.dll")]
+    private static extern int MFTEnumEx(Guid category, uint flags, ref MftTypeInfo input, IntPtr output, out IntPtr activates, out uint count);
+
+    /// <summary>Media Foundation 里能解这个 FOURCC 的视频解码器个数（含商店扩展注册的）。</summary>
+    private static int MediaFoundationDecoders(uint fourCc)
+    {
+        // MFMediaType_Video；视频子类型 GUID 是 FOURCC-0000-0010-8000-00AA00389B71；MFT_CATEGORY_VIDEO_DECODER。
+        var input = new MftTypeInfo { Major = new("73646976-0000-0010-8000-00aa00389b71"),
+            Sub = new(fourCc, 0, 0x10, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71) };
+        if (MFStartup(0x20070, 1) < 0) return 0;
+        try
+        {
+            // SYNCMFT | ASYNCMFT | HARDWARE | LOCALMFT | SORTANDFILTER
+            if (MFTEnumEx(new("d6c02d4b-6833-45b4-971a-05a4b04bab91"), 0x57, ref input, IntPtr.Zero, out IntPtr array, out uint count) < 0)
+                return 0;
+            for (int i = 0; i < count; ++i) Marshal.Release(Marshal.ReadIntPtr(array, i * IntPtr.Size));
+            Marshal.FreeCoTaskMem(array);
+            return (int)count;
+        }
+        finally { MFShutdown(); }
+    }
+
     public const string Software = "software";
     public const string Mf = "mf";
     public const string Nvenc = "nvenc";

@@ -413,6 +413,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 report["group_parallel"] = groupParallel = Math.Clamp(3, 1, Math.Max(1, groups.Length));
             scheduler = new GroupRenderScheduler(runner, request, plan, settings, groups, captureProject, output, snapshot, frames,
                 crossfadeFrames, warmupFrames, residualGroupIndexes, groupParallel, playbackKind, progress, token);
+            if (scheduler.PreferredCodecs.Length > 0) report["gpu_codec_preference"] = JsonSerializer.SerializeToNode(scheduler.PreferredCodecs);
             if (residualMasking is not null && !probe)
             {
                 startSearch = await LoopStartSelector.SearchAsync(runner, scheduler, groupParallel, progress, timing, token);
@@ -642,7 +643,9 @@ public sealed class HybridBakeService(NativeTools tools)
                             progress?.Report(new("checking_hardware_decode", (double)i / groups.Length,
                                 "Checking this actual video on the installed hardware decoders."));
                             using (timing.Measure(StageTiming.HardwareDecodeCheck))
-                                hardwareDecode = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(work, "hardware-decode"),
+                                // AV1/HEVC 直编组在调度器里已按同一实测过闸（成品同一份字节），直接取用。
+                                hardwareDecode = master["hardware_decode"]?.DeepClone() as JsonObject ??
+                                    await runner.ProbeHardwareDecodeAsync(video, Path.Combine(work, "hardware-decode"),
                                     Math.Min(frames, 5), cancellationToken);
                         }
                         JsonObject layer;

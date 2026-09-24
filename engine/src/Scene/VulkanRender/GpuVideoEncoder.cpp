@@ -375,9 +375,11 @@ struct GpuVideoEncoder::Impl {
         if (result != CUDA_SUCCESS) throw std::runtime_error(std::string(operation) + ": CUresult=" + std::to_string(result));
     }
 
-    // 加载驱动库、按 LUID 找到同一块卡并开 NVENC 会话；任何一步不可用返回 false，调用方改走 Vulkan Video。
-    bool openNvenc(std::span<const std::string> device_extensions, bool hevc, int qp) {
-        if (!hevc || std::find(device_extensions.begin(), device_extensions.end(),
+    // 加载驱动库、按 LUID 找到同一块卡并开 NVENC 会话；任何一步不可用返回 false，HEVC 改走 Vulkan Video，AV1 由调用方报初始化失败。
+    // AV1 用 p1（强制三条带约 5.9 GP/s），恒定 qindex 取 4×QP（QP 18 → 72，与 ARCHN 对照同档）。
+    // NVENC AV1 尺寸：本机 5090 实测 130×66 起可编（128 宽、64 高被拒），上限 8192×8192；NVDEC AV1 解码要高 ≥128。
+    bool openNvenc(std::span<const std::string> device_extensions, bool hevc, bool av1, int qp) {
+        if (!(hevc || av1) || std::find(device_extensions.begin(), device_extensions.end(),
                                VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME) == device_extensions.end() ||
             cuda_load_functions(&cu, nullptr) || nvenc_load_functions(&nvenc_dl, nullptr) || cu->cuInit(0) != CUDA_SUCCESS)
             return false;
@@ -397,20 +399,31 @@ struct GpuVideoEncoder::Impl {
         if (!cuda || nvenc_dl->NvEncodeAPICreateInstance(&nv) != NV_ENC_SUCCESS ||
             nv.nvEncOpenEncodeSessionEx(&open, &nvenc) != NV_ENC_SUCCESS) { nvenc = nullptr; return false; }
         NV_ENC_PRESET_CONFIG preset { .version = NV_ENC_PRESET_CONFIG_VER, .presetCfg = { .version = NV_ENC_CONFIG_VER } };
-        Nv(nv.nvEncGetEncodePresetConfigEx(nvenc, NV_ENC_CODEC_HEVC_GUID, NV_ENC_PRESET_P3_GUID, NV_ENC_TUNING_INFO_HIGH_QUALITY, &preset),
+        const GUID codec_guid = av1 ? NV_ENC_CODEC_AV1_GUID : NV_ENC_CODEC_HEVC_GUID;
+        const GUID preset_guid = av1 ? NV_ENC_PRESET_P1_GUID : NV_ENC_PRESET_P3_GUID;
+        Nv(nv.nvEncGetEncodePresetConfigEx(nvenc, codec_guid, preset_guid, NV_ENC_TUNING_INFO_HIGH_QUALITY, &preset),
            "read NVENC preset");
         auto config = preset.presetCfg;
         config.gopLength = 250; config.frameIntervalP = 1;
         config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
-        config.rcParams.constQP = { std::uint32_t(qp), std::uint32_t(qp), std::uint32_t(qp) };
+        const auto q = std::uint32_t(av1 ? qp * 4 : qp);
+        config.rcParams.constQP = { q, q, q };
+        if (av1) {
+            auto& av1_config = config.encodeCodecConfig.av1Config;
+            av1_config.idrPeriod = 250; av1_config.repeatSeqHdr = 1; av1_config.chromaFormatIDC = 1; av1_config.colorRange = 0;
+            av1_config.colorPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+            av1_config.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+            av1_config.matrixCoefficients = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+        } else {
         auto& hevc_config = config.encodeCodecConfig.hevcConfig;
         hevc_config.idrPeriod = 250;
         auto& vui = hevc_config.hevcVUIParameters;
         vui.videoSignalTypePresentFlag = 1; vui.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED; vui.videoFullRangeFlag = 0;
         vui.colourDescriptionPresentFlag = 1; vui.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
         vui.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709; vui.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
-        NV_ENC_INITIALIZE_PARAMS init { .version = NV_ENC_INITIALIZE_PARAMS_VER, .encodeGUID = NV_ENC_CODEC_HEVC_GUID,
-            .presetGUID = NV_ENC_PRESET_P3_GUID, .encodeWidth = output_width, .encodeHeight = output_height,
+        }
+        NV_ENC_INITIALIZE_PARAMS init { .version = NV_ENC_INITIALIZE_PARAMS_VER, .encodeGUID = codec_guid,
+            .presetGUID = preset_guid, .encodeWidth = output_width, .encodeHeight = output_height,
             .darWidth = output_width, .darHeight = output_height,
             .frameRateNum = std::uint32_t(codec->framerate.num), .frameRateDen = std::uint32_t(codec->framerate.den),
             .enablePTD = 1, .encodeConfig = &config, .maxEncodeWidth = output_width, .maxEncodeHeight = output_height,
@@ -419,7 +432,7 @@ struct GpuVideoEncoder::Impl {
         init.splitEncodeMode = NV_ENC_SPLIT_THREE_FORCED_MODE;
         if (nv.nvEncInitializeEncoder(nvenc, &init) != NV_ENC_SUCCESS) {
             init.splitEncodeMode = NV_ENC_SPLIT_AUTO_MODE;
-            Nv(nv.nvEncInitializeEncoder(nvenc, &init), "initialize NVENC HEVC");
+            Nv(nv.nvEncInitializeEncoder(nvenc, &init), av1 ? "initialize NVENC AV1" : "initialize NVENC HEVC");
         }
         std::array<std::uint8_t, 1024> header {};
         std::uint32_t header_size = 0;
@@ -617,8 +630,8 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
         throw std::runtime_error("Invalid GPU capture frame selection");
     if (!width || !height || !fps_num || !fps_den ||
         fps_num > INT32_MAX || fps_den > INT32_MAX || qp < 0 || qp > 51 ||
-        (codec_name != "h264_vulkan" && codec_name != "hevc_vulkan"))
-        throw std::runtime_error("GPU encoding requires positive capture dimensions, a rational FPS and Vulkan H.264/HEVC");
+        (codec_name != "h264_vulkan" && codec_name != "hevc_vulkan" && codec_name != "av1_nvenc"))
+        throw std::runtime_error("GPU encoding requires positive capture dimensions, a rational FPS and Vulkan H.264/HEVC or NVENC AV1");
     vkGetDeviceQueue(device, graphics_family, 0, &p.queue);
     p.push_descriptors = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR"));
     if (!p.push_descriptors) throw std::runtime_error("GPU conversion requires push descriptors");
@@ -669,10 +682,13 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     Av(av_hwframe_ctx_init(p.frames), "allocate Vulkan encoder frame pool");
     if (vkframes->format[0] != VK_FORMAT_G8_B8R8_2PLANE_420_UNORM)
         throw std::runtime_error("Vulkan encoder needs one multiplane NV12 image");
-    const auto* encoder = avcodec_find_encoder_by_name(codec_name.c_str());
-    if (!encoder) throw std::runtime_error("Vulkan encoder is absent from libavcodec");
+    // AV1 只走 NVENC SDK：libavcodec 里没有它的编码器，编解码上下文只给封装器提供流参数。
+    const bool av1 = codec_name == "av1_nvenc";
+    const auto* encoder = av1 ? nullptr : avcodec_find_encoder_by_name(codec_name.c_str());
+    if (!av1 && !encoder) throw std::runtime_error("Vulkan encoder is absent from libavcodec");
     p.codec = avcodec_alloc_context3(encoder);
     if (!p.codec) throw std::bad_alloc();
+    if (av1) { p.codec->codec_type = AVMEDIA_TYPE_VIDEO; p.codec->codec_id = AV_CODEC_ID_AV1; }
     p.codec->width = static_cast<int>(p.output_width); p.codec->height = static_cast<int>(p.output_height);
     p.codec->pix_fmt = AV_PIX_FMT_VULKAN; p.codec->sw_pix_fmt = AV_PIX_FMT_NV12;
     p.codec->time_base = { static_cast<int>(fps_den), static_cast<int>(fps_num) };
@@ -682,11 +698,15 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.codec->color_primaries = AVCOL_PRI_BT709; p.codec->color_trc = AVCOL_TRC_BT709;
     p.codec->hw_frames_ctx = av_buffer_ref(p.frames);
     p.codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    Av(av_opt_set_int(p.codec->priv_data, "qp", qp, 0), "set Vulkan encoder QP");
-    Av(av_opt_get_int(p.codec->priv_data, "quality", 0, &p.quality_level), "read Vulkan encoder quality level");
-    Av(av_opt_get_int(p.codec->priv_data, "async_depth", 0, &p.async_depth), "read Vulkan encoder depth");
-    if (!p.openNvenc(device_extensions, codec_name == "hevc_vulkan", qp))
+    if (!av1) {
+        Av(av_opt_set_int(p.codec->priv_data, "qp", qp, 0), "set Vulkan encoder QP");
+        Av(av_opt_get_int(p.codec->priv_data, "quality", 0, &p.quality_level), "read Vulkan encoder quality level");
+        Av(av_opt_get_int(p.codec->priv_data, "async_depth", 0, &p.async_depth), "read Vulkan encoder depth");
+    }
+    if (!p.openNvenc(device_extensions, codec_name == "hevc_vulkan", av1, qp)) {
+        if (av1) throw std::runtime_error("NVENC AV1 is unavailable on this device");
         Av(avcodec_open2(p.codec, encoder, nullptr), "open Vulkan encoder");
+    }
     if (p.capture.crossfade_frames) {
         p.body_path=path+".body.mp4"; p.head_path=path+".head.mp4";
         p.openMux(p.body_path,p.mux,p.stream);
