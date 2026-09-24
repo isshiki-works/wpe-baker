@@ -117,6 +117,79 @@ public sealed class HybridBakeService(NativeTools tools)
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        JsonObject result = await BakeCleanedAsync(request, progress, cancellationToken);
+        if (request.ProbeFrames > 0 || ResidualParticleRoots(request.Plan, result) is not int[] retain) return result;
+        return await RetryRetainingParticlesAsync(request, result, retain, progress, cancellationToken);
+    }
+
+    /// <summary>
+    /// 残差掩盖组在全分辨率第一层被拒、失败组里有被掩盖的粒子系统时要留实时的作者根：计划原本保留的根 ∪ 这些粒子的作者根；
+    /// 其余情况 null。粒子过了平稳随机判据才会被掩盖，但判据只证统计平稳：两次独立实现之差铺满画布时硬切残差照样超限，第一层才是裁决。
+    /// </summary>
+    internal static int[]? ResidualParticleRoots(JsonObject plan, JsonObject report)
+    {
+        if (report["status"]?.GetValue<string>() != "candidate_rejected_seam" ||
+            report["loop_validation"]?.GetValue<string>() != "residual_above_limits") return null;
+        var failed = (report["groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(group => group["status"]?.GetValue<string>() == "rejected_seam_residual")
+            .SelectMany(group => (group["source_layers"] as JsonArray ?? []).Select(SceneGraph.Int)).OfType<int>().ToHashSet();
+        var rootOf = new Dictionary<int, int>();
+        foreach (JsonObject layer in (plan["layers"] as JsonArray ?? []).OfType<JsonObject>())
+            if (SceneGraph.Int(layer["id"]) is int id) rootOf.TryAdd(id, SceneGraph.Int(layer["root"]) ?? id);
+        int[] particles = (report["residual_masking"]?["residual_layers"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(item => item["mechanism"]?.GetValue<string>() == "particle_system")
+            .Select(item => SceneGraph.Int(item["owner_layer_id"])).OfType<int>().Where(failed.Contains)
+            .Select(owner => rootOf.GetValueOrDefault(owner, owner)).ToArray();
+        if (particles.Length == 0) return null;
+        return (plan["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()
+            .Concat(particles).Distinct().ToArray();
+    }
+
+    /// <summary>
+    /// 残差粒子自动重试，只试一次：按计划里的分析设置加上 <paramref name="retain"/> 重新分析（在 .analysis-refresh），
+    /// 无 blocker 就把首次产物挪到 &lt;输出&gt;.residual-first-attempt，再烘一次。首次结论、保留的根与耗时记在 residual_particle_retry。
+    /// </summary>
+    private async Task<JsonObject> RetryRetainingParticlesAsync(HybridBakeRequest request, JsonObject first, int[] retain,
+        IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
+    {
+        var layout = new WorkLayout(request.OutputDirectory);
+        var record = new JsonObject {
+            ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(retain),
+            ["first_status"] = first["status"]?.DeepClone(), ["first_reason_localized"] = first["reason_localized"]?.DeepClone(),
+            ["first_rejected_groups"] = new JsonArray([.. (first["groups"] as JsonArray ?? []).OfType<JsonObject>()
+                .Where(group => group["status"]?.GetValue<string>() == "rejected_seam_residual").Select(group => group["id"]?.DeepClone())]),
+            ["first_stage_timing"] = first["stage_timing"]?.DeepClone() };
+        progress?.Report(new("retaining_residual_particles", null,
+            "Seam residual from masked particles exceeded the first layer; keeping those particles live and baking once more."));
+        long started = Stopwatch.GetTimestamp();
+        JsonObject plan = await new HybridScenePlanner(tools).AnalyzeAsync(PlanSettings.Of(request.Plan) with {
+            OutputDirectory = layout.AnalysisRefresh, RuntimeTraceFile = null, RetainLiveRootIds = retain }, progress, cancellationToken);
+        record["replan_seconds"] = Math.Round(Stopwatch.GetElapsedTime(started).TotalSeconds, 1);
+        if (plan["blockers"] is not JsonArray { Count: 0 })
+        {
+            record["status"] = "replan_blocked";
+            record["replanned_plan_path"] = Path.Combine(layout.AnalysisRefresh, "plan.json");
+            record["replanned_summary"] = plan["summary"]?.DeepClone();
+            first["residual_particle_retry"] = record;
+            await BakeReportWriter.SaveAsync(layout.Report, first, null, CancellationToken.None);
+            return first;
+        }
+        string firstAttempt = layout.Output + ".residual-first-attempt";
+        Directory.Move(layout.Output, firstAttempt);
+        // 首次的合成比对结果（ProbeBake 写在输出根旁）一并挪走，重烘要求它是新的。
+        if (Directory.Exists(layout.Output + ".composition-validation"))
+            Directory.Move(layout.Output + ".composition-validation", Path.Combine(firstAttempt, "composition-validation"));
+        record["first_attempt_directory"] = firstAttempt;
+        JsonObject retried = await BakeCleanedAsync(request with { Plan = plan }, progress, cancellationToken);
+        record["status"] = "retried";
+        retried["residual_particle_retry"] = record;
+        await BakeReportWriter.SaveAsync(layout.Report, retried, null, CancellationToken.None);
+        return retried;
+    }
+
+    private async Task<JsonObject> BakeCleanedAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
+        CancellationToken cancellationToken)
+    {
         if (request.ProbeFrames > 0 || request.KeepIntermediates)
             return await BakeRunAsync(request, progress, cancellationToken);
         var layout = new WorkLayout(request.OutputDirectory);
