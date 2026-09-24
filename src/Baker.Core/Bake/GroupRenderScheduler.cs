@@ -97,16 +97,16 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     }
 
     /// <summary>
-    /// 残差组的低分辨率起点评分样本：搜索窗固定 <see cref="ResidualMasking.SearchWindowPeriods"/> 个本组周期（候选起点只有 P/stride 个，
-    /// 每个比较 (s, s+P)，全部落在前 2P 帧里）；透明组用带覆盖度的样本，两半分别算。
+    /// 残差组的低分辨率起点评分样本：搜索窗是本组周期 P 再加 <paramref name="candidateFrames"/> 帧（候选起点 s 落在这段里，
+    /// 每个比较 (s, s+P)），最多 <see cref="ResidualMasking.SearchWindowPeriods"/> 个周期；透明组用带覆盖度的样本，两半分别算。
     /// </summary>
-    internal RenderRequest StartSearchRequest(int index, uint sampleStride) =>
-        StartSearchRequest(groups[index], Capture(groups[index]), sampleStride, groupFrames[index]);
+    internal RenderRequest StartSearchRequest(int index, uint sampleStride, ulong candidateFrames) =>
+        StartSearchRequest(groups[index], Capture(groups[index]), sampleStride, checked(groupFrames[index] + candidateFrames));
 
-    private RenderRequest StartSearchRequest(JsonObject group, GroupCapture capture, uint sampleStride, ulong period) =>
+    private RenderRequest StartSearchRequest(JsonObject group, GroupCapture capture, uint sampleStride, ulong windowFrames) =>
         new(captureProject, settings.Assets,
             ProjectSource.ContainedPath(output, $"{group["id"]!.GetValue<string>()}.start-search"), capture.PixelWidth, capture.PixelHeight,
-            settings.FpsNumerator, settings.FpsDenominator, checked(period * (ulong)ResidualMasking.SearchWindowPeriods),
+            settings.FpsNumerator, settings.FpsDenominator, windowFrames,
             WarmupFrames: SearchWarmupFrames,
             Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side",
             DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid,
