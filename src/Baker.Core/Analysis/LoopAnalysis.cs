@@ -55,7 +55,7 @@ internal static class LoopAnalysis
         CommonLoopComponent[] particleCycles = ParticleCycleComponents(particleVerdicts);
         CommonLoopComponent[] scriptCycles = ScriptFrameStepComponents(scene, bakedLayerIds, fpsNumerator, fpsDenominator, ceiling, unresolved);
         // 组间共用时钟的组要求 L 是它自身周期的倍数（见 GroupPeriods）：每个这样的周期当一个锁定分量交给求解器，解完再从候选里去掉。
-        CommonLoopComponent[] stepCycles = [.. (groupClockSteps ?? []).Select(step =>
+        CommonLoopComponent[] stepCycles = [.. (groupClockSteps ?? []).Distinct().Select(step =>
         {
             var exact = new CommonLoopRational(checked((long)step * fpsDenominator), fpsNumerator);
             return new CommonLoopComponent($"{GroupStepPrefix}{step}", new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
