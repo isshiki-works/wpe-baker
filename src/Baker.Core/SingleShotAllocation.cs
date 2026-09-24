@@ -28,23 +28,27 @@ internal static class SingleShotAllocation
 
     /// 事件触发的单次动画轨（播放时刻不定）所属层判为实时。场景加载即播的单次轨不在此列：
     /// 视频按入场结束后的定格态录制，入场那几秒成品显示原作图层（SceneAssembler.ApplyIntro）。
-    internal static IEnumerable<int> LiveOwners(JsonObject runtime) =>
+    /// <paramref name="loadPlayed"/>（settings.single_shot_live，入场切换做不成时的退回）：加载即播的也判实时，即旧行为。
+    internal static IEnumerable<int> LiveOwners(JsonObject runtime, bool loadPlayed) =>
         (runtime["runtime_animation_periods"]?.AsArray() ?? []).OfType<JsonObject>()
-            .Where(track => IsSingleShot(track) && Flag(track["event_driven"]) == true)
+            .Where(track => IsSingleShot(track) && (loadPlayed || Flag(track["event_driven"]) == true))
             .Select(track => Number(track["source_owner_layer_id"])).OfType<int>();
 
-    /// 入场秒数：相机入场（projection.camera_intro）与进了视频组的图层加载即播单次轨（时长 / 速率）取最大；没有为 0。
-    internal static double IntroSeconds(JsonObject plan, JsonObject runtime)
+    /// 入场秒数：相机入场（projection.camera_intro）与进了视频组的图层加载即播单次轨取最大；没有为 0。
+    internal static double IntroSeconds(JsonObject plan, JsonObject runtime) =>
+        Math.Max(IntroTrackSeconds(plan, runtime), SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0));
+
+    /// 进了视频组的图层加载即播单次轨的最长时长（时长 / 速率）；没有为 0。
+    internal static double IntroTrackSeconds(JsonObject plan, JsonObject runtime)
     {
         var baked = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
             .SelectMany(group => (group["layer_ids"] as JsonArray ?? []).Select(Number)).OfType<int>().ToHashSet();
-        double layers = (runtime["runtime_animation_periods"]?.AsArray() ?? []).OfType<JsonObject>()
+        return (runtime["runtime_animation_periods"]?.AsArray() ?? []).OfType<JsonObject>()
             .Where(track => IsSingleShot(track) && Flag(track["event_driven"]) != true &&
                 Number(track["source_owner_layer_id"]) is int owner && baked.Contains(owner))
             .Select(track => SceneGraph.Numeric(track["duration_seconds"], 0) /
                 SceneGraph.Numeric(track["playback_rate"] ?? track["current_rate"], 1))
             .Where(double.IsFinite).DefaultIfEmpty(0).Max();
-        return Math.Max(layers, SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0));
     }
 
     /// 唯一视频组不承担场景清屏、且决定这一点的那批前置可见绘制 live 根没有一个属于可提前景集合

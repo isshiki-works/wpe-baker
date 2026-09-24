@@ -60,6 +60,15 @@ internal sealed class AnalysisOrchestrator
             AnalysisCache.Key(typeof(AnalysisOrchestrator).Module.ModuleVersionId, assetsStamp));
         var orchestrator = new AnalysisOrchestrator(request, analyze, space, budget ?? space.Budget(), tools, run, cache, token);
         JsonObject result = await orchestrator.SelectAsync();
+        // 加载即播的单次轨进了视频组（入场切换）而结果不能生成：按旧行为（所属层判实时、不做切换）整套再分析一次，能生成就用它。
+        if (!Admission.Accepted(result) && !request.SingleShotLive && result["runtime_evidence"]?.GetValue<string>() is string evidence &&
+            SingleShotAllocation.IntroTrackSeconds(result, JsonNode.Parse(await File.ReadAllTextAsync(evidence, token))!.AsObject()) > 0)
+        {
+            var fallback = new AnalysisOrchestrator(request with { SingleShotLive = true }, analyze, space, space.Budget(), tools,
+                Path.Combine(run, "single-shot-live"), cache, token);
+            JsonObject old = await fallback.SelectAsync();
+            if (Admission.Accepted(old)) (orchestrator, result) = (fallback, old);
+        }
         string stagedPlan = Path.Combine(run, "selected-plan.json");
         await VideoSceneBuilder.WriteJsonAsync(stagedPlan, result, token);
         File.Move(stagedPlan, Path.Combine(root, "plan.json"), true);

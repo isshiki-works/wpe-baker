@@ -47,7 +47,7 @@ internal sealed class Liveness
             Live(owner, "source_script_error");
         }
         // 事件触发的一次性动画轨所属层实时绘制：播放时刻不定，循环视频表达不了。加载即播的见 SingleShotAllocation.IntroSeconds。
-        foreach (int owner in SingleShotAllocation.LiveOwners(observation.Trace)) Live(owner, SingleShotAllocation.LiveReason);
+        foreach (int owner in SingleShotAllocation.LiveOwners(observation.Trace, request.SingleShotLive)) Live(owner, SingleShotAllocation.LiveReason);
         foreach (var dependency in observation.Dependencies.OfType<JsonObject>())
         {
             int owner = dependency["owner"]!.GetValue<int>();

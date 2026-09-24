@@ -18,7 +18,10 @@ internal sealed class ProbeBake(NativeTools tools)
         HybridBakeService.EnsureNewDerivedOutput(source, probeOutput, "Composition probe output");
         string? selectedDevice = request.DeviceUuid ?? settings.DeviceUuid;
         progress?.Report(new("checking_composition", 0, "Generating a short candidate to check complete scene composition."));
-        JsonObject probe = await baker.BakeAsync(new(2, plan, probeOutput, CompositionGate.RequiredFrames,
+        // 相机入场动画：探针多烘这段。成品没做入场切换（退回旧行为、昼夜导出、副本做不成）时参照与成品都从入场结束后开始比。
+        ulong introFrames = (ulong)Math.Ceiling(SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0) *
+            settings.FpsNumerator / settings.FpsDenominator);
+        JsonObject probe = await baker.BakeAsync(new(2, plan, probeOutput, introFrames + CompositionGate.RequiredFrames,
             selectedDevice, EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution), progress, cancellationToken);
         // 探针跑完后与原来单独的比较段一样：按计划重新打开源、重读设置并复核哈希，短烘焙期间源被改过就不比了。
@@ -49,7 +52,7 @@ internal sealed class ProbeBake(NativeTools tools)
             comparisonProperties = daytime.ComparisonProperties(comparisonProperties);
         }
         // 单次入场动画（bake.json 的 intro_live）：入场段显示原作图层时从第 0 帧比到切换后 48 帧；没做成就只比入场结束后。
-        ulong introFrames = probe["intro_live"]?["intro_frames"]?.GetValue<ulong>() ?? 0;
+        introFrames = probe["intro_live"]?["intro_frames"]?.GetValue<ulong>() ?? introFrames;
         bool introLive = probe["intro_live"]?["status"]?.GetValue<string>() == "applied";
         await CreateReferenceAsync(planSource, comparisonReference, comparisonProperties, planSettings.ViewMode, plan, cancellationToken);
         PairedComparison comparison = await new CandidateValidation(tools).CompareAsync(new ValidationRequest(
@@ -61,6 +64,8 @@ internal sealed class ProbeBake(NativeTools tools)
             TileSize: (uint)Math.Round(CompositionGate.RequiredTileSize *
                 SwayRecurrenceSolver.SpeedLimitScale(planSettings.Width, planSettings.Height))), progress, cancellationToken);
         JsonObject validation = CompositionGate.Evaluate(comparison);
+        // 入场切换做成了却没过闸门时，HybridBakeService.BakeAsync 据此退回旧行为重烘。
+        validation["intro_live"] = probe["intro_live"]?.DeepClone();
         validation["probe_output_path"] = probeDirectory;
         validation["probe_capture_source_path"] = captureSource;
         validation["comparison_reference_path"] = comparisonReference;
