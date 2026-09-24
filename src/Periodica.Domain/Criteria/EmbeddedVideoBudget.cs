@@ -57,8 +57,8 @@ public static class EmbeddedVideoBudget
         frames * ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)) * HardwareBytesRatio(hevc) > MaximumBytes;
 
     /// <summary>参考码率下装得进上限的最多帧数。</summary>
-    public static ulong ReferenceMaximumFrames(uint width, uint height, bool packedAlpha) =>
-        (ulong)Math.Floor(MaximumBytes / ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)));
+    public static ulong ReferenceMaximumFrames(uint width, uint height, bool packedAlpha, bool hevc = false) =>
+        (ulong)Math.Floor(MaximumBytes / (ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)) * (hevc ? HevcSoftwareBytesRatio : 1)));
 
     /// <summary>帧数换成整秒（向下取整）。</summary>
     public static double WholeSeconds(ulong frames, uint fpsNumerator, uint fpsDenominator)
@@ -77,7 +77,7 @@ public static class EmbeddedVideoBudget
         if (width == 0 || height == 0 || fpsNumerator == 0 || fpsDenominator == 0) return null;
         // HEVC 配置的软件成品是 libx265，同 crf 下比参考（x264）大 HevcSoftwareBytesRatio 倍，按 x264 算会低估。
         double perFrame = ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)) * (hevc ? HevcSoftwareBytesRatio : 1);
-        ulong frames = (ulong)Math.Floor(MaximumBytes / perFrame);
+        ulong frames = ReferenceMaximumFrames(width, height, packedAlpha, hevc);
         return new(requestedSeconds, WholeSeconds(frames, fpsNumerator, fpsDenominator), width * (packedAlpha ? 2u : 1u), height,
             packedAlpha, fpsNumerator, fpsDenominator, perFrame);
     }
