@@ -399,7 +399,9 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
     const auto resources_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     if (m_services.failed) return false;
-    m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_options.readsFrame(clock.index));
+    // 首个输出帧之前（预热）只模拟：上面的资源推进照做，跳过光栅、提交与读回。
+    m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_options.readsFrame(clock.index),
+                                         clock.index >= m_options.readback_start);
     if (m_profile) {
         m_cpu_frame.cpu_scene_ms = std::chrono::duration<double,std::milli>(profile.scene_finished-profile.scene_started).count();
         m_cpu_frame.cpu_script_ms = profile.script_ms;
