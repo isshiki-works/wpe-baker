@@ -112,7 +112,8 @@ internal static class GroupVerdicts
         byte[] firstFrame = await LoopClosureCheck.ReadRetainedFrameAsync(master, 0, cancellationToken);
         byte[] wrapFrame = await LoopClosureCheck.ReadRetainedFrameAsync(master, frames, cancellationToken);
         JsonObject closure = LoopClosureCheck.Evaluate(firstFrame, wrapFrame,
-            (int)capture.PixelWidth, (int)capture.PixelHeight, withAlpha: !capture.SceneClear, frames, judged: !residualGroup);
+            (int)capture.PixelWidth, (int)capture.PixelHeight, withAlpha: !capture.SceneClear, frames, judged: !residualGroup,
+            SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height));
         if (isStatic)
             return new JsonObject { ["status"] = LoopClosureCheck.Allows(closure) ? "observed_seam_pass" : "observed_seam_fail",
                 ["failures"] = LoopClosureCheck.Allows(closure) ? new JsonArray() : new JsonArray("loop_not_closed"),

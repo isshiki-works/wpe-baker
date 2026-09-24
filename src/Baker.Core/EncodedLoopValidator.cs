@@ -311,7 +311,7 @@ public static class EncodedLoopValidator
         {
             JsonNode? rgb = closure["rgb"]?["tile_64"];
             parts.Add(MessageCatalog.Get("bake.loop_not_closed", language, closure["loop_frames"]?.ToJsonString() ?? "?",
-                LoopClosureCheck.TileSize, rgb?["worst_x"]?.ToJsonString() ?? "?", rgb?["worst_y"]?.ToJsonString() ?? "?",
+                closure["tile_size"]?.ToJsonString() ?? "?", rgb?["worst_x"]?.ToJsonString() ?? "?", rgb?["worst_y"]?.ToJsonString() ?? "?",
                 Number(rgb?["worst"]),
                 closure["alpha"] is JsonObject alpha ? MessageCatalog.Get("bake.loop_not_closed_alpha", language, Number(alpha["tile_64"]?["worst"])) : "",
                 LoopClosureCheck.MaximumTileMae255.ToString("0.0", CultureInfo.InvariantCulture)));
