@@ -126,7 +126,7 @@ public class AnalysisStagesTests
         var observation = new RuntimeObservation(new JsonObject(), dependencies, layers, new JsonObject());
         var properties = new JsonObject();
         var liveness = Liveness.Analyze(request, source, graph, observation, [], parallax: false, daytimeSelector: null, _ => false, _ => false);
-        var allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax: false, _ => false, _ => false);
+        var allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax: false, new JsonObject(), _ => false, _ => false);
         var composer = new Composer(request, source, scene, properties, graph, observation, liveness, allocation, parallax: false, [], []);
         return new(liveness, allocation, composer);
     }
