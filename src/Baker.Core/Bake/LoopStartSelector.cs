@@ -21,9 +21,14 @@ internal static class LoopStartSelector
     {
         int[] residualGroups = scheduler.ResidualGroupIndexes;
         uint sampleStride = ResidualMasking.StartSearchStride(residualGroups.Aggregate(0UL, (gcd, index) => (ulong)System.Numerics.BigInteger.GreatestCommonDivisor(gcd, scheduler.Frames(index))));
+        // 共享起点只落在最短组周期内（合成截到公共前缀），长周期组的第二个周期只需渲到 P_min + 淡化窗口（取整到步长）为止：
+        // 多出的至少一个步长给最后一个共享候选的 Δ_stride，淡化窗口让样本覆盖度仍盖住主渲染的 [s, s+P_g+C]，裁剪照旧可用。
+        ulong shortest = residualGroups.Min(index => scheduler.Frames(index));
+        ulong tail = checked(shortest + (scheduler.CrossfadeFrames + sampleStride - 1) / sampleStride * sampleStride);
         // 各组评分互不依赖：请求先按组序建好，最多 parallel 个同时跑；结果仍按组序登记与合成，与逐组串行逐字节相同。
         var requests = residualGroups.Select(groupIndex => (Id: scheduler.Groups[groupIndex]["id"]!.GetValue<string>(),
-                Request: scheduler.StartSearchRequest(groupIndex, sampleStride), Period: scheduler.Frames(groupIndex)))
+                Request: scheduler.StartSearchRequest(groupIndex, sampleStride, Math.Min(scheduler.Frames(groupIndex), tail)),
+                Period: scheduler.Frames(groupIndex)))
             .ToArray();
         var searches = new (JsonObject Search, IReadOnlyList<ResidualStartCandidate> Candidates)[requests.Length];
         JsonObject startSearch;
@@ -33,7 +38,7 @@ internal static class LoopStartSelector
                 new ParallelOptions { MaxDegreeOfParallelism = parallel, CancellationToken = cancellationToken }, async (slot, token) =>
                 {
                     progress?.Report(new("searching_loop_start", 0,
-                        $"在锁定的解析周期内按接缝残差挑选起点帧（组 {requests[slot].Id}，预热 {scheduler.SearchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {ResidualMasking.SearchWindowPeriods} 个周期）。"));
+                        $"在锁定的解析周期内按接缝残差挑选起点帧（组 {requests[slot].Id}，预热 {scheduler.SearchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {requests[slot].Request.Frames} 帧）。"));
                     var scores = new List<ResidualStartCandidate>();
                     JsonObject search = await runner.SearchLoopStartAsync(requests[slot].Request,
                         requests[slot].Period, scheduler.CrossfadeFrames, scheduler.TileScale, progress, token, requests.Length > 1 ? scores : null);

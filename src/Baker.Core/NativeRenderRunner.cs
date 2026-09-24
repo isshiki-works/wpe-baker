@@ -73,7 +73,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         if (request.PixelPacking is not "rgb" and not "rgba_side_by_side") throw new ArgumentException("Unsupported pixel packing.");
         if (request.CollectSamplingCoverage && !request.FrameSamplesOnly)
             throw new ArgumentException("Sampling coverage applies only to frame-sample requests.");
-        if (request.GpuEncoding is { } gpu && (gpu.Codec is not ("h264_vulkan" or "hevc_vulkan") ||
+        if (request.GpuEncoding is { } gpu && (gpu.Codec is not ("h264_vulkan" or "hevc_vulkan" or PlaybackEncoderSelection.Av1Nvenc) ||
             gpu.Qp is < 0 or > 51 || request.LosslessTest || request.FrameSamplesOnly || request.RequireOpaquePixels ||
             request.ForceKeyFrameFrame is not null || request.FrameSampleStride != 0 ||
             request.EncodePadding is not null || request.PlaybackEncoderKind is not null ||
