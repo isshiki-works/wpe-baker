@@ -16,7 +16,7 @@ public static class EmbeddedVideoBudgetJson
         ArgumentNullException.ThrowIfNull(groups);
         var result = new JsonObject { ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes, ["frames"] = frames,
             ["assumed_key_frame_interval"] = EmbeddedVideoBudget.AssumedKeyFrameInterval,
-            ["basis"] = "Composition-probe packets extrapolated with one largest key frame per interval and the mean non-key packet; on five existing bakes this was 0.77-1.38x the real size, so it only rejects over-limit loops and never raises the analyze limit." };
+            ["basis"] = "Composition-probe packets extrapolated with one largest key frame per interval and the mean non-key packet; on five existing bakes this was 0.77-1.38x the real size, so it only rejects over-limit loops; the bytes actually written are checked again after encoding." };
         if (groups.Count == 0)
         {
             result["status"] = "not_estimated";

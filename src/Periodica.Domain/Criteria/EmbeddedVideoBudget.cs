@@ -70,7 +70,7 @@ public static class EmbeddedVideoBudget
     /// <summary>
     /// 从短段试编码的包大小外推 frames 帧的成品字节：每 <see cref="AssumedKeyFrameInterval"/> 帧一个关键帧，大小取试片里最大的关键帧；
     /// 其余帧取试片非关键帧的平均。试片只有 48 帧、从第 0 帧起、不含粒子预热，现有 5 案外推为实测的 0.77–1.38 倍
-    /// （高熵场景偏低，静态插画偏高），所以只拿来在超限时拒绝，不用来放宽 analyze 的上限。
+    /// （高熵场景偏低，静态插画偏高），所以只拿来在超限时拒绝；编码后另按实际字节再判。
     /// </summary>
     public static double ExtrapolateBytes(IReadOnlyList<VideoPacket> packets, ulong frames)
     {
