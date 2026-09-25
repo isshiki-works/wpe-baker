@@ -22,16 +22,6 @@ internal static class EmbeddedVideoBudgetChecks
             EmbeddedVideoBudget.ReferenceBytesPerFrame(3840d * 2160) > EmbeddedVideoBudget.ReferenceBytesPerFrame(3414d * 1920),
             "embedded video budget: transparent groups double the encoded width and more pixels never lower the reference bytes per frame");
 
-        double perFrame = EmbeddedVideoBudget.ReferenceBytesPerFrame(3840d * 2160);
-        // 硬件档位预判：参考码率 × 1.555 刚好不超的帧数仍用硬件，多一帧就改软件。
-        ulong hardwareFrames = (ulong)Math.Floor(EmbeddedVideoBudget.MaximumBytes / (perFrame * 1.555));
-        ulong hevcFrames = (ulong)Math.Floor(EmbeddedVideoBudget.MaximumBytes / (perFrame * 1.12));
-        check(!EmbeddedVideoBudget.HardwareOverBudget(hardwareFrames, 3840, 2160, false, hevc: false) &&
-            EmbeddedVideoBudget.HardwareOverBudget(hardwareFrames + 1, 3840, 2160, false, hevc: false) &&
-            !EmbeddedVideoBudget.HardwareOverBudget(hevcFrames, 3840, 2160, false, hevc: true) &&
-            EmbeddedVideoBudget.HardwareOverBudget(hevcFrames + 1, 3840, 2160, false, hevc: true),
-            "embedded video budget: hardware falls back to software exactly when reference bytes x 1.555 (H.264) or x 1.12 (HEVC) exceed the limit");
-
         // ---- 试编码外推 ----
         EmbeddedVideoBudget.VideoPacket[] Packets(long key, long inter, int count) =>
             [new(key, true), .. Enumerable.Repeat(new EmbeddedVideoBudget.VideoPacket(inter, false), count - 1)];

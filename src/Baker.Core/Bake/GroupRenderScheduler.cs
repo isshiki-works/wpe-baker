@@ -188,17 +188,15 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         var framing = Framing(index);
         ulong period = groupFrames[index];
         bool direct = HybridBakeService.AllowsDirectPlayback(capture.SceneClear, framing.Residual, request.ProbeFrames);
-        // CPU 直编的档位：Vulkan 档位（GPU 管线不可用时才走到这里）或硬件档位预判超 2 GiB 时用软件编码（原因由 GroupEncoder 记）。
-        string CpuKind(uint width, uint height, bool packed) => playbackKind == PlaybackEncoderSelection.Vulkan ||
-            EmbeddedVideoBudget.HardwareOverBudget(period, width, height, packed, PlaybackEncodeProfile.SelectPlaybackEncoder(
-                width * (packed ? 2u : 1u), height, settings.FpsNumerator, settings.FpsDenominator) == "libx265")
-            ? PlaybackEncoderSelection.Software : playbackKind;
+        // CPU 直编的档位：Vulkan 档位（GPU 管线不可用时才走到这里）用软件编码；其余硬件档先用硬件，
+        // 编完超 2 GiB 或画质门不过由 StartAsync 把这一组改软件重渲。
+        string cpuKind = playbackKind == PlaybackEncoderSelection.Vulkan ? PlaybackEncoderSelection.Software : playbackKind;
         var render = new RenderRequest(captureProject, settings.Assets, Path.Combine(ProjectSource.ContainedPath(output, groupId), "master"),
             capture.PixelWidth, capture.PixelHeight, settings.FpsNumerator, settings.FpsDenominator,
             framing.RenderedFrames, WarmupFrames: framing.MasterWarmupFrames,
             Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side",
             // 直编组是不透明整幅。
-            LosslessTest: !direct, PlaybackEncoderKind: direct ? CpuKind(capture.PixelWidth, capture.PixelHeight, packed: false) : null,
+            LosslessTest: !direct, PlaybackEncoderKind: direct ? cpuKind : null,
             DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, CollectAlphaBounds: true, BoundsIncludeRgb: true,
             EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,
@@ -225,7 +223,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     return direct ? render : render with { LosslessTest = false, ForceKeyFrameFrame = null, EncodedFrames = period,
                         PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb", DirectCrop = layout.Crop,
                         DirectCrossfadeFrames = framing.Residual ? crossfadeFrames : null,
-                        PlaybackEncoderKind = CpuKind((uint)layout.Crop.Width, (uint)layout.Crop.Height, layout.Packed) };
+                        PlaybackEncoderKind = cpuKind };
                 // Vulkan 编码有最小编码尺寸：RTX 5090 驱动 610.62 报 H.264/HEVC minCodedExtent 160x64（vulkaninfo --show-video-props）。
                 // FFmpeg 拿按 16 对齐后的尺寸比：72 宽透明组打包成 144 被拒、整组落到 CPU 无损路线（3757825891 group-4 读回约 200 s）；
                 // 152 对齐成 160 放行，但实际尺寸低于下限。不足时在捕获范围内居中加宽/加高裁剪，多出的是透明像素；打包的每半幅算一半宽。
@@ -339,10 +337,16 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     if (!await GpuQualityPassesAsync(rendered, render))
                         throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
                 }
-                // 超内嵌视频上限的 GPU 成品不交出去：软件档码率更低，按 CPU 路线重渲（原来会被判为超限拒绝）。
-                if (render.GpuEncoding is not null &&
-                    new FileInfo(Path.Combine(render.OutputDirectory, "preview.mp4")).Length > EmbeddedVideoBudget.MaximumBytes)
-                    throw new GpuEncodeUnavailableException("GPU playback video exceeds the 2 GiB embedded-video limit; re-rendering on the software route.");
+                // 硬件先编，按实际字节判内嵌视频上限：超了不交出去，这一组按软件档重渲（GPU 组走 CPU 路线）。
+                bool cpuHardware = render.GpuEncoding is null && render.PlaybackEncoderKind is { } kind && kind != PlaybackEncoderSelection.Software;
+                if ((render.GpuEncoding is not null || cpuHardware) &&
+                    new FileInfo(Path.Combine(render.OutputDirectory, "preview.mp4")).Length is var bytes && bytes > EmbeddedVideoBudget.MaximumBytes)
+                    throw new GpuEncodeUnavailableException(NativeRenderRunner.HardwareOverLimitReason(
+                        render.GpuEncoding?.Codec ?? render.PlaybackEncoderKind!, bytes));
+                // CPU 硬件档（mf/nvenc/amf）直编没有母版可升档重编：画质门不过也只让这一组改软件重渲，不整张拒。
+                if (cpuHardware && !await GpuQualityPassesAsync(rendered, render))
+                    throw new GpuEncodeUnavailableException($"{render.PlaybackEncoderKind} 直编成品画质门未过（SSIM " +
+                        $"{rendered["playback_quality_gate"]?["ssim"]?.ToJsonString()}），这一组改用软件编码。");
                 if (lower is not null)
                 {
                     // 播放机就是本机：成品要在本机播放用的显卡上能硬解（WPE 经 MF 放视频，扩展装了但显卡解不了一样放不动）。
@@ -358,7 +362,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 if (fallbackReason is not null) rendered["gpu_pipeline_fallback_reason"] = fallbackReason;
                 return rendered;
             }
-            // ffmpeg 硬件档（mf/nvenc）直编的组编码器开不了或中途退出：这一组改用软件编码重渲，原因带给 GroupEncoder。
+            // ffmpeg 硬件档（mf/nvenc/amf）直编的组编码器开不了、中途退出、超 2 GiB 或画质门不过：这一组改用软件编码重渲，原因带给 GroupEncoder。
             catch (GpuEncodeUnavailableException error) when (render.GpuEncoding is null && !renderCancellation.IsCancellationRequested)
             {
                 Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(Path.GetDirectoryName(render.OutputDirectory)!, "master.hardware-failed"));
@@ -398,11 +402,12 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
          all["y"]!.GetValue<int>() + all["height"]!.GetValue<int>() <= crop.Y + crop.Height &&
          (packed || all["minimum_alpha"]!.GetValue<int>() == 255));
 
-    /// <summary>GPU 直编成品的画质门；结果挂在渲染结果上，GroupEncoder 接管成品时直接取用。</summary>
+    /// <summary>硬件直编成品的画质门；结果挂在渲染结果上，GroupEncoder 接管成品时直接取用。CPU 直编的不透明组是整幅。</summary>
     private async Task<bool> GpuQualityPassesAsync(JsonObject rendered, RenderRequest render)
     {
         JsonObject gate = await runner.GpuPlaybackQualityAsync(rendered, Path.Combine(render.OutputDirectory, "preview.mp4"),
-            render.GpuEncoding!.Crop!, render.PixelPacking == "rgba_side_by_side", render.OutputDirectory, renderCancellation.Token);
+            render.GpuEncoding?.Crop ?? render.DirectCrop ?? new CacheRegion((int)render.Width, (int)render.Height, 0, 0, (int)render.Width, (int)render.Height),
+            render.PixelPacking == "rgba_side_by_side", render.OutputDirectory, renderCancellation.Token);
         rendered["playback_quality_gate"] = gate;
         return gate["passed"]?.GetValue<bool>() == true;
     }
