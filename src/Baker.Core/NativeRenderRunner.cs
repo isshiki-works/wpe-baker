@@ -760,11 +760,15 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         return Classified(fallback, inner);
     }
 
-    /// <summary>渲染器报的是 GPU 编码初始化失败或缺 Vulkan 设备扩展时，归成 <see cref="GpuEncodeUnavailableException"/>。</summary>
+    /// <summary>
+    /// 渲染器报的是 GPU 编码初始化失败、缺 Vulkan 设备扩展，或没有一块显卡满足直编扩展时，归成 <see cref="GpuEncodeUnavailableException"/>
+    /// （调用方只在请求了 GPU 编码时接这个异常）。
+    /// </summary>
     private static IOException Classified(string message, Exception? inner)
     {
         bool gpuUnavailable = message.Contains("GPU encode initialization", StringComparison.Ordinal) ||
-            message.Contains("required vulkan device extension", StringComparison.Ordinal);
+            message.Contains("required vulkan device extension", StringComparison.Ordinal) ||
+            message.Contains("failed to find GPU with vulkan support", StringComparison.Ordinal);
         return gpuUnavailable ? new GpuEncodeUnavailableException(message, inner) : new IOException(message, inner);
     }
 

@@ -469,7 +469,8 @@ public sealed class HybridBakeService(NativeTools tools)
                 report["residual_group_ids"] = new JsonArray([.. residualGroupIndexes.Select(index => groups[index]["id"]!.DeepClone())]);
             // 直编组要在渲染开始前就定下播放档位（编码器随渲染一起启动），所以档位解析提到所有渲染之前，整次烘焙只解析一次。
             // master 路线拿解析后的档位：auto 选了 vulkan 时，走 master 的组用软件编码，不再落到经管道的 ffmpeg 硬件档。
-            (playbackKind, playbackFallbackReason) = await runner.ResolvePlaybackEncoderAsync(request.PlaybackEncoder, output, token);
+            (playbackKind, playbackFallbackReason) = await runner.ResolvePlaybackEncoderAsync(request.PlaybackEncoder,
+                request.DeviceUuid ?? settings.DeviceUuid, output, token);
             // 没指定组并行时，GPU 路线的编码在显卡上、不抢 CPU，组、起点搜索与覆盖度预通道最多 3 路同时跑。
             if (request.GroupParallel == 0 && playbackKind == PlaybackEncoderSelection.Vulkan)
                 report["group_parallel"] = groupParallel = Math.Clamp(3, 1, Math.Max(1, groups.Length));

@@ -750,7 +750,8 @@ public partial class MainWindow : Window
             if (status is not ("candidate_generated" or StaticOnlyBake.Status or "probe_generated" or "candidate_rejected_no_loop" or
                 "candidate_rejected_composition" or "candidate_rejected_late_dependency" or "candidate_rejected_seam" or
                 "candidate_rejected_hardware_decode" or "candidate_rejected_opaque_capture" or ResidualMasking.LayoutRejectedStatus or
-                "candidate_rejected_capture_target" or CandidateScriptErrorGate.RejectedBakeStatus or EmbeddedVideoBudget.RejectedBakeStatus or NoBenefit.RejectedBakeStatus))
+                "candidate_rejected_capture_target" or CandidateScriptErrorGate.RejectedBakeStatus or EmbeddedVideoBudget.RejectedBakeStatus or NoBenefit.RejectedBakeStatus or
+                BakeDiskBudget.RejectedBakeStatus))
                 throw new InvalidDataException("This hybrid report does not contain a finished result.");
             JsonObject savedPlan = report["plan"]?.DeepClone().AsObject()
                 ?? throw new InvalidDataException("The hybrid result has no saved plan.");
@@ -869,7 +870,7 @@ public partial class MainWindow : Window
                         : resultStatus == ResidualMasking.LayoutRejectedStatus
                         ? L("循环周期首尾不衔接，生成中止；原因见报告文件。",
                             "The loop period does not join end to start; generation aborted. The report file states the reason.")
-                        : resultStatus is "candidate_rejected_capture_target" or EmbeddedVideoBudget.RejectedBakeStatus
+                        : resultStatus is "candidate_rejected_capture_target" or EmbeddedVideoBudget.RejectedBakeStatus or BakeDiskBudget.RejectedBakeStatus
                         ? L("生成中止：", "Generation aborted: ") +
                             (result["reason_localized"]?[english ? "en" : "zh"]?.GetValue<string>() ?? result["reason"]?.GetValue<string>() ?? "")
                         : resultStatus == "candidate_rejected_opaque_capture"
