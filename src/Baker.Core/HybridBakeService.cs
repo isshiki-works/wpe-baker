@@ -414,6 +414,7 @@ public sealed class HybridBakeService(NativeTools tools)
         GroupRenderScheduler? scheduler = null;
         JsonObject? startSearch = null;
         JsonObject[] startOrder = [];
+        JsonArray? startRejected = null;
         using var speculation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         async Task SetupAsync(CancellationToken token)
         {
@@ -467,9 +468,11 @@ public sealed class HybridBakeService(NativeTools tools)
                 report["loop_start_search"] = startSearch.DeepClone();
                 report["source_start_frame"] = checked(warmupFrames + scheduler.StartFrame);
                 report["loop_start_phase_frame"] = scheduler.StartFrame;
+                startRejected = GroupVerdicts.StartSearchRejection(plan, report, startSearch,
+                    id => scheduler.Capture(groups.Single(group => group["id"]!.GetValue<string>() == id)).Layers);
             }
-            // 首批组主渲染（第 0 组及 groupParallel 允许的后续组）提前启动。
-            if (groups.Length > 0) _ = scheduler.RenderAsync(0);
+            // 首批组主渲染（第 0 组及 groupParallel 允许的后续组）提前启动；起点搜索已判定拒绝时不渲。
+            if (groups.Length > 0 && startRejected is null) _ = scheduler.RenderAsync(0);
         }
         Task setup = Task.Run(() => SetupAsync(speculation.Token));
         if (validation is not null)
@@ -513,6 +516,12 @@ public sealed class HybridBakeService(NativeTools tools)
                 var startAttempts = new JsonArray();
                 // 这一轮各残差组的第一层读数，组成本次起点尝试的记录。
                 var roundResiduals = new List<(string GroupId, JsonObject SeamResidual)>();
+                if (startRejected is not null)
+                {
+                    GroupVerdicts.RejectStartSearch(report, startRejected);
+                    await Save();
+                    return report;
+                }
                 for (int i = 0; i < groups.Length; ++i)
                 {
                     var group = groups[i];
