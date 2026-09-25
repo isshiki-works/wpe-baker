@@ -41,14 +41,10 @@ internal sealed class GroupEncoder(NativeRenderRunner runner, HybridBakeRequest 
         {
             string used = gpuDirect ? PlaybackEncoderSelection.Vulkan
                 : master["request"]?["playback_encoder_kind"]?.GetValue<string>() ?? playbackKind;
-            // 硬件档位（非 Vulkan）的直编组只有 2 GiB 预判一种情况会落到软件编码（GroupRenderScheduler.MasterRequest）。
-            bool overBudget = used == PlaybackEncoderSelection.Software &&
-                playbackKind is not (PlaybackEncoderSelection.Software or PlaybackEncoderSelection.Vulkan);
+            // 硬件直编的组编完超 2 GiB 或画质门不过时已由 GroupRenderScheduler 按软件档重渲，原因在 gpu_pipeline_fallback_reason。
             encoded = await runner.AdoptDirectPlaybackAsync(master, masterPath, Path.Combine(work, "encoded"),
                 request.PlaybackEncoder ?? PlaybackEncoderSelection.Auto, used,
-                master["gpu_pipeline_fallback_reason"]?.GetValue<string>() ??
-                    (overBudget ? NativeRenderRunner.HardwareBudgetFallbackReason : playbackFallbackReason),
-                cancellationToken);
+                master["gpu_pipeline_fallback_reason"]?.GetValue<string>() ?? playbackFallbackReason, cancellationToken);
         }
         else
         {

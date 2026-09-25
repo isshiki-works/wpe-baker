@@ -170,10 +170,10 @@ public sealed partial class NativeRenderRunner
             ["video_sha256"] = render["video_sha256"]?.DeepClone(),
             ["encoded_stream"] = render["encoded_stream"]?.DeepClone(),
             ["validation_required"] = "Cropped-cache reinjection, encoded loop seam and official playback." };
-        // 硬件直编（GPU 管线或 nvenc 等）没有 master 可比，拿渲染器保留的原帧跑同一个画质门；直编无法升档重编，不过就拒。
+        // 硬件直编（GPU 管线或 mf/nvenc/amf）没有 master 可比，拿渲染器保留的原帧跑同一个画质门。
         if (gpu || encoderKind != PlaybackEncoderSelection.Software)
         {
-            // GPU 组的门已在 GroupRenderScheduler 里过了（不过会降 QP 重渲或回退 CPU 路线），这里只取结果。
+            // 分组路线的门已在 GroupRenderScheduler 里过了（不过 GPU 先降 QP，再不过与 CPU 硬件档一样按组改软件重渲），这里只取结果。
             JsonObject quality = render["playback_quality_gate"]?.DeepClone().AsObject()
                 ?? await GpuPlaybackQualityAsync(render, video, region, packed, output, cancellationToken);
             report["playback_quality_gate"] = quality;
@@ -192,9 +192,9 @@ public sealed partial class NativeRenderRunner
     /// <summary>成品是渲染时直接编出来的（不透明整幅组），没有写过无损 master。</summary>
     public const string DirectPlaybackCaptureMode = "direct_playback";
 
-    /// <summary>硬件档位按 <see cref="EmbeddedVideoBudget.HardwareOverBudget"/> 预判会超 2 GiB、这一组改用软件编码时记的原因。</summary>
-    internal const string HardwareBudgetFallbackReason =
-        "按参考码率 × 硬件体积倍数（h264_nvenc 1.555、hevc_nvenc 1.12）外推，硬件编码成品会超过内嵌视频 2 GiB 上限，这一组改用软件编码。";
+    /// <summary>硬件编码成品按实际字节超过内嵌视频 2 GiB 上限、这一组改用软件编码时记的原因。</summary>
+    internal static string HardwareOverLimitReason(string encoder, long bytes) =>
+        $"{encoder} 编出 {bytes.ToString(CultureInfo.InvariantCulture)} 字节，超过内嵌视频 2 GiB 上限，这一组改用软件编码。";
 
     /// <summary>成品是从无损 master 裁切重编出来的。</summary>
     public const string LosslessMasterCaptureMode = "lossless_master";
@@ -251,9 +251,6 @@ public sealed partial class NativeRenderRunner
         else if (requestedEncoder != PlaybackEncoderSelection.Software)
             (encoderKind, encoderFallbackReason) = PlaybackEncoderSelection.Resolve(requestedEncoder,
                 await UsableEncodersAsync(requestedEncoder, output, cancellationToken));
-        if (encoderKind != PlaybackEncoderSelection.Software &&
-            EmbeddedVideoBudget.HardwareOverBudget(frames, (uint)region.Width, (uint)region.Height, preserveAlpha, decodePlan.SoftwareEncoder == "libx265"))
-            (encoderKind, encoderFallbackReason) = (PlaybackEncoderSelection.Software, HardwareBudgetFallbackReason);
         var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
             losslessTest: false, encoderKind);
         // 画质判据的抽样帧号在编码前定下来，升档重编时保持同一批帧，前后可直接横比。
@@ -316,6 +313,13 @@ public sealed partial class NativeRenderRunner
                     continue;
                 }
                 report["encode_seconds"] = Math.Round(System.Diagnostics.Stopwatch.GetElapsedTime(encodeStart).TotalSeconds, 3);
+                // 硬件先编，按实际字节判内嵌视频上限：超了只让这一组改用软件编码（软件档仍超由编码后的整案判定拒绝）。
+                if (profile.Kind != PlaybackEncoderSelection.Software && new FileInfo(partial).Length is var hardwareBytes &&
+                    hardwareBytes > EmbeddedVideoBudget.MaximumBytes)
+                {
+                    FallBackToSoftware(HardwareOverLimitReason(profile.Encoder, hardwareBytes));
+                    continue;
+                }
                 EncodedStream verified = await VerifyEncoded.ProbeAsync(ff, partial,
                     "stream=codec_name,width,height,avg_frame_rate,nb_frames,duration,duration_ts,time_base,pix_fmt,color_space,color_range",
                     frames, Path.Combine(output, $"ffprobe{suffix}.stderr.log"), cancellationToken);
