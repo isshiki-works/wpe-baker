@@ -16,6 +16,12 @@ internal sealed class Liveness
     internal HashSet<int> Ids { get; } = [];
     /// <summary>每个对象的实时原因（非实时对象为空集）。</summary>
     internal Dictionary<int, HashSet<string>> Reasons { get; }
+    /// <summary>
+    /// 场景相机由读输入的脚本设置（同一对象的脚本既 setCameraTransforms、又静态扫到指针/音频/时钟/媒体 API）：
+    /// 画面里每一层都经这台相机看到，视角随输入变。只作注记（plan 里实时层的 input_source），不改分配；
+    /// 无输入的运行时观测走不到拖动分支，依赖记录里没有这条边。
+    /// </summary>
+    internal bool InputDrivenCamera { get; private set; }
 
     private Liveness(SceneGraph graph)
     {
@@ -92,6 +98,7 @@ internal sealed class Liveness
         var sharedReads = new Dictionary<int, HashSet<string>>();
         var sharedWrites = new Dictionary<int, HashSet<string>>();
         HashSet<string> Keys(Dictionary<int, HashSet<string>> map, int id) => map.TryGetValue(id, out var keys) ? keys : map[id] = [];
+        var cameraScripts = new HashSet<int>();
         foreach (var (id, obj) in objects)
         {
             if (obj.ContainsKey("sound")) Live(id, "soundtrack");
@@ -110,6 +117,7 @@ internal sealed class Liveness
                 if (Regex.IsMatch(code, @"\bregisterAudioBuffers\s*\(")) Live(id, "audio_api");
                 if (Regex.IsMatch(code, @"\binput\s*[.\[]|\bfunction\s+cursor\w*\s*\(")) Live(id, "pointer_api");
                 if (Regex.IsMatch(code, @"\bfunction\s+media\w*\s*\(")) Live(id, "media_api");
+                if (Regex.IsMatch(code, @"\bsetCameraTransforms\s*\(")) cameraScripts.Add(id);
             }
             // Particle cursor linkage is a native input path rather than a SceneScript call.
             if (SceneAnalyzer.Walk(obj).OfType<JsonObject>().Any(n => n["name"]?.GetValue<string>() == "link_mouse" ||
@@ -127,6 +135,7 @@ internal sealed class Liveness
         // 经 shared 全局对象给别的脚本传值的写者：这种读写不进依赖记录，层烘成视频后脚本就不再执行，
         // 读它的实时脚本在成品里拿不到值（例如按 shared 值自检、不对就 destroyLayer 的防篡改脚本会把整个场景删空）。
         // 官方 WPE 里所有脚本都在跑，所以只要别的对象的脚本也用 shared，写者就留实时。
+        liveness.InputDrivenCamera = cameraScripts.Any(id => liveness.Reasons[id].Overlaps(["pointer_api", "audio_api", "wall_clock_api", "media_api"]));
         foreach (int id in sharedWrites.Keys.Where(id => sharedReads.Keys.Any(user => user != id))) Live(id, "writes_shared_script_state");
         // 反过来，写者因 shared 以外的原因（输入、时钟、读实时对象……）实时时，写进去的值随运行时变，读同一个键的层烘成视频
         // 就冻在烘焙时的值上。这类读同样不进依赖记录，补成读依赖交给下面同一个闭包（沿依赖继续传）；
