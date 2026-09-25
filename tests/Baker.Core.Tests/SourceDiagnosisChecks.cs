@@ -45,7 +45,8 @@ internal static class SourceDiagnosisChecks
             File.WriteAllText(Path.Combine(folder, "project.json"), $$"""{"type":"{{kind}}","file":"{{entry}}"}""");
             File.WriteAllText(Path.Combine(folder, entry), "unchanged");
             var result = SourceDiagnosis.Inspect(folder);
-            Check(result is not null && result.Kind == kind && result.Key == key, kind + " wallpaper is classified by its own kind");
+            Check(result is not null && result.Kind == kind && result.Key == key && result.Unsupported,
+                kind + " wallpaper is classified by its own kind as an unsupported source");
             string legacy = result!.Message.Text;
             Check(legacy.Contains("type=" + kind, StringComparison.Ordinal) && legacy.Contains(entry, StringComparison.Ordinal),
                 kind + " legacy english names the type and the content file");
@@ -62,7 +63,7 @@ internal static class SourceDiagnosisChecks
         string preset = New("preset");
         File.WriteAllText(Path.Combine(preset, "project.json"), """{"dependency":"3172471800","alignment":"center"}""");
         var presetResult = SourceDiagnosis.Inspect(preset);
-        Check(presetResult is { Kind: SourceDiagnosis.PresetKind, Dependency: "3172471800" },
+        Check(presetResult is { Kind: SourceDiagnosis.PresetKind, Dependency: "3172471800", Unsupported: true },
             "a preset package is classified apart from video and web and keeps its dependency");
         Check(presetResult!.Text(MessageCatalog.Chinese).Contains(@"431960\3172471800", StringComparison.Ordinal) &&
             presetResult.Text(MessageCatalog.English).Contains(@"431960\3172471800", StringComparison.Ordinal),
@@ -71,14 +72,15 @@ internal static class SourceDiagnosisChecks
         // ---- 别的 type ----
         string other = New("other");
         File.WriteAllText(Path.Combine(other, "project.json"), """{"type":"application","file":"a.exe"}""");
-        Check(SourceDiagnosis.Inspect(other) is { Kind: "other_type", Key: "source.not_scene_project" },
+        Check(SourceDiagnosis.Inspect(other) is { Kind: "other_type", Key: "source.not_scene_project", Unsupported: true },
             "an unknown project type falls back to the generic not-a-scene rejection");
 
         // ---- Scene 缺 objects ----
         string broken = New("broken-scene");
         File.WriteAllText(Path.Combine(broken, "project.json"), """{"type":"scene","file":"scene.json"}""");
         File.WriteAllText(Path.Combine(broken, "scene.json"), """{"camera":{}}""");
-        Check(SourceDiagnosis.Inspect(broken) is { Kind: "no_objects" }, "a scene json without an objects array is rejected on its own terms");
+        Check(SourceDiagnosis.Inspect(broken) is { Kind: "no_objects", Unsupported: false },
+            "a scene json without an objects array is rejected on its own terms, as an error rather than an unsupported source");
 
         // ---- 能用的 Scene：返回 null，并把路径规范化 ----
         string scene = New("scene");

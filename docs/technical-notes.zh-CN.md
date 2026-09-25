@@ -211,7 +211,7 @@ DJGun 3754908581 的周期判定不变：源视频 900 帧 / 30 fps = 精确 30.
 
 可将一个 Scene 文件夹、JSON 或 PKG 拖入窗口，也可用文件或文件夹选择按钮导入。设好两个选项——动画精度（效率 / 平衡 / 质量，默认平衡）与交互处理（保留 / 固定视角 / 关闭，默认固定视角）——就可以分析，再加入队列。属性从你在 Wallpaper Engine 里给这张壁纸设的值开始（读不到时用壁纸自带的默认值），见下文「壁纸属性」。分辨率与帧率会替你算好并在分析前显示：**帧率取你在 Wallpaper Engine 里设的帧率上限与屏幕刷新率里较小的那个**，不再固定默认 120（原生分辨率下 120 fps 视频在核显上比轻量原作更贵，见「重型与轻型」）；两者都可以手动改，plan 里记下每个值是来自档位、自动检测还是你的覆盖。支持 60/120 FPS、自定义及分数帧率。默认保留视差；调速预算由档位给（效率 5% / 平衡 3% / 质量求改动最小），可以在高级选项里覆盖或关闭。局部接缝修复已经移除，`--local-seam-repair true` 会直接报错（`--local-seam-repair true is no longer supported; source-period encodings are never repaired.`）。
 
-不是 Scene 的输入会在入口被分类拒绝，不进入分析：**视频壁纸与网页壁纸**报"本工具只处理 Scene"并以退出码 1 结束；**预设包**（`project.json` 只有 `dependency`、没有 `file` 也没有 `type`）报 `status=not_applicable`、`kind=preset` 并指出它依赖的作品 id，退出码 **3**——这类条目本身不含素材，要烘的是它依赖的那个 Scene。
+不是 Scene 的输入会在入口被分类拒绝，不进入分析：CLI 报 `status=rejected_unsupported_source`，`reason` 取 `video`（视频壁纸）/ `web`（网页壁纸）/ `preset`（预设包）/ `other_type`（其它类型），附 `message` 与中英 `message_localized`，退出码 **3**；界面在结论区给出"无法生成"和同一句理由。**预设包**（`project.json` 只有 `dependency`、没有 `file` 也没有 `type`）另带 `dependency` 指出它依赖的作品 id——这类条目本身不含素材，要烘的是它依赖的那个 Scene。
 
 原生渲染器读不了作品里的某个素材文件（暂不支持的 3D 模型或纹理）时，运行时观测起不来、分析无法进行，CLI 以退出码 **4** 结束：`--out` 仍会写出一份 `summary.verdict` 为 `tool_limitation` 的结论，逐个点名读不了的文件、解析停下的字段与文件偏移，以及用到它的图层。这是工具的能力缺口，不是对壁纸的判断；`bake` 会拒绝这份结论。完整退出码：0 已写出 plan，1 不是 Scene 壁纸或分析失败，3 预设包，4 工具局限，130 已取消。
 

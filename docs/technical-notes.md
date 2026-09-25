@@ -959,10 +959,13 @@ in the downloaded archive's properties before extracting it.
    install info. On multi-monitor setups you can pick which screen's Scene
    to load, or click "re-detect."
 2. Drag a Scene folder, JSON, or PKG into the window (or use the file/folder
-   picker). Video wallpapers and web wallpapers are refused at the entry
-   check (exit code 1) — this tool only handles Scene wallpapers. A preset
-   package is reported as `status=not_applicable`, `kind=preset` with the
-   Workshop id it depends on and exit code 3: bake that dependency instead.
+   picker). Video wallpapers, web wallpapers, preset packages and other
+   non-Scene projects are refused at the entry check — this tool only handles
+   Scene wallpapers. The CLI reports `status=rejected_unsupported_source` with
+   `reason` = `video` / `web` / `preset` / `other_type`, `message` and
+   `message_localized`, and exits with code 3; a preset package also carries
+   the Workshop id it depends on in `dependency`: bake that dependency instead.
+   The window shows the same sentence in the verdict panel.
    If the native renderer cannot read one of the wallpaper's asset files (a
    3D model or a texture it does not parse yet), analysis cannot start and
    the CLI exits with code **4**: `--out` still receives a report whose
