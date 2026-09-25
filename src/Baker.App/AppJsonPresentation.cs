@@ -182,15 +182,15 @@ internal static class AppJsonPresentation
                 ? english ? "reason unknown" : "原因不明"
                 : MessageCatalog.Get("properties.reason." + code, language);
             return english
-                ? $"Could not read your Wallpaper Engine settings for this wallpaper ({reason}); starting from the wallpaper's own defaults."
-                : $"没读到你在 Wallpaper Engine 里给这张壁纸做的设置（{reason}），从壁纸自带的默认值开始。";
+                ? $"Could not read the wallpaper settings from Wallpaper Engine ({reason}); using the wallpaper defaults."
+                : $"未能读取 Wallpaper Engine 中的壁纸设置（{reason}），使用壁纸默认值。";
         }
         int count = resolution.Values.Count;
         return count == 0
-            ? english ? "No properties of this wallpaper were changed in Wallpaper Engine; starting from its defaults."
-                : "这张壁纸在 Wallpaper Engine 里没改过属性，从默认值开始。"
-            : english ? $"Prefilled {count} values from your Wallpaper Engine settings (marked \"from WPE settings\")."
-                : $"已按你在 Wallpaper Engine 里的设置预填 {count} 项（标有“来自 WPE 设置”）。";
+            ? english ? "No wallpaper properties were changed in Wallpaper Engine; using defaults."
+                : "壁纸属性在 Wallpaper Engine 中未修改，使用默认值。"
+            : english ? $"Prefilled {count} values from Wallpaper Engine settings (marked \"from WPE settings\")."
+                : $"已从 Wallpaper Engine 设置预填 {count} 项（标有“来自 WPE 设置”）。";
     }
 
     public static bool HasAudioEffectsChoice(JsonObject plan) =>
