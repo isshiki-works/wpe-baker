@@ -222,27 +222,6 @@ bool next_is_anim_record_padding(fs::BinaryReader& f, uint32_t end_offset) {
     return peek_uint32_at(f, off + 8, next_unk_after_id) && next_unk_after_id == 0;
 }
 
-rstd::ptrdiff_t mdls_v2_indexed_trailer_start(uint32_t end_offset, uint16_t bones_num) {
-    auto trailer_size = 1ull + static_cast<uint64_t>(bones_num) * mdls_offset_trans_entry_size +
-                        1ull + static_cast<uint64_t>(bones_num) * 4ull;
-    if (end_offset < trailer_size) return -1;
-    return static_cast<rstd::ptrdiff_t>(end_offset - trailer_size);
-}
-
-bool is_mdls_v2_indexed_trailer(fs::BinaryReader& f, rstd::ptrdiff_t start, uint32_t end_offset,
-                                uint16_t bones_num) {
-    if (start < 0 || start >= static_cast<rstd::ptrdiff_t>(end_offset)) return false;
-    uint8_t has_offset_trans = 0;
-    if (! peek_uint8_at(f, start, has_offset_trans) || has_offset_trans != 1) return false;
-
-    auto has_index_off = start + 1 +
-                         static_cast<rstd::ptrdiff_t>(bones_num) *
-                             static_cast<rstd::ptrdiff_t>(mdls_offset_trans_entry_size);
-    if (has_index_off >= static_cast<rstd::ptrdiff_t>(end_offset)) return false;
-    uint8_t has_index = 0;
-    return peek_uint8_at(f, has_index_off, has_index) && has_index == 1;
-}
-
 bool ParseMasks(fs::BinaryReader& f, Mdl::Mesh& mesh, std::string_view path, Services* services);
 
 bool UsesUint32Indices(const MdlHeader& header, uint32_t vertex_num) {
@@ -608,37 +587,38 @@ bool ParseMDLS(fs::BinaryReader& f, Mdl& mdl, std::string_view path, Services* s
         uint16_t extras_count = f.ReadUint16();
 
         if (mdl.mdls == 2) {
-            if (extras_count != 0 && extras_count != 5)
-                return ParseFailure(path,
-                                    services,
-                                    "unsupported MDLS extras: version=2, extras_flag=" +
-                                        std::to_string(extras_count),
-                                    extras_offset,
-                                    end_offset);
-            uint8_t has_world_binds = f.ReadUint8();
-            if (has_world_binds) {
-                if (! RequireBytes(f,
-                                   uint64_t(bones_num) * 64,
-                                   end_offset,
-                                   path,
-                                   services,
-                                   "MDLS world binds"))
+            // v2 的 extras_count 是 IK 控制器数，其后与 ParseIkRig 读的 v4 IK 图同构，只是
+            // 控制器表后那个字节在 v2 是逐骨骼 world-bind 矩阵的旗标。本机两套语料 38 个 v2 模型
+            // 按此走读都正好落到 offset-transform 段。运行时 IK 只解 v4 三节点链，v2 的 IK 数据
+            // 按长度整段跳过：IK 只随 MDLA 控制器轨生效，没有动画的模型（3244988614）画面不变。
+            auto need = [&](uint64_t n, std::string_view field) {
+                return RequireBytes(f, n, end_offset, path, services, field);
+            };
+            auto skip = [&](uint64_t n, std::string_view field) {
+                if (! need(n, field)) return false;
+                f.SeekSet(f.Tell() + static_cast<rstd::ptrdiff_t>(n));
+                return true;
+            };
+            if (! skip(uint64_t(extras_count) * (1 + 4 + 4 + 16 * 4), "MDLS v2 IK controllers") ||
+                ! need(1, "MDLS world-bind flag"))
+                return false;
+            if (f.ReadUint8() && ! skip(uint64_t(bones_num) * 64, "MDLS world binds")) return false;
+            if (! skip(4, "MDLS v2 IK graph header") || ! need(2, "MDLS v2 IK node count"))
+                return false;
+            const uint16_t node_count = f.ReadUint16();
+            if (! skip(uint64_t(node_count) * 4, "MDLS v2 IK bone lengths")) return false;
+            for (uint16_t i = 0; i < node_count; ++i) {
+                if (! need(2, "MDLS v2 IK child count") ||
+                    ! skip(uint64_t(f.ReadUint16()) * 16, "MDLS v2 IK child table"))
                     return false;
-                // Per-bone world-bind mat4 inline (mdls v2 only).
-                for (unsigned i = 0; i < bones_num; ++i)
-                    for (unsigned j = 0; j < 16; ++j) f.ReadFloat();
             }
-            uint8_t pad[8];
-            f.Read(pad, sizeof(pad));
-            if (extras_count == 5) {
-                auto trailer_start = mdls_v2_indexed_trailer_start(end_offset, bones_num);
-                if (trailer_start >= f.Tell() &&
-                    is_mdls_v2_indexed_trailer(f, trailer_start, end_offset, bones_num)) {
-                    f.SeekSet(trailer_start);
-                } else {
-                    rstd_info("MDLSv2 extras_flag 5 did not match indexed trailer in {}",
-                              std::string(path));
-                }
+            if (! need(2, "MDLS v2 IK chain count")) return false;
+            const uint16_t chain_count = f.ReadUint16();
+            for (uint16_t i = 0; i < chain_count; ++i) {
+                // 链记录 38 字节，末尾 u16 是路径骨骼数，其后逐骨 u32
+                if (! skip(36, "MDLS v2 IK chain") || ! need(2, "MDLS v2 IK chain") ||
+                    ! skip(uint64_t(f.ReadUint16()) * 4, "MDLS v2 IK chain path"))
+                    return false;
             }
         } else if (extras_count != 0) {
             if (mdl.header.mdlv != 23 || mdl.mdls != 4)
