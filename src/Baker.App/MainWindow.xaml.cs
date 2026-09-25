@@ -23,7 +23,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<JobItem> jobs = [];
     private NativeTools? tools;
     private JsonObject? hybridPlan;
-    // 来源框里是视频/网页壁纸、预设包这类明确不支持的来源时，结论区照其它拒绝的样子给"无法生成"和理由。
+    // 来源框里是视频/网页壁纸、预设包这类明确不支持的来源时，结论区照其它拒绝的样子给"不支持"和理由。
     private SourceDiagnosis.Rejection? sourceRejection;
     private string setupError = "";
     // 工具缺失是独立一条：setupError 是单字段五处写入，后写者赢，GPU 或源属性的错误会把"生成工具未就绪"
@@ -150,7 +150,8 @@ public partial class MainWindow : Window
         BuildPropertyEditors();
         RefreshControls();
         ApplyBackdrop(); // 窗口背景下拉的提示跟着换语言
-        if (!processing && !analyzing) StatusText.Text = sourceRejection is not null ? sourceRejection.Text(AppEnvironment.Language)
+        if (activeJob is not null) StatusText.Text = activeJob.Title + " · " + activeJob.Detail;
+        else if (!processing && !analyzing) StatusText.Text = sourceRejection is not null ? sourceRejection.Text(AppEnvironment.Language)
             : hybridPlan is null
             ? L("未选择壁纸。选择壁纸后执行分析。", "No wallpaper selected. Select a wallpaper, then run analysis.")
             // 这张到底能不能做，结论区已经写得很清楚了，状态栏别在这里再下一次结论。
@@ -558,12 +559,12 @@ public partial class MainWindow : Window
         // 新手三行提示只在还没分析时显示，分析完就让位给结论。
         GettingStartedHint.Visibility = analyzed || rejected ? Visibility.Collapsed : Visibility.Visible;
         VerdictLine.Visibility = analyzed || rejected ? Visibility.Visible : Visibility.Collapsed;
-        VerdictLine.Text = analyzed ? PlainLanguage.Verdict(hybridPlan, english) : rejected ? L("无法生成", "Cannot generate") : "";
-        // 无法生成时第二行只放第一条阻塞原因的第一句，不放整段；其余三态沿用下一步动作提示。
+        VerdictLine.Text = analyzed ? PlainLanguage.Verdict(hybridPlan, english) : rejected ? L("不支持", "Not supported") : "";
+        // 不支持时第二行只放第一条阻塞原因的第一句，不放整段；其余显示数字行。
         // 不支持的来源放整句理由：英文句中有 project.json 的点号，按句号截会截断。
-        NumbersLine.Text = rejected ? sourceRejection!.Text(AppEnvironment.Language) : !analyzed ? ""
+        NumbersLine.Text = ReasonOnly(rejected ? sourceRejection!.Text(AppEnvironment.Language) : !analyzed ? ""
             : PlainLanguage.CannotGenerate(hybridPlan) ? FirstBlockerSentence()
-            : PlainLanguage.NextAction(hybridPlan, english);
+            : PlainLanguage.NextAction(hybridPlan, english));
         NumbersLine.Visibility = NumbersLine.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         if (AppJsonPresentation.SuggestedSettings(hybridPlan) is not null)
             NumbersLine.Text = hybridPlan!["suggested_change"]?[english ? "en" : "zh"]?.GetValue<string>() ?? NumbersLine.Text;
@@ -575,6 +576,14 @@ public partial class MainWindow : Window
         BuildNumbersTable();
         BuildTurnOffCard();
         UpdatePresetNote();
+    }
+
+    /// <summary>第一行已写"不支持"，第二行的原因句去掉开头的"不可生成："，其余照原文。</summary>
+    private string ReasonOnly(string text)
+    {
+        string prefix = L("不可生成：", "Cannot generate: ");
+        if (!text.StartsWith(prefix, StringComparison.Ordinal) || text.Length == prefix.Length) return text;
+        return char.ToUpperInvariant(text[prefix.Length]) + text[(prefix.Length + 1)..];
     }
 
     /// <summary>第一条阻塞原因的第一句（到第一个句号为止），没有阻塞原因文本时退回下一步动作提示。</summary>
@@ -844,10 +853,10 @@ public partial class MainWindow : Window
                     job.LatestReportPath = job.GenerationReportPath;
                     string resultStatus = result["status"]?.GetValue<string>() ?? "candidate_generated";
                     job.CanApply = AppJsonPresentation.CandidateCanApply(result);
-                    job.State = "completed";
+                    job.State = job.CanApply ? "completed" : "failed";
                     bool effectPrefix = job.Request.Plan["route"]?.GetValue<string>() == "effect_prefix";
                     // 队列里只说人话，每条后面都指向报告文件；技术原文在那里一句没少。
-                    job.Detail = resultStatus == StaticOnlyBake.Status
+                    job.Describe(() => (resultStatus == StaticOnlyBake.Status
                         ? L("当前方案输出静态纹理并保留全部实时图层，无功耗收益；需使动态部分进入视频图层。",
                             "Current route yields a static texture plus all live layers, with no power saving; the animated part must move into the video layer.")
                         : resultStatus == "candidate_rejected_no_loop"
@@ -878,16 +887,16 @@ public partial class MainWindow : Window
                             "Opaque coverage by the video layer could not be confirmed; generation aborted. Details are in the report file.")
                         : job.CanApply ? L("已生成：可应用到桌面。", "Generated: can be applied to the desktop.")
                         : L("循环周期首尾不衔接，成品不可用；详情见报告文件。",
-                            "The loop period does not join end to start, so this result is unusable. Details are in the report file.");
-                    if (AppJsonPresentation.Number(result["source_script_error_count"]) > 0 ||
-                        AppJsonPresentation.Number(result["full_capture_source_script_error_count"]) > 0)
-                        job.Detail += " · " + AppJsonPresentation.SourceScriptErrorSummary(result, english, includeFullCapture: true);
-                    if (StageTiming.Summary(result, english) is string stageSummary) job.Detail += " · " + stageSummary;
+                            "The loop period does not join end to start, so this result is unusable. Details are in the report file."))
+                        + (AppJsonPresentation.Number(result["source_script_error_count"]) > 0 ||
+                            AppJsonPresentation.Number(result["full_capture_source_script_error_count"]) > 0
+                            ? " · " + AppJsonPresentation.SourceScriptErrorSummary(result, english, includeFullCapture: true) : "")
+                        + (StageTiming.Summary(result, english) is string stageSummary ? " · " + stageSummary : ""));
                 }
                 catch (OperationCanceledException)
                 {
                     job.State = "cancelled";
-                    job.Detail = L("已取消，中间文件保留。", "Cancelled; partial files are retained.");
+                    job.Describe(() => L("已取消，中间文件保留。", "Cancelled; partial files are retained."));
                 }
                 catch (Exception error)
                 {
@@ -922,7 +931,8 @@ public partial class MainWindow : Window
         // Fractions from group selection and checks are not whole-job completion percentages.
         RunProgress.IsIndeterminate = value.Fraction is null || value.Stage != "rendering";
         RunProgress.Value = value.Fraction is double amount ? Math.Clamp(amount, 0, 1) : 0;
-        string message = value.Stage switch {
+        // 切换界面语言时 Translate 会重新调用它，L(...) 与 Text.In(...) 取的是那时的语言。
+        job.Describe(() => value.Stage switch {
             "preflight" => L("正在校验文件与工具…", "Verifying files and tools…"),
             "baking" => L("正在预渲染…", "Prerendering…"),
             "validating" => L("正在校验输出画面…", "Verifying rendered output…"),
@@ -933,9 +943,9 @@ public partial class MainWindow : Window
             "rendering" => value.FramesCompleted is ulong done && value.FramesTotal is ulong total
                 ? L("正在渲染：", "Rendering: ") + $"{done} / {total}" + L(" 帧", " frames")
                 : L("正在准备渲染与预热…", "Preparing the render and warmup…"),
-            _ => StageTiming.ExclusiveStages.Contains(value.Stage) ? StageTiming.StageLabel(value.Stage, english) + "…" : value.Message };
-        job.Detail = message;
-        StatusText.Text = job.Title + " · " + message;
+            _ => value.Text?.In(AppEnvironment.Language) ??
+                (StageTiming.ExclusiveStages.Contains(value.Stage) ? StageTiming.StageLabel(value.Stage, english) + "…" : value.Message) });
+        StatusText.Text = job.Title + " · " + job.Detail;
     });
 
     private void StartProgressTiming()
@@ -967,7 +977,7 @@ public partial class MainWindow : Window
         if (QueueList.SelectedItem is not JobItem job) return;
         if (job == activeJob)
         {
-            runCancellation?.Cancel(); job.Detail = L("正在停止…", "Stopping…");
+            runCancellation?.Cancel(); job.Describe(() => L("正在停止…", "Stopping…"));
             StatusText.Text = job.Title + " · " + job.Detail;
             RunProgress.IsIndeterminate = true;
             RefreshProgressTiming();
@@ -1592,6 +1602,7 @@ public partial class MainWindow : Window
     private sealed class JobItem(HybridBakeRequest request, NativeTools tools, string? gpuName, JsonObject? definitions = null) : ObservableItem
     {
         private string detail = "";
+        private Func<string>? describe;
         public HybridBakeRequest Request { get; } = request;
         public NativeTools Tools { get; } = tools;
         public string? GpuName { get; } = gpuName;
@@ -1620,7 +1631,9 @@ public partial class MainWindow : Window
             "queued" => StateBrushes.Muted,
             _ => StateBrushes.Busy,
         };
-        public string Detail { get => detail; set { detail = value; Changed(); } }
+        public string Detail { get => detail; set { detail = value; describe = null; Changed(); } }
+        /// <summary>按当前界面语言生成 Detail；切换语言时 <see cref="Translate"/> 再取一次。</summary>
+        public void Describe(Func<string> text) { Detail = text(); describe = text; }
         public string? ProjectPath { get; set; }
         public string? ErrorPath { get; set; }
         public string? ExportArchive { get; set; }
@@ -1640,12 +1653,12 @@ public partial class MainWindow : Window
                 "applying" => english ? "Applying wallpaper" : "正在应用壁纸", "restoring" => english ? "Restoring wallpaper" : "正在恢复壁纸",
                 "reading_report" => english ? "Reading validation report" : "正在读取验证报告",
                 "exporting" => english ? "Exporting ZIP" : "正在导出 ZIP", _ => State };
+            if (describe is not null) { detail = describe(); Changed(nameof(Detail)); }
             (string Zh, string En)[] details = [
                 ("已生成：可应用到桌面。", "Generated: can be applied to the desktop."),
                 ("特效前缀候选已生成，可应用。", "Effect-prefix candidate created and can be applied."),
-                ("已取消，中间文件保留。", "Cancelled; partial files are retained."),
                 ("ZIP 已导出。", "ZIP export complete.") ];
-            foreach (var pair in details) if (Detail == pair.Zh || Detail == pair.En) { Detail = english ? pair.En : pair.Zh; break; }
+            if (describe is null) foreach (var pair in details) if (Detail == pair.Zh || Detail == pair.En) { Detail = english ? pair.En : pair.Zh; break; }
             Changed(nameof(Settings));
             Changed(nameof(StatusText));
             Changed(nameof(StatusBrush));

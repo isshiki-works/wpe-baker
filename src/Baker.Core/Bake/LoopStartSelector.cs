@@ -37,8 +37,8 @@ internal static class LoopStartSelector
             await Parallel.ForEachAsync(Enumerable.Range(0, requests.Length),
                 new ParallelOptions { MaxDegreeOfParallelism = parallel, CancellationToken = cancellationToken }, async (slot, token) =>
                 {
-                    progress?.Report(new("searching_loop_start", 0,
-                        $"在锁定的解析周期内按接缝残差挑选起点帧（组 {requests[slot].Id}，预热 {scheduler.SearchWarmupFrames} 帧，步长 {sampleStride} 帧，搜索窗 {requests[slot].Request.Frames} 帧）。"));
+                    progress?.Report(new("searching_loop_start", 0, new Message("progress.searching_loop_start",
+                        [requests[slot].Id, scheduler.SearchWarmupFrames, sampleStride, requests[slot].Request.Frames])));
                     var scores = new List<ResidualStartCandidate>();
                     JsonObject search = await runner.SearchLoopStartAsync(requests[slot].Request,
                         requests[slot].Period, scheduler.CrossfadeFrames, scheduler.TileScale, progress, token, requests.Length > 1 ? scores : null);
