@@ -178,7 +178,7 @@ internal static class PlanWriter
             ["layers"] = new JsonArray(sourceOrder.Select(id => {
                 var (fraction, x, y) = Placement(id);
                 string[] suspicion = OverlaySuspicion(id, fraction, x, y);
-                return (JsonNode)new JsonObject {
+                var layer = new JsonObject {
                     ["id"] = id, ["root"] = graph.RootOf[id], ["allocation_root"] = allocation.UnitOf[id],
                     ["parent"] = objects[id]["parent"]?.DeepClone(), ["source_order"] = Array.IndexOf(sourceOrder, id),
                     ["name"] = objects[id]["name"]?.DeepClone(),
@@ -201,6 +201,11 @@ internal static class PlanWriter
                         ? JsonSerializer.SerializeToNode(TradeoffOptions.Classify(reasons[id], suspectedOverlay: suspicion.Length > 0).Kinds) : null,
                     ["visible_property"] = liveIds.Contains(id) ? VisibleProperty(id) : null,
                     ["visible"] = composer.Visible(id), ["drawable"] = composer.Draws(id) };
+                // 只作注记的输入来源（Liveness.InputDrivenCamera）；没有时不写字段，其余 plan 逐字节不变。
+                if (liveIds.Contains(id) && (liveness.InputDrivenCamera ? "input_driven_camera"
+                    : liveness.SharedStateForInputReaders.Contains(id) ? "shared_state_for_input_readers" : null) is string source)
+                    layer["input_source"] = source;
+                return (JsonNode)layer;
             }).ToArray()),
             ["optional_realtime_roots"] = JsonSerializer.SerializeToNode(composer.OptionalForeground),
             ["hdr_radiance_closure"] = verdict.RadianceClosure,
