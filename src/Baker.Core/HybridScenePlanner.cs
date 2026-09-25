@@ -306,7 +306,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // 只看整层初判拒因：路线与布局准入追加的 blockers 不影响前缀回退（与改写前读同一份局部数组的结果相同）。
             // HDR 闭合拒因不挡：它是按整层初始分配求的，前缀采纳后按前缀捕获对象重求（Verdict.ApplyPrefixRadianceClosure）。
             if (verdict.PrefixSafetyBlocked) return new JsonArray();
-            var proposed = EffectPrefixPlanner.Propose(scene, source, request.Assets, observation.Trace, properties, request, projection);
+            var proposed = EffectPrefixPlanner.Propose(scene, source, request.Assets, observation.Trace, properties, request, projection,
+                composer.MayBeVisible);
             var accepted = new JsonArray();
             // 提案按层分组、层内由长到短。每层只取第一个捕获点可用的前缀：最长的那个被拒时退一级，
             // 整层不因此退回实时（摆动改频进来以后，更长的前缀更容易把终端落在共用缓冲上）。

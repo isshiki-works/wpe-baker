@@ -71,7 +71,7 @@ internal static class EffectPrefixProfileChecks
         JsonObject Prefix(string? preset) => (JsonObject)AnalyzePrefix.Invoke(null,
             [Scene(), source, null, new JsonObject(), new JsonObject(), 7, 2, Request(preset), new JsonObject(), null])!;
         JsonArray Proposals(string? preset) => (JsonArray)Propose.Invoke(null,
-            [Scene(), source, sourceDirectory, new JsonObject(), new JsonObject(), Request(preset), new JsonObject()])!;
+            [Scene(), source, sourceDirectory, new JsonObject(), new JsonObject(), Request(preset), new JsonObject(), null])!;
 
         JsonObject efficiency = Prefix(RetimeProfile.Efficiency), balanced = Prefix(RetimeProfile.Balanced),
             quality = Prefix(RetimeProfile.Quality);
@@ -155,7 +155,7 @@ internal static class EffectPrefixProfileChecks
             controlledScene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 99, ["visible"] = new JsonObject {
                 ["script"] = "let target; export function init(){ target=thisScene.getLayer('leaf'); } export function update(value){ target.visible=engine.frametime>0; " + hiddenPixelWrite + " return value; }" } });
             var caches = (JsonArray)Propose.Invoke(null,
-                [controlledScene, source, sourceDirectory, trace, new JsonObject(), Request(RetimeProfile.Balanced), new JsonObject()])!;
+                [controlledScene, source, sourceDirectory, trace, new JsonObject(), Request(RetimeProfile.Balanced), new JsonObject(), null])!;
             check(trace["runtime_dependencies"]!.AsArray().Count == 1, "prefix analysis does not erase the original controller trace");
             return caches;
         }
@@ -184,7 +184,7 @@ internal static class EffectPrefixProfileChecks
         // fix-j：速度门限按输出短边换算，前缀路线与整层路线同一口径。4K 输出下缓存记录与前缀循环的 sway_retime 都写生效门限（×2），
         // 1080p 仍是 0.1 / 0.2。
         JsonObject fourK = ((JsonArray)Propose.Invoke(null, [Scene(), source, sourceDirectory, new JsonObject(), new JsonObject(),
-            Request(RetimeProfile.Balanced) with { Width = 3840, Height = 2160 }, new JsonObject()])!).OfType<JsonObject>().First();
+            Request(RetimeProfile.Balanced) with { Width = 3840, Height = 2160 }, new JsonObject(), null])!).OfType<JsonObject>().First();
         static double Limit(JsonNode? record, string kind) => record![kind + "_speed_deviation_limit_pixels_per_second"]!.GetValue<double>();
         JsonNode? fourKRetime = fourK["loop"]!["candidates"]![0]!["sway_retime"];
         check(Limit(profiles[1]["retime_profile"], "slow") == 0.1 && Limit(profiles[1]["retime_profile"], "visible") == 0.2 &&

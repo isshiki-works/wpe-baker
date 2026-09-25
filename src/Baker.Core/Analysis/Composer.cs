@@ -26,6 +26,11 @@ internal sealed class Composer
     internal JsonObject TextEffectChoice { get; }
     /// <summary>可以从视频组尾部剥成实时的根（plan.optional_realtime_roots）。</summary>
     internal int[] OptionalForeground { get; }
+    /// <summary>
+    /// 运行中可能可见：没被省略/剔除、不属于当前昼夜状态以外的受控层，且自己当前可见、可见性绑了脚本或动画、或观测到有脚本写它的 visible，
+    /// 父链同样如此。不满足的层 WPE 不画，分组不收它，分析也不为它做任何探测。
+    /// </summary>
+    internal Func<int, bool> MayBeVisible { get; }
 
     /// <param name="daytimeControlled">昼夜选择器控制的图层；不属于当前状态的按"保留但隐藏"处理。</param>
     /// <param name="daytimeVisible">当前状态下可见的受控图层。</param>
@@ -46,11 +51,12 @@ internal sealed class Composer
         // 状态拆分：不属于当前状态的受控层按"保留但隐藏"处理（不进视频、不实时、不删——选择器脚本在成品里仍要
         // getLayer 找到它们）；属于当前状态的受控层视为可见（探测在真实时刻跑，观测里它们多半是隐藏的）。
         daytimeHidden = daytimeControlled.Except(daytimeVisible).ToHashSet();
-        bool MayBeVisible(int id) => !omittedIds.Contains(id) && !daytimeHidden.Contains(id) && (LocallyVisible(id) ||
+        MayBeVisible = MayBe;
+        bool MayBe(int id) => !omittedIds.Contains(id) && !daytimeHidden.Contains(id) && (LocallyVisible(id) ||
             graph.DynamicVisibility(id) ||
             dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write" &&
                 d["property"]?.GetValue<string>() == "visible")) &&
-            (Int(objects[id]["parent"]) is not int parent || !objects.ContainsKey(parent) || MayBeVisible(parent));
+            (Int(objects[id]["parent"]) is not int parent || !objects.ContainsKey(parent) || MayBe(parent));
         // The stock fullscreen passthrough copies the framebuffer onto itself. Keep its scripts,
         // but it neither separates drawing groups nor prevents capturing the scene clear color.
         bool IdentityFramebuffer(int id) => objects[id]["image"]?.GetValue<string>() == "models/util/fullscreenlayer.json" &&
