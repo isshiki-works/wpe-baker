@@ -406,6 +406,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 var profile = PlaybackEncodeProfile.Create(encodedWidth, encodedHeight, request.FpsNumerator, request.FpsDenominator,
                     request.LosslessTest, request.PlaybackEncoderKind ?? PlaybackEncoderSelection.Software);
                 string colorFilter = profile.ColorFilter;
+                bool hardwareEncoder = profile.Kind != PlaybackEncoderSelection.Software;
                 // 直编成品要与"无损 master 解码后再编成品"逐字节相同，所以送进 swscale 的东西必须一模一样：
                 // master 那条链给 swscale 的是 h264 解码器产出的 gbrp 帧、再经一次全幅 crop（NativeRenderRunner.Crop.cs 的滤镜串），
                 // 这里就把 RGBA 先摊成同一个 gbrp、再做同一次全幅 crop。两步都是重排像素，不改数值。
@@ -470,12 +471,18 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 }
                 catch (Exception error) when (!cancellationToken.IsCancellationRequested && error is not OperationCanceledException)
                 {
+                    // 硬件档 ffmpeg（mf/nvenc）先退出、管道随之断开：按 GPU 编码不可用抛出，由组调度改用软件编码重渲这一组。
+                    bool hardwareEncoderFailed = hardwareEncoder && encoder.WaitForExit(2000) && encoder.ExitCode != 0;
                     StopBoth();
                     await Task.WhenAll(errors);
+                    if (hardwareEncoderFailed)
+                        throw new GpuEncodeUnavailableException($"{profile.Encoder} exited {encoder.ExitCode}; see encoder.stderr.log.", error);
                     throw RendererFailure(Path.Combine(renderDirectory, "result.json"), error.Message, error);
                 }
                 catch { StopBoth(); throw; }
                 finally { await Task.WhenAll(errors); }
+                if (hardwareEncoder && renderer.ExitCode == 0 && encoder.ExitCode != 0)
+                    throw new GpuEncodeUnavailableException($"{profile.Encoder} exited {encoder.ExitCode}; see encoder.stderr.log.");
                 if (renderer.ExitCode != 0 || encoder.ExitCode != 0)
                     throw RendererFailure(Path.Combine(renderDirectory, "result.json"),
                         $"Renderer exited {renderer.ExitCode}, encoder exited {encoder.ExitCode}; original stderr logs are retained.");

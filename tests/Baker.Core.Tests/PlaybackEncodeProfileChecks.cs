@@ -180,7 +180,7 @@ internal static class PlaybackEncodeProfileChecks
 
         object mfHevc = Create(4097, 2, false, PlaybackEncoderSelection.Mf);
         check(Value(mfHevc, "Encoder") == "hevc_mf" && Value(mfHevc, "PixelFormat") == "nv12" &&
-            Arguments(mfHevc, "cache.partial.mp4").SequenceEqual(["-c:v", "hevc_mf", "-rate_control", "quality", "-quality", "80", "-pix_fmt", "nv12", "-fps_mode", "passthrough", "-enc_time_base", "1:60", "-movie_timescale", "60", "-video_track_timescale", "60", "-movflags", "+faststart", "cache.partial.mp4"]),
+            Arguments(mfHevc, "cache.partial.mp4").SequenceEqual(["-c:v", "hevc_mf", "-hw_encoding", "true", "-rate_control", "quality", "-quality", "80", "-pix_fmt", "nv12", "-fps_mode", "passthrough", "-enc_time_base", "1:60", "-movie_timescale", "60", "-video_track_timescale", "60", "-movflags", "+faststart", "cache.partial.mp4"]),
             "mf playback profile uses MediaFoundation constant-quality 80 on nv12 with the shared container arguments");
 
         object mfH264 = Create(1920, 1080, false, PlaybackEncoderSelection.Mf);
@@ -209,43 +209,9 @@ internal static class PlaybackEncodeProfileChecks
         check(autoNames.FallbackReason!.Contains("mf", StringComparison.Ordinal),
             "the auto fallback reason names mf among the kinds it checked");
 
-        // 硬件 MFT 探测：退出码 0 才算硬件，失败时带回 MF_E_* 原因码。
-        const string HardwareProbe = """
-            [h264_mf @ 0] activate MFT 0
-            [h264_mf @ 0]    MFT_ENUM_HARDWARE_URL_Attribute='AMDh264Encoder'
-            [h264_mf @ 0] MFT name: 'AMDh264Encoder'
-            frame=    2 fps=0.0
-            """;
-        var hardwareProbe = PlaybackEncoderSelection.ParseMfProbe(0, HardwareProbe);
-        check(hardwareProbe.Hardware && hardwareProbe.Mft == "AMDh264Encoder" && hardwareProbe.Failure is null,
-            "a successful hardware MFT probe reports the activated vendor MFT");
-
-        const string FailedProbe = """
-            [h264_mf @ 0] MFT name: 'AMDh264Encoder'
-            [h264_mf @ 0] could not set output type (MF_E_UNSUPPORTED_D3D_TYPE)
-            Conversion failed!
-            """;
-        var failedProbe = PlaybackEncoderSelection.ParseMfProbe(1, FailedProbe);
-        check(!failedProbe.Hardware && failedProbe.Mft is null &&
-            failedProbe.Failure == "MF_E_UNSUPPORTED_D3D_TYPE",
-            "a failed hardware MFT probe reports no MFT and carries the MF_E_ reason code");
-
-        var blankProbe = PlaybackEncoderSelection.ParseMfProbe(1, "");
-        check(!blankProbe.Hardware && blankProbe.Mft is null && blankProbe.Failure is null &&
-            PlaybackEncoderSelection.ParseMfProbe(0, "").Mft is null,
-            "an empty probe log claims neither hardware nor a reason");
-
-        string note = PlaybackEncoderSelection.MfSoftwareOnlyNote("MF_E_UNSUPPORTED_D3D_TYPE", "AMDh264Encoder");
-        check(note.Contains("MF_E_UNSUPPORTED_D3D_TYPE", StringComparison.Ordinal) &&
-            note.Contains("AMDh264Encoder", StringComparison.Ordinal) &&
-            note.Contains("SET_D3D_MANAGER", StringComparison.Ordinal) &&
-            PlaybackEncoderSelection.MfProbeArguments("h264_mf", "in.mp4", "probe.mp4")
-                .SequenceEqual(["-hide_banner", "-loglevel", "verbose", "-nostdin", "-y", "-i", "in.mp4", "-frames:v", "2", "-an", "-c:v", "h264_mf", "-hw_encoding", "true", "-f", "mp4", "probe.mp4"]),
-            "the software-only note names the MFT, the MF reason and the upstream ordering cause");
-
         // ---- 质量升档阶梯 ----
         object mfStep1 = Escalate(mfHevc), mfStep2 = Escalate(mfStep1);
-        check(Arguments(mfStep1, "o.mp4")[5] == "90" && Arguments(mfStep2, "o.mp4")[5] == "96" &&
+        check(Arguments(mfStep1, "o.mp4")[7] == "90" && Arguments(mfStep2, "o.mp4")[7] == "96" &&
             Step(mfStep2) == 2 && !CanEscalate(mfStep2) && CanEscalate(mfStep1),
             "mf escalates along its own 80/90/96 quality ladder and stops at the top");
 
