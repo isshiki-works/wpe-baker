@@ -64,7 +64,9 @@ public partial class MainWindow : Window
         {
             // 系统背景要透到客户区：WPF 不刷底色 + 边框扩展到整个客户区；不透明模式由 Window.Background 自己盖住。
             var hwnd = new WindowInteropHelper(this).Handle;
-            HwndSource.FromHwnd(hwnd).CompositionTarget.BackgroundColor = System.Windows.Media.Colors.Transparent;
+            var source = HwndSource.FromHwnd(hwnd);
+            source.CompositionTarget.BackgroundColor = System.Windows.Media.Colors.Transparent;
+            source.AddHook(KeepBackdropActive);
             var margins = new Margins(-1, -1, -1, -1);
             DwmExtendFrameIntoClientArea(hwnd, ref margins);
             ApplyBackdrop();
@@ -1507,7 +1509,10 @@ public partial class MainWindow : Window
             : L("Windows 透明效果已关闭，窗口使用不透明背景。开启：设置 > 个性化 > 颜色 > 透明效果。",
                 "Windows transparency effects are off, so the window is opaque. Turn on: Settings > Personalization > Colors > Transparency effects.");
         int choice = BackdropBox.IsEnabled ? Math.Max(BackdropBox.SelectedIndex, 0) : 0;
+        backdropOn = choice != 0;
         SetResourceReference(BackgroundProperty, choice == 0 ? "Bg" : "Base");
+        // 深色玻璃卡片是压暗的烟色，放在不透明底上会和底色糊成一片；不透明时在窗口级把 Card 换成亮一级的实色。
+        if (choice == 0) Resources["Card"] = FindResource("CardOpaque"); else Resources.Remove("Card");
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
         int darkMode = dark ? 1 : 0, backdrop = choice switch { 1 => 2, 2 => 3, _ => 1 };
@@ -1520,7 +1525,19 @@ public partial class MainWindow : Window
         DwmSetWindowAttribute(hwnd, 35, ref caption, sizeof(int));
     }
 
+    /// <summary>系统云母/亚克力跟着标题栏的激活态走：窗口一失焦，DWM 就把背景换成纯色。
+    /// 失焦时照样按"激活"交给默认处理，背景就一直透着；代价是失焦时标题文字不变灰。不透明模式不拦。</summary>
+    private bool backdropOn;
+    private IntPtr KeepBackdropActive(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int WM_NCACTIVATE = 0x0086;
+        if (msg != WM_NCACTIVATE || wParam != IntPtr.Zero || !backdropOn) return IntPtr.Zero;
+        handled = true;
+        return DefWindowProc(hwnd, msg, 1, lParam);
+    }
+
     private record struct Margins(int Left, int Right, int Top, int Bottom);
+    [DllImport("user32.dll", EntryPoint = "DefWindowProcW")] private static extern IntPtr DefWindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref Margins margins);
 

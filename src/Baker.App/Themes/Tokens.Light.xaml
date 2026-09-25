@@ -1,11 +1,13 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <!-- 浅色颜色键。键名与 Tokens.Dark.xaml 一一对应；控件样式（Controls.xaml）一律用 DynamicResource 引用。
-         窗口底是系统云母/亚克力（自带浅色色调与亮度层），卡片、控件只再叠一层半透明白，数值取自 WinUI 的 Card/Control 填充。 -->
+         窗口底是系统云母/亚克力（自带浅色色调与亮度层），不再压底；卡片、控件叠一层半透明白。
+         暗壁纸上浅色亚克力会发灰，文字色因此比 WinUI 默认略深（实测正文 ≥7:1、次要文字 ≥4.5:1）。 -->
     <SolidColorBrush x:Key="Bg" Color="#F3F3F3"/> <!-- 窗口底色与标题栏（不透明模式） -->
-    <SolidColorBrush x:Key="Base" Color="#1AF3F3F3"/> <!-- 云母/亚克力上再压一层 10% 浅底，亮壁纸下字也清楚 -->
-    <SolidColorBrush x:Key="Card" Color="#99FFFFFF"/> <!-- 玻璃卡片：60% 白，背后材质透得出来；不透明模式下叠成 #FAFAFA -->
-    <SolidColorBrush x:Key="Field" Color="#B3FFFFFF"/> <!-- 卡片上的输入框、按钮、内嵌块：叠一层 70% 白 -->
+    <SolidColorBrush x:Key="Base" Color="#00F3F3F3"/> <!-- 云母/亚克力上不再压底 -->
+    <SolidColorBrush x:Key="Card" Color="#59FFFFFF"/> <!-- 玻璃卡片：35% 白，背后材质透得出来 -->
+    <SolidColorBrush x:Key="CardOpaque" Color="#FAFAFA"/> <!-- 不透明模式的卡片：比窗口底亮一级 -->
+    <SolidColorBrush x:Key="Field" Color="#80FFFFFF"/> <!-- 卡片上的输入框、按钮、内嵌块：叠一层 50% 白 -->
     <SolidColorBrush x:Key="Solid" Color="#FFFFFF"/> <!-- 下拉弹层：不透明 -->
     <SolidColorBrush x:Key="Fill" Color="#EBEBEB"/> <!-- 分段底、悬停 -->
     <SolidColorBrush x:Key="Stroke" Color="#1A000000"/> <!-- 内嵌块描边、分隔线 -->
@@ -14,11 +16,11 @@
         <GradientStop Color="#FFFFFFFF" Offset="0"/><GradientStop Color="#66FFFFFF" Offset="0.35"/><GradientStop Color="#1F000000" Offset="1"/>
     </LinearGradientBrush>
     <SolidColorBrush x:Key="Ink" Color="#1A1A1A"/> <!-- 主文字 -->
-    <SolidColorBrush x:Key="Ink2" Color="#404040"/> <!-- 次要文字 -->
+    <SolidColorBrush x:Key="Ink2" Color="#383838"/> <!-- 次要文字 -->
     <SolidColorBrush x:Key="Ink3" Color="#6E6E6E"/> <!-- 仅禁用与占位 -->
     <SolidColorBrush x:Key="Accent" Color="#0F7B6C"/> <!-- 强调填充 -->
     <SolidColorBrush x:Key="AccentInk" Color="#FFFFFF"/> <!-- 强调填充上的字 -->
-    <SolidColorBrush x:Key="AccentText" Color="#075046"/> <!-- 强调色文字、已完成 -->
+    <SolidColorBrush x:Key="AccentText" Color="#05443B"/> <!-- 强调色文字、已完成 -->
     <SolidColorBrush x:Key="AccentSoft" Color="#E4F1EE"/> <!-- 强调淡底（实色小底衬） -->
     <SolidColorBrush x:Key="BusyText" Color="#083F85"/> <!-- 进行中 -->
     <SolidColorBrush x:Key="BadText" Color="#7A130C"/> <!-- 失败文字 -->
