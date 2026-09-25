@@ -67,8 +67,8 @@ internal static class HybridLoopAllocation
         retained.UnionWith(added);
         // 加载即播、一次淡到全透明的图层（alpha 单次轨末帧值 0）入场后就看不见；视频从入场结束后录
         // （SingleShotAllocation.IntroSeconds），它不算剩下的可烘内容。
-        static bool FadesOutForGood(JsonObject obj) => obj["alpha"]?["animation"] is JsonObject track &&
-            track["options"]?["mode"] is JsonValue mode && mode.TryGetValue(out string? text) && text == "single" &&
+        static bool FadesOutForGood(JsonObject obj) => obj["alpha"] is JsonObject alpha && alpha["animation"] is JsonObject track &&
+            track["options"] is JsonObject options && options["mode"] is JsonValue mode && mode.TryGetValue(out string? text) && text == "single" &&
             (track["c0"] as JsonArray ?? []).OfType<JsonObject>().MaxBy(key => SceneGraph.Numeric(key["frame"], 0)) is JsonObject last &&
             SceneGraph.Numeric(last["value"], 1) == 0;
         int[] remaining = objects.Keys.Where(id => baked.Contains(id) && !retained.Contains(rootOf[id]) && !FadesOutForGood(objects[id])).ToArray();
