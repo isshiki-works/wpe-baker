@@ -126,6 +126,10 @@ internal static class StaticProof
             if (node is not JsonValue value || !value.TryGetValue<string>(out string? name))
                 return "a material texture entry is not a string";
             if (effect && name.StartsWith("_rt_", StringComparison.Ordinal)) continue;
+            // 文字图集按字体与字号共用、只追加：字形一经写入不再移动也不被清掉（满了新字形退成白块），所以一层文字采样的
+            // 那几块像素只随它自己的文字变。文字的变化另有拦截：本层脚本与动画绑定在 DynamicSourceMechanism，
+            // 别层脚本改 text 在上面的运行时依赖检查（引擎记 write/text），用户属性烘焙时固定。
+            if (name.StartsWith("_text_atlas_", StringComparison.Ordinal)) continue;
             if (!StaticTexture(source, assetsDirectory, name)) return $"material texture \"{name}\" is not a proven still image";
         }
         return null;
