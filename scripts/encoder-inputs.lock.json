@@ -39,5 +39,13 @@
     "sha256": "62b30ab37e4e9be0d0c5b37b8fee4b094e38e570984d56e1135a6b6c2c164c9f",
     "license": "MIT",
     "license_evidence": "header comments in include/ffnvcodec/*.h"
+  },
+  "amf-headers": {
+    "tag": "v1.5.2",
+    "url": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF/releases/download/v1.5.2/AMF-headers-v1.5.2.tar.gz",
+    "archive": ".tools/downloads/AMF-headers-v1.5.2.tar.gz",
+    "sha256": "d3c12eb324edf05e214608b6a395a51dd95770ed9d45520185d6c3a206811c99",
+    "license": "MIT",
+    "license_evidence": "header comments in AMF/**/*.h"
   }
 }

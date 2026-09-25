@@ -48,7 +48,10 @@ its original COPYING and public-header notice. x265 uses the same license terms.
 Keep the eight files in bin together. The encoder's DLLs belong to this process;
 the renderer uses its separately verified LGPL 2.1 library directory.
 The encoder set is libx264, libx264rgb, libx265, h264_mf, hevc_mf, av1_mf,
-rawvideo, AAC, PCM f32le and PCM s16le. The three Media Foundation encoder
+h264_nvenc, hevc_nvenc, h264_amf, hevc_amf, rawvideo, AAC, PCM f32le and PCM s16le.
+NVENC and AMF are compiled from MIT-licensed headers only (nv-codec-headers
+n12.1.14.0, AMF-headers v1.5.2); the NVIDIA or AMD driver supplies the runtime
+library, so these entries open only on machines with that driver. The three Media Foundation encoder
 entry points and D3D11VA decoding of H.264/HEVC/AV1 are compiled; availability
 depends on the actual adapter, driver and format and must be probed at runtime.
 An encoder listing alone does not establish hardware support. x265 is a static
