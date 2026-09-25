@@ -14,7 +14,9 @@ public enum VulkanDeviceType : uint
 
 /// <summary>UUID and optional LUID contain the Vulkan-reported bytes in memory order.</summary>
 /// <param name="DriverVersion">The implementation-defined raw driver version; its encoding is vendor-specific.</param>
-/// <param name="VideoEncode">驱动是否提供 VK_KHR_video_encode_queue（渲染器 GPU 直编的前提；Intel Windows 驱动目前没有）。</param>
+/// <param name="VideoEncode">渲染器能否在这块卡上 GPU 直编：驱动提供 VK_KHR_video_encode_queue（Intel Windows 驱动目前没有），且不是 AMD。
+/// AMD 驱动有这个扩展，但 2026-09 实测（Radeon 核显 RDNA2、驱动 32.0.21045.5002）渲染器内 h264_vulkan 出花屏码流、
+/// hevc_vulkan 初始化即访问违例，所以按没有算，auto 直接走 ffmpeg 档位，磁盘闸门也按真实路线估算（runs/AMDENC）。</param>
 public sealed record VulkanDeviceInfo(string Name, string DeviceUuid, uint VendorId, uint DeviceId,
     VulkanDeviceType DeviceType, uint ApiVersion, uint DriverVersion, string? WindowsLuid,
     uint? WindowsNodeMask, bool VideoEncode)
@@ -133,7 +135,8 @@ public static class VulkanDevices
         return new VulkanDeviceInfo(name, Hex(id.deviceUUID), info.vendorID, info.deviceID,
             (VulkanDeviceType)info.deviceType, info.apiVersion, info.driverVersion,
             id.deviceLUIDValid != 0 ? Hex(id.deviceLUID) : null,
-            id.deviceLUIDValid != 0 ? id.deviceNodeMask : null, HasExtension(device, getExtensions, "VK_KHR_video_encode_queue"));
+            id.deviceLUIDValid != 0 ? id.deviceNodeMask : null,
+            info.vendorID != 0x1002 && HasExtension(device, getExtensions, "VK_KHR_video_encode_queue"));
     }
 
     private static bool HasExtension(nint device, EnumerateDeviceExtensionPropertiesDelegate getExtensions, string name)
