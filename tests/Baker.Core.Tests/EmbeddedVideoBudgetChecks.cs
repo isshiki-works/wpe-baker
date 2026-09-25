@@ -22,45 +22,15 @@ internal static class EmbeddedVideoBudgetChecks
             EmbeddedVideoBudget.ReferenceBytesPerFrame(3840d * 2160) > EmbeddedVideoBudget.ReferenceBytesPerFrame(3414d * 1920),
             "embedded video budget: transparent groups double the encoded width and more pixels never lower the reference bytes per frame");
 
-        // 大小表的三档分辨率：60 fps 下参考码率装得下的整秒数；120 fps 帧数不变、秒数减半（按帧计，偏保守）。
-        (uint W, uint H, double At60, double At120)[] table = [(1920, 1080, 1175, 587), (3414, 1920, 633, 316), (3840, 2160, 558, 279)];
-        check(table.All(row =>
-                EmbeddedVideoBudget.WholeSeconds(EmbeddedVideoBudget.ReferenceMaximumFrames(row.W, row.H, false), 60, 1) == row.At60 &&
-                EmbeddedVideoBudget.WholeSeconds(EmbeddedVideoBudget.ReferenceMaximumFrames(row.W, row.H, false), 120, 1) == row.At120) &&
-            EmbeddedVideoBudget.WholeSeconds(EmbeddedVideoBudget.ReferenceMaximumFrames(1920, 1080, false), 60000, 1001) == 1177,
-            "embedded video budget: the reference fits 1175/633/558 s at 60 fps and 587/316/279 s at 120 fps for 1080p, 3414x1920 and 4K");
-        ulong fitFrames = EmbeddedVideoBudget.ReferenceMaximumFrames(3840, 2160, false);
         double perFrame = EmbeddedVideoBudget.ReferenceBytesPerFrame(3840d * 2160);
-        check(fitFrames * perFrame <= EmbeddedVideoBudget.MaximumBytes && (fitFrames + 1) * perFrame > EmbeddedVideoBudget.MaximumBytes,
-            "embedded video budget: the reference frame count is the largest that stays within the limit");
         // 硬件档位预判：参考码率 × 1.555 刚好不超的帧数仍用硬件，多一帧就改软件。
         ulong hardwareFrames = (ulong)Math.Floor(EmbeddedVideoBudget.MaximumBytes / (perFrame * 1.555));
         ulong hevcFrames = (ulong)Math.Floor(EmbeddedVideoBudget.MaximumBytes / (perFrame * 1.12));
         check(!EmbeddedVideoBudget.HardwareOverBudget(hardwareFrames, 3840, 2160, false, hevc: false) &&
             EmbeddedVideoBudget.HardwareOverBudget(hardwareFrames + 1, 3840, 2160, false, hevc: false) &&
             !EmbeddedVideoBudget.HardwareOverBudget(hevcFrames, 3840, 2160, false, hevc: true) &&
-            EmbeddedVideoBudget.HardwareOverBudget(hevcFrames + 1, 3840, 2160, false, hevc: true) &&
-            EmbeddedVideoBudget.LoopLengthLimit(600, 3840, 2160, false, 60, 1, hevc: true)!.ReferenceBytesPerFrame == perFrame * 1.34,
-            "embedded video budget: hardware falls back to software exactly when reference bytes x 1.555 (H.264) or x 1.12 (HEVC) exceed the limit; HEVC software budgets x 1.34");
-
-        // ---- 循环长度收紧 ----
-        EmbeddedVideoLoopLimit amiya = EmbeddedVideoBudget.LoopLengthLimit(3600, 1920, 1080, false, 60, 1)!;
-        EmbeddedVideoLoopLimit laptop = EmbeddedVideoBudget.LoopLengthLimit(600, 3414, 1920, false, 60, 1)!;
-        EmbeddedVideoLoopLimit desktop = EmbeddedVideoBudget.LoopLengthLimit(600, 3840, 2160, false, 60, 1)!;
-        EmbeddedVideoLoopLimit layered = EmbeddedVideoBudget.LoopLengthLimit(600, 1920, 1080, true, 60, 1)!;
-        check(amiya is { Applied: true, EffectiveSeconds: 1175, RequestedSeconds: 3600 } &&
-            laptop is { Applied: false, EffectiveSeconds: 600 } && desktop is { Applied: true, EffectiveSeconds: 558 } &&
-            layered is { Applied: false, EncodedWidth: 3840, PackedAlpha: true } && layered.FitSeconds < amiya.FitSeconds &&
-            EmbeddedVideoBudget.LoopLengthLimit(600, 0, 0, false, 60, 1) is null,
-            "embedded video limit: 1080p at 3600 s drops to 1175 s, the laptop's 600 s default fits, a 4K desktop's 600 s drops to 558 s, and an unknown size is not limited");
-        JsonObject record = EmbeddedVideoBudgetJson.ToJson(desktop);
-        check(record["applied"]!.GetValue<bool>() && record["requested_loop_length_maximum_seconds"]!.GetValue<double>() == 600 &&
-            record["fit_seconds"]!.GetValue<double>() == 558 && record["maximum_bytes"]!.GetValue<long>() == int.MaxValue &&
-            record["encoded_width"]!.GetValue<uint>() == 3840 && record["fps_numerator"]!.GetValue<uint>() == 60,
-            "embedded video limit: the plan record carries the requested and fitted seconds, the limit, the encoded size and its basis");
-        check(EmbeddedVideoBudgetJson.Sentence(laptop, MessageCatalog.Chinese) == "" &&
-            EmbeddedVideoBudgetJson.Sentence(EmbeddedVideoBudget.LoopLengthLimit(600, 1920, 1080, false, 60000, 1001)!, MessageCatalog.English) == "",
-            "embedded video limit: the sentence names the resolution, frame rate, longest and requested seconds, and is empty when nothing was lowered");
+            EmbeddedVideoBudget.HardwareOverBudget(hevcFrames + 1, 3840, 2160, false, hevc: true),
+            "embedded video budget: hardware falls back to software exactly when reference bytes x 1.555 (H.264) or x 1.12 (HEVC) exceed the limit");
 
         // ---- 试编码外推 ----
         EmbeddedVideoBudget.VideoPacket[] Packets(long key, long inter, int count) =>

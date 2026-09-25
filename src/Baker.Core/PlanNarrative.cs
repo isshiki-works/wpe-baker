@@ -326,26 +326,7 @@ public static class PlanNarrative
                 summary[language] = summary[language]!.GetValue<string>() + (language == MessageCatalog.Chinese ? "" : " ") +
                     MessageCatalog.Get("summary.particle_default_loop", language, length);
         }
-        // 循环长度上限被内嵌视频 2 GiB 收紧时说明"该分辨率下最长约 x 秒"。上限对所有周期分量共用，所以不论改频开关，
-        // 只要选中的是整层循环候选就说；循环记录上没有时回退读改频记录（旧 plan 只在那里记）。
-        if (ReferenceEquals(candidate.Parent, report["loop"]?["candidates"]) &&
-            (report["loop"]?["embedded_video_limit"] ?? report["loop"]?["sway_retime"]?["embedded_video_limit"]) is JsonObject limitRecord)
-            foreach (string language in new[] { MessageCatalog.Chinese, MessageCatalog.English })
-                if (EmbeddedVideoLimitLine(limitRecord, language) is string limit)
-                    summary[language] = summary[language]!.GetValue<string>() + (language == MessageCatalog.Chinese ? "" : " ") + limit;
         return summary;
-    }
-
-    /// <summary>plan 里 embedded_video_limit 记录收紧过（applied）时的说明句；没收紧或字段不全时为 null。</summary>
-    public static string? EmbeddedVideoLimitLine(JsonObject? limit, string language)
-    {
-        if (limit?["applied"] is not JsonValue applied || !applied.TryGetValue(out bool yes) || !yes) return null;
-        if (Number(limit["requested_loop_length_maximum_seconds"]) is not double requested || Number(limit["fit_seconds"]) is not double fit ||
-            Number(limit["encoded_width"]) is not double width || Number(limit["encoded_height"]) is not double height) return null;
-        return MessageCatalog.Get("summary.embedded_video_limit", language, width.ToString("0", CultureInfo.InvariantCulture),
-            height.ToString("0", CultureInfo.InvariantCulture), FramesPerSecond(new JsonObject { ["settings"] = new JsonObject {
-                ["fps_numerator"] = limit["fps_numerator"]?.DeepClone(), ["fps_denominator"] = limit["fps_denominator"]?.DeepClone() } }),
-            fit.ToString("0", CultureInfo.InvariantCulture), requested.ToString("0.###", CultureInfo.InvariantCulture));
     }
 
     /// <summary>
