@@ -25,6 +25,10 @@ X265_SHA = "40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210"
 # 发布包内容与 git 标签 n12.1.14.0 逐文件相同（9/24 核对）。
 NVCODEC_URL = "https://github.com/FFmpeg/nv-codec-headers/releases/download/n12.1.14.0/nv-codec-headers-12.1.14.0.tar.gz"
 NVCODEC_SHA = "62b30ab37e4e9be0d0c5b37b8fee4b094e38e570984d56e1135a6b6c2c164c9f"
+# AMF 头文件（MIT，只含头文件，运行时由 AMD 驱动提供 amfrt64.dll）：FFmpeg 8.1 configure 要求 >= 1.4.36。
+# sha256 与 GitHub 发布页登记的 digest 相同（9/26 核对）。
+AMF_URL = "https://github.com/GPUOpen-LibrariesAndSDKs/AMF/releases/download/v1.5.2/AMF-headers-v1.5.2.tar.gz"
+AMF_SHA = "d3c12eb324edf05e214608b6a395a51dd95770ed9d45520185d6c3a206811c99"
 
 
 def sha256(path):
@@ -76,6 +80,7 @@ def main():
     CACHE.mkdir(parents=True, exist_ok=True)
     x265_archive = pinned_tarball(X265_URL, X265_SHA, sources / "x265")
     nvcodec_archive = pinned_tarball(NVCODEC_URL, NVCODEC_SHA, sources / "nv-codec-headers")
+    amf_archive = pinned_tarball(AMF_URL, AMF_SHA, sources / "amf-headers")
     x264 = sources / "x264"
     bundle = CACHE / f"x264-{X264_REV}.bundle"
     if not (x264 / ".git").exists():
@@ -144,6 +149,9 @@ def main():
         "nv-codec-headers": {"tag": "n12.1.14.0", "url": NVCODEC_URL,
                              "archive": nvcodec_archive.relative_to(ROOT).as_posix(), "sha256": NVCODEC_SHA,
                              "license": "MIT", "license_evidence": "header comments in include/ffnvcodec/*.h"},
+        "amf-headers": {"tag": "v1.5.2", "url": AMF_URL,
+                        "archive": amf_archive.relative_to(ROOT).as_posix(), "sha256": AMF_SHA,
+                        "license": "MIT", "license_evidence": "header comments in AMF/**/*.h"},
     }
     (ROOT / "scripts/encoder-inputs.lock.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
     print("Ready: pinned FFmpeg 8.1.2, x264", X264_REV, "and x265 4.2")

@@ -28,7 +28,8 @@ REQUIRED_TREES = tuple(f".deps/{name}" for name in DEPENDENCIES) + (
     "engine", ".deps/ffmpeg-lgpl21/sources/ffmpeg", ".deps/ffmpeg-lgpl21/sources/dav1d",
     ".deps/ffmpeg-encoder-gpl2/sources/ffmpeg", ".deps/ffmpeg-encoder-gpl2/sources/x264",
     ".deps/ffmpeg-encoder-gpl2/sources/x265",
-    ".deps/ffmpeg-encoder-gpl2/sources/nv-codec-headers", "licenses-extra")
+    ".deps/ffmpeg-encoder-gpl2/sources/nv-codec-headers",
+    ".deps/ffmpeg-encoder-gpl2/sources/amf-headers", "licenses-extra")
 # Workshop wallpapers and baked masters must never enter a public archive.
 PRIVATE_PATTERN = re.compile(r"(^|/)(\d{9,10})(/|$)|\.pkg$|\.tex\.bak$")
 # Everything the archive picks up from the working tree, for the clean-tree check below.
