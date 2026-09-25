@@ -189,8 +189,8 @@ internal static class AppJsonPresentation
         return count == 0
             ? english ? "No wallpaper properties were changed in Wallpaper Engine; using defaults."
                 : "壁纸属性在 Wallpaper Engine 中未修改，使用默认值。"
-            : english ? $"Prefilled {count} values from Wallpaper Engine settings (marked \"from WPE settings\")."
-                : $"已从 Wallpaper Engine 设置预填 {count} 项（标有“来自 WPE 设置”）。";
+            : english ? $"Loaded {count} values from Wallpaper Engine (marked \"from Wallpaper Engine settings\")."
+                : $"已读取 Wallpaper Engine 中的 {count} 项设置（标有“取自 Wallpaper Engine 设置”）。";
     }
 
     public static bool HasAudioEffectsChoice(JsonObject plan) =>
@@ -229,8 +229,7 @@ internal static class AppJsonPresentation
         JsonObject? loop = plan["loop"] as JsonObject;
         if (loop?["status"]?.GetValue<string>() is "repairable_cut_candidate_requires_full_validation" or
             "observational_candidate_requires_seam_validation")
-            return english ? "Legacy image-derived loop; re-analyze using source periods."
-                : "旧版画面推断循环；请按源周期重新分析。";
+            return english ? "Older result; analyze again." : "旧版结果，需重新分析。";
         JsonObject? candidate = loop?["candidates"]?.AsArray().FirstOrDefault() as JsonObject;
         string rateHint = loop?["frame_rate_hint"] is not JsonObject hint ? "" : english
             ? $"; {hint["output_fps"]} fps is not a multiple of the {string.Join("/", hint["video_fps"]!.AsArray())} fps video layers, so the loop must span {hint["alignment_video_cycles"]} video cycles; {hint["suggested_fps"]} fps is suggested"
@@ -242,7 +241,7 @@ internal static class AppJsonPresentation
         string pending = unresolved == 0 ? "" : english
             ? $"; {unresolved} unresolved mechanism(s), cannot generate a complete loop"
             : $"；另有 {unresolved} 项未解决机制，不能生成完整循环";
-        return (english ? "source-period candidate " : "源周期候选 ") + duration + pending + rateHint;
+        return (english ? "Loop " : "循环周期 ") + duration + pending + rateHint;
     }
 
     private static string EffectPrefixLoopSummary(JsonObject plan, bool english)
@@ -254,13 +253,13 @@ internal static class AppJsonPresentation
             JsonObject? candidate = loop?["candidates"]?.AsArray().OfType<JsonObject>().FirstOrDefault();
             string owner = cache["owner_layer_id"]?.ToString() ?? "?";
             string prefix = cache["prefix_effect_count"]?.ToString() ?? "?";
-            if (candidate is null) return english ? $"owner {owner}: period unresolved" : $"对象 {owner}：周期未解析";
+            if (candidate is null) return english ? $"layer {owner}: no loop period found" : $"图层 {owner}：未找到循环周期";
             string seconds = Number(candidate["seconds"])?.ToString("0.###", CultureInfo.InvariantCulture) ?? "?";
             string frames = candidate["frames"]?.ToString() ?? "?";
-            return english ? $"owner {owner}, first {prefix} effects: {seconds}s/{frames} frames; later effects stay live"
-                : $"对象 {owner}，前 {prefix} 个效果：{seconds} 秒/{frames} 帧；后续效果保留实时运行";
+            return english ? $"layer {owner}, first {prefix} effects: {seconds}s/{frames} frames; later effects stay live"
+                : $"图层 {owner}，前 {prefix} 个特效：{seconds} 秒/{frames} 帧；其余特效保持实时渲染";
         }).ToArray();
-        return periods.Length == 0 ? (english ? "Effect-prefix route has no cache periods." : "特效前缀路线没有缓存周期。")
+        return periods.Length == 0 ? (english ? "The effect cache has no loop period." : "特效缓存没有循环周期。")
             : string.Join(english ? " | " : "；", periods);
     }
 
@@ -270,13 +269,12 @@ internal static class AppJsonPresentation
             return english ? "Generated from the original start." : "从原始起点生成。";
         if (SourceStartOffset.Allows(bake))
             return english
-                ? $"Analytic period kept; source frame 0 was an isolated start anomaly, so capture starts at source frame {start:0}."
-                : $"周期仍来自解析；原作第 0 帧是孤立的起点异常帧，从源帧 {start:0} 开始录。";
+                ? $"Loop starts at frame {start:0}." : $"循环从第 {start:0} 帧开始。";
         if (bake["seam_policy"]?.GetValue<string>() != ResidualMasking.SeamPolicy) return "";
         double crossfade = Number(bake["crossfade_frames"]) ?? 0;
         return english
-            ? $"Analytic period kept; phase chosen at source frame {start:0} and the seam crossfaded over {crossfade:0} frames."
-            : $"周期仍来自解析，起点相位选在源帧 {start:0}，接缝用 {crossfade:0} 帧交叉淡化。";
+            ? $"Loop starts at frame {start:0}; seam crossfade over {crossfade:0} frames."
+            : $"循环从第 {start:0} 帧开始，接缝淡入淡出 {crossfade:0} 帧。";
     }
 
     public static string SourceScriptErrorSummary(JsonObject evidence, bool english, bool includeFullCapture = false)
@@ -288,17 +286,17 @@ internal static class AppJsonPresentation
         JsonObject[] allErrors = sourceErrors.Concat(captureErrors).GroupBy(FaultKey).Select(group => group.First()).ToArray();
         string sourceState = sourceKnown
             ? sourceErrors.Length == 0
-                ? (english ? "Source observation recorded no script exceptions." : "来源观测未记录脚本异常。")
-                : (english ? $"Source script exceptions: {sourceErrors.Length}; affected owners are retained live: {FaultOwners(sourceErrors)}."
-                    : $"来源脚本异常：{sourceErrors.Length} 个；相关对象已保留为实时层：{FaultOwners(sourceErrors)}。")
-            : (english ? "Source script-fault evidence is unknown." : "来源脚本异常证据未知。");
+                ? ""
+                : (english ? $"The original wallpaper has {sourceErrors.Length} script errors; affected layers stay live."
+                    : $"原壁纸脚本报错 {sourceErrors.Length} 个，相关图层保持实时渲染。")
+            : "";
         if (!includeFullCapture) return sourceState;
-        if (!captureKnown) return sourceState + (english ? " Full-capture script-fault evidence is unknown." : " 完整捕获脚本异常证据未知。");
+        if (!captureKnown) return sourceState;
         if (captureErrors.Length == 0) return sourceState;
         int additional = allErrors.Length - sourceErrors.GroupBy(FaultKey).Count();
-        return sourceState + (english
-            ? $" Full capture recorded {allErrors.Length} distinct script exception(s){(additional > 0 ? $" ({additional} additional)" : "")}; see bake.json for details."
-            : $" 完整捕获记录了 {allErrors.Length} 个不同的脚本异常{(additional > 0 ? $"（其中新增 {additional} 个）" : "")}；详情见 bake.json。");
+        return (sourceState + (english
+            ? $" The output shows {allErrors.Length} script errors{(additional > 0 ? $" ({additional} new)" : "")}; see report."
+            : $" 输出出现 {allErrors.Length} 个脚本报错{(additional > 0 ? $"（新增 {additional} 个）" : "")}，详见报告。")).TrimStart();
     }
 
     private static bool TrySourceScriptErrors(JsonObject evidence, string countKey, string errorsKey, out JsonObject[] errors)
@@ -313,11 +311,6 @@ internal static class AppJsonPresentation
     private static string FaultKey(JsonObject error) => string.Join("|", error["binding_id"]?.ToJsonString() ?? "",
         error["owner_layer_id"]?.ToJsonString() ?? "", error["property"]?.ToJsonString() ?? "");
 
-    private static string FaultOwners(IEnumerable<JsonObject> errors) => string.Join(", ", errors.Select(error =>
-        error["owner_name"] is JsonValue name && name.TryGetValue<string>(out string? text) ? text :
-        error["owner_layer_id"]?.ToString() ?? "unknown")
-        .Distinct(StringComparer.Ordinal));
-
     private static string EffectName(JsonNode? effect)
     {
         if (effect is JsonValue value && value.TryGetValue<string>(out string? text)) return text;
@@ -331,68 +324,46 @@ internal static class AppJsonPresentation
     {
         if (bake["plan"] is JsonObject prefixPlan && prefixPlan["route"]?.GetValue<string>() == "effect_prefix")
             return EffectPrefixValidationSummary(prefixPlan, bake, english);
+        // 界面只说通过与否；MAE、修补、瓦片等细节留在报告里。
         JsonObject[] groups = bake["groups"]?.AsArray().OfType<JsonObject>()
             .Where(group => group["storage"]?.GetValue<string>() == "video").ToArray() ?? [];
-        string[] summaries = groups.Select(group =>
-        {
-            string id = group["id"]?.GetValue<string>() ?? "video";
-            string seam = group["encoded_loop_validation"]?["status"]?.GetValue<string>() ?? "n/a";
-            string repair;
-            if (group["local_repair"] is JsonObject local)
-            {
-                string repairStatus = local["status"]?.GetValue<string>() ?? "n/a";
-                double? coverage = Number(local["mask_coverage"] ?? local["mask"]?["affected_coverage_after_feather"]);
-                double? seconds = Number(local["bridge_seconds"] ?? local["temporal"]?["bridge_seconds"]);
-                string area = coverage is null ? "n/a" : (coverage.Value * 100).ToString("0.##", CultureInfo.InvariantCulture) + "%";
-                string duration = seconds is null ? "n/a" : seconds.Value.ToString("0.###", CultureInfo.InvariantCulture) + "s";
-                repair = english ? $"repair {repairStatus} {area}/{duration} (limit 0.5s)" :
-                    $"局部修复 {repairStatus} {area}/{duration}（上限 0.5s）";
-                if (local["error"] is JsonValue error && error.TryGetValue<string>(out string? errorText))
-                    repair += $": {local["error_type"]?.GetValue<string>()}: {errorText}";
-            }
-            else repair = english ? "source-period encoding; no repair" : "源周期编码；未修补";
-            string hardware = english ? "hardware decode not tested" : "硬解未测";
-            if (group["hardware_decode"] is JsonObject decode)
-            {
-                string codec = decode["video_stream"]?["codec_name"]?.GetValue<string>() ?? "video";
-                JsonObject[] adapters = decode["adapters"]?.AsArray().OfType<JsonObject>().ToArray() ?? [];
-                int passed = adapters.Count(a => a["passed"]?.GetValue<bool>() == true);
-                string[] failed = adapters.Where(a => a["passed"]?.GetValue<bool>() != true)
-                    .Select(a => a["name"]?.GetValue<string>() ?? "unknown").ToArray();
-                hardware = english ? $"{codec} hardware short check {passed}/{adapters.Length} adapters" :
-                    $"{codec} 硬解短检 {passed}/{adapters.Length} 张显卡通过";
-                if (failed.Length > 0) hardware += (english ? "; failed/unverified: " : "；失败/未确认：") + string.Join(", ", failed);
-            }
-            return english ? $"{id}: seam {seam}; {repair}; {hardware}" : $"{id}：接缝 {seam}；{repair}；{hardware}";
-        }).ToArray();
-        string body = summaries.Length == 0 ? (english ? "No encoded video groups." : "没有编码视频组。") : string.Join(" | ", summaries);
-        if (bake["composition_validation"] is JsonObject composition)
-        {
-            string status = composition["status"]?.GetValue<string>() ?? "n/a";
-            string rgb = Metric(composition["metrics"]?["rgb_mae_255"]);
-            string tile = Metric(composition["worst_rgb_tile"]?["metrics"]?["rgb_mae_255"]);
-            string alpha = Metric(composition["metrics"]?["alpha_mae_255"]);
-            body = (english ? $"Short composition {status}: RGB/tile/alpha MAE {rgb}/{tile}/{alpha}" :
-                $"短段合成 {status}：RGB/局部/Alpha MAE {rgb}/{tile}/{alpha}") + " | " + body;
-        }
-        // 旧版 bake.json（参照式接缝校验之前）里成品是"如实复现源片自身的切口"通过的，摘要第一句就要把这件事说清楚。
-        // 新版不再写 source_discontinuity，这个分支只为读旧结果保留；判据类已删，状态字面量写在这里。
+        var parts = new List<string>();
+        if (bake["reason"] is JsonValue reason && reason.TryGetValue<string>(out string? reasonText) && !string.IsNullOrWhiteSpace(reasonText))
+            parts.Add(reasonText);
+        if (bake["composition_validation"]?["status"]?.GetValue<string>() is string composition)
+            parts.Add((english ? "Image match: " : "画面比对：") + Passed([composition], english));
+        if (groups.Length > 0)
+            parts.Add((english ? "Seam: " : "接缝：") +
+                Passed(groups.Select(group => group["encoded_loop_validation"]?["status"]?.GetValue<string>()), english));
+        // 旧版 bake.json（参照式接缝校验之前）里成品是"如实复现源片自身的切口"通过的；新版不再写 source_discontinuity。
         if (bake["source_discontinuity"] is JsonObject sourceCut &&
             sourceCut["status"]?.GetValue<string>() == "candidate_matches_source_discontinuity")
-            body = (english
-                ? "The source material itself jumps at its loop point; this candidate reproduces that cut as-is and nothing was repaired."
-                : "原作素材自身在循环点有可见跳变，成品如实复现，未做修复。") + " | " + body;
-        if (bake["reason"] is JsonValue reason && reason.TryGetValue<string>(out string? reasonText) && !string.IsNullOrWhiteSpace(reasonText))
-            body = reasonText + " | " + body;
-        body += " | " + SourceScriptErrorSummary(bake, english, includeFullCapture: true);
-        string loop = bake["plan"] is JsonObject savedPlan ? LoopSummary(savedPlan, bake, english) : "";
-        if (loop.Length > 0) body += " | " + loop;
-        string phase = PhaseStartSummary(bake, english);
-        if (phase.Length > 0) body += " | " + phase;
+            parts.Add(english ? "The original wallpaper itself jumps at its loop point; the output matches it."
+                : "原壁纸在循环点本身就有跳变，输出与之一致。");
         string target = HardwareDecodeConclusions(bake, english);
-        if (target.Length > 0) body += " | " + target;
-        return body + (english ? " | Official-player playback not measured." : " | 尚未进行官方播放器实播验证。");
+        JsonObject[][] decoders = [.. groups.Select(group => group["hardware_decode"]?["adapters"]?.AsArray().OfType<JsonObject>().ToArray())
+            .OfType<JsonObject[]>()];
+        if (target.Length > 0) parts.Add(target);
+        else if (decoders.Length > 0)
+        {
+            // 各组在同一批显卡上测，取通过数最少的一组。
+            JsonObject[] worst = decoders.MinBy(adapters => adapters.Count(a => a["passed"]?.GetValue<bool>() == true))!;
+            int passed = worst.Count(a => a["passed"]?.GetValue<bool>() == true);
+            parts.Add(english ? $"Hardware decode: {passed}/{worst.Length} GPUs passed" : $"硬件解码：{passed}/{worst.Length} 张显卡通过");
+        }
+        string scripts = SourceScriptErrorSummary(bake, english, includeFullCapture: true);
+        if (scripts.Length > 0) parts.Add(scripts);
+        string loop = bake["plan"] is JsonObject savedPlan ? LoopSummary(savedPlan, bake, english) : "";
+        if (loop.Length > 0) parts.Add(loop);
+        string phase = PhaseStartSummary(bake, english);
+        if (phase.Length > 0) parts.Add(phase);
+        return string.Join(" · ", parts);
     }
+
+    /// <summary>检查状态码全部为通过时写"通过"：composition_pass、observed_seam_pass、encoded_seams_passed 这类以 pass/passed 结尾的码。</summary>
+    private static string Passed(IEnumerable<string?> statuses, bool english) =>
+        statuses.All(status => status is not null && (status.EndsWith("pass", StringComparison.Ordinal) || status.EndsWith("passed", StringComparison.Ordinal)))
+            ? english ? "passed" : "通过" : english ? "not passed" : "未通过";
 
     private static string EffectPrefixValidationSummary(JsonObject plan, JsonObject bake, bool english)
     {
@@ -408,17 +379,15 @@ internal static class AppJsonPresentation
             JsonObject? loop = group["period"] as JsonObject;
             JsonObject? candidate = loop?["candidates"]?.AsArray().OfType<JsonObject>().FirstOrDefault();
             string seconds = Number(candidate?["seconds"])?.ToString("0.###", CultureInfo.InvariantCulture) ?? "?";
-            return english ? $"owner {owner}: {seconds}s/{frames} frames, {group["status"]}; seam {seam}; hardware {hardware}"
-                : $"对象 {owner}：{seconds} 秒/{frames} 帧，{group["status"]}；接缝 {seam}；硬解 {hardware}";
+            return english ? $"layer {owner}: {seconds}s/{frames} frames, {group["status"]}; seam {seam}; hardware decode {hardware}"
+                : $"图层 {owner}：{seconds} 秒/{frames} 帧，{group["status"]}；接缝 {seam}；硬件解码 {hardware}";
         }).ToArray() ?? [];
-        string body = groups.Length == 0 ? (english ? "No effect-prefix groups." : "没有特效前缀组。") : string.Join(" | ", groups);
+        string body = groups.Length == 0 ? (english ? "No effect cache." : "没有特效缓存。") : string.Join(" | ", groups);
         string composition = bake["composition_validation"]?["status"]?.GetValue<string>() ?? "pending";
-        body = (english ? $"Effect-prefix composition {composition}" : $"特效前缀合成 {composition}") + " | " + body;
+        body = (english ? $"Effect cache image match {composition}" : $"特效缓存画面比对 {composition}") + " | " + body;
         string loops = EffectPrefixLoopSummary(plan, english);
         string target = HardwareDecodeConclusions(bake, english);
-        return body + " | " + loops + (target.Length > 0 ? " | " + target : "") + (english
-            ? " | Official WPE playback and GPU power benefit are unverified."
-            : " | 官方 WPE 实播和 GPU 功耗收益尚未验证。");
+        return body + " | " + loops + (target.Length > 0 ? " | " + target : "");
     }
 
     /// <summary>
@@ -446,9 +415,6 @@ internal static class AppJsonPresentation
         if (value.TryGetValue<ulong>(out ulong unsignedLargeInteger)) return unsignedLargeInteger;
         return null;
     }
-
-    private static string Metric(JsonNode? node) => Number(node) is double value
-        ? value.ToString("0.###", CultureInfo.InvariantCulture) : "n/a";
 
     /// <summary>阻断原因按界面语言取：优先读 blockers_localized，缺失或没有对应语言时回退英文原文。</summary>
     public static string[] BlockerLines(JsonObject? plan, bool english)
@@ -590,12 +556,12 @@ internal static class AppJsonPresentation
         if (Number(candidate?["total_retime_cost_percent"]) is double retime)
             rows.Add((english ? "Total retime" : "总调速", retime.ToString("0.###", CultureInfo.InvariantCulture) + "%"));
         int groups = Admission.GroupCount(plan), statics = Admission.StaticGroupCount(plan);
-        rows.Add((english ? "Video groups" : "视频组数", groups.ToString(CultureInfo.InvariantCulture)));
+        rows.Add((english ? "Video layers" : "视频层数", groups.ToString(CultureInfo.InvariantCulture)));
         if (plan["route"]?.GetValue<string>() == "whole_layer")
-            rows.Add((english ? "Static caches" : "静态缓存", statics.ToString(CultureInfo.InvariantCulture)));
+            rows.Add((english ? "Static layers" : "静态层数", statics.ToString(CultureInfo.InvariantCulture)));
         rows.Add((english ? "Live layers" : "实时图层数", (plan["live_layer_ids"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
         if (plan["live_overlays_hoisted"] is JsonArray { Count: > 0 } overlays)
-            rows.Add((english ? "Foreground widgets" : "置顶小组件数", overlays.Count.ToString(CultureInfo.InvariantCulture)));
+            rows.Add((english ? "Overlay layers" : "置顶层数", overlays.Count.ToString(CultureInfo.InvariantCulture)));
         double width = Number(plan["output_resolution"]?["width"]) ?? 0, height = Number(plan["output_resolution"]?["height"]) ?? 0;
         if (width > 0 && height > 0)
             rows.Add((english ? "Output resolution and frame rate" : "输出分辨率与帧率",

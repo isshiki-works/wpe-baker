@@ -65,12 +65,12 @@
                                     <StackPanel Margin="16,26" HorizontalAlignment="Center">
                                         <TextBlock Text="&#xE8B7;" FontFamily="{StaticResource Icons}" FontSize="28" Foreground="{DynamicResource AccentText}" HorizontalAlignment="Center"/>
                                         <TextBlock FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,4"
-                                            Tag="把壁纸文件夹拖进来|Drag in a wallpaper folder"/>
+                                            Tag="拖入壁纸文件夹|Drop a wallpaper folder here"/>
                                         <TextBlock Style="{StaticResource Note}" HorizontalAlignment="Center" TextAlignment="Center"
-                                            Tag="支持将壁纸目录拖入窗口。|Wallpaper directories can be dropped onto this window."/>
+                                            Tag="也可选择文件或文件夹|Or choose a file or folder"/>
                                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
-                                            <Button Tag="选文件…|File…" Click="ChooseSourceFile"/>
-                                            <Button Tag="选文件夹…|Folder…" Click="ChooseSource" Margin="0,0,0,8"/>
+                                            <Button Tag="选择文件…|Choose file…" Click="ChooseSourceFile"/>
+                                            <Button Tag="选择文件夹…|Choose folder…" Click="ChooseSource" Margin="0,0,0,8"/>
                                         </StackPanel>
                                     </StackPanel>
                                 </Grid>
@@ -136,7 +136,7 @@
                         </Border>
                             <Border x:Name="TurnOffCard" Visibility="Collapsed" Style="{StaticResource Glass}" Margin="0,12,0,0" Padding="20,16">
                                 <StackPanel>
-                                    <TextBlock Style="{StaticResource Group}" FontSize="13" Tag="本次未包含|Not included in this bake"/>
+                                    <TextBlock Style="{StaticResource Group}" FontSize="13" Tag="本次未包含|Not included"/>
                                     <StackPanel x:Name="TurnOffList"/>
                                 </StackPanel>
                             </Border>
@@ -154,10 +154,10 @@
                                     <TextBlock Style="{StaticResource Label}" Margin="0,0,0,4" Tag="壁纸来源|Wallpaper source"/>
                                     <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                         <TextBox x:Name="SourceBox" TextChanged="SourceChanged" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                                        <Button Grid.Column="1" Tag="选文件…|File…" Click="ChooseSourceFile" Margin="6,0,0,0"/>
-                                        <Button Grid.Column="2" Tag="选文件夹…|Folder…" Click="ChooseSource" Margin="6,0,0,0"/>
+                                        <Button Grid.Column="1" Tag="选择文件…|Choose file…" Click="ChooseSourceFile" Margin="6,0,0,0"/>
+                                        <Button Grid.Column="2" Tag="选择文件夹…|Choose folder…" Click="ChooseSource" Margin="6,0,0,0"/>
                                     </Grid>
-                                    <TextBlock Style="{StaticResource Label}" Margin="0,0,0,4" Tag="Wallpaper Engine assets 目录|Wallpaper Engine assets directory"/>
+                                    <TextBlock Style="{StaticResource Label}" Margin="0,0,0,4" Tag="Wallpaper Engine 资源目录（assets）|Wallpaper Engine assets folder"/>
                                     <DockPanel Margin="0,0,0,8">
                                         <Button DockPanel.Dock="Right" Margin="6,0,0,0" Tag="选择…|Browse…" Click="ChooseAssets"/>
                                         <TextBox x:Name="AssetsBox" TextChanged="SourceChanged" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
@@ -169,25 +169,25 @@
                                     </DockPanel>
                                     <TextBlock Style="{StaticResource Group}" FontSize="13" Tag="画面取舍|Visual tradeoffs"/>
                                     <CheckBox x:Name="LayeredVideoBox" Checked="SettingsChanged" Unchecked="SettingsChanged"
-                                        ToolTip="部分壁纸仅在分层模式下可生成；分层成品的功耗收益需单独实测。‖Some wallpapers can only be generated in layered mode; the power saving of a layered result must be measured separately.">
+                                        ToolTip="部分壁纸只能生成分层视频；分层视频的省电效果未经实测。‖Some wallpapers can only be generated as layered video; its power saving has not been measured.">
                                         <TextBlock Tag="允许分层视频|Allow layered video"/></CheckBox>
                                     <CheckBox x:Name="AudioEffectsBox" Visibility="Collapsed" Checked="SettingsChanged" Unchecked="SettingsChanged"
-                                        ToolTip="禁用音频响应。‖Disables audio response.">
+                                        ToolTip="灯光不再随音乐变化。‖Lighting no longer follows the music.">
                                         <TextBlock Tag="禁用音频响应光效|Disable audio-driven lighting"/></CheckBox>
                                     <TextBlock Style="{StaticResource Group}" FontSize="13" Margin="0,8,0,8" Tag="循环周期调节|Loop period tuning"/>
                                     <TextBlock Style="{StaticResource Note}" Margin="0,0,0,8"
-                                        Tag="以下两项默认取自预设；手动填写后以填写值为准。|Both default to the preset; a value entered here overrides it."/>
+                                        Tag="画面差异预算默认随“动画精度”变化，手动填写后以填写值为准。|The difference budget follows Animation precision by default; a value entered here takes priority."/>
                                     <CheckBox x:Name="RetimeBox" IsChecked="True" Checked="SettingsChanged" Unchecked="SettingsChanged"
-                                        ToolTip="允许调速以缩短循环周期，画面差异通常可忽略。‖Allows retiming to shorten the loop period; the visual difference is usually negligible.">
+                                        ToolTip="调整动画速度以缩短循环周期。‖Adjusts animation speed to shorten the loop period.">
                                         <TextBlock Tag="允许调速|Allow retiming"/>
                                     </CheckBox>
                                     <!-- 默认勾选在构造函数里按 SwayRetimeOptions.OnByDefault 设，与命令行的 sway-retime 开关共用同一个默认值。 -->
                                     <CheckBox x:Name="SwayRetimeBox" Checked="SettingsChanged" Unchecked="SettingsChanged"
-                                        ToolTip="默认启用。启用时循环周期显著缩短；禁用后摆动图层会使循环周期过长或无解。‖On by default. Enabled, the loop period is much shorter; disabled, swaying layers make it too long or unsolvable.">
-                                        <TextBlock Tag="摆动图层对齐循环周期|Align swaying layers to the loop period"/>
+                                        ToolTip="缩短循环周期；关闭后，含摆动动画的壁纸可能找不到循环周期。‖Shortens the loop period; when off, wallpapers with swaying animation may have no loop period.">
+                                        <TextBlock Tag="图层循环周期|Layer loop period"/>
                                     </CheckBox>
                                     <DockPanel Margin="0,2,0,0"
-                                        ToolTip="画面差异预算，取值 0 到 5 %；留空取预设值。‖Visual difference budget from 0 to 5 %; leave empty to use the preset value.">
+                                        ToolTip="取值 0–5%，留空则跟随动画精度。‖0–5 %; leave empty to follow Animation precision.">
                                         <TextBlock DockPanel.Dock="Left" Style="{StaticResource Label}" Tag="画面差异预算|Difference budget"/>
                                         <TextBlock x:Name="RetimeBudgetOrigin" DockPanel.Dock="Right" Style="{StaticResource Note}" VerticalAlignment="Center" Margin="8,0,0,0"/>
                                         <TextBox x:Name="RetimeBudgetBox" Width="88" HorizontalAlignment="Left" TextChanged="RetimeBudgetEdited" LostFocus="SettingsChanged"/>
@@ -197,15 +197,15 @@
                                         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                         <TextBlock Style="{StaticResource Label}" Tag="渲染显卡|Render GPU"/>
                                         <ComboBox x:Name="GpuBox" Grid.Column="1" DisplayMemberPath="Name" SelectionChanged="SettingsChanged"/>
-                                        <TextBlock Grid.Row="2" Style="{StaticResource Label}" Tag="播放版编码器|Playback encoder"/>
+                                        <TextBlock Grid.Row="2" Style="{StaticResource Label}" Tag="视频编码器|Video encoder"/>
                                         <ComboBox x:Name="EncoderBox" Grid.Row="2" Grid.Column="1" SelectionChanged="SettingsChanged"
-                                            ToolTip="vulkan 可在支持的显卡上直接生成视频，减少生成等待；不可用时使用软件路径。‖Vulkan can generate video directly on supported GPUs to reduce generation time; unavailable paths use software.">
-                                            <ComboBoxItem Content="software"/><ComboBoxItem Content="auto" IsSelected="True"/><ComboBoxItem Content="vulkan"/><ComboBoxItem Content="mf"/><ComboBoxItem Content="nvenc"/><ComboBoxItem Content="qsv"/><ComboBoxItem Content="amf"/>
+                                            ToolTip="自动：支持的显卡上用 Vulkan 直接编码，速度更快，否则用软件编码。‖Auto uses Vulkan on supported GPUs for faster encoding, otherwise software.">
+                                            <ComboBoxItem Tag="软件|Software"/><ComboBoxItem Tag="自动|Auto" IsSelected="True"/><ComboBoxItem Content="Vulkan"/><ComboBoxItem Content="Media Foundation"/><ComboBoxItem Content="NVENC"/><ComboBoxItem Content="Quick Sync"/><ComboBoxItem Content="AMF"/>
                                         </ComboBox>
                                     </Grid>
                                     <CheckBox x:Name="MatchEffectResolutionBox" Checked="SettingsChanged" Unchecked="SettingsChanged" Margin="0,0,0,8"
-                                        ToolTip="按输出尺寸和图层实际大小调整特效纹理；关闭时保留原作分辨率。‖Adjust effect textures to the output and actual layer dimensions; leave off to keep the original resolution.">
-                                        <TextBlock Tag="内部特效分辨率匹配输出|Match internal effect resolution to output"/>
+                                        ToolTip="按输出尺寸和图层实际大小调整特效纹理；关闭时保持原壁纸的特效分辨率。‖Adjusts effect textures to the output and actual layer size; when off, the wallpaper's own effect resolution is kept.">
+                                        <TextBlock Tag="特效分辨率随输出调整|Scale effect resolution to output"/>
                                     </CheckBox>
                                     <Expander x:Name="LayersExpander" Tag="图层清单|Layer list" Header="图层清单" Margin="0,4,0,0" IsEnabled="False" FontSize="13">
                                         <StackPanel Margin="0,8,0,0" TextElement.FontWeight="Normal">
@@ -239,7 +239,7 @@
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <Border Style="{StaticResource Glass}" Margin="4,0,4,0" Padding="20,12">
                         <DockPanel>
-                            <Button x:Name="LoadResultButton" DockPanel.Dock="Right" Tag="打开已有成品…|Open an existing result…" Click="LoadResultClicked" Margin="0" VerticalAlignment="Center"/>
+                            <Button x:Name="LoadResultButton" DockPanel.Dock="Right" Tag="打开已有输出…|Open existing output…" Click="LoadResultClicked" Margin="0" VerticalAlignment="Center"/>
                             <TextBlock Style="{StaticResource Section}" VerticalAlignment="Center" Tag="任务|Tasks"/>
                         </DockPanel>
                     </Border>
@@ -252,7 +252,7 @@
                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Grid>
                             <TextBlock FontSize="15" Foreground="{DynamicResource Ink2}" HorizontalAlignment="Center" TextAlignment="Center"
-                                Tag="队列为空。分析壁纸后开始生成。|Queue empty. Analyze a wallpaper, then start generating."/>
+                                Tag="暂无任务|No tasks"/>
                             <!-- 新手三步：分析过就收起（UpdatePlanSummary 控制）。 -->
                             <WrapPanel x:Name="GettingStartedHint" HorizontalAlignment="Center" Margin="0,12,0,0">
                                 <Border Style="{StaticResource Inset}" CornerRadius="14" Padding="12,5" Margin="4,0"><TextBlock FontSize="12" Tag="1 选择壁纸|1 Choose a wallpaper"/></Border>
@@ -308,9 +308,9 @@
                                     <Button x:Name="ExportButton" Tag="导出 ZIP|Export ZIP" Click="ExportClicked"/>
                                     <Button x:Name="ErrorButton" Tag="打开错误日志|Open error log" Click="OpenErrorClicked"/>
                                 </WrapPanel>
-                                <TextBlock Style="{StaticResource Group}" FontSize="13" Margin="0,4,0,8" Tag="校验|Verification"/>
+                                <TextBlock Style="{StaticResource Group}" FontSize="13" Margin="0,4,0,8" Tag="检查|Checks"/>
                                 <WrapPanel><Button x:Name="OfficialPreviewButton" Tag="在 Wallpaper Engine 中预览|Preview in Wallpaper Engine" Click="OfficialPreviewClicked"/>
-                                    <Button x:Name="ValidateButton" Tag="查看自动校验结果|View automatic checks" Click="ValidateClicked"/>
+                                    <Button x:Name="ValidateButton" Tag="查看自动检查结果|View automatic checks" Click="ValidateClicked"/>
                                     <Button x:Name="ReportButton" Tag="打开报告|Open report" Click="OpenReportClicked"/></WrapPanel>
                                 <Expander Tag="应用到桌面|Apply to desktop" Margin="0,2,0,6" FontSize="13" x:Name="DesktopExpander" Header="应用到桌面" IsExpanded="True">
                                     <StackPanel Margin="0,8,0,0" TextElement.FontWeight="Normal">
@@ -323,8 +323,8 @@
                                             <ComboBox x:Name="TargetBox" DisplayMemberPath="Label" SelectionChanged="SettingsChanged" ToolTip="{Binding SelectedItem.Target.CurrentFile, RelativeSource={RelativeSource Self}}"/></DockPanel>
                                         <WrapPanel Margin="0,12,0,0"><Button x:Name="ApplyButton" Style="{StaticResource Primary}" MinHeight="32" FontSize="13" Margin="0,0,8,8"
                                                 Tag="应用到桌面|Apply to desktop" Click="ApplyClicked"/>
-                                            <Button x:Name="RollbackButton" Tag="回滚到上一张|Roll back to the previous one" Click="RollbackClicked"/>
-                                            <Button x:Name="RollbackFileButton" Tag="从回滚记录还原…|Restore from a rollback record…" Click="RollbackClicked"/></WrapPanel>
+                                            <Button x:Name="RollbackButton" Tag="恢复上一个壁纸|Restore previous wallpaper" Click="RollbackClicked"/>
+                                            <Button x:Name="RollbackFileButton" Tag="从恢复记录还原…|Restore from a restore point…" Click="RollbackClicked"/></WrapPanel>
                                     </StackPanel>
                                 </Expander>
                             </StackPanel>
