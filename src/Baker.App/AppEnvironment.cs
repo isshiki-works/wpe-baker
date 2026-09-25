@@ -47,10 +47,11 @@ internal static class AppEnvironment
     /// <summary>
     /// 判定并规范化来源路径。拒绝理由与 CLI 共用 <see cref="SourceDiagnosis"/>：视频壁纸、网页壁纸、
     /// 预设包、空文件夹各有各的那一句，而不是一律"Only Scene wallpapers can be imported."。
+    /// 明确不支持的来源（视频/网页壁纸、预设包）照常返回路径：它们是拒绝不是打开失败，理由由结论区给出。
     /// </summary>
     public static string ValidateSource(string path)
     {
-        if (SourceDiagnosis.Inspect(path, out string resolved) is { } rejection)
+        if (SourceDiagnosis.Inspect(path, out string resolved) is { Unsupported: false } rejection)
             throw new InvalidDataException(rejection.Text(Language));
         return resolved;
     }

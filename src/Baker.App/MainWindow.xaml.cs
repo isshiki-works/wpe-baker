@@ -23,6 +23,8 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<JobItem> jobs = [];
     private NativeTools? tools;
     private JsonObject? hybridPlan;
+    // 来源框里是视频/网页壁纸、预设包这类明确不支持的来源时，结论区照其它拒绝的样子给"无法生成"和理由。
+    private SourceDiagnosis.Rejection? sourceRejection;
     private string setupError = "";
     // 工具缺失是独立一条：setupError 是单字段五处写入，后写者赢，GPU 或源属性的错误会把"生成工具未就绪"
     // 顶掉，界面就会指着错误的原因（实测显示 No Vulkan device found，而真因是 tools 为 null）。
@@ -148,7 +150,8 @@ public partial class MainWindow : Window
         BuildPropertyEditors();
         RefreshControls();
         ApplyBackdrop(); // 窗口背景下拉的提示跟着换语言
-        if (!processing && !analyzing) StatusText.Text = hybridPlan is null
+        if (!processing && !analyzing) StatusText.Text = sourceRejection is not null ? sourceRejection.Text(AppEnvironment.Language)
+            : hybridPlan is null
             ? L("未选择壁纸。选择壁纸后执行分析。", "No wallpaper selected. Select a wallpaper, then run analysis.")
             // 这张到底能不能做，结论区已经写得很清楚了，状态栏别在这里再下一次结论。
             : L("分析完成：结论见左侧结论区。", "Analysis complete; the verdict is in the panel on the left.");
@@ -202,7 +205,7 @@ public partial class MainWindow : Window
         try
         {
             SourceBox.Text = AppEnvironment.ValidateSource(path);
-            StatusText.Text = L("壁纸来源已载入。可执行分析。", "Wallpaper source loaded. Ready to analyze.");
+            StatusText.Text = sourceRejection?.Text(AppEnvironment.Language) ?? L("壁纸来源已载入。可执行分析。", "Wallpaper source loaded. Ready to analyze.");
             return true;
         }
         // 报错只给人话：Baker.Core 现在给的是完整的一句话（SourceDiagnosis），异常类名对用户没有意义，
@@ -243,6 +246,7 @@ public partial class MainWindow : Window
                 CurrentWallpaperBox.SelectedIndex = -1;
             QueueList.SelectedItem = null;
             ReloadSourcePropertyDefinitions(SourceBox.Text.Trim());
+            sourceRejection = SourceDiagnosis.Inspect(SourceBox.Text.Trim()) is { Unsupported: true } rejection ? rejection : null;
         }
         if (sender == AssetsBox && !updatingInstallation && AppEnvironment.AssetsValid(AssetsBox.Text))
         {
@@ -550,12 +554,14 @@ public partial class MainWindow : Window
         BuildLayerList();
         UpdateOutputSummary();
         bool analyzed = hybridPlan is not null;
+        bool rejected = !analyzed && sourceRejection is not null;
         // 新手三行提示只在还没分析时显示，分析完就让位给结论。
-        GettingStartedHint.Visibility = analyzed ? Visibility.Collapsed : Visibility.Visible;
-        VerdictLine.Visibility = analyzed ? Visibility.Visible : Visibility.Collapsed;
-        VerdictLine.Text = analyzed ? PlainLanguage.Verdict(hybridPlan, english) : "";
+        GettingStartedHint.Visibility = analyzed || rejected ? Visibility.Collapsed : Visibility.Visible;
+        VerdictLine.Visibility = analyzed || rejected ? Visibility.Visible : Visibility.Collapsed;
+        VerdictLine.Text = analyzed ? PlainLanguage.Verdict(hybridPlan, english) : rejected ? L("无法生成", "Cannot generate") : "";
         // 无法生成时第二行只放第一条阻塞原因的第一句，不放整段；其余三态沿用下一步动作提示。
-        NumbersLine.Text = !analyzed ? ""
+        // 不支持的来源放整句理由：英文句中有 project.json 的点号，按句号截会截断。
+        NumbersLine.Text = rejected ? sourceRejection!.Text(AppEnvironment.Language) : !analyzed ? ""
             : PlainLanguage.CannotGenerate(hybridPlan) ? FirstBlockerSentence()
             : PlainLanguage.NextAction(hybridPlan, english);
         NumbersLine.Visibility = NumbersLine.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -665,7 +671,7 @@ public partial class MainWindow : Window
         bool hybridBlocked = hybridPlan?["status"]?.GetValue<string>() == "requires_resolution" || hybridBlockers.Length > 0;
         bool effectResolutionBlocked = MatchEffectResolutionBox.IsChecked == true && hybridPlan?["route"]?.GetValue<string>() == "effect_prefix";
         // 分析同样硬依赖生成工具（:429 会直接抛），所以工具缺失时按钮就不该可点——生成按钮本来就有这一条。
-        AnalyzeButton.IsEnabled = sourceValid && assetsValid && tools is not null && !analyzing && !presetBusy;
+        AnalyzeButton.IsEnabled = sourceValid && sourceRejection is null && assetsValid && tools is not null && !analyzing && !presetBusy;
         SavePresetButton.IsEnabled = sourceValid && fpsValid && TryFrameSize(out _, out _) && !analyzing && !processing && !presetBusy;
         LoadPresetButton.IsEnabled = sourceValid && !analyzing && !processing && !presetBusy && QueueList.SelectedItem is null;
         GenerateButton.IsEnabled = hybridPlan is not null && sourceValid && outputValid && fpsValid && assetsValid &&

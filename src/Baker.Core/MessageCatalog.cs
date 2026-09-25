@@ -1015,10 +1015,6 @@ public static class MessageCatalog
             En: "Not evaluated: no candidate, no blocker and no unresolved item were produced; the analysis gave no internal reason.",
             Legacy: "Unknown: no bakeable candidate, no blocker and no unresolved item were produced - the analysis gave no internal reason."),
 
-        ["summary.not_applicable"] = new(
-            Zh: "不适用：{0}",
-            En: "Not applicable: {0}"),
-
         ["summary.failed"] = new(
             Zh: "分析失败：{0}",
             En: "Analysis failed: {0}"),

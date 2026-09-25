@@ -88,15 +88,15 @@ try
         // 各有各的那一句，两处说法一致。legacy 英文写进 stderr 的 JSON，人话那一行按 --lang 出。
         if (SourceDiagnosis.Inspect(args[1], out string sourcePath) is { } rejection)
         {
-            if (rejection.Kind == SourceDiagnosis.PresetKind)
-            {
-                Console.Error.WriteLine(JsonSerializer.Serialize(new { status = "not_applicable", kind = "preset",
-                    dependency = rejection.Dependency, message = rejection.Text(MessageCatalog.English) }, jsonOptions));
-                // 以前这里只吐一段英文 JSON 就退出，中文用户连一句人话都看不到。
-                Console.Error.WriteLine(MessageCatalog.Get("summary.not_applicable", language, rejection.Text(language)));
-                return 3;
-            }
-            throw rejection.Message.Error(text => new InvalidDataException(text));
+            if (!rejection.Unsupported) throw rejection.Message.Error(text => new InvalidDataException(text));
+            // 视频/网页壁纸、预设包这类明确不支持的来源是拒绝，不是出错：状态码 + reason + 中英文案，退出码 3。
+            var rejected = new JsonObject { ["status"] = SourceDiagnosis.UnsupportedStatus, ["reason"] = rejection.Kind };
+            if (rejection.Dependency is { } dependency) rejected["dependency"] = dependency;
+            rejected["message"] = rejection.Text(MessageCatalog.English);
+            rejected["message_localized"] = rejection.Message.Localized();
+            Console.Error.WriteLine(rejected.ToJsonString(jsonOptions));
+            Console.Error.WriteLine(rejection.Text(language));
+            return 3;
         }
         using var source = new ProjectSource(sourcePath);
         NativeTools tools = options.TryGetValue("--tools", out string? toolPath) ? await ReadTools(toolPath, cancellation.Token) : NativeEnvironment.FindTools();

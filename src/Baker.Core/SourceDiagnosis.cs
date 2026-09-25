@@ -12,8 +12,11 @@ namespace Baker.Core;
 /// </summary>
 public static class SourceDiagnosis
 {
-    /// <summary>预设包：本身不含场景，退出码与其它拒绝理由不同（CLI 用 3）。</summary>
+    /// <summary>预设包：本身不含场景，指路到它依赖的那一张。</summary>
     public const string PresetKind = "preset";
+
+    /// <summary>明确不支持的来源（见 <see cref="Rejection.Unsupported"/>）在 CLI analyze 里的状态码，退出码 3。</summary>
+    public const string UnsupportedStatus = "rejected_unsupported_source";
 
     /// <summary>
     /// 一条拒绝理由。<see cref="Message"/> 是这句话的键与参数（异常带着它走），<see cref="Text"/> 给出指定语言的那一句。
@@ -24,6 +27,9 @@ public static class SourceDiagnosis
         public string? Dependency { get; init; }
 
         public Message Message => new(Key, EnglishArgs, ChineseArgs);
+
+        /// <summary>预设包、视频/网页壁纸、其它非 Scene 类型：明确无法处理，是拒绝不是出错。其余（路径不存在、读不了等）仍按出错报。</summary>
+        public bool Unsupported => Kind is PresetKind or "video" or "web" or "other_type";
 
         /// <summary>按语言取这一句。</summary>
         public string Text(string language) => Message.In(language);
