@@ -231,6 +231,8 @@ struct OfflineSession::Impl {
     // 渲染图读上一帧像素（帧反馈）：预热也得真画。只增不减。
     // ponytail: 反馈在预热中途才出现时，之前跳过的帧不补画
     bool                           m_reads_previous_frame { false };
+    // 覆盖度按输出段每一帧累计，要它时输出段每帧都画。
+    bool                           m_raster_every_output_frame { false };
     audio::ResponseEngine          m_audio_response_engine;
     scene_audio::ResponseProcessor m_scene_audio_response;
     CpuFrameResult                 m_cpu_frame;
@@ -402,9 +404,11 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
     const auto resources_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     if (m_services.failed) return false;
-    // 首个输出帧之前（预热）只模拟：上面的资源推进照做，跳过光栅、提交与读回；帧反馈场景照常画。
-    m_cpu_frame = m_render->drawFrameCpu(*m_scene, m_options.readsFrame(clock.index),
-                                         clock.index >= m_options.readback_start || m_reads_previous_frame);
+    // 不读回的帧（预热、步长取样之间的帧）只模拟：上面的资源推进照做，跳过光栅、提交与读回；
+    // 帧反馈场景、要覆盖度的输出段照常画。
+    const bool reads = m_options.readsFrame(clock.index);
+    m_cpu_frame = m_render->drawFrameCpu(*m_scene, reads, reads || m_reads_previous_frame ||
+        (m_raster_every_output_frame && clock.index >= m_options.readback_start));
     if (m_profile) {
         m_cpu_frame.cpu_scene_ms = std::chrono::duration<double,std::milli>(profile.scene_finished-profile.scene_started).count();
         m_cpu_frame.cpu_script_ms = profile.script_ms;
@@ -687,6 +691,7 @@ bool OfflineSession::Impl::init(SessionConfig config, RenderInitInfo info, Offli
         return false;
     }
     m_options = options;
+    m_raster_every_output_frame = info.collect_sampling_coverage;
     m_profile = info.gpu_timing;
     m_layers = info.layer_selection;
     m_capture_target = info.capture_target;
