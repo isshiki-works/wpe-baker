@@ -82,6 +82,8 @@
                                         <TextBlock x:Name="NumbersLine" Foreground="{DynamicResource Ink2}" FontSize="13" Margin="0,4,0,0"/>
                                         <Button x:Name="SuggestionButton" Visibility="Collapsed" Tag="按建议重新分析|Re-analyze with suggestion"
                                                 Click="ApplySuggestionClicked" Margin="0,8,0,0" HorizontalAlignment="Left"/>
+                                        <Button x:Name="AllowNoBenefitButton" Visibility="Collapsed" Tag="仍然生成|Generate anyway"
+                                                Click="AllowNoBenefitClicked" Margin="0,8,0,0" HorizontalAlignment="Left"/>
                                         <TextBlock x:Name="PresetAppliedLine" Style="{StaticResource Note}" Margin="0,6,0,0"/>
                                         <!-- plain-language:tech-begin 折叠的技术细节：纯数字表，禁用词扫描跳过这一段。 -->
                                         <Expander x:Name="DetailsExpander" Tag="技术细节|Technical details" Header="技术细节" Margin="0,4,0,0" FontSize="12" FontWeight="Normal">
@@ -302,6 +304,7 @@
                         <Border x:Name="ActionsParking" Visibility="Collapsed">
                             <StackPanel x:Name="JobActions">
                                 <WrapPanel>
+                                    <Button x:Name="GenerateAnywayButton" Visibility="Collapsed" Tag="仍然生成|Generate anyway" Click="GenerateAnywayClicked"/>
                                     <Button x:Name="RetryButton" Tag="重新生成|Regenerate" Click="RetryClicked"
                                         ToolTip="重新执行生成，结果写入新目录。‖Runs generation again and writes the result to a new directory."/>
                                     <Button x:Name="ResultButton" Tag="打开输出目录|Open output directory" Click="OpenResultClicked"/>

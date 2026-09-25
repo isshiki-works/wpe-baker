@@ -106,6 +106,8 @@ internal sealed class AnalysisOrchestrator
                 PlanNarrative.Attach(result);
             }
         }
+        // 预计不省电的方案默认拒绝（判据与覆盖见 NoBenefit）；已经被别的原因拒掉的不重复写。
+        if (Admission.Accepted(result)) NoBenefit.Apply(result, request.AllowNoBenefit);
         // 尝试经过只写进既有的 preset_* / interaction_* 字段。
         result["preset_requested"] = requested;
         result["preset_applied"] = Admission.Accepted(result) ? result["settings"]?["preset"]?.DeepClone() ?? JsonValue.Create(requested) : JsonValue.Create("none");

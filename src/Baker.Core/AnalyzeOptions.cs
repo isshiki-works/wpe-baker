@@ -22,6 +22,7 @@ public sealed record AnalyzeOptions
     public string AudioEffects { get; init; } = "preserve";
     public int[]? ExcludedLayerIds { get; init; }
     public string VideoShell { get; init; } = VideoDominance.RejectChoice;
+    public bool AllowNoBenefit { get; init; }
     public bool DaytimeSplit { get; init; }
     /// <summary>0×0 = 未指定，分析时取本机主显示器分辨率。</summary>
     public uint Width { get; init; }

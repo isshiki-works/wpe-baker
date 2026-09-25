@@ -27,7 +27,7 @@ public partial class MainWindow : Window
     // 工具缺失是独立一条：setupError 是单字段五处写入，后写者赢，GPU 或源属性的错误会把"生成工具未就绪"
     // 顶掉，界面就会指着错误的原因（实测显示 No Vulkan device found，而真因是 tools 为 null）。
     private string toolsError = "";
-    private bool dark, initialized, english, analyzing, processing, closeRequested, detecting, updatingInstallation, audioEffectsChoiceKnown, presetBusy, suppressSettingsChanges;
+    private bool dark, initialized, english, analyzing, processing, closeRequested, detecting, updatingInstallation, audioEffectsChoiceKnown, presetBusy, suppressSettingsChanges, allowNoBenefit;
     // 高级区调速预算框里上一次由档位写进去的文本：与框里的内容一致就说明用户没自己填，换档时跟着换。
     private string presetBudgetText = "";
     private int settingsRevision;
@@ -250,7 +250,7 @@ public partial class MainWindow : Window
             if (detected.Length > 0) WpeExeBox.Text = detected;
         }
         hybridPlan = null;
-        if (sender == SourceBox) { analysisPreviewOverrides = new(); layerList = null; excludedLayerIds.Clear(); }
+        if (sender == SourceBox) { analysisPreviewOverrides = new(); layerList = null; excludedLayerIds.Clear(); allowNoBenefit = false; }
         BuildPropertyEditors();
         UpdatePlanSummary(); RefreshControls();
     }
@@ -513,7 +513,7 @@ public partial class MainWindow : Window
             // 高级区的勾选框默认勾上、取消勾选才关；剩余实时图层置顶固定 foreground、简化文字效果固定 preserve（界面已移除这两个开关）。
             var options = AnalyzeOptions.ForDesktop(SelectedPreset(), SelectedInteraction(), RetimeBox.IsChecked == true,
                 LayeredVideoBox.IsChecked == true, AudioEffectsBox.IsChecked == true, excludedLayerIds, RetimeBudgetOverride(),
-                SwayRetimeBox.IsChecked == true, AdvancedIsCustom(), width, height, gpu?.DeviceUuid);
+                SwayRetimeBox.IsChecked == true, AdvancedIsCustom(), width, height, gpu?.DeviceUuid) with { AllowNoBenefit = allowNoBenefit };
             var request = AnalyzeRequestFactory.Build(options, source, assets, output, properties, propertiesOrigin, numerator, denominator,
                 // 帧率框还是启动时算出的默认值就记 auto（连同依据），用户改过就记 explicit。
                 (autoFrameRate is { } automatic && denominator == 1 && numerator == automatic.Fps
@@ -563,6 +563,7 @@ public partial class MainWindow : Window
             NumbersLine.Text = hybridPlan!["suggested_change"]?[english ? "en" : "zh"]?.GetValue<string>() ?? NumbersLine.Text;
         NumbersLine.Visibility = NumbersLine.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         SuggestionButton.Visibility = AppJsonPresentation.SuggestedSettings(hybridPlan) is null ? Visibility.Collapsed : Visibility.Visible;
+        AllowNoBenefitButton.Visibility = PlainLanguage.NoBenefitExpected(hybridPlan) ? Visibility.Visible : Visibility.Collapsed;
         PresetAppliedLine.Text = PlainLanguage.PresetAppliedLine(hybridPlan, SelectedPreset(), english);
         PresetAppliedLine.Visibility = PresetAppliedLine.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         DetailsExpander.Visibility = analyzed ? Visibility.Visible : Visibility.Collapsed;
@@ -574,6 +575,7 @@ public partial class MainWindow : Window
     /// <summary>第一条阻塞原因的第一句（到第一个句号为止），没有阻塞原因文本时退回下一步动作提示。</summary>
     private string FirstBlockerSentence()
     {
+        if (PlainLanguage.NoBenefitExpected(hybridPlan)) return PlainLanguage.NoBenefitLine(hybridPlan!, english);
         if (hybridPlan?["video_dominant"]?["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
             return L("原作已是视频，转换后不会减少渲染工作。", "The original is already a video; conversion will not reduce rendering work.");
         string[] blockers = AppJsonPresentation.BlockerLines(hybridPlan, english);
@@ -624,6 +626,13 @@ public partial class MainWindow : Window
                 FontSize = 12, Margin = new Thickness(0, 0, 0, 6) });
     }
 
+    private void AllowNoBenefitClicked(object sender, RoutedEventArgs e)
+    {
+        if (analyzing || presetBusy) return;
+        allowNoBenefit = true;
+        AnalyzeClicked(this, new RoutedEventArgs());
+    }
+
     private void ApplySuggestionClicked(object sender, RoutedEventArgs e)
     {
         if (analyzing || presetBusy || AppJsonPresentation.SuggestedSettings(hybridPlan) is not JsonObject settings) return;
@@ -646,7 +655,7 @@ public partial class MainWindow : Window
     {
         if (!initialized) return;
         PresetBox.IsEnabled = InteractionBox.IsEnabled = !analyzing && !presetBusy;
-        SuggestionButton.IsEnabled = !analyzing && !presetBusy;
+        SuggestionButton.IsEnabled = AllowNoBenefitButton.IsEnabled = !analyzing && !presetBusy;
         bool sourceValid = AppEnvironment.SourceExists(SourceBox.Text.Trim());
         bool assetsValid = AppEnvironment.AssetsValid(AssetsBox.Text.Trim());
         bool outputValid = AppEnvironment.OutputValid(OutputBox.Text.Trim(), SourceBox.Text.Trim());
@@ -681,6 +690,7 @@ public partial class MainWindow : Window
         LoadResultButton.IsEnabled = !processing && tools is not null;
         CancelButton.IsEnabled = analyzing || selected?.State == "queued" || (selected is not null && selected == activeJob);
         RetryButton.IsEnabled = selected is not null && selected.State is "completed" or "cancelled" or "failed";
+        GenerateAnywayButton.Visibility = selected is { NoBenefitRejected: true, State: "completed" } ? Visibility.Visible : Visibility.Collapsed;
         ResultButton.IsEnabled = selected is not null && Directory.Exists(selected.Request.OutputDirectory);
         ErrorButton.IsEnabled = selected?.ErrorPath is string error && File.Exists(error);
         OfficialPreviewButton.IsEnabled = selected?.State == "completed" && selected.ProjectPath is not null &&
@@ -743,7 +753,7 @@ public partial class MainWindow : Window
             if (status is not ("candidate_generated" or StaticOnlyBake.Status or "probe_generated" or "candidate_rejected_no_loop" or
                 "candidate_rejected_composition" or "candidate_rejected_late_dependency" or "candidate_rejected_seam" or
                 "candidate_rejected_hardware_decode" or "candidate_rejected_opaque_capture" or ResidualMasking.LayoutRejectedStatus or
-                "candidate_rejected_capture_target" or CandidateScriptErrorGate.RejectedBakeStatus or EmbeddedVideoBudget.RejectedBakeStatus))
+                "candidate_rejected_capture_target" or CandidateScriptErrorGate.RejectedBakeStatus or EmbeddedVideoBudget.RejectedBakeStatus or NoBenefit.RejectedBakeStatus))
                 throw new InvalidDataException("This hybrid report does not contain a finished result.");
             JsonObject savedPlan = report["plan"]?.DeepClone().AsObject()
                 ?? throw new InvalidDataException("The hybrid result has no saved plan.");
@@ -836,6 +846,7 @@ public partial class MainWindow : Window
                     job.LatestReportPath = job.GenerationReportPath;
                     string resultStatus = result["status"]?.GetValue<string>() ?? "candidate_generated";
                     job.CanApply = AppJsonPresentation.CandidateCanApply(result);
+                    job.NoBenefitRejected = resultStatus == NoBenefit.RejectedBakeStatus;
                     job.State = "completed";
                     bool effectPrefix = job.Request.Plan["route"]?.GetValue<string>() == "effect_prefix";
                     // 队列里只说人话，每条后面都指向报告文件；技术原文在那里一句没少。
@@ -857,6 +868,9 @@ public partial class MainWindow : Window
                         : resultStatus == CandidateScriptErrorGate.RejectedBakeStatus
                         ? L("成品脚本报错多于原作，生成中止；报错原文见报告文件。",
                             "The result raised more script errors than the original; generation aborted. The original errors are in the report file.")
+                        : resultStatus == NoBenefit.RejectedBakeStatus
+                        ? L($"预计不省电，建议保持原作：已编出 {result[NoBenefit.Field]?["video_streams_encoded"]} 路视频，超过 {NoBenefit.SavingProvenStreams} 路。仍要生成请点“仍然生成”。",
+                            $"Not expected to save power; keeping the original is recommended: {result[NoBenefit.Field]?["video_streams_encoded"]} video streams are already encoded, above {NoBenefit.SavingProvenStreams}. Use Generate anyway to proceed.")
                         : resultStatus == ResidualMasking.LayoutRejectedStatus
                         ? L("循环周期首尾不衔接，生成中止；原因见报告文件。",
                             "The loop period does not join end to start; generation aborted. The report file states the reason.")
@@ -969,12 +983,26 @@ public partial class MainWindow : Window
     private async void RetryClicked(object sender, RoutedEventArgs e)
     {
         if (QueueList.SelectedItem is not JobItem { State: "completed" or "cancelled" or "failed" } original) return;
+        await RequeueAsync(original, allowNoBenefit: false);
+    }
+
+    /// <summary>预计不省电被拦下的那一单：把 plan 的 settings 标上允许后再排一次，烘焙按它放行。</summary>
+    private async void GenerateAnywayClicked(object sender, RoutedEventArgs e)
+    {
+        if (QueueList.SelectedItem is not JobItem { NoBenefitRejected: true, State: "completed" } original) return;
+        await RequeueAsync(original, allowNoBenefit: true);
+    }
+
+    private async Task RequeueAsync(JobItem original, bool allowNoBenefit)
+    {
         if (!AppEnvironment.OutputValid(OutputBox.Text.Trim(), original.Source))
         {
             StatusText.Text = L("输出目录无效：不能位于壁纸来源文件夹内。", "Invalid output directory: it must be outside the wallpaper source folder.");
             return;
         }
-        var request = original.Request with { Plan = original.Request.Plan.DeepClone().AsObject(),
+        var plan = original.Request.Plan.DeepClone().AsObject();
+        if (allowNoBenefit) plan["settings"]!["allow_no_benefit"] = true;
+        var request = original.Request with { Plan = plan,
             OutputDirectory = AppEnvironment.NewWorkDirectory(original.Source, OutputBox.Text.Trim()),
             ProjectDirectory = AppEnvironment.NewOutput(OutputBox.Text.Trim(), original.Source) };
         Enqueue(original.Clone(request));
@@ -1615,6 +1643,7 @@ public partial class MainWindow : Window
         public string? ApplyManifest { get; set; }
         public bool Restored { get; set; }
         public bool CanApply { get; set; } = true;
+        public bool NoBenefitRejected { get; set; }
         public JobItem Clone(HybridBakeRequest replacement) => new(replacement, Tools, GpuName, PropertyDefinitions);
         public void Translate(bool english)
         {

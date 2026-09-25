@@ -51,6 +51,7 @@ public class CliOptionTableTests
                 ? excludedLayers.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(int.Parse).ToArray() : null,
             LoopPreference: RetimeProfile.LoopPreferenceForPreset(preset),
             VideoShell: options.GetValueOrDefault("--video-shell", "reject"),
+            AllowNoBenefit: options.GetValueOrDefault("--no-benefit", "reject") == "allow",
             SwayRetime: options.GetValueOrDefault("--sway-retime", "on") == "on",
             LoopLengthMaximumSeconds: Real("--loop-max-seconds"),
             PropertiesOrigin: PropertiesOrigin,

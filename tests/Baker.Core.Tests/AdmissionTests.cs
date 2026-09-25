@@ -150,6 +150,51 @@ public class AdmissionTests
     }
 
     [Fact]
+    public void NoBenefitPlansAreRejectedByDefaultAndPassWhenAllowed()
+    {
+        // 静态图仍带实时层、固定时段：默认拒绝（blocker + 拒因），显式允许后放行；没命中的方案原样通过。
+        static JsonObject StaticWithLive(JsonObject plan)
+        {
+            plan["loop"]!["candidates"]![0]!["frames"] = 1;
+            plan["live_layer_ids"] = new JsonArray(7);
+            return plan;
+        }
+        JsonObject rejected = StaticWithLive(Narrated(Plan(new JsonArray())));
+        NoBenefit.Apply(rejected, allowed: false);
+        Assert.Equal([BlockerCode.NoBenefitExpected], PlanBlockers.Codes(rejected).ToArray());
+        Assert.False(Admission.Bakeable(rejected));
+        Assert.Equal(NoBenefit.RejectionReason, rejected["preset_rejection_reason"]!.GetValue<string>());
+        Assert.Equal([NoBenefit.StaticWithLive], NoBenefit.AnalysisConditions(rejected));
+
+        JsonObject allowed = StaticWithLive(Narrated(Plan(new JsonArray())));
+        NoBenefit.Apply(allowed, allowed: true);
+        Assert.True(Admission.Bakeable(allowed));
+        Assert.Equal(NoBenefit.OverrideStatus, allowed["no_benefit"]!["status"]!.GetValue<string>());
+
+        JsonObject noLive = StaticWithLive(Narrated(Plan(new JsonArray())));
+        noLive["live_layer_ids"] = new JsonArray();
+        NoBenefit.Apply(noLive, allowed: false);
+        Assert.True(Admission.Bakeable(noLive));
+
+        JsonObject fixedDay = Narrated(Plan(new JsonArray()));
+        fixedDay["settings"]!["daytime_state"] = "00-07+18-24";
+        NoBenefit.Apply(fixedDay, allowed: false);
+        Assert.Equal([BlockerCode.NoBenefitExpected], PlanBlockers.Codes(fixedDay).ToArray());
+
+        JsonObject ordinary = Narrated(Plan(new JsonArray()));
+        NoBenefit.Apply(ordinary, allowed: false);
+        Assert.True(Admission.Bakeable(ordinary));
+        Assert.Null(ordinary["no_benefit"]);
+
+        // 视频流路数在烘焙时按实际编出的流判：4 路放行，5 路拒；settings 里的允许标记随 plan 走。
+        Assert.False(NoBenefit.TooManyVideoStreams(4));
+        Assert.True(NoBenefit.TooManyVideoStreams(5));
+        Assert.False(NoBenefit.Allowed(ordinary));
+        ordinary["settings"]!["allow_no_benefit"] = true;
+        Assert.True(NoBenefit.Allowed(ordinary));
+    }
+
+    [Fact]
     public void BakeableMatchesTheNarratedConclusion()
     {
         // 可烘改按结构判定后，必须与结论行 summary.bakeable* 的判定逐一相同（原来 cascade 读 summary.key 前缀）。
