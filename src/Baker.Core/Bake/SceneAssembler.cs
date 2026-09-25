@@ -225,15 +225,39 @@ internal static class SceneAssembler
         foreach (var root in originals.Where(pair => Int(pair.Value["parent"]) is not int parent || !originals.ContainsKey(parent))) Visit(root.Key);
         var used = finalObjects.OfType<JsonObject>().Select(Id).ToHashSet();
         int next = used.Concat(originals.Keys).Max() + 1;
-        var inserts = new List<(JsonObject Video, List<JsonObject> Clones)>();
+        var inserts = new List<(JsonObject? Before, List<JsonObject> Clones)>();
         // 按模型资源找视频：查公开图层表时装配会把视频挪到成员槽位、换掉 id（见 AssembleAllocationObjects）。
         JsonObject Placed(JsonObject replacement) =>
             finalObjects.OfType<JsonObject>().Single(obj => JsonNode.DeepEquals(obj["image"], replacement["image"]));
+        // 生成区间里空的组（入场结束后不再可见，没有替换视频，如入场提示框、黑场淡出）入场段照样要画：
+        // 副本插到组父级下、计划合成顺序排在它后面的第一个对象之前；没有就放最后。
+        var composition = plan["composition"]!.AsArray().OfType<JsonObject>().ToArray();
+        var liveIds = plan["live_layer_ids"]!.AsArray().Select(n => Int(n)).OfType<int>().ToHashSet();
+        var layerInfo = plan["layers"]!.AsArray().OfType<JsonObject>().ToDictionary(Id);
+        var finalById = finalObjects.OfType<JsonObject>().ToDictionary(Id);
+        var placed = replacements.ToDictionary(pair => pair.Key, pair => Placed(pair.Value));
+        int Rank(JsonObject obj) => Array.FindIndex(composition, entry => entry["video_group"] is JsonValue name
+            ? placed.GetValueOrDefault(name.GetValue<string>()) == obj
+            : Int(entry["live_root"]) is int unit && liveIds.Contains(Id(obj)) &&
+              Int(layerInfo[Id(obj)]["allocation_root"] ?? layerInfo[Id(obj)]["root"]) == unit);
+        JsonObject? Before(string groupId, int? groupParent)
+        {
+            int at = Array.FindIndex(composition, entry => entry["video_group"]?.GetValue<string>() == groupId);
+            JsonObject? Sibling(JsonObject obj)
+            {
+                for (; Int(obj["parent"]) is int parent && finalById.TryGetValue(parent, out var up) && parent != groupParent; obj = up) { }
+                return (Int(obj["parent"]) is int p && finalById.ContainsKey(p) ? p : null) == groupParent ? obj : null;
+            }
+            return finalObjects.OfType<JsonObject>().Where(obj => Rank(obj) > at).Select(Sibling).OfType<JsonObject>()
+                .MinBy(finalObjects.IndexOf);
+        }
         string? skip = PublicLayerQueries(finalObjects.OfType<JsonObject>(), dependencies).Any() ? "public_layer_queries" : null;
         foreach (var group in plan["video_groups"]!.AsArray().OfType<JsonObject>())
         {
-            if (skip is not null || !replacements.TryGetValue(group["id"]!.GetValue<string>(), out var replacement)) continue;
+            if (skip is not null) continue;
             int? groupParent = Int(group["parent_id"]);
+            JsonObject? replacement = replacements.GetValueOrDefault(group["id"]!.GetValue<string>());
+            if (replacement is null && groupParent is int mount && !finalById.ContainsKey(mount)) continue;
             var members = group["layer_ids"]!.AsArray().Select(n => Int(n)).OfType<int>().ToHashSet();
             var cloned = new HashSet<int>();
             foreach (int member in members)
@@ -258,13 +282,13 @@ internal static class SceneAssembler
                     ["value"] = true, ["script"] = $"'use strict';\nexport function update(value) {{\n\treturn engine.runtime < {threshold};\n}}\n" };
                 clones.Add(clone);
             }
-            inserts.Add((Placed(replacement), clones));
+            inserts.Add((replacement is null ? Before(group["id"]!.GetValue<string>(), groupParent) : Placed(replacement), clones));
         }
         ulong switchFrame = skip is null ? introFrames : 0;
         if (skip is null)
-            foreach (var (video, clones) in inserts)
+            foreach (var (before, clones) in inserts)
             {
-                int at = finalObjects.IndexOf(video);
+                int at = before is null ? finalObjects.Count : finalObjects.IndexOf(before);
                 for (int i = clones.Count - 1; i >= 0; --i) finalObjects.Insert(at, clones[i]);
             }
         string on = skip is null ? threshold : Seconds(-.5 * frame);

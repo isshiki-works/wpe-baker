@@ -366,6 +366,8 @@ public sealed class HybridBakeService(NativeTools tools)
         // 与串行时它排在一切渲染之前等价。它自己的墙钟记在 stage_timing.overlapped，不进互斥阶段。
         var lane = new BakeGateContext(request, source, sourceHash, layout, progress)
             { Plan = plan.DeepClone().AsObject(), Settings = settings, Frames = frames };
+        // 起点搜索已判定这遍作废（GroupVerdicts.StartSearchRejection）时停掉合成校验：重烘那遍自己会校验。
+        using var validationStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task<BakeRejection?>? validation = probe ? null : Task.Run(async () =>
         {
             long started = Stopwatch.GetTimestamp();
@@ -374,7 +376,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 return await BakeGates.FirstRejectionAsync(BakeGates.Validation(
                     (context, token) => new ProbeBake(tools).ValidateAsync(this, context.Request, context.Plan, context.Settings,
                         context.Source, context.Layout.Output, context.Progress, token),
-                    EstimateEmbeddedVideoAsync), lane, cancellationToken);
+                    EstimateEmbeddedVideoAsync), lane, validationStop.Token);
             }
             finally { timing.AddOverlapped(StageTiming.CompositionValidation, Stopwatch.GetElapsedTime(started).TotalSeconds); }
         });
@@ -430,6 +432,7 @@ public sealed class HybridBakeService(NativeTools tools)
         GroupRenderScheduler? scheduler = null;
         JsonObject? startSearch = null;
         JsonObject[] startOrder = [];
+        JsonArray? startRejected = null;
         using var speculation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         async Task SetupAsync(CancellationToken token)
         {
@@ -483,17 +486,23 @@ public sealed class HybridBakeService(NativeTools tools)
                 report["loop_start_search"] = startSearch.DeepClone();
                 report["source_start_frame"] = checked(warmupFrames + scheduler.StartFrame);
                 report["loop_start_phase_frame"] = scheduler.StartFrame;
+                startRejected = GroupVerdicts.StartSearchRejection(plan, report, startSearch,
+                    id => scheduler.Capture(groups.Single(group => group["id"]!.GetValue<string>() == id)).Layers);
             }
-            // 首批组主渲染（第 0 组及 groupParallel 允许的后续组）提前启动。
-            if (groups.Length > 0) _ = scheduler.RenderAsync(0);
+            // 首批组主渲染（第 0 组及 groupParallel 允许的后续组）提前启动；起点搜索已判定拒绝时不渲。
+            if (groups.Length > 0 && startRejected is null) _ = scheduler.RenderAsync(0);
         }
         Task setup = Task.Run(() => SetupAsync(speculation.Token));
         if (validation is not null)
         {
             // 主道先做完时，剩下等合成校验的时间记 composition_validation；合成校验先完成时它整段被主道重叠，不记。
             if (await Task.WhenAny(setup, validation) == setup && !validation.IsCompleted)
+            {
+                if (setup.IsCompletedSuccessfully && startRejected is not null) await validationStop.CancelAsync();
                 using (timing.Measure(StageTiming.CompositionValidation)) await Task.WhenAny(validation);
-            if (!validation.IsCompletedSuccessfully || validation.Result is not null)
+            }
+            if (!(validation.IsCanceled && validationStop.IsCancellationRequested && !cancellationToken.IsCancellationRequested) &&
+                (!validation.IsCompletedSuccessfully || validation.Result is not null))
             {
                 // 合成校验没放行：主道提前做的全部作废。取消并等它与提前启动的渲染器退出，删掉整个输出目录（这一案新建的，
                 // 串行时此刻还不存在），再按串行时的出口结束：拒绝写 bake.json，异常原样抛出。
@@ -529,6 +538,12 @@ public sealed class HybridBakeService(NativeTools tools)
                 var startAttempts = new JsonArray();
                 // 这一轮各残差组的第一层读数，组成本次起点尝试的记录。
                 var roundResiduals = new List<(string GroupId, JsonObject SeamResidual)>();
+                if (startRejected is not null)
+                {
+                    GroupVerdicts.RejectStartSearch(report, startRejected);
+                    await Save();
+                    return report;
+                }
                 for (int i = 0; i < groups.Length; ++i)
                 {
                     var group = groups[i];
