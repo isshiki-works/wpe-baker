@@ -120,6 +120,17 @@ public sealed class HybridBakeService(NativeTools tools)
         ArgumentNullException.ThrowIfNull(request);
         JsonObject result = await BakeCleanedAsync(request, progress, cancellationToken);
         if (request.ProbeFrames > 0) return result;
+        // 内嵌视频超 2 GiB（渲染前外推或编码后实测）被拒，且报告给出按码率最长能做多少秒、比当前循环短：把它当循环上限
+        // （同 --loop-max-seconds）重新分析再烘一次。走 BakeCleanedAsync，不再套别的自动重试；重烘仍超限就照旧拒绝。
+        if (EmbeddedVideoBudgetJson.MaximumSeconds(result) is double cap && LoopSeconds(request.Plan) is double loopSeconds && cap < loopSeconds)
+        {
+            progress?.Report(new("capping_loop_length", null,
+                $"The embedded video would exceed 2 GiB; analyzing again with the loop capped at {cap:0} s and baking once more."));
+            return await RetryReplannedAsync(request, result, "embedded_video_cap_retry", ".embedded-video-first-attempt", new JsonObject {
+                    // 原因码：内嵌视频超 2 GiB；loop_maximum_seconds 是采用的循环上限（取自拒绝报告里按码率算出的最长秒数）。
+                    ["reason"] = "embedded_video_over_limit", ["loop_maximum_seconds"] = cap },
+                settings => settings with { LoopLengthMaximumSeconds = cap }, retry => BakeCleanedAsync(retry, progress, cancellationToken), progress, cancellationToken);
+        }
         // 入场切换没过合成门：不逐张修，按旧行为（单次轨所属层判实时、不做切换）重新分析再烘；重烘还能接着走残差粒子重试。
         if (result["composition_validation"] is JsonObject composition && composition["status"]?.GetValue<string>() != "composition_pass" &&
             composition["intro_live"]?["status"]?.GetValue<string>() == "applied")
@@ -152,6 +163,11 @@ public sealed class HybridBakeService(NativeTools tools)
             settings => settings with { RetainLiveRootIds = retain, RetainLiveReasons = reasons },
             retry => BakeCleanedAsync(retry, progress, cancellationToken), progress, cancellationToken);
     }
+
+    /// <summary>计划里首个循环候选的时长（秒）；没有候选时 null。</summary>
+    private static double? LoopSeconds(JsonObject plan) =>
+        (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["frames"]?.GetValue<ulong>() is ulong frames
+            ? (double)frames * PlanSettings.Of(plan).FpsDenominator / PlanSettings.Of(plan).FpsNumerator : null;
 
     /// <summary>接缝门拒绝的组若按自身周期（plan 候选的 group_frames，比 L 短）录制，返回它的 id、图层与帧数；其余情况 null。</summary>
     private static (string GroupId, int[] Layers, ulong Frames)? OwnPeriodSeamFailure(JsonObject plan, JsonObject report)

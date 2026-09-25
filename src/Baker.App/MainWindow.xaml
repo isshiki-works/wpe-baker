@@ -1,5 +1,5 @@
 <Window x:Class="Baker.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Periodica · WPE Baker" Width="1240" Height="950"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Periodica · WPE Baker" Icon="Periodica.ico" Width="1240" Height="950"
         MinWidth="980" MinHeight="720" Background="{DynamicResource Bg}" Foreground="{DynamicResource Ink}"
         FontFamily="Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI" FontSize="13" Loaded="WindowLoaded" Closing="WindowClosing"
         AllowDrop="True" PreviewDragOver="SourceDragOver" PreviewDrop="SourceDropped">
