@@ -72,7 +72,8 @@ public sealed partial class NativeRenderRunner
 
     /// <summary>
     /// ffmpeg 编码器表；auto 时再把打不开的硬件编码器剔掉：表里有不等于这台机器能用（没有 NVIDIA 驱动时 nvenc 打不开，
-    /// mf 常只落到软件 MFT）。按 auto 顺序逐档试编两帧空白画面，第一档全过就停。
+    /// 没有硬件 MFT 时 mf 带 -hw_encoding 打不开）。按 auto 顺序逐档试编两帧空白画面，喂各档实际编码用的像素格式
+    /// （Intel 硬件 MFT 只收 NV12，喂 yuv420p 会报 -542398533），第一档全过就停。
     /// </summary>
     private async Task<HashSet<string>> UsableEncodersAsync(string kind, string logDirectory, CancellationToken cancellationToken)
     {
@@ -89,7 +90,7 @@ public sealed partial class NativeRenderRunner
             foreach (string name in names)
                 try
                 {
-                    _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-f", "rawvideo", "-pix_fmt", "yuv420p",
+                    _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-f", "rawvideo", "-pix_fmt", PlaybackEncodeProfile.PixelFormatFor(candidate),
                         "-s", "256x256", "-i", blank, "-c:v", name, .. (candidate == PlaybackEncoderSelection.Mf ? new[] { "-hw_encoding", "true" } : []),
                         "-f", "null", "-"], Path.Combine(logDirectory, $"encoder-probe-{name}.stderr.log"), cancellationToken);
                 }
@@ -253,30 +254,6 @@ public sealed partial class NativeRenderRunner
             (encoderKind, encoderFallbackReason) = (PlaybackEncoderSelection.Software, HardwareBudgetFallbackReason);
         var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
             losslessTest: false, encoderKind);
-        // mf 档位要区分「真的落到厂商硬件 MFT」与「只有微软自带的软件 MFT」：能编不等于硬件在编。
-        JsonObject? mediaFoundation = null;
-        if (encoderKind == PlaybackEncoderSelection.Mf)
-        {
-            string probeVideo = Path.Combine(output, "mf-probe.mp4"), probeLog = Path.Combine(output, "mf-probe.stderr.log");
-            int probeExit = 0;
-            try
-            {
-                _ = await ff.RunTextAsync(tools.Ffmpeg,
-                    PlaybackEncoderSelection.MfProbeArguments(profile.Encoder, inputPath, probeVideo), probeLog, cancellationToken);
-            }
-            // 探测失败是正常结果之一（这台机器走不通硬件 MFT），不是这次生成的错误。
-            catch (IOException) { cancellationToken.ThrowIfCancellationRequested(); probeExit = 1; }
-            string probeText = File.Exists(probeLog) ? await File.ReadAllTextAsync(probeLog, cancellationToken) : "";
-            (bool hardware, string? mft, string? failure) = PlaybackEncoderSelection.ParseMfProbe(probeExit, probeText);
-            mediaFoundation = new JsonObject
-            {
-                ["mf_hardware"] = hardware,
-                ["mf_mft"] = hardware ? mft : null,
-                ["mf_hardware_failure"] = failure,
-                ["mf_note"] = hardware ? null : PlaybackEncoderSelection.MfSoftwareOnlyNote(failure, mft),
-            };
-            try { File.Delete(probeVideo); } catch (IOException) { } catch (UnauthorizedAccessException) { }
-        }
         // 画质判据的抽样帧号在编码前定下来，升档重编时保持同一批帧，前后可直接横比。
         ulong[] gateFrames = QualityGate.SampleFrames(frames);
         double gateReference = QualityGate.DefaultReferenceSsim, gateRatio = QualityGate.DefaultRatio;
@@ -290,7 +267,6 @@ public sealed partial class NativeRenderRunner
             ["frames"] = frames, ["fps_num"] = numerator, ["fps_den"] = denominator, ["encoder"] = encoder,
             ["encoder_requested"] = requestedEncoder, ["encoder_used"] = encoderKind,
             ["encoder_fallback_reason"] = encoderFallbackReason,
-            ["media_foundation"] = mediaFoundation,
             ["hardware_decode"] = "not_verified",
             ["hardware_decode_preflight"] = HardwareDecodePreflightReport(decodePlan, alphaRegion, region),
             ["decoded_area_fraction"] = (double)region.Width * region.Height / ((double)region.CaptureWidth * region.CaptureHeight),
@@ -298,6 +274,24 @@ public sealed partial class NativeRenderRunner
             ["validation_required"] = "Cropped-cache reinjection, encoded loop seam and official playback." };
         string reportPath = Path.Combine(output, "manifest.json");
         await WriteJsonAsync(reportPath, report, cancellationToken);
+        void SetProfile(PlaybackEncodeProfile next)
+        {
+            profile = next;
+            encoder = profile.Encoder;
+            arguments = EncodeArguments(profile);
+            report["encoder"] = encoder;
+            report["encoder_arguments"] = new JsonArray(arguments.Select(a => (JsonNode?)JsonValue.Create(a)).ToArray());
+            File.Delete(partial);
+        }
+        void FallBackToSoftware(string reason)
+        {
+            encoderKind = PlaybackEncoderSelection.Software;
+            encoderFallbackReason = reason;
+            report["encoder_used"] = encoderKind;
+            report["encoder_fallback_reason"] = reason;
+            SetProfile(PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
+                losslessTest: false, PlaybackEncoderSelection.Software));
+        }
         bool encodingFailed = false;
         try
         {
@@ -309,7 +303,16 @@ public sealed partial class NativeRenderRunner
                 string suffix = attempt == 0 ? "" : "." + attempt.ToString(CultureInfo.InvariantCulture);
                 // 只包住这一次 ffmpeg 调用：播放版编码在这里是独立进程，不与渲染重叠，秒数可直接横比。
                 long encodeStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                _ = await ff.RunTextAsync(tools.Ffmpeg, arguments, Path.Combine(output, $"encoder{suffix}.stderr.log"), cancellationToken);
+                try
+                {
+                    _ = await ff.RunTextAsync(tools.Ffmpeg, arguments, Path.Combine(output, $"encoder{suffix}.stderr.log"), cancellationToken);
+                }
+                // 硬件编码器开不了或中途失败（驱动、尺寸上限、MFT 状态）只让这一组改用软件编码，不让整次生成失败。
+                catch (IOException error) when (profile.Kind != PlaybackEncoderSelection.Software && !cancellationToken.IsCancellationRequested)
+                {
+                    FallBackToSoftware($"{profile.Encoder} 编码失败，这一组改用软件编码：{error.Message}");
+                    continue;
+                }
                 report["encode_seconds"] = Math.Round(System.Diagnostics.Stopwatch.GetElapsedTime(encodeStart).TotalSeconds, 3);
                 EncodedStream verified = await VerifyEncoded.ProbeAsync(ff, partial,
                     "stream=codec_name,width,height,avg_frame_rate,nb_frames,duration,duration_ts,time_base,pix_fmt,color_space,color_range",
@@ -341,21 +344,14 @@ public sealed partial class NativeRenderRunner
                 }
                 else
                 {
-                    encoderFallbackReason = $"{profile.Kind} 升到质量上限仍未达到 SSIM 阈值 " +
+                    string reason = $"{profile.Kind} 升到质量上限仍未达到 SSIM 阈值 " +
                         $"{QualityGate.Threshold(gateReference, gateRatio).ToString("0.######", CultureInfo.InvariantCulture)}，回退软件编码。";
                     qualityGate = QualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
-                        profile.QualityStep, QualityGate.ActionFellBack, encoderFallbackReason);
-                    encoderKind = PlaybackEncoderSelection.Software;
-                    profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
-                        losslessTest: false, PlaybackEncoderSelection.Software);
-                    report["encoder_used"] = encoderKind;
-                    report["encoder_fallback_reason"] = encoderFallbackReason;
+                        profile.QualityStep, QualityGate.ActionFellBack, reason);
+                    FallBackToSoftware(reason);
+                    continue;
                 }
-                encoder = profile.Encoder;
-                arguments = EncodeArguments(profile);
-                report["encoder"] = encoder;
-                report["encoder_arguments"] = new JsonArray(arguments.Select(a => (JsonNode?)JsonValue.Create(a)).ToArray());
-                File.Delete(partial);
+                SetProfile(profile);
             }
             if (qualityGate is not null) report["playback_quality_gate"] = qualityGate;
             string video = Path.Combine(output, "cache.mp4");

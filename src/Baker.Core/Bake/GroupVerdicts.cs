@@ -224,7 +224,6 @@ internal static class GroupVerdicts
                 ["encode_seconds"] = encoded["encode_seconds"]?.DeepClone(),
                 ["encode_seconds_basis"] = encoded["encode_seconds_basis"]?.DeepClone(),
                 // mf 档位的硬件 MFT 探测结果，与新增的播放版画质判据。只有走过的档位才有这两段。
-                ["media_foundation"] = encoded["media_foundation"]?.DeepClone(),
                 ["playback_quality_gate"] = encoded["playback_quality_gate"]?.DeepClone(),
                 ["encoder_arguments"] = encoded["encoder_arguments"]?.DeepClone() } };
         if (seamResidual is not null)
