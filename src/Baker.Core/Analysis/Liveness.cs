@@ -22,6 +22,11 @@ internal sealed class Liveness
     /// 无输入的运行时观测走不到拖动分支，依赖记录里没有这条边。
     /// </summary>
     internal bool InputDrivenCamera { get; private set; }
+    /// <summary>
+    /// 只因 writes_shared_script_state 实时、且按键读它的别的脚本全都带输入类原因的写者：它只服务于随输入变的层，
+    /// 记 shared_state_for_input_readers。同样只作注记（plan 里的 input_source），不改分配。
+    /// </summary>
+    internal HashSet<int> SharedStateForInputReaders { get; } = [];
 
     private Liveness(SceneGraph graph)
     {
@@ -149,6 +154,13 @@ internal sealed class Liveness
             dependency => sharedEdges.Contains(dependency)
                 ? liveness.Reasons[dependency["target"]!.GetValue<int>()].All(reason => reason == "writes_shared_script_state")
                 : severedRead(dependency), severedWrite);
+        string[] input = ["pointer_api", "observed_pointer", "particle_pointer_input", "active_shader_pointer_input", "audio_api", "observed_audio",
+            "active_shader_audio_spectrum", "particle_audio_input", "wall_clock_api", "observed_wall_clock", "media_api"];
+        foreach (int writer in sharedWrites.Keys.Where(id => liveness.Reasons[id].SetEquals(["writes_shared_script_state"])))
+        {
+            var readers = sharedEdges.Where(edge => edge["target"]!.GetValue<int>() == writer).Select(edge => edge["owner"]!.GetValue<int>()).ToList();
+            if (readers.Count > 0 && readers.All(reader => liveness.Reasons[reader].Overlaps(input))) liveness.SharedStateForInputReaders.Add(writer);
+        }
         return liveness;
     }
 

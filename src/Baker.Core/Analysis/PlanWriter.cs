@@ -202,7 +202,9 @@ internal static class PlanWriter
                     ["visible_property"] = liveIds.Contains(id) ? VisibleProperty(id) : null,
                     ["visible"] = composer.Visible(id), ["drawable"] = composer.Draws(id) };
                 // 只作注记的输入来源（Liveness.InputDrivenCamera）；没有时不写字段，其余 plan 逐字节不变。
-                if (liveness.InputDrivenCamera && liveIds.Contains(id)) layer["input_source"] = "input_driven_camera";
+                if (liveIds.Contains(id) && (liveness.InputDrivenCamera ? "input_driven_camera"
+                    : liveness.SharedStateForInputReaders.Contains(id) ? "shared_state_for_input_readers" : null) is string source)
+                    layer["input_source"] = source;
                 return (JsonNode)layer;
             }).ToArray()),
             ["optional_realtime_roots"] = JsonSerializer.SerializeToNode(composer.OptionalForeground),
