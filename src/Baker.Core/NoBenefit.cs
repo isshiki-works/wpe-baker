@@ -5,7 +5,8 @@ namespace Baker.Core;
 /// <summary>
 /// 烘了也不省电的几类方案默认拒绝，用户用 --no-benefit allow 显式覆盖。三条判据原样取自台账"必须有功耗实测证据"的条件：
 /// 静态成品仍带实时层、固定单个时段、视频流超过 <see cref="SavingProvenStreams"/> 路。
-/// 前两条在分析时就能从 plan 读准（写 blocker）；视频流路数要等组编完才知道哪些组是静态纹理，所以在烘焙时按实际编出的视频流判。
+/// 前两条在分析时就能从 plan 读准（写 blocker）。视频流路数：整层路线要等组编完才知道哪些组是静态纹理，在烘焙时按实际编出的视频流判；
+/// 特效前缀路线每个缓存都编成一路视频，路数就是 effect_prefix_caches 的个数，分析时判。
 /// 判据只说"预计"：不是功耗实测，覆盖后照常烘焙。
 /// </summary>
 public static class NoBenefit
@@ -29,7 +30,7 @@ public static class NoBenefit
     public const string FixedDaytime = "fixed_daytime_state";
     public const string TooManyStreams = "video_streams_over_limit";
 
-    /// <summary>分析时就能判的条件：只剩一张静态图但仍有实时层；固定在单个时段。</summary>
+    /// <summary>分析时就能判的条件：只剩一张静态图但仍有实时层；固定在单个时段；特效前缀缓存超过上限。</summary>
     public static string[] AnalysisConditions(JsonObject plan)
     {
         var hits = new List<string>();
@@ -39,6 +40,9 @@ public static class NoBenefit
             hits.Add(StaticWithLive);
         if (plan["settings"]?["daytime_state"] is JsonValue)
             hits.Add(FixedDaytime);
+        if (plan["route"]?.GetValue<string>() == "effect_prefix" && plan["effect_prefix_caches"] is JsonArray caches &&
+            TooManyVideoStreams(caches.Count))
+            hits.Add(TooManyStreams);
         return hits.ToArray();
     }
 
@@ -88,6 +92,8 @@ public static class NoBenefit
         (StaticWithLive, true) => "the result would be a still image with the live layers still running",
         (FixedDaytime, false) => "成品固定在一个时段，不随时刻切换",
         (FixedDaytime, true) => "the result is fixed to one time of day and does not follow the clock",
+        (TooManyStreams, false) => $"成品需要超过 {SavingProvenStreams} 路视频（路数更多的成品通常比原作更费电）",
+        (TooManyStreams, true) => $"the result needs more than {SavingProvenStreams} video streams (results with more streams usually draw more power than the original)",
         _ => c
     }));
 }
