@@ -120,7 +120,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             FrameSamplesOnly: true,
             EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,
-            CollectSamplingCoverage: playbackKind == PlaybackEncoderSelection.Vulkan,
+            // 覆盖度只给透明组定 GPU 直编的裁剪（不透明组裁剪恒为整幅）；要它时渲染器每帧都得画，不要时只画取样帧。
+            CollectSamplingCoverage: playbackKind == PlaybackEncoderSelection.Vulkan && !capture.SceneClear,
             FrameSampleIncludeAlpha: !capture.SceneClear,
             OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet()));
 
