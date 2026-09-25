@@ -53,6 +53,15 @@ public static class EmbeddedVideoBudgetJson
         return result;
     }
 
+    /// <summary>
+    /// 内嵌视频超 2 GiB 被拒的报告里"按码率最长能做多少秒"（外推与编码后两条拒绝文案的第 5 个参数，整秒）；
+    /// 不是这类拒绝、读不到或不足 1 s 时 null。
+    /// </summary>
+    public static double? MaximumSeconds(JsonObject report) =>
+        report["status"]?.GetValue<string>() == EmbeddedVideoBudget.RejectedBakeStatus &&
+        report["reason_localized"]?["params"] is JsonArray { Count: > 4 } args && args[4]?.GetValue<string>() is string text &&
+        double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) && seconds >= 1 ? seconds : null;
+
     /// <summary>编码后的实际字节超限时的拒绝理由（外推低估时的兜底）。</summary>
     public static Message EncodedRejection(string groupId, long bytes, ulong frames, uint fpsNumerator, uint fpsDenominator)
     {
