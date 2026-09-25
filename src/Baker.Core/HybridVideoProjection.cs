@@ -190,8 +190,10 @@ internal static class HybridVideoProjection
                 return still.Select(v => new[] { v }).ToArray();
             bool single = animation["options"]?["mode"]?.GetValue<string>() == "single";
             if (single) seconds = Math.Max(seconds, SceneGraph.Numeric(animation["options"]?["length"], 0) / SceneGraph.Numeric(animation["options"]?["fps"], 30));
+            // relative 动画的关键帧是相对静止值的增量（引擎 Scene.cpp：base + value），不是绝对值。
+            bool relative = animation["relative"]?.ToJsonString() == "true";
             return still.Select((v, i) => animation[$"c{i}"] is JsonArray { Count: > 0 } keys
-                ? (single ? keys.TakeLast(1) : keys).Select(key => key!["value"]!.GetValue<double>()).ToArray() : [v]).ToArray();
+                ? (single ? keys.TakeLast(1) : keys).Select(key => key!["value"]!.GetValue<double>() + (relative ? v : 0)).ToArray() : [v]).ToArray();
         }
         double Scalar(JsonNode? node) => SceneGraph.Numeric(SceneGraph.Resolve(node, properties), 1);
         double zoom = Values(scene["general"]?["zoom"], [Scalar(scene["general"]?["zoom"])])[0].Min();
