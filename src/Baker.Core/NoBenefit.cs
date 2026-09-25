@@ -13,12 +13,11 @@ public static class NoBenefit
     public const string RejectChoice = "reject";
     public const string AllowChoice = "allow";
 
-    /// <summary>plan 顶层字段：{ policy, status, conditions[] }。烘焙读 policy，界面读 status。</summary>
+    /// <summary>plan 顶层字段：{ policy, status, conditions[] }，命中判据时才写。界面读 status。</summary>
     public const string Field = "no_benefit";
 
     public const string ExpectedStatus = "expected_no_benefit";
     public const string OverrideStatus = "override_accepted";
-    public const string ClearStatus = "no_condition";
 
     public const string RejectionReason = "no_benefit_expected";
     public const string RejectedBakeStatus = "candidate_rejected_no_benefit_expected";
@@ -47,8 +46,9 @@ public static class NoBenefit
     public static void Apply(JsonObject plan, bool allowed)
     {
         string[] conditions = AnalysisConditions(plan);
-        plan[Field] = Record(allowed ? AllowChoice : RejectChoice, conditions.Length == 0 ? ClearStatus : allowed ? OverrideStatus : ExpectedStatus, conditions);
-        if (conditions.Length == 0 || allowed) return;
+        if (conditions.Length == 0) return;   // 没命中的方案不写记录，plan 与旧版逐字节相同
+        plan[Field] = Record(allowed ? AllowChoice : RejectChoice, allowed ? OverrideStatus : ExpectedStatus, conditions);
+        if (allowed) return;
         PlanBlockers.Add(plan, new Blocker(BlockerCode.NoBenefitExpected, [Describe(conditions, english: true)], [Describe(conditions, english: false)]));
         plan["status"] = "requires_resolution";
         plan["preset_rejection_reason"] = RejectionReason;

@@ -184,7 +184,7 @@ public class AdmissionTests
         JsonObject ordinary = Narrated(Plan(new JsonArray()));
         NoBenefit.Apply(ordinary, allowed: false);
         Assert.True(Admission.Bakeable(ordinary));
-        Assert.Equal(NoBenefit.ClearStatus, ordinary["no_benefit"]!["status"]!.GetValue<string>());
+        Assert.Null(ordinary["no_benefit"]);
 
         // 视频流路数在烘焙时按实际编出的流判：4 路放行，5 路拒；settings 里的允许标记随 plan 走。
         Assert.False(NoBenefit.TooManyVideoStreams(4));
