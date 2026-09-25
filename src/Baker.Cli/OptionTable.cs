@@ -139,6 +139,12 @@ internal static class OptionTable
                 ? parsed : throw new ArgumentException("--loop-max-seconds must be a number of seconds above 0 and at most 3600."),
             Help: ["Advanced override of the preset's loop ceiling, at most 3600."]),
         new("--video-shell", [Analyze], Choices: [VideoDominance.RejectChoice, VideoDominance.AllowChoice], Default: D.VideoShell, Custom: true),
+        new("--no-benefit", [Analyze], Choices: [NoBenefit.RejectChoice, NoBenefit.AllowChoice], Parse: text => text == NoBenefit.AllowChoice,
+            Default: NoBenefit.RejectChoice, Help:
+            [
+                "reject (default) stops plans that are not expected to save power: a still image with live layers left, a single fixed time of day, more than 4 video streams.",
+                "allow generates them anyway; the prediction is not a power measurement."
+            ]),
         new("--sway-retime", [Analyze], Choices: ["off", "on"], Parse: text => text == "on", Default: D.SwayRetime ? "on" : "off", Custom: true, Help:
         [
             "All three presets close swaying layers on whole cycles; the look budget above governs it.",
@@ -229,6 +235,7 @@ internal static class OptionTable
             AudioEffects = (string)values["--audio-effects"]!,
             ExcludedLayerIds = (int[]?)values["--exclude-layers"],
             VideoShell = (string)values["--video-shell"]!,
+            AllowNoBenefit = (bool)values["--no-benefit"]!,
             DaytimeSplit = (bool)values["--daytime-split"]!,
             Width = (uint)values["--width"]!,
             Height = (uint)values["--height"]!,

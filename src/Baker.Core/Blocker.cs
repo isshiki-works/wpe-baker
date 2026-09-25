@@ -34,6 +34,7 @@ public enum BlockerCode
     ReplacementParentMismatch,
     PublicLayerQuery,
     VideoShell,
+    NoBenefitExpected,
     ResidualMaskingLayout,
     LoopNoCommonFrame,
     LoopFixedPeriodExceedsCeiling,

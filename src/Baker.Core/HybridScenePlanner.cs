@@ -13,6 +13,8 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     int[]? ExcludedLayerIds = null, string LoopPreference = "balanced", string VideoShell = "reject", string? ResolutionSource = null,
     // 摆动改频（默认关）与它的循环长度上限（秒，null = 600）。默认值不写进 plan 的 settings，开关关闭时 plan 与旧版逐字节相同。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SwayRetime = false,
+    // 显式允许生成预计不省电的方案（--no-benefit allow）。默认 false 不写进 settings；true 时随 settings 走，烘焙期间重分析也保持。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool AllowNoBenefit = false,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? LoopLengthMaximumSeconds = null,
     // 属性来源记录（WallpaperEngineProperties.Merge 的 Origin）：只抄进 plan 的 properties_source / wpe_properties，不写进 settings。
     // WPE 值本身已并进 UserProperties，所以 bake 期间按 settings 重新分析时不会再去读 config.json，结果确定。

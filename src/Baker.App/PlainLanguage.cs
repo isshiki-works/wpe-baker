@@ -30,6 +30,7 @@ internal static class PlainLanguage
     public static string Verdict(JsonObject? plan, bool english)
     {
         if (plan is null) return "";
+        if (NoBenefitExpected(plan)) return L(english, "预计不省电，建议保持原作", "Not expected to save power; keeping the original is recommended");
         if (CannotBakeReason(plan, english) is not null) return L(english, "无法生成", "Cannot generate");
         if (HasTurnOffCard(plan))
         {
@@ -42,6 +43,13 @@ internal static class PlainLanguage
         if (value == "unknown") return L(english, "可以生成，收益待确认", "Ready to generate, benefit unconfirmed");
         return L(english, "可以生成", "Ready to generate");
     }
+
+    /// <summary>分析判定预计不省电（默认拒绝，用户可点"仍然生成"覆盖）。</summary>
+    public static bool NoBenefitExpected(JsonObject? plan) => plan?[NoBenefit.Field]?["status"]?.GetValue<string>() == NoBenefit.ExpectedStatus;
+
+    /// <summary>结论第二行：命中的条件，后面接一句怎么继续。</summary>
+    public static string NoBenefitLine(JsonObject plan, bool english) =>
+        NoBenefit.Describe(plan, english) + L(english, "。仍要生成请点“仍然生成”。", ". To generate anyway, use Generate anyway.");
 
     /// <summary>取舍方案里排第一（分析已按"预计能整幅预渲染"排过序）那一套要禁用的项数。</summary>
     private static int TurnOffCount(JsonObject plan)

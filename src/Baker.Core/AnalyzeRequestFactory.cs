@@ -27,6 +27,7 @@ public static class AnalyzeRequestFactory
             // 循环取向跟着档位走。
             LoopPreference: RetimeProfile.LoopPreferenceForPreset(options.Preset),
             VideoShell: options.VideoShell,
+            AllowNoBenefit: options.AllowNoBenefit,
             SwayRetime: options.SwayRetime,
             LoopLengthMaximumSeconds: options.LoopMaximumSeconds,
             PropertiesOrigin: propertiesOrigin,
