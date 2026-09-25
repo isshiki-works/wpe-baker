@@ -416,6 +416,9 @@ struct VulkanRender::Impl {
     bool m_sample_readback { false }, m_gpu_samples { false };
     bool m_sample_coverage_enabled { false };
     std::uint64_t m_sample_coverage_start {}, m_sample_coverage_frames {}, m_sample_coverage_observed {};
+    // 取样帧模式：每个取样帧的包围盒读回 CPU，合并出全部取样帧、偶数序取样帧两个并集。
+    bool m_sample_coverage_sampled_only { false };
+    std::array<std::uint32_t,8> m_coverage_all {}, m_coverage_even {};
     VmaBufferParameters m_sample_coverage;
     vvk::ImageView m_sample_view;
     vvk::ShaderModule m_sample_shader;
@@ -792,6 +795,8 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
     m_sample_coverage_start = info.sampling_coverage_start;
     m_sample_coverage_frames = info.sampling_coverage_frames;
     m_sample_coverage_observed = 0;
+    m_sample_coverage_sampled_only = info.sampling_coverage_sampled_only;
+    m_coverage_all = m_coverage_even = {extent.width,extent.height,0,0,255,0,0,0};
     constexpr VkFormatFeatureFlags required = VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                                                VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
                                                VK_FORMAT_FEATURE_BLIT_DST_BIT;
@@ -1350,9 +1355,11 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         rr.command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestamp_queries.get(), 1);
     // FinPass writes this ordinary image. Make those transfer writes visible
     // to the copy, then make staging writes visible to the host after the fence.
-    const bool coverage_frame=m_sample_coverage_enabled && m_cpu_frame_index>=m_sample_coverage_start &&
-        m_cpu_frame_index-m_sample_coverage_start<m_sample_coverage_frames;
-    const bool coverage_last=coverage_frame && m_cpu_frame_index-m_sample_coverage_start+1==m_sample_coverage_frames;
+    const bool coverage_frame=m_sample_coverage_enabled && (read_pixels || !m_sample_coverage_sampled_only) &&
+        m_cpu_frame_index>=m_sample_coverage_start && m_cpu_frame_index-m_sample_coverage_start<m_sample_coverage_frames;
+    // 取样帧模式每个取样帧都清零、量、读回（取样帧本来就等 fence），合并在 CPU 上做。
+    const bool coverage_last=coverage_frame && (m_sample_coverage_sampled_only ||
+        m_cpu_frame_index-m_sample_coverage_start+1==m_sample_coverage_frames);
     const bool compact_readback=m_gpu_samples && (read_pixels || coverage_frame);
     VkImageMemoryBarrier to_readback {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -1380,7 +1387,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     // Sparse sampling skips only the device-to-host copy and CPU pixel materialization.
     if (compact_readback) {
         if (coverage_frame) {
-            const bool first_coverage=m_cpu_frame_index==m_sample_coverage_start;
+            const bool first_coverage=m_sample_coverage_sampled_only || m_cpu_frame_index==m_sample_coverage_start;
             if (first_coverage) {
                 const std::array<std::uint32_t,8> empty {extent.width,extent.height,0,0,255,0,0,0};
                 vkCmdUpdateBuffer(*rr.command,*m_sample_coverage.handle,0,sizeof(empty),empty.data());
@@ -1571,15 +1578,35 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         if (coverage_last) {
             std::array<std::uint32_t,8> bounds;
             std::memcpy(bounds.data(),static_cast<const std::uint8_t*>(mapped)+m_cpu_staging.req_size-32,32);
+            if (m_sample_coverage_sampled_only) {
+                auto merge=[&](std::array<std::uint32_t,8>& into) {
+                    into[4]=std::min(into[4],bounds[4]); into[5]=std::max(into[5],bounds[5]);
+                    if (bounds[7]==0) return;
+                    into[0]=std::min(into[0],bounds[0]); into[1]=std::min(into[1],bounds[1]);
+                    into[2]=std::max(into[2],bounds[2]); into[3]=std::max(into[3],bounds[3]); into[7]=1;
+                };
+                merge(m_coverage_all);
+                if ((m_sample_coverage_observed-1)%2==0) merge(m_coverage_even);
+                bounds=m_coverage_all;
+            }
             const bool content=bounds[7]!=0;
             std::ostringstream report;
             report << "{\"status\":\"complete\",\"first_simulation_frame\":" << m_sample_coverage_start
-                << ",\"frames\":" << m_sample_coverage_observed << ",\"capture_width\":" << extent.width
+                << ",\"frames\":" << (m_sample_coverage_sampled_only ? m_sample_coverage_frames : m_sample_coverage_observed)
+                << ",\"capture_width\":" << extent.width
                 << ",\"capture_height\":" << extent.height << ",\"includes_rgb\":true,\"has_content\":" << (content ? "true" : "false")
                 << ",\"x\":" << (content ? bounds[0] : 0) << ",\"y\":" << (content ? bounds[1] : 0)
                 << ",\"width\":" << (content ? bounds[2]-bounds[0]+1 : 0) << ",\"height\":" << (content ? bounds[3]-bounds[1]+1 : 0)
-                << ",\"minimum_alpha\":" << bounds[4] << ",\"maximum_alpha\":" << bounds[5]
-                << ",\"basis\":\"Every full-resolution output frame reduced on GPU, including frames not selected for sampling.\"}";
+                << ",\"minimum_alpha\":" << bounds[4] << ",\"maximum_alpha\":" << bounds[5];
+            if (m_sample_coverage_sampled_only) {
+                // 边距 = 全部取样帧并集比偶数序取样帧并集多出的部分（取样间隔减半时各边多露出多少），偶数序没内容时取整幅。
+                const auto& even=m_coverage_even;
+                const bool known=even[7]!=0;
+                report << ",\"sampled_frames\":" << m_sample_coverage_observed
+                    << ",\"sample_margin\":[" << (known ? even[0]-bounds[0] : extent.width) << ',' << (known ? even[1]-bounds[1] : extent.height)
+                    << ',' << (known ? bounds[2]-even[2] : extent.width) << ',' << (known ? bounds[3]-even[3] : extent.height) << ']'
+                    << ",\"basis\":\"Full-resolution union over the read-back sample frames only; sample_margin is left,top,right,bottom.\"}";
+            } else report << ",\"basis\":\"Every full-resolution output frame reduced on GPU, including frames not selected for sampling.\"}";
             frame.sampling_coverage=report.str();
         }
         m_cpu_staging.handle.UnMapMemory();

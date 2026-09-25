@@ -27,7 +27,8 @@ public sealed record RenderRequest(string Source, string Assets, string OutputDi
     ulong? ForceKeyFrameFrame = null, RenderEncodePadding? EncodePadding = null,
     ulong? EncodedFrames = null, ulong[]? RetainFrames = null, string? PlaybackEncoderKind = null,
     GpuEncodeRequest? GpuEncoding = null, bool CollectSamplingCoverage = false,
-    double EffectRenderScale = 1.0, bool MatchEffectResolution = false, double? HdrScale = null);
+    double EffectRenderScale = 1.0, bool MatchEffectResolution = false, double? HdrScale = null,
+    bool SampledCoverageOnly = false);
 // HdrScale：官方 HDR 管线下闭合不成立的组。渲染器按浮点中间目标合成，出帧为 rgb/k；成品图层着色器再乘回 k。
 public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
     uint CrossfadeFrames = 0, CacheRegion? Crop = null, bool RetainLoopWindow = false,
@@ -234,7 +235,9 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 uint sampleHeight = (uint)Math.Max(1, Math.Round((double)request.Height * sampleWidth / request.Width));
                 job = job with { OutputSampleWidth = sampleWidth, OutputSampleHeight = sampleHeight,
                     CollectSamplingCoverage = request.CollectSamplingCoverage &&
-                        capabilities.Has("gpu-sampling-coverage-v1") ? true : null };
+                        capabilities.Has("gpu-sampling-coverage-v1") ? true : null,
+                    SamplingCoverageSampledOnly = request.CollectSamplingCoverage && request.SampledCoverageOnly &&
+                        capabilities.Has("gpu-sampled-coverage-v1") ? true : null };
                 streamRequest = request with { Width = sampleWidth, Height = sampleHeight, FrameSampleWidth = sampleWidth };
             }
             manifest["native_frame_transport"] = nativeSamples ? "sampled_rgba" : sparseInput ? "sparse_rgba" : "full_rgba";

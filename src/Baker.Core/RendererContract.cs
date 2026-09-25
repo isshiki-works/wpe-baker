@@ -41,6 +41,7 @@ internal sealed record RenderJob
     public uint? OutputSampleWidth { get; init; }
     public uint? OutputSampleHeight { get; init; }
     public bool? CollectSamplingCoverage { get; init; }
+    public bool? SamplingCoverageSampledOnly { get; init; }
     public RenderGpuEncodeJob? GpuEncode { get; init; }
 
     /// <summary>整帧渲染与原始帧渲染共用的字段。JsonObject 类输入直接引用请求里的节点：记录只被序列化、不挂父节点，不必深拷贝。</summary>

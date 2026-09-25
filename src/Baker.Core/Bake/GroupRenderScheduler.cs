@@ -120,8 +120,9 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             FrameSamplesOnly: true,
             EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,
-            // 覆盖度只给透明组定 GPU 直编的裁剪（不透明组裁剪恒为整幅）；要它时渲染器每帧都得画，不要时只画取样帧。
-            CollectSamplingCoverage: playbackKind == PlaybackEncoderSelection.Vulkan && !capture.SceneClear,
+            // 覆盖度只给透明组定 GPU 直编的裁剪（不透明组裁剪恒为整幅），只量取样帧、外加取样边距；
+            // 取样帧之间漏掉的内容由主渲染的全片覆盖度兜底（StartAsync 核对，超出就按实测重渲）。
+            CollectSamplingCoverage: playbackKind == PlaybackEncoderSelection.Vulkan && !capture.SceneClear, SampledCoverageOnly: true,
             FrameSampleIncludeAlpha: !capture.SceneClear,
             OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet()));
 
@@ -212,9 +213,9 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         {
             (CacheRegion Crop, bool Packed)? known = capture.SceneClear
                 ? (new CacheRegion((int)render.Width, (int)render.Height, 0, 0, (int)render.Width, (int)render.Height), false)
-                : (StartSearches.TryGetValue(groupId, out JsonObject? groupSearch)
-                    ? NativeRenderRunner.SamplingCrop(groupSearch["sampling_coverage"] as JsonObject, render) : null)
-                    ?? NativeRenderRunner.SamplingCrop(coverage, render);
+                : NativeRenderRunner.SamplingCrop(coverage, render) ??
+                    (StartSearches.TryGetValue(groupId, out JsonObject? groupSearch)
+                        ? NativeRenderRunner.SamplingCrop(groupSearch["sampling_coverage"] as JsonObject, render) : null);
             // 渲染器内的 GPU 打包只有左右并排；越宽度上限要上下并排的透明组走 master 路线。
             if (known is { } layout && !HardwareDecodeDimensions.StackedVertically(layout.Packed, layout.Crop.Width))
             {
@@ -295,6 +296,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         }
         var failedCodecs = new HashSet<string>();
         var codecFallbacks = new JsonArray();
+        JsonObject? coverageRerender = null;
         for (; ; )
         {
             RenderRequest? lower = render.GpuEncoding is { } current &&
@@ -303,6 +305,23 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             try
             {
                 JsonObject rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
+                if (render.GpuEncoding is { Crop: { } crop } && !Capture(groups[index]).SceneClear &&
+                    rendered["alpha_bounds"] is JsonObject all && !CoverageFits(all, crop, render.PixelPacking == "rgba_side_by_side"))
+                {
+                    // 起点搜索的裁剪只量了取样帧：主渲染逐帧累计的全片覆盖度超出裁剪、或有半透明却没打包时，按实测覆盖度重渲这一组。
+                    // 实测覆盖度就是这次渲染的全部帧，重渲后必然落在裁剪内；再不符只能是渲染不确定，停下不交出漏内容的成品。
+                    if (coverage?["basis"]?.GetValue<string>() == MeasuredCoverageBasis)
+                        throw new InvalidDataException("GPU master coverage still exceeds the crop derived from its own measured coverage.");
+                    Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(Path.GetDirectoryName(render.OutputDirectory)!, "master.coverage-miss"));
+                    coverage = all.DeepClone().AsObject();
+                    coverage["status"] = "complete"; coverage["basis"] = MeasuredCoverageBasis;
+                    coverage["first_simulation_frame"] = render.WarmupFrames; coverage["frames"] = render.Frames;
+                    coverage["render_request"] = JsonSerializer.SerializeToNode(render, JsonOptions);
+                    coverageRerender = new JsonObject { ["crop"] = JsonSerializer.SerializeToNode(crop, JsonOptions),
+                        ["packed_alpha"] = render.PixelPacking == "rgba_side_by_side", ["measured"] = all.DeepClone() };
+                    render = MasterRequest(index, coverage: coverage, failedCodecs: failedCodecs);
+                    continue;
+                }
                 if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render))
                 {
                     Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
@@ -326,6 +345,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     rendered["hardware_decode"] = decode;
                 }
                 rendered["gpu_bounds_prepass"] = coveragePass;
+                if (coverageRerender is not null) rendered["coverage_rerender"] = coverageRerender;
                 if (codecFallbacks.Count > 0) rendered["gpu_codec_fallbacks"] = codecFallbacks;
                 return rendered;
             }
@@ -353,6 +373,16 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             }
         }
     }
+
+    private const string MeasuredCoverageBasis = "GPU master alpha bounds over every encoded frame.";
+
+    /// <summary>主渲染逐帧累计的覆盖度落在裁剪内，且有半透明像素时成品是打包的。</summary>
+    private static bool CoverageFits(JsonObject all, CacheRegion crop, bool packed) =>
+        all["has_content"]?.GetValue<bool>() != true ||
+        (all["x"]!.GetValue<int>() >= crop.X && all["y"]!.GetValue<int>() >= crop.Y &&
+         all["x"]!.GetValue<int>() + all["width"]!.GetValue<int>() <= crop.X + crop.Width &&
+         all["y"]!.GetValue<int>() + all["height"]!.GetValue<int>() <= crop.Y + crop.Height &&
+         (packed || all["minimum_alpha"]!.GetValue<int>() == 255));
 
     /// <summary>GPU 直编成品的画质门；结果挂在渲染结果上，GroupEncoder 接管成品时直接取用。</summary>
     private async Task<bool> GpuQualityPassesAsync(JsonObject rendered, RenderRequest render)
