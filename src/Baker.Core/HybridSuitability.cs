@@ -59,6 +59,16 @@ internal static class HybridSuitability
                 "Automatic reallocation was already tried; keep using the original wallpaper.",
                 "保留控制和实时交互后，当前设置下没有可独立烘焙的画面。已经尝试自动重新分配，建议继续使用原壁纸。", notes);
 
+        // 准入拒了分配，而未解析机制的所有者覆盖了全部被烘图层：留实时后什么都不剩，取舍方案只关实时层、也解不开它们。
+        // 不是"待你决定"，同一条不可烘规则（NEW10 3793750035：VHS/脉冲着色器周期证不出，原先报 requires_user_choice）。
+        if (!hdr && !perspective && blockers.Contains(BlockerCode.BakeAllocation) &&
+            plan["loop_allocation_fallback"] is JsonObject nothingLeft && Text(nothingLeft["status"]) == "not_applicable" &&
+            Text(nothingLeft["reason_localized"]?["key"]) == "reason.allocation_nothing_left")
+            return Build("not_suitable", NoIndependentContentRule,
+                "Every layer that could go into the video has motion whose period the analysis cannot establish; keeping those layers live leaves nothing to pre-render, " +
+                "so reallocation cannot help. Keep using the original wallpaper.",
+                "能进视频的图层上都有分析不出周期的动态效果；把它们留作实时后就没有可以预渲染的画面，重新分配也帮不上。建议继续使用原壁纸。", notes);
+
         // S1：依赖闭包之后连一个视频组都没有，没有任何东西可烘。
         if (noCandidateAtAll && groups == 0)
             return Build("not_suitable", "nothing_to_bake",
