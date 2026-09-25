@@ -47,9 +47,12 @@ internal static class PlainLanguage
     /// <summary>分析判定预计不省电（默认拒绝，用户可点"仍然生成"覆盖）。</summary>
     public static bool NoBenefitExpected(JsonObject? plan) => plan?[NoBenefit.Field]?["status"]?.GetValue<string>() == NoBenefit.ExpectedStatus;
 
-    /// <summary>结论第二行：命中的条件，后面接一句怎么继续。</summary>
-    public static string NoBenefitLine(JsonObject plan, bool english) =>
-        NoBenefit.Describe(plan, english) + L(english, "。仍要生成请点“仍然生成”。", ". To generate anyway, use Generate anyway.");
+    /// <summary>结论第二行：命中的条件。"仍然生成"按钮就在下面，不再写一句怎么继续。</summary>
+    public static string NoBenefitLine(JsonObject plan, bool english)
+    {
+        string text = NoBenefit.Describe(plan, english);
+        return english && text.Length > 0 ? char.ToUpperInvariant(text[0]) + text[1..] + "." : text + "。";
+    }
 
     /// <summary>取舍方案里排第一（分析已按"预计能整幅预渲染"排过序）那一套要禁用的项数。</summary>
     private static int TurnOffCount(JsonObject plan)
