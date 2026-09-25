@@ -22,7 +22,7 @@ public sealed partial class NativeRenderRunner
         int height = (int)(request.EncodeHeight ?? (uint)crop.Height);
         int width = colorWidth * (packed ? 2 : 1);
         bool resized = colorWidth != crop.Width || height != crop.Height;
-        uint fade = request.GpuEncoding?.CrossfadeFrames ?? 0;
+        uint fade = request.GpuEncoding?.CrossfadeFrames ?? request.DirectCrossfadeFrames ?? 0;
         async Task WriteReferenceAsync(Stream reference, CancellationToken cancel)
         {
             (ulong[] Indices, byte[] Rgba)? scaled = resized

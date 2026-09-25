@@ -15,6 +15,12 @@ public sealed partial class NativeRenderRunner
     /// <summary>渲染时留下的原始 RGBA 帧文件名（与 master 同目录，组结束时随中间文件一起删）。</summary>
     internal const string RetainedFramesFile = "retained-frames.rgba";
 
+    /// <summary>CPU 直编残差组的原帧窗口：f[0..C-1] 后接 f[P..P+C-1]，与渲染器 GPU 路线的 loop-window.rgba 同布局。</summary>
+    internal const string LoopWindowFile = "loop-window.rgba";
+
+    /// <summary>CPU 直编残差组混合好的头段 C 帧（渲完另编后即删）。</summary>
+    private const string LoopHeadFile = "loop-head.rgba";
+
     private sealed class OpaquePixelException(JsonObject evidence) : IOException(
         $"Renderer emitted a non-opaque pixel at frame {evidence["first_nonopaque_frame"]}, " +
         $"({evidence["x"]}, {evidence["y"]}), alpha={evidence["alpha"]}.")
@@ -94,6 +100,11 @@ public sealed partial class NativeRenderRunner
         // 渲染器不再被 baker 的逐帧 CPU 扫描堵在管道写上。每帧的处理本身仍按帧序严格串行，落盘字节顺序不变。
         int frameBytes = checked(width * height * 4);
         byte[][] buffers = [new byte[frameBytes], new byte[frameBytes]];
+        // CPU 直编的淡化：f[0..C-1] 不进编码器、先存进窗口文件；读到 f[P+i] 时混成头段第 i 帧另存，渲完另编。
+        uint fade = request.DirectCrossfadeFrames ?? 0;
+        await using var window = fade > 0 ? new FileStream(Path.Combine(output, LoopWindowFile), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, 1 << 20, true) : null;
+        await using var head = fade > 0 ? new FileStream(Path.Combine(output, LoopHeadFile), FileMode.CreateNew, FileAccess.Write, FileShare.Read, 1 << 20, true) : null;
+        byte[] mixed = fade > 0 ? new byte[frameBytes] : [];
         int thumbnailBytes = checked(storedSampleWidth * sampleHeight * 3);
         byte[][] thumbnails = [new byte[thumbnailBytes], new byte[thumbnailBytes]];
         Task pending = Task.CompletedTask;
@@ -141,7 +152,8 @@ public sealed partial class NativeRenderRunner
 
         async Task ProcessFrameAsync(ulong frame, byte[] rgba, byte[] thumbnail)
         {
-            bool sampleThis = samples is not null && IsSampleFrame(request, frame);
+            bool sampleThis = samples is not null && IsSampleFrame(request, frame) && frame < encoded;
+            bool tail = frame >= encoded;
             bool first = request.CollectAlphaBounds && firstFrame is null && frame < encoded;
             if (first) firstFrame = rgba.ToArray();
             byte[]? reference = firstFrame;
@@ -158,10 +170,11 @@ public sealed partial class NativeRenderRunner
                     }
                     finally { opaqueSeconds += Stopwatch.GetElapsedTime(opaqueStarted).TotalSeconds; }
                 }
-                if (frame >= encoded) return;
+                // 淡化窗口 f[P..P+C-1] 会混进成品头段，覆盖范围要算上它（裁剪区据此核对）。
+                if (tail && fade == 0) return;
                 if (request.CollectAlphaBounds)
                 {
-                    if (pixelIdentical && !first && reference is not null)
+                    if (pixelIdentical && !first && reference is not null && !tail)
                     {
                         long identicalStarted = Stopwatch.GetTimestamp();
                         if (!rgba.AsSpan().SequenceEqual(reference)) pixelIdentical = false;
@@ -184,9 +197,21 @@ public sealed partial class NativeRenderRunner
                 await retained.WriteAsync(rgba, token);
                 retainSeconds += Stopwatch.GetElapsedTime(retainStarted).TotalSeconds;
             }
-            if (frame >= encoded) return;
+            if (window is not null && tail)
+            {
+                // 头段第 i 帧 = (f[i]·(i+1) + f[P+i]·(C−i)) / (C+1)，与渲染器 GPU 淡化、画质门参照同一个整数公式。
+                ulong i = frame - encoded;
+                window.Position = checked((long)i * frameBytes);
+                await window.ReadExactlyAsync(mixed, token);
+                for (int b = 0; b < frameBytes; ++b) mixed[b] = (byte)((mixed[b] * (i + 1) + rgba[b] * (fade - i)) / (fade + 1));
+                await head!.WriteAsync(mixed, token);
+                window.Seek(0, SeekOrigin.End);
+            }
+            if (window is not null && (frame < fade || tail)) await window.WriteAsync(rgba, token);
+            if (tail) return;
             if (first) await File.WriteAllBytesAsync(firstFramePath!, reference!, token);
             if (sampleThis) { await samples!.WriteAsync(thumbnail, token); ++sampleCount; }
+            if (frame < fade) return;
             long writeStarted = Stopwatch.GetTimestamp();
             await destination.WriteAsync(rgba, token);
             writeSeconds += Stopwatch.GetElapsedTime(writeStarted).TotalSeconds;

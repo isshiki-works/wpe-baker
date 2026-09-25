@@ -24,8 +24,11 @@ internal sealed class WorkLayout(string outputDirectory)
     /// <summary>输出根下的工程副本（成品、参照、捕获副本）：都是原作解包，里面可能恰好有同名文件夹，不按组目录清理。</summary>
     private static readonly string[] ProjectCopies = ["project", ReferenceName, CaptureSourceName];
 
-    /// <summary>每个组 / 前缀目录下：无损 master、GPU 编码初始化失败后挪开的 master、覆盖度预通道、前缀的捕获副本。</summary>
-    private static readonly string[] ChildDirectories = ["master", "master.gpu-unavailable", "capture-bounds", CaptureSourceName];
+    /// <summary>
+    /// 每个组 / 前缀目录下：主渲染、覆盖度预通道、前缀的捕获副本；另有重渲前挪开的 master.*
+    /// （gpu-unavailable、hardware-failed、coverage-miss、{codec}-qp{qp}、{codec}-failed），按前缀一并删。
+    /// </summary>
+    private static readonly string[] ChildDirectories = ["master", "capture-bounds", CaptureSourceName];
 
     internal string Output { get; } = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputDirectory));
     internal string Report => Path.Combine(Output, "bake.json");
@@ -63,6 +66,8 @@ internal sealed class WorkLayout(string outputDirectory)
             if (ProjectCopies.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
             if (name.EndsWith(StartSearchSuffix, StringComparison.OrdinalIgnoreCase)) { Remove(child); continue; }
             foreach (string intermediate in ChildDirectories) Remove(Path.Combine(child, intermediate));
+            try { foreach (string moved in Directory.GetDirectories(child, "master.*")) Remove(moved); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         }
         return errors;
     }

@@ -578,7 +578,9 @@ public sealed class HybridBakeService(NativeTools tools)
                         masterPath = master["request"]!["output_directory"]!.GetValue<string>();
                         timing.AddMasterBreakdown(master);
                         bool gpuDirect = master["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
-                        directPlayback |= gpuDirect;
+                        // CPU 直编的透明组、残差组（gpu_crop）与 GPU 直编一样：渲染时已裁剪、淡化并编好成品。
+                        bool loopEncoded = gpuDirect || master["gpu_crop"] is not null;
+                        directPlayback |= loopEncoded;
                         JsonObject? lateDependencyValidation = null;
                         if (!probe)
                         {
@@ -639,7 +641,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                     residualPreview = await SeamPreview.ExportOrWarnAsync(report, id, SeamPreview.RejectedOutcome,
                                         token => runner.ExportSeamPreviewAsync(Path.Combine(masterPath, "preview.mp4"),
                                             Path.Combine(work, SeamPreview.FileName), groupFrames, settings.FpsNumerator, settings.FpsDenominator,
-                                            gpuDirect ? "gpu_candidate_after_crossfade" : "lossless_master_hard_cut", token), cancellationToken);
+                                            loopEncoded ? "gpu_candidate_after_crossfade" : "lossless_master_hard_cut", token), cancellationToken);
                                 // 选定起点被拒即停止；记录本次各组的残差，不启动整案重渲。
                                 GroupVerdicts.RejectResidual(report, id, layers, lateDependencyValidation, wrap, residualPreview, startAttempts,
                                     startSearch?["candidate_count"]?.GetValue<int>() ?? startOrder.Length, crossfadeFrames);
@@ -649,14 +651,14 @@ public sealed class HybridBakeService(NativeTools tools)
                             }
                             progress?.Report(new("applying_crossfade", (double)i / groups.Length, new Message("progress.applying_crossfade")));
                             using (timing.Measure(StageTiming.Crossfade))
-                                groupCrossfade = gpuDirect ? master["loop_crossfade"]!.DeepClone().AsObject()
+                                groupCrossfade = loopEncoded ? master["loop_crossfade"]!.DeepClone().AsObject()
                                     : await new MasterRewrite(new FfmpegTool(tools)).CrossfadeAsync(masterPath, groupFrames, crossfadeFrames, cancellationToken);
                             groupCrossfade["group_id"] = id;
                             // 顶层 loop_crossfade 记第一个残差组；每组自己的淡化记录（含自检）在组记录里。
                             if (report["loop_crossfade"] is null) report["loop_crossfade"] = groupCrossfade.DeepClone();
                             await Save();
                         }
-                        bool packedAlpha = gpuDirect ? master["pixel_packing"]?.GetValue<string>() == "rgba_side_by_side"
+                        bool packedAlpha = loopEncoded ? master["pixel_packing"]?.GetValue<string>() == "rgba_side_by_side"
                             : !capture.SceneClear && master["alpha_bounds"]?["minimum_alpha"]?.ToJsonString() != "255";
                         bool isStatic = master["alpha_bounds"]?["pixel_identical_in_generated_interval"]?.GetValue<bool>() == true;
                         if (!probe && GroupVerdicts.RejectStaticProof(report, group, id, layers, lateDependencyValidation, isStatic))
@@ -752,7 +754,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     {
                         TemporaryCaptureFiles.Delete(report, masterPath,
                             "preview.mp4", "video.partial.mp4", "first-frame.rgba", "frame-samples.rgb",
-                            NativeRenderRunner.RetainedFramesFile, "native/audio.f32le", "native/audio.f32le.partial");
+                            NativeRenderRunner.RetainedFramesFile, NativeRenderRunner.LoopWindowFile, "native/audio.f32le", "native/audio.f32le.partial");
                         try { await Save(); }
                         catch when (groupFailed) { }
                     }
