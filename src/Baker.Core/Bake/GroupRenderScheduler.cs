@@ -346,7 +346,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 // CPU 硬件档（mf/nvenc/amf）直编没有母版可升档重编：画质门不过也只让这一组改软件重渲，不整张拒。
                 if (cpuHardware && !await GpuQualityPassesAsync(rendered, render))
                     throw new GpuEncodeUnavailableException($"{render.PlaybackEncoderKind} 直编成品画质门未过（SSIM " +
-                        $"{rendered["playback_quality_gate"]?["ssim"]?.ToJsonString()}），这一组改用软件编码。");
+                        $"{rendered["playback_quality_gate"]?["measured_ssim"]?.ToJsonString()}），这一组改用软件编码。");
                 if (lower is not null)
                 {
                     // 播放机就是本机：成品要在本机播放用的显卡上能硬解（WPE 经 MF 放视频，扩展装了但显卡解不了一样放不动）。
