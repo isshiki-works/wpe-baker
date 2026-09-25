@@ -33,6 +33,20 @@ public static partial class PlaybackEncoderSelection
         catch (Exception error) when (error is not OperationCanceledException) { return []; }
     }
 
+    /// <summary>
+    /// 这块显卡的 Vulkan 驱动能不能视频编码（渲染器直编的前提）。渲染器给了 UUID 就用那块，没给就挑第一块满足直编扩展的，
+    /// 所以没给 UUID 时任一块能编即可。读不到设备表时按能编处理，由渲染器实际报错再按组回退。
+    /// </summary>
+    public static bool VulkanVideoEncode(string? deviceUuid)
+    {
+        try
+        {
+            return VulkanDevices.Enumerate().Any(d => d.VideoEncode &&
+                (deviceUuid is null || string.Equals(d.DeviceUuid, deviceUuid, StringComparison.OrdinalIgnoreCase)));
+        }
+        catch (Exception error) when (error is not OperationCanceledException) { return true; }
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct MftTypeInfo { public Guid Major, Sub; }
     [DllImport("mfplat.dll")] private static extern int MFStartup(uint version, uint flags);

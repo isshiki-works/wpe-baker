@@ -97,7 +97,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         {
             var runner = new NativeRenderRunner(tools);
             (string playbackKind, string? playbackFallback) =
-                await runner.ResolvePlaybackEncoderAsync(request.PlaybackEncoder, output, cancellationToken);
+                await runner.ResolvePlaybackEncoderAsync(request.PlaybackEncoder, request.DeviceUuid ?? settings.DeviceUuid, output, cancellationToken);
             foreach (JsonObject cache in caches.OfType<JsonObject>())
             {
                 cancellationToken.ThrowIfCancellationRequested();

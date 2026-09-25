@@ -760,7 +760,8 @@ public partial class MainWindow : Window
             if (status is not ("candidate_generated" or StaticOnlyBake.Status or "probe_generated" or "candidate_rejected_no_loop" or
                 "candidate_rejected_composition" or "candidate_rejected_late_dependency" or "candidate_rejected_seam" or
                 "candidate_rejected_hardware_decode" or "candidate_rejected_opaque_capture" or ResidualMasking.LayoutRejectedStatus or
-                "candidate_rejected_capture_target" or CandidateScriptErrorGate.RejectedBakeStatus or EmbeddedVideoBudget.RejectedBakeStatus or NoBenefit.RejectedBakeStatus))
+                "candidate_rejected_capture_target" or CandidateScriptErrorGate.RejectedBakeStatus or EmbeddedVideoBudget.RejectedBakeStatus or NoBenefit.RejectedBakeStatus or
+                BakeDiskBudget.RejectedBakeStatus))
                 throw new InvalidDataException(L("此生成报告里没有已完成的输出。", "This report has no finished output."));
             JsonObject savedPlan = report["plan"]?.DeepClone().AsObject()
                 ?? throw new InvalidDataException(invalid);
@@ -879,7 +880,7 @@ public partial class MainWindow : Window
                         : resultStatus == ResidualMasking.LayoutRejectedStatus
                         ? L("循环首尾不衔接，已停止生成（详见报告）。",
                             "The loop doesn't join seamlessly; generation stopped (see report).")
-                        : resultStatus is "candidate_rejected_capture_target" or EmbeddedVideoBudget.RejectedBakeStatus
+                        : resultStatus is "candidate_rejected_capture_target" or EmbeddedVideoBudget.RejectedBakeStatus or BakeDiskBudget.RejectedBakeStatus
                         ? L("已停止生成：", "Generation stopped: ") +
                             (result["reason_localized"]?[english ? "en" : "zh"]?.GetValue<string>() ?? result["reason"]?.GetValue<string>() ?? "")
                         : resultStatus == "candidate_rejected_opaque_capture"

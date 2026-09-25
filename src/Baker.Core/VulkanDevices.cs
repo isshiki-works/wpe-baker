@@ -14,9 +14,10 @@ public enum VulkanDeviceType : uint
 
 /// <summary>UUID and optional LUID contain the Vulkan-reported bytes in memory order.</summary>
 /// <param name="DriverVersion">The implementation-defined raw driver version; its encoding is vendor-specific.</param>
+/// <param name="VideoEncode">驱动是否提供 VK_KHR_video_encode_queue（渲染器 GPU 直编的前提；Intel Windows 驱动目前没有）。</param>
 public sealed record VulkanDeviceInfo(string Name, string DeviceUuid, uint VendorId, uint DeviceId,
     VulkanDeviceType DeviceType, uint ApiVersion, uint DriverVersion, string? WindowsLuid,
-    uint? WindowsNodeMask)
+    uint? WindowsNodeMask, bool VideoEncode)
 {
     public string ApiVersionText
     {
@@ -76,6 +77,8 @@ public static class VulkanDevices
                 "vkEnumeratePhysicalDevices");
             var getProperties = InstanceFunction<GetPhysicalDeviceProperties2Delegate>(getProc, instance,
                 "vkGetPhysicalDeviceProperties2");
+            var getExtensions = InstanceFunction<EnumerateDeviceExtensionPropertiesDelegate>(getProc, instance,
+                "vkEnumerateDeviceExtensionProperties");
 
             // Enumeration may change between its count and fill calls (for example, hot-plug).
             for (int attempt = 0; attempt < 4; attempt++)
@@ -98,7 +101,7 @@ public static class VulkanDevices
                     nint device = Marshal.ReadIntPtr(handles.Pointer, checked(i * nint.Size));
                     if (device == 0)
                         throw new InvalidOperationException("Vulkan enumerated a null physical-device handle.");
-                    devices.Add(ReadDevice(device, getProperties));
+                    devices.Add(ReadDevice(device, getProperties, getExtensions));
                 }
                 return devices.AsReadOnly();
             }
@@ -114,7 +117,8 @@ public static class VulkanDevices
         }
     }
 
-    private static VulkanDeviceInfo ReadDevice(nint device, GetPhysicalDeviceProperties2Delegate getProperties)
+    private static VulkanDeviceInfo ReadDevice(nint device, GetPhysicalDeviceProperties2Delegate getProperties,
+        EnumerateDeviceExtensionPropertiesDelegate getExtensions)
     {
         using var identity = new NativeBuffer(Marshal.SizeOf<VkPhysicalDeviceIdProperties>());
         using var properties = new NativeBuffer(Marshal.SizeOf<VkPhysicalDeviceProperties2>());
@@ -129,7 +133,19 @@ public static class VulkanDevices
         return new VulkanDeviceInfo(name, Hex(id.deviceUUID), info.vendorID, info.deviceID,
             (VulkanDeviceType)info.deviceType, info.apiVersion, info.driverVersion,
             id.deviceLUIDValid != 0 ? Hex(id.deviceLUID) : null,
-            id.deviceLUIDValid != 0 ? id.deviceNodeMask : null);
+            id.deviceLUIDValid != 0 ? id.deviceNodeMask : null, HasExtension(device, getExtensions, "VK_KHR_video_encode_queue"));
+    }
+
+    private static bool HasExtension(nint device, EnumerateDeviceExtensionPropertiesDelegate getExtensions, string name)
+    {
+        const int PropertiesSize = 260; // VkExtensionProperties: char extensionName[256] + uint32_t specVersion
+        uint count = 0;
+        if (getExtensions(device, 0, ref count, 0) != Success || count == 0) return false;
+        using var properties = new NativeBuffer(checked((int)count * PropertiesSize));
+        if (getExtensions(device, 0, ref count, properties.Pointer) is not (Success or Incomplete)) return false;
+        for (int i = 0; i < count; i++)
+            if (Marshal.PtrToStringUTF8(properties.Pointer + i * PropertiesSize) == name) return true;
+        return false;
     }
 
     private static string Hex(byte[] bytes) => Convert.ToHexString(bytes).ToLowerInvariant();
@@ -194,6 +210,8 @@ public static class VulkanDevices
     private delegate int EnumeratePhysicalDevicesDelegate(nint instance, ref uint count, nint devices);
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate void GetPhysicalDeviceProperties2Delegate(nint device, nint properties);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate int EnumerateDeviceExtensionPropertiesDelegate(nint device, nint layerName, ref uint count, nint properties);
 
     // Field order/types are from Khronos Vulkan-Headers, vulkan_core.h:
     // VkApplicationInfo / VkInstanceCreateInfo / VkPhysicalDeviceProperties2 /

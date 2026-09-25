@@ -48,22 +48,24 @@ public sealed partial class NativeRenderRunner
     /// 解析一次播放版编码档位。软件档位不起任何进程；硬件档位问一次 <c>ffmpeg -encoders</c>。
     /// 直编路线要在渲染开始前就知道档位，所以把这一步单独拿出来，与 <see cref="EncodeCroppedRgbaAsync"/> 内部那次同一套判据。
     /// </summary>
-    public async Task<(string Used, string? FallbackReason)> ResolvePlaybackEncoderAsync(string? requested, string logDirectory,
-        CancellationToken cancellationToken = default)
+    public async Task<(string Used, string? FallbackReason)> ResolvePlaybackEncoderAsync(string? requested, string? deviceUuid,
+        string logDirectory, CancellationToken cancellationToken = default)
     {
         string kind = PlaybackEncoderSelection.Normalize(requested);
         if (kind == PlaybackEncoderSelection.Software) return (PlaybackEncoderSelection.Software, null);
         Directory.CreateDirectory(logDirectory);
         if (kind is PlaybackEncoderSelection.Vulkan or PlaybackEncoderSelection.Auto)
         {
-            // auto 先取 GPU 路线：渲染器内裁切、打包、淡化、编码，C# 不碰逐帧数据；设备没有视频编码队列时由渲染器报
-            // GpuEncodeUnavailableException，按组回退 CPU 路线。
+            // auto 先取 GPU 路线：渲染器内裁切、打包、淡化、编码，C# 不碰逐帧数据。显卡驱动没有 Vulkan 视频编码（Intel 核显）
+            // 时 auto 改挑 ffmpeg 硬件档；渲染器仍报 GpuEncodeUnavailableException 时按组回退 CPU 路线。
             RendererCapabilities capabilities = await client.CapabilitiesAsync(
                 Path.Combine(logDirectory, "gpu-renderer-capabilities.stderr.log"), cancellationToken);
-            if (capabilities.Has("gpu-loop-encode-v1") && capabilities.Has("gpu-sampling-coverage-v1"))
+            bool renderer = capabilities.Has("gpu-loop-encode-v1") && capabilities.Has("gpu-sampling-coverage-v1");
+            if (renderer && PlaybackEncoderSelection.VulkanVideoEncode(deviceUuid))
                 return (PlaybackEncoderSelection.Vulkan, null);
             if (kind == PlaybackEncoderSelection.Vulkan)
-                return (PlaybackEncoderSelection.Software, "Renderer does not support the complete GPU pipeline.");
+                return (PlaybackEncoderSelection.Software, renderer ? "The GPU driver does not support Vulkan video encoding."
+                    : "Renderer does not support the complete GPU pipeline.");
         }
         return PlaybackEncoderSelection.Resolve(kind, await UsableEncodersAsync(kind, logDirectory, cancellationToken));
     }

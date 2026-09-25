@@ -10,8 +10,9 @@ internal sealed class DiskBudgetGate : IBakeGate
 {
     public Task<BakeRejection?> CheckAsync(BakeGateContext context, CancellationToken cancellationToken)
     {
-        // auto/vulkan 走 GPU 直编（不落 master）；GPU 组回退或 auto 落到软件档时，每份 master 开写前另有同口径检查（NativeRenderRunner）。
-        bool gpu = PlaybackEncoderSelection.Normalize(context.Request.PlaybackEncoder) is PlaybackEncoderSelection.Auto or PlaybackEncoderSelection.Vulkan;
+        // auto/vulkan 在显卡能 Vulkan 视频编码时走 GPU 直编（不落 master）；GPU 组回退或 auto 落到软件档时，每份 master 开写前另有同口径检查（NativeRenderRunner）。
+        bool gpu = PlaybackEncoderSelection.Normalize(context.Request.PlaybackEncoder) is PlaybackEncoderSelection.Auto or PlaybackEncoderSelection.Vulkan &&
+            PlaybackEncoderSelection.VulkanVideoEncode(context.Request.DeviceUuid ?? PlanSettings.Of(context.Plan).DeviceUuid);
         int[] residualGroups = context.ResidualMasking is JsonObject masking ? ResidualMasking.ResidualGroupIndexes(context.Plan, masking) : [];
         if (BakeDiskBudget.Reject(context.Plan, context.Frames, Math.Max(1, context.Request.GroupParallel), gpu, residualGroups,
                 context.Layout.Output) is not JsonObject diskRejection)
