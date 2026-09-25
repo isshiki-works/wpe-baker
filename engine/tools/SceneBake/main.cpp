@@ -159,7 +159,7 @@ struct Job {
     fs::path source, assets, cache, output;
     uint32_t width{}, height{}, fps_num{}, fps_den{};
     uint32_t sample_width{}, sample_height{};
-    bool collect_sampling_coverage { false };
+    bool collect_sampling_coverage { false }, sampling_coverage_sampled_only { false };
     uint64_t frames{}, warmup{}, seed{}, readback_budget{};
     uint64_t output_stride { 1 };
     std::optional<uint64_t> output_phase;
@@ -256,6 +256,9 @@ Job ReadJob(const owe::NJson& json, const fs::path& base) {
     job.collect_sampling_coverage=Bool(json,"collect_sampling_coverage",false);
     if (job.collect_sampling_coverage && !job.sample_width)
         throw std::runtime_error("sampling coverage requires sampled output dimensions");
+    job.sampling_coverage_sampled_only=Bool(json,"sampling_coverage_sampled_only",false);
+    if (job.sampling_coverage_sampled_only && !job.collect_sampling_coverage)
+        throw std::runtime_error("sampled-only coverage requires sampling coverage");
     job.fps_num = narrow("fps_num", 60, std::numeric_limits<uint32_t>::max());
     job.fps_den = narrow("fps_den", 1, std::numeric_limits<uint32_t>::max());
     job.frames = Uint(json, "frames", 120);
@@ -463,6 +466,7 @@ int Render(const fs::path& job_path) {
     bool gpu_sampled = false;
     const auto start = std::chrono::steady_clock::now();
     owe::OfflineSession wallpaper;
+    std::string sampling_coverage; // 取样帧模式下每个取样帧都更新一次，最后一帧未必光栅，所以留最后一份非空的
     auto result = [&](std::string_view status, std::string_view error = {}) {
         std::array<uint8_t, 16> gpu_uuid {};
         wallpaper.deviceUuid(gpu_uuid.data());
@@ -492,7 +496,7 @@ int Render(const fs::path& job_path) {
             << ",\"readback_width\":" << (job.sample_width ? job.sample_width : job.width)
             << ",\"readback_height\":" << (job.sample_height ? job.sample_height : job.height)
             << ",\"gpu_sampled\":" << (gpu_sampled ? "true" : "false")
-            << ",\"sampling_coverage\":" << (wallpaper.readback().sampling_coverage.empty() ? "null" : wallpaper.readback().sampling_coverage)
+            << ",\"sampling_coverage\":" << (sampling_coverage.empty() ? "null" : sampling_coverage)
             << ",\"gpu_encoded\":" << (job.gpu_encode ? "true" : "false")
             << ",\"gpu_scene_overlap\":" << (wallpaper.readback().gpu_scene_overlap ? "true" : "false")
             << ",\"readback_frames\":" << (job.gpu_encode ? wallpaper.readback().gpu_readback_frames : written)
@@ -637,6 +641,7 @@ int Render(const fs::path& job_path) {
         info.collect_sampling_coverage=job.collect_sampling_coverage;
         info.sampling_coverage_start=job.warmup;
         info.sampling_coverage_frames=job.frames;
+        info.sampling_coverage_sampled_only=job.sampling_coverage_sampled_only;
         info.gpu_encode = job.gpu_encode;
         owe::OfflineOptions offline;
         offline.seed = job.seed;
@@ -694,6 +699,7 @@ int Render(const fs::path& job_path) {
                 !std::all_of(pcm.samples.begin(), pcm.samples.end(), [](float value) { return std::isfinite(value); }))
                 throw std::runtime_error("authored audio violates PCM contract");
             next_audio_sample = pcm.sample_start + pcm.frame_count;
+            if (!pixels.sampling_coverage.empty()) sampling_coverage = pixels.sampling_coverage;
             ++simulated_frames;
             gpu_sampled = gpu_sampled || pixels.gpu_sampled;
             ++drawn_frames;
@@ -787,7 +793,7 @@ int main(int argc, char** argv) {
         }
         if (parsed && version && !render->parsed()) {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1\n";
             return 0;
         }
         if (parsed && !version && render->parsed()) return Render(Path(job));

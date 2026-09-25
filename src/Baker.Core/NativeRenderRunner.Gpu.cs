@@ -84,7 +84,16 @@ public sealed partial class NativeRenderRunner
             "layer_selection","offline_video_rate_overrides","effect_render_scale","match_effect_resolution","hdr_scale"})
             if (!JsonNode.DeepEquals(observed[key],target[key])) return null;
         bool packed=coverage["minimum_alpha"]!.GetValue<int>()!=255;
-        var basis=new JsonObject { ["request"]=target, ["alpha_bounds"]=coverage.DeepClone() };
+        var bounds=coverage.DeepClone().AsObject();
+        if (coverage["sample_margin"] is JsonArray margin)
+        {
+            // 只量了取样帧：各边按取样边距（左、上、右、下）外扩，取样帧之间多出的内容正常情况下落在这圈里。
+            int left=margin[0]!.GetValue<int>(), top=margin[1]!.GetValue<int>();
+            bounds["x"]=bounds["x"]!.GetValue<int>()-left; bounds["y"]=bounds["y"]!.GetValue<int>()-top;
+            bounds["width"]=bounds["width"]!.GetValue<int>()+left+margin[2]!.GetValue<int>();
+            bounds["height"]=bounds["height"]!.GetValue<int>()+top+margin[3]!.GetValue<int>();
+        }
+        var basis=new JsonObject { ["request"]=target, ["alpha_bounds"]=bounds };
         CacheRegion region=CacheRegion.FromAlphaBounds(basis);
         return (HardwareDecodeDimensions.GrowRegion(region,packed,request.FpsNumerator,request.FpsDenominator),packed);
     }
