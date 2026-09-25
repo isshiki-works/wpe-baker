@@ -45,30 +45,30 @@ public static class MessageCatalog
     // ---------------------------------------------------------------------------------------
     private static readonly Dictionary<string, Entry> Table = new(StringComparer.Ordinal)
     {
-        ["blocker.bake_allocation"] = new(Zh: "当前分配包含必须保持实时的内容，需重新分配。", En: "The current allocation contains content that must remain live; reallocation is required.", Legacy: "Bake allocation rejected: {0}"),
+        ["blocker.bake_allocation"] = new(Zh: "部分内容必须实时渲染，无法转为视频。", En: "Some content must render live and can't be turned into video.", Legacy: "Bake allocation rejected: {0}"),
         ["preset.generated"] = new(Zh: "可以生成", En: "Ready to generate"),
         ["preset.omitted"] = new(Zh: "本次未包含：{0}", En: "Not included: {0}"),
         ["preset.experimental"] = new(Zh: "已启用保留实时元素（实验性：可能增加 GPU 占用）", En: "Live elements retained (experimental: may increase GPU usage)"),
         ["preset.daytime"] = new(Zh: "按 {0} 时段生成", En: "Generated for the {0} time of day"),
         ["preset.too_many_video_groups"] = new(Zh: "当前设置需要的视频数量超过 {0}，无法生成。", En: "The current settings require more than {0} videos and cannot be generated."),
         ["interaction.suggest_fixed"] = new(Zh: "固定视角后可以生成。", En: "A fixed view allows generation."),
-        ["interaction.suggest_off"] = new(Zh: "关闭输入驱动效果后可以生成。", En: "Disabling input-driven effects allows generation."),
+        ["interaction.suggest_off"] = new(Zh: "关闭鼠标效果后可以生成。", En: "Turning off mouse effects allows generation."),
         // ---- blockers ----
         ["blocker.missing_script_fault_evidence"] = new(
-            Zh: "未评估：运行时观测早于源脚本错误元数据，脚本报错判据不可用。请用当前版本的渲染器重新分析。",
-            En: "Not evaluated: runtime observation predates source script fault metadata; the script fault criterion is unavailable. Analyze again with the current renderer.",
+            Zh: "分析结果来自旧版本，需重新分析。运行时观测早于源脚本错误元数据，脚本报错判据不可用。",
+            En: "This analysis is from an older version; analyze again. Runtime observation predates source script fault metadata, so the script fault criterion is unavailable.",
             Legacy: "Runtime observation predates source script fault metadata; analyze again with the current renderer."),
 
         // 无独立组只说明当前依赖分析没有可烘焙分组，不能据一项输入推断整幅画面主体或禁用结果。
         // legacy 英文保持不变。
         ["blocker.no_input_independent_group"] = new(
-            Zh: "当前无法生成：依赖分析后未找到不依赖实时输入、可生成的视频组。相关依赖包括：{0}。",
-            En: "Cannot generate with the current plan: dependency analysis found no video group independent of live input. Related dependencies include: {0}.",
+            Zh: "画面全部依赖实时输入（如鼠标、音频），无法转为视频。相关依赖包括：{0}。",
+            En: "All visible content depends on live input such as the mouse or audio, so it can't be turned into video. Related dependencies include: {0}.",
             Legacy: "No input-independent visual group remains after dependency closure."),
 
         ["blocker.no_input_independent_group_generic"] = new(
-            Zh: "当前无法生成：依赖分析后未找到不依赖实时输入、可生成的视频组。",
-            En: "Cannot generate with the current plan: dependency analysis found no video group independent of live input.",
+            Zh: "画面全部依赖实时输入（如鼠标、音频），无法转为视频。",
+            En: "All visible content depends on live input such as the mouse or audio, so it can't be turned into video.",
             Legacy: "No input-independent visual group remains after dependency closure."),
 
         // 第 2 批合并新增（feat/sdr-closure）：拒绝理由不再是"场景开了 hdr"，而是"这一组的输出证明不了落在 [0,1] 内"。
@@ -77,58 +77,59 @@ public static class MessageCatalog
         // 名字里带 hdr 但绑在 bloom 等别处的属性关掉后 hdr 仍是 true，不算开关。
         // legacy 逐字沿用 SdrRadianceClosure.HdrBlocker + " Unproven: {0}"，写进 plan 的 blockers 一个字没变。
         ["blocker.hdr_radiance_open"] = new(
-            Zh: "不可生成：场景为 HDR 合成，当前仅支持 8 位 SDR 捕获；待录分组内有图层未能证明输出落在 [0,1] 内，亮部可能被压缩。壁纸未提供可禁用 HDR 的属性。未通过项：{0}",
-            En: SdrRadianceClosure.HdrBlocker + " Unproven: {0}"),
+            Zh: "场景使用 HDR，暂不支持。待录分组内有图层未能证明输出落在 [0,1] 内，亮部可能被压缩。壁纸未提供可禁用 HDR 的属性。未通过项：{0}",
+            En: "The scene uses HDR, which isn't supported yet. " + SdrRadianceClosure.HdrBlocker + " Unproven: {0}",
+            Legacy: SdrRadianceClosure.HdrBlocker + " Unproven: {0}"),
 
         ["blocker.hdr_radiance_open_property"] = new(
-            Zh: "不可生成：场景为 HDR 合成，当前仅支持 8 位 SDR 捕获；待录分组内有图层未能证明输出落在 [0,1] 内，亮部可能被压缩。壁纸提供 HDR 属性开关（{1}；{2}），在 Wallpaper Engine 中禁用后重新分析，或用 --properties 传入禁用后的属性。未通过项：{0}",
-            En: SdrRadianceClosure.HdrBlocker + " The wallpaper exposes an HDR property ({1}; {2}): disable it in Wallpaper Engine and analyze again, or pass the adjusted properties with --properties. Unproven: {0}",
+            Zh: "场景使用 HDR，暂不支持。待录分组内有图层未能证明输出落在 [0,1] 内，亮部可能被压缩。壁纸提供 HDR 属性开关（{1}；{2}），在 Wallpaper Engine 中禁用后重新分析，或用 --properties 传入禁用后的属性。未通过项：{0}",
+            En: "The scene uses HDR, which isn't supported yet. " + SdrRadianceClosure.HdrBlocker + " The wallpaper exposes an HDR property ({1}; {2}): disable it in Wallpaper Engine and analyze again, or pass the adjusted properties with --properties. Unproven: {0}",
             Legacy: SdrRadianceClosure.HdrBlocker + " Unproven: {0}"),
 
         ["blocker.perspective_needs_screenspace"] = new(
-            Zh: "不可生成：场景使用 3D 透视镜头，当前版本无法自动导出屏幕空间合成方案，全屏预渲染不可用。",
-            En: "Cannot generate: the scene uses a 3D perspective camera and the current version cannot derive a screen-space composition automatically, so full-frame pre-rendering is unavailable.",
+            Zh: "场景使用 3D 透视镜头，暂不支持。当前版本无法自动导出屏幕空间合成方案。",
+            En: "The scene uses a 3D perspective camera, which isn't supported yet. The current version cannot derive a screen-space composition automatically.",
             Legacy: "Perspective capture needs an explicit screen-space composition before production."),
 
         ["blocker.camera_path_needs_envelope"] = new(
-            Zh: "不可生成：场景存在启用的作者摄像机路径，需先捕获镜头运动包络，当前分析缺少该数据。",
-            En: "Cannot generate: an active authored camera path requires a captured motion envelope, which this analysis does not have.",
+            Zh: "场景有镜头运动，暂不支持。需先捕获镜头运动包络，当前分析缺少该数据。",
+            En: "The scene has camera movement, which isn't supported yet. An active authored camera path requires a captured motion envelope, which this analysis does not have.",
             Legacy: "An active authored camera path needs a captured motion envelope before production."),
 
         ["blocker.runtime_projection_required"] = new(
-            Zh: "未评估：场景包含摄像机对象，需要运行时摄像机投影数据，本次观测未采集。请重新分析。",
-            En: "Not evaluated: a scene with a camera object requires the runtime camera projection, which this observation did not capture. Analyze again.",
+            Zh: "场景含摄像机，本次分析缺少所需数据，需重新分析。需要运行时摄像机投影数据，本次观测未采集。",
+            En: "The scene has a camera and this analysis lacks the data it needs; analyze again. The runtime camera projection was not captured.",
             Legacy: "The runtime camera projection is required for a scene with a camera object."),
 
         // 文案① 的三种形态共用一份 legacy 模板：{0}=组数 {1}=交织实时层数 {2}=层名列表 {3}=legacy 专用中段
         ["blocker.fullframe_needs_opaque_group"] = new(
-            Zh: "不可生成：全屏视频布局需要单一不透明底层，当前可录内容分为 {0} 组，其间夹有必须保持实时的图层 {2}（共 {1} 个实时图层）。可选方案：--live-overlays foreground 将实时图层前置后重新分析（遮挡关系改变），或 --video-layout layered 分层视频（播放开销需另行验证）。",
-            En: "Cannot generate: full-frame video requires a single opaque base; the recordable content is split into {0} groups with {2} ({1} live layers) drawn in between. Options: --live-overlays foreground moves the live layers to the front and requires re-analysis (occlusion changes); --video-layout layered uses layered video (playback cost requires separate validation).",
+            Zh: "画面中间夹着必须实时渲染的图层（{2}），无法合成一整段视频。可录内容分为 {0} 组，共 {1} 个实时图层。可选方案：--live-overlays foreground 将实时图层前置后重新分析（遮挡关系改变），或 --video-layout layered 分层视频（播放开销需另行验证）。",
+            En: "Layers that must render live ({2}) sit between the video parts, so one full-frame video isn't possible. The recordable content is split into {0} groups with {1} live layers in between. Options: --live-overlays foreground moves the live layers to the front and requires re-analysis (occlusion changes); --video-layout layered uses layered video (playback cost requires separate validation).",
             Legacy: "Full-frame mode requires one opaque video group; the selected scene settings currently need {0} group(s) or a transparent background.{3} Choose independent live overlays in the foreground and analyze again, change the scene settings, or explicitly choose layered video. Foreground placement changes occlusion; layered video requires separate playback-cost validation."),
 
         ["blocker.fullframe_needs_opaque_group_no_live"] = new(
-            Zh: "不可生成：全屏视频布局需要单一不透明底层，当前可录内容分为 {0} 组，无一组可单独充当不透明底层。可选方案：--live-overlays foreground 将实时图层前置后重新分析（遮挡关系改变），或 --video-layout layered 分层视频（播放开销需另行验证）。",
-            En: "Cannot generate: full-frame video requires a single opaque base; the recordable content is split into {0} groups and none can serve as that base alone. Options: --live-overlays foreground moves the live layers to the front and requires re-analysis (occlusion changes); --video-layout layered uses layered video (playback cost requires separate validation).",
+            Zh: "画面分成 {0} 段，没有一段能单独作为底层，无法合成一整段视频。可选方案：--live-overlays foreground 将实时图层前置后重新分析（遮挡关系改变），或 --video-layout layered 分层视频（播放开销需另行验证）。",
+            En: "The image splits into {0} parts and none can serve as the base alone, so one full-frame video isn't possible. Options: --live-overlays foreground moves the live layers to the front and requires re-analysis (occlusion changes); --video-layout layered uses layered video (playback cost requires separate validation).",
             Legacy: "Full-frame mode requires one opaque video group; the selected scene settings currently need {0} group(s) or a transparent background.{3} Choose independent live overlays in the foreground and analyze again, change the scene settings, or explicitly choose layered video. Foreground placement changes occlusion; layered video requires separate playback-cost validation."),
 
         ["blocker.fullframe_single_transparent_group"] = new(
-            Zh: "不可生成：全屏视频布局需要单一不透明底层，而唯一的可录分组为透明（transparent=true），无不透明底层可录。可选方案：--live-overlays foreground 将实时图层前置后重新分析（遮挡关系改变），或 --video-layout layered 分层视频（播放开销需另行验证）。",
-            En: "Cannot generate: full-frame video requires a single opaque base, but the only recordable group is transparent (transparent=true), so no opaque base exists. Options: --live-overlays foreground moves the live layers to the front and requires re-analysis (occlusion changes); --video-layout layered uses layered video (playback cost requires separate validation).",
+            Zh: "可录的画面是透明的，没有不透明底层，无法合成一整段视频。可选方案：--live-overlays foreground 将实时图层前置后重新分析（遮挡关系改变），或 --video-layout layered 分层视频（播放开销需另行验证）。",
+            En: "The recordable image is transparent with no opaque base, so one full-frame video isn't possible. Options: --live-overlays foreground moves the live layers to the front and requires re-analysis (occlusion changes); --video-layout layered uses layered video (playback cost requires separate validation).",
             Legacy: "Full-frame mode requires one opaque video group; the selected scene settings currently need {0} group(s) or a transparent background.{3} Choose independent live overlays in the foreground and analyze again, change the scene settings, or explicitly choose layered video. Foreground placement changes occlusion; layered video requires separate playback-cost validation."),
 
         ["blocker.fullframe_single_transparent_group_live"] = new(
-            Zh: "不可生成：全屏视频布局需要单一不透明底层，而唯一的可录分组为透明（transparent=true），无不透明底层可录；图层 {2}（共 {1} 个实时图层）必须保持实时并夹在视频之间。可选方案：--live-overlays foreground 将这些实时图层前置后重新分析（遮挡关系改变），或 --video-layout layered 分层视频（播放开销需另行验证）。",
-            En: "Cannot generate: full-frame video requires a single opaque base, but the only recordable group is transparent (transparent=true); {2} ({1} live layers) must stay live and are drawn in between. Options: --live-overlays foreground moves them to the front and requires re-analysis (occlusion changes); --video-layout layered uses layered video (playback cost requires separate validation).",
+            Zh: "可录的画面是透明的，且中间夹着必须实时渲染的图层（{2}），无法合成一整段视频。共 {1} 个实时图层。可选方案：--live-overlays foreground 将这些实时图层前置后重新分析（遮挡关系改变），或 --video-layout layered 分层视频（播放开销需另行验证）。",
+            En: "The recordable image is transparent and layers that must render live ({2}) sit in between, so one full-frame video isn't possible. {1} live layers in total. Options: --live-overlays foreground moves them to the front and requires re-analysis (occlusion changes); --video-layout layered uses layered video (playback cost requires separate validation).",
             Legacy: "Full-frame mode requires one opaque video group; the selected scene settings currently need {0} group(s) or a transparent background.{3} Choose independent live overlays in the foreground and analyze again, change the scene settings, or explicitly choose layered video. Foreground placement changes occlusion; layered video requires separate playback-cost validation."),
 
         ["blocker.fullframe_no_video_group"] = new(
-            Zh: "不可生成：全屏视频布局需要单一不透明底层，依赖闭包后剩余可录分组为 0 组，无内容可录。具体依据见 blockers 中的其他条目：全部可见内容由实时输入驱动。",
-            En: "Cannot generate: full-frame video requires a single opaque base, but dependency closure leaves 0 recordable groups. The specific basis is in the other blockers entries: all visible content is driven by live input.",
+            Zh: "画面全部由实时输入驱动，没有可转为视频的内容。依赖闭包后剩余可录分组为 0 组。",
+            En: "All visible content is driven by live input, so nothing can be turned into video. Dependency closure leaves 0 recordable groups.",
             Legacy: "Full-frame mode requires one opaque video group; the selected scene settings currently need {0} group(s) or a transparent background.{3} Choose independent live overlays in the foreground and analyze again, change the scene settings, or explicitly choose layered video. Foreground placement changes occlusion; layered video requires separate playback-cost validation."),
 
         ["blocker.foreground_splits_video_group"] = new(
-            Zh: "不可生成：实时图层前置会使一个中间根节点留在原位，其后的根节点仍在同一视频组内；保持原始叠放顺序需显式选择分层视频（--video-layout layered）。",
-            En: "Cannot generate: foreground placement would retain a middle root while a later root stays in the same video group; preserving source order requires an explicit layered allocation (--video-layout layered).",
+            Zh: "图层结构暂不支持转为视频。实时图层前置会使一个中间根节点留在原位，其后的根节点仍在同一视频组内；保持原始叠放顺序需显式选择分层视频（--video-layout layered）。",
+            En: "This layer structure can't be turned into video yet. Foreground placement would retain a middle root while a later root stays in the same video group; preserving source order requires an explicit layered allocation (--video-layout layered).",
             Legacy: "Foreground dependency closure would retain a middle root while a later root remains in the same video group; preserving source order requires an explicit layered allocation."),
 
         // HybridBakeService.AssembleObjects 的层级检查，经 CompositionHierarchyConflict 进 blockers。英文逐字沿用抛出处的原文，
@@ -136,25 +137,25 @@ public static class MessageCatalog
         // 以下三条原先是 AssembleAllocationObjects 直接抛出的英文，经 CompositionHierarchyConflict 原样进 blockers，
         // blockers_localized 的 key 为 null（3674038504 的 layer_count 查询）。legacy 逐字沿用抛出处原文。
         ["blocker.public_layer_query"] = new(
-            Zh: "不可生成：保留实时的脚本读取了 {0}，而混合导出会改变公开的图层{1}。请让会改变这个脚本所见图层视图的图层保持实时，然后重新分析。",
-            En: "Cannot generate: a retained script reads {0}, but hybrid export changes the public layer {1}. Analyze again without baking layers that alter this script's public layer view.",
+            Zh: "图层结构暂不支持转为视频。保留实时的脚本读取了 {0}，而混合导出会改变公开的图层{1}。请让会改变这个脚本所见图层视图的图层保持实时，然后重新分析。",
+            En: "This layer structure can't be turned into video yet. A retained script reads {0}, but hybrid export changes the public layer {1}. Analyze again without baking layers that alter this script's public layer view.",
             Legacy: "A retained script queried {0}, but hybrid export changes the public layer {1}. Re-analyze without baking layers that alter this script's public layer view."),
         ["blocker.omitted_snapshot_dependency"] = new(
-            Zh: "不可生成：保留实时的对象依赖一个被省略的快照祖先或身份。",
-            En: "Cannot generate: a retained object depends on an omitted snapshot ancestor or identity.",
+            Zh: "图层结构暂不支持转为视频。保留实时的对象依赖一个被省略的快照祖先或身份。",
+            En: "This layer structure can't be turned into video yet. A retained object depends on an omitted snapshot ancestor or identity.",
             Legacy: "A retained object depends on an omitted snapshot ancestor or identity."),
         ["blocker.replacement_parent_mismatch"] = new(
-            Zh: "不可生成：视频替身必须挂在计划中的源同级父节点下。",
-            En: "Cannot generate: a video replacement must use its planned source sibling parent.",
+            Zh: "图层结构暂不支持转为视频。视频替身必须挂在计划中的源同级父节点下。",
+            En: "This layer structure can't be turned into video yet. A video replacement must use its planned source sibling parent.",
             Legacy: "A video replacement must use its planned source sibling parent."),
         ["blocker.hierarchy_changes_draw_order"] = new(
-            Zh: "不可生成：保留实时的父级层级会改变计划中视频与实时图层的绘制顺序；该分配不保持作者的同级叠放顺序，遮挡关系将改变。",
-            En: "Cannot generate: retained parent hierarchies would change the planned video and live draw order; the allocation does not preserve source sibling order and occlusion would change.",
+            Zh: "图层结构暂不支持转为视频。保留实时的父级层级会改变计划中视频与实时图层的绘制顺序；该分配不保持作者的同级叠放顺序，遮挡关系将改变。",
+            En: "This layer structure can't be turned into video yet. Retained parent hierarchies would change the planned video and live draw order; the allocation does not preserve source sibling order and occlusion would change.",
             Legacy: "Retained parent hierarchies would change the planned video/live draw order. The selected allocation does not preserve source sibling order."),
 
         ["blocker.foreground_outside_composition"] = new(
-            Zh: "不可生成：前景依赖闭包涉及现有视频/实时合成之外的根节点，前置需要一次未经验证的重排。",
-            En: "Cannot generate: foreground dependency closure reached a root outside the existing video/live composition; placing it would require an unverified reorder.",
+            Zh: "图层结构暂不支持转为视频。前景依赖闭包涉及现有视频/实时合成之外的根节点，前置需要一次未经验证的重排。",
+            En: "This layer structure can't be turned into video yet. Foreground dependency closure reached a root outside the existing video/live composition; placing it would require an unverified reorder.",
             Legacy: "Foreground dependency closure reached a root outside the existing video/live composition; placing it would require an unverified reorder."),
 
         // 第 1 批合并新增：全幅冲突的"本场景可执行选项"形态（feat/layout-demotion）。
@@ -162,26 +163,26 @@ public static class MessageCatalog
         // 双语文案按实际状态分四种（legacy 四者共用、逐字不变）：透明背景不是并列备选，而是 N=1 时被卡住的原因。
         // N≥2 且块与块之间夹着可见实时层：{1} 点名这些层。分块边界也可能来自父节点或视差深度，所以不写"全是实时层切的"。
         ["blocker.fullframe_needs_opaque_group_options"] = new(
-            Zh: "不可生成：全屏视频布局需要单一不透明底层，可录内容分为 {0} 个视频组，其间夹有必须保持实时的图层：{1}本场景可行方案：{2}。",
-            En: "Cannot generate: full-frame video requires a single opaque base; the recordable content is split into {0} video groups with layers that must stay live drawn in between:{1} Available options for this scene: {2}.",
+            Zh: "画面中间夹着必须实时渲染的图层，无法合成一整段视频。可录内容分为 {0} 个视频层，其间夹有：{1}本场景可行方案：{2}。",
+            En: "Layers that must render live sit between the video parts, so one full-frame video isn't possible. The recordable content is split into {0} video layers with these in between:{1} Available options for this scene: {2}.",
             Legacy: "Full-frame mode requires one opaque video group; the selected scene settings currently split the bakeable content into {0} video group(s) or leave a transparent background.{3} Options: {4}."),
 
         // N≥2 但中间没有可见实时层（分块来自父节点或视差深度不同）：不写"被实时图层切开"。
         ["blocker.fullframe_split_groups_options"] = new(
-            Zh: "不可生成：全屏视频布局需要单一不透明底层，可录内容分为 {0} 个视频组，无一组可单独充当不透明底层。本场景可行方案：{2}。",
-            En: "Cannot generate: full-frame video requires a single opaque base; the recordable content is split into {0} video groups and none can serve as that base alone. Available options for this scene: {2}.",
+            Zh: "画面分成 {0} 个视频层，没有一层能单独作为底层，无法合成一整段视频。本场景可行方案：{2}。",
+            En: "The image splits into {0} video layers and none can serve as the base alone, so one full-frame video isn't possible. Available options for this scene: {2}.",
             Legacy: "Full-frame mode requires one opaque video group; the selected scene settings currently split the bakeable content into {0} video group(s) or leave a transparent background.{3} Options: {4}."),
 
         // N=1：唯一的一块不含场景清屏、是透明的。{1} 点名排在它前面先画的实时层（没有时为空）。
         ["blocker.fullframe_single_transparent_group_options"] = new(
-            Zh: "不可生成：全屏视频布局需要单一不透明底层，可录内容仅 {0} 个视频组，该组为透明，不含场景清屏{1}。本场景可行方案：{2}。",
-            En: "Cannot generate: full-frame video requires a single opaque base; the recordable content is {0} video group and that group is transparent, without the scene clear{1}. Available options for this scene: {2}.",
+            Zh: "可录的画面是透明的，没有不透明底层，无法合成一整段视频。可录内容仅 {0} 个视频层，不含场景清屏{1}。本场景可行方案：{2}。",
+            En: "The recordable image is transparent with no opaque base, so one full-frame video isn't possible. The recordable content is {0} video layer without the scene clear{1}. Available options for this scene: {2}.",
             Legacy: "Full-frame mode requires one opaque video group; the selected scene settings currently split the bakeable content into {0} video group(s) or leave a transparent background.{3} Options: {4}."),
 
         // N=0：一块可录的画面都没剩下。
         ["blocker.fullframe_no_video_group_options"] = new(
-            Zh: "不可生成：全屏视频布局需要单一不透明底层，当前设置下剩余可录分组为 {0} 组。本场景可行方案：{2}。",
-            En: "Cannot generate: full-frame video requires a single opaque base; no recordable group remains under the current settings ({0} groups). Available options for this scene: {2}.",
+            Zh: "当前设置下没有可转为视频的内容。剩余可录分组为 {0} 组。本场景可行方案：{2}。",
+            En: "Nothing can be turned into video under the current settings. {0} recordable groups remain. Available options for this scene: {2}.",
             Legacy: "Full-frame mode requires one opaque video group; the selected scene settings currently split the bakeable content into {0} video group(s) or leave a transparent background.{3} Options: {4}."),
 
         // 第 1 批合并新增：唯一视频组被搬不走的实时绘制挡住（feat/single-shot-live）。{0}=阻挡者列表。
@@ -190,8 +191,8 @@ public static class MessageCatalog
         // 所以改成给出解锁路径。{1}=本场景可执行的关法（分语言，SingleShotAllocation 拼好）。
         // legacy 英文逐字沿用原 En，写进 plan 的 blockers 一个字没变。
         ["blocker.fullframe_unreachable"] = new(
-            Zh: "不可生成：全屏视频布局要求该视频组承担场景清屏，但它绘制于以下不可迁移的实时图层之后：{0}。前景放置仅接受独立的文字或粒子子树，均不满足，当前设置下该组无法充当不透明底层。可选方案：禁用前置的实时元素后生成整幅循环视频（{1}），或 --video-layout layered 分层视频（播放开销需另行验证）。",
-            En: "Cannot generate: the full-frame layout requires the single video group to carry the scene clear, but it is drawn after live layers that cannot be moved: {0}. Foreground placement accepts only independent text or particle trees, none of which qualifies, so under the current settings that group cannot become the opaque base. Options: disable the blocking live elements and generate the full-frame loop video ({1}); or --video-layout layered (playback cost requires separate validation).",
+            Zh: "视频层前面有无法移动的实时图层（{0}），无法合成一整段视频。前景放置仅接受独立的文字或粒子子树，均不满足。可选方案：禁用前置的实时元素后生成整幅循环视频（{1}），或 --video-layout layered 分层视频（播放开销需另行验证）。",
+            En: "Live layers that can't be moved ({0}) are drawn before the video layer, so one full-frame video isn't possible. Foreground placement accepts only independent text or particle trees, none of which qualifies. Options: disable the blocking live elements and generate the full-frame loop video ({1}); or --video-layout layered (playback cost requires separate validation).",
             Legacy: "Full-frame mode needs the single video group to carry the scene clear, but that group is drawn after realtime layers that keep drawing first: {0}. Foreground placement only accepts independent text or particle trees, and none of these qualifies, so the video group cannot become the opaque base of this composition. This scene has no full-frame layout as authored."),
 
         // 第 1 批合并新增：视频外壳（feat/video-shell）。中英原文就在 VideoDominance 里，这里直接引用，避免两处漂移。
@@ -205,26 +206,26 @@ public static class MessageCatalog
         // 只剩"可掩盖分量所在的图层不在任何视频组里"这一种布局确实淡化不了的情形。
         // {0}=布局名 {1}=视频组数 {2}=透明组说明（分语言） {3}=未解析分量列表（分语言） {4}=本场景可执行的出路（分语言）。
         ["blocker.residual_masking_layout"] = new(
-            Zh: "不可生成：循环候选存在未解析分量 {3}，需在接缝处由其所在视频组做整帧交叉淡化，但这些图层不属于任何视频组（当前 {0} 布局、{1} 个视频组{2}），无组可执行淡化。可选方案：{4}。",
-            En: "Cannot generate: the loop candidate leaves unresolved components {3} that require a whole-frame crossfade in their own video group at the seam, but those layers belong to no video group (current layout {0}, {1} video group(s){2}), so no group can perform it. Options: {4}.",
+            Zh: "部分动画无法在接缝处平滑过渡。循环候选存在未解析分量 {3}，需在接缝处由其所在视频组做整帧交叉淡化，但这些图层不属于任何视频组（当前 {0} 布局、{1} 个视频组{2}），无组可执行淡化。可选方案：{4}。",
+            En: "Some animation can't be smoothed at the seam. The loop candidate leaves unresolved components {3} that require a whole-frame crossfade in their own video group at the seam, but those layers belong to no video group (current layout {0}, {1} video group(s){2}), so no group can perform it. Options: {4}.",
             Legacy: "This loop candidate leaves unresolved components: {3}. Baking would hide them with a whole-frame crossfade in the video groups that contain them, but they are not in any video group (this plan uses the {0} layout with {1} video group(s){2}), so no group can crossfade them and baking this plan would be rejected. Options: {4}."),
 
         // fix/narrative-rc10：整层不可用、没有未解析机制，但求解器给出了结构化的空候选原因（HybridScenePlanner.RecordSolverNoCandidateBlocker）。
         // {0}=着色器周期分量数 {1}=运行时动画周期数 {2}=公共步长秒数 {3}=循环上限秒数
         ["blocker.loop_no_common_frame"] = new(
-            Zh: "不可生成：待录内容的 {0} 个着色器周期分量与 {1} 条运行时动画周期均已证明，但按 {2} 秒公共步长逐帧检查，{3} 秒循环上限内无同相位帧，未确立循环周期。保持部分图层实时或修改壁纸设置后重新分析，结论可能不同。",
-            En: "Cannot generate: the {0} shader period component(s) and {1} runtime animation period(s) are all proven, but on their common step of {2} s no frame within the {3} s loop ceiling returns them to the start together, so no loop period was established. Keeping some layers live or changing the wallpaper settings and analyzing again may change this.",
+            Zh: "{3} 秒内找不到循环周期。待录内容的 {0} 个着色器周期分量与 {1} 条运行时动画周期均已证明，但按 {2} 秒公共步长逐帧检查，上限内无同相位帧。保持部分图层实时或修改壁纸设置后重新分析，结论可能不同。",
+            En: "No loop period was found. The {0} shader period component(s) and {1} runtime animation period(s) are all proven, but on their common step of {2} s no frame within the {3} s loop ceiling returns them to the start together. Keeping some layers live or changing the wallpaper settings and analyzing again may change this.",
             Legacy: "The {0} shader period component(s) and {1} runtime animation period(s) in the recorded content are all proven, but checking every frame on their common {2} s step, no frame within the {3}-second loop ceiling brings them back to the start together, so the analysis established no loop. Keeping some of those layers live or changing the wallpaper settings and analyzing again may change this."),
 
         // {0}=不可调速的运行时动画周期数 {1}=它们重新对齐所需秒数 {2}=循环上限秒数
         ["blocker.loop_fixed_period_exceeds_ceiling"] = new(
-            Zh: "不可生成：待录内容含 {0} 条不可调速的运行时动画周期，重新对齐需 {1} 秒，超过 {2} 秒循环上限，上限内无可闭合循环。",
-            En: "Cannot generate: the recorded content has {0} runtime animation period(s) that cannot be retimed and realign only after {1} s, beyond the {2} s loop ceiling, so no loop closes within the ceiling.",
+            Zh: "{2} 秒内找不到循环周期。待录内容含 {0} 条不可调速的运行时动画周期，重新对齐需 {1} 秒，超过循环上限。",
+            En: "No loop period was found. The recorded content has {0} runtime animation period(s) that cannot be retimed and realign only after {1} s, beyond the {2} s loop ceiling.",
             Legacy: "The recorded content has {0} runtime animation period(s) that cannot be retimed and only line up again after {1} s, beyond the {2}-second loop ceiling, so no loop within the ceiling can close."),
 
         ["blocker.loop_no_exact_video_retime"] = new(
-            Zh: "不可生成：待录内容仅有一段视频在变化，调速后无落在输出帧网格上的整数帧长，未确立循环周期。",
-            En: "Cannot generate: the only changing element in the recorded content is a single video, and no retime lands its length on a whole number of output frames, so no loop period was established.",
+            Zh: "找不到循环周期。待录内容仅有一段视频在变化，调速后无落在输出帧网格上的整数帧长。",
+            En: "No loop period was found. The only changing element is a single video, and no retime lands its length on a whole number of output frames.",
             Legacy: "The only thing changing in the recorded content is a single video, and no retime lands its length on a whole number of output frames, so the analysis established no loop."),
 
         // feat/particle-crossfade：残差掩盖的逐层判定理由（ResidualMasking）。{0}=图层 id {1}=机制名
@@ -271,20 +272,20 @@ public static class MessageCatalog
         // fix/mdl-lenient-strings：原生渲染器读不了某个素材文件，运行时观测起不来（AnalysisToolLimitation）。
         // {0}=文件名 {1}=字段 {2}=问题短语（分语言，取自 asset_problem.*） {3}=文件偏移 {4}=引用它的图层短语（分语言，可为空）。
         ["blocker.tool_unsupported_model_field"] = new(
-            Zh: "未评估：工具不支持该 3D 模型文件 {0}{4}。原生渲染器在字段 {1} 出错（{2}，文件偏移 {3}），场景无法开始运行时观测。",
-            En: "Not evaluated: the tool does not support this 3D model file {0}{4}. The native renderer failed on field {1} ({2} at file offset {3}), so the scene could not start runtime observation.",
+            Zh: "不支持此壁纸中的 3D 模型文件 {0}{4}。原生渲染器在字段 {1} 出错（{2}，文件偏移 {3}），场景无法开始运行时观测。",
+            En: "This wallpaper's 3D model file isn't supported. File: {0}{4}. The native renderer failed on field {1} ({2} at file offset {3}), so the scene could not start runtime observation.",
             Legacy: "The tool cannot read this 3D model file yet: {0}{4}. The native renderer failed on field {1} ({2} at file offset {3}), so the scene could not start its runtime observation and was not analyzed."),
 
         // 渲染器没给出字段与偏移时的形态。{0}=文件名 {1}=引用它的图层短语 {2}=渲染器原话（英文）。
         ["blocker.tool_unsupported_model"] = new(
-            Zh: "未评估：工具不支持该 3D 模型文件 {0}{1}。原生渲染器报告：{2}。场景无法开始运行时观测。",
-            En: "Not evaluated: the tool does not support this 3D model file {0}{1}. The native renderer reported: {2}. The scene could not start runtime observation.",
+            Zh: "不支持此壁纸中的 3D 模型文件 {0}{1}。原生渲染器报告：{2}。场景无法开始运行时观测。",
+            En: "This wallpaper's 3D model file isn't supported. File: {0}{1}. The native renderer reported: {2}. The scene could not start runtime observation.",
             Legacy: "The tool cannot read this 3D model file yet: {0}{1}. The native renderer reported: {2}. The scene could not start its runtime observation and was not analyzed."),
 
         // {0}=渲染器报出的纹理名 {1}=被判无效的那部分数据（渲染器原词，如 mipmap）。
         ["blocker.tool_unsupported_texture"] = new(
-            Zh: "未评估：工具不支持该纹理文件 {0}，原生渲染器判定其 {1} 数据无效。",
-            En: "Not evaluated: the tool does not support this texture file {0}; the native renderer rejected its {1} data as invalid.",
+            Zh: "不支持此壁纸中的纹理文件 {0}。原生渲染器判定其 {1} 数据无效。",
+            En: "This wallpaper's texture file isn't supported. File: {0}; the native renderer rejected its {1} data as invalid.",
             Legacy: "The tool cannot read this texture file yet: {0} (the native renderer rejected its {1} data as invalid)."),
 
         // ---- 素材解析失败的问题短语与图层短语：只作为上面几条的参数嵌进句子 ----
@@ -495,45 +496,45 @@ public static class MessageCatalog
         // ---- effect_prefix 终端捕获点（analyze 写进 loop.unresolved 与 effect_prefix_capture_probes，bake 写进 reason） ----
         // {0}=层名 {1}=层 id {2}=终端效果 id {3}=实际捕获点 {4}=这一层自己的渲染目标列表
         ["effect_prefix.capture_not_layer_target"] = new(
-            Zh: "不生成图层 \"{0}\"（id {1}）的效果前缀缓存：终端效果 {2} 的实际捕获点为 {3}，非该层自身的渲染目标（{4}）。渲染器将该层的最后一个效果直接绘入共用缓冲，从该处录制会混入其他图层的像素。",
-            En: "No effect-prefix cache for layer \"{0}\" (id {1}): terminal effect {2} is captured from {3}, which is not this layer's own render target ({4}). The renderer draws this layer's last effect straight into a shared buffer, so recording from there would mix in other layers' pixels.",
+            Zh: "图层“{0}”的特效无法单独录制。",
+            En: "The effects on layer \"{0}\" can't be recorded separately.",
             Legacy: "No effect-prefix cache for layer \"{0}\" (id {1}): terminal effect {2} is actually captured from {3}, which is not this layer's own render target ({4}). The renderer draws this layer's last effect straight into a shared buffer, so recording it would mix in other layers' pixels."),
 
         // {0}=层名 {1}=层 id {2}=终端效果 id {3}=探测报错原文
         ["effect_prefix.capture_probe_failed"] = new(
-            Zh: "不生成图层 \"{0}\"（id {1}）的效果前缀缓存：确认终端效果 {2} 捕获点的探测未完成（{3}），无法证明录制的是该层自身的纹理。",
-            En: "No effect-prefix cache for layer \"{0}\" (id {1}): the probe confirming where terminal effect {2} is captured did not complete ({3}), so recording this layer's own texture cannot be shown.",
+            Zh: "图层“{0}”的特效无法单独录制。",
+            En: "The effects on layer \"{0}\" can't be recorded separately.",
             Legacy: "No effect-prefix cache for layer \"{0}\" (id {1}): the probe that confirms where terminal effect {2} is captured did not complete ({3}), so it cannot be shown to record this layer's own texture."),
 
         // ---- 硬件解码实测的适用范围（NativeRenderRunner.ProbeHardwareDecodeAsync 的结论文案）----
         // 实测只在烘焙机上做，用户在播放机上播；这几条只写进结果与界面文案，不参与任何判定。
         // {0}=硬解通过的显卡名单
         ["hardware_decode.verified_on_baking_machine"] = new(
-            Zh: "硬件解码仅在本生成机验证：在 {0} 上通过。目标播放机使用其他 GPU（尤其核显）时可能无法硬解；将成品拷贝至该机并运行 wpe-baker decode-check 可确认。",
-            En: "Hardware decode was verified on this generating machine only: it passed on {0}. A playback machine with a different GPU, especially an integrated one, may still fail to decode it; copy the output to that machine and run wpe-baker decode-check to confirm.",
+            Zh: "硬件解码：在 {0} 上通过（仅测试本机）。",
+            En: "Hardware decode: passed on {0} (this PC only).",
             Legacy: "Hardware decode was only verified on this baking machine: it passed on {0}. A playback machine with a different GPU (especially an integrated one) may still fail to decode it; to confirm, copy the finished file to that machine and run wpe-baker decode-check there."),
 
         // {0}=参与验证的显卡名单
         ["hardware_decode.none_passed_on_baking_machine"] = new(
-            Zh: "本生成机无显卡通过硬件解码验证（{0}），目标播放机（尤其核显）同样不可预期通过。",
-            En: "No adapter on this generating machine passed hardware decode ({0}), so a playback machine, especially an integrated one, cannot be expected to pass either.",
+            Zh: "硬件解码：本机显卡均未通过（{0}）。",
+            En: "Hardware decode: no GPU on this PC passed ({0}).",
             Legacy: "No adapter on this baking machine decoded it in hardware ({0}), so a playback machine, especially an integrated one, cannot be expected to either."),
 
         ["hardware_decode.no_adapters_on_baking_machine"] = new(
-            Zh: "本生成机未找到可用于硬件解码验证的显卡，本次未执行硬解验证；成品在目标播放机上的硬解能力未知。",
-            En: "No adapter suitable for hardware decode verification was found on this generating machine, so nothing was verified here and hardware decode on the playback machine is unknown.",
+            Zh: "硬件解码：本机无可测试的显卡。",
+            En: "Hardware decode: no GPU to test on this PC.",
             Legacy: "No adapter suitable for hardware decode verification was found on this baking machine, so nothing was verified here and hardware decode on the playback machine is entirely unknown."),
 
         // {0}=参与验证的独显名单
         ["hardware_decode.no_integrated_verified"] = new(
-            Zh: "参与验证的仅为独立显卡（{0}），未测试核显；核显的硬解上限通常低于独显，目标播放机使用核显时风险更高。",
-            En: "Only discrete GPUs took part ({0}); no integrated GPU was tested. Integrated decoders usually have lower limits, so an integrated playback GPU carries a markedly higher risk.",
+            Zh: "仅测试了独立显卡（{0}），未测试核显；核显的硬件解码上限通常更低，在核显上播放风险更高。",
+            En: "Only discrete GPUs were tested ({0}); integrated GPUs usually have lower decode limits, so playback on an integrated GPU is riskier.",
             Legacy: "Only discrete GPUs took part ({0}); no integrated GPU was tested. Integrated decoders usually have lower limits, so an integrated playback GPU is a markedly higher risk."),
 
         // {0}=编解码 {1}=码流尺寸 {2}=越限项 {3}=常见核显上限 {4}=依据（分语言）
         ["hardware_decode.beyond_integrated_ceiling"] = new(
-            Zh: "该 {0} 码流为 {1}，超出常见核显硬解上限 {3}（{2}），多数核显可能无法硬解（依据：{4}）。本条为提示，不改变判定。",
-            En: "This {0} bitstream is {1}, beyond the common integrated-GPU decode ceiling of {3} ({2}), so most integrated GPUs may fail to decode it (basis: {4}). Advisory only; no verdict changes.",
+            Zh: "该 {0} 码流为 {1}，超出常见核显的硬件解码上限 {3}（{2}），多数核显可能无法硬件解码（依据：{4}）。",
+            En: "This {0} bitstream is {1}, beyond the common integrated-GPU decode ceiling of {3} ({2}), so most integrated GPUs may fail to decode it (basis: {4}).",
             Legacy: "This {0} bitstream is {1}, beyond the common integrated-GPU decode ceiling of {3} ({2}), so most integrated GPUs may fail to decode it (basis: {4}). This is advisory and changes no verdict here."),
 
         // ---- 编码后接缝校验（参照式）的拒绝理由 ----
@@ -589,63 +590,63 @@ public static class MessageCatalog
         // legacy 英文逐字沿用入口分类分支已经在用的那几句，scripts/test-cli-scene-only.py 按它对账。
         // 上面三条 cli.* 是这套文案的旧占位（legacy 是更早的一句话），保留原样不动。
         ["source.not_scene_project"] = new(
-            Zh: "不可生成：来源不是 Scene 类壁纸（project.json type={0}）。本工具仅支持 Scene 壁纸：来源须为带 scene.pkg 或 scene.json 的 Scene 作品。",
-            En: "Cannot generate: the source is not a Scene wallpaper (project.json type={0}). WPE Baker supports Scene wallpapers only: the source must be a Scene project that ships scene.pkg or scene.json.",
+            Zh: "仅支持场景（Scene）类壁纸，此壁纸类型为 {0}。",
+            En: "Only Scene wallpapers are supported; this one is {0}.",
             Legacy: "This project is not a Scene wallpaper (project.json type={0}). WPE Baker bakes Scene wallpapers only: the source must be a Scene project that ships scene.pkg or scene.json."),
 
         // {1} 是"，内容是 xxx"这半句；project.json 没写 file 时为空串，所以中英各带一套参数。
         ["source.video_wallpaper"] = new(
-            Zh: "不可生成：来源是视频壁纸（project.json type={0}{1}）。本工具仅支持 Scene 壁纸，视频壁纸无场景可预渲染；它本身即为视频，直接播放原文件。",
-            En: "Cannot generate: the source is a video wallpaper (project.json type={0}{1}). WPE Baker supports Scene wallpapers only, and a video wallpaper has no scene to pre-render; it is already a video, so play the original file.",
+            Zh: "视频壁纸本身就是视频，无需生成。",
+            En: "Video wallpapers are already video; nothing to generate.",
             Legacy: "This is a video wallpaper (project.json says type={0}{1}). WPE Baker bakes Scene wallpapers only, and a video wallpaper has no scene to pre-render; it is already a video, so play the original file."),
 
         ["source.web_wallpaper"] = new(
-            Zh: "不可生成：来源是网页壁纸（project.json type={0}{1}）。本工具仅支持 Scene 壁纸，网页壁纸无场景可预渲染。",
-            En: "Cannot generate: the source is a web wallpaper (project.json type={0}{1}). WPE Baker supports Scene wallpapers only, and a web wallpaper has no scene to pre-render.",
+            Zh: "不支持网页壁纸。",
+            En: "Web wallpapers aren't supported.",
             Legacy: "This is a web wallpaper (project.json says type={0}{1}). WPE Baker bakes Scene wallpapers only, and a web wallpaper has no scene to pre-render."),
 
         ["source.content_clause"] = new(Zh: "，内容是 {0}", En: ", content is {0}"),
 
         ["source.path_missing"] = new(
-            Zh: "未评估：路径不存在：{0}。检查路径拼写，以及所在驱动器是否仍连接。",
-            En: "Not evaluated: this path does not exist: {0}. Check the path and that the drive it is on is still connected.",
+            Zh: "路径不存在：{0}",
+            En: "Path not found: {0}",
             Legacy: "This path does not exist: {0}. Check the path, and that the drive it is on is still connected."),
 
         ["source.folder_not_wallpaper"] = new(
-            Zh: "未评估：该文件夹不含壁纸：{0} 内无 project.json、scene.pkg 或 scene.json。改为选择订阅壁纸所在的文件夹（Wallpaper Engine 中右键壁纸、选择「打开文件夹」）。",
-            En: "Not evaluated: this folder holds no wallpaper: {0} contains no project.json, scene.pkg or scene.json. Choose the folder of a subscribed wallpaper instead (right-click the wallpaper in Wallpaper Engine and open its folder).",
+            Zh: "此文件夹中没有壁纸：{0}（缺少 project.json、scene.pkg 或 scene.json）",
+            En: "No wallpaper in this folder: {0} (no project.json, scene.pkg or scene.json)",
             Legacy: "This folder holds no wallpaper: {0} contains no project.json, scene.pkg or scene.json. Choose the folder of a subscribed wallpaper instead (right-click the wallpaper in Wallpaper Engine and open its folder)."),
 
         ["source.file_not_wallpaper"] = new(
-            Zh: "未评估：该文件不是壁纸来源：{0}。可拖入 Scene 壁纸文件夹，或其中的 project.json、scene.json、scene.pkg。",
-            En: "Not evaluated: this file is not a wallpaper source: {0}. Drop a Scene wallpaper folder, or the project.json, scene.json or scene.pkg inside one.",
+            Zh: "此文件不是壁纸：{0}",
+            En: "Not a wallpaper file: {0}",
             Legacy: "This file is not a wallpaper source: {0}. Drop a Scene wallpaper folder, or the project.json, scene.json or scene.pkg inside one."),
 
         ["source.scene_without_objects"] = new(
-            Zh: "未评估：场景文件可读取但无 objects 列表，不是完整场景；文件可能损坏或未下载完整。在 Wallpaper Engine 中重新订阅。",
-            En: "Not evaluated: the scene file opens but has no objects array, so it is not a complete scene; it may be damaged or incompletely downloaded. Re-subscribe to it in Wallpaper Engine.",
+            Zh: "壁纸文件不完整，可能已损坏或未下载完，可在 Wallpaper Engine 中重新订阅。",
+            En: "The wallpaper files are incomplete or damaged; re-subscribing in Wallpaper Engine may fix it.",
             Legacy: "This Scene's scene file opens but has no objects array, so it is not a complete scene; it may be damaged or incompletely downloaded. Re-subscribe to it in Wallpaper Engine."),
 
         ["source.unreadable"] = new(
-            Zh: "未评估：壁纸读取失败：{0}。文件可能损坏或未下载完整。在 Wallpaper Engine 中重新订阅。",
-            En: "Not evaluated: the wallpaper could not be read: {0}. It may be damaged or incompletely downloaded; re-subscribe to it in Wallpaper Engine.",
+            Zh: "壁纸读取失败：{0}。文件可能已损坏或未下载完，可在 Wallpaper Engine 中重新订阅。",
+            En: "The wallpaper couldn't be read: {0}. It may be damaged or incompletely downloaded; re-subscribing in Wallpaper Engine may fix it.",
             Legacy: "This wallpaper could not be read: {0}. It may be damaged or incompletely downloaded; re-subscribe to it in Wallpaper Engine."),
 
         // ---- 自检：便携包自身缺件 ----
         ["setup.tools_config_missing"] = new(
-            Zh: "启动中止：程序目录下缺少 tools.json，压缩包未完整解压。将下载的压缩包整体解压到一个文件夹后运行，不要单独取出 exe，也不要在压缩软件窗口内直接运行。",
-            En: "Startup stopped: tools.json is missing next to this program, so the package was not fully extracted. Extract the whole downloaded archive into one folder and run it from there - do not pull out the .exe alone, and do not run it from inside the archive viewer.",
+            Zh: "安装包未完整解压（缺少 tools.json），需完整解压后运行。",
+            En: "The package isn't fully extracted (tools.json missing); extract the whole archive and run it again.",
             Legacy: "tools.json is missing next to this program, which means the package was not fully extracted. Extract the whole downloaded archive into one folder and run it from there - do not pull out only the .exe, and do not run it from inside the archive viewer."),
 
         // {0}=缺的是哪一个（渲染器/视频编码器…） {1}=它应该在的完整路径
         ["setup.tool_file_missing"] = new(
-            Zh: "启动中止：缺少随包的{0}：{1}。该文件未解压，或已被杀毒软件删除。重新整体解压压缩包；若仍缺失，从杀毒软件隔离区恢复，并将该文件夹加入白名单。",
-            En: "Startup stopped: a bundled tool is missing - {0}: {1}. It was either not extracted or removed by antivirus software. Extract the whole archive again; if it is still missing, restore it from antivirus quarantine and allow this folder.",
+            Zh: "缺少随包的{0}：{1}。文件可能未解压或被杀毒软件删除，需重新完整解压；若仍缺失，从杀毒软件隔离区恢复并将该文件夹加入白名单。",
+            En: "A bundled tool is missing - {0}: {1}. It may not have been extracted or was removed by antivirus software; extract the whole archive again, and if it is still missing, restore it from antivirus quarantine and allow this folder.",
             Legacy: "A bundled tool is missing - {0}: {1}. It was either not extracted or removed by antivirus software. Extract the whole archive again; if it is still missing, restore it from your antivirus quarantine and allow this folder."),
 
         ["setup.runtime_directory_missing"] = new(
-            Zh: "启动中止：缺少随包的运行库目录：{0}。压缩包未完整解压，重新整体解压后运行。",
-            En: "Startup stopped: a bundled runtime folder is missing: {0}. The archive was not fully extracted; extract all of it again and run from there.",
+            Zh: "缺少随包的运行库目录：{0}。安装包未完整解压，需完整解压后运行。",
+            En: "A bundled runtime folder is missing: {0}. The package isn't fully extracted; extract the whole archive and run it again.",
             Legacy: "A bundled runtime folder is missing: {0}. The archive was not fully extracted; extract all of it again and run from there."),
 
         ["setup.tool_renderer"] = new(Zh: "渲染器 wpe-render.exe", En: "the renderer wpe-render.exe"),
@@ -654,15 +655,15 @@ public static class MessageCatalog
 
         // {0}=plan 里的 schema_version
         ["plan.legacy_version"] = new(
-            Zh: "旧版 plan（schema_version {0}），当前版本不再读取，请重新分析。",
-            En: "This is an older plan (schema_version {0}) that this version no longer reads; analyze the wallpaper again."),
+            Zh: "此结果由旧版本生成，需重新分析。",
+            En: "This result is from an older version; analyze again."),
         ["setup.assets_missing"] = new(
             Zh: "未评估：未找到 Wallpaper Engine 的 assets 目录，分析需要它读取着色器与特效。已安装 Wallpaper Engine 时，手动指向安装目录下的 assets（通常为 …\\steamapps\\common\\wallpaper_engine\\assets）；命令行用 --assets 指定。",
             En: "Not evaluated: the Wallpaper Engine assets folder was not found; analysis requires it to read shaders and effects. If Wallpaper Engine is installed, point at the assets folder inside its install directory (usually ...\\steamapps\\common\\wallpaper_engine\\assets); on the command line pass --assets.",
             Legacy: "The Wallpaper Engine assets folder was not found; analysis needs it to read shaders and effects. If Wallpaper Engine is installed, point at the assets folder inside its install directory (usually ...\\steamapps\\common\\wallpaper_engine\\assets); on the command line pass --assets."),
         ["plan.legacy_unnumbered_blocker"] = new(
-            Zh: "旧版 plan：里面的拒绝原因是更早的版本写的，没有编号，当前版本不再读取，请重新分析。",
-            En: "This is an older plan: its rejection reasons were written by an earlier version and carry no code, so this version no longer reads it; analyze the wallpaper again."),
+            Zh: "此结果由旧版本生成，需重新分析。",
+            En: "This result is from an older version; analyze again."),
 
         // ---- C1.1d：原来直接写英文的 reason（plan / bake / 测量报告）。En 即原文。 ----
         ["reason.demotion_unavailable"] = new(
@@ -783,13 +784,13 @@ public static class MessageCatalog
 
         // ---- 应用到桌面 ----
         ["apply.wallpaper_engine_not_running"] = new(
-            Zh: "应用中止：Wallpaper Engine 未运行，无法切换壁纸。启动 Wallpaper Engine（托盘中出现图标）后重新应用。",
-            En: "Apply stopped: Wallpaper Engine is not running, so the wallpaper cannot be switched. Start Wallpaper Engine (its tray icon should appear), then apply again.",
+            Zh: "Wallpaper Engine 未运行，无法应用。",
+            En: "Wallpaper Engine isn't running, so the wallpaper can't be applied.",
             Legacy: "Wallpaper Engine is not running, so the wallpaper cannot be switched. Start Wallpaper Engine first (it should appear in the tray), then apply again."),
 
         ["apply.location_missing"] = new(
-            Zh: "应用中止：Wallpaper Engine 中已无此屏幕（{0}），显示器可能已断开或重新排列。点击「重新检测」刷新屏幕列表后重新选择。",
-            En: "Apply stopped: Wallpaper Engine no longer lists this screen ({0}); the display may have been disconnected or rearranged. Refresh the screen list and choose again.",
+            Zh: "此屏幕已不在 Wallpaper Engine 中（{0}），可点“刷新”后重新选择。",
+            En: "Wallpaper Engine no longer lists this screen ({0}); refresh and choose again.",
             Legacy: "Wallpaper Engine no longer lists this screen ({0}); the display may have been disconnected or rearranged. Refresh the screen list and choose again."),
 
         // fix/mdl-lenient-strings：把 analyze 写出的工具局限结论当成 plan 交给 bake 时的拒绝理由。
@@ -803,8 +804,8 @@ public static class MessageCatalog
             Zh: "默认 auto：支持的显卡上走 vulkan，直接生成成品，减少中间文件和重复编码。不可用的路径使用\n软件，并在 bake.json 中记录原因；画质不达标时先降 QP 重渲这一组，仍不达标改用软件。",
             En: "Default auto: Vulkan generates playback video directly on supported GPUs, reducing intermediate files\nand repeated encoding. Unavailable paths use software and record why in bake.json.\nA group below the quality gate is re-rendered once at a lower QP, then with software."),
         ["bake.gpu_quality_rejected"] = new(
-            Zh: "GPU 编码的代表帧画质未达到既有限值。候选视频和报告已保留；可手动改用软件编码重试，本次不会自动重新生成。",
-            En: "GPU encoding did not meet the existing sample quality limit. The candidate video and report are retained; retry manually with software encoding. This run will not automatically regenerate the scene."),
+            Zh: "GPU 编码画质未达标；可在高级里把视频编码器改为“软件”后重新生成。",
+            En: "GPU encoding quality too low; set the video encoder to Software and regenerate."),
 
         ["cli.bake_parallel_help"] = new(
             Zh: "--encode-slots N 限制本机同时做成品编码的 wpe-baker 进程数（0 = 默认，不限）。渲染不受限制，\n只卡成品编码：多案并行时吃满 CPU 的就是这一路 ffmpeg。等槽位的时间单独记在\nstage_timing.stages.encode_slot_wait，不混进 encode_playback。\n--group-parallel N 让一个壁纸最多同时渲染 N 个视频组（默认：GPU 路线 3，其余 1 = 逐组渲染）。\n组的判定、编码与写入报告的顺序始终按组序串行，成品与逐组渲染逐字节相同；峰值磁盘与内存按 N 倍算。",
@@ -905,21 +906,21 @@ public static class MessageCatalog
 
         // {0}=视频组 {1}=帧数 {2}=秒数 {3}=预估大小（GiB） {4}=按试编码码率最长秒数
         ["bake.embedded_video_size_predicted"] = new(
-            Zh: "视频组 {0} 的成品（{1} 帧，{2} s）按短段试编码外推约 {3} GiB，超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按该码率最长约 {4} s。已在渲染前停止，未生成候选项目；请用更小的 --loop-max-seconds、更低的分辨率或帧率重新分析。",
-            En: "Video group {0} ({1} frames, {2} s) extrapolates to about {3} GiB from the trial encode, above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At this bitrate the limit is about {4} s. Stopped before rendering; no candidate project generated. Re-run analysis with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate.",
+            Zh: "视频超过 Wallpaper Engine 的 2 GiB 上限（约 {3} GiB），按当前码率最长约 {4} 秒；可降低分辨率或帧率后重试。",
+            En: "The video exceeds Wallpaper Engine's 2 GiB limit (about {3} GiB); at this bitrate the loop can be about {4} s at most. Lower the resolution or frame rate and retry.",
             Legacy: "Extrapolated from the short trial encode, video group {0} ({1} frames, {2} s) would be about {3} GiB, above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At this bitrate it fits about {4} s. Stopped before rendering; no candidate project was generated. Analyze again with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate."),
 
         // {0}=视频组 {1}=实际大小（GiB） {2}=帧数 {3}=秒数 {4}=按实际码率最长秒数
         ["bake.embedded_video_size_rejected"] = new(
-            Zh: "视频组 {0} 编码后 {1} GiB（{2} 帧，{3} s），超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按实测码率最长约 {4} s。已在接缝校验前停止，未生成候选项目；请用更小的 --loop-max-seconds、更低的分辨率或帧率重新分析。",
-            En: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit of Wallpaper Engine (a larger video renders only the clear color). At the measured bitrate the limit is about {4} s. Stopped before the seam checks; no candidate project generated. Re-run analysis with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate.",
+            Zh: "视频超过 Wallpaper Engine 的 2 GiB 上限（{1} GiB），按当前码率最长约 {4} 秒；可降低分辨率或帧率后重试。",
+            En: "The video exceeds Wallpaper Engine's 2 GiB limit ({1} GiB); at this bitrate the loop can be about {4} s at most. Lower the resolution or frame rate and retry.",
             Legacy: "Video group {0} encoded to {1} GiB ({2} frames, {3} s), above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At the actual bitrate it fits about {4} s. Stopped before the seam checks; no candidate project was generated. Analyze again with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate."),
 
         // ---- 开烘前的磁盘闸门（BakeDiskBudget）----
         // {0}=预估峰值（GiB） {1}=固定余量（GiB） {2}=合计需要（GiB） {3}=输出所在盘 {4}=现有空闲（GiB）
         ["bake.insufficient_disk_space"] = new(
-            Zh: "磁盘空间不足，未开始生成：中间产物峰值预估 {0} GiB，加 {1} GiB 余量，共需 {2} GiB；{3} 剩余 {4} GiB。请释放空间，或将输出位置改到其它磁盘（工作目录随输出位置）后重新生成。",
-            En: "Not enough disk space; generation did not start: intermediate files peak at about {0} GiB plus a {1} GiB reserve, {2} GiB required in total; {4} GiB free on {3}. Free space, or select an output folder on another drive (the working directory follows the output folder), then generate again.",
+            Zh: "磁盘空间不足：需要约 {2} GiB，{3} 仅剩 {4} GiB；可清理空间或把输出目录改到其他磁盘。",
+            En: "Not enough disk space: about {2} GiB needed, {4} GiB free on {3}; free up space or choose an output folder on another drive.",
             Legacy: "Not enough disk space, so this bake did not start: intermediate files are estimated to peak at about {0} GiB, plus a {1} GiB reserve, which needs {2} GiB in total; only {4} GiB is free on {3}. Free up space, or choose an output folder on another drive (the working directory follows the output folder) and generate again."),
 
         ["summary.not_suitable_current"] = new(
@@ -1094,8 +1095,8 @@ public static class MessageCatalog
             Legacy: "this wallpaper has different settings on different screens"),
 
         ["properties.reason.unknown"] = new(
-            Zh: "原因见 plan 的 wpe_properties",
-            En: "see wpe_properties in the plan"),
+            Zh: "原因不明",
+            En: "reason unknown"),
 
         ["summary.resolution_explicit_canvas"] = new(
             Zh: "输出分辨率取指定值 {0}（场景画布 {1}）。",
@@ -1118,62 +1119,62 @@ public static class MessageCatalog
             En: "Source frame 0 is an isolated start anomaly (the closure check failed only because of it); keeping the {0}-frame period and re-rendering from source frame {1} for re-checking."),
 
         ["progress.exporting_seam_preview"] = new(
-            Zh: "导出接缝预览：循环末尾 {0} 帧接循环开头 {0} 帧，原速一遍，0.25 倍速一遍。",
-            En: "Exporting the seam preview: the last {0} loop frames then the first {0}, once at normal speed and once at 0.25x."),
+            Zh: "正在导出接缝预览…",
+            En: "Exporting seam preview…"),
 
         // 烘焙中的进度句（界面任务行与状态栏按界面语言显示）。原先只写了一种语言的，另一种按原句直译补上，用词待定稿。
         ["progress.observing_without_audio_effects"] = new(
-            Zh: "省略列出的固定音频效果后，观测所选场景。",
-            En: "Observing the selected scene after omitting the listed fixed audio effects."),
+            Zh: "正在分析壁纸…",
+            En: "Analyzing the wallpaper…"),
         ["progress.observing_scene"] = new(
-            Zh: "观测真实的脚本输入、对象访问和场景层级。",
-            En: "Observing real script inputs, object accesses and scene hierarchy."),
+            Zh: "正在分析壁纸…",
+            En: "Analyzing the wallpaper…"),
         ["progress.refreshing_script_fault_evidence"] = new(
-            Zh: "用当前的源脚本故障证据刷新旧方案。",
-            En: "Refreshing an older plan with current source script fault evidence."),
+            Zh: "正在更新旧版分析结果…",
+            En: "Updating an older analysis…"),
         // {0}=组 {1}=预热帧数 {2}=步长帧数 {3}=搜索窗帧数
         ["progress.searching_loop_start"] = new(
-            Zh: "在锁定的解析周期内按接缝残差挑选起点帧（组 {0}，预热 {1} 帧，步长 {2} 帧，搜索窗 {3} 帧）。",
-            En: "Choosing the start frame by seam residual within the locked analytic period (group {0}, warmup {1} frames, stride {2} frames, search window {3} frames)."),
+            Zh: "正在选择循环起点…",
+            En: "Choosing loop start…"),
         ["progress.checking_composition"] = new(
-            Zh: "生成一段短候选，检查完整的场景合成。",
-            En: "Generating a short candidate to check complete scene composition."),
+            Zh: "正在生成短片段比对画面…",
+            En: "Generating a short clip to compare…"),
         ["progress.saving_project"] = new(
-            Zh: "将已验证的项目保存到所选的壁纸文件夹。",
-            En: "Saving the validated project to the selected wallpaper folder."),
+            Zh: "正在保存到输出目录…",
+            En: "Saving to the output folder…"),
         ["progress.rendering_pair"] = new(
-            Zh: "用相同的采样输入渲染源和候选；帧一到达就进行比较。",
-            En: "Rendering the source and the candidate with the same sampled inputs; frames are compared as they arrive."),
+            Zh: "正在比对画面…",
+            En: "Comparing images…"),
         // {0}=已比较帧数 {1}=总帧数
-        ["progress.comparing"] = new(Zh: "已比较 {0} / {1} 帧。", En: "Compared {0} / {1} frames."),
+        ["progress.comparing"] = new(Zh: "正在比对画面：{0}/{1} 帧", En: "Comparing images: {0}/{1} frames"),
         // {0}=循环上限秒数
         ["progress.capping_loop_length"] = new(
-            Zh: "内嵌视频会超过 2 GiB；以 {0:0} 秒为循环上限重新分析，并再烘焙一次。",
-            En: "The embedded video would exceed 2 GiB; analyzing again with the loop capped at {0:0} s and baking once more."),
+            Zh: "视频超过 2 GiB，缩短循环后重新生成…",
+            En: "Video over 2 GiB; regenerating with a shorter loop…"),
         ["progress.reverting_intro_switch"] = new(
-            Zh: "合成检查拒绝了开场切换；保持开场动画实时运行，重新分析，并再烘焙一次。",
-            En: "The composition check rejected the intro switch; analyzing again with intro animations kept live and baking once more."),
+            Zh: "画面比对未通过，保留开场动画后重新生成…",
+            En: "Image check failed; regenerating with the intro kept live…"),
         // {0}=视频组 {1}=该组自身的周期帧数
         ["progress.group_full_loop_fallback"] = new(
-            Zh: "视频组 {0} 未能在其自身 {1} 帧的周期上闭合；按完整循环长度录制，并再烘焙一次。",
-            En: "Video group {0} did not close on its own {1}-frame period; recording it at the full loop length and baking once more."),
+            Zh: "视频层 {0} 未能闭合，按完整循环重新生成…",
+            En: "Video layer {0} didn't loop; regenerating at full loop length…"),
         ["progress.retaining_residual_particles"] = new(
-            Zh: "被掩盖粒子的接缝残差超过了第一层；将这些粒子保持为实时，并再烘焙一次。",
-            En: "Seam residual from masked particles exceeded the first layer; keeping those particles live and baking once more."),
+            Zh: "接缝差异过大，保留粒子效果后重新生成…",
+            En: "Seam too visible; regenerating with particles kept live…"),
         // {0}=第几组 {1}=组数 {2}=源图层数
-        ["progress.rendering_group"] = new(Zh: "视频组 {0}/{1}：{2} 个源图层", En: "Video group {0}/{1}: {2} source layers"),
+        ["progress.rendering_group"] = new(Zh: "正在渲染第 {0}/{1} 个视频层…", En: "Rendering video layer {0} of {1}…"),
         ["progress.checking_seam_residual"] = new(
-            Zh: "在全分辨率下测量淡化窗口内每一帧的接缝残差。",
-            En: "Measuring the seam residual of every frame in the crossfade window at full resolution."),
+            Zh: "正在检查接缝…",
+            En: "Checking seam…"),
         ["progress.applying_crossfade"] = new(
-            Zh: "在接缝处做固定窗口的整帧交叉淡化。",
-            En: "Applying a fixed-window full-frame crossfade at the seam."),
+            Zh: "正在处理接缝淡入淡出…",
+            En: "Crossfading the seam…"),
         ["progress.checking_hardware_decode"] = new(
-            Zh: "在已安装的硬件解码器上检查这段实际视频。",
-            En: "Checking this actual video on the installed hardware decoders."),
+            Zh: "正在检查硬件解码…",
+            En: "Checking hardware decode…"),
         ["progress.retaining_nonlooping_layers"] = new(
-            Zh: "将未解决的特效和粒子保持为实时，然后检查一个更小的烘焙分配。",
-            En: "Keeping unresolved effects and particles live, then checking one smaller bake allocation."),
+            Zh: "保留无法循环的特效和粒子后重新检查…",
+            En: "Keeping non-looping effects and particles live, then checking again…"),
 
         ["warning.seam_preview_failed"] = new(
             Zh: "视频组 {0} 的接缝预览未导出（{1}）；生成结论不受影响。",

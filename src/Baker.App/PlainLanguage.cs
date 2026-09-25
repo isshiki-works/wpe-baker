@@ -33,9 +33,9 @@ internal static class PlainLanguage
         if (NoBenefitExpected(plan)) return L(english, "不支持", "Not supported");
         if (CannotBakeReason(plan, english) is not null) return L(english, "不支持", "Not supported");
         string? value = plan[BakeValueAssessment.Field]?["status"]?.GetValue<string>();
-        if (value == "potential_gain") return L(english, "可以生成，有潜在收益", "Ready to generate, potential benefit");
-        if (value == "low_value") return L(english, "可以生成，预计收益较低", "Ready to generate, low expected benefit");
-        if (value == "unknown") return L(english, "可以生成，收益待确认", "Ready to generate, benefit unconfirmed");
+        if (value == "potential_gain") return L(english, "可以生成，预计省电", "Ready to generate, likely saves power");
+        if (value == "low_value") return L(english, "可以生成，预计省电较少", "Ready to generate, small power saving expected");
+        if (value == "unknown") return L(english, "可以生成，省电效果未知", "Ready to generate, power saving unknown");
         return L(english, "可以生成", "Ready to generate");
     }
 
@@ -51,7 +51,7 @@ internal static class PlainLanguage
     /// </summary>
     public static string NextAction(JsonObject? plan, bool english) =>
         plan is not null && CannotBakeReason(plan, english) is not null
-            ? L(english, "原因见\"详情\"", "See Details for the reason") : Numbers(plan, english);
+            ? L(english, "未找到可用的生成方式", "No usable way to generate was found") : Numbers(plan, english);
 
     /// <summary>
     /// 结论的依据一句：路线说明或拒绝原因。只进"详情"面板，不进结论前两行。
@@ -146,7 +146,7 @@ internal static class PlainLanguage
         string? applied = plan?["preset_applied"]?.GetValue<string>();
         if (applied is null || applied == requested || !RetimeProfile.IsKnownPreset(applied)) return "";
         string name = AppJsonPresentation.PresetLabel(applied, english), selected = AppJsonPresentation.PresetLabel(requested, english);
-        return L(english, $"已按{name}生成方案（{selected}不可行）", $"Prepared with {name} ({selected} unavailable)");
+        return L(english, $"已改用动画精度“{name}”（“{selected}”无法生成）", $"Switched Animation precision to {name} ({selected} not possible)");
     }
 
     public static string[] AppliedChangeLines(JsonObject? plan, bool english)
@@ -170,7 +170,7 @@ internal static class PlainLanguage
         JsonObject? candidate = plan["loop"]?["candidates"]?.AsArray().OfType<JsonObject>().FirstOrDefault();
         if (AppJsonPresentation.Number(candidate?["seconds"]) is double seconds && seconds > 0)
         {
-            parts.Add(L(english, "循环周期 ", "loop period ") + Duration(seconds, english));
+            parts.Add(L(english, "循环周期 ", "Loop period ") + Duration(seconds, english));
             parts.Add(L(english, "画面差异：", "frame difference: ") + ChangeLevel(candidate!, english));
         }
         if (FrameRate(plan) is string fps) parts.Add(fps);
@@ -269,7 +269,7 @@ internal static class PlainLanguage
     {
         "pointer" => L(english, "鼠标跟随特效", "Mouse-follow effects"),
         "parallax" => L(english, "鼠标视差", "Mouse parallax"),
-        "feedback" => L(english, "拖影与反馈层", "Feedback trails"),
+        "feedback" => L(english, "拖影效果", "Trail effects"),
         "intro" => L(english, "开场动画", "Intro animation"),
         "clock" => L(english, "时钟与日期", "Clock and date"),
         "media" => L(english, "当前播放曲目", "Now-playing track"),
