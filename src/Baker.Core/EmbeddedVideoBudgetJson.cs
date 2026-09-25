@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// <summary>
-/// 内嵌视频大小判据的 JSON/文案/IO 一侧：试编码判定写成 bake 记录、编码后超限的拒绝理由、ffprobe 读包，以及循环上限收紧记录的 plan 字段。
+/// 内嵌视频大小判据的 JSON/文案/IO 一侧：试编码判定写成 bake 记录、编码后超限的拒绝理由、ffprobe 读包。
 /// 数值判据在 Domain 的 <see cref="EmbeddedVideoBudget"/>。
 /// </summary>
 public static class EmbeddedVideoBudgetJson
@@ -16,7 +16,7 @@ public static class EmbeddedVideoBudgetJson
         ArgumentNullException.ThrowIfNull(groups);
         var result = new JsonObject { ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes, ["frames"] = frames,
             ["assumed_key_frame_interval"] = EmbeddedVideoBudget.AssumedKeyFrameInterval,
-            ["basis"] = "Composition-probe packets extrapolated with one largest key frame per interval and the mean non-key packet; on five existing bakes this was 0.77-1.38x the real size, so it only rejects over-limit loops and never raises the analyze limit." };
+            ["basis"] = "Composition-probe packets extrapolated with one largest key frame per interval and the mean non-key packet; on five existing bakes this was 0.77-1.38x the real size, so it only rejects over-limit loops; the bytes actually written are checked again after encoding." };
         if (groups.Count == 0)
         {
             result["status"] = "not_estimated";
@@ -76,16 +76,6 @@ public static class EmbeddedVideoBudgetJson
         }
         return packets;
     }
-
-    public static JsonObject ToJson(EmbeddedVideoLoopLimit limit) => new() {
-        ["applied"] = limit.Applied, ["requested_loop_length_maximum_seconds"] = limit.RequestedSeconds, ["fit_seconds"] = limit.FitSeconds,
-        ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes, ["encoded_width"] = limit.EncodedWidth, ["encoded_height"] = limit.EncodedHeight,
-        ["packed_alpha"] = limit.PackedAlpha, ["fps_numerator"] = limit.FpsNumerator, ["fps_denominator"] = limit.FpsDenominator,
-        ["reference_bytes_per_frame"] = Math.Round(limit.ReferenceBytesPerFrame),
-        ["basis"] = "Wallpaper Engine 2.8.42 did not display a 2,922,466,521-byte embedded video and played 2,104,622,403 bytes; the reference bitrate is the highest per-frame size among existing long full-frame bakes (3572877776), scaled by pixels^0.537." };
-
-    /// <summary>"该分辨率下最长约 x 秒"一句（结论行与无解原因共用同一格式）；没有收紧时为空串。</summary>
-    public static string Sentence(EmbeddedVideoLoopLimit limit, string language) => PlanNarrative.EmbeddedVideoLimitLine(ToJson(limit), language) ?? "";
 
     private static string Seconds(ulong frames, uint fpsNumerator, uint fpsDenominator) =>
         ((double)frames * fpsDenominator / fpsNumerator).ToString("0.#", CultureInfo.InvariantCulture);

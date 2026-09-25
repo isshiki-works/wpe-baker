@@ -67,12 +67,12 @@ internal static class LoopCeilingChecks
         File.WriteAllText(Path.Combine(sourceDirectory, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
         File.WriteAllText(Path.Combine(sourceDirectory, "scene.json"), "{\"objects\":[]}");
         using var source = new ProjectSource(sourceDirectory);
-        JsonObject Analyze(double seconds, double? ceiling, SwayRetimeOptions? sway = null, EmbeddedVideoLoopLimit? limit = null) => LoopAnalysis.Analyze(
+        JsonObject Analyze(double seconds, double? ceiling, SwayRetimeOptions? sway = null) => LoopAnalysis.Analyze(
             new JsonObject { ["objects"] = new JsonArray { new JsonObject { ["id"] = 1 } } }, source, null,
             new JsonObject { ["runtime_animation_periods"] = new JsonArray { new JsonObject {
                 ["source_owner_layer_id"] = 1, ["mechanism"] = "authored_track", ["track_name"] = null, ["duration_seconds"] = seconds,
                 ["playback_rate"] = 1, ["looping"] = true, ["event_driven"] = false, ["confidence"] = "high" } } },
-            [1], 60, 1, 2, CommonLoopPreference.Balanced, sway, ceiling, limit).ToJson();
+            [1], 60, 1, 2, CommonLoopPreference.Balanced, sway, ceiling).ToJson();
         static ulong[] Frames(JsonObject loop) => loop["candidates"]!.AsArray().Select(candidate => candidate!["frames"]!.GetValue<ulong>()).ToArray();
         JsonObject byDefault = Analyze(300, null), legacy180 = Analyze(300, 180), wide = Analyze(300, 1200);
         check(Frames(byDefault).SequenceEqual(new ulong[] { 18000, 36000 }) && byDefault["maximum_seconds"]!.GetValue<double>() == 600 &&
@@ -88,33 +88,12 @@ internal static class LoopCeilingChecks
 
         var loopLengthMaximumOf = typeof(HybridScenePlanner).GetMethod("LoopLengthMaximumOf", BindingFlags.Static | BindingFlags.NonPublic)!;
         var request = new HybridAnalyzeRequest(2, "source", "assets", "out");
-        check((double)loopLengthMaximumOf.Invoke(null, [request, null, null])! == 600 &&
-            (double)loopLengthMaximumOf.Invoke(null, [request with { LoopLengthMaximumSeconds = 1800 }, null, null])! == 1800 &&
-            (double)loopLengthMaximumOf.Invoke(null, [request with { LoopLengthMaximumSeconds = 1800, SwayRetime = false }, null, null])! == 1800,
+        check((double)loopLengthMaximumOf.Invoke(null, [request, null])! == 600 &&
+            (double)loopLengthMaximumOf.Invoke(null, [request with { LoopLengthMaximumSeconds = 1800 }, null])! == 1800 &&
+            (double)loopLengthMaximumOf.Invoke(null, [request with { LoopLengthMaximumSeconds = 1800, SwayRetime = false }, null])! == 1800,
             "the planner takes the loop ceiling from --loop-max-seconds whether or not sway retime is on, defaulting to 600 seconds");
-
-        // ---- 合并 fix/embedded-video-size 后：内嵌视频 2 GiB 收紧与 --loop-max-seconds 是同一个实际上限 ----
-        var swayOptionsOf = typeof(HybridScenePlanner).GetMethod("SwayRetimeOptionsOf", BindingFlags.Static | BindingFlags.NonPublic)!;
-        var fourKRequest = new HybridAnalyzeRequest(2, "source", "assets", "out", Width: 3840, Height: 2160, FpsNumerator: 60,
-            LoopLengthMaximumSeconds: 3600);
-        var opaqueGroups = new JsonArray(new JsonObject { ["transparent"] = false });
-        var packedGroups = new JsonArray(new JsonObject { ["transparent"] = false }, new JsonObject { ["transparent"] = true });
-        double opaqueCeiling = (double)loopLengthMaximumOf.Invoke(null, [fourKRequest, opaqueGroups, null])!;
-        double packedCeiling = (double)loopLengthMaximumOf.Invoke(null, [fourKRequest, packedGroups, null])!;
-        var swayOn = (SwayRetimeOptions)swayOptionsOf.Invoke(null,
-            [fourKRequest with { SwayRetime = true }, new JsonObject { ["visible_width"] = 3840, ["visible_height"] = 2160 }, packedGroups, null])!;
-        check(opaqueCeiling == 558 && packedCeiling < 558 &&
-            (double)loopLengthMaximumOf.Invoke(null, [fourKRequest, null, null])! == 558 &&
-            (double)loopLengthMaximumOf.Invoke(null, [fourKRequest with { LoopLengthMaximumSeconds = 300 }, opaqueGroups, null])! == 300 &&
-            swayOn.LoopLengthMaximumSeconds == packedCeiling && swayOn.VideoLimit is { Applied: true, PackedAlpha: true },
-            "the solver ceiling and the sway Lmax are one value: --loop-max-seconds lowered by the embedded video limit, with or without sway retime");
-        EmbeddedVideoLoopLimit fourK = EmbeddedVideoBudget.LoopLengthLimit(3600, 3840, 2160, false, 60, 1)!;
-        JsonObject limitedOff = Analyze(300, fourK.EffectiveSeconds, limit: fourK);
-        JsonObject roomy = Analyze(300, 600, limit: EmbeddedVideoBudget.LoopLengthLimit(600, 1920, 1080, false, 60, 1));
-        check(Frames(limitedOff).SequenceEqual(new ulong[] { 18000 }) && limitedOff["maximum_seconds"]!.GetValue<double>() == 558 &&
-            limitedOff["embedded_video_limit"]!["applied"]!.GetValue<bool>() && limitedOff["sway_retime"] is null &&
-            roomy["embedded_video_limit"] is null && Frames(roomy).SequenceEqual(Frames(byDefault)) &&
-            Throws(() => Analyze(300, 600, limit: fourK)),
-            "with sway retime off a lowered ceiling is still recorded on the loop and stated in the conclusion; a mismatched limit is rejected");
+        // 4K 不再按参考码率收紧（原先 3840×2160@60 截到 558 s，透明组 287 s）：成品大小由 bake 按试编码与实际字节判。
+        check((double)loopLengthMaximumOf.Invoke(null, [request with { Width = 3840, Height = 2160, FpsNumerator = 60 }, null])! == 600,
+            "the analyze ceiling at 4K is the preset's 600 seconds; embedded-video size is judged by the bake, not a reference bitrate");
     }
 }

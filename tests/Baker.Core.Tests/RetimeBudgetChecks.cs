@@ -50,7 +50,7 @@ internal static class RetimeBudgetChecks
     {
         // 起因：上限同时决定通用求解器生成哪些候选 P，摆动只能在选中候选的整数倍上闭合。阿米娅 600 s 上限下 0.53%、
         // 1175 s 上限下反而 0.91%，质量档"改动最小"被上限口径破坏。所以质量档两个上限各求一次，取可见改动更小者。
-        // 判定的入参是生效上限（已按内嵌视频 2 GiB 收紧），不是档位名义上限。
+        // 判定的入参是生效上限，不是档位名义上限。
         static bool Compares(string? preset, double? ceilingOverride, double effectiveSeconds) =>
             RetimeProfile.Resolve(preset, null, ceilingOverride, 2).ComparesQualityCeilings(effectiveSeconds);
         check(RetimeProfile.QualityComparisonSeconds == 600 &&
@@ -62,13 +62,6 @@ internal static class RetimeBudgetChecks
             !Compares(null, null, 600),
             "quality ceiling: only the quality preset compares two ceilings, and only when its own ceiling is longer than 600 s");
 
-        // 2 GiB 收紧后的生效上限才算数：3840×2160@60 不透明组只剩 558 s，两个上限是同一次求解，不再白跑第二次；
-        // 1080p 含透明的阿米娅生效上限 1175 s，仍然要比。
-        double fourK = EmbeddedVideoBudget.LoopLengthLimit(1200, 3840, 2160, packedAlpha: false, 60, 1)!.EffectiveSeconds;
-        double amiya = EmbeddedVideoBudget.LoopLengthLimit(1200, 1920, 1080, packedAlpha: true, 60, 1)!.EffectiveSeconds;
-        check(fourK == 558 && !Compares(RetimeProfile.Quality, null, fourK) &&
-            amiya > RetimeProfile.QualityComparisonSeconds && Compares(RetimeProfile.Quality, null, amiya),
-            "quality ceiling: the effective ceiling after the 2 GiB squeeze decides, so 4K stops comparing and 1080p still does");
         // 阿米娅的实测读数：档位上限那次改动更大，取 600 s 那次。
         var atPreset = new RetimeProfile.QualityCeilingReading(1175, 0.905, 42000);
         var atComparison = new RetimeProfile.QualityCeilingReading(600, 0.531, 36000);

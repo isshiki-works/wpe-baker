@@ -372,7 +372,7 @@ internal static class SwayRetimeChecks
             CommonLoopPreference.Balanced, null).ToJson();
         check(offAgain.ToJsonString() == off.ToJsonString(), "sway retime off: passing no options is byte-identical to the default call");
 
-        // feat/retime-budget：质量档在档位上限（1200 s，1080p60 被内嵌视频 2 GiB 收到 1175 s）与 600 s 下各求一次，
+        // feat/retime-budget：质量档在档位上限（这里给 1200 s）与 600 s 下各求一次，
         // 取可见摆动改动更小的那次，并把两次读数记进 quality_ceiling_used。其余档位只求一次，记录不出现。
         JsonObject ForProfile(string preset, double? maximum = null) => HybridScenePlanner.AnalyzeLoopForProfile(() => scene.DeepClone().AsObject(),
             source, null, new JsonObject(), [1, 2],
@@ -385,7 +385,7 @@ internal static class SwayRetimeChecks
         JsonObject[] tried = used["tried"]!.AsArray().OfType<JsonObject>().ToArray();
         double Visible(JsonObject entry) => entry["max_change_visible_percent"]?.GetValue<double>() ?? double.PositiveInfinity;
         check(tried.Length == 2 && tried[0]["source"]!.GetValue<string>() == "preset" && tried[1]["source"]!.GetValue<string>() == "quality_comparison" &&
-            Math.Abs(tried[0]["ceiling_seconds"]!.GetValue<double>() - 1175) < 1 && tried[1]["ceiling_seconds"]!.GetValue<double>() == 600 &&
+            tried[0]["ceiling_seconds"]!.GetValue<double>() == 1200 && tried[1]["ceiling_seconds"]!.GetValue<double>() == 600 &&
             used["seconds"]!.GetValue<double>() == quality["maximum_seconds"]!.GetValue<double>() &&
             Visible(tried[used["source"]!.GetValue<string>() == "preset" ? 0 : 1]) <= Visible(tried[used["source"]!.GetValue<string>() == "preset" ? 1 : 0]) &&
             balancedLoop["quality_ceiling_used"] is null,
@@ -561,44 +561,22 @@ internal static class SwayRetimeChecks
         check(MessageCatalog.Find("summary.sway_retime") is not null && MessageCatalog.Find("sway_retime.no_multiple_within_maximum") is not null,
             "sway retime copy: the conclusion and rejection texts are in the bilingual message table");
 
-        // 内嵌视频 2 GiB（fix/embedded-video-size）：循环长度上限被收紧时写进 plan，结论行与无解原因说明"该分辨率下最长约 x 秒"。
-        EmbeddedVideoLoopLimit fourK = EmbeddedVideoBudget.LoopLengthLimit(3600, 3840, 2160, false, 60, 1)!;
-        JsonObject limited = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, options with { LoopLengthMaximumSeconds = fourK.EffectiveSeconds, VideoLimit = fourK }).ToJson();
-        check(fourK.Applied && fourK.EffectiveSeconds == 558 &&
-            limited["sway_retime"]!["loop_length_maximum_seconds"]!.GetValue<double>() == 558 &&
-            limited["sway_retime"]!["embedded_video_limit"]!["applied"]!.GetValue<bool>() &&
-            limited["sway_retime"]!["embedded_video_limit"]!["requested_loop_length_maximum_seconds"]!.GetValue<double>() == 3600 &&
-            limited["candidates"]!.AsArray().OfType<JsonObject>().All(candidate => candidate["frames"]!.GetValue<ulong>() <= 558 * 60),
-            "embedded video limit: a lowered loop-length maximum bounds every candidate and the conclusion states the longest loop at this resolution");
-        EmbeddedVideoLoopLimit roomy = EmbeddedVideoBudget.LoopLengthLimit(600, 1920, 1080, false, 60, 1)!;
-        JsonObject unlimited = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, options with { VideoLimit = roomy }).ToJson();
-        check(!roomy.Applied && unlimited["sway_retime"]!["embedded_video_limit"]!["applied"]!.GetValue<bool>() == false &&
-            unlimited["candidates"]!.ToJsonString() == on["candidates"]!.ToJsonString(),
-            "embedded video limit: a maximum that already fits changes no candidate and adds no sentence");
-        var squeezed = new EmbeddedVideoLoopLimit(600, 0.5, 3840, 2160, false, 60, 1, 64102);
         JsonObject squeezedLoop = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, null, new JsonObject(), [1, 2], 60, 1, 2,
-            CommonLoopPreference.Balanced, options with { LoopLengthMaximumSeconds = squeezed.EffectiveSeconds, VideoLimit = squeezed }).ToJson();
-        // 合并 fix/loop-ceiling 后求解器与改频共用同一个收紧后的上限：0.5 秒上限下求解器先就没有基础候选，状态是 no_base_candidate。
+            CommonLoopPreference.Balanced, options with { LoopLengthMaximumSeconds = 0.5 }).ToJson();
+        // 求解器与改频共用同一个上限：0.5 秒上限下求解器先就没有基础候选，状态是 no_base_candidate。
         check(squeezedLoop["sway_retime"]!["status"]!.GetValue<string>() == "no_base_candidate",
-            "embedded video limit: when the lowered maximum leaves no L = kP the bilingual reason says why the maximum is lower than requested");
+            "sway retime: when the loop-length maximum leaves no base candidate the status is no_base_candidate");
 
-        // analyze、布局降级与 bake 前刷新共用的参数构造：透明组按双宽算，输出尺寸未知时不收紧，开关关闭时仍为 null。
+        // analyze、布局降级与 bake 前刷新共用的参数构造：上限就是请求里的值（不按分辨率收紧），开关关闭时为 null。
         var optionsOf = typeof(HybridScenePlanner).GetMethod("SwayRetimeOptionsOf", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
         var nativeRequest = new HybridAnalyzeRequest(2, "s", "a", "o", Width: 3840, Height: 2160, FpsNumerator: 60, SwayRetime: true, LoopLengthMaximumSeconds: 3600);
         var nativeProjection = new JsonObject { ["visible_width"] = 3840, ["visible_height"] = 2160 };
-        SwayRetimeOptions? Of(HybridAnalyzeRequest value, JsonArray? groups) => (SwayRetimeOptions?)optionsOf.Invoke(null, [value, nativeProjection, groups, null]);
-        SwayRetimeOptions opaqueOptions = Of(nativeRequest, new JsonArray(new JsonObject { ["transparent"] = false }))!;
-        SwayRetimeOptions packedOptions = Of(nativeRequest, new JsonArray(new JsonObject { ["transparent"] = false }, new JsonObject { ["transparent"] = true }))!;
-        SwayRetimeOptions shortOptions = Of(nativeRequest with { LoopLengthMaximumSeconds = 300 }, null)!;
+        SwayRetimeOptions? Of(HybridAnalyzeRequest value, JsonArray? groups) => (SwayRetimeOptions?)optionsOf.Invoke(null, [value, nativeProjection, null]);
+        SwayRetimeOptions opaqueOptions = Of(nativeRequest, null)!;
         SwayRetimeOptions unknownSize = Of(nativeRequest with { Width = 0, Height = 0 }, null)!;
-        check(opaqueOptions.LoopLengthMaximumSeconds == 558 && opaqueOptions.VideoLimit is { Applied: true, PackedAlpha: false, EncodedWidth: 3840 } &&
-            packedOptions.VideoLimit is { PackedAlpha: true, EncodedWidth: 7680 } && packedOptions.LoopLengthMaximumSeconds < 558 &&
-            shortOptions.LoopLengthMaximumSeconds == 300 && shortOptions.VideoLimit is { Applied: false } &&
-            unknownSize.LoopLengthMaximumSeconds == 3600 && unknownSize.VideoLimit is null &&
-            Of(nativeRequest with { SwayRetime = false }, null) is null,
-            "embedded video limit: sway options take the output size, double the width for transparent groups, and keep smaller or unknown-size maximums");
+        check(opaqueOptions.LoopLengthMaximumSeconds == 3600 && Of(nativeRequest with { LoopLengthMaximumSeconds = 300 }, null)!.LoopLengthMaximumSeconds == 300 &&
+            unknownSize.LoopLengthMaximumSeconds == 3600 && Of(nativeRequest with { SwayRetime = false }, null) is null,
+            "sway retime options: the loop-length maximum is the requested one at any output size, and sway off gives null");
         // fix-j：速度门限倍率取最终输出画布的短边：3840×2160 与竖屏 2160×3840 都是 2，尺寸未知按 1080p 口径取 1。
         check(opaqueOptions.SpeedLimitScale == 2 && Of(nativeRequest with { Width = 2160, Height = 3840 }, null)!.SpeedLimitScale == 2 &&
             unknownSize.SpeedLimitScale == 1,

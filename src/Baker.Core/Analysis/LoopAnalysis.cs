@@ -13,19 +13,16 @@ internal static class LoopAnalysis
     internal static LoopReport Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory, JsonObject runtime,
         IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent = 2,
         CommonLoopPreference preference = CommonLoopPreference.Balanced, SwayRetimeOptions? swayRetime = null,
-        double? loopLengthMaximumSeconds = null, EmbeddedVideoLoopLimit? loopLengthLimit = null, JsonArray? videoGroups = null,
+        double? loopLengthMaximumSeconds = null, JsonArray? videoGroups = null,
         IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null)
     {
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
             throw new ArgumentException("FPS must be positive and retiming must be between zero and ten percent.");
-        // 循环时长上限 = --loop-max-seconds 再按内嵌视频 2 GiB 收紧后的那一个值：所有周期分量共用。
-        // 摆动改频的 Lmax 与收紧记录来自同一个请求字段，三者不许不一致。
+        // 循环时长上限 = --loop-max-seconds（或档位兜底）这一个值：所有周期分量共用，摆动改频的 Lmax 不许与它不一致。
         double ceilingSeconds = loopLengthMaximumSeconds ?? swayRetime?.LoopLengthMaximumSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
         if (swayRetime is not null && swayRetime.LoopLengthMaximumSeconds != ceilingSeconds)
             throw new ArgumentException("The sway retime loop length maximum must equal the solver loop length ceiling.");
-        if (loopLengthLimit is not null && loopLengthLimit.EffectiveSeconds != ceilingSeconds)
-            throw new ArgumentException("The embedded video loop length limit must equal the solver loop length ceiling.");
         CommonLoopRational ceiling = CommonLoopSolver.Ceiling(ceilingSeconds);
         ceilingSeconds = ceiling.ToSeconds();
         // 着色器裁定用的调速余量与求解器同一个预算（maximumRetimePercent = 档位预算），不各写各的。
@@ -192,7 +189,7 @@ internal static class LoopAnalysis
             candidates, unresolved, sourceStatic, videoControlScope,
             new LoopContentCadence(contentStep, animation.Where(x => x.IsVideo)
                 .Select(x => new LoopCadenceClip(x.LockedComponent.Id, x.OwnerLayerId, x.TrackName, x.ClipFrameRate)).ToArray()),
-            shader.Components, swayRecord, particleDefault, loopLengthLimit) { GroupClockSteps = clockSteps ?? [] };
+            shader.Components, swayRecord, particleDefault) { GroupClockSteps = clockSteps ?? [] };
     }
 
     private const string GroupStepPrefix = "group_period:";

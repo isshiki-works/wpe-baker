@@ -1,9 +1,10 @@
 namespace Periodica.Domain;
 
 /// <summary>
-/// Wallpaper Engine 内嵌视频（TEX 容器 TEXB0004 里的 MP4）的大小上限，以及成品视频大小的两种预估：
-/// analyze 按参考码率收紧摆动改频的循环长度上限；bake 在主渲染前按短段试编码（composition probe）外推，超限就干净拒绝；
-/// 编码后仍超限（外推低估）时在接缝校验前拒绝，不再跑到装配才失败。
+/// Wallpaper Engine 内嵌视频（TEX 容器 TEXB0004 里的 MP4）的大小上限，以及成品视频大小的预估：
+/// bake 在主渲染前按这个场景自己的短段试编码（composition probe）外推，超限就干净拒绝；编码后按实际字节再判一次。
+/// analyze 不按参考码率收紧循环长度：参考码率是现有成品里最高的那张，对一般场景高估一个数量级
+/// （3695791724 按 4K 估 4.5 GB，AV1 实际约 0.4 GB），会把 600 s 的循环截成 25 s。
 /// 这里只放数值判据；写 plan/bake JSON、拒绝文案与 ffprobe 读包在 Baker.Core 的 EmbeddedVideoBudgetJson。
 /// </summary>
 public static class EmbeddedVideoBudget
@@ -56,30 +57,11 @@ public static class EmbeddedVideoBudget
     public static bool HardwareOverBudget(ulong frames, uint width, uint height, bool packedAlpha, bool hevc) =>
         frames * ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)) * HardwareBytesRatio(hevc) > MaximumBytes;
 
-    /// <summary>参考码率下装得进上限的最多帧数。</summary>
-    public static ulong ReferenceMaximumFrames(uint width, uint height, bool packedAlpha, bool hevc = false) =>
-        (ulong)Math.Floor(MaximumBytes / (ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)) * (hevc ? HevcSoftwareBytesRatio : 1)));
-
     /// <summary>帧数换成整秒（向下取整）。</summary>
     public static double WholeSeconds(ulong frames, uint fpsNumerator, uint fpsDenominator)
     {
         if (fpsNumerator == 0 || fpsDenominator == 0) throw new ArgumentException("FPS must be positive.");
         return Math.Floor((double)frames * fpsDenominator / fpsNumerator);
-    }
-
-    /// <summary>
-    /// 摆动改频的循环长度上限按参考码率收紧。输出尺寸未知（0）时不收紧并返回 null。
-    /// 依据是参考码率（现有成品里最高的），不是这个场景自己的码率：画面简单的场景在长档会被多限，bake 前的试编码外推只负责拒绝、不负责放宽。
-    /// </summary>
-    public static EmbeddedVideoLoopLimit? LoopLengthLimit(double requestedSeconds, uint width, uint height, bool packedAlpha,
-        uint fpsNumerator, uint fpsDenominator, bool hevc = false)
-    {
-        if (width == 0 || height == 0 || fpsNumerator == 0 || fpsDenominator == 0) return null;
-        // HEVC 配置的软件成品是 libx265，同 crf 下比参考（x264）大 HevcSoftwareBytesRatio 倍，按 x264 算会低估。
-        double perFrame = ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)) * (hevc ? HevcSoftwareBytesRatio : 1);
-        ulong frames = ReferenceMaximumFrames(width, height, packedAlpha, hevc);
-        return new(requestedSeconds, WholeSeconds(frames, fpsNumerator, fpsDenominator), width * (packedAlpha ? 2u : 1u), height,
-            packedAlpha, fpsNumerator, fpsDenominator, perFrame);
     }
 
     /// <summary>ffprobe 读出的一个视频包：字节数与是否关键帧。</summary>
@@ -88,7 +70,7 @@ public static class EmbeddedVideoBudget
     /// <summary>
     /// 从短段试编码的包大小外推 frames 帧的成品字节：每 <see cref="AssumedKeyFrameInterval"/> 帧一个关键帧，大小取试片里最大的关键帧；
     /// 其余帧取试片非关键帧的平均。试片只有 48 帧、从第 0 帧起、不含粒子预热，现有 5 案外推为实测的 0.77–1.38 倍
-    /// （高熵场景偏低，静态插画偏高），所以只拿来在超限时拒绝，不用来放宽 analyze 的上限。
+    /// （高熵场景偏低，静态插画偏高），所以只拿来在超限时拒绝；编码后另按实际字节再判。
     /// </summary>
     public static double ExtrapolateBytes(IReadOnlyList<VideoPacket> packets, ulong frames)
     {
@@ -118,13 +100,3 @@ public static class EmbeddedVideoBudget
         long ProbeBytes, IReadOnlyList<VideoPacket> Packets);
 }
 
-/// <summary>analyze 对摆动改频循环长度上限的收紧记录。</summary>
-public sealed record EmbeddedVideoLoopLimit(double RequestedSeconds, double FitSeconds, uint EncodedWidth, uint EncodedHeight,
-    bool PackedAlpha, uint FpsNumerator, uint FpsDenominator, double ReferenceBytesPerFrame)
-{
-    /// <summary>用户给的上限超过参考码率下装得下的长度时才收紧。</summary>
-    public bool Applied => FitSeconds < RequestedSeconds;
-
-    /// <summary>生效的循环长度上限（秒）。</summary>
-    public double EffectiveSeconds => Math.Min(RequestedSeconds, FitSeconds);
-}

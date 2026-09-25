@@ -97,8 +97,9 @@ conditions hold.
   efficiency allows up to 5% on any visible component and takes the shortest
   loop inside it, balanced allows 3%, quality solves for the smallest change
   instead of a percentage. The length caps (600 / 600 / 1200 s) are a
-  backstop rather than the knob, the 2 GiB size ceiling can cut them shorter,
-  and the plan records which one bound the result. Three guards hold in all
+  backstop rather than the knob. Analysis no longer shortens them for the
+  2 GiB embedded-video limit; the bake judges size from this scene's trial
+  encode and the bytes actually written. Three guards hold in all
   three presets and do not move with the budget: the slowest visible
   component runs at least 3 cycles, the loop is at least 60 s, and no visible
   component's peak speed shifts by more than 0.2 px/s. Across a 27-title
