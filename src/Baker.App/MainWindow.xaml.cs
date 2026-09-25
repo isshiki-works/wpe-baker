@@ -101,7 +101,7 @@ public partial class MainWindow : Window
         initialized = true;
         // 默认界面语言跟随系统（与 CLI 的 --lang 默认值同一处逻辑），不再写死中文。
         SetLanguage(MessageCatalog.DefaultLanguage() != MessageCatalog.Chinese);
-        StatusText.Text = L("未选择壁纸。选择壁纸后执行分析。", "No wallpaper selected. Select a wallpaper, then run analysis.");
+        StatusText.Text = L("未选择壁纸", "No wallpaper selected");
     }
 
     private async void WindowLoaded(object sender, RoutedEventArgs e)
@@ -111,7 +111,6 @@ public partial class MainWindow : Window
             var devices = await Task.Run(VulkanDevices.Enumerate);
             GpuBox.ItemsSource = devices;
             GpuBox.SelectedItem = devices.FirstOrDefault(d => d.DeviceType == VulkanDeviceType.DiscreteGpu) ?? devices.FirstOrDefault();
-            if (devices.Count == 0) setupError = "No Vulkan device found.";
         }
         catch (Exception error) { setupError = error.Message; }
         RefreshControls();
@@ -153,9 +152,9 @@ public partial class MainWindow : Window
         if (activeJob is not null) StatusText.Text = activeJob.Title + " · " + activeJob.Detail;
         else if (!processing && !analyzing) StatusText.Text = sourceRejection is not null ? sourceRejection.Text(AppEnvironment.Language)
             : hybridPlan is null
-            ? L("未选择壁纸。选择壁纸后执行分析。", "No wallpaper selected. Select a wallpaper, then run analysis.")
+            ? L("未选择壁纸", "No wallpaper selected")
             // 这张到底能不能做，结论区已经写得很清楚了，状态栏别在这里再下一次结论。
-            : L("分析完成：结论见左侧结论区。", "Analysis complete; the verdict is in the panel on the left.");
+            : L("分析完成", "Analysis complete");
     }
 
     private void LanguageChanged(object sender, SelectionChangedEventArgs e)
@@ -286,9 +285,10 @@ public partial class MainWindow : Window
         }, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
-    /// <summary>播放版编码路径；支持的 Vulkan 路径直接生成视频。</summary>
+    /// <summary>视频编码器下拉按顺序对应的编码路径；下拉里显示的是界面名称。</summary>
+    private static readonly string[] EncoderValues = ["software", "auto", "vulkan", "mf", "nvenc", "qsv", "amf"];
     private string SelectedPlaybackEncoder() =>
-        PlaybackEncoderSelection.Normalize((EncoderBox.SelectedItem as ComboBoxItem)?.Content as string);
+        PlaybackEncoderSelection.Normalize(EncoderValues.ElementAtOrDefault(EncoderBox.SelectedIndex));
 
     /// <summary>画面尺寸两格：都留空得 0×0（按屏幕分辨率），都填正整数得指定尺寸，其余视为无效。</summary>
     private bool TryFrameSize(out uint width, out uint height)
@@ -303,7 +303,7 @@ public partial class MainWindow : Window
     private PresetSettings CurrentPresetSettings()
     {
         if (!TryFrameSize(out uint width, out uint height))
-            throw new InvalidDataException("Frame width and height must both be positive integers, or both empty to use the screen resolution.");
+            throw new InvalidDataException(L("宽和高需同时填写正整数，或同时留空。", "Fill in both width and height, or leave both empty."));
         // 剩余实时图层置顶与简化文字效果两个开关已从界面移除：置顶固定为开（--live-overlays foreground），
         // 简化文字效果固定为原默认值（关，即 preserve）。
         return new(width, height, FpsBox.Text.Trim(),
@@ -374,13 +374,13 @@ public partial class MainWindow : Window
             _ => L("速度与画面差异平衡。", "Balanced speed and visual difference.")
         };
         InteractionNote.Text = SelectedInteraction() switch {
-            "keep" => L("鼠标效果照旧", "Mouse effects unchanged"),
-            "off" => L("关闭输入效果", "Disables input-driven effects"),
+            "keep" => L("保留鼠标效果", "Keeps mouse effects"),
+            "off" => L("关闭鼠标效果", "Turns off mouse effects"),
             _ => L("视角保持固定", "View stays fixed") };
         RetimeBudgetOrigin.Text = RetimeBudgetFollowsPreset
-            ? L("取自档位", "from the selected profile")
+            ? L("跟随动画精度", "follows Animation precision")
             : RetimeBudgetOverride() is null ? L("无效值，范围 0 到 5", "invalid value, range 0 to 5")
-            : L("手动覆盖", "manual override");
+            : L("手动设置", "manual");
     }
 
     private async void SavePresetClicked(object sender, RoutedEventArgs e)
@@ -388,8 +388,8 @@ public partial class MainWindow : Window
         if (presetBusy) return;
         var dialog = new SaveFileDialog
         {
-            Title = L("保存当前壁纸方案", "Save current wallpaper preset"),
-            Filter = "WPE Baker preset|*.wpebaker.json|JSON|*.json", DefaultExt = ".wpebaker.json",
+            Title = L("保存设置", "Save settings"),
+            Filter = L("设置文件", "Settings file") + "|*.wpebaker.json|JSON|*.json", DefaultExt = ".wpebaker.json",
             AddExtension = true, FileName = "settings.wpebaker.json"
         };
         if (dialog.ShowDialog(this) != true) return;
@@ -398,7 +398,7 @@ public partial class MainWindow : Window
         {
             string sourcePath = SourceBox.Text.Trim();
             if (!AppEnvironment.OutputValid(Path.GetDirectoryName(Path.GetFullPath(dialog.FileName))!, sourcePath))
-                throw new InvalidDataException(L("方案不能保存在壁纸来源文件夹内。", "Presets cannot be saved inside the wallpaper source folder."));
+                throw new InvalidDataException(L("设置文件不能保存在壁纸文件夹内。", "Settings can't be saved inside the wallpaper folder."));
             PresetSettings settings = CurrentPresetSettings();
             JsonObject definitions = sourcePropertyDefinitions.DeepClone().AsObject();
             // 方案存的是面板上实际生效的值（WPE 设置 + 面板改动），换机器或之后改了 WPE 设置也能原样恢复。
@@ -413,15 +413,15 @@ public partial class MainWindow : Window
             });
             if (revision != settingsRevision || !string.Equals(sourcePath, SourceBox.Text.Trim(), StringComparison.OrdinalIgnoreCase))
             {
-                StatusText.Text = L("保存期间设置已变更，未写入方案。", "Settings changed while saving; no preset was written.");
+                StatusText.Text = L("保存期间设置有变动，未保存。", "Settings changed while saving; nothing was saved.");
                 return;
             }
             JsonObject preset = SettingsPreset.Create(sourcePath, sourceHash, settings, properties);
             _ = SettingsPreset.Parse(preset, definitions);
             File.WriteAllText(dialog.FileName, preset.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-            StatusText.Text = L("方案已保存。", "Preset saved.");
+            StatusText.Text = L("设置已保存。", "Settings saved.");
         }
-        catch (Exception error) { StatusText.Text = L("方案保存失败：", "Preset save failed: ") + error.Message; }
+        catch (Exception error) { StatusText.Text = L("设置保存失败：", "Couldn't save settings: ") + error.Message; }
         finally { presetBusy = false; RefreshControls(); }
     }
 
@@ -430,8 +430,8 @@ public partial class MainWindow : Window
         if (analyzing || processing || presetBusy || QueueList.SelectedItem is not null) return;
         var dialog = new OpenFileDialog
         {
-            Title = L("载入壁纸方案", "Load wallpaper preset"),
-            Filter = "WPE Baker preset|*.wpebaker.json|JSON|*.json", CheckFileExists = true
+            Title = L("载入设置", "Load settings"),
+            Filter = L("设置文件", "Settings file") + "|*.wpebaker.json|JSON|*.json", CheckFileExists = true
         };
         if (dialog.ShowDialog(this) != true) return;
         string sourcePath = SourceBox.Text.Trim();
@@ -440,7 +440,7 @@ public partial class MainWindow : Window
         try
         {
             JsonObject document = JsonNode.Parse(await File.ReadAllTextAsync(dialog.FileName))?.AsObject()
-                ?? throw new InvalidDataException("Preset is not a JSON object.");
+                ?? throw new InvalidDataException(L("设置文件无效。", "Invalid settings file."));
             var sourceState = await Task.Run(async () =>
             {
                 using var source = new ProjectSource(sourcePath);
@@ -448,16 +448,18 @@ public partial class MainWindow : Window
             });
             if (revision != settingsRevision || !string.Equals(sourcePath, SourceBox.Text.Trim(), StringComparison.OrdinalIgnoreCase))
             {
-                StatusText.Text = L("载入期间设置已变更，未应用方案。", "Settings changed while loading; preset was not applied.");
+                StatusText.Text = L("载入期间设置有变动，未载入。", "Settings changed while loading; nothing was loaded.");
                 return;
             }
             JsonObject definitions = sourceState.Definitions;
-            SettingsPreset preset = SettingsPreset.Parse(document, definitions);
+            SettingsPreset preset;
+            try { preset = SettingsPreset.Parse(document, definitions); }
+            catch (InvalidDataException) { throw new InvalidDataException(L("设置文件无效。", "Invalid settings file.")); }
             if (!string.Equals(sourceState.Hash, preset.SourceSha256, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Preset belongs to a different wallpaper source.");
+                throw new InvalidDataException(L("设置文件属于另一个壁纸。", "These settings belong to another wallpaper."));
             VulkanDeviceInfo? gpu = preset.Settings.DeviceUuid is null ? null : GpuBox.Items.OfType<VulkanDeviceInfo>()
                 .FirstOrDefault(device => device.DeviceUuid.Equals(preset.Settings.DeviceUuid, StringComparison.OrdinalIgnoreCase));
-            if (preset.Settings.DeviceUuid is not null && gpu is null) throw new InvalidDataException("Preset render GPU is not available.");
+            if (preset.Settings.DeviceUuid is not null && gpu is null) throw new InvalidDataException(L("设置文件指定的显卡不可用。", "The GPU in the settings file isn't available."));
 
             suppressSettingsChanges = true;
             try
@@ -473,8 +475,7 @@ public partial class MainWindow : Window
                 // 剩余实时图层置顶／简化文字效果两项界面已移除，方案里的旧值不再回填控件（分析时固定传 foreground/preserve）。
                 LayeredVideoBox.IsChecked = preset.Settings.LayeredVideo;
                 AudioEffectsBox.IsChecked = preset.Settings.AudioEffects;
-                EncoderBox.SelectedItem = EncoderBox.Items.OfType<ComboBoxItem>()
-                    .First(item => (string)item.Content == preset.Settings.PlaybackEncoder);
+                EncoderBox.SelectedIndex = Array.IndexOf(EncoderValues, preset.Settings.PlaybackEncoder);
                 MatchEffectResolutionBox.IsChecked = preset.Settings.MatchEffectResolution;
                 // 方案文件里的 loop_preference 就是档位（两者一一对应）；调速预算回到该档的值。
                 PresetBox.SelectedIndex = preset.Settings.LoopPreference switch { "performance" => 0, "quality" => 2, _ => 1 };
@@ -486,9 +487,9 @@ public partial class MainWindow : Window
             analysisCancellation?.Cancel(); hybridPlan = null;
             ++settingsRevision;
             BuildPropertyEditors(); UpdatePlanSummary(); RefreshControls();
-            StatusText.Text = L("方案已载入。生成前需重新分析。", "Preset loaded. Re-analysis required before generating.");
+            StatusText.Text = L("设置已载入，生成前需重新分析。", "Settings loaded; analyze again before generating.");
         }
-        catch (Exception error) { StatusText.Text = L("方案载入失败：", "Preset load failed: ") + error.Message; }
+        catch (Exception error) { StatusText.Text = L("设置载入失败：", "Couldn't load settings: ") + error.Message; }
         finally { presetBusy = false; RefreshControls(); }
     }
 
@@ -506,12 +507,12 @@ public partial class MainWindow : Window
             if (tools is null) throw new InvalidOperationException(toolsError.Length > 0 ? toolsError : setupError);
             ReloadSourcePropertyDefinitions(source);
             using var sourceView = new ProjectSource(source);
-            if (sourceView.Kind != "scene") throw new InvalidDataException("Hybrid baking requires a Scene project.");
-            if (!AppEnvironment.TryFrameRate(FpsBox.Text, out uint numerator, out uint denominator)) throw new InvalidDataException("Invalid frame rate.");
+            if (sourceView.Kind != "scene") throw new InvalidDataException(L("仅支持场景（Scene）类壁纸。", "Only Scene wallpapers are supported."));
+            if (!AppEnvironment.TryFrameRate(FpsBox.Text, out uint numerator, out uint denominator)) throw new InvalidDataException(L("帧率无效。", "Invalid frame rate."));
             var gpu = GpuBox.SelectedItem as VulkanDeviceInfo;
             string output = Path.Combine(Path.GetTempPath(), "WpeBaker", "analysis-" + Guid.NewGuid().ToString("N"));
             if (!TryFrameSize(out uint width, out uint height))
-                throw new InvalidDataException("Frame width and height must both be positive integers, or both empty to use the screen resolution.");
+                throw new InvalidDataException(L("宽和高需同时填写正整数，或同时留空。", "Fill in both width and height, or leave both empty."));
             // 属性底值是用户在 Wallpaper Engine 里的设置，面板里的改动覆盖在上；来源记录写进 plan。
             var (properties, propertiesOrigin) = AppJsonPresentation.MergeWpeProperties(sourceWpeProperties, sourcePropertyDefinitions, analysisPreviewOverrides);
             // 控件 → AnalyzeOptions → 请求，与 CLI 的选项表同一个工厂。档位走同一条 RetimeProfile 路径；摆动改频三档都开（设计 §3），
@@ -535,7 +536,7 @@ public partial class MainWindow : Window
 
                 UpdatePlanSummary(); BuildPropertyEditors(); RefreshControls();
                 StatusText.Text = found["blockers"] is JsonArray { Count: > 0 }
-                    ? L("分析完成：不可生成，原因见结论区。", "Analysis complete: cannot generate; see the verdict above.")
+                    ? L("分析完成：不支持", "Analysis complete: not supported")
                     : L("分析完成：可生成。", "Analysis complete: ready to generate.");
             }
         }
@@ -591,7 +592,7 @@ public partial class MainWindow : Window
     {
         if (PlainLanguage.NoBenefitExpected(hybridPlan)) return PlainLanguage.NoBenefitLine(english);
         if (hybridPlan?["video_dominant"]?["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
-            return L("原作已是视频，转换后不会减少渲染工作。", "The original is already a video; conversion will not reduce rendering work.");
+            return L("原壁纸主要是视频，生成后不省电。", "The wallpaper is mostly video already; generating won't save power.");
         string[] blockers = AppJsonPresentation.BlockerLines(hybridPlan, english);
         if (blockers.Length == 0) return PlainLanguage.NextAction(hybridPlan, english);
         string text = blockers[0];
@@ -612,7 +613,7 @@ public partial class MainWindow : Window
     private void UpdateOutputSummary()
     {
         string fps = FpsBox.Text.Trim();
-        var parts = new List<string> { fps.Length == 0 ? L("帧率自动", "frame rate automatic") : fps + " fps" };
+        var parts = new List<string> { fps.Length == 0 ? L("自动帧率", "Auto frame rate") : fps + " fps" };
         if (TryFrameSize(out uint width, out uint height) && width > 0 && height > 0)
             parts.Add(width.ToString(CultureInfo.InvariantCulture) + "×" + height.ToString(CultureInfo.InvariantCulture));
         else
@@ -681,15 +682,15 @@ public partial class MainWindow : Window
         // 它自己的错误文本，不会被后写的 GPU 或源属性错误顶掉。文案按「界面说人话」那版，别回到术语。
         ValidationText.Text = tools is null ? L("生成工具未就绪：", "Generation tools not ready: ") +
                 (toolsError.Length > 0 ? toolsError : setupError) :
-            !sourceValid ? L("未选择壁纸来源。指定壁纸文件夹或文件。", "No wallpaper source selected. Specify a wallpaper folder or file.") :
-            !assetsValid ? L("assets 路径无效。指定 Wallpaper Engine 的 assets 文件夹。", "Invalid assets path. Specify the Wallpaper Engine assets folder.") :
+            !sourceValid ? L("未选择壁纸", "No wallpaper selected") :
+            !assetsValid ? L("Wallpaper Engine 资源目录无效", "Invalid Wallpaper Engine assets folder") :
             !outputValid ? L("输出目录无效：不能位于壁纸来源文件夹内。", "Invalid output directory: it must be outside the wallpaper source folder.") :
             !fpsValid ? L("帧率无效：取值范围 1 到 1000 fps。", "Invalid frame rate: range 1 to 1000 fps.") :
-            !gpuValid ? L("未找到可用的 Vulkan 设备。", "No usable Vulkan device found.") + (setupError.Length > 0 ? " " + setupError : "") :
-            hybridPlan is null ? L("未评估：生成前需执行分析。", "Not evaluated: run analysis before generating.") :
-            effectResolutionBlocked ? L("当前方案仅捕获部分特效，需要保留原作特效分辨率。", "This capture uses only part of an effect chain and requires the original effect resolution.") :
+            !gpuValid ? L("未找到支持 Vulkan 的显卡。", "No Vulkan-capable GPU found.") + (setupError.Length > 0 ? " " + setupError : "") :
+            hybridPlan is null ? L("未分析：生成前需先分析", "Not analyzed yet") :
+            effectResolutionBlocked ? L("此壁纸不支持“特效分辨率随输出调整”，取消勾选后可生成", "This wallpaper doesn't support Scale effect resolution to output; clear that option to generate") :
             // 具体是哪条挡住了，结论区已经用人话写了，这里不再把 blocker 原文堆到状态行上。
-            hybridBlocked ? L("不可生成：原因见结论区。", "Cannot generate: the reason is stated in the verdict above.") :
+            hybridBlocked ? L("不支持（原因见上方）", "Not supported (see above)") :
             L("将在输出目录生成新壁纸。", "A new wallpaper will be generated in the output directory.");
         // 能生成就用普通灰，被挡住就用红，一眼看出还差什么。
         ValidationText.Foreground = GenerateButton.IsEnabled ? StateBrushes.Muted : StateBrushes.Bad;
@@ -701,11 +702,10 @@ public partial class MainWindow : Window
         ErrorButton.IsEnabled = selected?.ErrorPath is string error && File.Exists(error);
         OfficialPreviewButton.IsEnabled = selected?.State == "completed" && selected.ProjectPath is not null &&
             !processing && File.Exists(WpeExeBox.Text.Trim());
-        OfficialPreviewButton.ToolTip = L("在独立 Wallpaper Engine 窗口中播放成品，不改变桌面壁纸。",
-            "Plays the generated result in a separate Wallpaper Engine window; the desktop wallpaper is unchanged.");
+        OfficialPreviewButton.ToolTip = L("在独立的 Wallpaper Engine 窗口中预览，不更换桌面壁纸。",
+            "Previews in a separate Wallpaper Engine window without changing the desktop wallpaper.");
         ValidateButton.IsEnabled = selected?.State == "completed" && !processing &&
             selected.ProjectPath is not null;
-        ValidateButton.Content = L("查看自动检查结果", "Show automatic checks");
         ValidateButton.ToolTip = L("显示生成过程中记录的自动检查结果。", "Shows the checks recorded during generation.");
         ExportButton.IsEnabled = selected?.State == "completed" && selected.ProjectPath is not null &&
             (!processing || selected.ExportArchive is not null);
@@ -728,8 +728,8 @@ public partial class MainWindow : Window
         if (processing || tools is null) return;
         var dialog = new OpenFileDialog
         {
-            Title = L("打开已有生成结果", "Open an existing result"),
-            Filter = "Hybrid bake reports|bake.json|JSON|*.json", CheckFileExists = true
+            Title = L("打开已有输出", "Open existing output"),
+            Filter = L("生成报告", "Generation reports") + " (bake.json)|bake.json|JSON|*.json", CheckFileExists = true
         };
         if (dialog.ShowDialog(this) != true) return;
         try
@@ -737,7 +737,7 @@ public partial class MainWindow : Window
             JobItem job = LoadCompletedResult(dialog.FileName);
             JobItem? existing = jobs.FirstOrDefault(item => item.Request.OutputDirectory.Equals(job.Request.OutputDirectory, StringComparison.OrdinalIgnoreCase));
             if (existing is null) Enqueue(job); else QueueList.SelectedItem = existing;
-            StatusText.Text = L("已载入生成结果。", "Existing result loaded.");
+            StatusText.Text = L("已载入输出。", "Output loaded.");
         }
         catch (Exception error) { StatusText.Text = error.Message; }
         RefreshControls();
@@ -747,9 +747,10 @@ public partial class MainWindow : Window
     {
         if (tools is null) throw new InvalidOperationException("Generation tools are not available.");
         reportPath = Path.GetFullPath(reportPath);
+        string invalid = L("所选文件不是有效的生成报告。", "The selected file is not a valid generation report.");
         string output = Path.GetDirectoryName(reportPath)!;
         JsonObject report = JsonNode.Parse(File.ReadAllText(reportPath))?.AsObject()
-            ?? throw new InvalidDataException("The saved result is not a JSON object.");
+            ?? throw new InvalidDataException(invalid);
         string status = report["status"]?.GetValue<string>() ?? "";
         int schema = report["schema_version"]?.GetValue<int>() ?? 0;
         string? kind = report["artifact_kind"]?.GetValue<string>();
@@ -760,9 +761,9 @@ public partial class MainWindow : Window
                 "candidate_rejected_composition" or "candidate_rejected_late_dependency" or "candidate_rejected_seam" or
                 "candidate_rejected_hardware_decode" or "candidate_rejected_opaque_capture" or ResidualMasking.LayoutRejectedStatus or
                 "candidate_rejected_capture_target" or CandidateScriptErrorGate.RejectedBakeStatus or EmbeddedVideoBudget.RejectedBakeStatus or NoBenefit.RejectedBakeStatus))
-                throw new InvalidDataException("This hybrid report does not contain a finished result.");
+                throw new InvalidDataException(L("此生成报告里没有已完成的输出。", "This report has no finished output."));
             JsonObject savedPlan = report["plan"]?.DeepClone().AsObject()
-                ?? throw new InvalidDataException("The hybrid result has no saved plan.");
+                ?? throw new InvalidDataException(invalid);
             HybridPlanFormat.Validate(savedPlan);
             request = new HybridBakeRequest(2, savedPlan, output,
                 kind == "hybrid_video_probe" ? report["frames"]!.GetValue<ulong>() : 0, PlanSettings.Of(savedPlan).DeviceUuid,
@@ -772,16 +773,16 @@ public partial class MainWindow : Window
                 MatchEffectResolution: report["match_effect_resolution"]?.GetValue<bool>() ?? false);
             if (string.IsNullOrWhiteSpace(request.Plan["source"]?.GetValue<string>()) ||
                 !string.Equals(request.Plan["source_sha256"]?.GetValue<string>(), report["source_sha256"]?.GetValue<string>(), StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("The saved source identity or generation request is invalid.");
+                throw new InvalidDataException(invalid);
         }
-        else throw new InvalidDataException("Select a finished Hybrid bake.json result.");
+        else throw new InvalidDataException(invalid);
         // Prefer the copied result folder; older work folders keep their project one level below.
         string? declaredProject = AppJsonPresentation.CandidateProjectPath(report);
         string? project = declaredProject is null ? null :
             new[] { output, Path.Combine(output, "project"), declaredProject }
                 .FirstOrDefault(path => File.Exists(Path.Combine(path, "project.json")));
         if (declaredProject is not null && project is null)
-            throw new FileNotFoundException("The generated project.json is missing from the result folder and recorded project path.", declaredProject);
+            throw new FileNotFoundException(L("输出目录中缺少 project.json。", "project.json is missing from the output folder."), declaredProject);
         request = request with { ProjectDirectory = project };
         // 显卡名：先按设备 ID 在当前列表里找，找不到用报告里记的分析设备名；都没有就不显示这一段。
         string? gpuName = GpuBox.Items.OfType<VulkanDeviceInfo>()
@@ -795,8 +796,7 @@ public partial class MainWindow : Window
             CanApply = canApply,
             Detail = canApply
                 ? L("已生成：可应用到桌面。", "Generated: can be applied to the desktop.")
-                : L("已生成：循环记录版本不符，需重新生成后才能应用。",
-                    "Generated: the loop record is from another version; regenerate before applying.")
+                : L("已生成：由旧版本生成，重新生成后可应用到桌面。", "Generated by an older version; regenerate to apply it to the desktop.")
         };
     }
 
@@ -852,45 +852,46 @@ public partial class MainWindow : Window
                     job.LatestReportPath = job.GenerationReportPath;
                     string resultStatus = result["status"]?.GetValue<string>() ?? "candidate_generated";
                     job.CanApply = AppJsonPresentation.CandidateCanApply(result);
+                    string took = ProgressPresentation.Duration(runElapsed.Elapsed.TotalSeconds);
                     job.State = job.CanApply ? "completed" : "failed";
                     bool effectPrefix = job.Request.Plan["route"]?.GetValue<string>() == "effect_prefix";
                     // 队列里只说人话，每条后面都指向报告文件；技术原文在那里一句没少。
                     job.Describe(() => (resultStatus == StaticOnlyBake.Status
-                        ? L("当前方案输出静态纹理并保留全部实时图层，无功耗收益；需使动态部分进入视频图层。",
-                            "Current route yields a static texture plus all live layers, with no power saving; the animated part must move into the video layer.")
+                        ? L("只生成了静态图，动画仍实时渲染，不省电。",
+                            "Only a still image was generated; the animation still renders live, so no power is saved.")
                         : resultStatus == "candidate_rejected_no_loop"
-                        ? L("未检出循环周期，生成中止；原因见报告文件。",
-                            "No loop period was detected; generation aborted. The report file states the reason.")
+                        ? L("未找到循环周期，已停止生成（详见报告）。",
+                            "No loop period found; generation stopped (see report).")
                         : resultStatus == "candidate_rejected_composition"
-                        ? L("合成结果与原作不一致，生成中止；差异见自动检查结果。",
-                            "The composition did not match the original; generation aborted. The automatic checks show the difference.")
+                        ? L("生成画面与原壁纸不一致，已停止生成（详见报告）。",
+                            "The generated image differs from the original wallpaper; generation stopped (see report).")
                         : resultStatus == "candidate_rejected_late_dependency"
-                        ? L("检出画面仍依赖实时图层，生成中止；依赖项见报告文件。",
-                            "The picture was found to still depend on a live layer; generation aborted. The report file names the dependency.")
+                        ? L("部分画面无法转为视频，已停止生成（详见报告）。",
+                            "Part of the image can't be turned into video; generation stopped (see report).")
                         : resultStatus == "candidate_rejected_hardware_decode"
-                        ? L("本机无法硬件解码生成的视频，生成中止；详情见报告文件。",
-                            "This machine cannot hardware-decode the generated video; generation aborted. Details are in the report file.")
+                        ? L("本机无法硬件解码生成的视频，已停止生成（详见报告）。",
+                            "This PC can't hardware-decode the generated video; generation stopped (see report).")
                         : resultStatus == CandidateScriptErrorGate.RejectedBakeStatus
-                        ? L("成品脚本报错多于原作，生成中止；报错原文见报告文件。",
-                            "The result raised more script errors than the original; generation aborted. The original errors are in the report file.")
+                        ? L("输出的脚本报错比原壁纸多，已停止生成（详见报告）。",
+                            "The output has more script errors than the original wallpaper; generation stopped (see report).")
                         : resultStatus == NoBenefit.RejectedBakeStatus
                         ? L("不支持：预计功耗高于原壁纸", "Not supported: estimated power use is higher than the original wallpaper.")
                         : resultStatus == ResidualMasking.LayoutRejectedStatus
-                        ? L("循环周期首尾不衔接，生成中止；原因见报告文件。",
-                            "The loop period does not join end to start; generation aborted. The report file states the reason.")
+                        ? L("循环首尾不衔接，已停止生成（详见报告）。",
+                            "The loop doesn't join seamlessly; generation stopped (see report).")
                         : resultStatus is "candidate_rejected_capture_target" or EmbeddedVideoBudget.RejectedBakeStatus
-                        ? L("生成中止：", "Generation aborted: ") +
+                        ? L("已停止生成：", "Generation stopped: ") +
                             (result["reason_localized"]?[english ? "en" : "zh"]?.GetValue<string>() ?? result["reason"]?.GetValue<string>() ?? "")
                         : resultStatus == "candidate_rejected_opaque_capture"
-                        ? L("无法确认视频图层完全不透明，生成中止；详情见报告文件。",
-                            "Opaque coverage by the video layer could not be confirmed; generation aborted. Details are in the report file.")
+                        ? L("无法确认视频能完整覆盖画面，已停止生成（详见报告）。",
+                            "Couldn't confirm the video fully covers the image; generation stopped (see report).")
                         : job.CanApply ? L("已生成：可应用到桌面。", "Generated: can be applied to the desktop.")
-                        : L("循环周期首尾不衔接，成品不可用；详情见报告文件。",
-                            "The loop period does not join end to start, so this result is unusable. Details are in the report file."))
+                        : L("循环首尾不衔接，无法应用到桌面（详见报告）。",
+                            "The loop doesn't join seamlessly, so it can't be applied (see report)."))
                         + (AppJsonPresentation.Number(result["source_script_error_count"]) > 0 ||
                             AppJsonPresentation.Number(result["full_capture_source_script_error_count"]) > 0
                             ? " · " + AppJsonPresentation.SourceScriptErrorSummary(result, english, includeFullCapture: true) : "")
-                        + (StageTiming.Summary(result, english) is string stageSummary ? " · " + stageSummary : ""));
+                        + " · " + L("用时 ", "Time ") + took);
                 }
                 catch (OperationCanceledException)
                 {
@@ -931,17 +932,16 @@ public partial class MainWindow : Window
         RunProgress.IsIndeterminate = value.Fraction is null || value.Stage != "rendering";
         RunProgress.Value = value.Fraction is double amount ? Math.Clamp(amount, 0, 1) : 0;
         // 切换界面语言时 Translate 会重新调用它，L(...) 与 Text.In(...) 取的是那时的语言。
+        if (value.Stage == "completed") return; // 阶段收尾不换文字，任务行保留上一句
         job.Describe(() => value.Stage switch {
             "preflight" => L("正在校验文件与工具…", "Verifying files and tools…"),
-            "baking" => L("正在预渲染…", "Prerendering…"),
+            "baking" => L("正在生成…", "Generating…"),
             "validating" => L("正在校验输出画面…", "Verifying rendered output…"),
-            "official_window_phase" => english ? value.Message
-                : L("正在通过 Wallpaper Engine 对比原作与成品…", "Comparing the original and the result through Wallpaper Engine…"),
-            "completed" => L("阶段完成…", "Stage complete…"),
+            "official_window_phase" => L("正在用 Wallpaper Engine 比对原壁纸与输出…", "Comparing the original wallpaper and the output in Wallpaper Engine…"),
             "finishing_encode" => L("正在完成视频编码…", "Finishing video encoding…"),
             "rendering" => value.FramesCompleted is ulong done && value.FramesTotal is ulong total
                 ? L("正在渲染：", "Rendering: ") + $"{done} / {total}" + L(" 帧", " frames")
-                : L("正在准备渲染与预热…", "Preparing the render and warmup…"),
+                : L("正在准备渲染…", "Preparing to render…"),
             _ => value.Text?.In(AppEnvironment.Language) ??
                 (StageTiming.ExclusiveStages.Contains(value.Stage) ? StageTiming.StageLabel(value.Stage, english) + "…" : value.Message) });
         StatusText.Text = job.Title + " · " + job.Detail;
@@ -1088,8 +1088,7 @@ public partial class MainWindow : Window
         IReadOnlySet<string> fromWpe = AppJsonPresentation.WpeMarkedKeys(frozen ? selected!.Request.Plan : hybridPlan, wpe, overrides);
         string sourceNote = AppJsonPresentation.PropertySourceNote(wpe, english);
         PropertyScopeText.Text = frozen
-            ? L("这些是生成时使用的属性，已固定。修改需返回壁纸来源重新分析。",
-                "These are the properties used at generation time and are now fixed. Changing them requires returning to the wallpaper source and re-analyzing.")
+            ? L("生成时使用的属性（只读）", "Properties used for this output (read-only)")
             : L("这些属性用于下一次生成。修改后需重新分析。",
                 "These properties apply to the next generation. Changing them requires re-analysis.") + (sourceNote.Length == 0 ? "" : " " + sourceNote);
         AppPropertyDefinition[] ordered = AppJsonPresentation.OrderedDefinitions(definitions);
@@ -1150,7 +1149,7 @@ public partial class MainWindow : Window
                     input.LostFocus += (_, _) => Store(key, JsonValue.Create(input.Text)!);
                     row.Children.Add(input);
                 }
-                else row.Children.Add(new TextBlock { Text = L("只读 · ", "Read only · ") + type +
+                else row.Children.Add(new TextBlock { Text = L("只读", "Read only") +
                     (current is null ? "" : " · " + current.ToJsonString()), FontSize = 11, TextWrapping = TextWrapping.Wrap, Opacity = .6 });
             }
             // 值来自用户在 Wallpaper Engine 里的设置（且没被面板改动覆盖）时标一句。
@@ -1178,7 +1177,7 @@ public partial class MainWindow : Window
         await RunJobOperationAsync(job, "reading_report", async token =>
         {
             JsonObject bake = JsonNode.Parse(await File.ReadAllTextAsync(job.GenerationReportPath, token))?.AsObject()
-                ?? throw new InvalidDataException("Hybrid bake report is invalid.");
+                ?? throw new InvalidDataException(L("生成报告无效。", "Invalid generation report."));
             job.LatestReportPath = job.GenerationReportPath;
             return AppJsonPresentation.HybridValidationSummary(bake, english);
         });
@@ -1240,7 +1239,7 @@ public partial class MainWindow : Window
         {
             UpdateInstallationDefaults(AppEnvironment.FindWallpaperExecutable());
             if (File.Exists(WpeExeBox.Text)) await LoadTargetsAsync(autoImport: true);
-            else StatusText.Text = L("未找到 Wallpaper Engine。手动指定程序路径与壁纸。", "Wallpaper Engine not found. Specify the executable path and a wallpaper manually.");
+            else StatusText.Text = L("未找到 Wallpaper Engine", "Wallpaper Engine not found");
         }
         catch (Exception error) { StatusText.Text = L("检测失败：", "Detection failed: ") + error.Message; }
     }
@@ -1306,8 +1305,8 @@ public partial class MainWindow : Window
         CurrentWallpaperBox.ItemsSource = current;
         CurrentWallpaperBox.SelectedIndex = -1;
         StatusText.Text = current.Length == 0
-            ? L("未检出正在播放的壁纸。手动选择或拖入壁纸来源。", "No running wallpaper detected. Select or drop a wallpaper source manually.")
-            : L("已检出正在播放的壁纸。在上方选择屏幕。", "Running wallpapers detected. Select a screen above.");
+            ? L("未找到正在播放的壁纸", "No running wallpaper found")
+            : L("已找到当前壁纸", "Current wallpaper found");
         if (autoImport && SourceBox.Text.Length == 0 && current.Length == 1 && current[0].Source is not null)
             CurrentWallpaperBox.SelectedIndex = 0;
     }
@@ -1342,8 +1341,8 @@ public partial class MainWindow : Window
         {
             var dialog = new OpenFileDialog
             {
-                Title = L("选择壁纸应用记录", "Choose a wallpaper application record"),
-                Filter = "Wallpaper application record|apply.json|JSON|*.json", CheckFileExists = true
+                Title = L("选择恢复记录", "Choose a restore point"),
+                Filter = L("恢复记录", "Restore point") + " (apply.json)|apply.json|JSON|*.json", CheckFileExists = true
             };
             if (dialog.ShowDialog(this) != true) return;
             manifest = dialog.FileName;
@@ -1352,15 +1351,15 @@ public partial class MainWindow : Window
         await RunJobOperationAsync(job, "restoring", async token =>
         {
             JsonObject saved = JsonNode.Parse(await File.ReadAllTextAsync(manifest, token))?.AsObject()
-                ?? throw new InvalidDataException("The wallpaper application record is invalid.");
+                ?? throw new InvalidDataException(L("恢复记录无效。", "Invalid restore point."));
             string executable = saved["executable"]?.GetValue<string>()
-                ?? throw new InvalidDataException("The application record has no Wallpaper Engine executable.");
-            if (!File.Exists(executable)) throw new FileNotFoundException("The recorded Wallpaper Engine installation is missing.", executable);
+                ?? throw new InvalidDataException(L("恢复记录无效。", "Invalid restore point."));
+            if (!File.Exists(executable)) throw new FileNotFoundException(L("记录中的 Wallpaper Engine 已不存在。", "The recorded Wallpaper Engine is missing."), executable);
             var result = await new WallpaperController(executable).RollbackAsync(manifest, token);
             if (job is not null) { job.Restored = true; job.LatestReportPath = manifest; }
             return result["status"]?.GetValue<string>() == "restored"
-                ? L("已回滚到先前壁纸。", "Rolled back to the previous wallpaper.")
-                : L("回滚指令已发送。", "Rollback request sent.");
+                ? L("已恢复上一个壁纸。", "Previous wallpaper restored.")
+                : L("已发送恢复请求。", "Restore requested.");
         });
     }
 
@@ -1379,7 +1378,7 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            StatusText.Text = L("已取消：已生成文件保留，桌面状态见应用记录。", "Cancelled: the generated files are retained; the application record shows the desktop state.");
+            StatusText.Text = L("已取消", "Cancelled");
             if (job is not null) job.Detail = StatusText.Text;
         }
         catch (Exception error)
@@ -1409,8 +1408,7 @@ public partial class MainWindow : Window
                 await new WallpaperController(officialPreviewExecutable).CloseWindowAsync(officialPreviewName, token);
             await new WallpaperController(executable).OpenInWindowAsync(project, officialPreviewName, width, height, token, activate: true);
             officialPreviewExecutable = executable;
-            return L("已在独立窗口播放成品。关闭该窗口即结束预览。",
-                "The result is playing in a separate window. Closing that window ends the preview.");
+            return L("正在独立窗口中预览", "Previewing in a separate window");
         });
     }
 
@@ -1648,9 +1646,9 @@ public partial class MainWindow : Window
         {
             StatusText = State switch { "queued" => english ? "Queued" : "等待中", "running" => english ? "Generating" : "正在生成",
                 "completed" => english ? "Completed" : "已完成", "cancelled" => english ? "Cancelled" : "已取消",
-                "failed" => english ? "Failed" : "失败", "previewing" => english ? "Making previews" : "正在生成预览",
+                "failed" => english ? "Failed" : "失败", "previewing" => english ? "Previewing" : "正在预览",
                 "applying" => english ? "Applying wallpaper" : "正在应用壁纸", "restoring" => english ? "Restoring wallpaper" : "正在恢复壁纸",
-                "reading_report" => english ? "Reading validation report" : "正在读取验证报告",
+                "reading_report" => english ? "Reading checks" : "正在读取检查结果",
                 "exporting" => english ? "Exporting ZIP" : "正在导出 ZIP", _ => State };
             if (describe is not null) { detail = describe(); Changed(nameof(Detail)); }
             (string Zh, string En)[] details = [

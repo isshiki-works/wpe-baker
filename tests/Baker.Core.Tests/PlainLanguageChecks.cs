@@ -111,9 +111,9 @@ internal static class PlainLanguageChecks
         check(PlainLanguage.Verdict(cheap, false) == "可以生成",
             "an older static result is not automatically described as having no savings");
         foreach (var (status, zh) in new[] {
-            ("potential_gain", "可以生成，有潜在收益"),
-            ("low_value", "可以生成，预计收益较低"),
-            ("unknown", "可以生成，收益待确认") })
+            ("potential_gain", "可以生成，预计省电"),
+            ("low_value", "可以生成，预计省电较少"),
+            ("unknown", "可以生成，省电效果未知") })
         {
             cheap[BakeValueAssessment.Field] = new JsonObject { ["status"] = status, ["reason_zh"] = "已有元数据依据。", ["reason_en"] = "Recorded metadata evidence." };
             check(PlainLanguage.Verdict(cheap, false) == zh,

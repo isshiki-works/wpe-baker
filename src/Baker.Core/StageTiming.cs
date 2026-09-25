@@ -165,11 +165,11 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
 
     private static readonly (string Key, string Chinese, string English)[] Labels =
     [
-        (SourceCapture, "捕获源准备", "capture source"), (CompositionValidation, "画面对照", "composition"),
-        (LoopStartSearch, "起点搜索", "start search"), (MasterRender, "主渲染", "render"),
-        (SeamCheck, "接缝校验", "seam check"), (Crossfade, "接缝淡化", "crossfade"),
-        (EncodeSlotWait, "等编码槽位", "encode slot wait"), (EncodePlayback, "成品编码", "playback encode"),
-        (HardwareDecodeCheck, "硬件解码检查", "hardware decode"), (ProjectAssembly, "项目组装", "assembly"),
+        (SourceCapture, "准备素材", "Preparing source"), (CompositionValidation, "比对画面", "Comparing images"),
+        (LoopStartSearch, "选择循环起点", "Choosing loop start"), (MasterRender, "渲染", "Rendering"),
+        (SeamCheck, "检查接缝", "Checking seam"), (Crossfade, "接缝淡入淡出", "Seam crossfade"),
+        (EncodeSlotWait, "等待编码", "Waiting to encode"), (EncodePlayback, "编码视频", "Encoding video"),
+        (HardwareDecodeCheck, "检查硬件解码", "Checking hardware decode"), (ProjectAssembly, "整理输出", "Finishing output"),
         (Other, "其他", "other")
     ];
 
