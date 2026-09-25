@@ -120,9 +120,9 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             FrameSamplesOnly: true,
             EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,
-            // 覆盖度只给透明组定 GPU 直编的裁剪（不透明组裁剪恒为整幅），只量取样帧、外加取样边距；
+            // 覆盖度只给透明组定直编的裁剪（不透明组裁剪恒为整幅），只量取样帧、外加取样边距；
             // 取样帧之间漏掉的内容由主渲染的全片覆盖度兜底（StartAsync 核对，超出就按实测重渲）。
-            CollectSamplingCoverage: playbackKind == PlaybackEncoderSelection.Vulkan && !capture.SceneClear, SampledCoverageOnly: true,
+            CollectSamplingCoverage: !capture.SceneClear, SampledCoverageOnly: true,
             FrameSampleIncludeAlpha: !capture.SceneClear,
             OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet()));
 
@@ -175,7 +175,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
 
     /// <summary>
     /// 一个组的主渲染请求。直编组不写无损 master：渲染器出帧直接进播放档编码器（判定与组循环走同一个
-    /// <see cref="HybridBakeService.AllowsDirectPlayback"/>）；Vulkan 档位在裁剪已知时改走 GPU 编码整条管线。
+    /// <see cref="HybridBakeService.AllowsDirectPlayback"/>）；裁剪已知时，Vulkan 档位改走 GPU 编码整条管线，
+    /// 其余档位的透明组、残差组在 CPU 管道里按同一裁剪直编（淡化见 <see cref="RenderRequest.DirectCrossfadeFrames"/>）。
     /// 淡化窗口末尾的强制 IDR、源周期路线多留的原帧都在这里定。
     /// </summary>
     private RenderRequest MasterRequest(int index, bool allowGpu = true, JsonObject? coverage = null,
@@ -187,16 +188,17 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         var framing = Framing(index);
         ulong period = groupFrames[index];
         bool direct = HybridBakeService.AllowsDirectPlayback(capture.SceneClear, framing.Residual, request.ProbeFrames);
+        // CPU 直编的档位：Vulkan 档位（GPU 管线不可用时才走到这里）或硬件档位预判超 2 GiB 时用软件编码（原因由 GroupEncoder 记）。
+        string CpuKind(uint width, uint height, bool packed) => playbackKind == PlaybackEncoderSelection.Vulkan ||
+            EmbeddedVideoBudget.HardwareOverBudget(period, width, height, packed, PlaybackEncodeProfile.SelectPlaybackEncoder(
+                width * (packed ? 2u : 1u), height, settings.FpsNumerator, settings.FpsDenominator) == "libx265")
+            ? PlaybackEncoderSelection.Software : playbackKind;
         var render = new RenderRequest(captureProject, settings.Assets, Path.Combine(ProjectSource.ContainedPath(output, groupId), "master"),
             capture.PixelWidth, capture.PixelHeight, settings.FpsNumerator, settings.FpsDenominator,
             framing.RenderedFrames, WarmupFrames: framing.MasterWarmupFrames,
             Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side",
-            // 直编组是不透明整幅；硬件档位预判超 2 GiB 时改用软件编码（原因由 GroupEncoder 记）。
-            LosslessTest: !direct, PlaybackEncoderKind: direct ?
-                playbackKind == PlaybackEncoderSelection.Vulkan ||
-                EmbeddedVideoBudget.HardwareOverBudget(period, capture.PixelWidth, capture.PixelHeight, packedAlpha: false,
-                    PlaybackEncodeProfile.SelectPlaybackEncoder(capture.PixelWidth, capture.PixelHeight, settings.FpsNumerator, settings.FpsDenominator) == "libx265")
-                    ? PlaybackEncoderSelection.Software : playbackKind : null,
+            // 直编组是不透明整幅。
+            LosslessTest: !direct, PlaybackEncoderKind: direct ? CpuKind(capture.PixelWidth, capture.PixelHeight, packed: false) : null,
             DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, CollectAlphaBounds: true, BoundsIncludeRgb: true,
             EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,
@@ -208,17 +210,22 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             OfflineVideoRateOverrides: probe ? null : HybridBakeService.SelectVideoRateOverrides(plan["loop"]!.AsObject(), capture.Layers.ToHashSet()),
             EncodedFrames: framing.ClosureJudged ? period : null,
             RetainFrames: probe ? null : LoopClosureCheck.ReferenceFrameIndices(period));
-        if (allowGpu && playbackKind == PlaybackEncoderSelection.Vulkan && !probe &&
-            render.Width % 2 == 0 && render.Height % 2 == 0)
+        if (!probe && render.Width % 2 == 0 && render.Height % 2 == 0)
         {
             (CacheRegion Crop, bool Packed)? known = capture.SceneClear
                 ? (new CacheRegion((int)render.Width, (int)render.Height, 0, 0, (int)render.Width, (int)render.Height), false)
                 : NativeRenderRunner.SamplingCrop(coverage, render) ??
                     (StartSearches.TryGetValue(groupId, out JsonObject? groupSearch)
                         ? NativeRenderRunner.SamplingCrop(groupSearch["sampling_coverage"] as JsonObject, render) : null);
-            // 渲染器内的 GPU 打包只有左右并排；越宽度上限要上下并排的透明组走 master 路线。
+            // 直编的透明打包只有左右并排（画质门与接缝参照按它排）；越宽度上限要上下并排的透明组走 master 路线。
             if (known is { } layout && !HardwareDecodeDimensions.StackedVertically(layout.Packed, layout.Crop.Width))
             {
+                // 没有 GPU 直编：透明组、残差组也边渲染边编码成品，不写无损 master（核显上重型作品原要几百 GiB 临时空间）。
+                if (!(allowGpu && playbackKind == PlaybackEncoderSelection.Vulkan))
+                    return direct ? render : render with { LosslessTest = false, ForceKeyFrameFrame = null, EncodedFrames = period,
+                        PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb", DirectCrop = layout.Crop,
+                        DirectCrossfadeFrames = framing.Residual ? crossfadeFrames : null,
+                        PlaybackEncoderKind = CpuKind((uint)layout.Crop.Width, (uint)layout.Crop.Height, layout.Packed) };
                 // Vulkan 编码有最小编码尺寸：RTX 5090 驱动 610.62 报 H.264/HEVC minCodedExtent 160x64（vulkaninfo --show-video-props）。
                 // FFmpeg 拿按 16 对齐后的尺寸比：72 宽透明组打包成 144 被拒、整组落到 CPU 无损路线（3757825891 group-4 读回约 200 s）；
                 // 152 对齐成 160 放行，但实际尺寸低于下限。不足时在捕获范围内居中加宽/加高裁剪，多出的是透明像素；打包的每半幅算一半宽。
@@ -259,9 +266,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
             throw new IOException("A group master output must be new; existing files will not be cleaned.");
         JsonObject? coveragePass = null, coverage = null;
-        // 起点搜索已给出裁剪却没取 GPU 路线（须上下并排）时，预通道的裁剪同样用不上，不跑。
-        if (render.GpuEncoding is null && playbackKind == PlaybackEncoderSelection.Vulkan && !probe &&
-            render.PixelPacking != "rgb" && render.Width % 2 == 0 && render.Height % 2 == 0 &&
+        // 透明组的裁剪未知（还在走 master）时先跑覆盖度预通道；起点搜索已给出裁剪却没取直编（须上下并排）时，预通道的裁剪同样用不上，不跑。
+        if (render.LosslessTest && !probe && render.PixelPacking != "rgb" && render.Width % 2 == 0 && render.Height % 2 == 0 &&
             !(StartSearches.TryGetValue(groups[index]["id"]!.GetValue<string>(), out JsonObject? search) &&
                 NativeRenderRunner.SamplingCrop(search["sampling_coverage"] as JsonObject, render) is not null))
         {
@@ -297,6 +303,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         var failedCodecs = new HashSet<string>();
         var codecFallbacks = new JsonArray();
         JsonObject? coverageRerender = null;
+        string? fallbackReason = null;
+        bool gpuAllowed = true;
         for (; ; )
         {
             RenderRequest? lower = render.GpuEncoding is { } current &&
@@ -305,7 +313,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             try
             {
                 JsonObject rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
-                if (render.GpuEncoding is { Crop: { } crop } && !Capture(groups[index]).SceneClear &&
+                if ((render.GpuEncoding?.Crop ?? render.DirectCrop) is { } crop && !Capture(groups[index]).SceneClear &&
                     rendered["alpha_bounds"] is JsonObject all && !CoverageFits(all, crop, render.PixelPacking == "rgba_side_by_side"))
                 {
                     // 起点搜索的裁剪只量了取样帧：主渲染逐帧累计的全片覆盖度超出裁剪、或有半透明却没打包时，按实测覆盖度重渲这一组。
@@ -319,7 +327,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     coverage["render_request"] = JsonSerializer.SerializeToNode(render, JsonOptions);
                     coverageRerender = new JsonObject { ["crop"] = JsonSerializer.SerializeToNode(crop, JsonOptions),
                         ["packed_alpha"] = render.PixelPacking == "rgba_side_by_side", ["measured"] = all.DeepClone() };
-                    render = MasterRequest(index, coverage: coverage, failedCodecs: failedCodecs);
+                    render = MasterRequest(index, gpuAllowed, coverage, failedCodecs);
                     continue;
                 }
                 if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render))
@@ -347,16 +355,15 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 rendered["gpu_bounds_prepass"] = coveragePass;
                 if (coverageRerender is not null) rendered["coverage_rerender"] = coverageRerender;
                 if (codecFallbacks.Count > 0) rendered["gpu_codec_fallbacks"] = codecFallbacks;
+                if (fallbackReason is not null) rendered["gpu_pipeline_fallback_reason"] = fallbackReason;
                 return rendered;
             }
             // ffmpeg 硬件档（mf/nvenc）直编的组编码器开不了或中途退出：这一组改用软件编码重渲，原因带给 GroupEncoder。
             catch (GpuEncodeUnavailableException error) when (render.GpuEncoding is null && !renderCancellation.IsCancellationRequested)
             {
                 Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(Path.GetDirectoryName(render.OutputDirectory)!, "master.hardware-failed"));
-                JsonObject fallback = await runner.RenderAsync(render with { PlaybackEncoderKind = PlaybackEncoderSelection.Software },
-                    progress, renderCancellation.Token);
-                fallback["gpu_pipeline_fallback_reason"] = error.Message;
-                return fallback;
+                fallbackReason = error.Message;
+                render = render with { PlaybackEncoderKind = PlaybackEncoderSelection.Software };
             }
             catch (GpuEncodeUnavailableException error) when (render.GpuEncoding is not null && !renderCancellation.IsCancellationRequested)
             {
@@ -372,13 +379,11 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     render = lower;
                     continue;
                 }
-                string failed = ProjectSource.ContainedPath(parent, "master.gpu-unavailable");
-                Directory.Move(render.OutputDirectory, failed);
-                JsonObject fallback = await runner.RenderAsync(MasterRequest(index, allowGpu: false), progress, renderCancellation.Token);
-                fallback["gpu_pipeline_fallback_reason"] = error.Message;
-                fallback["gpu_bounds_prepass"] = coveragePass;
-                if (codecFallbacks.Count > 0) fallback["gpu_codec_fallbacks"] = codecFallbacks;
-                return fallback;
+                // GPU 管线用不了（含画质门降 QP 仍不过，原因里带 QP）：这一组按同一裁剪改走 CPU 直编的软件档，原因写进 bake.json。
+                Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(parent, "master.gpu-unavailable"));
+                fallbackReason = error.Message;
+                gpuAllowed = false;
+                render = MasterRequest(index, allowGpu: false, coverage: coverage);
             }
         }
     }

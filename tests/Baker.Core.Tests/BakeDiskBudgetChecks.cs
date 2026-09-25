@@ -19,50 +19,38 @@ internal static class BakeDiskBudgetChecks
     {
         ArgumentNullException.ThrowIfNull(check);
 
-        // ---- ① 峰值预估按路线：软件档落 master，GPU 直编不落；各组按自己录的帧数 ----
+        // ---- ① 峰值预估：所有档位直编、不落 master；各组按自己录的帧数 ----
         const ulong frames = 1000;
         double opaquePixels = EmbeddedVideoBudget.EncodedPixels(1920, 1080, false);
         double packedPixels = EmbeddedVideoBudget.EncodedPixels(1920, 1080, true);
         ulong packedMaster = BakeDiskBudget.MasterBytes(frames, packedPixels);
-        ulong playback = (ulong)Math.Ceiling(frames * EmbeddedVideoBudget.ReferenceBytesPerFrame(opaquePixels) +
-            frames * EmbeddedVideoBudget.ReferenceBytesPerFrame(packedPixels));
-        // 软件档：不透明非残差组边渲边编、不落 master；透明残差组落 master，淡化时再有一份副本。
-        BakeDiskBudget.Estimate residual = BakeDiskBudget.EstimatePeak(Plan(frames), frames, 1, gpu: false, [1]);
-        check(residual.Known && residual.Groups == 2 && residual.Frames == frames &&
-            residual.IntermediateBytes == packedMaster && residual.CrossfadeBytes == packedMaster &&
-            Math.Abs((long)residual.PlaybackBytes - (long)playback) <= 2 &&
-            residual.RequiredBytes == residual.PeakBytes + BakeDiskBudget.ReserveBytes,
-            "the software-route estimate adds the transparent master, every playback video and one crossfade copy");
-
-        // 没有残差组就没有淡化副本；组并行更高时同时在飞的 master 更多（这里已封顶到两个组）。
-        BakeDiskBudget.Estimate plain = BakeDiskBudget.EstimatePeak(Plan(frames), frames, 1, gpu: false, []);
-        check(plain.CrossfadeBytes == 0 && plain.PeakBytes < residual.PeakBytes &&
-            BakeDiskBudget.EstimatePeak(Plan(frames), frames, 4, gpu: false, []).IntermediateBytes == plain.IntermediateBytes,
-            "a source-period plan carries no crossfade copy and the masters in flight are capped by the group count");
-
-        // GPU 直编：没有 master 也没有淡化副本；group_frames 里的组（#131 雾组）只按自己录的帧数算成品。
+        // 残差组拼接头段时多一份自己的成品；没有残差组就没有；group_frames 里的组（#131 雾组）只按自己录的帧数算成品。
         JsonObject periods = Plan(frames);
         periods["loop"]!["candidates"]![0]!["group_frames"] = new JsonObject { ["group-2"] = 100 };
-        BakeDiskBudget.Estimate gpu = BakeDiskBudget.EstimatePeak(periods, frames, 1, gpu: true, [1]);
-        check(gpu.CrossfadeBytes == 0 && gpu.IntermediateBytes < packedMaster &&
-            Math.Abs((long)gpu.PlaybackBytes - (long)Math.Ceiling(frames * EmbeddedVideoBudget.ReferenceBytesPerFrame(opaquePixels) +
-                100 * EmbeddedVideoBudget.ReferenceBytesPerFrame(packedPixels))) <= 2,
-            "the GPU route writes no master and each group is estimated at its own recorded frame count");
+        BakeDiskBudget.Estimate residual = BakeDiskBudget.EstimatePeak(periods, frames, [1]);
+        double packedPlayback = 100 * EmbeddedVideoBudget.ReferenceBytesPerFrame(packedPixels);
+        check(residual.Known && residual.Groups == 2 && residual.Frames == frames && residual.IntermediateBytes < packedMaster &&
+            Math.Abs((long)residual.CrossfadeBytes - (long)Math.Ceiling(packedPlayback)) <= 1 &&
+            Math.Abs((long)residual.PlaybackBytes - (long)Math.Ceiling(frames * EmbeddedVideoBudget.ReferenceBytesPerFrame(opaquePixels) +
+                packedPlayback)) <= 2 &&
+            residual.RequiredBytes == residual.PeakBytes + BakeDiskBudget.ReserveBytes &&
+            BakeDiskBudget.EstimatePeak(periods, frames, []).CrossfadeBytes == 0,
+            "no master is written, each group is estimated at its own recorded frame count and only residual groups add a spliced copy");
 
         // 起点搜索样本：3803167460 实测两个透明残差组（P = 21780，gcd 步长 4）各 9,634,775,040 字节，是整案峰值的全部。
         JsonObject search = Plan(21_780);
         search["settings"]!["fps_numerator"] = 60;
         search["settings"]!["fps_denominator"] = 1;
-        check(BakeDiskBudget.EstimatePeak(search, 21_780, 1, gpu: true, [1]).StartSearchBytes == 10_890UL * 512 * 288 * 3 * 2,
+        check(BakeDiskBudget.EstimatePeak(search, 21_780, [1]).StartSearchBytes == 10_890UL * 512 * 288 * 3 * 2,
             "start-search thumbnails over two periods at stride gcd(P, 16) match the measured sample file");
 
         // 尺寸或视频组未知的计划不给预估，调用方也就不拦截。
         var unknown = new JsonObject { ["settings"] = new JsonObject { ["width"] = 0, ["height"] = 0 }, ["video_groups"] = new JsonArray() };
-        check(!BakeDiskBudget.EstimatePeak(unknown, frames, 1, gpu: true, []).Known && BakeDiskBudget.Reject(unknown, frames, 1, true, [], root) is null,
+        check(!BakeDiskBudget.EstimatePeak(unknown, frames, []).Known && BakeDiskBudget.Reject(unknown, frames, [], root) is null,
             "an unknown output size or group list produces no estimate and no rejection");
 
         // ---- ② 空间不足时的拒绝记录带中英文案 ----
-        JsonObject? rejection = BakeDiskBudget.Reject(Plan(50_000_000), 50_000_000, 1, false, [1], root);
+        JsonObject? rejection = BakeDiskBudget.Reject(Plan(50_000_000), 50_000_000, [1], root);
         check(rejection?["status"]?.GetValue<string>() == BakeDiskBudget.RejectedBakeStatus &&
             rejection["required_bytes"] is not null && rejection["available_bytes"] is not null &&
             rejection["estimate"]?["peak_bytes"] is not null,
@@ -72,6 +60,7 @@ internal static class BakeDiskBudgetChecks
         string output = Path.Combine(root, "disk-budget-cleanup");
         string[] removed = [Path.Combine(output, "capture-source"), Path.Combine(output, "reference"),
             Path.Combine(output, "group-1", "master"), Path.Combine(output, "group-1", "master.gpu-unavailable"),
+            Path.Combine(output, "group-1", "master.h264_vulkan-qp18"), Path.Combine(output, "group-1", "master.av1_nvenc-failed"),
             Path.Combine(output, "group-1", "capture-bounds"), Path.Combine(output, "group-1.start-search"),
             Path.Combine(output, "prefix-7", "capture-source"),
             output + ".composition-probe", output + ".composition-reference", output + ".analysis-refresh"];

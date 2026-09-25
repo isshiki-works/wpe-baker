@@ -28,7 +28,7 @@ public sealed record RenderRequest(string Source, string Assets, string OutputDi
     ulong? EncodedFrames = null, ulong[]? RetainFrames = null, string? PlaybackEncoderKind = null,
     GpuEncodeRequest? GpuEncoding = null, bool CollectSamplingCoverage = false,
     double EffectRenderScale = 1.0, bool MatchEffectResolution = false, double? HdrScale = null,
-    bool SampledCoverageOnly = false);
+    bool SampledCoverageOnly = false, CacheRegion? DirectCrop = null, uint? DirectCrossfadeFrames = null);
 // HdrScale：官方 HDR 管线下闭合不成立的组。渲染器按浮点中间目标合成，出帧为 rgb/k；成品图层着色器再乘回 k。
 public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
     uint CrossfadeFrames = 0, CacheRegion? Crop = null, bool RetainLoopWindow = false,
@@ -37,7 +37,10 @@ public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
 // RetainFrames：按帧号（严格递增）把渲染器原始 RGBA 帧依次写进 retained-frames.rgba，编码前的无损原帧，供闭合检查与接缝参照。
 // PlaybackEncoderKind：这次渲染直接产出播放版成品（不透明整幅组，不写无损 master），值是已解析好的档位
 // （software / nvenc / qsv / amf）。非 null 时色彩链补成与"无损 master 解码后再编成品"完全相同的一串，
-// 成品才能与 master 路线逐字节相同；与 LosslessTest、编码尺寸覆盖、补边互斥，且只支持不透明 rgb 打包。
+// 成品才能与 master 路线逐字节相同；与 LosslessTest、编码尺寸覆盖、补边互斥。
+// DirectCrop / DirectCrossfadeFrames：没有 GPU 直编时，透明组与残差组也在 CPU 管道里直编（不写无损 master）：
+// 按裁剪区编码（透明组左右打包），残差组多渲的淡化窗口在 C# 里按 GPU 路线同一个整数公式混进头段，头段另编后拷包拼接。
+// 清单写成与 GPU 路线相同的 gpu_crop / loop_crossfade / gpu_loop_window，接缝复核与画质门原样复用。
 /// <summary>缩放后的内容居中放进更大的编码画布（每半幅），补边为透明黑；只为满足硬件解码下限，回放按原矩形取样。</summary>
 public sealed record RenderEncodePadding(uint Width, uint Height, uint OffsetX, uint OffsetY);
 public sealed record RenderProgress(string Stage, double? Fraction, string Message,
@@ -125,10 +128,16 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             throw new ArgumentException("Forced key frame must be a positive frame index inside an encoded video request.");
         // 直编成品：裁剪区先验就是整幅，所以不缩放、不补边；无损 master 与它互斥（直编就是为了不写 master）。
         if (request.PlaybackEncoderKind is { } directKind && (request.FrameSamplesOnly || request.LosslessTest ||
-            request.PixelPacking != "rgb" || request.EncodeWidth.HasValue || request.EncodeHeight.HasValue ||
+            (request.PixelPacking != "rgb" && request.DirectCrop is null) || request.EncodeWidth.HasValue || request.EncodeHeight.HasValue ||
             request.EncodePadding is not null || PlaybackEncoderSelection.Normalize(directKind) != directKind ||
             directKind == PlaybackEncoderSelection.Auto))
             throw new ArgumentException("Direct playback encoding needs a resolved encoder kind on an opaque full-frame lossy render.");
+        if ((request.DirectCrop is not null || request.DirectCrossfadeFrames is not null) && (request.PlaybackEncoderKind is null ||
+            request.DirectCrop is { } checkedCrop && (checkedCrop.CaptureWidth != request.Width || checkedCrop.CaptureHeight != request.Height ||
+                ((checkedCrop.X | checkedCrop.Y | checkedCrop.Width | checkedCrop.Height) & 1) != 0) ||
+            request.DirectCrossfadeFrames is { } directFade && (directFade == 0 || directFade >= encodedFrames || request.Frames - encodedFrames != directFade)))
+            throw new ArgumentException("Direct crop and crossfade need a direct playback render, an even crop of this capture and exactly one continuation window.");
+        request.DirectCrop?.Validate();
         bool encodeSizeRequested = request.EncodeWidth.HasValue || request.EncodeHeight.HasValue;
         if (encodeSizeRequested && (!request.EncodeWidth.HasValue || !request.EncodeHeight.HasValue))
             throw new ArgumentException("EncodeWidth and EncodeHeight must be specified together.");
@@ -149,10 +158,10 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             ? FormattableString.Invariant($"pad={pad.Width}:{pad.Height}:{pad.OffsetX}:{pad.OffsetY}:color=black@0,") : null;
         uint canvasWidth = request.GpuEncoding is not null
             ? request.EncodeWidth ?? (uint)(request.GpuEncoding.Crop?.Width ?? (int)request.Width)
-            : request.EncodePadding?.Width ?? encodeWidth;
+            : request.DirectCrop is { } cropWidth ? (uint)cropWidth.Width : request.EncodePadding?.Width ?? encodeWidth;
         uint encodedHeight = request.GpuEncoding is not null
             ? request.EncodeHeight ?? (uint)(request.GpuEncoding.Crop?.Height ?? (int)request.Height)
-            : request.EncodePadding?.Height ?? encodeHeight;
+            : request.DirectCrop is { } cropHeight ? (uint)cropHeight.Height : request.EncodePadding?.Height ?? encodeHeight;
         // 播放版的软件打包越 HEVC 宽度上限时上下并排（master 与 GPU 直编仍左右并排）。
         bool below = request.GpuEncoding is null && !request.LosslessTest &&
             HardwareDecodeDimensions.StackedVertically(request.PixelPacking == "rgba_side_by_side", canvasWidth);
@@ -410,20 +419,26 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 // 直编成品要与"无损 master 解码后再编成品"逐字节相同，所以送进 swscale 的东西必须一模一样：
                 // master 那条链给 swscale 的是 h264 解码器产出的 gbrp 帧、再经一次全幅 crop（NativeRenderRunner.Crop.cs 的滤镜串），
                 // 这里就把 RGBA 先摊成同一个 gbrp、再做同一次全幅 crop。两步都是重排像素，不改数值。
+                // 直编裁剪：不透明 rgb 在这次全幅 crop 上带偏移；透明打包在拆 RGB/alpha 之前先裁。
+                bool packedInput = request.PixelPacking == "rgba_side_by_side";
+                CacheRegion? directCrop = request.DirectCrop;
                 if (request.PlaybackEncoderKind is not null)
-                    colorFilter = FormattableString.Invariant($"format=gbrp,crop={encodedWidth}:{encodedHeight}:0:0,") + colorFilter;
+                    colorFilter = FormattableString.Invariant($"format=gbrp,crop={encodedWidth}:{encodedHeight}:{(packedInput ? 0 : directCrop?.X ?? 0)}:{(packedInput ? 0 : directCrop?.Y ?? 0)},") + colorFilter;
+                string packedCrop = packedInput && directCrop is { } c ? FormattableString.Invariant($"crop={c.Width}:{c.Height}:{c.X}:{c.Y},") : "";
                 var encoderArguments = new List<string> { "-hide_banner", "-nostdin", "-n", "-f", "rawvideo", "-pixel_format", "rgba",
                     "-video_size", $"{request.Width}x{request.Height}", "-framerate", fps, "-i", "pipe:0", "-an" };
                 // 补边放在缩放之后、拆 RGB/alpha 之前：两半幅用同一张透明黑画布，alphaextract 得到的补边 alpha 为 0。
                 if (request.PixelPacking == "rgba_side_by_side")
-                    encoderArguments.AddRange(["-filter_complex", $"[0:v]{(encodeSizeRequested ? $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba," : "")}{padFilter}split=2[color][mask];[color]format=rgb24[rgb];[mask]alphaextract,format=rgb24[alpha];[rgb][alpha]{(below ? "vstack" : "hstack")}=inputs=2,{colorFilter}[packed]", "-map", "[packed]"]);
+                    encoderArguments.AddRange(["-filter_complex", $"[0:v]{packedCrop}{(encodeSizeRequested ? $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba," : "")}{padFilter}split=2[color][mask];[color]format=rgb24[rgb];[mask]alphaextract,format=rgb24[alpha];[rgb][alpha]{(below ? "vstack" : "hstack")}=inputs=2,{colorFilter}[packed]", "-map", "[packed]"]);
                 else encoderArguments.AddRange(["-vf", encodeSizeRequested
                     ? $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,{padFilter}{colorFilter}"
                     : padFilter + colorFilter]);
                 // 在淡化窗口末尾强制一个 IDR，让接缝改写只需要重编码这一小段，后面全部 stream copy。
                 if (request.ForceKeyFrameFrame is { } keyFrame)
                     encoderArguments.AddRange(["-force_key_frames", $"expr:eq(n,{keyFrame.ToString(CultureInfo.InvariantCulture)})"]);
-                encoderArguments.AddRange(profile.OutputArguments(request.FpsNumerator, request.FpsDenominator, partialVideo));
+                // 淡化组的主体段 [C, P) 先编进 loop-body.mp4，渲完再编头段、拷包拼成 partialVideo。
+                string encodedVideo = request.DirectCrossfadeFrames is null ? partialVideo : Path.Combine(output, "loop-body.mp4");
+                encoderArguments.AddRange(profile.OutputArguments(request.FpsNumerator, request.FpsDenominator, encodedVideo));
                 manifest["encoder_command"] = JsonSerializer.SerializeToNode(new { executable = Path.GetFullPath(tools.Ffmpeg), arguments = encoderArguments.ToArray() });
                 await WriteJsonAsync(manifestPath, manifest, cancellationToken);
                 await using var renderLog = new FileStream(Path.Combine(output, "renderer.stderr.log"), FileMode.CreateNew, FileAccess.Write, FileShare.Read);
@@ -486,6 +501,37 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 if (renderer.ExitCode != 0 || encoder.ExitCode != 0)
                     throw RendererFailure(Path.Combine(renderDirectory, "result.json"),
                         $"Renderer exited {renderer.ExitCode}, encoder exited {encoder.ExitCode}; original stderr logs are retained.");
+                if (request.DirectCrossfadeFrames is { } headFrames)
+                {
+                    // 头段 [0, C) 要用到最后渲出的 f[P..P+C-1]：CopyFrameStreamAsync 已把混合好的 C 帧写进 loop-head.rgba，
+                    // 这里用同一串编码参数另编，再与主体段拷包拼接（MasterRewrite 同一种拼法，只是不再有 master）。
+                    string headVideo = Path.Combine(output, "loop-head.mp4"), concatList = Path.Combine(output, "loop-concat.txt");
+                    try
+                    {
+                        _ = await ff.RunTextAsync(tools.Ffmpeg, [.. encoderArguments.Select(argument => argument == "pipe:0"
+                            ? Path.Combine(output, LoopHeadFile) : argument == encodedVideo ? headVideo : argument)],
+                            Path.Combine(output, "loop-head-encoder.stderr.log"), cancellationToken);
+                    }
+                    catch (IOException error) when (hardwareEncoder && !cancellationToken.IsCancellationRequested)
+                    {
+                        throw new GpuEncodeUnavailableException($"{profile.Encoder} failed on the loop head; see loop-head-encoder.stderr.log.", error);
+                    }
+                    await File.WriteAllTextAsync(concatList, $"file '{headVideo.Replace('\\', '/')}'\nfile '{encodedVideo.Replace('\\', '/')}'\n", cancellationToken);
+                    string timescale = request.FpsNumerator.ToString(CultureInfo.InvariantCulture);
+                    _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", "-f", "concat", "-safe", "0", "-i", concatList,
+                        "-map", "0:v:0", "-an", "-c", "copy", "-fps_mode", "passthrough", "-movie_timescale", timescale,
+                        "-video_track_timescale", timescale, "-movflags", "+faststart", partialVideo],
+                        Path.Combine(output, "loop-concat.stderr.log"), cancellationToken);
+                    TemporaryCaptureFiles.Delete(manifest, output, LoopHeadFile, "loop-head.mp4", "loop-body.mp4", "loop-concat.txt");
+                    manifest["loop_crossfade"] = new JsonObject { ["status"] = "applied", ["policy"] = ResidualMasking.SeamPolicy,
+                        ["crossfade_frames"] = headFrames, ["loop_frames"] = encodedFrames,
+                        ["weight_expression"] = $"out[i] = (f[i]*(i+1) + f[P+i]*(C-i)) / (C+1) in integers, C = {headFrames}",
+                        ["method"] = "CPU pipeline: [C, P) encoded while rendering; [0, C) blended in C# and encoded separately, then stream-copied in front." };
+                    manifest["gpu_loop_window"] = new JsonObject { ["path"] = Path.Combine(output, LoopWindowFile),
+                        ["width"] = request.Width, ["height"] = request.Height, ["crossfade_frames"] = headFrames,
+                        ["loop_frames"] = encodedFrames, ["frame_count"] = 2UL * headFrames };
+                }
+                if (directCrop is not null) manifest["gpu_crop"] = JsonSerializer.SerializeToNode(directCrop, JsonOptions);
             }
             RenderResult nativeResult = await RendererClient.ReadResultAsync(renderDirectory, cancellationToken);
             if (!nativeResult.Confirms(request.Frames))

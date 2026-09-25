@@ -88,7 +88,8 @@ public static class EncodedLoopValidator
     {
         ArgumentNullException.ThrowIfNull(renderManifest);
         ArgumentNullException.ThrowIfNull(wrapRgba);
-        bool gpu = renderManifest["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
+        // GPU 直编与 CPU 直编的裁剪、淡化组（gpu_crop）：成品按渲染时的裁剪与整数淡化编出。
+        bool gpu = renderManifest["native_frame_transport"]?.GetValue<string>() == "gpu_nv12" || renderManifest["gpu_crop"] is JsonObject;
         string packing = renderManifest["pixel_packing"]?.GetValue<string>() ?? "";
         if (renderManifest["status"]?.GetValue<string>() != "completed" || renderManifest["lossless_test_encoding"]?.GetValue<bool>() != false ||
             packing != (packedAlpha ? "rgba_side_by_side" : "rgb") || (packedAlpha && !gpu))

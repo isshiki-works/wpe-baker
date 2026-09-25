@@ -113,10 +113,12 @@ public sealed partial class NativeRenderRunner
         ArgumentNullException.ThrowIfNull(render);
         renderDirectory = Path.GetFullPath(renderDirectory);
         bool gpu = render["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
+        // CPU 直编的透明组、残差组同 GPU 路线一样带渲染时定下的裁剪（gpu_crop）。
+        bool cropped = gpu || render["gpu_crop"] is JsonObject;
         bool packed = render["pixel_packing"]?.GetValue<string>() == "rgba_side_by_side";
         if (render["status"]?.GetValue<string>() != "completed" || render["lossless_test_encoding"]?.GetValue<bool>() != false ||
-            (!gpu && (packed || render["request"]?["playback_encoder_kind"]?.GetValue<string>() != encoderKind)) ||
-            (gpu && encoderKind != PlaybackEncoderSelection.Vulkan))
+            (!cropped && packed) || (gpu ? encoderKind != PlaybackEncoderSelection.Vulkan
+                : render["request"]?["playback_encoder_kind"]?.GetValue<string>() != encoderKind))
             throw new InvalidDataException("Direct playback adoption requires a completed opaque render encoded with the same playback kind.");
         // 不透明组的裁剪范围是先验的整幅：BoundsIncludeRgb 下 alpha 恒 255 让空像素判据只剩"RGBA 全零"，并集就是整张画布。
         if (!packed && render["alpha_bounds"]?["minimum_alpha"]?.ToJsonString() != "255")
@@ -124,11 +126,11 @@ public sealed partial class NativeRenderRunner
         JsonObject request = render["request"]!.AsObject();
         int captureWidth = request["width"]!.GetValue<int>(), captureHeight = request["height"]!.GetValue<int>();
         uint numerator = request["fps_numerator"]!.GetValue<uint>(), denominator = request["fps_denominator"]!.GetValue<uint>();
-        var region = gpu && render["gpu_crop"] is JsonObject gpuCrop
+        var region = render["gpu_crop"] is JsonObject gpuCrop
             ? System.Text.Json.JsonSerializer.Deserialize<CacheRegion>(gpuCrop.ToJsonString(),JsonOptions)!
             : new CacheRegion(captureWidth, captureHeight, 0, 0, captureWidth, captureHeight);
         region.Validate();
-        if (gpu)
+        if (cropped)
         {
             CacheRegion required = CacheRegion.FromAlphaBounds(render,padding:2);
             if (region.CaptureWidth != captureWidth || region.CaptureHeight != captureHeight ||

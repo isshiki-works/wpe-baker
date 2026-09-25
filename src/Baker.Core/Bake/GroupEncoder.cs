@@ -59,6 +59,8 @@ internal sealed class GroupEncoder(NativeRenderRunner runner, HybridBakeRequest 
             using (timing.Measure(StageTiming.EncodePlayback))
                 encoded = await runner.EncodeCroppedRgbaAsync(masterPath, Path.Combine(work, "encoded"), cancellationToken,
                     preserveAlpha: packedAlpha, playbackEncoder: playbackKind);
+            // GPU 直编回退到 master 的组：记下真正的原因（含画质门没过的 QP），不是泛泛的"这一组要走无损路线"。
+            if (master["gpu_pipeline_fallback_reason"] is JsonNode gpuFallback) encoded["encoder_fallback_reason"] = gpuFallback.DeepClone();
         }
         return (encoded, encoded["crop"]!.Deserialize<CacheRegion>(JsonOptions)!, encoded["video_path"]!.GetValue<string>());
     }
