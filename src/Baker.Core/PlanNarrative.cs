@@ -285,8 +285,11 @@ public static class PlanNarrative
         if (blockers.Count > 0)
         {
             JsonObject first = report["blockers_localized"]![0]!.AsObject();
+            string blockerZh = first["zh"]?.GetValue<string>() ?? "", blockerEn = first["en"]?.GetValue<string>() ?? "";
+            // 拒因自带状态词（"不支持："）时不再叠一层"不可生成："。
+            bool stated = blockerZh.StartsWith("不支持：", StringComparison.Ordinal);
             return Bilingual(Blocked, "summary.blocked",
-                [first["zh"]?.GetValue<string>() ?? "", blockers.Count], [first["en"]?.GetValue<string>() ?? "", blockers.Count]);
+                [(stated ? "" : "不可生成：") + blockerZh, blockers.Count], [(stated ? "" : "Cannot generate: ") + blockerEn, blockers.Count]);
         }
         if (Admission.FirstCandidate(report) is JsonObject candidate) return Bakeable_(report, candidate);
         if (LoopUnresolved(report, notes) is JsonObject specific) return specific;
