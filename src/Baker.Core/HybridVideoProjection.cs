@@ -170,7 +170,8 @@ internal static class HybridVideoProjection
                 report["center_x"] = canvas.X / 2 + (minX + maxX) / 2; report["center_y"] = canvas.Y / 2 + (minY + maxY) / 2;
                 report["visible_width"] = width / fit; report["visible_height"] = height / fit;
                 report["camera_intro"] = new JsonObject { ["seconds"] = seconds,
-                    ["tradeoff"] = "取景与合成门按相机入场动画结束后的静止态；入场那几秒成品是放大的视频，会发糊。" };
+                    ["tradeoff"] = "取景按相机入场动画结束后的静止态；入场那几秒成品显示原作图层，结束后切到视频（bake.json 的 intro_live）。" +
+                        "切换做不成、退回旧行为（settings.single_shot_live）时，入场那几秒是放大的视频，会发糊。" };
             }
         }
         return report;
@@ -189,8 +190,10 @@ internal static class HybridVideoProjection
                 return still.Select(v => new[] { v }).ToArray();
             bool single = animation["options"]?["mode"]?.GetValue<string>() == "single";
             if (single) seconds = Math.Max(seconds, SceneGraph.Numeric(animation["options"]?["length"], 0) / SceneGraph.Numeric(animation["options"]?["fps"], 30));
+            // relative 动画的关键帧是相对静止值的增量（引擎 Scene.cpp：base + value），不是绝对值。
+            bool relative = animation["relative"]?.ToJsonString() == "true";
             return still.Select((v, i) => animation[$"c{i}"] is JsonArray { Count: > 0 } keys
-                ? (single ? keys.TakeLast(1) : keys).Select(key => key!["value"]!.GetValue<double>()).ToArray() : [v]).ToArray();
+                ? (single ? keys.TakeLast(1) : keys).Select(key => key!["value"]!.GetValue<double>() + (relative ? v : 0)).ToArray() : [v]).ToArray();
         }
         double Scalar(JsonNode? node) => SceneGraph.Numeric(SceneGraph.Resolve(node, properties), 1);
         double zoom = Values(scene["general"]?["zoom"], [Scalar(scene["general"]?["zoom"])])[0].Min();

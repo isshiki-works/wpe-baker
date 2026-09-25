@@ -7,9 +7,12 @@ namespace Baker.Core;
 
 public sealed partial class NativeRenderRunner
 {
-    /// <summary>Checks this bitstream on each non-software DXGI adapter. Does not certify sustained FPS or WPE playback.</summary>
+    /// <summary>
+    /// Checks this bitstream on the adapters WPE plays on: those driving a display; with no display attached, the bake's
+    /// render device; failing that, every hardware adapter. Does not certify sustained FPS or WPE playback.
+    /// </summary>
     public async Task<JsonObject> ProbeHardwareDecodeAsync(string videoFile, string outputNewDirectory,
-        ulong frames = 5, CancellationToken cancellationToken = default)
+        ulong frames = 5, CancellationToken cancellationToken = default, string? renderDeviceUuid = null)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("D3D11VA probing requires Windows.");
         if (frames == 0 || frames > long.MaxValue) throw new ArgumentOutOfRangeException(nameof(frames));
@@ -23,16 +26,17 @@ public sealed partial class NativeRenderRunner
         string reportPath = Path.Combine(output, "hardware-decode.json");
         var adapters = new JsonArray();
         var skippedSoftware = new JsonArray();
+        var skippedNotPlayback = new JsonArray();
         var report = new JsonObject {
             ["schema_version"] = 1, ["status"] = "running", ["video_path"] = videoFile,
             ["ffmpeg_path"] = Path.GetFullPath(tools.Ffmpeg), ["ffprobe_path"] = Path.GetFullPath(tools.Ffprobe),
             ["frames_requested"] = frames, ["adapter_timeout_seconds"] = 30,
-            ["scope"] = "Actual bitstream, short D3D11VA decode with mandatory hardware frames and hwdownload, on this baking machine's adapters only; no sustained FPS, full-file integrity, playback-machine claim or official WPE playback claim.",
+            ["scope"] = "Actual bitstream, short D3D11VA decode with mandatory hardware frames and hwdownload, on this baking machine's playback adapters only (see playback_adapter_basis); no sustained FPS, full-file integrity, playback-machine claim or official WPE playback claim.",
             ["all_adapters_passed"] = false, ["adapters"] = adapters,
             // 这次实测只代表烘焙机自己的显卡；verified_on / target_hints / conclusion 由 ApplyTargetGuidance 在收尾时填。
             ["target_caveat"] = HardwareDecodeDimensions.BakingMachineOnlyCaveat,
             ["verified_on"] = new JsonArray(), ["target_hints"] = new JsonArray(), ["conclusion"] = null,
-            ["skipped_software_adapters"] = skippedSoftware, ["report_path"] = reportPath
+            ["skipped_software_adapters"] = skippedSoftware, ["skipped_non_playback_adapters"] = skippedNotPlayback, ["report_path"] = reportPath
         };
         await WriteJsonAsync(reportPath, report, cancellationToken);
         try
@@ -59,6 +63,23 @@ public sealed partial class NativeRenderRunner
                 report["vulkan_enumeration_error_type"] = error.GetType().Name;
                 report["vulkan_enumeration_error"] = error.Message;
             }
+            // WPE 在驱动显示器的那块卡上解码播放：只验这些卡，没接显示器的核显解不了不影响播放。
+            // 一块都没接显示器（显示器休眠断开、远程会话、Session 0）时退到本次烘焙的渲染卡；也认不出就照旧验全部。
+            JsonObject[] all = [.. adapters.OfType<JsonObject>()], playback = [.. all.Where(a => a["drives_display"]!.GetValue<bool>())];
+            report["playback_adapter_basis"] = playback.Length > 0 ? "drives_display" : "all_adapters";
+            if (playback.Length == 0 && renderDeviceUuid is not null &&
+                all.Where(a => string.Equals(a["device_uuid"]?.GetValue<string>(), renderDeviceUuid, StringComparison.OrdinalIgnoreCase)).ToArray() is [var render])
+            {
+                playback = [render];
+                report["playback_adapter_basis"] = "render_device";
+            }
+            if (playback.Length > 0)
+                foreach (var idle in all.Except(playback))
+                {
+                    idle["status"] = "skipped_not_playback";
+                    adapters.Remove(idle);
+                    skippedNotPlayback.Add(idle);
+                }
 
             string probeLog = Path.Combine(output, "ffprobe.stderr.log");
             report["ffprobe_stderr_log_path"] = probeLog;
@@ -257,6 +278,8 @@ public sealed partial class NativeRenderRunner
                     var table = Marshal.PtrToStructure<DxgiAdapter1Vtable>(Marshal.ReadIntPtr(adapter));
                     var getDescription = Marshal.GetDelegateForFunctionPointer<GetDesc1Delegate>(table.GetDesc1);
                     Marshal.ThrowExceptionForHR(getDescription(adapter, out var description));
+                    int outputResult = Marshal.GetDelegateForFunctionPointer<EnumOutputsDelegate>(table.EnumOutputs)(adapter, 0, out nint output);
+                    if (output != 0) Marshal.Release(output);
                     byte[] luid = [.. BitConverter.GetBytes(description.AdapterLuid.LowPart), .. BitConverter.GetBytes(description.AdapterLuid.HighPart)];
                     // 核显还是独显要写进结果：用户在播放机（多半是核显）上播，烘焙机上验过的未必是同一类硬件。
                     ulong dedicated = description.DedicatedVideoMemory, shared = description.SharedSystemMemory;
@@ -268,6 +291,7 @@ public sealed partial class NativeRenderRunner
                         ["dedicated_video_memory_bytes"] = dedicated, ["shared_system_memory_bytes"] = shared,
                         ["adapter_class"] = HardwareDecodeDimensions.ClassifyAdapter(description.VendorId, dedicated, shared),
                         ["device_uuid"] = null, ["vulkan_match"] = "not_available",
+                        ["drives_display"] = outputResult >= 0,
                         ["status"] = "pending", ["passed"] = false
                     };
                     // Microsoft's DXGI overview defines 1414:008c as Basic Render Driver.
@@ -296,6 +320,8 @@ public sealed partial class NativeRenderRunner
     private delegate int EnumAdapters1Delegate(nint factory, uint index, out nint adapter);
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int GetDesc1Delegate(nint adapter, out DxgiAdapterDescription1 description);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate int EnumOutputsDelegate(nint adapter, uint index, out nint output);
 
     // Native field order from the bundled llvm-mingw-22/include/dxgi.h:
     // IDXGIFactory1Vtbl, IDXGIAdapter1Vtbl and DXGI_ADAPTER_DESC1. SIZE_T is nuint.

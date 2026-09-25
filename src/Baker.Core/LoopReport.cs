@@ -14,6 +14,9 @@ internal sealed record LoopReport(uint FpsNum, uint FpsDen, string RetimeMode, C
     bool SourceStatic, VideoControlScope VideoControlScope, LoopContentCadence ContentCadence, IReadOnlyList<ShaderPeriodComponent> Evidence,
     JsonObject? SwayRetime, JsonObject? LoopLengthDefault, EmbeddedVideoLoopLimit? EmbeddedVideoLimit)
 {
+    /// <summary>首个候选上与别的组共用时钟、自身周期不整除 L 的组想要的 L 步长（不写进 plan；HybridScenePlanner 据此重解一次）。</summary>
+    public IReadOnlyList<ulong> GroupClockSteps { get; init; } = [];
+
     public JsonObject ToJson()
     {
         var json = new JsonObject {
@@ -107,6 +110,11 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
     /// <summary>循环长度不来自周期求解时的来源（目前只有 stationary_particle_default）。</summary>
     public string? LoopLengthSource { get; init; }
     public CandidateSwayRetime? SwayRetime { get; init; }
+    /// <summary>
+    /// 按自身周期录制、比 L 短的组（组 id → 帧数，见 LoopAnalysis.GroupPeriods）；不在表里的组录 L 帧。
+    /// 时钟独占的组，它的分量在 components 里记的是在本组周期上的圈数与调速。
+    /// </summary>
+    public IReadOnlyDictionary<string, ulong>? GroupFrames { get; init; }
 
     public JsonObject ToJson()
     {
@@ -117,6 +125,8 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
                 ["speed_multiplier"] = x.SpeedMultiplier, ["delta_percent"] = x.DeltaPercent }).ToArray()),
             ["patches"] = new JsonArray(Patches.Select(x => (JsonNode)x.ToJson()).ToArray())
         };
+        if (GroupFrames is { Count: > 0 })
+            json["group_frames"] = new JsonObject(GroupFrames.Select(pair => KeyValuePair.Create(pair.Key, (JsonNode?)pair.Value)));
         if (SpriteSeam is { WarmupFrames: ulong warmup and > 0 } sprite)
         {
             json["source_period_warmup_frames"] = warmup;

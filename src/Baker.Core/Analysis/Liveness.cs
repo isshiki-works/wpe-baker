@@ -46,9 +46,8 @@ internal sealed class Liveness
                 throw new InvalidDataException("A source script fault lacks a known authored owner; its allocation cannot be inferred safely.");
             Live(owner, "source_script_error");
         }
-        // 一次性动画轨的所属层必须实时绘制：循环视频会让只播一次的动画每个周期重播，
-        // 与原作播完即定格的画面不一致。判据与 HybridLoopService 读的是同一份轨道证据。
-        foreach (int owner in SingleShotAllocation.LiveOwners(observation.Trace)) Live(owner, SingleShotAllocation.LiveReason);
+        // 事件触发的一次性动画轨所属层实时绘制：播放时刻不定，循环视频表达不了。加载即播的见 SingleShotAllocation.IntroSeconds。
+        foreach (int owner in SingleShotAllocation.LiveOwners(observation.Trace, request.SingleShotLive)) Live(owner, SingleShotAllocation.LiveReason);
         foreach (var dependency in observation.Dependencies.OfType<JsonObject>())
         {
             int owner = dependency["owner"]!.GetValue<int>();
@@ -89,8 +88,10 @@ internal sealed class Liveness
                     m["active_uniforms"] is JsonArray uniforms && uniforms.Any(u => u?.GetValue<string>() == "g_ParallaxPosition")))
                     Live(layer["owner"]!.GetValue<int>(), "active_shader_parallax_input");
             }
-        var sharedUsers = new HashSet<int>();
-        var sharedWriters = new HashSet<int>();
+        // 对象 → 用到 / 写入的 shared 键；认不出键（混淆、下标是变量、写入的字符串下标）记 "*"，与任何键都算同一个。
+        var sharedReads = new Dictionary<int, HashSet<string>>();
+        var sharedWrites = new Dictionary<int, HashSet<string>>();
+        HashSet<string> Keys(Dictionary<int, HashSet<string>> map, int id) => map.TryGetValue(id, out var keys) ? keys : map[id] = [];
         foreach (var (id, obj) in objects)
         {
             if (obj.ContainsKey("sound")) Live(id, "soundtrack");
@@ -99,10 +100,12 @@ internal sealed class Liveness
             {
                 if (binding["script"] is not JsonValue value || !value.TryGetValue<string>(out string? text)) continue;
                 string code = CapabilityScanText(text);
-                if (Regex.IsMatch(code, @"\bshared\b")) sharedUsers.Add(id);
+                foreach (Match use in Regex.Matches(code, @"\bshared\b(?:\s*\.\s*(\w+)|\s*\[\s*(['""])(\w*)\2\s*\])?"))
+                    Keys(sharedReads, id).Add(use.Groups[1].Success ? use.Groups[1].Value : use.Groups[3].Success ? use.Groups[3].Value : "*");
                 // 去掉字符串字面量再认写入：混淆脚本的键是 shared[_0x..('0x5',')#$]')] 这种，引号里可能有方括号。
-                if (Regex.IsMatch(Regex.Replace(code, "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'", "''"),
-                    @"\bshared\s*(\.\s*\w+|\[[^\]]*\])\s*(=(?!=)|[-+*/%&|^]=|\+\+|--)")) sharedWriters.Add(id);
+                foreach (Match write in Regex.Matches(Regex.Replace(code, "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'", "''"),
+                    @"\bshared\s*(\.\s*\w+|\[[^\]]*\])\s*(=(?!=)|[-+*/%&|^]=|\+\+|--)"))
+                    Keys(sharedWrites, id).Add(write.Groups[1].Value.StartsWith('.') ? write.Groups[1].Value[1..].Trim() : "*");
                 if (Regex.IsMatch(code, @"\bnew\s+Date\b|\bDate\s*\.\s*now\b|\btimeOfDay\b") && id != daytimeSelector) Live(id, "wall_clock_api");
                 if (Regex.IsMatch(code, @"\bregisterAudioBuffers\s*\(")) Live(id, "audio_api");
                 if (Regex.IsMatch(code, @"\binput\s*[.\[]|\bfunction\s+cursor\w*\s*\(")) Live(id, "pointer_api");
@@ -124,10 +127,19 @@ internal sealed class Liveness
         // 经 shared 全局对象给别的脚本传值的写者：这种读写不进依赖记录，层烘成视频后脚本就不再执行，
         // 读它的实时脚本在成品里拿不到值（例如按 shared 值自检、不对就 destroyLayer 的防篡改脚本会把整个场景删空）。
         // 官方 WPE 里所有脚本都在跑，所以只要别的对象的脚本也用 shared，写者就留实时。
-        foreach (int id in sharedWriters.Where(id => sharedUsers.Any(user => user != id))) Live(id, "writes_shared_script_state");
+        foreach (int id in sharedWrites.Keys.Where(id => sharedReads.Keys.Any(user => user != id))) Live(id, "writes_shared_script_state");
+        // 反过来，写者因 shared 以外的原因（输入、时钟、读实时对象……）实时时，写进去的值随运行时变，读同一个键的层烘成视频
+        // 就冻在烘焙时的值上。这类读同样不进依赖记录，补成读依赖交给下面同一个闭包（沿依赖继续传）；
+        // 写者只因 writes_shared_script_state 实时时写的是确定值，这条依赖摘掉，读者照常烘。
+        var sharedEdges = (from writer in sharedWrites from reader in sharedReads
+            where reader.Key != writer.Key && reader.Value.Any(key => key == "*" || writer.Value.Contains(key) || writer.Value.Contains("*"))
+            select new JsonObject { ["owner"] = reader.Key, ["target"] = writer.Key, ["operation"] = "read" }).ToHashSet();
         // Runtime writes by a live controller make their targets live. Reads of a live mutable
         // target make the consuming animation live too. Initialization-only transforms stay snapshots.
-        Close(observation.Dependencies.OfType<JsonObject>(), liveness.Ids.Contains, liveness.Mark, ownerPerRule: true, severedRead, severedWrite);
+        Close(observation.Dependencies.OfType<JsonObject>().Concat(sharedEdges), liveness.Ids.Contains, liveness.Mark, ownerPerRule: true,
+            dependency => sharedEdges.Contains(dependency)
+                ? liveness.Reasons[dependency["target"]!.GetValue<int>()].All(reason => reason == "writes_shared_script_state")
+                : severedRead(dependency), severedWrite);
         return liveness;
     }
 

@@ -200,6 +200,98 @@ internal static class SceneAssembler
         return finalObjects;
     }
 
+    /// <summary>
+    /// 单次入场动画（相机 projection.camera_intro、图层加载即播的单次轨）：前 <paramref name="introFrames"/> 帧显示原作图层、隐藏视频，之后反过来。
+    /// 每个视频前插入它那组成员（及到组父级之间的祖先，祖先去掉绘制键只给变换）的副本，id 在成品里没被占用就沿用原 id；
+    /// 副本与视频各带 visible 脚本按 engine.runtime 切换，不依赖父级可见性是否传给子级。
+    /// 视频 init 里暂停，切换那一帧 seek 到场景此刻对应的帧再播：视频第 j 帧是源第 master+j 帧，切换帧 s 播 (s − master) mod P，
+    /// 所以不管 WPE 隐藏的视频播不播，相位都对齐场景绝对时间。副本做不成（公开图层查询、跨对象依赖、脚本/动画可见性）时 s = 0：
+    /// 视频从头可见（入场那几秒是定格态），只做相位对齐。返回 bake.json 的 intro_live。
+    /// </summary>
+    internal static JsonObject ApplyIntro(JsonArray finalObjects, IReadOnlyDictionary<int, JsonObject> originals, JsonObject plan,
+        IReadOnlyDictionary<string, JsonObject> replacements, IReadOnlySet<int> staticIds, JsonArray dependencies, JsonObject snapshot,
+        ulong introFrames, ulong masterWarmupFrames, Func<string, ulong> loopFrames, uint fpsNumerator, uint fpsDenominator)
+    {
+        static string Seconds(double value) => value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        double frame = (double)fpsDenominator / fpsNumerator;
+        // 半帧余量：逐帧渲染时 engine.runtime 正好落在帧时刻上，比较不受浮点误差左右。
+        string threshold = Seconds((introFrames - .5) * frame);
+        var order = new List<int>();
+        void Visit(int id)
+        {
+            order.Add(id);
+            foreach (var child in originals.Where(pair => Int(pair.Value["parent"]) == id)) Visit(child.Key);
+        }
+        foreach (var root in originals.Where(pair => Int(pair.Value["parent"]) is not int parent || !originals.ContainsKey(parent))) Visit(root.Key);
+        var used = finalObjects.OfType<JsonObject>().Select(Id).ToHashSet();
+        int next = used.Concat(originals.Keys).Max() + 1;
+        var inserts = new List<(JsonObject Video, List<JsonObject> Clones)>();
+        // 按模型资源找视频：查公开图层表时装配会把视频挪到成员槽位、换掉 id（见 AssembleAllocationObjects）。
+        JsonObject Placed(JsonObject replacement) =>
+            finalObjects.OfType<JsonObject>().Single(obj => JsonNode.DeepEquals(obj["image"], replacement["image"]));
+        string? skip = PublicLayerQueries(finalObjects.OfType<JsonObject>(), dependencies).Any() ? "public_layer_queries" : null;
+        foreach (var group in plan["video_groups"]!.AsArray().OfType<JsonObject>())
+        {
+            if (skip is not null || !replacements.TryGetValue(group["id"]!.GetValue<string>(), out var replacement)) continue;
+            int? groupParent = Int(group["parent_id"]);
+            var members = group["layer_ids"]!.AsArray().Select(n => Int(n)).OfType<int>().ToHashSet();
+            var cloned = new HashSet<int>();
+            foreach (int member in members)
+                for (int? id = member; id is int current && current != groupParent && originals.ContainsKey(current) && cloned.Add(current);
+                     id = Int(originals[current]["parent"])) { }
+            if (dependencies.OfType<JsonObject>().Any(d => Int(d["owner"]) is int owner && Int(d["target"]) is int target && owner != target &&
+                (cloned.Contains(owner) || cloned.Contains(target)))) { skip = "cross_object_dependency"; break; }
+            var map = new Dictionary<int, int>();
+            var clones = new List<JsonObject>();
+            foreach (int id in order.Where(cloned.Contains))
+            {
+                var clone = originals[id].DeepClone().AsObject();
+                if (clone["visible"] is JsonObject binding && (binding.ContainsKey("script") || binding.ContainsKey("animation")))
+                { skip = "dynamic_visibility"; break; }
+                if (!members.Contains(id)) foreach (string key in NonLiveDrawKeys) clone.Remove(key);
+                map[id] = used.Add(id) ? id : next++;
+                clone["id"] = map[id];
+                if (Int(clone["parent"]) is int parent && map.TryGetValue(parent, out int mapped)) clone["parent"] = mapped;
+                var shown = SceneGraph.Resolve(clone["visible"], snapshot);
+                if (shown is JsonObject wrapped) shown = wrapped["value"];
+                clone["visible"] = shown is JsonValue flag && flag.TryGetValue(out bool hidden) && !hidden ? false : new JsonObject {
+                    ["value"] = true, ["script"] = $"'use strict';\nexport function update(value) {{\n\treturn engine.runtime < {threshold};\n}}\n" };
+                clones.Add(clone);
+            }
+            inserts.Add((Placed(replacement), clones));
+        }
+        ulong switchFrame = skip is null ? introFrames : 0;
+        if (skip is null)
+            foreach (var (video, clones) in inserts)
+            {
+                int at = finalObjects.IndexOf(video);
+                for (int i = clones.Count - 1; i >= 0; --i) finalObjects.Insert(at, clones[i]);
+            }
+        string on = skip is null ? threshold : Seconds(-.5 * frame);
+        var seeks = new JsonObject();
+        foreach (var (groupId, replacement) in replacements)
+        {
+            var video = Placed(replacement);
+            bool isStatic = staticIds.Contains(Id(replacement));
+            if (skip is not null && isStatic) continue;
+            // P 取本组录制帧数 P_g（各组按自身周期录制）；落在帧中间（+¼ 帧），解码取帧不受取整方向影响。
+            ulong period = loopFrames(groupId);
+            string seek = Seconds(((switchFrame + period - masterWarmupFrames % period) % period + .25) * frame);
+            if (!isStatic) seeks[groupId] = double.Parse(seek, System.Globalization.CultureInfo.InvariantCulture);
+            video["visible"] = new JsonObject { ["value"] = skip is not null, ["script"] = isStatic
+                ? $"'use strict';\nexport function update(value) {{\n\treturn engine.runtime >= {on};\n}}\n"
+                : $"'use strict';\nlet started = false;\nexport function init() {{\n\tthisLayer.getVideoTexture().pause();\n}}\n" +
+                  $"export function update(value) {{\n\tif (engine.runtime < {on}) return false;\n\tif (!started) {{\n\t\tstarted = true;\n" +
+                  $"\t\tconst video = thisLayer.getVideoTexture();\n\t\tvideo.setCurrentTime({seek});\n\t\tvideo.play();\n\t}}\n\treturn true;\n}}\n" };
+        }
+        var result = new JsonObject { ["intro_frames"] = introFrames, ["switch_frame"] = switchFrame,
+            ["switch_seconds"] = switchFrame * frame, ["video_seek_seconds"] = seeks,
+            ["status"] = skip is null ? "applied" : "skipped" };
+        if (skip is null) result["cloned_object_count"] = inserts.Sum(insert => insert.Clones.Count);
+        else result["reason"] = skip;
+        return result;
+    }
+
     /// <summary>运行时依赖记录去重合并（按 JSON 文本），保持先后顺序。</summary>
     internal static JsonArray MergeRuntimeDependencies(JsonArray first, JsonArray second)
     {

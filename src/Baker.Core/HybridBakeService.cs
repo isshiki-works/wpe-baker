@@ -119,8 +119,50 @@ public sealed class HybridBakeService(NativeTools tools)
     {
         ArgumentNullException.ThrowIfNull(request);
         JsonObject result = await BakeCleanedAsync(request, progress, cancellationToken);
-        if (request.ProbeFrames > 0 || ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
-        return await RetryRetainingParticlesAsync(request, result, retain, reasons, progress, cancellationToken);
+        if (request.ProbeFrames > 0) return result;
+        // 入场切换没过合成门：不逐张修，按旧行为（单次轨所属层判实时、不做切换）重新分析再烘；重烘还能接着走残差粒子重试。
+        if (result["composition_validation"] is JsonObject composition && composition["status"]?.GetValue<string>() != "composition_pass" &&
+            composition["intro_live"]?["status"]?.GetValue<string>() == "applied")
+        {
+            progress?.Report(new("reverting_intro_switch", null,
+                "The composition check rejected the intro switch; analyzing again with intro animations kept live and baking once more."));
+            return await RetryReplannedAsync(request, result, "intro_fallback", ".intro-first-attempt", new JsonObject(),
+                settings => settings with { SingleShotLive = true }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
+        }
+        // 按自身周期 P_g（< L）录的组没过接缝门（含闭合检验）：这一组退回录全局 L 帧，重新分析再烘；别的组不变。
+        // 重烘走 BakeAsync，再有别的缩短组没闭合时逐组接着退回（每轮都比上一轮多一组录 L，组数有限）。
+        if (OwnPeriodSeamFailure(request.Plan, result) is (string groupId, int[] groupLayers, ulong groupFrames))
+        {
+            int[] fullLoop = [.. PlanSettings.Of(request.Plan).FullLoopLayerIds ?? [], .. groupLayers];
+            progress?.Report(new("group_full_loop_fallback", null,
+                $"Video group {groupId} did not close on its own {groupFrames}-frame period; recording it at the full loop length and baking once more."));
+            return await RetryReplannedAsync(request, result, "group_period_fallback", $".{groupId}-own-period-attempt", new JsonObject {
+                    ["group_id"] = groupId, ["group_frames"] = groupFrames, ["loop_frames"] = result["frames"]?.DeepClone(),
+                    // 原因码：按自身周期录的组被接缝门拒绝；拒绝原文见 first_reason_localized。
+                    ["full_loop_layer_ids"] = JsonSerializer.SerializeToNode(fullLoop), ["reason"] = "own_period_seam_rejected" },
+                settings => settings with { FullLoopLayerIds = fullLoop }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
+        }
+        if (ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
+        progress?.Report(new("retaining_residual_particles", null,
+            "Seam residual from masked particles exceeded the first layer; keeping those particles live and baking once more."));
+        return await RetryReplannedAsync(request, result, "residual_particle_retry", ".residual-first-attempt", new JsonObject {
+                ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(retain),
+                ["first_rejected_groups"] = new JsonArray([.. (result["groups"] as JsonArray ?? []).OfType<JsonObject>()
+                    .Where(group => group["status"]?.GetValue<string>() == "rejected_seam_residual").Select(group => group["id"]?.DeepClone())]) },
+            settings => settings with { RetainLiveRootIds = retain, RetainLiveReasons = reasons },
+            retry => BakeCleanedAsync(retry, progress, cancellationToken), progress, cancellationToken);
+    }
+
+    /// <summary>接缝门拒绝的组若按自身周期（plan 候选的 group_frames，比 L 短）录制，返回它的 id、图层与帧数；其余情况 null。</summary>
+    private static (string GroupId, int[] Layers, ulong Frames)? OwnPeriodSeamFailure(JsonObject plan, JsonObject report)
+    {
+        if (report["status"]?.GetValue<string>() != "candidate_rejected_seam" ||
+            (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["group_frames"] is not JsonObject own) return null;
+        string? failed = (report["groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .FirstOrDefault(g => g["status"]?.GetValue<string>() == "rejected_seam")?["id"]?.GetValue<string>();
+        if (failed is null || own[failed] is not JsonNode frames) return null;
+        JsonObject group = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().Single(g => g["id"]?.GetValue<string>() == failed);
+        return (failed, [.. (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()], frames.GetValue<ulong>());
     }
 
     /// <summary>
@@ -148,44 +190,40 @@ public sealed class HybridBakeService(NativeTools tools)
     }
 
     /// <summary>
-    /// 残差粒子自动重试，只试一次：按计划里的分析设置加上 <paramref name="retain"/> 重新分析（在 .analysis-refresh），
-    /// 无 blocker 就把首次产物挪到 &lt;输出&gt;.residual-first-attempt，再烘一次。首次结论、保留的根与耗时记在 residual_particle_retry。
+    /// 自动重试，只试一次：按计划里的分析设置经 <paramref name="replan"/> 改写后重新分析（在 .analysis-refresh），
+    /// 无 blocker 就把首次产物（连同合成比对留下的探针、参照与比较结果）挪到 &lt;输出&gt;<paramref name="firstAttemptSuffix"/>，
+    /// 用新计划再烘一次。首次结论、改写的设置与耗时记在报告的 <paramref name="key"/>。
     /// </summary>
-    private async Task<JsonObject> RetryRetainingParticlesAsync(HybridBakeRequest request, JsonObject first, int[] retain,
-        Dictionary<int, string[]>? reasons, IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
+    private async Task<JsonObject> RetryReplannedAsync(HybridBakeRequest request, JsonObject first, string key, string firstAttemptSuffix,
+        JsonObject record, Func<HybridAnalyzeRequest, HybridAnalyzeRequest> replan, Func<HybridBakeRequest, Task<JsonObject>> bake,
+        IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
     {
         var layout = new WorkLayout(request.OutputDirectory);
-        var record = new JsonObject {
-            ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(retain),
-            ["first_status"] = first["status"]?.DeepClone(), ["first_reason_localized"] = first["reason_localized"]?.DeepClone(),
-            ["first_rejected_groups"] = new JsonArray([.. (first["groups"] as JsonArray ?? []).OfType<JsonObject>()
-                .Where(group => group["status"]?.GetValue<string>() == "rejected_seam_residual").Select(group => group["id"]?.DeepClone())]),
-            ["first_stage_timing"] = first["stage_timing"]?.DeepClone() };
-        progress?.Report(new("retaining_residual_particles", null,
-            "Seam residual from masked particles exceeded the first layer; keeping those particles live and baking once more."));
+        record["first_status"] = first["status"]?.DeepClone();
+        record["first_reason_localized"] = first["reason_localized"]?.DeepClone();
+        record["first_stage_timing"] = first["stage_timing"]?.DeepClone();
         long started = Stopwatch.GetTimestamp();
-        JsonObject plan = await new HybridScenePlanner(tools).AnalyzeAsync(PlanSettings.Of(request.Plan) with {
-            OutputDirectory = layout.AnalysisRefresh, RuntimeTraceFile = null, RetainLiveRootIds = retain, RetainLiveReasons = reasons },
-            progress, cancellationToken);
+        JsonObject plan = await new HybridScenePlanner(tools).AnalyzeAsync(replan(PlanSettings.Of(request.Plan) with {
+            OutputDirectory = layout.AnalysisRefresh, RuntimeTraceFile = null }), progress, cancellationToken);
         record["replan_seconds"] = Math.Round(Stopwatch.GetElapsedTime(started).TotalSeconds, 1);
         if (plan["blockers"] is not JsonArray { Count: 0 })
         {
             record["status"] = "replan_blocked";
             record["replanned_plan_path"] = Path.Combine(layout.AnalysisRefresh, "plan.json");
             record["replanned_summary"] = plan["summary"]?.DeepClone();
-            first["residual_particle_retry"] = record;
+            first[key] = record;
             await BakeReportWriter.SaveAsync(layout.Report, first, null, CancellationToken.None);
             return first;
         }
-        string firstAttempt = layout.Output + ".residual-first-attempt";
+        string firstAttempt = layout.Output + firstAttemptSuffix;
         Directory.Move(layout.Output, firstAttempt);
-        // 首次的合成比对结果（ProbeBake 写在输出根旁）一并挪走，重烘要求它是新的。
-        if (Directory.Exists(layout.Output + ".composition-validation"))
-            Directory.Move(layout.Output + ".composition-validation", Path.Combine(firstAttempt, "composition-validation"));
+        // 首次的合成比对产物（ProbeBake 写在输出根旁，被拒时探针与参照也留着）一并挪走，重烘要求它们是新的。
+        foreach (string part in new[] { "composition-validation", "composition-probe", "composition-reference" })
+            if (Directory.Exists(layout.Output + "." + part)) Directory.Move(layout.Output + "." + part, Path.Combine(firstAttempt, part));
         record["first_attempt_directory"] = firstAttempt;
-        JsonObject retried = await BakeCleanedAsync(request with { Plan = plan }, progress, cancellationToken);
+        JsonObject retried = await bake(request with { Plan = plan });
         record["status"] = "retried";
-        retried["residual_particle_retry"] = record;
+        retried[key] = record;
         await BakeReportWriter.SaveAsync(layout.Report, retried, null, CancellationToken.None);
         return retried;
     }
@@ -369,7 +407,7 @@ public sealed class HybridBakeService(NativeTools tools)
         // 残差掩盖打开时：起点帧由解析周期内的接缝残差决定，成品在接缝处做固定窗口的整帧交叉淡化。
         // 起点是预热之后、解析周期内的相位；渲染器实际跳过的帧数是 warmupFrames + 起点。
         uint crossfadeFrames = 0;
-        ulong warmupFrames = 0;
+        ulong warmupFrames = 0, introFrames = 0;
         int[] residualGroupIndexes = [];
         string playbackKind = PlaybackEncoderSelection.Software;
         string? playbackFallbackReason = null;
@@ -396,6 +434,11 @@ public sealed class HybridBakeService(NativeTools tools)
                 report["particle_warmup_frames"] = warmupFrames;
                 report["particle_warmup_seconds"] = residualMasking["max_warmup_seconds"]?.DeepClone();
             }
+            // 单次入场动画：视频从入场结束后录（定格态），入场那几秒成品显示原作图层（SceneAssembler.ApplyIntro）。
+            // 退回旧行为（settings.single_shot_live）时不切换：相机入场那几秒成品是放大的视频，合成门从入场结束后比（ProbeBake）。
+            if (daytimeExport is null && !settings.SingleShotLive)
+                warmupFrames += introFrames = (ulong)Math.Ceiling(SingleShotAllocation.IntroSeconds(plan, initialRuntime) *
+                    settings.FpsNumerator / settings.FpsDenominator);
             report["full_render_attempt_limit"] = probe ? 0 : 1;
             report["automatic_full_render_retries"] = false;
             // 含可掩盖残差层的组：它们的 master 多渲一个淡化窗口、各自测第一层并淡化；其余组照常渲 P 帧，相位同样是 warmup + S。
@@ -411,8 +454,12 @@ public sealed class HybridBakeService(NativeTools tools)
             // 没指定组并行时，GPU 路线的编码在显卡上、不抢 CPU，组、起点搜索与覆盖度预通道最多 3 路同时跑。
             if (request.GroupParallel == 0 && playbackKind == PlaybackEncoderSelection.Vulkan)
                 report["group_parallel"] = groupParallel = Math.Clamp(3, 1, Math.Max(1, groups.Length));
-            scheduler = new GroupRenderScheduler(runner, request, plan, settings, groups, captureProject, output, snapshot, frames,
+            // 各组按自己的周期 P_g 录（plan 候选的 group_frames，见 LoopAnalysis.GroupPeriods）；不在表里的组与探针照旧。
+            JsonObject? groupFrames = probe ? null : (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["group_frames"] as JsonObject;
+            ulong[] framesByGroup = [.. groups.Select(group => groupFrames?[group["id"]!.GetValue<string>()]?.GetValue<ulong>() ?? frames)];
+            scheduler = new GroupRenderScheduler(runner, request, plan, settings, groups, captureProject, output, snapshot, frames, framesByGroup,
                 crossfadeFrames, warmupFrames, residualGroupIndexes, groupParallel, playbackKind, progress, token);
+            if (scheduler.PreferredCodecs.Length > 0) report["gpu_codec_preference"] = JsonSerializer.SerializeToNode(scheduler.PreferredCodecs);
             if (residualMasking is not null && !probe)
             {
                 startSearch = await LoopStartSelector.SearchAsync(runner, scheduler, groupParallel, progress, timing, token);
@@ -461,7 +508,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 if (settings.ViewMode == "fixed_view") scene["general"]!["cameraparallax"] = false;
                 int nextId = checked(originalObjects.Keys.Max() + 1);
                 var replacements = new Dictionary<string, JsonObject>();
-                int staticLayers = 0;
+                var staticIds = new HashSet<int>();
                 var encoder = new GroupEncoder(runner, request, playbackKind, playbackFallbackReason, progress, timing);
                 var startAttempts = new JsonArray();
                 // 这一轮各残差组的第一层读数，组成本次起点尝试的记录。
@@ -478,11 +525,12 @@ public sealed class HybridBakeService(NativeTools tools)
                     progress?.Report(new("rendering_group", (double)i / groups.Length, $"Video group {i + 1}/{groups.Length}: {layers.Length} source layers"));
                     string masterPath = Path.Combine(work, "master");
                     // 提前启动的渲染已经建好这个目录并自己查过一次；没有提前启动时照旧在这里查。
-                    if (!groupScheduler.Started(i) && (Directory.Exists(masterPath) || File.Exists(masterPath)))
+                    if (!groupScheduler.FreshOutput(i, masterPath))
                         throw new IOException("A group master output must be new; existing files will not be cleaned.");
                     // 残差组（含可掩盖残差层）多渲一个淡化窗口，测第一层，通过后在接缝处淡化；不淡化的组多渲 1 帧，
                     // 编码只取前 P 帧，第 P 帧原帧留作闭合检验与接缝参照，接缝由闭合检验裁决。
                     GroupFraming framing = groupScheduler.Framing(i);
+                    ulong groupFrames = groupScheduler.Frames(i);
                     bool residualGroup = framing.Residual;
                     // 这个组的成品能不能在渲染时直接编出来，不写无损 master。
                     bool directPlayback = AllowsDirectPlayback(capture.SceneClear, residualGroup, request.ProbeFrames);
@@ -535,7 +583,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 "在全分辨率下测量淡化窗口内每一帧的接缝残差。"));
                             JsonObject wrap;
                             using (timing.Measure(StageTiming.SeamCheck))
-                                wrap = await runner.MeasureSeamResidualAsync(masterPath, frames, crossfadeFrames, cancellationToken,
+                                wrap = await runner.MeasureSeamResidualAsync(masterPath, groupFrames, crossfadeFrames, cancellationToken,
                                     SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height));
                             wrap["limits"] = ResidualMasking.Thresholds();
                             bool firstLayer = wrap["first_layer"]!["passed"]!.GetValue<bool>();
@@ -560,11 +608,11 @@ public sealed class HybridBakeService(NativeTools tools)
                                 JsonObject residualPreview;
                                 progress?.Report(new("exporting_seam_preview", (double)i / groups.Length,
                                     MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
-                                        SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
+                                        SeamPreview.WindowFrames(groupFrames, settings.FpsNumerator, settings.FpsDenominator))));
                                 using (timing.Measure(StageTiming.SeamCheck))
                                     residualPreview = await SeamPreview.ExportOrWarnAsync(report, id, SeamPreview.RejectedOutcome,
                                         token => runner.ExportSeamPreviewAsync(Path.Combine(masterPath, "preview.mp4"),
-                                            Path.Combine(work, SeamPreview.FileName), frames, settings.FpsNumerator, settings.FpsDenominator,
+                                            Path.Combine(work, SeamPreview.FileName), groupFrames, settings.FpsNumerator, settings.FpsDenominator,
                                             gpuDirect ? "gpu_candidate_after_crossfade" : "lossless_master_hard_cut", token), cancellationToken);
                                 // 选定起点被拒即停止；记录本次各组的残差，不启动整案重渲。
                                 GroupVerdicts.RejectResidual(report, id, layers, lateDependencyValidation, wrap, residualPreview, startAttempts,
@@ -577,7 +625,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 "在接缝处做固定窗口的整帧交叉淡化。"));
                             using (timing.Measure(StageTiming.Crossfade))
                                 groupCrossfade = gpuDirect ? master["loop_crossfade"]!.DeepClone().AsObject()
-                                    : await new MasterRewrite(new FfmpegTool(tools)).CrossfadeAsync(masterPath, frames, crossfadeFrames, cancellationToken);
+                                    : await new MasterRewrite(new FfmpegTool(tools)).CrossfadeAsync(masterPath, groupFrames, crossfadeFrames, cancellationToken);
                             groupCrossfade["group_id"] = id;
                             // 顶层 loop_crossfade 记第一个残差组；每组自己的淡化记录（含自检）在组记录里。
                             if (report["loop_crossfade"] is null) report["loop_crossfade"] = groupCrossfade.DeepClone();
@@ -594,12 +642,11 @@ public sealed class HybridBakeService(NativeTools tools)
                             throw new InvalidDataException("Full-frame output was not opaque. The candidate was stopped instead of switching to transparent video.");
                         var (encoded, crop, video) = await encoder.EncodeAsync(master, masterPath, work, capture, isStatic, directPlayback,
                             gpuDirect, packedAlpha, cancellationToken);
-                        if (isStatic) ++staticLayers;
                         long encodedBytes = isStatic ? 0 : new FileInfo(video).Length;
                         if (!probe && encodedBytes > EmbeddedVideoBudget.MaximumBytes)
                         {
                             GroupVerdicts.RejectEmbeddedSize(report, id, layers, packedAlpha, encoded, video, encodedBytes,
-                                lateDependencyValidation, frames, settings);
+                                lateDependencyValidation, groupFrames, settings);
                             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
@@ -613,7 +660,7 @@ public sealed class HybridBakeService(NativeTools tools)
                         {
                             using (timing.Measure(StageTiming.SeamCheck))
                                 seam = await GroupVerdicts.SeamAsync(tools, master, masterPath, video, crop, capture, isStatic, packedAlpha,
-                                    directPlayback, residualGroup, request.KeepIntermediates, frames, crossfadeFrames, settings, cancellationToken);
+                                    directPlayback, residualGroup, request.KeepIntermediates, groupFrames, crossfadeFrames, settings, cancellationToken);
                         }
                         else if (isStatic) seam = GroupVerdicts.ProbeStatic();
                         // 成功任务仅在显式保留诊断时导出；拒绝仍提供预览帮助定位。
@@ -622,11 +669,11 @@ public sealed class HybridBakeService(NativeTools tools)
                         {
                             progress?.Report(new("exporting_seam_preview", (double)i / groups.Length,
                                 MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
-                                    SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
+                                    SeamPreview.WindowFrames(groupFrames, settings.FpsNumerator, settings.FpsDenominator))));
                             using (timing.Measure(StageTiming.SeamCheck))
                                 seamPreview = await SeamPreview.ExportOrWarnAsync(report, id,
                                     SeamPreview.Outcome(seam!["status"]?.GetValue<string>()),
-                                    token => runner.ExportSeamPreviewAsync(video, Path.Combine(work, SeamPreview.FileName), frames,
+                                    token => runner.ExportSeamPreviewAsync(video, Path.Combine(work, SeamPreview.FileName), groupFrames,
                                         settings.FpsNumerator, settings.FpsDenominator, "encoded_video", token), cancellationToken);
                         }
                         JsonObject? hardwareDecode = null;
@@ -642,8 +689,10 @@ public sealed class HybridBakeService(NativeTools tools)
                             progress?.Report(new("checking_hardware_decode", (double)i / groups.Length,
                                 "Checking this actual video on the installed hardware decoders."));
                             using (timing.Measure(StageTiming.HardwareDecodeCheck))
-                                hardwareDecode = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(work, "hardware-decode"),
-                                    Math.Min(frames, 5), cancellationToken);
+                                // AV1/HEVC 直编组在调度器里已按同一实测过闸（成品同一份字节），直接取用。
+                                hardwareDecode = master["hardware_decode"]?.DeepClone() as JsonObject ??
+                                    await runner.ProbeHardwareDecodeAsync(video, Path.Combine(work, "hardware-decode"),
+                                    Math.Min(groupFrames, 5), cancellationToken, plan["settings"]?["device_uuid"]?.GetValue<string>());
                         }
                         JsonObject layer;
                         bool alphaBelow = HardwareDecodeDimensions.StackedVertically(packedAlpha && !isStatic, crop.Width);
@@ -658,6 +707,7 @@ public sealed class HybridBakeService(NativeTools tools)
                         if (daytimeExport is not null)
                             daytimeExport.BindReplacement(layer, originalObjects[daytimeExport.ReplacementTargets[id]], isStatic);
                         replacements[id] = layer;
+                        if (isStatic) staticIds.Add(SceneGraph.Id(layer));
                         report["groups"]!.AsArray().Add(GroupVerdicts.Encoded(id, layers, layer, isStatic, packedAlpha, encoded, video, capture,
                             lateDependencyValidation, seam, hardwareDecode, master, gpuDirect, directPlayback, groupSeamResidual, groupCrossfade,
                             seamPreview));
@@ -681,6 +731,12 @@ public sealed class HybridBakeService(NativeTools tools)
                 using (timing.Measure(StageTiming.ProjectAssembly))
                 {
                     finalObjects = SceneAssembler.AssembleObjects(originalObjects, plan, replacements, finalDependencies);
+                    // 切换后视频 seek 到 (s − master) mod P_g，P_g 是该组录制帧数。
+                    if (introFrames > 0 && replacements.Count > 0)
+                        report["intro_live"] = SceneAssembler.ApplyIntro(finalObjects, originalObjects, plan, replacements, staticIds,
+                            finalDependencies, snapshot, introFrames, groupScheduler.Framing(0).MasterWarmupFrames,
+                            id => groupScheduler.Frames(Array.FindIndex(groupScheduler.Groups, group => group["id"]!.GetValue<string>() == id)),
+                            settings.FpsNumerator, settings.FpsDenominator);
                     // 记下按"不绘制但带脚本"规则额外保留的根对象，事后核对用。
                     report["retained_script_root_ids"] = JsonSerializer.SerializeToNode(SceneAssembler.ScriptRootIds(originalObjects, plan));
                     if (daytimeExport is not null)
@@ -708,8 +764,8 @@ public sealed class HybridBakeService(NativeTools tools)
                     .Where(g => g["status"]?.GetValue<string>() == "encoded").ToArray();
                 bool seamsPass = !probe && encodedGroups.All(g =>
                     g["encoded_loop_validation"]?["status"]?.GetValue<string>() == "observed_seam_pass");
-                report["video_layers"] = replacements.Count - staticLayers;
-                report["static_layers"] = staticLayers;
+                report["video_layers"] = replacements.Count - staticIds.Count;
+                report["static_layers"] = staticIds.Count;
                 // 1 帧、0 个视频层的结果单列 static_only：candidate_generated 只给真的含视频循环的成品。
                 report["status"] = probe ? "probe_generated"
                     : !seamsPass ? "candidate_rejected_seam"

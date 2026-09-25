@@ -11,7 +11,7 @@ public sealed partial class NativeRenderRunner
     }
 
     /// <summary>
-    /// 在已经锁定的解析周期 P 内挑选起点帧。渲染 2 个周期的降采样样本，对每个候选起点在样本上估计第一层的量
+    /// 在已经锁定的解析周期 P 内挑选起点帧。渲染 P 加候选段（最多再一个周期）的降采样样本，对每个候选起点在样本上估计第一层的量
     /// max_k M(Δ_k)：样本只落在 k=0 与 k=stride 上，排序键取 max(M(Δ_0), M(Δ_stride))（stride 不在淡化窗口内时只有 Δ_0）。
     /// 先准入（整幅 ≤ 2/255），再按排序键从小到大排；排序键只排序、不准入。前几个候选记成全分辨率回退的尝试顺序。
     /// 周期本身不因此改变，这里只决定相位。样本目录在算完之后立即删除。
@@ -28,17 +28,16 @@ public sealed partial class NativeRenderRunner
         uint stride = sampleRequest.FrameSampleStride;
         if (periodFrames == 0 || periodFrames % stride != 0)
             throw new ArgumentException("解析周期必须是采样步长的整数倍，否则候选起点无法对齐到样本。");
-        if (sampleRequest.Frames % periodFrames != 0)
-            throw new ArgumentException("起点搜索窗口必须是整数个解析周期。");
-        int windowPeriods = checked((int)(sampleRequest.Frames / periodFrames));
-        // 窗口固定 2 个周期：候选起点只有 P/stride 个，每个比较的是 (s, s+P)，全部落在前 2P 帧里；
-        // 更宽的窗口不会引入任何新候选，只会多渲染帧。
-        if (windowPeriods != ResidualMasking.SearchWindowPeriods)
-            throw new ArgumentException("起点搜索窗口固定为 2 个解析周期：候选只由周期与步长决定，更宽的窗口不会引入新候选。");
+        // 窗口 = P + 候选段：候选起点 s 落在候选段里，每个比较 (s, s+P)。候选段最长一个周期（2P 已含全部 P/stride 个相位）；
+        // 多组共享起点时长周期组只需到最短周期为止（见 LoopStartSelector）。
+        if (sampleRequest.Frames <= periodFrames || sampleRequest.Frames > periodFrames * (ulong)ResidualMasking.SearchWindowPeriods ||
+            (sampleRequest.Frames - periodFrames) % stride != 0)
+            throw new ArgumentException("起点搜索窗口必须是一个解析周期再加 1 到 P/stride 个采样步长。");
         int perPeriod = checked((int)(periodFrames / stride));
+        int candidates = checked((int)((sampleRequest.Frames - periodFrames) / stride));
         int width, height, tileSize;
         ulong count;
-        var wraps = new List<LoopWrapResidual>(perPeriod);
+        var wraps = new List<LoopWrapResidual>(candidates);
         string sampleDirectory = Path.GetFullPath(sampleRequest.OutputDirectory);
         JsonObject? samplingCoverage = null;
         try
@@ -70,7 +69,7 @@ public sealed partial class NativeRenderRunner
             await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, true);
             byte[] left = new byte[frameBytes], right = new byte[frameBytes];
             // 每个采样相位 c 的 Δ_0 = 样本[c + P/stride] − 样本[c]，按相位顺序各算一次；Δ_stride 由 SeamMath 取下一个相位的读数。
-            for (int candidate = 0; candidate < perPeriod; ++candidate)
+            for (int candidate = 0; candidate < candidates; ++candidate)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 await ReadFrameAsync(file, left, candidate, frameBytes, cancellationToken);
@@ -105,11 +104,11 @@ public sealed partial class NativeRenderRunner
             ["pixel_packing"] = packed ? "rgba_side_by_side" : "rgb",
             ["warmup_frames"] = sampleRequest.WarmupFrames,
             ["period_frames"] = periodFrames,
-            ["search_window_periods"] = windowPeriods,
+            ["search_window_periods"] = Math.Round((double)sampleRequest.Frames / periodFrames, 4),
             ["search_window_frames"] = sampleRequest.Frames,
             ["stride_frames"] = stride,
             ["crossfade_frames"] = crossfadeFrames,
-            ["candidate_count"] = perPeriod,
+            ["candidate_count"] = candidates,
             ["candidates_within_global_limit"] = withinGlobal,
             ["sample_width"] = width,
             ["sample_height"] = height,
@@ -133,15 +132,17 @@ public sealed partial class NativeRenderRunner
     {
         if (searches.Count == 0) throw new ArgumentException("A shared start needs at least one residual group.");
         if (searches.Count == 1) return searches[0].Search;
+        // 各组可按自己的周期 P_g 评分：相位网格从 0 起、同一步长，短周期组的候选是长周期组的前缀，合成只取公共前缀。
+        int shared = searches.Min(group => group.Candidates.Count);
+        searches = [.. searches.Select(group => (group.Search, (IReadOnlyList<ResidualStartCandidate>)[.. group.Candidates.Take(shared)]))];
         var first = searches[0];
         if (first.Candidates.Count == 0) throw new InvalidDataException("The shared phase grid is empty.");
         foreach (var group in searches.Skip(1))
         {
-            if (group.Candidates.Count != first.Candidates.Count ||
-                !group.Candidates.Select(candidate => candidate.Start).SequenceEqual(first.Candidates.Select(candidate => candidate.Start)) ||
-                new[] { "warmup_frames", "period_frames", "stride_frames", "crossfade_frames" }.Any(key =>
+            if (!group.Candidates.Select(candidate => candidate.Start).SequenceEqual(first.Candidates.Select(candidate => candidate.Start)) ||
+                new[] { "warmup_frames", "stride_frames", "crossfade_frames" }.Any(key =>
                     !JsonNode.DeepEquals(group.Search[key], first.Search[key])))
-                throw new InvalidDataException("Residual groups must use the same phase grid, period and warmup.");
+                throw new InvalidDataException("Residual groups must use the same phase grid and warmup.");
         }
         // max(global) <= limit iff every group meets the existing global admission rule.
         // The tile maxima reuse the existing minimax ranking, keeping all groups at one phase.
@@ -154,6 +155,7 @@ public sealed partial class NativeRenderRunner
         result["schema_version"] = 5;
         result["selection_scope"] = "all_residual_groups";
         result["status"] = admitted > 0 ? "selected_by_joint_analytic_period_phase" : "selected_without_joint_global_limit_candidate";
+        result["candidate_count"] = shared;
         result["candidates_within_global_limit"] = admitted;
         result["selected_start_frame"] = ordered[0].Start;
         result["selected"] = LoopStartRow(ordered[0]);

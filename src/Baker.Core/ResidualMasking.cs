@@ -57,7 +57,7 @@ public static class ResidualMasking
     public const int MaximumStartAttempts = 8;
 
     /// <summary>
-    /// 起点搜索的窗口，固定 2 个解析周期。候选起点只由周期与采样步长决定（共 P/stride 个），每个候选比较的是
+    /// 起点搜索的窗口上限，2 个解析周期。候选起点只由周期与采样步长决定（共 P/stride 个），每个候选比较的是
     /// (s, s+P)，全部落在前 2P 帧里；再宽的窗口不会引入任何新候选，只是白渲染帧。
     /// </summary>
     public const int SearchWindowPeriods = 2;

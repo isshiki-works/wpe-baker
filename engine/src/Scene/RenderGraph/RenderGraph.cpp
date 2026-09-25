@@ -504,9 +504,8 @@ auto RenderGraph::getLastReadTextures(rstd::slice<NodeHandle> nodes) const
     return result;
 }
 
-auto RenderGraph::resourcePlan() const -> resource::ResourcePlan {
-    using BoundaryMap     = rstd::collections::HashMap<String, bool>;
-    auto frame_boundaries = BoundaryMap::make();
+auto RenderGraph::frameBoundaries() const -> rstd::collections::HashMap<String, bool> {
+    auto frame_boundaries = rstd::collections::HashMap<String, bool>::make();
     for (usize index {}; index < m_dg.NodeNum(); ++index) {
         auto node = getTexNode(NodeHandle { .index = index });
         if (node.is_none() || node->version != usize() || node->writer.is_none() ||
@@ -535,7 +534,11 @@ auto RenderGraph::resourcePlan() const -> resource::ResourcePlan {
             next = version->next;
         }
     }
+    return frame_boundaries;
+}
 
+auto RenderGraph::resourcePlan() const -> resource::ResourcePlan {
+    auto                   frame_boundaries = frameBoundaries();
     resource::ResourcePlan plan { .generation = m_resource_generation };
     auto                   plan_nodes = Vec<NodeHandle>::make();
     for (usize index {}; index < m_dg.NodeNum(); ++index) {

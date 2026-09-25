@@ -45,8 +45,15 @@ internal static class SharedLoopStartChecks
             none["status"]!.GetValue<string>() == "selected_without_joint_global_limit_candidate" &&
             none["selected"]!["sampled_global_rgb_mae_255"]!.GetValue<double>() == 3,
             "shared loop start: no jointly admitted phase remains explicitly unadmitted, with no threshold relaxation");
+        // 各组按自身周期 P_g 评分：短周期组的候选（0..P_short）是长周期组的前缀，共享起点只在公共前缀里挑。
+        JsonObject shortSearch = Search("group-1");
+        shortSearch["period_frames"] = 32UL;
+        JsonObject prefix = Select((shortSearch, first[..2]), (secondSearch, second));
+        check(prefix["selected_start_frame"]!.GetValue<ulong>() == 16 && prefix["candidates_within_global_limit"]!.GetValue<int>() == 1 &&
+            prefix["groups"]![1]!["at_shared_start"]!["start_frame"]!.GetValue<ulong>() == 16,
+            "shared loop start: groups with different periods share a start within the shorter group's phases");
         bool mismatchRejected = false;
-        try { _ = Select((firstSearch, first), (secondSearch, second[..^1])); }
+        try { _ = Select((firstSearch, first), (secondSearch, second.Select(candidate => candidate with { Start = candidate.Start + 8 }).ToArray())); }
         catch (TargetInvocationException error) when (error.InnerException is InvalidDataException) { mismatchRejected = true; }
         check(mismatchRejected, "shared loop start: groups on different phase grids cannot be combined");
     }
