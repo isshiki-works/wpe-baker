@@ -155,7 +155,7 @@ def main():
     (CHECKS / "encoders.stdout.txt").write_bytes(encoder_list)
     encoders = re.findall(r"^ [VAS][A-Z.]{5}\s+(\w+)", encoder_list.decode("utf-8"), re.MULTILINE)
     expected_encoders = {"libx264", "libx264rgb", "libx265", "h264_mf", "hevc_mf", "av1_mf", "h264_nvenc", "hevc_nvenc",
-                         "rawvideo", "aac", "pcm_s16le", "pcm_f32le"}
+                         "h264_amf", "hevc_amf", "rawvideo", "aac", "pcm_s16le", "pcm_f32le"}
     if set(encoders) != expected_encoders:
         raise RuntimeError("Unexpected active encoder set: " + repr(encoders))
     config = (DEST / "build/ffmpeg-hevc/config.h").read_text(encoding="utf-8")
@@ -310,6 +310,7 @@ def main():
                              (DEST / "sources/x264/x264.h", "x264/x264.h"),
                              (DEST / "sources/x265/COPYING", "x265/COPYING"),
                              (DEST / "sources/x265/source/x265.h", "x265/x265.h"),
+                             (DEST / "sources/amf-headers/AMF/core/Version.h", "amf-headers/Version.h"),
                              (ROOT / ".tools/llvm-mingw-22/LICENSE.TXT", "llvm/LICENSE.TXT"),
                              (ROOT / ".tools/llvm-mingw-22/x86_64-w64-mingw32/share/mingw32/COPYING.MinGW-w64-runtime.txt",
                               "mingw/COPYING.MinGW-w64-runtime.txt")]:
@@ -337,14 +338,20 @@ def main():
                                 for path in sorted(RUNTIME.iterdir()) if path.is_file()],
               "runtime_path": environment["PATH"], "renderer_library_baseline_verified": True}
     (DEST / "verification.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    portable = DEST / "portable"
+    # portable 是多个工作树共享的联接目标：先在旁边拼好新目录，再两次改名换上，旧目录整体移进 backups。
+    # 有进程正开着旧 ffmpeg 时改名会失败，此时旧目录原样不动。
+    portable, staged = DEST / "portable", DEST / "portable.new"
+    shutil.rmtree(staged, ignore_errors=True)
     if portable.exists():
-        backup = DEST / "backups" / ("portable-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
-        shutil.copytree(portable, backup)
-    shutil.copytree(RUNTIME, portable, dirs_exist_ok=True)
+        shutil.copytree(portable, staged)
+    shutil.copytree(RUNTIME, staged, dirs_exist_ok=True)
     for item in record["runtime_files"]:
-        if sha256(portable / item["file"]) != item["sha256"]:
+        if sha256(staged / item["file"]) != item["sha256"]:
             raise RuntimeError("Promoted runtime differs from verified candidate: " + item["file"])
+    if portable.exists():
+        (DEST / "backups").mkdir(exist_ok=True)
+        portable.rename(DEST / "backups" / ("portable-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")))
+    staged.rename(portable)
     print("Verified portable GPL 2 H.264/HEVC encoder:", portable)
 
 

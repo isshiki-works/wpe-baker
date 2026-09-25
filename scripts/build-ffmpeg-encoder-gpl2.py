@@ -88,8 +88,10 @@ def main():
         "--enable-d3d11va",
         # FFmpeg's Makefile attaches the shared codec objects to the legacy names too.
         "--enable-hwaccel=h264_d3d11va,h264_d3d11va2,hevc_d3d11va,hevc_d3d11va2,av1_d3d11va,av1_d3d11va2",
-        "--disable-encoders", "--enable-encoder=libx264,libx264rgb,libx265,h264_mf,hevc_mf,av1_mf,h264_nvenc,hevc_nvenc,aac,pcm_s16le,pcm_f32le,rawvideo",
+        "--disable-encoders", "--enable-encoder=libx264,libx264rgb,libx265,h264_mf,hevc_mf,av1_mf,h264_nvenc,hevc_nvenc,h264_amf,hevc_amf,aac,pcm_s16le,pcm_f32le,rawvideo",
         "--enable-libx264", "--enable-libx265", "--enable-mediafoundation", "--enable-ffnvcodec", "--enable-nvenc",
+        # AMF 同样只需头文件，AMD 驱动在运行时提供 amfrt64.dll。
+        "--enable-amf", "--extra-cflags=-I" + (DEST / "sources/amf-headers").as_posix(),
     ]
     configuration = {"x264": x264_flags, "x265": x265_flags, "ffmpeg": ffmpeg_flags,
                      "ffmpeg_build": "build/ffmpeg-hevc", "shell": str(BASH), "make": str(MAKE),
