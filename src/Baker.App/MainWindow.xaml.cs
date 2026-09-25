@@ -765,9 +765,10 @@ public partial class MainWindow : Window
         if (declaredProject is not null && project is null)
             throw new FileNotFoundException("The generated project.json is missing from the result folder and recorded project path.", declaredProject);
         request = request with { ProjectDirectory = project };
-        string gpuName = GpuBox.Items.OfType<VulkanDeviceInfo>()
+        // 显卡名：先按设备 ID 在当前列表里找，找不到用报告里记的分析设备名；都没有就不显示这一段。
+        string? gpuName = GpuBox.Items.OfType<VulkanDeviceInfo>()
             .FirstOrDefault(device => device.DeviceUuid.Equals(request.DeviceUuid, StringComparison.OrdinalIgnoreCase))?.Name
-            ?? request.DeviceUuid ?? L("生成设备未记录", "Generation device not recorded");
+            ?? report["analysis_device"]?["name"]?.GetValue<string>();
         JsonObject definitions = AppJsonPresentation.LoadPropertyDefinitions(project ?? request.Plan["source"]!.GetValue<string>());
         bool canApply = project is not null && AppJsonPresentation.CandidateCanApply(report);
         return new JobItem(request, tools, gpuName, definitions)
@@ -1555,12 +1556,12 @@ public partial class MainWindow : Window
         catch (Exception error) when (error is IOException or NotSupportedException or UnauthorizedAccessException) { return null; }
     }
     private sealed record PropertyOption(string Label, JsonNode Value);
-    private sealed class JobItem(HybridBakeRequest request, NativeTools tools, string gpuName, JsonObject? definitions = null) : ObservableItem
+    private sealed class JobItem(HybridBakeRequest request, NativeTools tools, string? gpuName, JsonObject? definitions = null) : ObservableItem
     {
         private string detail = "";
         public HybridBakeRequest Request { get; } = request;
         public NativeTools Tools { get; } = tools;
-        public string GpuName { get; private set; } = gpuName;
+        public string? GpuName { get; } = gpuName;
         public string Source => Request.Plan["source"]!.GetValue<string>();
         public string SourceSha256 => Request.Plan["source_sha256"]!.GetValue<string>();
         public string Assets => Request.Plan["assets"]!.GetValue<string>();
@@ -1575,7 +1576,7 @@ public partial class MainWindow : Window
             try { return JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "project.json")))?["title"]?.GetValue<string>() ?? Path.GetFileName(folder); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return Path.GetFileName(folder); }
         }
-        public string Settings => (FpsDenominator == 1 ? $"{FpsNumerator}" : $"{FpsNumerator / (double)FpsDenominator:0.##}") + $" fps · {GpuName}";
+        public string Settings => (FpsDenominator == 1 ? $"{FpsNumerator}" : $"{FpsNumerator / (double)FpsDenominator:0.##}") + " fps" + (string.IsNullOrEmpty(GpuName) ? "" : $" · {GpuName}");
         public string State { get; set; } = "queued";
         public string StatusText { get; private set; } = "";
         // 队列里用颜色区分状态：完成绿、失败/取消红、进行中蓝、等待灰。
@@ -1600,8 +1601,6 @@ public partial class MainWindow : Window
         public JobItem Clone(HybridBakeRequest replacement) => new(replacement, Tools, GpuName, PropertyDefinitions);
         public void Translate(bool english)
         {
-            if (GpuName is "生成设备未记录" or "Generation device not recorded")
-                GpuName = english ? "Generation device not recorded" : "生成设备未记录";
             StatusText = State switch { "queued" => english ? "Queued" : "等待中", "running" => english ? "Generating" : "正在生成",
                 "completed" => english ? "Completed" : "已完成", "cancelled" => english ? "Cancelled" : "已取消",
                 "failed" => english ? "Failed" : "失败", "previewing" => english ? "Making previews" : "正在生成预览",
