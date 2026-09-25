@@ -691,7 +691,7 @@ bool OfflineSession::Impl::init(SessionConfig config, RenderInitInfo info, Offli
         return false;
     }
     m_options = options;
-    m_raster_every_output_frame = info.collect_sampling_coverage;
+    m_raster_every_output_frame = info.collect_sampling_coverage && !info.sampling_coverage_sampled_only;
     m_profile = info.gpu_timing;
     m_layers = info.layer_selection;
     m_capture_target = info.capture_target;

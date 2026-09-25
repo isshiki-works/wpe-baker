@@ -170,6 +170,8 @@ struct RenderInitInfo {
     std::uint32_t    sample_height { 0 };
     bool             collect_sampling_coverage { false };
     std::uint64_t    sampling_coverage_start { 0 }, sampling_coverage_frames { 0 };
+    // 只在读回的取样帧上量覆盖度（不逐帧光栅），并报取样边距（sample_margin）。
+    bool             sampling_coverage_sampled_only { false };
     std::optional<GpuEncodeOptions> gpu_encode;
     std::optional<RenderCaptureTarget> capture_target;
     std::optional<OrthographicCaptureViewport> orthographic_capture_viewport;

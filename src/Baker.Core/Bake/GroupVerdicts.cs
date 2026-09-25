@@ -211,6 +211,7 @@ internal static class GroupVerdicts
             ["hardware_decode"] = hardwareDecode,
             ["video_bytes"] = new FileInfo(video).Length, ["source_render_passes"] = master["native_result"]?["compiled_scene_passes"]?.DeepClone(),
             ["gpu_bounds_prepass"] = master["gpu_bounds_prepass"]?.DeepClone(),
+            ["coverage_rerender"] = master["coverage_rerender"]?.DeepClone(),
             ["capture_mode"] = isStatic ? null
                 : gpuDirect ? "gpu_direct_playback" : directPlayback ? NativeRenderRunner.DirectPlaybackCaptureMode : NativeRenderRunner.LosslessMasterCaptureMode,
             // 播放版编码的实际档位与耗时；静态图层没有这一段编码，保持为 null。
