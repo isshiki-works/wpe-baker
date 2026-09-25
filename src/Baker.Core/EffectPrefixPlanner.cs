@@ -9,8 +9,10 @@ internal static class EffectPrefixPlanner
     /// <param name="request">这次分析的完整请求：档位预算、圈数下限、可见项第二闸与质量档双上限都由它经
     /// <see cref="HybridScenePlanner.AnalyzeLoopForProfile"/> 生效，前缀路线与整层路线同一口径。</param>
     /// <param name="projection">投影记录，只用来换算摆动振幅的输出比例；bake 侧从 plan["projection"] 取同一份。</param>
+    /// <param name="mayBeVisible">分析侧传 <see cref="Composer.MayBeVisible"/>：运行中不可能可见的层 WPE 不画，不提前缀、不探测
+    /// （以前对当前天气下隐藏的层也探测，探测报错把整张拒掉）。bake 侧复核描述时不传，提案是分析侧的超集。</param>
     internal static JsonArray Propose(JsonObject originalScene, ProjectSource source, string assets, JsonObject runtime,
-        JsonObject snapshotProperties, HybridAnalyzeRequest request, JsonObject projection)
+        JsonObject snapshotProperties, HybridAnalyzeRequest request, JsonObject projection, Func<int, bool>? mayBeVisible = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         RetimeProfile profile = RetimeProfileJson.Resolve(request);
@@ -22,7 +24,7 @@ internal static class EffectPrefixPlanner
         {
             if (!EligibleOwner(owner, source, runtime, out bool retainedPuppetAnimation)) continue;
             int ownerId = owner["id"]!.GetValue<int>();
-            if (!VisibilityControllersProven(originalScene, runtime, ownerId)) continue;
+            if (mayBeVisible?.Invoke(ownerId) == false || !VisibilityControllersProven(originalScene, runtime, ownerId)) continue;
             JsonArray effects = owner["effects"]!.AsArray();
             var closed = new List<JsonObject>();
             // 同层各前缀共用一份"每个效果用到哪些材质 shader"的索引：在第一次分析前缀时建，后面的前缀只切片不重读。
