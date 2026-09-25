@@ -67,8 +67,8 @@ internal static class PlainLanguageChecks
             "tool register: a clean plan reports one fixed state, an action line and the basis in the details");
 
         var tradeoff = TradeoffPlan();
-        check(PlainLanguage.Verdict(tradeoff, false).StartsWith("可以生成（需先禁用 ", StringComparison.Ordinal),
-            "tool register: a plan with tradeoff options reports the item count and one action");
+        check(PlainLanguage.Verdict(tradeoff, false) == "可以生成",
+            "a plan with tradeoff options does not point at a disable list the GUI no longer shows");
         var applied = bakeable.DeepClone().AsObject();
         applied["preset_applied"] = "quality";
         applied[TradeoffOptions.Field] = tradeoff[TradeoffOptions.Field]!.DeepClone();
@@ -76,7 +76,7 @@ internal static class PlainLanguageChecks
             "integrated GUI does not mistake optional tradeoffs for unapplied requirements");
         applied["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.loop_unresolved" });
         applied["preset_applied"] = "none";
-        check(PlainLanguage.Verdict(applied, false) == "无法生成", "integrated GUI does not promote a rejected plan because tradeoff options exist");
+        check(PlainLanguage.Verdict(applied, false) == "不支持", "integrated GUI does not promote a rejected plan because tradeoff options exist");
 
         // 主体类：整张画面就是那个实时效果画出来的。
         var subject = Plan(Layer(10, null, "指针着色器", live: true, ["active_shader_pointer_input"]));
@@ -84,7 +84,7 @@ internal static class PlainLanguageChecks
         subject["blockers"] = new JsonArray(MessageCatalog.RenderLegacy("blocker.no_input_independent_group"));
         subject["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.no_input_independent_group" });
         TradeoffOptions.Attach(subject);
-        check(PlainLanguage.Verdict(subject, false) == "无法生成" &&
+        check(PlainLanguage.Verdict(subject, false) == "不支持" &&
             !PlainLanguage.HasTurnOffCard(subject) && PlainLanguage.TurnOffItems(subject, false).Length == 0,
             "plain language: dependency blockage does not claim that disabling effects leaves no content");
 
@@ -92,7 +92,7 @@ internal static class PlainLanguageChecks
         var camera = Plan(Layer(10, null, "底", live: false, []));
         camera["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.perspective_needs_screenspace" });
         TradeoffOptions.Attach(camera);
-        check(PlainLanguage.Verdict(camera, false) == "无法生成",
+        check(PlainLanguage.Verdict(camera, false) == "不支持",
             "tool register: a moving 3D camera is stated as the cause, in the details");
 
         // 找不到循环。
@@ -101,7 +101,7 @@ internal static class PlainLanguageChecks
             ["no_candidate_reason"] = new JsonObject { ["kind"] = "NoTemporalMechanism" } };
         noLoop["suitability"] = new JsonObject { ["verdict"] = "not_suitable", ["rule"] = "fixed_period_exceeds_loop_ceiling" };
         TradeoffOptions.Attach(noLoop);
-        check(PlainLanguage.Verdict(noLoop, false) == "无法生成",
+        check(PlainLanguage.Verdict(noLoop, false) == "不支持",
             "tool register: a missing loop period is named in the details");
 
         var cheap = Plan(Layer(10, null, "底", live: false, []));
@@ -120,7 +120,7 @@ internal static class PlainLanguageChecks
                 "benefit assessment is displayed independently of static output: " + status);
         }
         cheap["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.loop_unresolved" });
-        check(PlainLanguage.Verdict(cheap, false) == "无法生成",
+        check(PlainLanguage.Verdict(cheap, false) == "不支持",
             "a failed plan keeps its actual failure reason rather than becoming a low-value verdict");
     }
 

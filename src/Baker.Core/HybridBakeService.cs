@@ -124,8 +124,7 @@ public sealed class HybridBakeService(NativeTools tools)
         // （同 --loop-max-seconds）重新分析再烘一次。走 BakeCleanedAsync，不再套别的自动重试；重烘仍超限就照旧拒绝。
         if (EmbeddedVideoBudgetJson.MaximumSeconds(result) is double cap && LoopSeconds(request.Plan) is double loopSeconds && cap < loopSeconds)
         {
-            progress?.Report(new("capping_loop_length", null,
-                $"The embedded video would exceed 2 GiB; analyzing again with the loop capped at {cap:0} s and baking once more."));
+            progress?.Report(new("capping_loop_length", null, new Message("progress.capping_loop_length", [cap])));
             return await RetryReplannedAsync(request, result, "embedded_video_cap_retry", ".embedded-video-first-attempt", new JsonObject {
                     // 原因码：内嵌视频超 2 GiB；loop_maximum_seconds 是采用的循环上限（取自拒绝报告里按码率算出的最长秒数）。
                     ["reason"] = "embedded_video_over_limit", ["loop_maximum_seconds"] = cap },
@@ -135,8 +134,7 @@ public sealed class HybridBakeService(NativeTools tools)
         if (result["composition_validation"] is JsonObject composition && composition["status"]?.GetValue<string>() != "composition_pass" &&
             composition["intro_live"]?["status"]?.GetValue<string>() == "applied")
         {
-            progress?.Report(new("reverting_intro_switch", null,
-                "The composition check rejected the intro switch; analyzing again with intro animations kept live and baking once more."));
+            progress?.Report(new("reverting_intro_switch", null, new Message("progress.reverting_intro_switch")));
             return await RetryReplannedAsync(request, result, "intro_fallback", ".intro-first-attempt", new JsonObject(),
                 settings => settings with { SingleShotLive = true }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
@@ -145,8 +143,7 @@ public sealed class HybridBakeService(NativeTools tools)
         if (OwnPeriodSeamFailure(request.Plan, result) is (string groupId, int[] groupLayers, ulong groupFrames))
         {
             int[] fullLoop = [.. PlanSettings.Of(request.Plan).FullLoopLayerIds ?? [], .. groupLayers];
-            progress?.Report(new("group_full_loop_fallback", null,
-                $"Video group {groupId} did not close on its own {groupFrames}-frame period; recording it at the full loop length and baking once more."));
+            progress?.Report(new("group_full_loop_fallback", null, new Message("progress.group_full_loop_fallback", [groupId, groupFrames])));
             return await RetryReplannedAsync(request, result, "group_period_fallback", $".{groupId}-own-period-attempt", new JsonObject {
                     ["group_id"] = groupId, ["group_frames"] = groupFrames, ["loop_frames"] = result["frames"]?.DeepClone(),
                     // 原因码：按自身周期录的组被接缝门拒绝；拒绝原文见 first_reason_localized。
@@ -154,8 +151,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 settings => settings with { FullLoopLayerIds = fullLoop }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
         if (ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
-        progress?.Report(new("retaining_residual_particles", null,
-            "Seam residual from masked particles exceeded the first layer; keeping those particles live and baking once more."));
+        progress?.Report(new("retaining_residual_particles", null, new Message("progress.retaining_residual_particles")));
         return await RetryReplannedAsync(request, result, "residual_particle_retry", ".residual-first-attempt", new JsonObject {
                 ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(retain),
                 ["first_rejected_groups"] = new JsonArray([.. (result["groups"] as JsonArray ?? []).OfType<JsonObject>()
@@ -553,7 +549,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     GroupCapture capture = groupScheduler.Capture(group);
                     int[] layers = capture.Layers;
                     string work = ProjectSource.ContainedPath(output, id);
-                    progress?.Report(new("rendering_group", (double)i / groups.Length, $"Video group {i + 1}/{groups.Length}: {layers.Length} source layers"));
+                    progress?.Report(new("rendering_group", (double)i / groups.Length, new Message("progress.rendering_group", [i + 1, groups.Length, layers.Length])));
                     string masterPath = Path.Combine(work, "master");
                     // 提前启动的渲染已经建好这个目录并自己查过一次；没有提前启动时照旧在这里查。
                     if (!groupScheduler.FreshOutput(i, masterPath))
@@ -610,8 +606,7 @@ public sealed class HybridBakeService(NativeTools tools)
                         if (residualGroup)
                         {
                             // 全分辨率复核第一层：降采样只用来排序候选起点，放行与否看这里的数字。
-                            progress?.Report(new("checking_seam_residual", (double)i / groups.Length,
-                                "在全分辨率下测量淡化窗口内每一帧的接缝残差。"));
+                            progress?.Report(new("checking_seam_residual", (double)i / groups.Length, new Message("progress.checking_seam_residual")));
                             JsonObject wrap;
                             using (timing.Measure(StageTiming.SeamCheck))
                                 wrap = await runner.MeasureSeamResidualAsync(masterPath, groupFrames, crossfadeFrames, cancellationToken,
@@ -637,9 +632,8 @@ public sealed class HybridBakeService(NativeTools tools)
                                 // 残差被拒时还没有编码成品：从尚未清理的无损 master 里 seek 出硬切接缝两侧各 N 帧。
                                 // 预览写在组目录，finally 只删 master 里点名的中间文件。
                                 JsonObject residualPreview;
-                                progress?.Report(new("exporting_seam_preview", (double)i / groups.Length,
-                                    MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
-                                        SeamPreview.WindowFrames(groupFrames, settings.FpsNumerator, settings.FpsDenominator))));
+                                progress?.Report(new("exporting_seam_preview", (double)i / groups.Length, new Message("progress.exporting_seam_preview",
+                                    [SeamPreview.WindowFrames(groupFrames, settings.FpsNumerator, settings.FpsDenominator)])));
                                 using (timing.Measure(StageTiming.SeamCheck))
                                     residualPreview = await SeamPreview.ExportOrWarnAsync(report, id, SeamPreview.RejectedOutcome,
                                         token => runner.ExportSeamPreviewAsync(Path.Combine(masterPath, "preview.mp4"),
@@ -652,8 +646,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 await Save();
                                 return report;
                             }
-                            progress?.Report(new("applying_crossfade", (double)i / groups.Length,
-                                "在接缝处做固定窗口的整帧交叉淡化。"));
+                            progress?.Report(new("applying_crossfade", (double)i / groups.Length, new Message("progress.applying_crossfade")));
                             using (timing.Measure(StageTiming.Crossfade))
                                 groupCrossfade = gpuDirect ? master["loop_crossfade"]!.DeepClone().AsObject()
                                     : await new MasterRewrite(new FfmpegTool(tools)).CrossfadeAsync(masterPath, groupFrames, crossfadeFrames, cancellationToken);
@@ -698,9 +691,8 @@ public sealed class HybridBakeService(NativeTools tools)
                         JsonObject? seamPreview = null;
                         if (SeamPreview.ShouldExport(probe, isStatic, seam, request.KeepIntermediates))
                         {
-                            progress?.Report(new("exporting_seam_preview", (double)i / groups.Length,
-                                MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
-                                    SeamPreview.WindowFrames(groupFrames, settings.FpsNumerator, settings.FpsDenominator))));
+                            progress?.Report(new("exporting_seam_preview", (double)i / groups.Length, new Message("progress.exporting_seam_preview",
+                                [SeamPreview.WindowFrames(groupFrames, settings.FpsNumerator, settings.FpsDenominator)])));
                             using (timing.Measure(StageTiming.SeamCheck))
                                 seamPreview = await SeamPreview.ExportOrWarnAsync(report, id,
                                     SeamPreview.Outcome(seam!["status"]?.GetValue<string>()),
@@ -717,8 +709,7 @@ public sealed class HybridBakeService(NativeTools tools)
                         }
                         if (!isStatic && !probe)
                         {
-                            progress?.Report(new("checking_hardware_decode", (double)i / groups.Length,
-                                "Checking this actual video on the installed hardware decoders."));
+                            progress?.Report(new("checking_hardware_decode", (double)i / groups.Length, new Message("progress.checking_hardware_decode")));
                             using (timing.Measure(StageTiming.HardwareDecodeCheck))
                                 // AV1/HEVC 直编组在调度器里已按同一实测过闸（成品同一份字节），直接取用。
                                 hardwareDecode = master["hardware_decode"]?.DeepClone() as JsonObject ??

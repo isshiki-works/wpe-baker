@@ -17,7 +17,7 @@ internal sealed class ProbeBake(NativeTools tools)
         string probeOutput = output + ".composition-probe";
         HybridBakeService.EnsureNewDerivedOutput(source, probeOutput, "Composition probe output");
         string? selectedDevice = request.DeviceUuid ?? settings.DeviceUuid;
-        progress?.Report(new("checking_composition", 0, "Generating a short candidate to check complete scene composition."));
+        progress?.Report(new("checking_composition", 0, new Message("progress.checking_composition")));
         // 相机入场动画：探针多烘这段。成品没做入场切换（退回旧行为、昼夜导出、副本做不成）时参照与成品都从入场结束后开始比。
         ulong introFrames = (ulong)Math.Ceiling(SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0) *
             settings.FpsNumerator / settings.FpsDenominator);

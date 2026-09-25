@@ -320,9 +320,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 JsonObject? seamPreview = null;
                 if (SeamPreview.ShouldExport(false, false, seam, request.KeepIntermediates))
                 {
-                    progress?.Report(new("exporting_seam_preview", 0,
-                        MessageCatalog.Get("progress.exporting_seam_preview", MessageCatalog.DefaultLanguage(),
-                            SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator))));
+                    progress?.Report(new("exporting_seam_preview", 0, new Message("progress.exporting_seam_preview",
+                        [SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator)])));
                     using (timing.Measure(StageTiming.SeamCheck))
                     seamPreview = await SeamPreview.ExportOrWarnAsync(result, "effect-prefix-" + owner,
                         SeamPreview.Outcome(seam["status"]?.GetValue<string>()),

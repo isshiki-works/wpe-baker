@@ -41,7 +41,13 @@ public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
 /// <summary>缩放后的内容居中放进更大的编码画布（每半幅），补边为透明黑；只为满足硬件解码下限，回放按原矩形取样。</summary>
 public sealed record RenderEncodePadding(uint Width, uint Height, uint OffsetX, uint OffsetY);
 public sealed record RenderProgress(string Stage, double? Fraction, string Message,
-    double? StageElapsedSeconds = null, double? StageRemainingSeconds = null, ulong? FramesCompleted = null, ulong? FramesTotal = null);
+    double? StageElapsedSeconds = null, double? StageRemainingSeconds = null, ulong? FramesCompleted = null, ulong? FramesTotal = null)
+{
+    /// <summary>带文案键的进度：Message 仍是英文原文（命令行照旧输出），界面按 <see cref="Text"/> 以界面语言渲染。</summary>
+    public RenderProgress(string stage, double? fraction, Message text) : this(stage, fraction, text.Text) => Text = text;
+
+    [JsonIgnore] public Message? Text { get; }
+}
 
 /// <summary>
 /// 同设备 GPU 编码起不来（渲染器缺能力、编码初始化失败、缺 Vulkan 设备扩展）：调用方据此改走软件编码。

@@ -1121,6 +1121,60 @@ public static class MessageCatalog
             Zh: "导出接缝预览：循环末尾 {0} 帧接循环开头 {0} 帧，原速一遍，0.25 倍速一遍。",
             En: "Exporting the seam preview: the last {0} loop frames then the first {0}, once at normal speed and once at 0.25x."),
 
+        // 烘焙中的进度句（界面任务行与状态栏按界面语言显示）。原先只写了一种语言的，另一种按原句直译补上，用词待定稿。
+        ["progress.observing_without_audio_effects"] = new(
+            Zh: "省略列出的固定音频效果后，观测所选场景。",
+            En: "Observing the selected scene after omitting the listed fixed audio effects."),
+        ["progress.observing_scene"] = new(
+            Zh: "观测真实的脚本输入、对象访问和场景层级。",
+            En: "Observing real script inputs, object accesses and scene hierarchy."),
+        ["progress.refreshing_script_fault_evidence"] = new(
+            Zh: "用当前的源脚本故障证据刷新旧方案。",
+            En: "Refreshing an older plan with current source script fault evidence."),
+        // {0}=组 {1}=预热帧数 {2}=步长帧数 {3}=搜索窗帧数
+        ["progress.searching_loop_start"] = new(
+            Zh: "在锁定的解析周期内按接缝残差挑选起点帧（组 {0}，预热 {1} 帧，步长 {2} 帧，搜索窗 {3} 帧）。",
+            En: "Choosing the start frame by seam residual within the locked analytic period (group {0}, warmup {1} frames, stride {2} frames, search window {3} frames)."),
+        ["progress.checking_composition"] = new(
+            Zh: "生成一段短候选，检查完整的场景合成。",
+            En: "Generating a short candidate to check complete scene composition."),
+        ["progress.saving_project"] = new(
+            Zh: "将已验证的项目保存到所选的壁纸文件夹。",
+            En: "Saving the validated project to the selected wallpaper folder."),
+        ["progress.rendering_pair"] = new(
+            Zh: "用相同的采样输入渲染源和候选；帧一到达就进行比较。",
+            En: "Rendering the source and the candidate with the same sampled inputs; frames are compared as they arrive."),
+        // {0}=已比较帧数 {1}=总帧数
+        ["progress.comparing"] = new(Zh: "已比较 {0} / {1} 帧。", En: "Compared {0} / {1} frames."),
+        // {0}=循环上限秒数
+        ["progress.capping_loop_length"] = new(
+            Zh: "内嵌视频会超过 2 GiB；以 {0:0} 秒为循环上限重新分析，并再烘焙一次。",
+            En: "The embedded video would exceed 2 GiB; analyzing again with the loop capped at {0:0} s and baking once more."),
+        ["progress.reverting_intro_switch"] = new(
+            Zh: "合成检查拒绝了开场切换；保持开场动画实时运行，重新分析，并再烘焙一次。",
+            En: "The composition check rejected the intro switch; analyzing again with intro animations kept live and baking once more."),
+        // {0}=视频组 {1}=该组自身的周期帧数
+        ["progress.group_full_loop_fallback"] = new(
+            Zh: "视频组 {0} 未能在其自身 {1} 帧的周期上闭合；按完整循环长度录制，并再烘焙一次。",
+            En: "Video group {0} did not close on its own {1}-frame period; recording it at the full loop length and baking once more."),
+        ["progress.retaining_residual_particles"] = new(
+            Zh: "被掩盖粒子的接缝残差超过了第一层；将这些粒子保持为实时，并再烘焙一次。",
+            En: "Seam residual from masked particles exceeded the first layer; keeping those particles live and baking once more."),
+        // {0}=第几组 {1}=组数 {2}=源图层数
+        ["progress.rendering_group"] = new(Zh: "视频组 {0}/{1}：{2} 个源图层", En: "Video group {0}/{1}: {2} source layers"),
+        ["progress.checking_seam_residual"] = new(
+            Zh: "在全分辨率下测量淡化窗口内每一帧的接缝残差。",
+            En: "Measuring the seam residual of every frame in the crossfade window at full resolution."),
+        ["progress.applying_crossfade"] = new(
+            Zh: "在接缝处做固定窗口的整帧交叉淡化。",
+            En: "Applying a fixed-window full-frame crossfade at the seam."),
+        ["progress.checking_hardware_decode"] = new(
+            Zh: "在已安装的硬件解码器上检查这段实际视频。",
+            En: "Checking this actual video on the installed hardware decoders."),
+        ["progress.retaining_nonlooping_layers"] = new(
+            Zh: "将未解决的特效和粒子保持为实时，然后检查一个更小的烘焙分配。",
+            En: "Keeping unresolved effects and particles live, then checking one smaller bake allocation."),
+
         ["warning.seam_preview_failed"] = new(
             Zh: "视频组 {0} 的接缝预览未导出（{1}）；生成结论不受影响。",
             En: "The seam preview for video group {0} was not exported ({1}); the generation result is unaffected.",
