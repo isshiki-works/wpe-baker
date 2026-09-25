@@ -97,7 +97,9 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
         return Kind switch
         {
             // MF：rate_control quality + quality 0..100 是 MF 里唯一与 CRF 同类的恒定质量模式。
-            PlaybackEncoderSelection.Mf => ["-rate_control", Preset, "-quality", StepMfQuality()],
+            // 不带 -hw_encoding 时 ffmpeg 只枚举同步（软件）MFT：H.264 落到微软 CPU 编码器，HEVC 落到 HEVCVideoExtensionEncoder，
+            // 后者在 Arc B390 上任何尺寸都报 -542398533（笔记本 9/26 实测）；带上它才用到 Intel/AMD 的硬件 MFT。
+            PlaybackEncoderSelection.Mf => ["-hw_encoding", "true", "-rate_control", Preset, "-quality", StepMfQuality()],
             // NVENC：vbr + cq 且 b:v 0 即恒定质量模式，是 NVENC 里语义最接近 CRF 的一档。
             PlaybackEncoderSelection.Nvenc => ["-preset", Preset, "-rc", "vbr", "-cq", q, "-b:v", "0"],
             // QSV：global_quality 就是 ICQ 的质量值。

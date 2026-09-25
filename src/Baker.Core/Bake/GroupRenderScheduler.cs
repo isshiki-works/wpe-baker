@@ -349,6 +349,15 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 if (codecFallbacks.Count > 0) rendered["gpu_codec_fallbacks"] = codecFallbacks;
                 return rendered;
             }
+            // ffmpeg 硬件档（mf/nvenc）直编的组编码器开不了或中途退出：这一组改用软件编码重渲，原因带给 GroupEncoder。
+            catch (GpuEncodeUnavailableException error) when (render.GpuEncoding is null && !renderCancellation.IsCancellationRequested)
+            {
+                Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(Path.GetDirectoryName(render.OutputDirectory)!, "master.hardware-failed"));
+                JsonObject fallback = await runner.RenderAsync(render with { PlaybackEncoderKind = PlaybackEncoderSelection.Software },
+                    progress, renderCancellation.Token);
+                fallback["gpu_pipeline_fallback_reason"] = error.Message;
+                return fallback;
+            }
             catch (GpuEncodeUnavailableException error) when (render.GpuEncoding is not null && !renderCancellation.IsCancellationRequested)
             {
                 string parent = Path.GetDirectoryName(render.OutputDirectory)!;

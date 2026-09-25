@@ -88,7 +88,7 @@ public static partial class PlaybackEncoderSelection
     /// auto 在渲染器支持整条 GPU 路线时先取 vulkan（见 NativeRenderRunner.ResolvePlaybackEncoderAsync）；
     /// 不支持时按这个顺序挑第一个可用的 ffmpeg 硬件档位。
     /// mf 排第一是因为它是 Windows 上唯一的厂商无关通道（Intel 落 QSV、AMD 落 VCE、NVIDIA 落 NVENC），
-    /// 基准平台是核显，厂商专用档位只作附加。注意 mf 可用不等于硬件可用，见 ParseMfProbe。
+    /// 基准平台是核显，厂商专用档位只作附加。mf 试编与实际编码都带 -hw_encoding true，只认硬件 MFT。
     /// </summary>
     internal static readonly string[] AutoOrder = [Mf, Nvenc, Qsv, Amf];
 
@@ -125,48 +125,6 @@ public static partial class PlaybackEncoderSelection
         names.Remove("=");
         return names;
     }
-
-    /// <summary>探测硬件 MFT 时试编的帧数：够走完 MFT 激活与类型协商即可，不测速度。</summary>
-    public const int MfProbeFrames = 2;
-
-    /// <summary>
-    /// mf 档位的硬件探测命令。ffmpeg 没有“只问不编”的接口，只能真编几帧：
-    /// <c>-hw_encoding true</c> 会把 MFT 枚举限制到 MFT_ENUM_FLAG_HARDWARE，落不到硬件就直接失败。
-    /// 包内 ffmpeg 没有 lavfi，所以拿真实输入的头几帧当探针。
-    /// </summary>
-    public static string[] MfProbeArguments(string encoder, string input, string output) =>
-        ["-hide_banner", "-loglevel", "verbose", "-nostdin", "-y", "-i", input,
-            "-frames:v", MfProbeFrames.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "-an", "-c:v", encoder, "-hw_encoding", "true", "-f", "mp4", output];
-
-    [GeneratedRegex(@"MFT name: '(?<name>[^']*)'")]
-    private static partial Regex MftNameLine();
-
-    [GeneratedRegex(@"\((?<code>MF_E_[A-Z0-9_]+)\)")]
-    private static partial Regex MfErrorCode();
-
-    /// <summary>
-    /// 解析硬件 MFT 探测结果。退出码为 0 才算硬件可用；失败时带回 MF_E_* 原因码，便于在 bake.json 里区分
-    /// “这台机器没有硬件 MFT”与“ffmpeg 自身走不通硬件 MFT”。
-    /// </summary>
-    public static (bool Hardware, string? Mft, string? Failure) ParseMfProbe(int exitCode, string text)
-    {
-        string body = text ?? "";
-        MatchCollection names = MftNameLine().Matches(body);
-        // 探测成功时最后一条 MFT name 就是实际激活的硬件 MFT；失败时它只是枚举到却用不了的那一个，不当成结论。
-        string? mft = names.Count == 0 ? null : names[^1].Groups["name"].Value;
-        if (exitCode == 0) return (true, mft, null);
-        Match error = MfErrorCode().Match(body);
-        return (false, null, error.Success ? error.Groups["code"].Value : null);
-    }
-
-    /// <summary>硬件 MFT 不可用时写进 bake.json 的中文说明；软件 MFT 仍可用，不是回退软件档位的理由。</summary>
-    public static string MfSoftwareOnlyNote(string? failure, string? attempted) =>
-        "mf 落到微软自带的软件 H.264/HEVC MFT，没有走到厂商硬件 MFT" +
-        (attempted is null ? "" : $"（枚举到 {attempted}）") +
-        (failure is null ? "" : $"：{failure}") +
-        "。ffmpeg 的 mfenc 只在编码第一帧 D3D11 画面时才发 MFT_MESSAGE_SET_D3D_MANAGER，" +
-        "而 D3D-aware 的厂商 MFT 在更早的 SetOutputType 就要求已绑定 D3D manager，属上游实现顺序问题，改构建选项无效。";
 
     /// <summary>
     /// 决定实际使用的档位。硬件不可用时一律回退软件编码，并给出可写进 bake.json 的中文理由。
