@@ -46,10 +46,18 @@ public static class BakeValueAssessment
         var selected = owners.ToHashSet();
         JsonObject[] observed = (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(layer => SceneGraph.Int(layer["owner"]) is int id && selected.Contains(id)).ToArray();
-        int effects = observed.SelectMany(layer => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>())
+        static int Effects(JsonObject layer) => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>()
             .Count(material => material["role"]?.GetValue<string>() == "effect");
+        int effects = observed.Sum(Effects);
         if (effects > 0)
-            return Result(WorkloadValue.CachedEffectPasses, new JsonObject { ["effect_passes"] = effects });
+        {
+            // 按画布占比加权的 pass 数：小块图层上的特效省不了多少（NoBenefit 拿它和视频路数比）；粒子等没有占比的按整屏算。
+            var fraction = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().Where(x => SceneGraph.Int(x["id"]) is int)
+                .DistinctBy(x => SceneGraph.Int(x["id"])).ToDictionary(x => SceneGraph.Int(x["id"])!.Value,
+                    x => Math.Min(1, SceneGraph.Numeric(x["canvas_fraction"], 1)));
+            double coverage = observed.Sum(layer => Effects(layer) * fraction.GetValueOrDefault(SceneGraph.Int(layer["owner"])!.Value, 1));
+            return Result(WorkloadValue.CachedEffectPasses, new JsonObject { ["effect_passes"] = effects, ["effect_pass_coverage"] = Math.Round(coverage, 2) });
+        }
         if (plan["loop"]?["source_static"]?.GetValue<bool>() == true && owners.Length == 1 && observed.Length == 1 &&
             plan["video_groups"] is JsonArray { Count: 1 } && observed[0]["has_effect_layer"]?.GetValue<bool>() == false &&
             observed[0]["materials"] is JsonArray { Count: 1 } materials && materials[0] is JsonObject baseMaterial &&

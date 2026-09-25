@@ -30,7 +30,7 @@ internal static class PlainLanguage
     public static string Verdict(JsonObject? plan, bool english)
     {
         if (plan is null) return "";
-        if (NoBenefitExpected(plan)) return L(english, "预计不省电，建议保持原作", "Not expected to save power; keeping the original is recommended");
+        if (NoBenefitExpected(plan)) return L(english, "不支持", "Not supported");
         if (CannotBakeReason(plan, english) is not null) return L(english, "无法生成", "Cannot generate");
         if (HasTurnOffCard(plan))
         {
@@ -44,15 +44,12 @@ internal static class PlainLanguage
         return L(english, "可以生成", "Ready to generate");
     }
 
-    /// <summary>分析判定预计不省电（默认拒绝，用户可点"仍然生成"覆盖）。</summary>
+    /// <summary>分析判定预计不省电：界面上一律不生成（只有命令行 --no-benefit allow 能覆盖）。</summary>
     public static bool NoBenefitExpected(JsonObject? plan) => plan?[NoBenefit.Field]?["status"]?.GetValue<string>() == NoBenefit.ExpectedStatus;
 
-    /// <summary>结论第二行：命中的条件。"仍然生成"按钮就在下面，不再写一句怎么继续。</summary>
-    public static string NoBenefitLine(JsonObject plan, bool english)
-    {
-        string text = NoBenefit.Describe(plan, english);
-        return english && text.Length > 0 ? char.ToUpperInvariant(text[0]) + text[1..] + "." : text + "。";
-    }
+    /// <summary>结论第二行：固定一句；命中的条件（主因）进"详情"，见 <see cref="Basis"/>。</summary>
+    public static string NoBenefitLine(bool english) =>
+        L(english, "预计功耗高于原壁纸", "Estimated power use is higher than the original wallpaper.");
 
     /// <summary>取舍方案里排第一（分析已按"预计能整幅预渲染"排过序）那一套要禁用的项数。</summary>
     private static int TurnOffCount(JsonObject plan)
@@ -80,6 +77,11 @@ internal static class PlainLanguage
     public static string Basis(JsonObject? plan, bool english)
     {
         if (plan is null) return "";
+        if (NoBenefitExpected(plan))
+        {
+            string text = NoBenefit.Describe(plan, english);
+            return english && text.Length > 0 ? char.ToUpperInvariant(text[0]) + text[1..] + "." : text + "。";
+        }
         if (CannotBakeReason(plan, english) is string reason)
             return L(english, "不可生成：", "Cannot generate: ") + reason;
         if (plan[BakeValueAssessment.Field]?[english ? "reason_en" : "reason_zh"]?.GetValue<string>() is { Length: > 0 } valueReason)

@@ -188,6 +188,15 @@ public class AdmissionTests
         prefixes["effect_prefix_caches"]!.AsArray().RemoveAt(0);
         Assert.Empty(NoBenefit.AnalysisConditions(prefixes));
 
+        // 整层路线：每路视频省下的特效（按画布占比加权的 pass 数）不到 1 道整屏就拒；bake_value 没算这项的不判。
+        JsonObject cheap = Narrated(Plan(new JsonArray(), groups: [[1], [3]]));
+        cheap["bake_value"] = new JsonObject { ["rule"] = "cached_effect_passes", ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 1.9 } };
+        Assert.Equal([NoBenefit.VideoCostOverSaving], NoBenefit.AnalysisConditions(cheap));
+        cheap["bake_value"]!["evidence"]!["effect_pass_coverage"] = 2.0;
+        Assert.Empty(NoBenefit.AnalysisConditions(cheap));
+        cheap["bake_value"] = new JsonObject { ["rule"] = "needs_work_comparison" };
+        Assert.Equal([NoBenefit.PlainLayersOnly], NoBenefit.AnalysisConditions(cheap));
+
         JsonObject ordinary = Narrated(Plan(new JsonArray()));
         NoBenefit.Apply(ordinary, allowed: false);
         Assert.True(Admission.Bakeable(ordinary));
