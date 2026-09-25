@@ -170,7 +170,8 @@ internal sealed class Allocation
         // 以前要烘到最后才发现（全组皆空即抛异常）。位置证得住时在这里就与固定隐藏同样省略：无视差，
         // 子树与父链的变换都是常量（无脚本、动画、属性绑定、运行时写入），子树每层都是居中、轴对齐的普通图片四边形，没有依赖连着它。
         double viewX = Numeric(projection["center_x"], double.NaN), viewY = Numeric(projection["center_y"], double.NaN);
-        double halfWidth = Numeric(projection["visible_width"], double.NaN) / 2, halfHeight = Numeric(projection["visible_height"], double.NaN) / 2;
+        double halfWidth = Numeric(projection["visible_width"], double.NaN) / 2 + HybridVideoProjection.CameraShakeMargin(projection);
+        double halfHeight = Numeric(projection["visible_height"], double.NaN) / 2 + HybridVideoProjection.CameraShakeMargin(projection);
         bool FixedTransform(int id) => scripts[id].Length == 0 && !SceneAnalyzer.Walk(objects[id]).OfType<JsonObject>().Any(Animated) &&
             new[] { "origin", "scale", "angles", "size" }.All(key => objects[id][key] is not JsonObject) &&
             !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write");

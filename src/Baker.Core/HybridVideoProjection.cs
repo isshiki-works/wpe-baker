@@ -65,7 +65,8 @@ internal static class HybridVideoProjection
     /// <summary>Returns the world-space extent needed to capture one group without parallax edge exposure.</summary>
     internal static CaptureViewportExtent CaptureViewportForGroup(JsonObject projection, JsonObject group, bool preserveParallax)
     {
-        double visibleWidth = projection["visible_width"]!.GetValue<double>(), visibleHeight = projection["visible_height"]!.GetValue<double>();
+        double visibleWidth = projection["visible_width"]!.GetValue<double>() + 2 * CameraShakeMargin(projection);
+        double visibleHeight = projection["visible_height"]!.GetValue<double>() + 2 * CameraShakeMargin(projection);
         if (!preserveParallax) return new(visibleWidth, visibleHeight);
         double depthX = group["parallax_depth"]![0]!.GetValue<double>(), depthY = group["parallax_depth"]![1]!.GetValue<double>();
         double amount = projection["parallax_amount"]!.GetValue<double>(), mouse = projection["parallax_mouse_influence"]!.GetValue<double>();
@@ -73,6 +74,9 @@ internal static class HybridVideoProjection
         double extraY = projection["canvas_height"]!.GetValue<double>() * Math.Abs(mouse * depthY * amount);
         return new(visibleWidth + extraX, visibleHeight + extraY);
     }
+
+    /// <summary>镜头抖动留在成品的实时镜头里（捕获时关掉），替换图层随镜头平移，四边各要多捕这么多场景单位，否则抖动露出底色。</summary>
+    internal static double CameraShakeMargin(JsonObject projection) => projection["camera_shake_margin"]?.GetValue<double>() ?? 0;
 
     /// <summary>Returns the shared extent covering every group that can appear in a composited seam check.</summary>
     internal static CaptureViewportExtent MaximumCaptureViewport(JsonObject projection, IEnumerable<JsonObject> groups, bool preserveParallax)
@@ -174,6 +178,14 @@ internal static class HybridVideoProjection
                         "切换做不成、退回旧行为（settings.single_shot_live）时，入场那几秒是放大的视频，会发糊。" };
             }
         }
+        // 引擎 UniformSource.cpp：正交相机的抖动把世界平移 amplitude × 短边 × 0.01 × ShakeOffset，
+        // ShakeOffset 每轴不超过 (1 + 7g)(1.09 + 0.04g)，g = clamp(roughness - 1, 0, 1)²。
+        double amplitude = SceneGraph.Numeric(SceneGraph.Resolve(general?["camerashakeamplitude"], properties), 0);
+        double rough = Math.Clamp(SceneGraph.Numeric(SceneGraph.Resolve(general?["camerashakeroughness"], properties), 0) - 1, 0, 1), grow = rough * rough;
+        bool shake = SceneGraph.Resolve(general?["camerashake"], properties)?.ToJsonString() == "true" && amplitude > 0 &&
+            SceneGraph.Numeric(SceneGraph.Resolve(general?["camerashakespeed"], properties), 0) > 0 && report["status"]!.GetValue<string>() == "orthographic";
+        report["camera_shake_margin"] = shake ? amplitude * Math.Min(report["canvas_width"]!.GetValue<double>(), report["canvas_height"]!.GetValue<double>()) *
+            .01 * (1 + 7 * grow) * (1.09 + .04 * grow) : 0;
         return report;
     }
 
