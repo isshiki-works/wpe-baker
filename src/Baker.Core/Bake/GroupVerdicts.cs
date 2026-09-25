@@ -58,6 +58,37 @@ internal static class GroupVerdicts
         ["gpu_bounds_prepass"] = master["gpu_bounds_prepass"]?.DeepClone()
     };
 
+    /// <summary>
+    /// 起点搜索里没有一个相位过整幅 Δ_0 限（整幅均值在降采样样本上与全分辨率几乎相同，语料里差不到 0.01/255），全分辨率复核必拒。
+    /// 超限的组里有被掩盖的粒子时，拒绝后反正要留粒子实时重烘（<see cref="HybridBakeService.ResidualParticleRoots"/>），
+    /// 返回这些组的拒绝记录，不再渲 master；其余情况 null，照旧渲染并在全分辨率复核。
+    /// </summary>
+    internal static JsonArray? StartSearchRejection(JsonObject plan, JsonObject report, JsonObject startSearch, Func<string, int[]> layersOf)
+    {
+        if (startSearch["candidates_within_global_limit"]?.GetValue<int>() != 0) return null;
+        IEnumerable<(string Id, JsonNode Row)> rows = startSearch["groups"] is JsonArray groups
+            ? groups.OfType<JsonObject>().Select(g => (g["group_id"]!.GetValue<string>(), g["at_shared_start"]!))
+            : [(startSearch["group_id"]!.GetValue<string>(), startSearch["selected"]!)];
+        var rejected = new JsonArray([.. rows.Where(r => r.Row["sampled_global_rgb_mae_255"]!.GetValue<double>() > ResidualMasking.MaximumSeamRgbMae255)
+            .Select(r => (JsonNode)new JsonObject { ["id"] = r.Id, ["status"] = "rejected_seam_residual", ["storage"] = "video",
+                ["source_layers"] = Layers(layersOf(r.Id)), ["start_search_at_selected"] = r.Row.DeepClone() })]);
+        var verdict = new JsonObject { ["status"] = "candidate_rejected_seam", ["loop_validation"] = "residual_above_limits",
+            ["groups"] = rejected, ["residual_masking"] = report["residual_masking"]?.DeepClone() };
+        return HybridBakeService.ResidualParticleRoots(plan, verdict) is null ? null : rejected;
+    }
+
+    /// <summary>写出起点搜索就判定的残差拒绝（<see cref="StartSearchRejection"/>）。</summary>
+    internal static void RejectStartSearch(JsonObject report, JsonArray rejected)
+    {
+        foreach (JsonNode? group in rejected) report["groups"]!.AsArray().Add(group!.DeepClone());
+        report["status"] = "candidate_rejected_seam";
+        report["loop_validation"] = "residual_above_limits";
+        string whole = ResidualMasking.MaximumSeamRgbMae255.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        string readings = string.Join(", ", rejected.OfType<JsonObject>().Select(group =>
+            $"{group["id"]} {group["start_search_at_selected"]!["sampled_global_rgb_mae_255"]}/255"));
+        new Message("bake.residual_start_search_rejected", [readings, whole], [readings, whole]).Write(report, "reason");
+    }
+
     /// <summary>选定起点在全分辨率第一层被拒：记本次各组的残差与起点尝试，不启动整案重渲。</summary>
     internal static void RejectResidual(JsonObject report, string id, int[] layers, JsonObject? lateDependency, JsonObject seamResidual,
         JsonObject preview, JsonArray startAttempts, int candidateCount, uint crossfadeFrames)

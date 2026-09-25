@@ -482,6 +482,11 @@ public static class MessageCatalog
             En: "Cannot generate: within the locked analytic period, {0} candidate start frame(s) of {1} were re-checked in sort order on the full-resolution lossless master and all exceeded the first layer: {2}. The first layer requires the worst 64px tile of the residual Δ_k = f[P+k] − f[k] to stay within {3}/255 for every k = 0..{5} of the crossfade window, and the hard-cut residual Δ_0 to stay within {4}/255 whole-frame RGB MAE; beyond that the crossfade ghost and the seam step are visible. The period was not changed, no threshold was relaxed, no local seam repair was applied, and the grouping was not adjusted automatically.",
             Legacy: "Within the locked analytic period, {0} candidate start frame(s) (of {1}) were re-checked in sort order on the full-resolution lossless master and every one exceeded the first layer: {2}. The first layer requires the worst 64px tile of the residual Δ_k = f[P+k] − f[k] to stay within {3}/255 for every k = 0..{5} of the crossfade window, and the hard-cut residual Δ_0 to stay within {4}/255 whole-frame RGB MAE; beyond that the crossfade ghost and seam step become visible. The period was not changed, no threshold was relaxed, no local seam repair was applied and the grouping was not changed automatically."),
 
+        // 残差掩盖路线：起点搜索的样本上没有一个起点过整幅 Δ_0 限，超限组含被掩盖的粒子。{0}=各组在选定起点的整幅读数 {1}=整幅上限
+        ["bake.residual_start_search_rejected"] = new(
+            Zh: "本遍不渲染：起点搜索的样本上没有一个起点的硬切残差 Δ_0 整幅 RGB MAE 在 {1}/255 以内（{0}），全分辨率复核必然超限；超限组里有被掩盖的粒子，改为让这些粒子保持实时后重新生成。",
+            En: "Not rendered: no start frame in the start search kept the hard-cut residual Δ_0 within {1}/255 whole-frame RGB MAE ({0}), so the full-resolution check would exceed it; the rejected groups contain masked particles, which are kept live for the next generation."),
+
         // ---- bake 结果（界面一行说明） ----
         // ---- effect_prefix 终端捕获点（analyze 写进 loop.unresolved 与 effect_prefix_capture_probes，bake 写进 reason） ----
         // {0}=层名 {1}=层 id {2}=终端效果 id {3}=实际捕获点 {4}=这一层自己的渲染目标列表
