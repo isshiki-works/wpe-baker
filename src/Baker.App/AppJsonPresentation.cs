@@ -573,7 +573,7 @@ internal static class AppJsonPresentation
     /// <summary>取舍清单的抬头：有方案时是"有 N 个方案…"，主体类壁纸是那句拒绝说明，其余为空串。</summary>
     public static string TradeoffHeader(JsonObject? plan, bool english) =>
         plan?[TradeoffOptions.Field] is JsonObject record &&
-        record["status"]?.GetValue<string>() is "available" or "subject_only" or "dependency_blocked"
+        record["status"]?.GetValue<string>() is "available" or "subject_only" or "dependency_blocked" or "baked_content_blocked"
             ? (english ? record[MessageCatalog.English] : record[MessageCatalog.Chinese])?.GetValue<string>() ?? "" : "";
 
     /// <summary>

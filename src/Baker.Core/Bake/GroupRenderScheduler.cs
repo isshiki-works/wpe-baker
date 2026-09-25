@@ -263,6 +263,12 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         RenderRequest render = MasterRequest(index);
         if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
             throw new IOException("A group master output must be new; existing files will not be cleaned.");
+        // 预热帧照样逐帧软解视频纹理，分段时第 k 段要把段起点前的视频从头解一遍，解码又已吃满 CPU：
+        // 3462279189 的视频组（3480x2250 H.264）三段实测 59/91/105 s，不分段的覆盖度预通道 62 s。有视频纹理的组不分段。
+        var layers = Capture(groups[index]).Layers;
+        int segments = loopCandidates.FirstOrDefault()?["components"]?.AsArray().Any(component =>
+            component?["id"]?.GetValue<string>().Split('/') is ["video", var owner, ..] &&
+            int.TryParse(owner, out int layer) && layers.Contains(layer)) == true ? 1 : groupParallel;
         JsonObject? coveragePass = null, coverage = null;
         // 透明组的裁剪未知（还在走 master）时先跑覆盖度预通道；起点搜索已给出裁剪却没取直编（须上下并排）时，预通道的裁剪同样用不上，不跑。
         if (render.LosslessTest && !probe && render.PixelPacking != "rgb" && render.Width % 2 == 0 && render.Height % 2 == 0 &&
@@ -310,7 +316,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     { GpuEncoding.Codec: var next } candidate && next != current.Codec ? candidate : null;
             try
             {
-                JsonObject rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
+                JsonObject rendered = await runner.RenderSegmentsAsync(render, segments, segmentSlots, progress, renderCancellation.Token);
                 if ((render.GpuEncoding?.Crop ?? render.DirectCrop) is { } crop && !Capture(groups[index]).SceneClear &&
                     rendered["alpha_bounds"] is JsonObject all && !CoverageFits(all, crop, render.PixelPacking == "rgba_side_by_side"))
                 {
@@ -333,7 +339,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
                         Path.GetDirectoryName(render.OutputDirectory)!, $"master.{gpu.Codec}-qp{gpu.Qp}"));
                     render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
-                    rendered = await runner.RenderSegmentsAsync(render, groupParallel, segmentSlots, progress, renderCancellation.Token);
+                    rendered = await runner.RenderSegmentsAsync(render, segments, segmentSlots, progress, renderCancellation.Token);
                     if (!await GpuQualityPassesAsync(rendered, render))
                         throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
                 }

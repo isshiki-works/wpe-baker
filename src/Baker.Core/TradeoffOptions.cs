@@ -178,6 +178,31 @@ public static class TradeoffOptions
             seen.Add(fingerprint);
             options.Add(option);
         }
+        // 关掉实时元素只清得掉实时层带来的阻断，照做后结论不变的方案不列；一个都不剩就明说原因（9/26 三张照方案重分析仍是同一条阻断）。
+        // 残差不可掩盖：不可掩盖的分量（要烘的层自己的循环没证出来，或没有归属图层）都在方案剔除范围内才可能清掉。
+        // 预计不省电：逐条看关掉之后判据还会不会命中（NoBenefit 同一口径）。视频不划算要并成一路整幅、且一路省下的渲染够本；
+        // 静态成品带实时层要一层实时都不剩；固定时段、前缀路数超限关实时层改不了。
+        JsonArray blocking = plan["loop"]?["residual_masking"]?["blocking_components"] as JsonArray ?? [];
+        string?[] noBenefit = [.. (plan[NoBenefit.Field]?["conditions"] as JsonArray ?? []).Select(Text)];
+        bool Undeliverable(JsonObject option) =>
+            blockerCodes.Contains(BlockerCode.BakeAllocation) && blocking.OfType<JsonObject>().Any(component =>
+                Number(component["owner_layer_id"]) is not double owner ||
+                !(option["excluded_layer_ids"] as JsonArray ?? []).Any(id => Number(id) == owner)) ||
+            blockerCodes.Contains(BlockerCode.NoBenefitExpected) && noBenefit.Any(condition => condition switch
+            {
+                NoBenefit.StaticWithLive => Number(option["estimated_residual_live_layers"]) != 0,
+                NoBenefit.VideoCostOverSaving or NoBenefit.PlainLayersOnly => Flag(option["expected_full_frame"]) != true ||
+                    !(NoBenefit.RemovedPassCoverage(plan) >= NoBenefit.MinPassCoveragePerStream),
+                _ => true
+            });
+        if (options.RemoveAll(Undeliverable) > 0 && options.Count == 0)
+        {
+            record["status"] = "baked_content_blocked";
+            record["options"] = new JsonArray();
+            record["zh"] = MessageCatalog.Get("tradeoff.baked_content_blocked", MessageCatalog.Chinese);
+            record["en"] = MessageCatalog.Get("tradeoff.baked_content_blocked", MessageCatalog.English);
+            return record;
+        }
         // 排序：预计能进整幅的排前面，其次关的项数少的；最多给三个。
         var ranked = options
             .OrderBy(option => Flag(option["expected_full_frame"]) == true ? 0 : 1)
@@ -412,6 +437,9 @@ public static class TradeoffOptions
         if (status == "dependency_blocked")
             return (MessageCatalog.Get("summary.tradeoff_dependency_blocked", MessageCatalog.Chinese),
                 MessageCatalog.Get("summary.tradeoff_dependency_blocked", MessageCatalog.English));
+        if (status == "baked_content_blocked")
+            return (MessageCatalog.Get("tradeoff.baked_content_blocked", MessageCatalog.Chinese),
+                MessageCatalog.Get("tradeoff.baked_content_blocked", MessageCatalog.English));
         return null;
     }
 
