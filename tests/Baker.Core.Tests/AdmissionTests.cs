@@ -181,6 +181,13 @@ public class AdmissionTests
         NoBenefit.Apply(fixedDay, allowed: false);
         Assert.Equal([BlockerCode.NoBenefitExpected], PlanBlockers.Codes(fixedDay).ToArray());
 
+        // 特效前缀路线：每个缓存都是一路视频，超过上限在分析时就拒。
+        JsonObject prefixes = Narrated(Plan(new JsonArray(), route: "effect_prefix"));
+        prefixes["effect_prefix_caches"] = new JsonArray([.. Enumerable.Range(0, 5).Select(i => (JsonNode)new JsonObject { ["owner_layer_id"] = i })]);
+        Assert.Equal([NoBenefit.TooManyStreams], NoBenefit.AnalysisConditions(prefixes));
+        prefixes["effect_prefix_caches"]!.AsArray().RemoveAt(0);
+        Assert.Empty(NoBenefit.AnalysisConditions(prefixes));
+
         JsonObject ordinary = Narrated(Plan(new JsonArray()));
         NoBenefit.Apply(ordinary, allowed: false);
         Assert.True(Admission.Bakeable(ordinary));
