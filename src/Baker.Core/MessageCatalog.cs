@@ -1337,8 +1337,8 @@ public static class MessageCatalog
             En: "Current dependency analysis found no video group; the result of disabling related effects has not been established. Related dependencies: {0}."),
 
         ["tradeoff.baked_content_blocked"] = new(
-            Zh: "禁用实时元素解决不了这张的阻断：卡住它的是要转成视频的内容本身（循环未能证明闭合），不是实时元素，因此没有取舍方案。",
-            En: "Disabling live elements cannot clear this blocker: it comes from the content that would become video (its loop could not be proven to close), not from live elements, so there are no tradeoff options."),
+            Zh: "禁用实时元素解决不了这张的阻断：卡住它的是要转成视频的内容本身，不是实时元素，因此没有取舍方案。",
+            En: "Disabling live elements cannot clear this blocker: it comes from the content that would become video, not from live elements, so there are no tradeoff options."),
 
         ["tradeoff.none_available"] = new(
             Zh: "无可取舍的实时元素：其余实时图层为技术性来源（透视相机、源脚本报错、运行时资源依赖）或随父层保持实时，均不可禁用。",

@@ -178,12 +178,18 @@ public static class TradeoffOptions
             seen.Add(fingerprint);
             options.Add(option);
         }
-        // 关掉实时元素只清得掉实时层带来的阻断。残差里不可掩盖的分量（要烘的层自己的循环没证出来，或没有归属图层）
-        // 不在方案剔除范围内时，照做后结论不变，这种方案不列；一个都不剩就明说原因（9/26 三张照方案重分析仍是同一条阻断）。
-        if (blockerCodes.Contains(BlockerCode.BakeAllocation) &&
-            plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
-            options.RemoveAll(option => blocking.OfType<JsonObject>().Any(component => Number(component["owner_layer_id"]) is not double owner ||
-                !(option["excluded_layer_ids"] as JsonArray ?? []).Any(id => Number(id) == owner))) > 0 && options.Count == 0)
+        // 关掉实时元素只清得掉实时层带来的阻断，照做后结论不变的方案不列；一个都不剩就明说原因（9/26 三张照方案重分析仍是同一条阻断）。
+        // 残差不可掩盖：不可掩盖的分量（要烘的层自己的循环没证出来，或没有归属图层）都在方案剔除范围内才可能清掉。
+        // 预计不省电：只有并成一路整幅视频才可能改变（视频路数、静态成品带实时层）；固定时段、前缀路数超限关实时层改不了。
+        JsonArray blocking = plan["loop"]?["residual_masking"]?["blocking_components"] as JsonArray ?? [];
+        string?[] noBenefit = [.. (plan[NoBenefit.Field]?["conditions"] as JsonArray ?? []).Select(Text)];
+        bool Undeliverable(JsonObject option) =>
+            blockerCodes.Contains(BlockerCode.BakeAllocation) && blocking.OfType<JsonObject>().Any(component =>
+                Number(component["owner_layer_id"]) is not double owner ||
+                !(option["excluded_layer_ids"] as JsonArray ?? []).Any(id => Number(id) == owner)) ||
+            blockerCodes.Contains(BlockerCode.NoBenefitExpected) && (Flag(option["expected_full_frame"]) != true ||
+                noBenefit.Any(condition => condition is NoBenefit.FixedDaytime or NoBenefit.TooManyStreams));
+        if (options.RemoveAll(Undeliverable) > 0 && options.Count == 0)
         {
             record["status"] = "baked_content_blocked";
             record["options"] = new JsonArray();

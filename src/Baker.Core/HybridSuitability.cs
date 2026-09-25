@@ -69,6 +69,18 @@ internal static class HybridSuitability
                 "so reallocation cannot help. Keep using the original wallpaper.",
                 "能进视频的图层上都有分析不出周期的动态效果；把它们留作实时后就没有可以预渲染的画面，重新分配也帮不上。建议继续使用原壁纸。", notes);
 
+        // 同类：不可掩盖的分量都在要烘的层上（或没有归属），把它们留实时的更小分配也试过、仍证不出循环。
+        // 重新分配已经试过，取舍方案只关实时层也够不着它们（TradeoffOptions 同一口径不列方案），没有可让用户决定的事项。
+        if (!hdr && !perspective && blockers.Contains(BlockerCode.BakeAllocation) &&
+            Text(plan["loop_allocation_fallback"]?["status"]) == "still_unavailable" &&
+            plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
+            blocking.OfType<JsonObject>().All(component => component["owner_layer_id"] is not JsonValue owner ||
+                !(plan["live_layer_ids"] as JsonArray ?? []).Any(id => JsonNode.DeepEquals(id, owner))))
+            return Build("not_suitable", "loop_unproven_after_reallocation",
+                "Some content bound for the video changes in a way whose loop cannot be proven; keeping it live and reallocating was already tried and found no loop either, " +
+                "and turning live elements off does not reach it. This version cannot bake this wallpaper; keep using the original.",
+                "要转成视频的内容里有证明不了能循环的变化；把它留作实时、重新分配也试过，仍没有循环，关掉实时元素也解不开。当前版本不支持这张，建议继续使用原壁纸。", notes);
+
         // S1：依赖闭包之后连一个视频组都没有，没有任何东西可烘。
         if (noCandidateAtAll && groups == 0)
             return Build("not_suitable", "nothing_to_bake",
