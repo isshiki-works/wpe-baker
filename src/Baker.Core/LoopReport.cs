@@ -5,14 +5,14 @@ namespace Baker.Core;
 
 /// <summary>
 /// plan.loop（循环报告 schema 1，随 plan v3 写出）的顶层字段。<see cref="ToJson"/> 按原顺序写出，与改动前逐字节相同：
-/// no_candidate_reason 与 fixed_frame_step 缺值时写 null，sway_retime / loop_length_default / embedded_video_limit 缺值时不写。
+/// no_candidate_reason 与 fixed_frame_step 缺值时写 null，sway_retime / loop_length_default 缺值时不写。
 /// candidates 与 unresolved 在分析过程中是 <see cref="LoopCandidate"/> / <see cref="LoopUnresolved"/>，只在这里渲染一次。
 /// </summary>
 internal sealed record LoopReport(uint FpsNum, uint FpsDen, string RetimeMode, CommonLoopPreference LoopPreference,
     double RetimeBudgetPercent, bool BudgetRelaxed, ulong? FixedFrameStep, double MaximumSeconds,
     LoopNoCandidateReason? NoCandidateReason, IReadOnlyList<LoopCandidate> Candidates, IReadOnlyList<LoopUnresolved> Unresolved,
     bool SourceStatic, VideoControlScope VideoControlScope, LoopContentCadence ContentCadence, IReadOnlyList<ShaderPeriodComponent> Evidence,
-    JsonObject? SwayRetime, JsonObject? LoopLengthDefault, EmbeddedVideoLoopLimit? EmbeddedVideoLimit)
+    JsonObject? SwayRetime, JsonObject? LoopLengthDefault)
 {
     /// <summary>首个候选上与别的组共用时钟、自身周期不整除 L 的组想要的 L 步长（不写进 plan；HybridScenePlanner 据此重解一次）。</summary>
     public IReadOnlyList<ulong> GroupClockSteps { get; init; } = [];
@@ -33,8 +33,6 @@ internal sealed record LoopReport(uint FpsNum, uint FpsDen, string RetimeMode, C
         };
         if (SwayRetime is not null) json["sway_retime"] = SwayRetime;
         if (LoopLengthDefault is not null) json["loop_length_default"] = LoopLengthDefault;
-        // 上限被内嵌视频 2 GiB 收紧时才写（maximum_seconds 已是收紧后的值）；没收紧时 plan 不变。
-        if (EmbeddedVideoLimit is { Applied: true }) json["embedded_video_limit"] = EmbeddedVideoBudgetJson.ToJson(EmbeddedVideoLimit);
         if (FrameRateHint() is { } hint) json["frame_rate_hint"] = hint;
         return json;
     }

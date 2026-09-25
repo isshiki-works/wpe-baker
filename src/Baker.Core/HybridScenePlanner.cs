@@ -63,48 +63,29 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     /// <summary>
     /// 摆动改频参数：开关关闭时为 null（循环分析完全不走改频）。输出比例 = 输出像素 / 可见场景单位，只用于把摆动振幅
     /// 换到输出像素（冻结项漂移的次序与报告），与 bake 的捕获像素换算同一口径。
-    /// 循环长度上限与通用求解器共用 <see cref="LoopLengthMaximumOf"/>（含内嵌视频 2 GiB 收紧），收紧记录挂在 VideoLimit 上。
+    /// 循环长度上限与通用求解器共用 <see cref="LoopLengthMaximumOf"/>。
     /// analyze、布局降级重算与 bake 前刷新都走这里，三处结果一致。
     /// </summary>
     /// <param name="ceilingOverride">质量档对比另一个上限时用的秒数（见 <see cref="RetimeProfile.QualityComparisonSeconds"/>）；其余情况为 null。</param>
-    internal static SwayRetimeOptions? SwayRetimeOptionsOf(HybridAnalyzeRequest request, JsonObject projection, JsonArray? videoGroups,
-        double? ceilingOverride = null)
+    internal static SwayRetimeOptions? SwayRetimeOptionsOf(HybridAnalyzeRequest request, JsonObject projection, double? ceilingOverride = null)
     {
         if (!request.SwayRetime) return null;
         double visibleWidth = projection["visible_width"] is JsonValue width && width.TryGetValue(out double w) && w > 0 ? w : request.Width;
         double visibleHeight = projection["visible_height"] is JsonValue height && height.TryGetValue(out double h) && h > 0 ? h : request.Height;
         // 速度门限按最终输出画布（OutputResolution 定下的 request 宽高，与振幅换算同一个画布）的短边换算。
-        return new(LoopLengthMaximumOf(request, videoGroups, ceilingOverride), request.Width / visibleWidth, request.Height / visibleHeight,
-            EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride), RetimeProfileJson.Resolve(request),
+        return new(LoopLengthMaximumOf(request, ceilingOverride), request.Width / visibleWidth, request.Height / visibleHeight,
+            RetimeProfileJson.Resolve(request),
             SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height));
     }
 
     /// <summary>
-    /// 内嵌视频 2 GiB 对循环时长上限的收紧记录（EmbeddedVideoBudget）：按 --loop-max-seconds（未给时 600）、输出宽高与帧率，
-    /// 有透明组时按 alpha 左右并排的双宽算。输出尺寸未知（0）时为 null，不收紧。
-    /// </summary>
-    internal static EmbeddedVideoLoopLimit? EmbeddedVideoLimitOf(HybridAnalyzeRequest request, JsonArray? videoGroups,
-        double? ceilingOverride = null)
-    {
-        double requested = ceilingOverride ?? RetimeProfileJson.Resolve(request).LoopMaximumSeconds;
-        bool packedAlpha = videoGroups?.OfType<JsonObject>().Any(group =>
-            group["transparent"] is JsonValue transparent && transparent.TryGetValue(out bool value) && value) == true;
-        // 编码格式按左右并排的双宽选（与成品一致；上下并排只在越 8192 时出现，那时本来就是 HEVC）。
-        bool hevc = request.Width > 0 && request.Height > 0 && PlaybackEncodeProfile.SelectPlaybackEncoder(request.Width * (packedAlpha ? 2u : 1u),
-            request.Height, request.FpsNumerator, request.FpsDenominator) == "libx265";
-        return EmbeddedVideoBudget.LoopLengthLimit(requested, request.Width, request.Height, packedAlpha,
-            request.FpsNumerator, request.FpsDenominator, hevc);
-    }
-
-    /// <summary>
-    /// 循环时长上限（秒）：唯一的实际上限 = min(档位兜底或 --loop-max-seconds, 内嵌视频 2 GiB 在参考码率下装得下的秒数)。
+    /// 循环时长上限（秒）：档位兜底或 --loop-max-seconds。不按内嵌视频 2 GiB 收紧：分析时只有参考码率（现有成品里最高的那张）可估，
+    /// 对一般场景高估一个数量级；成品大小由 bake 按这个场景自己的试编码外推、编码后按实际字节判（<see cref="EmbeddedVideoBudget"/>）。
     /// 与摆动改频开关无关：着色器、动画、视频与摆动分量全部在这一个上限下求解，摆动改频的 Lmax 也取这个值。
     /// 默认值不写进 plan.settings（字段为 null），bake 按同一规则还原，分析与烘焙用的上限一致。
-    /// 特效前缀路线在规划时还不知道缓存尺寸，<paramref name="videoGroups"/> 传 null，按不透明整幅输出估算。
     /// </summary>
-    internal static double LoopLengthMaximumOf(HybridAnalyzeRequest request, JsonArray? videoGroups, double? ceilingOverride = null) =>
-        EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride)?.EffectiveSeconds
-        ?? ceilingOverride ?? RetimeProfileJson.Resolve(request).LoopMaximumSeconds;
+    internal static double LoopLengthMaximumOf(HybridAnalyzeRequest request, double? ceilingOverride = null) =>
+        ceilingOverride ?? RetimeProfileJson.Resolve(request).LoopMaximumSeconds;
 
     /// <summary>
     /// 循环分析的唯一入口：质量档在档位上限与 <see cref="RetimeProfile.QualityComparisonSeconds"/> 下各求一次，
@@ -129,15 +110,14 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         {
             JsonObject input = scene();
             // 缓存两段：plan 形态的 loop + unresolved 各条的文案与点名图层（UnresolvedNotes.Pack）。格式变了就换前缀，旧缓存不再命中。
-            string key = "loop-v4-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
+            string key = "loop-v5-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
                 request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.SwayRetime, request.LoopPreference, ceilingOverride,
                 request.FullLoopLayerIds);
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
                 scene, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
-                SwayRetimeOptionsOf(request, projection, videoGroups, ceilingOverride),
-                LoopLengthMaximumOf(request, videoGroups, ceilingOverride), EmbeddedVideoLimitOf(request, videoGroups, ceilingOverride),
-                videoGroups, steps, request.FullLoopLayerIds);
+                SwayRetimeOptionsOf(request, projection, ceilingOverride),
+                LoopLengthMaximumOf(request, ceilingOverride), videoGroups, steps, request.FullLoopLayerIds);
             return UnresolvedNotes.Unpack(AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
             {
                 LoopReport loop = Analyze(input, null);
@@ -151,10 +131,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             }));
         }
         var atPreset = Solve(null);
-        // 判定用的是这一案的生效上限（含内嵌视频 2 GiB 收紧），不是档位名义上限：4K 不透明组的生效上限只有 558 s，
-        // 两个上限解出来是同一次求解，再跑一遍纯属白跑，还会写出"600 s 那侧循环更短所以胜出"的误导记录。
-        double presetCeiling = LoopLengthMaximumOf(request, videoGroups);
-        double comparisonCeiling = LoopLengthMaximumOf(request, videoGroups, RetimeProfile.QualityComparisonSeconds);
+        // 两个上限相同时解出来是同一次求解，再跑一遍纯属白跑，还会写出"600 s 那侧循环更短所以胜出"的误导记录。
+        double presetCeiling = LoopLengthMaximumOf(request);
+        double comparisonCeiling = LoopLengthMaximumOf(request, RetimeProfile.QualityComparisonSeconds);
         if (!profile.ComparesQualityCeilings(presetCeiling) || Math.Abs(presetCeiling - comparisonCeiling) <= 1e-9) return atPreset;
         var atComparison = Solve(RetimeProfile.QualityComparisonSeconds);
         RetimeProfile.QualityCeilingReading presetReading = ReadCeiling(atPreset.Loop), comparisonReading = ReadCeiling(atComparison.Loop);

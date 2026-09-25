@@ -129,7 +129,7 @@ internal static class EffectPrefixProfileChecks
                 Frames(loop) >= (ulong)(SwayRecurrenceSolver.MinimumLoopSeconds * 60)),
             "effect prefix profile: the prefix candidate records phase drift and stays inside the shared cycle floor and visible speed gate");
 
-        // 质量档双上限：档位上限 1200 s 被内嵌视频 2 GiB 在 1080p60 下收到 1175 s，与 600 s 各求一次并取可见改动更小者；
+        // 质量档双上限：档位上限比 600 s 长时与 600 s 各求一次并取可见改动更小者；
         // 其余档位只求一次，记录不出现。
         check(new[] { efficiency, balanced, quality }.All(loop => loop["quality_ceiling_used"] is null &&
             loop["maximum_seconds"]!.GetValue<double>() <= 600),

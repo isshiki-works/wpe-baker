@@ -890,13 +890,6 @@ public static class MessageCatalog
             En: "Sway retime enabled, but the other temporal components produced no loop candidate (maximum {0} s), so no L = kP exists; sway components remain unresolved.",
             Legacy: "Sway retime is on, but the other temporal components produced no loop candidate (maximum {0} s), so no L = kP exists; the sway components stay unresolved."),
 
-        // ---- 内嵌视频大小上限（EmbeddedVideoBudget，WPE 实测 2 GiB）----
-        // {0}=编码宽 {1}=编码高 {2}=帧率 {3}=参考码率下最长秒数 {4}=用户给的循环长度上限（秒）
-        ["summary.embedded_video_limit"] = new(
-            Zh: "按 Wallpaper Engine 内嵌视频上限 2 GiB 与参考码率估算，{0}×{1} @{2} fps 成品视频最长约 {3} s；循环长度上限由 {4} s 降至 {3} s。",
-            En: "Embedded-video limit of Wallpaper Engine is 2 GiB; at the reference bitrate a {0}×{1} @{2} fps video fits about {3} s, so the loop-length maximum was lowered from {4} s to {3} s.",
-            Legacy: "Wallpaper Engine cannot play an embedded video of 2 GiB or more; at the reference bitrate a {0}×{1} @{2} fps video fits about {3} s, so the loop-length maximum was lowered from {4} s to {3} s."),
-
         // {0}=视频组 {1}=帧数 {2}=秒数 {3}=预估大小（GiB） {4}=按试编码码率最长秒数
         ["bake.embedded_video_size_predicted"] = new(
             Zh: "视频组 {0} 的成品（{1} 帧，{2} s）按短段试编码外推约 {3} GiB，超过 Wallpaper Engine 内嵌视频上限 2 GiB（实测更大的视频只显示清屏色）。按该码率最长约 {4} s。已在渲染前停止，未生成候选项目；请用更小的 --loop-max-seconds、更低的分辨率或帧率重新分析。",

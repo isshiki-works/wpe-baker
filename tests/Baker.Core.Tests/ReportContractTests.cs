@@ -301,11 +301,11 @@ public class RenderResultContractTests
 [Trait("Layer", "L0")]
 public class LoopReportContractTests
 {
-    private static LoopReport Report(IReadOnlyList<LoopCandidate> candidates, LoopNoCandidateReason? reason = null, EmbeddedVideoLoopLimit? limit = null,
+    private static LoopReport Report(IReadOnlyList<LoopCandidate> candidates, LoopNoCandidateReason? reason = null,
         JsonObject? sway = null, JsonObject? particle = null, long cadence = 1) =>
         new(30000, 1001, "locked_clip_rates", CommonLoopPreference.Balanced, 2, false, null, 60, reason, candidates, [], false,
             VideoControlScope.Resolve(new JsonObject { ["objects"] = new JsonArray() }, new JsonObject()),
-            new LoopContentCadence(cadence, [new("video:1", 1, "clip", new CommonLoopRational(30))]), [], sway, particle, limit);
+            new LoopContentCadence(cadence, [new("video:1", 1, "clip", new CommonLoopRational(30))]), [], sway, particle);
 
     [Fact]
     public void WritesV3FieldsInOrderWithNullsWhereTheyWereWritten()
@@ -327,10 +327,8 @@ public class LoopReportContractTests
     [Fact]
     public void OptionalRecordsAreAppendedOnlyWhenPresent()
     {
-        var applied = new EmbeddedVideoLoopLimit(60, 30, 1920, 1080, false, 60, 1, 1e6);
-        JsonObject json = Report([], sway: new JsonObject { ["enabled"] = true }, particle: new JsonObject { ["kind"] = "p" }, limit: applied).ToJson();
-        Assert.Equal("sway_retime,loop_length_default,embedded_video_limit", string.Join(",", json.Select(x => x.Key).TakeLast(3)));
-        Assert.False(Report([], limit: applied with { FitSeconds = 90 }).ToJson().ContainsKey("embedded_video_limit"));
+        JsonObject json = Report([], sway: new JsonObject { ["enabled"] = true }, particle: new JsonObject { ["kind"] = "p" }).ToJson();
+        Assert.Equal("sway_retime,loop_length_default", string.Join(",", json.Select(x => x.Key).TakeLast(2)));
         Assert.Equal("encoded_loop", Report([]).ToJson().Last().Key);
     }
 

@@ -22,7 +22,7 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
     public const string Quality = "quality";
     /// <summary>
     /// 兼容档（实验性，只能手动选，不进自动回退链）：效率档翻倍，预算 10%、循环上限 1200 s。
-    /// 10% 没有扫描数据支持，观感变化未验证；接缝、合成、画质门不放宽，生效上限仍按内嵌视频 2 GiB 收紧。
+    /// 10% 没有扫描数据支持，观感变化未验证；接缝、合成、画质门与内嵌视频 2 GiB 判定不放宽。
     /// </summary>
     public const string Compatibility = "compatibility";
 
@@ -52,10 +52,8 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
     public const double QualityComparisonSeconds = 600;
 
     /// <summary>
-    /// 这一档要不要在两个上限下各求一次：只有质量档，且这一案的<b>生效</b>上限
-    /// （<see cref="LoopMaximumSeconds"/> 再按内嵌视频 2 GiB 收紧后的值）确实比 600 s 长时才值得。
-    /// 原先用的是档位名义上限（质量档 1200 s），而 3840×2160@60 不透明组的生效上限只有 558 s，
-    /// 两次求解的上限都是 558，逐位相同：白跑一次完整求解，还会走 ShorterLoop 分支写出
+    /// 这一档要不要在两个上限下各求一次：只有质量档，且这一案的生效上限确实比 600 s 长时才值得。
+    /// 两次求解的上限相同时逐位相同：白跑一次完整求解，还会走 ShorterLoop 分支写出
     /// source=quality_comparison 的误导记录。生效上限相等时调用方不跑第二次。
     /// </summary>
     public bool ComparesQualityCeilings(double effectiveMaximumSeconds) =>
@@ -82,7 +80,7 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
         _ => throw new InvalidDataException("A preset must be efficiency, balanced, quality, or compatibility.")
     };
 
-    /// <summary>档位的循环长度上限（秒，兜底值）；实际上限还要按内嵌视频 2 GiB 收紧。</summary>
+    /// <summary>档位的循环长度上限（秒，兜底值）。</summary>
     public static double PresetLoopMaximumSeconds(string preset) => preset switch
     {
         Efficiency => 600,

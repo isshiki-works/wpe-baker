@@ -123,8 +123,8 @@ internal static class OptionTable
             "Automatic fallback: quality -> balanced -> efficiency.",
             "Presets change retiming only; interaction is independent. Failed settings may return a verified suggested_change.",
             "efficiency: 5% look budget, loop at most 600 s; balanced: 3%, 600 s; quality: smallest change, 1200 s.",
-            "compatibility (experimental, manual only, never a fallback): 10% look budget, loop at most 1200 s, still capped by the 2 GiB",
-            "embedded-video limit; seam, composition and quality gates unchanged. No scan data supports 10%; the look change is unverified.",
+            "compatibility (experimental, manual only, never a fallback): 10% look budget, loop at most 1200 s; the 2 GiB",
+            "embedded-video check, seam, composition and quality gates are unchanged. No scan data supports 10%; the look change is unverified.",
             "兼容档（实验性，只能手动选）：预算 10%、循环上限 1200 s；10% 没有扫描数据支持，观感变化未验证。",
             "档位给的是允许多大的观感改动，循环长度是求解结果；上限只是兜底。"
         ]),
