@@ -83,7 +83,7 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
             var chosenProject = project.DeepClone().AsObject();
             chosenProject["file"] = source.SceneResource;
             await VideoSceneBuilder.WriteJsonAsync(Path.Combine(chosenSource, "project.json"), chosenProject, cancellationToken);
-            progress?.Report(new("analyzing", null, "Observing the selected scene after omitting the listed fixed audio effects."));
+            progress?.Report(new("analyzing", null, new Message("progress.observing_without_audio_effects")));
             trace = await ProbeAsync(chosenSource, "audio-choice-runtime-probe");
             if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray chosenDependencies ||
                 trace["runtime_layers"] is not JsonArray chosenLayers)

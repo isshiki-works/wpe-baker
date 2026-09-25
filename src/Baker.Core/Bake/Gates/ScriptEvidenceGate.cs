@@ -14,8 +14,7 @@ internal sealed class ScriptEvidenceGate(NativeTools tools) : IBakeGate
         JsonArray? errors = HybridBakeService.PlannedSourceScriptErrors(context.Plan);
         if (errors is null)
         {
-            context.Progress?.Report(new("refreshing_script_fault_evidence", 0,
-                "Refreshing an older plan with current source script fault evidence."));
+            context.Progress?.Report(new("refreshing_script_fault_evidence", 0, new Message("progress.refreshing_script_fault_evidence")));
             JsonObject plan = await new HybridScenePlanner(tools).AnalyzeSingleAsync(context.Settings with {
                 Source = context.Source.SourcePath, OutputDirectory = context.Layout.AnalysisRefresh, RuntimeTraceFile = null
                 }, context.Progress, cancellationToken);

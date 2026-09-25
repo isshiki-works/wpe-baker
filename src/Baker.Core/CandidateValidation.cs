@@ -58,13 +58,13 @@ public sealed class CandidateValidation(NativeTools tools)
             var comparer = new PairedFrameComparer(checked((int)request.Width), checked((int)request.Height), checked((int)request.TileSize));
             await using var frameReport = new StreamWriter(new FileStream(framesPath, FileMode.CreateNew, FileAccess.Write,
                 FileShare.Read, 128 * 1024, true), new UTF8Encoding(false));
-            progress?.Report(new("rendering_pair", 0, "Rendering the source and the candidate with the same sampled inputs; frames are compared as they arrive."));
+            progress?.Report(new("rendering_pair", 0, new Message("progress.rendering_pair")));
             async ValueTask CompareFrameAsync(ulong frame, ReadOnlyMemory<byte> a, ReadOnlyMemory<byte> b, CancellationToken token)
             {
                 PixelErrors frameErrors = comparer.Add(a, b, token);
                 var line = new JsonObject { ["frame"] = frame, ["metrics"] = frameErrors.ToJson() };
                 await frameReport.WriteLineAsync(line.ToJsonString().AsMemory(), token);
-                progress?.Report(new("comparing", (double)(frame + 1) / request.Frames, $"Compared {frame + 1} / {request.Frames} frames."));
+                progress?.Report(new("comparing", (double)(frame + 1) / request.Frames, new Message("progress.comparing", [frame + 1, request.Frames])));
             }
             (JsonObject original, JsonObject candidate) = await RenderLockstepAsync(
                 (sink, token) => runner.RenderRawAsync(RenderSide(request.Source, "source"), sink, token),

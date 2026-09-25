@@ -31,7 +31,7 @@ internal static class ProjectPublisher
         StageTiming timing, IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
     {
         if (destination is null || !StaticOnlyBake.Finished(report["status"]!.GetValue<string>())) return;
-        progress?.Report(new("saving_project", 1, "Saving the validated project to the selected wallpaper folder."));
+        progress?.Report(new("saving_project", 1, new Message("progress.saving_project")));
         using (timing.Measure(StageTiming.ProjectAssembly))
         {
             using var generated = new ProjectSource(project);

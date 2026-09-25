@@ -251,7 +251,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         request = request with { Width = resolution.Width, Height = resolution.Height, ResolutionSource = resolution.Source };
         var graph = new SceneGraph(scene);
         Directory.CreateDirectory(output);
-        progress?.Report(new("analyzing", null, "Observing real script inputs, object accesses and scene hierarchy."));
+        progress?.Report(new("analyzing", null, new Message("progress.observing_scene")));
         RuntimeObservation observation = await RuntimeObservation.ObserveAsync(request, source, sourceHash, scene, project, properties,
             graph, output, new NativeRuntimeObserver(tools), progress, cancellationToken);
         // feat/daytime-split：开关开着才识别状态选择器；识别失败只记原因，判定照旧。同名图层靠观测到的可见性写消歧。
@@ -399,8 +399,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         string retainedText = string.Join(",", retained);
         string analysisOutput = Path.Combine(output, "loop-allocation-analysis");
         evidence["analysis_plan_path"] = Path.Combine(analysisOutput, "plan.json");
-        progress?.Report(new("retaining_nonlooping_layers", null,
-            "Keeping unresolved effects and particles live, then checking one smaller bake allocation."));
+        progress?.Report(new("retaining_nonlooping_layers", null, new Message("progress.retaining_nonlooping_layers")));
         try
         {
             JsonObject replanned = await AnalyzeSingleAsync(request with {

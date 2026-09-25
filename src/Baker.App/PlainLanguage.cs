@@ -31,12 +31,7 @@ internal static class PlainLanguage
     {
         if (plan is null) return "";
         if (NoBenefitExpected(plan)) return L(english, "不支持", "Not supported");
-        if (CannotBakeReason(plan, english) is not null) return L(english, "无法生成", "Cannot generate");
-        if (HasTurnOffCard(plan))
-        {
-            string count = TurnOffCount(plan).ToString(CultureInfo.InvariantCulture);
-            return L(english, $"可以生成（需先禁用 {count} 项）", $"Ready to generate ({count} items to disable first)");
-        }
+        if (CannotBakeReason(plan, english) is not null) return L(english, "不支持", "Not supported");
         string? value = plan[BakeValueAssessment.Field]?["status"]?.GetValue<string>();
         if (value == "potential_gain") return L(english, "可以生成，有潜在收益", "Ready to generate, potential benefit");
         if (value == "low_value") return L(english, "可以生成，预计收益较低", "Ready to generate, low expected benefit");
@@ -51,25 +46,12 @@ internal static class PlainLanguage
     public static string NoBenefitLine(bool english) =>
         L(english, "预计功耗高于原壁纸", "Estimated power use is higher than the original wallpaper.");
 
-    /// <summary>取舍方案里排第一（分析已按"预计能整幅预渲染"排过序）那一套要禁用的项数。</summary>
-    private static int TurnOffCount(JsonObject plan)
-    {
-        var options = AppJsonPresentation.TradeoffOptionViews(plan, false);
-        return options.Length == 0 ? 0 : options[0].Kinds.Length;
-    }
-
     /// <summary>
-    /// 结论第二行：只给一句动作提示，不给数字。
+    /// 结论第二行：生成不了时指向详情，其余显示数字行（见 <see cref="Numbers"/>）。
     /// </summary>
-    public static string NextAction(JsonObject? plan, bool english)
-    {
-        if (plan is null) return "";
-        if (CannotBakeReason(plan, english) is not null)
-            return L(english, "原因见\"详情\"", "See Details for the reason");
-        if (HasTurnOffCard(plan))
-            return L(english, "先在下方禁用列出的项目，然后重新分析", "Disable the items listed below, then analyze again");
-        return L(english, "点击\"生成\"开始", "Use Generate to start");
-    }
+    public static string NextAction(JsonObject? plan, bool english) =>
+        plan is not null && CannotBakeReason(plan, english) is not null
+            ? L(english, "原因见\"详情\"", "See Details for the reason") : Numbers(plan, english);
 
     /// <summary>
     /// 结论的依据一句：路线说明或拒绝原因。只进"详情"面板，不进结论前两行。
@@ -155,7 +137,7 @@ internal static class PlainLanguage
     public static bool HasTurnOffCard(JsonObject? plan) =>
         plan?.ContainsKey("preset_applied") != true && plan?[TradeoffOptions.Field]?["status"]?.GetValue<string>() == "available";
 
-    /// <summary>这次分析烘不了：结论第一行会是"无法生成"。界面用它决定结论第二行放哪句话。</summary>
+    /// <summary>这次分析烘不了：结论第一行会是"不支持"。界面用它决定结论第二行放哪句话。</summary>
     public static bool CannotGenerate(JsonObject? plan) => plan is not null && CannotBakeReason(plan, false) is not null;
 
     /// <summary>plan 里如果写了这次实际按哪个档位出的方案（quality / balanced / efficiency / custom），结论区多出的一行；没有这个字段就不显示。</summary>
