@@ -248,13 +248,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
         node->ID() = obj.id;
         node->SetSize({ obj.size[0], obj.size[1] });
         node->SetReflected(obj.reflected);
-        AssignNodeFieldAnimations(context, *node.as_ptr(), obj.field_bindings);
-        WireFieldScripts(context, node, obj.field_bindings);
-        if (! obj.visible) node->SetVisible(false);
-        if (! obj.visible_user.empty())
-            node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(obj.visible_user));
-
-        ApplyParallaxUniformConfig(context, node, obj.parallax, obj.id);
+        // 先登记图层身份再挂脚本（同图片、容器层）：脚本加载期的报错与依赖才能归到这一层。
         RegisterNodeRef(context,
                         obj.id,
                         SceneParseContext::NodeRef {
@@ -263,6 +257,13 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
                             None(),
                             String::make(rstd::cppstd::as_str(obj.attachment).unwrap()),
                         });
+        AssignNodeFieldAnimations(context, *node.as_ptr(), obj.field_bindings);
+        WireFieldScripts(context, node, obj.field_bindings);
+        if (! obj.visible) node->SetVisible(false);
+        if (! obj.visible_user.empty())
+            node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(obj.visible_user));
+
+        ApplyParallaxUniformConfig(context, node, obj.parallax, obj.id);
         return;
     }
 

@@ -635,20 +635,15 @@ struct JsRuntime::Impl {
     std::unordered_map<std::string, JSValue>  ns_by_sha;
     std::uint64_t                             next_module_serial { 0 };
     std::vector<std::unique_ptr<FieldScript>> scripts;
-    // Non-update failures retain the existing once-per-source logging policy.
-    // Update failures are isolated per binding instead.
-    std::unordered_set<std::string> errored;
     // Scene root for `thisScene`. Wrapped lazily; freed in dtor.
     owe::SceneNode* scene_root { nullptr };
     JSValue         wrapped_scene { JS_UNDEFINED };
 
+    // 官方行为：脚本抛异常只记日志、壁纸照跑。能归到作者图层的错误记进 source_script_errors
+    // （分析把该层留实时），不中止整次渲染；归不到图层的才致命。
     void LogError(JSContext* c, std::string_view sha, const char* what,
-                  FieldScript* isolated_fault = nullptr, const char* phase = "update") {
+                  FieldScript* isolated_fault, const char* phase) {
         const bool isolated = isolated_fault != nullptr && isolated_fault->m_impl != nullptr;
-        if (! isolated) {
-            if (errored.contains(std::string(sha))) return;
-            errored.insert(std::string(sha));
-        }
         JSValue     exc = JS_GetException(c);
         const char* msg = JS_ToCString(c, exc);
         std::string message = msg ? msg : "<no message>";
@@ -1173,7 +1168,7 @@ void InvokeEventCallback(JSContext* ctx, JSValue ns, const char* name, JSValue e
         JSValue r   = JS_Call(ctx, fn, JS_UNDEFINED, 1, &arg);
         JS_FreeValue(ctx, arg);
         if (JS_IsException(r)) {
-            rt->LogError(ctx, sha, name);
+            rt->LogError(ctx, sha, name, rt->host.active_field_script, name);
             JS_FreeValue(ctx, r);
         } else {
             JS_FreeValue(ctx, r);
@@ -1209,7 +1204,10 @@ void SweepDeferred(JSContext* ctx, EngineHostState* host) {
             JSValue ret = JS_Call(ctx, fn, JS_UNDEFINED, 0, nullptr);
             JS_FreeValue(ctx, fn);
             host->active_field_script = previous;
-            if (JS_IsException(ret)) {
+            if (JS_IsException(ret) && owner != nullptr) {
+                owner->m_impl->rt->LogError(ctx, owner->m_impl->sha, "timer callback threw", owner, "timer");
+                host->deferred[i].dead = true;
+            } else if (JS_IsException(ret)) {
                 JSValue     exc = JS_GetException(ctx);
                 const char* msg = JS_ToCString(ctx, exc);
                 rstd_error("script timer callback threw: {}", msg ? msg : "<no message>");
@@ -3951,9 +3949,15 @@ void InstallOfflineGlobals(JSContext* ctx) {
     NativeDate.prototype[name] = () => unsupported('Date.' + name);
   globalThis.Date = OfflineDate;
   globalThis.performance = { now: globalThis.__wwOfflinePerformanceNow, timeOrigin: now() };
+  // 官方 IEngine 成员（docs.wallpaperengine.io scene/scenescript/reference/class/IEngine）缺实现才算不支持；
+  // 官方也没有的键（如 engine.on）按官方读成 undefined，由脚本自己的异常走 source_script_errors。
+  const officialEngine = new Set(['screenResolution','canvasSize','userProperties','timeOfDay','frametime','runtime',
+    'AUDIO_RESOLUTION_16','AUDIO_RESOLUTION_32','AUDIO_RESOLUTION_64','isDesktopDevice','isMobileDevice','isWallpaper',
+    'isScreensaver','isPortrait','isLandscape','isRunningInEditor','openUserShortcut','registerAudioBuffers',
+    'registerAsset','setTimeout','setInterval']);
   globalThis.engine = new Proxy(globalThis.engine, {
     get(target, key, receiver) {
-      if (typeof key === 'string' && !(key in target)) unsupported('engine.' + key);
+      if (officialEngine.has(key) && !(key in target)) unsupported('engine.' + key);
       return Reflect.get(target, key, receiver);
     }
   });
@@ -4103,7 +4107,7 @@ void JsRuntime::SetUserProperty(std::string_view key, const NJson& property) {
             JSValue arg                      = JS_DupValue(ctx, changed);
             JSValue r                        = JS_Call(ctx, fn, JS_UNDEFINED, 1, &arg);
             JS_FreeValue(ctx, arg);
-            if (JS_IsException(r)) m_impl->LogError(ctx, I->sha, "applyUserProperties threw");
+            if (JS_IsException(r)) m_impl->LogError(ctx, I->sha, "applyUserProperties threw", fs, "applyUserProperties");
             JS_FreeValue(ctx, r);
         }
         JS_FreeValue(ctx, fn);
@@ -4294,7 +4298,7 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
             JS_FreeValue(ctx, args[0]);
             JS_FreeValue(ctx, args[1]);
             if (JS_IsException(ret)) {
-                m_impl->LogError(ctx, I->sha, "animationEvent threw");
+                m_impl->LogError(ctx, I->sha, "animationEvent threw", fs, "animationEvent");
                 JS_FreeValue(ctx, ret);
                 continue;
             }
@@ -4330,7 +4334,7 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
             ret = JS_Call(ctx, I->update_fn, JS_UNDEFINED, 0, nullptr);
         }
         if (JS_IsException(ret)) {
-            m_impl->LogError(ctx, I->sha, "update threw", fs);
+            m_impl->LogError(ctx, I->sha, "update threw", fs, "update");
             JS_FreeValue(ctx, ret);
             continue;
         }
