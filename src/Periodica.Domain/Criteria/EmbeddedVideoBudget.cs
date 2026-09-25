@@ -44,19 +44,6 @@ public static class EmbeddedVideoBudget
         return ReferenceLowBytesPerFrame * Math.Pow(encodedPixels / ReferenceLowPixels, ReferencePixelExponent);
     }
 
-    /// <summary>
-    /// 成品相对参考码率（libx264 crf16）的体积倍数，按编码格式取。HW1b 在参考作品 3572877776 上实测（runs/hw1b/codec.log，
-    /// 20 s 片段对 x264）：libx265 crf16 1.338、hevc_nvenc cq22 1.117；h264_nvenc cq22 取全片实测 1.555。
-    /// </summary>
-    public const double H264HardwareBytesRatio = 1.555, HevcHardwareBytesRatio = 1.12, HevcSoftwareBytesRatio = 1.34;
-
-    /// <summary>硬件编码成品相对参考码率的体积倍数：H.264 与 HEVC 分开取。</summary>
-    public static double HardwareBytesRatio(bool hevc) => hevc ? HevcHardwareBytesRatio : H264HardwareBytesRatio;
-
-    /// <summary>按参考码率 × <see cref="HardwareBytesRatio"/> 外推，硬件编码 frames 帧会超过上限。</summary>
-    public static bool HardwareOverBudget(ulong frames, uint width, uint height, bool packedAlpha, bool hevc) =>
-        frames * ReferenceBytesPerFrame(EncodedPixels(width, height, packedAlpha)) * HardwareBytesRatio(hevc) > MaximumBytes;
-
     /// <summary>帧数换成整秒（向下取整）。</summary>
     public static double WholeSeconds(ulong frames, uint fpsNumerator, uint fpsDenominator)
     {
