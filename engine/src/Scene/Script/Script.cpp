@@ -2554,6 +2554,7 @@ JSValue NodeGetText(JSContext* ctx, JSValueConst this_val) {
     return JS_NewStringLen(ctx, text.data(), text.size());
 }
 JSValue NodeSetText(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    TraceDependency(ctx, "write", "text", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
