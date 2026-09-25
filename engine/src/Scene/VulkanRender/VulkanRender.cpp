@@ -1477,8 +1477,10 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     if (!completion.Valid()) return fail(VK_ERROR_INITIALIZATION_FAILED, "track submitted frame resources");
     // Sparse-search frames still draw and reduce coverage. Only the frames
     // that return pixels or the final coverage result need completion here.
+    // 覆盖度窗口的最后一帧必须完成：取样帧模式下它未必是取样帧（coverage_last 为假），
+    // 帧反馈场景又会照常光栅它，延后就只剩"已提交"，SceneBake 按最后一帧必须完成的约定判违约。
     const bool defer_completion = frame.gpu_scene_overlap && !read_pixels && !coverage_last &&
-        (m_gpu_encoder || m_cpu_frame_index < m_sample_coverage_start + m_sample_coverage_frames);
+        (m_gpu_encoder || m_cpu_frame_index + 1 < m_sample_coverage_start + m_sample_coverage_frames);
     if (defer_completion) m_pending_cpu_submission = completion;
     const auto cpu_submitted = m_cpu_timing_requested ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (m_cpu_timing_requested)
