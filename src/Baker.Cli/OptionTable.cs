@@ -142,8 +142,8 @@ internal static class OptionTable
         new("--no-benefit", [Analyze], Choices: [NoBenefit.RejectChoice, NoBenefit.AllowChoice], Parse: text => text == NoBenefit.AllowChoice,
             Default: NoBenefit.RejectChoice, Help:
             [
-                "reject (default) stops plans that are not expected to save power: a still image with live layers left, a single fixed time of day, more than 4 video streams.",
-                "allow generates them anyway; the prediction is not a power measurement."
+                "reject (default) stops plans that are not expected to save power: a still image with live layers left, a single fixed time of day, more than 4 video streams, or too little effect rendering removed per video stream.",
+                "allow generates them anyway; for debugging and power measurement only."
             ]),
         new("--sway-retime", [Analyze], Choices: ["off", "on"], Parse: text => text == "on", Default: D.SwayRetime ? "on" : "off", Custom: true, Help:
         [

@@ -196,10 +196,10 @@ public static class MessageCatalog
 
         // 第 1 批合并新增：视频外壳（feat/video-shell）。中英原文就在 VideoDominance 里，这里直接引用，避免两处漂移。
         ["blocker.video_shell"] = new(Zh: VideoDominance.BlockerZh, En: VideoDominance.Blocker),
-        // {0}=命中的条件（各语言一套）。预计不省电的方案默认拒绝：这是按结构做的预判，不是功耗实测。
+        // {0}=命中的条件（各语言一套）。预计不省电的方案一律拒绝；--no-benefit allow 只给调试、测功耗用。
         ["blocker.no_benefit_expected"] = new(
-            Zh: "预计不省电，建议保持原作：{0}。这是按结构做的预判，不是功耗实测；仍要生成可用 --no-benefit allow 覆盖。",
-            En: "Not expected to save power; keeping the original is recommended: {0}. This is a structural prediction, not a power measurement; use --no-benefit allow to generate anyway."),
+            Zh: "不支持：预计功耗高于原壁纸（{0}）。调试或测功耗时可用 --no-benefit allow 生成。",
+            En: "Not supported: estimated power use is higher than the original wallpaper ({0}). For debugging or power measurement, use --no-benefit allow to generate anyway."),
 
         // fix/residual-layout-gate → feat/particle-crossfade：透明组与多组已允许淡化（packed 域线性混合即预乘空间淡化），
         // 只剩"可掩盖分量所在的图层不在任何视频组里"这一种布局确实淡化不了的情形。
@@ -753,8 +753,8 @@ public static class MessageCatalog
             En: "The full terminal capture did not prove opaque pixels for every encoded source frame."),
         // {0}=停下时已编出的视频流路数 {1}=不需要实测证明的路数上限
         ["bake.no_benefit_streams"] = new(
-            Zh: "预计不省电，建议保持原作：已编出 {0} 路视频，超过 {1} 路（路数更多的成品通常比原作更费电）。这是预判，不是功耗实测；已在此停止，未生成候选项目。仍要生成可用 --no-benefit allow 重新分析并生成。",
-            En: "Not expected to save power; keeping the original is recommended: {0} video streams are already encoded, above {1} (results with more streams usually draw more power than the original). This is a prediction, not a power measurement; stopped here, no candidate project generated. Use --no-benefit allow to analyze and generate anyway."),
+            Zh: "不支持：预计功耗高于原壁纸（已编出 {0} 路视频，超过 {1} 路，路数更多的成品通常比原作更费电）。已在此停止，未生成候选项目。调试或测功耗时可用 --no-benefit allow 重新分析并生成。",
+            En: "Not supported: estimated power use is higher than the original wallpaper ({0} video streams are already encoded, above {1}; results with more streams usually draw more power than the original). Stopped here, no candidate project generated. For debugging or power measurement, use --no-benefit allow to analyze and generate anyway."),
         ["bake.no_visible_output"] = new(
             Zh: "不可生成：所有视频组在生成区间内都没有可见像素，没有可替换成视频的内容。",
             En: "Cannot generate: every video group was empty over the generated interval, so there is no content to replace with video."),
