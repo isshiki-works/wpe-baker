@@ -80,7 +80,7 @@ public sealed partial class NativeRenderRunner
             Path.Combine(logDirectory, "playback-encoders.stderr.log"), cancellationToken));
         if (kind != PlaybackEncoderSelection.Auto) return listed;
         string blank = Path.Combine(logDirectory, "encoder-probe.yuv");
-        await File.WriteAllBytesAsync(blank, new byte[256 * 256 * 3], cancellationToken);
+        await File.WriteAllBytesAsync(blank, new byte[256 * 256 * 3], cancellationToken); // 两帧 nv12
         foreach (string candidate in PlaybackEncoderSelection.AutoOrder)
         {
             string[] names = PlaybackEncoderSelection.RequiredEncoders(candidate);
@@ -89,7 +89,8 @@ public sealed partial class NativeRenderRunner
             foreach (string name in names)
                 try
                 {
-                    _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-f", "rawvideo", "-pix_fmt", "yuv420p",
+                    // 喂 nv12（与 PlaybackEncodeProfile 的硬件档一致）：Intel 的硬件 MFT 只收 NV12，喂 yuv420p 会打不开，mf 被误剔。
+                    _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-f", "rawvideo", "-pix_fmt", "nv12",
                         "-s", "256x256", "-i", blank, "-c:v", name, .. (candidate == PlaybackEncoderSelection.Mf ? new[] { "-hw_encoding", "true" } : []),
                         "-f", "null", "-"], Path.Combine(logDirectory, $"encoder-probe-{name}.stderr.log"), cancellationToken);
                 }
