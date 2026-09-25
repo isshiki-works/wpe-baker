@@ -114,6 +114,11 @@ internal static class HybridSuitability
                 "This scene needs a capture path the tool does not have yet (HDR intermediate compositing and/or perspective projection); that is a gap in the tool, not a verdict on the wallpaper.",
                 "这张壁纸需要工具目前还没有的采集能力（HDR 中间合成与/或透视投影）：这是工具的能力缺口，不是壁纸本身不行。", notes);
 
+        // 预计不省电一律拒绝（NoBenefit），不是待你决定的事项；理由用界面定稿的那一句。
+        if (blockers.Contains(BlockerCode.NoBenefitExpected))
+            return Build("not_suitable", NoBenefit.RejectionReason,
+                "Estimated power use is higher than the original wallpaper.", "预计功耗高于原壁纸", notes);
+
         if (blockers.Length > 0)
             return Build("requires_user_choice", "blockers_need_a_decision",
                 $"Analysis left {blockers.Length} blocker(s) for you to resolve before baking; none of them says this wallpaper cannot be baked.",

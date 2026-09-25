@@ -928,8 +928,8 @@ public static class MessageCatalog
             En: "Currently unsuitable for baking: {0}"),
 
         ["summary.blocked"] = new(
-            Zh: "不可生成：{0}（阻断原因共 {1} 条，详见 plan.json 的 blockers_localized）",
-            En: "Cannot generate: {0} ({1} blocker(s) in total; see blockers_localized in plan.json.)",
+            Zh: "{0}（阻断原因共 {1} 条，详见 plan.json 的 blockers_localized）",
+            En: "{0} ({1} blocker(s) in total; see blockers_localized in plan.json.)",
             Legacy: "Not bakeable: {0} ({1} blocker(s) in total; see blockers_localized in plan.json.)"),
 
         ["summary.unknown_with_reason"] = new(
