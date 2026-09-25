@@ -81,6 +81,14 @@ internal static class EmbeddedVideoBudgetChecks
         JsonObject encoded = EmbeddedVideoBudgetJson.EncodedRejection("group-1", 2_922_466_521, 150_000, 60, 1).Localized();
         check(encoded["key"]!.GetValue<string>() == "bake.embedded_video_size_rejected",
             "encoded size check: Amiya's real 2.72 GiB video is rejected with the longest loop its actual bitrate allows");
+        // 被拒报告里读出"最长能做多少秒"：超限自动重烘（HybridBakeService.BakeAsync）拿它当循环上限
+        double? predictedCap = EmbeddedVideoBudgetJson.MaximumSeconds(new JsonObject {
+            ["status"] = EmbeddedVideoBudget.RejectedBakeStatus, ["reason_localized"] = mixed["reason_localized"]!.DeepClone() });
+        double? encodedCap = EmbeddedVideoBudgetJson.MaximumSeconds(new JsonObject {
+            ["status"] = EmbeddedVideoBudget.RejectedBakeStatus, ["reason_localized"] = encoded.DeepClone() });
+        check(predictedCap == mixed["groups"]![1]!["maximum_seconds"]!.GetValue<double>() && encodedCap == 1837 &&
+            EmbeddedVideoBudgetJson.MaximumSeconds(new JsonObject { ["status"] = "candidate_generated", ["reason_localized"] = encoded.DeepClone() }) is null,
+            "over-limit retry: the longest loop the rejected bitrate allows is read from either rejection message, and only for this rejection status");
         check(EmbeddedVideoBudget.RejectedBakeStatus == "candidate_rejected_embedded_video_size",
             "embedded video budget: pre-render and post-encode rejections share one bake status the app recognizes");
     }
