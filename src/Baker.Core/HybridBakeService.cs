@@ -820,7 +820,8 @@ public sealed class HybridBakeService(NativeTools tools)
                     PlanTransforms.ApplyTextEffectChoice(scene, plan);
                     ProjectWriter.ApplyVisibilityFallbacks(scene, snapshot);
                     // 所有组整段都渲空：不是混合候选，照常写 bake.json 给出拒因，不按内部错误抛出。
-                    if (replacements.Count == 0)
+                    // 合成探针只渲开头几十帧，组在这段里空（例如图层稍后才入画）不说明整段空：照常写出只含实时层的探针工程去比较。
+                    if (replacements.Count == 0 && !probe)
                     {
                         report["status"] = "candidate_rejected_no_visible_output";
                         report["loop_validation"] = "not_performed";
