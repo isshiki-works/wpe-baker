@@ -833,6 +833,47 @@ std::string OfflineSession::Impl::describeProjection() const {
     return out.str();
 }
 
+// 着色器时间签名（SPIR-V 上的抽象解释，见 ShaderTime.cppm），随 runtime_layers 的每个材质带给 C#。
+// uniform 取材质常量、再取着色器默认值；带值动画的按外部输入；采样器寻址按绑定纹理（或渲染目标）的 wrap。
+static std::string DescribeShaderTime(const Scene& scene, const SceneMaterial& material) {
+    const auto& shader = material.customShader.shader;
+    if (! shader || shader->codes.empty()) return "null";
+    shader_time::Inputs inputs;
+    inputs.uniform = [&](std::string_view name) {
+        shader_time::UniformValue out;
+        const std::string         key(name);
+        if (material.customShader.valueAnimations.get(rstd::cppstd::as_str(key).unwrap()).is_some()) {
+            out.kind = shader_time::UniformValue::Kind::External;
+            return out;
+        }
+        const ShaderValue* value = nullptr;
+        if (auto it = material.customShader.constValues.find(key); it != material.customShader.constValues.end())
+            value = &it->second;
+        else if (auto def = shader->default_uniforms.find(key); def != shader->default_uniforms.end())
+            value = &def->second;
+        if (value != nullptr) {
+            out.kind = shader_time::UniformValue::Kind::Constant;
+            out.values.assign(value->data(), value->data() + value->size().to_primitive());
+        }
+        return out;
+    };
+    inputs.wrap = [&](std::string_view sampler) -> std::array<shader_time::Wrap, 2> {
+        auto wrap = [](TextureWrap w) {
+            return w == TextureWrap::REPEAT ? shader_time::Wrap::Repeat : shader_time::Wrap::Clamp;
+        };
+        for (const auto& binding : shader->sampler_bindings) {
+            if (binding.shader_member != sampler || binding.texture_slot >= material.textures.size()) continue;
+            const auto key = rstd::cppstd::as_str(material.textures[binding.texture_slot]).unwrap();
+            if (auto tex = scene.Texture(key); tex.is_some())
+                return { wrap((**tex).sample.wrapS), wrap((**tex).sample.wrapT) };
+            if (auto rt = scene.RenderTarget(key); rt.is_some())
+                return { wrap((**rt).sample.wrapS), wrap((**rt).sample.wrapT) };
+        }
+        return { shader_time::Wrap::Unknown, shader_time::Wrap::Unknown };
+    };
+    return shader_time::ToJson(shader_time::Analyze(shader->codes, inputs));
+}
+
 std::string OfflineSession::Impl::describeScene() const {
     if (!m_scene) return "[]";
     std::ostringstream out;
@@ -920,7 +961,7 @@ std::string OfflineSession::Impl::describeScene() const {
                     first_texture = false;
                     out << Dump(NJson(texture));
                 }
-                out << "]}";
+                out << "],\"time_signature\":" << DescribeShaderTime(*m_scene, *material) << '}';
             }
             };
             append_materials(node, "source");

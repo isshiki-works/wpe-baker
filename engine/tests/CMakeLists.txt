@@ -78,7 +78,8 @@ target_compile_options(script-runtime-tests PRIVATE -Wextra -Wno-missing-field-i
 add_executable(shader-parse-tests EXCLUDE_FROM_ALL)
 target_sources(shader-parse-tests PRIVATE
   tests/shader-parse/shader_parse_tests.cpp
-  tests/shader-parse/m2_mask_identity_tests.cpp)
+  tests/shader-parse/m2_mask_identity_tests.cpp
+  tests/shader-parse/shader_time_tests.cpp)
 target_link_libraries(shader-parse-tests PRIVATE owe-test-support owe-core owe-audio owe-scene owe-vulkan rstd.std rstd.cppstd rstd.log gtest_main vvk::vvk spirv-reflect)
 target_compile_options(shader-parse-tests PRIVATE -Wextra -Wno-missing-field-initializers -Wno-gnu-zero-variadic-macro-arguments)
 
