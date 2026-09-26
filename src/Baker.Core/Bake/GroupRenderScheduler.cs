@@ -141,6 +141,10 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         lock (renders) return renders.ContainsKey(index) || !(Directory.Exists(masterPath) || File.Exists(masterPath));
     }
 
+    /// <summary>分析阶段的慢分量闭合预检（<see cref="SlowClosureProbe"/>）：同一个主渲染请求走 CPU 路线，只编第 0 帧，第 0、P 帧原帧留给闭合检验。</summary>
+    internal RenderRequest ClosureProbeRequest(int index, string outputDirectory) =>
+        MasterRequest(index, allowGpu: false) with { OutputDirectory = outputDirectory, EncodedFrames = 1, TraceScene = false };
+
     /// <summary>取这个组的主渲染（没启动就现在启动），并把在飞的主渲染补到 groupParallel 个。</summary>
     internal Task<JsonObject> RenderAsync(int index)
     {
