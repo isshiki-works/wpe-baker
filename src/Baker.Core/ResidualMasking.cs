@@ -466,7 +466,7 @@ public static class ResidualMasking
         // 声明了幅度上界的位移机制单独分类（记下估算的峰值偏移），但一律不可掩盖。
         string mechanism = Text(item["mechanism"]);
         if (kind == "NonPeriodicOrDriftingMechanism" && Flag(item["bounded_displacement"]))
-            return BoundedDisplacementVerdict(verdict, item, mechanism, objects, outputWidth);
+            return Converge(BoundedDisplacementVerdict(verdict, item, mechanism, objects, outputWidth), mechanism);
 
         if (kind == "runtime_animation" && owner is int spriteOwner)
         {
@@ -506,6 +506,21 @@ public static class ResidualMasking
             ? MessageCatalog.Get("residual.proven_nonperiodic_unbounded", MessageCatalog.Chinese, layerPrefix, kind, ceiling, detail)
             : MessageCatalog.Get("residual.unrecognized_unbounded", MessageCatalog.Chinese, layerPrefix, kind, detail);
         if (mechanism == ShaderPeriodAnalysis.LightShaftDriftMechanism) AddLinearDriftGuidance(verdict, item, objects, loopCeiling);
+        return provenNonPeriodic ? Converge(verdict, mechanism) : verdict;
+    }
+
+    /// <summary>界面待定的占位理由键：分量在循环上限内不会重复（调速也够不着）。</summary>
+    public const string NeverRepeatsReasonKey = "reason.loop_never_repeats_within_limit";
+
+    /// <summary>
+    /// 带具名机制的 NonPeriodicOrDriftingMechanism 附有方程证明（上限内没有周期，允许的调速也够不着），结论是"不能"，不是"证不出"。
+    /// 没有具名机制的同类项（如"NOISE 开着或未证明"）不算证明，不收敛。
+    /// </summary>
+    private static JsonObject Converge(JsonObject verdict, string mechanism)
+    {
+        if (mechanism.Length == 0) return verdict;
+        verdict["loop_convergence"] = "cannot";
+        verdict["reason_key"] = NeverRepeatsReasonKey;
         return verdict;
     }
 
