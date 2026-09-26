@@ -25,7 +25,7 @@ internal sealed record LoopReport(uint FpsNum, uint FpsDen, string RetimeMode, C
             ["loop_preference"] = LoopPreference.ToString().ToLowerInvariant(), ["retime_budget_percent"] = RetimeBudgetPercent,
             ["budget_relaxed"] = BudgetRelaxed, ["fixed_frame_step"] = FixedFrameStep, ["maximum_seconds"] = MaximumSeconds,
             ["no_candidate_reason"] = NoCandidateReason?.ToJson(),
-            ["candidates"] = new JsonArray(Candidates.Select(x => (JsonNode)x.ToJson()).ToArray()),
+            ["candidates"] = new JsonArray(Candidates.Select(x => (JsonNode)x.ToJson(RetimeBudgetPercent)).ToArray()),
             ["unresolved"] = new JsonArray(Unresolved.Select(x => (JsonNode)x.ToJson()).ToArray()), ["source_static"] = SourceStatic,
             ["video_control_scope"] = VideoControlScope.ToJson(), ["content_cadence"] = ContentCadence.ToJson(),
             ["evidence"] = new JsonArray(Evidence.Select(x => (JsonNode)new JsonObject { ["component"] = x.Component.Id, ["detail"] = x.Evidence }).ToArray()),
@@ -116,7 +116,9 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
     /// <summary>不进求解器的着色器慢分量；slow_components 按本候选的 P 写漂移上界 2π·P/T（T 取原周期）。</summary>
     public IReadOnlyList<ShaderSlowComponent> SlowComponents { get; init; } = [];
 
-    public JsonObject ToJson()
+    /// <param name="budgetPercent">逐项调速预算；有分量超过它（摆动慢项按速度偏差放行）时写 max_change_visible_percent：
+    /// 原周期 &lt; 60 s 的可见项里最大的 |δ|，与 1.0.2 同一口径。</param>
+    public JsonObject ToJson(double budgetPercent = double.PositiveInfinity)
     {
         var json = new JsonObject {
             ["frames"] = Frames, ["seconds"] = Seconds, ["total_retime_cost_percent"] = TotalRetimeCostPercent,
@@ -125,6 +127,9 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
                 ["speed_multiplier"] = x.SpeedMultiplier, ["delta_percent"] = x.DeltaPercent }).ToArray()),
             ["patches"] = new JsonArray(Patches.Select(x => (JsonNode)x.ToJson()).ToArray())
         };
+        if (Components.Any(x => Math.Abs(x.DeltaPercent) > budgetPercent + 1e-9))
+            json["max_change_visible_percent"] = Components.Where(x => x.OldPeriodSeconds < SwayRecurrenceSolver.VisiblePeriodSeconds)
+                .Select(x => Math.Abs(x.DeltaPercent)).DefaultIfEmpty(0).Max();
         if (GroupFrames is { Count: > 0 })
             json["group_frames"] = new JsonObject(GroupFrames.Select(pair => KeyValuePair.Create(pair.Key, (JsonNode?)pair.Value)));
         if (SpriteSeam is { WarmupFrames: ulong warmup and > 0 } sprite)

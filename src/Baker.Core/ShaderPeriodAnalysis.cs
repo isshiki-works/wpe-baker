@@ -75,6 +75,16 @@ public static class ShaderPeriodAnalysis
         var animatedOwners = (runtime["runtime_animation_periods"] as JsonArray ?? []).OfType<JsonObject>()
             .Select(trace => SceneGraph.Int(trace["source_owner_layer_id"])).OfType<int>().ToHashSet();
         double stretch = 1 + maximumRetimePercent / 100;
+        var objects = new Dictionary<int, JsonObject>();
+        foreach (JsonObject o in (scene["objects"] as JsonArray ?? []).OfType<JsonObject>())
+            if (SceneGraph.Int(o["id"]) is int oid) objects.TryAdd(oid, o);
+        double? canvasShortEdge;
+        try
+        {
+            var canvas = HybridVideoProjection.AuthoredCanvas(scene, new JsonObject());
+            canvasShortEdge = canvas.Width is double cw && canvas.Height is double ch && cw > 0 && ch > 0 ? Math.Min(cw, ch) : null;
+        }
+        catch (Exception error) when (error is InvalidDataException or InvalidOperationException or FormatException) { canvasShortEdge = null; }
         static IEnumerable<JsonObject> Knobs(JsonObject term) => (term["knobs"] as JsonArray ?? []).OfType<JsonObject>();
         foreach (JsonObject layer in (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>())
         {
@@ -138,9 +148,18 @@ public static class ShaderPeriodAnalysis
                 var loose = new List<(CommonLoopComponent Term, string? Missing)>();
                 // 缺旋钮、π 次数已知的项：挂 pass 时间倍率，带它可用的分量旋钮键（null = 没有）
                 var timed = new List<(int Loose, int Pi, BigInteger Num, BigInteger Den, double Seconds, string? Axis)>();
-                ShaderPeriodComponent Through(string key, double seconds, bool inverse) => new(new CommonLoopComponent($"{id}/{key}",
-                    new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true), owner, effect, pass, key, inverse,
-                    $"SPIR-V time signature of {resource}: period {seconds.ToString("R", CultureInfo.InvariantCulture)} s through {key}");
+                // 1.0.2 摆动改频的口径：原周期 ≥ 60 s 的慢项看峰值速度偏差 a·(2π/T)·|δ|，≤ 0.1 px/s 就允许超过逐项预算（不比预算更紧）；
+                // 振幅 a 只有官方 foliagesway 能从材质常量算出（时间签名只给周期），其余着色器照旧按逐项预算
+                (double Amplitude, double Percent)? Cap(JsonObject term, double seconds) =>
+                    shader == "effects/foliagesway" && effect >= 0 && seconds >= SwayRecurrenceSolver.VisiblePeriodSeconds &&
+                    canvasShortEdge is double edge && objects.GetValueOrDefault(owner) is JsonObject obj &&
+                    Knobs(term).Select(k => SwayAmplitude(obj, objects, edge, effect, pass, k)).FirstOrDefault(x => x > 0) is double a
+                        ? (a, Math.Max(maximumRetimePercent, 100 * SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond * seconds / (2 * Math.PI * a)))
+                        : null;
+                ShaderPeriodComponent Through(string key, double seconds, bool inverse, (double Amplitude, double Percent)? cap = null) =>
+                    new(new CommonLoopComponent($"{id}/{key}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true, cap?.Percent),
+                    owner, effect, pass, key, inverse, $"SPIR-V time signature of {resource}: period {seconds.ToString("R", CultureInfo.InvariantCulture)} s through {key}" +
+                    (cap is var (amplitude, percent) ? $"; sway amplitude {amplitude:0.###} px at 1080p, slow-term speed limit allows {percent:0.##}%" : ""));
                 foreach (var (term, index) in terms.Select((term, index) => (term, index)))
                 {
                     double seconds = term["seconds"]!.GetValue<double>();
@@ -149,11 +168,12 @@ public static class ShaderPeriodAnalysis
                     // 记 seconds/stretch（有效周期的下界），漂移 2π·P/T 才是上界
                     if (seconds / stretch > ceilingSeconds) { slow.Add(new($"{id}/slow{slow.Count}", owner, effect, pass, seconds / stretch)); continue; }
                     if (num <= 0 || den <= 0) { unknown.Add(seconds); continue; }
-                    var relaxed = new CommonLoopComponent($"{id}/term{index}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true);
+                    var cap = Cap(term, seconds);
+                    var relaxed = new CommonLoopComponent($"{id}/term{index}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true, cap?.Percent);
                     // 旋钮只能挂在作者效果 pass 上（场景里有这个 pass 的 constantshadervalues）
                     if (effect >= 0 && Knobs(term).FirstOrDefault(Usable) is JsonObject knob)
                     {
-                        knobbed.Add(Through(ShaderTextPatch.KnobKey(knob), seconds, knob["inverse"]?.GetValue<bool>() == true));
+                        knobbed.Add(Through(ShaderTextPatch.KnobKey(knob), seconds, knob["inverse"]?.GetValue<bool>() == true, cap));
                         loose.Add((relaxed, null));
                         continue;
                     }
@@ -217,6 +237,53 @@ public static class ShaderPeriodAnalysis
             }
         }
         return new(components, unresolved, ruled, slowComponents, looseTerms, settle);
+    }
+
+    // stock foliagesway 的 8 个频率字面量：前 4 项进 x（sines），后 4 项进 y（csines）
+    private static readonly float[] SwaySines = [1f, -0.16161616f, 0.0083333f, -0.00019841f];
+    private static readonly float[] SwayCoSines = [-0.5f, 0.041666666f, -0.0013888889f, 0.000024801587f];
+
+    /// <summary>
+    /// foliagesway 一项在输出画面上的振幅（1080p 短边口径像素，与 0.1 px/s 门限同一口径）；旋钮不是 stock 频率字面量、读不到图层尺寸时为 null。
+    /// UV 模式（frag）：amp = strength²·0.005，aspect = 宽/高·ratio，(z, w) = rotateVec2((1/aspect, aspect), scrolldirection)，
+    /// A_x = |z|·amp·宽·scaleX；顶点模式（vert）：A_x = |strength·100·directionweights.x|·scaleX（角权重、遮罩按最坏值 1）；y 同理。
+    /// </summary>
+    private static double? SwayAmplitude(JsonObject obj, IReadOnlyDictionary<int, JsonObject> objects, double canvasShortEdge, int effect, int pass, JsonObject knob)
+    {
+        if (knob["literal"] is not JsonValue literal || !literal.TryGetValue(out double value)) return null;
+        int axis = Array.IndexOf(SwaySines, (float)value) >= 0 ? 0 : Array.IndexOf(SwayCoSines, (float)value) >= 0 ? 1 : -1;
+        if (axis < 0) return null;
+        static JsonObject? At(JsonNode? array, int index) => array is JsonArray items && index < items.Count ? items[index] as JsonObject : null;
+        var constants = At(At(obj["effects"], effect)?["passes"], pass)?["constantshadervalues"] as JsonObject;
+        double Constant(string key, double fallback) =>
+            (constants?[key] is JsonObject binding ? binding["value"] : constants?[key]) is JsonValue v && v.TryGetValue(out double d) && double.IsFinite(d) ? d : fallback;
+        try
+        {
+            double scaleX = 1, scaleY = 1;
+            var seen = new HashSet<int>();
+            for (JsonObject? current = obj; current is not null && seen.Add(SceneGraph.Int(current["id"]) ?? -1);
+                current = SceneGraph.Int(current["parent"]) is int parent ? objects.GetValueOrDefault(parent) : null)
+            {
+                var scale = HybridVideoProjection.Vector(current["scale"], (1, 1));
+                (scaleX, scaleY) = (scaleX * scale.X, scaleY * scale.Y);
+            }
+            double strength = Constant("strength", 0.4), amplitude;
+            if (knob["stage"]?.GetValue<string>() == "vert")
+            {
+                var weights = HybridVideoProjection.Vector(constants?["directionweights"], (1, 0.2));
+                amplitude = Math.Abs(strength * 100 * (axis == 0 ? weights.X * scaleX : weights.Y * scaleY));
+            }
+            else
+            {
+                var size = HybridVideoProjection.Vector(obj["size"], (0, 0));
+                double aspect = size.X / size.Y * Constant("ratio", 0.3), direction = Constant("scrolldirection", 0);
+                if (!(size.X > 0 && size.Y > 0) || !double.IsFinite(aspect) || aspect == 0) return null;
+                double rotated = axis == 0 ? Math.Cos(direction) / aspect - aspect * Math.Sin(direction) : Math.Sin(direction) / aspect + aspect * Math.Cos(direction);
+                amplitude = Math.Abs(rotated * strength * strength * 0.005 * (axis == 0 ? size.X * scaleX : size.Y * scaleY));
+            }
+            return amplitude * SwayRecurrenceSolver.ReferenceShortEdgePixels / canvasShortEdge;
+        }
+        catch (Exception error) when (error is InvalidDataException or InvalidOperationException or FormatException) { return null; }
     }
 
     /// <summary>原因串的码：到第一个空格、冒号或 @ 为止。</summary>

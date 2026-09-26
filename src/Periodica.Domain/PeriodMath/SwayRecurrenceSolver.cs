@@ -1,8 +1,14 @@
 namespace Periodica.Domain;
 
-/// <summary>输出画布短边换算（摆动改频求解器删除后只剩这一项；瓦片边长、接缝门与磁盘预算按它随输出短边缩放）。</summary>
+/// <summary>输出画布短边换算（瓦片边长、接缝门与磁盘预算按它随输出短边缩放），以及摆动慢项的观感口径（1.0.2 规则 v2）。</summary>
 public static class SwayRecurrenceSolver
 {
+    /// <summary>看得见的摇摆项与慢项的分界（秒）：原周期短于它的项受逐项调速预算约束，max_change_visible_percent 只统计这些项。</summary>
+    public const double VisiblePeriodSeconds = 60;
+
+    /// <summary>慢项允许的峰值速度偏差（1080p 短边口径像素/秒）：约 10 秒 1 像素，远低于慢漂移的可察觉量级。</summary>
+    public const double MaximumSlowSpeedDeviationPixelsPerSecond = 0.1;
+
     /// <summary>
     /// 换算基准的输出短边（像素）。同样的运动在 8K 下是 1080p 的 4 倍像素，而看不看得出取决于它占画面的比例，
     /// 所以按输出短边等比放大：倍率 = 短边 / 1080。
