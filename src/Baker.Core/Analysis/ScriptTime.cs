@@ -1100,7 +1100,6 @@ internal static class ScriptTime
 
         private V Fork(N cond, Func<V> a, Func<V> b, Scope s)
         {
-            if (collect) { a(); return b(); }
             Snap snap = Save(s);
             V va = a(); Snap sa = Save(s);
             Restore(snap);
@@ -1156,7 +1155,17 @@ internal static class ScriptTime
         private Flow If(N cond, X a, X? b, Scope s)
         {
             if (Branch(cond) is bool known) return known ? Exec(a, s) : b is null ? Flow.Normal : Exec(b, s);
-            if (collect) { Exec(a, s); if (b is not null) Exec(b, s); return Flow.Normal; }
+            if (collect)
+            {
+                // 收集图层名：两边都跑（两边的 getLayer 都记下），之后的状态按两边合并；
+                // 顺序跑会让后一边的赋值盖掉另一边，得出确切但错的名字（if (r > 21) r = 6 之后只剩下标 6）
+                Snap before = Save(s);
+                Exec(a, s); Snap thenState = Save(s);
+                Restore(before);
+                if (b is not null) Exec(b, s);
+                Restore(Merge(thenState, Save(s), cond));
+                return Flow.Normal;
+            }
             Snap snap = Save(s);
             Flow fa = Exec(a, s); V ra = ret; Snap sa = Save(s);
             Restore(snap);
@@ -1188,9 +1197,16 @@ internal static class ScriptTime
                     if (Branch(eq) is bool known) { if (known) start = i; }
                     else if (collect)
                     {
+                        // 同 If：每个 case 都从进 switch 时的状态跑，结果与"一个都没进"合并
+                        Snap before = Save(s), merged = before;
                         foreach (X c in cases)
+                        {
+                            Restore(before);
                             foreach (X st in c.K.Skip(1).OfType<X>())
                                 if (Exec(st, new Scope(s)) != Flow.Normal) break;
+                            merged = Merge(merged, Save(s), eq);
+                        }
+                        Restore(merged);
                         return Flow.Normal;
                     }
                     else throw new Bail("switch_on_time");
@@ -1221,7 +1237,8 @@ internal static class ScriptTime
                 {
                     N c = Truth(Ev(cond, scope));
                     bool? go = Decide(c);
-                    if (go is null && collect) go = n == 0;
+                    // 收集图层名时次数定不下的循环：只跑一遍会漏掉后面各轮取的名字，退回旧规则
+                    if (go is null && collect) { Unresolved = true; return Flow.Normal; }
                     if (go is null) throw new Bail("loop_on_time");
                     if (!go.Value) return Flow.Normal;
                 }
@@ -1464,6 +1481,8 @@ internal static class ScriptTime
                                     return;
                                 }
                         }
+                        // 写进说不清的对象（thisLayer.getAnimation().rate 之类）：原因取那个对象的来源，不是运行时错误
+                        if (obj is N { K: 'o', Why: string why }) throw new Bail(why, detail: "property write on " + Key(obj));
                         throw new Bail("script_runtime_error", detail: "property write on " + Key(obj));
                     }
             }
