@@ -80,13 +80,27 @@ internal sealed class Allocation
             runtimeLayers.OfType<JsonObject>().Any(layer => Int(layer["owner"]) == id && layer["has_mesh"]?.GetValue<bool>() == false) &&
             !runtimeLayers.OfType<JsonObject>().Any(layer => Int(layer["owner"]) == id && layer["has_mesh"]?.GetValue<bool>() != false) &&
             !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write");
+        // 绘制的父层不因实时子层被连带：成品里实时子层挂在去掉绘制键的父层下（SceneAssembler.Emit），变换、可见性与透明度
+        // 按原作同一份数据逐帧传给子层；父层先画进视频，读帧缓冲的子层读到的仍是它下面已合成好的画面。
+        // 条件是父层这份传给子层的状态是常量（无脚本、变换类属性无动画、没有运行时写入、轴对齐）：之后的非实时子层视频按固定父变换挂回去。
+        // 子层挂父层骨骼（attachment）时成品里没有木偶骨骼，仍连带。从第一个含实时层的子树起拆开，前面的子层留在父层单元里保持绘制顺序。
+        bool FixedDrawingParent(int id) => !live.Contains(id) && scripts[id].Length == 0 && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
+            !structuralFields.Any(key => objects[id][key] is JsonObject binding && SceneGraph.Animated(binding)) &&
+            HybridVideoProjection.SupportsStaticParent(objects[id], properties) &&
+            (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
+                HybridVideoProjection.Vector(Resolve(objects[id]["parallaxDepth"], properties), (0, 0)) == (0d, 0d)) &&
+            !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write") &&
+            !sourceOrder.Any(child => Int(objects[child]["parent"]) == id && objects[child].ContainsKey("attachment"));
         var allocationOf = allocation.UnitOf;
         void Assign(int id, int unit)
         {
             allocationOf[id] = unit;
-            bool split = id == unit && StaticStructure(id);
+            bool split = id == unit && StaticStructure(id), splitDrawing = id == unit && !split && FixedDrawingParent(id);
             foreach (int child in sourceOrder.Where(child => Int(objects[child]["parent"]) == id))
+            {
+                split |= splitDrawing && sourceOrder.Any(layer => live.Contains(layer) && graph.Within(layer, child));
                 Assign(child, split ? child : unit);
+            }
         }
         foreach (int root in authorRoots) Assign(root, root);
         // Depth-first source sibling order is the author's draw order, even when declarations interleave.
