@@ -188,6 +188,32 @@ TEST_F(ShaderTime, IntegerModFrameIndexPeriod) {
     }
 }
 
+// 时间加偏移再取整、再取模：偏移不改周期，棋盘格 mod(floor(uv.x − t) + floor(uv.y), 2) 周期 2 s；
+// mod(0.03·t, 5) 展开成 a − b·floor(a/b) 时系数在双精度下剩 1 ulp，不是漂移，周期 5/0.03 s
+TEST_F(ShaderTime, OffsetFloorThenModPeriod) {
+    const std::string vert = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\n"
+                             "void main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }\n";
+    const std::pair<const char*, double> cases[] = { { "mod(floor(v_TexCoord.x - g_Time) + floor(v_TexCoord.y), 2.0)", 2 },
+                                                      { "mod(floor(g_Time + 0.25), 3.0)", 3 },
+                                                      { "mod(floor(0.75 - g_Time), 3.0)", 3 },
+                                                      { "mod(0.03 * g_Time, 5.0)", 5 / double(0.03f) } };
+    for (const auto& [expr, period] : cases) {
+        Case c { "", "offset_floor_mod", {}, {} };
+        c.vert = vert;
+        c.frag = std::string("varying vec2 v_TexCoord;\nuniform float g_Time;\nvoid main() { gl_FragColor = vec4(") + expr + ", 0.0, 0.0, 1.0); }\n";
+        ExpectPeriod(Analyze(c), period);
+    }
+}
+
+// 循环次数只随 mod(0.03·t, 1) 变化：输出是周期量的确定函数，周期 1/0.03 s（不是"循环次数随时间变"的不周期）
+TEST_F(ShaderTime, LoopCountPeriodic) {
+    Case c { "", "loop_count_periodic", {}, {} };
+    c.vert = "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }\n";
+    c.frag = "uniform float g_Time;\nvoid main() {\n  float n = mod(0.03 * g_Time, 1.0) * 8.0;\n  float acc = 0.0;\n"
+             "  for (float i = 0.0; i < n; i += 1.0) acc += 0.1;\n  gl_FragColor = vec4(acc, 0.0, 0.0, 1.0);\n}\n";
+    ExpectPeriod(Analyze(c), 1 / double(0.03f));
+}
+
 // foliagesway（MODE 1）的写法：每个系数一项；后三项各带自己的字面量旋钮和 g_Speed 旋钮，供 C# 改写调速
 TEST_F(ShaderTime, SwayTermsCarryKnobs) {
     Case c { "", "sway_terms", {}, { { "g_Speed", { 1.0f } }, { "g_Phase", { 0.0f } } } };

@@ -161,6 +161,8 @@ void AddUnique(std::vector<Rate>& v, const Rate& x) {
 Rate Sum(const Rate& x, const Rate& y, double sign) {
     if (x.v == 0) return Rate { sign * y.v, y.pi, y.knobs };
     if (y.v == 0) return x;
+    // 抵消：mod 展开的 a − b·floor(a/b) 里系数 r − b·(r/b) 在双精度下常剩 1 ulp，那不是漂移
+    if (Near(x.v, -sign * y.v)) return Rate {};
     return Rate { x.v + sign * y.v, x.pi == y.pi ? x.pi : kNoPi, Common(x.knobs, y.knobs) };
 }
 
@@ -1354,7 +1356,9 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
         Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& b) {
                 if (a.known && b.known)
                     if (auto v = FoldCompare(op, a.value, b.value)) return Known(*v);
-                return Tagged({ &a, &b }, "compare_with_linear_time" + W(R));
+                // 系数不定（可能为 0）的线性量参与比较不是证明，只报没推下去
+                const bool drifts = (a.Linear() && ! a.rate_unknown) || (b.Linear() && ! b.rate_unknown);
+                return Tagged({ &a, &b }, (drifts ? "compare_with_linear_time" : "time_rate_not_constant") + W(R));
             }));
         break;
     case 166:
@@ -1666,11 +1670,9 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
         if (! c.aperiodic.empty())
             AddUnique(sig.reasons, c.aperiodic);
         else if (c.Linear())
-            AddUnique(sig.reasons, (cond.loop ? "loop_count_time_dependent" : "branch_on_linear_time") + cond.where);
-        else if (cond.loop && c.Timed())
-            // 循环次数随时间周期变化：输出仍只依赖周期量，但循环体没法逐次展开，只报没推下去
-            AddUnique(sig.reasons, "analysis_not_converged:loop_count_periodic" + cond.where);
+            AddUnique(sig.reasons, (c.rate_unknown ? "time_rate_not_constant" : cond.loop ? "loop_count_time_dependent" : "branch_on_linear_time") + cond.where);
         else
+            // 分支与循环次数只随周期量（或外部输入）变化：输出是这些量的确定函数，按它们的周期算
             MergeTags(acc, c);
     }
     sig.external  = acc.external;

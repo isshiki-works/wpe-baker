@@ -15,15 +15,25 @@ internal static class ShaderSignatureChecks
             using var source = new ProjectSource(root);
             foreach (string reason in (string[])["analysis_not_converged:op199 @fragment", "analysis_not_converged @fragment", "unsupported_side_effect",
                 "names_stripped", "spirv_unreadable", "time_rate_not_constant @fragment", "scroll_rate_not_constant:s @fragment",
-                "drift_rate_not_constant @fragment", "too_many_periods", "sampler_wrap_unknown:s @fragment"])
+                "drift_rate_not_constant @fragment", "too_many_periods", "sampler_wrap_unknown:s @fragment",
+                "linear_time_through_glsl8 @fragment mod %121", "linear_time_through_glsl40 @fragment", "linear_time_through_mix @fragment",
+                "linear_time_through_sample_coordinate:s @fragment", "linear_time_through_mod @fragment", "nonlinear_time @fragment"])
             {
                 var result = Analyze(source, reason);
                 check(result.Unresolved.Count == 1 && result.Unresolved[0].Kind == ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
                     $"engine reason '{reason}' stays not converged");
             }
-            var drift = Analyze(source, "drift @fragment");
-            check(drift.Unresolved.Count == 1 && drift.Unresolved[0].Kind == ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
-                "a drift reason is a proof of cannot");
+            foreach (string reason in (string[])["drift @fragment", "branch_on_linear_time @fragment", "loop_count_time_dependent @fragment",
+                "compare_with_linear_time @fragment"])
+            {
+                var result = Analyze(source, reason);
+                check(result.Unresolved.Count == 1 && result.Unresolved[0].Kind == ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
+                    $"engine reason '{reason}' is a proof of cannot");
+            }
+            // 视差位置在烘焙里是定值，不算外部输入；指针是
+            check(Analyze(source, "", "g_ParallaxPosition").Unresolved.Count == 0, "parallax position on a baked layer is not a live input");
+            check(Analyze(source, "", "g_PointerPosition").Unresolved is [{ Kind: ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism }],
+                "pointer position is a live input");
 
             // 旋钮 token：字面量按 float32 值、忽略符号、不算注释；uniform 不算声明行
             string text = "uniform float g_Speed; // {\"material\":\"speed\",\"default\":0.5}\nfloat a = sin(g_Time * g_Speed) * -0.16161616; /* 0.16161616 */";
@@ -76,7 +86,9 @@ internal static class ShaderSignatureChecks
         new() { ["runtime_layers"] = new JsonArray(new JsonObject { ["owner"] = 10, ["materials"] = new JsonArray(new JsonObject {
             ["shader"] = "effects/x", ["effect"] = 0, ["pass"] = 0, ["active_uniforms"] = new JsonArray(), ["time_signature"] = JsonNode.Parse(signature) }) }) };
 
-    private static ShaderPeriodAnalysisResult Analyze(ProjectSource source, string reason) =>
+    private static ShaderPeriodAnalysisResult Analyze(ProjectSource source, string reason, string external = "") =>
         ShaderPeriodAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null,
-            Runtime($$"""{"kind":"aperiodic","terms":[],"reasons":["{{reason}}"],"external":[],"transient":false}"""), [10], 600, 2);
+            Runtime(new JsonObject { ["kind"] = "aperiodic", ["terms"] = new JsonArray(),
+                ["reasons"] = reason.Length > 0 ? new JsonArray(reason) : new JsonArray(),
+                ["external"] = external.Length > 0 ? new JsonArray(external) : new JsonArray(), ["transient"] = false }.ToJsonString()), [10], 600, 2);
 }

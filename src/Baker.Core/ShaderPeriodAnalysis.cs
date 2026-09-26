@@ -51,9 +51,9 @@ public static class ShaderPeriodAnalysis
 {
     public const string TimeScaleKey = "periodica_time_scale";
 
-    // 引擎里这些原因只说明"分析没推下去"，不是不周期的证明（其余原因码都是证明：漂移、线性时间进非周期运算、按线性时间分支）
-    private static readonly string[] NotProof = ["spirv_unreadable", "analysis_not_converged", "sampler_wrap_unknown",
-        "time_rate_not_constant", "scroll_rate_not_constant", "drift_rate_not_constant", "too_many_periods", "unsupported_side_effect", "names_stripped"];
+    // 引擎原因码里只有这几条是不周期的证明：已知非零系数的线性时间直达输出、按它分支或定循环次数、与它比较。
+    // 其余（线性时间进了没有专门规则的运算 linear_time_through_*、与别的时间量相乘 nonlinear_time、系数不定、分析没推下去）只记未收敛
+    private static readonly string[] Proof = ["drift", "branch_on_linear_time", "loop_count_time_dependent", "compare_with_linear_time"];
     // 时间签名只认 g_Time；用到这些时钟的材质不裁定，交给运行时材质检查报未建模时钟
     private static readonly string[] AlternateClocks = ["g_Runtime", "g_Frametime", "g_DeltaTime"];
 
@@ -94,11 +94,13 @@ public static class ShaderPeriodAnalysis
                     "SPIR-V time signature: " + detail, code));
                 JsonObject[] signatures = [.. group.Select(m => m["time_signature"]!.AsObject())];
                 string[] reasons = [.. signatures.SelectMany(s => (s["reasons"] as JsonArray ?? []).Select(r => r!.GetValue<string>())).Distinct()];
-                string[] external = [.. signatures.SelectMany(s => (s["external"] as JsonArray ?? []).Select(r => r!.GetValue<string>())).Distinct()];
+                // 烘进视频的层里视差位置是定值：保留视差时读它的层已由 Liveness 留作实时
+                string[] external = [.. signatures.SelectMany(s => (s["external"] as JsonArray ?? []).Select(r => r!.GetValue<string>()))
+                    .Where(name => name != "g_ParallaxPosition").Distinct()];
                 if (reasons.Length > 0)
                 {
                     // 有一条证明就够"不能"；全是"没推下去"才记未收敛
-                    string? proof = reasons.FirstOrDefault(r => !NotProof.Contains(Code(r)));
+                    string? proof = reasons.FirstOrDefault(r => Proof.Contains(Code(r)));
                     Fail(proof is not null, Code(proof ?? reasons[0]), string.Join("; ", reasons));
                     continue;
                 }
