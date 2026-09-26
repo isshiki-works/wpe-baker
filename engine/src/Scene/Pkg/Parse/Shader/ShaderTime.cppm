@@ -67,12 +67,15 @@ struct Period {
     bool      pi { false };
 };
 
-// 调频旋钮：t 的系数里一个可改写的直接乘法因子（着色器浮点字面量或材质 uniform）
+// 调频旋钮：t 的系数里一个可改写的直接乘法因子（着色器浮点字面量或材质 uniform），
+// 或顶点输出分量（varying 非空）：顶点程序换个时间再算一遍、只取这个分量，就只给经过它的项调频
 struct Knob {
     std::string stage;   // vert | frag
     std::string uniform; // 空 = 字面量
     float       literal { 0 };
     bool        inverse { false }; // 作为除数出现
+    std::string varying;
+    int         component { -1 };
     auto        operator<=>(const Knob&) const = default;
 };
 
@@ -1603,6 +1606,12 @@ void Analyzer::Execute(int stage_index, const std::map<std::uint32_t, Val>& vary
         if (auto loc = location_.find(var); loc != location_.end()) {
             // 插值：各顶点系数不同，像素上的系数就不再是常量
             Val iv = v;
+            for (std::size_t k = 0; model_ == 0 && names_.count(var) && k < iv.size(); ++k) {
+                // HLSL 入口的输出名形如 @entryPointOutput.v_X：取源码里的 varying 名
+                const Knobs axis { Knob { .stage = "vert", .varying = names_[var].substr(names_[var].rfind('.') + 1), .component = int(k) } };
+                for (Rate& r : iv[k].rates) r.knobs = Union(r.knobs, axis);
+                for (Per& p : iv[k].periods) p.knobs = Union(p.knobs, axis);
+            }
             for (auto& c : iv)
                 if (c.rates.size() > 1) {
                     c.rate_unknown = true;
@@ -1743,14 +1752,28 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
     sig.transient = acc.transient;
     sig.settle    = acc.settle;
     sig.periods   = Classes(acc.periods);
+    // 分量旋钮不参与分项：同 (周期, 次数, 其余旋钮) 的来源并成一项，每个来源都带分量旋钮时才留（取并集）
+    std::vector<std::pair<Per, Knobs>> groups; // second 空 = 有来源不带分量旋钮
     for (const Per& p : acc.periods) {
         if (! (p.s > 0) || ! std::isfinite(p.s)) continue;
+        Per   base { p.s, p.pi, {} };
+        Knobs axes;
+        for (const Knob& k : p.knobs) (k.varying.empty() ? base.knobs : axes).push_back(k);
+        auto g = std::find_if(groups.begin(), groups.end(), [&](const auto& x) {
+            return x.first.pi == base.pi && Near(x.first.s, base.s) && x.first.knobs == base.knobs;
+        });
+        if (g == groups.end())
+            groups.emplace_back(base, axes);
+        else
+            g->second = g->second.empty() || axes.empty() ? Knobs {} : Union(g->second, axes);
+    }
+    for (const auto& [p, axes] : groups) {
         const auto r = p.pi == kNoPi ? std::nullopt : Rationalize(p.s / std::pow(kPi, p.pi));
         sig.terms.push_back(Term { .seconds = p.s,
                                    .num     = r ? r->p : 0,
                                    .den     = r ? r->q : 0,
                                    .pi      = p.pi == kNoPi ? std::nullopt : std::optional<int>(p.pi),
-                                   .knobs   = p.knobs });
+                                   .knobs   = Union(p.knobs, axes) });
     }
     sig.kind      = ! sig.reasons.empty() ? "aperiodic" : ! sig.periods.empty() ? "periodic" : "static";
     return sig;
@@ -1776,7 +1799,8 @@ std::string ToJson(const Signature& s) {
             // 字面量按 float32 精确值转 double 输出，C# (float) 回去逐位相等
             std::snprintf(buf, sizeof(buf), "%.17g", double(n.literal));
             r += (j ? ",{" : "{") + std::string("\"stage\":") + Quote(n.stage) +
-                 (n.uniform.empty() ? ",\"literal\":" + std::string(buf) : ",\"uniform\":" + Quote(n.uniform)) +
+                 (! n.varying.empty() ? ",\"varying\":" + Quote(n.varying) + ",\"component\":" + std::to_string(n.component)
+                  : n.uniform.empty() ? ",\"literal\":" + std::string(buf) : ",\"uniform\":" + Quote(n.uniform)) +
                  ",\"inverse\":" + (n.inverse ? "true" : "false") + "}";
         }
         r += "]}";

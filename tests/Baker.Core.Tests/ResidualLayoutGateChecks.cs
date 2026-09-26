@@ -97,8 +97,8 @@ internal static class ResidualLayoutGateChecks
             unplaced["status"]!.GetValue<string>() == "requires_resolution" &&
             unplaced["residual_layout_gate"]?["rule"]?.GetValue<string>() == "residual_masking_requires_residual_layers_in_video_groups",
             "a maskable residual layer that is in no video group gains an analyze blocker because no group can crossfade it");
-        check(Verdict(unplaced)["verdict"]!.GetValue<string>() == "requires_user_choice",
-            "the residual layout blocker turns suitability into a user choice");
+        check(Verdict(unplaced)["verdict"]!.GetValue<string>() == "not_suitable",
+            "the residual layout blocker leaves suitability not converged instead of asking the user");
         check(!blocker.Contains("--video-layout full_frame", StringComparison.Ordinal) &&
             blocker.Contains("--retain-live 30", StringComparison.Ordinal) &&
             gate!["suggested_retain_live_root_ids"]!.AsArray().Select(node => node!.GetValue<int>()).SequenceEqual([30]) &&
