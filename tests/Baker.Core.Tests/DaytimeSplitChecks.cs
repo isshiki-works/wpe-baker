@@ -245,6 +245,10 @@ internal static class DaytimeSplitChecks
     internal static async Task RunAsync(Action<bool, string> check, string root)
     {
         VideoSelectors(check);
+        check(MessageCatalog.DaytimeStateLabel("dusk", "zh") == "黄昏" && MessageCatalog.DaytimeStateLabel("night", "en") == "Night" &&
+            MessageCatalog.DaytimeStateLabel("00-07+18-24", "zh") == "0:00–7:00、18:00–24:00" &&
+            MessageCatalog.DaytimeStateLabel("20-24", "en") == "20:00–24:00" && MessageCatalog.DaytimeStateLabel("none", "zh") == "none",
+            "时段显示名：四个时段给中英文名，小时段显示成 0:00–7:00，内部代码值不变");
         DaytimeSplit.Detection recognized = DaytimeSplit.Detect(ById(Scene()));
         DaytimeSplit.State? day = recognized.StateNamed("day"), night = recognized.StateNamed("night");
         check(recognized.Status == "recognized" && recognized.ControllerId == 1 &&

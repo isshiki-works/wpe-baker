@@ -61,7 +61,9 @@ Windows 10/11 64 位；Wallpaper Engine（Steam 版）；一块支持 Vulkan 的
 
 ## 许可
 
-工具层 MIT，离线渲染器 GPL-2.0（源自 open-wallpaper-engine）。第三方组件与许可文本见 `THIRD-PARTY-NOTICES.md` 和源码包里的 `licenses/`。烘焙成品仅供在自己的电脑上使用，壁纸作品版权归创意工坊作者所有，请勿二次上传。本项目与 Wallpaper Engine 官方无关联。
+`LICENSE` 中的 MIT 许可适用于 C# 应用/工具层和开发脚本。`engine/`（离线渲染器，源自 open-wallpaper-engine）及其修改沿用上游的 GPL-2.0，见 `engine/LICENSE`。FFmpeg、x264 等依赖保留各自的许可。
+
+第三方组件与许可文本见 `THIRD-PARTY-NOTICES.md` 和源码包里的 `licenses/`。烘焙成品仅供在自己的电脑上使用，壁纸作品版权归创意工坊作者所有，请勿二次上传。本项目与 Wallpaper Engine 官方无关联。
 
 从源码构建：完整源码、第三方声明与构建记录在 Releases 页的 `WpeBaker-1.0.2-source.zip`，步骤见其中的 `REBUILD.md`。
 
