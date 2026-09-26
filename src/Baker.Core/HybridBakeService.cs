@@ -776,6 +776,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     }
                 }
                 JsonArray finalObjects;
+                JsonObject? hub = null;
                 using (timing.Measure(StageTiming.ProjectAssembly))
                 {
                     finalObjects = SceneAssembler.AssembleObjects(originalObjects, plan, replacements, finalDependencies);
@@ -785,6 +786,15 @@ public sealed class HybridBakeService(NativeTools tools)
                             finalDependencies, snapshot, introFrames, groupScheduler.Framing(0).MasterWarmupFrames,
                             id => groupScheduler.Frames(Array.FindIndex(groupScheduler.Groups, group => group["id"]!.GetValue<string>() == id)),
                             settings.FpsNumerator, settings.FpsDenominator);
+                    // 视频枢纽（ProjectWriter.WriteVideoHubAsync）。开场与昼夜切换靠各视频层的 getVideoTexture() 控制播放，
+                    // 保留的脚本查公开图层表时对象表不能多一项，这几种不并。
+                    else if (daytimeExport is null && !SceneAssembler.PublicLayerQueries(finalObjects.OfType<JsonObject>(), finalDependencies).Any())
+                    {
+                        var videos = replacements.Values.Where(layer => !staticIds.Contains(SceneGraph.Id(layer))).ToArray();
+                        hub = await ProjectWriter.WriteVideoHubAsync(project, finalObjects.OfType<JsonObject>()
+                            .Where(obj => videos.Any(video => JsonNode.DeepEquals(obj["image"], video["image"]))), nextId++, cancellationToken);
+                        if (hub is not null) finalObjects.Insert(0, hub);
+                    }
                     // 记下按"不绘制但带脚本"规则额外保留的根对象，事后核对用。
                     report["retained_script_root_ids"] = JsonSerializer.SerializeToNode(SceneAssembler.ScriptRootIds(originalObjects, plan));
                     if (daytimeExport is not null)
@@ -823,7 +833,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 // 播放版编码的汇总：请求档位、实际档位、回退理由与编码总秒数，方便直接和软件档位对比。
                 report["playback_encoder"] = PlaybackEncoderSelection.Summarize(request.PlaybackEncoder,
                     report["groups"]!.AsArray().OfType<JsonObject>());
-                report["retained_object_count"] = finalObjects.Count - replacements.Count;
+                report["retained_object_count"] = finalObjects.Count - replacements.Count - (hub is null ? 0 : 1);
                 report["source_draw_objects_removed"] = groups.Sum(g => g["layer_ids"]!.AsArray().Count);
                 await ProjectPublisher.PublishAsync(report, project, destination, layout, timing, progress, cancellationToken);
                 await Save();

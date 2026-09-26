@@ -386,7 +386,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         if ((request.RetainLiveRootIds ?? []).Length != 0 || report["route"]?.GetValue<string>() != "whole_layer" ||
             report["whole_layer"]?["status"]?.GetValue<string>() != "unavailable" ||
             report["blockers"] is not JsonArray initialBlockers ||
-            !PlanBlockers.Codes(report).All(code => Verdict.IsRadianceCode(code) || code == BlockerCode.PerspectiveNeedsScreenspace)) return;
+            !PlanBlockers.Codes(report).All(Verdict.IsCaptureGap)) return;
         // 只剩 HDR 拒因而循环本身完整时，没有要留实时的未解机制：不试，也不往完整的循环里补"没试"的说明。
         if (initialBlockers.Count > 0 && report["loop"] is JsonObject wholeLoop && Routes.WholeLoopComplete(wholeLoop)) return;
         JsonObject evidence = HybridLoopAllocation.Explain(report, scene);
@@ -420,6 +420,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             if (resolved && replannedPerspective) (resolved, basis) = (false, "perspective_capture_open");
             evidence["status"] = resolved ? "candidate_found" : "still_unavailable";
             evidence["resolution_basis"] = basis;
+            // 只差采集能力时，按"假设能采集"对这份更小分配做的省电预判（编排层据此判不省电或标给排期）。
+            if (basis is "perspective_capture_open" or "hdr_radiance_open" && NoBenefit.CaptureOpenConditions(replanned) is string[] ifCaptured)
+                evidence[NoBenefit.ReplannedConditionsField] = new JsonArray([.. ifCaptured.Select(c => (JsonNode)JsonValue.Create(c))]);
             if (residual is not null)
                 evidence["replanned_residual_masking"] = new JsonObject
                 {

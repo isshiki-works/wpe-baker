@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json.Nodes;
 
 namespace Baker.Core;
@@ -9,6 +10,9 @@ namespace Baker.Core;
 /// </summary>
 internal static class ProjectWriter
 {
+    private const string Vertex = "// SPDX-License-Identifier: MIT\nuniform mat4 g_ModelViewProjectionMatrix;\nattribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvarying vec3 v_ScreenPos;\nvoid main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; v_ScreenPos = gl_Position.xyw;\n#ifdef HLSL\nv_ScreenPos.y = -v_ScreenPos.y;\n#endif\n}\n";
+    private const string OpaqueFragment = "// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(texSample2D(g_Texture0, v_TexCoord).rgb, 1.0); }\n";
+
     /// <summary>写出一个视频（或静态 RGBA）图层的全部资源，返回要放进场景对象表的图层对象。</summary>
     public static async Task<JsonObject> WriteLayerAsync(string project, string stem, string videoFile,
         uint videoWidth, uint videoHeight, int id, double x, double y, double drawWidth, double drawHeight,
@@ -18,7 +22,6 @@ internal static class ProjectWriter
     {
         string textureStem = "wpe_baker_video/" + stem;
         string texturePath = ProjectSource.ContainedPath(project, $"materials/{textureStem}.tex");
-        string materialResource = $"materials/{textureStem}.json";
         string modelResource = $"models/wpe_baker_video/{stem}.json";
         Directory.CreateDirectory(Path.GetDirectoryName(texturePath)!);
         if (rgbaFrame) await TextureContainer.WriteRgbaAsync(texturePath, videoWidth, videoHeight,
@@ -31,7 +34,7 @@ internal static class ProjectWriter
         if (packedAlpha || geometryOffsetX != 0 || geometryOffsetY != 0 || capturedColor || hdrScale != 1)
         {
             shader = "wpe_baker_video/" + stem;
-            string vertex = "// SPDX-License-Identifier: MIT\nuniform mat4 g_ModelViewProjectionMatrix;\nattribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvarying vec3 v_ScreenPos;\nvoid main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; v_ScreenPos = gl_Position.xyw;\n#ifdef HLSL\nv_ScreenPos.y = -v_ScreenPos.y;\n#endif\n}\n";
+            string vertex = Vertex;
             string fragment = "// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\n" +
                 (readsFramebuffer ? "uniform sampler2D g_Texture1; // {\"hidden\":true,\"default\":\"_rt_FullFrameBuffer\"}\nvarying vec2 v_TexCoord;\nvarying vec3 v_ScreenPos;\n" : "varying vec2 v_TexCoord;\n") +
                 "void main() { vec3 rgb = texSample2D(g_Texture0, vec2(v_TexCoord.x * 0.5, v_TexCoord.y)).rgb; float a = texSample2D(g_Texture0, vec2(v_TexCoord.x * 0.5 + 0.5, v_TexCoord.y)).r; " +
@@ -41,7 +44,7 @@ internal static class ProjectWriter
             // pointer displacement. Cropping is a vertex offset, not a new parallax origin.
             string offset = FormattableString.Invariant($"vec4(a_Position + vec3({geometryOffsetX * videoWidth / drawWidth:R}, {geometryOffsetY * videoHeight / drawHeight:R}, 0.0), 1.0)");
             vertex = vertex.Replace("vec4(a_Position, 1.0)", offset, StringComparison.Ordinal);
-            if (!packedAlpha) fragment = "// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(texSample2D(g_Texture0, v_TexCoord).rgb, 1.0); }\n";
+            if (!packedAlpha) fragment = OpaqueFragment;
             else if (rgbaFrame) fragment = fragment.Replace("vec2(v_TexCoord.x * 0.5, v_TexCoord.y)", "v_TexCoord", StringComparison.Ordinal)
                 .Replace("texSample2D(g_Texture0, vec2(v_TexCoord.x * 0.5 + 0.5, v_TexCoord.y)).r", "texSample2D(g_Texture0, v_TexCoord).a", StringComparison.Ordinal);
             else if (alphaBelow)
@@ -72,14 +75,8 @@ internal static class ProjectWriter
             await File.WriteAllTextAsync(vertexPath, vertex, cancellationToken);
             await File.WriteAllTextAsync(ProjectSource.ContainedPath(project, $"shaders/{shader}.frag"), fragment, cancellationToken);
         }
-        await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, materialResource), new JsonObject {
-            ["passes"] = new JsonArray(new JsonObject {
-                ["shader"] = shader, ["blending"] = "translucent", ["cullmode"] = "nocull",
-                ["depthtest"] = "disabled", ["depthwrite"] = "disabled",
-                ["combos"] = new JsonObject { ["LIGHTING"] = 0, ["REFLECTION"] = 0, ["FOG"] = 0 },
-                ["textures"] = readsFramebuffer ? new JsonArray(textureStem, "_rt_FullFrameBuffer") : new JsonArray(textureStem) }) }, cancellationToken);
-        await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, modelResource), new JsonObject {
-            ["material"] = materialResource, ["autosize"] = true, ["cropoffset"] = "0 0" }, cancellationToken);
+        await WriteMaterialAsync(project, stem, shader,
+            readsFramebuffer ? new JsonArray(textureStem, "_rt_FullFrameBuffer") : new JsonArray(textureStem), autosize: true, cancellationToken);
         static string Number(double value) => value.ToString("R", CultureInfo.InvariantCulture);
         return new JsonObject {
             ["id"] = id, ["name"] = (rgbaFrame ? "Static " : "Video ") + stem, ["image"] = modelResource,
@@ -87,6 +84,98 @@ internal static class ProjectWriter
             ["scale"] = $"{Number(drawWidth / videoWidth)} {Number(drawHeight / videoHeight)} 1",
             ["size"] = $"{videoWidth} {videoHeight}", ["visible"] = true, ["alpha"] = 1,
             ["parallaxDepth"] = $"{Number(parallaxDepthX)} {Number(parallaxDepthY)}" };
+    }
+
+    /// <summary>材质与模型（models/wpe_baker_video/&lt;stem&gt;.json）。</summary>
+    private static async Task WriteMaterialAsync(string project, string stem, string shader, JsonArray textures, bool autosize,
+        CancellationToken cancellationToken)
+    {
+        string materialResource = $"materials/wpe_baker_video/{stem}.json";
+        await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, materialResource), new JsonObject {
+            ["passes"] = new JsonArray(new JsonObject {
+                ["shader"] = shader, ["blending"] = "translucent", ["cullmode"] = "nocull",
+                ["depthtest"] = "disabled", ["depthwrite"] = "disabled",
+                ["combos"] = new JsonObject { ["LIGHTING"] = 0, ["REFLECTION"] = 0, ["FOG"] = 0 },
+                ["textures"] = textures }) }, cancellationToken);
+        await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, $"models/wpe_baker_video/{stem}.json"), new JsonObject {
+            ["material"] = materialResource, ["autosize"] = autosize, ["cropoffset"] = "0 0" }, cancellationToken);
+    }
+
+    /// <summary>
+    /// 视频枢纽（runs/VLAYERCOST）：核显每帧的固定开销按"采样视频纹理的绘制次数"计（低负载下每次约 0.46 W），与路数、分辨率、面积无关。
+    /// 加一个隐藏的枢纽层，一次绘制把各视频上下堆进自己的合成目标；各视频层留在原位、着色器照旧，只改为采样目标里自己那一块。
+    /// 官方 WPE 上枢纽层与视频层都要关 autosize（否则枢纽按第一张纹理定尺寸、视频层按渲染目标定四边形）；
+    /// 块间空 4 行（只靠半纹素夹取，块边仍有 1 像素亮线）。并进去的不足 2 层时不写，返回 null；否则返回枢纽对象，放在对象表最前面。
+    /// </summary>
+    internal static async Task<JsonObject?> WriteVideoHubAsync(string project, IEnumerable<JsonObject> videos, int id,
+        CancellationToken cancellationToken)
+    {
+        const int gap = 4, limit = 8192;
+        var blocks = new List<(JsonObject Video, string Stem, int Top, int Width, int Height)>();
+        int y = 0;
+        foreach (var video in videos)
+        {
+            int[] size = video["size"]!.GetValue<string>().Split(' ').Select(int.Parse).ToArray();
+            if (size[0] > limit || y + size[1] > limit) continue;   // 放不下的仍是独立视频层
+            blocks.Add((video, Path.GetFileNameWithoutExtension(video["image"]!.GetValue<string>()), y, size[0], size[1]));
+            y += size[1] + gap;
+        }
+        if (blocks.Count < 2) return null;
+        int width = blocks.Max(b => b.Width), height = y - gap;
+        string Shader(string stem, string extension) => ProjectSource.ContainedPath(project, $"shaders/wpe_baker_video/{stem}.{extension}");
+        var hub = new StringBuilder("// SPDX-License-Identifier: MIT\n");
+        for (int i = 0; i < blocks.Count; ++i) hub.Append(CultureInfo.InvariantCulture, $"uniform sampler2D g_Texture{i};\n");
+        hub.Append(CultureInfo.InvariantCulture, $"varying vec2 v_TexCoord;\nvoid main() {{\nvec2 p = v_TexCoord * vec2({width}.0, {height}.0);\nvec3 c = vec3(0.0, 0.0, 0.0);\n");
+        for (int i = 0; i < blocks.Count; ++i)
+        {
+            var (_, _, top, w, h) = blocks[i];
+            hub.Append(CultureInfo.InvariantCulture, $"vec3 c{i} = texSample2D(g_Texture{i}, vec2(p.x / {w}.0, (p.y - {top}.0) / {h}.0)).rgb;\n" +
+                $"c = (p.y >= {top}.0 && p.y < {top + h}.0 && p.x < {w}.0) ? c{i} : c;\n");
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(Shader("hub", "vert"))!);
+        await File.WriteAllTextAsync(Shader("hub", "vert"), Vertex, cancellationToken);
+        await File.WriteAllTextAsync(Shader("hub", "frag"), hub.Append("gl_FragColor = vec4(c, 1.0); }\n").ToString(), cancellationToken);
+        await WriteMaterialAsync(project, "hub", "wpe_baker_video/hub",
+            new JsonArray(blocks.Select(b => (JsonNode)JsonValue.Create("wpe_baker_video/" + b.Stem)).ToArray()), autosize: false, cancellationToken);
+        foreach (var (video, stem, top, w, h) in blocks)
+        {
+            var textures = JsonNode.Parse(await File.ReadAllTextAsync(ProjectSource.ContainedPath(project, $"materials/wpe_baker_video/{stem}.json"),
+                cancellationToken))!["passes"]![0]!["textures"]!.DeepClone().AsArray();
+            textures[0] = $"_rt_imageLayerComposite_{id}_a";
+            // 用 genericimage4 的层（不透明、无偏移）换成等价的最小着色器，才能改采样坐标。
+            string fragment = File.Exists(Shader(stem, "frag")) ? await File.ReadAllTextAsync(Shader(stem, "frag"), cancellationToken) : OpaqueFragment;
+            if (!File.Exists(Shader(stem, "vert"))) await File.WriteAllTextAsync(Shader(stem, "vert"), Vertex, cancellationToken);
+            await File.WriteAllTextAsync(Shader(stem, "frag"), BlockSample(fragment, top, w, h, width, height), cancellationToken);
+            File.Delete(ProjectSource.ContainedPath(project, $"materials/wpe_baker_video/{stem}.json"));
+            File.Delete(ProjectSource.ContainedPath(project, $"models/wpe_baker_video/{stem}.json"));
+            await WriteMaterialAsync(project, stem, "wpe_baker_video/" + stem, textures, autosize: false, cancellationToken);
+            video["dependencies"] = new JsonArray(id);
+        }
+        return new JsonObject {
+            ["id"] = id, ["name"] = "Video hub", ["image"] = "models/wpe_baker_video/hub.json",
+            ["origin"] = FormattableString.Invariant($"{width / 2d:R} {height / 2d:R} 0"), ["angles"] = "0 0 0", ["scale"] = "1 1 1",
+            ["size"] = $"{width} {height}", ["visible"] = false, ["alpha"] = 1, ["parallaxDepth"] = "0 0",
+            // 空效果给枢纽层一个自己的合成目标。
+            ["effects"] = new JsonArray(new JsonObject { ["file"] = "effects/opacity/effect.json",
+                ["passes"] = new JsonArray(new JsonObject { ["combos"] = null, ["constantshadervalues"] = null }) }) };
+    }
+
+    /// <summary>texSample2D(g_Texture0, X) 换成采样图集里这一块：X 先夹在块内半个纹素，再仿射到块的位置。</summary>
+    private static string BlockSample(string fragment, int top, int w, int h, int width, int height)
+    {
+        const string key = "texSample2D(g_Texture0, ";
+        var result = new StringBuilder();
+        int i = 0;
+        for (int j; (j = fragment.IndexOf(key, i, StringComparison.Ordinal)) >= 0;)
+        {
+            int k = j + key.Length;
+            for (int depth = 1; depth > 0; ++k) depth += fragment[k] switch { '(' => 1, ')' => -1, _ => 0 };
+            result.Append(fragment, i, j - i).Append(CultureInfo.InvariantCulture,
+                $"{key}vec2(0.0, {(double)top / height:R}) + clamp({fragment[(j + key.Length)..(k - 1)]}, vec2({.5 / w:R}, {.5 / h:R}), " +
+                $"vec2({1 - .5 / w:R}, {1 - .5 / h:R})) * vec2({(double)w / width:R}, {(double)h / height:R}))");
+            i = k;
+        }
+        return result.Append(fragment, i, fragment.Length - i).ToString();
     }
 
     /// <summary>

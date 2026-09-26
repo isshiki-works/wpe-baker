@@ -256,7 +256,8 @@ public:
      * texture has been recognised as a VIDEO container. Invoked from
      * OfflineSession's per-frame draw step. */
     // services：离线作业的服务（不在离线作业里为空），视频按作业时钟选帧。
-    void pumpVideoTextures(double dt_seconds, Services* services);
+    // raster=false：这一帧不光栅，视频只推进解码、不写纹理。
+    void pumpVideoTextures(double dt_seconds, Services* services, bool raster);
 
     /* For every FontFace in the Scene font-cache extension with non-empty DirtyRects,
      * coalesce to one AABB and vkCmdCopyBufferToImage into the face's
