@@ -139,7 +139,7 @@ internal sealed class AnalysisOrchestrator
             foreach (string language in new[] { "zh", "en" })
                 summary[language] = MessageCatalog.Get("preset.generated", language) + (kinds.Count == 0 ? "" : "\n" +
                     MessageCatalog.Get("preset.omitted", language, string.Join(language == "zh" ? "、" : ", ", kinds.Order().Select(k => TradeoffOptions.KindLabel(k, language))))) +
-                    (result["settings"]?["daytime_state"] is JsonValue state ? "\n" + MessageCatalog.Get("preset.daytime", language, state.GetValue<string>()) : "");
+                    (result["settings"]?["daytime_state"] is JsonValue state ? "\n" + MessageCatalog.Get("preset.daytime", language, MessageCatalog.DaytimeStateLabel(state.GetValue<string>(), language)) : "");
         return result;
     }
 

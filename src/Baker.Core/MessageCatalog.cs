@@ -1364,6 +1364,22 @@ public static class MessageCatalog
         return Render(NormalizeLanguage(language) == Chinese ? entry.Zh : entry.En, args);
     }
 
+    /// <summary>时段状态代码的显示名：四个常见时段给中英文名；按小时划分的（如 00-07+18-24）显示成 0:00–7:00；其余原样。只管显示，不改代码值。</summary>
+    public static string DaytimeStateLabel(string state, string language)
+    {
+        bool zh = NormalizeLanguage(language) == Chinese;
+        return state switch
+        {
+            "morning" => zh ? "清晨" : "Morning",
+            "day" => zh ? "白天" : "Day",
+            "dusk" => zh ? "黄昏" : "Dusk",
+            "night" => zh ? "夜晚" : "Night",
+            _ when Regex.IsMatch(state, @"^\d\d-\d\d(\+\d\d-\d\d)*$") => string.Join(zh ? "、" : ", ", state.Split('+')
+                .Select(range => string.Join("–", range.Split('-').Select(hour => int.Parse(hour, CultureInfo.InvariantCulture) + ":00")))),
+            _ => state,
+        };
+    }
+
     /// <summary>按 plan v3 模板渲染英文原文。未知 key 回退为 key 本身。</summary>
     public static string RenderLegacy(string key, params object?[] args) =>
         Table.GetValueOrDefault(key) is { } entry ? Render(entry.LegacyTemplate, args) : key;
