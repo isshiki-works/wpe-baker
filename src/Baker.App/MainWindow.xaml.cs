@@ -760,7 +760,7 @@ public partial class MainWindow : Window
             if (status is not ("candidate_generated" or StaticOnlyBake.Status or "probe_generated" or "candidate_rejected_no_loop" or
                 "candidate_rejected_composition" or "candidate_rejected_late_dependency" or "candidate_rejected_seam" or
                 "candidate_rejected_hardware_decode" or "candidate_rejected_opaque_capture" or ResidualMasking.LayoutRejectedStatus or
-                "candidate_rejected_capture_target" or CandidateScriptErrorGate.RejectedBakeStatus or EmbeddedVideoBudget.RejectedBakeStatus or NoBenefit.RejectedBakeStatus or
+                "candidate_rejected_capture_target" or CandidateScriptErrorGate.RejectedBakeStatus or EmbeddedVideoBudget.RejectedBakeStatus or
                 BakeDiskBudget.RejectedBakeStatus))
                 throw new InvalidDataException(L("此生成报告里没有已完成的输出。", "This report has no finished output."));
             JsonObject savedPlan = report["plan"]?.DeepClone().AsObject()
@@ -875,8 +875,6 @@ public partial class MainWindow : Window
                         : resultStatus == CandidateScriptErrorGate.RejectedBakeStatus
                         ? L("输出的脚本报错比原壁纸多，已停止生成（详见报告）。",
                             "The output has more script errors than the original wallpaper; generation stopped (see report).")
-                        : resultStatus == NoBenefit.RejectedBakeStatus
-                        ? L("不支持：预计功耗高于原壁纸", "Not supported: estimated power use is higher than the original wallpaper.")
                         : resultStatus == ResidualMasking.LayoutRejectedStatus
                         ? L("循环首尾不衔接，已停止生成（详见报告）。",
                             "The loop doesn't join seamlessly; generation stopped (see report).")

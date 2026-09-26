@@ -106,6 +106,11 @@ internal sealed class AnalysisOrchestrator
                 PlanNarrative.Attach(result);
             }
         }
+        // 按组取舍：净收益不够的组还给实时（整层路线加 --retain-live 重新分析）；--no-benefit allow 时照旧全烘，测功耗用。
+        if (Admission.Accepted(result) && !request.AllowNoBenefit)
+            result = await NoBenefit.SelectGroupsAsync(result, request, tools, Path.Combine(run, "group-cost"), cache,
+                retain => new AnalysisOrchestrator(request with { RetainLiveRootIds = retain }, analyze, space, space.Budget(), tools,
+                    Path.Combine(run, "group-cost-live"), cache, token).SolveAsync(interaction), token);
         // 预计不省电的方案默认拒绝（判据与覆盖见 NoBenefit）；已经被别的原因拒掉的不重复写。
         if (Admission.Accepted(result)) NoBenefit.Apply(result, request.AllowNoBenefit);
         // 尝试经过只写进既有的 preset_* / interaction_* 字段。

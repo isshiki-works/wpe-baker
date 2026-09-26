@@ -752,10 +752,6 @@ public static class MessageCatalog
         ["bake.effect_prefix_opaque_unproven"] = new(
             Zh: "完整的末端截取没能证明每个编码源帧都是不透明像素。",
             En: "The full terminal capture did not prove opaque pixels for every encoded source frame."),
-        // {0}=停下时已编出的视频流路数 {1}=不需要实测证明的路数上限
-        ["bake.no_benefit_streams"] = new(
-            Zh: "不支持：预计功耗高于原壁纸（已编出 {0} 路视频，超过 {1} 路，路数更多的成品通常比原作更费电）。已在此停止，未生成候选项目。调试或测功耗时可用 --no-benefit allow 重新分析并生成。",
-            En: "Not supported: estimated power use is higher than the original wallpaper ({0} video streams are already encoded, above {1}; results with more streams usually draw more power than the original). Stopped here, no candidate project generated. For debugging or power measurement, use --no-benefit allow to analyze and generate anyway."),
         ["bake.no_visible_output"] = new(
             Zh: "不可生成：所有视频组在生成区间内都没有可见像素，没有可替换成视频的内容。",
             En: "Cannot generate: every video group was empty over the generated interval, so there is no content to replace with video."),

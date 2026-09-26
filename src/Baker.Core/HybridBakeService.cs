@@ -739,13 +739,6 @@ public sealed class HybridBakeService(NativeTools tools)
                             daytimeExport.BindReplacement(layer, originalObjects[daytimeExport.ReplacementTargets[id]], isStatic);
                         replacements[id] = layer;
                         if (isStatic) staticIds.Add(SceneGraph.Id(layer));
-                        // 预计不省电：实际编出的视频流（静态纹理不算）超过上限，默认在这里停，不再编剩下的组。
-                        if (!probe && !NoBenefit.Allowed(plan) && NoBenefit.TooManyVideoStreams(replacements.Count - staticIds.Count))
-                        {
-                            NoBenefit.RejectStreams(report, replacements.Count - staticIds.Count);
-                            await Save();
-                            return report;
-                        }
                         report["groups"]!.AsArray().Add(GroupVerdicts.Encoded(id, layers, layer, isStatic, packedAlpha, encoded, video, capture,
                             lateDependencyValidation, seam, hardwareDecode, master, gpuDirect, directPlayback, groupSeamResidual, groupCrossfade,
                             seamPreview));

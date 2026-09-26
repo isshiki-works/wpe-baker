@@ -180,21 +180,13 @@ public static class TradeoffOptions
         }
         // 关掉实时元素只清得掉实时层带来的阻断，照做后结论不变的方案不列；一个都不剩就明说原因（9/26 三张照方案重分析仍是同一条阻断）。
         // 残差不可掩盖：不可掩盖的分量（要烘的层自己的循环没证出来，或没有归属图层）都在方案剔除范围内才可能清掉。
-        // 预计不省电：逐条看关掉之后判据还会不会命中（NoBenefit 同一口径）。视频不划算要并成一路整幅、且一路省下的渲染够本；
-        // 静态成品带实时层要一层实时都不剩；固定时段、前缀路数超限关实时层改不了。
+        // 预计不省电：关实时层改不了固定时段；按组净收益关掉之后要重新量，这里不预测，一律不列。
         JsonArray blocking = plan["loop"]?["residual_masking"]?["blocking_components"] as JsonArray ?? [];
-        string?[] noBenefit = [.. (plan[NoBenefit.Field]?["conditions"] as JsonArray ?? []).Select(Text)];
         bool Undeliverable(JsonObject option) =>
             blockerCodes.Contains(BlockerCode.BakeAllocation) && blocking.OfType<JsonObject>().Any(component =>
                 Number(component["owner_layer_id"]) is not double owner ||
                 !(option["excluded_layer_ids"] as JsonArray ?? []).Any(id => Number(id) == owner)) ||
-            blockerCodes.Contains(BlockerCode.NoBenefitExpected) && noBenefit.Any(condition => condition switch
-            {
-                NoBenefit.StaticWithLive => Number(option["estimated_residual_live_layers"]) != 0,
-                NoBenefit.VideoCostOverSaving or NoBenefit.PlainLayersOnly => Flag(option["expected_full_frame"]) != true ||
-                    !(NoBenefit.RemovedPassCoverage(plan) >= NoBenefit.MinPassCoveragePerStream),
-                _ => true
-            });
+            blockerCodes.Contains(BlockerCode.NoBenefitExpected);
         if (options.RemoveAll(Undeliverable) > 0 && options.Count == 0)
         {
             record["status"] = "baked_content_blocked";
