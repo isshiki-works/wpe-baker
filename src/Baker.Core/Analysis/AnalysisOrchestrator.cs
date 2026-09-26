@@ -75,7 +75,8 @@ internal sealed class AnalysisOrchestrator
         while (Admission.Accepted(result) && tools is not null && request.RuntimeTraceFile is null)
         {
             JsonArray round = await SlowClosureProbe.RunAsync(result, tools, Path.Combine(run, $"slow-closure-{slowProbes.Count}"), token);
-            int[] retained = orchestrator.request.RetainLiveRootIds ?? [];
+            // 从选中方案实际留实时的层接着加（分配回退、逐组退回点名的层都在里面），不从请求的空集重来。
+            int[] retained = [.. (result["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()];
             int[] open = [.. round.OfType<JsonObject>().Where(record => !LoopClosureCheck.Allows(record["loop_closure"] as JsonObject))
                 .SelectMany(record => record["owner_layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>()).Except(retained)];
             foreach (JsonNode? record in round) slowProbes.Add(record!.DeepClone());
