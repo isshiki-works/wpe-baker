@@ -20,6 +20,7 @@ target_sources(owe-scene PUBLIC FILE_SET CXX_MODULES BASE_DIRS ../.. FILES
   Pkg/Parse/Shader/MaskIdentity.cppm
   Pkg/Parse/Shader/ShaderLex.cppm
   Pkg/Parse/Shader/ShaderParser.cppm
+  Pkg/Parse/Shader/ShaderTime.cppm
   Pkg/Parse/Sound/SoundParser.cppm
   Pkg/Parse/Uniform/GlobalUniform.cppm
   Pkg/Parse/Uniform/Uniform.cppm

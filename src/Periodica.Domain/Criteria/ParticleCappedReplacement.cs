@@ -23,8 +23,11 @@ namespace Periodica.Domain;
 /// </summary>
 internal static class ParticleCappedReplacement
 {
-    /// <summary>一个发射器：发射率（已乘 count 覆盖，float）与 one_per_frame 位。</summary>
-    internal sealed record Emitter(float Speed, bool OnePerFrame);
+    /// <summary>
+    /// 一个发射器：发射率（已乘 count 覆盖，float）、one_per_frame 位与爆发数 instantaneous。渲染器 ResolveEmitCount：系统里一个粒子都没有时
+    /// 这一步只发 instantaneous 个（代替计时器计数，不受 one_per_frame 限制），提交计时器照常；发射率为 0 时计时器不参与。
+    /// </summary>
+    internal sealed record Emitter(float Speed, bool OnePerFrame, uint Instantaneous = 0);
 
     /// <summary>复刻所需的全部源值，都已按渲染器的类型转换（float）。</summary>
     internal sealed record Input(uint MaxCount, IReadOnlyList<Emitter> Emitters, float Lifetime, float RateScale, float StartTime,
@@ -37,7 +40,11 @@ internal static class ParticleCappedReplacement
     /// </summary>
     internal sealed record Outcome(ulong? PeriodFrames, ulong? CycleStartFrame, string? FailureCode,
         double SubsystemStepSeconds, float AuthoredLifetime, ulong? MaximumPeriodFrames = null, ulong? ReplacementFrames = null,
-        ulong? StartTimePrerunSteps = null, long? SimulatedSteps = null);
+        ulong? StartTimePrerunSteps = null, long? SimulatedSteps = null)
+    {
+        /// <summary>计数状态的最小周期（PeriodFrames 的约数）；与别的锁定分量合并时取它的公倍数，超上限才证明得了"不能"。</summary>
+        internal ulong? MinimalPeriodFrames { get; init; }
+    }
 
     /// <summary>找周期态起点时最多看多少个周期：一般一到两代就进入，看到 16 代仍不回归就判算不准。</summary>
     internal const int CycleStartSearchPeriods = 16;
@@ -49,7 +56,7 @@ internal static class ParticleCappedReplacement
         double dt = (double)input.FpsDenominator / input.FpsNumerator;
         double delta = dt * input.RateScale;
         if (!(delta > 0) || !double.IsFinite(delta) || input.MaxCount == 0 || input.Emitters.Count == 0 ||
-            input.Emitters.Any(emitter => !(emitter.Speed > 0) || !float.IsFinite(emitter.Speed)) || !float.IsFinite(input.Lifetime) ||
+            input.Emitters.Any(emitter => !(emitter.Speed > 0 || emitter.Speed == 0 && emitter.Instantaneous > 0) || !float.IsFinite(emitter.Speed)) || !float.IsFinite(input.Lifetime) ||
             !(input.StartTime >= 0) || !float.IsFinite(input.StartTime))
             return new(null, null, "lifetime_capped_parameters_unverified", delta, input.Lifetime);
 
@@ -66,7 +73,7 @@ internal static class ParticleCappedReplacement
 
         int n = checked((int)period);
         int emitterCount = input.Emitters.Count;
-        double[] durations = input.Emitters.Select(emitter => (double)(1.0f / emitter.Speed)).ToArray();
+        double[] durations = input.Emitters.Select(emitter => emitter.Speed > 0 ? (double)(1.0f / emitter.Speed) : 0).ToArray();
         double[] timers = new double[emitterCount];
         long active = 0;
         long capacity = input.MaxCount;
@@ -78,17 +85,21 @@ internal static class ParticleCappedReplacement
             long born = 0;
             for (int index = 0; index < emitterCount; ++index)
             {
-                timers[index] += step;
+                Emitter emitter = input.Emitters[index];
+                if (emitter.Speed > 0) timers[index] += step;
                 double elapsed = timers[index], duration = durations[index];
-                long requested = elapsed < duration ? 0 : (long)Math.Min(Math.Floor(elapsed / duration), uint.MaxValue);
-                if (input.Emitters[index].OnePerFrame && requested > 1) requested = 1;
+                bool bursting = emitter.Instantaneous > 0 && active + born == 0;
+                long requested = bursting ? emitter.Instantaneous
+                    : emitter.Speed == 0 || elapsed < duration ? 0 : (long)Math.Min(Math.Floor(elapsed / duration), uint.MaxValue);
+                if (emitter.OnePerFrame && requested > 1 && !bursting) requested = 1;
                 if (requested == 0) continue;
                 long emitted = Math.Min(requested, Math.Max(0, capacity - active - born));
+                born += emitted;
+                if (emitter.Speed == 0) continue;
                 double left = Math.Max(0.0, timers[index] - duration * emitted);
                 if (emitted < requested) left = Math.Min(left, duration);
                 else if (input.Emitters[index].OnePerFrame) left %= duration; // std::fmod：被除数非负时即截断余数
                 timers[index] = left;
-                born += emitted;
             }
             return born;
         }
@@ -149,7 +160,13 @@ internal static class ParticleCappedReplacement
             }
             long cycleStart = step - n;
             if (run >= n && timersMatch && lastWarmupDeath >= 0 && cycleStart >= lastWarmupDeath)
-                return new(period, (ulong)cycleStart, null, delta, input.Lifetime, null, period, warmupSteps, step);
+            {
+                // 状态（最近 N 步出生数 + 计时器）已以 N 为周期；最小周期 d 是满足"出生环按 d 循环移位不变、计时器与 d 步前逐位相同"的最小约数。
+                int minimal = Enumerable.Range(1, n).First(d => n % d == 0 && Enumerable.Range(0, n).All(i => ring[i] == ring[(i + d) % n]) &&
+                    Enumerable.Range(0, emitterCount).All(index => BitConverter.DoubleToInt64Bits(timerHistory[history * emitterCount + index]) ==
+                        BitConverter.DoubleToInt64Bits(timerHistory[(int)((step - d) % (n + 1)) * emitterCount + index])));
+                return new(period, (ulong)cycleStart, null, delta, input.Lifetime, null, period, warmupSteps, step) { MinimalPeriodFrames = (ulong)minimal };
+            }
         }
         return new(null, null, "lifetime_capped_cycle_not_reached", delta, input.Lifetime, null, period, warmupSteps, limit);
     }
