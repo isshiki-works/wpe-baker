@@ -146,6 +146,8 @@ internal static class ProjectWriter
             string fragment = File.Exists(Shader(stem, "frag")) ? await File.ReadAllTextAsync(Shader(stem, "frag"), cancellationToken) : OpaqueFragment;
             if (!File.Exists(Shader(stem, "vert"))) await File.WriteAllTextAsync(Shader(stem, "vert"), Vertex, cancellationToken);
             await File.WriteAllTextAsync(Shader(stem, "frag"), BlockSample(fragment, top, w, h, width, height), cancellationToken);
+            File.Delete(ProjectSource.ContainedPath(project, $"materials/wpe_baker_video/{stem}.json"));
+            File.Delete(ProjectSource.ContainedPath(project, $"models/wpe_baker_video/{stem}.json"));
             await WriteMaterialAsync(project, stem, "wpe_baker_video/" + stem, textures, autosize: false, cancellationToken);
             video["dependencies"] = new JsonArray(id);
         }
