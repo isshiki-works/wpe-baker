@@ -426,7 +426,7 @@ public class LoopItemContractTests
     }
 
     [Fact]
-    public void RuntimeMaterialAndScriptClockItemsAreRecordedOncePerOwner()
+    public void RuntimeMaterialClockItemsAreRecordedOncePerOwner()
     {
         JsonObject Layer() => new() { ["owner"] = 1, ["materials"] = new JsonArray(new JsonObject { ["role"] = "source", ["active_uniforms"] = new JsonArray("g_Time") }) };
         var runtime = new JsonObject { ["runtime_layers"] = new JsonArray(Layer(), Layer()),
@@ -435,9 +435,7 @@ public class LoopItemContractTests
                 new JsonObject { ["operation"] = "time", ["owner"] = 1, ["binding"] = "b", ["property"] = "g_Time" }) };
         var items = new List<LoopUnresolved>();
         RuntimeTrackReader.AddMaterialClockUnresolved(runtime, [1], items, new HashSet<(int, string)>());
-        RuntimeTrackReader.AddScriptTimeUnresolved(runtime, [1], items);
-        Assert.Equal("runtime_material,script_time", string.Join(",", items.Select(item => item.Kind)));
-        Assert.Equal("g_Time", items[1].ToJson()["clock"]!.GetValue<string>());
+        Assert.Equal("runtime_material", string.Join(",", items.Select(item => item.Kind)));
     }
 
     [Fact]
@@ -449,14 +447,25 @@ public class LoopItemContractTests
     }
 
     [Fact]
-    public void ConstantScriptProofRejectsClockAndAccumulation()
+    public void ScriptTimeSignatureFollowsTheTimeDomain()
     {
-        const string head = "'use strict';\nexport var scriptProperties = createScriptProperties().addSlider({ name: 'x', value: 0, min: -1 }).finish();\n";
-        Assert.True(StaticProof.ConstantScript(head + "export function update(value) {\n  value.x = scriptProperties.x * engine.canvasSize.x; // 定位\n  return value;\n}"));
-        Assert.False(StaticProof.ConstantScript(head + "export function update(value) {\n  value.x += scriptProperties.x;\n  return value;\n}"));
-        Assert.False(StaticProof.ConstantScript(head + "export function update(value) {\n  value.x = value.y + 1;\n  return value;\n}"));
-        Assert.False(StaticProof.ConstantScript(head + "export function update(value) {\n  value.x = engine.runtime;\n  return value;\n}"));
-        Assert.False(StaticProof.ConstantScript(head + "let t = 0;\nexport function update(value) {\n  value.x = t;\n  return value;\n}"));
+        const string head = "'use strict';\nimport * as WEColor from 'WEColor';\nexport var scriptProperties = createScriptProperties().addSlider({ name: 'x', value: 0 }).finish();\n";
+        ScriptTime.Verdict Run(string body, string property = "origin") => ScriptTime.Analyze(new(1, property, "/" + property, new JsonObject {
+            ["script"] = head + body, ["value"] = "0 0 0", ["scriptproperties"] = new JsonObject { ["x"] = 0.25 } }, new JsonObject { ["id"] = 1 }), 30, 1, 3000);
+        Assert.Equal(ScriptTime.Outcome.Static, Run("export function update(value) { value.x = scriptProperties.x * engine.canvasSize.x; return value; }").Outcome);
+        Assert.Equal(ScriptTime.Outcome.Static, Run("let t = 0;\nexport function update(value) { value.x = t + value.y; return value; }").Outcome);
+        // 线性时间直达位置是漂移（证明）；经 sin、取模、色相变成周期；与时间比较过交点后固定
+        Assert.Equal("drift", Run("export function update(value) { value.x = engine.runtime; return value; }").Code);
+        Assert.Equal(2 * Math.PI / 0.5, Run("export function update(value) { value.y = 3 * Math.sin(engine.runtime * 0.5); return value; }").PeriodSeconds!.Value, 9);
+        Assert.Equal(4.0, Run("export function update(value) { return (engine.runtime * scriptProperties.x) % 1 > 0.5; }", "visible").PeriodSeconds!.Value, 9);
+        Assert.Equal(1 / 0.25, Run("export function update(value) { return WEColor.hsv2rgb({ x: engine.runtime * scriptProperties.x, y: 1, z: 1 }); }", "color").PeriodSeconds!.Value, 9);
+        var fade = Run("export function update(value) { const t = Math.max(0, Math.min(1, (engine.runtime - 0.5) / 0.75)); return 1 - t * t * (3 - 2 * t); }", "alpha");
+        Assert.Equal((ScriptTime.Outcome.Static, 1.25), (fade.Outcome, fade.Settle));
+        // 跨帧状态按单精度逐帧模拟：步进复位闭合出整数帧周期；一直累加不闭合是未收敛，不是证明
+        Assert.Equal(12UL, Run("export function update(value) { if (value.x > 5) { value.x = 0; } else { value.x += 0.5; } return value; }").PeriodFrames);
+        Assert.Equal("script_state_not_closed", Run("export function update(value) { value.x += scriptProperties.x; return value; }").Code);
+        Assert.Equal((ScriptTime.Outcome.Cannot, "script_reads_external_input"),
+            Run("export function update(value) { value.x = input.cursorWorldPosition.x; return value; }") is var input ? (input.Outcome, input.Code) : default);
     }
 
     [Fact]
@@ -522,8 +531,7 @@ public class LoopItemContractTests
         // 点名图层只走类型化记录，不进条目。
         Assert.Equal("""{"kind":"source_static","detail":"d","owner_layer_id":2}""",
             new SourceStaticUnresolved("d", 2, new StaticLayerNaming(null, false)).ToJson().ToJsonString());
-        Assert.Equal("kind,owner_layer_id,binding,clock,detail",
-            Keys(new ScriptTimeUnresolved(1, JsonValue.Create("b"), JsonValue.Create("time")).ToJson()));
+        Assert.Equal("kind,owner_layer_id,binding,mechanism,detail", Keys(new ScriptTimeUnresolved(1, "b", false, "c", "d").ToJson()));
         Assert.Equal("kind,rejected_candidate_count,detail", Keys(new SpriteSeamUnresolved(2).ToJson()));
         var shader = new ShaderTemporalUnresolved(1, 0, 0, "r", ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "d");
         Assert.Equal("""{"kind":"UnsupportedShaderMechanism","owner_layer_id":1,"effect_index":0,"pass_index":0,"resource":"r","detail":"d","mechanism":null}""",

@@ -48,6 +48,13 @@ public static class HybridLoopService
                     ?? throw new InvalidDataException("Capture scene changed since its loop patch was analyzed.");
                 Verify(options["fps"], oldValue); options["fps"] = newValue;
             }
+            else if (patch["kind"]!.GetValue<string>() == "script_speed")
+            {
+                // 脚本调速：这段脚本读到的 engine.runtime 乘倍率（见 ScriptTime.Retime），constant_key 是绑定相对图层的 JSON 指针
+                JsonObject binding = Resolve(owner, patch["constant_key"]!.GetValue<string>()) as JsonObject
+                    ?? throw new InvalidDataException("Capture scene changed since its loop patch was analyzed.");
+                binding["script"] = ScriptTime.Retime(binding["script"]!.GetValue<string>(), newValue);
+            }
             else throw new InvalidDataException("Unknown loop patch kind.");
         }
     }

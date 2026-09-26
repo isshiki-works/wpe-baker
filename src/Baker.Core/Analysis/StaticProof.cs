@@ -56,6 +56,8 @@ internal static class StaticProof
             if (!selected.Contains(ownerId) && !selected.Contains(targetId)) continue;
             // 别处的脚本只读被烘图层（名字、属性、查找）不改变它的画面；写入或挂在被烘图层上的脚本才算。
             if (!selected.Contains(ownerId) && dependency["operation"]?.GetValue<string>() != "write") continue;
+            // 被烘图层上脚本自己的依赖：脚本已由时间签名（ScriptTime）证明为静态，否则循环分析不会走到静止证明
+            if (selected.Contains(ownerId) && dependency["binding"] is JsonValue) continue;
             if (dependency["operation"] is not JsonValue operation || !operation.TryGetValue<string>(out string? name) || name != "write" ||
                 dependency["initialization"] is not JsonValue initialization || !initialization.TryGetValue<bool>(out bool initial) || !initial)
                 return Named($"Baked {Describe(selected.Contains(ownerId) ? ownerId : targetId)} takes part in a runtime dependency that is not an initialization write.", selected.Contains(ownerId) ? ownerId : targetId);
@@ -92,8 +94,6 @@ internal static class StaticProof
     {
         foreach (JsonObject node in SceneAnalyzer.Walk(owner).OfType<JsonObject>())
         {
-            if (node["script"] is not null && !(node["script"] is JsonValue script && script.TryGetValue<string>(out string? code) && ConstantScript(code)))
-                return ("script", "a script binding whose behavior over time is not proven");
             foreach (var (key, description) in DynamicSourceMechanisms)
                 if (node.ContainsKey(key)) return (key, description);
         }
@@ -136,36 +136,6 @@ internal static class StaticProof
         }
         return null;
     }
-
-    /// <summary>
-    /// 常量脚本：属性值只由字面值、脚本属性（烘焙时固定）与画布尺寸算出，不碰时钟、随机、输入、别的图层或跨帧状态，
-    /// 于是从第一帧起输出不变。白名单之外的任何名字（含自定义变量、函数）都不算证明；value 只许整体返回或按分量直接赋值，
-    /// 读它的分量就可能逐帧累积，不算证明。
-    /// </summary>
-    internal static bool ConstantScript(string code)
-    {
-        string text = Regex.Replace(Liveness.CapabilityScanText(code), "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'", "0");
-        if (text.Contains('`')) return false;
-        text = ConstantScriptValueUse.Replace(text, " ");
-        if (Regex.IsMatch(text, @"\bvalue\b")) return false;
-        foreach (Match word in Regex.Matches(text, @"(?<dot>\.\s*)?(?<name>[A-Za-z_$][\w$]*)"))
-        {
-            string name = word.Groups["name"].Value;
-            if (word.Groups["dot"].Success
-                ? !(ConstantScriptMembers.Contains(name) || Regex.IsMatch(text[..word.Index], @"\bscriptProperties\s*$"))
-                : !ConstantScriptNames.Contains(name)) return false;
-        }
-        return true;
-    }
-
-    // 对象字面量的键、update/init 的形参、return value、value 或其分量的直接赋值（非复合赋值）。
-    private static readonly Regex ConstantScriptValueUse = new(
-        @"(?<=[{,]\s*)[A-Za-z_$][\w$]*\s*:|\b(?:update|init)\s*\(\s*value\s*\)|\breturn\s+value\s*(?=[;}\r\n])|\bvalue\s*(?:\.\s*[xyzw]\s*)?=(?!=)",
-        RegexOptions.CultureInvariant);
-    private static readonly HashSet<string> ConstantScriptNames = ["export", "let", "var", "const", "function", "return", "if", "else", "new",
-        "true", "false", "null", "undefined", "update", "init", "scriptProperties", "createScriptProperties", "engine", "Vec2", "Vec3", "Math", "__workshopId"];
-    private static readonly HashSet<string> ConstantScriptMembers = ["x", "y", "z", "w", "canvasSize", "addSlider", "addCheckbox", "addCombo",
-        "addColor", "addTextInput", "finish", "abs", "min", "max", "floor", "ceil", "round", "sqrt", "pow", "sin", "cos", "PI"];
 
     private static bool False(JsonNode? node) => node is JsonValue value && value.TryGetValue<bool>(out bool flag) && !flag;
 

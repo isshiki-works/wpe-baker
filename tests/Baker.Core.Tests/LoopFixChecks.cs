@@ -68,7 +68,8 @@ internal static class LoopFixChecks
         const string colourScript = "export function update(value) { thisLayer.getTextureAnimation().getFrame(); " +
             "thisLayer.color = new Vec3(Math.random(), 0, 0); engine.setTimeout(() => {}, 10); return value; }";
         JsonObject colour = Analyze(Owner(6, colourScript), new JsonArray { BoneTrace(6, "sway") }, new JsonArray { Write(6, "animation") });
-        JsonObject colourItem = colour["unresolved"]!.AsArray().OfType<JsonObject>().Single();
+        // 脚本每帧写随机颜色另记一条脚本时间签名的未收敛（script_reads_random）；这里看轨道那一条
+        JsonObject colourItem = colour["unresolved"]!.AsArray().OfType<JsonObject>().Single(item => item["kind"]?.GetValue<string>() != "script_time");
         JsonObject colourClassified = ResidualMasking.Classify(Plan(6, new JsonArray(colourItem.DeepClone())),
             new JsonObject { ["objects"] = new JsonArray { Owner(6, colourScript) } }, _ => null);
         check(colourItem["random_restart"]?.GetValue<bool>() == false && colourClassified["status"]?.GetValue<string>() == "rejected" &&
@@ -77,7 +78,7 @@ internal static class LoopFixChecks
         // 精灵轨道、脚本只读帧且 Math.random 做颜色：外部写入让它成为脚本控制，但不是随机重启。
         JsonObject readOnlySprite = Analyze(Owner(6, colourScript), new JsonArray { SpriteTrace(6, "flip") },
             new JsonArray { Write(6, "textureAnimation") });
-        JsonObject readOnlyItem = readOnlySprite["unresolved"]!.AsArray().OfType<JsonObject>().Single();
+        JsonObject readOnlyItem = readOnlySprite["unresolved"]!.AsArray().OfType<JsonObject>().Single(item => item["kind"]?.GetValue<string>() != "script_time");
         check(readOnlyItem["mechanism"]?.GetValue<string>() == "sprite" && readOnlyItem["random_restart"]?.GetValue<bool>() == false,
             "a sprite whose script never controls playback is script-controlled, not proven random, even with Math.random in the file");
         // 真随机精灵脚本 + 无外部写入：靠脚本自身判出随机重启。

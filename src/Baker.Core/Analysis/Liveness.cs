@@ -109,7 +109,7 @@ internal sealed class Liveness
         var sharedWrites = new Dictionary<int, HashSet<string>>();
         HashSet<string> Keys(Dictionary<int, HashSet<string>> map, int id) => map.TryGetValue(id, out var keys) ? keys : map[id] = [];
         var cameraScripts = new HashSet<int>();
-        var lookupScripts = new Dictionary<int, List<string>>();
+        var lookupScripts = new Dictionary<int, List<(string Code, string[]? Names)>>();
         foreach (var (id, obj) in objects)
         {
             if (obj.ContainsKey("sound")) Live(id, "soundtrack");
@@ -118,7 +118,7 @@ internal sealed class Liveness
             {
                 if (binding["script"] is not JsonValue value || !value.TryGetValue<string>(out string? text)) continue;
                 string code = CapabilityScanText(text);
-                if (code.Contains("getLayer")) (lookupScripts.TryGetValue(id, out var codes) ? codes : lookupScripts[id] = []).Add(code);
+                if (code.Contains("getLayer")) (lookupScripts.TryGetValue(id, out var codes) ? codes : lookupScripts[id] = []).Add((code, ScriptTime.LayerNames(binding, obj)));
                 foreach (Match use in Regex.Matches(code, @"\bshared\b(?:\s*\.\s*(\w+)|\s*\[\s*(['""])(\w*)\2\s*\])?"))
                     Keys(sharedReads, id).Add(use.Groups[1].Success ? use.Groups[1].Value : use.Groups[3].Success ? use.Groups[3].Value : "*");
                 // 去掉字符串字面量再认写入：混淆脚本的键是 shared[_0x..('0x5',')#$]')] 这种，引号里可能有方括号。
@@ -144,12 +144,14 @@ internal sealed class Liveness
                 if (ParticleInputAnalysis.HasAudioInput(definition, obj)) Live(id, "particle_audio_input");
             }
         }
-        // 被取的名字：getLayer 的字面量参数；参数不是字面量（变量、脚本属性、数组元素）时退回脚本里引号括起的任何图层名。
+        // 被取的名字：getLayer 的参数按数据流求值（字面量、脚本属性的烘焙值、局部变量、数组元素，见 ScriptTime.LayerNames）；
+        // 有一处求不出具体名字时退回：参数是字面量取这个名字，否则取脚本里引号括起的任何图层名。
         // 没有 getLayer 的脚本不算（下拉选项的 '1'、'2' 之类会撞上同名图层）。
         // 写边记在 visible 上：昼夜选择器按名字取受控层的那部分照常由 severedWrite 摘掉。
         var named = objects.Where(pair => pair.Value["name"] is JsonValue name && name.TryGetValue<string>(out string? text) && text.Length > 0)
             .ToLookup(pair => pair.Value["name"]!.GetValue<string>(), pair => pair.Key);
-        IEnumerable<string> LookedUp(string code) => Regex.IsMatch(code, @"\bgetLayer\s*\(\s*[^'""`\s)]")
+        IEnumerable<string> LookedUp((string Code, string[]? Names) script) => script.Names ?? Quoted(script.Code);
+        IEnumerable<string> Quoted(string code) => Regex.IsMatch(code, @"\bgetLayer\s*\(\s*[^'""`\s)]")
             ? named.Select(group => group.Key).Where(name => QuotesName(code, name))
             : Regex.Matches(code, @"\bgetLayer\s*\(\s*(['""`])((?:(?!\1).)*)\1").Select(match => match.Groups[2].Value);
         liveness.LookupEdges = (from owner in lookupScripts from name in owner.Value.SelectMany(LookedUp).Distinct() from target in named[name]
