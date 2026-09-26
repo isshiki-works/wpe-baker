@@ -1215,10 +1215,11 @@
      "unresolved": 1
     },
     {
-     "message": "the pulse fingerprint still checks the uniform annotation: g_PulseSpeed bound to a different material is not the verified pulse",
+     "message": "g_PulseSpeed bound to another material key is read under that key: the scene's 'speed' does not bind it, so the shader default 3 applies and is patched by insertion",
      "layer": 3,
-     "components": 0,
-     "unresolved": 1
+     "components": 1,
+     "key": "rate",
+     "period": "2pi/3"
     },
     {
      "message": "extra spaces, a tab and a line break inside the fingerprint line do not hide a verified sine",

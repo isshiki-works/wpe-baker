@@ -304,7 +304,8 @@ public static class ShaderPeriodAnalysis
                     if (!enabled) return ShaderVerdict.NoMotion;
                     break;
                 case "constant_zero":
-                    if (!TryScalar(c.Pass, Text("key"), out double amount, out _, out _))
+                    string zeroKey = gate["uniform"] is JsonValue zeroUniform ? MaterialKey(c.Source, zeroUniform.GetValue<string>(), Text("key")) : Text("key");
+                    if (!TryScalar(c.Pass, zeroKey, out double amount, out _, out _))
                         return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, Text("missing"));
                     if (amount != 0) return c.Refuse(kind, Text("detail"));
                     break;
