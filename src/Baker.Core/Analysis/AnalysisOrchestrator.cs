@@ -69,6 +69,22 @@ internal sealed class AnalysisOrchestrator
             JsonObject old = await fallback.SelectAsync();
             if (Admission.Accepted(old)) (orchestrator, result) = (fallback, old);
         }
+        // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
+        // 读数（漂移上界、闭合读数、渲染器墙钟）写进 plan 的 slow_closure_probe。闭合的照常判能，烘焙时接缝门照常复核。
+        var slowProbes = new JsonArray();
+        while (Admission.Accepted(result) && tools is not null && request.RuntimeTraceFile is null)
+        {
+            JsonArray round = await SlowClosureProbe.RunAsync(result, tools, Path.Combine(run, $"slow-closure-{slowProbes.Count}"), token);
+            int[] retained = orchestrator.request.RetainLiveRootIds ?? [];
+            int[] open = [.. round.OfType<JsonObject>().Where(record => !LoopClosureCheck.Allows(record["loop_closure"] as JsonObject))
+                .SelectMany(record => record["owner_layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>()).Except(retained)];
+            foreach (JsonNode? record in round) slowProbes.Add(record!.DeepClone());
+            if (open.Length == 0) break;
+            orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. retained, .. open] }, analyze, space,
+                space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token);
+            result = await orchestrator.SelectAsync();
+        }
+        if (slowProbes.Count > 0) result["slow_closure_probe"] = slowProbes;
         string stagedPlan = Path.Combine(run, "selected-plan.json");
         await VideoSceneBuilder.WriteJsonAsync(stagedPlan, result, token);
         File.Move(stagedPlan, Path.Combine(root, "plan.json"), true);
