@@ -115,8 +115,8 @@ internal sealed class AnalysisOrchestrator
             if (Admission.Accepted(replanned) && NoBenefit.AnalysisConditions(replanned).Length <= NoBenefit.AnalysisConditions(result).Length)
                 result = replanned;
         }
-        // 预计不省电的方案默认拒绝（判据与覆盖见 NoBenefit）；已经被别的原因拒掉的不重复写。
-        if (Admission.Accepted(result)) NoBenefit.Apply(result, request.AllowNoBenefit);
+        // 预计不省电的方案默认拒绝（判据与覆盖见 NoBenefit）；已经被别的原因拒掉的不重复写，只差采集能力的按假设能采集判。
+        if (Admission.Accepted(result) || NoBenefit.CaptureOpenConditions(result) is not null) NoBenefit.Apply(result, request.AllowNoBenefit);
         // 尝试经过只写进既有的 preset_* / interaction_* 字段。
         result["preset_requested"] = requested;
         result["preset_applied"] = Admission.Accepted(result) ? result["settings"]?["preset"]?.DeepClone() ?? JsonValue.Create(requested) : JsonValue.Create("none");

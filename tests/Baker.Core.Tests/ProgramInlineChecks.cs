@@ -478,10 +478,10 @@ Check(subtreeExport.OfType<JsonObject>().Select(obj => obj["id"]!.GetValue<int>(
     subtreeExport[1]!["origin"]!.GetValue<string>() == "0.5 -0.3333333333333333 0" && subtreeExport[1]!["scale"]!.GetValue<string>() == "2 2 1" &&
     subtreeExport[5]!["text"] is null && subtreeExport[6]!["parent"]!.GetValue<int>() == 1201,
     "export keeps live ancestor identity and transforms, retains lookup parent chains, and compensates the video parent transform exactly once");
-var retainedSubtree = await PlanSubtrees("subtree-retained", subtreeObjects, [1200]);
+var retainedSubtree = await PlanSubtrees("subtree-retained", subtreeObjects, [.. subtreeObjects.Select(obj => obj!["id"]!.GetValue<int>())]);
 Check(retainedSubtree["live_layer_ids"]!.AsArray().Count == subtreeObjects.Count &&
     retainedSubtree["video_groups"]!.AsArray().Count == 0 && retainedSubtree["omitted_snapshot_layer_ids"]!.AsArray().Count == 0,
-    "explicit author-root retention covers every split descendant including hidden branches");
+    "explicit retention of every allocation unit covers each split descendant including hidden branches");
 var dynamicSubtree = subtreeObjects.DeepClone().AsArray();
 dynamicSubtree[0]!["origin"] = new JsonObject { ["script"] = "export function update() { return engine.runtime; }" };
 var dynamicSubtreePlan = await PlanSubtrees("subtree-dynamic", dynamicSubtree);

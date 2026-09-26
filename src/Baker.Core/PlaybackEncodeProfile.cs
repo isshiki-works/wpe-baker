@@ -3,7 +3,7 @@ using System.Globalization;
 namespace Baker.Core;
 
 internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, string Crf, string PixelFormat, string ColorFilter,
-    string Kind = PlaybackEncoderSelection.Software, bool Lossless = false, int QualityStep = 0)
+    string Kind = PlaybackEncoderSelection.Software, bool Lossless = false, int QualityStep = 0, int SizeOffset = 0)
 {
     /// <summary>画质判据不达标时最多再升这么多档；升满仍不达标就回退软件编码，不无限重编。</summary>
     internal const int MaximumQualityStep = 2;
@@ -71,8 +71,9 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
         _ => "yuv420p",
     };
 
+    /// <param name="quantizerOffset">按内嵌视频体积预算加的量化值（<see cref="EmbeddedVideoBudget.QuantizerOffset"/>），0 = 不受体积限制。</param>
     internal static PlaybackEncodeProfile Create(uint width, uint height, uint numerator, uint denominator, bool losslessTest,
-        string kind = PlaybackEncoderSelection.Software)
+        string kind = PlaybackEncoderSelection.Software, int quantizerOffset = 0)
     {
         // 需要无损 master 的路径使用软件 RGB 编码；直编路径保留必要原帧做检查。
         // 档位取 ultrafast 而不是 veryfast：crf 0 下两者都走 x264 的无损路径，解码像素逐位相同，
@@ -84,7 +85,7 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
         if (losslessTest) return new("libx264rgb", "ultrafast", "0", "rgb24", "format=rgb24", Lossless: true);
         string software = SelectPlaybackEncoder(width, height, numerator, denominator);
         return new(HardwareEncoder(software, kind), PresetFor(kind), kind == PlaybackEncoderSelection.Nvenc ? NvencStartCq : "16",
-            PixelFormatFor(kind), Bt709Filter, kind);
+            PixelFormatFor(kind), Bt709Filter, kind, SizeOffset: quantizerOffset);
     }
 
     /// <summary>
@@ -116,14 +117,17 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
     /// <summary>还能不能再升一档。</summary>
     internal bool CanEscalate => QualityStep < MaximumQualityStep;
 
-    /// <summary>量化值档位：每升一档减 3，下限 10。第 0 档原样返回 Crf，保证无损 master 的 "0" 不被改写。</summary>
-    private string StepQuantizer() => QualityStep <= 0 ? Crf
-        : Math.Max(10, int.Parse(Crf, CultureInfo.InvariantCulture) - 3 * Math.Min(QualityStep, MaximumQualityStep))
+    /// <summary>
+    /// 量化值档位：每升一档减 3，下限 10；再加体积预算的 <see cref="SizeOffset"/>（上限 51）。
+    /// 第 0 档且不受体积限制时原样返回 Crf，保证无损 master 的 "0" 不被改写。
+    /// </summary>
+    private string StepQuantizer() => QualityStep <= 0 && SizeOffset == 0 ? Crf
+        : Math.Min(51, Math.Max(10, int.Parse(Crf, CultureInfo.InvariantCulture) - 3 * Math.Clamp(QualityStep, 0, MaximumQualityStep)) + SizeOffset)
             .ToString(CultureInfo.InvariantCulture);
 
-    /// <summary>MF 的质量档位，越大越好，取自 MfQualityLadder。</summary>
+    /// <summary>MF 的质量档位，越大越好，取自 MfQualityLadder；体积预算每 +1 量化值降 2（MF 的 quality 与 QP 没有公开换算，编码后按实际字节再补）。</summary>
     private string StepMfQuality() =>
-        MfQualityLadder[Math.Clamp(QualityStep, 0, MfQualityLadder.Length - 1)].ToString(CultureInfo.InvariantCulture);
+        Math.Max(1, MfQualityLadder[Math.Clamp(QualityStep, 0, MfQualityLadder.Length - 1)] - 2 * SizeOffset).ToString(CultureInfo.InvariantCulture);
 
     internal string[] OutputArguments(uint numerator, uint denominator, string output) =>
     [

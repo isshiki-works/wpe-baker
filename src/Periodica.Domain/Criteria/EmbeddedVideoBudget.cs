@@ -2,7 +2,8 @@ namespace Periodica.Domain;
 
 /// <summary>
 /// Wallpaper Engine 内嵌视频（TEX 容器 TEXB0004 里的 MP4）的大小上限，以及成品视频大小的预估：
-/// bake 在主渲染前按这个场景自己的短段试编码（composition probe）外推，超限就干净拒绝；编码后按实际字节再判一次。
+/// bake 在主渲染前按这个场景自己的短段试编码（composition probe）外推，超限就按体积抬高量化值（<see cref="QuantizerOffset"/>）；
+/// 编码后按实际字节再算一次，仍超就再抬一次；画质门在体积限制下过不了才拒绝。
 /// analyze 不按参考码率收紧循环长度：参考码率是现有成品里最高的那张，对一般场景高估一个数量级
 /// （3695791724 按 4K 估 4.5 GB，AV1 实际约 0.4 GB），会把 600 s 的循环截成 25 s。
 /// 这里只放数值判据；写 plan/bake JSON、拒绝文案与 ffprobe 读包在 Baker.Core 的 EmbeddedVideoBudgetJson。
@@ -30,6 +31,16 @@ public static class EmbeddedVideoBudget
     /// <summary>参考码率的像素幂律指数。</summary>
     public static readonly double ReferencePixelExponent =
         Math.Log(ReferenceHighBytesPerFrame / ReferenceLowBytesPerFrame) / Math.Log(ReferenceHighPixels / ReferenceLowPixels);
+
+    /// <summary>按体积选编码参数时瞄准的字节数：上限留 10% 余量，吸收"每 +6 量化值体积减半"这条经验律的误差。</summary>
+    public const long TargetBytes = MaximumBytes / 10 * 9;
+
+    /// <summary>
+    /// 把 <paramref name="bytes"/> 压到 <see cref="TargetBytes"/> 以内要加的量化值（CRF/CQ/QP）：H.264/HEVC 每 +6 体积约减半，
+    /// 取 ceil(6·log2(bytes/目标))；不超目标时为 0。估不准由编码后按实际字节再算一次补上。
+    /// </summary>
+    public static int QuantizerOffset(double bytes) =>
+        bytes <= TargetBytes ? 0 : (int)Math.Ceiling(6 * Math.Log2(bytes / TargetBytes));
 
     /// <summary>外推假定的关键帧间隔：libx264、libx265、h264_nvenc 默认 GOP 的实测值（design-long-loop-streaming.md §2.6）。</summary>
     public const ulong AssumedKeyFrameInterval = 250;

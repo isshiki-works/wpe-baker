@@ -707,11 +707,11 @@ public static class MessageCatalog
             Zh: "没有图层分进视频，也没有更小的视频分配可试。",
             En: "No layer is allocated to video, so there is no smaller bake allocation left to try."),
         ["reason.allocation_no_trigger"] = new(
-            Zh: "转成视频的图层里没有不满足平稳随机判据的粒子，也没有带未解析循环机制的层，整棵保留作者子树得到的还是同一个分配。",
-            En: "No baked layer is a particle system that fails the stationary-random criteria or owns an unresolved loop mechanism, so retaining whole author subtrees would keep the same allocation."),
+            Zh: "转成视频的图层里没有不满足平稳随机判据的粒子，也没有带未解析循环机制的层，保留实时得到的还是同一个分配。",
+            En: "No baked layer is a particle system that fails the stationary-random criteria or owns an unresolved loop mechanism, so retaining units live would keep the same allocation."),
         ["reason.allocation_nothing_left"] = new(
-            Zh: "把所有未解析层和粒子层的作者子树都保留实时后，没有内容可以转成视频，缩小分配没有意义。",
-            En: "Retaining the author subtrees of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help."),
+            Zh: "把所有未解析层和粒子层所在的分配单元都保留实时后，没有内容可以转成视频，缩小分配没有意义。",
+            En: "Retaining the allocation units of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help."),
         ["hardware_decode.owner_unreadable"] = new(
             Zh: "读不到缓存所属图层的模型、材质或底图纹理。",
             En: "The cache owner's model, material or base texture could not be read."),
@@ -904,11 +904,11 @@ public static class MessageCatalog
             En: "Sway retime enabled, but the other temporal components produced no loop candidate (maximum {0} s), so no L = kP exists; sway components remain unresolved.",
             Legacy: "Sway retime is on, but the other temporal components produced no loop candidate (maximum {0} s), so no L = kP exists; the sway components stay unresolved."),
 
-        // {0}=视频组 {1}=帧数 {2}=秒数 {3}=预估大小（GiB） {4}=按试编码码率最长秒数
-        ["bake.embedded_video_size_predicted"] = new(
-            Zh: "视频超过 Wallpaper Engine 的 2 GiB 上限（约 {3} GiB），按当前码率最长约 {4} 秒；可降低分辨率或帧率后重试。",
-            En: "The video exceeds Wallpaper Engine's 2 GiB limit (about {3} GiB); at this bitrate the loop can be about {4} s at most. Lower the resolution or frame rate and retry.",
-            Legacy: "Extrapolated from the short trial encode, video group {0} ({1} frames, {2} s) would be about {3} GiB, above the 2 GiB embedded-video limit Wallpaper Engine can play (a larger video shows only the clear color). At this bitrate it fits about {4} s. Stopped before rendering; no candidate project was generated. Analyze again with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate."),
+        // {0}=视频组 {1}=不压时的大小（GiB） {2}=帧数 {3}=秒数 {4}=按不压的码率最长秒数 {5}=实测 SSIM {6}=门限 {7}=量化值增量
+        ["bake.embedded_video_quality_rejected"] = new(
+            Zh: "视频要压进 Wallpaper Engine 的 2 GiB 上限，画质就过不了画质门：不压约 {1} GiB，量化值 +{7} 后 SSIM {5}，门限 {6}；按不压的码率最长约 {4} 秒。可降低分辨率或帧率后重试。",
+            En: "Fitting the video into Wallpaper Engine's 2 GiB limit fails the playback quality gate: unconstrained it is about {1} GiB; with the quantizer raised by {7} the SSIM is {5} against a threshold of {6}. At the unconstrained bitrate the loop can be about {4} s at most. Lower the resolution or frame rate and retry.",
+            Legacy: "Video group {0} ({2} frames, {3} s) needs about {1} GiB at the reference quality, above the 2 GiB embedded-video limit; raising the quantizer by {7} to fit the limit measured SSIM {5}, below the playback quality gate threshold {6}. At the unconstrained bitrate it fits about {4} s. No candidate project was generated. Analyze again with a smaller --loop-max-seconds, a lower resolution, or a lower frame rate."),
 
         // {0}=视频组 {1}=实际大小（GiB） {2}=帧数 {3}=秒数 {4}=按实际码率最长秒数
         ["bake.embedded_video_size_rejected"] = new(

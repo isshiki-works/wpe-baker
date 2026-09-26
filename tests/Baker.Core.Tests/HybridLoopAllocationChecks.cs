@@ -47,9 +47,9 @@ internal static class HybridLoopAllocationChecks
         var (plan, scene) = Fixture();
         string originalPlan = plan.ToJsonString(), originalScene = scene.ToJsonString();
         var proposal = Propose(plan, scene)!;
-        check(proposal is not null && Ids(proposal, "retain_live_root_ids").SequenceEqual([30, 10, 20]) &&
-            Ids(proposal, "added_live_root_ids").SequenceEqual([10, 20]),
-            "loop fallback merges existing retention and maps split allocation children to author roots");
+        check(proposal is not null && Ids(proposal, "retain_live_root_ids").SequenceEqual([30, 11, 12, 20]) &&
+            Ids(proposal, "added_live_root_ids").SequenceEqual([11, 12, 20]),
+            "loop fallback merges existing retention and retains the allocation units of its triggers, not their whole author roots");
         check(Ids(proposal!, "trigger_layer_ids").SequenceEqual([11, 12, 20]) &&
             Ids(proposal!, "remaining_baked_layer_ids").SequenceEqual([50]),
             "loop fallback includes nested analytic owners and particles but ignores unknown or unselected owners");
@@ -57,7 +57,7 @@ internal static class HybridLoopAllocationChecks
             "loop allocation proposals leave source objects and the failed plan unchanged");
 
         plan["settings"]!["retain_live_root_ids"] = proposal!["retain_live_root_ids"]!.DeepClone();
-        check(Propose(plan, scene) is null, "loop fallback declines a retry with no newly retained author root");
+        check(Propose(plan, scene) is null, "loop fallback declines a retry with no newly retained allocation unit");
 
         (plan, scene) = Fixture();
         plan["video_groups"] = new JsonArray(new JsonObject { ["layer_ids"] = new JsonArray(11, 12) });
@@ -83,22 +83,6 @@ internal static class HybridLoopAllocationChecks
 
         plan["video_groups"] = new JsonArray();
         check(Propose(plan, scene) is null, "an allocation with no baked layers has no loop fallback proposal");
-
-        (plan, scene) = Fixture();
-        scene["objects"]![1]!["parent"] = 11;
-        bool cycleRejected = false;
-        try { Propose(plan, scene); }
-        catch (TargetInvocationException error) when (error.InnerException is InvalidDataException)
-        { cycleRejected = true; }
-        check(cycleRejected, "loop allocation rejects cyclic source ancestry instead of inventing a retained root");
-
-        (plan, scene) = Fixture();
-        plan["settings"]!["retain_live_root_ids"] = new JsonArray(11);
-        bool childRetentionRejected = false;
-        try { Propose(plan, scene); }
-        catch (TargetInvocationException error) when (error.InnerException is InvalidDataException)
-        { childRetentionRejected = true; }
-        check(childRetentionRejected, "loop allocation does not pass an allocation child as a retained author root");
 
         // feat/particle-stationarity：粒子层只在没通过平稳随机判据时才当触发器，判据结论读 loop.unresolved[].particle_stationarity。
         static JsonObject StationarityItem(int owner, bool stationary) => new() {
@@ -180,8 +164,10 @@ internal static class HybridLoopAllocationChecks
             ["kind"] = "NonPeriodicOrDriftingMechanism", ["owner_layer_id"] = 4, ["bounded_displacement"] = true,
             ["mechanism"] = ShaderPeriodAnalysis.FoliageSwayMechanism, ["detail"] = "sway"
         })));
+        // 重查 plan 的拒因带编号（与真实 plan 一样），ReplannedResolution 按编号放过透视拒因。
+        static JsonObject WithBlocker(JsonObject plan) { PlanBlockers.Set(plan, [new Blocker(BlockerCode.VideoShell)]); return plan; }
         check(!swayReplan.Resolved && swayReplan.Basis == "unavailable" &&
-            !Resolve(Replanned(new JsonArray(WarmStationary()), blockers: new JsonArray("a blocker"))).Resolved &&
+            !Resolve(WithBlocker(Replanned(new JsonArray(WarmStationary())))).Resolved &&
             !Resolve(Replanned(new JsonArray(WarmStationary()), candidates: 0)).Resolved &&
             !Resolve(Replanned(new JsonArray(Note()))).Resolved,
             "a smaller allocation stays unavailable when a displacement component remains, when blockers remain, without candidates, or with only informational notes");
