@@ -152,10 +152,13 @@ public sealed class HybridBakeService(NativeTools tools)
         }
         // 实际编出的视频流超过上限：省下渲染最少的一组留实时，重新分析再烘，不整张拒。重烘走 BakeAsync，仍超就接着退
         // （每轮多留一组的根，组数有限）；首次产物按留实时的根数分目录存。
-        if (await NoBenefit.StreamRetreatRootsAsync(request.Plan, result, cancellationToken) is int[] fewer)
+        if (result[NoBenefit.Field]?[NoBenefit.RetreatRootsField] is JsonArray retreatRoots)
+        {
+            int[] fewer = [.. retreatRoots.Select(SceneGraph.Int).OfType<int>()];
             return await RetryReplannedAsync(request, result, "video_stream_retreat", $".streams-{fewer.Length}-attempt", new JsonObject {
                     ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(fewer), ["reason"] = NoBenefit.TooManyStreams },
                 settings => settings with { RetainLiveRootIds = fewer }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
+        }
         // 残差掩盖组在第一层被拒：组里被掩盖的粒子留实时，重新分析再烘。重烘走 BakeAsync，重烘后新被拒的残差组接着留实时
         // （留实时的层不再进视频，每轮至少多留一层，层数有限）。
         if (ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
@@ -761,6 +764,8 @@ public sealed class HybridBakeService(NativeTools tools)
                         if (!probe && !NoBenefit.Allowed(plan) && NoBenefit.TooManyVideoStreams(replacements.Count - staticIds.Count))
                         {
                             NoBenefit.RejectStreams(report, replacements.Count - staticIds.Count);
+                            if (await NoBenefit.StreamRetreatRootsAsync(plan, report, cancellationToken) is int[] retreat)
+                                report[NoBenefit.Field]![NoBenefit.RetreatRootsField] = JsonSerializer.SerializeToNode(retreat);
                             await Save();
                             return report;
                         }

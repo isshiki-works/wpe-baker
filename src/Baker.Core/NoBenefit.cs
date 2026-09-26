@@ -150,16 +150,17 @@ public static class NoBenefit
         new Message("bake.no_benefit_streams", [videoLayers, SavingProvenStreams]).Write(report, "reason");
     }
 
+    /// <summary>no_benefit 记录里超路数拒绝后要再留实时的根（<see cref="StreamRetreatRootsAsync"/>）；烘焙外层据此重新分析再烘。</summary>
+    public const string RetreatRootsField = "retreat_root_ids";
+
     /// <summary>
     /// 烘焙因视频流超过上限被拒时，再退一组留实时：没被证明静态、也没编成静态纹理的视频组里，省下特效渲染
-    /// （<see cref="BakeValueAssessment.PassCoverage"/>）最少的那组的根并入 plan 已留的，返回新的 --retain-live 列表；
-    /// 不是这类拒绝、或没有能再留的组时 null。
+    /// （<see cref="BakeValueAssessment.PassCoverage"/>）最少的那组的根并入 plan 已留的，返回新的 --retain-live 列表；没有能再留的组时 null。
+    /// 在拒绝处调用：重烘的 plan 的运行时证据在分析刷新目录里，烘完就清掉了。
     /// </summary>
     internal static async Task<int[]?> StreamRetreatRootsAsync(JsonObject plan, JsonObject report, CancellationToken token)
     {
-        if (report["status"]?.GetValue<string>() != RejectedBakeStatus ||
-            !(report[Field]?["conditions"] as JsonArray ?? []).Any(c => c?.GetValue<string>() == TooManyStreams) ||
-            plan["runtime_evidence"]?.GetValue<string>() is not string path) return null;
+        if (plan["runtime_evidence"]?.GetValue<string>() is not string path) return null;
         var observed = (JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? [])
             .OfType<JsonObject>().ToLookup(layer => SceneGraph.Int(layer["owner"]));
         var staticIds = (report["groups"] as JsonArray ?? []).OfType<JsonObject>()
