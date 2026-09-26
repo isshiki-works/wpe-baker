@@ -152,33 +152,62 @@ public class AdmissionTests
     [Fact]
     public void NoBenefitPlansAreRejectedByDefaultAndPassWhenAllowed()
     {
-        // 按组取舍后全作品净收益不到 1 W、固定时段：默认拒绝（blocker + 拒因 + 主因），显式允许后放行；没命中的方案原样通过。
-        static JsonObject Costed(JsonObject plan, double net)
+        // 静态图仍带实时层、固定时段：默认拒绝（blocker + 拒因），显式允许后放行；没命中的方案原样通过。
+        static JsonObject StaticWithLive(JsonObject plan)
         {
-            plan[NoBenefit.CostField] = new JsonObject { ["net_w"] = net, ["cause"] = NoBenefit.CauseLiveLayers };
+            plan["loop"]!["candidates"]![0]!["frames"] = 1;
+            plan["live_layer_ids"] = new JsonArray(7);
             return plan;
         }
-        JsonObject rejected = Costed(Narrated(Plan(new JsonArray())), 0.9);
+        JsonObject rejected = StaticWithLive(Narrated(Plan(new JsonArray())));
         NoBenefit.Apply(rejected, allowed: false);
         Assert.Equal([BlockerCode.NoBenefitExpected], PlanBlockers.Codes(rejected).ToArray());
         Assert.False(Admission.Bakeable(rejected));
         Assert.Equal(NoBenefit.RejectionReason, rejected["preset_rejection_reason"]!.GetValue<string>());
-        Assert.Equal(NoBenefit.CauseLiveLayers, rejected["no_benefit"]!["cause"]!.GetValue<string>());
+        Assert.Equal([NoBenefit.StaticWithLive], NoBenefit.AnalysisConditions(rejected));
 
-        JsonObject allowed = Costed(Narrated(Plan(new JsonArray())), 0.9);
+        JsonObject allowed = StaticWithLive(Narrated(Plan(new JsonArray())));
         NoBenefit.Apply(allowed, allowed: true);
         Assert.True(Admission.Bakeable(allowed));
         Assert.Equal(NoBenefit.OverrideStatus, allowed["no_benefit"]!["status"]!.GetValue<string>());
 
-        JsonObject saving = Costed(Narrated(Plan(new JsonArray())), 1.0);
-        NoBenefit.Apply(saving, allowed: false);
-        Assert.True(Admission.Bakeable(saving));
-        Assert.Null(saving["no_benefit"]);
+        JsonObject noLive = StaticWithLive(Narrated(Plan(new JsonArray())));
+        noLive["live_layer_ids"] = new JsonArray();
+        NoBenefit.Apply(noLive, allowed: false);
+        Assert.True(Admission.Bakeable(noLive));
 
         JsonObject fixedDay = Narrated(Plan(new JsonArray()));
         fixedDay["settings"]!["daytime_state"] = "00-07+18-24";
         NoBenefit.Apply(fixedDay, allowed: false);
         Assert.Equal([BlockerCode.NoBenefitExpected], PlanBlockers.Codes(fixedDay).ToArray());
+
+        // 特效前缀路线：每个缓存都是一路视频，超过上限在分析时就拒。
+        JsonObject prefixes = Narrated(Plan(new JsonArray(), route: "effect_prefix"));
+        prefixes["effect_prefix_caches"] = new JsonArray([.. Enumerable.Range(0, 5).Select(i => (JsonNode)new JsonObject { ["owner_layer_id"] = i })]);
+        Assert.Equal([NoBenefit.TooManyStreams], NoBenefit.AnalysisConditions(prefixes));
+        prefixes["effect_prefix_caches"]!.AsArray().RemoveAt(0);
+        Assert.Empty(NoBenefit.AnalysisConditions(prefixes));
+
+        // 整层路线：每路视频省下的特效（按画布占比加权的 pass 数）不到 1 道整屏就拒；bake_value 没算这项的不判。
+        JsonObject cheap = Narrated(Plan(new JsonArray(), groups: [[1], [3]]));
+        cheap["bake_value"] = new JsonObject { ["rule"] = "cached_effect_passes", ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 1.9 } };
+        Assert.Equal([NoBenefit.VideoCostOverSaving], NoBenefit.AnalysisConditions(cheap));
+        cheap["bake_value"]!["evidence"]!["effect_pass_coverage"] = 2.0;
+        Assert.Empty(NoBenefit.AnalysisConditions(cheap));
+        cheap["bake_value"] = new JsonObject { ["rule"] = "needs_work_comparison" };
+        Assert.Equal([NoBenefit.PlainLayersOnly], NoBenefit.AnalysisConditions(cheap));
+
+        JsonObject ordinary = Narrated(Plan(new JsonArray()));
+        NoBenefit.Apply(ordinary, allowed: false);
+        Assert.True(Admission.Bakeable(ordinary));
+        Assert.Null(ordinary["no_benefit"]);
+
+        // 视频流路数在烘焙时按实际编出的流判：4 路放行，5 路拒；settings 里的允许标记随 plan 走。
+        Assert.False(NoBenefit.TooManyVideoStreams(4));
+        Assert.True(NoBenefit.TooManyVideoStreams(5));
+        Assert.False(NoBenefit.Allowed(ordinary));
+        ordinary["settings"]!["allow_no_benefit"] = true;
+        Assert.True(NoBenefit.Allowed(ordinary));
     }
 
     [Fact]
