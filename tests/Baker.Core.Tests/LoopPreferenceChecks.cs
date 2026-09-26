@@ -39,6 +39,7 @@ internal static class LoopPreferenceChecks
             "every preference keeps a full candidate table and only changes its order");
 
         // 1% 预算下这两个分量在 10..180 秒内无解，2% 下有 19 个可行帧。
+        // 总调速成本只计可见项（原周期 < 60 s）：质量档按 swirl 的调速排序，110 s 的 slow 不计。
         CommonLoopComponent[] coarse =
         [
             new("slow", new(110.0, CommonLoopPeriodEvidence.Analytic), true),
@@ -49,7 +50,7 @@ internal static class LoopPreferenceChecks
         CommonLoopSearchResult coarseQuality = Solve(coarse, CommonLoopPreference.Quality, 10);
         check(coarseBalanced.BudgetRelaxed && coarseBalanced.RetimeBudgetPercent == 2 && coarseBalanced.Candidates[0].Frames == 6480,
             "balanced falls back to the full budget and records the relaxation when one percent closes nothing");
-        check(!coarsePerformance.BudgetRelaxed && coarsePerformance.Candidates[0].Frames == 6480 && coarseQuality.Candidates[0].Frames == 6489 &&
+        check(!coarsePerformance.BudgetRelaxed && coarsePerformance.Candidates[0].Frames == 6480 && coarseQuality.Candidates[0].Frames == 6471 &&
             coarsePerformance.Candidates.Select(candidate => candidate.Frames).ToHashSet()
                 .SetEquals(coarseQuality.Candidates.Select(candidate => candidate.Frames)) &&
             coarsePerformance.Candidates.Count == 19,

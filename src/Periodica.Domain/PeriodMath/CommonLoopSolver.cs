@@ -240,7 +240,8 @@ public static class CommonLoopSolver
                 multiplier, delta, Math.Abs(delta) > 1e-12));
         }
         if (constraints.Count != 0) return new(frames, seconds, null, constraints);
-        double cost = cycles.Sum(c => Math.Abs(c.DeltaPercent));
+        // 成本只计可见项（原周期 < 60 s）：冻结或改频的极慢项看不出来，不按 δ 计入
+        double cost = cycles.Where(c => c.OldPeriodSeconds < SwayRecurrenceSolver.VisiblePeriodSeconds).Sum(c => Math.Abs(c.DeltaPercent));
         return new(frames, seconds, new(frames, request.FpsNumerator, request.FpsDenominator, seconds, cycles, cost), []);
     }
 

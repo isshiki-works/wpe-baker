@@ -142,13 +142,15 @@ internal static class PlainLanguage
     }
 
     /// <summary>
-    /// 画面改动的三档人话映射（基本看不出来 / 略有改动 / 改动明显）。判据是分析已经算出来的整体调速 total_retime_cost_percent：
+    /// 画面改动的三档人话映射（基本看不出来 / 略有改动 / 改动明显）。判据是可见改动 max_change_visible_percent（原周期 &lt; 60 s 的项里最大的 |δ|，
+    /// 与 1.0.2 一致；候选没写它时退回整体调速 total_retime_cost_percent）：
     /// ≤ 3% 基本看不出来，≤ 5% 略有改动，其余改动明显。档位与这三档对齐：平衡档预算 3%、效率档 5%。
     /// 一个改动量都没有（没有调速）时同样按"基本看不出来"：分析没改动画面。
     /// </summary>
     internal static string ChangeLevel(JsonObject candidate, bool english)
     {
-        double visible = AppJsonPresentation.Number(candidate["total_retime_cost_percent"]) ?? 0;
+        double visible = AppJsonPresentation.Number(candidate["max_change_visible_percent"]) ??
+            AppJsonPresentation.Number(candidate["total_retime_cost_percent"]) ?? 0;
         if (visible <= 3) return L(english, "可忽略", "negligible");
         if (visible <= 5) return L(english, "轻微", "slight");
         return L(english, "明显", "noticeable");

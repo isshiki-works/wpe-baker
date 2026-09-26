@@ -83,8 +83,8 @@ internal static class LoopAnalysis
             {
                 ShaderTerm[] own = [.. shader.Terms.Where(x => x.OwnerLayerId == owner)];
                 if (own.Length == 0) continue;
-                LoopSolve relaxed = SolveLoop(shader with { Components = [] }, [.. animation.Where(x => x.OwnerLayerId == owner)], [.. own.Select(x => x.Relaxed)],
-                    fpsNumerator, fpsDenominator, proof, ceiling, preference);
+                LoopSolve relaxed = SolveLoop(shader with { Components = [] }, [.. animation.Where(x => x.OwnerLayerId == owner)], [.. own.Select(x => x.Relaxed.MaximumRetimePercent is double cap
+                    ? x.Relaxed with { MaximumRetimePercent = Math.Max(cap, proof) } : x.Relaxed)], fpsNumerator, fpsDenominator, proof, ceiling, preference);
                 if (relaxed.Result.NoCandidate is { Kind: CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
                     or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling } never)
                 {
