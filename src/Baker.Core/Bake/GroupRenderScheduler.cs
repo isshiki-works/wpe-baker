@@ -271,8 +271,10 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     private async Task<JsonObject> StartAsync(int index)
     {
         JsonObject? estimate = await SizeEstimate;
-        lock (sizeBudgets) sizeBudgets[index] = (estimate?["quantizer_offset"]?.GetValue<int>() ?? 0,
+        // 外推来自 libx264 crf16 的试编，增量按软件档的码率律算；GPU 编码器的码率律不同，改走 CPU 路线时回到这个起点重新校正。
+        (int Offset, double Unconstrained) predicted = (estimate?["quantizer_offset"]?.GetValue<int>() ?? 0,
             (estimate?["groups"] as JsonArray ?? []).Max(group => group?["predicted_bytes"]?.GetValue<long>()) ?? 0);
+        lock (sizeBudgets) sizeBudgets[index] = predicted;
         bool sizeRetried = false;
         RenderRequest render = MasterRequest(index);
         if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
@@ -352,7 +354,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 {
                     // 体积限制下不降 QP（降了会超上限）：直接改走 CPU 路线，软件档同一量化值再过一次画质门。
                     if (SizeOffset(index) > 0)
-                        throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} under the embedded-video size budget.");
+                        throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} under the embedded-video size budget " +
+                            $"(SSIM {rendered["playback_quality_gate"]?["measured_ssim"]?.ToJsonString()}).");
                     Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
                         Path.GetDirectoryName(render.OutputDirectory)!, $"master.{gpu.Codec}-qp{gpu.Qp}"));
                     render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
@@ -433,6 +436,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(parent, "master.gpu-unavailable"));
                 fallbackReason = error.Message;
                 gpuAllowed = false;
+                lock (sizeBudgets) sizeBudgets[index] = (predicted.Offset, Math.Max(predicted.Unconstrained, sizeBudgets[index].Unconstrained));
+                sizeRetried = false;
                 render = MasterRequest(index, allowGpu: false, coverage: coverage);
             }
         }
