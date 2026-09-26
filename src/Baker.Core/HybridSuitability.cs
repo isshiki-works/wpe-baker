@@ -65,10 +65,7 @@ internal static class HybridSuitability
         if (blockers.Contains(BlockerCode.BakeAllocation) &&
             plan["loop_allocation_fallback"] is JsonObject nothingLeft && Text(nothingLeft["status"]) == "not_applicable" &&
             Text(nothingLeft["reason_localized"]?["key"]) == "reason.allocation_nothing_left")
-            return Converged(plan, Build("not_suitable", NoIndependentContentRule,
-                "Every layer that could go into the video has motion whose period the analysis cannot establish; keeping those layers live leaves nothing to pre-render, " +
-                "so reallocation cannot help. Keep using the original wallpaper.",
-                "能进视频的图层上都有分析不出周期的动态效果；把它们留作实时后就没有可以预渲染的画面，重新分配也帮不上。建议继续使用原壁纸。", notes));
+            return Converged(plan, Build("not_suitable", NoIndependentContentRule, "", "", notes), unsupportedOtherwise: true);
 
         // 同类：不可掩盖的分量都在要烘的层上（或没有归属），把它们留实时的更小分配也试过、仍证不出循环。
         // 这条保留 hdr 判据：重查可能只是被 HDR 闭合挡住（resolution_basis = hdr_radiance_open），不能说成证不出循环。
@@ -80,10 +77,7 @@ internal static class HybridSuitability
             plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
             blocking.OfType<JsonObject>().All(component => component["owner_layer_id"] is not JsonValue owner ||
                 !(plan["live_layer_ids"] as JsonArray ?? []).Any(id => JsonNode.DeepEquals(id, owner))))
-            return Converged(plan, Build("not_suitable", "loop_unproven_after_reallocation",
-                "Some content bound for the video changes in a way whose loop cannot be proven; keeping it live and reallocating was already tried and found no loop either, " +
-                "and turning live elements off does not reach it. This version cannot bake this wallpaper; keep using the original.",
-                "要转成视频的内容里有证明不了能循环的变化；把它留作实时、重新分配也试过，仍没有循环，关掉实时元素也解不开。当前版本不支持这张，建议继续使用原壁纸。", notes));
+            return Converged(plan, Build("not_suitable", "loop_unproven_after_reallocation", "", "", notes), unsupportedOtherwise: true);
 
         // S1：依赖闭包之后连一个视频组都没有，没有任何东西可烘。
         if (noCandidateAtAll && groups == 0)
@@ -157,16 +151,19 @@ internal static class HybridSuitability
     }
 
     /// <summary>
-    /// "证不出循环"的几条规则，在不可掩盖分量全都已被证明上限内不会重复时（<see cref="ResidualMasking"/> 标了 loop_convergence=cannot），
-    /// 结论就是"不能"：理由换成占位键，界面文字待定。规则名不动，下游按规则名的分支不受影响。
+    /// 给不出循环的几条规则：不可掩盖分量全都已被证明上限内不会重复时（<see cref="ResidualMasking"/> 标了 loop_convergence=cannot），
+    /// 结论是"不能"，理由写循环上限；unsupportedOtherwise 的规则在其余情况下是分析没推下去（未收敛）。规则名不动。
     /// </summary>
-    private static JsonObject Converged(JsonObject plan, JsonObject built)
+    private static JsonObject Converged(JsonObject plan, JsonObject built, bool unsupportedOtherwise = false)
     {
-        if (plan["loop"]?["residual_masking"]?["blocking_components"] is not JsonArray { Count: > 0 } blocking ||
-            !blocking.OfType<JsonObject>().All(component => Text(component["loop_convergence"]) == "cannot")) return built;
-        built["loop_convergence"] = "cannot";
-        built["reason_en"] = ResidualMasking.NeverRepeatsReasonKey;
-        built["reason_zh"] = ResidualMasking.NeverRepeatsReasonKey;
+        bool cannot = plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
+            blocking.OfType<JsonObject>().All(component => Text(component["loop_convergence"]) == "cannot");
+        if (!cannot && !unsupportedOtherwise) return built;
+        string key = cannot ? ResidualMasking.NeverRepeatsReasonKey : ResidualMasking.NotSupportedReasonKey;
+        double minutes = Number(plan["loop"]?["maximum_seconds"]) / 60;
+        if (cannot) built["loop_convergence"] = "cannot";
+        built["reason_en"] = MessageCatalog.Get(key, MessageCatalog.English, minutes);
+        built["reason_zh"] = MessageCatalog.Get(key, MessageCatalog.Chinese, minutes);
         return built;
     }
 

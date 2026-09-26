@@ -491,19 +491,25 @@ public static class ResidualMasking
         verdict["reason"] = provenNonPeriodic
             ? MessageCatalog.Get("residual.proven_nonperiodic_unbounded", MessageCatalog.Chinese, layerPrefix, kind, ceiling, detail)
             : MessageCatalog.Get("residual.unrecognized_unbounded", MessageCatalog.Chinese, layerPrefix, kind, detail);
-        return provenNonPeriodic ? Converge(verdict, mechanism) : verdict;
+        return Converge(verdict, provenNonPeriodic ? mechanism : "");
     }
 
-    /// <summary>界面待定的占位理由键：分量在循环上限内不会重复（调速也够不着）。</summary>
+    /// <summary>理由键：分量在循环上限内不会重复（调速也够不着），结论"不能"。</summary>
     public const string NeverRepeatsReasonKey = "reason.loop_never_repeats_within_limit";
+    /// <summary>理由键：分析没推下去（未收敛）；具体原因码留在 mechanism 里给调试用。</summary>
+    public const string NotSupportedReasonKey = "reason.effect_not_yet_supported";
 
     /// <summary>
     /// 带具名机制的 NonPeriodicOrDriftingMechanism 附有方程证明（上限内没有周期，允许的调速也够不着），结论是"不能"，不是"证不出"。
-    /// 没有具名机制的同类项（如"NOISE 开着或未证明"）不算证明，不收敛。
+    /// 没有具名机制的同类项（如"NOISE 开着或未证明"）不算证明，记未收敛。
     /// </summary>
     private static JsonObject Converge(JsonObject verdict, string mechanism)
     {
-        if (mechanism.Length == 0) return verdict;
+        if (mechanism.Length == 0)
+        {
+            verdict["reason_key"] = NotSupportedReasonKey;
+            return verdict;
+        }
         verdict["loop_convergence"] = "cannot";
         verdict["reason_key"] = NeverRepeatsReasonKey;
         return verdict;

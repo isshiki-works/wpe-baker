@@ -685,6 +685,12 @@ public static class MessageCatalog
         ["reason.allocation_no_trigger"] = new(
             Zh: "转成视频的图层里没有不满足平稳随机判据的粒子，也没有带未解析循环机制的层，保留实时得到的还是同一个分配。",
             En: "No baked layer is a particle system that fails the stationary-random criteria or owns an unresolved loop mechanism, so retaining units live would keep the same allocation."),
+        ["reason.loop_never_repeats_within_limit"] = new(
+            Zh: "动画在 {0} 分钟内不会重复，无法生成循环视频",
+            En: "The animation does not repeat within {0} minutes, so a looping video cannot be made."),
+        ["reason.effect_not_yet_supported"] = new(
+            Zh: "暂不支持此壁纸中的部分动态效果",
+            En: "Some animated effects in this wallpaper are not supported yet."),
         ["reason.allocation_nothing_left"] = new(
             Zh: "把所有未解析层和粒子层所在的分配单元都保留实时后，没有内容可以转成视频，缩小分配没有意义。",
             En: "Retaining the allocation units of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help."),
