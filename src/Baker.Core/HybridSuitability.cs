@@ -72,9 +72,11 @@ internal static class HybridSuitability
 
         // 同类：不可掩盖的分量都在要烘的层上（或没有归属），把它们留实时的更小分配也试过、仍证不出循环。
         // 这条保留 hdr 判据：重查可能只是被 HDR 闭合挡住（resolution_basis = hdr_radiance_open），不能说成证不出循环。
+        // 透视不改循环分析，重查判依据时已不看它；只差透视捕获的记 perspective_capture_open，不进这条。
         // 重新分配已经试过，取舍方案只关实时层也够不着它们（TradeoffOptions 同一口径不列方案），没有可让用户决定的事项。
-        if (!hdr && !perspective && blockers.Contains(BlockerCode.BakeAllocation) &&
+        if (!hdr && blockers.Contains(BlockerCode.BakeAllocation) &&
             Text(plan["loop_allocation_fallback"]?["status"]) == "still_unavailable" &&
+            Text(plan["loop_allocation_fallback"]?["resolution_basis"]) != "perspective_capture_open" &&
             plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
             blocking.OfType<JsonObject>().All(component => component["owner_layer_id"] is not JsonValue owner ||
                 !(plan["live_layer_ids"] as JsonArray ?? []).Any(id => JsonNode.DeepEquals(id, owner))))
