@@ -176,14 +176,21 @@ public static class ResidualMasking
     /// <summary>
     /// 含可掩盖残差层的视频组下标（plan.video_groups 顺序）。起点搜索在第一个上做、起点共享给所有组；
     /// 这些组的 master 多渲一个淡化窗口，各自测第一层并淡化。
+    /// 含缓变分量（选中候选的 slow_components）的组不算：慢分量在 P 处的漂移只能由硬切接缝门判，淡化会把漂移盖住。
+    /// 因此可能返回空（残差层全在含慢分量的组里），这时不做起点搜索，所有组都按硬切闭合判。
     /// </summary>
     public static int[] ResidualGroupIndexes(JsonObject plan, JsonObject classification)
     {
         ArgumentNullException.ThrowIfNull(plan);
         HashSet<int> owners = [.. ResidualOwners(classification)];
+        HashSet<int> slow = [.. ((plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["slow_components"] as JsonArray ?? [])
+            .OfType<JsonObject>().Select(component => Id(component["owner_layer_id"])).OfType<int>()];
         JsonObject[] groups = [.. (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()];
         return [.. Enumerable.Range(0, groups.Length).Where(index =>
-            (groups[index]["layer_ids"] as JsonArray ?? []).Select(Id).OfType<int>().Any(owners.Contains))];
+        {
+            int[] layers = [.. (groups[index]["layer_ids"] as JsonArray ?? []).Select(Id).OfType<int>()];
+            return layers.Any(owners.Contains) && !layers.Any(slow.Contains);
+        })];
     }
 
     /// <summary>
