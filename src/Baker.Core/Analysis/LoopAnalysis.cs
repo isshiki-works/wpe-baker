@@ -340,7 +340,7 @@ internal static class LoopAnalysis
             }
             if (period < loop) frames[id] = period;
         }
-        return (candidate with { Components = components, TotalRetimeCostPercent = components.Sum(c => Math.Abs(c.DeltaPercent)) }, frames, steps);
+        return (candidate with { Components = components, TotalRetimeCostPercent = CommonLoopSolver.RetimeCost(components) }, frames, steps);
     }
 
     /// <summary>粒子默认循环长度（秒）：长寿命粒子可在循环上限内延长到寿命之后。</summary>

@@ -240,10 +240,12 @@ public static class CommonLoopSolver
                 multiplier, delta, Math.Abs(delta) > 1e-12));
         }
         if (constraints.Count != 0) return new(frames, seconds, null, constraints);
-        // 成本只计可见项（原周期 < 60 s）：冻结或改频的极慢项看不出来，不按 δ 计入
-        double cost = cycles.Where(c => c.OldPeriodSeconds < SwayRecurrenceSolver.VisiblePeriodSeconds).Sum(c => Math.Abs(c.DeltaPercent));
-        return new(frames, seconds, new(frames, request.FpsNumerator, request.FpsDenominator, seconds, cycles, cost), []);
+        return new(frames, seconds, new(frames, request.FpsNumerator, request.FpsDenominator, seconds, cycles, RetimeCost(cycles)), []);
     }
+
+    /// <summary>总调速成本：可见项（原周期 &lt; 60 s）的 |δ| 之和；冻结或改频的极慢项看不出来，不计。</summary>
+    public static double RetimeCost(IEnumerable<CommonLoopComponentCycle> cycles) =>
+        cycles.Where(c => c.OldPeriodSeconds < SwayRecurrenceSolver.VisiblePeriodSeconds).Sum(c => Math.Abs(c.DeltaPercent));
 
     private static CommonLoopEvaluation Overflow(ulong frames, double seconds, string componentId) => new(frames, seconds, null,
         [new(componentId, CommonLoopConstraintKind.ArithmeticOverflow, "The requested duration exceeds the supported cycle-count range.")]);
