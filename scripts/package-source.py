@@ -15,13 +15,9 @@ if provenance_spec is None or provenance_spec.loader is None: raise RuntimeError
 provenance = importlib.util.module_from_spec(provenance_spec)
 provenance_spec.loader.exec_module(provenance)
 DEPENDENCIES = ("rstd", "vvk", "lz4", "freetype", "quickjs", "glslang", "vma",
-                "spirv-reflect", "eigen", "vulkan-headers", "vulkan-loader")
-# GPL v2 section 3: the renderer binary must ship with the sources it was built from,
-# including the multithreaded-decode patches applied on top of the pinned engine.
+                "spirv-reflect", "eigen", "vulkan-headers", "vulkan-loader", "nlohmann-json", "cli11")
+# GPL v2 section 3: the renderer binary must ship with the sources it was built from.
 REQUIRED_FILES = ("README.md", "README.zh-CN.md", "LICENSE", "THIRD-PARTY-NOTICES.md", "SOURCE.md",
-                  "patches/renderer-mt/README.md", "patches/renderer-mt/sha256.txt",
-                  "patches/renderer-mt/engine-perf-video-decode-threads.patch",
-                  "patches/renderer-mt/parent-perf-video-decode-threads.patch",
                   "scripts/dependency-patches/manifest.json", "scripts/dependency-patches/rstd.patch",
                   "scripts/dependency-patches/vvk.patch")
 REQUIRED_TREES = tuple(f".deps/{name}" for name in DEPENDENCIES) + (
@@ -33,7 +29,7 @@ REQUIRED_TREES = tuple(f".deps/{name}" for name in DEPENDENCIES) + (
 # Workshop wallpapers and baked masters must never enter a public archive.
 PRIVATE_PATTERN = re.compile(r"(^|/)(\d{9,10})(/|$)|\.pkg$|\.tex\.bak$")
 # Everything the archive picks up from the working tree, for the clean-tree check below.
-PACKAGED_PREFIXES = ("src/", "tests/", "scripts/", "patches/", "engine/", "licenses-extra/")
+PACKAGED_PREFIXES = ("src/", "tests/", "scripts/", "engine/", "licenses-extra/")
 PACKAGED_ROOT_FILES = frozenset({"README.md", "README.zh-CN.md", "LICENSE", ".gitignore",
                                  ".gitattributes", "THIRD-PARTY-NOTICES.md", "SOURCE.md"})
 
@@ -45,7 +41,7 @@ def check_inputs() -> None:
     if missing or empty:
         raise FileNotFoundError("Source archive inputs are incomplete; "
                                 f"missing files: {missing}; missing or empty trees: {empty}")
-    # src/, tests/, scripts/ and patches/ are packaged as whole trees, so any stray or
+    # src/, tests/ and scripts/ are packaged as whole trees, so any stray or
     # modified working file under them would silently enter a published archive. Only those
     # paths are checked: the build machine keeps unrelated untracked directories at the
     # repository root, and "git clean" is exactly what must not be run there (it would rewrite
@@ -90,7 +86,7 @@ def main() -> None:
                 continue
             if path.is_file() and not any(part in skipped_names for part in relative.parts):
                 candidates[prefix + "/" + relative.as_posix()] = path
-    for name in ("src", "tests", "scripts", "patches", "engine", "licenses-extra"):
+    for name in ("src", "tests", "scripts", "engine", "licenses-extra"):
         tree(ROOT / name, name)
     for name in ("README.md", "README.zh-CN.md", "LICENSE", ".gitignore",
                  "THIRD-PARTY-NOTICES.md", "SOURCE.md"):
@@ -146,9 +142,7 @@ Recreate x264's Git identity from the included bundle without replacing files:
 
 The distributed renderer includes the current rendering and encoding changes.
 The authoritative source fingerprint and packaged binary SHA256 are in
-build-records/build-wpe-render.json. The files in patches/renderer-mt/ identify
-the historical decode-threading snapshot; do not reapply them or compare this
-later renderer to that snapshot's binary hash.
+build-records/build-wpe-render.json.
 
 Use the project-local tool versions in scripts/native-inputs.lock.json and
 scripts/encoder-build-tools.lock.json. See README.md, SOURCE.md and the two

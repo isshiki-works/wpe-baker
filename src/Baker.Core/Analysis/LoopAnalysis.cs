@@ -83,8 +83,8 @@ internal static class LoopAnalysis
             {
                 ShaderTerm[] own = [.. shader.Terms.Where(x => x.OwnerLayerId == owner)];
                 if (own.Length == 0) continue;
-                LoopSolve relaxed = SolveLoop(shader with { Components = [] }, [.. animation.Where(x => x.OwnerLayerId == owner)], [.. own.Select(x => x.Relaxed)],
-                    fpsNumerator, fpsDenominator, proof, ceiling, preference);
+                LoopSolve relaxed = SolveLoop(shader with { Components = [] }, [.. animation.Where(x => x.OwnerLayerId == owner)], [.. own.Select(x => x.Relaxed.MaximumRetimePercent is double cap
+                    ? x.Relaxed with { MaximumRetimePercent = Math.Max(cap, proof) } : x.Relaxed)], fpsNumerator, fpsDenominator, proof, ceiling, preference);
                 if (relaxed.Result.NoCandidate is { Kind: CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
                     or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling } never)
                 {
@@ -340,7 +340,7 @@ internal static class LoopAnalysis
             }
             if (period < loop) frames[id] = period;
         }
-        return (candidate with { Components = components, TotalRetimeCostPercent = components.Sum(c => Math.Abs(c.DeltaPercent)) }, frames, steps);
+        return (candidate with { Components = components, TotalRetimeCostPercent = CommonLoopSolver.RetimeCost(components) }, frames, steps);
     }
 
     /// <summary>粒子默认循环长度（秒）：长寿命粒子可在循环上限内延长到寿命之后。</summary>

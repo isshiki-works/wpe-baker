@@ -176,6 +176,18 @@ using (var source = new ProjectSource(noLoopSource))
     catch (IOException) { }
     Check(File.ReadAllText(Path.Combine(existingProject, "keep.txt")) == "unchanged" && !Directory.Exists(publishWork),
         "existing wallpaper destination is preserved before starting work");
+    string occupiedOutput = Path.Combine(root, "existing-output");
+    string[] occupiedContents = [Path.Combine(occupiedOutput, "reference"), Path.Combine(occupiedOutput, "capture-source"),
+        Path.Combine(occupiedOutput, "group-1", "master"), Path.Combine(occupiedOutput, "group-1.start-search"),
+        occupiedOutput + ".analysis-refresh", occupiedOutput + ".composition-probe"];
+    foreach (string directory in occupiedContents) Directory.CreateDirectory(directory);
+    try
+    {
+        await new HybridBakeService(new("not-started", "not-started", "not-started", [])).BakeAsync(new(2, noLoopPlan, occupiedOutput));
+        throw new InvalidOperationException("Accepted an existing output directory.");
+    }
+    catch (IOException) { }
+    Check(occupiedContents.All(Directory.Exists), "an existing output directory is refused without removing anything in or beside it");
     string rejectedOutput = Path.Combine(root, "no-loop-result");
     string rejectedDestination = Path.Combine(root, "must-not-publish-rejection");
     JsonObject rejected = await new HybridBakeService(new("not-started", "not-started", "not-started", []))
