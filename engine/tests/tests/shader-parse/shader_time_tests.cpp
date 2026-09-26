@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -103,7 +104,7 @@ protected:
 
 } // namespace
 
-// 方程库 shake：2π/|speed|
+// 方程库 shake：2π/|speed|。frac(t/M_PI_2) 与 cos(t) 按 π 次数同属 π 类（M_PI_2 是 2π 字面量），只有一个周期
 TEST_F(ShaderTime, ShakeMatchesEquation) {
     ExpectPeriod(Analyze({ "shake", "shake", { { "NOISE", "0" } }, { { "g_Speed", { 2.5f } } } }), kTau / 2.5);
 }
@@ -165,6 +166,29 @@ TEST_F(ShaderTime, IntegerModFrameIndexPeriod) {
         c.vert = vert;
         c.frag = std::string("uniform float g_Time;\nvoid main() { gl_FragColor = vec4(") + index + " / 5.0, 0.0, 0.0, 1.0); }\n";
         ExpectPeriod(Analyze(c), 2.5);
+    }
+}
+
+// foliagesway（MODE 1）的写法：每个系数一项；后三项各带自己的字面量旋钮和 g_Speed 旋钮，供 C# 改写调速
+TEST_F(ShaderTime, SwayTermsCarryKnobs) {
+    Case c { "", "sway_terms", {}, { { "g_Speed", { 1.0f } }, { "g_Phase", { 0.0f } } } };
+    c.vert = "attribute vec3 a_Position;\nuniform float g_Time;\nuniform float g_Speed;\nuniform float g_Phase;\n"
+             "void main() { gl_Position = vec4(a_Position, 1.0) + "
+             "sin(g_Phase + g_Speed * g_Time * vec4(1, -0.16161616, 0.0083333, -0.00019841)); }\n";
+    c.frag = "void main() { gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); }\n";
+    const auto sig = Analyze(c);
+    ASSERT_EQ(sig.terms.size(), 4u) << st::ToJson(sig);
+    for (const float literal : { -0.16161616f, 0.0083333f, -0.00019841f }) {
+        auto has = [](const st::Term& t, auto&& pred) { return std::any_of(t.knobs.begin(), t.knobs.end(), pred); };
+        const auto it = std::find_if(sig.terms.begin(), sig.terms.end(), [&](const st::Term& t) {
+            return has(t, [&](const st::Knob& k) {
+                       return k.stage == "vert" && k.uniform.empty() && std::abs(k.literal - literal) <= 1e-7f * std::abs(literal);
+                   }) &&
+                   has(t, [](const st::Knob& k) { return k.stage == "vert" && k.uniform == "g_Speed" && ! k.inverse; });
+        });
+        ASSERT_NE(it, sig.terms.end()) << literal << ' ' << st::ToJson(sig);
+        EXPECT_EQ(it->pi, 1) << st::ToJson(sig);
+        EXPECT_NEAR(it->seconds, kTau / std::abs(literal), it->seconds * 1e-6) << st::ToJson(sig);
     }
 }
 

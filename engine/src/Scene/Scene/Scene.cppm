@@ -1991,6 +1991,8 @@ struct SceneImageEffectNode {
     // Assigned only while the render graph is built. It identifies this
     // node's real graph pass without inferring it from a render-target name.
     Option<u64>                  graph_pass_index;
+    // 效果定义里带 material 的 pass 序号；引擎补的节点为 -1
+    std::int32_t                 authored_pass { -1 };
 };
 
 struct SceneImageEffect {

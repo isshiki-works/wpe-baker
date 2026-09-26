@@ -63,6 +63,7 @@ public:
     bool                       FromJson(const owe::NJson&, fs::VFS& vfs, SceneVersion); // canonical
     bool                       FromFileJson(const owe::NJson&, fs::VFS& vfs);
     i32                        id;
+    int                        json_index { -1 }; // scene.json "effects" 数组下标（含加载失败的）；引擎补的效果为 -1
     std::string                name;
     std::string                username; // PKGV0001+; per-instance label override
     bool                       visible { true };
