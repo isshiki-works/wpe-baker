@@ -157,7 +157,7 @@ internal static class RuntimeTrackReader
         {
             if (!owners.TryGetValue(ownerId, out JsonObject? owner) || owner["particle"] is null || stationarity.ContainsKey(ownerId)) continue;
             ParticleStationarity.Result verdict = Stationarity(ownerId, owner);
-            // 共享湍流场（C2 turbulent_velocity_shared_field）：出生方向沿 CurlNoise 流线随出生次数确定性演化，证明不了周期，
+            // 共享湍流场（C2 turbulent_velocity_shared_field，phase 与 speed 都是定值）：出生方向沿 CurlNoise 流线随出生次数确定性演化，没有解析周期，
             // 调速也救不回，与精灵轨道粒子的湍流判据用同一个原因码，下游按无界类读。
             string? reason = verdict.Failures.Any(failure => failure.Code == "turbulent_velocity_shared_field")
                 ? "particle_nonperiodic_turbulent_velocity" : null;
