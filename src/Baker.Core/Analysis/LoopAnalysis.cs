@@ -86,10 +86,12 @@ internal static class LoopAnalysis
             {
                 CommonLoopComponent slowest = relaxed.Used.MaxBy(x => x.BasePeriod!.Seconds)!;
                 double longest = slowest.BasePeriod!.Seconds;
-                unresolved.Add(new NeverRepeatsUnresolved(ceilingSeconds, $"No loop within the {S(ceilingSeconds)} s limit at a " +
-                    $"{S(relaxed.Result.RetimeBudgetPercent)}% retime budget even with every shader period term retimed independently ({never.Kind}): " +
-                    $"slowest component {slowest.Id} has period {S(longest)} s = {S(longest / ceilingSeconds)}x the limit" + (never.FixedPeriodSeconds is double step
-                        ? $"; the fixed-period components close together only every {S(step)} s = {S(step / ceilingSeconds)}x the limit" : "") + "."));
+                // 证明归到并不进的所有者层：分配回退先把它们留实时重查，重查也无解这条证明才落成"不能"
+                foreach (int? owner in noCommonLoopOwners?.Select(id => (int?)id) ?? [null])
+                    unresolved.Add(new NeverRepeatsUnresolved(owner, ceilingSeconds, $"No loop within the {S(ceilingSeconds)} s limit at a " +
+                        $"{S(relaxed.Result.RetimeBudgetPercent)}% retime budget even with every shader period term retimed independently ({never.Kind}): " +
+                        $"slowest component {slowest.Id} has period {S(longest)} s = {S(longest / ceilingSeconds)}x the limit" + (never.FixedPeriodSeconds is double step
+                            ? $"; the fixed-period components close together only every {S(step)} s = {S(step / ceilingSeconds)}x the limit" : "") + "."));
             }
             else
                 foreach (var pass in shader.Terms.Where(x => x.Missing is not null && (noLoop || x.Split))
@@ -379,7 +381,7 @@ internal static class LoopAnalysis
 
     /// <summary>
     /// 按所有者层贪心并入（分量多的先并，同数按出现顺序），并入后上限内无解的层记下返回。已有未解析项的所有者本来就留实时，不参与。
-    /// 没有并不进的层、或一层都并不进时返回 null。
+    /// 没有并不进的层时返回 null；一层都并不进时全部点名，剩下的内容值不值得烘由分配回退重查判定。
     /// </summary>
     private static int[]? NoCommonLoopOwners(ShaderPeriodAnalysisResult shader, IReadOnlyList<RuntimeTrack> animation,
         CommonLoopComponent[] particleCycles, List<LoopUnresolved> unresolved, uint fpsNumerator, uint fpsDenominator,
@@ -399,7 +401,7 @@ internal static class LoopAnalysis
             kept.Remove(owner);
             dropped.Add(owner);
         }
-        return dropped.Count > 0 && kept.Count > 0 ? [.. dropped] : null;
+        return dropped.Count > 0 ? [.. dropped] : null;
     }
 
     /// <summary>
