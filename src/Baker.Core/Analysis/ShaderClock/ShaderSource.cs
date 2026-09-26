@@ -124,7 +124,8 @@ internal sealed class ShaderSource(string text)
                     annotation["material"] is JsonValue material && material.TryGetValue<string>(out string? name) && name is not null)
                     defaults.TryAdd(name, annotation["default"]?.DeepClone());
             }
-            catch (System.Text.Json.JsonException) { }
+            // 官方 lightshafts.frag 的注释里 "group" 写了两次，JsonObject 取键时抛 ArgumentException：跳过这一条。
+            catch (Exception error) when (error is System.Text.Json.JsonException or ArgumentException) { }
         }
         return defaults;
     }
