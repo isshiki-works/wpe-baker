@@ -88,7 +88,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         {
             JsonObject input = scene();
             // 缓存两段：plan 形态的 loop + unresolved 各条的文案与点名图层（UnresolvedNotes.Pack）。格式变了就换前缀，旧缓存不再命中。
-            string key = "loop-v5-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
+            string key = "loop-v6-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
                 request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.LoopPreference,
                 request.FullLoopLayerIds);
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(

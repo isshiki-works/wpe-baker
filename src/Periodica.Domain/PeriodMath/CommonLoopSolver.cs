@@ -12,7 +12,8 @@ public enum CommonLoopPreference { Performance, Balanced, Quality }
 public sealed record CommonLoopPeriod(double Seconds, CommonLoopPeriodEvidence Evidence,
     CommonLoopRational? ExactSeconds = null);
 
-public sealed record CommonLoopComponent(string Id, CommonLoopPeriod? BasePeriod, bool AllowRetime = false);
+/// <param name="MaximumRetimePercent">本分量自己的调速上限（百分比）；null = 用请求的 MaximumRetimePercent。</param>
+public sealed record CommonLoopComponent(string Id, CommonLoopPeriod? BasePeriod, bool AllowRetime = false, double? MaximumRetimePercent = null);
 
 public enum CommonLoopConstraintKind
 {
@@ -221,8 +222,9 @@ public static class CommonLoopSolver
             }
 
             double idealCycles = seconds / period.Seconds;
-            double tolerance = request.MaximumRetimePercent / 100;
-            double lower = Math.Ceiling(idealCycles * (1 - tolerance) - 1e-12);
+            double tolerance = (component.MaximumRetimePercent ?? request.MaximumRetimePercent) / 100;
+            // 至少一圈：上限超过 100% 时也不把分量调成静止
+            double lower = Math.Max(1, Math.Ceiling(idealCycles * (1 - tolerance) - 1e-12));
             double upper = Math.Floor(idealCycles * (1 + tolerance) + 1e-12);
             if (upper < 1 || lower > upper || lower > ulong.MaxValue)
             {
