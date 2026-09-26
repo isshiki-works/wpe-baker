@@ -179,6 +179,8 @@ internal static class PlanWriter
             ["layers"] = new JsonArray(sourceOrder.Select(id => {
                 var (fraction, x, y) = Placement(id);
                 string[] suspicion = OverlaySuspicion(id, fraction, x, y);
+                // 覆盖层只认名字命中词表与定时显示；角落小图只作位置标注（界面提示），不进 overlay 分类。
+                bool overlay = suspicion.Any(reason => reason != "small_image_in_canvas_corner");
                 var layer = new JsonObject {
                     ["id"] = id, ["root"] = graph.RootOf[id], ["allocation_root"] = allocation.UnitOf[id],
                     ["parent"] = objects[id]["parent"]?.DeepClone(), ["source_order"] = Array.IndexOf(sourceOrder, id),
@@ -193,13 +195,13 @@ internal static class PlanWriter
                     ["visible_binding"] = VisibleBinding(id),
                     ["allocation"] = allocation.ExcludedIds.Contains(id) ? "excluded" : allocation.OmittedIds.Contains(id) ? "omitted" :
                         liveIds.Contains(id) ? "live" : groupOfRoot.ContainsKey(allocation.UnitOf[id]) ? "video" : "inactive",
-                    ["suspected_overlay"] = suspicion.Length > 0,
+                    ["suspected_overlay"] = overlay,
                     ["suspected_overlay_reasons"] = JsonSerializer.SerializeToNode(suspicion),
                     ["live"] = liveIds.Contains(id), ["reasons"] = JsonSerializer.SerializeToNode(reasons[id]),
                     // 取舍清单用的两个标签与关闭办法：只给实时层，其余层这三个字段为 null。
-                    ["tradeoff_class"] = liveIds.Contains(id) ? TradeoffOptions.Classify(reasons[id], suspectedOverlay: suspicion.Length > 0).Class : null,
+                    ["tradeoff_class"] = liveIds.Contains(id) ? TradeoffOptions.Classify(reasons[id], suspectedOverlay: overlay).Class : null,
                     ["tradeoff_kinds"] = liveIds.Contains(id)
-                        ? JsonSerializer.SerializeToNode(TradeoffOptions.Classify(reasons[id], suspectedOverlay: suspicion.Length > 0).Kinds) : null,
+                        ? JsonSerializer.SerializeToNode(TradeoffOptions.Classify(reasons[id], suspectedOverlay: overlay).Kinds) : null,
                     ["visible_property"] = liveIds.Contains(id) ? VisibleProperty(id) : null,
                     ["visible"] = composer.Visible(id), ["drawable"] = composer.Draws(id) };
                 // 只作注记的输入来源（Liveness.InputDrivenCamera）；没有时不写字段，其余 plan 逐字节不变。

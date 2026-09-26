@@ -248,7 +248,7 @@ internal sealed class Composer
         string name = obj["name"]?.GetValue<string>() ?? "";
         return !SceneAnalyzer.Walk(obj).OfType<JsonObject>().Any(n => n["script"] is JsonValue) &&
             !SceneAnalyzer.Walk(scene).OfType<JsonObject>().Any(n => n["script"] is JsonValue script && script.TryGetValue<string>(out string? code) &&
-                ("'\"`".Any(q => code.Contains($"{q}{name}{q}")) ||
+                (Liveness.QuotesName(code, name) ||
                  Regex.IsMatch(code, @"getLayer\s*\(\s*[^'""`\s]|(enumerateLayers|getChildren|getParent|getLayerByIndex)")));
     }
 }

@@ -160,7 +160,7 @@ internal sealed class Allocation
             Live(id, reason);
             return liveRoots.Add(allocationOf[id]);
         }
-        Liveness.Close(dependencies.OfType<JsonObject>(), id => allocationOf.TryGetValue(id, out int unit) && liveRoots.Contains(unit), MarkUnit,
+        Liveness.Close(dependencies.OfType<JsonObject>().Concat(liveness.LookupEdges), id => allocationOf.TryGetValue(id, out int unit) && liveRoots.Contains(unit), MarkUnit,
             ownerPerRule: false, severedRead, severedWrite);
         // ponytail: leave dynamic object lookup/shared controllers alone. This small conservative
         // check only removes fixed-disabled, self-contained branches; it is not a JS optimizer.
