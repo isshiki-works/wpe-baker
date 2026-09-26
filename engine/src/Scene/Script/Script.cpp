@@ -3905,8 +3905,8 @@ void InstallOfflineGlobals(JSContext* ctx) {
     JS_SetPropertyStr(ctx, math, "random", JS_NewCFunction(ctx, OfflineRandom, "random", 0));
     JS_FreeValue(ctx, math);
     JS_FreeValue(ctx, global);
-    // Calendar and local getters use UTC. Ambiguous local strings and locale
-    // formatting fail explicitly instead of silently consulting the host OS.
+    // Calendar and local getters use UTC; local-time strings parse as UTC.
+    // Locale formatting fails explicitly instead of consulting the host OS.
     constexpr const char* source = R"JS(
 (() => {
   const NativeDate = globalThis.Date;
@@ -3916,23 +3916,27 @@ void InstallOfflineGlobals(JSContext* ctx) {
   }});
   const now = globalThis.__wwOfflineNow;
   const unsupported = globalThis.__wwOfflineUnsupported;
-  function checkString(v) {
-    if (typeof v === 'string' && !/^\d{4}-\d{2}-\d{2}$/.test(v) &&
-        !/(?:Z|[+-]\d{2}:?\d{2}|GMT|UTC)$/i.test(v))
-      unsupported('Date parsing without an explicit UTC offset');
-    return v;
+  // 没写时区的日期串按本地时间解析（ECMAScript 规定，官方同此）。离线本地时区固定为 UTC：
+  // 先按宿主时区解析，再把宿主本地字段当 UTC 字段重组，结果与宿主时区无关。
+  const hostFields = ['FullYear','Month','Date','Hours','Minutes','Seconds','Milliseconds']
+    .map(name => NativeDate.prototype['get' + name]);
+  function parse(v) {
+    const t = NativeDate.parse(v);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v) || /(?:Z|[+-]\d{2}:?\d{2}|GMT|UTC)$/i.test(v)) return t;
+    const d = new NativeDate(t);
+    return NativeDate.UTC(...hostFields.map(get => get.call(d)));
   }
   function OfflineDate(...args) {
     if (!new.target) return new NativeDate(now()).toUTCString();
     if (args.length === 0) return new NativeDate(now());
-    if (args.length === 1) return new NativeDate(checkString(args[0]));
+    if (args.length === 1) return new NativeDate(typeof args[0] === 'string' ? parse(args[0]) : args[0]);
     return new NativeDate(NativeDate.UTC(...args));
   }
   OfflineDate.prototype = NativeDate.prototype;
   Object.defineProperty(OfflineDate.prototype, 'constructor', {value: OfflineDate});
   OfflineDate.now = now;
   OfflineDate.UTC = NativeDate.UTC;
-  OfflineDate.parse = v => NativeDate.parse(checkString(String(v)));
+  OfflineDate.parse = v => parse(String(v));
   for (const name of ['FullYear','Month','Date','Day','Hours','Minutes','Seconds','Milliseconds']) {
     NativeDate.prototype['get' + name] = NativeDate.prototype['getUTC' + name];
     if (NativeDate.prototype['setUTC' + name])
