@@ -194,6 +194,8 @@ struct Comp {
     Knobs                    knobs;              // known 时：值的直接乘法因子里可改写的来源
     std::vector<Rate>        rates { Rate {} };  // t 的可能系数（含 0）
     bool                     rate_unknown { false };
+    // 含非时间部分（纹理坐标、非零常量、周期函数结果等）：再乘的因子会连带缩放静态部分，改它会变观感，不记旋钮
+    bool                     mixed { true };
     std::vector<Per>         periods;
     std::vector<std::string> external;
     std::string              aperiodic;
@@ -214,6 +216,7 @@ Comp Known(double v, int pi = 0) {
     c.known = true;
     c.value = v;
     c.pi    = pi;
+    c.mixed = v != 0;
     return c;
 }
 
@@ -256,6 +259,7 @@ Comp Join(const Comp& a, const Comp& b) {
     }
     for (const Rate& x : b.rates) AddUnique(r.rates, x);
     r.rate_unknown = a.rate_unknown || b.rate_unknown;
+    r.mixed        = a.mixed || b.mixed;
     MergeTags(r, b);
     Normalize(r);
     return r;
@@ -311,6 +315,7 @@ Comp Add(const Comp& a, const Comp& b, double sign) {
     for (const Rate& x : a.rates)
         for (const Rate& y : b.rates) AddUnique(r.rates, Sum(x, y, sign));
     r.rate_unknown = a.rate_unknown || b.rate_unknown;
+    r.mixed        = a.mixed || b.mixed;
     MergeTags(r, a);
     MergeTags(r, b);
     Normalize(r);
@@ -322,7 +327,9 @@ Comp Scale(const Comp& a, const Comp& k) {
     if (k.known && k.value == 0) return Known(0);
     Comp r = a;
     if (k.known) {
-        for (Rate& x : r.rates) x = Rate { x.v * k.value, PiAdd(x.pi, k.pi), Union(x.knobs, k.knobs) };
+        // 只有纯时间量（如 g_Speed·g_Time）上的因子才是旋钮；(uv + t·s)·k 的 k 同时缩放纹理坐标，不记
+        for (Rate& x : r.rates)
+            x = Rate { x.v * k.value, PiAdd(x.pi, k.pi), r.mixed ? x.knobs : Union(x.knobs, k.knobs) };
         if (r.known) {
             r.value *= k.value;
             r.pi    = PiAdd(r.pi, k.pi);
@@ -840,7 +847,10 @@ Val Analyzer::Load(const Ptr& p, const State& S) const {
         Val               r(p.size);
         const std::string& n = p.uniform;
         if (n == "g_Time") {
-            for (auto& c : r) c.rates = { Rate { 1.0 } };
+            for (auto& c : r) {
+                c.rates = { Rate { 1.0 } };
+                c.mixed = false;
+            }
             return r;
         }
         const bool dynamic = n.starts_with("g_AudioSpectrum") || n.starts_with("g_Pointer") ||

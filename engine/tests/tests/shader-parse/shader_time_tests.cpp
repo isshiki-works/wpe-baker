@@ -95,6 +95,10 @@ void ExpectPeriod(const st::Signature& sig, double seconds) {
 
 constexpr double kTau = 2 * std::numbers::pi;
 
+bool HasKnob(const st::Term& t, const std::string& uniform) {
+    return std::any_of(t.knobs.begin(), t.knobs.end(), [&](const st::Knob& k) { return k.uniform == uniform; });
+}
+
 class ShaderTime : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -146,12 +150,27 @@ TEST_F(ShaderTime, WaterRippleMatchesEquation) {
 TEST_F(ShaderTime, CloudsScrollPeriod) {
     // 两层云按 repeat 滚动（默认 speed 0.01/-0.02、scale 1.3/0.5，x 轴再乘 16/9）：
     // 四条轴周期 1125/26、1000/13、100、225/4，LCM 9000 s。不给 g_Texture0Resolution 时系数不定，判不周期。
-    ExpectPeriod(Analyze({ "clouds", "clouds", {}, { { "g_Texture0Resolution", { 1920, 1080, 1920, 1080 } } } }), 9000);
+    const auto sig = Analyze({ "clouds", "clouds", {}, { { "g_Texture0Resolution", { 1920, 1080, 1920, 1080 } } } });
+    ExpectPeriod(sig, 9000);
+    // (uv + t·speed)·scale：scale 同时缩放纹理坐标，不是旋钮；speed 是
+    ASSERT_FALSE(sig.terms.empty()) << st::ToJson(sig);
+    for (const auto& t : sig.terms) {
+        EXPECT_FALSE(HasKnob(t, "g_CloudScales")) << st::ToJson(sig);
+        EXPECT_TRUE(HasKnob(t, "g_CloudSpeeds")) << st::ToJson(sig);
+    }
 }
 
 TEST_F(ShaderTime, GodraysNoiseScrollPeriod) {
     // 噪声两次查表：速率 noisespeed·noisescale 与其一半，默认 0.15·3 → 周期 20/9 与 40/9，LCM 40/9
-    ExpectPeriod(Analyze({ "godrays", "godrays_downsample2", { { "NOISE", "1" } }, {} }), 40.0 / 9);
+    const auto sig = Analyze({ "godrays", "godrays_downsample2", { { "NOISE", "1" } }, {} });
+    ExpectPeriod(sig, 40.0 / 9);
+    // uv + t·0.5·speed 的 0.5 与 speed 是旋钮；之后整体 *= noisescale 连纹理坐标一起缩放，不是
+    for (const auto& t : sig.terms) EXPECT_FALSE(HasKnob(t, "g_NoiseScale")) << st::ToJson(sig);
+    EXPECT_TRUE(std::any_of(sig.terms.begin(), sig.terms.end(), [](const st::Term& t) {
+        return HasKnob(t, "g_NoiseSpeed") && std::any_of(t.knobs.begin(), t.knobs.end(), [](const st::Knob& k) {
+                   return k.uniform.empty() && k.literal == 0.5f;
+               });
+    })) << st::ToJson(sig);
 }
 
 TEST_F(ShaderTime, ShineCastRotationPeriod) {
