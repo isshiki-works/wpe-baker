@@ -145,29 +145,6 @@ internal static class NarrativePolishChecks
         JsonObject other = PlanNarrative.Summarize(blockedPlan);
         check(other["key"]!.GetValue<string>() == "summary.loop_unresolved",
             "a smaller allocation stopped by another blocker points at the replanned blockers instead of claiming no loop exists");
-
-        // 保留做法里的分配根是作者根拆开后的子单元（全量批处理 8 案 exit=1 的形态）：--retain-live 只收源作者根。
-        // 作者根 382 下的 155/379 在尾组视频里、382 本身是不画的容器：换成 382 不会多退回任何视频单元，照换。
-        // 作者根 129 下的 53 在尾组、16 却在不透明底组：整棵保留会连底组一起退回（实测重跑后一组视频都不剩），不给这条建议。
-        static JsonObject SplitLayer(int id, int root, string name, bool drawable = true) => new() {
-            ["id"] = id, ["root"] = root, ["allocation_root"] = id, ["name"] = name, ["visible"] = true, ["drawable"] = drawable };
-        JsonObject SplitPlan(int[] retention, params JsonObject[] layers) => new() {
-            ["settings"] = new JsonObject { ["video_layout"] = "full_frame", ["retain_live_root_ids"] = new JsonArray(20) },
-            ["full_frame_retention"] = new JsonObject { ["status"] = "available",
-                ["root_ids"] = new JsonArray([.. retention.Select(id => (JsonNode)JsonValue.Create(id))]) },
-            ["video_groups"] = new JsonArray(
-                new JsonObject { ["id"] = "group-1", ["root_ids"] = new JsonArray(17, 16), ["include_scene_clear"] = true, ["transparent"] = false },
-                new JsonObject { ["id"] = "group-2", ["root_ids"] = new JsonArray([.. retention.Select(id => (JsonNode)JsonValue.Create(id))]), ["transparent"] = true }),
-            ["layers"] = new JsonArray([.. layers]) };
-        var commandMethod = DemotionType.GetMethod("RetainLiveCommandRoots", BindingFlags.Static | BindingFlags.NonPublic)!;
-        JsonObject exactPlan = SplitPlan([155, 379], SplitLayer(17, 17, "Base"), SplitLayer(16, 16, "Sky"), SplitLayer(20, 20, "Shafts"),
-            SplitLayer(382, 382, "Rain group", drawable: false), SplitLayer(155, 382, "Rain A"), SplitLayer(379, 382, "Rain B"));
-        check(commandMethod.Invoke(null, [exactPlan, new[] { 155, 379 }]) is int[] exactIds && exactIds.SequenceEqual([20, 382]),
-            "split allocation units in a retention become their source author root, together with roots the plan already retains");
-        JsonObject inexactPlan = SplitPlan([53], SplitLayer(17, 17, "Base"), SplitLayer(20, 20, "Shafts"),
-            SplitLayer(129, 129, "Scene group", drawable: false), SplitLayer(16, 129, "Sky"), SplitLayer(53, 129, "Birds"));
-        check(commandMethod.Invoke(null, [inexactPlan, new[] { 53 }]) is null,
-            "no retain-live option when retaining the author root would also send another video unit such as the opaque base group live");
     }
 
     /// <summary>无阻断、无候选的整层 plan：一个漂移着色器 + 一个粒子 + 补充分析记录。</summary>

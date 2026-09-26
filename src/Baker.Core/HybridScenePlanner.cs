@@ -385,7 +385,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 重查请求自己带着 retain_live_root_ids，绝不递归第二层。
         if ((request.RetainLiveRootIds ?? []).Length != 0 || report["route"]?.GetValue<string>() != "whole_layer" ||
             report["whole_layer"]?["status"]?.GetValue<string>() != "unavailable" ||
-            report["blockers"] is not JsonArray initialBlockers || !PlanBlockers.Codes(report).All(Verdict.IsRadianceCode)) return;
+            report["blockers"] is not JsonArray initialBlockers ||
+            !PlanBlockers.Codes(report).All(Verdict.IsCaptureGap)) return;
         // 只剩 HDR 拒因而循环本身完整时，没有要留实时的未解机制：不试，也不往完整的循环里补"没试"的说明。
         if (initialBlockers.Count > 0 && report["loop"] is JsonObject wholeLoop && Routes.WholeLoopComplete(wholeLoop)) return;
         JsonObject evidence = HybridLoopAllocation.Explain(report, scene);
@@ -414,8 +415,14 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // ReplannedResolution 仍按路线判"找到"，这里按重查的 HDR 结论改判，免得编排层采纳一份还被 HDR 挡着的分配。
             bool replannedRadianceOpen = PlanBlockers.Codes(replanned).Any(Verdict.IsRadianceCode);
             if (resolved && replannedRadianceOpen) (resolved, basis) = (false, "hdr_radiance_open");
+            // 透视同理：剩下的内容循环成立、只差透视捕获时记 perspective_capture_open，不能说成证不出循环。
+            bool replannedPerspective = PlanBlockers.Codes(replanned).Contains(BlockerCode.PerspectiveNeedsScreenspace);
+            if (resolved && replannedPerspective) (resolved, basis) = (false, "perspective_capture_open");
             evidence["status"] = resolved ? "candidate_found" : "still_unavailable";
             evidence["resolution_basis"] = basis;
+            // 只差采集能力时，按"假设能采集"对这份更小分配做的省电预判（编排层据此判不省电或标给排期）。
+            if (basis is "perspective_capture_open" or "hdr_radiance_open" && NoBenefit.CaptureOpenConditions(replanned) is string[] ifCaptured)
+                evidence[NoBenefit.ReplannedConditionsField] = new JsonArray([.. ifCaptured.Select(c => (JsonNode)JsonValue.Create(c))]);
             if (residual is not null)
                 evidence["replanned_residual_masking"] = new JsonObject
                 {
@@ -442,10 +449,12 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             if (!resolved && HybridLoopAllocation.ReplannedRetainLiveSuggestion(replanned, retained) is JsonObject suggestion)
                 evidence["replanned_retain_live_suggestion"] = suggestion;
             Verdict.AddLoopUnresolved(report, "loop_allocation_fallback", resolved
-                ? $"No loop covers every baked layer, but a smaller bake allocation does: keeping author roots {retainedText} live leaves content that resolves. Re-run analyze with --retain-live {retainedText} to plan that allocation."
+                ? $"No loop covers every baked layer, but a smaller bake allocation does: keeping layers {retainedText} live leaves content that resolves. Re-run analyze with --retain-live {retainedText} to plan that allocation."
                 : replannedRadianceOpen
-                    ? $"No loop covers every baked layer, and the smaller bake allocation that keeps author roots {retainedText} live is still blocked by the HDR radiance closure of the content it captures."
-                    : $"No loop covers every baked layer, and the smaller bake allocation that keeps author roots {retainedText} live establishes none either.");
+                    ? $"No loop covers every baked layer, and the smaller bake allocation that keeps layers {retainedText} live is still blocked by the HDR radiance closure of the content it captures."
+                    : basis == "perspective_capture_open"
+                    ? $"No loop covers every baked layer; keeping layers {retainedText} live leaves content whose loop resolves, but capturing it still needs a perspective screen-space composition."
+                    : $"No loop covers every baked layer, and the smaller bake allocation that keeps layers {retainedText} live establishes none either.");
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
@@ -454,7 +463,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             evidence["error_type"] = error.GetType().Name;
             evidence["error"] = error.Message;
             Verdict.AddLoopUnresolved(report, "loop_allocation_fallback",
-                $"No loop covers every baked layer, and the smaller bake allocation keeping author roots {retainedText} live could not be analyzed: {error.Message}");
+                $"No loop covers every baked layer, and the smaller bake allocation keeping layers {retainedText} live could not be analyzed: {error.Message}");
         }
     }
 

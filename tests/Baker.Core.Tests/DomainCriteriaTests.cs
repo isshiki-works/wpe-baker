@@ -98,12 +98,13 @@ public class DomainCriteriaTests
         for (int i = 0; i < effects; ++i) materials.Add(new JsonObject { ["role"] = "effect" });
         var plan = new JsonObject
         {
-            ["blockers"] = blockers ? new JsonArray("x") : new JsonArray(),
+            ["blockers"] = new JsonArray(),
             ["effect_prefix_caches"] = prefixes ? new JsonArray(new JsonObject()) : new JsonArray(),
             ["loop"] = new JsonObject { ["candidates"] = candidates ? new JsonArray(new JsonObject()) : new JsonArray() },
             ["video_dominant"] = new JsonObject { ["status"] = dominance, ["decode_work"] = decode is null ? null : new JsonObject { ["status"] = decode } },
             ["video_groups"] = new JsonArray(new JsonObject { ["layer_ids"] = new JsonArray(12) }),
         };
+        if (blockers) PlanBlockers.Add(plan, new Blocker(BlockerCode.BakeAllocation));
         var runtime = new JsonObject { ["runtime_layers"] = new JsonArray(new JsonObject { ["owner"] = 12, ["has_effect_layer"] = false, ["materials"] = materials }) };
         JsonObject verdict = BakeValueAssessment.Evaluate(plan, runtime, null!, null);
         Assert.Equal((status, rule), (verdict["status"]!.GetValue<string>(), verdict["rule"]!.GetValue<string>()));

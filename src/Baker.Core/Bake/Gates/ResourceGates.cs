@@ -21,9 +21,9 @@ internal sealed class DiskBudgetGate : IBakeGate
 }
 
 /// <summary>
-/// 内嵌视频大小（WPE 实测 2 GiB 上限，见 <see cref="EmbeddedVideoBudget"/>）：起点搜索与主渲染之前按合成探针的试编码外推，
-/// 超限就干净拒绝，不再跑完几个小时才在装配时失败。外推读不到时只记录、不拒绝，编码后还有一次按实际字节的检查。
-/// 没有合成校验结果（探针）时不外推。
+/// 内嵌视频大小（WPE 实测 2 GiB 上限，见 <see cref="EmbeddedVideoBudget"/>）：主渲染前按合成探针的试编码外推，
+/// 结果（含按体积抬高的量化值 quantizer_offset）记进 bake.json 并交给主渲染选编码参数，不在这里拒绝；
+/// 编码后按实际字节与画质门再判。没有合成校验结果（探针）时不外推。
 /// </summary>
 internal sealed class EmbeddedVideoGate(EmbeddedVideoGate.Estimator estimate) : IBakeGate
 {
@@ -33,13 +33,8 @@ internal sealed class EmbeddedVideoGate(EmbeddedVideoGate.Estimator estimate) : 
 
     public async Task<BakeRejection?> CheckAsync(BakeGateContext context, CancellationToken cancellationToken)
     {
-        if (context.CompositionValidation is not JsonObject compositionValidation) return null;
-        JsonObject embeddedVideoEstimate = await estimate(compositionValidation, context.Frames, context.Settings, cancellationToken);
-        context.EmbeddedVideoEstimate = embeddedVideoEstimate;
-        if (embeddedVideoEstimate["status"]?.GetValue<string>() != "predicted_over_limit") return null;
-        return context.Reject(EmbeddedVideoBudget.RejectedBakeStatus, context.Plan, "not_performed", new() {
-            ["reason"] = embeddedVideoEstimate["reason"]?.DeepClone(),
-            ["reason_localized"] = embeddedVideoEstimate["reason_localized"]?.DeepClone(),
-            ["composition_validation"] = compositionValidation, ["embedded_video_estimate"] = embeddedVideoEstimate }, new());
+        if (context.CompositionValidation is JsonObject compositionValidation)
+            context.EmbeddedVideoEstimate = await estimate(compositionValidation, context.Frames, context.Settings, cancellationToken);
+        return null;
     }
 }

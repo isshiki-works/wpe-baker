@@ -12,8 +12,15 @@ internal static class PlaybackEncodeProfileChecks
         MethodInfo outputArguments = profileType.GetMethod("OutputArguments", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!;
         string Value(object profile, string property) => (string)profileType.GetProperty(property)!.GetValue(profile)!;
         string[] Arguments(object profile, string output) => (string[])outputArguments.Invoke(profile, [60u, 1u, output])!;
-        object Create(uint width, uint height, bool lossless, string kind = PlaybackEncoderSelection.Software) =>
-            create.Invoke(null, [width, height, 60u, 1u, lossless, kind])!;
+        object Create(uint width, uint height, bool lossless, string kind = PlaybackEncoderSelection.Software, int sizeOffset = 0) =>
+            create.Invoke(null, [width, height, 60u, 1u, lossless, kind, sizeOffset])!;
+
+        // 体积预算：所有档位的量化值一起抬（CRF/CQ/QP 加同一增量，MF 的 quality 每 +1 降 2）。
+        check(Arguments(Create(1920, 1080, false, sizeOffset: 4), "x.mp4").SkipWhile(a => a != "-crf").Skip(1).First() == "20" &&
+            Arguments(Create(1920, 1080, false, PlaybackEncoderSelection.Nvenc, 4), "x.mp4").SkipWhile(a => a != "-cq").Skip(1).First() == "26" &&
+            Arguments(Create(1920, 1080, false, PlaybackEncoderSelection.Amf, 4), "x.mp4").SkipWhile(a => a != "-qp_p").Skip(1).First() == "20" &&
+            Arguments(Create(1920, 1080, false, PlaybackEncoderSelection.Mf, 4), "x.mp4").SkipWhile(a => a != "-quality").Skip(1).First() == "72",
+            "size budget: the quantizer offset raises CRF, NVENC CQ and AMF QP by the same amount and lowers MF quality by twice it");
 
         object h264 = Create(1920, 1080, false);
         check(Value(h264, "Encoder") == "libx264" && Value(h264, "Preset") == "fast" && Value(h264, "Crf") == "16" &&

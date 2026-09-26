@@ -72,9 +72,11 @@ internal static class HybridSuitability
 
         // 同类：不可掩盖的分量都在要烘的层上（或没有归属），把它们留实时的更小分配也试过、仍证不出循环。
         // 这条保留 hdr 判据：重查可能只是被 HDR 闭合挡住（resolution_basis = hdr_radiance_open），不能说成证不出循环。
+        // 透视不改循环分析，重查判依据时已不看它；只差透视捕获的记 perspective_capture_open，不进这条。
         // 重新分配已经试过，取舍方案只关实时层也够不着它们（TradeoffOptions 同一口径不列方案），没有可让用户决定的事项。
-        if (!hdr && !perspective && blockers.Contains(BlockerCode.BakeAllocation) &&
+        if (!hdr && blockers.Contains(BlockerCode.BakeAllocation) &&
             Text(plan["loop_allocation_fallback"]?["status"]) == "still_unavailable" &&
+            Text(plan["loop_allocation_fallback"]?["resolution_basis"]) != "perspective_capture_open" &&
             plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
             blocking.OfType<JsonObject>().All(component => component["owner_layer_id"] is not JsonValue owner ||
                 !(plan["live_layer_ids"] as JsonArray ?? []).Any(id => JsonNode.DeepEquals(id, owner))))
@@ -122,16 +124,17 @@ internal static class HybridSuitability
                     $"{totalLayers} 层里只有 {videoLayers} 层能预渲染，而这些层没有任何随时间变化的机制：" +
                     "烘出来的视频就是一张静止画面，会动的部分照样实时运行，烘焙省不下任何东西。", notes);
 
+        // 预计不省电一律拒绝（NoBenefit），不是待你决定的事项；理由用界面定稿的那一句。
+        // 只差采集能力的按假设能采集判过（NoBenefit.CaptureOpenConditions），排在能力缺口前。
+        if (blockers.Contains(BlockerCode.NoBenefitExpected))
+            return Build("not_suitable", NoBenefit.RejectionReason,
+                "Estimated power use is higher than the original wallpaper.", "预计功耗高于原壁纸", notes);
+
         // 能力缺口是工具的问题，不是壁纸的问题，单独一档。
         if (hdr || perspective)
             return Build("unsupported_capture", "capture_capability_gap",
                 "This scene needs a capture path the tool does not have yet (HDR intermediate compositing and/or perspective projection); that is a gap in the tool, not a verdict on the wallpaper.",
                 "这张壁纸需要工具目前还没有的采集能力（HDR 中间合成与/或透视投影）：这是工具的能力缺口，不是壁纸本身不行。", notes);
-
-        // 预计不省电一律拒绝（NoBenefit），不是待你决定的事项；理由用界面定稿的那一句。
-        if (blockers.Contains(BlockerCode.NoBenefitExpected))
-            return Build("not_suitable", NoBenefit.RejectionReason,
-                "Estimated power use is higher than the original wallpaper.", "预计功耗高于原壁纸", notes);
 
         if (blockers.Length > 0)
             return Build("requires_user_choice", "blockers_need_a_decision",

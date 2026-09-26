@@ -29,7 +29,8 @@ public static class BakeValueAssessment
             ["status"] = verdict.Status, ["rule"] = verdict.Rule, ["reason_zh"] = verdict.ReasonZh, ["reason_en"] = verdict.ReasonEn,
             ["evidence"] = evidence ?? new JsonObject(), ["device_independent"] = true,
             ["scope"] = WorkloadValue.Scope };
-        if (plan["blockers"] is JsonArray { Count: > 0 })
+        // 采集能力缺口不算未解决：按"假设能采集"照常评估，NoBenefit 据此给只差采集的方案做省电预判。
+        if (PlanBlockers.Codes(plan).Any(code => !Verdict.IsCaptureGap(code)))
             return Result(WorkloadValue.UnresolvedPlan);
         if (plan["effect_prefix_caches"] is JsonArray { Count: > 0 } prefixes)
             return Result(WorkloadValue.CachedEffectPrefix, new JsonObject { ["prefix_count"] = prefixes.Count });

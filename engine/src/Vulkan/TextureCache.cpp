@@ -30,12 +30,15 @@ namespace owe::vulkan
 namespace
 {
 Services* active_offline_execution = nullptr;
+bool      active_offline_raster = true;
 }
 
-void TextureCache::PumpVideoTextures(double dt_seconds, Services* services) {
+void TextureCache::PumpVideoTextures(double dt_seconds, Services* services, bool raster) {
     active_offline_execution = services;
+    active_offline_raster = raster;
     PumpVideoTextures(dt_seconds);
     active_offline_execution = nullptr;
+    active_offline_raster = true;
 }
 } // namespace owe::vulkan
 
@@ -435,7 +438,7 @@ struct TextureCache::VideoRegistry {
         owe::media::Nv12Frame                       nv12_scratch;
         f64                                         pts_acc {};
         f64                                         last_pts { -1.0 };
-        bool                                        have_frame { false };
+        bool                                        convert_pending { false }; // nv12_scratch 里有还没写进纹理的新帧
         u64                                         applied_seek_sequence {};
         bool                                        offline_clock_initialized { false };
         double                                      offline_anchor_scene { 0.0 };
@@ -697,7 +700,6 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
             } else {
                 s.pts_acc    = state.seek_seconds;
                 s.last_pts   = f64(-1.0);
-                s.have_frame = false;
             }
         }
         if (! state.playing) {
@@ -765,7 +767,6 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
             s.offline_pending = None();
             s.offline_drained = false;
             s.offline_cycle = cycle;
-            s.have_frame = false;
             s.last_pts = f64(-1.0);
         }
         // Retain one future frame as lookahead. Only a frame whose PTS has
@@ -774,7 +775,7 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         while (!s.offline_drained) {
             if (s.offline_pending.is_none()) {
                 owe::media::Nv12Frame candidate;
-                auto pulled = s.decoder.next_frame(candidate);
+                auto pulled = s.decoder.next_frame(candidate, false);
                 if (!pulled) {
                     fail(std::string(s.decoder.last_error()));
                     return;
@@ -795,7 +796,9 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
             const double tolerance = 4.0 * std::numeric_limits<double>::epsilon() *
                 std::max(1.0, std::max(std::abs(deadline), std::abs(media_time)));
             if (deadline - media_time > tolerance) break;
-            s.nv12_scratch = rstd::move(*s.offline_pending);
+            // 只换解码帧，nv12_scratch 的 NV12 缓冲留着复用（转 NV12 推迟到要画的那帧，见下）。
+            s.nv12_scratch.decoded = rstd::move(s.offline_pending->decoded);
+            s.nv12_scratch.pts_seconds = s.offline_pending->pts_seconds;
             s.offline_pending = None();
             s.last_pts = f64(s.nv12_scratch.pts_seconds);
             got_new = true;
@@ -818,15 +821,21 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         if (decoder_looped) break;
     }
     }
-    if (! got_new && s.have_frame) {
-        publish_time();
-        return;
-    }
-    if (! got_new) {
+    if (got_new) s.convert_pending = true;
+    // 离线不光栅的帧（预热、取样步之间）不转 NV12、不写纹理：最新解出的帧留在 nv12_scratch，到要画的那帧再转，
+    // 画出的纹理与每帧都转相同。2903412088 的 4K 视频起点搜索 16 帧只画 1 帧，这些转换约占渲染器时间四成。
+    if (! s.convert_pending || (offline && ! active_offline_raster)) {
         publish_time();
         return;
     }
 
+    if (! s.decoder.to_nv12(s.nv12_scratch)) {
+        if (offline) active_offline_execution->diagnose(
+            "video[" + rstd::cppstd::to_string(s.key.as_str()) + "]: " + std::string(s.decoder.last_error()), true);
+        rstd_error("PumpVideoTextures[{}]: decode sw: {}", s.key.as_str(), s.decoder.last_error());
+        publish_time();
+        return;
+    }
     if (! yuv->Convert(ip.handle,
                        s.width,
                        s.height,
@@ -837,7 +846,7 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         publish_time();
         return;
     }
-    s.have_frame = true;
+    s.convert_pending = false;
     publish_time();
 }
 

@@ -127,14 +127,14 @@ internal sealed class Allocation
             if (parallax && request.ViewMode == "preserve" && sourceOrder.Any(id => allocationOf[id] == root &&
                 objects[id]["parallaxDepth"] is JsonObject binding && binding.ContainsKey("script"))) Live(root, "animated_parallax_depth");
         }
-        foreach (int root in request.RetainLiveRootIds ?? [])
+        // 按分配单元保留：列出的图层所在的单元整单元留实时，同一作者根下拆开的其它单元照常烘。单元边界是上面按保留之前的
+        // 实时集定的，拆分条件（父层传给子层的状态是常量、绘制顺序按单元保持）与哪个单元实时无关，所以留住任一单元画面不变。
+        var retainedUnits = (request.RetainLiveRootIds ?? []).Select(id => allocationOf.TryGetValue(id, out int unit) ? unit
+            : throw new InvalidDataException("A requested live layer is not in the source scene.")).ToHashSet();
+        foreach (int id in sourceOrder.Where(id => retainedUnits.Contains(allocationOf[id])))
         {
-            if (!rootOf.TryGetValue(root, out int actualRoot) || actualRoot != root) throw new InvalidDataException("A requested live root is not a source root.");
-            foreach (int id in sourceOrder.Where(id => rootOf[id] == root))
-            {
-                Live(id, "retained_by_cost_trial");
-                foreach (string reason in request.RetainLiveReasons?.GetValueOrDefault(id) ?? []) Live(id, reason);
-            }
+            Live(id, "retained_by_cost_trial");
+            foreach (string reason in request.RetainLiveReasons?.GetValueOrDefault(id) ?? []) Live(id, reason);
         }
         // Hidden script hosts can initialize fonts or other live layers without drawing a pixel.
         // Preserve those controllers instead of turning them into empty video groups.
@@ -167,7 +167,7 @@ internal sealed class Allocation
         bool dynamicLookup = allocation.DynamicLookup = scripts.Values.SelectMany(s => s).Any(code => Regex.IsMatch(code,
             @"\b(thisScene|getLayer|getParent|setParent|globalThis|eval|Function|Reflect|Proxy|import)\b|\.\s*(parent|children)\b"));
         bool SafeHiddenSubtree(int id, HashSet<int> subtree) => !dynamicLookup &&
-            !(request.RetainLiveRootIds ?? []).Contains(rootOf[id]) &&
+            !retainedUnits.Contains(allocationOf[id]) &&
             Resolve(objects[id]["visible"], properties)?.ToJsonString() == "false" &&
             !graph.DynamicVisibility(id) &&
             scripts[id].All(code => !Regex.IsMatch(code, @"\bthisLayer\s*\.\s*visible\b")) &&
