@@ -209,11 +209,10 @@ internal sealed record ShaderLoopUnresolved(ShaderTemporalUnresolved Source) : L
 }
 
 /// <summary>
-/// 各分量都有周期证明，求解器在循环上限内（含调速预算）却找不到公共闭合帧：上限内不重复的证明，结论"不能"。
-/// kind 与着色器的证明项相同，残差掩盖按 mechanism 判 loop_convergence=cannot。OwnerLayerId 是并不进的所有者层（每层一条，
-/// 与 no_candidate_reason.retain_live_owner_layer_ids 相同），分配回退据此先试留实时；点不出层时为 null。
+/// 这一层自己的周期项各自独立调频、连同它自己的动画轨道，在循环上限内（含调速预算）仍找不到公共闭合帧：上限内不重复的证明，结论"不能"。
+/// kind 与着色器的证明项相同，残差掩盖按 mechanism 判 loop_convergence=cannot。每层一条，分配回退据此把这一层留实时。
 /// </summary>
-internal sealed record NeverRepeatsUnresolved(int? OwnerLayerId, double CeilingSeconds, string Detail) : LoopUnresolved
+internal sealed record NeverRepeatsUnresolved(int OwnerLayerId, double CeilingSeconds, string Detail) : LoopUnresolved
 {
     public override string Kind => nameof(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism);
     public override Message DetailMessage => new(ResidualMasking.NeverRepeatsReasonKey, [CeilingSeconds / 60]);

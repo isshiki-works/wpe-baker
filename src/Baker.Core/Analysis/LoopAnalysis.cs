@@ -70,35 +70,39 @@ internal static class LoopAnalysis
             or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling
             ? NoCommonLoopOwners(shader, animation, particleCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
             : null;
-        // "不能"的证明只认最宽松模型：每个非慢的着色器周期项都在预算内独立调频，其余分量照旧；它也无解才是不能。
-        // 只在实际模型（旋钮 + 每 pass 时间倍率）无解、或有 pass 剩多个 π 类时跑。最宽松模型有解（或给不出证明）时，
-        // 缺独立调频来源的项所在 pass 记未收敛 term_not_retimable。带组步长重解时无解由调用方保持原解，不记。
+        // "不能"按所有者层逐层证明，只认最宽松模型：这一层自己的非慢着色器周期项各在预算内独立调频，加上它自己的动画轨道；
+        // 不带粒子锁（实际求解可以撤锁）、不带别的层（和别的层凑不到一起只是留实时，不是这一层不能）。含这一层的任何实际候选
+        // 都满足这些约束，所以它也无解才是这一层不能；有解（或给不出证明）时，缺独立调频来源的项所在 pass 记未收敛 term_not_retimable。
+        // 查的层：实际模型（旋钮 + 每 pass 时间倍率）无解时并不进的层，以及剩多个 π 类的 pass 所在的层。带组步长重解时无解由调用方保持原解，不查。
         bool noLoop = solve.Result.NoCandidate?.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
             or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling;
-        if (stepCycles.Length == 0 && (noLoop || shader.Terms.Any(x => x.Split)))
+        if (stepCycles.Length == 0)
         {
             static string S(double x) => x.ToString("0.###", CultureInfo.InvariantCulture);
-            LoopSolve relaxed = SolveLoop(shader with { Components = [] }, animation, [.. shader.Terms.Select(x => x.Relaxed), .. particleCycles, .. scriptCycles],
-                fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
-            if (relaxed.Result.NoCandidate is { Kind: CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
-                or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling } never)
+            foreach (int owner in (noLoop ? noCommonLoopOwners ?? [] : []).Concat(shader.Terms.Where(x => x.Split).Select(x => x.OwnerLayerId)).Distinct())
             {
-                CommonLoopComponent slowest = relaxed.Used.MaxBy(x => x.BasePeriod!.Seconds)!;
-                double longest = slowest.BasePeriod!.Seconds;
-                // 证明归到并不进的所有者层：分配回退先把它们留实时重查，重查也无解这条证明才落成"不能"
-                foreach (int? owner in noCommonLoopOwners?.Select(id => (int?)id) ?? [null])
+                ShaderTerm[] own = [.. shader.Terms.Where(x => x.OwnerLayerId == owner)];
+                if (own.Length == 0) continue;
+                LoopSolve relaxed = SolveLoop(shader with { Components = [] }, [.. animation.Where(x => x.OwnerLayerId == owner)], [.. own.Select(x => x.Relaxed)],
+                    fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+                if (relaxed.Result.NoCandidate is { Kind: CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
+                    or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling } never)
+                {
+                    CommonLoopComponent slowest = relaxed.Used.MaxBy(x => x.BasePeriod!.Seconds)!;
+                    double longest = slowest.BasePeriod!.Seconds;
                     unresolved.Add(new NeverRepeatsUnresolved(owner, ceilingSeconds, $"No loop within the {S(ceilingSeconds)} s limit at a " +
-                        $"{S(relaxed.Result.RetimeBudgetPercent)}% retime budget even with every shader period term retimed independently ({never.Kind}): " +
+                        $"{S(relaxed.Result.RetimeBudgetPercent)}% retime budget even with every shader period term of this layer retimed independently ({never.Kind}): " +
                         $"slowest component {slowest.Id} has period {S(longest)} s = {S(longest / ceilingSeconds)}x the limit" + (never.FixedPeriodSeconds is double step
                             ? $"; the fixed-period components close together only every {S(step)} s = {S(step / ceilingSeconds)}x the limit" : "") + "."));
+                }
+                else
+                    foreach (var pass in own.Where(x => x.Missing is not null && (noLoop || x.Split))
+                        .GroupBy(x => (x.OwnerLayerId, x.EffectIndex, x.PassIndex, x.Resource)))
+                        unresolved.Add(new ShaderLoopUnresolved(new(pass.Key.OwnerLayerId, pass.Key.EffectIndex, pass.Key.PassIndex, pass.Key.Resource,
+                            ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: these terms need independent retiming that " +
+                            "the shader source does not provide: " + string.Join("; ", pass.Select(x => $"{x.Relaxed.Id} {S(x.Relaxed.BasePeriod!.Seconds)} s ({x.Missing})")),
+                            "term_not_retimable")));
             }
-            else
-                foreach (var pass in shader.Terms.Where(x => x.Missing is not null && (noLoop || x.Split))
-                    .GroupBy(x => (x.OwnerLayerId, x.EffectIndex, x.PassIndex, x.Resource)))
-                    unresolved.Add(new ShaderLoopUnresolved(new(pass.Key.OwnerLayerId, pass.Key.EffectIndex, pass.Key.PassIndex, pass.Key.Resource,
-                        ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: these terms need independent retiming that " +
-                        "the shader source does not provide: " + string.Join("; ", pass.Select(x => $"{x.Relaxed.Id} {S(x.Relaxed.BasePeriod!.Seconds)} s ({x.Missing})")),
-                        "term_not_retimable")));
         }
         if (stepCycles.Length > 0)
         {

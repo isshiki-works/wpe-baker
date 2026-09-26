@@ -89,27 +89,32 @@ conditions hold.
   finite segment as a stand-in for a real period. If the period can't be
   solved, the tool says so — and says which kind of dead end it hit, in
   `loop.no_candidate_reason`.
-- **Three presets — efficiency, balanced, quality — budget how much the
-  motion may change; the loop length is what the solver returns.** A scene
-  usually has many periods that close, and the shorter the period, the more
-  the tempo of its components has to be adjusted. `--preset
-  efficiency|balanced|quality` (balanced by default; quality can be selected explicitly and is capped at 600 s) sets that budget:
-  efficiency allows up to 5% on any visible component and takes the shortest
-  loop inside it, balanced allows 3%, quality solves for the smallest change
-  instead of a percentage. The length caps (600 / 600 / 1200 s) are a
-  backstop rather than the knob. Analysis no longer shortens them for the
-  2 GiB embedded-video limit; the bake judges size from this scene's trial
-  encode and the bytes actually written. Three guards hold in all
-  three presets and do not move with the budget: the slowest visible
-  component runs at least 3 cycles, the loop is at least 60 s, and no visible
-  component's peak speed shifts by more than 0.2 px/s. Across a 27-title
-  scan the median loop was 146 s at efficiency, 200 s at balanced and 483 s
-  at quality, and the reported figure to watch is the phase drift in cycles,
-  not the percentage: at 3% a 120 s loop drifted 0.360 cycles, at 5% only
-  0.116. What the budget buys is a frequency change, and in the samples we
-  watched a changed frequency was hard to spot while a changed motion path
-  was not — which is why the displacement-fade path is used by none of the
-  three presets.
+- **Presets — efficiency, balanced, quality, compatibility — budget how much
+  the motion may change; the loop length is what the solver returns.** A
+  scene usually has many periods that close, and the shorter the period, the
+  more the tempo of its components has to be adjusted. `--preset
+  efficiency|balanced|quality|compatibility` (balanced by default;
+  `preset_applied` in the plan names the preset used) sets that budget:
+  efficiency allows up to 5% on any retimable component, balanced 3% and
+  compatibility 10%; quality sets no visual budget and falls back to the
+  general retime limit. `--retime-budget` (0–5%) overrides the preset's
+  budget. All four presets cap the loop at 600 s, and that cap is a backstop
+  rather than the knob. Within the cap and the budget the solver picks
+  candidates with the preset's preference (performance for efficiency and
+  compatibility, balanced for balanced, quality for quality); if no common
+  loop fits the budget the scene takes the unresolved path. Analysis does not
+  shorten the loop for the 2 GiB embedded-video limit; the bake judges size
+  from this scene's trial encode and the bytes actually written. Where the
+  retime lands: a shader component changes its pass's time scale, a knob
+  that only this term uses (a uniform or a literal), or a vertex output
+  component — when one scroll speed feeds both x and y with different
+  periods, the capture override shader reruns the vertex program on each
+  component's own time and keeps only that component, so the two axes are
+  retimed separately; an animation track changes its rate or fps, and a
+  video its playback rate. A retime changes a component's frequency, never
+  its motion path. `retime_profile` in the plan records the preset, budget,
+  cap and where each came from; changing preset means analysing again, not
+  editing an existing plan.
 - **A failed seam falls back to the next candidate, never to a looser
   threshold.** If the selected candidate fails the encoded seam check, the
   bake promotes the next analytic candidate and re-runs, up to three
@@ -294,7 +299,7 @@ conditions hold.
 RC8 (below) was the last packaged build; this release adds the following,
 each described in the section named after it:
 
-- **Three presets instead of loop preferences.** `--preset` budgets how much
+- **Presets instead of loop preferences.** `--preset` budgets how much
   the motion may change, and the loop length comes out of the solve (**How it
   works**).
 - **The frame rate is derived, not fixed at 120** — the lower of your
@@ -1036,9 +1041,10 @@ wpe-baker measure-official REQUEST.json
 
 Analyze options that change what goes into the plan:
 
-- `--preset efficiency|balanced|quality` — how much the motion may change
-  (5% / 3% / smallest), balanced by default; quality is capped at 600 s,
-  and `preset_applied` in the plan names the budget used. Advanced overrides: `--retime-budget
+- `--preset efficiency|balanced|quality|compatibility` — how much the motion
+  may change (5% / 3% / no visual budget / 10%), balanced by default; every
+  preset caps the loop at 600 s, and `preset_applied` in the plan names the
+  preset used. Advanced overrides: `--retime-budget
   PERCENT` (0..5) and `--loop-max-seconds`. The older `--loop-preference`,
   `--max-retime`, `--loop-length-max` and `--view-mode` names have been removed.
 - `--interaction keep|fixed|off` — what input-driven content does: keep it

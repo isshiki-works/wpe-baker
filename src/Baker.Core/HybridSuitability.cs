@@ -130,6 +130,11 @@ internal static class HybridSuitability
                 "This scene needs a capture path the tool does not have yet (HDR intermediate compositing and/or perspective projection); that is a gap in the tool, not a verdict on the wallpaper.",
                 "这张壁纸需要工具目前还没有的采集能力（HDR 中间合成与/或透视投影）：这是工具的能力缺口，不是壁纸本身不行。", notes);
 
+        // 视频数超过当前设置的上限：照这条拒因自己的文案说（与 blocker 同一键），不混进未收敛的通用文案
+        if ((plan["blockers_localized"] as JsonArray ?? []).OfType<JsonObject>()
+            .FirstOrDefault(item => Text(item["key"]) == BlockerCodes.Key(BlockerCode.TooManyVideoGroups)) is { } tooMany)
+            return Build("not_suitable", "too_many_video_groups", Text(tooMany["en"]) ?? "", Text(tooMany["zh"]) ?? "", notes);
+
         // 剩下的阻断项不交给用户判：不可掩盖的分量都已证明上限内不重复才是"不能"，其余是分析没推下去，记未收敛
         if (blockers.Length > 0)
             return Converged(plan, Build("not_suitable", "blockers_unresolved", "", "", notes), unsupportedOtherwise: true);
