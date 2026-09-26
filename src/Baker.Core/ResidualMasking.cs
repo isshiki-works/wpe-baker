@@ -637,6 +637,11 @@ public static class ResidualMasking
             verdict["maskable"] = false;
             verdict["reason"] = MessageCatalog.Get("residual.particle_not_stationary", MessageCatalog.Chinese, layer, codes);
             verdict["reason_en"] = MessageCatalog.Get("residual.particle_not_stationary", MessageCatalog.English, layer, codes);
+            if (Text(stationarity["loop_convergence"]) == "cannot")
+            {
+                verdict["loop_convergence"] = "cannot";
+                verdict["reason_key"] = NeverRepeatsReasonKey;
+            }
             return verdict;
         }
         if (Number(stationarity["warmup_seconds"]) is not double warmup || warmup < 0)
