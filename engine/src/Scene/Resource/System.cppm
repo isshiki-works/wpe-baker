@@ -521,8 +521,8 @@ public:
         m_registries.ImageUploads().Trim();
     }
 
-    void PumpVideoTextures(double seconds, Services* services) {
-        m_registries.Textures().PumpVideoTextures(seconds, services);
+    void PumpVideoTextures(double seconds, Services* services, bool raster) {
+        m_registries.Textures().PumpVideoTextures(seconds, services, raster);
     }
     vulkan::VideoDecoderInventory ObserveVideoDecoders() { return m_registries.Textures().ObserveVideoDecoders(); }
     void SetVideoDecodeOptions(vulkan::TextureCache::VideoDecodeOptions options) {
