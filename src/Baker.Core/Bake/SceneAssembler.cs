@@ -327,7 +327,7 @@ internal static class SceneAssembler
     }
 
     /// <summary>保留下来、带脚本的对象在运行时查询公开图层表（数量、下标、枚举、顺序）的记录。</summary>
-    private static IEnumerable<JsonObject> PublicLayerQueries(IEnumerable<JsonObject> finalObjects, JsonArray dependencies)
+    internal static IEnumerable<JsonObject> PublicLayerQueries(IEnumerable<JsonObject> finalObjects, JsonArray dependencies)
     {
         var finalById = finalObjects.ToDictionary(Id);
         return dependencies.OfType<JsonObject>().Where(dependency =>

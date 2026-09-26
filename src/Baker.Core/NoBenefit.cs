@@ -63,7 +63,7 @@ public static class NoBenefit
 
     /// <summary>
     /// 只有普通图层的视频组（单个源材质、普通贴图着色器、不带光照、没有特效 pass；不画东西的节点层不算）省下的渲染可证明约为 0，
-    /// 进视频只多一路视频和一个视频层的固定开销（SALVAGE 每路约 0.66 W，VLAYOUT 每层约 0.46 W）。返回把这些组留实时的 --retain-live 列表。
+    /// 进视频只多一路视频和一个视频层的固定开销（SALVAGE 每路约 0.66 W；每层绘制约 0.46 W，并进视频枢纽后约 0.03 W，光解码这一路就不省）。返回把这些组留实时的 --retain-live 列表。
     /// 静态成品、已证静态的组不编视频，不在此列；全部组都是普通组时没有可烘内容，交给 <see cref="PlainLayersOnly"/>。
     /// </summary>
     internal static async Task<int[]?> PlainGroupRetainRootsAsync(JsonObject plan, CancellationToken token)
