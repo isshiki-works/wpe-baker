@@ -185,6 +185,8 @@ public sealed partial class NativeRenderRunner
                 throw new InvalidDataException(MessageCatalog.RenderLegacy("bake.gpu_quality_rejected"));
             }
         }
+        // 按体积抬了量化值的软件直编：门已在 GroupRenderScheduler 过，读数照录；未过由整案按"体积限制下画质门未过"拒绝。
+        else if (render["playback_quality_gate"] is JsonObject sizeGate) report["playback_quality_gate"] = sizeGate.DeepClone();
         await WriteJsonAsync(Path.Combine(output, "manifest.json"), report, cancellationToken);
         return report;
     }
