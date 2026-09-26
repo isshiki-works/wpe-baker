@@ -85,9 +85,13 @@ internal static class HybridLoopAllocation
         JsonObject sourceScene, Func<string, JsonObject?> readResource)
     {
         ArgumentNullException.ThrowIfNull(replanned);
+        // 透视拒因是采集能力缺口，与循环成不成立无关：这里不看它，调用方按 perspective_capture_open 改判。
+        bool noLoopBlocker = replanned["blockers"] is JsonArray &&
+            PlanBlockers.Codes(replanned).All(code => code == BlockerCode.PerspectiveNeedsScreenspace);
         if (replanned["whole_layer"]?["status"]?.GetValue<string>() == "available") return (true, "whole_layer_available", null);
         if (replanned["route"]?.GetValue<string>() == "effect_prefix") return (true, "effect_prefix", null);
-        if (replanned["route"]?.GetValue<string>() != "whole_layer" || replanned["blockers"] is not JsonArray { Count: 0 } ||
+        if (noLoopBlocker && replanned["loop"] is JsonObject loop && Routes.WholeLoopComplete(loop)) return (true, "whole_layer_available", null);
+        if (replanned["route"]?.GetValue<string>() != "whole_layer" || !noLoopBlocker ||
             replanned["loop"]?["candidates"] is not JsonArray { Count: > 0 }) return (false, "unavailable", null);
         // 与分析、bake 同一个准入判定；说明性条目以外没有未解析项时不走残差掩盖。
         AdmissionVerdict verdict = Admission.Evaluate(replanned, sourceScene, readResource);
