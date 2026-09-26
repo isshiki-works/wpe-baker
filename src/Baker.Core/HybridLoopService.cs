@@ -22,11 +22,18 @@ public static class HybridLoopService
             double oldValue = patch["old_value"]!.GetValue<double>(), newValue = patch["new_value"]!.GetValue<double>();
             if (patch["kind"]!.GetValue<string>() is "shader_speed" or "shader_phase")
             {
-                JsonObject pass = owner["effects"]!.AsArray()[patch["effect_index"]!.GetValue<int>()]!.AsObject()["passes"]!.AsArray()[patch["pass_index"]!.GetValue<int>()]!.AsObject();
+                JsonObject effect = owner["effects"]!.AsArray()[patch["effect_index"]!.GetValue<int>()]!.AsObject();
+                if (effect["passes"] is not JsonArray passes) effect["passes"] = passes = [];
+                int passIndex = patch["pass_index"]!.GetValue<int>();
+                while (passes.Count <= passIndex) passes.Add(new JsonObject());
+                JsonObject pass = passes[passIndex]!.AsObject();
+                if (pass["constantshadervalues"] is not JsonObject values) pass["constantshadervalues"] = values = [];
                 string key = patch["constant_key"]!.GetValue<string>(); int index = patch["value_index"]!.GetValue<int>();
-                JsonNode? value = pass["constantshadervalues"]?[key];
-                if (value is JsonArray array) { Verify(array[index], oldValue); array[index] = newValue; }
-                else { Verify(value, oldValue); pass["constantshadervalues"]![key] = newValue; }
+                JsonNode? value = values[key];
+                // 场景没写这个键时渲染器取 shader 默认值（分析记作 old_value），插入新值即可。
+                if (value is null && !values.ContainsKey(key)) values[key] = newValue;
+                else if (value is JsonArray array) { Verify(array[index], oldValue); array[index] = newValue; }
+                else { Verify(value, oldValue); values[key] = newValue; }
             }
             else if (patch["kind"]!.GetValue<string>() == "animation_rate")
             {
