@@ -62,6 +62,16 @@ public class PlaybackEncodeProfileTests
 }
 
 [Trait("Layer", "L0")]
+public class ShaderSignatureTests
+{
+    [Fact]
+    public void Run()
+    {
+        ShaderSignatureChecks.Run(Assert.True);
+    }
+}
+
+[Trait("Layer", "L0")]
 public class HardwareDecodeDimensionsTests
 {
     [Fact]

@@ -42,11 +42,12 @@ struct Case {
     std::string                               shader;
     std::map<std::string, std::string>        combos;
     std::map<std::string, std::vector<float>> values; // 材质常量，其余取着色器默认值
+    std::string                               vert, frag; // 非空时用这段源码，不读 assets
 };
 
 st::Signature Analyze(const Case& c) {
     const auto dir = Assets() / "effects" / c.effect / "shaders" / "effects";
-    if (! std::filesystem::exists(dir / (c.shader + ".frag"))) {
+    if (c.frag.empty() && ! std::filesystem::exists(dir / (c.shader + ".frag"))) {
         ADD_FAILURE() << "missing " << (dir / (c.shader + ".frag")).string();
         return {};
     }
@@ -56,10 +57,10 @@ st::Signature Analyze(const Case& c) {
     for (const auto& [k, v] : c.combos) desc.input_combos[k] = v;
     desc.stages.push_back(owe::SceneShaderVariantStage { .stage      = owe::ShaderType::VERTEX,
                                                          .source_key = "/assets/shaders/effects/" + c.shader + ".vert",
-                                                         .source     = ReadText(dir / (c.shader + ".vert")) });
+                                                         .source     = c.frag.empty() ? ReadText(dir / (c.shader + ".vert")) : c.vert });
     desc.stages.push_back(owe::SceneShaderVariantStage { .stage      = owe::ShaderType::FRAGMENT,
                                                          .source_key = "/assets/shaders/effects/" + c.shader + ".frag",
-                                                         .source     = ReadText(dir / (c.shader + ".frag")) });
+                                                         .source     = c.frag.empty() ? ReadText(dir / (c.shader + ".frag")) : c.frag });
     owe::fs::VFS vfs;
     auto         mount = owe::fs::make_physical_fs(owe::fs::ToPath(Assets().string()));
     EXPECT_TRUE(mount.is_ok());
@@ -154,4 +155,41 @@ TEST_F(ShaderTime, GodraysNoiseScrollPeriod) {
 
 TEST_F(ShaderTime, ShineCastRotationPeriod) {
     ExpectPeriod(Analyze({ "shine", "shine_cast", {}, { { "g_Speed", { 0.2f } } } }), kTau / 0.2);
+}
+
+// 精灵帧索引 int(t·2) % 5 与 mod(floor(t·2), 5)：取整是阶梯，再取模按周期 5/2 s（不是"线性时间经过取整"的不周期）
+TEST_F(ShaderTime, IntegerModFrameIndexPeriod) {
+    const std::string vert = "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }\n";
+    for (const char* index : { "float(int(g_Time * 2.0) % 5)", "mod(floor(g_Time * 2.0), 5.0)" }) {
+        Case c { "", "imod_frame", {}, {} };
+        c.vert = vert;
+        c.frag = std::string("uniform float g_Time;\nvoid main() { gl_FragColor = vec4(") + index + " / 5.0, 0.0, 0.0, 1.0); }\n";
+        ExpectPeriod(Analyze(c), 2.5);
+    }
+}
+
+// 旧写法的存储缓冲（Uniform + BufferBlock）同 StorageBuffer 按副作用写入报原因；普通 uniform 块（Block）不算
+TEST(ShaderTimeSpirv, BufferBlockIsSideEffect) {
+    auto module = [](unsigned int decoration) {
+        return std::vector<std::vector<unsigned int>> { {
+            0x07230203u, 0x00010000u, 0, 9, 0,
+            (2u << 16) | 17, 1,                    // OpCapability Shader
+            (3u << 16) | 14, 0, 1,                 // OpMemoryModel Logical GLSL450
+            (5u << 16) | 15, 4, 1, 0x6E69616Du, 0, // OpEntryPoint Fragment %1 "main"
+            (4u << 16) | 5, 1, 0x6E69616Du, 0,     // OpName %1 "main"
+            (3u << 16) | 71, 4, decoration,        // OpDecorate %4 Block(2) / BufferBlock(3)
+            (2u << 16) | 19, 2,                    // %2 = OpTypeVoid
+            (3u << 16) | 33, 3, 2,                 // %3 = OpTypeFunction %2
+            (3u << 16) | 22, 5, 32,                // %5 = OpTypeFloat 32
+            (3u << 16) | 30, 4, 5,                 // %4 = OpTypeStruct %5
+            (4u << 16) | 32, 6, 2, 4,              // %6 = OpTypePointer Uniform %4
+            (4u << 16) | 59, 6, 7, 2,              // %7 = OpVariable %6 Uniform
+            (5u << 16) | 54, 2, 1, 0, 3,           // %1 = OpFunction %2 None %3
+            (2u << 16) | 248, 8,                   // %8 = OpLabel
+            (1u << 16) | 253,                      // OpReturn
+            (1u << 16) | 56 } };                   // OpFunctionEnd
+    };
+    const auto buffer = st::Analyze(module(3), {});
+    EXPECT_EQ((buffer.reasons.empty() ? std::string() : buffer.reasons[0]), "unsupported_side_effect") << st::ToJson(buffer);
+    EXPECT_EQ(st::Analyze(module(2), {}).kind, "static");
 }

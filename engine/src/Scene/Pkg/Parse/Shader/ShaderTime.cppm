@@ -493,6 +493,7 @@ private:
     std::map<std::pair<int, std::size_t>, Cond>&                          conds_;
     std::unordered_map<std::uint32_t, std::string>                        names_;
     bool                                                                  side_effect_ { false };
+    std::set<std::uint32_t>                                               buffer_blocks_;
     std::unordered_map<std::uint32_t, std::map<std::uint32_t, std::string>> member_names_;
     std::unordered_map<std::uint32_t, std::uint32_t>                      location_;
     std::unordered_map<std::uint32_t, std::uint32_t>                      builtin_;
@@ -525,8 +526,10 @@ bool Analyzer::Parse() {
         if (len == 0 || i + len > w_.size()) return false;
         const std::uint32_t* o = &w_[i + 1];
         const std::size_t    n = len - 1;
-        // OpImageWrite、原子操作、StorageBuffer 变量：有副作用的写入，抽象解释不建模
-        if (op == 99 || (op >= 227 && op <= 242) || (op == 59 && n > 2 && o[2] == 12)) side_effect_ = true;
+        // OpImageWrite、原子操作、存储缓冲变量（StorageBuffer，或旧写法 Uniform + BufferBlock）：有副作用的写入，抽象解释不建模
+        if (op == 99 || (op >= 227 && op <= 242) ||
+            (op == 59 && n > 2 && (o[2] == 12 || (o[2] == 2 && buffer_blocks_.contains(types_[o[0]].elem)))))
+            side_effect_ = true;
         switch (op) {
         case 5: names_[o[0]] = Str(o + 1, n - 1); break;
         case 6: member_names_[o[0]][o[1]] = Str(o + 2, n - 2); break;
@@ -542,6 +545,7 @@ bool Analyzer::Parse() {
         case 71:
             if (o[1] == 30 && n > 2) location_[o[0]] = o[2];
             if (o[1] == 11 && n > 2) builtin_[o[0]] = o[2];
+            if (o[1] == 3) buffer_blocks_.insert(o[0]);
             break;
         case 72:
             if (o[2] == 11 && n > 3) member_builtin_[o[0]][o[1]] = o[3];
@@ -757,7 +761,7 @@ Val Analyzer::GenericAll(const std::vector<Val>& a, std::size_t size, const std:
             MergeTags(r, c);
             linear = linear || c.Linear();
         }
-    if (linear && r.aperiodic.empty()) r.aperiodic = "linear_time_through_" + op + where;
+    if (linear && r.aperiodic.empty()) r.aperiodic = op + where;
     Normalize(r);
     return Val(size, r);
 }
@@ -776,13 +780,21 @@ Val Analyzer::Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t si
     case 69:
     case 70:
     case 71:
-    case 72: return GenericAll(a, size, "glsl" + std::to_string(inst), where);
+    case 72: return GenericAll(a, size, "linear_time_through_glsl" + std::to_string(inst), where);
     default: break;
     }
     Val r(size);
     for (std::size_t k = 0; k < size; ++k) {
         const Comp& x = arg(0, k);
         switch (inst) {
+        case 1:
+        case 2:
+        case 3:
+        case 8:
+        case 9:
+            // Round、RoundEven、Trunc、Floor、Ceil：线性时间取整是阶梯 = 线性 + 周期 1/|系数| 的锯齿（再取模即周期）
+            r[k] = x.known ? Known(*FoldGlsl(inst, { x.value })) : Add(x, Periodic(x, 1, 0, where), -1);
+            continue;
         case 10:
         case 13:
         case 14:
@@ -1101,7 +1113,10 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
         break;
     }
     case 109:
-    case 110: fold_generic("convert", [](const std::vector<double>& x) -> std::optional<double> { return std::trunc(x[0]); }); break;
+    case 110:
+        // 取整：线性时间取整是阶梯 = 线性 − 周期 1/|系数| 的锯齿；再取模（精灵帧索引）就按周期算
+        Set(R, map1(V(o[2]), [&](const Comp& a) { return a.known ? Known(std::trunc(a.value)) : Add(a, Periodic(a, 1, 0, W(R)), -1); }));
+        break;
     case 111:
     case 112:
     case 113:
@@ -1122,22 +1137,22 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
     case 136: Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& b) { return Div(a, b, W(R)); })); break;
     case 134:
     case 135:
-        fold_generic("idiv", [](const std::vector<double>& x) -> std::optional<double> {
-            return x[1] != 0 ? std::optional<double>(std::trunc(x[0] / x[1])) : std::nullopt;
-        });
+        // 整数除法：商取整，同 OpConvertFToS 的阶梯
+        Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& b) {
+                if (a.known && b.known && b.value != 0) return Known(std::trunc(a.value / b.value));
+                const Comp q = Div(a, b, W(R));
+                return Add(q, Periodic(q, 1, 0, W(R)), -1);
+            }));
         break;
     case 137:
     case 138:
     case 139:
-        fold_generic("imod", [](const std::vector<double>& x) -> std::optional<double> {
-            return x[1] != 0 ? std::optional<double>(std::fmod(x[0], x[1])) : std::nullopt;
-        });
-        break;
     case 140:
     case 141:
+        // 整数与浮点取模：模数与时间无关时按周期 |m|/系数；SMod、FMod 余数随除数符号
         Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& m) {
                 if (a.known && m.known && m.value != 0)
-                    return Known(op == 141 ? a.value - m.value * std::floor(a.value / m.value) : std::fmod(a.value, m.value));
+                    return Known(op == 139 || op == 141 ? a.value - m.value * std::floor(a.value / m.value) : std::fmod(a.value, m.value));
                 if (m.known && m.value != 0) return Periodic(a, std::abs(m.value), 0, W(R));
                 return Tagged({ &a, &m }, "linear_time_through_mod" + W(R));
             }));
@@ -1268,7 +1283,7 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
     case 12: {
         std::vector<Val> a;
         for (std::size_t k = 4; k < n; ++k) a.push_back(V(o[k]));
-        Set(R, o[2] == glsl_ ? Glsl(o[3], a, sz, W(R)) : GenericAll(a, sz, "extinst", W(R)));
+        Set(R, o[2] == glsl_ ? Glsl(o[3], a, sz, W(R)) : GenericAll(a, sz, "analysis_not_converged:extinst", W(R)));
         break;
     }
     case 57: {
@@ -1316,11 +1331,11 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
         break;
     default:
         if (has_result && ! IsHandle(T)) {
-            // 没单独建模的指令：与时间无关的输入给未知常量，带时间的输入按"线性经过非周期运算"保守处理
+            // 没单独建模的指令：与时间无关的输入给未知常量，带时间的输入报没推下去（C# 记未收敛，不当"不能"的证明）
             std::vector<Val> a;
             for (std::size_t k = 2; k < n; ++k)
                 if (HasVal(o[k])) a.push_back(V(o[k]));
-            Set(R, GenericAll(a, sz, "op" + std::to_string(op), W(R)));
+            Set(R, GenericAll(a, sz, "analysis_not_converged:op" + std::to_string(op), W(R)));
         }
         break;
     }
