@@ -56,6 +56,15 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     /// <summary>预热之后、解析周期内的起点相位：残差路线由起点搜索定，源周期路线为 0。</summary>
     internal ulong StartFrame { get; set; }
 
+    /// <summary>
+    /// 主渲染前的内嵌视频体积外推（bake.json 的 embedded_video_estimate，合成校验道给出；探针与读不到时 null）。
+    /// 每组首次主渲染前等它，按其中的 quantizer_offset 抬高所有播放档的量化值；编码后实际仍超上限就按实际字节再抬一次。
+    /// </summary>
+    internal Task<JsonObject?> SizeEstimate { get; set; } = Task.FromResult<JsonObject?>(null);
+
+    // 各组当前的体积量化值增量与"不抬量化值时"的字节估计（拒绝理由里的"需要多大"）。
+    private readonly Dictionary<int, (int Offset, double Unconstrained)> sizeBudgets = [];
+
     /// <summary>各残差组的起点搜索记录；Vulkan 直编的透明组从这里取全片覆盖度，省掉覆盖度预通道。</summary>
     internal Dictionary<string, JsonObject> StartSearches { get; } = new(StringComparer.Ordinal);
 
@@ -196,7 +205,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             framing.RenderedFrames, WarmupFrames: framing.MasterWarmupFrames,
             Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side",
             // 直编组是不透明整幅。
-            LosslessTest: !direct, PlaybackEncoderKind: direct ? cpuKind : null,
+            LosslessTest: !direct, PlaybackEncoderKind: direct ? cpuKind : null, QuantizerOffset: SizeOffset(index),
             DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, CollectAlphaBounds: true, BoundsIncludeRgb: true,
             EffectRenderScale: request.EffectRenderScale,
             MatchEffectResolution: request.MatchEffectResolution, HdrScale: capture.HdrScale,
@@ -238,6 +247,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 if (crop.Height < minimumHeight && crop.CaptureHeight >= minimumHeight)
                     crop = crop with { Y = Math.Clamp((crop.Y - (minimumHeight - crop.Height) / 2) & ~1, 0, crop.CaptureHeight - minimumHeight),
                         Height = minimumHeight };
+                int sizeOffset = SizeOffset(index);
                 string codec = preferred ?? PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
                     (uint)crop.Width * (layout.Packed ? 2u : 1u), (uint)crop.Height,
                     render.FpsNumerator, render.FpsDenominator), PlaybackEncoderSelection.Vulkan);
@@ -245,7 +255,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 // 成品实际超限时由 StartAsync 按软件档重渲。
                 render = render with { LosslessTest = false, PlaybackEncoderKind = null, ForceKeyFrameFrame = null,
                     EncodedFrames = period, PixelPacking = layout.Packed ? "rgba_side_by_side" : "rgb",
-                    GpuEncoding = new(codec, Qp: 18, CrossfadeFrames: framing.Residual ? crossfadeFrames : 0,
+                    GpuEncoding = new(codec, Qp: Math.Min(51, 18 + sizeOffset), CrossfadeFrames: framing.Residual ? crossfadeFrames : 0,
                         Crop: crop, RetainLoopWindow: framing.Residual, RetainQualitySamples: true) };
             }
         }
@@ -260,6 +270,10 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     /// </summary>
     private async Task<JsonObject> StartAsync(int index)
     {
+        JsonObject? estimate = await SizeEstimate;
+        lock (sizeBudgets) sizeBudgets[index] = (estimate?["quantizer_offset"]?.GetValue<int>() ?? 0,
+            (estimate?["groups"] as JsonArray ?? []).Max(group => group?["predicted_bytes"]?.GetValue<long>()) ?? 0);
+        bool sizeRetried = false;
         RenderRequest render = MasterRequest(index);
         if (Directory.Exists(render.OutputDirectory) || File.Exists(render.OutputDirectory))
             throw new IOException("A group master output must be new; existing files will not be cleaned.");
@@ -336,6 +350,9 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                 }
                 if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render))
                 {
+                    // 体积限制下不降 QP（降了会超上限）：直接改走 CPU 路线，软件档同一量化值再过一次画质门。
+                    if (SizeOffset(index) > 0)
+                        throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} under the embedded-video size budget.");
                     Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
                         Path.GetDirectoryName(render.OutputDirectory)!, $"master.{gpu.Codec}-qp{gpu.Qp}"));
                     render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
@@ -343,16 +360,39 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     if (!await GpuQualityPassesAsync(rendered, render))
                         throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
                 }
-                // 硬件先编，按实际字节判内嵌视频上限：超了不交出去，这一组按软件档重渲（GPU 组走 CPU 路线）。
+                // 直编成品按实际字节判内嵌视频上限：第一次超了按实际字节再抬量化值、同一档重渲；再超则硬件档改软件重渲
+                // （GPU 组走 CPU 路线），软件档交给整案按体积拒绝。
                 bool cpuHardware = render.GpuEncoding is null && render.PlaybackEncoderKind is { } kind && kind != PlaybackEncoderSelection.Software;
-                if ((render.GpuEncoding is not null || cpuHardware) &&
+                if ((render.GpuEncoding is not null || render.PlaybackEncoderKind is not null) &&
                     new FileInfo(Path.Combine(render.OutputDirectory, "preview.mp4")).Length is var bytes && bytes > EmbeddedVideoBudget.MaximumBytes)
-                    throw new GpuEncodeUnavailableException(NativeRenderRunner.HardwareOverLimitReason(
-                        render.GpuEncoding?.Codec ?? render.PlaybackEncoderKind!, bytes));
+                {
+                    if (!sizeRetried)
+                    {
+                        sizeRetried = true;
+                        lock (sizeBudgets)
+                        {
+                            var (offset, unconstrained) = sizeBudgets[index];
+                            sizeBudgets[index] = (offset + EmbeddedVideoBudget.QuantizerOffset(bytes),
+                                Math.Max(unconstrained, bytes * Math.Pow(2, offset / 6d)));
+                        }
+                        Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(Path.GetDirectoryName(render.OutputDirectory)!, "master.over-size"));
+                        render = MasterRequest(index, gpuAllowed, coverage, failedCodecs);
+                        continue;
+                    }
+                    if (render.GpuEncoding is not null || cpuHardware)
+                        throw new GpuEncodeUnavailableException(NativeRenderRunner.HardwareOverLimitReason(
+                            render.GpuEncoding?.Codec ?? render.PlaybackEncoderKind!, bytes));
+                }
                 // CPU 硬件档（mf/nvenc/amf）直编没有母版可升档重编：画质门不过也只让这一组改软件重渲，不整张拒。
                 if (cpuHardware && !await GpuQualityPassesAsync(rendered, render))
                     throw new GpuEncodeUnavailableException($"{render.PlaybackEncoderKind} 直编成品画质门未过（SSIM " +
                         $"{rendered["playback_quality_gate"]?["measured_ssim"]?.ToJsonString()}），这一组改用软件编码。");
+                // 按体积抬了量化值的软件直编也要过画质门；不过时读数留在结果上，由整案按"体积限制下画质门未过"拒绝。
+                if (render.PlaybackEncoderKind == PlaybackEncoderSelection.Software && SizeOffset(index) > 0)
+                    await GpuQualityPassesAsync(rendered, render);
+                if (SizeOffset(index) > 0)
+                    lock (sizeBudgets) rendered["size_budget"] = new JsonObject { ["quantizer_offset"] = sizeBudgets[index].Offset,
+                        ["unconstrained_bytes"] = Math.Round(sizeBudgets[index].Unconstrained), ["target_bytes"] = EmbeddedVideoBudget.TargetBytes };
                 if (lower is not null)
                 {
                     // 播放机就是本机：成品要在本机播放用的显卡上能硬解（WPE 经 MF 放视频，扩展装了但显卡解不了一样放不动）。
@@ -397,6 +437,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             }
         }
     }
+
+    private int SizeOffset(int index) { lock (sizeBudgets) return sizeBudgets.TryGetValue(index, out var budget) ? budget.Offset : 0; }
 
     private const string MeasuredCoverageBasis = "GPU master alpha bounds over every encoded frame.";
 

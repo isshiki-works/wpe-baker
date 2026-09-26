@@ -28,7 +28,8 @@ public sealed record RenderRequest(string Source, string Assets, string OutputDi
     ulong? EncodedFrames = null, ulong[]? RetainFrames = null, string? PlaybackEncoderKind = null,
     GpuEncodeRequest? GpuEncoding = null, bool CollectSamplingCoverage = false,
     double EffectRenderScale = 1.0, bool MatchEffectResolution = false, double? HdrScale = null,
-    bool SampledCoverageOnly = false, CacheRegion? DirectCrop = null, uint? DirectCrossfadeFrames = null);
+    bool SampledCoverageOnly = false, CacheRegion? DirectCrop = null, uint? DirectCrossfadeFrames = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int QuantizerOffset = 0);
 // HdrScale：官方 HDR 管线下闭合不成立的组。渲染器按浮点中间目标合成，出帧为 rgb/k；成品图层着色器再乘回 k。
 public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
     uint CrossfadeFrames = 0, CacheRegion? Crop = null, bool RetainLoopWindow = false,
@@ -41,6 +42,7 @@ public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
 // DirectCrop / DirectCrossfadeFrames：没有 GPU 直编时，透明组与残差组也在 CPU 管道里直编（不写无损 master）：
 // 按裁剪区编码（透明组左右打包），残差组多渲的淡化窗口在 C# 里按 GPU 路线同一个整数公式混进头段，头段另编后拷包拼接。
 // 清单写成与 GPU 路线相同的 gpu_crop / loop_crossfade / gpu_loop_window，接缝复核与画质门原样复用。
+// QuantizerOffset：内嵌视频体积预算给播放档加的量化值（EmbeddedVideoBudget.QuantizerOffset）；master 路线的成品编码从清单里的请求读它。
 /// <summary>缩放后的内容居中放进更大的编码画布（每半幅），补边为透明黑；只为满足硬件解码下限，回放按原矩形取样。</summary>
 public sealed record RenderEncodePadding(uint Width, uint Height, uint OffsetX, uint OffsetY);
 public sealed record RenderProgress(string Stage, double? Fraction, string Message,
@@ -107,8 +109,8 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             request = request with {
                 RetainFrames = (request.RetainFrames ?? []).Concat(QualityGate.SampleFrames(encodedFrames)).Distinct().Order().ToArray(),
                 GpuEncoding = quality with { RetainLoopWindow = quality.RetainLoopWindow || quality.CrossfadeFrames > 0 } };
-        // 硬件直编的画质门参照：同一批抽样帧的渲染器原帧。
-        if (request.PlaybackEncoderKind is { } hardwareKind && hardwareKind != PlaybackEncoderSelection.Software)
+        // 硬件直编（以及按体积抬了量化值的软件直编）的画质门参照：同一批抽样帧的渲染器原帧。
+        if (request.PlaybackEncoderKind is { } retainKind && (retainKind != PlaybackEncoderSelection.Software || request.QuantizerOffset > 0))
             request = request with {
                 RetainFrames = (request.RetainFrames ?? []).Concat(QualityGate.SampleFrames(encodedFrames)).Distinct().Order().ToArray() };
         if (request.GpuEncoding is { CrossfadeFrames: > 0 } fade &&
@@ -413,7 +415,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             {
                 string fps = $"{request.FpsNumerator}/{request.FpsDenominator}";
                 var profile = PlaybackEncodeProfile.Create(encodedWidth, encodedHeight, request.FpsNumerator, request.FpsDenominator,
-                    request.LosslessTest, request.PlaybackEncoderKind ?? PlaybackEncoderSelection.Software);
+                    request.LosslessTest, request.PlaybackEncoderKind ?? PlaybackEncoderSelection.Software, request.QuantizerOffset);
                 string colorFilter = profile.ColorFilter;
                 bool hardwareEncoder = profile.Kind != PlaybackEncoderSelection.Software;
                 // 直编成品要与"无损 master 解码后再编成品"逐字节相同，所以送进 swscale 的东西必须一模一样：

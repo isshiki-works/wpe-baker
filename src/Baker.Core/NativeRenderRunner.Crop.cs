@@ -251,8 +251,9 @@ public sealed partial class NativeRenderRunner
         else if (requestedEncoder != PlaybackEncoderSelection.Software)
             (encoderKind, encoderFallbackReason) = PlaybackEncoderSelection.Resolve(requestedEncoder,
                 await UsableEncodersAsync(requestedEncoder, output, cancellationToken));
+        int sizeOffset = master["request"]?["quantizer_offset"]?.GetValue<int>() ?? 0;
         var profile = PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
-            losslessTest: false, encoderKind);
+            losslessTest: false, encoderKind, sizeOffset);
         // 画质判据的抽样帧号在编码前定下来，升档重编时保持同一批帧，前后可直接横比。
         ulong[] gateFrames = QualityGate.SampleFrames(frames);
         double gateReference = QualityGate.DefaultReferenceSsim, gateRatio = QualityGate.DefaultRatio;
@@ -289,7 +290,7 @@ public sealed partial class NativeRenderRunner
             report["encoder_used"] = encoderKind;
             report["encoder_fallback_reason"] = reason;
             SetProfile(PlaybackEncodeProfile.Create((uint)encodedWidth, (uint)encodedHeight, numerator, denominator,
-                losslessTest: false, PlaybackEncoderSelection.Software));
+                losslessTest: false, PlaybackEncoderSelection.Software, sizeOffset));
         }
         bool encodingFailed = false;
         try
@@ -330,8 +331,8 @@ public sealed partial class NativeRenderRunner
                 if (!verified.Has(encodedWidth, encodedHeight, frames) || !verified.RateIs(numerator, denominator))
                     throw new InvalidDataException("Cropped video violates dimensions, frame count or rational FPS.");
                 ConfirmEncodedDuration(verified, frames, numerator, denominator);
-                // 软件档位本身就是画质判据的参照，不自己跟自己比，也保持原来的零额外进程。
-                if (profile.Kind == PlaybackEncoderSelection.Software || gateFrames.Length == 0) break;
+                // 软件档位本身就是画质判据的参照，不自己跟自己比，也保持原来的零额外进程；按体积抬了量化值的软件档要过门。
+                if ((profile.Kind == PlaybackEncoderSelection.Software && sizeOffset == 0) || gateFrames.Length == 0) break;
                 QualityReport measured = await qualityComparer.CompareAsync(new(partial, frames, gateFrames, numerator, denominator,
                     new MasterQualityReference(inputPath, filter), output, $"quality{suffix}"), cancellationToken);
                 double? ssim = measured.Ssim, psnr = measured.Psnr;
@@ -342,7 +343,14 @@ public sealed partial class NativeRenderRunner
                         profile.QualityStep, QualityGate.ActionAccepted);
                     break;
                 }
-                if (profile.CanEscalate)
+                // 体积限制下不升档（升档会超上限）：硬件档改软件同一量化值重编，软件档也不过就交给整案按体积限制下画质门未过拒绝。
+                if (sizeOffset > 0 && profile.Kind == PlaybackEncoderSelection.Software)
+                {
+                    qualityGate = QualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
+                        profile.QualityStep, QualityGate.ActionRejected, $"量化值按体积预算 +{sizeOffset} 后 SSIM 低于阈值。");
+                    break;
+                }
+                if (sizeOffset == 0 && profile.CanEscalate)
                 {
                     qualityGate = QualityGate.Summarize(gateFrames, gateReference, gateRatio, ssim, psnr,
                         profile.QualityStep, QualityGate.ActionEscalated, "SSIM 低于阈值，升一档质量重编。");
