@@ -31,7 +31,13 @@ public sealed record ShaderSlowComponent(string Id, int OwnerLayerId, int Effect
 /// <summary>RuledMaterials：已由时间签名裁定过的 (层, shader)，运行时材质不再按"未建模时钟"重复计。</summary>
 public sealed record ShaderPeriodAnalysisResult(IReadOnlyList<ShaderPeriodComponent> Components,
     IReadOnlyList<ShaderTemporalUnresolved> Unresolved,
-    IReadOnlySet<(int OwnerLayerId, string Shader)> RuledMaterials, IReadOnlyList<ShaderSlowComponent> Slow);
+    IReadOnlySet<(int OwnerLayerId, string Shader)> RuledMaterials, IReadOnlyList<ShaderSlowComponent> Slow, IReadOnlyList<ShaderTerm> Terms);
+
+/// <summary>
+/// 一个非慢的已知周期项。Relaxed 是它在最宽松模型里的分量（预算内独立调频，"不能"的证明只认这个模型也无解）；
+/// Split：所在 pass 剩多个 π 类，在实际模型里不成分量；Missing：实际模型里它缺独立调频来源的原因（null = 有可用旋钮，或是 pass 时间倍率上唯一的项）。
+/// </summary>
+public sealed record ShaderTerm(CommonLoopComponent Relaxed, int OwnerLayerId, int EffectIndex, int PassIndex, string Resource, bool Split, string? Missing);
 
 /// <summary>
 /// 读引擎在 SPIR-V 上算出的时间签名（runtime_layers[].materials[].time_signature.terms，见 engine ShaderTime.cppm），
@@ -39,7 +45,7 @@ public sealed record ShaderPeriodAnalysisResult(IReadOnlyList<ShaderPeriodCompon
 /// 周期/(1+预算) 仍超过上限的项是慢分量；带旋钮、且旋钮 token 在该 stage 源码里恰好出现一次的项单独成分量，
 /// 捕获时改写那一处 token 调频（<see cref="ShaderTextPatch.KnobUses"/>）；其余项按 π 次数分类、类内取有理 LCM，
 /// 合成一个挂时间倍率（<see cref="TimeScaleKey"/>，给 g_Time 乘材质常量）的分量。剩两类以上时周期比是无理数，
-/// 同乘一个倍率保不住整数比，是"不能"的证明。
+/// 同乘一个倍率保不住整数比，这个 pass 不成分量，由 LoopAnalysis 按最宽松模型（每项独立调频）判不能或未收敛。
 /// </summary>
 public static class ShaderPeriodAnalysis
 {
@@ -56,6 +62,7 @@ public static class ShaderPeriodAnalysis
     {
         var components = new List<ShaderPeriodComponent>();
         var slowComponents = new List<ShaderSlowComponent>();
+        var looseTerms = new List<ShaderTerm>();
         var unresolved = new List<ShaderTemporalUnresolved>();
         var ruled = new HashSet<(int, string)>();
         var seen = new HashSet<int>();
@@ -118,8 +125,9 @@ public static class ShaderPeriodAnalysis
                 var knobbed = new List<ShaderPeriodComponent>();
                 var slow = new List<ShaderSlowComponent>();
                 var unknown = new List<double>();
-                bool stuckKnob = false;
-                foreach (JsonObject term in terms)
+                // 非慢的已知周期项：最宽松模型里各自独立调频；Missing 是实际模型里它缺独立调频来源的原因（null = 不缺）
+                var loose = new List<(CommonLoopComponent Term, string? Missing)>();
+                foreach (var (term, index) in terms.Select((term, index) => (term, index)))
                 {
                     double seconds = term["seconds"]!.GetValue<double>();
                     BigInteger num = term["num"]!.GetValue<long>(), den = term["den"]!.GetValue<long>();
@@ -127,6 +135,7 @@ public static class ShaderPeriodAnalysis
                     // 记 seconds/stretch（有效周期的下界），漂移 2π·P/T 才是上界
                     if (seconds / stretch > ceilingSeconds) { slow.Add(new($"{id}/slow{slow.Count}", owner, effect, pass, seconds / stretch)); continue; }
                     if (num <= 0 || den <= 0) { unknown.Add(seconds); continue; }
+                    var relaxed = new CommonLoopComponent($"{id}/term{index}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true);
                     // 旋钮只能挂在作者效果 pass 上（场景里有这个 pass 的 constantshadervalues）
                     if (effect >= 0 && Knobs(term).FirstOrDefault(Usable) is JsonObject knob)
                     {
@@ -134,9 +143,12 @@ public static class ShaderPeriodAnalysis
                         knobbed.Add(new(new CommonLoopComponent($"{id}/{key}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true),
                             owner, effect, pass, key, knob["inverse"]?.GetValue<bool>() == true,
                             $"SPIR-V time signature of {resource}: period {seconds.ToString("R", CultureInfo.InvariantCulture)} s through {key}"));
+                        loose.Add((relaxed, null));
                         continue;
                     }
-                    stuckKnob |= effect >= 0 && Knobs(term).Any(k => claims[ShaderTextPatch.KnobKey(k)] == 1);
+                    loose.Add((relaxed, effect < 0 ? "source material without an authored effect pass" : !Knobs(term).Any() ? "no knob"
+                        : string.Join("; ", Knobs(term).Select(ShaderTextPatch.KnobKey).Distinct().Select(key => claims[key] > 1
+                            ? $"knob {key} is shared by {claims[key]} terms" : $"knob {key} is not a unique rewritable token in the source"))));
                     if (term["pi"] is not JsonValue power || !power.TryGetValue(out int pi)) { unknown.Add(seconds); continue; }
                     BigInteger divisor = BigInteger.GreatestCommonDivisor(num, den);
                     (num, den) = (num / divisor, den / divisor);
@@ -152,14 +164,10 @@ public static class ShaderPeriodAnalysis
                         string.Join(", ", unknown.Select(x => x.ToString("R", CultureInfo.InvariantCulture))));
                     continue;
                 }
-                if (classes.Count > 1)
-                {
-                    // π 次数不同的周期比是无理数，一个时间倍率同乘保不住整数比：证明。能分开它们的旋钮只是在源码里不唯一时，是改写办不到，记未收敛
-                    Fail(!stuckKnob, stuckKnob ? "knob_not_unique" : "incommensurate_period_classes",
-                        $"periods {periods} have an irrational ratio that one time scale per pass keeps" +
-                        (stuckKnob ? "; a knob that could split them is not a unique token in the shader source" : ""));
-                    continue;
-                }
+                // pass 时间倍率上只挂一个项时，倍率就是它独立的调频来源
+                if (effect >= 0 && loose.Count(x => x.Missing is not null) == 1) loose = [.. loose.Select(x => (x.Term, (string?)null))];
+                // 剩多个 π 类：一个时间倍率同乘保不住无理比，这个 pass 在实际模型里不成分量，交给 LoopAnalysis 的最宽松模型判定
+                bool split = classes.Count > 1;
                 if (classes.Count == 1)
                 {
                     var (pi, (num, den)) = classes.Single();
@@ -173,11 +181,12 @@ public static class ShaderPeriodAnalysis
                     components.Add(new(new CommonLoopComponent(id, new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic, exact), AllowRetime: effect >= 0),
                         owner, effect, pass, TimeScaleKey, false, $"SPIR-V time signature of {resource}: period {periods}"));
                 }
-                components.AddRange(knobbed);
+                if (!split) components.AddRange(knobbed);
                 slowComponents.AddRange(slow);
+                looseTerms.AddRange(loose.Select(x => new ShaderTerm(x.Term, owner, effect, pass, resource, split, x.Missing)));
             }
         }
-        return new(components, unresolved, ruled, slowComponents);
+        return new(components, unresolved, ruled, slowComponents, looseTerms);
     }
 
     /// <summary>原因串的码：到第一个空格、冒号或 @ 为止。</summary>

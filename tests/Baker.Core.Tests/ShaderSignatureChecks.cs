@@ -48,10 +48,26 @@ internal static class ShaderSignatureChecks
                 Math.Abs(Patch("periodica_k_frag_3f000000")!.Value - knob / time) < 1e-12,
                 "a knob patch carries the component multiplier divided by the pass time multiplier");
             JsonObject slow = candidate["slow_components"]![0]!.AsObject();
-            check(slow["period_seconds"]!.GetValue<double>() == 100000 &&
-                Math.Abs(slow["drift_bound_radians"]!.GetValue<double>() - 2 * Math.PI * candidate["seconds"]!.GetValue<double>() / 100000) < 1e-15 &&
+            // 有效周期下界 T = 100000/(1+2%)（同 pass 时间倍率也乘在它上面）
+            double slowPeriod = 100000 / 1.02;
+            check(Math.Abs(slow["period_seconds"]!.GetValue<double>() - slowPeriod) < 1e-9 &&
+                Math.Abs(slow["drift_bound_radians"]!.GetValue<double>() - 2 * Math.PI * candidate["seconds"]!.GetValue<double>() / slowPeriod) < 1e-12 &&
                 !candidate["components"]!.AsArray().Any(x => x!["id"]!.GetValue<string>().Contains("slow", StringComparison.Ordinal)),
                 "a slow component stays out of the solver and reports a 2πP/T drift bound");
+
+            // 同一 pass 剩 7 s 与 3π s 两类且没有旋钮：每项独立调频有解（上限 600 s）记未收敛 term_not_retimable；
+            // 上限 10 s 时独立调频也无解，才是"不能"
+            string split = """
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
+                  {"seconds":7,"num":7,"den":1,"pi":0,"knobs":[]},
+                  {"seconds":9.42477796076938,"num":3,"den":1,"pi":1,"knobs":[]}]}
+                """;
+            string[] Landing(double ceiling) => [.. LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null,
+                Runtime(split), [10], 30, 1, loopLengthMaximumSeconds: ceiling).ToJson()["unresolved"]!.AsArray()
+                .Select(x => $"{x!["kind"]}/{x["mechanism"]}")];
+            check(Landing(600) is ["UnsupportedShaderMechanism/term_not_retimable"] &&
+                Landing(10) is ["NonPeriodicOrDriftingMechanism/loop_never_repeats_within_limit"],
+                "irrational classes in one pass are cannot only when independent retiming of every term also has no loop");
         }
         finally { Directory.Delete(root, true); }
     }

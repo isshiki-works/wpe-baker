@@ -73,18 +73,33 @@ internal static class LoopAnalysis
             or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling
             ? NoCommonLoopOwners(shader, animation, particleCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
             : null;
-        // 各分量都有周期证明（周期不明时求解器报约束，不报这两类），上限内含调速预算却没有公共闭合帧："不能"的证明。
-        // 带组步长重解时无解由调用方保持原解，不记。
-        if (stepCycles.Length == 0 && solve.Result.NoCandidate is { Kind: CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
-            or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling } never)
+        // "不能"的证明只认最宽松模型：每个非慢的着色器周期项都在预算内独立调频，其余分量照旧；它也无解才是不能。
+        // 只在实际模型（旋钮 + 每 pass 时间倍率）无解、或有 pass 剩多个 π 类时跑。最宽松模型有解（或给不出证明）时，
+        // 缺独立调频来源的项所在 pass 记未收敛 term_not_retimable。带组步长重解时无解由调用方保持原解，不记。
+        bool noLoop = solve.Result.NoCandidate?.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
+            or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling;
+        if (stepCycles.Length == 0 && (noLoop || shader.Terms.Any(x => x.Split)))
         {
             static string S(double x) => x.ToString("0.###", CultureInfo.InvariantCulture);
-            CommonLoopComponent slowest = solve.Used.MaxBy(x => x.BasePeriod!.Seconds)!;
-            double longest = slowest.BasePeriod!.Seconds;
-            unresolved.Add(new NeverRepeatsUnresolved(ceilingSeconds, $"No common loop within the {S(ceilingSeconds)} s limit at a " +
-                $"{S(solve.Result.RetimeBudgetPercent)}% retime budget ({never.Kind}): slowest component {slowest.Id} has period {S(longest)} s = " +
-                $"{S(longest / ceilingSeconds)}x the limit" + (never.FixedPeriodSeconds is double step
-                    ? $"; the fixed-period components close together only every {S(step)} s = {S(step / ceilingSeconds)}x the limit" : "") + "."));
+            LoopSolve relaxed = SolveLoop(shader with { Components = [] }, animation, [.. shader.Terms.Select(x => x.Relaxed), .. particleCycles, .. scriptCycles],
+                fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+            if (relaxed.Result.NoCandidate is { Kind: CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
+                or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling } never)
+            {
+                CommonLoopComponent slowest = relaxed.Used.MaxBy(x => x.BasePeriod!.Seconds)!;
+                double longest = slowest.BasePeriod!.Seconds;
+                unresolved.Add(new NeverRepeatsUnresolved(ceilingSeconds, $"No loop within the {S(ceilingSeconds)} s limit at a " +
+                    $"{S(relaxed.Result.RetimeBudgetPercent)}% retime budget even with every shader period term retimed independently ({never.Kind}): " +
+                    $"slowest component {slowest.Id} has period {S(longest)} s = {S(longest / ceilingSeconds)}x the limit" + (never.FixedPeriodSeconds is double step
+                        ? $"; the fixed-period components close together only every {S(step)} s = {S(step / ceilingSeconds)}x the limit" : "") + "."));
+            }
+            else
+                foreach (var pass in shader.Terms.Where(x => x.Missing is not null && (noLoop || x.Split))
+                    .GroupBy(x => (x.OwnerLayerId, x.EffectIndex, x.PassIndex, x.Resource)))
+                    unresolved.Add(new ShaderLoopUnresolved(new(pass.Key.OwnerLayerId, pass.Key.EffectIndex, pass.Key.PassIndex, pass.Key.Resource,
+                        ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: these terms need independent retiming that " +
+                        "the shader source does not provide: " + string.Join("; ", pass.Select(x => $"{x.Relaxed.Id} {S(x.Relaxed.BasePeriod!.Seconds)} s ({x.Missing})")),
+                        "term_not_retimable")));
         }
         if (stepCycles.Length > 0)
         {
