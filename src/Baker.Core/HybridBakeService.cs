@@ -361,6 +361,9 @@ public sealed class HybridBakeService(NativeTools tools)
             { Plan = plan.DeepClone().AsObject(), Settings = settings, Frames = frames };
         // 起点搜索已判定这遍作废（GroupVerdicts.StartSearchRejection）时停掉合成校验：重烘那遍自己会校验。
         using var validationStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // 体积外推交给主渲染选量化值：每组首次主渲染前等合成校验道做完（探针不外推）。
+        var sizeEstimate = new TaskCompletionSource<JsonObject?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (probe) sizeEstimate.SetResult(null);
         Task<BakeRejection?>? validation = probe ? null : Task.Run(async () =>
         {
             long started = Stopwatch.GetTimestamp();
@@ -371,7 +374,11 @@ public sealed class HybridBakeService(NativeTools tools)
                         context.Source, context.Layout.Output, context.Progress, token),
                     EstimateEmbeddedVideoAsync), lane, validationStop.Token);
             }
-            finally { timing.AddOverlapped(StageTiming.CompositionValidation, Stopwatch.GetElapsedTime(started).TotalSeconds); }
+            finally
+            {
+                timing.AddOverlapped(StageTiming.CompositionValidation, Stopwatch.GetElapsedTime(started).TotalSeconds);
+                sizeEstimate.TrySetResult(lane.EmbeddedVideoEstimate);
+            }
         });
         var original = source.ReadJson(source.SceneResource);
         PlanTransforms.ApplyAudioEffectChoice(original, plan);
@@ -476,7 +483,8 @@ public sealed class HybridBakeService(NativeTools tools)
             JsonObject? groupFrames = probe ? null : (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["group_frames"] as JsonObject;
             ulong[] framesByGroup = [.. groups.Select(group => groupFrames?[group["id"]!.GetValue<string>()]?.GetValue<ulong>() ?? frames)];
             scheduler = new GroupRenderScheduler(runner, request, plan, settings, groups, captureProject, output, snapshot, frames, framesByGroup,
-                crossfadeFrames, warmupFrames, residualGroupIndexes, groupParallel, playbackKind, progress, token);
+                crossfadeFrames, warmupFrames, residualGroupIndexes, groupParallel, playbackKind, progress, token)
+                { SizeEstimate = sizeEstimate.Task };
             if (scheduler.PreferredCodecs.Length > 0) report["gpu_codec_preference"] = JsonSerializer.SerializeToNode(scheduler.PreferredCodecs);
             if (residualMasking is not null && !probe)
             {
@@ -672,10 +680,15 @@ public sealed class HybridBakeService(NativeTools tools)
                         var (encoded, crop, video) = await encoder.EncodeAsync(master, masterPath, work, capture, isStatic, directPlayback,
                             gpuDirect, packedAlpha, cancellationToken);
                         long encodedBytes = isStatic ? 0 : new FileInfo(video).Length;
-                        if (!probe && encodedBytes > EmbeddedVideoBudget.MaximumBytes)
+                        // 超上限，或按体积抬了量化值后画质门没过（体积与画质两头都守不住）：整案拒绝，理由带需要多大、上限与画质门读数。
+                        JsonObject? sizeGate = master["size_budget"] is JsonObject ? (encoded["playback_quality_gate"] ?? master["playback_quality_gate"]) as JsonObject : null;
+                        if (!probe && (encodedBytes > EmbeddedVideoBudget.MaximumBytes || sizeGate?["passed"]?.GetValue<bool>() == false))
                         {
                             GroupVerdicts.RejectEmbeddedSize(report, id, layers, packedAlpha, encoded, video, encodedBytes,
-                                lateDependencyValidation, groupFrames, settings);
+                                lateDependencyValidation, groupFrames, settings, encodedBytes > EmbeddedVideoBudget.MaximumBytes ? null :
+                                EmbeddedVideoBudgetJson.QualityRejection(id, master["size_budget"]!["unconstrained_bytes"]!.GetValue<double>(), groupFrames,
+                                    settings.FpsNumerator, settings.FpsDenominator, sizeGate!["measured_ssim"]?.GetValue<double>(),
+                                    sizeGate["threshold"]!.GetValue<double>(), master["size_budget"]!["quantizer_offset"]!.GetValue<int>()));
                             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
