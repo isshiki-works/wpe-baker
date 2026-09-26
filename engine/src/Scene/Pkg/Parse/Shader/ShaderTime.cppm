@@ -31,7 +31,8 @@ export module wescene.pkg.parse:shader_time;
 // 抽象域逐分量：与时间无关（可带已知常数）；a·t + 周期部分（a 取可能系数的集合）；证明不周期。
 // 规则：sin/cos/tan/fract/mod 作用在线性式上得周期 2π/a、π/a、1/a、m/a；周期值做任何运算仍是周期，
 // 最后按可公度类取 LCM；线性式不经周期函数流到输出 = 漂移（系数 0 除外）；采样坐标线性滚动时 repeat 轴周期 1/|v|，
-// clamp 轴过某时刻后静止（记为暂态）；与线性 t 比较的分支、随时间变化的循环条件判不周期；
+// clamp 轴过某时刻后静止（记为暂态）；与线性 t 比较（含 switch 按线性 t 选分支）看差的范围：有界则过 settle 时刻后固定
+// （暂态，给出时刻上界），含 tan(线性 t) 的极点则永不固定、判不周期，范围说不清只报没推下去；
 // 周期比为无理数时各类分别输出，交给 C# 的调速逻辑。
 export namespace owe::shader_time
 {
@@ -91,6 +92,7 @@ struct Signature {
     std::vector<std::string> reasons;           // 不周期的原因与出处
     std::vector<std::string> external;          // 随时间变化的外部输入（音频、指针、日时、动画化的材质值）
     bool                     transient { false }; // clamp 采样的滚动在某时刻后停住：稳态之前有一段不周期
+    double                   settle { -1 };       // 与线性时间比较的分支在此时刻（秒，上界）之后固定；< 0：没有这种分支
 };
 
 Signature   Analyze(std::span<const std::vector<unsigned int>> stages, const Inputs& inputs);
@@ -108,6 +110,7 @@ constexpr std::size_t kMaxPeriods = 32;
 constexpr std::size_t kMaxPasses  = 48;
 constexpr std::size_t kMaxComps   = 256;
 constexpr double      kPi         = std::numbers::pi;
+constexpr double      kInf        = HUGE_VAL;
 
 constexpr int         kNoPi       = 1 << 20; // π 次数未知
 
@@ -202,12 +205,18 @@ struct Comp {
     std::vector<std::string> external;
     std::string              aperiodic;
     bool                     transient { false };
+    // 去掉线性时间项后余下部分（常量、逐像素量、周期量）的取值范围；无穷 = 说不清
+    double                   lo { -kInf };
+    double                   hi { kInf };
+    bool                     poles { false }; // 余下部分含 tan(线性时间) 这种每周期都趋于 ±∞ 的项，其余有界
+    double                   settle { -1 };   // 与线性时间比较的分支在此时刻（秒）之后固定；< 0：没有
 
     bool operator==(const Comp&) const = default;
     bool Linear() const {
         return rate_unknown || std::any_of(rates.begin(), rates.end(), [](const Rate& r) { return r.v != 0; });
     }
-    bool Timed() const { return Linear() || ! periods.empty() || ! external.empty() || ! aperiodic.empty(); }
+    bool Timed() const { return Linear() || ! periods.empty() || ! external.empty() || ! aperiodic.empty() || settle >= 0; }
+    bool Bounded() const { return std::isfinite(lo) && std::isfinite(hi); }
     Rate Value() const { return Rate { value, pi, knobs }; }
 };
 using Val   = std::vector<Comp>;
@@ -219,6 +228,7 @@ Comp Known(double v, int pi = 0) {
     c.value = v;
     c.pi    = pi;
     c.mixed = v != 0;
+    if (std::isfinite(v)) c.lo = c.hi = v;
     return c;
 }
 
@@ -237,6 +247,7 @@ void MergeTags(Comp& dst, const Comp& src) {
     for (const auto& e : src.external) AddUnique(dst.external, e);
     if (dst.aperiodic.empty()) dst.aperiodic = src.aperiodic;
     dst.transient = dst.transient || src.transient;
+    dst.settle    = std::max(dst.settle, src.settle);
 }
 
 void Normalize(Comp& c) {
@@ -262,6 +273,9 @@ Comp Join(const Comp& a, const Comp& b) {
     for (const Rate& x : b.rates) AddUnique(r.rates, x);
     r.rate_unknown = a.rate_unknown || b.rate_unknown;
     r.mixed        = a.mixed || b.mixed;
+    // 范围只在两边相同时保留：循环里逐轮变宽的量一次就放弃，不动点照常收敛
+    if (a.lo != b.lo || a.hi != b.hi) r.lo = -kInf, r.hi = kInf;
+    r.poles = a.poles && b.poles;
     MergeTags(r, b);
     Normalize(r);
     return r;
@@ -318,6 +332,9 @@ Comp Add(const Comp& a, const Comp& b, double sign) {
         for (const Rate& y : b.rates) AddUnique(r.rates, Sum(x, y, sign));
     r.rate_unknown = a.rate_unknown || b.rate_unknown;
     r.mixed        = a.mixed || b.mixed;
+    r.lo           = sign > 0 ? a.lo + b.lo : a.lo - b.hi;
+    r.hi           = sign > 0 ? a.hi + b.hi : a.hi - b.lo;
+    r.poles        = a.poles != b.poles && (a.poles ? b : a).Bounded();
     MergeTags(r, a);
     MergeTags(r, b);
     Normalize(r);
@@ -332,6 +349,8 @@ Comp Scale(const Comp& a, const Comp& k) {
         // 只有纯时间量（如 g_Speed·g_Time）上的因子才是旋钮；(uv + t·s)·k 的 k 同时缩放纹理坐标，不记
         for (Rate& x : r.rates)
             x = Rate { x.v * k.value, PiAdd(x.pi, k.pi), r.mixed ? x.knobs : Union(x.knobs, k.knobs) };
+        r.lo = a.lo * k.value, r.hi = a.hi * k.value;
+        if (k.value < 0) std::swap(r.lo, r.hi);
         if (r.known) {
             r.value *= k.value;
             r.pi    = PiAdd(r.pi, k.pi);
@@ -342,6 +361,7 @@ Comp Scale(const Comp& a, const Comp& k) {
         r.value = 0;
         r.pi    = 0;
         r.knobs.clear();
+        r.lo = -kInf, r.hi = kInf, r.poles = false;
         if (r.Linear()) {
             r.rate_unknown = true;
             r.rates        = { Rate {} };
@@ -385,6 +405,35 @@ Comp Periodic(const Comp& a, double q, int pi, const std::string& where) {
             if (x.v != 0) AddUnique(r.periods, Per { q / std::abs(x.v), PiAdd(pi, PiNeg(x.pi)), x.knobs });
     }
     Normalize(r);
+    return r;
+}
+
+// 取整的余量 x − 取整(x)：周期 1/|系数| 的锯齿，取值在 [−1, 1]
+Comp Saw(const Comp& a, const std::string& where) {
+    Comp r = Periodic(a, 1, 0, where);
+    r.lo = -1, r.hi = 1;
+    return r;
+}
+
+// a 与 b 比较看差 d = a − b。d 不含线性时间：结果是周期量或常量的函数。d = r·t + q（各 r ≠ 0）：
+// q ∈ [lo, hi] 时，r > 0 在 t > −lo/r 之后 d 恒正、r < 0 在 t > hi/|r| 之后恒负，比较从此固定（暂态），记 settle 上界，
+// 之后照常按周期量求；q 含 tan(线性时间) 的极点、其余有界时 d 每个周期都变号且变号相位漂移，永不固定，是不周期的证明；
+// q 的范围说不清（纹理、顶点属性、循环变量）只报没推下去
+Comp Compare(const Comp& a, const Comp& b, const std::string& code, const std::string& where) {
+    const Comp d = Add(a, b, -1);
+    Comp       r;
+    MergeTags(r, d);
+    if (! d.Linear() || ! r.aperiodic.empty()) return r;
+    const bool moving = std::none_of(d.rates.begin(), d.rates.end(), [](const Rate& x) { return x.v == 0; });
+    if (d.rate_unknown)
+        r.aperiodic = "time_rate_not_constant" + where;
+    else if (d.poles && moving)
+        r.aperiodic = "compare_with_unbounded_time: " + code + " against tan(linear time), whose poles flip it every period at a drifting phase" + where;
+    else if (! d.Bounded())
+        r.aperiodic = code + ": threshold range unknown" + where;
+    else
+        for (const Rate& x : d.rates)
+            if (x.v != 0) r.settle = std::max(r.settle, std::max(0.0, (x.v > 0 ? -d.lo : -d.hi) / x.v));
     return r;
 }
 
@@ -852,6 +901,7 @@ Val Analyzer::Load(const Ptr& p, const State& S) const {
             for (auto& c : r) {
                 c.rates = { Rate { 1.0 } };
                 c.mixed = false;
+                c.lo = c.hi = 0;
             }
             return r;
         }
@@ -932,7 +982,7 @@ Val Analyzer::Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t si
         case 8:
         case 9:
             // Round、RoundEven、Trunc、Floor、Ceil：线性时间取整是阶梯 = 线性 + 周期 1/|系数| 的锯齿（再取模即周期）
-            r[k] = x.known ? Known(*FoldGlsl(inst, { x.value })) : Add(x, Periodic(x, 1, 0, where), -1);
+            r[k] = x.known ? Known(*FoldGlsl(inst, { x.value })) : Add(x, Saw(x, where), -1);
             continue;
         case 10:
         case 13:
@@ -940,6 +990,13 @@ Val Analyzer::Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t si
         case 15:
             r[k] = x.known ? Known(*FoldGlsl(inst, { x.value }), x.pi == 0 ? 0 : kNoPi)
                            : Periodic(x, inst == 10 ? 1.0 : inst == 15 ? kPi : 2 * kPi, inst == 10 ? 0 : 1, where);
+            // fract ∈ [0, 1]、sin/cos ∈ [−1, 1]；tan 的自变量是各系数都非零的线性时间、余下有界时，每个周期都经过极点
+            if (x.known) continue;
+            if (inst != 15)
+                r[k].lo = inst == 10 ? 0 : -1, r[k].hi = 1;
+            else
+                r[k].poles = ! x.rate_unknown && x.Bounded() &&
+                             std::none_of(x.rates.begin(), x.rates.end(), [](const Rate& y) { return y.v == 0; });
             continue;
         case 11:
         case 12: r[k] = Scale(x, inst == 11 ? Known(kPi / 180, 1) : Known(180 / kPi, -1)); continue;
@@ -1255,7 +1312,7 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
     case 109:
     case 110:
         // 取整：线性时间取整是阶梯 = 线性 − 周期 1/|系数| 的锯齿；再取模（精灵帧索引）就按周期算
-        Set(R, map1(V(o[2]), [&](const Comp& a) { return a.known ? Known(std::trunc(a.value)) : Add(a, Periodic(a, 1, 0, W(R)), -1); }));
+        Set(R, map1(V(o[2]), [&](const Comp& a) { return a.known ? Known(std::trunc(a.value)) : Add(a, Saw(a, W(R)), -1); }));
         break;
     case 111:
     case 112:
@@ -1281,7 +1338,7 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
         Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& b) {
                 if (a.known && b.known && b.value != 0) return Known(std::trunc(a.value / b.value));
                 const Comp q = Div(a, b, W(R));
-                return Add(q, Periodic(q, 1, 0, W(R)), -1);
+                return Add(q, Saw(q, W(R)), -1);
             }));
         break;
     case 137:
@@ -1356,9 +1413,7 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
         Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& b) {
                 if (a.known && b.known)
                     if (auto v = FoldCompare(op, a.value, b.value)) return Known(*v);
-                // 系数不定（可能为 0）的线性量参与比较不是证明，只报没推下去
-                const bool drifts = (a.Linear() && ! a.rate_unknown) || (b.Linear() && ! b.rate_unknown);
-                return Tagged({ &a, &b }, (drifts ? "compare_with_linear_time" : "time_rate_not_constant") + W(R));
+                return Compare(a, b, "compare_with_linear_time", W(R));
             }));
         break;
     case 166:
@@ -1400,6 +1455,7 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
                 Comp r  = x;
                 r.known = false;
                 r.value = 0;
+                r.lo = -kInf, r.hi = kInf, r.poles = false;
                 if (! x.rate_unknown && x.rates.size() <= 1)
                     r.rates = { Rate {} };
                 else if (x.Linear()) {
@@ -1451,7 +1507,15 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
     }
     case 250:
     case 251: {
-        Cond c { .value = JoinAll(V(o[0])),
+        Comp v = JoinAll(V(o[0]));
+        // switch 按线性时间选分支：逐个与 case 值（常量）比较
+        if (op == 251 && v.Linear() && n > 3) {
+            Comp s = Compare(v, Known(double(std::int32_t(o[2]))), "branch_on_linear_time", W(o[0]));
+            for (std::size_t k = 4; k + 1 < n; k += 2)
+                s = Join(s, Compare(v, Known(double(std::int32_t(o[k]))), "branch_on_linear_time", W(o[0])));
+            v = s;
+        }
+        Cond c { .value = std::move(v),
                  .loop  = op == 250 && (loop_merges_.count(o[1]) || loop_merges_.count(o[2])),
                  .where = W(o[0]) };
         auto key = std::make_pair(stage_index_, at);
@@ -1677,6 +1741,7 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
     }
     sig.external  = acc.external;
     sig.transient = acc.transient;
+    sig.settle    = acc.settle;
     sig.periods   = Classes(acc.periods);
     for (const Per& p : acc.periods) {
         if (! (p.s > 0) || ! std::isfinite(p.s)) continue;
@@ -1720,8 +1785,12 @@ std::string ToJson(const Signature& s) {
     for (std::size_t k = 0; k < s.reasons.size(); ++k) r += (k ? "," : "") + Quote(s.reasons[k]);
     r += "],\"external\":[";
     for (std::size_t k = 0; k < s.external.size(); ++k) r += (k ? "," : "") + Quote(s.external[k]);
-    r += std::string("],\"transient\":") + (s.transient ? "true" : "false") + "}";
-    return r;
+    r += std::string("],\"transient\":") + (s.transient ? "true" : "false");
+    if (s.settle >= 0) {
+        std::snprintf(buf, sizeof(buf), "%.17g", s.settle);
+        r += ",\"settle_seconds\":" + std::string(buf);
+    }
+    return r + "}";
 }
 
 } // namespace owe::shader_time

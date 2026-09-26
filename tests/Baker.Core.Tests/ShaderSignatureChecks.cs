@@ -17,14 +17,16 @@ internal static class ShaderSignatureChecks
                 "names_stripped", "spirv_unreadable", "time_rate_not_constant @fragment", "scroll_rate_not_constant:s @fragment",
                 "drift_rate_not_constant @fragment", "too_many_periods", "sampler_wrap_unknown:s @fragment",
                 "linear_time_through_glsl8 @fragment mod %121", "linear_time_through_glsl40 @fragment", "linear_time_through_mix @fragment",
-                "linear_time_through_sample_coordinate:s @fragment", "linear_time_through_mod @fragment", "nonlinear_time @fragment"])
+                "linear_time_through_sample_coordinate:s @fragment", "linear_time_through_mod @fragment", "nonlinear_time @fragment",
+                "branch_on_linear_time: threshold range unknown @fragment", "loop_count_time_dependent @fragment",
+                "compare_with_linear_time: threshold range unknown @fragment"])
             {
                 var result = Analyze(source, reason);
                 check(result.Unresolved.Count == 1 && result.Unresolved[0].Kind == ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
                     $"engine reason '{reason}' stays not converged");
             }
-            foreach (string reason in (string[])["drift @fragment", "branch_on_linear_time @fragment", "loop_count_time_dependent @fragment",
-                "compare_with_linear_time @fragment"])
+            foreach (string reason in (string[])["drift @fragment",
+                "compare_with_unbounded_time: compare_with_linear_time against tan(linear time), whose poles flip it every period at a drifting phase @fragment"])
             {
                 var result = Analyze(source, reason);
                 check(result.Unresolved.Count == 1 && result.Unresolved[0].Kind == ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
@@ -78,6 +80,17 @@ internal static class ShaderSignatureChecks
             check(Landing(600) is ["UnsupportedShaderMechanism/term_not_retimable"] &&
                 Landing(10) is ["NonPeriodicOrDriftingMechanism/loop_never_repeats_within_limit"],
                 "irrational classes in one pass are cannot only when independent retiming of every term also has no loop");
+
+            // 阈值有界的比较在 settle 时刻后固定：候选整周期预热 L 帧后起录、plan 记 settle 上界；L 不晚于 settle 记未收敛
+            JsonObject Settled(double settle) => LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null,
+                Runtime($$"""
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"settle_seconds":{{settle}},"terms":[{"seconds":3,"num":3,"den":1,"pi":0,"knobs":[]}]}
+                """), [10], 30, 1).ToJson();
+            JsonObject early = Settled(2)["candidates"]![0]!.AsObject();
+            check(early["source_period_warmup_frames"]!.GetValue<ulong>() == early["frames"]!.GetValue<ulong>() &&
+                early["shader_settle_seconds"]!.GetValue<double>() == 2 &&
+                Settled(1000)["unresolved"]!.AsArray().Select(x => $"{x!["kind"]}/{x["mechanism"]}").SequenceEqual(["UnsupportedShaderMechanism/transient_settle_beyond_warmup"]),
+                "a bounded-threshold branch warms up one whole period past its settle time, and stays not converged when no period is longer");
         }
         finally { Directory.Delete(root, true); }
     }

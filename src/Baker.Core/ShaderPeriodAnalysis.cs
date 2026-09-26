@@ -28,10 +28,14 @@ public sealed record ShaderPeriodComponent(CommonLoopComponent Component, int Ow
 /// <summary>慢分量：周期/(1+预算) 仍超过循环上限，不进求解器、不调频；接缝漂移上界 2π·P/T 由烘焙侧接缝门复核。</summary>
 public sealed record ShaderSlowComponent(string Id, int OwnerLayerId, int EffectIndex, int PassIndex, double PeriodSeconds);
 
-/// <summary>RuledMaterials：已由时间签名裁定过的 (层, shader)，运行时材质不再按"未建模时钟"重复计。</summary>
+/// <summary>与线性时间比较的分支在 Seconds（上界）之后固定：录制起点要放到它之后。</summary>
+public sealed record ShaderSettle(int OwnerLayerId, int EffectIndex, int PassIndex, string Resource, double Seconds);
+
+/// <summary>RuledMaterials：已由时间签名裁定过的 (层, shader)，运行时材质不再按"未建模时钟"重复计。Settle：各 pass 里最晚的一个。</summary>
 public sealed record ShaderPeriodAnalysisResult(IReadOnlyList<ShaderPeriodComponent> Components,
     IReadOnlyList<ShaderTemporalUnresolved> Unresolved,
-    IReadOnlySet<(int OwnerLayerId, string Shader)> RuledMaterials, IReadOnlyList<ShaderSlowComponent> Slow, IReadOnlyList<ShaderTerm> Terms);
+    IReadOnlySet<(int OwnerLayerId, string Shader)> RuledMaterials, IReadOnlyList<ShaderSlowComponent> Slow, IReadOnlyList<ShaderTerm> Terms,
+    ShaderSettle? Settle = null);
 
 /// <summary>
 /// 一个非慢的已知周期项。Relaxed 是它在最宽松模型里的分量（预算内独立调频，"不能"的证明只认这个模型也无解）；
@@ -51,9 +55,10 @@ public static class ShaderPeriodAnalysis
 {
     public const string TimeScaleKey = "periodica_time_scale";
 
-    // 引擎原因码里只有这几条是不周期的证明：已知非零系数的线性时间直达输出、按它分支或定循环次数、与它比较。
-    // 其余（线性时间进了没有专门规则的运算 linear_time_through_*、与别的时间量相乘 nonlinear_time、系数不定、分析没推下去）只记未收敛
-    private static readonly string[] Proof = ["drift", "branch_on_linear_time", "loop_count_time_dependent", "compare_with_linear_time"];
+    // 引擎原因码里只有这两条是不周期的证明：已知非零系数的线性时间直达输出；与线性时间比较而阈值无界（tan 极点，永不固定）。
+    // 阈值有界的比较是暂态（签名给 settle_seconds），阈值范围说不清的比较与分支（compare_with_linear_time、branch_on_linear_time、
+    // loop_count_time_dependent）、线性时间进了没有专门规则的运算、与别的时间量相乘、系数不定、分析没推下去，只记未收敛
+    private static readonly string[] Proof = ["drift", "compare_with_unbounded_time"];
     // 时间签名只认 g_Time；用到这些时钟的材质不裁定，交给运行时材质检查报未建模时钟
     private static readonly string[] AlternateClocks = ["g_Runtime", "g_Frametime", "g_DeltaTime"];
 
@@ -66,6 +71,7 @@ public static class ShaderPeriodAnalysis
         var unresolved = new List<ShaderTemporalUnresolved>();
         var ruled = new HashSet<(int, string)>();
         var seen = new HashSet<int>();
+        ShaderSettle? settle = null;
         var objects = (scene["objects"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(item => SceneGraph.Int(item["id"]) is not null).ToDictionary(item => SceneGraph.Int(item["id"])!.Value);
         JsonObject[] dependencies = [.. (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()];
@@ -111,6 +117,8 @@ public static class ShaderPeriodAnalysis
                 { Fail(false, "external_uniform_unmodeled", "animated uniforms " + string.Join(", ", external) + " have no runtime track"); continue; }
                 if (signatures.Any(s => s["transient"]?.GetValue<bool>() == true))
                 { Fail(false, "transient_clamp_scroll", "clamp-axis scroll settles at a time the signature does not report"); continue; }
+                if (signatures.Max(s => s["settle_seconds"]?.GetValue<double>() ?? -1) is double at and >= 0 && (settle is null || at > settle.Seconds))
+                    settle = new(owner, effect, pass, resource, at);
 
                 JsonObject[] terms = [.. signatures.SelectMany(s => (s["terms"] as JsonArray ?? []).OfType<JsonObject>()).DistinctBy(t => t.ToJsonString())];
                 // 同一旋钮被几个项用到：多于一个就分不开，不用它
@@ -188,7 +196,7 @@ public static class ShaderPeriodAnalysis
                 looseTerms.AddRange(loose.Select(x => new ShaderTerm(x.Term, owner, effect, pass, resource, split, x.Missing)));
             }
         }
-        return new(components, unresolved, ruled, slowComponents, looseTerms);
+        return new(components, unresolved, ruled, slowComponents, looseTerms, settle);
     }
 
     /// <summary>原因串的码：到第一个空格、冒号或 @ 为止。</summary>

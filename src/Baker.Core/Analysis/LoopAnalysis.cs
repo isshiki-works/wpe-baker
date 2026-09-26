@@ -193,6 +193,18 @@ internal static class LoopAnalysis
         }
         if (spriteRejectedCandidates > 0)
             unresolved.Add(new SpriteSeamUnresolved(spriteRejectedCandidates));
+        // 着色器里与线性时间比较的分支在 settle 时刻后固定：同精灵，整周期预热 L 帧后起录（预热只能 0 或 L），要求 L 晚于 settle；
+        // 精灵已定在起点 0 闭合的候选不能再预热。候选全放不进就记未收敛
+        if (shader.Settle is { } settle && candidates.Count > 0)
+        {
+            candidates = [.. candidates.Where(c => c.Seconds > settle.Seconds && (c.SpriteSeam is null || c.SpriteSeam.WarmupFrames == c.Frames))
+                .Select(c => c with { ShaderSettleSeconds = settle.Seconds })];
+            if (candidates.Count == 0)
+                unresolved.Add(new ShaderLoopUnresolved(new(settle.OwnerLayerId, settle.EffectIndex, settle.PassIndex, settle.Resource,
+                    ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: a branch on linear time settles by " +
+                    settle.Seconds.ToString("R", CultureInfo.InvariantCulture) + " s, later than the one-period warmup of every candidate",
+                    "transient_settle_beyond_warmup")));
+        }
         long contentStep = ContentStepFrames(shader.Components.Count + shader.Slow.Count + scriptCycles.Length, animation, unresolved.Count, fpsNumerator, fpsDenominator);
         // 没有任何周期分量（求解器与摆动改频都没给出候选），而未解析项全部是满足平稳随机判据、可交叉淡化的粒子：
         // 粒子本身定不出循环长度，从 min(60 秒, 上限) 起，必要时在上限内延长到最长寿命之后；接缝由残差交叉淡化处理。

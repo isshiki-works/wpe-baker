@@ -214,6 +214,37 @@ TEST_F(ShaderTime, LoopCountPeriodic) {
     ExpectPeriod(Analyze(c), 1 / double(0.03f));
 }
 
+// 与线性时间比较的分支、阈值有界（常量，fract(uv) 这类逐像素有界量）：过 settle 时刻后固定，是暂态不是"不能"；
+// settle 上界 = 差的余量范围 / 系数（系数为负同理），固定之后 sin(t) 照常给周期
+TEST_F(ShaderTime, BoundedThresholdBranchSettles) {
+    const std::string vert = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\n"
+                             "void main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }\n";
+    const std::pair<const char*, double> cases[] = { { "g_Time * 0.5 > 3.0", 6 },
+                                                      { "1.0 - 0.25 * g_Time > fract(v_TexCoord.x * 7.0) * 2.0", 4 } };
+    for (const auto& [cond, settle] : cases) {
+        Case c { "", "bounded_branch", {}, {} };
+        c.vert = vert;
+        c.frag = std::string("varying vec2 v_TexCoord;\nuniform float g_Time;\nvoid main() {\n  float m = 0.0;\n  if (") + cond +
+                 ") m = 1.0;\n  gl_FragColor = vec4(m, sin(g_Time), 0.0, 1.0);\n}\n";
+        const auto sig = Analyze(c);
+        ExpectPeriod(sig, kTau);
+        EXPECT_NEAR(sig.settle, settle, 1e-9) << st::ToJson(sig);
+    }
+}
+
+// 阈值含 tan(t) 的极点：每个周期都越过线性时间、变号相位漂移，分支永不固定，才是"不能"
+TEST_F(ShaderTime, UnboundedThresholdBranchIsProof) {
+    Case c { "", "unbounded_branch", {}, {} };
+    c.vert = "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }\n";
+    c.frag = "uniform float g_Time;\nvoid main() {\n  float m = 0.0;\n  if (g_Time > tan(g_Time)) m = 1.0;\n"
+             "  gl_FragColor = vec4(m, 0.0, 0.0, 1.0);\n}\n";
+    const auto sig = Analyze(c);
+    EXPECT_EQ(sig.kind, "aperiodic") << st::ToJson(sig);
+    EXPECT_TRUE(std::any_of(sig.reasons.begin(), sig.reasons.end(),
+                            [](const std::string& r) { return r.starts_with("compare_with_unbounded_time"); }))
+        << st::ToJson(sig);
+}
+
 // foliagesway（MODE 1）的写法：每个系数一项；后三项各带自己的字面量旋钮和 g_Speed 旋钮，供 C# 改写调速
 TEST_F(ShaderTime, SwayTermsCarryKnobs) {
     Case c { "", "sway_terms", {}, { { "g_Speed", { 1.0f } }, { "g_Phase", { 0.0f } } } };

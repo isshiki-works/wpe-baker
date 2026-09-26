@@ -104,6 +104,8 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
 {
     /// <summary>精灵 float32 帧表的接缝判定；null = 这次捕获没有可读帧表的精灵轨道。</summary>
     public SpriteSeamPhase.Selection? SpriteSeam { get; init; }
+    /// <summary>着色器里与线性时间比较的分支固定下来的时刻上界（秒）；有值时整周期预热 Frames 帧后起录。</summary>
+    public double? ShaderSettleSeconds { get; init; }
     /// <summary>循环长度不来自周期求解时的来源（目前只有 stationary_particle_default）。</summary>
     public string? LoopLengthSource { get; init; }
     /// <summary>
@@ -135,6 +137,7 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
         else if (SpriteSeam?.AtOrigin == SpriteSeamPhase.Verdict.Undetermined)
             json["sprite_seam_phase"] = new JsonObject { ["origin"] = "undetermined",
                 ["basis"] = "a sample lies within the renderer's double accumulation error of a sprite boundary" };
+        if (ShaderSettleSeconds is double settle) { json["source_period_warmup_frames"] = Frames; json["shader_settle_seconds"] = settle; }
         if (LoopLengthSource is not null) json["loop_length_source"] = LoopLengthSource;
         if (SlowComponents.Count > 0)
             json["slow_components"] = new JsonArray([.. SlowComponents.Select(x => (JsonNode)new JsonObject { ["component"] = x.Id,
