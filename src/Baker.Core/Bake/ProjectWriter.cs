@@ -137,6 +137,16 @@ internal static class ProjectWriter
         await File.WriteAllTextAsync(Shader("hub", "frag"), hub.Append("gl_FragColor = vec4(c, 1.0); }\n").ToString(), cancellationToken);
         await WriteMaterialAsync(project, "hub", "wpe_baker_video/hub",
             new JsonArray(blocks.Select(b => (JsonNode)JsonValue.Create("wpe_baker_video/" + b.Stem)).ToArray()), autosize: false, cancellationToken);
+        // 空效果给枢纽层一个自己的合成目标：原样拷贝的一道 pass，文件都写进工程。借用自带的 effects/opacity 时，
+        // 它的材质只在资源目录的效果文件夹里，本仓库引擎按工程/资源根目录找不到，成品在合成门渲染时失败。
+        await File.WriteAllTextAsync(Shader("hubcopy", "vert"), Vertex, cancellationToken);
+        await File.WriteAllTextAsync(Shader("hubcopy", "frag"), OpaqueFragment, cancellationToken);
+        await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, "materials/wpe_baker_video/hubcopy.json"), new JsonObject {
+            ["passes"] = new JsonArray(new JsonObject { ["shader"] = "wpe_baker_video/hubcopy", ["blending"] = "normal",
+                ["depthtest"] = "disabled", ["depthwrite"] = "disabled", ["cullmode"] = "nocull" }) }, cancellationToken);
+        await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, "effects/wpe_baker_video/hubcopy.json"), new JsonObject {
+            ["name"] = "Video hub copy", ["passes"] = new JsonArray(new JsonObject { ["material"] = "materials/wpe_baker_video/hubcopy.json" }) },
+            cancellationToken);
         foreach (var (video, stem, top, w, h) in blocks)
         {
             var textures = JsonNode.Parse(await File.ReadAllTextAsync(ProjectSource.ContainedPath(project, $"materials/wpe_baker_video/{stem}.json"),
@@ -155,8 +165,7 @@ internal static class ProjectWriter
             ["id"] = id, ["name"] = "Video hub", ["image"] = "models/wpe_baker_video/hub.json",
             ["origin"] = FormattableString.Invariant($"{width / 2d:R} {height / 2d:R} 0"), ["angles"] = "0 0 0", ["scale"] = "1 1 1",
             ["size"] = $"{width} {height}", ["visible"] = false, ["alpha"] = 1, ["parallaxDepth"] = "0 0",
-            // 空效果给枢纽层一个自己的合成目标。
-            ["effects"] = new JsonArray(new JsonObject { ["file"] = "effects/opacity/effect.json",
+            ["effects"] = new JsonArray(new JsonObject { ["file"] = "effects/wpe_baker_video/hubcopy.json",
                 ["passes"] = new JsonArray(new JsonObject { ["combos"] = null, ["constantshadervalues"] = null }) }) };
     }
 
