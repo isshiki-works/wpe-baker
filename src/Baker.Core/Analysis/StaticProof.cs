@@ -54,6 +54,8 @@ internal static class StaticProof
                 !owner.TryGetValue<int>(out int ownerId) || !target.TryGetValue<int>(out int targetId))
                 return Unproven("A runtime dependency entry is malformed, so the observation cannot establish a still image.");
             if (!selected.Contains(ownerId) && !selected.Contains(targetId)) continue;
+            // 别处的脚本只读被烘图层（名字、属性、查找）不改变它的画面；写入或挂在被烘图层上的脚本才算。
+            if (!selected.Contains(ownerId) && dependency["operation"]?.GetValue<string>() != "write") continue;
             if (dependency["operation"] is not JsonValue operation || !operation.TryGetValue<string>(out string? name) || name != "write" ||
                 dependency["initialization"] is not JsonValue initialization || !initialization.TryGetValue<bool>(out bool initial) || !initial)
                 return Named($"Baked {Describe(selected.Contains(ownerId) ? ownerId : targetId)} takes part in a runtime dependency that is not an initialization write.", selected.Contains(ownerId) ? ownerId : targetId);
