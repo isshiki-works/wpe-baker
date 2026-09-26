@@ -94,7 +94,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
                 scene, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
-                LoopLengthMaximumOf(request), videoGroups, steps, request.FullLoopLayerIds);
+                LoopLengthMaximumOf(request), videoGroups, steps, request.FullLoopLayerIds,
+                // 逐层"不能"按档位回退链能走到的最大预算证明（SearchSpace：没给 --retime-budget 时一直退到效率档）
+                request.RetimeBudgetPercent is null && request.Preset is not null ? Math.Max(profile.CommonRetimePercent, RetimeProfile.MaximumBudgetPercent) : null);
             return UnresolvedNotes.Unpack(AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
             {
                 LoopReport loop = Analyze(input, null);
