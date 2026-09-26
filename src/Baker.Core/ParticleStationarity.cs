@@ -348,6 +348,11 @@ internal static class ParticleStationarity
         // ---- C5 子系统：事件子系统逐个递归判定（CheckEventChild）；非数组与嵌套的没有核过 ----
         double childTail = 0;
         var childLocks = new List<CyclostationaryLock>();
+        // 按父发射率给同时在世的子实例一个上界：活着的父粒子（出生于最近 L_max 内）+ 最近 tail 内释放的（父粒子出生于最近 tail + L_max 内）；
+        // 每个发射器按计时器等间隔发射，任意 w 真实秒内至多 ⌊w × 率⌋ + 1 个。有爆发时不给（爆发数另算）。
+        double Births(double window) => Math.Floor(window * emissionRate * rateScale) + emitters.Length;
+        double? ParentInstances(double tail) => burst || emitters.Length == 0 || lifetimeMax is not double parentMax ? null
+            : Births(parentMax * lifetimeScale / rateScale) + Births(tail + parentMax * lifetimeScale / rateScale);
         if (definition["children"] is JsonNode children && !(children is JsonArray { Count: 0 }))
         {
             if (childType is not null || children is not JsonArray list || list.Any(entry => entry is not JsonObject))
@@ -355,7 +360,7 @@ internal static class ParticleStationarity
             else
                 for (int index = 0; index < list.Count; ++index)
                     childTail = Math.Max(childTail, CheckEventChild(list[index]!.AsObject(), $"children[{index}]", failures, definition,
-                        overrides, lifetimeMin * lifetimeScale / rateScale, objects, runtime, readResource, clock, childLocks));
+                        overrides, lifetimeMin * lifetimeScale / rateScale, objects, runtime, readResource, clock, childLocks, ParentInstances));
         }
 
         // ---- C6 材质：genericparticle 且不读帧缓冲 ----
@@ -618,7 +623,7 @@ internal static class ParticleStationarity
     /// </summary>
     private static double CheckEventChild(JsonObject child, string node, List<Failure> failures, JsonObject definition, JsonObject overrides,
         double? parentLifetimeMin, IReadOnlyDictionary<int, JsonObject> objects, JsonObject? runtime, Func<string, JsonObject?> readResource,
-        FrameClock? clock, List<CyclostationaryLock> locks)
+        FrameClock? clock, List<CyclostationaryLock> locks, Func<double, double?> parentInstances)
     {
         // 渲染器 ParseSpawnType：type 缺省或不认识的字样都是 static。
         string type = Text(child["type"]) is "eventspawn" or "eventfollow" or "eventdeath" ? Text(child["type"]) : "static";
@@ -635,6 +640,7 @@ internal static class ParticleStationarity
         bool capReadable = child["maxcount"] is null || TryNonNegative(child["maxcount"], out cap);
         double? instances = TryNonNegative(definition["maxcount"], out double parentCount) && parentLifetimeMin is > 0
             ? Math.Min(parentCount, 20000) * (2 + Math.Floor(tail / parentLifetimeMin.Value)) : null;
+        if (parentInstances(tail) is double byRate) instances = Math.Min(instances ?? double.PositiveInfinity, byRate);
         if (capReadable && instances <= cap) return tail;
         failures.Add(new("C5", "child_instance_cap_binds", node + ".maxcount",
             new JsonObject { ["cap"] = child["maxcount"]?.DeepClone(), ["instances_bound"] = instances }.ToJsonString()));
