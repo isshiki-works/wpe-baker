@@ -366,7 +366,9 @@ internal static class ParticleStationarity
         // ---- C6 材质：genericparticle 且不读帧缓冲 ----
         CheckMaterial(definition, readResource, Fail);
 
-        // ---- C7 脚本：对象及祖先不能被脚本逐帧驱动或写入 ----
+        // ---- C7 脚本：对象及祖先被脚本逐帧驱动或写入 ----
+        // 脚本读外部输入（日时、音频、指针、媒体；初始化时注册也算）：输出依赖外部量，不是时间的周期函数，判不能。
+        // 其余脚本的输出随时间怎样变要做确定性分析（常数 / a·t+b / 周期集合 / 不周期，与着色器时间签名同一个域），还没有，标未收敛。
         int[] chain = Chain(owner, objects);
         if (runtime?["runtime_dependencies"] is not JsonArray dependencies)
             Fail("C7", "script_evidence_unavailable", "runtime_dependencies");
@@ -377,19 +379,25 @@ internal static class ParticleStationarity
                 string operation = Text(dependency["operation"]);
                 int? scriptOwner = SceneGraph.Int(dependency["owner"]);
                 int? target = SceneGraph.Int(dependency["target"]);
-                string summary = $"{operation}:{Text(dependency["property"])}";
-                // 挂在本对象或祖先上的脚本：逐帧运行，或读外部输入（音频、鼠标等，初始化时注册也算）。
+                string node;
                 if (scriptOwner is int host && chain.Contains(host) && (!initialization || operation == "input"))
-                    Cannot("C7", "script_drives_object", $"runtime_dependencies[owner={host}]", JsonValue.Create(summary));
+                    node = $"runtime_dependencies[owner={host}]";
                 else if (target is int written && chain.Contains(written) && operation == "write" && !initialization)
-                    Cannot("C7", "script_writes_object", $"runtime_dependencies[target={written}]", JsonValue.Create(summary));
+                    node = $"runtime_dependencies[target={written}]";
+                else continue;
+                // 同一段脚本（所有者 + 绑定）读过的外部输入。
+                string[] inputs = dependencies.OfType<JsonObject>().Where(other => SceneGraph.Int(other["owner"]) == scriptOwner &&
+                        Text(other["binding"]) == Text(dependency["binding"]) && Text(other["operation"]) == "input")
+                    .Select(other => "input:" + Text(other["property"])).Distinct().ToArray();
+                if (inputs.Length > 0) Cannot("C7", "script_reads_external_input", node, JsonValue.Create(string.Join(",", inputs)));
+                else Fail("C7", "script_period_not_derived", node, JsonValue.Create($"{operation}:{Text(dependency["property"])}"));
             }
 
         // ---- C8 覆盖与对象属性：常数、静态属性绑定，或周期已由渲染器动画轨道证明的关键帧 ----
-        // 作者脚本驱动的值（覆盖或属性）：分析没有脚本周期的推导（运行时观测只记录读时钟与外部输入），周期给不出，判不能。C7 同理。
+        // 作者脚本驱动的值（覆盖或属性）：脚本挂在本对象或祖先上，读外部输入的已由 C7 判不能；其余同 C7 标未收敛。
         foreach ((string key, JsonNode? value) in overrides)
             if (key == "id" || IsConstantBinding(value)) continue;
-            else if (value is JsonObject { } scripted && scripted["script"] is not null) Cannot("C8", "override_script_driven", "instanceoverride." + key, value);
+            else if (value is JsonObject { } scripted && scripted["script"] is not null) Fail("C8", "script_period_not_derived", "instanceoverride." + key, value);
             else Fail("C8", "override_not_constant", "instanceoverride." + key, value);
         var tracks = new List<(string Node, int Id, JsonObject Binding)>();
         foreach (int id in chain)
@@ -397,7 +405,7 @@ internal static class ParticleStationarity
             JsonObject item = objects.TryGetValue(id, out JsonObject? found) ? found : owner;
             foreach (string key in ParticleCriteria.AncestorMotionKeys)
                 if (item[key] is not JsonObject binding || IsConstantBinding(binding)) continue;
-                else if (binding["script"] is not null) Cannot("C8", "property_script_driven", $"object[{id}].{key}", binding);
+                else if (binding["script"] is not null) Fail("C8", "script_period_not_derived", $"object[{id}].{key}", binding);
                 // 关键帧：发射器随动画轨道周期运动，粒子层是按轨道周期的周期平稳过程，锁到轨道周期（见下方锁定）。
                 else if (binding["animation"] is JsonObject) tracks.Add(($"object[{id}].{key}", id, binding));
                 else Fail("C8", "property_animated", $"object[{id}].{key}", binding);

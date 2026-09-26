@@ -353,24 +353,29 @@ internal static class ParticleStationarityChecks
         // ---- C7 脚本 ----
         check(NoCondition(rainVerdict, "C7"), "C7 正例：运行时观测里没有针对该层的脚本依赖");
         check(Only(Verdict(droplets, [new JsonObject { ["owner"] = 5, ["target"] = 153, ["operation"] = "write", ["property"] = "alpha",
-                ["initialization"] = false }]), "C7 script_writes_object"),
-            "C7 反例：别的层脚本逐帧写这个粒子层的属性，不放行");
+                ["initialization"] = false }]), "C7 script_period_not_derived"),
+            "C7 未收敛：别的层脚本逐帧写这个粒子层的属性，脚本周期还没有推导");
         check(Stationary(Verdict(droplets, [new JsonObject { ["owner"] = 5, ["target"] = 153, ["operation"] = "write", ["property"] = "alpha",
                 ["initialization"] = true }])),
             "C7 正例：只在初始化时写一次的依赖不算脚本驱动");
-        check(Only(Verdict(Mutate(droplets, (obj, _, _) => obj["parent"] = 900),
-                [new JsonObject { ["owner"] = 900, ["target"] = -1, ["operation"] = "time", ["property"] = "frametime", ["initialization"] = false }],
-                extraObjects: [new JsonObject { ["id"] = 900, ["name"] = "group" }]), "C7 script_drives_object"),
-            "C7 反例：祖先对象上逐帧运行的脚本等于移动发射器，不放行");
+        JsonObject ScriptedAncestor(params string[] inputs) => Verdict(Mutate(droplets, (obj, _, _) => obj["parent"] = 900),
+            [new JsonObject { ["owner"] = 900, ["target"] = -1, ["operation"] = "time", ["property"] = "frametime", ["binding"] = "origin",
+                ["initialization"] = false }, .. inputs.Select(input => new JsonObject { ["owner"] = 900, ["target"] = -1, ["operation"] = "input",
+                ["property"] = input, ["binding"] = "origin", ["initialization"] = false })],
+            extraObjects: [new JsonObject { ["id"] = 900, ["name"] = "group" }]);
+        JsonObject clockOnly = ScriptedAncestor(), pointer = ScriptedAncestor("pointer");
+        check(Only(clockOnly, "C7 script_period_not_derived") && clockOnly["loop_convergence"] is null,
+            "C7 未收敛：祖先对象上逐帧读时钟的脚本等于移动发射器，脚本周期还没有推导，不判不能");
+        check(Only(pointer, "C7 script_reads_external_input") && pointer["loop_convergence"]?.GetValue<string>() == "cannot",
+            "C7 不能：同一段脚本读指针，输出依赖外部输入，不是时间的周期函数");
         check(Only(Verdict(droplets, withDependencies: false), "C7 script_evidence_unavailable"),
             "C7 反例：运行时观测缺 runtime_dependencies 时证明不了没有脚本");
 
         // ---- C8 覆盖与属性绑定 ----
         check(NoCondition(dropletsVerdict, "C8"), "C8 正例：数值覆盖与 {user, value} 可见性绑定是常数");
         JsonObject blinking = Verdict(Load("3151551777", 805));
-        check(Codes(blinking).Contains("C8 override_script_driven") && Codes(blinking).Contains("C8 property_script_driven") &&
-            blinking["loop_convergence"]?.GetValue<string>() == "cannot",
-            "C8 不能：Blinking Stars 805 的 instanceoverride.alpha 与 visible 都挂着脚本，脚本周期没有推导，判不能");
+        check(Codes(blinking).Contains("C8 script_period_not_derived") && blinking["loop_convergence"] is null,
+            "C8 未收敛：Blinking Stars 805 的 instanceoverride.alpha 与 visible 都挂着脚本，脚本周期还没有推导，不判不能");
 
         // ---- C9 渲染器与精灵帧 ----
         check(NoCondition(rainVerdict, "C9") && NoCondition(dropletsVerdict, "C9"), "C9 正例：spritetrail + randomframe 放行");
