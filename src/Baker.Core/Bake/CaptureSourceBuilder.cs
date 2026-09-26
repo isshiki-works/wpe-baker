@@ -19,15 +19,10 @@ internal static class CaptureSourceBuilder
         using (timing.Measure(StageTiming.SourceCapture)) await source.ExtractAsync(captureProject, cancellationToken);
         using (timing.Measure(StageTiming.SourceCapture))
         {
-            await File.WriteAllTextAsync(ProjectSource.ContainedPath(captureProject, source.SceneResource),
-                Scene(original, snapshot, plan, settings, probe).ToJsonString(), cancellationToken);
-            // 摆动改频：按首个候选的 sway_retime 在捕获项目副本里写覆盖 shader，只影响捕获；成品项目另从源解包。
-            if (!probe && plan["loop"]?["candidates"]?.AsArray().FirstOrDefault()?["sway_retime"] is JsonObject swayRetime)
-            {
-                report["sway_retime"] = swayRetime.DeepClone();
-                report["sway_shader_patches"] = await ShaderTextPatch.WriteSwayRetimeAsync(captureProject, source, settings.Assets,
-                    plan["loop"]!.AsObject(), cancellationToken);
-            }
+            JsonObject scene = Scene(original, snapshot, plan, settings, probe);
+            await File.WriteAllTextAsync(ProjectSource.ContainedPath(captureProject, source.SceneResource), scene.ToJsonString(), cancellationToken);
+            // 着色器调速：给挂了时间倍率的 pass 写覆盖 shader，只影响捕获；成品项目另从源解包。
+            if (!probe) report["time_scale_shaders"] = await ShaderTextPatch.WriteTimeScaleAsync(captureProject, source, settings.Assets, scene, cancellationToken);
             ProjectWriter.ApplyPropertySnapshot(metadata, snapshot);
             metadata["file"] = source.SceneResource;
             await File.WriteAllTextAsync(Path.Combine(captureProject, "project.json"), metadata.ToJsonString(), cancellationToken);

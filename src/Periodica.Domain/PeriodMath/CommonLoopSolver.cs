@@ -80,7 +80,8 @@ public static class CommonLoopSolver
     /// <summary>--loop-max-seconds 允许的上限（秒）。</summary>
     public const double MaximumLoopLengthSeconds = 3600;
 
-    private static readonly CommonLoopRational DefaultMinimum = new(10);
+    /// <summary>请求没带下限时的最短循环时长（10 秒）。</summary>
+    public static readonly CommonLoopRational DefaultMinimum = new(10);
     private static readonly CommonLoopRational DefaultMaximum = Ceiling(DefaultLoopLengthMaximumSeconds);
 
     /// <summary>

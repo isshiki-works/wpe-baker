@@ -229,12 +229,6 @@ public static class MessageCatalog
             Legacy: "The only thing changing in the recorded content is a single video, and no retime lands its length on a whole number of output frames, so the analysis established no loop."),
 
         // feat/particle-crossfade：残差掩盖的逐层判定理由（ResidualMasking）。{0}=图层 id {1}=机制名
-        ["residual.displacement_not_maskable"] = new(
-            Zh: "层 {0} 的位移类分量 {1} 不可掩盖：接缝两侧同一元素位置不同，交叉淡化产生半透明双影，视觉定标判定为明显。需解析闭合其周期，或保持该层实时。",
-            En: "Layer {0}'s displacement component {1} cannot be masked: the same element sits at different positions on either side of the seam, and a crossfade yields a semi-transparent double image that visual calibration judged obvious. Its period must close analytically, or the layer must stay live.",
-            Legacy: "Layer {0}'s displacement component {1} would show a visible position jump through a crossfade: the same element sits in different places on either side of the seam, and a crossfade only turns the jump into a semi-transparent double image, which visual calibration judged obvious. It cannot be masked; its period must close analytically, or the layer must stay live."),
-
-        // {0}=图层 id
         ["residual.particle_verdict_missing"] = new(
             Zh: "层 {0} 的粒子未解析项不可掩盖：计划中无平稳随机判据结论（旧版计划），淡化替换无法证明成立。请重新分析。",
             En: "Layer {0}'s particle item cannot be masked: the plan carries no stationary-random verdict (an older plan), so crossfade replacement cannot be shown to hold. Analyze the source again.",
@@ -438,24 +432,6 @@ public static class MessageCatalog
             En: "The runtime {0} material uses unmodeled temporal uniforms {1}, so its period cannot be proven.",
             Legacy: "Runtime {0} material uses unmodeled temporal uniforms: {1}."),
 
-        ["unresolved.shader_runtime_clock_unverified"] = new(
-            Zh: "该着色器使用运行时时钟或帧间隔（g_Runtime / g_Frametime 一类），而非已验证的周期性 g_Time 公式，无法证明循环。",
-            En: "The shader uses a runtime or delta clock (g_Runtime / g_Frametime) rather than a verified periodic g_Time equation, so looping cannot be proven.",
-            Legacy: "Shader uses a runtime or delta clock without a verified periodic g_Time equation."),
-
-        ["unresolved.shader_mixed_clock"] = new(
-            Zh: "该着色器混用 g_Time 与运行时时钟/帧间隔，周期无法证明。",
-            En: "The shader mixes g_Time with a runtime or delta clock, so its period cannot be proven.",
-            Legacy: "Shader mixes g_Time with a runtime or delta clock, so its period is not proven."),
-
-        ["unresolved.shader_not_verified_periodic"] = new(
-            Zh: "该着色器源码不匹配任何已验证的周期公式，无法证明循环。",
-            En: "The shader source matches no verified periodic equation, so looping cannot be proven.",
-            Legacy: "Shader source does not match a verified periodic equation."),
-
-        // ---- bake 拒绝理由（写进 bake.json 的 reason / reason_localized） ----
-        // 特效前缀按不透明视频规划，但全分辨率捕获读到 alpha<255。{0}=图层 id {1}=层名 {2}=帧 {3}/{4}=坐标
-        // {5}=该点 alpha {6}=该帧非不透明像素数 {7}=该帧最低 alpha。
         ["bake.effect_prefix_nonopaque_capture"] = new(
             Zh: "不可生成：图层 {0}「{1}」的原尺寸首帧全像素不透明，但完整捕获在第 {2} 帧 ({3}, {4}) 读到 alpha={5}；该帧有 {6} 个像素非完全不透明（最低 alpha {7}）。首帧结论不能覆盖后续透明度变化，当前不透明编码会丢失这些信息，因此已中止本次生成；原壁纸未改动，相关内容保持实时。",
             En: "Layer {0} (\"{1}\") was opaque in the native-size first frame, but full capture read alpha={5} at ({3}, {4}) in frame {2}, affecting {6} pixel(s) (lowest alpha {7}). The first frame did not establish opacity throughout the animation. RGB encoding would lose this transparency, so generation stopped; the source is unchanged and remains live."),
@@ -564,6 +540,23 @@ public static class MessageCatalog
             Zh: "不可生成：源周期编码未通过接缝校验：{0}未做接缝修复或尾段拼接，其余捕获、转换检查与工程组装已跳过。",
             En: "Cannot generate: the source-period encoding failed the required seam check: {0} No seam repair or tail splicing was applied; remaining captures, conversion checks and project assembly were skipped.",
             Legacy: "The original source-period encoding failed the required seam check: {0} No seam repair or tail splicing is applied; remaining captures, conversion checks and project assembly were skipped."),
+
+        // 选中候选带缓变分量（周期远超循环上限、不进求解器），循环闭合检查在 P 处没过：结论"不能"。{0}=漂移上界（度） {1}=接缝读数（同上）
+        // 备选写法（界面文字由用户定）：
+        //   A（占位）不可生成：画面里有变化很慢的部分，每个循环最多偏移 {0}°，循环衔接处差异超出限值：{1} / Cannot generate: part of the scene changes slowly and drifts up to {0}° per loop, so the loop seam exceeds the limit: {1}
+        //   B 无法无缝循环：缓慢变化的效果每次循环最多偏移 {0}°，衔接处会看到跳变。{1} / Cannot loop seamlessly: a slow-moving effect shifts up to {0}° each loop, leaving a visible jump at the seam. {1}
+        //   C 缓变效果偏移过大（每个循环最多 {0}°），无法无缝循环：{1} / Slow effect drifts too far (up to {0}° per loop) to loop seamlessly: {1}
+        ["reason.slow_component_drift_exceeds_seam"] = new(
+            Zh: "不可生成：画面里有变化很慢的部分，每个循环最多偏移 {0}°，循环衔接处差异超出限值：{1}",
+            En: "Cannot generate: part of the scene changes slowly and drifts up to {0}° per loop, so the loop seam exceeds the limit: {1}"),
+
+        // 带缓变分量的候选过了接缝门，成品里记一句。{0}=漂移上界（度）
+        // 备选写法：A（占位）含缓变分量，每个循环最多偏移 {0}° / Includes slow-changing content that drifts up to {0}° per loop
+        //           B 缓变分量，漂移上界 {0}° / Slow component, drift bound {0}°
+        //           C 部分效果变化很慢，循环衔接处最多偏移 {0}° / Some effects change slowly and shift by up to {0}° at the loop seam
+        ["bake.slow_component_drift"] = new(
+            Zh: "含缓变分量，每个循环最多偏移 {0}°",
+            En: "Includes slow-changing content that drifts up to {0}° per loop"),
 
         ["bake.effect_prefix_seam_rejected"] = new(
             Zh: "不可生成：特效前缀按源周期编码后未通过接缝校验：{0}未做修补。",
@@ -709,6 +702,12 @@ public static class MessageCatalog
         ["reason.allocation_no_trigger"] = new(
             Zh: "转成视频的图层里没有不满足平稳随机判据的粒子，也没有带未解析循环机制的层，保留实时得到的还是同一个分配。",
             En: "No baked layer is a particle system that fails the stationary-random criteria or owns an unresolved loop mechanism, so retaining units live would keep the same allocation."),
+        ["reason.loop_never_repeats_within_limit"] = new(
+            Zh: "动画在 {0} 分钟内不会重复，无法生成循环视频",
+            En: "The animation does not repeat within {0} minutes, so a looping video cannot be made."),
+        ["reason.effect_not_yet_supported"] = new(
+            Zh: "暂不支持此壁纸中的部分动态效果",
+            En: "Some animated effects in this wallpaper are not supported yet."),
         ["reason.allocation_nothing_left"] = new(
             Zh: "把所有未解析层和粒子层所在的分配单元都保留实时后，没有内容可以转成视频，缩小分配没有意义。",
             En: "Retaining the allocation units of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help."),
@@ -849,32 +848,6 @@ public static class MessageCatalog
             En: "Effect-prefix caching retains other live work; benefit depends on the cached effects' cost and requires comparing the source and generated result.",
             Legacy: "This route (effect prefix) saves little power unless the part baked away is the bulk of the work."),
 
-        // feat/sway-retime：摆动改频成立时补在结论行后面。feat/retime-budget：观感按相位差排序（百分比只是求解参数），
-        // 所以先报一个循环内最坏偏多少圈相位、最慢可见项走几圈，再报改动百分比与预算。
-        // {0}=一个循环内最坏相位差（圈） {1}=最慢可见项走的圈数 {2}=可见摆动项（周期 < 60 s）最大改动百分比
-        // {3}=预算说明（"预算 3%" 或 "改动最小"） {4}=慢项（周期 ≥ 60 s）最大峰值速度偏差（像素/秒） {5}=冻结项个数 {6}=循环秒数
-        ["summary.sway_retime"] = new(
-            Zh: "摆动改频：单个循环内相位最大偏差 {0} 圈，最慢可见摆动项运行 {1} 圈（可见项周期 < 60 s，改频 {2}%，{3}）；慢项（周期 ≥ 60 s）峰值速度偏差最大 {4} px/s，其中冻结 {5} 项；摆动图层在 {6} s 循环内逐项精确闭合。",
-            En: "Sway retime: maximum phase drift {0} cycle per loop; slowest visible sway term runs {1} cycles (visible terms period < 60 s, retimed {2}%, {3}); slow terms (period ≥ 60 s) peak speed deviation at most {4} px/s, {5} frozen; sway layers close exactly over the {6} s loop.",
-            Legacy: "Sway retime: phase drifts by at most {0} cycle within one loop and the slowest visible sway term runs {1} cycles (visible terms have periods < 60 s, retimed by {2}%, {3}); slow terms (period ≥ 60 s) deviate by at most {4} px/s in peak speed, {5} of them frozen; sway layers close exactly over the {6} s loop."),
-
-        // {0}=预算百分比。档位给的观感改动预算，写在结论行括号里。
-        ["summary.sway_budget"] = new(Zh: "预算 {0}%", En: "budget {0}%"),
-        ["summary.sway_budget_minimized"] = new(Zh: "按最小改动求解", En: "minimum-change solution",
-            Legacy: "solved for the smallest change"),
-
-        // {0}=--loop-max-seconds 秒数 {1}=慢项峰值速度偏差上限（像素/秒）
-        ["sway_retime.no_multiple_meets_speed_limit"] = new(
-            Zh: "摆动改频已启用，但 {0} s 循环长度上限内无合规 L = kP：存在周期 < 60 s 的可见摆动项走不满整圈（可见项不可冻结），或慢项冻结、改频后峰值速度偏差超过 {1} px/s；摆动分量按未解析项处理。",
-            En: "Sway retime enabled, but no L = kP within the {0} s loop-length maximum qualifies: a visible sway term (period < 60 s) cannot complete a whole cycle (visible terms cannot be frozen), or a slow term's peak speed deviation after freezing or retiming exceeds {1} px/s; sway components remain unresolved.",
-            Legacy: "Sway retime is on, but no L = kP within the {0} s loop-length maximum qualifies: either a visible sway term (period < 60 s) cannot complete a whole cycle and visible terms may not be frozen, or a slow term's peak speed deviation after freezing or retiming exceeds {1} px/s; the sway components stay unresolved."),
-
-        // {0}=振幅换算不到输出像素的图层 id 列表
-        ["sway_retime.amplitude_unknown"] = new(
-            Zh: "摆动改频已启用，但图层 {0} 的摆动振幅无法换算为输出像素（图层尺寸不可读），慢项冻结或改频后的速度偏差无法判定；摆动分量按未解析项处理。",
-            En: "Sway retime enabled, but the sway amplitude of layer(s) {0} cannot be converted to output pixels (layer size unreadable), so the speed deviation of slow terms cannot be evaluated; sway components remain unresolved.",
-            Legacy: "Sway retime is on, but the sway amplitude of layer(s) {0} cannot be converted to output pixels (the layer size is unreadable), so the speed deviation of slow terms cannot be judged; the sway components stay unresolved."),
-
         // {0}=循环秒数。未解析项全是平稳随机粒子、且没有任何周期分量时，循环长度取默认值（见 HybridLoopService）。
         ["summary.particle_default_loop"] = new(
             Zh: "粒子系统无周期：循环长度取默认值 {0} s，接缝处交叉淡化。",
@@ -886,23 +859,6 @@ public static class MessageCatalog
             Zh: "未解析项均为平稳随机粒子系统，但粒子最长寿命 {1} s 不短于默认循环长度 {0} s：接缝两侧共享同一批粒子，交叉淡化替换前提不成立，不采用默认循环长度。",
             En: "All unresolved mechanisms are stationary-random particle systems, but the longest particle lifetime ({1} s) is not shorter than the default loop length ({0} s): both sides of the seam would share particles, so the crossfade replacement premise fails and the default loop length is not applied.",
             Legacy: "Every unresolved mechanism is a stationary-random particle system, but the longest particle lifetime ({1} s) is not shorter than the default loop length ({0} s): both sides of the seam would share particles, so the crossfade replacement premise fails and no default loop length is used."),
-
-        // {0}=--loop-max-seconds 秒数
-        ["sway_retime.no_multiple_within_maximum"] = new(
-            Zh: "摆动改频已启用，但其余分量解出的循环周期均超过 {0} s 循环长度上限，无法取得 L = kP；摆动分量按未解析项处理。",
-            En: "Sway retime enabled, but every loop period solved from the other components exceeds the {0} s loop-length maximum, so no L = kP exists; sway components remain unresolved.",
-            Legacy: "Sway retime is on, but every loop period solved from the other components exceeds the {0} s loop-length maximum, so no L = kP exists; the sway components stay unresolved."),
-
-        // {0}=循环长度上限秒数 {1}=观感改动预算百分比。预算太紧：不设预算时有解，说明卡住的是档位预算，不是速度闸。
-        ["sway_retime.no_multiple_within_budget"] = new(
-            Zh: "摆动改频已启用，但 {0} s 循环长度上限内无 L = kP 能把可见摆动项的改动压入 {1}% 观感预算；摆动分量按未解析项处理。放宽预算需改用更宽的档位或指定 --retime-budget。",
-            En: "Sway retime enabled, but no L = kP within the {0} s loop-length maximum keeps the visible sway change inside the {1}% look budget; sway components remain unresolved. A wider preset or --retime-budget raises the budget.",
-            Legacy: "Sway retime is on, but no L = kP within the {0} s loop-length maximum keeps the visible sway change inside the {1}% look budget; the sway components stay unresolved. A looser preset or --retime-budget raises the budget."),
-
-        ["sway_retime.no_base_candidate"] = new(
-            Zh: "摆动改频已启用，但其余时间分量未解出循环候选（上限 {0} s），无法取得 L = kP；摆动分量按未解析项处理。",
-            En: "Sway retime enabled, but the other temporal components produced no loop candidate (maximum {0} s), so no L = kP exists; sway components remain unresolved.",
-            Legacy: "Sway retime is on, but the other temporal components produced no loop candidate (maximum {0} s), so no L = kP exists; the sway components stay unresolved."),
 
         // {0}=视频组 {1}=不压时的大小（GiB） {2}=帧数 {3}=秒数 {4}=按不压的码率最长秒数 {5}=实测 SSIM {6}=门限 {7}=量化值增量
         ["bake.embedded_video_quality_rejected"] = new(

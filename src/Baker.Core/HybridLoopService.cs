@@ -20,7 +20,7 @@ public static class HybridLoopService
             int ownerId = patch["owner_layer_id"]!.GetValue<int>();
             if (!owners.TryGetValue(ownerId, out JsonObject? owner)) throw new InvalidDataException($"Patch owner {ownerId} is absent.");
             double oldValue = patch["old_value"]!.GetValue<double>(), newValue = patch["new_value"]!.GetValue<double>();
-            if (patch["kind"]!.GetValue<string>() is "shader_speed" or "shader_phase")
+            if (patch["kind"]!.GetValue<string>() == "shader_speed")
             {
                 JsonObject effect = owner["effects"]!.AsArray()[patch["effect_index"]!.GetValue<int>()]!.AsObject();
                 if (effect["passes"] is not JsonArray passes) effect["passes"] = passes = [];

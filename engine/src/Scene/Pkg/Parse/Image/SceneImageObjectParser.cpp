@@ -968,7 +968,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
             std::shared_ptr<SceneImageEffect> imgEffect = std::make_shared<SceneImageEffect>();
             imgEffect->name                             = wpeffobj.name;
             imgEffect->authored_id                      = wpeffobj.id.to_primitive();
-            imgEffect->authored_ordinal                 = effect_ordinal;
+            imgEffect->authored_ordinal                 = wpeffobj.json_index;
             imgEffect->runtime_visible                  = wpeffobj.visible;
             const auto effect_id = scene.RegisterEffect(image_node_id, *imgEffectLayer, imgEffect);
             if (! wpeffobj.visible_user.empty()) {
@@ -1253,6 +1253,7 @@ void ParseImageObjImpl(SceneParseContext& context, wpscene::ImageObject& img_obj
                     .uses_unit_final_quad     = UsesUnitFinalQuad(wpmat),
                     .final_quad_shader_values = std::move(final_quad_shader_values),
                     .mask_support             = rstd::move(mask_support),
+                    .authored_pass            = static_cast<std::int32_t>(i_mat),
                 });
             }
 

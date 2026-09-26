@@ -126,26 +126,10 @@ internal static class PlainLanguageChecks
 
     private static void NumberLine(Action<bool, string> check)
     {
-        // 可见改动看的是摆动改频那一项（max_change_visible_percent），不是整体调速；档位预算就按这个量给。
-        JsonObject Candidate(double drift, double visiblePercent, double residual = 0) => new() {
-            ["seconds"] = 60.0, ["total_retime_cost_percent"] = 0.05,
-            ["sway_retime"] = new JsonObject { ["phase_drift_cycles"] = drift,
-                ["max_change_visible_percent"] = visiblePercent, ["residual_pixels"] = residual } };
-        // 三档按 2026-09-18 用户看片结论：平衡档 3% 以内（阿米娅 3486806915 的 2.81%）属于基本看不出来。
-        check(PlainLanguage.ChangeLevel(Candidate(0.02, 0.5), false) == "可忽略" &&
-            PlainLanguage.ChangeLevel(Candidate(0.42, 2.81), false) == "可忽略" &&
-            PlainLanguage.ChangeLevel(Candidate(0.12, 4.2), false) == "轻微" &&
-            PlainLanguage.ChangeLevel(Candidate(0.2, 6), false) == "明显",
-            "plain language: visible change maps to three plain grades");
-        // 相位差越界（改频求解自身恒 < 0.5 圈）与没闭合的位移分量都降一档/直接判成改动明显。
-        check(PlainLanguage.ChangeLevel(Candidate(0.6, 2), false) == "轻微" &&
-            PlainLanguage.ChangeLevel(Candidate(0.02, 0.5, residual: 1.5), false) == "明显" &&
-            PlainLanguage.ChangeLevel(Candidate(0.02, 0.5), true) == "negligible",
-            "plain language: phase drift past half a cycle and unclosed displacement are not called invisible");
-        // 没有摆动解时退回整体调速百分比。
+        // 按整体调速百分比分档。
         check(PlainLanguage.ChangeLevel(new JsonObject { ["total_retime_cost_percent"] = 4.0 }, false) == "轻微" &&
             PlainLanguage.ChangeLevel(new JsonObject(), false) == "可忽略",
-            "plain language: without a sway solution the overall retime percentage is used");
+            "plain language: the overall retime percentage maps to the plain grades");
     }
 
     private static void TurnOffCard(Action<bool, string> check)

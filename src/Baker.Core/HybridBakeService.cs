@@ -466,10 +466,8 @@ public sealed class HybridBakeService(NativeTools tools)
             report["full_render_attempt_limit"] = probe ? 0 : 1;
             report["automatic_full_render_retries"] = false;
             // 含可掩盖残差层的组：它们的 master 多渲一个淡化窗口、各自测第一层并淡化；其余组照常渲 P 帧，相位同样是 warmup + S。
-            // 布局门保证每个残差层都在某个组里，所以残差路线下这个列表非空。
+            // 含缓变分量的组不在其中（只走硬切接缝门），所以列表可能为空；布局门另在组循环里守"每个残差层都在某个组里"。
             residualGroupIndexes = residualMasking is null ? [] : ResidualMasking.ResidualGroupIndexes(plan, residualMasking);
-            if (residualMasking is not null && residualGroupIndexes.Length == 0)
-                throw new InvalidOperationException("残差掩盖路线没有任何视频组含可掩盖残差层；布局门本应先拒绝。");
             if (residualMasking is not null)
                 report["residual_group_ids"] = new JsonArray([.. residualGroupIndexes.Select(index => groups[index]["id"]!.DeepClone())]);
             // 直编组要在渲染开始前就定下播放档位（编码器随渲染一起启动），所以档位解析提到所有渲染之前，整次烘焙只解析一次。
@@ -486,7 +484,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 crossfadeFrames, warmupFrames, residualGroupIndexes, groupParallel, playbackKind, progress, token)
                 { SizeEstimate = sizeEstimate.Task };
             if (scheduler.PreferredCodecs.Length > 0) report["gpu_codec_preference"] = JsonSerializer.SerializeToNode(scheduler.PreferredCodecs);
-            if (residualMasking is not null && !probe)
+            if (residualGroupIndexes.Length > 0 && !probe)
             {
                 startSearch = await LoopStartSelector.SearchAsync(runner, scheduler, groupParallel, progress, timing, token);
                 startOrder = LoopStartSelector.Order(startSearch);
@@ -720,7 +718,8 @@ public sealed class HybridBakeService(NativeTools tools)
                         JsonObject? hardwareDecode = null;
                         if (!probe && seam?["status"]?.GetValue<string>() != "observed_seam_pass")
                         {
-                            GroupVerdicts.RejectSeam(report, id, layers, packedAlpha, encoded, video, lateDependencyValidation, seam, seamPreview);
+                            GroupVerdicts.RejectSeam(report, id, layers, packedAlpha, encoded, video, lateDependencyValidation, seam, seamPreview,
+                                GroupVerdicts.SlowDriftDegrees(plan));
                             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
@@ -829,6 +828,9 @@ public sealed class HybridBakeService(NativeTools tools)
                     : !seamsPass ? "candidate_rejected_seam"
                     : StaticOnlyBake.Is(report) ? StaticOnlyBake.Status : "candidate_generated";
                 report["loop_validation"] = probe ? "not_performed" : seamsPass ? "encoded_seams_passed" : "encoded_seam_failed";
+                // 选中候选带缓变分量、接缝门都过了：结论"能"，成品里记漂移上界。
+                if (report["status"]?.GetValue<string>() == "candidate_generated" && GroupVerdicts.SlowDriftDegrees(plan) is string drift)
+                    new Message("bake.slow_component_drift", [drift]).Write(report, "slow_component_drift");
                 report["project_path"] = project;
                 // 播放版编码的汇总：请求档位、实际档位、回退理由与编码总秒数，方便直接和软件档位对比。
                 report["playback_encoder"] = PlaybackEncoderSelection.Summarize(request.PlaybackEncoder,

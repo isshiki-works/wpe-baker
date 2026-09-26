@@ -244,8 +244,10 @@ void ReadImageEffects(const owe::NJson& json, owe::fs::VFS& vfs, SceneVersion ve
     if (values == nullptr) return;
     if (! values->is_array()) return;
 
+    int index = 0;
     for (const auto& value : *values) {
         ImageEffect effect;
+        effect.json_index = index++;
         if (effect.FromJson(value, vfs, version)) effects.push_back(std::move(effect));
     }
 }

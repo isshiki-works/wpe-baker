@@ -67,7 +67,7 @@ internal static class HybridLoopGeneralizationChecks
         // 文案不在条目里：走循环分析缓存的两段（plan 形态 loop + 同下标文案），按条目取回。
         var (particleLoop, particleNotes) = UnresolvedNotes.Unpack(UnresolvedNotes.Pack(LoopAnalysis.Analyze(
             new JsonObject { ["objects"] = new JsonArray { new JsonObject { ["id"] = 1, ["particle"] = "particles/test.json" } } }, source, null,
-            new JsonObject { ["runtime_animation_periods"] = new JsonArray { Sprite(1) } }, [1], 60, 1, 2, CommonLoopPreference.Balanced, null, null, null)));
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray { Sprite(1) } }, [1], 60, 1, 2, CommonLoopPreference.Balanced, null, null)));
         JsonObject particleReason = particleLoop["unresolved"]!.AsArray().OfType<JsonObject>()
             .Single(x => x["particle_nonperiodic_reason"] is not null);
         check(!particleLoop.ToJsonString().Contains("detail_localized", StringComparison.Ordinal) &&

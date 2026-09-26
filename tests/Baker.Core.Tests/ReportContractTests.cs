@@ -302,10 +302,10 @@ public class RenderResultContractTests
 public class LoopReportContractTests
 {
     private static LoopReport Report(IReadOnlyList<LoopCandidate> candidates, LoopNoCandidateReason? reason = null,
-        JsonObject? sway = null, JsonObject? particle = null, long cadence = 1) =>
+        JsonObject? particle = null, long cadence = 1) =>
         new(30000, 1001, "locked_clip_rates", CommonLoopPreference.Balanced, 2, false, null, 60, reason, candidates, [], false,
             VideoControlScope.Resolve(new JsonObject { ["objects"] = new JsonArray() }, new JsonObject()),
-            new LoopContentCadence(cadence, [new("video:1", 1, "clip", new CommonLoopRational(30))]), [], sway, particle);
+            new LoopContentCadence(cadence, [new("video:1", 1, "clip", new CommonLoopRational(30))]), [], particle);
 
     [Fact]
     public void WritesV3FieldsInOrderWithNullsWhereTheyWereWritten()
@@ -327,8 +327,8 @@ public class LoopReportContractTests
     [Fact]
     public void OptionalRecordsAreAppendedOnlyWhenPresent()
     {
-        JsonObject json = Report([], sway: new JsonObject { ["enabled"] = true }, particle: new JsonObject { ["kind"] = "p" }).ToJson();
-        Assert.Equal("sway_retime,loop_length_default", string.Join(",", json.Select(x => x.Key).TakeLast(2)));
+        JsonObject json = Report([], particle: new JsonObject { ["kind"] = "p" }).ToJson();
+        Assert.Equal("encoded_loop,loop_length_default", string.Join(",", json.Select(x => x.Key).TakeLast(2)));
         Assert.Equal("encoded_loop", Report([]).ToJson().Last().Key);
     }
 
@@ -358,9 +358,6 @@ public class LoopItemContractTests
         Assert.Equal("frames,seconds,total_retime_cost_percent,components,patches,source_period_warmup_frames,sprite_seam_phase,loop_length_source", Keys(json));
         Assert.Equal("""{"origin":"mismatch","after_one_period":"closed","basis":"float32 sprite frame table; frame 0 sits on the sprite frame-0 start boundary"}""",
             json["sprite_seam_phase"]!.ToJsonString());
-        JsonObject swayed = (warm with { LoopLengthSource = null,
-            SwayRetime = new CandidateSwayRetime(new SwayRetimeSolution(60, 2, 120, 2, 0, 0, []), 60, 60, 1, null) }).ToJson();
-        Assert.Equal("sway_retime", swayed.Last().Key);
         Assert.Equal("""[{"id":"c","cycles":3,"old_period_seconds":1,"new_period_seconds":1,"speed_multiplier":1,"delta_percent":0}]""", json["components"]!.ToJsonString());
         Assert.Equal("""[{"component":"v","kind":"video_rate","owner_layer_id":4,"rate_numerator":25,"rate_denominator":24,"old_value":1,"new_value":1.0416666666666667,"delta_percent":4.166666666666674}]""",
             json["patches"]!.ToJsonString());
@@ -529,13 +526,8 @@ public class LoopItemContractTests
             Keys(new ScriptTimeUnresolved(1, JsonValue.Create("b"), JsonValue.Create("time")).ToJson()));
         Assert.Equal("kind,rejected_candidate_count,detail", Keys(new SpriteSeamUnresolved(2).ToJson()));
         var shader = new ShaderTemporalUnresolved(1, 0, 0, "r", ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "d");
-        Assert.Equal("""{"kind":"UnsupportedShaderMechanism","owner_layer_id":1,"effect_index":0,"pass_index":0,"resource":"r","detail":"d","bounded_displacement":false,"mechanism":null}""",
+        Assert.Equal("""{"kind":"UnsupportedShaderMechanism","owner_layer_id":1,"effect_index":0,"pass_index":0,"resource":"r","detail":"d","mechanism":null}""",
             new ShaderLoopUnresolved(shader).ToJson().ToJsonString());
-        // 带文案的着色器条目：detail 原位换成文案的英文原文，文案本身只在 DetailMessage 上。
-        var keyed = new ShaderLoopUnresolved(shader with { Message = new Message("unresolved.script_time") });
-        Assert.Equal(MessageCatalog.RenderLegacy("unresolved.script_time"), keyed.ToJson()["detail"]!.GetValue<string>());
-        Assert.Equal("kind,owner_layer_id,effect_index,pass_index,resource,detail,bounded_displacement,mechanism", Keys(keyed.ToJson()));
-        Assert.Equal("unresolved.script_time", keyed.DetailMessage!.Key);
     }
 }
 

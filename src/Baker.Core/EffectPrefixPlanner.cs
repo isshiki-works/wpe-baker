@@ -36,16 +36,18 @@ internal static class EffectPrefixPlanner
                 effectShaders ??= EffectShaderIndex(originalScene, source, assets, ownerId);
                 JsonObject loop = AnalyzeIndexedPrefix(originalScene, source, assets, runtime, snapshotProperties,
                     ownerId, count, request, projection, effectShaders);
+                // 带缓变分量的前缀不提：前缀缓存要在自身周期上精确闭合、没有淡化，缓变项的漂移在 P 处闭合不了，
+                // 提了只会让最长前缀在接缝门上被拒、整案判不能；这个效果留实时，短一级的前缀照用。
                 if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 } candidates ||
-                    candidates[0]?["components"] is not JsonArray { Count: > 0 }) continue;
+                    candidates[0]?["components"] is not JsonArray { Count: > 0 } ||
+                    candidates[0]?["slow_components"] is JsonArray { Count: > 0 }) continue;
                 var cache = new JsonObject {
                     ["owner_layer_id"] = ownerId, ["prefix_effect_count"] = count,
                     ["terminal_effect_id"] = effect["id"]!.DeepClone(), ["source_image"] = owner["image"]!.DeepClone(),
                     ["loop"] = loop, ["fixed_user_properties"] = PrefixProperties(effects.Take(count), snapshotProperties),
                     // 这个前缀循环是在哪一档下求出来的：与 plan 顶层的 retime_profile 同一份值，
-                    // 单看一条缓存记录就能知道 preset 与 retime_budget_percent；phase_drift_cycles 在 loop 的 sway_retime 里，
-                    // 质量档两个上限的取舍在 loop 的 quality_ceiling_used 里。
-                    ["retime_profile"] = RetimeProfileJson.ToJson(profile, SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height)),
+                    // 单看一条缓存记录就能知道 preset 与 retime_budget_percent。
+                    ["retime_profile"] = RetimeProfileJson.ToJson(profile),
                     ["retained_puppet_animation"] = retainedPuppetAnimation,
                     ["prefix_capture_scope"] = retainedPuppetAnimation ? "pre_puppet_authored_effect_terminal" : "flat_authored_effect_terminal"
                 };

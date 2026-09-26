@@ -153,7 +153,7 @@ internal static class PlanWriter
             ["assets"] = Path.GetFullPath(request.Assets), ["analysis_directory"] = output,
             ["settings"] = PlanSettings.ToJson(verdict.RadianceClosure["hdr"]?.GetValue<bool>() == true ? request : request with { Postprocessing = null }),
             // 档位与两个高级覆盖合成的生效值，每个值带来源（preset/override/default）；求解器与 bake 读的都是这一份。
-            ["retime_profile"] = RetimeProfileJson.ToJson(RetimeProfileJson.Resolve(request), SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height)),
+            ["retime_profile"] = RetimeProfileJson.ToJson(RetimeProfileJson.Resolve(request)),
             ["output_resolution"] = resolution.ToJson(),
             ["analysis_device"] = analysisDevice.DeepClone(),
             ["canvas_width"] = canvasWidth, ["canvas_height"] = canvasHeight,

@@ -11,8 +11,6 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     int[]? RetainLiveRootIds = null, string VideoLayout = "full_frame",
     string LiveOverlayPlacement = "preserve", string LiveTextEffects = "preserve", string AudioEffects = "preserve",
     int[]? ExcludedLayerIds = null, string LoopPreference = "balanced", string VideoShell = "reject", string? ResolutionSource = null,
-    // 摆动改频（默认关）与它的循环长度上限（秒，null = 600）。默认值不写进 plan 的 settings，开关关闭时 plan 与旧版逐字节相同。
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SwayRetime = false,
     // 显式允许生成预计不省电的方案（--no-benefit allow）。默认 false 不写进 settings；true 时随 settings 走，烘焙期间重分析也保持。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool AllowNoBenefit = false,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? LoopLengthMaximumSeconds = null,
@@ -63,37 +61,15 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     };
 
     /// <summary>
-    /// 摆动改频参数：开关关闭时为 null（循环分析完全不走改频）。输出比例 = 输出像素 / 可见场景单位，只用于把摆动振幅
-    /// 换到输出像素（冻结项漂移的次序与报告），与 bake 的捕获像素换算同一口径。
-    /// 循环长度上限与通用求解器共用 <see cref="LoopLengthMaximumOf"/>。
-    /// analyze、布局降级重算与 bake 前刷新都走这里，三处结果一致。
-    /// </summary>
-    /// <param name="ceilingOverride">质量档对比另一个上限时用的秒数（见 <see cref="RetimeProfile.QualityComparisonSeconds"/>）；其余情况为 null。</param>
-    internal static SwayRetimeOptions? SwayRetimeOptionsOf(HybridAnalyzeRequest request, JsonObject projection, double? ceilingOverride = null)
-    {
-        if (!request.SwayRetime) return null;
-        double visibleWidth = projection["visible_width"] is JsonValue width && width.TryGetValue(out double w) && w > 0 ? w : request.Width;
-        double visibleHeight = projection["visible_height"] is JsonValue height && height.TryGetValue(out double h) && h > 0 ? h : request.Height;
-        // 速度门限按最终输出画布（OutputResolution 定下的 request 宽高，与振幅换算同一个画布）的短边换算。
-        return new(LoopLengthMaximumOf(request, ceilingOverride), request.Width / visibleWidth, request.Height / visibleHeight,
-            RetimeProfileJson.Resolve(request),
-            SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height));
-    }
-
-    /// <summary>
     /// 循环时长上限（秒）：档位兜底或 --loop-max-seconds。不按内嵌视频 2 GiB 收紧：分析时只有参考码率（现有成品里最高的那张）可估，
     /// 对一般场景高估一个数量级；成品大小由 bake 按这个场景自己的试编码外推、编码后按实际字节判（<see cref="EmbeddedVideoBudget"/>）。
-    /// 与摆动改频开关无关：着色器、动画、视频与摆动分量全部在这一个上限下求解，摆动改频的 Lmax 也取这个值。
     /// 默认值不写进 plan.settings（字段为 null），bake 按同一规则还原，分析与烘焙用的上限一致。
     /// </summary>
-    internal static double LoopLengthMaximumOf(HybridAnalyzeRequest request, double? ceilingOverride = null) =>
-        ceilingOverride ?? RetimeProfileJson.Resolve(request).LoopMaximumSeconds;
+    internal static double LoopLengthMaximumOf(HybridAnalyzeRequest request) =>
+        RetimeProfileJson.Resolve(request).LoopMaximumSeconds;
 
     /// <summary>
-    /// 循环分析的唯一入口：质量档在档位上限与 <see cref="RetimeProfile.QualityComparisonSeconds"/> 下各求一次，
-    /// 取可见摆动改动更小的那次（规则见 <see cref="RetimeProfile.ChooseQualityCeiling"/>），并把两次读数写进选中结果的
-    /// <c>quality_ceiling_used</c>；其余档位只求一次，行为与从前逐字节相同。
-    /// analyze、布局降级重算与 bake 前刷新都走这里，三处结果一致——否则 bake 会按另一个上限重算出别的循环。
+    /// 循环分析的唯一入口。analyze、布局降级重算与 bake 前刷新都走这里，三处结果一致。
     /// </summary>
     /// <param name="scene">每次求解取一份新的、已冻结时间属性的场景副本（求解会写候选与未解析项，不能共用）。</param>
     public static JsonObject AnalyzeLoopForProfile(Func<JsonObject> scene, ProjectSource source, string? assets, JsonObject runtime,
@@ -108,65 +84,30 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         JsonObject runtime, int[] bakedLayerIds, HybridAnalyzeRequest request, JsonObject projection, JsonArray? videoGroups)
     {
         RetimeProfile profile = RetimeProfileJson.Resolve(request);
-        (JsonObject Loop, UnresolvedNotes Notes) Solve(double? ceilingOverride)
+        (JsonObject Loop, UnresolvedNotes Notes) Solve()
         {
             JsonObject input = scene();
             // 缓存两段：plan 形态的 loop + unresolved 各条的文案与点名图层（UnresolvedNotes.Pack）。格式变了就换前缀，旧缓存不再命中。
             string key = "loop-v5-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
-                request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.SwayRetime, request.LoopPreference, ceilingOverride,
+                request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.LoopPreference,
                 request.FullLoopLayerIds);
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
                 scene, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
-                SwayRetimeOptionsOf(request, projection, ceilingOverride),
-                LoopLengthMaximumOf(request, ceilingOverride), videoGroups, steps, request.FullLoopLayerIds);
+                LoopLengthMaximumOf(request), videoGroups, steps, request.FullLoopLayerIds);
             return UnresolvedNotes.Unpack(AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
             {
                 LoopReport loop = Analyze(input, null);
                 // 与别的组共用时钟的组，自身周期不整除 L 时给 L 加"是它的倍数"的约束重解一次；
-                // 只在重解后候选、未解析项与摆动改频结论都不变差时采用，否则保持原解（这些组录 L 帧）。
+                // 只在重解后候选与未解析项都不变差时采用，否则保持原解（这些组录 L 帧）。
                 if (loop.GroupClockSteps.Count > 0 && Analyze(scene(), loop.GroupClockSteps) is { Candidates.Count: > 0 } stepped &&
-                    stepped.Unresolved.Count == loop.Unresolved.Count &&
-                    JsonNode.DeepEquals(stepped.SwayRetime?["status"], loop.SwayRetime?["status"]))
+                    stepped.Unresolved.Count == loop.Unresolved.Count)
                     loop = stepped;
                 return UnresolvedNotes.Pack(loop);
             }));
         }
-        var atPreset = Solve(null);
-        // 两个上限相同时解出来是同一次求解，再跑一遍纯属白跑，还会写出"600 s 那侧循环更短所以胜出"的误导记录。
-        double presetCeiling = LoopLengthMaximumOf(request);
-        double comparisonCeiling = LoopLengthMaximumOf(request, RetimeProfile.QualityComparisonSeconds);
-        if (!profile.ComparesQualityCeilings(presetCeiling) || Math.Abs(presetCeiling - comparisonCeiling) <= 1e-9) return atPreset;
-        var atComparison = Solve(RetimeProfile.QualityComparisonSeconds);
-        RetimeProfile.QualityCeilingReading presetReading = ReadCeiling(atPreset.Loop), comparisonReading = ReadCeiling(atComparison.Loop);
-        RetimeProfile.QualityCeilingChoice choice = RetimeProfile.ChooseQualityCeiling(presetReading, comparisonReading);
-        var chosen = choice.UsePresetCeiling ? atPreset : atComparison;
-        chosen.Loop["quality_ceiling_used"] = new JsonObject
-        {
-            ["seconds"] = choice.UsePresetCeiling ? presetReading.CeilingSeconds : comparisonReading.CeilingSeconds,
-            ["source"] = choice.UsePresetCeiling ? "preset" : "quality_comparison",
-            ["reason"] = choice.Reason,
-            ["tried"] = new JsonArray(CeilingJson(presetReading, "preset"), CeilingJson(comparisonReading, "quality_comparison"))
-        };
-        return chosen;
+        return Solve();
     }
-
-    /// <summary>一次求解的对比读数：生效上限、选中候选的可见摆动改动与帧数（没有候选或没有摆动解时改动为 null）。</summary>
-    private static RetimeProfile.QualityCeilingReading ReadCeiling(JsonObject loop)
-    {
-        JsonObject? candidate = (loop["candidates"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault();
-        double? visible = candidate?["sway_retime"] is JsonObject sway && sway["max_change_visible_percent"] is JsonValue change &&
-            change.TryGetValue(out double percent) ? percent : null;
-        ulong? frames = candidate?["frames"] is JsonValue value && value.TryGetValue(out ulong count) ? count : null;
-        double ceiling = loop["maximum_seconds"] is JsonValue seconds && seconds.TryGetValue(out double limit) ? limit : 0;
-        return new(ceiling, visible, frames);
-    }
-
-    private static JsonNode CeilingJson(RetimeProfile.QualityCeilingReading reading, string source) => new JsonObject
-    {
-        ["source"] = source, ["ceiling_seconds"] = reading.CeilingSeconds,
-        ["max_change_visible_percent"] = reading.VisibleChangePercent, ["frames"] = reading.Frames
-    };
 
     /// <summary>给候选表补上名次与计划选中项：候选表首项就是 bake 会用的那个。</summary>
     internal static void AnnotateLoopCandidates(JsonObject loop)

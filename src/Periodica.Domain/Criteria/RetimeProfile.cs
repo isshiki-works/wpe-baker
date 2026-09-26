@@ -2,14 +2,13 @@ namespace Periodica.Domain;
 
 /// <summary>
 /// 三档预设：档位给的是"允许多大的观感改动"，循环长度是求解结果（用户 2026-09-18 03:15 定，样片见 sway-budget-scan.md §3）。
-/// 一个百分比同时当摆动可见项预算与通用分量调速预算；长度上限只是兜底，真正压短 L 的是预算。
+/// 一个百分比当通用分量调速预算；长度上限只是兜底，真正压短 L 的是预算。
 /// 预设值来自 27 案五档扫描（同报告 §1.2、§4）：
 /// - 效率 5%：相对 3% 中位再缩 1.25 倍，单槽 9.7 → 7.4 h；只有 13 案真能吃到 4% 以上。
 /// - 平衡 3%：第一条能对全部 27 案兑现的线（最难的 3516174947 在 600 s 内的最小可见改动就是 2.71%）。
 /// - 质量：不设百分比门槛，求解器按"可见项改动最小"取解（规则 v2 的原目标）。
 /// - v1.0.2 三档默认长度上限统一为 600 s；L 只能取 base 周期的整数倍，19 案的 P 本身就 50–180 s，
 ///   60 s 上限下 27 案只有 1 案有解。
-/// 圈数下限（最慢可见项 ≥ 3 圈且 L ≥ 60 s）与速度偏差两道闸不是档位旋钮，写在 <see cref="SwayRecurrenceSolver"/> 里，三档相同。
 /// </summary>
 /// <param name="Preset">档位名；null 表示调用方没选档（旧 plan、旧接口），按"不设预算 + 600 s"的旧行为走。</param>
 /// <param name="BudgetPercent">观感改动预算（百分比）；null = 不设门槛，取改动最小的解。</param>
@@ -41,23 +40,6 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
 
     /// <summary>没选档时的循环长度上限（秒），与 --loop-max-seconds 的默认一致。</summary>
     public const double DefaultLoopMaximumSeconds = CommonLoopSolver.DefaultLoopLengthMaximumSeconds;
-
-    /// <summary>
-    /// 质量档要额外试一次的循环长度上限（秒）。
-    /// 起因（2026-09-18 27 案实测）：上限不只是摆动求解器的 Lmax，它同时决定通用求解器生成哪些候选 P，
-    /// 而摆动只能在选中候选的整数倍上闭合。阿米娅在 600 s 上限下有 4 个候选（P = 300 s）、可见改动 0.53%，
-    /// 放到 1200 s 上限后只剩 1 个候选（P = 700 s）、可见改动反而涨到 0.91%——质量档"改动最小"的目标被上限口径破坏了。
-    /// 所以质量档在这个上限与档位上限下各求一次，取可见改动更小的那次。
-    /// </summary>
-    public const double QualityComparisonSeconds = 600;
-
-    /// <summary>
-    /// 这一档要不要在两个上限下各求一次：只有质量档，且这一案的生效上限确实比 600 s 长时才值得。
-    /// 两次求解的上限相同时逐位相同：白跑一次完整求解，还会走 ShorterLoop 分支写出
-    /// source=quality_comparison 的误导记录。生效上限相等时调用方不跑第二次。
-    /// </summary>
-    public bool ComparesQualityCeilings(double effectiveMaximumSeconds) =>
-        Preset == Quality && effectiveMaximumSeconds > QualityComparisonSeconds + 1e-9;
 
     public static bool IsKnownPreset(string value) => value is Efficiency or Balanced or Quality or Compatibility;
 
@@ -102,37 +84,5 @@ public sealed record RetimeProfile(string? Preset, double? BudgetPercent, double
         string budgetSource = budgetOverride is not null ? FromOverride : preset is null ? FromDefault : FromPreset;
         string maximumSource = loopMaximumOverride is not null ? FromOverride : preset is null ? FromDefault : FromPreset;
         return new(preset, budget, budget ?? commonFallbackPercent, maximum, budgetSource, maximumSource);
-    }
-
-    /// <summary>一次求解在某个上限下的读数：生效上限秒数、选中候选的可见摆动改动（没有摆动解时为 null）与帧数。</summary>
-    public readonly record struct QualityCeilingReading(double CeilingSeconds, double? VisibleChangePercent, ulong? Frames);
-
-    /// <summary>选中的那次求解，以及为什么选它。</summary>
-    public readonly record struct QualityCeilingChoice(bool UsePresetCeiling, string Reason)
-    {
-        /// <summary>可见改动更小。</summary>
-        public const string SmallerVisibleChange = "smaller_visible_change";
-        /// <summary>可见改动相同，取更短的循环。</summary>
-        public const string ShorterLoop = "shorter_loop";
-        /// <summary>只有这一侧解出了摆动改频。</summary>
-        public const string OnlySolution = "only_solution";
-        /// <summary>两侧都没有摆动解，可见改动无从比较，按档位上限走。</summary>
-        public const string NoSwaySolution = "no_sway_solution";
-    }
-
-    /// <summary>
-    /// 质量档两个上限之间的取舍：可见改动更小者胜；一样小就取更短的循环（同样的观感下不必多烘一倍的帧）；
-    /// 只有一侧解出摆动就取那一侧；两侧都没有摆动解时按档位上限走，不因为这条规则改变原本的结果。
-    /// </summary>
-    public static QualityCeilingChoice ChooseQualityCeiling(QualityCeilingReading atPreset, QualityCeilingReading atComparison)
-    {
-        if (atPreset.VisibleChangePercent is not double preset)
-            return new(atComparison.VisibleChangePercent is null, atComparison.VisibleChangePercent is null
-                ? QualityCeilingChoice.NoSwaySolution : QualityCeilingChoice.OnlySolution);
-        if (atComparison.VisibleChangePercent is not double comparison) return new(true, QualityCeilingChoice.OnlySolution);
-        if (Math.Abs(preset - comparison) > 1e-9)
-            return new(preset < comparison, QualityCeilingChoice.SmallerVisibleChange);
-        ulong presetFrames = atPreset.Frames ?? ulong.MaxValue, comparisonFrames = atComparison.Frames ?? ulong.MaxValue;
-        return new(presetFrames < comparisonFrames, QualityCeilingChoice.ShorterLoop);
     }
 }

@@ -912,7 +912,10 @@ std::string OfflineSession::Impl::describeScene() const {
                         : std::string("null"))
                 << ",\"materials\":[";
             bool first_material = true;
-            auto append_materials = [&](SceneNode* render_node, std::string_view role) {
+            // effect/pass：scene.json 里 effects 的下标与效果定义里带 material 的 pass 序号（同 C# ShaderPeriodAnalysis.EffectPasses）；
+            // 引擎补的效果或节点不输出
+            auto append_materials = [&](SceneNode* render_node, std::string_view role, std::int32_t effect_index = -1,
+                                        std::int32_t pass_index = -1) {
             if (auto* mesh = render_node->Mesh(); mesh != nullptr) for (const auto& material : mesh->MaterialSlots()) {
                 if (!material) continue;
                 if (!first_material) out << ',';
@@ -942,8 +945,10 @@ std::string OfflineSession::Impl::describeScene() const {
                     }
                 }
                 out << "{\"shader\":" << Dump(NJson(material->customShader.shader ? material->customShader.shader->name : std::string()))
-                    << ",\"role\":" << Dump(NJson(role))
-                    << ",\"blend\":" << static_cast<int>(material->blenmode)
+                    << ",\"role\":" << Dump(NJson(role));
+                if (effect_index >= 0 && pass_index >= 0)
+                    out << ",\"effect\":" << effect_index << ",\"pass\":" << pass_index;
+                out << ",\"blend\":" << static_cast<int>(material->blenmode)
                     << ",\"uses_audio_spectrum\":" << (uses_audio_spectrum ? "true" : "false")
                     << ",\"uses_system_media_thumbnail\":"
                     << (uses_system_media_thumbnail ? "true" : "false")
@@ -969,7 +974,9 @@ std::string OfflineSession::Impl::describeScene() const {
             // 也得报出它读的 _rt_link_<id>，否则分析看不到链接，会把被它读的隐藏层省略掉（3152793212）。
             auto append_effect = [&](const std::shared_ptr<SceneImageEffect>& effect) {
                 if (effect) for (auto& effect_node : effect->nodes)
-                    if (effect_node.sceneNode) append_materials(effect_node.sceneNode.as_ptr(), "effect");
+                    if (effect_node.sceneNode)
+                        append_materials(effect_node.sceneNode.as_ptr(), "effect", effect->authored_ordinal,
+                                         effect_node.authored_pass);
             };
             if (node->HasLayer()) {
                 auto& layer = node->Layer();

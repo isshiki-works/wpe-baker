@@ -30,7 +30,7 @@ public class SpriteSeamRejectionTests
             new JsonObject { ["runtime_animation_periods"] = new JsonArray { new JsonObject {
                 ["source_owner_layer_id"] = 1, ["mechanism"] = "sprite", ["track_name"] = "Drift", ["duration_seconds"] = 0.3,
                 ["looping"] = true, ["event_driven"] = false, ["confidence"] = "high" } } },
-            [1], 60, 1, 2, CommonLoopPreference.Balanced, null, ceilingSeconds, null).ToJson();
+            [1], 60, 1, 2, CommonLoopPreference.Balanced, ceilingSeconds, null).ToJson();
 
         // 全拒：唯一的候选被丢掉，求解器本身有解所以没有 no_candidate_reason，未解析项只有这一条、被拒数 1。
         JsonObject rejected = Analyze(0.5);

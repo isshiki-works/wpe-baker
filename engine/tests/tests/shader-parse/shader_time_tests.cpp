@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -42,11 +43,12 @@ struct Case {
     std::string                               shader;
     std::map<std::string, std::string>        combos;
     std::map<std::string, std::vector<float>> values; // 材质常量，其余取着色器默认值
+    std::string                               vert, frag; // 非空时用这段源码，不读 assets
 };
 
 st::Signature Analyze(const Case& c) {
     const auto dir = Assets() / "effects" / c.effect / "shaders" / "effects";
-    if (! std::filesystem::exists(dir / (c.shader + ".frag"))) {
+    if (c.frag.empty() && ! std::filesystem::exists(dir / (c.shader + ".frag"))) {
         ADD_FAILURE() << "missing " << (dir / (c.shader + ".frag")).string();
         return {};
     }
@@ -56,10 +58,10 @@ st::Signature Analyze(const Case& c) {
     for (const auto& [k, v] : c.combos) desc.input_combos[k] = v;
     desc.stages.push_back(owe::SceneShaderVariantStage { .stage      = owe::ShaderType::VERTEX,
                                                          .source_key = "/assets/shaders/effects/" + c.shader + ".vert",
-                                                         .source     = ReadText(dir / (c.shader + ".vert")) });
+                                                         .source     = c.frag.empty() ? ReadText(dir / (c.shader + ".vert")) : c.vert });
     desc.stages.push_back(owe::SceneShaderVariantStage { .stage      = owe::ShaderType::FRAGMENT,
                                                          .source_key = "/assets/shaders/effects/" + c.shader + ".frag",
-                                                         .source     = ReadText(dir / (c.shader + ".frag")) });
+                                                         .source     = c.frag.empty() ? ReadText(dir / (c.shader + ".frag")) : c.frag });
     owe::fs::VFS vfs;
     auto         mount = owe::fs::make_physical_fs(owe::fs::ToPath(Assets().string()));
     EXPECT_TRUE(mount.is_ok());
@@ -93,6 +95,10 @@ void ExpectPeriod(const st::Signature& sig, double seconds) {
 
 constexpr double kTau = 2 * std::numbers::pi;
 
+bool HasKnob(const st::Term& t, const std::string& uniform) {
+    return std::any_of(t.knobs.begin(), t.knobs.end(), [&](const st::Knob& k) { return k.uniform == uniform; });
+}
+
 class ShaderTime : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -102,7 +108,7 @@ protected:
 
 } // namespace
 
-// 方程库 shake：2π/|speed|
+// 方程库 shake：2π/|speed|。frac(t/M_PI_2) 与 cos(t) 按 π 次数同属 π 类（M_PI_2 是 2π 字面量），只有一个周期
 TEST_F(ShaderTime, ShakeMatchesEquation) {
     ExpectPeriod(Analyze({ "shake", "shake", { { "NOISE", "0" } }, { { "g_Speed", { 2.5f } } } }), kTau / 2.5);
 }
@@ -144,14 +150,146 @@ TEST_F(ShaderTime, WaterRippleMatchesEquation) {
 TEST_F(ShaderTime, CloudsScrollPeriod) {
     // 两层云按 repeat 滚动（默认 speed 0.01/-0.02、scale 1.3/0.5，x 轴再乘 16/9）：
     // 四条轴周期 1125/26、1000/13、100、225/4，LCM 9000 s。不给 g_Texture0Resolution 时系数不定，判不周期。
-    ExpectPeriod(Analyze({ "clouds", "clouds", {}, { { "g_Texture0Resolution", { 1920, 1080, 1920, 1080 } } } }), 9000);
+    const auto sig = Analyze({ "clouds", "clouds", {}, { { "g_Texture0Resolution", { 1920, 1080, 1920, 1080 } } } });
+    ExpectPeriod(sig, 9000);
+    // (uv + t·speed)·scale：scale 同时缩放纹理坐标，不是旋钮；speed 是
+    ASSERT_FALSE(sig.terms.empty()) << st::ToJson(sig);
+    for (const auto& t : sig.terms) {
+        EXPECT_FALSE(HasKnob(t, "g_CloudScales")) << st::ToJson(sig);
+        EXPECT_TRUE(HasKnob(t, "g_CloudSpeeds")) << st::ToJson(sig);
+    }
 }
 
 TEST_F(ShaderTime, GodraysNoiseScrollPeriod) {
     // 噪声两次查表：速率 noisespeed·noisescale 与其一半，默认 0.15·3 → 周期 20/9 与 40/9，LCM 40/9
-    ExpectPeriod(Analyze({ "godrays", "godrays_downsample2", { { "NOISE", "1" } }, {} }), 40.0 / 9);
+    const auto sig = Analyze({ "godrays", "godrays_downsample2", { { "NOISE", "1" } }, {} });
+    ExpectPeriod(sig, 40.0 / 9);
+    // uv + t·0.5·speed 的 0.5 与 speed 是旋钮；之后整体 *= noisescale 连纹理坐标一起缩放，不是
+    for (const auto& t : sig.terms) EXPECT_FALSE(HasKnob(t, "g_NoiseScale")) << st::ToJson(sig);
+    EXPECT_TRUE(std::any_of(sig.terms.begin(), sig.terms.end(), [](const st::Term& t) {
+        return HasKnob(t, "g_NoiseSpeed") && std::any_of(t.knobs.begin(), t.knobs.end(), [](const st::Knob& k) {
+                   return k.uniform.empty() && k.literal == 0.5f;
+               });
+    })) << st::ToJson(sig);
 }
 
 TEST_F(ShaderTime, ShineCastRotationPeriod) {
     ExpectPeriod(Analyze({ "shine", "shine_cast", {}, { { "g_Speed", { 0.2f } } } }), kTau / 0.2);
+}
+
+// 精灵帧索引 int(t·2) % 5 与 mod(floor(t·2), 5)：取整是阶梯，再取模按周期 5/2 s（不是"线性时间经过取整"的不周期）
+TEST_F(ShaderTime, IntegerModFrameIndexPeriod) {
+    const std::string vert = "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }\n";
+    for (const char* index : { "float(int(g_Time * 2.0) % 5)", "mod(floor(g_Time * 2.0), 5.0)" }) {
+        Case c { "", "imod_frame", {}, {} };
+        c.vert = vert;
+        c.frag = std::string("uniform float g_Time;\nvoid main() { gl_FragColor = vec4(") + index + " / 5.0, 0.0, 0.0, 1.0); }\n";
+        ExpectPeriod(Analyze(c), 2.5);
+    }
+}
+
+// 时间加偏移再取整、再取模：偏移不改周期，棋盘格 mod(floor(uv.x − t) + floor(uv.y), 2) 周期 2 s；
+// mod(0.03·t, 5) 展开成 a − b·floor(a/b) 时系数在双精度下剩 1 ulp，不是漂移，周期 5/0.03 s
+TEST_F(ShaderTime, OffsetFloorThenModPeriod) {
+    const std::string vert = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\n"
+                             "void main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }\n";
+    const std::pair<const char*, double> cases[] = { { "mod(floor(v_TexCoord.x - g_Time) + floor(v_TexCoord.y), 2.0)", 2 },
+                                                      { "mod(floor(g_Time + 0.25), 3.0)", 3 },
+                                                      { "mod(floor(0.75 - g_Time), 3.0)", 3 },
+                                                      { "mod(0.03 * g_Time, 5.0)", 5 / double(0.03f) } };
+    for (const auto& [expr, period] : cases) {
+        Case c { "", "offset_floor_mod", {}, {} };
+        c.vert = vert;
+        c.frag = std::string("varying vec2 v_TexCoord;\nuniform float g_Time;\nvoid main() { gl_FragColor = vec4(") + expr + ", 0.0, 0.0, 1.0); }\n";
+        ExpectPeriod(Analyze(c), period);
+    }
+}
+
+// 循环次数只随 mod(0.03·t, 1) 变化：输出是周期量的确定函数，周期 1/0.03 s（不是"循环次数随时间变"的不周期）
+TEST_F(ShaderTime, LoopCountPeriodic) {
+    Case c { "", "loop_count_periodic", {}, {} };
+    c.vert = "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }\n";
+    c.frag = "uniform float g_Time;\nvoid main() {\n  float n = mod(0.03 * g_Time, 1.0) * 8.0;\n  float acc = 0.0;\n"
+             "  for (float i = 0.0; i < n; i += 1.0) acc += 0.1;\n  gl_FragColor = vec4(acc, 0.0, 0.0, 1.0);\n}\n";
+    ExpectPeriod(Analyze(c), 1 / double(0.03f));
+}
+
+// 与线性时间比较的分支、阈值有界（常量，fract(uv) 这类逐像素有界量）：过 settle 时刻后固定，是暂态不是"不能"；
+// settle 上界 = 差的余量范围 / 系数（系数为负同理），固定之后 sin(t) 照常给周期
+TEST_F(ShaderTime, BoundedThresholdBranchSettles) {
+    const std::string vert = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\n"
+                             "void main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }\n";
+    const std::pair<const char*, double> cases[] = { { "g_Time * 0.5 > 3.0", 6 },
+                                                      { "1.0 - 0.25 * g_Time > fract(v_TexCoord.x * 7.0) * 2.0", 4 } };
+    for (const auto& [cond, settle] : cases) {
+        Case c { "", "bounded_branch", {}, {} };
+        c.vert = vert;
+        c.frag = std::string("varying vec2 v_TexCoord;\nuniform float g_Time;\nvoid main() {\n  float m = 0.0;\n  if (") + cond +
+                 ") m = 1.0;\n  gl_FragColor = vec4(m, sin(g_Time), 0.0, 1.0);\n}\n";
+        const auto sig = Analyze(c);
+        ExpectPeriod(sig, kTau);
+        EXPECT_NEAR(sig.settle, settle, 1e-9) << st::ToJson(sig);
+    }
+}
+
+// 阈值含 tan(t) 的极点：每个周期都越过线性时间、变号相位漂移，分支永不固定，才是"不能"
+TEST_F(ShaderTime, UnboundedThresholdBranchIsProof) {
+    Case c { "", "unbounded_branch", {}, {} };
+    c.vert = "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }\n";
+    c.frag = "uniform float g_Time;\nvoid main() {\n  float m = 0.0;\n  if (g_Time > tan(g_Time)) m = 1.0;\n"
+             "  gl_FragColor = vec4(m, 0.0, 0.0, 1.0);\n}\n";
+    const auto sig = Analyze(c);
+    EXPECT_EQ(sig.kind, "aperiodic") << st::ToJson(sig);
+    EXPECT_TRUE(std::any_of(sig.reasons.begin(), sig.reasons.end(),
+                            [](const std::string& r) { return r.starts_with("compare_with_unbounded_time"); }))
+        << st::ToJson(sig);
+}
+
+// foliagesway（MODE 1）的写法：每个系数一项；后三项各带自己的字面量旋钮和 g_Speed 旋钮，供 C# 改写调速
+TEST_F(ShaderTime, SwayTermsCarryKnobs) {
+    Case c { "", "sway_terms", {}, { { "g_Speed", { 1.0f } }, { "g_Phase", { 0.0f } } } };
+    c.vert = "attribute vec3 a_Position;\nuniform float g_Time;\nuniform float g_Speed;\nuniform float g_Phase;\n"
+             "void main() { gl_Position = vec4(a_Position, 1.0) + "
+             "sin(g_Phase + g_Speed * g_Time * vec4(1, -0.16161616, 0.0083333, -0.00019841)); }\n";
+    c.frag = "void main() { gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); }\n";
+    const auto sig = Analyze(c);
+    ASSERT_EQ(sig.terms.size(), 4u) << st::ToJson(sig);
+    for (const float literal : { -0.16161616f, 0.0083333f, -0.00019841f }) {
+        auto has = [](const st::Term& t, auto&& pred) { return std::any_of(t.knobs.begin(), t.knobs.end(), pred); };
+        const auto it = std::find_if(sig.terms.begin(), sig.terms.end(), [&](const st::Term& t) {
+            return has(t, [&](const st::Knob& k) {
+                       return k.stage == "vert" && k.uniform.empty() && std::abs(k.literal - literal) <= 1e-7f * std::abs(literal);
+                   }) &&
+                   has(t, [](const st::Knob& k) { return k.stage == "vert" && k.uniform == "g_Speed" && ! k.inverse; });
+        });
+        ASSERT_NE(it, sig.terms.end()) << literal << ' ' << st::ToJson(sig);
+        EXPECT_EQ(it->pi, 1) << st::ToJson(sig);
+        EXPECT_NEAR(it->seconds, kTau / std::abs(literal), it->seconds * 1e-6) << st::ToJson(sig);
+    }
+}
+
+// 旧写法的存储缓冲（Uniform + BufferBlock）同 StorageBuffer 按副作用写入报原因；普通 uniform 块（Block）不算
+TEST(ShaderTimeSpirv, BufferBlockIsSideEffect) {
+    auto module = [](unsigned int decoration) {
+        return std::vector<std::vector<unsigned int>> { {
+            0x07230203u, 0x00010000u, 0, 9, 0,
+            (2u << 16) | 17, 1,                    // OpCapability Shader
+            (3u << 16) | 14, 0, 1,                 // OpMemoryModel Logical GLSL450
+            (5u << 16) | 15, 4, 1, 0x6E69616Du, 0, // OpEntryPoint Fragment %1 "main"
+            (4u << 16) | 5, 1, 0x6E69616Du, 0,     // OpName %1 "main"
+            (3u << 16) | 71, 4, decoration,        // OpDecorate %4 Block(2) / BufferBlock(3)
+            (2u << 16) | 19, 2,                    // %2 = OpTypeVoid
+            (3u << 16) | 33, 3, 2,                 // %3 = OpTypeFunction %2
+            (3u << 16) | 22, 5, 32,                // %5 = OpTypeFloat 32
+            (3u << 16) | 30, 4, 5,                 // %4 = OpTypeStruct %5
+            (4u << 16) | 32, 6, 2, 4,              // %6 = OpTypePointer Uniform %4
+            (4u << 16) | 59, 6, 7, 2,              // %7 = OpVariable %6 Uniform
+            (5u << 16) | 54, 2, 1, 0, 3,           // %1 = OpFunction %2 None %3
+            (2u << 16) | 248, 8,                   // %8 = OpLabel
+            (1u << 16) | 253,                      // OpReturn
+            (1u << 16) | 56 } };                   // OpFunctionEnd
+    };
+    const auto buffer = st::Analyze(module(3), {});
+    EXPECT_EQ((buffer.reasons.empty() ? std::string() : buffer.reasons[0]), "unsupported_side_effect") << st::ToJson(buffer);
+    EXPECT_EQ(st::Analyze(module(2), {}).kind, "static");
 }

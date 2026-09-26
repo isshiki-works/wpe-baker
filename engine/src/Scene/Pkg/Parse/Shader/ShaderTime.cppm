@@ -6,8 +6,10 @@ module;
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <compare>
 #include <cstdio>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <initializer_list>
@@ -29,7 +31,8 @@ export module wescene.pkg.parse:shader_time;
 // 抽象域逐分量：与时间无关（可带已知常数）；a·t + 周期部分（a 取可能系数的集合）；证明不周期。
 // 规则：sin/cos/tan/fract/mod 作用在线性式上得周期 2π/a、π/a、1/a、m/a；周期值做任何运算仍是周期，
 // 最后按可公度类取 LCM；线性式不经周期函数流到输出 = 漂移（系数 0 除外）；采样坐标线性滚动时 repeat 轴周期 1/|v|，
-// clamp 轴过某时刻后静止（记为暂态）；与线性 t 比较的分支、随时间变化的循环条件判不周期；
+// clamp 轴过某时刻后静止（记为暂态）；与线性 t 比较（含 switch 按线性 t 选分支）看差的范围：有界则过 settle 时刻后固定
+// （暂态，给出时刻上界），含 tan(线性 t) 的极点则永不固定、判不周期，范围说不清只报没推下去；
 // 周期比为无理数时各类分别输出，交给 C# 的调速逻辑。
 export namespace owe::shader_time
 {
@@ -59,17 +62,37 @@ struct Inputs {
 
 struct Period {
     double    seconds { 0 };
-    long long num { 0 }; // seconds = num/den（pi 时再乘 π）；num = 0：不是简单有理数或 LCM 溢出，单独成类
+    long long num { 0 }; // seconds = num/den（pi 时再乘 π）；num = 0：不是简单有理数、LCM 溢出或 π 次数不是 0/1，单独成类
     long long den { 0 };
     bool      pi { false };
+};
+
+// 调频旋钮：t 的系数里一个可改写的直接乘法因子（着色器浮点字面量或材质 uniform）
+struct Knob {
+    std::string stage;   // vert | frag
+    std::string uniform; // 空 = 字面量
+    float       literal { 0 };
+    bool        inverse { false }; // 作为除数出现
+    auto        operator<=>(const Knob&) const = default;
+};
+
+// 逐项周期：seconds = num/den·π^pi；pi 空 = π 次数未知；num = 0：化不成有理数
+struct Term {
+    double             seconds { 0 };
+    long long          num { 0 };
+    long long          den { 0 };
+    std::optional<int> pi;
+    std::vector<Knob>  knobs;
 };
 
 struct Signature {
     std::string              kind { "static" }; // static | periodic | aperiodic
     std::vector<Period>      periods;           // 每个可公度类一个（类内已取 LCM）；多于一个 = 周期比无理
+    std::vector<Term>        terms;             // 每个不同的 (周期, π 次数, 旋钮集合) 一项
     std::vector<std::string> reasons;           // 不周期的原因与出处
     std::vector<std::string> external;          // 随时间变化的外部输入（音频、指针、日时、动画化的材质值）
     bool                     transient { false }; // clamp 采样的滚动在某时刻后停住：稳态之前有一段不周期
+    double                   settle { -1 };       // 与线性时间比较的分支在此时刻（秒，上界）之后固定；< 0：没有这种分支
 };
 
 Signature   Analyze(std::span<const std::vector<unsigned int>> stages, const Inputs& inputs);
@@ -87,23 +110,83 @@ constexpr std::size_t kMaxPeriods = 32;
 constexpr std::size_t kMaxPasses  = 48;
 constexpr std::size_t kMaxComps   = 256;
 constexpr double      kPi         = std::numbers::pi;
+constexpr double      kInf        = HUGE_VAL;
+
+constexpr int         kNoPi       = 1 << 20; // π 次数未知
 
 bool Near(double a, double b) { return a == b || std::abs(a - b) <= 1e-9 * std::max(std::abs(a), std::abs(b)); }
-void AddUnique(std::vector<double>& v, double x) {
-    for (double y : v)
-        if (Near(x, y)) return;
+int  PiAdd(int a, int b) { return a == kNoPi || b == kNoPi ? kNoPi : a + b; }
+int  PiNeg(int a) { return a == kNoPi ? kNoPi : -a; }
+
+using Knobs = std::vector<Knob>; // 有序、去重
+Knobs Union(Knobs a, const Knobs& b) {
+    a.insert(a.end(), b.begin(), b.end());
+    std::sort(a.begin(), a.end());
+    a.erase(std::unique(a.begin(), a.end()), a.end());
+    return a;
+}
+Knobs Common(const Knobs& a, const Knobs& b) {
+    Knobs r;
+    std::set_intersection(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(r));
+    return r;
+}
+
+// 浮点字面量是否为 float32(k·π/n)（π 次数 +1）或 float32(k/(n·π))（−1），n ≤ 12、|k| ≤ 48 且已约分：
+// 认出 M_PI、M_PI_2（WE 里是 2π）、M_PI_HALF、1/π 这类写法，返回精确值与次数
+std::optional<std::pair<double, int>> PiLiteral(float f) {
+    for (int n = 1; n <= 12; ++n)
+        for (int k = -48; k <= 48; ++k) {
+            if (k == 0 || std::gcd(k, n) != 1) continue;
+            if (float(k * kPi / n) == f) return std::pair { k * kPi / n, 1 };
+            if (float(k / (n * kPi)) == f) return std::pair { k / (n * kPi), -1 };
+        }
+    return std::nullopt;
+}
+
+// t 的一个系数：值、π 次数、直接乘法因子里可改写的来源
+struct Rate {
+    double v { 0 };
+    int    pi { 0 };
+    Knobs  knobs;
+    bool   operator==(const Rate&) const = default;
+};
+// 同值合并：次数不同记未知，旋钮取交集（只留各路径都有的因子）
+void AddUnique(std::vector<Rate>& v, const Rate& x) {
+    for (Rate& y : v)
+        if (Near(x.v, y.v)) {
+            if (y.pi != x.pi) y.pi = kNoPi;
+            y.knobs = Common(y.knobs, x.knobs);
+            return;
+        }
     v.push_back(x);
 }
-// 周期带上来源的 π 次数：sin/cos/tan 产生的按 π 类、fract/mod/滚动按有理类，归类时先按来源试
+// x + sign·y：一边为 0 取另一边的次数与旋钮；否则次数不同即未知、旋钮取交集
+Rate Sum(const Rate& x, const Rate& y, double sign) {
+    if (x.v == 0) return Rate { sign * y.v, y.pi, y.knobs };
+    if (y.v == 0) return x;
+    // 抵消：mod 展开的 a − b·floor(a/b) 里系数 r − b·(r/b) 在双精度下常剩 1 ulp，那不是漂移
+    if (Near(x.v, -sign * y.v)) return Rate {};
+    return Rate { x.v + sign * y.v, x.pi == y.pi ? x.pi : kNoPi, Common(x.knobs, y.knobs) };
+}
+
+// 周期带上 π 次数（函数周期的次数 − 系数的次数）与系数的旋钮；归类只按次数
 struct Per {
     double s { 0 };
     int    pi { 0 };
+    Knobs  knobs;
     bool   operator==(const Per&) const = default;
 };
-void AddUnique(std::vector<Per>& v, Per x) {
+void AddUnique(std::vector<Per>& v, const Per& x) {
     for (const Per& y : v)
-        if (y.pi == x.pi && Near(x.s, y.s)) return;
+        if (y.pi == x.pi && Near(x.s, y.s) && y.knobs == x.knobs) return;
     v.push_back(x);
+}
+// 周期个数上限按 (周期, 次数) 计，同一周期只是旋钮不同不多占
+std::size_t Distinct(const std::vector<Per>& v) {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < v.size(); ++i)
+        n += std::none_of(v.begin(), v.begin() + long(i), [&](const Per& y) { return y.pi == v[i].pi && Near(y.s, v[i].s); });
+    return n;
 }
 void AddUnique(std::vector<std::string>& v, const std::string& x) {
     if (std::find(v.begin(), v.end(), x) == v.end()) v.push_back(x);
@@ -112,27 +195,51 @@ void AddUnique(std::vector<std::string>& v, const std::string& x) {
 struct Comp {
     bool                     known { false }; // 只在与时间无关时成立
     double                   value { 0 };
-    std::vector<double>      rates { 0.0 }; // t 的可能系数（含 0）
+    int                      pi { 0 };           // known 时：值的 π 次数
+    Knobs                    knobs;              // known 时：值的直接乘法因子里可改写的来源
+    std::vector<Rate>        rates { Rate {} };  // t 的可能系数（含 0）
     bool                     rate_unknown { false };
+    // 含非时间部分（纹理坐标、非零常量、周期函数结果等）：再乘的因子会连带缩放静态部分，改它会变观感，不记旋钮
+    bool                     mixed { true };
     std::vector<Per>         periods;
     std::vector<std::string> external;
     std::string              aperiodic;
     bool                     transient { false };
+    // 去掉线性时间项后余下部分（常量、逐像素量、周期量）的取值范围；无穷 = 说不清
+    double                   lo { -kInf };
+    double                   hi { kInf };
+    bool                     poles { false }; // 余下部分含 tan(线性时间) 这种每周期都趋于 ±∞ 的项，其余有界
+    double                   settle { -1 };   // 与线性时间比较的分支在此时刻（秒）之后固定；< 0：没有
 
     bool operator==(const Comp&) const = default;
     bool Linear() const {
-        return rate_unknown || std::any_of(rates.begin(), rates.end(), [](double r) { return r != 0; });
+        return rate_unknown || std::any_of(rates.begin(), rates.end(), [](const Rate& r) { return r.v != 0; });
     }
-    bool Timed() const { return Linear() || ! periods.empty() || ! external.empty() || ! aperiodic.empty(); }
+    bool Timed() const { return Linear() || ! periods.empty() || ! external.empty() || ! aperiodic.empty() || settle >= 0; }
+    bool Bounded() const { return std::isfinite(lo) && std::isfinite(hi); }
+    Rate Value() const { return Rate { value, pi, knobs }; }
 };
 using Val   = std::vector<Comp>;
 using State = std::map<std::uint32_t, Val>;
 
-Comp Known(double v) {
+Comp Known(double v, int pi = 0) {
     Comp c;
     c.known = true;
     c.value = v;
+    c.pi    = pi;
+    c.mixed = v != 0;
+    if (std::isfinite(v)) c.lo = c.hi = v;
     return c;
+}
+
+// 1/b：次数取反，旋钮翻成除数
+Comp Inverse(const Comp& b) {
+    Comp r = Known(1 / b.value, PiNeg(b.pi));
+    for (Knob k : b.knobs) {
+        k.inverse = ! k.inverse;
+        r.knobs   = Union(r.knobs, { k });
+    }
+    return r;
 }
 
 void MergeTags(Comp& dst, const Comp& src) {
@@ -140,22 +247,35 @@ void MergeTags(Comp& dst, const Comp& src) {
     for (const auto& e : src.external) AddUnique(dst.external, e);
     if (dst.aperiodic.empty()) dst.aperiodic = src.aperiodic;
     dst.transient = dst.transient || src.transient;
+    dst.settle    = std::max(dst.settle, src.settle);
 }
 
 void Normalize(Comp& c) {
     if (c.rates.size() > kMaxRates) {
         c.rate_unknown = true;
-        c.rates        = { 0.0 };
+        c.rates        = { Rate {} };
     }
-    if (c.periods.size() > kMaxPeriods && c.aperiodic.empty()) c.aperiodic = "too_many_periods";
+    if (c.periods.size() > kMaxPeriods && c.aperiodic.empty() && Distinct(c.periods) > kMaxPeriods)
+        c.aperiodic = "too_many_periods";
 }
 
 Comp Join(const Comp& a, const Comp& b) {
     Comp r  = a;
     r.known = a.known && b.known && a.value == b.value;
-    if (! r.known) r.value = 0;
-    for (double x : b.rates) AddUnique(r.rates, x);
+    if (! r.known) {
+        r.value = 0;
+        r.pi    = 0;
+        r.knobs.clear();
+    } else {
+        r.pi    = a.pi == b.pi ? a.pi : kNoPi;
+        r.knobs = Common(a.knobs, b.knobs);
+    }
+    for (const Rate& x : b.rates) AddUnique(r.rates, x);
     r.rate_unknown = a.rate_unknown || b.rate_unknown;
+    r.mixed        = a.mixed || b.mixed;
+    // 范围只在两边相同时保留：循环里逐轮变宽的量一次就放弃，不动点照常收敛
+    if (a.lo != b.lo || a.hi != b.hi) r.lo = -kInf, r.hi = kInf;
+    r.poles = a.poles && b.poles;
     MergeTags(r, b);
     Normalize(r);
     return r;
@@ -201,11 +321,20 @@ const Comp& At(const Val& v, std::size_t k) {
 Comp Add(const Comp& a, const Comp& b, double sign) {
     Comp r;
     r.known = a.known && b.known;
-    r.value = r.known ? a.value + sign * b.value : 0;
+    if (r.known) {
+        const Rate s = Sum(a.Value(), b.Value(), sign);
+        r.value      = s.v;
+        r.pi         = s.pi;
+        r.knobs      = s.knobs;
+    }
     r.rates.clear();
-    for (double x : a.rates)
-        for (double y : b.rates) AddUnique(r.rates, x + sign * y);
+    for (const Rate& x : a.rates)
+        for (const Rate& y : b.rates) AddUnique(r.rates, Sum(x, y, sign));
     r.rate_unknown = a.rate_unknown || b.rate_unknown;
+    r.mixed        = a.mixed || b.mixed;
+    r.lo           = sign > 0 ? a.lo + b.lo : a.lo - b.hi;
+    r.hi           = sign > 0 ? a.hi + b.hi : a.hi - b.lo;
+    r.poles        = a.poles != b.poles && (a.poles ? b : a).Bounded();
     MergeTags(r, a);
     MergeTags(r, b);
     Normalize(r);
@@ -217,14 +346,25 @@ Comp Scale(const Comp& a, const Comp& k) {
     if (k.known && k.value == 0) return Known(0);
     Comp r = a;
     if (k.known) {
-        for (double& x : r.rates) x *= k.value;
-        if (r.known) r.value *= k.value;
+        // 只有纯时间量（如 g_Speed·g_Time）上的因子才是旋钮；(uv + t·s)·k 的 k 同时缩放纹理坐标，不记
+        for (Rate& x : r.rates)
+            x = Rate { x.v * k.value, PiAdd(x.pi, k.pi), r.mixed ? x.knobs : Union(x.knobs, k.knobs) };
+        r.lo = a.lo * k.value, r.hi = a.hi * k.value;
+        if (k.value < 0) std::swap(r.lo, r.hi);
+        if (r.known) {
+            r.value *= k.value;
+            r.pi    = PiAdd(r.pi, k.pi);
+            r.knobs = Union(r.knobs, k.knobs);
+        }
     } else {
         r.known = false;
         r.value = 0;
+        r.pi    = 0;
+        r.knobs.clear();
+        r.lo = -kInf, r.hi = kInf, r.poles = false;
         if (r.Linear()) {
             r.rate_unknown = true;
-            r.rates        = { 0.0 };
+            r.rates        = { Rate {} };
         }
     }
     return r;
@@ -250,21 +390,50 @@ Comp Mul(const Comp& a, const Comp& b, const std::string& where) {
 }
 
 Comp Div(const Comp& a, const Comp& b, const std::string& where) {
-    if (! b.Timed()) return b.known && b.value != 0 ? Scale(a, Known(1 / b.value)) : Scale(a, Comp {});
+    if (! b.Timed()) return b.known && b.value != 0 ? Scale(a, Inverse(b)) : Scale(a, Comp {});
     return Tagged({ &a, &b }, "nonlinear_time" + where);
 }
 
-// 周期为 q·π^pi（自变量单位）的函数作用在 a 上
+// 周期为 q（π 次数 pi，自变量单位）的函数作用在 a 上：周期 q/|系数|，次数 pi − 系数的次数
 Comp Periodic(const Comp& a, double q, int pi, const std::string& where) {
     Comp r;
     MergeTags(r, a);
     if (a.rate_unknown) {
         if (r.aperiodic.empty()) r.aperiodic = "time_rate_not_constant" + where;
     } else {
-        for (double x : a.rates)
-            if (x != 0) AddUnique(r.periods, Per { q / std::abs(x), pi });
+        for (const Rate& x : a.rates)
+            if (x.v != 0) AddUnique(r.periods, Per { q / std::abs(x.v), PiAdd(pi, PiNeg(x.pi)), x.knobs });
     }
     Normalize(r);
+    return r;
+}
+
+// 取整的余量 x − 取整(x)：周期 1/|系数| 的锯齿，取值在 [−1, 1]
+Comp Saw(const Comp& a, const std::string& where) {
+    Comp r = Periodic(a, 1, 0, where);
+    r.lo = -1, r.hi = 1;
+    return r;
+}
+
+// a 与 b 比较看差 d = a − b。d 不含线性时间：结果是周期量或常量的函数。d = r·t + q（各 r ≠ 0）：
+// q ∈ [lo, hi] 时，r > 0 在 t > −lo/r 之后 d 恒正、r < 0 在 t > hi/|r| 之后恒负，比较从此固定（暂态），记 settle 上界，
+// 之后照常按周期量求；q 含 tan(线性时间) 的极点、其余有界时 d 每个周期都变号且变号相位漂移，永不固定，是不周期的证明；
+// q 的范围说不清（纹理、顶点属性、循环变量）只报没推下去
+Comp Compare(const Comp& a, const Comp& b, const std::string& code, const std::string& where) {
+    const Comp d = Add(a, b, -1);
+    Comp       r;
+    MergeTags(r, d);
+    if (! d.Linear() || ! r.aperiodic.empty()) return r;
+    const bool moving = std::none_of(d.rates.begin(), d.rates.end(), [](const Rate& x) { return x.v == 0; });
+    if (d.rate_unknown)
+        r.aperiodic = "time_rate_not_constant" + where;
+    else if (d.poles && moving)
+        r.aperiodic = "compare_with_unbounded_time: " + code + " against tan(linear time), whose poles flip it every period at a drifting phase" + where;
+    else if (! d.Bounded())
+        r.aperiodic = code + ": threshold range unknown" + where;
+    else
+        for (const Rate& x : d.rates)
+            if (x.v != 0) r.settle = std::max(r.settle, std::max(0.0, (x.v > 0 ? -d.lo : -d.hi) / x.v));
     return r;
 }
 
@@ -419,6 +588,11 @@ public:
 
     bool          Parse();
     std::uint32_t Model() const { return model_; }
+    // 分析只覆盖顶点/几何/片元阶段、且靠 OpName 按名字取 uniform：看不到的情况报原因，不静默当成与时间无关
+    std::string Unsupported() const {
+        if ((model_ != 0 && model_ != 3 && model_ != 4) || side_effect_) return "unsupported_side_effect";
+        return names_.empty() ? "names_stripped" : "";
+    }
     void          Execute(int stage_index, const std::map<std::uint32_t, Val>& varyings_in,
                           std::map<std::uint32_t, Val>& varyings_out, std::vector<std::pair<Comp, std::string>>& outputs);
 
@@ -469,6 +643,10 @@ private:
     std::string W(std::uint32_t id) const {
         return " @" + stage_ + " " + fname_ + " %" + std::to_string(id);
     }
+    // 旋钮所在的着色器文件后缀
+    std::string Stage() const {
+        return model_ == 0 ? "vert" : model_ == 4 ? "frag" : model_ == 3 ? "geom" : "stage" + std::to_string(model_);
+    }
 
     std::uint32_t Walk(std::uint32_t type, const std::uint32_t* idx, std::size_t count, bool literal, long& off,
                        bool& weak) const;
@@ -487,6 +665,8 @@ private:
     const Inputs&                                                         in_;
     std::map<std::pair<int, std::size_t>, Cond>&                          conds_;
     std::unordered_map<std::uint32_t, std::string>                        names_;
+    bool                                                                  side_effect_ { false };
+    std::set<std::uint32_t>                                               buffer_blocks_;
     std::unordered_map<std::uint32_t, std::map<std::uint32_t, std::string>> member_names_;
     std::unordered_map<std::uint32_t, std::uint32_t>                      location_;
     std::unordered_map<std::uint32_t, std::uint32_t>                      builtin_;
@@ -519,6 +699,10 @@ bool Analyzer::Parse() {
         if (len == 0 || i + len > w_.size()) return false;
         const std::uint32_t* o = &w_[i + 1];
         const std::size_t    n = len - 1;
+        // OpImageWrite、原子操作、存储缓冲变量（StorageBuffer，或旧写法 Uniform + BufferBlock）：有副作用的写入，抽象解释不建模
+        if (op == 99 || (op >= 227 && op <= 242) ||
+            (op == 59 && n > 2 && (o[2] == 12 || (o[2] == 2 && buffer_blocks_.contains(types_[o[0]].elem)))))
+            side_effect_ = true;
         switch (op) {
         case 5: names_[o[0]] = Str(o + 1, n - 1); break;
         case 6: member_names_[o[0]][o[1]] = Str(o + 2, n - 2); break;
@@ -534,6 +718,7 @@ bool Analyzer::Parse() {
         case 71:
             if (o[1] == 30 && n > 2) location_[o[0]] = o[2];
             if (o[1] == 11 && n > 2) builtin_[o[0]] = o[2];
+            if (o[1] == 3) buffer_blocks_.insert(o[0]);
             break;
         case 72:
             if (o[2] == 11 && n > 3) member_builtin_[o[0]][o[1]] = o[3];
@@ -591,7 +776,16 @@ bool Analyzer::Parse() {
                 v = t.is_signed ? double(std::int64_t(bits)) : double(bits);
             else
                 v = t.is_signed ? double(std::int32_t(o[2])) : double(o[2]);
-            consts_[o[1]]      = Val { Known(v) };
+            Comp c = Known(v);
+            // 32 位浮点字面量是可改写的旋钮；π 字面量换成精确值并记次数
+            if (t.is_float && t.width == 32 && v != 0) {
+                c.knobs = { Knob { .stage = Stage(), .literal = float(v) } };
+                if (auto p = PiLiteral(float(v))) {
+                    c.value = p->first;
+                    c.pi    = p->second;
+                }
+            }
+            consts_[o[1]]      = Val { c };
             result_type_[o[1]] = o[0];
             break;
         }
@@ -704,7 +898,11 @@ Val Analyzer::Load(const Ptr& p, const State& S) const {
         Val               r(p.size);
         const std::string& n = p.uniform;
         if (n == "g_Time") {
-            for (auto& c : r) c.rates = { 1.0 };
+            for (auto& c : r) {
+                c.rates = { Rate { 1.0 } };
+                c.mixed = false;
+                c.lo = c.hi = 0;
+            }
             return r;
         }
         const bool dynamic = n.starts_with("g_AudioSpectrum") || n.starts_with("g_Pointer") ||
@@ -715,7 +913,10 @@ Val Analyzer::Load(const Ptr& p, const State& S) const {
             for (auto& c : r) c.external = { n };
         else if (u.kind == UniformValue::Kind::Constant && p.off >= 0 && ! p.weak)
             for (std::size_t k = 0; k < p.size; ++k)
-                if (std::size_t(p.off) + k < u.values.size()) r[k] = Known(u.values[std::size_t(p.off) + k]);
+                if (std::size_t(p.off) + k < u.values.size()) {
+                    r[k]       = Known(u.values[std::size_t(p.off) + k]);
+                    r[k].knobs = { Knob { .stage = Stage(), .uniform = n } };
+                }
         return r;
     }
     auto it = S.find(p.root);
@@ -749,7 +950,7 @@ Val Analyzer::GenericAll(const std::vector<Val>& a, std::size_t size, const std:
             MergeTags(r, c);
             linear = linear || c.Linear();
         }
-    if (linear && r.aperiodic.empty()) r.aperiodic = "linear_time_through_" + op + where;
+    if (linear && r.aperiodic.empty()) r.aperiodic = op + where;
     Normalize(r);
     return Val(size, r);
 }
@@ -768,22 +969,37 @@ Val Analyzer::Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t si
     case 69:
     case 70:
     case 71:
-    case 72: return GenericAll(a, size, "glsl" + std::to_string(inst), where);
+    case 72: return GenericAll(a, size, "linear_time_through_glsl" + std::to_string(inst), where);
     default: break;
     }
     Val r(size);
     for (std::size_t k = 0; k < size; ++k) {
         const Comp& x = arg(0, k);
         switch (inst) {
+        case 1:
+        case 2:
+        case 3:
+        case 8:
+        case 9:
+            // Round、RoundEven、Trunc、Floor、Ceil：线性时间取整是阶梯 = 线性 + 周期 1/|系数| 的锯齿（再取模即周期）
+            r[k] = x.known ? Known(*FoldGlsl(inst, { x.value })) : Add(x, Saw(x, where), -1);
+            continue;
         case 10:
         case 13:
         case 14:
         case 15:
-            r[k] = x.known ? Known(*FoldGlsl(inst, { x.value }))
+            r[k] = x.known ? Known(*FoldGlsl(inst, { x.value }), x.pi == 0 ? 0 : kNoPi)
                            : Periodic(x, inst == 10 ? 1.0 : inst == 15 ? kPi : 2 * kPi, inst == 10 ? 0 : 1, where);
+            // fract ∈ [0, 1]、sin/cos ∈ [−1, 1]；tan 的自变量是各系数都非零的线性时间、余下有界时，每个周期都经过极点
+            if (x.known) continue;
+            if (inst != 15)
+                r[k].lo = inst == 10 ? 0 : -1, r[k].hi = 1;
+            else
+                r[k].poles = ! x.rate_unknown && x.Bounded() &&
+                             std::none_of(x.rates.begin(), x.rates.end(), [](const Rate& y) { return y.v == 0; });
             continue;
         case 11:
-        case 12: r[k] = Scale(x, Known(inst == 11 ? kPi / 180 : 180 / kPi)); continue;
+        case 12: r[k] = Scale(x, inst == 11 ? Known(kPi / 180, 1) : Known(180 / kPi, -1)); continue;
         case 50: r[k] = Add(Mul(x, arg(1, k), where), arg(2, k), 1); continue;
         case 46: {
             const Comp& t = arg(2, k);
@@ -797,15 +1013,16 @@ Val Analyzer::Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t si
         }
         std::vector<double>       known;
         std::vector<const Comp*>  args;
-        bool                      all_known = true;
+        bool                      all_known = true, rational = true;
         for (std::size_t j = 0; j < a.size(); ++j) {
             args.push_back(&arg(j, k));
             all_known = all_known && arg(j, k).known;
+            rational  = rational && arg(j, k).pi == 0;
             known.push_back(arg(j, k).value);
         }
         if (all_known)
             if (auto v = FoldGlsl(inst, known); v && std::isfinite(*v)) {
-                r[k] = Known(*v);
+                r[k] = Known(*v, rational ? 0 : kNoPi);
                 continue;
             }
         Comp c;
@@ -840,8 +1057,8 @@ Val Analyzer::Sample(const std::string& name, const Val& coord, const std::vecto
         else if (c.rate_unknown)
             r.aperiodic = "scroll_rate_not_constant:" + name + where;
         else if (wrap[k] == Wrap::Repeat) {
-            for (double x : c.rates)
-                if (x != 0) AddUnique(r.periods, Per { 1 / std::abs(x), 0 });
+            for (const Rate& x : c.rates)
+                if (x.v != 0) AddUnique(r.periods, Per { 1 / std::abs(x.v), PiNeg(x.pi), x.knobs });
         } else if (wrap[k] == Wrap::Clamp)
             r.transient = true;
         else
@@ -1093,7 +1310,10 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
         break;
     }
     case 109:
-    case 110: fold_generic("convert", [](const std::vector<double>& x) -> std::optional<double> { return std::trunc(x[0]); }); break;
+    case 110:
+        // 取整：线性时间取整是阶梯 = 线性 − 周期 1/|系数| 的锯齿；再取模（精灵帧索引）就按周期算
+        Set(R, map1(V(o[2]), [&](const Comp& a) { return a.known ? Known(std::trunc(a.value)) : Add(a, Saw(a, W(R)), -1); }));
+        break;
     case 111:
     case 112:
     case 113:
@@ -1114,23 +1334,23 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
     case 136: Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& b) { return Div(a, b, W(R)); })); break;
     case 134:
     case 135:
-        fold_generic("idiv", [](const std::vector<double>& x) -> std::optional<double> {
-            return x[1] != 0 ? std::optional<double>(std::trunc(x[0] / x[1])) : std::nullopt;
-        });
+        // 整数除法：商取整，同 OpConvertFToS 的阶梯
+        Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& b) {
+                if (a.known && b.known && b.value != 0) return Known(std::trunc(a.value / b.value));
+                const Comp q = Div(a, b, W(R));
+                return Add(q, Saw(q, W(R)), -1);
+            }));
         break;
     case 137:
     case 138:
     case 139:
-        fold_generic("imod", [](const std::vector<double>& x) -> std::optional<double> {
-            return x[1] != 0 ? std::optional<double>(std::fmod(x[0], x[1])) : std::nullopt;
-        });
-        break;
     case 140:
     case 141:
+        // 整数与浮点取模：模数与时间无关时按周期 |m|/系数；SMod、FMod 余数随除数符号
         Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& m) {
                 if (a.known && m.known && m.value != 0)
-                    return Known(op == 141 ? a.value - m.value * std::floor(a.value / m.value) : std::fmod(a.value, m.value));
-                if (m.known && m.value != 0) return Periodic(a, std::abs(m.value), 0, W(R));
+                    return Known(op == 139 || op == 141 ? a.value - m.value * std::floor(a.value / m.value) : std::fmod(a.value, m.value));
+                if (m.known && m.value != 0) return Periodic(a, std::abs(m.value), m.pi, W(R));
                 return Tagged({ &a, &m }, "linear_time_through_mod" + W(R));
             }));
         break;
@@ -1193,7 +1413,7 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
         Set(R, map2(V(o[2]), V(o[3]), [&](const Comp& a, const Comp& b) {
                 if (a.known && b.known)
                     if (auto v = FoldCompare(op, a.value, b.value)) return Known(*v);
-                return Tagged({ &a, &b }, "compare_with_linear_time" + W(R));
+                return Compare(a, b, "compare_with_linear_time", W(R));
             }));
         break;
     case 166:
@@ -1235,11 +1455,12 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
                 Comp r  = x;
                 r.known = false;
                 r.value = 0;
+                r.lo = -kInf, r.hi = kInf, r.poles = false;
                 if (! x.rate_unknown && x.rates.size() <= 1)
-                    r.rates = { 0.0 };
+                    r.rates = { Rate {} };
                 else if (x.Linear()) {
                     r.rate_unknown = true;
-                    r.rates        = { 0.0 };
+                    r.rates        = { Rate {} };
                 }
                 return r;
             }));
@@ -1260,7 +1481,7 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
     case 12: {
         std::vector<Val> a;
         for (std::size_t k = 4; k < n; ++k) a.push_back(V(o[k]));
-        Set(R, o[2] == glsl_ ? Glsl(o[3], a, sz, W(R)) : GenericAll(a, sz, "extinst", W(R)));
+        Set(R, o[2] == glsl_ ? Glsl(o[3], a, sz, W(R)) : GenericAll(a, sz, "analysis_not_converged:extinst", W(R)));
         break;
     }
     case 57: {
@@ -1286,7 +1507,15 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
     }
     case 250:
     case 251: {
-        Cond c { .value = JoinAll(V(o[0])),
+        Comp v = JoinAll(V(o[0]));
+        // switch 按线性时间选分支：逐个与 case 值（常量）比较
+        if (op == 251 && v.Linear() && n > 3) {
+            Comp s = Compare(v, Known(double(std::int32_t(o[2]))), "branch_on_linear_time", W(o[0]));
+            for (std::size_t k = 4; k + 1 < n; k += 2)
+                s = Join(s, Compare(v, Known(double(std::int32_t(o[k]))), "branch_on_linear_time", W(o[0])));
+            v = s;
+        }
+        Cond c { .value = std::move(v),
                  .loop  = op == 250 && (loop_merges_.count(o[1]) || loop_merges_.count(o[2])),
                  .where = W(o[0]) };
         auto key = std::make_pair(stage_index_, at);
@@ -1308,11 +1537,11 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
         break;
     default:
         if (has_result && ! IsHandle(T)) {
-            // 没单独建模的指令：与时间无关的输入给未知常量，带时间的输入按"线性经过非周期运算"保守处理
+            // 没单独建模的指令：与时间无关的输入给未知常量，带时间的输入报没推下去（C# 记未收敛，不当"不能"的证明）
             std::vector<Val> a;
             for (std::size_t k = 2; k < n; ++k)
                 if (HasVal(o[k])) a.push_back(V(o[k]));
-            Set(R, GenericAll(a, sz, "op" + std::to_string(op), W(R)));
+            Set(R, GenericAll(a, sz, "analysis_not_converged:op" + std::to_string(op), W(R)));
         }
         break;
     }
@@ -1377,7 +1606,7 @@ void Analyzer::Execute(int stage_index, const std::map<std::uint32_t, Val>& vary
             for (auto& c : iv)
                 if (c.rates.size() > 1) {
                     c.rate_unknown = true;
-                    c.rates        = { 0.0 };
+                    c.rates        = { Rate {} };
                 }
             varyings_out[loc->second] = iv;
         }
@@ -1415,23 +1644,16 @@ std::optional<Rat> Rationalize(double x) {
     return std::nullopt;
 }
 
-// 周期按可公度类归并。类按来源的 π 次数定（sin/cos/tan 为 π 类，fract/mod/滚动为有理类）；另一类只在分母很小
-// （≤ 12，如 M_PI_2 这类浮点 π 字面量）且更小时才改用。类内以最短周期为基准，其余周期与它的比值化成有理数
-// （分母 ≤ 10⁶）即可公度，组周期 = 基准 × 各比值的 LCM；化不成的另起一组（周期比无理，交给调速）。
+// 周期按可公度类归并。类按来源的 π 次数定（函数周期的次数 − 系数的次数，π 字面量计入系数）。
+// 类内以最短周期为基准，其余周期与它的比值化成有理数（分母 ≤ 10⁶）即可公度，组周期 = 基准 × 各比值的 LCM；
+// 化不成的另起一组（周期比无理，交给调速）。次数不是 0/1（含未知）的类照样归并，num 记 0。
 std::vector<Period> Classes(const std::vector<Per>& periods) {
-    std::vector<double> by_class[2];
-    for (const Per& per : periods) {
-        const double p = per.s;
-        if (! (p > 0) || ! std::isfinite(p)) continue;
-        const auto  r1 = Rationalize(p), r2 = Rationalize(p / kPi);
-        const auto& natural = per.pi ? r2 : r1;
-        const auto& other   = per.pi ? r1 : r2;
-        const bool  swap    = other && other->q <= 12 && (! natural || other->q < natural->q);
-        by_class[(per.pi != 0) != swap ? 1 : 0].push_back(p);
-    }
+    std::map<int, std::vector<double>> by_class;
+    for (const Per& per : periods)
+        if (per.s > 0 && std::isfinite(per.s)) by_class[per.pi].push_back(per.s);
     std::vector<Period> out;
-    for (int c = 0; c < 2; ++c) {
-        std::sort(by_class[c].begin(), by_class[c].end());
+    for (auto& [c, list] : by_class) {
+        std::sort(list.begin(), list.end());
         struct Group {
             double    base;
             long long lcm { 1 };
@@ -1439,7 +1661,7 @@ std::vector<Period> Classes(const std::vector<Per>& periods) {
             bool      overflow { false };
         };
         std::vector<Group> groups;
-        for (double p : by_class[c]) {
+        for (double p : list) {
             bool merged = false;
             for (Group& g : groups) {
                 const auto r = Rationalize(p / g.base);
@@ -1455,8 +1677,8 @@ std::vector<Period> Classes(const std::vector<Per>& periods) {
         }
         for (const Group& g : groups) {
             const double seconds = g.overflow ? 1e300 : g.base * double(g.lcm) / double(g.gcd);
-            const auto   r       = g.overflow ? std::nullopt : Rationalize(c ? seconds / kPi : seconds);
-            out.push_back(Period { .seconds = seconds, .num = r ? r->p : 0, .den = r ? r->q : 0, .pi = c == 1 });
+            const auto   r = g.overflow || (c != 0 && c != 1) ? std::nullopt : Rationalize(c ? seconds / kPi : seconds);
+            out.push_back(Period { .seconds = seconds, .num = r ? r->p : 0, .den = r ? r->q : 0, .pi = c != 0 });
         }
     }
     return out;
@@ -1484,6 +1706,11 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
             sig.reasons.push_back("spirv_unreadable");
             return sig;
         }
+        if (const std::string why = a->Unsupported(); ! why.empty()) {
+            sig.kind = "aperiodic";
+            sig.reasons.push_back(why);
+            return sig;
+        }
         list.push_back(std::move(a));
     }
     std::stable_sort(list.begin(), list.end(), [](const auto& l, const auto& r) { return l->Model() < r->Model(); });
@@ -1507,15 +1734,24 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
         if (! c.aperiodic.empty())
             AddUnique(sig.reasons, c.aperiodic);
         else if (c.Linear())
-            AddUnique(sig.reasons, (cond.loop ? "loop_count_time_dependent" : "branch_on_linear_time") + cond.where);
-        else if (cond.loop && c.Timed())
-            AddUnique(sig.reasons, "loop_count_time_dependent" + cond.where);
+            AddUnique(sig.reasons, (c.rate_unknown ? "time_rate_not_constant" : cond.loop ? "loop_count_time_dependent" : "branch_on_linear_time") + cond.where);
         else
+            // 分支与循环次数只随周期量（或外部输入）变化：输出是这些量的确定函数，按它们的周期算
             MergeTags(acc, c);
     }
     sig.external  = acc.external;
     sig.transient = acc.transient;
+    sig.settle    = acc.settle;
     sig.periods   = Classes(acc.periods);
+    for (const Per& p : acc.periods) {
+        if (! (p.s > 0) || ! std::isfinite(p.s)) continue;
+        const auto r = p.pi == kNoPi ? std::nullopt : Rationalize(p.s / std::pow(kPi, p.pi));
+        sig.terms.push_back(Term { .seconds = p.s,
+                                   .num     = r ? r->p : 0,
+                                   .den     = r ? r->q : 0,
+                                   .pi      = p.pi == kNoPi ? std::nullopt : std::optional<int>(p.pi),
+                                   .knobs   = p.knobs });
+    }
     sig.kind      = ! sig.reasons.empty() ? "aperiodic" : ! sig.periods.empty() ? "periodic" : "static";
     return sig;
 }
@@ -1529,12 +1765,32 @@ std::string ToJson(const Signature& s) {
         r += (k ? ",{" : "{") + std::string("\"seconds\":") + buf + ",\"num\":" + std::to_string(p.num) +
              ",\"den\":" + std::to_string(p.den) + ",\"pi\":" + (p.pi ? "true" : "false") + "}";
     }
+    r += "],\"terms\":[";
+    for (std::size_t k = 0; k < s.terms.size(); ++k) {
+        const Term& t = s.terms[k];
+        std::snprintf(buf, sizeof(buf), "%.17g", t.seconds);
+        r += (k ? ",{" : "{") + std::string("\"seconds\":") + buf + ",\"num\":" + std::to_string(t.num) +
+             ",\"den\":" + std::to_string(t.den) + ",\"pi\":" + (t.pi ? std::to_string(*t.pi) : "null") + ",\"knobs\":[";
+        for (std::size_t j = 0; j < t.knobs.size(); ++j) {
+            const Knob& n = t.knobs[j];
+            // 字面量按 float32 精确值转 double 输出，C# (float) 回去逐位相等
+            std::snprintf(buf, sizeof(buf), "%.17g", double(n.literal));
+            r += (j ? ",{" : "{") + std::string("\"stage\":") + Quote(n.stage) +
+                 (n.uniform.empty() ? ",\"literal\":" + std::string(buf) : ",\"uniform\":" + Quote(n.uniform)) +
+                 ",\"inverse\":" + (n.inverse ? "true" : "false") + "}";
+        }
+        r += "]}";
+    }
     r += "],\"reasons\":[";
     for (std::size_t k = 0; k < s.reasons.size(); ++k) r += (k ? "," : "") + Quote(s.reasons[k]);
     r += "],\"external\":[";
     for (std::size_t k = 0; k < s.external.size(); ++k) r += (k ? "," : "") + Quote(s.external[k]);
-    r += std::string("],\"transient\":") + (s.transient ? "true" : "false") + "}";
-    return r;
+    r += std::string("],\"transient\":") + (s.transient ? "true" : "false");
+    if (s.settle >= 0) {
+        std::snprintf(buf, sizeof(buf), "%.17g", s.settle);
+        r += ",\"settle_seconds\":" + std::string(buf);
+    }
+    return r + "}";
 }
 
 } // namespace owe::shader_time

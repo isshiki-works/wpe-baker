@@ -28,7 +28,6 @@ public static class AnalyzeRequestFactory
             LoopPreference: RetimeProfile.LoopPreferenceForPreset(options.Preset),
             VideoShell: options.VideoShell,
             AllowNoBenefit: options.AllowNoBenefit,
-            SwayRetime: options.SwayRetime,
             LoopLengthMaximumSeconds: options.LoopMaximumSeconds,
             PropertiesOrigin: propertiesOrigin,
             FrameRateOrigin: frameRateOrigin,

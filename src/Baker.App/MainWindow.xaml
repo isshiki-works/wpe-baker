@@ -181,11 +181,6 @@
                                         ToolTip="调整动画速度以缩短循环周期。‖Adjusts animation speed to shorten the loop period.">
                                         <TextBlock Tag="允许调速|Allow retiming"/>
                                     </CheckBox>
-                                    <!-- 默认勾选在构造函数里按 SwayRetimeOptions.OnByDefault 设，与命令行的 sway-retime 开关共用同一个默认值。 -->
-                                    <CheckBox x:Name="SwayRetimeBox" Checked="SettingsChanged" Unchecked="SettingsChanged"
-                                        ToolTip="缩短循环周期；关闭后，含摆动动画的壁纸可能找不到循环周期。‖Shortens the loop period; when off, wallpapers with swaying animation may have no loop period.">
-                                        <TextBlock Tag="图层循环周期|Layer loop period"/>
-                                    </CheckBox>
                                     <DockPanel Margin="0,2,0,0"
                                         ToolTip="取值 0–5%，留空则跟随动画精度。‖0–5 %; leave empty to follow Animation precision.">
                                         <TextBlock DockPanel.Dock="Left" Style="{StaticResource Label}" Tag="画面差异预算|Difference budget"/>

@@ -1046,11 +1046,6 @@ Analyze options that change what goes into the plan:
   every mode.
 - `--measure-source on|off` — measure the original's power in the official
   player before analysis; off by default.
-- `--sway-retime on|off` — sway retime is **on by default** under all three
-  presets, because the preset's look budget is exactly what governs it. Pass
-  `--sway-retime off` (or clear "Sway retime" in the GUI's advanced section)
-  to turn it off; with it off the sway components stay unresolved and the
-  only effect is more refusals.
 - `--fps N --fps-den D` — overrides the automatic frame rate; the plan marks
   the value as an override instead of auto-detected.
 

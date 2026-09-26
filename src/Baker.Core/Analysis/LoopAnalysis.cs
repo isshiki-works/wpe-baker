@@ -5,45 +5,33 @@ namespace Baker.Core;
 
 /// <summary>
 /// 循环分析：把源码证明的着色器周期与运行时轨道周期合成捕获用的循环候选。候选与未解析项全程是类型化对象，
-/// 由 <see cref="LoopReport.ToJson"/> 渲染一次写进 plan.loop。静止证明、运行时轨道、摆动改频分别在
-/// <see cref="StaticProof"/>、<see cref="RuntimeTrackReader"/>、<see cref="SwayRetimeApplier"/>。
+/// 由 <see cref="LoopReport.ToJson"/> 渲染一次写进 plan.loop。静止证明、运行时轨道分别在
+/// <see cref="StaticProof"/>、<see cref="RuntimeTrackReader"/>。
 /// </summary>
 internal static class LoopAnalysis
 {
     internal static LoopReport Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory, JsonObject runtime,
         IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent = 2,
-        CommonLoopPreference preference = CommonLoopPreference.Balanced, SwayRetimeOptions? swayRetime = null,
+        CommonLoopPreference preference = CommonLoopPreference.Balanced,
         double? loopLengthMaximumSeconds = null, JsonArray? videoGroups = null,
         IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null)
     {
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
             throw new ArgumentException("FPS must be positive and retiming must be between zero and ten percent.");
-        // 循环时长上限 = --loop-max-seconds（或档位兜底）这一个值：所有周期分量共用，摆动改频的 Lmax 不许与它不一致。
-        double ceilingSeconds = loopLengthMaximumSeconds ?? swayRetime?.LoopLengthMaximumSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
-        if (swayRetime is not null && swayRetime.LoopLengthMaximumSeconds != ceilingSeconds)
-            throw new ArgumentException("The sway retime loop length maximum must equal the solver loop length ceiling.");
+        // 循环时长上限 = --loop-max-seconds（或档位兜底）这一个值：所有周期分量共用。
+        double ceilingSeconds = loopLengthMaximumSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
         CommonLoopRational ceiling = CommonLoopSolver.Ceiling(ceilingSeconds);
         ceilingSeconds = ceiling.ToSeconds();
-        // 着色器裁定用的调速余量与求解器同一个预算（maximumRetimePercent = 档位预算），不各写各的。
-        var shader = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, bakedLayerIds, ceilingSeconds, maximumRetimePercent);
+        var shader = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, runtime, bakedLayerIds, ceilingSeconds, maximumRetimePercent);
         List<LoopUnresolved> unresolved = [.. shader.Unresolved.Select(item => (LoopUnresolved)new ShaderLoopUnresolved(item))];
         RuntimeTrackReader.AddMaterialClockUnresolved(runtime, bakedLayerIds, unresolved, shader.RuledMaterials);
         // A model/shader period does not also prove the state advanced by an authored script.
         // Keep the observed owner so allocation fallback can retain that subtree live.
         RuntimeTrackReader.AddScriptTimeUnresolved(runtime, bakedLayerIds, unresolved);
-        var patches = new List<LoopValuePatch>();
-        foreach (var item in shader.Components)
-        {
-            // A fixed-period mechanism whose rate is a shader literal names no constant: it stays a
-            // locked loop constraint and there is nothing in the capture scene to rewrite for it.
-            if (item.Patch.ConstantKey.Length == 0) continue;
-            patches.Add(new(item.Component.Id, "shader_speed", item.Patch.OwnerLayerId, item.Patch.EffectIndex, item.Patch.PassIndex,
-                item.Patch.ConstantKey, item.Patch.ValueIndex, null, item.Patch.OldValue, BaseShaderValue(item), item.Patch.SpeedExponent));
-            if (item.Patch.CompanionConstantKey is string companionKey && item.Patch.CompanionOldValue is double companionOldValue)
-                patches.Add(new(item.Component.Id, "shader_phase", item.Patch.OwnerLayerId, item.Patch.EffectIndex, item.Patch.PassIndex,
-                    companionKey, item.Patch.CompanionValueIndex, null, companionOldValue, companionOldValue, item.Patch.CompanionSpeedExponent));
-        }
+        // 着色器调速：可调速分量在它的作者 pass 上挂时间倍率或旋钮常量，旧值 1（场景里没有这个键）。旋钮值与速度成反比时指数取 -1。
+        LoopValuePatch[] patches = [.. shader.Components.Where(item => item.Component.AllowRetime).Select(item => new LoopValuePatch(item.Component.Id,
+            "shader_speed", item.OwnerLayerId, item.EffectIndex, item.PassIndex, item.ConstantKey, 0, null, 1, 1, item.Inverse ? -1 : 1))];
 
         var videoControlScope = VideoControlScope.Resolve(scene, runtime);
         var animation = RuntimeTrackReader.Read(scene, source, assetsDirectory, runtime, bakedLayerIds, unresolved, videoControlScope,
@@ -83,6 +71,36 @@ internal static class LoopAnalysis
             or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling
             ? NoCommonLoopOwners(shader, animation, particleCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
             : null;
+        // "不能"的证明只认最宽松模型：每个非慢的着色器周期项都在预算内独立调频，其余分量照旧；它也无解才是不能。
+        // 只在实际模型（旋钮 + 每 pass 时间倍率）无解、或有 pass 剩多个 π 类时跑。最宽松模型有解（或给不出证明）时，
+        // 缺独立调频来源的项所在 pass 记未收敛 term_not_retimable。带组步长重解时无解由调用方保持原解，不记。
+        bool noLoop = solve.Result.NoCandidate?.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
+            or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling;
+        if (stepCycles.Length == 0 && (noLoop || shader.Terms.Any(x => x.Split)))
+        {
+            static string S(double x) => x.ToString("0.###", CultureInfo.InvariantCulture);
+            LoopSolve relaxed = SolveLoop(shader with { Components = [] }, animation, [.. shader.Terms.Select(x => x.Relaxed), .. particleCycles, .. scriptCycles],
+                fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+            if (relaxed.Result.NoCandidate is { Kind: CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
+                or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling } never)
+            {
+                CommonLoopComponent slowest = relaxed.Used.MaxBy(x => x.BasePeriod!.Seconds)!;
+                double longest = slowest.BasePeriod!.Seconds;
+                // 证明归到并不进的所有者层：分配回退先把它们留实时重查，重查也无解这条证明才落成"不能"
+                foreach (int? owner in noCommonLoopOwners?.Select(id => (int?)id) ?? [null])
+                    unresolved.Add(new NeverRepeatsUnresolved(owner, ceilingSeconds, $"No loop within the {S(ceilingSeconds)} s limit at a " +
+                        $"{S(relaxed.Result.RetimeBudgetPercent)}% retime budget even with every shader period term retimed independently ({never.Kind}): " +
+                        $"slowest component {slowest.Id} has period {S(longest)} s = {S(longest / ceilingSeconds)}x the limit" + (never.FixedPeriodSeconds is double step
+                            ? $"; the fixed-period components close together only every {S(step)} s = {S(step / ceilingSeconds)}x the limit" : "") + "."));
+            }
+            else
+                foreach (var pass in shader.Terms.Where(x => x.Missing is not null && (noLoop || x.Split))
+                    .GroupBy(x => (x.OwnerLayerId, x.EffectIndex, x.PassIndex, x.Resource)))
+                    unresolved.Add(new ShaderLoopUnresolved(new(pass.Key.OwnerLayerId, pass.Key.EffectIndex, pass.Key.PassIndex, pass.Key.Resource,
+                        ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: these terms need independent retiming that " +
+                        "the shader source does not provide: " + string.Join("; ", pass.Select(x => $"{x.Relaxed.Id} {S(x.Relaxed.BasePeriod!.Seconds)} s ({x.Missing})")),
+                        "term_not_retimable")));
+        }
         if (stepCycles.Length > 0)
         {
             static CommonLoopComponent[] Real(CommonLoopComponent[] list) => [.. list.Where(x => !x.Id.StartsWith(GroupStepPrefix, StringComparison.Ordinal))];
@@ -101,7 +119,7 @@ internal static class LoopAnalysis
         bool sourceStatic = false;
         // 被烘集合为空时不走静态证明：没有要捕获的画面时，调用方已用 blocker
         // 说明依赖闭包后没剩下可烘组，这里再追一条 source_static 只是同一件事的重复描述。
-        if (shader.Components.Count == 0 && animation.Count == 0 && scriptCycles.Length == 0 && unresolved.Count == 0 && bakedLayerIds.Count > 0)
+        if (shader.Components.Count == 0 && shader.Slow.Count == 0 && animation.Count == 0 && scriptCycles.Length == 0 && unresolved.Count == 0 && bakedLayerIds.Count > 0)
         {
             // 没有任何已建模的时间机制时只剩两种结局：证明这一帧是静态的，或者说清楚为什么证明不了。
             // 旧实现在证明不了时一个字都不写，plan 里就出现零候选零理由的 unavailable（沉默拒绝）。
@@ -129,15 +147,22 @@ internal static class LoopAnalysis
                 if (spriteSeam.AtOrigin == SpriteSeamPhase.Verdict.Mismatch && spriteSeam.WarmupFrames is null) { ++spriteRejectedCandidates; continue; }
             }
             var (candidate, groupFrames, steps) = GroupPeriods(solved, groups, solve.Used, unresolved, spriteTablesByOwner,
-                // 精灵帧表从全局整周期预热之后起判（0 或 L）；摆动改频可能把 L 与预热改成 kL 时不缩短精灵组。
-                spriteSeam is null ? 0 : spriteSeam.WarmupFrames is ulong warmup && (warmup == 0 || swayRetime is null || shader.Unresolved.Count == 0) ? warmup : null,
+                // 精灵帧表从全局整周期预热之后起判（0 或 L）。
+                spriteSeam is null ? 0 : spriteSeam.WarmupFrames,
                 fpsNumerator, fpsDenominator, maximumRetimePercent, preference, ceiling, fullLoopLayerIds);
             clockSteps ??= steps;
             var candidatePatches = new List<LoopPatch>();
+            double Speed(string id) => candidate.Components.Single(x => x.ComponentId == id).SpeedMultiplier;
             foreach (LoopValuePatch patch in patches)
             {
-                CommonLoopComponentCycle cycle = candidate.Components.Single(x => x.ComponentId == patch.ComponentId);
-                candidatePatches.Add(patch with { NewValue = ShaderPatchValue(patch.NewValue, cycle.SpeedMultiplier, patch.SpeedExponent) });
+                double value = Speed(patch.ComponentId);
+                // 同 pass 的时间倍率也乘在旋钮项上：旋钮只补差，新值 = (分量倍率 / 时间倍率)^指数
+                if (patch.ConstantKey != ShaderPeriodAnalysis.TimeScaleKey)
+                    value = Math.Pow(value / (patches.FirstOrDefault(time => time.ConstantKey == ShaderPeriodAnalysis.TimeScaleKey &&
+                        (time.OwnerLayerId, time.EffectIndex, time.PassIndex) == (patch.OwnerLayerId, patch.EffectIndex, patch.PassIndex)) is { } time
+                        ? Speed(time.ComponentId) : 1), patch.SpeedExponent);
+                // 倍率为 1 不写：没调速的 pass 捕获与原作相同
+                if (value != 1) candidatePatches.Add(patch with { NewValue = value });
             }
             foreach (RuntimeTrack clip in animation.Where(x => x.CanRetime))
             {
@@ -168,17 +193,39 @@ internal static class LoopAnalysis
         }
         if (spriteRejectedCandidates > 0)
             unresolved.Add(new SpriteSeamUnresolved(spriteRejectedCandidates));
-        long contentStep = ContentStepFrames(shader.Components.Count + scriptCycles.Length, animation, unresolved.Count, fpsNumerator, fpsDenominator);
-        // 摆动改频（默认关）：在其余分量解出的每个候选 P 上找 L = kP，让摆动层逐项精确闭合；成立时摆动分量
-        // 从未解析项里移出，候选帧数改成 L。开关关闭时这里什么都不做，plan 与旧版逐字节相同。
-        JsonObject? swayRecord = swayRetime is null ? null : SwayRetimeApplier.Apply(shader.Unresolved, unresolved, candidates,
-            locked.Length == 0, fpsNumerator, fpsDenominator, swayRetime, spriteTables);
+        // 着色器里与线性时间比较的分支在 settle 时刻后固定：同精灵，整周期预热 L 帧后起录（预热只能 0 或 L），要求 L 晚于 settle；
+        // 精灵已定在起点 0 闭合的候选不能再预热。候选全放不进就记未收敛
+        if (shader.Settle is { } settle && candidates.Count > 0)
+        {
+            candidates = [.. candidates.Where(c => c.Seconds > settle.Seconds && (c.SpriteSeam is null || c.SpriteSeam.WarmupFrames == c.Frames))
+                .Select(c => c with { ShaderSettleSeconds = settle.Seconds })];
+            if (candidates.Count == 0)
+                unresolved.Add(new ShaderLoopUnresolved(new(settle.OwnerLayerId, settle.EffectIndex, settle.PassIndex, settle.Resource,
+                    ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: a branch on linear time settles by " +
+                    settle.Seconds.ToString("R", CultureInfo.InvariantCulture) + " s, later than the one-period warmup of every candidate",
+                    "transient_settle_beyond_warmup")));
+        }
+        long contentStep = ContentStepFrames(shader.Components.Count + shader.Slow.Count + scriptCycles.Length, animation, unresolved.Count, fpsNumerator, fpsDenominator);
         // 没有任何周期分量（求解器与摆动改频都没给出候选），而未解析项全部是满足平稳随机判据、可交叉淡化的粒子：
         // 粒子本身定不出循环长度，从 min(60 秒, 上限) 起，必要时在上限内延长到最长寿命之后；接缝由残差交叉淡化处理。
         // 有周期分量时长度由上面的求解器按这些周期的公共闭合给出，这里不插手；位移类等不可掩盖的未解析项不是粒子，不满足前提。
         JsonObject? particleDefault = candidates.Count == 0 && locked.Length == 0
             ? StationaryParticleDefaultLoop(unresolved, candidates, fpsNumerator, fpsDenominator, ceiling)
             : null;
+        // 慢分量不进求解器：各候选另写它们在 P 处的漂移上界（烘焙侧接缝门复核）。除慢分量外没有任何周期分量时，
+        // P 取求解器的最短循环时长对齐到帧网格（不超过上限），是确定值。
+        if (shader.Slow.Count > 0)
+        {
+            if (candidates.Count == 0 && locked.Length == 0)
+            {
+                CommonLoopRational minimum = CommonLoopSolver.DefaultMinimum;
+                UInt128 unit = (UInt128)minimum.Denominator * fpsDenominator;
+                UInt128 frames = UInt128.Max(1, UInt128.Min(((UInt128)minimum.Numerator * fpsNumerator + unit - 1) / unit,
+                    (UInt128)ceiling.Numerator * fpsNumerator / ((UInt128)ceiling.Denominator * fpsDenominator)));
+                candidates.Add(new LoopCandidate((ulong)frames, (double)frames * fpsDenominator / fpsNumerator, 0d, [], []) { LoopLengthSource = "slow_components_only" });
+            }
+            for (int index = 0; index < candidates.Count; ++index) candidates[index] = candidates[index] with { SlowComponents = shader.Slow };
+        }
         return new LoopReport(fpsNumerator, fpsDenominator,
             singleVideoRetime ? "single_video_nearest_frame_retime" : retimeClips ? "clip_retime_after_locked_search" : "locked_clip_rates",
             result.Preference, result.RetimeBudgetPercent, result.BudgetRelaxed, result.FixedFrameStep, ceilingSeconds,
@@ -189,7 +236,7 @@ internal static class LoopAnalysis
             candidates, unresolved, sourceStatic, videoControlScope,
             new LoopContentCadence(contentStep, animation.Where(x => x.IsVideo)
                 .Select(x => new LoopCadenceClip(x.LockedComponent.Id, x.OwnerLayerId, x.TrackName, x.ClipFrameRate)).ToArray()),
-            shader.Components, swayRecord, particleDefault) { GroupClockSteps = clockSteps ?? [] };
+            shader.Components, particleDefault) { GroupClockSteps = clockSteps ?? [] };
     }
 
     private const string GroupStepPrefix = "group_period:";
@@ -346,27 +393,27 @@ internal static class LoopAnalysis
 
     /// <summary>
     /// 按所有者层贪心并入（分量多的先并，同数按出现顺序），并入后上限内无解的层记下返回。已有未解析项的所有者本来就留实时，不参与。
-    /// 没有并不进的层、或一层都并不进时返回 null。
+    /// 没有并不进的层时返回 null；一层都并不进时全部点名，剩下的内容值不值得烘由分配回退重查判定。
     /// </summary>
     private static int[]? NoCommonLoopOwners(ShaderPeriodAnalysisResult shader, IReadOnlyList<RuntimeTrack> animation,
         CommonLoopComponent[] particleCycles, List<LoopUnresolved> unresolved, uint fpsNumerator, uint fpsDenominator,
         double maximumRetimePercent, CommonLoopRational ceiling, CommonLoopPreference preference)
     {
         var live = unresolved.Select(item => SceneGraph.Int(item.ToJson()["owner_layer_id"])).OfType<int>().ToHashSet();
-        int[] owners = [.. shader.Components.Select(x => x.Patch.OwnerLayerId).Concat(animation.Select(x => x.OwnerLayerId))
+        int[] owners = [.. shader.Components.Select(x => x.OwnerLayerId).Concat(animation.Select(x => x.OwnerLayerId))
             .Where(id => !live.Contains(id)).GroupBy(id => id).OrderByDescending(group => group.Count()).Select(group => group.Key)];
         var kept = new HashSet<int>();
         var dropped = new List<int>();
         foreach (int owner in owners)
         {
             kept.Add(owner);
-            if (SolveLoop(shader with { Components = [.. shader.Components.Where(x => kept.Contains(x.Patch.OwnerLayerId))] },
+            if (SolveLoop(shader with { Components = [.. shader.Components.Where(x => kept.Contains(x.OwnerLayerId))] },
                 [.. animation.Where(x => kept.Contains(x.OwnerLayerId))], particleCycles, fpsNumerator, fpsDenominator,
                 maximumRetimePercent, ceiling, preference).Result.Candidates.Count > 0) continue;
             kept.Remove(owner);
             dropped.Add(owner);
         }
-        return dropped.Count > 0 && kept.Count > 0 ? [.. dropped] : null;
+        return dropped.Count > 0 ? [.. dropped] : null;
     }
 
     /// <summary>
@@ -497,21 +544,5 @@ internal static class LoopAnalysis
             step = step == 0 ? clipStep : GreatestCommonDivisor(step, clipStep);
         }
         return step == 0 ? 1 : (long)step;
-    }
-
-    private static double BaseShaderValue(ShaderPeriodComponent component)
-    {
-        CommonLoopPeriod period = component.Component.BasePeriod!;
-        if (component.Component.AllowRetime || period.ExactSeconds is null) return component.Patch.OldValue;
-        double magnitude = (double)period.ExactSeconds.Value.Denominator / period.ExactSeconds.Value.Numerator;
-        return Math.CopySign(magnitude, component.Patch.OldValue);
-    }
-
-    private static double ShaderPatchValue(double baseSpeed, double speedMultiplier, double speedExponent)
-    {
-        if (!double.IsFinite(speedMultiplier) || speedMultiplier <= 0 || !double.IsFinite(speedExponent) ||
-            speedExponent == 0 || speedExponent < 0 && speedExponent != -1)
-            throw new InvalidDataException("Shader patch exponent must be positive or the supported inverse exponent -1.");
-        return baseSpeed * Math.Pow(speedMultiplier, 1 / speedExponent);
     }
 }

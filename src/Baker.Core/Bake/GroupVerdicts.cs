@@ -170,9 +170,23 @@ internal static class GroupVerdicts
     internal static JsonObject ProbeStatic() =>
         new() { ["status"] = "observed_seam_pass", ["basis"] = "Every captured RGBA frame was byte-identical in this probe interval; stored as one static texture." };
 
-    /// <summary>成品组的接缝没过：记组记录与中英理由，拒绝整案。</summary>
+    /// <summary>
+    /// 选中候选（plan 首个循环候选）的缓变分量（slow_components：周期远超循环上限、不进求解器）里最大的漂移上界，换算成度；
+    /// 没有缓变分量时 null。接缝门照常在 P 处判，它的结果就是结论，这里只决定结论怎么写。
+    /// </summary>
+    internal static string? SlowDriftDegrees(JsonObject plan)
+    {
+        double[] bounds = [.. ((plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["slow_components"] as JsonArray ?? [])
+            .OfType<JsonObject>().Select(component => component["drift_bound_radians"]!.GetValue<double>())];
+        return bounds.Length == 0 ? null : (bounds.Max() * 180 / Math.PI).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// 成品组的接缝没过：记组记录与中英理由，拒绝整案。<paramref name="slowDrift"/>（<see cref="SlowDriftDegrees"/>）非空且没过的是
+    /// 循环闭合检查时，结论是"不能"、理由写缓变分量漂移（reason.slow_component_drift_exceeds_seam），附漂移上界与接缝读数。
+    /// </summary>
     internal static void RejectSeam(JsonObject report, string id, int[] layers, bool packedAlpha, JsonObject encoded, string video,
-        JsonObject? lateDependency, JsonObject? seam, JsonObject? preview)
+        JsonObject? lateDependency, JsonObject? seam, JsonObject? preview, string? slowDrift)
     {
         var rejected = new JsonObject {
             ["id"] = id, ["status"] = "rejected_seam", ["storage"] = "video",
@@ -185,6 +199,13 @@ internal static class GroupVerdicts
         report["groups"]!.AsArray().Add(rejected);
         report["status"] = "candidate_rejected_seam";
         report["loop_validation"] = "encoded_seam_failed";
+        if (slowDrift is not null && seam?["loop_closure"]?["status"]?.GetValue<string>() == LoopClosureCheck.NotClosedStatus)
+        {
+            new Message("reason.slow_component_drift_exceeds_seam",
+                [slowDrift, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.English)],
+                [slowDrift, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.Chinese)]).Write(report, "reason");
+            return;
+        }
         string reasonEnglish = MessageCatalog.Get("bake.encoded_seam_rejected", MessageCatalog.English,
             EncodedLoopValidator.RejectionDetail(seam!, MessageCatalog.English));
         report["reason"] = reasonEnglish;
