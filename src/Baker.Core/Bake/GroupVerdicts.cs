@@ -171,21 +171,24 @@ internal static class GroupVerdicts
         new() { ["status"] = "observed_seam_pass", ["basis"] = "Every captured RGBA frame was byte-identical in this probe interval; stored as one static texture." };
 
     /// <summary>
-    /// 选中候选（plan 首个循环候选）的缓变分量（slow_components：周期远超循环上限、不进求解器）里最大的漂移上界，换算成度；
-    /// 没有缓变分量时 null。接缝门照常在 P 处判，它的结果就是结论，这里只决定结论怎么写。
+    /// 选中候选（plan 首个循环候选）的缓变分量（slow_components：周期远超循环上限、不进求解器）里最大的漂移上界（换算成度）与所有者层；
+    /// 给了 <paramref name="layers"/> 就只看所有者层在其中的。没有时 null。接缝门照常在 P 处判，它的结果就是结论，这里只决定结论怎么写、退回哪些层。
     /// </summary>
-    internal static string? SlowDriftDegrees(JsonObject plan)
+    internal static (string Degrees, int[] Owners)? SlowDrift(JsonObject plan, int[]? layers = null)
     {
-        double[] bounds = [.. ((plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["slow_components"] as JsonArray ?? [])
-            .OfType<JsonObject>().Select(component => component["drift_bound_radians"]!.GetValue<double>())];
-        return bounds.Length == 0 ? null : (bounds.Max() * 180 / Math.PI).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        JsonObject[] slow = [.. ((plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["slow_components"] as JsonArray ?? [])
+            .OfType<JsonObject>().Where(component => layers is null || SceneGraph.Int(component["owner_layer_id"]) is int owner && layers.Contains(owner))];
+        return slow.Length == 0 ? null : ((slow.Max(component => component["drift_bound_radians"]!.GetValue<double>()) * 180 / Math.PI)
+            .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
+            [.. slow.Select(component => SceneGraph.Int(component["owner_layer_id"])).OfType<int>().Distinct()]);
     }
 
     /// <summary>
-    /// 成品组的接缝没过：记组记录与中英理由，拒绝整案。<paramref name="slowDrift"/>（<see cref="SlowDriftDegrees"/>）非空且没过的是
-    /// 循环闭合检查时，结论是"不能"、理由写缓变分量漂移（reason.slow_component_drift_exceeds_seam），附漂移上界与接缝读数。
+    /// 成品组的接缝没过：记组记录与中英理由，拒绝整案。<paramref name="slowDrift"/>（<see cref="SlowDrift"/>）非空且没过的是
+    /// 循环闭合检查时，理由写缓变分量漂移（reason.slow_component_drift_exceeds_seam），附漂移上界与接缝读数，返回 true
+    /// （烘焙外层据此把这些层退回实时再烘，没得退时这就是"不能"的结论）。
     /// </summary>
-    internal static void RejectSeam(JsonObject report, string id, int[] layers, bool packedAlpha, JsonObject encoded, string video,
+    internal static bool RejectSeam(JsonObject report, string id, int[] layers, bool packedAlpha, JsonObject encoded, string video,
         JsonObject? lateDependency, JsonObject? seam, JsonObject? preview, string? slowDrift)
     {
         var rejected = new JsonObject {
@@ -204,7 +207,7 @@ internal static class GroupVerdicts
             new Message("reason.slow_component_drift_exceeds_seam",
                 [slowDrift, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.English)],
                 [slowDrift, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.Chinese)]).Write(report, "reason");
-            return;
+            return true;
         }
         string reasonEnglish = MessageCatalog.Get("bake.encoded_seam_rejected", MessageCatalog.English,
             EncodedLoopValidator.RejectionDetail(seam!, MessageCatalog.English));
@@ -213,6 +216,7 @@ internal static class GroupVerdicts
             ["zh"] = MessageCatalog.Get("bake.encoded_seam_rejected", MessageCatalog.Chinese,
                 EncodedLoopValidator.RejectionDetail(seam!, MessageCatalog.Chinese)),
             ["en"] = reasonEnglish, ["params"] = new JsonArray() };
+        return false;
     }
 
     /// <summary>

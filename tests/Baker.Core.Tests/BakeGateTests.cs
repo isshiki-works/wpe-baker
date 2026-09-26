@@ -262,8 +262,8 @@ public class BakeGateTests : IDisposable
     {
         JsonObject Plan(params double[] bounds) => new() { ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject {
             ["frames"] = 600, ["slow_components"] = new JsonArray([.. bounds.Select(bound => (JsonNode)new JsonObject { ["drift_bound_radians"] = bound })]) }) } };
-        Assert.Equal("10", GroupVerdicts.SlowDriftDegrees(Plan(Math.PI / 36, Math.PI / 18)));
-        Assert.Null(GroupVerdicts.SlowDriftDegrees(Plan()));
+        Assert.Equal("10", GroupVerdicts.SlowDrift(Plan(Math.PI / 36, Math.PI / 18))?.Degrees);
+        Assert.Null(GroupVerdicts.SlowDrift(Plan()));
         var seam = new JsonObject { ["status"] = "observed_seam_fail", ["failures"] = new JsonArray("loop_not_closed"),
             ["loop_closure"] = new JsonObject { ["status"] = LoopClosureCheck.NotClosedStatus, ["loop_frames"] = 600, ["tile_size"] = 64,
                 ["rgb"] = new JsonObject { ["tile_64"] = new JsonObject { ["worst"] = 9.5, ["worst_x"] = 3, ["worst_y"] = 4 } } } };

@@ -150,13 +150,16 @@ public sealed class HybridBakeService(NativeTools tools)
                     ["full_loop_layer_ids"] = JsonSerializer.SerializeToNode(fullLoop), ["reason"] = "own_period_seam_rejected" },
                 settings => settings with { FullLoopLayerIds = fullLoop }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
-        // 实际编出的视频流超过上限：省下渲染最少的一组留实时，重新分析再烘，不整张拒。重烘走 BakeAsync，仍超就接着退
-        // （每轮多留一组的根，组数有限）；首次产物按留实时的根数分目录存。
+        // 实际编出的视频流超过上限，或慢分量漂移让接缝门拒了某组：省下渲染最少的一组 / 该组点名的慢分量层留实时，重新分析再烘，
+        // 不整张拒。重烘走 BakeAsync，仍被拒就接着退（每轮至少多留一个根，层数有限）；首次产物按留实时的根数分目录存。
         if (result[NoBenefit.Field]?[NoBenefit.RetreatRootsField] is JsonArray retreatRoots)
         {
             int[] fewer = [.. retreatRoots.Select(SceneGraph.Int).OfType<int>()];
-            return await RetryReplannedAsync(request, result, "video_stream_retreat", $".streams-{fewer.Length}-attempt", new JsonObject {
-                    ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(fewer), ["reason"] = NoBenefit.TooManyStreams },
+            bool slow = result["status"]?.GetValue<string>() == "candidate_rejected_seam";
+            return await RetryReplannedAsync(request, result, slow ? "slow_component_retreat" : "video_stream_retreat",
+                $".{(slow ? "slow" : "streams")}-{fewer.Length}-attempt", new JsonObject {
+                    ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(fewer),
+                    ["reason"] = slow ? "slow_component_drift_exceeds_seam" : NoBenefit.TooManyStreams },
                 settings => settings with { RetainLiveRootIds = fewer }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
         // 残差掩盖组在第一层被拒：组里被掩盖的粒子留实时，重新分析再烘。重烘走 BakeAsync，重烘后新被拒的残差组接着留实时
@@ -730,8 +733,16 @@ public sealed class HybridBakeService(NativeTools tools)
                         JsonObject? hardwareDecode = null;
                         if (!probe && seam?["status"]?.GetValue<string>() != "observed_seam_pass")
                         {
-                            GroupVerdicts.RejectSeam(report, id, layers, packedAlpha, encoded, video, lateDependencyValidation, seam, seamPreview,
-                                GroupVerdicts.SlowDriftDegrees(plan));
+                            var slow = GroupVerdicts.SlowDrift(plan, layers);
+                            // 闭合没过、组里有点名的慢分量：这些层退回实时，外层重新分析再烘（同超路数退回）；都已留实时就照旧判不能。
+                            if (GroupVerdicts.RejectSeam(report, id, layers, packedAlpha, encoded, video, lateDependencyValidation, seam, seamPreview,
+                                slow?.Degrees))
+                            {
+                                int[] kept = [.. (plan["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()];
+                                if (slow!.Value.Owners.Except(kept).Any())
+                                    report[NoBenefit.Field] = new JsonObject { [NoBenefit.RetreatRootsField] =
+                                        JsonSerializer.SerializeToNode<int[]>([.. kept.Union(slow.Value.Owners)]) };
+                            }
                             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
@@ -843,7 +854,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     : StaticOnlyBake.Is(report) ? StaticOnlyBake.Status : "candidate_generated";
                 report["loop_validation"] = probe ? "not_performed" : seamsPass ? "encoded_seams_passed" : "encoded_seam_failed";
                 // 选中候选带缓变分量、接缝门都过了：结论"能"，成品里记漂移上界。
-                if (report["status"]?.GetValue<string>() == "candidate_generated" && GroupVerdicts.SlowDriftDegrees(plan) is string drift)
+                if (report["status"]?.GetValue<string>() == "candidate_generated" && GroupVerdicts.SlowDrift(plan)?.Degrees is string drift)
                     new Message("bake.slow_component_drift", [drift]).Write(report, "slow_component_drift");
                 report["project_path"] = project;
                 // 播放版编码的汇总：请求档位、实际档位、回退理由与编码总秒数，方便直接和软件档位对比。
