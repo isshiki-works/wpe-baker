@@ -249,7 +249,7 @@ public static class ResidualMasking
     /// <summary>
     /// 布局不允许掩盖时的取证与双语理由：点名不在任何视频组里的可掩盖分量、说明没有组能替它们淡化、给出本场景可执行的出路。
     /// --retain-live 的具体 id 优先取 analyze 已经重查过的更小分配（loop_allocation_fallback 为 candidate_found），
-    /// 否则退回这些分量所在的作者根，并如实说明还没重新分析过。
+    /// 否则退回这些分量所在的分配单元，并如实说明还没重新分析过。
     /// </summary>
     public static JsonObject LayoutRejection(JsonObject plan, JsonObject classification) =>
         LayoutRejection(plan, classification, out _);
@@ -273,7 +273,7 @@ public static class ResidualMasking
         foreach (JsonObject item in residual)
         {
             int? owner = Id(item["owner_layer_id"]);
-            int? root = owner is int ownerId && layers.TryGetValue(ownerId, out JsonObject? layer) ? Id(layer["root"]) ?? ownerId : owner;
+            int? root = owner is int ownerId && layers.TryGetValue(ownerId, out JsonObject? layer) ? Id(layer["allocation_root"]) ?? ownerId : owner;
             if (root is int rootId && !ownerRoots.Contains(rootId)) ownerRoots.Add(rootId);
             components.Add(new JsonObject
             {
@@ -315,11 +315,11 @@ public static class ResidualMasking
         else
         {
             optionsZh.Add(verified.Length > 0
-                ? $"加 --retain-live {retainText} 重新分析，让这些分量所在的作者根整棵保持实时；按这个分配重新分析过，已经找到覆盖其余内容的循环"
-                : $"加 --retain-live {retainText} 重新分析，让这些分量所在的作者根整棵保持实时（这个分配还没有重新分析过）");
+                ? $"加 --retain-live {retainText} 重新分析，让这些分量所在的分配单元保持实时；按这个分配重新分析过，已经找到覆盖其余内容的循环"
+                : $"加 --retain-live {retainText} 重新分析，让这些分量所在的分配单元保持实时（这个分配还没有重新分析过）");
             optionsEn.Add(verified.Length > 0
-                ? $"re-run analyze with --retain-live {retainText} to keep the author roots that own these components live; a re-analysis with that allocation already finds a loop for the remaining content"
-                : $"re-run analyze with --retain-live {retainText} to keep the author roots that own these components live (that allocation has not been re-analyzed yet)");
+                ? $"re-run analyze with --retain-live {retainText} to keep the allocation units that own these components live; a re-analysis with that allocation already finds a loop for the remaining content"
+                : $"re-run analyze with --retain-live {retainText} to keep the allocation units that own these components live (that allocation has not been re-analyzed yet)");
         }
         string groupCount = groups.Length.ToString(CultureInfo.InvariantCulture);
         object?[] zh = [layout, groupCount, transparentGroups > 0 ? $"（其中 {transparentGroups} 个是透明组）" : "",
@@ -466,7 +466,7 @@ public static class ResidualMasking
         // 声明了幅度上界的位移机制单独分类（记下估算的峰值偏移），但一律不可掩盖。
         string mechanism = Text(item["mechanism"]);
         if (kind == "NonPeriodicOrDriftingMechanism" && Flag(item["bounded_displacement"]))
-            return BoundedDisplacementVerdict(verdict, item, mechanism, objects, outputWidth);
+            return Converge(BoundedDisplacementVerdict(verdict, item, mechanism, objects, outputWidth), mechanism);
 
         if (kind == "runtime_animation" && owner is int spriteOwner)
         {
@@ -506,6 +506,21 @@ public static class ResidualMasking
             ? MessageCatalog.Get("residual.proven_nonperiodic_unbounded", MessageCatalog.Chinese, layerPrefix, kind, ceiling, detail)
             : MessageCatalog.Get("residual.unrecognized_unbounded", MessageCatalog.Chinese, layerPrefix, kind, detail);
         if (mechanism == ShaderPeriodAnalysis.LightShaftDriftMechanism) AddLinearDriftGuidance(verdict, item, objects, loopCeiling);
+        return provenNonPeriodic ? Converge(verdict, mechanism) : verdict;
+    }
+
+    /// <summary>界面待定的占位理由键：分量在循环上限内不会重复（调速也够不着）。</summary>
+    public const string NeverRepeatsReasonKey = "reason.loop_never_repeats_within_limit";
+
+    /// <summary>
+    /// 带具名机制的 NonPeriodicOrDriftingMechanism 附有方程证明（上限内没有周期，允许的调速也够不着），结论是"不能"，不是"证不出"。
+    /// 没有具名机制的同类项（如"NOISE 开着或未证明"）不算证明，不收敛。
+    /// </summary>
+    private static JsonObject Converge(JsonObject verdict, string mechanism)
+    {
+        if (mechanism.Length == 0) return verdict;
+        verdict["loop_convergence"] = "cannot";
+        verdict["reason_key"] = NeverRepeatsReasonKey;
         return verdict;
     }
 
