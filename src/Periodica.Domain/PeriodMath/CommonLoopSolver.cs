@@ -223,10 +223,11 @@ public static class CommonLoopSolver
 
             double idealCycles = seconds / period.Seconds;
             double tolerance = (component.MaximumRetimePercent ?? request.MaximumRetimePercent) / 100;
-            // 至少一圈：上限超过 100% 时也不把分量调成静止
-            double lower = Math.Max(1, Math.Ceiling(idealCycles * (1 - tolerance) - 1e-12));
+            // 周期超过循环上限的分量在自身上限 ≥ 100% 时可以冻结（0 圈，与 1.0.2 一致），取离原速最近的圈数；其余至少一圈
+            bool freezable = request.MaximumDuration is { } ceiling && period.Seconds > ceiling.ToSeconds();
+            double lower = Math.Max(freezable ? 0 : 1, Math.Ceiling(idealCycles * (1 - tolerance) - 1e-12));
             double upper = Math.Floor(idealCycles * (1 + tolerance) + 1e-12);
-            if (upper < 1 || lower > upper || lower > ulong.MaxValue)
+            if (lower > upper || lower > ulong.MaxValue)
             {
                 constraints.Add(new(component.Id, CommonLoopConstraintKind.RetimeOutsideLimit,
                     "No positive integer cycle count fits the allowed local speed adjustment."));

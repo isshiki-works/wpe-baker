@@ -123,7 +123,7 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
         var json = new JsonObject {
             ["frames"] = Frames, ["seconds"] = Seconds, ["total_retime_cost_percent"] = TotalRetimeCostPercent,
             ["components"] = new JsonArray(Components.Select(x => (JsonNode)new JsonObject { ["id"] = x.ComponentId, ["cycles"] = x.Cycles,
-                ["old_period_seconds"] = x.OldPeriodSeconds, ["new_period_seconds"] = x.NewPeriodSeconds,
+                ["old_period_seconds"] = x.OldPeriodSeconds, ["new_period_seconds"] = double.IsFinite(x.NewPeriodSeconds) ? x.NewPeriodSeconds : null,
                 ["speed_multiplier"] = x.SpeedMultiplier, ["delta_percent"] = x.DeltaPercent }).ToArray()),
             ["patches"] = new JsonArray(Patches.Select(x => (JsonNode)x.ToJson()).ToArray())
         };
