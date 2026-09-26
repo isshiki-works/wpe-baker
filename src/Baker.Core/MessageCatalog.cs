@@ -541,6 +541,23 @@ public static class MessageCatalog
             En: "Cannot generate: the source-period encoding failed the required seam check: {0} No seam repair or tail splicing was applied; remaining captures, conversion checks and project assembly were skipped.",
             Legacy: "The original source-period encoding failed the required seam check: {0} No seam repair or tail splicing is applied; remaining captures, conversion checks and project assembly were skipped."),
 
+        // 选中候选带缓变分量（周期远超循环上限、不进求解器），循环闭合检查在 P 处没过：结论"不能"。{0}=漂移上界（度） {1}=接缝读数（同上）
+        // 备选写法（界面文字由用户定）：
+        //   A（占位）不可生成：画面里有变化很慢的部分，每个循环最多偏移 {0}°，循环衔接处差异超出限值：{1} / Cannot generate: part of the scene changes slowly and drifts up to {0}° per loop, so the loop seam exceeds the limit: {1}
+        //   B 无法无缝循环：缓慢变化的效果每次循环最多偏移 {0}°，衔接处会看到跳变。{1} / Cannot loop seamlessly: a slow-moving effect shifts up to {0}° each loop, leaving a visible jump at the seam. {1}
+        //   C 缓变效果偏移过大（每个循环最多 {0}°），无法无缝循环：{1} / Slow effect drifts too far (up to {0}° per loop) to loop seamlessly: {1}
+        ["reason.slow_component_drift_exceeds_seam"] = new(
+            Zh: "不可生成：画面里有变化很慢的部分，每个循环最多偏移 {0}°，循环衔接处差异超出限值：{1}",
+            En: "Cannot generate: part of the scene changes slowly and drifts up to {0}° per loop, so the loop seam exceeds the limit: {1}"),
+
+        // 带缓变分量的候选过了接缝门，成品里记一句。{0}=漂移上界（度）
+        // 备选写法：A（占位）含缓变分量，每个循环最多偏移 {0}° / Includes slow-changing content that drifts up to {0}° per loop
+        //           B 缓变分量，漂移上界 {0}° / Slow component, drift bound {0}°
+        //           C 部分效果变化很慢，循环衔接处最多偏移 {0}° / Some effects change slowly and shift by up to {0}° at the loop seam
+        ["bake.slow_component_drift"] = new(
+            Zh: "含缓变分量，每个循环最多偏移 {0}°",
+            En: "Includes slow-changing content that drifts up to {0}° per loop"),
+
         ["bake.effect_prefix_seam_rejected"] = new(
             Zh: "不可生成：特效前缀按源周期编码后未通过接缝校验：{0}未做修补。",
             En: "Cannot generate: the unmodified source-period prefix encoding failed its seam validation: {0} No repair was applied.",

@@ -255,4 +255,30 @@ public class BakeGateTests : IDisposable
         Assert.Null(ProjectPublisher.Destination(null, source, output));
         Assert.Equal(Path.Combine(root, "fresh"), ProjectPublisher.Destination(Path.Combine(root, "fresh") + Path.DirectorySeparatorChar, source, output));
     }
+
+    /// <summary>缓变分量：接缝门在 P 处的结果就是结论。闭合没过 → 理由换成缓变分量漂移，附漂移上界与接缝读数；没有缓变分量照旧。</summary>
+    [Fact]
+    public void SlowComponentSeamFailureIsTheVerdict()
+    {
+        JsonObject Plan(params double[] bounds) => new() { ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject {
+            ["frames"] = 600, ["slow_components"] = new JsonArray([.. bounds.Select(bound => (JsonNode)new JsonObject { ["drift_bound_radians"] = bound })]) }) } };
+        Assert.Equal("10", GroupVerdicts.SlowDriftDegrees(Plan(Math.PI / 36, Math.PI / 18)));
+        Assert.Null(GroupVerdicts.SlowDriftDegrees(Plan()));
+        var seam = new JsonObject { ["status"] = "observed_seam_fail", ["failures"] = new JsonArray("loop_not_closed"),
+            ["loop_closure"] = new JsonObject { ["status"] = LoopClosureCheck.NotClosedStatus, ["loop_frames"] = 600, ["tile_size"] = 64,
+                ["rgb"] = new JsonObject { ["tile_64"] = new JsonObject { ["worst"] = 9.5, ["worst_x"] = 3, ["worst_y"] = 4 } } } };
+        JsonObject Reject(string? drift)
+        {
+            var report = new JsonObject { ["groups"] = new JsonArray() };
+            GroupVerdicts.RejectSeam(report, "g0", [1], false, new JsonObject { ["crop"] = new JsonObject() }, "v.mp4", null, seam.DeepClone().AsObject(), null, drift);
+            return report;
+        }
+        JsonObject slow = Reject("10"), plain = Reject(null);
+        Assert.Equal("candidate_rejected_seam", slow["status"]!.GetValue<string>());
+        Assert.Equal("reason.slow_component_drift_exceeds_seam", slow["reason_localized"]!["key"]!.GetValue<string>());
+        string zh = slow["reason_localized"]!["zh"]!.GetValue<string>();
+        Assert.Contains("10°", zh);
+        Assert.Contains(EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.Chinese), zh);
+        Assert.Equal("bake.encoded_seam_rejected", plain["reason_localized"]!["key"]!.GetValue<string>());
+    }
 }

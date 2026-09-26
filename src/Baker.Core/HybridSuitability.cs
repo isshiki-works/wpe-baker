@@ -140,23 +140,20 @@ internal static class HybridSuitability
                 $"Analysis produced {(candidates > 0 ? candidates + " loop candidate(s)" : prefixCaches + " effect-prefix cache(s)")} and left no blockers.",
                 $"分析产出了 {(candidates > 0 ? candidates + " 个循环候选" : prefixCaches + " 份 effect_prefix 缓存")}，没有遗留事项。", notes);
 
-        // 既没候选也没可判定的不适合理由：说清楚是这次没解出来，不冒充壁纸不行。
-        return unresolved > 0
-            ? Build("requires_user_choice", "loop_not_established",
-                $"Analysis established no loop: {unresolved} temporal mechanism(s) in this scene are still unexplained, so this run cannot say whether it closes; a different setting or a hand-picked period is needed before baking.",
-                $"分析没能确立循环：这张壁纸上还有 {unresolved} 条没解开的时间机制，所以这一次无法断定它能不能闭合；要烘的话需要换设置重新分析，或者人工指定周期。", notes)
-            : Build("requires_user_choice", "loop_not_established",
-                "Analysis established no loop and reported no blocker, so this run cannot say the scene is unsuitable; a different setting or a hand-picked period is needed before baking.",
-                "分析既没确立循环，也没有留下可判定的理由，所以这一次不能断言这张壁纸不适合：要烘的话需要换设置重新分析，或者人工指定周期。", notes);
+        // 既没候选也没可判定的规则：未解析项里有证明（具名的 NonPeriodicOrDriftingMechanism，与 ResidualMasking 同一口径）就是"不能"，
+        // 其余是分析没推下去，记未收敛（reason.effect_not_yet_supported），不冒充壁纸不行。
+        bool proven = (loop?["unresolved"] as JsonArray ?? []).OfType<JsonObject>().Any(item =>
+            Text(item["kind"]) == nameof(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism) && Text(item["mechanism"]) is { Length: > 0 });
+        return Converged(plan, Build("not_suitable", "loop_not_established", "", "", notes), unsupportedOtherwise: true, proven);
     }
 
     /// <summary>
     /// 给不出循环的几条规则：不可掩盖分量全都已被证明上限内不会重复时（<see cref="ResidualMasking"/> 标了 loop_convergence=cannot），
-    /// 结论是"不能"，理由写循环上限；unsupportedOtherwise 的规则在其余情况下是分析没推下去（未收敛）。规则名不动。
+    /// 或调用方已从未解析项里拿到证明（proven），结论是"不能"，理由写循环上限；unsupportedOtherwise 的规则在其余情况下是分析没推下去（未收敛）。规则名不动。
     /// </summary>
-    private static JsonObject Converged(JsonObject plan, JsonObject built, bool unsupportedOtherwise = false)
+    private static JsonObject Converged(JsonObject plan, JsonObject built, bool unsupportedOtherwise = false, bool proven = false)
     {
-        bool cannot = plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
+        bool cannot = proven || plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
             blocking.OfType<JsonObject>().All(component => Text(component["loop_convergence"]) == "cannot");
         if (!cannot && !unsupportedOtherwise) return built;
         string key = cannot ? ResidualMasking.NeverRepeatsReasonKey : ResidualMasking.NotSupportedReasonKey;
