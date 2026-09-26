@@ -106,6 +106,15 @@ internal sealed class AnalysisOrchestrator
                 PlanNarrative.Attach(result);
             }
         }
+        // 只有普通图层的视频组省不下渲染，还给实时（加 --retain-live 重新分析）；重新分析能生成、预计不省电的条件没变多才采用。
+        // --no-benefit allow 时照旧全烘，测功耗用。
+        if (Admission.Accepted(result) && !request.AllowNoBenefit && await NoBenefit.PlainGroupRetainRootsAsync(result, token) is { Length: > 0 } plain)
+        {
+            var (replanned, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = plain }, analyze, space, space.Budget(), tools,
+                Path.Combine(run, "plain-groups-live"), cache, token).SolveAsync(interaction);
+            if (Admission.Accepted(replanned) && NoBenefit.AnalysisConditions(replanned).Length <= NoBenefit.AnalysisConditions(result).Length)
+                result = replanned;
+        }
         // 预计不省电的方案默认拒绝（判据与覆盖见 NoBenefit）；已经被别的原因拒掉的不重复写。
         if (Admission.Accepted(result)) NoBenefit.Apply(result, request.AllowNoBenefit);
         // 尝试经过只写进既有的 preset_* / interaction_* 字段。
