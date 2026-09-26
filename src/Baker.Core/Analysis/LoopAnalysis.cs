@@ -65,21 +65,17 @@ internal static class LoopAnalysis
                 particleCycles = [];
             }
         }
-        // 各分量都有周期证明、却在上限内凑不出公共循环：点名并不进的所有者层，由分配回退把它们的作者子树留实时，其余照常规划。
-        int[]? noCommonLoopOwners = solve.Result.NoCandidate?.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
-            or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling
-            ? NoCommonLoopOwners(shader, animation, particleCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
-            : null;
         // "不能"按所有者层逐层证明，只认最宽松模型：这一层自己的非慢着色器周期项各在预算内独立调频，加上它自己的动画轨道；
         // 不带粒子锁（实际求解可以撤锁）、不带别的层（和别的层凑不到一起只是留实时，不是这一层不能）。含这一层的任何实际候选
         // 都满足这些约束，所以它也无解才是这一层不能；有解（或给不出证明）时，缺独立调频来源的项所在 pass 记未收敛 term_not_retimable。
-        // 查的层：实际模型（旋钮 + 每 pass 时间倍率）无解时并不进的层，以及剩多个 π 类的 pass 所在的层。带组步长重解时无解由调用方保持原解，不查。
+        // 带组步长重解时无解由调用方保持原解，不查。
         bool noLoop = solve.Result.NoCandidate?.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
             or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling;
-        if (stepCycles.Length == 0)
+        static string S(double x) => x.ToString("0.###", CultureInfo.InvariantCulture);
+        void Prove(IEnumerable<int> owners)
         {
-            static string S(double x) => x.ToString("0.###", CultureInfo.InvariantCulture);
-            foreach (int owner in (noLoop ? noCommonLoopOwners ?? [] : []).Concat(shader.Terms.Where(x => x.Split).Select(x => x.OwnerLayerId)).Distinct())
+            if (stepCycles.Length > 0) return;
+            foreach (int owner in owners)
             {
                 ShaderTerm[] own = [.. shader.Terms.Where(x => x.OwnerLayerId == owner)];
                 if (own.Length == 0) continue;
@@ -104,6 +100,13 @@ internal static class LoopAnalysis
                             "term_not_retimable")));
             }
         }
+        // 先查剩多个 π 类的 pass 所在的层（实际模型里这些 pass 不成分量）：记了未解析项的层本来就留实时，下面点名时不再参与合并
+        Prove(shader.Terms.Where(x => x.Split).Select(x => x.OwnerLayerId).Distinct());
+        // 各分量都有周期证明、却在上限内凑不出公共循环：点名并不进的所有者层，由分配回退把它们的作者子树留实时，其余照常规划；这些层再逐层查
+        int[]? noCommonLoopOwners = noLoop
+            ? NoCommonLoopOwners(shader, animation, particleCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
+            : null;
+        if (noLoop) Prove(noCommonLoopOwners ?? []);
         if (stepCycles.Length > 0)
         {
             static CommonLoopComponent[] Real(CommonLoopComponent[] list) => [.. list.Where(x => !x.Id.StartsWith(GroupStepPrefix, StringComparison.Ordinal))];
