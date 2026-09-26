@@ -314,7 +314,7 @@ internal static class ParticleStationarity
                 else Fail("C1", outcome.FailureCode!, "emitter", outcome.Evidence);
             }
         }
-        else if (refires && lifetimeMax is double refireMax && lifetimeMin is double refireMin)
+        else if (refires && lifetimeMax is double refireMax && lifetimeMin is double refireMin && refireMin < refireMax)
             generations = Math.Max(generations, ParticleCriteria.WarmupGenerations(refireMax, refireMin));
 
         // ---- C3 算子：年龄函数或静止的确定性场；turbulence 的场不得随时间推进 ----
