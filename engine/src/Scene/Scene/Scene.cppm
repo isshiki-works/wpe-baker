@@ -1781,7 +1781,8 @@ public:
     }
     float Volume() const { return m_volume; }
     void  SetVolume(float volume) {
-        m_volume = rstd::f32(volume).clamp(rstd::f32(), rstd::f32(1.0f)).to_primitive();
+        // 脚本写 undefined 之类会得到 NaN：按 0 处理（NaN 比较恒假），不让它乘进混音。
+        m_volume = volume > 0.0f ? (volume < 1.0f ? volume : 1.0f) : 0.0f;
         if (m_sound_control) (*m_sound_control)->SetVolume(m_volume);
     }
     void SetParticleControl(std::shared_ptr<SceneParticleControl> control) {

@@ -109,7 +109,8 @@ public static class Admission
         AdmissionVerdict verdict = Evaluate(plan, scene, readResource);
         plan["loop"]!["residual_masking"] = verdict.Residual;
         if (verdict.Blocker is not { Code: BlockerCode.BakeAllocation } blocker) return;
-        PlanBlockers.Add(plan, blocker);
+        // 准入拒的是这份分配本身证不出循环，工具补上 HDR/透视采集也照样拒：排第一条，结论与界面第二行读的就是它。
+        PlanBlockers.Add(plan, blocker, first: true);
         plan["status"] = "requires_resolution";
         plan["suitability"] = HybridSuitability.Verdict(plan);
         PlanNarrative.Attach(plan);

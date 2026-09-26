@@ -109,8 +109,11 @@ TextureFormat ToTexFormate(int type) {
 // caller can decide whether to bail or attempt a best-effort read.
 TexFormatVersion LoadHeader(fs::BinaryReader& file, ImageHeader& header) {
     TexFormatVersion v;
-    v.texv                         = ReadTexVersion(file);
-    v.texi                         = ReadTexVersion(file);
+    v.texv = ReadTexVersion(file);
+    // TEXV0004（2016 年前后的早期作品）：没有 TEXI/TEXB 段、未知字段和图数，固定一张图，
+    // 正文同 TEXB0001（每个 mip 只有宽、高、字节数）。
+    const bool v4                  = v.texv == 4;
+    v.texi                         = v4 ? 1 : ReadTexVersion(file);
     header.extraHeader["texv"].val = v.texv;
     header.extraHeader["texi"].val = v.texi;
 
@@ -148,17 +151,17 @@ TexFormatVersion LoadHeader(fs::BinaryReader& file, ImageHeader& header) {
     header.mapWidth  = file.ReadInt32();
     header.mapHeight = file.ReadInt32();
 
-    file.ReadInt32(); // unknown
+    if (! v4) file.ReadInt32(); // unknown
 
-    v.texb                         = ReadTexVersion(file);
+    v.texb                         = v4 ? 1 : ReadTexVersion(file);
     header.extraHeader["texb"].val = v.texb;
 
-    header.count = file.ReadInt32();
+    header.count = v4 ? 1 : file.ReadInt32();
 
     if (v.body_has_image_type()) header.type = static_cast<ImageType>(file.ReadInt32());
     if (v.body_has_variant_table()) v.variant_count = file.ReadUint32();
 
-    if (v.texv != 5 || v.texi != 1 || v.texb < 1 || v.texb > 4) {
+    if (v.texv < 4 || v.texv > 5 || v.texi != 1 || v.texb < 1 || v.texb > 4) {
         rstd_error(
             "TexImageParser: unsupported version texv={} texi={} texb={}", v.texv, v.texi, v.texb);
     }

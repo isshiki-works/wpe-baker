@@ -61,6 +61,35 @@ public static class NoBenefit
         return hits.ToArray();
     }
 
+    /// <summary>
+    /// 只有普通图层的视频组（单个源材质、普通贴图着色器、不带光照、没有特效 pass；不画东西的节点层不算）省下的渲染可证明约为 0，
+    /// 进视频只多一路视频和一个视频层的固定开销（SALVAGE 每路约 0.66 W，VLAYOUT 每层约 0.46 W）。返回把这些组留实时的 --retain-live 列表。
+    /// 静态成品、已证静态的组不编视频，不在此列；全部组都是普通组时没有可烘内容，交给 <see cref="PlainLayersOnly"/>。
+    /// </summary>
+    internal static async Task<int[]?> PlainGroupRetainRootsAsync(JsonObject plan, CancellationToken token)
+    {
+        if (plan["route"]?.GetValue<string>() != "whole_layer" || plan["video_dominant"]?["decode_work"] is not null ||
+            plan["loop"]?["candidates"] is not JsonArray { Count: > 0 } loops || !(StaticOnlyBake.Count(loops[0]?["frames"]) > 1) ||
+            plan["video_groups"] is not JsonArray { Count: > 1 } groups ||
+            plan["runtime_evidence"]?.GetValue<string>() is not string path || !File.Exists(path)) return null;
+        var drawn = (JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? [])
+            .OfType<JsonObject>().ToLookup(layer => SceneGraph.Int(layer["owner"]));
+        var drawable = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["id"]) is int)
+            .DistinctBy(layer => SceneGraph.Int(layer["id"])).ToDictionary(layer => SceneGraph.Int(layer["id"])!.Value,
+                layer => layer["drawable"]?.GetValue<bool>() != false);
+        static bool Plain(JsonObject layer) => layer["has_effect_layer"]?.GetValue<bool>() != true &&
+            layer["materials"] is JsonArray { Count: 1 } materials && materials[0] is JsonObject source &&
+            source["role"]?.GetValue<string>() == "source" &&
+            source["shader"]?.GetValue<string>() is "genericimage2" or "genericimage3" or "genericimage4" or "flat" &&
+            !(source["active_uniforms"] as JsonArray ?? []).Any(u => u?.GetValue<string>().StartsWith("g_Lights", StringComparison.Ordinal) == true);
+        bool PlainLayer(int id) => drawn[id].All(Plain) && (drawn[id].Any() || !drawable.GetValueOrDefault(id, true));
+        int[] roots = [.. groups.OfType<JsonObject>().Where(group => group["static_verified"]?.GetValue<bool>() != true &&
+                (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int layer && PlainLayer(layer)))
+            .SelectMany(group => (group["root_ids"] as JsonArray ?? []).Select(SceneGraph.Int)).OfType<int>()];
+        bool allPlain = groups.OfType<JsonObject>().All(group => (group["root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int r && roots.Contains(r)));
+        return roots.Length == 0 || allPlain ? null : FullFrameDemotion.RetainLiveCommandRoots(plan, roots);
+    }
+
     /// <summary>被烘层省下的特效渲染（按画布占比加权的 pass 数）；bake_value 没算这一项的方案返回 null，不判。</summary>
     internal static double? RemovedPassCoverage(JsonObject plan) => plan[BakeValueAssessment.Field]?["rule"]?.GetValue<string>() switch
     {
@@ -105,10 +134,6 @@ public static class NoBenefit
         ["policy"] = policy, ["status"] = status,
         ["conditions"] = new JsonArray(conditions.Select(c => (JsonNode)JsonValue.Create(c)).ToArray())
     };
-
-    /// <summary>plan 里记下的命中条件，讲成一句话（界面结论区用）。</summary>
-    public static string Describe(JsonObject plan, bool english) => Describe(
-        (plan[Field]?["conditions"] as JsonArray ?? []).Select(c => c!.GetValue<string>()).ToArray(), english);
 
     private static string Describe(string[] conditions, bool english) => string.Join(english ? "; " : "；", conditions.Select(c => (c, english) switch
     {
