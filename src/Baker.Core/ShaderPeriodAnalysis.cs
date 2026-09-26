@@ -155,7 +155,6 @@ public static class ShaderPeriodAnalysis
                     // 这一层的这个 shader 从这里起进入方程规则链，下面每条出口都是一次裁定（产出分量、产出
                     // 未解析项，或证明它没有运动）。登记在这里，运行时材质便不会再以「未建模时钟」重复计一次。
                     ruled.Add((ownerId, shader));
-                    JsonObject effectivePass = EffectiveAnalysisPass(materialPass, definitionPass, authoredPass);
                     if (!TryReadShader(source, assetsDirectory, shader, out string shaderResource, out string shaderText, out reason))
                     {
                         unresolved.Add(new(ownerId, effectIndex, authoredPassIndex, shader, ShaderTemporalUnresolvedKind.ResourceUnavailable, reason));
@@ -181,7 +180,8 @@ public static class ShaderPeriodAnalysis
                             new Message("unresolved.shader_mixed_clock")));
                         continue;
                     }
-                    ShaderVerdict verdict = Judge(new(ownerId, effectIndex, authoredPassIndex, effectivePass, shader, shaderResource,
+                    ShaderVerdict verdict = Judge(new(ownerId, effectIndex, authoredPassIndex,
+                        EffectiveAnalysisPass(materialPass, definitionPass, authoredPass, shaderSource), shader, shaderResource,
                         shaderSource, owner, objectsById, source, assetsDirectory, ceiling, maximumRetimePercent));
                     components.AddRange(verdict.Components);
                     unresolved.AddRange(verdict.Unresolved);
@@ -236,7 +236,7 @@ public static class ShaderPeriodAnalysis
             !TryReadMaterialShader(source, assetsDirectory, material, out string shader, out JsonObject pass, out _) ||
             !TryReadShader(source, assetsDirectory, shader, out string resource, out string text, out _)) return;
         var shaderSource = new ShaderSource(text);
-        var c = new PassContext(ownerId, BaseMaterialEffectIndex, 0, pass, shader, resource, shaderSource, owner, objectsById, source,
+        var c = new PassContext(ownerId, BaseMaterialEffectIndex, 0, EffectiveAnalysisPass(pass, new JsonObject(), null, shaderSource), shader, resource, shaderSource, owner, objectsById, source,
             assetsDirectory, ceiling, retimePercent) { BaseMaterial = true };
         foreach (ClockRule rule in Table.Rules)
         {
@@ -274,7 +274,7 @@ public static class ShaderPeriodAnalysis
 
     /// <summary>
     /// 规则表里的门控，按顺序求值：combo_off = 分支启用或未证明关闭就拒；combo_on = 分支关闭即无运动、值读不出就拒；
-    /// constant_zero = 常量必须写明且为零。都通过返回 null。
+    /// constant_zero = 常量（场景没写取 shader 默认值）必须为零。都通过返回 null。
     /// directive 是一行预处理指令的开头（如 "#if NOISE"），按预处理词法查（ShaderSource.HasDirective）；
     /// absent_enabled_unless / absent_enabled_if 是规则表里的指纹名，与规则的 match 同一套求值：
     /// combo 缺省值按 [COMBO] 注释解析后的 JSON 比（数字按数值，1 与 1.0 相同）。
@@ -397,12 +397,12 @@ public static class ShaderPeriodAnalysis
         // shine 把前两个 pass 当一个机制整体裁定，主循环不会再单独走它们，所以两个 shader 都在这里登记。
         ruled.Add((ownerId, downsampleShader));
         ruled.Add((ownerId, castShader));
-        JsonObject noisePass = EffectiveAnalysisPass(downsampleMaterialPass, downsampleDefinition,
-            authoredPasses.ElementAtOrDefault(0)?.AsObject());
-        JsonObject castPass = EffectiveAnalysisPass(castMaterialPass, castDefinition,
-            authoredPasses.ElementAtOrDefault(1)?.AsObject());
         var noiseSource = new ShaderSource(noiseText);
         var castSource = new ShaderSource(castText);
+        JsonObject noisePass = EffectiveAnalysisPass(downsampleMaterialPass, downsampleDefinition,
+            authoredPasses.ElementAtOrDefault(0)?.AsObject(), noiseSource);
+        JsonObject castPass = EffectiveAnalysisPass(castMaterialPass, castDefinition,
+            authoredPasses.ElementAtOrDefault(1)?.AsObject(), castSource);
         bool canonicalNoise = Table.Matches("repeat_noise", noiseSource);
         bool castClock = Table.Matches("shine_cast_clock", castSource);
         // 读不出的 EDGES 值不能算成已证明的四方向变体，下面的 fourDirections 因此为 false。
@@ -696,28 +696,13 @@ public static class ShaderPeriodAnalysis
         double? authoredSpeed)
     {
         (int ownerId, int effectIndex, int passIndex, JsonObject pass, JsonObject owner) = (c.OwnerId, c.EffectIndex, c.PassIndex, c.Pass, c.Owner);
-        IReadOnlyDictionary<string, JsonNode?> defaults = c.Source.UniformDefaults;
-        double Scalar(string key, double fallback)
-        {
-            if (TryScalar(pass, key, out double value, out _, out _)) return value;
-            return defaults.GetValueOrDefault(key) is JsonValue json && json.TryGetValue<double>(out double parsed) && double.IsFinite(parsed)
-                ? parsed : fallback;
-        }
+        double Scalar(string key, double fallback) => TryScalar(pass, key, out double value, out _, out _) ? value : fallback;
         double speed = authoredSpeed ?? Scalar(speedKey, double.NaN);
         if (!double.IsFinite(speed) || speed == 0 || !float.IsFinite((float)speed)) return null;
         double gpuSpeed = (float)speed;
         double[] coefficients = [.. clock.Sines.Evaluate(gpuSpeed), .. clock.CoSines.Evaluate(gpuSpeed)];
         double weightX = 1, weightY = 0.2;
-        if (vertexMode && !TryVec2(pass, "directionweights", out weightX, out weightY))
-        {
-            (weightX, weightY) = (1, 0.2);
-            if (defaults.GetValueOrDefault("directionweights") is JsonValue text && text.TryGetValue<string>(out string? words))
-            {
-                string[] parts = words.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length == 2 && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double x) &&
-                    double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double y)) (weightX, weightY) = (x, y);
-            }
-        }
+        if (vertexMode && !TryVec2(pass, "directionweights", out weightX, out weightY)) (weightX, weightY) = (1, 0.2);
         double? width = null, height = null;
         double scaleX = 1, scaleY = 1;
         try
@@ -774,19 +759,17 @@ public static class ShaderPeriodAnalysis
     private static ShaderVerdict WaterRipple(PassContext c)
     {
         JsonObject pass = c.Pass;
-        IReadOnlyDictionary<string, JsonNode?> defaults = c.Source.UniformDefaults;
         // 常量按 uniform 注释的材质键读（pkg 内嵌的旧版用 ui_editor_properties_* 旧键）。旧版没有 g_Ratio 时 y 轴不缩放，即 ratio = 1。
         string speedKey = MaterialKey(c.Source, "g_AnimationSpeed", "animationspeed");
         bool hasRatio = c.Source.Uses("g_Ratio");
         double ratio = 1;
         string ratioToken = "1 (no ratio uniform)";
-        // animationspeed 必须是场景里写明的标量：改频要改写它。其余三个常量缺省时取 shader 声明的默认值。
-        if (!RippleConstant(speedKey, authoredOnly: true, out double speed, out int speedIndex, out string speedToken) ||
-            !RippleConstant(MaterialKey(c.Source, "g_ScrollSpeed", "scrollspeed"), authoredOnly: false, out double scrollSpeed, out _, out string scrollToken) ||
-            !RippleConstant(MaterialKey(c.Source, "g_Scale", "scale"), authoredOnly: false, out double scale, out _, out string scaleToken) ||
-            (hasRatio && !RippleConstant(MaterialKey(c.Source, "g_Ratio", "ratio"), authoredOnly: false, out ratio, out _, out ratioToken)))
+        if (!TryScalar(pass, speedKey, out double speed, out int speedIndex, out string speedToken) ||
+            !TryScalar(pass, MaterialKey(c.Source, "g_ScrollSpeed", "scrollspeed"), out double scrollSpeed, out _, out string scrollToken) ||
+            !TryScalar(pass, MaterialKey(c.Source, "g_Scale", "scale"), out double scale, out _, out string scaleToken) ||
+            (hasRatio && !TryScalar(pass, MaterialKey(c.Source, "g_Ratio", "ratio"), out ratio, out _, out ratioToken)))
             return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed,
-                "Verified water-ripple timing needs an authored finite scalar 'animationspeed' and finite 'scrollspeed', 'scale' and 'ratio' constants (authored or shader default).");
+                "Verified water-ripple timing needs finite scalar 'animationspeed', 'scrollspeed', 'scale' and 'ratio' constants (authored or shader default).");
         double animation = speed * speed, drift = scrollSpeed * scrollSpeed;
         if (scale == 0 || (animation == 0 && drift == 0)) return ShaderVerdict.NoMotion;
         // 法线贴图槽：现行版在槽 2，旧版在槽 1（指纹已要求两次查表同槽）。
@@ -798,7 +781,7 @@ public static class ShaderPeriodAnalysis
         // 滚动开、a ≠ 0、方向 d 是非零有限浮点（有理数）时：两次查表 x 轴速率比 (a² − s²·sin d)/(−a² − s²·sin d) 若是有理数，
         // sin d 就是有理数；而非零有理 d 的 sin d 是超越数（Lindemann–Weierstrass），所以永不同时回到整数圈，统一调速不改比值。
         if (drift != 0 && animation != 0 &&
-            RippleConstant(MaterialKey(c.Source, "g_Direction", "scrolldirection"), authoredOnly: false, out double direction, out _, out string directionToken) && direction != 0)
+            TryScalar(pass, MaterialKey(c.Source, "g_Direction", "scrolldirection"), out double direction, out _, out string directionToken) && direction != 0)
             return c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
                 $"Water-ripple scroll is on (scrollspeed {scrollToken}, scrolldirection {directionToken}, animationspeed {speedToken}). " +
                 "Along x the two normal lookups translate at rates proportional to a² − s²·sin d and −a² − s²·sin d (a = animationspeed, " +
@@ -839,16 +822,6 @@ public static class ShaderPeriodAnalysis
             new CommonLoopPeriod(period, CommonLoopPeriodEvidence.Analytic), AllowRetime: true),
             c.Patch(speedKey, speedIndex, speed, exponent: 2), c.Resource,
             $"Verified water-ripple normal scroll with scrollspeed 0: {equation}."));
-
-        bool RippleConstant(string key, bool authoredOnly, out double value, out int index, out string token)
-        {
-            if (pass["constantshadervalues"]?[key] is not null) return TryScalar(pass, key, out value, out index, out token);
-            (value, index, token) = (0, 0, "");
-            if (authoredOnly || defaults.GetValueOrDefault(key) is not JsonValue json || !json.TryGetValue(out value) || !double.IsFinite(value))
-                return false;
-            token = json.ToJsonString() + " (shader default)";
-            return true;
-        }
     }
 
     /// <summary>调用方没给调速预算时的缺省（百分比）：与 HybridLoopService.Analyze、CommonLoopRequest 的缺省 2% 一致。</summary>
@@ -982,7 +955,7 @@ public static class ShaderPeriodAnalysis
     {
         if (!TryScalar(c.Pass, "speed", out double speed, out int speedIndex, out string speedToken))
             return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, "Verified glitter timing needs a finite scalar 'speed' constant.");
-        if (!AuthoredOrDefault(c, "density", out double density, out string densityToken))
+        if (!TryScalar(c.Pass, "density", out double density, out _, out string densityToken))
             return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, "Verified glitter timing needs a finite 'density' constant or shader default.");
         double rate = speed * density * density;
         if (rate == 0) return ShaderVerdict.NoMotion;
@@ -1013,11 +986,7 @@ public static class ShaderPeriodAnalysis
         string uniform = fracs[0].Groups["u"].Value;
         if (c.Source.UniformAnnotations.FirstOrDefault(item => item.Name == uniform).Annotation?["material"] is not JsonValue keyValue ||
             !keyValue.TryGetValue(out string? key) || string.IsNullOrEmpty(key)) return null;
-        bool authored = c.Pass["constantshadervalues"]?[key] is not null;
-        int valueIndex = 0;
-        double speed;
-        string token;
-        if (!(authored ? TryScalar(c.Pass, key, out speed, out valueIndex, out token) : AuthoredOrDefault(c, key, out speed, out token)))
+        if (!TryScalar(c.Pass, key, out double speed, out int valueIndex, out string token))
             return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, $"Verified frac(g_Time * {uniform}) clock needs a finite scalar '{key}' constant.");
         if (speed == 0) return ShaderVerdict.NoMotion;
         double period = 1 / Math.Abs(speed);
@@ -1026,7 +995,7 @@ public static class ShaderPeriodAnalysis
         if (period > c.Ceiling * (1 + c.RetimePercent / 100))
             return c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
                 $"Verified {equation}. That is past the {CeilingText(c.Ceiling)}-second loop ceiling even with the largest retime this analysis allows ({CeilingText(c.RetimePercent)}%).");
-        if (authored && !c.BaseMaterial)
+        if (!c.BaseMaterial)
             return ShaderVerdict.Of(new ShaderPeriodComponent(new(c.Id(key), new CommonLoopPeriod(period, CommonLoopPeriodEvidence.Analytic), AllowRetime: true),
                 c.Patch(key, valueIndex, speed), c.Resource, $"Verified {equation}."));
         if (!TryReciprocalRational(token.Split(' ')[0], out CommonLoopRational exact))
@@ -1079,15 +1048,6 @@ public static class ShaderPeriodAnalysis
     }
 
     /// <summary>pass 上写了就按写的读（必须是有限标量），没写取 shader uniform 注释的默认值（材质键 → default）。</summary>
-    private static bool AuthoredOrDefault(PassContext c, string key, out double value, out string token)
-    {
-        if (c.Pass["constantshadervalues"]?[key] is not null) return TryScalar(c.Pass, key, out value, out _, out token);
-        (value, token) = (0, "");
-        if (c.Source.UniformDefaults.GetValueOrDefault(key) is not JsonValue json || !json.TryGetValue(out value) || !double.IsFinite(value)) return false;
-        token = json.ToJsonString() + " (shader default)";
-        return true;
-    }
-
     /// <summary>
     /// 按 pass 的 combo 值挑出预处理分支后的源码。只认 <c>#if NAME</c>、<c>#if NAME == N</c>、<c>#if NAME != N</c>、
     /// <c>#else</c>、<c>#endif</c>。combo 值来自 pass，缺省时取 shader 里 <c>// [COMBO]</c> 声明的 default；
@@ -1222,13 +1182,19 @@ public static class ShaderPeriodAnalysis
             _ => true,
         };
 
-    private static JsonObject EffectiveAnalysisPass(JsonObject materialPass, JsonObject definitionPass, JsonObject? authoredPass)
+    private static JsonObject EffectiveAnalysisPass(JsonObject materialPass, JsonObject definitionPass, JsonObject? authoredPass,
+        ShaderSource shader)
     {
-        // Constants stay authored: every emitted rate patch must have a source-scene value to verify and replace.
+        // 常量按渲染器的覆盖顺序合并：shader 注释默认值 < 材质 < 效果定义 < 场景。场景没写的键产出的调速补丁
+        // 以合并后的值为 old_value，bake 时插进场景（HybridLoopService.ApplyPatches）。
         JsonObject result = authoredPass?.DeepClone().AsObject() ?? new JsonObject();
         var combos = new JsonObject();
         var textures = new JsonArray();
+        var constants = new JsonObject();
+        foreach ((string key, JsonNode? value) in shader.UniformDefaults)
+            if (value is not null) constants[key] = value.DeepClone();
         Merge(materialPass); Merge(definitionPass); if (authoredPass is not null) Merge(authoredPass);
+        if (constants.Count > 0) result["constantshadervalues"] = constants;
         if (combos.Count > 0) result["combos"] = combos;
         else result.Remove("combos");
         if (textures.Count > 0) result["textures"] = textures;
@@ -1239,6 +1205,8 @@ public static class ShaderPeriodAnalysis
         {
             if (source["combos"] is JsonObject values)
                 foreach ((string key, JsonNode? value) in values) combos[key] = value?.DeepClone();
+            if (source["constantshadervalues"] is JsonObject authored)
+                foreach ((string key, JsonNode? value) in authored) constants[key] = value?.DeepClone();
             if (source["textures"] is not JsonArray slots) return;
             while (textures.Count < slots.Count) textures.Add(null);
             for (int index = 0; index < slots.Count; ++index)

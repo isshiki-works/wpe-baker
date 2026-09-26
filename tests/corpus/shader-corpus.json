@@ -3105,7 +3105,7 @@
       3,
       4
      ],
-     "components_total": 1
+     "components_total": 2
     },
     {
      "message": "definition combos override material defaults for an authored patchable period",
@@ -3125,10 +3125,10 @@
      "kind": "NonPeriodicOrDriftingMechanism"
     },
     {
-     "message": "a definition-only time pass is reported but an inherited speed is not exposed as an unpatchable component",
+     "message": "a speed inherited from the material is patched by inserting it into the scene pass",
      "layer": 3,
-     "unresolved": 1,
-     "kind": "MissingOrInvalidSpeed"
+     "components": 1,
+     "key": "speed"
     },
     {
      "message": "a source-verified static shine cast emits only the complete repeat-noise period and still rejects a later unmodeled time pass",
@@ -3847,13 +3847,15 @@
      "kind": "UnsupportedShaderMechanism"
     },
     {
-     "message": "an unauthored rate uses the shader default as a locked exact period",
+     "message": "an unauthored rate reads the shader default and retimes by inserting it into the scene pass",
      "layer": 4,
      "components": 1,
      "unresolved": 0,
-     "allow_retime": false,
-     "key": "",
-     "exact_seconds": "2"
+     "allow_retime": true,
+     "key": "Speed",
+     "exponent": 1,
+     "period": "1/0.5",
+     "tolerance": 1e-09
     },
     {
      "message": "a base material frac clock is a locked exact period from its material constant",
