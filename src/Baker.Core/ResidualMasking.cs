@@ -249,7 +249,7 @@ public static class ResidualMasking
     /// <summary>
     /// 布局不允许掩盖时的取证与双语理由：点名不在任何视频组里的可掩盖分量、说明没有组能替它们淡化、给出本场景可执行的出路。
     /// --retain-live 的具体 id 优先取 analyze 已经重查过的更小分配（loop_allocation_fallback 为 candidate_found），
-    /// 否则退回这些分量所在的作者根，并如实说明还没重新分析过。
+    /// 否则退回这些分量所在的分配单元，并如实说明还没重新分析过。
     /// </summary>
     public static JsonObject LayoutRejection(JsonObject plan, JsonObject classification) =>
         LayoutRejection(plan, classification, out _);
@@ -273,7 +273,7 @@ public static class ResidualMasking
         foreach (JsonObject item in residual)
         {
             int? owner = Id(item["owner_layer_id"]);
-            int? root = owner is int ownerId && layers.TryGetValue(ownerId, out JsonObject? layer) ? Id(layer["root"]) ?? ownerId : owner;
+            int? root = owner is int ownerId && layers.TryGetValue(ownerId, out JsonObject? layer) ? Id(layer["allocation_root"]) ?? ownerId : owner;
             if (root is int rootId && !ownerRoots.Contains(rootId)) ownerRoots.Add(rootId);
             components.Add(new JsonObject
             {
@@ -315,11 +315,11 @@ public static class ResidualMasking
         else
         {
             optionsZh.Add(verified.Length > 0
-                ? $"加 --retain-live {retainText} 重新分析，让这些分量所在的作者根整棵保持实时；按这个分配重新分析过，已经找到覆盖其余内容的循环"
-                : $"加 --retain-live {retainText} 重新分析，让这些分量所在的作者根整棵保持实时（这个分配还没有重新分析过）");
+                ? $"加 --retain-live {retainText} 重新分析，让这些分量所在的分配单元保持实时；按这个分配重新分析过，已经找到覆盖其余内容的循环"
+                : $"加 --retain-live {retainText} 重新分析，让这些分量所在的分配单元保持实时（这个分配还没有重新分析过）");
             optionsEn.Add(verified.Length > 0
-                ? $"re-run analyze with --retain-live {retainText} to keep the author roots that own these components live; a re-analysis with that allocation already finds a loop for the remaining content"
-                : $"re-run analyze with --retain-live {retainText} to keep the author roots that own these components live (that allocation has not been re-analyzed yet)");
+                ? $"re-run analyze with --retain-live {retainText} to keep the allocation units that own these components live; a re-analysis with that allocation already finds a loop for the remaining content"
+                : $"re-run analyze with --retain-live {retainText} to keep the allocation units that own these components live (that allocation has not been re-analyzed yet)");
         }
         string groupCount = groups.Length.ToString(CultureInfo.InvariantCulture);
         object?[] zh = [layout, groupCount, transparentGroups > 0 ? $"（其中 {transparentGroups} 个是透明组）" : "",

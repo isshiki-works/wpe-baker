@@ -27,21 +27,11 @@ internal static class HybridLoopAllocation
         if (baked.Any(id => !objects.ContainsKey(id)))
             throw new InvalidDataException("A baked loop layer is absent from the source scene.");
 
-        int AuthorRoot(int id)
-        {
-            var seen = new HashSet<int>();
-            while (SceneGraph.Int(objects[id]["parent"]) is int parent && objects.ContainsKey(parent))
-            {
-                if (!seen.Add(id)) throw new InvalidDataException("Scene parent cycle.");
-                id = parent;
-            }
-            return id;
-        }
-        // RetainLiveRootIds accepts author roots, even when the current plan split allocation units.
-        var rootOf = objects.Keys.ToDictionary(id => id, AuthorRoot);
-        var retained = ReadIds(plan["settings"]?["retain_live_root_ids"]).ToHashSet();
-        if (retained.Any(id => !rootOf.TryGetValue(id, out int root) || root != id))
-            throw new InvalidDataException("A retained loop root is not a source author root.");
+        // 与 Allocation 同一粒度：保留的是触发器所在的分配单元（plan 层记录的 allocation_root），同一作者根下拆开的其它单元照常烘。
+        var unitOf = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["id"]) is not null)
+            .ToDictionary(layer => SceneGraph.Int(layer["id"])!.Value, layer => SceneGraph.Int(layer["allocation_root"]) ?? SceneGraph.Int(layer["id"])!.Value);
+        int Unit(int id) => unitOf.GetValueOrDefault(id, id);
+        var retained = ReadIds(plan["settings"]?["retain_live_root_ids"]).Select(Unit).ToHashSet();
 
         // 触发器 = 没通过平稳随机判据的粒子层 + 其它未解析机制的所有者。判据结论由 HybridLoopService 写在
         // loop.unresolved[].particle_stationarity 里：通过判据的粒子层没有周期但可以淡化替换，留实时救不了循环，不再触发。
@@ -62,7 +52,7 @@ internal static class HybridLoopAllocation
         // 各分量有周期证明却凑不出上限内公共循环时，循环分析点名的并不进的所有者层同样留实时（LoopAnalysis.NoCommonLoopOwners）。
         triggers.UnionWith(ReadIds(plan["loop"]?["no_candidate_reason"]?["retain_live_owner_layer_ids"]).Where(baked.Contains));
 
-        var added = triggers.Select(id => rootOf[id]).Where(root => !retained.Contains(root)).ToHashSet();
+        var added = triggers.Select(Unit).Where(unit => !retained.Contains(unit)).ToHashSet();
         if (added.Count == 0) return NotApplicable("reason.allocation_no_trigger");
         retained.UnionWith(added);
         // 加载即播、一次淡到全透明的图层（alpha 单次轨末帧值 0）入场后就看不见；视频从入场结束后录
@@ -71,7 +61,7 @@ internal static class HybridLoopAllocation
             track["options"] is JsonObject options && options["mode"] is JsonValue mode && mode.TryGetValue(out string? text) && text == "single" &&
             (track["c0"] as JsonArray ?? []).OfType<JsonObject>().MaxBy(key => SceneGraph.Numeric(key["frame"], 0)) is JsonObject last &&
             SceneGraph.Numeric(last["value"], 1) == 0;
-        int[] remaining = objects.Keys.Where(id => baked.Contains(id) && !retained.Contains(rootOf[id]) && !FadesOutForGood(objects[id])).ToArray();
+        int[] remaining = objects.Keys.Where(id => baked.Contains(id) && !retained.Contains(Unit(id)) && !FadesOutForGood(objects[id])).ToArray();
         if (remaining.Length == 0) return NotApplicable("reason.allocation_nothing_left");
 
         return new JsonObject {
@@ -81,7 +71,7 @@ internal static class HybridLoopAllocation
             ["added_live_root_ids"] = JsonSerializer.SerializeToNode(objects.Keys.Where(added.Contains)),
             ["trigger_layer_ids"] = JsonSerializer.SerializeToNode(objects.Keys.Where(triggers.Contains)),
             ["remaining_baked_layer_ids"] = JsonSerializer.SerializeToNode(remaining),
-            ["scope"] = "Retain whole author subtrees containing unresolved loop owners or selected particles that fail the stationary-random criteria; replan the remaining bake and rerun all loop, composition and cost checks."
+            ["scope"] = "Retain the allocation units containing unresolved loop owners or selected particles that fail the stationary-random criteria; replan the remaining bake and rerun all loop, composition and cost checks."
         };
     }
 
@@ -125,7 +115,6 @@ internal static class HybridLoopAllocation
             !conflict.TryGetValue(out string? conflictText) || blockerText != conflictText ||
             replanned["full_frame_retention"] is not JsonObject retention ||
             retention["status"]?.GetValue<string>() != "available") return null;
-        // 用记录里换算好的源作者根（--retain-live 只收源根）；换算不成立（会连带退回别的视频单元）时记录为 null，不给建议。
         if (retention["retain_live_root_ids"] is not JsonArray command) return null;
         int[] added = ReadIds(command).Where(id => !retained.Contains(id)).Distinct().ToArray();
         if (added.Length == 0) return null;
