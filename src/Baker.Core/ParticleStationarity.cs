@@ -360,13 +360,16 @@ internal static class ParticleStationarity
             else
                 for (int index = 0; index < list.Count; ++index)
                     childTail = Math.Max(childTail, CheckEventChild(list[index]!.AsObject(), $"children[{index}]", failures, definition,
-                        overrides, lifetimeMin * lifetimeScale / rateScale, objects, runtime, readResource, clock, childLocks, ParentInstances));
+                        overrides, lifetimeMin * lifetimeScale / rateScale, lifetimeMax > lifetimeMin, objects, runtime, readResource, clock, childLocks,
+                        ParentInstances));
         }
 
         // ---- C6 材质：genericparticle 且不读帧缓冲 ----
         CheckMaterial(definition, readResource, Fail);
 
-        // ---- C7 脚本：对象及祖先不能被脚本逐帧驱动或写入 ----
+        // ---- C7 脚本：对象及祖先被脚本逐帧驱动或写入 ----
+        // 脚本读外部输入（日时、音频、指针、媒体；初始化时注册也算）：输出依赖外部量，不是时间的周期函数，判不能。
+        // 其余脚本的输出随时间怎样变要做确定性分析（常数 / a·t+b / 周期集合 / 不周期，与着色器时间签名同一个域），还没有，标未收敛。
         int[] chain = Chain(owner, objects);
         if (runtime?["runtime_dependencies"] is not JsonArray dependencies)
             Fail("C7", "script_evidence_unavailable", "runtime_dependencies");
@@ -377,19 +380,25 @@ internal static class ParticleStationarity
                 string operation = Text(dependency["operation"]);
                 int? scriptOwner = SceneGraph.Int(dependency["owner"]);
                 int? target = SceneGraph.Int(dependency["target"]);
-                string summary = $"{operation}:{Text(dependency["property"])}";
-                // 挂在本对象或祖先上的脚本：逐帧运行，或读外部输入（音频、鼠标等，初始化时注册也算）。
+                string node;
                 if (scriptOwner is int host && chain.Contains(host) && (!initialization || operation == "input"))
-                    Cannot("C7", "script_drives_object", $"runtime_dependencies[owner={host}]", JsonValue.Create(summary));
+                    node = $"runtime_dependencies[owner={host}]";
                 else if (target is int written && chain.Contains(written) && operation == "write" && !initialization)
-                    Cannot("C7", "script_writes_object", $"runtime_dependencies[target={written}]", JsonValue.Create(summary));
+                    node = $"runtime_dependencies[target={written}]";
+                else continue;
+                // 同一段脚本（所有者 + 绑定）读过的外部输入。
+                string[] inputs = dependencies.OfType<JsonObject>().Where(other => SceneGraph.Int(other["owner"]) == scriptOwner &&
+                        Text(other["binding"]) == Text(dependency["binding"]) && Text(other["operation"]) == "input")
+                    .Select(other => "input:" + Text(other["property"])).Distinct().ToArray();
+                if (inputs.Length > 0) Cannot("C7", "script_reads_external_input", node, JsonValue.Create(string.Join(",", inputs)));
+                else Fail("C7", "script_period_not_derived", node, JsonValue.Create($"{operation}:{Text(dependency["property"])}"));
             }
 
         // ---- C8 覆盖与对象属性：常数、静态属性绑定，或周期已由渲染器动画轨道证明的关键帧 ----
-        // 作者脚本驱动的值（覆盖或属性）：分析没有脚本周期的推导（运行时观测只记录读时钟与外部输入），周期给不出，判不能。C7 同理。
+        // 作者脚本驱动的值（覆盖或属性）：脚本挂在本对象或祖先上，读外部输入的已由 C7 判不能；其余同 C7 标未收敛。
         foreach ((string key, JsonNode? value) in overrides)
             if (key == "id" || IsConstantBinding(value)) continue;
-            else if (value is JsonObject { } scripted && scripted["script"] is not null) Cannot("C8", "override_script_driven", "instanceoverride." + key, value);
+            else if (value is JsonObject { } scripted && scripted["script"] is not null) Fail("C8", "script_period_not_derived", "instanceoverride." + key, value);
             else Fail("C8", "override_not_constant", "instanceoverride." + key, value);
         var tracks = new List<(string Node, int Id, JsonObject Binding)>();
         foreach (int id in chain)
@@ -397,7 +406,7 @@ internal static class ParticleStationarity
             JsonObject item = objects.TryGetValue(id, out JsonObject? found) ? found : owner;
             foreach (string key in ParticleCriteria.AncestorMotionKeys)
                 if (item[key] is not JsonObject binding || IsConstantBinding(binding)) continue;
-                else if (binding["script"] is not null) Cannot("C8", "property_script_driven", $"object[{id}].{key}", binding);
+                else if (binding["script"] is not null) Fail("C8", "script_period_not_derived", $"object[{id}].{key}", binding);
                 // 关键帧：发射器随动画轨道周期运动，粒子层是按轨道周期的周期平稳过程，锁到轨道周期（见下方锁定）。
                 else if (binding["animation"] is JsonObject) tracks.Add(($"object[{id}].{key}", id, binding));
                 else Fail("C8", "property_animated", $"object[{id}].{key}", binding);
@@ -616,13 +625,13 @@ internal static class ParticleStationarity
     /// 在父粒子出生、eventdeath 在父粒子死亡时取一个实例（按 probability 独立抽签）；实例的发射计时、槽位、starttime 预跑都从实例创建起算，
     /// 父粒子死后实例停发（InstanceCanEmit），余下粒子走完子寿命即回收。每个实例因此是父粒子标记、自身随机与事件后时间的函数，
     /// 寿命有界：父层平稳时整体仍平稳，相关跨度与预热各多一段尾长（返回值，真实秒；不满足时返回 0）。
-    /// 前提是实例上限（children[].maxcount，缺省 20）永不触顶，否则哪些事件拿到实例取决于历史：每个父槽位相邻两次出生或死亡至少隔
-    /// 父寿命下界，同时在世的实例 ≤ min(父 maxcount, 20000) × (2 + ⌊尾长 / 父寿命下界⌋)。子定义按同一套条件递归判，
+    /// 实例上限（children[].maxcount，缺省 20）永不触顶时直接成立：每个父槽位相邻两次出生或死亡至少隔
+    /// 父寿命下界，同时在世的实例 ≤ min(父 maxcount, 20000) × (2 + ⌊尾长 / 父寿命下界⌋)。可能触顶时按父寿命是否随机分两种（见方法内）。子定义按同一套条件递归判，
     /// 只相对实例的几条（爆发、零发射率、有限时长、间歇、实例内封顶）不判。eventfollow 例外：父粒子死亡的同一帧槽位被补上时实例不释放、
     /// 接着跟新粒子（ProcessChildEvents），发射计时跨代延续，所以按常驻系统的全套条件判。static 子系统是另一个常驻系统，同样按全套条件判。
     /// </summary>
     private static double CheckEventChild(JsonObject child, string node, List<Failure> failures, JsonObject definition, JsonObject overrides,
-        double? parentLifetimeMin, IReadOnlyDictionary<int, JsonObject> objects, JsonObject? runtime, Func<string, JsonObject?> readResource,
+        double? parentLifetimeMin, bool parentLifetimeRandom, IReadOnlyDictionary<int, JsonObject> objects, JsonObject? runtime, Func<string, JsonObject?> readResource,
         FrameClock? clock, List<CyclostationaryLock> locks, Func<double, double?> parentInstances)
     {
         // 渲染器 ParseSpawnType：type 缺省或不认识的字样都是 static。
@@ -642,6 +651,11 @@ internal static class ParticleStationarity
             ? Math.Min(parentCount, 20000) * (2 + Math.Floor(tail / parentLifetimeMin.Value)) : null;
         if (parentInstances(tail) is double byRate) instances = Math.Min(instances ?? double.PositiveInfinity, byRate);
         if (capReadable && instances <= cap) return tail;
+        // 上限会触顶时，哪些父事件拿到实例取决于实例池的历史（ProcessChildEvents：满了就不建，父粒子死后实例走完子寿命才回池；
+        // eventfollow 的槽位同帧补上时实例不释放）。父寿命随机时，池的占用与释放由逐粒子独立抽取的寿命驱动、规则不随时间变，
+        // 父层平稳后各父粒子统计上可互换，拿到实例的是哪几个不改变画面的分布：仍是平稳过程，走淡化替换，接缝门验证。
+        // 父寿命确定时分配是计数动态的确定函数，周期要按槽位逐帧重放推导（还没有），标未收敛。
+        if (capReadable && parentLifetimeRandom) return tail;
         failures.Add(new("C5", "child_instance_cap_binds", node + ".maxcount",
             new JsonObject { ["cap"] = child["maxcount"]?.DeepClone(), ["instances_bound"] = instances }.ToJsonString()));
         return 0;
