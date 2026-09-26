@@ -55,20 +55,20 @@ internal static class HybridSuitability
             plan["loop_allocation_fallback"] is JsonObject fallback && Text(fallback["status"]) == "still_unavailable" &&
             fallback["replanned_video_group_count"] is JsonValue remainingGroups && remainingGroups.TryGetValue<int>(out int groupCount) && groupCount == 0 &&
             fallback["replanned_effect_prefix_cache_count"] is JsonValue remainingCaches && remainingCaches.TryGetValue<int>(out int cacheCount) && cacheCount == 0)
-            return Build("not_suitable", NoIndependentContentRule,
+            return Converged(plan, Build("not_suitable", NoIndependentContentRule,
                 "Keeping the controls and live interactions intact leaves no independently bakeable content with the current settings. " +
                 "Automatic reallocation was already tried; keep using the original wallpaper.",
-                "保留控制和实时交互后，当前设置下没有可独立烘焙的画面。已经尝试自动重新分配，建议继续使用原壁纸。", notes);
+                "保留控制和实时交互后，当前设置下没有可独立烘焙的画面。已经尝试自动重新分配，建议继续使用原壁纸。", notes));
 
         // 准入拒了分配，而未解析机制的所有者覆盖了全部被烘图层：留实时后什么都不剩，取舍方案只关实时层、也解不开它们。
         // 不是"待你决定"，同一条不可烘规则（NEW10 3793750035：VHS/脉冲着色器周期证不出，原先报 requires_user_choice）。
         if (blockers.Contains(BlockerCode.BakeAllocation) &&
             plan["loop_allocation_fallback"] is JsonObject nothingLeft && Text(nothingLeft["status"]) == "not_applicable" &&
             Text(nothingLeft["reason_localized"]?["key"]) == "reason.allocation_nothing_left")
-            return Build("not_suitable", NoIndependentContentRule,
+            return Converged(plan, Build("not_suitable", NoIndependentContentRule,
                 "Every layer that could go into the video has motion whose period the analysis cannot establish; keeping those layers live leaves nothing to pre-render, " +
                 "so reallocation cannot help. Keep using the original wallpaper.",
-                "能进视频的图层上都有分析不出周期的动态效果；把它们留作实时后就没有可以预渲染的画面，重新分配也帮不上。建议继续使用原壁纸。", notes);
+                "能进视频的图层上都有分析不出周期的动态效果；把它们留作实时后就没有可以预渲染的画面，重新分配也帮不上。建议继续使用原壁纸。", notes));
 
         // 同类：不可掩盖的分量都在要烘的层上（或没有归属），把它们留实时的更小分配也试过、仍证不出循环。
         // 这条保留 hdr 判据：重查可能只是被 HDR 闭合挡住（resolution_basis = hdr_radiance_open），不能说成证不出循环。
@@ -80,10 +80,10 @@ internal static class HybridSuitability
             plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
             blocking.OfType<JsonObject>().All(component => component["owner_layer_id"] is not JsonValue owner ||
                 !(plan["live_layer_ids"] as JsonArray ?? []).Any(id => JsonNode.DeepEquals(id, owner))))
-            return Build("not_suitable", "loop_unproven_after_reallocation",
+            return Converged(plan, Build("not_suitable", "loop_unproven_after_reallocation",
                 "Some content bound for the video changes in a way whose loop cannot be proven; keeping it live and reallocating was already tried and found no loop either, " +
                 "and turning live elements off does not reach it. This version cannot bake this wallpaper; keep using the original.",
-                "要转成视频的内容里有证明不了能循环的变化；把它留作实时、重新分配也试过，仍没有循环，关掉实时元素也解不开。当前版本不支持这张，建议继续使用原壁纸。", notes);
+                "要转成视频的内容里有证明不了能循环的变化；把它留作实时、重新分配也试过，仍没有循环，关掉实时元素也解不开。当前版本不支持这张，建议继续使用原壁纸。", notes));
 
         // S1：依赖闭包之后连一个视频组都没有，没有任何东西可烘。
         if (noCandidateAtAll && groups == 0)
@@ -153,6 +153,20 @@ internal static class HybridSuitability
             : Build("requires_user_choice", "loop_not_established",
                 "Analysis established no loop and reported no blocker, so this run cannot say the scene is unsuitable; a different setting or a hand-picked period is needed before baking.",
                 "分析既没确立循环，也没有留下可判定的理由，所以这一次不能断言这张壁纸不适合：要烘的话需要换设置重新分析，或者人工指定周期。", notes);
+    }
+
+    /// <summary>
+    /// "证不出循环"的几条规则，在不可掩盖分量全都已被证明上限内不会重复时（<see cref="ResidualMasking"/> 标了 loop_convergence=cannot），
+    /// 结论就是"不能"：理由换成占位键，界面文字待定。规则名不动，下游按规则名的分支不受影响。
+    /// </summary>
+    private static JsonObject Converged(JsonObject plan, JsonObject built)
+    {
+        if (plan["loop"]?["residual_masking"]?["blocking_components"] is not JsonArray { Count: > 0 } blocking ||
+            !blocking.OfType<JsonObject>().All(component => Text(component["loop_convergence"]) == "cannot")) return built;
+        built["loop_convergence"] = "cannot";
+        built["reason_en"] = ResidualMasking.NeverRepeatsReasonKey;
+        built["reason_zh"] = ResidualMasking.NeverRepeatsReasonKey;
+        return built;
     }
 
     private static JsonObject Build(string verdict, string rule, string reasonEnglish, string reasonChinese, JsonArray notes) => new()
