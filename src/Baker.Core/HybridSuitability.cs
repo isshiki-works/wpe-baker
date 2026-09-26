@@ -50,7 +50,8 @@ internal static class HybridSuitability
 
         // The allocator has already tried keeping the unresolved controller live.
         // If nothing independent remains, do not ask the user to repeat that choice.
-        if (noCandidateAtAll && !hdr && !perspective &&
+        // 这条与下一条说的是"留实时后没东西可烘"，换采集能力也不变，所以排在能力缺口前面，不看 hdr/perspective。
+        if (noCandidateAtAll &&
             plan["loop_allocation_fallback"] is JsonObject fallback && Text(fallback["status"]) == "still_unavailable" &&
             fallback["replanned_video_group_count"] is JsonValue remainingGroups && remainingGroups.TryGetValue<int>(out int groupCount) && groupCount == 0 &&
             fallback["replanned_effect_prefix_cache_count"] is JsonValue remainingCaches && remainingCaches.TryGetValue<int>(out int cacheCount) && cacheCount == 0)
@@ -61,7 +62,7 @@ internal static class HybridSuitability
 
         // 准入拒了分配，而未解析机制的所有者覆盖了全部被烘图层：留实时后什么都不剩，取舍方案只关实时层、也解不开它们。
         // 不是"待你决定"，同一条不可烘规则（NEW10 3793750035：VHS/脉冲着色器周期证不出，原先报 requires_user_choice）。
-        if (!hdr && !perspective && blockers.Contains(BlockerCode.BakeAllocation) &&
+        if (blockers.Contains(BlockerCode.BakeAllocation) &&
             plan["loop_allocation_fallback"] is JsonObject nothingLeft && Text(nothingLeft["status"]) == "not_applicable" &&
             Text(nothingLeft["reason_localized"]?["key"]) == "reason.allocation_nothing_left")
             return Converged(plan, Build("not_suitable", NoIndependentContentRule,
@@ -70,6 +71,7 @@ internal static class HybridSuitability
                 "能进视频的图层上都有分析不出周期的动态效果；把它们留作实时后就没有可以预渲染的画面，重新分配也帮不上。建议继续使用原壁纸。", notes));
 
         // 同类：不可掩盖的分量都在要烘的层上（或没有归属），把它们留实时的更小分配也试过、仍证不出循环。
+        // 这条保留 hdr 判据：重查可能只是被 HDR 闭合挡住（resolution_basis = hdr_radiance_open），不能说成证不出循环。
         // 重新分配已经试过，取舍方案只关实时层也够不着它们（TradeoffOptions 同一口径不列方案），没有可让用户决定的事项。
         if (!hdr && !perspective && blockers.Contains(BlockerCode.BakeAllocation) &&
             Text(plan["loop_allocation_fallback"]?["status"]) == "still_unavailable" &&
