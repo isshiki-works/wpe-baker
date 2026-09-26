@@ -375,8 +375,9 @@ nothing is special-cased for an individual wallpaper.
   and three counts — shader components, runtime animation periods, runtime
   clock uniforms — so you can check for yourself whether nothing moves or
   the analysis simply did not understand it. A new top-level `suitability`
-  gives a `verdict` of `suitable` / `requires_user_choice` /
-  `unsupported_capture` / `not_suitable` with the rule name and a reason in
+  gives a `verdict` of `suitable` / `unsupported_capture` / `not_suitable`
+  (`not_suitable` is split into "cannot" with a proof and "not converged";
+  nothing is left for the user to judge) with the rule name and a reason in
   both languages; capture gaps and layout conflicts only go into `notes` and
   never override the main verdict.
 - **One shader on one layer is ruled on once.** A (layer, shader) pair that
