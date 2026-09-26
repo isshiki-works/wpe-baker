@@ -442,10 +442,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             if (!resolved && HybridLoopAllocation.ReplannedRetainLiveSuggestion(replanned, retained) is JsonObject suggestion)
                 evidence["replanned_retain_live_suggestion"] = suggestion;
             Verdict.AddLoopUnresolved(report, "loop_allocation_fallback", resolved
-                ? $"No loop covers every baked layer, but a smaller bake allocation does: keeping author roots {retainedText} live leaves content that resolves. Re-run analyze with --retain-live {retainedText} to plan that allocation."
+                ? $"No loop covers every baked layer, but a smaller bake allocation does: keeping layers {retainedText} live leaves content that resolves. Re-run analyze with --retain-live {retainedText} to plan that allocation."
                 : replannedRadianceOpen
-                    ? $"No loop covers every baked layer, and the smaller bake allocation that keeps author roots {retainedText} live is still blocked by the HDR radiance closure of the content it captures."
-                    : $"No loop covers every baked layer, and the smaller bake allocation that keeps author roots {retainedText} live establishes none either.");
+                    ? $"No loop covers every baked layer, and the smaller bake allocation that keeps layers {retainedText} live is still blocked by the HDR radiance closure of the content it captures."
+                    : $"No loop covers every baked layer, and the smaller bake allocation that keeps layers {retainedText} live establishes none either.");
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
@@ -454,7 +454,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             evidence["error_type"] = error.GetType().Name;
             evidence["error"] = error.Message;
             Verdict.AddLoopUnresolved(report, "loop_allocation_fallback",
-                $"No loop covers every baked layer, and the smaller bake allocation keeping author roots {retainedText} live could not be analyzed: {error.Message}");
+                $"No loop covers every baked layer, and the smaller bake allocation keeping layers {retainedText} live could not be analyzed: {error.Message}");
         }
     }
 
