@@ -14,7 +14,7 @@ internal static class ProjectWriter
         uint videoWidth, uint videoHeight, int id, double x, double y, double drawWidth, double drawHeight,
         CancellationToken cancellationToken = default, bool packedAlpha = false,
         double parallaxDepthX = 0, double parallaxDepthY = 0, double geometryOffsetX = 0, double geometryOffsetY = 0,
-        bool rgbaFrame = false, bool capturedColor = false, double hdrScale = 1, bool alphaBelow = false)
+        bool rgbaFrame = false, bool capturedColor = false, double hdrScale = 1, bool alphaBelow = false, bool additiveLight = false)
     {
         string textureStem = "wpe_baker_video/" + stem;
         string texturePath = ProjectSource.ContainedPath(project, $"materials/{textureStem}.tex");
@@ -25,11 +25,18 @@ internal static class ProjectWriter
             await File.ReadAllBytesAsync(videoFile, cancellationToken), cancellationToken);
         else await TextureContainer.WriteVideoAsync(texturePath, videoFile, videoWidth, videoHeight, cancellationToken);
         string shader = "genericimage4";
+        // 左半是预乘色 C、右半是覆盖度 a，要画出 C + (1 - a)·背景。translucent 混合给的是 src·a + 背景·(1 - a)，
+        // 输出 C/a 即得同一结果，不必读帧缓冲。加性光（C 可以大于 a，a = 0 处也有 C）translucent 表达不了，这种组仍读帧缓冲。
+        bool readsFramebuffer = packedAlpha && additiveLight;
         if (packedAlpha || geometryOffsetX != 0 || geometryOffsetY != 0 || capturedColor || hdrScale != 1)
         {
             shader = "wpe_baker_video/" + stem;
             string vertex = "// SPDX-License-Identifier: MIT\nuniform mat4 g_ModelViewProjectionMatrix;\nattribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvarying vec3 v_ScreenPos;\nvoid main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; v_ScreenPos = gl_Position.xyw;\n#ifdef HLSL\nv_ScreenPos.y = -v_ScreenPos.y;\n#endif\n}\n";
-            string fragment = "// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\nuniform sampler2D g_Texture1; // {\"hidden\":true,\"default\":\"_rt_FullFrameBuffer\"}\nvarying vec2 v_TexCoord;\nvarying vec3 v_ScreenPos;\nvoid main() { vec3 rgb = texSample2D(g_Texture0, vec2(v_TexCoord.x * 0.5, v_TexCoord.y)).rgb; float a = texSample2D(g_Texture0, vec2(v_TexCoord.x * 0.5 + 0.5, v_TexCoord.y)).r; vec2 uv = (v_ScreenPos.xy / v_ScreenPos.z) * 0.5 + 0.5; vec3 background = texSample2D(g_Texture1, uv).rgb; gl_FragColor = vec4(rgb + background * (1.0 - a), 1.0); }\n";
+            string fragment = "// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\n" +
+                (readsFramebuffer ? "uniform sampler2D g_Texture1; // {\"hidden\":true,\"default\":\"_rt_FullFrameBuffer\"}\nvarying vec2 v_TexCoord;\nvarying vec3 v_ScreenPos;\n" : "varying vec2 v_TexCoord;\n") +
+                "void main() { vec3 rgb = texSample2D(g_Texture0, vec2(v_TexCoord.x * 0.5, v_TexCoord.y)).rgb; float a = texSample2D(g_Texture0, vec2(v_TexCoord.x * 0.5 + 0.5, v_TexCoord.y)).r; " +
+                (readsFramebuffer ? "vec2 uv = (v_ScreenPos.xy / v_ScreenPos.z) * 0.5 + 0.5; vec3 background = texSample2D(g_Texture1, uv).rgb; gl_FragColor = vec4(rgb + background * (1.0 - a), 1.0); }\n"
+                    : "gl_FragColor = vec4(rgb / max(a, 0.004), a); }\n");
             // Keep the node at the original camera center so parallax contributes only the
             // pointer displacement. Cropping is a vertex offset, not a new parallax origin.
             string offset = FormattableString.Invariant($"vec4(a_Position + vec3({geometryOffsetX * videoWidth / drawWidth:R}, {geometryOffsetY * videoHeight / drawHeight:R}, 0.0), 1.0)");
@@ -58,7 +65,7 @@ internal static class ProjectWriter
             }
             // 浮点捕获的组存的是 rgb/k（预乘），在着色器里乘回 k：官方 HDR 管线的浮点目标保留 >1。
             // genericimage4 没有 g_Brightness，所以不靠图层 brightness。
-            if (hdrScale != 1) fragment = fragment.Replace("gl_FragColor = vec4(rgb + ", $"gl_FragColor = vec4(rgb * {Number(hdrScale)} + ", StringComparison.Ordinal)
+            if (hdrScale != 1) fragment = fragment.Replace("gl_FragColor = vec4(rgb ", $"gl_FragColor = vec4(rgb * {Number(hdrScale)} ", StringComparison.Ordinal)
                 .Replace(".rgb, 1.0);", $".rgb * {Number(hdrScale)}, 1.0);", StringComparison.Ordinal);
             string vertexPath = ProjectSource.ContainedPath(project, $"shaders/{shader}.vert");
             Directory.CreateDirectory(Path.GetDirectoryName(vertexPath)!);
@@ -70,7 +77,7 @@ internal static class ProjectWriter
                 ["shader"] = shader, ["blending"] = "translucent", ["cullmode"] = "nocull",
                 ["depthtest"] = "disabled", ["depthwrite"] = "disabled",
                 ["combos"] = new JsonObject { ["LIGHTING"] = 0, ["REFLECTION"] = 0, ["FOG"] = 0 },
-                ["textures"] = packedAlpha ? new JsonArray(textureStem, "_rt_FullFrameBuffer") : new JsonArray(textureStem) }) }, cancellationToken);
+                ["textures"] = readsFramebuffer ? new JsonArray(textureStem, "_rt_FullFrameBuffer") : new JsonArray(textureStem) }) }, cancellationToken);
         await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, modelResource), new JsonObject {
             ["material"] = materialResource, ["autosize"] = true, ["cropoffset"] = "0 0" }, cancellationToken);
         static string Number(double value) => value.ToString("R", CultureInfo.InvariantCulture);

@@ -417,6 +417,7 @@ public sealed class HybridBakeService(NativeTools tools)
         string project = Path.Combine(output, "project");
         JsonObject snapshot = null!;
         DaytimeSplit.DynamicExport? daytimeExport = null;
+        HashSet<int> additiveOwners = [];
         JsonArray finalDependencies = null!;
         // 残差掩盖打开时：起点帧由解析周期内的接缝残差决定，成品在接缝处做固定窗口的整帧交叉淡化。
         // 起点是预热之后、解析周期内的相位；渲染器实际跳过的帧数是 warmupFrames + 起点。
@@ -436,6 +437,10 @@ public sealed class HybridBakeService(NativeTools tools)
             var runtimeDependencies = initialRuntime["runtime_dependencies"]?.AsArray()
                 ?? throw new InvalidDataException("Runtime dependencies are missing.");
             daytimeExport = DaytimeSplit.PrepareDynamicExport(originalObjects, plan, runtimeDependencies);
+            // 材质 blend 2 = 加性（引擎 BlendMode::Additive）：这类层的组合成时仍读帧缓冲，见 ProjectWriter。
+            additiveOwners = (initialRuntime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
+                .Where(layer => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>().Any(m => SceneGraph.Int(m["blend"]) == 2))
+                .Select(layer => SceneGraph.Int(layer["owner"])).OfType<int>().ToHashSet();
             finalDependencies = SceneAssembler.MergeRuntimeDependencies(runtimeDependencies, new JsonArray());
             snapshot = plan["snapshot_properties"]!.DeepClone().AsObject();
             await CaptureSourceBuilder.PrepareAsync(captureProject, source, original, metadata, snapshot, plan, settings, probe,
@@ -727,7 +732,8 @@ public sealed class HybridBakeService(NativeTools tools)
                             groupScheduler.CenterX, groupScheduler.CenterY,
                             crop.Width * capture.Width / capture.PixelWidth, crop.Height * capture.Height / capture.PixelHeight,
                             cancellationToken, packedAlpha, depthX, depthY, x, y, isStatic,
-                            capturedColor: SceneGraph.Int(group["parent_id"]) is not null, hdrScale: capture.HdrScale ?? 1, alphaBelow: alphaBelow);
+                            capturedColor: SceneGraph.Int(group["parent_id"]) is not null, hdrScale: capture.HdrScale ?? 1, alphaBelow: alphaBelow,
+                            additiveLight: layers.Any(additiveOwners.Contains));
                         HybridVideoProjection.AttachToParent(layer, group);
                         if (daytimeExport is not null)
                             daytimeExport.BindReplacement(layer, originalObjects[daytimeExport.ReplacementTargets[id]], isStatic);
