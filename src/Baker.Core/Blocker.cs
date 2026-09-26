@@ -156,8 +156,8 @@ public static class PlanBlockers
         to[Localized] = from[Localized]?.DeepClone() ?? new JsonArray();
     }
 
-    /// <summary>追加一条；同编号同参数的已在 owner 里就不重复加。字段缺失时补上（追加在末尾）。</summary>
-    public static void Add(JsonObject owner, Blocker blocker)
+    /// <summary>追加一条（<paramref name="first"/> 时插到最前）；同编号同参数的已在 owner 里就不重复加。字段缺失时补上（追加在末尾）。</summary>
+    public static void Add(JsonObject owner, Blocker blocker, bool first = false)
     {
         if (owner[Texts] is not JsonArray texts) owner[Texts] = texts = new JsonArray();
         if (owner[Localized] is not JsonArray localized) owner[Localized] = localized = new JsonArray();
@@ -166,8 +166,8 @@ public static class PlanBlockers
         for (int i = 0; i < texts.Count; ++i)
             if (texts[i] is JsonValue value && value.TryGetValue(out string? existing) && existing == text &&
                 i < localized.Count && JsonNode.DeepEquals(localized[i], entry)) return;
-        texts.Add(text);
-        localized.Add(entry);
+        texts.Insert(first ? 0 : texts.Count, text);
+        localized.Insert(first ? 0 : localized.Count, entry);
     }
 
     /// <summary>
