@@ -31,6 +31,12 @@ internal static class LoopCeilingChecks
             longestCeiling.Candidates.Count == 12 && longestCeiling.Candidates[^1].Frames == 216000 &&
             Throws(() => CommonLoopSolver.Suggest(new(60, 1, fixed300, new(1, 60), new(3601)))),
             "a 300-second fixed track closes under the default 600-second ceiling, is refused with the passed 180-second ceiling, and a 3600-second ceiling is searched in full");
+        // 公共帧步长超出 ulong 的固定分量与跨过上限同一结论，不留成没有所有者的求解器约束（否则分配回退点不出并不进的层）。
+        static CommonLoopComponent Huge(string id, long frames) => new(id, new((double)frames / 60, CommonLoopPeriodEvidence.Analytic, new(frames, 60)));
+        CommonLoopSearchResult overflow = CommonLoopSolver.Suggest(new(60, 1, [Huge("a", 10_000_000_019), Huge("b", 10_000_000_033)], new(1, 60)));
+        check(overflow.Candidates.Count == 0 && overflow.UnresolvedConstraints.Count == 0 &&
+            overflow.NoCandidate is { Kind: CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling },
+            "fixed periods whose common frame step overflows are refused as exceeding the ceiling, not left as an unowned solver constraint");
 
         // ---- 原本 180 秒内有候选：效率档与未回落的平衡档选中项不变 ----
         CommonLoopSearchResult Solve(CommonLoopComponent[] components, CommonLoopPreference preference, long minimumSeconds, long maximumSeconds) =>

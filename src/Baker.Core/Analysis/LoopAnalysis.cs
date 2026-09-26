@@ -112,7 +112,7 @@ internal static class LoopAnalysis
         Prove(shader.Terms.Where(x => x.Split).Select(x => x.OwnerLayerId).Distinct());
         // 各分量都有周期证明、却在上限内凑不出公共循环：点名并不进的所有者层，由分配回退把它们的作者子树留实时，其余照常规划；这些层再逐层查
         int[]? noCommonLoopOwners = noLoop
-            ? NoCommonLoopOwners(shader, animation, particleCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
+            ? NoCommonLoopOwners(shader, animation, particleCycles, scriptCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
             : null;
         if (noLoop) Prove(noCommonLoopOwners ?? []);
         if (stepCycles.Length > 0)
@@ -433,11 +433,13 @@ internal static class LoopAnalysis
     /// 没有并不进的层时返回 null；一层都并不进时全部点名，剩下的内容值不值得烘由分配回退重查判定。
     /// </summary>
     private static int[]? NoCommonLoopOwners(ShaderPeriodAnalysisResult shader, IReadOnlyList<RuntimeTrack> animation,
-        CommonLoopComponent[] particleCycles, List<LoopUnresolved> unresolved, uint fpsNumerator, uint fpsDenominator,
+        CommonLoopComponent[] particleCycles, CommonLoopComponent[] scriptCycles, List<LoopUnresolved> unresolved, uint fpsNumerator, uint fpsDenominator,
         double maximumRetimePercent, CommonLoopRational ceiling, CommonLoopPreference preference)
     {
+        // 脚本周期分量的 id 是 script/<所有者层>/<绑定>（ScriptComponents），和着色器、动画轨道一样按所有者层并入。
+        static int ScriptOwner(CommonLoopComponent x) => int.Parse(x.Id.Split('/')[1], CultureInfo.InvariantCulture);
         var live = unresolved.Select(item => SceneGraph.Int(item.ToJson()["owner_layer_id"])).OfType<int>().ToHashSet();
-        int[] owners = [.. shader.Components.Select(x => x.OwnerLayerId).Concat(animation.Select(x => x.OwnerLayerId))
+        int[] owners = [.. shader.Components.Select(x => x.OwnerLayerId).Concat(animation.Select(x => x.OwnerLayerId)).Concat(scriptCycles.Select(ScriptOwner))
             .Where(id => !live.Contains(id)).GroupBy(id => id).OrderByDescending(group => group.Count()).Select(group => group.Key)];
         var kept = new HashSet<int>();
         var dropped = new List<int>();
@@ -445,7 +447,7 @@ internal static class LoopAnalysis
         {
             kept.Add(owner);
             if (SolveLoop(shader with { Components = [.. shader.Components.Where(x => kept.Contains(x.OwnerLayerId))] },
-                [.. animation.Where(x => kept.Contains(x.OwnerLayerId))], particleCycles, fpsNumerator, fpsDenominator,
+                [.. animation.Where(x => kept.Contains(x.OwnerLayerId))], [.. particleCycles, .. scriptCycles.Where(x => kept.Contains(ScriptOwner(x)))], fpsNumerator, fpsDenominator,
                 maximumRetimePercent, ceiling, preference).Result.Candidates.Count > 0) continue;
             kept.Remove(owner);
             dropped.Add(owner);

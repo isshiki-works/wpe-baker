@@ -106,6 +106,7 @@ internal sealed class AnalysisOrchestrator
                 PlanNarrative.Attach(result);
             }
         }
+        result = await RetreatAsync(result, interaction);
         // 只有普通图层的视频组省不下渲染，还给实时（加 --retain-live 重新分析）；重新分析能生成、预计不省电的条件没变多才采用。
         // --no-benefit allow 时照旧全烘，测功耗用。
         if (Admission.Accepted(result) && !request.AllowNoBenefit && await NoBenefit.PlainGroupRetainRootsAsync(result, token) is { Length: > 0 } plain)
@@ -140,6 +141,41 @@ internal sealed class AnalysisOrchestrator
                 summary[language] = MessageCatalog.Get("preset.generated", language) + (kinds.Count == 0 ? "" : "\n" +
                     MessageCatalog.Get("preset.omitted", language, string.Join(language == "zh" ? "、" : ", ", kinds.Order().Select(k => TradeoffOptions.KindLabel(k, language))))) +
                     (result["settings"]?["daytime_state"] is JsonValue state ? "\n" + MessageCatalog.Get("preset.daytime", language, MessageCatalog.DaytimeStateLabel(state.GetValue<string>(), language)) : "");
+        return result;
+    }
+
+    /// <summary>
+    /// 放进视频的层多了反而不行（整层无解、被阻断、预计视频成本高于省下的渲染）时，退回更多层留实时的方案：每轮把每个视频组各留一次实时
+    /// 重新分析（连同 plan 已留的和分配回退已点名的层），能生成且预计省电的候选里取预计收益（省下的渲染减视频路数）最大的；一个都没有时，
+    /// 从"能生成、只差省电或路数"且离可行的差距比这一轮起点小的候选里取差距最小的接着退。只加实时层、不减，证明不能循环的层照旧留实时。都不行时原样返回。
+    /// </summary>
+    private async Task<JsonObject> RetreatAsync(JsonObject result, string interaction)
+    {
+        // 烘焙按实际编出的视频流数拒（NoBenefit.TooManyVideoStreams），可行与差距用同一判据，不选烘焙必拒的方案。
+        bool Viable(JsonObject plan) => Admission.Accepted(plan) && (request.AllowNoBenefit ||
+            NoBenefit.AnalysisConditions(plan).Length == 0 && !NoBenefit.TooManyVideoStreams(Admission.GroupCount(plan)));
+        static double Margin(JsonObject plan) => Admission.Accepted(plan) ? (NoBenefit.RemovedPassCoverage(plan) ?? 0) -
+            ((plan["video_groups"] as JsonArray)?.Count ?? 0) * NoBenefit.MinPassCoveragePerStream : double.NegativeInfinity;
+        // 离可行的差距：省下的渲染抵不过视频的差额与超出路数上限的路数取大；不能生成为无穷大。
+        static double Gap(JsonObject plan) => Math.Max(-Margin(plan), Admission.GroupCount(plan) - NoBenefit.SavingProvenStreams);
+        static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
+        if (Viable(result) || Admission.Accepted(result) && !NoBenefit.AnalysisConditions(result).Contains(NoBenefit.VideoCostOverSaving)) return result;
+        JsonObject current = result;
+        for (int round = 0; current["video_groups"] is JsonArray { Count: > 1 } groups; round++)
+        {
+            int[] kept = [.. Ids(current["settings"]?["retain_live_root_ids"]).Concat(Ids(current["loop_allocation_fallback"]?["retain_live_root_ids"]))];
+            JsonObject? best = null, next = null;
+            for (int index = 0; index < groups.Count; index++)
+            {
+                var (plan, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = [.. kept.Concat(Ids(groups[index]?["root_ids"])).Distinct()] },
+                    analyze, space, space.Budget(), tools, Path.Combine(run, $"retreat-{round}-{index}"), cache, token).SolveAsync(interaction);
+                if (Viable(plan)) { if (best is null || Margin(plan) > Margin(best)) best = plan; }
+                else if (Gap(plan) < Gap(next ?? current)) next = plan;
+            }
+            if (best is not null) return best;
+            if (next is null) break;
+            current = next;
+        }
         return result;
     }
 

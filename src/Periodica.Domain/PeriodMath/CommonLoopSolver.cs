@@ -124,6 +124,11 @@ public static class CommonLoopSolver
     private static CommonLoopSearchResult Search(CommonLoopSolveRequest request, double budgetPercent, bool budgetRelaxed)
     {
         var setup = Prepare(request);
+        // 固定分量的公共帧步长超出 ulong：步长比任何上限都长，与下面 FixedPeriodExceedsCeiling 是同一个确定的无解（秒数取下界）。
+        // 记成空约束的话上层点不出是哪些层并不进，分配回退就只能留触发层、重查仍无解。
+        if (setup.Constraints.Count != 0 && setup.Constraints.All(c => c.Kind == CommonLoopConstraintKind.ArithmeticOverflow))
+            return new([], [], true, null, request.Preference, budgetPercent, budgetRelaxed,
+                new(CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling, setup.Maximum.ToSeconds(), FrameSeconds(ulong.MaxValue, request)));
         if (setup.Constraints.Count != 0)
             return new([], setup.Constraints, true, setup.FixedFrameStep, request.Preference, budgetPercent, budgetRelaxed);
 

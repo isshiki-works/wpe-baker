@@ -150,14 +150,26 @@ public sealed class HybridBakeService(NativeTools tools)
                     ["full_loop_layer_ids"] = JsonSerializer.SerializeToNode(fullLoop), ["reason"] = "own_period_seam_rejected" },
                 settings => settings with { FullLoopLayerIds = fullLoop }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
+        // 实际编出的视频流超过上限：省下渲染最少的一组留实时，重新分析再烘，不整张拒。重烘走 BakeAsync，仍超就接着退
+        // （每轮多留一组的根，组数有限）；首次产物按留实时的根数分目录存。
+        if (result[NoBenefit.Field]?[NoBenefit.RetreatRootsField] is JsonArray retreatRoots)
+        {
+            int[] fewer = [.. retreatRoots.Select(SceneGraph.Int).OfType<int>()];
+            return await RetryReplannedAsync(request, result, "video_stream_retreat", $".streams-{fewer.Length}-attempt", new JsonObject {
+                    ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(fewer), ["reason"] = NoBenefit.TooManyStreams },
+                settings => settings with { RetainLiveRootIds = fewer }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
+        }
+        // 残差掩盖组在第一层被拒：组里被掩盖的粒子留实时，重新分析再烘。重烘走 BakeAsync，重烘后新被拒的残差组接着留实时
+        // （留实时的层不再进视频，每轮至少多留一层，层数有限）。
         if (ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
         progress?.Report(new("retaining_residual_particles", null, new Message("progress.retaining_residual_particles")));
-        return await RetryReplannedAsync(request, result, "residual_particle_retry", ".residual-first-attempt", new JsonObject {
+        // 每轮留实时的层数都比上一轮多，首次产物按层数分目录存，逐轮重试不撞名。
+        return await RetryReplannedAsync(request, result, "residual_particle_retry", $".residual-{retain.Length}-attempt", new JsonObject {
                 ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(retain),
                 ["first_rejected_groups"] = new JsonArray([.. (result["groups"] as JsonArray ?? []).OfType<JsonObject>()
                     .Where(group => group["status"]?.GetValue<string>() == "rejected_seam_residual").Select(group => group["id"]?.DeepClone())]) },
             settings => settings with { RetainLiveRootIds = retain, RetainLiveReasons = reasons },
-            retry => BakeCleanedAsync(retry, progress, cancellationToken), progress, cancellationToken);
+            retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
     }
 
     /// <summary>计划里首个循环候选的时长（秒）；没有候选时 null。</summary>
@@ -752,6 +764,8 @@ public sealed class HybridBakeService(NativeTools tools)
                         if (!probe && !NoBenefit.Allowed(plan) && NoBenefit.TooManyVideoStreams(replacements.Count - staticIds.Count))
                         {
                             NoBenefit.RejectStreams(report, replacements.Count - staticIds.Count);
+                            if (await NoBenefit.StreamRetreatRootsAsync(plan, report, cancellationToken) is int[] retreat)
+                                report[NoBenefit.Field]![NoBenefit.RetreatRootsField] = JsonSerializer.SerializeToNode(retreat);
                             await Save();
                             return report;
                         }
