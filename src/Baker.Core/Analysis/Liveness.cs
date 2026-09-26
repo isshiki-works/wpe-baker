@@ -27,6 +27,12 @@ internal sealed class Liveness
     /// 记 shared_state_for_input_readers。同样只作注记（plan 里的 input_source），不改分配。
     /// </summary>
     internal HashSet<int> SharedStateForInputReaders { get; } = [];
+    /// <summary>
+    /// 脚本按名字取图层（<c>getLayer('灯遮罩')</c>）补的写边：点击、属性变更这类回调在观测里没执行过，依赖记录里没有这条边，
+    /// 被取的层（多半初始隐藏、点了才显示）会被判成不用而丢掉。脚本里引号括起某层的名字就算可能写它，写者实时则它也留实时，宁可多留。
+    /// 按分配单元的闭包（<see cref="Allocation"/>）也带上这些边。
+    /// </summary>
+    internal JsonObject[] LookupEdges { get; private set; } = [];
 
     private Liveness(SceneGraph graph)
     {
@@ -103,6 +109,7 @@ internal sealed class Liveness
         var sharedWrites = new Dictionary<int, HashSet<string>>();
         HashSet<string> Keys(Dictionary<int, HashSet<string>> map, int id) => map.TryGetValue(id, out var keys) ? keys : map[id] = [];
         var cameraScripts = new HashSet<int>();
+        var scriptCode = new Dictionary<int, List<string>>();
         foreach (var (id, obj) in objects)
         {
             if (obj.ContainsKey("sound")) Live(id, "soundtrack");
@@ -111,6 +118,7 @@ internal sealed class Liveness
             {
                 if (binding["script"] is not JsonValue value || !value.TryGetValue<string>(out string? text)) continue;
                 string code = CapabilityScanText(text);
+                (scriptCode.TryGetValue(id, out var codes) ? codes : scriptCode[id] = []).Add(code);
                 foreach (Match use in Regex.Matches(code, @"\bshared\b(?:\s*\.\s*(\w+)|\s*\[\s*(['""])(\w*)\2\s*\])?"))
                     Keys(sharedReads, id).Add(use.Groups[1].Success ? use.Groups[1].Value : use.Groups[3].Success ? use.Groups[3].Value : "*");
                 // 去掉字符串字面量再认写入：混淆脚本的键是 shared[_0x..('0x5',')#$]')] 这种，引号里可能有方括号。
@@ -136,6 +144,11 @@ internal sealed class Liveness
                 if (ParticleInputAnalysis.HasAudioInput(definition, obj)) Live(id, "particle_audio_input");
             }
         }
+        // 按名字取层的写边记在 visible 上：昼夜选择器按名字取受控层的那部分照常由 severedWrite 摘掉。
+        liveness.LookupEdges = (from owner in scriptCode from target in objects
+            where target.Key != owner.Key && target.Value["name"] is JsonValue name && name.TryGetValue<string>(out string? text) &&
+                text.Length > 0 && owner.Value.Any(code => QuotesName(code, text))
+            select new JsonObject { ["owner"] = owner.Key, ["target"] = target.Key, ["operation"] = "write", ["property"] = "visible" }).ToArray();
         // 经 shared 全局对象给别的脚本传值的写者：这种读写不进依赖记录，层烘成视频后脚本就不再执行，
         // 读它的实时脚本在成品里拿不到值（例如按 shared 值自检、不对就 destroyLayer 的防篡改脚本会把整个场景删空）。
         // 官方 WPE 里所有脚本都在跑，所以只要别的对象的脚本也用 shared，写者就留实时。
@@ -149,7 +162,7 @@ internal sealed class Liveness
             select new JsonObject { ["owner"] = reader.Key, ["target"] = writer.Key, ["operation"] = "read" }).ToHashSet();
         // Runtime writes by a live controller make their targets live. Reads of a live mutable
         // target make the consuming animation live too. Initialization-only transforms stay snapshots.
-        Close(observation.Dependencies.OfType<JsonObject>().Concat(sharedEdges), liveness.Ids.Contains, liveness.Mark, ownerPerRule: true,
+        Close(observation.Dependencies.OfType<JsonObject>().Concat(sharedEdges).Concat(liveness.LookupEdges), liveness.Ids.Contains, liveness.Mark, ownerPerRule: true,
             dependency => sharedEdges.Contains(dependency)
                 ? liveness.Reasons[dependency["target"]!.GetValue<int>()].All(reason => reason == "writes_shared_script_state")
                 : severedRead(dependency), severedWrite);
@@ -197,6 +210,9 @@ internal sealed class Liveness
             }
         } while (changed);
     }
+
+    /// <summary>脚本里有没有引号括起的这个图层名（按名字 getLayer 取层的痕迹）。</summary>
+    internal static bool QuotesName(string code, string name) => "'\"`".Any(q => code.Contains($"{q}{name}{q}"));
 
     /// <summary>
     /// 能力扫描用的脚本文本：去掉注释、保留字符串与正则字面量（否则 URL 里的 // 会把同一行后面的实时/共享 API 调用藏起来）。
