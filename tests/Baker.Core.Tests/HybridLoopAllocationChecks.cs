@@ -180,8 +180,10 @@ internal static class HybridLoopAllocationChecks
             ["kind"] = "NonPeriodicOrDriftingMechanism", ["owner_layer_id"] = 4, ["bounded_displacement"] = true,
             ["mechanism"] = ShaderPeriodAnalysis.FoliageSwayMechanism, ["detail"] = "sway"
         })));
+        // 重查 plan 的拒因带编号（与真实 plan 一样），ReplannedResolution 按编号放过透视拒因。
+        static JsonObject WithBlocker(JsonObject plan) { PlanBlockers.Set(plan, [new Blocker(BlockerCode.VideoShell)]); return plan; }
         check(!swayReplan.Resolved && swayReplan.Basis == "unavailable" &&
-            !Resolve(Replanned(new JsonArray(WarmStationary()), blockers: new JsonArray("a blocker"))).Resolved &&
+            !Resolve(WithBlocker(Replanned(new JsonArray(WarmStationary())))).Resolved &&
             !Resolve(Replanned(new JsonArray(WarmStationary()), candidates: 0)).Resolved &&
             !Resolve(Replanned(new JsonArray(Note()))).Resolved,
             "a smaller allocation stays unavailable when a displacement component remains, when blockers remain, without candidates, or with only informational notes");
