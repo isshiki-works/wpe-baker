@@ -197,6 +197,16 @@ public class AdmissionTests
         cheap["bake_value"] = new JsonObject { ["rule"] = "needs_work_comparison" };
         Assert.Equal([NoBenefit.PlainLayersOnly], NoBenefit.AnalysisConditions(cheap));
 
+        // 只差透视捕获：按假设能采集照常判，命中就是不省电（结论规则排在能力缺口前），不命中留在能力缺口并标出来。
+        PlanBlockers.Add(cheap, new Blocker(BlockerCode.PerspectiveNeedsScreenspace));
+        NoBenefit.Apply(cheap, allowed: false);
+        Assert.Equal(NoBenefit.RejectionReason, cheap["suitability"]!["rule"]!.GetValue<string>());
+        JsonObject gap = Narrated(Plan(new JsonArray()));
+        PlanBlockers.Add(gap, new Blocker(BlockerCode.PerspectiveNeedsScreenspace));
+        NoBenefit.Apply(gap, allowed: false);
+        Assert.Equal(NoBenefit.CaptureOpenStatus, gap["no_benefit"]!["status"]!.GetValue<string>());
+        Assert.Equal("capture_capability_gap", HybridSuitability.Verdict(gap)["rule"]!.GetValue<string>());
+
         JsonObject ordinary = Narrated(Plan(new JsonArray()));
         NoBenefit.Apply(ordinary, allowed: false);
         Assert.True(Admission.Bakeable(ordinary));

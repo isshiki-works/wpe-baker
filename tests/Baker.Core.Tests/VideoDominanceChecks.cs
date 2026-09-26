@@ -144,7 +144,7 @@ internal static class VideoDominanceChecks
             still["loop"]!["candidates"]!.AsArray().Clear();
             check(BakeValueAssessment.Evaluate(still, runtime, source, root)["status"]!.GetValue<string>() == "unknown",
                 "no working candidate is not a low-value conclusion");
-            reduced["blockers"] = new JsonArray("An unrelated capture limitation.");
+            PlanBlockers.Add(reduced, new Blocker(BlockerCode.BakeAllocation));
             check(BakeValueAssessment.Evaluate(reduced, highResolution, source, root)["status"]!.GetValue<string>() == "unknown",
                 "an unresolved plan is not classified by its attempted optimization");
         }
