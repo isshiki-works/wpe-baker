@@ -15,7 +15,8 @@
       { "contains": [
           "float distance = g_Time * g_Speed + dot(texCoord, v_Direction) * (g_Scale + g_Perspective * pos);",
           "texCoord += sin(distance) * offset * strength * mask;" ],
-        "count": { "word:g_Time": 2, "word:g_Speed": 2, "word:distance": 2, "assign:distance": 1 } },
+        "vars": { "U": "uniform float g_Time;" },
+        "count": { "word:g_Time": "U+1", "word:g_Speed": 2, "word:distance": 2, "assign:distance": 1 } },
       { "contains": [ "float distance = g_Time * g_Speed;", "sin(distance);" ],
         "count": { "word:g_Time": 2, "word:g_Speed": 2, "word:distance": 2, "assign:distance": 1 } },
       { "contains": [
@@ -283,7 +284,7 @@
         { "type": "constant_zero", "key": "noiseamount", "uniform": "g_NoiseAmount",
           "missing": "Verified pulse timing needs a finite authored 'noiseamount' to prove that noise drift is disabled.",
           "kind": "NonPeriodicOrDriftingMechanism",
-          "detail": "Pulse noise UV drift is enabled, so the simple pulse speed does not prove closure." } ],
+          "detail": "Pulse noise is enabled: it samples the tiling noise at UV (t, 0.333 t) * noisespeed (official and legacy line) or (0.08333333 t, 0.02777777 t) * noisespeed. Both UV offsets return to whole repeats together only when t * noisespeed is a multiple of 16777216 (float32 0.333 = 5586813/2^24; 33554432 s at the shader maximum noisespeed 0.5) or of 536870912 (float32 0.0833333284 = 5592405/2^26 and 0.0277777705 = 14913077/2^29; 1073741824 s at 0.5); even reading 0.333 as 333/1000 needs t * noisespeed = 1000, 2000 s at 0.5. All are past the 600-second loop ceiling, and a retime scales both offsets equally. The second line comes back to within 2.6e-7 UV every 36/noisespeed s; that near-return is not modeled." } ],
       "speed_key": "speed", "speed_uniform": "g_PulseSpeed", "zero": "static", "period_numerator": "2pi", "component": "speed",
       "missing": "Verified noise-disabled pulse timing needs a finite scalar 'speed' constant.",
       "evidence": "Verified all active g_Time terms reduce to sin(g_Time * g_PulseSpeed + static phase) when authored noiseamount is zero; source speed token is {speed}." },
