@@ -259,7 +259,7 @@ internal static class VideoDominanceChecks
             ["uses_audio_spectrum"] = false, ["uses_system_media_thumbnail"] = false,
             ["active_uniforms"] = new JsonArray(), ["textures"] = new JsonArray("clip") });
         // 引擎给的着色器时间签名：周期 2 s
-        if (clock) materials[0]!["time_signature"] = JsonNode.Parse("""{"kind":"periodic","periods":[{"seconds":2,"num":2,"den":1,"pi":false}],"reasons":[],"external":[],"transient":false}""");
+        if (clock) materials[0]!["time_signature"] = JsonNode.Parse("""{"kind":"periodic","terms":[{"seconds":2,"num":2,"den":1,"pi":0,"knobs":[]}],"reasons":[],"external":[],"transient":false}""");
         if (effect) materials.Add(new JsonObject { ["shader"] = "filmgrain", ["role"] = "effect",
             ["uses_audio_spectrum"] = false, ["uses_system_media_thumbnail"] = false,
             ["active_uniforms"] = new JsonArray(), ["textures"] = new JsonArray() });

@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Baker.Core;
 
-/// <summary>引擎时间签名原因码到结论的映射：分析没推下去的只记未收敛，不当"不能"的证明。</summary>
+/// <summary>引擎时间签名到结论与调速的映射：分析没推下去的只记未收敛；旋钮 token 唯一才调频；旋钮补差与慢分量漂移上界的算式。</summary>
 internal static class ShaderSignatureChecks
 {
     internal static void Run(Action<bool, string> check)
@@ -10,6 +10,8 @@ internal static class ShaderSignatureChecks
         try
         {
             File.WriteAllText(Path.Combine(root, "scene.json"), """{"objects":[{"id":10}]}""");
+            Directory.CreateDirectory(Path.Combine(root, "shaders", "effects"));
+            File.WriteAllText(Path.Combine(root, "shaders", "effects", "x.frag"), "void main() { gl_FragColor = vec4(sin(g_Time * 0.5)); }");
             using var source = new ProjectSource(root);
             foreach (string reason in (string[])["analysis_not_converged:op199 @fragment", "analysis_not_converged @fragment", "unsupported_side_effect",
                 "names_stripped", "spirv_unreadable", "time_rate_not_constant @fragment", "scroll_rate_not_constant:s @fragment",
@@ -22,14 +24,43 @@ internal static class ShaderSignatureChecks
             var drift = Analyze(source, "drift @fragment");
             check(drift.Unresolved.Count == 1 && drift.Unresolved[0].Kind == ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
                 "a drift reason is a proof of cannot");
+
+            // 旋钮 token：字面量按 float32 值、忽略符号、不算注释；uniform 不算声明行
+            string text = "uniform float g_Speed; // {\"material\":\"speed\",\"default\":0.5}\nfloat a = sin(g_Time * g_Speed) * -0.16161616; /* 0.16161616 */";
+            string literal = ShaderTextPatch.KnobKey(new JsonObject { ["stage"] = "frag", ["literal"] = -0.16161616 });
+            check(ShaderTextPatch.KnobUses(text, literal).Length == 1 && ShaderTextPatch.KnobUses(text + "\nfloat b = 0.16161616f;", literal).Length == 2 &&
+                ShaderTextPatch.KnobUses(text, "periodica_k_frag_g_Speed").Length == 1 &&
+                ShaderTextPatch.KnobUses(text, ShaderTextPatch.KnobKey(new JsonObject { ["stage"] = "frag", ["literal"] = 0.5 })).Length == 0,
+                "a knob token is matched by float32 value outside comments, and a uniform knob outside its declaration");
+
+            // 同一 pass：3 s 项走时间倍率，7.1 s 项有唯一旋钮 0.5 单独调频，100000 s 项是慢分量
+            JsonObject loop = LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
+                  {"seconds":3,"num":3,"den":1,"pi":0,"knobs":[]},
+                  {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
+                  {"seconds":100000,"num":100000,"den":1,"pi":0,"knobs":[]}]}
+                """), [10], 30, 1).ToJson();
+            JsonObject candidate = loop["candidates"]![0]!.AsObject();
+            double Speed(string id) => candidate["components"]!.AsArray().Single(x => x!["id"]!.GetValue<string>() == id)!["speed_multiplier"]!.GetValue<double>();
+            double? Patch(string key) => candidate["patches"]!.AsArray().SingleOrDefault(x => x!["constant_key"]!.GetValue<string>() == key)?["new_value"]!.GetValue<double>();
+            double time = Speed("shader/10/0/0/effects/x"), knob = Speed("shader/10/0/0/effects/x/periodica_k_frag_3f000000");
+            check(time != 1 && Patch(ShaderPeriodAnalysis.TimeScaleKey) == time &&
+                Math.Abs(Patch("periodica_k_frag_3f000000")!.Value - knob / time) < 1e-12,
+                "a knob patch carries the component multiplier divided by the pass time multiplier");
+            JsonObject slow = candidate["slow_components"]![0]!.AsObject();
+            check(slow["period_seconds"]!.GetValue<double>() == 100000 &&
+                Math.Abs(slow["drift_bound_radians"]!.GetValue<double>() - 2 * Math.PI * candidate["seconds"]!.GetValue<double>() / 100000) < 1e-15 &&
+                !candidate["components"]!.AsArray().Any(x => x!["id"]!.GetValue<string>().Contains("slow", StringComparison.Ordinal)),
+                "a slow component stays out of the solver and reports a 2πP/T drift bound");
         }
         finally { Directory.Delete(root, true); }
     }
 
+    private static JsonObject Runtime(string signature) =>
+        new() { ["runtime_layers"] = new JsonArray(new JsonObject { ["owner"] = 10, ["materials"] = new JsonArray(new JsonObject {
+            ["shader"] = "effects/x", ["effect"] = 0, ["pass"] = 0, ["active_uniforms"] = new JsonArray(), ["time_signature"] = JsonNode.Parse(signature) }) }) };
+
     private static ShaderPeriodAnalysisResult Analyze(ProjectSource source, string reason) =>
         ShaderPeriodAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null,
-            new JsonObject { ["runtime_layers"] = new JsonArray(new JsonObject { ["owner"] = 10, ["materials"] = new JsonArray(new JsonObject {
-                ["shader"] = "effects/x", ["active_uniforms"] = new JsonArray(),
-                ["time_signature"] = new JsonObject { ["kind"] = "aperiodic", ["periods"] = new JsonArray(), ["reasons"] = new JsonArray(reason),
-                    ["external"] = new JsonArray(), ["transient"] = false } }) }) }, [10]);
+            Runtime($$"""{"kind":"aperiodic","terms":[],"reasons":["{{reason}}"],"external":[],"transient":false}"""), [10], 600, 2);
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -16,19 +17,29 @@ public enum ShaderTemporalUnresolvedKind
 public sealed record ShaderTemporalUnresolved(int OwnerLayerId, int EffectIndex, int PassIndex,
     string Resource, ShaderTemporalUnresolvedKind Kind, string Detail, string Mechanism = "");
 
-/// <summary>一个 (层, shader) 的周期分量；Passes 是能挂时间倍率的作者效果 pass，空表示不能调速。</summary>
-public sealed record ShaderPeriodComponent(CommonLoopComponent Component, int OwnerLayerId,
-    IReadOnlyList<(int Effect, int Pass)> Passes, string Evidence);
+/// <summary>
+/// 一个着色器周期分量，属于一个作者效果 pass（EffectIndex/PassIndex &lt; 0 是 source 材质，不能调速）。
+/// ConstantKey 是调速挂的材质常量：<see cref="ShaderPeriodAnalysis.TimeScaleKey"/>（整个 pass 的时间倍率）或旋钮键；
+/// Inverse：旋钮值与该项速度成反比。
+/// </summary>
+public sealed record ShaderPeriodComponent(CommonLoopComponent Component, int OwnerLayerId, int EffectIndex, int PassIndex,
+    string ConstantKey, bool Inverse, string Evidence);
+
+/// <summary>慢分量：周期/(1+预算) 仍超过循环上限，不进求解器、不调频；接缝漂移上界 2π·P/T 由烘焙侧接缝门复核。</summary>
+public sealed record ShaderSlowComponent(string Id, int OwnerLayerId, int EffectIndex, int PassIndex, double PeriodSeconds);
 
 /// <summary>RuledMaterials：已由时间签名裁定过的 (层, shader)，运行时材质不再按"未建模时钟"重复计。</summary>
 public sealed record ShaderPeriodAnalysisResult(IReadOnlyList<ShaderPeriodComponent> Components,
     IReadOnlyList<ShaderTemporalUnresolved> Unresolved,
-    IReadOnlySet<(int OwnerLayerId, string Shader)> RuledMaterials);
+    IReadOnlySet<(int OwnerLayerId, string Shader)> RuledMaterials, IReadOnlyList<ShaderSlowComponent> Slow);
 
 /// <summary>
-/// 读引擎在 SPIR-V 上算出的时间签名（runtime_layers[].materials[].time_signature，见 engine ShaderTime.cppm），
-/// 按 (层, shader) 合成循环分量。调速是给这些 pass 的 g_Time 乘一个材质常量（<see cref="TimeScaleKey"/>，
-/// 捕获时由 <see cref="ShaderTextPatch.WriteTimeScaleAsync"/> 写覆盖 shader），同一材质内各周期等比缩放。
+/// 读引擎在 SPIR-V 上算出的时间签名（runtime_layers[].materials[].time_signature.terms，见 engine ShaderTime.cppm），
+/// 按 (层, 效果, pass) 合成循环分量；没有 effect/pass 的 source 材质按 (层, shader) 合成，不能调速。一个 pass 内：
+/// 周期/(1+预算) 仍超过上限的项是慢分量；带旋钮、且旋钮 token 在该 stage 源码里恰好出现一次的项单独成分量，
+/// 捕获时改写那一处 token 调频（<see cref="ShaderTextPatch.KnobUses"/>）；其余项按 π 次数分类、类内取有理 LCM，
+/// 合成一个挂时间倍率（<see cref="TimeScaleKey"/>，给 g_Time 乘材质常量）的分量。剩两类以上时周期比是无理数，
+/// 同乘一个倍率保不住整数比，是"不能"的证明。
 /// </summary>
 public static class ShaderPeriodAnalysis
 {
@@ -41,9 +52,10 @@ public static class ShaderPeriodAnalysis
     private static readonly string[] AlternateClocks = ["g_Runtime", "g_Frametime", "g_DeltaTime"];
 
     public static ShaderPeriodAnalysisResult Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory,
-        JsonObject runtime, IReadOnlyCollection<int> selectedLayerIds)
+        JsonObject runtime, IReadOnlyCollection<int> selectedLayerIds, double ceilingSeconds, double maximumRetimePercent)
     {
         var components = new List<ShaderPeriodComponent>();
+        var slowComponents = new List<ShaderSlowComponent>();
         var unresolved = new List<ShaderTemporalUnresolved>();
         var ruled = new HashSet<(int, string)>();
         var seen = new HashSet<int>();
@@ -52,6 +64,8 @@ public static class ShaderPeriodAnalysis
         JsonObject[] dependencies = [.. (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()];
         var animatedOwners = (runtime["runtime_animation_periods"] as JsonArray ?? []).OfType<JsonObject>()
             .Select(trace => SceneGraph.Int(trace["source_owner_layer_id"])).OfType<int>().ToHashSet();
+        double stretch = 1 + maximumRetimePercent / 100;
+        static IEnumerable<JsonObject> Knobs(JsonObject term) => (term["knobs"] as JsonArray ?? []).OfType<JsonObject>();
         foreach (JsonObject layer in (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>())
         {
             if (SceneGraph.Int(layer["owner"]) is not int owner || !selectedLayerIds.Contains(owner) || !seen.Add(owner)) continue;
@@ -61,13 +75,13 @@ public static class ShaderPeriodAnalysis
                 .SelectMany(x => (x["materials"] as JsonArray ?? []).OfType<JsonObject>())
                 .Where(m => m["time_signature"] is JsonObject && m["shader"] is JsonValue &&
                     !(m["active_uniforms"] as JsonArray ?? []).Any(u => AlternateClocks.Contains(u?.ToString())))
-                .GroupBy(m => m["shader"]!.GetValue<string>());
+                .GroupBy(m => (Effect: SceneGraph.Int(m["effect"]) ?? -1, Pass: SceneGraph.Int(m["pass"]) ?? -1, Shader: m["shader"]!.GetValue<string>()));
             foreach (var group in groups)
             {
-                ruled.Add((owner, group.Key));
-                (int, int)[] passes = ownerObject is null ? [] : EffectPasses(source, assetsDirectory, ownerObject, group.Key);
-                var (effect, pass) = passes.FirstOrDefault((-1, -1));
-                string resource = "shaders/" + group.Key;
+                var (effect, pass, shader) = group.Key;
+                ruled.Add((owner, shader));
+                string resource = "shaders/" + shader;
+                string id = effect < 0 ? $"shader/{owner}/{shader}" : $"shader/{owner}/{effect}/{pass}/{shader}";
                 void Fail(bool proof, string code, string detail) => unresolved.Add(new(owner, effect, pass, resource,
                     proof ? ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism : ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
                     "SPIR-V time signature: " + detail, code));
@@ -88,30 +102,81 @@ public static class ShaderPeriodAnalysis
                 { Fail(false, "external_uniform_unmodeled", "animated uniforms " + string.Join(", ", external) + " have no runtime track"); continue; }
                 if (signatures.Any(s => s["transient"]?.GetValue<bool>() == true))
                 { Fail(false, "transient_clamp_scroll", "clamp-axis scroll settles at a time the signature does not report"); continue; }
-                if (!TryJoinPeriods(signatures, out (BigInteger Num, BigInteger Den, bool Pi)[] classes, out double[] loose))
-                { Fail(false, "period_class_unknown", "period is not a simple rational: " + string.Join(", ", loose)); continue; }
-                if (classes.Length == 0) continue;
-                string periods = string.Join(", ", classes.Select(c => $"{c.Num}/{c.Den}{(c.Pi ? "·π" : "")} s"));
-                if (classes.Length > 1)
+
+                JsonObject[] terms = [.. signatures.SelectMany(s => (s["terms"] as JsonArray ?? []).OfType<JsonObject>()).DistinctBy(t => t.ToJsonString())];
+                // 同一旋钮被几个项用到：多于一个就分不开，不用它
+                var claims = terms.SelectMany(t => Knobs(t).Select(ShaderTextPatch.KnobKey).Distinct()).GroupBy(key => key).ToDictionary(g => g.Key, g => g.Count());
+                var stages = new Dictionary<string, string?>();
+                bool Usable(JsonObject knob)
                 {
-                    // 类别按来源与有理化判定（浮点 π 字面量会落进有理类），不同类不等于比值无理：记未收敛，不当证明
-                    Fail(false, "incommensurate_classes", $"periods {periods} fall in different classes; one time scale per material keeps their ratio");
+                    string stage = knob["stage"]!.GetValue<string>(), key = ShaderTextPatch.KnobKey(knob);
+                    if (!stages.TryGetValue(stage, out string? text))
+                        stages[stage] = text = TryReadShaderStage(source, assetsDirectory, resource + "." + stage, out string read) ? read : null;
+                    return claims[key] == 1 && text is not null && ShaderTextPatch.KnobUses(text, key).Length == 1;
+                }
+                var classes = new SortedDictionary<int, (BigInteger Num, BigInteger Den)>();
+                var knobbed = new List<ShaderPeriodComponent>();
+                var slow = new List<ShaderSlowComponent>();
+                var unknown = new List<double>();
+                bool stuckKnob = false;
+                foreach (JsonObject term in terms)
+                {
+                    double seconds = term["seconds"]!.GetValue<double>();
+                    BigInteger num = term["num"]!.GetValue<long>(), den = term["den"]!.GetValue<long>();
+                    // 慢分量：调速到预算上限也放不进一圈；num=0 时 seconds 是下界，照样成立
+                    if (seconds / stretch > ceilingSeconds) { slow.Add(new($"{id}/slow{slow.Count}", owner, effect, pass, seconds)); continue; }
+                    if (num <= 0 || den <= 0) { unknown.Add(seconds); continue; }
+                    // 旋钮只能挂在作者效果 pass 上（场景里有这个 pass 的 constantshadervalues）
+                    if (effect >= 0 && Knobs(term).FirstOrDefault(Usable) is JsonObject knob)
+                    {
+                        string key = ShaderTextPatch.KnobKey(knob);
+                        knobbed.Add(new(new CommonLoopComponent($"{id}/{key}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true),
+                            owner, effect, pass, key, knob["inverse"]?.GetValue<bool>() == true,
+                            $"SPIR-V time signature of {resource}: period {seconds.ToString("R", CultureInfo.InvariantCulture)} s through {key}"));
+                        continue;
+                    }
+                    stuckKnob |= effect >= 0 && Knobs(term).Any();
+                    if (term["pi"] is not JsonValue power || !power.TryGetValue(out int pi)) { unknown.Add(seconds); continue; }
+                    BigInteger divisor = BigInteger.GreatestCommonDivisor(num, den);
+                    (num, den) = (num / divisor, den / divisor);
+                    // 类内有理 LCM：lcm(a/b, c/d) = lcm(a,c)/gcd(b,d)
+                    classes[pi] = classes.TryGetValue(pi, out var old)
+                        ? (old.Num / BigInteger.GreatestCommonDivisor(old.Num, num) * num, BigInteger.GreatestCommonDivisor(old.Den, den))
+                        : (num, den);
+                }
+                string periods = string.Join(", ", classes.Select(c => $"{c.Value.Num}/{c.Value.Den}{(c.Key == 0 ? "" : c.Key == 1 ? "·π" : $"·π^{c.Key}")} s"));
+                if (unknown.Count > 0)
+                {
+                    Fail(false, "period_class_unknown", "period is not a rational multiple of a known power of π: " +
+                        string.Join(", ", unknown.Select(x => x.ToString("R", CultureInfo.InvariantCulture))));
                     continue;
                 }
-                var (num, den, pi) = classes[0];
-                double seconds = (double)num / (double)den * (pi ? Math.PI : 1);
-                CommonLoopRational? exact = !pi && num <= long.MaxValue && den <= long.MaxValue ? new((long)num, (long)den) : null;
-                if (exact is null && passes.Length == 0)
+                if (classes.Count > 1)
                 {
-                    Fail(false, "irrational_period_not_retimable", $"period {periods} needs a time scale, but the material has no authored effect pass");
+                    // π 次数不同的周期比是无理数，一个时间倍率同乘保不住整数比：证明。能分开它们的旋钮只是在源码里不唯一时，是改写办不到，记未收敛
+                    Fail(!stuckKnob, stuckKnob ? "knob_not_unique" : "incommensurate_period_classes",
+                        $"periods {periods} have an irrational ratio that one time scale per pass keeps" +
+                        (stuckKnob ? "; a knob that could split them is not a unique token in the shader source" : ""));
                     continue;
                 }
-                components.Add(new(new CommonLoopComponent($"shader/{owner}/{group.Key}",
-                    new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic, exact), AllowRetime: passes.Length > 0),
-                    owner, passes, $"SPIR-V time signature of {resource}: period {periods}"));
+                if (classes.Count == 1)
+                {
+                    var (pi, (num, den)) = classes.Single();
+                    double seconds = (double)num / (double)den * Math.Pow(Math.PI, pi);
+                    CommonLoopRational? exact = pi == 0 && num <= long.MaxValue && den <= long.MaxValue ? new((long)num, (long)den) : null;
+                    if (exact is null && effect < 0)
+                    {
+                        Fail(false, "irrational_period_not_retimable", $"period {periods} needs a time scale, but the material has no authored effect pass");
+                        continue;
+                    }
+                    components.Add(new(new CommonLoopComponent(id, new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic, exact), AllowRetime: effect >= 0),
+                        owner, effect, pass, TimeScaleKey, false, $"SPIR-V time signature of {resource}: period {periods}"));
+                }
+                components.AddRange(knobbed);
+                slowComponents.AddRange(slow);
             }
         }
-        return new(components, unresolved, ruled);
+        return new(components, unresolved, ruled, slowComponents);
     }
 
     /// <summary>原因串的码：到第一个空格、冒号或 @ 为止。</summary>
@@ -119,30 +184,6 @@ public static class ShaderPeriodAnalysis
 
     private static bool IsSystemInput(string name) => name.StartsWith("g_AudioSpectrum", StringComparison.Ordinal) ||
         name.StartsWith("g_Pointer", StringComparison.Ordinal) || name is "g_ParallaxPosition" or "g_Daytime";
-
-    /// <summary>
-    /// 同一 (层, shader) 的各材质按类合并：类内取有理数 LCM（lcm(a/b, c/d) = lcm(a,c)/gcd(b,d)）。
-    /// num = 0 的周期不是简单有理数，类别不明，返回 false。
-    /// </summary>
-    private static bool TryJoinPeriods(JsonObject[] signatures, out (BigInteger, BigInteger, bool)[] classes, out double[] loose)
-    {
-        var joined = new Dictionary<bool, (BigInteger Num, BigInteger Den)>();
-        var unknown = new List<double>();
-        foreach (JsonObject period in signatures.SelectMany(s => (s["periods"] as JsonArray ?? []).OfType<JsonObject>()))
-        {
-            BigInteger num = period["num"]!.GetValue<long>(), den = period["den"]!.GetValue<long>();
-            if (num <= 0 || den <= 0) { unknown.Add(period["seconds"]!.GetValue<double>()); continue; }
-            BigInteger g = BigInteger.GreatestCommonDivisor(num, den);
-            (num, den) = (num / g, den / g);
-            bool pi = period["pi"]?.GetValue<bool>() == true;
-            joined[pi] = joined.TryGetValue(pi, out var old)
-                ? (old.Num / BigInteger.GreatestCommonDivisor(old.Num, num) * num, BigInteger.GreatestCommonDivisor(old.Den, den))
-                : (num, den);
-        }
-        classes = [.. joined.Select(pair => (pair.Value.Num, pair.Value.Den, pair.Key))];
-        loose = [.. unknown];
-        return unknown.Count == 0;
-    }
 
     /// <summary>
     /// 作者脚本写的材质常量（constantshadervalues 里带 script 的键）不是常量：运行时依赖里该层对这个键有非初始化的读写，
@@ -167,21 +208,6 @@ public static class ShaderPeriodAnalysis
                         $"Script drives material constant {key} ({string.Join(", ", operations)}).", input ? "script_uniform_input" : "script_uniform_unmodeled"));
                 }
         }
-    }
-
-    /// <summary>本层可见作者效果里用到这个材质 shader 的 (effect, pass)。</summary>
-    private static (int, int)[] EffectPasses(ProjectSource source, string? assetsDirectory, JsonObject owner, string shader)
-    {
-        var found = new List<(int, int)>();
-        JsonArray effects = owner["effects"] as JsonArray ?? [];
-        for (int effect = 0; effect < effects.Count; ++effect)
-        {
-            if (effects[effect] is not JsonObject item || item["visible"] is JsonValue shown && shown.TryGetValue(out bool visible) && !visible) continue;
-            string[] shaders = [.. EffectMaterialShaders(source, assetsDirectory, item)];
-            for (int pass = 0; pass < shaders.Length; ++pass)
-                if (shaders[pass] == shader) found.Add((effect, pass));
-        }
-        return [.. found];
     }
 
     /// <summary>

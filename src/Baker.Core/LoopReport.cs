@@ -113,6 +113,8 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
     /// 时钟独占的组，它的分量在 components 里记的是在本组周期上的圈数与调速。
     /// </summary>
     public IReadOnlyDictionary<string, ulong>? GroupFrames { get; init; }
+    /// <summary>不进求解器的着色器慢分量；slow_components 按本候选的 P 写漂移上界 2π·P/T（T 取原周期）。</summary>
+    public IReadOnlyList<ShaderSlowComponent> SlowComponents { get; init; } = [];
 
     public JsonObject ToJson()
     {
@@ -139,6 +141,10 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
         if (LoopLengthSource is not null) json["loop_length_source"] = LoopLengthSource;
         if (SwayRetime is not null) json["sway_retime"] = SwayRetimeJson.ToJson(SwayRetime.Solution,
             SwayRetime.LoopLengthMaximumSeconds, SwayRetime.FpsNumerator, SwayRetime.FpsDenominator, SwayRetime.Profile);
+        if (SlowComponents.Count > 0)
+            json["slow_components"] = new JsonArray([.. SlowComponents.Select(x => (JsonNode)new JsonObject { ["component"] = x.Id,
+                ["owner_layer_id"] = x.OwnerLayerId, ["effect_index"] = x.EffectIndex, ["pass_index"] = x.PassIndex,
+                ["period_seconds"] = x.PeriodSeconds, ["drift_bound_radians"] = 2 * Math.PI * Seconds / x.PeriodSeconds })]);
         return json;
     }
 }
@@ -206,6 +212,18 @@ internal sealed record ShaderLoopUnresolved(ShaderTemporalUnresolved Source) : L
     public override JsonObject ToJson() => new() { ["kind"] = Kind, ["owner_layer_id"] = Source.OwnerLayerId,
         ["effect_index"] = Source.EffectIndex, ["pass_index"] = Source.PassIndex, ["resource"] = Source.Resource, ["detail"] = Source.Detail,
         ["mechanism"] = Source.Mechanism.Length == 0 ? null : Source.Mechanism };
+}
+
+/// <summary>
+/// 各分量都有周期证明，求解器在循环上限内（含调速预算）却找不到公共闭合帧：上限内不重复的证明，结论"不能"。
+/// kind 与着色器的证明项相同，残差掩盖按 mechanism 判 loop_convergence=cannot；不点名所有者层（并不进的层由 no_candidate_reason 点名）。
+/// </summary>
+internal sealed record NeverRepeatsUnresolved(double CeilingSeconds, string Detail) : LoopUnresolved
+{
+    public override string Kind => nameof(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism);
+    public override Message DetailMessage => new(ResidualMasking.NeverRepeatsReasonKey, [CeilingSeconds / 60]);
+    public override JsonObject ToJson() => new() { ["kind"] = Kind, ["owner_layer_id"] = null,
+        ["mechanism"] = "loop_never_repeats_within_limit", ["detail"] = Detail };
 }
 
 /// <summary>被烘图层上作者脚本读时钟（非初始化）：模型/着色器周期证明不了脚本推进的状态。binding/clock 原样取自运行时依赖。</summary>
