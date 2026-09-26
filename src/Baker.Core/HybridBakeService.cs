@@ -154,7 +154,8 @@ public sealed class HybridBakeService(NativeTools tools)
         // （留实时的层不再进视频，每轮至少多留一层，层数有限）。
         if (ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
         progress?.Report(new("retaining_residual_particles", null, new Message("progress.retaining_residual_particles")));
-        return await RetryReplannedAsync(request, result, "residual_particle_retry", ".residual-first-attempt", new JsonObject {
+        // 每轮留实时的层数都比上一轮多，首次产物按层数分目录存，逐轮重试不撞名。
+        return await RetryReplannedAsync(request, result, "residual_particle_retry", $".residual-{retain.Length}-attempt", new JsonObject {
                 ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(retain),
                 ["first_rejected_groups"] = new JsonArray([.. (result["groups"] as JsonArray ?? []).OfType<JsonObject>()
                     .Where(group => group["status"]?.GetValue<string>() == "rejected_seam_residual").Select(group => group["id"]?.DeepClone())]) },
