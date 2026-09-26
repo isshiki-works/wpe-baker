@@ -393,9 +393,15 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
     refreshPreparedMeshDirtyEvents();
     refreshPreparedMaterialDirtyEvents();
 
+    // 不读回的帧（预热、步长取样之间的帧）只模拟：下面的资源推进照做，跳过光栅、提交与读回；
+    // 帧反馈场景、要覆盖度的输出段照常画。
+    const bool reads = m_options.readsFrame(clock.index);
+    const bool raster = reads || m_reads_previous_frame ||
+        (m_raster_every_output_frame && clock.index >= m_options.readback_start);
+
     /* Advance video textures (no-op if none) before drawFrame so
      * the new RGBA frame is sampled by the same render pass. */
-    m_render->pumpVideoTextures(clock.scaled_dt, &m_services);
+    m_render->pumpVideoTextures(clock.scaled_dt, &m_services, raster);
 
     /* Upload any glyph rects the actuators added this tick. Runs after
      * TickSceneScripts (which calls FontFace::Populate) and before
@@ -404,11 +410,7 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
     const auto resources_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     if (m_services.failed) return false;
-    // 不读回的帧（预热、步长取样之间的帧）只模拟：上面的资源推进照做，跳过光栅、提交与读回；
-    // 帧反馈场景、要覆盖度的输出段照常画。
-    const bool reads = m_options.readsFrame(clock.index);
-    m_cpu_frame = m_render->drawFrameCpu(*m_scene, reads, reads || m_reads_previous_frame ||
-        (m_raster_every_output_frame && clock.index >= m_options.readback_start));
+    m_cpu_frame = m_render->drawFrameCpu(*m_scene, reads, raster);
     if (m_profile) {
         m_cpu_frame.cpu_scene_ms = std::chrono::duration<double,std::milli>(profile.scene_finished-profile.scene_started).count();
         m_cpu_frame.cpu_script_ms = profile.script_ms;

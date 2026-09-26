@@ -112,6 +112,8 @@ struct Nv12Frame {
     // colorspace 0 = BT.709、1 = BT.601、2 = BT.2020；color_range 0 = limited、1 = full。
     std::uint32_t colorspace {};
     std::uint32_t color_range {};
+    // 还没转成 NV12 的解码帧（VideoSource 持有的 AVFrame 引用）。非空时 data 与色彩字段不是这一帧，先 to_nv12。
+    std::shared_ptr<void> decoded;
 };
 
 // 选中视频流的元数据（缩放、转 NV12 之前）。
@@ -159,7 +161,10 @@ public:
 
     // 失败返回 nullopt，原因见 last_error()；错误不锁存，下次调用照常再试。
     // 最后一个包的解码错误按读完处理，照常回到开头（见 detail::DecodeTailGate）。
-    auto next_frame(Nv12Frame& out) -> std::optional<NextFrame>;
+    // convert=false 只解码不转 NV12，帧留在 out.decoded，要用时再 to_nv12（离线不光栅的帧用不着 NV12）。
+    auto next_frame(Nv12Frame& out, bool convert = true) -> std::optional<NextFrame>;
+    // 把 frame.decoded 转成 NV12 写进 frame.data；没有待转的帧时什么也不做。失败返回 false，原因见 last_error()。
+    auto to_nv12(Nv12Frame& frame) -> bool;
     // 跳到不超过 seconds 的关键帧（超出时长按时长算）；失败返回 false。
     auto seek(double seconds) -> bool;
     auto duration() const -> std::optional<double>;
