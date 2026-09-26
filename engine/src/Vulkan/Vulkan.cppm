@@ -381,7 +381,8 @@ public:
      * VkImage. No-op if no video textures are registered. */
     void PumpVideoTextures(double dt_seconds);
     // R4 过渡：注入离线作业服务（不在离线作业里为空）后调上面那个；T5b 合并后两者合一。
-    void                  PumpVideoTextures(double dt_seconds, Services* services);
+    // raster=false：这一帧不光栅，只推进解码，不写纹理。
+    void                  PumpVideoTextures(double dt_seconds, Services* services, bool raster);
     VideoDecoderInventory ObserveVideoDecoders();
 
     /* vkCmdCopyBufferToImage a sub-rect of `atlas` into the supplied texture. */

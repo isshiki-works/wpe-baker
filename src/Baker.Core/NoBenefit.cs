@@ -20,6 +20,9 @@ public static class NoBenefit
 
     public const string ExpectedStatus = "expected_no_benefit";
     public const string OverrideStatus = "override_accepted";
+    /// <summary>只差采集能力、假设能采集也不命中判据：留在能力缺口，标给主线程排期实现采集。</summary>
+    public const string CaptureOpenStatus = "benefit_if_captured";
+    internal const string ReplannedConditionsField = "replanned_no_benefit_conditions";
 
     public const string RejectionReason = "no_benefit_expected";
     public const string RejectedBakeStatus = "candidate_rejected_no_benefit_expected";
@@ -62,6 +65,18 @@ public static class NoBenefit
     }
 
     /// <summary>
+    /// 只差采集能力（<see cref="Verdict.IsCaptureGap"/>）的方案按"假设能采集"照常预判：拒因只剩这类时读 plan 自身（bake_value 不看这类拒因）；
+    /// 更小分配重查只差采集能力时读重查记下的条件。都不是返回 null。
+    /// </summary>
+    internal static string[]? CaptureOpenConditions(JsonObject plan)
+    {
+        BlockerCode[] codes = [.. PlanBlockers.Codes(plan)];
+        if (codes.Length > 0 && codes.All(Verdict.IsCaptureGap)) return AnalysisConditions(plan);
+        return plan["loop_allocation_fallback"]?[ReplannedConditionsField] is JsonArray replanned
+            ? [.. replanned.Select(c => c!.GetValue<string>())] : null;
+    }
+
+    /// <summary>
     /// 只有普通图层的视频组（单个源材质、普通贴图着色器、不带光照、没有特效 pass；不画东西的节点层不算）省下的渲染可证明约为 0，
     /// 进视频只多一路视频和一个视频层的固定开销（SALVAGE 每路约 0.66 W；每层绘制约 0.46 W，并进视频枢纽后约 0.03 W，光解码这一路就不省）。返回把这些组留实时的 --retain-live 列表。
     /// 静态成品、已证静态的组不编视频，不在此列；全部组都是普通组时没有可烘内容，交给 <see cref="PlainLayersOnly"/>。
@@ -99,11 +114,17 @@ public static class NoBenefit
         _ => null
     };
 
-    /// <summary>分析收尾：记下判定；命中且没有覆盖时写 blocker 拒绝（与 TooManyVideoGroups 同一写法）。</summary>
+    /// <summary>分析收尾：记下判定；命中且没有覆盖时写 blocker 拒绝（与 TooManyVideoGroups 同一写法）。只差采集能力的方案按假设能采集判。</summary>
     public static void Apply(JsonObject plan, bool allowed)
     {
-        string[] conditions = AnalysisConditions(plan);
-        if (conditions.Length == 0) return;   // 没命中的方案不写记录，plan 与旧版逐字节相同
+        string[]? ifCaptured = CaptureOpenConditions(plan);
+        string[] conditions = ifCaptured ?? AnalysisConditions(plan);
+        if (conditions.Length == 0)
+        {
+            // 没命中的方案不写记录，plan 与旧版逐字节相同；只差采集能力的标出来。
+            if (ifCaptured is not null) plan[Field] = Record(RejectChoice, CaptureOpenStatus, []);
+            return;
+        }
         plan[Field] = Record(allowed ? AllowChoice : RejectChoice, allowed ? OverrideStatus : ExpectedStatus, conditions);
         if (allowed) return;
         PlanBlockers.Add(plan, new Blocker(BlockerCode.NoBenefitExpected, [Describe(conditions, english: true)], [Describe(conditions, english: false)]));
