@@ -419,6 +419,11 @@ public:
 
     bool          Parse();
     std::uint32_t Model() const { return model_; }
+    // 分析只覆盖顶点/几何/片元阶段、且靠 OpName 按名字取 uniform：看不到的情况报原因，不静默当成与时间无关
+    std::string Unsupported() const {
+        if ((model_ != 0 && model_ != 3 && model_ != 4) || side_effect_) return "unsupported_side_effect";
+        return names_.empty() ? "names_stripped" : "";
+    }
     void          Execute(int stage_index, const std::map<std::uint32_t, Val>& varyings_in,
                           std::map<std::uint32_t, Val>& varyings_out, std::vector<std::pair<Comp, std::string>>& outputs);
 
@@ -487,6 +492,7 @@ private:
     const Inputs&                                                         in_;
     std::map<std::pair<int, std::size_t>, Cond>&                          conds_;
     std::unordered_map<std::uint32_t, std::string>                        names_;
+    bool                                                                  side_effect_ { false };
     std::unordered_map<std::uint32_t, std::map<std::uint32_t, std::string>> member_names_;
     std::unordered_map<std::uint32_t, std::uint32_t>                      location_;
     std::unordered_map<std::uint32_t, std::uint32_t>                      builtin_;
@@ -519,6 +525,8 @@ bool Analyzer::Parse() {
         if (len == 0 || i + len > w_.size()) return false;
         const std::uint32_t* o = &w_[i + 1];
         const std::size_t    n = len - 1;
+        // OpImageWrite、原子操作、StorageBuffer 变量：有副作用的写入，抽象解释不建模
+        if (op == 99 || (op >= 227 && op <= 242) || (op == 59 && n > 2 && o[2] == 12)) side_effect_ = true;
         switch (op) {
         case 5: names_[o[0]] = Str(o + 1, n - 1); break;
         case 6: member_names_[o[0]][o[1]] = Str(o + 2, n - 2); break;
@@ -1482,6 +1490,11 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
         if (! a->Parse()) {
             sig.kind = "aperiodic";
             sig.reasons.push_back("spirv_unreadable");
+            return sig;
+        }
+        if (const std::string why = a->Unsupported(); ! why.empty()) {
+            sig.kind = "aperiodic";
+            sig.reasons.push_back(why);
             return sig;
         }
         list.push_back(std::move(a));

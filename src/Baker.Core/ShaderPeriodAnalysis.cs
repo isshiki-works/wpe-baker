@@ -36,7 +36,7 @@ public static class ShaderPeriodAnalysis
 
     // 引擎里这些原因只说明"分析没推下去"，不是不周期的证明（其余原因码都是证明：漂移、线性时间进非周期运算、按线性时间分支）
     private static readonly string[] NotProof = ["spirv_unreadable", "analysis_not_converged", "sampler_wrap_unknown",
-        "time_rate_not_constant", "scroll_rate_not_constant", "drift_rate_not_constant", "too_many_periods"];
+        "time_rate_not_constant", "scroll_rate_not_constant", "drift_rate_not_constant", "too_many_periods", "unsupported_side_effect", "names_stripped"];
     // 时间签名只认 g_Time；用到这些时钟的材质不裁定，交给运行时材质检查报未建模时钟
     private static readonly string[] AlternateClocks = ["g_Runtime", "g_Frametime", "g_DeltaTime"];
 
