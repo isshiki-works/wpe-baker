@@ -1048,7 +1048,6 @@ public static class ShaderPeriodAnalysis
         return Regex.Replace(text, @"\buniform\s+\w+\s+g_Time\s*;", " ", RegexOptions.CultureInvariant);
     }
 
-    /// <summary>pass 上写了就按写的读（必须是有限标量），没写取 shader uniform 注释的默认值（材质键 → default）。</summary>
     /// <summary>
     /// 按 pass 的 combo 值挑出预处理分支后的源码。只认 <c>#if NAME</c>、<c>#if NAME == N</c>、<c>#if NAME != N</c>、
     /// <c>#else</c>、<c>#endif</c>。combo 值来自 pass，缺省时取 shader 里 <c>// [COMBO]</c> 声明的 default；
