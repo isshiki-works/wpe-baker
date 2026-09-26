@@ -4,7 +4,7 @@
 
     用法：
       pwsh -File verify-package.ps1 -PortableZip <便携包.zip> -SourceZip <源码包.zip> `
-           -WorkDir D:\WPE-rc11-pkg\verify [-ExpectedRenderer <SHA256>] [-RendererPatchDir <目录>] [-Keep]
+           -WorkDir D:\WPE-rc11-pkg\verify -ExpectedRenderer <SHA256> [-Keep]
 
     退出码：0 全部通过；1 有 FAIL；2 只有 WARN（人工确认后可放行）。
 #>
@@ -13,10 +13,8 @@ param(
     [Parameter(Mandatory)][string]$PortableZip,
     [Parameter(Mandatory)][string]$SourceZip,
     [Parameter(Mandatory)][string]$WorkDir,
-    # 多线程渲染器 wpe-render-mt-r4b.exe
-    [string]$ExpectedRenderer = 'A8F03257E3B02CD691813AB7302E76C9EEA68567D77B3A71B1EC434A14FC3292',
-    # 可选：外部渲染器补丁包目录（比对它声明的 exe SHA 与补丁文件哈希）
-    [string]$RendererPatchDir,
+    # 本次发行的 wpe-render.exe（原生构建记录里的 binary.sha256）
+    [Parameter(Mandatory)][string]$ExpectedRenderer,
     [switch]$Keep
 )
 
@@ -100,47 +98,7 @@ if ((Test-Path $sourceBundle) -and $rendererSha) {
     Add-Row '源码包' 'source-bundle.json' 'FAIL' '源码包缺 source-bundle.json'
 }
 
-# ---------- 3. 渲染器补丁（多线程版必须随源码） ----------
-foreach ($dir in @(@{ Name = '源码包 patches\renderer-mt'; Path = (Need $src 'patches\renderer-mt') },
-                   @{ Name = '外部补丁包'; Path = $RendererPatchDir })) {
-    if (-not $dir.Path) { continue }
-    if (-not (Test-Path -LiteralPath $dir.Path)) {
-        Add-Row '渲染器补丁' $dir.Name 'FAIL' "目录不存在：$($dir.Path)"
-        continue
-    }
-    $shaList = Join-Path $dir.Path 'sha256.txt'
-    $missing = @('README.md', 'sha256.txt', 'engine-perf-video-decode-threads.patch',
-        'parent-perf-video-decode-threads.patch') | Where-Object { -not (Test-Path (Join-Path $dir.Path $_)) }
-    Add-Row '渲染器补丁' "$($dir.Name) 文件齐备" (($missing.Count -eq 0) ? 'PASS' : 'FAIL') ($missing.Count -eq 0 ? '4 个文件都在' : "缺 $($missing -join ', ')")
-    if (-not (Test-Path $shaList)) { continue }
-    $declared = @{}
-    foreach ($line in Get-Content -LiteralPath $shaList) {
-        if ($line -match '^([0-9A-Fa-f]{64})\s+\*?(.+?)\s*$') { $declared[$Matches[2]] = $Matches[1].ToUpperInvariant() }
-    }
-    # 补丁包声明的 exe SHA 必须与便携包里的渲染器一致
-    $exeEntry = $declared.Keys | Where-Object { $_ -like '*wpe-render-mt-r4b*' } | Select-Object -First 1
-    if ($exeEntry -and $rendererSha) {
-        Add-Row '渲染器补丁' "$($dir.Name) 声明的 exe" (($declared[$exeEntry] -eq $rendererSha) ? 'PASS' : 'FAIL') "$exeEntry = $($declared[$exeEntry].Substring(0,16))…"
-    } else {
-        Add-Row '渲染器补丁' "$($dir.Name) 声明的 exe" 'WARN' 'sha256.txt 里没有 wpe-render-mt-r4b 条目'
-    }
-    # 两个 patch 文件的实际哈希 vs 声明
-    foreach ($patch in @('engine-perf-video-decode-threads.patch', 'parent-perf-video-decode-threads.patch')) {
-        $file = Join-Path $dir.Path $patch
-        if (-not (Test-Path $file)) { continue }
-        $actual = Sha $file
-        if ($declared.ContainsKey($patch)) {
-            Add-Row '渲染器补丁' "$patch 哈希" (($declared[$patch] -eq $actual) ? 'PASS' : 'FAIL') "$($actual.Substring(0,16))…"
-        } else {
-            Add-Row '渲染器补丁' "$patch 哈希" 'WARN' "sha256.txt 未声明，实际 $($actual.Substring(0,16))…"
-        }
-        # 内容必须是 diff，不能是误写入的终端输出
-        $head = (Get-Content -LiteralPath $file -TotalCount 1 -Encoding utf8)
-        Add-Row '渲染器补丁' "$patch 是 diff" (($head -like 'diff --git*' -or $head -like '---*') ? 'PASS' : 'FAIL') "首行：$($head.Substring(0, [math]::Min(40, $head.Length)))"
-    }
-}
-
-# ---------- 4. LGPL / GPL 运行库与编码器 ----------
+# ---------- 3. LGPL / GPL 运行库与编码器 ----------
 $verificationText = ''
 foreach ($flavor in @('ffmpeg-lgpl21', 'ffmpeg-encoder-gpl2')) {
     $file = Need $src ".deps\$flavor\verification.json"
@@ -160,13 +118,13 @@ foreach ($binary in $binaries) {
 Add-Row 'GPL/LGPL 二进制' 'SHA 能在验证记录中找到' (($unmatched.Count -eq 0) ? 'PASS' : 'FAIL') `
     ("核对 $($binaries.Count) 个" + ($unmatched.Count ? "，未匹配：$($unmatched -join ', ')" : '，全部匹配'))
 
-# ---------- 5. 源码包必须包含 / 必须排除 ----------
-$required = @('engine', 'engine-upstream.bundle', 'patches', 'scripts\dependency-patches\manifest.json',
+# ---------- 4. 源码包必须包含 / 必须排除 ----------
+$required = @('engine', 'engine-upstream.bundle', 'scripts\dependency-patches\manifest.json',
     'scripts\dependency-patches\rstd.patch', 'scripts\dependency-patches\vvk.patch',
     'THIRD-PARTY-NOTICES.md', 'SOURCE.md', 'REBUILD.md',
     '.deps\ffmpeg-lgpl21\sources\ffmpeg', '.deps\ffmpeg-encoder-gpl2\sources\x264',
     '.deps\ffmpeg-encoder-gpl2\sources\x265', '.deps\vvk', '.deps\rstd', '.deps\eigen',
-    '.deps\freetype', '.deps\glslang', 'src', 'tests', 'scripts', 'LICENSE')
+    '.deps\freetype', '.deps\glslang', '.deps\nlohmann-json', '.deps\cli11', 'src', 'tests', 'scripts', 'LICENSE')
 $missingRequired = $required | Where-Object { -not (Test-Path (Join-Path $src $_)) }
 Add-Row '源码包' '必备条目齐备' (($missingRequired.Count -eq 0) ? 'PASS' : 'FAIL') ($missingRequired.Count -eq 0 ? "$($required.Count) 项都在" : "缺 $($missingRequired -join ', ')")
 $engineFiles = (Get-ChildItem (Join-Path $src 'engine') -Recurse -File -ErrorAction SilentlyContinue).Count
@@ -182,7 +140,7 @@ $workshop = @(Get-ChildItem $src -Recurse -File -ErrorAction SilentlyContinue | 
 } | Select-Object -First 10)
 Add-Row '源码包' '无 Workshop 素材' (($workshop.Count -eq 0) ? 'PASS' : 'WARN') ($workshop.Count -eq 0 ? '没有 .pkg 与工坊 ID 目录' : "可疑：$(($workshop | ForEach-Object { $_.FullName.Substring($src.Length + 1) }) -join '; ')")
 
-# ---------- 6. 便携包的许可与源码说明 ----------
+# ---------- 5. 便携包的许可与源码说明 ----------
 $portableRequired = @('SOURCE.md', 'THIRD-PARTY-NOTICES.md', 'README.md', 'README.zh-CN.md', 'LICENSE',
     'licenses\open-wallpaper-engine.LICENSE', 'licenses\renderer-codecs\ffmpeg\COPYING.LGPLv2.1',
     'licenses\renderer-codecs\dav1d\COPYING', 'encoder\licenses\x264\COPYING', 'encoder\licenses\x265\COPYING',
@@ -205,7 +163,7 @@ if (Test-Path $sourceDoc) {
     Add-Row '便携包' 'SOURCE.md 无占位符' (($placeholders -eq 0) ? 'PASS' : 'FAIL') "$placeholders 处【待填】"
 }
 
-# ---------- 7. 两包版本一致 ----------
+# ---------- 6. 两包版本一致 ----------
 foreach ($readme in @('README.md', 'README.zh-CN.md')) {
     $a = Join-Path $bundle $readme; $b = Join-Path $src $readme
     if ((Test-Path $a) -and (Test-Path $b)) {
