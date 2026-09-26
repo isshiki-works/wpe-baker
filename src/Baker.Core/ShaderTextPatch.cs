@@ -82,9 +82,17 @@ public static class ShaderTextPatch
         string id = key[(key.IndexOf('_', KnobPrefix.Length) + 1)..];
         // 注释换成等长空白，下标仍对得上原文
         string code = Comment.Replace(text, match => new string(' ', match.Length));
+        // const 初始化与 #if 之类预处理行包成 uniform 乘法会编译失败；整数写法的 token 可能处在要求 int 的位置。
+        // 唯一的出现处落在这些位置时不当旋钮（返回空）
+        string Line(int at) { int start = code.LastIndexOf('\n', Math.Max(0, at - 1)) + 1, end = code.IndexOf('\n', at); return code[start..(end < 0 ? code.Length : end)].Trim(); }
+        bool Rewritable(Match match) => match.Groups[1].Value.IndexOfAny(['.', 'e', 'E']) >= 0 && Line(match.Index) is var line &&
+            !Regex.IsMatch(line, @"\bconst\b") && (!line.StartsWith('#') || line.StartsWith("#define", StringComparison.Ordinal));
         if (id.Length == 8 && uint.TryParse(id, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out uint bits))
-            return [.. NumberToken.Matches(code).Where(match => float.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) &&
+        {
+            Match[] found = [.. NumberToken.Matches(code).Where(match => float.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) &&
                 (BitConverter.SingleToUInt32Bits(value) & 0x7FFFFFFF) == (bits & 0x7FFFFFFF))];
+            return found is [Match only] && !Rewritable(only) ? [] : found;
+        }
         return [.. Regex.Matches(code, @"\b" + Regex.Escape(id) + @"\b", RegexOptions.CultureInvariant).Where(match =>
             !code[(code.LastIndexOf('\n', Math.Max(0, match.Index - 1)) + 1)..match.Index].TrimStart().StartsWith("uniform", StringComparison.Ordinal))];
     }

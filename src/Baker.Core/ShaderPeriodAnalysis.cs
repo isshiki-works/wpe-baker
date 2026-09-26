@@ -123,8 +123,9 @@ public static class ShaderPeriodAnalysis
                 {
                     double seconds = term["seconds"]!.GetValue<double>();
                     BigInteger num = term["num"]!.GetValue<long>(), den = term["den"]!.GetValue<long>();
-                    // 慢分量：调速到预算上限也放不进一圈；num=0 时 seconds 是下界，照样成立
-                    if (seconds / stretch > ceilingSeconds) { slow.Add(new($"{id}/slow{slow.Count}", owner, effect, pass, seconds)); continue; }
+                    // 慢分量：调速到预算上限也放不进一圈；num=0 时 seconds 是下界，照样成立。同 pass 的时间倍率也乘在它上面，
+                    // 记 seconds/stretch（有效周期的下界），漂移 2π·P/T 才是上界
+                    if (seconds / stretch > ceilingSeconds) { slow.Add(new($"{id}/slow{slow.Count}", owner, effect, pass, seconds / stretch)); continue; }
                     if (num <= 0 || den <= 0) { unknown.Add(seconds); continue; }
                     // 旋钮只能挂在作者效果 pass 上（场景里有这个 pass 的 constantshadervalues）
                     if (effect >= 0 && Knobs(term).FirstOrDefault(Usable) is JsonObject knob)
@@ -135,7 +136,7 @@ public static class ShaderPeriodAnalysis
                             $"SPIR-V time signature of {resource}: period {seconds.ToString("R", CultureInfo.InvariantCulture)} s through {key}"));
                         continue;
                     }
-                    stuckKnob |= effect >= 0 && Knobs(term).Any();
+                    stuckKnob |= effect >= 0 && Knobs(term).Any(k => claims[ShaderTextPatch.KnobKey(k)] == 1);
                     if (term["pi"] is not JsonValue power || !power.TryGetValue(out int pi)) { unknown.Add(seconds); continue; }
                     BigInteger divisor = BigInteger.GreatestCommonDivisor(num, den);
                     (num, den) = (num / divisor, den / divisor);
