@@ -165,15 +165,14 @@ internal sealed class Verdict
         if (report["effect_prefix_caches"] is JsonArray { Count: > 0 })
             report["effect_prefix_hardware_decode_preflight"] = HardwareDecodeDimensions.PredictEffectPrefixCaches(report, source,
                 request.Assets, request, report["projection"] as JsonObject ?? projection);
-        // These queries are already present in the analysis trace. Use the exporter's
-        // existing assembly rule before promising a whole-layer bake, without rendering again.
-        if (!effectPrefixRoute && observation.Dependencies.OfType<JsonObject>().Any(item =>
-                item["operation"]?.GetValue<string>() == "query" &&
-                item["property"]?.GetValue<string>()?.StartsWith("layer_", StringComparison.Ordinal) == true) &&
-            LayoutAdmission.CompositionHierarchyConflict(report, graph.Objects, observation.Dependencies) is Blocker publicQueryConflict)
+        // 用烘焙的装配规则（真实对象表与运行时依赖）核一遍再许诺整层烘焙，不重新渲染。只有 id/parent 的骨架看不到
+        // 光源（装配时连同父级提前输出），父级下的实时层随之提前、绘制顺序改变，骨架判能、烘焙到装配才抛。
+        // 没有视频组时没有可装配的视频，不另加这条拒因。
+        if (!effectPrefixRoute && report["video_groups"] is JsonArray { Count: > 0 } &&
+            LayoutAdmission.CompositionHierarchyConflict(report, graph.Objects, observation.Dependencies) is Blocker assemblyConflict)
         {
-            PlanBlockers.Add(report, publicQueryConflict);
-            PlanBlockers.Add(report["whole_layer"]!.AsObject(), publicQueryConflict);
+            PlanBlockers.Add(report, assemblyConflict);
+            PlanBlockers.Add(report["whole_layer"]!.AsObject(), assemblyConflict);
             report["whole_layer"]!["status"] = "unavailable";
             report["status"] = "requires_resolution";
         }
