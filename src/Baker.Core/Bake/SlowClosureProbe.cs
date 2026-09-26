@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// <summary>
-/// 分析阶段的慢分量闭合预检：视频组里有缓变分量（plan 的 slow_components）所有者层时，按烘焙同一个主渲染请求渲 P+1 帧（只编第 0 帧），
+/// 分析阶段的慢分量闭合预检：视频组里有缓变分量（plan 的 slow_components）所有者层时，按烘焙同一个主渲染请求出第 0 帧与第 P 帧（第 P 帧靠多预热 P 帧，不回读中间帧），
 /// 在编码前原帧上过 <see cref="LoopClosureCheck"/>（阈值不动）。P 取 plan 的解析周期，不搜。每组一条记录：所有者层、漂移上界、闭合读数、渲染器墙钟。
 /// 没闭合的，调用方把所有者层留实时重新分析；闭合的照常判能，烘焙时接缝门照常复核。
 /// </summary>
@@ -38,14 +38,16 @@ internal static class SlowClosureProbe
                 if (GroupVerdicts.SlowDrift(plan, Layers(groups[index])) is not (string degrees, int[] owners)) continue;
                 GroupCapture capture = scheduler.Capture(groups[index]);
                 ulong period = groupFrames[index];
-                JsonObject manifest = await runner.RenderAsync(scheduler.ClosureProbeRequest(index, Path.Combine(output, $"group-{index}")), null, token);
-                byte[] first = await LoopClosureCheck.ReadRetainedFrameAsync(manifest, 0, token);
-                byte[] wrap = await LoopClosureCheck.ReadRetainedFrameAsync(manifest, period, token);
+                JsonObject start = await runner.RenderAsync(scheduler.ClosureProbeRequest(index, Path.Combine(output, $"group-{index}-0"), 0), null, token);
+                JsonObject end = await runner.RenderAsync(scheduler.ClosureProbeRequest(index, Path.Combine(output, $"group-{index}-p"), period), null, token);
+                byte[] first = await LoopClosureCheck.ReadRetainedFrameAsync(start, 0, token);
+                byte[] wrap = await LoopClosureCheck.ReadRetainedFrameAsync(end, 0, token);
                 JsonObject closure = LoopClosureCheck.Evaluate(first, wrap, (int)capture.PixelWidth, (int)capture.PixelHeight,
                     withAlpha: !capture.SceneClear, period, judged: true, scheduler.TileScale);
                 records.Add(new JsonObject { ["group_id"] = groups[index]["id"]!.DeepClone(), ["owner_layer_ids"] = new JsonArray([.. owners.Select(id => (JsonNode)id)]),
                     ["drift_bound_degrees"] = degrees, ["status"] = closure["status"]!.DeepClone(),
-                    ["renderer_wall_seconds"] = manifest["native_result"]?["wall_seconds"]?.DeepClone(), ["loop_closure"] = closure });
+                    ["renderer_wall_seconds"] = new[] { start, end }.Sum(render => render["native_result"]?["wall_seconds"]?.GetValue<double>() ?? 0),
+                    ["loop_closure"] = closure });
             }
         }
         finally
