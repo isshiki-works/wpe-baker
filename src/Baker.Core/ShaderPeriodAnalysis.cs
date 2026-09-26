@@ -124,19 +124,28 @@ public static class ShaderPeriodAnalysis
                 // 同一旋钮被几个项用到：多于一个就分不开，不用它
                 var claims = terms.SelectMany(t => Knobs(t).Select(ShaderTextPatch.KnobKey).Distinct()).GroupBy(key => key).ToDictionary(g => g.Key, g => g.Count());
                 var stages = new Dictionary<string, string?>();
-                bool Usable(JsonObject knob)
+                string? Text(string stage)
                 {
-                    string stage = knob["stage"]!.GetValue<string>(), key = ShaderTextPatch.KnobKey(knob);
                     if (!stages.TryGetValue(stage, out string? text))
                         stages[stage] = text = TryReadShaderStage(source, assetsDirectory, resource + "." + stage, out string read) ? read : null;
-                    return claims[key] == 1 && text is not null && ShaderTextPatch.KnobUses(text, key).Length == 1;
+                    return text;
                 }
-                var classes = new SortedDictionary<int, (BigInteger Num, BigInteger Den)>();
+                bool Usable(JsonObject knob) => knob["varying"] is null && claims[ShaderTextPatch.KnobKey(knob)] == 1 &&
+                    Text(knob["stage"]!.GetValue<string>()) is string text && ShaderTextPatch.KnobUses(text, ShaderTextPatch.KnobKey(knob)).Length == 1;
+                // 没有可用旋钮时退到顶点输出分量：这一项经过的分量只归它、同在一个 varying 上，且顶点程序能整段换时间重算
+                string? AxisKey(JsonObject term) => Knobs(term).Where(k => k["varying"] is not null).ToArray() is { Length: > 0 } axes &&
+                    axes.All(k => claims[ShaderTextPatch.KnobKey(k)] == 1) && ShaderTextPatch.AxisKey(axes) is string key &&
+                    Text("vert") is string vert && ShaderTextPatch.AxisTarget(vert, key) is not null ? key : null;
                 var knobbed = new List<ShaderPeriodComponent>();
                 var slow = new List<ShaderSlowComponent>();
                 var unknown = new List<double>();
                 // 非慢的已知周期项：最宽松模型里各自独立调频；Missing 是实际模型里它缺独立调频来源的原因（null = 不缺）
                 var loose = new List<(CommonLoopComponent Term, string? Missing)>();
+                // 缺旋钮、π 次数已知的项：挂 pass 时间倍率，带它可用的分量旋钮键（null = 没有）
+                var timed = new List<(int Loose, int Pi, BigInteger Num, BigInteger Den, double Seconds, string? Axis)>();
+                ShaderPeriodComponent Through(string key, double seconds, bool inverse) => new(new CommonLoopComponent($"{id}/{key}",
+                    new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true), owner, effect, pass, key, inverse,
+                    $"SPIR-V time signature of {resource}: period {seconds.ToString("R", CultureInfo.InvariantCulture)} s through {key}");
                 foreach (var (term, index) in terms.Select((term, index) => (term, index)))
                 {
                     double seconds = term["seconds"]!.GetValue<double>();
@@ -149,23 +158,39 @@ public static class ShaderPeriodAnalysis
                     // 旋钮只能挂在作者效果 pass 上（场景里有这个 pass 的 constantshadervalues）
                     if (effect >= 0 && Knobs(term).FirstOrDefault(Usable) is JsonObject knob)
                     {
-                        string key = ShaderTextPatch.KnobKey(knob);
-                        knobbed.Add(new(new CommonLoopComponent($"{id}/{key}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true),
-                            owner, effect, pass, key, knob["inverse"]?.GetValue<bool>() == true,
-                            $"SPIR-V time signature of {resource}: period {seconds.ToString("R", CultureInfo.InvariantCulture)} s through {key}"));
+                        knobbed.Add(Through(ShaderTextPatch.KnobKey(knob), seconds, knob["inverse"]?.GetValue<bool>() == true));
                         loose.Add((relaxed, null));
                         continue;
                     }
                     loose.Add((relaxed, effect < 0 ? "source material without an authored effect pass" : !Knobs(term).Any() ? "no knob"
                         : string.Join("; ", Knobs(term).Select(ShaderTextPatch.KnobKey).Distinct().Select(key => claims[key] > 1
-                            ? $"knob {key} is shared by {claims[key]} terms" : $"knob {key} is not a unique rewritable token in the source"))));
+                            ? $"knob {key} is shared by {claims[key]} terms" : key.Contains("_ax_", StringComparison.Ordinal)
+                            ? $"knob {key} cannot be retimed on its own (the term also runs through other outputs, or the vertex program cannot be rerun)"
+                            : $"knob {key} is not a unique rewritable token in the source"))));
                     if (term["pi"] is not JsonValue power || !power.TryGetValue(out int pi)) { unknown.Add(seconds); continue; }
                     BigInteger divisor = BigInteger.GreatestCommonDivisor(num, den);
-                    (num, den) = (num / divisor, den / divisor);
-                    // 类内有理 LCM：lcm(a/b, c/d) = lcm(a,c)/gcd(b,d)
-                    classes[pi] = classes.TryGetValue(pi, out var old)
-                        ? (old.Num / BigInteger.GreatestCommonDivisor(old.Num, num) * num, BigInteger.GreatestCommonDivisor(old.Den, den))
-                        : (num, den);
+                    timed.Add((loose.Count - 1, pi, num / divisor, den / divisor, seconds, effect >= 0 ? AxisKey(term) : null));
+                }
+                // 类内有理 LCM：lcm(a/b, c/d) = lcm(a,c)/gcd(b,d)
+                static SortedDictionary<int, (BigInteger Num, BigInteger Den)> Classes(IEnumerable<(int Loose, int Pi, BigInteger Num, BigInteger Den, double Seconds, string? Axis)> items)
+                {
+                    var classes = new SortedDictionary<int, (BigInteger Num, BigInteger Den)>();
+                    foreach (var (_, pi, num, den, _, _) in items)
+                        classes[pi] = classes.TryGetValue(pi, out var old)
+                            ? (old.Num / BigInteger.GreatestCommonDivisor(old.Num, num) * num, BigInteger.GreatestCommonDivisor(old.Den, den))
+                            : (num, den);
+                    return classes;
+                }
+                var classes = Classes(timed);
+                // 一个时间倍率兜不住（剩多个 π 类，或类周期调速到预算上限仍超上限）时，有分量旋钮的项改挂各自的分量旋钮
+                if (classes.Count > 1 || classes.Any(c => (double)c.Value.Num / (double)c.Value.Den * Math.Pow(Math.PI, c.Key) / stretch > ceilingSeconds))
+                {
+                    foreach (var item in timed.Where(x => x.Axis is not null))
+                    {
+                        knobbed.Add(Through(item.Axis!, item.Seconds, false));
+                        loose[item.Loose] = (loose[item.Loose].Term, null);
+                    }
+                    classes = Classes(timed.Where(x => x.Axis is null));
                 }
                 string periods = string.Join(", ", classes.Select(c => $"{c.Value.Num}/{c.Value.Den}{(c.Key == 0 ? "" : c.Key == 1 ? "·π" : $"·π^{c.Key}")} s"));
                 if (unknown.Count > 0)

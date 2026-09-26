@@ -38,7 +38,7 @@ public static class ShaderTextPatch
                 // ponytail: 只改本 stage 文本；#include 进来的头文件若读 g_Time 不会被缩放（WE 自带头文件不读）
                 int uses = 0;
                 var header = new StringBuilder();
-                foreach (string key in keys.Where(key => key.StartsWith(KnobPrefix + stage + "_", StringComparison.Ordinal)))
+                foreach (string key in keys.Where(key => key.StartsWith(KnobPrefix + stage + "_", StringComparison.Ordinal) && !key.StartsWith(KnobPrefix + "vert_ax_", StringComparison.Ordinal)))
                 {
                     // 分析时判过恰好一次；对不上说明源码变了
                     if (KnobUses(body, key) is not [Match use])
@@ -54,6 +54,31 @@ public static class ShaderTextPatch
                     body = TimeUse.Replace(body, _ => { ++uses; return "(g_Time*g_PeriodicaTimeScale)"; });
                     if (uses > before) header.Append("uniform float g_PeriodicaTimeScale; // {\"material\":\"" + ShaderPeriodAnalysis.TimeScaleKey + "\",\"default\":1}\n");
                 }
+                // 分量旋钮：原 main 改名、读时间处改读 periodica_T；新 main 按各旋钮的时间各跑一遍取它的分量，最后按原时间跑一遍再把这些分量写回
+                string[] axes = [.. keys.Where(key => stage == "vert" && key.StartsWith(KnobPrefix + "vert_ax_", StringComparison.Ordinal))];
+                if (axes.Length > 0)
+                {
+                    var main = new StringBuilder("void main() {\n");
+                    var restore = new StringBuilder();
+                    foreach (string key in axes)
+                    {
+                        if (AxisTarget(body, key) is not (string varying, string[] swizzles))
+                            throw new InvalidDataException($"Shader knob {key} no longer names a rewritable vertex output in {resource}.");
+                        string uniform = "g_PeriodicaK_" + key[KnobPrefix.Length..];
+                        header.Append("uniform float " + uniform + "; // {\"material\":\"" + key + "\",\"default\":1}\n");
+                        main.Append("\tperiodica_T = g_Time * " + uniform + ";\n\tperiodica_main();\n");
+                        foreach (string swizzle in swizzles)
+                        {
+                            string saved = "periodica_" + uses++;
+                            main.Append("\tfloat " + saved + " = " + varying + swizzle + ";\n");
+                            restore.Append("\t" + varying + swizzle + " = " + saved + ";\n");
+                        }
+                    }
+                    body = MainDecl.Replace(body, "void periodica_main()", 1);
+                    body = TimeUse.Replace(body, "periodica_T");
+                    header.Append("float periodica_T;\n");
+                    body += "\n" + main + "\tperiodica_T = g_Time;\n\tperiodica_main();\n" + restore + "}\n";
+                }
                 if (uses == 0) continue;
                 string patched = header + body;
                 string path = ProjectSource.ContainedPath(captureProject, resource);
@@ -68,8 +93,11 @@ public static class ShaderTextPatch
     /// <summary>旋钮材质常量键的前缀：periodica_k_&lt;stage&gt;_&lt;id&gt;。</summary>
     private const string KnobPrefix = "periodica_k_";
 
-    /// <summary>引擎时间签名里一个旋钮（terms[].knobs[]）的材质常量键；id 是字面量的 float32 位（8 位十六进制）或 uniform 名。</summary>
-    internal static string KnobKey(JsonObject knob) => KnobPrefix + knob["stage"]!.GetValue<string>() + "_" +
+    /// <summary>
+    /// 引擎时间签名里一个旋钮（terms[].knobs[]）的材质常量键；id 是字面量的 float32 位（8 位十六进制）、uniform 名，
+    /// 或顶点输出分量 ax_&lt;分量字母&gt;_&lt;varying&gt;。
+    /// </summary>
+    internal static string KnobKey(JsonObject knob) => knob["varying"] is not null ? AxisKey([knob])! : KnobPrefix + knob["stage"]!.GetValue<string>() + "_" +
         (knob["uniform"] is JsonValue uniform ? uniform.GetValue<string>()
             : BitConverter.SingleToUInt32Bits((float)knob["literal"]!.GetValue<double>()).ToString("x8", CultureInfo.InvariantCulture));
 
@@ -97,6 +125,29 @@ public static class ShaderTextPatch
             !code[(code.LastIndexOf('\n', Math.Max(0, match.Index - 1)) + 1)..match.Index].TrimStart().StartsWith("uniform", StringComparison.Ordinal))];
     }
 
+    /// <summary>一项经过的几个顶点输出分量合成一个旋钮键；分量不在同一个 varying 上时给 null。</summary>
+    internal static string? AxisKey(IReadOnlyCollection<JsonObject> axes) =>
+        axes.Select(k => k["varying"]!.GetValue<string>()).Distinct().ToArray() is [string varying]
+            ? KnobPrefix + "vert_ax_" + string.Concat(axes.Select(k => k["component"]!.GetValue<int>()).Distinct().Order().Select(c => "xyzw"[c])) + "_" + varying
+            : null;
+
+    /// <summary>
+    /// 分量旋钮在顶点源码里的改写目标：恰好一个 void main()，varying 恰好声明一次（float 或 vec2–4）；
+    /// 返回 varying 名与每个分量的取值后缀（float 为空）。不满足给 null。
+    /// </summary>
+    internal static (string Varying, string[] Swizzles)? AxisTarget(string text, string key)
+    {
+        Match parts = Regex.Match(key, @"_ax_([xyzw]+)_(\w+)$", RegexOptions.CultureInvariant);
+        if (!parts.Success) return null;
+        string code = Comment.Replace(text, match => new string(' ', match.Length)), varying = parts.Groups[2].Value, letters = parts.Groups[1].Value;
+        Match[] declared = Regex.Matches(code, @"\bvarying\s+(?:\w+\s+)*?(float|vec[234])\s+" + Regex.Escape(varying) + @"\s*;", RegexOptions.CultureInvariant).ToArray();
+        if (MainDecl.Matches(code).Count != 1 || declared is not [Match only]) return null;
+        string type = only.Groups[1].Value;
+        if (type == "float") return letters == "x" ? (varying, [""]) : null;
+        return letters.All(c => "xyzw".IndexOf(c) < type[3] - '0') ? (varying, [.. letters.Select(c => "." + c)]) : null;
+    }
+
+    private static readonly Regex MainDecl = new(@"\bvoid\s+main\s*\(\s*(?:void\s*)?\)", RegexOptions.CultureInvariant);
     // g_Time 的使用处，不含它自己的 uniform 声明
     private static readonly Regex TimeUse = new(@"(?<!\buniform\s+float\s+)\bg_Time\b", RegexOptions.CultureInvariant);
     private static readonly Regex Comment = new(@"//[^\n]*|/\*.*?\*/", RegexOptions.Singleline | RegexOptions.CultureInvariant);

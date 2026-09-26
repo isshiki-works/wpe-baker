@@ -130,10 +130,9 @@ internal static class HybridSuitability
                 "This scene needs a capture path the tool does not have yet (HDR intermediate compositing and/or perspective projection); that is a gap in the tool, not a verdict on the wallpaper.",
                 "这张壁纸需要工具目前还没有的采集能力（HDR 中间合成与/或透视投影）：这是工具的能力缺口，不是壁纸本身不行。", notes);
 
+        // 剩下的阻断项不交给用户判：不可掩盖的分量都已证明上限内不重复才是"不能"，其余是分析没推下去，记未收敛
         if (blockers.Length > 0)
-            return Build("requires_user_choice", "blockers_need_a_decision",
-                $"Analysis left {blockers.Length} blocker(s) for you to resolve before baking; none of them says this wallpaper cannot be baked.",
-                $"分析留下 {blockers.Length} 条需要你先决定的事项；它们都不代表这张壁纸不能烘。", notes);
+            return Converged(plan, Build("not_suitable", "blockers_unresolved", "", "", notes), unsupportedOtherwise: true);
 
         if (candidates > 0 || prefixCaches > 0)
             return Build("suitable", "loop_candidates_available",

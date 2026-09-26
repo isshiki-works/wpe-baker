@@ -26,7 +26,7 @@ public class BlockerTriageTests
     [InlineData(BlockerCode.HdrRadianceOpen, "capture_capability_gap")]
     [InlineData(BlockerCode.HdrRadianceOpenProperty, "capture_capability_gap")]
     [InlineData(BlockerCode.PerspectiveNeedsScreenspace, "capture_capability_gap")]
-    [InlineData(BlockerCode.CameraPathNeedsEnvelope, "blockers_need_a_decision")]
+    [InlineData(BlockerCode.CameraPathNeedsEnvelope, "blockers_unresolved")]
     public void CapabilityGapIsTriagedByCode(BlockerCode code, string rule)
     {
         int arity = BlockerCatalogTests.Arity(BlockerCodes.Key(code));
