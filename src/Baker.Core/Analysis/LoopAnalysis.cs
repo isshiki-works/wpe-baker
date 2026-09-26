@@ -247,7 +247,21 @@ internal static class LoopAnalysis
                     (UInt128)ceiling.Numerator * fpsNumerator / ((UInt128)ceiling.Denominator * fpsDenominator)));
                 candidates.Add(new LoopCandidate((ulong)frames, (double)frames * fpsDenominator / fpsNumerator, 0d, [], []) { LoopLengthSource = "slow_components_only" });
             }
-            for (int index = 0; index < candidates.Count; ++index) candidates[index] = candidates[index] with { SlowComponents = shader.Slow };
+            // 慢分量在上限内闭合不了（定义如此），只有漂移小到接缝门看不出时才能烘。单位增益下 |sin(x+δ) − sin(x)| ≤ δ，
+            // 漂移上界 2π·P/T 超过接缝门的 8 位取整容差就不指望过门：按"上限内不重复"记所有者层，分配回退把它留实时，其余照常烘；
+            // 容差内的才留给烘焙侧接缝门复核。P 取各候选中最长的（漂移最大）；没有候选时取求解器的最短循环时长（任何候选都不短于它），
+            // 这样首轮求不出循环时也先点名，分配回退一次就把它们和别的未解层一起留实时。
+            double longest = candidates.Count == 0 ? CommonLoopSolver.DefaultMinimum.ToSeconds() : candidates.Max(candidate => candidate.Seconds);
+            double tolerance = LoopClosureCheck.MaximumTileMae255 / 255;
+            ShaderSlowComponent[] kept = [.. shader.Slow.Where(x => 2 * Math.PI * longest / x.PeriodSeconds <= tolerance)];
+            foreach (var owner in shader.Slow.Except(kept).GroupBy(x => x.OwnerLayerId))
+            {
+                ShaderSlowComponent fastest = owner.MinBy(x => x.PeriodSeconds)!;
+                unresolved.Add(new NeverRepeatsUnresolved(owner.Key, ceilingSeconds, $"Slow shader component {fastest.Id} has period {S(fastest.PeriodSeconds)} s, " +
+                    $"beyond the {S(ceilingSeconds)} s limit even at the retime budget; over a {S(longest)} s loop its phase drifts up to " +
+                    $"{S(2 * Math.PI * longest / fastest.PeriodSeconds)} rad, above the seam gate's 8-bit rounding allowance ({tolerance.ToString("0.#####", CultureInfo.InvariantCulture)} rad at unit gain)."));
+            }
+            for (int index = 0; index < candidates.Count; ++index) candidates[index] = candidates[index] with { SlowComponents = kept };
         }
         return new LoopReport(fpsNumerator, fpsDenominator,
             singleVideoRetime ? "single_video_nearest_frame_retime" : retimeClips ? "clip_retime_after_locked_search" : "locked_clip_rates",
