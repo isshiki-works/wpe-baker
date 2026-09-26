@@ -105,7 +105,8 @@ internal static class PlainLanguage
         var lines = (plan?["applied_tradeoffs"]?["turn_off_kinds"] as JsonArray ?? [])
             .Select(k => k?.GetValue<string>()).OfType<string>().Distinct().Select(k => KindLabel(k, english)).ToList();
         if (plan?["applied_tradeoffs"]?["daytime_state"]?.GetValue<string>() is string state)
-            lines.Add(L(english, $"按 {state} 时段生成", $"Generated for the {state} time of day"));
+            lines.Add(MessageCatalog.Get("preset.daytime", english ? MessageCatalog.English : MessageCatalog.Chinese,
+                MessageCatalog.DaytimeStateLabel(state, english ? MessageCatalog.English : MessageCatalog.Chinese)));
         return lines.ToArray();
     }
 

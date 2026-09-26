@@ -65,7 +65,9 @@ Full source, third-party notices and build records are in `WpeBaker-1.0.2-source
 
 ## Licenses
 
-Tooling: MIT. Offline renderer: GPL-2.0 (derived from open-wallpaper-engine). Third-party components and license texts: `THIRD-PARTY-NOTICES.md` and `licenses/` in the source archive. Baked outputs are for personal use on your own machine; wallpaper artwork remains the property of its Steam Workshop authors. WPE Baker is not affiliated with or endorsed by Wallpaper Engine.
+The MIT license in `LICENSE` covers the C# application/tool layer and the developer scripts. `engine/` (the offline renderer, derived from open-wallpaper-engine) and its modifications keep the upstream GPL-2.0; see `engine/LICENSE`. FFmpeg, x264 and other dependencies keep their own licenses.
+
+Third-party components and license texts: `THIRD-PARTY-NOTICES.md` and `licenses/` in the source archive. Baked outputs are for personal use on your own machine; wallpaper artwork remains the property of its Steam Workshop authors. WPE Baker is not affiliated with or endorsed by Wallpaper Engine.
 
 ## Credits
 
