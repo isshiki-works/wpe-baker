@@ -329,7 +329,8 @@ public static class ShaderPeriodAnalysis
     private static ShaderVerdict ScalarPeriod(PassContext c, ClockRule rule)
     {
         if (Gates(c, rule) is ShaderVerdict gated) return gated;
-        string key = rule.Text("speed_key");
+        string key = rule.Data["speed_uniform"] is JsonValue uniform
+            ? MaterialKey(c.Source, uniform.GetValue<string>(), rule.Text("speed_key")) : rule.Text("speed_key");
         bool read = TryScalar(c.Pass, key, out double speed, out int valueIndex, out string numericText);
         if (!read || (speed == 0 && rule.Text("zero") == "missing"))
             return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed, rule.Text("missing"));
@@ -410,7 +411,8 @@ public static class ShaderPeriodAnalysis
             (edges == ComboRead.Absent || (edges == ComboRead.Value && edgesValue == 4)) &&
             ((edges == ComboRead.Value && edgesValue == 4) || Table.Matches("shine_edges_default_four", castSource)) &&
             castClock;
-        bool hasCastSpeed = TryScalar(castPass, "speed", out double speed, out int speedIndex, out string speedToken);
+        string castKey = MaterialKey(castSource, "g_Speed", "speed"), noiseKey = MaterialKey(noiseSource, "g_NoiseSpeed", "noisespeed");
+        bool hasCastSpeed = TryScalar(castPass, castKey, out double speed, out int speedIndex, out string speedToken);
         bool staticCast = hasCastSpeed && speed == 0 && castClock;
         bool canonicalRepeatTexture = UsesDefaultRepeatCloudTexture(noisePass, source, assetsDirectory);
         if (!canonicalNoise || (!fourDirections && !staticCast) || !canonicalRepeatTexture)
@@ -420,8 +422,8 @@ public static class ShaderPeriodAnalysis
             return true;
         }
         if ((!staticCast && (!hasCastSpeed || speed == 0)) ||
-            !TryScalar(noisePass, "noisespeed", out double noiseSpeed, out int noiseSpeedIndex, out string noiseToken) || noiseSpeed == 0 ||
-            !TryScalar(noisePass, "noisescale", out double noiseScale, out _, out string scaleToken) || noiseScale <= 0)
+            !TryScalar(noisePass, noiseKey, out double noiseSpeed, out int noiseSpeedIndex, out string noiseToken) || noiseSpeed == 0 ||
+            !TryScalar(noisePass, MaterialKey(noiseSource, "g_NoiseScale", "noisescale"), out double noiseScale, out _, out string scaleToken) || noiseScale <= 0)
         {
             unresolved.Add(new(ownerId, effectIndex, -1, noiseResource, ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed,
                 "Verified shine equations need a supported cast speed or static cast, nonzero noisespeed, and positive noisescale constants."));
@@ -430,10 +432,10 @@ public static class ShaderPeriodAnalysis
         string prefix = $"shader/{ownerId}/{effectIndex}";
         if (!staticCast)
             components.Add(new(new(prefix + "/ray-speed", new CommonLoopPeriod(Math.PI / (2 * Math.Abs(speed)), CommonLoopPeriodEvidence.Analytic), true),
-                new(ownerId, effectIndex, 1, "speed", speedIndex, speed), castResource,
+                new(ownerId, effectIndex, 1, castKey, speedIndex, speed), castResource,
                 $"Verified four-direction rotateVec2(g_Time * g_Speed) kernel; period π/(2*abs({speedToken}))."));
         components.Add(new(new(prefix + "/noise-speed", new CommonLoopPeriod(2 / (Math.Abs(noiseSpeed) * noiseScale), CommonLoopPeriodEvidence.Analytic), true),
-            new(ownerId, effectIndex, 0, "noisespeed", noiseSpeedIndex, noiseSpeed), noiseResource,
+            new(ownerId, effectIndex, 0, noiseKey, noiseSpeedIndex, noiseSpeed), noiseResource,
             $"Verified full/half-speed canonical repeat UV sampling; period 2/(abs({noiseToken})*{scaleToken})." +
             (staticCast ? " Cast rotate clock is static (speed is zero)." : "")));
         return true;
@@ -448,22 +450,37 @@ public static class ShaderPeriodAnalysis
             ComboRead.Absent => Table.Matches("repeat_noise_default_on", c.Source),
             _ => false,
         };
+        // NOISE 关闭（例如 godrays 降采样）：按 pass 的 combo 挑完分支后不再用到 g_Time，时钟全在关闭的分支里，pass 静止。
+        // 值未知或指令不认识的块两支都保留，所以这是对任一分支组合都成立的证明。
+        if (!noiseEnabled && SelectComboBranches(c.Source.Raw, c.Pass) is string selected && !new ShaderSource(selected).Uses("g_Time"))
+            return ShaderVerdict.NoMotion;
         if (!noiseEnabled || !UsesDefaultRepeatCloudTexture(c.Pass, c.Project, c.Assets))
             return c.Refuse(ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
                 "Canonical repeat noise requires the enabled default clouds_256 texture with verified repeat addressing.");
-        if (!TryScalar(c.Pass, "noisespeed", out double speed, out int valueIndex, out string speedToken) || speed == 0 ||
-            !TryScalar(c.Pass, "noisescale", out double scale, out _, out string scaleToken) || scale <= 0)
+        string speedKey = MaterialKey(c.Source, "g_NoiseSpeed", "noisespeed");
+        if (!TryScalar(c.Pass, speedKey, out double speed, out int valueIndex, out string speedToken) || speed == 0 ||
+            !TryScalar(c.Pass, MaterialKey(c.Source, "g_NoiseScale", "noisescale"), out double scale, out _, out string scaleToken) || scale <= 0)
             return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed,
                 "Canonical repeat noise needs nonzero noisespeed and positive noisescale constants.");
         return ShaderVerdict.Of(new ShaderPeriodComponent(new(c.Id("noise-speed"),
             new CommonLoopPeriod(2 / (Math.Abs(speed) * scale), CommonLoopPeriodEvidence.Analytic), true),
-            c.Patch("noisespeed", valueIndex, speed), c.Resource,
+            c.Patch(speedKey, valueIndex, speed), c.Resource,
             $"Verified full/half-speed canonical repeat UV sampling; period 2/(abs({speedToken})*{scaleToken})."));
     }
 
+    // 槽 2 没写、或写明的就是默认的 util/clouds_256（新版编辑器会把默认贴图名写进场景），都是同一张贴图。
     private static bool UsesDefaultRepeatCloudTexture(JsonObject pass, ProjectSource source, string? assetsDirectory) =>
-        (pass["textures"] is not JsonArray textures || textures.Count < 3 || textures[2] is null) &&
+        (pass["textures"] is not JsonArray textures || textures.Count < 3 || textures[2] is null ||
+            (textures[2] is JsonValue named && named.TryGetValue(out string? texture) && texture == "util/clouds_256")) &&
         HasRepeatCloudTexture(source, assetsDirectory);
+
+    /// <summary>
+    /// uniform 在 shader 注释里声明的材质键，即场景 constantshadervalues 里绑定它的键。工程 pkg 里内嵌的旧版官方 shader
+    /// 用旧键（如 ui_editor_properties_speed），与现行版（speed）不同；没有注释时用 <paramref name="fallback"/>。
+    /// </summary>
+    private static string MaterialKey(ShaderSource source, string uniform, string fallback) =>
+        source.UniformAnnotations.FirstOrDefault(item => item.Name == uniform).Annotation?["material"] is JsonValue value &&
+        value.TryGetValue(out string? key) && !string.IsNullOrEmpty(key) ? key : fallback;
 
     private static ShaderVerdict? DualWaterWave(PassContext c, ClockRule rule)
     {
@@ -758,22 +775,30 @@ public static class ShaderPeriodAnalysis
     {
         JsonObject pass = c.Pass;
         IReadOnlyDictionary<string, JsonNode?> defaults = c.Source.UniformDefaults;
+        // 常量按 uniform 注释的材质键读（pkg 内嵌的旧版用 ui_editor_properties_* 旧键）。旧版没有 g_Ratio 时 y 轴不缩放，即 ratio = 1。
+        string speedKey = MaterialKey(c.Source, "g_AnimationSpeed", "animationspeed");
+        bool hasRatio = c.Source.Uses("g_Ratio");
+        double ratio = 1;
+        string ratioToken = "1 (no ratio uniform)";
         // animationspeed 必须是场景里写明的标量：改频要改写它。其余三个常量缺省时取 shader 声明的默认值。
-        if (!RippleConstant("animationspeed", authoredOnly: true, out double speed, out int speedIndex, out string speedToken) ||
-            !RippleConstant("scrollspeed", authoredOnly: false, out double scrollSpeed, out _, out string scrollToken) ||
-            !RippleConstant("scale", authoredOnly: false, out double scale, out _, out string scaleToken) ||
-            !RippleConstant("ratio", authoredOnly: false, out double ratio, out _, out string ratioToken))
+        if (!RippleConstant(speedKey, authoredOnly: true, out double speed, out int speedIndex, out string speedToken) ||
+            !RippleConstant(MaterialKey(c.Source, "g_ScrollSpeed", "scrollspeed"), authoredOnly: false, out double scrollSpeed, out _, out string scrollToken) ||
+            !RippleConstant(MaterialKey(c.Source, "g_Scale", "scale"), authoredOnly: false, out double scale, out _, out string scaleToken) ||
+            (hasRatio && !RippleConstant(MaterialKey(c.Source, "g_Ratio", "ratio"), authoredOnly: false, out ratio, out _, out ratioToken)))
             return c.Refuse(ShaderTemporalUnresolvedKind.MissingOrInvalidSpeed,
                 "Verified water-ripple timing needs an authored finite scalar 'animationspeed' and finite 'scrollspeed', 'scale' and 'ratio' constants (authored or shader default).");
         double animation = speed * speed, drift = scrollSpeed * scrollSpeed;
         if (scale == 0 || (animation == 0 && drift == 0)) return ShaderVerdict.NoMotion;
-        if (!UsesStaticRepeatTexture(pass, 2, c.Project, c.Assets))
+        // 法线贴图槽：现行版在槽 2，旧版在槽 1（指纹已要求两次查表同槽）。
+        int normalSlot = Regex.Match(c.Source.Normalized, @"texSample2D\(g_Texture(\d), (?:v_TexCoordRipple|rippleCoords)\.xy\)", RegexOptions.CultureInvariant)
+            .Groups[1].Value is "1" ? 1 : 2;
+        if (!UsesStaticRepeatTexture(pass, normalSlot, c.Project, c.Assets))
             return c.Refuse(ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
-                "Water-ripple normal lookups repeat only when texture slot 2 is a still texture with repeat addressing; that is not proven for this pass.");
+                $"Water-ripple normal lookups repeat only when texture slot {normalSlot} is a still texture with repeat addressing; that is not proven for this pass.");
         // 滚动开、a ≠ 0、方向 d 是非零有限浮点（有理数）时：两次查表 x 轴速率比 (a² − s²·sin d)/(−a² − s²·sin d) 若是有理数，
         // sin d 就是有理数；而非零有理 d 的 sin d 是超越数（Lindemann–Weierstrass），所以永不同时回到整数圈，统一调速不改比值。
         if (drift != 0 && animation != 0 &&
-            RippleConstant("scrolldirection", authoredOnly: false, out double direction, out _, out string directionToken) && direction != 0)
+            RippleConstant(MaterialKey(c.Source, "g_Direction", "scrolldirection"), authoredOnly: false, out double direction, out _, out string directionToken) && direction != 0)
             return c.Refuse(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism,
                 $"Water-ripple scroll is on (scrollspeed {scrollToken}, scrolldirection {directionToken}, animationspeed {speedToken}). " +
                 "Along x the two normal lookups translate at rates proportional to a² − s²·sin d and −a² − s²·sin d (a = animationspeed, " +
@@ -812,7 +837,7 @@ public static class ShaderPeriodAnalysis
                 bounded: true, mechanism: WaterRippleScrollMechanism);
         return ShaderVerdict.Of(new ShaderPeriodComponent(new(c.Id("animationspeed"),
             new CommonLoopPeriod(period, CommonLoopPeriodEvidence.Analytic), AllowRetime: true),
-            c.Patch("animationspeed", speedIndex, speed, exponent: 2), c.Resource,
+            c.Patch(speedKey, speedIndex, speed, exponent: 2), c.Resource,
             $"Verified water-ripple normal scroll with scrollspeed 0: {equation}."));
 
         bool RippleConstant(string key, bool authoredOnly, out double value, out int index, out string token)
