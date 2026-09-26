@@ -35,7 +35,7 @@ internal static class ScriptTime
         foreach (JsonObject layer in (scene["objects"] as JsonArray ?? []).OfType<JsonObject>())
         {
             if (SceneGraph.Int(layer["id"]) is not int id || !baked.Contains(id)) continue;
-            foreach (var (pointer, node) in Walk(layer, "")) yield return new(id, pointer[(pointer.LastIndexOf('/') + 1)..], pointer, node, layer);
+            foreach (Binding binding in Of(layer, id)) yield return binding;
             if (layer["model"] is not JsonValue model || !model.TryGetValue(out string? mdl)) continue;
             // 模型的材质脚本：.mdl 里按明文记着材质 json 的路径
             string text;
@@ -45,6 +45,10 @@ internal static class ScriptTime
                     yield return new(id, pointer[(pointer.LastIndexOf('/') + 1)..], null, node, layer);
         }
     }
+
+    /// <summary>图层对象上场景里的脚本绑定（不含模型材质）。</summary>
+    internal static IEnumerable<Binding> Of(JsonObject layer, int id) =>
+        Walk(layer, "").Select(w => new Binding(id, w.Pointer[(w.Pointer.LastIndexOf('/') + 1)..], w.Pointer, w.Node, layer));
 
     private static IEnumerable<(string Pointer, JsonObject Node)> Walk(JsonNode? node, string path)
     {
@@ -765,6 +769,7 @@ internal static class ScriptTime
         private bool indirectRuntime;
         private V ret = Un.I;
         private (V Ret, Snap State, N Cond)? pending;
+        private N? rate;
         private int depth;
         private long steps;
 
@@ -1466,6 +1471,14 @@ internal static class ScriptTime
                         {
                             case Ly l: Write(l, key, v); return;
                             case Host { Name: "shared" }: return;   // 别的脚本经 shared 读，由 Liveness 处理
+                            case Host { Name: "animation" }:
+                                // 本层动画速率：每次都写同一个烘焙期常量时，运行时观测给的轨道速率（跑完观测帧后读）就是它，轨道周期已按它缩放
+                                if (key != "rate") throw new Bail("layer_api", detail: "animation." + key);
+                                if (v is not N { K: 'c', St: false } r || rate is not null && rate.C != r.C)
+                                    throw v is N { K: 'e' } e ? new Bail("script_reads_external_input", true, "animation rate depends on live input " + e.Why)
+                                        : new Bail("animation_rate_varies", detail: "animation.rate = " + Key(v));
+                                rate = r;
+                                return;
                             case Ob o:
                                 {
                                     var fields = new Dictionary<string, V>(o.F, StringComparer.Ordinal) { [key] = v };
@@ -1552,6 +1565,8 @@ internal static class ScriptTime
 
         private V LayerGet(Ly l, string name)
         {
+            // 本层时间轴动画：rate 按烘焙期常量接（见 Assign），其余成员同其他图层 API
+            if (name == "getAnimation" && l.Name is null && !collect) return new Bi((_, _) => new Host("animation"));
             if (name.StartsWith("get", StringComparison.Ordinal) || name is "play" or "stop" or "pause" or "setAnimation" or "playSingleAnimation" or "setFrame")
             {
                 if (collect && name is "getChildren" or "getParent" or "getChildByName") Unresolved = true;
@@ -1602,6 +1617,7 @@ internal static class ScriptTime
                 case "input": return time == 'n' ? throw new Bail("script_reads_external_input", true, "pointer") : External("pointer");
                 case "Date" when name == "now": return new Bi((_, _) => time == 'n' ? throw new Bail("script_reads_external_input", true, "wall_clock") : External("wall_clock"));
                 case "console": return new Bi((_, _) => Un.I);
+                case "animation": return name == "rate" && rate is not null ? rate : Opaque("layer_api");
                 case "shared": return Opaque("shared_state");
                 case "localStorage": return new Bi((_, _) => Opaque("persistent_storage"));
                 case "thisScene":
