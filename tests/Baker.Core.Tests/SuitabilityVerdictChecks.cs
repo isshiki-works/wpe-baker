@@ -73,9 +73,10 @@ internal static class SuitabilityVerdictChecks
         JsonObject unexplained = Plan(groups: 1, totalLayers: 130, videoLayers: 8,
             loop: Loop(reason: Reason("NoTemporalMechanism", periodCount: 0), unresolved: 4));
         JsonObject unexplainedVerdict = Verdict(unexplained);
-        check(Text(unexplainedVerdict, "verdict") == "requires_user_choice" &&
-            Text(unexplainedVerdict, "rule") == "loop_not_established",
-            "unexplained temporal mechanisms are never reported as an absence of motion");
+        check(Text(unexplainedVerdict, "verdict") == "not_suitable" &&
+            Text(unexplainedVerdict, "rule") == "loop_not_established" && unexplainedVerdict["loop_convergence"] is null &&
+            Text(unexplainedVerdict, "reason_zh") == MessageCatalog.Get(ResidualMasking.NotSupportedReasonKey, MessageCatalog.Chinese),
+            "unexplained temporal mechanisms are never reported as an absence of motion; without a proof they are unconverged");
 
         // --- S3：不可调速分量的公共帧步长超过求解器上限 ---
         JsonObject overCeiling = Plan(groups: 5, totalLayers: 960, videoLayers: 27,
@@ -118,11 +119,11 @@ internal static class SuitabilityVerdictChecks
         check(Text(Verdict(oneFrame), "verdict") == "suitable",
             "a proven-static scene with one frame candidate stays suitable");
 
-        // --- 无候选也无可判定理由时，说清是这次没解出来，不冒充壁纸不行 ---
+        // --- 无候选也无可判定理由时，记未收敛（effect_not_yet_supported），不冒充有证明的"不能" ---
         JsonObject undecided = Plan(groups: 2, totalLayers: 50, videoLayers: 20, loop: Loop());
-        check(Text(Verdict(undecided), "verdict") == "requires_user_choice" &&
-            Text(Verdict(undecided), "rule") == "loop_not_established",
-            "an empty candidate list with no structured reason does not become a not_suitable verdict");
+        check(Text(Verdict(undecided), "rule") == "loop_not_established" && Verdict(undecided)["loop_convergence"] is null &&
+            Text(Verdict(undecided), "reason_en") == MessageCatalog.Get(ResidualMasking.NotSupportedReasonKey, MessageCatalog.English),
+            "an empty candidate list with no structured reason is unconverged, not a proven cannot");
 
         // --- 真实 analyze 路径：候选存在时不写原因，没有时间机制时写 NoTemporalMechanism ---
         RunAnalyzeChecks(check, outputRoot);

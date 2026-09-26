@@ -720,7 +720,8 @@ public sealed class HybridBakeService(NativeTools tools)
                         JsonObject? hardwareDecode = null;
                         if (!probe && seam?["status"]?.GetValue<string>() != "observed_seam_pass")
                         {
-                            GroupVerdicts.RejectSeam(report, id, layers, packedAlpha, encoded, video, lateDependencyValidation, seam, seamPreview);
+                            GroupVerdicts.RejectSeam(report, id, layers, packedAlpha, encoded, video, lateDependencyValidation, seam, seamPreview,
+                                GroupVerdicts.SlowDriftDegrees(plan));
                             if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
@@ -829,6 +830,9 @@ public sealed class HybridBakeService(NativeTools tools)
                     : !seamsPass ? "candidate_rejected_seam"
                     : StaticOnlyBake.Is(report) ? StaticOnlyBake.Status : "candidate_generated";
                 report["loop_validation"] = probe ? "not_performed" : seamsPass ? "encoded_seams_passed" : "encoded_seam_failed";
+                // 选中候选带缓变分量、接缝门都过了：结论"能"，成品里记漂移上界。
+                if (report["status"]?.GetValue<string>() == "candidate_generated" && GroupVerdicts.SlowDriftDegrees(plan) is string drift)
+                    new Message("bake.slow_component_drift", [drift]).Write(report, "slow_component_drift");
                 report["project_path"] = project;
                 // 播放版编码的汇总：请求档位、实际档位、回退理由与编码总秒数，方便直接和软件档位对比。
                 report["playback_encoder"] = PlaybackEncoderSelection.Summarize(request.PlaybackEncoder,
