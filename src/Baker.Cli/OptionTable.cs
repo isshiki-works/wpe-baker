@@ -117,7 +117,7 @@ internal static class OptionTable
                 "elements can be traded away and what disappears with them."
             ]),
         new("--retain-live", [Analyze], "12,34", Custom: true, Parse: text => text.Split(',').Select(int.Parse).ToArray(),
-            Help: ["Keeps the listed layer trees live (a plan may suggest the exact list)."]),
+            Help: ["Keeps the allocation units containing the listed layers live (a plan may suggest the exact list)."]),
         new("--preset", [Analyze], Choices: [RetimeProfile.Efficiency, RetimeProfile.Balanced, RetimeProfile.Quality, RetimeProfile.Compatibility], Default: D.Preset, Help:
         [
             "Automatic fallback: quality -> balanced -> efficiency.",
