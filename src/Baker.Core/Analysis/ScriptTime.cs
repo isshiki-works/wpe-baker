@@ -69,7 +69,7 @@ internal static class ScriptTime
             return new(Outcome.Unconverged, Code: "script_source_unreadable");
         X program;
         try { program = new Parser(code).Program(); }
-        catch (SyntaxError e) { return new(Outcome.Unconverged, Code: "script_syntax_unsupported", Detail: e.Message); }
+        catch (Exception e) when (e is not OutOfMemoryException) { return new(Outcome.Unconverged, Code: "script_syntax_unsupported", Detail: e.Message); }
         double frametime = (double)fpsDenominator / fpsNumerator;
         var run = new Interp(program, binding, frametime, collect: false);
         try
@@ -92,6 +92,8 @@ internal static class ScriptTime
             return run.Simulate(update, s0, frameCap);
         }
         catch (Bail bail) { return new(bail.Proof ? Outcome.Cannot : Outcome.Unconverged, Code: bail.Code, Detail: bail.Detail); }
+        // 作者脚本是任意代码：解释器自身没料到的情况一律记未收敛，不让分析中断
+        catch (Exception e) when (e is not OutOfMemoryException) { return new(Outcome.Unconverged, Code: "script_analysis_error", Detail: e.GetType().Name); }
     }
 
     /// <summary>
@@ -101,15 +103,16 @@ internal static class ScriptTime
     internal static string[]? LayerNames(JsonObject node, JsonObject owner)
     {
         if (node["script"] is not JsonValue value || !value.TryGetValue(out string? code)) return null;
-        X program;
-        try { program = new Parser(code).Program(); } catch (SyntaxError) { return null; }
-        var run = new Interp(program, new(-1, "", null, node, owner), 1.0 / 30, collect: true);
-        try { run.Setup(); } catch (Bail) { return null; }
-        foreach (X fn in All(program).Where(x => x.Op is "fn" or "fdecl"))
-            if (!run.Executed.Contains(fn))
-                try { run.Call(new Fn(fn, run.Root), null, [.. fn.K[0]!.K.Select(_ => (V)new N('o', Why: "event_argument"))]); }
-                catch (Bail) { return null; }
-        return run.Unresolved ? null : [.. run.Names.Distinct()];
+        try
+        {
+            X program = new Parser(code).Program();
+            var run = new Interp(program, new(-1, "", null, node, owner), 1.0 / 30, collect: true);
+            run.Setup();
+            foreach (X fn in All(program).Where(x => x.Op is "fn" or "fdecl"))
+                if (!run.Executed.Contains(fn)) run.Call(new Fn(fn, run.Root), null, [.. fn.K[0]!.K.Select(_ => (V)new N('o', Why: "event_argument"))]);
+            return run.Unresolved ? null : [.. run.Names.Distinct()];
+        }
+        catch (Exception e) when (e is not OutOfMemoryException) { return null; }
     }
 
     private static IEnumerable<X> All(X x) => x.K.OfType<X>().SelectMany(All).Prepend(x);
