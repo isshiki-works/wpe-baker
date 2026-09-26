@@ -30,11 +30,12 @@ public sealed partial class NativeRenderRunner
         {
             ulong start = starts[k], end = k + 1 < starts.Length ? starts[k + 1] : request.Frames;
             ulong[] mine = [.. retain.Where(index => index >= start && index < end).Select(index => index - start)];
-            return request with { OutputDirectory = $"{output}.part{k}", WarmupFrames = request.WarmupFrames + start,
+            return request with { OutputDirectory = Path.Combine(output, $"part{k}"), WarmupFrames = request.WarmupFrames + start,
                 Frames = end - start, EncodedFrames = Math.Min(end, encoded) - start, RetainFrames = mine.Length > 0 ? mine : null,
                 GpuEncoding = gpu with { RetainQualitySamples = false } };
         }
-        // 先建好组目录：某段失败时调用方照旧把它挪开再回退。
+        // 先建好组目录，段目录建在它里面：某段失败时调用方照旧把整个目录挪开再回退，段目录跟着走，
+        // 回退重渲不会撞上上一次留下的段目录（段目录原在组目录旁，AV1 段编码器开不了降 HEVC 重渲时撞名整张失败）。
         Directory.CreateDirectory(Path.Combine(output, "native"));
         JsonObject[] parts = await Task.WhenAll(starts.Select(async (_, k) =>
         {
@@ -126,7 +127,7 @@ public sealed partial class NativeRenderRunner
             ["frames"] = part["request"]!["frames"]!.DeepClone(), ["wall_seconds"] = part["native_result"]!["wall_seconds"]!.DeepClone() })]);
         manifest["completed_utc"] = DateTimeOffset.UtcNow.ToString("O");
         await WriteJsonAsync(Path.Combine(output, "manifest.json"), manifest, cancellationToken);
-        // 段目录删掉：画质门不过降 QP 重渲时要用同样的段目录名。
+        // 段目录删掉：拷包拼好的 preview.mp4 已含全部段，段成品不再占盘。
         foreach (string directory in partDirectories) Directory.Delete(directory, true);
         return manifest;
 
