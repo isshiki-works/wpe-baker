@@ -15,7 +15,7 @@ internal static class GuiPresetTradeoffChecks
     {
         // 界面控件经 AnalyzeOptions.ForDesktop → AnalyzeRequestFactory 生成请求（C2.5a，与 CLI 选项表同一个工厂）。
         static HybridAnalyzeRequest Gui(string preset, string interaction, bool custom, bool layered) =>
-            AnalyzeRequestFactory.Build(AnalyzeOptions.ForDesktop(preset, interaction, true, layered, false, [], null, true, custom, 0, 0, null),
+            AnalyzeRequestFactory.Build(AnalyzeOptions.ForDesktop(preset, interaction, true, layered, false, [], null, custom, 0, 0, null),
                 "s", "a", "o", null, null, 60, 1, new JsonObject());
         var fixedQuality = Gui("quality", "fixed", false, false);
         var offEfficiency = Gui("efficiency", "off", false, false);

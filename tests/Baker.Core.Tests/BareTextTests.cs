@@ -106,7 +106,7 @@ public class BareTextTests
 
     /// <summary>
     /// 这几族的键都由产品代码按字面量构造（new Message("…") 或 MessageCatalog.Get("…")）。其余族不在这里查：
-    /// blocker.* 由编号表管（BlockerCatalogTests），tradeoff.kind.* / asset_problem.* / sway_retime.* / properties.reason.* 按拼接构造，
+    /// blocker.* 由编号表管（BlockerCatalogTests），tradeoff.kind.* / asset_problem.* / properties.reason.* 按拼接构造，
     /// cli.* / preset.* / progress.* 是命令行与界面文案，归 C2.5。
     /// </summary>
     private static readonly string[] ProducedFamilies =

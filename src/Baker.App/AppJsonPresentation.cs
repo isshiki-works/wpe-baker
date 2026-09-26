@@ -458,9 +458,6 @@ internal static class AppJsonPresentation
             ? (english ? "look budget " : "观感预算 ") + budget.ToString("0.###", CultureInfo.InvariantCulture) + "%"
             : english ? "smallest change" : "按改动最小求解") + budgetOrigin);
         JsonObject? candidate = plan["loop"]?["candidates"]?.AsArray().OfType<JsonObject>().FirstOrDefault();
-        if (Number(candidate?["sway_retime"]?["phase_drift_cycles"]) is double drift)
-            parts.Add((english ? "phase drift " : "相位差 ") + drift.ToString("0.###", CultureInfo.InvariantCulture) +
-                (english ? " cycles" : " 圈"));
         if (Number(candidate?["seconds"]) is double seconds)
             parts.Add((english ? "loop " : "循环 ") + seconds.ToString("0.###", CultureInfo.InvariantCulture) +
                 (english ? " s" : " 秒"));

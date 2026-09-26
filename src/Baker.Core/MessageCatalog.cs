@@ -848,32 +848,6 @@ public static class MessageCatalog
             En: "Effect-prefix caching retains other live work; benefit depends on the cached effects' cost and requires comparing the source and generated result.",
             Legacy: "This route (effect prefix) saves little power unless the part baked away is the bulk of the work."),
 
-        // feat/sway-retime：摆动改频成立时补在结论行后面。feat/retime-budget：观感按相位差排序（百分比只是求解参数），
-        // 所以先报一个循环内最坏偏多少圈相位、最慢可见项走几圈，再报改动百分比与预算。
-        // {0}=一个循环内最坏相位差（圈） {1}=最慢可见项走的圈数 {2}=可见摆动项（周期 < 60 s）最大改动百分比
-        // {3}=预算说明（"预算 3%" 或 "改动最小"） {4}=慢项（周期 ≥ 60 s）最大峰值速度偏差（像素/秒） {5}=冻结项个数 {6}=循环秒数
-        ["summary.sway_retime"] = new(
-            Zh: "摆动改频：单个循环内相位最大偏差 {0} 圈，最慢可见摆动项运行 {1} 圈（可见项周期 < 60 s，改频 {2}%，{3}）；慢项（周期 ≥ 60 s）峰值速度偏差最大 {4} px/s，其中冻结 {5} 项；摆动图层在 {6} s 循环内逐项精确闭合。",
-            En: "Sway retime: maximum phase drift {0} cycle per loop; slowest visible sway term runs {1} cycles (visible terms period < 60 s, retimed {2}%, {3}); slow terms (period ≥ 60 s) peak speed deviation at most {4} px/s, {5} frozen; sway layers close exactly over the {6} s loop.",
-            Legacy: "Sway retime: phase drifts by at most {0} cycle within one loop and the slowest visible sway term runs {1} cycles (visible terms have periods < 60 s, retimed by {2}%, {3}); slow terms (period ≥ 60 s) deviate by at most {4} px/s in peak speed, {5} of them frozen; sway layers close exactly over the {6} s loop."),
-
-        // {0}=预算百分比。档位给的观感改动预算，写在结论行括号里。
-        ["summary.sway_budget"] = new(Zh: "预算 {0}%", En: "budget {0}%"),
-        ["summary.sway_budget_minimized"] = new(Zh: "按最小改动求解", En: "minimum-change solution",
-            Legacy: "solved for the smallest change"),
-
-        // {0}=--loop-max-seconds 秒数 {1}=慢项峰值速度偏差上限（像素/秒）
-        ["sway_retime.no_multiple_meets_speed_limit"] = new(
-            Zh: "摆动改频已启用，但 {0} s 循环长度上限内无合规 L = kP：存在周期 < 60 s 的可见摆动项走不满整圈（可见项不可冻结），或慢项冻结、改频后峰值速度偏差超过 {1} px/s；摆动分量按未解析项处理。",
-            En: "Sway retime enabled, but no L = kP within the {0} s loop-length maximum qualifies: a visible sway term (period < 60 s) cannot complete a whole cycle (visible terms cannot be frozen), or a slow term's peak speed deviation after freezing or retiming exceeds {1} px/s; sway components remain unresolved.",
-            Legacy: "Sway retime is on, but no L = kP within the {0} s loop-length maximum qualifies: either a visible sway term (period < 60 s) cannot complete a whole cycle and visible terms may not be frozen, or a slow term's peak speed deviation after freezing or retiming exceeds {1} px/s; the sway components stay unresolved."),
-
-        // {0}=振幅换算不到输出像素的图层 id 列表
-        ["sway_retime.amplitude_unknown"] = new(
-            Zh: "摆动改频已启用，但图层 {0} 的摆动振幅无法换算为输出像素（图层尺寸不可读），慢项冻结或改频后的速度偏差无法判定；摆动分量按未解析项处理。",
-            En: "Sway retime enabled, but the sway amplitude of layer(s) {0} cannot be converted to output pixels (layer size unreadable), so the speed deviation of slow terms cannot be evaluated; sway components remain unresolved.",
-            Legacy: "Sway retime is on, but the sway amplitude of layer(s) {0} cannot be converted to output pixels (the layer size is unreadable), so the speed deviation of slow terms cannot be judged; the sway components stay unresolved."),
-
         // {0}=循环秒数。未解析项全是平稳随机粒子、且没有任何周期分量时，循环长度取默认值（见 HybridLoopService）。
         ["summary.particle_default_loop"] = new(
             Zh: "粒子系统无周期：循环长度取默认值 {0} s，接缝处交叉淡化。",
@@ -885,23 +859,6 @@ public static class MessageCatalog
             Zh: "未解析项均为平稳随机粒子系统，但粒子最长寿命 {1} s 不短于默认循环长度 {0} s：接缝两侧共享同一批粒子，交叉淡化替换前提不成立，不采用默认循环长度。",
             En: "All unresolved mechanisms are stationary-random particle systems, but the longest particle lifetime ({1} s) is not shorter than the default loop length ({0} s): both sides of the seam would share particles, so the crossfade replacement premise fails and the default loop length is not applied.",
             Legacy: "Every unresolved mechanism is a stationary-random particle system, but the longest particle lifetime ({1} s) is not shorter than the default loop length ({0} s): both sides of the seam would share particles, so the crossfade replacement premise fails and no default loop length is used."),
-
-        // {0}=--loop-max-seconds 秒数
-        ["sway_retime.no_multiple_within_maximum"] = new(
-            Zh: "摆动改频已启用，但其余分量解出的循环周期均超过 {0} s 循环长度上限，无法取得 L = kP；摆动分量按未解析项处理。",
-            En: "Sway retime enabled, but every loop period solved from the other components exceeds the {0} s loop-length maximum, so no L = kP exists; sway components remain unresolved.",
-            Legacy: "Sway retime is on, but every loop period solved from the other components exceeds the {0} s loop-length maximum, so no L = kP exists; the sway components stay unresolved."),
-
-        // {0}=循环长度上限秒数 {1}=观感改动预算百分比。预算太紧：不设预算时有解，说明卡住的是档位预算，不是速度闸。
-        ["sway_retime.no_multiple_within_budget"] = new(
-            Zh: "摆动改频已启用，但 {0} s 循环长度上限内无 L = kP 能把可见摆动项的改动压入 {1}% 观感预算；摆动分量按未解析项处理。放宽预算需改用更宽的档位或指定 --retime-budget。",
-            En: "Sway retime enabled, but no L = kP within the {0} s loop-length maximum keeps the visible sway change inside the {1}% look budget; sway components remain unresolved. A wider preset or --retime-budget raises the budget.",
-            Legacy: "Sway retime is on, but no L = kP within the {0} s loop-length maximum keeps the visible sway change inside the {1}% look budget; the sway components stay unresolved. A looser preset or --retime-budget raises the budget."),
-
-        ["sway_retime.no_base_candidate"] = new(
-            Zh: "摆动改频已启用，但其余时间分量未解出循环候选（上限 {0} s），无法取得 L = kP；摆动分量按未解析项处理。",
-            En: "Sway retime enabled, but the other temporal components produced no loop candidate (maximum {0} s), so no L = kP exists; sway components remain unresolved.",
-            Legacy: "Sway retime is on, but the other temporal components produced no loop candidate (maximum {0} s), so no L = kP exists; the sway components stay unresolved."),
 
         // {0}=视频组 {1}=不压时的大小（GiB） {2}=帧数 {3}=秒数 {4}=按不压的码率最长秒数 {5}=实测 SSIM {6}=门限 {7}=量化值增量
         ["bake.embedded_video_quality_rejected"] = new(

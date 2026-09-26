@@ -43,9 +43,8 @@ internal static class EffectPrefixPlanner
                     ["terminal_effect_id"] = effect["id"]!.DeepClone(), ["source_image"] = owner["image"]!.DeepClone(),
                     ["loop"] = loop, ["fixed_user_properties"] = PrefixProperties(effects.Take(count), snapshotProperties),
                     // 这个前缀循环是在哪一档下求出来的：与 plan 顶层的 retime_profile 同一份值，
-                    // 单看一条缓存记录就能知道 preset 与 retime_budget_percent；phase_drift_cycles 在 loop 的 sway_retime 里，
-                    // 质量档两个上限的取舍在 loop 的 quality_ceiling_used 里。
-                    ["retime_profile"] = RetimeProfileJson.ToJson(profile, SwayRecurrenceSolver.SpeedLimitScale(request.Width, request.Height)),
+                    // 单看一条缓存记录就能知道 preset 与 retime_budget_percent。
+                    ["retime_profile"] = RetimeProfileJson.ToJson(profile),
                     ["retained_puppet_animation"] = retainedPuppetAnimation,
                     ["prefix_capture_scope"] = retainedPuppetAnimation ? "pre_puppet_authored_effect_terminal" : "flat_authored_effect_terminal"
                 };

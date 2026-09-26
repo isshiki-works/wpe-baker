@@ -35,7 +35,7 @@ public class CliOptionTableTests
             "--properties" or "--properties-source" or "--width" or "--height" or "--fps" or "--fps-den" or
             "--video-layout" or "--live-overlays" or "--text-effects" or "--audio-effects" or
             "--exclude-layers" or "--retime-budget" or "--video-shell" or
-            "--sway-retime" or "--loop-max-seconds" or
+            "--loop-max-seconds" or
             "--retain-live" or "--daytime-split" or "--trace");
         return new HybridAnalyzeRequest(2, Source, Assets, Output,
             Number("--width", 0), Number("--height", 0), 60, Number("--fps-den", 1), Properties,
@@ -52,7 +52,6 @@ public class CliOptionTableTests
             LoopPreference: RetimeProfile.LoopPreferenceForPreset(preset),
             VideoShell: options.GetValueOrDefault("--video-shell", "reject"),
             AllowNoBenefit: options.GetValueOrDefault("--no-benefit", "reject") == "allow",
-            SwayRetime: options.GetValueOrDefault("--sway-retime", "on") == "on",
             LoopLengthMaximumSeconds: Real("--loop-max-seconds"),
             PropertiesOrigin: PropertiesOrigin,
             FrameRateOrigin: FrameRate,
@@ -98,7 +97,7 @@ public class CliOptionTableTests
         ["--width", "1920", "--height", "1080", "--fps", "60", "--fps-den", "1", "--preset", "balanced", "--interaction", "fixed",
             "--properties-source", "defaults", "--device", "b22adf1f455b2bcc8bdbefd93eab85ee"],
         ["--preset", "quality", "--interaction", "off", "--video-layout", "layered", "--audio-effects", "omit"],
-        ["--preset", "efficiency", "--interaction", "keep", "--retime-budget", "4.5", "--loop-max-seconds", "900", "--sway-retime", "off"],
+        ["--preset", "efficiency", "--interaction", "keep", "--retime-budget", "4.5", "--loop-max-seconds", "900"],
         ["--daytime-split", "on", "--video-shell", "allow", "--live-overlays", "preserve", "--text-effects", "simple", "--lang", "en"],
         ["--out", "plan.json", "--tools", "tools.json", "--assets", "D:/assets", "--preset", "quality", "--lang", "zh"],
         ["--exclude-layers", "3,4", "--retain-live", "9", "--trace", "t.json", "--properties", "p.json", "--properties-source", "wpe",
@@ -148,26 +147,24 @@ public class CliOptionTableTests
         foreach (bool omitAudio in new[] { false, true })
         foreach (bool exclude in new[] { false, true })
         foreach (double? budget in new double?[] { null, 4.5 })
-        foreach (bool sway in new[] { true, false })
         foreach (string? device in new[] { null, "b22adf1f455b2bcc8bdbefd93eab85ee" })
         {
             // 界面：高级区任何一项偏离档位默认就记自定义（MainWindow.AdvancedIsCustom 的判据，本组选择覆盖到的部分）。
-            bool custom = layered || omitAudio || exclude || budget is not null || !sway;
+            bool custom = layered || omitAudio || exclude || budget is not null;
             HybridAnalyzeRequest desktop = AnalyzeRequestFactory.Build(
                 AnalyzeOptions.ForDesktop(preset, interaction, true, layered, omitAudio, exclude ? new HashSet<int> { 34, 12 } : [],
-                    budget, sway, custom, 0, 0, device),
+                    budget, custom, 0, 0, device),
                 Source, Assets, Output, Properties, PropertiesOrigin, 60, 1, FrameRate);
             var args = new List<string> { "--preset", preset, "--interaction", interaction };
             if (layered) args.AddRange(["--video-layout", "layered"]);
             if (omitAudio) args.AddRange(["--audio-effects", "omit"]);
             if (exclude) args.AddRange(["--exclude-layers", "12,34"]);
             if (budget is double percent) args.AddRange(["--retime-budget", percent.ToString(CultureInfo.InvariantCulture)]);
-            if (!sway) args.AddRange(["--sway-retime", "off"]);
             if (device is not null) args.AddRange(["--device", device]);
             Assert.Empty(Differences(Cli([.. args]), desktop));
             cases++;
         }
-        Assert.Equal(576, cases);
+        Assert.Equal(288, cases);
     }
 
     [Fact]
@@ -197,7 +194,6 @@ public class CliOptionTableTests
         // 非法值
         { ["analyze", "src", "--preset", "fast"], typeof(ArgumentException) },
         { ["analyze", "src", "--interaction", "none"], typeof(ArgumentException) },
-        { ["analyze", "src", "--sway-retime", "yes"], typeof(ArgumentException) },
         { ["analyze", "src", "--daytime-split", "true"], typeof(ArgumentException) },
         { ["analyze", "src", "--video-shell", "maybe"], typeof(ArgumentException) },
         { ["analyze", "src", "--video-layout", "tiled"], typeof(ArgumentException) },

@@ -314,13 +314,6 @@ public static class PlanNarrative
                 retime.ToString("0.00", CultureInfo.InvariantCulture), liveNames];
             summary = hasLive ? Verdict(Bakeable, "summary.bakeable", shared) : Verdict(Bakeable, "summary.bakeable_no_live", shared);
         }
-        // 摆动改频成立时结论行补一句改了多少、冻结了什么；开关关闭的计划没有这个字段，结论逐字不变。
-        // 静止候选也补：护栏之后它只可能是摆动项全部是慢项、冻结后速度偏差都在上限内，冻结了什么得说出来。
-        if (candidate["sway_retime"] is JsonObject swayRetime)
-            foreach (string language in new[] { MessageCatalog.Chinese, MessageCatalog.English })
-            {
-                summary[language] = summary[language]!.GetValue<string>() + (language == MessageCatalog.Chinese ? "" : " ") + SwayRetimeLine(swayRetime, language);
-            }
         // 循环长度不是任何周期定出来的（只有平稳随机粒子）：结论行说明按几秒循环、接缝靠交叉淡化。
         if (Text(candidate["loop_length_source"]) == "stationary_particle_default")
         {
@@ -330,22 +323,6 @@ public static class PlanNarrative
                     MessageCatalog.Get("summary.particle_default_loop", language, length);
         }
         return summary;
-    }
-
-    /// <summary>
-    /// "一个循环内相位最多偏 x 圈、最慢可见项走 n 圈（改频 y%，预算 z%）；慢项峰值速度偏差最大 w 像素/秒，其中冻结 m 项"一句
-    /// （结论行与 bake 的 stderr 共用）。相位差才是观感排序量，百分比只是求解参数。
-    /// </summary>
-    public static string SwayRetimeLine(JsonObject retime, string language)
-    {
-        ArgumentNullException.ThrowIfNull(retime);
-        var (drift, cycles, visible, deviation, frozen) = SwayRetimeJson.SummaryNumbers(retime);
-        string seconds = Number(retime["seconds"]) is double length ? length.ToString("0.##", CultureInfo.InvariantCulture) : "?";
-        // 预算是求解参数：质量档与旧 plan 没有预算，讲"按改动最小求解"。
-        string budget = Number(retime["retime_budget_percent"]) is double percent
-            ? MessageCatalog.Get("summary.sway_budget", language, percent.ToString("0.###", CultureInfo.InvariantCulture))
-            : MessageCatalog.Get("summary.sway_budget_minimized", language);
-        return MessageCatalog.Get("summary.sway_retime", language, drift, cycles ?? "?", visible, budget, deviation ?? "?", frozen, seconds);
     }
 
     private static JsonObject Verdict(string verdict, string key, params object?[] args) => Bilingual(verdict, key, args, args);

@@ -142,29 +142,15 @@ internal static class PlainLanguage
     }
 
     /// <summary>
-    /// 画面改动的三档人话映射（基本看不出来 / 略有改动 / 改动明显）。判据是分析已经算出来的量：摆动改频的
-    /// 可见改动（sway_retime.max_change_visible_percent；没有摆动解时退回整体调速 total_retime_cost_percent）
-    /// 与一个循环内最坏相位差（sway_retime.phase_drift_cycles，单位是摆动的圈数）。
-    /// <list type="bullet">
-    /// <item>基本看不出来：可见改动 ≤ 3% 且相位差 &lt; 0.5 圈；</item>
-    /// <item>略有改动：可见改动 ≤ 5%；</item>
-    /// <item>改动明显：可见改动 &gt; 5%，或位移分量没闭合（sway_retime.residual_pixels &gt; 0）。</item>
-    /// </list>
-    /// 档位与这三档对齐：平衡档预算 3%、效率档 5%。依据是 2026-09-18 用户看片后的结论——
-    /// sway-budget-scan.md §3 的五个样片里，3% 与 5% 档的解（阿米娅 3486806915 平衡档 2.81%、
-    /// 3750317749 的 2.03%）看下来都属于"基本看不出来"，此前把平衡档 3% 判成"改动明显"与实际观感不符。
-    /// 相位差 0.5 圈是改频求解自身的上界（每项取 n = round(x) 个整圈），越界只会来自没闭合的位移分量。
-    /// 一个改动量都没有（没开摆动改频、也没有调速）时同样按"基本看不出来"：分析没改动画面。
+    /// 画面改动的三档人话映射（基本看不出来 / 略有改动 / 改动明显）。判据是分析已经算出来的整体调速 total_retime_cost_percent：
+    /// ≤ 3% 基本看不出来，≤ 5% 略有改动，其余改动明显。档位与这三档对齐：平衡档预算 3%、效率档 5%。
+    /// 一个改动量都没有（没有调速）时同样按"基本看不出来"：分析没改动画面。
     /// </summary>
     internal static string ChangeLevel(JsonObject candidate, bool english)
     {
-        JsonObject? sway = candidate["sway_retime"] as JsonObject;
-        double drift = AppJsonPresentation.Number(sway?["phase_drift_cycles"]) ?? 0;
-        double visible = AppJsonPresentation.Number(sway?["max_change_visible_percent"]) ??
-            AppJsonPresentation.Number(candidate["total_retime_cost_percent"]) ?? 0;
-        double residual = AppJsonPresentation.Number(sway?["residual_pixels"]) ?? 0;
-        if (residual <= 0 && visible <= 3 && drift < 0.5) return L(english, "可忽略", "negligible");
-        if (residual <= 0 && visible <= 5) return L(english, "轻微", "slight");
+        double visible = AppJsonPresentation.Number(candidate["total_retime_cost_percent"]) ?? 0;
+        if (visible <= 3) return L(english, "可忽略", "negligible");
+        if (visible <= 5) return L(english, "轻微", "slight");
         return L(english, "明显", "noticeable");
     }
 

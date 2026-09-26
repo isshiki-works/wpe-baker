@@ -5,14 +5,14 @@ namespace Baker.Core;
 
 /// <summary>
 /// plan.loop（循环报告 schema 1，随 plan v3 写出）的顶层字段。<see cref="ToJson"/> 按原顺序写出，与改动前逐字节相同：
-/// no_candidate_reason 与 fixed_frame_step 缺值时写 null，sway_retime / loop_length_default 缺值时不写。
+/// no_candidate_reason 与 fixed_frame_step 缺值时写 null，loop_length_default 缺值时不写。
 /// candidates 与 unresolved 在分析过程中是 <see cref="LoopCandidate"/> / <see cref="LoopUnresolved"/>，只在这里渲染一次。
 /// </summary>
 internal sealed record LoopReport(uint FpsNum, uint FpsDen, string RetimeMode, CommonLoopPreference LoopPreference,
     double RetimeBudgetPercent, bool BudgetRelaxed, ulong? FixedFrameStep, double MaximumSeconds,
     LoopNoCandidateReason? NoCandidateReason, IReadOnlyList<LoopCandidate> Candidates, IReadOnlyList<LoopUnresolved> Unresolved,
     bool SourceStatic, VideoControlScope VideoControlScope, LoopContentCadence ContentCadence, IReadOnlyList<ShaderPeriodComponent> Evidence,
-    JsonObject? SwayRetime, JsonObject? LoopLengthDefault)
+    JsonObject? LoopLengthDefault)
 {
     /// <summary>首个候选上与别的组共用时钟、自身周期不整除 L 的组想要的 L 步长（不写进 plan；HybridScenePlanner 据此重解一次）。</summary>
     public IReadOnlyList<ulong> GroupClockSteps { get; init; } = [];
@@ -31,7 +31,6 @@ internal sealed record LoopReport(uint FpsNum, uint FpsDen, string RetimeMode, C
             ["evidence"] = new JsonArray(Evidence.Select(x => (JsonNode)new JsonObject { ["component"] = x.Component.Id, ["detail"] = x.Evidence }).ToArray()),
             ["visual_seam"] = "not_verified", ["encoded_loop"] = "not_verified"
         };
-        if (SwayRetime is not null) json["sway_retime"] = SwayRetime;
         if (LoopLengthDefault is not null) json["loop_length_default"] = LoopLengthDefault;
         if (FrameRateHint() is { } hint) json["frame_rate_hint"] = hint;
         return json;
@@ -96,18 +95,17 @@ internal sealed record LoopContentCadence(long CaptureFramesPerContentFrame, IRe
 internal sealed record LoopCadenceClip(string Component, int OwnerLayerId, string TrackName, CommonLoopRational? ClipFrameRate);
 
 /// <summary>
-/// plan.loop.candidates[] 的一项。分析过程中按字段读写（摆动改频读 Frames 与 Components、换算圈数，精灵接缝换判定），
+/// plan.loop.candidates[] 的一项。分析过程中按字段读写（精灵接缝换判定），
 /// 写 plan 时由 <see cref="ToJson"/> 渲染一次，键序与 v3 相同：frames, seconds, total_retime_cost_percent, components, patches,
-/// [source_period_warmup_frames], [sprite_seam_phase], [loop_length_source], [sway_retime]。
+/// [source_period_warmup_frames], [sprite_seam_phase], [loop_length_source]。
 /// </summary>
 internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalRetimeCostPercent,
     IReadOnlyList<CommonLoopComponentCycle> Components, IReadOnlyList<LoopPatch> Patches)
 {
-    /// <summary>精灵 float32 帧表的接缝判定；null = 这次捕获没有可读帧表的精灵轨道。带摆动改频解时是在 L = kP 上重判的结果。</summary>
+    /// <summary>精灵 float32 帧表的接缝判定；null = 这次捕获没有可读帧表的精灵轨道。</summary>
     public SpriteSeamPhase.Selection? SpriteSeam { get; init; }
     /// <summary>循环长度不来自周期求解时的来源（目前只有 stationary_particle_default）。</summary>
     public string? LoopLengthSource { get; init; }
-    public CandidateSwayRetime? SwayRetime { get; init; }
     /// <summary>
     /// 按自身周期录制、比 L 短的组（组 id → 帧数，见 LoopAnalysis.GroupPeriods）；不在表里的组录 L 帧。
     /// 时钟独占的组，它的分量在 components 里记的是在本组周期上的圈数与调速。
@@ -132,15 +130,12 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
             json["source_period_warmup_frames"] = warmup;
             json["sprite_seam_phase"] = new JsonObject { ["origin"] = sprite.AtOrigin.ToString().ToLowerInvariant(),
                 ["after_one_period"] = sprite.AfterOnePeriod?.ToString().ToLowerInvariant(),
-                ["basis"] = SwayRetime is not null ? "float32 sprite frame table re-checked on the sway-retimed loop length"
-                    : "float32 sprite frame table; frame 0 sits on the sprite frame-0 start boundary" };
+                ["basis"] = "float32 sprite frame table; frame 0 sits on the sprite frame-0 start boundary" };
         }
         else if (SpriteSeam?.AtOrigin == SpriteSeamPhase.Verdict.Undetermined)
             json["sprite_seam_phase"] = new JsonObject { ["origin"] = "undetermined",
                 ["basis"] = "a sample lies within the renderer's double accumulation error of a sprite boundary" };
         if (LoopLengthSource is not null) json["loop_length_source"] = LoopLengthSource;
-        if (SwayRetime is not null) json["sway_retime"] = SwayRetimeJson.ToJson(SwayRetime.Solution,
-            SwayRetime.LoopLengthMaximumSeconds, SwayRetime.FpsNumerator, SwayRetime.FpsDenominator, SwayRetime.Profile);
         if (SlowComponents.Count > 0)
             json["slow_components"] = new JsonArray([.. SlowComponents.Select(x => (JsonNode)new JsonObject { ["component"] = x.Id,
                 ["owner_layer_id"] = x.OwnerLayerId, ["effect_index"] = x.EffectIndex, ["pass_index"] = x.PassIndex,
@@ -148,10 +143,6 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
         return json;
     }
 }
-
-/// <summary>候选上的摆动改频解（bake 按它写覆盖 shader）；渲染参数与 loop.sway_retime 记录同一份请求。</summary>
-internal sealed record CandidateSwayRetime(SwayRetimeSolution Solution, double LoopLengthMaximumSeconds, uint FpsNumerator,
-    uint FpsDenominator, RetimeProfile? Profile);
 
 /// <summary>候选里的一条改写（capture 场景按它改速度常量、动画 rate 或视频 rate）。</summary>
 internal abstract record LoopPatch

@@ -5,24 +5,22 @@ namespace Baker.Core;
 
 /// <summary>
 /// 循环分析：把源码证明的着色器周期与运行时轨道周期合成捕获用的循环候选。候选与未解析项全程是类型化对象，
-/// 由 <see cref="LoopReport.ToJson"/> 渲染一次写进 plan.loop。静止证明、运行时轨道、摆动改频分别在
-/// <see cref="StaticProof"/>、<see cref="RuntimeTrackReader"/>、<see cref="SwayRetimeApplier"/>。
+/// 由 <see cref="LoopReport.ToJson"/> 渲染一次写进 plan.loop。静止证明、运行时轨道分别在
+/// <see cref="StaticProof"/>、<see cref="RuntimeTrackReader"/>。
 /// </summary>
 internal static class LoopAnalysis
 {
     internal static LoopReport Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory, JsonObject runtime,
         IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent = 2,
-        CommonLoopPreference preference = CommonLoopPreference.Balanced, SwayRetimeOptions? swayRetime = null,
+        CommonLoopPreference preference = CommonLoopPreference.Balanced,
         double? loopLengthMaximumSeconds = null, JsonArray? videoGroups = null,
         IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null)
     {
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
             throw new ArgumentException("FPS must be positive and retiming must be between zero and ten percent.");
-        // 循环时长上限 = --loop-max-seconds（或档位兜底）这一个值：所有周期分量共用，摆动改频的 Lmax 不许与它不一致。
-        double ceilingSeconds = loopLengthMaximumSeconds ?? swayRetime?.LoopLengthMaximumSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
-        if (swayRetime is not null && swayRetime.LoopLengthMaximumSeconds != ceilingSeconds)
-            throw new ArgumentException("The sway retime loop length maximum must equal the solver loop length ceiling.");
+        // 循环时长上限 = --loop-max-seconds（或档位兜底）这一个值：所有周期分量共用。
+        double ceilingSeconds = loopLengthMaximumSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
         CommonLoopRational ceiling = CommonLoopSolver.Ceiling(ceilingSeconds);
         ceilingSeconds = ceiling.ToSeconds();
         var shader = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, runtime, bakedLayerIds, ceilingSeconds, maximumRetimePercent);
@@ -147,8 +145,8 @@ internal static class LoopAnalysis
                 if (spriteSeam.AtOrigin == SpriteSeamPhase.Verdict.Mismatch && spriteSeam.WarmupFrames is null) { ++spriteRejectedCandidates; continue; }
             }
             var (candidate, groupFrames, steps) = GroupPeriods(solved, groups, solve.Used, unresolved, spriteTablesByOwner,
-                // 精灵帧表从全局整周期预热之后起判（0 或 L）；摆动改频可能把 L 与预热改成 kL 时不缩短精灵组。
-                spriteSeam is null ? 0 : spriteSeam.WarmupFrames is ulong warmup && (warmup == 0 || swayRetime is null || shader.Unresolved.Count == 0) ? warmup : null,
+                // 精灵帧表从全局整周期预热之后起判（0 或 L）。
+                spriteSeam is null ? 0 : spriteSeam.WarmupFrames,
                 fpsNumerator, fpsDenominator, maximumRetimePercent, preference, ceiling, fullLoopLayerIds);
             clockSteps ??= steps;
             var candidatePatches = new List<LoopPatch>();
@@ -224,7 +222,7 @@ internal static class LoopAnalysis
             candidates, unresolved, sourceStatic, videoControlScope,
             new LoopContentCadence(contentStep, animation.Where(x => x.IsVideo)
                 .Select(x => new LoopCadenceClip(x.LockedComponent.Id, x.OwnerLayerId, x.TrackName, x.ClipFrameRate)).ToArray()),
-            shader.Components, null, particleDefault) { GroupClockSteps = clockSteps ?? [] };
+            shader.Components, particleDefault) { GroupClockSteps = clockSteps ?? [] };
     }
 
     private const string GroupStepPrefix = "group_period:";

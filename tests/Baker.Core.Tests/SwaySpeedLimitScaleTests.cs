@@ -1,11 +1,9 @@
-using System.Text.Json.Nodes;
 using Baker.Core;
 using Xunit;
 
 /// <summary>
 /// fix-j：摆动速度偏差门限按输出短边换算（门限 = 1080p 常量 × min(宽, 高) / 1080）。
 /// 1080p 下倍率精确为 1、门限与旧版逐位相同；2160p ×2、4320p ×4；竖屏与横屏同门限；带鱼屏按短边（不按对角线）。
-/// 求解器与 plan 记录的整链检查在 SwayRetimeChecks（CanvasScaleChecks 与 8K 集成检查）。
 /// </summary>
 [Trait("Layer", "L0")]
 public class SwaySpeedLimitScaleTests
@@ -24,19 +22,4 @@ public class SwaySpeedLimitScaleTests
         Assert.Equal(SwayRecurrenceSolver.SpeedLimitScale(2560, 1440), SwayRecurrenceSolver.SpeedLimitScale(3440, 1440));
     }
 
-    [Fact]
-    public void ProfileRecordCarriesTheEffectiveLimits()
-    {
-        RetimeProfile profile = RetimeProfile.Resolve(RetimeProfile.Balanced, null, null, 2);
-        JsonObject Record(uint width, uint height) => RetimeProfileJson.ToJson(profile, SwayRecurrenceSolver.SpeedLimitScale(width, height));
-        static double Limit(JsonObject record, string kind) => record[kind + "_speed_deviation_limit_pixels_per_second"]!.GetValue<double>();
-        // 1080p：与旧版常量逐位相同。
-        JsonObject fullHd = Record(1920, 1080);
-        Assert.Equal(0.1, Limit(fullHd, "slow"));
-        Assert.Equal(0.2, Limit(fullHd, "visible"));
-        Assert.Equal(0.2, Limit(Record(3840, 2160), "slow"));
-        Assert.Equal(0.4, Limit(Record(3840, 2160), "visible"));
-        Assert.Equal(0.4, Limit(Record(7680, 4320), "slow"));
-        Assert.Equal(0.8, Limit(Record(7680, 4320), "visible"));
-    }
 }

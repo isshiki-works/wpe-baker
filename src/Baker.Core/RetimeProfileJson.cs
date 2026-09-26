@@ -15,20 +15,15 @@ public static class RetimeProfileJson
     }
 
     /// <summary>
-    /// 写进 plan 的 profile 记录：每个值带来源，用户改过哪一项一看便知。两个速度门限写生效值：
-    /// <paramref name="speedLimitScale"/> 是输出短边 / 1080（<see cref="SwayRecurrenceSolver.SpeedLimitScale"/>），1080p 为 1。
+    /// 写进 plan 的 profile 记录：每个值带来源，用户改过哪一项一看便知。
     /// </summary>
-    public static JsonObject ToJson(RetimeProfile profile, double speedLimitScale) => new()
+    public static JsonObject ToJson(RetimeProfile profile) => new()
     {
         ["preset"] = profile.Preset,
         ["retime_budget_percent"] = profile.BudgetPercent,
         ["retime_budget_source"] = profile.BudgetSource,
         ["common_retime_percent"] = profile.CommonRetimePercent,
         ["loop_max_seconds"] = profile.LoopMaximumSeconds,
-        ["loop_max_seconds_source"] = profile.LoopMaximumSource,
-        ["minimum_visible_cycles"] = SwayRecurrenceSolver.MinimumVisibleCycles,
-        ["minimum_loop_seconds"] = SwayRecurrenceSolver.MinimumLoopSeconds,
-        ["slow_speed_deviation_limit_pixels_per_second"] = SwayRecurrenceSolver.SlowSpeedDeviationLimit(speedLimitScale),
-        ["visible_speed_deviation_limit_pixels_per_second"] = SwayRecurrenceSolver.VisibleSpeedDeviationLimit(speedLimitScale)
+        ["loop_max_seconds_source"] = profile.LoopMaximumSource
     };
 }

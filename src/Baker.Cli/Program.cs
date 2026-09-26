@@ -238,8 +238,6 @@ try
             Console.Error.WriteLine(reasonText["zh"]?.GetValue<string>());
             Console.Error.WriteLine(reasonText["en"]?.GetValue<string>());
         }
-        // 摆动改频成立时说一句改了多少、冻结了什么（开关关闭的计划没有 sway_retime，这一行不出现）。
-        if (baked["sway_retime"] is JsonObject swayRetime) Console.Error.WriteLine(PlanNarrative.SwayRetimeLine(swayRetime, language));
         // 结论行之后补一句接缝预览的路径：通过、被拒都有。
         foreach (string previewLine in SeamPreview.SummaryLines(baked, language)) Console.Error.WriteLine(previewLine);
     }

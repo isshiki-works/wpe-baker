@@ -145,11 +145,6 @@ internal static class OptionTable
                 "reject (default) stops plans that are not expected to save power: a still image with live layers left, a single fixed time of day, more than 4 video streams, or too little effect rendering removed per video stream.",
                 "allow generates them anyway; for debugging and power measurement only."
             ]),
-        new("--sway-retime", [Analyze], Choices: ["off", "on"], Parse: text => text == "on", Default: D.SwayRetime ? "on" : "off", Custom: true, Help:
-        [
-            "All three presets close swaying layers on whole cycles; the look budget above governs it.",
-            "摆动改频三档都开（档位的观感预算管的就是它），只有显式 --sway-retime off 才关；界面高级区同一个默认。"
-        ]),
         new("--daytime-split", [Analyze], Choices: ["on", "off"], Parse: text => text == "on", Default: D.DaytimeSplit ? "on" : "off", Custom: true,
             Help: ["Plans each recognized day/time state of the wallpaper separately."]),
         new("--trace", [Analyze], "FILE", Custom: true, Help: ["Diagnostic: writes the renderer's runtime trace to FILE."]),
@@ -228,7 +223,6 @@ internal static class OptionTable
             Interaction = (string)values["--interaction"]!,
             RetimeBudgetPercent = (double?)values["--retime-budget"],
             LoopMaximumSeconds = (double?)values["--loop-max-seconds"],
-            SwayRetime = (bool)values["--sway-retime"]!,
             VideoLayout = (string?)values["--video-layout"],
             LiveOverlays = (string)values["--live-overlays"]!,
             TextEffects = (string)values["--text-effects"]!,
