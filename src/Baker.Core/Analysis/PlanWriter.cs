@@ -140,9 +140,10 @@ internal static class PlanWriter
             if (OverlayVocabulary.IsMatch(Name(id))) found.Add("name_matches_overlay_vocabulary");
             if (objects[id].ContainsKey("image") && fraction is > 0 and < .12 &&
                 x is <= .2 or >= .8 && y is <= .2 or >= .8) found.Add("small_image_in_canvas_corner");
+            // 只认定时器；Date 是按钟点、日期切换（昼夜、时段组件），已归时钟类，不算覆盖层。
             if (objects[id]["visible"] is JsonObject visibility && visibility["script"] is JsonValue script &&
                 script.TryGetValue<string>(out string? code) &&
-                Regex.IsMatch(Liveness.CapabilityScanText(code), @"\b(setTimeout|setInterval|Date)\b")) found.Add("timer_driven_visibility");
+                Regex.IsMatch(Liveness.CapabilityScanText(code), @"\b(setTimeout|setInterval)\b")) found.Add("timer_driven_visibility");
             return found.ToArray();
         }
         var report = new JsonObject {
