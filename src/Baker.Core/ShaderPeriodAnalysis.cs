@@ -166,9 +166,11 @@ public static class ShaderPeriodAnalysis
                     BigInteger num = term["num"]!.GetValue<long>(), den = term["den"]!.GetValue<long>();
                     // 慢分量：调速到预算上限也放不进一圈；num=0 时 seconds 是下界，照样成立。同 pass 的时间倍率也乘在它上面，
                     // 记 seconds/stretch（有效周期的下界），漂移 2π·P/T 才是上界
-                    if (seconds / stretch > ceilingSeconds) { slow.Add(new($"{id}/slow{slow.Count}", owner, effect, pass, seconds / stretch)); continue; }
-                    if (num <= 0 || den <= 0) { unknown.Add(seconds); continue; }
+                    // 带振幅的摆动项能单独调频时按它自己的上限算：1.0.2 里周期超过上限的极慢项也在速度偏差门限内改频（或冻结），不留给接缝门
                     var cap = Cap(term, seconds);
+                    double own = 1 + (cap is (_, double percent) && effect >= 0 && Knobs(term).Any(Usable) ? percent : maximumRetimePercent) / 100;
+                    if (seconds / own > ceilingSeconds) { slow.Add(new($"{id}/slow{slow.Count}", owner, effect, pass, seconds / stretch)); continue; }
+                    if (num <= 0 || den <= 0) { unknown.Add(seconds); continue; }
                     var relaxed = new CommonLoopComponent($"{id}/term{index}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true, cap?.Percent);
                     // 旋钮只能挂在作者效果 pass 上（场景里有这个 pass 的 constantshadervalues）
                     if (effect >= 0 && Knobs(term).FirstOrDefault(Usable) is JsonObject knob)
