@@ -229,21 +229,6 @@ internal static class RuntimeTrackReader
     }
 
     /// <summary>
-    /// 被烘图层上作者脚本对时钟的非初始化读取：模型/着色器周期证明不了脚本推进的状态。
-    /// 保留观测到的所有者，让分配回退能把那棵子树留实时。
-    /// </summary>
-    internal static void AddScriptTimeUnresolved(JsonObject runtime, IReadOnlyCollection<int> bakedLayerIds, List<LoopUnresolved> unresolved)
-    {
-        foreach (var dependency in (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(item => item["operation"]?.GetValue<string>() == "time" &&
-                item["initialization"]?.GetValue<bool>() != true &&
-                SceneGraph.Int(item["owner"]) is int owner && bakedLayerIds.Contains(owner))
-            .DistinctBy(item => (SceneGraph.Int(item["owner"]), item["binding"]?.GetValue<string>())))
-            unresolved.Add(new ScriptTimeUnresolved(SceneGraph.Int(dependency["owner"])!.Value,
-                dependency["binding"]?.DeepClone(), dependency["property"]?.DeepClone()));
-    }
-
-    /// <summary>
     /// 运行时材质里没被建模的时钟 uniform。一个图层的时间行为由「哪个 shader、哪套常量」决定，不由它在运行时
     /// 以 source 还是 effect 角色实例化决定：<paramref name="ruledMaterials"/> 里已经被方程规则裁定过的
     /// (层, shader) 不再重复计一条——direct-draw 效果层会把同一个 effect 实例化成 source + effect 两份材质，

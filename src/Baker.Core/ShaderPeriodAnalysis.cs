@@ -72,9 +72,6 @@ public static class ShaderPeriodAnalysis
         var ruled = new HashSet<(int, string)>();
         var seen = new HashSet<int>();
         ShaderSettle? settle = null;
-        var objects = (scene["objects"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(item => SceneGraph.Int(item["id"]) is not null).ToDictionary(item => SceneGraph.Int(item["id"])!.Value);
-        JsonObject[] dependencies = [.. (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()];
         var animatedOwners = (runtime["runtime_animation_periods"] as JsonArray ?? []).OfType<JsonObject>()
             .Select(trace => SceneGraph.Int(trace["source_owner_layer_id"])).OfType<int>().ToHashSet();
         double stretch = 1 + maximumRetimePercent / 100;
@@ -82,8 +79,6 @@ public static class ShaderPeriodAnalysis
         foreach (JsonObject layer in (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>())
         {
             if (SceneGraph.Int(layer["owner"]) is not int owner || !selectedLayerIds.Contains(owner) || !seen.Add(owner)) continue;
-            objects.TryGetValue(owner, out JsonObject? ownerObject);
-            AddScriptDrivenUniforms(owner, ownerObject, dependencies, unresolved);
             var groups = (runtime["runtime_layers"] as JsonArray)!.OfType<JsonObject>().Where(x => SceneGraph.Int(x["owner"]) == owner)
                 .SelectMany(x => (x["materials"] as JsonArray ?? []).OfType<JsonObject>())
                 .Where(m => m["time_signature"] is JsonObject && m["shader"] is JsonValue &&
@@ -229,31 +224,6 @@ public static class ShaderPeriodAnalysis
 
     private static bool IsSystemInput(string name) => name.StartsWith("g_AudioSpectrum", StringComparison.Ordinal) ||
         name.StartsWith("g_Pointer", StringComparison.Ordinal) || name is "g_ParallaxPosition" or "g_Daytime";
-
-    /// <summary>
-    /// 作者脚本写的材质常量（constantshadervalues 里带 script 的键）不是常量：运行时依赖里该层对这个键有非初始化的读写，
-    /// 就按外部输入处理。读时钟的由 script_time 未解析项覆盖；读真实输入或随机数的输出不周期；其余说不清。
-    /// </summary>
-    private static void AddScriptDrivenUniforms(int owner, JsonObject? ownerObject, JsonObject[] dependencies, List<ShaderTemporalUnresolved> unresolved)
-    {
-        if (ownerObject?["effects"] is not JsonArray effects) return;
-        for (int effect = 0; effect < effects.Count; ++effect)
-        {
-            JsonArray passes = effects[effect]?["passes"] as JsonArray ?? [];
-            for (int pass = 0; pass < passes.Count; ++pass)
-                foreach (var (key, value) in passes[pass]?["constantshadervalues"] as JsonObject ?? [])
-                {
-                    if (value is not JsonObject { } scripted || scripted["script"] is null) continue;
-                    string[] operations = [.. dependencies.Where(d => SceneGraph.Int(d["owner"]) == owner && d["initialization"]?.GetValue<bool>() != true &&
-                        d["binding"]?.ToString() == key).Select(d => d["operation"]?.ToString() ?? "").Distinct()];
-                    if (operations.Length == 0 || operations.All(op => op == "time")) continue;
-                    bool input = operations.Any(op => op is "input" or "random");
-                    unresolved.Add(new(owner, effect, pass, key, input ? ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism
-                        : ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism,
-                        $"Script drives material constant {key} ({string.Join(", ", operations)}).", input ? "script_uniform_input" : "script_uniform_unmodeled"));
-                }
-        }
-    }
 
     /// <summary>
     /// 一个作者效果引用到的材质 shader 名（与 runtime.json 里 materials[].shader 同一写法），按有材质的 pass 顺序。

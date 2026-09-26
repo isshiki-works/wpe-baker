@@ -45,7 +45,8 @@ internal static class SourceStaticLoopChecks
         JsonObject scripted = Analyze(scriptedScene, Runtime());
         check(!scripted["source_static"]!.GetValue<bool>() &&
             scripted["unresolved"]!.AsArray().OfType<JsonObject>().Any(item =>
-                item["kind"]?.GetValue<string>() == "source_static" && item["owner_layer_id"]?.GetValue<int>() == 1),
+                item["kind"]?.GetValue<string>() == "script_time" &&
+                item["owner_layer_id"]?.GetValue<int>() == 1),
             "unproven script state stays non-static and identifies its owner for partial allocation");
         scriptedScene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 2, ["image"] = "models/genericimage.json" });
         JsonObject allocation = HybridLoopAllocation.Explain(new JsonObject {

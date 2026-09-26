@@ -26,19 +26,18 @@ internal static class LoopAnalysis
         var shader = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, runtime, bakedLayerIds, ceilingSeconds, maximumRetimePercent);
         List<LoopUnresolved> unresolved = [.. shader.Unresolved.Select(item => (LoopUnresolved)new ShaderLoopUnresolved(item))];
         RuntimeTrackReader.AddMaterialClockUnresolved(runtime, bakedLayerIds, unresolved, shader.RuledMaterials);
-        // A model/shader period does not also prove the state advanced by an authored script.
-        // Keep the observed owner so allocation fallback can retain that subtree live.
-        RuntimeTrackReader.AddScriptTimeUnresolved(runtime, bakedLayerIds, unresolved);
+        // 被烘图层上的脚本按时间签名出结论（ScriptTime）：周期进求解器，不能/未收敛记所有者，分配回退据此把那棵子树留实时。
+        CommonLoopComponent[] scriptCycles = ScriptComponents(scene, source, assetsDirectory, runtime, bakedLayerIds, fpsNumerator, fpsDenominator, ceiling,
+            unresolved, out LoopValuePatch[] scriptPatches, out (int Owner, string Binding, double Seconds)? scriptSettle);
         // 着色器调速：可调速分量在它的作者 pass 上挂时间倍率或旋钮常量，旧值 1（场景里没有这个键）。旋钮值与速度成反比时指数取 -1。
         LoopValuePatch[] patches = [.. shader.Components.Where(item => item.Component.AllowRetime).Select(item => new LoopValuePatch(item.Component.Id,
-            "shader_speed", item.OwnerLayerId, item.EffectIndex, item.PassIndex, item.ConstantKey, 0, null, 1, 1, item.Inverse ? -1 : 1))];
+            "shader_speed", item.OwnerLayerId, item.EffectIndex, item.PassIndex, item.ConstantKey, 0, null, 1, 1, item.Inverse ? -1 : 1)), .. scriptPatches];
 
         var videoControlScope = VideoControlScope.Resolve(scene, runtime);
         var animation = RuntimeTrackReader.Read(scene, source, assetsDirectory, runtime, bakedLayerIds, unresolved, videoControlScope,
             new ParticleStationarity.FrameClock(fpsNumerator, fpsDenominator, ceilingSeconds), out var particleVerdicts);
         // 封顶 + 确定寿命的粒子层：替换周期（整数帧）作为锁定分量交给求解器，与着色器、轨道的锁定分量同等对待。
         CommonLoopComponent[] particleCycles = ParticleCycleComponents(particleVerdicts);
-        CommonLoopComponent[] scriptCycles = ScriptFrameStepComponents(scene, bakedLayerIds, fpsNumerator, fpsDenominator, ceiling, unresolved);
         // 组间共用时钟的组要求 L 是它自身周期的倍数（见 GroupPeriods）：每个这样的周期当一个锁定分量交给求解器，解完再从候选里去掉。
         CommonLoopComponent[] stepCycles = [.. (groupClockSteps ?? []).Distinct().Select(step =>
         {
@@ -128,7 +127,11 @@ internal static class LoopAnalysis
             if (obstacle is not null) unresolved.Add(obstacle);
         }
         if (sourceStatic)
-            candidates.Add(new LoopCandidate(1UL, (double)fpsDenominator / fpsNumerator, 0d, [], []));
+        {
+            // 脚本过 settle 才固定的静态画面：长度取刚过 settle 的帧数，预热一整段后起录
+            ulong still = scriptSettle is { } late ? (ulong)Math.Floor(late.Seconds * fpsNumerator / fpsDenominator) + 1 : 1;
+            candidates.Add(new LoopCandidate(still, (double)still * fpsDenominator / fpsNumerator, 0d, [], []));
+        }
         // 精灵分量按渲染器实际使用的 float32 帧表逐帧判定接缝（见 SpriteSeamPhase）。起点 0 闭合则候选不变；
         // 起点 0 不闭合但整周期预热后闭合，候选带上预热帧数；两者都不闭合，候选移除并写明理由。
         float[][] spriteTables = animation.Where(x => x.SpriteFrameTimes is not null).Select(x => x.SpriteFrameTimes!).ToArray();
@@ -195,15 +198,20 @@ internal static class LoopAnalysis
             unresolved.Add(new SpriteSeamUnresolved(spriteRejectedCandidates));
         // 着色器里与线性时间比较的分支在 settle 时刻后固定：同精灵，整周期预热 L 帧后起录（预热只能 0 或 L），要求 L 晚于 settle；
         // 精灵已定在起点 0 闭合的候选不能再预热。候选全放不进就记未收敛
-        if (shader.Settle is { } settle && candidates.Count > 0)
+        // 脚本的 settle 同样处理，取两者较晚的一个
+        double settleSeconds = Math.Max(shader.Settle?.Seconds ?? 0, scriptSettle?.Seconds ?? 0);
+        if (settleSeconds > 0 && candidates.Count > 0)
         {
-            candidates = [.. candidates.Where(c => c.Seconds > settle.Seconds && (c.SpriteSeam is null || c.SpriteSeam.WarmupFrames == c.Frames))
-                .Select(c => c with { ShaderSettleSeconds = settle.Seconds })];
-            if (candidates.Count == 0)
+            candidates = [.. candidates.Where(c => c.Seconds > settleSeconds && (c.SpriteSeam is null || c.SpriteSeam.WarmupFrames == c.Frames))
+                .Select(c => c with { ShaderSettleSeconds = settleSeconds })];
+            if (candidates.Count == 0 && shader.Settle is { } settle && settle.Seconds >= settleSeconds)
                 unresolved.Add(new ShaderLoopUnresolved(new(settle.OwnerLayerId, settle.EffectIndex, settle.PassIndex, settle.Resource,
                     ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: a branch on linear time settles by " +
                     settle.Seconds.ToString("R", CultureInfo.InvariantCulture) + " s, later than the one-period warmup of every candidate",
                     "transient_settle_beyond_warmup")));
+            else if (candidates.Count == 0)
+                unresolved.Add(new ScriptTimeUnresolved(scriptSettle!.Value.Owner, scriptSettle.Value.Binding, false, "transient_settle_beyond_warmup",
+                    "the script settles by " + settleSeconds.ToString("R", CultureInfo.InvariantCulture) + " s, later than the one-period warmup of every candidate"));
         }
         long contentStep = ContentStepFrames(shader.Components.Count + shader.Slow.Count + scriptCycles.Length, animation, unresolved.Count, fpsNumerator, fpsDenominator);
         // 没有任何周期分量（求解器与摆动改频都没给出候选），而未解析项全部是满足平稳随机判据、可交叉淡化的粒子：
@@ -457,28 +465,46 @@ internal static class LoopAnalysis
         })];
 
     /// <summary>
-    /// 逐帧步进脚本（<see cref="ScriptFrameStep"/>）的整数帧周期作锁定分量交给求解器。这类脚本合起来的最小公倍数超过
-    /// 循环上限时没有能同时闭合它们的循环：不给分量，每条记一个无界未解析项，由分配回退把这些层留实时。
+    /// 被烘图层上每段脚本的时间签名（<see cref="ScriptTime"/>）：周期作分量交给求解器——按 engine.runtime 的周期可调速（捕获时改写
+    /// 这段脚本读到的 runtime），跨帧状态的周期是精确帧数；不能与未收敛各记一条。运行时观测到读时钟、源码却没找到的脚本记未收敛。
+    /// settle 取最晚的一段。
     /// </summary>
-    private static CommonLoopComponent[] ScriptFrameStepComponents(JsonObject scene, IReadOnlyCollection<int> bakedLayerIds,
-        uint fpsNumerator, uint fpsDenominator, CommonLoopRational ceiling, List<LoopUnresolved> unresolved)
+    private static CommonLoopComponent[] ScriptComponents(JsonObject scene, ProjectSource source, string? assetsDirectory, JsonObject runtime,
+        IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, CommonLoopRational ceiling, List<LoopUnresolved> unresolved,
+        out LoopValuePatch[] patches, out (int Owner, string Binding, double Seconds)? settle)
     {
         UInt128 ceilingFrames = (UInt128)ceiling.Numerator * fpsNumerator / ((UInt128)ceiling.Denominator * fpsDenominator);
-        var scripts = ScriptFrameStep.Find(scene, bakedLayerIds, (ulong)UInt128.Min(ceilingFrames, ulong.MaxValue));
-        if (scripts.Count == 0) return [];
-        System.Numerics.BigInteger? joint = ScriptFrameStep.JointFrames(scripts);
-        if (joint is null || joint > (System.Numerics.BigInteger)ceilingFrames)
+        var components = new List<CommonLoopComponent>();
+        var retimes = new List<LoopValuePatch>();
+        var seen = new HashSet<(int, string)>();
+        settle = null;
+        foreach (ScriptTime.Binding binding in ScriptTime.Bindings(scene, source, assetsDirectory, bakedLayerIds))
         {
-            string text = joint?.ToString(CultureInfo.InvariantCulture) ?? $">{ceilingFrames}";
-            unresolved.AddRange(scripts.Select(item => new ScriptFrameStepUnresolved(item.OwnerLayerId, item.Binding, item.PeriodFrames, scripts.Count, text)));
-            return [];
+            seen.Add((binding.OwnerLayerId, binding.Name));
+            ScriptTime.Verdict verdict = ScriptTime.Analyze(binding, fpsNumerator, fpsDenominator, (ulong)UInt128.Min(ceilingFrames, 1_000_000));
+            if (verdict.Settle > (settle?.Seconds ?? 0)) settle = (binding.OwnerLayerId, binding.Name, verdict.Settle);
+            string id = $"script/{binding.OwnerLayerId}/{binding.Pointer ?? binding.Name}";
+            if (verdict.PeriodFrames is ulong frames)
+            {
+                var exact = new CommonLoopRational(checked((long)frames * fpsDenominator), fpsNumerator);
+                components.Add(new(id, new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact)));
+            }
+            else if (verdict.PeriodSeconds is double seconds)
+            {
+                components.Add(new(id, new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: verdict.Retimable));
+                if (verdict.Retimable) retimes.Add(new(id, "script_speed", binding.OwnerLayerId, -1, -1, binding.Pointer!, 0, null, 1, 1));
+            }
+            else if (verdict.Outcome is ScriptTime.Outcome.Cannot or ScriptTime.Outcome.Unconverged)
+                unresolved.Add(new ScriptTimeUnresolved(binding.OwnerLayerId, binding.Name, verdict.Outcome == ScriptTime.Outcome.Cannot, verdict.Code, verdict.Detail));
         }
-        return [.. scripts.Select(item =>
-        {
-            var exact = new CommonLoopRational(checked((long)item.PeriodFrames!.Value * fpsDenominator), fpsNumerator);
-            return new CommonLoopComponent($"script_frame_step:{item.OwnerLayerId}:{item.Binding}",
-                new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
-        })];
+        foreach (var dependency in (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(item => item["operation"]?.GetValue<string>() == "time" && item["initialization"]?.GetValue<bool>() != true &&
+                SceneGraph.Int(item["owner"]) is int owner && bakedLayerIds.Contains(owner) && !seen.Contains((owner, item["binding"]?.GetValue<string>() ?? "")))
+            .DistinctBy(item => (SceneGraph.Int(item["owner"]), item["binding"]?.GetValue<string>())))
+            unresolved.Add(new ScriptTimeUnresolved(SceneGraph.Int(dependency["owner"])!.Value, dependency["binding"]?.GetValue<string>() ?? "", false,
+                "script_source_not_found", "a script reads " + dependency["property"] + " but its source is not in the scene or the layer's model materials"));
+        patches = [.. retimes];
+        return [.. components];
     }
 
     private static CommonLoopSearchResult SuggestSingleVideoRetime(uint fpsNumerator, uint fpsDenominator,
