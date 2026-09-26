@@ -1537,7 +1537,8 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
         else if (c.Linear())
             AddUnique(sig.reasons, (cond.loop ? "loop_count_time_dependent" : "branch_on_linear_time") + cond.where);
         else if (cond.loop && c.Timed())
-            AddUnique(sig.reasons, "loop_count_time_dependent" + cond.where);
+            // 循环次数随时间周期变化：输出仍只依赖周期量，但循环体没法逐次展开，只报没推下去
+            AddUnique(sig.reasons, "analysis_not_converged:loop_count_periodic" + cond.where);
         else
             MergeTags(acc, c);
     }

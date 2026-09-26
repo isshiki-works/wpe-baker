@@ -94,7 +94,8 @@ public static class ShaderPeriodAnalysis
                 string periods = string.Join(", ", classes.Select(c => $"{c.Num}/{c.Den}{(c.Pi ? "·π" : "")} s"));
                 if (classes.Length > 1)
                 {
-                    Fail(true, "incommensurate_classes", $"periods {periods} have an irrational ratio; one time scale per material keeps the ratio");
+                    // 类别按来源与有理化判定（浮点 π 字面量会落进有理类），不同类不等于比值无理：记未收敛，不当证明
+                    Fail(false, "incommensurate_classes", $"periods {periods} fall in different classes; one time scale per material keeps their ratio");
                     continue;
                 }
                 var (num, den, pi) = classes[0];
