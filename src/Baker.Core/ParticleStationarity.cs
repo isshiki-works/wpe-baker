@@ -360,7 +360,8 @@ internal static class ParticleStationarity
             else
                 for (int index = 0; index < list.Count; ++index)
                     childTail = Math.Max(childTail, CheckEventChild(list[index]!.AsObject(), $"children[{index}]", failures, definition,
-                        overrides, lifetimeMin * lifetimeScale / rateScale, objects, runtime, readResource, clock, childLocks, ParentInstances));
+                        overrides, lifetimeMin * lifetimeScale / rateScale, lifetimeMax > lifetimeMin, objects, runtime, readResource, clock, childLocks,
+                        ParentInstances));
         }
 
         // ---- C6 材质：genericparticle 且不读帧缓冲 ----
@@ -624,13 +625,13 @@ internal static class ParticleStationarity
     /// 在父粒子出生、eventdeath 在父粒子死亡时取一个实例（按 probability 独立抽签）；实例的发射计时、槽位、starttime 预跑都从实例创建起算，
     /// 父粒子死后实例停发（InstanceCanEmit），余下粒子走完子寿命即回收。每个实例因此是父粒子标记、自身随机与事件后时间的函数，
     /// 寿命有界：父层平稳时整体仍平稳，相关跨度与预热各多一段尾长（返回值，真实秒；不满足时返回 0）。
-    /// 前提是实例上限（children[].maxcount，缺省 20）永不触顶，否则哪些事件拿到实例取决于历史：每个父槽位相邻两次出生或死亡至少隔
-    /// 父寿命下界，同时在世的实例 ≤ min(父 maxcount, 20000) × (2 + ⌊尾长 / 父寿命下界⌋)。子定义按同一套条件递归判，
+    /// 实例上限（children[].maxcount，缺省 20）永不触顶时直接成立：每个父槽位相邻两次出生或死亡至少隔
+    /// 父寿命下界，同时在世的实例 ≤ min(父 maxcount, 20000) × (2 + ⌊尾长 / 父寿命下界⌋)。可能触顶时按父寿命是否随机分两种（见方法内）。子定义按同一套条件递归判，
     /// 只相对实例的几条（爆发、零发射率、有限时长、间歇、实例内封顶）不判。eventfollow 例外：父粒子死亡的同一帧槽位被补上时实例不释放、
     /// 接着跟新粒子（ProcessChildEvents），发射计时跨代延续，所以按常驻系统的全套条件判。static 子系统是另一个常驻系统，同样按全套条件判。
     /// </summary>
     private static double CheckEventChild(JsonObject child, string node, List<Failure> failures, JsonObject definition, JsonObject overrides,
-        double? parentLifetimeMin, IReadOnlyDictionary<int, JsonObject> objects, JsonObject? runtime, Func<string, JsonObject?> readResource,
+        double? parentLifetimeMin, bool parentLifetimeRandom, IReadOnlyDictionary<int, JsonObject> objects, JsonObject? runtime, Func<string, JsonObject?> readResource,
         FrameClock? clock, List<CyclostationaryLock> locks, Func<double, double?> parentInstances)
     {
         // 渲染器 ParseSpawnType：type 缺省或不认识的字样都是 static。
@@ -650,6 +651,11 @@ internal static class ParticleStationarity
             ? Math.Min(parentCount, 20000) * (2 + Math.Floor(tail / parentLifetimeMin.Value)) : null;
         if (parentInstances(tail) is double byRate) instances = Math.Min(instances ?? double.PositiveInfinity, byRate);
         if (capReadable && instances <= cap) return tail;
+        // 上限会触顶时，哪些父事件拿到实例取决于实例池的历史（ProcessChildEvents：满了就不建，父粒子死后实例走完子寿命才回池；
+        // eventfollow 的槽位同帧补上时实例不释放）。父寿命随机时，池的占用与释放由逐粒子独立抽取的寿命驱动、规则不随时间变，
+        // 父层平稳后各父粒子统计上可互换，拿到实例的是哪几个不改变画面的分布：仍是平稳过程，走淡化替换，接缝门验证。
+        // 父寿命确定时分配是计数动态的确定函数，周期要按槽位逐帧重放推导（还没有），标未收敛。
+        if (capReadable && parentLifetimeRandom) return tail;
         failures.Add(new("C5", "child_instance_cap_binds", node + ".maxcount",
             new JsonObject { ["cap"] = child["maxcount"]?.DeepClone(), ["instances_bound"] = instances }.ToJsonString()));
         return 0;

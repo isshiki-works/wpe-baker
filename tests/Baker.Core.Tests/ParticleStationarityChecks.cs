@@ -335,11 +335,15 @@ internal static class ParticleStationarityChecks
         // 事件子系统递归：水滴 153 在出生时各带一个 352 实例（子寿命 0.5 × 覆盖 2.0 / 1.29）；实例上限按 maxcount 32 ×（2 + ⌊子寿命 / 父寿命下界⌋）判。
         Fixture Spawner(JsonNode? cap) => Mutate(droplets, (_, definition, _) => definition["children"] = new JsonArray(new JsonObject
             { ["type"] = "eventspawn", ["name"] = "particles/particle-352.json", ["maxcount"] = cap }));
-        JsonObject EventChild(JsonNode? cap) => ParticleItems(Analyze([Spawner(cap), rain]), 153).Single()["particle_stationarity"]!.AsObject();
+        JsonObject EventChild(JsonNode? cap, bool fixedLifetime = false) => ParticleItems(Analyze([fixedLifetime ? Mutate(Spawner(cap), (_, definition, _) =>
+            { JsonObject lifetime = Node(definition, "initializer", "lifetimerandom"); lifetime["min"] = lifetime["max"]!.DeepClone(); }) : Spawner(cap), rain]),
+            153).Single()["particle_stationarity"]!.AsObject();
         JsonObject spawned = EventChild(1000.0);
         check(Stationary(spawned) && Near(Seconds(spawned, "lifetime_max_seconds"), 2 / 1.29 + 1 / 1.29) &&
-                Near(Seconds(spawned, "warmup_seconds"), 4 / 1.29 + 1 / 1.29) && Only(EventChild(null), "C5 child_instance_cap_binds"),
-            "C5 正例：eventspawn 子系统按实例递归判（封顶只在实例内），寿命与预热各加子寿命 0.775194 s；反例：缺省实例上限 20 < 32 × 2，会触顶，不放行");
+                Near(Seconds(spawned, "warmup_seconds"), 4 / 1.29 + 1 / 1.29) && Stationary(EventChild(null)) &&
+                Only(EventChild(null, fixedLifetime: true), "C5 child_instance_cap_binds"),
+            "C5 正例：eventspawn 子系统按实例递归判（封顶只在实例内），寿命与预热各加子寿命 0.775194 s；缺省实例上限 20 < 32 × 2 会触顶，" +
+            "父寿命随机时拿到实例的父粒子由独立抽取的寿命决定，仍平稳；反例：父寿命确定时分配周期还没推导，不放行");
 
         // ---- C6 材质 ----
         check(NoCondition(rainVerdict, "C6"), "C6 正例：genericparticle 且不带 REFRACT 组合");
