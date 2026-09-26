@@ -452,16 +452,6 @@ public class SavedLoopApplyTests
 }
 
 [Trait("Layer", "L1")]
-public class CanonicalRepeatNoiseTests
-{
-    [Fact]
-    public async Task Run()
-    {
-        await TestTemp.Run(dir => CanonicalRepeatNoiseChecks.Run(Assert.True, dir));
-    }
-}
-
-[Trait("Layer", "L1")]
 public class SourceStaticLoopTests
 {
     [Fact]
@@ -491,66 +481,6 @@ public class HybridLoopGeneralizationTests
     }
 }
 
-[Trait("Layer", "L1")]
-public class ShaderPeriodGeneralizationTests
-{
-    [Fact]
-    public async Task Run()
-    {
-        await TestTemp.Run(dir => ShaderPeriodGeneralizationChecks.Run(Assert.True, dir));
-    }
-}
-
-[Trait("Layer", "L1")]
-public class ShaderEffectivePassTests
-{
-    [Fact]
-    public async Task Run()
-    {
-        await TestTemp.Run(dir => ShaderEffectivePassChecks.Run(Assert.True, dir));
-    }
-}
-
-[Trait("Layer", "L1")]
-public class ShaderAdditionalPeriodTests
-{
-    [Fact]
-    public async Task Run()
-    {
-        await TestTemp.Run(dir => ShaderAdditionalPeriodChecks.Run(Assert.True, dir));
-    }
-}
-
-[Trait("Layer", "L1")]
-public class WaterRippleSineClockTests
-{
-    [Fact]
-    public async Task Run()
-    {
-        await TestTemp.Run(dir => WaterRippleSineClockChecks.Run(Assert.True, dir));
-    }
-}
-
-[Trait("Layer", "L1")]
-public class ShaderSplitPeriodTests
-{
-    [Fact]
-    public async Task Run()
-    {
-        await TestTemp.Run(dir => ShaderSplitPeriodChecks.Run(Assert.True, dir));
-    }
-}
-
-[Trait("Layer", "L1")]
-public class WaterFlowPeriodTests
-{
-    [Fact]
-    public async Task Run()
-    {
-        await TestTemp.Run(dir => WaterFlowPeriodChecks.Run(Assert.True, dir));
-    }
-}
-
 [Trait("Layer", "L0")]
 public class ResidualMaskingTests
 {
@@ -561,16 +491,6 @@ public class ResidualMaskingTests
     }
 }
 
-[Trait("Layer", "L1")]
-public class SwayRetimeTests
-{
-    [Fact]
-    public async Task Run()
-    {
-        await TestTemp.Run(dir => SwayRetimeChecks.RunAsync(Assert.True, dir));
-    }
-}
-
 [Trait("Layer", "L0")]
 public class RetimeBudgetTests
 {
@@ -578,16 +498,6 @@ public class RetimeBudgetTests
     public void Run()
     {
         RetimeBudgetChecks.Run(Assert.True);
-    }
-}
-
-[Trait("Layer", "L1")]
-public class EffectPrefixProfileTests
-{
-    [Fact]
-    public async Task Run()
-    {
-        await TestTemp.Run(dir => EffectPrefixProfileChecks.Run(Assert.True, dir));
     }
 }
 

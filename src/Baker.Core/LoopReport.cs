@@ -202,16 +202,10 @@ internal abstract record LoopUnresolved
 internal sealed record ShaderLoopUnresolved(ShaderTemporalUnresolved Source) : LoopUnresolved
 {
     public override string Kind => Source.Kind.ToString();
-    public override Message? DetailMessage => Source.Message;
-    public override JsonObject ToJson()
-    {
-        var json = new JsonObject { ["kind"] = Kind, ["owner_layer_id"] = Source.OwnerLayerId,
-            ["effect_index"] = Source.EffectIndex, ["pass_index"] = Source.PassIndex, ["resource"] = Source.Resource, ["detail"] = Source.Detail,
-            // 机制知识按结构化字段下传，残差掩盖据此判定，不再按资源名匹配字样。
-            ["bounded_displacement"] = Source.BoundedDisplacement, ["mechanism"] = Source.Mechanism.Length == 0 ? null : Source.Mechanism };
-        if (Source.Message is Message message) json["detail"] = message.Text;
-        return json;
-    }
+    public override Message? DetailMessage => null;
+    public override JsonObject ToJson() => new() { ["kind"] = Kind, ["owner_layer_id"] = Source.OwnerLayerId,
+        ["effect_index"] = Source.EffectIndex, ["pass_index"] = Source.PassIndex, ["resource"] = Source.Resource, ["detail"] = Source.Detail,
+        ["mechanism"] = Source.Mechanism.Length == 0 ? null : Source.Mechanism };
 }
 
 /// <summary>被烘图层上作者脚本读时钟（非初始化）：模型/着色器周期证明不了脚本推进的状态。binding/clock 原样取自运行时依赖。</summary>

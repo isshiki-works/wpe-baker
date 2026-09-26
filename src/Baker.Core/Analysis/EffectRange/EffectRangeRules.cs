@@ -1,7 +1,7 @@
+using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
-using Baker.Core.Analysis.ShaderClock;
 
 namespace Baker.Core.Analysis.EffectRange;
 
@@ -31,7 +31,7 @@ internal sealed class EffectRangeRules
 
     /// <summary>片元着色器指纹：归一化源码（去注释、压空白）的 UTF-8 sha256，小写十六进制。</summary>
     public static string Fingerprint(string fragment) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(ShaderSource.Normalize(fragment))));
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Normalize(fragment))));
 
     private static string ReadEmbedded()
     {
@@ -229,4 +229,9 @@ internal sealed class EffectRangeRules
             }
         return null;
     }
+
+    /// <summary>去掉 // 与 /* */ 注释、把连续空白压成一个空格后的文本。</summary>
+    private static string Normalize(string shaderText) => Regex.Replace(
+        Regex.Replace(shaderText, @"//[^\r\n]*|/\*.*?\*/", "", RegexOptions.CultureInvariant | RegexOptions.Singleline),
+        @"\s+", " ", RegexOptions.CultureInvariant).Trim();
 }

@@ -56,8 +56,6 @@ internal static class ResidualMaskingChecks
             ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 6000 }), ["unresolved"] = unresolved }
         };
 
-        const string FoliageResource = "shaders/effects/foliagesway.frag + shaders/effects/foliagesway.vert";
-        const string FoliageDetail = "Foliage sway adds eight sines at speeduv * (1, -0.16161616, ...) rad/s; no common return exists.";
         const string RandomSpriteDetail = "Script playback restarts this sprite animation after a Math.random() delay, so it has no period at any capture length.";
         const string ParticleDetail = "A particle sprite texture period does not establish the particle system's effective period.";
 
@@ -82,9 +80,6 @@ internal static class ResidualMaskingChecks
         JsonObject Sprite(int id) => new() { ["id"] = id };
         JsonObject ParticleOwner(int id, string path) => new() { ["id"] = id, ["particle"] = path };
         Func<string, JsonObject?> LeavesReader = path => path == "particles/presets/leaves5.json" ? leaves : null;
-        // 阿米娅那条 foliagesway 的标准形态：带结构化的有界位移机制字段。
-        JsonObject Sway(int owner) => Unresolved("NonPeriodicOrDriftingMechanism", owner, FoliageDetail, FoliageResource,
-            bounded: true, mechanism: ShaderPeriodAnalysis.FoliageSwayMechanism);
 
         // HybridLoopService 对粒子层写下的 particle_stationarity（C1–C9 判据结论）；残差掩盖只认这个字段，不看定义里的名字。
         JsonObject ParticleItem(int owner, bool stationary, double? warmup = 13, params string[] failed) => new()
@@ -157,19 +152,6 @@ internal static class ResidualMaskingChecks
                 new JsonArray(Layer(186, "鸟", 0))), Scene(Sprite(186)), LeavesReader), 60, 1) == 0,
             "warm-up frames are the largest particle warm-up times the frame rate rounded up (4 s -> 240, 0.795 s -> 48 at 60 fps), zero without particles");
 
-        // 1d. 位移类分量（uv_sway）一律不可掩盖：人眼定标判定淡化后位置跳变明显。峰值偏移照样记录，只作取证。
-        JsonObject sway = ResidualMasking.Classify(Plan(new JsonArray(Sway(407), RandomSprite(186, RandomSpriteDetail)),
-                new JsonArray(Layer(407, "左臂", 0.096937), Layer(186, "鸟_00020", 0))),
-            Scene(FoliageOwner(407, 0.52999997), Sprite(186)), LeavesReader);
-        JsonObject arm = sway["blocking_components"]!.AsArray().OfType<JsonObject>().Single();
-        check(sway["status"]?.GetValue<string>() == "rejected" && arm["classification"]?.GetValue<string>() == "displacement" &&
-            arm["maskable"]?.GetValue<bool>() == false && arm["mechanism"]?.GetValue<string>() == ShaderPeriodAnalysis.FoliageSwayMechanism &&
-            Math.Abs((arm["peak_offset_pixels"]?.GetValue<double>() ?? 0) - 0.52999997 * 0.52999997 * 0.02 * 3072) < 0.01 &&
-            arm["peak_offset_limit_pixels"] is null && arm["layer_name"]?.GetValue<string>() == "左臂" &&
-            sway["residual_layers"]!.AsArray().Count == 1,
-            "a bounded foliage sway component is never masked: its crossfade shows a visible position jump, so the candidate is refused and the offset is only recorded");
-        check(sway["peak_offset_limit_pixels"] is null,
-            "the two-percent short-edge displacement allowance is gone together with displacement masking");
 
         // 2. 不可掩盖仍然拒绝：识别不了的着色器机制、拿不出随机证明的粒子、读不出 strength 的位移层。
         JsonObject unsupported = ResidualMasking.Classify(
@@ -185,19 +167,6 @@ internal static class ResidualMaskingChecks
         check(deterministic["status"]?.GetValue<string>() == "rejected" &&
             (deterministic["blocking_components"] as JsonArray)?.OfType<JsonObject>().Single()["classification"]?.GetValue<string>() == "random_particle",
             "a particle system that fails the criteria is refused instead of being masked");
-        JsonObject unknownStrength = ResidualMasking.Classify(
-            Plan(new JsonArray(Sway(407)), new JsonArray(Layer(407, "左臂", 0.1))),
-            Scene(FoliageOwner(407, null)), LeavesReader);
-        JsonObject unknownStrengthVerdict = unknownStrength["blocking_components"]!.AsArray().OfType<JsonObject>().Single();
-        check(unknownStrength["status"]?.GetValue<string>() == "rejected" && unknownStrengthVerdict["peak_offset_pixels"] is null &&
-            unknownStrengthVerdict["classification"]?.GetValue<string>() == "displacement",
-            "a foliage sway pass with no readable strength is refused as displacement without inventing an offset");
-        JsonObject tooWide = ResidualMasking.Classify(
-            Plan(new JsonArray(Sway(407)), new JsonArray(Layer(407, "左臂", 0.1))),
-            Scene(FoliageOwner(407, 1.0)), LeavesReader);
-        check(tooWide["status"]?.GetValue<string>() == "rejected" &&
-            tooWide["blocking_components"]![0]!["peak_offset_pixels"]?.GetValue<double>() == 61.44,
-            "a wide foliage sway is refused like any displacement and its measured offset is still recorded");
         // 精灵/粒子的画布占比只记录不裁决：合计超过 1（阿米娅六只鸟的包围盒合计 4.1 倍画布）也照样可掩盖，
         // 掩盖是否可接受由全分辨率的第一层残差判据实测决定。
         JsonObject hugeCoverage = ResidualMasking.Classify(
@@ -229,38 +198,6 @@ internal static class ResidualMaskingChecks
             legacyText["blocking_components"]!.AsArray().OfType<JsonObject>().Single()["classification"]?.GetValue<string>() == "unrecognized",
             "random-restart proof is read from the structured field, never matched from the detail text");
 
-        // 2b. 位移幅度上界同样只认结构化字段：资源名里带 foliagesway、但没有 bounded_displacement 的项
-        // 不再被当成有界位移；反过来，带字段的项即便资源名换了写法也照样按 uv_sway 公式判定。
-        JsonObject resourceNameOnly = ResidualMasking.Classify(
-            Plan(new JsonArray(Unresolved("NonPeriodicOrDriftingMechanism", 407, FoliageDetail, FoliageResource)),
-                new JsonArray(Layer(407, "左臂", 0.1))),
-            Scene(FoliageOwner(407, 0.52999997)), LeavesReader);
-        check(resourceNameOnly["status"]?.GetValue<string>() == "rejected" &&
-            resourceNameOnly["blocking_components"]!.AsArray().OfType<JsonObject>().Single()["classification"]?.GetValue<string>()
-                == "proven_nonperiodic_unbounded",
-            "an amplitude bound is read from the bounded-displacement field, never matched from the resource name");
-        JsonObject renamedSway = ResidualMasking.Classify(
-            Plan(new JsonArray(Unresolved("NonPeriodicOrDriftingMechanism", 407, FoliageDetail,
-                    "shaders/workshop/renamed_sway.frag + shaders/workshop/renamed_sway.vert",
-                    bounded: true, mechanism: ShaderPeriodAnalysis.FoliageSwayMechanism)),
-                new JsonArray(Layer(407, "左臂", 0.1))),
-            Scene(FoliageOwner(407, 0.52999997)), LeavesReader);
-        JsonObject renamedLayer = renamedSway["blocking_components"]!.AsArray().OfType<JsonObject>().Single();
-        check(renamedSway["status"]?.GetValue<string>() == "rejected" &&
-            renamedLayer["classification"]?.GetValue<string>() == "displacement" &&
-            Math.Abs((renamedLayer["peak_offset_pixels"]?.GetValue<double>() ?? 0) - 0.52999997 * 0.52999997 * 0.02 * 3072) < 0.01,
-            "a bounded uv_sway mechanism is classified as displacement from the structured field whatever its shader file is called");
-        // 声称有界却不是已知有界族的机制同样是位移类，一律阻断，不记偏移。
-        JsonObject unknownBounded = ResidualMasking.Classify(
-            Plan(new JsonArray(Unresolved("NonPeriodicOrDriftingMechanism", 407, FoliageDetail, FoliageResource,
-                    bounded: true, mechanism: "uv_unknown_bound")),
-                new JsonArray(Layer(407, "左臂", 0.1))),
-            Scene(FoliageOwner(407, 0.52999997)), LeavesReader);
-        JsonObject unknownBoundedVerdict = unknownBounded["blocking_components"]!.AsArray().OfType<JsonObject>().Single();
-        check(unknownBounded["status"]?.GetValue<string>() == "rejected" &&
-            unknownBoundedVerdict["classification"]?.GetValue<string>() == "displacement" &&
-            unknownBoundedVerdict["mechanism"]?.GetValue<string>() == "uv_unknown_bound" && unknownBoundedVerdict["peak_offset_pixels"] is null,
-            "a mechanism that claims a bound without a peak-offset formula is refused as displacement instead of masked");
 
         // 2c. 线性漂移（lightshafts 一族）仍然不可掩盖，而理由必须说"已被方程证明非周期"，
         // 不能写成"没有非周期证明"；数字由该 pass 的 rayspeed 与着色器方程算出。
@@ -278,28 +215,14 @@ internal static class ResidualMaskingChecks
         const string ShaftDetail = "Light-shaft noise UVs translate at rayspeed 0.38999999 * (0.003, 0.000375111, 0.0047111, 0.0007399) per second.";
         JsonObject drift = ResidualMasking.Classify(
             Plan(new JsonArray(Unresolved("NonPeriodicOrDriftingMechanism", 83, ShaftDetail,
-                    "shaders/effects/lightshafts.frag", mechanism: ShaderPeriodAnalysis.LightShaftDriftMechanism)),
+                    "shaders/effects/lightshafts.frag", mechanism: "uv_linear_drift")),
                 new JsonArray(Layer(83, "光束 - 角", 0.05))),
             Scene(ShaftOwner(83, 0.38999999)), LeavesReader);
         JsonObject driftVerdict = drift["blocking_components"]!.AsArray().OfType<JsonObject>().Single();
         check(drift["status"]?.GetValue<string>() == "rejected" && driftVerdict["maskable"]?.GetValue<bool>() == false &&
             driftVerdict["classification"]?.GetValue<string>() == "proven_nonperiodic_unbounded" &&
-            driftVerdict["mechanism"]?.GetValue<string>() == ShaderPeriodAnalysis.LightShaftDriftMechanism,
+            driftVerdict["mechanism"]?.GetValue<string>() == "uv_linear_drift",
             "a proven non-periodic unbounded drift is refused as proven, never as a missing non-periodicity proof");
-        check(Math.Abs((driftVerdict["fastest_axis_seconds"]?.GetValue<double>() ?? 0) -
-                1 / (0.0047111 * 0.38999999)) < 0.01 &&
-            Math.Abs((driftVerdict["slowest_axis_seconds"]?.GetValue<double>() ?? 0) -
-                1 / (0.000375111 * 0.38999999)) < 0.01,
-            "the drift guidance states the axis periods computed from the pass speed and never names a layer or wallpaper");
-        // 计划记下的循环时长上限（loop.maximum_seconds = --loop-max-seconds）原样进拒绝理由与指引，不再写死 180。
-        JsonObject longPlan = Plan(new JsonArray(Unresolved("NonPeriodicOrDriftingMechanism", 83, ShaftDetail,
-                "shaders/effects/lightshafts.frag", mechanism: ShaderPeriodAnalysis.LightShaftDriftMechanism)),
-            new JsonArray(Layer(83, "光束 - 角", 0.05)));
-        longPlan["loop"]!["maximum_seconds"] = 3600;
-        JsonObject longVerdict = ResidualMasking.Classify(longPlan, Scene(ShaftOwner(83, 0.38999999)), LeavesReader)
-            ["blocking_components"]!.AsArray().OfType<JsonObject>().Single();
-        check(longVerdict["loop_ceiling_seconds"]?.GetValue<double>() == 3600 && longVerdict["maskable"]?.GetValue<bool>() == false,
-            "residual masking quotes the plan's own loop ceiling and still refuses the unbounded drift");
 
         // 3. 残差超阈值拒绝：整幅 MAE 与最差瓦片各自都能单独否决一个起点。
         const int width = 512, height = 512;

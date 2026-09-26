@@ -229,12 +229,6 @@ public static class MessageCatalog
             Legacy: "The only thing changing in the recorded content is a single video, and no retime lands its length on a whole number of output frames, so the analysis established no loop."),
 
         // feat/particle-crossfade：残差掩盖的逐层判定理由（ResidualMasking）。{0}=图层 id {1}=机制名
-        ["residual.displacement_not_maskable"] = new(
-            Zh: "层 {0} 的位移类分量 {1} 不可掩盖：接缝两侧同一元素位置不同，交叉淡化产生半透明双影，视觉定标判定为明显。需解析闭合其周期，或保持该层实时。",
-            En: "Layer {0}'s displacement component {1} cannot be masked: the same element sits at different positions on either side of the seam, and a crossfade yields a semi-transparent double image that visual calibration judged obvious. Its period must close analytically, or the layer must stay live.",
-            Legacy: "Layer {0}'s displacement component {1} would show a visible position jump through a crossfade: the same element sits in different places on either side of the seam, and a crossfade only turns the jump into a semi-transparent double image, which visual calibration judged obvious. It cannot be masked; its period must close analytically, or the layer must stay live."),
-
-        // {0}=图层 id
         ["residual.particle_verdict_missing"] = new(
             Zh: "层 {0} 的粒子未解析项不可掩盖：计划中无平稳随机判据结论（旧版计划），淡化替换无法证明成立。请重新分析。",
             En: "Layer {0}'s particle item cannot be masked: the plan carries no stationary-random verdict (an older plan), so crossfade replacement cannot be shown to hold. Analyze the source again.",
@@ -438,24 +432,6 @@ public static class MessageCatalog
             En: "The runtime {0} material uses unmodeled temporal uniforms {1}, so its period cannot be proven.",
             Legacy: "Runtime {0} material uses unmodeled temporal uniforms: {1}."),
 
-        ["unresolved.shader_runtime_clock_unverified"] = new(
-            Zh: "该着色器使用运行时时钟或帧间隔（g_Runtime / g_Frametime 一类），而非已验证的周期性 g_Time 公式，无法证明循环。",
-            En: "The shader uses a runtime or delta clock (g_Runtime / g_Frametime) rather than a verified periodic g_Time equation, so looping cannot be proven.",
-            Legacy: "Shader uses a runtime or delta clock without a verified periodic g_Time equation."),
-
-        ["unresolved.shader_mixed_clock"] = new(
-            Zh: "该着色器混用 g_Time 与运行时时钟/帧间隔，周期无法证明。",
-            En: "The shader mixes g_Time with a runtime or delta clock, so its period cannot be proven.",
-            Legacy: "Shader mixes g_Time with a runtime or delta clock, so its period is not proven."),
-
-        ["unresolved.shader_not_verified_periodic"] = new(
-            Zh: "该着色器源码不匹配任何已验证的周期公式，无法证明循环。",
-            En: "The shader source matches no verified periodic equation, so looping cannot be proven.",
-            Legacy: "Shader source does not match a verified periodic equation."),
-
-        // ---- bake 拒绝理由（写进 bake.json 的 reason / reason_localized） ----
-        // 特效前缀按不透明视频规划，但全分辨率捕获读到 alpha<255。{0}=图层 id {1}=层名 {2}=帧 {3}/{4}=坐标
-        // {5}=该点 alpha {6}=该帧非不透明像素数 {7}=该帧最低 alpha。
         ["bake.effect_prefix_nonopaque_capture"] = new(
             Zh: "不可生成：图层 {0}「{1}」的原尺寸首帧全像素不透明，但完整捕获在第 {2} 帧 ({3}, {4}) 读到 alpha={5}；该帧有 {6} 个像素非完全不透明（最低 alpha {7}）。首帧结论不能覆盖后续透明度变化，当前不透明编码会丢失这些信息，因此已中止本次生成；原壁纸未改动，相关内容保持实时。",
             En: "Layer {0} (\"{1}\") was opaque in the native-size first frame, but full capture read alpha={5} at ({3}, {4}) in frame {2}, affecting {6} pixel(s) (lowest alpha {7}). The first frame did not establish opacity throughout the animation. RGB encoding would lose this transparency, so generation stopped; the source is unchanged and remains live."),

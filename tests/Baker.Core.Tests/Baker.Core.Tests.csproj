@@ -17,5 +17,4 @@
     <Compile Include="../../src/Baker.App/PlainLanguage.cs" Link="PlainLanguage.cs" />
     <Compile Include="../../src/Baker.App/ProgressPresentation.cs" Link="ProgressPresentation.cs" />
     <Compile Include="../../src/Baker.Cli/OptionTable.cs" Link="OptionTable.cs" /></ItemGroup>
-  <ItemGroup><None Include="../corpus/shader-corpus.json" Link="corpus/shader-corpus.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

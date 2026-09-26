@@ -162,7 +162,7 @@ internal static class HybridLoopAllocationChecks
         var swayReplan = Resolve(Replanned(new JsonArray(WarmStationary(), new JsonObject
         {
             ["kind"] = "NonPeriodicOrDriftingMechanism", ["owner_layer_id"] = 4, ["bounded_displacement"] = true,
-            ["mechanism"] = ShaderPeriodAnalysis.FoliageSwayMechanism, ["detail"] = "sway"
+            ["mechanism"] = "drift", ["detail"] = "sway"
         })));
         // 重查 plan 的拒因带编号（与真实 plan 一样），ReplannedResolution 按编号放过透视拒因。
         static JsonObject WithBlocker(JsonObject plan) { PlanBlockers.Set(plan, [new Blocker(BlockerCode.VideoShell)]); return plan; }

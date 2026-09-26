@@ -31,10 +31,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         HybridLoopService.ApplyPatches(scene, loop);
         await source.ExtractAsync(captureProject, cancellationToken);
         await File.WriteAllTextAsync(ProjectSource.ContainedPath(captureProject, source.SceneResource), scene.ToJsonString(), cancellationToken);
-        // The loop includes the retimed sway coefficients, not just the scene's speed constants.
-        // Keep these overrides in the capture copy: the candidate's retained suffix and the
-        // pristine composition reference must continue to use the authored shaders.
-        JsonArray patches = await ShaderTextPatch.WriteSwayRetimeAsync(captureProject, source, assets, loop, cancellationToken);
+        // 调速的覆盖 shader 只写进捕获副本：候选保留的后缀与原样合成参照仍用作者 shader。
+        JsonArray patches = await ShaderTextPatch.WriteTimeScaleAsync(captureProject, source, assets, scene, cancellationToken);
         JsonObject metadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
         ProjectWriter.ApplyPropertySnapshot(metadata, snapshot); metadata["file"] = source.SceneResource;
         await File.WriteAllTextAsync(Path.Combine(captureProject, "project.json"), metadata.ToJsonString(), cancellationToken);

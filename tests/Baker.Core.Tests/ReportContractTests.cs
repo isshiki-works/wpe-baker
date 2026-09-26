@@ -529,13 +529,8 @@ public class LoopItemContractTests
             Keys(new ScriptTimeUnresolved(1, JsonValue.Create("b"), JsonValue.Create("time")).ToJson()));
         Assert.Equal("kind,rejected_candidate_count,detail", Keys(new SpriteSeamUnresolved(2).ToJson()));
         var shader = new ShaderTemporalUnresolved(1, 0, 0, "r", ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "d");
-        Assert.Equal("""{"kind":"UnsupportedShaderMechanism","owner_layer_id":1,"effect_index":0,"pass_index":0,"resource":"r","detail":"d","bounded_displacement":false,"mechanism":null}""",
+        Assert.Equal("""{"kind":"UnsupportedShaderMechanism","owner_layer_id":1,"effect_index":0,"pass_index":0,"resource":"r","detail":"d","mechanism":null}""",
             new ShaderLoopUnresolved(shader).ToJson().ToJsonString());
-        // 带文案的着色器条目：detail 原位换成文案的英文原文，文案本身只在 DetailMessage 上。
-        var keyed = new ShaderLoopUnresolved(shader with { Message = new Message("unresolved.script_time") });
-        Assert.Equal(MessageCatalog.RenderLegacy("unresolved.script_time"), keyed.ToJson()["detail"]!.GetValue<string>());
-        Assert.Equal("kind,owner_layer_id,effect_index,pass_index,resource,detail,bounded_displacement,mechanism", Keys(keyed.ToJson()));
-        Assert.Equal("unresolved.script_time", keyed.DetailMessage!.Key);
     }
 }
 

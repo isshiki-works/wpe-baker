@@ -22,7 +22,7 @@ internal static class VideoDominanceChecks
         string unresolvedTrace = WriteTrace(root, "video-shell-unresolved-trace.json", clipSource, RuntimeLayers(effect: false),
             VideoPeriods(new JsonObject { ["source_owner_layer_id"] = 10, ["mechanism"] = "animation", ["track_name"] = "drift",
                 ["duration_seconds"] = 2.0, ["playback_rate"] = 1.0, ["looping"] = true, ["confidence"] = "low" }));
-        string shaderTrace = WriteTrace(root, "video-shell-shader-trace.json", shaderSource, RuntimeLayers(effect: false), VideoPeriods());
+        string shaderTrace = WriteTrace(root, "video-shell-shader-trace.json", shaderSource, RuntimeLayers(effect: false, clock: true), VideoPeriods());
         string partialTrace = WriteTrace(root, "video-shell-partial-trace.json", partialSource, RuntimeLayers(effect: false), VideoPeriods());
 
         async Task<JsonObject> PlanAsync(string name, string source, string trace, string videoShell = VideoDominance.RejectChoice) =>
@@ -253,11 +253,13 @@ internal static class VideoDominanceChecks
             """);
     }
 
-    private static JsonArray RuntimeLayers(bool effect)
+    private static JsonArray RuntimeLayers(bool effect, bool clock = false)
     {
         var materials = new JsonArray(new JsonObject { ["shader"] = "genericimage4", ["role"] = "source",
             ["uses_audio_spectrum"] = false, ["uses_system_media_thumbnail"] = false,
             ["active_uniforms"] = new JsonArray(), ["textures"] = new JsonArray("clip") });
+        // 引擎给的着色器时间签名：周期 2 s
+        if (clock) materials[0]!["time_signature"] = JsonNode.Parse("""{"kind":"periodic","periods":[{"seconds":2,"num":2,"den":1,"pi":false}],"reasons":[],"external":[],"transient":false}""");
         if (effect) materials.Add(new JsonObject { ["shader"] = "filmgrain", ["role"] = "effect",
             ["uses_audio_spectrum"] = false, ["uses_system_media_thumbnail"] = false,
             ["active_uniforms"] = new JsonArray(), ["textures"] = new JsonArray() });

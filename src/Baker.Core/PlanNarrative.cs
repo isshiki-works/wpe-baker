@@ -371,12 +371,6 @@ public static class PlanNarrative
         if (items.Length == 0) return null;
         var names = LayerNames(report);
         JsonObject[] mechanisms = items.Where(item => !StationaryParticle(item)).ToArray();
-        // 摆动改频开着、摆动项全部建了模型时，摆动项只是在等其余分量先解出候选，本身能被改频接住；
-        // 首条让给真正挡路的机制。只调整首条的挑选顺序，处数与判定不变。
-        if (report["loop"]?["sway_retime"] is JsonObject swayRetime && swayRetime["enabled"] is JsonValue enabled &&
-            enabled.TryGetValue(out bool swayOn) && swayOn && Number(swayRetime["sway_items"]) is double swayItems && swayItems > 0 &&
-            Number(swayRetime["modeled_items"]) == swayItems)
-            mechanisms = [.. mechanisms.OrderBy(item => Text(item["mechanism"]) == ShaderPeriodAnalysis.FoliageSwayMechanism ? 1 : 0)];
         // 同一粒子层可能有多条精灵轨道项，按层计数。
         string[] stationaryLayers = items.Where(StationaryParticle)
             .Select(item => Number(item["owner_layer_id"]) is double id ? names.GetValueOrDefault((int)id) ?? ((int)id).ToString(CultureInfo.InvariantCulture) : "?")

@@ -88,16 +88,6 @@ public static class ResidualMasking
         return (uint)a;
     }
 
-    /// <summary>
-    /// foliagesway 的 UV 位移幅度：着色器把八项正弦和乘以 amp = strength^2 * 0.005 写进纹理坐标，
-    /// 其中四项 sines 与四项 csines 分别构成两个坐标轴的和，单轴峰值上界取四项各自幅度之和。
-    /// </summary>
-    public const double FoliageSwayAmplitudeFactor = 0.005;
-    public const int FoliageSwaySineTerms = 4;
-
-    public static double FoliageSwayPeakOffsetFraction(double strength) =>
-        strength * strength * FoliageSwayAmplitudeFactor * FoliageSwaySineTerms;
-
     /// <summary>0.4 秒对应的整帧数，向上取整到至少一帧。</summary>
     public static uint CrossfadeFrames(uint fpsNumerator, uint fpsDenominator)
     {
@@ -462,11 +452,7 @@ public static class ResidualMasking
             ? Number(fractionLayer["canvas_fraction"]) : null;
         verdict["canvas_fraction"] = canvasFraction;
 
-        // 机制知识来自 ShaderPeriodAnalysis 写下的结构化字段，不按资源名匹配字样——同一套方程换个文件名，判定必须一致。
-        // 声明了幅度上界的位移机制单独分类（记下估算的峰值偏移），但一律不可掩盖。
         string mechanism = Text(item["mechanism"]);
-        if (kind == "NonPeriodicOrDriftingMechanism" && Flag(item["bounded_displacement"]))
-            return Converge(BoundedDisplacementVerdict(verdict, item, mechanism, objects, outputWidth), mechanism);
 
         if (kind == "runtime_animation" && owner is int spriteOwner)
         {
@@ -505,7 +491,6 @@ public static class ResidualMasking
         verdict["reason"] = provenNonPeriodic
             ? MessageCatalog.Get("residual.proven_nonperiodic_unbounded", MessageCatalog.Chinese, layerPrefix, kind, ceiling, detail)
             : MessageCatalog.Get("residual.unrecognized_unbounded", MessageCatalog.Chinese, layerPrefix, kind, detail);
-        if (mechanism == ShaderPeriodAnalysis.LightShaftDriftMechanism) AddLinearDriftGuidance(verdict, item, objects, loopCeiling);
         return provenNonPeriodic ? Converge(verdict, mechanism) : verdict;
     }
 
@@ -521,86 +506,6 @@ public static class ResidualMasking
         if (mechanism.Length == 0) return verdict;
         verdict["loop_convergence"] = "cannot";
         verdict["reason_key"] = NeverRepeatsReasonKey;
-        return verdict;
-    }
-
-    /// <summary>
-    /// 线性漂移（lightshafts 一族）的用户指引：数字全部由该 pass 的速率常量与着色器方程算出，不写壁纸名，
-    /// 也不针对任何一张壁纸。读不出速率常量时只给不带数字的一句，不编数。
-    /// </summary>
-    private static void AddLinearDriftGuidance(JsonObject verdict, JsonObject item, IReadOnlyDictionary<int, JsonObject> objects,
-        double loopCeiling)
-    {
-        string ceiling = loopCeiling.ToString("0.###", CultureInfo.InvariantCulture);
-        JsonObject? pass = AuthoredPass(item, objects);
-        double? speed = pass is null ? null : Scalar(pass, "rayspeed");
-        if (speed is not double value || !double.IsFinite(value) || value == 0)
-        {
-            verdict["user_guidance_zh"] = "这一层的特效让噪声贴图沿四条轴匀速漂移，偏移随时间线性增长、不回头，" +
-                $"在 {ceiling} 秒的循环上限内没有可用循环；调速只会等比缩放这四条速率，救不回来。" +
-                "请在 Wallpaper Engine 里关掉这一层后重新烘焙，或接受该层保持实时渲染。";
-            verdict["user_guidance_en"] = "This layer's effect drifts noise textures along four axes at a constant rate, " +
-                $"so the offset grows without ever returning and no loop exists within the {ceiling}-second ceiling; " +
-                "retiming scales all four rates equally and cannot recover it. Switch that layer off before baking, or keep it rendering live.";
-            return;
-        }
-        double rate = Math.Abs(value);
-        double fastest = 1 / (ShaderPeriodAnalysis.LightShaftDriftRates.Max() * rate);
-        double slowest = 1 / (ShaderPeriodAnalysis.LightShaftDriftRates.Min() * rate);
-        double joint = ShaderPeriodAnalysis.LightShaftJointRepeatUnits / rate;
-        verdict["axis_rates_per_second"] = new JsonArray(ShaderPeriodAnalysis.LightShaftDriftRates
-            .Select(coefficient => (JsonNode)JsonValue.Create(rate * coefficient)).ToArray());
-        verdict["fastest_axis_seconds"] = Math.Round(fastest, 3);
-        verdict["slowest_axis_seconds"] = Math.Round(slowest, 3);
-        verdict["joint_return_seconds"] = joint;
-        verdict["loop_ceiling_seconds"] = loopCeiling;
-        string fast = fastest.ToString("0.#", CultureInfo.InvariantCulture);
-        string slow = slowest.ToString("0.#", CultureInfo.InvariantCulture);
-        string together = joint.ToString("0.###E+00", CultureInfo.InvariantCulture);
-        verdict["user_guidance_zh"] = $"这一层的光轴效果让两张噪声贴图沿四条轴漂移，单轴回归周期是 {fast} 秒到 {slow} 秒，" +
-            $"四条轴合到一起要 {together} 秒，在 {ceiling} 秒的循环上限内不存在任何可用循环；" +
-            "调速只会等比缩放这四条速率，救不回来。请在 Wallpaper Engine 里关掉这一层后重新烘焙，或接受该层保持实时渲染。";
-        verdict["user_guidance_en"] = "This layer's light-shaft effect drifts two noise textures at four rates; the axes repeat only every " +
-            $"{fast} s to {slow} s and close together only after {together} s, so no loop exists within the " +
-            $"{ceiling}-second ceiling, and retiming scales all four rates equally. " +
-            "Switch that layer off before baking, or keep it rendering live.";
-    }
-
-    /// <summary>未解析分量指向的作者 pass（effects[effect_index].passes[pass_index]），取不到返回 null。</summary>
-    private static JsonObject? AuthoredPass(JsonObject item, IReadOnlyDictionary<int, JsonObject> objects)
-    {
-        int? owner = Id(item["owner_layer_id"]);
-        int effectIndex = Id(item["effect_index"]) ?? -1, passIndex = Id(item["pass_index"]) ?? -1;
-        return owner is int ownerId && objects.TryGetValue(ownerId, out JsonObject? ownerObject)
-            ? (ownerObject["effects"] as JsonArray)?.ElementAtOrDefault(effectIndex)?["passes"]?.AsArray()?.ElementAtOrDefault(passIndex) as JsonObject
-            : null;
-    }
-
-    /// <summary>
-    /// 声明了幅度上界的位移机制（foliagesway 这类着色器 UV/顶点抖动）。一律不可掩盖：残差是同一个元素在接缝两侧的位置不同，
-    /// 交叉淡化只会把位置跳变变成 0.4 秒的半透明双影，人眼定标（3648434762、3652446458、3750317749 的并排视频，max_k 12.8～24.4）
-    /// 判定明显。能算出峰值偏移时照样记下（uv_sway 一族：八项正弦和乘以 strength²·0.005），只作取证，不再参与裁决。
-    /// </summary>
-    private static JsonObject BoundedDisplacementVerdict(JsonObject verdict, JsonObject item, string mechanism,
-        IReadOnlyDictionary<int, JsonObject> objects, double canvasWidth)
-    {
-        verdict["classification"] = "displacement";
-        string named = mechanism.Length > 0 ? mechanism : ShaderPeriodAnalysis.FoliageSwayMechanism;
-        verdict["mechanism"] = named;
-        int? owner = Id(item["owner_layer_id"]);
-        verdict["maskable"] = false;
-        string layer = owner is int ownerId ? ownerId.ToString(CultureInfo.InvariantCulture) : "?";
-        verdict["reason"] = MessageCatalog.Get("residual.displacement_not_maskable", MessageCatalog.Chinese, layer, named);
-        verdict["reason_en"] = MessageCatalog.Get("residual.displacement_not_maskable", MessageCatalog.English, layer, named);
-        if (named != ShaderPeriodAnalysis.FoliageSwayMechanism) return verdict;
-        JsonObject? pass = AuthoredPass(item, objects);
-        double? strength = pass is null ? null : Scalar(pass, "strength");
-        if (strength is not double value || !double.IsFinite(value)) return verdict;
-        double fraction = FoliageSwayPeakOffsetFraction(Math.Abs(value));
-        verdict["strength"] = value;
-        verdict["peak_offset_uv"] = Math.Round(fraction, 8);
-        verdict["peak_offset_pixels"] = Math.Round(fraction * canvasWidth, 3);
-        verdict["peak_offset_basis"] = "strength² × 0.005 × 4 × 输出宽度，只记录不裁决。";
         return verdict;
     }
 
