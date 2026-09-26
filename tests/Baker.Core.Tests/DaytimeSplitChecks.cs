@@ -82,6 +82,9 @@ internal static class DaytimeSplitChecks
         var defaults = DaytimeSplit.Detect(ById(VideoScene(VideoSelector.Replace("timeVarying = false", "timeVarying = true", StringComparison.Ordinal))));
         check(defaults.IsRecognized && defaults.ThresholdSource == "script_defaults" && HoursAre(defaults.StateNamed("morning")!, [[5, 9]]),
             "没有属性快照时采用模板声明的开关与阈值默认值");
+        var escaping = DaytimeSplit.Detect(ById(VideoScene(VideoSelector.Replace("\"dusk\"", "\"../dusk\"", StringComparison.Ordinal))), properties: properties);
+        check(!escaping.IsRecognized && escaping.FallbackReason == "unsafe_video_state_names",
+            "状态名要拼进输出路径，含路径分隔符的图层名不识别成状态");
         string renamed = VideoSelector.Replace("'morningtime'", "'startHour'", StringComparison.Ordinal)
             .Replace("changedUserProperties.morningtime", "changedUserProperties.startHour", StringComparison.Ordinal);
         properties["startHour"] = "6";

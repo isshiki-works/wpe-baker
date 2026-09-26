@@ -35,6 +35,9 @@ internal sealed class WorkLayout(string outputDirectory)
     internal string CaptureSource => Path.Combine(Output, CaptureSourceName);
     internal string AnalysisRefresh => Output + ".analysis-refresh";
 
+    /// <summary>输出根或合成探针 / 参照已存在：烘焙会以 must-be-new 拒绝，这些不是本案建的，结束时不按登记表清理。</summary>
+    internal bool Occupied => Path.Exists(Output) || Siblings.Any(sibling => sibling.CompositionProbe && Path.Exists(Output + sibling.Suffix));
+
     /// <summary>合成被拒（含脚本报错门）时探针、参照要留给报告指路。</summary>
     internal static bool KeepsCompositionProbe(JsonObject? report) =>
         report?["probe_paths"] is JsonObject ||

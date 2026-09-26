@@ -255,9 +255,9 @@ public sealed class HybridBakeService(NativeTools tools)
     private async Task<JsonObject> BakeCleanedAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
         CancellationToken cancellationToken)
     {
-        if (request.ProbeFrames > 0 || request.KeepIntermediates)
-            return await BakeRunAsync(request, progress, cancellationToken);
         var layout = new WorkLayout(request.OutputDirectory);
+        if (request.ProbeFrames > 0 || request.KeepIntermediates || layout.Occupied)
+            return await BakeRunAsync(request, progress, cancellationToken);
         JsonObject? result = null;
         try { return result = await BakeRunAsync(request, progress, cancellationToken); }
         finally

@@ -23,6 +23,7 @@ internal static class DaytimeSplit
     private static readonly Regex ClockRead = new(@"\bnew\s+Date\s*\(\s*\)|\bDate\s*\.\s*now\b|\btimeOfDay\b", Options);
     private static readonly Regex HoursRead = new(@"\bgetHours\s*\(\s*\)", Options);
     private static readonly Regex GroupArray = new(@"\b(?:var|let|const)\s+(\w+)\s*=\s*\[\s*((?:(?:""[^""]*""|'[^']*')\s*,?\s*)+)\]", Options);
+    private static readonly Regex SafeStateName = new(@"^[\p{L}\p{N}_-]+\z", Options);
     private static readonly Regex StringLiteral = new(@"""([^""]*)""|'([^']*)'", Options);
     private static readonly Regex HourBranch = new(@"\bif\s*\(\s*(\w+)\s*>=\s*(\w+)\s*&&\s*\1\s*<\s*(\w+)\s*\)\s*\{\s*(\w+)\s*\(\s*(\w+)\s*\)\s*;?\s*\}", Options);
     private static readonly Regex ElseBranch = new(@"\}\s*else\s*\{\s*(\w+)\s*\(\s*(\w+)\s*\)\s*;?\s*\}", Options);
@@ -397,6 +398,9 @@ internal static class DaytimeSplit
         string[] stateNames = layerLiterals.Select(match => (match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value).ToLowerInvariant()).ToArray();
         if (stateNames.Any(string.IsNullOrWhiteSpace) || stateNames.Distinct().Count() != stateNames.Length)
             return Reject("ambiguous_video_state_names");
+        // 状态名会拼进输出路径（state-<名字>），只收字母、数字、下划线和连字符。
+        if (stateNames.Any(stateName => !SafeStateName.IsMatch(stateName)))
+            return Reject("unsafe_video_state_names");
         string Group(int index) => "video" + index.ToString(CultureInfo.InvariantCulture) + "Layers";
         // 已完整验证的模板归一化到现有组解析器；这里只生成数据，不执行源脚本。
         string normalized = "new Date().getHours(); layer.visible=true;\n" + string.Join("\n",
