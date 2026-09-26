@@ -1415,51 +1415,48 @@ std::optional<Rat> Rationalize(double x) {
     return std::nullopt;
 }
 
-// 周期按可公度类归并：有理秒数一类、有理倍 π 一类，类内取 LCM；两类都不是的各自单列。
-// 先按来源的类化成有理数；另一类只在分母很小（≤ 12，如 M_PI_2 这类浮点 π 字面量）且更小时才改用。
+// 周期按可公度类归并。类按来源的 π 次数定（sin/cos/tan 为 π 类，fract/mod/滚动为有理类）；另一类只在分母很小
+// （≤ 12，如 M_PI_2 这类浮点 π 字面量）且更小时才改用。类内以最短周期为基准，其余周期与它的比值化成有理数
+// （分母 ≤ 10⁶）即可公度，组周期 = 基准 × 各比值的 LCM；化不成的另起一组（周期比无理，交给调速）。
 std::vector<Period> Classes(const std::vector<Per>& periods) {
-    std::vector<Period> out;
-    std::optional<Rat>  acc[2];
-    bool                overflow[2] { false, false };
-    double              approx[2] { 0, 0 };
+    std::vector<double> by_class[2];
     for (const Per& per : periods) {
         const double p = per.s;
         if (! (p > 0) || ! std::isfinite(p)) continue;
-        const auto r1 = Rationalize(p), r2 = Rationalize(p / kPi);
+        const auto  r1 = Rationalize(p), r2 = Rationalize(p / kPi);
         const auto& natural = per.pi ? r2 : r1;
         const auto& other   = per.pi ? r1 : r2;
         const bool  swap    = other && other->q <= 12 && (! natural || other->q < natural->q);
-        const bool  pi      = per.pi ? ! swap : swap;
-        const auto  r       = pi ? r2 : r1;
-        if (! r) {
-            out.push_back(Period { .seconds = p });
-            continue;
-        }
-        const int c = pi ? 1 : 0;
-        approx[c]   = std::max(approx[c], p);
-        if (overflow[c]) continue;
-        if (! acc[c]) {
-            acc[c] = r;
-            continue;
-        }
-        const long long g  = std::gcd(acc[c]->p, r->p);
-        const __int128  l  = (__int128)(acc[c]->p / g) * r->p;
-        const long long gq = std::gcd(acc[c]->q, r->q);
-        if (l > (__int128)1000000000000000LL)
-            overflow[c] = true;
-        else
-            acc[c] = Rat { (long long)l, gq };
+        by_class[(per.pi != 0) != swap ? 1 : 0].push_back(p);
     }
+    std::vector<Period> out;
     for (int c = 0; c < 2; ++c) {
-        if (overflow[c])
-            out.insert(out.begin(), Period { .seconds = std::max(approx[c], 1e15), .pi = c == 1 });
-        else if (acc[c]) {
-            const long long g = std::gcd(acc[c]->p, acc[c]->q);
-            const Rat       r { acc[c]->p / g, acc[c]->q / g };
-            out.insert(out.begin(), Period { .seconds = double(r.p) / double(r.q) * (c == 1 ? kPi : 1.0),
-                                              .num     = r.p,
-                                              .den     = r.q,
-                                              .pi      = c == 1 });
+        std::sort(by_class[c].begin(), by_class[c].end());
+        struct Group {
+            double    base;
+            long long lcm { 1 };
+            long long gcd { 0 };
+            bool      overflow { false };
+        };
+        std::vector<Group> groups;
+        for (double p : by_class[c]) {
+            bool merged = false;
+            for (Group& g : groups) {
+                const auto r = Rationalize(p / g.base);
+                if (! r) continue;
+                const __int128 l = (__int128)(g.lcm / std::gcd(g.lcm, r->p)) * r->p;
+                g.overflow       = g.overflow || l > (__int128)1000000000000000LL;
+                if (! g.overflow) g.lcm = (long long)l;
+                g.gcd  = std::gcd(g.gcd, r->q);
+                merged = true;
+                break;
+            }
+            if (! merged) groups.push_back(Group { .base = p, .gcd = 1 });
+        }
+        for (const Group& g : groups) {
+            const double seconds = g.overflow ? 1e300 : g.base * double(g.lcm) / double(g.gcd);
+            const auto   r       = g.overflow ? std::nullopt : Rationalize(c ? seconds / kPi : seconds);
+            out.push_back(Period { .seconds = seconds, .num = r ? r->p : 0, .den = r ? r->q : 0, .pi = c == 1 });
         }
     }
     return out;
