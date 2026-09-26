@@ -249,16 +249,34 @@ struct VideoSource::Impl {
         tail.reset();
     }
 
-    auto next_frame(Nv12Frame& out) -> std::optional<NextFrame> {
-        bool looped = false;
-
+    auto to_nv12(Nv12Frame& out) -> bool {
+        if (! out.decoded) return true;
+        const AVFrame& feed = *static_cast<const AVFrame*>(out.decoded.get());
+        if (! ensure_sws(feed)) return false;
         // 输出缓冲按 NV12 尺寸定长（解码器生命周期内尺寸固定）。4:2:0 色度向上取整：
         // UV 平面 ceil(w/2) × ceil(h/2) 个 (U,V) 对，行距 2×ceil(w/2)（奇数宽高时 swscale 就写这么多）。
         const std::size_t uv_pitch = std::size_t((target_width + 1) / 2) * 2;
         const std::size_t want =
             std::size_t(target_width) * target_height + uv_pitch * ((target_height + 1) / 2);
         if (out.data.size() != want) out.data.resize(want, 0);
+        std::uint8_t* dst_planes[4]  = { out.data.data(),
+                                         out.data.data() + std::size_t(target_width) * target_height,
+                                         nullptr,
+                                         nullptr };
+        int           dst_strides[4] = { static_cast<int>(target_width),
+                                         static_cast<int>(uv_pitch),
+                                         0,
+                                         0 };
+        if (sws_scale(sws, feed.data, feed.linesize, 0, feed.height, dst_planes, dst_strides) <= 0)
+            return fail("sws_scale produced no rows");
+        out.colorspace  = sws_out_colorspace;
+        out.color_range = sws_out_color_range;
+        out.decoded.reset();
+        return true;
+    }
 
+    auto next_frame(Nv12Frame& out, bool convert) -> std::optional<NextFrame> {
+        bool looped = false;
         while (true) {
             int rc = avcodec_receive_frame(cctx, src_frame);
             if (rc == 0) {
@@ -269,25 +287,21 @@ struct VideoSource::Impl {
                     fail("decoded frame has invalid dimensions/format");
                     return std::nullopt;
                 }
-                if (! ensure_sws(feed)) return std::nullopt;
-                std::uint8_t* dst_planes[4]  = { out.data.data(),
-                                                 out.data.data() + std::size_t(target_width) * target_height,
-                                                 nullptr,
-                                                 nullptr };
-                int           dst_strides[4] = { static_cast<int>(target_width),
-                                                 static_cast<int>(uv_pitch),
-                                                 0,
-                                                 0 };
-                if (sws_scale(sws, feed.data, feed.linesize, 0, feed.height, dst_planes, dst_strides) <= 0) {
-                    fail("sws_scale produced no rows");
-                    return std::nullopt;
-                }
                 const std::int64_t pts =
                     feed.best_effort_timestamp != AV_NOPTS_VALUE ? feed.best_effort_timestamp : feed.pts;
                 out.pts_seconds = pts == AV_NOPTS_VALUE ? -1.0 : static_cast<double>(pts) * av_q2d(stream_tb);
-                out.colorspace  = sws_out_colorspace;
-                out.color_range = sws_out_color_range;
-                av_frame_unref(src_frame);
+                // 帧数据按引用交给 out（不拷贝）；src_frame 清空后留给下一次解码。
+                AVFrame* held = av_frame_alloc();
+                if (! held) {
+                    fail("av_frame_alloc failed");
+                    return std::nullopt;
+                }
+                av_frame_move_ref(held, src_frame);
+                out.decoded = std::shared_ptr<void>(held, [](void* frame) {
+                    auto* f = static_cast<AVFrame*>(frame);
+                    av_frame_free(&f);
+                });
+                if (convert && ! to_nv12(out)) return std::nullopt;
                 return looped ? NextFrame::Looped : NextFrame::Ok;
             }
             if (rc == AVERROR_EOF) {
@@ -377,7 +391,10 @@ auto VideoSource::open(owe::io::RangeReader source, std::uint32_t target_width,
     return m_impl->open(target_width, target_height);
 }
 
-auto VideoSource::next_frame(Nv12Frame& out) -> std::optional<NextFrame> { return m_impl->next_frame(out); }
+auto VideoSource::next_frame(Nv12Frame& out, bool convert) -> std::optional<NextFrame> {
+    return m_impl->next_frame(out, convert);
+}
+auto VideoSource::to_nv12(Nv12Frame& frame) -> bool { return m_impl->to_nv12(frame); }
 
 auto VideoSource::seek(double seconds) -> bool {
     if (! std::isfinite(seconds) || seconds < 0.0)
