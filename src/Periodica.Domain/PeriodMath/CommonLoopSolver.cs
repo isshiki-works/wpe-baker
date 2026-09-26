@@ -12,7 +12,8 @@ public enum CommonLoopPreference { Performance, Balanced, Quality }
 public sealed record CommonLoopPeriod(double Seconds, CommonLoopPeriodEvidence Evidence,
     CommonLoopRational? ExactSeconds = null);
 
-public sealed record CommonLoopComponent(string Id, CommonLoopPeriod? BasePeriod, bool AllowRetime = false);
+/// <param name="MaximumRetimePercent">本分量自己的调速上限（百分比）；null = 用请求的 MaximumRetimePercent。</param>
+public sealed record CommonLoopComponent(string Id, CommonLoopPeriod? BasePeriod, bool AllowRetime = false, double? MaximumRetimePercent = null);
 
 public enum CommonLoopConstraintKind
 {
@@ -221,10 +222,12 @@ public static class CommonLoopSolver
             }
 
             double idealCycles = seconds / period.Seconds;
-            double tolerance = request.MaximumRetimePercent / 100;
-            double lower = Math.Ceiling(idealCycles * (1 - tolerance) - 1e-12);
+            double tolerance = (component.MaximumRetimePercent ?? request.MaximumRetimePercent) / 100;
+            // 周期超过循环上限的分量在自身上限 ≥ 100% 时可以冻结（0 圈，与 1.0.2 一致），取离原速最近的圈数；其余至少一圈
+            bool freezable = request.MaximumDuration is { } ceiling && period.Seconds > ceiling.ToSeconds();
+            double lower = Math.Max(freezable ? 0 : 1, Math.Ceiling(idealCycles * (1 - tolerance) - 1e-12));
             double upper = Math.Floor(idealCycles * (1 + tolerance) + 1e-12);
-            if (upper < 1 || lower > upper || lower > ulong.MaxValue)
+            if (lower > upper || lower > ulong.MaxValue)
             {
                 constraints.Add(new(component.Id, CommonLoopConstraintKind.RetimeOutsideLimit,
                     "No positive integer cycle count fits the allowed local speed adjustment."));
