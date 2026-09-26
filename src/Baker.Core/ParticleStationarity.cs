@@ -369,8 +369,19 @@ internal static class ParticleStationarity
 
         // ---- C7 脚本：对象及祖先被脚本逐帧驱动或写入 ----
         // 脚本读外部输入（日时、音频、指针、媒体；初始化时注册也算）：输出依赖外部量，不是时间的周期函数，判不能。
-        // 其余脚本的输出随时间怎样变要做确定性分析（常数 / a·t+b / 周期集合 / 不周期，与着色器时间签名同一个域），还没有，标未收敛。
+        // 其余按脚本时间签名（ScriptTime）：证为静态的不挡（settle 记进预热），证为不能的判不能；周期的还没接进锁定，与推不出的一样标未收敛。
         int[] chain = Chain(owner, objects);
+        double scriptSettle = 0;
+        var scriptVerdicts = new Dictionary<JsonObject, ScriptTime.Verdict>();
+        void Script(string condition, string node, IEnumerable<ScriptTime.Binding> bindings, JsonNode? value)
+        {
+            ScriptTime.Verdict[] verdicts = clock is FrameClock frame ? [.. bindings.Select(b => scriptVerdicts.TryGetValue(b.Node, out var known) ? known :
+                scriptVerdicts[b.Node] = ScriptTime.Analyze(b, frame.FpsNumerator, frame.FpsDenominator,
+                    Math.Min(ParticleCriteria.MaximumPeriodFrames(frame.LoopCeilingSeconds, frame.FpsNumerator, frame.FpsDenominator), 1_000_000)))] : [];
+            if (verdicts.Length > 0 && verdicts.All(v => v.Outcome == ScriptTime.Outcome.Static)) scriptSettle = Math.Max(scriptSettle, verdicts.Max(v => v.Settle));
+            else if (verdicts.FirstOrDefault(v => v.Outcome == ScriptTime.Outcome.Cannot) is { } cannot) Cannot(condition, cannot.Code, node, value);
+            else Fail(condition, "script_period_not_derived", node, value);
+        }
         if (runtime?["runtime_dependencies"] is not JsonArray dependencies)
             Fail("C7", "script_evidence_unavailable", "runtime_dependencies");
         else
@@ -391,14 +402,19 @@ internal static class ParticleStationarity
                         Text(other["binding"]) == Text(dependency["binding"]) && Text(other["operation"]) == "input")
                     .Select(other => "input:" + Text(other["property"])).Distinct().ToArray();
                 if (inputs.Length > 0) Cannot("C7", "script_reads_external_input", node, JsonValue.Create(string.Join(",", inputs)));
-                else Fail("C7", "script_period_not_derived", node, JsonValue.Create($"{operation}:{Text(dependency["property"])}"));
+                // 写动画/精灵轨道是播放控制，时间签名不把它算作输出，照旧未收敛
+                else Script("C7", node, operation == "write" && Text(dependency["property"]) is "animation" or "textureAnimation" ||
+                        scriptOwner is not int script || !objects.TryGetValue(script, out JsonObject? holder) ? [] :
+                        ScriptTime.Of(holder, script).Where(b => b.Name == Text(dependency["binding"])),
+                    JsonValue.Create($"{operation}:{Text(dependency["property"])}"));
             }
 
         // ---- C8 覆盖与对象属性：常数、静态属性绑定，或周期已由渲染器动画轨道证明的关键帧 ----
         // 作者脚本驱动的值（覆盖或属性）：脚本挂在本对象或祖先上，读外部输入的已由 C7 判不能；其余同 C7 标未收敛。
         foreach ((string key, JsonNode? value) in overrides)
             if (key == "id" || IsConstantBinding(value)) continue;
-            else if (value is JsonObject { } scripted && scripted["script"] is not null) Fail("C8", "script_period_not_derived", "instanceoverride." + key, value);
+            else if (value is JsonObject { } scripted && scripted["script"] is not null)
+                Script("C8", "instanceoverride." + key, [new(SceneGraph.Int(owner["id"]) ?? -1, key, null, scripted, owner)], value);
             else Fail("C8", "override_not_constant", "instanceoverride." + key, value);
         var tracks = new List<(string Node, int Id, JsonObject Binding)>();
         foreach (int id in chain)
@@ -406,7 +422,7 @@ internal static class ParticleStationarity
             JsonObject item = objects.TryGetValue(id, out JsonObject? found) ? found : owner;
             foreach (string key in ParticleCriteria.AncestorMotionKeys)
                 if (item[key] is not JsonObject binding || IsConstantBinding(binding)) continue;
-                else if (binding["script"] is not null) Fail("C8", "script_period_not_derived", $"object[{id}].{key}", binding);
+                else if (binding["script"] is not null) Script("C8", $"object[{id}].{key}", [new(id, key, null, binding, item)], binding);
                 // 关键帧：发射器随动画轨道周期运动，粒子层是按轨道周期的周期平稳过程，锁到轨道周期（见下方锁定）。
                 else if (binding["animation"] is JsonObject) tracks.Add(($"object[{id}].{key}", id, binding));
                 else Fail("C8", "property_animated", $"object[{id}].{key}", binding);
@@ -437,7 +453,7 @@ internal static class ParticleStationarity
         {
             // 事件子系统的实例在父粒子死后还要走完子寿命：相关跨度与预热各加尾长（CheckEventChild）。
             lifetime = ParticleCriteria.Round(authoredLifetime * lifetimeScale / rateScale + childTail);
-            warmup = ParticleCriteria.WarmupSeconds(start, authoredLifetime, lifetimeScale, generations, periodicWarmup, rateScale) + childTail;
+            warmup = ParticleCriteria.WarmupSeconds(start, authoredLifetime, lifetimeScale, generations, periodicWarmup, rateScale) + childTail + scriptSettle;
         }
         // 同层的几把锁（封顶/爆发的计数周期、湍流场周期、关键帧轨道周期、static 子系统的锁）合成一把：周期取各自最小周期的最小公倍数，
         // 起点取最晚的。公倍数超过循环上限就是上限内不会同时回到同一相位，判"不能"并写出各分量。

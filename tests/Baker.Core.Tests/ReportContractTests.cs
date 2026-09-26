@@ -466,6 +466,9 @@ public class LoopItemContractTests
         Assert.Equal("script_state_not_closed", Run("export function update(value) { value.x += scriptProperties.x; return value; }").Code);
         Assert.Equal((ScriptTime.Outcome.Cannot, "script_reads_external_input"),
             Run("export function update(value) { value.x = input.cursorWorldPosition.x; return value; }") is var input ? (input.Outcome, input.Code) : default);
+        // 本层动画速率设成烘焙期常量：轨道周期由运行时观测的速率给出，脚本本身静态；速率随时间变说不清
+        Assert.Equal(ScriptTime.Outcome.Static, Run("let a;\nexport function init() { a = thisLayer.getAnimation(); a.rate = scriptProperties.x; }\nexport function update() { if (a) a.rate = scriptProperties.x; }", "alpha").Outcome);
+        Assert.Equal("animation_rate_varies", Run("export function update() { thisLayer.getAnimation().rate = 1 + Math.sin(engine.runtime); }", "alpha").Code);
     }
 
     [Fact]
