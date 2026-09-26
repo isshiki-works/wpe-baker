@@ -150,6 +150,8 @@ public sealed class HybridBakeService(NativeTools tools)
                     ["full_loop_layer_ids"] = JsonSerializer.SerializeToNode(fullLoop), ["reason"] = "own_period_seam_rejected" },
                 settings => settings with { FullLoopLayerIds = fullLoop }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
+        // 残差掩盖组在第一层被拒：组里被掩盖的粒子留实时，重新分析再烘。重烘走 BakeAsync，重烘后新被拒的残差组接着留实时
+        // （留实时的层不再进视频，每轮至少多留一层，层数有限）。
         if (ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
         progress?.Report(new("retaining_residual_particles", null, new Message("progress.retaining_residual_particles")));
         return await RetryReplannedAsync(request, result, "residual_particle_retry", ".residual-first-attempt", new JsonObject {
@@ -157,7 +159,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 ["first_rejected_groups"] = new JsonArray([.. (result["groups"] as JsonArray ?? []).OfType<JsonObject>()
                     .Where(group => group["status"]?.GetValue<string>() == "rejected_seam_residual").Select(group => group["id"]?.DeepClone())]) },
             settings => settings with { RetainLiveRootIds = retain, RetainLiveReasons = reasons },
-            retry => BakeCleanedAsync(retry, progress, cancellationToken), progress, cancellationToken);
+            retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
     }
 
     /// <summary>计划里首个循环候选的时长（秒）；没有候选时 null。</summary>
