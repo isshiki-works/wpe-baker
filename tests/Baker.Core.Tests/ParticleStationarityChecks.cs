@@ -254,9 +254,14 @@ internal static class ParticleStationarityChecks
         // ---- C3 湍流算子：随子系统时间沿 x 平移的共享确定性场（Perlin 表周期 256）----
         Fixture withTurbulence = Mutate(droplets, (_, definition, _) => definition["operator"]!.AsArray().Add(new JsonObject { ["name"] = "turbulence" }));
         JsonObject turbulenceVerdict = Verdict(withTurbulence);
-        check(Only(turbulenceVerdict, "C3 turbulence_shared_field") &&
-            FailureValue(turbulenceVerdict, "turbulence_shared_field").Contains("\"field_period_system_seconds\":640", StringComparison.Ordinal),
-            "C3 反例：加一个缺省参数的 turbulence 算子（timescale 20、scale 0.01、speed 500–1000）后不放行，快照记场周期 256 / (2 × 0.01 × 20) = 640 系统秒");
+        check(Stationary(turbulenceVerdict) &&
+            turbulenceVerdict["cyclostationary_lock"]?["component"]?.GetValue<string>().StartsWith("particle_field/153/", StringComparison.Ordinal) == true,
+            "C3 正例：缺省参数的 turbulence 算子（timescale 20、scale 0.01）场周期 256 / (2 × 0.01 × 20) = 640 系统秒，÷ rate 覆盖后在上限内，循环长度锁到场周期 " +
+            turbulenceVerdict.ToJsonString());
+        JsonObject slowField = Verdict(Mutate(withTurbulence, (_, definition, _) => Node(definition, "operator", "turbulence")["scale"] = 0.001));
+        check(Only(slowField, "C3 turbulence_shared_field") && slowField["loop_convergence"]?.GetValue<string>() == "cannot" &&
+            FailureValue(slowField, "turbulence_shared_field").Contains("\"field_period_system_seconds\":6400", StringComparison.Ordinal),
+            "C3 反例：scale 0.001 时场周期 6400 系统秒，循环上限内不会重复，判不能并写出周期 " + slowField.ToJsonString());
         check(Stationary(Verdict(Mutate(withTurbulence, (_, definition, _) => Node(definition, "operator", "turbulence")["timescale"] = 0))),
             "C3 正例：turbulence 的 timescale 为 0 时场静止，每个粒子的轨迹只是自身标记的函数，放行");
         check(Stationary(Verdict(Mutate(withTurbulence, (_, definition, _) => {
@@ -267,8 +272,9 @@ internal static class ParticleStationarityChecks
             "C3 正例：turbulence 的 mask 全 0 时算子不起作用，放行");
 
         // ---- C1 发射器 ----
-        check(Codes(Verdict(Load("3151551777", 799))).Contains("C1 emitter_burst"),
-            "C1 反例：3151551777 层 799 的 instantaneous 20 是爆发发射，不放行");
+        JsonObject burstVerdict = Verdict(Load("3151551777", 799));
+        check(!Codes(burstVerdict).Contains("C1 emitter_burst"),
+            "C1 正例：3151551777 层 799 的 instantaneous 20 只在系统空时发（开场一次），寿命有界，预热内死光，这一条放行 " + string.Join(",", Codes(burstVerdict)));
         var defaultRate = Load("3516174947", 171);
         var explicitRate = Mutate(defaultRate, (_, definition, _) => {
             foreach (JsonObject emitter in definition["emitter"]!.AsArray().OfType<JsonObject>())
@@ -320,7 +326,8 @@ internal static class ParticleStationarityChecks
 
         // ---- C5 子系统 ----
         check(NoCondition(rainVerdict, "C5") && NoCondition(dropletsVerdict, "C5"), "C5 正例：children 缺省或为 null 放行");
-        check(Codes(rainScreenVerdict).Contains("C5 child_type_unverified"), "C5 反例：Gouttes de pluie 4k 130 的子系统没写 type（static，常驻系统），没有核过，不放行");
+        check(!Codes(rainScreenVerdict).Contains("C5 child_type_unverified"),
+            "C5 正例：Gouttes de pluie 4k 130 的子系统没写 type（渲染器缺省 static，常驻系统），按全套条件递归判 " + string.Join(",", Codes(rainScreenVerdict)));
         // 事件子系统递归：水滴 153 在出生时各带一个 352 实例（子寿命 0.5 × 覆盖 2.0 / 1.29）；实例上限按 maxcount 32 ×（2 + ⌊子寿命 / 父寿命下界⌋）判。
         Fixture Spawner(JsonNode? cap) => Mutate(droplets, (_, definition, _) => definition["children"] = new JsonArray(new JsonObject
             { ["type"] = "eventspawn", ["name"] = "particles/particle-352.json", ["maxcount"] = cap }));
@@ -362,7 +369,7 @@ internal static class ParticleStationarityChecks
 
         // ---- C9 渲染器与精灵帧 ----
         check(NoCondition(rainVerdict, "C9") && NoCondition(dropletsVerdict, "C9"), "C9 正例：spritetrail + randomframe 放行");
-        check(Codes(trails).Contains("C9 renderer_kind"), "C9 反例：rope 渲染器不放行");
+        check(NoCondition(trails, "C9"), "C9 正例：rope 渲染器把粒子按出生顺序连成带，是粒子状态的确定函数，这一条放行 " + string.Join(",", Codes(trails)));
         var defaultRenderer = Mutate(Load("3151551777", 793), (obj, _, _) => obj.Remove("visible"));
         var explicitRenderer = Mutate(defaultRenderer, (_, definition, _) =>
             definition["renderer"] = new JsonArray(new JsonObject { ["name"] = "sprite" }));
@@ -408,9 +415,9 @@ internal static class ParticleStationarityChecks
             ResidualMasking.ResidualOwners(mixedResidual).SequenceEqual([153, 352]) &&
             blockedParticles.Select(item => item["owner_layer_id"]!.GetValue<int>()).Order().SequenceEqual([130, 560]) &&
             residualReport["candidates"]!.AsArray().OfType<JsonObject>().All(candidate => candidate["frames"]!.GetValue<ulong>() % 48 == 0) &&
-            blockedParticles.Single(item => item["owner_layer_id"]!.GetValue<int>() == 130)["reason"]!.GetValue<string>().Contains("C5 child_type_unverified", StringComparison.Ordinal) &&
+            blockedParticles.Single(item => item["owner_layer_id"]!.GetValue<int>() == 130)["reason"]!.GetValue<string>().Contains("C6 shader_reads_framebuffer", StringComparison.Ordinal) &&
             blockedParticles.Single(item => item["owner_layer_id"]!.GetValue<int>() == 560)["reason"]!.GetValue<string>().Contains("C4 controlpoint_follows_cursor", StringComparison.Ordinal),
-            "残差掩盖读真实粒子定义的判据结论：水滴 153 与锁定周期的雨透视 352 可掩盖（候选全是 48 帧的倍数）；带子系统的 130 与跟鼠标的 560 不可掩盖，理由列出条件代号");
+            "残差掩盖读真实粒子定义的判据结论：水滴 153 与锁定周期的雨透视 352 可掩盖（候选全是 48 帧的倍数）；材质读帧缓冲的 130 与跟鼠标的 560 不可掩盖，理由列出条件代号");
         JsonArray stationaryItems = new([.. residualReport["unresolved"]!.AsArray().OfType<JsonObject>()
             .Where(item => item["owner_layer_id"]!.GetValue<int>() is 153).Select(item => (JsonNode)item.DeepClone())]);
         JsonObject dropletPlan = ResidualPlan(stationaryItems, [65], [153, 352]);

@@ -26,7 +26,8 @@ internal static class ParticleCriteria
 
     internal static readonly HashSet<string> OscillateOperators = new(StringComparer.Ordinal) { "oscillateposition", "oscillatealpha", "oscillatesize" };
 
-    internal static readonly HashSet<string> Renderers = new(StringComparer.Ordinal) { "sprite", "spritetrail" };
+    /// <summary>rope / ropetrail（渲染器 SceneParticleObjectParser）把粒子按出生顺序连成带，仍是粒子状态的确定函数：状态平稳则画面平稳。</summary>
+    internal static readonly HashSet<string> Renderers = new(StringComparer.Ordinal) { "sprite", "spritetrail", "rope", "ropetrail" };
 
     /// <summary>
     /// 精灵帧的取法：缺省与 sequence 按粒子年龄推进，randomframe 每个粒子出生时抽一帧，都是每粒子的标记。
