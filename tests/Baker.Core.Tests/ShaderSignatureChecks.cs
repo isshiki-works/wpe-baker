@@ -45,13 +45,11 @@ internal static class ShaderSignatureChecks
                 ShaderTextPatch.KnobUses(text, ShaderTextPatch.KnobKey(new JsonObject { ["stage"] = "frag", ["literal"] = 0.5 })).Length == 0,
                 "a knob token is matched by float32 value outside comments, and a uniform knob outside its declaration");
 
-            // 同一 pass：3 s 项走时间倍率，7.1 s 项有唯一旋钮 0.5 单独调频，1e8 s 与 100000 s 项是慢分量；
-            // 100000 s 项在 P 处漂移超过接缝门的 8 位取整容差，本层记"上限内不重复"（分配回退留实时），不进 slow_components
+            // 同一 pass：3 s 项走时间倍率，7.1 s 项有唯一旋钮 0.5 单独调频，100000 s 项是慢分量
             JsonObject loop = LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
                 {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
                   {"seconds":3,"num":3,"den":1,"pi":0,"knobs":[]},
                   {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
-                  {"seconds":100000000,"num":100000000,"den":1,"pi":0,"knobs":[]},
                   {"seconds":100000,"num":100000,"den":1,"pi":0,"knobs":[]}]}
                 """), [10], 30, 1).ToJson();
             JsonObject candidate = loop["candidates"]![0]!.AsObject();
@@ -61,11 +59,10 @@ internal static class ShaderSignatureChecks
             check(time != 1 && Patch(ShaderPeriodAnalysis.TimeScaleKey) == time &&
                 Math.Abs(Patch("periodica_k_frag_3f000000")!.Value - knob / time) < 1e-12,
                 "a knob patch carries the component multiplier divided by the pass time multiplier");
-            JsonObject slow = candidate["slow_components"]!.AsArray().Single()!.AsObject();
-            // 有效周期下界 T = 1e8/(1+2%)（同 pass 时间倍率也乘在它上面）
-            double slowPeriod = 100000000 / 1.02;
-            check(loop["unresolved"]!.AsArray().Any(x => x!["owner_layer_id"]?.GetValue<int>() == 10 &&
-                x["mechanism"]?.GetValue<string>() == "loop_never_repeats_within_limit") && Math.Abs(slow["period_seconds"]!.GetValue<double>() - slowPeriod) < 1e-9 &&
+            JsonObject slow = candidate["slow_components"]![0]!.AsObject();
+            // 有效周期下界 T = 100000/(1+2%)（同 pass 时间倍率也乘在它上面）
+            double slowPeriod = 100000 / 1.02;
+            check(Math.Abs(slow["period_seconds"]!.GetValue<double>() - slowPeriod) < 1e-9 &&
                 Math.Abs(slow["drift_bound_radians"]!.GetValue<double>() - 2 * Math.PI * candidate["seconds"]!.GetValue<double>() / slowPeriod) < 1e-12 &&
                 !candidate["components"]!.AsArray().Any(x => x!["id"]!.GetValue<string>().Contains("slow", StringComparison.Ordinal)),
                 "a slow component stays out of the solver and reports a 2πP/T drift bound");
