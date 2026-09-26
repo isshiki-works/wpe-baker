@@ -24,14 +24,13 @@ internal static class PlainLanguage
     // ---------------------------------------------------------------------------------------
 
     /// <summary>
-    /// 结论第一行：固定四种状态文本之一，不带数字、不带依据、不拼句。依据一律进"详情"面板（见 <see cref="Basis"/>）。
+    /// 结论第一行：固定四种状态文本之一，不带数字、不带依据、不拼句。依据一律进"详情"面板。
     /// 还没分析时返回空串，界面自己显示"未评估"。
     /// </summary>
     public static string Verdict(JsonObject? plan, bool english)
     {
         if (plan is null) return "";
-        if (NoBenefitExpected(plan)) return L(english, "不支持", "Not supported");
-        if (CannotBakeReason(plan, english) is not null) return L(english, "不支持", "Not supported");
+        if (NoBenefitExpected(plan) || CannotBake(plan)) return L(english, "不支持", "Not supported");
         string? value = plan[BakeValueAssessment.Field]?["status"]?.GetValue<string>();
         if (value == "potential_gain") return L(english, "可以生成，预计省电", "Ready to generate, likely saves power");
         if (value == "low_value") return L(english, "可以生成，预计省电较少", "Ready to generate, small power saving expected");
@@ -42,7 +41,7 @@ internal static class PlainLanguage
     /// <summary>分析判定预计不省电：界面上一律不生成（只有命令行 --no-benefit allow 能覆盖）。</summary>
     public static bool NoBenefitExpected(JsonObject? plan) => plan?[NoBenefit.Field]?["status"]?.GetValue<string>() == NoBenefit.ExpectedStatus;
 
-    /// <summary>结论第二行：固定一句；命中的条件（主因）进"详情"，见 <see cref="Basis"/>。</summary>
+    /// <summary>结论第二行：固定一句；命中的条件（主因）进"详情"。</summary>
     public static string NoBenefitLine(bool english) =>
         L(english, "预计功耗高于原壁纸", "Estimated power use is higher than the original wallpaper.");
 
@@ -50,73 +49,25 @@ internal static class PlainLanguage
     /// 结论第二行：生成不了时指向详情，其余显示数字行（见 <see cref="Numbers"/>）。
     /// </summary>
     public static string NextAction(JsonObject? plan, bool english) =>
-        plan is not null && CannotBakeReason(plan, english) is not null
+        plan is not null && CannotBake(plan)
             ? L(english, "未找到可用的生成方式", "No usable way to generate was found") : Numbers(plan, english);
 
     /// <summary>
-    /// 结论的依据一句：路线说明或拒绝原因。只进"详情"面板，不进结论前两行。
+    /// 烘不了（能烘、含"关掉几样就能烘"时为 false）。原因句不在这里写，界面第二行读 blockers_localized 的第一条。
+    /// 判据全部来自 plan 已有的字段：取舍清单的状态、suitability 的 rule、阻塞原因的 key、有没有循环。
     /// </summary>
-    public static string Basis(JsonObject? plan, bool english)
+    private static bool CannotBake(JsonObject plan)
     {
-        if (plan is null) return "";
-        if (NoBenefitExpected(plan))
-        {
-            string text = NoBenefit.Describe(plan, english);
-            return english && text.Length > 0 ? char.ToUpperInvariant(text[0]) + text[1..] + "." : text + "。";
-        }
-        if (CannotBakeReason(plan, english) is string reason)
-            return L(english, "不可生成：", "Cannot generate: ") + reason;
-        if (plan[BakeValueAssessment.Field]?[english ? "reason_en" : "reason_zh"]?.GetValue<string>() is { Length: > 0 } valueReason)
-            return valueReason;
-        // 旧报告只有静态状态时，保留其事实，不沿用旧的收益推断。
-        if (StaticResult(plan))
-            return L(english, "当前方案输出静态图；收益取决于省去的特效计算、绘制和纹理开销，尚待确认。",
-                "The output is a still image; benefit depends on removed effects, drawing and texture costs and remains unconfirmed.");
-        return HasTurnOffCard(plan)
-            ? L(english, "可生成，需先禁用取舍方案中的项目。", "Ready after disabling the tradeoff items.")
-            : L(english, "可生成。", "Ready.");
-    }
-
-    /// <summary>这次分析的结果是不是"只剩一张静态图"：可录的部分只有 1 帧，会动的全留在实时那边。</summary>
-    private static bool StaticResult(JsonObject plan) =>
-        plan["summary"]?["key"]?.GetValue<string>()?.StartsWith("summary.bakeable_static", StringComparison.Ordinal) == true;
-
-    /// <summary>
-    /// 烘不了时那一句人话原因；能烘（含"关掉几样就能烘"）时返回 null。
-    /// 判据全部来自 plan 已有的字段：取舍清单的 subject_only、suitability 的 rule、阻塞原因的 key、有没有循环。
-    /// </summary>
-    private static string? CannotBakeReason(JsonObject plan, bool english)
-    {
-        string tradeoff = plan[TradeoffOptions.Field]?["status"]?.GetValue<string>() ?? "";
-        if (tradeoff == "dependency_blocked")
-            return L(english, "当前方案还无法生成视频，关闭相关效果后的结果尚未确认。",
-                "a video cannot be generated yet; the result of disabling related effects is unverified.");
-        // 主体类：整张画面就是那个实时效果画出来的，关掉就没有内容了。
-        if (tradeoff == "subject_only")
-            return L(english, "全部可见内容由实时效果生成，禁用后无剩余内容。",
-                "all visible content is produced by a live effect; nothing remains once disabled.");
         string[] keys = BlockerKeys(plan);
-        if (keys.Any(key => key.StartsWith("blocker.hdr", StringComparison.Ordinal)))
-            return L(english, "场景为 HDR 合成，当前仅支持 8 位 SDR 捕获。",
-                "the scene is composited in HDR; only 8-bit SDR capture is supported.");
-        if (keys.Any(key => key is "blocker.perspective_needs_screenspace" or "blocker.camera_path_needs_envelope"
-                or "blocker.runtime_projection_required"))
-            return L(english, "场景使用运动 3D 摄像机。", "the scene uses a moving 3D camera.");
         string rule = plan["suitability"]?["rule"]?.GetValue<string>() ?? "";
-        if (rule == "nothing_to_bake")
-            return L(english, "全部图层受鼠标、时钟或脚本驱动。",
-                "every layer is driven by the mouse, the clock or a script.");
-        if (rule == "no_temporal_mechanism_in_video")
-            return L(english, "本次分析未找到动态内容；静态内容的优化收益尚未确认。",
-                "this analysis found no dynamic content; the benefit of optimizing still content is unconfirmed.");
+        // 这几类关掉实时元素也救不回来，先于取舍卡片判定：依赖挡住、主体就是实时效果、HDR/3D 相机、没东西可烘或只剩静态。
+        if (plan[TradeoffOptions.Field]?["status"]?.GetValue<string>() is "dependency_blocked" or "subject_only" ||
+            rule is "nothing_to_bake" or "no_temporal_mechanism_in_video" ||
+            keys.Any(key => key.StartsWith("blocker.hdr", StringComparison.Ordinal) || key is "blocker.perspective_needs_screenspace"
+                or "blocker.camera_path_needs_envelope" or "blocker.runtime_projection_required"))
+            return true;
         // 还有取舍方案可选时不算烘不了：第一行会说"关掉几样就能烘"。
-        if (HasTurnOffCard(plan)) return null;
-        if (rule == "fixed_period_exceeds_loop_ceiling" || keys.Any(key => key.StartsWith("blocker.loop", StringComparison.Ordinal)))
-            return L(english, "未找到循环周期。", "no loop period was found.");
-        if (HasLoop(plan) && keys.Length == 0) return null;
-        return keys.Length > 0 || !HasLoop(plan)
-            ? L(english, "本次分析未找到可用的预渲染方案。", "this analysis found no usable pre-rendering route.")
-            : null;
+        return !HasTurnOffCard(plan) && (keys.Length > 0 || !HasLoop(plan));
     }
 
     private static string[] BlockerKeys(JsonObject plan) =>
@@ -138,7 +89,7 @@ internal static class PlainLanguage
         plan?.ContainsKey("preset_applied") != true && plan?[TradeoffOptions.Field]?["status"]?.GetValue<string>() == "available";
 
     /// <summary>这次分析烘不了：结论第一行会是"不支持"。界面用它决定结论第二行放哪句话。</summary>
-    public static bool CannotGenerate(JsonObject? plan) => plan is not null && CannotBakeReason(plan, false) is not null;
+    public static bool CannotGenerate(JsonObject? plan) => plan is not null && CannotBake(plan);
 
     /// <summary>plan 里如果写了这次实际按哪个档位出的方案（quality / balanced / efficiency / custom），结论区多出的一行；没有这个字段就不显示。</summary>
     public static string PresetAppliedLine(JsonObject? plan, string requested, bool english)

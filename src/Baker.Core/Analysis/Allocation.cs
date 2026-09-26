@@ -80,13 +80,29 @@ internal sealed class Allocation
             runtimeLayers.OfType<JsonObject>().Any(layer => Int(layer["owner"]) == id && layer["has_mesh"]?.GetValue<bool>() == false) &&
             !runtimeLayers.OfType<JsonObject>().Any(layer => Int(layer["owner"]) == id && layer["has_mesh"]?.GetValue<bool>() != false) &&
             !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write");
+        // 绘制的父层不因实时子层被连带：成品里实时子层挂在去掉绘制键的父层下（SceneAssembler.Emit），变换、可见性与透明度
+        // 按原作同一份数据逐帧传给子层；父层先画进视频，读帧缓冲的子层读到的仍是它下面已合成好的画面。
+        // 条件是父层这份传给子层的状态是常量（无脚本、变换类属性无动画、没有运行时写入、轴对齐）：之后的非实时子层视频按固定父变换挂回去。
+        // 子层挂父层骨骼（attachment）时成品里没有木偶骨骼，仍连带。从第一个含实时层的子树起拆开，前面的子层留在父层单元里保持绘制顺序。
+        // 只管真正绘制的父层（有 image/text/particle/model）；不绘制的容器仍走 StaticStructure（要求运行时记录证实无网格，缺记录即不拆）。
+        bool FixedDrawingParent(int id) => new[] { "image", "text", "particle", "model" }.Any(objects[id].ContainsKey) &&
+            !live.Contains(id) && scripts[id].Length == 0 && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
+            !structuralFields.Any(key => objects[id][key] is JsonObject binding && SceneGraph.Animated(binding)) &&
+            HybridVideoProjection.SupportsStaticParent(objects[id], properties) &&
+            (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
+                HybridVideoProjection.Vector(Resolve(objects[id]["parallaxDepth"], properties), (0, 0)) == (0d, 0d)) &&
+            !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write") &&
+            !sourceOrder.Any(child => Int(objects[child]["parent"]) == id && objects[child].ContainsKey("attachment"));
         var allocationOf = allocation.UnitOf;
         void Assign(int id, int unit)
         {
             allocationOf[id] = unit;
-            bool split = id == unit && StaticStructure(id);
+            bool split = id == unit && StaticStructure(id), splitDrawing = id == unit && !split && FixedDrawingParent(id);
             foreach (int child in sourceOrder.Where(child => Int(objects[child]["parent"]) == id))
+            {
+                split |= splitDrawing && sourceOrder.Any(layer => live.Contains(layer) && graph.Within(layer, child));
                 Assign(child, split ? child : unit);
+            }
         }
         foreach (int root in authorRoots) Assign(root, root);
         // Depth-first source sibling order is the author's draw order, even when declarations interleave.
@@ -111,14 +127,14 @@ internal sealed class Allocation
             if (parallax && request.ViewMode == "preserve" && sourceOrder.Any(id => allocationOf[id] == root &&
                 objects[id]["parallaxDepth"] is JsonObject binding && binding.ContainsKey("script"))) Live(root, "animated_parallax_depth");
         }
-        foreach (int root in request.RetainLiveRootIds ?? [])
+        // 按分配单元保留：列出的图层所在的单元整单元留实时，同一作者根下拆开的其它单元照常烘。单元边界是上面按保留之前的
+        // 实时集定的，拆分条件（父层传给子层的状态是常量、绘制顺序按单元保持）与哪个单元实时无关，所以留住任一单元画面不变。
+        var retainedUnits = (request.RetainLiveRootIds ?? []).Select(id => allocationOf.TryGetValue(id, out int unit) ? unit
+            : throw new InvalidDataException("A requested live layer is not in the source scene.")).ToHashSet();
+        foreach (int id in sourceOrder.Where(id => retainedUnits.Contains(allocationOf[id])))
         {
-            if (!rootOf.TryGetValue(root, out int actualRoot) || actualRoot != root) throw new InvalidDataException("A requested live root is not a source root.");
-            foreach (int id in sourceOrder.Where(id => rootOf[id] == root))
-            {
-                Live(id, "retained_by_cost_trial");
-                foreach (string reason in request.RetainLiveReasons?.GetValueOrDefault(id) ?? []) Live(id, reason);
-            }
+            Live(id, "retained_by_cost_trial");
+            foreach (string reason in request.RetainLiveReasons?.GetValueOrDefault(id) ?? []) Live(id, reason);
         }
         // Hidden script hosts can initialize fonts or other live layers without drawing a pixel.
         // Preserve those controllers instead of turning them into empty video groups.
@@ -151,7 +167,7 @@ internal sealed class Allocation
         bool dynamicLookup = allocation.DynamicLookup = scripts.Values.SelectMany(s => s).Any(code => Regex.IsMatch(code,
             @"\b(thisScene|getLayer|getParent|setParent|globalThis|eval|Function|Reflect|Proxy|import)\b|\.\s*(parent|children)\b"));
         bool SafeHiddenSubtree(int id, HashSet<int> subtree) => !dynamicLookup &&
-            !(request.RetainLiveRootIds ?? []).Contains(rootOf[id]) &&
+            !retainedUnits.Contains(allocationOf[id]) &&
             Resolve(objects[id]["visible"], properties)?.ToJsonString() == "false" &&
             !graph.DynamicVisibility(id) &&
             scripts[id].All(code => !Regex.IsMatch(code, @"\bthisLayer\s*\.\s*visible\b")) &&

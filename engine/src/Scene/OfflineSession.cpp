@@ -922,9 +922,20 @@ std::string OfflineSession::Impl::describeScene() const {
             }
             };
             append_materials(node, "source");
-            if (node->HasLayer()) for (auto* effect : node->Layer()->ResolvedEffects())
-                if (effect != nullptr) for (auto& effect_node : effect->nodes)
+            // 按 ResolveEffect 的挑选列效果材质，不看本层画没画过：从没显示过的层（如只在播放媒体时出现）
+            // 也得报出它读的 _rt_link_<id>，否则分析看不到链接，会把被它读的隐藏层省略掉（3152793212）。
+            auto append_effect = [&](const std::shared_ptr<SceneImageEffect>& effect) {
+                if (effect) for (auto& effect_node : effect->nodes)
                     if (effect_node.sceneNode) append_materials(effect_node.sceneNode.as_ptr(), "effect");
+            };
+            if (node->HasLayer()) {
+                auto& layer = node->Layer();
+                for (usize i {}; i < layer->EffectCount(); ++i)
+                    if (auto& effect = layer->GetEffect(i); effect && effect->runtime_visible) append_effect(effect);
+                append_effect(layer->FinalResolveEffect());
+                append_effect(layer->PublishedEffect());
+                if (layer->VisibleOutputEnabled()) append_effect(layer->VisibleResolveEffect());
+            }
             out << "]}";
         }
         for (const auto& child : node->GetChildren()) visit(child.as_ptr(), owner);

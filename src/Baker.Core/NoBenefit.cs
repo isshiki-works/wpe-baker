@@ -135,10 +135,6 @@ public static class NoBenefit
         ["conditions"] = new JsonArray(conditions.Select(c => (JsonNode)JsonValue.Create(c)).ToArray())
     };
 
-    /// <summary>plan 里记下的命中条件，讲成一句话（界面结论区用）。</summary>
-    public static string Describe(JsonObject plan, bool english) => Describe(
-        (plan[Field]?["conditions"] as JsonArray ?? []).Select(c => c!.GetValue<string>()).ToArray(), english);
-
     private static string Describe(string[] conditions, bool english) => string.Join(english ? "; " : "；", conditions.Select(c => (c, english) switch
     {
         (StaticWithLive, false) => "烘完只剩一张静态图，实时图层照旧运行",

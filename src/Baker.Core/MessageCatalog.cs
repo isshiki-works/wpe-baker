@@ -707,11 +707,11 @@ public static class MessageCatalog
             Zh: "没有图层分进视频，也没有更小的视频分配可试。",
             En: "No layer is allocated to video, so there is no smaller bake allocation left to try."),
         ["reason.allocation_no_trigger"] = new(
-            Zh: "转成视频的图层里没有不满足平稳随机判据的粒子，也没有带未解析循环机制的层，整棵保留作者子树得到的还是同一个分配。",
-            En: "No baked layer is a particle system that fails the stationary-random criteria or owns an unresolved loop mechanism, so retaining whole author subtrees would keep the same allocation."),
+            Zh: "转成视频的图层里没有不满足平稳随机判据的粒子，也没有带未解析循环机制的层，保留实时得到的还是同一个分配。",
+            En: "No baked layer is a particle system that fails the stationary-random criteria or owns an unresolved loop mechanism, so retaining units live would keep the same allocation."),
         ["reason.allocation_nothing_left"] = new(
-            Zh: "把所有未解析层和粒子层的作者子树都保留实时后，没有内容可以转成视频，缩小分配没有意义。",
-            En: "Retaining the author subtrees of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help."),
+            Zh: "把所有未解析层和粒子层所在的分配单元都保留实时后，没有内容可以转成视频，缩小分配没有意义。",
+            En: "Retaining the allocation units of every unresolved or particle layer leaves no bakeable content, so a smaller allocation cannot help."),
         ["hardware_decode.owner_unreadable"] = new(
             Zh: "读不到缓存所属图层的模型、材质或底图纹理。",
             En: "The cache owner's model, material or base texture could not be read."),

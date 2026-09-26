@@ -178,7 +178,7 @@ public sealed class HybridBakeService(NativeTools tools)
     }
 
     /// <summary>
-    /// 残差掩盖组在全分辨率第一层被拒、失败组里有被掩盖的粒子系统时要留实时的作者根：计划原本保留的根 ∪ 这些粒子的作者根；
+    /// 残差掩盖组在全分辨率第一层被拒、失败组里有被掩盖的粒子系统时要留实时的单元：计划原本保留的 ∪ 这些粒子层（Allocation 按所在分配单元保留）；
     /// 其余情况 null。粒子过了平稳随机判据才会被掩盖，但判据只证统计平稳：两次独立实现之差铺满画布时硬切残差照样超限，第一层才是裁决。
     /// Reasons 是这些粒子层原来的未解析原因码（<see cref="HybridLoopAllocation.RetainReasons"/>），重查时写进它们的 reasons。
     /// </summary>
@@ -189,15 +189,12 @@ public sealed class HybridBakeService(NativeTools tools)
         var failed = (report["groups"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(group => group["status"]?.GetValue<string>() == "rejected_seam_residual")
             .SelectMany(group => (group["source_layers"] as JsonArray ?? []).Select(SceneGraph.Int)).OfType<int>().ToHashSet();
-        var rootOf = new Dictionary<int, int>();
-        foreach (JsonObject layer in (plan["layers"] as JsonArray ?? []).OfType<JsonObject>())
-            if (SceneGraph.Int(layer["id"]) is int id) rootOf.TryAdd(id, SceneGraph.Int(layer["root"]) ?? id);
         int[] particles = (report["residual_masking"]?["residual_layers"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(item => item["mechanism"]?.GetValue<string>() == "particle_system")
             .Select(item => SceneGraph.Int(item["owner_layer_id"])).OfType<int>().Where(failed.Contains).ToArray();
         if (particles.Length == 0) return null;
         return ((plan["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()
-            .Concat(particles.Select(owner => rootOf.GetValueOrDefault(owner, owner))).Distinct().ToArray(),
+            .Concat(particles).Distinct().ToArray(),
             HybridLoopAllocation.RetainReasons(plan, particles));
     }
 

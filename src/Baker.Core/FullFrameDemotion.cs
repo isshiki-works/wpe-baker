@@ -48,10 +48,8 @@ internal static class FullFrameDemotion
         return new Message(retained is null ? "reason.demotion_unavailable" : "reason.demotion_available").Write(new JsonObject {
             ["status"] = retained is null ? "unavailable" : "available",
             ["root_ids"] = JsonSerializer.SerializeToNode(retained ?? []),
-            // root_ids 是分配根，可能是作者根拆开后的子单元；--retain-live 只收源作者根。这里给出照抄就能跑的完整列表，
-            // 换算会连带退回别的视频单元（多半是不透明底组）时为 null：那不是同一个分配，不能当建议。
-            ["retain_live_root_ids"] = retained is null ? null : RetainLiveCommandRoots(plan, retained) is int[] command
-                ? JsonSerializer.SerializeToNode(command) : null,
+            // root_ids 是分配根；这里给出照抄就能跑的完整 --retain-live 列表。
+            ["retain_live_root_ids"] = retained is null ? null : JsonSerializer.SerializeToNode(RetainLiveCommandRoots(plan, retained)),
             ["names"] = JsonSerializer.SerializeToNode(retained is null ? [] : VisibleNames(layers, retained)),
             ["canvas_fractions"] = new JsonArray((retained ?? []).Select(root => (JsonNode?)(
                 layers.Where(layer => AllocationRoot(layer) == root && VisibleDrawable(layer)).Select(Fraction).OfType<double>().ToArray() is { Length: > 0 } found
@@ -140,10 +138,11 @@ internal static class FullFrameDemotion
             chinese.Add("把独立的实时小组件提到前景后重新分析（这会改变遮挡关系）");
             english.Add("choose independent live overlays in the foreground and analyze again, which changes occlusion");
         }
-        if (RetentionRoots(plan) is { Length: > 0 } retention && RetainLiveCommandRoots(plan, retention) is { Length: > 0 } roots)
+        if (RetentionRoots(plan) is { Length: > 0 } retention)
         {
+            int[] roots = RetainLiveCommandRoots(plan, retention);
             string ids = string.Join(",", roots);
-            string[] visibleNames = VisibleSourceNames(Layers(plan), roots);
+            string[] visibleNames = VisibleNames(Layers(plan), roots);
             string named = Listed(" (", visibleNames, ")");
             // 中文通道单独拼接：顿号分隔、超出以"等 N 个"收尾，不混进英文的 and N more / root。
             string namedZh = ListedChinese(visibleNames);
@@ -164,31 +163,9 @@ internal static class FullFrameDemotion
             ? recorded["status"]?.GetValue<string>() == "available" ? Ids(recorded["root_ids"]) : null
             : FullFrameSingleGroupRetention(plan);
 
-    /// <summary>
-    /// 照抄就能跑的 --retain-live 列表：本次已保留的根（--retain-live 每次整体替换，必须带上）+ 保留做法换算成的源作者根。
-    /// 分配根是作者根拆开后的子单元时换成它的作者根；如果这棵作者根下还有别的单元在视频里、又不在保留做法里，
-    /// 整棵保留实时会把它们一起退回实时（实测常常就是不透明底组，重跑后一组视频都不剩），这就不是同一个分配，返回 null。
-    /// </summary>
-    internal static int[]? RetainLiveCommandRoots(JsonObject plan, IReadOnlyCollection<int> allocationRoots)
-    {
-        ArgumentNullException.ThrowIfNull(plan);
-        ArgumentNullException.ThrowIfNull(allocationRoots);
-        var layers = Layers(plan);
-        var sourceOf = new Dictionary<int, int>();
-        foreach (var layer in layers)
-            if (SceneGraph.Int(layer["id"]) is int id && SourceRoot(layer) is int source) sourceOf.TryAdd(id, source);
-        var sources = new List<int>();
-        foreach (int unit in allocationRoots)
-        {
-            if (!sourceOf.TryGetValue(unit, out int source)) return null;
-            if (!sources.Contains(source)) sources.Add(source);
-        }
-        var retention = allocationRoots.ToHashSet();
-        var videoRoots = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().SelectMany(group => Ids(group["root_ids"])).ToHashSet();
-        bool pullsOtherVideo = layers.Any(layer => SourceRoot(layer) is int source && sources.Contains(source) &&
-            AllocationRoot(layer) is int unit && videoRoots.Contains(unit) && !retention.Contains(unit));
-        return pullsOtherVideo ? null : Ids(plan["settings"]?["retain_live_root_ids"]).Concat(sources).Distinct().ToArray();
-    }
+    /// <summary>照抄就能跑的 --retain-live 列表：本次已保留的（--retain-live 每次整体替换，必须带上）+ 保留做法的分配单元（--retain-live 按单元保留）。</summary>
+    internal static int[] RetainLiveCommandRoots(JsonObject plan, IReadOnlyCollection<int> allocationRoots) =>
+        [.. Ids(plan["settings"]?["retain_live_root_ids"]).Concat(allocationRoots).Distinct()];
 
     private static string Listed(string prefix, string[] names, string suffix = ".")
     {
@@ -235,13 +212,6 @@ internal static class FullFrameDemotion
     private static string[] VisibleNames(JsonObject[] layers, int[] roots) => roots
         .SelectMany(root => layers.Where(layer => AllocationRoot(layer) == root && VisibleDrawable(layer)).Select(Name))
         .Where(name => name.Length > 0).Distinct().ToArray();
-
-    /// <summary>按源作者根列可见层名：--retain-live 保留的是整棵作者根。</summary>
-    private static string[] VisibleSourceNames(JsonObject[] layers, int[] roots) => roots
-        .SelectMany(root => layers.Where(layer => SourceRoot(layer) == root && VisibleDrawable(layer)).Select(Name))
-        .Where(name => name.Length > 0).Distinct().ToArray();
-
-    private static int? SourceRoot(JsonObject layer) => SceneGraph.Int(layer["root"] ?? layer["allocation_root"]);
 
     private static string Layout(JsonObject plan) => PlanSettings.Of(plan).VideoLayout;
 
