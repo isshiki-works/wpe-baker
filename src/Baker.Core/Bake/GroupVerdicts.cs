@@ -117,9 +117,11 @@ internal static class GroupVerdicts
         return true;
     }
 
-    /// <summary>试编码外推偏低时的兜底：实际字节已超内嵌视频上限，WPE 放不出来，接缝、质量校验与装配都不必再做。</summary>
+    /// <summary>
+    /// 实际字节已超内嵌视频上限（WPE 放不出来），或 <paramref name="reason"/> 给出的体积限制下画质门未过：接缝与装配都不必再做。
+    /// </summary>
     internal static void RejectEmbeddedSize(JsonObject report, string id, int[] layers, bool packedAlpha, JsonObject encoded, string video,
-        long encodedBytes, JsonObject? lateDependency, ulong frames, HybridAnalyzeRequest settings)
+        long encodedBytes, JsonObject? lateDependency, ulong frames, HybridAnalyzeRequest settings, Message? reason = null)
     {
         report["groups"]!.AsArray().Add(new JsonObject {
             ["id"] = id, ["status"] = "rejected_embedded_video_size", ["storage"] = "video",
@@ -129,7 +131,7 @@ internal static class GroupVerdicts
             ["late_dependency_validation"] = lateDependency,
             ["encoded_loop_validation"] = null, ["hardware_decode"] = null });
         report["status"] = EmbeddedVideoBudget.RejectedBakeStatus;
-        EmbeddedVideoBudgetJson.EncodedRejection(id, encodedBytes, frames, settings.FpsNumerator, settings.FpsDenominator).Write(report, "reason");
+        (reason ?? EmbeddedVideoBudgetJson.EncodedRejection(id, encodedBytes, frames, settings.FpsNumerator, settings.FpsDenominator)).Write(report, "reason");
     }
 
     /// <summary>

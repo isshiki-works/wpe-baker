@@ -175,7 +175,7 @@ public class BakeGateTests : IDisposable
     }
 
     [Fact]
-    public async Task EmbeddedVideoGateSkipsWithoutAProbePassesUnderTheLimitAndRejectsOver()
+    public async Task EmbeddedVideoGateSkipsWithoutAProbeAndRecordsTheEstimateWithoutRejecting()
     {
         int calls = 0;
         EmbeddedVideoGate Gate(string status) => new((_, frames, _, _) =>
@@ -196,10 +196,8 @@ public class BakeGateTests : IDisposable
 
         BakeGateContext over = Context(Plan(600));
         over.CompositionValidation = new JsonObject { ["status"] = "composition_pass" };
-        JsonObject rejected = (await Gate("predicted_over_limit").CheckAsync(over, Ct))!.ToJson();
-        Assert.Equal(EmbeddedVideoBudget.RejectedBakeStatus, rejected["status"]!.GetValue<string>());
-        Assert.Same(over.CompositionValidation, rejected["composition_validation"]);
-        Assert.Same(over.EmbeddedVideoEstimate, rejected["embedded_video_estimate"]);
+        Assert.Null(await Gate("predicted_over_limit").CheckAsync(over, Ct));
+        Assert.Equal("predicted_over_limit", over.EmbeddedVideoEstimate!["status"]!.GetValue<string>());
     }
 
     [Fact]

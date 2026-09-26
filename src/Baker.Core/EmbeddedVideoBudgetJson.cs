@@ -9,14 +9,18 @@ namespace Baker.Core;
 /// </summary>
 public static class EmbeddedVideoBudgetJson
 {
-    /// <summary>主渲染前的判定：任一视频组外推超限就是 predicted_over_limit，带中英理由；没有样本时 not_estimated，不拒绝。</summary>
+    /// <summary>
+    /// 主渲染前的外推：任一视频组超出目标体积就是 predicted_over_limit，quantizer_offset 是按最大那组算出的量化值增量
+    /// （主渲染的所有编码档都加它，见 <see cref="EmbeddedVideoBudget.QuantizerOffset"/>），不拒绝；没有样本时 not_estimated。
+    /// </summary>
     public static JsonObject EvaluateProbe(IReadOnlyList<EmbeddedVideoBudget.ProbeGroup> groups, ulong frames, uint fpsNumerator, uint fpsDenominator,
         Message? notEstimatedReason = null)
     {
         ArgumentNullException.ThrowIfNull(groups);
         var result = new JsonObject { ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes, ["frames"] = frames,
             ["assumed_key_frame_interval"] = EmbeddedVideoBudget.AssumedKeyFrameInterval,
-            ["basis"] = "Composition-probe packets extrapolated with one largest key frame per interval and the mean non-key packet; on five existing bakes this was 0.77-1.38x the real size, so it only rejects over-limit loops; the bytes actually written are checked again after encoding." };
+            ["target_bytes"] = EmbeddedVideoBudget.TargetBytes,
+            ["basis"] = "Composition-probe packets extrapolated with one largest key frame per interval and the mean non-key packet (0.77-1.38x the real size on five existing bakes). Over the target, every playback encoder of the main render raises its quantizer by quantizer_offset (about +6 per halving); the bytes actually written are checked again after encoding and the quantizer is raised once more if still over the limit." };
         if (groups.Count == 0)
         {
             result["status"] = "not_estimated";
@@ -24,9 +28,7 @@ public static class EmbeddedVideoBudgetJson
             return result;
         }
         var records = new JsonArray();
-        EmbeddedVideoBudget.ProbeGroup? worst = null;
         double worstBytes = 0;
-        ulong worstMaximum = 0;
         foreach (EmbeddedVideoBudget.ProbeGroup group in groups)
         {
             double predicted = EmbeddedVideoBudget.ExtrapolateBytes(group.Packets, frames);
@@ -40,16 +42,12 @@ public static class EmbeddedVideoBudgetJson
                 ["mean_non_key_frame_bytes"] = nonKey.Length == 0 ? null : Math.Round(nonKey.Average(), 1),
                 ["predicted_bytes"] = (long)Math.Round(predicted), ["maximum_frames"] = maximum,
                 ["maximum_seconds"] = EmbeddedVideoBudget.WholeSeconds(maximum, fpsNumerator, fpsDenominator), ["over_limit"] = over });
-            if (over && (worst is null || predicted > worstBytes)) { worst = group; worstBytes = predicted; worstMaximum = maximum; }
+            worstBytes = Math.Max(worstBytes, predicted);
         }
         result["groups"] = records;
-        result["status"] = worst is null ? "within_limit" : "predicted_over_limit";
-        if (worst is not null)
-        {
-            object?[] args = [worst.Id, frames, Seconds(frames, fpsNumerator, fpsDenominator), Gibibytes(worstBytes),
-                EmbeddedVideoBudget.WholeSeconds(worstMaximum, fpsNumerator, fpsDenominator).ToString("0", CultureInfo.InvariantCulture)];
-            new Message("bake.embedded_video_size_predicted", args).Write(result, "reason");
-        }
+        int offset = EmbeddedVideoBudget.QuantizerOffset(worstBytes);
+        result["status"] = offset == 0 ? "within_limit" : "predicted_over_limit";
+        result["quantizer_offset"] = offset;
         return result;
     }
 
@@ -68,6 +66,18 @@ public static class EmbeddedVideoBudgetJson
         ulong maximum = bytes <= 0 ? frames : (ulong)Math.Floor((double)frames * EmbeddedVideoBudget.MaximumBytes / bytes);
         return new Message("bake.embedded_video_size_rejected", [groupId, Gibibytes(bytes), frames,
             Seconds(frames, fpsNumerator, fpsDenominator), EmbeddedVideoBudget.WholeSeconds(maximum, fpsNumerator, fpsDenominator).ToString("0", CultureInfo.InvariantCulture)]);
+    }
+
+    /// <summary>体积限制下画质门没过的拒绝理由：<paramref name="neededBytes"/> 是不抬量化值时的字节估计，第 5 个参数照旧是按它能做的最长秒数。</summary>
+    public static Message QualityRejection(string groupId, double neededBytes, ulong frames, uint fpsNumerator, uint fpsDenominator,
+        double? ssim, double threshold, int quantizerOffset)
+    {
+        ulong maximum = neededBytes <= 0 ? frames : (ulong)Math.Floor(frames * EmbeddedVideoBudget.MaximumBytes / neededBytes);
+        return new Message("bake.embedded_video_quality_rejected", [groupId, Gibibytes(neededBytes), frames,
+            Seconds(frames, fpsNumerator, fpsDenominator),
+            EmbeddedVideoBudget.WholeSeconds(maximum, fpsNumerator, fpsDenominator).ToString("0", CultureInfo.InvariantCulture),
+            ssim?.ToString("0.######", CultureInfo.InvariantCulture) ?? "n/a", threshold.ToString("0.######", CultureInfo.InvariantCulture),
+            quantizerOffset]);
     }
 
     /// <summary>用 ffprobe 读出视频流全部包的大小与关键帧标记（试编码只有几十个包）。</summary>
