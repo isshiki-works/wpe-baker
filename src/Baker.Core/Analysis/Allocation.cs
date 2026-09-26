@@ -84,7 +84,9 @@ internal sealed class Allocation
         // 按原作同一份数据逐帧传给子层；父层先画进视频，读帧缓冲的子层读到的仍是它下面已合成好的画面。
         // 条件是父层这份传给子层的状态是常量（无脚本、变换类属性无动画、没有运行时写入、轴对齐）：之后的非实时子层视频按固定父变换挂回去。
         // 子层挂父层骨骼（attachment）时成品里没有木偶骨骼，仍连带。从第一个含实时层的子树起拆开，前面的子层留在父层单元里保持绘制顺序。
-        bool FixedDrawingParent(int id) => !live.Contains(id) && scripts[id].Length == 0 && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
+        // 只管真正绘制的父层（有 image/text/particle/model）；不绘制的容器仍走 StaticStructure（要求运行时记录证实无网格，缺记录即不拆）。
+        bool FixedDrawingParent(int id) => new[] { "image", "text", "particle", "model" }.Any(objects[id].ContainsKey) &&
+            !live.Contains(id) && scripts[id].Length == 0 && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
             !structuralFields.Any(key => objects[id][key] is JsonObject binding && SceneGraph.Animated(binding)) &&
             HybridVideoProjection.SupportsStaticParent(objects[id], properties) &&
             (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
