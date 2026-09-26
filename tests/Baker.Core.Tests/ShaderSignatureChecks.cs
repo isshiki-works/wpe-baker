@@ -80,6 +80,15 @@ internal static class ShaderSignatureChecks
             check(Landing(600) is ["UnsupportedShaderMechanism/term_not_retimable"] &&
                 Landing(10) is ["NonPeriodicOrDriftingMechanism/loop_never_repeats_within_limit"],
                 "irrational classes in one pass are cannot only when independent retiming of every term also has no loop");
+            // "不能"按层证明：10 层两类项单独独立调频有解，只是和 11 层的 29.9 s 项在 30 s 上限内凑不到一起——不是 10 层不能，记未收敛
+            JsonObject pair = Runtime(split);
+            pair["runtime_layers"]!.AsArray().Add(new JsonObject { ["owner"] = 11, ["materials"] = new JsonArray(new JsonObject {
+                ["shader"] = "effects/x", ["effect"] = 0, ["pass"] = 0, ["active_uniforms"] = new JsonArray(), ["time_signature"] = JsonNode.Parse("""
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[{"seconds":29.9,"num":299,"den":10,"pi":0,"knobs":[]}]}
+                """) }) });
+            check(LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10},{"id":11}]}""")!.AsObject(), source, null, pair, [10, 11], 30, 1,
+                loopLengthMaximumSeconds: 30).ToJson()["unresolved"]!.AsArray().Select(x => $"{x!["owner_layer_id"]}/{x["mechanism"]}")
+                .SequenceEqual(["10/term_not_retimable"]), "a layer that loops alone is not cannot just because it does not close together with another layer");
 
             // 阈值有界的比较在 settle 时刻后固定：候选整周期预热 L 帧后起录、plan 记 settle 上界；L 不晚于 settle 记未收敛
             JsonObject Settled(double settle) => LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null,
