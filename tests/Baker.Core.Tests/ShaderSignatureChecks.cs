@@ -89,6 +89,16 @@ internal static class ShaderSignatureChecks
             check(LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10},{"id":11}]}""")!.AsObject(), source, null, pair, [10, 11], 30, 1,
                 loopLengthMaximumSeconds: 30).ToJson()["unresolved"]!.AsArray().Select(x => $"{x!["owner_layer_id"]}/{x["mechanism"]}")
                 .SequenceEqual(["10/term_not_retimable"]), "a layer that loops alone is not cannot just because it does not close together with another layer");
+            // 同一类的两项（7 s、3.5 s）没有旋钮，靠 pass 时间倍率一起调：10 层按实际模型单独有解，只是和先入选的 11 层凑不到一起，
+            // 挡住它的不是缺调频来源，不记 term_not_retimable
+            JsonObject shared = Runtime("""
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
+                  {"seconds":7,"num":7,"den":1,"pi":0,"knobs":[]},{"seconds":3.5,"num":7,"den":2,"pi":0,"knobs":[]}]}
+                """);
+            shared["runtime_layers"]!.AsArray().Insert(0, pair["runtime_layers"]![1]!.DeepClone());
+            check(!LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10},{"id":11}]}""")!.AsObject(), source, null, shared, [10, 11], 30, 1,
+                loopLengthMaximumSeconds: 30).ToJson()["unresolved"]!.AsArray().Any(x => x!["mechanism"]?.GetValue<string>() == "term_not_retimable"),
+                "terms that share one time-scale class are not flagged as needing independent retiming when the layer loops alone");
 
             // 阈值有界的比较在 settle 时刻后固定：候选整周期预热 L 帧后起录、plan 记 settle 上界；L 不晚于 settle 记未收敛
             JsonObject Settled(double settle) => LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null,

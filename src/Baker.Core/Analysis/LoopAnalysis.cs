@@ -14,7 +14,8 @@ internal static class LoopAnalysis
         IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent = 2,
         CommonLoopPreference preference = CommonLoopPreference.Balanced,
         double? loopLengthMaximumSeconds = null, JsonArray? videoGroups = null,
-        IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null)
+        IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null,
+        double? proofRetimePercent = null)
     {
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
@@ -67,8 +68,11 @@ internal static class LoopAnalysis
         }
         // "不能"按所有者层逐层证明，只认最宽松模型：这一层自己的非慢着色器周期项各在预算内独立调频，加上它自己的动画轨道；
         // 不带粒子锁（实际求解可以撤锁）、不带别的层（和别的层凑不到一起只是留实时，不是这一层不能）。含这一层的任何实际候选
-        // 都满足这些约束，所以它也无解才是这一层不能；有解（或给不出证明）时，缺独立调频来源的项所在 pass 记未收敛 term_not_retimable。
+        // 都满足这些约束，所以它也无解才是这一层不能；有解时，缺独立调频来源的项所在 pass 记未收敛 term_not_retimable——
+        // 但这一层按实际模型单独有解时，挡住它的是和别的层凑不到一起，不是缺调频来源，不记。
+        // 预算取档位回退链能走到的最大值（proofRetimePercent，见 HybridScenePlanner）：本档无解、下一档有解的层不是"不能"。
         // 带组步长重解时无解由调用方保持原解，不查。
+        double proof = proofRetimePercent ?? maximumRetimePercent;
         bool noLoop = solve.Result.NoCandidate?.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
             or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling;
         static string S(double x) => x.ToString("0.###", CultureInfo.InvariantCulture);
@@ -80,7 +84,7 @@ internal static class LoopAnalysis
                 ShaderTerm[] own = [.. shader.Terms.Where(x => x.OwnerLayerId == owner)];
                 if (own.Length == 0) continue;
                 LoopSolve relaxed = SolveLoop(shader with { Components = [] }, [.. animation.Where(x => x.OwnerLayerId == owner)], [.. own.Select(x => x.Relaxed)],
-                    fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+                    fpsNumerator, fpsDenominator, proof, ceiling, preference);
                 if (relaxed.Result.NoCandidate is { Kind: CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
                     or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling } never)
                 {
@@ -92,12 +96,16 @@ internal static class LoopAnalysis
                             ? $"; the fixed-period components close together only every {S(step)} s = {S(step / ceilingSeconds)}x the limit" : "") + "."));
                 }
                 else
-                    foreach (var pass in own.Where(x => x.Missing is not null && (noLoop || x.Split))
+                {
+                    bool alone = noLoop && SolveLoop(shader with { Components = [.. shader.Components.Where(c => c.OwnerLayerId == owner)] },
+                        [.. animation.Where(a => a.OwnerLayerId == owner)], [], fpsNumerator, fpsDenominator, proof, ceiling, preference).Result.Candidates.Count > 0;
+                    foreach (var pass in own.Where(x => x.Missing is not null && (x.Split || noLoop && !alone))
                         .GroupBy(x => (x.OwnerLayerId, x.EffectIndex, x.PassIndex, x.Resource)))
                         unresolved.Add(new ShaderLoopUnresolved(new(pass.Key.OwnerLayerId, pass.Key.EffectIndex, pass.Key.PassIndex, pass.Key.Resource,
                             ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: these terms need independent retiming that " +
                             "the shader source does not provide: " + string.Join("; ", pass.Select(x => $"{x.Relaxed.Id} {S(x.Relaxed.BasePeriod!.Seconds)} s ({x.Missing})")),
                             "term_not_retimable")));
+                }
             }
         }
         // 先查剩多个 π 类的 pass 所在的层（实际模型里这些 pass 不成分量）：记了未解析项的层本来就留实时，下面点名时不再参与合并
