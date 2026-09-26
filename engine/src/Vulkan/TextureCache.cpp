@@ -775,7 +775,7 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         while (!s.offline_drained) {
             if (s.offline_pending.is_none()) {
                 owe::media::Nv12Frame candidate;
-                auto pulled = s.decoder.next_frame(candidate);
+                auto pulled = s.decoder.next_frame(candidate, false);
                 if (!pulled) {
                     fail(std::string(s.decoder.last_error()));
                     return;
@@ -796,7 +796,9 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
             const double tolerance = 4.0 * std::numeric_limits<double>::epsilon() *
                 std::max(1.0, std::max(std::abs(deadline), std::abs(media_time)));
             if (deadline - media_time > tolerance) break;
-            s.nv12_scratch = rstd::move(*s.offline_pending);
+            // 只换解码帧，nv12_scratch 的 NV12 缓冲留着复用（转 NV12 推迟到要画的那帧，见下）。
+            s.nv12_scratch.decoded = rstd::move(s.offline_pending->decoded);
+            s.nv12_scratch.pts_seconds = s.offline_pending->pts_seconds;
             s.offline_pending = None();
             s.last_pts = f64(s.nv12_scratch.pts_seconds);
             got_new = true;
@@ -820,13 +822,20 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
     }
     }
     if (got_new) s.convert_pending = true;
-    // 离线不光栅的帧（预热、取样步之间）不写纹理：最新解出的帧留在 nv12_scratch，到要画的那帧再转，
-    // 画出来的纹理与每帧都转相同。4K 视频每帧的上传与转换比解码还贵（2903412088 起点搜索 16 帧只画 1 帧）。
+    // 离线不光栅的帧（预热、取样步之间）不转 NV12、不写纹理：最新解出的帧留在 nv12_scratch，到要画的那帧再转，
+    // 画出的纹理与每帧都转相同。2903412088 的 4K 视频起点搜索 16 帧只画 1 帧，这些转换约占渲染器时间四成。
     if (! s.convert_pending || (offline && ! active_offline_raster)) {
         publish_time();
         return;
     }
 
+    if (! s.decoder.to_nv12(s.nv12_scratch)) {
+        if (offline) active_offline_execution->diagnose(
+            "video[" + rstd::cppstd::to_string(s.key.as_str()) + "]: " + std::string(s.decoder.last_error()), true);
+        rstd_error("PumpVideoTextures[{}]: decode sw: {}", s.key.as_str(), s.decoder.last_error());
+        publish_time();
+        return;
+    }
     if (! yuv->Convert(ip.handle,
                        s.width,
                        s.height,
