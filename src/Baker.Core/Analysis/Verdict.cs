@@ -65,6 +65,9 @@ internal sealed class Verdict
     internal static bool IsRadianceCode(BlockerCode code) =>
         code is BlockerCode.HdrRadianceOpen or BlockerCode.HdrRadianceOpenProperty;
 
+    /// <summary>采集能力缺口（HDR 闭合、透视投影）：说的是工具还不会采，不是这份分配烘出来不对。</summary>
+    internal static bool IsCaptureGap(BlockerCode code) => IsRadianceCode(code) || code == BlockerCode.PerspectiveNeedsScreenspace;
+
     /// <summary>
     /// 效果前缀回退救"没有与输入无关的可烘组"（含通用形态）与 HDR 闭合不成立两类拒因；拒因里还有别的时不试前缀。
     /// HDR 拒因是按整层初始分配求的，前缀路线捕获的是另一批对象：采纳前缀后由 <see cref="ApplyPrefixRadianceClosure"/> 对前缀捕获对象重求。
