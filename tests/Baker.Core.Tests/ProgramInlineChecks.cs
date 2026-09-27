@@ -355,7 +355,7 @@ var subtreeObjects = new JsonArray(
     new JsonObject { ["id"] = 1206, ["parent"] = 1201, ["text"] = "body child" },
     new JsonObject { ["id"] = 1207, ["parent"] = 1200, ["visible"] = false, ["text"] = "omitted fixed branch" });
 async Task<JsonObject> PlanSubtrees(string name, JsonArray objects, int[]? retained = null, JsonArray? dependencies = null,
-    string placement = "preserve", string layout = "full_frame")
+    string placement = "preserve", string layout = "full_frame", int[]? audio = null)
 {
     await File.WriteAllTextAsync(Path.Combine(subtreeSource, "scene.json"), new JsonObject {
         ["general"] = new JsonObject { ["orthogonalprojection"] = new JsonObject { ["width"] = 64, ["height"] = 32 }, ["clearenabled"] = true },
@@ -369,7 +369,7 @@ async Task<JsonObject> PlanSubtrees(string name, JsonArray objects, int[]? retai
             ["id"] = obj["id"]!.DeepClone(), ["owner"] = obj["id"]!.DeepClone(),
             ["visible"] = obj["visible"]?.DeepClone() ?? JsonValue.Create(true), ["has_mesh"] = obj.ContainsKey("text"),
             ["effective_parallax_depth"] = new JsonArray(0, 0),
-            ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = false }) }).ToArray()) }.ToJsonString());
+            ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = audio?.Contains(obj["id"]!.GetValue<int>()) == true }) }).ToArray()) }.ToJsonString());
     return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
         new(2, subtreeSource, root, Path.Combine(root, name), 64, 32, RuntimeTraceFile: tracePath,
             RetainLiveRootIds: retained, LiveOverlayPlacement: placement, VideoLayout: layout));
@@ -561,6 +561,41 @@ File.Delete(Path.Combine(subtreeSource, "project.json"));
 Check(editorOnlyPlan["root_order"]!.AsArray().Count > 1 && editorOnlyPlan["video_groups"]!.AsArray().OfType<JsonObject>()
         .Where(g => g["parent_id"]?.GetValue<int>() == 1200).All(g => g["parent_transform"]!["scale"]!.ToJsonString() == "[2,3,1]"),
     "editor lock and scalar-slider scale do not protect the subtree; mapping uses the serialized parent value");
+// 父层 origin 挂只依赖常量的相对位置脚本：按项目尺寸（64×32）求出 (32, 8, 0) 当固定父变换拆开，映射用求出的值。
+var relativeParent = subtreeObjects.DeepClone().AsArray();
+relativeParent[0]!["origin"] = new JsonObject { ["value"] = "0 0 0", ["script"] = "'use strict';\nexport var scriptProperties = createScriptProperties()" +
+    ".addSlider({ name: 'x', value: 0.5 }).addSlider({ name: 'y', value: 0.25 }).finish();\n" +
+    "export function update(value) {\n\tvalue.x = scriptProperties.x * engine.canvasSize.x;\n\tvalue.y = scriptProperties.y * engine.canvasSize.y;\n\treturn value;\n}" };
+var relativePlan = await PlanSubtrees("subtree-relative-origin", relativeParent);
+Check(relativePlan["root_order"]!.AsArray().Count > 1 && relativePlan["video_groups"]!.AsArray().OfType<JsonObject>()
+        .Single(g => g["parent_id"]?.GetValue<int>() == 1200)["parent_transform"]!["origin"]!.ToJsonString() == "[32,8,0]",
+    "a constant relative-position script on the parent origin splits the subtree and maps with the evaluated origin");
+relativeParent[0]!["origin"]!["script"] = relativeParent[0]!["origin"]!["script"]!.GetValue<string>().Replace("scriptProperties.y *", "(engine.runtime > 5 ? 0.25 : 0.5) *");
+Check((await PlanSubtrees("subtree-relative-runtime", relativeParent))["root_order"]!.AsArray().Single()!.GetValue<int>() == 1200,
+    "a parent origin script that only settles after a time comparison keeps the subtree protected");
+// 当前隐藏、可能被脚本重新显示（场景里有 getLayer）的容器不拆：隐藏子层跟随容器单元，不单独进视频组。
+var hiddenContainer = subtreeObjects.DeepClone().AsArray();
+hiddenContainer[0]!["visible"] = false;
+hiddenContainer.Insert(0, new JsonObject { ["id"] = 1208, ["text"] = new JsonObject { ["value"] = "x",
+    ["script"] = "export function update(v) { thisScene.getLayer('other'); return v; }" } });
+var hiddenContainerPlan = await PlanSubtrees("subtree-hidden-container", hiddenContainer);
+Check(hiddenContainerPlan["layers"]!.AsArray().OfType<JsonObject>().Where(layer => layer["root"]!.GetValue<int>() == 1200)
+        .All(layer => layer["allocation_root"]!.GetValue<int>() == 1200) &&
+    !hiddenContainerPlan["video_groups"]!.AsArray().OfType<JsonObject>().Any(g => g["layer_ids"]!.AsArray().Any(n => n!.GetValue<int>() is >= 1200 and <= 1207)),
+    "a hidden container that scripts may show again keeps its subtree in one unit");
+// 父层只因着色器读音频频谱实时：它留实时（带绘制键），后面的静态子层进视频、挂在它下面，装配后绘制顺序不变。
+var spectrumParent = new JsonArray(
+    new JsonObject { ["id"] = 1200, ["name"] = "spectrum", ["origin"] = "31 17 0", ["scale"] = "2 3 1", ["text"] = "bars" },
+    new JsonObject { ["id"] = 1201, ["parent"] = 1200, ["text"] = "label" },
+    new JsonObject { ["id"] = 1202, ["parent"] = 1200, ["text"] = "caption" });
+var spectrumPlan = await PlanSubtrees("subtree-spectrum-parent", spectrumParent, audio: [1200]);
+var spectrumGroup = spectrumPlan["video_groups"]!.AsArray().OfType<JsonObject>().SingleOrDefault();
+var spectrumExport = spectrumGroup is null ? null : Assemble(spectrumPlan, spectrumParent);
+Check(spectrumPlan["live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).SequenceEqual(new[] { 1200 }) &&
+    spectrumGroup?["parent_id"]?.GetValue<int>() == 1200 && spectrumGroup["layer_ids"]!.ToJsonString() == "[1201,1202]" &&
+    spectrumExport is not null && spectrumExport.OfType<JsonObject>().Select(obj => obj["id"]!.GetValue<int>()).SequenceEqual(new[] { 1200, 1500 }) &&
+    spectrumExport[0]!["text"]!.GetValue<string>() == "bars" && spectrumExport[1]!["parent"]!.GetValue<int>() == 1200,
+    "a parent live only for its own pixels keeps static children in a video mounted under the live parent");
 var parentTransformMethod = projectionType.GetMethod("ParentTransform", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 var nestedParentTransform = (JsonObject)parentTransformMethod.Invoke(null, new object[] {
     subtreeObjects.OfType<JsonObject>().ToDictionary(obj => obj["id"]!.GetValue<int>()), 1202 })!;
