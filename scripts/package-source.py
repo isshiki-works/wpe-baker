@@ -74,9 +74,6 @@ def main() -> None:
     output = args.output.resolve()
     if output.exists(): raise FileExistsError(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    bundle = output.with_suffix(".engine.bundle")
-    subprocess.run(["git", "-C", str(ROOT / "engine"), "bundle", "create", str(bundle), "HEAD"], check=True,
-                   capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
     candidates: dict[str, Path] = {}
     skipped_names = {".git", "__pycache__", "bin", "obj", ".cache"}
     def tree(directory: Path, prefix: str) -> None:
@@ -91,7 +88,6 @@ def main() -> None:
     for name in ("README.md", "README.zh-CN.md", "LICENSE", ".gitignore",
                  "THIRD-PARTY-NOTICES.md", "SOURCE.md"):
         candidates[name] = ROOT / name
-    candidates["engine-upstream.bundle"] = bundle
     for name in DEPENDENCIES:
         tree(ROOT / ".deps" / name, ".deps/" + name)
     for flavor in ("ffmpeg-lgpl21", "ffmpeg-encoder-gpl2"):
@@ -127,12 +123,6 @@ encoder sources, C# tool layer, tests, input locks and build recipes. Workshop
 projects and generated user wallpapers are excluded.
 
 The engine source files already contain the modifications used by the build.
-If the build provenance helper requires the upstream Git identity, initialize
-its index without replacing those working files:
-
-    git -C engine init
-    git -C engine fetch ../engine-upstream.bundle HEAD
-    git -C engine reset --mixed FETCH_HEAD
 
 Recreate x264's Git identity from the included bundle without replacing files:
 

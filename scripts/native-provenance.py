@@ -10,7 +10,7 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ENGINE_BASE = "b866e8e711fdd7762385b23601affa1ea5539e3b"
-SOURCE_DEPENDENCIES = ["rstd", "vvk", "spirv-reflect", "glslang", "quickjs", "vma", "lz4", "freetype", "vulkan-headers", "vulkan-loader", "eigen", "nlohmann-json"]
+SOURCE_DEPENDENCIES = ["rstd", "vvk", "spirv-reflect", "glslang", "quickjs", "vma", "lz4", "freetype", "vulkan-headers", "vulkan-loader", "eigen", "nlohmann-json", "cli11"]
 
 def digest_file(path: pathlib.Path) -> str:
     with path.open("rb") as stream:
@@ -57,7 +57,7 @@ def load_verified_build(build_directory: pathlib.Path) -> tuple[pathlib.Path, pa
 
 def snapshot(ffmpeg_root: pathlib.Path | None = None) -> dict:
     ffmpeg_root = pathlib.Path(os.path.abspath(ffmpeg_root or ROOT / ".deps/ffmpeg-lgpl21/prefix"))
-    roots = [ROOT / "engine/src", ROOT / "engine/tools/SceneBake", ROOT / "engine/tests/offline-vulkan"]
+    roots = [ROOT / "engine/src", ROOT / "engine/third_party", ROOT / "engine/tools/SceneBake", ROOT / "engine/tests/offline-vulkan"]
     roots += [ROOT / ".deps" / name for name in SOURCE_DEPENDENCIES]
     roots += [ffmpeg_root / "include", ffmpeg_root / "lib"]
     paths = {ROOT / "engine/CMakeLists.txt", ROOT / "engine/CMakePresets.json", ROOT / "engine/LICENSE"}

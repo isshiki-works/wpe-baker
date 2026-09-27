@@ -462,6 +462,18 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
                     .message = rstd::format("texture {} has an invalid mipmap", name),
                 });
             }
+            // GPU 贴图按第 0 级宽高和 mip 数建（TextureCache::AllocateImportedTexture），第 i 级是
+            // max(1, 第 0 级 >> i)，级数不超过第 0 级能减半的次数；声明得更大，上传就写出该级。
+            if (i_mipmap > 0 &&
+                (i_mipmap > 30 || (std::max(img_slot.width, img_slot.height) >> i_mipmap) == 0 ||
+                 mipmap.width > std::max(img_slot.width >> i_mipmap, 1) ||
+                 mipmap.height > std::max(img_slot.height >> i_mipmap, 1))) {
+                return Err(ImageParseError {
+                    .kind    = ImageParseErrorKind::InvalidData,
+                    .message = rstd::format("texture {} mipmap {} is larger than its level", name,
+                                            i_mipmap),
+                });
+            }
 
             // Peek the first 16 bytes of the body so we can route MP4 /
             // WebM containers into the video-tex path without ever
@@ -475,6 +487,13 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
                 file.Read(sniff, sizeof(sniff));
                 ImageType maybe_video = DetectEmbeddedImageType(sniff, sizeof(sniff));
                 if (maybe_video == ImageType::VIDEO) {
+                    // 同下面的内嵌图片：前面已有按原格式收下的 mip。
+                    if (i_image > 0 || i_mipmap > 0) {
+                        return Err(ImageParseError {
+                            .kind    = ImageParseErrorKind::InvalidData,
+                            .message = rstd::format("texture {} mixes raw and embedded mipmaps", name),
+                        });
+                    }
                     img.header.type   = ImageType::VIDEO;
                     img.header.format = TextureFormat::RGBA8;
                     auto video_source =
@@ -523,6 +542,15 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
                                                    static_cast<std::size_t>(src_size));
             }
             if (ver.body_has_image_type() && embedded != ImageType::UNKNOWN) {
+                // 内嵌图片把整张贴图改成 RGBA8：类型还没定而前面已有 mip，说明那些是按原格式收下的原始数据，
+                // 上传时会按 RGBA8 越界读。
+                if (img.header.type == ImageType::UNKNOWN && (i_image > 0 || i_mipmap > 0)) {
+                    delete[] result;
+                    return Err(ImageParseError {
+                        .kind    = ImageParseErrorKind::InvalidData,
+                        .message = rstd::format("texture {} mixes raw and embedded mipmaps", name),
+                    });
+                }
                 int32_t w, h, n;
                 auto*   data =
                     stbi_load_from_memory((const unsigned char*)result, src_size, &w, &h, &n, 4);
@@ -644,10 +672,11 @@ auto TexImageParser::ParseHeader(ref<str> name) const -> Result<ImageHeader, Ima
             .message = rstd::format("texture {} has a truncated variant table", name),
         });
     }
-    if (header.count < 0) {
+    // 计数按剩余字节限住（同 Parse），不按声明值分配或循环。
+    if (header.count < 0 || header.count > Remaining(file) / 4) {
         return Err(ImageParseError {
             .kind    = ImageParseErrorKind::InvalidData,
-            .message = rstd::format("texture {} has a negative image count", name),
+            .message = rstd::format("texture {} has an invalid image count", name),
         });
     }
 
@@ -659,10 +688,10 @@ auto TexImageParser::ParseHeader(ref<str> name) const -> Result<ImageHeader, Ima
         std::vector<std::vector<float>> imageDatas(image_count);
         for (std::size_t i_image = 0; i_image < image_count; i_image++) {
             int mipmap_count = file.ReadInt32();
-            if (mipmap_count < 0) {
+            if (mipmap_count < 0 || mipmap_count > Remaining(file) / 12) {
                 return Err(ImageParseError {
                     .kind    = ImageParseErrorKind::InvalidData,
-                    .message = rstd::format("texture {} has a negative sprite mip count", name),
+                    .message = rstd::format("texture {} has an invalid sprite mip count", name),
                 });
             }
             for (int32_t i_mipmap = 0; i_mipmap < mipmap_count; i_mipmap++) {
@@ -701,7 +730,8 @@ auto TexImageParser::ParseHeader(ref<str> name) const -> Result<ImageHeader, Ima
             });
         }
         int32_t framecount = file.ReadInt32();
-        if (framecount <= 0) {
+        // 每帧至少 32 字节：imageId、frametime、6 个坐标。
+        if (framecount <= 0 || framecount > Remaining(file) / 32) {
             return Err(ImageParseError {
                 .kind    = ImageParseErrorKind::InvalidData,
                 .message = rstd::format("texture {} has no sprite frames", name),

@@ -36,4 +36,33 @@ public class BakePathTests
         Assert.Empty(await SlowClosureProbe.RunAsync(Plan(2), tools, Path.Combine(dir, "other"), CancellationToken.None));
         await Assert.ThrowsAnyAsync<Exception>(() => SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), CancellationToken.None));
     });
+
+    // 接缝门因慢分量漂移拒了某组、点名层 7：退回让层 7 留实时，重新分析，用新计划再烘一次，报告记成 retried。
+    [Fact]
+    public async Task SlowComponentRejectionRetreatsReplansAndRebakes() => await TestTemp.Run(async dir =>
+    {
+        string output = Path.Combine(dir, "bake");
+        var firstPlan = new JsonObject { ["settings"] = PlanSettings.ToJson(new HybridAnalyzeRequest(2, "source", "assets", "analysis")) };
+        var newPlan = new JsonObject { ["settings"] = firstPlan["settings"]!.DeepClone(), ["blockers"] = new JsonArray() };
+        HybridAnalyzeRequest? replanned = null;
+        var baked = new List<JsonObject>();
+        var service = new HybridBakeService(new NativeTools("must-not-run", "must-not-run", "must-not-run", []),
+            bakeOnce: request =>
+            {
+                baked.Add(request.Plan);
+                Directory.CreateDirectory(output);
+                return Task.FromResult(baked.Count == 1
+                    ? new JsonObject { ["status"] = "candidate_rejected_seam",
+                        [NoBenefit.Field] = new JsonObject { [NoBenefit.RetreatRootsField] = new JsonArray(7) } }
+                    : new JsonObject { ["status"] = "candidate_generated" });
+            },
+            analyze: settings => { replanned = settings; return Task.FromResult(newPlan); });
+
+        JsonObject result = await service.BakeAsync(new HybridBakeRequest(2, firstPlan, output));
+
+        Assert.Contains(7, replanned!.RetainLiveRootIds!);
+        Assert.Equal(2, baked.Count);
+        Assert.Same(newPlan, baked[1]);
+        Assert.Equal("retried", result["slow_component_retreat"]?["status"]?.GetValue<string>());
+    });
 }
