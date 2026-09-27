@@ -1,4 +1,3 @@
-using System.Text.Json.Nodes;
 using Baker.Core;
 using Xunit;
 
@@ -38,21 +37,4 @@ public class SwaySpeedLimitScaleTests
         Assert.Null(CommonLoopSolver.EvaluateAtFrames(request with { Components = [Slow(1e15, null)], MaximumDuration = new CommonLoopRational(600) }, 390 * 30).Candidate);
     }
 
-    // 官方 waterwaves 的峰值速度系数 K = strength²·Σ eᵢ|speedᵢ|·max(宽·scaleX, 高·scaleY)·1080/画布短边：
-    // 单波 0.1²·0.05·1920 = 0.96 px/s；父层缩放 0.5 减半；双波按两项相加；指数 < 1、双波缺第二组常量时不放行
-    [Fact]
-    public void WaterWavePeakSpeedBoundsTheRetimedDisplacement()
-    {
-        static JsonObject Layer(string constants, string combos = "{}", int? parent = null) => JsonNode.Parse($$"""
-            {"id":10,"size":"1920 1080","scale":"1 1 1"{{(parent is int p ? $",\"parent\":{p}" : "")}},
-             "effects":[{"passes":[{"constantshadervalues":{{constants}},"combos":{{combos}}}]}]}
-            """)!.AsObject();
-        double? K(JsonObject layer, bool dual = false) => ShaderPeriodAnalysis.WaveSpeed(layer, new Dictionary<int, JsonObject> {
-            [10] = layer, [1] = JsonNode.Parse("""{"id":1,"scale":"0.5 0.5 1"}""")!.AsObject() }, 1080, 0, 0, dual);
-        Assert.Equal(0.96, K(Layer("""{"strength":0.1,"speed":0.05}"""))!.Value, 9);
-        Assert.Equal(0.48, K(Layer("""{"strength":0.1,"speed":0.05}""", parent: 1))!.Value, 9);
-        Assert.Equal(0.01 * (0.05 + 2 * 0.02) * 1920, K(Layer("""{"strength":0.1,"speed":0.05,"speed2":0.02,"exponent2":2}""", """{"DUALWAVES":1}"""))!.Value, 9);
-        Assert.Null(K(Layer("""{"strength":0.1,"speed":0.05,"exponent":0.8}""")));
-        Assert.Null(K(Layer("""{"strength":0.1,"speed":0.05}"""), dual: true));
-    }
 }

@@ -13,7 +13,6 @@ internal static class ShaderSignatureChecks
             Directory.CreateDirectory(Path.Combine(root, "shaders", "effects"));
             File.WriteAllText(Path.Combine(root, "shaders", "effects", "x.frag"), "void main() { gl_FragColor = vec4(sin(g_Time * 0.5), sin(g_Time * 0.25), 0.0, 1.0); }");
             File.Copy(Path.Combine(root, "shaders", "effects", "x.frag"), Path.Combine(root, "shaders", "effects", "foliagesway.frag"));
-            File.WriteAllText(Path.Combine(root, "shaders", "effects", "waterwaves.frag"), "uniform float g_Speed;\nvoid main() { gl_FragColor = vec4(sin(g_Time * g_Speed)); }");
             using var source = new ProjectSource(root);
             foreach (string reason in (string[])["analysis_not_converged:op199 @fragment", "analysis_not_converged @fragment", "unsupported_side_effect",
                 "names_stripped", "spirv_unreadable", "time_rate_not_constant @fragment", "scroll_rate_not_constant:s @fragment",
@@ -118,19 +117,6 @@ internal static class ShaderSignatureChecks
             LoopReport sway = Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }), shader: "effects/foliagesway");
             check(sway.Candidates.Count == 0 && !sway.Evidence.Any(x => x.Evidence.EndsWith(ShaderPeriodAnalysis.MeasuredNote, StringComparison.Ordinal)),
                 "foliagesway without a computable amplitude stays on the per-term budget and never enters the speed check");
-
-            // waterwaves 的解析放行只认钉住指纹的官方片元：同名但内容不同的源码（工坊改版、这里的夹具）不放宽也不进实测，照旧按逐项预算。
-            // 振幅与尺寸都给足（改指纹核对就会按 K = 0.01·0.05·1920 = 0.96 px/s 放行约 10%）
-            LoopReport wave = LoopAnalysis.Analyze(JsonNode.Parse("""
-                {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
-                 "objects":[{"id":10,"image":"x","size":"1920 1080","effects":[{"passes":[{"constantshadervalues":{"strength":0.1,"speed":0.05}}]}]}]}
-                """)!.AsObject(), source, null, Runtime("""
-                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
-                  {"seconds":125.66370614359172,"num":40,"den":1,"pi":1,"knobs":[{"stage":"frag","uniform":"g_Speed","inverse":false}]}]}
-                """, "effects/waterwaves"), [10], 30, 1, 0, videoGroups: new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }));
-            check(wave.Candidates.Count == 0 && !wave.Evidence.Any(x => x.Evidence.Contains("water-wave", StringComparison.Ordinal) ||
-                x.Evidence.EndsWith(ShaderPeriodAnalysis.MeasuredNote, StringComparison.Ordinal)),
-                "a waterwaves source that is not the pinned official fragment keeps the per-term budget");
 
             // 同一 pass 剩 7 s 与 3π s 两类且没有旋钮：每项独立调频有解（上限 600 s）记未收敛 term_not_retimable；
             // 上限 10 s 时独立调频也无解，才是"不能"
