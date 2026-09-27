@@ -145,9 +145,9 @@ internal static class LoopAnalysis
         {
             // 没有任何已建模的时间机制时只剩两种结局：证明这一帧是静态的，或者说清楚为什么证明不了。
             // 旧实现在证明不了时一个字都不写，plan 里就出现零候选零理由的 unavailable（沉默拒绝）。
-            SourceStaticUnresolved? obstacle = StaticProof.Obstacle(scene, source, assetsDirectory, runtime, bakedLayerIds);
-            sourceStatic = obstacle is null;
-            if (obstacle is not null) unresolved.Add(obstacle);
+            SourceStaticUnresolved[] obstacles = StaticProof.Obstacle(scene, source, assetsDirectory, runtime, bakedLayerIds);
+            sourceStatic = obstacles.Length == 0;
+            unresolved.AddRange(obstacles);
         }
         if (sourceStatic)
         {
