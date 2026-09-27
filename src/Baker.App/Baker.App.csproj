@@ -7,7 +7,6 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>WpeBaker</AssemblyName>
-    <Version>1.1.0-preview.1</Version>
     <RootNamespace>Baker.App</RootNamespace>
     <ApplicationIcon>Periodica.ico</ApplicationIcon>
   </PropertyGroup>
