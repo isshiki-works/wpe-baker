@@ -732,6 +732,7 @@ bool OfflineSession::Impl::init(SessionConfig config, RenderInitInfo info, Offli
     m_mixer->set_volume_scale(m_config.volume_scale, 0);
     m_mixer->set_muted(m_config.muted);
 
+    info.pipeline_cache_dir = m_config.cache_dir;
     if (m_render->init(rstd::move(info)) && m_render->inited()) loadScene(m_render->deviceCapabilities());
     if (!m_render->inited()) m_error = "Offline Vulkan initialization failed";
     else if (!hasScene()) m_error = "Offline scene loading failed; see engine diagnostics";

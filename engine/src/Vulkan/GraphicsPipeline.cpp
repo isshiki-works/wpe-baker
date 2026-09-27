@@ -243,6 +243,11 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass, VkPipelin
         .renderPass          = pass,
         .subpass             = m_subpass,
     };
-    VVK_CHECK_BOOL_RE(device.handle().CreateGraphicsPipeline(create, pipeline.handle));
+    // 与 vvk::Device::CreateGraphicsPipeline 相同，只是带上设备的 VkPipelineCache（没有时为空句柄）。
+    const auto& dld    = device.handle().Dispatch();
+    VkPipeline  object = VK_NULL_HANDLE;
+    VVK_CHECK_BOOL_RE(
+        dld.vkCreateGraphicsPipelines(*device.handle(), device.pipeline_cache(), 1, &create, nullptr, &object));
+    pipeline.handle = vvk::Pipeline(object, *device.handle(), dld);
     return true;
 }

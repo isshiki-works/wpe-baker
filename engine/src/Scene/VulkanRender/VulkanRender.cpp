@@ -706,6 +706,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
             rstd_error("init vulkan device failed");
             return false;
         }
+        if (! info.pipeline_cache_dir.empty()) m_device->OpenPipelineCache(info.pipeline_cache_dir);
         if (! m_rendering_resources.resources.Initialize(*m_device)) {
             rstd_error("resource registry init failed");
             return false;

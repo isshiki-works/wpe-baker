@@ -220,6 +220,29 @@ uint64_t AudioBoundary(uint64_t frame, uint32_t fps_num, uint32_t fps_den) {
     return static_cast<uint64_t>(samples);
 }
 
+// 着色器缓存跨作业共享：条目按内容寻址、读时校验，写入是临时文件再改名，并发的渲染器互不写坏。放在
+// %LOCALAPPDATA%\WpeBaker\shader-cache 下，按这个渲染器的构建分目录（源码摘要 + exe 大小与修改时间），换了渲染器就不读旧编译器的产物。
+// 取不到这些时照旧放进本作业的输出目录（每次冷编译）。
+fs::path SharedShaderCache(const fs::path& fallback) {
+#ifdef _WIN32
+    std::wstring exe(32768, L'\0'), local(32768, L'\0');
+    DWORD exe_length = GetModuleFileNameW(nullptr, exe.data(), static_cast<DWORD>(exe.size()));
+    DWORD local_length = GetEnvironmentVariableW(L"LOCALAPPDATA", local.data(), static_cast<DWORD>(local.size()));
+    if (exe_length == 0 || exe_length >= exe.size() || local_length == 0 || local_length >= local.size()) return fallback;
+    exe.resize(exe_length);
+    local.resize(local_length);
+    std::error_code size_error, time_error;
+    auto size = fs::file_size(exe, size_error);
+    auto time = fs::last_write_time(exe, time_error);
+    if (size_error || time_error) return fallback;
+    std::string build = std::string(WPE_RENDER_SOURCE_DIGEST).substr(0, 16) + "-" + std::to_string(size) + "-" +
+        std::to_string(time.time_since_epoch().count());
+    return fs::path(local) / "WpeBaker" / "shader-cache" / build;
+#else
+    return fallback;
+#endif
+}
+
 Job ReadJob(const owe::NJson& json, const fs::path& base) {
     if (!json.is_object() || Uint(json, "schema_version", 0) != 1)
         throw std::runtime_error("unsupported job schema_version (expected 1)");
@@ -233,7 +256,7 @@ Job ReadJob(const owe::NJson& json, const fs::path& base) {
     job.source = resolve("source");
     job.assets = resolve("assets");
     job.output = resolve("output_dir");
-    job.cache = job.output / "shader-cache";
+    job.cache = SharedShaderCache(job.output / "shader-cache");
     if (fs::is_directory(job.source))
         job.source /= fs::is_regular_file(job.source / "scene.pkg") ? "scene.pkg" : "scene.json";
     if (!fs::is_regular_file(job.source)) throw std::runtime_error("source scene does not exist");
