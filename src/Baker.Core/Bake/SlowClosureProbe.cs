@@ -76,8 +76,10 @@ internal static class SlowClosureProbe
         return records;
     }
 
-    /// <summary>实测的时间窗（秒）：都量，读数取最大（长窗灵敏，短窗兜住位移超出线性区时的低估）。</summary>
-    static readonly double[] Windows = [8, 4, 2, 1, 0.5];
+    /// <summary>最短时间窗（秒）：从它起每次翻倍，直到循环长度。</summary>
+    const double ShortestWindowSeconds = 0.5;
+    /// <summary>画面差可测的下限（levels）：最差块的平均差 D 达到它的第一个窗才算速率；更小的差可能只是 8 位量化抹掉了。</summary>
+    internal const double MeasurableLevels = 3;
 
     /// <summary>
     /// 振幅推不出的慢项超预算改速（evidence 带 <see cref="ShaderPeriodAnalysis.MeasuredNote"/>、首选候选里 |δ| 超过逐项预算）实测看不看得出。
@@ -130,7 +132,7 @@ internal static class SlowClosureProbe
             HybridAnalyzeRequest settings = PlanSettings.Of(plan);
             var (openedBefore, _, _) = await OpenAsync(before, groups, runner, Path.Combine(output, "before"), token);
             await using var schedulerBefore = openedBefore;
-            var (openedAfter, _, _) = await OpenAsync(plan, groups, runner, Path.Combine(output, "after"), token);
+            var (openedAfter, loopFrames, _) = await OpenAsync(plan, groups, runner, Path.Combine(output, "after"), token);
             await using var schedulerAfter = openedAfter;
             foreach (int index in probed)
             {
@@ -145,7 +147,7 @@ internal static class SlowClosureProbe
                     return await LoopClosureCheck.ReadRetainedFrameAsync(manifest, 0, token);
                 }
                 JsonObject reading = await MeasureAsync(Render, (int)capture.PixelWidth, (int)capture.PixelHeight, schedulerAfter.TileScale,
-                    settings.FpsNumerator, settings.FpsDenominator);
+                    settings.FpsNumerator, settings.FpsDenominator, loopFrames[index]);
                 reading["group_id"] = groups[index]["id"]!.DeepClone();
                 readings.Add(reading);
             }
@@ -169,17 +171,18 @@ internal static class SlowClosureProbe
     }
 
     /// <summary>
-    /// 一个组的速度差读数。<paramref name="render"/>(after, frame) 出改速前/后从时间 0 起的第 frame 帧（RGBA）。
+    /// 一个组的速度差读数。<paramref name="render"/>(after, frame) 出改速前/后从时间 0 起的第 frame 帧（RGBA）；<paramref name="loopFrames"/> 是这个组的循环长度 L（帧）。
     /// 第 0 帧两版不逐位相同 → not_measured（frame0_differs）；第 0 帧整幅没有梯度 → not_measured（no_texture，所有者层可能没渲出来）。
-    /// 否则比较两版在 t 时刻的画面差，同时抓位移和亮度变化（分块光流只量位移，亮度类特效怎么改速都会"通过"）：
+    /// 否则比较两版在 t 时刻的画面，同时抓位移和亮度变化（分块光流只量位移，亮度类特效怎么改速都会"通过"）：
     /// 约 540p 网格（1080p 下 2×2 平均）上逐格取 d = max_c |after_c − before_c|、g = max_c |∇before_c|（c 取 RGBA，梯度按 1080p 像素），
-    /// 块边 16 格（1080p 的 32 px）内求平均 D、G，读数 v = D / (t·G)，单位 px/s。
-    /// 纯位移 s 时每个通道 |Δc| ≈ |∇c·s| ≤ |∇c|·|s| ≤ g·|s|，所以 D ≤ G·|s|、v ≤ |s|/t = 位移速度差：速度差 ≤ 0.1 px/s 的纯位移必然通过，
-    /// 与原来的位移判据同一口径；亮度变化在 G ≈ 0 的平坦块里直接让 v 变大（G = 0 而 D > 0 记无穷）。
-    /// 5 个时间窗都量，读数取各块、各窗的最大值（长窗的位移可能超出线性区而低估，短窗兜住），≤ 0.1 px/s 为 passed，否则 visible。
+    /// 块边 16 格（1080p 的 32 px）内求平均 D、G，读数 v = D / (t·G)，单位 px/s；G = 0 而 D > 0 记无穷。
+    /// 纯位移 s 时每个通道 |Δc| ≈ |∇c·s| ≤ |∇c|·|s| ≤ g·|s|，所以 D ≤ G·|s|、v ≤ |s|/t = 位移速度差：速度差 ≤ 0.1 px/s 的纯位移必然通过。
+    /// 窗口 t 从 0.5 s 起翻倍直到 L（最后一窗取 L），取第一个最差块 D ≥ <see cref="MeasurableLevels"/> 的窗算读数，≤ 0.1 px/s 为 passed，否则 visible：
+    /// 更短的窗里差可能被 8 位量化抹成 0（周期几百秒的项改速几十个百分点，8 s 里相位差不到 1%），更长的窗里图案去相关、D 饱和会低估速率，所以只取第一个可测窗。
+    /// 到 t = L 两版的差都不可测时，整个循环里都看不出差别，按 below_quantization_through_loop 放行（读数写 null，另记全程最大块差）。
     /// </summary>
     internal static async Task<JsonObject> MeasureAsync(Func<bool, ulong, Task<byte[]>> render, int width, int height, double tileScale,
-        uint fpsNumerator, uint fpsDenominator)
+        uint fpsNumerator, uint fpsDenominator, ulong loopFrames)
     {
         byte[] origin = await render(false, 0), retimed = await render(true, 0);
         if (!origin.AsSpan().SequenceEqual(retimed))
@@ -188,20 +191,27 @@ internal static class SlowClosureProbe
         double toReference = step / tileScale;
         if (Blocks(origin, origin, width, height, step, toReference).All(block => block.Gradient == 0))
             return new JsonObject { ["status"] = "not_measured", ["reason"] = "no_texture" };
-        double peak = 0, worstWindow = 0;
-        foreach (double seconds in Windows)
+        double largest = 0;
+        for (double seconds = ShortestWindowSeconds; ; seconds *= 2)
         {
-            ulong frame = (ulong)Math.Round(seconds * fpsNumerator / fpsDenominator);
-            foreach (var (difference, gradient) in Blocks(await render(false, frame), await render(true, frame), width, height, step, toReference))
+            ulong frame = Math.Min(loopFrames, Math.Max(1, (ulong)Math.Round(seconds * fpsNumerator / fpsDenominator)));
+            double t = (double)frame * fpsDenominator / fpsNumerator;
+            var blocks = Blocks(await render(false, frame), await render(true, frame), width, height, step, toReference).ToArray();
+            double worst = blocks.Max(block => block.Difference);
+            largest = Math.Max(largest, worst);
+            if (worst >= MeasurableLevels)
             {
-                double reading = difference == 0 ? 0 : gradient == 0 ? double.PositiveInfinity : difference / (seconds * gradient);
-                if (reading > peak) (peak, worstWindow) = (reading, seconds);
+                double peak = blocks.Max(block => block.Difference == 0 ? 0 : block.Gradient == 0 ? double.PositiveInfinity : block.Difference / (t * block.Gradient));
+                return new JsonObject { ["status"] = peak <= SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond ? "passed" : "visible",
+                    ["basis"] = "first_measurable_window",
+                    // 平坦块里有变化时读数是无穷，JSON 里记 null 并标 flat_block_changed
+                    ["peak_speed_deviation_px_per_second"] = double.IsFinite(peak) ? peak : null, ["flat_block_changed"] = !double.IsFinite(peak),
+                    ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = worst };
             }
+            if (frame >= loopFrames)
+                return new JsonObject { ["status"] = "passed", ["basis"] = "below_quantization_through_loop",
+                    ["peak_speed_deviation_px_per_second"] = null, ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = largest };
         }
-        return new JsonObject { ["status"] = peak <= SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond ? "passed" : "visible",
-            // 平坦块里有变化时读数是无穷，JSON 里记 null 并标 flat_block_changed
-            ["peak_speed_deviation_px_per_second"] = double.IsFinite(peak) ? peak : null, ["flat_block_changed"] = !double.IsFinite(peak),
-            ["worst_window_seconds"] = worstWindow };
     }
 
     /// <summary>

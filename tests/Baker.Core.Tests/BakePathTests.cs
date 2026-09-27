@@ -68,7 +68,8 @@ public class BakePathTests
 
     // 慢项改速实测的读数（伪造渲染器出平滑纹理）。位移：改速后的版本按速度差 dv 横移 dv·t 像素，0.05 px/s 放行、0.5 px/s 看得出。
     // 亮度：画面左半是静止纹理，右半是平坦的光晕按 pulse 起伏（周期 400 s 改到 101 s，2997331973 的实况），不动一个像素也必须看得出——
-    // 分块光流只量位移（平坦块没有纹理、纹理块没变化），这种改速曾读出 0.019 px/s 放行。两版第 0 帧不逐位相同、第 0 帧没有梯度时不出读数。
+    // 分块光流只量位移（平坦块没有纹理、纹理块没变化），这种改速曾读出 0.019 px/s 放行。
+    // 窗口从 0.5 s 翻倍到循环长度，取第一个最差块差 ≥ 3 levels 的窗算读数。两版第 0 帧不逐位相同、第 0 帧没有梯度时不出读数。
     [Fact]
     public async Task SlowSpeedProbeCatchesDisplacementAndBrightness()
     {
@@ -89,7 +90,7 @@ public class BakePathTests
             return rgba;
         }
         static Task<JsonObject> Read(Func<bool, double, byte[]> frame) => SlowClosureProbe.MeasureAsync(
-            (after, index) => Task.FromResult(frame(after, index / 30.0)), size, size, 1, 30, 1);
+            (after, index) => Task.FromResult(frame(after, index / 30.0)), size, size, 1, 30, 1, 400 * 30);
         static Task<JsonObject> Shift(double deviation) => Read((after, t) => Frame(after ? deviation * t : 0));
         JsonObject slow = await Shift(0.05), fast = await Shift(0.5);
         Assert.Equal("passed", slow["status"]!.GetValue<string>());
@@ -98,6 +99,16 @@ public class BakePathTests
         JsonObject pulse = await Read((after, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / (after ? 101 : 400)), halfFlat: true));
         Assert.Equal("visible", pulse["status"]!.GetValue<string>());
         Assert.True(pulse["flat_block_changed"]!.GetValue<bool>());
+        // 慢亮度漂移（3715870843 的 caustics 形态）：平坦光晕 ±5 levels、周期 400 s 改到 300 s。8 s 内两版量化后逐位相同（旧的 0.5–8 s 窗读 0 放行），
+        // 翻倍到第一个最差块差 ≥ 3 levels 的窗才算读数，平坦块里的变化判看得出
+        JsonObject drift = await Read((after, t) => Frame(0, 5 * Math.Sin(2 * Math.PI * t / (after ? 300 : 400)), halfFlat: true));
+        Assert.Equal("visible", drift["status"]!.GetValue<string>());
+        Assert.True(drift["worst_window_seconds"]!.GetValue<double>() > 8);
+        // 整个循环（400 s）里两版的差都在量化阈值以下：放行，并写明按哪种情况放行
+        JsonObject faint = await Read((after, t) => Frame(0, 0.4 * Math.Sin(2 * Math.PI * t / (after ? 300 : 400)), halfFlat: true));
+        Assert.Equal("passed", faint["status"]!.GetValue<string>());
+        Assert.Equal("below_quantization_through_loop", faint["basis"]!.GetValue<string>());
+        Assert.Equal(400.0, faint["worst_window_seconds"]!.GetValue<double>());
         Assert.Equal("frame0_differs", (await Read((after, t) => Frame(0, speck: after && t == 0)))["reason"]!.GetValue<string>());
         Assert.Equal("no_texture", (await Read((after, t) => Frame(0, after ? t : 0, flat: true)))["reason"]!.GetValue<string>());
     }
