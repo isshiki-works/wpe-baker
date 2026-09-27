@@ -368,6 +368,24 @@ TEST(ImageParser, CorruptTextureSizesAreRejected) {
         tex.u32(0x7fffffffu);
         cases.push_back(tex.data);
     }
+    { // RGBA8 4x4 的第 1 级声明成 4x4，GPU 上这一级只有 2x2
+        auto tex = TexVariantHeader(0, 0, 4, {});
+        tex.u32(2);
+        for (std::uint32_t v : { 4u, 4u, 0u, 0u, 64u }) tex.u32(v);
+        tex.data += std::string(64, '\0');
+        for (std::uint32_t v : { 4u, 4u, 0u, 0u, 64u }) tex.u32(v);
+        tex.data += std::string(64, '\0');
+        cases.push_back(tex.data);
+    }
+    { // RGBA8 1x1 带第 2 级：GPU 上 1x1 只有一级
+        auto tex = TexVariantHeader(0, 0, 1, {});
+        tex.u32(2);
+        for (int i = 0; i < 2; ++i) {
+            for (std::uint32_t v : { 1u, 1u, 0u, 0u, 4u }) tex.u32(v);
+            tex.data += std::string(4, '\0');
+        }
+        cases.push_back(tex.data);
+    }
     for (std::size_t i = 0; i < cases.size(); ++i) dir.Write("corrupt" + std::to_string(i), cases[i]);
     ASSERT_TRUE(dir.Mount());
 
@@ -379,6 +397,25 @@ TEST(ImageParser, CorruptTextureSizesAreRejected) {
         EXPECT_TRUE(rstd::move(parsed).unwrap_err().kind == owe::ImageParseErrorKind::InvalidData)
             << name;
     }
+}
+
+// 按 GPU 取整规则（向下、至少 1）减半的完整 mip 链照常解析，非 2 的幂也一样。
+TEST(ImageParser, MipChainWithinGpuLevelsParses) {
+    TexFixtureDir dir("mipchain");
+    auto          tex = TexVariantHeader(0, 0, 8, {});
+    tex.u32(3);
+    const std::pair<std::uint32_t, std::uint32_t> levels[] = { { 3, 5 }, { 1, 2 }, { 1, 1 } };
+    for (auto [w, h] : levels) {
+        for (std::uint32_t v : { w, h, 0u, 0u, w * h * 4 }) tex.u32(v);
+        tex.data += std::string(w * h * 4, '\0');
+    }
+    dir.Write("chain", tex.data);
+    ASSERT_TRUE(dir.Mount());
+
+    owe::TexImageParser parser(&dir.vfs);
+    auto                parsed = parser.Parse("chain"_str);
+    ASSERT_TRUE(parsed.is_ok());
+    EXPECT_EQ(rstd::move(parsed).unwrap_unchecked()->slots[0].mipmaps.size(), 3u);
 }
 
 // 贴图名只在挂载的包和资产目录里找，不按本机绝对路径读文件。

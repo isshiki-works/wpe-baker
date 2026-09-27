@@ -462,6 +462,18 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
                     .message = rstd::format("texture {} has an invalid mipmap", name),
                 });
             }
+            // GPU 贴图按第 0 级宽高和 mip 数建（TextureCache::AllocateImportedTexture），第 i 级是
+            // max(1, 第 0 级 >> i)，级数不超过第 0 级能减半的次数；声明得更大，上传就写出该级。
+            if (i_mipmap > 0 &&
+                (i_mipmap > 30 || (std::max(img_slot.width, img_slot.height) >> i_mipmap) == 0 ||
+                 mipmap.width > std::max(img_slot.width >> i_mipmap, 1) ||
+                 mipmap.height > std::max(img_slot.height >> i_mipmap, 1))) {
+                return Err(ImageParseError {
+                    .kind    = ImageParseErrorKind::InvalidData,
+                    .message = rstd::format("texture {} mipmap {} is larger than its level", name,
+                                            i_mipmap),
+                });
+            }
 
             // Peek the first 16 bytes of the body so we can route MP4 /
             // WebM containers into the video-tex path without ever
