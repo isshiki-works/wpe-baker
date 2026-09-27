@@ -51,14 +51,14 @@ internal static class SlowClosureProbe
         if (plan["route"]?.GetValue<string>() == "effect_prefix" || !groups.Any(group => GroupVerdicts.SlowDrift(plan, Layers(group)) is not null))
             return records;
         var runner = new NativeRenderRunner(tools);
-        var (opened, groupFrames, residualGroups, _) = await OpenAsync(plan, groups, runner, output, token);
-        await using var scheduler = opened;
+        // 每组一次渲染同时留第 0 与第 P 帧；各组互不依赖，最多 Parallel 组同时渲，记录仍按组序。
+        int[] probed = [.. Enumerable.Range(0, groups.Length).Where(index => GroupVerdicts.SlowDrift(plan, Layers(groups[index])) is not null)];
+        var results = new JsonObject?[probed.Length];
         try
         {
+            var (opened, groupFrames, residualGroups, _) = await OpenAsync(plan, groups, runner, output, token);
+            await using var scheduler = opened;
             if (residualGroups.Length > 0) await LoopStartSelector.SearchAsync(runner, scheduler, Parallel, null, new StageTiming(), token);
-            // 每组一次渲染同时留第 0 与第 P 帧；各组互不依赖，最多 Parallel 组同时渲，记录仍按组序。
-            int[] probed = [.. Enumerable.Range(0, groups.Length).Where(index => GroupVerdicts.SlowDrift(plan, Layers(groups[index])) is not null)];
-            var results = new JsonObject[probed.Length];
             await System.Threading.Tasks.Parallel.ForEachAsync(Enumerable.Range(0, probed.Length),
                 new ParallelOptions { MaxDegreeOfParallelism = Parallel, CancellationToken = token }, async (slot, cancel) =>
                 {
@@ -76,7 +76,20 @@ internal static class SlowClosureProbe
                         ["renderer_wall_seconds"] = render["native_result"]?["wall_seconds"]?.GetValue<double>() ?? 0,
                         ["loop_closure"] = closure };
                 });
-            foreach (JsonObject record in results) records.Add(record);
+            foreach (JsonObject? record in results) records.Add(record);
+        }
+        // 建采集工程或渲染失败（比如改速补丁后的覆盖 shader 编不过）：已测完的组照记读数，没测到的组记 probe_failed、不带闭合读数，不让整次分析失败；
+        // 编排层照没闭合处理（这些层留实时、不改写），裁定不按"有证明的不能"算。取消照常往外抛
+        catch (Exception error) when (!token.IsCancellationRequested)
+        {
+            records.Clear();
+            for (int slot = 0; slot < probed.Length; ++slot)
+            {
+                var (degrees, owners) = GroupVerdicts.SlowDrift(plan, Layers(groups[probed[slot]]))!.Value;
+                records.Add(results[slot] ?? new JsonObject { ["group_id"] = groups[probed[slot]]["id"]!.DeepClone(),
+                    ["owner_layer_ids"] = new JsonArray([.. owners.Select(id => (JsonNode)id)]), ["drift_bound_degrees"] = degrees, ["status"] = "probe_failed",
+                    ["error_type"] = error.GetType().Name, ["message"] = error.Message });
+            }
         }
         finally
         {

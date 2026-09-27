@@ -34,7 +34,11 @@ public class BakePathTests
                 ["slow_components"] = new JsonArray(new JsonObject { ["owner_layer_id"] = owner, ["drift_bound_radians"] = 0.01 }) }) },
         };
         Assert.Empty(await SlowClosureProbe.RunAsync(Plan(2), tools, Path.Combine(dir, "other"), CancellationToken.None));
-        await Assert.ThrowsAnyAsync<Exception>(() => SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), CancellationToken.None));
+        // 在组里时开始准备渲染；准备失败（这里源不存在）记 probe_failed、不带闭合读数，不让整次分析失败
+        JsonObject failed = Assert.Single(await SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), CancellationToken.None))!.AsObject();
+        Assert.Equal("probe_failed", failed["status"]!.GetValue<string>());
+        Assert.Null(failed["loop_closure"]);
+        Assert.Equal([1], failed["owner_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()));
     });
 
     // 接缝门因慢分量漂移拒了某组、点名层 7：退回让层 7 留实时，重新分析，用新计划再烘一次，报告记成 retried。

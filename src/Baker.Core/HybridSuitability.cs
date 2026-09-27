@@ -82,7 +82,7 @@ internal static class HybridSuitability
         // 慢分量闭合预检没闭合（解析漂移上界 + 接缝读数），把所有者层留实时后整张生成不了：有证明的不能，不是"全部依赖实时输入"。
         // 预检只在能生成的方案上跑，留实时之前能生成，所以生成不了就是这些层闭合不了造成的（AnalysisOrchestrator 在写入读数后重算裁定）。
         if ((noCandidateAtAll || blockers.Length > 0) && (plan["slow_closure_probe"] as JsonArray ?? []).OfType<JsonObject>()
-            .Any(record => !LoopClosureCheck.Allows(record["loop_closure"] as JsonObject)))
+            .Any(record => record["loop_closure"] is JsonObject closure && !LoopClosureCheck.Allows(closure)))
             return Converged(plan, Build("not_suitable", "slow_components_not_closed", "", "", notes), proven: true);
 
         // S1：依赖闭包之后连一个视频组都没有，没有任何东西可烘。

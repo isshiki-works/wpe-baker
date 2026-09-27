@@ -98,6 +98,12 @@ internal static class ShaderSignatureChecks
                     .Select(x => x!["mechanism"]!.GetValue<string>()).SequenceEqual(["term_not_retimable"]),
                 "a call knob rewrites only when the source has exactly the call sites the engine counted");
 
+            // 分量旋钮改写在文件末尾追加新 main：varying 声明在预处理条件块里时条件不成立就不存在，覆盖 shader 编不过（3644280276 waterripple），不当改写目标
+            string ripple = "varying vec4 v_Plain;\n#if RIPPLE\nvarying vec4 v_TexCoordRipple;\n#endif\nvoid main() { v_Plain = vec4(g_Time); }\n";
+            check(ShaderTextPatch.AxisTarget(ripple, "periodica_k_vert_ax_x_v_TexCoordRipple") is null &&
+                ShaderTextPatch.AxisTarget(ripple, "periodica_k_vert_ax_x_v_Plain") is not null,
+                "a vertex output declared inside a preprocessor conditional is not a rewrite target");
+
             // 振幅推不出的慢项（90.1 s，旋钮 0.25）：逐项预算（这里 0%）内与 7.1 s 项凑不出循环时，整层路线（有视频组）放开它的改速、
             // 证据带实测标记留给分析收尾实测；特效前缀路线（没有视频组）不放开，照旧无解
             LoopReport Measured(JsonArray? groups, bool budgetOnly = false, string shader = "effects/x", bool unmeasured = false, bool demote = false) => LoopAnalysis.Analyze(
@@ -126,6 +132,22 @@ internal static class ShaderSignatureChecks
                 demoted.Candidates[0].Components.All(x => x.ComponentId != slowTerm) && demoted.Candidates[0].Patches.OfType<LoopValuePatch>().All(x => x.ComponentId != slowTerm) &&
                 Kinds(demoted).Count == 0,
                 "a long term that cannot close within the budget becomes a slow component for the closure probe instead of proving cannot");
+            // 只降精确闭合证明无解的层：10 层只有 142 s 一项（能与 11 层的 7.1 s 精确闭合），是全场最长的项也不动；
+            // 11 层 7.1 s 与 90.1 s 在 0% 预算下最宽松模型也无解，只降它的 90.1 s，10 层照旧精确闭合在 142 s
+            JsonObject two = Runtime("""
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[{"seconds":142,"num":142,"den":1,"pi":0,"knobs":[]}]}
+                """);
+            two["runtime_layers"]!.AsArray().Add(Runtime("""
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
+                  {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
+                  {"seconds":90.1,"num":901,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.25,"inverse":false}]}]}
+                """)["runtime_layers"]![0]!.DeepClone());
+            two["runtime_layers"]![1]!["owner"] = 11;
+            LoopReport pair2 = LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10},{"id":11}]}""")!.AsObject(), source, null, two, [10, 11], 30, 1, 0,
+                videoGroups: new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10, 11) }), budgetOnlyRetime: true, demoteLongTerms: true);
+            check(pair2.Candidates.Count > 0 && pair2.Candidates[0].SlowComponents.Select(x => x.Id).SequenceEqual(["shader/11/0/0/effects/x/periodica_k_frag_3e800000/slow"]) &&
+                pair2.Candidates[0].Components.Any(x => x.ComponentId == "shader/10/0/0/effects/x") && pair2.Candidates[0].Frames == 142 * 30,
+                "only a layer proven unable to close exactly has its long terms demoted; a layer that closes exactly stays in the solver even with the longest term");
             // 分析入口：档位上限与 1200 s 都凑不出时才降级（整层路线），plan.loop 带慢分量；特效前缀路线（没有视频组）不降级
             JsonObject Planned(JsonArray? groups) => HybridScenePlanner.AnalyzeLoopForProfile(() => JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(),
                 source, null, Runtime("""

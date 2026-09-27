@@ -160,6 +160,12 @@ public static class ShaderTextPatch
         string code = Comment.Replace(text, match => new string(' ', match.Length)), varying = parts.Groups[2].Value, letters = parts.Groups[1].Value;
         Match[] declared = Regex.Matches(code, @"\bvarying\s+(?:\w+\s+)*?(float|vec[234])\s+" + Regex.Escape(varying) + @"\s*;", RegexOptions.CultureInvariant).ToArray();
         if (MainDecl.Matches(code).Count != 1 || declared is not [Match only]) return null;
+        // 改写把新 main 追加在文件末尾、预处理条件块之外：声明在 #if/#ifdef/#ifndef 块里的 varying 在条件不成立的组合下不存在，
+        // 覆盖 shader 编不过（3644280276 waterripple 的 v_TexCoordRipple）。这种 varying 不当改写目标，分析也就不挂这个旋钮
+        int depth = 0;
+        foreach (string line in code[..only.Index].Split('\n').Select(line => line.TrimStart()))
+            depth += line.StartsWith("#if", StringComparison.Ordinal) ? 1 : line.StartsWith("#endif", StringComparison.Ordinal) ? -1 : 0;
+        if (depth > 0) return null;
         string type = only.Groups[1].Value;
         if (type == "float") return letters == "x" ? (varying, [""]) : null;
         return letters.All(c => "xyzw".IndexOf(c) < type[3] - '0') ? (varying, [.. letters.Select(c => "." + c)]) : null;
