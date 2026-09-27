@@ -8,11 +8,13 @@
 #include <io.h>
 #endif
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <CLI11.hpp>
 #include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
 
 #include "JsonNlohmann.hpp"
+#include "FrameWriter.hpp"
 #ifndef WPE_RENDER_SOURCE_DIGEST
 #define WPE_RENDER_SOURCE_DIGEST "unrecorded"
 #endif
@@ -670,6 +672,18 @@ int Render(const fs::path& job_path) {
             raw.open(job.output / "frames.rgba.partial", std::ios::binary);
             if (!raw) throw std::runtime_error("cannot create raw frame stream");
         }
+        // 像素交给写线程，写本帧的同时渲染下一帧；WPE_SERIAL_FRAMES=1 时回到同步写（与渲染器的回退开关同一个）。
+        const char* serial_frames = std::getenv("WPE_SERIAL_FRAMES");
+        FrameWriter writer([&](const std::vector<uint8_t>& frame_pixels) {
+            if (job.raw_stdout) {
+                if (std::fwrite(frame_pixels.data(), 1, frame_pixels.size(), stdout) != frame_pixels.size())
+                    throw std::runtime_error("frame consumer closed or failed");
+            } else {
+                raw.write(reinterpret_cast<const char*>(frame_pixels.data()), static_cast<std::streamsize>(frame_pixels.size()));
+                if (!raw) throw std::runtime_error("raw frame write failed");
+            }
+        }, !(serial_frames && *serial_frames && std::string_view(serial_frames) != "0"));
+        std::vector<uint8_t> spare_pixels;
         const double dt = static_cast<double>(job.fps_den) / job.fps_num;
         uint64_t next_audio_sample = 0;
         std::size_t next_input_event = 0;
@@ -711,12 +725,10 @@ int Render(const fs::path& job_path) {
             }
             audio_processed += pcm.frame_count;
             if (!read_pixels && !job.gpu_encode) continue;
-            if (job.raw_stdout) {
-                if (std::fwrite(pixels.pixels.data(), 1, pixels.pixels.size(), stdout) != pixels.pixels.size())
-                    throw std::runtime_error("frame consumer closed or failed");
-            } else if (!job.gpu_encode) {
-                raw.write(reinterpret_cast<const char*>(pixels.pixels.data()), static_cast<std::streamsize>(pixels.pixels.size()));
-                if (!raw) throw std::runtime_error("raw frame write failed");
+            // GPU 直编不读回（像素为空），不写。换出的缓冲在下一帧 step 时回收给读回复用。
+            if (read_pixels) {
+                wallpaper.exchangePixels(spare_pixels);
+                writer.push(spare_pixels);
             }
             index << "{\"frame\":" << (frame - job.warmup) << ",\"simulation_frame\":" << frame
                   << ",\"pts_num\":" << (frame - job.warmup) * job.fps_den << ",\"pts_den\":" << job.fps_num
@@ -739,6 +751,7 @@ int Render(const fs::path& job_path) {
             if (written == 1 || written % 120 == 0 || written == job.frames)
                 std::cerr << "wpe-render: " << written << '/' << job.frames << " frames\n";
         }
+        writer.finish();
         if (audio_processed != AudioBoundary(job.warmup + job.frames, job.fps_num, job.fps_den) -
                              AudioBoundary(job.warmup, job.fps_num, job.fps_den))
             throw std::runtime_error("final audio duration does not match video timeline");

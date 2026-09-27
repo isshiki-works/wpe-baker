@@ -447,8 +447,14 @@ struct TextureCache::VideoRegistry {
         double                                      offline_cycle { -1.0 };
         bool                                        offline_drained { false };
         Option<owe::media::Nv12Frame>               offline_pending;
+        // 离线分两段（见 PrepareVideoTextures）：offline_prepared 为真时本帧已解码，Pump 只写纹理；
+        // 解码失败的消息留到 Pump 再报，nv12_ready 表示 nv12_scratch 已按当前解码帧转好。
+        bool                                        offline_prepared { false };
+        std::optional<std::string>                  offline_error;
+        bool                                        nv12_ready { false };
 
         void Pump(double dt_seconds) override;
+        void PrepareOffline();
     };
     Vec<std::weak_ptr<TextureAllocationRuntime>> runtimes;
     struct ObservedRuntime {
@@ -681,6 +687,102 @@ TextureCache::CreateVideoTex(const Image&                                image,
     return Some(rstd::move(allocation));
 }
 
+// 离线的解码段：按作业时钟推进播放、解出本帧该显示的帧，要画的帧顺带转 NV12。只动 CPU 内存和解码器
+// （nv12_scratch、播放状态），不碰 GPU，所以可以排在等上一帧 GPU 收尾之前（PrepareVideoTextures）。
+// 失败只记下消息，由同一帧的 Pump 报出，与不拆段时报在同一处。
+void TextureCache::VideoRegistry::Runtime::PrepareOffline() {
+    auto& s = *this;
+    s.offline_prepared = true;
+    bool got_new = false;
+    auto fail = [&](const std::string& message) { s.offline_error = message; };
+    const double now = active_offline_execution->elapsed;
+    const bool first = !s.offline_clock_initialized;
+    auto control = s.playback.is_some() ? (*s.playback)->Snapshot() : VideoPlaybackSnapshot {};
+    const bool seek_changed = control.seek_sequence != s.applied_seek_sequence;
+    double media_time;
+    if (s.playback.is_some()) {
+        media_time = (*s.playback)->AdvanceOffline(f64(now)).to_primitive();
+    } else {
+        media_time = first ? control.seek_seconds.to_primitive() :
+            s.offline_anchor_media + (s.offline_control.playing ?
+                (now - s.offline_anchor_scene) * s.offline_control.rate.to_primitive() : 0.0);
+        if (seek_changed) media_time = control.seek_seconds.to_primitive();
+        if (first || seek_changed || control.playing != s.offline_control.playing ||
+            control.rate != s.offline_control.rate) {
+            s.offline_anchor_scene = now;
+            s.offline_anchor_media = media_time;
+        }
+        s.offline_control = control;
+    }
+    s.offline_clock_initialized = true;
+    s.applied_seek_sequence = control.seek_sequence;
+    const auto duration = s.decoder.duration();
+    if (!duration || !std::isfinite(*duration) || *duration <= 0.0 ||
+        !std::isfinite(media_time) || media_time < 0.0) {
+        fail("offline video sampling requires a finite timestamp and positive video duration");
+        return;
+    }
+    const double duration_s = *duration;
+    double quotient = media_time / duration_s;
+    const double nearest = std::round(quotient);
+    if (std::abs(quotient - nearest) <= 4.0 * std::numeric_limits<double>::epsilon() *
+        std::max(1.0, std::abs(quotient))) quotient = nearest;
+    const double cycle = std::floor(quotient);
+    const double cycle_start = cycle * duration_s;
+    s.pts_acc = f64(std::max(0.0, media_time - cycle_start));
+    if (first || seek_changed || cycle != s.offline_cycle) {
+        if (! s.decoder.seek(s.pts_acc.to_primitive())) {
+            fail(std::string(s.decoder.last_error()));
+            return;
+        }
+        s.offline_pending = None();
+        s.offline_drained = false;
+        s.offline_cycle = cycle;
+        s.last_pts = f64(-1.0);
+    }
+    // Retain one future frame as lookahead. Only a frame whose PTS has
+    // arrived may replace the displayed image; output FPS does not change
+    // the source's sampling rate. Offline catch-up must not drop work.
+    while (!s.offline_drained) {
+        if (s.offline_pending.is_none()) {
+            owe::media::Nv12Frame candidate;
+            auto pulled = s.decoder.next_frame(candidate, false);
+            if (!pulled) {
+                fail(std::string(s.decoder.last_error()));
+                return;
+            }
+            if (*pulled != owe::media::NextFrame::Ok) {
+                // The decoder's eager loop has consumed the next cycle's
+                // first frame. Seek again only when scene time wraps.
+                s.offline_drained = true;
+                break;
+            }
+            if (!std::isfinite(candidate.pts_seconds) || candidate.pts_seconds < 0.0) {
+                fail("decoded video frame has no usable presentation timestamp");
+                return;
+            }
+            s.offline_pending = Some(rstd::move(candidate));
+        }
+        const double deadline = cycle_start + s.offline_pending->pts_seconds;
+        const double tolerance = 4.0 * std::numeric_limits<double>::epsilon() *
+            std::max(1.0, std::max(std::abs(deadline), std::abs(media_time)));
+        if (deadline - media_time > tolerance) break;
+        // 只换解码帧，nv12_scratch 的 NV12 缓冲留着复用（转 NV12 推迟到要画的那帧，见下）。
+        s.nv12_scratch.decoded = rstd::move(s.offline_pending->decoded);
+        s.nv12_scratch.pts_seconds = s.offline_pending->pts_seconds;
+        s.offline_pending = None();
+        s.last_pts = f64(s.nv12_scratch.pts_seconds);
+        got_new = true;
+    }
+    if (got_new) {
+        s.convert_pending = true;
+        s.nv12_ready = false;
+    }
+    // 转失败时留给 Pump 重转并按原样报错。
+    if (s.convert_pending && active_offline_raster && ! s.nv12_ready)
+        s.nv12_ready = s.decoder.to_nv12(s.nv12_scratch);
+}
+
 void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
     if (registry == nullptr || device == nullptr) return;
     auto& s            = *this;
@@ -719,89 +821,15 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
 
     bool got_new = false;
     if (offline) {
-        auto fail = [&](const std::string& message) {
+        // 新建的运行时（本帧刷新材质时才打开）或没走提前段时，在这里补做解码段。
+        if (! s.offline_prepared) s.PrepareOffline();
+        s.offline_prepared = false;
+        if (s.offline_error) {
+            const std::string message = *std::exchange(s.offline_error, std::nullopt);
             active_offline_execution->diagnose(
                 "video[" + rstd::cppstd::to_string(s.key.as_str()) + "]: " + message, true);
             rstd_error("PumpVideoTextures[{}]: {}", s.key.as_str(), message);
-        };
-        const double now = active_offline_execution->elapsed;
-        const bool first = !s.offline_clock_initialized;
-        auto control = s.playback.is_some() ? (*s.playback)->Snapshot() : VideoPlaybackSnapshot {};
-        const bool seek_changed = control.seek_sequence != s.applied_seek_sequence;
-        double media_time;
-        if (s.playback.is_some()) {
-            media_time = (*s.playback)->AdvanceOffline(f64(now)).to_primitive();
-        } else {
-            media_time = first ? control.seek_seconds.to_primitive() :
-                s.offline_anchor_media + (s.offline_control.playing ?
-                    (now - s.offline_anchor_scene) * s.offline_control.rate.to_primitive() : 0.0);
-            if (seek_changed) media_time = control.seek_seconds.to_primitive();
-            if (first || seek_changed || control.playing != s.offline_control.playing ||
-                control.rate != s.offline_control.rate) {
-                s.offline_anchor_scene = now;
-                s.offline_anchor_media = media_time;
-            }
-            s.offline_control = control;
-        }
-        s.offline_clock_initialized = true;
-        s.applied_seek_sequence = control.seek_sequence;
-        const auto duration = s.decoder.duration();
-        if (!duration || !std::isfinite(*duration) || *duration <= 0.0 ||
-            !std::isfinite(media_time) || media_time < 0.0) {
-            fail("offline video sampling requires a finite timestamp and positive video duration");
             return;
-        }
-        const double duration_s = *duration;
-        double quotient = media_time / duration_s;
-        const double nearest = std::round(quotient);
-        if (std::abs(quotient - nearest) <= 4.0 * std::numeric_limits<double>::epsilon() *
-            std::max(1.0, std::abs(quotient))) quotient = nearest;
-        const double cycle = std::floor(quotient);
-        const double cycle_start = cycle * duration_s;
-        s.pts_acc = f64(std::max(0.0, media_time - cycle_start));
-        if (first || seek_changed || cycle != s.offline_cycle) {
-            if (! s.decoder.seek(s.pts_acc.to_primitive())) {
-                fail(std::string(s.decoder.last_error()));
-                return;
-            }
-            s.offline_pending = None();
-            s.offline_drained = false;
-            s.offline_cycle = cycle;
-            s.last_pts = f64(-1.0);
-        }
-        // Retain one future frame as lookahead. Only a frame whose PTS has
-        // arrived may replace the displayed image; output FPS does not change
-        // the source's sampling rate. Offline catch-up must not drop work.
-        while (!s.offline_drained) {
-            if (s.offline_pending.is_none()) {
-                owe::media::Nv12Frame candidate;
-                auto pulled = s.decoder.next_frame(candidate, false);
-                if (!pulled) {
-                    fail(std::string(s.decoder.last_error()));
-                    return;
-                }
-                if (*pulled != owe::media::NextFrame::Ok) {
-                    // The decoder's eager loop has consumed the next cycle's
-                    // first frame. Seek again only when scene time wraps.
-                    s.offline_drained = true;
-                    break;
-                }
-                if (!std::isfinite(candidate.pts_seconds) || candidate.pts_seconds < 0.0) {
-                    fail("decoded video frame has no usable presentation timestamp");
-                    return;
-                }
-                s.offline_pending = Some(rstd::move(candidate));
-            }
-            const double deadline = cycle_start + s.offline_pending->pts_seconds;
-            const double tolerance = 4.0 * std::numeric_limits<double>::epsilon() *
-                std::max(1.0, std::max(std::abs(deadline), std::abs(media_time)));
-            if (deadline - media_time > tolerance) break;
-            // 只换解码帧，nv12_scratch 的 NV12 缓冲留着复用（转 NV12 推迟到要画的那帧，见下）。
-            s.nv12_scratch.decoded = rstd::move(s.offline_pending->decoded);
-            s.nv12_scratch.pts_seconds = s.offline_pending->pts_seconds;
-            s.offline_pending = None();
-            s.last_pts = f64(s.nv12_scratch.pts_seconds);
-            got_new = true;
         }
     } else {
     /* Realtime pacing retains its bounded catch-up policy. */
@@ -829,7 +857,7 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         return;
     }
 
-    if (! s.decoder.to_nv12(s.nv12_scratch)) {
+    if (! std::exchange(s.nv12_ready, false) && ! s.decoder.to_nv12(s.nv12_scratch)) {
         if (offline) active_offline_execution->diagnose(
             "video[" + rstd::cppstd::to_string(s.key.as_str()) + "]: " + std::string(s.decoder.last_error()), true);
         rstd_error("PumpVideoTextures[{}]: decode sw: {}", s.key.as_str(), s.decoder.last_error());
@@ -862,6 +890,20 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
         auto runtime = weak.lock();
         if (runtime) runtime->Pump(dt_seconds);
     }
+}
+
+void TextureCache::PrepareVideoTextures(Services* services, bool raster) {
+    if (m_video_registry.is_none() || services == nullptr) return;
+    // 不在这里 ++tick、Observe：观测照旧只在 PumpVideoTextures 里做，统计口径不变。
+    active_offline_execution = services;
+    active_offline_raster = raster;
+    for (const auto& weak : m_video_registry->get()->runtimes) {
+        auto runtime = weak.lock();
+        // runtimes 里只登记视频运行时（CreateVideoTex）。
+        if (runtime) static_cast<VideoRegistry::Runtime&>(*runtime).PrepareOffline();
+    }
+    active_offline_execution = nullptr;
+    active_offline_raster = true;
 }
 
 VideoDecoderInventory TextureCache::ObserveVideoDecoders() {

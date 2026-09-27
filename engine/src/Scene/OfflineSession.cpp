@@ -47,13 +47,15 @@ using rstd::sync::Arc;
 //   simulate    指针位置 → 脚本输入（frametime/runtime/time_of_day/画布/光标/按键边沿）
 //               → 音频响应推进与频谱 → 节点字段动画 → 场景脚本 → 相机路径
 //               → 材质着色器动画 → 变换更新器
-//   draw        等上一帧 GPU 工作收尾（之后才能改网格/材质/纹理）→ 需要时重建渲染图
-//               → SceneRuntime::BeforeRender → 刷新渲染目标/网格/材质 → 推进视频纹理
+//   draw        提前段：SceneRuntime::BeforeRender → 视频解码与转 NV12（本帧要重建渲染图时不做）
+//               → 等上一帧 GPU 工作收尾（之后才能改网格/材质/纹理）→ 需要时重建渲染图
+//               → 没做提前段时在这里 BeforeRender → 刷新渲染目标/网格/材质 → 视频写纹理
 //               → 上传字形 → drawFrameCpu → 检查有没有漏准备的 pass
 //   advance     SceneRuntime::AdvanceOffline（FrameAdvance 系统在本帧绘制之后才跑）
 //
-// 注意 draw 开头的 finishPendingFrame 排在 simulate 之后：上一帧的 GPU 工作可以和
-// 本帧的脚本/音频并行，但任何 GPU 资源改动都必须在它之后。
+// 注意 draw 开头的 finishPendingFrame 排在 simulate 与提前段之后：上一帧的 GPU 工作可以和
+// 本帧的脚本/音频/粒子/视频解码并行，但任何 GPU 资源改动都必须在它之后。提前段只挪时间，
+// 每个系统自己的推进顺序与随机数消费不变；WPE_SERIAL_FRAMES=1 回退到不做提前段。
 //
 // 时钟由 FrameClock 一次给全，simulate/draw/advance 只读它，不关心时钟从哪来。
 // 离线作业用 offlineClock（固定 dt 或有理帧率 + 作业纪元）；实时驱动（将来的第二个
@@ -233,6 +235,8 @@ struct OfflineSession::Impl {
     bool                           m_reads_previous_frame { false };
     // 覆盖度按输出段每一帧累计，要它时输出段每帧都画。
     bool                           m_raster_every_output_frame { false };
+    // 回退开关：环境变量 WPE_SERIAL_FRAMES 非空且不为 0 时，draw 不做提前段，一帧的顺序与改动前一致。
+    bool                           m_serial_frames { false };
     audio::ResponseEngine          m_audio_response_engine;
     scene_audio::ResponseProcessor m_scene_audio_response;
     CpuFrameResult                 m_cpu_frame;
@@ -377,6 +381,26 @@ OfflineSession::Impl::FrameProfile OfflineSession::Impl::simulate(const FrameClo
 }
 
 bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& profile) {
+    // 不读回的帧（预热、步长取样之间的帧）只模拟：下面的资源推进照做，跳过光栅、提交与读回；
+    // 帧反馈场景、要覆盖度的输出段照常画。
+    const bool reads = m_options.readsFrame(clock.index);
+    auto rasters = [&] {
+        return reads || m_reads_previous_frame ||
+            (m_raster_every_output_frame && clock.index >= m_options.readback_start);
+    };
+    // 提前段：只动 CPU 内存的准备放在等上一帧 GPU 之前，与上一帧的 GPU 工作并行（GPU 直编、覆盖度
+    // 这两种延后收尾的模式下才真有重叠）。BeforeRender（粒子模拟与网格提取、uniform 帧状态）只写场景
+    // 的 CPU 数组，网格经上传块拷贝才进 GPU；视频只解码、转 NV12，写纹理留在下面的 pumpVideoTextures。
+    // 两者都不读 finishPendingFrame 动过的东西，所以提前只改时间、不改内容。
+    // 要重建渲染图的帧照旧先收尾再准备（重建会改相机填充）；WPE_SERIAL_FRAMES=1 时每帧都照旧。
+    const bool rebuild = m_scene->ConsumeRenderGraphDirty();
+    const bool early = !rebuild && !m_serial_frames;
+    if (early) {
+        m_scene->Runtime().BeforeRender();
+        m_render->prepareVideoTextures(&m_services, rasters());
+    }
+    const auto early_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+
     // CPU scripts/audio for the next frame may run while the previous GPU
     // frame is in flight. Drain before any mesh/material/texture mutation.
     if (const auto error = m_render->finishPendingFrame(); !error.empty()) {
@@ -384,20 +408,17 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
         return false;
     }
     const auto pending_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    if (m_scene->ConsumeRenderGraphDirty()) {
+    if (rebuild) {
         rebuildRenderGraph(
             vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
     }
-    m_scene->Runtime().BeforeRender();
+    if (!early) m_scene->Runtime().BeforeRender();
     refreshPreparedRenderTargetDirtyEvents();
     refreshPreparedMeshDirtyEvents();
     refreshPreparedMaterialDirtyEvents();
 
-    // 不读回的帧（预热、步长取样之间的帧）只模拟：下面的资源推进照做，跳过光栅、提交与读回；
-    // 帧反馈场景、要覆盖度的输出段照常画。
-    const bool reads = m_options.readsFrame(clock.index);
-    const bool raster = reads || m_reads_previous_frame ||
-        (m_raster_every_output_frame && clock.index >= m_options.readback_start);
+    // 上面的刷新可能重建渲染图、打开帧反馈，光栅与否在这里重算。
+    const bool raster = rasters();
 
     /* Advance video textures (no-op if none) before drawFrame so
      * the new RGBA frame is sampled by the same render pass. */
@@ -414,8 +435,8 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
     if (m_profile) {
         m_cpu_frame.cpu_scene_ms = std::chrono::duration<double,std::milli>(profile.scene_finished-profile.scene_started).count();
         m_cpu_frame.cpu_script_ms = profile.script_ms;
-        m_cpu_frame.cpu_pending_wait_ms = std::chrono::duration<double,std::milli>(pending_finished-profile.scene_finished).count();
-        m_cpu_frame.cpu_resources_ms = std::chrono::duration<double,std::milli>(resources_finished-pending_finished).count();
+        m_cpu_frame.cpu_pending_wait_ms = std::chrono::duration<double,std::milli>(pending_finished-early_finished).count();
+        m_cpu_frame.cpu_resources_ms = std::chrono::duration<double,std::milli>((early_finished-profile.scene_finished)+(resources_finished-pending_finished)).count();
     }
     m_cpu_frame.frame_index = clock.index;
     if (!m_cpu_frame.completed() && !m_cpu_frame.submitted()) return false;
@@ -695,6 +716,7 @@ bool OfflineSession::Impl::init(SessionConfig config, RenderInitInfo info, Offli
     m_options = options;
     m_raster_every_output_frame = info.collect_sampling_coverage && !info.sampling_coverage_sampled_only;
     m_profile = info.gpu_timing;
+    if (const char* serial = std::getenv("WPE_SERIAL_FRAMES")) m_serial_frames = *serial != '\0' && std::string_view(serial) != "0";
     m_layers = info.layer_selection;
     m_capture_target = info.capture_target;
     m_services.epoch_ms = options.epoch_ms;
@@ -1016,6 +1038,8 @@ void OfflineSession::setUserProperty(std::string_view key, NJson value) {
 }
 
 const CpuFrameResult& OfflineSession::readback() const { return m_impl->m_cpu_frame; }
+
+void OfflineSession::exchangePixels(std::vector<uint8_t>& other) { std::swap(m_impl->m_cpu_frame.pixels, other); }
 
 OfflineStepStatus OfflineSession::stepStatus() const { return m_impl->m_step_status; }
 

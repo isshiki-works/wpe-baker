@@ -367,7 +367,7 @@ async Task<JsonObject> PlanSubtrees(string name, JsonArray objects, int[]? retai
         ["runtime_dependencies"] = dependencies?.DeepClone() ?? new JsonArray(),
         ["runtime_layers"] = new JsonArray(objects.OfType<JsonObject>().Select(obj => (JsonNode)new JsonObject {
             ["id"] = obj["id"]!.DeepClone(), ["owner"] = obj["id"]!.DeepClone(),
-            ["visible"] = obj["visible"]?.DeepClone() ?? JsonValue.Create(true), ["has_mesh"] = obj.ContainsKey("text"),
+            ["visible"] = obj["visible"]?.DeepClone() ?? JsonValue.Create(true), ["has_mesh"] = obj.ContainsKey("text") || obj.ContainsKey("image"),
             ["effective_parallax_depth"] = new JsonArray(0, 0),
             ["materials"] = new JsonArray(new JsonObject { ["uses_audio_spectrum"] = audio?.Contains(obj["id"]!.GetValue<int>()) == true }) }).ToArray()) }.ToJsonString());
     return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
@@ -622,6 +622,34 @@ Check(spectrumPlan["live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).
     spectrumExport is not null && spectrumExport.OfType<JsonObject>().Select(obj => obj["id"]!.GetValue<int>()).SequenceEqual(new[] { 1200, 1500 }) &&
     spectrumExport[0]!["text"]!.GetValue<string>() == "bars" && spectrumExport[1]!["parent"]!.GetValue<int>() == 1200,
     "a parent live only for its own pixels keeps static children in a video mounted under the live parent");
+// 实时子层挂在木偶父层的骨骼挂点（attachment）上：父层像素进视频，成品里父层保留木偶与动画层只当骨骼载体（alpha 0、无 effects），
+// 子层的挂点与 parent 不变，挂在父层下，绘制顺序为 [视频, 父层 → 子层]。
+var puppetParent = new JsonArray(
+    new JsonObject { ["id"] = 1200, ["name"] = "puppet", ["image"] = "models/puppet.json", ["puppet"] = "models/puppet.mdl", ["alpha"] = 0.8,
+        ["animationlayers"] = new JsonArray(new JsonObject { ["rate"] = 0.72 }), ["effects"] = new JsonArray(new JsonObject { ["file"] = "effects/shake/effect.json" }) },
+    new JsonObject { ["id"] = 1201, ["parent"] = 1200, ["attachment"] = "Attachment",
+        ["text"] = new JsonObject { ["script"] = "export function update() { return Date.now(); }" } },
+    new JsonObject { ["id"] = 1202, ["parent"] = 1200, ["text"] = "label" });
+var puppetPlan = await PlanSubtrees("subtree-puppet-attachment", puppetParent);
+var puppetExport = Assemble(puppetPlan, puppetParent);
+var puppetCarrier = puppetExport.OfType<JsonObject>().SingleOrDefault(obj => obj["id"]!.GetValue<int>() == 1200);
+Check(puppetPlan["live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).SequenceEqual(new[] { 1201 }) &&
+    puppetPlan["video_groups"]!.AsArray().OfType<JsonObject>().Any(g => g["layer_ids"]!.AsArray().Any(n => n!.GetValue<int>() == 1200)) &&
+    puppetExport.OfType<JsonObject>().Select(obj => obj["id"]!.GetValue<int>()).SequenceEqual(new[] { 1500, 1200, 1201, 1501 }) &&
+    puppetCarrier is not null && puppetCarrier["alpha"]!.ToJsonString() == "0" && !puppetCarrier.ContainsKey("effects") &&
+    puppetCarrier["image"]!.GetValue<string>() == "models/puppet.json" && puppetCarrier["puppet"]!.GetValue<string>() == "models/puppet.mdl" &&
+    puppetCarrier["animationlayers"] is JsonArray &&
+    puppetExport[2]!["attachment"]!.GetValue<string>() == "Attachment" && puppetExport[2]!["parent"]!.GetValue<int>() == 1200,
+    "a live child on a puppet attachment bakes the puppet and keeps it as a transparent bone carrier");
+// 当前隐藏、可能被脚本重新显示（场景里有 getLayer）的木偶父层：挂点拆分是新放开的，不用在它身上，父层与挂点子层同一单元。
+var hiddenPuppet = puppetParent.DeepClone().AsArray();
+hiddenPuppet[0]!["visible"] = false;
+hiddenPuppet.Insert(0, new JsonObject { ["id"] = 1208, ["text"] = new JsonObject { ["value"] = "x",
+    ["script"] = "export function update(v) { thisScene.getLayer('other'); return v; }" } });
+var hiddenPuppetPlan = await PlanSubtrees("subtree-hidden-puppet", hiddenPuppet);
+Check(hiddenPuppetPlan["layers"]!.AsArray().OfType<JsonObject>().Where(layer => layer["id"]!.GetValue<int>() is 1200 or 1201)
+        .All(layer => layer["allocation_root"]!.GetValue<int>() == 1200),
+    "a hidden puppet parent that scripts may show again keeps its attachment child in one unit");
 var parentTransformMethod = projectionType.GetMethod("ParentTransform", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 var nestedParentTransform = (JsonObject)parentTransformMethod.Invoke(null, new object[] {
     subtreeObjects.OfType<JsonObject>().ToDictionary(obj => obj["id"]!.GetValue<int>()), 1202 })!;
