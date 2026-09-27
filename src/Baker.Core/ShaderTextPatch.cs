@@ -40,13 +40,15 @@ public static class ShaderTextPatch
                 var header = new StringBuilder();
                 foreach (string key in keys.Where(key => key.StartsWith(KnobPrefix + stage + "_", StringComparison.Ordinal) && !key.StartsWith(KnobPrefix + "vert_ax_", StringComparison.Ordinal)))
                 {
-                    // 分析时判过恰好一次；对不上说明源码变了
-                    if (KnobUses(body, key) is not [Match use])
+                    // 分析时判过恰好一次（调用旋钮是恰好 sites 处，KnobUses 已核对）；对不上说明源码变了
+                    Match[] found = KnobUses(body, key);
+                    if (found.Length == 0 || found.Length > 1 && CallKnob.Match(key) is not { Success: true })
                         throw new InvalidDataException($"Shader knob {key} no longer occurs exactly once in {resource}.");
                     string uniform = "g_PeriodicaK_" + key[KnobPrefix.Length..];
-                    body = body[..use.Index] + "(" + use.Value + "*" + uniform + ")" + body[(use.Index + use.Length)..];
+                    foreach (Match use in Enumerable.Reverse(found))
+                        body = body[..use.Index] + "(" + use.Value + "*" + uniform + ")" + body[(use.Index + use.Length)..];
                     header.Append("uniform float " + uniform + "; // {\"material\":\"" + key + "\",\"default\":1}\n");
-                    ++uses;
+                    uses += found.Length;
                 }
                 if (keys.Contains(ShaderPeriodAnalysis.TimeScaleKey))
                 {
@@ -95,21 +97,28 @@ public static class ShaderTextPatch
 
     /// <summary>
     /// 引擎时间签名里一个旋钮（terms[].knobs[]）的材质常量键；id 是字面量的 float32 位（8 位十六进制）、uniform 名，
-    /// 或顶点输出分量 ax_&lt;分量字母&gt;_&lt;varying&gt;。
+    /// 顶点输出分量 ax_&lt;分量字母&gt;_&lt;varying&gt;，或调用旋钮 call&lt;处数&gt;_&lt;变量&gt;（sin/cos 直接作用在这个局部变量上的 sites 处调用）。
     /// </summary>
     internal static string KnobKey(JsonObject knob) => knob["varying"] is not null ? AxisKey([knob])! : KnobPrefix + knob["stage"]!.GetValue<string>() + "_" +
-        (knob["uniform"] is JsonValue uniform ? uniform.GetValue<string>()
+        (knob["call"] is JsonValue call ? "call" + knob["sites"]!.GetValue<int>().ToString(CultureInfo.InvariantCulture) + "_" + call.GetValue<string>()
+        : knob["uniform"] is JsonValue uniform ? uniform.GetValue<string>()
             : BitConverter.SingleToUInt32Bits((float)knob["literal"]!.GetValue<double>()).ToString("x8", CultureInfo.InvariantCulture));
 
     /// <summary>
     /// 旋钮键在一个 stage 源码里的出现处（注释除外；分析判"恰好一次"和写覆盖共用这一份）：
-    /// 字面量按 float32 值匹配数字字面量 token，忽略符号；uniform 按标识符，不含声明行。
+    /// 字面量按 float32 值匹配数字字面量 token，忽略符号；uniform 按标识符，不含声明行；
+    /// 调用旋钮按 sin(变量)、cos(变量) 里的变量，处数与引擎数到的不同时返回空（有别的写法或预处理分支，改写不是只调这一项）。
     /// </summary>
     internal static Match[] KnobUses(string text, string key)
     {
         string id = key[(key.IndexOf('_', KnobPrefix.Length) + 1)..];
         // 注释换成等长空白，下标仍对得上原文
         string code = Comment.Replace(text, match => new string(' ', match.Length));
+        if (CallKnob.Match(key) is { Success: true } call)
+        {
+            Match[] sites = [.. Regex.Matches(code, @"(?<=\b(?:sin|cos)\s*\(\s*)" + Regex.Escape(call.Groups[2].Value) + @"(?=\s*\))", RegexOptions.CultureInvariant).Cast<Match>()];
+            return sites.Length == int.Parse(call.Groups[1].Value, CultureInfo.InvariantCulture) ? sites : [];
+        }
         // const 初始化与 #if 之类预处理行包成 uniform 乘法会编译失败；整数写法的 token 可能处在要求 int 的位置。
         // 唯一的出现处落在这些位置时不当旋钮（返回空）
         string Line(int at) { int start = code.LastIndexOf('\n', Math.Max(0, at - 1)) + 1, end = code.IndexOf('\n', at); return code[start..(end < 0 ? code.Length : end)].Trim(); }
@@ -147,6 +156,7 @@ public static class ShaderTextPatch
         return letters.All(c => "xyzw".IndexOf(c) < type[3] - '0') ? (varying, [.. letters.Select(c => "." + c)]) : null;
     }
 
+    private static readonly Regex CallKnob = new(@"^periodica_k_\w+?_call(\d+)_(\w+)$", RegexOptions.CultureInvariant);
     private static readonly Regex MainDecl = new(@"\bvoid\s+main\s*\(\s*(?:void\s*)?\)", RegexOptions.CultureInvariant);
     // g_Time 的使用处，不含它自己的 uniform 声明
     private static readonly Regex TimeUse = new(@"(?<!\buniform\s+float\s+)\bg_Time\b", RegexOptions.CultureInvariant);

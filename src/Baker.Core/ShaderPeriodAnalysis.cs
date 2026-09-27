@@ -135,8 +135,10 @@ public static class ShaderPeriodAnalysis
                         stages[stage] = text = TryReadShaderStage(source, assetsDirectory, resource + "." + stage, out string read) ? read : null;
                     return text;
                 }
+                // 调用旋钮改写 sites 处调用（KnobUses 已核对处数），其余旋钮只改唯一的一处
                 bool Usable(JsonObject knob) => knob["varying"] is null && claims[ShaderTextPatch.KnobKey(knob)] == 1 &&
-                    Text(knob["stage"]!.GetValue<string>()) is string text && ShaderTextPatch.KnobUses(text, ShaderTextPatch.KnobKey(knob)).Length == 1;
+                    Text(knob["stage"]!.GetValue<string>()) is string text && ShaderTextPatch.KnobUses(text, ShaderTextPatch.KnobKey(knob)).Length is int uses &&
+                    (uses == 1 || knob["call"] is not null && uses > 0);
                 // 没有可用旋钮时退到顶点输出分量：这一项经过的分量只归它、同在一个 varying 上，且顶点程序能整段换时间重算
                 string? AxisKey(JsonObject term) => Knobs(term).Where(k => k["varying"] is not null).ToArray() is { Length: > 0 } axes &&
                     axes.All(k => claims[ShaderTextPatch.KnobKey(k)] == 1) && ShaderTextPatch.AxisKey(axes) is string key &&

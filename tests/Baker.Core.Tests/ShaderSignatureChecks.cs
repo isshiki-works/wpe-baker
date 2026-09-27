@@ -67,6 +67,36 @@ internal static class ShaderSignatureChecks
                 !candidate["components"]!.AsArray().Any(x => x!["id"]!.GetValue<string>().Contains("slow", StringComparison.Ordinal)),
                 "a slow component stays out of the solver and reports a 2πP/T drift bound");
 
+            // iris 形态（引擎对同构着色器给出的签名）：1 s 步进项走时间倍率，1.9、2.5 两项走字面量旋钮，sin/cos(clock) 这一项走调用旋钮，
+            // 源码里 sin(clock)、cos(clock) 恰好是引擎数到的 2 处才改写；多一处（别的写法、预处理分支）就不是只调这一项，仍记未收敛
+            string iris = "uniform float g_Time;\nuniform float g_Speed;\nvoid main() {\n  float clock = g_Time * g_Speed + 0.31;\n  float n = floor(clock);\n" +
+                "  vec2 a = sin(1.9 * (n + vec2(0, 1)));\n  vec4 b = sin(2.5 * (n + vec4(0, 0, 1, 1)));\n" +
+                "  vec2 d = mix(vec2(a.x, b.x), vec2(a.y, b.w), fract(clock)) + vec2(sin(clock), cos( clock )) * 0.25;\n  gl_Position = vec4(d, 0.0, 1.0);\n}\n";
+            string irisSignature = """
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
+                  {"seconds":1.0309278046442463,"num":100,"den":97,"pi":0,"knobs":[{"stage":"vert","varying":"v_Look","component":0,"inverse":false},{"stage":"vert","varying":"v_Look","component":1,"inverse":false},{"stage":"vert","uniform":"g_Speed","inverse":false}]},
+                  {"seconds":3.409216061150358,"num":2000,"den":1843,"pi":1,"knobs":[{"stage":"vert","varying":"v_Look","component":0,"inverse":false},{"stage":"vert","literal":1.899999976158142,"inverse":false},{"stage":"vert","uniform":"g_Speed","inverse":false}]},
+                  {"seconds":6.477510434903635,"num":200,"den":97,"pi":1,"knobs":[{"stage":"vert","call":"clock","sites":2,"inverse":false},{"stage":"vert","varying":"v_Look","component":0,"inverse":false},{"stage":"vert","varying":"v_Look","component":1,"inverse":false},{"stage":"vert","uniform":"g_Speed","inverse":false}]},
+                  {"seconds":2.591004173961454,"num":80,"den":97,"pi":1,"knobs":[{"stage":"vert","varying":"v_Look","component":1,"inverse":false},{"stage":"vert","literal":2.5,"inverse":false},{"stage":"vert","uniform":"g_Speed","inverse":false}]}]}
+                """;
+            JsonObject IrisLoop(string vert)
+            {
+                File.WriteAllText(Path.Combine(root, "shaders", "effects", "x.vert"), vert);
+                using var irisSource = new ProjectSource(root);
+                return LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), irisSource, null, Runtime(irisSignature), [10], 30, 1,
+                    3, CommonLoopPreference.Balanced, loopLengthMaximumSeconds: 600).ToJson();
+            }
+            JsonObject closed = IrisLoop(iris);
+            string[] irisKeys = [.. closed["candidates"]!.AsArray().FirstOrDefault()?["patches"]!.AsArray().Select(x => x!["constant_key"]!.GetValue<string>()) ?? []];
+            check(closed["unresolved"]!.AsArray().Count == 0 && irisKeys.Contains("periodica_k_vert_call2_clock") &&
+                irisKeys.Contains("periodica_k_vert_3ff33333") && irisKeys.Contains("periodica_k_vert_40200000") &&
+                closed["candidates"]![0]!["components"]!.AsArray().All(x => Math.Abs(x!["speed_multiplier"]!.GetValue<double>() - 1) <= 0.03),
+                "iris terms each retime on their own (step grid, 1.9, 2.5, and sin/cos(clock) through a call knob) within the budget");
+            check(ShaderTextPatch.KnobUses(iris, "periodica_k_vert_call2_clock").Length == 2 &&
+                IrisLoop(iris.Replace("gl_Position = vec4(d", "gl_Position = vec4(d + sin(clock)"))["unresolved"]!.AsArray()
+                    .Select(x => x!["mechanism"]!.GetValue<string>()).SequenceEqual(["term_not_retimable"]),
+                "a call knob rewrites only when the source has exactly the call sites the engine counted");
+
             // 同一 pass 剩 7 s 与 3π s 两类且没有旋钮：每项独立调频有解（上限 600 s）记未收敛 term_not_retimable；
             // 上限 10 s 时独立调频也无解，才是"不能"
             string split = """
