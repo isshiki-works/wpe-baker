@@ -287,6 +287,31 @@ public class AnalysisOrchestratorTests
         public void Report(RenderProgress value) => reports.Add(value);
     }
 
+    [Fact]
+    public async Task SourceStaticLayersSplitIntoSeparateUnitsAreAllRetained()
+    {
+        // 拆分后两个含作者动画的层分在不同单元：第一轮只在 loop 里点名 209，214 要到分配回退的重查里才冒出来。
+        // 编排层把静止证明点名、还没留实时的层都加进留实时再分析，两层都留实时时方案能生成。
+        await TestTemp.Run(async root =>
+        {
+            JsonObject Analyze(HybridAnalyzeRequest r)
+            {
+                int[] kept = r.RetainLiveRootIds ?? [];
+                JsonObject plan = Plan(r, kept.Contains(209) && kept.Contains(214));
+                plan["settings"]!["retain_live_root_ids"] = new JsonArray([.. kept.Select(id => (JsonNode)id)]);
+                JsonObject Named(int id) => new() { ["kind"] = "source_static", ["owner_layer_id"] = id };
+                if (!kept.Contains(209)) plan["loop"]!["unresolved"] = new JsonArray(Named(209));
+                if (!kept.Contains(214)) plan["loop_allocation_fallback"] = new JsonObject { ["status"] = "still_unavailable",
+                    ["replanned_unresolved"] = new JsonArray(Named(214)) };
+                return plan;
+            }
+            JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "static-live")),
+                (r, _) => Task.FromResult(Analyze(r)), CancellationToken.None);
+            Assert.True(Admission.Accepted(result));
+            Assert.Equal([209, 214], result["settings"]!["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()).Order());
+        });
+    }
+
     private static JsonObject Plan(HybridAnalyzeRequest request, bool usable, string[]? states = null, int groups = 1) => new()
     {
         ["summary"] = new JsonObject { ["key"] = usable ? "summary.bakeable" : "summary.blocked", ["zh"] = "", ["en"] = "" },
