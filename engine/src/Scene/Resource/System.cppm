@@ -524,6 +524,9 @@ public:
     void PumpVideoTextures(double seconds, Services* services, bool raster) {
         m_registries.Textures().PumpVideoTextures(seconds, services, raster);
     }
+    void PrepareVideoTextures(Services* services, bool raster) {
+        m_registries.Textures().PrepareVideoTextures(services, raster);
+    }
     vulkan::VideoDecoderInventory ObserveVideoDecoders() { return m_registries.Textures().ObserveVideoDecoders(); }
     void SetVideoDecodeOptions(vulkan::TextureCache::VideoDecodeOptions options) {
         m_registries.Textures().SetVideoDecodeOptions(std::move(options));

@@ -498,6 +498,11 @@ void VulkanRender::pumpVideoTextures(double dt_seconds, Services* services, bool
     pImpl->m_rendering_resources.resources.PumpVideoTextures(dt_seconds, services, raster);
 }
 
+void VulkanRender::prepareVideoTextures(Services* services, bool raster) {
+    if (! pImpl->m_inited) return;
+    pImpl->m_rendering_resources.resources.PrepareVideoTextures(services, raster);
+}
+
 void VulkanRender::pumpFontAtlases(Scene& scene) {
     if (! pImpl->m_inited) return;
     auto* fc = owe::text::SceneFontCache(scene);

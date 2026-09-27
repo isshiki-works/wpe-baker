@@ -18,6 +18,7 @@ target_link_libraries(owe-test-support PRIVATE spirv-reflect)
 
 add_executable(core-tests EXCLUDE_FROM_ALL)
 target_sources(core-tests PRIVATE
+  tests/core/frame_writer_tests.cpp
   tests/core/json_tests.cpp
   tests/core/vfs_tests.cpp)
 target_link_libraries(core-tests PRIVATE owe-test-support owe-core owe-audio owe-scene owe-vulkan rstd.std rstd.cppstd rstd.log gtest_main vvk::vvk spirv-reflect)
