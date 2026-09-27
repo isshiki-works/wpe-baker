@@ -70,7 +70,6 @@ internal static class NarrativePolishChecks
         staticPlan["loop"]!["unresolved"] = new JsonArray(staticItem.ToJson());
         var (_, staticNotes) = UnresolvedNotes.Unpack(new JsonObject {
             ["loop"] = staticPlan["loop"]!.DeepClone(), ["notes"] = UnresolvedNotes.PackNotes([staticItem]) });
-        Verdict.AddLoopUnresolved(staticPlan, "loop_allocation_fallback", "A smaller bake allocation was not attempted: no reason recorded.", staticNotes);
         JsonObject staticSummary = PlanNarrative.Summarize(staticPlan, staticNotes);
         check(staticSummary["key"]!.GetValue<string>() == "summary.loop_unresolved",
             "a still-image proof failure is counted without the allocation record and described in chinese");
@@ -103,8 +102,7 @@ internal static class NarrativePolishChecks
         // 只剩平稳粒子（3594269099）：不说"1 处证明不了周期"，也不拿它当首条。
         JsonObject onlyPlan = UnresolvedPlan("not_applicable");
         onlyPlan["loop"]!["no_candidate_reason"] = new JsonObject { ["kind"] = "NoTemporalMechanism" };
-        onlyPlan["loop"]!["unresolved"] = new JsonArray(Stationary(28, stationaryDetail),
-            new JsonObject { ["kind"] = "loop_allocation_fallback", ["detail"] = "A smaller bake allocation was not attempted: no reason recorded." });
+        onlyPlan["loop"]!["unresolved"] = new JsonArray(Stationary(28, stationaryDetail));
         JsonObject only = PlanNarrative.Summarize(onlyPlan);
         check(only["verdict"]!.GetValue<string>() == PlanNarrative.Unknown &&
             only["key"]!.GetValue<string>() == "summary.loop_unresolved_stationary_only",
@@ -162,8 +160,7 @@ internal static class NarrativePolishChecks
                     ["detail"] = "Light-shaft noise UVs translate at rayspeed 0.39 * (0.003, 0.000375111) per second. The fastest axis alone repeats only every 544.3 s." },
                 new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = 28,
                     ["particle_nonperiodic_reason"] = "particle_nonperiodic_random_initializer",
-                    ["detail"] = "A particle sentence that is not registered in this process." },
-                new JsonObject { ["kind"] = "loop_allocation_fallback", ["detail"] = "No loop covers every baked layer." }) } };
+                    ["detail"] = "A particle sentence that is not registered in this process." }) } };
         if (fallbackStatus is not null)
             plan["loop_allocation_fallback"] = new JsonObject { ["status"] = fallbackStatus, ["retain_live_root_ids"] = new JsonArray(20, 28) };
         return plan;

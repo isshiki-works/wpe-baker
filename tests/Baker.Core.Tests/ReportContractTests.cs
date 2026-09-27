@@ -526,26 +526,6 @@ public class LoopItemContractTests
     }
 
     [Fact]
-    public void AddLoopUnresolvedKeepsNotesInStepAndDedupesOnTextAndMessage()
-    {
-        var plan = new JsonObject { ["loop"] = new JsonObject { ["unresolved"] = new JsonArray() },
-            ["whole_layer"] = new JsonObject { ["loop"] = new JsonObject { ["unresolved"] = new JsonArray() } } };
-        var notes = new UnresolvedNotes();
-        var first = new Message("unresolved.particle_stationary_random").Localized();
-        Verdict.AddLoopUnresolved(plan, "k", "same", notes, first);
-        Verdict.AddLoopUnresolved(plan, "k", "same", notes, first);
-        Assert.Single(plan["loop"]!["unresolved"]!.AsArray());
-        // 同一句英文、不同文案不算重复（与原来"整条结构相等"同义）。
-        Verdict.AddLoopUnresolved(plan, "k", "same", notes, new Message("unresolved.script_time").Localized());
-        Assert.Equal(2, plan["loop"]!["unresolved"]!.AsArray().Count);
-        Assert.Equal(2, plan["whole_layer"]!["loop"]!["unresolved"]!.AsArray().Count);
-        PlanNarrative.Attach(plan, notes);
-        Assert.Equal(["unresolved.particle_stationary_random", "unresolved.script_time"],
-            plan["whole_layer"]!["loop"]!["unresolved_localized"]!.AsArray().Select(x => x!["key"]!.GetValue<string>()));
-        Assert.Equal("unresolved_localized", plan["loop"]!.AsObject().Last().Key);
-    }
-
-    [Fact]
     public void OtherUnresolvedItemsKeepKeyOrder()
     {
         Assert.Equal("""{"kind":"search_budget","detail":"d"}""", new SolverUnresolved(true, null, "d").ToJson().ToJsonString());

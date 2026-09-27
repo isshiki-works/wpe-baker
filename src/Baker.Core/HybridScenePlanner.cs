@@ -95,7 +95,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // 这样同一组图层换了布局或别的组变了，也能命中。
             JsonArray? groupLayers = videoGroups is null ? null : new JsonArray([.. videoGroups.OfType<JsonObject>().Select(group =>
                 (JsonNode)new JsonObject { ["id"] = group["id"]?.DeepClone(), ["layer_ids"] = group["layer_ids"]?.DeepClone() })]);
-            string key = "loop-v12-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, groupLayers,
+            string key = "loop-v13-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, groupLayers,
                 request.FpsNumerator, request.FpsDenominator, profile, request.LoopPreference,
                 request.FullLoopLayerIds, request.BudgetOnlyRetime);
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
@@ -105,7 +105,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 // 逐层"不能"按档位回退链能走到的最大预算证明（SearchSpace：没给 --retime-budget 时一直退到效率档）
                 request.RetimeBudgetPercent is null && request.Preset is not null ? Math.Max(profile.CommonRetimePercent, RetimeProfile.MaximumBudgetPercent) : null,
                 request.BudgetOnlyRetime);
-            return UnresolvedNotes.Unpack(AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
+            JsonObject packed = AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
             {
                 LoopReport loop = Analyze(input, null);
                 // 与别的组共用时钟的组，自身周期不整除 L 时给 L 加"是它的倍数"的约束重解一次；
@@ -114,7 +114,13 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                     stepped.Unresolved.Count == loop.Unresolved.Count)
                     loop = stepped;
                 return UnresolvedNotes.Pack(loop);
-            }));
+            });
+            // 每条未解析项记下能否被接缝淡化掩盖（与生成准入 Admission 同一判定 ResidualMasking）：循环完整不完整
+            // （Routes.WholeLoopComplete）按它判，已证随机的精灵与平稳随机粒子不再让整层路线记成没解完。拆包前写，文案记录与条目逐字对得上。
+            Func<string, JsonObject?> resources = ResidualMasking.ResourceReader(source, assets);
+            foreach (JsonObject item in (packed["loop"]?["unresolved"] as JsonArray ?? []).OfType<JsonObject>())
+                item["maskable"] = ResidualMasking.Maskable(item, input, resources);
+            return UnresolvedNotes.Unpack(packed);
         }
         return Solve();
     }
@@ -327,18 +333,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 不成立时拒因写回。路线到这里已定稿，后面的更小分配取证只看整层路线，不会再改道。
         if (effectPrefixRoute)
             Verdict.ApplyPrefixRadianceClosure(report, scene, properties, observation.Trace, source, request.Assets, project);
-        // 探测过的前缀捕获点全部留档。被拒的原因只在整层循环本来就有未解机制时并进 loop.unresolved：这时前缀是
-        // 整层循环的回退，拒绝原因正好说明回退为什么没走成。条目不带 owner_layer_id，免得分配回退把它当成要保留实时的
-        // 未解层；原本没有未解项的循环也不凭空添一条，免得改变整层裁定。
+        // 探测过的前缀捕获点全部留档（被拒的原因就在这份记录里，不再并进 loop.unresolved：那里只放时间机制）。
         if (captureProbes.Recorded.Count > 0)
-        {
             report["effect_prefix_capture_probes"] = new JsonArray(captureProbes.Recorded.Select(probe => (JsonNode)probe.DeepClone()).ToArray());
-            if (report["loop"]?["unresolved"] is JsonArray { Count: > 0 })
-                foreach (JsonObject probe in captureProbes.Recorded.Where(probe =>
-                    probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus))
-                    Verdict.AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>(), loopNotes,
-                        probe["reason_localized"] as JsonObject);
-        }
         // README 的承诺：解析周期不完整时，把未解决机制与粒子所在的完整作者子树保留实时，再重查一次周期与构图。
         // 这条路以前只在 bake 阶段跑，analyze 既没走也没记录，用户拿到的就是一个没有任何理由的 unavailable。
         timing.Mark("A12_compose_routes");
@@ -391,12 +388,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         if (initialBlockers.Count > 0 && report["loop"] is JsonObject wholeLoop && Routes.WholeLoopComplete(wholeLoop)) return;
         JsonObject evidence = HybridLoopAllocation.Explain(report, scene);
         report["loop_allocation_fallback"] = evidence;
-        if (evidence["status"]?.GetValue<string>() != "proposed")
-        {
-            Verdict.AddLoopUnresolved(report, "loop_allocation_fallback",
-                "A smaller bake allocation was not attempted: " + (evidence["reason"]?.GetValue<string>() ?? "no reason recorded."));
-            return;
-        }
+        // 取证只记在 loop_allocation_fallback 字段里，不再往 loop.unresolved 塞说明条目（那里只放时间机制）。
+        if (evidence["status"]?.GetValue<string>() != "proposed") return;
         string analysisOutput = Path.Combine(output, "loop-allocation-analysis");
         evidence["analysis_plan_path"] = Path.Combine(analysisOutput, "plan.json");
         progress?.Report(new("retaining_nonlooping_layers", null, new Message("progress.retaining_nonlooping_layers")));
@@ -463,13 +456,6 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // 重查只被全幅布局挡住时，把冲突给出的保留做法按完整 --retain-live 列表记下来，结论行才能给出照做就能用的参数。
             if (!resolved && HybridLoopAllocation.ReplannedRetainLiveSuggestion(replanned, retained) is JsonObject suggestion)
                 evidence["replanned_retain_live_suggestion"] = suggestion;
-            Verdict.AddLoopUnresolved(report, "loop_allocation_fallback", resolved
-                ? $"No loop covers every baked layer, but a smaller bake allocation does: keeping layers {retainedText} live leaves content that resolves. Re-run analyze with --retain-live {retainedText} to plan that allocation."
-                : replannedRadianceOpen
-                    ? $"No loop covers every baked layer, and the smaller bake allocation that keeps layers {retainedText} live is still blocked by the HDR radiance closure of the content it captures."
-                    : basis == "perspective_capture_open"
-                    ? $"No loop covers every baked layer; keeping layers {retainedText} live leaves content whose loop resolves, but capturing it still needs a perspective screen-space composition."
-                    : $"No loop covers every baked layer, and the smaller bake allocation that keeps layers {retainedText} live establishes none either.");
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
@@ -477,8 +463,6 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             evidence["status"] = "failed";
             evidence["error_type"] = error.GetType().Name;
             evidence["error"] = error.Message;
-            Verdict.AddLoopUnresolved(report, "loop_allocation_fallback",
-                $"No loop covers every baked layer, and the smaller bake allocation keeping layers {retainedText} live could not be analyzed: {error.Message}");
         }
     }
 

@@ -23,7 +23,6 @@ internal static class ResidualLayoutGateChecks
             ["kind"] = "runtime_animation", ["owner_layer_id"] = 3, ["mechanism"] = "sprite", ["random_restart"] = true,
             ["track_name"] = "flip", ["detail"] = "Script playback restarts this sprite animation after a Math.random() delay."
         };
-        JsonObject Informational() => new() { ["kind"] = ResidualMasking.AllocationFallbackKind, ["detail"] = "A smaller allocation note." };
         // groupLayers[i] 是第 i 组的 layer_ids；层 3 不在任何组里时就是"布局淡化不了"的形态。
         JsonObject Plan(string layout, bool[] groupClears, JsonArray unresolved, JsonObject? fallback = null, string? layoutConflict = null,
             int[][]? groupLayers = null)
@@ -62,7 +61,7 @@ internal static class ResidualLayoutGateChecks
         var candidateFound = new JsonObject { ["status"] = "candidate_found", ["retain_live_root_ids"] = new JsonArray(30) };
 
         // ---- layered 多组、残差层在透明组里 → 允许淡化，不写 blocker ----
-        JsonObject layered = Plan("layered", [true, false], new JsonArray(RandomSprite(), Informational()), candidateFound.DeepClone().AsObject());
+        JsonObject layered = Plan("layered", [true, false], new JsonArray(RandomSprite()), candidateFound.DeepClone().AsObject());
         string layeredBefore = layered.ToJsonString();
         JsonObject layeredClassification = ResidualMasking.Classify(layered, scene, NoResource);
         check(Admission.ApplyResidualLayoutGate(layered, scene, NoResource) is null && layered.ToJsonString() == layeredBefore &&
@@ -78,7 +77,7 @@ internal static class ResidualLayoutGateChecks
             "every video group that contains a residual layer is listed, in plan order, and several transparent groups are allowed");
 
         // ---- full_frame 单个不透明组 + 需掩盖 → 不受影响 ----
-        JsonObject fullFrame = Plan("full_frame", [true], new JsonArray(RandomSprite(), Informational()), candidateFound.DeepClone().AsObject(),
+        JsonObject fullFrame = Plan("full_frame", [true], new JsonArray(RandomSprite()), candidateFound.DeepClone().AsObject(),
             groupLayers: [[1, 3]]);
         string fullFrameBefore = fullFrame.ToJsonString();
         check(ResidualMasking.LayoutAllowsMasking(fullFrame, ResidualMasking.Classify(fullFrame, scene, NoResource)) &&
@@ -87,7 +86,7 @@ internal static class ResidualLayoutGateChecks
             "a single opaque full-frame group that needs residual masking is left untouched");
 
         // ---- 残差层不在任何视频组里 → 布局确实淡化不了，写 blocker ----
-        JsonObject unplaced = Plan("layered", [true], new JsonArray(RandomSprite(), Informational()), candidateFound.DeepClone().AsObject(),
+        JsonObject unplaced = Plan("layered", [true], new JsonArray(RandomSprite()), candidateFound.DeepClone().AsObject(),
             groupLayers: [[1]]);
         JsonObject? gate = Admission.ApplyResidualLayoutGate(unplaced, scene, NoResource);
         string blocker = gate?["reason"]?.GetValue<string>() ?? "";
@@ -117,14 +116,11 @@ internal static class ResidualLayoutGateChecks
         check(unverifiedGate?["retain_live_basis"]?.GetValue<string>() == "unresolved_owner_author_roots_not_reanalyzed",
             "without a re-analyzed allocation the blocker suggests the owners' author roots and says they are not re-analyzed");
 
-        // ---- layered 多组 + 没有未解析时间机制 → 不受影响（说明性条目不算） ----
-        foreach (JsonArray unresolved in new[] { new JsonArray(), new JsonArray(Informational()) })
-        {
-            JsonObject resolved = Plan("layered", [true, false], unresolved);
-            string before = resolved.ToJsonString();
-            check(Admission.ApplyResidualLayoutGate(resolved, scene, NoResource) is null && resolved.ToJsonString() == before,
-                $"layered groups without unresolved temporal mechanisms are left untouched ({unresolved.Count} informational item(s))");
-        }
+        // ---- layered 多组 + 没有未解析时间机制 → 不受影响 ----
+        JsonObject resolved = Plan("layered", [true, false], new JsonArray());
+        string before = resolved.ToJsonString();
+        check(Admission.ApplyResidualLayoutGate(resolved, scene, NoResource) is null && resolved.ToJsonString() == before,
+            "layered groups without unresolved temporal mechanisms are left untouched");
 
         // ---- 布局本身已冲突（全幅多组）→ 不再追加，保持原有那一条 blocker ----
         JsonObject conflicted = Plan("full_frame", [true, false], new JsonArray(RandomSprite()), layoutConflict: "Full-frame mode requires one opaque video group.",

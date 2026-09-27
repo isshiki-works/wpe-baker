@@ -36,9 +36,13 @@ internal static class Routes
         return (layout.Plan, effectPrefix);
     }
 
-    /// <summary>整层路线的循环是否完整：零未解析项且至少一个候选。</summary>
+    /// <summary>
+    /// 整层路线的循环是否完整：至少一个候选，且每条未解析项都能被接缝淡化掩盖（maskable，循环分析按 ResidualMasking 记下，
+    /// 与生成准入同一判据）。已证随机的精灵、平稳随机粒子有交叉淡化处置，不算没解完。
+    /// </summary>
     internal static bool WholeLoopComplete(JsonObject loop) =>
-        loop["unresolved"] is JsonArray { Count: 0 } && loop["candidates"] is JsonArray { Count: > 0 };
+        loop["candidates"] is JsonArray { Count: > 0 } && loop["unresolved"] is JsonArray unresolved &&
+        unresolved.All(item => item?["maskable"] is JsonValue value && value.TryGetValue(out bool maskable) && maskable);
 
     /// <summary>whole_layer 副本按 plan 当前的 blockers 与 loop 重写：各拷一份，零阻断且循环完整才 available。</summary>
     internal static void RefreshWholeLayer(JsonObject plan)

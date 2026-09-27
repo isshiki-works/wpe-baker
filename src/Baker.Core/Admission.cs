@@ -42,19 +42,14 @@ public static class Admission
     }
 
     /// <summary>
-    /// 整层路线的循环准入：未解析分量（去掉说明性条目）逐条判定能否被接缝淡化掩盖，再看可掩盖分量是否都落在视频组里。
+    /// 整层路线的循环准入：未解析分量逐条判定能否被接缝淡化掩盖，再看可掩盖分量是否都落在视频组里。
     /// 效果前缀路线不适用，直接通过（路线只有整层与效果前缀两种）。纯函数：只读 plan、源场景与资源，不改 plan。
     /// </summary>
     public static AdmissionVerdict Evaluate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (plan["route"]?.GetValue<string>() == "effect_prefix") return new(AdmissionRejection.None, null, null, null);
-        // 说明性条目（更小分配取证）不是时间机制，不能当成识别不了的机制去判定。
-        var input = plan.DeepClone().AsObject();
-        if (input["loop"] is JsonObject loop && loop["unresolved"] is JsonArray unresolved)
-            loop["unresolved"] = new JsonArray(unresolved.OfType<JsonObject>()
-                .Where(item => item["kind"]?.GetValue<string>() != ResidualMasking.AllocationFallbackKind).Select(item => item.DeepClone()).ToArray());
-        JsonObject residual = ResidualMasking.Classify(input, scene, readResource);
+        JsonObject residual = ResidualMasking.Classify(plan, scene, readResource);
         bool hasCandidates = plan["loop"]?["candidates"] is JsonArray { Count: > 0 };
         if (residual["status"]?.GetValue<string>() == "rejected")
         {
