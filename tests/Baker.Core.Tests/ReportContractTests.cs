@@ -13,7 +13,7 @@ public class RenderJobContractTests
     private const string AllFeatures = "sparse-readback-v1,gpu-samples-v1,gpu-sampling-coverage-v1,gpu-encode-v1,gpu-capture-v1," +
         "gpu-loop-encode-v1,gpu-encode-resize-v1,gpu-quality-samples-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,capture-force-visible-owner-v1";
 
-    private static NativeTools FakeTools(string dir, string features = AllFeatures)
+    internal static NativeTools FakeTools(string dir, string features = AllFeatures)
     {
         string renderer = Path.Combine(dir, "fake-render.cmd");
         File.WriteAllText(renderer, "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo wpe-render test features=" + features +
