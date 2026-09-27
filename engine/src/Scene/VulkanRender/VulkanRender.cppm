@@ -178,6 +178,8 @@ struct RenderInitInfo {
     RenderLayerSelection layer_selection;
 
     std::span<const rstd::uint8_t> uuid;
+    // 磁盘 VkPipelineCache 所在目录（与着色器缓存同一个）；空 = 不用。
+    std::string pipeline_cache_dir;
 
     std::uint16_t width { 1920 };
     std::uint16_t height { 1080 };

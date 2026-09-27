@@ -1,7 +1,15 @@
 module;
 
 #include <rstd/macro.hpp>
+#include <algorithm>
+#include <atomic>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <type_traits>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 #include "vvk/macros.hpp"
@@ -311,7 +319,83 @@ auto Device::MemoryBudget() const -> MemoryBudgetSnapshot {
     return snapshot;
 }
 
-void Device::Destroy() { VVK_CHECK(m_device.WaitIdle()); }
+void Device::Destroy() {
+    VVK_CHECK(m_device.WaitIdle());
+    ClosePipelineCache();
+}
+
+void Device::OpenPipelineCache(const std::string& directory) {
+    namespace fs = std::filesystem;
+    const VkPhysicalDeviceProperties properties = m_gpu.GetProperties();
+    const fs::path file = fs::u8path(directory) /
+        ("pipeline-" + std::to_string(properties.vendorID) + "-" + std::to_string(properties.deviceID) + ".bin");
+    std::vector<char> data;
+    if (std::ifstream in { file, std::ios::binary }) data.assign(std::istreambuf_iterator<char>(in), {});
+    // 头部（VkPipelineCacheHeaderVersionOne）的长度、版本、vendorID、deviceID、pipelineCacheUUID 都对得上才交给驱动：
+    // 换了显卡或驱动时从空的开始，结束时整份覆盖掉旧的。
+    VkPipelineCacheHeaderVersionOne header {};
+    bool usable = data.size() >= sizeof(header);
+    if (usable) {
+        std::memcpy(&header, data.data(), sizeof(header));
+        usable = header.headerSize >= sizeof(header) && header.headerSize <= data.size() &&
+                 header.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
+                 header.vendorID == properties.vendorID && header.deviceID == properties.deviceID &&
+                 std::memcmp(header.pipelineCacheUUID, properties.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+    }
+    if (! usable) data.clear();
+    VkPipelineCacheCreateInfo info {
+        .sType           = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+        .pNext           = nullptr,
+        .flags           = 0,
+        .initialDataSize = data.size(),
+        .pInitialData    = data.empty() ? nullptr : data.data(),
+    };
+    if (vkCreatePipelineCache(*m_device, &info, nullptr, &m_pipeline_cache) != VK_SUCCESS) {
+        m_pipeline_cache = VK_NULL_HANDLE;
+        rstd_warn("cannot create the Vulkan pipeline cache; pipelines are built without it");
+        return;
+    }
+    const auto utf8         = file.u8string();
+    m_pipeline_cache_file   = std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+    m_pipeline_cache_loaded = data.size();
+}
+
+void Device::ClosePipelineCache() {
+    namespace fs = std::filesystem;
+    if (m_pipeline_cache == VK_NULL_HANDLE) return;
+    std::size_t       size = 0;
+    std::vector<char> data;
+    // 大小没变就是没有新管线，不重写（多个渲染器同时收尾时也少一次覆盖）。
+    if (vkGetPipelineCacheData(*m_device, m_pipeline_cache, &size, nullptr) == VK_SUCCESS &&
+        size != m_pipeline_cache_loaded) {
+        data.resize(size);
+        if (vkGetPipelineCacheData(*m_device, m_pipeline_cache, &size, data.data()) != VK_SUCCESS) data.clear();
+        data.resize(std::min(size, data.size()));
+    }
+    vkDestroyPipelineCache(*m_device, m_pipeline_cache, nullptr);
+    m_pipeline_cache = VK_NULL_HANDLE;
+    if (data.empty()) return;
+
+    // 先写本进程独占的临时文件，写完整再改名覆盖：读的一方只会看到旧的整份或新的整份。
+    static std::atomic<std::uint64_t> sequence { 0 };
+    const fs::path file = fs::u8path(m_pipeline_cache_file);
+    fs::path temporary = file;
+    temporary += "." + std::to_string(rstd::process::id().to_primitive()) + "." + std::to_string(sequence++) + ".tmp";
+    std::error_code error;
+    fs::create_directories(file.parent_path(), error);
+    bool written = false;
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        written = static_cast<bool>(out.write(data.data(), static_cast<std::streamsize>(data.size())));
+        out.close();
+        written = written && ! out.fail();
+    }
+    if (written) fs::rename(temporary, file, error);
+    if (! written || error) {
+        rstd_warn("cannot save the Vulkan pipeline cache");
+        fs::remove(temporary, error);
+    }
+}
 
 Device::Device() = default;
 Device::~Device() {}

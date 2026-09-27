@@ -57,8 +57,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     internal ulong StartFrame { get; set; }
 
     /// <summary>
-    /// 主渲染前的内嵌视频体积外推（bake.json 的 embedded_video_estimate，合成校验道给出；探针与读不到时 null）。
-    /// 每组首次主渲染前等它，按其中的 quantizer_offset 抬高所有播放档的量化值；编码后实际仍超上限就按实际字节再抬一次。
+    /// 主渲染前的内嵌视频体积外推（bake.json 的 embedded_video_estimate，合成校验道给出；探针、短循环与读不到时 null）。
+    /// 按其中的 quantizer_offset 抬高所有播放档的量化值；编码后实际仍超上限就按实际字节再抬一次。主渲染不等它，见 <see cref="StartAsync"/>。
     /// </summary>
     internal Task<JsonObject?> SizeEstimate { get; set; } = Task.FromResult<JsonObject?>(null);
 
@@ -301,10 +301,33 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     /// </summary>
     private async Task<JsonObject> StartAsync(int index)
     {
+        // 不等合成校验道：外推已出（或不外推）就按它渲；还没出时先按量化值 0 渲，渲完再对外推。外推要抬量化值（只有很长、码率很高的循环）时
+        // 把这次的产物整份挪开、按外推从头重渲，与先等外推再渲逐字节相同；不抬时这次就是先等外推会渲出的那份。
+        if (SizeEstimate.IsCompleted) return await MasterAsync(index, await SizeEstimate);
+        JsonObject rendered = await MasterAsync(index, null);
         JsonObject? estimate = await SizeEstimate;
-        // 外推来自 libx264 crf16 的试编，增量按软件档的码率律算；GPU 编码器的码率律不同，改走 CPU 路线时回到这个起点重新校正。
-        (int Offset, double Unconstrained) predicted = (estimate?["quantizer_offset"]?.GetValue<int>() ?? 0,
-            (estimate?["groups"] as JsonArray ?? []).Max(group => group?["predicted_bytes"]?.GetValue<long>()) ?? 0);
+        if (Predicted(estimate) is var predicted && predicted.Offset == 0)
+        {
+            // "不抬量化值时的字节估计"按最大值累计，外推那份补进来就与先等外推时相同。
+            if (rendered["size_budget"] is JsonObject budget)
+                budget["unconstrained_bytes"] = Math.Max(budget["unconstrained_bytes"]!.GetValue<double>(), Math.Round(predicted.Unconstrained));
+            return rendered;
+        }
+        string work = ProjectSource.ContainedPath(output, groups[index]["id"]!.GetValue<string>());
+        string aside = WorkLayout.Vacant(Path.Combine(work, "master.unestimated"));
+        Directory.CreateDirectory(aside);
+        foreach (string entry in Directory.GetFileSystemEntries(work).Where(entry => entry != aside))
+            Directory.Move(entry, Path.Combine(aside, Path.GetFileName(entry)));
+        return await MasterAsync(index, estimate);
+    }
+
+    // 外推来自 libx264 crf16 的试编，增量按软件档的码率律算；GPU 编码器的码率律不同，改走 CPU 路线时回到这个起点重新校正。
+    private static (int Offset, double Unconstrained) Predicted(JsonObject? estimate) => (estimate?["quantizer_offset"]?.GetValue<int>() ?? 0,
+        (estimate?["groups"] as JsonArray ?? []).Max(group => group?["predicted_bytes"]?.GetValue<long>()) ?? 0);
+
+    private async Task<JsonObject> MasterAsync(int index, JsonObject? estimate)
+    {
+        var predicted = Predicted(estimate);
         lock (sizeBudgets) sizeBudgets[index] = predicted;
         bool sizeRetried = false;
         RenderRequest render = MasterRequest(index);

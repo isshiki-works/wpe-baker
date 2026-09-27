@@ -188,14 +188,23 @@ public class BakeGateTests : IDisposable
         Assert.Equal(0, calls);
         Assert.Null(noProbe.EmbeddedVideoEstimate);
 
-        BakeGateContext under = Context(Plan(600));
-        under.CompositionValidation = new JsonObject { ["status"] = "composition_pass" };
-        under.Frames = 600;
-        Assert.Null(await Gate("predicted_within_limit").CheckAsync(under, Ct));
-        Assert.Equal(600UL, under.EmbeddedVideoEstimate!["loop_frames"]!.GetValue<ulong>());
+        // 循环 ≤20 s（60 fps 下 1200 帧）到不了 2 GiB，不外推；21 s 照常外推。
+        BakeGateContext shortLoop = Context(Plan(1200));
+        shortLoop.CompositionValidation = new JsonObject { ["status"] = "composition_pass" };
+        shortLoop.Frames = 1200;
+        Assert.Null(await Gate("predicted_over_limit").CheckAsync(shortLoop, Ct));
+        Assert.Equal(0, calls);
+        Assert.Null(shortLoop.EmbeddedVideoEstimate);
 
-        BakeGateContext over = Context(Plan(600));
+        BakeGateContext under = Context(Plan(1260));
+        under.CompositionValidation = new JsonObject { ["status"] = "composition_pass" };
+        under.Frames = 1260;
+        Assert.Null(await Gate("predicted_within_limit").CheckAsync(under, Ct));
+        Assert.Equal(1260UL, under.EmbeddedVideoEstimate!["loop_frames"]!.GetValue<ulong>());
+
+        BakeGateContext over = Context(Plan(36000));
         over.CompositionValidation = new JsonObject { ["status"] = "composition_pass" };
+        over.Frames = 36000;
         Assert.Null(await Gate("predicted_over_limit").CheckAsync(over, Ct));
         Assert.Equal("predicted_over_limit", over.EmbeddedVideoEstimate!["status"]!.GetValue<string>());
     }

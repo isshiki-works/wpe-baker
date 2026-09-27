@@ -1,5 +1,7 @@
 module;
 
+// vvk 的 FFI 只按名单导出 Vk 名字，VkPipelineCache 不在名单里：与 ResourceKey.cppm 一样在全局模块片段里引入头文件。
+#include <vulkan/vulkan_core.h>
 // Macros only — VVK_CHECK family.
 #include "vvk/macros.hpp"
 
@@ -610,8 +612,14 @@ public:
     VkDeviceSize GetUsage() const;
     auto         MemoryBudget() const -> MemoryBudgetSnapshot override;
 
+    // 磁盘上的 VkPipelineCache：从 directory 读入本设备的那份（头部与本机设备、驱动不符就从空的开始），
+    // Destroy 时有新内容才写回（临时文件再改名，并发的渲染器互不写坏）。建不起来时 pipeline_cache() 为空句柄，照常建管线。
+    void            OpenPipelineCache(const std::string& directory);
+    VkPipelineCache pipeline_cache() const { return m_pipeline_cache; }
+
 private:
     std::vector<VkDeviceQueueCreateInfo> ChooseDeviceQueue(VkSurfaceKHR = {});
+    void                                 ClosePipelineCache();
 
     vvk::DeviceDispatch     dld;
     VkInstance              m_instance { VK_NULL_HANDLE };
@@ -634,6 +642,10 @@ private:
     QueueParameters m_present_queue;
 
     VkExtent2D m_extent { 1, 1 };
+
+    VkPipelineCache m_pipeline_cache { VK_NULL_HANDLE };
+    std::string     m_pipeline_cache_file;
+    std::size_t     m_pipeline_cache_loaded { 0 };
 };
 
 // ---------- Util.hpp ----------

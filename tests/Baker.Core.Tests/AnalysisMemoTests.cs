@@ -47,6 +47,8 @@ public class AnalysisMemoTests
                 string output = Path.Combine(root, name);
                 JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", output), (r, _) => Analyze(r), CancellationToken.None,
                     memo: new AnalysisMemo(parallelism));
+                // 分阶段计时是墙钟，串行与并行两次必然不同，比较前去掉。
+                result.Remove("analysis_timing");
                 return Regex.Replace(result.ToJsonString().Replace(output.Replace("\\", "\\\\"), "<out>"), "run-[0-9a-f]{32}", "run");
             }
             string serial = await RunAsync("serial", 1);

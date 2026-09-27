@@ -89,6 +89,14 @@ public class AnalysisOrchestratorTests
             Assert.Equal(Enumerable.Range(1, 10).Select(n => n.ToString()), calls.Select(r => Path.GetFileName(r.OutputDirectory)));
             Assert.Equal("none", result["preset_applied"]!.GetValue<string>());
             Assert.Equal("balanced: summary.blocked; efficiency: summary.blocked", result["preset_fallback_reason"]!.GetValue<string>());
+            // analysis_timing 按重查路径记次数：档位与布局回退 7 次（fixed 3 次；off 的取舍测量 1 次 + 各档 3 次），交互替代与成本试算各 1 次。
+            JsonObject paths = result["analysis_timing"]!["paths"]!.AsObject();
+            Assert.Equal(7, paths["a_preset_layout_fallback"]!["count"]!.GetValue<int>());
+            Assert.Equal(1, paths["b_interaction_alternative"]!["count"]!.GetValue<int>());
+            Assert.Equal(1, paths["i_interaction_cost_trial"]!["count"]!.GetValue<int>());
+            Assert.Null(paths["c_retreat"]);
+            Assert.Equal(0, result["analysis_timing"]!["sub_analyses"]!.GetValue<int>());
+            Assert.NotNull(JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(root, "order", "plan.json")))!["analysis_timing"]);
         });
     }
 
@@ -311,6 +319,43 @@ public class AnalysisOrchestratorTests
             Assert.Equal([209, 214], result["settings"]!["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()).Order());
         });
     }
+
+    // "留非循环层实时再查"递归的子分析与父分析共用 cache/<sha>：原先把已拼过源哈希的目录再传下去，子分析落到 cache/<sha>/<sha>，
+    // 父分析的观测、循环与探针缓存全部用不上。子分析第一步就按缓存目录写 scene 缓存，看它写到哪里即可（之后的观测没有渲染器，失败无妨）。
+    [Fact]
+    public async Task LoopAllocationReplanSharesTheParentAnalysisCache() => await TestTemp.Run(async root =>
+    {
+        string fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
+        string sha;
+        using (var source = new ProjectSource(fixture)) sha = await source.SourceHashAsync(TestContext.Current.CancellationToken);
+        string cache = Path.Combine(root, "cache", sha);
+        string output = Path.Combine(root, "analysis");
+        Directory.CreateDirectory(output);
+        var report = new JsonObject
+        {
+            ["route"] = "whole_layer", ["whole_layer"] = new JsonObject { ["status"] = "unavailable" }, ["blockers"] = new JsonArray(),
+            ["video_groups"] = new JsonArray(new JsonObject { ["layer_ids"] = new JsonArray(1, 2) }),
+            ["layers"] = new JsonArray(new JsonObject { ["id"] = 1, ["root"] = 1, ["allocation_root"] = 1 },
+                new JsonObject { ["id"] = 2, ["root"] = 2, ["allocation_root"] = 2 }),
+            ["loop"] = new JsonObject { ["unresolved"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 1 }) }
+        };
+        var scene = new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1, ["image"] = "a.json" }, new JsonObject { ["id"] = 2, ["image"] = "b.json" }) };
+        var request = new HybridAnalyzeRequest(2, fixture, root, output, 64, 32, AnalysisCacheDirectory: cache);
+        var record = typeof(HybridScenePlanner).GetMethod("RecordLoopAllocationFallbackAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var planner = new HybridScenePlanner(new("not-started", "not-started", "not-started", []));
+        try
+        {
+            // memo 传 null：子分析的 scene 照常经 AnalysisCache 按缓存目录落盘，看得出它用的是哪个目录。
+            await (Task)record.Invoke(planner, [report, scene, request, output, scene, (Func<string, JsonObject?>)(_ => null), null, null,
+                TestContext.Current.CancellationToken])!;
+        }
+        // 反射调用本身对不上（签名变了）要直接失败，不能当成子分析失败吞掉。
+        catch (Exception error) when (error is not System.Reflection.TargetParameterCountException and not ArgumentException) { }
+        Assert.NotNull(report["loop_allocation_fallback"]!["analysis_plan_path"]);
+        Assert.True(File.Exists(Path.Combine(cache, "scene.json")));
+        Assert.False(Directory.Exists(Path.Combine(cache, sha)));
+    });
 
     private static JsonObject Plan(HybridAnalyzeRequest request, bool usable, string[]? states = null, int groups = 1) => new()
     {
