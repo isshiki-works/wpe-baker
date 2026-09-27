@@ -66,7 +66,7 @@ internal static class PlanWriter
             {
                 var origin = HybridVideoProjection.Vector(Resolve(objects[id]["origin"], properties), (0, 0));
                 JsonObject? inherited = Int(objects[id]["parent"]) is int parent && objects.ContainsKey(parent)
-                    ? HybridVideoProjection.ParentTransform(objects, parent, properties) : null;
+                    ? HybridVideoProjection.ParentTransform(objects, parent) : null;
                 var parentOrigin = HybridVideoProjection.Vector(inherited?["origin"], (0, 0));
                 var parentScale = HybridVideoProjection.Vector(inherited?["scale"], (1, 1));
                 double centreX = .5 + (parentOrigin.X + parentScale.X * origin.X - centerX) / canvasWidth;

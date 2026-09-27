@@ -11,15 +11,15 @@ namespace Baker.Core;
 internal static class StaticProof
 {
     /// <summary>
-    /// 返回 null 表示这次捕获可由源与运行时证据证明为一张静态图；否则保留理由和可定位的所有者，供重新分配使用。
+    /// 返回空表示这次捕获可由源与运行时证据证明为一张静态图；否则保留理由和可定位的所有者，供重新分配使用。
     /// 旧版返回 bool，判否时不留任何记录，是 plan 里"零候选零理由 unavailable"的直接来源。
     /// </summary>
-    internal static SourceStaticUnresolved? Obstacle(JsonObject scene, ProjectSource source, string? assetsDirectory,
+    internal static SourceStaticUnresolved[] Obstacle(JsonObject scene, ProjectSource source, string? assetsDirectory,
         JsonObject runtime, IReadOnlyCollection<int> bakedLayerIds)
     {
-        static SourceStaticUnresolved Unproven(string detail, int? owner = null) => new(detail, owner, null);
+        static SourceStaticUnresolved[] Unproven(string detail, int? owner = null) => [new(detail, owner, null)];
         // 点名被烘图层的几种理由另带结构化的层名与"是不是粒子系统"，一行结论的中文据此说，不从英文明细里抠。
-        SourceStaticUnresolved Named(string detail, int id, bool particle = false) => new(detail, id, new StaticLayerNaming(Name(id), particle));
+        SourceStaticUnresolved[] Named(string detail, int id, bool particle = false) => [new(detail, id, new StaticLayerNaming(Name(id), particle))];
         if (runtime["status"] is not JsonValue status || !status.TryGetValue<string>(out string? state) || state != "complete" || runtime["runtime_layers"] is not JsonArray layers ||
             runtime["runtime_dependencies"] is not JsonArray dependencies || runtime["runtime_animation_periods"] is not JsonArray periods)
             return Unproven("Runtime observation is incomplete, so a static capture cannot be proven.");
@@ -38,9 +38,11 @@ internal static class StaticProof
         string Describe(int id) => Name(id) is string text ? $"layer {id} \"{text}\"" : $"layer {id}";
         foreach (int id in selected)
             if (!owners.ContainsKey(id)) return Unproven($"Baked {Describe(id)} is absent from the source scene.");
-        foreach (int id in selected)
-            if (DynamicSourceMechanism(owners[id]) is (string key, string mechanism))
-                return Named($"Baked {Describe(id)} contains {mechanism}; no analytic period was established for it either, so neither a loop nor a still image can be proven.", id, key == "particle");
+        // 源里含动态机制的被烘层一次全部点名（不是只报第一个）：分配回退按点名的层留实时、只重查一次，
+        // 只报第一个时重查会撞上下一个同类层，更小的分配就白试了。
+        SourceStaticUnresolved[] moving = [.. selected.SelectMany(id => DynamicSourceMechanism(owners[id]) is (string key, string mechanism)
+            ? Named($"Baked {Describe(id)} contains {mechanism}; no analytic period was established for it either, so neither a loop nor a still image can be proven.", id, key == "particle") : [])];
+        if (moving.Length > 0) return moving;
         foreach (JsonNode? node in periods)
         {
             if (node is not JsonObject period || period["source_owner_layer_id"] is not JsonValue owner ||
@@ -79,7 +81,7 @@ internal static class StaticProof
                 }
             }
         }
-        return null;
+        return [];
     }
 
     private static readonly (string Key, string Description)[] DynamicSourceMechanisms = [

@@ -6,26 +6,29 @@ namespace Baker.Core;
 /// <summary>Maps a fixed orthographic capture to source-world video geometry.</summary>
 internal static class HybridVideoProjection
 {
-    internal static bool SupportsStaticParent(JsonObject obj, JsonObject properties)
+    // 父变换一律取序列化的 value：渲染器不按用户属性改 origin/scale/angles（只认材质、视差、可见性、文字上的绑定），
+    // 捕获用的就是这个值，映射必须与之一致；运行时 WPE 按属性改父变换，视频作为子层随之变换，画面仍与原作一致。
+    // 以前先按属性解析，绑到标量滑块的 scale 解出单个数，被当成"非轴对齐"整棵不拆。
+    internal static bool SupportsStaticParent(JsonObject obj)
     {
         try
         {
-            var angles = Vector3(SceneGraph.Resolve(obj["angles"], properties), (0, 0, 0));
-            var scale = Vector3(SceneGraph.Resolve(obj["scale"], properties), (1, 1, 1));
-            _ = Vector3(SceneGraph.Resolve(obj["origin"], properties), (0, 0, 0));
+            var angles = Vector3(obj["angles"], (0, 0, 0));
+            var scale = Vector3(obj["scale"], (1, 1, 1));
+            _ = Vector3(obj["origin"], (0, 0, 0));
             return angles == (0d, 0d, 0d) && Math.Abs(scale.X) > 1e-9 && Math.Abs(scale.Y) > 1e-9 && Math.Abs(scale.Z) > 1e-9;
         }
         catch (InvalidDataException) { return false; }
     }
 
-    internal static JsonObject ParentTransform(IReadOnlyDictionary<int, JsonObject> objects, int parent, JsonObject properties)
+    internal static JsonObject ParentTransform(IReadOnlyDictionary<int, JsonObject> objects, int parent)
     {
         var chain = new Stack<JsonObject>();
         var seen = new HashSet<int>();
         int id = parent;
         while (objects.TryGetValue(id, out var obj))
         {
-            if (!seen.Add(id) || !SupportsStaticParent(obj, properties))
+            if (!seen.Add(id) || !SupportsStaticParent(obj))
                 throw new InvalidDataException("Video parent mapping requires a static axis-aligned, non-singular parent chain.");
             chain.Push(obj);
             if (SceneGraph.Int(obj["parent"]) is not int next || !objects.ContainsKey(next)) break;
@@ -34,8 +37,8 @@ internal static class HybridVideoProjection
         (double X, double Y, double Z) origin = (0, 0, 0), scale = (1, 1, 1);
         foreach (var obj in chain)
         {
-            var localOrigin = Vector3(SceneGraph.Resolve(obj["origin"], properties), (0, 0, 0));
-            var localScale = Vector3(SceneGraph.Resolve(obj["scale"], properties), (1, 1, 1));
+            var localOrigin = Vector3(obj["origin"], (0, 0, 0));
+            var localScale = Vector3(obj["scale"], (1, 1, 1));
             origin = (origin.X + scale.X * localOrigin.X, origin.Y + scale.Y * localOrigin.Y, origin.Z + scale.Z * localOrigin.Z);
             scale = (scale.X * localScale.X, scale.Y * localScale.Y, scale.Z * localScale.Z);
         }

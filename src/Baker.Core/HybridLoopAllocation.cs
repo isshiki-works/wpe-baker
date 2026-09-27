@@ -76,6 +76,25 @@ internal static class HybridLoopAllocation
     }
 
     /// <summary>
+    /// 更小分配重查仍不行时的第二次尝试：新留实时的单元所在的作者根被拆成了多个单元（触发器在拆出来的子单元里，
+    /// 或者触发器就是拆分点、子层被拆走），就把这些作者根下的全部单元都留实时。这是拆分前的范围：不拆时整棵子树跟着触发器留实时，
+    /// 所以这份分配不比不拆时留得少。作者根没被拆过、或留完之后没剩可烘的内容时返回 null。
+    /// </summary>
+    internal static int[]? AuthorRootRetention(JsonObject plan, JsonObject evidence)
+    {
+        var layers = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
+            .Select(layer => (Id: SceneGraph.Int(layer["id"]), Root: SceneGraph.Int(layer["root"]), Unit: SceneGraph.Int(layer["allocation_root"])))
+            .Where(layer => layer.Id is not null && layer.Root is not null && layer.Unit is not null).ToArray();
+        var added = ReadIds(evidence["added_live_root_ids"]).ToHashSet();
+        var split = layers.Where(layer => layer.Unit != layer.Root).Select(layer => layer.Root!.Value).ToHashSet();
+        var roots = layers.Where(layer => added.Contains(layer.Unit!.Value) && split.Contains(layer.Root!.Value)).Select(layer => layer.Root!.Value).ToHashSet();
+        if (roots.Count == 0) return null;
+        var widened = layers.Where(layer => roots.Contains(layer.Root!.Value)).Select(layer => layer.Id!.Value).ToHashSet();
+        if (ReadIds(evidence["remaining_baked_layer_ids"]).All(widened.Contains)) return null;
+        return [.. ReadIds(evidence["retain_live_root_ids"]).Concat(layers.Where(layer => roots.Contains(layer.Root!.Value)).Select(layer => layer.Unit!.Value)).Distinct()];
+    }
+
+    /// <summary>
     /// analyze 侧回退取证：按更小分配重新分析出的 plan 算不算"找到了循环"。整层可用、改走 effect_prefix 照旧算；
     /// 另外，整层路线下零 blocker、有解析候选、留下的未解析项（说明性条目除外）全部可由残差掩盖时也算——bake 会走残差掩盖路线，
     /// 只是 whole_layer 因为留着未解析项而写 unavailable（例如留实时 Sea 之后剩下的平稳随机雨）。

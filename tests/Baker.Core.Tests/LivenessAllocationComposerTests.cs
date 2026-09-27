@@ -170,7 +170,7 @@ public class AnalysisStagesTests
     [Fact]
     public Task ScriptedStructuralParentKeepsItsSubtreeTogether() => TestTemp.Run(dir =>
     {
-        var parent = new JsonObject { ["id"] = 10, ["name"] = "group", ["origin"] = new JsonObject { ["script"] = "export function update(v){return v;}", ["value"] = "0 0 0" } };
+        var parent = new JsonObject { ["id"] = 10, ["name"] = "group", ["origin"] = new JsonObject { ["script"] = "export function update(v){v.x = engine.runtime; return v;}", ["value"] = "0 0 0" } };
         var staged = Run(dir, [parent, Image(11, 10)], [Mesh(10, hasMesh: false), Mesh(11)], []);
         Assert.Equal(new int[] { 10 }, staged.Allocation.Order);
         Assert.Equal(10, staged.Allocation.UnitOf[11]);

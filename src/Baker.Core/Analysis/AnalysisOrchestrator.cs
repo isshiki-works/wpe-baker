@@ -77,6 +77,24 @@ internal sealed class AnalysisOrchestrator
             JsonObject old = await fallback.SelectAsync();
             if (Admission.Accepted(old)) (orchestrator, result) = (fallback, old);
         }
+        // 生成不了、静止证明点名了还没留实时的层（source_static：含作者动画、木偶、粒子或音源，证不了循环也证不了静止）：
+        // 把它们加进留实时、整套再分析，直到能生成或不再点名新层。拆分放开后这些层可能分在不同单元，分配回退只知道第一轮点名的，
+        // 后面的要到回退重查里才冒出来。能生成才采用，否则保留原结果与结论。
+        var kept = (result["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>().ToHashSet();
+        for (JsonObject current = result; !Admission.Accepted(current);)
+        {
+            int[] named = [.. SceneAnalyzer.Walk(current["loop"]).Concat(SceneAnalyzer.Walk(current["loop_allocation_fallback"])).OfType<JsonObject>()
+                .Where(item => item["kind"]?.GetValue<string>() == "source_static").Select(item => SceneGraph.Int(item["owner_layer_id"]))
+                .OfType<int>().Distinct().Where(id => !kept.Contains(id))];
+            if (named.Length == 0) break;
+            kept.UnionWith(named);
+            var reasons = HybridLoopAllocation.RetainReasons(current, kept) ?? new();
+            foreach (int id in named) reasons.TryAdd(id, ["source_static"]);
+            var trial = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. kept], RetainLiveReasons = reasons },
+                analyze, space, space.Budget(), tools, Path.Combine(run, $"static-live-{kept.Count}"), cache, token, progress, orchestrator.retreats);
+            current = await trial.SelectAsync();
+            if (Admission.Accepted(current)) (orchestrator, result) = (trial, current);
+        }
         // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
         // 读数（漂移上界、闭合读数、渲染器墙钟）写进 plan 的 slow_closure_probe。闭合的照常判能，烘焙时接缝门照常复核。
         // 振幅推不出的慢项超预算改速先实测速度差（SlowClosureProbe.SpeedAsync）：看得出、量不到或渲染失败就按逐项预算整套再分析

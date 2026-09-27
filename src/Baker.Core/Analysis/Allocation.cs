@@ -32,6 +32,8 @@ internal sealed class Allocation
     internal HashSet<int> LiveIds { get; private set; } = [];
     /// <summary>有脚本做动态对象查找（getLayer、thisScene、parent 等）：这时不省略隐藏子树，也不简化文字效果。</summary>
     internal bool DynamicLookup { get; private set; }
+    /// <summary>父变换映射用的对象表：变换上只依赖常量的脚本（相对位置）换成按项目尺寸求出的值，其余对象原样。</summary>
+    internal IReadOnlyDictionary<int, JsonObject> TransformObjects { get; private set; } = new Dictionary<int, JsonObject>();
 
     private Allocation(SceneGraph graph) =>
         Scripts = graph.Objects.ToDictionary(pair => pair.Key, pair => SceneAnalyzer.Walk(pair.Value).OfType<JsonObject>()
@@ -66,14 +68,47 @@ internal sealed class Allocation
                  (Int(d["target"]) is int target && rootOf.GetValueOrDefault(target, -1) == root)))).ToHashSet();
         // A structural node can share its fixed parent transform between independently allocated
         // children. Unknown state, drawing, scripts and observed writes keep its whole subtree intact.
+        // locktransforms 只是编辑器里防误拖的锁，不影响绘制（渲染器解析后不用）。
         var structuralFields = new HashSet<string>(["id", "name", "parent", "origin", "angles", "scale", "visible",
-            "alpha", "color", "solid", "disablepropagation", "parallaxDepth"], StringComparer.Ordinal);
+            "alpha", "color", "solid", "disablepropagation", "parallaxDepth", "locktransforms"], StringComparer.Ordinal);
         bool unresolvedObjectAccess = dependencies.OfType<JsonObject>().Any(d =>
             d["operation"]?.GetValue<string>() is "lookup" or "read" or "write" &&
             (Int(d["target"]) is not int target || !objects.ContainsKey(target)));
+        // 父层 origin/scale/angles 上只依赖常量的脚本（相对位置 x * engine.canvasSize.x）：按项目尺寸求出数值，当固定父变换；
+        // 对象上的脚本全是这种时才算，映射（TransformObjects）用求出的值，与成品里脚本照跑的位置一致。
+        double canvasWidth = Numeric(projection["canvas_width"], double.NaN), canvasHeight = Numeric(projection["canvas_height"], double.NaN);
+        var constantScripted = new Dictionary<int, JsonObject>();
+        foreach (var (id, obj) in objects.Where(pair => scripts[pair.Key].Length > 0))
+        {
+            var bound = new[] { "origin", "scale", "angles" }.Where(key => obj[key] is JsonObject { } binding && binding.ContainsKey("script")).ToArray();
+            string?[] values = [.. bound.Select(key => ScriptTime.ConstantVector(obj[key]!.AsObject(), obj, canvasWidth, canvasHeight, properties))];
+            if (bound.Length != scripts[id].Length || values.Any(value => value is null)) continue;
+            var evaluated = obj.DeepClone().AsObject();
+            for (int i = 0; i < bound.Length; i++) evaluated[bound[i]] = values[i];
+            constantScripted[id] = evaluated;
+        }
+        var transformObjects = objects.ToDictionary(pair => pair.Key, pair => constantScripted.GetValueOrDefault(pair.Key) ?? pair.Value);
+        allocation.TransformObjects = transformObjects;
+        bool FixedScripts(int id) => scripts[id].Length == 0 || constantScripted.ContainsKey(id);
+        // 绑到用户属性的变换：映射取序列化值，所以按本次分析的属性值解析后必须与它一致（标量只用于 scale，三轴同值）；
+        // 属性缺失、解析不出或不一致的拿不准，不拆。
+        bool BoundTransformsAgree(int id) => new[] { "origin", "scale", "angles" }.All(key =>
+        {
+            if (objects[id][key] is not JsonObject { } binding || binding["user"] is not { } user) return true;
+            string? name = user is JsonValue text && text.TryGetValue(out string? plain) ? plain : user["name"]?.GetValue<string>();
+            if (name is null || !properties.ContainsKey(name)) return false;
+            static double[]? Numbers(JsonNode? node) =>
+                node is JsonValue number && number.TryGetValue(out double single) ? [single] :
+                node is JsonValue words && words.TryGetValue(out string? line) ? line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(word => double.TryParse(word, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) ? v : double.NaN).ToArray() : null;
+            double[]? resolved = Numbers(Resolve(binding, properties)), serialized = Numbers(binding["value"]);
+            if (resolved is [double uniform] && key == "scale") resolved = [uniform, uniform, uniform];
+            return resolved is { Length: 3 } && serialized is { Length: 3 } &&
+                resolved.Zip(serialized).All(pair => Math.Abs(pair.First - pair.Second) <= 1e-4 * Math.Max(1, Math.Abs(pair.Second)));
+        });
         bool StaticStructure(int id) => objects[id].All(pair => structuralFields.Contains(pair.Key)) &&
-            scripts[id].Length == 0 && !live.Contains(id) && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
-            HybridVideoProjection.SupportsStaticParent(objects[id], properties) &&
+            FixedScripts(id) && !live.Contains(id) && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
+            HybridVideoProjection.SupportsStaticParent(transformObjects[id]) && BoundTransformsAgree(id) &&
             (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
                 HybridVideoProjection.Vector(Resolve(objects[id]["parallaxDepth"], properties), (0, 0)) == (0d, 0d)) &&
             !SceneAnalyzer.Walk(objects[id]).OfType<JsonObject>().Any(SceneGraph.Animated) &&
@@ -82,22 +117,48 @@ internal sealed class Allocation
             !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write");
         // 绘制的父层不因实时子层被连带：成品里实时子层挂在去掉绘制键的父层下（SceneAssembler.Emit），变换、可见性与透明度
         // 按原作同一份数据逐帧传给子层；父层先画进视频，读帧缓冲的子层读到的仍是它下面已合成好的画面。
-        // 条件是父层这份传给子层的状态是常量（无脚本、变换类属性无动画、没有运行时写入、轴对齐）：之后的非实时子层视频按固定父变换挂回去。
+        // 条件是父层这份传给子层的状态是常量（无脚本或只有常量脚本、变换类属性无动画、没有运行时写入、轴对齐）：之后的非实时子层视频按固定父变换挂回去。
         // 子层挂父层骨骼（attachment）时成品里没有木偶骨骼，仍连带。从第一个含实时层的子树起拆开，前面的子层留在父层单元里保持绘制顺序。
         // 只管真正绘制的父层（有 image/text/particle/model）；不绘制的容器仍走 StaticStructure（要求运行时记录证实无网格，缺记录即不拆）。
+        // 父层只因画面实时（读帧缓冲、着色器读音频频谱/指针/视差）时同样可拆：这些只改它自己的像素，传给子层的变换、可见性与透明度
+        // 仍是上面这些条件管的常量。成品里它原样留实时（带绘制键），后面的静态子层视频挂在它下面，绘制顺序照旧。
+        string[] pictureOnly = ["reads_current_framebuffer", "active_shader_audio_spectrum", "active_shader_pointer_input", "active_shader_parallax_input"];
         bool FixedDrawingParent(int id) => new[] { "image", "text", "particle", "model" }.Any(objects[id].ContainsKey) &&
-            !live.Contains(id) && scripts[id].Length == 0 && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
+            reasons[id].All(pictureOnly.Contains) && FixedScripts(id) && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
             !structuralFields.Any(key => objects[id][key] is JsonObject binding && SceneGraph.Animated(binding)) &&
-            HybridVideoProjection.SupportsStaticParent(objects[id], properties) &&
+            HybridVideoProjection.SupportsStaticParent(transformObjects[id]) && BoundTransformsAgree(id) &&
             (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
                 HybridVideoProjection.Vector(Resolve(objects[id]["parallaxDepth"], properties), (0, 0)) == (0d, 0d)) &&
             !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write") &&
             !sourceOrder.Any(child => Int(objects[child]["parent"]) == id && objects[child].ContainsKey("attachment"));
+        bool dynamicLookup = allocation.DynamicLookup = scripts.Values.SelectMany(s => s).Any(code => Regex.IsMatch(code,
+            @"\b(thisScene|getLayer|getParent|setParent|globalThis|eval|Function|Reflect|Proxy|import)\b|\.\s*(parent|children)\b"));
+        // 有动态查找时当前隐藏的节点（脚本可能把它重新显示）只按放开前的条件拆：编辑器锁、常量变换脚本、标量滑块缩放、
+        // 实时父层这几类新放开的拆分不用在它身上，隐藏子树不单独进视频、不多占一路视频流。放开前本来就拆的照旧拆，
+        // 否则隐藏容器单元里的脚本会让整个单元变成 hidden_script_controller，连带读它的层一起留实时。
+        // 没有动态查找的固定隐藏子树照旧拆，后面按 SafeHiddenSubtree 整棵省略。
+        bool MayBeReshown(int id)
+        {
+            JsonNode? visibility = Resolve(objects[id]["visible"], properties);
+            if (visibility is JsonObject binding) visibility = binding["value"];
+            return dynamicLookup && visibility?.ToJsonString() == "false";
+        }
+        bool SplittableBefore(int id)
+        {
+            var resolved = new JsonObject();
+            foreach (string key in new[] { "origin", "scale", "angles" })
+                if (objects[id][key] is JsonNode node) resolved[key] = Resolve(node, properties);
+            return !objects[id].ContainsKey("locktransforms") && scripts[id].Length == 0 && !live.Contains(id) &&
+                HybridVideoProjection.SupportsStaticParent(resolved);
+        }
         var allocationOf = allocation.UnitOf;
         void Assign(int id, int unit)
         {
             allocationOf[id] = unit;
-            bool split = id == unit && StaticStructure(id), splitDrawing = id == unit && !split && FixedDrawingParent(id);
+            bool splittable = id == unit && (!MayBeReshown(id) || SplittableBefore(id));
+            bool split = splittable && StaticStructure(id), splitDrawing = splittable && !split && FixedDrawingParent(id);
+            // 实时父层自己留一个单元，子层从第一个起各自成单元。
+            split |= splitDrawing && live.Contains(id);
             foreach (int child in sourceOrder.Where(child => Int(objects[child]["parent"]) == id))
             {
                 split |= splitDrawing && sourceOrder.Any(layer => live.Contains(layer) && graph.Within(layer, child));
@@ -164,8 +225,6 @@ internal sealed class Allocation
             ownerPerRule: false, severedRead, severedWrite);
         // ponytail: leave dynamic object lookup/shared controllers alone. This small conservative
         // check only removes fixed-disabled, self-contained branches; it is not a JS optimizer.
-        bool dynamicLookup = allocation.DynamicLookup = scripts.Values.SelectMany(s => s).Any(code => Regex.IsMatch(code,
-            @"\b(thisScene|getLayer|getParent|setParent|globalThis|eval|Function|Reflect|Proxy|import)\b|\.\s*(parent|children)\b"));
         bool SafeHiddenSubtree(int id, HashSet<int> subtree) => !dynamicLookup &&
             !retainedUnits.Contains(allocationOf[id]) &&
             Resolve(objects[id]["visible"], properties)?.ToJsonString() == "false" &&
@@ -198,11 +257,11 @@ internal sealed class Allocation
             if (!FixedTransform(id) || obj["image"] is not JsonValue image || image.ToJsonString().Contains("fullscreen", StringComparison.OrdinalIgnoreCase) ||
                 obj["fullscreen"] is JsonNode fullscreen && fullscreen.ToJsonString() != "false" || obj.ContainsKey("attachment") ||
                 obj["alignment"] is JsonNode alignment && alignment.ToJsonString() != "\"center\"" || obj["size"] is null ||
-                !HybridVideoProjection.SupportsStaticParent(obj, properties)) return false;
+                !HybridVideoProjection.SupportsStaticParent(obj)) return false;
             try
             {
                 JsonObject? inherited = Int(obj["parent"]) is int parent && objects.ContainsKey(parent)
-                    ? HybridVideoProjection.ParentTransform(objects, parent, properties) : null;
+                    ? HybridVideoProjection.ParentTransform(objects, parent) : null;
                 var parentOrigin = HybridVideoProjection.Vector(inherited?["origin"], (0, 0));
                 var parentScale = HybridVideoProjection.Vector(inherited?["scale"], (1, 1));
                 var origin = HybridVideoProjection.Vector(obj["origin"], (0, 0));

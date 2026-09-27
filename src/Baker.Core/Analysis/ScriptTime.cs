@@ -120,6 +120,34 @@ internal static class ScriptTime
         catch (Exception e) when (e is not OutOfMemoryException) { return null; }
     }
 
+    /// <summary>
+    /// 只依赖常量的脚本（字面量、脚本属性的烘焙值、engine.canvasSize）的输出值，如父层 origin 上的"相对位置"脚本 x * engine.canvasSize.x。
+    /// canvasSize 是项目尺寸，官方文档（IEngine）写明是常量；screenResolution、userProperties、时间与输入仍是未知。
+    /// 首帧与次帧输出同一个已知常数的三维向量、状态不再变、不写别的属性时返回 "x y z"，否则 null。
+    /// 场景对象上绑到用户属性的 scriptproperties 按本次分析的属性值（<paramref name="properties"/>）解析，渲染器与 WPE 都这样取；
+    /// 属性不在其中（来源拿不准）时返回 null，不当常量。
+    /// </summary>
+    internal static string? ConstantVector(JsonObject node, JsonObject owner, double canvasWidth, double canvasHeight, JsonObject properties)
+    {
+        if (node["script"] is not JsonValue value || !value.TryGetValue(out string? code)) return null;
+        node = node.DeepClone().AsObject();
+        if (node["scriptproperties"] is JsonObject bound)
+            foreach (var (key, entry) in bound.ToArray())
+            {
+                if (entry is not JsonObject { } binding || binding["user"] is not { } user) continue;
+                string? name = user is JsonValue text && text.TryGetValue(out string? plain) ? plain : user["name"]?.GetValue<string>();
+                if (name is null || !properties.ContainsKey(name)) return null;
+                bound[key] = SceneGraph.Resolve(binding, properties);
+            }
+        try
+        {
+            var run = new Interp(new Parser(code).Program(), new(-1, "", null, node, owner), 1.0 / 30, collect: false) { Canvas = (canvasWidth, canvasHeight) };
+            run.Setup();
+            return run.Settled(run.Root.Vars.GetValueOrDefault("update") as Fn);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException) { return null; }
+    }
+
     private static IEnumerable<X> All(X x) => x.K.OfType<X>().SelectMany(All).Prepend(x);
 
     // ---------------- 前端：词法 + 递归下降 ----------------
@@ -782,6 +810,8 @@ internal static class ScriptTime
         private N? rate;
         private int depth;
         private long steps;
+        /// <summary>给定时 engine.canvasSize 取这个常数（<see cref="ConstantVector"/>），否则是未知常数。</summary>
+        public (double W, double H)? Canvas;
 
         public Interp(X program, Binding binding, double frametime, bool collect)
         {
@@ -899,6 +929,25 @@ internal static class ScriptTime
                 seen[key] = frame;
             }
             throw new Bail("script_state_not_closed", detail: $"cross-frame state does not repeat within {frameCap} frames");
+        }
+
+        /// <summary>
+        /// 连跑两帧（按线性时间，读 runtime 的输出不是常数）：只输出绑定的属性，两帧的状态与输出相同、都是已知常数时返回 "x y z"。
+        /// 没有 update 时取 init 之后的值。
+        /// </summary>
+        public string? Settled(Fn? update)
+        {
+            string? Once()
+            {
+                var outputs = update is null ? [] : Frame(update, 's');
+                if (self.Count > 0 || outputs.Any(o => o.Property != "|" + binding.Name)) return null;
+                State state = Capture();
+                return state.Parts.Any(Unknown) ? null : state.Key();
+            }
+            // settle > 0：过了与时间比较的交点才固定，开头一段不是这个值。
+            if (Once() is not string first || Once() != first || settle > 0) return null;
+            return value is Ob { Cls: "Vec3" } vec && vec.F.Count == 3 && vec.F.Values.All(v => v is N { K: 'c' } n && double.IsFinite(n.C))
+                ? string.Join(' ', "xyz".Select(c => ((N)vec.F[c.ToString()]).C.ToString("R", CultureInfo.InvariantCulture))) : null;
         }
 
         private static bool Unknown(V v) => Deep(v) switch { N n => n.K != 'c', Ob o => o.F.Values.Any(Unknown), Ar a => a.E.Any(Unknown), _ => false };
@@ -1611,6 +1660,7 @@ internal static class ScriptTime
                             return time switch { 's' => new N('l', 0, 1), 'z' => Const(0), _ => throw new Bail("script_state_reads_time", detail: "cross-frame state also reads engine.runtime") };
                         case "frametime": return Const(frametime);
                         case "timeOfDay": return External("wall_clock");
+                        case "canvasSize" when Canvas is { } canvas: return Vec(2, [Const(canvas.W), Const(canvas.H)]);
                         case "canvasSize" or "screenResolution": return Vec(2, [new N('u'), new N('u')]);
                         case "userProperties": return new N('u');
                         case "registerAudioBuffers":
