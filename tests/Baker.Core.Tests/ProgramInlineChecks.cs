@@ -550,17 +550,25 @@ foreach (var (field, value) in new[] { ("angles", "0 0 0.3"), ("scale", "1 0 1")
     Check((await PlanSubtrees("subtree-protected-" + field, unsupportedParent))["root_order"]!.AsArray().Single()!.GetValue<int>() == 1200,
         "rotated or singular ancestor remains protected: " + field);
 }
-// 编辑器锁 locktransforms 与绑到标量滑块的 scale 不挡拆分；父变换映射取渲染器实际用的序列化值（不是属性值 5）。
-await File.WriteAllTextAsync(Path.Combine(subtreeSource, "project.json"),
-    "{\"type\":\"scene\",\"file\":\"scene.json\",\"general\":{\"properties\":{\"s\":{\"type\":\"slider\",\"value\":5}}}}");
-var editorOnlyParent = subtreeObjects.DeepClone().AsArray();
-editorOnlyParent[0]!["locktransforms"] = true;
-editorOnlyParent[0]!["scale"] = new JsonObject { ["user"] = "s", ["value"] = "2 3 1" };
-var editorOnlyPlan = await PlanSubtrees("subtree-editor-only", editorOnlyParent);
-File.Delete(Path.Combine(subtreeSource, "project.json"));
+// 编辑器锁 locktransforms 与绑到标量滑块的 scale 不挡拆分：属性值（2）按本次分析的属性解析，与序列化值 "2 2 2" 一致，映射用它。
+// 属性值与序列化值不一致（5）、或属性不在本次分析的属性里时拿不准，不拆。
+async Task<JsonObject> PlanScaleBound(string name, string properties)
+{
+    await File.WriteAllTextAsync(Path.Combine(subtreeSource, "project.json"),
+        "{\"type\":\"scene\",\"file\":\"scene.json\",\"general\":{\"properties\":{" + properties + "}}}");
+    var editorOnlyParent = subtreeObjects.DeepClone().AsArray();
+    editorOnlyParent[0]!["locktransforms"] = true;
+    editorOnlyParent[0]!["scale"] = new JsonObject { ["user"] = "s", ["value"] = "2 2 2" };
+    try { return await PlanSubtrees(name, editorOnlyParent); }
+    finally { File.Delete(Path.Combine(subtreeSource, "project.json")); }
+}
+var editorOnlyPlan = await PlanScaleBound("subtree-editor-only", "\"s\":{\"type\":\"slider\",\"value\":2}");
 Check(editorOnlyPlan["root_order"]!.AsArray().Count > 1 && editorOnlyPlan["video_groups"]!.AsArray().OfType<JsonObject>()
-        .Where(g => g["parent_id"]?.GetValue<int>() == 1200).All(g => g["parent_transform"]!["scale"]!.ToJsonString() == "[2,3,1]"),
-    "editor lock and scalar-slider scale do not protect the subtree; mapping uses the serialized parent value");
+        .Where(g => g["parent_id"]?.GetValue<int>() == 1200).All(g => g["parent_transform"]!["scale"]!.ToJsonString() == "[2,2,2]"),
+    "editor lock and a scalar-slider scale that agrees with the serialized value do not protect the subtree");
+Check((await PlanScaleBound("subtree-scale-disagrees", "\"s\":{\"type\":\"slider\",\"value\":5}"))["root_order"]!.AsArray().Single()!.GetValue<int>() == 1200 &&
+    (await PlanScaleBound("subtree-scale-unknown", ""))["root_order"]!.AsArray().Single()!.GetValue<int>() == 1200,
+    "a user-bound parent scale whose property disagrees with the serialized value, or is not known, keeps the subtree protected");
 // 父层 origin 挂只依赖常量的相对位置脚本：按项目尺寸（64×32）求出 (32, 8, 0) 当固定父变换拆开，映射用求出的值。
 var relativeParent = subtreeObjects.DeepClone().AsArray();
 relativeParent[0]!["origin"] = new JsonObject { ["value"] = "0 0 0", ["script"] = "'use strict';\nexport var scriptProperties = createScriptProperties()" +
@@ -570,6 +578,17 @@ var relativePlan = await PlanSubtrees("subtree-relative-origin", relativeParent)
 Check(relativePlan["root_order"]!.AsArray().Count > 1 && relativePlan["video_groups"]!.AsArray().OfType<JsonObject>()
         .Single(g => g["parent_id"]?.GetValue<int>() == 1200)["parent_transform"]!["origin"]!.ToJsonString() == "[32,8,0]",
     "a constant relative-position script on the parent origin splits the subtree and maps with the evaluated origin");
+// scriptProperties 绑到用户属性：按本次分析的属性值（px = 0.75）求值，不用脚本默认值 0.5；属性不在本次分析的属性里时不当常量。
+relativeParent[0]!["origin"]!["scriptproperties"] = new JsonObject { ["x"] = new JsonObject { ["user"] = "px", ["value"] = 0.5 } };
+await File.WriteAllTextAsync(Path.Combine(subtreeSource, "project.json"),
+    "{\"type\":\"scene\",\"file\":\"scene.json\",\"general\":{\"properties\":{\"px\":{\"type\":\"slider\",\"value\":0.75}}}}");
+var boundRelativePlan = await PlanSubtrees("subtree-relative-bound", relativeParent);
+File.Delete(Path.Combine(subtreeSource, "project.json"));
+Check(boundRelativePlan["video_groups"]!.AsArray().OfType<JsonObject>()
+        .Single(g => g["parent_id"]?.GetValue<int>() == 1200)["parent_transform"]!["origin"]!.ToJsonString() == "[48,8,0]" &&
+    (await PlanSubtrees("subtree-relative-bound-unknown", relativeParent))["root_order"]!.AsArray().Single()!.GetValue<int>() == 1200,
+    "a relative-position script maps with user-bound script properties resolved from the analysed properties, and stays protected when the property is unknown");
+relativeParent[0]!["origin"]!.AsObject().Remove("scriptproperties");
 relativeParent[0]!["origin"]!["script"] = relativeParent[0]!["origin"]!["script"]!.GetValue<string>().Replace("scriptProperties.y *", "(engine.runtime > 5 ? 0.25 : 0.5) *");
 Check((await PlanSubtrees("subtree-relative-runtime", relativeParent))["root_order"]!.AsArray().Single()!.GetValue<int>() == 1200,
     "a parent origin script that only settles after a time comparison keeps the subtree protected");

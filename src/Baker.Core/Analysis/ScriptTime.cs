@@ -124,10 +124,21 @@ internal static class ScriptTime
     /// 只依赖常量的脚本（字面量、脚本属性的烘焙值、engine.canvasSize）的输出值，如父层 origin 上的"相对位置"脚本 x * engine.canvasSize.x。
     /// canvasSize 是项目尺寸，官方文档（IEngine）写明是常量；screenResolution、userProperties、时间与输入仍是未知。
     /// 首帧与次帧输出同一个已知常数的三维向量、状态不再变、不写别的属性时返回 "x y z"，否则 null。
+    /// 场景对象上绑到用户属性的 scriptproperties 按本次分析的属性值（<paramref name="properties"/>）解析，渲染器与 WPE 都这样取；
+    /// 属性不在其中（来源拿不准）时返回 null，不当常量。
     /// </summary>
-    internal static string? ConstantVector(JsonObject node, JsonObject owner, double canvasWidth, double canvasHeight)
+    internal static string? ConstantVector(JsonObject node, JsonObject owner, double canvasWidth, double canvasHeight, JsonObject properties)
     {
         if (node["script"] is not JsonValue value || !value.TryGetValue(out string? code)) return null;
+        node = node.DeepClone().AsObject();
+        if (node["scriptproperties"] is JsonObject bound)
+            foreach (var (key, entry) in bound.ToArray())
+            {
+                if (entry is not JsonObject { } binding || binding["user"] is not { } user) continue;
+                string? name = user is JsonValue text && text.TryGetValue(out string? plain) ? plain : user["name"]?.GetValue<string>();
+                if (name is null || !properties.ContainsKey(name)) return null;
+                bound[key] = SceneGraph.Resolve(binding, properties);
+            }
         try
         {
             var run = new Interp(new Parser(code).Program(), new(-1, "", null, node, owner), 1.0 / 30, collect: false) { Canvas = (canvasWidth, canvasHeight) };

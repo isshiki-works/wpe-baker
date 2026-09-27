@@ -81,7 +81,7 @@ internal sealed class Allocation
         foreach (var (id, obj) in objects.Where(pair => scripts[pair.Key].Length > 0))
         {
             var bound = new[] { "origin", "scale", "angles" }.Where(key => obj[key] is JsonObject { } binding && binding.ContainsKey("script")).ToArray();
-            string?[] values = [.. bound.Select(key => ScriptTime.ConstantVector(obj[key]!.AsObject(), obj, canvasWidth, canvasHeight))];
+            string?[] values = [.. bound.Select(key => ScriptTime.ConstantVector(obj[key]!.AsObject(), obj, canvasWidth, canvasHeight, properties))];
             if (bound.Length != scripts[id].Length || values.Any(value => value is null)) continue;
             var evaluated = obj.DeepClone().AsObject();
             for (int i = 0; i < bound.Length; i++) evaluated[bound[i]] = values[i];
@@ -90,9 +90,25 @@ internal sealed class Allocation
         var transformObjects = objects.ToDictionary(pair => pair.Key, pair => constantScripted.GetValueOrDefault(pair.Key) ?? pair.Value);
         allocation.TransformObjects = transformObjects;
         bool FixedScripts(int id) => scripts[id].Length == 0 || constantScripted.ContainsKey(id);
+        // 绑到用户属性的变换：映射取序列化值，所以按本次分析的属性值解析后必须与它一致（标量只用于 scale，三轴同值）；
+        // 属性缺失、解析不出或不一致的拿不准，不拆。
+        bool BoundTransformsAgree(int id) => new[] { "origin", "scale", "angles" }.All(key =>
+        {
+            if (objects[id][key] is not JsonObject { } binding || binding["user"] is not { } user) return true;
+            string? name = user is JsonValue text && text.TryGetValue(out string? plain) ? plain : user["name"]?.GetValue<string>();
+            if (name is null || !properties.ContainsKey(name)) return false;
+            static double[]? Numbers(JsonNode? node) =>
+                node is JsonValue number && number.TryGetValue(out double single) ? [single] :
+                node is JsonValue words && words.TryGetValue(out string? line) ? line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(word => double.TryParse(word, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) ? v : double.NaN).ToArray() : null;
+            double[]? resolved = Numbers(Resolve(binding, properties)), serialized = Numbers(binding["value"]);
+            if (resolved is [double uniform] && key == "scale") resolved = [uniform, uniform, uniform];
+            return resolved is { Length: 3 } && serialized is { Length: 3 } &&
+                resolved.Zip(serialized).All(pair => Math.Abs(pair.First - pair.Second) <= 1e-4 * Math.Max(1, Math.Abs(pair.Second)));
+        });
         bool StaticStructure(int id) => objects[id].All(pair => structuralFields.Contains(pair.Key)) &&
             FixedScripts(id) && !live.Contains(id) && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
-            HybridVideoProjection.SupportsStaticParent(transformObjects[id]) &&
+            HybridVideoProjection.SupportsStaticParent(transformObjects[id]) && BoundTransformsAgree(id) &&
             (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
                 HybridVideoProjection.Vector(Resolve(objects[id]["parallaxDepth"], properties), (0, 0)) == (0d, 0d)) &&
             !SceneAnalyzer.Walk(objects[id]).OfType<JsonObject>().Any(SceneGraph.Animated) &&
@@ -110,7 +126,7 @@ internal sealed class Allocation
         bool FixedDrawingParent(int id) => new[] { "image", "text", "particle", "model" }.Any(objects[id].ContainsKey) &&
             reasons[id].All(pictureOnly.Contains) && FixedScripts(id) && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
             !structuralFields.Any(key => objects[id][key] is JsonObject binding && SceneGraph.Animated(binding)) &&
-            HybridVideoProjection.SupportsStaticParent(transformObjects[id]) &&
+            HybridVideoProjection.SupportsStaticParent(transformObjects[id]) && BoundTransformsAgree(id) &&
             (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
                 HybridVideoProjection.Vector(Resolve(objects[id]["parallaxDepth"], properties), (0, 0)) == (0d, 0d)) &&
             !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write") &&
