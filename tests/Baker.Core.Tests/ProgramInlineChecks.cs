@@ -550,9 +550,20 @@ foreach (var (field, value) in new[] { ("angles", "0 0 0.3"), ("scale", "1 0 1")
     Check((await PlanSubtrees("subtree-protected-" + field, unsupportedParent))["root_order"]!.AsArray().Single()!.GetValue<int>() == 1200,
         "rotated or singular ancestor remains protected: " + field);
 }
+// 编辑器锁 locktransforms 与绑到标量滑块的 scale 不挡拆分；父变换映射取渲染器实际用的序列化值（不是属性值 5）。
+await File.WriteAllTextAsync(Path.Combine(subtreeSource, "project.json"),
+    "{\"type\":\"scene\",\"file\":\"scene.json\",\"general\":{\"properties\":{\"s\":{\"type\":\"slider\",\"value\":5}}}}");
+var editorOnlyParent = subtreeObjects.DeepClone().AsArray();
+editorOnlyParent[0]!["locktransforms"] = true;
+editorOnlyParent[0]!["scale"] = new JsonObject { ["user"] = "s", ["value"] = "2 3 1" };
+var editorOnlyPlan = await PlanSubtrees("subtree-editor-only", editorOnlyParent);
+File.Delete(Path.Combine(subtreeSource, "project.json"));
+Check(editorOnlyPlan["root_order"]!.AsArray().Count > 1 && editorOnlyPlan["video_groups"]!.AsArray().OfType<JsonObject>()
+        .Where(g => g["parent_id"]?.GetValue<int>() == 1200).All(g => g["parent_transform"]!["scale"]!.ToJsonString() == "[2,3,1]"),
+    "editor lock and scalar-slider scale do not protect the subtree; mapping uses the serialized parent value");
 var parentTransformMethod = projectionType.GetMethod("ParentTransform", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 var nestedParentTransform = (JsonObject)parentTransformMethod.Invoke(null, new object[] {
-    subtreeObjects.OfType<JsonObject>().ToDictionary(obj => obj["id"]!.GetValue<int>()), 1202, new JsonObject() })!;
+    subtreeObjects.OfType<JsonObject>().ToDictionary(obj => obj["id"]!.GetValue<int>()), 1202 })!;
 var mappedLayer = new JsonObject { ["origin"] = "32 16 0", ["scale"] = "4 6 1", ["parallaxDepth"] = "0.4 0.2" };
 attachMethod.Invoke(null, new object[] { mappedLayer, new JsonObject { ["parent_id"] = 1202, ["parent_transform"] = nestedParentTransform } });
 double[] mappedOrigin = mappedLayer["origin"]!.GetValue<string>().Split(' ').Select(value => double.Parse(value, System.Globalization.CultureInfo.InvariantCulture)).ToArray();

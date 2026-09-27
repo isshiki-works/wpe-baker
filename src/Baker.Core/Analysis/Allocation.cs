@@ -66,14 +66,15 @@ internal sealed class Allocation
                  (Int(d["target"]) is int target && rootOf.GetValueOrDefault(target, -1) == root)))).ToHashSet();
         // A structural node can share its fixed parent transform between independently allocated
         // children. Unknown state, drawing, scripts and observed writes keep its whole subtree intact.
+        // locktransforms 只是编辑器里防误拖的锁，不影响绘制（渲染器解析后不用）。
         var structuralFields = new HashSet<string>(["id", "name", "parent", "origin", "angles", "scale", "visible",
-            "alpha", "color", "solid", "disablepropagation", "parallaxDepth"], StringComparer.Ordinal);
+            "alpha", "color", "solid", "disablepropagation", "parallaxDepth", "locktransforms"], StringComparer.Ordinal);
         bool unresolvedObjectAccess = dependencies.OfType<JsonObject>().Any(d =>
             d["operation"]?.GetValue<string>() is "lookup" or "read" or "write" &&
             (Int(d["target"]) is not int target || !objects.ContainsKey(target)));
         bool StaticStructure(int id) => objects[id].All(pair => structuralFields.Contains(pair.Key)) &&
             scripts[id].Length == 0 && !live.Contains(id) && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
-            HybridVideoProjection.SupportsStaticParent(objects[id], properties) &&
+            HybridVideoProjection.SupportsStaticParent(objects[id]) &&
             (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
                 HybridVideoProjection.Vector(Resolve(objects[id]["parallaxDepth"], properties), (0, 0)) == (0d, 0d)) &&
             !SceneAnalyzer.Walk(objects[id]).OfType<JsonObject>().Any(SceneGraph.Animated) &&
@@ -88,7 +89,7 @@ internal sealed class Allocation
         bool FixedDrawingParent(int id) => new[] { "image", "text", "particle", "model" }.Any(objects[id].ContainsKey) &&
             !live.Contains(id) && scripts[id].Length == 0 && !unresolvedObjectAccess && !independentOverlays.Contains(id) &&
             !structuralFields.Any(key => objects[id][key] is JsonObject binding && SceneGraph.Animated(binding)) &&
-            HybridVideoProjection.SupportsStaticParent(objects[id], properties) &&
+            HybridVideoProjection.SupportsStaticParent(objects[id]) &&
             (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
                 HybridVideoProjection.Vector(Resolve(objects[id]["parallaxDepth"], properties), (0, 0)) == (0d, 0d)) &&
             !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write") &&
@@ -198,11 +199,11 @@ internal sealed class Allocation
             if (!FixedTransform(id) || obj["image"] is not JsonValue image || image.ToJsonString().Contains("fullscreen", StringComparison.OrdinalIgnoreCase) ||
                 obj["fullscreen"] is JsonNode fullscreen && fullscreen.ToJsonString() != "false" || obj.ContainsKey("attachment") ||
                 obj["alignment"] is JsonNode alignment && alignment.ToJsonString() != "\"center\"" || obj["size"] is null ||
-                !HybridVideoProjection.SupportsStaticParent(obj, properties)) return false;
+                !HybridVideoProjection.SupportsStaticParent(obj)) return false;
             try
             {
                 JsonObject? inherited = Int(obj["parent"]) is int parent && objects.ContainsKey(parent)
-                    ? HybridVideoProjection.ParentTransform(objects, parent, properties) : null;
+                    ? HybridVideoProjection.ParentTransform(objects, parent) : null;
                 var parentOrigin = HybridVideoProjection.Vector(inherited?["origin"], (0, 0));
                 var parentScale = HybridVideoProjection.Vector(inherited?["scale"], (1, 1));
                 var origin = HybridVideoProjection.Vector(obj["origin"], (0, 0));
