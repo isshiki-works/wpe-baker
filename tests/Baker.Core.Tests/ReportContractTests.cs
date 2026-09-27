@@ -442,8 +442,17 @@ public class LoopItemContractTests
     public void StaticProofNamesTheBakedParticleLayer()
     {
         JsonObject Scene(string key) => new() { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1, ["name"] = "雨", [key] = "x.json" }) };
-        Assert.Equal(new StaticLayerNaming("雨", true), StaticProof.Obstacle(Scene("particle"), null!, null, NoRuntime, [1])!.Layer);
-        Assert.Equal(new StaticLayerNaming("雨", false), StaticProof.Obstacle(Scene("puppet"), null!, null, NoRuntime, [1])!.Layer);
+        Assert.Equal(new StaticLayerNaming("雨", true), StaticProof.Obstacle(Scene("particle"), null!, null, NoRuntime, [1]).Single().Layer);
+        Assert.Equal(new StaticLayerNaming("雨", false), StaticProof.Obstacle(Scene("puppet"), null!, null, NoRuntime, [1]).Single().Layer);
+    }
+
+    [Fact]
+    public void StaticProofNamesEveryBakedLayerWithASourceMechanism()
+    {
+        // 分配回退按点名的层留实时、只重查一次：两个含作者动画的被烘层要一起点名，不能只报第一个。
+        JsonObject Layer(int id) => new() { ["id"] = id, ["name"] = "纯色", ["color"] = new JsonObject { ["animation"] = new JsonObject() } };
+        var scene = new JsonObject { ["objects"] = new JsonArray(Layer(1), new JsonObject { ["id"] = 2 }, Layer(3)) };
+        Assert.Equal(new int?[] { 1, 3 }, StaticProof.Obstacle(scene, null!, null, NoRuntime, [1, 2, 3]).Select(item => item.OwnerLayerId));
     }
 
     [Fact]
