@@ -14,7 +14,7 @@ internal static class SlowClosureProbe
         static int[] Layers(JsonObject group) => [.. group["layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>()];
         var records = new JsonArray();
         JsonObject[] groups = [.. (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()];
-        // 特效前缀路线不烘视频组（只烘前缀缓存），没有要预检的。
+        // 特效前缀路线不烘视频组（只烘前缀缓存），前缀缓存在规划时已由 PrefixAsync 预检过。
         if (plan["route"]?.GetValue<string>() == "effect_prefix" || !groups.Any(group => GroupVerdicts.SlowDrift(plan, Layers(group)) is not null))
             return records;
         using var source = new ProjectSource(plan["source"]!.GetValue<string>());
@@ -65,5 +65,65 @@ internal static class SlowClosureProbe
             try { Directory.Delete(output, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
         return records;
+    }
+
+    /// <summary>
+    /// 特效前缀缓存的同一预检：缓存从第 0 帧起录、在自身周期 P 上闭合，没有组预热。按烘焙同一个捕获源
+    /// （<see cref="EffectPrefixBakeService.PrepareCaptureSourceAsync"/>）、同一个终端捕获选择与原生捕获尺寸出第 0 帧与第 P 帧，
+    /// 过同一个 <see cref="LoopClosureCheck"/>（透明与否按第 0 帧定，同烘焙）。缓存循环没有缓变分量时返回 null，不用预检；
+    /// 渲染失败记 probe_failed，调用方只认 closed，按没闭合处理。
+    /// </summary>
+    internal static async Task<JsonObject?> PrefixAsync(JsonObject cache, NativeTools tools, HybridAnalyzeRequest settings, ProjectSource source,
+        JsonObject snapshot, string output, CancellationToken token)
+    {
+        if (GroupVerdicts.SlowDrift(cache) is not (string degrees, _)) return null;
+        int owner = cache["owner_layer_id"]!.GetValue<int>();
+        JsonObject loop = cache["loop"]!.AsObject();
+        ulong period = loop["candidates"]![0]!["frames"]!.GetValue<ulong>();
+        var record = new JsonObject { ["group_id"] = "effect-prefix-" + owner, ["owner_layer_ids"] = new JsonArray(owner),
+            ["prefix_effect_count"] = cache["prefix_effect_count"]!.DeepClone(), ["drift_bound_degrees"] = degrees };
+        var renders = new List<JsonObject>();
+        try
+        {
+            string captureProject = Path.Combine(output, "capture-source");
+            await EffectPrefixBakeService.PrepareCaptureSourceAsync(captureProject, source, settings.Assets, source.ReadJson(source.SceneResource),
+                snapshot, loop, token);
+            var target = new RenderCaptureSelection(owner, cache["terminal_effect_id"]!.GetValue<int>(), EffectTerminal: true, ExactExtent: true,
+                ForceVisibleOwner: cache["preserve_external_visibility"]?.GetValue<bool>() == true ? true : null);
+            var runner = new NativeRenderRunner(tools);
+            async Task<JsonObject> Render(string name, uint width, uint height, ulong warmup, RenderCaptureSelection capture, bool trace)
+            {
+                JsonObject rendered = await runner.RenderRawAsync(new(captureProject, settings.Assets, Path.Combine(output, name), width, height,
+                    settings.FpsNumerator, settings.FpsDenominator, 1, WarmupFrames: warmup, Seed: 17, CaptureTarget: capture, UserProperties: snapshot,
+                    DeviceUuid: settings.DeviceUuid, TraceScene: trace,
+                    OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(loop, new HashSet<int> { owner })), token);
+                renders.Add(rendered);
+                return rendered;
+            }
+            // 捕获尺寸取烘焙元数据探测的同一个读数
+            JsonObject extent = (await Render("metadata", 64, 64, 0, target with { ExactExtent = false }, true))["native_result"]?["capture_source"] as JsonObject
+                ?? throw new InvalidDataException("Terminal metadata probe omitted its capture source.");
+            uint width = extent["width"]?.GetValue<uint>() ?? 0, height = extent["height"]?.GetValue<uint>() ?? 0;
+            if (width == 0 || height == 0) throw new InvalidDataException("Terminal metadata probe reported an invalid capture extent.");
+            byte[] first = await File.ReadAllBytesAsync((await Render("frame-0", width, height, 0, target, false))["rgba_path"]!.GetValue<string>(), token);
+            byte[] wrap = await File.ReadAllBytesAsync((await Render("frame-p", width, height, period, target, false))["rgba_path"]!.GetValue<string>(), token);
+            bool packedAlpha = false;
+            for (int pixel = 3; pixel < first.Length && !packedAlpha; pixel += 4) packedAlpha = first[pixel] != byte.MaxValue;
+            JsonObject closure = LoopClosureCheck.Evaluate(first, wrap, (int)width, (int)height, withAlpha: packedAlpha, period, judged: true,
+                SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height));
+            record["status"] = closure["status"]!.DeepClone();
+            record["loop_closure"] = closure;
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException)
+        {
+            record["status"] = "probe_failed";
+            record["error"] = error.Message;
+        }
+        finally
+        {
+            record["renderer_wall_seconds"] = renders.Sum(render => render["native_result"]?["wall_seconds"]?.GetValue<double>() ?? 0);
+            try { Directory.Delete(output, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+        return record;
     }
 }

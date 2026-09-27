@@ -244,6 +244,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         AnnotateLoopCandidates(loop);
         // 三处回退都可能要前缀缓存，同一个终端捕获点只问一次渲染器。
         var captureProbes = new PrefixCaptureProbes(tools, request, source, scene, properties, output);
+        // 带缓变分量的前缀的闭合预检读数，按 (层, 前缀长度) 只渲一次
+        var slowProbes = new Dictionary<string, JsonObject?>(StringComparer.Ordinal);
         async Task<JsonArray> PrefixCachesAsync()
         {
             // 只看整层初判拒因：路线与布局准入追加的 blockers 不影响前缀回退（与改写前读同一份局部数组的结果相同）。
@@ -264,6 +266,15 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 // 捕获点落在共用缓冲上的前缀录到的是整幅场景，这个候选不生成。
                 if (await captureProbes.TargetAsync(cache, cancellationToken) is { } probe &&
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus) continue;
+                // 带缓变分量的前缀过与整层路线同一个闭合预检，判闭合才采纳；没闭合、或没有渲染器可问（离线 trace），退一级前缀，这个效果留实时。
+                if (GroupVerdicts.SlowDrift(cache) is not null)
+                {
+                    string key = $"{ownerId}-{cache["prefix_effect_count"]!.GetValue<int>()}";
+                    if (!slowProbes.TryGetValue(key, out JsonObject? slow))
+                        slowProbes[key] = slow = request.RuntimeTraceFile is not null ? null : await SlowClosureProbe.PrefixAsync(cache, tools, request, source,
+                            properties, Path.Combine(output, "effect-prefix-slow-closure-" + key), cancellationToken);
+                    if (slow?["status"]?.GetValue<string>() != LoopClosureCheck.ClosedStatus) continue;
+                }
                 accepted.Add(cache.DeepClone());
                 settled.Add(ownerId);
             }
@@ -291,6 +302,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 不成立时拒因写回。路线到这里已定稿，后面的更小分配取证只看整层路线，不会再改道。
         if (effectPrefixRoute)
             Verdict.ApplyPrefixRadianceClosure(report, scene, properties, observation.Trace, source, request.Assets, project);
+        // 前缀闭合预检的读数（漂移上界、闭合读数、渲染器墙钟）同样留档；不写进 slow_closure_probe：没闭合的只是退一级前缀，不是整张的结论。
+        if (slowProbes.Values.OfType<JsonObject>().ToArray() is { Length: > 0 } slowRecords)
+            report["effect_prefix_slow_closure_probes"] = new JsonArray([.. slowRecords.Select(record => (JsonNode)record.DeepClone())]);
         // 探测过的前缀捕获点全部留档。被拒的原因只在整层循环本来就有未解机制时并进 loop.unresolved：这时前缀是
         // 整层循环的回退，拒绝原因正好说明回退为什么没走成。条目不带 owner_layer_id，免得分配回退把它当成要保留实时的
         // 未解层；原本没有未解项的循环也不凭空添一条，免得改变整层裁定。
