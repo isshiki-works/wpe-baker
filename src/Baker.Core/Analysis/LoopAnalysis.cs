@@ -263,7 +263,7 @@ internal static class LoopAnalysis
         // 粒子本身定不出循环长度，从 min(60 秒, 上限) 起，必要时在上限内延长到最长寿命之后；接缝由残差交叉淡化处理。
         // 有周期分量时长度由上面的求解器按这些周期的公共闭合给出，这里不插手；位移类等不可掩盖的未解析项不是粒子，不满足前提。
         JsonObject? particleDefault = candidates.Count == 0 && locked.Length == 0
-            ? StationaryParticleDefaultLoop(unresolved, candidates, fpsNumerator, fpsDenominator, ceiling)
+            ? StationaryParticleDefaultLoop(unresolved, candidates, groups, fpsNumerator, fpsDenominator, ceiling)
             : null;
         // 慢分量不进求解器：各候选另写它们在 P 处的漂移上界（烘焙侧接缝门复核）。除慢分量外没有任何周期分量时，
         // P 取求解器的最短循环时长对齐到帧网格（不超过上限），是确定值。
@@ -381,11 +381,13 @@ internal static class LoopAnalysis
     /// 必要时延长到最长寿命之后的首个输出帧，但不超过上限。返回 loop.loop_length_default 记录；有其它未解析项时不追加候选。
     /// 交叉淡化替换要求接缝两侧不共享粒子（循环长度 &gt; 粒子最长寿命，见 design-particle-crossfade §2.3），不满足时不加候选、记原因。
     /// </summary>
-    internal static JsonObject? StationaryParticleDefaultLoop(List<LoopUnresolved> unresolved, List<LoopCandidate> candidates, uint fpsNumerator,
-        uint fpsDenominator, CommonLoopRational ceiling)
+    /// <param name="groups">视频组（id、图层）：每组按组内最长粒子寿命取自己的默认长度（GroupFrames），L 取各组最大；没有组时按全场。</param>
+    internal static JsonObject? StationaryParticleDefaultLoop(List<LoopUnresolved> unresolved, List<LoopCandidate> candidates,
+        IReadOnlyList<(string Id, HashSet<int> Layers)> groups, uint fpsNumerator, uint fpsDenominator, CommonLoopRational ceiling)
     {
         if (unresolved.Count == 0) return null;
         var layerIds = new JsonArray();
+        var lifetimes = new Dictionary<int, double>();
         double longestLifetime = 0, longestWarmup = 0;
         foreach (LoopUnresolved item in unresolved)
         {
@@ -393,10 +395,17 @@ internal static class LoopAnalysis
                 !NonNegative(particle.WarmupSeconds, out double warmup) || !NonNegative(particle.LifetimeMaxSeconds, out double lifetime))
                 return null;
             layerIds.Add(track.OwnerLayerId);
+            lifetimes[track.OwnerLayerId] = Math.Max(lifetimes.GetValueOrDefault(track.OwnerLayerId), lifetime);
             longestLifetime = Math.Max(longestLifetime, lifetime);
             longestWarmup = Math.Max(longestWarmup, warmup);
         }
-        UInt128 frames = DefaultLoopFrames(longestLifetime, fpsNumerator, fpsDenominator, ceiling);
+        // 按组取最长寿命：一个组里的长寿粒子只把这个组拉长，不把别的粒子组一起拖出默认 60 s（1444077782）。
+        var groupFrames = new Dictionary<string, ulong>(StringComparer.Ordinal);
+        foreach (var (id, layers) in groups)
+            if (lifetimes.Where(pair => layers.Contains(pair.Key)).Select(pair => pair.Value).DefaultIfEmpty(-1).Max() is double own and >= 0 &&
+                DefaultLoopFrames(own, fpsNumerator, fpsDenominator, ceiling) is UInt128 ownFrames && ownFrames > 0)
+                groupFrames[id] = (ulong)ownFrames;
+        UInt128 frames = groupFrames.Count > 0 ? groupFrames.Values.Max() : DefaultLoopFrames(longestLifetime, fpsNumerator, fpsDenominator, ceiling);
         if (frames == 0) return null;
         double seconds = (double)frames * fpsDenominator / fpsNumerator;
         var record = new JsonObject {
@@ -419,7 +428,10 @@ internal static class LoopAnalysis
         record["status"] = "applied";
         record["summary_zh"] = MessageCatalog.Get("summary.particle_default_loop", MessageCatalog.Chinese, secondsText);
         record["summary_en"] = MessageCatalog.Get("summary.particle_default_loop", MessageCatalog.English, secondsText);
-        candidates.Add(new LoopCandidate((ulong)frames, seconds, 0d, [], []) { LoopLengthSource = "stationary_particle_default" });
+        // 比 L 短的组按自己的长度录（组 id → 帧数），其余组录 L
+        Dictionary<string, ulong> shorter = groupFrames.Where(pair => pair.Value < (ulong)frames).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        candidates.Add(new LoopCandidate((ulong)frames, seconds, 0d, [], []) { LoopLengthSource = "stationary_particle_default",
+            GroupFrames = shorter.Count > 0 ? shorter : null });
         return record;
     }
 
