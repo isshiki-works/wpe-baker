@@ -5,8 +5,8 @@
 许可全文在便携包 `licenses\` 目录下；对应的完整源码在本仓库与源码包里，获取方式见 `SOURCE.md`。
 
 「修改」一列指我们是否改动过该组件的源码；补丁路径都是本仓库内的相对路径，`.deps\` 开头的是源码包内的依赖快照。
-许可文本一列是 `licenses\` 下的文件名（本文件同目录的 `licenses\` 是打包用的核对副本，
-2026-09-18 从各上游按锁定版本下载，文本 SHA256 见本文件末尾）。
+许可文本一列是 `licenses\` 下的文件名（仓库根的 `licenses-extra\` 是打包用的核对副本，
+2026-09-18 起从各上游按锁定版本下载或从头文件提取，文本 SHA256 见本文件末尾）。
 
 ## 1. 引擎本体（GPL v2，随包提供源码）
 
@@ -36,6 +36,9 @@ GPL v2 第 3 条要求二进制与对应完整源码一起提供 —— 两个 z
 | rstd | `456fec5cc2b87acdb56800e298b5712ea69cdd47` | MIT OR Apache-2.0 | https://github.com/litocpp/rstd | **是** | `scripts\dependency-patches\rstd.patch`（4 个文件：`src/core/src/convert.cppm`、`src/json/src/parser.cppm`、`src/json/src/reader.cpp`、`tests/main/json/parser.cpp`） | `rstd.LICENSE-MIT` + `rstd.LICENSE-APACHE` |
 | wavsen（`engine/src/Media/` 的音频、视频解码移植自 wavsen（MIT）；T5b 起不再作为依赖构建） | `77dfd33d07112c05df4682e08b98e19153ebe3ab`（移植所据版本） | MIT OR Apache-2.0，移植代码按 MIT 使用（作者 2026-09-18 确认同样适用于锁定的 `77dfd33`：https://github.com/hypengw/wavsen/issues/5） | https://github.com/hypengw/wavsen | **是** | 移植后的源码即 `engine/src/Media/`（原 `scripts\dependency-patches\wavsen.patch` 已删，历史见 git） | `wavsen.LICENSE-MIT` + `wavsen.LICENSE-APACHE`（取自 `5a0ddb9`，见下方说明） |
 | vvk | `f53d60cc70938d0485802750deeb15d18ba033ea` | MIT OR Apache-2.0（作者 2026-09-18 在 `220116d` 加入许可文件，并确认适用于此前所有提交：https://github.com/litocpp/vvk/issues/3） | https://github.com/litocpp/vvk | **是** | `scripts\dependency-patches\vvk.patch`（6 个文件） | `vvk.LICENSE-MIT` + `vvk.LICENSE-APACHE` |
+| Random for modern C++（effolkronium/random，单头文件 `engine/third_party/effolkronium/random.hpp`） | `1.4.1` | MIT | https://github.com/effolkronium/random | 否 | — | `random.LICENSE.MIT`（取自头文件开头的许可注释） |
+| stb_image（单头文件 `engine/third_party/stb_image.h`） | `v2.26` | 公有领域或 MIT（二选一，按公有领域使用） | https://github.com/nothings/stb | 否 | — | 不需要（公有领域） |
+| SHA-1 in C++（单头文件 `engine/third_party/vog/sha1.hpp`） | 头文件自带版本 | 公有领域 | https://github.com/vog/sha1 | 否 | — | 不需要（公有领域） |
 
 FreeType 选 FTL 时上游要求在文档里致谢，发布文档与便携包 README 的 License 节须包含：
 
@@ -95,7 +98,6 @@ vvk 的完整源码与我们的补丁在源码包 `.deps\vvk\`、`scripts\depend
 
 | 组件 | 版本 | 许可 | 来源 | 修改 | 许可文本 |
 |---|---|---|---|---|---|
-| PresentMon | `2.5.1`（官方发行的 `PresentMon-2.5.1-x64.exe`，SHA256 `9bec3083…`） | MIT | https://github.com/GameTechDev/PresentMon/tree/v2.5.1 | 否 | `licenses\PresentMon.LICENSE.txt` + `PresentMon.THIRD_PARTY.txt` |
 | .NET 10.0.400 运行时（self-contained 发布） | SDK 10.0.400 / 运行时 10.0.11 | MIT | https://dotnet.microsoft.com | 否 | `licenses\dotnet.LICENSE.txt` + `dotnet.ThirdPartyNotices.txt` |
 | WpeBaker 本体（`src\`、`tests\`、`scripts\`） | 见发布说明的提交号 | 见仓库根 `LICENSE` | 本项目 | — | 包内 `LICENSE` |
 
@@ -111,33 +113,34 @@ GPL-2.0-only 的引擎静态链接 Apache-2.0-only 的组件（SPIRV-Reflect、V
 
 | 文件 | SHA256（前 16 位） |
 |---|---|
-| freetype-LICENSE.TXT | `bd36c8b474855fa2` |
-| freetype-FTL.TXT | `5a5ee54c5001bbad` |
-| glslang-LICENSE.txt | `17e70c676e1521ff` |
-| lz4-LICENSE | `4bc9c403f6b679cc` |
-| lz4-lib-LICENSE | `8b58c446121a109c` |
-| quickjs-ng-LICENSE | `96f73f9d2a16c21a` |
-| vma-LICENSE.txt | `52df2c03d6cfc9ff` |
-| spirv-reflect-LICENSE | `c71d239df91726fc` |
-| eigen-COPYING.MPL2 | `66a3107d5ad6a058` |
-| eigen-COPYING.README | `db640ff2bd90c6ab` |
-| vulkan-headers-LICENSE.md | `ac24e5ea920e4318` |
-| vulkan-headers-LICENSES-Apache-2.0.txt | `cfc7749b96f63bd3` |
-| vulkan-headers-LICENSES-MIT.txt | `1ca3502222d967f3` |
-| vulkan-loader-LICENSE.txt | `43c0a37e6a0fa7ff` |
-| nlohmann-json-LICENSE.MIT | `46a65cffd1ea9551` |
+| freetype.LICENSE.TXT | `bd36c8b474855fa2` |
+| freetype.FTL.TXT | `5a5ee54c5001bbad` |
+| glslang.LICENSE.txt | `17e70c676e1521ff` |
+| lz4.LICENSE | `4bc9c403f6b679cc` |
+| lz4.lib.LICENSE | `8b58c446121a109c` |
+| quickjs-ng.LICENSE | `96f73f9d2a16c21a` |
+| vma.LICENSE.txt | `52df2c03d6cfc9ff` |
+| spirv-reflect.LICENSE | `c71d239df91726fc` |
+| eigen.COPYING.MPL2 | `66a3107d5ad6a058` |
+| eigen.COPYING.README | `db640ff2bd90c6ab` |
+| vulkan-headers.LICENSE.md | `ac24e5ea920e4318` |
+| vulkan-headers.Apache-2.0.txt | `cfc7749b96f63bd3` |
+| vulkan-headers.MIT.txt | `1ca3502222d967f3` |
+| vulkan-loader.LICENSE.txt | `43c0a37e6a0fa7ff` |
+| nlohmann-json.LICENSE.MIT | `46a65cffd1ea9551` |
 | cli11.LICENSE（2026-09-23 从 v2.7.2 头文件提取） | `a4e99505fae59bea` |
-| rstd-LICENSE-MIT | `dc69d4de4e50e20b` |
-| rstd-LICENSE-APACHE | `cfc7749b96f63bd3` |
-| wavsen-LICENSE-MIT | `2d1edaf74e77c63e` |
-| wavsen-LICENSE-APACHE | `cfc7749b96f63bd3` |
-| vvk-LICENSE-MIT | `2d1edaf74e77c63e` |
-| vvk-LICENSE-APACHE | `cfc7749b96f63bd3` |
-| ffmpeg-COPYING.LGPLv2.1 | `246041b6ecf9bc32` |
-| ffmpeg-COPYING.GPLv2 | `8177f97513213526` |
-| dav1d-COPYING | `dd92c3c2247c5651` |
-| x264-COPYING | `32b1062f7da84967` |
-| x265-COPYING | `d8afb1bcc7a2cfc6` |
+| random.LICENSE.MIT（2026-09-27 从 1.4.1 头文件提取） | `b7bed50ec3beedf5` |
+| rstd.LICENSE-MIT | `dc69d4de4e50e20b` |
+| rstd.LICENSE-APACHE | `cfc7749b96f63bd3` |
+| wavsen.LICENSE-MIT | `2d1edaf74e77c63e` |
+| wavsen.LICENSE-APACHE | `cfc7749b96f63bd3` |
+| vvk.LICENSE-MIT | `2d1edaf74e77c63e` |
+| vvk.LICENSE-APACHE | `cfc7749b96f63bd3` |
+| `licenses\renderer-codecs\ffmpeg\COPYING.LGPLv2.1`（便携包内，不在 licenses-extra） | `246041b6ecf9bc32` |
+| `encoder\licenses\ffmpeg\COPYING.GPLv2`（便携包内，不在 licenses-extra） | `8177f97513213526` |
+| `licenses\renderer-codecs\dav1d\COPYING`（便携包内，不在 licenses-extra） | `dd92c3c2247c5651` |
+| `encoder\licenses\x264\COPYING`（便携包内，不在 licenses-extra） | `32b1062f7da84967` |
+| `encoder\licenses\x265\COPYING`（便携包内，不在 licenses-extra） | `d8afb1bcc7a2cfc6` |
 
 打包时优先从构建机 `.deps\<组件>\` 里的原始许可文件拷贝（那是真正参与构建的副本）；
-本目录的 22 份下载件是台式机 `.deps` 为空时的兜底与核对基准。
+`licenses-extra\` 的 23 份是台式机 `.deps` 为空时的兜底与核对基准；cli11、random、wavsen、vvk 只有这一处来源。
