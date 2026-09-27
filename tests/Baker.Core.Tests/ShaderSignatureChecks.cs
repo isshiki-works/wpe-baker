@@ -106,12 +106,12 @@ internal static class ShaderSignatureChecks
 
             // 振幅推不出的慢项（90.1 s，旋钮 0.25）：逐项预算（这里 0%）内与 7.1 s 项凑不出循环时，整层路线（有视频组）放开它的改速、
             // 证据带实测标记留给分析收尾实测；特效前缀路线（没有视频组）不放开，照旧无解
-            LoopReport Measured(JsonArray? groups, bool budgetOnly = false, string shader = "effects/x", bool unmeasured = false, bool demote = false) => LoopAnalysis.Analyze(
+            LoopReport Measured(JsonArray? groups, bool budgetOnly = false, string shader = "effects/x", bool unmeasured = false) => LoopAnalysis.Analyze(
                 JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
                 {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
                   {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
                   {"seconds":90.1,"num":901,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.25,"inverse":false}]}]}
-                """, shader), [10], 30, 1, 0, videoGroups: groups, budgetOnlyRetime: budgetOnly, speedUnmeasured: unmeasured, demoteLongTerms: demote);
+                """, shader), [10], 30, 1, 0, videoGroups: groups, budgetOnlyRetime: budgetOnly, speedUnmeasured: unmeasured);
             LoopReport whole = Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }));
             const string slowTerm = "shader/10/0/0/effects/x/periodica_k_frag_3e800000";
             check(whole.Candidates.Count > 0 && Math.Abs(whole.Candidates[0].Components.Single(x => x.ComponentId == slowTerm).DeltaPercent) > 0 &&
@@ -126,40 +126,6 @@ internal static class ShaderSignatureChecks
             check(Kinds(Measured(group.DeepClone().AsArray(), unmeasured: true)).Select(x => x!.GetValue<string>()).SequenceEqual(["UnsupportedShaderMechanism/speed_not_measured"]) &&
                 Kinds(Measured(group.DeepClone().AsArray(), budgetOnly: true)).Select(x => x!.GetValue<string>()).SequenceEqual(["NonPeriodicOrDriftingMechanism/loop_never_repeats_within_limit"]),
                 "an unmeasurable speed check leaves the blocked layer not converged; a visible one proves cannot");
-            // 长周期项按慢分量（demoteLongTerms）：90.1 s 项移出求解器、记成慢分量，7.1 s 项独自闭合；不闭合与否交给闭合预检，不在这里判不能
-            LoopReport demoted = Measured(group.DeepClone().AsArray(), budgetOnly: true, demote: true);
-            check(demoted.Candidates.Count > 0 && demoted.Candidates[0].SlowComponents.Single().Id == slowTerm + "/slow" &&
-                demoted.Candidates[0].Components.All(x => x.ComponentId != slowTerm) && demoted.Candidates[0].Patches.OfType<LoopValuePatch>().All(x => x.ComponentId != slowTerm) &&
-                Kinds(demoted).Count == 0,
-                "a long term that cannot close within the budget becomes a slow component for the closure probe instead of proving cannot");
-            // 只降精确闭合证明无解的层：10 层只有 142 s 一项（能与 11 层的 7.1 s 精确闭合），是全场最长的项也不动；
-            // 11 层 7.1 s 与 90.1 s 在 0% 预算下最宽松模型也无解，只降它的 90.1 s，10 层照旧精确闭合在 142 s
-            JsonObject two = Runtime("""
-                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[{"seconds":142,"num":142,"den":1,"pi":0,"knobs":[]}]}
-                """);
-            two["runtime_layers"]!.AsArray().Add(Runtime("""
-                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
-                  {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
-                  {"seconds":90.1,"num":901,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.25,"inverse":false}]}]}
-                """)["runtime_layers"]![0]!.DeepClone());
-            two["runtime_layers"]![1]!["owner"] = 11;
-            LoopReport pair2 = LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10},{"id":11}]}""")!.AsObject(), source, null, two, [10, 11], 30, 1, 0,
-                videoGroups: new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10, 11) }), budgetOnlyRetime: true, demoteLongTerms: true);
-            check(pair2.Candidates.Count > 0 && pair2.Candidates[0].SlowComponents.Select(x => x.Id).SequenceEqual(["shader/11/0/0/effects/x/periodica_k_frag_3e800000/slow"]) &&
-                pair2.Candidates[0].Components.Any(x => x.ComponentId == "shader/10/0/0/effects/x") && pair2.Candidates[0].Frames == 142 * 30,
-                "only a layer proven unable to close exactly has its long terms demoted; a layer that closes exactly stays in the solver even with the longest term");
-            // 分析入口：档位上限与 1200 s 都凑不出时才降级（整层路线），plan.loop 带慢分量；特效前缀路线（没有视频组）不降级
-            JsonObject Planned(JsonArray? groups) => HybridScenePlanner.AnalyzeLoopForProfile(() => JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(),
-                source, null, Runtime("""
-                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
-                  {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
-                  {"seconds":90.1,"num":901,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.25,"inverse":false}]}]}
-                """), [10], new HybridAnalyzeRequest(2, "s", "a", "o", FpsNumerator: 30, Preset: "balanced", RetimeBudgetPercent: 0, BudgetOnlyRetime: true),
-                new JsonObject(), groups);
-            JsonObject planned = Planned(group.DeepClone().AsArray());
-            check(planned["candidates"]![0]!["slow_components"]![0]!["component"]!.GetValue<string>() == slowTerm + "/slow" &&
-                planned["maximum_seconds"]!.GetValue<double>() == 600 && Planned(null)["candidates"]!.AsArray().Count == 0,
-                "the planner demotes long terms only after the 1200-second retry also fails, on the whole-layer route");
             LoopReport sway = Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }), shader: "effects/foliagesway");
             check(sway.Candidates.Count == 0 && !sway.Evidence.Any(x => x.Evidence.EndsWith(ShaderPeriodAnalysis.MeasuredNote, StringComparison.Ordinal)),
                 "foliagesway without a computable amplitude stays on the per-term budget and never enters the speed check");

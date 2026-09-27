@@ -15,8 +15,7 @@ internal static class LoopAnalysis
         CommonLoopPreference preference = CommonLoopPreference.Balanced,
         double? loopLengthMaximumSeconds = null, JsonArray? videoGroups = null,
         IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null,
-        double? proofRetimePercent = null, bool budgetOnlyRetime = false, bool retimeSlow = false, bool speedUnmeasured = false,
-        bool demoteLongTerms = false)
+        double? proofRetimePercent = null, bool budgetOnlyRetime = false, bool retimeSlow = false, bool speedUnmeasured = false)
     {
         // 速度实测量不到（speedUnmeasured）后与看得出（budgetOnlyRetime）后一样不放开要实测的改速与冻结；区别只在结论：量不到的挡住循环记未收敛
         bool budgetOnly = budgetOnlyRetime || speedUnmeasured;
@@ -88,46 +87,6 @@ internal static class LoopAnalysis
         // 预算取档位回退链能走到的最大值（proofRetimePercent，见 HybridScenePlanner）：本档无解、下一档有解的层不是"不能"。
         // 带组步长重解时无解由调用方保持原解，不查。
         double proof = proofRetimePercent ?? maximumRetimePercent;
-        // 这一层按最宽松模型（Prove 同一口径）求一次：它自己的非慢着色器周期项各在预算内独立调频，加上它自己的动画轨道
-        LoopSolve Relaxed(int owner, ShaderTerm[] own) => SolveLoop(shader with { Components = [] }, [.. animation.Where(x => x.OwnerLayerId == owner)],
-            [.. own.Select(x => x.Relaxed.MaximumRetimePercent is double cap ? x.Relaxed with { MaximumRetimePercent = Math.Max(cap, proof) } : x.Relaxed)],
-            fpsNumerator, fpsDenominator, proof, ceiling, preference);
-        static bool Never(LoopSolve relaxed) => relaxed.Result.NoCandidate?.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
-            or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling;
-        // 长周期项按慢分量（demoteLongTerms，HybridScenePlanner 在档位上限与 1200 s 都无解时打开）：只动精确闭合证明无解的层（最宽松模型也无解，
-        // 原来判不能、留实时的层），从它最长的 ≥ 60 s 着色器分量起逐个移出求解器、记成慢分量（漂移上界 2π·P/T，T 取周期/(1+预算) 的下界），
-        // 直到这一层按实际模型单独有解；降不出解的层原样不动。之后整场有解才采用，否则保持原解。别的层（原来能精确闭合的）一律不动。
-        // 闭合与否交给慢分量闭合预检实测，不闭合才把这些层留实时、判不能。
-        if (demoteLongTerms && videoGroups is not null && stepCycles.Length == 0 && solve.Result.Candidates.Count == 0)
-        {
-            double stretch = 1 + maximumRetimePercent / 100;
-            List<ShaderPeriodComponent> kept = [.. shader.Components];
-            List<ShaderSlowComponent> slow = [.. shader.Slow];
-            foreach (int owner in shader.Terms.Select(x => x.OwnerLayerId).Distinct().Order()
-                .Where(owner => Never(Relaxed(owner, [.. shader.Terms.Where(x => x.OwnerLayerId == owner)]))).ToArray())
-            {
-                List<ShaderPeriodComponent> trial = [.. kept];
-                List<ShaderSlowComponent> trialSlow = [.. slow];
-                foreach (ShaderPeriodComponent longest in kept.Where(x => x.OwnerLayerId == owner && x.Component.BasePeriod!.Seconds >= SwayRecurrenceSolver.VisiblePeriodSeconds)
-                    .OrderByDescending(x => x.Component.BasePeriod!.Seconds).ToArray())
-                {
-                    trial.Remove(longest);
-                    trialSlow.Add(new($"{longest.Component.Id}/slow", owner, longest.EffectIndex, longest.PassIndex, longest.Component.BasePeriod!.Seconds / stretch));
-                    if (SolveLoop(shader with { Components = [.. trial.Where(x => x.OwnerLayerId == owner)] }, [.. animation.Where(x => x.OwnerLayerId == owner)], [],
-                        fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference).Result.Candidates.Count == 0) continue;
-                    (kept, slow) = (trial, trialSlow);
-                    break;
-                }
-            }
-            var demoted = shader with { Components = [.. kept], Slow = [.. slow] };
-            if (slow.Count > shader.Slow.Count && SolveLoop(demoted, animation, [.. particleCycles, .. scriptCycles], fpsNumerator, fpsDenominator,
-                maximumRetimePercent, ceiling, preference) is { Result.Candidates.Count: > 0 } found)
-            {
-                HashSet<string> removed = [.. shader.Components.Except(kept).Select(x => x.Component.Id)];
-                patches = [.. patches.Where(patch => !removed.Contains(patch.ComponentId))];
-                (shader, solve) = (demoted, found);
-            }
-        }
         bool noLoop = solve.Result.NoCandidate?.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
             or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling;
         static string S(double x) => x.ToString("0.###", CultureInfo.InvariantCulture);
@@ -138,7 +97,8 @@ internal static class LoopAnalysis
             {
                 ShaderTerm[] own = [.. shader.Terms.Where(x => x.OwnerLayerId == owner)];
                 if (own.Length == 0) continue;
-                LoopSolve relaxed = Relaxed(owner, own);
+                LoopSolve relaxed = SolveLoop(shader with { Components = [] }, [.. animation.Where(x => x.OwnerLayerId == owner)], [.. own.Select(x => x.Relaxed.MaximumRetimePercent is double cap
+                    ? x.Relaxed with { MaximumRetimePercent = Math.Max(cap, proof) } : x.Relaxed)], fpsNumerator, fpsDenominator, proof, ceiling, preference);
                 if (relaxed.Result.NoCandidate is { Kind: CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents
                     or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling } never)
                 {
