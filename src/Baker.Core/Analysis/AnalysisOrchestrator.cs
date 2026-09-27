@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -29,12 +30,14 @@ internal sealed class AnalysisOrchestrator
     private readonly string run, cache;
     private readonly CancellationToken token;
     private readonly IProgress<RenderProgress>? progress;
+    /// <summary>退回重查的次数，一次 RunAsync 里各编排器共用：子分析目录（retreat-N）与进度序号都按它，主路径与关交互试探的退回不撞。</summary>
+    private readonly StrongBox<int> retreats;
     private int attempt, states;
     private JsonArray costs = new();
 
     private AnalysisOrchestrator(HybridAnalyzeRequest request, Func<HybridAnalyzeRequest, CancellationToken, Task<JsonObject>> analyze,
         SearchSpace space, CallBudget budget, NativeTools? tools, string run, string cache, CancellationToken token,
-        IProgress<RenderProgress>? progress = null)
+        IProgress<RenderProgress>? progress = null, StrongBox<int>? retreats = null)
     {
         this.request = request;
         this.analyze = analyze;
@@ -45,6 +48,7 @@ internal sealed class AnalysisOrchestrator
         this.cache = cache;
         this.token = token;
         this.progress = progress;
+        this.retreats = retreats ?? new();
     }
 
     /// <param name="budget">省略时用 <see cref="SearchSpace.Budget"/> 的现状最坏上限；测试传入别的预算验证超出时的内部错误。</param>
@@ -69,7 +73,7 @@ internal sealed class AnalysisOrchestrator
             SingleShotAllocation.IntroTrackSeconds(result, JsonNode.Parse(await File.ReadAllTextAsync(evidence, token))!.AsObject()) > 0)
         {
             var fallback = new AnalysisOrchestrator(request with { SingleShotLive = true }, analyze, space, space.Budget(), tools,
-                Path.Combine(run, "single-shot-live"), cache, token, progress);
+                Path.Combine(run, "single-shot-live"), cache, token, progress, orchestrator.retreats);
             JsonObject old = await fallback.SelectAsync();
             if (Admission.Accepted(old)) (orchestrator, result) = (fallback, old);
         }
@@ -87,7 +91,7 @@ internal sealed class AnalysisOrchestrator
             if (open.Length == 0) break;
             orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. retained, .. open],
                 RetainLiveReasons = HybridLoopAllocation.RetainReasons(result, []) }, analyze, space,
-                space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token, progress);
+                space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token, progress, orchestrator.retreats);
             result = await orchestrator.SelectAsync();
         }
         if (slowProbes.Count > 0) result["slow_closure_probe"] = slowProbes;
@@ -206,8 +210,7 @@ internal sealed class AnalysisOrchestrator
         static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
         if (Viable(result) || Admission.Accepted(result) && !NoBenefit.AnalysisConditions(result).Contains(NoBenefit.VideoCostOverSaving)) return result;
         JsonObject current = result;
-        int tried = 0;
-        for (int round = 0; current["video_groups"] is JsonArray { Count: > 1 } groups; round++)
+        while (current["video_groups"] is JsonArray { Count: > 1 } groups)
         {
             int[] kept = [.. Ids(current["settings"]?["retain_live_root_ids"]).Concat(Ids(current["loop_allocation_fallback"]?["retain_live_root_ids"]))];
             // 已留实时层的原因码跟着重查走（分配回退点名层的未解析原因、plan 已带的），被保留层不被盖成只剩 retained_by_cost_trial。
@@ -216,10 +219,11 @@ internal sealed class AnalysisOrchestrator
             for (int index = 0; index < groups.Count; index++)
             {
                 // 每次重查都是一整次分析，耗时成倍增加：报一条阶段信息，命令行与界面不至于看起来卡住。
-                progress?.Report(new("retreating", null, new Message("progress.trying_grouping", [++tried])));
+                int tried = ++retreats.Value;
+                progress?.Report(new("retreating", null, new Message("progress.trying_grouping", [tried])));
                 var (plan, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = [.. kept.Concat(Ids(groups[index]?["root_ids"])).Distinct()],
                     RetainLiveReasons = keptReasons },
-                    analyze, space, space.Budget(), tools, Path.Combine(run, $"retreat-{round}-{index}"), cache, token).SolveAsync(interaction);
+                    analyze, space, space.Budget(), tools, Path.Combine(run, $"retreat-{tried}"), cache, token).SolveAsync(interaction);
                 if (Viable(plan)) { if (best is null || Margin(plan) > Margin(best)) best = plan; }
                 else if (Gap(plan) < Gap(next ?? current)) next = plan;
             }

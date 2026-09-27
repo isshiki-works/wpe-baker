@@ -252,6 +252,36 @@ public class AnalysisOrchestratorTests
         });
     }
 
+    [Fact]
+    public async Task MainAndOffRetreatsNeverShareAnOutputDirectory()
+    {
+        // 主路径退回后判不省电、再试关交互也退回：两次退回在同一个编排器里，子分析目录与进度序号都不能从头再来（489 张全集里 7 张撞了 "Analysis output must be new."）。
+        await TestTemp.Run(async root =>
+        {
+            var outputs = new List<string>();
+            JsonObject Analyze(HybridAnalyzeRequest r)
+            {
+                // 与 AnalyzeSingleAsync 同一条约束：输出目录必须是新的。
+                if (Directory.Exists(r.OutputDirectory)) throw new IOException("Analysis output must be new.");
+                Directory.CreateDirectory(r.OutputDirectory);
+                outputs.Add(r.OutputDirectory);
+                JsonObject plan = Plan(r, true, groups: 2);
+                // 省下的渲染抵不过两路视频（video_cost_over_saved_rendering）：主路径与 off 都会退回，退回的每一格也一样不省电。
+                plan["bake_value"] = new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule, ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 0.5 } };
+                plan["layers"] = new JsonArray(new JsonObject { ["id"] = 1, ["kind"] = "image", ["tradeoff_kinds"] = new JsonArray("pointer") });
+                return plan;
+            }
+            var reports = new List<RenderProgress>();
+            JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "twice")), (r, _) => Task.FromResult(Analyze(r)),
+                CancellationToken.None, progress: new Collect(reports));
+            Assert.Equal(NoBenefit.ExpectedStatus, result[NoBenefit.Field]!["status"]!.GetValue<string>());
+            string[] retreating = [.. reports.Where(p => p.Stage == "retreating").Select(p => p.Text!.In(MessageCatalog.Chinese))];
+            Assert.Equal(4, retreating.Length);
+            Assert.Equal(Enumerable.Range(1, 4).Select(n => MessageCatalog.Get("progress.trying_grouping", MessageCatalog.Chinese, n)), retreating);
+            Assert.Equal(outputs.Count, outputs.Distinct().Count());
+        });
+    }
+
     private sealed class Collect(List<RenderProgress> reports) : IProgress<RenderProgress>
     {
         public void Report(RenderProgress value) => reports.Add(value);
