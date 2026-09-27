@@ -292,6 +292,29 @@ TEST_F(ShaderTime, LiteralOnSpatiallyUniformOffsetIsKnob) {
     for (const auto& t : sig.terms) EXPECT_FALSE(literal(t, 3.0f)) << st::ToJson(sig);
 }
 
+// 隐含系数 1 的 sin/cos(clock)：clock = t·speed + 常量，没有周期部分、空间上处处相同，两处调用合成一个调用旋钮（sites 2）；
+// 有一处调用的实参混进逐像素量，整个变量不给
+TEST_F(ShaderTime, ImplicitRateCallCarriesCallKnob) {
+    const std::string head = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nuniform float g_Time;\nuniform float g_Speed;\n"
+                             "varying vec4 v_Look;\nvoid main() {\n  gl_Position = vec4(a_Position, 1.0);\n"
+                             "  float clock = g_Time * g_Speed + 0.31;\n  vec2 d = vec2(sin(clock), cos(clock)) + fract(clock);\n";
+    auto call = [](const st::Signature& sig) {
+        for (const auto& t : sig.terms)
+            for (const auto& k : t.knobs)
+                if (k.call == "clock") return std::pair { k.sites, t.seconds };
+        return std::pair { 0, 0.0 };
+    };
+    Case c { "", "implicit_rate", {}, { { "g_Speed", { 0.5f } } } };
+    c.vert = head + "  v_Look = vec4(a_TexCoord + d * 0.01, 0.0, 0.0);\n}\n";
+    c.frag = "varying vec4 v_Look;\nvoid main() { gl_FragColor = v_Look; }\n";
+    const auto sig = Analyze(c);
+    EXPECT_EQ(call(sig).first, 2) << st::ToJson(sig);
+    EXPECT_NEAR(call(sig).second, kTau / 0.5, 1e-6) << st::ToJson(sig);
+    c.vert = head + "  clock += a_TexCoord.x;\n  d.x += sin(clock);\n  v_Look = vec4(a_TexCoord + d * 0.01, 0.0, 0.0);\n}\n";
+    const auto spatial = Analyze(c);
+    EXPECT_EQ(call(spatial).first, 0) << st::ToJson(spatial);
+}
+
 // 旧写法的存储缓冲（Uniform + BufferBlock）同 StorageBuffer 按副作用写入报原因；普通 uniform 块（Block）不算
 TEST(ShaderTimeSpirv, BufferBlockIsSideEffect) {
     auto module = [](unsigned int decoration) {

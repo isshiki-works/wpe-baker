@@ -68,7 +68,9 @@ struct Period {
 };
 
 // 调频旋钮：t 的系数里一个可改写的直接乘法因子（着色器浮点字面量或材质 uniform），
-// 或顶点输出分量（varying 非空）：顶点程序换个时间再算一遍、只取这个分量，就只给经过它的项调频
+// 或顶点输出分量（varying 非空）：顶点程序换个时间再算一遍、只取这个分量，就只给经过它的项调频；
+// 或隐含系数 1 的调用（call 非空）：sin/cos 直接作用在局部变量 call 上、它的值是 r·t + 空间上处处相同的常量，
+// 把这 sites 处调用的实参改写成 call·k，只改这一项的速度与常量相位
 struct Knob {
     std::string stage;   // vert | frag
     std::string uniform; // 空 = 字面量
@@ -76,6 +78,8 @@ struct Knob {
     bool        inverse { false }; // 作为除数出现
     std::string varying;
     int         component { -1 };
+    std::string call;
+    int         sites { 0 };
     auto        operator<=>(const Knob&) const = default;
 };
 
@@ -611,6 +615,14 @@ public:
     }
     void          Execute(int stage_index, const std::map<std::uint32_t, Val>& varyings_in,
                           std::map<std::uint32_t, Val>& varyings_out, std::vector<std::pair<Comp, std::string>>& outputs);
+    // 调用旋钮：本阶段 sin/cos 作用在局部变量上的调用处数（按变量名）；有一处实参不是 r·t + 常量的变量不给
+    std::map<std::string, int> CallKnobSites() const {
+        std::map<std::string, int> r;
+        for (const auto& [name, sites] : call_sites_)
+            if (! call_bad_.count(name)) r[name] = int(sites.size());
+        return r;
+    }
+    std::string StageName() const { return Stage(); }
 
 private:
     std::size_t Sz(std::uint32_t type) const {
@@ -668,7 +680,8 @@ private:
                        bool& weak) const;
     Val           Load(const Ptr& p, const State& S) const;
     void          Store(const Ptr& p, const Val& v, State& S) const;
-    Val           Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t size, const std::string& where) const;
+    Val           Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t size, const std::string& where,
+                       const std::string& call = {}) const;
     Val           Sample(const std::string& name, const Val& coord, const std::vector<Val>& extra, bool integral,
                          std::size_t size, const std::string& where) const;
     Val           GenericAll(const std::vector<Val>& a, std::size_t size, const std::string& op,
@@ -697,6 +710,9 @@ private:
     std::unordered_map<std::uint32_t, Ptr>                                ptrs_;
     std::unordered_map<std::uint32_t, std::string>                        handles_;
     std::unordered_map<std::uint32_t, std::string>                        var_handles_;
+    std::unordered_map<std::uint32_t, std::string>                        load_names_; // 整个读出的具名局部标量变量
+    std::map<std::string, std::set<std::uint32_t>>                        call_sites_;
+    std::set<std::string>                                                 call_bad_;
     std::uint32_t                                                         glsl_ { 0 };
     std::uint32_t                                                         model_ { 0 };
     std::uint32_t                                                         entry_ { 0 };
@@ -972,7 +988,8 @@ Val Analyzer::GenericAll(const std::vector<Val>& a, std::size_t size, const std:
     return Val(size, r);
 }
 
-Val Analyzer::Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t size, const std::string& where) const {
+Val Analyzer::Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t size, const std::string& where,
+                   const std::string& call) const {
     auto arg = [&](std::size_t j, std::size_t k) -> const Comp& {
         static const Comp none;
         return j < a.size() ? At(a[j], k) : none;
@@ -1004,9 +1021,12 @@ Val Analyzer::Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t si
         case 10:
         case 13:
         case 14:
-        case 15:
+        case 15: {
+            Comp y = x;
+            if (! call.empty())
+                for (Rate& q : y.rates) q.knobs = Union(q.knobs, { Knob { .stage = Stage(), .call = call } });
             r[k] = x.known ? Known(*FoldGlsl(inst, { x.value }), x.pi == 0 ? 0 : kNoPi)
-                           : Periodic(x, inst == 10 ? 1.0 : inst == 15 ? kPi : 2 * kPi, inst == 10 ? 0 : 1, where);
+                           : Periodic(y, inst == 10 ? 1.0 : inst == 15 ? kPi : 2 * kPi, inst == 10 ? 0 : 1, where);
             // fract ∈ [0, 1]、sin/cos ∈ [−1, 1]；tan 的自变量是各系数都非零的线性时间、余下有界时，每个周期都经过极点
             if (x.known) continue;
             if (inst != 15)
@@ -1015,6 +1035,7 @@ Val Analyzer::Glsl(std::uint32_t inst, const std::vector<Val>& a, std::size_t si
                 r[k].poles = ! x.rate_unknown && x.Bounded() &&
                              std::none_of(x.rates.begin(), x.rates.end(), [](const Rate& y) { return y.v == 0; });
             continue;
+        }
         case 11:
         case 12: r[k] = Scale(x, inst == 11 ? Known(kPi / 180, 1) : Known(180 / kPi, -1)); continue;
         case 50: r[k] = Add(Mul(x, arg(1, k), where), arg(2, k), 1); continue;
@@ -1186,6 +1207,9 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
             handles_[R] = h != var_handles_.end() ? h->second : names_[p.root];
             break;
         }
+        if (auto v = ptrs_.find(o[2]); v != ptrs_.end() && v->second.root == o[2] && v->second.size == 1 && ! globals_.count(o[2]) &&
+                                       names_.count(o[2]) && ! names_[o[2]].empty())
+            load_names_[R] = names_[o[2]];
         Set(R, Load(p, S));
         break;
     }
@@ -1498,7 +1522,20 @@ void Analyzer::Exec(Function& f, std::size_t at, State& S, RunResult& res, const
     case 12: {
         std::vector<Val> a;
         for (std::size_t k = 4; k < n; ++k) a.push_back(V(o[k]));
-        Set(R, o[2] == glsl_ ? Glsl(o[3], a, sz, W(R)) : GenericAll(a, sz, "analysis_not_converged:extinst", W(R)));
+        // sin/cos(局部变量)：实参是 r·t + 常量（单一非零系数、没有周期部分与别的标记、空间上处处相同）时，
+        // 改写成 sin(变量·k) 只把这一项的速度乘 k、相位加一个常量，其余画面不变，挂调用旋钮；有一处不是就整个变量不给
+        std::string call;
+        if (o[2] == glsl_ && (o[3] == 13 || o[3] == 14) && n == 5 && sz == 1)
+            if (auto name = load_names_.find(o[4]); name != load_names_.end()) {
+                call_sites_[name->second].insert(R);
+                const Comp& x = At(a[0], 0);
+                if (! x.known && ! x.rate_unknown && x.rates.size() == 1 && x.rates[0].v != 0 && x.periods.empty() &&
+                    x.aperiodic.empty() && x.external.empty() && ! x.spatial && ! x.transient && x.settle < 0 && ! x.poles)
+                    call = name->second;
+                else
+                    call_bad_.insert(name->second);
+            }
+        Set(R, o[2] == glsl_ ? Glsl(o[3], a, sz, W(R), call) : GenericAll(a, sz, "analysis_not_converged:extinst", W(R)));
         break;
     }
     case 57: {
@@ -1766,6 +1803,22 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
     sig.transient = acc.transient;
     sig.settle    = acc.settle;
     sig.periods   = Classes(acc.periods);
+    // 调用旋钮定稿：记上调用处数，调用处有不合格实参的去掉
+    std::map<std::pair<std::string, std::string>, int> calls;
+    for (const auto& a : list)
+        for (const auto& [name, sites] : a->CallKnobSites()) calls[{ a->StageName(), name }] = sites;
+    for (Per& p : acc.periods) {
+        Knobs kept;
+        for (Knob k : p.knobs) {
+            if (! k.call.empty()) {
+                auto it = calls.find({ k.stage, k.call });
+                if (it == calls.end()) continue;
+                k.sites = it->second;
+            }
+            kept.push_back(k);
+        }
+        p.knobs = Union({}, kept);
+    }
     // 分量旋钮不参与分项：同 (周期, 次数, 其余旋钮) 的来源并成一项，每个来源都带分量旋钮时才留（取并集）
     std::vector<std::pair<Per, Knobs>> groups; // second 空 = 有来源不带分量旋钮
     for (const Per& p : acc.periods) {
@@ -1814,6 +1867,7 @@ std::string ToJson(const Signature& s) {
             std::snprintf(buf, sizeof(buf), "%.17g", double(n.literal));
             r += (j ? ",{" : "{") + std::string("\"stage\":") + Quote(n.stage) +
                  (! n.varying.empty() ? ",\"varying\":" + Quote(n.varying) + ",\"component\":" + std::to_string(n.component)
+                  : ! n.call.empty()  ? ",\"call\":" + Quote(n.call) + ",\"sites\":" + std::to_string(n.sites)
                   : n.uniform.empty() ? ",\"literal\":" + std::string(buf) : ",\"uniform\":" + Quote(n.uniform)) +
                  ",\"inverse\":" + (n.inverse ? "true" : "false") + "}";
         }
