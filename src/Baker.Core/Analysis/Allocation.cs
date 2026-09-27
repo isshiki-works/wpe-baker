@@ -136,7 +136,7 @@ internal sealed class Allocation
         bool dynamicLookup = allocation.DynamicLookup = scripts.Values.SelectMany(s => s).Any(code => Regex.IsMatch(code,
             @"\b(thisScene|getLayer|getParent|setParent|globalThis|eval|Function|Reflect|Proxy|import)\b|\.\s*(parent|children)\b"));
         // 有动态查找时当前隐藏的节点（脚本可能把它重新显示）只按放开前的条件拆：编辑器锁、常量变换脚本、标量滑块缩放、
-        // 实时父层这几类新放开的拆分不用在它身上，隐藏子树不单独进视频、不多占一路视频流。放开前本来就拆的照旧拆，
+        // 实时父层、木偶挂点父层这几类新放开的拆分不用在它身上，隐藏子树不单独进视频、不多占一路视频流。放开前本来就拆的照旧拆，
         // 否则隐藏容器单元里的脚本会让整个单元变成 hidden_script_controller，连带读它的层一起留实时。
         // 没有动态查找的固定隐藏子树照旧拆，后面按 SafeHiddenSubtree 整棵省略。
         bool MayBeReshown(int id)
@@ -151,7 +151,8 @@ internal sealed class Allocation
             foreach (string key in new[] { "origin", "scale", "angles" })
                 if (objects[id][key] is JsonNode node) resolved[key] = Resolve(node, properties);
             return !objects[id].ContainsKey("locktransforms") && scripts[id].Length == 0 && !live.Contains(id) &&
-                HybridVideoProjection.SupportsStaticParent(resolved);
+                HybridVideoProjection.SupportsStaticParent(resolved) &&
+                !sourceOrder.Any(child => Int(objects[child]["parent"]) == id && objects[child].ContainsKey("attachment"));
         }
         var allocationOf = allocation.UnitOf;
         void Assign(int id, int unit)

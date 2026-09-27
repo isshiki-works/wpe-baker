@@ -641,6 +641,15 @@ Check(puppetPlan["live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).Se
     puppetCarrier["animationlayers"] is JsonArray &&
     puppetExport[2]!["attachment"]!.GetValue<string>() == "Attachment" && puppetExport[2]!["parent"]!.GetValue<int>() == 1200,
     "a live child on a puppet attachment bakes the puppet and keeps it as a transparent bone carrier");
+// 当前隐藏、可能被脚本重新显示（场景里有 getLayer）的木偶父层：挂点拆分是新放开的，不用在它身上，父层与挂点子层同一单元。
+var hiddenPuppet = puppetParent.DeepClone().AsArray();
+hiddenPuppet[0]!["visible"] = false;
+hiddenPuppet.Insert(0, new JsonObject { ["id"] = 1208, ["text"] = new JsonObject { ["value"] = "x",
+    ["script"] = "export function update(v) { thisScene.getLayer('other'); return v; }" } });
+var hiddenPuppetPlan = await PlanSubtrees("subtree-hidden-puppet", hiddenPuppet);
+Check(hiddenPuppetPlan["layers"]!.AsArray().OfType<JsonObject>().Where(layer => layer["id"]!.GetValue<int>() is 1200 or 1201)
+        .All(layer => layer["allocation_root"]!.GetValue<int>() == 1200),
+    "a hidden puppet parent that scripts may show again keeps its attachment child in one unit");
 var parentTransformMethod = projectionType.GetMethod("ParentTransform", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 var nestedParentTransform = (JsonObject)parentTransformMethod.Invoke(null, new object[] {
     subtreeObjects.OfType<JsonObject>().ToDictionary(obj => obj["id"]!.GetValue<int>()), 1202 })!;
