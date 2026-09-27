@@ -41,11 +41,13 @@ internal static class OptionTable
     public static readonly CliCommand[] Commands =
     [
         new(Analyze, "SOURCE", false,
-            // fix/mdl-lenient-strings 加的退出码表，原样保留中英两行（两种 --lang 下输出相同）。
-            "  Exit codes: 0 plan written; 1 not a Scene wallpaper, or analysis failed; 3 preset package;",
+            // 退出码表，中英各一段（两种 --lang 下输出相同）。
+            "  Exit codes: 0 plan written; 1 source unreadable (e.g. an empty folder) or analysis failed;",
+            "    3 unsupported source: a video, web or other non-Scene wallpaper, or a preset package;",
             "    4 tool limitation: the renderer cannot read an asset file (a 3D model or texture), a report with",
             "      summary.verdict=tool_limitation is still written to --out; 130 cancelled.",
-            "  退出码：0 已写出 plan；1 不是 Scene 壁纸或分析失败；3 预设包；4 工具局限：渲染器读不了某个素材文件",
+            "  退出码：0 已写出 plan；1 来源读不了（例如空文件夹）或分析失败；3 不支持的来源：视频、网页等非 Scene 壁纸，",
+            "    或预设包；4 工具局限：渲染器读不了某个素材文件",
             "    （3D 模型或纹理），--out 仍写出 summary.verdict=tool_limitation 的结论；130 已取消。"),
         new(Bake, "PLAN.json|REQUEST.json", false,
             "  A saved PLAN.json needs --out NEW_DIRECTORY; a REQUEST.json already names its output directory."),
@@ -122,7 +124,7 @@ internal static class OptionTable
         [
             "Automatic fallback: quality -> balanced -> efficiency.",
             "Presets change retiming only; interaction is independent. Failed settings may return a verified suggested_change.",
-            "efficiency: 5% look budget, loop at most 600 s; balanced: 3%, 600 s; quality: smallest change, 1200 s.",
+            "efficiency: 5% look budget, loop at most 600 s; balanced: 3%, 600 s; quality: smallest change, 600 s.",
             "compatibility (experimental, manual only, never a fallback): 10% look budget, loop at most 1200 s; the 2 GiB",
             "embedded-video check, seam, composition and quality gates are unchanged. No scan data supports 10%; the look change is unverified.",
             "兼容档（实验性，只能手动选）：预算 10%、循环上限 1200 s；10% 没有扫描数据支持，观感变化未验证。",
@@ -147,7 +149,7 @@ internal static class OptionTable
             ]),
         new("--daytime-split", [Analyze], Choices: ["on", "off"], Parse: text => text == "on", Default: D.DaytimeSplit ? "on" : "off", Custom: true,
             Help: ["Plans each recognized day/time state of the wallpaper separately."]),
-        new("--trace", [Analyze], "FILE", Custom: true, Help: ["Diagnostic: writes the renderer's runtime trace to FILE."]),
+        new("--trace", [Analyze], "FILE", Custom: true, Help: ["Diagnostic: reads a recorded renderer runtime trace from FILE instead of observing the renderer."]),
         new("--lang", [Analyze, Bake], Choices: ["zh", "en"], Help: ["Default: the system interface language."]),
         // ---- bake ----
         new("--out", [Bake], "NEW_DIRECTORY", Help: ["Only with a PLAN.json."]),

@@ -43,9 +43,9 @@ jobs:
         run: dotnet test tests/Baker.Core.Tests -c Release --filter "Layer!=L3" --logger "trx;LogFileName=ci.trx"
 
       # 测试工程没被识别成测试工程时（例如缺 Microsoft.NET.Test.Sdk），dotnet test 一个测试不跑、不写 trx、退出码仍是 0。
-      # 所以直接读 trx 数通过的个数；没有 trx 时 Get-Content 报错，这一步同样失败。70 = 当前 L0–L2 测试数，测试增删时一起改。
+      # 所以直接读 trx 数通过的个数；没有 trx 时 Get-Content 报错，这一步同样失败。420 ≈ 当前 L0–L2 测试数（约 429）的下限，测试增删时一起改。
       - name: 核对 trx
         run: |
           $c = ([xml](Get-Content tests/Baker.Core.Tests/TestResults/ci.trx)).TestRun.ResultSummary.Counters
           "trx：总数 $($c.total)，执行 $($c.executed)，通过 $($c.passed)，失败 $($c.failed)"
-          if ([int]$c.passed -lt 70) { throw "只通过了 $($c.passed) 个测试，L0–L2 应至少 70 个" }
+          if ([int]$c.passed -lt 420) { throw "只通过了 $($c.passed) 个测试，L0–L2 应至少 420 个" }

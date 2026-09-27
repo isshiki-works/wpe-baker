@@ -45,6 +45,8 @@ STATIC_LICENSES = {
     "wavsen.LICENSE-APACHE": None,
     "vvk.LICENSE-MIT": None,
     "vvk.LICENSE-APACHE": None,
+    # engine/third_party/effolkronium/random.hpp: MIT, the text is the header's own license comment.
+    "random.LICENSE.MIT": None,
 }
 
 

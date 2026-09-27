@@ -95,11 +95,18 @@ conditions hold.
   more the tempo of its components has to be adjusted. `--preset
   efficiency|balanced|quality|compatibility` (balanced by default;
   `preset_applied` in the plan names the preset used) sets that budget:
-  efficiency allows up to 5% on any retimable component, balanced 3% and
-  compatibility 10%; quality sets no visual budget and falls back to the
-  general retime limit. `--retime-budget` (0–5%) overrides the preset's
-  budget. All four presets cap the loop at 600 s, and that cap is a backstop
-  rather than the knob. Within the cap and the budget the solver picks
+  efficiency allows up to 5% on any retimable component, balanced 3% (the
+  solver first tries 1% and widens to 3% only when 1% finds no loop) and
+  compatibility 10%; quality sets no visual budget, takes the smallest
+  change and falls back to the general retime limit. `--retime-budget`
+  (0–5%) overrides the preset's budget. Efficiency, balanced and quality cap
+  the loop at 600 s and compatibility at 1200 s; the cap is a backstop
+  rather than the knob. Slow sways (original period of 60 s or more) are
+  judged by peak speed instead: their retime may exceed the per-component
+  budget as long as the peak speed changes by at most 0.1 px/s, the solver
+  takes the lap count closest to the original speed, and zero laps freezes
+  the sway. Whether slow components close is decided by the seam check
+  between the loop's last and first frames. Within the cap and the budget the solver picks
   candidates with the preset's preference (performance for efficiency and
   compatibility, balanced for balanced, quality for quality); if no common
   loop fits the budget the scene takes the unresolved path. Analysis does not
@@ -194,19 +201,6 @@ conditions hold.
   `wpe-baker cost-probe` stays as an optional diagnostic that measures but
   never decides. Real savings have to be compared on your own playback
   device.
-- **The original's own draw is measured before you bake.** Where the platform
-  exposes RAPL energy counters, `measure-official` plays the original in the
-  official Wallpaper Engine player, waits for it to settle, samples for
-  30-45 s, restores the wallpaper you had, and reports the iGPU-rail and
-  package watts it read. If the original draws almost nothing on the iGPU
-  rail, the verdict says baking will not win that back, and leaves the choice
-  with you. The absolute verdict needs a real graphics domain counter (Intel
-  PP1 / GFX / GT): a machine that publishes only package and core domains —
-  the AMD desktop this is developed on is one — reports
-  `unsupported_platform` and no verdict rather than a fabricated number. On a
-  laptop with an Intel iGPU the same reading matched a manual counter read to
-  0.36%. This is a measurement of the machine you run it on, not a promise
-  about yours.
 - **A few unresolved layers can be masked, under two recorded tests.** When
   a scene solves to a period but a handful of components stay unresolved,
   they may be smeared across a fixed 0.4-second whole-frame crossfade at
@@ -278,8 +272,6 @@ conditions hold.
 - **Analysis cache:** re-analyzing the same output directory with different
   settings reuses scene loading and period solving (3426865175 at 4K: 4.98 s
   → 0.95 s).
-- **Pre-bake power measurement of the original is off by default**
-  (`--measure-source`; an optional checkbox in the GUI, about 60 s).
 - **GUI:** four fixed verdict texts; Technical details collapses to a table
   of numbers; a "Not included in this bake" card lists only what was
   actually left out; edits in Advanced show as "Custom". The 1.0
@@ -436,7 +428,7 @@ nothing is special-cased for an individual wallpaper.
   `project.json` with `dependency` but no `file` and no `type`) no longer
   shares a sentence with real video wallpapers: stderr reports
   `status=not_applicable`, `kind=preset` and the Workshop id it depends on,
-  and it exits with code **3** (video wallpapers keep 1). `analyze --help` /
+  and it exits with code **3** (video and web wallpapers now exit 3 too). `analyze --help` /
   `-h` now prints that subcommand's own usage and exits 0, instead of
   treating `--help` as a source path.
 - **Bilingual messages and a one-line verdict.** 42 message keys, each with
@@ -978,8 +970,10 @@ in the downloaded archive's properties before extracting it.
    `summary.verdict` is `tool_limitation`, naming each unreadable file, the
    field and file offset where parsing stopped, and the layer that uses it.
    That is a gap in the tool, not a verdict on the wallpaper; `bake` refuses
-   the report. Exit codes in full: 0 plan written, 1 not a Scene wallpaper or
-   analysis failed, 3 preset package, 4 tool limitation, 130 cancelled.
+   the report. Exit codes in full: 0 plan written, 1 source unreadable (for
+   example an empty folder) or analysis failed, 3 unsupported source (a
+   video, web or other non-Scene wallpaper, or a preset package), 4 tool
+   limitation, 130 cancelled.
 3. Set the two controls — Animation precision (efficiency / balanced /
    quality, balanced by default) and Interaction (keep / fixed view / off,
    fixed view by default) — and click Analyze. Precision only bounds
@@ -1036,14 +1030,13 @@ wpe-baker analyze SOURCE --fps 60 --fps-den 1 --lang zh --out PLAN.json
 wpe-baker analyze SOURCE --video-shell allow --out PLAN.json
 wpe-baker analyze SOURCE --exclude-layers 224,269,2242 --out PLAN.json
 wpe-baker bake PLAN.json --out NEW_DIRECTORY
-wpe-baker measure-official REQUEST.json
 ```
 
 Analyze options that change what goes into the plan:
 
 - `--preset efficiency|balanced|quality|compatibility` — how much the motion
-  may change (5% / 3% / no visual budget / 10%), balanced by default; every
-  preset caps the loop at 600 s, and `preset_applied` in the plan names the
+  may change (5% / 3% / no visual budget / 10%), balanced by default; the
+  loop is capped at 600 s (compatibility: 1200 s), and `preset_applied` in the plan names the
   preset used. Advanced overrides: `--retime-budget
   PERCENT` (0..5) and `--loop-max-seconds`. The older `--loop-preference`,
   `--max-retime`, `--loop-length-max` and `--view-mode` names have been removed.
@@ -1051,8 +1044,6 @@ Analyze options that change what goes into the plan:
   live, fix the view (default), or also drop pointer effects and sampled,
   costly full-screen audio effects. Clocks, dates and media text stay live in
   every mode.
-- `--measure-source on|off` — measure the original's power in the official
-  player before analysis; off by default.
 - `--fps N --fps-den D` — overrides the automatic frame rate; the plan marks
   the value as an override instead of auto-detected.
 
@@ -1201,5 +1192,5 @@ are never part of the public source package.
   `licenses\`. Thanks to hypengw for the quick answer.
   Per-component versions, licenses, origins, modifications and patch locations
   are listed in `THIRD-PARTY-NOTICES.md`.
-- Other bundled components (.NET runtime, LLVM-MinGW runtime DLLs, PresentMon)
+- Other bundled components (.NET runtime, LLVM-MinGW runtime DLLs)
   keep their own licenses, copied under `licenses/`.

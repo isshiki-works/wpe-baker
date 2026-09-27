@@ -75,7 +75,9 @@ auto WPPkgFs::open(Path pkg_path) -> Result<PkgMount> {
     auto files = ::alloc::vec::Vec<PendingFile>::make();
 
     auto entry_count = pkg.ReadInt32();
-    if (entry_count < 0) {
+    // 每个条目至少有路径长度、偏移、长度三个 int32；条目数超出文件剩余就是损坏的包。
+    if (entry_count < 0 || static_cast<std::uint64_t>(entry_count) >
+                               (pkg_source.len() - pkg.position().to_primitive()) / 12) {
         return Err(FsError(owe::io::ErrorKind::InvalidData));
     }
     files.reserve(usize(entry_count));

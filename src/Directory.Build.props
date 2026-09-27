@@ -1,0 +1,6 @@
+<Project>
+  <!-- src 下各工程共用的版本号（放在 src 里才随源码包走）：App 与 CLI 的文件版本、产品版本都取自这里，发版只改这一处。 -->
+  <PropertyGroup>
+    <Version>2.0.0-rc.1</Version>
+  </PropertyGroup>
+</Project>

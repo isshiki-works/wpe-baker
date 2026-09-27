@@ -332,4 +332,68 @@ TEST(ImageParser, SpriteTextureVariantBlocks) {
     EXPECT_EQ(MipBytes(rstd::move(parsed).unwrap_unchecked()->slots[0].mipmaps[0]), expected);
 }
 
+// 损坏的贴图按解析失败处理，不越界、不按声明值做超大分配。
+TEST(ImageParser, CorruptTextureSizesAreRejected) {
+    TexFixtureDir            dir("corrupt");
+    std::vector<std::string> cases;
+    { // RGBA8 8x8 只有 16 字节
+        auto tex = TexVariantHeader(0, 0, 8, {});
+        for (std::uint32_t v : { 1u, 8u, 8u, 0u, 16u, 16u }) tex.u32(v);
+        tex.data += std::string(16, '\0');
+        cases.push_back(tex.data);
+    }
+    { // BC3 宽 2^30、高 2^30+4 只有 16 字节；命中的补丁在最后两块行，旧的偏移乘法会回绕
+        auto tex = TexVariantHeader(4, 0, 8, { { 1, 1, 0, R"({"condition":"flag"})" } });
+        for (std::uint32_t v : { 1u, 1u << 30, (1u << 30) + 4, 0u, 16u, 16u }) tex.u32(v);
+        tex.data += std::string(16, '\0');
+        tex.u32(1);
+        tex.u32(1);
+        tex.patch(1, 0, (1u << 30) - 4, 4, 8, std::string(32, '\x11'));
+        cases.push_back(tex.data);
+    }
+    { // LZ4：16 字节声明解压成 2 GiB
+        auto tex = TexVariantHeader(0, 0, 8, {});
+        for (std::uint32_t v : { 1u, 8u, 8u, 1u, 0x7fffffffu, 16u }) tex.u32(v);
+        tex.data += std::string(16, '\0');
+        cases.push_back(tex.data);
+    }
+    { // 声明 2 GiB 字节，文件里只有 16
+        auto tex = TexVariantHeader(0, 0, 8, {});
+        for (std::uint32_t v : { 1u, 8u, 8u, 0u, 0u, 0x7fffffffu }) tex.u32(v);
+        tex.data += std::string(16, '\0');
+        cases.push_back(tex.data);
+    }
+    { // mip 数 2^31-1
+        auto tex = TexVariantHeader(0, 0, 8, {});
+        tex.u32(0x7fffffffu);
+        cases.push_back(tex.data);
+    }
+    for (std::size_t i = 0; i < cases.size(); ++i) dir.Write("corrupt" + std::to_string(i), cases[i]);
+    ASSERT_TRUE(dir.Mount());
+
+    owe::TexImageParser parser(&dir.vfs, UserProperties(R"({"flag":{"value":true}})"));
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        const auto name   = "corrupt" + std::to_string(i);
+        auto       parsed = parser.Parse(rstd::cppstd::as_str(name).unwrap());
+        ASSERT_TRUE(parsed.is_err()) << name;
+        EXPECT_TRUE(rstd::move(parsed).unwrap_err().kind == owe::ImageParseErrorKind::InvalidData)
+            << name;
+    }
+}
+
+// 贴图名只在挂载的包和资产目录里找，不按本机绝对路径读文件。
+TEST(ImageParser, AbsoluteTextureNamesStayInsideMounts) {
+    TexFixtureDir dir("absolute");
+    ASSERT_TRUE(dir.Mount());
+    const auto outside = std::filesystem::current_path() / "owe-absolute-texture.png";
+    std::ofstream(outside, std::ios::binary) << "not a png";
+    const auto name = "/" + outside.relative_path().generic_string();
+
+    owe::TexImageParser parser(&dir.vfs);
+    auto                parsed = parser.Parse(rstd::cppstd::as_str(name).unwrap());
+    std::filesystem::remove(outside);
+    ASSERT_TRUE(parsed.is_err());
+    EXPECT_TRUE(rstd::move(parsed).unwrap_err().kind == owe::ImageParseErrorKind::MissingContent);
+}
+
 } // namespace
