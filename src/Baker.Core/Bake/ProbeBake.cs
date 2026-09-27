@@ -21,26 +21,13 @@ internal sealed class ProbeBake(NativeTools tools)
         // 相机入场动画：探针多烘这段。成品没做入场切换（退回旧行为、昼夜导出、副本做不成）时参照与成品都从入场结束后开始比。
         ulong introFrames = (ulong)Math.Ceiling(SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0) *
             settings.FpsNumerator / settings.FpsDenominator);
-        JsonObject probe = await baker.BakeAsync(new(2, plan, probeOutput, introFrames + CompositionGate.RequiredFrames,
-            selectedDevice, EffectRenderScale: request.EffectRenderScale,
-            MatchEffectResolution: request.MatchEffectResolution), progress, cancellationToken);
-        // 探针跑完后与原来单独的比较段一样：按计划重新打开源、重读设置并复核哈希，短烘焙期间源被改过就不比了。
         var planSettings = PlanSettings.Of(plan);
         using var planSource = new ProjectSource(plan["source"]?.GetValue<string>()
             ?? throw new InvalidDataException("Hybrid plan source is missing."));
-        if (await planSource.SourceHashAsync(cancellationToken) != plan["source_sha256"]?.GetValue<string>())
-            throw new InvalidDataException("Source changed; analyze it again.");
         string comparisonReference = output + ".composition-reference";
         string comparisonOutput = output + ".composition-validation";
         HybridBakeService.EnsureNewDerivedOutput(planSource, comparisonReference, "Composition reference output");
         HybridBakeService.EnsureNewDerivedOutput(planSource, comparisonOutput, "Composition validation output");
-        if (probe["status"]?.GetValue<string>() != "probe_generated")
-            throw new InvalidDataException("The short composition probe did not produce a project for paired comparison.");
-        string project = Path.GetFullPath(probe["project_path"]?.GetValue<string>()
-            ?? throw new InvalidDataException("The short composition probe omitted its project path."));
-        string probeDirectory = Path.GetDirectoryName(project)
-            ?? throw new InvalidDataException("The short composition probe project path has no parent directory.");
-        string captureSource = Path.Combine(probeDirectory, "capture-source");
         JsonObject comparisonProperties = plan["snapshot_properties"]!.DeepClone().AsObject();
         if (plan["daytime_split"]?["controls_video_playback"]?.GetValue<bool>() == true && planSettings.DaytimeState is not null)
         {
@@ -51,10 +38,35 @@ internal sealed class ProbeBake(NativeTools tools)
                 .ToDictionary(SceneGraph.Id), plan, runtime["runtime_dependencies"]!.AsArray())!;
             comparisonProperties = daytime.ComparisonProperties(comparisonProperties);
         }
+        // 参照工程只取决于计划与原作，与探针短烘焙同时解包（C-PERF-BAKE P2-1）；探针失败时等它写完再往外抛。
+        Task reference = Task.Run(() => CreateReferenceAsync(planSource, comparisonReference, comparisonProperties, planSettings.ViewMode, plan,
+            cancellationToken), cancellationToken);
+        JsonObject probe;
+        try
+        {
+            probe = await baker.BakeAsync(new(2, plan, probeOutput, introFrames + CompositionGate.RequiredFrames,
+                selectedDevice, EffectRenderScale: request.EffectRenderScale,
+                MatchEffectResolution: request.MatchEffectResolution), progress, cancellationToken);
+        }
+        catch
+        {
+            try { await reference; } catch { }
+            throw;
+        }
+        await reference;
+        // 探针跑完后与原来单独的比较段一样：复核哈希，短烘焙期间源被改过就不比了。
+        if (await planSource.SourceHashAsync(cancellationToken, reuse: true) != plan["source_sha256"]?.GetValue<string>())
+            throw new InvalidDataException("Source changed; analyze it again.");
+        if (probe["status"]?.GetValue<string>() != "probe_generated")
+            throw new InvalidDataException("The short composition probe did not produce a project for paired comparison.");
+        string project = Path.GetFullPath(probe["project_path"]?.GetValue<string>()
+            ?? throw new InvalidDataException("The short composition probe omitted its project path."));
+        string probeDirectory = Path.GetDirectoryName(project)
+            ?? throw new InvalidDataException("The short composition probe project path has no parent directory.");
+        string captureSource = Path.Combine(probeDirectory, "capture-source");
         // 单次入场动画（bake.json 的 intro_live）：入场段显示原作图层时从第 0 帧比到切换后 48 帧；没做成就只比入场结束后。
         introFrames = probe["intro_live"]?["intro_frames"]?.GetValue<ulong>() ?? introFrames;
         bool introLive = probe["intro_live"]?["status"]?.GetValue<string>() == "applied";
-        await CreateReferenceAsync(planSource, comparisonReference, comparisonProperties, planSettings.ViewMode, plan, cancellationToken);
         PairedComparison comparison = await new CandidateValidation(tools).CompareAsync(new ValidationRequest(
             1, comparisonReference, project, planSettings.Assets, comparisonOutput, planSettings.Width, planSettings.Height,
             planSettings.FpsNumerator, planSettings.FpsDenominator, CompositionGate.RequiredFrames + (introLive ? introFrames : 0),
@@ -91,7 +103,7 @@ internal sealed class ProbeBake(NativeTools tools)
         PlanTransforms.ApplyTextEffectChoice(scene, plan);
         ProjectWriter.ApplyPropertySnapshot(metadata, snapshot);
         metadata["file"] = source.SceneResource;
-        await source.ExtractAsync(destination, cancellationToken);
+        await source.ExtractAsync(destination, cancellationToken, link: true);
         await File.WriteAllTextAsync(ProjectSource.ContainedPath(destination, source.SceneResource),
             scene.ToJsonString(), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(destination, "project.json"), metadata.ToJsonString(), cancellationToken);

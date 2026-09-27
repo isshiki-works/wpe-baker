@@ -70,6 +70,21 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 
+    /// <summary>渲染器 exe 的 SHA-256，按 (路径, 长度, mtime) 记住：一次烘焙要启动十几次渲染器，exe 不变就不再逐次整份哈希。</summary>
+    private static readonly Dictionary<string, (long Length, DateTime Modified, string Hash)> RendererHashes = new(StringComparer.OrdinalIgnoreCase);
+
+    internal static async Task<string> RendererHashAsync(string renderer, CancellationToken cancellationToken)
+    {
+        var info = new FileInfo(Path.GetFullPath(renderer));
+        lock (RendererHashes)
+            if (RendererHashes.TryGetValue(info.FullName, out var known) && known.Length == info.Length && known.Modified == info.LastWriteTimeUtc)
+                return known.Hash;
+        await using var executableFile = File.OpenRead(info.FullName);
+        string hash = Convert.ToHexStringLower(await SHA256.HashDataAsync(executableFile, cancellationToken));
+        lock (RendererHashes) RendererHashes[info.FullName] = (info.Length, info.LastWriteTimeUtc, hash);
+        return hash;
+    }
+
     // 进程一律走 FfmpegTool；和渲染器打交道（握手、render --job、读回执）走 RendererClient。
     private readonly FfmpegTool ff = new(tools);
     private readonly RendererClient client = new(new FfmpegTool(tools));
@@ -121,7 +136,8 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             throw new ArgumentException("Original loop window retention requires GPU crossfade.");
         if (request.EncodedFrames is { } limit && (request.FrameSamplesOnly || request.IncludeAudio || limit == 0 || limit > request.Frames))
             throw new ArgumentException("Encoded frames must be a positive prefix of an ordinary silent video render.");
-        if (request.RetainFrames is { } retain && (request.FrameSamplesOnly || retain.Length == 0 ||
+        // 只出样本的渲染也能留原帧，前提是留的都是样本帧（慢分量预检只要 1 帧原帧、不编码，见 GroupRenderScheduler.ClosureProbeRequest）。
+        if (request.RetainFrames is { } retain && (request.FrameSamplesOnly && retain.Any(frame => !IsSampleFrame(request, frame)) || retain.Length == 0 ||
             retain.Length > 32 ||
             retain.Any(frame => frame >= request.Frames) || retain.Zip(retain.Skip(1)).Any(pair => pair.Second <= pair.First)))
             throw new ArgumentException("Retained frames must be increasing indices inside the render (at most 32 frames).");
@@ -193,9 +209,8 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         if (output.StartsWith(source.DirectoryPath.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new IOException("Render output cannot be inside the source project.");
         progress?.Report(new("preflight", null, "Hashing source and verifying native tools."));
-        string sourceHash = await source.SourceHashAsync(cancellationToken);
-        await using var executableFile = File.OpenRead(tools.Renderer);
-        string rendererHash = Convert.ToHexStringLower(await SHA256.HashDataAsync(executableFile, cancellationToken));
+        string sourceHash = await source.SourceHashAsync(cancellationToken, reuse: true);
+        string rendererHash = await RendererHashAsync(tools.Renderer, cancellationToken);
         // 无损 master 开写前按开烘闸门的同一口径量这一份（GPU 组回退软件档重渲也走这里）：不够就停，不写一半把盘写满。
         TemporaryCaptureFiles.RequireFreeSpace(output, request.LosslessTest && !request.FrameSamplesOnly
             ? BakeDiskBudget.MasterBytes(request.Frames, EmbeddedVideoBudget.EncodedPixels(request.Width, request.Height,
@@ -228,7 +243,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             // Only pure sample consumers may omit full frames. Bounds, opacity and retained-frame
             // checks still require their original complete input. Older renderers keep that path.
             bool sampleConsumer = request.FrameSamplesOnly && !request.CollectAlphaBounds && !request.RequireOpaquePixels &&
-                request.RetainFrames is not { Length: > 0 };
+                (request.RetainFrames ?? []).All(frame => IsSampleFrame(request, frame));
             // 只在要按能力分支时才握手；同一个渲染器文件在进程内只跑一次 --version（RendererClient 缓存）。
             RendererCapabilities capabilities = sampleConsumer || request.GpuEncoding is not null || request.EffectRenderScale != 1.0 || request.MatchEffectResolution || request.CaptureTarget?.ForceVisibleOwner == true
                 ? await client.CapabilitiesAsync(Path.Combine(output, "renderer-capabilities.stderr.log"), cancellationToken) : new([]);
@@ -239,7 +254,8 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             if (request.CaptureTarget?.ForceVisibleOwner == true && !capabilities.Has("capture-force-visible-owner-v1"))
                 throw new InvalidDataException("Renderer does not support capturing a visibility-controlled effect owner.");
             bool sparseInput = sampleConsumer && capabilities.SparseReadback;
-            bool nativeSamples = sparseInput && capabilities.Has("gpu-samples-v1");
+            // 要留全分辨率原帧时不在 GPU 上缩样本：稀疏读回照样只传样本帧，但传的是整帧 RGBA。
+            bool nativeSamples = sparseInput && capabilities.Has("gpu-samples-v1") && request.RetainFrames is not { Length: > 0 };
             RenderRequest streamRequest = request;
             if (sparseInput)
             {
@@ -336,6 +352,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 manifest["stream_timing"] = StreamTiming(captured);
                 if (captured.Bounds is not null) manifest["alpha_bounds"] = captured.Bounds;
                 if (captured.OpaquePixels is not null) manifest["opaque_pixels"] = captured.OpaquePixels;
+                if (captured.Retained is not null) manifest["retained_frames"] = captured.Retained;
                 ConfirmVideoRateOverrides(request, sampleNativeResult);
                 ulong expectedNativeFrames = sparseInput ? captured.Samples?["count"]?.GetValue<ulong>() ?? 0 : request.Frames;
                 manifest["readback_frames"] = expectedNativeFrames;
@@ -370,7 +387,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                     throw new InvalidDataException("Renderer did not confirm the requested layer selection.");
                 if (captured.Samples is null)
                     throw new InvalidDataException("Renderer did not produce the requested frame samples.");
-                if (sourceHash != await source.SourceHashAsync(cancellationToken))
+                if (sourceHash != await source.SourceHashAsync(cancellationToken, reuse: true))
                     throw new IOException("Source changed during render; artifact is invalid.");
                 manifest["frame_samples"] = captured.Samples;
                 manifest["status"] = "completed";
@@ -658,7 +675,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 ["source"] = nativePacketCount && verified.CountSource == "container_header"
                     ? "container_header_and_native_encoder_packets" : verified.CountSource,
                 ["full_decode_performed"] = verified.CountSource == "full_decode", ["fallback_reason"] = verified.FallbackReason };
-            if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during render; artifact is invalid.");
+            if (sourceHash != await source.SourceHashAsync(cancellationToken, reuse: true)) throw new IOException("Source changed during render; artifact is invalid.");
             // 只在确实少编码了帧时记录；残差路线的交叉淡化会把 request.frames 改写成 P，这里不能留一个过期的数。
             if (request.EncodedFrames is not null) manifest["encoded_frames"] = encodedFrames;
             manifest["encoded_stream"] = verified.Probe;

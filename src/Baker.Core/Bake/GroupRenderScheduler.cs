@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -51,6 +52,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     /// <summary>第 index 组录制的帧数 P_g（plan 候选的 group_frames，缺省为 L；探针为探针帧数）。</summary>
     internal ulong Frames(int index) => groupFrames[index];
     internal uint CrossfadeFrames => crossfadeFrames;
+    internal uint FpsNumerator => settings.FpsNumerator;
+    internal uint FpsDenominator => settings.FpsDenominator;
     internal int[] ResidualGroupIndexes => residualGroupIndexes;
 
     /// <summary>预热之后、解析周期内的起点相位：残差路线由起点搜索定，源周期路线为 0。</summary>
@@ -110,11 +113,13 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     /// <summary>
     /// 残差组的低分辨率起点评分样本：搜索窗是本组周期 P 再加 <paramref name="candidateFrames"/> 帧（候选起点 s 落在这段里，
     /// 每个比较 (s, s+P)），最多 <see cref="ResidualMasking.SearchWindowPeriods"/> 个周期；透明组用带覆盖度的样本，两半分别算。
+    /// 周期不是步长的整数倍时另采相位 P mod 步长的帧，s+P 才有样本。
     /// </summary>
     internal RenderRequest StartSearchRequest(int index, uint sampleStride, ulong candidateFrames) =>
-        StartSearchRequest(groups[index], Capture(groups[index]), sampleStride, checked(groupFrames[index] + candidateFrames));
+        StartSearchRequest(groups[index], Capture(groups[index]), sampleStride, checked(groupFrames[index] + candidateFrames),
+            ResidualMasking.StartSearchPhase(groupFrames[index], sampleStride));
 
-    private RenderRequest StartSearchRequest(JsonObject group, GroupCapture capture, uint sampleStride, ulong windowFrames) =>
+    private RenderRequest StartSearchRequest(JsonObject group, GroupCapture capture, uint sampleStride, ulong windowFrames, ulong? phase) =>
         new(captureProject, settings.Assets,
             ProjectSource.ContainedPath(output, $"{group["id"]!.GetValue<string>()}.start-search"), capture.PixelWidth, capture.PixelHeight,
             settings.FpsNumerator, settings.FpsDenominator, windowFrames,
@@ -124,7 +129,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             Input: new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
             OrthographicCaptureViewport: new(CenterX, CenterY, capture.Width, capture.Height),
             LayerSelection: new(capture.Layers, TransparentBackground: !capture.SceneClear, IncludePostprocessing: false),
-            FrameSampleStride: sampleStride,
+            FrameSampleStride: sampleStride, FrameSamplePhaseFrames: phase,
             FrameSampleWidth: (uint)Math.Round(ResidualMasking.StartSearchSampleWidth * TileScale),
             FrameSamplesOnly: true,
             EffectRenderScale: request.EffectRenderScale,
@@ -142,14 +147,19 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     }
 
     /// <summary>
-    /// 分析阶段的慢分量闭合预检（<see cref="SlowClosureProbe"/>）：同一个主渲染请求走 CPU 路线，只出 1 帧并留原帧；
+    /// 分析阶段的慢分量闭合预检（<see cref="SlowClosureProbe"/>）：同一个主渲染请求的模拟输入，只出 1 帧并留原帧；
     /// 多预热 <paramref name="extraWarmupFrames"/> 帧（取 P）出的就是连续播放的第 P 帧，预热帧不回读。
+    /// 两帧必须各自一次渲染、都是该进程光栅化的第一帧：同一进程里先画第 0 帧、隔 P−1 个只模拟的帧再画第 P 帧，
+    /// 渲染器给出的第 P 帧不等于连续播放的第 P 帧（3448877775 层 332 实测与第 0 帧逐像素相同，见 C-PERF-BAKE #234）。
+    /// 只要原帧：不编码、不量覆盖度，直编、裁剪、淡化这些成品设置都去掉（渲染器 job 与带编码的请求相同，像素一样）。
     /// </summary>
     internal RenderRequest ClosureProbeRequest(int index, string outputDirectory, ulong extraWarmupFrames)
     {
         RenderRequest master = MasterRequest(index);
         return master with { OutputDirectory = outputDirectory, Frames = 1, WarmupFrames = master.WarmupFrames + extraWarmupFrames,
-            EncodedFrames = null, RetainFrames = [0], TraceScene = false };
+            EncodedFrames = null, RetainFrames = [0], TraceScene = false, FrameSamplesOnly = true, FrameSampleStride = 1, FrameSampleWidth = 1,
+            LosslessTest = false, PlaybackEncoderKind = null, QuantizerOffset = 0, GpuEncoding = null, DirectCrop = null, DirectCrossfadeFrames = null,
+            ForceKeyFrameFrame = null, CollectAlphaBounds = false, BoundsIncludeRgb = false };
     }
 
     /// <summary>
@@ -379,6 +389,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         JsonObject? coverageRerender = null;
         string? fallbackReason = null;
         bool gpuAllowed = true;
+        // 渲染器退出后画质门与硬解实测各自的墙钟（跨重渲累计），见 StageTiming.QualityGate。
+        var postRender = new JsonObject();
         for (; ; )
         {
             RenderRequest? lower = render.GpuEncoding is { } current &&
@@ -404,61 +416,70 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                     render = MasterRequest(index, gpuAllowed, coverage, failedCodecs);
                     continue;
                 }
-                if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render))
+                // 渲染器退出后的两步读同一份成品：画质门（软解抽样帧比 SSIM）与本机硬解实测（D3D11VA 解 5 帧）。实测先起跑、与画质门
+                // 同时进行，只在成品原样交出时取用它的结果；成品要挪走重渲时先等它退出，读数作废（串行时它根本不会跑到）。
+                Task<JsonObject>? decode = lower is null ? null : ProbeDecodeAsync(render, groupFrames[index], postRender);
+                try
                 {
-                    // 体积限制下不降 QP（降了会超上限）：直接改走 CPU 路线，软件档同一量化值再过一次画质门。
-                    if (SizeOffset(index) > 0)
-                        throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} under the embedded-video size budget " +
-                            $"(SSIM {rendered["playback_quality_gate"]?["measured_ssim"]?.ToJsonString()}).");
-                    Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
-                        Path.GetDirectoryName(render.OutputDirectory)!, $"master.{gpu.Codec}-qp{gpu.Qp}"));
-                    render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
-                    rendered = await runner.RenderSegmentsAsync(render, segments, segmentSlots, progress, renderCancellation.Token);
-                    if (!await GpuQualityPassesAsync(rendered, render))
-                        throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
-                }
-                // 直编成品按实际字节判内嵌视频上限：第一次超了按实际字节再抬量化值、同一档重渲；再超则硬件档改软件重渲
-                // （GPU 组走 CPU 路线），软件档交给整案按体积拒绝。
-                bool cpuHardware = render.GpuEncoding is null && render.PlaybackEncoderKind is { } kind && kind != PlaybackEncoderSelection.Software;
-                if ((render.GpuEncoding is not null || render.PlaybackEncoderKind is not null) &&
-                    new FileInfo(Path.Combine(render.OutputDirectory, "preview.mp4")).Length is var bytes && bytes > EmbeddedVideoBudget.MaximumBytes)
-                {
-                    if (!sizeRetried)
+                    if (render.GpuEncoding is { } gpu && !await GpuQualityPassesAsync(rendered, render, postRender))
                     {
-                        sizeRetried = true;
-                        lock (sizeBudgets)
-                        {
-                            var (offset, unconstrained) = sizeBudgets[index];
-                            sizeBudgets[index] = (offset + EmbeddedVideoBudget.QuantizerOffset(bytes),
-                                Math.Max(unconstrained, bytes * Math.Pow(2, offset / 6d)));
-                        }
-                        Directory.Move(render.OutputDirectory, WorkLayout.Vacant(ProjectSource.ContainedPath(Path.GetDirectoryName(render.OutputDirectory)!, "master.over-size")));
-                        render = MasterRequest(index, gpuAllowed, coverage, failedCodecs);
-                        continue;
+                        // 体积限制下不降 QP（降了会超上限）：直接改走 CPU 路线，软件档同一量化值再过一次画质门。
+                        if (SizeOffset(index) > 0)
+                            throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} under the embedded-video size budget " +
+                                $"(SSIM {rendered["playback_quality_gate"]?["measured_ssim"]?.ToJsonString()}).");
+                        decode = await SettleAsync(decode);
+                        Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(
+                            Path.GetDirectoryName(render.OutputDirectory)!, $"master.{gpu.Codec}-qp{gpu.Qp}"));
+                        render = render with { GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
+                        rendered = await runner.RenderSegmentsAsync(render, segments, segmentSlots, progress, renderCancellation.Token);
+                        if (!await GpuQualityPassesAsync(rendered, render, postRender))
+                            throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
                     }
-                    if (render.GpuEncoding is not null || cpuHardware)
-                        throw new GpuEncodeUnavailableException(NativeRenderRunner.HardwareOverLimitReason(
-                            render.GpuEncoding?.Codec ?? render.PlaybackEncoderKind!, bytes));
+                    // 直编成品按实际字节判内嵌视频上限：第一次超了按实际字节再抬量化值、同一档重渲；再超则硬件档改软件重渲
+                    // （GPU 组走 CPU 路线），软件档交给整案按体积拒绝。
+                    bool cpuHardware = render.GpuEncoding is null && render.PlaybackEncoderKind is { } kind && kind != PlaybackEncoderSelection.Software;
+                    if ((render.GpuEncoding is not null || render.PlaybackEncoderKind is not null) &&
+                        new FileInfo(Path.Combine(render.OutputDirectory, "preview.mp4")).Length is var bytes && bytes > EmbeddedVideoBudget.MaximumBytes)
+                    {
+                        if (!sizeRetried)
+                        {
+                            sizeRetried = true;
+                            lock (sizeBudgets)
+                            {
+                                var (offset, unconstrained) = sizeBudgets[index];
+                                sizeBudgets[index] = (offset + EmbeddedVideoBudget.QuantizerOffset(bytes),
+                                    Math.Max(unconstrained, bytes * Math.Pow(2, offset / 6d)));
+                            }
+                            decode = await SettleAsync(decode);
+                            Directory.Move(render.OutputDirectory, WorkLayout.Vacant(ProjectSource.ContainedPath(Path.GetDirectoryName(render.OutputDirectory)!, "master.over-size")));
+                            render = MasterRequest(index, gpuAllowed, coverage, failedCodecs);
+                            continue;
+                        }
+                        if (render.GpuEncoding is not null || cpuHardware)
+                            throw new GpuEncodeUnavailableException(NativeRenderRunner.HardwareOverLimitReason(
+                                render.GpuEncoding?.Codec ?? render.PlaybackEncoderKind!, bytes));
+                    }
+                    // CPU 硬件档（mf/nvenc/amf）直编没有母版可升档重编：画质门不过也只让这一组改软件重渲，不整张拒。
+                    if (cpuHardware && !await GpuQualityPassesAsync(rendered, render, postRender))
+                        throw new GpuEncodeUnavailableException($"{render.PlaybackEncoderKind} 直编成品画质门未过（SSIM " +
+                            $"{rendered["playback_quality_gate"]?["measured_ssim"]?.ToJsonString()}），这一组改用软件编码。");
+                    // 按体积抬了量化值的软件直编也要过画质门；不过时读数留在结果上，由整案按"体积限制下画质门未过"拒绝。
+                    if (render.PlaybackEncoderKind == PlaybackEncoderSelection.Software && SizeOffset(index) > 0)
+                        await GpuQualityPassesAsync(rendered, render, postRender);
+                    if (SizeOffset(index) > 0)
+                        lock (sizeBudgets) rendered["size_budget"] = new JsonObject { ["quantizer_offset"] = sizeBudgets[index].Offset,
+                            ["unconstrained_bytes"] = Math.Round(sizeBudgets[index].Unconstrained), ["target_bytes"] = EmbeddedVideoBudget.TargetBytes };
+                    if (lower is not null)
+                    {
+                        // 播放机就是本机：成品要在本机播放用的显卡上能硬解（WPE 经 MF 放视频，扩展装了但显卡解不了一样放不动）。
+                        JsonObject hardware = await (decode ?? ProbeDecodeAsync(render, groupFrames[index], postRender));
+                        if (hardware["all_adapters_passed"]?.GetValue<bool>() != true)
+                            throw new GpuEncodeUnavailableException($"{render.GpuEncoding!.Codec} did not pass hardware decoding on this machine's playback adapter.");
+                        rendered["hardware_decode"] = hardware;
+                    }
                 }
-                // CPU 硬件档（mf/nvenc/amf）直编没有母版可升档重编：画质门不过也只让这一组改软件重渲，不整张拒。
-                if (cpuHardware && !await GpuQualityPassesAsync(rendered, render))
-                    throw new GpuEncodeUnavailableException($"{render.PlaybackEncoderKind} 直编成品画质门未过（SSIM " +
-                        $"{rendered["playback_quality_gate"]?["measured_ssim"]?.ToJsonString()}），这一组改用软件编码。");
-                // 按体积抬了量化值的软件直编也要过画质门；不过时读数留在结果上，由整案按"体积限制下画质门未过"拒绝。
-                if (render.PlaybackEncoderKind == PlaybackEncoderSelection.Software && SizeOffset(index) > 0)
-                    await GpuQualityPassesAsync(rendered, render);
-                if (SizeOffset(index) > 0)
-                    lock (sizeBudgets) rendered["size_budget"] = new JsonObject { ["quantizer_offset"] = sizeBudgets[index].Offset,
-                        ["unconstrained_bytes"] = Math.Round(sizeBudgets[index].Unconstrained), ["target_bytes"] = EmbeddedVideoBudget.TargetBytes };
-                if (lower is not null)
-                {
-                    // 播放机就是本机：成品要在本机播放用的显卡上能硬解（WPE 经 MF 放视频，扩展装了但显卡解不了一样放不动）。
-                    JsonObject decode = await runner.ProbeHardwareDecodeAsync(Path.Combine(render.OutputDirectory, "preview.mp4"),
-                        Path.Combine(render.OutputDirectory, "hardware-decode"), Math.Min(groupFrames[index], 5), renderCancellation.Token, render.DeviceUuid);
-                    if (decode["all_adapters_passed"]?.GetValue<bool>() != true)
-                        throw new GpuEncodeUnavailableException($"{render.GpuEncoding!.Codec} did not pass hardware decoding on this machine's playback adapter.");
-                    rendered["hardware_decode"] = decode;
-                }
+                finally { await SettleAsync(decode); }
+                rendered["post_render_timing"] = postRender;
                 rendered["gpu_bounds_prepass"] = coveragePass;
                 if (coverageRerender is not null) rendered["coverage_rerender"] = coverageRerender;
                 if (codecFallbacks.Count > 0) rendered["gpu_codec_fallbacks"] = codecFallbacks;
@@ -510,12 +531,45 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
          (packed || all["minimum_alpha"]!.GetValue<int>() == 255));
 
     /// <summary>硬件直编成品的画质门；结果挂在渲染结果上，GroupEncoder 接管成品时直接取用。CPU 直编的不透明组是整幅。</summary>
-    private async Task<bool> GpuQualityPassesAsync(JsonObject rendered, RenderRequest render)
+    private async Task<bool> GpuQualityPassesAsync(JsonObject rendered, RenderRequest render, JsonObject postRender)
     {
-        JsonObject gate = await runner.GpuPlaybackQualityAsync(rendered, Path.Combine(render.OutputDirectory, "preview.mp4"),
-            render.GpuEncoding?.Crop ?? render.DirectCrop ?? new CacheRegion((int)render.Width, (int)render.Height, 0, 0, (int)render.Width, (int)render.Height),
-            render.PixelPacking == "rgba_side_by_side", render.OutputDirectory, renderCancellation.Token);
+        long started = Stopwatch.GetTimestamp();
+        progress?.Report(new("checking_playback_quality", null, new Message("progress.rendering_pair")));
+        JsonObject gate;
+        try
+        {
+            gate = await runner.GpuPlaybackQualityAsync(rendered, Path.Combine(render.OutputDirectory, "preview.mp4"),
+                render.GpuEncoding?.Crop ?? render.DirectCrop ?? new CacheRegion((int)render.Width, (int)render.Height, 0, 0, (int)render.Width, (int)render.Height),
+                render.PixelPacking == "rgba_side_by_side", render.OutputDirectory, renderCancellation.Token);
+        }
+        finally { AddSeconds(postRender, "quality_gate_seconds", started); }
         rendered["playback_quality_gate"] = gate;
         return gate["passed"]?.GetValue<bool>() == true;
+    }
+
+    /// <summary>本机播放显卡上的硬解实测（成品 preview.mp4 的前几帧），墙钟记进 <paramref name="postRender"/>。</summary>
+    private async Task<JsonObject> ProbeDecodeAsync(RenderRequest render, ulong decodeFrames, JsonObject postRender)
+    {
+        long started = Stopwatch.GetTimestamp();
+        progress?.Report(new("checking_hardware_decode", null, new Message("progress.checking_hardware_decode")));
+        try
+        {
+            return await runner.ProbeHardwareDecodeAsync(Path.Combine(render.OutputDirectory, "preview.mp4"),
+                Path.Combine(render.OutputDirectory, "hardware-decode"), Math.Min(decodeFrames, 5),
+                renderCancellation.Token, render.DeviceUuid);
+        }
+        finally { AddSeconds(postRender, "hardware_decode_seconds", started); }
+    }
+
+    /// <summary>等提前起跑的硬解实测退出（它的结果已经不要了，失败与取消都咽掉），之后才能挪它所在的目录。</summary>
+    private static async Task<Task<JsonObject>?> SettleAsync(Task<JsonObject>? pending)
+    {
+        if (pending is not null) try { await pending; } catch { }
+        return null;
+    }
+
+    private static void AddSeconds(JsonObject timing, string key, long started)
+    {
+        lock (timing) timing[key] = Math.Round((timing[key]?.GetValue<double>() ?? 0) + Stopwatch.GetElapsedTime(started).TotalSeconds, 3);
     }
 }

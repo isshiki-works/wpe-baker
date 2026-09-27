@@ -37,12 +37,13 @@ internal static class BakeDiskBudgetChecks
             BakeDiskBudget.EstimatePeak(periods, frames, []).CrossfadeBytes == 0,
             "no master is written, each group is estimated at its own recorded frame count and only residual groups add a spliced copy");
 
-        // 起点搜索样本：3803167460 实测两个透明残差组（P = 21780，gcd 步长 4）各 9,634,775,040 字节，是整案峰值的全部。
+        // 起点搜索样本：3803167460 两个透明残差组（P = 21780）。原 gcd 步长 4、窗口 2P 实测各 9,634,775,040 字节；
+        // 现在步长 16 加相位 4、候选只取前 30 秒 + 淡化（1840 帧），窗口 23620 帧里 1477 + 1476 个样本。
         JsonObject search = Plan(21_780);
         search["settings"]!["fps_numerator"] = 60;
         search["settings"]!["fps_denominator"] = 1;
-        check(BakeDiskBudget.EstimatePeak(search, 21_780, [1]).StartSearchBytes == 10_890UL * 512 * 288 * 3 * 2,
-            "start-search thumbnails over two periods at stride gcd(P, 16) match the measured sample file");
+        check(BakeDiskBudget.EstimatePeak(search, 21_780, [1]).StartSearchBytes == 2_953UL * 512 * 288 * 3 * 2,
+            "start-search thumbnails at stride 16 plus the period phase over P + 30 s candidates match the sample file");
 
         // 尺寸或视频组未知的计划不给预估，调用方也就不拦截。
         var unknown = new JsonObject { ["settings"] = new JsonObject { ["width"] = 0, ["height"] = 0 }, ["video_groups"] = new JsonArray() };

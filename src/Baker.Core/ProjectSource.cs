@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -240,11 +241,29 @@ public sealed class ProjectSource : IDisposable
 
     public JsonObject ReadJson(string resource) => ParseWpeJsonObject(Read(resource), resource);
 
-    public async Task<string> SourceHashAsync(CancellationToken cancellationToken = default)
+    /// <summary>每个目录最近一次整树哈希：当时逐文件的 (路径, 长度, mtime) 指纹与哈希值。</summary>
+    private static readonly Dictionary<string, (string Stamp, string Hash)> Hashes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 整树 SHA-256。<paramref name="reuse"/> 为真时，逐文件 (路径, 长度, mtime) 与最近一次整树哈希时相同就直接返回那次的值：
+    /// 烘焙开头与结尾各完整哈希一次，中间每次渲染、校验的"源没变"只比这份指纹（C-PERF-BAKE P1-4）。
+    /// </summary>
+    public async Task<string> SourceHashAsync(CancellationToken cancellationToken = default, bool reuse = false)
     {
+        string[] files = [.. EnumerateLooseFiles().Order(StringComparer.Ordinal)];
+        var stamp = new StringBuilder();
+        foreach (string path in files)
+        {
+            var info = new FileInfo(ContainedPath(DirectoryPath, path));
+            stamp.Append(path).Append('\0').Append(info.Length).Append('\0').Append(info.LastWriteTimeUtc.Ticks).Append('\n');
+        }
+        string key = stamp.ToString();
+        if (reuse)
+            lock (Hashes)
+                if (Hashes.TryGetValue(DirectoryPath, out var known) && known.Stamp == key) return known.Hash;
         // A directory project depends on all its files, not only scene.json.
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var path in EnumerateLooseFiles().Order(StringComparer.Ordinal))
+        foreach (var path in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
             byte[] name = Utf8.GetBytes(path);
@@ -256,7 +275,9 @@ public sealed class ProjectSource : IDisposable
             int n;
             while ((n = await file.ReadAsync(buffer, cancellationToken)) != 0) hash.AppendData(buffer, 0, n);
         }
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
+        string digest = Convert.ToHexStringLower(hash.GetHashAndReset());
+        lock (Hashes) Hashes[DirectoryPath] = (key, digest);
+        return digest;
     }
 
     private IEnumerable<string> EnumerateLooseFiles()
@@ -280,7 +301,12 @@ public sealed class ProjectSource : IDisposable
         }
     }
 
-    public async Task ExtractAsync(string destination, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// 解包到新目录。<paramref name="link"/> 为真时，1 MiB 以上、不是 .json 也不在 shaders/ 下的松散文件（视频、贴图）
+    /// 先试同卷硬链接，不同卷或文件系统不支持时照旧拷贝（C-PERF-BAKE P2-1）。只给烘焙中间副本用：捕获副本、参照、
+    /// 探针与会再发布的成品底稿只就地重写场景、project.json 与着色器，这些照旧拷贝，硬链接的文件之后没人写，改不到原作。
+    /// </summary>
+    public async Task ExtractAsync(string destination, CancellationToken cancellationToken = default, bool link = false)
     {
         destination = Path.GetFullPath(destination);
         if (Directory.Exists(destination) || File.Exists(destination))
@@ -300,6 +326,9 @@ public sealed class ProjectSource : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             string target = ContainedPath(destination, resource);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            if (link && !entries.ContainsKey(resource) && Linkable(resource) &&
+                new FileInfo(ContainedPath(DirectoryPath, resource)).Length >= LinkMinimumBytes &&
+                TryHardLink(ContainedPath(DirectoryPath, resource), target)) continue;
             await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, buffer.Length, true);
             if (entries.TryGetValue(resource, out var item))
             {
@@ -320,6 +349,23 @@ public sealed class ProjectSource : IDisposable
             }
         }
     }
+
+    private const long LinkMinimumBytes = 1 << 20;
+
+    private static bool Linkable(string resource) =>
+        !resource.EndsWith(".json", StringComparison.OrdinalIgnoreCase) && !resource.StartsWith("shaders/", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryHardLink(string existing, string target)
+    {
+        try { return OperatingSystem.IsWindows() ? CreateHardLinkW(target, existing, IntPtr.Zero) : link(existing, target) == 0; }
+        catch (Exception error) when (error is DllNotFoundException or EntryPointNotFoundException) { return false; }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateHardLinkW(string newFileName, string existingFileName, IntPtr securityAttributes);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int link(string existing, string target);
 
     public void Dispose() => package?.Dispose();
 }

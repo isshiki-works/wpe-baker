@@ -91,12 +91,29 @@ internal static class LoopFixChecks
         check(otherTrack["unresolved"]!.AsArray().OfType<JsonObject>().Single()["random_restart"]?.GetValue<bool>() == false,
             "a random-restart script that names a different texture animation is not evidence for this track");
 
-        // ---- M1：采样步长取 gcd(P, 16)。
-        check(ResidualMasking.StartSearchStride(6000) == 16 && ResidualMasking.StartSearchStride(120) == 8 &&
-            ResidualMasking.StartSearchStride(1800) == 8 && ResidualMasking.StartSearchStride(121) == 1 &&
-            ResidualMasking.StartSearchStride(96) == 16 && ResidualMasking.StartSearchStride(100) == 4 &&
-            120 % ResidualMasking.StartSearchStride(120) == 0 && 1800 % ResidualMasking.StartSearchStride(1800) == 0,
-            "the start-search stride is gcd(period, 16) so 120-frame and 1800-frame analytic periods align their candidates without rejection");
+        // ---- M1：步长固定 16，周期不整除时补采相位 P mod 16；候选只取前 30 秒（C-PERF-BAKE P2-2）。
+        // 改回 gcd(P, 16) 时奇数周期的步长是 1，第一条失败；去掉候选上限时 32000 帧周期的候选段是 32000，第二条失败。
+        var odd = ResidualMasking.StartSearchWindows([121], 24, 60, 1);
+        check(odd.Stride == 16 && odd.CandidateFrames.SequenceEqual([112UL]) && ResidualMasking.StartSearchPhase(121, 16) == 9 &&
+            ResidualMasking.StartSearchPhase(6000, 16) is null && ResidualMasking.StartSearchWindows([1800], 24, 60, 1).Stride == 16,
+            "the start-search stride stays 16 for periods that are not multiples of 16; s+P is covered by the P mod 16 sample phase");
+        var longPeriod = ResidualMasking.StartSearchWindows([32_000, 40_000], 24, 60, 1);
+        check(longPeriod.Stride == 16 && longPeriod.CandidateFrames.SequenceEqual([1840UL, 1840UL]) &&
+            ResidualMasking.StartSearchWindows([96], 24, 60, 1).CandidateFrames.SequenceEqual([96UL]) &&
+            ResidualMasking.StartSearchWindows([13], 5, 30, 1) is { Stride: 13, CandidateFrames: [13] },
+            "start candidates cover only the first 30 s (plus the crossfade) of long periods, the whole period of short ones, and at least one stride");
+        bool ordinalsMatch = true;
+        foreach ((uint stride, ulong? phase) in new (uint, ulong?)[] { (16, null), (16, 9), (16, 4), (13, 0), (4, 3) })
+        {
+            var request = new RenderRequest("s", "a", "o", 64, 64, 60, 1, 200, FrameSampleStride: stride, FrameSamplePhaseFrames: phase);
+            ulong seen = 0;
+            for (ulong frame = 0; frame <= 200; ++frame)
+            {
+                ordinalsMatch &= ResidualMasking.SampleOrdinal(frame, stride, phase) == seen;
+                if (frame < 200 && NativeRenderRunner.IsSampleFrame(request, frame)) ++seen;
+            }
+        }
+        check(ordinalsMatch, "a frame's sample-file index counts exactly the renderer's sample frames before it, including the phase class");
 
         // ---- M2：搜索窗固定 2P，没有 3P 重试。
         check(ResidualMasking.SearchWindowPeriods == 2,
