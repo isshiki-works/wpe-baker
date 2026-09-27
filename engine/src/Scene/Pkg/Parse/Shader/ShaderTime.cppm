@@ -1628,8 +1628,8 @@ void Analyzer::Execute(int stage_index, const std::map<std::uint32_t, Val>& vary
                 auto v = varyings_in.find(loc->second);
                 S[var] = v != varyings_in.end() ? Fit(v->second, p.size) : Val(p.size);
             }
-            // 图层与特效四边形的纹理坐标在 [0, 1]
-            if (model_ == 0 && names_.count(var) && names_[var] == "a_TexCoord") {
+            // 图层与特效四边形的纹理坐标在 [0, 1]。HLSL 入口的输入名形如 _ww_in.a_TexCoord（同名的 a_TexCoord 是包装里的 static）
+            if (model_ == 0 && names_.count(var) && names_[var].substr(names_[var].rfind('.') + 1) == "a_TexCoord") {
                 Val& t = S.try_emplace(var, Val(p.size)).first->second;
                 for (std::size_t k = 0; k < 2 && k < t.size(); ++k) t[k].lo = 0, t[k].hi = 1;
             }
