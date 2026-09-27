@@ -147,17 +147,15 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     }
 
     /// <summary>
-    /// 分析阶段的慢分量闭合预检（<see cref="SlowClosureProbe"/>）：同一个主渲染请求的模拟输入，只出 1 帧并留原帧；
-    /// 多预热 <paramref name="extraWarmupFrames"/> 帧（取 P）出的就是连续播放的第 P 帧，预热帧不回读。
-    /// 两帧必须各自一次渲染、都是该进程光栅化的第一帧：同一进程里先画第 0 帧、隔 P−1 个只模拟的帧再画第 P 帧，
-    /// 渲染器给出的第 P 帧不等于连续播放的第 P 帧（3448877775 层 332 实测与第 0 帧逐像素相同，见 C-PERF-BAKE #234）。
-    /// 只要原帧：不编码、不量覆盖度，直编、裁剪、淡化这些成品设置都去掉（渲染器 job 与带编码的请求相同，像素一样）。
+    /// 分析阶段的慢分量闭合预检（<see cref="SlowClosureProbe"/>）：同一个主渲染请求（同一份模拟输入与预热），一次渲染留第 0 帧与第 P 帧原帧。
+    /// 只取样这两帧（步长 P 的稀疏读回），中间 P−1 帧与预热一样只模拟、不光栅化；原来是两次渲染，第二次多预热 P 帧只出 1 帧，出的是同一对帧。
+    /// 不编码、不量覆盖度，直编、裁剪、淡化这些成品设置都去掉。
     /// </summary>
-    internal RenderRequest ClosureProbeRequest(int index, string outputDirectory, ulong extraWarmupFrames)
+    internal RenderRequest ClosureProbeRequest(int index, string outputDirectory)
     {
-        RenderRequest master = MasterRequest(index);
-        return master with { OutputDirectory = outputDirectory, Frames = 1, WarmupFrames = master.WarmupFrames + extraWarmupFrames,
-            EncodedFrames = null, RetainFrames = [0], TraceScene = false, FrameSamplesOnly = true, FrameSampleStride = 1, FrameSampleWidth = 1,
+        ulong period = groupFrames[index];
+        return MasterRequest(index) with { OutputDirectory = outputDirectory, Frames = checked(period + 1), EncodedFrames = null,
+            RetainFrames = [0, period], TraceScene = false, FrameSamplesOnly = true, FrameSampleStride = checked((uint)period), FrameSampleWidth = 1,
             LosslessTest = false, PlaybackEncoderKind = null, QuantizerOffset = 0, GpuEncoding = null, DirectCrop = null, DirectCrossfadeFrames = null,
             ForceKeyFrameFrame = null, CollectAlphaBounds = false, BoundsIncludeRgb = false };
     }

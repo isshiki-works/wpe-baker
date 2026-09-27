@@ -56,7 +56,7 @@ internal static class SlowClosureProbe
         try
         {
             if (residualGroups.Length > 0) await LoopStartSelector.SearchAsync(runner, scheduler, Parallel, null, new StageTiming(), token);
-            // 每组两次渲染（第 0 帧、第 P 帧）；各组互不依赖，最多 Parallel 组同时渲，记录仍按组序。
+            // 每组一次渲染同时留第 0 与第 P 帧；各组互不依赖，最多 Parallel 组同时渲，记录仍按组序。
             int[] probed = [.. Enumerable.Range(0, groups.Length).Where(index => GroupVerdicts.SlowDrift(plan, Layers(groups[index])) is not null)];
             var results = new JsonObject[probed.Length];
             await System.Threading.Tasks.Parallel.ForEachAsync(Enumerable.Range(0, probed.Length),
@@ -66,12 +66,14 @@ internal static class SlowClosureProbe
                     var (degrees, owners) = GroupVerdicts.SlowDrift(plan, Layers(groups[index]))!.Value;
                     GroupCapture capture = scheduler.Capture(groups[index]);
                     ulong period = groupFrames[index];
-                    var (first, wrap, wall) = await FramePairAsync(runner, scheduler, index, period, output, cancel);
+                    JsonObject render = await runner.RenderAsync(scheduler.ClosureProbeRequest(index, Path.Combine(output, $"group-{index}")), null, cancel);
+                    byte[] first = await LoopClosureCheck.ReadRetainedFrameAsync(render, 0, cancel);
+                    byte[] wrap = await LoopClosureCheck.ReadRetainedFrameAsync(render, period, cancel);
                     JsonObject closure = LoopClosureCheck.Evaluate(first, wrap, (int)capture.PixelWidth, (int)capture.PixelHeight,
                         withAlpha: !capture.SceneClear, period, judged: true, scheduler.TileScale);
                     results[slot] = new JsonObject { ["group_id"] = groups[index]["id"]!.DeepClone(), ["owner_layer_ids"] = new JsonArray([.. owners.Select(id => (JsonNode)id)]),
                         ["drift_bound_degrees"] = degrees, ["status"] = closure["status"]!.DeepClone(),
-                        ["renderer_wall_seconds"] = wall,
+                        ["renderer_wall_seconds"] = render["native_result"]?["wall_seconds"]?.GetValue<double>() ?? 0,
                         ["loop_closure"] = closure };
                 });
             foreach (JsonObject record in results) records.Add(record);
@@ -81,19 +83,6 @@ internal static class SlowClosureProbe
             try { Directory.Delete(output, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
         return records;
-    }
-
-    /// <summary>
-    /// 一个组连续播放的第 0 帧与第 P 帧原帧：两次渲染，第二次多预热 P 帧（见 <see cref="GroupRenderScheduler.ClosureProbeRequest"/>）。
-    /// 返回两帧与两次渲染器墙钟之和。
-    /// </summary>
-    internal static async Task<(byte[] First, byte[] Wrap, double WallSeconds)> FramePairAsync(NativeRenderRunner runner,
-        GroupRenderScheduler scheduler, int index, ulong period, string output, CancellationToken token)
-    {
-        JsonObject start = await runner.RenderAsync(scheduler.ClosureProbeRequest(index, Path.Combine(output, $"group-{index}-0"), 0), null, token);
-        JsonObject end = await runner.RenderAsync(scheduler.ClosureProbeRequest(index, Path.Combine(output, $"group-{index}-p"), period), null, token);
-        return (await LoopClosureCheck.ReadRetainedFrameAsync(start, 0, token), await LoopClosureCheck.ReadRetainedFrameAsync(end, 0, token),
-            new[] { start, end }.Sum(render => render["native_result"]?["wall_seconds"]?.GetValue<double>() ?? 0));
     }
 
     /// <summary>最短时间窗（秒）：从它起每次翻倍，直到循环长度。</summary>
