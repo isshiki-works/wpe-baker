@@ -44,6 +44,19 @@ internal sealed class Liveness
         Reasons = objects.Keys.ToDictionary(id => id, _ => new HashSet<string>());
     }
 
+    /// <summary>
+    /// 挂在另一份同源场景图上的副本（<see cref="AnalysisMemo"/> 在各次子分析之间共用判定结果）。集合按原插入顺序复制，
+    /// reasons 的先后不变；分配阶段往副本里加原因，不动母本。
+    /// </summary>
+    internal Liveness CopyFor(SceneGraph graph)
+    {
+        var copy = new Liveness(graph) { InputDrivenCamera = InputDrivenCamera, LookupEdges = [.. LookupEdges.Select(edge => edge.DeepClone().AsObject())] };
+        copy.Ids.UnionWith(Ids);
+        foreach (var (id, reasons) in Reasons) copy.Reasons[id] = [.. reasons];
+        copy.SharedStateForInputReaders.UnionWith(SharedStateForInputReaders);
+        return copy;
+    }
+
     /// <summary>记一条实时原因；场景外的 id 忽略。返回这个对象是否新变成实时。</summary>
     internal bool Mark(int id, string reason)
     {

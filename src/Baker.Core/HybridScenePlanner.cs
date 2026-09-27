@@ -91,8 +91,12 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         {
             JsonObject input = scene();
             // 缓存两段：plan 形态的 loop + unresolved 各条的文案与点名图层（UnresolvedNotes.Pack）。格式变了就换前缀，旧缓存不再命中。
-            string key = "loop-v11-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
-                request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.LoopPreference,
+            // 键只放 LoopAnalysis 真读的：视频组只读 id 与 layer_ids（组的位置、尺寸随布局变），投影与输出宽高根本不传进去。
+            // 这样同一组图层换了布局或别的组变了，也能命中。
+            JsonArray? groupLayers = videoGroups is null ? null : new JsonArray([.. videoGroups.OfType<JsonObject>().Select(group =>
+                (JsonNode)new JsonObject { ["id"] = group["id"]?.DeepClone(), ["layer_ids"] = group["layer_ids"]?.DeepClone() })]);
+            string key = "loop-v12-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, groupLayers,
+                request.FpsNumerator, request.FpsDenominator, profile, request.LoopPreference,
                 request.FullLoopLayerIds, request.BudgetOnlyRetime);
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
                 scene, source, assets, runtime, bakedLayerIds,
@@ -156,18 +160,28 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         catch (Exception) { return null; }
     }
 
-    /// <summary>门面：交给 <see cref="AnalysisOrchestrator"/> 在搜索空间里编排单次分析；<paramref name="states"/> 给了才逐状态导出子 plan。</summary>
+    /// <summary>门面：交给 <see cref="AnalysisOrchestrator"/> 在搜索空间里编排单次分析；<paramref name="states"/> 给了才逐状态导出子 plan。
+    /// 一次调用内各次子分析共用一个 <see cref="AnalysisMemo"/>，源是否被改过在最后核对一次。</summary>
     public async Task<JsonObject> AnalyzeAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
-        CancellationToken cancellationToken = default, StateExport? states = null) =>
-        await AnalysisOrchestrator.RunAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, progress, token), cancellationToken, tools, states,
-            progress: progress);
+        CancellationToken cancellationToken = default, StateExport? states = null)
+    {
+        var memo = new AnalysisMemo();
+        JsonObject result = await AnalysisOrchestrator.RunAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, memo, progress, token),
+            cancellationToken, tools, states, progress: progress, memo: memo);
+        await memo.VerifySourcesAsync(cancellationToken);
+        return result;
+    }
 
     /// <summary>
     /// 单次分析的编排：观测 → 实时判定 → 分配 → 构图 → 初判（<see cref="Verdict"/>）→ 循环与特效前缀 → 组 plan（<see cref="PlanWriter"/>）
     /// → 路线与布局准入（<see cref="Routes"/>）→ 更小分配取证 → 收尾裁定 → 落盘。各阶段只按这个顺序各跑一次。
     /// </summary>
-    public async Task<JsonObject> AnalyzeSingleAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+    public Task<JsonObject> AnalyzeSingleAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
+        CancellationToken cancellationToken = default) => AnalyzeSingleAsync(request, null, progress, cancellationToken);
+
+    /// <param name="memo">一次 analyze 内共用的记忆（<see cref="AnalysisMemo"/>）；null 时每步照常各算各的（烘焙前刷新、单次调用）。</param>
+    internal async Task<JsonObject> AnalyzeSingleAsync(HybridAnalyzeRequest request, AnalysisMemo? memo, IProgress<RenderProgress>? progress,
+        CancellationToken cancellationToken)
     {
         if (request.SchemaVersion != 2 || (request.Width == 0) != (request.Height == 0) || !OutputResolution.IsKnownSource(request.ResolutionSource) ||
             request.FpsNumerator == 0 || request.FpsDenominator == 0 ||
@@ -187,11 +201,14 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         if (Directory.Exists(output) || File.Exists(output)) throw new IOException("Analysis output must be new.");
         using var source = new ProjectSource(request.Source);
         if (source.Kind != "scene") throw new InvalidDataException("Hybrid scene planning requires a Scene project.");
-        string sourceHash = await source.SourceHashAsync(cancellationToken);
+        string sourceHash = memo is null ? await source.SourceHashAsync(cancellationToken) : await memo.SourceHashAsync(source, cancellationToken);
+        // 只随源变的 JSON：有记忆时整次 analyze 只解析一次，每次拿一份副本。
+        JsonObject SourceJson(string name, Func<JsonObject> read) => memo is null ? read() : memo.Json(name + "|" + sourceHash, read);
         if (request.AnalysisCacheDirectory is string cacheDirectory)
             request = request with { AnalysisCacheDirectory = Path.Combine(cacheDirectory, sourceHash) };
-        var scene = AnalysisCache.Get(request.AnalysisCacheDirectory, "scene", () => source.ReadJson(source.SceneResource));
-        var project = AnalysisCache.Get(request.AnalysisCacheDirectory, "project", () => source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject());
+        var scene = SourceJson("scene", () => AnalysisCache.Get(request.AnalysisCacheDirectory, "scene", () => source.ReadJson(source.SceneResource)));
+        var project = SourceJson("project", () => AnalysisCache.Get(request.AnalysisCacheDirectory, "project",
+            () => source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject()));
         var properties = SceneGraph.SnapshotProperties(project, request.UserProperties);
         // 未指定宽高时取本机主显示器分辨率；之后的探测、投影、plan.settings 与 bake 全部用这里定下的尺寸。
         OutputResolution.Choice resolution = OutputResolution.Choose(scene, properties, request.Width, request.Height,
@@ -201,7 +218,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         Directory.CreateDirectory(output);
         progress?.Report(new("analyzing", null, new Message("progress.observing_scene")));
         RuntimeObservation observation = await RuntimeObservation.ObserveAsync(request, source, sourceHash, scene, project, properties,
-            graph, output, new NativeRuntimeObserver(tools), progress, cancellationToken);
+            graph, output, new NativeRuntimeObserver(tools), progress, cancellationToken, memo);
         // feat/daytime-split：开关开着才识别状态选择器；识别失败只记原因，判定照旧。同名图层靠观测到的可见性写消歧。
         DaytimeSplit.Detection? daytime = request.DaytimeSplit ? DaytimeSplit.Detect(graph.Objects, observation.Dependencies, properties) : null;
         if (request.DaytimeState is not null && daytime?.IsRecognized != true)
@@ -225,8 +242,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             SceneGraph.Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
         var scriptFaults = observation.ScriptFaults(request.RuntimeTraceFile is not null);
         bool parallax = SceneGraph.Resolve(scene["general"]?["cameraparallax"], properties)?.ToJsonString() == "true";
-        var liveness = Liveness.Analyze(request, source, graph, observation, scriptFaults.Errors, parallax, daytimeSelector,
+        Liveness AnalyzeLiveness() => Liveness.Analyze(request, source, graph, observation, scriptFaults.Errors, parallax, daytimeSelector,
             FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
+        // 实时判定只取决于源、观测与到这里为止读过的请求字段（见 LivenessKey），退回、档位、布局、留实时集合各轮都相同。
+        var liveness = memo is null ? AnalyzeLiveness() : memo.Liveness(LivenessKey(request, sourceHash), graph, AnalyzeLiveness);
         var projection = HybridVideoProjection.Describe(scene, properties, request.Width, request.Height, observation.Trace["runtime_projection"] as JsonObject);
         var allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax, projection, FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
         var composer = new Composer(request, source, scene, properties, graph, observation, liveness, allocation, parallax,
@@ -248,7 +267,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             request, projection, composer.Groups);
         AnnotateLoopCandidates(loop);
         // 三处回退都可能要前缀缓存，同一个终端捕获点只问一次渲染器。
-        var captureProbes = new PrefixCaptureProbes(tools, request, source, scene, properties, output);
+        var captureProbes = new PrefixCaptureProbes(tools, request, source, scene, properties, output, memo);
         async Task<JsonArray> PrefixCachesAsync()
         {
             // 只看整层初判拒因：路线与布局准入追加的 blockers 不影响前缀回退（与改写前读同一份局部数组的结果相同）。
@@ -310,15 +329,28 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         }
         // README 的承诺：解析周期不完整时，把未解决机制与粒子所在的完整作者子树保留实时，再重查一次周期与构图。
         // 这条路以前只在 bake 阶段跑，analyze 既没走也没记录，用户拿到的就是一个没有任何理由的 unavailable。
-        JsonObject residualScene = source.ReadJson(source.SceneResource);
+        JsonObject residualScene = SourceJson("source-scene", () => source.ReadJson(source.SceneResource));
         Func<string, JsonObject?> residualResources = ResidualMasking.ResourceReader(source, request.Assets);
-        await RecordLoopAllocationFallbackAsync(report, scene, request, output, residualScene, residualResources, progress, cancellationToken);
+        await RecordLoopAllocationFallbackAsync(report, scene, request, output, residualScene, residualResources, memo, progress, cancellationToken);
         // 收尾裁定（原 X 段）：残差布局闸门 → 求解器空候选 → 可追溯不变量 → 视频外壳 → 硬解预检 → 公共查询冲突 → suitability。
         Verdict.Conclude(report, request, source, graph, observation, projection, effectPrefixRoute, residualScene, residualResources);
         await PlanWriter.WriteAsync(report, request, output, loopNotes, cancellationToken);
-        if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during analysis.");
+        // 有记忆时改在整次 analyze 结束时核对一次（AnalysisMemo.VerifySourcesAsync）。
+        if (memo is null && sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during analysis.");
         return report;
     }
+
+    /// <summary>
+    /// 实时判定（<see cref="Liveness.Analyze"/>）的记忆键。它的输入在分配之前就全部定下，都只随下面这些变：
+    /// 源（sourceHash；scene、project 只随源变）、属性（UserProperties）、分辨率（已解析的 Width/Height/ResolutionSource，本机显示器同一个 planner 不变）、
+    /// 观测（ObservationKey 的各项，Interaction 决定 gpuTiming，DeviceUuid、RuntimeTraceFile，音频效果取舍 AudioEffects，时段 DaytimeSplit/DaytimeState），
+    /// 以及 Liveness 自己读的 SingleShotLive、ViewMode、Assets。
+    /// 置空的这几项在 Liveness 之前一处都没读到（分配、构图、循环与收尾才用），退回、档位、布局、留实时集合各轮之间变的正是它们；
+    /// 其余字段原样进键：以后在这之前多读了哪个字段，键只会更细，不会错用别的请求的结果。
+    /// </summary>
+    internal static string LivenessKey(HybridAnalyzeRequest request, string sourceHash) => "liveness|" + AnalysisCache.Key(sourceHash, request with {
+        OutputDirectory = "", AnalysisCacheDirectory = null, RetainLiveRootIds = null, RetainLiveReasons = null, ExcludedLayerIds = null,
+        Preset = null, LoopPreference = "", VideoLayout = "", LiveOverlayPlacement = "", BudgetOnlyRetime = false });
 
     /// <summary>
     /// 整层路线在"除 HDR 闭合外零 blocker 却求不出循环"时，真的试一次更小的烘焙分配，并把走了什么、结果如何写进 plan。
@@ -327,7 +359,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     /// 这里只取证，不替换用户没有要求的分配：真要改分配由 bake 的同名回退或显式 --retain-live 执行。
     /// </summary>
     private async Task RecordLoopAllocationFallbackAsync(JsonObject report, JsonObject scene, HybridAnalyzeRequest request,
-        string output, JsonObject sourceScene, Func<string, JsonObject?> readResource,
+        string output, JsonObject sourceScene, Func<string, JsonObject?> readResource, AnalysisMemo? memo,
         IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
     {
         // 重查请求自己带着 retain_live_root_ids，绝不递归第二层。
@@ -355,7 +387,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             Task<JsonObject> Replan() => AnalyzeSingleAsync(request with {
                 OutputDirectory = analysisOutput, RuntimeTraceFile = null, RetainLiveRootIds = retained,
                 RetainLiveReasons = HybridLoopAllocation.RetainReasons(report, evidence["trigger_layer_ids"]!.AsArray().Select(node => node!.GetValue<int>())) },
-                progress, cancellationToken);
+                memo, progress, cancellationToken);
             JsonObject replanned = await Replan();
             // 留下的未解析项全部可由残差掩盖时也算找到：bake 会走残差掩盖路线（例如留实时水面之后剩下的平稳随机雨）。
             (bool resolved, string basis, JsonObject? residual) = HybridLoopAllocation.ReplannedResolution(replanned, sourceScene, readResource);
