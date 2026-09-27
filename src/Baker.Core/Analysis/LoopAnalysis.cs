@@ -15,7 +15,7 @@ internal static class LoopAnalysis
         CommonLoopPreference preference = CommonLoopPreference.Balanced,
         double? loopLengthMaximumSeconds = null, JsonArray? videoGroups = null,
         IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null,
-        double? proofRetimePercent = null)
+        double? proofRetimePercent = null, bool budgetOnlyRetime = false)
     {
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
@@ -26,7 +26,7 @@ internal static class LoopAnalysis
         ceilingSeconds = ceiling.ToSeconds();
         var measured = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, runtime, bakedLayerIds, ceilingSeconds, maximumRetimePercent);
         // 振幅推不出的慢项先按逐项预算求解；整层路线（有视频组）逐项预算内无解时才放开它们的改速，放不放行由分析收尾实测。
-        // 特效前缀路线（videoGroups 为 null）没有实测，始终按逐项预算。
+        // 特效前缀路线（videoGroups 为 null）没有实测、实测没放行后的重分析（budgetOnlyRetime），都始终按逐项预算。
         var shader = measured with { Components = [.. measured.Components.Select(item => item.Component.MaximumRetimePercent == ShaderPeriodAnalysis.MeasuredRetimePercent
             ? item with { Component = item.Component with { MaximumRetimePercent = null } } : item)] };
         List<LoopUnresolved> unresolved = [.. shader.Unresolved.Select(item => (LoopUnresolved)new ShaderLoopUnresolved(item))];
@@ -50,7 +50,7 @@ internal static class LoopAnalysis
             return new CommonLoopComponent($"{GroupStepPrefix}{step}", new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
         })];
         LoopSolve solve = SolveLoop(shader, animation, [.. particleCycles, .. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
-        if (videoGroups is not null && solve.Result.Candidates.Count == 0 && !measured.Components.SequenceEqual(shader.Components) &&
+        if (videoGroups is not null && !budgetOnlyRetime && solve.Result.Candidates.Count == 0 && !measured.Components.SequenceEqual(shader.Components) &&
             SolveLoop(measured, animation, [.. particleCycles, .. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
                 is { Result.Candidates.Count: > 0 } loose)
             (shader, solve) = (measured, loose);

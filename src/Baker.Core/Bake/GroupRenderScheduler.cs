@@ -153,13 +153,23 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     }
 
     /// <summary>
-    /// 慢项改速实测（<see cref="SlowClosureProbe.SpeedAsync"/>）：同一个闭合预检请求，只渲 <paramref name="layers"/>（所有者层），
-    /// 不带预热地从时间 0 起跑 <paramref name="frame"/> 帧，出的就是第 frame 帧；两版第 0 帧因此是同一状态。
+    /// 慢项改速实测（<see cref="SlowClosureProbe.SpeedAsync"/>）：组的捕获几何上原样渲 1 帧无损、留原帧，只渲 <paramref name="layers"/>（所有者层），
+    /// 不带预热地从时间 0 起跑 <paramref name="frame"/> 帧，出的就是第 frame 帧，两版第 0 帧因此是同一状态。
+    /// 不从主渲染请求派生：直编、裁剪、淡化窗口、量化值、HDR 缩放这些烘焙专用设置都不带（残差组的淡化窗口在 1 帧请求上不成立）。
     /// </summary>
     internal RenderRequest SpeedProbeRequest(int index, string outputDirectory, ulong frame, int[] layers)
     {
-        RenderRequest probe = ClosureProbeRequest(index, outputDirectory, 0);
-        return probe with { WarmupFrames = frame, LayerSelection = probe.LayerSelection! with { IncludeLayers = layers } };
+        GroupCapture capture = Capture(groups[index]);
+        return new(captureProject, settings.Assets, outputDirectory, capture.PixelWidth, capture.PixelHeight,
+            settings.FpsNumerator, settings.FpsDenominator, 1, WarmupFrames: frame,
+            Seed: 17, UserProperties: snapshot, PixelPacking: capture.SceneClear ? "rgb" : "rgba_side_by_side", LosslessTest: true,
+            DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid,
+            EffectRenderScale: request.EffectRenderScale, MatchEffectResolution: request.MatchEffectResolution,
+            Input: new JsonObject { ["cursor_x"] = .5, ["cursor_y"] = .5, ["cursor_in_window"] = true },
+            OrthographicCaptureViewport: new(CenterX, CenterY, capture.Width, capture.Height),
+            LayerSelection: new(layers, TransparentBackground: !capture.SceneClear, IncludePostprocessing: false),
+            OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(plan["loop"]!.AsObject(), layers.ToHashSet()),
+            RetainFrames: [0]);
     }
 
     /// <summary>取这个组的主渲染（没启动就现在启动），并把在飞的主渲染补到 groupParallel 个。</summary>

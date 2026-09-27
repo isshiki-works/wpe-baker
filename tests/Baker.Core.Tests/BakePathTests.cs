@@ -95,4 +95,52 @@ public class BakePathTests
         Assert.Equal("frame0_differs", (await Read(0, randomOrigin: true))["reason"]!.GetValue<string>());
         Assert.Equal("no_texture", (await Read(0.5, flat: true))["reason"]!.GetValue<string>());
     }
+
+    // 测速请求不带烘焙专用设置：组本来是残差组（淡化窗口 + CPU 直编裁剪）时，从主渲染请求派生的 1 帧请求过不了渲染器的请求校验
+    // （本机全集 3582367840 等 3 张分析因此崩溃）。原样渲染的请求要过完全部参数校验，停在"渲染器文件不存在"上。
+    [Fact]
+    public async Task SpeedProbeRequestDropsCropAndCrossfadeOfAResidualGroup() => await TestTemp.Run(async dir =>
+    {
+        var tools = new NativeTools(Path.Combine(dir, "no-renderer"), Path.Combine(dir, "no-ffmpeg"), Path.Combine(dir, "no-ffprobe"), []);
+        var runner = new NativeRenderRunner(tools);
+        var plan = new JsonObject
+        {
+            ["projection"] = new JsonObject { ["center_x"] = 0.0, ["center_y"] = 0.0, ["visible_width"] = 64.0, ["visible_height"] = 48.0 },
+            ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 60, ["patches"] = new JsonArray() }) },
+        };
+        JsonObject[] groups = [new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(1, 2), ["include_scene_clear"] = true }];
+        var settings = new HybridAnalyzeRequest(1, Fixture, dir, dir, 64, 48, 30, 1);
+        await using var scheduler = new GroupRenderScheduler(runner, new HybridBakeRequest(2, plan, dir), plan, settings, groups,
+            Fixture, Path.Combine(dir, "out"), new JsonObject(), 60, [60], 30, 0, [0], 1, PlaybackEncoderSelection.Software, null, CancellationToken.None);
+        RenderRequest request = scheduler.SpeedProbeRequest(0, Path.Combine(dir, "speed"), 120, [2]);
+        Assert.True(request is { DirectCrop: null, DirectCrossfadeFrames: null, PlaybackEncoderKind: null, Frames: 1, WarmupFrames: 120 });
+        Assert.Equal([2], request.LayerSelection!.IncludeLayers);
+        var error = await Assert.ThrowsAnyAsync<Exception>(() => runner.RenderAsync(request, null, CancellationToken.None));
+        Assert.IsType<FileNotFoundException>(error);
+    });
+
+    // 测速准备或渲染失败（这里是源工程不存在）记 not_measured / probe_failed，不让整次分析崩溃；调用方据此按逐项预算重分析。
+    [Fact]
+    public async Task SlowSpeedProbeFailureIsNotMeasuredInsteadOfThrowing() => await TestTemp.Run(async dir =>
+    {
+        const string component = "shader/1/0/0/effects/x/periodica_k_frag_3e800000";
+        var plan = new JsonObject
+        {
+            ["source"] = Path.Combine(dir, "missing-source"),
+            ["video_groups"] = new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(1) }),
+            ["loop"] = new JsonObject
+            {
+                ["retime_budget_percent"] = 1.0,
+                ["evidence"] = new JsonArray(new JsonObject { ["component"] = component, ["detail"] = "period 90 s" + ShaderPeriodAnalysis.MeasuredNote }),
+                ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 3000,
+                    ["components"] = new JsonArray(new JsonObject { ["id"] = component, ["delta_percent"] = 11.1 }),
+                    ["patches"] = new JsonArray(new JsonObject { ["component"] = component, ["owner_layer_id"] = 1, ["effect_index"] = 0, ["pass_index"] = 0,
+                        ["constant_key"] = "periodica_k_frag_3e800000", ["new_value"] = 1.111, ["speed_exponent"] = 1.0 }) })
+            },
+        };
+        JsonObject record = (await SlowClosureProbe.SpeedAsync(plan, new NativeTools("must-not-run", "must-not-run", "must-not-run", []),
+            Path.Combine(dir, "speed"), CancellationToken.None))!;
+        Assert.Equal("not_measured", record["status"]!.GetValue<string>());
+        Assert.Equal("probe_failed", record["groups"]![0]!["reason"]!.GetValue<string>());
+    });
 }

@@ -63,7 +63,7 @@ public static class ShaderPeriodAnalysis
     private static readonly string[] AlternateClocks = ["g_Runtime", "g_Frametime", "g_DeltaTime"];
 
     /// <summary>
-    /// 振幅推不出的慢项（原周期 ≥ 60 s、不是慢分量、有可用旋钮）在求解器里的调速上限：实际等于不设限（取离原速最近的圈数），
+    /// 振幅推不出的慢项（原周期 ≥ 60 s、不是慢分量、有可用旋钮、不是 foliagesway）在求解器里的调速上限：实际等于不设限（取离原速最近的圈数），
     /// 看不看得出由分析收尾实测（<see cref="SlowClosureProbe.SpeedAsync"/>）；只在整层路线、逐项预算内无解时启用（见 LoopAnalysis）。
     /// </summary>
     internal const double MeasuredRetimePercent = 1e4;
@@ -186,9 +186,10 @@ public static class ShaderPeriodAnalysis
                     // 旋钮只能挂在作者效果 pass 上（场景里有这个 pass 的 constantshadervalues）
                     if (effect >= 0 && Knobs(term).FirstOrDefault(Usable) is JsonObject knob)
                     {
-                        // 振幅推不出的慢项：超预算的改速先挂上，放不放行看实测（MeasuredRetimePercent）；最宽松模型的"不能"证明不带它
+                        // 振幅推不出的慢项：超预算的改速先挂上，放不放行看实测（MeasuredRetimePercent）；最宽松模型的"不能"证明不带它。
+                        // foliagesway 只走 #209 的解析判据：算不出振幅（如顶点模式 directionweights 的这一轴为 0）就按逐项预算，不进实测
                         knobbed.Add(Through(ShaderTextPatch.KnobKey(knob), seconds, knob["inverse"]?.GetValue<bool>() == true, cap,
-                            measured: cap is null && seconds >= SwayRecurrenceSolver.VisiblePeriodSeconds));
+                            measured: cap is null && shader != "effects/foliagesway" && seconds >= SwayRecurrenceSolver.VisiblePeriodSeconds));
                         loose.Add((relaxed, null));
                         continue;
                     }

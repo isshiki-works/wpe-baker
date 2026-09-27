@@ -83,8 +83,8 @@ internal static class SlowClosureProbe
     /// 振幅推不出的慢项超预算改速（evidence 带 <see cref="ShaderPeriodAnalysis.MeasuredNote"/>、首选候选里 |δ| 超过逐项预算）实测看不看得出。
     /// 看成品的人没有原作对照，能感知的是速度变化，所以量两版的速度差：这些项的补丁还原成原速（before）与改速后（after）
     /// 各只渲所有者层，从时间 0 起出第 0 帧和第 t 帧。两版第 0 帧必须逐位相同（同一状态出发；不同说明所有者层里有随机内容，读数不可信）。
-    /// 读数按输出短边折到 1080p 口径，≤ 0.1 px/s（1.0.2 摆动慢项同一门限）才放行。
-    /// 返回 null = 特效前缀路线，或首选候选里没有这类项；status 不是 passed 的，调用方把所有者层留实时重新分析。改速后的循环照常过接缝门。
+    /// 读数按输出短边折到 1080p 口径，≤ 0.1 px/s（1.0.2 摆动慢项同一门限）才放行；渲染或准备失败记 not_measured（probe_failed），不抛出。
+    /// 返回 null = 特效前缀路线，或首选候选里没有这类项；status 不是 passed 的，调用方按逐项预算重新分析。改速后的循环照常过接缝门。
     /// </summary>
     internal static async Task<JsonObject?> SpeedAsync(JsonObject plan, NativeTools tools, string output, CancellationToken token)
     {
@@ -122,12 +122,12 @@ internal static class SlowClosureProbe
             record["status"] = "not_measured";
             return record;
         }
-        HybridAnalyzeRequest settings = PlanSettings.Of(plan);
         var runner = new NativeRenderRunner(tools);
         double wall = 0;
         var readings = new JsonArray();
         try
         {
+            HybridAnalyzeRequest settings = PlanSettings.Of(plan);
             var (openedBefore, _, _) = await OpenAsync(before, groups, runner, Path.Combine(output, "before"), token);
             await using var schedulerBefore = openedBefore;
             var (openedAfter, _, _) = await OpenAsync(plan, groups, runner, Path.Combine(output, "after"), token);
@@ -149,6 +149,12 @@ internal static class SlowClosureProbe
                 reading["group_id"] = groups[index]["id"]!.DeepClone();
                 readings.Add(reading);
             }
+        }
+        // 建采集工程、构造请求或渲染失败：记量不到（调用方按逐项预算重分析），不让整次分析失败；取消照常往外抛
+        catch (Exception error) when (!token.IsCancellationRequested)
+        {
+            readings.Add(new JsonObject { ["status"] = "not_measured", ["reason"] = "probe_failed",
+                ["error_type"] = error.GetType().Name, ["message"] = error.Message });
         }
         finally
         {

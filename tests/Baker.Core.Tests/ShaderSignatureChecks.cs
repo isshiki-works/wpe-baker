@@ -12,6 +12,7 @@ internal static class ShaderSignatureChecks
             File.WriteAllText(Path.Combine(root, "scene.json"), """{"objects":[{"id":10}]}""");
             Directory.CreateDirectory(Path.Combine(root, "shaders", "effects"));
             File.WriteAllText(Path.Combine(root, "shaders", "effects", "x.frag"), "void main() { gl_FragColor = vec4(sin(g_Time * 0.5), sin(g_Time * 0.25), 0.0, 1.0); }");
+            File.Copy(Path.Combine(root, "shaders", "effects", "x.frag"), Path.Combine(root, "shaders", "effects", "foliagesway.frag"));
             using var source = new ProjectSource(root);
             foreach (string reason in (string[])["analysis_not_converged:op199 @fragment", "analysis_not_converged @fragment", "unsupported_side_effect",
                 "names_stripped", "spirv_unreadable", "time_rate_not_constant @fragment", "scroll_rate_not_constant:s @fragment",
@@ -99,17 +100,23 @@ internal static class ShaderSignatureChecks
 
             // 振幅推不出的慢项（90.1 s，旋钮 0.25）：逐项预算（这里 0%）内与 7.1 s 项凑不出循环时，整层路线（有视频组）放开它的改速、
             // 证据带实测标记留给分析收尾实测；特效前缀路线（没有视频组）不放开，照旧无解
-            LoopReport Measured(JsonArray? groups) => LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
+            LoopReport Measured(JsonArray? groups, bool budgetOnly = false, string shader = "effects/x") => LoopAnalysis.Analyze(
+                JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
                 {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
                   {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
                   {"seconds":90.1,"num":901,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.25,"inverse":false}]}]}
-                """), [10], 30, 1, 0, videoGroups: groups);
+                """, shader), [10], 30, 1, 0, videoGroups: groups, budgetOnlyRetime: budgetOnly);
             LoopReport whole = Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }));
             const string slowTerm = "shader/10/0/0/effects/x/periodica_k_frag_3e800000";
             check(whole.Candidates.Count > 0 && Math.Abs(whole.Candidates[0].Components.Single(x => x.ComponentId == slowTerm).DeltaPercent) > 0 &&
                 whole.Evidence.Single(x => x.Component.Id == slowTerm).Evidence.EndsWith(ShaderPeriodAnalysis.MeasuredNote, StringComparison.Ordinal),
                 "a slow term without a provable amplitude is retimed beyond the budget on the whole-layer route, pending a rendered speed check");
             check(Measured(null).Candidates.Count == 0, "the effect-prefix route never retimes a slow term beyond the budget");
+            // 实测没放行后的重分析按逐项预算，与没有这条放宽时同一结果；foliagesway 只走 #209 的解析判据，算不出振幅时不进实测
+            check(Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }), budgetOnly: true).Candidates.Count == 0, "after a failed speed check the whole-layer route falls back to the per-term budget");
+            LoopReport sway = Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }), shader: "effects/foliagesway");
+            check(sway.Candidates.Count == 0 && !sway.Evidence.Any(x => x.Evidence.EndsWith(ShaderPeriodAnalysis.MeasuredNote, StringComparison.Ordinal)),
+                "foliagesway without a computable amplitude stays on the per-term budget and never enters the speed check");
 
             // 同一 pass 剩 7 s 与 3π s 两类且没有旋钮：每项独立调频有解（上限 600 s）记未收敛 term_not_retimable；
             // 上限 10 s 时独立调频也无解，才是"不能"
@@ -170,9 +177,9 @@ internal static class ShaderSignatureChecks
         finally { Directory.Delete(root, true); }
     }
 
-    private static JsonObject Runtime(string signature) =>
+    private static JsonObject Runtime(string signature, string shader = "effects/x") =>
         new() { ["runtime_layers"] = new JsonArray(new JsonObject { ["owner"] = 10, ["materials"] = new JsonArray(new JsonObject {
-            ["shader"] = "effects/x", ["effect"] = 0, ["pass"] = 0, ["active_uniforms"] = new JsonArray(), ["time_signature"] = JsonNode.Parse(signature) }) }) };
+            ["shader"] = shader, ["effect"] = 0, ["pass"] = 0, ["active_uniforms"] = new JsonArray(), ["time_signature"] = JsonNode.Parse(signature) }) }) };
 
     private static ShaderPeriodAnalysisResult Analyze(ProjectSource source, string reason, string external = "") =>
         ShaderPeriodAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null,
