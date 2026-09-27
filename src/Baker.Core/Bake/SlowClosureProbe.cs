@@ -179,7 +179,9 @@ internal static class SlowClosureProbe
     /// 纯位移 s 时每个通道 |Δc| ≈ |∇c·s| ≤ |∇c|·|s| ≤ g·|s|，所以 D ≤ G·|s|、v ≤ |s|/t = 位移速度差：速度差 ≤ 0.1 px/s 的纯位移必然通过。
     /// 窗口 t 从 0.5 s 起翻倍直到 L（最后一窗取 L），取第一个最差块 D ≥ <see cref="MeasurableLevels"/> 的窗算读数，≤ 0.1 px/s 为 passed，否则 visible：
     /// 更短的窗里差可能被 8 位量化抹成 0（周期几百秒的项改速几十个百分点，8 s 里相位差不到 1%），更长的窗里图案去相关、D 饱和会低估速率，所以只取第一个可测窗。
-    /// 到 t = L 两版的差都不可测时，整个循环里都看不出差别，按 below_quantization_through_loop 放行（读数写 null，另记全程最大块差）。
+    /// 到 t = L 两版的差都不可测时先自检：原速版本自己的第 0 帧与各窗第 t 帧也比一遍（最大块差记 self_change_levels）。
+    /// 原速版本在整个循环里都没有可测变化 → 这一层在所有者层渲染里不可见或不动，改速无害，按 component_not_visible 放行（读数写 null）；
+    /// 原速版本在变、两版却不可测地相同 → 补丁没生效或渲染有误，记 not_measured（patch_not_effective），调用方按逐项预算重分析。
     /// </summary>
     internal static async Task<JsonObject> MeasureAsync(Func<bool, ulong, Task<byte[]>> render, int width, int height, double tileScale,
         uint fpsNumerator, uint fpsDenominator, ulong loopFrames)
@@ -191,14 +193,16 @@ internal static class SlowClosureProbe
         double toReference = step / tileScale;
         if (Blocks(origin, origin, width, height, step, toReference).All(block => block.Gradient == 0))
             return new JsonObject { ["status"] = "not_measured", ["reason"] = "no_texture" };
-        double largest = 0;
+        double largest = 0, motion = 0;
         for (double seconds = ShortestWindowSeconds; ; seconds *= 2)
         {
             ulong frame = Math.Min(loopFrames, Math.Max(1, (ulong)Math.Round(seconds * fpsNumerator / fpsDenominator)));
             double t = (double)frame * fpsDenominator / fpsNumerator;
-            var blocks = Blocks(await render(false, frame), await render(true, frame), width, height, step, toReference).ToArray();
+            byte[] original = await render(false, frame);
+            var blocks = Blocks(original, await render(true, frame), width, height, step, toReference).ToArray();
             double worst = blocks.Max(block => block.Difference);
             largest = Math.Max(largest, worst);
+            motion = Math.Max(motion, Blocks(origin, original, width, height, step, toReference).Max(block => block.Difference));
             if (worst >= MeasurableLevels)
             {
                 double peak = blocks.Max(block => block.Difference == 0 ? 0 : block.Gradient == 0 ? double.PositiveInfinity : block.Difference / (t * block.Gradient));
@@ -209,8 +213,11 @@ internal static class SlowClosureProbe
                     ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = worst };
             }
             if (frame >= loopFrames)
-                return new JsonObject { ["status"] = "passed", ["basis"] = "below_quantization_through_loop",
-                    ["peak_speed_deviation_px_per_second"] = null, ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = largest };
+                return motion < MeasurableLevels
+                    ? new JsonObject { ["status"] = "passed", ["basis"] = "component_not_visible", ["peak_speed_deviation_px_per_second"] = null,
+                        ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = largest, ["self_change_levels"] = motion }
+                    : new JsonObject { ["status"] = "not_measured", ["reason"] = "patch_not_effective",
+                        ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = largest, ["self_change_levels"] = motion };
         }
     }
 

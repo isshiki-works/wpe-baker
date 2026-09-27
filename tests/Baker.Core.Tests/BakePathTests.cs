@@ -104,11 +104,15 @@ public class BakePathTests
         JsonObject drift = await Read((after, t) => Frame(0, 5 * Math.Sin(2 * Math.PI * t / (after ? 300 : 400)), halfFlat: true));
         Assert.Equal("visible", drift["status"]!.GetValue<string>());
         Assert.True(drift["worst_window_seconds"]!.GetValue<double>() > 8);
-        // 整个循环（400 s）里两版的差都在量化阈值以下：放行，并写明按哪种情况放行
+        // 整个循环（400 s）里两版的差都在量化阈值以下，原速版本自己也不可测地变化：这一层看不见或不动，放行并写明依据
         JsonObject faint = await Read((after, t) => Frame(0, 0.4 * Math.Sin(2 * Math.PI * t / (after ? 300 : 400)), halfFlat: true));
         Assert.Equal("passed", faint["status"]!.GetValue<string>());
-        Assert.Equal("below_quantization_through_loop", faint["basis"]!.GetValue<string>());
+        Assert.Equal("component_not_visible", faint["basis"]!.GetValue<string>());
         Assert.Equal(400.0, faint["worst_window_seconds"]!.GetValue<double>());
+        // 补丁没生效（3715870843 的疑点）：原速版本明显在动，改速后的版本却与它逐位相同，整个循环两版都不差——不放行
+        JsonObject inert = await Read((_, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / 400), halfFlat: true));
+        Assert.Equal("not_measured", inert["status"]!.GetValue<string>());
+        Assert.Equal("patch_not_effective", inert["reason"]!.GetValue<string>());
         Assert.Equal("frame0_differs", (await Read((after, t) => Frame(0, speck: after && t == 0)))["reason"]!.GetValue<string>());
         Assert.Equal("no_texture", (await Read((after, t) => Frame(0, after ? t : 0, flat: true)))["reason"]!.GetValue<string>());
     }
