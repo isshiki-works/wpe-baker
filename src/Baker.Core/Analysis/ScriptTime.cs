@@ -657,7 +657,14 @@ internal static class ScriptTime
         return new('p', P: [.. list], St: st);
     }
 
-    private static string Key(V v) => v switch
+    /// <summary>沿值递归的函数先过这里：循环能造出上百万层的嵌套值，栈不够时抛异常记未收敛，不让栈溢出终止进程。</summary>
+    private static V Deep(V v)
+    {
+        RuntimeHelpers.EnsureSufficientExecutionStack();
+        return v;
+    }
+
+    private static string Key(V v) => Deep(v) switch
     {
         N n => n.K switch
         {
@@ -677,12 +684,12 @@ internal static class ScriptTime
         _ => "?",
     };
 
-    private static bool Tainted(V v) => v switch
+    private static bool Tainted(V v) => Deep(v) switch
     {
         N n => n.St, Str s => s.St, Ob o => o.F.Values.Any(Tainted), Ar a => a.E.Any(Tainted), _ => false
     };
 
-    private static V Taint(V v, bool st) => !st ? v : v switch
+    private static V Taint(V v, bool st) => !st ? v : Deep(v) switch
     {
         N n => n with { St = true },
         Str s => s with { St = true },
@@ -691,7 +698,7 @@ internal static class ScriptTime
         _ => v,
     };
 
-    private static V Clean(V v) => v switch
+    private static V Clean(V v) => Deep(v) switch
     {
         N n => n with { St = false },
         Str s => s with { St = false },
@@ -701,11 +708,11 @@ internal static class ScriptTime
     };
 
     /// <summary>新值里相对旧值变了的部分打上状态标记（对象按字段比）。</summary>
-    private static V TaintDiff(V now, V? before) => now is Ob o && before is Ob b
+    private static V TaintDiff(V now, V? before) => Deep(now) is Ob o && before is Ob b
         ? new Ob(o.F.ToDictionary(f => f.Key, f => TaintDiff(f.Value, b.F.GetValueOrDefault(f.Key))), o.Cls)
         : before is not null && Key(now) == Key(before) ? now : Taint(now, true);
 
-    private static V F32(V v) => v switch
+    private static V F32(V v) => Deep(v) switch
     {
         N { K: 'c' } n => n with { C = (float)n.C },
         Ob o => new Ob(o.F.ToDictionary(f => f.Key, f => F32(f.Value)), o.Cls),
@@ -833,7 +840,7 @@ internal static class ScriptTime
             var forms = new List<(string Property, N Form)>();
             void Flatten(string property, V v)
             {
-                switch (v)
+                switch (Deep(v))
                 {
                     case N n: forms.Add((property, n)); break;
                     case Ob o: foreach (V f in o.F.Values) Flatten(property, f); break;
@@ -894,8 +901,8 @@ internal static class ScriptTime
             throw new Bail("script_state_not_closed", detail: $"cross-frame state does not repeat within {frameCap} frames");
         }
 
-        private static bool Unknown(V v) => v switch { N n => n.K != 'c', Ob o => o.F.Values.Any(Unknown), Ar a => a.E.Any(Unknown), _ => false };
-        private static N? Unsettled(V v) => v switch
+        private static bool Unknown(V v) => Deep(v) switch { N n => n.K != 'c', Ob o => o.F.Values.Any(Unknown), Ar a => a.E.Any(Unknown), _ => false };
+        private static N? Unsettled(V v) => Deep(v) switch
         {
             N n => n.K is 'c' or 'u' ? null : n,
             Ob o => o.F.Values.Select(Unsettled).FirstOrDefault(x => x is not null),
@@ -1070,6 +1077,7 @@ internal static class ScriptTime
         /// <summary>按非常数条件合并两边的值：两边相同照旧；否则常数/周期按条件的周期合并，其余降为说不清。</summary>
         private V Join(V a, V b, N cond)
         {
+            Deep(a);
             if (Key(a) == Key(b)) return Taint(a, cond.St);
             if (a is Ob oa && b is Ob ob && oa.F.Keys.Order().SequenceEqual(ob.F.Keys.Order()))
                 return new Ob(oa.F.ToDictionary(f => f.Key, f => Join(f.Value, ob.F[f.Key], cond)), oa.Cls);
@@ -1715,7 +1723,7 @@ internal static class ScriptTime
         private N Pure(V[] args, Func<double[], double>? f, Func<N, N>? linear = null)
         {
             var ns = new List<N>();
-            void Add(V v) { if (v is Ob o) foreach (V x in o.F.Values) Add(x); else if (v is Ar a) foreach (V x in a.E) Add(x); else ns.Add(Num(v)); }
+            void Add(V v) { if (Deep(v) is Ob o) foreach (V x in o.F.Values) Add(x); else if (v is Ar a) foreach (V x in a.E) Add(x); else ns.Add(Num(v)); }
             foreach (V v in args) Add(v);
             bool st = ns.Any(n => n.St);
             if (Worst(st, [.. ns]) is N worst) return worst;

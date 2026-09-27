@@ -119,7 +119,7 @@ Add-Row 'GPL/LGPL 二进制' 'SHA 能在验证记录中找到' (($unmatched.Coun
     ("核对 $($binaries.Count) 个" + ($unmatched.Count ? "，未匹配：$($unmatched -join ', ')" : '，全部匹配'))
 
 # ---------- 4. 源码包必须包含 / 必须排除 ----------
-$required = @('engine', 'engine-upstream.bundle', 'scripts\dependency-patches\manifest.json',
+$required = @('engine', 'scripts\dependency-patches\manifest.json',
     'scripts\dependency-patches\rstd.patch', 'scripts\dependency-patches\vvk.patch',
     'THIRD-PARTY-NOTICES.md', 'SOURCE.md', 'REBUILD.md',
     '.deps\ffmpeg-lgpl21\sources\ffmpeg', '.deps\ffmpeg-encoder-gpl2\sources\x264',

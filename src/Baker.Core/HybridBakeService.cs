@@ -51,6 +51,13 @@ public sealed class HybridBakeService(NativeTools tools)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
+    // 测试注入点：替换单次烘焙与重新分析，不跑渲染器也能走通"被拒 → 退回 → 重新分析 → 重烘"。
+    private readonly Func<HybridBakeRequest, Task<JsonObject>>? bakeOnce;
+    private readonly Func<HybridAnalyzeRequest, Task<JsonObject>>? analyze;
+
+    internal HybridBakeService(NativeTools tools, Func<HybridBakeRequest, Task<JsonObject>>? bakeOnce = null,
+        Func<HybridAnalyzeRequest, Task<JsonObject>>? analyze = null) : this(tools) => (this.bakeOnce, this.analyze) = (bakeOnce, analyze);
+
     private static JsonArray? SourceScriptErrors(JsonObject evidence)
     {
         if (evidence["source_script_error_count"] is JsonValue count && count.TryGetValue<int>(out int errorCount) &&
@@ -240,8 +247,8 @@ public sealed class HybridBakeService(NativeTools tools)
         record["first_reason_localized"] = first["reason_localized"]?.DeepClone();
         record["first_stage_timing"] = first["stage_timing"]?.DeepClone();
         long started = Stopwatch.GetTimestamp();
-        JsonObject plan = await new HybridScenePlanner(tools).AnalyzeAsync(replan(PlanSettings.Of(request.Plan) with {
-            OutputDirectory = layout.AnalysisRefresh, RuntimeTraceFile = null }), progress, cancellationToken);
+        HybridAnalyzeRequest settings = replan(PlanSettings.Of(request.Plan) with { OutputDirectory = layout.AnalysisRefresh, RuntimeTraceFile = null });
+        JsonObject plan = analyze is null ? await new HybridScenePlanner(tools).AnalyzeAsync(settings, progress, cancellationToken) : await analyze(settings);
         record["replan_seconds"] = Math.Round(Stopwatch.GetElapsedTime(started).TotalSeconds, 1);
         if (plan["blockers"] is not JsonArray { Count: 0 })
         {
@@ -301,7 +308,7 @@ public sealed class HybridBakeService(NativeTools tools)
         timing.SetDevice(request.DeviceUuid ?? request.Plan["settings"]?["device_uuid"]?.GetValue<string>());
         if (request.Plan["route"]?.GetValue<string>() == "effect_prefix")
             return await BakeEffectPrefixesAsync(request, progress, timing, cancellationToken);
-        return await BakeOnceAsync(request, progress, timing, cancellationToken);
+        return bakeOnce is null ? await BakeOnceAsync(request, progress, timing, cancellationToken) : await bakeOnce(request);
     }
 
     private async Task<JsonObject> BakeEffectPrefixesAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
