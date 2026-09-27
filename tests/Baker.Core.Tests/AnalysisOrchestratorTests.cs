@@ -89,6 +89,14 @@ public class AnalysisOrchestratorTests
             Assert.Equal(Enumerable.Range(1, 10).Select(n => n.ToString()), calls.Select(r => Path.GetFileName(r.OutputDirectory)));
             Assert.Equal("none", result["preset_applied"]!.GetValue<string>());
             Assert.Equal("balanced: summary.blocked; efficiency: summary.blocked", result["preset_fallback_reason"]!.GetValue<string>());
+            // analysis_timing 按重查路径记次数：档位与布局回退 7 次（fixed 3 次；off 的取舍测量 1 次 + 各档 3 次），交互替代与成本试算各 1 次。
+            JsonObject paths = result["analysis_timing"]!["paths"]!.AsObject();
+            Assert.Equal(7, paths["a_preset_layout_fallback"]!["count"]!.GetValue<int>());
+            Assert.Equal(1, paths["b_interaction_alternative"]!["count"]!.GetValue<int>());
+            Assert.Equal(1, paths["i_interaction_cost_trial"]!["count"]!.GetValue<int>());
+            Assert.Null(paths["c_retreat"]);
+            Assert.Equal(0, result["analysis_timing"]!["sub_analyses"]!.GetValue<int>());
+            Assert.NotNull(JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(root, "order", "plan.json")))!["analysis_timing"]);
         });
     }
 

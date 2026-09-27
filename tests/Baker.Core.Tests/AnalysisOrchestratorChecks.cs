@@ -133,6 +133,11 @@ internal static class AnalysisOrchestratorChecks
         check(result["preset_applied"]!.GetValue<string>() == "balanced" &&
             result["settings"]!["live_overlay_placement"]!.GetValue<string>() == "foreground",
             "Core default entry point starts at balanced and produces a valid real plan");
+        // 真实子分析逐段计时：每次子分析 A1–A15 各记一次（有记忆时源哈希不在子分析收尾重算，A2 也只记一次）。
+        JsonObject timing = result["analysis_timing"]!.AsObject();
+        int analyses = timing["sub_analyses"]!.GetValue<int>();
+        check(analyses > 0 && AnalysisTiming.Stages.All(stage => timing["stages"]![stage]!["count"]!.GetValue<int>() == analyses),
+            "analysis_timing records every stage of every sub-analysis");
         string[] caches = Directory.GetFiles(Path.Combine(request.OutputDirectory, "cache"), "loop-*.json", SearchOption.AllDirectories);
         var modified = caches.Select(File.GetLastWriteTimeUtc).ToArray();
         JsonObject repeat = await planner.AnalyzeAsync(request with { CustomSettings = true, VideoLayout = "layered", Preset = "balanced", LoopPreference = "balanced" });

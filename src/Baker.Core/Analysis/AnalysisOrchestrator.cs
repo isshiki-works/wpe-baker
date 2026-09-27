@@ -58,6 +58,7 @@ internal sealed class AnalysisOrchestrator
         StateExport? export = null, CallBudget? budget = null, IProgress<RenderProgress>? progress = null, AnalysisMemo? memo = null)
     {
         memo ??= new();
+        AnalysisTiming timing = AnalysisTiming.Begin();
         SearchSpace space = SearchSpace.Of(request, export is not null);
         string root = Path.GetFullPath(request.OutputDirectory);
         ProjectSource.EnsureNoReparsePoints(root);
@@ -75,7 +76,8 @@ internal sealed class AnalysisOrchestrator
         {
             var fallback = new AnalysisOrchestrator(request with { SingleShotLive = true }, analyze, space, space.Budget(), tools,
                 Path.Combine(run, "single-shot-live"), cache, token, memo, progress);
-            JsonObject old = await fallback.SelectAsync();
+            JsonObject old;
+            using (AnalysisTiming.Measure("f_single_shot_live")) old = await fallback.SelectAsync();
             if (Admission.Accepted(old)) (orchestrator, result) = (fallback, old);
         }
         // 生成不了、静止证明点名了还没留实时的层（source_static：含作者动画、木偶、粒子或音源，证不了循环也证不了静止）：
@@ -93,7 +95,7 @@ internal sealed class AnalysisOrchestrator
             foreach (int id in named) reasons.TryAdd(id, ["source_static"]);
             var trial = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. kept], RetainLiveReasons = reasons },
                 analyze, space, space.Budget(), tools, Path.Combine(run, $"static-live-{kept.Count}"), cache, token, memo, progress);
-            current = await trial.SelectAsync();
+            using (AnalysisTiming.Measure("g_static_live")) current = await trial.SelectAsync();
             if (Admission.Accepted(current)) (orchestrator, result) = (trial, current);
         }
         // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
@@ -104,6 +106,7 @@ internal sealed class AnalysisOrchestrator
         var speedProbes = new JsonArray();
         while (Admission.Accepted(result) && tools is not null && request.RuntimeTraceFile is null)
         {
+            using var slow = AnalysisTiming.Measure("j_slow_closure");
             if (await SlowClosureProbe.SpeedAsync(result, tools, Path.Combine(run, $"slow-speed-{speedProbes.Count}"), token) is JsonObject speed)
             {
                 speedProbes.Add(speed);
@@ -135,6 +138,7 @@ internal sealed class AnalysisOrchestrator
             result["suitability"] = HybridSuitability.Verdict(result);
             PlanNarrative.Attach(result);
         }
+        result["analysis_timing"] = timing.ToJson();
         string stagedPlan = Path.Combine(run, "selected-plan.json");
         await VideoSceneBuilder.WriteJsonAsync(stagedPlan, result, token);
         File.Move(stagedPlan, Path.Combine(root, "plan.json"), true);
@@ -154,7 +158,8 @@ internal sealed class AnalysisOrchestrator
         {
             foreach (string mode in space.Interactions.Skip(1))
             {
-                var alternative = await SolveAsync(mode);
+                (JsonObject Plan, JsonArray Reasons) alternative;
+                using (AnalysisTiming.Measure("b_interaction_alternative")) alternative = await SolveAsync(mode);
                 if (!Admission.Accepted(alternative.Plan)) continue;
                 await SuggestAsync(result, mode, alternative.Plan);
                 break;
@@ -173,6 +178,7 @@ internal sealed class AnalysisOrchestrator
         // --no-benefit allow 时照旧全烘，测功耗用。
         if (Admission.Accepted(result) && !request.AllowNoBenefit && await NoBenefit.PlainGroupRetainRootsAsync(result, token) is { Length: > 0 } plain)
         {
+            using var plainGroups = AnalysisTiming.Measure("d_plain_groups_live");
             var (replanned, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = plain }, analyze, space, space.Budget(), tools,
                 Path.Combine(run, "plain-groups-live"), cache, token, memo).SolveAsync(interaction);
             if (Admission.Accepted(replanned) && NoBenefit.AnalysisConditions(replanned).Length <= NoBenefit.AnalysisConditions(result).Length)
@@ -186,6 +192,7 @@ internal sealed class AnalysisOrchestrator
             space.Interactions.Skip(1).Contains("off") && (result["layers"] as JsonArray ?? []).OfType<JsonObject>().Any(layer => !InteractionPolicy.Protected(layer) &&
                 (layer["tradeoff_kinds"] as JsonArray ?? []).Any(kind => kind?.GetValue<string>() is "pointer" or "audio")))
         {
+            using var offTrial = AnalysisTiming.Measure("e_interaction_off_trial");
             var (off, _) = await SolveAsync("off");
             if (Admission.Accepted(off) && await RetreatAsync(off, "off") is var retreated && Viable(retreated)) await SuggestAsync(result, "off", retreated);
         }
@@ -268,7 +275,10 @@ internal sealed class AnalysisOrchestrator
                         analyze, space, space.Budget(), tools, Path.Combine(run, $"retreat-{tried}"), cache, token, memo);
                     plans[index] = Task.Run(async () =>
                     {
-                        try { return (await trial.SolveAsync(interaction)).Plan; }
+                        try
+                        {
+                            using (AnalysisTiming.Measure("c_retreat")) return (await trial.SolveAsync(interaction)).Plan;
+                        }
                         finally { slots.Release(); }
                     });
                 }
@@ -303,12 +313,14 @@ internal sealed class AnalysisOrchestrator
             {
                 // 关交互：先按原图层分析一次，据此测出要剔除的指针内容与代价高的全屏音频层，之后各档都带着这份剔除。
                 JsonObject original = await LayoutsAsync(current, "measure", null);
-                (off, costs) = await InteractionPolicy.ExclusionsAsync(original, current with { AnalysisCacheDirectory = cache }, tools,
-                    Path.Combine(run, "interaction-cost"), token);
+                using (AnalysisTiming.Measure("i_interaction_cost_trial"))
+                    (off, costs) = await InteractionPolicy.ExclusionsAsync(original, current with { AnalysisCacheDirectory = cache }, tools,
+                        Path.Combine(run, "interaction-cost"), token);
             }
             current = current with { ExcludedLayerIds = off is null ? request.ExcludedLayerIds :
                 (request.ExcludedLayerIds ?? []).Concat(off).Distinct().Order().ToArray() };
-            last = await StatesAsync(current);
+            // 请求的那档之后的每一档都是档位回退触发的重查。
+            using (preset == space.Presets[0] ? default : AnalysisTiming.Measure("a_preset_layout_fallback")) last = await StatesAsync(current);
             if (Admission.Accepted(last)) return (last, reasons);
             reasons.Add(preset + ": " + (Admission.GroupCount(last) > Admission.MaxVideoGroups(last) ? "too_many_video_groups" : last["summary"]?["key"]?.GetValue<string>()));
         }
@@ -336,7 +348,8 @@ internal sealed class AnalysisOrchestrator
         JsonObject? plan = null;
         foreach (string layout in space.Layouts)
         {
-            plan = await TryAsync(candidate with { VideoLayout = layout }, phase, state);
+            using (layout == space.Layouts[0] ? default : AnalysisTiming.Measure("a_preset_layout_fallback"))
+                plan = await TryAsync(candidate with { VideoLayout = layout }, phase, state);
             if (Admission.Accepted(plan)) break;
         }
         return plan!;
