@@ -130,6 +130,10 @@ internal static class HybridSuitability
             return Build("not_suitable", NoBenefit.RejectionReason,
                 "Estimated power use is higher than the original wallpaper.", "预计功耗高于原壁纸", notes);
 
+        // 固定在一个时段：做不出按时段切换，是工具的能力缺口，不是省不省电。待定文案。
+        if (blockers.Contains(BlockerCode.FixedDaytimeState))
+            return Build("unsupported_capture", "fixed_daytime_state", "TODO_UI", "TODO_UI", notes);
+
         // 能力缺口是工具的问题，不是壁纸的问题，单独一档。
         if (hdr || perspective)
             return Build("unsupported_capture", "capture_capability_gap",

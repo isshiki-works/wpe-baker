@@ -50,7 +50,7 @@ internal static class SdrRadianceClosureChecks
                 RuntimeLayer(20, "genericimage3", new JsonArray("clip"))) };
 
         async Task<JsonObject> PlanAsync(string name, bool hdr = true,
-            Action<JsonObject, JsonObject, Dictionary<string, byte[]>>? mutate = null)
+            Action<JsonObject, JsonObject, Dictionary<string, byte[]>>? mutate = null, int[]? liveReaders = null)
         {
             string directory = Path.Combine(root, "sdr-" + name);
             Directory.CreateDirectory(Path.Combine(directory, "models"));
@@ -74,7 +74,8 @@ internal static class SdrRadianceClosureChecks
             string tracePath = Path.Combine(root, "sdr-" + name + "-trace.json");
             await File.WriteAllTextAsync(tracePath, trace.ToJsonString());
             return await new HybridScenePlanner(new("not-started", "not-started", "not-started", [])).AnalyzeSingleAsync(
-                new(2, directory, root, Path.Combine(root, "sdr-" + name + "-plan"), 64, 32, RuntimeTraceFile: tracePath, Postprocessing: "ultra"));
+                new(2, directory, root, Path.Combine(root, "sdr-" + name + "-plan"), 64, 32, RuntimeTraceFile: tracePath, Postprocessing: "ultra",
+                    LiveFramebufferReaderIds: liveReaders));
         }
         static JsonObject Closure(JsonObject plan) => plan["hdr_radiance_closure"]!.AsObject();
         static bool Blocked(JsonObject plan) => plan["blockers"]!.AsArray()
@@ -218,12 +219,46 @@ internal static class SdrRadianceClosureChecks
             Reasons(tenBit).Contains("yuv420p10le", StringComparison.Ordinal),
             "a 10-bit video decode stays open (HDR pipeline: float capture, no blocker) and names R3");
 
-        // 采样帧缓冲的层本就会被 planner 判为 live 而不进组；判据必须独立于那条路径也拒绝它。
+        // 采样帧缓冲的 20 之前只有静态的 10：两者同在带场景清屏的第一组采集，20 进视频；hdr 场景里 R5 照样把这条反馈路径判为未闭合。
         JsonObject feedback = await PlanAsync("feedback", mutate: (_, trace, _) =>
             trace["runtime_layers"]![1]!["materials"]![0]!["textures"] = new JsonArray("_rt_FullFrameBuffer"));
+        var feedbackGroup = feedback["video_groups"]!.AsArray().OfType<JsonObject>().Single();
         check(feedback["layers"]!.AsArray().OfType<JsonObject>().Single(layer => layer["id"]!.GetValue<int>() == 20)
-                ["allocation"]!.GetValue<string>() == "live",
-            "a framebuffer-sampling layer stays live instead of entering a captured group");
+                ["allocation"]!.GetValue<string>() == "video" &&
+            feedbackGroup["include_scene_clear"]!.GetValue<bool>() &&
+            feedbackGroup["layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()).SequenceEqual(new[] { 10, 20 }) &&
+            Closure(feedback)["status"]!.GetValue<string>() == "open" && Reasons(feedback).Contains("(R5)", StringComparison.Ordinal),
+            "a framebuffer-sampling layer over static content enters the first captured group, and R5 still names the feedback path");
+        // 仍留实时的三种：之前有实时层；没有场景清屏（第一组不带清屏，读不到原作画面）；之前的层被脚本经 shared 牵连。
+        string FeedbackAllocation(JsonObject plan) => plan["layers"]!.AsArray().OfType<JsonObject>()
+            .Single(layer => layer["id"]!.GetValue<int>() == 20)["allocation"]!.GetValue<string>();
+        void ReadFramebuffer(JsonObject trace) => trace["runtime_layers"]![1]!["materials"]![0]!["textures"] = new JsonArray("_rt_FullFrameBuffer");
+        JsonObject overLive = await PlanAsync("feedback-over-live", mutate: (scene, trace, _) => {
+            ReadFramebuffer(trace);
+            scene["objects"]![0]!["origin"] = new JsonObject { ["value"] = "32 16 0",
+                ["script"] = "export function update(value) { new Date(); return value; }" };
+        });
+        JsonObject noClear = await PlanAsync("feedback-no-clear", mutate: (scene, trace, _) => {
+            ReadFramebuffer(trace);
+            scene["general"]!["clearenabled"] = false;
+        });
+        JsonObject overShared = await PlanAsync("feedback-over-shared", mutate: (scene, trace, _) => {
+            ReadFramebuffer(trace);
+            scene["objects"]![0]!["origin"] = new JsonObject { ["value"] = "32 16 0",
+                ["script"] = "export function update(value) { return shared.tint ? value : value; }" };
+            scene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 30, ["name"] = "Writer", ["visible"] = false,
+                ["origin"] = new JsonObject { ["value"] = "0 0 0", ["script"] = "export function update(value) { shared.tint = 1; return value; }" } });
+        });
+        // 放宽前的判定：请求点名的读取层（LiveFramebufferReaderIds）在实时判定阶段按读帧缓冲留实时，不经 --retain-live。
+        JsonObject named = await PlanAsync("feedback-named", mutate: (_, trace, _) => ReadFramebuffer(trace), liveReaders: [20]);
+        check(FeedbackAllocation(named) == "live" && named["settings"]!["retain_live_root_ids"] is null &&
+            named["layers"]!.AsArray().OfType<JsonObject>().Single(layer => layer["id"]!.GetValue<int>() == 20)["reasons"]!.AsArray()
+                .Select(reason => reason!.GetValue<string>()).SequenceEqual(new[] { "reads_current_framebuffer" }),
+            "a reader named in the request stays live for reading the framebuffer, without --retain-live");
+        check(FeedbackAllocation(overLive) == "live" && FeedbackAllocation(noClear) == "live" && FeedbackAllocation(overShared) == "live" &&
+            new[] { overLive, noClear, overShared }.All(plan => plan["layers"]!.AsArray().OfType<JsonObject>().Single(layer => layer["id"]!.GetValue<int>() == 20)
+                ["reasons"]!.AsArray().Any(reason => reason!.GetValue<string>() == "reads_current_framebuffer")),
+            "a framebuffer-sampling layer stays live over a live layer, without the scene clear, or over a layer linked through shared");
         using (var feedbackSource = new ProjectSource(Path.Combine(root, "sdr-feedback")))
         {
             JsonObject scene = Scene(true), trace = Trace();

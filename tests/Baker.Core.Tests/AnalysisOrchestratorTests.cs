@@ -184,7 +184,7 @@ public class AnalysisOrchestratorTests
             int calls = 0;
             await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "gui"), DaytimeSplit: true),
                 (r, _) => { calls++; return Task.FromResult(Plan(r, true, Day)); }, CancellationToken.None);
-            // 第一格就能生成：只有母 plan 1 次。单时段方案必判不省电（fixed_daytime），不带 --no-benefit allow 时不展开；也没有逐状态导出。
+            // 第一格就能生成：只有母 plan 1 次。单时段方案必被固定时段拒因拒绝，不带 --no-benefit allow 时不展开；也没有逐状态导出。
             Assert.Equal(1, calls);
         });
     }
@@ -267,7 +267,8 @@ public class AnalysisOrchestratorTests
                 JsonObject plan = Plan(r, true);
                 plan["bake_value"] = r.Interaction == "off"
                     ? new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule, ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 2.0 } }
-                    : new JsonObject { ["rule"] = WorkloadValue.NeedsWorkComparison.Rule };
+                    : new JsonObject { ["rule"] = WorkloadValue.NeedsWorkComparison.Rule,
+                        ["evidence"] = new JsonObject { ["plain_group_ids"] = new JsonArray(0) } };
                 plan["layers"] = new JsonArray(new JsonObject { ["id"] = 1, ["kind"] = "image" },
                     new JsonObject { ["id"] = 2, ["kind"] = "image", ["tradeoff_kinds"] = pointer ? new JsonArray("pointer") : new JsonArray() });
                 return plan;
@@ -377,6 +378,74 @@ public class AnalysisOrchestratorTests
         Assert.True(File.Exists(Path.Combine(cache, "scene.json")));
         Assert.False(Directory.Exists(Path.Combine(cache, sha)));
     });
+
+    [Fact]
+    public async Task FixedDaytimeStateIsItsOwnRejectionNotNoBenefit()
+    {
+        // 按请求固定在一个时段的方案做不出按时段切换：拒因是固定时段（能力缺口），不写 no_benefit；--no-benefit allow 照旧能生成。
+        await TestTemp.Run(async root =>
+        {
+            JsonObject Run(bool allowed) => AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "fixed-day-" + allowed),
+                    DaytimeState: "day", AllowNoBenefit: allowed),
+                (r, _) => Task.FromResult(Plan(r, true)), CancellationToken.None).GetAwaiter().GetResult();
+            JsonObject rejected = Run(false);
+            Assert.Equal([BlockerCode.FixedDaytimeState], PlanBlockers.Codes(rejected).ToArray());
+            Assert.Null(rejected[NoBenefit.Field]);
+            Assert.True(Admission.Accepted(Run(true)));
+        });
+    }
+
+    [Fact]
+    public async Task FramebufferReaderStaysOutOfRealtimeOnlyWhenThePlanIsNotWorse()
+    {
+        // 读帧缓冲的 20、30 画在 10 之后，按放宽后的规则没留实时。放宽前的判定经 LiveFramebufferReaderIds 在实时判定阶段恢复，
+        // 不占用 --retain-live（分配回退照常能跑），也不带放宽后方案自己的回退留下的层（这里的 99）。
+        // 一：20 带进凑不出循环的分量、方案不能生成：放宽前的判定（20、30 都按读帧缓冲留实时）能生成，用它。
+        // 二：能生成，但预计收益（省下的特效覆盖减视频路数）与实时画布都不比放宽前好、且至少一项更差：用放宽前的；否则保留放宽后的。
+        await TestTemp.Run(async root =>
+        {
+            string runtime = Path.Combine(root, "runtime.json");
+            JsonObject Reader(int id) => new() { ["owner"] = id, ["has_mesh"] = true, ["materials"] = new JsonArray(new JsonObject {
+                ["textures"] = new JsonArray("_rt_FullFrameBuffer") }) };
+            await File.WriteAllTextAsync(runtime, new JsonObject { ["runtime_layers"] = new JsonArray(
+                new JsonObject { ["owner"] = 10, ["has_mesh"] = true }, Reader(20), Reader(30)) }.ToJsonString());
+            var retainRequests = new List<int[]?>();
+            async Task<JsonObject> RunAsync(string name, bool unresolved, Func<bool, bool, (double Coverage, int Groups, double Canvas)> value) =>
+                await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, name)), (r, _) =>
+                {
+                    int[] readers = r.LiveFramebufferReaderIds ?? [];
+                    bool live20 = readers.Contains(20), live30 = readers.Contains(30);
+                    if (live20) retainRequests.Add(r.RetainLiveRootIds);
+                    var (coverage, groups, canvas) = value(live20, live30);
+                    bool usable = live20 || !unresolved;
+                    JsonObject plan = Plan(r, usable, groups: groups);
+                    plan["runtime_evidence"] = runtime;
+                    // 放宽后的方案自己的回退留下了 99。
+                    if (!live20) plan["settings"]!["retain_live_root_ids"] = new JsonArray(99);
+                    plan["layers"] = new JsonArray(new JsonObject { ["id"] = 20, ["allocation"] = live20 ? "live" : "video" },
+                        new JsonObject { ["id"] = 30, ["allocation"] = live30 ? "live" : "video" },
+                        new JsonObject { ["id"] = 99, ["allocation"] = "live", ["canvas_fraction"] = canvas });
+                    plan["bake_value"] = new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule,
+                        ["evidence"] = new JsonObject { ["effect_pass_coverage"] = coverage } };
+                    if (!usable) plan["loop"]!["unresolved"] = new JsonArray(new JsonObject { ["kind"] = "shader_period", ["owner_layer_id"] = 20 });
+                    return Task.FromResult(plan);
+                }, CancellationToken.None);
+            static double Coverage(JsonObject plan) => plan["bake_value"]!["evidence"]!["effect_pass_coverage"]!.GetValue<double>();
+
+            JsonObject unresolvedPlan = await RunAsync("reader-unresolved", true, (live20, live30) => (live20 && live30 ? 2 : 5, 1, 0));
+            Assert.True(Admission.Accepted(unresolvedPlan));
+            Assert.Equal(2, Coverage(unresolvedPlan));
+            // 恢复放宽前判定的重查不带 --retain-live：99 是放宽后的方案引出来的。
+            Assert.All(retainRequests, ids => Assert.Null(ids));
+
+            // 预计收益更少、实时画布更大：用放宽前的。
+            Assert.Equal(3.44, Coverage(await RunAsync("reader-worse", false, (live20, live30) => live20 && live30 ? (3.44, 2, 1.29) : (1.61, 1, 3.21))));
+            // 预计收益相同、实时画布更大：用放宽前的。
+            Assert.Equal(2.5, Coverage(await RunAsync("reader-canvas", false, (live20, live30) => live20 && live30 ? (2.5, 2, 0.4) : (1.5, 1, 1.4))));
+            // 预计收益更多：保留放宽后的，即使实时画布更大。
+            Assert.Equal(5, Coverage(await RunAsync("reader-better", false, (live20, live30) => live20 && live30 ? (3.44, 2, 0.4) : (5, 2, 1.4))));
+        });
+    }
 
     private static JsonObject Plan(HybridAnalyzeRequest request, bool usable, string[]? states = null, int groups = 1) => new()
     {

@@ -202,6 +202,9 @@ public static class MessageCatalog
             Zh: "不支持：预计功耗高于原壁纸（{0}）。调试或测功耗时可用 --no-benefit allow 生成。",
             En: "Not supported: estimated power use is higher than the original wallpaper ({0}). For debugging or power measurement, use --no-benefit allow to generate anyway."),
 
+        // 固定在一个时段：做不出按时段切换的能力缺口（DaytimeSplit.RejectFixedState）。待定文案，由维护者定稿。
+        ["blocker.fixed_daytime_state"] = new(Zh: "TODO_UI", En: "TODO_UI"),
+
         // fix/residual-layout-gate → feat/particle-crossfade：透明组与多组已允许淡化（packed 域线性混合即预乘空间淡化），
         // 只剩"可掩盖分量所在的图层不在任何视频组里"这一种布局确实淡化不了的情形。
         // {0}=布局名 {1}=视频组数 {2}=透明组说明（分语言） {3}=未解析分量列表（分语言） {4}=本场景可执行的出路（分语言）。

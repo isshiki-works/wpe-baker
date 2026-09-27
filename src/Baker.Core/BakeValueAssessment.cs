@@ -92,6 +92,13 @@ public static class BakeValueAssessment
                 }
             }
         }
-        return Result(WorkloadValue.NeedsWorkComparison);
+        // 没算出省下多少：记下只有普通图层（NoBenefit.Plain）的组，不省电判据只在这些组上把省下的当 0。
+        Func<int, bool> plain = NoBenefit.PlainLayers(plan, runtime["runtime_layers"] as JsonArray ?? []);
+        return Result(WorkloadValue.NeedsWorkComparison, new JsonObject { [PlainGroupsField] = new JsonArray([.. (plan["video_groups"] as JsonArray ?? [])
+            .OfType<JsonObject>().Where(group => (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int layer && plain(layer)))
+            .Select(group => group["id"]?.DeepClone())]) });
     }
+
+    /// <summary>needs_work_comparison 的 evidence 里：被烘层全是普通图层的视频组 id。</summary>
+    internal const string PlainGroupsField = "plain_group_ids";
 }

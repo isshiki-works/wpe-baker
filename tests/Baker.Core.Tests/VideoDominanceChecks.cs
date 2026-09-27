@@ -132,8 +132,15 @@ internal static class VideoDominanceChecks
                 "one unchanged plain still texture has low identified benefit");
             JsonObject stillUnplaced = still.DeepClone().AsObject();
             stillUnplaced["layers"]![0]!["canvas_center_y"] = null;
-            check(BakeValueAssessment.Evaluate(stillUnplaced, runtime, source, root)["rule"]!.GetValue<string>() == "needs_work_comparison",
+            JsonObject unplacedValue = BakeValueAssessment.Evaluate(stillUnplaced, runtime, source, root);
+            check(unplacedValue["rule"]!.GetValue<string>() == "needs_work_comparison",
                 "a plain still texture whose centre is unknown is not called low value");
+            // 没算出省下多少时记下只有普通图层的组；粒子着色器不算普通（只数 role==effect 会把它当成 0 特效）。
+            JsonObject particleRuntime = runtime.DeepClone().AsObject();
+            particleRuntime["runtime_layers"]![0]!["materials"]![0]!["shader"] = "genericparticle";
+            check(unplacedValue["evidence"]!["plain_group_ids"]!.AsArray().Count == stillUnplaced["video_groups"]!.AsArray().Count &&
+                BakeValueAssessment.Evaluate(stillUnplaced, particleRuntime, source, root)["evidence"]!["plain_group_ids"]!.AsArray().Count == 0,
+                "needs_work_comparison records which groups bake only plain layers, and a particle layer is not plain");
             still["output_resolution"]!["width"] = 32; still["output_resolution"]!["height"] = 16;
             check(BakeValueAssessment.Evaluate(still, runtime, source, root)["status"]!.GetValue<string>() == "potential_gain",
                 "a still texture larger than output retains potential residency or sampling benefit");

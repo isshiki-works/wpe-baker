@@ -4,9 +4,9 @@ namespace Baker.Core;
 
 /// <summary>
 /// 烘了也不省电的几类方案一律拒绝，只有命令行 --no-benefit allow（调试、测功耗用）能覆盖。判据：
-/// 静态成品仍带实时层、固定单个时段、视频流超过 <see cref="SavingProvenStreams"/> 路，
+/// 静态成品仍带实时层且证出省不下东西、视频流超过 <see cref="SavingProvenStreams"/> 路，
 /// 以及整层路线里每路视频省下的特效渲染不到 <see cref="MinPassCoveragePerStream"/> 道整屏（贵的层留在实时，烘掉的只是便宜的部分）。
-/// 前两条在分析时就能从 plan 读准（写 blocker）。视频流路数：整层路线要等组编完才知道哪些组是静态纹理，在烘焙时按实际编出的视频流判；
+/// 第一条在分析时就能从 plan 读准（写 blocker）。固定单个时段不在此列：那是做不出按时段切换的能力缺口（<see cref="DaytimeSplit.RejectFixedState"/>）。视频流路数：整层路线要等组编完才知道哪些组是静态纹理，在烘焙时按实际编出的视频流判；
 /// 特效前缀路线每个缓存都编成一路视频，路数就是 effect_prefix_caches 的个数，分析时判。
 /// 判据只说"预计"：不是功耗实测，覆盖后照常烘焙。
 /// </summary>
@@ -31,7 +31,6 @@ public static class NoBenefit
     public const int SavingProvenStreams = 4;
 
     public const string StaticWithLive = "static_only_with_live_layers";
-    public const string FixedDaytime = "fixed_daytime_state";
     public const string TooManyStreams = "video_streams_over_limit";
 
     /// <summary>
@@ -44,15 +43,15 @@ public static class NoBenefit
     public const string PlainLayersOnly = "only_plain_layers_baked";
     public const string VideoCostOverSaving = "video_cost_over_saved_rendering";
 
-    /// <summary>分析时就能判的条件：只剩一张静态图但仍有实时层；固定在单个时段；特效前缀缓存超过上限；整层路线省下的渲染抵不过视频。</summary>
+    /// <summary>分析时就能判的条件：只剩一张静态图但仍有实时层、且证出省不下东西；特效前缀缓存超过上限；整层路线省下的渲染抵不过视频。</summary>
     public static string[] AnalysisConditions(JsonObject plan)
     {
         var hits = new List<string>();
         double? frames = plan["loop"]?["candidates"] is JsonArray { Count: > 0 } candidates ? StaticOnlyBake.Count(candidates[0]?["frames"]) : null;
-        if (frames is <= 1 && plan["live_layer_ids"] is JsonArray { Count: > 0 })
+        // 静态成品不编视频、没有解码开销：只在证出省不下东西时拒——bake_value 判低价值，或没算出省下多少（unknown）而被烘层全是普通图层。
+        if (frames is <= 1 && plan["live_layer_ids"] is JsonArray { Count: > 0 } &&
+            (BakeValueAssessment.IsLowValue(plan) || PlainOnly(plan, videoOnly: false)))
             hits.Add(StaticWithLive);
-        if (plan["settings"]?["daytime_state"] is JsonValue)
-            hits.Add(FixedDaytime);
         if (plan["route"]?.GetValue<string>() == "effect_prefix" && plan["effect_prefix_caches"] is JsonArray caches &&
             TooManyVideoStreams(caches.Count))
             hits.Add(TooManyStreams);
@@ -87,19 +86,9 @@ public static class NoBenefit
             plan["loop"]?["candidates"] is not JsonArray { Count: > 0 } loops || !(StaticOnlyBake.Count(loops[0]?["frames"]) > 1) ||
             plan["video_groups"] is not JsonArray { Count: > 1 } groups ||
             plan["runtime_evidence"]?.GetValue<string>() is not string path || !File.Exists(path)) return null;
-        var drawn = (JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? [])
-            .OfType<JsonObject>().ToLookup(layer => SceneGraph.Int(layer["owner"]));
-        var drawable = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["id"]) is int)
-            .DistinctBy(layer => SceneGraph.Int(layer["id"])).ToDictionary(layer => SceneGraph.Int(layer["id"])!.Value,
-                layer => layer["drawable"]?.GetValue<bool>() != false);
-        static bool Plain(JsonObject layer) => layer["has_effect_layer"]?.GetValue<bool>() != true &&
-            layer["materials"] is JsonArray { Count: 1 } materials && materials[0] is JsonObject source &&
-            source["role"]?.GetValue<string>() == "source" &&
-            source["shader"]?.GetValue<string>() is "genericimage2" or "genericimage3" or "genericimage4" or "flat" &&
-            !(source["active_uniforms"] as JsonArray ?? []).Any(u => u?.GetValue<string>().StartsWith("g_Lights", StringComparison.Ordinal) == true);
-        bool PlainLayer(int id) => drawn[id].All(Plain) && (drawn[id].Any() || !drawable.GetValueOrDefault(id, true));
+        Func<int, bool> plainLayer = PlainLayers(plan, JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? []);
         int[] roots = [.. groups.OfType<JsonObject>().Where(group => group["static_verified"]?.GetValue<bool>() != true &&
-                (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int layer && PlainLayer(layer)))
+                (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int layer && plainLayer(layer)))
             .SelectMany(group => (group["root_ids"] as JsonArray ?? []).Select(SceneGraph.Int)).OfType<int>()];
         bool allPlain = groups.OfType<JsonObject>().All(group => (group["root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int r && roots.Contains(r)));
         return roots.Length == 0 || allPlain ? null : FullFrameDemotion.RetainLiveCommandRoots(plan, roots);
@@ -110,9 +99,41 @@ public static class NoBenefit
     {
         var rule when rule == WorkloadValue.CachedEffectPasses.Rule =>
             BakeValueAssessment.Number(plan[BakeValueAssessment.Field]!["evidence"]?["effect_pass_coverage"]) is double w && double.IsFinite(w) ? w : null,
-        var rule when rule == WorkloadValue.NeedsWorkComparison.Rule => 0,   // 走到这条时被烘层一道特效都没有
+        // 走到这条时被烘层没有 role==effect 的材质，但粒子、源视频、自定义着色器、模型这些省下多少没算：
+        // 只有每个要编视频的组都只有普通图层（Plain）时才算省下 0，否则不判。
+        var rule when rule == WorkloadValue.NeedsWorkComparison.Rule => PlainOnly(plan, videoOnly: true) ? 0 : null,
         _ => null
     };
+
+    /// <summary>
+    /// 普通图层的唯一定义（按一条运行时绘制记录）：单个源材质、普通贴图着色器（genericimage2–4、flat）、不带光照、没有特效层。
+    /// 退回实时（<see cref="PlainGroupRetainRootsAsync"/>）与不省电判据（<see cref="PlainOnly"/>）共用。
+    /// </summary>
+    internal static bool Plain(JsonObject layer) => layer["has_effect_layer"]?.GetValue<bool>() != true &&
+        layer["materials"] is JsonArray { Count: 1 } materials && materials[0] is JsonObject source &&
+        source["role"]?.GetValue<string>() == "source" &&
+        source["shader"]?.GetValue<string>() is "genericimage2" or "genericimage3" or "genericimage4" or "flat" &&
+        !(source["active_uniforms"] as JsonArray ?? []).Any(u => u?.GetValue<string>().StartsWith("g_Lights", StringComparison.Ordinal) == true);
+
+    /// <summary>图层是否普通：画出的每条运行时记录都普通；没有绘制记录的只有不绘制的节点算。</summary>
+    internal static Func<int, bool> PlainLayers(JsonObject plan, JsonArray runtimeLayers)
+    {
+        var drawn = runtimeLayers.OfType<JsonObject>().ToLookup(layer => SceneGraph.Int(layer["owner"]));
+        var drawable = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["id"]) is int)
+            .DistinctBy(layer => SceneGraph.Int(layer["id"])).ToDictionary(layer => SceneGraph.Int(layer["id"])!.Value,
+                layer => layer["drawable"]?.GetValue<bool>() != false);
+        return id => drawn[id].All(Plain) && (drawn[id].Any() || !drawable.GetValueOrDefault(id, true));
+    }
+
+    /// <summary>
+    /// bake_value 没算出省下多少（needs_work_comparison），且被烘层全是普通图层：<paramref name="videoOnly"/> 时只看要编视频的组
+    /// （已证静态的组不编视频），否则看全部组。普通组由 bake_value 记在 evidence.plain_group_ids；旧 plan 没记的不判。
+    /// </summary>
+    private static bool PlainOnly(JsonObject plan, bool videoOnly) =>
+        plan[BakeValueAssessment.Field]?["rule"]?.GetValue<string>() == WorkloadValue.NeedsWorkComparison.Rule &&
+        plan[BakeValueAssessment.Field]?["evidence"]?[BakeValueAssessment.PlainGroupsField] is JsonArray plain &&
+        (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().Where(group => !videoOnly || group["static_verified"]?.GetValue<bool>() != true)
+            .All(group => plain.Any(id => JsonNode.DeepEquals(id, group["id"])));
 
     /// <summary>分析收尾：记下判定；命中且没有覆盖时写 blocker 拒绝（与 TooManyVideoGroups 同一写法）。只差采集能力的方案按假设能采集判。</summary>
     public static void Apply(JsonObject plan, bool allowed)
@@ -185,8 +206,6 @@ public static class NoBenefit
     {
         (StaticWithLive, false) => "烘完只剩一张静态图，实时图层照旧运行",
         (StaticWithLive, true) => "the result would be a still image with the live layers still running",
-        (FixedDaytime, false) => "成品固定在一个时段，不随时刻切换",
-        (FixedDaytime, true) => "the result is fixed to one time of day and does not follow the clock",
         (TooManyStreams, false) => $"成品需要超过 {SavingProvenStreams} 路视频（路数更多的成品通常比原作更费电）",
         (TooManyStreams, true) => $"the result needs more than {SavingProvenStreams} video streams (results with more streams usually draw more power than the original)",
         (PlainLayersOnly, false) => "带特效的图层都要留在实时，能转成视频的只有普通贴图，省下的渲染抵不过视频解码",

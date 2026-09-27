@@ -19,6 +19,23 @@ internal static class DaytimeSplit
 {
     internal const string Recognized = "recognized", FallbackStatus = "fallback";
 
+    /// <summary>方案固定在一个时段（settings.daytime_state）：成品不随时刻切换。</summary>
+    internal static bool FixedState(JsonObject plan) => plan["settings"]?["daytime_state"] is JsonValue;
+
+    /// <summary>
+    /// 固定在一个时段的方案拒绝：做不出按时段切换是工具的能力缺口，不是省不省电，单独一条拒因（不进 no_benefit）。
+    /// --no-benefit allow（调试、测功耗）仍能生成单时段方案，与单时段方案只在它打开时展开（AnalysisOrchestrator.StatesAsync）同一口径。
+    /// 已被别的原因拒掉的不重复写。
+    /// </summary>
+    internal static void RejectFixedState(JsonObject plan, bool allowed)
+    {
+        if (allowed || !FixedState(plan) || !Admission.Bakeable(plan)) return;
+        PlanBlockers.Add(plan, new Blocker(BlockerCode.FixedDaytimeState));
+        plan["status"] = "requires_resolution";
+        plan["suitability"] = HybridSuitability.Verdict(plan);
+        PlanNarrative.Attach(plan);
+    }
+
     private static readonly RegexOptions Options = RegexOptions.CultureInvariant;
     private static readonly Regex ClockRead = new(@"\bnew\s+Date\s*\(\s*\)|\bDate\s*\.\s*now\b|\btimeOfDay\b", Options);
     private static readonly Regex HoursRead = new(@"\bgetHours\s*\(\s*\)", Options);
