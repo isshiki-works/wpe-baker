@@ -524,7 +524,10 @@ public partial class MainWindow : Window
                     ? automatic : OutputFrameRate.Requested(numerator)).ToJson(), analysisCacheDirectory) with {
                 Postprocessing = WallpaperEngineProperties.ReadPostprocessing(WallpaperEngineProperties.LocateConfig(WpeExeBox.Text.Trim())) };
             StatusText.Text = L("正在分析…", "Analyzing…");
-            var found = await Task.Run(() => new HybridScenePlanner(tools).AnalyzeAsync(request, null, analysisCancellation.Token));
+            // 只接多轮退回重查的阶段信息（"正在尝试第 N 种分组"），其余分析阶段照旧只显示"正在分析…"。
+            var progress = new Progress<RenderProgress>(value => {
+                if (analyzing && value.Stage == "retreating") StatusText.Text = value.Text?.In(AppEnvironment.Language) ?? value.Message; });
+            var found = await Task.Run(() => new HybridScenePlanner(tools).AnalyzeAsync(request, progress, analysisCancellation.Token));
             analysisCancellation.Token.ThrowIfCancellationRequested();
             if (SourceBox.Text.Trim() == source && AssetsBox.Text.Trim() == assets)
             {

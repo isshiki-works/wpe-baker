@@ -34,6 +34,10 @@ internal sealed class Liveness
     /// </summary>
     internal JsonObject[] LookupEdges { get; private set; } = [];
 
+    /// <summary>外部实时输入类原因（指针、音频、时钟、媒体）。结论理由也按它认"由输入驱动"（<see cref="ResidualMasking.LiveInput"/>）。</summary>
+    internal static readonly string[] InputReasons = ["pointer_api", "observed_pointer", "particle_pointer_input", "active_shader_pointer_input",
+        "audio_api", "observed_audio", "active_shader_audio_spectrum", "particle_audio_input", "wall_clock_api", "observed_wall_clock", "media_api"];
+
     private Liveness(SceneGraph graph)
     {
         objects = graph.Objects;
@@ -174,12 +178,10 @@ internal sealed class Liveness
             dependency => sharedEdges.Contains(dependency)
                 ? liveness.Reasons[dependency["target"]!.GetValue<int>()].All(reason => reason == "writes_shared_script_state")
                 : severedRead(dependency), severedWrite);
-        string[] input = ["pointer_api", "observed_pointer", "particle_pointer_input", "active_shader_pointer_input", "audio_api", "observed_audio",
-            "active_shader_audio_spectrum", "particle_audio_input", "wall_clock_api", "observed_wall_clock", "media_api"];
         foreach (int writer in sharedWrites.Keys.Where(id => liveness.Reasons[id].SetEquals(["writes_shared_script_state"])))
         {
             var readers = sharedEdges.Where(edge => edge["target"]!.GetValue<int>() == writer).Select(edge => edge["owner"]!.GetValue<int>()).ToList();
-            if (readers.Count > 0 && readers.All(reader => liveness.Reasons[reader].Overlaps(input))) liveness.SharedStateForInputReaders.Add(writer);
+            if (readers.Count > 0 && readers.All(reader => liveness.Reasons[reader].Overlaps(InputReasons))) liveness.SharedStateForInputReaders.Add(writer);
         }
         return liveness;
     }

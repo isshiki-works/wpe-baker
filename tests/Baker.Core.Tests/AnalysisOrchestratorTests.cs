@@ -210,10 +210,51 @@ public class AnalysisOrchestratorTests
                 plan["loop"]!["unresolved"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 64, ["mechanism"] = "term_not_retimable" });
                 return plan;
             }
-            await AnalysisOrchestrator.RunAsync(new(2, "s", "a", root, Interaction: "keep"), (r, _) => Task.FromResult(Analyze(r)), CancellationToken.None);
+            var reports = new List<RenderProgress>();
+            await AnalysisOrchestrator.RunAsync(new(2, "s", "a", root, Interaction: "keep"), (r, _) => Task.FromResult(Analyze(r)), CancellationToken.None,
+                progress: new Collect(reports));
             Assert.NotEmpty(retreats);
             Assert.All(retreats, r => Assert.Contains("term_not_retimable", r.RetainLiveReasons![64]));
+            // 每试一种分组报一条阶段信息，按第 1、2… 种编号（命令行与界面同一通道）。
+            Assert.Equal(Enumerable.Range(1, retreats.Count).Select(n => MessageCatalog.Get("progress.trying_grouping", MessageCatalog.Chinese, n)),
+                reports.Where(p => p.Stage == "retreating").Select(p => p.Text!.In(MessageCatalog.Chinese)));
         });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task NoBenefitWithSwitchableInteractionSuggestsOffWithoutApplyingIt(bool pointer)
+    {
+        // fixed 能生成但只烘普通图层（预计不省电）；关交互后烘下的层带特效、省电。有指针层才试 off，试出能就给一键建议，不自动关。
+        await TestTemp.Run(async root =>
+        {
+            var calls = new List<HybridAnalyzeRequest>();
+            JsonObject Analyze(HybridAnalyzeRequest r)
+            {
+                calls.Add(r);
+                JsonObject plan = Plan(r, true);
+                plan["bake_value"] = r.Interaction == "off"
+                    ? new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule, ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 2.0 } }
+                    : new JsonObject { ["rule"] = WorkloadValue.NeedsWorkComparison.Rule };
+                plan["layers"] = new JsonArray(new JsonObject { ["id"] = 1, ["kind"] = "image" },
+                    new JsonObject { ["id"] = 2, ["kind"] = "image", ["tradeoff_kinds"] = pointer ? new JsonArray("pointer") : new JsonArray() });
+                return plan;
+            }
+            JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "nobenefit")),
+                (r, _) => Task.FromResult(Analyze(r)), CancellationToken.None);
+            Assert.Equal(NoBenefit.ExpectedStatus, result[NoBenefit.Field]!["status"]!.GetValue<string>());
+            Assert.Equal("fixed", result["settings"]!["interaction"]!.GetValue<string>());
+            Assert.Empty(result["applied_tradeoffs"]!["properties"]!.AsObject());
+            Assert.Empty(result["applied_tradeoffs"]!["turn_off_kinds"]!.AsArray());
+            Assert.Equal(pointer, calls.Any(r => r.Interaction == "off"));
+            Assert.Equal(pointer ? "off" : null, result["suggested_change"]?["settings"]?["interaction"]?.GetValue<string>());
+        });
+    }
+
+    private sealed class Collect(List<RenderProgress> reports) : IProgress<RenderProgress>
+    {
+        public void Report(RenderProgress value) => reports.Add(value);
     }
 
     private static JsonObject Plan(HybridAnalyzeRequest request, bool usable, string[]? states = null, int groups = 1) => new()
