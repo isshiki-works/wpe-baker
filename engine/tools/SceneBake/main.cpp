@@ -236,7 +236,7 @@ fs::path SharedShaderCache(const fs::path& fallback) {
     auto time = fs::last_write_time(exe, time_error);
     if (size_error || time_error) return fallback;
     std::string build = std::string(WPE_RENDER_SOURCE_DIGEST).substr(0, 16) + "-" + std::to_string(size) + "-" +
-        std::to_string(time.time_since_epoch().count());
+        std::to_string(static_cast<long long>(time.time_since_epoch().count()));
     return fs::path(local) / "WpeBaker" / "shader-cache" / build;
 #else
     return fallback;
