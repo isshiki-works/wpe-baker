@@ -162,6 +162,24 @@ internal static class ShaderSignatureChecks
                 Settled(1000)["unresolved"]!.AsArray().Select(x => $"{x!["kind"]}/{x["mechanism"]}").SequenceEqual(["UnsupportedShaderMechanism/transient_settle_beyond_warmup"]),
                 "a bounded-threshold branch warms up one whole period past its settle time, and stays not converged when no period is longer");
 
+            // clamp 轴滚动停在边上：签名给 settle_seconds 时按静态 settle 处理，预热跳过开头；只报暂态、给不出时刻的照旧记未收敛
+            JsonObject clampRuntime = Runtime("""{"kind":"static","reasons":[],"external":[],"transient":false,"settle_seconds":4,"terms":[]}""");
+            clampRuntime["status"] = "complete";
+            clampRuntime["runtime_dependencies"] = new JsonArray();
+            clampRuntime["runtime_animation_periods"] = new JsonArray();
+            clampRuntime["runtime_layers"]![0]!["has_mesh"] = false;
+            clampRuntime["runtime_layers"]![0]!["materials"]![0]!["role"] = "effect";
+            clampRuntime["runtime_layers"]![0]!["materials"]![0]!["uses_audio_spectrum"] = false;
+            clampRuntime["runtime_layers"]![0]!["materials"]![0]!["uses_system_media_thumbnail"] = false;
+            clampRuntime["runtime_layers"]![0]!["materials"]![0]!["textures"] = new JsonArray();
+            JsonObject clamp = LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, clampRuntime, [10], 30, 1).ToJson();
+            check(clamp["unresolved"]!.AsArray().Count == 0 && clamp["candidates"]![0]!["shader_settle_seconds"]!.GetValue<double>() == 4 &&
+                clamp["candidates"]![0]!["source_period_warmup_frames"]!.GetValue<ulong>() >= 4 * 30 &&
+                ShaderPeriodAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
+                    {"kind":"static","reasons":[],"external":[],"transient":true,"terms":[]}
+                    """), [10], 600, 2).Unresolved is [{ Mechanism: "transient_clamp_scroll" }],
+                "a clamp-axis scroll with a reported settle time warms up past it; one without stays not converged");
+
             // 脚本：不能调速的秒周期、晚于上限才静止，都记在所有者名下（分配回退据此点名），不留零候选零理由
             string[] Scripted(string script) => [.. LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 10,
                 ["origin"] = new JsonObject { ["value"] = "0 0 0", ["script"] = script } }) }, source, null, JsonNode.Parse("""
