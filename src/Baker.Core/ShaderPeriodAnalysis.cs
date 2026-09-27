@@ -25,8 +25,9 @@ public sealed record ShaderTemporalUnresolved(int OwnerLayerId, int EffectIndex,
 public sealed record ShaderPeriodComponent(CommonLoopComponent Component, int OwnerLayerId, int EffectIndex, int PassIndex,
     string ConstantKey, bool Inverse, string Evidence);
 
-/// <summary>慢分量：周期/(1+预算) 仍超过循环上限，不进求解器、不调频；接缝漂移上界 2π·P/T 由烘焙侧接缝门复核。</summary>
-public sealed record ShaderSlowComponent(string Id, int OwnerLayerId, int EffectIndex, int PassIndex, double PeriodSeconds);
+/// <summary>慢分量：周期/(1+预算) 仍超过循环上限，不进求解器、不调频；接缝漂移上界 2π·P/T 由烘焙侧接缝门复核。
+/// Retimable：带可用旋钮，闭合预检没过时可以改挂旋钮改速或冻结（见 <see cref="ShaderPeriodAnalysis.Analyze"/> 的 retimeSlow）。</summary>
+public sealed record ShaderSlowComponent(string Id, int OwnerLayerId, int EffectIndex, int PassIndex, double PeriodSeconds, bool Retimable = false);
 
 /// <summary>与线性时间比较的分支在 Seconds（上界）之后固定：录制起点要放到它之后。</summary>
 public sealed record ShaderSettle(int OwnerLayerId, int EffectIndex, int PassIndex, string Resource, double Seconds);
@@ -71,7 +72,7 @@ public static class ShaderPeriodAnalysis
     internal const string MeasuredNote = "; retimed beyond the budget only after a rendered speed check";
 
     public static ShaderPeriodAnalysisResult Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory,
-        JsonObject runtime, IReadOnlyCollection<int> selectedLayerIds, double ceilingSeconds, double maximumRetimePercent)
+        JsonObject runtime, IReadOnlyCollection<int> selectedLayerIds, double ceilingSeconds, double maximumRetimePercent, bool retimeSlow = false)
     {
         var components = new List<ShaderPeriodComponent>();
         var slowComponents = new List<ShaderSlowComponent>();
@@ -180,7 +181,16 @@ public static class ShaderPeriodAnalysis
                     // 带振幅的摆动项能单独调频时按它自己的上限算：1.0.2 里周期超过上限的极慢项也在速度偏差门限内改频（或冻结），不留给接缝门
                     var cap = Cap(term, seconds);
                     double own = 1 + (cap is (_, double percent) && effect >= 0 && Knobs(term).Any(Usable) ? percent : maximumRetimePercent) / 100;
-                    if (seconds / own > ceilingSeconds) { slow.Add(new($"{id}/slow{slow.Count}", owner, effect, pass, seconds / stretch)); continue; }
+                    if (seconds / own > ceilingSeconds)
+                    {
+                        // 带可用旋钮（值与速度同向，冻结时旋钮取 0）的慢项：retimeSlow（闭合预检没过后的重分析）时改挂自己的旋钮，
+                        // 取离原速最近的圈数（周期超上限时可为 0 圈即冻结），放不放行看实测（MeasuredRetimePercent），改完精确闭合
+                        JsonObject? slowKnob = effect >= 0 && shader != "effects/foliagesway"
+                            ? Knobs(term).FirstOrDefault(k => Usable(k) && k["inverse"]?.GetValue<bool>() != true) : null;
+                        if (retimeSlow && slowKnob is not null) knobbed.Add(Through(ShaderTextPatch.KnobKey(slowKnob), seconds, false, measured: true));
+                        else slow.Add(new($"{id}/slow{slow.Count}", owner, effect, pass, seconds / stretch, slowKnob is not null));
+                        continue;
+                    }
                     if (num <= 0 || den <= 0) { unknown.Add(seconds); continue; }
                     var relaxed = new CommonLoopComponent($"{id}/term{index}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true, cap?.Percent);
                     // 旋钮只能挂在作者效果 pass 上（场景里有这个 pass 的 constantshadervalues）

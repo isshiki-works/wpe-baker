@@ -294,4 +294,28 @@ public class BakePathTests
         Assert.Equal([knob], SlowClosureProbe.UnwrittenKeys(Written("capture-without-material"), [knob]));
         await Task.CompletedTask;
     });
+
+    // 冻结的粒子湍流场不进求解器，没有候选分量与证据：按补丁认项，同样进测速
+    [Fact]
+    public async Task FrozenParticleFieldEntersTheSpeedProbe() => await TestTemp.Run(async dir =>
+    {
+        const string component = "particle_field/1/operator1";
+        var plan = new JsonObject
+        {
+            ["source"] = Path.Combine(dir, "missing-source"),
+            ["video_groups"] = new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(1) }),
+            ["loop"] = new JsonObject
+            {
+                ["retime_budget_percent"] = 1.0, ["evidence"] = new JsonArray(),
+                ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 3000, ["components"] = new JsonArray(),
+                    ["patches"] = new JsonArray(new JsonObject { ["component"] = component, ["kind"] = LoopAnalysis.ParticleFieldPatchKind, ["owner_layer_id"] = 1,
+                        ["effect_index"] = -1, ["pass_index"] = -1, ["constant_key"] = "timescale", ["value_index"] = 1, ["old_value"] = 20.0, ["new_value"] = 0.0,
+                        ["speed_exponent"] = 1.0 }) })
+            },
+        };
+        JsonObject? record = await SlowClosureProbe.SpeedAsync(plan, new NativeTools("must-not-run", "must-not-run", "must-not-run", []),
+            Path.Combine(dir, "speed"), CancellationToken.None);
+        Assert.Equal([component], record?["components"]!.AsArray().Select(x => x!.GetValue<string>()) ?? []);
+        Assert.Equal("not_measured", record!["status"]!.GetValue<string>());
+    });
 }

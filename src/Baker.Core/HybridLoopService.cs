@@ -16,7 +16,8 @@ public static class HybridLoopService
             ?? throw new InvalidDataException("Capture scene has no objects.");
         foreach (JsonObject patch in candidate["patches"]!.AsArray().OfType<JsonObject>())
         {
-            if (patch["kind"]?.GetValue<string>() == "video_rate") continue;
+            // 粒子场补丁改写粒子定义资源，由 WriteParticleFieldsAsync 在写捕获场景前处理
+            if (patch["kind"]?.GetValue<string>() is "video_rate" or LoopAnalysis.ParticleFieldPatchKind) continue;
             int ownerId = patch["owner_layer_id"]!.GetValue<int>();
             if (!owners.TryGetValue(ownerId, out JsonObject? owner)) throw new InvalidDataException($"Patch owner {ownerId} is absent.");
             double oldValue = patch["old_value"]!.GetValue<double>(), newValue = patch["new_value"]!.GetValue<double>();
@@ -56,6 +57,38 @@ public static class HybridLoopService
                 binding["script"] = ScriptTime.Retime(binding["script"]!.GetValue<string>(), newValue);
             }
             else throw new InvalidDataException("Unknown loop patch kind.");
+        }
+    }
+
+    /// <summary>
+    /// 冻结 turbulence 共享场（<see cref="LoopAnalysis.ParticleFieldPatchKind"/>）：把这层的粒子定义另存一份（原路径加 .periodica-层号），
+    /// 改写 operator[value_index].timescale，捕获场景里这层改指向新文件；共用同一定义的别的层不受影响。只写进捕获副本。
+    /// </summary>
+    internal static async Task WriteParticleFieldsAsync(string captureProject, ProjectSource source, string? assetsDirectory,
+        JsonObject captureScene, JsonObject loopReport, CancellationToken cancellationToken)
+    {
+        JsonObject[] patches = [.. ((loopReport["candidates"] as JsonArray)?.FirstOrDefault()?["patches"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(patch => patch["kind"]?.GetValue<string>() == LoopAnalysis.ParticleFieldPatchKind)];
+        foreach (var owner in patches.GroupBy(patch => patch["owner_layer_id"]!.GetValue<int>()))
+        {
+            JsonObject layer = captureScene["objects"]!.AsArray().OfType<JsonObject>().SingleOrDefault(x => x["id"]?.GetValue<int>() == owner.Key)
+                ?? throw new InvalidDataException($"Patch owner {owner.Key} is absent.");
+            string resource = layer["particle"]!.GetValue<string>();
+            JsonObject definition = SceneAnalyzer.ReadResourceJson(source, assetsDirectory, resource);
+            // 下标与分析（ParticleStationarity.Entries）同一口径：只数对象项
+            JsonObject[] operators = [.. (definition["operator"] as JsonArray ?? []).OfType<JsonObject>()];
+            foreach (JsonObject patch in owner)
+            {
+                JsonObject item = operators[patch["value_index"]!.GetValue<int>()];
+                // 没写这个键时分析按渲染器缺省值（20）记旧值，直接插入；写成数字的核对旧值
+                if (item["timescale"] is JsonValue value && value.TryGetValue(out double _)) Verify(value, patch["old_value"]!.GetValue<double>());
+                item["timescale"] = patch["new_value"]!.GetValue<double>();
+            }
+            string patched = resource + ".periodica-" + owner.Key + ".json";
+            string path = ProjectSource.ContainedPath(captureProject, patched);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, definition.ToJsonString(), cancellationToken);
+            layer["particle"] = patched;
         }
     }
 

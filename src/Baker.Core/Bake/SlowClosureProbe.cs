@@ -91,7 +91,8 @@ internal static class SlowClosureProbe
     internal const double MeasurableLevels = 3;
 
     /// <summary>
-    /// 振幅推不出的慢项超预算改速（evidence 带 <see cref="ShaderPeriodAnalysis.MeasuredNote"/>、首选候选里 |δ| 超过逐项预算）实测看不看得出。
+    /// 振幅推不出的慢项超预算改速（evidence 带 <see cref="ShaderPeriodAnalysis.MeasuredNote"/>、首选候选里 |δ| 超过逐项预算，含改挂旋钮的慢分量）
+    /// 与冻结的粒子湍流场（<see cref="LoopAnalysis.ParticleFieldPatchKind"/> 补丁）实测看不看得出。
     /// 看成品的人没有原作对照，能感知的是速度变化，所以量两版的速度差：这些项的补丁还原成原速（before）与改速后（after）
     /// 各只渲所有者层，从时间 0 起出第 0 帧和第 t 帧。两版第 0 帧必须逐位相同（同一状态出发；不同说明所有者层里有随机内容，读数不可信）。
     /// 读数（见 <see cref="MeasureAsync"/>，位移与亮度变化都算）按 1080p 口径，≤ 0.1 px/s（1.0.2 摆动慢项同一门限）才放行；渲染或准备失败记 not_measured（probe_failed），不抛出。
@@ -106,7 +107,10 @@ internal static class SlowClosureProbe
             .Select(item => item["component"]!.GetValue<string>())];
         string[] relaxed = [.. candidates[0]!["components"]!.AsArray().OfType<JsonObject>()
             .Where(c => measured.Contains(c["id"]!.GetValue<string>()) && Math.Abs(c["delta_percent"]!.GetValue<double>()) > budget + 1e-9)
-            .Select(c => c["id"]!.GetValue<string>()).Order(StringComparer.Ordinal)];
+            .Select(c => c["id"]!.GetValue<string>())
+            // 冻结的粒子湍流场不进求解器，按补丁认项；还原成原速就是去掉这条补丁
+            .Concat(candidates[0]!["patches"]!.AsArray().OfType<JsonObject>().Where(patch => patch["kind"]?.GetValue<string>() == LoopAnalysis.ParticleFieldPatchKind)
+                .Select(patch => patch["component"]!.GetValue<string>())).Order(StringComparer.Ordinal)];
         if (relaxed.Length == 0) return null;
         static bool Retimed(JsonNode? patch, string[] relaxed) => relaxed.Contains(patch?["component"]?.GetValue<string>() ?? "");
         // 这些项按原速的 speed 倍跑的一版：旋钮补丁新值 = (分量倍率 / 同 pass 时间倍率)^指数，所以 speed 倍对应 (speed / 时间倍率)^指数；为 1 就去掉这条补丁。
@@ -117,6 +121,13 @@ internal static class SlowClosureProbe
             JsonArray patches = variant["loop"]!["candidates"]![0]!["patches"]!.AsArray();
             foreach (JsonObject patch in patches.OfType<JsonObject>().Where(patch => Retimed(patch, relaxed)).ToArray())
             {
+                // 粒子场补丁写的是 timescale 本身（冻结为 0）：原速去掉补丁，speed 倍取原值的 speed 倍
+                if (patch["kind"]?.GetValue<string>() == LoopAnalysis.ParticleFieldPatchKind)
+                {
+                    if (speed == 1) patches.Remove(patch);
+                    else patch["new_value"] = speed * patch["old_value"]!.GetValue<double>();
+                    continue;
+                }
                 double time = patches.OfType<JsonObject>().FirstOrDefault(other => other["constant_key"]?.GetValue<string>() == ShaderPeriodAnalysis.TimeScaleKey &&
                     JsonNode.DeepEquals(other["owner_layer_id"], patch["owner_layer_id"]) && JsonNode.DeepEquals(other["effect_index"], patch["effect_index"]) &&
                     JsonNode.DeepEquals(other["pass_index"], patch["pass_index"]))?["new_value"]?.GetValue<double>() ?? 1;
@@ -152,7 +163,9 @@ internal static class SlowClosureProbe
             await using var schedulerAfter = openedAfter;
             record["time_scale_shaders"] = new JsonObject { ["before"] = shadersBefore.DeepClone(), ["after"] = shadersAfter.DeepClone() };
             // 改速后的采集工程里，每条改速补丁的键都要真的改写进了覆盖 shader（写覆盖时读不到源码或解析不出 pass 着色器会静默跳过）：缺了就是没改速，不必渲染
-            if (UnwrittenKeys(shadersAfter, retimed.Select(patch => patch["constant_key"]!.GetValue<string>())) is { Length: > 0 } missing)
+            // 粒子场补丁改写的是粒子定义副本，不在覆盖 shader 里，不参与这项核对
+            if (UnwrittenKeys(shadersAfter, retimed.Where(patch => patch["kind"]?.GetValue<string>() != LoopAnalysis.ParticleFieldPatchKind)
+                .Select(patch => patch["constant_key"]!.GetValue<string>())) is { Length: > 0 } missing)
             {
                 readings.Add(new JsonObject { ["status"] = "not_measured", ["reason"] = "patch_not_written",
                     ["missing_keys"] = new JsonArray([.. missing.Select(key => (JsonNode)key)]) });

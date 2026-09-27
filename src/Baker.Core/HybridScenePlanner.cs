@@ -47,7 +47,10 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int[]? FullLoopLayerIds = null,
     // 慢项实测的退回：振幅推不出的慢项一律按逐项预算（不放开改速，见 LoopAnalysis）。分析收尾的速度实测（SlowClosureProbe.SpeedAsync）
     // 没放行（看得出、量不到或渲染失败）时自动打开，随 settings 走，烘焙前刷新循环与分析同一口径；默认关时不写进 settings，plan 逐字不变。
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool BudgetOnlyRetime = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool BudgetOnlyRetime = false,
+    // 慢分量改速：带可用旋钮的慢分量（loop.candidates[].slow_components[].retimable）改挂旋钮改速或冻结，放不放行由速度实测。
+    // 慢分量闭合预检没过时自动打开，随 settings 走；BudgetOnlyRetime 打开后不再生效。默认关时不写进 settings，plan 逐字不变。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool RetimeSlowComponents = false);
 
 /// <summary>Plans video replacement from source hierarchy and observed input dependencies.</summary>
 /// <param name="display">未指定宽高时用来铺满的屏幕尺寸；省略时读本机主显示器物理分辨率，测试可注入固定值。</param>
@@ -95,19 +98,30 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // 这样同一组图层换了布局或别的组变了，也能命中。
             JsonArray? groupLayers = videoGroups is null ? null : new JsonArray([.. videoGroups.OfType<JsonObject>().Select(group =>
                 (JsonNode)new JsonObject { ["id"] = group["id"]?.DeepClone(), ["layer_ids"] = group["layer_ids"]?.DeepClone() })]);
-            string key = "loop-v12-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, groupLayers,
+            string key = "loop-v13-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, groupLayers,
                 request.FpsNumerator, request.FpsDenominator, profile, request.LoopPreference,
-                request.FullLoopLayerIds, request.BudgetOnlyRetime);
+                request.FullLoopLayerIds, request.BudgetOnlyRetime, request.RetimeSlowComponents);
+            double ceiling = LoopLengthMaximumOf(request);
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
                 scene, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
-                LoopLengthMaximumOf(request), videoGroups, steps, request.FullLoopLayerIds,
+                ceiling, videoGroups, steps, request.FullLoopLayerIds,
                 // 逐层"不能"按档位回退链能走到的最大预算证明（SearchSpace：没给 --retime-budget 时一直退到效率档）
                 request.RetimeBudgetPercent is null && request.Preset is not null ? Math.Max(profile.CommonRetimePercent, RetimeProfile.MaximumBudgetPercent) : null,
-                request.BudgetOnlyRetime);
+                request.BudgetOnlyRetime, request.RetimeSlowComponents);
             return UnresolvedNotes.Unpack(AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
             {
                 LoopReport loop = Analyze(input, null);
+                // 档位上限（600 s）内凑不出公共循环：判"周期超上限"之前，按兼容档的上限（1200 s）、同一预算再求一次，有解才用
+                // （视频变长，画面不变）。用户给了 --loop-max-seconds 时不动；plan 的 loop.maximum_seconds 记实际用的上限。
+                double wider = RetimeProfile.PresetLoopMaximumSeconds(RetimeProfile.Compatibility);
+                if (loop.Candidates.Count == 0 && profile.LoopMaximumSource == RetimeProfile.FromPreset && ceiling < wider &&
+                    loop.NoCandidateReason?.Reason.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling)
+                {
+                    (double narrow, ceiling) = (ceiling, wider);
+                    if (Analyze(scene(), null) is { Candidates.Count: > 0 } relaxed) loop = relaxed;
+                    else ceiling = narrow;
+                }
                 // 与别的组共用时钟的组，自身周期不整除 L 时给 L 加"是它的倍数"的约束重解一次；
                 // 只在重解后候选与未解析项都不变差时采用，否则保持原解（这些组录 L 帧）。
                 if (loop.GroupClockSteps.Count > 0 && Analyze(scene(), loop.GroupClockSteps) is { Candidates.Count: > 0 } stepped &&

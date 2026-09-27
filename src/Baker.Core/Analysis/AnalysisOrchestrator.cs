@@ -75,6 +75,7 @@ internal sealed class AnalysisOrchestrator
         // 结果不行多半是预计不省电，多留实时、单次轨判实时只会烘得更少，救不回来。
         // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
         // 读数（漂移上界、闭合读数、渲染器墙钟）写进 plan 的 slow_closure_probe。闭合的照常判能，烘焙时接缝门照常复核。
+        // 没闭合的层上有能改挂旋钮的慢分量时，留实时之前先改速或冻结它们重分析（RetimeSlowComponents），过速度实测才放行。
         // 振幅推不出的慢项超预算改速先实测速度差（SlowClosureProbe.SpeedAsync）：看得出、量不到或渲染失败就按逐项预算整套再分析
         // （BudgetOnlyRetime，与没有这条放宽时同一结果）；读数写进 plan 的 slow_speed_probe。放行的改速照常过闭合预检与烘焙接缝门，阈值不动。
         var slowProbes = new JsonArray();
@@ -98,6 +99,22 @@ internal sealed class AnalysisOrchestrator
             int[] retained = [.. (result["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()];
             var (open, reasons) = SlowClosureRetention(result, round, retained, slowProbes);
             if (open.Length == 0) break;
+            // 没闭合的层上有能改挂旋钮的慢分量：先改速或冻结它们（RetimeSlowComponents）整套再分析，放不放行由上面的速度实测；
+            // 实测没放行（BudgetOnlyRetime）或改完仍没闭合，才留实时
+            if (!orchestrator.request.RetimeSlowComponents && !orchestrator.request.BudgetOnlyRetime &&
+                ((result["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["slow_components"] as JsonArray ?? []).OfType<JsonObject>().Any(slow =>
+                    slow["retimable"]?.GetValue<bool>() == true && SceneGraph.Int(slow["owner_layer_id"]) is int owner && open.Contains(owner)))
+            {
+                var trial = new AnalysisOrchestrator(orchestrator.request with { RetimeSlowComponents = true }, analyze, space,
+                    space.Budget(), tools, Path.Combine(run, $"slow-retime-{slowProbes.Count}"), cache, token, memo, progress);
+                JsonObject retimed = await trial.SelectAsync();
+                // 改速后反而生成不了：不采用，照旧留实时
+                if (Admission.Accepted(retimed))
+                {
+                    (orchestrator, result) = (trial, retimed);
+                    continue;
+                }
+            }
             orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. retained, .. open],
                 RetainLiveReasons = reasons }, analyze, space,
                 space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token, memo, progress);

@@ -118,6 +118,22 @@ internal static class ShaderSignatureChecks
             check(sway.Candidates.Count == 0 && !sway.Evidence.Any(x => x.Evidence.EndsWith(ShaderPeriodAnalysis.MeasuredNote, StringComparison.Ordinal)),
                 "foliagesway without a computable amplitude stays on the per-term budget and never enters the speed check");
 
+            // 慢分量（100000 s，唯一旋钮 0.25）：默认照旧不进求解器、标可改挂旋钮；闭合预检没过后的重分析（retimeSlow）改挂旋钮，
+            // 离原速最近的圈数是 0（冻结，旋钮取 0），证据带实测标记；实测没放行后（budgetOnly）回到慢分量
+            LoopCandidate SlowRetimed(bool retimeSlow, bool budgetOnly = false) => LoopAnalysis.Analyze(
+                JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
+                  {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
+                  {"seconds":100000,"num":100000,"den":1,"pi":0,"knobs":[{"stage":"frag","literal":0.25,"inverse":false}]}]}
+                """), [10], 30, 1, videoGroups: new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }),
+                budgetOnlyRetime: budgetOnly, retimeSlow: retimeSlow).Candidates[0];
+            LoopCandidate kept = SlowRetimed(false), frozen = SlowRetimed(true);
+            check(kept.SlowComponents is [{ Retimable: true }] && kept.ToJson()["slow_components"]![0]!["retimable"]!.GetValue<bool>() &&
+                frozen.SlowComponents.Count == 0 && frozen.Components.Single(x => x.ComponentId == slowTerm).Cycles == 0 &&
+                frozen.Patches.OfType<LoopValuePatch>().Single(x => x.ComponentId == slowTerm).NewValue == 0 &&
+                SlowRetimed(true, budgetOnly: true).SlowComponents is [{ Retimable: true }],
+                "a slow term with a usable knob stays a slow component until its closure fails, then freezes at the nearest cycle count pending the speed check");
+
             // 同一 pass 剩 7 s 与 3π s 两类且没有旋钮：每项独立调频有解（上限 600 s）记未收敛 term_not_retimable；
             // 上限 10 s 时独立调频也无解，才是"不能"
             string split = """
