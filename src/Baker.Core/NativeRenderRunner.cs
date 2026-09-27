@@ -136,7 +136,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             throw new ArgumentException("Original loop window retention requires GPU crossfade.");
         if (request.EncodedFrames is { } limit && (request.FrameSamplesOnly || request.IncludeAudio || limit == 0 || limit > request.Frames))
             throw new ArgumentException("Encoded frames must be a positive prefix of an ordinary silent video render.");
-        // 只出样本的渲染也能留原帧，前提是留的都是样本帧（慢分量预检只要 1 帧原帧、不编码，见 GroupRenderScheduler.ClosureProbeRequest）。
+        // 只出样本的渲染也能留原帧，前提是留的都是样本帧（慢分量预检一次留第 0 与第 P 帧，见 GroupRenderScheduler.ClosureProbeRequest）。
         if (request.RetainFrames is { } retain && (request.FrameSamplesOnly && retain.Any(frame => !IsSampleFrame(request, frame)) || retain.Length == 0 ||
             retain.Length > 32 ||
             retain.Any(frame => frame >= request.Frames) || retain.Zip(retain.Skip(1)).Any(pair => pair.Second <= pair.First)))

@@ -171,12 +171,11 @@ public class BakePathTests
         Assert.IsType<FileNotFoundException>(error);
     });
 
-    // 慢分量闭合预检的两帧必须是连续播放的第 0 帧与第 P 帧，且各是一个渲染进程光栅化的第一帧。
-    // 假渲染器（Python）按渲染器实测的缺陷建模：同一进程里读出的每一帧都停在该进程第一次光栅化的那一帧（3448877775 层 332：
-    // 一次稀疏渲染先画第 0 帧、隔 P−1 个只模拟的帧再画第 P 帧，读回与第 0 帧逐像素相同，预检误判闭合）。
-    // 每帧字节 = 模拟帧号 mod 251。把预检改回"一次渲染留第 0 与第 P 帧"，第二帧就等于第一帧，这条失败。
+    // 慢分量闭合预检每组一次稀疏渲染：1 帧预热后渲 P+1 帧、步长 P，只光栅化第 0 与第 P 帧并留原帧。
+    // 假渲染器（Python）每帧字节 = 模拟帧号 mod 251：留下的两帧必须来自模拟帧 W 与 W+P，且只起了一个渲染进程。
+    // 改回两次 1 帧渲染时 job 数与帧数对不上，这条失败。
     [Fact]
-    public async Task SlowClosurePairComesFromFramesZeroAndP() => await TestTemp.Run(async dir =>
+    public async Task SlowClosurePairComesFromOneSparseRender() => await TestTemp.Run(async dir =>
     {
         string? python = new[] { "python3", "python" }.SelectMany(name => (Environment.GetEnvironmentVariable("PATH") ?? "")
                 .Split(Path.PathSeparator).Select(folder => Path.Combine(folder, OperatingSystem.IsWindows() ? name + ".exe" : name)))
@@ -192,12 +191,11 @@ public class BakePathTests
             warm, frames = job.get("warmup_frames", 0), job["frames"]
             stride, phase = job.get("output_frame_stride", 1), job.get("output_frame_phase")
             size = (job.get("output_sample_width") or job["width"]) * (job.get("output_sample_height") or job["height"]) * 4
-            latched, written = None, 0
+            written = 0
             for frame in range(warm, warm + frames):
                 offset = (frame - warm) % stride
                 if offset != 0 and offset != phase: continue
-                latched = frame if latched is None else latched
-                sys.stdout.buffer.write(bytes([latched % 251]) * size); written += 1
+                sys.stdout.buffer.write(bytes([frame % 251]) * size); written += 1
             sys.stdout.flush()
             json.dump({"status": "complete", "written_frames": written, "renderer_error_count": 0, "output_frame_stride": stride,
                        "output_frame_phase": phase, "effect_render_scale": 1.0, "match_effect_resolution": False,
@@ -226,19 +224,14 @@ public class BakePathTests
         var settings = new HybridAnalyzeRequest(1, Fixture, dir, dir, 64, 48, 30, 1);
         await using var scheduler = new GroupRenderScheduler(runner, new HybridBakeRequest(2, plan, dir), plan, settings, groups,
             Fixture, Path.Combine(dir, "out"), new JsonObject(), 60, [60], 0, 7, [], 1, PlaybackEncoderSelection.Software, null, CancellationToken.None);
-        ulong warmup = scheduler.ClosureProbeRequest(0, Path.Combine(dir, "unused"), 0).WarmupFrames;
-        var (first, wrap, _) = await SlowClosureProbe.FramePairAsync(runner, scheduler, 0, 60, Path.Combine(dir, "probe"), CancellationToken.None);
+        RenderRequest request = scheduler.ClosureProbeRequest(0, Path.Combine(dir, "probe"));
+        Assert.True(request is { Frames: 61, FrameSampleStride: 60, FrameSamplesOnly: true, PlaybackEncoderKind: null, GpuEncoding: null });
+        JsonObject render = await runner.RenderAsync(request, null, CancellationToken.None);
+        byte[] first = await LoopClosureCheck.ReadRetainedFrameAsync(render, 0), wrap = await LoopClosureCheck.ReadRetainedFrameAsync(render, 60);
         Assert.Equal(64 * 48 * 4, first.Length);
-        Assert.Equal((byte)(warmup % 251), first[0]);
-        Assert.Equal((byte)((warmup + 60) % 251), wrap[0]);
-        // 两次渲染的 job 只差预热：1 帧、步长 1、全分辨率原帧，与改动前（带编码的 1 帧请求）交给渲染器的模拟输入相同。
-        foreach ((string name, ulong extra) in new[] { ("group-0-0", 0UL), ("group-0-p", 60UL) })
-        {
-            JsonObject job = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(dir, "probe", name, "renderer-job.json")))!.AsObject();
-            Assert.Equal(1UL, job["frames"]!.GetValue<ulong>());
-            Assert.Equal(warmup + extra, job["warmup_frames"]!.GetValue<ulong>());
-            Assert.Null(job["output_sample_width"]);
-        }
+        Assert.Equal((byte)(request.WarmupFrames % 251), first[0]);
+        Assert.Equal((byte)((request.WarmupFrames + 60) % 251), wrap[0]);
+        Assert.Equal("sparse_rgba", render["native_frame_transport"]!.GetValue<string>());
     });
 
     // 测速准备或渲染失败（这里是源工程不存在）记 not_measured / probe_failed，不让整次分析崩溃；调用方据此按逐项预算重分析。
