@@ -88,6 +88,17 @@ internal static class PlainLanguageChecks
             !PlainLanguage.HasTurnOffCard(subject) && PlainLanguage.TurnOffItems(subject, false).Length == 0,
             "plain language: dependency blockage does not claim that disabling effects leaves no content");
 
+        // 有收敛理由（未收敛：暂不支持）时，第二行与摘要读同一个理由，不读第一条阻断"部分内容必须实时渲染"。
+        var unsupported = Plan(Layer(10, null, "底", live: true, ["bake_allocation"]));
+        string reason = MessageCatalog.Get(ResidualMasking.NotSupportedReasonKey, MessageCatalog.Chinese);
+        unsupported["blockers"] = new JsonArray("Bake allocation rejected");
+        unsupported["blockers_localized"] = new JsonArray(new JsonObject {
+            ["key"] = "blocker.bake_allocation", ["zh"] = MessageCatalog.Get("blocker.bake_allocation", MessageCatalog.Chinese) });
+        unsupported["suitability"] = new JsonObject { ["verdict"] = "not_suitable", ["rule"] = "blockers_unresolved",
+            ["reason_key"] = ResidualMasking.NotSupportedReasonKey, ["reason_zh"] = reason, ["reason_en"] = "" };
+        check(PlainLanguage.ReasonLine(unsupported, false) == reason && PlanNarrative.Summarize(unsupported)["zh"]!.GetValue<string>().Contains(reason),
+            "plain language: the second verdict line states the same converged reason as the summary, not the first blocker");
+
         // 3D 镜头。
         var camera = Plan(Layer(10, null, "底", live: false, []));
         camera["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.perspective_needs_screenspace" });

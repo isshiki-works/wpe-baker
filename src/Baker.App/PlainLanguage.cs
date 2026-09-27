@@ -46,6 +46,23 @@ internal static class PlainLanguage
         L(english, "预计功耗高于原壁纸", "Estimated power use is higher than the original wallpaper.");
 
     /// <summary>
+    /// 不支持时的结论第二行：与摘要同一个理由（<see cref="PlanNarrative.SuitabilityReason"/>）；
+    /// 没有收敛理由时取第一条阻塞原因的第一句，再没有就退回下一步动作提示。
+    /// </summary>
+    public static string ReasonLine(JsonObject? plan, bool english)
+    {
+        if (NoBenefitExpected(plan)) return NoBenefitLine(english);
+        if (plan?["video_dominant"]?["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
+            return L(english, "原壁纸主要是视频，生成后不省电。", "The wallpaper is mostly video already; generating won't save power.");
+        if (PlanNarrative.SuitabilityReason(plan) is (string zh, string en)) return english ? en : zh;
+        string[] blockers = AppJsonPresentation.BlockerLines(plan, english);
+        if (blockers.Length == 0) return NextAction(plan, english);
+        string text = blockers[0];
+        int index = text.IndexOf(english ? '.' : '。');
+        return index < 0 ? text : text[..(index + 1)];
+    }
+
+    /// <summary>
     /// 结论第二行：生成不了时指向详情，其余显示数字行（见 <see cref="Numbers"/>）。
     /// </summary>
     public static string NextAction(JsonObject? plan, bool english) =>
@@ -53,7 +70,7 @@ internal static class PlainLanguage
             ? L(english, "未找到可用的生成方式", "No usable way to generate was found") : Numbers(plan, english);
 
     /// <summary>
-    /// 烘不了（能烘、含"关掉几样就能烘"时为 false）。原因句不在这里写，界面第二行读 blockers_localized 的第一条。
+    /// 烘不了（能烘、含"关掉几样就能烘"时为 false）。原因句不在这里写，界面第二行见 <see cref="ReasonLine"/>。
     /// 判据全部来自 plan 已有的字段：取舍清单的状态、suitability 的 rule、阻塞原因的 key、有没有循环。
     /// </summary>
     private static bool CannotBake(JsonObject plan)

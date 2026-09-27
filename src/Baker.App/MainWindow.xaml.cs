@@ -559,10 +559,10 @@ public partial class MainWindow : Window
         GettingStartedHint.Visibility = analyzed || rejected ? Visibility.Collapsed : Visibility.Visible;
         VerdictLine.Visibility = analyzed || rejected ? Visibility.Visible : Visibility.Collapsed;
         VerdictLine.Text = analyzed ? PlainLanguage.Verdict(hybridPlan, english) : rejected ? L("不支持", "Not supported") : "";
-        // 不支持时第二行只放第一条阻塞原因的第一句，不放整段；其余显示数字行。
+        // 不支持时第二行只放一句理由（与摘要同一理由，见 PlainLanguage.ReasonLine），不放整段；其余显示数字行。
         // 不支持的来源放整句理由：英文句中有 project.json 的点号，按句号截会截断。
         NumbersLine.Text = ReasonOnly(rejected ? sourceRejection!.Text(AppEnvironment.Language) : !analyzed ? ""
-            : PlainLanguage.CannotGenerate(hybridPlan) ? FirstBlockerSentence()
+            : PlainLanguage.CannotGenerate(hybridPlan) ? PlainLanguage.ReasonLine(hybridPlan, english)
             : PlainLanguage.NextAction(hybridPlan, english));
         NumbersLine.Visibility = NumbersLine.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         if (AppJsonPresentation.SuggestedSettings(hybridPlan) is not null)
@@ -583,19 +583,6 @@ public partial class MainWindow : Window
         string prefix = L("不可生成：", "Cannot generate: ");
         if (!text.StartsWith(prefix, StringComparison.Ordinal) || text.Length == prefix.Length) return text;
         return char.ToUpperInvariant(text[prefix.Length]) + text[(prefix.Length + 1)..];
-    }
-
-    /// <summary>第一条阻塞原因的第一句（到第一个句号为止），没有阻塞原因文本时退回下一步动作提示。</summary>
-    private string FirstBlockerSentence()
-    {
-        if (PlainLanguage.NoBenefitExpected(hybridPlan)) return PlainLanguage.NoBenefitLine(english);
-        if (hybridPlan?["video_dominant"]?["status"]?.GetValue<string>() == VideoDominance.ShellStatus)
-            return L("原壁纸主要是视频，生成后不省电。", "The wallpaper is mostly video already; generating won't save power.");
-        string[] blockers = AppJsonPresentation.BlockerLines(hybridPlan, english);
-        if (blockers.Length == 0) return PlainLanguage.NextAction(hybridPlan, english);
-        string text = blockers[0];
-        int index = text.IndexOf(english ? '.' : '。');
-        return index < 0 ? text : text[..(index + 1)];
     }
 
     /// <summary>折叠的"技术细节"面板：纯数字表，一行一个"名称：值"，不解释、不写段落。</summary>

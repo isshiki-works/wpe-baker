@@ -28,11 +28,21 @@ internal static class SlowClosureProbe
         JsonObject candidate = plan["loop"]!["candidates"]![0]!.AsObject();
         ulong frames = candidate["frames"]!.GetValue<ulong>();
         ulong[] groupFrames = [.. groups.Select(group => candidate["group_frames"]?[group["id"]!.GetValue<string>()]?.GetValue<ulong>() ?? frames)];
+        // 与烘焙同一份预热（粒子预热 + 入场帧）与残差起点：不带入场帧时，有入场动画的组第 0 帧还在入场里，必然判没闭合。
+        // 残差分类取分析写下的 loop.residual_masking（烘焙准入门同一判定，能生成的 plan 不会是拒绝态）。
+        var runtime = JsonNode.Parse(await File.ReadAllTextAsync(plan["runtime_evidence"]!.GetValue<string>(), token))!.AsObject();
+        JsonObject? residual = plan["loop"]?["residual_masking"] is JsonObject masking &&
+            masking["status"]?.GetValue<string>() != "no_residual" ? masking : null;
+        bool daytimeExport = DaytimeSplit.PrepareDynamicExport(original["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(SceneGraph.Id),
+            plan, runtime["runtime_dependencies"]!.AsArray()) is not null;
+        var (crossfade, particleWarmup, intro, residualGroups) = HybridBakeService.GroupTiming(plan, settings, residual, runtime, daytimeExport);
         var runner = new NativeRenderRunner(tools);
         await using var scheduler = new GroupRenderScheduler(runner, new HybridBakeRequest(2, plan, output), plan, settings, groups,
-            captureProject, output, snapshot, frames, groupFrames, 0, 0, [], 1, PlaybackEncoderSelection.Software, null, token);
+            captureProject, output, snapshot, frames, groupFrames, crossfade, particleWarmup + intro, residualGroups, 1,
+            PlaybackEncoderSelection.Software, null, token);
         try
         {
+            if (residualGroups.Length > 0) await LoopStartSelector.SearchAsync(runner, scheduler, 1, null, new StageTiming(), token);
             for (int index = 0; index < groups.Length; index++)
             {
                 if (GroupVerdicts.SlowDrift(plan, Layers(groups[index])) is not (string degrees, int[] owners)) continue;

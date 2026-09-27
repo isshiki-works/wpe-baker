@@ -81,11 +81,18 @@ internal sealed class AnalysisOrchestrator
                 .SelectMany(record => record["owner_layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>()).Except(retained)];
             foreach (JsonNode? record in round) slowProbes.Add(record!.DeepClone());
             if (open.Length == 0) break;
-            orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. retained, .. open] }, analyze, space,
+            orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. retained, .. open],
+                RetainLiveReasons = HybridLoopAllocation.RetainReasons(result, []) }, analyze, space,
                 space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token);
             result = await orchestrator.SelectAsync();
         }
         if (slowProbes.Count > 0) result["slow_closure_probe"] = slowProbes;
+        // 留实时后生成不了：裁定与结论按预检读数重算（HybridSuitability 判有证明的不能）。
+        if (slowProbes.Count > 0 && !Admission.Accepted(result))
+        {
+            result["suitability"] = HybridSuitability.Verdict(result);
+            PlanNarrative.Attach(result);
+        }
         string stagedPlan = Path.Combine(run, "selected-plan.json");
         await VideoSceneBuilder.WriteJsonAsync(stagedPlan, result, token);
         File.Move(stagedPlan, Path.Combine(root, "plan.json"), true);
@@ -181,10 +188,13 @@ internal sealed class AnalysisOrchestrator
         for (int round = 0; current["video_groups"] is JsonArray { Count: > 1 } groups; round++)
         {
             int[] kept = [.. Ids(current["settings"]?["retain_live_root_ids"]).Concat(Ids(current["loop_allocation_fallback"]?["retain_live_root_ids"]))];
+            // 已留实时层的原因码跟着重查走（分配回退点名层的未解析原因、plan 已带的），被保留层不被盖成只剩 retained_by_cost_trial。
+            var keptReasons = HybridLoopAllocation.RetainReasons(current, Ids(current["loop_allocation_fallback"]?["trigger_layer_ids"]));
             JsonObject? best = null, next = null;
             for (int index = 0; index < groups.Count; index++)
             {
-                var (plan, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = [.. kept.Concat(Ids(groups[index]?["root_ids"])).Distinct()] },
+                var (plan, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = [.. kept.Concat(Ids(groups[index]?["root_ids"])).Distinct()],
+                    RetainLiveReasons = keptReasons },
                     analyze, space, space.Budget(), tools, Path.Combine(run, $"retreat-{round}-{index}"), cache, token).SolveAsync(interaction);
                 if (Viable(plan)) { if (best is null || Margin(plan) > Margin(best)) best = plan; }
                 else if (Gap(plan) < Gap(next ?? current)) next = plan;
