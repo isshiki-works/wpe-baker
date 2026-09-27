@@ -110,6 +110,14 @@ internal static class LoopAnalysis
         }
         // 先查剩多个 π 类的 pass 所在的层（实际模型里这些 pass 不成分量）：记了未解析项的层本来就留实时，下面点名时不再参与合并
         Prove(shader.Terms.Where(x => x.Split).Select(x => x.OwnerLayerId).Distinct());
+        (string Id, HashSet<int> Layers)[] groups = [.. (videoGroups ?? []).OfType<JsonObject>().Select(group => (group["id"]!.GetValue<string>(),
+            (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>().ToHashSet()))];
+        // 凑不出公共循环、组间又没有共享动画：各组只解自己的分量、按自己的周期录（PerGroupLoop），不再点名留实时。
+        (LoopSolve Solve, Dictionary<string, ulong> Frames)? perGroup = noLoop && stepCycles.Length == 0 && shader.Settle is null && scriptSettle is null
+            ? PerGroupLoop(scene, runtime, groups, shader, animation, [.. particleCycles, .. scriptCycles], unresolved, solve.Result,
+                fullLoopLayerIds, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
+            : null;
+        if (perGroup is not null) (solve, noLoop) = (perGroup.Value.Solve, false);
         // 各分量都有周期证明、却在上限内凑不出公共循环：点名并不进的所有者层，由分配回退把它们的作者子树留实时，其余照常规划；这些层再逐层查
         int[]? noCommonLoopOwners = noLoop
             ? NoCommonLoopOwners(shader, animation, particleCycles, scriptCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
@@ -159,8 +167,6 @@ internal static class LoopAnalysis
         // 起点 0 不闭合但整周期预热后闭合，候选带上预热帧数；两者都不闭合，候选移除并写明理由。
         float[][] spriteTables = animation.Where(x => x.SpriteFrameTimes is not null).Select(x => x.SpriteFrameTimes!).ToArray();
         int spriteRejectedCandidates = 0;
-        (string Id, HashSet<int> Layers)[] groups = [.. (videoGroups ?? []).OfType<JsonObject>().Select(group => (group["id"]!.GetValue<string>(),
-            (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>().ToHashSet()))];
         Dictionary<int, float[][]> spriteTablesByOwner = animation.Where(x => x.SpriteFrameTimes is not null).GroupBy(x => x.OwnerLayerId)
             .ToDictionary(owner => owner.Key, owner => owner.Select(x => x.SpriteFrameTimes!).ToArray());
         List<ulong>? clockSteps = null;
@@ -172,7 +178,7 @@ internal static class LoopAnalysis
                 spriteSeam = SpriteSeamPhase.Select(spriteTables, fpsNumerator, fpsDenominator, (ulong)solved.Frames);
                 if (spriteSeam.AtOrigin == SpriteSeamPhase.Verdict.Mismatch && spriteSeam.WarmupFrames is null) { ++spriteRejectedCandidates; continue; }
             }
-            var (candidate, groupFrames, steps) = GroupPeriods(solved, groups, solve.Used, unresolved, spriteTablesByOwner,
+            var (candidate, groupFrames, steps) = perGroup is not null ? (solved, perGroup.Value.Frames, []) : GroupPeriods(solved, groups, solve.Used, unresolved, spriteTablesByOwner,
                 // 精灵帧表从全局整周期预热之后起判（0 或 L）。
                 spriteSeam is null ? 0 : spriteSeam.WarmupFrames,
                 fpsNumerator, fpsDenominator, maximumRetimePercent, preference, ceiling, fullLoopLayerIds);
@@ -195,7 +201,9 @@ internal static class LoopAnalysis
                 CommonLoopComponentCycle cycle = candidate.Components.Single(x => x.ComponentId == clip.LockedComponent.Id);
                 if (clip.IsVideo)
                 {
-                    if (!TryVideoRate(clip.LockedComponent.BasePeriod!.ExactSeconds!.Value, cycle.Cycles, candidate.Frames,
+                    // 分组各自循环时，圈数按本组的周期数
+                    if (!TryVideoRate(clip.LockedComponent.BasePeriod!.ExactSeconds!.Value, cycle.Cycles, perGroup is not null &&
+                        groups.FirstOrDefault(g => g.Layers.Contains(clip.OwnerLayerId)).Id is string own && groupFrames.TryGetValue(own, out ulong ownFrames) ? ownFrames : candidate.Frames,
                         fpsNumerator, fpsDenominator, out CommonLoopRational videoRate))
                         throw new InvalidDataException("Video rate override exceeds the supported exact rational range.");
                     if (videoRate != new CommonLoopRational(1)) candidatePatches.Add(new LoopVideoRatePatch(clip.LockedComponent.Id, clip.OwnerLayerId, videoRate));
@@ -423,6 +431,82 @@ internal static class LoopAnalysis
 
     private sealed record LoopSolve(CommonLoopComponent[] Locked, CommonLoopComponent[] Used, bool RetimeClips, bool SingleVideoRetime,
         CommonLoopSearchResult Result);
+
+    /// <summary>
+    /// 公共循环无解时的分组回退：每组只解自己的分量，各按自己的周期 P_g 录；L 取最长的 P_g，其余组记进 group_frames
+    /// （烘焙、接缝门、成品 seek 本来就按组各自的帧数走）。没有时钟的组录 L。组间有共享动画（<see cref="SharesAnimation"/>）、
+    /// 有精灵帧表、有平稳粒子以外的未解析项、有组在 <paramref name="fullLoopLayerIds"/> 里、或任一组自己也无解时返回 null，照旧点名留实时。
+    /// </summary>
+    private static (LoopSolve Solve, Dictionary<string, ulong> Frames)? PerGroupLoop(JsonObject scene, JsonObject runtime,
+        (string Id, HashSet<int> Layers)[] groups, ShaderPeriodAnalysisResult shader, IReadOnlyList<RuntimeTrack> animation,
+        CommonLoopComponent[] cycles, List<LoopUnresolved> unresolved, CommonLoopSearchResult failed, IReadOnlyCollection<int>? fullLoopLayerIds,
+        uint fpsNumerator, uint fpsDenominator, double maximumRetimePercent, CommonLoopRational ceiling, CommonLoopPreference preference)
+    {
+        if (groups.Length < 2 || groups.Any(g => g.Layers.Overlaps(fullLoopLayerIds ?? [])) || animation.Any(x => x.SpriteFrameTimes is not null)) return null;
+        int Group(int layer) => Array.FindIndex(groups, g => g.Layers.Contains(layer));
+        // 粒子锁与脚本分量的 id 第二段是所有者层（particle_*/<层>/…、script/<层>/…）
+        static int Owner(CommonLoopComponent x) => x.Id.Split('/') is [_, var text, ..] && int.TryParse(text, CultureInfo.InvariantCulture, out int id) ? id : -1;
+        var floors = new Dictionary<int, ulong>();
+        foreach (LoopUnresolved item in unresolved)
+        {
+            if (item is not RuntimeTrackUnresolved { Video: false, Particle: { Stationary: true } particle } track || Group(track.OwnerLayerId) is not (>= 0 and int group) ||
+                !NonNegative(particle.LifetimeMaxSeconds, out double lifetime)) return null;
+            floors[group] = Math.Max(floors.GetValueOrDefault(group), (ulong)DefaultLoopFrames(lifetime, fpsNumerator, fpsDenominator, ceiling));
+        }
+        if (SharesAnimation(scene, runtime, groups, [.. shader.Components.Select(x => (x.OwnerLayerId, x.Component)),
+            .. animation.Select(x => (x.OwnerLayerId, x.LockedComponent)), .. cycles.Select(x => (Owner(x), x))])) return null;
+        var solves = new List<LoopSolve>();
+        var periods = new ulong?[groups.Length];
+        for (int index = 0; index < groups.Length; ++index)
+        {
+            HashSet<int> mine = groups[index].Layers;
+            LoopSolve own = SolveLoop(shader with { Components = [.. shader.Components.Where(x => mine.Contains(x.OwnerLayerId))] },
+                [.. animation.Where(x => mine.Contains(x.OwnerLayerId))], [.. cycles.Where(x => mine.Contains(Owner(x)))],
+                fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
+            if (own.Locked.Length == 0) continue;
+            if (!own.Result.SearchComplete || own.Result.Candidates.FirstOrDefault(c => c.Frames >= floors.GetValueOrDefault(index, 1UL)) is not { } best) return null;
+            solves.Add(own with { Result = own.Result with { Candidates = [best] } });
+            periods[index] = best.Frames;
+        }
+        if (solves.Count == 0) return null;
+        ulong loop = periods.Max()!.Value;
+        if (floors.Any(pair => (periods[pair.Key] ?? loop) < pair.Value)) return null;
+        CommonLoopComponentCycle[] components = [.. solves.SelectMany(s => s.Result.Candidates[0].Components)];
+        var candidate = new CommonLoopCandidate(loop, fpsNumerator, fpsDenominator, (double)loop * fpsDenominator / fpsNumerator,
+            components, CommonLoopSolver.RetimeCost(components));
+        return (new LoopSolve([.. solves.SelectMany(s => s.Locked)], [.. solves.SelectMany(s => s.Used)], solves.Any(s => s.RetimeClips), false,
+                failed with { Candidates = [candidate], UnresolvedConstraints = [], FixedFrameStep = null, NoCandidate = null }),
+            groups.Select((g, index) => (g.Id, Frames: periods[index])).Where(x => x.Frames < loop).ToDictionary(x => x.Id, x => x.Frames!.Value, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// 组与组之间有没有共享动画；拿不准的一律算共享。任一成立即共享：
+    /// 分量的所有者不在任何组里（整场景时钟、别处的层）；两组各有一个基准周期相同的分量（同一着色器时间项、同一视频源、同一粒子周期，
+    /// 相位可能要同步）；一条运行时依赖（脚本、控制器、属性绑定的读写，只在初始化时写一次的除外）两端分属两组，或同一个所有者的依赖落到两组；
+    /// 两组里有同一个粒子系统；一层的父链上有另一组的层（父层的动画带着子层动）。
+    /// </summary>
+    internal static bool SharesAnimation(JsonObject scene, JsonObject runtime, (string Id, HashSet<int> Layers)[] groups,
+        (int Owner, CommonLoopComponent Component)[] owned)
+    {
+        int Group(int? layer) => layer is int id ? Array.FindIndex(groups, g => g.Layers.Contains(id)) : -1;
+        if (owned.Any(x => Group(x.Owner) < 0) || owned.Any(x => owned.Any(y => Group(x.Owner) != Group(y.Owner) &&
+            x.Component.BasePeriod?.Seconds == y.Component.BasePeriod?.Seconds))) return true;
+        if ((runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>().Where(d => d["initialization"]?.GetValue<bool>() != true)
+            .GroupBy(d => SceneGraph.Int(d["owner"]))
+            .Any(owner => owner.SelectMany(d => new[] { Group(owner.Key), Group(SceneGraph.Int(d["target"])) }).Where(g => g >= 0).Distinct().Count() > 1)) return true;
+        var objects = (scene["objects"] as JsonArray ?? []).OfType<JsonObject>().Where(o => SceneGraph.Int(o["id"]) is not null)
+            .ToDictionary(o => SceneGraph.Int(o["id"])!.Value);
+        if (groups.SelectMany((g, index) => g.Layers.Select(id => (index, Particle: objects.GetValueOrDefault(id)?["particle"]?.ToJsonString())))
+            .Where(x => x.Particle is not null).GroupBy(x => x.Particle).Any(same => same.Select(x => x.index).Distinct().Count() > 1)) return true;
+        for (int index = 0; index < groups.Length; ++index)
+            foreach (int id in groups[index].Layers)
+            {
+                int? parent = SceneGraph.Int(objects.GetValueOrDefault(id)?["parent"]);
+                for (int depth = 0; parent is int up && depth <= objects.Count; ++depth, parent = SceneGraph.Int(objects.GetValueOrDefault(up)?["parent"]))
+                    if (Group(up) is int other and >= 0 && other != index) return true;
+            }
+        return false;
+    }
 
     /// <summary>
     /// 按所有者层贪心并入（分量多的先并，同数按出现顺序），并入后上限内无解的层记下返回。已有未解析项的所有者本来就留实时，不参与。

@@ -111,6 +111,48 @@ internal static class ExactVideoLoopChecks
         check(rejected, "native video rate evidence accepts integer JSON representations but rejects a different exact rate");
 
         ContentCadence(check, source);
+        PerGroupLoops(check, source);
+    }
+
+    /// <summary>
+    /// 两组各一段视频（20 s、25.7 s），30 s 上限内凑不出公共循环：组间没有共享动画时各组按自己的周期录，
+    /// 最长的一组定 L、另一组记 group_frames，视频不调速；有跨组依赖、同一父链或同一周期时照旧无候选。
+    /// </summary>
+    private static void PerGroupLoops(Action<bool, string> check, ProjectSource source)
+    {
+        JsonObject Clip(int owner, int frames) => new() {
+            ["source_owner_layer_id"] = owner, ["mechanism"] = "video", ["track_name"] = "clip",
+            ["duration_numerator"] = frames, ["duration_denominator"] = 60, ["looping"] = true, ["event_driven"] = false,
+            ["confidence"] = "high", ["playback_rate"] = 1 };
+        var groups = new JsonArray {
+            new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(1) },
+            new JsonObject { ["id"] = "group-2", ["layer_ids"] = new JsonArray(2) } };
+        JsonObject Analyze(int second = 1543, JsonArray? dependencies = null, int? parent = null, JsonArray? videoGroups = null) => LoopAnalysis.Analyze(
+            new JsonObject { ["objects"] = new JsonArray { new JsonObject { ["id"] = 1 }, new JsonObject { ["id"] = 2, ["parent"] = parent } } }, source, null,
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray { Clip(1, 1199), Clip(2, second) },
+                ["runtime_dependencies"] = dependencies ?? [] }, [1, 2], 60, 1, loopLengthMaximumSeconds: 30,
+            videoGroups: (videoGroups ?? groups).DeepClone().AsArray()).ToJson();
+
+        JsonObject own = Analyze();
+        JsonObject candidate = own["candidates"]!.AsArray().Single()!.AsObject();
+        check(candidate["frames"]!.GetValue<ulong>() == 1543 && candidate["group_frames"]!["group-1"]!.GetValue<ulong>() == 1199 &&
+            candidate["group_frames"]!.AsObject().Count == 1 && candidate["patches"]!.AsArray().Count == 0 && own["no_candidate_reason"] is null,
+            "unshared groups with no common loop each record their own video period; the longest sets L and neither video is retimed");
+        check(Analyze(videoGroups: [new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(1, 2) }])["candidates"]!.AsArray().Count == 0,
+            "one group holding both videos still needs a common loop");
+        check(Analyze(dependencies: [new JsonObject { ["owner"] = 1, ["target"] = 2, ["operation"] = "write", ["property"] = "origin" }])
+                ["candidates"]!.AsArray().Count == 0 &&
+            Analyze(dependencies: [new JsonObject { ["owner"] = 1, ["target"] = 2, ["operation"] = "write", ["property"] = "origin", ["initialization"] = true }])
+                ["candidates"]!.AsArray().Count == 1,
+            "a runtime write from one group into the other shares animation; an initialization-only write does not");
+        check(Analyze(parent: 1)["candidates"]!.AsArray().Count == 0, "a layer parented under another group's layer shares its motion");
+        check(LoopAnalysis.SharesAnimation(new JsonObject(), new JsonObject(),
+                [("group-1", [1]), ("group-2", [2])], [(1, new("a", new(2, CommonLoopPeriodEvidence.Analytic))), (2, new("b", new(2, CommonLoopPeriodEvidence.Analytic)))]) &&
+            LoopAnalysis.SharesAnimation(new JsonObject(), new JsonObject(), [("group-1", [1])], [(3, new("a", new(2, CommonLoopPeriodEvidence.Analytic)))]) &&
+            LoopAnalysis.SharesAnimation(new JsonObject { ["objects"] = new JsonArray {
+                    new JsonObject { ["id"] = 1, ["particle"] = "particles/rain.json" }, new JsonObject { ["id"] = 2, ["particle"] = "particles/rain.json" } } },
+                new JsonObject(), [("group-1", [1]), ("group-2", [2])], []),
+            "the same base period in two groups, an ungrouped clock owner, or one particle system in two groups counts as shared");
     }
 
     /// <summary>
