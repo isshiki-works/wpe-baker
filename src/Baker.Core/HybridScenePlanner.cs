@@ -42,8 +42,8 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     // 入场切换的退回（旧行为）：加载即播的单次轨所属层也判实时，bake 不做入场切换。分析引出新 blocker 或合成门拒绝切换时自动打开；
     // 默认关时不写进 settings，plan 逐字不变。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SingleShotLive = false,
-    // 组周期的退回：含这些图层的视频组不按自身周期缩短，录全局 L 帧（LoopAnalysis.GroupPeriods）。按自身周期录的组在接缝门上
-    // 没闭合时由烘焙自动加上；默认空时不写进 settings，plan 逐字不变。
+    // 组周期的退回：含这些图层的视频组不按自身周期缩短，录全局 L 帧（LoopAnalysis.GroupPeriods）。只在请求显式给出时生效：
+    // 烘焙的自身周期退回已删（没有缓变分量的组按解析周期精确闭合，有的由分析的慢分量预检在 P_g 上判）；默认空时不写进 settings，plan 逐字不变。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int[]? FullLoopLayerIds = null,
     // 慢项实测的退回：振幅推不出的慢项一律按逐项预算（不放开改速，见 LoopAnalysis）。分析收尾的速度实测（SlowClosureProbe.SpeedAsync）
     // 没放行（看得出、量不到或渲染失败）时自动打开，随 settings 走，烘焙前刷新循环与分析同一口径；默认关时不写进 settings，plan 逐字不变。

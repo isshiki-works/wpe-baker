@@ -119,17 +119,18 @@ public class AnalysisRerunChainTests
     public void SlowComponentsThatDoNotCloseAreRetainedWithTheirOwnReason()
     {
         // slow-live 重查原先只传 plan 已带的原因，没闭合的慢分量层只剩 retained_by_cost_trial（被当成用户 --retain-live）。
-        JsonObject result = new() { ["settings"] = new JsonObject { ["retain_live_reasons"] = new JsonObject { ["5"] = new JsonArray("source_static") } } };
+        JsonObject result = new() { ["settings"] = new JsonObject { ["retain_live_root_ids"] = new JsonArray(8),
+            ["retain_live_reasons"] = new JsonObject { ["5"] = new JsonArray("source_static") } } };
         JsonArray round = new(
             new JsonObject { ["owner_layer_ids"] = new JsonArray(7, 8), ["loop_closure"] = new JsonObject { ["status"] = LoopClosureCheck.NotClosedStatus } },
             new JsonObject { ["owner_layer_ids"] = new JsonArray(9), ["loop_closure"] = new JsonObject { ["status"] = "closed" } });
-        var records = new JsonArray();
-        var (open, reasons) = AnalysisOrchestrator.SlowClosureRetention(result, round, [8], records);
-        Assert.Equal([7], open);
+        HybridAnalyzeRequest next = AnalysisOrchestrator.ProbeReplan(result, round, new HybridAnalyzeRequest(2, "s", "a", "o"))!;
+        Assert.Equal([8, 7], next.RetainLiveRootIds!);
+        var reasons = next.RetainLiveReasons!;
         Assert.Equal([AnalysisOrchestrator.SlowClosureNotClosed], reasons[7]);
         Assert.Equal(["source_static"], reasons[5]);
-        Assert.Equal([7], records[0]!["retained_live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()));
-        Assert.Null(records[1]!["retained_live_layer_ids"]);
+        Assert.Equal([7], round[0]!["retained_live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()));
+        Assert.Null(round[1]!["retained_live_layer_ids"]);
     }
 
     [Fact]

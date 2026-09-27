@@ -108,8 +108,7 @@ internal static class GroupVerdicts
     /// <summary>计划证明这个组源与运行时都静态，渲出来却有变化：证明失效，拒绝整案（true）。</summary>
     internal static bool RejectStaticProof(JsonObject report, JsonObject group, string id, int[] layers, JsonObject? lateDependency, bool isStatic)
     {
-        if (!(group["static_verified"]?.GetValue<bool>() == true &&
-            group["static_verification"]?["basis"]?.GetValue<string>() == "source_and_runtime_static_proof" && !isStatic)) return false;
+        if (!(Admission.StaticVerified(group) && !isStatic)) return false;
         report["groups"]!.AsArray().Add(new JsonObject { ["id"] = id, ["status"] = "rejected_static_proof",
             ["source_layers"] = Layers(layers), ["late_dependency_validation"] = lateDependency });
         report["status"] = "candidate_rejected_static_proof";
@@ -172,7 +171,8 @@ internal static class GroupVerdicts
 
     /// <summary>
     /// 选中候选（plan 首个循环候选）的缓变分量（slow_components：周期远超循环上限、不进求解器）里最大的漂移上界（换算成度）与所有者层；
-    /// 给了 <paramref name="layers"/> 就只看所有者层在其中的。没有时 null。接缝门照常在 P 处判，它的结果就是结论，这里只决定结论怎么写、退回哪些层。
+    /// 给了 <paramref name="layers"/> 就只看所有者层在其中的。没有时 null。接缝门照常在 P 处判，它的结果就是结论，这里只决定结论怎么写；
+    /// 退回哪些层由分析的闭合预检（<see cref="SlowClosureProbe"/>）定。
     /// </summary>
     internal static (string Degrees, int[] Owners)? SlowDrift(JsonObject plan, int[]? layers = null)
     {
@@ -185,10 +185,9 @@ internal static class GroupVerdicts
 
     /// <summary>
     /// 成品组的接缝没过：记组记录与中英理由，拒绝整案。<paramref name="slowDrift"/>（<see cref="SlowDrift"/>）非空且没过的是
-    /// 循环闭合检查时，理由写缓变分量漂移（reason.slow_component_drift_exceeds_seam），附漂移上界与接缝读数，返回 true
-    /// （烘焙外层据此把这些层退回实时再烘，没得退时这就是"不能"的结论）。
+    /// 循环闭合检查时，理由写缓变分量漂移（reason.slow_component_drift_exceeds_seam），附漂移上界与接缝读数。
     /// </summary>
-    internal static bool RejectSeam(JsonObject report, string id, int[] layers, bool packedAlpha, JsonObject encoded, string video,
+    internal static void RejectSeam(JsonObject report, string id, int[] layers, bool packedAlpha, JsonObject encoded, string video,
         JsonObject? lateDependency, JsonObject? seam, JsonObject? preview, string? slowDrift)
     {
         var rejected = new JsonObject {
@@ -207,7 +206,7 @@ internal static class GroupVerdicts
             new Message("reason.slow_component_drift_exceeds_seam",
                 [slowDrift, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.English)],
                 [slowDrift, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.Chinese)]).Write(report, "reason");
-            return true;
+            return;
         }
         string reasonEnglish = MessageCatalog.Get("bake.encoded_seam_rejected", MessageCatalog.English,
             EncodedLoopValidator.RejectionDetail(seam!, MessageCatalog.English));
@@ -216,7 +215,6 @@ internal static class GroupVerdicts
             ["zh"] = MessageCatalog.Get("bake.encoded_seam_rejected", MessageCatalog.Chinese,
                 EncodedLoopValidator.RejectionDetail(seam!, MessageCatalog.Chinese)),
             ["en"] = reasonEnglish, ["params"] = new JsonArray() };
-        return false;
     }
 
     /// <summary>

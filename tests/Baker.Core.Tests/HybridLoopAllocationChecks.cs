@@ -216,14 +216,13 @@ internal static class HybridLoopAllocationChecks
             ["reason"] = "No analytic loop candidate was found.", ["reason_localized"] = new JsonObject { ["zh"] = "没有候选。" },
             ["plan"] = new JsonObject()
         };
-        markInProgress.Invoke(null, [stale, 2, "loop_candidate_fallback"]);
+        markInProgress.Invoke(null, [stale, "intro_fallback"]);
         check(stale["status"]!.GetValue<string>() == HybridBakeService.InProgressStatus &&
             HybridBakeService.InProgressStatus == "in_progress" &&
-            stale["candidate_attempt"]!.GetValue<int>() == 2 &&
-            stale["in_progress_stage"]!.GetValue<string>() == "loop_candidate_fallback" &&
+            stale["in_progress_stage"]!.GetValue<string>() == "intro_fallback" &&
             stale["loop_validation"]!.GetValue<string>() == "not_performed" &&
             stale["reason"] is null && stale["reason_localized"] is null &&
             !AppJsonPresentation.CandidateCanApply(stale),
-            "a report marked in progress drops the previous verdict, records the candidate index and cannot be applied");
+            "a report marked in progress drops the previous verdict, records the retry stage and cannot be applied");
     }
 }

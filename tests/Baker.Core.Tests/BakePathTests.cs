@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 using Baker.Core;
 using Xunit;
 
-// 烘焙侧此前没有测试执行到的两处：分段渲染的段目录、分析阶段慢分量闭合预检的分流。都不需要 GPU 与 WPE 素材。
+// 烘焙侧此前没有测试执行到的两处：分段渲染的段目录、分析阶段烘焙预检的分流。都不需要 GPU 与 WPE 素材。
 
 [Trait("Layer", "L1")]
 public class BakePathTests
@@ -21,7 +21,8 @@ public class BakePathTests
         Assert.All(new[] { "part0", "part1" }, part => Assert.True(File.Exists(Path.Combine(output, part, "manifest.json")), part));
     });
 
-    // 闭合预检只对含慢分量所有者层的组动手：慢分量所有者不在任何组里时不碰源与渲染器，在组里时才开始准备渲染。
+    // 预检只对要查的组动手：慢分量所有者不在任何组里时不碰源与渲染器，组按自身周期录也一样（没有缓变分量的组按解析周期精确闭合，不渲）；
+    // 所有者在组里时才开始准备渲染。
     [Fact]
     public async Task SlowClosureProbeOnlyTouchesGroupsOwningSlowComponents() => await TestTemp.Run(async dir =>
     {
@@ -33,37 +34,11 @@ public class BakePathTests
             ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 60,
                 ["slow_components"] = new JsonArray(new JsonObject { ["owner_layer_id"] = owner, ["drift_bound_radians"] = 0.01 }) }) },
         };
-        Assert.Empty(await SlowClosureProbe.RunAsync(Plan(2), tools, Path.Combine(dir, "other"), CancellationToken.None));
-        await Assert.ThrowsAnyAsync<Exception>(() => SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), CancellationToken.None));
-    });
-
-    // 接缝门因慢分量漂移拒了某组、点名层 7：退回让层 7 留实时，重新分析，用新计划再烘一次，报告记成 retried。
-    [Fact]
-    public async Task SlowComponentRejectionRetreatsReplansAndRebakes() => await TestTemp.Run(async dir =>
-    {
-        string output = Path.Combine(dir, "bake");
-        var firstPlan = new JsonObject { ["settings"] = PlanSettings.ToJson(new HybridAnalyzeRequest(2, "source", "assets", "analysis")) };
-        var newPlan = new JsonObject { ["settings"] = firstPlan["settings"]!.DeepClone(), ["blockers"] = new JsonArray() };
-        HybridAnalyzeRequest? replanned = null;
-        var baked = new List<JsonObject>();
-        var service = new HybridBakeService(new NativeTools("must-not-run", "must-not-run", "must-not-run", []),
-            bakeOnce: request =>
-            {
-                baked.Add(request.Plan);
-                Directory.CreateDirectory(output);
-                return Task.FromResult(baked.Count == 1
-                    ? new JsonObject { ["status"] = "candidate_rejected_seam",
-                        [NoBenefit.Field] = new JsonObject { [NoBenefit.RetreatRootsField] = new JsonArray(7) } }
-                    : new JsonObject { ["status"] = "candidate_generated" });
-            },
-            analyze: settings => { replanned = settings; return Task.FromResult(newPlan); });
-
-        JsonObject result = await service.BakeAsync(new HybridBakeRequest(2, firstPlan, output));
-
-        Assert.Contains(7, replanned!.RetainLiveRootIds!);
-        Assert.Equal(2, baked.Count);
-        Assert.Same(newPlan, baked[1]);
-        Assert.Equal("retried", result["slow_component_retreat"]?["status"]?.GetValue<string>());
+        Assert.Empty(await SlowClosureProbe.RunAsync(Plan(2), tools, Path.Combine(dir, "other"), TimeSpan.Zero, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<Exception>(() => SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), TimeSpan.Zero, CancellationToken.None));
+        JsonObject own = Plan(2);
+        own["loop"]!["candidates"]![0]!["group_frames"] = new JsonObject { ["group-1"] = 30 };
+        Assert.Empty(await SlowClosureProbe.RunAsync(own, tools, Path.Combine(dir, "own-period"), TimeSpan.Zero, CancellationToken.None));
     });
 
     // 慢项改速实测的读数（伪造渲染器出平滑纹理）。位移：改速后的版本按速度差 dv 横移 dv·t 像素，0.05 px/s 放行、0.5 px/s 看得出。

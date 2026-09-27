@@ -161,6 +161,22 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     }
 
     /// <summary>
+    /// 分析阶段的动态组判定（<see cref="SlowClosureProbe.StreamsAsync"/>）：同一个主渲染请求（同一份预热与起点）录制区间开头的
+    /// min(16, P) 帧，逐帧光栅、只回读降采样样本（样本不同即原帧不同）。不跳帧：跳过光栅的帧之后画出的帧不等于连续播放（见 <see cref="ClosureProbeRequest"/>）。
+    /// </summary>
+    internal RenderRequest StreamProbeRequest(int index, string outputDirectory) =>
+        Probe(MasterRequest(index), outputDirectory, Math.Min(16UL, groupFrames[index]), !Capture(groups[index]).SceneClear,
+            (uint)Math.Round(ResidualMasking.StartSearchSampleWidth * TileScale));
+
+    /// <summary>主渲染请求改成只出样本的预检：不编码、不留原帧、不追踪，其余（捕获几何、预热、补丁、HDR 缩放）不动。</summary>
+    private static RenderRequest Probe(RenderRequest master, string outputDirectory, ulong frames, bool alpha, uint sampleWidth) => master with {
+        OutputDirectory = outputDirectory, Frames = frames, EncodedFrames = null, RetainFrames = null, TraceScene = false,
+        LosslessTest = false, PlaybackEncoderKind = null, GpuEncoding = null, DirectCrop = null, DirectCrossfadeFrames = null,
+        ForceKeyFrameFrame = null, QuantizerOffset = 0, CollectAlphaBounds = false, BoundsIncludeRgb = false,
+        PixelPacking = alpha ? "rgba_side_by_side" : "rgb",
+        FrameSamplesOnly = true, FrameSampleStride = 1, FrameSampleWidth = sampleWidth, FrameSampleIncludeAlpha = alpha };
+
+    /// <summary>
     /// 慢项改速实测（<see cref="SlowClosureProbe.SpeedAsync"/>）：组的捕获几何上原样渲 1 帧无损、留原帧，只渲 <paramref name="layers"/>（所有者层），
     /// 不带预热地从时间 0 起跑 <paramref name="frame"/> 帧，出的就是第 frame 帧，两版第 0 帧因此是同一状态。
     /// 不从主渲染请求派生：直编、裁剪、淡化窗口、量化值、HDR 缩放这些烘焙专用设置都不带（残差组的淡化窗口在 1 帧请求上不成立）。

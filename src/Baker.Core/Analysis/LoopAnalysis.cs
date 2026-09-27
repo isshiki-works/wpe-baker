@@ -278,7 +278,7 @@ internal static class LoopAnalysis
                 candidates.Add(new LoopCandidate((ulong)frames, (double)frames * fpsDenominator / fpsNumerator, 0d, [], []) { LoopLengthSource = "slow_components_only" });
             }
             // 漂移上界 2π·P/T 只是上界（单位增益），不是证明：分量实际振幅和画面占比可能让接缝看不出（3653641024 层 17 上界 62°，
-            // 接缝残差 0.0002/255）。这里只点名，所有者层照常进视频；烘焙时接缝门因它拒绝，再把所在层退回实时（HybridBakeService）。
+            // 接缝残差 0.0002/255）。这里只点名，所有者层照常进视频；分析的闭合预检（SlowClosureProbe）没闭合时把所在层留实时，烘焙接缝门照常复核。
             for (int index = 0; index < candidates.Count; ++index) candidates[index] = candidates[index] with { SlowComponents = shader.Slow };
         }
         return new LoopReport(fpsNumerator, fpsDenominator,
@@ -304,7 +304,7 @@ internal static class LoopAnalysis
     /// 它整除 L，任一时刻的画面与整组录 L 帧完全相同；有平稳粒子时取满足默认长度下限的最小这种因子。
     /// 分量的时钟被本组独占（别的组没有同一基准周期的分量）时，再用同一个求解器只解本组分量（上限取上面的 P_g）：
     /// 更短就改用它，调速只落在本组的层上，别的组看不到。与别的组共用时钟、自身周期 L/G 却不整除 L 的组，
-    /// 返回 round(L/G) 作为给 L 加的约束（调用方据此重解一次）。含 <paramref name="fullLoopLayerIds"/> 的组录 L（烘焙时自身周期没闭合的退回）。
+    /// 返回 round(L/G) 作为给 L 加的约束（调用方据此重解一次）。含 <paramref name="fullLoopLayerIds"/> 的组录 L（请求显式给出时）。
     /// </summary>
     private static (CommonLoopCandidate Candidate, Dictionary<string, ulong> Frames, List<ulong> ClockSteps) GroupPeriods(
         CommonLoopCandidate candidate, (string Id, HashSet<int> Layers)[] groups, CommonLoopComponent[] used, List<LoopUnresolved> unresolved,
