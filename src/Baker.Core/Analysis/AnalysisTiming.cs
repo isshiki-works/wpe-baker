@@ -21,7 +21,7 @@ internal sealed class AnalysisTiming
     internal static readonly string[] Paths =
     [
         "a_preset_layout_fallback", "b_interaction_alternative", "c_retreat", "d_plain_groups_live", "e_interaction_off_trial",
-        "f_single_shot_live", "g_static_live", "h_loop_allocation_replan", "i_interaction_cost_trial", "j_slow_closure"
+        "g_static_live", "h_loop_allocation_replan", "i_interaction_cost_trial", "j_slow_closure"
     ];
 
     private static readonly AsyncLocal<AnalysisTiming?> current = new();

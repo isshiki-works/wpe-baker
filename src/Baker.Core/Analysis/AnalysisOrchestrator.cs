@@ -70,21 +70,17 @@ internal sealed class AnalysisOrchestrator
             AnalysisCache.Key(typeof(AnalysisOrchestrator).Module.ModuleVersionId, assetsStamp));
         var orchestrator = new AnalysisOrchestrator(request, analyze, space, budget ?? space.Budget(), tools, run, cache, token, memo, progress);
         JsonObject result = await orchestrator.SelectAsync();
-        // 加载即播的单次轨进了视频组（入场切换）而结果不能生成：按旧行为（所属层判实时、不做切换）整套再分析一次，能生成就用它。
-        if (!Admission.Accepted(result) && !request.SingleShotLive && result["runtime_evidence"]?.GetValue<string>() is string evidence &&
-            SingleShotAllocation.IntroTrackSeconds(result, JsonNode.Parse(await File.ReadAllTextAsync(evidence, token))!.AsObject()) > 0)
-        {
-            var fallback = new AnalysisOrchestrator(request with { SingleShotLive = true }, analyze, space, space.Budget(), tools,
-                Path.Combine(run, "single-shot-live"), cache, token, memo, progress);
-            JsonObject old;
-            using (AnalysisTiming.Measure("f_single_shot_live")) old = await fallback.SelectAsync();
-            if (Admission.Accepted(old)) (orchestrator, result) = (fallback, old);
-        }
+        // 单次轨判实时（SingleShotLive）不在分析侧整套重跑：结果不行多半是预计不省电，所属层判实时只会烘得更少（全集 0 次采纳）；
+        // 入场切换做不成时由烘焙侧合成门拒绝后重试。
         // 生成不了、静止证明点名了还没留实时的层（source_static：含作者动画、木偶、粒子或音源，证不了循环也证不了静止）：
         // 把它们加进留实时、整套再分析，直到能生成或不再点名新层。拆分放开后这些层可能分在不同单元，分配回退只知道第一轮点名的，
         // 后面的要到回退重查里才冒出来。能生成才采用，否则保留原结果与结论。
+        // 拒因只剩预计不省电时不试：这样的方案本来就能生成，多留实时只会烘得更少，救不回来。整层没收敛（没有候选、没有 blocker）或
+        // 还有别的 blocker 时照旧试。
         var kept = (result["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>().ToHashSet();
-        for (JsonObject current = result; !Admission.Accepted(current);)
+        static bool OnlyNoBenefit(JsonObject plan) => PlanBlockers.Codes(plan).ToArray() is { Length: > 0 } codes &&
+            codes.All(code => code == BlockerCode.NoBenefitExpected);
+        for (JsonObject current = result; !Admission.Accepted(current) && !OnlyNoBenefit(current);)
         {
             int[] named = [.. SceneAnalyzer.Walk(current["loop"]).Concat(SceneAnalyzer.Walk(current["loop_allocation_fallback"])).OfType<JsonObject>()
                 .Where(item => item["kind"]?.GetValue<string>() == "source_static").Select(item => SceneGraph.Int(item["owner_layer_id"]))
@@ -252,6 +248,12 @@ internal sealed class AnalysisOrchestrator
         static double Gap(JsonObject plan) => Math.Max(-Margin(plan), Admission.GroupCount(plan) - NoBenefit.SavingProvenStreams);
         static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
         if (Viable(result) || Admission.Accepted(result) && !NoBenefit.AnalysisConditions(result).Contains(NoBenefit.VideoCostOverSaving)) return result;
+        // 多留实时改不了的直接不退：固定在一个时段、静态成品带实时层（条件不随留实时变），组数之外的 blocker（采集能力、布局冲突、
+        // 残差不可掩盖……），以及组数超过上限两倍（逐组各留一次每个候选只少一组，一轮试遍也到不了上限）。
+        string[] conditions = NoBenefit.AnalysisConditions(result);
+        if (conditions.Contains(NoBenefit.FixedDaytime) || conditions.Contains(NoBenefit.StaticWithLive) ||
+            PlanBlockers.Codes(result).Any(code => code != BlockerCode.TooManyVideoGroups) ||
+            Admission.GroupCount(result) > 2 * Admission.MaxVideoGroups(result)) return result;
         JsonObject current = result;
         while (current["video_groups"] is JsonArray { Count: > 1 } groups)
         {
