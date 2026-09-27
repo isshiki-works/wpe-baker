@@ -130,7 +130,7 @@ internal sealed class Composer
             var group = new JsonObject { ["id"] = groupId, ["root_ids"] = JsonSerializer.SerializeToNode(current),
                 ["layer_ids"] = JsonSerializer.SerializeToNode(ids), ["transparent"] = !includeClear,
                 ["parent_id"] = ParentOf(current[0]),
-                ["parent_transform"] = ParentOf(current[0]) is int parent ? HybridVideoProjection.ParentTransform(objects, parent, properties) : null,
+                ["parent_transform"] = ParentOf(current[0]) is int parent ? HybridVideoProjection.ParentTransform(objects, parent) : null,
                 ["include_scene_clear"] = includeClear,
                 ["parallax_depth"] = new JsonArray(rootDepths[current[0]].X, rootDepths[current[0]].Y),
                 ["capture_space"] = "scene", ["static_verified"] = false };
