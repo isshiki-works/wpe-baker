@@ -16,9 +16,9 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
     /// </summary>
     internal static async Task<RuntimeObservation> ObserveAsync(HybridAnalyzeRequest request, ProjectSource source, string sourceHash,
         JsonObject scene, JsonObject project, JsonObject properties, SceneGraph graph, string output, NativeRuntimeObserver observer,
-        IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
+        IProgress<RenderProgress>? progress, CancellationToken cancellationToken, AnalysisMemo? memo = null)
     {
-        async Task<JsonObject> ProbeAsync(string renderSource, string directory)
+        async Task<JsonObject> ProbeAsync(string renderSource, string directory, Func<Task>? prepare = null)
         {
             JsonObject? daytimeScene = request.DaytimeSplit && request.DaytimeState is string state
                 ? DaytimeSplit.PrepareVideoObservation(scene, properties, state) : null;
@@ -30,32 +30,38 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
             var key = new ObservationKey(sourceHash, daytimeScene ?? scene, properties, request.Assets, probeWidth, probeHeight,
                 request.FpsNumerator, request.FpsDenominator, gpuTiming, gpuTiming ? request.DeviceUuid : null, observer.Identity);
             string cacheKey = "runtime-" + key.Hash();
-            if (AnalysisCache.Read(request.AnalysisCacheDirectory, cacheKey) is JsonObject cached) return cached;
-            try
+            // 同一次 analyze 里同一个键只观测一次（退回并行时也不会同时起几个渲染器），各次子分析拿各自的副本。
+            return memo is null ? await ObserveOnceAsync() : await memo.JsonAsync(cacheKey, ObserveOnceAsync);
+            async Task<JsonObject> ObserveOnceAsync()
             {
-                if (daytimeScene is not null)
+                if (AnalysisCache.Read(request.AnalysisCacheDirectory, cacheKey) is JsonObject cached) return cached;
+                if (prepare is not null) await prepare();
+                try
                 {
-                    // renderSource 不是原作时已经是本次分析创建的音频选择副本，直接复用。
-                    if (renderSource.Equals(source.SourcePath, StringComparison.OrdinalIgnoreCase))
+                    if (daytimeScene is not null)
                     {
-                        renderSource = Path.Combine(output, directory + "-daytime-source");
-                        await source.ExtractAsync(renderSource, cancellationToken);
+                        // renderSource 不是原作时已经是本次分析创建的音频选择副本，直接复用。
+                        if (renderSource.Equals(source.SourcePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            renderSource = Path.Combine(output, directory + "-daytime-source");
+                            await source.ExtractAsync(renderSource, cancellationToken);
+                        }
+                        await File.WriteAllTextAsync(ProjectSource.ContainedPath(renderSource, source.SceneResource), daytimeScene.ToJsonString(), cancellationToken);
+                        var observedProject = project.DeepClone().AsObject();
+                        observedProject["file"] = source.SceneResource;
+                        await File.WriteAllTextAsync(Path.Combine(renderSource, "project.json"), observedProject.ToJsonString(), cancellationToken);
                     }
-                    await File.WriteAllTextAsync(ProjectSource.ContainedPath(renderSource, source.SceneResource), daytimeScene.ToJsonString(), cancellationToken);
-                    var observedProject = project.DeepClone().AsObject();
-                    observedProject["file"] = source.SceneResource;
-                    await File.WriteAllTextAsync(Path.Combine(renderSource, "project.json"), observedProject.ToJsonString(), cancellationToken);
+                    JsonObject observed = await observer.ObserveAsync(new(key, renderSource, probeOutput, request.DeviceUuid), cancellationToken);
+                    AnalysisCache.Write(request.AnalysisCacheDirectory, cacheKey, observed);
+                    return observed;
                 }
-                JsonObject observed = await observer.ObserveAsync(new(key, renderSource, probeOutput, request.DeviceUuid), cancellationToken);
-                AnalysisCache.Write(request.AnalysisCacheDirectory, cacheKey, observed);
-                return observed;
-            }
-            // 渲染器读不了某个素材文件时观测根本起不来：这是工具局限，不是壁纸不适用，交给调用方给出结构化结论。
-            catch (IOException error) when (error is not AnalysisToolLimitationException &&
-                AnalysisToolLimitation.Classify(error.Message) is { Count: > 0 } findings)
-            {
-                throw new AnalysisToolLimitationException(AnalysisToolLimitation.BuildReport(findings, scene, source.SourcePath,
-                    sourceHash, probeOutput, error.Message), error);
+                // 渲染器读不了某个素材文件时观测根本起不来：这是工具局限，不是壁纸不适用，交给调用方给出结构化结论。
+                catch (IOException error) when (error is not AnalysisToolLimitationException &&
+                    AnalysisToolLimitation.Classify(error.Message) is { Count: > 0 } findings)
+                {
+                    throw new AnalysisToolLimitationException(AnalysisToolLimitation.BuildReport(findings, scene, source.SourcePath,
+                        sourceHash, probeOutput, error.Message), error);
+                }
             }
         }
         JsonObject trace;
@@ -78,13 +84,16 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
             audioEffectChoice["original_runtime_evidence"] = beforePath;
             PlanTransforms.ApplyAudioEffectChoice(scene, new JsonObject { ["audio_effects_choice"] = audioEffectChoice.DeepClone() });
             string chosenSource = Path.Combine(output, "audio-choice-source");
-            await source.ExtractAsync(chosenSource, cancellationToken);
-            await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(chosenSource, source.SceneResource), scene, cancellationToken);
-            var chosenProject = project.DeepClone().AsObject();
-            chosenProject["file"] = source.SceneResource;
-            await VideoSceneBuilder.WriteJsonAsync(Path.Combine(chosenSource, "project.json"), chosenProject, cancellationToken);
             progress?.Report(new("analyzing", null, new Message("progress.observing_without_audio_effects")));
-            trace = await ProbeAsync(chosenSource, "audio-choice-runtime-probe");
+            // 整树拷贝只给渲染器用：观测命中缓存时不拷。
+            trace = await ProbeAsync(chosenSource, "audio-choice-runtime-probe", async () =>
+            {
+                await source.ExtractAsync(chosenSource, cancellationToken);
+                await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(chosenSource, source.SceneResource), scene, cancellationToken);
+                var chosenProject = project.DeepClone().AsObject();
+                chosenProject["file"] = source.SceneResource;
+                await VideoSceneBuilder.WriteJsonAsync(Path.Combine(chosenSource, "project.json"), chosenProject, cancellationToken);
+            });
             if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray chosenDependencies ||
                 trace["runtime_layers"] is not JsonArray chosenLayers)
                 throw new InvalidDataException("Audio-effect omission requires a complete new runtime observation.");

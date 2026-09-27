@@ -13,7 +13,8 @@ public static class ShaderTextPatch
     /// 给捕获场景里挂了 <see cref="ShaderPeriodAnalysis.TimeScaleKey"/> 或旋钮键（<see cref="KnobPrefix"/>）的 pass 写覆盖 shader：
     /// 时间倍率把 g_Time 的每处使用换成 (g_Time*g_PeriodicaTimeScale)；旋钮把那一处 token 换成 (token*g_PeriodicaK_&lt;stage&gt;_&lt;id&gt;)。
     /// 两者都声明成材质常量（缺省 1，没挂的 pass 行为不变）。原文取自源项目（包内优先，其次 assets）；
-    /// 返回每个写出文件的记录（资源名、SHA256），写进 bake.json 以便复现。
+    /// 返回每个写出文件的记录（资源名、改写的键、SHA256），写进 bake.json 以便复现；场景里挂了键、却读不到它的 shader 源码或解析不出 pass 着色器的，
+    /// 不写文件，也就不出现在记录里（慢项测速据此核对补丁真的写进了覆盖 shader，见 <see cref="SlowClosureProbe.SpeedAsync"/>）。
     /// </summary>
     public static async Task<JsonArray> WriteTimeScaleAsync(string captureProject, ProjectSource source, string? assetsDirectory,
         JsonObject captureScene, CancellationToken cancellationToken)
@@ -38,6 +39,7 @@ public static class ShaderTextPatch
                 // ponytail: 只改本 stage 文本；#include 进来的头文件若读 g_Time 不会被缩放（WE 自带头文件不读）
                 int uses = 0;
                 var header = new StringBuilder();
+                var rewritten = new JsonArray();
                 foreach (string key in keys.Where(key => key.StartsWith(KnobPrefix + stage + "_", StringComparison.Ordinal) && !key.StartsWith(KnobPrefix + "vert_ax_", StringComparison.Ordinal)))
                 {
                     // 分析时判过恰好一次（调用旋钮是恰好 sites 处，KnobUses 已核对）；对不上说明源码变了
@@ -49,12 +51,17 @@ public static class ShaderTextPatch
                         body = body[..use.Index] + "(" + use.Value + "*" + uniform + ")" + body[(use.Index + use.Length)..];
                     header.Append("uniform float " + uniform + "; // {\"material\":\"" + key + "\",\"default\":1}\n");
                     uses += found.Length;
+                    rewritten.Add(key);
                 }
                 if (keys.Contains(ShaderPeriodAnalysis.TimeScaleKey))
                 {
                     int before = uses;
                     body = TimeUse.Replace(body, _ => { ++uses; return "(g_Time*g_PeriodicaTimeScale)"; });
-                    if (uses > before) header.Append("uniform float g_PeriodicaTimeScale; // {\"material\":\"" + ShaderPeriodAnalysis.TimeScaleKey + "\",\"default\":1}\n");
+                    if (uses > before)
+                    {
+                        header.Append("uniform float g_PeriodicaTimeScale; // {\"material\":\"" + ShaderPeriodAnalysis.TimeScaleKey + "\",\"default\":1}\n");
+                        rewritten.Add(ShaderPeriodAnalysis.TimeScaleKey);
+                    }
                 }
                 // 分量旋钮：原 main 改名、读时间处改读 periodica_T；新 main 按各旋钮的时间各跑一遍取它的分量，最后按原时间跑一遍再把这些分量写回
                 string[] axes = [.. keys.Where(key => stage == "vert" && key.StartsWith(KnobPrefix + "vert_ax_", StringComparison.Ordinal))];
@@ -68,6 +75,7 @@ public static class ShaderTextPatch
                             throw new InvalidDataException($"Shader knob {key} no longer names a rewritable vertex output in {resource}.");
                         string uniform = "g_PeriodicaK_" + key[KnobPrefix.Length..];
                         header.Append("uniform float " + uniform + "; // {\"material\":\"" + key + "\",\"default\":1}\n");
+                        rewritten.Add(key);
                         main.Append("\tperiodica_T = g_Time * " + uniform + ";\n\tperiodica_main();\n");
                         foreach (string swizzle in swizzles)
                         {
@@ -87,7 +95,8 @@ public static class ShaderTextPatch
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 byte[] bytes = new UTF8Encoding(false).GetBytes(patched);
                 await File.WriteAllBytesAsync(path, bytes, cancellationToken);
-                written.Add(new JsonObject { ["resource"] = resource, ["uses_rewritten"] = uses, ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)) });
+                written.Add(new JsonObject { ["resource"] = resource, ["uses_rewritten"] = uses, ["keys"] = rewritten,
+                    ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)) });
             }
         return written;
     }

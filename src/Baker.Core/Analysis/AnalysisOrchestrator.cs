@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -30,14 +29,14 @@ internal sealed class AnalysisOrchestrator
     private readonly string run, cache;
     private readonly CancellationToken token;
     private readonly IProgress<RenderProgress>? progress;
-    /// <summary>退回重查的次数，一次 RunAsync 里各编排器共用：子分析目录（retreat-N）与进度序号都按它，主路径与关交互试探的退回不撞。</summary>
-    private readonly StrongBox<int> retreats;
+    /// <summary>一次 RunAsync 里各编排器共用：退回重查的序号、逐组静态证明的记忆（子分析的记忆由 analyze 自己带着）。</summary>
+    private readonly AnalysisMemo memo;
     private int attempt, states;
     private JsonArray costs = new();
 
     private AnalysisOrchestrator(HybridAnalyzeRequest request, Func<HybridAnalyzeRequest, CancellationToken, Task<JsonObject>> analyze,
-        SearchSpace space, CallBudget budget, NativeTools? tools, string run, string cache, CancellationToken token,
-        IProgress<RenderProgress>? progress = null, StrongBox<int>? retreats = null)
+        SearchSpace space, CallBudget budget, NativeTools? tools, string run, string cache, CancellationToken token, AnalysisMemo memo,
+        IProgress<RenderProgress>? progress = null)
     {
         this.request = request;
         this.analyze = analyze;
@@ -48,15 +47,17 @@ internal sealed class AnalysisOrchestrator
         this.cache = cache;
         this.token = token;
         this.progress = progress;
-        this.retreats = retreats ?? new();
+        this.memo = memo;
     }
 
     /// <param name="budget">省略时用 <see cref="SearchSpace.Budget"/> 的现状最坏上限；测试传入别的预算验证超出时的内部错误。</param>
     /// <param name="progress">多轮退回重查时每试一种分组报一条阶段信息（retreating）。</param>
+    /// <param name="memo">与 <paramref name="analyze"/> 共用的记忆（<see cref="HybridScenePlanner"/> 传入）；省略时新建一个。</param>
     internal static async Task<JsonObject> RunAsync(HybridAnalyzeRequest request,
         Func<HybridAnalyzeRequest, CancellationToken, Task<JsonObject>> analyze, CancellationToken token, NativeTools? tools = null,
-        StateExport? export = null, CallBudget? budget = null, IProgress<RenderProgress>? progress = null)
+        StateExport? export = null, CallBudget? budget = null, IProgress<RenderProgress>? progress = null, AnalysisMemo? memo = null)
     {
+        memo ??= new();
         SearchSpace space = SearchSpace.Of(request, export is not null);
         string root = Path.GetFullPath(request.OutputDirectory);
         ProjectSource.EnsureNoReparsePoints(root);
@@ -66,14 +67,14 @@ internal sealed class AnalysisOrchestrator
             .Order(StringComparer.Ordinal).Select(path => { var file = new FileInfo(path); return new { path, file.Length, file.LastWriteTimeUtc }; }).ToArray()) : "missing";
         string cache = Path.Combine(request.AnalysisCacheDirectory ?? Path.Combine(root, "cache"),
             AnalysisCache.Key(typeof(AnalysisOrchestrator).Module.ModuleVersionId, assetsStamp));
-        var orchestrator = new AnalysisOrchestrator(request, analyze, space, budget ?? space.Budget(), tools, run, cache, token, progress);
+        var orchestrator = new AnalysisOrchestrator(request, analyze, space, budget ?? space.Budget(), tools, run, cache, token, memo, progress);
         JsonObject result = await orchestrator.SelectAsync();
         // 加载即播的单次轨进了视频组（入场切换）而结果不能生成：按旧行为（所属层判实时、不做切换）整套再分析一次，能生成就用它。
         if (!Admission.Accepted(result) && !request.SingleShotLive && result["runtime_evidence"]?.GetValue<string>() is string evidence &&
             SingleShotAllocation.IntroTrackSeconds(result, JsonNode.Parse(await File.ReadAllTextAsync(evidence, token))!.AsObject()) > 0)
         {
             var fallback = new AnalysisOrchestrator(request with { SingleShotLive = true }, analyze, space, space.Budget(), tools,
-                Path.Combine(run, "single-shot-live"), cache, token, progress, orchestrator.retreats);
+                Path.Combine(run, "single-shot-live"), cache, token, memo, progress);
             JsonObject old = await fallback.SelectAsync();
             if (Admission.Accepted(old)) (orchestrator, result) = (fallback, old);
         }
@@ -91,7 +92,7 @@ internal sealed class AnalysisOrchestrator
             var reasons = HybridLoopAllocation.RetainReasons(current, kept) ?? new();
             foreach (int id in named) reasons.TryAdd(id, ["source_static"]);
             var trial = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. kept], RetainLiveReasons = reasons },
-                analyze, space, space.Budget(), tools, Path.Combine(run, $"static-live-{kept.Count}"), cache, token, progress, orchestrator.retreats);
+                analyze, space, space.Budget(), tools, Path.Combine(run, $"static-live-{kept.Count}"), cache, token, memo, progress);
             current = await trial.SelectAsync();
             if (Admission.Accepted(current)) (orchestrator, result) = (trial, current);
         }
@@ -109,7 +110,7 @@ internal sealed class AnalysisOrchestrator
                 if (speed["status"]!.GetValue<string>() != "passed" && !orchestrator.request.BudgetOnlyRetime)
                 {
                     orchestrator = new AnalysisOrchestrator(orchestrator.request with { BudgetOnlyRetime = true }, analyze, space,
-                        space.Budget(), tools, Path.Combine(run, $"slow-speed-budget-{speedProbes.Count}"), cache, token, progress, orchestrator.retreats);
+                        space.Budget(), tools, Path.Combine(run, $"slow-speed-budget-{speedProbes.Count}"), cache, token, memo, progress);
                     result = await orchestrator.SelectAsync();
                     continue;
                 }
@@ -123,7 +124,7 @@ internal sealed class AnalysisOrchestrator
             if (open.Length == 0) break;
             orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. retained, .. open],
                 RetainLiveReasons = HybridLoopAllocation.RetainReasons(result, []) }, analyze, space,
-                space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token, progress, orchestrator.retreats);
+                space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token, memo, progress);
             result = await orchestrator.SelectAsync();
         }
         if (slowProbes.Count > 0) result["slow_closure_probe"] = slowProbes;
@@ -173,7 +174,7 @@ internal sealed class AnalysisOrchestrator
         if (Admission.Accepted(result) && !request.AllowNoBenefit && await NoBenefit.PlainGroupRetainRootsAsync(result, token) is { Length: > 0 } plain)
         {
             var (replanned, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = plain }, analyze, space, space.Budget(), tools,
-                Path.Combine(run, "plain-groups-live"), cache, token).SolveAsync(interaction);
+                Path.Combine(run, "plain-groups-live"), cache, token, memo).SolveAsync(interaction);
             if (Admission.Accepted(replanned) && NoBenefit.AnalysisConditions(replanned).Length <= NoBenefit.AnalysisConditions(result).Length)
                 result = replanned;
         }
@@ -233,6 +234,8 @@ internal sealed class AnalysisOrchestrator
     /// 放进视频的层多了反而不行（整层无解、被阻断、预计视频成本高于省下的渲染）时，退回更多层留实时的方案：每轮把每个视频组各留一次实时
     /// 重新分析（连同 plan 已留的和分配回退已点名的层），能生成且预计省电的候选里取预计收益（省下的渲染减视频路数）最大的；一个都没有时，
     /// 从"能生成、只差省电或路数"且离可行的差距比这一轮起点小的候选里取差距最小的接着退。只加实时层、不减，证明不能循环的层照旧留实时。都不行时原样返回。
+    /// 一轮里各组的重查互不依赖（各自的 retreat-N 目录与调用预算），同时跑至多 min(组数, <see cref="AnalysisMemo.RetreatParallelism"/>) 个；
+    /// 序号与进度仍按组序发，全部跑完后按组序比较，选中的与逐个串行跑时相同。
     /// </summary>
     private async Task<JsonObject> RetreatAsync(JsonObject result, string interaction)
     {
@@ -248,15 +251,32 @@ internal sealed class AnalysisOrchestrator
             int[] kept = [.. Ids(current["settings"]?["retain_live_root_ids"]).Concat(Ids(current["loop_allocation_fallback"]?["retain_live_root_ids"]))];
             // 已留实时层的原因码跟着重查走（分配回退点名层的未解析原因、plan 已带的），被保留层不被盖成只剩 retained_by_cost_trial。
             var keptReasons = HybridLoopAllocation.RetainReasons(current, Ids(current["loop_allocation_fallback"]?["trigger_layer_ids"]));
-            JsonObject? best = null, next = null;
-            for (int index = 0; index < groups.Count; index++)
+            var plans = new Task<JsonObject>[groups.Count];
+            using (var slots = new SemaphoreSlim(Math.Min(groups.Count, memo.RetreatParallelism)))
             {
-                // 每次重查都是一整次分析，耗时成倍增加：报一条阶段信息，命令行与界面不至于看起来卡住。
-                int tried = ++retreats.Value;
-                progress?.Report(new("retreating", null, new Message("progress.trying_grouping", [tried])));
-                var (plan, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = [.. kept.Concat(Ids(groups[index]?["root_ids"])).Distinct()],
-                    RetainLiveReasons = keptReasons },
-                    analyze, space, space.Budget(), tools, Path.Combine(run, $"retreat-{tried}"), cache, token).SolveAsync(interaction);
+                for (int index = 0; index < groups.Count; index++)
+                {
+                    await slots.WaitAsync();
+                    // 每次重查都是一整次分析，耗时成倍增加：报一条阶段信息，命令行与界面不至于看起来卡住。
+                    int tried = Interlocked.Increment(ref memo.Retreats);
+                    progress?.Report(new("retreating", null, new Message("progress.trying_grouping", [tried])));
+                    var trial = new AnalysisOrchestrator(request with { RetainLiveRootIds = [.. kept.Concat(Ids(groups[index]?["root_ids"])).Distinct()],
+                        RetainLiveReasons = keptReasons,
+                        // 请求里的 JSON 各给一份：解析出来的 JsonObject 首次访问才展开，不能几个线程同时读同一份。
+                        UserProperties = request.UserProperties?.DeepClone().AsObject(), PropertiesOrigin = request.PropertiesOrigin?.DeepClone().AsObject(),
+                        FrameRateOrigin = request.FrameRateOrigin?.DeepClone().AsObject() },
+                        analyze, space, space.Budget(), tools, Path.Combine(run, $"retreat-{tried}"), cache, token, memo);
+                    plans[index] = Task.Run(async () =>
+                    {
+                        try { return (await trial.SolveAsync(interaction)).Plan; }
+                        finally { slots.Release(); }
+                    });
+                }
+                await Task.WhenAll(plans);
+            }
+            JsonObject? best = null, next = null;
+            foreach (JsonObject plan in plans.Select(task => task.Result))
+            {
                 if (Viable(plan)) { if (best is null || Margin(plan) > Margin(best)) best = plan; }
                 else if (Gap(plan) < Gap(next ?? current)) next = plan;
             }
@@ -326,7 +346,7 @@ internal sealed class AnalysisOrchestrator
     {
         budget.Charge($"{phase}|{candidate.Interaction}|{candidate.Preset}|{candidate.VideoLayout}|{state ?? "-"}", states);
         return await AdoptAllocationAsync(await analyze(candidate with {
-            OutputDirectory = Path.Combine(run, (++attempt).ToString()), AnalysisCacheDirectory = cache }, token), token);
+            OutputDirectory = Path.Combine(run, (++attempt).ToString()), AnalysisCacheDirectory = cache }, token), token, memo);
     }
 
     /// <summary>
@@ -359,16 +379,16 @@ internal sealed class AnalysisOrchestrator
         }
     }
 
-    internal static async Task<JsonObject> AdoptAllocationAsync(JsonObject plan, CancellationToken token)
+    internal static async Task<JsonObject> AdoptAllocationAsync(JsonObject plan, CancellationToken token, AnalysisMemo? memo = null)
     {
-        await VerifyStaticGroupBudgetAsync(plan, token);
+        await VerifyStaticGroupBudgetAsync(plan, token, memo);
         Admission.ApplyGenerationAdmission(plan);
         if (Admission.Accepted(plan) || plan["loop_allocation_fallback"]?["status"]?.GetValue<string>() != "candidate_found" ||
             plan["analysis_directory"]?.GetValue<string>() is not string directory) return plan;
         string path = Path.Combine(directory, "loop-allocation-analysis", "plan.json");
         if (!File.Exists(path)) return plan;
         JsonObject child = JsonNode.Parse(await File.ReadAllTextAsync(path, token))!.AsObject();
-        await VerifyStaticGroupBudgetAsync(child, token);
+        await VerifyStaticGroupBudgetAsync(child, token, memo);
         Admission.ApplyGenerationAdmission(child);
         if (!Admission.Accepted(child) || !JsonNode.DeepEquals(child["source_sha256"], plan["source_sha256"])) return plan;
         child["allocation_adopted"] = new JsonObject { ["plan_path"] = path,
@@ -379,8 +399,10 @@ internal sealed class AnalysisOrchestrator
 
     /// <summary>整层方案逐组做源与运行时的静态证明（只用 CPU），已证静态的组不计视频路数（<see cref="Admission.GroupCount"/>）。
     /// 不论组数都证：路数上限、预计省电、退回的差距用同一口径，组数跨过上限时路数不跳变。
-    /// 这是准入估计；烘焙仍录完整区间，声称静态却有变化的组整案拒绝。</summary>
-    private static async Task VerifyStaticGroupBudgetAsync(JsonObject plan, CancellationToken token)
+    /// 这是准入估计；烘焙仍录完整区间，声称静态却有变化的组整案拒绝。
+    /// 每组的证明只取决于源、运行时证据的内容、素材目录、这组的图层与帧率（<see cref="LoopAnalysis.Analyze"/> 其余参数取默认值）：
+    /// 有记忆时按这些做键，退回各轮与各布局里没变的组不再重证，源与运行时证据也只在要证时才解析。</summary>
+    private static async Task VerifyStaticGroupBudgetAsync(JsonObject plan, CancellationToken token, AnalysisMemo? memo)
     {
         if (!Admission.Bakeable(plan) || plan["route"]?.GetValue<string>() != "whole_layer" ||
             plan["video_groups"] is not JsonArray groups ||
@@ -397,24 +419,37 @@ internal sealed class AnalysisOrchestrator
         }
         try
         {
-            JsonObject runtime = JsonNode.Parse(await File.ReadAllTextAsync(runtimePath, token))!.AsObject();
+            string runtimeText = await File.ReadAllTextAsync(runtimePath, token);
+            string evidence = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(runtimeText)));
             JsonObject settings = plan["settings"]?.AsObject() ?? new JsonObject();
             uint fpsNumerator = settings["fps_numerator"]?.GetValue<uint>() ?? 120;
             uint fpsDenominator = settings["fps_denominator"]?.GetValue<uint>() ?? 1;
             string? assets = plan["assets"]?.GetValue<string>() ?? settings["assets"]?.GetValue<string>();
-            using var source = new ProjectSource(sourcePath);
-            JsonObject scene = source.ReadJson(source.SceneResource);
-            foreach (JsonObject group in groups.OfType<JsonObject>())
+            ProjectSource? source = null;
+            JsonObject? runtime = null, scene = null;
+            try
             {
-                int[] layers = (group["layer_ids"] as JsonArray)?.Select(node => node!.GetValue<int>()).ToArray() ?? [];
-                if (layers.Length == 0) continue;
-                JsonObject proof = LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, assets, runtime, layers,
-                    fpsNumerator, fpsDenominator).ToJson();
-                if (proof["source_static"]?.GetValue<bool>() != true) continue;
-                group["static_verified"] = true;
-                group["static_verification"] = new JsonObject { ["basis"] = "source_and_runtime_static_proof",
-                    ["runtime_evidence"] = runtimePath, ["source"] = sourceKey };
+                foreach (JsonObject group in groups.OfType<JsonObject>())
+                {
+                    int[] layers = (group["layer_ids"] as JsonArray)?.Select(node => node!.GetValue<int>()).ToArray() ?? [];
+                    if (layers.Length == 0) continue;
+                    bool Prove()
+                    {
+                        source ??= new ProjectSource(sourcePath);
+                        runtime ??= JsonNode.Parse(runtimeText)!.AsObject();
+                        scene ??= source.ReadJson(source.SceneResource);
+                        return LoopAnalysis.Analyze(scene.DeepClone().AsObject(), source, assets, runtime, layers,
+                            fpsNumerator, fpsDenominator).ToJson()["source_static"]?.GetValue<bool>() == true;
+                    }
+                    bool proven = memo is null ? Prove() : await memo.StaticProofAsync(
+                        "static-proof|" + AnalysisCache.Key(sourceKey, evidence, assets, layers, fpsNumerator, fpsDenominator), () => Task.FromResult(Prove()));
+                    if (!proven) continue;
+                    group["static_verified"] = true;
+                    group["static_verification"] = new JsonObject { ["basis"] = "source_and_runtime_static_proof",
+                        ["runtime_evidence"] = runtimePath, ["source"] = sourceKey };
+                }
             }
+            finally { source?.Dispose(); }
             plan["static_group_budget"] = new JsonObject { ["status"] = "verified", ["basis"] = "source_and_runtime_static_proof",
                 ["source"] = sourceKey, ["runtime_evidence"] = runtimePath };
         }
