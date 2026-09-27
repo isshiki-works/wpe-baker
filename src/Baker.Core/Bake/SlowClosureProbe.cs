@@ -76,14 +76,14 @@ internal static class SlowClosureProbe
         return records;
     }
 
-    /// <summary>实测的时间窗（秒）：从长到短，每块取位移不超过 1 px（分块光流的线性区）的最长窗。</summary>
+    /// <summary>实测的时间窗（秒）：都量，读数取最大（长窗灵敏，短窗兜住位移超出线性区时的低估）。</summary>
     static readonly double[] Windows = [8, 4, 2, 1, 0.5];
 
     /// <summary>
     /// 振幅推不出的慢项超预算改速（evidence 带 <see cref="ShaderPeriodAnalysis.MeasuredNote"/>、首选候选里 |δ| 超过逐项预算）实测看不看得出。
     /// 看成品的人没有原作对照，能感知的是速度变化，所以量两版的速度差：这些项的补丁还原成原速（before）与改速后（after）
     /// 各只渲所有者层，从时间 0 起出第 0 帧和第 t 帧。两版第 0 帧必须逐位相同（同一状态出发；不同说明所有者层里有随机内容，读数不可信）。
-    /// 读数按输出短边折到 1080p 口径，≤ 0.1 px/s（1.0.2 摆动慢项同一门限）才放行；渲染或准备失败记 not_measured（probe_failed），不抛出。
+    /// 读数（见 <see cref="MeasureAsync"/>，位移与亮度变化都算）按 1080p 口径，≤ 0.1 px/s（1.0.2 摆动慢项同一门限）才放行；渲染或准备失败记 not_measured（probe_failed），不抛出。
     /// 返回 null = 特效前缀路线，或首选候选里没有这类项；status 不是 passed 的，调用方按逐项预算重新分析。改速后的循环照常过接缝门。
     /// </summary>
     internal static async Task<JsonObject?> SpeedAsync(JsonObject plan, NativeTools tools, string output, CancellationToken token)
@@ -170,8 +170,13 @@ internal static class SlowClosureProbe
 
     /// <summary>
     /// 一个组的速度差读数。<paramref name="render"/>(after, frame) 出改速前/后从时间 0 起的第 frame 帧（RGBA）。
-    /// 第 0 帧两版不逐位相同 → not_measured（frame0_differs）；没有一块有纹理 → not_measured（no_texture）；
-    /// 否则分块求改速后相对改速前的位移，每块取位移 ≤ 1 px 的最长窗（都超过就取最短窗），位移/窗长的最大值折到 1080p 口径，≤ 0.1 px/s 为 passed，否则 visible。
+    /// 第 0 帧两版不逐位相同 → not_measured（frame0_differs）；第 0 帧整幅没有梯度 → not_measured（no_texture，所有者层可能没渲出来）。
+    /// 否则比较两版在 t 时刻的画面差，同时抓位移和亮度变化（分块光流只量位移，亮度类特效怎么改速都会"通过"）：
+    /// 约 540p 网格（1080p 下 2×2 平均）上逐格取 d = max_c |after_c − before_c|、g = max_c |∇before_c|（c 取 RGBA，梯度按 1080p 像素），
+    /// 块边 16 格（1080p 的 32 px）内求平均 D、G，读数 v = D / (t·G)，单位 px/s。
+    /// 纯位移 s 时每个通道 |Δc| ≈ |∇c·s| ≤ |∇c|·|s| ≤ g·|s|，所以 D ≤ G·|s|、v ≤ |s|/t = 位移速度差：速度差 ≤ 0.1 px/s 的纯位移必然通过，
+    /// 与原来的位移判据同一口径；亮度变化在 G ≈ 0 的平坦块里直接让 v 变大（G = 0 而 D > 0 记无穷）。
+    /// 5 个时间窗都量，读数取各块、各窗的最大值（长窗的位移可能超出线性区而低估，短窗兜住），≤ 0.1 px/s 为 passed，否则 visible。
     /// </summary>
     internal static async Task<JsonObject> MeasureAsync(Func<bool, ulong, Task<byte[]>> render, int width, int height, double tileScale,
         uint fpsNumerator, uint fpsDenominator)
@@ -179,67 +184,64 @@ internal static class SlowClosureProbe
         byte[] origin = await render(false, 0), retimed = await render(true, 0);
         if (!origin.AsSpan().SequenceEqual(retimed))
             return new JsonObject { ["status"] = "not_measured", ["reason"] = "frame0_differs" };
-        // 分块光流在约 540p 的网格上做（1080p 下 2×2 平均），块边 16 格 = 1080p 的 32 px
         int step = Math.Max(1, (int)Math.Round(2 * tileScale));
         double toReference = step / tileScale;
-        double?[]? speeds = null;
+        if (Blocks(origin, origin, width, height, step, toReference).All(block => block.Gradient == 0))
+            return new JsonObject { ["status"] = "not_measured", ["reason"] = "no_texture" };
+        double peak = 0, worstWindow = 0;
         foreach (double seconds in Windows)
         {
             ulong frame = (ulong)Math.Round(seconds * fpsNumerator / fpsDenominator);
-            (double X, double Y)?[] shifts = Shift(await render(false, frame), await render(true, frame), width, height, step);
-            speeds ??= new double?[shifts.Length];
-            bool pending = false;
-            for (int block = 0; block < shifts.Length; block++)
+            foreach (var (difference, gradient) in Blocks(await render(false, frame), await render(true, frame), width, height, step, toReference))
             {
-                if (speeds[block] is not null || shifts[block] is not var (x, y)) continue;
-                double moved = Math.Sqrt(x * x + y * y) * toReference;
-                if (moved <= 1 || seconds == Windows[^1]) speeds[block] = moved / seconds;
-                else pending = true;
+                double reading = difference == 0 ? 0 : gradient == 0 ? double.PositiveInfinity : difference / (seconds * gradient);
+                if (reading > peak) (peak, worstWindow) = (reading, seconds);
             }
-            if (!pending) break;
         }
-        double[] read = [.. (speeds ?? []).OfType<double>()];
-        if (read.Length == 0) return new JsonObject { ["status"] = "not_measured", ["reason"] = "no_texture" };
-        double peak = read.Max();
         return new JsonObject { ["status"] = peak <= SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond ? "passed" : "visible",
-            ["peak_speed_deviation_px_per_second"] = peak, ["textured_blocks"] = read.Length };
+            // 平坦块里有变化时读数是无穷，JSON 里记 null 并标 flat_block_changed
+            ["peak_speed_deviation_px_per_second"] = double.IsFinite(peak) ? peak : null, ["flat_block_changed"] = !double.IsFinite(peak),
+            ["worst_window_seconds"] = worstWindow };
     }
 
     /// <summary>
-    /// 分块 Lucas–Kanade：两帧先按 step×step 平均（亮度 R+2G+B 加透明度），以改速前的帧为参考逐块解 2×2 结构张量，
-    /// 得改速后相对改速前的位移（网格格数）；纹理太弱（结构张量小特征值不够）的块为 null。
+    /// 两帧先按 step×step 平均到网格，逐块（16×16 格，去掉最外一圈格子）给出平均差 D（levels）与改速前那帧的平均梯度幅值 G（levels / 1080p 像素）；
+    /// 每格取 RGBA 四个通道里最大的差与最大的梯度幅值（中心差分）。
     /// </summary>
-    static (double X, double Y)?[] Shift(byte[] before, byte[] after, int width, int height, int step)
+    static IEnumerable<(double Difference, double Gradient)> Blocks(byte[] before, byte[] after, int width, int height, int step, double toReference)
     {
         int w = width / step, h = height / step, size = 16;
-        float[] Grid(byte[] rgba)
+        float[][] Grid(byte[] rgba)
         {
-            var grid = new float[w * h];
+            var grid = new float[4][];
+            for (int c = 0; c < 4; c++) grid[c] = new float[w * h];
             for (int y = 0; y < h * step; y++)
                 for (int x = 0; x < w * step; x++)
-                {
-                    int i = (y * width + x) * 4;
-                    grid[y / step * w + x / step] += (rgba[i] + 2 * rgba[i + 1] + rgba[i + 2] + rgba[i + 3]) / (float)(step * step);
-                }
+                    for (int c = 0; c < 4; c++)
+                        grid[c][y / step * w + x / step] += rgba[(y * width + x) * 4 + c] / (float)(step * step);
             return grid;
         }
-        float[] a = Grid(before), b = Grid(after);
-        var shifts = new List<(double X, double Y)?>();
+        float[][] a = Grid(before), b = Grid(after);
         for (int top = 1; top + size < h; top += size)
             for (int left = 1; left + size < w; left += size)
             {
-                double xx = 0, xy = 0, yy = 0, xt = 0, yt = 0;
+                double difference = 0, gradient = 0;
                 for (int y = top; y < top + size; y++)
                     for (int x = left; x < left + size; x++)
                     {
                         int i = y * w + x;
-                        double gx = (a[i + 1] - a[i - 1]) / 2.0, gy = (a[i + w] - a[i - w]) / 2.0, gt = b[i] - a[i];
-                        xx += gx * gx; xy += gx * gy; yy += gy * gy; xt += gx * gt; yt += gy * gt;
+                        double d = 0, g = 0;
+                        for (int c = 0; c < 4; c++)
+                        {
+                            float[] ac = a[c];
+                            double gx = (ac[i + 1] - ac[i - 1]) / 2.0, gy = (ac[i + w] - ac[i - w]) / 2.0;
+                            d = Math.Max(d, Math.Abs(b[c][i] - ac[i]));
+                            g = Math.Max(g, Math.Sqrt(gx * gx + gy * gy));
+                        }
+                        difference += d;
+                        gradient += g;
                     }
-                double det = xx * yy - xy * xy, least = (xx + yy) / 2 - Math.Sqrt((xx - yy) * (xx - yy) / 4 + xy * xy);
-                // 每格平均梯度至少 5（亮度满量程 1275）才算有纹理
-                shifts.Add(least < size * size * 25.0 ? null : ((xy * yt - yy * xt) / det, (xy * xt - xx * yt) / det));
+                yield return (difference / (size * size), gradient / (size * size) / toReference);
             }
-        return [.. shifts];
     }
 }

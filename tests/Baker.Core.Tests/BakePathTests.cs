@@ -66,19 +66,21 @@ public class BakePathTests
         Assert.Equal("retried", result["slow_component_retreat"]?["status"]?.GetValue<string>());
     });
 
-    // 慢项改速实测的读数（伪造渲染器出平滑纹理，改速后的版本按速度差 dv 横移 dv·t 像素）：0.05 px/s 放行、0.5 px/s 看得出；
-    // 两版第 0 帧不逐位相同（所有者层里有随机内容）时不出读数，哪怕第 t 帧两版完全一样；没有纹理时同样不出读数。
+    // 慢项改速实测的读数（伪造渲染器出平滑纹理）。位移：改速后的版本按速度差 dv 横移 dv·t 像素，0.05 px/s 放行、0.5 px/s 看得出。
+    // 亮度：画面左半是静止纹理，右半是平坦的光晕按 pulse 起伏（周期 400 s 改到 101 s，2997331973 的实况），不动一个像素也必须看得出——
+    // 分块光流只量位移（平坦块没有纹理、纹理块没变化），这种改速曾读出 0.019 px/s 放行。两版第 0 帧不逐位相同、第 0 帧没有梯度时不出读数。
     [Fact]
-    public async Task SlowSpeedProbeReadsSpeedOnlyFromIdenticalOrigins()
+    public async Task SlowSpeedProbeCatchesDisplacementAndBrightness()
     {
         const int size = 256;
-        static byte[] Frame(double shift, bool flat = false, bool speck = false)
+        static byte[] Frame(double shift, double glow = 0, bool flat = false, bool halfFlat = false, bool speck = false)
         {
             var rgba = new byte[size * size * 4];
             for (int y = 0; y < size; y++)
                 for (int x = 0; x < size; x++)
                 {
-                    double v = flat ? 128 : 128 + 60 * Math.Sin((x - shift) / 6.0) + 60 * Math.Cos(y / 7.0);
+                    bool smooth = flat || halfFlat && x >= size / 2;
+                    double v = smooth ? 128 + glow : 128 + 50 * Math.Sin((x - shift) / 6.0) + 50 * Math.Cos(y / 7.0);
                     int i = (y * size + x) * 4;
                     rgba[i] = rgba[i + 1] = rgba[i + 2] = (byte)Math.Round(v);
                     rgba[i + 3] = 255;
@@ -86,14 +88,18 @@ public class BakePathTests
             if (speck) rgba[0] ^= 1;
             return rgba;
         }
-        static Task<JsonObject> Read(double deviation, bool randomOrigin = false, bool flat = false) => SlowClosureProbe.MeasureAsync(
-            (after, frame) => Task.FromResult(Frame(after ? deviation * frame / 30.0 : 0, flat, randomOrigin && after && frame == 0)), size, size, 1, 30, 1);
-        JsonObject slow = await Read(0.05), fast = await Read(0.5);
+        static Task<JsonObject> Read(Func<bool, double, byte[]> frame) => SlowClosureProbe.MeasureAsync(
+            (after, index) => Task.FromResult(frame(after, index / 30.0)), size, size, 1, 30, 1);
+        static Task<JsonObject> Shift(double deviation) => Read((after, t) => Frame(after ? deviation * t : 0));
+        JsonObject slow = await Shift(0.05), fast = await Shift(0.5);
         Assert.Equal("passed", slow["status"]!.GetValue<string>());
-        Assert.InRange(slow["peak_speed_deviation_px_per_second"]!.GetValue<double>(), 0.03, 0.07);
+        Assert.InRange(slow["peak_speed_deviation_px_per_second"]!.GetValue<double>(), 0.005, 0.07);
         Assert.Equal("visible", fast["status"]!.GetValue<string>());
-        Assert.Equal("frame0_differs", (await Read(0, randomOrigin: true))["reason"]!.GetValue<string>());
-        Assert.Equal("no_texture", (await Read(0.5, flat: true))["reason"]!.GetValue<string>());
+        JsonObject pulse = await Read((after, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / (after ? 101 : 400)), halfFlat: true));
+        Assert.Equal("visible", pulse["status"]!.GetValue<string>());
+        Assert.True(pulse["flat_block_changed"]!.GetValue<bool>());
+        Assert.Equal("frame0_differs", (await Read((after, t) => Frame(0, speck: after && t == 0)))["reason"]!.GetValue<string>());
+        Assert.Equal("no_texture", (await Read((after, t) => Frame(0, after ? t : 0, flat: true)))["reason"]!.GetValue<string>());
     }
 
     // 测速请求不带烘焙专用设置：组本来是残差组（淡化窗口 + CPU 直编裁剪）时，从主渲染请求派生的 1 帧请求过不了渲染器的请求校验
