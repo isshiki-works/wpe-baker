@@ -11,22 +11,20 @@ internal static class CaptureSourceBuilder
     /// <summary>
     /// 解包并写入捕获场景与 project.json。<paramref name="metadata"/> 会就地套上属性快照与场景文件名，
     /// 成品工程的 project.json 也从这份写出。摆动改频的记录写进 <paramref name="report"/>。
+    /// 捕获副本只给渲染器读，大文件走硬链接（<see cref="ProjectSource.ExtractAsync"/>）；计时由调用方记。
     /// </summary>
     internal static async Task PrepareAsync(string captureProject, ProjectSource source, JsonObject original, JsonObject metadata,
-        JsonObject snapshot, JsonObject plan, HybridAnalyzeRequest settings, bool probe, JsonObject report, StageTiming timing,
+        JsonObject snapshot, JsonObject plan, HybridAnalyzeRequest settings, bool probe, JsonObject report,
         CancellationToken cancellationToken)
     {
-        using (timing.Measure(StageTiming.SourceCapture)) await source.ExtractAsync(captureProject, cancellationToken);
-        using (timing.Measure(StageTiming.SourceCapture))
-        {
-            JsonObject scene = Scene(original, snapshot, plan, settings, probe);
-            await File.WriteAllTextAsync(ProjectSource.ContainedPath(captureProject, source.SceneResource), scene.ToJsonString(), cancellationToken);
-            // 着色器调速：给挂了时间倍率的 pass 写覆盖 shader，只影响捕获；成品项目另从源解包。
-            if (!probe) report["time_scale_shaders"] = await ShaderTextPatch.WriteTimeScaleAsync(captureProject, source, settings.Assets, scene, cancellationToken);
-            ProjectWriter.ApplyPropertySnapshot(metadata, snapshot);
-            metadata["file"] = source.SceneResource;
-            await File.WriteAllTextAsync(Path.Combine(captureProject, "project.json"), metadata.ToJsonString(), cancellationToken);
-        }
+        await source.ExtractAsync(captureProject, cancellationToken, link: true);
+        JsonObject scene = Scene(original, snapshot, plan, settings, probe);
+        await File.WriteAllTextAsync(ProjectSource.ContainedPath(captureProject, source.SceneResource), scene.ToJsonString(), cancellationToken);
+        // 着色器调速：给挂了时间倍率的 pass 写覆盖 shader，只影响捕获；成品项目另从源解包。
+        if (!probe) report["time_scale_shaders"] = await ShaderTextPatch.WriteTimeScaleAsync(captureProject, source, settings.Assets, scene, cancellationToken);
+        ProjectWriter.ApplyPropertySnapshot(metadata, snapshot);
+        metadata["file"] = source.SceneResource;
+        await File.WriteAllTextAsync(Path.Combine(captureProject, "project.json"), metadata.ToJsonString(), cancellationToken);
     }
 
     /// <summary>

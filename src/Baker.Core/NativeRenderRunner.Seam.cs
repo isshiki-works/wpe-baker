@@ -26,14 +26,15 @@ public sealed partial class NativeRenderRunner
         bool packed = sampleRequest.FrameSampleIncludeAlpha;
         if (crossfadeFrames == 0) throw new ArgumentException("起点搜索需要知道淡化窗口，才能判断 Δ_stride 是否落在窗口内。");
         uint stride = sampleRequest.FrameSampleStride;
-        if (periodFrames == 0 || periodFrames % stride != 0)
-            throw new ArgumentException("解析周期必须是采样步长的整数倍，否则候选起点无法对齐到样本。");
+        ulong? phase = sampleRequest.FrameSamplePhaseFrames;
+        // 候选起点在第 0 类（s = c·stride），s+P 落在 P mod stride 类：周期不整除时这一类必须由样本相位补采。
+        if (periodFrames == 0 || (phase ?? 0) % stride != periodFrames % stride)
+            throw new ArgumentException("样本相位必须等于解析周期对采样步长的余数，否则 s+P 没有样本。");
         // 窗口 = P + 候选段：候选起点 s 落在候选段里，每个比较 (s, s+P)。候选段最长一个周期（2P 已含全部 P/stride 个相位）；
         // 多组共享起点时长周期组只需到最短周期为止（见 LoopStartSelector）。
         if (sampleRequest.Frames <= periodFrames || sampleRequest.Frames > periodFrames * (ulong)ResidualMasking.SearchWindowPeriods ||
             (sampleRequest.Frames - periodFrames) % stride != 0)
             throw new ArgumentException("起点搜索窗口必须是一个解析周期再加 1 到 P/stride 个采样步长。");
-        int perPeriod = checked((int)(periodFrames / stride));
         int candidates = checked((int)((sampleRequest.Frames - periodFrames) / stride));
         int width, height, tileSize;
         ulong count;
@@ -54,7 +55,7 @@ public sealed partial class NativeRenderRunner
             string path = samples["path"]!.GetValue<string>();
             width = samples["width"]!.GetValue<int>(); height = samples["height"]!.GetValue<int>();
             count = samples["count"]!.GetValue<ulong>();
-            if (count != sampleRequest.Frames / stride) throw new InvalidDataException("帧样本数量与采样步长不一致。");
+            if (count != ResidualMasking.SampleOrdinal(sampleRequest.Frames, stride, phase)) throw new InvalidDataException("帧样本数量与采样步长不一致。");
             if ((samples["includes_packed_alpha"]?.GetValue<bool>() == true) != packed)
                 throw new InvalidDataException("帧样本是否带覆盖度与请求不一致。");
             int frameBytes = checked(width * height * 3);
@@ -68,12 +69,14 @@ public sealed partial class NativeRenderRunner
             // 样本文件是 2 个周期 ÷ 步长 × 采样帧大小，高窄画布上能到几个 GB，所以按需读两帧，不整份载入。
             await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, true);
             byte[] left = new byte[frameBytes], right = new byte[frameBytes];
-            // 每个采样相位 c 的 Δ_0 = 样本[c + P/stride] − 样本[c]，按相位顺序各算一次；Δ_stride 由 SeamMath 取下一个相位的读数。
+            // 每个候选起点 s = c·stride 的 Δ_0 = 第 s+P 帧的样本 − 第 s 帧的样本（样本文件按帧序，序号见 SampleOrdinal），
+            // 按相位顺序各算一次；Δ_stride 由 SeamMath 取下一个相位的读数。
             for (int candidate = 0; candidate < candidates; ++candidate)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await ReadFrameAsync(file, left, candidate, frameBytes, cancellationToken);
-                await ReadFrameAsync(file, right, candidate + perPeriod, frameBytes, cancellationToken);
+                ulong start = (ulong)candidate * stride;
+                await ReadFrameAsync(file, left, checked((int)ResidualMasking.SampleOrdinal(start, stride, phase)), frameBytes, cancellationToken);
+                await ReadFrameAsync(file, right, checked((int)ResidualMasking.SampleOrdinal(start + periodFrames, stride, phase)), frameBytes, cancellationToken);
                 wraps.Add(packed
                     ? LoopSeamMetrics.PackedResidual(left, right, logicalWidth, height, tileSize).Combined(logicalWidth)
                     : LoopSeamMetrics.WrapResidual(left, right, width, height, tileSize));
@@ -107,6 +110,7 @@ public sealed partial class NativeRenderRunner
             ["search_window_periods"] = Math.Round((double)sampleRequest.Frames / periodFrames, 4),
             ["search_window_frames"] = sampleRequest.Frames,
             ["stride_frames"] = stride,
+            ["sample_phase_frames"] = phase,
             ["crossfade_frames"] = crossfadeFrames,
             ["candidate_count"] = candidates,
             ["candidates_within_global_limit"] = withinGlobal,
@@ -150,7 +154,7 @@ public sealed partial class NativeRenderRunner
         ResidualStartCandidate[] ordered = ResidualMasking.OrderStartCandidates(combined);
         int admitted = combined.Count(ResidualMasking.StartCandidateAdmitted);
         JsonObject result = first.Search.DeepClone().AsObject();
-        foreach (string key in new[] { "group_id", "sampling_coverage", "pixel_packing", "sample_width", "sample_height", "sample_tile_size", "sample_count" })
+        foreach (string key in new[] { "group_id", "sampling_coverage", "pixel_packing", "sample_width", "sample_height", "sample_tile_size", "sample_count", "sample_phase_frames" })
             result.Remove(key);
         result["schema_version"] = 5;
         result["selection_scope"] = "all_residual_groups";

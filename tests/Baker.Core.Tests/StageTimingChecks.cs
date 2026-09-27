@@ -18,12 +18,14 @@ internal static class StageTimingChecks
         timing.AddMasterBreakdown(new JsonObject
         {
             ["stream_timing"] = new JsonObject { ["readback_seconds"] = 12.5, ["encode_seconds"] = 3.25 },
-            ["native_result"] = new JsonObject { ["wall_seconds"] = 20.0 }
+            ["native_result"] = new JsonObject { ["wall_seconds"] = 20.0 },
+            ["post_render_timing"] = new JsonObject { ["quality_gate_seconds"] = 1.5, ["hardware_decode_seconds"] = 0.5 }
         });
         timing.AddMasterBreakdown(new JsonObject
         {
             ["stream_timing"] = new JsonObject { ["readback_seconds"] = 4.5, ["encode_seconds"] = 0.75 },
-            ["native_result"] = new JsonObject { ["wall_seconds"] = 6.0 }
+            ["native_result"] = new JsonObject { ["wall_seconds"] = 6.0 },
+            ["post_render_timing"] = new JsonObject { ["quality_gate_seconds"] = 2.0 }
         });
         timing.AddMasterBreakdown(null);
         Thread.Sleep(60); // 没有单独计时的一段，必须落到 other 里
@@ -50,6 +52,8 @@ internal static class StageTimingChecks
         check(Number(breakdown[StageTiming.Readback]) == 17.0 && Number(breakdown[StageTiming.EncodeMaster]) == 4.0 &&
             Number(breakdown["renderer_wall_seconds"]) == 26.0,
             "master_render_breakdown 累加回读、编码背压与渲染器自报墙钟");
+        check(Number(breakdown[StageTiming.QualityGate]) == 3.5 && Number(breakdown[StageTiming.HardwareDecodeProbe]) == 0.5,
+            "渲染器退出后的画质门与硬解实测墙钟单列在 master_render_breakdown 里，逐组累加");
 
         double expectedRate = 720 / Number(stages[StageTiming.MasterRender])!.Value;
         check(json["frames"]!.GetValue<ulong>() == 720UL &&

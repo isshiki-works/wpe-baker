@@ -78,8 +78,8 @@ public sealed class CandidateValidation(NativeTools tools)
             report["candidate_compiled_scene_passes"] = candidate["native_result"]!["compiled_scene_passes"]!.DeepClone();
             using var sourceView = new ProjectSource(request.Source);
             using var candidateView = new ProjectSource(request.Candidate);
-            if (await sourceView.SourceHashAsync(cancellationToken) != original["source_sha256"]!.GetValue<string>() ||
-                await candidateView.SourceHashAsync(cancellationToken) != candidate["source_sha256"]!.GetValue<string>())
+            if (await sourceView.SourceHashAsync(cancellationToken, reuse: true) != original["source_sha256"]!.GetValue<string>() ||
+                await candidateView.SourceHashAsync(cancellationToken, reuse: true) != candidate["source_sha256"]!.GetValue<string>())
                 throw new IOException("Source or candidate changed during the paired comparison.");
             report["object_preservation"] = ObjectPreservation(sourceView, candidateView);
             report["lookup_binding_validation"] = CompareLookupBindings(

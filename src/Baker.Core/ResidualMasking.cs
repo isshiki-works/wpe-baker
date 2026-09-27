@@ -71,21 +71,42 @@ public static class ResidualMasking
     /// <summary>接缝整帧交叉淡化窗口，固定 0.4 秒。</summary>
     public const double CrossfadeSeconds = 0.4;
 
-    /// <summary>起点搜索的采样步长上限（源帧）与样本宽度（像素，1080p 短边下，同上缩放）。实际步长见 <see cref="StartSearchStride"/>。</summary>
+    /// <summary>起点搜索的采样步长上限（源帧）与样本宽度（像素，1080p 短边下，同上缩放）。实际步长见 <see cref="StartSearchWindows"/>。</summary>
     public const uint StartSearchSampleStride = 16;
     public const uint StartSearchSampleWidth = 512;
 
+    /// <summary>候选起点只取预热后前这么多秒的相位（取整到步长，不超过最短周期）；窗口从 2P 缩到 P + 这一段。</summary>
+    public const double StartSearchCandidateSeconds = 30;
+
     /// <summary>
-    /// 起点搜索实际使用的采样步长：解析周期帧数与步长上限的最大公约数，保证候选起点 s 与 s+P 都落在样本网格上。
-    /// 周期不是 16 的倍数时（120 fps 下 1 秒 = 120 帧、60 fps 下 1800 帧）步长缩到 8、4、2 或 1，只会多出候选，
-    /// 不会因为对齐问题拒绝。
+    /// 起点搜索的采样步长与各残差组的候选段帧数（窗口 = P_g + 候选段）。
+    /// 步长固定 16（最短周期不足 16 帧时取该周期），候选起点是 0、16、32…；周期不是步长的整数倍时 s+P 落在另一个剩余类上，
+    /// 由样本相位 P_g mod 步长（<see cref="StartSearchPhase"/>）补采。原来取 gcd(P, 16)，P 为奇数时步长 1、逐帧光栅化 2P 帧。
+    /// 候选段 = min(前 <see cref="StartSearchCandidateSeconds"/> 秒, 最短周期) 再加淡化窗口（取整到步长），
+    /// 多出的至少一个步长给最后一个共享候选的 Δ_stride；每组不超过自己周期内的整步长。
     /// </summary>
-    public static uint StartSearchStride(ulong periodFrames)
+    public static (uint Stride, ulong[] CandidateFrames) StartSearchWindows(IReadOnlyList<ulong> periods, uint crossfadeFrames,
+        uint fpsNumerator, uint fpsDenominator)
     {
-        if (periodFrames == 0) throw new ArgumentException("解析周期帧数必须为正。");
-        ulong a = periodFrames, b = StartSearchSampleStride;
-        while (b != 0) (a, b) = (b, a % b);
-        return (uint)a;
+        ulong shortest = periods.Min();
+        if (shortest == 0 || fpsNumerator == 0 || fpsDenominator == 0) throw new ArgumentException("解析周期帧数与帧率必须为正。");
+        uint stride = (uint)Math.Min(StartSearchSampleStride, shortest);
+        ulong RoundUp(ulong frames) => checked((frames + stride - 1) / stride * stride);
+        ulong span = Math.Min(shortest / stride * stride,
+            RoundUp((ulong)Math.Ceiling(StartSearchCandidateSeconds * fpsNumerator / fpsDenominator)));
+        ulong tail = checked(span + RoundUp(crossfadeFrames));
+        return (stride, [.. periods.Select(period => Math.Min(period / stride * stride, tail))]);
+    }
+
+    /// <summary>这个组的样本相位 P mod 步长：让 s+P 也是样本帧；整除时 null（请求与改动前相同）。</summary>
+    public static ulong? StartSearchPhase(ulong periodFrames, uint stride) => periodFrames % stride is var phase and not 0 ? phase : null;
+
+    /// <summary>[0, frame) 里的样本帧数（第 0 类与相位类各按步长计），也就是第 frame 帧在样本文件里的序号。</summary>
+    public static ulong SampleOrdinal(ulong frame, uint stride, ulong? phase)
+    {
+        ulong Count(ulong residue) => frame > residue ? (frame - residue + stride - 1) / stride : 0;
+        ulong offset = (phase ?? 0) % stride;
+        return Count(0) + (offset == 0 ? 0 : Count(offset));
     }
 
     /// <summary>0.4 秒对应的整帧数，向上取整到至少一帧。</summary>

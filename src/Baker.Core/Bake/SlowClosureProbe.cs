@@ -9,6 +9,9 @@ namespace Baker.Core;
 /// </summary>
 internal static class SlowClosureProbe
 {
+    /// <summary>同时在飞的预检渲染数，与烘焙 GPU 路线的组并行默认值相同。</summary>
+    const int Parallel = 3;
+
     static int[] Layers(JsonObject group) => [.. group["layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>()];
 
     /// <summary>按 plan 建采集工程与组渲染调度（与烘焙同一个主渲染请求、同一份预热与残差起点）；返回调度器、各组循环帧数、残差组与写出的覆盖 shader 记录。</summary>
@@ -23,7 +26,7 @@ internal static class SlowClosureProbe
         var report = new JsonObject();
         await CaptureSourceBuilder.PrepareAsync(captureProject, source, original,
             source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject(), snapshot, plan, settings, false,
-            report, new StageTiming(), token);
+            report, token);
         JsonObject candidate = plan["loop"]!["candidates"]![0]!.AsObject();
         ulong frames = candidate["frames"]!.GetValue<ulong>();
         ulong[] groupFrames = [.. groups.Select(group => candidate["group_frames"]?[group["id"]!.GetValue<string>()]?.GetValue<ulong>() ?? frames)];
@@ -52,23 +55,28 @@ internal static class SlowClosureProbe
         await using var scheduler = opened;
         try
         {
-            if (residualGroups.Length > 0) await LoopStartSelector.SearchAsync(runner, scheduler, 1, null, new StageTiming(), token);
-            for (int index = 0; index < groups.Length; index++)
-            {
-                if (GroupVerdicts.SlowDrift(plan, Layers(groups[index])) is not (string degrees, int[] owners)) continue;
-                GroupCapture capture = scheduler.Capture(groups[index]);
-                ulong period = groupFrames[index];
-                JsonObject start = await runner.RenderAsync(scheduler.ClosureProbeRequest(index, Path.Combine(output, $"group-{index}-0"), 0), null, token);
-                JsonObject end = await runner.RenderAsync(scheduler.ClosureProbeRequest(index, Path.Combine(output, $"group-{index}-p"), period), null, token);
-                byte[] first = await LoopClosureCheck.ReadRetainedFrameAsync(start, 0, token);
-                byte[] wrap = await LoopClosureCheck.ReadRetainedFrameAsync(end, 0, token);
-                JsonObject closure = LoopClosureCheck.Evaluate(first, wrap, (int)capture.PixelWidth, (int)capture.PixelHeight,
-                    withAlpha: !capture.SceneClear, period, judged: true, scheduler.TileScale);
-                records.Add(new JsonObject { ["group_id"] = groups[index]["id"]!.DeepClone(), ["owner_layer_ids"] = new JsonArray([.. owners.Select(id => (JsonNode)id)]),
-                    ["drift_bound_degrees"] = degrees, ["status"] = closure["status"]!.DeepClone(),
-                    ["renderer_wall_seconds"] = new[] { start, end }.Sum(render => render["native_result"]?["wall_seconds"]?.GetValue<double>() ?? 0),
-                    ["loop_closure"] = closure });
-            }
+            if (residualGroups.Length > 0) await LoopStartSelector.SearchAsync(runner, scheduler, Parallel, null, new StageTiming(), token);
+            // 每组一次渲染同时留第 0 与第 P 帧；各组互不依赖，最多 Parallel 组同时渲，记录仍按组序。
+            int[] probed = [.. Enumerable.Range(0, groups.Length).Where(index => GroupVerdicts.SlowDrift(plan, Layers(groups[index])) is not null)];
+            var results = new JsonObject[probed.Length];
+            await System.Threading.Tasks.Parallel.ForEachAsync(Enumerable.Range(0, probed.Length),
+                new ParallelOptions { MaxDegreeOfParallelism = Parallel, CancellationToken = token }, async (slot, cancel) =>
+                {
+                    int index = probed[slot];
+                    var (degrees, owners) = GroupVerdicts.SlowDrift(plan, Layers(groups[index]))!.Value;
+                    GroupCapture capture = scheduler.Capture(groups[index]);
+                    ulong period = groupFrames[index];
+                    JsonObject render = await runner.RenderAsync(scheduler.ClosureProbeRequest(index, Path.Combine(output, $"group-{index}")), null, cancel);
+                    byte[] first = await LoopClosureCheck.ReadRetainedFrameAsync(render, 0, cancel);
+                    byte[] wrap = await LoopClosureCheck.ReadRetainedFrameAsync(render, period, cancel);
+                    JsonObject closure = LoopClosureCheck.Evaluate(first, wrap, (int)capture.PixelWidth, (int)capture.PixelHeight,
+                        withAlpha: !capture.SceneClear, period, judged: true, scheduler.TileScale);
+                    results[slot] = new JsonObject { ["group_id"] = groups[index]["id"]!.DeepClone(), ["owner_layer_ids"] = new JsonArray([.. owners.Select(id => (JsonNode)id)]),
+                        ["drift_bound_degrees"] = degrees, ["status"] = closure["status"]!.DeepClone(),
+                        ["renderer_wall_seconds"] = render["native_result"]?["wall_seconds"]?.GetValue<double>() ?? 0,
+                        ["loop_closure"] = closure };
+                });
+            foreach (JsonObject record in results) records.Add(record);
         }
         finally
         {

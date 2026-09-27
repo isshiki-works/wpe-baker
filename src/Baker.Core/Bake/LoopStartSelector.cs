@@ -13,21 +13,18 @@ internal static class LoopStartSelector
     /// <summary>
     /// 跑各残差组的起点评分并合成共享起点，写进 <paramref name="scheduler"/> 的 <see cref="GroupRenderScheduler.StartFrame"/>
     /// 与各组搜索记录；返回合成后的搜索记录（bake.json 的 loop_start_search）。
-    /// 采样步长取 gcd(各残差组 P_g, 16)：周期不是 16 的倍数时步长缩小、候选变多，不再因对齐问题抛异常。
-    /// 各组周期不同时，每组仍按自己的 (s, s+P_g) 评分，共享起点只在最短周期内的相位里挑（合成时截到公共前缀）。
+    /// 步长与候选段见 <see cref="ResidualMasking.StartSearchWindows"/>：步长固定 16，周期不整除时按组补采相位 P_g mod 16，
+    /// 候选只取前 30 秒的相位。各组周期不同时，每组仍按自己的 (s, s+P_g) 评分，共享起点只在公共前缀里挑。
     /// </summary>
     internal static async Task<JsonObject> SearchAsync(NativeRenderRunner runner, GroupRenderScheduler scheduler, int parallel,
         IProgress<RenderProgress>? progress, StageTiming timing, CancellationToken cancellationToken)
     {
         int[] residualGroups = scheduler.ResidualGroupIndexes;
-        uint sampleStride = ResidualMasking.StartSearchStride(residualGroups.Aggregate(0UL, (gcd, index) => (ulong)System.Numerics.BigInteger.GreatestCommonDivisor(gcd, scheduler.Frames(index))));
-        // 共享起点只落在最短组周期内（合成截到公共前缀），长周期组的第二个周期只需渲到 P_min + 淡化窗口（取整到步长）为止：
-        // 多出的至少一个步长给最后一个共享候选的 Δ_stride，淡化窗口让样本覆盖度仍盖住主渲染的 [s, s+P_g+C]，裁剪照旧可用。
-        ulong shortest = residualGroups.Min(index => scheduler.Frames(index));
-        ulong tail = checked(shortest + (scheduler.CrossfadeFrames + sampleStride - 1) / sampleStride * sampleStride);
+        (uint sampleStride, ulong[] candidateFrames) = ResidualMasking.StartSearchWindows(
+            [.. residualGroups.Select(scheduler.Frames)], scheduler.CrossfadeFrames, scheduler.FpsNumerator, scheduler.FpsDenominator);
         // 各组评分互不依赖：请求先按组序建好，最多 parallel 个同时跑；结果仍按组序登记与合成，与逐组串行逐字节相同。
-        var requests = residualGroups.Select(groupIndex => (Id: scheduler.Groups[groupIndex]["id"]!.GetValue<string>(),
-                Request: scheduler.StartSearchRequest(groupIndex, sampleStride, Math.Min(scheduler.Frames(groupIndex), tail)),
+        var requests = residualGroups.Select((groupIndex, slot) => (Id: scheduler.Groups[groupIndex]["id"]!.GetValue<string>(),
+                Request: scheduler.StartSearchRequest(groupIndex, sampleStride, candidateFrames[slot]),
                 Period: scheduler.Frames(groupIndex)))
             .ToArray();
         var searches = new (JsonObject Search, IReadOnlyList<ResidualStartCandidate> Candidates)[requests.Length];

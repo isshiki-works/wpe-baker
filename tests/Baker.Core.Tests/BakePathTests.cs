@@ -171,6 +171,69 @@ public class BakePathTests
         Assert.IsType<FileNotFoundException>(error);
     });
 
+    // 慢分量闭合预检每组一次稀疏渲染：1 帧预热后渲 P+1 帧、步长 P，只光栅化第 0 与第 P 帧并留原帧。
+    // 假渲染器（Python）每帧字节 = 模拟帧号 mod 251：留下的两帧必须来自模拟帧 W 与 W+P，且只起了一个渲染进程。
+    // 改回两次 1 帧渲染时 job 数与帧数对不上，这条失败。
+    [Fact]
+    public async Task SlowClosurePairComesFromOneSparseRender() => await TestTemp.Run(async dir =>
+    {
+        string? python = new[] { "python3", "python" }.SelectMany(name => (Environment.GetEnvironmentVariable("PATH") ?? "")
+                .Split(Path.PathSeparator).Select(folder => Path.Combine(folder, OperatingSystem.IsWindows() ? name + ".exe" : name)))
+            .FirstOrDefault(File.Exists);
+        Assert.SkipUnless(python is not null, "缺 Python，假渲染器跑不起来");
+        string script = Path.Combine(dir, "fake-render.py");
+        await File.WriteAllTextAsync(script, """
+            import json, os, sys
+            if sys.argv[1] == "--version":
+                print("wpe-render fake features=sparse-readback-v1,gpu-samples-v1"); sys.exit(0)
+            job = json.load(open(sys.argv[3], encoding="utf-8"))
+            os.makedirs(job["output_dir"], exist_ok=True)
+            warm, frames = job.get("warmup_frames", 0), job["frames"]
+            stride, phase = job.get("output_frame_stride", 1), job.get("output_frame_phase")
+            size = (job.get("output_sample_width") or job["width"]) * (job.get("output_sample_height") or job["height"]) * 4
+            written = 0
+            for frame in range(warm, warm + frames):
+                offset = (frame - warm) % stride
+                if offset != 0 and offset != phase: continue
+                sys.stdout.buffer.write(bytes([frame % 251]) * size); written += 1
+            sys.stdout.flush()
+            json.dump({"status": "complete", "written_frames": written, "renderer_error_count": 0, "output_frame_stride": stride,
+                       "output_frame_phase": phase, "effect_render_scale": 1.0, "match_effect_resolution": False,
+                       "orthographic_capture_viewport": job.get("orthographic_capture_viewport"), "layer_selection": job.get("layer_selection")},
+                      open(os.path.join(job["output_dir"], "result.json"), "w"))
+            """);
+        string renderer;
+        if (OperatingSystem.IsWindows())
+        {
+            renderer = Path.Combine(dir, "fake-render.cmd");
+            await File.WriteAllTextAsync(renderer, $"@\"{python}\" \"{script}\" %*\r\n");
+        }
+        else
+        {
+            renderer = Path.Combine(dir, "fake-render");
+            await File.WriteAllTextAsync(renderer, $"#!/bin/sh\nexec \"{python}\" \"{script}\" \"$@\"\n");
+            File.SetUnixFileMode(renderer, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        var runner = new NativeRenderRunner(new NativeTools(renderer, Path.Combine(dir, "no-ffmpeg"), Path.Combine(dir, "no-ffprobe"), []));
+        var plan = new JsonObject
+        {
+            ["projection"] = new JsonObject { ["center_x"] = 0.0, ["center_y"] = 0.0, ["visible_width"] = 64.0, ["visible_height"] = 48.0 },
+            ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 60, ["patches"] = new JsonArray() }) },
+        };
+        JsonObject[] groups = [new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(1, 2), ["include_scene_clear"] = true }];
+        var settings = new HybridAnalyzeRequest(1, Fixture, dir, dir, 64, 48, 30, 1);
+        await using var scheduler = new GroupRenderScheduler(runner, new HybridBakeRequest(2, plan, dir), plan, settings, groups,
+            Fixture, Path.Combine(dir, "out"), new JsonObject(), 60, [60], 0, 7, [], 1, PlaybackEncoderSelection.Software, null, CancellationToken.None);
+        RenderRequest request = scheduler.ClosureProbeRequest(0, Path.Combine(dir, "probe"));
+        Assert.True(request is { Frames: 61, FrameSampleStride: 60, FrameSamplesOnly: true, PlaybackEncoderKind: null, GpuEncoding: null });
+        JsonObject render = await runner.RenderAsync(request, null, CancellationToken.None);
+        byte[] first = await LoopClosureCheck.ReadRetainedFrameAsync(render, 0), wrap = await LoopClosureCheck.ReadRetainedFrameAsync(render, 60);
+        Assert.Equal(64 * 48 * 4, first.Length);
+        Assert.Equal((byte)(request.WarmupFrames % 251), first[0]);
+        Assert.Equal((byte)((request.WarmupFrames + 60) % 251), wrap[0]);
+        Assert.Equal("sparse_rgba", render["native_frame_transport"]!.GetValue<string>());
+    });
+
     // 测速准备或渲染失败（这里是源工程不存在）记 not_measured / probe_failed，不让整次分析崩溃；调用方据此按逐项预算重分析。
     [Fact]
     public async Task SlowSpeedProbeFailureIsNotMeasuredInsteadOfThrowing() => await TestTemp.Run(async dir =>

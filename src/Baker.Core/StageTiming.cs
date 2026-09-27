@@ -30,12 +30,15 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
     /// <summary>master_render 内部与渲染重叠的分量，不参与求和。</summary>
     public const string Readback = "readback";
     public const string EncodeMaster = "encode_master";
+    /// <summary>master_render 里渲染器退出之后的两步（成品画质门、本机硬解实测）各自的墙钟，见 GroupRenderScheduler 的 post_render_timing。</summary>
+    public const string QualityGate = "quality_gate";
+    public const string HardwareDecodeProbe = "hardware_decode_probe";
 
     private readonly Dictionary<string, double> seconds = new(StringComparer.Ordinal);
     private readonly Stopwatch total = Stopwatch.StartNew();
     private readonly object gate = new();
     private readonly Dictionary<string, double> overlapped = new(StringComparer.Ordinal);
-    private double? readback, encodeMaster, rendererWall;
+    private double? readback, encodeMaster, rendererWall, qualityGate, hardwareDecodeProbe;
     private string? deviceUuid, deviceName;
 
     /// <summary>记录这次烘焙实际使用的 GPU；名称解析失败时只保留 UUID。</summary>
@@ -101,6 +104,8 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
             Accumulate(ref readback, manifest["stream_timing"]?["readback_seconds"]);
             Accumulate(ref encodeMaster, manifest["stream_timing"]?["encode_seconds"]);
             Accumulate(ref rendererWall, manifest["native_result"]?["wall_seconds"]);
+            Accumulate(ref qualityGate, manifest["post_render_timing"]?["quality_gate_seconds"]);
+            Accumulate(ref hardwareDecodeProbe, manifest["post_render_timing"]?["hardware_decode_seconds"]);
         }
     }
 
@@ -148,7 +153,9 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
                 {
                     [Readback] = Round(readback),
                     [EncodeMaster] = Round(encodeMaster),
-                    ["renderer_wall_seconds"] = Round(rendererWall)
+                    ["renderer_wall_seconds"] = Round(rendererWall),
+                    [QualityGate] = Round(qualityGate),
+                    [HardwareDecodeProbe] = Round(hardwareDecodeProbe)
                 },
                 ["overlapped"] = new JsonObject
                 {
@@ -157,7 +164,8 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
                 ["basis"] = "每一项都是本进程测得的墙钟秒。stages 的各项互斥，它们与 other 相加等于 total_seconds；" +
                     "没有发生过的阶段是 null，不是 0。master_render_breakdown 是 master_render 内部与渲染重叠的分量" +
                     "（readback 是等渲染器交出帧的时间，encode_master 是等待编码管道接收帧的背压时间，" +
-                    "renderer_wall_seconds 是渲染器自己在 result.json 里报的墙钟），它们不参与求和。" +
+                    "renderer_wall_seconds 是渲染器自己在 result.json 里报的墙钟，quality_gate 与 hardware_decode_probe 是渲染器退出后" +
+                    "直编成品的画质门与本机硬解实测各自的墙钟，两者同时跑、可以重叠），它们不参与求和。" +
                     "overlapped 是与互斥阶段并行的合成校验道自己的墙钟，也不参与求和；stages 里的 composition_validation 只记主道做完后还在等它的那段。"
             };
         }

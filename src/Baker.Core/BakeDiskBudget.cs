@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Numerics;
 using System.Text.Json.Nodes;
 
 namespace Baker.Core;
@@ -62,8 +61,8 @@ public static class BakeDiskBudget
             ["required_bytes"] = RequiredBytes,
             ["master_compression_ratio"] = MasterCompressionRatio,
             ["basis"] = "Each group records its own frame count (group_frames, else the loop length). Every group's playback video at the " +
-                "embedded-video reference bitrate, plus the residual groups' start-search samples (512-wide RGB thumbnails every stride frames over " +
-                "P_g + min(P_g, P_min + crossfade), colour and alpha for transparent groups), plus 13 retained RGBA frames per group " +
+                "embedded-video reference bitrate, plus the residual groups' start-search samples (512-wide RGB thumbnails every 16 frames, plus the " +
+                "P_g mod 16 phase, over P_g + min(first 30 s, P_min) + crossfade), colour and alpha for transparent groups), plus 13 retained RGBA frames per group " +
                 "(plus the crossfade window on both sides and the blended head for residual groups), plus one spliced copy of the largest " +
                 "residual group's playback video. No lossless master is written."
         };
@@ -102,18 +101,21 @@ public static class BakeDiskBudget
             intermediate += (ulong)width * height * 4 * (RetainedFrames + (residual ? 3UL * crossfadeFrames : 0));
             if (residual) crossfade = Math.Max(crossfade, groupPlayback);
         }
-        // 起点搜索的窗口与步长照 LoopStartSelector.SearchAsync：步长 gcd(各残差组 P_g, 16)，窗口 P_g + min(P_g, P_min + 淡化取整到步长)。
+        // 起点搜索的窗口、步长与样本相位照 LoopStartSelector.SearchAsync（ResidualMasking.StartSearchWindows）。
         double search = 0;
-        if (residualGroups.Count > 0)
+        if (residualGroups.Count > 0 && fpsNumerator > 0 && fpsDenominator > 0)
         {
-            ulong[] periods = [.. residualGroups.Select(i => recordedFrames[i])];
-            ulong stride = ResidualMasking.StartSearchStride(periods.Aggregate(0UL, (gcd, period) => (ulong)BigInteger.GreatestCommonDivisor(gcd, period)));
-            ulong tail = periods.Min() + (crossfadeFrames + stride - 1) / stride * stride;
+            int[] residual = [.. residualGroups];
+            (uint stride, ulong[] candidateFrames) = ResidualMasking.StartSearchWindows(
+                [.. residual.Select(i => recordedFrames[i])], crossfadeFrames, fpsNumerator, fpsDenominator);
             double sampleWidth = Math.Round(ResidualMasking.StartSearchSampleWidth * SwayRecurrenceSolver.SpeedLimitScale(width, height));
             double sampleBytes = sampleWidth * Math.Max(1, Math.Round(height * sampleWidth / width)) * 3;
-            foreach (int i in residualGroups)
-                search += (recordedFrames[i] + Math.Min(recordedFrames[i], tail) + stride - 1) / stride * sampleBytes *
-                    (transparentGroups[i] ? 2 : 1);
+            for (int slot = 0; slot < residual.Length; ++slot)
+            {
+                ulong period = recordedFrames[residual[slot]];
+                search += ResidualMasking.SampleOrdinal(period + candidateFrames[slot], stride, ResidualMasking.StartSearchPhase(period, stride)) *
+                    sampleBytes * (transparentGroups[residual[slot]] ? 2 : 1);
+            }
         }
         return new(frames, groups.Length, intermediate, Bytes(search), Bytes(playback), Bytes(crossfade));
     }
