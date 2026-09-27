@@ -268,6 +268,30 @@ TEST_F(ShaderTime, SwayTermsCarryKnobs) {
     }
 }
 
+// iris 的写法：floor(t) 加常量偏移后再乘 1.9、2.5（顶点阶段）。非时间部分空间上处处相同，字面量仍是各自那一项的旋钮；
+// (uv + t)·3.0 的 3.0 连纹理坐标一起缩放，不是
+TEST_F(ShaderTime, LiteralOnSpatiallyUniformOffsetIsKnob) {
+    Case c { "", "iris_terms", {}, { { "g_Speed", { 1.0f } } } };
+    c.vert = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nuniform float g_Time;\nuniform float g_Speed;\n"
+             "varying vec4 v_TexCoordIris;\n"
+             "void main() {\n  gl_Position = vec4(a_Position, 1.0);\n  float n = floor(g_Time * g_Speed);\n"
+             "  v_TexCoordIris = vec4(a_TexCoord + vec2(sin((n + 0.3) * 1.9), cos((n + 0.7) * 2.5)) * 0.01,\n"
+             "                        fract((a_TexCoord.x + g_Time) * 3.0), 0.0);\n}\n";
+    c.frag = "varying vec4 v_TexCoordIris;\nvoid main() { gl_FragColor = v_TexCoordIris; }\n";
+    const auto sig = Analyze(c);
+    auto literal = [](const st::Term& t, float value) {
+        return std::any_of(t.knobs.begin(), t.knobs.end(), [&](const st::Knob& k) {
+            return k.stage == "vert" && k.uniform.empty() && k.varying.empty() && k.literal == value;
+        });
+    };
+    for (const auto& [value, seconds] : { std::pair { 1.9f, kTau / double(1.9f) }, std::pair { 2.5f, kTau / 2.5 } }) {
+        const auto it = std::find_if(sig.terms.begin(), sig.terms.end(), [&](const st::Term& t) { return literal(t, value); });
+        ASSERT_NE(it, sig.terms.end()) << value << ' ' << st::ToJson(sig);
+        EXPECT_NEAR(it->seconds, seconds, seconds * 1e-6) << st::ToJson(sig);
+    }
+    for (const auto& t : sig.terms) EXPECT_FALSE(literal(t, 3.0f)) << st::ToJson(sig);
+}
+
 // 旧写法的存储缓冲（Uniform + BufferBlock）同 StorageBuffer 按副作用写入报原因；普通 uniform 块（Block）不算
 TEST(ShaderTimeSpirv, BufferBlockIsSideEffect) {
     auto module = [](unsigned int decoration) {

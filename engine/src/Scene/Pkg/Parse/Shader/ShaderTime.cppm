@@ -204,6 +204,9 @@ struct Comp {
     bool                     rate_unknown { false };
     // 含非时间部分（纹理坐标、非零常量、周期函数结果等）：再乘的因子会连带缩放静态部分，改它会变观感，不记旋钮
     bool                     mixed { true };
+    // 非时间部分含逐像素量（纹理坐标、顶点属性、采样结果）或说不清的量；否 = 空间上处处相同（常量偏移、只由时间算出的周期量）。
+    // 只含后者时再乘的字面量仍是旋钮：改它只改这一项的速度和常量相位，不改画面的空间形状
+    bool                     spatial { true };
     std::vector<Per>         periods;
     std::vector<std::string> external;
     std::string              aperiodic;
@@ -231,6 +234,7 @@ Comp Known(double v, int pi = 0) {
     c.value = v;
     c.pi    = pi;
     c.mixed = v != 0;
+    c.spatial = false;
     if (std::isfinite(v)) c.lo = c.hi = v;
     return c;
 }
@@ -276,6 +280,7 @@ Comp Join(const Comp& a, const Comp& b) {
     for (const Rate& x : b.rates) AddUnique(r.rates, x);
     r.rate_unknown = a.rate_unknown || b.rate_unknown;
     r.mixed        = a.mixed || b.mixed;
+    r.spatial      = a.spatial || b.spatial;
     // 范围只在两边相同时保留：循环里逐轮变宽的量一次就放弃，不动点照常收敛
     if (a.lo != b.lo || a.hi != b.hi) r.lo = -kInf, r.hi = kInf;
     r.poles = a.poles && b.poles;
@@ -335,6 +340,7 @@ Comp Add(const Comp& a, const Comp& b, double sign) {
         for (const Rate& y : b.rates) AddUnique(r.rates, Sum(x, y, sign));
     r.rate_unknown = a.rate_unknown || b.rate_unknown;
     r.mixed        = a.mixed || b.mixed;
+    r.spatial      = a.spatial || b.spatial;
     r.lo           = sign > 0 ? a.lo + b.lo : a.lo - b.hi;
     r.hi           = sign > 0 ? a.hi + b.hi : a.hi - b.lo;
     r.poles        = a.poles != b.poles && (a.poles ? b : a).Bounded();
@@ -349,9 +355,14 @@ Comp Scale(const Comp& a, const Comp& k) {
     if (k.known && k.value == 0) return Known(0);
     Comp r = a;
     if (k.known) {
-        // 只有纯时间量（如 g_Speed·g_Time）上的因子才是旋钮；(uv + t·s)·k 的 k 同时缩放纹理坐标，不记
+        // 只有纯时间量（如 g_Speed·g_Time）上的因子才是旋钮；(uv + t·s)·k 的 k 同时缩放纹理坐标，不记。
+        // 非时间部分空间上处处相同时（(floor(t) + c)·1.9），字面量因子也记：改它只改这一项的速度与常量相位
+        Knobs literals;
+        for (const Knob& n : k.knobs)
+            if (n.uniform.empty() && n.varying.empty()) literals.push_back(n);
         for (Rate& x : r.rates)
-            x = Rate { x.v * k.value, PiAdd(x.pi, k.pi), r.mixed ? x.knobs : Union(x.knobs, k.knobs) };
+            x = Rate { x.v * k.value, PiAdd(x.pi, k.pi),
+                       ! r.mixed ? Union(x.knobs, k.knobs) : r.spatial ? x.knobs : Union(x.knobs, literals) };
         r.lo = a.lo * k.value, r.hi = a.hi * k.value;
         if (k.value < 0) std::swap(r.lo, r.hi);
         if (r.known) {
@@ -360,9 +371,10 @@ Comp Scale(const Comp& a, const Comp& k) {
             r.knobs = Union(r.knobs, k.knobs);
         }
     } else {
-        r.known = false;
-        r.value = 0;
-        r.pi    = 0;
+        r.known   = false;
+        r.spatial = true;
+        r.value   = 0;
+        r.pi      = 0;
         r.knobs.clear();
         r.lo = -kInf, r.hi = kInf, r.poles = false;
         if (r.Linear()) {
@@ -400,6 +412,7 @@ Comp Div(const Comp& a, const Comp& b, const std::string& where) {
 // 周期为 q（π 次数 pi，自变量单位）的函数作用在 a 上：周期 q/|系数|，次数 pi − 系数的次数
 Comp Periodic(const Comp& a, double q, int pi, const std::string& where) {
     Comp r;
+    r.spatial = a.spatial;
     MergeTags(r, a);
     if (a.rate_unknown) {
         if (r.aperiodic.empty()) r.aperiodic = "time_rate_not_constant" + where;
@@ -903,7 +916,8 @@ Val Analyzer::Load(const Ptr& p, const State& S) const {
         if (n == "g_Time") {
             for (auto& c : r) {
                 c.rates = { Rate { 1.0 } };
-                c.mixed = false;
+                c.mixed   = false;
+                c.spatial = false;
                 c.lo = c.hi = 0;
             }
             return r;
