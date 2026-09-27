@@ -21,7 +21,7 @@ def main() -> None:
     tools_path = output / "tools.json"
     tools_path.write_text(json.dumps(tools), encoding="utf-8")
     request = {"source": str(ROOT / "tests/fixtures/native/authored-audio"),
-               "assets": "D:/Apps/Steam/steamapps/common/wallpaper_engine/assets",
+               "assets": os.environ.get("WPE_ASSETS_DIR", "C:/Program Files (x86)/Steam/steamapps/common/wallpaper_engine/assets"),
                "output_directory": str(output / "中文成品"), "width": 128, "height": 96,
                "fps_numerator": 120000, "fps_denominator": 1001, "frames": 120,
                "warmup_frames": 37, "seed": 7, "include_audio": True}

@@ -173,7 +173,7 @@ internal sealed class MasterRewrite(FfmpegTool ff)
         }
     }
 
-    private static string ConcatEntry(string path) => path.Replace('\\', '/').Replace("'", @"'\''");
+    internal static string ConcatEntry(string path) => path.Replace('\\', '/').Replace("'", @"'\''");
 
     /// <summary>
     /// 找第一个不小于 <paramref name="minimum"/> 的 IDR，作为「只重编码接缝片段」的切点。

@@ -38,6 +38,14 @@ internal sealed class WorkLayout(string outputDirectory)
     /// <summary>输出根或合成探针 / 参照已存在：烘焙会以 must-be-new 拒绝，这些不是本案建的，结束时不按登记表清理。</summary>
     internal bool Occupied => Path.Exists(Output) || Siblings.Any(sibling => sibling.CompositionProbe && Path.Exists(Output + sibling.Suffix));
 
+    /// <summary>挪开旧产物的目标：已被占用（同名重试、同一组第二次超上限）就依次加 -2、-3……，不覆盖、不抛撞名。</summary>
+    internal static string Vacant(string path)
+    {
+        string candidate = path;
+        for (int n = 2; Path.Exists(candidate); ++n) candidate = $"{path}-{n}";
+        return candidate;
+    }
+
     /// <summary>合成被拒（含脚本报错门）时探针、参照要留给报告指路。</summary>
     internal static bool KeepsCompositionProbe(JsonObject? report) =>
         report?["probe_paths"] is JsonObject ||

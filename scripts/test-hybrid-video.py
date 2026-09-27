@@ -22,7 +22,7 @@ env = os.environ.copy()
 env['DOTNET_ROOT'] = str(ROOT / '.dotnet')
 env['PATH'] = str(ROOT / '.dotnet') + ';' + env.get('PATH', '')
 cli = ROOT / 'src/Baker.Cli/bin/Release/net10.0/wpe-baker.exe'
-assets = 'D:/Apps/Steam/steamapps/common/wallpaper_engine/assets'
+assets = os.environ.get("WPE_ASSETS_DIR", "C:/Program Files (x86)/Steam/steamapps/common/wallpaper_engine/assets")
 tools = out / 'tools.json'
 tools.write_text(json.dumps({
     'renderer': str(ROOT / 'build/native-release22/bin/wpe-render.exe'),
