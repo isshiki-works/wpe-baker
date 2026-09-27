@@ -125,6 +125,24 @@ internal static class SuitabilityVerdictChecks
             Text(Verdict(undecided), "reason_en") == MessageCatalog.Get(ResidualMasking.NotSupportedReasonKey, MessageCatalog.English),
             "an empty candidate list with no structured reason is unconverged, not a proven cannot");
 
+        // --- 慢分量预检没闭合、留实时后生成不了：有证明的不能，结论与摘要都说"动画在 N 分钟内不会重复"，不说"全部依赖实时输入" ---
+        JsonObject slowOpen = Plan(groups: 0, totalLayers: 30, videoLayers: 0, loop: Loop(),
+            blockers: [new Blocker(BlockerCode.NoInputIndependentGroupGeneric)]);
+        slowOpen["slow_closure_probe"] = new JsonArray(new JsonObject { ["loop_closure"] = new JsonObject { ["status"] = "not_closed" } });
+        slowOpen["suitability"] = Verdict(slowOpen);
+        PlanNarrative.Attach(slowOpen);
+        check(Text(slowOpen["suitability"]!.AsObject(), "loop_convergence") == "cannot" && slowOpen["summary"]!["zh"]!.GetValue<string>()
+                .Contains(MessageCatalog.Get(ResidualMasking.NeverRepeatsReasonKey, MessageCatalog.Chinese, 180d / 60), StringComparison.Ordinal),
+            "a slow component proven not to close leaves a proven cannot, not an all-live-input verdict");
+        // --- 未收敛而第一条阻断是分配拒绝：摘要按收敛理由说"暂不支持"，不说"部分内容必须实时渲染" ---
+        JsonObject unconverged = Plan(groups: 2, totalLayers: 50, videoLayers: 20, loop: Loop(unresolved: 1),
+            blockers: [new Blocker(BlockerCode.BakeAllocation, ["A layer has no proof."])]);
+        unconverged["suitability"] = Verdict(unconverged);
+        PlanNarrative.Attach(unconverged);
+        check(unconverged["summary"]!["zh"]!.GetValue<string>().Contains(MessageCatalog.Get(ResidualMasking.NotSupportedReasonKey, MessageCatalog.Chinese),
+                StringComparison.Ordinal),
+            "an unconverged verdict is what the summary says, not the first allocation blocker");
+
         // --- 真实 analyze 路径：候选存在时不写原因，没有时间机制时写 NoTemporalMechanism ---
         RunAnalyzeChecks(check, outputRoot);
     }

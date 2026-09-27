@@ -175,6 +175,19 @@ public sealed class HybridBakeService(NativeTools tools)
             retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
     }
 
+    /// <summary>
+    /// 组主渲染的时序：残差淡化窗口、平稳粒子预热（可掩盖粒子层 warmup_seconds 的最大值，才进入与时间无关的分布）、单次入场帧与残差组。
+    /// 入场：视频从入场结束后录（定格态），入场那几秒成品显示原作图层（SceneAssembler.ApplyIntro）；昼夜动态导出与退回旧行为
+    /// （settings.single_shot_live）时不切换，入场帧为 0。烘焙与分析侧慢分量预检（<see cref="SlowClosureProbe"/>）共用，两边预热不会漂开。
+    /// </summary>
+    internal static (uint Crossfade, ulong ParticleWarmup, ulong Intro, int[] ResidualGroups) GroupTiming(JsonObject plan,
+        HybridAnalyzeRequest settings, JsonObject? residualMasking, JsonObject runtime, bool daytimeExport) =>
+        (residualMasking is null ? 0 : ResidualMasking.CrossfadeFrames(settings.FpsNumerator, settings.FpsDenominator),
+         residualMasking is null ? 0 : ResidualMasking.WarmupFrames(residualMasking, settings.FpsNumerator, settings.FpsDenominator),
+         daytimeExport || settings.SingleShotLive ? 0
+            : (ulong)Math.Ceiling(SingleShotAllocation.IntroSeconds(plan, runtime) * settings.FpsNumerator / settings.FpsDenominator),
+         residualMasking is null ? [] : ResidualMasking.ResidualGroupIndexes(plan, residualMasking));
+
     /// <summary>计划里首个循环候选的时长（秒）；没有候选时 null。</summary>
     private static double? LoopSeconds(JsonObject plan) =>
         (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["frames"]?.GetValue<ulong>() is ulong frames
@@ -465,24 +478,17 @@ public sealed class HybridBakeService(NativeTools tools)
             await CaptureSourceBuilder.PrepareAsync(captureProject, source, original, metadata, snapshot, plan, settings, probe,
                 report, timing, token);
             using (timing.Measure(StageTiming.SourceCapture)) await source.ExtractAsync(project, token);
-            crossfadeFrames = residualMasking is null ? 0 : ResidualMasking.CrossfadeFrames(settings.FpsNumerator, settings.FpsDenominator);
-            // 平稳随机粒子要跑过预热（所有可掩盖粒子层 warmup_seconds 的最大值）才进入与时间无关的分布；没有粒子层时为 0。
-            warmupFrames = residualMasking is null ? 0 : ResidualMasking.WarmupFrames(residualMasking, settings.FpsNumerator, settings.FpsDenominator);
+            (crossfadeFrames, warmupFrames, introFrames, residualGroupIndexes) = GroupTiming(plan, settings, residualMasking, initialRuntime, daytimeExport is not null);
             if (residualMasking is not null)
             {
                 report["particle_warmup_frames"] = warmupFrames;
                 report["particle_warmup_seconds"] = residualMasking["max_warmup_seconds"]?.DeepClone();
             }
-            // 单次入场动画：视频从入场结束后录（定格态），入场那几秒成品显示原作图层（SceneAssembler.ApplyIntro）。
-            // 退回旧行为（settings.single_shot_live）时不切换：相机入场那几秒成品是放大的视频，合成门从入场结束后比（ProbeBake）。
-            if (daytimeExport is null && !settings.SingleShotLive)
-                warmupFrames += introFrames = (ulong)Math.Ceiling(SingleShotAllocation.IntroSeconds(plan, initialRuntime) *
-                    settings.FpsNumerator / settings.FpsDenominator);
+            warmupFrames += introFrames;
             report["full_render_attempt_limit"] = probe ? 0 : 1;
             report["automatic_full_render_retries"] = false;
             // 含可掩盖残差层的组：它们的 master 多渲一个淡化窗口、各自测第一层并淡化；其余组照常渲 P 帧，相位同样是 warmup + S。
             // 含缓变分量的组不在其中（只走硬切接缝门），所以列表可能为空；布局门另在组循环里守"每个残差层都在某个组里"。
-            residualGroupIndexes = residualMasking is null ? [] : ResidualMasking.ResidualGroupIndexes(plan, residualMasking);
             if (residualMasking is not null)
                 report["residual_group_ids"] = new JsonArray([.. residualGroupIndexes.Select(index => groups[index]["id"]!.DeepClone())]);
             // 直编组要在渲染开始前就定下播放档位（编码器随渲染一起启动），所以档位解析提到所有渲染之前，整次烘焙只解析一次。

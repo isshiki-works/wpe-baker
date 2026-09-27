@@ -277,10 +277,8 @@ public static class PlanNarrative
 
     private static JsonObject Narrate(JsonObject report, UnresolvedNotes? notes)
     {
-        if (report["suitability"] is JsonObject suitability &&
-            suitability["rule"]?.GetValue<string>() == HybridSuitability.NoIndependentContentRule)
-            return Bilingual(Blocked, "summary.not_suitable_current",
-                [suitability["reason_zh"]!.GetValue<string>()], [suitability["reason_en"]!.GetValue<string>()]);
+        if (SuitabilityReason(report) is (string reasonZh, string reasonEn))
+            return Bilingual(Blocked, "summary.not_suitable_current", [reasonZh], [reasonEn]);
         var blockers = report["blockers"] as JsonArray ?? [];
         if (blockers.Count > 0)
         {
@@ -495,6 +493,17 @@ public static class PlanNarrative
     /// unknown 时把 plan 里任何一条现成的理由带出来（中、英），没有就说内部未给出理由。loop.unresolved 首条按它的
     /// unresolved_localized 出双语；其余几处只有英文原文，中英都用原文。
     /// </summary>
+    /// <summary>
+    /// 留实时后没东西可烘，或有阻断且有收敛结论（有证明的不能 / 未收敛，HybridSuitability.Converged 写 reason_key）时的理由。
+    /// 摘要与界面第二行都读它，代替第一条阻断（如 blocker.bake_allocation 的"部分内容必须实时渲染"）；
+    /// 没有阻断时摘要照旧说未解析的循环机制（点名层），比这句具体。
+    /// </summary>
+    public static (string Zh, string En)? SuitabilityReason(JsonObject? report) =>
+        report?["suitability"] is JsonObject suitability &&
+        (suitability["rule"]?.GetValue<string>() == HybridSuitability.NoIndependentContentRule ||
+         suitability["reason_key"] is JsonValue && report["blockers"] is JsonArray { Count: > 0 })
+            ? (suitability["reason_zh"]!.GetValue<string>(), suitability["reason_en"]!.GetValue<string>()) : null;
+
     private static (string Zh, string En)? FirstReason(JsonObject report)
     {
         if ((report["loop"]?["unresolved"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault() is JsonObject first &&
