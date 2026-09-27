@@ -55,20 +55,20 @@ internal static class BakeOverheadChecks
         byte First(string copy, string name) => File.ReadAllBytes(Path.Combine(copy, name))[0];
         check(First(linkedCopy, "video.mp4") == 42 && First(plainCopy, "video.mp4") == 0,
             "a linked extraction hard-links large binary resources instead of copying them");
-        // P2-5：慢分量预检一次渲染留第 0 与第 P 帧，靠"只出样本的渲染可以留样本帧"。请求校验放行它（走到找渲染器才失败），
+        // P2-5：慢分量预检只要 1 帧原帧、不编码，靠"只出样本的渲染可以留样本帧"。请求校验放行它（走到找渲染器才失败），
         // 留非样本帧仍拒绝。改回"只出样本就不许留原帧"时第一条失败。
         var runner = new NativeRenderRunner(new(Path.Combine(root, "missing-renderer"), Path.Combine(root, "missing-ffmpeg"),
             Path.Combine(root, "missing-ffprobe"), []));
-        var closure = new RenderRequest(project, root, Path.Combine(root, "closure"), 64, 64, 60, 1, 91, WarmupFrames: 30,
-            FrameSamplesOnly: true, FrameSampleStride: 90, FrameSampleWidth: 1, RetainFrames: [0, 90]);
+        var closure = new RenderRequest(project, root, Path.Combine(root, "closure"), 64, 64, 60, 1, 1, WarmupFrames: 120,
+            FrameSamplesOnly: true, FrameSampleStride: 1, FrameSampleWidth: 1, RetainFrames: [0]);
         async Task<Type?> Failure(RenderRequest request)
         {
             try { await runner.RenderAsync(request); return null; }
             catch (Exception error) { return error.GetType(); }
         }
         check(await Failure(closure) == typeof(FileNotFoundException) &&
-            await Failure(closure with { RetainFrames = [0, 45] }) == typeof(ArgumentException),
-            "a sample-only render may retain full frames only at sample indices, so frames 0 and P come from one render");
+            await Failure(closure with { Frames = 2, FrameSampleStride = 2, RetainFrames = [1] }) == typeof(ArgumentException),
+            "a sample-only render may retain full frames only at sample indices");
 
         check(First(linkedCopy, "shaders/big.frag") == 0 && First(linkedCopy, "big.json") == 0 && First(linkedCopy, "small.tex") == 5,
             "shaders, JSON and small files are still copied, so rewriting them in a work copy never reaches the source");
