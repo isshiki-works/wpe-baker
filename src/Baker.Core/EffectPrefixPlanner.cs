@@ -31,6 +31,9 @@ internal static class EffectPrefixPlanner
             string[][]? effectShaders = null;
             for (int count = 1; count <= effects.Count; ++count)
             {
+                // 读指针/音频的效果（xray、cursorripple、带音频的 pulse）就是要留实时的后缀：前缀截在它之前，
+                // 之前的纯时间特效（waterwaves、shake、foliagesway、clouds……）照样缓存。
+                if (EffectReadsLiveInput(runtime, ownerId, count - 1)) break;
                 if (effects[count - 1] is not JsonObject effect || !SafeEffect(effect, source, retainedPuppetAnimation)) break;
                 if (effect["id"] is null) continue;
                 effectShaders ??= EffectShaderIndex(originalScene, source, assets, ownerId);
@@ -145,7 +148,7 @@ internal static class EffectPrefixPlanner
             owner["image"] is not JsonValue image || !image.TryGetValue<string>(out string? imageResource) ||
             string.IsNullOrWhiteSpace(imageResource) || owner["effects"] is not JsonArray { Count: > 0 } ||
             HasUnsafeOwnerDynamic(owner) || owner.ContainsKey("particle") || owner.ContainsKey("puppet") ||
-            HasRuntimeInput(runtime, ownerId) || !source.Contains(imageResource)) return false;
+            BaseReadsRuntimeInput(runtime, ownerId) || !source.Contains(imageResource)) return false;
         JsonObject model;
         try { model = source.ReadJson(imageResource); }
         catch (Exception error) when (error is IOException or InvalidDataException) { return false; }
@@ -156,7 +159,7 @@ internal static class EffectPrefixPlanner
         try { material = source.ReadJson(materialResource); }
         catch (Exception error) when (error is IOException or InvalidDataException) { return false; }
         return !HasDynamic(material) && material["passes"] is JsonArray { Count: 1 } passes && passes[0] is JsonObject pass &&
-            (pass["shader"]?.GetValue<string>() is "genericimage3" or "genericimage4") && pass["textures"] is JsonArray { Count: 1 } textures &&
+            EffectPrefixCache.CacheableBaseShader(pass["shader"]?.GetValue<string>()) && pass["textures"] is JsonArray { Count: 1 } textures &&
             textures[0]?.GetValue<string>() is string texture && !texture.StartsWith("_rt_", StringComparison.Ordinal);
     }
 
@@ -246,17 +249,32 @@ internal static class EffectPrefixPlanner
             .All(match => calls.Contains(match.Groups[1].Value));
     }
 
-    private static bool HasRuntimeInput(JsonObject runtime, int ownerId)
+    /// <summary>
+    /// 底材质（非效果材质）读实时输入，或别的对象在运行中改写这一层：前缀缓存不成立。
+    /// 效果材质读输入不在这里判——那些效果是后缀，由 <see cref="Propose"/> 在第一个读输入的效果之前截断前缀。
+    /// 这一层自己发出的依赖边也不在这里判：合格的层整层没有脚本与动画（<see cref="HasUnsafeOwnerDynamic"/>）、底材质不读 _rt_ 纹理，
+    /// 这些边只能出自效果纹理读别的层，而读 _rt_ 的效果到不了前缀（<see cref="SafeEffect"/> 截断），归后缀。
+    /// </summary>
+    private static bool BaseReadsRuntimeInput(JsonObject runtime, int ownerId)
     {
         if (runtime["runtime_dependencies"] is JsonArray dependencies && dependencies.OfType<JsonObject>().Any(dependency =>
-            dependency["initialization"]?.GetValue<bool>() != true &&
-            (SceneGraph.Int(dependency["owner"]) == ownerId || SceneGraph.Int(dependency["target"]) == ownerId) &&
-            !IsExternalVisibilityDependency(dependency, ownerId))) return true;
-        return runtime["runtime_layers"] is JsonArray layers && layers.OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["owner"]) == ownerId)
-            .SelectMany(layer => layer["materials"]?.AsArray().OfType<JsonObject>() ?? []).Any(material =>
-                material["uses_audio_spectrum"]?.GetValue<bool>() == true || material["uses_system_media_thumbnail"]?.GetValue<bool>() == true ||
-                material["active_uniforms"]?.AsArray().Any(uniform => uniform?.GetValue<string>() is "g_PointerPosition" or "g_PointerPositionLast" or "g_ParallaxPosition") == true);
+            dependency["initialization"]?.GetValue<bool>() != true && SceneGraph.Int(dependency["target"]) == ownerId &&
+            SceneGraph.Int(dependency["owner"]) != ownerId && !IsExternalVisibilityDependency(dependency, ownerId))) return true;
+        return Materials(runtime, ownerId).Any(material => material["role"]?.GetValue<string>() != "effect" && ReadsLiveInput(material));
     }
+
+    /// <summary>第 index 个效果的运行时材质读实时输入（音频频谱、媒体缩略图、指针、视差位置）。</summary>
+    private static bool EffectReadsLiveInput(JsonObject runtime, int ownerId, int index) =>
+        Materials(runtime, ownerId).Any(material => material["role"]?.GetValue<string>() == "effect" &&
+            SceneGraph.Int(material["effect"]) == index && ReadsLiveInput(material));
+
+    private static IEnumerable<JsonObject> Materials(JsonObject runtime, int ownerId) =>
+        (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["owner"]) == ownerId)
+            .SelectMany(layer => layer["materials"]?.AsArray().OfType<JsonObject>() ?? []);
+
+    private static bool ReadsLiveInput(JsonObject material) =>
+        material["uses_audio_spectrum"]?.GetValue<bool>() == true || material["uses_system_media_thumbnail"]?.GetValue<bool>() == true ||
+        material["active_uniforms"]?.AsArray().Any(uniform => uniform?.GetValue<string>() is "g_PointerPosition" or "g_PointerPositionLast" or "g_ParallaxPosition") == true;
 
     private static JsonObject PrefixProperties(IEnumerable<JsonNode?> effects, JsonObject snapshot)
     {

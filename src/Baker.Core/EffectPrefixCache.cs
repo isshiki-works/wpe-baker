@@ -47,7 +47,7 @@ internal static class EffectPrefixCache
         JsonObject cachedMaterial = material.DeepClone().AsObject();
         JsonObject cachedPass = cachedMaterial["passes"]!.AsArray()[0]!.AsObject();
         cachedPass["textures"]!.AsArray()[0] = textureResource;
-        // 缓存截在前缀末个特效之后，基础 pass（genericimage3/4 按这些组合开关做的光照、反射、雾、精灵帧等逐像素运算）
+        // 缓存截在前缀末个特效之后，基础 pass（genericimage2/3/4 按这些组合开关做的光照、反射、雾、精灵帧等逐像素运算）
         // 已经烘在里面；替代材质的基础 pass 只能原样取样，否则会再算一遍。作者写的组合开关全部去掉，
         // 两个着色器里唯一默认开启的 FOG 显式关掉。
         cachedPass["combos"] = new JsonObject { ["FOG"] = 0 };
@@ -146,11 +146,18 @@ internal static class EffectPrefixCache
         if (HasScriptOrAnimation(material) || SceneAnalyzer.Walk(material).OfType<JsonObject>().Any(node =>
                 node["use_puppet"] is JsonNode flag && flag.ToJsonString() != "false") ||
             material["passes"] is not JsonArray { Count: 1 } materialPasses ||
-            materialPasses[0] is not JsonObject materialPass || materialPass["shader"]?.GetValue<string>() is not ("genericimage3" or "genericimage4") ||
+            materialPasses[0] is not JsonObject materialPass || !CacheableBaseShader(materialPass["shader"]?.GetValue<string>()) ||
             materialPass["textures"] is not JsonArray { Count: 1 } textures || textures[0]?.GetValue<string>() is not string sourceTexture || IsFramebuffer(sourceTexture))
-            throw new InvalidDataException("Effect-prefix caching requires one genericimage3/4 material pass with one non-framebuffer base texture.");
+            throw new InvalidDataException("Effect-prefix caching requires one genericimage2/3/4 material pass with one non-framebuffer base texture.");
         for (int index = 0; index < effects.Count; ++index) RejectUnsafeEffect(source, effects[index]!.AsObject(), index < prefixEffectCount);
     }
+
+    /// <summary>
+    /// 前缀缓存能替换的底材质着色器：官方 genericimage2/3/4（单 pass 取样一张非帧缓冲纹理，替代材质按原着色器取样缓存）。
+    /// genericimage2 原来不在其中，查不到排除依据（引擎对它唯一的特殊处理是 _rt_FullFrameBuffer 纹理，底纹理本来就不许是帧缓冲）；
+    /// 替代材质与源整帧的合成门照常复核。
+    /// </summary>
+    internal static bool CacheableBaseShader(string? shader) => shader is "genericimage2" or "genericimage3" or "genericimage4";
 
     private static JsonObject Owner(JsonObject scene, int ownerId) => scene["objects"]?.AsArray().OfType<JsonObject>()
         .SingleOrDefault(obj => SceneGraph.Id(obj) == ownerId)
