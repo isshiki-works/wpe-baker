@@ -320,6 +320,41 @@ public class AnalysisOrchestratorTests
         });
     }
 
+    // "留非循环层实时再查"递归的子分析与父分析共用 cache/<sha>：原先把已拼过源哈希的目录再传下去，子分析落到 cache/<sha>/<sha>，
+    // 父分析的观测、循环与探针缓存全部用不上。子分析第一步就按缓存目录写 scene 缓存，看它写到哪里即可（之后的观测没有渲染器，失败无妨）。
+    [Fact]
+    public async Task LoopAllocationReplanSharesTheParentAnalysisCache() => await TestTemp.Run(async root =>
+    {
+        string fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
+        string sha;
+        using (var source = new ProjectSource(fixture)) sha = await source.SourceHashAsync(TestContext.Current.CancellationToken);
+        string cache = Path.Combine(root, "cache", sha);
+        string output = Path.Combine(root, "analysis");
+        Directory.CreateDirectory(output);
+        var report = new JsonObject
+        {
+            ["route"] = "whole_layer", ["whole_layer"] = new JsonObject { ["status"] = "unavailable" }, ["blockers"] = new JsonArray(),
+            ["video_groups"] = new JsonArray(new JsonObject { ["layer_ids"] = new JsonArray(1, 2) }),
+            ["layers"] = new JsonArray(new JsonObject { ["id"] = 1, ["root"] = 1, ["allocation_root"] = 1 },
+                new JsonObject { ["id"] = 2, ["root"] = 2, ["allocation_root"] = 2 }),
+            ["loop"] = new JsonObject { ["unresolved"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 1 }) }
+        };
+        var scene = new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1, ["image"] = "a.json" }, new JsonObject { ["id"] = 2, ["image"] = "b.json" }) };
+        var request = new HybridAnalyzeRequest(2, fixture, root, output, 64, 32, AnalysisCacheDirectory: cache);
+        var record = typeof(HybridScenePlanner).GetMethod("RecordLoopAllocationFallbackAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var planner = new HybridScenePlanner(new("not-started", "not-started", "not-started", []));
+        try
+        {
+            await (Task)record.Invoke(planner, [report, scene, request, output, scene, (Func<string, JsonObject?>)(_ => null), null,
+                TestContext.Current.CancellationToken])!;
+        }
+        catch (Exception) { }
+        Assert.NotNull(report["loop_allocation_fallback"]!["analysis_plan_path"]);
+        Assert.True(File.Exists(Path.Combine(cache, "scene.json")));
+        Assert.False(Directory.Exists(Path.Combine(cache, sha)));
+    });
+
     private static JsonObject Plan(HybridAnalyzeRequest request, bool usable, string[]? states = null, int groups = 1) => new()
     {
         ["summary"] = new JsonObject { ["key"] = usable ? "summary.bakeable" : "summary.blocked", ["zh"] = "", ["en"] = "" },

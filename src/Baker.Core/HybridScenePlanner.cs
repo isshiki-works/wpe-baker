@@ -404,11 +404,14 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         progress?.Report(new("retaining_nonlooping_layers", null, new Message("progress.retaining_nonlooping_layers")));
         try
         {
+            // 这里的缓存目录已按源哈希拼过一层（AnalyzeSingleAsync 开头）：递归时交回基础目录，子分析再拼一次正好落回同一个目录，
+            // 父分析已有的观测、循环分析与捕获探针缓存都能命中（原先落到 <sha>/<sha>，每次重查都冷算一遍、多起一次观测渲染）。
             async Task<JsonObject> Replan()
             {
                 using (AnalysisTiming.Measure("h_loop_allocation_replan"))
                     return await AnalyzeSingleAsync(request with {
                         OutputDirectory = analysisOutput, RuntimeTraceFile = null, RetainLiveRootIds = retained,
+                        AnalysisCacheDirectory = Path.GetDirectoryName(request.AnalysisCacheDirectory),
                         RetainLiveReasons = HybridLoopAllocation.RetainReasons(report, evidence["trigger_layer_ids"]!.AsArray().Select(node => node!.GetValue<int>())) },
                         memo, progress, cancellationToken);
             }
