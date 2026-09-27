@@ -1,5 +1,7 @@
 module;
 
+// vvk 的 FFI 只按名单导出 Vk 名字，VkPipelineCache 不在名单里：与 ResourceKey.cppm 一样在全局模块片段里引入头文件。
+#include <vulkan/vulkan_core.h>
 // Macros only — VVK_CHECK family.
 #include "vvk/macros.hpp"
 
