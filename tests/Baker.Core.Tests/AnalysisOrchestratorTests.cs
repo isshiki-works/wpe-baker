@@ -319,27 +319,25 @@ public class AnalysisOrchestratorTests
     }
 
     [Fact]
-    public async Task SourceStaticLayersSplitIntoSeparateUnitsAreAllRetained()
+    public async Task AnUnusableResultIsNotReanalyzedWithMoreLiveLayers()
     {
-        // 拆分后两个含作者动画的层分在不同单元：第一轮只在 loop 里点名 209，214 要到分配回退的重查里才冒出来。
-        // 编排层把静止证明点名、还没留实时的层都加进留实时再分析，两层都留实时时方案能生成。
+        // 生成不了、静止证明点名了还没留实时的层：编排层不再把它们加进留实时整套重跑（全集 252 次整次分析 0 次采纳），
+        // 重查新点名的所有者由分配回退在同一次分析里并进留实时（HybridLoopAllocation.ReplanUntilSettledAsync）。
         await TestTemp.Run(async root =>
         {
+            var calls = new List<HybridAnalyzeRequest>();
             JsonObject Analyze(HybridAnalyzeRequest r)
             {
-                int[] kept = r.RetainLiveRootIds ?? [];
-                JsonObject plan = Plan(r, kept.Contains(209) && kept.Contains(214));
-                plan["settings"]!["retain_live_root_ids"] = new JsonArray([.. kept.Select(id => (JsonNode)id)]);
-                JsonObject Named(int id) => new() { ["kind"] = "source_static", ["owner_layer_id"] = id };
-                if (!kept.Contains(209)) plan["loop"]!["unresolved"] = new JsonArray(Named(209));
-                if (!kept.Contains(214)) plan["loop_allocation_fallback"] = new JsonObject { ["status"] = "still_unavailable",
-                    ["replanned_unresolved"] = new JsonArray(Named(214)) };
+                calls.Add(r);
+                JsonObject plan = Plan(r, false);
+                plan["loop"]!["unresolved"] = new JsonArray(new JsonObject { ["kind"] = "source_static", ["owner_layer_id"] = 209 });
                 return plan;
             }
             JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "static-live")),
                 (r, _) => Task.FromResult(Analyze(r)), CancellationToken.None);
-            Assert.True(Admission.Accepted(result));
-            Assert.Equal([209, 214], result["settings"]!["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()).Order());
+            Assert.False(Admission.Accepted(result));
+            Assert.All(calls, r => Assert.Empty(r.RetainLiveRootIds ?? []));
+            Assert.All(calls, r => Assert.False(r.SingleShotLive));
         });
     }
 

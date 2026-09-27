@@ -36,8 +36,8 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     // WPE 设置里的后处理画质档（config.json general.user.postprocessing）。只有它是 ultra/displayhdr 且场景 hdr、bloom 都开时，
     // 官方走浮点 HDR 管线；plan 的 settings 只在这种场景里记它，其余 plan 逐字不变。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Postprocessing = null,
-    // 自动留实时（分配回退、残差粒子重试）时触发留实时的原因码：图层 id → 原来的未解析原因（HybridLoopAllocation.RetainReasons）。
-    // 重查时并进这些层的 reasons，不只剩 retained_by_cost_trial；没有时不写进 settings，plan 逐字不变。
+    // 自动留实时（分配回退、慢分量预检、残差粒子重试）时触发留实时的原因码：图层 id → 原来的未解析原因（HybridLoopAllocation.RetainReasons）。
+    // 重查时所在单元写这些原因，不写 retained_by_cost_trial（那条只给用户 --retain-live 与退回轮）；没有时不写进 settings，plan 逐字不变。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<int, string[]>? RetainLiveReasons = null,
     // 入场切换的退回（旧行为）：加载即播的单次轨所属层也判实时，bake 不做入场切换。分析引出新 blocker 或合成门拒绝切换时自动打开；
     // 默认关时不写进 settings，plan 逐字不变。
@@ -397,44 +397,34 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 "A smaller bake allocation was not attempted: " + (evidence["reason"]?.GetValue<string>() ?? "no reason recorded."));
             return;
         }
-        int[] retained = evidence["retain_live_root_ids"]!.AsArray().Select(node => node!.GetValue<int>()).ToArray();
-        string retainedText = string.Join(",", retained);
         string analysisOutput = Path.Combine(output, "loop-allocation-analysis");
         evidence["analysis_plan_path"] = Path.Combine(analysisOutput, "plan.json");
         progress?.Report(new("retaining_nonlooping_layers", null, new Message("progress.retaining_nonlooping_layers")));
+        int[] retained = [];
+        string retainedText = string.Join(",", evidence["retain_live_root_ids"]!.AsArray().Select(node => node!.GetValue<int>()));
         try
         {
+            // 重查仍证不出循环而又点名了新的所有者时并进留实时再查（拆分放开后第一轮看不到的单元、静止证明点名的层），
+            // 前几轮挪到 -1、-2…，最终结果仍在 analysis_plan_path（编排层按它采纳）。
             // 这里的缓存目录已按源哈希拼过一层（AnalyzeSingleAsync 开头）：递归时交回基础目录，子分析再拼一次正好落回同一个目录，
             // 父分析已有的观测、循环分析与捕获探针缓存都能命中（原先落到 <sha>/<sha>，每次重查都冷算一遍、多起一次观测渲染）。
-            async Task<JsonObject> Replan()
-            {
-                using (AnalysisTiming.Measure("h_loop_allocation_replan"))
-                    return await AnalyzeSingleAsync(request with {
-                        OutputDirectory = analysisOutput, RuntimeTraceFile = null, RetainLiveRootIds = retained,
-                        AnalysisCacheDirectory = Path.GetDirectoryName(request.AnalysisCacheDirectory),
-                        RetainLiveReasons = HybridLoopAllocation.RetainReasons(report, evidence["trigger_layer_ids"]!.AsArray().Select(node => node!.GetValue<int>())) },
-                        memo, progress, cancellationToken);
-            }
-            JsonObject replanned = await Replan();
-            // 留下的未解析项全部可由残差掩盖时也算找到：bake 会走残差掩盖路线（例如留实时水面之后剩下的平稳随机雨）。
-            (bool resolved, string basis, JsonObject? residual) = HybridLoopAllocation.ReplannedResolution(replanned, sourceScene, readResource);
-            // 只留触发器所在单元仍不行、而这些单元是从作者根里拆出来的：再试一次把整个作者根留实时，回到拆分前的范围。
-            // 多拆一层不能让原来（整棵连带留实时）能得到的方案丢掉；第一次的结果记在 unit_attempt。
-            if (!resolved && basis == "unavailable" && HybridLoopAllocation.AuthorRootRetention(report, evidence) is int[] widened)
-            {
-                // 分析输出目录必须是新的：第一次的挪到 -unit，最终结果仍在 analysis_plan_path（编排层按它采纳）。
-                Directory.Move(analysisOutput, analysisOutput + "-unit");
-                evidence["unit_attempt"] = new JsonObject { ["plan_path"] = Path.Combine(analysisOutput + "-unit", "plan.json"),
-                    ["retain_live_root_ids"] = evidence["retain_live_root_ids"]!.DeepClone(),
-                    ["replanned_blockers"] = replanned["blockers"]?.DeepClone(), ["replanned_unresolved"] = replanned["loop"]?["unresolved"]?.DeepClone() };
-                int[] before = retained;
-                (retained, retainedText) = (widened, string.Join(",", widened));
-                evidence["retain_live_root_ids"] = new JsonArray([.. retained.Select(id => (JsonNode)id)]);
-                evidence["added_live_root_ids"] = new JsonArray([.. retained.Except(before).Concat(
-                    evidence["added_live_root_ids"]!.AsArray().Select(node => node!.GetValue<int>())).Distinct().Order().Select(id => (JsonNode)id)]);
-                replanned = await Replan();
-                (resolved, basis, residual) = HybridLoopAllocation.ReplannedResolution(replanned, sourceScene, readResource);
-            }
+            int archived = 0;
+            (JsonObject replanned, bool resolved, string basis, JsonObject? residual) = await HybridLoopAllocation.ReplanUntilSettledAsync(report, scene, evidence,
+                async (ids, reasons) =>
+                {
+                    (retained, retainedText) = (ids, string.Join(",", ids));
+                    using (AnalysisTiming.Measure("h_loop_allocation_replan"))
+                        return await AnalyzeSingleAsync(request with { OutputDirectory = analysisOutput, RuntimeTraceFile = null,
+                            AnalysisCacheDirectory = Path.GetDirectoryName(request.AnalysisCacheDirectory),
+                            RetainLiveRootIds = ids, RetainLiveReasons = reasons }, memo, progress, cancellationToken);
+                },
+                replanned => HybridLoopAllocation.ReplannedResolution(replanned, sourceScene, readResource),
+                () =>
+                {
+                    string moved = analysisOutput + "-" + ++archived;
+                    Directory.Move(analysisOutput, moved);
+                    return Path.Combine(moved, "plan.json");
+                });
             var replannedLoop = replanned["loop"]!.AsObject();
             // 重查按更小分配重求了 HDR 闭合（走前缀路线时是前缀捕获对象那次）。前缀路线的 blockers 只剩 HDR 拒因时
             // ReplannedResolution 仍按路线判"找到"，这里按重查的 HDR 结论改判，免得编排层采纳一份还被 HDR 挡着的分配。

@@ -54,25 +54,6 @@ public class HopelessRerunTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SourceStaticLayersAreRetainedOnlyWhenSomethingBesidesNoBenefitBlocks(bool blocked)
-    {
-        // 只差预计不省电（能生成）：把静止证明点名的层留实时整套重跑只会烘得更少，不跑。还有别的 blocker 时照旧试。
-        await TestTemp.Run(async root =>
-        {
-            var calls = await RunAsync(root, r =>
-            {
-                JsonObject plan = Plan(r, [1], 0.5);
-                plan["loop"]!["unresolved"] = new JsonArray(new JsonObject { ["kind"] = "source_static", ["owner_layer_id"] = 209 });
-                if (blocked) Block(plan);
-                return plan;
-            });
-            Assert.Equal(blocked, calls.Any(r => (r.RetainLiveRootIds ?? []).Contains(209)));
-        });
-    }
-
-    [Theory]
     [InlineData("requested_daytime", false)]
     [InlineData("static_with_live", false)]
     [InlineData("coverage_only", true)]

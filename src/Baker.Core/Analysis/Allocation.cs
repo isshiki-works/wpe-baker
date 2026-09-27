@@ -195,10 +195,14 @@ internal sealed class Allocation
         // 实时集定的，拆分条件（父层传给子层的状态是常量、绘制顺序按单元保持）与哪个单元实时无关，所以留住任一单元画面不变。
         var retainedUnits = (request.RetainLiveRootIds ?? []).Select(id => allocationOf.TryGetValue(id, out int unit) ? unit
             : throw new InvalidDataException("A requested live layer is not in the source scene.")).ToHashSet();
+        // 原因码：调用方给了（自动留实时：分配回退的未解析机制、慢分量没闭合……）就整单元写这些真实原因；
+        // 没给的是用户显式 --retain-live 或退回轮的逐组试探，才写 retained_by_cost_trial。
+        var unitReasons = retainedUnits.ToDictionary(unit => unit, unit => (request.RetainLiveReasons ?? [])
+            .Where(pair => allocationOf.GetValueOrDefault(pair.Key, -1) == unit).SelectMany(pair => pair.Value).Distinct().ToArray());
         foreach (int id in sourceOrder.Where(id => retainedUnits.Contains(allocationOf[id])))
         {
-            Live(id, "retained_by_cost_trial");
-            foreach (string reason in request.RetainLiveReasons?.GetValueOrDefault(id) ?? []) Live(id, reason);
+            string[] given = unitReasons[allocationOf[id]];
+            foreach (string reason in given.Length > 0 ? given : ["retained_by_cost_trial"]) Live(id, reason);
         }
         // Hidden script hosts can initialize fonts or other live layers without drawing a pixel.
         // Preserve those controllers instead of turning them into empty video groups.
