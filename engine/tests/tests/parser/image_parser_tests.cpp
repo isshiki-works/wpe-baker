@@ -377,6 +377,21 @@ TEST(ImageParser, CorruptTextureSizesAreRejected) {
         tex.data += std::string(64, '\0');
         cases.push_back(tex.data);
     }
+    { // DXT1 16x16 原始第 0 级 + 内嵌 PNG 的第 1 级：PNG 把整张贴图改成 RGBA8，第 0 级的 128 字节只够 BC1
+        static const char kPng8x8[] =
+            "\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x08\x00\x00"
+            "\x00\x08\x08\x06\x00\x00\x00\xc4\x0f\xbe\x8b\x00\x00\x00\x12\x49\x44\x41\x54\x78\x9c\x63"
+            "\xf8\xcf\xc0\xf0\x1f\x1f\x66\x18\x19\x0a\x00\xc2\xd7\x7f\x81\x2f\x71\xe0\x01\x00\x00\x00"
+            "\x00\x49\x45\x4e\x44\xae\x42\x60\x82";
+        const std::string png(kPng8x8, sizeof(kPng8x8) - 1);
+        auto              tex = TexVariantHeader(7, 0, 16, {});
+        tex.u32(2);
+        for (std::uint32_t v : { 16u, 16u, 0u, 0u, 128u }) tex.u32(v);
+        tex.data += std::string(128, '\x11');
+        for (std::uint32_t v : { 8u, 8u, 0u, 0u, std::uint32_t(png.size()) }) tex.u32(v);
+        tex.data += png;
+        cases.push_back(tex.data);
+    }
     { // RGBA8 1x1 带第 2 级：GPU 上 1x1 只有一级
         auto tex = TexVariantHeader(0, 0, 1, {});
         tex.u32(2);
@@ -395,6 +410,41 @@ TEST(ImageParser, CorruptTextureSizesAreRejected) {
         auto       parsed = parser.Parse(rstd::cppstd::as_str(name).unwrap());
         ASSERT_TRUE(parsed.is_err()) << name;
         EXPECT_TRUE(rstd::move(parsed).unwrap_err().kind == owe::ImageParseErrorKind::InvalidData)
+            << name;
+    }
+}
+
+// 精灵贴图的头解析（ParseHeader）与 Parse 一样按剩余字节限住声明的图数、mip 数、帧数。
+TEST(ImageParser, CorruptSpriteHeaderCountsAreRejected) {
+    TexFixtureDir            dir("corrupt-sprite-header");
+    std::vector<std::string> cases;
+    { // 图数 2^31-1：旧代码先按这个数建 imageDatas（约 51 GB）
+        auto                tex   = TexVariantHeader(0, 1u << 2, 4, {});
+        const std::uint32_t count = 0x7fffffffu;
+        tex.data.replace(55, 4, reinterpret_cast<const char*>(&count), 4); // TEXB0004 后的 count
+        cases.push_back(tex.data);
+    }
+    { // 一张 4x4 图，TEXS0002 声明 2^31-1 帧后直接结束：旧代码读出 imageId=0 一直追加
+        auto tex = TexVariantHeader(0, 1u << 2, 4, {});
+        for (std::uint32_t v : { 1u, 4u, 4u, 0u, 0u, 0u }) tex.u32(v);
+        tex.cstr("TEXS0002");
+        tex.u32(0x7fffffffu);
+        cases.push_back(tex.data);
+    }
+    { // mip 数 2^31-1：旧代码过了文件尾仍逐个空转
+        auto tex = TexVariantHeader(0, 1u << 2, 4, {});
+        tex.u32(0x7fffffffu);
+        cases.push_back(tex.data);
+    }
+    for (std::size_t i = 0; i < cases.size(); ++i) dir.Write("sprite" + std::to_string(i), cases[i]);
+    ASSERT_TRUE(dir.Mount());
+
+    owe::TexImageParser parser(&dir.vfs);
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        const auto name   = "sprite" + std::to_string(i);
+        auto       header = parser.ParseHeader(rstd::cppstd::as_str(name).unwrap());
+        ASSERT_TRUE(header.is_err()) << name;
+        EXPECT_TRUE(rstd::move(header).unwrap_err().kind == owe::ImageParseErrorKind::InvalidData)
             << name;
     }
 }
