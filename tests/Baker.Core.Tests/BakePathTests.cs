@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 using Baker.Core;
 using Xunit;
 
-// 烘焙侧此前没有测试执行到的几处：分段渲染的段目录、分析阶段慢分量闭合预检的分流（视频组与特效前缀）。都不需要 GPU 与 WPE 素材。
+// 烘焙侧此前没有测试执行到的两处：分段渲染的段目录、分析阶段慢分量闭合预检的分流。都不需要 GPU 与 WPE 素材。
 
 [Trait("Layer", "L1")]
 public class BakePathTests
@@ -35,25 +35,5 @@ public class BakePathTests
         };
         Assert.Empty(await SlowClosureProbe.RunAsync(Plan(2), tools, Path.Combine(dir, "other"), CancellationToken.None));
         await Assert.ThrowsAnyAsync<Exception>(() => SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), CancellationToken.None));
-    });
-
-    // 前缀缓存的闭合预检：没有缓变分量不渲染（null）；有缓变分量时渲染失败记 probe_failed，不是 closed，规划侧按没闭合退一级前缀。
-    [Fact]
-    public async Task PrefixSlowClosureProbeOnlyClosesOnARenderedVerdict() => await TestTemp.Run(async dir =>
-    {
-        var tools = new NativeTools("must-not-run", "must-not-run", "must-not-run", []);
-        using var source = new ProjectSource(Fixture);
-        var settings = new HybridAnalyzeRequest(2, Fixture, Path.Combine(dir, "missing-assets"), dir, 64, 48, 60, 1);
-        JsonObject Cache(JsonArray slow) => new()
-        {
-            ["owner_layer_id"] = 1, ["prefix_effect_count"] = 1, ["terminal_effect_id"] = 2,
-            ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 60UL, ["components"] = new JsonArray(),
-                ["patches"] = new JsonArray(), ["slow_components"] = slow }) },
-        };
-        Assert.Null(await SlowClosureProbe.PrefixAsync(Cache([]), tools, settings, source, new JsonObject(), Path.Combine(dir, "plain"), CancellationToken.None));
-        JsonObject? record = await SlowClosureProbe.PrefixAsync(Cache([new JsonObject { ["owner_layer_id"] = 1, ["drift_bound_radians"] = 0.01 }]),
-            tools, settings, source, new JsonObject(), Path.Combine(dir, "slow"), CancellationToken.None);
-        Assert.Equal("probe_failed", record!["status"]!.GetValue<string>());
-        Assert.False(Directory.Exists(Path.Combine(dir, "slow")));
     });
 }

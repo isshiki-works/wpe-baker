@@ -195,11 +195,6 @@ public class AdmissionTests
         // 前缀缓存从第 0 帧起录：要整周期预热的前缀循环不提（接缝门必拒）。
         JsonObject prefixLoop = new() { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 600, ["components"] = new JsonArray(1) }) };
         Assert.True(EffectPrefixPlanner.Cacheable(prefixLoop));
-        // 带缓变分量的照提（分析侧闭合预检判闭合才采纳），只有缓变分量的也提。
-        prefixLoop["candidates"]![0]!["slow_components"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 1, ["drift_bound_radians"] = 0.5 });
-        Assert.True(EffectPrefixPlanner.Cacheable(prefixLoop));
-        prefixLoop["candidates"]![0]!["components"] = new JsonArray();
-        Assert.True(EffectPrefixPlanner.Cacheable(prefixLoop));
         prefixLoop["candidates"]![0]!["source_period_warmup_frames"] = 600UL;
         Assert.False(EffectPrefixPlanner.Cacheable(prefixLoop));
         cheap["bake_value"]!["evidence"]!["effect_pass_coverage"] = 2.0;

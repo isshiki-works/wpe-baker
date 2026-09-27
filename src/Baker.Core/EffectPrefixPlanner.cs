@@ -61,14 +61,13 @@ internal static class EffectPrefixPlanner
     }
 
     /// <summary>
-    /// 前缀循环能不能做成缓存：没有未解析项、首选候选有分量（周期分量或缓变分量）。前缀缓存从第 0 帧起录、在自身周期上精确闭合、没有淡化，所以
-    /// 要整周期预热（source_period_warmup_frames，精灵起点错相或着色器 settle）的不提，提了只会在接缝门上被拒、整案判不能；
-    /// 这个效果留实时，短一级的前缀照用。带缓变分量的照提，由分析侧闭合预检（<see cref="SlowClosureProbe.PrefixAsync"/>）判闭合才采纳，
-    /// 判不闭合同样退一级；烘焙时接缝门照常复核。
+    /// 前缀循环能不能做成缓存：没有未解析项、首选候选有分量。前缀缓存从第 0 帧起录、在自身周期上精确闭合、没有淡化，所以
+    /// 带缓变分量（漂移在 P 处闭合不了）或要整周期预热（source_period_warmup_frames，精灵起点错相或着色器 settle）的都不提，
+    /// 提了只会在接缝门上被拒、整案判不能；这个效果留实时，短一级的前缀照用。
     /// </summary>
     internal static bool Cacheable(JsonObject loop) =>
         loop["unresolved"] is not JsonArray { Count: > 0 } && loop["candidates"] is JsonArray { Count: > 0 } candidates &&
-        (candidates[0]?["components"] is JsonArray { Count: > 0 } || candidates[0]?["slow_components"] is JsonArray { Count: > 0 }) &&
+        candidates[0]?["components"] is JsonArray { Count: > 0 } && candidates[0]?["slow_components"] is not JsonArray { Count: > 0 } &&
         LoopWarmupJson.CandidateSourcePeriodWarmupFrames(candidates) == 0;
 
     /// <summary>
