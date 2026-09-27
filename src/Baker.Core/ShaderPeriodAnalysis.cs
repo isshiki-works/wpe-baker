@@ -158,19 +158,29 @@ public static class ShaderPeriodAnalysis
                 var loose = new List<(CommonLoopComponent Term, string? Missing)>();
                 // 缺旋钮、π 次数已知的项：挂 pass 时间倍率，带它可用的分量旋钮键（null = 没有）
                 var timed = new List<(int Loose, int Pi, BigInteger Num, BigInteger Den, double Seconds, string? Axis)>();
-                // 1.0.2 摆动改频的口径：原周期 ≥ 60 s 的慢项看峰值速度偏差 a·(2π/T)·|δ|，≤ 0.1 px/s 就允许超过逐项预算（不比预算更紧）；
-                // 振幅 a 只有官方 foliagesway 能从材质常量算出（时间签名只给周期），其余着色器照旧按逐项预算
-                (double Amplitude, double Percent)? Cap(JsonObject term, double seconds) =>
-                    shader == "effects/foliagesway" && effect >= 0 && seconds >= SwayRecurrenceSolver.VisiblePeriodSeconds &&
-                    canvasShortEdge is double edge && objects.GetValueOrDefault(owner) is JsonObject obj &&
-                    Knobs(term).Select(k => SwayAmplitude(obj, objects, edge, effect, pass, k)).FirstOrDefault(x => x > 0) is double a
-                        ? (a, Math.Max(maximumRetimePercent, 100 * SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond * seconds / (2 * Math.PI * a)))
+                // 1.0.2 摆动改频的口径：原周期 ≥ 60 s 的慢项看峰值速度偏差 K·|δ|（K = 改速 100% 时的峰值速度偏差，1080p 口径 px/s），
+                // ≤ 0.1 px/s 就允许超过逐项预算（不比预算更紧；上限 ≥ 100% 且周期超过循环上限时可冻结）。K 能从材质常量算出的只有：
+                // 官方 foliagesway（K = a·2π/T，a 见 SwayAmplitude）与官方 waterwaves（按钉住的片元指纹认领，K 见 WaveSpeed），其余着色器照旧按逐项预算
+                (string Note, double Percent)? Cap(JsonObject term, double seconds)
+                {
+                    if (effect < 0 || seconds < SwayRecurrenceSolver.VisiblePeriodSeconds || canvasShortEdge is not double edge ||
+                        objects.GetValueOrDefault(owner) is not JsonObject obj) return null;
+                    (double Speed, string Note)? peak =
+                        shader == "effects/foliagesway" && Knobs(term).Select(k => SwayAmplitude(obj, objects, edge, effect, pass, k)).FirstOrDefault(x => x > 0) is double a
+                            ? (a * 2 * Math.PI / seconds, $"; sway amplitude {a:0.###} px at 1080p")
+                        : shader == "effects/waterwaves" && Text("frag") is string frag && Analysis.EffectRange.EffectRangeRules.Fingerprint(frag) == WaterWavesFragment &&
+                            WaveSpeed(obj, objects, edge, effect, pass, terms.Any(t => Knobs(t).Any(k => k["uniform"]?.GetValue<string>() == "g_Speed2"))) is double k
+                            ? (k, $"; water-wave peak speed {k:0.###} px/s at 1080p")
                         : null;
-                ShaderPeriodComponent Through(string key, double seconds, bool inverse, (double Amplitude, double Percent)? cap = null, bool measured = false) =>
+                    if (peak is not var (speed, note)) return null;
+                    double percent = Math.Max(maximumRetimePercent, 100 * SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond / speed);
+                    return (note + $", slow-term speed limit allows {percent:0.##}%", percent);
+                }
+                ShaderPeriodComponent Through(string key, double seconds, bool inverse, (string Note, double Percent)? cap = null, bool measured = false) =>
                     new(new CommonLoopComponent($"{id}/{key}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true,
                         measured ? MeasuredRetimePercent : cap?.Percent),
                     owner, effect, pass, key, inverse, $"SPIR-V time signature of {resource}: period {seconds.ToString("R", CultureInfo.InvariantCulture)} s through {key}" +
-                    (cap is var (amplitude, percent) ? $"; sway amplitude {amplitude:0.###} px at 1080p, slow-term speed limit allows {percent:0.##}%" : measured ? MeasuredNote : ""));
+                    (cap?.Note ?? (measured ? MeasuredNote : "")));
                 foreach (var (term, index) in terms.Select((term, index) => (term, index)))
                 {
                     double seconds = term["seconds"]!.GetValue<double>();
@@ -187,9 +197,10 @@ public static class ShaderPeriodAnalysis
                     if (effect >= 0 && Knobs(term).FirstOrDefault(Usable) is JsonObject knob)
                     {
                         // 振幅推不出的慢项：超预算的改速先挂上，放不放行看实测（MeasuredRetimePercent）；最宽松模型的"不能"证明不带它。
-                        // foliagesway 只走 #209 的解析判据：算不出振幅（如顶点模式 directionweights 的这一轴为 0）就按逐项预算，不进实测
+                        // foliagesway、waterwaves 只走解析判据：算不出（如顶点模式 directionweights 的这一轴为 0、waterwaves 指数 < 1 或源码不是钉住的版本）
+                        // 就按逐项预算，不进实测
                         knobbed.Add(Through(ShaderTextPatch.KnobKey(knob), seconds, knob["inverse"]?.GetValue<bool>() == true, cap,
-                            measured: cap is null && shader != "effects/foliagesway" && seconds >= SwayRecurrenceSolver.VisiblePeriodSeconds));
+                            measured: cap is null && shader is not ("effects/foliagesway" or "effects/waterwaves") && seconds >= SwayRecurrenceSolver.VisiblePeriodSeconds));
                         loose.Add((relaxed, null));
                         continue;
                     }
@@ -255,6 +266,60 @@ public static class ShaderPeriodAnalysis
         return new(components, unresolved, ruled, slowComponents, looseTerms, settle);
     }
 
+    /// <summary>官方 waterwaves.frag 归一化源码的指纹（与 effect-range-rules.json 的 uv_displace_waterwaves 同一份）：只有它按 <see cref="WaveSpeed"/> 放行慢项改速。</summary>
+    internal const string WaterWavesFragment = "ff838f0fbe51919c6cb12385008a63a8d074bdd69555cbaae7b8199532fe9b2a";
+
+    static JsonObject? At(JsonNode? array, int index) => array is JsonArray items && index < items.Count ? items[index] as JsonObject : null;
+    static JsonObject? Pass(JsonObject obj, int effect, int pass) => At(At(obj["effects"], effect)?["passes"], pass);
+    /// <summary>材质常量的有限数值（绑定取 value）；没写或不是数时为 null。</summary>
+    static double? Constant(JsonObject? constants, string key) =>
+        (constants?[key] is JsonObject binding ? binding["value"] : constants?[key]) is JsonValue v && v.TryGetValue(out double d) && double.IsFinite(d) ? d : null;
+
+    /// <summary>图层连同各级父层的缩放之积。</summary>
+    static (double X, double Y) ChainScale(JsonObject obj, IReadOnlyDictionary<int, JsonObject> objects)
+    {
+        double scaleX = 1, scaleY = 1;
+        var seen = new HashSet<int>();
+        for (JsonObject? current = obj; current is not null && seen.Add(SceneGraph.Int(current["id"]) ?? -1);
+            current = SceneGraph.Int(current["parent"]) is int parent ? objects.GetValueOrDefault(parent) : null)
+        {
+            var scale = HybridVideoProjection.Vector(current["scale"], (1, 1));
+            (scaleX, scaleY) = (scaleX * scale.X, scaleY * scale.Y);
+        }
+        return (scaleX, scaleY);
+    }
+
+    /// <summary>
+    /// 官方 waterwaves 一个 pass 的峰值速度系数 K（1080p 短边口径 px/s）：该 pass 的项改速 |δ|（各项取最大）时，画面内容的峰值速度偏差 ≤ K·|δ|。
+    /// 采样坐标的位移 = s₁(θ₁) [· s₂(θ₂)] · 单位方向 · strength² · 遮罩，sᵢ(θ) = sign(sin θ)·|sin θ|^eᵢ，θᵢ = 时间·speedᵢ + 与时间无关的相位：
+    /// 位移幅度 ≤ strength²（遮罩 ≤ 1、方向为单位向量），e ≥ 1 时 |s'(θ)| ≤ e，
+    /// 所以位移速度 ≤ strength²·(e₁|speed₁| [+ e₂|speed₂|])（纹理坐标/秒），乘纹理坐标到画面的像素数（宽·scaleX 与 高·scaleY 取大）再折到 1080p。
+    /// 任一指数 &lt; 1（过零点斜率无界）、双波缺 speed2/exponent2、读不到图层尺寸时为 null。默认值取官方注释：speed 5、exponent 1、strength 0.1。
+    /// </summary>
+    internal static double? WaveSpeed(JsonObject obj, IReadOnlyDictionary<int, JsonObject> objects, double canvasShortEdge, int effect, int pass, bool dual)
+    {
+        JsonObject? material = Pass(obj, effect, pass);
+        JsonObject? constants = material?["constantshadervalues"] as JsonObject;
+        dual |= (material?["combos"]?["DUALWAVES"] is JsonValue combo && combo.TryGetValue(out double on) ? on : 0) != 0;
+        double strength = Constant(constants, "strength") ?? 0.1, exponent = Constant(constants, "exponent") ?? 1;
+        if (!(exponent >= 1)) return null;
+        double rate = exponent * Math.Abs(Constant(constants, "speed") ?? 5);
+        if (dual)
+        {
+            if (Constant(constants, "speed2") is not double speed2 || Constant(constants, "exponent2") is not double exponent2 || !(exponent2 >= 1)) return null;
+            rate += exponent2 * Math.Abs(speed2);
+        }
+        try
+        {
+            var (scaleX, scaleY) = ChainScale(obj, objects);
+            var size = HybridVideoProjection.Vector(obj["size"], (0, 0));
+            if (!(size.X > 0 && size.Y > 0)) return null;
+            double pixels = Math.Max(Math.Abs(size.X * scaleX), Math.Abs(size.Y * scaleY));
+            return strength * strength * rate * pixels * SwayRecurrenceSolver.ReferenceShortEdgePixels / canvasShortEdge;
+        }
+        catch (Exception error) when (error is InvalidDataException or InvalidOperationException or FormatException) { return null; }
+    }
+
     // stock foliagesway 的 8 个频率字面量：前 4 项进 x（sines），后 4 项进 y（csines）
     private static readonly float[] SwaySines = [1f, -0.16161616f, 0.0083333f, -0.00019841f];
     private static readonly float[] SwayCoSines = [-0.5f, 0.041666666f, -0.0013888889f, 0.000024801587f];
@@ -269,20 +334,11 @@ public static class ShaderPeriodAnalysis
         if (knob["literal"] is not JsonValue literal || !literal.TryGetValue(out double value)) return null;
         int axis = Array.IndexOf(SwaySines, (float)value) >= 0 ? 0 : Array.IndexOf(SwayCoSines, (float)value) >= 0 ? 1 : -1;
         if (axis < 0) return null;
-        static JsonObject? At(JsonNode? array, int index) => array is JsonArray items && index < items.Count ? items[index] as JsonObject : null;
-        var constants = At(At(obj["effects"], effect)?["passes"], pass)?["constantshadervalues"] as JsonObject;
-        double Constant(string key, double fallback) =>
-            (constants?[key] is JsonObject binding ? binding["value"] : constants?[key]) is JsonValue v && v.TryGetValue(out double d) && double.IsFinite(d) ? d : fallback;
+        JsonObject? constants = Pass(obj, effect, pass)?["constantshadervalues"] as JsonObject;
+        double Constant(string key, double fallback) => ShaderPeriodAnalysis.Constant(constants, key) ?? fallback;
         try
         {
-            double scaleX = 1, scaleY = 1;
-            var seen = new HashSet<int>();
-            for (JsonObject? current = obj; current is not null && seen.Add(SceneGraph.Int(current["id"]) ?? -1);
-                current = SceneGraph.Int(current["parent"]) is int parent ? objects.GetValueOrDefault(parent) : null)
-            {
-                var scale = HybridVideoProjection.Vector(current["scale"], (1, 1));
-                (scaleX, scaleY) = (scaleX * scale.X, scaleY * scale.Y);
-            }
+            var (scaleX, scaleY) = ChainScale(obj, objects);
             double strength = Constant("strength", 0.4), amplitude;
             if (knob["stage"]?.GetValue<string>() == "vert")
             {
