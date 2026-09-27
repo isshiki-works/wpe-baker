@@ -58,6 +58,23 @@ internal static class HybridLoopAllocationChecks
 
         plan["settings"]!["retain_live_root_ids"] = proposal!["retain_live_root_ids"]!.DeepClone();
         check(Propose(plan, scene) is null, "loop fallback declines a retry with no newly retained allocation unit");
+        // 只留单元重查仍不行时的第二次尝试：触发器单元是从作者根拆出来的，整个作者根的单元都留实时（回到拆分前的范围）。
+        var authorRoot = typeof(HybridBakeService).Assembly.GetType("Baker.Core.HybridLoopAllocation")!
+            .GetMethod("AuthorRootRetention", BindingFlags.Static | BindingFlags.NonPublic)!;
+        int[]? Widen(int[] added, int[] remaining)
+        {
+            JsonObject wide = Fixture().Plan;
+            wide["layers"]!.AsArray().Add(new JsonObject { ["id"] = 13, ["root"] = 10, ["allocation_root"] = 13 });
+            return (int[]?)authorRoot.Invoke(null, [wide, new JsonObject {
+                ["retain_live_root_ids"] = new JsonArray([.. added.Prepend(30).Select(id => (JsonNode)id)]),
+                ["added_live_root_ids"] = new JsonArray([.. added.Select(id => (JsonNode)id)]),
+                ["remaining_baked_layer_ids"] = new JsonArray([.. remaining.Select(id => (JsonNode)id)]) }]);
+        }
+        check(Widen([12], [11, 13, 20, 50]) is [30, 12, 11, 13],
+            "a failed unit retry widens split trigger units to every unit of their author root");
+        check(Widen([20], [11, 12, 13, 50]) is null, "a trigger that is its own author root has nothing to widen");
+        check(Widen([12], [11, 13]) is null, "widening that leaves nothing to bake is not attempted");
+
 
         (plan, scene) = Fixture();
         plan["video_groups"] = new JsonArray(new JsonObject { ["layer_ids"] = new JsonArray(11, 12) });

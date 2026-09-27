@@ -348,13 +348,31 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         progress?.Report(new("retaining_nonlooping_layers", null, new Message("progress.retaining_nonlooping_layers")));
         try
         {
-            JsonObject replanned = await AnalyzeSingleAsync(request with {
+            Task<JsonObject> Replan() => AnalyzeSingleAsync(request with {
                 OutputDirectory = analysisOutput, RuntimeTraceFile = null, RetainLiveRootIds = retained,
                 RetainLiveReasons = HybridLoopAllocation.RetainReasons(report, evidence["trigger_layer_ids"]!.AsArray().Select(node => node!.GetValue<int>())) },
                 progress, cancellationToken);
-            var replannedLoop = replanned["loop"]!.AsObject();
+            JsonObject replanned = await Replan();
             // 留下的未解析项全部可由残差掩盖时也算找到：bake 会走残差掩盖路线（例如留实时水面之后剩下的平稳随机雨）。
             (bool resolved, string basis, JsonObject? residual) = HybridLoopAllocation.ReplannedResolution(replanned, sourceScene, readResource);
+            // 只留触发器所在单元仍不行、而这些单元是从作者根里拆出来的：再试一次把整个作者根留实时，回到拆分前的范围。
+            // 多拆一层不能让原来（整棵连带留实时）能得到的方案丢掉；第一次的结果记在 unit_attempt。
+            if (!resolved && basis == "unavailable" && HybridLoopAllocation.AuthorRootRetention(report, evidence) is int[] widened)
+            {
+                // 分析输出目录必须是新的：第一次的挪到 -unit，最终结果仍在 analysis_plan_path（编排层按它采纳）。
+                Directory.Move(analysisOutput, analysisOutput + "-unit");
+                evidence["unit_attempt"] = new JsonObject { ["plan_path"] = Path.Combine(analysisOutput + "-unit", "plan.json"),
+                    ["retain_live_root_ids"] = evidence["retain_live_root_ids"]!.DeepClone(),
+                    ["replanned_blockers"] = replanned["blockers"]?.DeepClone(), ["replanned_unresolved"] = replanned["loop"]?["unresolved"]?.DeepClone() };
+                int[] before = retained;
+                (retained, retainedText) = (widened, string.Join(",", widened));
+                evidence["retain_live_root_ids"] = new JsonArray([.. retained.Select(id => (JsonNode)id)]);
+                evidence["added_live_root_ids"] = new JsonArray([.. retained.Except(before).Concat(
+                    evidence["added_live_root_ids"]!.AsArray().Select(node => node!.GetValue<int>())).Distinct().Order().Select(id => (JsonNode)id)]);
+                replanned = await Replan();
+                (resolved, basis, residual) = HybridLoopAllocation.ReplannedResolution(replanned, sourceScene, readResource);
+            }
+            var replannedLoop = replanned["loop"]!.AsObject();
             // 重查按更小分配重求了 HDR 闭合（走前缀路线时是前缀捕获对象那次）。前缀路线的 blockers 只剩 HDR 拒因时
             // ReplannedResolution 仍按路线判"找到"，这里按重查的 HDR 结论改判，免得编排层采纳一份还被 HDR 挡着的分配。
             bool replannedRadianceOpen = PlanBlockers.Codes(replanned).Any(Verdict.IsRadianceCode);
