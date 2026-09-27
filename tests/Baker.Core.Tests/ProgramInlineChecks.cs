@@ -622,6 +622,20 @@ Check(spectrumPlan["live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).
     spectrumExport is not null && spectrumExport.OfType<JsonObject>().Select(obj => obj["id"]!.GetValue<int>()).SequenceEqual(new[] { 1200, 1500 }) &&
     spectrumExport[0]!["text"]!.GetValue<string>() == "bars" && spectrumExport[1]!["parent"]!.GetValue<int>() == 1200,
     "a parent live only for its own pixels keeps static children in a video mounted under the live parent");
+// 实时子层挂在木偶父层的骨骼挂点（attachment）上：父层不进视频，整棵留实时，成品里父层带着绘制键（木偶）与动画层，子层的挂点照旧。
+var puppetParent = new JsonArray(
+    new JsonObject { ["id"] = 1200, ["name"] = "puppet", ["text"] = "body", ["animationlayers"] = new JsonArray(new JsonObject { ["rate"] = 0.72 }) },
+    new JsonObject { ["id"] = 1201, ["parent"] = 1200, ["attachment"] = "Attachment",
+        ["text"] = new JsonObject { ["script"] = "export function update() { return Date.now(); }" } },
+    new JsonObject { ["id"] = 1202, ["parent"] = 1200, ["text"] = "label" });
+var puppetPlan = await PlanSubtrees("subtree-puppet-attachment", puppetParent);
+var puppetExport = Assemble(puppetPlan, puppetParent);
+Check(puppetPlan["live_layer_ids"]!.AsArray().Select(n => n!.GetValue<int>()).Order().SequenceEqual(new[] { 1200, 1201, 1202 }) &&
+    puppetPlan["video_groups"]!.AsArray().Count == 0 &&
+    puppetExport.OfType<JsonObject>().Select(obj => obj["id"]!.GetValue<int>()).SequenceEqual(new[] { 1200, 1201, 1202 }) &&
+    puppetExport[0]!["text"]!.GetValue<string>() == "body" && puppetExport[0]!["animationlayers"] is JsonArray &&
+    puppetExport[1]!["attachment"]!.GetValue<string>() == "Attachment" && puppetExport[1]!["parent"]!.GetValue<int>() == 1200,
+    "a live child on a puppet attachment keeps the puppet parent live with its drawing keys");
 var parentTransformMethod = projectionType.GetMethod("ParentTransform", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
 var nestedParentTransform = (JsonObject)parentTransformMethod.Invoke(null, new object[] {
     subtreeObjects.OfType<JsonObject>().ToDictionary(obj => obj["id"]!.GetValue<int>()), 1202 })!;
