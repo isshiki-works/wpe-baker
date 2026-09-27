@@ -86,7 +86,7 @@ public class BakePathTests
                     rgba[i] = rgba[i + 1] = rgba[i + 2] = (byte)Math.Round(v);
                     rgba[i + 3] = 255;
                 }
-            if (speck) rgba[0] ^= 1;
+            if (speck) rgba[(size / 2 * size + size / 2) * 4] ^= 1; // 画面中间一个像素差 1 level
             return rgba;
         }
         // version：0 改速前、1 改速后、2 对照（改速项按原速 2 倍）
@@ -120,7 +120,9 @@ public class BakePathTests
         JsonObject inert = await Read((version, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / (version == 2 ? 200 : 400)), halfFlat: true));
         Assert.Equal("not_measured", inert["status"]!.GetValue<string>());
         Assert.Equal("patch_not_effective", inert["reason"]!.GetValue<string>());
-        Assert.Equal("frame0_differs", (await Read((version, t) => Frame(0, speck: version == 1 && t == 0)))["reason"]!.GetValue<string>());
+        // 第 0 帧按可测下限比：一个像素差 1 level（量化、粒子这类逐位不稳）不算不同状态；整幅错开 5 px 才是 frame0_differs
+        Assert.NotEqual("frame0_differs", (await Read((version, t) => Frame(0, speck: version == 1 && t == 0)))["reason"]?.GetValue<string>());
+        Assert.Equal("frame0_differs", (await Read((version, t) => Frame(version == 1 && t == 0 ? 5 : 0)))["reason"]!.GetValue<string>());
         Assert.Equal("no_texture", (await Read((version, t) => Frame(0, version == 1 ? t : 0, flat: true)))["reason"]!.GetValue<string>());
     }
 

@@ -47,6 +47,8 @@ internal static class ParticleStationarity
     {
         /// <summary>整层路线、速度实测没放行之前为 true：周期是上限 2 倍以上的 turbulence 共享场冻结（见 <see cref="Result.FrozenFields"/>）。</summary>
         internal bool FreezeSlowFields { get; init; }
+        /// <summary>冻结的速度实测量不到后的重分析为 true：本该冻结的场不冻结，也不判不能，记未收敛。</summary>
+        internal bool FreezeUnmeasured { get; init; }
     }
 
     /// <summary>
@@ -490,6 +492,8 @@ internal static class ParticleStationarity
             // 子系统的定义是另一份资源，捕获只改写本层的定义，子系统里的场不冻结
             if (period >= 2 * ceiling && clock is { FreezeSlowFields: true } && childType is null)
                 frozen.Add((int.Parse(node["operator[".Length..^1], CultureInfo.InvariantCulture), field["timescale"]!.GetValue<double>()));
+            else if (period >= 2 * ceiling && clock is { FreezeUnmeasured: true } && childType is null)
+                failures.Add(new("C3", "turbulence_freeze_not_measured", node, field.ToJsonString()));
             else if (period > ceiling) failures.Add(new("C3", "turbulence_shared_field", node, field.ToJsonString(), Cannot: true));
             else if (period is double locked && clock is FrameClock frame && warmup is double settled)
             {

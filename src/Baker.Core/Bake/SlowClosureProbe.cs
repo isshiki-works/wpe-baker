@@ -212,7 +212,7 @@ internal static class SlowClosureProbe
 
     /// <summary>
     /// 一个组的速度差读数。<paramref name="render"/>(version, frame) 出从时间 0 起的第 frame 帧（RGBA）：version 0 改速前、1 改速后、2 对照（改速项按原速 2 倍）；<paramref name="loopFrames"/> 是这个组的循环长度 L（帧）。
-    /// 第 0 帧两版不逐位相同 → not_measured（frame0_differs）；第 0 帧整幅没有梯度 → not_measured（no_texture，所有者层可能没渲出来）。
+    /// 第 0 帧两版最差块的平均差达到 <see cref="MeasurableLevels"/> → not_measured（frame0_differs）；第 0 帧整幅没有梯度 → not_measured（no_texture，所有者层可能没渲出来）。
     /// 否则比较两版在 t 时刻的画面，同时抓位移和亮度变化（分块光流只量位移，亮度类特效怎么改速都会"通过"）：
     /// 约 540p 网格（1080p 下 2×2 平均）上逐格取 d = max_c |after_c − before_c|、g = max_c |∇before_c|（c 取 RGBA，梯度按 1080p 像素），
     /// 块边 16 格（1080p 的 32 px）内求平均 D、G，读数 v = D / (t·G)，单位 px/s；G = 0 而 D > 0 记无穷。
@@ -227,10 +227,12 @@ internal static class SlowClosureProbe
         uint fpsNumerator, uint fpsDenominator, ulong loopFrames)
     {
         byte[] origin = await render(0, 0), retimed = await render(1, 0);
-        if (!origin.AsSpan().SequenceEqual(retimed))
-            return new JsonObject { ["status"] = "not_measured", ["reason"] = "frame0_differs" };
         int step = Math.Max(1, (int)Math.Round(2 * tileScale));
         double toReference = step / tileScale;
+        // 两版第 0 帧按可测下限比：最差块的平均差不到 MeasurableLevels 就算同一状态（8 位量化、粒子这类逐位不稳的差不算）
+        double frame0 = origin.AsSpan().SequenceEqual(retimed) ? 0 : Blocks(origin, retimed, width, height, step, toReference).Select(block => block.Difference).DefaultIfEmpty(0).Max();
+        if (frame0 >= MeasurableLevels)
+            return new JsonObject { ["status"] = "not_measured", ["reason"] = "frame0_differs", ["frame0_difference_levels"] = frame0 };
         if (Blocks(origin, origin, width, height, step, toReference).All(block => block.Gradient == 0))
             return new JsonObject { ["status"] = "not_measured", ["reason"] = "no_texture" };
         double largest = 0, motion = 0;

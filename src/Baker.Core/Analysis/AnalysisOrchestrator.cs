@@ -76,8 +76,8 @@ internal sealed class AnalysisOrchestrator
         // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
         // 读数（漂移上界、闭合读数、渲染器墙钟）写进 plan 的 slow_closure_probe。闭合的照常判能，烘焙时接缝门照常复核。
         // 没闭合的层上有能改挂旋钮的慢分量时，留实时之前先改速或冻结它们重分析（RetimeSlowComponents），过速度实测才放行。
-        // 振幅推不出的慢项超预算改速先实测速度差（SlowClosureProbe.SpeedAsync）：看得出、量不到或渲染失败就按逐项预算整套再分析
-        // （BudgetOnlyRetime，与没有这条放宽时同一结果）；读数写进 plan 的 slow_speed_probe。放行的改速照常过闭合预检与烘焙接缝门，阈值不动。
+        // 振幅推不出的慢项超预算改速先实测速度差（SlowClosureProbe.SpeedAsync）：看得出就按逐项预算整套再分析（BudgetOnlyRetime，与没有这条放宽时
+        // 同一结果），量不到（含渲染失败）同样不放开、但挡住循环的记未收敛（SpeedUnmeasured，见 AfterSpeedProbe）；读数写进 plan 的 slow_speed_probe。放行的改速照常过闭合预检与烘焙接缝门，阈值不动。
         var slowProbes = new JsonArray();
         var speedProbes = new JsonArray();
         while (Admission.Accepted(result) && tools is not null && request.RuntimeTraceFile is null)
@@ -86,9 +86,9 @@ internal sealed class AnalysisOrchestrator
             if (await SlowClosureProbe.SpeedAsync(result, tools, Path.Combine(run, $"slow-speed-{speedProbes.Count}"), token) is JsonObject speed)
             {
                 speedProbes.Add(speed);
-                if (speed["status"]!.GetValue<string>() != "passed" && !orchestrator.request.BudgetOnlyRetime)
+                if (AfterSpeedProbe(orchestrator.request, speed["status"]!.GetValue<string>()) is HybridAnalyzeRequest retry)
                 {
-                    orchestrator = new AnalysisOrchestrator(orchestrator.request with { BudgetOnlyRetime = true }, analyze, space,
+                    orchestrator = new AnalysisOrchestrator(retry, analyze, space,
                         space.Budget(), tools, Path.Combine(run, $"slow-speed-budget-{speedProbes.Count}"), cache, token, memo, progress);
                     result = await orchestrator.SelectAsync();
                     continue;
@@ -101,9 +101,9 @@ internal sealed class AnalysisOrchestrator
             if (open.Length == 0) break;
             // 没闭合的层上有能改挂旋钮的慢分量：先改速或冻结它们（RetimeSlowComponents）整套再分析，放不放行由上面的速度实测；
             // 实测没放行（BudgetOnlyRetime）或改完仍没闭合，才留实时
-            if (!orchestrator.request.RetimeSlowComponents && !orchestrator.request.BudgetOnlyRetime &&
-                ((result["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["slow_components"] as JsonArray ?? []).OfType<JsonObject>().Any(slow =>
-                    slow["retimable"]?.GetValue<bool>() == true && SceneGraph.Int(slow["owner_layer_id"]) is int owner && open.Contains(owner)))
+            if (!orchestrator.request.RetimeSlowComponents && !orchestrator.request.BudgetOnlyRetime && !orchestrator.request.SpeedUnmeasured &&
+                ((result["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["slow_components"] as JsonArray ?? []).OfType<JsonObject>().Any(component =>
+                    component["retimable"]?.GetValue<bool>() == true && SceneGraph.Int(component["owner_layer_id"]) is int owner && open.Contains(owner)))
             {
                 var trial = new AnalysisOrchestrator(orchestrator.request with { RetimeSlowComponents = true }, analyze, space,
                     space.Budget(), tools, Path.Combine(run, $"slow-retime-{slowProbes.Count}"), cache, token, memo, progress);
@@ -163,6 +163,19 @@ internal sealed class AnalysisOrchestrator
         }
         return ([.. open], reasons);
     }
+
+    /// <summary>
+    /// 速度实测之后要不要整套重分析：看得出（visible）按逐项预算（BudgetOnlyRetime），挡住循环的记不能；
+    /// 量不到（not_measured：第 0 帧不同、没有纹理、渲染失败、所有者层不全在视频组、补丁没写进或没生效）同样不放开这些改速，
+    /// 但挡住循环的记未收敛（SpeedUnmeasured）。放行或已经重分析过返回 null。
+    /// </summary>
+    internal static HybridAnalyzeRequest? AfterSpeedProbe(HybridAnalyzeRequest request, string status) => status switch
+    {
+        _ when request.BudgetOnlyRetime => null,
+        "visible" => request with { BudgetOnlyRetime = true, SpeedUnmeasured = false },
+        "not_measured" when !request.SpeedUnmeasured => request with { SpeedUnmeasured = true },
+        _ => null
+    };
 
     private async Task<JsonObject> SelectAsync()
     {

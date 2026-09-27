@@ -15,8 +15,11 @@ internal static class LoopAnalysis
         CommonLoopPreference preference = CommonLoopPreference.Balanced,
         double? loopLengthMaximumSeconds = null, JsonArray? videoGroups = null,
         IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null,
-        double? proofRetimePercent = null, bool budgetOnlyRetime = false, bool retimeSlow = false)
+        double? proofRetimePercent = null, bool budgetOnlyRetime = false, bool retimeSlow = false, bool speedUnmeasured = false,
+        bool demoteLongTerms = false)
     {
+        // 速度实测量不到（speedUnmeasured）后与看得出（budgetOnlyRetime）后一样不放开要实测的改速与冻结；区别只在结论：量不到的挡住循环记未收敛
+        bool budgetOnly = budgetOnlyRetime || speedUnmeasured;
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
             throw new ArgumentException("FPS must be positive and retiming must be between zero and ten percent.");
@@ -26,7 +29,7 @@ internal static class LoopAnalysis
         ceilingSeconds = ceiling.ToSeconds();
         // 慢分量改速（retimeSlow）同样要实测，只在整层路线、实测没放行之前打开
         var measured = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, runtime, bakedLayerIds, ceilingSeconds, maximumRetimePercent,
-            retimeSlow && videoGroups is not null && !budgetOnlyRetime);
+            retimeSlow && videoGroups is not null && !budgetOnly);
         // 振幅推不出的慢项先按逐项预算求解；整层路线（有视频组）逐项预算内无解时才放开它们的改速，放不放行由分析收尾实测。
         // 特效前缀路线（videoGroups 为 null）没有实测、实测没放行后的重分析（budgetOnlyRetime），都始终按逐项预算。
         // 改挂旋钮的慢分量（逐项预算内放不进一圈）一开始就放开，否则逐项预算内必然无解。
@@ -44,7 +47,7 @@ internal static class LoopAnalysis
 
         var videoControlScope = VideoControlScope.Resolve(scene, runtime);
         var animation = RuntimeTrackReader.Read(scene, source, assetsDirectory, runtime, bakedLayerIds, unresolved, videoControlScope,
-            new ParticleStationarity.FrameClock(fpsNumerator, fpsDenominator, ceilingSeconds) { FreezeSlowFields = videoGroups is not null && !budgetOnlyRetime }, out var particleVerdicts);
+            new ParticleStationarity.FrameClock(fpsNumerator, fpsDenominator, ceilingSeconds) { FreezeSlowFields = videoGroups is not null && !budgetOnly, FreezeUnmeasured = videoGroups is not null && speedUnmeasured }, out var particleVerdicts);
         // 封顶 + 确定寿命的粒子层：替换周期（整数帧）作为锁定分量交给求解器，与着色器、轨道的锁定分量同等对待。
         CommonLoopComponent[] particleCycles = ParticleCycleComponents(particleVerdicts);
         // 组间共用时钟的组要求 L 是它自身周期的倍数（见 GroupPeriods）：每个这样的周期当一个锁定分量交给求解器，解完再从候选里去掉。
@@ -54,7 +57,7 @@ internal static class LoopAnalysis
             return new CommonLoopComponent($"{GroupStepPrefix}{step}", new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
         })];
         LoopSolve solve = SolveLoop(shader, animation, [.. particleCycles, .. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
-        if (videoGroups is not null && !budgetOnlyRetime && solve.Result.Candidates.Count == 0 && !measured.Components.SequenceEqual(shader.Components) &&
+        if (videoGroups is not null && !budgetOnly && solve.Result.Candidates.Count == 0 && !measured.Components.SequenceEqual(shader.Components) &&
             SolveLoop(measured, animation, [.. particleCycles, .. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
                 is { Result.Candidates.Count: > 0 } loose)
             (shader, solve) = (measured, loose);
@@ -76,6 +79,27 @@ internal static class LoopAnalysis
                 RuntimeTrackReader.RewriteParticleItems(unresolved, particleVerdicts);
                 solve = unlocked;
                 particleCycles = [];
+            }
+        }
+        // 长周期项按慢分量（demoteLongTerms，HybridScenePlanner 在档位上限与 1200 s 都无解时打开）：从最长的 ≥ 60 s 着色器分量起逐个移出求解器、
+        // 记成慢分量（漂移上界 2π·P/T，T 取周期/(1+预算) 的下界），直到有解。闭合与否交给慢分量闭合预检实测，不在这里判不能。
+        if (demoteLongTerms && videoGroups is not null && stepCycles.Length == 0 && solve.Result.Candidates.Count == 0)
+        {
+            double stretch = 1 + maximumRetimePercent / 100;
+            List<ShaderPeriodComponent> kept = [.. shader.Components];
+            List<ShaderSlowComponent> slow = [.. shader.Slow];
+            foreach (ShaderPeriodComponent longest in shader.Components.Where(x => x.Component.BasePeriod!.Seconds >= SwayRecurrenceSolver.VisiblePeriodSeconds)
+                .OrderByDescending(x => x.Component.BasePeriod!.Seconds).ToArray())
+            {
+                kept.Remove(longest);
+                slow.Add(new($"{longest.Component.Id}/slow", longest.OwnerLayerId, longest.EffectIndex, longest.PassIndex, longest.Component.BasePeriod!.Seconds / stretch));
+                var demoted = shader with { Components = [.. kept], Slow = [.. slow] };
+                if (SolveLoop(demoted, animation, [.. particleCycles, .. scriptCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
+                    is not { Result.Candidates.Count: > 0 } found) continue;
+                HashSet<string> removed = [.. shader.Components.Except(kept).Select(x => x.Component.Id)];
+                patches = [.. patches.Where(patch => !removed.Contains(patch.ComponentId))];
+                (shader, solve) = (demoted, found);
+                break;
             }
         }
         // "不能"按所有者层逐层证明，只认最宽松模型：这一层自己的非慢着色器周期项各在预算内独立调频，加上它自己的动画轨道；
@@ -102,6 +126,16 @@ internal static class LoopAnalysis
                 {
                     CommonLoopComponent slowest = relaxed.Used.MaxBy(x => x.BasePeriod!.Seconds)!;
                     double longest = slowest.BasePeriod!.Seconds;
+                    // 挡住它的项里有超预算改速实测量不到的：放开改速可能有解，只是没能实测，记未收敛，不记不能
+                    if (speedUnmeasured && measured.Components.FirstOrDefault(c => c.OwnerLayerId == owner &&
+                        c.Component.MaximumRetimePercent == ShaderPeriodAnalysis.MeasuredRetimePercent) is { } unmeasured)
+                    {
+                        unresolved.Add(new ShaderLoopUnresolved(new(owner, unmeasured.EffectIndex, unmeasured.PassIndex,
+                            own.FirstOrDefault(x => (x.EffectIndex, x.PassIndex) == (unmeasured.EffectIndex, unmeasured.PassIndex))?.Resource ?? "",
+                            ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, $"No loop within the {S(ceilingSeconds)} s limit at the per-term " +
+                            $"retime budget; retiming {unmeasured.Component.Id} beyond it was not measurable by the rendered speed check", "speed_not_measured")));
+                        continue;
+                    }
                     unresolved.Add(new NeverRepeatsUnresolved(owner, ceilingSeconds, $"No loop within the {S(ceilingSeconds)} s limit at a " +
                         $"{S(relaxed.Result.RetimeBudgetPercent)}% retime budget even with every shader period term of this layer retimed independently ({never.Kind}): " +
                         $"slowest component {slowest.Id} has period {S(longest)} s = {S(longest / ceilingSeconds)}x the limit" + (never.FixedPeriodSeconds is double step

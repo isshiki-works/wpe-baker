@@ -50,7 +50,10 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool BudgetOnlyRetime = false,
     // 慢分量改速：带可用旋钮的慢分量（loop.candidates[].slow_components[].retimable）改挂旋钮改速或冻结，放不放行由速度实测。
     // 慢分量闭合预检没过时自动打开，随 settings 走；BudgetOnlyRetime 打开后不再生效。默认关时不写进 settings，plan 逐字不变。
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool RetimeSlowComponents = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool RetimeSlowComponents = false,
+    // 速度实测量不到（not_measured）后的重分析：求解同 BudgetOnlyRetime（不放开要实测的改速与冻结），但这些项挡住循环时记未收敛、不记不能。
+    // 只由编排层在测速量不到时打开，随 settings 走；默认关时不写进 settings，plan 逐字不变。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SpeedUnmeasured = false);
 
 /// <summary>Plans video replacement from source hierarchy and observed input dependencies.</summary>
 /// <param name="display">未指定宽高时用来铺满的屏幕尺寸；省略时读本机主显示器物理分辨率，测试可注入固定值。</param>
@@ -98,17 +101,18 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // 这样同一组图层换了布局或别的组变了，也能命中。
             JsonArray? groupLayers = videoGroups is null ? null : new JsonArray([.. videoGroups.OfType<JsonObject>().Select(group =>
                 (JsonNode)new JsonObject { ["id"] = group["id"]?.DeepClone(), ["layer_ids"] = group["layer_ids"]?.DeepClone() })]);
-            string key = "loop-v13-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, groupLayers,
+            string key = "loop-v14-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, groupLayers,
                 request.FpsNumerator, request.FpsDenominator, profile, request.LoopPreference,
-                request.FullLoopLayerIds, request.BudgetOnlyRetime, request.RetimeSlowComponents);
+                request.FullLoopLayerIds, request.BudgetOnlyRetime, request.RetimeSlowComponents, request.SpeedUnmeasured);
             double ceiling = LoopLengthMaximumOf(request);
+            bool demote = false;
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
                 scene, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
                 ceiling, videoGroups, steps, request.FullLoopLayerIds,
                 // 逐层"不能"按档位回退链能走到的最大预算证明（SearchSpace：没给 --retime-budget 时一直退到效率档）
                 request.RetimeBudgetPercent is null && request.Preset is not null ? Math.Max(profile.CommonRetimePercent, RetimeProfile.MaximumBudgetPercent) : null,
-                request.BudgetOnlyRetime, request.RetimeSlowComponents);
+                request.BudgetOnlyRetime, request.RetimeSlowComponents, request.SpeedUnmeasured, demote);
             return UnresolvedNotes.Unpack(AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
             {
                 LoopReport loop = Analyze(input, null);
@@ -121,6 +125,15 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                     (double narrow, ceiling) = (ceiling, wider);
                     if (Analyze(scene(), null) is { Candidates.Count: > 0 } relaxed) loop = relaxed;
                     else ceiling = narrow;
+                }
+                // 还是凑不出公共循环（整层路线）：判不能之前，把 ≥ 60 s 的长周期着色器项从最长的起按慢分量处理（不进求解器、记漂移上界），
+                // 由分析收尾的慢分量闭合预检实测（阈值不动），不闭合才把所有者层留实时、判不能。上限用档位上限（漂移上界更小）。
+                if (loop.Candidates.Count == 0 && videoGroups is not null &&
+                    loop.NoCandidateReason?.Reason.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling)
+                {
+                    demote = true;
+                    if (Analyze(scene(), null) is { Candidates.Count: > 0 } demoted) loop = demoted;
+                    else demote = false;
                 }
                 // 与别的组共用时钟的组，自身周期不整除 L 时给 L 加"是它的倍数"的约束重解一次；
                 // 只在重解后候选与未解析项都不变差时采用，否则保持原解（这些组录 L 帧）。
@@ -384,7 +397,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     /// </summary>
     internal static string LivenessKey(HybridAnalyzeRequest request, string sourceHash) => "liveness|" + AnalysisCache.Key(sourceHash, request with {
         OutputDirectory = "", AnalysisCacheDirectory = null, RetainLiveRootIds = null, RetainLiveReasons = null, ExcludedLayerIds = null,
-        Preset = null, LoopPreference = "", VideoLayout = "", LiveOverlayPlacement = "", BudgetOnlyRetime = false });
+        Preset = null, LoopPreference = "", VideoLayout = "", LiveOverlayPlacement = "", BudgetOnlyRetime = false,
+        RetimeSlowComponents = false, SpeedUnmeasured = false });
 
     /// <summary>
     /// 整层路线在"除 HDR 闭合外零 blocker 却求不出循环"时，真的试一次更小的烘焙分配，并把走了什么、结果如何写进 plan。
