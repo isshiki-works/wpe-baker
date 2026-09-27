@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -28,11 +29,15 @@ internal sealed class AnalysisOrchestrator
     private readonly NativeTools? tools;
     private readonly string run, cache;
     private readonly CancellationToken token;
+    private readonly IProgress<RenderProgress>? progress;
+    /// <summary>退回重查的次数，一次 RunAsync 里各编排器共用：子分析目录（retreat-N）与进度序号都按它，主路径与关交互试探的退回不撞。</summary>
+    private readonly StrongBox<int> retreats;
     private int attempt, states;
     private JsonArray costs = new();
 
     private AnalysisOrchestrator(HybridAnalyzeRequest request, Func<HybridAnalyzeRequest, CancellationToken, Task<JsonObject>> analyze,
-        SearchSpace space, CallBudget budget, NativeTools? tools, string run, string cache, CancellationToken token)
+        SearchSpace space, CallBudget budget, NativeTools? tools, string run, string cache, CancellationToken token,
+        IProgress<RenderProgress>? progress = null, StrongBox<int>? retreats = null)
     {
         this.request = request;
         this.analyze = analyze;
@@ -42,12 +47,15 @@ internal sealed class AnalysisOrchestrator
         this.run = run;
         this.cache = cache;
         this.token = token;
+        this.progress = progress;
+        this.retreats = retreats ?? new();
     }
 
     /// <param name="budget">省略时用 <see cref="SearchSpace.Budget"/> 的现状最坏上限；测试传入别的预算验证超出时的内部错误。</param>
+    /// <param name="progress">多轮退回重查时每试一种分组报一条阶段信息（retreating）。</param>
     internal static async Task<JsonObject> RunAsync(HybridAnalyzeRequest request,
         Func<HybridAnalyzeRequest, CancellationToken, Task<JsonObject>> analyze, CancellationToken token, NativeTools? tools = null,
-        StateExport? export = null, CallBudget? budget = null)
+        StateExport? export = null, CallBudget? budget = null, IProgress<RenderProgress>? progress = null)
     {
         SearchSpace space = SearchSpace.Of(request, export is not null);
         string root = Path.GetFullPath(request.OutputDirectory);
@@ -58,14 +66,14 @@ internal sealed class AnalysisOrchestrator
             .Order(StringComparer.Ordinal).Select(path => { var file = new FileInfo(path); return new { path, file.Length, file.LastWriteTimeUtc }; }).ToArray()) : "missing";
         string cache = Path.Combine(request.AnalysisCacheDirectory ?? Path.Combine(root, "cache"),
             AnalysisCache.Key(typeof(AnalysisOrchestrator).Module.ModuleVersionId, assetsStamp));
-        var orchestrator = new AnalysisOrchestrator(request, analyze, space, budget ?? space.Budget(), tools, run, cache, token);
+        var orchestrator = new AnalysisOrchestrator(request, analyze, space, budget ?? space.Budget(), tools, run, cache, token, progress);
         JsonObject result = await orchestrator.SelectAsync();
         // 加载即播的单次轨进了视频组（入场切换）而结果不能生成：按旧行为（所属层判实时、不做切换）整套再分析一次，能生成就用它。
         if (!Admission.Accepted(result) && !request.SingleShotLive && result["runtime_evidence"]?.GetValue<string>() is string evidence &&
             SingleShotAllocation.IntroTrackSeconds(result, JsonNode.Parse(await File.ReadAllTextAsync(evidence, token))!.AsObject()) > 0)
         {
             var fallback = new AnalysisOrchestrator(request with { SingleShotLive = true }, analyze, space, space.Budget(), tools,
-                Path.Combine(run, "single-shot-live"), cache, token);
+                Path.Combine(run, "single-shot-live"), cache, token, progress, orchestrator.retreats);
             JsonObject old = await fallback.SelectAsync();
             if (Admission.Accepted(old)) (orchestrator, result) = (fallback, old);
         }
@@ -83,7 +91,7 @@ internal sealed class AnalysisOrchestrator
             if (open.Length == 0) break;
             orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. retained, .. open],
                 RetainLiveReasons = HybridLoopAllocation.RetainReasons(result, []) }, analyze, space,
-                space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token);
+                space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token, progress, orchestrator.retreats);
             result = await orchestrator.SelectAsync();
         }
         if (slowProbes.Count > 0) result["slow_closure_probe"] = slowProbes;
@@ -107,18 +115,14 @@ internal sealed class AnalysisOrchestrator
         var selected = await SolveAsync(interaction);
         JsonObject result = selected.Plan;
         JsonArray selectedCosts = costs.DeepClone().AsArray();
-        if (!Admission.Accepted(result))
+        bool alternativesTried = !Admission.Accepted(result);
+        if (alternativesTried)
         {
             foreach (string mode in space.Interactions.Skip(1))
             {
                 var alternative = await SolveAsync(mode);
                 if (!Admission.Accepted(alternative.Plan)) continue;
-                string path = Path.Combine(run, "suggested-" + mode + ".json");
-                await VideoSceneBuilder.WriteJsonAsync(path, alternative.Plan, token);
-                string key = mode == "fixed" ? "interaction.suggest_fixed" : "interaction.suggest_off";
-                result["suggested_change"] = new JsonObject { ["verified"] = true, ["plan_path"] = path,
-                    ["settings"] = new JsonObject { ["interaction"] = mode },
-                    ["zh"] = MessageCatalog.Get(key, "zh"), ["en"] = MessageCatalog.Get(key, "en") };
+                await SuggestAsync(result, mode, alternative.Plan);
                 break;
             }
             if (Admission.Bakeable(result) && Admission.GroupCount(result) > Admission.MaxVideoGroups(result))
@@ -142,6 +146,15 @@ internal sealed class AnalysisOrchestrator
         }
         // 预计不省电的方案默认拒绝（判据与覆盖见 NoBenefit）；已经被别的原因拒掉的不重复写，只差采集能力的按假设能采集判。
         if (Admission.Accepted(result) || NoBenefit.CaptureOpenConditions(result) is not null) NoBenefit.Apply(result, request.AllowNoBenefit);
+        // 判"不省电"而有可关的交互项（指针、音频层）时也试关交互，与生成不了时同一条建议；试出能生成且省电才建议。不自动关，applied_tradeoffs 不变。
+        // 请求的策略生成不了时上面已验证过替代策略，不再重试。
+        if (result[NoBenefit.Field]?["status"]?.GetValue<string>() == NoBenefit.ExpectedStatus && !alternativesTried &&
+            space.Interactions.Skip(1).Contains("off") && (result["layers"] as JsonArray ?? []).OfType<JsonObject>().Any(layer => !InteractionPolicy.Protected(layer) &&
+                (layer["tradeoff_kinds"] as JsonArray ?? []).Any(kind => kind?.GetValue<string>() is "pointer" or "audio")))
+        {
+            var (off, _) = await SolveAsync("off");
+            if (Admission.Accepted(off) && await RetreatAsync(off, "off") is var retreated && Viable(retreated)) await SuggestAsync(result, "off", retreated);
+        }
         // 尝试经过只写进既有的 preset_* / interaction_* 字段。
         result["preset_requested"] = requested;
         result["preset_applied"] = Admission.Accepted(result) ? result["settings"]?["preset"]?.DeepClone() ?? JsonValue.Create(requested) : JsonValue.Create("none");
@@ -168,6 +181,21 @@ internal sealed class AnalysisOrchestrator
         return result;
     }
 
+    /// <summary>把验证过的替代交互策略记成一键建议（suggested_change），方案落盘供查看；不改 result 的判定。</summary>
+    private async Task SuggestAsync(JsonObject result, string mode, JsonObject plan)
+    {
+        string path = Path.Combine(run, "suggested-" + mode + ".json");
+        await VideoSceneBuilder.WriteJsonAsync(path, plan, token);
+        string key = mode == "fixed" ? "interaction.suggest_fixed" : "interaction.suggest_off";
+        result["suggested_change"] = new JsonObject { ["verified"] = true, ["plan_path"] = path,
+            ["settings"] = new JsonObject { ["interaction"] = mode },
+            ["zh"] = MessageCatalog.Get(key, "zh"), ["en"] = MessageCatalog.Get(key, "en") };
+    }
+
+    /// <summary>能生成且预计省电。烘焙按实际编出的视频流数拒（NoBenefit.TooManyVideoStreams），可行与差距用同一判据，不选烘焙必拒的方案。</summary>
+    private bool Viable(JsonObject plan) => Admission.Accepted(plan) && (request.AllowNoBenefit ||
+        NoBenefit.AnalysisConditions(plan).Length == 0 && !NoBenefit.TooManyVideoStreams(Admission.GroupCount(plan)));
+
     /// <summary>
     /// 放进视频的层多了反而不行（整层无解、被阻断、预计视频成本高于省下的渲染）时，退回更多层留实时的方案：每轮把每个视频组各留一次实时
     /// 重新分析（连同 plan 已留的和分配回退已点名的层），能生成且预计省电的候选里取预计收益（省下的渲染减视频路数）最大的；一个都没有时，
@@ -175,9 +203,6 @@ internal sealed class AnalysisOrchestrator
     /// </summary>
     private async Task<JsonObject> RetreatAsync(JsonObject result, string interaction)
     {
-        // 烘焙按实际编出的视频流数拒（NoBenefit.TooManyVideoStreams），可行与差距用同一判据，不选烘焙必拒的方案。
-        bool Viable(JsonObject plan) => Admission.Accepted(plan) && (request.AllowNoBenefit ||
-            NoBenefit.AnalysisConditions(plan).Length == 0 && !NoBenefit.TooManyVideoStreams(Admission.GroupCount(plan)));
         static double Margin(JsonObject plan) => Admission.Accepted(plan) ? (NoBenefit.RemovedPassCoverage(plan) ?? 0) -
             Admission.GroupCount(plan) * NoBenefit.MinPassCoveragePerStream : double.NegativeInfinity;
         // 离可行的差距：省下的渲染抵不过视频的差额与超出路数上限的路数取大；不能生成为无穷大。
@@ -185,7 +210,7 @@ internal sealed class AnalysisOrchestrator
         static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
         if (Viable(result) || Admission.Accepted(result) && !NoBenefit.AnalysisConditions(result).Contains(NoBenefit.VideoCostOverSaving)) return result;
         JsonObject current = result;
-        for (int round = 0; current["video_groups"] is JsonArray { Count: > 1 } groups; round++)
+        while (current["video_groups"] is JsonArray { Count: > 1 } groups)
         {
             int[] kept = [.. Ids(current["settings"]?["retain_live_root_ids"]).Concat(Ids(current["loop_allocation_fallback"]?["retain_live_root_ids"]))];
             // 已留实时层的原因码跟着重查走（分配回退点名层的未解析原因、plan 已带的），被保留层不被盖成只剩 retained_by_cost_trial。
@@ -193,9 +218,12 @@ internal sealed class AnalysisOrchestrator
             JsonObject? best = null, next = null;
             for (int index = 0; index < groups.Count; index++)
             {
+                // 每次重查都是一整次分析，耗时成倍增加：报一条阶段信息，命令行与界面不至于看起来卡住。
+                int tried = ++retreats.Value;
+                progress?.Report(new("retreating", null, new Message("progress.trying_grouping", [tried])));
                 var (plan, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = [.. kept.Concat(Ids(groups[index]?["root_ids"])).Distinct()],
                     RetainLiveReasons = keptReasons },
-                    analyze, space, space.Budget(), tools, Path.Combine(run, $"retreat-{round}-{index}"), cache, token).SolveAsync(interaction);
+                    analyze, space, space.Budget(), tools, Path.Combine(run, $"retreat-{tried}"), cache, token).SolveAsync(interaction);
                 if (Viable(plan)) { if (best is null || Margin(plan) > Margin(best)) best = plan; }
                 else if (Gap(plan) < Gap(next ?? current)) next = plan;
             }
