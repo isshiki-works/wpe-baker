@@ -392,7 +392,7 @@ public static class PlanNarrative
     }
 
     /// <summary>这一条是满足平稳随机判据的粒子项：它没有周期，但接缝可以淡化替换，不是"证明不了周期"的机制。</summary>
-    private static bool StationaryParticle(JsonObject item) =>
+    internal static bool StationaryParticle(JsonObject item) =>
         item["particle_stationarity"]?["stationary"] is JsonValue flag && flag.TryGetValue(out bool stationary) && stationary;
 
     /// <summary>按补充分析的结局选下一步说明（中英各一句）。</summary>
