@@ -147,7 +147,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
     /// </summary>
     internal RenderRequest ClosureProbeRequest(int index, string outputDirectory, ulong extraWarmupFrames)
     {
-        RenderRequest master = MasterRequest(index, allowGpu: false);
+        RenderRequest master = MasterRequest(index);
         return master with { OutputDirectory = outputDirectory, Frames = 1, WarmupFrames = master.WarmupFrames + extraWarmupFrames,
             EncodedFrames = null, RetainFrames = [0], TraceScene = false };
     }
@@ -389,7 +389,7 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
                             sizeBudgets[index] = (offset + EmbeddedVideoBudget.QuantizerOffset(bytes),
                                 Math.Max(unconstrained, bytes * Math.Pow(2, offset / 6d)));
                         }
-                        Directory.Move(render.OutputDirectory, ProjectSource.ContainedPath(Path.GetDirectoryName(render.OutputDirectory)!, "master.over-size"));
+                        Directory.Move(render.OutputDirectory, WorkLayout.Vacant(ProjectSource.ContainedPath(Path.GetDirectoryName(render.OutputDirectory)!, "master.over-size")));
                         render = MasterRequest(index, gpuAllowed, coverage, failedCodecs);
                         continue;
                     }

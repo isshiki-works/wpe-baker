@@ -28,7 +28,7 @@ namespace
 
 std::filesystem::path Assets() {
     const char* env = std::getenv("WPE_ASSETS_DIR");
-    return env ? env : "D:/Apps/Steam/steamapps/common/wallpaper_engine/assets";
+    return env ? env : "C:/Program Files (x86)/Steam/steamapps/common/wallpaper_engine/assets";
 }
 
 std::string ReadText(const std::filesystem::path& path) {

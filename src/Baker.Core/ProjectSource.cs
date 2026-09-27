@@ -71,7 +71,7 @@ public sealed class ProjectSource : IDisposable
                 if (offset < 0 || length < 0) throw new InvalidDataException($"Invalid PKG entry: {name}");
                 directory.Add((name, new Entry(offset, length)));
             }
-            long header = package.Position;
+            long header = package.Position, compared = 0;
             foreach (var (name, item) in directory)
             {
                 long start = checked(header + item.Offset);
@@ -83,6 +83,9 @@ public sealed class ProjectSource : IDisposable
                     // Official packages can repeat an identical font/resource. Windows
                     // has one path for those entries, so only byte-identical aliases can
                     // be represented without changing which resource is read.
+                    // 正常包里每个重复条目各占自己的字节，逐字节比较的总量不超过包长；超了是反复指向同一大块的坏包，按损坏拒绝。
+                    if (previous.Offset != absolute.Offset && (compared += absolute.Length) > package.Length)
+                        throw new InvalidDataException($"PKG duplicate entries exceed the package size: {name}");
                     if (!SamePayload(previous, absolute)) throw new InvalidDataException($"Conflicting duplicate PKG entry: {name}");
                 }
                 else entries.Add(name, absolute);

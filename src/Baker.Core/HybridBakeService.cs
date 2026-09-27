@@ -239,7 +239,7 @@ public sealed class HybridBakeService(NativeTools tools)
             await BakeReportWriter.SaveAsync(layout.Report, first, null, CancellationToken.None);
             return first;
         }
-        string firstAttempt = layout.Output + firstAttemptSuffix;
+        string firstAttempt = WorkLayout.Vacant(layout.Output + firstAttemptSuffix);
         Directory.Move(layout.Output, firstAttempt);
         // 首次的合成比对产物（ProbeBake 写在输出根旁，被拒时探针与参照也留着）一并挪走，重烘要求它们是新的。
         foreach (string part in new[] { "composition-validation", "composition-probe", "composition-reference" })

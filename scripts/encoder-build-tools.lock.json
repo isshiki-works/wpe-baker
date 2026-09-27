@@ -44,39 +44,39 @@
   "git_for_windows": "git version 2.52.0.windows.1",
   "actual_tool_files": [
     {
-      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\llvm-mingw-22\\bin\\clang.exe",
+      "file": ".tools/llvm-mingw-22/bin/clang.exe",
       "sha256": "a8b7a614eeadd9105f814be3701a7f312cda4cea51751b75b408c16100c94e85"
     },
     {
-      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\llvm-mingw-22\\bin\\ld.lld.exe",
+      "file": ".tools/llvm-mingw-22/bin/ld.lld.exe",
       "sha256": "ebc594a240cd325f1ea8b865ee88da0d004e94ea31eb1fc3f7f8f0ff8d93f58f"
     },
     {
-      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\nasm\\nasm.exe",
+      "file": ".tools/nasm/nasm.exe",
       "sha256": "04ec2385879f7e1c45dbe76c4020970555de48eeb97c23f59620ede061328f51"
     },
     {
-      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\ffmpeg-build\\usr\\bin\\make.exe",
+      "file": ".tools/ffmpeg-build/usr/bin/make.exe",
       "sha256": "91b7e155590d59db22e5eb0a3ffeec6350149f70f9ed2c242d133e584eb72fee"
     },
     {
-      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\cmake\\bin\\cmake.exe",
+      "file": ".tools/cmake/bin/cmake.exe",
       "sha256": "ab8247ca4554871e5d75c0ee118ee8663727bd6fdf37ad76b17e9cc8d5f286a8"
     },
     {
-      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\ninja\\ninja.exe",
+      "file": ".tools/ninja/ninja.exe",
       "sha256": "e52a7ad9538d9618c67a0bd777964e2eec8a30f68b810a2f6adce1f2daf847b8"
     },
     {
-      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\llvm-mingw-22\\x86_64-w64-mingw32\\lib\\libc++.a",
+      "file": ".tools/llvm-mingw-22/x86_64-w64-mingw32/lib/libc++.a",
       "sha256": "a563f5a45aab4d3fd9f1a86f84e228f8c3463fe269fcd6bd9522a62b473c29dc"
     },
     {
-      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\llvm-mingw-22\\x86_64-w64-mingw32\\lib\\libunwind.a",
+      "file": ".tools/llvm-mingw-22/x86_64-w64-mingw32/lib/libunwind.a",
       "sha256": "e3323763cfd160c1f14998ae2da92ddde9f17f9c337282597ba1ef4074882935"
     },
     {
-      "file": "C:\\Users\\Alya\\Desktop\\Work\\wpe-baker-next\\.tools\\pkgconf\\bin\\pkgconf.exe",
+      "file": ".tools/pkgconf/bin/pkgconf.exe",
       "sha256": "1ff3306d492ad9e2fdb677c5e01eb86408cbea374811ed686b8ef970577d66b9"
     },
     {

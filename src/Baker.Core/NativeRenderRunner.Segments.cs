@@ -48,7 +48,7 @@ public sealed partial class NativeRenderRunner
         // 同一编码器、同一参数的段，SPS/PPS 相同，concat 分离器拷包即可。
         string list = Path.Combine(output, "segments.txt"), video = Path.Combine(output, "preview.mp4");
         await File.WriteAllLinesAsync(list, partDirectories.Select(directory =>
-            $"file '{Path.Combine(directory, "preview.mp4").Replace('\\', '/')}'"), cancellationToken);
+            $"file '{MasterRewrite.ConcatEntry(Path.Combine(directory, "preview.mp4"))}'"), cancellationToken);
         string timescale = request.FpsNumerator.ToString(CultureInfo.InvariantCulture);
         _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy",
             "-movie_timescale", timescale, "-video_track_timescale", timescale, video], Path.Combine(output, "concat.stderr.log"), cancellationToken);

@@ -94,5 +94,12 @@ internal static class BakeDiskBudgetChecks
         check(!WorkLayout.KeepsCompositionProbe(null) &&
             WorkLayout.KeepsCompositionProbe(new JsonObject { ["status"] = "candidate_rejected_composition" }),
             "only composition rejections keep the probe");
+
+        // ---- 挪开旧产物撞名：同一组第二次超上限、重排后同名组再次重试，都挪到新名字 ----
+        string moved = Path.Combine(root, "vacant", "master.over-size");
+        Directory.CreateDirectory(moved);
+        Directory.CreateDirectory(moved + "-2");
+        check(WorkLayout.Vacant(moved) == moved + "-3" && WorkLayout.Vacant(moved + ".free") == moved + ".free",
+            "moving an old output aside picks the next free numbered name instead of colliding");
     }
 }
