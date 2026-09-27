@@ -11,8 +11,8 @@ internal static class SlowClosureProbe
 {
     static int[] Layers(JsonObject group) => [.. group["layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>()];
 
-    /// <summary>按 plan 建采集工程与组渲染调度（与烘焙同一个主渲染请求、同一份预热与残差起点）；返回调度器、各组循环帧数与残差组。</summary>
-    static async Task<(GroupRenderScheduler Scheduler, ulong[] GroupFrames, int[] ResidualGroups)> OpenAsync(JsonObject plan, JsonObject[] groups,
+    /// <summary>按 plan 建采集工程与组渲染调度（与烘焙同一个主渲染请求、同一份预热与残差起点）；返回调度器、各组循环帧数、残差组与写出的覆盖 shader 记录。</summary>
+    static async Task<(GroupRenderScheduler Scheduler, ulong[] GroupFrames, int[] ResidualGroups, JsonArray Shaders)> OpenAsync(JsonObject plan, JsonObject[] groups,
         NativeRenderRunner runner, string output, CancellationToken token)
     {
         using var source = new ProjectSource(plan["source"]!.GetValue<string>());
@@ -20,9 +20,10 @@ internal static class SlowClosureProbe
         JsonObject original = source.ReadJson(source.SceneResource), snapshot = plan["snapshot_properties"]!.DeepClone().AsObject();
         PlanTransforms.ApplyAudioEffectChoice(original, plan);
         string captureProject = Path.Combine(output, "capture-source");
+        var report = new JsonObject();
         await CaptureSourceBuilder.PrepareAsync(captureProject, source, original,
             source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject(), snapshot, plan, settings, false,
-            new JsonObject(), new StageTiming(), token);
+            report, new StageTiming(), token);
         JsonObject candidate = plan["loop"]!["candidates"]![0]!.AsObject();
         ulong frames = candidate["frames"]!.GetValue<ulong>();
         ulong[] groupFrames = [.. groups.Select(group => candidate["group_frames"]?[group["id"]!.GetValue<string>()]?.GetValue<ulong>() ?? frames)];
@@ -36,7 +37,7 @@ internal static class SlowClosureProbe
         var (crossfade, particleWarmup, intro, residualGroups) = HybridBakeService.GroupTiming(plan, settings, residual, runtime, daytimeExport);
         return (new GroupRenderScheduler(runner, new HybridBakeRequest(2, plan, output), plan, settings, groups,
             captureProject, output, snapshot, frames, groupFrames, crossfade, particleWarmup + intro, residualGroups, 1,
-            PlaybackEncoderSelection.Software, null, token), groupFrames, residualGroups);
+            PlaybackEncoderSelection.Software, null, token), groupFrames, residualGroups, report["time_scale_shaders"] as JsonArray ?? []);
     }
 
     internal static async Task<JsonArray> RunAsync(JsonObject plan, NativeTools tools, string output, CancellationToken token)
@@ -47,7 +48,7 @@ internal static class SlowClosureProbe
         if (plan["route"]?.GetValue<string>() == "effect_prefix" || !groups.Any(group => GroupVerdicts.SlowDrift(plan, Layers(group)) is not null))
             return records;
         var runner = new NativeRenderRunner(tools);
-        var (opened, groupFrames, residualGroups) = await OpenAsync(plan, groups, runner, output, token);
+        var (opened, groupFrames, residualGroups, _) = await OpenAsync(plan, groups, runner, output, token);
         await using var scheduler = opened;
         try
         {
@@ -99,20 +100,26 @@ internal static class SlowClosureProbe
             .Where(c => measured.Contains(c["id"]!.GetValue<string>()) && Math.Abs(c["delta_percent"]!.GetValue<double>()) > budget + 1e-9)
             .Select(c => c["id"]!.GetValue<string>()).Order(StringComparer.Ordinal)];
         if (relaxed.Length == 0) return null;
-        JsonObject before = plan.DeepClone().AsObject();
-        JsonArray patches = before["loop"]!["candidates"]![0]!["patches"]!.AsArray();
-        JsonObject[] retimed = [.. patches.OfType<JsonObject>().Where(patch => relaxed.Contains(patch["component"]?.GetValue<string>() ?? ""))];
-        int[] owners = [.. retimed.Select(patch => patch["owner_layer_id"]!.GetValue<int>()).Distinct()];
-        // 还原成原速：旋钮补丁新值 = (分量倍率 / 同 pass 时间倍率)^指数，原速对应 (1 / 时间倍率)^指数；为 1 就去掉这条补丁
-        foreach (JsonObject patch in retimed)
+        static bool Retimed(JsonNode? patch, string[] relaxed) => relaxed.Contains(patch?["component"]?.GetValue<string>() ?? "");
+        // 这些项按原速的 speed 倍跑的一版：旋钮补丁新值 = (分量倍率 / 同 pass 时间倍率)^指数，所以 speed 倍对应 (speed / 时间倍率)^指数；为 1 就去掉这条补丁。
+        // speed = 1 是改速前（before）；speed = 2 是对照（control）：它与改速前也分不出时，这些项在画面上本来就不起作用
+        JsonObject Variant(double speed)
         {
-            double time = patches.OfType<JsonObject>().FirstOrDefault(other => other["constant_key"]?.GetValue<string>() == ShaderPeriodAnalysis.TimeScaleKey &&
-                JsonNode.DeepEquals(other["owner_layer_id"], patch["owner_layer_id"]) && JsonNode.DeepEquals(other["effect_index"], patch["effect_index"]) &&
-                JsonNode.DeepEquals(other["pass_index"], patch["pass_index"]))?["new_value"]?.GetValue<double>() ?? 1;
-            double original = Math.Pow(1 / time, patch["speed_exponent"]!.GetValue<double>());
-            if (original == 1) patches.Remove(patch);
-            else patch["new_value"] = original;
+            JsonObject variant = plan.DeepClone().AsObject();
+            JsonArray patches = variant["loop"]!["candidates"]![0]!["patches"]!.AsArray();
+            foreach (JsonObject patch in patches.OfType<JsonObject>().Where(patch => Retimed(patch, relaxed)).ToArray())
+            {
+                double time = patches.OfType<JsonObject>().FirstOrDefault(other => other["constant_key"]?.GetValue<string>() == ShaderPeriodAnalysis.TimeScaleKey &&
+                    JsonNode.DeepEquals(other["owner_layer_id"], patch["owner_layer_id"]) && JsonNode.DeepEquals(other["effect_index"], patch["effect_index"]) &&
+                    JsonNode.DeepEquals(other["pass_index"], patch["pass_index"]))?["new_value"]?.GetValue<double>() ?? 1;
+                double value = Math.Pow(speed / time, patch["speed_exponent"]!.GetValue<double>());
+                if (value == 1) patches.Remove(patch);
+                else patch["new_value"] = value;
+            }
+            return variant;
         }
+        JsonObject[] retimed = [.. candidates[0]!["patches"]!.AsArray().OfType<JsonObject>().Where(patch => Retimed(patch, relaxed))];
+        int[] owners = [.. retimed.Select(patch => patch["owner_layer_id"]!.GetValue<int>()).Distinct()];
         JsonObject[] groups = [.. (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()];
         int[] probed = [.. Enumerable.Range(0, groups.Length).Where(index => Layers(groups[index]).Intersect(owners).Any())];
         var record = new JsonObject { ["components"] = new JsonArray([.. relaxed.Select(id => (JsonNode)id)]),
@@ -127,21 +134,32 @@ internal static class SlowClosureProbe
         var runner = new NativeRenderRunner(tools);
         double wall = 0;
         var readings = new JsonArray();
+        GroupRenderScheduler? schedulerControl = null;
         try
         {
             HybridAnalyzeRequest settings = PlanSettings.Of(plan);
-            var (openedBefore, _, _) = await OpenAsync(before, groups, runner, Path.Combine(output, "before"), token);
+            var (openedBefore, _, _, shadersBefore) = await OpenAsync(Variant(1), groups, runner, Path.Combine(output, "before"), token);
             await using var schedulerBefore = openedBefore;
-            var (openedAfter, loopFrames, _) = await OpenAsync(plan, groups, runner, Path.Combine(output, "after"), token);
+            var (openedAfter, loopFrames, _, shadersAfter) = await OpenAsync(plan, groups, runner, Path.Combine(output, "after"), token);
             await using var schedulerAfter = openedAfter;
+            record["time_scale_shaders"] = new JsonObject { ["before"] = shadersBefore.DeepClone(), ["after"] = shadersAfter.DeepClone() };
+            // 改速后的采集工程里，每条改速补丁的键都要真的改写进了覆盖 shader（写覆盖时读不到源码或解析不出 pass 着色器会静默跳过）：缺了就是没改速，不必渲染
+            if (UnwrittenKeys(shadersAfter, retimed.Select(patch => patch["constant_key"]!.GetValue<string>())) is { Length: > 0 } missing)
+            {
+                readings.Add(new JsonObject { ["status"] = "not_measured", ["reason"] = "patch_not_written",
+                    ["missing_keys"] = new JsonArray([.. missing.Select(key => (JsonNode)key)]) });
+                probed = [];
+            }
             foreach (int index in probed)
             {
                 GroupCapture capture = schedulerAfter.Capture(groups[index]);
                 int[] layers = [.. Layers(groups[index]).Intersect(owners)];
-                async Task<byte[]> Render(bool after, ulong frame)
+                async Task<byte[]> Render(int version, ulong frame)
                 {
-                    GroupRenderScheduler scheduler = after ? schedulerAfter : schedulerBefore;
-                    string name = $"speed-{index}-{frame}-{(after ? "after" : "before")}";
+                    if (version == 2 && schedulerControl is null)
+                        (schedulerControl, _, _, _) = await OpenAsync(Variant(2), groups, runner, Path.Combine(output, "control"), token);
+                    GroupRenderScheduler scheduler = version switch { 0 => schedulerBefore, 1 => schedulerAfter, _ => schedulerControl! };
+                    string name = $"speed-{index}-{frame}-{version switch { 0 => "before", 1 => "after", _ => "control" }}";
                     JsonObject manifest = await runner.RenderAsync(scheduler.SpeedProbeRequest(index, Path.Combine(output, name), frame, layers), null, token);
                     wall += manifest["native_result"]?["wall_seconds"]?.GetValue<double>() ?? 0;
                     return await LoopClosureCheck.ReadRetainedFrameAsync(manifest, 0, token);
@@ -160,6 +178,7 @@ internal static class SlowClosureProbe
         }
         finally
         {
+            if (schedulerControl is not null) await schedulerControl.DisposeAsync();
             try { Directory.Delete(output, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
         JsonObject[] all = [.. readings.OfType<JsonObject>()];
@@ -171,7 +190,7 @@ internal static class SlowClosureProbe
     }
 
     /// <summary>
-    /// 一个组的速度差读数。<paramref name="render"/>(after, frame) 出改速前/后从时间 0 起的第 frame 帧（RGBA）；<paramref name="loopFrames"/> 是这个组的循环长度 L（帧）。
+    /// 一个组的速度差读数。<paramref name="render"/>(version, frame) 出从时间 0 起的第 frame 帧（RGBA）：version 0 改速前、1 改速后、2 对照（改速项按原速 2 倍）；<paramref name="loopFrames"/> 是这个组的循环长度 L（帧）。
     /// 第 0 帧两版不逐位相同 → not_measured（frame0_differs）；第 0 帧整幅没有梯度 → not_measured（no_texture，所有者层可能没渲出来）。
     /// 否则比较两版在 t 时刻的画面，同时抓位移和亮度变化（分块光流只量位移，亮度类特效怎么改速都会"通过"）：
     /// 约 540p 网格（1080p 下 2×2 平均）上逐格取 d = max_c |after_c − before_c|、g = max_c |∇before_c|（c 取 RGBA，梯度按 1080p 像素），
@@ -179,14 +198,14 @@ internal static class SlowClosureProbe
     /// 纯位移 s 时每个通道 |Δc| ≈ |∇c·s| ≤ |∇c|·|s| ≤ g·|s|，所以 D ≤ G·|s|、v ≤ |s|/t = 位移速度差：速度差 ≤ 0.1 px/s 的纯位移必然通过。
     /// 窗口 t 从 0.5 s 起翻倍直到 L（最后一窗取 L），取第一个最差块 D ≥ <see cref="MeasurableLevels"/> 的窗算读数，≤ 0.1 px/s 为 passed，否则 visible：
     /// 更短的窗里差可能被 8 位量化抹成 0（周期几百秒的项改速几十个百分点，8 s 里相位差不到 1%），更长的窗里图案去相关、D 饱和会低估速率，所以只取第一个可测窗。
-    /// 到 t = L 两版的差都不可测时先自检：原速版本自己的第 0 帧与各窗第 t 帧也比一遍（最大块差记 self_change_levels）。
-    /// 原速版本在整个循环里都没有可测变化 → 这一层在所有者层渲染里不可见或不动，改速无害，按 component_not_visible 放行（读数写 null）；
-    /// 原速版本在变、两版却不可测地相同 → 补丁没生效或渲染有误，记 not_measured（patch_not_effective），调用方按逐项预算重分析。
+    /// 到 t = L 两版的差都不可测时自检：对照版与改速前在同样的窗上比（最大块差记 control_change_levels；原速版本自身的变化另记 self_change_levels，只作参考）。
+    /// 对照也不可测 → 改速项在所有者层画面上不起作用，改速无害，按 component_not_visible 放行（读数写 null）；
+    /// 对照可测、改速后却不可测 → 补丁没生效或渲染有误，记 not_measured（patch_not_effective），调用方按逐项预算重分析。
     /// </summary>
-    internal static async Task<JsonObject> MeasureAsync(Func<bool, ulong, Task<byte[]>> render, int width, int height, double tileScale,
+    internal static async Task<JsonObject> MeasureAsync(Func<int, ulong, Task<byte[]>> render, int width, int height, double tileScale,
         uint fpsNumerator, uint fpsDenominator, ulong loopFrames)
     {
-        byte[] origin = await render(false, 0), retimed = await render(true, 0);
+        byte[] origin = await render(0, 0), retimed = await render(1, 0);
         if (!origin.AsSpan().SequenceEqual(retimed))
             return new JsonObject { ["status"] = "not_measured", ["reason"] = "frame0_differs" };
         int step = Math.Max(1, (int)Math.Round(2 * tileScale));
@@ -194,12 +213,14 @@ internal static class SlowClosureProbe
         if (Blocks(origin, origin, width, height, step, toReference).All(block => block.Gradient == 0))
             return new JsonObject { ["status"] = "not_measured", ["reason"] = "no_texture" };
         double largest = 0, motion = 0;
+        var frames = new List<ulong>();
         for (double seconds = ShortestWindowSeconds; ; seconds *= 2)
         {
             ulong frame = Math.Min(loopFrames, Math.Max(1, (ulong)Math.Round(seconds * fpsNumerator / fpsDenominator)));
+            frames.Add(frame);
             double t = (double)frame * fpsDenominator / fpsNumerator;
-            byte[] original = await render(false, frame);
-            var blocks = Blocks(original, await render(true, frame), width, height, step, toReference).ToArray();
+            byte[] original = await render(0, frame);
+            var blocks = Blocks(original, await render(1, frame), width, height, step, toReference).ToArray();
             double worst = blocks.Max(block => block.Difference);
             largest = Math.Max(largest, worst);
             motion = Math.Max(motion, Blocks(origin, original, width, height, step, toReference).Max(block => block.Difference));
@@ -213,13 +234,26 @@ internal static class SlowClosureProbe
                     ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = worst };
             }
             if (frame >= loopFrames)
-                return motion < MeasurableLevels
+            {
+                // 对照：这些项按原速 2 倍跑的一版与改速前在同样的窗上比。原速版本自己在动（self_change）不够说明问题——动的可能是别的项；
+                // 对照也分不出 → 这些项在所有者层画面上本来就不起作用；对照分得出、改速后却分不出 → 补丁没生效或渲染有误
+                double control = 0;
+                foreach (ulong at in frames)
+                    if ((control = Math.Max(control, Blocks(await render(0, at), await render(2, at), width, height, step, toReference)
+                        .Max(block => block.Difference))) >= MeasurableLevels) break;
+                return control < MeasurableLevels
                     ? new JsonObject { ["status"] = "passed", ["basis"] = "component_not_visible", ["peak_speed_deviation_px_per_second"] = null,
-                        ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = largest, ["self_change_levels"] = motion }
+                        ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = largest, ["self_change_levels"] = motion, ["control_change_levels"] = control }
                     : new JsonObject { ["status"] = "not_measured", ["reason"] = "patch_not_effective",
-                        ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = largest, ["self_change_levels"] = motion };
+                        ["worst_window_seconds"] = t, ["worst_block_difference_levels"] = largest, ["self_change_levels"] = motion, ["control_change_levels"] = control };
+            }
         }
     }
+
+    /// <summary>改速补丁的键里，没有出现在任何覆盖 shader 记录（<see cref="ShaderTextPatch.WriteTimeScaleAsync"/> 的 keys）里的那些。</summary>
+    internal static string[] UnwrittenKeys(JsonArray shaders, IEnumerable<string> keys) =>
+        [.. keys.Distinct().Except(shaders.OfType<JsonObject>().SelectMany(shader => (shader["keys"] as JsonArray ?? []).Select(key => key!.GetValue<string>())))
+            .Order(StringComparer.Ordinal)];
 
     /// <summary>
     /// 两帧先按 step×step 平均到网格，逐块（16×16 格，去掉最外一圈格子）给出平均差 D（levels）与改速前那帧的平均梯度幅值 G（levels / 1080p 像素）；

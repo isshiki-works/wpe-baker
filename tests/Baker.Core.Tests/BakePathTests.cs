@@ -89,32 +89,39 @@ public class BakePathTests
             if (speck) rgba[0] ^= 1;
             return rgba;
         }
-        static Task<JsonObject> Read(Func<bool, double, byte[]> frame) => SlowClosureProbe.MeasureAsync(
-            (after, index) => Task.FromResult(frame(after, index / 30.0)), size, size, 1, 30, 1, 400 * 30);
-        static Task<JsonObject> Shift(double deviation) => Read((after, t) => Frame(after ? deviation * t : 0));
+        // version：0 改速前、1 改速后、2 对照（改速项按原速 2 倍）
+        static Task<JsonObject> Read(Func<int, double, byte[]> frame) => SlowClosureProbe.MeasureAsync(
+            (version, index) => Task.FromResult(frame(version, index / 30.0)), size, size, 1, 30, 1, 400 * 30);
+        static Task<JsonObject> Shift(double deviation) => Read((version, t) => Frame(version == 1 ? deviation * t : 0));
         JsonObject slow = await Shift(0.05), fast = await Shift(0.5);
         Assert.Equal("passed", slow["status"]!.GetValue<string>());
         Assert.InRange(slow["peak_speed_deviation_px_per_second"]!.GetValue<double>(), 0.005, 0.07);
         Assert.Equal("visible", fast["status"]!.GetValue<string>());
-        JsonObject pulse = await Read((after, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / (after ? 101 : 400)), halfFlat: true));
+        JsonObject pulse = await Read((version, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / (version == 1 ? 101 : 400)), halfFlat: true));
         Assert.Equal("visible", pulse["status"]!.GetValue<string>());
         Assert.True(pulse["flat_block_changed"]!.GetValue<bool>());
         // 慢亮度漂移（3715870843 的 caustics 形态）：平坦光晕 ±5 levels、周期 400 s 改到 300 s。8 s 内两版量化后逐位相同（旧的 0.5–8 s 窗读 0 放行），
         // 翻倍到第一个最差块差 ≥ 3 levels 的窗才算读数，平坦块里的变化判看得出
-        JsonObject drift = await Read((after, t) => Frame(0, 5 * Math.Sin(2 * Math.PI * t / (after ? 300 : 400)), halfFlat: true));
+        JsonObject drift = await Read((version, t) => Frame(0, 5 * Math.Sin(2 * Math.PI * t / (version == 1 ? 300 : 400)), halfFlat: true));
         Assert.Equal("visible", drift["status"]!.GetValue<string>());
         Assert.True(drift["worst_window_seconds"]!.GetValue<double>() > 8);
-        // 整个循环（400 s）里两版的差都在量化阈值以下，原速版本自己也不可测地变化：这一层看不见或不动，放行并写明依据
-        JsonObject faint = await Read((after, t) => Frame(0, 0.4 * Math.Sin(2 * Math.PI * t / (after ? 300 : 400)), halfFlat: true));
+        // 整个循环（400 s）里两版的差都在量化阈值以下，对照（2 倍速）也分不出：改速项在画面上不起作用，放行并写明依据
+        static double Period(int version) => version switch { 1 => 300, 2 => 200, _ => 400 };
+        JsonObject faint = await Read((version, t) => Frame(0, 0.4 * Math.Sin(2 * Math.PI * t / Period(version)), halfFlat: true));
         Assert.Equal("passed", faint["status"]!.GetValue<string>());
         Assert.Equal("component_not_visible", faint["basis"]!.GetValue<string>());
         Assert.Equal(400.0, faint["worst_window_seconds"]!.GetValue<double>());
-        // 补丁没生效（3715870843 的疑点）：原速版本明显在动，改速后的版本却与它逐位相同，整个循环两版都不差——不放行
-        JsonObject inert = await Read((_, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / 400), halfFlat: true));
+        // 所有者层在动（光晕 ±20 levels 来自没改速的项），改速的项却不影响画面（3715870843 的一种可能）：三版逐位相同。
+        // 原速版本自身变化很大（self_change）不能说明补丁没生效——对照也分不出，按 component_not_visible 放行
+        JsonObject idle = await Read((_, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / 400), halfFlat: true));
+        Assert.Equal("component_not_visible", idle["basis"]!.GetValue<string>());
+        Assert.True(idle["self_change_levels"]!.GetValue<double>() >= SlowClosureProbe.MeasurableLevels);
+        // 补丁没生效：改速项确实影响画面（对照 2 倍速分得出），改速后的版本却与改速前逐位相同——不放行
+        JsonObject inert = await Read((version, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / (version == 2 ? 200 : 400)), halfFlat: true));
         Assert.Equal("not_measured", inert["status"]!.GetValue<string>());
         Assert.Equal("patch_not_effective", inert["reason"]!.GetValue<string>());
-        Assert.Equal("frame0_differs", (await Read((after, t) => Frame(0, speck: after && t == 0)))["reason"]!.GetValue<string>());
-        Assert.Equal("no_texture", (await Read((after, t) => Frame(0, after ? t : 0, flat: true)))["reason"]!.GetValue<string>());
+        Assert.Equal("frame0_differs", (await Read((version, t) => Frame(0, speck: version == 1 && t == 0)))["reason"]!.GetValue<string>());
+        Assert.Equal("no_texture", (await Read((version, t) => Frame(0, version == 1 ? t : 0, flat: true)))["reason"]!.GetValue<string>());
     }
 
     // 测速请求不带烘焙专用设置：组本来是残差组（淡化窗口 + CPU 直编裁剪）时，从主渲染请求派生的 1 帧请求过不了渲染器的请求校验
@@ -163,5 +170,41 @@ public class BakePathTests
             Path.Combine(dir, "speed"), CancellationToken.None))!;
         Assert.Equal("not_measured", record["status"]!.GetValue<string>());
         Assert.Equal("probe_failed", record["groups"]![0]!["reason"]!.GetValue<string>());
+    });
+
+    // 覆盖 shader 的写出记录带上改写的键：创意工坊特效（资源名带 workshop/<id>/，3715870843 的 caustics 形态）照样改写，
+    // 慢项测速据此核对每条改速补丁的键真的写进了覆盖 shader；pass 着色器解析不出（这里删掉材质）时静默跳过，核对把它挑出来
+    [Fact]
+    public async Task OverrideShaderRecordsTheKnobsItRewrote() => await TestTemp.Run(async dir =>
+    {
+        string project = Path.Combine(dir, "project");
+        void Write(string resource, string text)
+        {
+            string path = Path.Combine(project, resource);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+        }
+        string knob = ShaderTextPatch.KnobKey(new JsonObject { ["stage"] = "frag", ["literal"] = 0.003777 });
+        Write("scene.json", """{"objects":[]}""");
+        Write("project.json", """{"file":"scene.json","type":"scene"}""");
+        Write("workshop/3468454002/effects/caustics/effect.json", """{"passes":[{"material":"workshop/3468454002/materials/effects/caustics.json"}]}""");
+        Write("workshop/3468454002/materials/effects/caustics.json", """{"passes":[{"shader":"workshop/3468454002/effects/caustics"}]}""");
+        Write("shaders/workshop/3468454002/effects/caustics.frag",
+            "uniform float g_Time;\nvoid main() { float time = g_Time * 0.5; gl_FragColor = vec4(fract(time * 0.003777)); }\n");
+        var scene = JsonNode.Parse($$$"""
+            {"objects":[{"id":409,"effects":[{"file":"workshop/3468454002/effects/caustics/effect.json",
+              "passes":[{"constantshadervalues":{"{{{knob}}}":1.33}}]}]}]}
+            """)!.AsObject();
+        JsonArray Written(string capture)
+        {
+            using var source = new ProjectSource(project);
+            return ShaderTextPatch.WriteTimeScaleAsync(Path.Combine(dir, capture), source, null, scene, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        JsonArray written = Written("capture");
+        Assert.Equal("shaders/workshop/3468454002/effects/caustics.frag", written.Single()!["resource"]!.GetValue<string>());
+        Assert.Empty(SlowClosureProbe.UnwrittenKeys(written, [knob]));
+        File.Delete(Path.Combine(project, "workshop/3468454002/materials/effects/caustics.json"));
+        Assert.Equal([knob], SlowClosureProbe.UnwrittenKeys(Written("capture-without-material"), [knob]));
+        await Task.CompletedTask;
     });
 }
