@@ -23,10 +23,10 @@ CREATE_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 ENV = os.environ.copy()
 
 
-def run(command: list[str], cwd: Path, log: Path, timeout: int = 180) -> None:
+def run(command: list[str], cwd: Path, log: Path, timeout: int = 180, env: dict | None = None) -> None:
     with log.open("wb") as output:
         completed = subprocess.run(command, cwd=cwd, stdout=output, stderr=subprocess.STDOUT,
-                                   timeout=timeout, creationflags=CREATE_FLAGS, env=ENV)
+                                   timeout=timeout, creationflags=CREATE_FLAGS, env=env or ENV)
     if completed.returncode:
         raise RuntimeError(f"exit {completed.returncode}: {command[0]}; log {log}")
 
@@ -41,7 +41,7 @@ def png(path: Path, pixels: bytes, width: int, height: int) -> None:
 
 def render(renderer: Path, folder: Path, fixture: str, fps: int, frames: int, label: str,
            *, fps_den: int = 1, warmup: int = 0, seed: int = 123456,
-           epoch_ms: int = 946684800000, source_override: Path | None = None) -> dict:
+           epoch_ms: int = 946684800000, source_override: Path | None = None, serial: bool = False) -> dict:
     source = source_override or ROOT / "tests" / "fixtures" / "native" / fixture
     output = folder / label
     job = {
@@ -52,7 +52,8 @@ def render(renderer: Path, folder: Path, fixture: str, fps: int, frames: int, la
     }
     jobfile = folder / (label + ".job.json")
     jobfile.write_text(json.dumps(job, indent=2), encoding="utf-8")
-    run([str(renderer), "render", "--job", str(jobfile)], ROOT, folder / (label + ".log"))
+    run([str(renderer), "render", "--job", str(jobfile)], ROOT, folder / (label + ".log"),
+        env={**ENV, "WPE_SERIAL_FRAMES": "1"} if serial else None)
     result = json.loads((output / "result.json").read_text(encoding="utf-8"))
     assert result["status"] == "complete" and result["written_frames"] == frames, result
     raw = (output / "frames.rgba").read_bytes()
@@ -151,6 +152,10 @@ def main() -> None:
         assert report["tests"]["random-a"]["sha256"] == report["tests"]["random-b"]["sha256"], "same seed is not reproducible"
         assert report["tests"]["random-a"]["sha256"] != report["tests"]["random-c"]["sha256"], "seed is ignored"
         assert len(set(report["tests"]["random-a"]["frame_hashes"])) > 10, "random script did not advance"
+        # 帧流水线（提前段、写线程）只挪时间：与 WPE_SERIAL_FRAMES=1 的单帧顺序逐字节相同。
+        serial = render(args.renderer.resolve(), folder, "random-clock", 120, 121, "random-serial", seed=123456, serial=True)
+        assert serial["sha256"] == report["tests"]["random-a"]["sha256"], "frame pipeline changed output"
+        report["tests"]["random-serial"] = serial
         soundtrack = render(args.renderer.resolve(), folder, "authored-audio", 120, 301, "authored-audio")
         with wave.open(str(ROOT / "tests/fixtures/native/authored-audio/sounds/probe.wav"), "rb") as wav:
             original = array.array("h", wav.readframes(wav.getnframes()))

@@ -383,6 +383,9 @@ public:
     // R4 过渡：注入离线作业服务（不在离线作业里为空）后调上面那个；T5b 合并后两者合一。
     // raster=false：这一帧不光栅，只推进解码，不写纹理。
     void                  PumpVideoTextures(double dt_seconds, Services* services, bool raster);
+    // 离线：先把本帧的解码（raster 时连同转 NV12）做掉，只动 CPU 内存与解码器，不碰 GPU，
+    // 可以排在等上一帧 GPU 收尾之前；随后同一帧的 PumpVideoTextures 只剩写纹理。
+    void                  PrepareVideoTextures(Services* services, bool raster);
     VideoDecoderInventory ObserveVideoDecoders();
 
     /* vkCmdCopyBufferToImage a sub-rect of `atlas` into the supplied texture. */
