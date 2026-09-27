@@ -172,7 +172,7 @@ internal sealed class AnalysisOrchestrator
         bool Viable(JsonObject plan) => Admission.Accepted(plan) && (request.AllowNoBenefit ||
             NoBenefit.AnalysisConditions(plan).Length == 0 && !NoBenefit.TooManyVideoStreams(Admission.GroupCount(plan)));
         static double Margin(JsonObject plan) => Admission.Accepted(plan) ? (NoBenefit.RemovedPassCoverage(plan) ?? 0) -
-            ((plan["video_groups"] as JsonArray)?.Count ?? 0) * NoBenefit.MinPassCoveragePerStream : double.NegativeInfinity;
+            Admission.GroupCount(plan) * NoBenefit.MinPassCoveragePerStream : double.NegativeInfinity;
         // 离可行的差距：省下的渲染抵不过视频的差额与超出路数上限的路数取大；不能生成为无穷大。
         static double Gap(JsonObject plan) => Math.Max(-Margin(plan), Admission.GroupCount(plan) - NoBenefit.SavingProvenStreams);
         static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
@@ -306,12 +306,13 @@ internal sealed class AnalysisOrchestrator
         return child;
     }
 
-    /// <summary>Only over-budget whole-layer plans receive this CPU-only source/runtime proof.  It is an admission estimate;
-    /// baking still captures the complete interval and rejects a claimed static group that changes.</summary>
+    /// <summary>整层方案逐组做源与运行时的静态证明（只用 CPU），已证静态的组不计视频路数（<see cref="Admission.GroupCount"/>）。
+    /// 不论组数都证：路数上限、预计省电、退回的差距用同一口径，组数跨过上限时路数不跳变。
+    /// 这是准入估计；烘焙仍录完整区间，声称静态却有变化的组整案拒绝。</summary>
     private static async Task VerifyStaticGroupBudgetAsync(JsonObject plan, CancellationToken token)
     {
         if (!Admission.Bakeable(plan) || plan["route"]?.GetValue<string>() != "whole_layer" ||
-            plan["video_groups"] is not JsonArray groups || groups.Count <= Admission.MaxVideoGroups(plan) ||
+            plan["video_groups"] is not JsonArray groups ||
             plan["source"]?.GetValue<string>() is not string sourcePath ||
             plan["runtime_evidence"]?.GetValue<string>() is not string runtimePath || !File.Exists(runtimePath)) return;
         string sourceKey = plan["source_sha256"]?.GetValue<string>() ?? sourcePath;

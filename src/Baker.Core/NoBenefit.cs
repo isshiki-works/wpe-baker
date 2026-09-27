@@ -56,10 +56,10 @@ public static class NoBenefit
         if (plan["route"]?.GetValue<string>() == "effect_prefix" && plan["effect_prefix_caches"] is JsonArray caches &&
             TooManyVideoStreams(caches.Count))
             hits.Add(TooManyStreams);
-        // 源里自带视频的方案（decode_work）换的是解码量，不按特效算；static 成品不编视频，不在此列。
+        // 源里自带视频的方案（decode_work）换的是解码量，不按特效算；static 成品不编视频，不在此列；已证静态的组编成静态纹理，不算路数。
         if (frames is > 1 && plan["route"]?.GetValue<string>() == "whole_layer" && plan["video_dominant"]?["decode_work"] is null &&
-            plan["video_groups"] is JsonArray { Count: > 0 } groups && RemovedPassCoverage(plan) is double removed &&
-            removed < groups.Count * MinPassCoveragePerStream)
+            Admission.GroupCount(plan) is > 0 and int streams && RemovedPassCoverage(plan) is double removed &&
+            removed < streams * MinPassCoveragePerStream)
             hits.Add(removed == 0 ? PlainLayersOnly : VideoCostOverSaving);
         return hits.ToArray();
     }

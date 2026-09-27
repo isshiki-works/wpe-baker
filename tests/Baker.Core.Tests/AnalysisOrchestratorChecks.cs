@@ -117,14 +117,14 @@ internal static class AnalysisOrchestratorChecks
                     ["uses_audio_spectrum"] = false, ["uses_system_media_thumbnail"] = false,
                     ["active_uniforms"] = new JsonArray("g_ModelViewProjectionMatrix"), ["textures"] = new JsonArray() }) })
         }.ToJsonString());
-        JsonObject staticBudget = Plan(new(2, source, assets, root), true, 10);
+        JsonObject staticBudget = Plan(new(2, source, assets, root), true, 3);
         staticBudget["source"] = scenePath;
         staticBudget["runtime_evidence"] = trace;
         foreach (JsonObject group in staticBudget["video_groups"]!.AsArray().OfType<JsonObject>()) group["layer_ids"] = new JsonArray(1);
         JsonObject verifiedStaticBudget = await AnalysisOrchestrator.AdoptAllocationAsync(staticBudget, CancellationToken.None);
-        check(Admission.GroupCount(verifiedStaticBudget) == 0 && Admission.StaticGroupCount(verifiedStaticBudget) == 10 &&
+        check(Admission.GroupCount(verifiedStaticBudget) == 0 && Admission.StaticGroupCount(verifiedStaticBudget) == 3 &&
             verifiedStaticBudget["static_group_budget"]?["status"]?.GetValue<string>() == "verified",
-            "only an over-budget plan with source_static proof frees decoder slots for static caches");
+            "source_static groups free decoder slots even under the group limit, so the stream count does not jump at the limit");
         var planner = new HybridScenePlanner(new("not-started", "not-started", "not-started", []));
         var request = new HybridAnalyzeRequest(2, source, assets, Path.Combine(root, "preset-integration"), 64, 32,
             RuntimeTraceFile: trace);
