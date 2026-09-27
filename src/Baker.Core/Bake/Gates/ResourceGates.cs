@@ -23,7 +23,7 @@ internal sealed class DiskBudgetGate : IBakeGate
 /// <summary>
 /// 内嵌视频大小（WPE 实测 2 GiB 上限，见 <see cref="EmbeddedVideoBudget"/>）：主渲染前按合成探针的试编码外推，
 /// 结果（含按体积抬高的量化值 quantizer_offset）记进 bake.json 并交给主渲染选编码参数，不在这里拒绝；
-/// 编码后按实际字节与画质门再判。没有合成校验结果（探针）时不外推。
+/// 编码后按实际字节与画质门再判。没有合成校验结果（探针）或循环很短时不外推。
 /// </summary>
 internal sealed class EmbeddedVideoGate(EmbeddedVideoGate.Estimator estimate) : IBakeGate
 {
@@ -31,9 +31,15 @@ internal sealed class EmbeddedVideoGate(EmbeddedVideoGate.Estimator estimate) : 
     internal delegate Task<JsonObject> Estimator(JsonObject compositionValidation, ulong frames, HybridAnalyzeRequest settings,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// 循环不超过 20 s 时不外推：到 2 GiB 要 ~860 Mbit/s，任何播放档都到不了；主渲染直接按量化值 0 开跑，编码后按实际字节照旧兜底。
+    /// </summary>
+    internal static bool Skips(ulong frames, HybridAnalyzeRequest settings) =>
+        (double)frames * settings.FpsDenominator / settings.FpsNumerator <= 20;
+
     public async Task<BakeRejection?> CheckAsync(BakeGateContext context, CancellationToken cancellationToken)
     {
-        if (context.CompositionValidation is JsonObject compositionValidation)
+        if (context.CompositionValidation is JsonObject compositionValidation && !Skips(context.Frames, context.Settings))
             context.EmbeddedVideoEstimate = await estimate(compositionValidation, context.Frames, context.Settings, cancellationToken);
         return null;
     }

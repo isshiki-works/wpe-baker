@@ -147,6 +147,30 @@ public class BakePathTests
         Assert.IsType<FileNotFoundException>(error);
     });
 
+    // 主渲染不等合成校验道的体积外推（原先每组开跑前 await SizeEstimate，校验道整段做完才放行，主渲染与它并不并行）。
+    // 外推一直不来时，主渲染照样开跑、走到"渲染器文件不存在"上；改回等外推，这里等到超时失败。
+    [Fact]
+    public async Task MasterRenderStartsBeforeTheSizeEstimateArrives() => await TestTemp.Run(async dir =>
+    {
+        var tools = new NativeTools(Path.Combine(dir, "no-renderer"), Path.Combine(dir, "no-ffmpeg"), Path.Combine(dir, "no-ffprobe"), []);
+        var plan = new JsonObject
+        {
+            ["projection"] = new JsonObject { ["center_x"] = 0.0, ["center_y"] = 0.0, ["visible_width"] = 64.0, ["visible_height"] = 48.0 },
+            ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 60, ["patches"] = new JsonArray() }) },
+        };
+        JsonObject[] groups = [new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(1), ["include_scene_clear"] = true }];
+        var settings = new HybridAnalyzeRequest(1, Fixture, dir, dir, 64, 48, 30, 1);
+        var estimate = new TaskCompletionSource<JsonObject?>();
+        await using var scheduler = new GroupRenderScheduler(new NativeRenderRunner(tools), new HybridBakeRequest(2, plan, dir), plan, settings, groups,
+            Fixture, Path.Combine(dir, "out"), new JsonObject(), 60, [60], 0, 0, [], 1, PlaybackEncoderSelection.Software, null, CancellationToken.None)
+            { SizeEstimate = estimate.Task };
+        Exception error;
+        // 放行外推放在 finally：失败时渲染不再挂着，scheduler 退出时能收尾。
+        try { error = await Assert.ThrowsAnyAsync<Exception>(() => scheduler.RenderAsync(0).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)); }
+        finally { estimate.TrySetResult(null); }
+        Assert.IsType<FileNotFoundException>(error);
+    });
+
     // 测速准备或渲染失败（这里是源工程不存在）记 not_measured / probe_failed，不让整次分析崩溃；调用方据此按逐项预算重分析。
     [Fact]
     public async Task SlowSpeedProbeFailureIsNotMeasuredInsteadOfThrowing() => await TestTemp.Run(async dir =>

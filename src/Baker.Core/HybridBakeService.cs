@@ -396,9 +396,9 @@ public sealed class HybridBakeService(NativeTools tools)
             { Plan = plan.DeepClone().AsObject(), Settings = settings, Frames = frames };
         // 起点搜索已判定这遍作废（GroupVerdicts.StartSearchRejection）时停掉合成校验：重烘那遍自己会校验。
         using var validationStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        // 体积外推交给主渲染选量化值：每组首次主渲染前等合成校验道做完（探针不外推）。
+        // 体积外推交给主渲染选量化值（探针与短循环不外推）。主渲染不等它先开跑，外推要抬量化值时那一组重渲（GroupRenderScheduler.StartAsync）。
         var sizeEstimate = new TaskCompletionSource<JsonObject?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (probe) sizeEstimate.SetResult(null);
+        if (probe || EmbeddedVideoGate.Skips(frames, settings)) sizeEstimate.SetResult(null);
         Task<BakeRejection?>? validation = probe ? null : Task.Run(async () =>
         {
             long started = Stopwatch.GetTimestamp();
