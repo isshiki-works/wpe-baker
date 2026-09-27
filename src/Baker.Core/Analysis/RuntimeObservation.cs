@@ -76,7 +76,8 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
         if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray dependencies ||
             trace["runtime_layers"] is not JsonArray runtimeLayers)
             throw new InvalidDataException("A complete runtime dependency observation is required.");
-        var audioEffectChoice = PlanTransforms.DescribeAudioEffectChoice(scene, source, request.Assets, properties, trace, request.AudioEffects);
+        var audioEffectChoice = PlanTransforms.DescribeAudioEffectChoice(scene, source, request.Assets, properties, trace, request.AudioEffects,
+            interactionOff: request.Interaction == "off");
         if (audioEffectChoice["status"]?.GetValue<string>() == "applied")
         {
             string beforePath = Path.Combine(output, "runtime-before-audio-choice.json");

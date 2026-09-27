@@ -289,9 +289,16 @@ internal static class PlanTransforms
         }
     }
 
+    /// <param name="interactionOff">
+    /// 交互关（--interaction off）：成品就是 WPE 里鼠标不动、没有声音时的画面，读指针的效果与音频效果一样去掉（同一套映射与保护条件），
+    /// 不再为一个读输入的效果把整层剔除。只有这类效果让它留实时的 image 层因此回到烘焙。
+    /// </param>
     internal static JsonObject DescribeAudioEffectChoice(JsonObject scene, ProjectSource source, string? assets,
-        JsonObject properties, JsonObject runtime, string selection)
+        JsonObject properties, JsonObject runtime, string selection, bool interactionOff = false)
     {
+        static bool Pointer(JsonObject material) => material["active_uniforms"] is JsonArray uniforms &&
+            uniforms.Any(n => n?.GetValue<string>() is "g_PointerPosition" or "g_PointerPositionLast");
+        bool Input(JsonObject material) => material["uses_audio_spectrum"]?.GetValue<bool>() == true || interactionOff && Pointer(material);
         if (selection is not "preserve" and not "omit") throw new InvalidDataException("Unknown audio-effect choice.");
         var available = new JsonArray(); var protectedEffects = new JsonArray();
         var objects = scene["objects"]!.AsArray().OfType<JsonObject>().ToArray();
@@ -303,8 +310,7 @@ internal static class PlanTransforms
         {
             int id = Id(obj);
             var observed = runtime["runtime_layers"]!.AsArray().OfType<JsonObject>().Where(n => Int(n["owner"]) == id).ToArray();
-            var audio = observed.SelectMany(n => n["materials"]?.AsArray().OfType<JsonObject>() ?? [])
-                .Where(m => m["uses_audio_spectrum"]?.GetValue<bool>() == true).ToArray();
+            var audio = observed.SelectMany(n => n["materials"]?.AsArray().OfType<JsonObject>() ?? []).Where(Input).ToArray();
             if (audio.Length == 0) continue;
             JsonObject Entry(int index, JsonObject? effect, string? reason = null) => new() {
                 ["layer_id"] = id, ["layer_name"] = obj["name"]?.DeepClone() ?? JsonValue.Create("Layer"),
@@ -312,8 +318,9 @@ internal static class PlanTransforms
                 ["name"] = effect?["name"] is JsonValue name && name.TryGetValue<string>(out string? text) && !string.IsNullOrWhiteSpace(text)
                     ? text : effect?["file"]?.GetValue<string>() ?? "Source audio material",
                 ["reason"] = reason };
-            if (audio.Any(m => m["role"]?.GetValue<string>() != "effect"))
-                protectedEffects.Add(Entry(-1, null, "intrinsic_audio_material"));
+            if (audio.Where(m => m["role"]?.GetValue<string>() != "effect").ToArray() is { Length: > 0 } intrinsic)
+                protectedEffects.Add(Entry(-1, null, intrinsic.Any(m => m["uses_audio_spectrum"]?.GetValue<bool>() == true)
+                    ? "intrinsic_audio_material" : "intrinsic_pointer_material"));
             if (!audio.Any(m => m["role"]?.GetValue<string>() == "effect")) continue;
             var effects = obj["effects"]?.AsArray().OfType<JsonObject>().ToArray() ?? [];
             var materials = observed.SelectMany(n => n["materials"]?.AsArray().OfType<JsonObject>() ?? [])
@@ -345,12 +352,12 @@ internal static class PlanTransforms
             { protectedEffects.Add(Entry(-1, null, "audio_effect_mapping_unavailable")); continue; }
             for (int index = 0; index < effects.Length; ++index)
             {
-                if (materials[index]["uses_audio_spectrum"]?.GetValue<bool>() != true) continue;
+                if (!Input(materials[index])) continue;
                 var effect = effects[index];
                 string? reason = scriptAccess || dependencies.Any(d => Int(d["target"]) == id && d["property"]?.GetValue<string>() == "effect")
                     ? "script_accessed_effect" : SceneAnalyzer.Walk(effect).OfType<JsonObject>().Any(SceneGraph.Dynamic)
                     ? "scripted_or_animated_effect" : materials[index]["active_uniforms"] is JsonArray uniforms &&
-                        uniforms.Any(n => n?.GetValue<string>() is "g_PointerPosition" or "g_PointerPositionLast" or "g_ParallaxPosition")
+                        uniforms.Any(n => n?.GetValue<string>() is "g_ParallaxPosition" || !interactionOff && n?.GetValue<string>() is "g_PointerPosition" or "g_PointerPositionLast")
                     ? "other_live_effect_input" : materials[index]["textures"] is JsonArray textures &&
                         textures.Any(n => n?.GetValue<string>() is "_rt_default" or "_rt_FullFrameBuffer")
                     ? "framebuffer_effect" : null;
@@ -358,13 +365,18 @@ internal static class PlanTransforms
                 else available.Add(Entry(index, effect));
             }
         }
-        return new JsonObject {
+        bool omit = selection == "omit" || interactionOff;
+        var choice = new JsonObject {
             ["selection"] = selection,
-            ["status"] = selection == "omit" && available.Count > 0 ? "applied" : available.Count > 0 ? "available" :
+            ["status"] = omit && available.Count > 0 ? "applied" : available.Count > 0 ? "available" :
                 protectedEffects.Count > 0 ? "protected" : "not_needed",
-            ["scope"] = "Explicit appearance tradeoff: remove only the listed fixed single-pass audio effects. Their lighting or other appearance changes no longer respond to music. Other effects, audio scripts, intrinsic audio materials, clocks and pointer interaction remain intact.",
-            ["available_effects"] = available, ["omitted_effects"] = selection == "omit" ? available.DeepClone() : new JsonArray(),
+            ["scope"] = interactionOff
+                ? "Interaction off: remove only the listed fixed single-pass effects that read the pointer or audio, which is what Wallpaper Engine shows with the pointer still and no sound. Other effects, scripts, intrinsic input materials and clocks remain intact."
+                : "Explicit appearance tradeoff: remove only the listed fixed single-pass audio effects. Their lighting or other appearance changes no longer respond to music. Other effects, audio scripts, intrinsic audio materials, clocks and pointer interaction remain intact.",
+            ["available_effects"] = available, ["omitted_effects"] = omit ? available.DeepClone() : new JsonArray(),
             ["protected_effects"] = protectedEffects };
+        if (interactionOff) choice["trigger"] = "interaction_off";
+        return choice;
     }
 
     internal static void ApplyAudioEffectChoice(JsonObject scene, JsonObject plan)
