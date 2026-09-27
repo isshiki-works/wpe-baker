@@ -465,6 +465,10 @@ public class LoopItemContractTests
         Assert.Equal(5.0, Run("export function update(value) { value.y = (engine.runtime - 5) % 2; return value; }").Settle, 9);
         // 超深嵌套记未收敛，不让栈溢出终止进程
         Assert.Equal(ScriptTime.Outcome.Unconverged, Run("export function update(value) { value.y = " + new string('(', 100_000) + "1" + new string(')', 100_000) + "; return value; }").Outcome);
+        // 循环造出的超深值：沿值递归的函数（Clean、Key、Tainted 等）同样记未收敛
+        const string deep = "let a = [];\nfor (let j = 0; j < 20; j++) { for (let i = 0; i < 50000; i++) { a = [a]; } }\n";
+        Assert.Equal(ScriptTime.Outcome.Unconverged, Run(deep + "export function update(value) { value.x = 1; return value; }").Outcome);
+        Assert.Equal(ScriptTime.Outcome.Unconverged, Run(deep + "export function update(value) { value.x = (a == a) ? 1 : 0; return value; }").Outcome);
         // 跨帧状态按单精度逐帧模拟：步进复位闭合出整数帧周期；一直累加不闭合是未收敛，不是证明
         Assert.Equal(12UL, Run("export function update(value) { if (value.x > 5) { value.x = 0; } else { value.x += 0.5; } return value; }").PeriodFrames);
         Assert.Equal("script_state_not_closed", Run("export function update(value) { value.x += scriptProperties.x; return value; }").Code);
