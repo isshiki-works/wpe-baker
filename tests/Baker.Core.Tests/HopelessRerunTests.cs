@@ -73,24 +73,45 @@ public class HopelessRerunTests
     }
 
     [Theory]
-    [InlineData("fixed_daytime", false)]
-    [InlineData("far_over_limit", false)]
+    [InlineData("requested_daytime", false)]
+    [InlineData("static_with_live", false)]
     [InlineData("coverage_only", true)]
-    public async Task RetreatRunsOnlyWhenRetainingMoreCanHelp(string kind, bool retreats)
+    public async Task RetreatRunsUnlessEveryCandidateStillHitsTheSameCondition(string kind, bool retreats)
     {
-        // 固定时段（2955378002：一张 1414 s）、组数超过上限两倍：多留实时改不了，不退。只差覆盖时照旧退。
+        // 请求本身固定了时段：每个候选都固定在它上面，fixed_daytime 改不了。静态成品带实时层：多留实时剩下的仍是静态的。只差覆盖时照旧退。
         await TestTemp.Run(async root =>
         {
-            var calls = await RunAsync(root, r =>
+            var calls = new List<HybridAnalyzeRequest>();
+            await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "run"), DaytimeState: kind == "requested_daytime" ? "day" : null), (r, _) =>
             {
-                int[] kept = r.RetainLiveRootIds ?? [];
-                JsonObject plan = kind == "far_over_limit"
-                    ? Plan(r, [.. Enumerable.Range(100, 20).Except(kept)], 100)
-                    : Plan(r, [.. new[] { 10, 11, 12, 13 }.Except(kept)], 2);
-                if (kind == "fixed_daytime") plan["settings"]!["daytime_state"] = "day";
-                return plan;
-            });
+                lock (calls) calls.Add(r);
+                JsonObject plan = Plan(r, [.. new[] { 10, 11, 12, 13 }.Except(r.RetainLiveRootIds ?? [])], 2);
+                plan["settings"]!["daytime_state"] = r.DaytimeState;
+                if (kind == "static_with_live")
+                {
+                    plan["loop"]!["candidates"]![0]!["frames"] = 1;
+                    plan["live_layer_ids"] = new JsonArray(5);
+                    Block(plan);
+                }
+                return Task.FromResult(plan);
+            }, CancellationToken.None);
             Assert.Equal(retreats, calls.Any(r => r.RetainLiveRootIds is { Length: > 0 }));
+        });
+    }
+
+    [Fact]
+    public async Task FarTooManyGroupsAreStillRescuedWhenOneRetainedGroupLetsThemMerge()
+    {
+        // 20 组远超上限 9，但留实时组 119 之后全幅布局变得可行、并成一组：逐组退回一轮就救回。
+        // "组数超过上限两倍就不退"把这类作品从能掉成未收敛（全集 3463280673 在 main 上就是逐组退回救回的）。
+        await TestTemp.Run(async root =>
+        {
+            JsonObject chosen = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "run")), (r, _) =>
+                Task.FromResult((r.RetainLiveRootIds ?? []).Contains(119)
+                    ? Plan(r, [1000], 100)
+                    : Plan(r, [.. Enumerable.Range(100, 20).Except(r.RetainLiveRootIds ?? [])], 100)), CancellationToken.None);
+            Assert.True(Admission.Accepted(chosen));
+            Assert.Equal([119], chosen["settings"]!["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()));
         });
     }
 

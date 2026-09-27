@@ -6,11 +6,12 @@ internal static class AnalysisOrchestratorChecks
     internal static async Task RunAsync(Action<bool, string> check, string root)
     {
         var calls = new List<HybridAnalyzeRequest>();
-        async Task<JsonObject> Run(string name, Func<HybridAnalyzeRequest, JsonObject> plan, string preset = "quality", bool custom = false, string interaction = "fixed")
+        async Task<JsonObject> Run(string name, Func<HybridAnalyzeRequest, JsonObject> plan, string preset = "quality", bool custom = false, string interaction = "fixed",
+            bool allowNoBenefit = false)
         {
             calls.Clear();
             return await AnalysisOrchestrator.RunAsync(new(2, "unused", "unused", Path.Combine(root, name),
-                Preset: preset, CustomSettings: custom, Interaction: interaction), (request, _) => {
+                Preset: preset, CustomSettings: custom, Interaction: interaction, AllowNoBenefit: allowNoBenefit), (request, _) => {
                 calls.Add(request);
                 return Task.FromResult(plan(request));
             }, CancellationToken.None);
@@ -60,9 +61,9 @@ internal static class AnalysisOrchestratorChecks
             result["daytime_split"] = new JsonObject { ["status"] = "recognized", ["states"] = new JsonArray(
                 new JsonObject { ["name"] = "day" }, new JsonObject { ["name"] = "night" }) };
             return result;
-        });
+        }, allowNoBenefit: true);
         check(day["settings"]!["daytime_state"]!.GetValue<string>() == "night",
-            "recognized time states choose the bakeable result with fewest groups and name the selected state");
+            "with --no-benefit allow, recognized time states choose the bakeable result with fewest groups and name the selected state");
         string allocation = Path.Combine(root, "internal-allocation");
         Directory.CreateDirectory(Path.Combine(allocation, "loop-allocation-analysis"));
         var child = Plan(new(2, "s", "a", allocation, Preset: "quality", DaytimeState: "morning"), true, 3);

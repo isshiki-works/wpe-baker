@@ -105,7 +105,8 @@ public class AnalysisOrchestratorTests
     {
         await TestTemp.Run(async root =>
         {
-            var request = new HybridAnalyzeRequest(2, "s", "a", Path.Combine(root, "worst"), Preset: "quality", Interaction: "keep", DaytimeSplit: true);
+            var request = new HybridAnalyzeRequest(2, "s", "a", Path.Combine(root, "worst"), Preset: "quality", Interaction: "keep", DaytimeSplit: true,
+                AllowNoBenefit: true);
             CallBudget budget = SearchSpace.Of(request, true).Budget();
             int calls = 0;
             await AnalysisOrchestrator.RunAsync(request, (r, _) => { calls++; return Task.FromResult(Plan(r, false, Day)); }, CancellationToken.None,
@@ -119,7 +120,8 @@ public class AnalysisOrchestratorTests
     {
         await TestTemp.Run(async root =>
         {
-            var request = new HybridAnalyzeRequest(2, "s", "a", Path.Combine(root, "short"), Preset: "quality", Interaction: "keep", DaytimeSplit: true);
+            var request = new HybridAnalyzeRequest(2, "s", "a", Path.Combine(root, "short"), Preset: "quality", Interaction: "keep", DaytimeSplit: true,
+                AllowNoBenefit: true);
             CallBudget full = SearchSpace.Of(request, true).Budget();
             int calls = 0;
             await Assert.ThrowsAsync<InvalidOperationException>(() => AnalysisOrchestrator.RunAsync(request,
@@ -135,7 +137,7 @@ public class AnalysisOrchestratorTests
         await TestTemp.Run(async root =>
         {
             var calls = new List<HybridAnalyzeRequest>();
-            JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "states"), Interaction: "keep"),
+            JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "states"), Interaction: "keep", AllowNoBenefit: true),
                 (r, _) => { calls.Add(r); return Task.FromResult(Plan(r, r.DaytimeState is "day" or "dusk", Day, r.DaytimeState == "dusk" ? 1 : 2)); },
                 CancellationToken.None);
             Assert.DoesNotContain(calls, r => r.Interaction == "keep" && r.DaytimeState is not null);
@@ -182,8 +184,29 @@ public class AnalysisOrchestratorTests
             int calls = 0;
             await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "gui"), DaytimeSplit: true),
                 (r, _) => { calls++; return Task.FromResult(Plan(r, true, Day)); }, CancellationToken.None);
-            // 第一格就能生成：母 plan 1 次 + 四个状态各 1 次，没有逐状态导出。
-            Assert.Equal(5, calls);
+            // 第一格就能生成：只有母 plan 1 次。单时段方案必判不省电（fixed_daytime），不带 --no-benefit allow 时不展开；也没有逐状态导出。
+            Assert.Equal(1, calls);
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SingleStatePlansAreSearchedOnlyWhenNoBenefitIsAllowed(bool allowed)
+    {
+        // 2955378002：11 个时段 × 2 个布局 × 2 档，48 次子分析里 44 次是单时段方案，它们一律命中 fixed_daytime、默认必被拒。
+        // 不带 --no-benefit allow 时不展开；能生成的母 plan 也不再被组数更少的单时段方案顶替。
+        await TestTemp.Run(async root =>
+        {
+            var calls = new List<HybridAnalyzeRequest>();
+            string[] states = [.. Enumerable.Range(0, 11).Select(i => "state" + i)];
+            JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "daytime"), AllowNoBenefit: allowed),
+                (r, _) => { calls.Add(r); return Task.FromResult(Plan(r, true, states, r.DaytimeState is null ? 2 : 1)); },
+                CancellationToken.None);
+            Assert.Equal(allowed, calls.Any(r => r.DaytimeState is not null));
+            Assert.Equal(allowed ? 12 : 1, calls.Count);
+            Assert.Equal(allowed ? "state0" : null, result["settings"]!["daytime_state"]?.GetValue<string>());
+            Assert.True(Admission.Accepted(result));
         });
     }
 

@@ -248,11 +248,13 @@ internal sealed class AnalysisOrchestrator
         static double Gap(JsonObject plan) => Math.Max(-Margin(plan), Admission.GroupCount(plan) - NoBenefit.SavingProvenStreams);
         static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
         if (Viable(result) || Admission.Accepted(result) && !NoBenefit.AnalysisConditions(result).Contains(NoBenefit.VideoCostOverSaving)) return result;
-        // 多留实时改不了的直接不退：固定在一个时段、静态成品带实时层（条件不随留实时变），以及组数超过上限两倍
-        // （逐组各留一次每个候选只少一组，一轮试遍也到不了上限）。blocker 不在此列：把挡住的那组留实时常常正好解开它（3463280673）。
+        // 只有每个候选必然仍命中的条件才叫改不了，这时直接不退：每个候选都是一整套重查（档位 × 状态 × 布局），结果不必和原方案同路。
+        // 静态成品带实时层：被烘内容是静态的，多留实时剩下的仍是静态的子集。固定时段：只有请求本身指定了时段，候选才都固定在它上面；
+        // 否则候选重查可以选中不分时段的母 plan。blocker、组数超限都不算：把挡住的那组留实时、或留实时后全幅布局变得可行
+        // （一下并成一组），都可能解开（3463280673 在 main 上就是这样逐组退回救回的）。
         string[] conditions = NoBenefit.AnalysisConditions(result);
-        if (conditions.Contains(NoBenefit.FixedDaytime) || conditions.Contains(NoBenefit.StaticWithLive) ||
-            Admission.GroupCount(result) > 2 * Admission.MaxVideoGroups(result)) return result;
+        if (conditions.Contains(NoBenefit.StaticWithLive) || request.DaytimeState is not null && conditions.Contains(NoBenefit.FixedDaytime))
+            return result;
         JsonObject current = result;
         while (current["video_groups"] is JsonArray { Count: > 1 } groups)
         {
@@ -328,11 +330,16 @@ internal sealed class AnalysisOrchestrator
         return (last!, reasons);
     }
 
-    /// <summary>母 plan 识别出状态时，每个状态各规划一次，取能生成且视频组最少的；都不行保留母 plan。</summary>
+    /// <summary>
+    /// 母 plan 识别出状态时，每个状态各规划一次，取能生成且视频组最少的；都不行保留母 plan。
+    /// 固定在单个时段的方案一律命中 <see cref="NoBenefit.FixedDaytime"/>（成品不随时刻切换），没有 --no-benefit allow 时必被拒：
+    /// 这时不展开。原来每个档位都要多跑 状态数 × 布局数 次整次分析（2955378002：11 个时段 × 2 个布局 × 2 档 = 48 次里的 44 次，
+    /// 退回时每个候选再各来一遍），挑出来的状态方案还会顶替能生成的母 plan、随后被判不省电。
+    /// </summary>
     private async Task<JsonObject> StatesAsync(HybridAnalyzeRequest candidate)
     {
         JsonObject plan = await LayoutsAsync(candidate, "search", null);
-        if (!space.Expands(candidate.Interaction!) || DaytimeSplit.RecognizedStates(plan) is not { } entries) return plan;
+        if (!space.Expands(candidate.Interaction!) || !request.AllowNoBenefit || DaytimeSplit.RecognizedStates(plan) is not { } entries) return plan;
         states = Math.Max(states, entries.Length);
         JsonObject? best = Admission.Accepted(plan) ? plan : null;
         for (int index = 0; index < entries.Length; index++)
