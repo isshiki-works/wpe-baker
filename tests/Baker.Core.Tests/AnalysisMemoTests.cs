@@ -125,16 +125,16 @@ public class AnalysisMemoTests
         });
     }
 
-    private static HybridAnalyzeRequest Request(string root, string source) =>
+    internal static HybridAnalyzeRequest Request(string root, string source) =>
         new(2, source, root, "", 64, 32, RuntimeTraceFile: Path.Combine(root, "trace.json"));
 
-    private static JsonObject Layer(JsonObject plan, int id) =>
+    internal static JsonObject Layer(JsonObject plan, int id) =>
         plan["layers"]!.AsArray().OfType<JsonObject>().Single(layer => layer["id"]!.GetValue<int>() == id);
 
     private static string Normalize(JsonObject plan, string output) => plan.ToJsonString().Replace(output.Replace("\\", "\\\\"), "<out>");
 
     /// <summary>不透明底图、读音频频谱的实时层、两个小文本层；实时层运行时写 3 的 parallaxDepth（保留视角时 3 因此实时）。</summary>
-    private static async Task<string> FixtureAsync(string root)
+    internal static async Task<string> FixtureAsync(string root)
     {
         string directory = Path.Combine(root, "source");
         Directory.CreateDirectory(directory);

@@ -70,30 +70,9 @@ internal sealed class AnalysisOrchestrator
             AnalysisCache.Key(typeof(AnalysisOrchestrator).Module.ModuleVersionId, assetsStamp));
         var orchestrator = new AnalysisOrchestrator(request, analyze, space, budget ?? space.Budget(), tools, run, cache, token, memo, progress);
         JsonObject result = await orchestrator.SelectAsync();
-        // 单次轨判实时（SingleShotLive）不在分析侧整套重跑：结果不行多半是预计不省电，所属层判实时只会烘得更少（全集 0 次采纳）；
-        // 入场切换做不成时由烘焙侧合成门拒绝后重试。
-        // 生成不了、静止证明点名了还没留实时的层（source_static：含作者动画、木偶、粒子或音源，证不了循环也证不了静止）：
-        // 把它们加进留实时、整套再分析，直到能生成或不再点名新层。拆分放开后这些层可能分在不同单元，分配回退只知道第一轮点名的，
-        // 后面的要到回退重查里才冒出来。能生成才采用，否则保留原结果与结论。
-        // 拒因只剩预计不省电时不试：这样的方案本来就能生成，多留实时只会烘得更少，救不回来。整层没收敛（没有候选、没有 blocker）或
-        // 还有别的 blocker 时照旧试。
-        var kept = (result["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>().ToHashSet();
-        static bool OnlyNoBenefit(JsonObject plan) => PlanBlockers.Codes(plan).ToArray() is { Length: > 0 } codes &&
-            codes.All(code => code == BlockerCode.NoBenefitExpected);
-        for (JsonObject current = result; !Admission.Accepted(current) && !OnlyNoBenefit(current);)
-        {
-            int[] named = [.. SceneAnalyzer.Walk(current["loop"]).Concat(SceneAnalyzer.Walk(current["loop_allocation_fallback"])).OfType<JsonObject>()
-                .Where(item => item["kind"]?.GetValue<string>() == "source_static").Select(item => SceneGraph.Int(item["owner_layer_id"]))
-                .OfType<int>().Distinct().Where(id => !kept.Contains(id))];
-            if (named.Length == 0) break;
-            kept.UnionWith(named);
-            var reasons = HybridLoopAllocation.RetainReasons(current, kept) ?? new();
-            foreach (int id in named) reasons.TryAdd(id, ["source_static"]);
-            var trial = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. kept], RetainLiveReasons = reasons },
-                analyze, space, space.Budget(), tools, Path.Combine(run, $"static-live-{kept.Count}"), cache, token, memo, progress);
-            using (AnalysisTiming.Measure("g_static_live")) current = await trial.SelectAsync();
-            if (Admission.Accepted(current)) (orchestrator, result) = (trial, current);
-        }
+        // 单次轨判实时（SingleShotLive）与"静止证明点名的层留实时"不在这里整套重跑：前者只在烘焙时由合成门拒绝入场切换触发，
+        // 后者由分配回退在同一次分析里把重查新点名的所有者并进留实时（HybridLoopAllocation.ReplanUntilSettledAsync）。
+        // 结果不行多半是预计不省电，多留实时、单次轨判实时只会烘得更少，救不回来。
         // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
         // 读数（漂移上界、闭合读数、渲染器墙钟）写进 plan 的 slow_closure_probe。闭合的照常判能，烘焙时接缝门照常复核。
         // 振幅推不出的慢项超预算改速先实测速度差（SlowClosureProbe.SpeedAsync）：看得出、量不到或渲染失败就按逐项预算整套再分析
@@ -117,12 +96,10 @@ internal sealed class AnalysisOrchestrator
             JsonArray round = await SlowClosureProbe.RunAsync(result, tools, Path.Combine(run, $"slow-closure-{slowProbes.Count}"), token);
             // 从选中方案实际留实时的层接着加（分配回退、逐组退回点名的层都在里面），不从请求的空集重来。
             int[] retained = [.. (result["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()];
-            int[] open = [.. round.OfType<JsonObject>().Where(record => !LoopClosureCheck.Allows(record["loop_closure"] as JsonObject))
-                .SelectMany(record => record["owner_layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>()).Except(retained)];
-            foreach (JsonNode? record in round) slowProbes.Add(record!.DeepClone());
+            var (open, reasons) = SlowClosureRetention(result, round, retained, slowProbes);
             if (open.Length == 0) break;
             orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. retained, .. open],
-                RetainLiveReasons = HybridLoopAllocation.RetainReasons(result, []) }, analyze, space,
+                RetainLiveReasons = reasons }, analyze, space,
                 space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token, memo, progress);
             result = await orchestrator.SelectAsync();
         }
@@ -141,6 +118,33 @@ internal sealed class AnalysisOrchestrator
         // 逐状态导出只改内存里的结果（母 plan 的 states[] 记子 plan 路径与结论），不回写上面落盘的 plan.json。
         if (space.ExportStates) await orchestrator.ExportStatesAsync(result, export!);
         return result;
+    }
+
+    /// <summary>慢分量闭合预检没闭合、所有者层因此留实时的原因码（不是用户要求的 retained_by_cost_trial）。</summary>
+    internal const string SlowClosureNotClosed = "slow_closure_not_closed";
+
+    /// <summary>
+    /// 一轮慢分量闭合预检之后要再留实时的层：没闭合的记录里还没留实时的所有者层。原因码写 <see cref="SlowClosureNotClosed"/>
+    /// （并上 plan 已带的原因），读数引用记在那条记录的 retained_live_layer_ids 上；记录的副本追加进 <paramref name="records"/>。
+    /// </summary>
+    internal static (int[] Open, Dictionary<int, string[]> Reasons) SlowClosureRetention(JsonObject result, JsonArray round, int[] retained,
+        JsonArray records)
+    {
+        var reasons = HybridLoopAllocation.RetainReasons(result, []) ?? [];
+        var open = new List<int>();
+        foreach (JsonObject record in round.OfType<JsonObject>())
+        {
+            JsonObject kept = record.DeepClone().AsObject();
+            if (!LoopClosureCheck.Allows(record["loop_closure"] as JsonObject))
+            {
+                int[] owners = [.. record["owner_layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>().Except(retained).Except(open)];
+                foreach (int owner in owners) reasons[owner] = [.. reasons.GetValueOrDefault(owner, []).Append(SlowClosureNotClosed).Distinct()];
+                kept["retained_live_layer_ids"] = new JsonArray([.. owners.Select(id => (JsonNode)id)]);
+                open.AddRange(owners);
+            }
+            records.Add(kept);
+        }
+        return ([.. open], reasons);
     }
 
     private async Task<JsonObject> SelectAsync()
@@ -351,16 +355,46 @@ internal sealed class AnalysisOrchestrator
         return best ?? plan;
     }
 
+    /// <summary>
+    /// 布局按顺序试，第一个能生成的就用。例外：能生成的是特效前缀、而整层只被这个布局的冲突挡住（整层本身零阻断、有候选）时，
+    /// 后面的布局下整层分组可能省得更多，也试一次，用 <see cref="LayeredSavesMoreAsync"/> 比，取省得多的。
+    /// </summary>
     private async Task<JsonObject> LayoutsAsync(HybridAnalyzeRequest candidate, string phase, string? state)
     {
         JsonObject? plan = null;
         foreach (string layout in space.Layouts)
         {
+            JsonObject tried;
             using (layout == space.Layouts[0] ? default : AnalysisTiming.Measure("a_preset_layout_fallback"))
-                plan = await TryAsync(candidate with { VideoLayout = layout }, phase, state);
-            if (Admission.Accepted(plan)) break;
+                tried = await TryAsync(candidate with { VideoLayout = layout }, phase, state);
+            if (plan is not null && Admission.Accepted(plan)) return await LayeredSavesMoreAsync(plan, tried) ? tried : plan;
+            plan = tried;
+            if (Admission.Accepted(plan) && !(phase == "search" && PrefixOverLayoutConflict(plan))) break;
         }
         return plan!;
+    }
+
+    /// <summary>特效前缀接手只是因为整层被布局冲突挡住：整层自己零阻断、有循环候选，冲突记在 whole_layer.layout_conflict。</summary>
+    private static bool PrefixOverLayoutConflict(JsonObject plan) => plan["route"]?.GetValue<string>() == "effect_prefix" &&
+        plan["whole_layer"] is JsonObject whole && whole["layout_conflict"] is JsonValue &&
+        whole["blockers"] is JsonArray { Count: 0 } && whole["loop"]?["candidates"] is JsonArray { Count: > 0 };
+
+    /// <summary>
+    /// 换个布局的整层方案是否比特效前缀方案好：它可行而前缀不可行；或都可行、它省下的特效渲染（<see cref="NoBenefit.RemovedPassCoverage"/>）
+    /// 超过前缀方案最多能省的——前缀缓存的所有者层全部特效 pass（同一 <see cref="BakeValueAssessment.PassCoverage"/> 口径）。
+    /// 前缀方案不算覆盖，取上界比较：只有确实省得多才换，不拿"没算"当理由换掉能用的方案。
+    /// </summary>
+    private async Task<bool> LayeredSavesMoreAsync(JsonObject prefix, JsonObject whole)
+    {
+        if (!Viable(whole)) return false;
+        if (!Viable(prefix)) return true;
+        if (NoBenefit.RemovedPassCoverage(whole) is not double removed ||
+            prefix["runtime_evidence"]?.GetValue<string>() is not string path || !File.Exists(path)) return false;
+        var owners = (prefix["effect_prefix_caches"] as JsonArray ?? []).OfType<JsonObject>()
+            .Select(cache => SceneGraph.Int(cache["owner_layer_id"])).OfType<int>().ToHashSet();
+        var observed = (JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(layer => SceneGraph.Int(layer["owner"]) is int owner && owners.Contains(owner));
+        return removed > BakeValueAssessment.PassCoverage(prefix, observed);
     }
 
     private async Task<JsonObject> TryAsync(HybridAnalyzeRequest candidate, string phase, string? state)

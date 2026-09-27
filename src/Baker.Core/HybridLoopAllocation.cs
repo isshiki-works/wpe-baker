@@ -75,23 +75,45 @@ internal static class HybridLoopAllocation
         };
     }
 
+    /// <summary>触发器在循环分析里没有可写的原因码（例如没有判据结论的粒子层）时，留实时写这一条，不借用用户要求的 retained_by_cost_trial。</summary>
+    internal const string TriggerReason = "loop_allocation_trigger";
+
     /// <summary>
-    /// 更小分配重查仍不行时的第二次尝试：新留实时的单元所在的作者根被拆成了多个单元（触发器在拆出来的子单元里，
-    /// 或者触发器就是拆分点、子层被拆走），就把这些作者根下的全部单元都留实时。这是拆分前的范围：不拆时整棵子树跟着触发器留实时，
-    /// 所以这份分配不比不拆时留得少。作者根没被拆过、或留完之后没剩可烘的内容时返回 null。
+    /// 更小分配重查：按 <paramref name="evidence"/> 的留实时集合重查；仍证不出循环（依据 unavailable）而重查自己又点名了还没留实时的
+    /// 所有者（拆分放开后第一轮看不到的单元、静止证明点名的层……，与 <see cref="Explain"/> 同一判定）时，把它们并进留实时再查，
+    /// 直到能生成、不再点名新单元、或留完没剩可烘的内容。每轮只加不减，单元数有限，必然停。
+    /// 原因码按各轮的未解析项写（<see cref="RetainReasons"/>，找不到的写 <see cref="TriggerReason"/>）；最终用的原因码记在 evidence.retain_live_reasons，
+    /// 退回轮沿用。前几轮的重查由 <paramref name="archive"/> 挪走并返回其 plan 路径，记在 evidence.attempts。
     /// </summary>
-    internal static int[]? AuthorRootRetention(JsonObject plan, JsonObject evidence)
+    /// <param name="replan">按留实时集合与原因码重查一次，结果落在 evidence.analysis_plan_path。</param>
+    internal static async Task<(JsonObject Replanned, bool Resolved, string Basis, JsonObject? Residual)> ReplanUntilSettledAsync(
+        JsonObject report, JsonObject scene, JsonObject evidence, Func<int[], Dictionary<int, string[]>, Task<JsonObject>> replan,
+        Func<JsonObject, (bool Resolved, string Basis, JsonObject? Residual)> resolve, Func<string> archive)
     {
-        var layers = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
-            .Select(layer => (Id: SceneGraph.Int(layer["id"]), Root: SceneGraph.Int(layer["root"]), Unit: SceneGraph.Int(layer["allocation_root"])))
-            .Where(layer => layer.Id is not null && layer.Root is not null && layer.Unit is not null).ToArray();
-        var added = ReadIds(evidence["added_live_root_ids"]).ToHashSet();
-        var split = layers.Where(layer => layer.Unit != layer.Root).Select(layer => layer.Root!.Value).ToHashSet();
-        var roots = layers.Where(layer => added.Contains(layer.Unit!.Value) && split.Contains(layer.Root!.Value)).Select(layer => layer.Root!.Value).ToHashSet();
-        if (roots.Count == 0) return null;
-        var widened = layers.Where(layer => roots.Contains(layer.Root!.Value)).Select(layer => layer.Id!.Value).ToHashSet();
-        if (ReadIds(evidence["remaining_baked_layer_ids"]).All(widened.Contains)) return null;
-        return [.. ReadIds(evidence["retain_live_root_ids"]).Concat(layers.Where(layer => roots.Contains(layer.Root!.Value)).Select(layer => layer.Unit!.Value)).Distinct()];
+        JsonObject named = evidence, source = report;
+        var attempts = new JsonArray();
+        while (true)
+        {
+            int[] retained = [.. ReadIds(named["retain_live_root_ids"])], triggers = [.. ReadIds(named["trigger_layer_ids"])];
+            var reasons = RetainReasons(source, triggers) ?? [];
+            foreach (int trigger in triggers) reasons.TryAdd(trigger, [TriggerReason]);
+            JsonObject replanned = await replan(retained, reasons);
+            evidence["retain_live_root_ids"] = new JsonArray([.. retained.Select(id => (JsonNode)id)]);
+            evidence["retain_live_reasons"] = JsonSerializer.SerializeToNode(reasons);
+            var (resolved, basis, residual) = resolve(replanned);
+            if (resolved || basis != "unavailable" || Explain(replanned, scene) is not { } next ||
+                next["status"]?.GetValue<string>() != "proposed")
+            {
+                if (attempts.Count > 0) evidence["attempts"] = attempts;
+                return (replanned, resolved, basis, residual);
+            }
+            attempts.Add(new JsonObject { ["plan_path"] = archive(), ["retain_live_root_ids"] = new JsonArray([.. retained.Select(id => (JsonNode)id)]),
+                ["replanned_blockers"] = replanned["blockers"]?.DeepClone(), ["replanned_unresolved"] = replanned["loop"]?["unresolved"]?.DeepClone() });
+            foreach (string key in new[] { "added_live_root_ids", "trigger_layer_ids" })
+                evidence[key] = new JsonArray([.. ReadIds(evidence[key]).Concat(ReadIds(next[key])).Distinct().Order().Select(id => (JsonNode)id)]);
+            evidence["remaining_baked_layer_ids"] = next["remaining_baked_layer_ids"]?.DeepClone();
+            (named, source) = (next, replanned);
+        }
     }
 
     /// <summary>
@@ -154,8 +176,11 @@ internal static class HybridLoopAllocation
     internal static Dictionary<int, string[]>? RetainReasons(JsonObject plan, IEnumerable<int> owners)
     {
         var wanted = owners.ToHashSet();
-        var reasons = plan["settings"]?["retain_live_reasons"]?.Deserialize<Dictionary<int, string[]>>()
-            ?.ToDictionary(pair => pair.Key, pair => pair.Value.ToList()) ?? [];
+        // 已带的：plan 设置里的（上一轮留实时的原因），加上分配回退最终重查用的（它点名的层在退回轮里接着留实时）。
+        var reasons = new Dictionary<int, List<string>>();
+        foreach (JsonNode? recorded in new[] { plan["settings"]?["retain_live_reasons"], plan["loop_allocation_fallback"]?["retain_live_reasons"] })
+            foreach (var (id, codes) in recorded?.Deserialize<Dictionary<int, string[]>>() ?? [])
+                reasons[id] = [.. reasons.GetValueOrDefault(id, []).Concat(codes).Distinct()];
         void Add(int id, JsonNode? code)
         {
             if (!wanted.Contains(id) || code is not JsonValue value || !value.TryGetValue(out string? text)) return;

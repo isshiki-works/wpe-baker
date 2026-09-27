@@ -45,7 +45,8 @@ public static class TradeoffOptions
         ["mixed_parallax_depth_hierarchy"] = (Tradeoff, "parallax"),
         ["runtime_parallax_depth_change"] = (Tradeoff, "parallax"),
         ["animated_parallax_depth"] = (Tradeoff, "parallax"),
-        // 用户自己用 --retain-live 要求留着的层：清单不劝人关它，按派生处理。
+        // 用户自己用 --retain-live 要求留着的层（或退回轮逐组试探留的）：清单不劝人关它，按派生处理。
+        // 分配回退、慢分量预检这类自动留实时写各自的真实原因码，不借用这一条。
         ["retained_by_cost_trial"] = (Derived, "requested_live"),
         // 读上一帧的残影/拖影/扩散与一次性入场动画：分析上是结构问题，对用户是"关掉就好"的观感取舍。
         ["reads_current_framebuffer"] = (Tradeoff, "feedback"),
