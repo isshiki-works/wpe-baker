@@ -36,11 +36,7 @@ internal static class EffectPrefixPlanner
                 effectShaders ??= EffectShaderIndex(originalScene, source, assets, ownerId);
                 JsonObject loop = AnalyzeIndexedPrefix(originalScene, source, assets, runtime, snapshotProperties,
                     ownerId, count, request, projection, effectShaders);
-                // 带缓变分量的前缀不提：前缀缓存要在自身周期上精确闭合、没有淡化，缓变项的漂移在 P 处闭合不了，
-                // 提了只会让最长前缀在接缝门上被拒、整案判不能；这个效果留实时，短一级的前缀照用。
-                if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 } candidates ||
-                    candidates[0]?["components"] is not JsonArray { Count: > 0 } ||
-                    candidates[0]?["slow_components"] is JsonArray { Count: > 0 }) continue;
+                if (!Cacheable(loop)) continue;
                 var cache = new JsonObject {
                     ["owner_layer_id"] = ownerId, ["prefix_effect_count"] = count,
                     ["terminal_effect_id"] = effect["id"]!.DeepClone(), ["source_image"] = owner["image"]!.DeepClone(),
@@ -63,6 +59,16 @@ internal static class EffectPrefixPlanner
         }
         return proposals;
     }
+
+    /// <summary>
+    /// 前缀循环能不能做成缓存：没有未解析项、首选候选有分量。前缀缓存从第 0 帧起录、在自身周期上精确闭合、没有淡化，所以
+    /// 带缓变分量（漂移在 P 处闭合不了）或要整周期预热（source_period_warmup_frames，精灵起点错相或着色器 settle）的都不提，
+    /// 提了只会在接缝门上被拒、整案判不能；这个效果留实时，短一级的前缀照用。
+    /// </summary>
+    internal static bool Cacheable(JsonObject loop) =>
+        loop["unresolved"] is not JsonArray { Count: > 0 } && loop["candidates"] is JsonArray { Count: > 0 } candidates &&
+        candidates[0]?["components"] is JsonArray { Count: > 0 } && candidates[0]?["slow_components"] is not JsonArray { Count: > 0 } &&
+        LoopWarmupJson.CandidateSourcePeriodWarmupFrames(candidates) == 0;
 
     /// <summary>
     /// 一个前缀的循环分析。走 <see cref="HybridScenePlanner.AnalyzeLoopForProfile"/> 这一个入口，

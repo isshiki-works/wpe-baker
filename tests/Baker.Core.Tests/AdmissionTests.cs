@@ -192,6 +192,11 @@ public class AdmissionTests
         JsonObject cheap = Narrated(Plan(new JsonArray(), groups: [[1], [3]]));
         cheap["bake_value"] = new JsonObject { ["rule"] = "cached_effect_passes", ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 1.9 } };
         Assert.Equal([NoBenefit.VideoCostOverSaving], NoBenefit.AnalysisConditions(cheap));
+        // 前缀缓存从第 0 帧起录：要整周期预热的前缀循环不提（接缝门必拒）。
+        JsonObject prefixLoop = new() { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 600, ["components"] = new JsonArray(1) }) };
+        Assert.True(EffectPrefixPlanner.Cacheable(prefixLoop));
+        prefixLoop["candidates"]![0]!["source_period_warmup_frames"] = 600UL;
+        Assert.False(EffectPrefixPlanner.Cacheable(prefixLoop));
         cheap["bake_value"]!["evidence"]!["effect_pass_coverage"] = 2.0;
         Assert.Empty(NoBenefit.AnalysisConditions(cheap));
         cheap["bake_value"] = new JsonObject { ["rule"] = "needs_work_comparison" };

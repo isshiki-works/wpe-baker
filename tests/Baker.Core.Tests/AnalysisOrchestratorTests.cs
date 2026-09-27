@@ -194,6 +194,28 @@ public class AnalysisOrchestratorTests
         Assert.Equal(2, costs.Count);
     }
 
+    [Fact]
+    public async Task RetreatCarriesTheReasonsOfLayersAlreadyRetained()
+    {
+        // 回退重查带上分配回退点名层的原因（INV-FRIEREN 层 64 的 term_not_retimable），不被盖成只剩 retained_by_cost_trial。
+        await TestTemp.Run(async root =>
+        {
+            var retreats = new List<HybridAnalyzeRequest>();
+            JsonObject Analyze(HybridAnalyzeRequest r)
+            {
+                if (r.RetainLiveRootIds is { Length: > 0 }) retreats.Add(r);
+                JsonObject plan = Plan(r, true, groups: 2);
+                plan["bake_value"] = new JsonObject { ["rule"] = "cached_effect_passes", ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 0.5 } };
+                plan["loop_allocation_fallback"] = new JsonObject { ["retain_live_root_ids"] = new JsonArray(64), ["trigger_layer_ids"] = new JsonArray(64) };
+                plan["loop"]!["unresolved"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 64, ["mechanism"] = "term_not_retimable" });
+                return plan;
+            }
+            await AnalysisOrchestrator.RunAsync(new(2, "s", "a", root, Interaction: "keep"), (r, _) => Task.FromResult(Analyze(r)), CancellationToken.None);
+            Assert.NotEmpty(retreats);
+            Assert.All(retreats, r => Assert.Contains("term_not_retimable", r.RetainLiveReasons![64]));
+        });
+    }
+
     private static JsonObject Plan(HybridAnalyzeRequest request, bool usable, string[]? states = null, int groups = 1) => new()
     {
         ["summary"] = new JsonObject { ["key"] = usable ? "summary.bakeable" : "summary.blocked", ["zh"] = "", ["en"] = "" },
