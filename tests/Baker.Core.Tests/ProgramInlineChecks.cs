@@ -574,8 +574,10 @@ relativeParent[0]!["origin"]!["script"] = relativeParent[0]!["origin"]!["script"
 Check((await PlanSubtrees("subtree-relative-runtime", relativeParent))["root_order"]!.AsArray().Single()!.GetValue<int>() == 1200,
     "a parent origin script that only settles after a time comparison keeps the subtree protected");
 // 当前隐藏、可能被脚本重新显示（场景里有 getLayer）的容器不拆：隐藏子层跟随容器单元，不单独进视频组。
+// 只管新放开的那类（这里是编辑器锁）；放开前本来就拆的隐藏容器照旧拆，免得容器单元的脚本把整单元连成 hidden_script_controller。
 var hiddenContainer = subtreeObjects.DeepClone().AsArray();
 hiddenContainer[0]!["visible"] = false;
+hiddenContainer[0]!["locktransforms"] = true;
 hiddenContainer.Insert(0, new JsonObject { ["id"] = 1208, ["text"] = new JsonObject { ["value"] = "x",
     ["script"] = "export function update(v) { thisScene.getLayer('other'); return v; }" } });
 var hiddenContainerPlan = await PlanSubtrees("subtree-hidden-container", hiddenContainer);
@@ -583,6 +585,11 @@ Check(hiddenContainerPlan["layers"]!.AsArray().OfType<JsonObject>().Where(layer 
         .All(layer => layer["allocation_root"]!.GetValue<int>() == 1200) &&
     !hiddenContainerPlan["video_groups"]!.AsArray().OfType<JsonObject>().Any(g => g["layer_ids"]!.AsArray().Any(n => n!.GetValue<int>() is >= 1200 and <= 1207)),
     "a hidden container that scripts may show again keeps its subtree in one unit");
+hiddenContainer[1]!.AsObject().Remove("locktransforms");
+var hiddenBeforePlan = await PlanSubtrees("subtree-hidden-container-before", hiddenContainer);
+Check(hiddenBeforePlan["layers"]!.AsArray().OfType<JsonObject>().Single(layer => layer["id"]!.GetValue<int>() == 1201)["allocation_root"]!.GetValue<int>() == 1201 &&
+    !hiddenBeforePlan["live_layer_ids"]!.AsArray().Any(n => n!.GetValue<int>() == 1201),
+    "a hidden container that was already splittable before keeps splitting, so its static children are not pulled live");
 // 父层只因着色器读音频频谱实时：它留实时（带绘制键），后面的静态子层进视频、挂在它下面，装配后绘制顺序不变。
 var spectrumParent = new JsonArray(
     new JsonObject { ["id"] = 1200, ["name"] = "spectrum", ["origin"] = "31 17 0", ["scale"] = "2 3 1", ["text"] = "bars" },

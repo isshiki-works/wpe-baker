@@ -76,9 +76,9 @@ internal static class HybridLoopAllocation
     }
 
     /// <summary>
-    /// 更小分配重查仍不行时的第二次尝试：新留实时的单元有从作者根里拆出来的（allocation_root ≠ root），就把这些作者根下的全部单元
-    /// 都留实时。这是拆分前的范围：不拆时整棵子树跟着触发器留实时，所以这份分配不比不拆时留得少。
-    /// 没有拆出来的单元、或留完之后没剩可烘的内容时返回 null。
+    /// 更小分配重查仍不行时的第二次尝试：新留实时的单元所在的作者根被拆成了多个单元（触发器在拆出来的子单元里，
+    /// 或者触发器就是拆分点、子层被拆走），就把这些作者根下的全部单元都留实时。这是拆分前的范围：不拆时整棵子树跟着触发器留实时，
+    /// 所以这份分配不比不拆时留得少。作者根没被拆过、或留完之后没剩可烘的内容时返回 null。
     /// </summary>
     internal static int[]? AuthorRootRetention(JsonObject plan, JsonObject evidence)
     {
@@ -86,7 +86,8 @@ internal static class HybridLoopAllocation
             .Select(layer => (Id: SceneGraph.Int(layer["id"]), Root: SceneGraph.Int(layer["root"]), Unit: SceneGraph.Int(layer["allocation_root"])))
             .Where(layer => layer.Id is not null && layer.Root is not null && layer.Unit is not null).ToArray();
         var added = ReadIds(evidence["added_live_root_ids"]).ToHashSet();
-        var roots = layers.Where(layer => added.Contains(layer.Unit!.Value) && layer.Unit != layer.Root).Select(layer => layer.Root!.Value).ToHashSet();
+        var split = layers.Where(layer => layer.Unit != layer.Root).Select(layer => layer.Root!.Value).ToHashSet();
+        var roots = layers.Where(layer => added.Contains(layer.Unit!.Value) && split.Contains(layer.Root!.Value)).Select(layer => layer.Root!.Value).ToHashSet();
         if (roots.Count == 0) return null;
         var widened = layers.Where(layer => roots.Contains(layer.Root!.Value)).Select(layer => layer.Id!.Value).ToHashSet();
         if (ReadIds(evidence["remaining_baked_layer_ids"]).All(widened.Contains)) return null;
