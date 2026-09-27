@@ -201,6 +201,19 @@ TEST(PkgFs, ReusesHeaderAndRejectsInvalidEntryRanges) {
     EXPECT_TRUE(std::move(invalid).unwrap_err_unchecked().kind() == owe::io::ErrorKind::InvalidData);
 }
 
+TEST(PkgFs, RejectsEntryCountBeyondFile) {
+    TempDirectory temp;
+    auto          path = temp.path / "count.pkg";
+    {
+        std::ofstream output(path, std::ios::binary);
+        WriteSized(output, "PKGV0001");
+        WriteI32(output, 0x7fffffff);
+    }
+    auto pkg = owe::fs::WPPkgFs::open(owe::fs::ToPath(path.string()));
+    ASSERT_TRUE(pkg.is_err());
+    EXPECT_TRUE(std::move(pkg).unwrap_err_unchecked().kind() == owe::io::ErrorKind::InvalidData);
+}
+
 TEST(PkgFs, PreservesUtf8WhileFoldingAsciiPathCase) {
     TempDirectory temp;
     auto          path = temp.path / "utf8.pkg";

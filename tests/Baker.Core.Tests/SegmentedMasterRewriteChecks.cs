@@ -66,6 +66,9 @@ internal static class SegmentedMasterRewriteChecks
             }
             check(await RejectsAsync(24, 24), "强制关键帧帧号不能等于总帧数");
             check(await RejectsAsync(0, 24), "强制关键帧帧号不能是第 0 帧，那一帧本来就是 IDR");
+            // concat 清单按 ffmpeg 引号规则转义单引号：用户名含 ' 的路径（O'Brien）以前整案烘焙失败。
+            check(MasterRewrite.ConcatEntry(@"D:\Bakes\O'Brien\a.mp4") == @"D:/Bakes/O'\''Brien/a.mp4",
+                "concat 清单里的单引号要转义");
         }
         finally
         {

@@ -19,7 +19,7 @@ from ctypes import wintypes
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parent.parent
-ASSETS = Path(r"D:/Apps/Steam/steamapps/common/wallpaper_engine/assets")
+ASSETS = Path(os.environ.get("WPE_ASSETS_DIR", "C:/Program Files (x86)/Steam/steamapps/common/wallpaper_engine/assets"))
 LOCAL_SUMMARY = ROOT / "artifacts/library-smoke-1788783520814886300/summary.json"
 HELDOUT_MANIFEST = ROOT / "artifacts/heldout-scene-corpus-20260908/steam-download-manifest.json"
 HELDOUT_META = ROOT / "artifacts/heldout-scene-corpus-20260908/metadata-summary.json"

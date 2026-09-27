@@ -518,7 +518,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                     {
                         throw new GpuEncodeUnavailableException($"{profile.Encoder} failed on the loop head; see loop-head-encoder.stderr.log.", error);
                     }
-                    await File.WriteAllTextAsync(concatList, $"file '{headVideo.Replace('\\', '/')}'\nfile '{encodedVideo.Replace('\\', '/')}'\n", cancellationToken);
+                    await File.WriteAllTextAsync(concatList, $"file '{MasterRewrite.ConcatEntry(headVideo)}'\nfile '{MasterRewrite.ConcatEntry(encodedVideo)}'\n", cancellationToken);
                     string timescale = request.FpsNumerator.ToString(CultureInfo.InvariantCulture);
                     _ = await ff.RunTextAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-n", "-f", "concat", "-safe", "0", "-i", concatList,
                         "-map", "0:v:0", "-an", "-c", "copy", "-fps_mode", "passthrough", "-movie_timescale", timescale,

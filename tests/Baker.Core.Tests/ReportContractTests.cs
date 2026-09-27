@@ -461,11 +461,18 @@ public class LoopItemContractTests
         Assert.Equal(1 / 0.25, Run("export function update(value) { return WEColor.hsv2rgb({ x: engine.runtime * scriptProperties.x, y: 1, z: 1 }); }", "color").PeriodSeconds!.Value, 9);
         var fade = Run("export function update(value) { const t = Math.max(0, Math.min(1, (engine.runtime - 0.5) / 0.75)); return 1 - t * t * (3 - 2 * t); }", "alpha");
         Assert.Equal((ScriptTime.Outcome.Static, 1.25), (fade.Outcome, fade.Settle));
+        // JS 取余随被除数变号：被除数过零（t = 5）之后才是周期
+        Assert.Equal(5.0, Run("export function update(value) { value.y = (engine.runtime - 5) % 2; return value; }").Settle, 9);
+        // 超深嵌套记未收敛，不让栈溢出终止进程
+        Assert.Equal(ScriptTime.Outcome.Unconverged, Run("export function update(value) { value.y = " + new string('(', 100_000) + "1" + new string(')', 100_000) + "; return value; }").Outcome);
         // 跨帧状态按单精度逐帧模拟：步进复位闭合出整数帧周期；一直累加不闭合是未收敛，不是证明
         Assert.Equal(12UL, Run("export function update(value) { if (value.x > 5) { value.x = 0; } else { value.x += 0.5; } return value; }").PeriodFrames);
         Assert.Equal("script_state_not_closed", Run("export function update(value) { value.x += scriptProperties.x; return value; }").Code);
         Assert.Equal((ScriptTime.Outcome.Cannot, "script_reads_external_input"),
             Run("export function update(value) { value.x = input.cursorWorldPosition.x; return value; }") is var input ? (input.Outcome, input.Code) : default);
+        // 跨帧状态里读到输入：流到输出才是证明，只进状态是未收敛
+        Assert.Equal(ScriptTime.Outcome.Cannot, Run("export function update(value) { value.x += input.cursorWorldPosition.x; return value; }").Outcome);
+        Assert.Equal("script_state_unknown", Run("let last = 0;\nexport function update(value) { last = input.cursorWorldPosition.x; if (value.x > 5) { value.x = 0; } else { value.x += 0.5; } return value; }").Code);
         // 本层动画速率设成烘焙期常量：轨道周期由运行时观测的速率给出，脚本本身静态；速率随时间变说不清
         Assert.Equal(ScriptTime.Outcome.Static, Run("let a;\nexport function init() { a = thisLayer.getAnimation(); a.rate = scriptProperties.x; }\nexport function update() { if (a) a.rate = scriptProperties.x; }", "alpha").Outcome);
         Assert.Equal("animation_rate_varies", Run("export function update() { thisLayer.getAnimation().rate = 1 + Math.sin(engine.runtime); }", "alpha").Code);

@@ -354,95 +354,6 @@ void ApplyVariantPatch(fs::BinaryReader& file, const TexVariantPatch& patch, boo
     }
 }
 
-Option<uint8_t> HexValue(char c) {
-    if (c >= '0' && c <= '9') return Some(static_cast<uint8_t>(c - '0'));
-    if (c >= 'a' && c <= 'f') return Some(static_cast<uint8_t>(c - 'a' + 10));
-    if (c >= 'A' && c <= 'F') return Some(static_cast<uint8_t>(c - 'A' + 10));
-    return None();
-}
-
-Option<std::string> PercentDecode(std::string_view raw) {
-    std::string out;
-    out.reserve(raw.size());
-    for (std::size_t i = 0; i < raw.size();) {
-        if (raw[i] != '%') {
-            out.push_back(raw[i++]);
-            continue;
-        }
-        if (i + 2 >= raw.size()) return None();
-        auto hi = HexValue(raw[i + 1]);
-        auto lo = HexValue(raw[i + 2]);
-        if (hi.is_none() || lo.is_none()) return None();
-        out.push_back(static_cast<char>((*hi << 4) | *lo));
-        i += 3;
-    }
-    return Some(rstd::move(out));
-}
-
-Option<std::string> ResolveExternalImagePath(std::string_view name) {
-    std::string path;
-    if (name.starts_with("file://localhost/")) {
-        path = "/" + std::string(name.substr(std::string_view("file://localhost/").size()));
-    } else if (name.starts_with("file:///")) {
-        path = std::string(name.substr(std::string_view("file://").size()));
-    } else if (! name.empty() && name[0] == '/') {
-        path = std::string(name);
-    } else {
-        return None();
-    }
-    auto            decoded = PercentDecode(path).unwrap_or(path);
-    std::error_code ec;
-    if (! std::filesystem::is_regular_file(decoded, ec)) return None();
-    return Some(rstd::move(decoded));
-}
-
-ImageHeader MakeExternalImageHeader(int width, int height) {
-    ImageHeader header;
-    header.width     = width;
-    header.height    = height;
-    header.mapWidth  = width;
-    header.mapHeight = height;
-    header.format    = TextureFormat::RGBA8;
-    header.type      = ImageType::PNG;
-    header.count     = 1;
-    header.sample    = TextureSample { TextureWrap::CLAMP_TO_EDGE,
-                                       TextureWrap::CLAMP_TO_EDGE,
-                                       TextureFilter::LINEAR,
-                                       TextureFilter::LINEAR };
-    SetHeaderPow2(header, width, height);
-    return header;
-}
-
-auto ParseExternalImage(std::string_view key, const std::string& path)
-    -> Result<Arc<Image>, ImageParseError> {
-    int   width = 0, height = 0, channels = 0;
-    auto* pixels = stbi_load(path.c_str(), &width, &height, &channels, 4);
-    if (! pixels || width <= 0 || height <= 0) {
-        if (pixels) stbi_image_free(pixels);
-        return Err(ImageParseError {
-            .kind    = ImageParseErrorKind::DecodeFailed,
-            .message = rstd::format("decode external image {} failed", key),
-        });
-    }
-
-    auto img_ptr    = Arc<Image>::make();
-    img_ptr->key    = std::string(key);
-    img_ptr->header = MakeExternalImageHeader(width, height);
-    img_ptr->slots.resize(1);
-    auto& slot  = img_ptr->slots[0];
-    slot.width  = width;
-    slot.height = height;
-    slot.mipmaps.resize(1);
-    auto& mipmap  = slot.mipmaps[0];
-    mipmap.width  = width;
-    mipmap.height = height;
-    mipmap.size   = isize(static_cast<std::ptrdiff_t>(width * height * 4));
-    mipmap.data   = ImageDataPtr(reinterpret_cast<uint8_t*>(pixels), [](uint8_t* data) {
-        stbi_image_free(data);
-    });
-    return Ok(rstd::move(img_ptr));
-}
-
 } // namespace
 
 auto owe::ProbeVideoDuration(fs::VFS& vfs, ref<str> name) -> Option<f64> {
@@ -475,10 +386,6 @@ auto owe::ProbeVideoDuration(fs::VFS& vfs, ref<str> name) -> Option<f64> {
 
 auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParseError> {
     const auto name_view = rstd::cppstd::as_string_view(name);
-    if (auto path = ResolveExternalImagePath(name_view)) {
-        return ParseExternalImage(name_view, *path);
-    }
-
     std::string path    = "/assets/materials/" + std::string(name_view) + ".tex";
     auto        img_ptr = Arc<Image>::make();
     auto&       img     = *img_ptr;
@@ -504,10 +411,10 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
 
     // image
     std::int32_t _image_count = img.header.count;
-    if (_image_count < 0) {
+    if (_image_count < 0 || _image_count > Remaining(file) / 4) {
         return Err(ImageParseError {
             .kind    = ImageParseErrorKind::InvalidData,
-            .message = rstd::format("texture {} has a negative image count", name),
+            .message = rstd::format("texture {} has an invalid image count", name),
         });
     }
     std::size_t image_count = static_cast<std::size_t>(_image_count);
@@ -519,6 +426,12 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
 
         std::size_t mipmap_count =
             static_cast<std::size_t>(std::max<std::int32_t>(file.ReadInt32(), 0));
+        if (mipmap_count > static_cast<std::size_t>(Remaining(file) / 12)) {
+            return Err(ImageParseError {
+                .kind    = ImageParseErrorKind::InvalidData,
+                .message = rstd::format("texture {} has an invalid mipmap count", name),
+            });
+        }
         mipmaps.resize(mipmap_count);
         // load image
         for (std::size_t i_mipmap = 0; i_mipmap < mipmap_count; i_mipmap++) {
@@ -540,7 +453,10 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
             }
 
             std::int32_t src_size = file.ReadInt32();
-            if (src_size <= 0 || mipmap.width <= 0 || mipmap.height <= 0 || decompressed_size < 0) {
+            // 字节数不能超出文件剩余；LZ4 每个输入字节最多展开成 255 字节，声明的解压长度更大就是损坏。
+            if (src_size <= 0 || src_size > Remaining(file) || mipmap.width <= 0 ||
+                mipmap.height <= 0 || decompressed_size < 0 ||
+                (LZ4_compressed && decompressed_size > std::int64_t(src_size) * 255)) {
                 return Err(ImageParseError {
                     .kind    = ImageParseErrorKind::InvalidData,
                     .message = rstd::format("texture {} has an invalid mipmap", name),
@@ -634,6 +550,20 @@ auto TexImageParser::Parse(ref<str> name) const -> Result<Arc<Image>, ImageParse
             mipmap.size = isize(static_cast<std::ptrdiff_t>(src_size * sizeof(uint8_t)));
             delete[] result;
 
+            // 上传按 宽×高×格式 从这块数据里拷；字节不够就是损坏的贴图。
+            // 宽高因此受数据量约束，下面贴变体补丁时的偏移乘法也不会溢出。
+            const auto layout = BlockLayoutOf(img.header.format);
+            const auto blocks_w =
+                (static_cast<std::size_t>(mipmap.width) + layout.w - 1) / layout.w;
+            const auto blocks_h =
+                (static_cast<std::size_t>(mipmap.height) + layout.h - 1) / layout.h;
+            if (blocks_w * blocks_h * layout.bytes > static_cast<std::size_t>(src_size)) {
+                return Err(ImageParseError {
+                    .kind    = ImageParseErrorKind::InvalidData,
+                    .message = rstd::format("texture {} mipmap data is smaller than its size", name),
+                });
+            }
+
             if (conditions.empty()) continue;
             std::vector<TexVariantPatch> patches;
             if (! ReadVariantBlock(file, patches)) {
@@ -692,15 +622,6 @@ auto TexImageParser::ParseMany(slice<String> names) const
 auto TexImageParser::ParseHeader(ref<str> name) const -> Result<ImageHeader, ImageParseError> {
     const auto  name_view = rstd::cppstd::as_string_view(name);
     ImageHeader header;
-    if (auto path = ResolveExternalImagePath(name_view)) {
-        int width = 0, height = 0, channels = 0;
-        if (stbi_info(path->c_str(), &width, &height, &channels) && width > 0 && height > 0)
-            return Ok(MakeExternalImageHeader(width, height));
-        return Err(ImageParseError {
-            .kind    = ImageParseErrorKind::DecodeFailed,
-            .message = rstd::format("read external image header {} failed", name),
-        });
-    }
     // WE "_alias_*" textures are runtime aliases the engine resolves
     // internally (light cookies, etc.). We don't model that, so just
     // return an empty header without spamming a vfs miss.

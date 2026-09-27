@@ -4,7 +4,7 @@ The native Windows renderer has compiled, linked and passed real file-render tes
 
 ## Working build entry
 
-From `C:\Users\Alya\Desktop\Work\wpe-baker-next`:
+From the repository root:
 
 ```powershell
 python scripts/build-native-cmake.py --target wpe-render

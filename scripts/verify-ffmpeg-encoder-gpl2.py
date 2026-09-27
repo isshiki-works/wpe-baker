@@ -326,7 +326,7 @@ def main():
                  ROOT / ".tools/llvm-mingw-22/x86_64-w64-mingw32/lib/libunwind.a",
                  ROOT / ".tools/pkgconf/bin/pkgconf.exe", pathlib.Path(r"C:\Program Files\Git\bin\bash.exe"),
                  pathlib.Path(r"C:\Program Files\Git\usr\bin\msys-2.0.dll")]:
-        build_tools.append({"file": str(path), "sha256": sha256(path)})
+        build_tools.append({"file": path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else str(path), "sha256": sha256(path)})
     record = {"schema_version": 1, "verified_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "inputs": inputs, "input_lock_sha256": sha256(lock_path), "source_integrity": integrity,
               "configuration": json.loads((DEST / "build-configuration.json").read_text(encoding="utf-8")),

@@ -103,6 +103,14 @@ internal static class SourceDiagnosisChecks
             Check(opened.Kind == "scene" && opened.SourcePath.EndsWith("scene.pkg", StringComparison.OrdinalIgnoreCase),
                 "ProjectSource itself also falls back from scene.json to the scene.pkg beside it");
 
+        // ---- 重复条目：一份同样的副本照收；反复指向同一大块、比较总量超过包长的按损坏拒绝（以前界面会卡很久）----
+        string scene4k = """{"objects":[]}""".PadRight(4096);
+        WritePackage(Path.Combine(New("alias-once"), "scene.pkg"), scene4k, aliases: 1);
+        WritePackage(Path.Combine(New("alias-flood"), "scene.pkg"), scene4k, aliases: 3);
+        Check(SourceDiagnosis.Inspect(Path.Combine(home, "alias-once")) is null &&
+            SourceDiagnosis.Inspect(Path.Combine(home, "alias-flood")) is { Kind: "unreadable" },
+            "one identical duplicate PKG entry is accepted; duplicates whose comparisons exceed the package size are rejected as damaged");
+
         // ---- 拖放接受范围：存在即收，由导入给理由 ----
         Check(SourceDiagnosis.LooksLikeSource(scene) && !SourceDiagnosis.LooksLikeSource(empty) &&
             !SourceDiagnosis.LooksLikeSource(stray) && !SourceDiagnosis.LooksLikeSource(""),
@@ -152,8 +160,8 @@ internal static class SourceDiagnosisChecks
         finally { Environment.CurrentDirectory = previous; }
     }
 
-    /// <summary>最小的 PKGV 容器，只放一个 scene.json 条目。</summary>
-    private static void WritePackage(string path, string sceneJson)
+    /// <summary>最小的 PKGV 容器，只放一个 scene.json 条目；aliases &gt; 0 时再放一份同样的载荷，另有 aliases 个同名条目都指向它。</summary>
+    private static void WritePackage(string path, string sceneJson, int aliases = 0)
     {
         using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
         using var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
@@ -164,11 +172,18 @@ internal static class SourceDiagnosisChecks
             writer.Write(bytes);
         }
         WriteString("PKGV0017");
-        writer.Write(1);
+        writer.Write(1 + aliases);
         byte[] payload = System.Text.Encoding.UTF8.GetBytes(sceneJson);
         WriteString("scene.json");
         writer.Write(0);
         writer.Write(payload.Length);
+        for (int i = 0; i < aliases; ++i)
+        {
+            WriteString("scene.json");
+            writer.Write(payload.Length);
+            writer.Write(payload.Length);
+        }
         writer.Write(payload);
+        if (aliases > 0) writer.Write(payload);
     }
 }

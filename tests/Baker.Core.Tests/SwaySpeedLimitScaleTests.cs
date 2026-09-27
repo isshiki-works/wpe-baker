@@ -33,6 +33,8 @@ public class SwaySpeedLimitScaleTests
         Assert.Equal(3ul, CommonLoopSolver.EvaluateAtFrames(request with { Components = [Slow(150.8, 50)] }, 390 * 30).Candidate!.Components[0].Cycles);
         Assert.Equal(1ul, CommonLoopSolver.EvaluateAtFrames(request with { Components = [Slow(1000, 500)] }, 390 * 30).Candidate!.Components[0].Cycles);
         Assert.Equal(0ul, CommonLoopSolver.EvaluateAtFrames(request with { Components = [Slow(1000, 500)], MaximumDuration = new CommonLoopRational(600) }, 390 * 30).Candidate!.Components[0].Cycles);
+        // 只有分量自身上限 ≥ 100% 才可冻结：理想圈数小到被取整容差吞掉（< 1e-12）时，3% 的上限也不许冻结成 −100%
+        Assert.Null(CommonLoopSolver.EvaluateAtFrames(request with { Components = [Slow(1e15, null)], MaximumDuration = new CommonLoopRational(600) }, 390 * 30).Candidate);
     }
 
 }

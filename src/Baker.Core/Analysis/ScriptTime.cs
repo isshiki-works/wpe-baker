@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -279,6 +280,7 @@ internal static class ScriptTime
 
         private X Stmt()
         {
+            RuntimeHelpers.EnsureSufficientExecutionStack();
             if (Eat(";")) return new("empty");
             if (Is("{")) return Block();
             if (Eat("import"))
@@ -489,6 +491,7 @@ internal static class ScriptTime
 
         private X Unary()
         {
+            RuntimeHelpers.EnsureSufficientExecutionStack();
             if (t[p].K == 'p' && t[p].S is "!" or "-" or "+" or "~" || t[p].K == 'i' && t[p].S is "typeof" or "void" or "delete")
             {
                 string op = t[p++].S;
@@ -1013,6 +1016,9 @@ internal static class ScriptTime
                 case "/" when a.K == 'l' && b.K == 'c' && b.C != 0:
                     return Lin(a.A / b.C, a.C / b.C, st);
                 case "%" when a.K is 'l' or 'f' && b.K == 'c' && b.C != 0 && (a.K == 'l' || double.IsInteger(b.C)):
+                    // JS 取余随被除数变号：被除数过零之后才是周期（floor 递减时到 x < 1 就不再为正）
+                    if (double.IsNaN(a.C)) return Opaque("threshold_unknown", st);
+                    AddSettle((-a.C + (a.K == 'f' && a.A < 0 ? 1 : 0)) / a.A);
                     return Per(st, [Math.Abs(b.C / a.A)]);
             }
             return Opaque(a.K == 'l' && b.K == 'l' && op == "*" ? "quadratic_time" : a.K == 'u' || b.K == 'u' ? "unknown_coefficient" : "nonlinear_time", st);
@@ -1115,7 +1121,11 @@ internal static class ScriptTime
 
         // ---- 语句 ----
 
-        private void Tick() { if (++steps > 50_000_000) throw new Bail("script_step_budget"); }
+        private void Tick()
+        {
+            if (++steps > 50_000_000) throw new Bail("script_step_budget");
+            if (!RuntimeHelpers.TryEnsureSufficientExecutionStack()) throw new Bail("script_nesting_too_deep");
+        }
 
         private Flow Exec(X x, Scope s)
         {
@@ -1592,11 +1602,11 @@ internal static class ScriptTime
                         case "runtime":
                             return time switch { 's' => new N('l', 0, 1), 'z' => Const(0), _ => throw new Bail("script_state_reads_time", detail: "cross-frame state also reads engine.runtime") };
                         case "frametime": return Const(frametime);
-                        case "timeOfDay": return time == 'n' ? throw new Bail("script_reads_external_input", true, "wall_clock") : External("wall_clock");
+                        case "timeOfDay": return External("wall_clock");
                         case "canvasSize" or "screenResolution": return Vec(2, [new N('u'), new N('u')]);
                         case "userProperties": return new N('u');
                         case "registerAudioBuffers":
-                            return new Bi((_, _) => time == 'n' ? throw new Bail("script_reads_external_input", true, "audio") : External("audio"));
+                            return new Bi((_, _) => External("audio"));
                         case "setTimeout" or "setInterval":
                             return new Bi((_, args) =>
                             {
@@ -1614,8 +1624,8 @@ internal static class ScriptTime
                         case "clearTimeout" or "clearInterval" or "openUserShortcut": return new Bi((_, _) => Un.I);
                     }
                     return name.StartsWith("is", StringComparison.Ordinal) ? new Bi((_, _) => new N('u')) : Opaque("engine_api");
-                case "input": return time == 'n' ? throw new Bail("script_reads_external_input", true, "pointer") : External("pointer");
-                case "Date" when name == "now": return new Bi((_, _) => time == 'n' ? throw new Bail("script_reads_external_input", true, "wall_clock") : External("wall_clock"));
+                case "input": return External("pointer");
+                case "Date" when name == "now": return new Bi((_, _) => External("wall_clock"));
                 case "console": return new Bi((_, _) => Un.I);
                 case "animation": return name == "rate" && rate is not null ? rate : Opaque("layer_api");
                 case "shared": return Opaque("shared_state");
