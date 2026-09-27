@@ -20,11 +20,16 @@ internal static class EffectPrefixPlanner
             profile.CommonRetimePercent < 0 || profile.CommonRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
             throw new ArgumentException("Use positive rational FPS and a retime limit from zero to ten percent.");
         var proposals = new JsonArray();
+        HashSet<int>? unobservedLookups = null;
         foreach (JsonObject owner in originalScene["objects"]?.AsArray().OfType<JsonObject>() ?? [])
         {
             if (!EligibleOwner(owner, source, runtime, out bool retainedPuppetAnimation)) continue;
             int ownerId = owner["id"]!.GetValue<int>();
             if (mayBeVisible?.Invoke(ownerId) == false || !VisibilityControllersProven(originalScene, runtime, ownerId)) continue;
+            // 别的脚本按名字取得到、观测里却没碰过的层：取层在回调或计时分支里，短观测没跑到，完整捕获才冒出来
+            // （烘焙时复核这一层的前缀就作废）。观测里碰过的由上面两道判过；没碰过的不提前缀，整层照常按实时处理。
+            unobservedLookups ??= UnobservedLookupTargets(originalScene, runtime);
+            if (unobservedLookups.Contains(ownerId)) continue;
             JsonArray effects = owner["effects"]!.AsArray();
             var closed = new List<JsonObject>();
             // 同层各前缀共用一份"每个效果用到哪些材质 shader"的索引：在第一次分析前缀时建，后面的前缀只切片不重读。
@@ -212,6 +217,16 @@ internal static class EffectPrefixPlanner
         (dependency["operation"]?.GetValue<string>() == "lookup" ||
          dependency["property"]?.GetValue<string>() == "visible" &&
          dependency["operation"]?.GetValue<string>() is "read" or "write");
+
+    /// <summary>脚本按名字取得到（<see cref="Liveness.ScriptLookupEdges"/>）、但观测里这个脚本对象从没访问过的层。</summary>
+    private static HashSet<int> UnobservedLookupTargets(JsonObject scene, JsonObject runtime)
+    {
+        var observed = (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()
+            .Select(dependency => (SceneGraph.Int(dependency["owner"]), SceneGraph.Int(dependency["target"]))).ToHashSet();
+        return Liveness.ScriptLookupEdges(new SceneGraph(scene).Objects)
+            .Where(edge => !observed.Contains((SceneGraph.Int(edge["owner"]), SceneGraph.Int(edge["target"]))))
+            .Select(edge => edge["target"]!.GetValue<int>()).ToHashSet();
+    }
 
     private static bool VisibilityControllersProven(JsonObject scene, JsonObject runtime, int ownerId)
     {

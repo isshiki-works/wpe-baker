@@ -58,6 +58,40 @@ public class EffectPrefixEligibilityTests
         await Task.CompletedTask;
     });
 
+    // 别的脚本按名字取得到这张背景、观测里却没碰过它（取层在计时分支里，短观测没跑到）：完整捕获才会冒出这条依赖，
+    // 烘焙时这一层的前缀就作废（#238 本机全集 3019976352、2931199278）。分析期就不提；观测里碰过、控制器可证的照常提。
+    [Fact]
+    public async Task UnobservedScriptLookupKeepsTheLayerOutOfThePrefix() => await TestTemp.Run(async dir =>
+    {
+        var (scene, runtime) = Background(dir);
+        scene["objects"]![0]!["name"] = "background";
+        scene["objects"]!.AsArray().Add(JsonNode.Parse("""
+            {"id":2,"name":"controller","origin":{"value":"0 0 0",
+             "script":"export function update(value) { if (engine.runtime > 30) thisScene.getLayer('background').visible = false; return value; }"}}
+            """));
+        using var source = new ProjectSource(dir);
+        var request = new HybridAnalyzeRequest(1, dir, dir, dir, 64, 48, 30, 1);
+        Assert.Empty(EffectPrefixPlanner.Propose(scene, source, dir, runtime, new JsonObject(), request, new JsonObject()));
+        runtime["runtime_dependencies"]!.AsArray().Add(new JsonObject { ["owner"] = 2, ["target"] = 1, ["operation"] = "lookup",
+            ["property"] = "", ["initialization"] = false });
+        Assert.Single(EffectPrefixPlanner.Propose(scene, source, dir, runtime, new JsonObject(), request, new JsonObject()).OfType<JsonObject>());
+        await Task.CompletedTask;
+    });
+
+    // 烘焙时完整捕获推翻了某层的前缀：只记这一层的拒绝（带上完整捕获里新出现、涉及这一层的依赖），不抛异常让整张失败。
+    [Fact]
+    public void LateDependencyRejectionListsOnlyTheNewEdgesOfThatLayer()
+    {
+        JsonObject Edge(int owner, int target, bool initialization) => new() { ["owner"] = owner, ["target"] = target,
+            ["operation"] = "write", ["property"] = "visible", ["initialization"] = initialization };
+        var analyzed = new JsonObject { ["runtime_dependencies"] = new JsonArray(Edge(2, 25, true)) };
+        var full = new JsonObject { ["runtime_dependencies"] = new JsonArray(Edge(2, 25, true), Edge(2, 25, false), Edge(3, 4, false)) };
+        JsonObject group = EffectPrefixBakeService.LateDependencyRejection(25, 90, new JsonObject(), full, analyzed);
+        Assert.Equal("rejected_late_dependency", group["status"]!.GetValue<string>());
+        JsonObject late = Assert.Single(group["late_dependencies"]!.AsArray().OfType<JsonObject>());
+        Assert.False(late["initialization"]!.GetValue<bool>());
+    }
+
     // 交互关（成品就是 WPE 里鼠标不动、没有声音时的画面）：读指针的效果与音频效果一样从场景里去掉，不再把整张背景剔除。
     // 交互保留时读指针的效果不在可去掉之列（它不是音频效果）。
     [Fact]
