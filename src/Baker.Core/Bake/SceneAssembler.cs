@@ -93,8 +93,13 @@ internal static class SceneAssembler
             if (omitted.Contains(id)) throw new Blocker(BlockerCode.OmittedSnapshotDependency).ToException();
             if (Int(original["parent"]) is int parent && originalObjects.ContainsKey(parent)) Emit(parent);
             var obj = original.DeepClone().AsObject();
+            // 非实时父层下有挂在它骨骼上（attachment）的实时子层：保留木偶只当骨骼载体，alpha 设 0 不出像素（像素已在视频里）。
+            // 官方 WPE 实测：父层 alpha 不传给挂点子层，alpha 0 的木偶照常推进骨骼动画；visible 会传给子层，不能用。
+            bool carrier = !liveIds.Contains(id) && originalObjects.Any(pair => Int(pair.Value["parent"]) == id &&
+                pair.Value.ContainsKey("attachment") && liveIds.Contains(pair.Key));
             if (!liveIds.Contains(id))
-                foreach (string key in NonLiveDrawKeys) obj.Remove(key);
+                foreach (string key in NonLiveDrawKeys.Where(key => !carrier || key is not ("image" or "puppet"))) obj.Remove(key);
+            if (carrier) obj["alpha"] = 0;
             finalObjects.Add(obj);
         }
         // 不绘制但带脚本的根对象按源顺序放在最前：保证它们的 init 先于保留的实时脚本执行。
