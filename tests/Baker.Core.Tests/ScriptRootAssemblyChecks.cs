@@ -85,6 +85,35 @@ internal static class ScriptRootAssemblyChecks
         check(Ids(parented).SequenceEqual(new[] { 100, 31, 32 }),
             "a script root that already parents a live layer keeps its source position behind the video");
 
+        // ---- 光源连同父级链保留在合成之后：父级下挂着实时层也不打乱绘制顺序；光源先后被打乱时拒绝 ----
+        var video = new Dictionary<string, JsonObject> { ["group-1"] = new JsonObject { ["id"] = 100, ["image"] = "wpe_baker_video/group-1.json" } };
+        JsonObject LightPlan(JsonArray layers, params int[] live) => new()
+        {
+            ["layers"] = layers, ["live_layer_ids"] = new JsonArray(live.Select(id => (JsonNode)id).ToArray()),
+            ["omitted_snapshot_layer_ids"] = new JsonArray(),
+            ["video_groups"] = new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(40) }),
+            ["composition"] = new JsonArray(new JsonObject { ["video_group"] = "group-1" }, new JsonObject { ["live_root"] = 42 })
+        };
+        JsonArray lit = Assemble(new JsonArray(
+                new JsonObject { ["id"] = 40, ["image"] = "materials/background.json" },
+                new JsonObject { ["id"] = 41, ["image"] = "materials/frame.json" },
+                new JsonObject { ["id"] = 42, ["parent"] = 41, ["text"] = new JsonObject { ["value"] = "live" } },
+                new JsonObject { ["id"] = 43, ["parent"] = 41, ["light"] = "point" }),
+            LightPlan(new JsonArray(Layer(40, "video", true), Layer(41, "inactive", false), Layer(42, "live", true, 41), Layer(43, "live", false, 41)), 42, 43), video);
+        check(Ids(lit).SequenceEqual(new[] { 100, 41, 42, 43 }), "a light keeps its parent chain and goes after the composition");
+        bool reordered = false;
+        try
+        {
+            Assemble(new JsonArray(
+                    new JsonObject { ["id"] = 40, ["image"] = "materials/background.json" },
+                    new JsonObject { ["id"] = 44, ["light"] = "point" },
+                    new JsonObject { ["id"] = 41, ["light"] = "point" },
+                    new JsonObject { ["id"] = 42, ["parent"] = 41, ["text"] = new JsonObject { ["value"] = "live" } }),
+                LightPlan(new JsonArray(Layer(40, "video", true), Layer(44, "live", false), Layer(41, "live", false), Layer(42, "live", true, 41)), 44, 41, 42), video);
+        }
+        catch (TargetInvocationException error) when (error.InnerException is InvalidDataException) { reordered = true; }
+        check(reordered, "assembly is rejected when the retained lights would change their source order");
+
         // ---- 脚本报错门 ----
         JsonObject Error(int owner, string name, string message) => new()
         {

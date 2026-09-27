@@ -100,9 +100,6 @@ internal static class SceneAssembler
         // 不绘制但带脚本的根对象按源顺序放在最前：保证它们的 init 先于保留的实时脚本执行。
         // 它们不绘制，不进 expected，不影响下面的视频/实时绘制顺序校验。
         foreach (int id in ScriptRootIds(originalObjects, plan)) Emit(id);
-        // 光源不绘制，却照亮开了 LIGHTING 的实时层；丢掉它，实时层在光源附近会变暗。原样保留，同样不进 expected。
-        foreach (var (id, obj) in originalObjects)
-            if (obj.ContainsKey("light") && !omitted.Contains(id)) Emit(id);
         foreach (var entry in plan["composition"]!.AsArray().OfType<JsonObject>())
         {
             if (entry["video_group"] is JsonValue groupName && replacements.TryGetValue(groupName.GetValue<string>(), out var replacement))
@@ -118,12 +115,17 @@ internal static class SceneAssembler
             }
             else if (Int(entry["live_root"]) is int unit)
                 foreach (int id in sourceDrawOrder)
-                    if (liveIds.Contains(id) && Int(layerInfo[id]["allocation_root"] ?? layerInfo[id]["root"]) == unit)
+                    if (liveIds.Contains(id) && !originalObjects[id].ContainsKey("light") &&
+                        Int(layerInfo[id]["allocation_root"] ?? layerInfo[id]["root"]) == unit)
                     {
                         Emit(id);
                         if (layerInfo[id]["drawable"]?.GetValue<bool>() == true) expected.Add(id);
                     }
         }
+        // 光源不绘制，却照亮开了 LIGHTING 的实时层；丢掉它，实时层在光源附近会变暗。连同父级链原样保留（世界变换不变），不进 expected。
+        // 放在合成之后：还没输出的父级落在末尾，底下没有已输出的绘制对象，不改绘制顺序。
+        foreach (var (id, obj) in originalObjects)
+            if (obj.ContainsKey("light") && !omitted.Contains(id)) Emit(id);
         foreach (var dependency in dependencies.OfType<JsonObject>())
             if (Int(dependency["owner"]) is int owner && liveIds.Contains(owner) &&
                 Int(dependency["target"]) is int target && originalObjects.ContainsKey(target)) Emit(target);
@@ -194,7 +196,9 @@ internal static class SceneAssembler
             var order = inPlace ? expected.Select(id => moved.GetValueOrDefault(id, id)).ToList() : expected.Where(id => !moved.ContainsKey(id)).ToList();
             if (KeepsDrawOrder(table, order)) (finalObjects, expected) = (table, order);
         }
-        if (!KeepsDrawOrder(finalObjects, expected))
+        // 引擎按对象表顺序取前 4 个光源，保留的光源先后要与原作相同。
+        var lights = originalObjects.Keys.Where(id => originalObjects[id].ContainsKey("light") && emitted.Contains(id)).ToList();
+        if (!KeepsDrawOrder(finalObjects, expected) || !finalObjects.OfType<JsonObject>().Select(Id).Where(lights.Contains).SequenceEqual(lights))
             throw new Blocker(BlockerCode.HierarchyChangesDrawOrder).ToException();
         GuardPublicLayerQueries(originalObjects.Values, finalObjects.OfType<JsonObject>(), dependencies);
         return finalObjects;
