@@ -232,7 +232,7 @@ internal sealed record NeverRepeatsUnresolved(int OwnerLayerId, double CeilingSe
 internal sealed record ScriptTimeUnresolved(int OwnerLayerId, string Binding, bool Proof, string Code, string Detail) : LoopUnresolved
 {
     public override string Kind => Proof ? nameof(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism) : "script_time";
-    public override Message DetailMessage => new("unresolved.script_time");
+    public override Message DetailMessage => new(Proof && ResidualMasking.LiveInput(Code) ? ResidualMasking.LiveInputReasonKey : "unresolved.script_time");
     public override JsonObject ToJson() => new() {
         ["kind"] = Kind, ["owner_layer_id"] = OwnerLayerId, ["binding"] = Binding, ["mechanism"] = Code, ["detail"] = Detail };
 }

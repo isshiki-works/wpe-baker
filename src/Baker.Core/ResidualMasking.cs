@@ -503,8 +503,13 @@ public static class ResidualMasking
 
     /// <summary>理由键：分量在循环上限内不会重复（调速也够不着），结论"不能"。</summary>
     public const string NeverRepeatsReasonKey = "reason.loop_never_repeats_within_limit";
+    /// <summary>理由键：分量由外部实时输入（鼠标、音频、时钟）驱动，结论"不能"；与"上限内不重复"分开说。</summary>
+    public const string LiveInputReasonKey = "reason.loop_driven_by_live_input";
     /// <summary>理由键：分析没推下去（未收敛）；具体原因码留在 mechanism 里给调试用。</summary>
     public const string NotSupportedReasonKey = "reason.effect_not_yet_supported";
+
+    /// <summary>这条"不能"的证明是读外部输入：脚本时间签名 / 粒子 C7 的 script_reads_external_input，或实时判定的输入类原因。</summary>
+    internal static bool LiveInput(string? code) => code == "script_reads_external_input" || Liveness.InputReasons.Contains(code);
 
     /// <summary>
     /// 带具名机制的 NonPeriodicOrDriftingMechanism 附有方程证明（上限内没有周期，允许的调速也够不着），结论是"不能"，不是"证不出"。
@@ -518,7 +523,7 @@ public static class ResidualMasking
             return verdict;
         }
         verdict["loop_convergence"] = "cannot";
-        verdict["reason_key"] = NeverRepeatsReasonKey;
+        verdict["reason_key"] = LiveInput(mechanism) ? LiveInputReasonKey : NeverRepeatsReasonKey;
         return verdict;
     }
 
@@ -558,7 +563,7 @@ public static class ResidualMasking
             if (Text(stationarity["loop_convergence"]) == "cannot")
             {
                 verdict["loop_convergence"] = "cannot";
-                verdict["reason_key"] = NeverRepeatsReasonKey;
+                verdict["reason_key"] = Text(stationarity["reason_key"]) is { Length: > 0 } key ? key : NeverRepeatsReasonKey;
             }
             return verdict;
         }

@@ -701,6 +701,10 @@ public static class MessageCatalog
         ["reason.loop_never_repeats_within_limit"] = new(
             Zh: "动画在 {0} 分钟内不会重复，无法生成循环视频。",
             En: "The animation does not repeat within {0} minutes, so a looping video cannot be made."),
+        // 待定文案（C-VERDICT）：先用占位句，维护者定稿后替换。
+        ["reason.loop_driven_by_live_input"] = new(
+            Zh: "部分动画由实时输入（如鼠标、音频、时钟）驱动，无法生成循环视频。",
+            En: "Some animation is driven by live input such as the mouse, audio or the clock, so a looping video cannot be made."),
         ["reason.effect_not_yet_supported"] = new(
             Zh: "暂不支持此壁纸中的部分动态效果。",
             En: "Some animated effects in this wallpaper are not supported yet."),
@@ -1124,6 +1128,8 @@ public static class MessageCatalog
         ["progress.checking_hardware_decode"] = new(
             Zh: "正在检查硬件解码…",
             En: "Checking hardware decode…"),
+        // 待定文案（C-VERDICT）：先用占位句，维护者定稿后替换。
+        ["progress.trying_grouping"] = new(Zh: "正在尝试第 {0} 种分组…", En: "Trying grouping {0}…"),
         ["progress.retaining_nonlooping_layers"] = new(
             Zh: "保留无法循环的特效和粒子后重新检查…",
             En: "Keeping non-looping effects and particles live, then checking again…"),

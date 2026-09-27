@@ -110,7 +110,8 @@ internal static class ParticleStationarity
             if (Failures.Any(failure => failure.Cannot))
             {
                 json["loop_convergence"] = "cannot";
-                json["reason_key"] = ResidualMasking.NeverRepeatsReasonKey;
+                json["reason_key"] = Failures.Where(failure => failure.Cannot).All(failure => ResidualMasking.LiveInput(failure.Code))
+                    ? ResidualMasking.LiveInputReasonKey : ResidualMasking.NeverRepeatsReasonKey;
             }
             return json;
         }

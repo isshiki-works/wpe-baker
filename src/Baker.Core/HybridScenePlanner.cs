@@ -88,7 +88,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         {
             JsonObject input = scene();
             // 缓存两段：plan 形态的 loop + unresolved 各条的文案与点名图层（UnresolvedNotes.Pack）。格式变了就换前缀，旧缓存不再命中。
-            string key = "loop-v9-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
+            string key = "loop-v10-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, projection, videoGroups,
                 request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, profile, request.LoopPreference,
                 request.FullLoopLayerIds);
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
@@ -155,7 +155,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     /// <summary>门面：交给 <see cref="AnalysisOrchestrator"/> 在搜索空间里编排单次分析；<paramref name="states"/> 给了才逐状态导出子 plan。</summary>
     public async Task<JsonObject> AnalyzeAsync(HybridAnalyzeRequest request, IProgress<RenderProgress>? progress = null,
         CancellationToken cancellationToken = default, StateExport? states = null) =>
-        await AnalysisOrchestrator.RunAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, progress, token), cancellationToken, tools, states);
+        await AnalysisOrchestrator.RunAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, progress, token), cancellationToken, tools, states,
+            progress: progress);
 
     /// <summary>
     /// 单次分析的编排：观测 → 实时判定 → 分配 → 构图 → 初判（<see cref="Verdict"/>）→ 循环与特效前缀 → 组 plan（<see cref="PlanWriter"/>）

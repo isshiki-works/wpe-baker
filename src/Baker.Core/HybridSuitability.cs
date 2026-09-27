@@ -152,21 +152,27 @@ internal static class HybridSuitability
 
         // 既没候选也没可判定的规则：未解析项里有证明（具名的 NonPeriodicOrDriftingMechanism，与 ResidualMasking 同一口径）就是"不能"，
         // 其余是分析没推下去，记未收敛（reason.effect_not_yet_supported），不冒充壁纸不行。
-        bool proven = (loop?["unresolved"] as JsonArray ?? []).OfType<JsonObject>().Any(item =>
-            Text(item["kind"]) == nameof(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism) && Text(item["mechanism"]) is { Length: > 0 });
-        return Converged(plan, Build("not_suitable", "loop_not_established", "", "", notes), unsupportedOtherwise: true, proven);
+        string?[] proofs = [.. (loop?["unresolved"] as JsonArray ?? []).OfType<JsonObject>().Where(item =>
+            Text(item["kind"]) == nameof(ShaderTemporalUnresolvedKind.NonPeriodicOrDriftingMechanism) && Text(item["mechanism"]) is { Length: > 0 })
+            .Select(item => Text(item["mechanism"]))];
+        return Converged(plan, Build("not_suitable", "loop_not_established", "", "", notes), unsupportedOtherwise: true, proofs.Length > 0,
+            liveInput: proofs.Length > 0 && proofs.All(ResidualMasking.LiveInput));
     }
 
     /// <summary>
     /// 给不出循环的几条规则：不可掩盖分量全都已被证明上限内不会重复时（<see cref="ResidualMasking"/> 标了 loop_convergence=cannot），
-    /// 或调用方已从未解析项里拿到证明（proven），结论是"不能"，理由写循环上限；unsupportedOtherwise 的规则在其余情况下是分析没推下去（未收敛）。规则名不动。
+    /// 或调用方已从未解析项里拿到证明（proven），结论是"不能"，理由写循环上限；证明全都是读外部输入的（分量的 reason_key、或调用方给的 liveInput）
+    /// 改说"由实时输入驱动"。unsupportedOtherwise 的规则在其余情况下是分析没推下去（未收敛）。规则名不动。
     /// </summary>
-    private static JsonObject Converged(JsonObject plan, JsonObject built, bool unsupportedOtherwise = false, bool proven = false)
+    private static JsonObject Converged(JsonObject plan, JsonObject built, bool unsupportedOtherwise = false, bool proven = false, bool liveInput = false)
     {
-        bool cannot = proven || plan["loop"]?["residual_masking"]?["blocking_components"] is JsonArray { Count: > 0 } blocking &&
-            blocking.OfType<JsonObject>().All(component => Text(component["loop_convergence"]) == "cannot");
+        JsonObject[] blocking = (plan["loop"]?["residual_masking"]?["blocking_components"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
+        bool blockingCannot = blocking.Length > 0 && blocking.All(component => Text(component["loop_convergence"]) == "cannot");
+        bool cannot = proven || blockingCannot;
         if (!cannot && !unsupportedOtherwise) return built;
-        string key = cannot ? ResidualMasking.NeverRepeatsReasonKey : ResidualMasking.NotSupportedReasonKey;
+        if (!proven && blockingCannot) liveInput = blocking.All(component => Text(component["reason_key"]) == ResidualMasking.LiveInputReasonKey);
+        string key = !cannot ? ResidualMasking.NotSupportedReasonKey
+            : liveInput ? ResidualMasking.LiveInputReasonKey : ResidualMasking.NeverRepeatsReasonKey;
         double minutes = Number(plan["loop"]?["maximum_seconds"]) / 60;
         if (cannot) built["loop_convergence"] = "cannot";
         // 结论与界面第二行读这个键的理由，不读第一条阻断（如 blocker.bake_allocation 的"部分内容必须实时渲染"）。
