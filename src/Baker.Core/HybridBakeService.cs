@@ -374,7 +374,7 @@ public sealed class HybridBakeService(NativeTools tools)
             captureSettings["device_uuid"] = request.DeviceUuid;
         }
         using var source = new ProjectSource(plan["source"]!.GetValue<string>());
-        string sourceHash = await source.SourceHashAsync(cancellationToken);
+        string sourceHash = await source.SourceHashAsync(cancellationToken, reuse: probe);
         if (sourceHash != plan["source_sha256"]!.GetValue<string>()) throw new InvalidDataException("Source changed; analyze it again.");
         var layout = new WorkLayout(request.OutputDirectory);
         string output = layout.Output;
@@ -482,9 +482,11 @@ public sealed class HybridBakeService(NativeTools tools)
                 .Select(layer => SceneGraph.Int(layer["owner"])).OfType<int>().ToHashSet();
             finalDependencies = SceneAssembler.MergeRuntimeDependencies(runtimeDependencies, new JsonArray());
             snapshot = plan["snapshot_properties"]!.DeepClone().AsObject();
-            await CaptureSourceBuilder.PrepareAsync(captureProject, source, original, metadata, snapshot, plan, settings, probe,
-                report, timing, token);
-            using (timing.Measure(StageTiming.SourceCapture)) await source.ExtractAsync(project, token);
+            // 捕获副本与成品底稿两份解包同时做；底稿之后还要发布到目标目录时它也是中间产物，大文件同样硬链接。
+            using (timing.Measure(StageTiming.SourceCapture))
+                await Task.WhenAll(
+                    CaptureSourceBuilder.PrepareAsync(captureProject, source, original, metadata, snapshot, plan, settings, probe, report, token),
+                    source.ExtractAsync(project, token, link: probe || destination is not null));
             (crossfadeFrames, warmupFrames, introFrames, residualGroupIndexes) = GroupTiming(plan, settings, residualMasking, initialRuntime, daytimeExport is not null);
             if (residualMasking is not null)
             {
@@ -681,7 +683,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 // 选定起点被拒即停止；记录本次各组的残差，不启动整案重渲。
                                 GroupVerdicts.RejectResidual(report, id, layers, lateDependencyValidation, wrap, residualPreview, startAttempts,
                                     startSearch?["candidate_count"]?.GetValue<int>() ?? startOrder.Length, crossfadeFrames);
-                                if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
+                                if (sourceHash != await source.SourceHashAsync(cancellationToken, reuse: probe)) throw new IOException("Source changed during generation.");
                                 await Save();
                                 return report;
                             }
@@ -715,7 +717,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                 EmbeddedVideoBudgetJson.QualityRejection(id, master["size_budget"]!["unconstrained_bytes"]!.GetValue<double>(), groupFrames,
                                     settings.FpsNumerator, settings.FpsDenominator, sizeGate!["measured_ssim"]?.GetValue<double>(),
                                     sizeGate["threshold"]!.GetValue<double>(), master["size_budget"]!["quantizer_offset"]!.GetValue<int>()));
-                            if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
+                            if (sourceHash != await source.SourceHashAsync(cancellationToken, reuse: probe)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
                         }
@@ -756,7 +758,7 @@ public sealed class HybridBakeService(NativeTools tools)
                                     report[NoBenefit.Field] = new JsonObject { [NoBenefit.RetreatRootsField] =
                                         JsonSerializer.SerializeToNode<int[]>([.. kept.Union(slow.Value.Owners)]) };
                             }
-                            if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
+                            if (sourceHash != await source.SourceHashAsync(cancellationToken, reuse: probe)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
                         }
@@ -855,7 +857,9 @@ public sealed class HybridBakeService(NativeTools tools)
                     }
                     await ProjectWriter.WriteAsync(project, source.SceneResource, scene, metadata, daytimeExport, cancellationToken);
                 }
-                if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during generation.");
+                // 烘焙结束时完整重哈希一次源树（中间各步只比了长度与 mtime），计入"整理输出"。
+                using (timing.Measure(StageTiming.ProjectAssembly))
+                    if (sourceHash != await source.SourceHashAsync(cancellationToken, reuse: probe)) throw new IOException("Source changed during generation.");
                 JsonObject[] encodedGroups = report["groups"]!.AsArray().OfType<JsonObject>()
                     .Where(g => g["status"]?.GetValue<string>() == "encoded").ToArray();
                 bool seamsPass = !probe && encodedGroups.All(g =>

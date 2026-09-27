@@ -122,6 +122,16 @@ public class OutputFrameRateTests
 }
 
 [Trait("Layer", "L1")]
+public class BakeOverheadTests
+{
+    [Fact]
+    public async Task Run()
+    {
+        await TestTemp.Run(dir => BakeOverheadChecks.RunAsync(Assert.True, dir));
+    }
+}
+
+[Trait("Layer", "L1")]
 public class StageTimingTests
 {
     [Fact]
