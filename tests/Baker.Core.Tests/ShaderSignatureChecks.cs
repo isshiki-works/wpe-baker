@@ -11,7 +11,7 @@ internal static class ShaderSignatureChecks
         {
             File.WriteAllText(Path.Combine(root, "scene.json"), """{"objects":[{"id":10}]}""");
             Directory.CreateDirectory(Path.Combine(root, "shaders", "effects"));
-            File.WriteAllText(Path.Combine(root, "shaders", "effects", "x.frag"), "void main() { gl_FragColor = vec4(sin(g_Time * 0.5)); }");
+            File.WriteAllText(Path.Combine(root, "shaders", "effects", "x.frag"), "void main() { gl_FragColor = vec4(sin(g_Time * 0.5), sin(g_Time * 0.25), 0.0, 1.0); }");
             using var source = new ProjectSource(root);
             foreach (string reason in (string[])["analysis_not_converged:op199 @fragment", "analysis_not_converged @fragment", "unsupported_side_effect",
                 "names_stripped", "spirv_unreadable", "time_rate_not_constant @fragment", "scroll_rate_not_constant:s @fragment",
@@ -96,6 +96,20 @@ internal static class ShaderSignatureChecks
                 IrisLoop(iris.Replace("gl_Position = vec4(d", "gl_Position = vec4(d + sin(clock)"))["unresolved"]!.AsArray()
                     .Select(x => x!["mechanism"]!.GetValue<string>()).SequenceEqual(["term_not_retimable"]),
                 "a call knob rewrites only when the source has exactly the call sites the engine counted");
+
+            // 振幅推不出的慢项（90.1 s，旋钮 0.25）：逐项预算（这里 0%）内与 7.1 s 项凑不出循环时，整层路线（有视频组）放开它的改速、
+            // 证据带实测标记留给分析收尾实测；特效前缀路线（没有视频组）不放开，照旧无解
+            LoopReport Measured(JsonArray? groups) => LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
+                  {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
+                  {"seconds":90.1,"num":901,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.25,"inverse":false}]}]}
+                """), [10], 30, 1, 0, videoGroups: groups);
+            LoopReport whole = Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }));
+            const string slowTerm = "shader/10/0/0/effects/x/periodica_k_frag_3e800000";
+            check(whole.Candidates.Count > 0 && Math.Abs(whole.Candidates[0].Components.Single(x => x.ComponentId == slowTerm).DeltaPercent) > 0 &&
+                whole.Evidence.Single(x => x.Component.Id == slowTerm).Evidence.EndsWith(ShaderPeriodAnalysis.MeasuredNote, StringComparison.Ordinal),
+                "a slow term without a provable amplitude is retimed beyond the budget on the whole-layer route, pending a rendered speed check");
+            check(Measured(null).Candidates.Count == 0, "the effect-prefix route never retimes a slow term beyond the budget");
 
             // 同一 pass 剩 7 s 与 3π s 两类且没有旋钮：每项独立调频有解（上限 600 s）记未收敛 term_not_retimable；
             // 上限 10 s 时独立调频也无解，才是"不能"

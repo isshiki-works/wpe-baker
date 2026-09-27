@@ -62,6 +62,14 @@ public static class ShaderPeriodAnalysis
     // 时间签名只认 g_Time；用到这些时钟的材质不裁定，交给运行时材质检查报未建模时钟
     private static readonly string[] AlternateClocks = ["g_Runtime", "g_Frametime", "g_DeltaTime"];
 
+    /// <summary>
+    /// 振幅推不出的慢项（原周期 ≥ 60 s、不是慢分量、有可用旋钮）在求解器里的调速上限：实际等于不设限（取离原速最近的圈数），
+    /// 看不看得出由分析收尾实测（<see cref="SlowClosureProbe.SpeedAsync"/>）；只在整层路线、逐项预算内无解时启用（见 LoopAnalysis）。
+    /// </summary>
+    internal const double MeasuredRetimePercent = 1e4;
+    /// <summary>这类项在 loop.evidence 里的证据后缀；实测按它认项，不按 id 猜。</summary>
+    internal const string MeasuredNote = "; retimed beyond the budget only after a rendered speed check";
+
     public static ShaderPeriodAnalysisResult Analyze(JsonObject scene, ProjectSource source, string? assetsDirectory,
         JsonObject runtime, IReadOnlyCollection<int> selectedLayerIds, double ceilingSeconds, double maximumRetimePercent)
     {
@@ -158,10 +166,11 @@ public static class ShaderPeriodAnalysis
                     Knobs(term).Select(k => SwayAmplitude(obj, objects, edge, effect, pass, k)).FirstOrDefault(x => x > 0) is double a
                         ? (a, Math.Max(maximumRetimePercent, 100 * SwayRecurrenceSolver.MaximumSlowSpeedDeviationPixelsPerSecond * seconds / (2 * Math.PI * a)))
                         : null;
-                ShaderPeriodComponent Through(string key, double seconds, bool inverse, (double Amplitude, double Percent)? cap = null) =>
-                    new(new CommonLoopComponent($"{id}/{key}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true, cap?.Percent),
+                ShaderPeriodComponent Through(string key, double seconds, bool inverse, (double Amplitude, double Percent)? cap = null, bool measured = false) =>
+                    new(new CommonLoopComponent($"{id}/{key}", new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true,
+                        measured ? MeasuredRetimePercent : cap?.Percent),
                     owner, effect, pass, key, inverse, $"SPIR-V time signature of {resource}: period {seconds.ToString("R", CultureInfo.InvariantCulture)} s through {key}" +
-                    (cap is var (amplitude, percent) ? $"; sway amplitude {amplitude:0.###} px at 1080p, slow-term speed limit allows {percent:0.##}%" : ""));
+                    (cap is var (amplitude, percent) ? $"; sway amplitude {amplitude:0.###} px at 1080p, slow-term speed limit allows {percent:0.##}%" : measured ? MeasuredNote : ""));
                 foreach (var (term, index) in terms.Select((term, index) => (term, index)))
                 {
                     double seconds = term["seconds"]!.GetValue<double>();
@@ -177,7 +186,9 @@ public static class ShaderPeriodAnalysis
                     // 旋钮只能挂在作者效果 pass 上（场景里有这个 pass 的 constantshadervalues）
                     if (effect >= 0 && Knobs(term).FirstOrDefault(Usable) is JsonObject knob)
                     {
-                        knobbed.Add(Through(ShaderTextPatch.KnobKey(knob), seconds, knob["inverse"]?.GetValue<bool>() == true, cap));
+                        // 振幅推不出的慢项：超预算的改速先挂上，放不放行看实测（MeasuredRetimePercent）；最宽松模型的"不能"证明不带它
+                        knobbed.Add(Through(ShaderTextPatch.KnobKey(knob), seconds, knob["inverse"]?.GetValue<bool>() == true, cap,
+                            measured: cap is null && seconds >= SwayRecurrenceSolver.VisiblePeriodSeconds));
                         loose.Add((relaxed, null));
                         continue;
                     }

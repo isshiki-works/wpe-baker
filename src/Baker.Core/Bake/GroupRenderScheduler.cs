@@ -152,6 +152,16 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
             EncodedFrames = null, RetainFrames = [0], TraceScene = false };
     }
 
+    /// <summary>
+    /// 慢项改速实测（<see cref="SlowClosureProbe.SpeedAsync"/>）：同一个闭合预检请求，只渲 <paramref name="layers"/>（所有者层），
+    /// 不带预热地从时间 0 起跑 <paramref name="frame"/> 帧，出的就是第 frame 帧；两版第 0 帧因此是同一状态。
+    /// </summary>
+    internal RenderRequest SpeedProbeRequest(int index, string outputDirectory, ulong frame, int[] layers)
+    {
+        RenderRequest probe = ClosureProbeRequest(index, outputDirectory, 0);
+        return probe with { WarmupFrames = frame, LayerSelection = probe.LayerSelection! with { IncludeLayers = layers } };
+    }
+
     /// <summary>取这个组的主渲染（没启动就现在启动），并把在飞的主渲染补到 groupParallel 个。</summary>
     internal Task<JsonObject> RenderAsync(int index)
     {

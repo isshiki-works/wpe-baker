@@ -79,9 +79,26 @@ internal sealed class AnalysisOrchestrator
         }
         // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
         // 读数（漂移上界、闭合读数、渲染器墙钟）写进 plan 的 slow_closure_probe。闭合的照常判能，烘焙时接缝门照常复核。
+        // 振幅推不出的慢项超预算改速先实测速度差（SlowClosureProbe.SpeedAsync）：看得出或量不到就把所有者层留实时、整套再分析；
+        // 读数写进 plan 的 slow_speed_probe。放行的改速照常过闭合预检与烘焙接缝门，阈值不动。
         var slowProbes = new JsonArray();
+        var speedProbes = new JsonArray();
         while (Admission.Accepted(result) && tools is not null && request.RuntimeTraceFile is null)
         {
+            if (await SlowClosureProbe.SpeedAsync(result, tools, Path.Combine(run, $"slow-speed-{speedProbes.Count}"), token) is JsonObject speed)
+            {
+                speedProbes.Add(speed);
+                int[] kept = [.. (result["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()];
+                int[] visible = [.. speed["owner_layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>().Except(kept)];
+                if (speed["status"]!.GetValue<string>() != "passed" && visible.Length > 0)
+                {
+                    orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. kept, .. visible],
+                        RetainLiveReasons = HybridLoopAllocation.RetainReasons(result, []) }, analyze, space,
+                        space.Budget(), tools, Path.Combine(run, $"slow-speed-live-{speedProbes.Count}"), cache, token);
+                    result = await orchestrator.SelectAsync();
+                    continue;
+                }
+            }
             JsonArray round = await SlowClosureProbe.RunAsync(result, tools, Path.Combine(run, $"slow-closure-{slowProbes.Count}"), token);
             // 从选中方案实际留实时的层接着加（分配回退、逐组退回点名的层都在里面），不从请求的空集重来。
             int[] retained = [.. (result["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()];
@@ -95,6 +112,7 @@ internal sealed class AnalysisOrchestrator
             result = await orchestrator.SelectAsync();
         }
         if (slowProbes.Count > 0) result["slow_closure_probe"] = slowProbes;
+        if (speedProbes.Count > 0) result["slow_speed_probe"] = speedProbes;
         // 留实时后生成不了：裁定与结论按预检读数重算（HybridSuitability 判有证明的不能）。
         if (slowProbes.Count > 0 && !Admission.Accepted(result))
         {
