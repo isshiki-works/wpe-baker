@@ -9,7 +9,7 @@ namespace Baker.Core;
 /// 探测过的全部留档，由 HybridScenePlanner 写进 plan 的 effect_prefix_capture_probes。
 /// </summary>
 internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeRequest request, ProjectSource source, JsonObject scene,
-    JsonObject properties, string output)
+    JsonObject properties, string output, AnalysisMemo? memo = null)
 {
     private readonly Dictionary<string, JsonObject> probes = new(StringComparer.Ordinal);
 
@@ -28,35 +28,39 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
         string persistentKey = "capture-" + AnalysisCache.Key(source.SourcePath, properties, request.Assets, tools,
             File.Exists(tools.Renderer) ? File.GetLastWriteTimeUtc(tools.Renderer).Ticks : 0,
             request.FpsNumerator, request.FpsDenominator, request.DeviceUuid, key);
-        if (AnalysisCache.Read(request.AnalysisCacheDirectory, persistentKey) is JsonObject cachedProbe)
-            return probes[key] = cachedProbe;
-        string? name = EffectPrefixCaptureTarget.LayerName(scene, owner);
-        string probeOutput = Path.Combine(output, $"effect-prefix-capture-probe-{owner}-{terminal}" + (forceVisibleOwner ? "-visible" : ""));
-        JsonObject observed = new(), verdict;
-        try
+        // 同一次 analyze 里探到的捕获点记下来（退回并行时同一个键也只起一个渲染器）；探测失败的不记，与磁盘缓存同一口径，下次照常重探。
+        return probes[key] = memo is null ? await ProbeAsync() : await memo.JsonAsync(persistentKey, ProbeAsync,
+            verdict => verdict["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.ProbeFailedStatus);
+        async Task<JsonObject> ProbeAsync()
         {
-            // 与 bake 的元数据探测同一个捕获选择：原始源、快照属性、1 帧，只看渲染器实际从哪个目标取帧。
-            var raw = await new NativeRenderRunner(tools).RenderRawAsync(new(source.SourcePath, request.Assets, probeOutput, 64, 64,
-                request.FpsNumerator, request.FpsDenominator, 1, Seed: 17,
-                CaptureTarget: new RenderCaptureSelection(owner, terminal, EffectTerminal: true, ExactExtent: false,
-                    ForceVisibleOwner: forceVisibleOwner ? true : null),
-                UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true), cancellationToken);
-            observed = raw["native_result"]!.AsObject();
-            verdict = EffectPrefixCaptureTarget.Evaluate(observed, owner, terminal, name);
+            if (AnalysisCache.Read(request.AnalysisCacheDirectory, persistentKey) is JsonObject cachedProbe) return cachedProbe;
+            string? name = EffectPrefixCaptureTarget.LayerName(scene, owner);
+            string probeOutput = Path.Combine(output, $"effect-prefix-capture-probe-{owner}-{terminal}" + (forceVisibleOwner ? "-visible" : ""));
+            JsonObject observed = new(), verdict;
+            try
+            {
+                // 与 bake 的元数据探测同一个捕获选择：原始源、快照属性、1 帧，只看渲染器实际从哪个目标取帧。
+                var raw = await new NativeRenderRunner(tools).RenderRawAsync(new(source.SourcePath, request.Assets, probeOutput, 64, 64,
+                    request.FpsNumerator, request.FpsDenominator, 1, Seed: 17,
+                    CaptureTarget: new RenderCaptureSelection(owner, terminal, EffectTerminal: true, ExactExtent: false,
+                        ForceVisibleOwner: forceVisibleOwner ? true : null),
+                    UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true), cancellationToken);
+                observed = raw["native_result"]!.AsObject();
+                verdict = EffectPrefixCaptureTarget.Evaluate(observed, owner, terminal, name);
+            }
+            catch (Exception error) when (error is IOException or InvalidDataException)
+            {
+                verdict = EffectPrefixCaptureTarget.ProbeFailed(owner, terminal, name, error.Message);
+            }
+            finally
+            {
+                TemporaryCaptureFiles.Delete(observed, probeOutput, "native/frames.rgba", "native/frames.rgba.partial",
+                    "native/audio.f32le", "native/audio.f32le.partial");
+            }
+            verdict["probe_output"] = probeOutput;
+            if (verdict["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.ProbeFailedStatus)
+                AnalysisCache.Write(request.AnalysisCacheDirectory, persistentKey, verdict);
+            return verdict;
         }
-        catch (Exception error) when (error is IOException or InvalidDataException)
-        {
-            verdict = EffectPrefixCaptureTarget.ProbeFailed(owner, terminal, name, error.Message);
-        }
-        finally
-        {
-            TemporaryCaptureFiles.Delete(observed, probeOutput, "native/frames.rgba", "native/frames.rgba.partial",
-                "native/audio.f32le", "native/audio.f32le.partial");
-        }
-        verdict["probe_output"] = probeOutput;
-        probes[key] = verdict;
-        if (verdict["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.ProbeFailedStatus)
-            AnalysisCache.Write(request.AnalysisCacheDirectory, persistentKey, verdict);
-        return verdict;
     }
 }
