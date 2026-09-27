@@ -145,7 +145,15 @@ internal static class LoopAnalysis
         {
             // 脚本过 settle 才固定的静态画面：长度取刚过 settle 的帧数，预热一整段后起录
             ulong still = scriptSettle is { } late ? (ulong)Math.Floor(late.Seconds * fpsNumerator / fpsDenominator) + 1 : 1;
-            candidates.Add(new LoopCandidate(still, (double)still * fpsDenominator / fpsNumerator, 0d, [], []));
+            double stillSeconds = (double)still * fpsDenominator / fpsNumerator;
+            // 预热一整段也受循环上限约束：settle 晚于上限就放不进
+            if (stillSeconds <= ceiling.ToSeconds()) candidates.Add(new LoopCandidate(still, stillSeconds, 0d, [], []));
+            else
+            {
+                sourceStatic = false;
+                unresolved.Add(new ScriptTimeUnresolved(scriptSettle!.Value.Owner, scriptSettle.Value.Binding, false, "transient_settle_beyond_warmup",
+                    "the script settles by " + scriptSettle.Value.Seconds.ToString("R", CultureInfo.InvariantCulture) + " s, later than the loop ceiling"));
+            }
         }
         // 精灵分量按渲染器实际使用的 float32 帧表逐帧判定接缝（见 SpriteSeamPhase）。起点 0 闭合则候选不变；
         // 起点 0 不闭合但整周期预热后闭合，候选带上预热帧数；两者都不闭合，候选移除并写明理由。
@@ -508,11 +516,16 @@ internal static class LoopAnalysis
                 var exact = new CommonLoopRational(checked((long)frames * fpsDenominator), fpsNumerator);
                 components.Add(new(id, new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact)));
             }
-            else if (verdict.PeriodSeconds is double seconds)
+            else if (verdict.PeriodSeconds is double seconds && verdict.Retimable)
             {
-                components.Add(new(id, new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: verdict.Retimable));
-                if (verdict.Retimable) retimes.Add(new(id, "script_speed", binding.OwnerLayerId, -1, -1, binding.Pointer!, 0, null, 1, 1));
+                components.Add(new(id, new CommonLoopPeriod(seconds, CommonLoopPeriodEvidence.Analytic), AllowRetime: true));
+                retimes.Add(new(id, "script_speed", binding.OwnerLayerId, -1, -1, binding.Pointer!, 0, null, 1, 1));
             }
+            // 秒周期没有精确有理值，不调速就定不出帧对齐接缝：记在所有者名下，分配回退据此留实时
+            else if (verdict.PeriodSeconds is double fixedSeconds)
+                unresolved.Add(new ScriptTimeUnresolved(binding.OwnerLayerId, binding.Name, false, "script_period_not_retimable",
+                    "the script repeats every " + fixedSeconds.ToString("R", CultureInfo.InvariantCulture) +
+                    " s, but it reads engine.runtime indirectly or lives in a model material, so the capture cannot retime it"));
             else if (verdict.Outcome is ScriptTime.Outcome.Cannot or ScriptTime.Outcome.Unconverged)
                 unresolved.Add(new ScriptTimeUnresolved(binding.OwnerLayerId, binding.Name, verdict.Outcome == ScriptTime.Outcome.Cannot, verdict.Code, verdict.Detail));
         }

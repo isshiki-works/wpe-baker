@@ -110,6 +110,18 @@ internal static class ShaderSignatureChecks
                 early["shader_settle_seconds"]!.GetValue<double>() == 2 &&
                 Settled(1000)["unresolved"]!.AsArray().Select(x => $"{x!["kind"]}/{x["mechanism"]}").SequenceEqual(["UnsupportedShaderMechanism/transient_settle_beyond_warmup"]),
                 "a bounded-threshold branch warms up one whole period past its settle time, and stays not converged when no period is longer");
+
+            // 脚本：不能调速的秒周期、晚于上限才静止，都记在所有者名下（分配回退据此点名），不留零候选零理由
+            string[] Scripted(string script) => [.. LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 10,
+                ["origin"] = new JsonObject { ["value"] = "0 0 0", ["script"] = script } }) }, source, null, JsonNode.Parse("""
+                {"status":"complete","runtime_dependencies":[],"runtime_animation_periods":[],"runtime_layers":[{"owner":10,"has_mesh":false,
+                  "materials":[{"uses_audio_spectrum":false,"uses_system_media_thumbnail":false,"active_uniforms":[],"textures":[]}]}]}
+                """)!.AsObject(), [10], 30, 1,
+                loopLengthMaximumSeconds: 30).ToJson()["unresolved"]!.AsArray().Select(x => $"{x!["owner_layer_id"]}/{x["mechanism"]}")];
+            check(Scripted("const e = engine;\nexport function update(value) { value.y = Math.sin(e.runtime); return value; }")
+                .SequenceEqual(["10/script_period_not_retimable"]), "a script period read through an alias is unresolved under its owner");
+            check(Scripted("export function update(value) { value.y = Math.min(engine.runtime / 60, 1); return value; }")
+                .SequenceEqual(["10/transient_settle_beyond_warmup"]), "a script that settles after the loop ceiling is unresolved under its owner");
         }
         finally { Directory.Delete(root, true); }
     }
