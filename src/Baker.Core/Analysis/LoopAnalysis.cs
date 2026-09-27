@@ -157,18 +157,25 @@ internal static class LoopAnalysis
             sourceStatic = obstacles.Length == 0;
             unresolved.AddRange(obstacles);
         }
+        // 着色器（clamp 轴滚动停在边上、与线性时间比较的分支）与脚本的 settle 取较晚的一个
+        double settleSeconds = Math.Max(shader.Settle?.Seconds ?? 0, scriptSettle?.Seconds ?? 0);
         if (sourceStatic)
         {
-            // 脚本过 settle 才固定的静态画面：长度取刚过 settle 的帧数，预热一整段后起录
-            ulong still = scriptSettle is { } late ? (ulong)Math.Floor(late.Seconds * fpsNumerator / fpsDenominator) + 1 : 1;
+            // 过 settle 才固定的静态画面：长度取刚过 settle 的帧数，预热一整段后起录
+            ulong still = settleSeconds > 0 ? (ulong)Math.Floor(settleSeconds * fpsNumerator / fpsDenominator) + 1 : 1;
             double stillSeconds = (double)still * fpsDenominator / fpsNumerator;
             // 预热一整段也受循环上限约束：settle 晚于上限就放不进
             if (stillSeconds <= ceiling.ToSeconds()) candidates.Add(new LoopCandidate(still, stillSeconds, 0d, [], []));
             else
             {
                 sourceStatic = false;
-                unresolved.Add(new ScriptTimeUnresolved(scriptSettle!.Value.Owner, scriptSettle.Value.Binding, false, "transient_settle_beyond_warmup",
-                    "the script settles by " + scriptSettle.Value.Seconds.ToString("R", CultureInfo.InvariantCulture) + " s, later than the loop ceiling"));
+                if (shader.Settle is { } settle && settle.Seconds >= settleSeconds)
+                    unresolved.Add(new ShaderLoopUnresolved(new(settle.OwnerLayerId, settle.EffectIndex, settle.PassIndex, settle.Resource,
+                        ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: the shader settles by " +
+                        settle.Seconds.ToString("R", CultureInfo.InvariantCulture) + " s, later than the loop ceiling", "transient_settle_beyond_warmup")));
+                else
+                    unresolved.Add(new ScriptTimeUnresolved(scriptSettle!.Value.Owner, scriptSettle.Value.Binding, false, "transient_settle_beyond_warmup",
+                        "the script settles by " + scriptSettle.Value.Seconds.ToString("R", CultureInfo.InvariantCulture) + " s, later than the loop ceiling"));
             }
         }
         // 精灵分量按渲染器实际使用的 float32 帧表逐帧判定接缝（见 SpriteSeamPhase）。起点 0 闭合则候选不变；
@@ -238,14 +245,13 @@ internal static class LoopAnalysis
         // 着色器里与线性时间比较的分支在 settle 时刻后固定：同精灵，整周期预热 L 帧后起录（预热只能 0 或 L），要求 L 晚于 settle；
         // 精灵已定在起点 0 闭合的候选不能再预热。候选全放不进就记未收敛
         // 脚本的 settle 同样处理，取两者较晚的一个
-        double settleSeconds = Math.Max(shader.Settle?.Seconds ?? 0, scriptSettle?.Seconds ?? 0);
         if (settleSeconds > 0 && candidates.Count > 0)
         {
             candidates = [.. candidates.Where(c => c.Seconds > settleSeconds && (c.SpriteSeam is null || c.SpriteSeam.WarmupFrames == c.Frames))
                 .Select(c => c with { ShaderSettleSeconds = settleSeconds })];
             if (candidates.Count == 0 && shader.Settle is { } settle && settle.Seconds >= settleSeconds)
                 unresolved.Add(new ShaderLoopUnresolved(new(settle.OwnerLayerId, settle.EffectIndex, settle.PassIndex, settle.Resource,
-                    ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: a branch on linear time settles by " +
+                    ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, "SPIR-V time signature: the shader settles by " +
                     settle.Seconds.ToString("R", CultureInfo.InvariantCulture) + " s, later than the one-period warmup of every candidate",
                     "transient_settle_beyond_warmup")));
             else if (candidates.Count == 0)

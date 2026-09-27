@@ -31,7 +31,7 @@ export module wescene.pkg.parse:shader_time;
 // 抽象域逐分量：与时间无关（可带已知常数）；a·t + 周期部分（a 取可能系数的集合）；证明不周期。
 // 规则：sin/cos/tan/fract/mod 作用在线性式上得周期 2π/a、π/a、1/a、m/a；周期值做任何运算仍是周期，
 // 最后按可公度类取 LCM；线性式不经周期函数流到输出 = 漂移（系数 0 除外）；采样坐标线性滚动时 repeat 轴周期 1/|v|，
-// clamp 轴过某时刻后静止（记为暂态）；与线性 t 比较（含 switch 按线性 t 选分支）看差的范围：有界则过 settle 时刻后固定
+// clamp 轴滚到边上后静止（坐标余量有界时给出 settle 时刻，否则记为暂态）；与线性 t 比较（含 switch 按线性 t 选分支）看差的范围：有界则过 settle 时刻后固定
 // （暂态，给出时刻上界），含 tan(线性 t) 的极点则永不固定、判不周期，范围说不清只报没推下去；
 // 周期比为无理数时各类分别输出，交给 C# 的调速逻辑。
 export namespace owe::shader_time
@@ -98,8 +98,8 @@ struct Signature {
     std::vector<Term>        terms;             // 每个不同的 (周期, π 次数, 旋钮集合) 一项
     std::vector<std::string> reasons;           // 不周期的原因与出处
     std::vector<std::string> external;          // 随时间变化的外部输入（音频、指针、日时、动画化的材质值）
-    bool                     transient { false }; // clamp 采样的滚动在某时刻后停住：稳态之前有一段不周期
-    double                   settle { -1 };       // 与线性时间比较的分支在此时刻（秒，上界）之后固定；< 0：没有这种分支
+    bool                     transient { false }; // clamp 采样的滚动在某时刻后停住、时刻说不清：稳态之前有一段不周期
+    double                   settle { -1 };       // 与线性时间比较的分支、clamp 轴的滚动在此时刻（秒，上界）之后固定；< 0：没有
 };
 
 Signature   Analyze(std::span<const std::vector<unsigned int>> stages, const Inputs& inputs);
@@ -1097,9 +1097,14 @@ Val Analyzer::Sample(const std::string& name, const Val& coord, const std::vecto
         else if (wrap[k] == Wrap::Repeat) {
             for (const Rate& x : c.rates)
                 if (x.v != 0) AddUnique(r.periods, Per { 1 / std::abs(x.v), PiNeg(x.pi), x.knobs });
-        } else if (wrap[k] == Wrap::Clamp)
-            r.transient = true;
-        else
+        } else if (wrap[k] == Wrap::Clamp) {
+            // u = v·t + q、q ∈ [lo, hi]：v > 0 在 t ≥ (1 − lo)/v 之后 u ≥ 1、v < 0 在 t ≥ hi/|v| 之后 u ≤ 0，停在边上；
+            // q 的范围说不清才只记暂态
+            if (! c.Bounded()) r.transient = true;
+            else
+                for (const Rate& x : c.rates)
+                    if (x.v != 0) r.settle = std::max(r.settle, std::max(0.0, (x.v > 0 ? 1 - c.lo : -c.hi) / x.v));
+        } else
             r.aperiodic = "sampler_wrap_unknown:" + name + where;
     }
     Normalize(r);
@@ -1622,6 +1627,11 @@ void Analyzer::Execute(int stage_index, const std::map<std::uint32_t, Val>& vary
             if (auto loc = location_.find(var); loc != location_.end()) {
                 auto v = varyings_in.find(loc->second);
                 S[var] = v != varyings_in.end() ? Fit(v->second, p.size) : Val(p.size);
+            }
+            // 图层与特效四边形的纹理坐标在 [0, 1]。HLSL 入口的输入名形如 _ww_in.a_TexCoord（同名的 a_TexCoord 是包装里的 static）
+            if (model_ == 0 && names_.count(var) && names_[var].substr(names_[var].rfind('.') + 1) == "a_TexCoord") {
+                Val& t = S.try_emplace(var, Val(p.size)).first->second;
+                for (std::size_t k = 0; k < 2 && k < t.size(); ++k) t[k].lo = 0, t[k].hi = 1;
             }
         } else {
             S[var] = g.init ? Fit(V(g.init), p.size) : Val(p.size);

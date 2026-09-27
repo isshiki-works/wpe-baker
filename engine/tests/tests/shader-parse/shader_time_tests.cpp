@@ -44,6 +44,7 @@ struct Case {
     std::map<std::string, std::string>        combos;
     std::map<std::string, std::vector<float>> values; // 材质常量，其余取着色器默认值
     std::string                               vert, frag; // 非空时用这段源码，不读 assets
+    st::Wrap                                  wrap { st::Wrap::Repeat }; // 所有采样器两轴
 };
 
 st::Signature Analyze(const Case& c) {
@@ -80,7 +81,7 @@ st::Signature Analyze(const Case& c) {
                      std::vector<float>(it->second.data(), it->second.data() + it->second.size().to_primitive()) };
         return {};
     };
-    in.wrap = [](std::string_view) { return std::array { st::Wrap::Repeat, st::Wrap::Repeat }; };
+    in.wrap = [&](std::string_view) { return std::array { c.wrap, c.wrap }; };
     auto sig = st::Analyze(compiled.shader->codes, in);
     std::cout << c.shader << ": " << st::ToJson(sig) << '\n';
     return sig;
@@ -229,6 +230,25 @@ TEST_F(ShaderTime, BoundedThresholdBranchSettles) {
         const auto sig = Analyze(c);
         ExpectPeriod(sig, kTau);
         EXPECT_NEAR(sig.settle, settle, 1e-9) << st::ToJson(sig);
+    }
+}
+
+// clamp 轴的滚动：a_TexCoord ∈ [0, 1]，坐标 = v·t + q 滚到边上后停住，settle = (1 − q 下界)/v（v < 0 时 q 上界/|v|），不是说不清的暂态
+TEST_F(ShaderTime, ClampScrollSettles) {
+    const std::string vert = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\n"
+                             "void main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }\n";
+    const std::pair<const char*, double> cases[] = { { "v_TexCoord + vec2(0.25 * g_Time, 0.0)", 4 },
+                                                      { "v_TexCoord * 3.0 - vec2(0.0, 0.5 * g_Time)", 6 } };
+    for (const auto& [uv, settle] : cases) {
+        Case c { "", "clamp_scroll", {}, {} };
+        c.vert = vert;
+        c.wrap = st::Wrap::Clamp;
+        c.frag = std::string("varying vec2 v_TexCoord;\nuniform float g_Time;\nuniform sampler2D g_Texture0;\n"
+                             "void main() { gl_FragColor = texSample2D(g_Texture0, ") + uv + "); }\n";
+        const auto sig = Analyze(c);
+        EXPECT_EQ(sig.kind, "static") << st::ToJson(sig);
+        EXPECT_FALSE(sig.transient) << st::ToJson(sig);
+        EXPECT_NEAR(sig.settle, settle, 1e-6) << st::ToJson(sig);
     }
 }
 
