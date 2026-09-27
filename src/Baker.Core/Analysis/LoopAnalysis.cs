@@ -128,7 +128,7 @@ internal static class LoopAnalysis
         if (perGroup is not null) (solve, noLoop) = (perGroup.Value.Solve, false);
         // 各分量都有周期证明、却在上限内凑不出公共循环：点名并不进的所有者层，由分配回退把它们的作者子树留实时，其余照常规划；这些层再逐层查
         int[]? noCommonLoopOwners = noLoop
-            ? NoCommonLoopOwners(shader, animation, particleCycles, scriptCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
+            ? NoCommonLoopOwners(scene, runtime, shader, animation, particleCycles, scriptCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
             : null;
         if (noLoop) Prove(noCommonLoopOwners ?? []);
         if (stepCycles.Length > 0)
@@ -526,15 +526,24 @@ internal static class LoopAnalysis
     /// 按所有者层贪心并入（分量多的先并，同数按出现顺序），并入后上限内无解的层记下返回。已有未解析项的所有者本来就留实时，不参与。
     /// 没有并不进的层时返回 null；一层都并不进时全部点名，剩下的内容值不值得烘由分配回退重查判定。
     /// </summary>
-    private static int[]? NoCommonLoopOwners(ShaderPeriodAnalysisResult shader, IReadOnlyList<RuntimeTrack> animation,
+    private static int[]? NoCommonLoopOwners(JsonObject scene, JsonObject runtime, ShaderPeriodAnalysisResult shader, IReadOnlyList<RuntimeTrack> animation,
         CommonLoopComponent[] particleCycles, CommonLoopComponent[] scriptCycles, List<LoopUnresolved> unresolved, uint fpsNumerator, uint fpsDenominator,
         double maximumRetimePercent, CommonLoopRational ceiling, CommonLoopPreference preference)
     {
         // 脚本周期分量的 id 是 script/<所有者层>/<绑定>（ScriptComponents），和着色器、动画轨道一样按所有者层并入。
         static int ScriptOwner(CommonLoopComponent x) => int.Parse(x.Id.Split('/')[1], CultureInfo.InvariantCulture);
         var live = unresolved.Select(item => SceneGraph.Int(item.ToJson()["owner_layer_id"])).OfType<int>().ToHashSet();
+        // 按烘进视频能省下的特效渲染并入（与 bake_value 同口径：画布占比 × 特效 pass 数，占比算不出按整屏），凑不进的就是最不值钱的那些层；
+        // 分量个数只作并列次序。原来只按分量个数排，3644280276 为两块 0.7% 画布的小层丢了占 57% 画布的天空。
+        var canvas = HybridVideoProjection.AuthoredCanvas(scene, new JsonObject());
+        var objects = (scene["objects"] as JsonArray ?? []).OfType<JsonObject>().Where(o => SceneGraph.Int(o["id"]) is int)
+            .GroupBy(o => SceneGraph.Int(o["id"])!.Value).ToDictionary(g => g.Key, g => g.First());
+        double Value(int owner) => (HybridVideoProjection.CanvasFraction(objects, owner, node => node, canvas.Width ?? 1920, canvas.Height ?? 1080) ?? 1) *
+            (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["owner"]) == owner)
+                .SelectMany(layer => layer["materials"] as JsonArray ?? []).OfType<JsonObject>().Count(material => material["role"]?.GetValue<string>() == "effect");
         int[] owners = [.. shader.Components.Select(x => x.OwnerLayerId).Concat(animation.Select(x => x.OwnerLayerId)).Concat(scriptCycles.Select(ScriptOwner))
-            .Where(id => !live.Contains(id)).GroupBy(id => id).OrderByDescending(group => group.Count()).Select(group => group.Key)];
+            .Where(id => !live.Contains(id)).GroupBy(id => id).OrderByDescending(group => Value(group.Key)).ThenByDescending(group => group.Count())
+            .Select(group => group.Key)];
         var kept = new HashSet<int>();
         var dropped = new List<int>();
         foreach (int owner in owners)
