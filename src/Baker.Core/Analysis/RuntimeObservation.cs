@@ -89,11 +89,12 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
             // 整树拷贝只给渲染器用：观测命中缓存时不拷。
             trace = await ProbeAsync(chosenSource, "audio-choice-runtime-probe", async () =>
             {
+                // 解包出来的副本里已经有原作的场景与 project.json：改过的这两份覆盖写（与昼夜状态副本同一写法），不能按新建写。
                 await source.ExtractAsync(chosenSource, cancellationToken);
-                await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(chosenSource, source.SceneResource), scene, cancellationToken);
+                await File.WriteAllTextAsync(ProjectSource.ContainedPath(chosenSource, source.SceneResource), scene.ToJsonString(), cancellationToken);
                 var chosenProject = project.DeepClone().AsObject();
                 chosenProject["file"] = source.SceneResource;
-                await VideoSceneBuilder.WriteJsonAsync(Path.Combine(chosenSource, "project.json"), chosenProject, cancellationToken);
+                await File.WriteAllTextAsync(Path.Combine(chosenSource, "project.json"), chosenProject.ToJsonString(), cancellationToken);
             });
             if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray chosenDependencies ||
                 trace["runtime_layers"] is not JsonArray chosenLayers)

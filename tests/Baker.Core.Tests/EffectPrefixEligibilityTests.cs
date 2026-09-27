@@ -76,4 +76,27 @@ public class EffectPrefixEligibilityTests
         Assert.Equal("not_needed", keep["status"]!.GetValue<string>());
         await Task.CompletedTask;
     });
+
+    // 采用去掉效果的选择时，观测前把改过的场景写进解包副本：副本里已经有原作的 scene.json 与 project.json，
+    // 按新建写就抛 "already exists"（#238 本机全集 40 张分析因此崩溃）。这里只到写副本为止，渲染器是占位文件、观测本身起不来。
+    [Fact]
+    public async Task ChosenSceneOverwritesTheExtractedCopy() => await TestTemp.Run(async dir =>
+    {
+        string project = Path.Combine(dir, "project"), tools = Path.Combine(dir, "tools"), output = Path.Combine(dir, "out");
+        var (scene, runtime) = Background(project);
+        Directory.CreateDirectory(tools);
+        Directory.CreateDirectory(output);
+        foreach (string tool in new[] { "renderer", "ffmpeg", "ffprobe" }) await File.WriteAllTextAsync(Path.Combine(tools, tool), "placeholder");
+        using var source = new ProjectSource(project);
+        runtime["source"] = source.SourcePath;
+        string trace = Path.Combine(dir, "trace.json");
+        await File.WriteAllTextAsync(trace, runtime.ToJsonString());
+        var request = new HybridAnalyzeRequest(1, project, project, output, 64, 48, 30, 1, RuntimeTraceFile: trace, Interaction: "off");
+        var observer = new NativeRuntimeObserver(new NativeTools(Path.Combine(tools, "renderer"), Path.Combine(tools, "ffmpeg"), Path.Combine(tools, "ffprobe"), []));
+        Exception? error = await Record.ExceptionAsync(() => RuntimeObservation.ObserveAsync(request, source, "hash", scene, new JsonObject(), new JsonObject(),
+            new SceneGraph(scene), output, observer, null, CancellationToken.None));
+        Assert.DoesNotContain("already exists", error?.Message ?? "");
+        JsonObject chosen = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(output, "audio-choice-source", "scene.json")))!.AsObject();
+        Assert.Equal([10], chosen["objects"]![0]!["effects"]!.AsArray().Select(effect => effect!["id"]!.GetValue<int>()));
+    });
 }
