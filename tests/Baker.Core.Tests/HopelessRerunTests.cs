@@ -74,12 +74,11 @@ public class HopelessRerunTests
 
     [Theory]
     [InlineData("fixed_daytime", false)]
-    [InlineData("non_count_blocker", false)]
     [InlineData("far_over_limit", false)]
     [InlineData("coverage_only", true)]
     public async Task RetreatRunsOnlyWhenRetainingMoreCanHelp(string kind, bool retreats)
     {
-        // 固定时段（2955378002：一张 1414 s）、组数之外的 blocker、组数超过上限两倍：多留实时改不了，不退。只差覆盖时照旧退。
+        // 固定时段（2955378002：一张 1414 s）、组数超过上限两倍：多留实时改不了，不退。只差覆盖时照旧退。
         await TestTemp.Run(async root =>
         {
             var calls = await RunAsync(root, r =>
@@ -89,10 +88,31 @@ public class HopelessRerunTests
                     ? Plan(r, [.. Enumerable.Range(100, 20).Except(kept)], 100)
                     : Plan(r, [.. new[] { 10, 11, 12, 13 }.Except(kept)], 2);
                 if (kind == "fixed_daytime") plan["settings"]!["daytime_state"] = "day";
-                if (kind == "non_count_blocker") Block(plan);
                 return plan;
             });
             Assert.Equal(retreats, calls.Any(r => r.RetainLiveRootIds is { Length: > 0 }));
+        });
+    }
+
+    [Fact]
+    public async Task APlanBlockedByOneGroupIsStillRescuedByRetainingThatGroup()
+    {
+        // 原方案被组 13 带来的 blocker 挡住（残差不可掩盖一类），把组 13 留实时就能生成且省电：逐组退回照旧试、照旧救回。
+        // "组数之外的 blocker 一律不退"会把这类作品从能掉成未收敛（全集 3463280673）。
+        await TestTemp.Run(async root =>
+        {
+            JsonObject? chosen = null;
+            var calls = new List<HybridAnalyzeRequest>();
+            chosen = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "run")), (r, _) =>
+            {
+                lock (calls) calls.Add(r);
+                int[] kept = r.RetainLiveRootIds ?? [];
+                JsonObject plan = Plan(r, [.. new[] { 10, 11, 12, 13 }.Except(kept)], 4);
+                if (!kept.Contains(13)) Block(plan);
+                return Task.FromResult(plan);
+            }, CancellationToken.None);
+            Assert.True(Admission.Accepted(chosen));
+            Assert.Equal([13], chosen["settings"]!["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()));
         });
     }
 }

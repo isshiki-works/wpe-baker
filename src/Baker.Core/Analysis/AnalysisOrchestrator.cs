@@ -248,11 +248,10 @@ internal sealed class AnalysisOrchestrator
         static double Gap(JsonObject plan) => Math.Max(-Margin(plan), Admission.GroupCount(plan) - NoBenefit.SavingProvenStreams);
         static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
         if (Viable(result) || Admission.Accepted(result) && !NoBenefit.AnalysisConditions(result).Contains(NoBenefit.VideoCostOverSaving)) return result;
-        // 多留实时改不了的直接不退：固定在一个时段、静态成品带实时层（条件不随留实时变），组数之外的 blocker（采集能力、布局冲突、
-        // 残差不可掩盖……），以及组数超过上限两倍（逐组各留一次每个候选只少一组，一轮试遍也到不了上限）。
+        // 多留实时改不了的直接不退：固定在一个时段、静态成品带实时层（条件不随留实时变），以及组数超过上限两倍
+        // （逐组各留一次每个候选只少一组，一轮试遍也到不了上限）。blocker 不在此列：把挡住的那组留实时常常正好解开它（3463280673）。
         string[] conditions = NoBenefit.AnalysisConditions(result);
         if (conditions.Contains(NoBenefit.FixedDaytime) || conditions.Contains(NoBenefit.StaticWithLive) ||
-            PlanBlockers.Codes(result).Any(code => code != BlockerCode.TooManyVideoGroups) ||
             Admission.GroupCount(result) > 2 * Admission.MaxVideoGroups(result)) return result;
         JsonObject current = result;
         while (current["video_groups"] is JsonArray { Count: > 1 } groups)
