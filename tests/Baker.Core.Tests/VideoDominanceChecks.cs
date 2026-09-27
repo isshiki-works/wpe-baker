@@ -118,9 +118,19 @@ internal static class VideoDominanceChecks
             Evidence(bakedParticles).Contains("baked_stationary_particle_layers=347", StringComparison.Ordinal) &&
             bakedParticles["video_dominant"]!["decode_work"]!["status"]!.GetValue<string>() == "potential_gain",
             "baked stationary particles keep the plan out of the shell verdict, and the source video's decode reduction still reaches the value assessment");
-        check(VideoDominance.Evaluate(Noted(allowed, true), runtime, VideoDominance.RejectChoice)["decode_work"] is null &&
-            withUnresolved["video_dominant"]!["decode_work"] is null,
-            "a disqualified plan carries decode_work only when the source video's decoding can be reduced");
+        // 外壳判据没全过也照样算 decode_work；降不了的仍按特效覆盖交给 NoBenefit 判，不因为有 decode_work 就豁免
+        JsonObject bakedSame = Noted(allowed, true);
+        bakedSame["video_dominant"] = VideoDominance.Evaluate(bakedSame, runtime, VideoDominance.RejectChoice);
+        check(bakedSame["video_dominant"]!["decode_work"]!["status"]!.GetValue<string>() == "not_reduced" &&
+            bakedSame["video_dominant"]!["shell_structure"]!.GetValue<bool>() == false && !NoBenefit.DecodeWorkCounts(bakedSame) &&
+            withUnresolved["video_dominant"]!["decode_work"] is JsonObject && NoBenefit.DecodeWorkCounts(bakedParticles) && NoBenefit.DecodeWorkCounts(allowed),
+            "every whole-layer plan baking a source video carries decode_work; only a reducible decode (or a matched shell structure) exempts it from the effect-coverage test");
+        // 片源在透明组里：颜色与 alpha 左右打包，1080p 输出按两倍像素比，不比 1440p 源少
+        JsonObject packed = Noted(reduced, true);
+        packed["video_groups"]![0]!["transparent"] = true;
+        JsonObject packedWork = VideoDominance.Evaluate(packed, highResolution, VideoDominance.RejectChoice)["decode_work"]!.AsObject();
+        check(packedWork["status"]!.GetValue<string>() == "not_reduced" && packedWork["output_packed_alpha"]!.GetValue<bool>(),
+            "a transparent group's packed alpha doubles the output pixels in the decode comparison");
         JsonObject lowerFps = allowed.DeepClone().AsObject();
         lowerFps["settings"]!["fps_numerator"] = 15;
         check(VideoDominance.Evaluate(lowerFps, runtime, VideoDominance.RejectChoice)["status"]!.GetValue<string>() == VideoDominance.NotShellStatus,

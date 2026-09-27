@@ -74,17 +74,18 @@ public static class VideoDominance
         if (route != "whole_layer")
             return Record(EffectPrefixStatus, choice, evidence, EffectPrefixReasonEn, EffectPrefixReasonZh);
         var failure = Disqualify(plan, runtime, evidence);
-        JsonObject decodeWork = DecodeWork(plan, runtime);
+        // 源视频解码量与外壳判定无关：被烘组里有源视频就算（外壳判据没全过只说明别的东西也在动，烘掉的只会更多），交给估值与 NoBenefit。
+        // shell_structure 记外壳结构是否成立：NoBenefit 只在解码量能降、或结构成立（原有口径）时按解码量判，不按特效覆盖判
+        JsonObject? decodeWork = DecodeWork(plan, runtime);
         if (failure is not null)
         {
             JsonObject record = Record(NotShellStatus, choice, evidence, failure.Value.En, failure.Value.Zh);
-            // 源视频解码量能降是独立事实：外壳判据没全过只说明别的东西也在动，烘掉的只会更多。片源层进了视频、解码量能降时照样交给估值与 NoBenefit；
-            // 降不了或说不清的不写（NoBenefit 见到 decode_work 就不再按特效覆盖判"只烘普通图层"，写了等于放宽）。
-            if (decodeWork["status"]!.GetValue<string>() == WorkloadValue.DecodePotentialGain &&
-                SceneGraph.Int((plan["loop"]?["content_cadence"]?["clips"] as JsonArray)?.FirstOrDefault()?["owner_layer_id"]) is int clipOwner && Baked(plan).Contains(clipOwner))
-                record["decode_work"] = decodeWork;
+            record["shell_structure"] = false;
+            if (decodeWork is not null) record["decode_work"] = decodeWork;
             return record;
         }
+        // 结构成立时片源层就是唯一不透明组的唯一一层，必在被烘组里
+        decodeWork ??= new JsonObject { ["status"] = "unknown" };
         string decodeStatus = decodeWork["status"]!.GetValue<string>();
         JsonObject result = decodeStatus != WorkloadValue.DecodeNotReduced
             ? Record(NotShellStatus, choice, evidence,
@@ -94,16 +95,25 @@ public static class VideoDominance
             : choice == AllowChoice
             ? Record(OverrideStatus, choice, evidence, OverrideReasonEn, OverrideReasonZh)
             : Record(ShellStatus, choice, evidence, Blocker, BlockerZh);
+        result["shell_structure"] = true;
         result["decode_work"] = decodeWork;
         return result;
     }
 
-    private static JsonObject DecodeWork(JsonObject plan, JsonObject runtime)
+    /// <summary>
+    /// 被烘组里片源（loop.content_cadence 首段）的解码量比较；片源层不在任何视频组里（留实时或没有片源）返回 null。
+    /// 片源所在组透明时颜色与 alpha 左右打包，输出像素数按两倍比。
+    /// </summary>
+    private static JsonObject? DecodeWork(JsonObject plan, JsonObject runtime)
     {
+        int? owner = SceneGraph.Int((plan["loop"]?["content_cadence"]?["clips"] as JsonArray)?.FirstOrDefault()?["owner_layer_id"]);
+        JsonObject? group = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .FirstOrDefault(item => (item["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).Contains(owner) && owner is not null);
+        if (group is null) return null;
+        bool packedAlpha = group["transparent"]?.GetValue<bool>() == true;
         var result = new JsonObject { ["status"] = "unknown" };
         JsonObject workload = HybridVideoWorkload.Summarize(runtime);
         if (!HybridVideoWorkload.Complete(workload)) return result;
-        int? owner = SceneGraph.Int((plan["loop"]?["content_cadence"]?["clips"] as JsonArray)?.FirstOrDefault()?["owner_layer_id"]);
         var textures = (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(layer => SceneGraph.Int(layer["owner"]) == owner)
             .SelectMany(layer => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>())
@@ -123,7 +133,7 @@ public static class VideoDominance
         double fps = numerator / denominator;
         if (!WorkloadValue.IsComparableOutput(width, height, fps)) return result;
         result["source"] = streams[0].DeepClone();
-        result["output_width"] = width; result["output_height"] = height; result["output_fps"] = fps;
+        result["output_width"] = width; result["output_height"] = height; result["output_fps"] = fps; result["output_packed_alpha"] = packedAlpha;
         string? codec = plan["encoding"]?["codec"]?.GetValue<string>();
         if (codec == "auto_h264_hevc")
         {
@@ -136,7 +146,7 @@ public static class VideoDominance
         result["output_codec"] = codec; result["output_pixel_format"] = pixelFormat;
         if (codec is not ("h264" or "hevc") || codec != streams[0]["codec"]?.GetValue<string>() ||
             string.IsNullOrWhiteSpace(pixelFormat) || pixelFormat != streams[0]["pixel_format"]?.GetValue<string>()) return result;
-        result["status"] = WorkloadValue.DecodeWorkStatus(width, height, fps, sourceWidth, sourceHeight, sourceFps);
+        result["status"] = WorkloadValue.DecodeWorkStatus(width, height, fps, sourceWidth, sourceHeight, sourceFps, packedAlpha);
         return result;
     }
 
