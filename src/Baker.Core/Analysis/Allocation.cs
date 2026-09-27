@@ -118,8 +118,9 @@ internal sealed class Allocation
         // 绘制的父层不因实时子层被连带：成品里实时子层挂在去掉绘制键的父层下（SceneAssembler.Emit），变换、可见性与透明度
         // 按原作同一份数据逐帧传给子层；父层先画进视频，读帧缓冲的子层读到的仍是它下面已合成好的画面。
         // 条件是父层这份传给子层的状态是常量（无脚本或只有常量脚本、变换类属性无动画、没有运行时写入、轴对齐）：之后的非实时子层视频按固定父变换挂回去。
-        // 子层挂父层骨骼（attachment）时仍连带：挂点每帧取父层木偶的骨骼动画（引擎 SceneFinalize 的 attachmentTransform），去掉绘制键的父层没有木偶，
-        // 挂点解析不到，子层只按自身局部变换放、不跟骨骼。保留木偶只当骨骼载体要靠官方 WPE 里父层透明度不传给子层、透明的木偶照常推动挂点，这两点没有官方依据，所以不拆。
+        // 子层挂父层骨骼（attachment）时同样可拆：挂点每帧取父层木偶的骨骼动画（引擎 SceneFinalize 的 attachmentTransform），成品里父层保留木偶、
+        // alpha 设 0 只当骨骼载体（SceneAssembler.Emit）。依据是官方 WPE 实测（3426865175 层 22 与挂点粒子 137）：父层 alpha 0 时木偶不出像素，
+        // 挂点子层照常显示并跟着骨骼动画移动；父层 visible 为 false 时子层随之消失，所以不能用 visible。
         // 从第一个含实时层的子树起拆开，前面的子层留在父层单元里保持绘制顺序。
         // 只管真正绘制的父层（有 image/text/particle/model）；不绘制的容器仍走 StaticStructure（要求运行时记录证实无网格，缺记录即不拆）。
         // 父层只因画面实时（读帧缓冲、着色器读音频频谱/指针/视差）时同样可拆：这些只改它自己的像素，传给子层的变换、可见性与透明度
@@ -131,8 +132,7 @@ internal sealed class Allocation
             HybridVideoProjection.SupportsStaticParent(transformObjects[id]) && BoundTransformsAgree(id) &&
             (!parallax || request.ViewMode != "preserve" || objects[id]["parallaxDepth"] is null ||
                 HybridVideoProjection.Vector(Resolve(objects[id]["parallaxDepth"], properties), (0, 0)) == (0d, 0d)) &&
-            !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write") &&
-            !sourceOrder.Any(child => Int(objects[child]["parent"]) == id && objects[child].ContainsKey("attachment"));
+            !dependencies.OfType<JsonObject>().Any(d => Int(d["target"]) == id && d["operation"]?.GetValue<string>() == "write");
         bool dynamicLookup = allocation.DynamicLookup = scripts.Values.SelectMany(s => s).Any(code => Regex.IsMatch(code,
             @"\b(thisScene|getLayer|getParent|setParent|globalThis|eval|Function|Reflect|Proxy|import)\b|\.\s*(parent|children)\b"));
         // 有动态查找时当前隐藏的节点（脚本可能把它重新显示）只按放开前的条件拆：编辑器锁、常量变换脚本、标量滑块缩放、
