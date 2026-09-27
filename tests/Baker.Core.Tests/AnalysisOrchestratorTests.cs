@@ -346,10 +346,12 @@ public class AnalysisOrchestratorTests
         var planner = new HybridScenePlanner(new("not-started", "not-started", "not-started", []));
         try
         {
-            await (Task)record.Invoke(planner, [report, scene, request, output, scene, (Func<string, JsonObject?>)(_ => null), null,
+            // memo 传 null：子分析的 scene 照常经 AnalysisCache 按缓存目录落盘，看得出它用的是哪个目录。
+            await (Task)record.Invoke(planner, [report, scene, request, output, scene, (Func<string, JsonObject?>)(_ => null), null, null,
                 TestContext.Current.CancellationToken])!;
         }
-        catch (Exception) { }
+        // 反射调用本身对不上（签名变了）要直接失败，不能当成子分析失败吞掉。
+        catch (Exception error) when (error is not System.Reflection.TargetParameterCountException and not ArgumentException) { }
         Assert.NotNull(report["loop_allocation_fallback"]!["analysis_plan_path"]);
         Assert.True(File.Exists(Path.Combine(cache, "scene.json")));
         Assert.False(Directory.Exists(Path.Combine(cache, sha)));
