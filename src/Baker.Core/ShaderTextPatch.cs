@@ -119,6 +119,32 @@ public static class ShaderTextPatch
         : knob["uniform"] is JsonValue uniform ? uniform.GetValue<string>()
             : BitConverter.SingleToUInt32Bits((float)knob["literal"]!.GetValue<double>()).ToString("x8", CultureInfo.InvariantCulture));
 
+    internal static bool HasTimeUse(string text) => TimeUse.IsMatch(Comment.Replace(text, match => new string(' ', match.Length)));
+
+    /// <summary>Identify an installed knob by its original source site, using the same matcher as the write path.</summary>
+    internal static bool TryOriginalKnob(string original, string key, out JsonObject? knob)
+    {
+        knob = null;
+        Match stageMatch = Regex.Match(key, @"^periodica_k_(vert|frag)_(.+)$", RegexOptions.CultureInvariant);
+        if (!stageMatch.Success) return false;
+        string stage = stageMatch.Groups[1].Value, id = stageMatch.Groups[2].Value;
+        Match[] uses = KnobUses(original, key);
+        if (CallKnob.Match(key) is { Success: true } call)
+        {
+            if (uses.Length == 0) return false;
+            knob = new JsonObject { ["stage"] = stage, ["call"] = call.Groups[2].Value,
+                ["sites"] = int.Parse(call.Groups[1].Value, CultureInfo.InvariantCulture) };
+        }
+        else if (id.Length == 8 && uint.TryParse(id, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out uint bits))
+        {
+            if (uses.Length != 1) return false;
+            knob = new JsonObject { ["stage"] = stage, ["literal"] = (double)BitConverter.UInt32BitsToSingle(bits) };
+        }
+        else if (Regex.IsMatch(id, @"^[A-Za-z_]\w*$", RegexOptions.CultureInvariant) && uses.Length == 1)
+            knob = new JsonObject { ["stage"] = stage, ["uniform"] = id };
+        return knob is not null && KnobKey(knob) == key;
+    }
+
     /// <summary>
     /// 旋钮键在一个 stage 源码里的出现处（注释除外；分析判"恰好一次"和写覆盖共用这一份）：
     /// 字面量按 float32 值匹配数字字面量 token，忽略符号；uniform 按标识符，不含声明行；

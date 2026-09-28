@@ -98,6 +98,35 @@ internal static class ShaderSignatureChecks
                     .Select(x => x!["mechanism"]!.GetValue<string>()).SequenceEqual(["term_not_retimable"]),
                 "a call knob rewrites only when the source has exactly the call sites the engine counted");
 
+            // 完整捕获看到的是已改写 shader：同一 call 旋钮变成两个 g_PeriodicaK 使用处。
+            // 只凭原源码查这个合成 uniform 会误拒；已写出的 patch 记录和原来两处 sin/cos 才能恢复身份。
+            File.WriteAllText(Path.Combine(root, "shaders", "effects", "x.vert"), iris);
+            using (var original = new ProjectSource(root))
+            {
+                JsonObject patched = Runtime(irisSignature);
+                JsonArray terms = patched["runtime_layers"]![0]!["materials"]![0]!["time_signature"]!["terms"]!.AsArray();
+                foreach (JsonObject term in terms.OfType<JsonObject>())
+                    term["knobs"]!.AsArray().Add(new JsonObject { ["stage"] = "vert", ["uniform"] = "g_PeriodicaTimeScale", ["inverse"] = false });
+                JsonArray callKnobs = terms[2]!["knobs"]!.AsArray();
+                int callIndex = Enumerable.Range(0, callKnobs.Count).Single(i => callKnobs[i]?["call"] is not null);
+                callKnobs[callIndex] = new JsonObject { ["stage"] = "vert", ["uniform"] = "g_PeriodicaK_vert_call2_clock", ["inverse"] = false };
+                JsonArray installed = new(new JsonObject { ["resource"] = "shaders/effects/x.vert",
+                    ["keys"] = new JsonArray("periodica_k_vert_call2_clock", ShaderPeriodAnalysis.TimeScaleKey) });
+                JsonObject restored = ShaderPeriodAnalysis.ReconcileInstalledKnobs(patched, original, null, installed);
+                JsonArray restoredTerms = restored["runtime_layers"]![0]!["materials"]![0]!["time_signature"]!["terms"]!.AsArray();
+                check(restoredTerms[2]!["knobs"]!.AsArray().Any(k => k?["call"]?.GetValue<string>() == "clock" && k["sites"]?.GetValue<int>() == 2) &&
+                    restoredTerms.OfType<JsonObject>().All(t => t["knobs"]!.AsArray().All(k => k?["uniform"]?.GetValue<string>() != "g_PeriodicaTimeScale")) &&
+                    callKnobs[callIndex]?["uniform"]?.GetValue<string>() == "g_PeriodicaK_vert_call2_clock" &&
+                    restoredTerms[2]!["seconds"]!.GetValue<double>() == terms[2]!["seconds"]!.GetValue<double>(),
+                    "a proven installed call knob is restored without changing the original runtime or observed period");
+                check(ShaderPeriodAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), original, null,
+                    patched, [10], 600, 2).Terms.Any(t => t.Missing?.Contains("not a unique rewritable token", StringComparison.Ordinal) == true) &&
+                    !ShaderPeriodAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), original, null,
+                    restored, [10], 600, 2).Terms.Any(t => t.Missing?.Contains("not a unique rewritable token", StringComparison.Ordinal) == true) &&
+                    JsonNode.DeepEquals(ShaderPeriodAnalysis.ReconcileInstalledKnobs(patched, original, null, new JsonArray()), patched),
+                    "the patched-runtime false rejection disappears only with recorded patch provenance");
+            }
+
             // 分量旋钮改写在文件末尾追加新 main：varying 声明在预处理条件块里时条件不成立就不存在，覆盖 shader 编不过（3644280276 waterripple），不当改写目标
             string ripple = "varying vec4 v_Plain;\n#if RIPPLE\nvarying vec4 v_TexCoordRipple;\n#endif\nvoid main() { v_Plain = vec4(g_Time); }\n";
             check(ShaderTextPatch.AxisTarget(ripple, "periodica_k_vert_ax_x_v_TexCoordRipple") is (_, _, ["#if RIPPLE"]) &&
