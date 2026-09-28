@@ -168,6 +168,25 @@ public class AnalysisStagesTests
     });
 
     [Fact]
+    public Task RetainedChildOfFixedDrawingParentDoesNotCarryItsSiblingsLive() => TestTemp.Run(dir =>
+    {
+        JsonObject[] objects = [Image(10), Image(11, 10), Image(12, 10), Image(13, 10)];
+        var runtime = new JsonArray(Mesh(10), Mesh(11), Mesh(12), Mesh(13));
+        var child = Run(dir, objects, runtime, [], request => request with { RetainLiveRootIds = [12] });
+        Assert.Equal(10, child.Allocation.UnitOf[11]);
+        Assert.Equal(12, child.Allocation.UnitOf[12]);
+        Assert.Equal(13, child.Allocation.UnitOf[13]);
+        Assert.Equal(new[] { 12 }, child.Allocation.LiveIds.Order());
+        Assert.Equal(new[] { "[10,11]", "[13]" }, child.Composer.Groups.OfType<JsonObject>()
+            .Select(group => group["layer_ids"]!.ToJsonString()));
+
+        var parent = Run(dir, objects, runtime, [], request => request with { RetainLiveRootIds = [10] });
+        Assert.All(objects, obj => Assert.Equal(10, parent.Allocation.UnitOf[obj["id"]!.GetValue<int>()]));
+        Assert.Equal(new[] { 10, 11, 12, 13 }, parent.Allocation.LiveIds.Order());
+        return Task.CompletedTask;
+    });
+
+    [Fact]
     public Task ScriptedStructuralParentKeepsItsSubtreeTogether() => TestTemp.Run(dir =>
     {
         var parent = new JsonObject { ["id"] = 10, ["name"] = "group", ["origin"] = new JsonObject { ["script"] = "export function update(v){v.x = engine.runtime; return v;}", ["value"] = "0 0 0" } };
