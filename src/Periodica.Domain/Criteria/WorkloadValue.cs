@@ -12,8 +12,11 @@ public static class WorkloadValue
     /// <summary>源视频解码量可降低（输出像素数或帧率更小）。</summary>
     public const string DecodePotentialGain = "potential_gain";
 
-    /// <summary>输出与源视频同尺寸同帧率（或更大），解码量不降。</summary>
+    /// <summary>输出每秒编码像素数不低于源视频，解码量未证明下降。</summary>
     public const string DecodeNotReduced = "not_reduced";
+
+    /// <summary>任一侧的编码尺寸或帧率缺失，不能比较解码量。</summary>
+    public const string DecodeUnknown = "unknown";
 
     /// <summary>
     /// 输出尺寸与帧率能不能拿来比较：三者乘积有限且各自为正。缺值（NaN）、零或无穷都不比较，解码工作量记 unknown。
@@ -22,12 +25,14 @@ public static class WorkloadValue
         double.IsFinite(width * height * fps) && width > 0 && height > 0 && fps > 0;
 
     /// <summary>
-    /// 编码格式一致之后的解码量比较：输出像素数或帧率任一小于源视频即有降低空间。
-    /// <paramref name="packedAlpha"/>：透明组把颜色与 alpha 左右打包进一帧，输出像素数按两倍算。
+    /// 编码格式一致之后比较每秒编码像素数。面积与帧率必须合起来比较：一项降低可能被另一项的增长抵消。
+    /// <paramref name="packedAlpha"/>：输出透明组把颜色与 alpha 左右打包进一帧，输出面积按两倍算；源宽高已是编码尺寸。
     /// </summary>
     public static string DecodeWorkStatus(double width, double height, double fps, double sourceWidth, double sourceHeight, double sourceFps,
         bool packedAlpha = false) =>
-        width * height * (packedAlpha ? 2 : 1) < sourceWidth * sourceHeight || fps < sourceFps ? DecodePotentialGain : DecodeNotReduced;
+        !IsComparableOutput(width * (packedAlpha ? 2 : 1), height, fps) ||
+        !IsComparableOutput(sourceWidth, sourceHeight, sourceFps) ? DecodeUnknown :
+        width * (packedAlpha ? 2 : 1) * height * fps < sourceWidth * sourceHeight * sourceFps ? DecodePotentialGain : DecodeNotReduced;
 
     /// <summary>周期分量 id（如 video/12/...）的第二段是承载它的图层；解析不出来记 −1，落在"不止一层"那一侧。</summary>
     public static int OwnerOf(string component)

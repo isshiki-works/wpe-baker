@@ -17,7 +17,7 @@ public class DomainCriteriaTests
     public void ComparableOutput(double width, double height, double fps, bool expected) =>
         Assert.Equal(expected, WorkloadValue.IsComparableOutput(width, height, fps));
 
-    // 解码量：输出像素数或帧率任一更小即 potential_gain，相等或更大为 not_reduced。
+    // 解码量：比较编码面积 × 帧率；一项下降、另一项上升时不能只看下降的一项。
     [Theory]
     [InlineData(1920.0, 1080.0, 60.0, 1920.0, 1080.0, 60.0, "not_reduced")]
     [InlineData(1280.0, 720.0, 60.0, 1920.0, 1080.0, 60.0, "potential_gain")]
@@ -25,6 +25,11 @@ public class DomainCriteriaTests
     [InlineData(3840.0, 2160.0, 60.0, 1920.0, 1080.0, 60.0, "not_reduced")]
     [InlineData(1080.0, 1920.0, 60.0, 1920.0, 1080.0, 60.0, "not_reduced")]
     [InlineData(1920.0, 1080.0, 60.0, 1920.0, 1080.0, 59.94, "not_reduced")]
+    [InlineData(1600.0, 900.0, 120.0, 1920.0, 1080.0, 60.0, "not_reduced")]
+    [InlineData(3840.0, 2160.0, 30.0, 1920.0, 1080.0, 60.0, "not_reduced")]
+    [InlineData(2560.0, 1440.0, 30.0, 1920.0, 1080.0, 60.0, "potential_gain")]
+    [InlineData(1920.0, 1080.0, 30.0, 1920.0, 1080.0, 0.0, "unknown")]
+    [InlineData(1920.0, 1080.0, 30.0, double.NaN, 1080.0, 60.0, "unknown")]
     public void DecodeWork(double width, double height, double fps, double sourceWidth, double sourceHeight, double sourceFps, string expected) =>
         Assert.Equal(expected, WorkloadValue.DecodeWorkStatus(width, height, fps, sourceWidth, sourceHeight, sourceFps));
 
