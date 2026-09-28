@@ -214,8 +214,8 @@ public static class NoBenefit
 
     private static string Describe(string[] conditions, bool english) => string.Join(english ? "; " : "；", conditions.Select(c => (c, english) switch
     {
-        (StaticWithLive, false) => "烘完只剩一张静态图，实时图层照旧运行",
-        (StaticWithLive, true) => "the result would be a still image with the live layers still running",
+        (StaticWithLive, false) => "静态图替换没有减少原来的绘制工作，实时图层照旧运行",
+        (StaticWithLive, true) => "the still-image replacement preserves the original drawing work and leaves the live layers running",
         (TooManyStreams, false) => $"成品需要超过当前 {SavingProvenStreams} 路视频上限",
         (TooManyStreams, true) => $"the result exceeds the current limit of {SavingProvenStreams} video streams",
         (PlainLayersOnly, false) => "带特效的图层都要留在实时，能转成视频的只有普通贴图，省下的渲染抵不过视频解码",

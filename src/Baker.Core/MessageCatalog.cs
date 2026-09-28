@@ -199,8 +199,8 @@ public static class MessageCatalog
         ["blocker.video_shell"] = new(Zh: VideoDominance.BlockerZh, En: VideoDominance.Blocker),
         // {0}=命中的条件（各语言一套）。预计不省电的方案一律拒绝；--no-benefit allow 只给调试、测功耗用。
         ["blocker.no_benefit_expected"] = new(
-            Zh: "不支持：预计功耗高于原壁纸（{0}）。调试或测功耗时可用 --no-benefit allow 生成。",
-            En: "Not supported: estimated power use is higher than the original wallpaper ({0}). For debugging or power measurement, use --no-benefit allow to generate anyway."),
+            Zh: "此方案预计无法降低播放开销（{0}）。调试或测功耗时可用 --no-benefit allow 生成。",
+            En: "This plan is not expected to reduce playback cost ({0}). For debugging or power measurement, use --no-benefit allow to generate anyway."),
 
         // 固定在一个时段：做不出按时段切换的能力缺口（DaytimeSplit.RejectFixedState）。待定文案，由维护者定稿。
         ["blocker.fixed_daytime_state"] = new(Zh: "当前方案只生成一个时段，壁纸不会随时间切换。", En: "This option generates one time period, so the wallpaper won't change with the time of day."),
