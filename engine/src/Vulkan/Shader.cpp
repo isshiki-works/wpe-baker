@@ -410,6 +410,9 @@ void ConfigureShader(glslang::TShader& shader, SourceLang lang, VulkanTarget tar
     shader.setEnvInput(src_lang, shader.getStage(), glslang::EShClientVulkan, 100);
     shader.setEnvClient(glslang::EShClientVulkan, ToClientVersion(target));
     shader.setEnvTarget(glslang::EShTargetSpv, ToSpvVersion(target));
+    // HLSL saturate(NaN) is zero; GLSL keeps its own min/max/clamp contract.
+    // https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/saturate
+    shader.setNanMinMaxClamp(lang == SourceLang::Hlsl);
     shader.setEntryPoint(entry);
     shader.setSourceEntryPoint(entry);
     // We emit explicit `layout(location=N)` and `layout(set=B, binding=K)`

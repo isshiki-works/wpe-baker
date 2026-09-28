@@ -63,6 +63,99 @@ void main() { gl_Position = vec4(a_Position, 1.0); }
 
 } // namespace
 
+TEST(ShaderParser, HlslBoundedIntrinsicsUseNanSafeClamp) {
+    const auto result = CompileEmptyFunctionFragment(R"(
+uniform float g_Time;
+void main() {
+    vec3 finite = smoothstep(0.0, 1.0, vec3(g_Time, 0.5, 0.75));
+    vec3 equal = smoothstep(vec3(0.8), vec3(0.8), vec3(0.7, g_Time, 0.9));
+    float reverse = smoothstep(1.0, 0.0, g_Time);
+    float2x2 matrixValue = smoothstep((float2x2)0.0, (float2x2)1.0, (float2x2)g_Time);
+    gl_FragColor = vec4(finite + equal + reverse + matrixValue[0][0], saturate(g_Time));
+}
+)", "hlsl-bounded-intrinsics", "0");
+    ASSERT_TRUE(result.ok) << result.error;
+    ASSERT_TRUE(result.shader);
+    unsigned nan_clamps = 0;
+    const auto& code = result.shader->codes[1];
+    for (std::size_t i = 5; i < code.size(); i += code[i] >> 16) {
+        ASSERT_GT(code[i] >> 16, 0u);
+        if ((code[i] & 0xffffu) != SpvOpExtInst) continue;
+        // GLSL.std.450: FClamp=43, SmoothStep=49, NClamp=81.
+        EXPECT_NE(code[i + 4], 43u);
+        EXPECT_NE(code[i + 4], 49u);
+        if (code[i + 4] == 81u) ++nan_clamps;
+    }
+    EXPECT_GT(nan_clamps, 0u);
+}
+
+TEST(ShaderParser, GlslClampKeepsItsOwnNanContract) {
+    owe::vulkan::ShaderCompUnit unit {
+        .stage = owe::ShaderType::FRAGMENT,
+        .src = R"(#version 450
+layout(location=0) in vec3 value;
+layout(location=0) out vec4 color;
+void main() { color = vec4(clamp(value, 0.0, 1.0), 1.0); }
+)",
+        .lang = owe::vulkan::SourceLang::Glsl,
+    };
+    std::vector<owe::vulkan::Uni_ShaderSpv> compiled;
+    ASSERT_TRUE(owe::vulkan::CompileAndLinkShaderUnits(std::span(&unit, 1), {}, compiled));
+    ASSERT_EQ(compiled.size(), 1u);
+    unsigned float_clamps = 0;
+    const auto& code = compiled[0]->spirv;
+    for (std::size_t i = 5; i < code.size(); i += code[i] >> 16) {
+        ASSERT_GT(code[i] >> 16, 0u);
+        if ((code[i] & 0xffffu) != SpvOpExtInst) continue;
+        EXPECT_NE(code[i + 4], 81u);
+        if (code[i + 4] == 43u) ++float_clamps;
+    }
+    EXPECT_GT(float_clamps, 0u);
+}
+
+TEST(ShaderParser, AuthoredSmoothstepOverloadIsPreserved) {
+    const auto result = CompileEmptyFunctionFragment(R"(
+float smoothstep (float lo, float hi, float x) { return 0.25; }
+void main() { gl_FragColor = vec4(smoothstep(0.0, 1.0, 0.5)); }
+)", "authored-smoothstep", "0");
+    ASSERT_TRUE(result.ok) << result.error;
+}
+
+TEST(ShaderParser, ConsecutiveStorageDeclarationsOnOneLineCompileAndKeepTheirAnnotation) {
+    const std::string fragment = R"(
+uniform sampler2D g_Texture0; varying vec2 v_Uv; uniform float g_First; uniform float g_Second; // {"material":"second","default":0.25}
+void main() { gl_FragColor = texSample2D(g_Texture0, v_Uv) * (g_First + g_Second); }
+)";
+    const auto info = Parse(fragment);
+    ASSERT_TRUE(info.alias.contains("second"));
+    EXPECT_EQ(info.alias.at("second"), "g_Second");
+    EXPECT_TRUE(info.svs.contains("g_Second"));
+    EXPECT_FALSE(info.svs.contains("g_First"));
+
+    owe::SceneShaderVariantDesc desc;
+    desc.scene_id = desc.shader_name = "same-line-storage-test";
+    desc.texture_infos.push_back(owe::SceneShaderTextureCompileInfo { .enabled = true });
+    desc.stages.push_back(owe::SceneShaderVariantStage {
+        .stage = owe::ShaderType::VERTEX,
+        .source_key = "/assets/shaders/same-line-storage-test.vert",
+        .source = "attribute vec3 a_Position; attribute vec2 a_TexCoord; varying vec2 v_Uv; "
+                  "void main(){ v_Uv=a_TexCoord; gl_Position=vec4(a_Position,1.0); }",
+    });
+    desc.stages.push_back(owe::SceneShaderVariantStage {
+        .stage = owe::ShaderType::FRAGMENT,
+        .source_key = "/assets/shaders/same-line-storage-test.frag",
+        .source = fragment,
+    });
+    owe::fs::VFS vfs;
+    const auto result = owe::ShaderParser::CompileSceneShaderVariant(desc, vfs);
+    ASSERT_TRUE(result.ok) << result.error;
+    ASSERT_TRUE(result.shader);
+    EXPECT_TRUE(result.variant.stages.back().uniforms.contains("g_First"));
+    EXPECT_TRUE(result.variant.stages.back().uniforms.contains("g_Second"));
+    ASSERT_EQ(result.variant.sampler_bindings.size(), 1u);
+    EXPECT_EQ(result.variant.uniform_aliases.at("second"), "g_Second");
+}
+
 // --- annotation collection: unconditional ----------------------------------
 
 TEST(ShaderParser, TextureDefaultCollectedRegardlessOfIfdef) {
@@ -1377,7 +1470,7 @@ void main() {
                (static_cast<std::uint32_t>(header[offset + 3]) << 24);
     };
     EXPECT_EQ(read_u32(8), 3u);
-    EXPECT_EQ(read_u32(12), 19u);
+    EXPECT_EQ(read_u32(12), 22u);
     EXPECT_EQ(read_u32(16), 112u);
     EXPECT_EQ(read_u32(24), 2u);
     const auto initial_write_time = std::filesystem::last_write_time(artifact_path);

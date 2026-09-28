@@ -25,8 +25,8 @@ using namespace rstd::literals;
 
 namespace
 {
-// Decl scanners over GLSL declaration lines. Each WE shader decl is
-// line-scoped; the Cursor primitives in :shader_lex do all char-level work.
+// Decl scanners over GLSL declaration lines. Consecutive declarations may
+// share a line; the Cursor primitives in :shader_lex do all char-level work.
 
 struct DeclMatch {
     std::size_t start;       // offset of leading newline (or 0 at file start)
@@ -125,23 +125,26 @@ inline Option<DeclMatch> TryParseDeclLine(ref<str> src, usize line_start,
     return Some(m);
 }
 
-// Iterate every line; yield one DeclMatch per matching line. `keep_prefix`
-// is 1 when a leading newline exists (so callers stripping decl lines keep
-// the newline as a paragraph anchor).
+// Continue after each semicolon, including declarations of another storage
+// class. Filtering first would lose `uniform` after `varying` on the same line.
 template<typename Fn>
 inline void ForEachDeclLine(ref<str> src, std::initializer_list<ref<str>> storage_kws, Fn&& fn) {
     shader_lex::LineWalker w(src);
     for (; ! w.Done(); w.Step()) {
-        if (auto m = TryParseDeclLine(src, w.LineStart(), storage_kws)) {
+        auto cursor = w.LineStart();
+        while (auto m = TryParseDeclLine(src, cursor,
+                   { "attribute"_str, "varying"_str, "in"_str, "out"_str, "uniform"_str })) {
             DeclMatch out = *m;
-            if (w.LineStart() > rstd::usize()) {
+            if (cursor == w.LineStart() && cursor > rstd::usize()) {
                 out.start       = (w.LineStart() - rstd::usize(1)).to_primitive();
                 out.keep_prefix = 1;
-            } else {
-                out.start       = w.LineStart().to_primitive();
-                out.keep_prefix = 0;
             }
-            fn(out);
+            cursor = usize(m->end);
+            for (auto requested : storage_kws) {
+                if (out.storage != requested) continue;
+                fn(out);
+                break;
+            }
         }
     }
 }
@@ -1984,7 +1987,7 @@ using ShaderCacheDigest = std::array<std::uint8_t, 20>;
 
 constexpr std::array<std::uint8_t, 8> kShaderCacheMagic { 'O', 'W', 'E', 'S', 'P', 'V', '3', 0 };
 constexpr std::uint32_t               kShaderCacheFormatVersion = 3;
-constexpr std::uint32_t               kShaderCacheAbiVersion    = 19;
+constexpr std::uint32_t               kShaderCacheAbiVersion    = 22;
 // 8-byte magic, six u32 fields, and four SHA-1 digests total 112 bytes.
 constexpr std::uint32_t kShaderCacheHeaderSize = static_cast<std::uint32_t>(
     kShaderCacheMagic.size() + 6 * sizeof(std::uint32_t) + 4 * ShaderCacheDigest {}.size());
@@ -2708,6 +2711,53 @@ std::string ShaderParser::PreShaderHeader(const std::string& src, const Combos& 
         // Inject #define ahead of the prologue text so the #ifndef guard
         // around our `mod` overloads sees it during glslang preprocess.
         pre = "#define WW_USER_MOD 1\n" + pre;
+    }
+
+    // HLSL defines smoothstep through saturate, including coincident/reversed
+    // edges. SPIR-V SmoothStep leaves those edges undefined. Keep the documented
+    // arithmetic and let HLSL's NClamp lowering handle NaN/Inf in the quotient.
+    // https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-smoothstep
+    // Preserve an authored overload instead of macro-renaming its declaration.
+    bool user_smoothstep = false;
+    shader_lex::Lexer smoothstep_lexer(rstd::cppstd::as_str(user_src).unwrap());
+    auto previous = NextShaderToken(smoothstep_lexer);
+    int brace_depth = 0;
+    for (auto token = NextShaderToken(smoothstep_lexer);
+         token.kind != shader_lex::TokenKind::Eof;
+         previous = token, token = NextShaderToken(smoothstep_lexer)) {
+        if (PunctIs(token, '{')) ++brace_depth;
+        if (PunctIs(token, '}')) --brace_depth;
+        if (brace_depth == 0 && token.text == "smoothstep"_str &&
+            previous.kind == shader_lex::TokenKind::Ident) user_smoothstep = true;
+    }
+    if (! user_smoothstep) {
+        // Keep scalar/vector/matrix overloads and evaluate each argument once.
+        for (std::string type : { "float", "float2", "float3", "float4" }) {
+            pre += "\n" + type + " ww_smoothstep(" + type + " lo, " + type + " hi, " +
+                   type + " x) { " + type + " t = saturate((x - lo) / (hi - lo)); " +
+                   // A driver may reassociate hi-(lo+0) to negative zero even
+                   // though the SPIR-V still contains FSub/FDiv/NClamp. Do not
+                   // use a division by zero to select the coincident-edge side.
+                   "return (lo == hi) ? (" + type + ")((x > lo) && isfinite(lo)) : " +
+                   "t * t * (3.0 - 2.0 * t); }\n";
+        }
+        // glslang does not implement HLSL matrix arithmetic component-wise.
+        // Indexing a row gives a vector, so preserve every matrix shape by
+        // applying the same intrinsic to each row without matrix operators.
+        for (int rows = 1; rows <= 4; ++rows) {
+            for (int cols = 1; cols <= 4; ++cols) {
+                const auto type = "float" + std::to_string(rows) + "x" + std::to_string(cols);
+                pre += "\n" + type + " ww_smoothstep(" + type + " lo, " + type + " hi, " +
+                       type + " x) { " + type + " result;\n";
+                for (int row = 0; row < rows; ++row) {
+                    const auto index = "[" + std::to_string(row) + "]";
+                    pre += "result" + index + " = ww_smoothstep(lo" + index + ", hi" +
+                           index + ", x" + index + ");\n";
+                }
+                pre += "return result; }\n";
+            }
+        }
+        pre += "#define smoothstep ww_smoothstep\n";
     }
 
     std::string combo_defines;

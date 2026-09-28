@@ -89,6 +89,39 @@ def red_pixel(run_result: dict, frame: int) -> int:
         return stream.read(1)[0]
 
 
+def check_hlsl_bounded_intrinsics(renderer: Path, folder: Path) -> dict:
+    """One frame: normal Hermite, NaN/Inf saturation and degenerate edges."""
+    source = folder / "hlsl-bounded-intrinsics-source"
+    shutil.copytree(ROOT / "tests/fixtures/native/orientation", source)
+    (source / "shaders/probe.frag").write_text("""
+// Original WpeBaker test shader, MIT.
+uniform float g_Time;
+varying vec2 v_TexCoord;
+void main() {
+    float zero = g_Time;
+    vec3 c;
+    if (v_TexCoord.x < 0.25)
+        c = saturate(vec3(zero / zero, -1.0 / zero, 1.0 / zero));
+    else if (v_TexCoord.x < 0.5)
+        c = smoothstep(0.0, 1.0, vec3(0.25, 0.5, 0.75));
+    else if (v_TexCoord.x < 0.75)
+        c = smoothstep(vec3(0.8 + zero), vec3(0.8), vec3(0.7, 0.8, 0.9));
+    else
+        c = smoothstep(1.0, 0.0, vec3(0.25, 0.5, 0.75));
+    gl_FragColor = vec4(c, 1.0);
+}
+""", encoding="utf-8")
+    result = render(renderer, folder, "orientation", 60, 1, "hlsl-bounded-intrinsics",
+                    source_override=source)
+    raw = (Path(result["path"]) / "frames.rgba").read_bytes()
+    for x, expected in [(32, (0, 0, 255)), (96, (40, 128, 215)),
+                        (160, (0, 0, 255)), (224, (215, 128, 40))]:
+        actual = tuple(raw[(64 * 256 + x) * 4:(64 * 256 + x) * 4 + 4])
+        assert all(abs(a - e) <= 1 for a, e in zip(actual[:3], expected)), (x, actual, expected)
+        assert actual[3] == 255, (x, actual)
+    return result
+
+
 def main() -> None:
     if not __debug__:
         raise RuntimeError("validation must run with Python assertions enabled")
@@ -108,6 +141,7 @@ def main() -> None:
     report = {"schema_version": 1, "status": "running", "renderer": str(args.renderer.resolve()),
               "renderer_sha256": hashlib.sha256(args.renderer.read_bytes()).hexdigest(), "tests": {}}
     try:
+        report["tests"]["hlsl_bounded_intrinsics"] = check_hlsl_bounded_intrinsics(args.renderer.resolve(), folder)
         orientation = render(args.renderer.resolve(), folder, "orientation", 120, 2, "orientation")
         raw = (Path(orientation["path"]) / "frames.rgba").read_bytes()
         for x, y, rgb in [(32, 16, (255, 0, 0)), (224, 16, (0, 255, 0)),

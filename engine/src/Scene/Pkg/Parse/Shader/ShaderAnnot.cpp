@@ -144,8 +144,9 @@ void HandleUniformLine(ShaderInfo* info, std::span<const ShaderTexInfo> texinfos
     c.SkipHSpace();
     if (! c.MatchChar(';')) return;
 
-    // Find the trailing `// {json}` blob.
-    while (! c.Eof() && c.Peek() != '/') c.Advance();
+    // The comment belongs to this declaration only. Do not cross another
+    // declaration and accidentally assign its annotation to this uniform.
+    c.SkipHSpace();
     if (! c.MatchPunct("//"_str)) return;
     while (! c.Eof() && c.Peek() != '{') c.Advance();
     if (c.Eof()) return;
@@ -225,25 +226,39 @@ void ParseShader(const std::string& src, ShaderInfo* info,
     LineWalker                     w(rstd::cppstd::as_str(src).unwrap());
     for (; ! w.Done(); w.Step()) {
         auto line = rstd::cppstd::as_string_view(w.Line());
-        if (line.empty()) continue;
+        const auto main = line.find("void main(");
+        const bool final_line = main != std::string_view::npos;
+        if (final_line) line = line.substr(0, main);
+        if (line.empty()) {
+            if (final_line) break;
+            continue;
+        }
         // Helpers / forward decls above `void main()` are the annotated
         // region; the function body never carries new annotations.
-        if (line.find("void main(") != std::string_view::npos) break;
-
         if (line.find("// [COMBO]") != std::string_view::npos) {
             HandleComboLine(info, line);
-            continue;
-        }
-        if (line.find("// [PASS] shadow") != std::string_view::npos) {
+        } else if (line.find("// [PASS] shadow") != std::string_view::npos) {
             HandlePassLine(info, line);
-            continue;
+        } else {
+            // Match the declaration scanner: several storage declarations may
+            // precede the annotated uniform on this physical line.
+            while (!line.empty()) {
+                Cursor probe(rstd::cppstd::as_str(line).unwrap());
+                probe.SkipHSpace();
+                auto storage = probe.ReadIdent();
+                if (!storage || (*storage != "uniform"_str && *storage != "varying"_str &&
+                    *storage != "attribute"_str && *storage != "in"_str && *storage != "out"_str)) break;
+                probe.SkipHSpace();
+                if (!shader_lex::ReadTypeName(probe)) break;
+                probe.SkipHSpace();
+                (void)probe.ReadArraySuffix();
+                probe.SkipHSpace();
+                if (!probe.MatchChar(';')) break;
+                if (*storage == "uniform"_str) HandleUniformLine(info, texinfos, line);
+                line.remove_prefix(probe.Pos().to_primitive());
+            }
         }
-        // Cheap pre-check: only attempt the full keyword match if the trimmed
-        // line could plausibly start with `uniform`.
-        Cursor probe(rstd::cppstd::as_str(line).unwrap());
-        probe.SkipHSpace();
-        if (probe.Eof() || probe.Peek() != 'u') continue;
-        HandleUniformLine(info, texinfos, line);
+        if (final_line) break;
     }
 }
 
