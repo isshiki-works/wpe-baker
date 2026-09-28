@@ -32,11 +32,9 @@ internal static class PlainLanguage
         if (plan is null) return "";
         if (NoBenefitExpected(plan) || CannotBake(plan)) return L(english, "不支持", "Not supported");
         string? value = plan[BakeValueAssessment.Field]?["status"]?.GetValue<string>();
-        if (value == "potential_gain") return L(english, "可以生成，省电需实测", "Ready to generate; measure power first");
+        if (value == "potential_gain") return L(english, "可以生成", "Ready to generate");
         if (value == "low_value") return L(english, "可以生成，预计省电较少", "Ready to generate, small power saving expected");
-        if (value == "unknown") return PlanNarrative.AddedDecoderWork(plan)
-            ? L(english, "可生成样片，功耗需实测", "Can generate a sample; measure power first")
-            : L(english, "可以生成，省电效果未知", "Ready to generate, power saving unknown");
+        if (value == "unknown") return L(english, "可以生成，省电效果未知", "Ready to generate, power saving unknown");
         return L(english, "可以生成", "Ready to generate");
     }
 
@@ -70,10 +68,7 @@ internal static class PlainLanguage
     public static string NextAction(JsonObject? plan, bool english) =>
         plan is not null && CannotBake(plan)
             ? L(english, "未找到可用的生成方式", "No usable way to generate was found")
-            : PlanNarrative.AddedDecoderWork(plan)
-                ? L(english, "新增视频解码；同分辨率实测前，暂不建议替换原壁纸。",
-                    "Video decoding is added; keep the original wallpaper until a same-resolution power test.")
-                : Numbers(plan, english);
+            : Numbers(plan, english);
 
     /// <summary>
     /// 烘不了（能烘、含"关掉几样就能烘"时为 false）。原因句不在这里写，界面第二行见 <see cref="ReasonLine"/>。

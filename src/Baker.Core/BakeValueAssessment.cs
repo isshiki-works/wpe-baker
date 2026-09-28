@@ -43,7 +43,7 @@ public static class BakeValueAssessment
                 WorkloadValue.IsComparableOutput(width, height, fps) ? width * height * fps * surfaces : null,
             ["candidate_video_groups"] = plan["route"]?.GetValue<string>() == "effect_prefix"
                 ? (plan["effect_prefix_caches"] as JsonArray ?? []).Count
-                : Admission.GroupCount(plan),
+                : Admission.DynamicGroupCount(plan),
             ["scope"] = "Full-canvas planning estimate before crop, padding and opacity proof. A transparent video carries colour and alpha in one wider coded stream; these are surfaces, not decoder instances or predicted watts."
         };
     }
