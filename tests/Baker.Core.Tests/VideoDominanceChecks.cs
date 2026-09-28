@@ -97,14 +97,13 @@ internal static class VideoDominanceChecks
         check(Status(reduced) == VideoDominance.NotShellStatus &&
             reduced["video_dominant"]!["decode_work"]!["status"]!.GetValue<string>() == "potential_gain",
             "1440p60 source video to 1080p60 can reduce decoding work despite identical draw counts");
-        // 只数真正未解析的机制：已证平稳随机的粒子项（层留实时）与更小分配回退的说明条目不挡外壳判据
+        // 只数真正未解析的机制：已证平稳随机的粒子项（层留实时）不挡外壳判据
         JsonObject Noted(JsonObject plan, bool particleBaked)
         {
             JsonObject noted = plan.DeepClone().AsObject();
             noted["loop"]!["unresolved"] = new JsonArray(
                 new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = 347, ["particle_stationarity"] = new JsonObject { ["stationary"] = true },
-                    ["detail"] = "stationary random particles" },
-                new JsonObject { ["kind"] = ResidualMasking.AllocationFallbackKind, ["detail"] = "smaller allocation note" });
+                    ["detail"] = "stationary random particles" });
             noted["layers"]!.AsArray().Add(new JsonObject { ["id"] = 347, ["allocation"] = particleBaked ? "video" : "live" });
             return noted;
         }

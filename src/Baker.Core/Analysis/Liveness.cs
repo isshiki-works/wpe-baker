@@ -177,7 +177,7 @@ internal sealed class Liveness
                 if (ParticleInputAnalysis.HasAudioInput(definition, obj)) Live(id, "particle_audio_input");
             }
         }
-        liveness.LookupEdges = ScriptLookupEdges(objects);
+        liveness.LookupEdges = ScriptLookupEdges(objects, out var lookupOwners);
         // 经 shared 全局对象给别的脚本传值的写者：这种读写不进依赖记录，层烘成视频后脚本就不再执行，
         // 读它的实时脚本在成品里拿不到值（例如按 shared 值自检、不对就 destroyLayer 的防篡改脚本会把整个场景删空）。
         // 官方 WPE 里所有脚本都在跑，所以只要别的对象的脚本也用 shared，写者就留实时。
@@ -197,7 +197,9 @@ internal sealed class Liveness
                 : severedRead(dependency), severedWrite);
         CloseAll();
         // 读帧缓冲层（见上）：已经实时的照旧记这条原因；新变实时的会让后面的读取层也变，再闭包一轮，直到不再变。
-        var scriptLinked = sharedReads.Keys.Concat(sharedWrites.Keys).Concat(lookupScripts.Keys)
+        // Keep every getLayer controller, including one whose name cannot be resolved to an edge.
+        var scriptLinked = sharedReads.Keys.Concat(sharedWrites.Keys)
+            .Concat(lookupOwners)
             .Concat(liveness.LookupEdges.Select(edge => edge["target"]!.GetValue<int>())).ToHashSet();
         bool promoted = true;
         while (promoted)
@@ -260,6 +262,9 @@ internal sealed class Liveness
     /// 写边记在 visible 上：昼夜选择器按名字取受控层的那部分照常由 severedWrite 摘掉。
     /// </summary>
     internal static JsonObject[] ScriptLookupEdges(IReadOnlyDictionary<int, JsonObject> objects)
+        => ScriptLookupEdges(objects, out _);
+
+    private static JsonObject[] ScriptLookupEdges(IReadOnlyDictionary<int, JsonObject> objects, out IReadOnlySet<int> lookupOwners)
     {
         var lookupScripts = new Dictionary<int, List<(string Code, string[]? Names)>>();
         foreach (var (id, obj) in objects)
@@ -267,6 +272,7 @@ internal sealed class Liveness
                 if (binding["script"] is JsonValue value && value.TryGetValue<string>(out string? text) && CapabilityScanText(text) is var code &&
                     code.Contains("getLayer"))
                     (lookupScripts.TryGetValue(id, out var codes) ? codes : lookupScripts[id] = []).Add((code, ScriptTime.LayerNames(binding, obj)));
+        lookupOwners = lookupScripts.Keys.ToHashSet();
         var named = objects.Where(pair => pair.Value["name"] is JsonValue name && name.TryGetValue<string>(out string? text) && text.Length > 0)
             .ToLookup(pair => pair.Value["name"]!.GetValue<string>(), pair => pair.Key);
         IEnumerable<string> LookedUp((string Code, string[]? Names) script) => script.Names ?? Quoted(script.Code);

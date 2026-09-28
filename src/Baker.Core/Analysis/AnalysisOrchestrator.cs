@@ -94,8 +94,20 @@ internal sealed class AnalysisOrchestrator
         // 没闭合的层上有能改挂旋钮的慢分量时，留实时之前先改速或冻结它们重分析（RetimeSlowComponents），过速度实测才放行。
         // 振幅推不出的慢项超预算改速先实测速度差（SlowClosureProbe.SpeedAsync）：看得出就按逐项预算整套再分析（BudgetOnlyRetime，与没有这条放宽时
         // 同一结果），量不到（含渲染失败）同样不放开、但挡住循环的记未收敛（SpeedUnmeasured，见 AfterSpeedProbe）；读数写进 plan 的 slow_speed_probe。放行的改速照常过闭合预检与烘焙接缝门，阈值不动。
+        // 烘焙预检（SlowClosureProbe）：按烘焙同一个主渲染请求，把烘焙门要看的帧在分析里渲出来、按烘焙的阈值判，没过的在这里留实时、整套再分析，
+        // 直到都过或不能生成；烘焙不再为这些情况退回重烘。读数写进 plan：
+        // 缓变分量闭合（slow_closure_probe；组按自身周期 P_g 录时就在 P_g 上判；没闭合 → 所有者层留实时）、
+        // 含粒子的残差组（residual_probe；慢分量预检本来就跑的起点搜索证出烘焙第一层必拒 → 组里的粒子留实时，不另起渲染）、
+        // 没证出静态的组数越过路数上限时的动态组（video_stream_probe；证出越线 → 省下渲染最少的越线几组留实时）。
+        // 动态组判定是 main 没有的渲染，限时：只用到这里为止分析墙钟的一半（StreamBudgetFraction），超时没证出的组照旧没证出，不当拒因。
+        // 过了的照常判能，烘焙时各道门照常复核，阈值都不动。这样留实时的层各带专门的原因码，读数在对应记录里（ProbeReplan）。
+        // 预检的渲染记在 j_slow_closure，因预检改方案而整套再分析记在 k_probe_replan。
         var slowProbes = new JsonArray();
+        var residualProbes = new JsonArray();
+        var streamProbes = new JsonArray();
         var speedProbes = new JsonArray();
+        int rounds = 0;
+        TimeSpan streamBudget = timing.Elapsed * StreamBudgetFraction;
         while (Admission.Accepted(result) && tools is not null && request.RuntimeTraceFile is null)
         {
             using var slow = AnalysisTiming.Measure("j_slow_closure");
@@ -110,36 +122,42 @@ internal sealed class AnalysisOrchestrator
                     continue;
                 }
             }
-            JsonArray round = await SlowClosureProbe.RunAsync(result, tools, Path.Combine(run, $"slow-closure-{slowProbes.Count}"), token);
-            // 从选中方案实际留实时的层接着加（分配回退、逐组退回点名的层都在里面），不从请求的空集重来。
-            int[] retained = [.. (result["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()];
-            var (open, reasons) = SlowClosureRetention(result, round, retained, slowProbes);
-            if (open.Length == 0) break;
-            // 没闭合的层上有能改挂旋钮的慢分量：先改速或冻结它们（RetimeSlowComponents）整套再分析，放不放行由上面的速度实测；
-            // 实测没放行（BudgetOnlyRetime）或改完仍没闭合，才留实时
-            if (!orchestrator.request.RetimeSlowComponents && !orchestrator.request.BudgetOnlyRetime && !orchestrator.request.SpeedUnmeasured &&
+            JsonArray round = await SlowClosureProbe.RunAsync(result, tools, Path.Combine(run, $"bake-probe-{rounds}"), streamBudget, token);
+            HybridAnalyzeRequest? next = ProbeReplan(result, round, orchestrator.request);
+            foreach (JsonObject record in round.OfType<JsonObject>())
+                (record["kind"]?.GetValue<string>() switch { "residual_start_search" => residualProbes, "video_streams" => streamProbes, _ => slowProbes })
+                    .Add(record.DeepClone());
+            streamBudget -= TimeSpan.FromSeconds(round.OfType<JsonObject>().Sum(record => record["stream_elapsed_seconds"]?.GetValue<double>() ?? 0));
+            int[] slowOpen = [.. round.OfType<JsonObject>().Where(record =>
+                (record["kind"]?.GetValue<string>() is null or "slow_closure") && !LoopClosureCheck.Allows(record["loop_closure"] as JsonObject))
+                .SelectMany(record => (record["owner_layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int)).OfType<int>()];
+            if (slowOpen.Length > 0 && !orchestrator.request.RetimeSlowComponents && !orchestrator.request.BudgetOnlyRetime && !orchestrator.request.SpeedUnmeasured &&
                 ((result["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["slow_components"] as JsonArray ?? []).OfType<JsonObject>().Any(component =>
-                    component["retimable"]?.GetValue<bool>() == true && SceneGraph.Int(component["owner_layer_id"]) is int owner && open.Contains(owner)))
+                    component["retimable"]?.GetValue<bool>() == true && SceneGraph.Int(component["owner_layer_id"]) is int owner && slowOpen.Contains(owner)))
             {
                 var trial = new AnalysisOrchestrator(orchestrator.request with { RetimeSlowComponents = true }, analyze, space,
                     space.Budget(), tools, Path.Combine(run, $"slow-retime-{slowProbes.Count}"), cache, token, memo, progress);
                 JsonObject retimed = await trial.SelectAsync();
-                // 改速后反而生成不了：不采用，照旧留实时
                 if (Admission.Accepted(retimed))
                 {
                     (orchestrator, result) = (trial, retimed);
                     continue;
                 }
             }
-            orchestrator = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = [.. retained, .. open],
-                RetainLiveReasons = reasons }, analyze, space,
-                space.Budget(), tools, Path.Combine(run, $"slow-live-{slowProbes.Count}"), cache, token, memo, progress);
-            result = await orchestrator.SelectAsync();
+            if (next is null) break;
+            orchestrator = new AnalysisOrchestrator(next, analyze, space, space.Budget(), tools, Path.Combine(run, $"probe-live-{++rounds}"),
+                cache, token, memo, progress);
+            using (AnalysisTiming.Measure("k_probe_replan")) result = await orchestrator.SelectAsync();
         }
         if (slowProbes.Count > 0) result["slow_closure_probe"] = slowProbes;
+        if (residualProbes.Count > 0) result["residual_probe"] = residualProbes;
+        if (streamProbes.Count > 0) result["video_stream_probe"] = streamProbes;
+        // 证出的动态组仍越线（没有能再留实时的组）：按预计不省电拒（判据见 NoBenefit，只认证出的动态组）。
+        if (Admission.Accepted(result) && NoBenefit.AnalysisConditions(result).Contains(NoBenefit.TooManyStreams))
+            NoBenefit.Apply(result, orchestrator.request.AllowNoBenefit);
         if (speedProbes.Count > 0) result["slow_speed_probe"] = speedProbes;
-        // 留实时后生成不了：裁定与结论按预检读数重算（HybridSuitability 判有证明的不能）。
-        if (slowProbes.Count > 0 && !Admission.Accepted(result))
+        // 改方案后生成不了：裁定与结论按预检读数重算（HybridSuitability 判有证明的不能）。
+        if (slowProbes.Count + residualProbes.Count + streamProbes.Count > 0 && !Admission.Accepted(result))
         {
             result["suitability"] = HybridSuitability.Verdict(result);
             PlanNarrative.Attach(result);
@@ -155,29 +173,58 @@ internal sealed class AnalysisOrchestrator
 
     /// <summary>慢分量闭合预检没闭合、所有者层因此留实时的原因码（不是用户要求的 retained_by_cost_trial）。</summary>
     internal const string SlowClosureNotClosed = "slow_closure_not_closed";
+    /// <summary>起点搜索证出烘焙第一层必拒的残差组里的粒子（读数见 residual_probe）。</summary>
+    internal const string ResidualRetainReason = "residual_seam_over_limit";
+    /// <summary>证出的动态组超过路数上限、退回的组（读数见 video_stream_probe）。</summary>
+    internal const string StreamRetainReason = "video_streams_over_limit";
+    /// <summary>动态组判定（main 没有的渲染）可用的墙钟：到烘焙预检为止分析墙钟的这个比例，整张分析不超过原来的 1.5 倍。</summary>
+    internal const double StreamBudgetFraction = 0.5;
 
     /// <summary>
-    /// 一轮慢分量闭合预检之后要再留实时的层：没闭合的记录里还没留实时的所有者层。原因码写 <see cref="SlowClosureNotClosed"/>
-    /// （并上 plan 已带的原因），读数引用记在那条记录的 retained_live_layer_ids 上；记录的副本追加进 <paramref name="records"/>。
+    /// 烘焙预检（<see cref="SlowClosureProbe.RunAsync"/>）一轮读数之后的下一次分析请求；没有要再留实时的层时返回 null。
+    /// 没闭合的缓变分量所有者层（<see cref="SlowClosureNotClosed"/>）、起点搜索证出第一层必拒的残差组里的粒子（<see cref="ResidualRetainReason"/>，
+    /// 并上它们原来的未解析原因）、证出越线时点名退回的动态组的根（<see cref="StreamRetainReason"/>）留实时；
+    /// 从选中方案实际留实时的层接着加（分配回退、逐组退回点名的层都在里面），plan 已带的原因跟着走。只加不减，层数有限，循环必然停下。
+    /// 每条读数记录写 retained_live_layer_ids（这条读数让哪些层留实时）；留实时按分配单元整单元生效（<see cref="Allocation"/>，
+    /// 整单元写这些原因码），同单元里没点名、原来也不实时的层（例如粒子挂在下面的全屏背景）记进同一条的 carried_layer_ids。
     /// </summary>
-    internal static (int[] Open, Dictionary<int, string[]> Reasons) SlowClosureRetention(JsonObject result, JsonArray round, int[] retained,
-        JsonArray records)
+    internal static HybridAnalyzeRequest? ProbeReplan(JsonObject plan, JsonArray round, HybridAnalyzeRequest request)
     {
-        var reasons = HybridLoopAllocation.RetainReasons(result, []) ?? [];
-        var open = new List<int>();
-        foreach (JsonObject record in round.OfType<JsonObject>())
+        static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
+        int[] retained = [.. Ids(plan["settings"]?["retain_live_root_ids"])];
+        HashSet<int> alreadyLive = [.. Ids(plan["live_layer_ids"])];
+        var reasons = HybridLoopAllocation.RetainReasons(plan, []) ?? [];
+        var unitOf = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["id"]) is int)
+            .DistinctBy(layer => SceneGraph.Int(layer["id"])).ToDictionary(layer => SceneGraph.Int(layer["id"])!.Value,
+                layer => SceneGraph.Int(layer["allocation_root"] ?? layer["root"]) ?? SceneGraph.Int(layer["id"])!.Value);
+        var live = new List<int>();
+        void Retain(JsonObject record, IEnumerable<int> named, string reason)
         {
-            JsonObject kept = record.DeepClone().AsObject();
-            if (!LoopClosureCheck.Allows(record["loop_closure"] as JsonObject))
-            {
-                int[] owners = [.. record["owner_layer_ids"]!.AsArray().Select(SceneGraph.Int).OfType<int>().Except(retained).Except(open)];
-                foreach (int owner in owners) reasons[owner] = [.. reasons.GetValueOrDefault(owner, []).Append(SlowClosureNotClosed).Distinct()];
-                kept["retained_live_layer_ids"] = new JsonArray([.. owners.Select(id => (JsonNode)id)]);
-                open.AddRange(owners);
-            }
-            records.Add(kept);
+            int[] ids = [.. named.Except(retained).Except(live).Distinct()];
+            foreach (int id in ids) reasons[id] = [.. reasons.GetValueOrDefault(id, []).Append(reason).Distinct()];
+            record["retained_live_layer_ids"] = new JsonArray([.. ids.Select(id => (JsonNode)id)]);
+            var units = ids.Where(unitOf.ContainsKey).Select(id => unitOf[id]).ToHashSet();
+            record["carried_layer_ids"] = new JsonArray([.. unitOf.Where(pair => units.Contains(pair.Value) && !ids.Contains(pair.Key) &&
+                !alreadyLive.Contains(pair.Key)).Select(pair => pair.Key).Order().Select(id => (JsonNode)id)]);
+            live.AddRange(ids);
         }
-        return ([.. open], reasons);
+        foreach (JsonObject record in round.OfType<JsonObject>())
+            switch (record["kind"]?.GetValue<string>() ?? "slow_closure")
+            {
+                case "slow_closure" when !LoopClosureCheck.Allows(record["loop_closure"] as JsonObject):
+                    Retain(record, Ids(record["owner_layer_ids"]), SlowClosureNotClosed);
+                    break;
+                case "residual_start_search" when record["status"]?.GetValue<string>() == "rejected_residual_above_limits":
+                    int[] particles = [.. Ids(record["particle_layer_ids"])];
+                    foreach (var (id, codes) in HybridLoopAllocation.RetainReasons(plan, particles) ?? [])
+                        reasons[id] = [.. reasons.GetValueOrDefault(id, []).Concat(codes).Distinct()];
+                    Retain(record, particles, ResidualRetainReason);
+                    break;
+                case "video_streams" when record["retreat_root_ids"] is JsonArray roots:
+                    Retain(record, Ids(roots), StreamRetainReason);
+                    break;
+            }
+        return live.Count == 0 ? null : request with { RetainLiveRootIds = [.. retained, .. live], RetainLiveReasons = reasons };
     }
 
     /// <summary>
@@ -284,7 +331,8 @@ internal sealed class AnalysisOrchestrator
             ["zh"] = MessageCatalog.Get(key, "zh"), ["en"] = MessageCatalog.Get(key, "en") };
     }
 
-    /// <summary>能生成且预计省电。烘焙按实际编出的视频流数拒（NoBenefit.TooManyVideoStreams），可行与差距用同一判据，不选烘焙必拒的方案。</summary>
+    /// <summary>能生成且预计省电，路数按没证出静态的组数（上界）算：可行与差距用同一判据，不选烘焙可能拒的方案。
+    /// 选中方案的上界越线时，编排收尾按渲染证据证出动态组（<see cref="SlowClosureProbe.StreamsAsync"/>），证出越线再退。</summary>
     private bool Viable(JsonObject plan) => Admission.Accepted(plan) && (request.AllowNoBenefit ||
         !DaytimeSplit.FixedState(plan) && NoBenefit.AnalysisConditions(plan).Length == 0 && !NoBenefit.TooManyVideoStreams(Admission.GroupCount(plan)));
 

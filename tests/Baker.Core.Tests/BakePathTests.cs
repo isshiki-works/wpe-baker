@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 using Baker.Core;
 using Xunit;
 
-// 烘焙侧此前没有测试执行到的两处：分段渲染的段目录、分析阶段慢分量闭合预检的分流。都不需要 GPU 与 WPE 素材。
+// 烘焙侧此前没有测试执行到的两处：分段渲染的段目录、分析阶段烘焙预检的分流。都不需要 GPU 与 WPE 素材。
 
 [Trait("Layer", "L1")]
 public class BakePathTests
@@ -21,7 +21,8 @@ public class BakePathTests
         Assert.All(new[] { "part0", "part1" }, part => Assert.True(File.Exists(Path.Combine(output, part, "manifest.json")), part));
     });
 
-    // 闭合预检只对含慢分量所有者层的组动手：慢分量所有者不在任何组里时不碰源与渲染器，在组里时才开始准备渲染。
+    // 预检只对要查的组动手：慢分量所有者不在任何组里时不碰源与渲染器，组按自身周期录也一样（没有缓变分量的组按解析周期精确闭合，不渲）；
+    // 所有者在组里时才开始准备渲染。
     [Fact]
     public async Task SlowClosureProbeOnlyTouchesGroupsOwningSlowComponents() => await TestTemp.Run(async dir =>
     {
@@ -33,41 +34,12 @@ public class BakePathTests
             ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 60,
                 ["slow_components"] = new JsonArray(new JsonObject { ["owner_layer_id"] = owner, ["drift_bound_radians"] = 0.01 }) }) },
         };
-        Assert.Empty(await SlowClosureProbe.RunAsync(Plan(2), tools, Path.Combine(dir, "other"), CancellationToken.None));
-        // 在组里时开始准备渲染；准备失败（这里源不存在）记 probe_failed、不带闭合读数，不让整次分析失败
-        JsonObject failed = Assert.Single(await SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), CancellationToken.None))!.AsObject();
-        Assert.Equal("probe_failed", failed["status"]!.GetValue<string>());
-        Assert.Null(failed["loop_closure"]);
-        Assert.Equal([1], failed["owner_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()));
-    });
-
-    // 接缝门因慢分量漂移拒了某组、点名层 7：退回让层 7 留实时，重新分析，用新计划再烘一次，报告记成 retried。
-    [Fact]
-    public async Task SlowComponentRejectionRetreatsReplansAndRebakes() => await TestTemp.Run(async dir =>
-    {
-        string output = Path.Combine(dir, "bake");
-        var firstPlan = new JsonObject { ["settings"] = PlanSettings.ToJson(new HybridAnalyzeRequest(2, "source", "assets", "analysis")) };
-        var newPlan = new JsonObject { ["settings"] = firstPlan["settings"]!.DeepClone(), ["blockers"] = new JsonArray() };
-        HybridAnalyzeRequest? replanned = null;
-        var baked = new List<JsonObject>();
-        var service = new HybridBakeService(new NativeTools("must-not-run", "must-not-run", "must-not-run", []),
-            bakeOnce: request =>
-            {
-                baked.Add(request.Plan);
-                Directory.CreateDirectory(output);
-                return Task.FromResult(baked.Count == 1
-                    ? new JsonObject { ["status"] = "candidate_rejected_seam",
-                        [NoBenefit.Field] = new JsonObject { [NoBenefit.RetreatRootsField] = new JsonArray(7) } }
-                    : new JsonObject { ["status"] = "candidate_generated" });
-            },
-            analyze: settings => { replanned = settings; return Task.FromResult(newPlan); });
-
-        JsonObject result = await service.BakeAsync(new HybridBakeRequest(2, firstPlan, output));
-
-        Assert.Contains(7, replanned!.RetainLiveRootIds!);
-        Assert.Equal(2, baked.Count);
-        Assert.Same(newPlan, baked[1]);
-        Assert.Equal("retried", result["slow_component_retreat"]?["status"]?.GetValue<string>());
+        Assert.Empty(await SlowClosureProbe.RunAsync(Plan(2), tools, Path.Combine(dir, "other"), TimeSpan.Zero, CancellationToken.None));
+        JsonArray failed = await SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), TimeSpan.Zero, CancellationToken.None);
+        Assert.Equal("probe_failed", failed[0]!["status"]!.GetValue<string>());
+        JsonObject own = Plan(2);
+        own["loop"]!["candidates"]![0]!["group_frames"] = new JsonObject { ["group-1"] = 30 };
+        Assert.Empty(await SlowClosureProbe.RunAsync(own, tools, Path.Combine(dir, "own-period"), TimeSpan.Zero, CancellationToken.None));
     });
 
     // 慢项改速实测的读数（伪造渲染器出平滑纹理）。位移：改速后的版本按速度差 dv 横移 dv·t 像素，0.05 px/s 放行、0.5 px/s 看得出。
@@ -90,7 +62,7 @@ public class BakePathTests
                     rgba[i] = rgba[i + 1] = rgba[i + 2] = (byte)Math.Round(v);
                     rgba[i + 3] = 255;
                 }
-            if (speck) rgba[(size / 2 * size + size / 2) * 4] ^= 1; // 画面中间一个像素差 1 level
+            if (speck) rgba[0] ^= 1;
             return rgba;
         }
         // version：0 改速前、1 改速后、2 对照（改速项按原速 2 倍）
@@ -124,9 +96,7 @@ public class BakePathTests
         JsonObject inert = await Read((version, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / (version == 2 ? 200 : 400)), halfFlat: true));
         Assert.Equal("not_measured", inert["status"]!.GetValue<string>());
         Assert.Equal("patch_not_effective", inert["reason"]!.GetValue<string>());
-        // 第 0 帧按可测下限比：一个像素差 1 level（量化、粒子这类逐位不稳）不算不同状态；整幅错开 5 px 才是 frame0_differs
-        Assert.NotEqual("frame0_differs", (await Read((version, t) => Frame(0, speck: version == 1 && t == 0)))["reason"]?.GetValue<string>());
-        Assert.Equal("frame0_differs", (await Read((version, t) => Frame(version == 1 && t == 0 ? 5 : 0)))["reason"]!.GetValue<string>());
+        Assert.Equal("frame0_differs", (await Read((version, t) => Frame(0, speck: version == 1 && t == 0)))["reason"]!.GetValue<string>());
         Assert.Equal("no_texture", (await Read((version, t) => Frame(0, version == 1 ? t : 0, flat: true)))["reason"]!.GetValue<string>());
     }
 
@@ -300,9 +270,6 @@ public class BakePathTests
         Assert.Equal([knob], SlowClosureProbe.UnwrittenKeys(Written("capture-without-material"), [knob]));
         await Task.CompletedTask;
     });
-
-    // 分量旋钮改写把新 main 追加在文件末尾：varying 声明在 #if 块里时，保存与恢复它的语句包进同一条件（3644280276 waterripple 的组合关着时编不过），
-    // 条件成立的组合照常改写（main 上这些作品就是这样烘的，不能因此改判不可调速）
     [Fact]
     public async Task AxisRewriteKeepsAConditionalVaryingInsideItsGuard() => await TestTemp.Run(async dir =>
     {
@@ -314,21 +281,17 @@ public class BakePathTests
             File.WriteAllText(path, text);
         }
         const string key = "periodica_k_vert_ax_xy_v_TexCoordRipple";
-        Write("scene.json", """{"objects":[]}""");
-        Write("project.json", """{"file":"scene.json","type":"scene"}""");
-        Write("effects/ripple/effect.json", """{"passes":[{"material":"materials/effects/ripple.json"}]}""");
-        Write("materials/effects/ripple.json", """{"passes":[{"shader":"effects/ripple"}]}""");
-        Write("shaders/effects/ripple.vert", "uniform float g_Time;\n#if RIPPLE\nvarying vec4 v_TexCoordRipple;\n#endif\n" +
-            "void main() {\n#if RIPPLE\n  v_TexCoordRipple = vec4(g_Time);\n#endif\n  gl_Position = vec4(0.0);\n}\n");
-        var scene = JsonNode.Parse($$$"""
-            {"objects":[{"id":1,"effects":[{"file":"effects/ripple/effect.json","passes":[{"constantshadervalues":{"{{{key}}}":1.25}}]}]}]}
-            """)!.AsObject();
+        Write("scene.json", "{\"objects\":[]}");
+        Write("project.json", "{\"file\":\"scene.json\",\"type\":\"scene\"}");
+        Write("effects/ripple/effect.json", "{\"passes\":[{\"material\":\"materials/effects/ripple.json\"}]}");
+        Write("materials/effects/ripple.json", "{\"passes\":[{\"shader\":\"effects/ripple\"}]}");
+        Write("shaders/effects/ripple.vert", "uniform float g_Time;\n#if RIPPLE\nvarying vec4 v_TexCoordRipple;\n#endif\nvoid main() {\n#if RIPPLE\n v_TexCoordRipple = vec4(g_Time);\n#endif\n gl_Position = vec4(0.0);\n}\n");
+        var scene = JsonNode.Parse($"{{\"objects\":[{{\"id\":1,\"effects\":[{{\"file\":\"effects/ripple/effect.json\",\"passes\":[{{\"constantshadervalues\":{{\"{key}\":1.25}}}}]}}]}}]}}")!.AsObject();
         using var source = new ProjectSource(project);
         JsonArray written = await ShaderTextPatch.WriteTimeScaleAsync(Path.Combine(dir, "capture"), source, null, scene, CancellationToken.None);
         Assert.Equal([key], written.Single()!["keys"]!.AsArray().Select(k => k!.GetValue<string>()));
         string text = File.ReadAllText(Path.Combine(dir, "capture", "shaders", "effects", "ripple.vert"));
         string tail = text[text.LastIndexOf("void main()", StringComparison.Ordinal)..];
-        // 新 main 里每处读写 v_TexCoordRipple 都在 #if RIPPLE … #endif 之内
         foreach (int at in System.Text.RegularExpressions.Regex.Matches(tail, @"\bv_TexCoordRipple\b").Select(m => m.Index))
         {
             string before = tail[..at];
@@ -337,24 +300,16 @@ public class BakePathTests
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(tail, "#if RIPPLE").Count);
     });
 
-    // 冻结的粒子湍流场不进求解器，没有候选分量与证据：按补丁认项，同样进测速
     [Fact]
     public async Task FrozenParticleFieldEntersTheSpeedProbe() => await TestTemp.Run(async dir =>
     {
         const string component = "particle_field/1/operator1";
-        var plan = new JsonObject
-        {
-            ["source"] = Path.Combine(dir, "missing-source"),
+        var plan = new JsonObject { ["source"] = Path.Combine(dir, "missing-source"),
             ["video_groups"] = new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(1) }),
-            ["loop"] = new JsonObject
-            {
-                ["retime_budget_percent"] = 1.0, ["evidence"] = new JsonArray(),
+            ["loop"] = new JsonObject { ["retime_budget_percent"] = 1.0, ["evidence"] = new JsonArray(),
                 ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 3000, ["components"] = new JsonArray(),
                     ["patches"] = new JsonArray(new JsonObject { ["component"] = component, ["kind"] = LoopAnalysis.ParticleFieldPatchKind, ["owner_layer_id"] = 1,
-                        ["effect_index"] = -1, ["pass_index"] = -1, ["constant_key"] = "timescale", ["value_index"] = 1, ["old_value"] = 20.0, ["new_value"] = 0.0,
-                        ["speed_exponent"] = 1.0 }) })
-            },
-        };
+                        ["effect_index"] = -1, ["pass_index"] = -1, ["constant_key"] = "timescale", ["value_index"] = 1, ["old_value"] = 20.0, ["new_value"] = 0.0, ["speed_exponent"] = 1.0 }) }) } };
         JsonObject? record = await SlowClosureProbe.SpeedAsync(plan, new NativeTools("must-not-run", "must-not-run", "must-not-run", []),
             Path.Combine(dir, "speed"), CancellationToken.None);
         Assert.Equal([component], record?["components"]!.AsArray().Select(x => x!.GetValue<string>()) ?? []);

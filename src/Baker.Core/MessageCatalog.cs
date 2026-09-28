@@ -758,6 +758,10 @@ public static class MessageCatalog
         ["bake.no_benefit_streams"] = new(
             Zh: "不支持：预计功耗高于原壁纸（已编出 {0} 路视频，超过 {1} 路，路数更多的成品通常比原作更费电）。已在此停止，未生成候选项目。调试或测功耗时可用 --no-benefit allow 重新分析并生成。",
             En: "Not supported: estimated power use is higher than the original wallpaper ({0} video streams are already encoded, above {1}; results with more streams usually draw more power than the original). Stopped here, no candidate project generated. For debugging or power measurement, use --no-benefit allow to analyze and generate anyway."),
+        // 全静态、没有任何实时层的成品：整张壁纸换成一张静态图，没有实时渲染（待定文案，维护者定稿）。
+        ["bake.static_only_no_live"] = new(
+            Zh: "TODO_UI",
+            En: "TODO_UI"),
         ["bake.no_visible_output"] = new(
             Zh: "不可生成：所有视频组在生成区间内都没有可见像素，没有可替换成视频的内容。",
             En: "Cannot generate: every video group was empty over the generated interval, so there is no content to replace with video."),

@@ -845,7 +845,9 @@ public partial class MainWindow : Window
                     job.State = job.CanApply ? "completed" : "failed";
                     bool effectPrefix = job.Request.Plan["route"]?.GetValue<string>() == "effect_prefix";
                     // 队列里只说人话，每条后面都指向报告文件；技术原文在那里一句没少。
-                    job.Describe(() => (resultStatus == StaticOnlyBake.Status
+                    job.Describe(() => (StaticOnlyBake.WithoutLiveLayers(result)
+                        ? MessageCatalog.Get("bake.static_only_no_live", english ? MessageCatalog.English : MessageCatalog.Chinese)
+                        : resultStatus == StaticOnlyBake.Status
                         ? L("只生成了静态图，动画仍实时渲染，不省电。",
                             "Only a still image was generated; the animation still renders live, so no power is saved.")
                         : resultStatus == "candidate_rejected_no_loop"

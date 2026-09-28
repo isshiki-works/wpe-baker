@@ -176,7 +176,7 @@ public static class VideoDominance
                 "这段周期里有着色器时钟或非视频动画分量，说明存在可以被烘进视频的逐帧计算。");
         // 只数真正未解析的时间机制：已证平稳随机的粒子项（接缝交叉淡化，particle_stationarity.stationary）与更小分配回退的说明条目不是
         JsonObject[] items = (loop["unresolved"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? [];
-        int unresolved = loop["unresolved"] is JsonArray ? items.Count(item => item["kind"]?.GetValue<string>() != ResidualMasking.AllocationFallbackKind &&
+        int unresolved = loop["unresolved"] is JsonArray ? items.Count(item => item["kind"]?.GetValue<string>() != "loop_allocation_fallback" &&
             !PlanNarrative.StationaryParticle(item)) : -1;
         evidence.Add("unresolved_components=" + unresolved.ToString(CultureInfo.InvariantCulture));
         if (unresolved != 0)

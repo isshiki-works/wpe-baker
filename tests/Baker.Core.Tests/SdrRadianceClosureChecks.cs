@@ -249,6 +249,11 @@ internal static class SdrRadianceClosureChecks
             scene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 30, ["name"] = "Writer", ["visible"] = false,
                 ["origin"] = new JsonObject { ["value"] = "0 0 0", ["script"] = "export function update(value) { shared.tint = 1; return value; }" } });
         });
+        JsonObject overUnknownLookup = await PlanAsync("feedback-unknown-lookup", mutate: (scene, trace, _) => {
+            ReadFramebuffer(trace);
+            scene["objects"]![1]!["origin"] = new JsonObject { ["value"] = "32 16 0",
+                ["script"] = "export function update(value) { return getLayer('missing-layer').visible ? value : value; }" };
+        });
         // 放宽前的判定：请求点名的读取层（LiveFramebufferReaderIds）在实时判定阶段按读帧缓冲留实时，不经 --retain-live。
         JsonObject named = await PlanAsync("feedback-named", mutate: (_, trace, _) => ReadFramebuffer(trace), liveReaders: [20]);
         check(FeedbackAllocation(named) == "live" && named["settings"]!["retain_live_root_ids"] is null &&
@@ -259,6 +264,10 @@ internal static class SdrRadianceClosureChecks
             new[] { overLive, noClear, overShared }.All(plan => plan["layers"]!.AsArray().OfType<JsonObject>().Single(layer => layer["id"]!.GetValue<int>() == 20)
                 ["reasons"]!.AsArray().Any(reason => reason!.GetValue<string>() == "reads_current_framebuffer")),
             "a framebuffer-sampling layer stays live over a live layer, without the scene clear, or over a layer linked through shared");
+        check(FeedbackAllocation(overUnknownLookup) == "live" &&
+            overUnknownLookup["layers"]!.AsArray().OfType<JsonObject>().Single(layer => layer["id"]!.GetValue<int>() == 20)["reasons"]!.AsArray()
+                .Any(reason => reason!.GetValue<string>() == "reads_current_framebuffer"),
+            "a framebuffer reader with an unresolved getLayer name stays live conservatively");
         using (var feedbackSource = new ProjectSource(Path.Combine(root, "sdr-feedback")))
         {
             JsonObject scene = Scene(true), trace = Trace();
