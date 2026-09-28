@@ -203,7 +203,7 @@ internal static class EffectPrefixLightingChecks
         }
         double directAlpha = AlphaMae(captured, directTerminal), oldAlpha = AlphaMae(captured, oldTerminal);
         check(Enumerable.Range(0, captured.Length / 4).Any(pixel => captured[pixel * 4 + 3] < 255) &&
-            directRgb < oldRgb / 2 && directRgb < 2 && directAlpha < oldAlpha / 2,
+            directRgb < oldRgb / 2 && directRgb < 2 && directAlpha < oldAlpha / 2 && directAlpha <= 1,
             $"sharp one-pixel color and alpha grid survives direct decode (RGB MAE old {oldRgb:F3}, direct {directRgb:F3}; alpha old {oldAlpha:F3}, direct {directAlpha:F3})");
     }
 }
