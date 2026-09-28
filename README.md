@@ -4,30 +4,15 @@ English ｜ [简体中文](README.zh-CN.md)
 
 **Deterministic animation baking for Wallpaper Engine.** The first product built on Periodica.
 
-Your wallpaper renders the same frames forever. WPE Baker models a scene's animation math — shader time, animation tracks, particle cycles, video timebases — retunes the periods within a visible-change budget until the whole scene closes into one loop, and pre-renders the deterministic part into a single video. The output is a standalone Wallpaper Engine project: same look, decoded for almost nothing, no model calls at runtime, no Python.
+WPE Baker models a scene's animation — shader time, animation tracks, particle cycles and video timebases — and retunes periodic motion within a visible-change budget until it closes into a loop. One offline generation pass pre-renders the deterministic parts as video or static caches; the result can contain multiple videos and textures. On repeat playback, the precomputed animation is decoded while retained layers such as mouse interaction, audio response, clocks and day/night effects keep running according to the selected mode. No model calls or Python are needed at runtime.
 
 Website: **https://isshiki-works.github.io/wpe-baker/** · Download: **[Releases](https://github.com/isshiki-works/wpe-baker/releases/latest)** · 中文：[README.zh-CN.md](README.zh-CN.md)
 
-## Measured
-
-Official Wallpaper Engine player, Intel Arc B390 laptop, A/B/B/A runs, RAPL iGPU rail, 60 fps. Original scene against its baked output.
-
-| Wallpaper | Original | Baked | Change |
-|---|---:|---:|---:|
-| Nijika (3650475846) | 22.51 W | 1.86 W | −91.7% |
-| Ayanami Rei (3258032485) | 2.29 W | 0.19 W | −91.8% |
-| Atri (3669681034) | 8.45 W | 0.81 W | −90.4% |
-| Alone (3448877775) | 5.66 W | 1.05 W | −81.5% |
-| Ultraman Leo (3685247684) | 9.13 W | 2.46 W | −73.0% |
-| Yuri (3572877776) | 2.38 W | 0.71 W | −70.3% |
-| Frieren (3426865175) | 10.09 W | 3.50 W | −65.3% |
-| Lost Landscape 3 (3713073223) | 8.11 W | 3.48 W | −57.1% |
-
-At the panel's full refresh rate the gap widens: Atri at 165 Hz draws 26.0 W as the original and 3.9 W baked (package 41.4 W → 15.4 W). Per-title tables for every measured output, including the ones that did not save, are in the [technical notes](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.md).
+Technical details and project notes: [technical notes](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.md).
 
 ## Quick start
 
-1. Download `WpeBaker-1.0.2-win-x64.zip` from [Releases](https://github.com/isshiki-works/wpe-baker/releases/latest) and unzip the **whole** archive into a folder you can write to (not `C:\Program Files`). No installer.
+1. Download the Windows archive from [Releases](https://github.com/isshiki-works/wpe-baker/releases/latest) and unzip the **whole** archive into a folder you can write to (not `C:\Program Files`). No installer.
 2. Run `WpeBaker\WpeBaker.exe`. If Windows SmartScreen appears, choose More info → Run anyway; the build is not code-signed.
 3. Drag a Scene wallpaper folder from `steamapps\workshop\content\431960\` into the window and click Analyze.
 4. Read the verdict and click Start generating. The output appears in Wallpaper Engine's own list.
@@ -48,7 +33,7 @@ wpe-baker.exe bake plan.json --out <output-dir>
 
 - **Measure** — optionally plays the original in the official player first and reads the GPU power counters.
 - **Solve** — each periodic component is solved for its own period, then retuned within the preset's budget (efficiency 5 %, balanced 3 %, quality: smallest change that closes) into one common loop.
-- **Bake** — everything deterministic becomes one video; the output is rendered past its loop point and checked tile by tile against the original's next frame before it is accepted.
+- **Bake** — deterministic parts are pre-rendered as video or static caches; the output is rendered past its loop point and checked tile by tile against the original's next frame before it is accepted. Retained real-time layers continue to use live input according to the selected interaction mode.
 - **Input stays input** — mouse parallax, audio-reactive effects, clocks and interactive panels are treated as input: kept live, fixed, or left out, and always listed before generation.
 
 ## Feedback
@@ -57,11 +42,11 @@ Issues are welcome in English or Chinese. Attach `plan.json` and `bake.json` fro
 
 ## Requirements
 
-Windows 10/11, Wallpaper Engine, a GPU for the offline render (any modern iGPU works; a discrete GPU is faster). Playback needs only hardware video decode.
+Windows 10/11 64-bit, Wallpaper Engine, and a Vulkan-capable GPU for offline rendering. During playback, Wallpaper Engine decodes the baked videos and renders the retained real-time layers.
 
 ## Building from source
 
-Full source, third-party notices and build records are in `WpeBaker-1.0.2-source.zip` on the release page. See `REBUILD.md` in the source archive.
+The source archive on the release page contains the full source, third-party notices and build records. See `REBUILD.md` in that archive.
 
 ## Licenses
 
