@@ -674,6 +674,7 @@ constexpr const char* kTextShaderHlsl = R"hlsl(
 [[vk::binding(0, 1)]] cbuffer ww_Uniforms {
     column_major float4x4 g_ModelViewProjectionMatrix;
     float g_Alpha;
+    float3 g_Color;
 };
 
 struct VSInput {
@@ -702,7 +703,7 @@ SamplerState g_Texture0_sampler;
 
 float4 main_ps(PSInput i) : SV_Target {
     float a = g_Texture0.Sample(g_Texture0_sampler, i.v_uv).r;
-    return float4(i.v_col.rgb, i.v_col.a * a * g_Alpha);
+    return float4(i.v_col.rgb * g_Color, i.v_col.a * a * g_Alpha);
 }
 )hlsl";
 
@@ -811,6 +812,9 @@ auto TextUniformSource::Describe(UniformBindingSink* sink) const
     auto alpha = sink->Bind(UniformOutputId { .value = rstd::u32(static_cast<rstd::uint32_t>(TextUniformOutput::Alpha)) },
                             G_ALPHA, UniformValueShape::Float(rstd::u32(1)));
     if (alpha.is_err()) return rstd::Err(rstd::move(alpha).unwrap_err_unchecked());
+    auto color = sink->Bind(UniformOutputId { .value = rstd::u32(static_cast<rstd::uint32_t>(TextUniformOutput::Color)) },
+                            G_COLOR, UniformValueShape::Float(rstd::u32(3)));
+    if (color.is_err()) return rstd::Err(rstd::move(color).unwrap_err_unchecked());
     return rstd::Ok(rstd::empty {});
 }
 
@@ -824,14 +828,22 @@ auto TextUniformSource::Evaluate(const UniformUpdateContext*,
     -> rstd::Result<rstd::empty, UniformError> {
     if (! m_state || m_state->camera.is_none()) return rstd::Ok(rstd::empty {});
 
-    // Effect text keeps its authored alpha in vertex colors and applies the
-    // layer alpha during final composition. Its source pass needs unit alpha.
+    // Effect text keeps authored alpha/color in vertex colors and applies the
+    // layer overrides during final composition. Its source pass needs unit tint.
     const auto alpha_id = UniformOutputId {
         .value = rstd::u32(static_cast<rstd::uint32_t>(TextUniformOutput::Alpha)),
     };
     if (sink->Wants(alpha_id)) {
         const auto alpha = UniformValue(1.0f);
         auto result = sink->Write(alpha_id, alpha.View());
+        if (result.is_err()) return result;
+    }
+    const auto color_id = UniformOutputId {
+        .value = rstd::u32(static_cast<rstd::uint32_t>(TextUniformOutput::Color)),
+    };
+    if (sink->Wants(color_id)) {
+        const auto color = UniformValue(rstd::array<float, 3> { 1.0f, 1.0f, 1.0f });
+        auto result = sink->Write(color_id, color.View());
         if (result.is_err()) return result;
     }
 
@@ -1165,9 +1177,9 @@ void TextLayouter::SetText(std::string_view utf8) {
     }
 
     std::array<float, 4> text_rgba {
-        im.style.color[0],
-        im.style.color[1],
-        im.style.color[2],
+        im.style.color[0] * im.style.brightness,
+        im.style.color[1] * im.style.brightness,
+        im.style.color[2] * im.style.brightness,
         im.style.alpha,
     };
 

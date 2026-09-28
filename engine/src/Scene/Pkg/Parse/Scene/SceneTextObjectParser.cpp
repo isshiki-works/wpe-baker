@@ -422,7 +422,9 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
 
     // --- layouter owns the cache (FontFace lifetime) + mesh ref + style.
     text::TextLayoutStyle style;
-    style.color                 = { obj.color[0], obj.color[1], obj.color[2] };
+    // Direct text takes absolute runtime color from the node; offscreen text
+    // keeps its glyph color in the source surface, apart from its background.
+    style.color                 = direct_text ? std::array<float, 3> { 1.0f, 1.0f, 1.0f } : obj.color;
     // Direct text reads the node's absolute runtime alpha in its shader. Keep
     // the glyph vertices at unit alpha so an initial value below one is not squared.
     style.alpha                 = direct_text ? 1.0f : obj.alpha;
@@ -479,6 +481,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
                                                    Vector3f(obj.angles.data()),
                                                    direct_text ? obj.name : std::string {});
     if (direct_text) sp_node->SetUserAlpha(obj.alpha);
+    if (direct_text) sp_node->SetColor({ obj.color[0], obj.color[1], obj.color[2] });
     const float text_bbox_w = text_w + 2.0f * style.padding;
     const float text_bbox_h = text_h + 2.0f * style.padding;
     sp_node->SetSize({ text_bbox_w, text_bbox_h });
