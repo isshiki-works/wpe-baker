@@ -429,6 +429,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
     // the glyph vertices at unit alpha so an initial value below one is not squared.
     style.alpha                 = direct_text ? 1.0f : obj.alpha;
     style.brightness            = obj.brightness;
+    style.direct_baseline       = direct_text;
     style.opaquebackground      = has_bg;
     style.background_color      = { obj.backgroundcolor[0],
                                     obj.backgroundcolor[1],
