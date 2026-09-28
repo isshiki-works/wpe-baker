@@ -132,8 +132,10 @@ internal static class SingleShotAllocationChecks
                 ["materials"] = new JsonArray(new JsonObject { ["time_signature"] = new JsonObject {
                     ["kind"] = "periodic", ["settle_seconds"] = 2 } }) }) };
             var graph = new SceneGraph(new JsonObject { ["objects"] = objects.DeepClone() });
-            int[] settledOwners = [.. SingleShotAllocation.SettledSourceOwners(graph, fixtureSource, null, shaderRuntime, 60, 1)];
-            check(settledOwners.SequenceEqual([20]),
+            int[] settledOwners = [.. SingleShotAllocation.SettledSourceOwners(graph, fixtureSource, null, shaderRuntime, 60, 1, 600)];
+            check(settledOwners.SequenceEqual([20]) &&
+                ScriptTime.FrameCap(CommonLoopSolver.Ceiling(1200), 60, 1) == 72000 &&
+                ScriptTime.FrameCap(CommonLoopSolver.Ceiling(600), 60, 1) == 36000,
                 "SingleShotLive also retains only the owner of a shader whose periodic phase settles after load: " + string.Join(',', settledOwners));
         }
 

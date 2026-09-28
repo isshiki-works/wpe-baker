@@ -645,7 +645,7 @@ internal static class LoopAnalysis
         IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, CommonLoopRational ceiling, List<LoopUnresolved> unresolved,
         out LoopValuePatch[] patches, out (int Owner, string Binding, double Seconds)? settle)
     {
-        UInt128 ceilingFrames = (UInt128)ceiling.Numerator * fpsNumerator / ((UInt128)ceiling.Denominator * fpsDenominator);
+        ulong frameCap = ScriptTime.FrameCap(ceiling, fpsNumerator, fpsDenominator);
         var components = new List<CommonLoopComponent>();
         var retimes = new List<LoopValuePatch>();
         var seen = new HashSet<(int, string)>();
@@ -653,7 +653,7 @@ internal static class LoopAnalysis
         foreach (ScriptTime.Binding binding in ScriptTime.Bindings(scene, source, assetsDirectory, bakedLayerIds))
         {
             seen.Add((binding.OwnerLayerId, binding.Name));
-            ScriptTime.Verdict verdict = ScriptTime.Analyze(binding, fpsNumerator, fpsDenominator, (ulong)UInt128.Min(ceilingFrames, 1_000_000));
+            ScriptTime.Verdict verdict = ScriptTime.Analyze(binding, fpsNumerator, fpsDenominator, frameCap);
             if (verdict.Settle > (settle?.Seconds ?? 0)) settle = (binding.OwnerLayerId, binding.Name, verdict.Settle);
             string id = $"script/{binding.OwnerLayerId}/{binding.Pointer ?? binding.Name}";
             if (verdict.PeriodFrames is ulong frames)

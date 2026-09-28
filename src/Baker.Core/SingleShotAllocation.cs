@@ -36,9 +36,9 @@ internal static class SingleShotAllocation
 
     /// 入场切换失败后的旧行为：只把已证实需时间收敛的脚本/着色器所有者留实时，独立兄弟仍可缓存。
     internal static IEnumerable<int> SettledSourceOwners(SceneGraph graph, ProjectSource source, string? assets,
-        JsonObject runtime, uint fpsNumerator, uint fpsDenominator)
+        JsonObject runtime, uint fpsNumerator, uint fpsDenominator, double ceilingSeconds)
     {
-        ulong frameCap = (ulong)Math.Min(1_000_000d, Math.Ceiling(600d * fpsNumerator / fpsDenominator));
+        ulong frameCap = ScriptTime.FrameCap(CommonLoopSolver.Ceiling(ceilingSeconds), fpsNumerator, fpsDenominator);
         var owners = new HashSet<int>();
         foreach (ScriptTime.Binding binding in ScriptTime.Bindings(graph.Objects.Values, source, assets, graph.Objects.Keys))
             if (ScriptTime.Analyze(binding, fpsNumerator, fpsDenominator, frameCap) is

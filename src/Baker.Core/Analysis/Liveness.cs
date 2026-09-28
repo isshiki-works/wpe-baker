@@ -104,7 +104,8 @@ internal sealed class Liveness
         foreach (int owner in SingleShotAllocation.LiveOwners(observation.Trace, request.SingleShotLive)) Live(owner, SingleShotAllocation.LiveReason);
         if (request.SingleShotLive)
             foreach (int owner in SingleShotAllocation.SettledSourceOwners(graph, source, request.Assets, observation.Trace,
-                request.FpsNumerator, request.FpsDenominator)) Live(owner, SingleShotAllocation.LiveReason);
+                request.FpsNumerator, request.FpsDenominator, HybridScenePlanner.LoopLengthMaximumOf(request)))
+                Live(owner, SingleShotAllocation.LiveReason);
         foreach (var dependency in observation.Dependencies.OfType<JsonObject>())
         {
             int owner = dependency["owner"]!.GetValue<int>();
