@@ -34,26 +34,30 @@ public static class EffectPrefixCaptureTarget
     /// 裁定一次带 trace_scene 的终端捕获探测。返回的 status 为 <see cref="LayerTargetStatus"/> 时可以生成前缀；
     /// 否则 reason 是写进 plan/bake.json 的英文原文，reason_localized 是中英对照。
     /// </summary>
-    public static JsonObject Evaluate(JsonObject nativeResult, int ownerLayerId, int terminalEffectId, string? layerName)
+    public static JsonObject Evaluate(JsonObject nativeResult, int ownerLayerId, int? terminalEffectId, string? layerName,
+        int? terminalEffectOrdinal = null)
     {
         string? target = Text(nativeResult["capture_source"]?["render_target"]);
         string[] layerTargets = LayerTargets(nativeResult, ownerLayerId);
         bool owned = target is not null && !SceneWideTargets.Contains(target) && layerTargets.Contains(target, StringComparer.Ordinal);
-        var result = Describe(ownerLayerId, terminalEffectId, layerName, owned ? LayerTargetStatus : RejectedStatus);
+        var result = Describe(ownerLayerId, terminalEffectId, terminalEffectOrdinal, layerName, owned ? LayerTargetStatus : RejectedStatus);
         result["render_target"] = target;
         result["capture_pass"] = nativeResult["capture_source"]?["pass"]?.DeepClone();
         result["layer_targets"] = new JsonArray(layerTargets.Select(item => (JsonNode?)JsonValue.Create(item)).ToArray());
         if (!owned)
             new Message("effect_prefix.capture_not_layer_target", [MessageCatalog.EscapeName(layerName), ownerLayerId,
-                terminalEffectId, target ?? "(none)", layerTargets.Length == 0 ? "(none)" : string.Join(", ", layerTargets)]).Write(result, "reason");
+                terminalEffectId?.ToString() ?? $"ordinal {terminalEffectOrdinal}", target ?? "(none)",
+                layerTargets.Length == 0 ? "(none)" : string.Join(", ", layerTargets)]).Write(result, "reason");
         return result;
     }
 
     /// <summary>探测本身没跑成：证明不了捕获点属于这一层，同样不生成前缀。</summary>
-    public static JsonObject ProbeFailed(int ownerLayerId, int terminalEffectId, string? layerName, string error)
+    public static JsonObject ProbeFailed(int ownerLayerId, int? terminalEffectId, string? layerName, string error,
+        int? terminalEffectOrdinal = null)
     {
-        var result = Describe(ownerLayerId, terminalEffectId, layerName, ProbeFailedStatus);
-        new Message("effect_prefix.capture_probe_failed", [MessageCatalog.EscapeName(layerName), ownerLayerId, terminalEffectId, error]).Write(result, "reason");
+        var result = Describe(ownerLayerId, terminalEffectId, terminalEffectOrdinal, layerName, ProbeFailedStatus);
+        new Message("effect_prefix.capture_probe_failed", [MessageCatalog.EscapeName(layerName), ownerLayerId,
+            terminalEffectId?.ToString() ?? $"ordinal {terminalEffectOrdinal}", error]).Write(result, "reason");
         return result;
     }
 
@@ -62,10 +66,13 @@ public static class EffectPrefixCaptureTarget
         Text((scene["objects"] as JsonArray ?? []).OfType<JsonObject>()
             .FirstOrDefault(node => SceneGraph.Int(node["id"]) == ownerLayerId)?["name"]);
 
-    private static JsonObject Describe(int ownerLayerId, int terminalEffectId, string? layerName, string status) => new()
+    private static JsonObject Describe(int ownerLayerId, int? terminalEffectId, int? terminalEffectOrdinal, string? layerName, string status)
     {
-        ["owner_layer_id"] = ownerLayerId, ["layer_name"] = layerName, ["terminal_effect_id"] = terminalEffectId, ["status"] = status
-    };
+        var result = new JsonObject { ["owner_layer_id"] = ownerLayerId, ["layer_name"] = layerName,
+            ["terminal_effect_id"] = terminalEffectId is int id ? JsonValue.Create(id) : null, ["status"] = status };
+        if (terminalEffectOrdinal is int ordinal) result["terminal_effect_ordinal"] = ordinal;
+        return result;
+    }
 
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out string? text) ? text : null;
 }
