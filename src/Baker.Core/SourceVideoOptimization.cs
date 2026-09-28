@@ -8,6 +8,8 @@ internal static class SourceVideoOptimization
 {
     internal const string Route = "source_video_optimization";
 
+    internal static string CreateProbeDirectory() => Directory.CreateTempSubdirectory("periodica-source-video-").FullName;
+
     internal static async Task<JsonObject> BakeAsync(HybridBakeRequest request, NativeTools tools,
         IProgress<RenderProgress>? progress, StageTiming timing, CancellationToken token)
     {
@@ -61,23 +63,27 @@ internal static class SourceVideoOptimization
             try
             {
                 TextureContainer.TextureHeader original = await TextureContainer.ExtractVideoAsync(target, sourceVideo, token);
-                if (original.Width != resource["source_width"]!.GetValue<uint>() ||
-                    original.Height != resource["source_height"]!.GetValue<uint>())
+                if (original.Format != TextureContainer.FormatRgba8 ||
+                    original.Width != resource["source_width"]!.GetValue<uint>() ||
+                    original.Height != resource["source_height"]!.GetValue<uint>() ||
+                    original.Flags != resource["source_flags"]!.GetValue<uint>())
                     throw new InvalidDataException($"Source video dimensions changed: {name}");
                 uint width = resource["target_width"]!.GetValue<uint>(), height = resource["target_height"]!.GetValue<uint>();
+                string range = resource["color_range"]!.GetValue<string>();
                 using (timing.Measure(StageTiming.EncodePlayback))
                     _ = await ff.RunTextAsync(tools.Ffmpeg,
                         ["-hide_banner", "-nostdin", "-y", "-i", sourceVideo, "-map", "0", "-c", "copy", "-c:v:0", "libx264",
                          "-preset", "fast", "-crf", "16", "-vf", $"scale={width}:{height}:flags=lanczos", "-pix_fmt", "yuv420p",
                          "-fps_mode:v", "passthrough", "-color_primaries", "bt709", "-color_trc", "bt709",
-                         "-colorspace", "bt709", "-movflags", "+faststart", resizedVideo],
+                         "-colorspace", "bt709", "-color_range", range, "-movflags", "+faststart", resizedVideo],
                         Path.Combine(layout.Output, $"video-{index}-encode.log"), token);
                 JsonObject? media = await MediaAsync(tools, resizedVideo, Path.Combine(layout.Output, $"video-{index}-probe.log"), token);
                 if (media is null || media["width"]!.GetValue<int>() != width || media["height"]!.GetValue<int>() != height ||
                     media["frame_count"]!.GetValue<ulong>() != resource["frame_count"]!.GetValue<ulong>() ||
                     media["fps_num"]!.GetValue<uint>() != resource["fps_num"]!.GetValue<uint>() ||
                     media["fps_den"]!.GetValue<uint>() != resource["fps_den"]!.GetValue<uint>() ||
-                    media["audio_streams"]!.GetValue<int>() != resource["audio_streams"]!.GetValue<int>())
+                    media["audio_streams"]!.GetValue<int>() != resource["audio_streams"]!.GetValue<int>() ||
+                    media["color_range"]!.GetValue<string>() != range)
                     throw new InvalidDataException($"Source video stream timing or format changed: {name}");
                 foreach (string stream in media["audio_streams"]!.GetValue<int>() == 0 ? ["v:0"] : new[] { "v:0", "a:0" })
                 {
@@ -85,11 +91,12 @@ internal static class SourceVideoOptimization
                     string after = await PacketTimelineAsync(ff, tools, resizedVideo, stream, Path.Combine(layout.Output, $"video-{index}-{stream[0]}-resized.log"), token);
                     if (before != after) throw new InvalidDataException($"Source video {stream} packet times or audio payload changed: {name}");
                 }
-                await TextureContainer.WriteVideoAsync(wrapped, resizedVideo, width, height, token);
+                await TextureContainer.WriteVideoAsync(wrapped, resizedVideo, width, height, token, original.Flags);
                 File.Move(wrapped, target, true);
                 completed.Add(new JsonObject { ["layer_id"] = resource["layer_id"]!.DeepClone(), ["resource"] = name,
                     ["source_width"] = original.Width, ["source_height"] = original.Height,
                     ["target_width"] = width, ["target_height"] = height,
+                    ["color_range"] = range, ["source_flags"] = original.Flags,
                     ["frame_count"] = media["frame_count"]!.DeepClone(), ["fps_num"] = media["fps_num"]!.DeepClone(),
                     ["fps_den"] = media["fps_den"]!.DeepClone(), ["audio_streams"] = media["audio_streams"]!.DeepClone(),
                     ["source_bytes"] = new FileInfo(sourceVideo).Length, ["candidate_bytes"] = new FileInfo(resizedVideo).Length,
@@ -108,27 +115,16 @@ internal static class SourceVideoOptimization
             index++;
         }
         // The controller is retained. Sample every manual choice and the authored automatic mode.
-        string? mode = plan["daytime_split"]?["video_selection"]?["mode_property"]?.GetValue<string>();
-        string? manual = plan["daytime_split"]?["video_selection"]?["manual_property"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(mode) || string.IsNullOrWhiteSpace(manual))
-            throw new InvalidDataException("Daytime selection properties are missing.");
         var comparisons = new JsonArray();
         HybridAnalyzeRequest settings = PlanSettings.Of(plan);
-        for (int selection = 0; selection <= 5; selection++)
+        foreach (var (label, properties) in ValidationStates(plan))
         {
-            JsonObject properties = plan["snapshot_properties"]?.DeepClone().AsObject() ?? new JsonObject();
-            if (selection < 5)
-            {
-                properties[mode] = false;
-                properties[manual] = selection.ToString(CultureInfo.InvariantCulture);
-            }
             PairedComparison paired = await new CandidateValidation(tools).CompareAsync(new ValidationRequest(1,
-                source.SourcePath, project, settings.Assets, Path.Combine(layout.Output, $"selection-{selection}"),
+                source.SourcePath, project, settings.Assets, Path.Combine(layout.Output, $"selection-{label}"),
                 settings.Width, settings.Height, settings.FpsNumerator, settings.FpsDenominator,
                 CompositionGate.RequiredFrames, DeviceUuid: request.DeviceUuid, UserProperties: properties), progress, token);
             JsonObject verdict = CompositionGate.Evaluate(paired);
-            comparisons.Add(new JsonObject { ["selection"] = selection == 5 ? "automatic" : selection.ToString(CultureInfo.InvariantCulture),
-                ["validation"] = verdict });
+            comparisons.Add(new JsonObject { ["selection"] = label, ["validation"] = verdict });
             if (verdict["status"]?.GetValue<string>() != "composition_pass")
             {
                 report["status"] = "candidate_rejected_composition";
@@ -143,6 +139,30 @@ internal static class SourceVideoOptimization
         await ProjectPublisher.PublishAsync(report, project, destination, layout, timing, progress, token);
         await BakeReportWriter.SaveAsync(layout.Report, report, timing, token);
         return report;
+    }
+
+    internal static (string Label, JsonObject Properties)[] ValidationStates(JsonObject plan)
+    {
+        JsonNode? selection = plan["daytime_split"]?["video_selection"];
+        string? mode = selection?["mode_property"]?.GetValue<string>();
+        string? manual = selection?["manual_property"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(mode) || string.IsNullOrWhiteSpace(manual) ||
+            selection?["layer_ids"] is not JsonArray { Count: > 0 } ids)
+            throw new InvalidDataException("Daytime selection properties are missing.");
+        JsonObject snapshot = plan["snapshot_properties"] as JsonObject ?? new JsonObject();
+        var states = new (string Label, JsonObject Properties)[ids.Count + 1];
+        for (int index = 0; index < ids.Count; index++)
+        {
+            JsonObject properties = snapshot.DeepClone().AsObject();
+            properties[mode] = false;
+            // String "0" is truthy in the authored JavaScript selector; numeric 0 is not.
+            properties[manual] = index.ToString(CultureInfo.InvariantCulture);
+            states[index] = (index.ToString(CultureInfo.InvariantCulture), properties);
+        }
+        JsonObject automatic = snapshot.DeepClone().AsObject();
+        automatic[mode] = true;
+        states[^1] = ("automatic", automatic);
+        return states;
     }
 
     private static async Task<string> PacketTimelineAsync(FfmpegTool ff, NativeTools tools, string path, string stream,
@@ -174,7 +194,7 @@ internal static class SourceVideoOptimization
         JsonArray dependencies = runtime["runtime_dependencies"]?.AsArray() ?? [];
         DaytimeSplit.Detection detection = DaytimeSplit.Detect(objects, dependencies, plan["snapshot_properties"] as JsonObject);
         if (!detection.IsRecognized || !detection.ControlsVideoPlayback || detection.Selection is null ||
-            detection.States.Length < 2 || detection.Selection.LayerIds.Length <= detection.States.Length) return null;
+            detection.States.Length < 2) return null;
         var layers = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().ToDictionary(SceneGraph.Id);
         JsonObject[] observed = [.. (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()];
         var lookups = Liveness.ScriptLookupEdges(objects);
@@ -185,13 +205,13 @@ internal static class SourceVideoOptimization
 
         var resources = new JsonArray();
         var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        string probe = Path.Combine(plan["analysis_directory"]!.GetValue<string>(), "source-video-probe");
-        Directory.CreateDirectory(probe);
+        string probe = CreateProbeDirectory();
         try
         {
             int index = 0;
             foreach (int id in detection.Selection.LayerIds)
             {
+                int current = index++;
                 token.ThrowIfCancellationRequested();
                 if (!objects.TryGetValue(id, out JsonObject? layer) || !layers.TryGetValue(id, out JsonObject? described) ||
                     !SimpleLeaf(layer, objects, described, canvasWidth, canvasHeight, settings.Width, settings.Height) ||
@@ -216,20 +236,22 @@ internal static class SourceVideoOptimization
                 catch (InvalidDataException) { continue; }
                 if (!source.Contains(resource) || !UniqueRuntimeUse(observed, id, key) ||
                     !UniqueStaticUse(source, objects, id, model["material"]!.GetValue<string>(), key)) continue;
-                string tex = Path.Combine(probe, index.ToString(CultureInfo.InvariantCulture) + ".tex");
-                string mp4 = Path.Combine(probe, index.ToString(CultureInfo.InvariantCulture) + ".mp4");
+                string tex = Path.Combine(probe, current.ToString(CultureInfo.InvariantCulture) + ".tex");
+                string mp4 = Path.Combine(probe, current.ToString(CultureInfo.InvariantCulture) + ".mp4");
                 try
                 {
                     await source.CopyResourceAsync(resource, tex, token);
                     TextureContainer.TextureHeader header = await TextureContainer.ExtractVideoAsync(tex, mp4, token);
-                    JsonObject? media = await MediaAsync(tools, mp4, Path.Combine(probe, index + ".ffprobe.log"), token);
-                    if (media is null || media["width"]!.GetValue<int>() != header.Width ||
+                    JsonObject? media = await MediaAsync(tools, mp4, Path.Combine(probe, current + ".ffprobe.log"), token);
+                    if (header.Format != TextureContainer.FormatRgba8 || media is null ||
+                        media["width"]!.GetValue<int>() != header.Width ||
                         media["height"]!.GetValue<int>() != header.Height ||
                         WorkloadValue.DecodeWorkStatus(settings.Width, settings.Height, media["fps"]!.GetValue<double>(),
                             header.Width, header.Height, media["fps"]!.GetValue<double>()) != WorkloadValue.DecodePotentialGain)
                         continue;
                     resources.Add(new JsonObject { ["layer_id"] = id, ["resource"] = resource,
                         ["source_width"] = header.Width, ["source_height"] = header.Height,
+                        ["source_flags"] = header.Flags, ["color_range"] = media["color_range"]!.DeepClone(),
                         ["target_width"] = settings.Width, ["target_height"] = settings.Height,
                         ["codec"] = "h264", ["frame_count"] = media["frame_count"]!.DeepClone(),
                         ["fps_num"] = media["fps_num"]!.DeepClone(), ["fps_den"] = media["fps_den"]!.DeepClone(),
@@ -241,7 +263,6 @@ internal static class SourceVideoOptimization
                     if (File.Exists(tex)) File.Delete(tex);
                     if (File.Exists(mp4)) File.Delete(mp4);
                 }
-                index++;
             }
         }
         finally { Directory.Delete(probe, recursive: true); }
@@ -266,8 +287,8 @@ internal static class SourceVideoOptimization
             ["device_independent"] = true, ["scope"] = WorkloadValue.Scope };
         plan["suitability"] = new JsonObject { ["verdict"] = "bakeable", ["rule"] = Route };
         plan["summary"] = new JsonObject { ["key"] = "summary.source_video_optimization",
-            ["zh"] = $"可以保持昼夜与手动切换，并把 {resources.Count} 段原视频缩到本次输出尺寸；实际省电仍需对照。",
-            ["en"] = $"Ready to resize {resources.Count} authored videos while preserving daytime and manual switching; power savings remain unmeasured." };
+            ["zh"] = $"按输出尺寸优化 {resources.Count} 段原视频，保留昼夜与手动切换。",
+            ["en"] = $"Resize {resources.Count} authored videos for the output while preserving daytime and manual switching." };
         return plan;
     }
 
@@ -277,16 +298,18 @@ internal static class SourceVideoOptimization
         ((edge["operation"]?.GetValue<string>() == "read" && edge["property"]?.GetValue<string>() == "videoTexture") ||
          (edge["operation"]?.GetValue<string>() == "write" && edge["property"]?.GetValue<string>() == "visible"));
 
-    private static bool SimpleLeaf(JsonObject layer, IReadOnlyDictionary<int, JsonObject> objects, JsonObject described,
+    internal static bool SimpleLeaf(JsonObject layer, IReadOnlyDictionary<int, JsonObject> objects, JsonObject described,
         double canvasWidth, double canvasHeight, uint outputWidth, uint outputHeight)
     {
         int id = SceneGraph.Id(layer);
+        double centerX = SceneGraph.Numeric(described["canvas_center_x"], double.NaN);
+        double centerY = SceneGraph.Numeric(described["canvas_center_y"], double.NaN);
         if (layer["image"] is not JsonValue || layer["effects"] is JsonArray { Count: > 0 } ||
             objects.Values.Any(obj => SceneGraph.Int(obj["parent"]) == id) ||
             SceneAnalyzer.Walk(layer).OfType<JsonObject>().Any(node => node["script"] is not null) ||
             SceneGraph.Numeric(described["canvas_fraction"], 0) != 1 ||
-            Math.Abs(SceneGraph.Numeric(described["canvas_center_x"], double.NaN) - .5) > 1e-6 ||
-            Math.Abs(SceneGraph.Numeric(described["canvas_center_y"], double.NaN) - .5) > 1e-6) return false;
+            !double.IsFinite(centerX) || !double.IsFinite(centerY) ||
+            Math.Abs(centerX - .5) > 1e-6 || Math.Abs(centerY - .5) > 1e-6) return false;
         try
         {
             var size = HybridVideoProjection.Vector(layer["size"], (0, 0));
@@ -350,7 +373,7 @@ internal static class SourceVideoOptimization
     private static async Task<JsonObject?> MediaAsync(NativeTools tools, string path, string log, CancellationToken token)
     {
         string output = await new FfmpegTool(tools).RunTextAsync(tools.Ffprobe,
-            ["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,pix_fmt,color_space,color_transfer,color_primaries,avg_frame_rate,nb_frames,duration,start_time", "-of", "json", path],
+            ["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,pix_fmt,color_space,color_transfer,color_primaries,color_range,avg_frame_rate,nb_frames,duration,start_time", "-of", "json", path],
             log, token);
         JsonArray streams = JsonNode.Parse(output)?["streams"] as JsonArray ?? [];
         JsonObject[] video = [.. streams.OfType<JsonObject>().Where(stream => stream["codec_type"]?.GetValue<string>() == "video")];
@@ -360,6 +383,7 @@ internal static class SourceVideoOptimization
             video[0]["color_space"]?.GetValue<string>() != "bt709" ||
             video[0]["color_transfer"]?.GetValue<string>() != "bt709" ||
             video[0]["color_primaries"]?.GetValue<string>() != "bt709" ||
+            video[0]["color_range"]?.GetValue<string>() is not ("tv" or "pc") ||
             audio.Any(stream => stream["codec_name"]?.GetValue<string>() != "aac") ||
             video[0]["width"]?.GetValue<int>() is not int width || video[0]["height"]?.GetValue<int>() is not int height ||
             video[0]["nb_frames"]?.GetValue<string>() is not string count || !ulong.TryParse(count, out ulong frames) || frames == 0 ||
@@ -368,6 +392,6 @@ internal static class SourceVideoOptimization
             video[0]["start_time"]?.GetValue<string>() != "0.000000") return null;
         return new JsonObject { ["width"] = width, ["height"] = height, ["frame_count"] = frames,
             ["fps_num"] = fpsNum, ["fps_den"] = fpsDen, ["fps"] = (double)fpsNum / fpsDen,
-            ["audio_streams"] = audio.Length };
+            ["audio_streams"] = audio.Length, ["color_range"] = video[0]["color_range"]!.DeepClone() };
     }
 }

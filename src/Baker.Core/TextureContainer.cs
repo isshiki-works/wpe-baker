@@ -29,10 +29,12 @@ public static class TextureContainer
     }
 
     public static async Task WriteVideoAsync(string destination, string mp4Path, uint width, uint height,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, uint? sourceFlags = null)
     {
         if (width == 0 || height == 0 || width > int.MaxValue || height > int.MaxValue)
             throw new ArgumentException("Video dimensions must fit the TEX dimension fields.");
+        if (sourceFlags is uint flags && (flags & 0x20) == 0)
+            throw new ArgumentException("Source TEX flags must describe a video texture.");
         await using var input = File.OpenRead(mp4Path);
         // 上限依据见 EmbeddedVideoBudget.MaximumBytes（WPE 实测）；bake 在渲染前与编码后各查一次，这里只是最后一道。
         if (input.Length < 16 || input.Length > EmbeddedVideoBudget.MaximumBytes)
@@ -45,8 +47,8 @@ public static class TextureContainer
         using var header = new MemoryStream();
         using (var writer = new BinaryWriter(header, Encoding.ASCII, leaveOpen: true))
         {
-            // Format is RGBA8 (0); flags 0x22 are clamp plus the native video flag.
-            WritePreamble(writer, width, height, flags: 0x22);
+            // Existing encoded outputs use 0x22; replacing an authored video keeps its sampling flags.
+            WritePreamble(writer, width, height, flags: sourceFlags ?? 0x22);
             writer.Write(Encoding.ASCII.GetBytes("TEXB0004\0"));
             writer.Write(1); // image count
             writer.Write(-1); // no FreeImage container type; the body is an MP4
