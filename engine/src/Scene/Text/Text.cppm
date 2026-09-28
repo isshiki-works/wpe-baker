@@ -179,7 +179,7 @@ auto BuildAtlasImage(const FontFace& face, ref<str> key) -> Option<Arc<owe::Imag
 // cached) and returns a ready-to-bind SceneShader. The shader expects:
 //   - vertex inputs: a_Position (float3), a_TexCoord (float2),
 //                    a_Color (float4)
-//   - uniform block ww_Uniforms with member g_ModelViewProjectionMatrix
+//   - uniform block ww_Uniforms with g_ModelViewProjectionMatrix and g_Alpha
 //   - combined image sampler g_Texture0 (R8 atlas; .r = coverage)
 // Returns nullptr if the SPIR-V compile fails.
 std::shared_ptr<owe::SceneShader> GetTextSceneShader();
@@ -192,6 +192,7 @@ enum class TextUniformOutput : rstd::uint32_t
 {
     ModelViewProjection,
     EffectModelViewProjection,
+    Alpha,
 };
 
 struct TextEffectProjectionState {

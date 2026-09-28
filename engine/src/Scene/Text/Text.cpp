@@ -808,6 +808,9 @@ auto TextUniformSource::Describe(UniformBindingSink* sink) const
     if (model.is_err()) return rstd::Err(rstd::move(model).unwrap_err_unchecked());
     auto effect = bind(TextUniformOutput::EffectModelViewProjection, G_EMVP);
     if (effect.is_err()) return rstd::Err(rstd::move(effect).unwrap_err_unchecked());
+    auto alpha = sink->Bind(UniformOutputId { .value = rstd::u32(static_cast<rstd::uint32_t>(TextUniformOutput::Alpha)) },
+                            G_ALPHA, UniformValueShape::Float(rstd::u32(1)));
+    if (alpha.is_err()) return rstd::Err(rstd::move(alpha).unwrap_err_unchecked());
     return rstd::Ok(rstd::empty {});
 }
 
@@ -820,6 +823,17 @@ auto TextUniformSource::Evaluate(const UniformUpdateContext*,
                                  UniformValueSink* sink) const
     -> rstd::Result<rstd::empty, UniformError> {
     if (! m_state || m_state->camera.is_none()) return rstd::Ok(rstd::empty {});
+
+    // Effect text keeps its authored alpha in vertex colors and applies the
+    // layer alpha during final composition. Its source pass needs unit alpha.
+    const auto alpha_id = UniformOutputId {
+        .value = rstd::u32(static_cast<rstd::uint32_t>(TextUniformOutput::Alpha)),
+    };
+    if (sink->Wants(alpha_id)) {
+        const auto alpha = UniformValue(1.0f);
+        auto result = sink->Write(alpha_id, alpha.View());
+        if (result.is_err()) return result;
+    }
 
     auto write = [&](TextUniformOutput      output,
                      const Eigen::Matrix4d& matrix) -> rstd::Result<rstd::empty, UniformError> {
