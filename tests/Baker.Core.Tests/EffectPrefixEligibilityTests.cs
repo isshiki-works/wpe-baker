@@ -86,6 +86,53 @@ public class EffectPrefixEligibilityTests
     });
 
     [Fact]
+    public async Task AConsumerReadPreservesTheProducerPrefixButWritesAndSourceReadsDoNot() => await TestTemp.Run(async dir =>
+    {
+        var (scene, runtime) = Background(dir);
+        using var source = new ProjectSource(dir);
+        var request = new HybridAnalyzeRequest(1, dir, dir, dir, 64, 48, 30, 1);
+        JsonArray dependencies = runtime["runtime_dependencies"]!.AsArray();
+        dependencies.Add(new JsonObject { ["owner"] = 2, ["target"] = 1, ["operation"] = "read",
+            ["property"] = "layerComposite", ["initialization"] = false });
+        Assert.Single(EffectPrefixPlanner.Propose(scene, source, dir, runtime, new JsonObject(), request,
+            new JsonObject()).OfType<JsonObject>());
+        Assert.True(EffectPrefixBakeService.SurvivesCompleteCapture(scene, source, request, runtime,
+            new JsonObject(), new JsonObject(), 1, 1));
+
+        dependencies.Clear();
+        dependencies.Add(new JsonObject { ["owner"] = 2, ["target"] = 1, ["operation"] = "write",
+            ["property"] = "origin", ["initialization"] = false });
+        Assert.Empty(EffectPrefixPlanner.Propose(scene, source, dir, runtime, new JsonObject(), request, new JsonObject()));
+
+        dependencies.Clear();
+        dependencies.Add(new JsonObject { ["owner"] = 1, ["target"] = 2, ["operation"] = "read",
+            ["property"] = "layerComposite", ["initialization"] = false });
+        File.WriteAllText(Path.Combine(dir, "materials/effects/waves.json"),
+            """{"passes":[{"shader":"effects/waves","textures":["_rt_imageLayerComposite_2_a"]}]}""");
+        using var sourcedEffect = new ProjectSource(dir);
+        Assert.Empty(EffectPrefixPlanner.Propose(scene, sourcedEffect, dir, runtime, new JsonObject(), request,
+            new JsonObject()));
+        await Task.CompletedTask;
+    });
+
+    [Fact]
+    public async Task MissingAuthorEffectIdUsesItsSceneOrdinal() => await TestTemp.Run(async dir =>
+    {
+        var (scene, runtime) = Background(dir);
+        scene["objects"]![0]!["effects"]![0]!.AsObject().Remove("id");
+        using var source = new ProjectSource(dir);
+        var request = new HybridAnalyzeRequest(1, dir, dir, dir, 64, 48, 30, 1);
+        JsonObject prefix = Assert.Single(EffectPrefixPlanner.Propose(scene, source, dir, runtime,
+            new JsonObject(), request, new JsonObject()).OfType<JsonObject>());
+        Assert.Null(prefix["terminal_effect_id"]);
+        Assert.Equal(0, prefix["terminal_effect_ordinal"]!.GetValue<int>());
+        EffectPrefixBakeService.ValidateSource(source, scene, prefix);
+        prefix["terminal_effect_ordinal"] = 1;
+        Assert.Throws<InvalidDataException>(() => EffectPrefixBakeService.ValidateSource(source, scene, prefix));
+        await Task.CompletedTask;
+    });
+
+    [Fact]
     public async Task DynamicSuffixDoesNotHideASafePrefixButDynamicOwnerStillDoes() => await TestTemp.Run(async dir =>
     {
         var (scene, runtime) = Background(dir);
