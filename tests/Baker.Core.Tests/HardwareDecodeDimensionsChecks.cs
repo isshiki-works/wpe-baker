@@ -107,10 +107,8 @@ internal static class HardwareDecodeDimensionsChecks
         check(content.Extract(frame, 2).AsSpan().SequenceEqual(expected),
             "the seam validator measures exactly the content rectangle of both halves and none of the padding");
 
-        MethodInfo fragmentMethod = typeof(NativeRenderRunner).Assembly.GetType("Baker.Core.EffectPrefixCache")!
-            .GetMethod("DecoderFragment", BindingFlags.Static | BindingFlags.NonPublic)!;
         string Fragment(uint width, uint height, bool packed, EncodedContentRegion? region, double scale = 1, double lower = 0) =>
-            (string)fragmentMethod.Invoke(null, [width, height, packed, region, scale, lower])!;
+            EffectPrefixCache.DecoderFragment(width, height, packed, region, scale, lower);
         const uint legacyWidth = 3840;
         double legacyEdge = .5 / legacyWidth;
         check(Fragment(legacyWidth, 6, true, null) == FormattableString.Invariant($"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5,{legacyEdge:R},{.5-legacyEdge:R}),v_TexCoord.y)).rgb; float a=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+legacyEdge:R},{1-legacyEdge:R}),v_TexCoord.y)).r; gl_FragColor=vec4(rgb,a); }}\n"),
