@@ -313,7 +313,15 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         timing.Mark("A9_loop_analysis");
         // 三处回退都可能要前缀缓存，同一个终端捕获点只问一次渲染器。
         var captureProbes = new PrefixCaptureProbes(tools, request, source, scene, properties, output, memo);
+        Task<JsonArray>? prefixCacheTask = null;
         async Task<JsonArray> PrefixCachesAsync()
+        {
+            // The route fallback may ask again after an empty initial probe. Its inputs
+            // are fixed for this analysis; return a fresh tree for each plan parent.
+            prefixCacheTask ??= ComputePrefixCachesAsync();
+            return (await prefixCacheTask).DeepClone().AsArray();
+        }
+        async Task<JsonArray> ComputePrefixCachesAsync()
         {
             // 只看整层初判拒因：路线与布局准入追加的 blockers 不影响前缀回退（与改写前读同一份局部数组的结果相同）。
             // HDR 闭合拒因不挡：它是按整层初始分配求的，前缀采纳后按前缀捕获对象重求（Verdict.ApplyPrefixRadianceClosure）。
