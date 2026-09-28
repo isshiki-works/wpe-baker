@@ -1877,6 +1877,12 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
 }
 
 Signature Memo::Get(std::span<const std::vector<unsigned int>> stages, const Inputs& inputs) {
+    auto uniform = [&](std::string_view name) {
+        return inputs.uniform ? inputs.uniform(name) : UniformValue {};
+    };
+    auto wrap = [&](std::string_view name) {
+        return inputs.wrap ? inputs.wrap(name) : std::array { Wrap::Unknown, Wrap::Unknown };
+    };
     auto same_uniform = [](const UniformValue& a, const UniformValue& b) {
         return a.kind == b.kind && a.values.size() == b.values.size() &&
                (a.values.empty() || std::memcmp(a.values.data(), b.values.data(),
@@ -1888,8 +1894,8 @@ Signature Memo::Get(std::span<const std::vector<unsigned int>> stages, const Inp
             continue;
         bool same = true;
         for (const auto& query : entry.queries) {
-            if (query.is_wrap ? inputs.wrap(query.name) != query.wrap
-                              : !same_uniform(inputs.uniform(query.name), query.uniform)) {
+            if (query.is_wrap ? wrap(query.name) != query.wrap
+                              : !same_uniform(uniform(query.name), query.uniform)) {
                 same = false;
                 break;
             }
@@ -1898,8 +1904,6 @@ Signature Memo::Get(std::span<const std::vector<unsigned int>> stages, const Inp
     }
     Entry entry;
     entry.stages.assign(stages.begin(), stages.end());
-    const auto uniform = inputs.uniform;
-    const auto wrap = inputs.wrap;
     Inputs observed;
     observed.uniform = [&](std::string_view name) {
         auto value = uniform(name);

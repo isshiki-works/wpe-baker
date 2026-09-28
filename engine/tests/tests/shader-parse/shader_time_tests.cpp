@@ -48,7 +48,7 @@ struct Case {
     std::vector<std::string>                  external; // 动画化材质 uniform
 };
 
-st::Signature Analyze(const Case& c, st::Memo* memo = nullptr) {
+st::Signature Analyze(const Case& c, st::Memo* memo = nullptr, bool empty_inputs = false) {
     const auto dir = Assets() / "effects" / c.effect / "shaders" / "effects";
     if (c.frag.empty() && ! std::filesystem::exists(dir / (c.shader + ".frag"))) {
         ADD_FAILURE() << "missing " << (dir / (c.shader + ".frag")).string();
@@ -73,18 +73,20 @@ st::Signature Analyze(const Case& c, st::Memo* memo = nullptr) {
     EXPECT_TRUE(compiled.ok && compiled.shader) << c.shader;
     if (! compiled.ok || ! compiled.shader) return {};
     st::Inputs in;
-    in.uniform = [&](std::string_view name) -> st::UniformValue {
-        if (std::find(c.external.begin(), c.external.end(), name) != c.external.end())
-            return { st::UniformValue::Kind::External, {} };
-        if (auto it = c.values.find(std::string(name)); it != c.values.end())
-            return { st::UniformValue::Kind::Constant, it->second };
-        const auto& defaults = compiled.shader->default_uniforms;
-        if (auto it = defaults.find(name); it != defaults.end())
-            return { st::UniformValue::Kind::Constant,
-                     std::vector<float>(it->second.data(), it->second.data() + it->second.size().to_primitive()) };
-        return {};
-    };
-    in.wrap = [&](std::string_view) { return std::array { c.wrap, c.wrap }; };
+    if (!empty_inputs) {
+        in.uniform = [&](std::string_view name) -> st::UniformValue {
+            if (std::find(c.external.begin(), c.external.end(), name) != c.external.end())
+                return { st::UniformValue::Kind::External, {} };
+            if (auto it = c.values.find(std::string(name)); it != c.values.end())
+                return { st::UniformValue::Kind::Constant, it->second };
+            const auto& defaults = compiled.shader->default_uniforms;
+            if (auto it = defaults.find(name); it != defaults.end())
+                return { st::UniformValue::Kind::Constant,
+                         std::vector<float>(it->second.data(), it->second.data() + it->second.size().to_primitive()) };
+            return {};
+        };
+        in.wrap = [&](std::string_view) { return std::array { c.wrap, c.wrap }; };
+    }
     auto sig = memo ? memo->Get(compiled.shader->codes, in) : st::Analyze(compiled.shader->codes, in);
     std::cout << c.shader << ": " << st::ToJson(sig) << '\n';
     return sig;
@@ -129,6 +131,9 @@ TEST_F(ShaderTime, SameProgramUsesActualMaterialInputs) {
     speed.external = { "g_Speed" };
     const auto animated = Analyze(speed, &memo);
     EXPECT_NE(std::find(animated.external.begin(), animated.external.end(), "g_Speed"), animated.external.end());
+    const auto unknown = Analyze(speed, &memo, true);
+    EXPECT_EQ(st::ToJson(unknown), st::ToJson(Analyze(speed, nullptr, true)));
+    EXPECT_EQ(st::ToJson(unknown), st::ToJson(Analyze(speed, &memo, true)));
 
     Case texture { "", "wrap_input", {}, {} };
     texture.vert = "attribute vec3 a_Position; attribute vec2 a_TexCoord; varying vec2 uv; "
