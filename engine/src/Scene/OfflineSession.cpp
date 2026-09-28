@@ -4,7 +4,6 @@ module;
 #include <random>
 #include <chrono>
 #include <cstdlib>
-#include <cstring>
 
 #include "JsonNlohmann.hpp"
 
@@ -862,20 +861,8 @@ std::string OfflineSession::Impl::describeProjection() const {
 
 // 着色器时间签名（SPIR-V 上的抽象解释，见 ShaderTime.cppm），随 runtime_layers 的每个材质带给 C#。
 // uniform 取材质常量、再取着色器默认值；带值动画的按外部输入；采样器寻址按绑定纹理（或渲染目标）的 wrap。
-struct ShaderTimeCacheEntry {
-    struct Query {
-        std::string name;
-        bool is_wrap { false };
-        shader_time::UniformValue uniform;
-        std::array<shader_time::Wrap, 2> wrap {};
-    };
-    const SceneShader* shader {};
-    std::vector<Query> queries;
-    std::string signature;
-};
-
 static std::string DescribeShaderTime(const Scene& scene, const SceneMaterial& material,
-                                      std::vector<ShaderTimeCacheEntry>& cache) {
+                                      shader_time::Memo& cache) {
     const auto& shader = material.customShader.shader;
     if (! shader || shader->codes.empty()) return "null";
     shader_time::Inputs inputs;
@@ -911,49 +898,13 @@ static std::string DescribeShaderTime(const Scene& scene, const SceneMaterial& m
         }
         return { shader_time::Wrap::Unknown, shader_time::Wrap::Unknown };
     };
-    auto same_uniform = [](const shader_time::UniformValue& a, const shader_time::UniformValue& b) {
-        return a.kind == b.kind && a.values.size() == b.values.size() &&
-               (a.values.empty() || std::memcmp(a.values.data(), b.values.data(),
-                                                a.values.size() * sizeof(float)) == 0);
-    };
-    // Analyze is deterministic for the SPIR-V and the callback answers it actually queried.
-    for (const auto& entry : cache) {
-        if (entry.shader != shader.get() && entry.shader->codes != shader->codes) continue;
-        bool same = true;
-        for (const auto& query : entry.queries) {
-            if (query.is_wrap ? inputs.wrap(query.name) != query.wrap
-                              : !same_uniform(inputs.uniform(query.name), query.uniform)) {
-                same = false;
-                break;
-            }
-        }
-        if (same) {
-            return entry.signature;
-        }
-    }
-    ShaderTimeCacheEntry entry;
-    entry.shader = shader.get();
-    const auto uniform = inputs.uniform;
-    const auto wrap = inputs.wrap;
-    inputs.uniform = [&](std::string_view name) {
-        auto value = uniform(name);
-        entry.queries.push_back({ .name = std::string(name), .uniform = value });
-        return value;
-    };
-    inputs.wrap = [&](std::string_view name) {
-        auto value = wrap(name);
-        entry.queries.push_back({ .name = std::string(name), .is_wrap = true, .wrap = value });
-        return value;
-    };
-    entry.signature = shader_time::ToJson(shader_time::Analyze(shader->codes, inputs));
-    cache.push_back(std::move(entry));
-    return cache.back().signature;
+    return shader_time::ToJson(cache.Get(shader->codes, inputs));
 }
 
 std::string OfflineSession::Impl::describeScene() const {
     if (!m_scene) return "[]";
     std::ostringstream out;
-    std::vector<ShaderTimeCacheEntry> shader_time_cache;
+    shader_time::Memo shader_time_cache;
     out << '[';
     bool first = true;
     std::function<void(SceneNode*, std::int32_t)> visit = [&](SceneNode* node, std::int32_t inherited) {

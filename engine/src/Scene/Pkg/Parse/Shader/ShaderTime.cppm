@@ -8,6 +8,7 @@ module;
 #include <cstdint>
 #include <compare>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -104,6 +105,25 @@ struct Signature {
 
 Signature   Analyze(std::span<const std::vector<unsigned int>> stages, const Inputs& inputs);
 std::string ToJson(const Signature& signature);
+
+// Reuse only within one scene description; no shader or material state survives that call.
+class Memo {
+    struct Query {
+        std::string name;
+        bool is_wrap { false };
+        UniformValue uniform;
+        std::array<Wrap, 2> wrap {};
+    };
+    struct Entry {
+        std::vector<std::vector<unsigned int>> stages;
+        std::vector<Query> queries;
+        Signature signature;
+    };
+    std::vector<Entry> entries_;
+
+public:
+    Signature Get(std::span<const std::vector<unsigned int>> stages, const Inputs& inputs);
+};
 
 } // namespace owe::shader_time
 
@@ -1854,6 +1874,46 @@ Signature Analyze(std::span<const std::vector<unsigned int>> stages, const Input
     }
     sig.kind      = ! sig.reasons.empty() ? "aperiodic" : ! sig.periods.empty() ? "periodic" : "static";
     return sig;
+}
+
+Signature Memo::Get(std::span<const std::vector<unsigned int>> stages, const Inputs& inputs) {
+    auto same_uniform = [](const UniformValue& a, const UniformValue& b) {
+        return a.kind == b.kind && a.values.size() == b.values.size() &&
+               (a.values.empty() || std::memcmp(a.values.data(), b.values.data(),
+                                                a.values.size() * sizeof(float)) == 0);
+    };
+    // Analyze is deterministic for the SPIR-V and the callback answers it actually queried.
+    for (const auto& entry : entries_) {
+        if (entry.stages.size() != stages.size() || !std::equal(stages.begin(), stages.end(), entry.stages.begin()))
+            continue;
+        bool same = true;
+        for (const auto& query : entry.queries) {
+            if (query.is_wrap ? inputs.wrap(query.name) != query.wrap
+                              : !same_uniform(inputs.uniform(query.name), query.uniform)) {
+                same = false;
+                break;
+            }
+        }
+        if (same) return entry.signature;
+    }
+    Entry entry;
+    entry.stages.assign(stages.begin(), stages.end());
+    const auto uniform = inputs.uniform;
+    const auto wrap = inputs.wrap;
+    Inputs observed;
+    observed.uniform = [&](std::string_view name) {
+        auto value = uniform(name);
+        entry.queries.push_back({ .name = std::string(name), .uniform = value });
+        return value;
+    };
+    observed.wrap = [&](std::string_view name) {
+        auto value = wrap(name);
+        entry.queries.push_back({ .name = std::string(name), .is_wrap = true, .wrap = value });
+        return value;
+    };
+    entry.signature = Analyze(stages, observed);
+    entries_.push_back(std::move(entry));
+    return entries_.back().signature;
 }
 
 std::string ToJson(const Signature& s) {

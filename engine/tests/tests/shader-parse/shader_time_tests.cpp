@@ -48,7 +48,7 @@ struct Case {
     std::vector<std::string>                  external; // 动画化材质 uniform
 };
 
-st::Signature Analyze(const Case& c) {
+st::Signature Analyze(const Case& c, st::Memo* memo = nullptr) {
     const auto dir = Assets() / "effects" / c.effect / "shaders" / "effects";
     if (c.frag.empty() && ! std::filesystem::exists(dir / (c.shader + ".frag"))) {
         ADD_FAILURE() << "missing " << (dir / (c.shader + ".frag")).string();
@@ -85,7 +85,7 @@ st::Signature Analyze(const Case& c) {
         return {};
     };
     in.wrap = [&](std::string_view) { return std::array { c.wrap, c.wrap }; };
-    auto sig = st::Analyze(compiled.shader->codes, in);
+    auto sig = memo ? memo->Get(compiled.shader->codes, in) : st::Analyze(compiled.shader->codes, in);
     std::cout << c.shader << ": " << st::ToJson(sig) << '\n';
     return sig;
 }
@@ -118,14 +118,16 @@ TEST_F(ShaderTime, ShakeMatchesEquation) {
 }
 
 TEST_F(ShaderTime, SameProgramUsesActualMaterialInputs) {
+    st::Memo memo;
     Case speed { "shake", "shake", { { "NOISE", "0" } }, { { "g_Speed", { 1.0f } } } };
-    const auto slow = Analyze(speed);
+    const auto slow = Analyze(speed, &memo);
+    EXPECT_EQ(st::ToJson(Analyze(speed, &memo)), st::ToJson(slow));
     speed.values["g_Speed"] = { 2.0f };
-    const auto fast = Analyze(speed);
+    const auto fast = Analyze(speed, &memo);
     ExpectPeriod(slow, kTau);
     ExpectPeriod(fast, kTau / 2);
     speed.external = { "g_Speed" };
-    const auto animated = Analyze(speed);
+    const auto animated = Analyze(speed, &memo);
     EXPECT_NE(std::find(animated.external.begin(), animated.external.end(), "g_Speed"), animated.external.end());
 
     Case texture { "", "wrap_input", {}, {} };
@@ -133,9 +135,9 @@ TEST_F(ShaderTime, SameProgramUsesActualMaterialInputs) {
                    "void main() { gl_Position = vec4(a_Position, 1.0); uv = a_TexCoord; }";
     texture.frag = "varying vec2 uv; uniform float g_Time; uniform sampler2D g_Texture0; "
                    "void main() { gl_FragColor = texSample2D(g_Texture0, uv + vec2(g_Time, 0.0)); }";
-    const auto repeat = Analyze(texture);
+    const auto repeat = Analyze(texture, &memo);
     texture.wrap = st::Wrap::Clamp;
-    const auto clamp = Analyze(texture);
+    const auto clamp = Analyze(texture, &memo);
     EXPECT_EQ(repeat.kind, "periodic");
     EXPECT_EQ(clamp.kind, "static");
     EXPECT_EQ(clamp.settle, 1);
