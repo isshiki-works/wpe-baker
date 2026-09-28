@@ -258,6 +258,10 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                                 if (!await GpuQualityPassesAsync())
                                     throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
                             }
+                            if (renderRequest.GpuEncoding is { } encodedOnGpu &&
+                                new FileInfo(rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4")).Length is long bytes &&
+                                bytes > EmbeddedVideoBudget.MaximumBytes)
+                                throw new GpuEncodeUnavailableException(NativeRenderRunner.HardwareOverLimitReason(encodedOnGpu.Codec, bytes));
                         }
                         catch (GpuEncodeUnavailableException error) when (renderRequest.GpuEncoding is not null && !cancellationToken.IsCancellationRequested)
                         {
@@ -309,6 +313,20 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     continue;
                 }
                 string video = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
+                long videoBytes = new FileInfo(video).Length;
+                if (videoBytes > EmbeddedVideoBudget.MaximumBytes)
+                {
+                    DeleteRetainedFrames();
+                    string id = "effect-prefix-" + owner;
+                    result["groups"]!.AsArray().Add(new JsonObject { ["id"] = id, ["status"] = "rejected_embedded_video_size",
+                        ["owner_layer_id"] = owner, ["frames"] = frames, ["video_path"] = video,
+                        ["video_bytes"] = videoBytes, ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes,
+                        ["playback_encode"] = encodeInfo });
+                    result["status"] = EmbeddedVideoBudget.RejectedBakeStatus;
+                    EmbeddedVideoBudgetJson.EncodedRejection(id, videoBytes, frames, settings.FpsNumerator, settings.FpsDenominator)
+                        .Write(result, "reason");
+                    await Save(); return result;
+                }
                 JsonObject seam;
                 JsonObject? gpuQuality = null;
                 using (timing.Measure(StageTiming.SeamCheck))
