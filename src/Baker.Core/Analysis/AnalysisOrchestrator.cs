@@ -76,7 +76,8 @@ internal sealed class AnalysisOrchestrator
         // 读帧缓冲规则放宽只在不让结果变差时采用：把放宽后没留实时的读取层按读帧缓冲留实时（LiveFramebufferReaderIds，实时判定阶段生效，
         // 不占用 --retain-live，分配回退照常能跑），从原请求的留实时集合整套再分析一次（放宽前的判定；不带放宽后方案自己的回退、
         // 退回留下的层，那些是放宽后的分配引出来的）。放宽后不能生成（例如读取层带进凑不出循环的分量），
-        // 或预计收益（省下的特效覆盖减视频路数）与实时画布都不比它好、且至少一项更差，就用放宽前的。这一次能换回结果，不是白跑。
+        // 放宽后的方案只在能生成、且预计收益（省下的特效覆盖减视频路数）不少于、实时画布不大于放宽前时保留（放宽前不能生成的除外）；
+        // 否则用放宽前的，两边都不能生成时结论也按放宽前。这一次能换回结果，不是白跑。
         if (await orchestrator.RelaxedFramebufferReadersAsync(result) is { Length: > 0 } relaxed)
         {
             var trial = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = request.RetainLiveRootIds,
@@ -84,10 +85,9 @@ internal sealed class AnalysisOrchestrator
                 analyze, space, space.Budget(), tools, Path.Combine(run, "framebuffer-live"), cache, token, memo, progress);
             JsonObject before;
             using (AnalysisTiming.Measure("g_framebuffer_live")) before = await trial.SelectAsync();
-            if (Admission.Accepted(before) && (!Admission.Accepted(result) ||
-                Margin(before) >= Margin(result) && LiveCanvas(before) <= LiveCanvas(result) &&
-                (Margin(before) > Margin(result) || LiveCanvas(before) < LiveCanvas(result))))
-                (orchestrator, result) = (trial, before);
+            bool relaxedHolds = Admission.Accepted(result) && (!Admission.Accepted(before) ||
+                Margin(result) >= Margin(before) && LiveCanvas(result) <= LiveCanvas(before) + 1e-9);
+            if (!relaxedHolds) (orchestrator, result) = (trial, before);
         }
         // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
         // 读数（漂移上界、闭合读数、渲染器墙钟）写进 plan 的 slow_closure_probe。闭合的照常判能，烘焙时接缝门照常复核。
@@ -190,14 +190,18 @@ internal sealed class AnalysisOrchestrator
             }
         }
         result = await RetreatAsync(result, interaction);
-        // 只有普通图层的视频组省不下渲染，还给实时（加 --retain-live 重新分析）；重新分析能生成、预计不省电的条件没变多才采用。
+        // 只有普通图层的视频组省不下渲染，还给实时（加 --retain-live 重新分析）；重新分析能生成、预计不省电的条件（含省下多少算不出）没变多才采用。
         // --no-benefit allow 时照旧全烘，测功耗用。
         if (Admission.Accepted(result) && !request.AllowNoBenefit && await NoBenefit.PlainGroupRetainRootsAsync(result, token) is { Length: > 0 } plain)
         {
             using var plainGroups = AnalysisTiming.Measure("d_plain_groups_live");
             var (replanned, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = plain }, analyze, space, space.Budget(), tools,
                 Path.Combine(run, "plain-groups-live"), cache, token, memo).SolveAsync(interaction);
-            if (Admission.Accepted(replanned) && NoBenefit.AnalysisConditions(replanned).Length <= NoBenefit.AnalysisConditions(result).Length)
+            // 省下多少算不出（needs_work_comparison 而被烘层不全是普通图层）也算一条：还给实时要证得出剩下的不更不省电，
+            // 不能靠"不判"换来普通组留实时（实时画布变大）。
+            static int Unproven(JsonObject plan) => NoBenefit.AnalysisConditions(plan).Length +
+                (plan[BakeValueAssessment.Field]?["rule"]?.GetValue<string>() == WorkloadValue.NeedsWorkComparison.Rule && NoBenefit.RemovedPassCoverage(plan) is null ? 1 : 0);
+            if (Admission.Accepted(replanned) && Unproven(replanned) <= Unproven(result))
                 result = replanned;
         }
         // 预计不省电的方案默认拒绝（判据与覆盖见 NoBenefit）；已经被别的原因拒掉的不重复写，只差采集能力的按假设能采集判。
@@ -263,14 +267,16 @@ internal sealed class AnalysisOrchestrator
         .Where(layer => layer["allocation"]?.GetValue<string>() == "live").Sum(layer => SceneGraph.Numeric(layer["canvas_fraction"], 0));
 
     /// <summary>
-    /// 读帧缓冲规则放宽后没留实时的读取层（之前画过网格、读当前帧缓冲，plan 里没留实时、也没被剔除或省略；进了视频或不绘制都算）。
-    /// 放宽前它们一律留实时，依赖它们的层也跟着留实时。没有运行时证据时为空。
+    /// 读帧缓冲规则放宽涉及的读取层：之前画过网格、读当前帧缓冲，plan 里没按读帧缓冲留实时（reasons 里没有 reads_current_framebuffer），
+    /// 也没被剔除或省略。进了视频、不绘制、或后来被回退与退回以别的原因留实时的都算：放宽前它们在实时判定阶段就留实时，
+    /// 依赖它们的层也跟着留实时，分配从那里起就不同。没有运行时证据时为空。
     /// </summary>
     private async Task<int[]> RelaxedFramebufferReadersAsync(JsonObject plan)
     {
         if (plan["runtime_evidence"]?.GetValue<string>() is not string runtime || !File.Exists(runtime)) return [];
         var relaxed = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(layer => layer["allocation"]?.GetValue<string>() is "video" or "inactive")
+            .Where(layer => layer["allocation"]?.GetValue<string>() is not ("excluded" or "omitted") &&
+                !(layer["reasons"] as JsonArray ?? []).Any(reason => reason?.GetValue<string>() == "reads_current_framebuffer"))
             .Select(layer => SceneGraph.Int(layer["id"])).OfType<int>().ToHashSet();
         return [.. Liveness.FramebufferReads(JsonNode.Parse(await File.ReadAllTextAsync(runtime, token))?["runtime_layers"] as JsonArray ?? [])
             .Select(read => read.Reader).Where(relaxed.Contains).Distinct()];
