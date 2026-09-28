@@ -177,11 +177,11 @@ internal static class LoopAnalysis
         double settleSeconds = Math.Max(shader.Settle?.Seconds ?? 0, scriptSettle?.Seconds ?? 0);
         if (sourceStatic)
         {
-            // 过 settle 才固定的静态画面：长度取刚过 settle 的帧数，预热一整段后起录
+            // 过 settle 才固定的静态画面：入场预热负责走到末态，末态本身只需录一帧。
             ulong still = settleSeconds > 0 ? (ulong)Math.Floor(settleSeconds * fpsNumerator / fpsDenominator) + 1 : 1;
             double stillSeconds = (double)still * fpsDenominator / fpsNumerator;
-            // 预热一整段也受循环上限约束：settle 晚于上限就放不进
-            if (stillSeconds <= ceiling.ToSeconds()) candidates.Add(new LoopCandidate(still, stillSeconds, 0d, [], []));
+            // 入场时长仍受原循环上限约束，避免无界预热。
+            if (stillSeconds <= ceiling.ToSeconds()) candidates.Add(new LoopCandidate(1, (double)fpsDenominator / fpsNumerator, 0d, [], []));
             else
             {
                 sourceStatic = false;
@@ -263,7 +263,8 @@ internal static class LoopAnalysis
         // 脚本的 settle 同样处理，取两者较晚的一个
         if (settleSeconds > 0 && candidates.Count > 0)
         {
-            candidates = [.. candidates.Where(c => c.Seconds > settleSeconds && (c.SpriteSeam is null || c.SpriteSeam.WarmupFrames == c.Frames))
+            candidates = [.. candidates.Where(c => sourceStatic || c.Seconds > settleSeconds &&
+                    (c.SpriteSeam is null || c.SpriteSeam.WarmupFrames == c.Frames))
                 .Select(c => c with { ShaderSettleSeconds = settleSeconds })];
             if (candidates.Count == 0 && shader.Settle is { } settle && settle.Seconds >= settleSeconds)
                 unresolved.Add(new ShaderLoopUnresolved(new(settle.OwnerLayerId, settle.EffectIndex, settle.PassIndex, settle.Resource,
@@ -644,7 +645,7 @@ internal static class LoopAnalysis
         IReadOnlyCollection<int> bakedLayerIds, uint fpsNumerator, uint fpsDenominator, CommonLoopRational ceiling, List<LoopUnresolved> unresolved,
         out LoopValuePatch[] patches, out (int Owner, string Binding, double Seconds)? settle)
     {
-        UInt128 ceilingFrames = (UInt128)ceiling.Numerator * fpsNumerator / ((UInt128)ceiling.Denominator * fpsDenominator);
+        ulong frameCap = ScriptTime.FrameCap(ceiling, fpsNumerator, fpsDenominator);
         var components = new List<CommonLoopComponent>();
         var retimes = new List<LoopValuePatch>();
         var seen = new HashSet<(int, string)>();
@@ -652,7 +653,7 @@ internal static class LoopAnalysis
         foreach (ScriptTime.Binding binding in ScriptTime.Bindings(scene, source, assetsDirectory, bakedLayerIds))
         {
             seen.Add((binding.OwnerLayerId, binding.Name));
-            ScriptTime.Verdict verdict = ScriptTime.Analyze(binding, fpsNumerator, fpsDenominator, (ulong)UInt128.Min(ceilingFrames, 1_000_000));
+            ScriptTime.Verdict verdict = ScriptTime.Analyze(binding, fpsNumerator, fpsDenominator, frameCap);
             if (verdict.Settle > (settle?.Seconds ?? 0)) settle = (binding.OwnerLayerId, binding.Name, verdict.Settle);
             string id = $"script/{binding.OwnerLayerId}/{binding.Pointer ?? binding.Name}";
             if (verdict.PeriodFrames is ulong frames)

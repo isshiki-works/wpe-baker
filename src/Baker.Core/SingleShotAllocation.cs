@@ -34,9 +34,27 @@ internal static class SingleShotAllocation
             .Where(track => IsSingleShot(track) && (loadPlayed || Flag(track["event_driven"]) == true))
             .Select(track => Number(track["source_owner_layer_id"])).OfType<int>();
 
-    /// 入场秒数：相机入场（projection.camera_intro）与进了视频组的图层加载即播单次轨取最大；没有为 0。
+    /// 入场切换失败后的旧行为：只把已证实需时间收敛的脚本/着色器所有者留实时，独立兄弟仍可缓存。
+    internal static IEnumerable<int> SettledSourceOwners(SceneGraph graph, ProjectSource source, string? assets,
+        JsonObject runtime, uint fpsNumerator, uint fpsDenominator, double ceilingSeconds)
+    {
+        ulong frameCap = ScriptTime.FrameCap(CommonLoopSolver.Ceiling(ceilingSeconds), fpsNumerator, fpsDenominator);
+        var owners = new HashSet<int>();
+        foreach (ScriptTime.Binding binding in ScriptTime.Bindings(graph.Objects.Values, source, assets, graph.Objects.Keys))
+            if (ScriptTime.Analyze(binding, fpsNumerator, fpsDenominator, frameCap) is
+                { Outcome: ScriptTime.Outcome.Static or ScriptTime.Outcome.Periodic, Settle: > 0 }) owners.Add(binding.OwnerLayerId);
+        foreach (JsonObject layer in (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>())
+            if (Number(layer["owner"]) is int owner && graph.Objects.ContainsKey(owner) &&
+                (layer["materials"] as JsonArray ?? []).OfType<JsonObject>().Any(material =>
+                    material["time_signature"]?["kind"]?.GetValue<string>() is "static" or "periodic" &&
+                    StaticOnlyBake.Count(material["time_signature"]?["settle_seconds"]) is > 0)) owners.Add(owner);
+        return owners;
+    }
+
+    /// 入场秒数：相机入场、加载即播单次轨，以及候选录制前要跳过的脚本/着色器暂态取最大；没有为 0。
     internal static double IntroSeconds(JsonObject plan, JsonObject runtime) =>
-        Math.Max(IntroTrackSeconds(plan, runtime), SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0));
+        Math.Max(Math.Max(IntroTrackSeconds(plan, runtime), SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0)),
+            SceneGraph.Numeric((plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["shader_settle_seconds"], 0));
 
     /// 进了视频组的图层加载即播单次轨的最长时长（时长 / 速率）；没有为 0。
     internal static double IntroTrackSeconds(JsonObject plan, JsonObject runtime)

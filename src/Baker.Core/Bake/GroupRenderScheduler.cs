@@ -329,6 +329,8 @@ internal sealed class GroupRenderScheduler(NativeRenderRunner runner, HybridBake
         // 把这次的产物整份挪开、按外推从头重渲，与先等外推再渲逐字节相同；不抬时这次就是先等外推会渲出的那份。
         if (SizeEstimate.IsCompleted) return await MasterAsync(index, await SizeEstimate);
         JsonObject rendered = await MasterAsync(index, null);
+        // A measured empty group cannot produce embedded video, so its size estimate cannot change this result.
+        if (rendered["alpha_bounds"]?["has_content"]?.GetValue<bool>() == false) return rendered;
         JsonObject? estimate = await SizeEstimate;
         if (Predicted(estimate) is var predicted && predicted.Offset == 0)
         {

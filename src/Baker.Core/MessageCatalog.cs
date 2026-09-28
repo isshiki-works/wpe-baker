@@ -765,6 +765,9 @@ public static class MessageCatalog
         ["bake.no_visible_output"] = new(
             Zh: "不可生成：所有视频组在生成区间内都没有可见像素，没有可替换成视频的内容。",
             En: "Cannot generate: every video group was empty over the generated interval, so there is no content to replace with video."),
+        ["bake.no_persistent_output_after_intro"] = new(
+            Zh: "不可生成：所选图层仅在一次性入场中显示，结束后没有可替换成视频的画面。",
+            En: "Cannot generate: the selected layers are visible only during the one-time intro, with no image left to replace by video afterward."),
         ["bake.effect_prefix_composition_failed"] = new(
             Zh: "原始源 48 帧合成比对没通过。",
             En: "The pristine-source 48-frame composition comparison failed."),

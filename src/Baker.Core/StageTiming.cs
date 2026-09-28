@@ -139,7 +139,6 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
                 else stages[stage] = null;
             }
             stages[Other] = Round(Math.Max(0, totalSeconds - sum));
-            double? render = seconds.TryGetValue(MasterRender, out double rendered) && rendered > 0 ? rendered : null;
             return new JsonObject
             {
                 ["schema_version"] = 1,
@@ -147,7 +146,8 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
                 ["device_uuid"] = deviceUuid is null ? null : JsonValue.Create(deviceUuid),
                 ["frames"] = frames,
                 ["total_seconds"] = Round(totalSeconds),
-                ["frames_per_second_render"] = render is null || frames == 0 ? null : Round(frames / render.Value),
+                // master_render is only the unoverlapped wait for prestarted group tasks, not renderer work.
+                ["frames_per_second_render"] = null,
                 ["stages"] = stages,
                 ["master_render_breakdown"] = new JsonObject
                 {
