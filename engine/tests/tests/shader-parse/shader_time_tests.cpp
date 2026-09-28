@@ -45,6 +45,7 @@ struct Case {
     std::map<std::string, std::vector<float>> values; // 材质常量，其余取着色器默认值
     std::string                               vert, frag; // 非空时用这段源码，不读 assets
     st::Wrap                                  wrap { st::Wrap::Repeat }; // 所有采样器两轴
+    std::vector<std::string>                  external; // 动画化材质 uniform
 };
 
 st::Signature Analyze(const Case& c) {
@@ -73,6 +74,8 @@ st::Signature Analyze(const Case& c) {
     if (! compiled.ok || ! compiled.shader) return {};
     st::Inputs in;
     in.uniform = [&](std::string_view name) -> st::UniformValue {
+        if (std::find(c.external.begin(), c.external.end(), name) != c.external.end())
+            return { st::UniformValue::Kind::External, {} };
         if (auto it = c.values.find(std::string(name)); it != c.values.end())
             return { st::UniformValue::Kind::Constant, it->second };
         const auto& defaults = compiled.shader->default_uniforms;
@@ -112,6 +115,30 @@ protected:
 // 方程库 shake：2π/|speed|。frac(t/M_PI_2) 与 cos(t) 按 π 次数同属 π 类（M_PI_2 是 2π 字面量），只有一个周期
 TEST_F(ShaderTime, ShakeMatchesEquation) {
     ExpectPeriod(Analyze({ "shake", "shake", { { "NOISE", "0" } }, { { "g_Speed", { 2.5f } } } }), kTau / 2.5);
+}
+
+TEST_F(ShaderTime, SameProgramUsesActualMaterialInputs) {
+    Case speed { "shake", "shake", { { "NOISE", "0" } }, { { "g_Speed", { 1.0f } } } };
+    const auto slow = Analyze(speed);
+    speed.values["g_Speed"] = { 2.0f };
+    const auto fast = Analyze(speed);
+    ExpectPeriod(slow, kTau);
+    ExpectPeriod(fast, kTau / 2);
+    speed.external = { "g_Speed" };
+    const auto animated = Analyze(speed);
+    EXPECT_NE(std::find(animated.external.begin(), animated.external.end(), "g_Speed"), animated.external.end());
+
+    Case texture { "", "wrap_input", {}, {} };
+    texture.vert = "attribute vec3 a_Position; attribute vec2 a_TexCoord; varying vec2 uv; "
+                   "void main() { gl_Position = vec4(a_Position, 1.0); uv = a_TexCoord; }";
+    texture.frag = "varying vec2 uv; uniform float g_Time; uniform sampler2D g_Texture0; "
+                   "void main() { gl_FragColor = texSample2D(g_Texture0, uv + vec2(g_Time, 0.0)); }";
+    const auto repeat = Analyze(texture);
+    texture.wrap = st::Wrap::Clamp;
+    const auto clamp = Analyze(texture);
+    EXPECT_EQ(repeat.kind, "periodic");
+    EXPECT_EQ(clamp.kind, "static");
+    EXPECT_EQ(clamp.settle, 1);
 }
 
 // 方程库 shake 的 NOISE 分支判不周期（多个时间系数）：签名给不出上限内的周期
