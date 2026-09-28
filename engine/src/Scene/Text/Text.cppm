@@ -243,6 +243,7 @@ struct TextLayoutStyle {
     std::array<float, 3> color { 1.0f, 1.0f, 1.0f };
     float                alpha { 1.0f };
     float                brightness { 1.0f };
+    bool                 direct_baseline { false };
 
     bool                 opaquebackground { false };
     std::array<float, 3> background_color { 0.0f, 0.0f, 0.0f };
@@ -259,6 +260,7 @@ struct TextLayoutMetrics {
     float source_height { 0.0f };
     float source_center_x { 0.0f };
     float source_center_y { 0.0f };
+    float font_descender { 0.0f };
     float padding { 0.0f };
 };
 

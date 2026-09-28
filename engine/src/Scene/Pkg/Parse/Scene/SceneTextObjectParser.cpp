@@ -50,7 +50,7 @@ array<i32, 2> TextLayerExtent(const text::TextGeometry& geometry) {
 }
 
 std::uint32_t TextPointSizeToPx(float point_size) {
-    constexpr float kPointsizeToPx = 4.0f;
+    constexpr float kPointsizeToPx = 25.0f / 6.0f;
     if (! std::isfinite(point_size) || point_size <= 0.0f) return 1;
     auto px = static_cast<std::uint32_t>(std::round(point_size * kPointsizeToPx));
     return std::clamp<std::uint32_t>(px, 1, 1024);
@@ -429,6 +429,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
     // the glyph vertices at unit alpha so an initial value below one is not squared.
     style.alpha                 = direct_text ? 1.0f : obj.alpha;
     style.brightness            = obj.brightness;
+    style.direct_baseline       = direct_text;
     style.opaquebackground      = has_bg;
     style.background_color      = { obj.backgroundcolor[0],
                                     obj.backgroundcolor[1],
