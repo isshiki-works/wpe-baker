@@ -210,14 +210,17 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     EncodePadding: paddedContent is null ? null
                         : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY));
                 RenderRequest renderRequest = softwareRender;
+                string[] gpuCodecs = [];
                 bool gpuEdgePadding = paddedContent is { OffsetX: 0, OffsetY: 0 } content && !decodePlan.Vertical &&
                     content.PaddedWidth - content.Width <= 1 && content.PaddedHeight - content.Height <= 1;
                 if (playbackKind == PlaybackEncoderSelection.Vulkan && (paddedContent is null || gpuEdgePadding))
                 {
                     bool resize = encodeWidth != sourceWidth || encodeHeight != sourceHeight;
-                    string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
+                    string baseline = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
                         storedWidth, storedHeight, settings.FpsNumerator, settings.FpsDenominator), PlaybackEncoderSelection.Vulkan);
-                    renderRequest = softwareRender with { GpuEncoding = new(codec, Qp: 12, RetainQualitySamples: true),
+                    gpuCodecs = [.. PlaybackEncoderSelection.PreferredGpuCodecs(request.DeviceUuid ?? settings.DeviceUuid)
+                        .Append(baseline).Distinct(StringComparer.Ordinal)];
+                    renderRequest = softwareRender with { GpuEncoding = new(gpuCodecs[0], Qp: 12, RetainQualitySamples: true),
                         RequireOpaquePixels = false, CollectAlphaBounds = !packedAlpha,
                         EncodeWidth = resize ? encodeWidth : null, EncodeHeight = resize ? encodeHeight : null };
                 }
@@ -225,8 +228,10 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     encoderFallback ??= paddedContent is not null
                         ? "GPU prefix encoding supports only one-pixel edge padding; using the existing software path."
                         : "This effect-prefix path supports software or same-device Vulkan encoding.";
+                JsonObject? earlyHardware = null;
                 try
                 {
+                    RenderRequest firstGpuRequest = renderRequest;
                     // 与分组源周期路线一样多渲 1 帧：编码只取前 P 帧，第 0、P−1、P 帧原帧留作闭合检查与接缝参照。
                     // 编码尺寸（Fit/FitAtlas）只由捕获范围与投影决定，与帧数无关。
                     using (timing.Measure(StageTiming.MasterRender))
@@ -234,7 +239,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         // GPU 成品先过画质门：不过降 QP 在 GPU 上重渲一次，还不过与编码器初始化失败一样按软件路线重渲。
                         async Task<bool> GpuQualityPassesAsync()
                         {
-                            string qualityOutput = Path.Combine(cacheOutput, $"quality-qp{renderRequest.GpuEncoding!.Qp}");
+                            string qualityOutput = Path.Combine(cacheOutput, $"quality-{renderRequest.GpuEncoding!.Codec}-qp{renderRequest.GpuEncoding.Qp}");
                             Directory.CreateDirectory(qualityOutput);
                             JsonObject gate = await runner.GpuPlaybackQualityAsync(rendered,
                                 rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4"),
@@ -243,23 +248,56 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                             rendered["playback_quality_gate"] = gate;
                             return gate["passed"]?.GetValue<bool>() == true;
                         }
-                        try
+                        for (int codecIndex = 0; ;)
                         {
-                            rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken);
-                            if (renderRequest.GpuEncoding is { } gpu && !await GpuQualityPassesAsync())
+                            try
                             {
-                                renderOutput = Path.Combine(cacheOutput, $"encoded-qp{gpu.Qp - 6}");
-                                renderRequest = renderRequest with { OutputDirectory = renderOutput, GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
                                 rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken);
-                                if (!await GpuQualityPassesAsync())
-                                    throw new GpuEncodeUnavailableException($"GPU playback quality gate failed at QP {gpu.Qp} and {gpu.Qp - 6}.");
+                                if (renderRequest.GpuEncoding is { } gpu)
+                                {
+                                    if (!await GpuQualityPassesAsync())
+                                    {
+                                        renderOutput = Path.Combine(cacheOutput, $"encoded-{gpu.Codec}-qp{gpu.Qp - 6}");
+                                        renderRequest = renderRequest with { OutputDirectory = renderOutput, GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
+                                        rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken);
+                                        if (!await GpuQualityPassesAsync())
+                                            throw new GpuEncodeUnavailableException($"GPU playback quality gate failed for {gpu.Codec} at QP {gpu.Qp} and {gpu.Qp - 6}.");
+                                    }
+                                    string videoPath = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
+                                    if (new FileInfo(videoPath).Length > EmbeddedVideoBudget.MaximumBytes)
+                                    {
+                                        encoderFallback = $"{gpu.Codec} playback exceeds the 2 GiB embedded-video limit.";
+                                        renderOutput = Path.Combine(cacheOutput, "encoded-software");
+                                        rendered = await runner.RenderAsync(softwareRender with { OutputDirectory = renderOutput }, progress, cancellationToken);
+                                        break;
+                                    }
+                                    if (codecIndex + 1 < gpuCodecs.Length)
+                                    {
+                                        using (timing.Measure(StageTiming.HardwareDecodeCheck))
+                                            earlyHardware = await runner.ProbeHardwareDecodeAsync(videoPath,
+                                                Path.Combine(cacheOutput, $"hardware-decode-{gpu.Codec}"), Math.Min(frames, 5),
+                                                cancellationToken, request.DeviceUuid ?? settings.DeviceUuid);
+                                        if (earlyHardware["all_adapters_passed"]?.GetValue<bool>() != true)
+                                            throw new GpuEncodeUnavailableException($"{gpu.Codec} did not pass hardware decoding on this machine's playback adapter.");
+                                    }
+                                }
+                                break;
                             }
-                        }
-                        catch (GpuEncodeUnavailableException error) when (renderRequest.GpuEncoding is not null && !cancellationToken.IsCancellationRequested)
-                        {
-                            encoderFallback = error.Message;
-                            renderOutput = Path.Combine(cacheOutput, "encoded-software");
-                            rendered = await runner.RenderAsync(softwareRender with { OutputDirectory = renderOutput }, progress, cancellationToken);
+                            catch (GpuEncodeUnavailableException error) when (renderRequest.GpuEncoding is not null && !cancellationToken.IsCancellationRequested)
+                            {
+                                encoderFallback = error.Message;
+                                earlyHardware = null;
+                                if (++codecIndex < gpuCodecs.Length)
+                                {
+                                    renderOutput = Path.Combine(cacheOutput, $"encoded-{gpuCodecs[codecIndex]}");
+                                    renderRequest = firstGpuRequest with { OutputDirectory = renderOutput,
+                                        GpuEncoding = firstGpuRequest.GpuEncoding! with { Codec = gpuCodecs[codecIndex] } };
+                                    continue;
+                                }
+                                renderOutput = Path.Combine(cacheOutput, "encoded-software");
+                                rendered = await runner.RenderAsync(softwareRender with { OutputDirectory = renderOutput }, progress, cancellationToken);
+                                break;
+                            }
                         }
                     }
                 }
@@ -363,11 +401,12 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     opaque["checked_frames"]?.GetValue<ulong>() == frames + 1 && opaque["checked_pixels"]?.GetValue<ulong>() ==
                     checked((ulong)sourceWidth * sourceHeight * (frames + 1)) && opaque["minimum_alpha"]?.GetValue<int>() == 255;
                 bool seamPassed = seam["status"]?.GetValue<string>() == "observed_seam_pass";
-                JsonObject hardware = new() { ["status"] = "not_performed" };
+                JsonObject hardware = earlyHardware ?? new() { ["status"] = "not_performed" };
                 if (seamPassed && gpuQuality?["passed"]?.GetValue<bool>() != false && opaquePass)
-                    using (timing.Measure(StageTiming.HardwareDecodeCheck))
-                        hardware = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(cacheOutput, "hardware-decode"), Math.Min(frames, 5), cancellationToken,
-                            request.DeviceUuid ?? settings.DeviceUuid);
+                    if (earlyHardware is null)
+                        using (timing.Measure(StageTiming.HardwareDecodeCheck))
+                            hardware = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(cacheOutput, "hardware-decode"), Math.Min(frames, 5), cancellationToken,
+                                request.DeviceUuid ?? settings.DeviceUuid);
                 string? rejection = !seamPassed ? "seam" : gpuQuality?["passed"]?.GetValue<bool>() == false ? "quality" :
                     !opaquePass ? "opaque_capture" : hardware["all_adapters_passed"]?.GetValue<bool>() != true ? "hardware_decode" : null;
                 if (rejection is not null)
