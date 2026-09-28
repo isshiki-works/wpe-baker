@@ -2729,14 +2729,26 @@ std::string ShaderParser::PreShaderHeader(const std::string& src, const Combos& 
     }
     if (! user_smoothstep) {
         // Keep scalar/vector/matrix overloads and evaluate each argument once.
-        for (std::string type : { "float", "float2", "float3", "float4",
-                                  "float1x1", "float1x2", "float1x3", "float1x4",
-                                  "float2x1", "float2x2", "float2x3", "float2x4",
-                                  "float3x1", "float3x2", "float3x3", "float3x4",
-                                  "float4x1", "float4x2", "float4x3", "float4x4" }) {
+        for (std::string type : { "float", "float2", "float3", "float4" }) {
             pre += "\n" + type + " ww_smoothstep(" + type + " lo, " + type + " hi, " +
                    type + " x) { " + type + " t = saturate((x - lo) / (hi - lo)); " +
                    "return t * t * (3.0 - 2.0 * t); }\n";
+        }
+        // glslang does not implement HLSL matrix arithmetic component-wise.
+        // Indexing a row gives a vector, so preserve every matrix shape by
+        // applying the same intrinsic to each row without matrix operators.
+        for (int rows = 1; rows <= 4; ++rows) {
+            for (int cols = 1; cols <= 4; ++cols) {
+                const auto type = "float" + std::to_string(rows) + "x" + std::to_string(cols);
+                pre += "\n" + type + " ww_smoothstep(" + type + " lo, " + type + " hi, " +
+                       type + " x) { " + type + " result;\n";
+                for (int row = 0; row < rows; ++row) {
+                    const auto index = "[" + std::to_string(row) + "]";
+                    pre += "result" + index + " = ww_smoothstep(lo" + index + ", hi" +
+                           index + ", x" + index + ");\n";
+                }
+                pre += "return result; }\n";
+            }
         }
         pre += "#define smoothstep ww_smoothstep\n";
     }
