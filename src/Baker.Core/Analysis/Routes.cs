@@ -31,6 +31,35 @@ internal static class Routes
         return !capturedEffects && retainedEffects;
     }
 
+    /// <summary>两条路线都有循环候选时，留下各自已知的工作范围；不同类型的工作与新增解码尚不能比较。</summary>
+    internal static void RecordSelectionEvidence(JsonObject plan, JsonArray runtimeLayers)
+    {
+        if (plan["route"]?.GetValue<string>() != "effect_prefix" ||
+            plan["whole_layer"]?["loop"]?["candidates"] is not JsonArray { Count: > 0 } ||
+            plan["effect_prefix_caches"] is not JsonArray { Count: > 0 } caches) return;
+        var captured = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .SelectMany(group => (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()).ToHashSet();
+        JsonObject[] observed = [.. runtimeLayers.OfType<JsonObject>()
+            .Where(layer => SceneGraph.Int(layer["owner"]) is int owner && captured.Contains(owner))];
+        int[] particles = [.. (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(layer => layer["kind"]?.GetValue<string>() == "particle" &&
+                SceneGraph.Int(layer["id"]) is int id && captured.Contains(id))
+            .Select(layer => SceneGraph.Int(layer["id"])!.Value)];
+        plan["route_selection"] = new JsonObject {
+            ["selected"] = "effect_prefix", ["comparison"] = "unknown",
+            ["basis"] = "A safe prefix was found; the whole-layer candidate's removed work and the prefix video's added playback work have not been compared on a common basis.",
+            ["whole_layer_status"] = plan["whole_layer"]?["status"]?.DeepClone(),
+            ["whole_layer_layout_conflict"] = plan["whole_layer"]?["layout_conflict"]?.DeepClone(),
+            ["whole_layer_video_group_upper_bound"] = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
+                .Count(group => !Admission.StaticVerified(group)),
+            ["whole_layer_effect_pass_coverage"] = captured.Count > 0 && captured.All(id => observed.Any(layer => SceneGraph.Int(layer["owner"]) == id && layer["materials"] is JsonArray))
+                ? Math.Round(BakeValueAssessment.PassCoverage(plan, observed), 2) : null,
+            ["whole_layer_particle_layer_ids"] = new JsonArray([.. particles.Select(id => (JsonNode)id)]),
+            ["prefix_cache_count"] = caches.Count,
+            ["prefix_cached_authored_effect_count"] = caches.OfType<JsonObject>()
+                .Sum(cache => SceneGraph.Int(cache["prefix_effect_count"]) ?? 0) };
+    }
+
     /// <param name="plan">整层路线的 plan（route/status/blockers/whole_layer 已按初判写好）。</param>
     /// <param name="effectPrefix">初判是否已走特效前缀。</param>
     /// <param name="prefixCaches">求本场景可用的特效前缀缓存；同一捕获点只探测一次由调用方保证。</param>

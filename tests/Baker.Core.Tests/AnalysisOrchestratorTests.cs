@@ -237,39 +237,12 @@ public class AnalysisOrchestratorTests
         Assert.Equal(2, costs.Count);
     }
 
-    [Fact]
-    public async Task RetreatCarriesTheReasonsOfLayersAlreadyRetained()
-    {
-        // 回退重查带上分配回退点名层的原因（INV-FRIEREN 层 64 的 term_not_retimable），不被盖成只剩 retained_by_cost_trial。
-        await TestTemp.Run(async root =>
-        {
-            var retreats = new List<HybridAnalyzeRequest>();
-            JsonObject Analyze(HybridAnalyzeRequest r)
-            {
-                if (r.RetainLiveRootIds is { Length: > 0 }) retreats.Add(r);
-                JsonObject plan = Plan(r, true, groups: 2);
-                plan["bake_value"] = new JsonObject { ["rule"] = "cached_effect_passes", ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 0.5 } };
-                plan["loop_allocation_fallback"] = new JsonObject { ["retain_live_root_ids"] = new JsonArray(64), ["trigger_layer_ids"] = new JsonArray(64) };
-                plan["loop"]!["unresolved"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 64, ["mechanism"] = "term_not_retimable" });
-                return plan;
-            }
-            var reports = new List<RenderProgress>();
-            await AnalysisOrchestrator.RunAsync(new(2, "s", "a", root, Interaction: "keep"), (r, _) => Task.FromResult(Analyze(r)), CancellationToken.None,
-                progress: new Collect(reports));
-            Assert.NotEmpty(retreats);
-            Assert.All(retreats, r => Assert.Contains("term_not_retimable", r.RetainLiveReasons![64]));
-            // 每试一种分组报一条阶段信息，按第 1、2… 种编号（命令行与界面同一通道）。
-            Assert.Equal(Enumerable.Range(1, retreats.Count).Select(n => MessageCatalog.Get("progress.trying_grouping", MessageCatalog.Chinese, n)),
-                reports.Where(p => p.Stage == "retreating").Select(p => p.Text!.In(MessageCatalog.Chinese)));
-        });
-    }
-
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task NoBenefitWithSwitchableInteractionSuggestsOffWithoutApplyingIt(bool pointer)
+    public async Task LowCoverageDoesNotForceInteractionOff(bool pointer)
     {
-        // fixed 能生成但只烘普通图层（预计不省电）；关交互后烘下的层带特效、省电。有指针层才试 off，试出能就给一键建议，不自动关。
+        // 普通图层/低 pass 覆盖没有足够的功耗证据，不因指针元素存在就自动建议关闭交互。
         await TestTemp.Run(async root =>
         {
             var calls = new List<HybridAnalyzeRequest>();
@@ -287,19 +260,19 @@ public class AnalysisOrchestratorTests
             }
             JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "nobenefit")),
                 (r, _) => Task.FromResult(Analyze(r)), CancellationToken.None);
-            Assert.Equal(NoBenefit.ExpectedStatus, result[NoBenefit.Field]!["status"]!.GetValue<string>());
+            Assert.Null(result[NoBenefit.Field]);
             Assert.Equal("fixed", result["settings"]!["interaction"]!.GetValue<string>());
             Assert.Empty(result["applied_tradeoffs"]!["properties"]!.AsObject());
             Assert.Empty(result["applied_tradeoffs"]!["turn_off_kinds"]!.AsArray());
-            Assert.Equal(pointer, calls.Any(r => r.Interaction == "off"));
-            Assert.Equal(pointer ? "off" : null, result["suggested_change"]?["settings"]?["interaction"]?.GetValue<string>());
+            Assert.DoesNotContain(calls, r => r.Interaction == "off");
+            Assert.Null(result["suggested_change"]);
         });
     }
 
     [Fact]
-    public async Task MainAndOffRetreatsNeverShareAnOutputDirectory()
+    public async Task LowCoverageDoesNotSpawnCostRetreats()
     {
-        // 主路径退回后判不省电、再试关交互也退回：两次退回在同一个编排器里，子分析目录与进度序号都不能从头再来（489 张全集里 7 张撞了 "Analysis output must be new."）。
+        // pass/视频组阈值只作风险线索，不再因它为每个视频组重跑完整分析。
         await TestTemp.Run(async root =>
         {
             var outputs = new List<string>();
@@ -310,7 +283,6 @@ public class AnalysisOrchestratorTests
                 Directory.CreateDirectory(r.OutputDirectory);
                 outputs.Add(r.OutputDirectory);
                 JsonObject plan = Plan(r, true, groups: 2);
-                // 省下的渲染抵不过两路视频（video_cost_over_saved_rendering）：主路径与 off 都会退回，退回的每一格也一样不省电。
                 plan["bake_value"] = new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule, ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 0.5 } };
                 plan["layers"] = new JsonArray(new JsonObject { ["id"] = 1, ["kind"] = "image", ["tradeoff_kinds"] = new JsonArray("pointer") });
                 return plan;
@@ -318,10 +290,10 @@ public class AnalysisOrchestratorTests
             var reports = new List<RenderProgress>();
             JsonObject result = await AnalysisOrchestrator.RunAsync(new(2, "s", "a", Path.Combine(root, "twice")), (r, _) => Task.FromResult(Analyze(r)),
                 CancellationToken.None, progress: new Collect(reports));
-            Assert.Equal(NoBenefit.ExpectedStatus, result[NoBenefit.Field]!["status"]!.GetValue<string>());
+            Assert.Null(result[NoBenefit.Field]);
+            Assert.Equal("unknown", result["bake_value"]!["status"]!.GetValue<string>());
             string[] retreating = [.. reports.Where(p => p.Stage == "retreating").Select(p => p.Text!.In(MessageCatalog.Chinese))];
-            Assert.Equal(4, retreating.Length);
-            Assert.Equal(Enumerable.Range(1, 4).Select(n => MessageCatalog.Get("progress.trying_grouping", MessageCatalog.Chinese, n)), retreating);
+            Assert.Empty(retreating);
             Assert.Equal(outputs.Count, outputs.Distinct().Count());
         });
     }
@@ -493,11 +465,42 @@ public class AnalysisOrchestratorTests
                     new JsonObject { ["id"] = 20, ["allocation"] = "video" });
                 plan["bake_value"] = !plainLive || proven
                     ? new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule, ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 2.5 } }
-                    : new JsonObject { ["rule"] = WorkloadValue.NeedsWorkComparison.Rule, ["evidence"] = new JsonObject { ["plain_group_ids"] = new JsonArray() } };
+                    : new JsonObject { ["status"] = "unknown", ["rule"] = WorkloadValue.CachedEffectPrefix.Rule,
+                        ["evidence"] = new JsonObject { ["prefix_count"] = 1 } };
+                if (plainLive && !proven)
+                {
+                    plan["route"] = "effect_prefix";
+                    plan["effect_prefix_caches"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 20, ["prefix_effect_count"] = 1 });
+                }
                 return Task.FromResult(plan);
             }, CancellationToken.None);
             Assert.Equal(proven ? 1 : 2, result["video_groups"]!.AsArray().Count);
         });
+    }
+
+    [Fact]
+    public void UnknownCoverageDoesNotBecomeZeroOrBeatAHeavyWholeLayer()
+    {
+        var request = new HybridAnalyzeRequest(2, "s", "a", "o");
+        JsonObject prefix = Plan(request, true);
+        prefix["route"] = "effect_prefix";
+        prefix["effect_prefix_caches"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 10, ["prefix_effect_count"] = 1 },
+            new JsonObject { ["owner_layer_id"] = 20, ["prefix_effect_count"] = 1 });
+        prefix["bake_value"] = new JsonObject { ["status"] = "unknown", ["rule"] = WorkloadValue.CachedEffectPrefix.Rule };
+        Assert.True(Admission.Accepted(prefix));
+        Assert.False(AnalysisOrchestrator.KnownEffectWorkNotReduced(prefix, prefix));
+        Assert.Empty(NoBenefit.AnalysisConditions(prefix));
+
+        JsonObject whole = Plan(request, true, groups: 2);
+        whole["bake_value"] = new JsonObject { ["status"] = "potential_gain", ["rule"] = WorkloadValue.CachedEffectPasses.Rule,
+            ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 35.7 } };
+        Assert.False(AnalysisOrchestrator.KnownEffectWorkNotReduced(whole, prefix));
+        Assert.False(AnalysisOrchestrator.KnownEffectWorkNotReduced(prefix, whole));
+        Assert.True(AnalysisOrchestrator.KnownEffectWorkNotReduced(whole, whole));
+        whole["video_groups"]!.AsArray().Add(new JsonObject { ["id"] = "extra" });
+        JsonObject fewerStreams = Plan(request, true, groups: 2);
+        fewerStreams["bake_value"] = whole["bake_value"]!.DeepClone();
+        Assert.False(AnalysisOrchestrator.KnownEffectWorkNotReduced(whole, fewerStreams));
     }
 
     private static JsonObject Plan(HybridAnalyzeRequest request, bool usable, string[]? states = null, int groups = 1) => new()

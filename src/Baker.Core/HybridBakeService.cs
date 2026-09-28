@@ -298,6 +298,20 @@ public sealed class HybridBakeService(NativeTools tools)
         return bakeOnce is null ? await BakeOnceAsync(request, progress, timing, cancellationToken) : await bakeOnce(request);
     }
 
+    private async Task VerifyPlanRendererAsync(JsonObject plan, CancellationToken cancellationToken)
+    {
+        // Missing provenance is an old plan, so fail before starting the renderer or creating output.
+        if (plan["renderer_source_digest"] is not JsonValue)
+            throw new InvalidDataException("The generation plan lacks renderer provenance; analyze the source again.");
+        await using NativeProcess run = new FfmpegTool(tools).Start(tools.Renderer, ["--version"], cancellationToken);
+        var process = run.Process;
+        Task<string> output = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        Task<string> errors = process.StandardError.ReadToEndAsync(cancellationToken);
+        await Task.WhenAll(output, errors, process.WaitForExitAsync(cancellationToken));
+        if (process.ExitCode != 0) throw new IOException($"Renderer --version failed: {FfmpegTool.Trim(errors.Result)}");
+        HybridPlanFormat.RequireCompatibleRenderer(plan, HybridPlanFormat.RendererSourceDigest(output.Result));
+    }
+
     private async Task<JsonObject> BakeEffectPrefixesAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
         StageTiming timing, CancellationToken cancellationToken)
     {
@@ -317,6 +331,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 source.DirectoryPath.StartsWith(destination + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The destination project must be separate from source and working directories.");
         }
+        await VerifyPlanRendererAsync(request.Plan, cancellationToken);
         JsonObject result = await new EffectPrefixBakeService(tools).BakeAsync(request, progress, timing, cancellationToken);
         AttachPlanProvenance(result, request.Plan);
         if (destination is not null && StaticOnlyBake.Finished(result["status"]?.GetValue<string>()))
@@ -373,6 +388,7 @@ public sealed class HybridBakeService(NativeTools tools)
         if (!probe && await BakeGates.FirstRejectionAsync(BakeGates.Preflight(tools), preflight, cancellationToken) is BakeRejection rejection)
             return await WriteRejectionAsync(rejection, preflight.Plan, layout, timing, cancellationToken);
         plan = preflight.Plan;
+        await VerifyPlanRendererAsync(plan, cancellationToken);
         HybridAnalyzeRequest settings = preflight.Settings;
         ulong frames = probe ? request.ProbeFrames : preflight.Frames;
         JsonObject? residualMasking = preflight.ResidualMasking;

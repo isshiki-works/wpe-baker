@@ -6,7 +6,7 @@ internal static class HybridPlanFormatChecks
     internal static async Task RunAsync(Action<bool, string> check, string outputRoot)
     {
         JsonObject Plan() => JsonNode.Parse("""
-            {"schema_version":3,"kind":"hybrid_video","layers":[
+            {"schema_version":4,"kind":"hybrid_video","layers":[
               {"id":1,"root":1,"allocation_root":1,"parent":null},
              {"id":2,"root":1,"allocation_root":2,"parent":1}],
              "root_order":[1,2],"source_root_order":[1],
@@ -24,10 +24,29 @@ internal static class HybridPlanFormatChecks
         var current = Plan();
         HybridPlanFormat.Validate(current);
         check(current["schema_version"]!.GetValue<int>() == HybridPlanFormat.CurrentVersion,
-            "plan v3 explicitly represents author roots, allocation units and parent placement");
+            "current plan revision represents author roots, allocation units and parent placement");
         var currentRoundTrip = JsonNode.Parse(current.ToJsonString())!.AsObject();
         HybridPlanFormat.Validate(currentRoundTrip);
-        check(JsonNode.DeepEquals(current, currentRoundTrip), "current v3 plan survives a JSON round trip without losing hierarchy metadata");
+        check(JsonNode.DeepEquals(current, currentRoundTrip), "current plan survives a JSON round trip without losing hierarchy metadata");
+        const string digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        current["renderer_source_digest"] = digest;
+        HybridPlanFormat.RequireCompatibleRenderer(current, digest.ToUpperInvariant());
+        foreach (string version in new[] { "", "wpe-render 0.1-dev source=unrecorded" })
+        {
+            bool rejected = false;
+            try { HybridPlanFormat.RendererSourceDigest(version); }
+            catch (InvalidDataException) { rejected = true; }
+            check(rejected, "renderer without a source digest cannot establish plan compatibility");
+        }
+        check(HybridPlanFormat.RendererSourceDigest($"wpe-render 0.1-dev upstream=base source={digest} features=x") == digest,
+            "renderer source digest comes from its version response");
+        var missingDigest = current.DeepClone().AsObject(); missingDigest.Remove("renderer_source_digest");
+        bool missingDigestRejected = false, changedRendererRejected = false;
+        try { HybridPlanFormat.RequireCompatibleRenderer(missingDigest, digest); }
+        catch (InvalidDataException) { missingDigestRejected = true; }
+        try { HybridPlanFormat.RequireCompatibleRenderer(current, new string('f', 64)); }
+        catch (InvalidDataException) { changedRendererRejected = true; }
+        check(missingDigestRejected && changedRendererRejected, "missing or changed renderer source requires reanalysis");
         // 旧版 plan 不迁移：v2 一律按"旧版，请重新分析"拒绝，异常带文案键，调用方按键出中英文。
         var legacy = JsonNode.Parse("""
             {"schema_version":2,"kind":"hybrid_video","layers":[{"id":1,"root":1},{"id":2,"root":1}],
@@ -38,6 +57,8 @@ internal static class HybridPlanFormatChecks
         catch (InvalidDataException error) { legacyMessage = Message.Of(error); }
         check(legacyMessage is { Key: "plan.legacy_version" } && legacyMessage.Args.SequenceEqual(new object?[] { 2 }),
             "a legacy v2 plan is rejected as an older plan to analyze again, not read or migrated");
+        var previousRevision = Plan(); previousRevision["schema_version"] = 3;
+        Reject(previousRevision, "saved revision 3 plan cannot silently cross planning semantics");
         var otherKind = Plan(); otherKind["kind"] = "media_optimization";
         Reject(otherKind, "a current-version document of another kind is not accepted as a Scene plan");
         bool missingSettings = false;
@@ -72,12 +93,14 @@ internal static class HybridPlanFormatChecks
             check(rejected && !Directory.Exists(output), name + " rejects plan version before tools and output creation");
         }
         await RejectBeforeTools(async output => { await new HybridBakeService(tools).BakeAsync(new(2, unknown, output)); }, "bake-version-boundary");
+        await RejectBeforeTools(async output => { await new HybridBakeService(tools).BakeAsync(new(2, previousRevision, output)); },
+            "bake-previous-revision-boundary");
         PlanBlockers.Set(current, [new Blocker(BlockerCode.PerspectiveNeedsScreenspace)]);
         bool blockerReached = false;
-        try { await new HybridBakeService(tools).BakeAsync(new(2, current, Path.Combine(outputRoot, "v3-blocked"))); }
+        try { await new HybridBakeService(tools).BakeAsync(new(2, current, Path.Combine(outputRoot, "v4-blocked"))); }
         catch (InvalidDataException) { blockerReached = true; }
-        check(blockerReached && !Directory.Exists(Path.Combine(outputRoot, "v3-blocked")),
-            "request v2 accepts plan v3 and still enforces the pre-render blocker");
+        check(blockerReached && !Directory.Exists(Path.Combine(outputRoot, "v4-blocked")),
+            "request v2 accepts plan v4 and still enforces the pre-render blocker");
         // C1.1a 之前分析出的 v3 plan：拒因是英文原文，blockers_localized 的 key 为 null。按旧版 plan 提示重新分析，
         // 与读到旧版本号同一种异常，不能漏成 InvalidOperationException。
         var unnumbered = Plan();

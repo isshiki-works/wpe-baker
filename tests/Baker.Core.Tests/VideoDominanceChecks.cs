@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Baker.Core;
+using Periodica.Domain;
 
 /// <summary>
 /// 视频外壳判据的离线检查：全部用注入的伪运行时观察跑 AnalyzeAsync，不需要渲染器也不需要 GPU。
@@ -97,6 +98,18 @@ internal static class VideoDominanceChecks
         check(Status(reduced) == VideoDominance.NotShellStatus &&
             reduced["video_dominant"]!["decode_work"]!["status"]!.GetValue<string>() == "potential_gain",
             "1440p60 source video to 1080p60 can reduce decoding work despite identical draw counts");
+        JsonObject areaDownRateUp = allowed.DeepClone().AsObject();
+        areaDownRateUp["output_resolution"]!["width"] = 1600;
+        areaDownRateUp["output_resolution"]!["height"] = 900;
+        areaDownRateUp["settings"]!["fps_numerator"] = 120;
+        JsonObject source1080p60 = runtime.DeepClone().AsObject();
+        source1080p60["runtime_video_decoders"]![0]!["coded_width"] = 1920.0;
+        source1080p60["runtime_video_decoders"]![0]!["coded_height"] = 1080.0;
+        source1080p60["runtime_video_decoders"]![0]!["fps_num"] = 60.0;
+        JsonObject increasedRate = VideoDominance.Evaluate(areaDownRateUp, source1080p60, VideoDominance.RejectChoice);
+        check(increasedRate["decode_work"]!["status"]!.GetValue<string>() == WorkloadValue.DecodeNotReduced &&
+            increasedRate["status"]!.GetValue<string>() == VideoDominance.ShellStatus,
+            "a smaller frame at twice the frame rate increases coded pixels per second and cannot claim decoder savings");
         // 只数真正未解析的机制：已证平稳随机的粒子项（层留实时）不挡外壳判据
         JsonObject Noted(JsonObject plan, bool particleBaked)
         {

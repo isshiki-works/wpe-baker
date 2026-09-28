@@ -46,7 +46,7 @@ try
         Console.WriteLine(Sections(true));
         Console.WriteLine();
         Console.WriteLine("""
-            Scene projects only. Analyze creates a version 3 video-plus-live plan.
+            Scene projects only. Analyze creates a version 4 video-plus-live plan.
             Analysis never judges whether baking is worth it; it records the analysis device and
             plans. Cost-probe stays available as an optional diagnostic measurement only.
             Analysis also considers independently periodic effect prefixes when whole-layer

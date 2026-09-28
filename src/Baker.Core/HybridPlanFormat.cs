@@ -2,11 +2,29 @@ using System.Text.Json.Nodes;
 
 namespace Baker.Core;
 
-/// <summary>Versioned allocation semantics; request and result versions are independent.</summary>
+/// <summary>Versioned planning and capture semantics; request and result versions are independent.</summary>
 /// <remarks>只读当前版本；旧版 plan 不迁移，一律提示重新分析。</remarks>
 public static class HybridPlanFormat
 {
-    public const int CurrentVersion = 3;
+    // Bump only when saved planning/capture semantics change, not for UI or build changes.
+    public const int CurrentVersion = 4;
+
+    internal static void RequireCompatibleRenderer(JsonObject plan, string currentSourceDigest)
+    {
+        if (plan["renderer_source_digest"] is not JsonValue value ||
+            !value.TryGetValue<string>(out string? planned) || !Digest(planned) ||
+            !Digest(currentSourceDigest) || !planned.Equals(currentSourceDigest, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The renderer or generation plan changed; analyze the source again.");
+    }
+
+    internal static string RendererSourceDigest(string versionOutput)
+    {
+        string? source = versionOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(part => part.StartsWith("source=", StringComparison.Ordinal))?["source=".Length..];
+        return Digest(source) ? source! : throw new InvalidDataException("Renderer source version is unavailable; analyze with a supported renderer.");
+    }
+
+    private static bool Digest(string? value) => value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
     public static void Validate(JsonObject plan)
     {
@@ -23,7 +41,7 @@ public static class HybridPlanFormat
         {
             int id = Number(layer["id"], "layer id");
             if (!layer.ContainsKey("parent") || !layer.ContainsKey("allocation_root") || !byId.TryAdd(id, layer))
-                throw new InvalidDataException("Version 3 layers require unique IDs, author parents and allocation roots.");
+                throw new InvalidDataException("Current plans require unique layer IDs, author parents and allocation roots.");
         }
         int? Parent(JsonObject layer)
         {
@@ -62,7 +80,7 @@ public static class HybridPlanFormat
         foreach (var group in Objects(plan["video_groups"], "video_groups"))
         {
             if (!group.ContainsKey("parent_id") || !group.ContainsKey("parent_transform"))
-                throw new InvalidDataException("Version 3 video groups require explicit parent placement metadata.");
+                throw new InvalidDataException("Current video groups require explicit parent placement metadata.");
             string id = Text(group["id"], "video group id");
             int? parent = group["parent_id"] is null ? null : Number(group["parent_id"], "parent_id");
             var roots = Ids(group["root_ids"], "root_ids").ToHashSet();

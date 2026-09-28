@@ -56,10 +56,10 @@ public class HopelessRerunTests
     [Theory]
     [InlineData("requested_daytime", false)]
     [InlineData("static_with_live", false)]
-    [InlineData("coverage_only", true)]
+    [InlineData("coverage_only", false)]
     public async Task RetreatRunsUnlessEveryCandidateStillHitsTheSameCondition(string kind, bool retreats)
     {
-        // 请求本身固定了时段：每个候选都固定在它上面，fixed_daytime 改不了。静态成品带实时层：多留实时剩下的仍是静态的。只差覆盖时照旧退。
+        // 固定时段、低价值静态成品都不靠逐组退回解决；pass 覆盖只是风险线索，也不再触发重跑。
         await TestTemp.Run(async root =>
         {
             var calls = new List<HybridAnalyzeRequest>();

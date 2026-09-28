@@ -197,16 +197,12 @@ internal static class ResidualLayoutGateChecks
         };
         V3Fixture.Upgrade(plan);
         string output = Path.Combine(root, "residual-layout-bake");
-        Exception? thrown = null;
-        JsonObject? result = null;
-        // KeepIntermediates：这条用例靠合成探针目录还在来证明计划走过了布局防御，所以关掉结束后的中间产物清理。
-        try { result = await new HybridBakeService(new("not-started", "not-started", "not-started", []))
-            .BakeAsync(new(2, plan, output, KeepIntermediates: true)); }
-        catch (Exception error) { thrown = error; }
-        JsonNode? saved = File.Exists(Path.Combine(output, "bake.json")) ? JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(output, "bake.json"))) : null;
-        check(result?["status"]?.GetValue<string>() != ResidualMasking.LayoutRejectedStatus &&
-            saved?["status"]?.GetValue<string>() != ResidualMasking.LayoutRejectedStatus &&
-            Directory.Exists(output + ".composition-probe") && thrown is not null,
-            "bake no longer rejects residual masking on a transparent group: the plan passes the layout defense and reaches the composition probe");
+        var tools = new NativeTools("not-started", "not-started", "not-started", []);
+        var request = new HybridBakeRequest(2, plan, output);
+        var context = new BakeGateContext(request, source, plan["source_sha256"]!.GetValue<string>(), new WorkLayout(output), null)
+            { Plan = plan, Settings = PlanSettings.Of(plan) };
+        BakeRejection? rejection = await BakeGates.FirstRejectionAsync(BakeGates.Preflight(tools), context, CancellationToken.None);
+        check(rejection is null && context.ResidualMasking?["status"]?.GetValue<string>() != ResidualMasking.LayoutRejectedStatus,
+            "bake preflight admits residual masking on a transparent group before the composition probe");
     }
 }

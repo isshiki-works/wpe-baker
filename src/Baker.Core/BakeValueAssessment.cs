@@ -70,6 +70,8 @@ public static class BakeValueAssessment
             return Result(WorkloadValue.UnresolvedPlan);
         if (plan["effect_prefix_caches"] is JsonArray { Count: > 0 } prefixes)
             return Result(WorkloadValue.CachedEffectPrefix, new JsonObject { ["prefix_count"] = prefixes.Count,
+                ["cached_authored_effect_count"] = prefixes.OfType<JsonObject>()
+                    .Sum(cache => SceneGraph.Int(cache["prefix_effect_count"]) ?? 0),
                 ["decoder_work"] = DecoderWork(plan, runtime) });
         if (plan["loop"]?["candidates"] is not JsonArray { Count: > 0 })
             return Result(WorkloadValue.NoWorkingCandidate);

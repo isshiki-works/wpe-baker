@@ -403,6 +403,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         timing.Mark("A14_loop_allocation_fallback");
         // 收尾裁定（原 X 段）：残差布局闸门 → 求解器空候选 → 可追溯不变量 → 视频外壳 → 硬解预检 → 公共查询冲突 → suitability。
         Verdict.Conclude(report, request, source, graph, observation, projection, effectPrefixRoute, residualScene, residualResources);
+        Routes.RecordSelectionEvidence(report, observation.RuntimeLayers);
         await PlanWriter.WriteAsync(report, request, output, loopNotes, cancellationToken);
         timing.Mark("A15_conclude_write");
         // 有记忆时改在整次 analyze 结束时核对一次（AnalysisMemo.VerifySourcesAsync）。

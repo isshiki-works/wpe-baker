@@ -129,6 +129,7 @@ internal static class PlanWriter
             ["schema_version"] = HybridPlanFormat.CurrentVersion, ["kind"] = "hybrid_video", ["route"] = effectPrefixRoute ? "effect_prefix" : "whole_layer",
             ["status"] = effectPrefixRoute || verdict.Blockers.Count == 0 ? "requires_loop_analysis" : "requires_resolution",
             ["source"] = source.SourcePath, ["source_sha256"] = sourceHash, ["source_digest_scope"] = ProjectSource.DigestScope,
+            ["renderer_source_digest"] = observation.Trace["build_source_digest"]?.DeepClone(),
             ["assets"] = Path.GetFullPath(request.Assets), ["analysis_directory"] = output,
             ["settings"] = PlanSettings.ToJson(verdict.RadianceClosure["hdr"]?.GetValue<bool>() == true ? request : request with { Postprocessing = null }),
             // 档位与两个高级覆盖合成的生效值，每个值带来源（preset/override/default）；求解器与 bake 读的都是这一份。

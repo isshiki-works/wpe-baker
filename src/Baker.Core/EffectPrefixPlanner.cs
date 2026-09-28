@@ -59,6 +59,7 @@ internal static class EffectPrefixPlanner
                     dependency["initialization"]?.GetValue<bool>() != true &&
                     IsExternalVisibilityDependency(dependency, ownerId) && dependency["operation"]?.GetValue<string>() == "write"))
                     cache["preserve_external_visibility"] = true;
+                if (PureOwnerVisibility(owner)) cache["preserve_external_visibility"] = true;
                 closed.Add(cache);
             }
             // 同一层的可闭合前缀按长到短全部提出来：最长的那个仍是首选，但它的终端捕获点可能落在共用缓冲上
@@ -117,6 +118,8 @@ internal static class EffectPrefixPlanner
             PlanTransforms.FreezeTemporalProperties(prefixScene, snapshot);
             JsonObject owner = prefixScene["objects"]!.AsArray().OfType<JsonObject>()
                 .Single(item => item["id"]!.GetValue<int>() == ownerId);
+            // Visibility is evaluated on the retained owner at playback, outside this pixel capture.
+            if (PureOwnerVisibility(owner)) owner["visible"] = true;
             JsonArray prefixEffects = owner["effects"]!.AsArray();
             while (prefixEffects.Count > prefixCount) prefixEffects.RemoveAt(prefixEffects.Count - 1);
             if (owner["animationlayers"] is JsonArray) owner.Remove("animationlayers");
@@ -211,7 +214,30 @@ internal static class EffectPrefixPlanner
         // Effects are inspected one at a time by SafeEffect. A live script in a later
         // effect is a valid suffix; it must not disqualify an earlier closed prefix.
         baseOwner.Remove("effects");
+        if (PureOwnerVisibility(baseOwner)) baseOwner.Remove("visible");
         return HasDynamic(baseOwner);
+    }
+
+    /// <summary>Only a read-only user-property predicate assigning its local return value can be separated from owner pixels.</summary>
+    internal static bool PureOwnerVisibility(JsonObject owner)
+    {
+        if (owner["visible"] is not JsonObject binding || binding["script"] is not JsonValue script ||
+            !script.TryGetValue<string>(out string? source) || binding.Any(field => field.Key is not ("script" or "value"))) return false;
+        string code = Liveness.CapabilityScanText(source).Trim();
+        code = Regex.Replace(code, "^['\"]use strict['\"]\\s*;\\s*", "");
+        Match function = Regex.Match(code, @"^export\s+function\s+update\s*\(\s*value\s*\)\s*\{([\s\S]*)\}\s*$",
+            RegexOptions.CultureInvariant);
+        if (!function.Success) return false;
+        string body = function.Groups[1].Value;
+        if (!Regex.IsMatch(body, @"\breturn\s+value\s*;\s*$")) return false;
+        body = Regex.Replace(body, @"\bengine\s*\.\s*userProperties\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*\b", "1");
+        if (Regex.IsMatch(body, @"[^A-Za-z0-9_$\s.(){};=!<>&|]") || body.Contains('.')) return false;
+        if (Regex.Matches(body, @"\b[A-Za-z_$][A-Za-z0-9_$]*\b")
+            .Any(token => token.Value is not ("value" or "if" or "else" or "return" or "true" or "false"))) return false;
+        if (Regex.IsMatch(body, @"\b(?:value|true|false|[0-9]+)\s*\(")) return false;
+        // Equality operators are reads. Every standalone assignment must target the callback's local value.
+        return Regex.Matches(body, @"(?<![=!<>])=(?!=|>)").All(match =>
+            Regex.IsMatch(body[..match.Index], @"(?:^|[^A-Za-z0-9_$])value\s*$"));
     }
 
     private static bool IsExternalVisibilityDependency(JsonObject dependency, int ownerId) =>

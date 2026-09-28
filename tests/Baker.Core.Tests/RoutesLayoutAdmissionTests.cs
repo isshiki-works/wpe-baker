@@ -327,4 +327,31 @@ public class RoutesTests
         Assert.Single(result["video_groups"]!.AsArray());
         Assert.Equal(LayoutAdmission.DemotedStatus, Text(result["video_layout_admission"]!["status"]));
     });
+
+    [Fact]
+    public void ParticleWholeLayerAndSmallPrefixRemainIncomparable()
+    {
+        var plan = new JsonObject {
+            ["route"] = "effect_prefix",
+            ["whole_layer"] = new JsonObject { ["status"] = "available",
+                ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 3600 }) } },
+            ["video_groups"] = new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(625) }),
+            ["layers"] = new JsonArray(new JsonObject { ["id"] = 625, ["kind"] = "particle", ["canvas_fraction"] = 0.1 }),
+            ["effect_prefix_caches"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 550, ["prefix_effect_count"] = 1 })
+        };
+        var runtime = new JsonArray(new JsonObject { ["owner"] = 625,
+            ["materials"] = new JsonArray(new JsonObject { ["role"] = "source", ["shader"] = "genericparticle" }) });
+        Routes.RecordSelectionEvidence(plan, runtime);
+        JsonObject selection = plan["route_selection"]!.AsObject();
+        Assert.Equal("unknown", Text(selection["comparison"]));
+        Assert.Equal(0, selection["whole_layer_effect_pass_coverage"]!.GetValue<double>());
+        Assert.Equal([625], selection["whole_layer_particle_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()));
+        Assert.Equal(1, selection["whole_layer_video_group_upper_bound"]!.GetValue<int>());
+        Assert.Equal(1, selection["prefix_cached_authored_effect_count"]!.GetValue<int>());
+
+        plan["route"] = "whole_layer";
+        plan.Remove("route_selection");
+        Routes.RecordSelectionEvidence(plan, runtime);
+        Assert.Null(plan["route_selection"]);
+    }
 }

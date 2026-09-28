@@ -131,6 +131,7 @@ internal static class EffectPrefixCache
         bool retainsPuppet = model["puppet"] is JsonValue puppetValue && puppetValue.TryGetValue<string>(out string? puppet) && source.Contains(puppet);
         JsonObject checkedOwner = original.DeepClone().AsObject();
         if (retainsPuppet) checkedOwner.Remove("animationlayers");
+        if (EffectPrefixPlanner.PureOwnerVisibility(checkedOwner)) checkedOwner.Remove("visible");
         // Only the selected prefix is cached. Later effects stay authored and live;
         // their scripts must not disqualify the earlier capture.
         checkedOwner.Remove("effects");
