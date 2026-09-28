@@ -50,7 +50,7 @@ array<i32, 2> TextLayerExtent(const text::TextGeometry& geometry) {
 }
 
 std::uint32_t TextPointSizeToPx(float point_size) {
-    constexpr float kPointsizeToPx = 4.0f;
+    constexpr float kPointsizeToPx = 25.0f / 6.0f;
     if (! std::isfinite(point_size) || point_size <= 0.0f) return 1;
     auto px = static_cast<std::uint32_t>(std::round(point_size * kPointsizeToPx));
     return std::clamp<std::uint32_t>(px, 1, 1024);
