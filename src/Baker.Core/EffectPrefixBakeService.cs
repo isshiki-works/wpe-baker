@@ -39,6 +39,15 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         return patches;
     }
 
+    internal static Task<JsonArray> PatchCompositionReferenceAsync(string referenceProject, ProjectSource source,
+        string? assets, JsonObject referenceScene, JsonObject snapshot, IEnumerable<JsonObject> encodedLoops,
+        CancellationToken cancellationToken)
+    {
+        PlanTransforms.FreezeTemporalProperties(referenceScene, snapshot);
+        foreach (JsonObject loop in encodedLoops) HybridLoopService.ApplyPatches(referenceScene, loop);
+        return ShaderTextPatch.WriteTimeScaleAsync(referenceProject, source, assets, referenceScene, cancellationToken);
+    }
+
     internal async Task<JsonObject> BakeAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
         StageTiming timing, CancellationToken cancellationToken = default)
     {
@@ -78,6 +87,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         }
         JsonObject candidateScene = pristine.DeepClone().AsObject();
         JsonObject referenceScene = pristine.DeepClone().AsObject();
+        var encodedLoops = new Dictionary<int, JsonObject>();
         JsonObject candidateMetadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
         JsonObject referenceMetadata = candidateMetadata.DeepClone().AsObject();
         HashSet<string> cachedPropertyKeys = EffectPrefixCache.FixedPropertyKeys(caches.OfType<JsonObject>());
@@ -403,6 +413,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 }
                 SeamPreview.Attach(encodedGroup, seamPreview);
                 result["groups"]!.AsArray().Add(encodedGroup);
+                encodedLoops.Add(owner, loop.DeepClone().AsObject());
             }
             if (!result["groups"]!.AsArray().OfType<JsonObject>().Any(group => group["status"]?.GetValue<string>() == "encoded"))
             {
@@ -414,6 +425,11 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             ProjectWriter.ApplyPropertySnapshot(referenceMetadata, snapshot); referenceMetadata["file"] = source.SceneResource;
             JsonObject propertyReport = ApplyCachedPropertyPresentation(candidateMetadata, candidateScene, cachedPropertyKeys);
             result["effect_prefix_fixed_properties"] = propertyReport;
+            // Compare the video against the same installed prefix clocks. The author's
+            // original speed differs by the explicitly planned retime and is not an
+            // encoding/composition reference; suffixes and other owners remain live.
+            result["composition_reference_patches"] = await PatchCompositionReferenceAsync(referenceProject,
+                source, settings.Assets, referenceScene, snapshot, encodedLoops.Values, cancellationToken);
             using (timing.Measure(StageTiming.ProjectAssembly))
             {
                 await File.WriteAllTextAsync(ProjectSource.ContainedPath(candidateProject, source.SceneResource), candidateScene.ToJsonString(), cancellationToken);
@@ -428,6 +444,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 CompositionGate.RequiredFrames, 0, 17, request.DeviceUuid ?? settings.DeviceUuid,
                 snapshot), progress, cancellationToken);
             JsonObject composition = CompositionGate.Evaluate(comparison);
+            composition["reference_basis"] = "same_installed_prefix_retime";
             result["composition_validation"] = composition;
             if (composition["status"]?.GetValue<string>() == CandidateScriptErrorGate.RejectedCompositionStatus)
             {
