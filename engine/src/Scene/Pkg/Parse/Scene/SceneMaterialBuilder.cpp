@@ -270,7 +270,8 @@ SceneShaderVariantDesc MakeSceneShaderVariantDesc(
 
 auto BuildMaterial(fs::VFS& vfs, ShaderCache& shader_cache,
                    const SceneShaderEnvironment& environment, const wpscene::Material& wpmat,
-                   Scene& scene, ShaderInfo shader_info, GeometryStageRequirement geometry_stage)
+                   Scene& scene, ShaderInfo shader_info, GeometryStageRequirement geometry_stage,
+                   const InternalShaderSource* internal_shader)
     -> Result<MaterialBuild, MaterialBuildError> {
     MaterialBuild build { .shader_info = rstd::move(shader_info) };
     auto&         material        = build.material;
@@ -290,12 +291,13 @@ auto BuildMaterial(fs::VFS& vfs, ShaderCache& shader_cache,
     std::vector<std::string> sd_source_keys;
     std::vector<std::string> sd_original_sources;
     auto                     add_shader_unit = [&](ShaderType stage, std::string source_key) {
-        auto        loaded = fs::ReadFileContent(vfs, source_key);
         std::string source;
-        if (loaded.is_ok()) {
-            source = rstd::move(loaded).unwrap_unchecked();
-        } else {
-            rstd_error("Can't read shader source {}", source_key);
+        if (internal_shader != nullptr && stage == ShaderType::VERTEX) source = internal_shader->vertex;
+        else if (internal_shader != nullptr && stage == ShaderType::FRAGMENT) source = internal_shader->fragment;
+        else {
+            auto loaded = fs::ReadFileContent(vfs, source_key);
+            if (loaded.is_ok()) source = rstd::move(loaded).unwrap_unchecked();
+            else rstd_error("Can't read shader source {}", source_key);
         }
         sd_source_keys.push_back(std::move(source_key));
         sd_original_sources.push_back(source);

@@ -28,8 +28,11 @@ public sealed record RenderRequest(string Source, string Assets, string OutputDi
     ulong? EncodedFrames = null, ulong[]? RetainFrames = null, string? PlaybackEncoderKind = null,
     GpuEncodeRequest? GpuEncoding = null, bool CollectSamplingCoverage = false,
     double EffectRenderScale = 1.0, bool MatchEffectResolution = false, double? HdrScale = null,
+    double HdrLowerBound = 0,
     bool SampledCoverageOnly = false, CacheRegion? DirectCrop = null, uint? DirectCrossfadeFrames = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int QuantizerOffset = 0);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int QuantizerOffset = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool HdrRangeProbe = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool HdrSignedSqrt = false);
 // HdrScale：官方 HDR 管线下闭合不成立的组。渲染器按浮点中间目标合成，出帧为 rgb/k；成品图层着色器再乘回 k。
 public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
     uint CrossfadeFrames = 0, CacheRegion? Crop = null, bool RetainLoopWindow = false,
@@ -92,6 +95,9 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
     public async Task<JsonObject> RenderAsync(RenderRequest request, IProgress<RenderProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (request.HdrRangeProbe) throw new ArgumentException("An HDR range probe requires the raw-frame renderer.");
+        if (request.HdrSignedSqrt && (request.HdrScale is not > 0 || request.CaptureTarget is not { EffectTerminal: true, ExactExtent: true }))
+            throw new ArgumentException("Signed HDR encoding requires an exact effect-terminal capture.");
         if (request.SchemaVersion != 1) throw new InvalidDataException("Unsupported render request version.");
         if (!double.IsFinite(request.EffectRenderScale) || request.EffectRenderScale is <= 0 or > 1)
             throw new ArgumentException("EffectRenderScale must be finite and in (0, 1].");
@@ -244,15 +250,24 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 WriteAudio = request.IncludeAudio,
                 EffectRenderScale = request.EffectRenderScale != 1.0 ? request.EffectRenderScale : null,
                 MatchEffectResolution = request.MatchEffectResolution,
-                HdrScale = request.HdrScale
+                HdrScale = request.HdrScale,
+                HdrLowerBound = request.HdrLowerBound != 0 ? request.HdrLowerBound : null,
+                HdrSignedSqrt = request.HdrSignedSqrt ? true : null
             };
             // Only pure sample consumers may omit full frames. Bounds, opacity and retained-frame
             // checks still require their original complete input. Older renderers keep that path.
             bool sampleConsumer = request.FrameSamplesOnly && !request.CollectAlphaBounds && !request.RequireOpaquePixels &&
                 (request.RetainFrames ?? []).All(frame => IsSampleFrame(request, frame));
             // 只在要按能力分支时才握手；同一个渲染器文件在进程内只跑一次 --version（RendererClient 缓存）。
-            RendererCapabilities capabilities = sampleConsumer || request.GpuEncoding is not null || request.EffectRenderScale != 1.0 || request.MatchEffectResolution || request.CaptureTarget?.ForceVisibleOwner == true
+            bool hdrTerminal = request.HdrScale is > 0 && request.CaptureTarget?.EffectTerminal == true;
+            RendererCapabilities capabilities = sampleConsumer || request.GpuEncoding is not null || request.EffectRenderScale != 1.0 || request.MatchEffectResolution || request.CaptureTarget?.ForceVisibleOwner == true || hdrTerminal || request.HdrLowerBound != 0
                 ? await client.CapabilitiesAsync(Path.Combine(output, "renderer-capabilities.stderr.log"), cancellationToken) : new([]);
+            if (hdrTerminal && !capabilities.Has("hdr-terminal-affine-v2"))
+                throw new InvalidDataException("Renderer does not support affine HDR capture at an effect terminal.");
+            if (request.HdrLowerBound != 0 && !capabilities.Has("hdr-terminal-affine-v2"))
+                throw new InvalidDataException("Renderer does not support signed HDR capture encoding.");
+            if (request.HdrSignedSqrt && !capabilities.Has("hdr-terminal-signed-sqrt-v1"))
+                throw new InvalidDataException("Renderer does not support signed-sqrt HDR video encoding.");
             if (request.EffectRenderScale != 1.0 && !capabilities.Has("effect-render-scale-v1"))
                 throw new InvalidDataException("Renderer does not support internal effect scaling.");
             if (request.MatchEffectResolution && !capabilities.Has("adaptive-effect-resolution-v1"))

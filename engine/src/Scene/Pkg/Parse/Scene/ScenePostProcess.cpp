@@ -25,7 +25,8 @@ namespace owe
 {
 
 void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
-                           const wpscene::SceneGeneral& g, float hdr_scale) {
+                           const wpscene::SceneGeneral& g, float hdr_scale, float hdr_lower_bound,
+                           bool hdr_signed_sqrt) {
     auto& scene = *context.scene;
 
     auto declare_rt = [&](std::string name, float inv_scale) {
@@ -61,19 +62,24 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
                         std::vector<wpscene::MaterialPassBindItem>
                                                                 binds,
                         std::string                             output_rt,
-                        std::function<void(wpscene::Material&, ShaderInfo&)> mutate = nullptr) -> bool {
-        std::string material_path { "/assets/" };
-        material_path.append(mat_relpath);
-        auto loaded = ReadNJsonFile(vfs, material_path);
-        if (loaded.is_err()) {
-            rstd_error("bloom: parse material json failed {}", mat_relpath);
-            return false;
-        }
-        auto              material_json = rstd::move(loaded).unwrap_unchecked();
+                        std::function<void(wpscene::Material&, ShaderInfo&)> mutate = nullptr,
+                        const InternalShaderSource* internal_shader = nullptr) -> bool {
         wpscene::Material wpmat;
-        if (! wpmat.FromJson(material_json)) {
-            rstd_error("bloom: Material::FromJson failed: {}", mat_relpath);
-            return false;
+        if (internal_shader != nullptr) {
+            wpmat.shader = "__wpe_baker_hdr_affine";
+            wpmat.blending = "disabled";
+        } else {
+            std::string material_path { "/assets/" };
+            material_path.append(mat_relpath);
+            auto loaded = ReadNJsonFile(vfs, material_path);
+            if (loaded.is_err()) {
+                rstd_error("bloom: parse material json failed {}", mat_relpath);
+                return false;
+            }
+            if (! wpmat.FromJson(rstd::move(loaded).unwrap_unchecked())) {
+                rstd_error("bloom: Material::FromJson failed: {}", mat_relpath);
+                return false;
+            }
         }
         ApplyTextureBinds(wpmat, std::span(binds), render_targets);
 
@@ -89,7 +95,9 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
                                                                context.shader_environment,
                                                                wpmat,
                                                                scene,
-                                                               rstd::move(wpShaderInfo));
+                                                               rstd::move(wpShaderInfo),
+                                                               GeometryStageRequirement::None,
+                                                               internal_shader);
         if (material_result.is_err()) {
             rstd_error("bloom: BuildMaterial failed: {}", mat_relpath);
             return false;
@@ -160,24 +168,42 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
 
     (void)scene.RegisterPostProcess(rstd::move(pp));
 
-    // hdr_scale=k：给 RGBA8 捕获前把浮点结果 rgb 除以 k。在 _rt_default 上叠一层黑色、
-    // alpha=1-1/k 的 translucent，dst*(1-a) 正好是 rgb/k；不写 alpha，alpha 不变。
+    // HDR 捕获编码 (rgb-lower)/scale。此内部 pass 从原 terminal 读，向独立目标写；
+    // 原目标与后续作者 effect/反馈不受捕获编码影响。
     // 单独注册为 "__hdr_scale"：组捕获不含后处理时也照做（见 SceneToRenderGraph）。
-    if (hdr_scale <= 1.0f) return;
+    if (hdr_scale <= 0.0f || (!hdr_signed_sqrt && hdr_scale == 1.0f && hdr_lower_bound == 0.0f)) return;
+    declare_rt("_rt_wpe_baker_hdr_screen", 1.0f);
+    (void)render_targets.insert(String::make("_rt_wpe_baker_hdr_screen"_str),
+                                String::make("_rt_wpe_baker_hdr_screen"_str));
+    InternalShaderSource affine {
+        .vertex = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\n"
+                  "void main(){ gl_Position=vec4(a_Position,1.0); v_TexCoord=a_TexCoord; }",
+        .fragment = "varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\n"
+                    "uniform float g_HdrScale; // {\"material\":\"hdrscale\"}\n"
+                    "uniform float g_HdrLower; // {\"material\":\"hdrlower\"}\n"
+                    "void main(){ vec4 source=g_Texture0.Load(int3(gl_FragCoord.xy,0)); " +
+                    // Transform the floating terminal before video quantization; the range probe stays linear.
+                    std::string(hdr_signed_sqrt
+                        ? "float qlo=sign(g_HdrLower)*sqrt(abs(g_HdrLower)); "
+                          "float hi=g_HdrLower+g_HdrScale; float qhi=sign(hi)*sqrt(abs(hi)); "
+                          "vec3 q=sign(source.rgb)*sqrt(abs(source.rgb)); "
+                          "gl_FragColor=vec4((q-qlo)/(qhi-qlo),source.a); }"
+                        : "gl_FragColor=vec4((source.rgb-g_HdrLower)/g_HdrScale,source.a); }"),
+    };
     pp       = Box<ScenePostProcess>::make();
     pp->name = "__hdr_scale";
-    if (add_pass("materials/util/fade.json",
-                 {},
-                 rstd::cppstd::to_string(SpecTex_Default),
-                 [&](wpscene::Material& m, ShaderInfo& info) {
-                     m.constantshadervalues["tint"] = { 0.0f, 0.0f, 0.0f };
-                     // fade.json 用 usershadervalues 把 tint 绑到工程属性 schemecolor；场景带这个属性时
-                     // 用户值会盖掉上面的黑色，捕获变成 rgb/k + (1-1/k)*0.7*schemecolor。缩放层必须是纯黑，去掉绑定。
-                     m.user_shader_values.clear();
-                     m.alphawriting                 = "disabled";
-                     info.baseConstSvs[rstd::cppstd::to_string(G_ALPHA)] = 1.0f - 1.0f / hdr_scale;
-                 }))
+    if (add_pass("<internal affine>", { { "previous", i32() } },
+                 "_rt_wpe_baker_hdr_screen",
+                 [&](wpscene::Material& m, ShaderInfo&) {
+                     m.constantshadervalues["hdrscale"] = { hdr_scale };
+                     m.constantshadervalues["hdrlower"] = { hdr_lower_bound };
+                 }, &affine)) {
+        pp->steps.push(ScenePostProcessStep(ScenePostProcessCopy {
+            .src = "_rt_wpe_baker_hdr_screen",
+            .dst = rstd::cppstd::to_string(SpecTex_Default),
+        }));
         (void)scene.RegisterPostProcess(rstd::move(pp));
+    }
 }
 
 } // namespace owe

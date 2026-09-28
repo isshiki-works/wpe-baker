@@ -6,7 +6,7 @@ internal static class HybridPlanFormatChecks
     internal static async Task RunAsync(Action<bool, string> check, string outputRoot)
     {
         JsonObject Plan() => JsonNode.Parse("""
-            {"schema_version":4,"kind":"hybrid_video","layers":[
+            {"schema_version":5,"kind":"hybrid_video","layers":[
               {"id":1,"root":1,"allocation_root":1,"parent":null},
              {"id":2,"root":1,"allocation_root":2,"parent":1}],
              "root_order":[1,2],"source_root_order":[1],
@@ -28,6 +28,16 @@ internal static class HybridPlanFormatChecks
         var currentRoundTrip = JsonNode.Parse(current.ToJsonString())!.AsObject();
         HybridPlanFormat.Validate(currentRoundTrip);
         check(JsonNode.DeepEquals(current, currentRoundTrip), "current plan survives a JSON round trip without losing hierarchy metadata");
+        var pendingHdr = Plan();
+        pendingHdr["route"] = "effect_prefix";
+        pendingHdr["blockers"] = new JsonArray();
+        pendingHdr["hdr_radiance_closure"] = new JsonObject { ["hdr"] = true, ["status"] = "open" };
+        HybridPlanFormat.Validate(pendingHdr, requireCaptureEncoding: false);
+        Reject(pendingHdr, "a saved HDR prefix cannot omit its affine capture proof");
+        pendingHdr["status"] = "requires_resolution";
+        pendingHdr["blockers"] = new JsonArray("HDR range could not be proven");
+        HybridPlanFormat.Validate(pendingHdr);
+        check(true, "a rejected HDR prefix remains a readable report without affine capture fields");
         const string digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         current["renderer_source_digest"] = digest;
         HybridPlanFormat.RequireCompatibleRenderer(current, digest.ToUpperInvariant());

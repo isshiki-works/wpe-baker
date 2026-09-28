@@ -61,9 +61,15 @@ struct MaterialBuild {
     ShaderInfo    shader_info;
 };
 
+struct InternalShaderSource {
+    std::string vertex;
+    std::string fragment;
+};
+
 auto BuildMaterial(fs::VFS&, ShaderCache&, const SceneShaderEnvironment&, const wpscene::Material&,
                    Scene&, ShaderInfo = {},
-                   GeometryStageRequirement = GeometryStageRequirement::None)
+                   GeometryStageRequirement = GeometryStageRequirement::None,
+                   const InternalShaderSource* = nullptr)
     -> Result<MaterialBuild, MaterialBuildError>;
 auto ApplyImageColorBlend(wpscene::Material&, const wpscene::ImageObject&) -> Option<BlendMode>;
 auto NeutralColorUniforms(ShaderValueMap) -> ShaderValueMap;
@@ -357,6 +363,7 @@ void ProcessObjects(SceneParseContext&, mut_ref<SceneObjectVar[]>, owe::media::O
                     ProcessOpts opts = {});
 
 Box<Scene> FinalizeScene(SceneParseContext&);
-void       BuildBloomPostProcess(SceneParseContext&, fs::VFS&, const wpscene::SceneGeneral&, float hdr_scale);
+void       BuildBloomPostProcess(SceneParseContext&, fs::VFS&, const wpscene::SceneGeneral&, float hdr_scale,
+                                 float hdr_lower_bound, bool hdr_signed_sqrt);
 
 } // namespace owe

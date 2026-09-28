@@ -13,6 +13,8 @@ namespace Baker.Core.Analysis.EffectRange;
 /// changes the program identity. No resource name or wallpaper ID grants eligibility.</summary>
 internal static class EffectPrefixRadianceBounds
 {
+    internal readonly record struct StaticHeadBound(int EffectId, double Lower, double Upper, string Evidence);
+
     private const double MinNormalFloat = 1.1754943508222875e-38;
     private readonly record struct Range(double Lo, double Hi, bool Opaque)
     {
@@ -34,7 +36,9 @@ internal static class EffectPrefixRadianceBounds
         ["16c601d6461d96aa190b151b80b8b5e0fad827c539714cd076d16b336543d5d9"] = "downsample",
         ["f762376f067628877d9c994e9a5bdf8d23a2cd0ca8b5232fb0b11481b2a787c7"] = "upsample",
         ["8fedd61a7c3034a926a35b803af232d7f18f65928b5ce3d08e2dc752bed9b99d"] = "bloom-add",
-        ["1b52117cb0f17e96fdace598d3eae791ad085098f104f01821c5868709373b0c"] = "fog-multiply"
+        ["1b52117cb0f17e96fdace598d3eae791ad085098f104f01821c5868709373b0c"] = "fog-multiply",
+        ["fa60a7bfaba3da543d42842f611a03f42300179b32d756319b624938d3e7acf9"] = "iris-resample",
+        ["b6688f8e3da77c518596118373e06d0ab9429d4cbe932803bb10ab62060d7a99"] = "shake-resample"
     };
 
     private static readonly Dictionary<string, string> Headers = new(StringComparer.Ordinal)
@@ -50,7 +54,8 @@ internal static class EffectPrefixRadianceBounds
     };
 
     internal static bool TryProve(JsonObject layer, JsonObject properties, ProjectSource source,
-        string? assets, out double lower, out double upper, out string detail)
+        string? assets, out double lower, out double upper, out string detail,
+        StaticHeadBound? staticHead = null)
     {
         lower = upper = 0;
         detail = "";
@@ -137,8 +142,11 @@ internal static class EffectPrefixRadianceBounds
                 "Source texture alpha is not proven one.");
             Range current = new(0, 1, true);
 
+            int effectOrdinal = 0;
+            bool usedStaticHead = false;
             foreach (var effect in (layer["effects"] as JsonArray ?? []).OfType<JsonObject>())
             {
+                int authoredOrdinal = effectOrdinal++;
                 var visible = SceneGraph.Resolve(effect["visible"], properties)?.ToJsonString();
                 if (visible == "false") continue;
                 Need(visible is null or "true", "Dynamic effect visibility.");
@@ -322,6 +330,39 @@ internal static class EffectPrefixRadianceBounds
                                 }
                             result = new(extrema.Min(), extrema.Max(), a0.Opaque);
                             break;
+                        case "iris-resample":
+                            Names("MASK BACKGROUND", "color|scale|speed|rough|noiseamount|phase");
+                            Combo("MASK", 1, 0, 1);
+                            Combo("BACKGROUND", 0, 0);
+                            External(1);
+                            Need(V("scale", "1 1", -float.MaxValue, float.MaxValue).Length == 2,
+                                "Iris scale must be a finite vector.");
+                            C("speed", 1, -float.MaxValue, float.MaxValue);
+                            C("rough", .2, -float.MaxValue, float.MaxValue);
+                            C("noiseamount", .5, -float.MaxValue, float.MaxValue);
+                            C("phase", 0, -float.MaxValue, float.MaxValue);
+                            // BACKGROUND=0 only fetches the prior RT at displaced UVs. The
+                            // MASK branch changes the displacement, never the sampled color.
+                            result = a0; nonnegative = a0.Lo >= 0;
+                            break;
+                        case "shake-resample":
+                            Names("NOISE DIRECTION TIMEOFFSET AUDIOPROCESSING MASK", "speed|strength|friction|bounds");
+                            Combo("NOISE", 0, 0); Combo("DIRECTION", 0, 0);
+                            Combo("TIMEOFFSET", 0, 0); Combo("AUDIOPROCESSING", 0, 0); Combo("MASK", 0, 0);
+                            External(1); External(2, "util/black");
+                            C("speed", 1, -float.MaxValue, float.MaxValue);
+                            double amplitude = C("strength", .1, -float.MaxValue, float.MaxValue);
+                            Need(amplitude * amplitude * 2 <= float.MaxValue, "Shake UV displacement exceeds finite FP32.");
+                            Need(V("friction", "1 1", MinNormalFloat, float.MaxValue).Length == 2,
+                                "Shake friction must be a finite positive vector.");
+                            double[] bounds = V("bounds", "0 1", -float.MaxValue, float.MaxValue);
+                            Need(bounds.Length == 2 && bounds[1] > bounds[0] &&
+                                double.IsFinite(1 / (bounds[1] - bounds[0])) &&
+                                Math.Abs(1 / (bounds[1] - bounds[0])) <= float.MaxValue,
+                                "Shake bounds do not produce a finite reciprocal.");
+                            // With MASK=0 the final color is a single prior-RT fetch.
+                            result = a0; nonnegative = a0.Lo >= 0;
+                            break;
                         default: throw new InvalidDataException("Source shader cannot be used as an effect transfer.");
                     }
                     foreach (JsonObject p in new[] { material, instance })
@@ -334,6 +375,18 @@ internal static class EffectPrefixRadianceBounds
                         }
                     }
                     current = RoundRt(result, Math.Max(a0.Magnitude, inputs.Values.Max(r => r.Magnitude)), nonnegative);
+                    if (staticHead is { } measured && authoredOrdinal == 0)
+                    {
+                        Need(index == 0 && passes.Count == 1 && kind == "sharpen" &&
+                            effect["id"]?.GetValue<int>() == measured.EffectId &&
+                            double.IsFinite(measured.Lower) && double.IsFinite(measured.Upper) &&
+                            measured.Lower <= measured.Upper && measured.Lower >= current.Lo &&
+                            measured.Upper <= current.Hi && current.Opaque,
+                            "Static probe does not match the reviewed first-effect range.");
+                        current = new(measured.Lower, measured.Upper, true);
+                        usedStaticHead = true;
+                        evidence.Add("static full-extent first-effect probe: " + measured.Evidence);
+                    }
                     evidence.Add($"{kind}[{index}]=[{current.Lo:R},{current.Hi:R}]; alpha={(current.Opaque ? "1" : "[0,1]")}");
                     if (pass["target"] is JsonNode target)
                     {
@@ -343,6 +396,7 @@ internal static class EffectPrefixRadianceBounds
                     }
                 }
             }
+            Need(staticHead is null || usedStaticHead, "Static first-effect probe was not applied.");
             Need(current.Opaque, "Terminal alpha is not constant one.");
             lower = current.Lo; upper = current.Hi;
             detail = "Reviewed shader ABI 21 interval proof; outward FP16 RT rounding. " + string.Join("; ", evidence);

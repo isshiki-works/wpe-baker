@@ -248,6 +248,7 @@ struct SceneRenderTarget {
     // Later graph versions of this RT keep earlier color content. Use this
     // for composition targets, not transient effect outputs.
     bool preserve_on_write { false };
+    bool force_sdr { false }; // raw范围探针绕过HDR全局RT格式；普通捕获仍保留float
     // 颜色 RT 用 RGBA16F（HDR 管线，由场景 HdrScale 决定）。
     bool hdr { false };
 
@@ -2766,6 +2767,8 @@ public:
     // 作业 hdr_scale：>0 时走 HDR 管线（浮点 RT、brightness 生效），捕获前 rgb 除以它。
     float HdrScale() const { return m_hdr_scale; }
     void  SetHdrScale(float v) { m_hdr_scale = v; }
+    bool HdrRangeProbe() const { return m_hdr_range_probe; }
+    void SetHdrRangeProbe(bool value) { m_hdr_range_probe = value; }
     bool ConsumeRenderGraphDirty();
     bool ApplyUserNodeVisibilityBindings(std::string_view key, const NJson& property);
     bool ApplyUserImageEffectVisibilityBindings(std::string_view key, const NJson& property);
@@ -3050,6 +3053,7 @@ private:
     bool                                         m_render_graph_dirty { false };
     bool                                         m_planar_reflection_enabled { false };
     float                                        m_hdr_scale { 0.0f };
+    bool                                         m_hdr_range_probe { false };
     HashMap<i32, String>                         m_render_group_cameras;
     HashMap<String, Vec<String>>                 m_linked_cameras;
     HashMap<i32, SceneNodeId>                    m_layer_link_source_ids;
@@ -3083,4 +3087,3 @@ struct Impl<fmt::Display, owe::ImageParseError> : ImplBase<owe::ImageParseError>
 };
 
 } // namespace rstd
-

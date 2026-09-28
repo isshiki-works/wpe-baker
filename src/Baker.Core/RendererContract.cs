@@ -36,6 +36,9 @@ internal sealed record RenderJob
     public double? EffectRenderScale { get; init; }
     public bool? MatchEffectResolution { get; init; }
     public double? HdrScale { get; init; }
+    public double? HdrLowerBound { get; init; }
+    public bool? HdrRangeProbe { get; init; }
+    public bool? HdrSignedSqrt { get; init; }
     public uint? OutputFrameStride { get; init; }
     public ulong? OutputFramePhase { get; init; }
     public uint? OutputSampleWidth { get; init; }
@@ -53,7 +56,9 @@ internal sealed record RenderJob
         CaptureTarget = request.CaptureTarget, OrthographicCaptureViewport = request.OrthographicCaptureViewport,
         LayerSelection = request.LayerSelection, Input = request.Input, InputTimeline = request.InputTimeline,
         UserProperties = request.UserProperties, OfflineVideoRateOverrides = request.OfflineVideoRateOverrides, DeviceUuid = request.DeviceUuid,
-        GpuTiming = request.GpuTiming ? true : null, TraceScene = request.TraceScene ? true : null
+        GpuTiming = request.GpuTiming ? true : null, TraceScene = request.TraceScene ? true : null,
+        HdrRangeProbe = request.HdrRangeProbe ? true : null,
+        HdrSignedSqrt = request.HdrSignedSqrt ? true : null
     };
 }
 

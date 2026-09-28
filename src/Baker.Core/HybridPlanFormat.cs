@@ -7,7 +7,7 @@ namespace Baker.Core;
 public static class HybridPlanFormat
 {
     // Bump only when saved planning/capture semantics change, not for UI or build changes.
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     internal static void RequireCompatibleRenderer(JsonObject plan, string currentSourceDigest)
     {
@@ -26,12 +26,28 @@ public static class HybridPlanFormat
 
     private static bool Digest(string? value) => value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
-    public static void Validate(JsonObject plan)
+    public static void Validate(JsonObject plan, bool requireCaptureEncoding = true)
     {
         int version = Number(plan["schema_version"], "schema_version");
         if (plan["kind"]?.GetValue<string>() != "hybrid_video")
             throw new InvalidDataException("A Scene plan is required; analyze the source with this version of WPE Baker.");
         if (version != CurrentVersion) throw new Message("plan.legacy_version", [version]).Error(text => new InvalidDataException(text));
+        if (requireCaptureEncoding && plan["route"]?.GetValue<string>() == "effect_prefix" &&
+            plan["hdr_radiance_closure"] is JsonObject radiance &&
+            radiance["hdr"]?.GetValue<bool>() == true && radiance["status"]?.GetValue<string>() == "open" &&
+            plan["blockers"] is JsonArray { Count: 0 })
+        {
+            if (radiance["capture_encoding"]?.GetValue<string>() != "float_terminal_rgb_signed_sqrt")
+                throw new InvalidDataException("An open HDR prefix needs a proven signed-sqrt capture range.");
+            foreach (JsonObject group in (radiance["groups"] as JsonArray ?? []).OfType<JsonObject>()
+                .Where(group => group["status"]?.GetValue<string>() == "open"))
+            {
+                if (group["capture_scale"] is not JsonValue scaleValue || !scaleValue.TryGetValue<double>(out double scale) ||
+                    group["capture_lower_bound"] is not JsonValue lowerValue || !lowerValue.TryGetValue<double>(out double lower) ||
+                    !double.IsFinite(scale) || !double.IsFinite(lower) || scale <= 0)
+                    throw new InvalidDataException("An open HDR prefix has an invalid capture range.");
+            }
+        }
         foreach (var group in Objects(plan["video_groups"], "video_groups"))
             if (group["id"] is not null && ProjectSource.NormalizeResource(Text(group["id"], "video group id")).Contains('/'))
                 throw new InvalidDataException("Video group IDs must be single path components.");

@@ -14,6 +14,22 @@ internal sealed class Verdict
 {
     internal static readonly Blocker MissingScriptFaultEvidenceBlocker = new(BlockerCode.MissingScriptFaultEvidence);
 
+    internal static (double Scale, double Lower)? CaptureEncoding(SdrRadianceClosure.ProvenRange? range)
+    {
+        if (range is not { } proof || !double.IsFinite(proof.Lower) || !double.IsFinite(proof.Upper)) return null;
+        double lower = Math.Min(0, proof.Lower), upper = Math.Max(1, proof.Upper);
+        if (lower < -float.MaxValue || upper > float.MaxValue) return null;
+        float encodedLower = (float)lower;
+        if (encodedLower > lower) encodedLower = MathF.BitDecrement(encodedLower);
+        double minimumSpan = upper - encodedLower;
+        if (!double.IsFinite(minimumSpan) || minimumSpan > float.MaxValue) return null;
+        float scale = (float)minimumSpan;
+        for (int i = 0; i < 4 && (scale < upper - encodedLower ||
+            -encodedLower > scale - 1); ++i) scale = MathF.BitIncrement(scale);
+        return float.IsFinite(scale) && scale >= 1 && scale >= upper - encodedLower &&
+            -encodedLower <= scale - 1 ? (scale, encodedLower) : null;
+    }
+
     /// <summary>整层路线的初判拒因，按记录先后（同一条可以出现多次，例如多台相机）。</summary>
     internal IReadOnlyList<Blocker> Blockers { get; }
     /// <summary>HDR 辐射闭合判据的明细（plan.hdr_radiance_closure）。</summary>
@@ -86,7 +102,9 @@ internal sealed class Verdict
     /// hdr 未开启时判据不运行，plan 逐字不变。
     /// </summary>
     internal static void ApplyPrefixRadianceClosure(JsonObject report, JsonObject scene, JsonObject properties, JsonObject trace,
-        ProjectSource source, string? assets, JsonObject? project, Analysis.EffectRange.EffectRangeRules? effectRules = null)
+        ProjectSource source, string? assets, JsonObject? project, Analysis.EffectRange.EffectRangeRules? effectRules = null,
+        bool terminalSignedSqrtSupported = false, bool terminalAffineSupported = false,
+        IReadOnlyDictionary<int, Analysis.EffectRange.EffectPrefixRadianceBounds.StaticHeadBound>? staticHeads = null)
     {
         if (report["route"]?.GetValue<string>() != "effect_prefix" || report["effect_prefix_caches"] is not JsonArray { Count: > 0 } caches ||
             report["hdr_radiance_closure"] is not JsonObject initial ||
@@ -110,6 +128,31 @@ internal sealed class Verdict
         report.Remove(InitialRadianceClosureField);
         report.Insert(report.IndexOf("hdr_radiance_closure") + 1, InitialRadianceClosureField, initialCopy);
         if (blocker is null) return;
+        JsonObject[] open = (closure["groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(group => group["status"]?.GetValue<string>() == "open").ToArray();
+        var proofs = open.Select(group =>
+        {
+            int? owner = (group["per_layer"] as JsonArray)?.OfType<JsonObject>()
+                .Where(layer => layer["status"]?.GetValue<string>() != "not_drawn")
+                .Select(layer => Int(layer["layer_id"])).SingleOrDefault();
+            Analysis.EffectRange.EffectPrefixRadianceBounds.StaticHeadBound? head = owner is int id &&
+                staticHeads is not null && staticHeads.TryGetValue(id, out var measured) ? measured : null;
+            return SdrRadianceClosure.ProvenPrefixRange(group, captureScene,
+                properties, source, assets, terminalAffineSupported, head);
+        }).ToArray();
+        var encodings = proofs.Select(CaptureEncoding).ToArray();
+        if (terminalSignedSqrtSupported && terminalAffineSupported && encodings.All(encoding => encoding is not null))
+        {
+            for (int index = 0; index < open.Length; ++index)
+            {
+                open[index]["capture_lower_bound"] = encodings[index]!.Value.Lower;
+                open[index]["capture_scale"] = encodings[index]!.Value.Scale;
+                if (proofs[index]?.Detail is string detail) open[index]["capture_range_detail"] = detail;
+            }
+            closure["capture_encoding"] = "float_terminal_rgb_signed_sqrt";
+            closure["blocker"] = null;
+            return;
+        }
         PlanBlockers.Add(report, blocker);
         report["status"] = "requires_resolution";
     }

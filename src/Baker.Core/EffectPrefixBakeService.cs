@@ -100,6 +100,11 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int owner = cache["owner_layer_id"]!.GetValue<int>(), prefix = cache["prefix_effect_count"]!.GetValue<int>();
+                JsonObject? radiance = (plan["hdr_radiance_closure"]?["groups"] as JsonArray ?? []).OfType<JsonObject>()
+                    .FirstOrDefault(group => group["group_id"]?.GetValue<string>() == $"effect_prefix_{owner}");
+                double hdrScale = radiance?["capture_scale"]?.GetValue<double>() ?? 1;
+                double hdrLowerBound = radiance?["capture_lower_bound"]?.GetValue<double>() ?? 0;
+                bool hdrSignedSqrt = radiance?["capture_scale"] is not null;
                 JsonObject loop = EffectPrefixPlanner.AnalyzeIndexedPrefix(pristine, source, settings.Assets, runtime, snapshot,
                     owner, prefix, settings, projection, null);
                 if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 })
@@ -126,7 +131,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 using (timing.Measure(StageTiming.MasterRender))
                 probe = await runner.RenderRawAsync(new(captureProject, settings.Assets, Path.Combine(cacheOutput, "metadata"), 64, 64,
                     settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target with { ExactExtent = false },
-                    UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true), cancellationToken);
+                    UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true,
+                    HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
+                    HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt), cancellationToken);
                 JsonObject captureSource = probe["native_result"]?["capture_source"]?.AsObject()
                     ?? throw new InvalidDataException("Terminal metadata probe omitted its capture source.");
                 // 尺寸、编码都以捕获点确实是这一层自己的目标为前提；落到共用缓冲时录到的是整幅场景，直接拒绝，不做完整捕获。
@@ -156,7 +163,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     opacityProbe = await runner.RenderRawAsync(new(captureProject, settings.Assets,
                         Path.Combine(cacheOutput, "opacity"), sourceWidth, sourceHeight,
                         settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target,
-                        UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid), cancellationToken);
+                        UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid,
+                        HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
+                        HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt), cancellationToken);
                     string opacityPath = opacityProbe["rgba_path"]!.GetValue<string>();
                     byte[] opacityPixels = await File.ReadAllBytesAsync(opacityPath, cancellationToken);
                     for (int pixel = 3; pixel < opacityPixels.Length; pixel += 4)
@@ -186,6 +195,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     EncodedFrames: frames, RetainFrames: LoopClosureCheck.ReferenceFrameIndices(frames),
                     DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true, RequireOpaquePixels: !packedAlpha,
                     PixelPacking: packedAlpha ? "rgba_side_by_side" : "rgb", EncodeWidth: encodeWidth, EncodeHeight: encodeHeight,
+                    HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
+                    HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt,
                     OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(loop, new HashSet<int> { owner }),
                     EncodePadding: paddedContent is null ? null
                         : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY));
@@ -376,7 +387,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 }
                 using (timing.Measure(StageTiming.ProjectAssembly))
                     await EffectPrefixCache.ApplyAsync(source, pristine, candidateScene, candidateProject, owner, prefix, video,
-                        storedWidth, storedHeight, false, cancellationToken, sourceWidth, sourceHeight, packedAlpha, paddedContent);
+                        storedWidth, storedHeight, false, cancellationToken, sourceWidth, sourceHeight, packedAlpha, paddedContent,
+                        hdrScale, hdrLowerBound, hdrSignedSqrt);
                 var encodedGroup = new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "encoded",
                     ["owner_layer_id"] = owner, ["frames"] = frames, ["source_extent"] = new JsonArray(sourceWidth, sourceHeight),
                     ["encoded_extent"] = new JsonArray(storedWidth, storedHeight), ["logical_encoded_extent"] = new JsonArray(encodeWidth, encodeHeight),
@@ -385,6 +397,11 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     ["hardware_decode_preflight"] = decodePlan.ToJson(),
                     ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone(),
                     ["playback_encode"] = encodeInfo, ["playback_quality_gate"] = gpuQuality, ["video_bytes"] = new FileInfo(video).Length };
+                if (radiance?["capture_scale"] is not null)
+                {
+                    encodedGroup["hdr_capture_scale"] = hdrScale;
+                    encodedGroup["hdr_capture_lower_bound"] = hdrLowerBound;
+                }
                 SeamPreview.Attach(encodedGroup, seamPreview);
                 result["groups"]!.AsArray().Add(encodedGroup);
             }

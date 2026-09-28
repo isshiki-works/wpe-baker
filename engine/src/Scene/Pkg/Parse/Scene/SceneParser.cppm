@@ -40,6 +40,9 @@ struct SceneParseOptions {
     SceneParseCapabilities      capabilities;
     Services*                   services { nullptr }; // 离线作业的服务；空 = 不在离线作业里
     float                       hdr_scale { 0.0f };   // 作业 hdr_scale；0 = 现有 LDR 管线
+    float                       hdr_lower_bound { 0.0f }; // 作业 HDR 捕获下界
+    bool                        hdr_range_probe { false }; // CPU/raw静态范围探针
+    bool                        hdr_signed_sqrt { false }; // 仅真实缓存捕获；严格范围探针始终线性
 };
 
 struct ParsedScene {
@@ -67,4 +70,3 @@ struct Impl<fmt::Display, owe::SceneParseError> : ImplBase<owe::SceneParseError>
 };
 
 } // namespace rstd
-

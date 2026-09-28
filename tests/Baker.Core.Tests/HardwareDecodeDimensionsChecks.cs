@@ -109,8 +109,8 @@ internal static class HardwareDecodeDimensionsChecks
 
         MethodInfo fragmentMethod = typeof(NativeRenderRunner).Assembly.GetType("Baker.Core.EffectPrefixCache")!
             .GetMethod("DecoderFragment", BindingFlags.Static | BindingFlags.NonPublic)!;
-        string Fragment(uint width, uint height, bool packed, EncodedContentRegion? region) =>
-            (string)fragmentMethod.Invoke(null, [width, height, packed, region])!;
+        string Fragment(uint width, uint height, bool packed, EncodedContentRegion? region, double scale = 1, double lower = 0) =>
+            (string)fragmentMethod.Invoke(null, [width, height, packed, region, scale, lower])!;
         const uint legacyWidth = 3840;
         double legacyEdge = .5 / legacyWidth;
         check(Fragment(legacyWidth, 6, true, null) == FormattableString.Invariant($"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5,{legacyEdge:R},{.5-legacyEdge:R}),v_TexCoord.y)).rgb; float a=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+legacyEdge:R},{1-legacyEdge:R}),v_TexCoord.y)).r; gl_FragColor=vec4(rgb,a); }}\n"),
@@ -142,6 +142,15 @@ internal static class HardwareDecodeDimensionsChecks
         check(vertical.Contains("texSample2D(g_Texture1", StringComparison.Ordinal) &&
             vertical.Contains("0.5+clamp(", StringComparison.Ordinal) && !vertical.Contains("g_Texture0", StringComparison.Ordinal),
             "a vertically stacked packed cache reads both halves directly from the original video");
+        string hdr = Fragment(legacyWidth, 6, true, null, 2);
+        string hdrOpaque = Fragment(64, 64, false, null, 2);
+        check(hdr.Contains("vec4(rgb*2,a)", StringComparison.Ordinal) &&
+            hdrOpaque.Contains("vec4(rgb*2,1.0)", StringComparison.Ordinal) &&
+            hdr.Contains("float a=texSample2D(g_Texture1", StringComparison.Ordinal),
+            "a bounded HDR prefix restores RGB after decode while leaving alpha unchanged, including an opaque unpadded cache");
+        string signed = Fragment(legacyWidth, 6, true, null, 18, -6);
+        check(signed.Contains("vec4(rgb*18-6,a)", StringComparison.Ordinal),
+            "a signed HDR range restores its lower bound after sampling while preserving alpha");
 
         // ---- 分组裁剪区扩到下限，显示几何随裁剪区 ----
         var small = new CacheRegion(1920, 1080, 100, 100, 34, 34);

@@ -333,7 +333,7 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 // 捕获点落在共用缓冲上的前缀录到的是整幅场景，这个候选不生成。
                 if (await captureProbes.TargetAsync(cache, cancellationToken) is { } probe &&
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus) continue;
-                // 完整区间复核（与烘焙同一份捕获副本、同一判据）：短观测看不到的晚到依赖推翻这条前缀时不采用，退一级再试，
+                // 完整区间复核（与烘焙同一份捕获副本、同一判据）：晚到依赖或全区间改频证据推翻这条前缀时不采用，退一级再试，
                 // 分析结论与烘焙一致，不再判"能"而烘焙 candidate_rejected_late_dependency。
                 if (await captureProbes.CompleteCaptureAsync(cache, observation.Trace, projection, cancellationToken) is { } complete &&
                     complete["status"]?.GetValue<string>() != PrefixCaptureProbes.CompleteCapturePassedStatus) continue;
@@ -389,7 +389,41 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 前缀路线不管是初判就走的、还是路线准入里改走的，blockers 都被清空过：这里按前缀实际捕获的对象重求 HDR 闭合，
         // 不成立时拒因写回。路线到这里已定稿，后面的更小分配取证只看整层路线，不会再改道。
         if (effectPrefixRoute)
-            Verdict.ApplyPrefixRadianceClosure(report, scene, properties, observation.Trace, source, request.Assets, project);
+        {
+            bool terminalAffineSupported = false;
+            bool terminalSignedSqrtSupported = false;
+            bool staticRangeProbeSupported = false;
+            if (report["hdr_radiance_closure"]?["hdr"]?.GetValue<bool>() == true && File.Exists(tools.Renderer))
+            {
+                RendererCapabilities capabilities = await new RendererClient(new FfmpegTool(tools))
+                    .CapabilitiesAsync(Path.Combine(output, "renderer-prefix-hdr.stderr.log"), cancellationToken);
+                terminalAffineSupported = capabilities.Has("hdr-terminal-affine-v2");
+                terminalSignedSqrtSupported = capabilities.Has("hdr-terminal-signed-sqrt-v1");
+                staticRangeProbeSupported = capabilities.Has("hdr-range-probe-v1");
+            }
+            var staticHeads = new Dictionary<int, Analysis.EffectRange.EffectPrefixRadianceBounds.StaticHeadBound>();
+            if (terminalAffineSupported && staticRangeProbeSupported && request.Assets is string assets &&
+                report["hdr_radiance_closure"]?["status"]?.GetValue<string>() == "open" &&
+                report["effect_prefix_caches"] is JsonArray caches)
+            {
+                var attempts = new JsonArray();
+                foreach (JsonObject cache in caches.OfType<JsonObject>())
+                {
+                    if (SceneGraph.Int(cache["owner_layer_id"]) is not int ownerId ||
+                        SceneGraph.Int(cache["prefix_effect_count"]) is not int prefixCount) continue;
+                    var measured = await EffectPrefixStaticRangeProbe.MeasureAsync(scene, properties, observation.Trace,
+                        source, assets, tools, Path.Combine(output, "hdr-static-range"), ownerId, prefixCount,
+                        cancellationToken);
+                    if (measured.Bound is { } head) staticHeads[ownerId] = head;
+                    attempts.Add(new JsonObject { ["owner_layer_id"] = ownerId,
+                        ["status"] = measured.Bound is null ? "unproven" : "proven", ["detail"] = measured.Detail });
+                }
+                report["hdr_static_range_probes"] = attempts;
+            }
+            Verdict.ApplyPrefixRadianceClosure(report, scene, properties, observation.Trace, source, request.Assets, project,
+                terminalSignedSqrtSupported: terminalSignedSqrtSupported, terminalAffineSupported: terminalAffineSupported,
+                staticHeads: staticHeads);
+        }
         // 探测过的前缀捕获点全部留档（被拒的原因就在这份记录里，不再并进 loop.unresolved：那里只放时间机制）。
         if (captureProbes.Recorded.Count > 0)
             report["effect_prefix_capture_probes"] = new JsonArray(captureProbes.Recorded.Select(probe => (JsonNode)probe.DeepClone()).ToArray());
