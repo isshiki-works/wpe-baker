@@ -488,6 +488,12 @@ internal static class AppJsonPresentation
         if (plan is null) return "";
         int groups = Admission.GroupCount(plan), statics = Admission.StaticGroupCount(plan), live = plan["live_layer_ids"]?.AsArray().Count ?? 0;
         int prefixCaches = plan["effect_prefix_caches"]?.AsArray().Count ?? 0;
+        if (plan["route"]?.GetValue<string>() == "source_video_optimization")
+        {
+            int videos = plan["source_video_optimization"]?["resources"]?.AsArray().Count ?? 0;
+            return english ? $"{videos} source videos to resize · {live} live objects"
+                : $"待优化源视频 {videos} 段 · 实时对象 {live} 个";
+        }
         return plan["route"]?.GetValue<string>() == "effect_prefix"
             ? english ? $"{prefixCaches} effect-prefix caches · {live} live objects"
                 : $"特效前缀缓存 {prefixCaches} 组 · 实时对象 {live} 个"
@@ -565,7 +571,10 @@ internal static class AppJsonPresentation
         if (Number(candidate?["total_retime_cost_percent"]) is double retime)
             rows.Add((english ? "Total retime" : "总调速", retime.ToString("0.###", CultureInfo.InvariantCulture) + "%"));
         int groups = Admission.GroupCount(plan), statics = Admission.StaticGroupCount(plan);
-        rows.Add((english ? "Video layers" : "视频层数", groups.ToString(CultureInfo.InvariantCulture)));
+        if (plan["route"]?.GetValue<string>() == "source_video_optimization")
+            rows.Add((english ? "Source videos to resize" : "待优化源视频",
+                (plan["source_video_optimization"]?["resources"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
+        else rows.Add((english ? "Video layers" : "视频层数", groups.ToString(CultureInfo.InvariantCulture)));
         if (plan["route"]?.GetValue<string>() == "whole_layer")
             rows.Add((english ? "Static layers" : "静态层数", statics.ToString(CultureInfo.InvariantCulture)));
         rows.Add((english ? "Live layers" : "实时图层数", (plan["live_layer_ids"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
