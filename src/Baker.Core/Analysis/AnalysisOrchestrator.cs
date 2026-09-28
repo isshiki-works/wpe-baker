@@ -507,7 +507,10 @@ internal sealed class AnalysisOrchestrator
             // 子 plan 不经档位与布局的搜索，生成准入要在这里补上，否则它会说能生成、bake 第一步才拒。
             Admission.ApplyGenerationAdmission(statePlan);
             string statePlanPath = export.PlanPath(stateName);
-            await using (var stateFile = new FileStream(statePlanPath, FileMode.CreateNew, FileAccess.Write))
+            string generatedPath = Path.Combine(request.OutputDirectory, "state-" + stateName, "plan.json");
+            bool rewriteGenerated = Path.GetFullPath(statePlanPath).Equals(Path.GetFullPath(generatedPath),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+            await using (var stateFile = new FileStream(statePlanPath, rewriteGenerated ? FileMode.Create : FileMode.CreateNew, FileAccess.Write))
                 await JsonSerializer.SerializeAsync(stateFile, statePlan, StatePlanJson, token);
             state["plan"] = statePlanPath;
             state["status"] = statePlan["status"]?.DeepClone();
