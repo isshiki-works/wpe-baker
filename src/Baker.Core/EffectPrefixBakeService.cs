@@ -264,9 +264,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                                             throw new GpuEncodeUnavailableException($"GPU playback quality gate failed for {gpu.Codec} at QP {gpu.Qp} and {gpu.Qp - 6}.");
                                     }
                                     string videoPath = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
-                                    if (new FileInfo(videoPath).Length > EmbeddedVideoBudget.MaximumBytes)
+                                    if (new FileInfo(videoPath).Length is long bytes && bytes > EmbeddedVideoBudget.MaximumBytes)
                                     {
-                                        encoderFallback = $"{gpu.Codec} playback exceeds the 2 GiB embedded-video limit.";
+                                        encoderFallback = NativeRenderRunner.HardwareOverLimitReason(gpu.Codec, bytes);
                                         renderOutput = Path.Combine(cacheOutput, "encoded-software");
                                         rendered = await runner.RenderAsync(softwareRender with { OutputDirectory = renderOutput }, progress, cancellationToken);
                                         break;
@@ -343,6 +343,20 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     continue;
                 }
                 string video = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
+                long videoBytes = new FileInfo(video).Length;
+                if (videoBytes > EmbeddedVideoBudget.MaximumBytes)
+                {
+                    DeleteRetainedFrames();
+                    string id = "effect-prefix-" + owner;
+                    result["groups"]!.AsArray().Add(new JsonObject { ["id"] = id, ["status"] = "rejected_embedded_video_size",
+                        ["owner_layer_id"] = owner, ["frames"] = frames, ["video_path"] = video,
+                        ["video_bytes"] = videoBytes, ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes,
+                        ["playback_encode"] = encodeInfo });
+                    result["status"] = EmbeddedVideoBudget.RejectedBakeStatus;
+                    EmbeddedVideoBudgetJson.EncodedRejection(id, videoBytes, frames, settings.FpsNumerator, settings.FpsDenominator)
+                        .Write(result, "reason");
+                    await Save(); return result;
+                }
                 JsonObject seam;
                 JsonObject? gpuQuality = null;
                 using (timing.Measure(StageTiming.SeamCheck))
