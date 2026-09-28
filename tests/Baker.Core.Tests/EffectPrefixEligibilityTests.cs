@@ -81,6 +81,56 @@ public class EffectPrefixEligibilityTests
     });
 
     [Fact]
+    public async Task PureOwnerVisibilityCanStayLiveAroundCachedPixels() => await TestTemp.Run(async dir =>
+    {
+        var (scene, runtime) = Background(dir);
+        JsonObject owner = scene["objects"]![0]!.AsObject();
+        owner["visible"] = new JsonObject { ["value"] = true, ["script"] = """
+            'use strict';
+            export function update(value) {
+                if (engine.userProperties.character == 1 || engine.userProperties.character == 2) {
+                    value = true;
+                } else {
+                    value = false;
+                }
+                return value;
+            }
+            """ };
+        using var source = new ProjectSource(dir);
+        var request = new HybridAnalyzeRequest(1, dir, dir, dir, 64, 48, 30, 1);
+        JsonObject prefix = Assert.Single(EffectPrefixPlanner.Propose(scene, source, dir, runtime,
+            new JsonObject(), request, new JsonObject()).OfType<JsonObject>());
+        Assert.True(prefix["preserve_external_visibility"]!.GetValue<bool>());
+        EffectPrefixBakeService.ValidateSource(source, scene, prefix);
+        JsonObject derived = scene.DeepClone().AsObject();
+        string rgba = Path.Combine(dir, "cache.rgba"), output = Path.Combine(dir, "candidate");
+        await File.WriteAllBytesAsync(rgba, new byte[64 * 48 * 4]);
+        await EffectPrefixCache.ApplyAsync(source, scene, derived, output, 1, 1, rgba, 64, 48, rgbaFrame: true);
+        Assert.True(JsonNode.DeepEquals(owner["visible"], derived["objects"]![0]!["visible"]));
+        Assert.Single(derived["objects"]![0]!["effects"]!.AsArray());
+    });
+
+    [Fact]
+    public async Task OwnerVisibilityWithPixelSideEffectCannotBeCached() => await TestTemp.Run(async dir =>
+    {
+        var (scene, runtime) = Background(dir);
+        JsonObject owner = scene["objects"]![0]!.AsObject();
+        using var source = new ProjectSource(dir);
+        var request = new HybridAnalyzeRequest(1, dir, dir, dir, 64, 48, 30, 1);
+        JsonObject ordinary = Assert.Single(EffectPrefixPlanner.Propose(scene, source, dir, runtime,
+            new JsonObject(), request, new JsonObject()).OfType<JsonObject>());
+        owner["visible"] = new JsonObject { ["value"] = true, ["script"] = """
+            export function update(value) {
+                if (engine.userProperties.character == 1) thisLayer.alpha = 0.5;
+                return value;
+            }
+            """ };
+        Assert.Empty(EffectPrefixPlanner.Propose(scene, source, dir, runtime, new JsonObject(), request, new JsonObject()));
+        Assert.Throws<InvalidDataException>(() => EffectPrefixBakeService.ValidateSource(source, scene, ordinary));
+        await Task.CompletedTask;
+    });
+
+    [Fact]
     public void WholeLayerWithoutCapturedEffectsStillChecksSafePrefixes()
     {
         var loop = new JsonObject { ["candidates"] = new JsonArray(new JsonObject()), ["unresolved"] = new JsonArray() };
