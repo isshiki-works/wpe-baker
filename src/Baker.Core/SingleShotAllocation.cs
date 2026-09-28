@@ -34,9 +34,10 @@ internal static class SingleShotAllocation
             .Where(track => IsSingleShot(track) && (loadPlayed || Flag(track["event_driven"]) == true))
             .Select(track => Number(track["source_owner_layer_id"])).OfType<int>();
 
-    /// 入场秒数：相机入场（projection.camera_intro）与进了视频组的图层加载即播单次轨取最大；没有为 0。
+    /// 入场秒数：相机入场、加载即播单次轨，以及候选录制前要跳过的脚本/着色器暂态取最大；没有为 0。
     internal static double IntroSeconds(JsonObject plan, JsonObject runtime) =>
-        Math.Max(IntroTrackSeconds(plan, runtime), SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0));
+        Math.Max(Math.Max(IntroTrackSeconds(plan, runtime), SceneGraph.Numeric(plan["projection"]?["camera_intro"]?["seconds"], 0)),
+            SceneGraph.Numeric((plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["shader_settle_seconds"], 0));
 
     /// 进了视频组的图层加载即播单次轨的最长时长（时长 / 速率）；没有为 0。
     internal static double IntroTrackSeconds(JsonObject plan, JsonObject runtime)

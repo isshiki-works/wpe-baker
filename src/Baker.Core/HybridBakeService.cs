@@ -847,7 +847,8 @@ public sealed class HybridBakeService(NativeTools tools)
                     {
                         report["status"] = "candidate_rejected_no_visible_output";
                         report["loop_validation"] = "not_performed";
-                        new Message("bake.no_visible_output").Write(report, "reason");
+                        new Message(introFrames > 0 ? "bake.no_persistent_output_after_intro" : "bake.no_visible_output")
+                            .Write(report, "reason");
                         await Save();
                         return report;
                     }

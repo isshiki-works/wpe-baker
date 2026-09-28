@@ -79,6 +79,40 @@ internal static class SingleShotAllocationChecks
             Allocation(introFallback, 20) == "live" && Reasons(introFallback, 20).Contains("single_shot_animation"),
             "a load-played single-shot track joins the video group as an intro and stays live when the intro switch falls back");
 
+        // 解析器已证明的脚本/着色器暂态也是入场，不应因整周期预热而从成品开头消失。
+        var settledPlan = new JsonObject { ["loop"] = new JsonObject { ["candidates"] = new JsonArray(
+            new JsonObject { ["frames"] = 1351, ["shader_settle_seconds"] = 22.5 }) },
+            ["video_groups"] = new JsonArray(new JsonObject { ["id"] = "g", ["layer_ids"] = new JsonArray(1), ["parent_id"] = null }),
+            ["composition"] = new JsonArray(new JsonObject { ["video_group"] = "g" }),
+            ["live_layer_ids"] = new JsonArray(),
+            ["layers"] = new JsonArray(new JsonObject { ["id"] = 1, ["allocation_root"] = 1 }) };
+        JsonObject Video() => new() { ["id"] = 99, ["image"] = "models/video.json" };
+        var introObjects = new JsonArray(Video());
+        var introReplacement = new Dictionary<string, JsonObject> { ["g"] = Video() };
+        var introDependencies = new JsonArray(new JsonObject { ["operation"] = "time", ["owner"] = 1,
+            ["target"] = -1, ["property"] = "runtime", ["binding"] = "alpha" });
+        JsonObject scriptIntro = SceneAssembler.ApplyIntro(introObjects,
+            new Dictionary<int, JsonObject> { [1] = new JsonObject { ["id"] = 1, ["text"] = "hello", ["visible"] = true } },
+            settledPlan, introReplacement, new HashSet<int>(), introDependencies, new JsonObject(),
+            1350, 1351, _ => 1351, 60, 1);
+        JsonObject blockedIntro = SceneAssembler.ApplyIntro(new JsonArray(Video()),
+            new Dictionary<int, JsonObject> { [1] = new JsonObject { ["id"] = 1, ["text"] = "hello" },
+                [2] = new JsonObject { ["id"] = 2, ["text"] = "controller" } },
+            settledPlan, introReplacement, new HashSet<int>(),
+            new JsonArray(new JsonObject { ["operation"] = "read", ["owner"] = 2, ["target"] = 1, ["property"] = "alpha" }),
+            new JsonObject(), 1350, 1351, _ => 1351, 60, 1);
+        JsonObject unknownIntro = SceneAssembler.ApplyIntro(new JsonArray(Video()),
+            new Dictionary<int, JsonObject> { [1] = new JsonObject { ["id"] = 1, ["text"] = "hello" } },
+            settledPlan, introReplacement, new HashSet<int>(),
+            new JsonArray(new JsonObject { ["operation"] = "read", ["owner"] = 1, ["target"] = -1, ["property"] = "alpha" }),
+            new JsonObject(), 1350, 1351, _ => 1351, 60, 1);
+        check(SingleShotAllocation.IntroSeconds(settledPlan, new JsonObject()) == 22.5 &&
+            scriptIntro["status"]?.GetValue<string>() == "applied" && introObjects.Count == 2 &&
+            introObjects[0]?["visible"]?["script"]?.GetValue<string>().Contains("engine.runtime < 22.491", StringComparison.Ordinal) == true &&
+            blockedIntro["status"]?.GetValue<string>() == "skipped" && blockedIntro["reason"]?.GetValue<string>() == "cross_object_dependency" &&
+            unknownIntro["status"]?.GetValue<string>() == "skipped" && unknownIntro["reason"]?.GetValue<string>() == "cross_object_dependency",
+            "a settled one-time intro remains live until its video replacement starts, while real or unknown cross-object dependencies still block the switch");
+
         foreach (string mode in new[] { "loop", "mirror" })
         {
             JsonObject looping = await PlanAsync("looping-" + mode, new JsonArray(Track(20, true, mode, "high")), objects);
