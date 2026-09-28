@@ -6,9 +6,9 @@ using System.Text.Json.Nodes;
 namespace Baker.Core.Analysis.EffectRange;
 
 /// <summary>
-/// HDR 闭合 R1 的特效值域规则表（嵌入资源 effect-range-rules.json）：输出只是输入纹理凸组合采样的特效着色器，
-/// 按片元着色器归一化源码的 sha256 认领（不按特效名），每条带着色器层面的证明文字。
-/// 认领了的特效不会把层输出推出 [0,1]，层上其余判据（R2–R5）照常求值。
+/// HDR 闭合 R1 的特效值域规则表（嵌入资源 effect-range-rules.json）：已审读的保范围特效着色器，
+/// 按片元着色器归一化源码的 sha256 认领（不按特效名）；需要顶点身份的规则另钉住整套程序。
+/// 认领了的特效不会把 [0,1] 输入推出 [0,1]，层上其余判据（R2–R5）照常求值。
 /// 带条件的规则（如 pulse）另列 combo 允许集、常量界与证明所依赖头文件的指纹，逐项在作者取值上核对。
 /// </summary>
 internal sealed class EffectRangeRules
@@ -20,7 +20,8 @@ internal sealed class EffectRangeRules
     /// <summary>若干标量常量之和的上界。</summary>
     private sealed record SumBound(string[] Terms, double Max);
     private sealed record Rule(string Id, Dictionary<string, HashSet<int>> ForbidCombos, Dictionary<string, ComboChoice> AllowCombos,
-        Dictionary<string, string> Includes, Dictionary<string, ConstantBound> Constants, SumBound[] Sums);
+        Dictionary<string, string> Includes, Dictionary<string, ConstantBound> Constants, SumBound[] Sums,
+        string? ProgramSha256, int[] UnormTextureSlots, int? MaskTextureSlot);
 
     /// <summary>随程序集嵌入的规则表。</summary>
     public static EffectRangeRules Default { get; } = Parse(ReadEmbedded());
@@ -66,13 +67,16 @@ internal sealed class EffectRangeRules
             if (sums.SelectMany(sum => sum.Terms).FirstOrDefault(term => !constants.ContainsKey(term)) is string missing)
                 throw new InvalidDataException($"Effect range rule sum term '{missing}' has no constant bound.");
             rules.Add(rule["fragment_sha256"]!.GetValue<string>(),
-                new(rule["id"]!.GetValue<string>(), forbid, allow, includes, constants, sums));
+                new(rule["id"]!.GetValue<string>(), forbid, allow, includes, constants, sums,
+                    rule["program_sha256"]?.GetValue<string>(),
+                    [.. (rule["unorm_texture_slots"] as JsonArray ?? []).Select(slot => slot!.GetValue<int>())],
+                    rule["mask_texture_slot"]?.GetValue<int>()));
         }
         return new(rules);
     }
 
     /// <summary>
-    /// 这一个作者特效（场景里 effects[] 的一项）是否每个 pass 都被规则表证明为凸组合采样。
+    /// 这一个作者特效（场景里 effects[] 的一项）是否每个 pass 都被规则表证明保范围。
     /// 认领时 <paramref name="detail"/> 给出命中的规则 id，<paramref name="shaders"/> 追加各 pass 的着色器名（运行时材质按它对账）；不认领时给出第一处认不出的原因（英文，写进 checks）。
     /// <paramref name="properties"/> 用来解开常量上的 {user, value} 绑定。
     /// </summary>
@@ -102,7 +106,7 @@ internal sealed class EffectRangeRules
             passIndex++;
             if (!PassClosed(materialResource, authored, properties, source, assets, out string ruleId, out string shader, out string condition))
             {
-                detail = condition.Length == 0 ? $"effect \"{resource}\" shader is not proven to be a convex resampling of its input"
+                detail = condition.Length == 0 ? $"effect \"{resource}\" shader is not proven to preserve its input range"
                     : $"effect \"{resource}\" matches rule {ruleId} but {condition}";
                 return false;
             }
@@ -110,7 +114,7 @@ internal sealed class EffectRangeRules
             shaders.Add(shader);
         }
         if (matched.Count == 0) { detail = $"effect \"{resource}\" declares no pass"; return false; }
-        detail = $"effect \"{resource}\" is a convex resampling ({string.Join(", ", matched.Distinct(StringComparer.Ordinal))})";
+        detail = $"effect \"{resource}\" preserves [0,1] ({string.Join(", ", matched.Distinct(StringComparer.Ordinal))})";
         return true;
     }
 
@@ -131,11 +135,35 @@ internal sealed class EffectRangeRules
             if (string.IsNullOrWhiteSpace(shader) ||
                 !ShaderPeriodAnalysis.TryReadShaderStage(source, assets, "shaders/" + shader + ".frag", out string fragment)) return false;
             if (!table.TryGetValue(Fingerprint(fragment), out Rule? rule)) return false;
+            if (rule.ProgramSha256 is string programSha)
+            {
+                if (!ShaderPeriodAnalysis.TryReadShaderStage(source, assets, "shaders/" + shader + ".vert", out string vertex)) return false;
+                string program = Regex.Replace(fragment + "\n" + vertex, @"\s+", " ").Trim();
+                if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(program))),
+                    programSha, StringComparison.OrdinalIgnoreCase)) return false;
+            }
             foreach (var (combo, forbidden) in rule.ForbidCombos)
                 if (ComboValue(authoredPass, combo) is int value ? forbidden.Contains(value)
                     : ComboValue(pass, combo) is int materialValue && forbidden.Contains(materialValue)) return false;
             ruleId = rule.Id;
             if (!ConditionsHold(rule, authoredPass, pass, properties, source, assets, out condition)) return false;
+            JsonNode? TextureAt(int slot) => (authoredPass?["textures"] as JsonArray)?.ElementAtOrDefault(slot)
+                ?? (pass["textures"] as JsonArray)?.ElementAtOrDefault(slot);
+            bool maskEnabled = rule.MaskTextureSlot is int maskSlot &&
+                (ComboValue(authoredPass, "MASK") ?? ComboValue(pass, "MASK") ??
+                    (TextureAt(maskSlot) is not null ? 1 : 0)) == 1;
+            foreach (int slot in rule.UnormTextureSlots.Concat(maskEnabled ? [rule.MaskTextureSlot!.Value] : []))
+            {
+                JsonNode? texture = TextureAt(slot);
+                if (texture is not JsonValue value || !value.TryGetValue(out string? textureName) || textureName is null ||
+                    !TextureContainer.TryReadHeader(source, assets, "materials/" + textureName + ".tex", out var header, out _) ||
+                    header.IsVideo || header.Width == 0 || header.Height == 0 ||
+                    !(TextureContainer.IsEightBitUnsignedFormat(header.Format) || header.Format is 8 or 9))
+                {
+                    condition = $"texture slot {slot} is not a proven 8-bit unsigned input";
+                    return false;
+                }
+            }
             shaderName = shader;
             return true;
         }
@@ -150,8 +178,21 @@ internal sealed class EffectRangeRules
         ProjectSource source, string? assets, out string condition)
     {
         condition = "";
+        if (rule.ProgramSha256 is not null && new[] { authoredPass, materialPass }.Where(p => p is not null)
+            .SelectMany(p => (p!["combos"] as JsonObject ?? []).Select(item => item.Key))
+            .Any(name => !rule.AllowCombos.ContainsKey(name) && !rule.ForbidCombos.ContainsKey(name)))
+        {
+            condition = "an unreviewed combo is present";
+            return false;
+        }
         foreach (var (combo, choice) in rule.AllowCombos)
         {
+            if (rule.ProgramSha256 is not null && ((HasCombo(authoredPass, combo) && ComboValue(authoredPass, combo) is null) ||
+                (HasCombo(materialPass, combo) && ComboValue(materialPass, combo) is null)))
+            {
+                condition = $"combo {combo} is not a literal integer";
+                return false;
+            }
             int value = ComboValue(authoredPass, combo) ?? ComboValue(materialPass, combo) ?? choice.Default;
             if (choice.Allowed.Contains(value)) continue;
             condition = $"combo {combo}={value} is outside the proven set";
@@ -218,6 +259,9 @@ internal sealed class EffectRangeRules
         pass?["constantshadervalues"] is JsonObject values && values.TryGetPropertyValue(name, out JsonNode? value) ? value : null;
 
     /// <summary>combo 取值：场景 pass 覆盖材质 pass；读不出整数的按未设处理（着色器默认值，规则表的证明对默认值成立）。</summary>
+    private static bool HasCombo(JsonObject? pass, string combo) =>
+        (pass?["combos"] as JsonObject ?? []).Any(item => string.Equals(item.Key, combo, StringComparison.OrdinalIgnoreCase));
+
     private static int? ComboValue(JsonObject? pass, string combo)
     {
         if (pass?["combos"] is not JsonObject combos) return null;
@@ -225,7 +269,8 @@ internal sealed class EffectRangeRules
             if (string.Equals(key, combo, StringComparison.OrdinalIgnoreCase) && value is JsonValue v)
             {
                 if (v.TryGetValue(out int asInt)) return asInt;
-                if (v.TryGetValue(out double asDouble)) return (int)asDouble;
+                if (v.TryGetValue(out double asDouble) && double.IsFinite(asDouble) && asDouble >= int.MinValue &&
+                    asDouble <= int.MaxValue && asDouble == Math.Truncate(asDouble)) return (int)asDouble;
             }
         return null;
     }
