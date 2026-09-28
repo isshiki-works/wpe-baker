@@ -26,7 +26,6 @@ public class AdmissionTests
         ["kind"] = "runtime_animation", ["owner_layer_id"] = 3, ["detail"] = "Runtime duration or source owner cannot be resolved exactly."
     };
 
-    private static JsonObject Note() => new() { ["kind"] = ResidualMasking.AllocationFallbackKind, ["detail"] = "A smaller allocation note." };
 
     private static JsonObject Plan(JsonArray unresolved, int candidates = 1, int[][]? groups = null, string route = "whole_layer",
         string? layoutConflict = null) => new()
@@ -65,15 +64,6 @@ public class AdmissionTests
     }
 
     [Fact]
-    public void ExplanatoryNotesAreNotMechanisms()
-    {
-        // 只剩说明性条目时就是没有残差：cascade 与 bake 同一口径（原来 bake 会把它当"不可掩盖"拒绝）。
-        AdmissionVerdict verdict = Evaluate(Plan(new JsonArray(Note())));
-        Assert.Equal(AdmissionRejection.None, verdict.Rejection);
-        Assert.Equal("no_residual", verdict.Residual!["status"]!.GetValue<string>());
-    }
-
-    [Fact]
     public void NoCandidateIsNoLoop()
     {
         AdmissionVerdict verdict = Evaluate(Plan(new JsonArray(), candidates: 0));
@@ -102,7 +92,7 @@ public class AdmissionTests
     [Fact]
     public void MaskableResidualInsideAGroupIsAdmitted()
     {
-        AdmissionVerdict verdict = Evaluate(Plan(new JsonArray(Maskable(), Note())));
+        AdmissionVerdict verdict = Evaluate(Plan(new JsonArray(Maskable())));
         Assert.Equal(AdmissionRejection.None, verdict.Rejection);
         Assert.Equal("residual_maskable", verdict.Residual!["status"]!.GetValue<string>());
     }
@@ -136,7 +126,7 @@ public class AdmissionTests
     [Fact]
     public void EvaluateDoesNotChangeThePlan()
     {
-        JsonObject plan = Plan(new JsonArray(Maskable(), Note()), groups: [[1]]);
+        JsonObject plan = Plan(new JsonArray(Maskable()), groups: [[1]]);
         string before = plan.ToJsonString();
         Evaluate(plan);
         Assert.Equal(before, plan.ToJsonString());

@@ -161,7 +161,7 @@ internal static class SourceStaticLoopChecks
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
         JsonObject SolverPlan(string kind, JsonArray? unresolved = null)
         {
-            JsonObject plan = Plan("whole_layer", [], unresolved ?? [new JsonObject { ["kind"] = "loop_allocation_fallback", ["detail"] = "note" }]);
+            JsonObject plan = Plan("whole_layer", [], unresolved ?? []);
             plan["blockers"] = new JsonArray();
             plan["status"] = "requires_loop_analysis";
             var wholeLoop = plan["whole_layer"]!["loop"]!.AsObject();

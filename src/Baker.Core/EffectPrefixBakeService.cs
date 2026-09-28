@@ -259,13 +259,24 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     ["readback_frames"] = rendered["readback_frames"]?.DeepClone(),
                     ["readback_bytes"] = rendered["readback_bytes"]?.DeepClone(),
                     ["gpu_resize"] = rendered["gpu_resize"]?.DeepClone() };
+                // 原帧只为这一次校验存在；缓存目录会随候选保留，不能把几帧原始 RGBA 留在里面。
+                void DeleteRetainedFrames()
+                {
+                    if (!request.KeepIntermediates)
+                        foreach (string path in new[] { rendered["retained_frames"]?["path"]?.GetValue<string>(),
+                            rendered["alpha_bounds"]?["first_frame_rgba_path"]?.GetValue<string>() }.OfType<string>())
+                            TemporaryCaptureFiles.Delete(result, Path.GetDirectoryName(path)!, Path.GetFileName(path));
+                }
                 JsonObject fullRuntime = rendered["native_result"]?.AsObject()
                     ?? throw new InvalidDataException("The complete prefix capture omitted its runtime evidence.");
-                JsonArray fullProposals = EffectPrefixPlanner.Propose(pristine, source, settings.Assets, fullRuntime, snapshot,
-                    settings, projection);
-                if (!fullProposals.OfType<JsonObject>().Any(value => value["owner_layer_id"]?.GetValue<int>() == owner &&
-                    value["prefix_effect_count"]?.GetValue<int>() >= prefix))
-                    throw new InvalidDataException($"The complete capture found a late dependency in effect-prefix owner {owner}; no cache was applied.");
+                // 完整捕获推翻了这一层的前缀资格（观测窗口之后才出现的依赖或输入）：只丢这一层的缓存，层按作者原样留实时，
+                // 别的层照常烘；一个缓存都没留下时按晚到依赖拒绝，不整张失败。
+                if (!SurvivesCompleteCapture(pristine, source, settings, fullRuntime, snapshot, projection, owner, prefix))
+                {
+                    DeleteRetainedFrames();
+                    result["groups"]!.AsArray().Add(LateDependencyRejection(owner, frames, loop, fullRuntime, runtime));
+                    continue;
+                }
                 string video = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
                 JsonObject seam;
                 JsonObject? gpuQuality = null;
@@ -306,14 +317,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         if (gpuDirect && seam["status"]?.GetValue<string>() == "observed_seam_pass")
                             gpuQuality = rendered["playback_quality_gate"]!.DeepClone().AsObject();
                     }
-                    finally
-                    {
-                        // 原帧只为这一次校验存在；缓存目录会随候选保留，不能把几帧原始 RGBA 留在里面。
-                        if (!request.KeepIntermediates)
-                            foreach (string path in new[] { rendered["retained_frames"]?["path"]?.GetValue<string>(),
-                                rendered["alpha_bounds"]?["first_frame_rgba_path"]?.GetValue<string>() }.OfType<string>())
-                                TemporaryCaptureFiles.Delete(result, Path.GetDirectoryName(path)!, Path.GetFileName(path));
-                    }
+                    finally { DeleteRetainedFrames(); }
                 }
                 JsonObject? seamPreview = null;
                 if (SeamPreview.ShouldExport(false, false, seam, request.KeepIntermediates))
@@ -376,6 +380,12 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     ["playback_encode"] = encodeInfo, ["playback_quality_gate"] = gpuQuality, ["video_bytes"] = new FileInfo(video).Length };
                 SeamPreview.Attach(encodedGroup, seamPreview);
                 result["groups"]!.AsArray().Add(encodedGroup);
+            }
+            if (!result["groups"]!.AsArray().OfType<JsonObject>().Any(group => group["status"]?.GetValue<string>() == "encoded"))
+            {
+                result["status"] = "candidate_rejected_late_dependency";
+                new Message("bake.late_external_input").Write(result, "reason");
+                await Save(); return result;
             }
             ProjectWriter.ApplyPropertySnapshot(candidateMetadata, snapshot); candidateMetadata["file"] = source.SceneResource;
             ProjectWriter.ApplyPropertySnapshot(referenceMetadata, snapshot); referenceMetadata["file"] = source.SceneResource;
@@ -440,6 +450,30 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 ["basis"] = "The native-size first-frame opacity probe had no pixel below alpha 255; later frames are still checked during capture." },
             ["period"] = loop.DeepClone(), ["opaque_pixels"] = evidence.DeepClone() };
         return (group, reason);
+    }
+
+    /// <summary>
+    /// 完整捕获的运行时证据下，这一层仍提得出不短于 <paramref name="prefix"/> 的前缀。烘焙复核与分析期的完整区间探测
+    /// （<see cref="PrefixCaptureProbes.CompleteCaptureAsync"/>）同一判据，分析的结论因此与烘焙一致。
+    /// </summary>
+    internal static bool SurvivesCompleteCapture(JsonObject pristine, ProjectSource source, HybridAnalyzeRequest settings, JsonObject fullRuntime,
+        JsonObject snapshot, JsonObject projection, int owner, int prefix) =>
+        EffectPrefixPlanner.Propose(pristine, source, settings.Assets, fullRuntime, snapshot, settings, projection).OfType<JsonObject>()
+            .Any(value => value["owner_layer_id"]?.GetValue<int>() == owner && value["prefix_effect_count"]?.GetValue<int>() >= prefix);
+
+    /// <summary>
+    /// 完整捕获推翻前缀资格时这一层的组记录：带上完整捕获里有、分析观测里没有、涉及这一层的依赖（多半就是晚到的那条）。纯函数。
+    /// </summary>
+    internal static JsonObject LateDependencyRejection(int owner, ulong frames, JsonObject loop, JsonObject fullRuntime, JsonObject analyzed)
+    {
+        var known = (analyzed["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()
+            .Select(dependency => dependency.ToJsonString()).ToHashSet(StringComparer.Ordinal);
+        var late = new JsonArray((fullRuntime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(dependency => (SceneGraph.Int(dependency["owner"]) == owner || SceneGraph.Int(dependency["target"]) == owner) &&
+                !known.Contains(dependency.ToJsonString()))
+            .Select(dependency => (JsonNode)dependency.DeepClone()).ToArray());
+        return new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "rejected_late_dependency",
+            ["owner_layer_id"] = owner, ["frames"] = frames, ["period"] = loop.DeepClone(), ["late_dependencies"] = late };
     }
 
     internal static (uint Width, uint Height) Fit(uint sourceWidth, uint sourceHeight, uint targetWidth, uint targetHeight)

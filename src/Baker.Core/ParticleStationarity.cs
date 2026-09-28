@@ -513,6 +513,10 @@ internal static class ParticleStationarity
                     new JsonObject { ["object"] = id, ["traces"] = traces }, null), frame);
             else Fail("C8", "property_animated", node, binding);
         double? emitInterval = emissionRate > 0 ? ParticleCriteria.Round(1 / (emissionRate * rateScale)) : null;
+        // 交叉淡化的前提：粒子寿命短于循环长度（接缝两侧的粒子才各自来自同一平稳分布）。寿命不短于上限时任何循环长度都做不到，
+        // 不满足淡化前提（锁定到精确周期的粒子不靠淡化，不受这条约束）；它的层照常由分配回退第一轮留实时，不拖累别的粒子组。
+        if (cycle is null && lifetime is double life && life >= ceiling)
+            failures.Add(new("C2", "lifetime_not_shorter_than_loop_ceiling", "lifetime", life.ToString("R", CultureInfo.InvariantCulture)));
         // 锁定周期只在其余条件全部满足时成立；预热换成进入周期态的帧（starttime 预跑已在推导里），按微秒向上取，
         // 保证 ⌈预热秒 × fps⌉ 不少于起点帧。连续公式的值留着，退回拒绝时恢复。
         if (failures.Count == 0 && cycle is not null)

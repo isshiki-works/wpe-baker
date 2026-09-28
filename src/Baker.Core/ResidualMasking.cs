@@ -161,9 +161,6 @@ public static class ResidualMasking
         [.. candidates.OrderBy(x => StartCandidateAdmitted(x) ? 0 : 1).ThenBy(x => x.SortKey)
             .ThenBy(x => x.Global).ThenBy(x => x.Start)];
 
-    /// <summary>plan.loop.unresolved 里 analyze 追加的"更小分配"取证条目：它是说明，不是时间机制，不参与掩盖判定。</summary>
-    public const string AllocationFallbackKind = "loop_allocation_fallback";
-
     /// <summary>bake.json 里残差掩盖因布局被拒时的状态。</summary>
     public const string LayoutRejectedStatus = "candidate_rejected_residual_layout";
 
@@ -383,6 +380,12 @@ public static class ResidualMasking
             catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException) { return null; }
         };
     }
+
+    /// <summary>单条未解析项能否被接缝淡化掩盖：与 <see cref="Classify"/> 逐条判定是同一个函数，不看 plan 的层表（层表只给名字与面积，不参与裁决）。</summary>
+    internal static bool Maskable(JsonObject item, JsonObject scene, Func<string, JsonObject?> readResource) =>
+        Evaluate(item, new Dictionary<int, JsonObject>(), (scene["objects"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(node => Id(node["id"]) is not null).GroupBy(node => Id(node["id"])!.Value).ToDictionary(group => group.Key, group => group.First()),
+            readResource, 0, 0, 0, CommonLoopSolver.DefaultMaximumSeconds)["maskable"] is JsonValue value && value.TryGetValue(out bool maskable) && maskable;
 
     /// <summary>
     /// 对 plan.loop.unresolved 的每一项判定"残差可掩盖"或"不可掩盖"。

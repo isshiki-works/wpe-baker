@@ -98,9 +98,9 @@ internal static class MessagesChecks
         JsonObject unknownPlan = Plan(blockers: [], candidates: 0);
         var omitted = new Message("unresolved.material_omits_active_uniforms");
         var unknownNotes = new UnresolvedNotes();
-        Baker.Core.Verdict.AddLoopUnresolved(unknownPlan, "runtime_animation", omitted.Text, unknownNotes, omitted.Localized());
-        Check(unknownPlan["loop"]!["unresolved"]![0]!.AsObject().Select(x => x.Key).SequenceEqual(["kind", "detail"]),
-            "the appended unresolved item carries only its v3 fields");
+        var omittedItem = new JsonObject { ["kind"] = "runtime_animation", ["detail"] = omitted.Text };
+        unknownPlan["loop"]!["unresolved"]!.AsArray().Add(omittedItem);
+        unknownNotes.Add(omittedItem, omitted.Localized());
         PlanNarrative.Attach(unknownPlan, unknownNotes);
         JsonObject unknownSummary = unknownPlan["summary"]!.AsObject();
         Check(unknownPlan["loop"]!["unresolved_localized"]![0]!["key"]?.GetValue<string>() == "unresolved.material_omits_active_uniforms",

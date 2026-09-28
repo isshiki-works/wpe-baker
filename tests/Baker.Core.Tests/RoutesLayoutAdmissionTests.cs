@@ -33,6 +33,27 @@ public class WholeLayerRefreshTests
     public void StatusNeedsNoBlockerAndACompleteLoop(int blockers, int unresolved, int candidates, string expected) =>
         Assert.Equal(expected, Refreshed(blockers, unresolved, candidates)["whole_layer"]!["status"]!.GetValue<string>());
 
+    // 循环完整 = 有候选且每条未解析项可被接缝淡化掩盖（与生成准入同一判定，循环分析记在 maskable 上）：
+    // 已证随机的精灵（脚本 Math.random 重启）有淡化处置，不算没解完；识别不了的机制、没记判定的条目不算完整。
+    [Fact]
+    public void MaskableResidualCountsAsACompleteLoop()
+    {
+        var sprite = new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = 3, ["mechanism"] = "sprite", ["random_restart"] = true,
+            ["detail"] = "Script playback restarts this sprite animation after a Math.random() delay." };
+        var scene = new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 3, ["image"] = "models/x.json" }) };
+        Assert.True(ResidualMasking.Maskable(sprite, scene, _ => null));
+        Assert.False(ResidualMasking.Maskable(new JsonObject { ["kind"] = "UnsupportedShaderMechanism", ["owner_layer_id"] = 3, ["detail"] = "x" }, scene, _ => null));
+        JsonObject Loop(params bool?[] maskable) => new()
+        {
+            ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 60 }),
+            ["unresolved"] = new JsonArray([.. maskable.Select(flag => (JsonNode)(flag is bool value ? new JsonObject { ["kind"] = "x", ["maskable"] = value } : new JsonObject { ["kind"] = "x" }))])
+        };
+        Assert.True(Routes.WholeLoopComplete(Loop(true, true)));
+        Assert.False(Routes.WholeLoopComplete(Loop(true, false)));
+        Assert.False(Routes.WholeLoopComplete(Loop((bool?)null)));
+        Assert.False(Routes.WholeLoopComplete(new JsonObject { ["candidates"] = new JsonArray(), ["unresolved"] = new JsonArray() }));
+    }
+
     [Fact]
     public void WholeLayerHoldsIndependentCopies()
     {

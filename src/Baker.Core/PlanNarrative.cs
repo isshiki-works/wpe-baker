@@ -331,9 +331,6 @@ public static class PlanNarrative
         ["zh"] = MessageCatalog.Get(key, MessageCatalog.Chinese, chineseArgs), ["en"] = MessageCatalog.Get(key, MessageCatalog.English, englishArgs) };
 
     /// <summary>整幅候选优先，其次特效前缀候选。</summary>
-    /// <summary>补充分析"更小的烘焙分配"写进 loop.unresolved 的那条记录；它是出路说明，不是时间机制。</summary>
-    private const string AllocationFallbackKind = "loop_allocation_fallback";
-
     /// <summary>
     /// 没有候选、没有阻断、但 loop.unresolved 里有具体时间机制：说清几处、首条是什么、补充分析给了什么出路。
     /// 满足平稳随机判据的粒子项不算"证明不了周期"，不计数、不当首条，只另起半句说明。
@@ -341,8 +338,7 @@ public static class PlanNarrative
     /// </summary>
     private static JsonObject? LoopUnresolved(JsonObject report, UnresolvedNotes? notes)
     {
-        JsonObject[] items = (report["loop"]?["unresolved"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(item => Text(item["kind"]) != AllocationFallbackKind).ToArray();
+        JsonObject[] items = (report["loop"]?["unresolved"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
         if (items.Length == 0) return null;
         var names = LayerNames(report);
         JsonObject[] mechanisms = items.Where(item => !StationaryParticle(item)).ToArray();

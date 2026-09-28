@@ -146,6 +146,21 @@ internal static class ShaderSignatureChecks
                 frozen.Patches.OfType<LoopValuePatch>().Single(x => x.ComponentId == slowTerm).NewValue == 0 &&
                 SlowRetimed(true, budgetOnly: true).SlowComponents is [{ Retimable: true }],
                 "a slow term with a usable knob stays a slow component until its closure fails, then freezes at the nearest cycle count pending the speed check");
+            // 凑不出公共循环时点名留实时的是最不值钱的层（画布占比 × 特效 pass，与 bake_value 同口径），不是排在最后的层：
+            // 两层各一个不可调速的源材质周期（7.1 s、9.7 s，最小公倍数 688.7 s 超过 600 s 上限），分量个数相同；
+            // 小层（1% 画布、无特效）排在前面，大层（占满画布、2 个特效 pass）必须留在视频里，点名的是小层 10
+            JsonObject Source(int owner, double seconds, int num, int effects) => new() { ["owner"] = owner, ["materials"] = new JsonArray([
+                new JsonObject { ["shader"] = "effects/x", ["active_uniforms"] = new JsonArray(), ["time_signature"] = JsonNode.Parse($$"""
+                    {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[{"seconds":{{seconds}},"num":{{num}},"den":10,"pi":0,"knobs":[]}]}
+                    """) },
+                .. Enumerable.Range(0, effects).Select(_ => (JsonNode)new JsonObject { ["role"] = "effect", ["shader"] = "effects/y", ["active_uniforms"] = new JsonArray() })]) };
+            LoopReport valued = LoopAnalysis.Analyze(JsonNode.Parse("""
+                {"general":{"orthogonalprojection":{"width":1000,"height":1000}},
+                 "objects":[{"id":10,"size":"100 100"},{"id":11,"size":"1000 1000"}]}
+                """)!.AsObject(), source, null, new JsonObject { ["runtime_layers"] = new JsonArray(Source(10, 7.1, 71, 0), Source(11, 9.7, 97, 2)) },
+                [10, 11], 30, 1, 2, CommonLoopPreference.Balanced, loopLengthMaximumSeconds: 600);
+            check(valued.NoCandidateReason?.RetainLiveOwnerLayerIds is [10],
+                "with no common loop the least valuable layer (canvas share times effect passes) is named for live retention, not the last one merged");
 
             // 同一 pass 剩 7 s 与 3π s 两类且没有旋钮：每项独立调频有解（上限 600 s）记未收敛 term_not_retimable；
             // 上限 10 s 时独立调频也无解，才是"不能"
