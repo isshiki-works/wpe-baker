@@ -152,11 +152,12 @@ public class AdmissionTests
     [Fact]
     public void NoBenefitPlansAreRejectedByDefaultAndPassWhenAllowed()
     {
-        // 静态图仍带实时层、固定时段：默认拒绝（blocker + 拒因），显式允许后放行；没命中的方案原样通过。
+        // 静态图仍带实时层且 bake_value 判低价值：默认拒绝（blocker + 拒因），显式允许后放行；没命中的方案原样通过。
         static JsonObject StaticWithLive(JsonObject plan)
         {
             plan["loop"]!["candidates"]![0]!["frames"] = 1;
             plan["live_layer_ids"] = new JsonArray(7);
+            plan["bake_value"] = new JsonObject { ["status"] = WorkloadValue.LowValueStatus, ["rule"] = WorkloadValue.OneStillTextureUnchanged.Rule };
             return plan;
         }
         JsonObject rejected = StaticWithLive(Narrated(Plan(new JsonArray())));
@@ -176,10 +177,29 @@ public class AdmissionTests
         NoBenefit.Apply(noLive, allowed: false);
         Assert.True(Admission.Bakeable(noLive));
 
+        // 静态成品没有视频解码开销：被烘层省下了特效就不拒。
+        JsonObject savedEffects = StaticWithLive(Narrated(Plan(new JsonArray())));
+        savedEffects["bake_value"] = new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule,
+            ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 0.3 } };
+        NoBenefit.Apply(savedEffects, allowed: false);
+        Assert.True(Admission.Bakeable(savedEffects));
+
+        // 没算出省下多少（unknown）：被烘层全是普通图层才拒，否则不判（粒子、源视频、自定义着色器、模型省下多少没算）。
+        JsonObject unknownPlain = StaticWithLive(Narrated(Plan(new JsonArray())));
+        unknownPlain["bake_value"] = new JsonObject { ["status"] = "unknown", ["rule"] = WorkloadValue.NeedsWorkComparison.Rule,
+            ["evidence"] = new JsonObject { ["plain_group_ids"] = new JsonArray("group-1") } };
+        Assert.Equal([NoBenefit.StaticWithLive], NoBenefit.AnalysisConditions(unknownPlain));
+        unknownPlain["bake_value"]!["evidence"]!["plain_group_ids"] = new JsonArray();
+        Assert.Empty(NoBenefit.AnalysisConditions(unknownPlain));
+
+        // 固定单个时段是能力缺口，不是不省电：单独一条拒因，不写 no_benefit。
         JsonObject fixedDay = Narrated(Plan(new JsonArray()));
         fixedDay["settings"]!["daytime_state"] = "00-07+18-24";
-        NoBenefit.Apply(fixedDay, allowed: false);
-        Assert.Equal([BlockerCode.NoBenefitExpected], PlanBlockers.Codes(fixedDay).ToArray());
+        Assert.Empty(NoBenefit.AnalysisConditions(fixedDay));
+        DaytimeSplit.RejectFixedState(fixedDay, allowed: false);
+        Assert.Equal([BlockerCode.FixedDaytimeState], PlanBlockers.Codes(fixedDay).ToArray());
+        Assert.Null(fixedDay["no_benefit"]);
+        Assert.Equal("fixed_daytime_state", fixedDay["suitability"]!["rule"]!.GetValue<string>());
 
         // 特效前缀路线：每个缓存都是一路视频，超过上限在分析时就拒。
         JsonObject prefixes = Narrated(Plan(new JsonArray(), route: "effect_prefix"));
@@ -199,7 +219,10 @@ public class AdmissionTests
         Assert.False(EffectPrefixPlanner.Cacheable(prefixLoop));
         cheap["bake_value"]!["evidence"]!["effect_pass_coverage"] = 2.0;
         Assert.Empty(NoBenefit.AnalysisConditions(cheap));
-        cheap["bake_value"] = new JsonObject { ["rule"] = "needs_work_comparison" };
+        // 没算出省下多少：只有每个视频组都只有普通图层时才算省下 0，否则不判。
+        cheap["bake_value"] = new JsonObject { ["rule"] = "needs_work_comparison", ["evidence"] = new JsonObject { ["plain_group_ids"] = new JsonArray("group-1") } };
+        Assert.Empty(NoBenefit.AnalysisConditions(cheap));
+        cheap["bake_value"]!["evidence"]!["plain_group_ids"]!.AsArray().Add("group-2");
         Assert.Equal([NoBenefit.PlainLayersOnly], NoBenefit.AnalysisConditions(cheap));
 
         // 只差透视捕获：按假设能采集照常判，命中就是不省电（结论规则排在能力缺口前），不命中留在能力缺口并标出来。

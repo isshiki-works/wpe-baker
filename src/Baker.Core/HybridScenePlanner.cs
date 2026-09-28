@@ -47,7 +47,10 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int[]? FullLoopLayerIds = null,
     // 慢项实测的退回：振幅推不出的慢项一律按逐项预算（不放开改速，见 LoopAnalysis）。分析收尾的速度实测（SlowClosureProbe.SpeedAsync）
     // 没放行（看得出、量不到或渲染失败）时自动打开，随 settings 走，烘焙前刷新循环与分析同一口径；默认关时不写进 settings，plan 逐字不变。
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool BudgetOnlyRetime = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool BudgetOnlyRetime = false,
+    // 按读帧缓冲留实时的读取层（放宽前的判定）：之前全是静态内容的读取层默认不留实时，分析编排发现放宽让结果变差时点名这些层重查。
+    // 在实时判定阶段生效（与 --retain-live 不同，不占用分配回退）；随 settings 走，默认空时不写进 settings，plan 逐字不变。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int[]? LiveFramebufferReaderIds = null);
 
 /// <summary>Plans video replacement from source hierarchy and observed input dependencies.</summary>
 /// <param name="display">未指定宽高时用来铺满的屏幕尺寸；省略时读本机主显示器物理分辨率，测试可注入固定值。</param>
@@ -248,16 +251,25 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             SceneGraph.Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
         var scriptFaults = observation.ScriptFaults(request.RuntimeTraceFile is not null);
         bool parallax = SceneGraph.Resolve(scene["general"]?["cameraparallax"], properties)?.ToJsonString() == "true";
-        Liveness AnalyzeLiveness() => Liveness.Analyze(request, source, graph, observation, scriptFaults.Errors, parallax, daytimeSelector,
-            FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
-        // 实时判定只取决于源、观测与到这里为止读过的请求字段（见 LivenessKey），退回、档位、布局、留实时集合各轮都相同。
-        var liveness = memo is null ? AnalyzeLiveness() : memo.Liveness(LivenessKey(request, sourceHash), graph, AnalyzeLiveness);
         var projection = HybridVideoProjection.Describe(scene, properties, request.Width, request.Height, observation.Trace["runtime_projection"] as JsonObject);
-        timing.Mark("A6_liveness_projection");
-        var allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax, projection, FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
-        timing.Mark("A7_allocation");
-        var composer = new Composer(request, source, scene, properties, graph, observation, liveness, allocation, parallax,
-            daytimeControlled, daytimeVisible);
+        // 读帧缓冲层没和之前的内容同在第一组时留实时重判；每轮只增不减，最多读帧缓冲层个数轮。计时按段累加，重判各轮都记进同一段。
+        var retainedReaders = new HashSet<int>(request.LiveFramebufferReaderIds ?? []);
+        Liveness liveness; Allocation allocation; Composer composer;
+        do
+        {
+            int[] readers = [.. retainedReaders.Order()];
+            Liveness AnalyzeLiveness() => Liveness.Analyze(request, source, graph, observation, scriptFaults.Errors, parallax, daytimeSelector,
+                FrozenDaytimeVideoRead, DaytimeVisibilityWrite, readers.ToHashSet());
+            // 实时判定只取决于源、观测与到这里为止读过的请求字段（见 LivenessKey），退回、档位、布局、留实时集合各轮都相同；
+            // 构图阶段要求重判的读帧缓冲层并进键（没有时键与原来相同）。
+            liveness = memo is null ? AnalyzeLiveness() : memo.Liveness(LivenessKey(request, sourceHash) +
+                (readers.Length > 0 ? "|framebuffer-readers:" + string.Join(",", readers) : ""), graph, AnalyzeLiveness);
+            timing.Mark("A6_liveness_projection");
+            allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax, projection, FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
+            timing.Mark("A7_allocation");
+            composer = new Composer(request, source, scene, properties, graph, observation, liveness, allocation, parallax,
+                daytimeControlled, daytimeVisible);
+        } while (composer.UnsettledFramebufferReaders.Length > 0 && retainedReaders.Add(composer.UnsettledFramebufferReaders[0]));
         // A later parallax/occlusion group can stay live in its original place. Compare that
         // complete suffix before concluding that the user needs multiple transparent videos.
         // 初判（原 R 段）：拒因在内存里按 Blocker 持有，写 plan 时渲染一次。

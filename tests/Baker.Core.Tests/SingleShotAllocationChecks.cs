@@ -129,10 +129,11 @@ internal static class SingleShotAllocationChecks
             "a single-shot track that used to form its own transparent second group leaves one opaque group behind");
 
         // 规则二：唯一组排在一个读 framebuffer 的全屏层与一个图像树之后，两者都不能提前景。
-        // 30 是隐藏的底图：40 之前得有网格，读帧缓冲才读到真实内容而不是清屏色。
+        // 30 是隐藏的实时底图：40 之前得有实时的网格，读帧缓冲才必须留实时。
         var blocked = new JsonArray(
             new JsonObject { ["id"] = 30, ["name"] = "底图", ["image"] = "models/background.json",
-                ["size"] = "64 32", ["origin"] = "32 16 0", ["visible"] = false },
+                ["size"] = "64 32", ["origin"] = new JsonObject { ["value"] = "32 16 0",
+                    ["script"] = "export function update(value) { new Date(); return value; }" }, ["visible"] = false },
             new JsonObject { ["id"] = 40, ["name"] = "后处理层", ["image"] = "models/util/fullscreenlayer.json",
                 ["size"] = "64 32", ["origin"] = "32 16 0", ["effects"] = new JsonArray(new JsonObject { ["name"] = "grade" }) },
             new JsonObject { ["id"] = 50, ["name"] = "时钟底板", ["image"] = "models/plate.json",

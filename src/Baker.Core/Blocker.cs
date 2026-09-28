@@ -35,6 +35,7 @@ public enum BlockerCode
     PublicLayerQuery,
     VideoShell,
     NoBenefitExpected,
+    FixedDaytimeState,
     ResidualMaskingLayout,
     LoopNoCommonFrame,
     LoopFixedPeriodExceedsCeiling,

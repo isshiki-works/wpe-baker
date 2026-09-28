@@ -182,7 +182,7 @@ public static class TradeoffOptions
         // 关掉实时元素只清得掉实时层带来的阻断，照做后结论不变的方案不列；一个都不剩就明说原因（9/26 三张照方案重分析仍是同一条阻断）。
         // 残差不可掩盖：不可掩盖的分量（要烘的层自己的循环没证出来，或没有归属图层）都在方案剔除范围内才可能清掉。
         // 预计不省电：逐条看关掉之后判据还会不会命中（NoBenefit 同一口径）。视频不划算要并成一路整幅、且一路省下的渲染够本；
-        // 静态成品带实时层要一层实时都不剩；固定时段、前缀路数超限关实时层改不了。
+        // 静态成品带实时层要一层实时都不剩；前缀路数超限关实时层改不了。
         JsonArray blocking = plan["loop"]?["residual_masking"]?["blocking_components"] as JsonArray ?? [];
         string?[] noBenefit = [.. (plan[NoBenefit.Field]?["conditions"] as JsonArray ?? []).Select(Text)];
         bool Undeliverable(JsonObject option) =>

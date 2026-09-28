@@ -73,6 +73,22 @@ internal sealed class AnalysisOrchestrator
         // 单次轨判实时（SingleShotLive）与"静止证明点名的层留实时"不在这里整套重跑：前者只在烘焙时由合成门拒绝入场切换触发，
         // 后者由分配回退在同一次分析里把重查新点名的所有者并进留实时（HybridLoopAllocation.ReplanUntilSettledAsync）。
         // 结果不行多半是预计不省电，多留实时、单次轨判实时只会烘得更少，救不回来。
+        // 读帧缓冲规则放宽只在不让结果变差时采用：把放宽后没留实时的读取层按读帧缓冲留实时（LiveFramebufferReaderIds，实时判定阶段生效，
+        // 不占用 --retain-live，分配回退照常能跑），从原请求的留实时集合整套再分析一次（放宽前的判定；不带放宽后方案自己的回退、
+        // 退回留下的层，那些是放宽后的分配引出来的）。放宽后不能生成（例如读取层带进凑不出循环的分量），
+        // 放宽后的方案只在能生成、且预计收益（省下的特效覆盖减视频路数）不少于、实时画布不大于放宽前时保留（放宽前不能生成的除外）；
+        // 否则用放宽前的，两边都不能生成时结论也按放宽前。这一次能换回结果，不是白跑。
+        if (await orchestrator.RelaxedFramebufferReadersAsync(result) is { Length: > 0 } relaxed)
+        {
+            var trial = new AnalysisOrchestrator(orchestrator.request with { RetainLiveRootIds = request.RetainLiveRootIds,
+                    RetainLiveReasons = request.RetainLiveReasons, LiveFramebufferReaderIds = [.. (request.LiveFramebufferReaderIds ?? []).Union(relaxed).Order()] },
+                analyze, space, space.Budget(), tools, Path.Combine(run, "framebuffer-live"), cache, token, memo, progress);
+            JsonObject before;
+            using (AnalysisTiming.Measure("g_framebuffer_live")) before = await trial.SelectAsync();
+            bool relaxedHolds = Admission.Accepted(result) && (!Admission.Accepted(before) ||
+                Margin(result) >= Margin(before) && LiveCanvas(result) <= LiveCanvas(before) + 1e-9);
+            if (!relaxedHolds) (orchestrator, result) = (trial, before);
+        }
         // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
         // 读数（漂移上界、闭合读数、渲染器墙钟）写进 plan 的 slow_closure_probe。闭合的照常判能，烘焙时接缝门照常复核。
         // 振幅推不出的慢项超预算改速先实测速度差（SlowClosureProbe.SpeedAsync）：看得出、量不到或渲染失败就按逐项预算整套再分析
@@ -174,18 +190,23 @@ internal sealed class AnalysisOrchestrator
             }
         }
         result = await RetreatAsync(result, interaction);
-        // 只有普通图层的视频组省不下渲染，还给实时（加 --retain-live 重新分析）；重新分析能生成、预计不省电的条件没变多才采用。
+        // 只有普通图层的视频组省不下渲染，还给实时（加 --retain-live 重新分析）；重新分析能生成、预计不省电的条件（含省下多少算不出）没变多才采用。
         // --no-benefit allow 时照旧全烘，测功耗用。
         if (Admission.Accepted(result) && !request.AllowNoBenefit && await NoBenefit.PlainGroupRetainRootsAsync(result, token) is { Length: > 0 } plain)
         {
             using var plainGroups = AnalysisTiming.Measure("d_plain_groups_live");
             var (replanned, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = plain }, analyze, space, space.Budget(), tools,
                 Path.Combine(run, "plain-groups-live"), cache, token, memo).SolveAsync(interaction);
-            if (Admission.Accepted(replanned) && NoBenefit.AnalysisConditions(replanned).Length <= NoBenefit.AnalysisConditions(result).Length)
+            // 省下多少算不出（needs_work_comparison 而被烘层不全是普通图层）也算一条：还给实时要证得出剩下的不更不省电，
+            // 不能靠"不判"换来普通组留实时（实时画布变大）。
+            static int Unproven(JsonObject plan) => NoBenefit.AnalysisConditions(plan).Length +
+                (plan[BakeValueAssessment.Field]?["rule"]?.GetValue<string>() == WorkloadValue.NeedsWorkComparison.Rule && NoBenefit.RemovedPassCoverage(plan) is null ? 1 : 0);
+            if (Admission.Accepted(replanned) && Unproven(replanned) <= Unproven(result))
                 result = replanned;
         }
         // 预计不省电的方案默认拒绝（判据与覆盖见 NoBenefit）；已经被别的原因拒掉的不重复写，只差采集能力的按假设能采集判。
         if (Admission.Accepted(result) || NoBenefit.CaptureOpenConditions(result) is not null) NoBenefit.Apply(result, request.AllowNoBenefit);
+        DaytimeSplit.RejectFixedState(result, request.AllowNoBenefit);
         // 判"不省电"而有可关的交互项（指针、音频层）时也试关交互，与生成不了时同一条建议；试出能生成且省电才建议。不自动关，applied_tradeoffs 不变。
         // 请求的策略生成不了时上面已验证过替代策略，不再重试。
         if (result[NoBenefit.Field]?["status"]?.GetValue<string>() == NoBenefit.ExpectedStatus && !alternativesTried &&
@@ -235,7 +256,31 @@ internal sealed class AnalysisOrchestrator
 
     /// <summary>能生成且预计省电。烘焙按实际编出的视频流数拒（NoBenefit.TooManyVideoStreams），可行与差距用同一判据，不选烘焙必拒的方案。</summary>
     private bool Viable(JsonObject plan) => Admission.Accepted(plan) && (request.AllowNoBenefit ||
-        NoBenefit.AnalysisConditions(plan).Length == 0 && !NoBenefit.TooManyVideoStreams(Admission.GroupCount(plan)));
+        !DaytimeSplit.FixedState(plan) && NoBenefit.AnalysisConditions(plan).Length == 0 && !NoBenefit.TooManyVideoStreams(Admission.GroupCount(plan)));
+
+    /// <summary>预计收益：省下的渲染减视频路数；不能生成为负无穷。</summary>
+    private static double Margin(JsonObject plan) => Admission.Accepted(plan) ? (NoBenefit.RemovedPassCoverage(plan) ?? 0) -
+        Admission.GroupCount(plan) * NoBenefit.MinPassCoveragePerStream : double.NegativeInfinity;
+
+    /// <summary>实时画布：留实时图层的画布占比之和（plan.layers[].canvas_fraction，缺值按 0）。</summary>
+    private static double LiveCanvas(JsonObject plan) => (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
+        .Where(layer => layer["allocation"]?.GetValue<string>() == "live").Sum(layer => SceneGraph.Numeric(layer["canvas_fraction"], 0));
+
+    /// <summary>
+    /// 读帧缓冲规则放宽涉及的读取层：之前画过网格、读当前帧缓冲，plan 里没按读帧缓冲留实时（reasons 里没有 reads_current_framebuffer），
+    /// 也没被剔除或省略。进了视频、不绘制、或后来被回退与退回以别的原因留实时的都算：放宽前它们在实时判定阶段就留实时，
+    /// 依赖它们的层也跟着留实时，分配从那里起就不同。没有运行时证据时为空。
+    /// </summary>
+    private async Task<int[]> RelaxedFramebufferReadersAsync(JsonObject plan)
+    {
+        if (plan["runtime_evidence"]?.GetValue<string>() is not string runtime || !File.Exists(runtime)) return [];
+        var relaxed = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(layer => layer["allocation"]?.GetValue<string>() is not ("excluded" or "omitted") &&
+                !(layer["reasons"] as JsonArray ?? []).Any(reason => reason?.GetValue<string>() == "reads_current_framebuffer"))
+            .Select(layer => SceneGraph.Int(layer["id"])).OfType<int>().ToHashSet();
+        return [.. Liveness.FramebufferReads(JsonNode.Parse(await File.ReadAllTextAsync(runtime, token))?["runtime_layers"] as JsonArray ?? [])
+            .Select(read => read.Reader).Where(relaxed.Contains).Distinct()];
+    }
 
     /// <summary>
     /// 放进视频的层多了反而不行（整层无解、被阻断、预计视频成本高于省下的渲染）时，退回更多层留实时的方案：每轮把每个视频组各留一次实时
@@ -246,8 +291,6 @@ internal sealed class AnalysisOrchestrator
     /// </summary>
     private async Task<JsonObject> RetreatAsync(JsonObject result, string interaction)
     {
-        static double Margin(JsonObject plan) => Admission.Accepted(plan) ? (NoBenefit.RemovedPassCoverage(plan) ?? 0) -
-            Admission.GroupCount(plan) * NoBenefit.MinPassCoveragePerStream : double.NegativeInfinity;
         // 离可行的差距：省下的渲染抵不过视频的差额与超出路数上限的路数取大；不能生成为无穷大。
         static double Gap(JsonObject plan) => Math.Max(-Margin(plan), Admission.GroupCount(plan) - NoBenefit.SavingProvenStreams);
         static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
@@ -257,7 +300,7 @@ internal sealed class AnalysisOrchestrator
         // 否则候选重查可以选中不分时段的母 plan。blocker、组数超限都不算：把挡住的那组留实时、或留实时后全幅布局变得可行
         // （一下并成一组），都可能解开（3463280673 在 main 上就是这样逐组退回救回的）。
         string[] conditions = NoBenefit.AnalysisConditions(result);
-        if (conditions.Contains(NoBenefit.StaticWithLive) || request.DaytimeState is not null && conditions.Contains(NoBenefit.FixedDaytime))
+        if (conditions.Contains(NoBenefit.StaticWithLive) || request.DaytimeState is not null && DaytimeSplit.FixedState(result))
             return result;
         JsonObject current = result;
         while (current["video_groups"] is JsonArray { Count: > 1 } groups)
@@ -336,9 +379,9 @@ internal sealed class AnalysisOrchestrator
 
     /// <summary>
     /// 母 plan 识别出状态时，每个状态各规划一次，取能生成且视频组最少的；都不行保留母 plan。
-    /// 固定在单个时段的方案一律命中 <see cref="NoBenefit.FixedDaytime"/>（成品不随时刻切换），没有 --no-benefit allow 时必被拒：
+    /// 固定在单个时段的方案成品不随时刻切换，没有 --no-benefit allow 时必被固定时段拒因拒绝（<see cref="DaytimeSplit.RejectFixedState"/>）：
     /// 这时不展开。原来每个档位都要多跑 状态数 × 布局数 次整次分析（2955378002：11 个时段 × 2 个布局 × 2 档 = 48 次里的 44 次，
-    /// 退回时每个候选再各来一遍），挑出来的状态方案还会顶替能生成的母 plan、随后被判不省电。
+    /// 退回时每个候选再各来一遍），挑出来的状态方案还会顶替能生成的母 plan、随后被拒。
     /// </summary>
     private async Task<JsonObject> StatesAsync(HybridAnalyzeRequest candidate)
     {
