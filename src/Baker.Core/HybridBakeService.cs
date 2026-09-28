@@ -393,8 +393,8 @@ public sealed class HybridBakeService(NativeTools tools)
         ulong frames = probe ? request.ProbeFrames : preflight.Frames;
         JsonObject? residualMasking = preflight.ResidualMasking;
         // P4：合成校验道（48 帧探针烘焙 + 原作参照配对比较 + 内嵌视频 2 GiB 外推，BakeGates.Validation）与下面的捕获副本准备、
-        // 起点搜索、首批组主渲染同时跑。它不改计划，读自己的计划副本；它的拒绝与异常优先于主道这段时间里的任何结果，
-        // 与串行时它排在一切渲染之前等价。它自己的墙钟记在 stage_timing.overlapped，不进互斥阶段。
+        // 起点搜索、首批组主渲染同时跑。它不改计划，读自己的计划副本；有效成品仍须等它放行。
+        // 所有组实际渲空时无需验证成品，下面会停掉尚在跑的校验。它自己的墙钟记在 stage_timing.overlapped，不进互斥阶段。
         var lane = new BakeGateContext(request, source, sourceHash, layout, progress)
             { Plan = plan.DeepClone().AsObject(), Settings = settings, Frames = frames };
         // 起点搜索已判定这遍作废（GroupVerdicts.StartSearchRejection）时停掉合成校验：重烘那遍自己会校验。
@@ -531,13 +531,38 @@ public sealed class HybridBakeService(NativeTools tools)
             if (groups.Length > 0 && startRejected is null) _ = scheduler.RenderAsync(0);
         }
         Task setup = Task.Run(() => SetupAsync(speculation.Token));
+        async Task<bool> AllGroupsEmptyAsync()
+        {
+            for (int i = 0; i < groups.Length; ++i)
+            {
+                if (validation!.IsCompleted || cancellationToken.IsCancellationRequested) return false;
+                try
+                {
+                    Task<JsonObject> render = scheduler!.RenderAsync(i);
+                    if (await Task.WhenAny(render, validation!) == validation) return false;
+                    JsonObject master = await render;
+                    if (master["alpha_bounds"]?["has_content"]?.GetValue<bool>() != false) return false;
+                }
+                catch { return false; } // The ordinary group path reports the original failure after validation.
+            }
+            return true;
+        }
         if (validation is not null)
         {
             // 主道先做完时，剩下等合成校验的时间记 composition_validation；合成校验先完成时它整段被主道重叠，不记。
             if (await Task.WhenAny(setup, validation) == setup && !validation.IsCompleted)
             {
                 if (setup.IsCompletedSuccessfully && startRejected is not null) await validationStop.CancelAsync();
-                using (timing.Measure(StageTiming.CompositionValidation)) await Task.WhenAny(validation);
+                using (timing.Measure(StageTiming.CompositionValidation))
+                {
+                    if (setup.IsCompletedSuccessfully && startRejected is null)
+                    {
+                        Task<bool> allEmpty = AllGroupsEmptyAsync();
+                        if (await Task.WhenAny(validation, allEmpty) == allEmpty && await allEmpty && !validation.IsCompleted)
+                            await validationStop.CancelAsync();
+                    }
+                    await Task.WhenAny(validation);
+                }
             }
             if (!(validation.IsCanceled && validationStop.IsCancellationRequested && !cancellationToken.IsCancellationRequested) &&
                 (!validation.IsCompletedSuccessfully || validation.Result is not null))

@@ -55,10 +55,9 @@ internal static class StageTimingChecks
         check(Number(breakdown[StageTiming.QualityGate]) == 3.5 && Number(breakdown[StageTiming.HardwareDecodeProbe]) == 0.5,
             "渲染器退出后的画质门与硬解实测墙钟单列在 master_render_breakdown 里，逐组累加");
 
-        double expectedRate = 720 / Number(stages[StageTiming.MasterRender])!.Value;
         check(json["frames"]!.GetValue<ulong>() == 720UL &&
-            Math.Abs(Number(json["frames_per_second_render"])!.Value - expectedRate) <= expectedRate * 0.01,
-            "frames_per_second_render 是帧数除以主渲染秒数");
+            json["frames_per_second_render"] is null,
+            "提前启动的渲染任务只量到剩余等待时，不报告虚假的渲染帧率");
         check(json["device_uuid"]!.GetValue<string>() == "868080b0040000000002000000000000", "stage_timing 记录生成设备");
 
         var report = new JsonObject { ["status"] = "candidate_generated", ["frames"] = 720 };

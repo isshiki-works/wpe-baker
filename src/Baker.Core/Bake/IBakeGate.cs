@@ -69,7 +69,7 @@ internal static class BakeGates
 
     /// <summary>
     /// 合成校验道（P4）：合成校验（短探针与原作参照配对比较，含候选脚本报错门）→ 内嵌视频 2 GiB 外推（读探针的试编码）。
-    /// 排在 <see cref="Preflight"/> 之后、与捕获副本准备、起点搜索和组主渲染并行；它的结论优先于主道这段时间的任何结果。
+    /// 排在 <see cref="Preflight"/> 之后、与捕获副本准备、起点搜索和组主渲染并行；有实际替换画面的成品必须等它放行。
     /// </summary>
     internal static IBakeGate[] Validation(CompositionGate.Validator validate, EmbeddedVideoGate.Estimator estimate) =>
         [new CompositionGate(validate), new EmbeddedVideoGate(estimate)];
