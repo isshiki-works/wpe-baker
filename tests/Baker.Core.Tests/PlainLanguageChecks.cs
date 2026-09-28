@@ -122,7 +122,7 @@ internal static class PlainLanguageChecks
         check(PlainLanguage.Verdict(cheap, false) == "可以生成",
             "an older static result is not automatically described as having no savings");
         foreach (var (status, zh) in new[] {
-            ("potential_gain", "可以生成，预计省电"),
+            ("potential_gain", "可以生成"),
             ("low_value", "可以生成，预计省电较少"),
             ("unknown", "可以生成，省电效果未知") })
         {
@@ -130,6 +130,12 @@ internal static class PlainLanguageChecks
             check(PlainLanguage.Verdict(cheap, false) == zh,
                 "benefit assessment is displayed independently of static output: " + status);
         }
+        cheap[BakeValueAssessment.Field] = new JsonObject { ["status"] = "unknown", ["evidence"] = new JsonObject {
+            ["decoder_work"] = new JsonObject { ["source_observed_coded_pixels_per_second"] = 0d,
+                ["candidate_uncropped_potential_coded_pixels_per_second"] = 100d } } };
+        check(PlainLanguage.Verdict(cheap, false) == "可以生成，省电效果未知" &&
+            PlainLanguage.NextAction(cheap, false) == PlainLanguage.Numbers(cheap, false),
+            "decoder workload evidence does not add a product warning to an unknown benefit");
         cheap["blockers_localized"] = new JsonArray(new JsonObject { ["key"] = "blocker.loop_unresolved" });
         check(PlainLanguage.Verdict(cheap, false) == "不支持",
             "a failed plan keeps its actual failure reason rather than becoming a low-value verdict");

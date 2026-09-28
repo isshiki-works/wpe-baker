@@ -9,6 +9,28 @@ namespace Baker.Core;
 /// </summary>
 internal static class Routes
 {
+    /// <summary>
+    /// A complete whole-layer loop is not enough when it only replaces base draws:
+    /// a safe effect prefix on a retained layer may remove more per-frame work.
+    /// The prefix planner still has to prove and validate every proposed cache.
+    /// </summary>
+    internal static bool ProbePrefix(JsonObject loop, JsonArray groups, JsonArray runtimeLayers)
+    {
+        if (!WholeLoopComplete(loop)) return true;
+        int[] captured = [.. groups.OfType<JsonObject>().SelectMany(group => (group["layer_ids"] as JsonArray ?? [])
+            .Select(SceneGraph.Int).OfType<int>())];
+        if (captured.Length == 0) return false;
+        bool capturedEffects = runtimeLayers.OfType<JsonObject>().Any(layer =>
+            SceneGraph.Int(layer["owner"]) is int id && captured.Contains(id) &&
+            (layer["materials"] as JsonArray ?? []).OfType<JsonObject>()
+                .Any(material => material["role"]?.GetValue<string>() == "effect"));
+        bool retainedEffects = runtimeLayers.OfType<JsonObject>().Any(layer =>
+            SceneGraph.Int(layer["owner"]) is int id && !captured.Contains(id) &&
+            (layer["materials"] as JsonArray ?? []).OfType<JsonObject>()
+                .Any(material => material["role"]?.GetValue<string>() == "effect"));
+        return !capturedEffects && retainedEffects;
+    }
+
     /// <param name="plan">整层路线的 plan（route/status/blockers/whole_layer 已按初判写好）。</param>
     /// <param name="effectPrefix">初判是否已走特效前缀。</param>
     /// <param name="prefixCaches">求本场景可用的特效前缀缓存；同一捕获点只探测一次由调用方保证。</param>
