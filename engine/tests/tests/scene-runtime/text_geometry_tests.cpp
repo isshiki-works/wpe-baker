@@ -102,6 +102,7 @@ TEST(TextGeometry, DynamicEffectFollowsCurrentTextBounds) {
         .text_height   = 157.0f,
         .source_width  = 563.0f,
         .source_height = 143.0f,
+        .font_descender = -101.0f,
         .padding       = 32.0f,
     };
 
@@ -112,6 +113,24 @@ TEST(TextGeometry, DynamicEffectFollowsCurrentTextBounds) {
     EXPECT_FLOAT_EQ(geometry.uv_source_width, 671.0f);
     EXPECT_FLOAT_EQ(geometry.effect_frame_width, 671.0f);
     EXPECT_FLOAT_EQ(geometry.draw_height, 221.0f);
+    EXPECT_FLOAT_EQ(geometry.draw_offset_y, -50.5f);
     EXPECT_FLOAT_EQ(geometry.uv_source_height, 221.0f);
     EXPECT_FLOAT_EQ(geometry.effect_frame_height, 221.0f);
+}
+
+TEST(TextGeometry, StaticEffectKeepsInkOutsideAuthoredFrame) {
+    const owe::text::TextGeometryPolicy policy {
+        .frame_width = 200.0f, .frame_height = 80.0f, .has_effect = true,
+    };
+    const owe::text::TextLayoutMetrics metrics {
+        .text_width = 255.0f, .text_height = 272.0f,
+        .source_width = 251.0f, .source_height = 67.0f, .font_descender = -101.0f,
+    };
+    const auto geometry = owe::text::ResolveTextGeometry(policy, metrics);
+    EXPECT_FLOAT_EQ(geometry.rt_width, 251.0f);
+    EXPECT_FLOAT_EQ(geometry.draw_width, 251.0f);
+    EXPECT_FLOAT_EQ(geometry.uv_source_width, 251.0f);
+    EXPECT_FLOAT_EQ(geometry.effect_frame_width, 251.0f);
+    EXPECT_FLOAT_EQ(geometry.draw_height, 80.0f);
+    EXPECT_FLOAT_EQ(geometry.draw_offset_y, -50.5f);
 }

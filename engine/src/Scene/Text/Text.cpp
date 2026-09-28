@@ -954,6 +954,7 @@ TextLayoutMetrics TextLayouter::Metrics() const noexcept {
         .source_height   = m_impl->last_source_h,
         .source_center_x = m_impl->last_source_center_x,
         .source_center_y = m_impl->last_source_center_y,
+        .font_descender  = m_impl->metrics.descender,
         .padding         = m_impl->style.padding,
     };
 }
@@ -1016,6 +1017,10 @@ TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
         return out;
     }
 
+    // The glyphs stay centered in their private RT; the authored line-box
+    // baseline is restored when that RT is composed into the scene.
+    out.draw_offset_y = 0.5f * metrics.font_descender;
+
     if (dynamic_effect) {
         out.draw_width          = dynamic_effect_w;
         out.draw_height         = dynamic_effect_h;
@@ -1026,10 +1031,13 @@ TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
         return out;
     }
 
-    out.draw_width       = frame_w;
+    // Authored effect frames can be narrower than the glyph ink. Keep the
+    // complete source surface when composing the terminal effect.
+    out.draw_width       = std::max(frame_w, src_bbox_w);
     out.draw_height      = frame_h;
-    out.uv_source_width  = frame_w;
+    out.uv_source_width  = out.draw_width;
     out.uv_source_height = frame_h;
+    out.effect_frame_width = out.draw_width;
     return out;
 }
 

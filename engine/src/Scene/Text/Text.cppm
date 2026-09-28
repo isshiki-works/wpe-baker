@@ -260,6 +260,7 @@ struct TextLayoutMetrics {
     float source_height { 0.0f };
     float source_center_x { 0.0f };
     float source_center_y { 0.0f };
+    float font_descender { 0.0f };
     float padding { 0.0f };
 };
 
