@@ -461,7 +461,8 @@ internal static class AppJsonPresentation
         if (Number(candidate?["seconds"]) is double seconds)
             parts.Add((english ? "loop " : "循环 ") + seconds.ToString("0.###", CultureInfo.InvariantCulture) +
                 (english ? " s" : " 秒"));
-        double maximum = Number(profile["loop_max_seconds"]) ?? 0;
+        // 档位上限内无解时分析自动放宽到 1200 s（loop.maximum_seconds 记实际用的上限）
+        double maximum = Math.Max(Number(profile["loop_max_seconds"]) ?? 0, Number(plan["loop"]?["maximum_seconds"]) ?? 0);
         string maximumOrigin = profile["loop_max_seconds_source"]?.GetValue<string>() == RetimeProfile.FromOverride ? manual : "";
         if (maximum > 0) parts.Add((english ? "at most " : "上限 ") + maximum.ToString("0.###", CultureInfo.InvariantCulture) +
             (english ? " s" : " 秒") + maximumOrigin);

@@ -21,9 +21,13 @@ public static class WorkloadValue
     public static bool IsComparableOutput(double width, double height, double fps) =>
         double.IsFinite(width * height * fps) && width > 0 && height > 0 && fps > 0;
 
-    /// <summary>编码格式一致之后的解码量比较：输出像素数或帧率任一小于源视频即有降低空间。</summary>
-    public static string DecodeWorkStatus(double width, double height, double fps, double sourceWidth, double sourceHeight, double sourceFps) =>
-        width * height < sourceWidth * sourceHeight || fps < sourceFps ? DecodePotentialGain : DecodeNotReduced;
+    /// <summary>
+    /// 编码格式一致之后的解码量比较：输出像素数或帧率任一小于源视频即有降低空间。
+    /// <paramref name="packedAlpha"/>：透明组把颜色与 alpha 左右打包进一帧，输出像素数按两倍算。
+    /// </summary>
+    public static string DecodeWorkStatus(double width, double height, double fps, double sourceWidth, double sourceHeight, double sourceFps,
+        bool packedAlpha = false) =>
+        width * height * (packedAlpha ? 2 : 1) < sourceWidth * sourceHeight || fps < sourceFps ? DecodePotentialGain : DecodeNotReduced;
 
     /// <summary>周期分量 id（如 video/12/...）的第二段是承载它的图层；解析不出来记 −1，落在"不止一层"那一侧。</summary>
     public static int OwnerOf(string component)

@@ -98,14 +98,21 @@ internal static class ShaderSignatureChecks
                     .Select(x => x!["mechanism"]!.GetValue<string>()).SequenceEqual(["term_not_retimable"]),
                 "a call knob rewrites only when the source has exactly the call sites the engine counted");
 
+            // 分量旋钮改写在文件末尾追加新 main：varying 声明在预处理条件块里时条件不成立就不存在，覆盖 shader 编不过（3644280276 waterripple），不当改写目标
+            string ripple = "varying vec4 v_Plain;\n#if RIPPLE\nvarying vec4 v_TexCoordRipple;\n#endif\nvoid main() { v_Plain = vec4(g_Time); }\n";
+            check(ShaderTextPatch.AxisTarget(ripple, "periodica_k_vert_ax_x_v_TexCoordRipple") is (_, _, ["#if RIPPLE"]) &&
+                ShaderTextPatch.AxisTarget(ripple, "periodica_k_vert_ax_x_v_Plain") is (_, _, []) &&
+                ShaderTextPatch.AxisTarget(ripple.Replace("#if RIPPLE\n", "#if RIPPLE\n#else\n"), "periodica_k_vert_ax_x_v_TexCoordRipple") is null,
+                "a vertex output declared inside a preprocessor conditional stays a rewrite target, carrying its guard; one inside an #else branch does not");
+
             // 振幅推不出的慢项（90.1 s，旋钮 0.25）：逐项预算（这里 0%）内与 7.1 s 项凑不出循环时，整层路线（有视频组）放开它的改速、
             // 证据带实测标记留给分析收尾实测；特效前缀路线（没有视频组）不放开，照旧无解
-            LoopReport Measured(JsonArray? groups, bool budgetOnly = false, string shader = "effects/x") => LoopAnalysis.Analyze(
+            LoopReport Measured(JsonArray? groups, bool budgetOnly = false, string shader = "effects/x", bool unmeasured = false) => LoopAnalysis.Analyze(
                 JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
                 {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
                   {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
                   {"seconds":90.1,"num":901,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.25,"inverse":false}]}]}
-                """, shader), [10], 30, 1, 0, videoGroups: groups, budgetOnlyRetime: budgetOnly);
+                """, shader), [10], 30, 1, 0, videoGroups: groups, budgetOnlyRetime: budgetOnly, speedUnmeasured: unmeasured);
             LoopReport whole = Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }));
             const string slowTerm = "shader/10/0/0/effects/x/periodica_k_frag_3e800000";
             check(whole.Candidates.Count > 0 && Math.Abs(whole.Candidates[0].Components.Single(x => x.ComponentId == slowTerm).DeltaPercent) > 0 &&
@@ -114,9 +121,31 @@ internal static class ShaderSignatureChecks
             check(Measured(null).Candidates.Count == 0, "the effect-prefix route never retimes a slow term beyond the budget");
             // 实测没放行后的重分析按逐项预算，与没有这条放宽时同一结果；foliagesway 只走 #209 的解析判据，算不出振幅时不进实测
             check(Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }), budgetOnly: true).Candidates.Count == 0, "after a failed speed check the whole-layer route falls back to the per-term budget");
+            // 测速量不到（speedUnmeasured）：同样按逐项预算、无解，但挡住循环的是没能实测的改速，记未收敛 speed_not_measured，不记不能
+            JsonArray Kinds(LoopReport report) => [.. report.ToJson()["unresolved"]!.AsArray().Select(x => (JsonNode)$"{x!["kind"]}/{x["mechanism"]}")];
+            JsonArray group = new(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) });
+            check(Kinds(Measured(group.DeepClone().AsArray(), unmeasured: true)).Select(x => x!.GetValue<string>()).SequenceEqual(["UnsupportedShaderMechanism/speed_not_measured"]) &&
+                Kinds(Measured(group.DeepClone().AsArray(), budgetOnly: true)).Select(x => x!.GetValue<string>()).SequenceEqual(["NonPeriodicOrDriftingMechanism/loop_never_repeats_within_limit"]),
+                "an unmeasurable speed check leaves the blocked layer not converged; a visible one proves cannot");
             LoopReport sway = Measured(new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }), shader: "effects/foliagesway");
             check(sway.Candidates.Count == 0 && !sway.Evidence.Any(x => x.Evidence.EndsWith(ShaderPeriodAnalysis.MeasuredNote, StringComparison.Ordinal)),
                 "foliagesway without a computable amplitude stays on the per-term budget and never enters the speed check");
+
+            // 慢分量（100000 s，唯一旋钮 0.25）：默认照旧不进求解器、标可改挂旋钮；闭合预检没过后的重分析（retimeSlow）改挂旋钮，
+            // 离原速最近的圈数是 0（冻结，旋钮取 0），证据带实测标记；实测没放行后（budgetOnly）回到慢分量
+            LoopCandidate SlowRetimed(bool retimeSlow, bool budgetOnly = false) => LoopAnalysis.Analyze(
+                JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
+                {"kind":"periodic","reasons":[],"external":[],"transient":false,"terms":[
+                  {"seconds":7.1,"num":71,"den":10,"pi":0,"knobs":[{"stage":"frag","literal":0.5,"inverse":false}]},
+                  {"seconds":100000,"num":100000,"den":1,"pi":0,"knobs":[{"stage":"frag","literal":0.25,"inverse":false}]}]}
+                """), [10], 30, 1, videoGroups: new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(10) }),
+                budgetOnlyRetime: budgetOnly, retimeSlow: retimeSlow).Candidates[0];
+            LoopCandidate kept = SlowRetimed(false), frozen = SlowRetimed(true);
+            check(kept.SlowComponents is [{ Retimable: true }] && kept.ToJson()["slow_components"]![0]!["retimable"]!.GetValue<bool>() &&
+                frozen.SlowComponents.Count == 0 && frozen.Components.Single(x => x.ComponentId == slowTerm).Cycles == 0 &&
+                frozen.Patches.OfType<LoopValuePatch>().Single(x => x.ComponentId == slowTerm).NewValue == 0 &&
+                SlowRetimed(true, budgetOnly: true).SlowComponents is [{ Retimable: true }],
+                "a slow term with a usable knob stays a slow component until its closure fails, then freezes at the nearest cycle count pending the speed check");
 
             // 同一 pass 剩 7 s 与 3π s 两类且没有旋钮：每项独立调频有解（上限 600 s）记未收敛 term_not_retimable；
             // 上限 10 s 时独立调频也无解，才是"不能"

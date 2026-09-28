@@ -97,6 +97,40 @@ internal static class VideoDominanceChecks
         check(Status(reduced) == VideoDominance.NotShellStatus &&
             reduced["video_dominant"]!["decode_work"]!["status"]!.GetValue<string>() == "potential_gain",
             "1440p60 source video to 1080p60 can reduce decoding work despite identical draw counts");
+        // 只数真正未解析的机制：已证平稳随机的粒子项（层留实时）与更小分配回退的说明条目不挡外壳判据
+        JsonObject Noted(JsonObject plan, bool particleBaked)
+        {
+            JsonObject noted = plan.DeepClone().AsObject();
+            noted["loop"]!["unresolved"] = new JsonArray(
+                new JsonObject { ["kind"] = "runtime_animation", ["owner_layer_id"] = 347, ["particle_stationarity"] = new JsonObject { ["stationary"] = true },
+                    ["detail"] = "stationary random particles" },
+                new JsonObject { ["kind"] = ResidualMasking.AllocationFallbackKind, ["detail"] = "smaller allocation note" });
+            noted["layers"]!.AsArray().Add(new JsonObject { ["id"] = 347, ["allocation"] = particleBaked ? "video" : "live" });
+            return noted;
+        }
+        JsonObject liveParticles = VideoDominance.Evaluate(Noted(allowed, false), runtime, VideoDominance.RejectChoice);
+        check(liveParticles["status"]!.GetValue<string>() == VideoDominance.ShellStatus &&
+            string.Join(" | ", liveParticles["evidence"]!.AsArray().Select(item => item!.GetValue<string>())).Contains("unresolved_components=0", StringComparison.Ordinal),
+            "a stationary-random particle item and the smaller-allocation note are not unresolved temporal mechanisms");
+        JsonObject bakedParticles = Noted(reduced, true);
+        bakedParticles["video_dominant"] = VideoDominance.Evaluate(bakedParticles, highResolution, VideoDominance.RejectChoice);
+        check(Status(bakedParticles) == VideoDominance.NotShellStatus &&
+            Evidence(bakedParticles).Contains("baked_stationary_particle_layers=347", StringComparison.Ordinal) &&
+            bakedParticles["video_dominant"]!["decode_work"]!["status"]!.GetValue<string>() == "potential_gain",
+            "baked stationary particles keep the plan out of the shell verdict, and the source video's decode reduction still reaches the value assessment");
+        // 外壳判据没全过也照样算 decode_work；降不了的仍按特效覆盖交给 NoBenefit 判，不因为有 decode_work 就豁免
+        JsonObject bakedSame = Noted(allowed, true);
+        bakedSame["video_dominant"] = VideoDominance.Evaluate(bakedSame, runtime, VideoDominance.RejectChoice);
+        check(bakedSame["video_dominant"]!["decode_work"]!["status"]!.GetValue<string>() == "not_reduced" &&
+            bakedSame["video_dominant"]!["shell_structure"]!.GetValue<bool>() == false && !NoBenefit.DecodeWorkCounts(bakedSame) &&
+            withUnresolved["video_dominant"]!["decode_work"] is JsonObject && NoBenefit.DecodeWorkCounts(bakedParticles) && NoBenefit.DecodeWorkCounts(allowed),
+            "every whole-layer plan baking a source video carries decode_work; only a reducible decode (or a matched shell structure) exempts it from the effect-coverage test");
+        // 片源在透明组里：颜色与 alpha 左右打包，1080p 输出按两倍像素比，不比 1440p 源少
+        JsonObject packed = Noted(reduced, true);
+        packed["video_groups"]![0]!["transparent"] = true;
+        JsonObject packedWork = VideoDominance.Evaluate(packed, highResolution, VideoDominance.RejectChoice)["decode_work"]!.AsObject();
+        check(packedWork["status"]!.GetValue<string>() == "not_reduced" && packedWork["output_packed_alpha"]!.GetValue<bool>(),
+            "a transparent group's packed alpha doubles the output pixels in the decode comparison");
         JsonObject lowerFps = allowed.DeepClone().AsObject();
         lowerFps["settings"]!["fps_numerator"] = 15;
         check(VideoDominance.Evaluate(lowerFps, runtime, VideoDominance.RejectChoice)["status"]!.GetValue<string>() == VideoDominance.NotShellStatus,
@@ -125,6 +159,10 @@ internal static class VideoDominanceChecks
         {
             check(BakeValueAssessment.Evaluate(reduced, highResolution, source, root)["status"]!.GetValue<string>() == "potential_gain",
                 "video decode reduction is retained by the device-independent benefit assessment");
+            check(BakeValueAssessment.Evaluate(bakedParticles, highResolution, source, root)["rule"]!.GetValue<string>() ==
+                BakeValueAssessment.Evaluate(reduced, highResolution, source, root)["rule"]!.GetValue<string>() &&
+                !NoBenefit.AnalysisConditions(bakedParticles).Contains(NoBenefit.PlainLayersOnly),
+                "a reducible source video counts as saved work even when other baked content keeps the plan out of the shell verdict");
             JsonObject still = allowed.DeepClone().AsObject();
             still.Remove("video_dominant");
             still["loop"]!["source_static"] = true;

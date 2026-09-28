@@ -53,6 +53,18 @@ public class SearchSpaceTests
         Assert.Equal(72, widest.Limit(4));
     }
 
+    // 速度实测之后：看得出才按逐项预算重分析（挡住循环的记不能）；量不到另走 SpeedUnmeasured（挡住循环的记未收敛）；各只一次
+    [Fact]
+    public void OnlyAVisibleSpeedReadingFallsBackToTheBudget()
+    {
+        var request = new HybridAnalyzeRequest(2, "s", "a", "o");
+        Assert.Equal(request with { BudgetOnlyRetime = true }, AnalysisOrchestrator.AfterSpeedProbe(request, "visible"));
+        Assert.Equal(request with { SpeedUnmeasured = true }, AnalysisOrchestrator.AfterSpeedProbe(request, "not_measured"));
+        Assert.Null(AnalysisOrchestrator.AfterSpeedProbe(request, "passed"));
+        Assert.Null(AnalysisOrchestrator.AfterSpeedProbe(request with { SpeedUnmeasured = true }, "not_measured"));
+        Assert.Null(AnalysisOrchestrator.AfterSpeedProbe(request with { BudgetOnlyRetime = true }, "visible"));
+    }
+
     [Fact]
     public void BudgetRejectsARepeatedCellAndAnOverrun()
     {

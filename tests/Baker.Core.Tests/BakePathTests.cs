@@ -34,7 +34,11 @@ public class BakePathTests
                 ["slow_components"] = new JsonArray(new JsonObject { ["owner_layer_id"] = owner, ["drift_bound_radians"] = 0.01 }) }) },
         };
         Assert.Empty(await SlowClosureProbe.RunAsync(Plan(2), tools, Path.Combine(dir, "other"), CancellationToken.None));
-        await Assert.ThrowsAnyAsync<Exception>(() => SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), CancellationToken.None));
+        // 在组里时开始准备渲染；准备失败（这里源不存在）记 probe_failed、不带闭合读数，不让整次分析失败
+        JsonObject failed = Assert.Single(await SlowClosureProbe.RunAsync(Plan(1), tools, Path.Combine(dir, "owned"), CancellationToken.None))!.AsObject();
+        Assert.Equal("probe_failed", failed["status"]!.GetValue<string>());
+        Assert.Null(failed["loop_closure"]);
+        Assert.Equal([1], failed["owner_layer_ids"]!.AsArray().Select(id => id!.GetValue<int>()));
     });
 
     // 接缝门因慢分量漂移拒了某组、点名层 7：退回让层 7 留实时，重新分析，用新计划再烘一次，报告记成 retried。
@@ -86,7 +90,7 @@ public class BakePathTests
                     rgba[i] = rgba[i + 1] = rgba[i + 2] = (byte)Math.Round(v);
                     rgba[i + 3] = 255;
                 }
-            if (speck) rgba[0] ^= 1;
+            if (speck) rgba[(size / 2 * size + size / 2) * 4] ^= 1; // 画面中间一个像素差 1 level
             return rgba;
         }
         // version：0 改速前、1 改速后、2 对照（改速项按原速 2 倍）
@@ -120,7 +124,9 @@ public class BakePathTests
         JsonObject inert = await Read((version, t) => Frame(0, 20 * Math.Sin(2 * Math.PI * t / (version == 2 ? 200 : 400)), halfFlat: true));
         Assert.Equal("not_measured", inert["status"]!.GetValue<string>());
         Assert.Equal("patch_not_effective", inert["reason"]!.GetValue<string>());
-        Assert.Equal("frame0_differs", (await Read((version, t) => Frame(0, speck: version == 1 && t == 0)))["reason"]!.GetValue<string>());
+        // 第 0 帧按可测下限比：一个像素差 1 level（量化、粒子这类逐位不稳）不算不同状态；整幅错开 5 px 才是 frame0_differs
+        Assert.NotEqual("frame0_differs", (await Read((version, t) => Frame(0, speck: version == 1 && t == 0)))["reason"]?.GetValue<string>());
+        Assert.Equal("frame0_differs", (await Read((version, t) => Frame(version == 1 && t == 0 ? 5 : 0)))["reason"]!.GetValue<string>());
         Assert.Equal("no_texture", (await Read((version, t) => Frame(0, version == 1 ? t : 0, flat: true)))["reason"]!.GetValue<string>());
     }
 
@@ -293,5 +299,65 @@ public class BakePathTests
         File.Delete(Path.Combine(project, "workshop/3468454002/materials/effects/caustics.json"));
         Assert.Equal([knob], SlowClosureProbe.UnwrittenKeys(Written("capture-without-material"), [knob]));
         await Task.CompletedTask;
+    });
+
+    // 分量旋钮改写把新 main 追加在文件末尾：varying 声明在 #if 块里时，保存与恢复它的语句包进同一条件（3644280276 waterripple 的组合关着时编不过），
+    // 条件成立的组合照常改写（main 上这些作品就是这样烘的，不能因此改判不可调速）
+    [Fact]
+    public async Task AxisRewriteKeepsAConditionalVaryingInsideItsGuard() => await TestTemp.Run(async dir =>
+    {
+        string project = Path.Combine(dir, "project");
+        void Write(string resource, string text)
+        {
+            string path = Path.Combine(project, resource);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+        }
+        const string key = "periodica_k_vert_ax_xy_v_TexCoordRipple";
+        Write("scene.json", """{"objects":[]}""");
+        Write("project.json", """{"file":"scene.json","type":"scene"}""");
+        Write("effects/ripple/effect.json", """{"passes":[{"material":"materials/effects/ripple.json"}]}""");
+        Write("materials/effects/ripple.json", """{"passes":[{"shader":"effects/ripple"}]}""");
+        Write("shaders/effects/ripple.vert", "uniform float g_Time;\n#if RIPPLE\nvarying vec4 v_TexCoordRipple;\n#endif\n" +
+            "void main() {\n#if RIPPLE\n  v_TexCoordRipple = vec4(g_Time);\n#endif\n  gl_Position = vec4(0.0);\n}\n");
+        var scene = JsonNode.Parse($$$"""
+            {"objects":[{"id":1,"effects":[{"file":"effects/ripple/effect.json","passes":[{"constantshadervalues":{"{{{key}}}":1.25}}]}]}]}
+            """)!.AsObject();
+        using var source = new ProjectSource(project);
+        JsonArray written = await ShaderTextPatch.WriteTimeScaleAsync(Path.Combine(dir, "capture"), source, null, scene, CancellationToken.None);
+        Assert.Equal([key], written.Single()!["keys"]!.AsArray().Select(k => k!.GetValue<string>()));
+        string text = File.ReadAllText(Path.Combine(dir, "capture", "shaders", "effects", "ripple.vert"));
+        string tail = text[text.LastIndexOf("void main()", StringComparison.Ordinal)..];
+        // 新 main 里每处读写 v_TexCoordRipple 都在 #if RIPPLE … #endif 之内
+        foreach (int at in System.Text.RegularExpressions.Regex.Matches(tail, @"\bv_TexCoordRipple\b").Select(m => m.Index))
+        {
+            string before = tail[..at];
+            Assert.True(before.LastIndexOf("#if RIPPLE", StringComparison.Ordinal) > before.LastIndexOf("#endif", StringComparison.Ordinal), tail);
+        }
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(tail, "#if RIPPLE").Count);
+    });
+
+    // 冻结的粒子湍流场不进求解器，没有候选分量与证据：按补丁认项，同样进测速
+    [Fact]
+    public async Task FrozenParticleFieldEntersTheSpeedProbe() => await TestTemp.Run(async dir =>
+    {
+        const string component = "particle_field/1/operator1";
+        var plan = new JsonObject
+        {
+            ["source"] = Path.Combine(dir, "missing-source"),
+            ["video_groups"] = new JsonArray(new JsonObject { ["id"] = "group-1", ["layer_ids"] = new JsonArray(1) }),
+            ["loop"] = new JsonObject
+            {
+                ["retime_budget_percent"] = 1.0, ["evidence"] = new JsonArray(),
+                ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 3000, ["components"] = new JsonArray(),
+                    ["patches"] = new JsonArray(new JsonObject { ["component"] = component, ["kind"] = LoopAnalysis.ParticleFieldPatchKind, ["owner_layer_id"] = 1,
+                        ["effect_index"] = -1, ["pass_index"] = -1, ["constant_key"] = "timescale", ["value_index"] = 1, ["old_value"] = 20.0, ["new_value"] = 0.0,
+                        ["speed_exponent"] = 1.0 }) })
+            },
+        };
+        JsonObject? record = await SlowClosureProbe.SpeedAsync(plan, new NativeTools("must-not-run", "must-not-run", "must-not-run", []),
+            Path.Combine(dir, "speed"), CancellationToken.None);
+        Assert.Equal([component], record?["components"]!.AsArray().Select(x => x!.GetValue<string>()) ?? []);
+        Assert.Equal("not_measured", record!["status"]!.GetValue<string>());
     });
 }

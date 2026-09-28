@@ -71,18 +71,24 @@ public static class ShaderTextPatch
                     var restore = new StringBuilder();
                     foreach (string key in axes)
                     {
-                        if (AxisTarget(body, key) is not (string varying, string[] swizzles))
+                        if (AxisTarget(body, key) is not (string varying, string[] swizzles, string[] guards))
                             throw new InvalidDataException($"Shader knob {key} no longer names a rewritable vertex output in {resource}.");
                         string uniform = "g_PeriodicaK_" + key[KnobPrefix.Length..];
                         header.Append("uniform float " + uniform + "; // {\"material\":\"" + key + "\",\"default\":1}\n");
                         rewritten.Add(key);
                         main.Append("\tperiodica_T = g_Time * " + uniform + ";\n\tperiodica_main();\n");
+                        // varying 声明在条件块里：保存与恢复它的语句包进同一条件，条件不成立时这一项不影响输出，跳过即可
+                        string open = string.Concat(guards.Select(guard => guard + "\n")), close = string.Concat(guards.Select(_ => "#endif\n"));
+                        main.Append(open);
+                        restore.Append(open);
                         foreach (string swizzle in swizzles)
                         {
                             string saved = "periodica_" + uses++;
                             main.Append("\tfloat " + saved + " = " + varying + swizzle + ";\n");
                             restore.Append("\t" + varying + swizzle + " = " + saved + ";\n");
                         }
+                        main.Append(close);
+                        restore.Append(close);
                     }
                     body = MainDecl.Replace(body, "void periodica_main()", 1);
                     body = TimeUse.Replace(body, "periodica_T");
@@ -151,18 +157,27 @@ public static class ShaderTextPatch
 
     /// <summary>
     /// 分量旋钮在顶点源码里的改写目标：恰好一个 void main()，varying 恰好声明一次（float 或 vec2–4）；
-    /// 返回 varying 名与每个分量的取值后缀（float 为空）。不满足给 null。
+    /// 返回 varying 名、每个分量的取值后缀（float 为空），以及声明外层的预处理条件（#if/#ifdef/#ifndef 行，由外到内）。
+    /// 声明在 #else/#elif 分支里的不给（改写时包不出同一条件）。不满足给 null。
     /// </summary>
-    internal static (string Varying, string[] Swizzles)? AxisTarget(string text, string key)
+    internal static (string Varying, string[] Swizzles, string[] Guards)? AxisTarget(string text, string key)
     {
         Match parts = Regex.Match(key, @"_ax_([xyzw]+)_(\w+)$", RegexOptions.CultureInvariant);
         if (!parts.Success) return null;
         string code = Comment.Replace(text, match => new string(' ', match.Length)), varying = parts.Groups[2].Value, letters = parts.Groups[1].Value;
         Match[] declared = Regex.Matches(code, @"\bvarying\s+(?:\w+\s+)*?(float|vec[234])\s+" + Regex.Escape(varying) + @"\s*;", RegexOptions.CultureInvariant).ToArray();
         if (MainDecl.Matches(code).Count != 1 || declared is not [Match only]) return null;
+        // 改写把新 main 追加在文件末尾、预处理条件块之外：声明在 #if/#ifdef/#ifndef 块里的 varying 在条件不成立的组合下不存在，
+        // 读写它的语句要包进同一条件（3644280276 waterripple 的 v_TexCoordRipple）；条件成立的组合照常改写（main 上这些作品就是这样烘的）
+        var guards = new List<string?>();
+        foreach (string line in code[..only.Index].Split('\n').Select(line => line.Trim()))
+            if (line.StartsWith("#if", StringComparison.Ordinal)) guards.Add(line);
+            else if (line.StartsWith("#el", StringComparison.Ordinal) && guards.Count > 0) guards[^1] = null;
+            else if (line.StartsWith("#endif", StringComparison.Ordinal) && guards.Count > 0) guards.RemoveAt(guards.Count - 1);
+        if (guards.Any(guard => guard is null)) return null;
         string type = only.Groups[1].Value;
-        if (type == "float") return letters == "x" ? (varying, [""]) : null;
-        return letters.All(c => "xyzw".IndexOf(c) < type[3] - '0') ? (varying, [.. letters.Select(c => "." + c)]) : null;
+        if (type == "float") return letters == "x" ? (varying, [""], [.. guards!]) : null;
+        return letters.All(c => "xyzw".IndexOf(c) < type[3] - '0') ? (varying, [.. letters.Select(c => "." + c)], [.. guards!]) : null;
     }
 
     private static readonly Regex CallKnob = new(@"^periodica_k_\w+?_call(\d+)_(\w+)$", RegexOptions.CultureInvariant);

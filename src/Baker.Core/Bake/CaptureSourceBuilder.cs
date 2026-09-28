@@ -19,6 +19,8 @@ internal static class CaptureSourceBuilder
     {
         await source.ExtractAsync(captureProject, cancellationToken, link: true);
         JsonObject scene = Scene(original, snapshot, plan, settings, probe);
+        // 粒子场冻结写的是另存的新文件（原路径加 .periodica-层号），不碰硬链接进来的源文件
+        if (!probe) await HybridLoopService.WriteParticleFieldsAsync(captureProject, source, settings.Assets, scene, plan["loop"]!.AsObject(), cancellationToken);
         await File.WriteAllTextAsync(ProjectSource.ContainedPath(captureProject, source.SceneResource), scene.ToJsonString(), cancellationToken);
         // 着色器调速：给挂了时间倍率的 pass 写覆盖 shader，只影响捕获；成品项目另从源解包。
         if (!probe) report["time_scale_shaders"] = await ShaderTextPatch.WriteTimeScaleAsync(captureProject, source, settings.Assets, scene, cancellationToken);

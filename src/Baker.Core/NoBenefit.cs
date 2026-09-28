@@ -56,7 +56,7 @@ public static class NoBenefit
             TooManyVideoStreams(caches.Count))
             hits.Add(TooManyStreams);
         // 源里自带视频的方案（decode_work）换的是解码量，不按特效算；static 成品不编视频，不在此列；已证静态的组编成静态纹理，不算路数。
-        if (frames is > 1 && plan["route"]?.GetValue<string>() == "whole_layer" && plan["video_dominant"]?["decode_work"] is null &&
+        if (frames is > 1 && plan["route"]?.GetValue<string>() == "whole_layer" && !DecodeWorkCounts(plan) &&
             Admission.GroupCount(plan) is > 0 and int streams && RemovedPassCoverage(plan) is double removed &&
             removed < streams * MinPassCoveragePerStream)
             hits.Add(removed == 0 ? PlainLayersOnly : VideoCostOverSaving);
@@ -82,7 +82,7 @@ public static class NoBenefit
     /// </summary>
     internal static async Task<int[]?> PlainGroupRetainRootsAsync(JsonObject plan, CancellationToken token)
     {
-        if (plan["route"]?.GetValue<string>() != "whole_layer" || plan["video_dominant"]?["decode_work"] is not null ||
+        if (plan["route"]?.GetValue<string>() != "whole_layer" || DecodeWorkCounts(plan) ||
             plan["loop"]?["candidates"] is not JsonArray { Count: > 0 } loops || !(StaticOnlyBake.Count(loops[0]?["frames"]) > 1) ||
             plan["video_groups"] is not JsonArray { Count: > 1 } groups ||
             plan["runtime_evidence"]?.GetValue<string>() is not string path || !File.Exists(path)) return null;
@@ -93,6 +93,13 @@ public static class NoBenefit
         bool allPlain = groups.OfType<JsonObject>().All(group => (group["root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int r && roots.Contains(r)));
         return roots.Length == 0 || allPlain ? null : FullFrameDemotion.RetainLiveCommandRoots(plan, roots);
     }
+
+    /// <summary>
+    /// 按源视频解码量判、不按特效覆盖判：源视频解码量能降，或视频外壳结构成立（原有口径：结构成立时解码量降不了由外壳判据拦，说不清的不判）。
+    /// 旧 plan 没有 shell_structure，那时 decode_work 只在结构成立时才写。
+    /// </summary>
+    internal static bool DecodeWorkCounts(JsonObject plan) => plan["video_dominant"] is JsonObject dominant && dominant["decode_work"] is JsonObject decode &&
+        (decode["status"]?.GetValue<string>() == WorkloadValue.DecodePotentialGain || dominant["shell_structure"]?.GetValue<bool>() != false);
 
     /// <summary>被烘层省下的特效渲染（按画布占比加权的 pass 数）；bake_value 没算这一项的方案返回 null，不判。</summary>
     internal static double? RemovedPassCoverage(JsonObject plan) => plan[BakeValueAssessment.Field]?["rule"]?.GetValue<string>() switch

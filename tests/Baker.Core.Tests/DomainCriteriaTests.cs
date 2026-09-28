@@ -28,6 +28,13 @@ public class DomainCriteriaTests
     public void DecodeWork(double width, double height, double fps, double sourceWidth, double sourceHeight, double sourceFps, string expected) =>
         Assert.Equal(expected, WorkloadValue.DecodeWorkStatus(width, height, fps, sourceWidth, sourceHeight, sourceFps));
 
+    // 透明组左右打包 alpha，输出像素数按两倍：1080p 透明输出不比 1440p 源少（4.15M > 3.69M），比 4K 源少。
+    [Theory]
+    [InlineData(1920.0, 1080.0, 60.0, 2560.0, 1440.0, 60.0, "not_reduced")]
+    [InlineData(1920.0, 1080.0, 60.0, 3840.0, 2160.0, 60.0, "potential_gain")]
+    public void PackedAlphaDoublesOutputPixels(double width, double height, double fps, double sourceWidth, double sourceHeight, double sourceFps, string expected) =>
+        Assert.Equal(expected, WorkloadValue.DecodeWorkStatus(width, height, fps, sourceWidth, sourceHeight, sourceFps, packedAlpha: true));
+
     // 分量归属：第二段按无符号十进制解析，解析不出来记 −1。
     [Theory]
     [InlineData("video/12/clip", 12)]
