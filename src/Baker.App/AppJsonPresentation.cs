@@ -47,6 +47,14 @@ internal static class AppJsonPresentation
         bool residualMasked = result["seam_policy"]?.GetValue<string>() == ResidualMasking.SeamPolicy;
         // 源周期路线的非零起点只能是起点偏移（第 0 帧孤立异常，顺延 1 帧，见 SourceStartOffset），并且记录要对得上。
         if (!residualMasked && Number(result["source_start_frame"]) != 0 && !SourceStartOffset.Allows(result)) return false;
+        if (plan["route"]?.GetValue<string>() == "source_video_optimization")
+            return !residualMasked && result["source_video_optimization"]?["status"]?.GetValue<string>() == "validated" &&
+                result["composition_validation"]?["status"]?.GetValue<string>() == "composition_pass" &&
+                plan["source_video_optimization"]?["resources"] is JsonArray { Count: > 0 } planned &&
+                result["source_video_optimization"]?["resources"] is JsonArray completed &&
+                completed.Count == planned.Count && completed.OfType<JsonObject>().All(resource =>
+                    resource["packet_timestamps_match"]?.GetValue<bool>() == true &&
+                    resource["audio_packets_match"]?.GetValue<bool>() == true);
         if (plan["route"]?.GetValue<string>() == "effect_prefix")
             return !residualMasked && EffectPrefixCandidateCanApply(result, plan);
         if (plan["loop"] is not JsonObject loop ||

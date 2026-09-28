@@ -78,6 +78,19 @@ internal static class BakeReportWriter
     private static void StampEncodedWork(JsonObject report)
     {
         if (report["status"]?.GetValue<string>() != "candidate_generated" || report["plan"] is not JsonObject plan) return;
+        if (plan["route"]?.GetValue<string>() == SourceVideoOptimization.Route)
+        {
+            JsonArray resources = report["source_video_optimization"]?["resources"] as JsonArray ?? [];
+            double resourcePixels = 0;
+            foreach (JsonObject resource in resources.OfType<JsonObject>())
+                resourcePixels += BakeValueAssessment.Number(resource["target_width"]) *
+                    BakeValueAssessment.Number(resource["target_height"]) *
+                    BakeValueAssessment.Number(resource["fps_num"]) / BakeValueAssessment.Number(resource["fps_den"]);
+            report["encoded_video_work"] = new JsonObject { ["status"] = "measured_dimensions",
+                ["video_streams"] = resources.Count, ["coded_pixels_per_second"] = resourcePixels,
+                ["scope"] = "Sum across optimized authored resources; the daytime selector may play fewer streams concurrently. Decoder input, not measured power." };
+            return;
+        }
         double fps = BakeValueAssessment.Number(plan["settings"]?["fps_numerator"]) /
             BakeValueAssessment.Number(plan["settings"]?["fps_denominator"]);
         JsonObject[] videos = [.. (report["groups"] as JsonArray ?? []).OfType<JsonObject>()

@@ -64,6 +64,25 @@ public static class TextureContainer
         await input.CopyToAsync(file, cancellationToken);
     }
 
+    /// <summary>Copy the MP4 body of a native TEXB0003/0004 video into a new file for ffprobe/ffmpeg.</summary>
+    internal static async Task<TextureHeader> ExtractVideoAsync(string texPath, string mp4Path, CancellationToken token)
+    {
+        await using var input = File.OpenRead(texPath);
+        byte[] preamble = new byte[100];
+        await input.ReadExactlyAsync(preamble, token);
+        if (!TryReadHeader(preamble, out TextureHeader header) || !header.IsVideo)
+            throw new InvalidDataException("The source texture is not a native video TEX.");
+        int offset = preamble.AsSpan(46, 9).SequenceEqual("TEXB0003\0"u8) ? 87 :
+            preamble.AsSpan(46, 9).SequenceEqual("TEXB0004\0"u8) ? 91 : 0;
+        if (offset == 0 || BinaryPrimitives.ReadInt32LittleEndian(preamble.AsSpan(offset - 4, 4)) != input.Length - offset ||
+            !preamble.AsSpan(offset + 4, 4).SequenceEqual("ftyp"u8))
+            throw new InvalidDataException("The source video TEX has an invalid MP4 body.");
+        input.Position = offset;
+        await using var output = new FileStream(mp4Path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, true);
+        await input.CopyToAsync(output, token);
+        return header;
+    }
+
     /// <summary>TEX 前导里的只读信息：像素格式、标志与存储尺寸。不解码像素。</summary>
     public readonly record struct TextureHeader(int Format, uint Flags, uint Width, uint Height)
     {
