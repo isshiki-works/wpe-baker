@@ -40,28 +40,7 @@ internal static class PlanWriter
         {
             double area = canvasWidth * canvasHeight;
             if (!double.IsFinite(area) || area <= 0) return (null, null, null);
-            double? fraction = null, x = null, y = null;
-            try
-            {
-                var scale = HybridVideoProjection.Vector(Resolve(objects[id]["scale"], properties), (1, 1));
-                (double X, double Y) chainScale = (1, 1);
-                var seen = new HashSet<int> { id };
-                int? ancestor = Int(objects[id]["parent"]);
-                while (ancestor is int parentId && objects.TryGetValue(parentId, out JsonObject? parentObject) && seen.Add(parentId))
-                {
-                    var parentScale = HybridVideoProjection.Vector(Resolve(parentObject["scale"], properties), (1, 1));
-                    chainScale = (chainScale.X * parentScale.X, chainScale.Y * parentScale.Y);
-                    ancestor = Int(parentObject["parent"]);
-                }
-                if (objects[id]["size"] is not null)
-                {
-                    var size = HybridVideoProjection.Vector(Resolve(objects[id]["size"], properties), (0, 0));
-                    double coverage = Math.Abs(size.X * scale.X * chainScale.X * size.Y * scale.Y * chainScale.Y) / area;
-                    // 包围盒伸出画布的部分不可见，占比封顶 1。
-                    if (double.IsFinite(coverage)) fraction = Math.Min(1, coverage);
-                }
-            }
-            catch (InvalidDataException) { }
+            double? fraction = HybridVideoProjection.CanvasFraction(objects, id, node => Resolve(node, properties), canvasWidth, canvasHeight), x = null, y = null;
             try
             {
                 var origin = HybridVideoProjection.Vector(Resolve(objects[id]["origin"], properties), (0, 0));

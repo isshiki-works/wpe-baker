@@ -4,10 +4,11 @@ namespace Baker.Core;
 
 /// <summary>
 /// 烘了也不省电的几类方案一律拒绝，只有命令行 --no-benefit allow（调试、测功耗用）能覆盖。判据：
-/// 静态成品仍带实时层、固定单个时段、视频流超过 <see cref="SavingProvenStreams"/> 路，
+/// 静态成品仍带实时层且证出省不下东西、视频流超过 <see cref="SavingProvenStreams"/> 路，
 /// 以及整层路线里每路视频省下的特效渲染不到 <see cref="MinPassCoveragePerStream"/> 道整屏（贵的层留在实时，烘掉的只是便宜的部分）。
-/// 前两条在分析时就能从 plan 读准（写 blocker）。视频流路数：整层路线要等组编完才知道哪些组是静态纹理，在烘焙时按实际编出的视频流判；
-/// 特效前缀路线每个缓存都编成一路视频，路数就是 effect_prefix_caches 的个数，分析时判。
+/// 都在分析时判（写 blocker）。视频流路数：特效前缀路线每个缓存都编成一路视频，路数就是 effect_prefix_caches 的个数；
+/// 整层路线按已证动态的组数（<see cref="Admission.DynamicGroupCount"/>）判——没证出静态的组数越线时，分析按渲染证据证出哪些组是动态的
+/// （<see cref="SlowClosureProbe.StreamsAsync"/>，限时），证出越线就在分析里把省下渲染最少的越线几组留实时再分析；没证出的不当拒因。烘焙时仍按实际编出的视频流复核，不再退回重烘。
 /// 判据只说"预计"：不是功耗实测，覆盖后照常烘焙。
 /// </summary>
 public static class NoBenefit
@@ -31,7 +32,6 @@ public static class NoBenefit
     public const int SavingProvenStreams = 4;
 
     public const string StaticWithLive = "static_only_with_live_layers";
-    public const string FixedDaytime = "fixed_daytime_state";
     public const string TooManyStreams = "video_streams_over_limit";
 
     /// <summary>
@@ -44,20 +44,19 @@ public static class NoBenefit
     public const string PlainLayersOnly = "only_plain_layers_baked";
     public const string VideoCostOverSaving = "video_cost_over_saved_rendering";
 
-    /// <summary>分析时就能判的条件：只剩一张静态图但仍有实时层；固定在单个时段；特效前缀缓存超过上限；整层路线省下的渲染抵不过视频。</summary>
+    /// <summary>分析时就能判的条件：静态图仍带实时层且证出低价值；视频流超过上限（特效前缀按缓存数、整层按已证动态的组数）；整层路线省下的渲染抵不过视频。</summary>
     public static string[] AnalysisConditions(JsonObject plan)
     {
         var hits = new List<string>();
         double? frames = plan["loop"]?["candidates"] is JsonArray { Count: > 0 } candidates ? StaticOnlyBake.Count(candidates[0]?["frames"]) : null;
-        if (frames is <= 1 && plan["live_layer_ids"] is JsonArray { Count: > 0 })
+        if (frames is <= 1 && plan["live_layer_ids"] is JsonArray { Count: > 0 } &&
+            (BakeValueAssessment.IsLowValue(plan) || PlainOnly(plan, videoOnly: false)))
             hits.Add(StaticWithLive);
-        if (plan["settings"]?["daytime_state"] is JsonValue)
-            hits.Add(FixedDaytime);
-        if (plan["route"]?.GetValue<string>() == "effect_prefix" && plan["effect_prefix_caches"] is JsonArray caches &&
-            TooManyVideoStreams(caches.Count))
+        if (plan["route"]?.GetValue<string>() == "effect_prefix" && plan["effect_prefix_caches"] is JsonArray caches && TooManyVideoStreams(caches.Count) ||
+            TooManyVideoStreams(Admission.DynamicGroupCount(plan)))
             hits.Add(TooManyStreams);
-        // 源里自带视频的方案（decode_work）换的是解码量，不按特效算；static 成品不编视频，不在此列；已证静态的组编成静态纹理，不算路数。
-        if (frames is > 1 && plan["route"]?.GetValue<string>() == "whole_layer" && plan["video_dominant"]?["decode_work"] is null &&
+        // 只有证出解码量能降，或满足原有视频外壳规则时，decode_work 才替代特效覆盖判据；静态成品不编视频。
+        if (frames is > 1 && plan["route"]?.GetValue<string>() == "whole_layer" && !DecodeWorkCounts(plan) &&
             Admission.GroupCount(plan) is > 0 and int streams && RemovedPassCoverage(plan) is double removed &&
             removed < streams * MinPassCoveragePerStream)
             hits.Add(removed == 0 ? PlainLayersOnly : VideoCostOverSaving);
@@ -83,23 +82,13 @@ public static class NoBenefit
     /// </summary>
     internal static async Task<int[]?> PlainGroupRetainRootsAsync(JsonObject plan, CancellationToken token)
     {
-        if (plan["route"]?.GetValue<string>() != "whole_layer" || plan["video_dominant"]?["decode_work"] is not null ||
+        if (plan["route"]?.GetValue<string>() != "whole_layer" || DecodeWorkCounts(plan) ||
             plan["loop"]?["candidates"] is not JsonArray { Count: > 0 } loops || !(StaticOnlyBake.Count(loops[0]?["frames"]) > 1) ||
             plan["video_groups"] is not JsonArray { Count: > 1 } groups ||
             plan["runtime_evidence"]?.GetValue<string>() is not string path || !File.Exists(path)) return null;
-        var drawn = (JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? [])
-            .OfType<JsonObject>().ToLookup(layer => SceneGraph.Int(layer["owner"]));
-        var drawable = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["id"]) is int)
-            .DistinctBy(layer => SceneGraph.Int(layer["id"])).ToDictionary(layer => SceneGraph.Int(layer["id"])!.Value,
-                layer => layer["drawable"]?.GetValue<bool>() != false);
-        static bool Plain(JsonObject layer) => layer["has_effect_layer"]?.GetValue<bool>() != true &&
-            layer["materials"] is JsonArray { Count: 1 } materials && materials[0] is JsonObject source &&
-            source["role"]?.GetValue<string>() == "source" &&
-            source["shader"]?.GetValue<string>() is "genericimage2" or "genericimage3" or "genericimage4" or "flat" &&
-            !(source["active_uniforms"] as JsonArray ?? []).Any(u => u?.GetValue<string>().StartsWith("g_Lights", StringComparison.Ordinal) == true);
-        bool PlainLayer(int id) => drawn[id].All(Plain) && (drawn[id].Any() || !drawable.GetValueOrDefault(id, true));
+        Func<int, bool> plainLayer = PlainLayers(plan, JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? []);
         int[] roots = [.. groups.OfType<JsonObject>().Where(group => group["static_verified"]?.GetValue<bool>() != true &&
-                (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int layer && PlainLayer(layer)))
+                (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int layer && plainLayer(layer)))
             .SelectMany(group => (group["root_ids"] as JsonArray ?? []).Select(SceneGraph.Int)).OfType<int>()];
         bool allPlain = groups.OfType<JsonObject>().All(group => (group["root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int r && roots.Contains(r)));
         return roots.Length == 0 || allPlain ? null : FullFrameDemotion.RetainLiveCommandRoots(plan, roots);
@@ -110,9 +99,34 @@ public static class NoBenefit
     {
         var rule when rule == WorkloadValue.CachedEffectPasses.Rule =>
             BakeValueAssessment.Number(plan[BakeValueAssessment.Field]!["evidence"]?["effect_pass_coverage"]) is double w && double.IsFinite(w) ? w : null,
-        var rule when rule == WorkloadValue.NeedsWorkComparison.Rule => 0,   // 走到这条时被烘层一道特效都没有
+        var rule when rule == WorkloadValue.NeedsWorkComparison.Rule => PlainOnly(plan, videoOnly: true) ? 0 : null,
         _ => null
     };
+
+    internal static bool Plain(JsonObject layer) => layer["has_effect_layer"]?.GetValue<bool>() != true &&
+        layer["materials"] is JsonArray { Count: 1 } materials && materials[0] is JsonObject source &&
+        source["role"]?.GetValue<string>() == "source" &&
+        source["shader"]?.GetValue<string>() is "genericimage2" or "genericimage3" or "genericimage4" or "flat" &&
+        !(source["active_uniforms"] as JsonArray ?? []).Any(u => u?.GetValue<string>().StartsWith("g_Lights", StringComparison.Ordinal) == true);
+
+    internal static Func<int, bool> PlainLayers(JsonObject plan, JsonArray runtimeLayers)
+    {
+        var drawn = runtimeLayers.OfType<JsonObject>().ToLookup(layer => SceneGraph.Int(layer["owner"]));
+        var drawable = (plan["layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["id"]) is int)
+            .DistinctBy(layer => SceneGraph.Int(layer["id"])).ToDictionary(layer => SceneGraph.Int(layer["id"])!.Value,
+                layer => layer["drawable"]?.GetValue<bool>() != false);
+        return id => drawn[id].All(Plain) && (drawn[id].Any() || !drawable.GetValueOrDefault(id, true));
+    }
+
+    private static bool PlainOnly(JsonObject plan, bool videoOnly) =>
+        plan[BakeValueAssessment.Field]?["rule"]?.GetValue<string>() == WorkloadValue.NeedsWorkComparison.Rule &&
+        plan[BakeValueAssessment.Field]?["evidence"]?[BakeValueAssessment.PlainGroupsField] is JsonArray plain &&
+        (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().Where(group => !videoOnly || group["static_verified"]?.GetValue<bool>() != true)
+            .ToArray() is { Length: > 0 } groups &&
+        groups.All(group => plain.Any(id => JsonNode.DeepEquals(id, group["id"])));
+
+    internal static bool DecodeWorkCounts(JsonObject plan) => plan["video_dominant"] is JsonObject dominant && dominant["decode_work"] is JsonObject decode &&
+        (decode["status"]?.GetValue<string>() == WorkloadValue.DecodePotentialGain || dominant["shell_structure"]?.GetValue<bool>() != false);
 
     /// <summary>分析收尾：记下判定；命中且没有覆盖时写 blocker 拒绝（与 TooManyVideoGroups 同一写法）。只差采集能力的方案按假设能采集判。</summary>
     public static void Apply(JsonObject plan, bool allowed)
@@ -134,7 +148,7 @@ public static class NoBenefit
         PlanNarrative.Attach(plan);
     }
 
-    /// <summary>烘焙用：plan 是否已被显式允许生成预计不省电的方案。读 settings 而不是 no_benefit 记录，烘焙期间重分析出的新 plan 也带着它。</summary>
+    /// <summary>plan 是否已被显式允许生成预计不省电的方案。读 settings 而不是 no_benefit 记录，烘焙期间重分析出的新 plan 也带着它。</summary>
     public static bool Allowed(JsonObject plan) => plan["settings"]?["allow_no_benefit"]?.GetValue<bool>() == true;
 
     /// <summary>烘焙时的视频流判据：实际编出的视频流（不含静态纹理）超过上限。</summary>
@@ -150,28 +164,23 @@ public static class NoBenefit
         new Message("bake.no_benefit_streams", [videoLayers, SavingProvenStreams]).Write(report, "reason");
     }
 
-    /// <summary>no_benefit 记录里超路数拒绝后要再留实时的根（<see cref="StreamRetreatRootsAsync"/>）；烘焙外层据此重新分析再烘。</summary>
     public const string RetreatRootsField = "retreat_root_ids";
 
-    /// <summary>
-    /// 烘焙因视频流超过上限被拒时，再退一组留实时：没被证明静态、也没编成静态纹理的视频组里，省下特效渲染
-    /// （<see cref="BakeValueAssessment.PassCoverage"/>）最少的那组的根并入 plan 已留的，返回新的 --retain-live 列表；没有能再留的组时 null。
-    /// 在拒绝处调用：重烘的 plan 的运行时证据在分析刷新目录里，烘完就清掉了。
-    /// </summary>
     internal static async Task<int[]?> StreamRetreatRootsAsync(JsonObject plan, JsonObject report, CancellationToken token)
     {
         if (plan["runtime_evidence"]?.GetValue<string>() is not string path) return null;
         var observed = (JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? [])
             .OfType<JsonObject>().ToLookup(layer => SceneGraph.Int(layer["owner"]));
         var staticIds = (report["groups"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(group => group["storage"]?.GetValue<string>() == "static_rgba").Select(group => group["id"]?.GetValue<string>()).ToHashSet();
+            .Where(group => group["storage"]?.GetValue<string>() == "static_rgba")
+            .Select(group => group["id"]?.GetValue<string>()).ToHashSet();
         int[] kept = [.. (plan["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()];
         int[]? roots = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(group => group["static_verified"]?.GetValue<bool>() != true && !staticIds.Contains(group["id"]?.GetValue<string>()))
             .Select(group => (Roots: (group["root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>().Except(kept).ToArray(),
                 Value: BakeValueAssessment.PassCoverage(plan, (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()
-                    .Distinct().SelectMany(id => observed[id]))))
-            .Where(group => group.Roots.Length > 0).OrderBy(group => group.Value).Select(group => group.Roots).FirstOrDefault();
+                    .Distinct().SelectMany(id => observed[id])))).Where(group => group.Roots.Length > 0)
+            .OrderBy(group => group.Value).Select(group => group.Roots).FirstOrDefault();
         return roots is null ? null : [.. kept, .. roots];
     }
 
@@ -185,8 +194,6 @@ public static class NoBenefit
     {
         (StaticWithLive, false) => "烘完只剩一张静态图，实时图层照旧运行",
         (StaticWithLive, true) => "the result would be a still image with the live layers still running",
-        (FixedDaytime, false) => "成品固定在一个时段，不随时刻切换",
-        (FixedDaytime, true) => "the result is fixed to one time of day and does not follow the clock",
         (TooManyStreams, false) => $"成品需要超过 {SavingProvenStreams} 路视频（路数更多的成品通常比原作更费电）",
         (TooManyStreams, true) => $"the result needs more than {SavingProvenStreams} video streams (results with more streams usually draw more power than the original)",
         (PlainLayersOnly, false) => "带特效的图层都要留在实时，能转成视频的只有普通贴图，省下的渲染抵不过视频解码",

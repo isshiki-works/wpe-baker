@@ -205,6 +205,9 @@ internal static class AppJsonPresentation
         JsonArray? effects = (status == "applied" ? choice["omitted_effects"] : choice["available_effects"]) as JsonArray;
         string[] names = effects?.Select(EffectName).Where(name => name.Length > 0).Distinct().ToArray() ?? [];
         string listed = names.Length == 0 ? (english ? "identified audio effects" : "已识别的音频效果") : string.Join(", ", names);
+        // 待定文案（占位）：交互关时一并去掉的读指针效果，不能说成"音频效果"。
+        if (status == "applied" && choice["trigger"]?.GetValue<string>() == "interaction_off")
+            return english ? $"Interaction off, input-reactive effects omitted: {listed}." : $"交互已关闭，已去掉随鼠标或音乐变化的效果：{listed}。";
         return status == "applied"
             ? (english ? $"Audio effects omitted: {listed}; music-reactive lighting stops." : $"已关闭音频效果：{listed}；灯光不再随音乐变化。")
             : (english ? $"Audio effects can be omitted: {listed}; this stops music-reactive lighting." : $"可关闭音频效果：{listed}；关闭后灯光不再随音乐变化。");
@@ -461,7 +464,8 @@ internal static class AppJsonPresentation
         if (Number(candidate?["seconds"]) is double seconds)
             parts.Add((english ? "loop " : "循环 ") + seconds.ToString("0.###", CultureInfo.InvariantCulture) +
                 (english ? " s" : " 秒"));
-        double maximum = Number(profile["loop_max_seconds"]) ?? 0;
+        // 档位上限内无解时分析自动放宽到 1200 s（loop.maximum_seconds 记实际用的上限）
+        double maximum = Math.Max(Number(profile["loop_max_seconds"]) ?? 0, Number(plan["loop"]?["maximum_seconds"]) ?? 0);
         string maximumOrigin = profile["loop_max_seconds_source"]?.GetValue<string>() == RetimeProfile.FromOverride ? manual : "";
         if (maximum > 0) parts.Add((english ? "at most " : "上限 ") + maximum.ToString("0.###", CultureInfo.InvariantCulture) +
             (english ? " s" : " 秒") + maximumOrigin);

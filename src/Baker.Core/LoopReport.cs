@@ -145,9 +145,15 @@ internal sealed record LoopCandidate(ulong Frames, double Seconds, double TotalR
         if (ShaderSettleSeconds is double settle) { json["source_period_warmup_frames"] = Frames; json["shader_settle_seconds"] = settle; }
         if (LoopLengthSource is not null) json["loop_length_source"] = LoopLengthSource;
         if (SlowComponents.Count > 0)
-            json["slow_components"] = new JsonArray([.. SlowComponents.Select(x => (JsonNode)new JsonObject { ["component"] = x.Id,
-                ["owner_layer_id"] = x.OwnerLayerId, ["effect_index"] = x.EffectIndex, ["pass_index"] = x.PassIndex,
-                ["period_seconds"] = x.PeriodSeconds, ["drift_bound_radians"] = 2 * Math.PI * Seconds / x.PeriodSeconds })]);
+            json["slow_components"] = new JsonArray([.. SlowComponents.Select(x =>
+            {
+                var slow = new JsonObject { ["component"] = x.Id,
+                    ["owner_layer_id"] = x.OwnerLayerId, ["effect_index"] = x.EffectIndex, ["pass_index"] = x.PassIndex,
+                    ["period_seconds"] = x.PeriodSeconds, ["drift_bound_radians"] = 2 * Math.PI * Seconds / x.PeriodSeconds };
+                // 只在能改挂旋钮时写：编排层据此在闭合预检没过时先试改速或冻结，再留实时
+                if (x.Retimable) slow["retimable"] = true;
+                return (JsonNode)slow;
+            })]);
         return json;
     }
 }

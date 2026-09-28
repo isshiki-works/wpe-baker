@@ -33,6 +33,8 @@ internal sealed class Liveness
     /// 按分配单元的闭包（<see cref="Allocation"/>）也带上这些边。
     /// </summary>
     internal JsonObject[] LookupEdges { get; private set; } = [];
+    /// <summary>之前画过网格的读帧缓冲层（实时与否都在内）。没留实时的由构图阶段核对是否与之前的内容同在带场景清屏的第一组。</summary>
+    internal int[] FramebufferReaders { get; private set; } = [];
 
     /// <summary>外部实时输入类原因（指针、音频、时钟、媒体）。结论理由也按它认"由输入驱动"（<see cref="ResidualMasking.LiveInput"/>）。</summary>
     internal static readonly string[] InputReasons = ["pointer_api", "observed_pointer", "particle_pointer_input", "active_shader_pointer_input",
@@ -50,11 +52,27 @@ internal sealed class Liveness
     /// </summary>
     internal Liveness CopyFor(SceneGraph graph)
     {
-        var copy = new Liveness(graph) { InputDrivenCamera = InputDrivenCamera, LookupEdges = [.. LookupEdges.Select(edge => edge.DeepClone().AsObject())] };
+        var copy = new Liveness(graph) { InputDrivenCamera = InputDrivenCamera, LookupEdges = [.. LookupEdges.Select(edge => edge.DeepClone().AsObject())],
+            FramebufferReaders = FramebufferReaders };
         copy.Ids.UnionWith(Ids);
         foreach (var (id, reasons) in Reasons) copy.Reasons[id] = [.. reasons];
         copy.SharedStateForInputReaders.UnionWith(SharedStateForInputReaders);
         return copy;
+    }
+
+    /// <summary>按绘制顺序列出读当前帧缓冲、且之前画过网格的层，连同之前画过网格的层。</summary>
+    internal static List<(int Reader, int[] Before)> FramebufferReads(JsonArray runtimeLayers)
+    {
+        var reads = new List<(int Reader, int[] Before)>();
+        var drawn = new List<int>();
+        foreach (var layer in runtimeLayers.OfType<JsonObject>())
+        {
+            if (drawn.Count > 0 && layer["materials"] is JsonArray materials && materials.OfType<JsonObject>().Any(material =>
+                material["textures"] is JsonArray textures && textures.Any(texture => texture?.GetValue<string>() is "_rt_default" or "_rt_FullFrameBuffer")))
+                reads.Add((layer["owner"]!.GetValue<int>(), [.. drawn]));
+            if (layer["has_mesh"]?.GetValue<bool>() == true) drawn.Add(layer["owner"]!.GetValue<int>());
+        }
+        return reads;
     }
 
     /// <summary>记一条实时原因；场景外的 id 忽略。返回这个对象是否新变成实时。</summary>
@@ -68,8 +86,10 @@ internal sealed class Liveness
 
     /// <param name="severedRead">昼夜状态下摘掉的依赖（已冻结的视频读取），整条不参与闭包。</param>
     /// <param name="severedWrite">昼夜状态下摘掉的可见性写，只不再把目标连坐成实时。</param>
+    /// <param name="retainedReaders">构图阶段查出没落在第一组的读帧缓冲层，按读帧缓冲留实时。</param>
     internal static Liveness Analyze(HybridAnalyzeRequest request, ProjectSource source, SceneGraph graph, RuntimeObservation observation,
-        JsonArray sourceScriptErrors, bool parallax, int? daytimeSelector, Func<JsonObject, bool> severedRead, Func<JsonObject, bool> severedWrite)
+        JsonArray sourceScriptErrors, bool parallax, int? daytimeSelector, Func<JsonObject, bool> severedRead, Func<JsonObject, bool> severedWrite,
+        IReadOnlySet<int>? retainedReaders = null)
     {
         var liveness = new Liveness(graph);
         var objects = graph.Objects;
@@ -97,16 +117,14 @@ internal sealed class Liveness
         // These materials consume the already-composited scene. Their input must remain the
         // current video/live composition; their upstream drawing need not remain expensive.
         // runtime_layers 按场景树深度优先（即绘制顺序）列出：在它之前没有任何网格的读取层只读到场景清屏色，输入是常量，不因此实时。
+        // 之前画过的内容全是静态的也不因此实时：视频组采集只渲染本组的层、第一组带场景清屏，读取层与它之前的内容同在第一组时读到的就是原作画面
+        // （官方文档：合成层像相机一样记录它下面的图层）。"同在第一组"由构图阶段核对（Composer.UnsettledFramebufferReaders），
+        // 不满足的经 retainedReaders 重判为实时。之前有实时层、相机随输入动、或它和之前的层被脚本经 shared / 按名字取图层牵连时仍留实时，
+        // 这些要等依赖闭包之后才知道，所以在下面闭包之后判。
         // _rt_MipMappedFrameBuffer（genericimage REFLECTION）不在此列：官方 WPE 里它是上一帧的整幅合成（清屏色换成品红，最底层反光不变），
         // 属帧反馈，由预热光栅收敛（#142），不因此实时。
-        bool drawnBefore = false;
-        foreach (var layer in observation.RuntimeLayers.OfType<JsonObject>())
-        {
-            if (drawnBefore && layer["materials"] is JsonArray materials && materials.OfType<JsonObject>().Any(material =>
-                material["textures"] is JsonArray textures && textures.Any(texture => texture?.GetValue<string>() is "_rt_default" or "_rt_FullFrameBuffer")))
-                Live(layer["owner"]!.GetValue<int>(), "reads_current_framebuffer");
-            drawnBefore |= layer["has_mesh"]?.GetValue<bool>() == true;
-        }
+        var framebufferReaders = FramebufferReads(observation.RuntimeLayers);
+        liveness.FramebufferReaders = [.. framebufferReaders.Select(reader => reader.Reader).Distinct()];
         foreach (var layer in observation.RuntimeLayers.OfType<JsonObject>())
             if (layer["materials"] is JsonArray materials)
             {
@@ -126,7 +144,6 @@ internal sealed class Liveness
         var sharedWrites = new Dictionary<int, HashSet<string>>();
         HashSet<string> Keys(Dictionary<int, HashSet<string>> map, int id) => map.TryGetValue(id, out var keys) ? keys : map[id] = [];
         var cameraScripts = new HashSet<int>();
-        var lookupScripts = new Dictionary<int, List<(string Code, string[]? Names)>>();
         foreach (var (id, obj) in objects)
         {
             if (obj.ContainsKey("sound")) Live(id, "soundtrack");
@@ -135,7 +152,6 @@ internal sealed class Liveness
             {
                 if (binding["script"] is not JsonValue value || !value.TryGetValue<string>(out string? text)) continue;
                 string code = CapabilityScanText(text);
-                if (code.Contains("getLayer")) (lookupScripts.TryGetValue(id, out var codes) ? codes : lookupScripts[id] = []).Add((code, ScriptTime.LayerNames(binding, obj)));
                 foreach (Match use in Regex.Matches(code, @"\bshared\b(?:\s*\.\s*(\w+)|\s*\[\s*(['""])(\w*)\2\s*\])?"))
                     Keys(sharedReads, id).Add(use.Groups[1].Success ? use.Groups[1].Value : use.Groups[3].Success ? use.Groups[3].Value : "*");
                 // 去掉字符串字面量再认写入：混淆脚本的键是 shared[_0x..('0x5',')#$]')] 这种，引号里可能有方括号。
@@ -161,19 +177,7 @@ internal sealed class Liveness
                 if (ParticleInputAnalysis.HasAudioInput(definition, obj)) Live(id, "particle_audio_input");
             }
         }
-        // 被取的名字：getLayer 的参数按数据流求值（字面量、脚本属性的烘焙值、局部变量、数组元素，见 ScriptTime.LayerNames）；
-        // 有一处求不出具体名字时退回：参数是字面量取这个名字，否则取脚本里引号括起的任何图层名。
-        // 没有 getLayer 的脚本不算（下拉选项的 '1'、'2' 之类会撞上同名图层）。
-        // 写边记在 visible 上：昼夜选择器按名字取受控层的那部分照常由 severedWrite 摘掉。
-        var named = objects.Where(pair => pair.Value["name"] is JsonValue name && name.TryGetValue<string>(out string? text) && text.Length > 0)
-            .ToLookup(pair => pair.Value["name"]!.GetValue<string>(), pair => pair.Key);
-        IEnumerable<string> LookedUp((string Code, string[]? Names) script) => script.Names ?? Quoted(script.Code);
-        IEnumerable<string> Quoted(string code) => Regex.IsMatch(code, @"\bgetLayer\s*\(\s*[^'""`\s)]")
-            ? named.Select(group => group.Key).Where(name => QuotesName(code, name))
-            : Regex.Matches(code, @"\bgetLayer\s*\(\s*(['""`])((?:(?!\1).)*)\1").Select(match => match.Groups[2].Value);
-        liveness.LookupEdges = (from owner in lookupScripts from name in owner.Value.SelectMany(LookedUp).Distinct() from target in named[name]
-            where target != owner.Key
-            select new JsonObject { ["owner"] = owner.Key, ["target"] = target, ["operation"] = "write", ["property"] = "visible" }).ToArray();
+        liveness.LookupEdges = ScriptLookupEdges(objects, out var lookupOwners);
         // 经 shared 全局对象给别的脚本传值的写者：这种读写不进依赖记录，层烘成视频后脚本就不再执行，
         // 读它的实时脚本在成品里拿不到值（例如按 shared 值自检、不对就 destroyLayer 的防篡改脚本会把整个场景删空）。
         // 官方 WPE 里所有脚本都在跑，所以只要别的对象的脚本也用 shared，写者就留实时。
@@ -187,10 +191,26 @@ internal sealed class Liveness
             select new JsonObject { ["owner"] = reader.Key, ["target"] = writer.Key, ["operation"] = "read" }).ToHashSet();
         // Runtime writes by a live controller make their targets live. Reads of a live mutable
         // target make the consuming animation live too. Initialization-only transforms stay snapshots.
-        Close(observation.Dependencies.OfType<JsonObject>().Concat(sharedEdges).Concat(liveness.LookupEdges), liveness.Ids.Contains, liveness.Mark, ownerPerRule: true,
+        void CloseAll() => Close(observation.Dependencies.OfType<JsonObject>().Concat(sharedEdges).Concat(liveness.LookupEdges), liveness.Ids.Contains, liveness.Mark, ownerPerRule: true,
             dependency => sharedEdges.Contains(dependency)
                 ? liveness.Reasons[dependency["target"]!.GetValue<int>()].All(reason => reason == "writes_shared_script_state")
                 : severedRead(dependency), severedWrite);
+        CloseAll();
+        // 读帧缓冲层（见上）：已经实时的照旧记这条原因；新变实时的会让后面的读取层也变，再闭包一轮，直到不再变。
+        // Keep every getLayer controller, including one whose name cannot be resolved to an edge.
+        var scriptLinked = sharedReads.Keys.Concat(sharedWrites.Keys)
+            .Concat(lookupOwners)
+            .Concat(liveness.LookupEdges.Select(edge => edge["target"]!.GetValue<int>())).ToHashSet();
+        bool promoted = true;
+        while (promoted)
+        {
+            promoted = false;
+            foreach (var (reader, before) in framebufferReaders)
+                if (liveness.Ids.Contains(reader) || liveness.InputDrivenCamera || retainedReaders?.Contains(reader) == true ||
+                    scriptLinked.Contains(reader) || before.Any(id => liveness.Ids.Contains(id) || scriptLinked.Contains(id)))
+                    promoted |= liveness.Mark(reader, "reads_current_framebuffer");
+            if (promoted) CloseAll();
+        }
         foreach (int writer in sharedWrites.Keys.Where(id => liveness.Reasons[id].SetEquals(["writes_shared_script_state"])))
         {
             var readers = sharedEdges.Where(edge => edge["target"]!.GetValue<int>() == writer).Select(edge => edge["owner"]!.GetValue<int>()).ToList();
@@ -232,6 +252,36 @@ internal sealed class Liveness
                     changed |= mark(target, "live_runtime_resource_dependency");
             }
         } while (changed);
+    }
+
+    /// <summary>
+    /// 脚本按名字取图层的静态边（见 <see cref="LookupEdges"/>）：owner 是脚本所在对象，target 是取得到的别的层。
+    /// 被取的名字：getLayer 的参数按数据流求值（字面量、脚本属性的烘焙值、局部变量、数组元素，见 ScriptTime.LayerNames）；
+    /// 有一处求不出具体名字时退回：参数是字面量取这个名字，否则取脚本里引号括起的任何图层名。
+    /// 没有 getLayer 的脚本不算（下拉选项的 '1'、'2' 之类会撞上同名图层）。
+    /// 写边记在 visible 上：昼夜选择器按名字取受控层的那部分照常由 severedWrite 摘掉。
+    /// </summary>
+    internal static JsonObject[] ScriptLookupEdges(IReadOnlyDictionary<int, JsonObject> objects)
+        => ScriptLookupEdges(objects, out _);
+
+    private static JsonObject[] ScriptLookupEdges(IReadOnlyDictionary<int, JsonObject> objects, out IReadOnlySet<int> lookupOwners)
+    {
+        var lookupScripts = new Dictionary<int, List<(string Code, string[]? Names)>>();
+        foreach (var (id, obj) in objects)
+            foreach (var binding in SceneAnalyzer.Walk(obj).OfType<JsonObject>())
+                if (binding["script"] is JsonValue value && value.TryGetValue<string>(out string? text) && CapabilityScanText(text) is var code &&
+                    code.Contains("getLayer"))
+                    (lookupScripts.TryGetValue(id, out var codes) ? codes : lookupScripts[id] = []).Add((code, ScriptTime.LayerNames(binding, obj)));
+        lookupOwners = lookupScripts.Keys.ToHashSet();
+        var named = objects.Where(pair => pair.Value["name"] is JsonValue name && name.TryGetValue<string>(out string? text) && text.Length > 0)
+            .ToLookup(pair => pair.Value["name"]!.GetValue<string>(), pair => pair.Key);
+        IEnumerable<string> LookedUp((string Code, string[]? Names) script) => script.Names ?? Quoted(script.Code);
+        IEnumerable<string> Quoted(string code) => Regex.IsMatch(code, @"\bgetLayer\s*\(\s*[^'""`\s)]")
+            ? named.Select(group => group.Key).Where(name => QuotesName(code, name))
+            : Regex.Matches(code, @"\bgetLayer\s*\(\s*(['""`])((?:(?!\1).)*)\1").Select(match => match.Groups[2].Value);
+        return (from owner in lookupScripts from name in owner.Value.SelectMany(LookedUp).Distinct() from target in named[name]
+            where target != owner.Key
+            select new JsonObject { ["owner"] = owner.Key, ["target"] = target, ["operation"] = "write", ["property"] = "visible" }).ToArray();
     }
 
     /// <summary>脚本里有没有引号括起的这个图层名（按名字 getLayer 取层的痕迹）。</summary>

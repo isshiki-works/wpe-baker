@@ -42,19 +42,14 @@ public static class Admission
     }
 
     /// <summary>
-    /// 整层路线的循环准入：未解析分量（去掉说明性条目）逐条判定能否被接缝淡化掩盖，再看可掩盖分量是否都落在视频组里。
+    /// 整层路线的循环准入：未解析分量逐条判定能否被接缝淡化掩盖，再看可掩盖分量是否都落在视频组里。
     /// 效果前缀路线不适用，直接通过（路线只有整层与效果前缀两种）。纯函数：只读 plan、源场景与资源，不改 plan。
     /// </summary>
     public static AdmissionVerdict Evaluate(JsonObject plan, JsonObject scene, Func<string, JsonObject?> readResource)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (plan["route"]?.GetValue<string>() == "effect_prefix") return new(AdmissionRejection.None, null, null, null);
-        // 说明性条目（更小分配取证）不是时间机制，不能当成识别不了的机制去判定。
-        var input = plan.DeepClone().AsObject();
-        if (input["loop"] is JsonObject loop && loop["unresolved"] is JsonArray unresolved)
-            loop["unresolved"] = new JsonArray(unresolved.OfType<JsonObject>()
-                .Where(item => item["kind"]?.GetValue<string>() != ResidualMasking.AllocationFallbackKind).Select(item => item.DeepClone()).ToArray());
-        JsonObject residual = ResidualMasking.Classify(input, scene, readResource);
+        JsonObject residual = ResidualMasking.Classify(plan, scene, readResource);
         bool hasCandidates = plan["loop"]?["candidates"] is JsonArray { Count: > 0 };
         if (residual["status"]?.GetValue<string>() == "rejected")
         {
@@ -132,7 +127,8 @@ public static class Admission
             .FirstOrDefault(candidate => candidate is not null);
     }
 
-    /// <summary>要编码的动态视频数：效果前缀按缓存数，整层按未被静态证明的视频组数。</summary>
+    /// <summary>要编码的动态视频数：效果前缀按缓存数，整层按未被静态证明的视频组数（上界：没证出静态的都算）。
+    /// 越线的拒因不用它，只认已证动态的组（<see cref="DynamicGroupCount"/>）。</summary>
     public static int GroupCount(JsonObject plan) => plan["route"]?.GetValue<string>() == "effect_prefix"
         ? (plan["effect_prefix_caches"] as JsonArray)?.Count ?? 0
         : (plan["video_groups"] as JsonArray)?.OfType<JsonObject>().Count(group => !StaticVerified(group)) ?? 0;
@@ -140,7 +136,12 @@ public static class Admission
     public static int StaticGroupCount(JsonObject plan) => plan["route"]?.GetValue<string>() == "whole_layer"
         ? (plan["video_groups"] as JsonArray)?.OfType<JsonObject>().Count(StaticVerified) ?? 0 : 0;
 
-    private static bool StaticVerified(JsonObject group) => group["static_verified"]?.GetValue<bool>() == true &&
+    /// <summary>已证动态（分析时渲染出过不同的帧，<see cref="SlowClosureProbe.StreamsAsync"/>）的视频组数：路数越线的拒因只认它（下界），没证出的不算。</summary>
+    public static int DynamicGroupCount(JsonObject plan) => plan["route"]?.GetValue<string>() == "whole_layer"
+        ? (plan["video_groups"] as JsonArray)?.OfType<JsonObject>().Count(group => group["dynamic_verified"]?.GetValue<bool>() == true) ?? 0 : 0;
+
+    /// <summary>组已证静态（源与运行时的静止证明）。</summary>
+    internal static bool StaticVerified(JsonObject group) => group["static_verified"]?.GetValue<bool>() == true &&
         group["static_verification"]?["basis"]?.GetValue<string>() == "source_and_runtime_static_proof";
 
     /// <summary>预设级联的接受条件：可烘且动态视频数不超过上限。</summary>

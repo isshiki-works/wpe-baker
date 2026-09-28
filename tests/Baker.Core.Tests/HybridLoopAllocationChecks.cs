@@ -144,12 +144,11 @@ internal static class HybridLoopAllocationChecks
             }
         };
         JsonObject WarmStationary() { var item = StationarityItem(2, true); item["particle_stationarity"]!["warmup_seconds"] = 4.0; return item; }
-        JsonObject Note() => new() { ["kind"] = ResidualMasking.AllocationFallbackKind, ["detail"] = "note" };
-        var maskableReplan = Resolve(Replanned(new JsonArray(WarmStationary(), Note())));
-        JsonObject admitted = Replanned(new JsonArray(WarmStationary(), Note()));
+        var maskableReplan = Resolve(Replanned(new JsonArray(WarmStationary())));
+        JsonObject admitted = Replanned(new JsonArray(WarmStationary()));
         string admissionInput = admitted.ToJsonString();
         check(Admission.Evaluate(admitted, particleScene, _ => null).Residual!["status"]!.GetValue<string>() == "residual_maskable" &&
-            admitted.ToJsonString() == admissionInput, "shared bake admission ignores explanatory notes without changing the analyzed plan");
+            admitted.ToJsonString() == admissionInput, "shared bake admission classifies a stationary particle without changing the analyzed plan");
         check(Admission.Evaluate(Replanned(new JsonArray(StationarityItem(2, false))), particleScene, _ => null)
             .Residual!["status"]!.GetValue<string>() == "rejected", "shared analysis/bake admission rejects a nonstationary particle before rendering");
         var ordered = new JsonArray(new JsonObject { ["frames"] = 36000UL }, new JsonObject { ["frames"] = 18001UL }, new JsonObject { ["frames"] = 18024UL });
@@ -168,9 +167,8 @@ internal static class HybridLoopAllocationChecks
         static JsonObject WithBlocker(JsonObject plan) { PlanBlockers.Set(plan, [new Blocker(BlockerCode.VideoShell)]); return plan; }
         check(!swayReplan.Resolved && swayReplan.Basis == "unavailable" &&
             !Resolve(WithBlocker(Replanned(new JsonArray(WarmStationary())))).Resolved &&
-            !Resolve(Replanned(new JsonArray(WarmStationary()), candidates: 0)).Resolved &&
-            !Resolve(Replanned(new JsonArray(Note()))).Resolved,
-            "a smaller allocation stays unavailable when a displacement component remains, when blockers remain, without candidates, or with only informational notes");
+            !Resolve(Replanned(new JsonArray(WarmStationary()), candidates: 0)).Resolved,
+            "a smaller allocation stays unavailable when a displacement component remains, when blockers remain, or without candidates");
         check(Resolve(Replanned(new JsonArray(), wholeLayer: "available")) is { Resolved: true, Basis: "whole_layer_available" } &&
             Resolve(Replanned(new JsonArray(), route: "effect_prefix")) is { Resolved: true, Basis: "effect_prefix" },
             "whole-layer availability and an effect-prefix route still count as found, as before");
@@ -216,14 +214,13 @@ internal static class HybridLoopAllocationChecks
             ["reason"] = "No analytic loop candidate was found.", ["reason_localized"] = new JsonObject { ["zh"] = "没有候选。" },
             ["plan"] = new JsonObject()
         };
-        markInProgress.Invoke(null, [stale, 2, "loop_candidate_fallback"]);
+        markInProgress.Invoke(null, [stale, "intro_fallback"]);
         check(stale["status"]!.GetValue<string>() == HybridBakeService.InProgressStatus &&
             HybridBakeService.InProgressStatus == "in_progress" &&
-            stale["candidate_attempt"]!.GetValue<int>() == 2 &&
-            stale["in_progress_stage"]!.GetValue<string>() == "loop_candidate_fallback" &&
+            stale["in_progress_stage"]!.GetValue<string>() == "intro_fallback" &&
             stale["loop_validation"]!.GetValue<string>() == "not_performed" &&
             stale["reason"] is null && stale["reason_localized"] is null &&
             !AppJsonPresentation.CandidateCanApply(stale),
-            "a report marked in progress drops the previous verdict, records the candidate index and cannot be applied");
+            "a report marked in progress drops the previous verdict, records the retry stage and cannot be applied");
     }
 }

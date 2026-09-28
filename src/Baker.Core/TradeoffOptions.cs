@@ -48,6 +48,10 @@ public static class TradeoffOptions
         // 用户自己用 --retain-live 要求留着的层（或退回轮逐组试探留的）：清单不劝人关它，按派生处理。
         // 分配回退、慢分量预检这类自动留实时写各自的真实原因码，不借用这一条。
         ["retained_by_cost_trial"] = (Derived, "requested_live"),
+        // 分析的烘焙预检证出烘焙必拒而留实时（AnalysisOrchestrator.ProbeReplan）：读数在 plan 的预检记录里，清单不劝人关它，按派生处理。
+        [AnalysisOrchestrator.SlowClosureNotClosed] = (Derived, "requested_live"),
+        [AnalysisOrchestrator.ResidualRetainReason] = (Derived, "requested_live"),
+        [AnalysisOrchestrator.StreamRetainReason] = (Derived, "requested_live"),
         // 读上一帧的残影/拖影/扩散与一次性入场动画：分析上是结构问题，对用户是"关掉就好"的观感取舍。
         ["reads_current_framebuffer"] = (Tradeoff, "feedback"),
         [SingleShotAllocation.LiveReason] = (Tradeoff, "intro"),
@@ -182,7 +186,7 @@ public static class TradeoffOptions
         // 关掉实时元素只清得掉实时层带来的阻断，照做后结论不变的方案不列；一个都不剩就明说原因（9/26 三张照方案重分析仍是同一条阻断）。
         // 残差不可掩盖：不可掩盖的分量（要烘的层自己的循环没证出来，或没有归属图层）都在方案剔除范围内才可能清掉。
         // 预计不省电：逐条看关掉之后判据还会不会命中（NoBenefit 同一口径）。视频不划算要并成一路整幅、且一路省下的渲染够本；
-        // 静态成品带实时层要一层实时都不剩；固定时段、前缀路数超限关实时层改不了。
+        // 静态成品带实时层要一层实时都不剩；前缀路数超限关实时层改不了。
         JsonArray blocking = plan["loop"]?["residual_masking"]?["blocking_components"] as JsonArray ?? [];
         string?[] noBenefit = [.. (plan[NoBenefit.Field]?["conditions"] as JsonArray ?? []).Select(Text)];
         bool Undeliverable(JsonObject option) =>

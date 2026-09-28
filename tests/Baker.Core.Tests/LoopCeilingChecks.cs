@@ -90,6 +90,19 @@ internal static class LoopCeilingChecks
 
         var loopLengthMaximumOf = typeof(HybridScenePlanner).GetMethod("LoopLengthMaximumOf", BindingFlags.Static | BindingFlags.NonPublic)!;
         var request = new HybridAnalyzeRequest(2, "source", "assets", "out");
+
+        // 300 s 与 450 s 两条轨道各短于 600 s，公共循环 900 s：档位上限内无解时自动按 1200 s 再求一次；用户给的上限不放宽
+        JsonObject Planned(HybridAnalyzeRequest planned) => HybridScenePlanner.AnalyzeLoopForProfile(
+            () => new JsonObject { ["objects"] = new JsonArray { new JsonObject { ["id"] = 1 } } }, source, null,
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray([.. new[] { ("a", 300), ("b", 450) }.Select(track => (JsonNode)new JsonObject {
+                ["source_owner_layer_id"] = 1, ["mechanism"] = "authored_track", ["track_name"] = track.Item1, ["duration_seconds"] = track.Item2,
+                ["playback_rate"] = 1, ["looping"] = true, ["event_driven"] = false, ["confidence"] = "high" })]) },
+            [1], planned, new JsonObject(), null);
+        JsonObject automatic = Planned(request with { Preset = "balanced", FpsNumerator = 60 }),
+            manual = Planned(request with { Preset = "balanced", FpsNumerator = 60, LoopLengthMaximumSeconds = 600 });
+        check(Frames(automatic).FirstOrDefault() == 54000 && automatic["maximum_seconds"]!.GetValue<double>() == 1200 &&
+            Frames(manual).Length == 0 && manual["maximum_seconds"]!.GetValue<double>() == 600,
+            "a preset loop with no candidate under 600 seconds is solved again under 1200 seconds; an explicit --loop-max-seconds is kept");
         check((double)loopLengthMaximumOf.Invoke(null, [request])! == 600 &&
             (double)loopLengthMaximumOf.Invoke(null, [request with { LoopLengthMaximumSeconds = 1800 }])! == 1800,
             "the planner takes the loop ceiling from --loop-max-seconds, defaulting to 600 seconds");

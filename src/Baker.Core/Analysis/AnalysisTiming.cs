@@ -21,13 +21,16 @@ internal sealed class AnalysisTiming
     internal static readonly string[] Paths =
     [
         "a_preset_layout_fallback", "b_interaction_alternative", "c_retreat", "d_plain_groups_live", "e_interaction_off_trial",
-        "h_loop_allocation_replan", "i_interaction_cost_trial", "j_slow_closure"
+        "h_loop_allocation_replan", "i_interaction_cost_trial", "j_slow_closure", "k_probe_replan"
     ];
 
     private static readonly AsyncLocal<AnalysisTiming?> current = new();
     private readonly Dictionary<string, (int Count, double Seconds)> entries = new(StringComparer.Ordinal);
     private readonly Stopwatch total = Stopwatch.StartNew();
     private int subAnalyses;
+
+    /// <summary>这一份开始以来的墙钟。</summary>
+    internal TimeSpan Elapsed => total.Elapsed;
 
     /// <summary>从这里往下（含 await 之后）的子分析与路径都记进新的一份。</summary>
     internal static AnalysisTiming Begin() => current.Value = new();

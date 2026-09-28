@@ -74,8 +74,18 @@ public static class VideoDominance
         if (route != "whole_layer")
             return Record(EffectPrefixStatus, choice, evidence, EffectPrefixReasonEn, EffectPrefixReasonZh);
         var failure = Disqualify(plan, runtime, evidence);
-        if (failure is not null) return Record(NotShellStatus, choice, evidence, failure.Value.En, failure.Value.Zh);
-        JsonObject decodeWork = DecodeWork(plan, runtime);
+        // 源视频解码量与外壳判定无关：被烘组里有源视频就算（外壳判据没全过只说明别的东西也在动，烘掉的只会更多），交给估值与 NoBenefit。
+        // shell_structure 记外壳结构是否成立：NoBenefit 只在解码量能降、或结构成立（原有口径）时按解码量判，不按特效覆盖判
+        JsonObject? decodeWork = DecodeWork(plan, runtime);
+        if (failure is not null)
+        {
+            JsonObject record = Record(NotShellStatus, choice, evidence, failure.Value.En, failure.Value.Zh);
+            record["shell_structure"] = false;
+            if (decodeWork is not null) record["decode_work"] = decodeWork;
+            return record;
+        }
+        // 结构成立时片源层就是唯一不透明组的唯一一层，必在被烘组里
+        decodeWork ??= new JsonObject { ["status"] = "unknown" };
         string decodeStatus = decodeWork["status"]!.GetValue<string>();
         JsonObject result = decodeStatus != WorkloadValue.DecodeNotReduced
             ? Record(NotShellStatus, choice, evidence,
@@ -85,16 +95,25 @@ public static class VideoDominance
             : choice == AllowChoice
             ? Record(OverrideStatus, choice, evidence, OverrideReasonEn, OverrideReasonZh)
             : Record(ShellStatus, choice, evidence, Blocker, BlockerZh);
+        result["shell_structure"] = true;
         result["decode_work"] = decodeWork;
         return result;
     }
 
-    private static JsonObject DecodeWork(JsonObject plan, JsonObject runtime)
+    /// <summary>
+    /// 被烘组里片源（loop.content_cadence 首段）的解码量比较；片源层不在任何视频组里（留实时或没有片源）返回 null。
+    /// 片源所在组透明时颜色与 alpha 左右打包，输出像素数按两倍比。
+    /// </summary>
+    private static JsonObject? DecodeWork(JsonObject plan, JsonObject runtime)
     {
+        int? owner = SceneGraph.Int((plan["loop"]?["content_cadence"]?["clips"] as JsonArray)?.FirstOrDefault()?["owner_layer_id"]);
+        JsonObject? group = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .FirstOrDefault(item => (item["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).Contains(owner) && owner is not null);
+        if (group is null) return null;
+        bool packedAlpha = group["transparent"]?.GetValue<bool>() == true;
         var result = new JsonObject { ["status"] = "unknown" };
         JsonObject workload = HybridVideoWorkload.Summarize(runtime);
         if (!HybridVideoWorkload.Complete(workload)) return result;
-        int? owner = SceneGraph.Int(plan["loop"]?["content_cadence"]?["clips"]?[0]?["owner_layer_id"]);
         var textures = (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(layer => SceneGraph.Int(layer["owner"]) == owner)
             .SelectMany(layer => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>())
@@ -114,7 +133,7 @@ public static class VideoDominance
         double fps = numerator / denominator;
         if (!WorkloadValue.IsComparableOutput(width, height, fps)) return result;
         result["source"] = streams[0].DeepClone();
-        result["output_width"] = width; result["output_height"] = height; result["output_fps"] = fps;
+        result["output_width"] = width; result["output_height"] = height; result["output_fps"] = fps; result["output_packed_alpha"] = packedAlpha;
         string? codec = plan["encoding"]?["codec"]?.GetValue<string>();
         if (codec == "auto_h264_hevc")
         {
@@ -127,7 +146,7 @@ public static class VideoDominance
         result["output_codec"] = codec; result["output_pixel_format"] = pixelFormat;
         if (codec is not ("h264" or "hevc") || codec != streams[0]["codec"]?.GetValue<string>() ||
             string.IsNullOrWhiteSpace(pixelFormat) || pixelFormat != streams[0]["pixel_format"]?.GetValue<string>()) return result;
-        result["status"] = WorkloadValue.DecodeWorkStatus(width, height, fps, sourceWidth, sourceHeight, sourceFps);
+        result["status"] = WorkloadValue.DecodeWorkStatus(width, height, fps, sourceWidth, sourceHeight, sourceFps, packedAlpha);
         return result;
     }
 
@@ -155,11 +174,21 @@ public static class VideoDominance
         if (nonVideo.Length > 0)
             return ("A shader clock or a non-video animation carries part of this period, so per-frame work exists that the bake can move into the video.",
                 "这段周期里有着色器时钟或非视频动画分量，说明存在可以被烘进视频的逐帧计算。");
-        int unresolved = (loop["unresolved"] as JsonArray)?.Count ?? -1;
+        // 只数真正未解析的时间机制：已证平稳随机的粒子项（接缝交叉淡化，particle_stationarity.stationary）与更小分配回退的说明条目不是
+        JsonObject[] items = (loop["unresolved"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? [];
+        int unresolved = loop["unresolved"] is JsonArray ? items.Count(item => item["kind"]?.GetValue<string>() != "loop_allocation_fallback" &&
+            !PlanNarrative.StationaryParticle(item)) : -1;
         evidence.Add("unresolved_components=" + unresolved.ToString(CultureInfo.InvariantCulture));
         if (unresolved != 0)
             return ("The analytic loop parse left unresolved temporal mechanisms, so the clip is not provably the only thing moving.",
                 "解析式循环分析还留着未解析的时间机制，无法证明动的只有那段视频，按保守处理不下结论。");
+        // 平稳随机的粒子层进了视频：烘焙把它的逐帧模拟转进视频，不是只换了一层壳
+        int[] bakedParticles = [.. items.Where(PlanNarrative.StationaryParticle).Select(item => SceneGraph.Int(item["owner_layer_id"])).OfType<int>()
+            .Intersect(Baked(plan)).Order()];
+        evidence.Add("baked_stationary_particle_layers=" + Join(bakedParticles.Select(id => id.ToString(CultureInfo.InvariantCulture))));
+        if (bakedParticles.Length > 0)
+            return ("Stationary-random particle layers are baked with the clip, so the bake moves their per-frame simulation into the video.",
+                "被烘图层里有已证平稳随机的粒子层，烘焙会把它们的逐帧模拟转进视频。");
         int patches = (candidate!["patches"] as JsonArray)?.Count ?? 0;
         evidence.Add("retime_patches=" + patches.ToString(CultureInfo.InvariantCulture));
         if (patches > 0)
@@ -200,9 +229,7 @@ public static class VideoDominance
         if (!WorkloadValue.FillsCentredCanvas(fraction, centreX, centreY))
             return ("The clip layer does not cover the whole centred canvas, so the wallpaper is not that clip played back.",
                 "承载片源的图层没有铺满居中的整幅画布，这张壁纸不只是把那段视频播出来而已。");
-        int[] baked = (plan["layers"] as JsonArray)?.OfType<JsonObject>()
-            .Where(layer => layer["allocation"]?.GetValue<string>() == "video")
-            .Select(layer => SceneGraph.Int(layer["id"])).OfType<int>().ToArray() ?? [];
+        int[] baked = Baked(plan);
         evidence.Add("baked_layers=" + Join(baked.Select(id => id.ToString(CultureInfo.InvariantCulture))));
         if (runtime["runtime_layers"] is not JsonArray observed)
             return ("The runtime observation carries no layer table, so the baked layers' effect passes are unknown.",
@@ -230,6 +257,11 @@ public static class VideoDominance
                 "被烘图层上挂着特效通道，烘焙会把这些逐帧着色器计算转进视频。");
         return null;
     }
+
+    /// <summary>分配进视频的图层（plan.layers[].allocation = video）。</summary>
+    private static int[] Baked(JsonObject plan) => (plan["layers"] as JsonArray)?.OfType<JsonObject>()
+        .Where(layer => layer["allocation"]?.GetValue<string>() == "video")
+        .Select(layer => SceneGraph.Int(layer["id"])).OfType<int>().ToArray() ?? [];
 
     private static string Join(IEnumerable<string> values)
     {

@@ -180,28 +180,6 @@ internal sealed class Verdict
     }
 
     /// <summary>
-    /// plan 里的 loop 与 whole_layer.loop 是两份独立副本，追加理由时必须同时写。条目本身只有 v3 字段；
-    /// <paramref name="localized"/> 是 detail 的 {key, zh, en, params}（例如捕获点探测的理由），与条目同步记进
-    /// <paramref name="notes"/>，写 plan 时渲染进 unresolved_localized。只有英文原文的理由不带。
-    /// 去重看条目与它的文案两样都相同（与原来"整条结构相等"同义）。
-    /// </summary>
-    internal static void AddLoopUnresolved(JsonObject report, string kind, string detail, UnresolvedNotes? notes = null, JsonObject? localized = null)
-    {
-        var entry = new JsonObject { ["kind"] = kind, ["detail"] = detail };
-        bool noted = false;
-        foreach (JsonNode? node in new JsonNode?[] { report["loop"], report["whole_layer"]?["loop"] })
-        {
-            if (node is not JsonObject loop || loop["unresolved"] is not JsonArray unresolved ||
-                Enumerable.Range(0, unresolved.Count).Any(index => JsonNode.DeepEquals(unresolved[index], entry) &&
-                    JsonNode.DeepEquals(notes?.At(loop, index)?.Localized, localized))) continue;
-            unresolved.Add(entry.DeepClone());
-            // 两份副本同下标，文案只记一次。
-            if (!noted) notes?.Add(entry, localized);
-            noted = true;
-        }
-    }
-
-    /// <summary>
     /// 整层不可用、没有阻断、也没有任何未解析机制，但求解器给出了结构化的空候选原因（公共步长上没有闭合帧、不可调速分量的周期超上限、
     /// 单段视频调速落不到整数帧）：这就是分析结论，写成 blocker 讲给用户，而不是留给下面的不变量当内部错误抛出。
     /// 典型路径是 --retain-live（包括补充分析的重查）把所有未解析机制的所有者留成实时，剩下的分量各有周期却凑不出公共循环。
@@ -212,7 +190,7 @@ internal sealed class Verdict
         if (report["route"]?.GetValue<string>() != "whole_layer" || report["whole_layer"] is not JsonObject wholeLayer ||
             wholeLayer["status"]?.GetValue<string>() != "unavailable" || wholeLayer["blockers"] is JsonArray { Count: > 0 } ||
             wholeLayer["loop"] is not JsonObject loop || loop["candidates"] is JsonArray { Count: > 0 } ||
-            (loop["unresolved"] as JsonArray ?? []).OfType<JsonObject>().Any(item => item["kind"]?.GetValue<string>() != ResidualMasking.AllocationFallbackKind) ||
+            loop["unresolved"] is JsonArray { Count: > 0 } ||
             loop["no_candidate_reason"] is not JsonObject reason) return;
         // 内存里刚写的 plan 是 int/double 各自装箱，从磁盘读回的是 JsonElement：两种都要读得出来。
         static double Number(JsonNode? node) => node is not JsonValue value ? 0

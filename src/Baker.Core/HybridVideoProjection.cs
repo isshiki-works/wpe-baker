@@ -66,6 +66,35 @@ internal static class HybridVideoProjection
     internal readonly record struct CaptureViewportExtent(double Width, double Height);
 
     /// <summary>Returns the world-space extent needed to capture one group without parallax edge exposure.</summary>
+    /// <summary>
+    /// 图层包围盒占画布的比例（封顶 1）：尺寸 × 本层与整条父链的缩放之积 ÷ 画布面积；父链旋转不改变面积。
+    /// 没有 size、画布面积不可用、几何解析失败时为 null（未知不是 0）。plan.layers[].canvas_fraction 与循环分析的层价值共用这一份。
+    /// </summary>
+    internal static double? CanvasFraction(IReadOnlyDictionary<int, JsonObject> objects, int id, Func<JsonNode?, JsonNode?> resolve,
+        double canvasWidth, double canvasHeight)
+    {
+        double area = canvasWidth * canvasHeight;
+        if (!double.IsFinite(area) || area <= 0 || !objects.TryGetValue(id, out JsonObject? item) || item["size"] is null) return null;
+        try
+        {
+            var scale = Vector(resolve(item["scale"]), (1, 1));
+            (double X, double Y) chainScale = (1, 1);
+            var seen = new HashSet<int> { id };
+            int? ancestor = SceneGraph.Int(item["parent"]);
+            while (ancestor is int parentId && objects.TryGetValue(parentId, out JsonObject? parentObject) && seen.Add(parentId))
+            {
+                var parentScale = Vector(resolve(parentObject["scale"]), (1, 1));
+                chainScale = (chainScale.X * parentScale.X, chainScale.Y * parentScale.Y);
+                ancestor = SceneGraph.Int(parentObject["parent"]);
+            }
+            var size = Vector(resolve(item["size"]), (0, 0));
+            double coverage = Math.Abs(size.X * scale.X * chainScale.X * size.Y * scale.Y * chainScale.Y) / area;
+            // 包围盒伸出画布的部分不可见，占比封顶 1。
+            return double.IsFinite(coverage) ? Math.Min(1, coverage) : null;
+        }
+        catch (InvalidDataException) { return null; }
+    }
+
     internal static CaptureViewportExtent CaptureViewportForGroup(JsonObject projection, JsonObject group, bool preserveParallax)
     {
         double visibleWidth = projection["visible_width"]!.GetValue<double>() + 2 * CameraShakeMargin(projection);

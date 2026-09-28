@@ -20,10 +20,17 @@ public sealed record HybridBakeRequest(int SchemaVersion, JsonObject Plan, strin
     bool KeepIntermediates = false, double EffectRenderScale = 1.0, bool MatchEffectResolution = false);
 
 /// <summary>Replaces rendered scene groups with videos and retains the original live hierarchies.</summary>
-/// <summary>1 帧、0 个视频层的结果：烘完等于一张静态图加全部实时，不省电，所以不算成品（fix/verdict-flow）。</summary>
+/// <summary>
+/// 1 帧、0 个视频层的结果单列（fix/verdict-flow）：有实时层时烘完等于一张静态图加这些实时层，动画仍实时渲染；
+/// 没有实时层时整张壁纸就是一张静态图，没有实时渲染（<see cref="WithoutLiveLayers"/>，结论按这个事实写）。
+/// </summary>
 public static class StaticOnlyBake
 {
     public const string Status = "static_only";
+
+    /// <summary>只剩静态图、且计划里没有任何实时层：成品里没有实时渲染。</summary>
+    public static bool WithoutLiveLayers(JsonObject report) =>
+        report["status"]?.GetValue<string>() == Status && report["plan"]?["live_layer_ids"] is not JsonArray { Count: > 0 };
 
     /// <summary>这份烘焙结果是不是"只剩一张静态图"：帧数 ≤ 1 且一个视频层都没有。</summary>
     public static bool Is(JsonObject report)
@@ -79,21 +86,20 @@ public sealed class HybridBakeService(NativeTools tools)
         includeSceneClear && !residualGroup && probeFrames == 0;
 
     /// <summary>
-    /// "这一案还没跑完"的状态。硬超时或硬杀之后留在 bake.json 里的就是它：候选回退与分配回退都要跑几十分钟，
-    /// 期间磁盘上不能留着上一段的结论（那会被下游当成最终结果，把整轮工作量记成上一段的零点几秒）。
+    /// "这一案还没跑完"的状态。自动重试（<see cref="RetryReplannedAsync"/>）重新分析期间，以及硬超时或硬杀之后留在 bake.json 里的就是它：
+    /// 重新分析要跑几分钟到几十分钟，期间磁盘上不能留着首次的拒绝结论（那会被下游当成最终结果）。
     /// 不在界面的"已完成"白名单里，也不是任何拒绝状态。
     /// </summary>
     public const string InProgressStatus = "in_progress";
 
     /// <summary>
-    /// 把报告标成"还在跑"，记下这是第几个候选与处在哪一段回退。正常结束时再由各自的出口写最终状态。
+    /// 把报告标成"还在跑"，记下处在哪一段重试。正常结束时再由各自的出口写最终状态。
     /// </summary>
-    internal static void MarkInProgress(JsonObject report, int candidateAttempt, string stage)
+    internal static void MarkInProgress(JsonObject report, string stage)
     {
         ArgumentNullException.ThrowIfNull(report);
         report["status"] = InProgressStatus;
         report["in_progress_stage"] = stage;
-        report["candidate_attempt"] = candidateAttempt;
         report["loop_validation"] = "not_performed";
         report.Remove("reason");
         report.Remove("reason_localized");
@@ -145,31 +151,16 @@ public sealed class HybridBakeService(NativeTools tools)
             return await RetryReplannedAsync(request, result, "intro_fallback", ".intro-first-attempt", new JsonObject(),
                 settings => settings with { SingleShotLive = true }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
-        // 按自身周期 P_g（< L）录的组没过接缝门（含闭合检验）：这一组退回录全局 L 帧，重新分析再烘；别的组不变。
-        // 重烘走 BakeAsync，再有别的缩短组没闭合时逐组接着退回（每轮都比上一轮多一组录 L，组数有限）。
-        if (OwnPeriodSeamFailure(request.Plan, result) is (string groupId, int[] groupLayers, ulong groupFrames))
-        {
-            int[] fullLoop = [.. PlanSettings.Of(request.Plan).FullLoopLayerIds ?? [], .. groupLayers];
-            progress?.Report(new("group_full_loop_fallback", null, new Message("progress.group_full_loop_fallback", [groupId, groupFrames])));
-            return await RetryReplannedAsync(request, result, "group_period_fallback", $".{groupId}-own-period-attempt", new JsonObject {
-                    ["group_id"] = groupId, ["group_frames"] = groupFrames, ["loop_frames"] = result["frames"]?.DeepClone(),
-                    // 原因码：按自身周期录的组被接缝门拒绝；拒绝原文见 first_reason_localized。
-                    ["full_loop_layer_ids"] = JsonSerializer.SerializeToNode(fullLoop), ["reason"] = "own_period_seam_rejected" },
-                settings => settings with { FullLoopLayerIds = fullLoop }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
-        }
-        // 实际编出的视频流超过上限，或慢分量漂移让接缝门拒了某组：省下渲染最少的一组 / 该组点名的慢分量层留实时，重新分析再烘，
-        // 不整张拒。重烘走 BakeAsync，仍被拒就接着退（每轮至少多留一个根，层数有限）；首次产物按留实时的根数分目录存。
-        if (result[NoBenefit.Field]?[NoBenefit.RetreatRootsField] is JsonArray retreatRoots)
+        if (result["status"]?.GetValue<string>() == NoBenefit.RejectedBakeStatus &&
+            result[NoBenefit.Field]?[NoBenefit.RetreatRootsField] is JsonArray { Count: > 0 } retreatRoots)
         {
             int[] fewer = [.. retreatRoots.Select(SceneGraph.Int).OfType<int>()];
-            bool slow = result["status"]?.GetValue<string>() == "candidate_rejected_seam";
-            return await RetryReplannedAsync(request, result, slow ? "slow_component_retreat" : "video_stream_retreat",
-                $".{(slow ? "slow" : "streams")}-{fewer.Length}-attempt", new JsonObject {
-                    ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(fewer),
-                    ["reason"] = slow ? "slow_component_drift_exceeds_seam" : NoBenefit.TooManyStreams },
+            return await RetryReplannedAsync(request, result, "video_stream_retreat", $".streams-{fewer.Length}-attempt", new JsonObject {
+                    ["retain_live_root_ids"] = JsonSerializer.SerializeToNode(fewer), ["reason"] = NoBenefit.TooManyStreams },
                 settings => settings with { RetainLiveRootIds = fewer }, retry => BakeAsync(retry, progress, cancellationToken), progress, cancellationToken);
         }
-        // 残差掩盖组在第一层被拒：组里被掩盖的粒子留实时，重新分析再烘。重烘走 BakeAsync，重烘后新被拒的残差组接着留实时
+        // 残差掩盖组在第一层被拒：组里被掩盖的粒子留实时，重新分析再烘。分析的残差预检只在慢分量预检本来就跑起点搜索时判得了，
+        // 其余作品的粒子残差只有烘焙第一层量得到，这一步接住它们。重烘走 BakeAsync，重烘后新被拒的残差组接着留实时
         // （留实时的层不再进视频，每轮至少多留一层，层数有限）。
         if (ResidualParticleRoots(request.Plan, result) is not (int[] retain, var reasons)) return result;
         progress?.Report(new("retaining_residual_particles", null, new Message("progress.retaining_residual_particles")));
@@ -200,24 +191,13 @@ public sealed class HybridBakeService(NativeTools tools)
         (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["frames"]?.GetValue<ulong>() is ulong frames
             ? (double)frames * PlanSettings.Of(plan).FpsDenominator / PlanSettings.Of(plan).FpsNumerator : null;
 
-    /// <summary>接缝门拒绝的组若按自身周期（plan 候选的 group_frames，比 L 短）录制，返回它的 id、图层与帧数；其余情况 null。</summary>
-    private static (string GroupId, int[] Layers, ulong Frames)? OwnPeriodSeamFailure(JsonObject plan, JsonObject report)
-    {
-        if (report["status"]?.GetValue<string>() != "candidate_rejected_seam" ||
-            (plan["loop"]?["candidates"] as JsonArray)?.FirstOrDefault()?["group_frames"] is not JsonObject own) return null;
-        string? failed = (report["groups"] as JsonArray ?? []).OfType<JsonObject>()
-            .FirstOrDefault(g => g["status"]?.GetValue<string>() == "rejected_seam")?["id"]?.GetValue<string>();
-        if (failed is null || own[failed] is not JsonNode frames) return null;
-        JsonObject group = (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().Single(g => g["id"]?.GetValue<string>() == failed);
-        return (failed, [.. (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()], frames.GetValue<ulong>());
-    }
-
     /// <summary>
     /// 残差掩盖组在全分辨率第一层被拒、失败组里有被掩盖的粒子系统时要留实时的单元：计划原本保留的 ∪ 这些粒子层（Allocation 按所在分配单元保留）；
     /// 其余情况 null。粒子过了平稳随机判据才会被掩盖，但判据只证统计平稳：两次独立实现之差铺满画布时硬切残差照样超限，第一层才是裁决。
-    /// Reasons 是这些粒子层原来的未解析原因码（<see cref="HybridLoopAllocation.RetainReasons"/>），重查时写进它们的 reasons。
+    /// Reasons：plan 已带的原因（<see cref="HybridLoopAllocation.RetainReasons"/>，含这些粒子原来的未解析原因码），粒子再加
+    /// <see cref="AnalysisOrchestrator.ResidualRetainReason"/>（与分析的残差预检同一个码，读数在首次烘焙的 first_rejected_groups 与首次报告里）。
     /// </summary>
-    internal static (int[] Roots, Dictionary<int, string[]>? Reasons)? ResidualParticleRoots(JsonObject plan, JsonObject report)
+    internal static (int[] Roots, Dictionary<int, string[]> Reasons)? ResidualParticleRoots(JsonObject plan, JsonObject report)
     {
         if (report["status"]?.GetValue<string>() != "candidate_rejected_seam" ||
             report["loop_validation"]?.GetValue<string>() != "residual_above_limits") return null;
@@ -228,9 +208,10 @@ public sealed class HybridBakeService(NativeTools tools)
             .Where(item => item["mechanism"]?.GetValue<string>() == "particle_system")
             .Select(item => SceneGraph.Int(item["owner_layer_id"])).OfType<int>().Where(failed.Contains).ToArray();
         if (particles.Length == 0) return null;
+        var reasons = HybridLoopAllocation.RetainReasons(plan, particles) ?? [];
+        foreach (int id in particles) reasons[id] = [.. reasons.GetValueOrDefault(id, []).Append(AnalysisOrchestrator.ResidualRetainReason).Distinct()];
         return ((plan["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()
-            .Concat(particles).Distinct().ToArray(),
-            HybridLoopAllocation.RetainReasons(plan, particles));
+            .Concat(particles).Distinct().ToArray(), reasons);
     }
 
     /// <summary>
@@ -246,6 +227,10 @@ public sealed class HybridBakeService(NativeTools tools)
         record["first_status"] = first["status"]?.DeepClone();
         record["first_reason_localized"] = first["reason_localized"]?.DeepClone();
         record["first_stage_timing"] = first["stage_timing"]?.DeepClone();
+        // 重新分析期间盘上是"还在跑"：中途被杀时不留首次的拒绝结论。
+        JsonObject running = first.DeepClone().AsObject();
+        MarkInProgress(running, key);
+        await BakeReportWriter.SaveAsync(layout.Report, running, null, CancellationToken.None);
         long started = Stopwatch.GetTimestamp();
         HybridAnalyzeRequest settings = replan(PlanSettings.Of(request.Plan) with { OutputDirectory = layout.AnalysisRefresh, RuntimeTraceFile = null });
         JsonObject plan = analyze is null ? await new HybridScenePlanner(tools).AnalyzeAsync(settings, progress, cancellationToken) : await analyze(settings);
@@ -260,6 +245,8 @@ public sealed class HybridBakeService(NativeTools tools)
             return first;
         }
         string firstAttempt = WorkLayout.Vacant(layout.Output + firstAttemptSuffix);
+        // 首次产物挪走时带回首次的结论，"还在跑"只留给重烘自己的报告。
+        await BakeReportWriter.SaveAsync(layout.Report, first, null, CancellationToken.None);
         Directory.Move(layout.Output, firstAttempt);
         // 首次的合成比对产物（ProbeBake 写在输出根旁，被拒时探针与参照也留着）一并挪走，重烘要求它们是新的。
         foreach (string part in new[] { "composition-validation", "composition-probe", "composition-reference" })
@@ -748,16 +735,9 @@ public sealed class HybridBakeService(NativeTools tools)
                         JsonObject? hardwareDecode = null;
                         if (!probe && seam?["status"]?.GetValue<string>() != "observed_seam_pass")
                         {
-                            var slow = GroupVerdicts.SlowDrift(plan, layers);
-                            // 闭合没过、组里有点名的慢分量：这些层退回实时，外层重新分析再烘（同超路数退回）；都已留实时就照旧判不能。
-                            if (GroupVerdicts.RejectSeam(report, id, layers, packedAlpha, encoded, video, lateDependencyValidation, seam, seamPreview,
-                                slow?.Degrees))
-                            {
-                                int[] kept = [.. (plan["settings"]?["retain_live_root_ids"] as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>()];
-                                if (slow!.Value.Owners.Except(kept).Any())
-                                    report[NoBenefit.Field] = new JsonObject { [NoBenefit.RetreatRootsField] =
-                                        JsonSerializer.SerializeToNode<int[]>([.. kept.Union(slow.Value.Owners)]) };
-                            }
+                            // 慢分量闭合已在分析的预检（SlowClosureProbe）里按同一对帧（按自身周期录的组就是第 0 与第 P_g 帧）、同一阈值过过，这里没过就是结论。
+                            GroupVerdicts.RejectSeam(report, id, layers, packedAlpha, encoded, video, lateDependencyValidation, seam, seamPreview,
+                                GroupVerdicts.SlowDrift(plan, layers)?.Degrees);
                             if (sourceHash != await source.SourceHashAsync(cancellationToken, reuse: probe)) throw new IOException("Source changed during generation.");
                             await Save();
                             return report;
@@ -786,7 +766,7 @@ public sealed class HybridBakeService(NativeTools tools)
                             daytimeExport.BindReplacement(layer, originalObjects[daytimeExport.ReplacementTargets[id]], isStatic);
                         replacements[id] = layer;
                         if (isStatic) staticIds.Add(SceneGraph.Id(layer));
-                        // 预计不省电：实际编出的视频流（静态纹理不算）超过上限，默认在这里停，不再编剩下的组。
+                        // 预计不省电：分析未证出的延迟动态组仍可能越线；保留旧回退把最便宜的一组留实时后重分析。
                         if (!probe && !NoBenefit.Allowed(plan) && NoBenefit.TooManyVideoStreams(replacements.Count - staticIds.Count))
                         {
                             NoBenefit.RejectStreams(report, replacements.Count - staticIds.Count);
@@ -871,6 +851,7 @@ public sealed class HybridBakeService(NativeTools tools)
                     : !seamsPass ? "candidate_rejected_seam"
                     : StaticOnlyBake.Is(report) ? StaticOnlyBake.Status : "candidate_generated";
                 report["loop_validation"] = probe ? "not_performed" : seamsPass ? "encoded_seams_passed" : "encoded_seam_failed";
+                if (StaticOnlyBake.WithoutLiveLayers(report)) new Message("bake.static_only_no_live").Write(report, "reason");
                 // 选中候选带缓变分量、接缝门都过了：结论"能"，成品里记漂移上界。
                 if (report["status"]?.GetValue<string>() == "candidate_generated" && GroupVerdicts.SlowDrift(plan)?.Degrees is string drift)
                     new Message("bake.slow_component_drift", [drift]).Write(report, "slow_component_drift");

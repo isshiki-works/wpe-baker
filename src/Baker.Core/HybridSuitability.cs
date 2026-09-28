@@ -82,7 +82,7 @@ internal static class HybridSuitability
         // 慢分量闭合预检没闭合（解析漂移上界 + 接缝读数），把所有者层留实时后整张生成不了：有证明的不能，不是"全部依赖实时输入"。
         // 预检只在能生成的方案上跑，留实时之前能生成，所以生成不了就是这些层闭合不了造成的（AnalysisOrchestrator 在写入读数后重算裁定）。
         if ((noCandidateAtAll || blockers.Length > 0) && (plan["slow_closure_probe"] as JsonArray ?? []).OfType<JsonObject>()
-            .Any(record => !LoopClosureCheck.Allows(record["loop_closure"] as JsonObject)))
+            .Any(record => record["loop_closure"] is JsonObject closure && !LoopClosureCheck.Allows(closure)))
             return Converged(plan, Build("not_suitable", "slow_components_not_closed", "", "", notes), proven: true);
 
         // S1：依赖闭包之后连一个视频组都没有，没有任何东西可烘。
@@ -129,6 +129,10 @@ internal static class HybridSuitability
         if (blockers.Contains(BlockerCode.NoBenefitExpected))
             return Build("not_suitable", NoBenefit.RejectionReason,
                 "Estimated power use is higher than the original wallpaper.", "预计功耗高于原壁纸", notes);
+
+        // 固定在一个时段：做不出按时段切换，是工具的能力缺口，不是省不省电。待定文案。
+        if (blockers.Contains(BlockerCode.FixedDaytimeState))
+            return Build("unsupported_capture", "fixed_daytime_state", "当前方案只生成一个时段，壁纸不会随时间切换。", "This option generates one time period, so the wallpaper won't change with the time of day.", notes);
 
         // 能力缺口是工具的问题，不是壁纸的问题，单独一档。
         if (hdr || perspective)

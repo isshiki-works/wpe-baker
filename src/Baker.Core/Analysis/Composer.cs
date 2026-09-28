@@ -26,6 +26,8 @@ internal sealed class Composer
     internal JsonObject TextEffectChoice { get; }
     /// <summary>可以从视频组尾部剥成实时的根（plan.optional_realtime_roots）。</summary>
     internal int[] OptionalForeground { get; }
+    /// <summary>没留实时、却没和之前画出的内容同在带场景清屏的第一组的读帧缓冲层：要按读帧缓冲留实时重判（<see cref="Liveness.FramebufferReaders"/>）。</summary>
+    internal int[] UnsettledFramebufferReaders { get; }
     /// <summary>
     /// 运行中可能可见：没被省略/剔除、不属于当前昼夜状态以外的受控层，且自己当前可见、可见性绑了脚本或动画、或观测到有脚本写它的 visible，
     /// 父链同样如此。不满足的层 WPE 不画，分组不收它，分析也不为它做任何探测。
@@ -181,6 +183,11 @@ internal sealed class Composer
             }
         }
         Flush();
+        // 没留实时的读帧缓冲层：它之前画出的内容必须全在带场景清屏的第一组里、与它一起采集，读到的才是原作画面；否则按读帧缓冲留实时重判。
+        var first = groups.OfType<JsonObject>().FirstOrDefault(group => group["include_scene_clear"]?.GetValue<bool>() == true);
+        var firstRoots = (first?["root_ids"] as JsonArray ?? []).Select(n => n!.GetValue<int>()).ToHashSet();
+        UnsettledFramebufferReaders = [.. liveness.FramebufferReaders.Where(id => !liveRoots.Contains(allocationOf[id]) && MayBeVisible(id) && Contributes(id) &&
+            !(firstRoots.Contains(allocationOf[id]) && sourceRootOrder.TakeWhile(root => root != allocationOf[id]).All(root => firstRoots.Contains(root) || !VisibleDrawingRoot(root))))];
         OcclusionTradeoff = new Message("reason.foreground_occlusion").Write(new JsonObject {
             ["status"] = inPlace ? (crossed.Count > 0 ? "applied" : "not_needed") : moveOverlays ? "applied" : overlayRoots.Length > 0 ? "available" : "not_needed",
             ["selection"] = request.LiveOverlayPlacement,

@@ -15,8 +15,10 @@ internal static class LoopAnalysis
         CommonLoopPreference preference = CommonLoopPreference.Balanced,
         double? loopLengthMaximumSeconds = null, JsonArray? videoGroups = null,
         IReadOnlyCollection<ulong>? groupClockSteps = null, IReadOnlyCollection<int>? fullLoopLayerIds = null,
-        double? proofRetimePercent = null, bool budgetOnlyRetime = false)
+        double? proofRetimePercent = null, bool budgetOnlyRetime = false, bool retimeSlow = false, bool speedUnmeasured = false)
     {
+        // 速度实测量不到（speedUnmeasured）后与看得出（budgetOnlyRetime）后一样不放开要实测的改速与冻结；区别只在结论：量不到的挡住循环记未收敛
+        bool budgetOnly = budgetOnlyRetime || speedUnmeasured;
         if (fpsNumerator == 0 || fpsDenominator == 0 || !double.IsFinite(maximumRetimePercent) ||
             maximumRetimePercent < 0 || maximumRetimePercent > RetimeProfile.MaximumCommonRetimePercent)
             throw new ArgumentException("FPS must be positive and retiming must be between zero and ten percent.");
@@ -24,10 +26,14 @@ internal static class LoopAnalysis
         double ceilingSeconds = loopLengthMaximumSeconds ?? CommonLoopSolver.DefaultMaximumSeconds;
         CommonLoopRational ceiling = CommonLoopSolver.Ceiling(ceilingSeconds);
         ceilingSeconds = ceiling.ToSeconds();
-        var measured = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, runtime, bakedLayerIds, ceilingSeconds, maximumRetimePercent);
+        // 慢分量改速（retimeSlow）同样要实测，只在整层路线、实测没放行之前打开
+        var measured = ShaderPeriodAnalysis.Analyze(scene, source, assetsDirectory, runtime, bakedLayerIds, ceilingSeconds, maximumRetimePercent,
+            retimeSlow && videoGroups is not null && !budgetOnly);
         // 振幅推不出的慢项先按逐项预算求解；整层路线（有视频组）逐项预算内无解时才放开它们的改速，放不放行由分析收尾实测。
         // 特效前缀路线（videoGroups 为 null）没有实测、实测没放行后的重分析（budgetOnlyRetime），都始终按逐项预算。
-        var shader = measured with { Components = [.. measured.Components.Select(item => item.Component.MaximumRetimePercent == ShaderPeriodAnalysis.MeasuredRetimePercent
+        // 改挂旋钮的慢分量（逐项预算内放不进一圈）一开始就放开，否则逐项预算内必然无解。
+        var shader = measured with { Components = [.. measured.Components.Select(item => item.Component.MaximumRetimePercent == ShaderPeriodAnalysis.MeasuredRetimePercent &&
+            item.Component.BasePeriod!.Seconds / (1 + maximumRetimePercent / 100) <= ceilingSeconds
             ? item with { Component = item.Component with { MaximumRetimePercent = null } } : item)] };
         List<LoopUnresolved> unresolved = [.. shader.Unresolved.Select(item => (LoopUnresolved)new ShaderLoopUnresolved(item))];
         RuntimeTrackReader.AddMaterialClockUnresolved(runtime, bakedLayerIds, unresolved, shader.RuledMaterials);
@@ -40,7 +46,7 @@ internal static class LoopAnalysis
 
         var videoControlScope = VideoControlScope.Resolve(scene, runtime);
         var animation = RuntimeTrackReader.Read(scene, source, assetsDirectory, runtime, bakedLayerIds, unresolved, videoControlScope,
-            new ParticleStationarity.FrameClock(fpsNumerator, fpsDenominator, ceilingSeconds), out var particleVerdicts);
+            new ParticleStationarity.FrameClock(fpsNumerator, fpsDenominator, ceilingSeconds) { FreezeSlowFields = videoGroups is not null && !budgetOnly, FreezeUnmeasured = videoGroups is not null && speedUnmeasured }, out var particleVerdicts);
         // 封顶 + 确定寿命的粒子层：替换周期（整数帧）作为锁定分量交给求解器，与着色器、轨道的锁定分量同等对待。
         CommonLoopComponent[] particleCycles = ParticleCycleComponents(particleVerdicts);
         // 组间共用时钟的组要求 L 是它自身周期的倍数（见 GroupPeriods）：每个这样的周期当一个锁定分量交给求解器，解完再从候选里去掉。
@@ -50,7 +56,7 @@ internal static class LoopAnalysis
             return new CommonLoopComponent($"{GroupStepPrefix}{step}", new CommonLoopPeriod(exact.ToSeconds(), CommonLoopPeriodEvidence.Analytic, exact));
         })];
         LoopSolve solve = SolveLoop(shader, animation, [.. particleCycles, .. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference);
-        if (videoGroups is not null && !budgetOnlyRetime && solve.Result.Candidates.Count == 0 && !measured.Components.SequenceEqual(shader.Components) &&
+        if (videoGroups is not null && !budgetOnly && solve.Result.Candidates.Count == 0 && !measured.Components.SequenceEqual(shader.Components) &&
             SolveLoop(measured, animation, [.. particleCycles, .. scriptCycles, .. stepCycles], fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
                 is { Result.Candidates.Count: > 0 } loose)
             (shader, solve) = (measured, loose);
@@ -98,6 +104,16 @@ internal static class LoopAnalysis
                 {
                     CommonLoopComponent slowest = relaxed.Used.MaxBy(x => x.BasePeriod!.Seconds)!;
                     double longest = slowest.BasePeriod!.Seconds;
+                    // 挡住它的项里有超预算改速实测量不到的：放开改速可能有解，只是没能实测，记未收敛，不记不能
+                    if (speedUnmeasured && measured.Components.FirstOrDefault(c => c.OwnerLayerId == owner &&
+                        c.Component.MaximumRetimePercent == ShaderPeriodAnalysis.MeasuredRetimePercent) is { } unmeasured)
+                    {
+                        unresolved.Add(new ShaderLoopUnresolved(new(owner, unmeasured.EffectIndex, unmeasured.PassIndex,
+                            own.FirstOrDefault(x => (x.EffectIndex, x.PassIndex) == (unmeasured.EffectIndex, unmeasured.PassIndex))?.Resource ?? "",
+                            ShaderTemporalUnresolvedKind.UnsupportedShaderMechanism, $"No loop within the {S(ceilingSeconds)} s limit at the per-term " +
+                            $"retime budget; retiming {unmeasured.Component.Id} beyond it was not measurable by the rendered speed check", "speed_not_measured")));
+                        continue;
+                    }
                     unresolved.Add(new NeverRepeatsUnresolved(owner, ceilingSeconds, $"No loop within the {S(ceilingSeconds)} s limit at a " +
                         $"{S(relaxed.Result.RetimeBudgetPercent)}% retime budget even with every shader period term of this layer retimed independently ({never.Kind}): " +
                         $"slowest component {slowest.Id} has period {S(longest)} s = {S(longest / ceilingSeconds)}x the limit" + (never.FixedPeriodSeconds is double step
@@ -128,7 +144,7 @@ internal static class LoopAnalysis
         if (perGroup is not null) (solve, noLoop) = (perGroup.Value.Solve, false);
         // 各分量都有周期证明、却在上限内凑不出公共循环：点名并不进的所有者层，由分配回退把它们的作者子树留实时，其余照常规划；这些层再逐层查
         int[]? noCommonLoopOwners = noLoop
-            ? NoCommonLoopOwners(shader, animation, particleCycles, scriptCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
+            ? NoCommonLoopOwners(scene, runtime, shader, animation, particleCycles, scriptCycles, unresolved, fpsNumerator, fpsDenominator, maximumRetimePercent, ceiling, preference)
             : null;
         if (noLoop) Prove(noCommonLoopOwners ?? []);
         if (stepCycles.Length > 0)
@@ -263,7 +279,7 @@ internal static class LoopAnalysis
         // 粒子本身定不出循环长度，从 min(60 秒, 上限) 起，必要时在上限内延长到最长寿命之后；接缝由残差交叉淡化处理。
         // 有周期分量时长度由上面的求解器按这些周期的公共闭合给出，这里不插手；位移类等不可掩盖的未解析项不是粒子，不满足前提。
         JsonObject? particleDefault = candidates.Count == 0 && locked.Length == 0
-            ? StationaryParticleDefaultLoop(unresolved, candidates, fpsNumerator, fpsDenominator, ceiling)
+            ? StationaryParticleDefaultLoop(unresolved, candidates, groups, fpsNumerator, fpsDenominator, ceiling)
             : null;
         // 慢分量不进求解器：各候选另写它们在 P 处的漂移上界（烘焙侧接缝门复核）。除慢分量外没有任何周期分量时，
         // P 取求解器的最短循环时长对齐到帧网格（不超过上限），是确定值。
@@ -278,9 +294,16 @@ internal static class LoopAnalysis
                 candidates.Add(new LoopCandidate((ulong)frames, (double)frames * fpsDenominator / fpsNumerator, 0d, [], []) { LoopLengthSource = "slow_components_only" });
             }
             // 漂移上界 2π·P/T 只是上界（单位增益），不是证明：分量实际振幅和画面占比可能让接缝看不出（3653641024 层 17 上界 62°，
-            // 接缝残差 0.0002/255）。这里只点名，所有者层照常进视频；烘焙时接缝门因它拒绝，再把所在层退回实时（HybridBakeService）。
+            // 接缝残差 0.0002/255）。这里只点名，所有者层照常进视频；分析的闭合预检（SlowClosureProbe）没闭合时把所在层留实时，烘焙接缝门照常复核。
             for (int index = 0; index < candidates.Count; ++index) candidates[index] = candidates[index] with { SlowComponents = shader.Slow };
         }
+        // 冻结的 turbulence 共享场（ParticleStationarity.FrozenFields）：视频组里的平稳粒子层各候选都带 timescale → 0 的补丁，
+        // 捕获时改写这层的粒子定义；接缝照常走粒子交叉淡化，冻结看不看得出由分析收尾的速度实测判定。
+        LoopValuePatch[] freezes = [.. particleVerdicts.Where(pair => pair.Value.Stationary && groups.Any(group => group.Layers.Contains(pair.Key)))
+            .OrderBy(pair => pair.Key).SelectMany(pair => pair.Value.FrozenFields.Select(field => new LoopValuePatch(
+                $"particle_field/{pair.Key}/operator{field.Operator}", ParticleFieldPatchKind, pair.Key, -1, -1, "timescale", field.Operator, null, field.Timescale, 0)))];
+        for (int index = 0; freezes.Length > 0 && index < candidates.Count; ++index)
+            candidates[index] = candidates[index] with { Patches = [.. candidates[index].Patches, .. freezes] };
         return new LoopReport(fpsNumerator, fpsDenominator,
             singleVideoRetime ? "single_video_nearest_frame_retime" : retimeClips ? "clip_retime_after_locked_search" : "locked_clip_rates",
             result.Preference, result.RetimeBudgetPercent, result.BudgetRelaxed, result.FixedFrameStep, ceilingSeconds,
@@ -295,6 +318,8 @@ internal static class LoopAnalysis
     }
 
     private const string GroupStepPrefix = "group_period:";
+    /// <summary>冻结 turbulence 共享场的补丁：value_index 是粒子定义里 operator 的下标，捕获时写 timescale（<see cref="HybridLoopService"/>）。</summary>
+    internal const string ParticleFieldPatchKind = "particle_field_speed";
 
     /// <summary>
     /// 各视频组按自己的周期 P_g 录制。分量按 id 里的所有者层归组（所有者不在任何组里的分量算各组共有）。
@@ -304,7 +329,7 @@ internal static class LoopAnalysis
     /// 它整除 L，任一时刻的画面与整组录 L 帧完全相同；有平稳粒子时取满足默认长度下限的最小这种因子。
     /// 分量的时钟被本组独占（别的组没有同一基准周期的分量）时，再用同一个求解器只解本组分量（上限取上面的 P_g）：
     /// 更短就改用它，调速只落在本组的层上，别的组看不到。与别的组共用时钟、自身周期 L/G 却不整除 L 的组，
-    /// 返回 round(L/G) 作为给 L 加的约束（调用方据此重解一次）。含 <paramref name="fullLoopLayerIds"/> 的组录 L（烘焙时自身周期没闭合的退回）。
+    /// 返回 round(L/G) 作为给 L 加的约束（调用方据此重解一次）。含 <paramref name="fullLoopLayerIds"/> 的组录 L（请求显式给出时）。
     /// </summary>
     private static (CommonLoopCandidate Candidate, Dictionary<string, ulong> Frames, List<ulong> ClockSteps) GroupPeriods(
         CommonLoopCandidate candidate, (string Id, HashSet<int> Layers)[] groups, CommonLoopComponent[] used, List<LoopUnresolved> unresolved,
@@ -381,11 +406,13 @@ internal static class LoopAnalysis
     /// 必要时延长到最长寿命之后的首个输出帧，但不超过上限。返回 loop.loop_length_default 记录；有其它未解析项时不追加候选。
     /// 交叉淡化替换要求接缝两侧不共享粒子（循环长度 &gt; 粒子最长寿命，见 design-particle-crossfade §2.3），不满足时不加候选、记原因。
     /// </summary>
-    internal static JsonObject? StationaryParticleDefaultLoop(List<LoopUnresolved> unresolved, List<LoopCandidate> candidates, uint fpsNumerator,
-        uint fpsDenominator, CommonLoopRational ceiling)
+    /// <param name="groups">视频组（id、图层）：每组按组内最长粒子寿命取自己的默认长度（GroupFrames），L 取各组最大；没有组时按全场。</param>
+    internal static JsonObject? StationaryParticleDefaultLoop(List<LoopUnresolved> unresolved, List<LoopCandidate> candidates,
+        IReadOnlyList<(string Id, HashSet<int> Layers)> groups, uint fpsNumerator, uint fpsDenominator, CommonLoopRational ceiling)
     {
         if (unresolved.Count == 0) return null;
         var layerIds = new JsonArray();
+        var lifetimes = new Dictionary<int, double>();
         double longestLifetime = 0, longestWarmup = 0;
         foreach (LoopUnresolved item in unresolved)
         {
@@ -393,10 +420,17 @@ internal static class LoopAnalysis
                 !NonNegative(particle.WarmupSeconds, out double warmup) || !NonNegative(particle.LifetimeMaxSeconds, out double lifetime))
                 return null;
             layerIds.Add(track.OwnerLayerId);
+            lifetimes[track.OwnerLayerId] = Math.Max(lifetimes.GetValueOrDefault(track.OwnerLayerId), lifetime);
             longestLifetime = Math.Max(longestLifetime, lifetime);
             longestWarmup = Math.Max(longestWarmup, warmup);
         }
-        UInt128 frames = DefaultLoopFrames(longestLifetime, fpsNumerator, fpsDenominator, ceiling);
+        // 按组取最长寿命：一个组里的长寿粒子只把这个组拉长，不把别的粒子组一起拖出默认 60 s（1444077782）。
+        var groupFrames = new Dictionary<string, ulong>(StringComparer.Ordinal);
+        foreach (var (id, layers) in groups)
+            if (lifetimes.Where(pair => layers.Contains(pair.Key)).Select(pair => pair.Value).DefaultIfEmpty(-1).Max() is double own and >= 0 &&
+                DefaultLoopFrames(own, fpsNumerator, fpsDenominator, ceiling) is UInt128 ownFrames && ownFrames > 0)
+                groupFrames[id] = (ulong)ownFrames;
+        UInt128 frames = groupFrames.Count > 0 ? groupFrames.Values.Max() : DefaultLoopFrames(longestLifetime, fpsNumerator, fpsDenominator, ceiling);
         if (frames == 0) return null;
         double seconds = (double)frames * fpsDenominator / fpsNumerator;
         var record = new JsonObject {
@@ -419,7 +453,10 @@ internal static class LoopAnalysis
         record["status"] = "applied";
         record["summary_zh"] = MessageCatalog.Get("summary.particle_default_loop", MessageCatalog.Chinese, secondsText);
         record["summary_en"] = MessageCatalog.Get("summary.particle_default_loop", MessageCatalog.English, secondsText);
-        candidates.Add(new LoopCandidate((ulong)frames, seconds, 0d, [], []) { LoopLengthSource = "stationary_particle_default" });
+        // 比 L 短的组按自己的长度录（组 id → 帧数），其余组录 L
+        Dictionary<string, ulong> shorter = groupFrames.Where(pair => pair.Value < (ulong)frames).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        candidates.Add(new LoopCandidate((ulong)frames, seconds, 0d, [], []) { LoopLengthSource = "stationary_particle_default",
+            GroupFrames = shorter.Count > 0 ? shorter : null });
         return record;
     }
 
@@ -526,15 +563,24 @@ internal static class LoopAnalysis
     /// 按所有者层贪心并入（分量多的先并，同数按出现顺序），并入后上限内无解的层记下返回。已有未解析项的所有者本来就留实时，不参与。
     /// 没有并不进的层时返回 null；一层都并不进时全部点名，剩下的内容值不值得烘由分配回退重查判定。
     /// </summary>
-    private static int[]? NoCommonLoopOwners(ShaderPeriodAnalysisResult shader, IReadOnlyList<RuntimeTrack> animation,
+    private static int[]? NoCommonLoopOwners(JsonObject scene, JsonObject runtime, ShaderPeriodAnalysisResult shader, IReadOnlyList<RuntimeTrack> animation,
         CommonLoopComponent[] particleCycles, CommonLoopComponent[] scriptCycles, List<LoopUnresolved> unresolved, uint fpsNumerator, uint fpsDenominator,
         double maximumRetimePercent, CommonLoopRational ceiling, CommonLoopPreference preference)
     {
         // 脚本周期分量的 id 是 script/<所有者层>/<绑定>（ScriptComponents），和着色器、动画轨道一样按所有者层并入。
         static int ScriptOwner(CommonLoopComponent x) => int.Parse(x.Id.Split('/')[1], CultureInfo.InvariantCulture);
         var live = unresolved.Select(item => SceneGraph.Int(item.ToJson()["owner_layer_id"])).OfType<int>().ToHashSet();
+        // 按烘进视频能省下的特效渲染并入（与 bake_value 同口径：画布占比 × 特效 pass 数，占比算不出按整屏），凑不进的就是最不值钱的那些层；
+        // 分量个数只作并列次序。原来只按分量个数排，3644280276 为两块 0.7% 画布的小层丢了占 57% 画布的天空。
+        var canvas = HybridVideoProjection.AuthoredCanvas(scene, new JsonObject());
+        var objects = (scene["objects"] as JsonArray ?? []).OfType<JsonObject>().Where(o => SceneGraph.Int(o["id"]) is int)
+            .GroupBy(o => SceneGraph.Int(o["id"])!.Value).ToDictionary(g => g.Key, g => g.First());
+        double Value(int owner) => (HybridVideoProjection.CanvasFraction(objects, owner, node => node, canvas.Width ?? 1920, canvas.Height ?? 1080) ?? 1) *
+            (runtime["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["owner"]) == owner)
+                .SelectMany(layer => layer["materials"] as JsonArray ?? []).OfType<JsonObject>().Count(material => material["role"]?.GetValue<string>() == "effect");
         int[] owners = [.. shader.Components.Select(x => x.OwnerLayerId).Concat(animation.Select(x => x.OwnerLayerId)).Concat(scriptCycles.Select(ScriptOwner))
-            .Where(id => !live.Contains(id)).GroupBy(id => id).OrderByDescending(group => group.Count()).Select(group => group.Key)];
+            .Where(id => !live.Contains(id)).GroupBy(id => id).OrderByDescending(group => Value(group.Key)).ThenByDescending(group => group.Count())
+            .Select(group => group.Key)];
         var kept = new HashSet<int>();
         var dropped = new List<int>();
         foreach (int owner in owners)

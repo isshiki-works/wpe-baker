@@ -72,6 +72,8 @@ public class HopelessRerunTests
                 {
                     plan["loop"]!["candidates"]![0]!["frames"] = 1;
                     plan["live_layer_ids"] = new JsonArray(5);
+                    // 静态成品带实时层要有省不下东西的证明才命中（bake_value 判低价值）。
+                    plan["bake_value"] = new JsonObject { ["status"] = WorkloadValue.LowValueStatus, ["rule"] = WorkloadValue.OneStillTextureUnchanged.Rule };
                     Block(plan);
                 }
                 return Task.FromResult(plan);

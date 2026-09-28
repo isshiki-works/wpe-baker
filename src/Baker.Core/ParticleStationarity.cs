@@ -43,7 +43,13 @@ internal static class ParticleStationarity
     /// 锁定周期超过它就算不出可用循环，维持拒绝。不给时按 --loop-max-seconds 的默认值。
     /// </summary>
     internal readonly record struct FrameClock(uint FpsNumerator, uint FpsDenominator,
-        double LoopCeilingSeconds = CommonLoopSolver.DefaultLoopLengthMaximumSeconds);
+        double LoopCeilingSeconds = CommonLoopSolver.DefaultLoopLengthMaximumSeconds)
+    {
+        /// <summary>整层路线、速度实测没放行之前为 true：周期是上限 2 倍以上的 turbulence 共享场冻结（见 <see cref="Result.FrozenFields"/>）。</summary>
+        internal bool FreezeSlowFields { get; init; }
+        /// <summary>冻结的速度实测量不到后的重分析为 true：本该冻结的场不冻结，也不判不能，记未收敛。</summary>
+        internal bool FreezeUnmeasured { get; init; }
+    }
 
     /// <summary>
     /// 封顶 + 确定寿命的粒子层按周期锁定：计数状态从 CycleStartFrame 起严格以 PeriodFrames 帧为周期，画面是按该周期的统计平稳过程。
@@ -82,6 +88,9 @@ internal static class ParticleStationarity
     internal sealed record Result(bool Stationary, IReadOnlyList<Failure> Failures, double? WarmupSeconds, double? LifetimeMaxSeconds,
         double? EmitIntervalSeconds = null, bool Capped = false, int WarmupGenerations = 1, CyclostationaryLock? Lock = null)
     {
+        /// <summary>捕获时冻结的 turbulence 算子（下标、原 timescale）：场静止后粒子是平稳的，判据按冻结后的场算；放不放行由速度实测。</summary>
+        internal IReadOnlyList<(int Operator, double Timescale)> FrozenFields { get; init; } = [];
+
         /// <summary>写进 plan.loop.unresolved[].particle_stationarity 的结构化字段，下游只读这里，不匹配文案。</summary>
         internal JsonObject ToJson()
         {
@@ -106,6 +115,7 @@ internal static class ParticleStationarity
                     "replacement period and warms up to its cycle start frame"
             };
             if (Lock is not null) json["cyclostationary_lock"] = Lock.ToJson();
+            if (FrozenFields.Count > 0) json["frozen_turbulence_operators"] = new JsonArray([.. FrozenFields.Select(x => (JsonNode)x.Operator)]);
             // 任一条已证明上限内不会重复，这一层就是"不能"（ResidualMasking 据此收敛），其余条件说不说得清都不改变结论。
             if (Failures.Any(failure => failure.Cannot))
             {
@@ -471,12 +481,20 @@ internal static class ParticleStationarity
         foreach (CyclostationaryLock child in childLocks) Lock(child, clock!.Value);
         // C3 turbulence 共享场以 256 / (2 × scale × timescale) 系统秒为周期平移（÷ rate 覆盖是真实秒），粒子是按场周期的周期平稳过程：
         // 周期超过循环上限就是上限内不会重复，判"不能"并写出周期；否则循环长度锁到场周期的整数倍（与封顶锁定同一机制，起点在预热之后）。
+        // 场周期是上限 2 倍以上时，任何 L ≤ 上限里离原速最近的圈数都是 0：整层路线把它当慢分量冻结（捕获时 timescale 取 0，场静止），
+        // 放不放行由分析收尾的速度实测（SlowClosureProbe.SpeedAsync），没放行时重分析（FreezeSlowFields 关）照旧判不能。
         double ceiling = clock?.LoopCeilingSeconds ?? CommonLoopSolver.DefaultLoopLengthMaximumSeconds;
+        var frozen = new List<(int Operator, double Timescale)>();
         foreach ((string node, JsonObject field) in fields)
         {
             double? period = field["field_period_system_seconds"]?.GetValue<double>() / rateScale;
             if (period is double real) field["field_period_seconds"] = ParticleCriteria.Round(real);
-            if (period > ceiling) failures.Add(new("C3", "turbulence_shared_field", node, field.ToJsonString(), Cannot: true));
+            // 子系统的定义是另一份资源，捕获只改写本层的定义，子系统里的场不冻结
+            if (period >= 2 * ceiling && clock is { FreezeSlowFields: true } && childType is null)
+                frozen.Add((int.Parse(node["operator[".Length..^1], CultureInfo.InvariantCulture), field["timescale"]!.GetValue<double>()));
+            else if (period >= 2 * ceiling && clock is { FreezeUnmeasured: true } && childType is null)
+                failures.Add(new("C3", "turbulence_freeze_not_measured", node, field.ToJsonString()));
+            else if (period > ceiling) failures.Add(new("C3", "turbulence_shared_field", node, field.ToJsonString(), Cannot: true));
             else if (period is double locked && clock is FrameClock frame && warmup is double settled)
             {
                 ulong frames = (ulong)Math.Round(locked * frame.FpsNumerator / frame.FpsDenominator);
@@ -495,6 +513,10 @@ internal static class ParticleStationarity
                     new JsonObject { ["object"] = id, ["traces"] = traces }, null), frame);
             else Fail("C8", "property_animated", node, binding);
         double? emitInterval = emissionRate > 0 ? ParticleCriteria.Round(1 / (emissionRate * rateScale)) : null;
+        // 交叉淡化的前提：粒子寿命短于循环长度（接缝两侧的粒子才各自来自同一平稳分布）。寿命不短于上限时任何循环长度都做不到，
+        // 不满足淡化前提（锁定到精确周期的粒子不靠淡化，不受这条约束）；它的层照常由分配回退第一轮留实时，不拖累别的粒子组。
+        if (cycle is null && lifetime is double life && life >= ceiling)
+            failures.Add(new("C2", "lifetime_not_shorter_than_loop_ceiling", "lifetime", life.ToString("R", CultureInfo.InvariantCulture)));
         // 锁定周期只在其余条件全部满足时成立；预热换成进入周期态的帧（starttime 预跑已在推导里），按微秒向上取，
         // 保证 ⌈预热秒 × fps⌉ 不少于起点帧。连续公式的值留着，退回拒绝时恢复。
         if (failures.Count == 0 && cycle is not null)
@@ -503,7 +525,7 @@ internal static class ParticleStationarity
             warmup = ParticleCriteria.CycleWarmupSeconds(cycle.CycleStartFrame, cycle.FpsNumerator, cycle.FpsDenominator) + childTail;
         }
         else cycle = null;
-        return new(failures.Count == 0, failures, warmup, lifetime, emitInterval, capped, generations, cycle);
+        return new(failures.Count == 0, failures, warmup, lifetime, emitInterval, capped, generations, cycle) { FrozenFields = frozen };
     }
 
     /// <summary>

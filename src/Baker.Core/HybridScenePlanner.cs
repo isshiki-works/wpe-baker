@@ -42,12 +42,21 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     // 入场切换的退回（旧行为）：加载即播的单次轨所属层也判实时，bake 不做入场切换。分析引出新 blocker 或合成门拒绝切换时自动打开；
     // 默认关时不写进 settings，plan 逐字不变。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SingleShotLive = false,
-    // 组周期的退回：含这些图层的视频组不按自身周期缩短，录全局 L 帧（LoopAnalysis.GroupPeriods）。按自身周期录的组在接缝门上
-    // 没闭合时由烘焙自动加上；默认空时不写进 settings，plan 逐字不变。
+    // 组周期的退回：含这些图层的视频组不按自身周期缩短，录全局 L 帧（LoopAnalysis.GroupPeriods）。只在请求显式给出时生效：
+    // 烘焙的自身周期退回已删（没有缓变分量的组按解析周期精确闭合，有的由分析的慢分量预检在 P_g 上判）；默认空时不写进 settings，plan 逐字不变。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int[]? FullLoopLayerIds = null,
     // 慢项实测的退回：振幅推不出的慢项一律按逐项预算（不放开改速，见 LoopAnalysis）。分析收尾的速度实测（SlowClosureProbe.SpeedAsync）
     // 没放行（看得出、量不到或渲染失败）时自动打开，随 settings 走，烘焙前刷新循环与分析同一口径；默认关时不写进 settings，plan 逐字不变。
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool BudgetOnlyRetime = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool BudgetOnlyRetime = false,
+    // 按读帧缓冲留实时的读取层（放宽前的判定）：之前全是静态内容的读取层默认不留实时，分析编排发现放宽让结果变差时点名这些层重查。
+    // 在实时判定阶段生效（与 --retain-live 不同，不占用分配回退）；随 settings 走，默认空时不写进 settings，plan 逐字不变。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int[]? LiveFramebufferReaderIds = null,
+    // 慢分量改速：带可用旋钮的慢分量（loop.candidates[].slow_components[].retimable）改挂旋钮改速或冻结，放不放行由速度实测。
+    // 慢分量闭合预检没过时自动打开，随 settings 走；BudgetOnlyRetime 打开后不再生效。默认关时不写进 settings，plan 逐字不变。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool RetimeSlowComponents = false,
+    // 速度实测量不到（not_measured）后的重分析：求解同 BudgetOnlyRetime（不放开要实测的改速与冻结），但这些项挡住循环时记未收敛、不记不能。
+    // 只由编排层在测速量不到时打开，随 settings 走；默认关时不写进 settings，plan 逐字不变。
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SpeedUnmeasured = false);
 
 /// <summary>Plans video replacement from source hierarchy and observed input dependencies.</summary>
 /// <param name="display">未指定宽高时用来铺满的屏幕尺寸；省略时读本机主显示器物理分辨率，测试可注入固定值。</param>
@@ -95,26 +104,43 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // 这样同一组图层换了布局或别的组变了，也能命中。
             JsonArray? groupLayers = videoGroups is null ? null : new JsonArray([.. videoGroups.OfType<JsonObject>().Select(group =>
                 (JsonNode)new JsonObject { ["id"] = group["id"]?.DeepClone(), ["layer_ids"] = group["layer_ids"]?.DeepClone() })]);
-            string key = "loop-v12-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, groupLayers,
+            string key = "loop-v15-" + AnalysisCache.Key(input, runtime, bakedLayerIds, assets, groupLayers,
                 request.FpsNumerator, request.FpsDenominator, profile, request.LoopPreference,
-                request.FullLoopLayerIds, request.BudgetOnlyRetime);
+                request.FullLoopLayerIds, request.BudgetOnlyRetime, request.RetimeSlowComponents, request.SpeedUnmeasured);
+            double ceiling = LoopLengthMaximumOf(request);
             LoopReport Analyze(JsonObject scene, IReadOnlyCollection<ulong>? steps) => LoopAnalysis.Analyze(
                 scene, source, assets, runtime, bakedLayerIds,
                 request.FpsNumerator, request.FpsDenominator, profile.CommonRetimePercent, LoopPreferenceOf(request.LoopPreference),
-                LoopLengthMaximumOf(request), videoGroups, steps, request.FullLoopLayerIds,
+                ceiling, videoGroups, steps, request.FullLoopLayerIds,
                 // 逐层"不能"按档位回退链能走到的最大预算证明（SearchSpace：没给 --retime-budget 时一直退到效率档）
                 request.RetimeBudgetPercent is null && request.Preset is not null ? Math.Max(profile.CommonRetimePercent, RetimeProfile.MaximumBudgetPercent) : null,
-                request.BudgetOnlyRetime);
-            return UnresolvedNotes.Unpack(AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
+                request.BudgetOnlyRetime, request.RetimeSlowComponents, request.SpeedUnmeasured);
+            JsonObject packed = AnalysisCache.Get(request.AnalysisCacheDirectory, key, () =>
             {
                 LoopReport loop = Analyze(input, null);
+                // 档位上限（600 s）内凑不出公共循环：判"周期超上限"之前，按兼容档的上限（1200 s）、同一预算再求一次，有解才用
+                // （视频变长，画面不变）。用户给了 --loop-max-seconds 时不动；plan 的 loop.maximum_seconds 记实际用的上限。
+                double wider = RetimeProfile.PresetLoopMaximumSeconds(RetimeProfile.Compatibility);
+                if (loop.Candidates.Count == 0 && profile.LoopMaximumSource == RetimeProfile.FromPreset && ceiling < wider &&
+                    loop.NoCandidateReason?.Reason.Kind is CommonLoopNoCandidateKind.NoFrameOnFixedStepSatisfiesComponents or CommonLoopNoCandidateKind.FixedPeriodExceedsCeiling)
+                {
+                    (double narrow, ceiling) = (ceiling, wider);
+                    if (Analyze(scene(), null) is { Candidates.Count: > 0 } relaxed) loop = relaxed;
+                    else ceiling = narrow;
+                }
                 // 与别的组共用时钟的组，自身周期不整除 L 时给 L 加"是它的倍数"的约束重解一次；
                 // 只在重解后候选与未解析项都不变差时采用，否则保持原解（这些组录 L 帧）。
                 if (loop.GroupClockSteps.Count > 0 && Analyze(scene(), loop.GroupClockSteps) is { Candidates.Count: > 0 } stepped &&
                     stepped.Unresolved.Count == loop.Unresolved.Count)
                     loop = stepped;
                 return UnresolvedNotes.Pack(loop);
-            }));
+            });
+            // 每条未解析项记下能否被接缝淡化掩盖（与生成准入 Admission 同一判定 ResidualMasking）：循环完整不完整
+            // （Routes.WholeLoopComplete）按它判，已证随机的精灵与平稳随机粒子不再让整层路线记成没解完。拆包前写，文案记录与条目逐字对得上。
+            Func<string, JsonObject?> resources = ResidualMasking.ResourceReader(source, assets);
+            foreach (JsonObject item in (packed["loop"]?["unresolved"] as JsonArray ?? []).OfType<JsonObject>())
+                item["maskable"] = ResidualMasking.Maskable(item, input, resources);
+            return UnresolvedNotes.Unpack(packed);
         }
         return Solve();
     }
@@ -248,16 +274,25 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             SceneGraph.Int(dependency["target"]) is int target && daytimeControlled.Contains(target);
         var scriptFaults = observation.ScriptFaults(request.RuntimeTraceFile is not null);
         bool parallax = SceneGraph.Resolve(scene["general"]?["cameraparallax"], properties)?.ToJsonString() == "true";
-        Liveness AnalyzeLiveness() => Liveness.Analyze(request, source, graph, observation, scriptFaults.Errors, parallax, daytimeSelector,
-            FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
-        // 实时判定只取决于源、观测与到这里为止读过的请求字段（见 LivenessKey），退回、档位、布局、留实时集合各轮都相同。
-        var liveness = memo is null ? AnalyzeLiveness() : memo.Liveness(LivenessKey(request, sourceHash), graph, AnalyzeLiveness);
         var projection = HybridVideoProjection.Describe(scene, properties, request.Width, request.Height, observation.Trace["runtime_projection"] as JsonObject);
-        timing.Mark("A6_liveness_projection");
-        var allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax, projection, FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
-        timing.Mark("A7_allocation");
-        var composer = new Composer(request, source, scene, properties, graph, observation, liveness, allocation, parallax,
-            daytimeControlled, daytimeVisible);
+        // 读帧缓冲层没和之前的内容同在第一组时留实时重判；每轮只增不减，最多读帧缓冲层个数轮。计时按段累加，重判各轮都记进同一段。
+        var retainedReaders = new HashSet<int>(request.LiveFramebufferReaderIds ?? []);
+        Liveness liveness; Allocation allocation; Composer composer;
+        do
+        {
+            int[] readers = [.. retainedReaders.Order()];
+            Liveness AnalyzeLiveness() => Liveness.Analyze(request, source, graph, observation, scriptFaults.Errors, parallax, daytimeSelector,
+                FrozenDaytimeVideoRead, DaytimeVisibilityWrite, readers.ToHashSet());
+            // 实时判定只取决于源、观测与到这里为止读过的请求字段（见 LivenessKey），退回、档位、布局、留实时集合各轮都相同；
+            // 构图阶段要求重判的读帧缓冲层并进键（没有时键与原来相同）。
+            liveness = memo is null ? AnalyzeLiveness() : memo.Liveness(LivenessKey(request, sourceHash) +
+                (readers.Length > 0 ? "|framebuffer-readers:" + string.Join(",", readers) : ""), graph, AnalyzeLiveness);
+            timing.Mark("A6_liveness_projection");
+            allocation = Allocation.Plan(graph, observation, liveness, request, properties, parallax, projection, FrozenDaytimeVideoRead, DaytimeVisibilityWrite);
+            timing.Mark("A7_allocation");
+            composer = new Composer(request, source, scene, properties, graph, observation, liveness, allocation, parallax,
+                daytimeControlled, daytimeVisible);
+        } while (composer.UnsettledFramebufferReaders.Length > 0 && retainedReaders.Add(composer.UnsettledFramebufferReaders[0]));
         // A later parallax/occlusion group can stay live in its original place. Compare that
         // complete suffix before concluding that the user needs multiple transparent videos.
         // 初判（原 R 段）：拒因在内存里按 Blocker 持有，写 plan 时渲染一次。
@@ -298,6 +333,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 // 捕获点落在共用缓冲上的前缀录到的是整幅场景，这个候选不生成。
                 if (await captureProbes.TargetAsync(cache, cancellationToken) is { } probe &&
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus) continue;
+                // 完整区间复核（与烘焙同一份捕获副本、同一判据）：短观测看不到的晚到依赖推翻这条前缀时不采用，退一级再试，
+                // 分析结论与烘焙一致，不再判"能"而烘焙 candidate_rejected_late_dependency。
+                if (await captureProbes.CompleteCaptureAsync(cache, observation.Trace, projection, cancellationToken) is { } complete &&
+                    complete["status"]?.GetValue<string>() != PrefixCaptureProbes.CompleteCapturePassedStatus) continue;
                 accepted.Add(cache.DeepClone());
                 settled.Add(ownerId);
             }
@@ -327,18 +366,9 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         // 不成立时拒因写回。路线到这里已定稿，后面的更小分配取证只看整层路线，不会再改道。
         if (effectPrefixRoute)
             Verdict.ApplyPrefixRadianceClosure(report, scene, properties, observation.Trace, source, request.Assets, project);
-        // 探测过的前缀捕获点全部留档。被拒的原因只在整层循环本来就有未解机制时并进 loop.unresolved：这时前缀是
-        // 整层循环的回退，拒绝原因正好说明回退为什么没走成。条目不带 owner_layer_id，免得分配回退把它当成要保留实时的
-        // 未解层；原本没有未解项的循环也不凭空添一条，免得改变整层裁定。
+        // 探测过的前缀捕获点全部留档（被拒的原因就在这份记录里，不再并进 loop.unresolved：那里只放时间机制）。
         if (captureProbes.Recorded.Count > 0)
-        {
             report["effect_prefix_capture_probes"] = new JsonArray(captureProbes.Recorded.Select(probe => (JsonNode)probe.DeepClone()).ToArray());
-            if (report["loop"]?["unresolved"] is JsonArray { Count: > 0 })
-                foreach (JsonObject probe in captureProbes.Recorded.Where(probe =>
-                    probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus))
-                    Verdict.AddLoopUnresolved(report, "effect_prefix_capture_target", probe["reason"]!.GetValue<string>(), loopNotes,
-                        probe["reason_localized"] as JsonObject);
-        }
         // README 的承诺：解析周期不完整时，把未解决机制与粒子所在的完整作者子树保留实时，再重查一次周期与构图。
         // 这条路以前只在 bake 阶段跑，analyze 既没走也没记录，用户拿到的就是一个没有任何理由的 unavailable。
         timing.Mark("A12_compose_routes");
@@ -370,7 +400,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
     /// </summary>
     internal static string LivenessKey(HybridAnalyzeRequest request, string sourceHash) => "liveness|" + AnalysisCache.Key(sourceHash, request with {
         OutputDirectory = "", AnalysisCacheDirectory = null, RetainLiveRootIds = null, RetainLiveReasons = null, ExcludedLayerIds = null,
-        Preset = null, LoopPreference = "", VideoLayout = "", LiveOverlayPlacement = "", BudgetOnlyRetime = false });
+        Preset = null, LoopPreference = "", VideoLayout = "", LiveOverlayPlacement = "", BudgetOnlyRetime = false,
+        RetimeSlowComponents = false, SpeedUnmeasured = false });
 
     /// <summary>
     /// 整层路线在"除 HDR 闭合外零 blocker 却求不出循环"时，真的试一次更小的烘焙分配，并把走了什么、结果如何写进 plan。
@@ -391,12 +422,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         if (initialBlockers.Count > 0 && report["loop"] is JsonObject wholeLoop && Routes.WholeLoopComplete(wholeLoop)) return;
         JsonObject evidence = HybridLoopAllocation.Explain(report, scene);
         report["loop_allocation_fallback"] = evidence;
-        if (evidence["status"]?.GetValue<string>() != "proposed")
-        {
-            Verdict.AddLoopUnresolved(report, "loop_allocation_fallback",
-                "A smaller bake allocation was not attempted: " + (evidence["reason"]?.GetValue<string>() ?? "no reason recorded."));
-            return;
-        }
+        // 取证只记在 loop_allocation_fallback 字段里，不再往 loop.unresolved 塞说明条目（那里只放时间机制）。
+        if (evidence["status"]?.GetValue<string>() != "proposed") return;
         string analysisOutput = Path.Combine(output, "loop-allocation-analysis");
         evidence["analysis_plan_path"] = Path.Combine(analysisOutput, "plan.json");
         progress?.Report(new("retaining_nonlooping_layers", null, new Message("progress.retaining_nonlooping_layers")));
@@ -463,13 +490,6 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             // 重查只被全幅布局挡住时，把冲突给出的保留做法按完整 --retain-live 列表记下来，结论行才能给出照做就能用的参数。
             if (!resolved && HybridLoopAllocation.ReplannedRetainLiveSuggestion(replanned, retained) is JsonObject suggestion)
                 evidence["replanned_retain_live_suggestion"] = suggestion;
-            Verdict.AddLoopUnresolved(report, "loop_allocation_fallback", resolved
-                ? $"No loop covers every baked layer, but a smaller bake allocation does: keeping layers {retainedText} live leaves content that resolves. Re-run analyze with --retain-live {retainedText} to plan that allocation."
-                : replannedRadianceOpen
-                    ? $"No loop covers every baked layer, and the smaller bake allocation that keeps layers {retainedText} live is still blocked by the HDR radiance closure of the content it captures."
-                    : basis == "perspective_capture_open"
-                    ? $"No loop covers every baked layer; keeping layers {retainedText} live leaves content whose loop resolves, but capturing it still needs a perspective screen-space composition."
-                    : $"No loop covers every baked layer, and the smaller bake allocation that keeps layers {retainedText} live establishes none either.");
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
@@ -477,8 +497,6 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             evidence["status"] = "failed";
             evidence["error_type"] = error.GetType().Name;
             evidence["error"] = error.Message;
-            Verdict.AddLoopUnresolved(report, "loop_allocation_fallback",
-                $"No loop covers every baked layer, and the smaller bake allocation keeping layers {retainedText} live could not be analyzed: {error.Message}");
         }
     }
 

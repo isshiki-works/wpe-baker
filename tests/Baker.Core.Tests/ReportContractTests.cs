@@ -399,13 +399,55 @@ public class LoopItemContractTests
         RuntimeTrackUnresolved Particle(bool stationary) => new(false, 3, new Message("unresolved.particle_stationary_random")) {
             Mechanism = "particle_system", Particle = new ParticleStationarity.Result(stationary, [], 1, 2) };
         var candidates = new List<LoopCandidate>();
-        Assert.Null(LoopAnalysis.StationaryParticleDefaultLoop([Particle(false)], candidates, 60, 1, ceiling));
-        Assert.Null(LoopAnalysis.StationaryParticleDefaultLoop([Particle(true), new SolverUnresolved(false, "c", "d")], candidates, 60, 1, ceiling));
+        Assert.Null(LoopAnalysis.StationaryParticleDefaultLoop([Particle(false)], candidates, [], 60, 1, ceiling));
+        Assert.Null(LoopAnalysis.StationaryParticleDefaultLoop([Particle(true), new SolverUnresolved(false, "c", "d")], candidates, [], 60, 1, ceiling));
         Assert.Empty(candidates);
-        JsonObject applied = LoopAnalysis.StationaryParticleDefaultLoop([Particle(true)], candidates, 60, 1, ceiling)!;
+        JsonObject applied = LoopAnalysis.StationaryParticleDefaultLoop([Particle(true)], candidates, [], 60, 1, ceiling)!;
         Assert.Equal("applied", applied["status"]!.GetValue<string>());
         Assert.Equal("[3]", applied["particle_layer_ids"]!.ToJsonString());
         Assert.Equal("stationary_particle_default", Assert.Single(candidates).LoopLengthSource);
+    }
+
+    // 默认循环按组取最长寿命：g2 里寿命 90 s 的粒子只把 g2 拉长到 90 s 之后，g1（寿命 2 s）仍录默认 60 s（1444077782 形态）。
+    [Fact]
+    public void ParticleDefaultLoopTakesTheLongestLifetimePerGroup()
+    {
+        RuntimeTrackUnresolved Particle(int owner, double lifetime) => new(false, owner, new Message("unresolved.particle_stationary_random")) {
+            Mechanism = "particle_system", Particle = new ParticleStationarity.Result(true, [], 1, lifetime) };
+        var candidates = new List<LoopCandidate>();
+        JsonObject applied = LoopAnalysis.StationaryParticleDefaultLoop([Particle(3, 2), Particle(4, 90)], candidates,
+            [("g1", [3]), ("g2", [4])], 60, 1, new CommonLoopRational(600))!;
+        Assert.Equal("applied", applied["status"]!.GetValue<string>());
+        LoopCandidate candidate = Assert.Single(candidates);
+        Assert.Equal(90ul * 60 + 1, candidate.Frames);
+        Assert.Equal(60ul * 60, candidate.GroupFrames!["g1"]);
+        Assert.False(candidate.GroupFrames.ContainsKey("g2"));
+    }
+
+    // 寿命不短于循环上限的粒子不满足交叉淡化前提（任何循环长度下接缝两侧都不是同一平稳分布）：判定记 C2 失败，
+    // 它的层由分配回退第一轮留实时，而不是让全场粒子组都拿不到默认循环。
+    [Fact]
+    public void ParticleLivingPastTheLoopCeilingIsNotStationary()
+    {
+        // 骨架取 leaves5.json（随机发射、随机初始化），只改寿命
+        static JsonObject Definition(double lifetime) => new()
+        {
+            ["animationmode"] = "randomframe",
+            ["emitter"] = new JsonArray(new JsonObject { ["name"] = "sphererandom", ["rate"] = 20 }),
+            ["initializer"] = new JsonArray(new JsonObject { ["name"] = "lifetimerandom", ["min"] = lifetime * 0.8, ["max"] = lifetime },
+                new JsonObject { ["name"] = "sizerandom", ["min"] = 20, ["max"] = 50 }, new JsonObject { ["name"] = "velocityrandom" }),
+            ["maxcount"] = 200
+        };
+        var clock = new ParticleStationarity.FrameClock(30, 1, 600);
+        var owner = new JsonObject { ["id"] = 3, ["particle"] = "particles/p.json" };
+        ParticleStationarity.Result Judge(double lifetime) => ParticleStationarity.Evaluate(owner, new Dictionary<int, JsonObject> { [3] = owner }, null,
+            path => path == "particles/p.json" ? Definition(lifetime) : null, clock);
+        // 夹具别的条件（材质、运行时取证）在这里不全，只看这一条判据本身
+        const string LongLived = "lifetime_not_shorter_than_loop_ceiling";
+        Assert.DoesNotContain(Judge(30).Failures, failure => failure.Code == LongLived);
+        ParticleStationarity.Result longLived = Judge(2000);
+        Assert.False(longLived.Stationary);
+        Assert.Contains(longLived.Failures, failure => failure.Code == LongLived && failure.Condition == "C2");
     }
 
     [Fact]
@@ -523,26 +565,6 @@ public class LoopItemContractTests
         unpacked["unresolved"]![0]!["detail"] = "changed";
         Assert.Null(notes.At(unpacked, 0));
         Assert.Null(notes.At(unpacked, 3));
-    }
-
-    [Fact]
-    public void AddLoopUnresolvedKeepsNotesInStepAndDedupesOnTextAndMessage()
-    {
-        var plan = new JsonObject { ["loop"] = new JsonObject { ["unresolved"] = new JsonArray() },
-            ["whole_layer"] = new JsonObject { ["loop"] = new JsonObject { ["unresolved"] = new JsonArray() } } };
-        var notes = new UnresolvedNotes();
-        var first = new Message("unresolved.particle_stationary_random").Localized();
-        Verdict.AddLoopUnresolved(plan, "k", "same", notes, first);
-        Verdict.AddLoopUnresolved(plan, "k", "same", notes, first);
-        Assert.Single(plan["loop"]!["unresolved"]!.AsArray());
-        // 同一句英文、不同文案不算重复（与原来"整条结构相等"同义）。
-        Verdict.AddLoopUnresolved(plan, "k", "same", notes, new Message("unresolved.script_time").Localized());
-        Assert.Equal(2, plan["loop"]!["unresolved"]!.AsArray().Count);
-        Assert.Equal(2, plan["whole_layer"]!["loop"]!["unresolved"]!.AsArray().Count);
-        PlanNarrative.Attach(plan, notes);
-        Assert.Equal(["unresolved.particle_stationary_random", "unresolved.script_time"],
-            plan["whole_layer"]!["loop"]!["unresolved_localized"]!.AsArray().Select(x => x!["key"]!.GetValue<string>()));
-        Assert.Equal("unresolved_localized", plan["loop"]!.AsObject().Last().Key);
     }
 
     [Fact]
