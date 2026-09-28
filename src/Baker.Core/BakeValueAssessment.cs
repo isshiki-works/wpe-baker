@@ -26,6 +26,28 @@ public static class BakeValueAssessment
     private static int Effects(JsonObject layer) => (layer["materials"] as JsonArray ?? []).OfType<JsonObject>()
         .Count(material => material["role"]?.GetValue<string>() == "effect");
 
+    // Before cropping/decoder padding, account for the colour+alpha surfaces of
+    // new videos. This is workload evidence, never a watts estimate or rejection.
+    private static JsonObject DecoderWork(JsonObject plan, JsonObject runtime)
+    {
+        double width = Number(plan["output_resolution"]?["width"]), height = Number(plan["output_resolution"]?["height"]);
+        double fps = Number(plan["settings"]?["fps_numerator"]) / Number(plan["settings"]?["fps_denominator"]);
+        int surfaces = plan["route"]?.GetValue<string>() == "effect_prefix"
+            ? 2 * (plan["effect_prefix_caches"] as JsonArray ?? []).Count // alpha may need a second surface
+            : (plan["video_groups"] as JsonArray ?? []).OfType<JsonObject>().Where(group => !Admission.StaticVerified(group))
+                .Sum(group => group["transparent"]?.GetValue<bool>() == true ? 2 : 1);
+        JsonObject source = HybridVideoWorkload.Summarize(runtime);
+        return new JsonObject {
+            ["source_observed_coded_pixels_per_second"] = source["coded_pixels_per_second"]?.DeepClone(),
+            ["candidate_uncropped_potential_coded_pixels_per_second"] =
+                WorkloadValue.IsComparableOutput(width, height, fps) ? width * height * fps * surfaces : null,
+            ["candidate_video_groups"] = plan["route"]?.GetValue<string>() == "effect_prefix"
+                ? (plan["effect_prefix_caches"] as JsonArray ?? []).Count
+                : Admission.GroupCount(plan),
+            ["scope"] = "Full-canvas planning estimate before crop, padding and opacity proof. A transparent video carries colour and alpha in one wider coded stream; these are surfaces, not decoder instances or predicted watts."
+        };
+    }
+
     /// <summary>
     /// 这些运行时图层的特效 pass 数按画布占比加权：小块图层上的特效省不了多少（NoBenefit 拿它和视频路数比）；粒子等没有占比的按整屏算。
     /// </summary>
@@ -47,7 +69,8 @@ public static class BakeValueAssessment
         if (PlanBlockers.Codes(plan).Any(code => !Verdict.IsCaptureGap(code)))
             return Result(WorkloadValue.UnresolvedPlan);
         if (plan["effect_prefix_caches"] is JsonArray { Count: > 0 } prefixes)
-            return Result(WorkloadValue.CachedEffectPrefix, new JsonObject { ["prefix_count"] = prefixes.Count });
+            return Result(WorkloadValue.CachedEffectPrefix, new JsonObject { ["prefix_count"] = prefixes.Count,
+                ["decoder_work"] = DecoderWork(plan, runtime) });
         if (plan["loop"]?["candidates"] is not JsonArray { Count: > 0 })
             return Result(WorkloadValue.NoWorkingCandidate);
         JsonObject? decodeWork = plan["video_dominant"]?["decode_work"] as JsonObject;
@@ -94,7 +117,8 @@ public static class BakeValueAssessment
         }
         // 没算出省下多少：记下只有普通图层（NoBenefit.Plain）的组，不省电判据只在这些组上把省下的当 0。
         Func<int, bool> plain = NoBenefit.PlainLayers(plan, runtime["runtime_layers"] as JsonArray ?? []);
-        return Result(WorkloadValue.NeedsWorkComparison, new JsonObject { [PlainGroupsField] = new JsonArray([.. (plan["video_groups"] as JsonArray ?? [])
+        return Result(WorkloadValue.NeedsWorkComparison, new JsonObject { ["decoder_work"] = DecoderWork(plan, runtime),
+            [PlainGroupsField] = new JsonArray([.. (plan["video_groups"] as JsonArray ?? [])
             .OfType<JsonObject>().Where(group => (group["layer_ids"] as JsonArray ?? []).Select(SceneGraph.Int).All(id => id is int layer && plain(layer)))
             .Select(group => group["id"]?.DeepClone())]) });
     }

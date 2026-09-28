@@ -206,9 +206,12 @@ internal static class EffectPrefixPlanner
             layer.ContainsKey("script") || layer.ContainsKey("animations") ||
             SceneAnalyzer.Walk(layer).OfType<JsonObject>().Any(value => !ReferenceEquals(value, layer) &&
                 (value.ContainsKey("script") || value.ContainsKey("animation") || value.ContainsKey("animations"))))) return true;
-        JsonObject withoutPuppetLayers = owner.DeepClone().AsObject();
-        withoutPuppetLayers.Remove("animationlayers");
-        return HasDynamic(withoutPuppetLayers);
+        JsonObject baseOwner = owner.DeepClone().AsObject();
+        baseOwner.Remove("animationlayers");
+        // Effects are inspected one at a time by SafeEffect. A live script in a later
+        // effect is a valid suffix; it must not disqualify an earlier closed prefix.
+        baseOwner.Remove("effects");
+        return HasDynamic(baseOwner);
     }
 
     private static bool IsExternalVisibilityDependency(JsonObject dependency, int ownerId) =>

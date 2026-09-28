@@ -58,6 +58,62 @@ public class EffectPrefixEligibilityTests
         await Task.CompletedTask;
     });
 
+    [Fact]
+    public async Task DynamicSuffixDoesNotHideASafePrefixButDynamicOwnerStillDoes() => await TestTemp.Run(async dir =>
+    {
+        var (scene, runtime) = Background(dir);
+        scene["objects"]![0]!["effects"]![1]!["passes"]![0]!["constantshadervalues"] = new JsonObject {
+            ["amount"] = new JsonObject { ["value"] = 0, ["script"] = "export function update(value) { return engine.timeOfDay; }" } };
+        File.WriteAllText(Path.Combine(dir, "models/background.json"),
+            """{"material":"materials/background.json","autosize":true,"cropoffset":"0 24"}""");
+        using var source = new ProjectSource(dir);
+        var request = new HybridAnalyzeRequest(1, dir, dir, dir, 64, 48, 30, 1);
+        JsonObject prefix = Assert.Single(EffectPrefixPlanner.Propose(scene, source, dir, runtime,
+            new JsonObject(), request, new JsonObject()).OfType<JsonObject>());
+        Assert.Equal(1, prefix["prefix_effect_count"]!.GetValue<int>());
+        EffectPrefixBakeService.ValidateSource(source, scene, prefix);
+        scene["objects"]![0]!["origin"] = new JsonObject { ["value"] = "0 0 0",
+            ["script"] = "export function update(value) { return engine.timeOfDay; }" };
+        Assert.Empty(EffectPrefixPlanner.Propose(scene, source, dir, runtime,
+            new JsonObject(), request, new JsonObject()));
+        Assert.Throws<InvalidDataException>(() => EffectPrefixBakeService.ValidateSource(source, scene, prefix));
+        await Task.CompletedTask;
+    });
+
+    [Fact]
+    public void WholeLayerWithoutCapturedEffectsStillChecksSafePrefixes()
+    {
+        var loop = new JsonObject { ["candidates"] = new JsonArray(new JsonObject()), ["unresolved"] = new JsonArray() };
+        var groups = new JsonArray(new JsonObject { ["layer_ids"] = new JsonArray(1) });
+        var layers = new JsonArray(new JsonObject { ["owner"] = 1,
+            ["materials"] = new JsonArray(new JsonObject { ["role"] = "source" }) });
+        Assert.False(Routes.ProbePrefix(loop, groups, layers));
+        layers.Add(new JsonObject { ["owner"] = 2,
+            ["materials"] = new JsonArray(new JsonObject { ["role"] = "effect" }) });
+        Assert.True(Routes.ProbePrefix(loop, groups, layers));
+        layers[0]!["materials"]!.AsArray().Add(new JsonObject { ["role"] = "effect" });
+        Assert.False(Routes.ProbePrefix(loop, groups, layers));
+    }
+
+    [Fact]
+    public async Task EncodedWorkCountsCodedPixelsAndActualStreams() => await TestTemp.Run(async dir =>
+    {
+        var report = new JsonObject {
+            ["status"] = "candidate_generated",
+            ["plan"] = new JsonObject { ["settings"] = new JsonObject { ["fps_numerator"] = 60,
+                ["fps_denominator"] = 1 } },
+            ["groups"] = new JsonArray(
+                new JsonObject { ["status"] = "encoded", ["video_path"] = "a.mp4",
+                    ["encoded_extent"] = new JsonArray(3072, 974), ["packed_alpha"] = false },
+                new JsonObject { ["status"] = "encoded", ["video_path"] = "b.mp4",
+                    ["encoded_extent"] = new JsonArray(6144, 1000), ["packed_alpha"] = true })
+        };
+        await BakeReportWriter.SaveAsync(Path.Combine(dir, "bake.json"), report, null, CancellationToken.None);
+        Assert.Equal(2, report["encoded_video_work"]!["video_streams"]!.GetValue<int>());
+        Assert.Equal((3072d * 974 + 6144d * 1000) * 60,
+            report["encoded_video_work"]!["coded_pixels_per_second"]!.GetValue<double>());
+    });
+
     // 别的脚本按名字取得到这张背景、观测里却没碰过它（取层在计时分支里，短观测没跑到）：完整捕获才会冒出这条依赖，
     // 烘焙时这一层的前缀就作废（#238 本机全集 3019976352、2931199278）。分析期就不提；观测里碰过、控制器可证的照常提。
     [Fact]

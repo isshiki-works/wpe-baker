@@ -60,6 +60,7 @@ internal static class BakeReportWriter
     /// <summary>覆盖写（运行中、收尾、清理后重写）；给了计时就先盖阶段计时戳。</summary>
     internal static Task SaveAsync(string path, JsonObject report, StageTiming? timing, CancellationToken cancellationToken)
     {
+        StampEncodedWork(report);
         timing?.Stamp(report);
         return File.WriteAllTextAsync(path, report.ToJsonString(Options), cancellationToken);
     }
@@ -68,8 +69,33 @@ internal static class BakeReportWriter
     internal static async Task<JsonObject> WriteNewAsync(string path, JsonObject report, StageTiming? timing,
         CancellationToken cancellationToken)
     {
+        StampEncodedWork(report);
         timing?.Stamp(report);
         await VideoSceneBuilder.WriteJsonAsync(path, report, cancellationToken);
         return report;
+    }
+
+    private static void StampEncodedWork(JsonObject report)
+    {
+        if (report["status"]?.GetValue<string>() != "candidate_generated" || report["plan"] is not JsonObject plan) return;
+        double fps = BakeValueAssessment.Number(plan["settings"]?["fps_numerator"]) /
+            BakeValueAssessment.Number(plan["settings"]?["fps_denominator"]);
+        JsonObject[] videos = [.. (report["groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(group => group["status"]?.GetValue<string>() == "encoded" && group["video_path"] is JsonValue)];
+        double pixels = 0;
+        bool complete = double.IsFinite(fps) && fps > 0;
+        foreach (JsonObject group in videos)
+        {
+            JsonNode? extent = group["encoded_extent"] ?? group["hardware_decode_preflight"]?["encoded_extent"];
+            double width = BakeValueAssessment.Number(extent?[0]), height = BakeValueAssessment.Number(extent?[1]);
+            if (!WorkloadValue.IsComparableOutput(width, height, fps)) { complete = false; break; }
+            pixels += width * height * fps;
+        }
+        report["encoded_video_work"] = new JsonObject {
+            ["status"] = complete ? "measured_dimensions" : "incomplete",
+            ["video_streams"] = videos.Length,
+            ["coded_pixels_per_second"] = complete ? pixels : null,
+            ["scope"] = "Sum of encoded video dimensions times frame rate; packed alpha is already included in the coded width or height. This is decoder input, not measured power."
+        };
     }
 }

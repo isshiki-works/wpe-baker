@@ -131,6 +131,9 @@ internal static class EffectPrefixCache
         bool retainsPuppet = model["puppet"] is JsonValue puppetValue && puppetValue.TryGetValue<string>(out string? puppet) && source.Contains(puppet);
         JsonObject checkedOwner = original.DeepClone().AsObject();
         if (retainsPuppet) checkedOwner.Remove("animationlayers");
+        // Only the selected prefix is cached. Later effects stay authored and live;
+        // their scripts must not disqualify the earlier capture.
+        checkedOwner.Remove("effects");
         if (model.ContainsKey("puppet") && !retainsPuppet)
             throw new InvalidDataException("A retained puppet must be a project-owned source resource.");
         if (!Neutral(original["alpha"], 1) || !NeutralColor(original["color"]) || !NeutralVector(original["scale"], 1) ||
@@ -138,7 +141,7 @@ internal static class EffectPrefixCache
             original.ContainsKey("puppet") || !retainsPuppet && original.ContainsKey("animationlayers") || HasScriptOrAnimation(checkedOwner) ||
             effects.Any(effect => effect is not JsonObject) || !source.Contains(sourceModel))
             throw new InvalidDataException("Effect-prefix caching requires an unscripted flat project-owned owner with neutral appearance and geometry.");
-        if (model["autosize"]?.GetValue<bool>() != true || model["cropoffset"] is not null && model["cropoffset"]?.GetValue<string>() != "0 0" ||
+        if (model["autosize"]?.GetValue<bool>() != true || !ValidCropOffset(model["cropoffset"]) ||
             model["material"]?.GetValue<string>() is not string sourceMaterial || string.IsNullOrWhiteSpace(sourceMaterial) ||
             HasScriptOrAnimation(model) || !source.Contains(sourceMaterial))
             throw new InvalidDataException("Effect-prefix caching requires a flat autosized source model with a project-owned material.");
@@ -149,7 +152,7 @@ internal static class EffectPrefixCache
             materialPasses[0] is not JsonObject materialPass || !CacheableBaseShader(materialPass["shader"]?.GetValue<string>()) ||
             materialPass["textures"] is not JsonArray { Count: 1 } textures || textures[0]?.GetValue<string>() is not string sourceTexture || IsFramebuffer(sourceTexture))
             throw new InvalidDataException("Effect-prefix caching requires one genericimage2/3/4 material pass with one non-framebuffer base texture.");
-        for (int index = 0; index < effects.Count; ++index) RejectUnsafeEffect(source, effects[index]!.AsObject(), index < prefixEffectCount);
+        for (int index = 0; index < prefixEffectCount; ++index) RejectUnsafeEffect(source, effects[index]!.AsObject(), captured: true);
     }
 
     /// <summary>
@@ -165,6 +168,17 @@ internal static class EffectPrefixCache
 
     private static bool HasScriptOrAnimation(JsonNode node) => SceneAnalyzer.Walk(node).OfType<JsonObject>()
         .Any(value => value.ContainsKey("script") || value.ContainsKey("animation") || value.ContainsKey("animations") || value.ContainsKey("animationlayers"));
+
+    // The cached model is cloned from the author model, so its local offset stays
+    // in place. Reject malformed offsets; the composition gate checks the geometry.
+    private static bool ValidCropOffset(JsonNode? value)
+    {
+        if (value is null) return true;
+        if (value is not JsonValue scalar || !scalar.TryGetValue<string>(out string? text)) return false;
+        string[] parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 2 && parts.All(part => double.TryParse(part, NumberStyles.Float,
+            CultureInfo.InvariantCulture, out double number) && double.IsFinite(number));
+    }
 
     private static bool Neutral(JsonNode? value, double neutral) => value is null || value is JsonValue scalar &&
         scalar.TryGetValue<double>(out double number) && number == neutral;

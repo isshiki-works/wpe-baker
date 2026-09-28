@@ -185,6 +185,13 @@ public static class PlanNarrative
         }
     }
 
+    public static bool AddedDecoderWork(JsonObject? plan)
+    {
+        JsonNode? work = plan?[BakeValueAssessment.Field]?["evidence"]?["decoder_work"];
+        return Number(work?["candidate_uncropped_potential_coded_pixels_per_second"]) is double candidate &&
+            Number(work?["source_observed_coded_pixels_per_second"]) is double source && candidate > source;
+    }
+
     /// <summary>
     /// owner.unresolved_localized：每条取 <paramref name="notes"/> 里同下标的文案；没有时（再次 Attach、预检条目）
     /// 沿用同下标的现成条目；只有英文明细的条目 key 为 null、中英都是原文。

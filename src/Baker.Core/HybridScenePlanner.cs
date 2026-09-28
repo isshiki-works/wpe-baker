@@ -340,9 +340,33 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 accepted.Add(cache.DeepClone());
                 settled.Add(ownerId);
             }
+            if (accepted.Count > NoBenefit.SavingProvenStreams)
+            {
+                // Overflow used to reject the entire prefix route. Try only the two
+                // largest effect footprints as a conservative first candidate;
+                // filling all four allowed streams is not evidence of power saving.
+                // This is a selection heuristic, not a decoder-count conversion or
+                // a benefit verdict. Unselected author effects remain live.
+                const int overflowCandidateCount = 2;
+                var chosen = accepted.OfType<JsonObject>()
+                    .OrderByDescending(cache =>
+                    {
+                        int owner = cache["owner_layer_id"]!.GetValue<int>();
+                        double fraction = HybridVideoProjection.CanvasFraction(graph.Objects, owner,
+                            node => SceneGraph.Resolve(node, properties),
+                            projection["canvas_width"]!.GetValue<double>(), projection["canvas_height"]!.GetValue<double>()) ?? 0;
+                        return fraction * cache["prefix_effect_count"]!.GetValue<int>();
+                    })
+                    .Take(overflowCandidateCount)
+                    .Select(cache => cache["owner_layer_id"]!.GetValue<int>()).ToHashSet();
+                return new JsonArray(accepted.OfType<JsonObject>()
+                    .Where(cache => chosen.Contains(cache["owner_layer_id"]!.GetValue<int>()))
+                    .Select(cache => (JsonNode)cache.DeepClone()).ToArray());
+            }
             return accepted;
         }
-        JsonArray effectPrefixCaches = Routes.WholeLoopComplete(loop) ? new JsonArray() : await PrefixCachesAsync();
+        JsonArray effectPrefixCaches = Routes.ProbePrefix(loop, composer.Groups, observation.RuntimeLayers)
+            ? await PrefixCachesAsync() : new JsonArray();
         timing.Mark("A10_effect_prefix");
         // 只记录这次分析实际用的是哪台设备；要不要烘是用户的事，不在这里裁决。
         JsonObject analysisDevice = DescribeAnalysisDevice(EnumerateDevicesOrNull(), request.DeviceUuid);
