@@ -134,8 +134,8 @@ internal static class EffectPrefixCache
         return $"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\n" +
             $"vec3 DecodeRgb(int2 p){{ int2 xy=clamp(p,int2({minX},{minY}),int2({maxX},{maxY})); " +
             $"vec3 e=g_Texture1.Load(int3(xy,0)).rgb; vec3 v=e*{span}+{lower}; return v*abs(v); }}\n" +
-            $"void main(){{ vec2 pos=({rgbUv})*vec2({storedWidth},{storedHeight})-vec2(0.5); " +
-            "int2 p=int2(floor(pos)); vec2 f=fract(pos); vec3 rgb=DecodeRgb(p); " +
+            $"void main(){{ vec2 pos=({rgbUv})*vec2({storedWidth},{storedHeight})-vec2(0.5,0.5); " +
+            "int2 p=int2(floor(pos)); vec2 f=frac(pos); vec3 rgb=DecodeRgb(p); " +
             "if(f.x!=0.0 || f.y!=0.0){ vec3 right=DecodeRgb(p+int2(1,0)); " +
             "vec3 down=DecodeRgb(p+int2(0,1)); vec3 diagonal=DecodeRgb(p+int2(1,1)); " +
             "rgb=mix(mix(rgb,right,f.x),mix(down,diagonal,f.x),f.y); } " +
