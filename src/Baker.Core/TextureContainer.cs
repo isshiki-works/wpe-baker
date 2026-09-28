@@ -29,10 +29,12 @@ public static class TextureContainer
     }
 
     public static async Task WriteVideoAsync(string destination, string mp4Path, uint width, uint height,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, uint? sourceFlags = null)
     {
         if (width == 0 || height == 0 || width > int.MaxValue || height > int.MaxValue)
             throw new ArgumentException("Video dimensions must fit the TEX dimension fields.");
+        if (sourceFlags is uint flags && (flags & 0x20) == 0)
+            throw new ArgumentException("Source TEX flags must describe a video texture.");
         await using var input = File.OpenRead(mp4Path);
         // 上限依据见 EmbeddedVideoBudget.MaximumBytes（WPE 实测）；bake 在渲染前与编码后各查一次，这里只是最后一道。
         if (input.Length < 16 || input.Length > EmbeddedVideoBudget.MaximumBytes)
@@ -45,8 +47,8 @@ public static class TextureContainer
         using var header = new MemoryStream();
         using (var writer = new BinaryWriter(header, Encoding.ASCII, leaveOpen: true))
         {
-            // Format is RGBA8 (0); flags 0x22 are clamp plus the native video flag.
-            WritePreamble(writer, width, height, flags: 0x22);
+            // Existing encoded outputs use 0x22; replacing an authored video keeps its sampling flags.
+            WritePreamble(writer, width, height, flags: sourceFlags ?? 0x22);
             writer.Write(Encoding.ASCII.GetBytes("TEXB0004\0"));
             writer.Write(1); // image count
             writer.Write(-1); // no FreeImage container type; the body is an MP4
@@ -62,6 +64,25 @@ public static class TextureContainer
         await using var file = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, true);
         await file.WriteAsync(header.ToArray(), cancellationToken);
         await input.CopyToAsync(file, cancellationToken);
+    }
+
+    /// <summary>Copy the MP4 body of a native TEXB0003/0004 video into a new file for ffprobe/ffmpeg.</summary>
+    internal static async Task<TextureHeader> ExtractVideoAsync(string texPath, string mp4Path, CancellationToken token)
+    {
+        await using var input = File.OpenRead(texPath);
+        byte[] preamble = new byte[100];
+        await input.ReadExactlyAsync(preamble, token);
+        if (!TryReadHeader(preamble, out TextureHeader header) || !header.IsVideo)
+            throw new InvalidDataException("The source texture is not a native video TEX.");
+        int offset = preamble.AsSpan(46, 9).SequenceEqual("TEXB0003\0"u8) ? 87 :
+            preamble.AsSpan(46, 9).SequenceEqual("TEXB0004\0"u8) ? 91 : 0;
+        if (offset == 0 || BinaryPrimitives.ReadInt32LittleEndian(preamble.AsSpan(offset - 4, 4)) != input.Length - offset ||
+            !preamble.AsSpan(offset + 4, 4).SequenceEqual("ftyp"u8))
+            throw new InvalidDataException("The source video TEX has an invalid MP4 body.");
+        input.Position = offset;
+        await using var output = new FileStream(mp4Path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, true);
+        await input.CopyToAsync(output, token);
+        return header;
     }
 
     /// <summary>TEX 前导里的只读信息：像素格式、标志与存储尺寸。不解码像素。</summary>

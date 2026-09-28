@@ -76,6 +76,9 @@ internal static class PlainLanguage
     /// </summary>
     private static bool CannotBake(JsonObject plan)
     {
+        if (plan["route"]?.GetValue<string>() == "source_video_optimization")
+            return plan["status"]?.GetValue<string>() != "source_video_resources_ready" ||
+                plan["source_video_optimization"]?["resources"] is not JsonArray { Count: > 0 };
         string[] keys = BlockerKeys(plan);
         string rule = plan["suitability"]?["rule"]?.GetValue<string>() ?? "";
         // 这几类关掉实时元素也救不回来，先于取舍卡片判定：依赖挡住、主体就是实时效果、HDR/3D 相机、没东西可烘或只剩静态。

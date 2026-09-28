@@ -293,6 +293,11 @@ public sealed class HybridBakeService(NativeTools tools)
             throw new ArgumentException("Internal effect resolution changes currently apply to whole-layer baking; effect-prefix captures require the original resolution.");
         progress?.Report(new("preflight", null, "Verifying the generation plan and source files."));
         timing.SetDevice(request.DeviceUuid ?? request.Plan["settings"]?["device_uuid"]?.GetValue<string>());
+        if (request.Plan["route"]?.GetValue<string>() == SourceVideoOptimization.Route)
+        {
+            await VerifyPlanRendererAsync(request.Plan, cancellationToken);
+            return await SourceVideoOptimization.BakeAsync(request, tools, progress, timing, cancellationToken);
+        }
         if (request.Plan["route"]?.GetValue<string>() == "effect_prefix")
             return await BakeEffectPrefixesAsync(request, progress, timing, cancellationToken);
         return bakeOnce is null ? await BakeOnceAsync(request, progress, timing, cancellationToken) : await bakeOnce(request);

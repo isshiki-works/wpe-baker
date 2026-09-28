@@ -194,6 +194,14 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
         var memo = new AnalysisMemo();
         JsonObject result = await AnalysisOrchestrator.RunAsync(request, (candidate, token) => AnalyzeSingleAsync(candidate, memo, progress, token),
             cancellationToken, tools, states, progress: progress, memo: memo);
+        if (await SourceVideoOptimization.TryPlanAsync(result, tools, cancellationToken) is JsonObject sourceVideo)
+        {
+            string root = Path.GetFullPath(request.OutputDirectory);
+            string staged = Path.Combine(root, "source-video-plan.json");
+            await VideoSceneBuilder.WriteJsonAsync(staged, sourceVideo, cancellationToken);
+            File.Move(staged, Path.Combine(root, "plan.json"), true);
+            result = sourceVideo;
+        }
         await memo.VerifySourcesAsync(cancellationToken);
         return result;
     }

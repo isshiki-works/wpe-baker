@@ -189,6 +189,9 @@ public sealed class ProjectSource : IDisposable
         return entries.ContainsKey(resource) || File.Exists(ContainedPath(DirectoryPath, resource));
     }
 
+    internal IEnumerable<string> ResourceNames() =>
+        entries.Keys.Concat(EnumerateLooseFiles()).Distinct(StringComparer.OrdinalIgnoreCase);
+
     public byte[] Read(string resource, int maximumBytes = 32 * 1024 * 1024)
     {
         resource = NormalizeResource(resource);
@@ -229,6 +232,33 @@ public sealed class ProjectSource : IDisposable
         var prefix = new byte[Math.Min(checked((int)Math.Min(input.Length, int.MaxValue)), maximumBytes)];
         input.ReadExactly(prefix);
         return prefix;
+    }
+
+    /// <summary>Stream one packaged or loose resource to a new file without loading a video into memory.</summary>
+    internal async Task CopyResourceAsync(string resource, string destination, CancellationToken token)
+    {
+        resource = NormalizeResource(resource);
+        destination = Path.GetFullPath(destination);
+        if (destination.StartsWith(DirectoryPath.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase))
+            throw new IOException("A resource copy cannot overwrite the source project.");
+        EnsureNoReparsePoints(destination);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, true);
+        if (entries.TryGetValue(resource, out var item))
+        {
+            byte[] buffer = new byte[128 * 1024];
+            for (long done = 0; done < item.Length;)
+            {
+                int read = await RandomAccess.ReadAsync(package!.SafeFileHandle,
+                    buffer.AsMemory(0, (int)Math.Min(buffer.Length, item.Length - done)), item.Offset + done, token);
+                if (read == 0) throw new EndOfStreamException(resource);
+                await output.WriteAsync(buffer.AsMemory(0, read), token);
+                done += read;
+            }
+        }
+        else await using (var input = File.OpenRead(ContainedPath(DirectoryPath, resource)))
+            await input.CopyToAsync(output, token);
     }
 
     internal static JsonObject ParseWpeJsonObject(string json, string resource) =>
