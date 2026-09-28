@@ -133,7 +133,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target with { ExactExtent = false },
                     UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true,
                     HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
-                    HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt), cancellationToken);
+                    HdrLowerBound: hdrLowerBound), cancellationToken);
                 JsonObject captureSource = probe["native_result"]?["capture_source"]?.AsObject()
                     ?? throw new InvalidDataException("Terminal metadata probe omitted its capture source.");
                 // 尺寸、编码都以捕获点确实是这一层自己的目标为前提；落到共用缓冲时录到的是整幅场景，直接拒绝，不做完整捕获。
