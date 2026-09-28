@@ -861,7 +861,8 @@ std::string OfflineSession::Impl::describeProjection() const {
 
 // 着色器时间签名（SPIR-V 上的抽象解释，见 ShaderTime.cppm），随 runtime_layers 的每个材质带给 C#。
 // uniform 取材质常量、再取着色器默认值；带值动画的按外部输入；采样器寻址按绑定纹理（或渲染目标）的 wrap。
-static std::string DescribeShaderTime(const Scene& scene, const SceneMaterial& material) {
+static std::string DescribeShaderTime(const Scene& scene, const SceneMaterial& material,
+                                      shader_time::Memo& cache) {
     const auto& shader = material.customShader.shader;
     if (! shader || shader->codes.empty()) return "null";
     shader_time::Inputs inputs;
@@ -897,12 +898,13 @@ static std::string DescribeShaderTime(const Scene& scene, const SceneMaterial& m
         }
         return { shader_time::Wrap::Unknown, shader_time::Wrap::Unknown };
     };
-    return shader_time::ToJson(shader_time::Analyze(shader->codes, inputs));
+    return shader_time::ToJson(cache.Get(shader->codes, inputs));
 }
 
 std::string OfflineSession::Impl::describeScene() const {
     if (!m_scene) return "[]";
     std::ostringstream out;
+    shader_time::Memo shader_time_cache;
     out << '[';
     bool first = true;
     std::function<void(SceneNode*, std::int32_t)> visit = [&](SceneNode* node, std::int32_t inherited) {
@@ -992,7 +994,8 @@ std::string OfflineSession::Impl::describeScene() const {
                     first_texture = false;
                     out << Dump(NJson(texture));
                 }
-                out << "],\"time_signature\":" << DescribeShaderTime(*m_scene, *material) << '}';
+                out << "],\"time_signature\":"
+                    << DescribeShaderTime(*m_scene, *material, shader_time_cache) << '}';
             }
             };
             append_materials(node, "source");
