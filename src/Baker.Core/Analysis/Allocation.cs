@@ -155,6 +155,10 @@ internal sealed class Allocation
                 !sourceOrder.Any(child => Int(objects[child]["parent"]) == id && objects[child].ContainsKey("attachment"));
         }
         var allocationOf = allocation.UnitOf;
+        // 留实时目标只提示固定绘制父层在何处拆子树；能否拆仍由 FixedDrawingParent 判。
+        var requestedLive = (request.RetainLiveRootIds ?? []).ToHashSet();
+        if (requestedLive.Any(id => !objects.ContainsKey(id)))
+            throw new InvalidDataException("A requested live layer is not in the source scene.");
         void Assign(int id, int unit)
         {
             allocationOf[id] = unit;
@@ -164,7 +168,7 @@ internal sealed class Allocation
             split |= splitDrawing && live.Contains(id);
             foreach (int child in sourceOrder.Where(child => Int(objects[child]["parent"]) == id))
             {
-                split |= splitDrawing && sourceOrder.Any(layer => live.Contains(layer) && graph.Within(layer, child));
+                split |= splitDrawing && sourceOrder.Any(layer => (live.Contains(layer) || requestedLive.Contains(layer)) && graph.Within(layer, child));
                 Assign(child, split ? child : unit);
             }
         }
@@ -191,10 +195,8 @@ internal sealed class Allocation
             if (parallax && request.ViewMode == "preserve" && sourceOrder.Any(id => allocationOf[id] == root &&
                 objects[id]["parallaxDepth"] is JsonObject binding && binding.ContainsKey("script"))) Live(root, "animated_parallax_depth");
         }
-        // 按分配单元保留：列出的图层所在的单元整单元留实时，同一作者根下拆开的其它单元照常烘。单元边界是上面按保留之前的
-        // 实时集定的，拆分条件（父层传给子层的状态是常量、绘制顺序按单元保持）与哪个单元实时无关，所以留住任一单元画面不变。
-        var retainedUnits = (request.RetainLiveRootIds ?? []).Select(id => allocationOf.TryGetValue(id, out int unit) ? unit
-            : throw new InvalidDataException("A requested live layer is not in the source scene.")).ToHashSet();
+        // 按分配单元保留：列出的图层所在的单元整单元留实时，同一作者根下安全拆开的其它单元照常烘。
+        var retainedUnits = requestedLive.Select(id => allocationOf[id]).ToHashSet();
         // 原因码：调用方给了（自动留实时：分配回退的未解析机制、慢分量没闭合……）就整单元写这些真实原因；
         // 没给的是用户显式 --retain-live 或退回轮的逐组试探，才写 retained_by_cost_trial。
         var unitReasons = retainedUnits.ToDictionary(unit => unit, unit => (request.RetainLiveReasons ?? [])
