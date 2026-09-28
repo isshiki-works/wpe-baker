@@ -128,7 +128,7 @@ internal static class HybridSuitability
         // 只差采集能力的按假设能采集判过（NoBenefit.CaptureOpenConditions），排在能力缺口前。
         if (blockers.Contains(BlockerCode.NoBenefitExpected))
             return Build("not_suitable", NoBenefit.RejectionReason,
-                "Estimated power use is higher than the original wallpaper.", "预计功耗高于原壁纸", notes);
+                "This plan is not expected to reduce playback cost.", "此方案预计无法降低播放开销", notes);
 
         // 固定在一个时段：做不出按时段切换，是工具的能力缺口，不是省不省电。待定文案。
         if (blockers.Contains(BlockerCode.FixedDaytimeState))
