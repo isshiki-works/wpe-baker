@@ -40,14 +40,13 @@ internal static class EffectPrefixPlanner
                 // 之前的纯时间特效（waterwaves、shake、foliagesway、clouds……）照样缓存。
                 if (EffectReadsLiveInput(runtime, ownerId, count - 1)) break;
                 if (effects[count - 1] is not JsonObject effect || !SafeEffect(effect, source, retainedPuppetAnimation)) break;
-                if (effect["id"] is null) continue;
                 effectShaders ??= EffectShaderIndex(originalScene, source, assets, ownerId);
                 JsonObject loop = AnalyzeIndexedPrefix(originalScene, source, assets, runtime, snapshotProperties,
                     ownerId, count, request, projection, effectShaders);
                 if (!Cacheable(loop)) continue;
                 var cache = new JsonObject {
                     ["owner_layer_id"] = ownerId, ["prefix_effect_count"] = count,
-                    ["terminal_effect_id"] = effect["id"]!.DeepClone(), ["source_image"] = owner["image"]!.DeepClone(),
+                    ["terminal_effect_id"] = effect["id"]?.DeepClone(), ["source_image"] = owner["image"]!.DeepClone(),
                     ["loop"] = loop, ["fixed_user_properties"] = PrefixProperties(effects.Take(count), snapshotProperties),
                     // 这个前缀循环是在哪一档下求出来的：与 plan 顶层的 retime_profile 同一份值，
                     // 单看一条缓存记录就能知道 preset 与 retime_budget_percent。
@@ -55,6 +54,8 @@ internal static class EffectPrefixPlanner
                     ["retained_puppet_animation"] = retainedPuppetAnimation,
                     ["prefix_capture_scope"] = retainedPuppetAnimation ? "pre_puppet_authored_effect_terminal" : "flat_authored_effect_terminal"
                 };
+                // Author effects need not have IDs; the renderer also selects them by their stable scene ordinal.
+                if (effect["id"] is null) cache["terminal_effect_ordinal"] = count - 1;
                 if ((runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>().Any(dependency =>
                     dependency["initialization"]?.GetValue<bool>() != true &&
                     IsExternalVisibilityDependency(dependency, ownerId) && dependency["operation"]?.GetValue<string>() == "write"))
@@ -303,7 +304,8 @@ internal static class EffectPrefixPlanner
     {
         if (runtime["runtime_dependencies"] is JsonArray dependencies && dependencies.OfType<JsonObject>().Any(dependency =>
             dependency["initialization"]?.GetValue<bool>() != true && SceneGraph.Int(dependency["target"]) == ownerId &&
-            SceneGraph.Int(dependency["owner"]) != ownerId && !IsExternalVisibilityDependency(dependency, ownerId))) return true;
+            SceneGraph.Int(dependency["owner"]) != ownerId && dependency["operation"]?.GetValue<string>() == "write" &&
+            !IsExternalVisibilityDependency(dependency, ownerId))) return true;
         return Materials(runtime, ownerId).Any(material => material["role"]?.GetValue<string>() != "effect" && ReadsLiveInput(material));
     }
 

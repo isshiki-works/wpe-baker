@@ -12,10 +12,13 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
     {
         int owner = cache["owner_layer_id"]?.GetValue<int>() ?? throw new InvalidDataException("Effect-prefix cache owner_layer_id is missing.");
         int prefix = cache["prefix_effect_count"]?.GetValue<int>() ?? 0;
+        int? terminalOrdinal = SceneGraph.Int(cache["terminal_effect_ordinal"]);
         JsonObject node = scene["objects"]?.AsArray().OfType<JsonObject>().SingleOrDefault(x => SceneGraph.Id(x) == owner)
             ?? throw new InvalidDataException("Effect-prefix cache owner is absent from the source scene.");
         if (prefix <= 0 || node["effects"] is not JsonArray effects || prefix > effects.Count ||
             effects[prefix - 1]?["id"]?.GetValue<int>() != cache["terminal_effect_id"]?.GetValue<int>() ||
+            (cache["terminal_effect_id"] is null && terminalOrdinal is null) ||
+            (terminalOrdinal is int ordinal && ordinal != prefix - 1) ||
             node["image"]?.GetValue<string>() != cache["source_image"]?.GetValue<string>() ||
             cache["loop"] is not JsonObject || cache["fixed_user_properties"] is not JsonObject)
             throw new InvalidDataException("Effect-prefix cache description no longer matches its source owner, terminal effect, or fixed properties.");
@@ -110,6 +113,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int owner = cache["owner_layer_id"]!.GetValue<int>(), prefix = cache["prefix_effect_count"]!.GetValue<int>();
+                int? terminalId = SceneGraph.Int(cache["terminal_effect_id"]), terminalOrdinal = SceneGraph.Int(cache["terminal_effect_ordinal"]);
                 JsonObject? radiance = (plan["hdr_radiance_closure"]?["groups"] as JsonArray ?? []).OfType<JsonObject>()
                     .FirstOrDefault(group => group["group_id"]?.GetValue<string>() == $"effect_prefix_{owner}");
                 double hdrScale = radiance?["capture_scale"]?.GetValue<double>() ?? 1;
@@ -135,7 +139,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         recorded.Add(patch.DeepClone());
                     }
                 }
-                var target = new RenderCaptureSelection(owner, cache["terminal_effect_id"]!.GetValue<int>(), EffectTerminal: true,
+                var target = new RenderCaptureSelection(owner, terminalId, EffectOrdinal: terminalOrdinal, EffectTerminal: true,
                     ExactExtent: true, ForceVisibleOwner: cache["preserve_external_visibility"]?.GetValue<bool>() == true ? true : null);
                 JsonObject probe;
                 using (timing.Measure(StageTiming.MasterRender))
@@ -147,7 +151,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     ?? throw new InvalidDataException("Terminal metadata probe omitted its capture source.");
                 // 尺寸、编码都以捕获点确实是这一层自己的目标为前提；落到共用缓冲时录到的是整幅场景，直接拒绝，不做完整捕获。
                 JsonObject captureTarget = EffectPrefixCaptureTarget.Evaluate(probe["native_result"]!.AsObject(), owner,
-                    cache["terminal_effect_id"]!.GetValue<int>(), EffectPrefixCaptureTarget.LayerName(pristine, owner));
+                    terminalId, EffectPrefixCaptureTarget.LayerName(pristine, owner), terminalOrdinal);
                 if (captureTarget["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus)
                 {
                     result["groups"]!.AsArray().Add(new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "rejected_capture_target",
@@ -305,8 +309,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                                               NativeRenderRunner.OpaquePixelEvidence(error) is { } nonOpaque)
                 {
                     // 首帧不透明不代表完整动画始终不透明；后续帧变化仍按拒绝收尾，不丢弃透明度。
-                    (JsonObject group, Message reason) = OpaqueCaptureRejection(pristine, owner, cache["terminal_effect_id"]!.GetValue<int>(),
-                        frames, sourceWidth, sourceHeight, loop, nonOpaque);
+                    (JsonObject group, Message reason) = OpaqueCaptureRejection(pristine, owner, terminalId,
+                        frames, sourceWidth, sourceHeight, loop, nonOpaque, terminalOrdinal);
                     result["groups"]!.AsArray().Add(group);
                     result["status"] = "candidate_rejected_opaque_capture";
                     reason.Write(result, "reason");
@@ -524,8 +528,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
     /// 不透明规划被全分辨率捕获推翻时的拒绝记录：组条目带上预探测结论与逐帧扫描证据，理由点名层、坐标与 alpha。
     /// 纯函数，不读写文件。
     /// </summary>
-    internal static (JsonObject Group, Message Reason) OpaqueCaptureRejection(JsonObject scene, int owner, int terminalEffectId,
-        ulong frames, uint sourceWidth, uint sourceHeight, JsonObject loop, JsonObject evidence)
+    internal static (JsonObject Group, Message Reason) OpaqueCaptureRejection(JsonObject scene, int owner, int? terminalEffectId,
+        ulong frames, uint sourceWidth, uint sourceHeight, JsonObject loop, JsonObject evidence, int? terminalEffectOrdinal = null)
     {
         string? name = scene["objects"]?.AsArray().OfType<JsonObject>()
             .FirstOrDefault(node => SceneGraph.Id(node) == owner)?["name"] is JsonValue value &&
@@ -537,11 +541,13 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             Number("first_nonopaque_frame"), Number("x"), Number("y"), Number("alpha"),
             Number("nonopaque_pixels_in_frame"), Number("minimum_alpha_in_frame")]);
         var group = new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "rejected_opaque_capture",
-            ["owner_layer_id"] = owner, ["terminal_effect_id"] = terminalEffectId, ["frames"] = frames,
+            ["owner_layer_id"] = owner, ["terminal_effect_id"] = terminalEffectId is int id ? JsonValue.Create(id) : null,
+            ["frames"] = frames,
             ["source_extent"] = new JsonArray(sourceWidth, sourceHeight), ["packed_alpha"] = false,
             ["probe_opacity"] = new JsonObject { ["width"] = sourceWidth, ["height"] = sourceHeight, ["minimum_alpha"] = 255,
                 ["basis"] = "The native-size first-frame opacity probe had no pixel below alpha 255; later frames are still checked during capture." },
             ["period"] = loop.DeepClone(), ["opaque_pixels"] = evidence.DeepClone() };
+        if (terminalEffectOrdinal is int ordinal) group["terminal_effect_ordinal"] = ordinal;
         return (group, reason);
     }
 
