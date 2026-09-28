@@ -261,6 +261,19 @@ public class RoutesTests
     });
 
     [Fact]
+    public Task BlockedWholeLayerAndLayoutConflictBothAskForAnEmptyPrefix() => TestTemp.Run(async dir =>
+    {
+        JsonObject plan = await LayoutAdmissionTests.PlanAsync(dir, "blocked-conflict");
+        Block(plan);
+        var stub = new PrefixStub();
+        var (result, prefix) = await Settle(plan, "full_frame", stub);
+        Assert.False(prefix);
+        Assert.Equal(2, stub.Calls);
+        Assert.Equal("requires_resolution", Text(result["status"]));
+        Assert.NotNull(result["whole_layer"]!["layout_conflict"]);
+    });
+
+    [Fact]
     public Task UnblockedAllowedLayoutNeverAsksForPrefixCaches() => TestTemp.Run(async dir =>
     {
         JsonObject plan = await LayoutAdmissionTests.PlanAsync(dir, "clear", layout: "layered");

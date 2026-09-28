@@ -39,6 +39,15 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         return patches;
     }
 
+    internal static Task<JsonArray> PatchCompositionReferenceAsync(string referenceProject, ProjectSource source,
+        string? assets, JsonObject referenceScene, JsonObject snapshot, IEnumerable<JsonObject> encodedLoops,
+        CancellationToken cancellationToken)
+    {
+        PlanTransforms.FreezeTemporalProperties(referenceScene, snapshot);
+        foreach (JsonObject loop in encodedLoops) HybridLoopService.ApplyPatches(referenceScene, loop);
+        return ShaderTextPatch.WriteTimeScaleAsync(referenceProject, source, assets, referenceScene, cancellationToken);
+    }
+
     internal async Task<JsonObject> BakeAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
         StageTiming timing, CancellationToken cancellationToken = default)
     {
@@ -78,6 +87,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         }
         JsonObject candidateScene = pristine.DeepClone().AsObject();
         JsonObject referenceScene = pristine.DeepClone().AsObject();
+        var encodedLoops = new Dictionary<int, JsonObject>();
         JsonObject candidateMetadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
         JsonObject referenceMetadata = candidateMetadata.DeepClone().AsObject();
         HashSet<string> cachedPropertyKeys = EffectPrefixCache.FixedPropertyKeys(caches.OfType<JsonObject>());
@@ -100,6 +110,11 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int owner = cache["owner_layer_id"]!.GetValue<int>(), prefix = cache["prefix_effect_count"]!.GetValue<int>();
+                JsonObject? radiance = (plan["hdr_radiance_closure"]?["groups"] as JsonArray ?? []).OfType<JsonObject>()
+                    .FirstOrDefault(group => group["group_id"]?.GetValue<string>() == $"effect_prefix_{owner}");
+                double hdrScale = radiance?["capture_scale"]?.GetValue<double>() ?? 1;
+                double hdrLowerBound = radiance?["capture_lower_bound"]?.GetValue<double>() ?? 0;
+                bool hdrSignedSqrt = radiance?["capture_scale"] is not null;
                 JsonObject loop = EffectPrefixPlanner.AnalyzeIndexedPrefix(pristine, source, settings.Assets, runtime, snapshot,
                     owner, prefix, settings, projection, null);
                 if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 })
@@ -126,7 +141,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 using (timing.Measure(StageTiming.MasterRender))
                 probe = await runner.RenderRawAsync(new(captureProject, settings.Assets, Path.Combine(cacheOutput, "metadata"), 64, 64,
                     settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target with { ExactExtent = false },
-                    UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true), cancellationToken);
+                    UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true,
+                    HdrScale: hdrSignedSqrt ? 1 : null), cancellationToken);
                 JsonObject captureSource = probe["native_result"]?["capture_source"]?.AsObject()
                     ?? throw new InvalidDataException("Terminal metadata probe omitted its capture source.");
                 // 尺寸、编码都以捕获点确实是这一层自己的目标为前提；落到共用缓冲时录到的是整幅场景，直接拒绝，不做完整捕获。
@@ -156,7 +172,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     opacityProbe = await runner.RenderRawAsync(new(captureProject, settings.Assets,
                         Path.Combine(cacheOutput, "opacity"), sourceWidth, sourceHeight,
                         settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target,
-                        UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid), cancellationToken);
+                        UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid,
+                        HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
+                        HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt), cancellationToken);
                     string opacityPath = opacityProbe["rgba_path"]!.GetValue<string>();
                     byte[] opacityPixels = await File.ReadAllBytesAsync(opacityPath, cancellationToken);
                     for (int pixel = 3; pixel < opacityPixels.Length; pixel += 4)
@@ -186,6 +204,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     EncodedFrames: frames, RetainFrames: LoopClosureCheck.ReferenceFrameIndices(frames),
                     DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true, RequireOpaquePixels: !packedAlpha,
                     PixelPacking: packedAlpha ? "rgba_side_by_side" : "rgb", EncodeWidth: encodeWidth, EncodeHeight: encodeHeight,
+                    HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
+                    HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt,
                     OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(loop, new HashSet<int> { owner }),
                     EncodePadding: paddedContent is null ? null
                         : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY));
@@ -376,7 +396,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 }
                 using (timing.Measure(StageTiming.ProjectAssembly))
                     await EffectPrefixCache.ApplyAsync(source, pristine, candidateScene, candidateProject, owner, prefix, video,
-                        storedWidth, storedHeight, false, cancellationToken, sourceWidth, sourceHeight, packedAlpha, paddedContent);
+                        storedWidth, storedHeight, false, cancellationToken, sourceWidth, sourceHeight, packedAlpha, paddedContent,
+                        hdrScale, hdrLowerBound, hdrSignedSqrt);
                 var encodedGroup = new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "encoded",
                     ["owner_layer_id"] = owner, ["frames"] = frames, ["source_extent"] = new JsonArray(sourceWidth, sourceHeight),
                     ["encoded_extent"] = new JsonArray(storedWidth, storedHeight), ["logical_encoded_extent"] = new JsonArray(encodeWidth, encodeHeight),
@@ -385,8 +406,14 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     ["hardware_decode_preflight"] = decodePlan.ToJson(),
                     ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone(),
                     ["playback_encode"] = encodeInfo, ["playback_quality_gate"] = gpuQuality, ["video_bytes"] = new FileInfo(video).Length };
+                if (radiance?["capture_scale"] is not null)
+                {
+                    encodedGroup["hdr_capture_scale"] = hdrScale;
+                    encodedGroup["hdr_capture_lower_bound"] = hdrLowerBound;
+                }
                 SeamPreview.Attach(encodedGroup, seamPreview);
                 result["groups"]!.AsArray().Add(encodedGroup);
+                encodedLoops.Add(owner, loop.DeepClone().AsObject());
             }
             if (!result["groups"]!.AsArray().OfType<JsonObject>().Any(group => group["status"]?.GetValue<string>() == "encoded"))
             {
@@ -398,6 +425,11 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             ProjectWriter.ApplyPropertySnapshot(referenceMetadata, snapshot); referenceMetadata["file"] = source.SceneResource;
             JsonObject propertyReport = ApplyCachedPropertyPresentation(candidateMetadata, candidateScene, cachedPropertyKeys);
             result["effect_prefix_fixed_properties"] = propertyReport;
+            // Compare the video against the same installed prefix clocks. The author's
+            // original speed differs by the explicitly planned retime and is not an
+            // encoding/composition reference; suffixes and other owners remain live.
+            result["composition_reference_patches"] = await PatchCompositionReferenceAsync(referenceProject,
+                source, settings.Assets, referenceScene, snapshot, encodedLoops.Values, cancellationToken);
             using (timing.Measure(StageTiming.ProjectAssembly))
             {
                 await File.WriteAllTextAsync(ProjectSource.ContainedPath(candidateProject, source.SceneResource), candidateScene.ToJsonString(), cancellationToken);
@@ -412,6 +444,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 CompositionGate.RequiredFrames, 0, 17, request.DeviceUuid ?? settings.DeviceUuid,
                 snapshot), progress, cancellationToken);
             JsonObject composition = CompositionGate.Evaluate(comparison);
+            composition["reference_basis"] = "same_installed_prefix_retime";
             result["composition_validation"] = composition;
             if (composition["status"]?.GetValue<string>() == CandidateScriptErrorGate.RejectedCompositionStatus)
             {

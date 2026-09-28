@@ -15,8 +15,11 @@ internal static class EffectPrefixCache
     internal static async Task<Result> ApplyAsync(ProjectSource source, JsonObject originalScene, JsonObject derivedScene,
         string outputProject, int ownerId, int prefixEffectCount, string cacheFile, uint width, uint height, bool rgbaFrame,
         CancellationToken cancellationToken = default, uint? sourceWidth = null, uint? sourceHeight = null, bool packedAlpha = false,
-        EncodedContentRegion? paddedContent = null)
+        EncodedContentRegion? paddedContent = null, double hdrScale = 1, double hdrLowerBound = 0,
+        bool hdrSignedSqrt = false)
     {
+        if (!double.IsFinite(hdrScale) || hdrScale <= 0 || !double.IsFinite(hdrLowerBound))
+            throw new ArgumentOutOfRangeException(nameof(hdrScale));
         if (paddedContent is { } declared && (rgbaFrame || declared.OffsetX < 0 || declared.OffsetY < 0 || declared.Width <= 0 || declared.Height <= 0 ||
             declared.OffsetX + declared.Width > declared.PaddedWidth || declared.OffsetY + declared.Height > declared.PaddedHeight ||
             (long)declared.PaddedWidth * (packedAlpha && !HardwareDecodeDimensions.StackedVertically(packedAlpha, declared.PaddedWidth) ? 2 : 1) != width ||
@@ -61,13 +64,13 @@ internal static class EffectPrefixCache
         await VideoSceneBuilder.WriteJsonAsync(modelPath, cachedModel, cancellationToken);
         derived["image"] = modelResource;
         for (int i = 0; i < prefixEffectCount; ++i) derived["effects"]!.AsArray().RemoveAt(0);
-        if (packedAlpha || paddedContent is not null)
+        if (packedAlpha || paddedContent is not null || hdrScale != 1 || hdrLowerBound != 0 || hdrSignedSqrt)
         {
             int effectId = checked(SceneAnalyzer.Walk(derivedScene).OfType<JsonObject>()
                 .Where(node => node["id"] is JsonValue value && value.TryGetValue<int>(out _))
                 .Select(node => node["id"]!.GetValue<int>()).DefaultIfEmpty(0).Max() + 1);
             derived["effects"]!.AsArray().Insert(0, await WriteAlphaDecoderAsync(outputProject, stem, textureResource, effectId, width,
-                cancellationToken, height, packedAlpha, paddedContent));
+                cancellationToken, height, packedAlpha, paddedContent, hdrScale, hdrLowerBound, hdrSignedSqrt));
         }
         return new(textureResource, materialResource, modelResource);
     }
@@ -77,13 +80,28 @@ internal static class EffectPrefixCache
     /// 补边时把 UV 映射回每半幅里的内容矩形，
     /// 并夹在矩形内半个纹素，双线性取样不会混进补边。内容居中放置，纹理上下或左右翻转时矩形 UV 不变。
     /// </summary>
-    internal static string DecoderFragment(uint storedWidth, uint storedHeight, bool packedAlpha, EncodedContentRegion? content)
+    internal static string DecoderFragment(uint storedWidth, uint storedHeight, bool packedAlpha, EncodedContentRegion? content,
+        double hdrScale = 1, double hdrLowerBound = 0, bool hdrSignedSqrt = false)
     {
+        string scaledRgb = hdrScale == 1 && hdrLowerBound == 0 ? "rgb" :
+            $"rgb*{hdrScale.ToString("R", CultureInfo.InvariantCulture)}" +
+            (hdrLowerBound < 0 ? $"-{(-hdrLowerBound).ToString("R", CultureInfo.InvariantCulture)}" :
+                hdrLowerBound > 0 ? $"+{hdrLowerBound.ToString("R", CultureInfo.InvariantCulture)}" : "");
         if (content is null)
         {
-            if (!packedAlpha) throw new ArgumentException("An unpadded opaque cache needs no decoder.");
+            if (!packedAlpha)
+            {
+                if (hdrSignedSqrt) return SignedRgbDecoder("v_TexCoord", "1.0", storedWidth, storedHeight,
+                    0, 0, checked((int)storedWidth - 1), checked((int)storedHeight - 1), hdrScale, hdrLowerBound);
+                if (hdrScale == 1 && hdrLowerBound == 0) throw new ArgumentException("An unpadded opaque cache needs no decoder.");
+                return $"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,v_TexCoord).rgb; gl_FragColor=vec4({scaledRgb},1.0); }}\n";
+            }
             double edge = .5 / storedWidth;
-            return FormattableString.Invariant($"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5,{edge:R},{.5-edge:R}),v_TexCoord.y)).rgb; float a=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+edge:R},{1-edge:R}),v_TexCoord.y)).r; gl_FragColor=vec4(rgb,a); }}\n");
+            if (hdrSignedSqrt) return SignedRgbDecoder("vec2(v_TexCoord.x*0.5,v_TexCoord.y)",
+                FormattableString.Invariant($"texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+edge:R},{1-edge:R}),v_TexCoord.y)).r"),
+                storedWidth, storedHeight, 0, 0, checked((int)storedWidth / 2 - 1), checked((int)storedHeight - 1),
+                hdrScale, hdrLowerBound);
+            return FormattableString.Invariant($"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5,{edge:R},{.5-edge:R}),v_TexCoord.y)).rgb; float a=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+edge:R},{1-edge:R}),v_TexCoord.y)).r; gl_FragColor=vec4({scaledRgb},a); }}\n");
         }
         bool below = HardwareDecodeDimensions.StackedVertically(packedAlpha, content.PaddedWidth);
         double halfX = packedAlpha && !below ? .5 : 1, halfY = below ? .5 : 1;
@@ -93,15 +111,44 @@ internal static class EffectPrefixCache
         string x = FormattableString.Invariant($"clamp({left:R}+v_TexCoord.x*{spanX:R},{left + edgeX:R},{left + spanX - edgeX:R})");
         string y = FormattableString.Invariant($"clamp({top:R}+v_TexCoord.y*{spanY:R},{top + edgeY:R},{top + spanY - edgeY:R})");
         string alpha = !packedAlpha ? "1.0" : below ? $"texSample2D(g_Texture1,vec2({x},0.5+{y})).r" : $"texSample2D(g_Texture1,vec2(0.5+{x},{y})).r";
-        return $"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,vec2({x},{y})).rgb; float a={alpha}; gl_FragColor=vec4(rgb,a); }}\n";
+        if (hdrSignedSqrt) return SignedRgbDecoder($"vec2({x},{y})", alpha, storedWidth, storedHeight,
+            content.OffsetX, content.OffsetY, content.OffsetX + content.Width - 1,
+            content.OffsetY + content.Height - 1, hdrScale, hdrLowerBound);
+        return $"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,vec2({x},{y})).rgb; float a={alpha}; gl_FragColor=vec4({scaledRgb},a); }}\n";
+    }
+
+    private static string SignedRgbDecoder(string rgbUv, string alpha, uint storedWidth, uint storedHeight,
+        int minX, int minY, int maxX, int maxY, double hdrScale, double hdrLowerBound)
+    {
+        float lo = (float)hdrLowerBound, hi = lo + (float)hdrScale;
+        float qLo = MathF.Sign(lo) * MathF.Sqrt(MathF.Abs(lo));
+        float qHi = MathF.Sign(hi) * MathF.Sqrt(MathF.Abs(hi));
+        float qSpan = qHi - qLo;
+        if (!float.IsFinite(qSpan) || qSpan <= 0 || minX < 0 || minY < 0 || maxX < minX || maxY < minY ||
+            maxX >= storedWidth || maxY >= storedHeight)
+            throw new ArgumentException("Signed HDR decoder needs a finite range and a valid encoded content rectangle.");
+        string span = qSpan.ToString("R", CultureInfo.InvariantCulture);
+        string lower = qLo.ToString("R", CultureInfo.InvariantCulture);
+        // Invert the nonlinear transfer at each encoded texel before filtering it in radiance space.
+        // A 1:1 mapping hits the exact-center branch and reads only one texel.
+        return $"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\n" +
+            $"vec3 DecodeRgb(int2 p){{ int2 xy=clamp(p,int2({minX},{minY}),int2({maxX},{maxY})); " +
+            $"vec3 e=g_Texture1.Load(int3(xy,0)).rgb; vec3 v=e*{span}+{lower}; return v*abs(v); }}\n" +
+            $"void main(){{ vec2 pos=({rgbUv})*vec2({storedWidth},{storedHeight})-vec2(0.5,0.5); " +
+            "int2 p=int2(floor(pos)); vec2 f=frac(pos); vec3 rgb=DecodeRgb(p); " +
+            "if(f.x!=0.0 || f.y!=0.0){ vec3 right=DecodeRgb(p+int2(1,0)); " +
+            "vec3 down=DecodeRgb(p+int2(0,1)); vec3 diagonal=DecodeRgb(p+int2(1,1)); " +
+            "rgb=mix(mix(rgb,right,f.x),mix(down,diagonal,f.x),f.y); } " +
+            $"gl_FragColor=vec4(rgb,{alpha}); }}\n";
     }
 
     private static async Task<JsonObject> WriteAlphaDecoderAsync(string project, string stem, string textureResource, int id, uint storedWidth,
-        CancellationToken cancellationToken, uint storedHeight = 0, bool packedAlpha = true, EncodedContentRegion? content = null)
+        CancellationToken cancellationToken, uint storedHeight = 0, bool packedAlpha = true, EncodedContentRegion? content = null,
+        double hdrScale = 1, double hdrLowerBound = 0, bool hdrSignedSqrt = false)
     {
         string shader = stem + "/decode", material = "materials/" + shader + ".json", effect = "effects/" + shader + ".json";
         string vertex = "// SPDX-License-Identifier: MIT\nuniform mat4 g_ModelViewProjectionMatrix;\nattribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main(){ gl_Position=mul(vec4(a_Position,1.0),g_ModelViewProjectionMatrix); v_TexCoord=a_TexCoord; }\n";
-        string fragment = DecoderFragment(storedWidth, storedHeight, packedAlpha, content);
+        string fragment = DecoderFragment(storedWidth, storedHeight, packedAlpha, content, hdrScale, hdrLowerBound, hdrSignedSqrt);
         string vertexPath = ProjectSource.ContainedPath(project, "shaders/" + shader + ".vert");
         foreach (string resource in new[] { "shaders/" + shader + ".vert", "shaders/" + shader + ".frag", material, effect })
         {

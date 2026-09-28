@@ -48,12 +48,37 @@ public sealed partial class NativeRenderRunner
         await WriteJsonAsync(manifestPath, manifest, cancellationToken);
         try
         {
+            if (request.HdrRangeProbe && (request.HdrScale is not > 0 ||
+                request.CaptureTarget is not { EffectTerminal: true, ExactExtent: true }))
+                throw new ArgumentException("An HDR range probe requires an exact effect-terminal capture.");
+            if (request.HdrSignedSqrt && (request.HdrRangeProbe || request.HdrScale is not > 0 ||
+                request.CaptureTarget is not { EffectTerminal: true, ExactExtent: true }))
+                throw new ArgumentException("Signed HDR encoding requires an exact effect-terminal capture outside the range probe.");
+            if (request.HdrRangeProbe &&
+                !(await client.CapabilitiesAsync(Path.Combine(output, "renderer-version.stderr.log"), cancellationToken))
+                    .Has("hdr-range-probe-v1"))
+                throw new InvalidDataException("Renderer does not support an exact HDR range probe.");
             if (request.CaptureTarget?.ForceVisibleOwner == true &&
                 !(await client.CapabilitiesAsync(Path.Combine(output, "renderer-version.stderr.log"), cancellationToken))
                     .Has("capture-force-visible-owner-v1"))
                 throw new InvalidDataException("Renderer does not support capturing a visibility-controlled effect owner.");
+            if (request.HdrScale is > 0 && request.CaptureTarget?.EffectTerminal == true &&
+                !(await client.CapabilitiesAsync(Path.Combine(output, "renderer-version.stderr.log"), cancellationToken))
+                    .Has("hdr-terminal-affine-v2"))
+                throw new InvalidDataException("Renderer does not support affine HDR capture at an effect terminal.");
+            if (request.HdrLowerBound != 0 &&
+                !(await client.CapabilitiesAsync(Path.Combine(output, "renderer-version.stderr.log"), cancellationToken))
+                    .Has("hdr-terminal-affine-v2"))
+                throw new InvalidDataException("Renderer does not support signed HDR capture encoding.");
+            if (request.HdrSignedSqrt &&
+                !(await client.CapabilitiesAsync(Path.Combine(output, "renderer-version.stderr.log"), cancellationToken))
+                    .Has("hdr-terminal-signed-sqrt-v1"))
+                throw new InvalidDataException("Renderer does not support signed-sqrt HDR video encoding.");
             string native = Path.Combine(output, "native");
-            RenderJob job = RenderJob.From(request, source.SourcePath, native, rawStdout: frameSink is not null);
+            RenderJob job = RenderJob.From(request, source.SourcePath, native, rawStdout: frameSink is not null)
+                with { HdrScale = request.HdrScale,
+                    HdrLowerBound = request.HdrLowerBound != 0 ? request.HdrLowerBound : null,
+                    HdrSignedSqrt = request.HdrSignedSqrt ? true : null };
             string jobPath = Path.Combine(output, "renderer-job.json");
             await WriteJsonAsync(jobPath, JsonSerializer.SerializeToNode(job, JsonOptions)!, cancellationToken);
             try

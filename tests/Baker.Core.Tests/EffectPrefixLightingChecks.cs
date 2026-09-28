@@ -13,9 +13,11 @@ internal static class EffectPrefixLightingChecks
     private const int Owner = 1, PrefixEffect = 11;
     private const string Vertex = "// Original WpeBaker test shader, MIT.\nuniform mat4 g_ModelViewProjectionMatrix;\nattribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main(){ gl_Position=mul(vec4(a_Position,1.0),g_ModelViewProjectionMatrix); v_TexCoord=a_TexCoord; }\n";
 
-    private static async Task<string> WriteSourceAsync(string root, bool sharp = false)
+    private static async Task<string> WriteSourceAsync(string root, bool sharp = false, bool hdr = false, bool signed = false,
+        bool spanOne = false)
     {
-        string source = Path.Combine(root, sharp ? "sharp-prefix-source" : "lit-prefix-source");
+        string source = Path.Combine(root, spanOne ? "span-one-prefix-source" : signed ? "signed-prefix-source" : hdr ? "hdr-prefix-source" :
+            sharp ? "sharp-prefix-source" : "lit-prefix-source");
         async Task Write(string relative, string text)
         {
             string path = Path.Combine(source, relative.Replace('/', Path.DirectorySeparatorChar));
@@ -26,12 +28,13 @@ internal static class EffectPrefixLightingChecks
         await Write("scene.json", new JsonObject
         {
             ["camera"] = new JsonObject { ["center"] = "0 0 0", ["eye"] = "0 0 1", ["up"] = "0 1 0" },
-            ["general"] = new JsonObject { ["clearcolor"] = "0 0 0", ["clearenabled"] = true, ["ambientcolor"] = "0.5 0.5 0.5",
-                ["orthogonalprojection"] = new JsonObject { ["width"] = Size, ["height"] = Size }, ["bloom"] = false },
+            ["general"] = new JsonObject { ["clearcolor"] = "0 0 0", ["clearenabled"] = true,
+                ["ambientcolor"] = hdr ? "1 1 1" : "0.5 0.5 0.5", ["hdr"] = hdr,
+                ["orthogonalprojection"] = new JsonObject { ["width"] = Size, ["height"] = Size }, ["bloom"] = hdr },
             ["objects"] = new JsonArray(new JsonObject
             {
                 ["id"] = Owner, ["name"] = "lit", ["image"] = "models/lit.json", ["origin"] = $"{Size / 2} {Size / 2} 0",
-                ["size"] = $"{Size} {Size}", ["visible"] = true,
+                ["size"] = $"{Size} {Size}", ["visible"] = true, ["brightness"] = hdr && !signed ? 1.64 : 1.0,
                 ["effects"] = new JsonArray(
                     new JsonObject { ["id"] = PrefixEffect, ["file"] = "effects/prefix.json", ["visible"] = true },
                     new JsonObject { ["id"] = 12, ["file"] = "effects/suffix.json", ["visible"] = true })
@@ -82,7 +85,10 @@ internal static class EffectPrefixLightingChecks
         await Write("shaders/genericimage3.vert", Vertex);
         await Write("shaders/genericimage3.frag", "// Original WpeBaker test shader, MIT.\nuniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvoid main(){ gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }\n");
         foreach ((string name, string body) in new[] {
-            ("prefix", "gl_FragColor = vec4(c.g, c.r, c.b, c.a);"), ("suffix", "gl_FragColor = vec4(c.rgb * vec3(1.0, 0.9, 0.8), c.a);") })
+            ("prefix", spanOne ? "gl_FragColor = vec4(c.rgb * 0.75 - 0.2, c.a);" :
+                signed ? "gl_FragColor = vec4(c.rgb * 2.5 - 0.5, c.a);" :
+                "gl_FragColor = vec4(c.g, c.r, c.b, c.a);"),
+            ("suffix", "gl_FragColor = vec4(c.rgb * vec3(1.0, 0.9, 0.8), c.a);") })
         {
             await Write($"effects/{name}.json", $$"""{"name":"{{name}}","passes":[{"material":"materials/{{name}}.json"}]}""");
             await Write($"materials/{name}.json", $$"""{"passes":[{"shader":"{{name}}","blending":"normal","cullmode":"nocull","depthtest":"disabled","depthwrite":"disabled"}]}""");
@@ -93,14 +99,16 @@ internal static class EffectPrefixLightingChecks
     }
 
     /// <summary>从源工程复制出候选工程，把前缀换成缓存；返回候选工程目录。</summary>
-    private static async Task<string> AssembleCandidateAsync(string root, string sourceDirectory, string cacheFile, bool packedAlpha = false)
+    private static async Task<string> AssembleCandidateAsync(string root, string sourceDirectory, string cacheFile,
+        bool packedAlpha = false, double hdrScale = 1, double hdrLowerBound = 0, bool hdrSignedSqrt = false)
     {
         using var source = new ProjectSource(sourceDirectory);
         JsonObject scene = source.ReadJson(source.SceneResource), derived = scene.DeepClone().AsObject();
         string candidate = Path.Combine(root, Path.GetFileName(sourceDirectory).Replace("-source", "-candidate", StringComparison.Ordinal));
         await source.ExtractAsync(candidate);
         await EffectPrefixCache.ApplyAsync(source, scene, derived, candidate, Owner, 1, cacheFile,
-            packedAlpha ? Size * 2 : Size, Size, rgbaFrame: true, sourceWidth: Size, sourceHeight: Size, packedAlpha: packedAlpha);
+            packedAlpha ? Size * 2 : Size, Size, rgbaFrame: true, sourceWidth: Size, sourceHeight: Size,
+            packedAlpha: packedAlpha, hdrScale: hdrScale, hdrLowerBound: hdrLowerBound, hdrSignedSqrt: hdrSignedSqrt);
         await File.WriteAllTextAsync(Path.Combine(candidate, source.SceneResource), derived.ToJsonString());
         return candidate;
     }
@@ -206,4 +214,39 @@ internal static class EffectPrefixLightingChecks
             directRgb < oldRgb / 2 && directRgb < 2 && directAlpha < oldAlpha / 2 && directAlpha <= 1,
             $"sharp one-pixel color and alpha grid survives direct decode (RGB MAE old {oldRgb:F3}, direct {directRgb:F3}; alpha old {oldAlpha:F3}, direct {directAlpha:F3})");
     }
+
+    internal static async Task RunHdrAsync(Action<bool, string> check, string root, string assets, bool signed = false,
+        bool spanOne = false)
+    {
+        string source = await WriteSourceAsync(root, hdr: true, signed: signed, spanOne: spanOne);
+        double scale = spanOne ? 1 : signed ? 2.5 : 2, lower = spanOne ? -0.2 : signed ? -0.5 : 0;
+        bool signedEncoding = signed || spanOne;
+        var runner = new NativeRenderRunner(LocalTools.Tools!);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        async Task<byte[]> Render(string project, string name, RenderCaptureSelection? target = null) =>
+            await File.ReadAllBytesAsync((await runner.RenderRawAsync(new(project, assets, Path.Combine(root, name),
+                Size, Size, 60, 1, 1, Seed: 17, CaptureTarget: target, HdrScale: target is null ? 1 : scale,
+                HdrLowerBound: target is null ? 0 : lower, HdrSignedSqrt: target is not null && signedEncoding), timeout.Token))
+                ["rgba_path"]!.GetValue<string>(), timeout.Token);
+        var target = new RenderCaptureSelection(Owner, PrefixEffect, EffectTerminal: true, ExactExtent: true);
+        byte[] scaled = await Render(source, "hdr-scaled-prefix", target);
+        string cache = Path.Combine(root, "hdr-scaled.rgba");
+        await File.WriteAllBytesAsync(cache, scaled, timeout.Token);
+        string candidate = await AssembleCandidateAsync(root, source, cache, hdrScale: scale, hdrLowerBound: lower,
+            hdrSignedSqrt: signedEncoding);
+        byte[] expected = await Render(source, "hdr-reference");
+        byte[] actual = await Render(candidate, "hdr-candidate");
+        long rgb = 0, alpha = 0;
+        for (int i = 0; i < actual.Length; i += 4)
+        {
+            for (int c = 0; c < 3; ++c) rgb += Math.Abs(actual[i + c] - expected[i + c]);
+            alpha += Math.Abs(actual[i + 3] - expected[i + 3]);
+        }
+        double rgbMae = (double)rgb / (Size * Size * 3), alphaMae = (double)alpha / (Size * Size);
+        check(rgbMae <= 2 && alphaMae <= 1 && (signed || scaled.Where((_, index) => index % 4 != 3).Max() < 255),
+            $"the bounded HDR terminal is encoded and restored in the first effect " +
+            $"(RGB MAE {rgbMae:F3}, alpha MAE {alphaMae:F3})");
+    }
+
+
 }

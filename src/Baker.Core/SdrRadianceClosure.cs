@@ -30,6 +30,59 @@ public static class SdrRadianceClosure
         ProjectSource source, string? assets, bool hdrEnabled, JsonObject? project, out Blocker? blocker) =>
         Describe(scene, properties, trace, groups, source, assets, hdrEnabled, project, EffectRangeRules.Default, out blocker);
 
+    internal readonly record struct ProvenRange(double Lower, double Upper, string? Detail = null);
+
+    /// <summary>Literal nonnegative scalars may widen an otherwise proven SDR prefix; other open mechanisms stay unresolved.</summary>
+    internal static ProvenRange? ProvenPrefixRange(JsonObject group, JsonObject scene, JsonObject properties,
+        ProjectSource source, string? assets, bool reviewedShaderSemantics,
+        EffectPrefixRadianceBounds.StaticHeadBound? staticHead = null)
+    {
+        if (Text(group["status"]) != "open" || (group["group_checks"] as JsonArray ?? []).OfType<JsonObject>()
+            .Any(check => Text(check["status"]) != "pass")) return null;
+        var objects = (scene["objects"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(obj => SceneGraph.Int(obj["id"]) is not null)
+            .ToDictionary(obj => SceneGraph.Int(obj["id"])!.Value);
+        JsonObject[] drawn = (group["per_layer"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(layer => Text(layer["status"]) != "not_drawn").ToArray();
+        if (reviewedShaderSemantics && staticHead is not null && drawn.Length == 1 && SceneGraph.Int(drawn[0]["layer_id"]) is int ownerId &&
+            objects.TryGetValue(ownerId, out JsonObject? owner) &&
+            EffectPrefixRadianceBounds.TryProve(owner, properties, source, assets,
+                out double lower, out double boundedUpper, out string detail, staticHead))
+            return new(lower, boundedUpper, detail);
+        bool widened = false;
+        double upper = 1;
+        foreach (JsonObject layer in (group["per_layer"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            if (Text(layer["status"]) == "not_drawn") continue;
+            JsonObject[] failed = (layer["checks"] as JsonArray ?? []).OfType<JsonObject>()
+                .Where(check => Text(check["status"]) != "pass").ToArray();
+            if (failed.Length == 0) continue;
+            if (failed.Any(check => Text(check["rule"]) != "R4") ||
+                SceneGraph.Int(layer["layer_id"]) is not int id || !objects.TryGetValue(id, out JsonObject? obj) ||
+                !LiteralMaximum(Field(obj, "color"), properties, out double color) ||
+                !LiteralMaximum(Field(obj, "brightness"), properties, out double brightness) ||
+                !LiteralMaximum(Field(obj, "alpha"), properties, out double alpha) || alpha > 1 ||
+                !double.IsFinite(color * brightness)) return null;
+            upper = Math.Max(upper, color * brightness);
+            widened = true;
+        }
+        return widened && upper <= float.MaxValue ? new(0, upper) : null;
+    }
+
+    private static bool LiteralMaximum(JsonNode? raw, JsonObject properties, out double maximum)
+    {
+        maximum = 1;
+        JsonNode? value = SceneGraph.Resolve(raw, properties);
+        if (value is null) return true;
+        var components = new List<double>();
+        if (Number(value, out double number)) components.Add(number);
+        else if (value is not JsonValue text || !text.TryGetValue<string>(out string? literal) ||
+            !SdrRadianceCriteria.TryParseComponents(literal, components)) return false;
+        if (components.Count == 0 || components.Any(component => !double.IsFinite(component) || component < 0)) return false;
+        maximum = components.Max();
+        return true;
+    }
+
     /// <summary>同上，特效值域规则表可替换（测试用自带着色器的夹具表）。</summary>
     internal static JsonObject Describe(JsonObject scene, JsonObject properties, JsonObject? trace, JsonArray groups,
         ProjectSource source, string? assets, bool hdrEnabled, JsonObject? project, EffectRangeRules effectRules, out Blocker? blocker)

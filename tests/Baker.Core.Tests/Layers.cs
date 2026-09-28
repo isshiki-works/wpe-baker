@@ -737,3 +737,42 @@ public class EffectPrefixDirectSamplerTests
         await TestTemp.Run(dir => EffectPrefixLightingChecks.RunDirectSamplerAsync(Assert.True, dir));
     }
 }
+
+[Trait("Layer", "L3"), Collection("L3 本机工具")]
+public class EffectPrefixHdrCaptureTests
+{
+    [Fact]
+    public async Task Run()
+    {
+        Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
+        string? assets = Environment.GetEnvironmentVariable("WPE_BAKER_ASSETS");
+        Assert.SkipUnless(assets is not null && Directory.Exists(assets), "Set WPE_BAKER_ASSETS to Wallpaper Engine's assets directory.");
+        await TestTemp.Run(dir => EffectPrefixLightingChecks.RunHdrAsync(Assert.True, dir, assets!));
+    }
+}
+
+[Trait("Layer", "L3"), Collection("L3 本机工具")]
+public class EffectPrefixSignedHdrCaptureTests
+{
+    [Fact]
+    public async Task Run()
+    {
+        Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
+        string? assets = Environment.GetEnvironmentVariable("WPE_BAKER_ASSETS");
+        Assert.SkipUnless(assets is not null && Directory.Exists(assets), "Set WPE_BAKER_ASSETS to Wallpaper Engine's assets directory.");
+        await TestTemp.Run(dir => EffectPrefixLightingChecks.RunHdrAsync(Assert.True, dir, assets!, signed: true));
+    }
+}
+
+[Trait("Layer", "L3"), Collection("L3 本机工具")]
+public class EffectPrefixUnitSpanHdrCaptureTests
+{
+    [Fact]
+    public async Task Run()
+    {
+        Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
+        string? assets = Environment.GetEnvironmentVariable("WPE_BAKER_ASSETS");
+        Assert.SkipUnless(assets is not null && Directory.Exists(assets), "Set WPE_BAKER_ASSETS to Wallpaper Engine's assets directory.");
+        await TestTemp.Run(dir => EffectPrefixLightingChecks.RunHdrAsync(Assert.True, dir, assets!, spanOne: true));
+    }
+}
