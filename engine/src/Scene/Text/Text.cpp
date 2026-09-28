@@ -1088,11 +1088,10 @@ void TextLayouter::SetText(std::string_view utf8) {
     float text_w = 0.0f;
     for (auto& l : lines)
         if (l.width > text_w) text_w = l.width;
-    // Direct text is placed in the author's point-size line box. Using the
-    // font's ascender+descender instead moves glyphs toward the box center for
-    // fonts with large descenders (e.g. Chathura), despite a fixed layer origin.
+    // Direct text uses the ascender line box. Including the descender moves
+    // glyphs toward the box center for fonts with large descenders (e.g. Chathura).
     float text_h =
-        (im.style.direct_baseline ? static_cast<float>(fm.pixel_size) : fm.ascender - fm.descender) +
+        (im.style.direct_baseline ? fm.ascender : fm.ascender - fm.descender) +
         static_cast<float>(lines.size() - 1) * fm.line_height;
     im.last_text_w          = text_w;
     im.last_text_h          = text_h;
