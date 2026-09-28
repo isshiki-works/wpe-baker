@@ -100,9 +100,10 @@ internal static class ShaderSignatureChecks
 
             // 分量旋钮改写在文件末尾追加新 main：varying 声明在预处理条件块里时条件不成立就不存在，覆盖 shader 编不过（3644280276 waterripple），不当改写目标
             string ripple = "varying vec4 v_Plain;\n#if RIPPLE\nvarying vec4 v_TexCoordRipple;\n#endif\nvoid main() { v_Plain = vec4(g_Time); }\n";
-            check(ShaderTextPatch.AxisTarget(ripple, "periodica_k_vert_ax_x_v_TexCoordRipple") is null &&
-                ShaderTextPatch.AxisTarget(ripple, "periodica_k_vert_ax_x_v_Plain") is not null,
-                "a vertex output declared inside a preprocessor conditional is not a rewrite target");
+            check(ShaderTextPatch.AxisTarget(ripple, "periodica_k_vert_ax_x_v_TexCoordRipple") is (_, _, ["#if RIPPLE"]) &&
+                ShaderTextPatch.AxisTarget(ripple, "periodica_k_vert_ax_x_v_Plain") is (_, _, []) &&
+                ShaderTextPatch.AxisTarget(ripple.Replace("#if RIPPLE\n", "#if RIPPLE\n#else\n"), "periodica_k_vert_ax_x_v_TexCoordRipple") is null,
+                "a vertex output declared inside a preprocessor conditional stays a rewrite target, carrying its guard; one inside an #else branch does not");
 
             // 振幅推不出的慢项（90.1 s，旋钮 0.25）：逐项预算（这里 0%）内与 7.1 s 项凑不出循环时，整层路线（有视频组）放开它的改速、
             // 证据带实测标记留给分析收尾实测；特效前缀路线（没有视频组）不放开，照旧无解

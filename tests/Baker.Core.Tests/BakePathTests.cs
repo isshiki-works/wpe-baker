@@ -301,6 +301,42 @@ public class BakePathTests
         await Task.CompletedTask;
     });
 
+    // 分量旋钮改写把新 main 追加在文件末尾：varying 声明在 #if 块里时，保存与恢复它的语句包进同一条件（3644280276 waterripple 的组合关着时编不过），
+    // 条件成立的组合照常改写（main 上这些作品就是这样烘的，不能因此改判不可调速）
+    [Fact]
+    public async Task AxisRewriteKeepsAConditionalVaryingInsideItsGuard() => await TestTemp.Run(async dir =>
+    {
+        string project = Path.Combine(dir, "project");
+        void Write(string resource, string text)
+        {
+            string path = Path.Combine(project, resource);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+        }
+        const string key = "periodica_k_vert_ax_xy_v_TexCoordRipple";
+        Write("scene.json", """{"objects":[]}""");
+        Write("project.json", """{"file":"scene.json","type":"scene"}""");
+        Write("effects/ripple/effect.json", """{"passes":[{"material":"materials/effects/ripple.json"}]}""");
+        Write("materials/effects/ripple.json", """{"passes":[{"shader":"effects/ripple"}]}""");
+        Write("shaders/effects/ripple.vert", "uniform float g_Time;\n#if RIPPLE\nvarying vec4 v_TexCoordRipple;\n#endif\n" +
+            "void main() {\n#if RIPPLE\n  v_TexCoordRipple = vec4(g_Time);\n#endif\n  gl_Position = vec4(0.0);\n}\n");
+        var scene = JsonNode.Parse($$$"""
+            {"objects":[{"id":1,"effects":[{"file":"effects/ripple/effect.json","passes":[{"constantshadervalues":{"{{{key}}}":1.25}}]}]}]}
+            """)!.AsObject();
+        using var source = new ProjectSource(project);
+        JsonArray written = await ShaderTextPatch.WriteTimeScaleAsync(Path.Combine(dir, "capture"), source, null, scene, CancellationToken.None);
+        Assert.Equal([key], written.Single()!["keys"]!.AsArray().Select(k => k!.GetValue<string>()));
+        string text = File.ReadAllText(Path.Combine(dir, "capture", "shaders", "effects", "ripple.vert"));
+        string tail = text[text.LastIndexOf("void main()", StringComparison.Ordinal)..];
+        // 新 main 里每处读写 v_TexCoordRipple 都在 #if RIPPLE … #endif 之内
+        foreach (int at in System.Text.RegularExpressions.Regex.Matches(tail, @"\bv_TexCoordRipple\b").Select(m => m.Index))
+        {
+            string before = tail[..at];
+            Assert.True(before.LastIndexOf("#if RIPPLE", StringComparison.Ordinal) > before.LastIndexOf("#endif", StringComparison.Ordinal), tail);
+        }
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(tail, "#if RIPPLE").Count);
+    });
+
     // 冻结的粒子湍流场不进求解器，没有候选分量与证据：按补丁认项，同样进测速
     [Fact]
     public async Task FrozenParticleFieldEntersTheSpeedProbe() => await TestTemp.Run(async dir =>
