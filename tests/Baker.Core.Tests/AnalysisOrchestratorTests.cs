@@ -493,11 +493,40 @@ public class AnalysisOrchestratorTests
                     new JsonObject { ["id"] = 20, ["allocation"] = "video" });
                 plan["bake_value"] = !plainLive || proven
                     ? new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule, ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 2.5 } }
-                    : new JsonObject { ["rule"] = WorkloadValue.NeedsWorkComparison.Rule, ["evidence"] = new JsonObject { ["plain_group_ids"] = new JsonArray() } };
+                    : new JsonObject { ["status"] = "unknown", ["rule"] = WorkloadValue.CachedEffectPrefix.Rule,
+                        ["evidence"] = new JsonObject { ["prefix_count"] = 1 } };
+                if (plainLive && !proven)
+                {
+                    plan["route"] = "effect_prefix";
+                    plan["effect_prefix_caches"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 20, ["prefix_effect_count"] = 1 });
+                }
                 return Task.FromResult(plan);
             }, CancellationToken.None);
             Assert.Equal(proven ? 1 : 2, result["video_groups"]!.AsArray().Count);
         });
+    }
+
+    [Fact]
+    public void UnknownCoverageDoesNotBecomeZeroOrBeatAHeavyWholeLayer()
+    {
+        var request = new HybridAnalyzeRequest(2, "s", "a", "o");
+        JsonObject prefix = Plan(request, true);
+        prefix["route"] = "effect_prefix";
+        prefix["effect_prefix_caches"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 10, ["prefix_effect_count"] = 1 },
+            new JsonObject { ["owner_layer_id"] = 20, ["prefix_effect_count"] = 1 });
+        prefix["bake_value"] = new JsonObject { ["status"] = "unknown", ["rule"] = WorkloadValue.CachedEffectPrefix.Rule };
+        Assert.True(Admission.Accepted(prefix));
+        Assert.Null(AnalysisOrchestrator.Margin(prefix));
+        Assert.Empty(NoBenefit.AnalysisConditions(prefix));
+
+        JsonObject whole = Plan(request, true, groups: 2);
+        whole["bake_value"] = new JsonObject { ["status"] = "potential_gain", ["rule"] = WorkloadValue.CachedEffectPasses.Rule,
+            ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 35.7 } };
+        Assert.Equal(33.7, AnalysisOrchestrator.Margin(whole));
+        Assert.True(AnalysisOrchestrator.WholeEffectWorkProvenGreater(whole, prefix, 35.7, 6));
+        Assert.False(AnalysisOrchestrator.WholeEffectWorkProvenGreater(whole, prefix, 4, 6));
+        whole["video_groups"]!.AsArray().Add(new JsonObject { ["id"] = "extra" });
+        Assert.False(AnalysisOrchestrator.WholeEffectWorkProvenGreater(whole, prefix, 35.7, 6));
     }
 
     private static JsonObject Plan(HybridAnalyzeRequest request, bool usable, string[]? states = null, int groups = 1) => new()

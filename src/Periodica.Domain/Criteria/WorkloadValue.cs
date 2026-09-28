@@ -65,9 +65,9 @@ public static class WorkloadValue
     public static readonly Verdict UnresolvedPlan = new("unknown", "unresolved_plan", "当前方案仍有未解决的问题，不能据此判断原作没有优化价值。",
         "The current plan has unresolved issues; that does not establish a lack of optimization value.");
 
-    /// <summary>方案缓存了重复执行的特效前缀。</summary>
-    public static readonly Verdict CachedEffectPrefix = new("potential_gain", "cached_effect_prefix", "方案可以缓存重复执行的特效；实际收益仍需原作与成品对照。",
-        "The plan caches repeated effect work; actual savings still need a source/candidate comparison.");
+    /// <summary>已找到可缓存的特效前缀，但没有把移除工作与新视频负担按同一口径比较。</summary>
+    public static readonly Verdict CachedEffectPrefix = new("unknown", "cached_effect_prefix", "方案可以缓存重复执行的特效；新增视频能否省电仍需比较。",
+        "The plan caches repeated effect work; whether the added video saves power still needs comparison.");
 
     /// <summary>没有可用候选：不能据此断言原作负载低。</summary>
     public static readonly Verdict NoWorkingCandidate = new("unknown", "no_working_candidate", "当前未找到可用方案，不能据此断言原作负载低或没有优化价值。",

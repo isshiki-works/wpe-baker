@@ -86,7 +86,8 @@ internal sealed class AnalysisOrchestrator
             JsonObject before;
             using (AnalysisTiming.Measure("g_framebuffer_live")) before = await trial.SelectAsync();
             bool relaxedHolds = Admission.Accepted(result) && (!Admission.Accepted(before) ||
-                Margin(result) >= Margin(before) && LiveCanvas(result) <= LiveCanvas(before) + 1e-9);
+                Margin(result) is double relaxedMargin && Margin(before) is double beforeMargin &&
+                relaxedMargin >= beforeMargin && LiveCanvas(result) <= LiveCanvas(before) + 1e-9);
             if (!relaxedHolds) (orchestrator, result) = (trial, before);
         }
         // 含缓变分量的视频组先过闭合预检（SlowClosureProbe）：没闭合的把点名的慢分量层留实时、整套再分析，直到都闭合或不能生成；
@@ -274,10 +275,10 @@ internal sealed class AnalysisOrchestrator
             using var plainGroups = AnalysisTiming.Measure("d_plain_groups_live");
             var (replanned, _) = await new AnalysisOrchestrator(request with { RetainLiveRootIds = plain }, analyze, space, space.Budget(), tools,
                 Path.Combine(run, "plain-groups-live"), cache, token, memo).SolveAsync(interaction);
-            // 省下多少算不出（needs_work_comparison 而被烘层不全是普通图层）也算一条：还给实时要证得出剩下的不更不省电，
-            // 不能靠"不判"换来普通组留实时（实时画布变大）。
+            // 任何 unknown 且没有可比较的特效覆盖都算一条：还给实时要证得出剩下的不更不省电，
+            // 不能靠换成前缀等另一种 unknown 让普通组留实时（实时画布变大）。
             static int Unproven(JsonObject plan) => NoBenefit.AnalysisConditions(plan).Length +
-                (plan[BakeValueAssessment.Field]?["rule"]?.GetValue<string>() == WorkloadValue.NeedsWorkComparison.Rule && NoBenefit.RemovedPassCoverage(plan) is null ? 1 : 0);
+                (plan[BakeValueAssessment.Field]?["status"]?.GetValue<string>() == "unknown" && NoBenefit.RemovedPassCoverage(plan) is null ? 1 : 0);
             if (Admission.Accepted(replanned) && Unproven(replanned) <= Unproven(result))
                 result = replanned;
         }
@@ -331,14 +332,14 @@ internal sealed class AnalysisOrchestrator
             ["zh"] = MessageCatalog.Get(key, "zh"), ["en"] = MessageCatalog.Get(key, "en") };
     }
 
-    /// <summary>能生成且预计省电，路数按没证出静态的组数（上界）算：可行与差距用同一判据，不选烘焙可能拒的方案。
+    /// <summary>能生成且没有已证不省电条件，路数按没证出静态的组数（上界）算。
     /// 选中方案的上界越线时，编排收尾按渲染证据证出动态组（<see cref="SlowClosureProbe.StreamsAsync"/>），证出越线再退。</summary>
     private bool Viable(JsonObject plan) => Admission.Accepted(plan) && (request.AllowNoBenefit ||
         !DaytimeSplit.FixedState(plan) && NoBenefit.AnalysisConditions(plan).Length == 0 && !NoBenefit.TooManyVideoStreams(Admission.GroupCount(plan)));
 
-    /// <summary>预计收益：省下的渲染减视频路数；不能生成为负无穷。</summary>
-    private static double Margin(JsonObject plan) => Admission.Accepted(plan) ? (NoBenefit.RemovedPassCoverage(plan) ?? 0) -
-        Admission.GroupCount(plan) * NoBenefit.MinPassCoveragePerStream : double.NegativeInfinity;
+    /// <summary>同口径的特效覆盖减视频路数；省下的覆盖没算出或不能生成就不可比较。</summary>
+    internal static double? Margin(JsonObject plan) => Admission.Accepted(plan) && NoBenefit.RemovedPassCoverage(plan) is double removed
+        ? removed - Admission.GroupCount(plan) * NoBenefit.MinPassCoveragePerStream : null;
 
     /// <summary>实时画布：留实时图层的画布占比之和（plan.layers[].canvas_fraction，缺值按 0）。</summary>
     private static double LiveCanvas(JsonObject plan) => (plan["layers"] as JsonArray ?? []).OfType<JsonObject>()
@@ -369,8 +370,9 @@ internal sealed class AnalysisOrchestrator
     /// </summary>
     private async Task<JsonObject> RetreatAsync(JsonObject result, string interaction)
     {
-        // 离可行的差距：省下的渲染抵不过视频的差额与超出路数上限的路数取大；不能生成为无穷大。
-        static double Gap(JsonObject plan) => Math.Max(-Margin(plan), Admission.GroupCount(plan) - NoBenefit.SavingProvenStreams);
+        // 离可行的差距：只在特效覆盖有数值时比较；未算出覆盖或不能生成时没有可比较的差距。
+        static double? Gap(JsonObject plan) => Margin(plan) is double margin
+            ? Math.Max(-margin, Admission.GroupCount(plan) - NoBenefit.SavingProvenStreams) : null;
         static IEnumerable<int> Ids(JsonNode? node) => (node as JsonArray ?? []).Select(SceneGraph.Int).OfType<int>();
         if (Viable(result) || Admission.Accepted(result) && !NoBenefit.AnalysisConditions(result).Contains(NoBenefit.VideoCostOverSaving)) return result;
         // 只有每个候选必然仍命中的条件才叫改不了，这时直接不退：每个候选都是一整套重查（档位 × 状态 × 布局），结果不必和原方案同路。
@@ -415,8 +417,12 @@ internal sealed class AnalysisOrchestrator
             JsonObject? best = null, next = null;
             foreach (JsonObject plan in plans.Select(task => task.Result))
             {
-                if (Viable(plan)) { if (best is null || Margin(plan) > Margin(best)) best = plan; }
-                else if (Gap(plan) < Gap(next ?? current)) next = plan;
+                if (Viable(plan))
+                {
+                    if (best is null || Margin(plan) is double margin && Margin(best) is double bestMargin && margin > bestMargin)
+                        best = plan;
+                }
+                else if (Gap(plan) is double gap && Gap(next ?? current) is double currentGap && gap < currentGap) next = plan;
             }
             if (best is not null) return best;
             if (next is null) break;
@@ -501,9 +507,8 @@ internal sealed class AnalysisOrchestrator
         whole["blockers"] is JsonArray { Count: 0 } && whole["loop"]?["candidates"] is JsonArray { Count: > 0 };
 
     /// <summary>
-    /// 换个布局的整层方案是否比特效前缀方案好：它可行而前缀不可行；或都可行、它省下的特效渲染（<see cref="NoBenefit.RemovedPassCoverage"/>）
-    /// 超过前缀方案最多能省的——前缀缓存的所有者层全部特效 pass（同一 <see cref="BakeValueAssessment.PassCoverage"/> 口径）。
-    /// 前缀方案不算覆盖，取上界比较：只有确实省得多才换，不拿"没算"当理由换掉能用的方案。
+    /// 换个布局的整层方案是否可证明比前缀多省特效渲染：整层的已知覆盖严格超过前缀所有者层全部特效的上界，
+    /// 且新增视频路数不更多。前缀自身的覆盖没算出，不能拿 unknown 当零；也不能把仍实时的后缀当已缓存。
     /// </summary>
     private async Task<bool> LayeredSavesMoreAsync(JsonObject prefix, JsonObject whole)
     {
@@ -513,10 +518,17 @@ internal sealed class AnalysisOrchestrator
             prefix["runtime_evidence"]?.GetValue<string>() is not string path || !File.Exists(path)) return false;
         var owners = (prefix["effect_prefix_caches"] as JsonArray ?? []).OfType<JsonObject>()
             .Select(cache => SceneGraph.Int(cache["owner_layer_id"])).OfType<int>().ToHashSet();
-        var observed = (JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()
-            .Where(layer => SceneGraph.Int(layer["owner"]) is int owner && owners.Contains(owner));
-        return removed > BakeValueAssessment.PassCoverage(prefix, observed);
+        JsonObject[] observed = [.. (JsonNode.Parse(await File.ReadAllTextAsync(path, token))?["runtime_layers"] as JsonArray ?? [])
+            .OfType<JsonObject>().Where(layer => SceneGraph.Int(layer["owner"]) is int owner && owners.Contains(owner))];
+        if (owners.Count == 0 || owners.Any(owner => !observed.Any(layer => SceneGraph.Int(layer["owner"]) == owner && layer["materials"] is JsonArray)))
+            return false;
+        return WholeEffectWorkProvenGreater(whole, prefix, removed, BakeValueAssessment.PassCoverage(prefix, observed));
     }
+
+    /// <summary>整层覆盖为两位小数记录，下界减半个末位；前缀的全部 owner 特效只是上界。</summary>
+    internal static bool WholeEffectWorkProvenGreater(JsonObject whole, JsonObject prefix, double wholeCoverage,
+        double prefixCoverageUpper) => double.IsFinite(wholeCoverage) && double.IsFinite(prefixCoverageUpper) &&
+        Admission.GroupCount(whole) <= Admission.GroupCount(prefix) && wholeCoverage - 0.005 > prefixCoverageUpper;
 
     private async Task<JsonObject> TryAsync(HybridAnalyzeRequest candidate, string phase, string? state)
     {

@@ -97,7 +97,7 @@ public class DomainCriteriaTests
     // 烘焙价值规则表：按判定顺序，每行只让一条规则成立（不读文件的七条），钉住状态与规则代号。
     [Theory]
     [InlineData(true, true, true, "potential_gain", "video_shell", 2, "unknown", "unresolved_plan")]
-    [InlineData(false, true, false, null, "video_shell", 0, "potential_gain", "cached_effect_prefix")]
+    [InlineData(false, true, false, null, "video_shell", 0, "unknown", "cached_effect_prefix")]
     [InlineData(false, false, false, "potential_gain", "video_shell", 2, "unknown", "no_working_candidate")]
     [InlineData(false, false, true, "potential_gain", "video_shell", 2, "potential_gain", "reduced_video_decode")]
     [InlineData(false, false, true, "not_reduced", "video_shell", 2, "low_value", "unchanged_video_playback")]
