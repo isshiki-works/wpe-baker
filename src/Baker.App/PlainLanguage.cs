@@ -43,7 +43,7 @@ internal static class PlainLanguage
 
     /// <summary>结论第二行：固定一句；命中的条件（主因）进"详情"。</summary>
     public static string NoBenefitLine(bool english) =>
-        L(english, "预计功耗高于原壁纸", "Estimated power use is higher than the original wallpaper.");
+        L(english, "此方案预计无法降低播放开销", "This plan is not expected to reduce playback cost.");
 
     /// <summary>
     /// 不支持时的结论第二行：与摘要同一个理由（<see cref="PlanNarrative.SuitabilityReason"/>）；
