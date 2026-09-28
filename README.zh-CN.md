@@ -4,30 +4,13 @@
 
 **面向 Wallpaper Engine 的确定性动画烘焙工具**，基于 Periodica 引擎。
 
-场景壁纸每一帧都在实时重复渲染同样的画面。WPE Baker 为壁纸里的动画建立数学模型（着色器时间、动画轨道、粒子循环、视频时间基准），在可见变化预算内微调各自的周期，让整个场景首尾闭合成一段循环，再把其中确定性的部分预先渲染成一段视频。输出是一个独立的 Wallpaper Engine 项目：画面几乎不变，播放只需要视频解码。运行时不调用任何模型，也不需要 Python。
+WPE Baker 为场景壁纸里的动画建立数学模型（着色器时间、动画轨道、粒子循环和视频时间基准），并在可见变化预算内微调周期，让周期动画首尾闭合。一次离线生成会把确定性部分预渲染为视频或静态缓存；成品可以包含多个视频和纹理。重复播放时，预计算动画通过视频解码播放，保留的鼠标交互、音频响应、时钟和昼夜效果等图层则按所选模式继续实时运行。运行时不调用任何模型，也不需要 Python。
 
-官网：**https://isshiki-works.github.io/wpe-baker/zh.html** · 下载：**[Releases](https://github.com/isshiki-works/wpe-baker/releases/latest)** · 逐案数据与开发记录：[技术记录](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.zh-CN.md)
-
-## 实测
-
-官方 Wallpaper Engine 播放器，Intel Arc B390 笔记本，A/B/B/A 交替测试，RAPL 核显功耗，60 fps。原版壁纸对比烘焙成品。
-
-| 壁纸 | 原版 | 烘焙后 | 变化 |
-|---|---:|---:|---:|
-| 虹夏（3650475846） | 22.51 W | 1.86 W | −91.7% |
-| 绫波丽（3258032485） | 2.29 W | 0.19 W | −91.8% |
-| 亚托莉（3669681034） | 8.45 W | 0.81 W | −90.4% |
-| Alone（3448877775） | 5.66 W | 1.05 W | −81.5% |
-| 奥特曼雷欧（3685247684） | 9.13 W | 2.46 W | −73.0% |
-| 百合（3572877776） | 2.38 W | 0.71 W | −70.3% |
-| 芙莉莲（3426865175） | 10.09 W | 3.50 W | −65.3% |
-| Lost Landscape 3（3713073223） | 8.11 W | 3.48 W | −57.1% |
-
-刷新率越高，差距越大：亚托莉在面板满速 165 Hz 下，原版核显 26.0 W，烘焙后 3.9 W（整机封装 41.4 W → 15.4 W）。每个实测成品的逐案数据，包括没省下来的那些，见[技术记录](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.zh-CN.md)。
+官网：**https://isshiki-works.github.io/wpe-baker/zh.html** · 下载：**[Releases](https://github.com/isshiki-works/wpe-baker/releases/latest)** · 技术细节与项目记录：[技术记录](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.zh-CN.md)
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/isshiki-works/wpe-baker/releases/latest) 下载 `WpeBaker-1.0.2-win-x64.zip`，**整个**解压到有写入权限的目录（例如 `D:\WpeBaker`）。不要放进 `C:\Program Files`，也不要在压缩软件窗口里直接运行。
+1. 从 [Releases](https://github.com/isshiki-works/wpe-baker/releases/latest) 下载 Windows 压缩包，**整个**解压到有写入权限的目录（例如 `D:\WpeBaker`）。不要放进 `C:\Program Files`，也不要在压缩软件窗口里直接运行。
 2. 双击 `WpeBaker\WpeBaker.exe`。第一次运行如果弹出"Windows 已保护你的电脑"，点"更多信息"→"仍要运行"：程序没有购买代码签名证书，提示只说明这一点。
 3. 把 `steamapps\workshop\content\431960\` 下你想烘的那张壁纸的文件夹拖进窗口，点"分析"。
 4. 看结论，点"开始生成"。成品会直接出现在 Wallpaper Engine 的壁纸列表里。
@@ -53,7 +36,7 @@ wpe-baker.exe bake plan.json --out <输出目录>
 
 ## 系统要求
 
-Windows 10/11 64 位；Wallpaper Engine（Steam 版）；一块支持 Vulkan 的显卡用于离线渲染。播放烘焙成品只需要硬件视频解码。
+烘焙需要 Windows 10/11、Wallpaper Engine（Steam 版）和用于离线渲染的 GPU。播放时，预渲染视频使用硬件视频解码，保留的实时图层仍会继续渲染并处理输入。
 
 ## 反馈
 
@@ -65,7 +48,7 @@ Windows 10/11 64 位；Wallpaper Engine（Steam 版）；一块支持 Vulkan 的
 
 第三方组件与许可文本见 `THIRD-PARTY-NOTICES.md` 和源码包里的 `licenses/`。烘焙成品仅供在自己的电脑上使用，壁纸作品版权归创意工坊作者所有，请勿二次上传。本项目与 Wallpaper Engine 官方无关联。
 
-从源码构建：完整源码、第三方声明与构建记录在 Releases 页的 `WpeBaker-1.0.2-source.zip`，步骤见其中的 `REBUILD.md`。
+从源码构建：Releases 页的源码包包含完整源码、第三方声明与构建记录，步骤见其中的 `REBUILD.md`。
 
 ## 致谢
 
