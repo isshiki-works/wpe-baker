@@ -113,8 +113,8 @@ internal static class HardwareDecodeDimensionsChecks
             (string)fragmentMethod.Invoke(null, [width, height, packed, region])!;
         const uint legacyWidth = 3840;
         double legacyEdge = .5 / legacyWidth;
-        check(Fragment(legacyWidth, 6, true, null) == FormattableString.Invariant($"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture0,vec2(clamp(v_TexCoord.x*0.5,{legacyEdge:R},{.5-legacyEdge:R}),v_TexCoord.y)).rgb; float a=texSample2D(g_Texture0,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+legacyEdge:R},{1-legacyEdge:R}),v_TexCoord.y)).r; gl_FragColor=vec4(rgb,a); }}\n"),
-            "an unpadded packed cache keeps the historical decoder shader byte for byte");
+        check(Fragment(legacyWidth, 6, true, null) == FormattableString.Invariant($"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5,{legacyEdge:R},{.5-legacyEdge:R}),v_TexCoord.y)).rgb; float a=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+legacyEdge:R},{1-legacyEdge:R}),v_TexCoord.y)).r; gl_FragColor=vec4(rgb,a); }}\n"),
+            "an unpadded packed cache samples the original video in slot 1 before owner-width downsampling");
 
         string padded = Fragment(strip.StoredWidth, strip.StoredHeight, true, content);
         double[] numbers = Regex.Matches(padded, @"clamp\(([-0-9.Ee]+)\+v_TexCoord\.([xy])\*([-0-9.Ee]+),([-0-9.Ee]+),([-0-9.Ee]+)\)")
@@ -130,12 +130,18 @@ internal static class HardwareDecodeDimensionsChecks
             Math.Abs(numbers[6] * storedH - (content.OffsetY + .5)) < 1e-9 && Math.Abs(numbers[7] * storedH - (content.OffsetY + content.Height - .5)) < 1e-9;
         // 上下翻转取样：1-(top+span) 仍等于 top，说明内容矩形在翻转后落在同一位置。
         bool flipInvariant = numbers.Length >= 8 && Math.Abs(1 - (numbers[4] + numbers[5]) - numbers[4]) < 1e-9;
-        check(xMaps && yMaps && flipInvariant && padded.Contains("vec2(0.5+clamp(", StringComparison.Ordinal),
+        check(xMaps && yMaps && flipInvariant && padded.Contains("vec2(0.5+clamp(", StringComparison.Ordinal) &&
+            padded.Contains("texSample2D(g_Texture1", StringComparison.Ordinal) && !padded.Contains("g_Texture0", StringComparison.Ordinal),
             "the padded decoder maps UV 0..1 onto exactly the original content rectangle, clamped half a texel inside, and stays centred under a vertical flip");
         string opaquePadded = Fragment(wideStrip.StoredWidth, wideStrip.StoredHeight, false,
             new((int)wideStrip.PaddedWidth, (int)wideStrip.PaddedHeight, (int)wideStrip.OffsetX, (int)wideStrip.OffsetY, (int)wideStrip.ContentWidth, (int)wideStrip.ContentHeight));
-        check(opaquePadded.Contains("float a=1.0;", StringComparison.Ordinal) && !opaquePadded.Contains("0.5+clamp", StringComparison.Ordinal),
+        check(opaquePadded.Contains("float a=1.0;", StringComparison.Ordinal) && !opaquePadded.Contains("0.5+clamp", StringComparison.Ordinal) &&
+            opaquePadded.Contains("texSample2D(g_Texture1", StringComparison.Ordinal),
             "a padded opaque cache decodes RGB from the content rectangle and keeps full alpha");
+        string vertical = Fragment(4098, 4, true, new(4098, 2, 0, 0, 4098, 2));
+        check(vertical.Contains("texSample2D(g_Texture1", StringComparison.Ordinal) &&
+            vertical.Contains("0.5+clamp(", StringComparison.Ordinal) && !vertical.Contains("g_Texture0", StringComparison.Ordinal),
+            "a vertically stacked packed cache reads both halves directly from the original video");
 
         // ---- 分组裁剪区扩到下限，显示几何随裁剪区 ----
         var small = new CacheRegion(1920, 1080, 100, 100, 34, 34);

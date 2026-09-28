@@ -66,14 +66,15 @@ internal static class EffectPrefixCache
             int effectId = checked(SceneAnalyzer.Walk(derivedScene).OfType<JsonObject>()
                 .Where(node => node["id"] is JsonValue value && value.TryGetValue<int>(out _))
                 .Select(node => node["id"]!.GetValue<int>()).DefaultIfEmpty(0).Max() + 1);
-            derived["effects"]!.AsArray().Insert(0, await WriteAlphaDecoderAsync(outputProject, stem, effectId, width, cancellationToken,
-                height, packedAlpha, paddedContent));
+            derived["effects"]!.AsArray().Insert(0, await WriteAlphaDecoderAsync(outputProject, stem, textureResource, effectId, width,
+                cancellationToken, height, packedAlpha, paddedContent));
         }
         return new(textureResource, materialResource, modelResource);
     }
 
     /// <summary>
-    /// 解码片段着色器。未补边时与历史输出逐字相同；补边时把 UV 映射回每半幅里的内容矩形，
+    /// 解码片段着色器。直接读取 slot 1 的原视频，避免 packed 两半在基础 pass 的 owner 宽度目标里先各缩一半。
+    /// 补边时把 UV 映射回每半幅里的内容矩形，
     /// 并夹在矩形内半个纹素，双线性取样不会混进补边。内容居中放置，纹理上下或左右翻转时矩形 UV 不变。
     /// </summary>
     internal static string DecoderFragment(uint storedWidth, uint storedHeight, bool packedAlpha, EncodedContentRegion? content)
@@ -82,7 +83,7 @@ internal static class EffectPrefixCache
         {
             if (!packedAlpha) throw new ArgumentException("An unpadded opaque cache needs no decoder.");
             double edge = .5 / storedWidth;
-            return FormattableString.Invariant($"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture0,vec2(clamp(v_TexCoord.x*0.5,{edge:R},{.5-edge:R}),v_TexCoord.y)).rgb; float a=texSample2D(g_Texture0,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+edge:R},{1-edge:R}),v_TexCoord.y)).r; gl_FragColor=vec4(rgb,a); }}\n");
+            return FormattableString.Invariant($"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5,{edge:R},{.5-edge:R}),v_TexCoord.y)).rgb; float a=texSample2D(g_Texture1,vec2(clamp(v_TexCoord.x*0.5+0.5,{.5+edge:R},{1-edge:R}),v_TexCoord.y)).r; gl_FragColor=vec4(rgb,a); }}\n");
         }
         bool below = HardwareDecodeDimensions.StackedVertically(packedAlpha, content.PaddedWidth);
         double halfX = packedAlpha && !below ? .5 : 1, halfY = below ? .5 : 1;
@@ -91,11 +92,11 @@ internal static class EffectPrefixCache
         double edgeX = .5 / storedWidth, edgeY = .5 / storedHeight;
         string x = FormattableString.Invariant($"clamp({left:R}+v_TexCoord.x*{spanX:R},{left + edgeX:R},{left + spanX - edgeX:R})");
         string y = FormattableString.Invariant($"clamp({top:R}+v_TexCoord.y*{spanY:R},{top + edgeY:R},{top + spanY - edgeY:R})");
-        string alpha = !packedAlpha ? "1.0" : below ? $"texSample2D(g_Texture0,vec2({x},0.5+{y})).r" : $"texSample2D(g_Texture0,vec2(0.5+{x},{y})).r";
-        return $"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture0,vec2({x},{y})).rgb; float a={alpha}; gl_FragColor=vec4(rgb,a); }}\n";
+        string alpha = !packedAlpha ? "1.0" : below ? $"texSample2D(g_Texture1,vec2({x},0.5+{y})).r" : $"texSample2D(g_Texture1,vec2(0.5+{x},{y})).r";
+        return $"// SPDX-License-Identifier: MIT\nuniform sampler2D g_Texture1;\nvarying vec2 v_TexCoord;\nvoid main(){{ vec3 rgb=texSample2D(g_Texture1,vec2({x},{y})).rgb; float a={alpha}; gl_FragColor=vec4(rgb,a); }}\n";
     }
 
-    private static async Task<JsonObject> WriteAlphaDecoderAsync(string project, string stem, int id, uint storedWidth,
+    private static async Task<JsonObject> WriteAlphaDecoderAsync(string project, string stem, string textureResource, int id, uint storedWidth,
         CancellationToken cancellationToken, uint storedHeight = 0, bool packedAlpha = true, EncodedContentRegion? content = null)
     {
         string shader = stem + "/decode", material = "materials/" + shader + ".json", effect = "effects/" + shader + ".json";
@@ -111,12 +112,12 @@ internal static class EffectPrefixCache
         await File.WriteAllTextAsync(vertexPath, vertex, cancellationToken);
         await File.WriteAllTextAsync(ProjectSource.ContainedPath(project, "shaders/" + shader + ".frag"), fragment, cancellationToken);
         await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, material), new JsonObject {
-            ["passes"] = new JsonArray(new JsonObject { ["shader"] = shader, ["blending"] = "normal",
+            ["passes"] = new JsonArray(new JsonObject { ["shader"] = shader, ["textures"] = new JsonArray("", textureResource), ["blending"] = "normal",
                 ["depthtest"] = "disabled", ["depthwrite"] = "disabled", ["cullmode"] = "nocull" }) }, cancellationToken);
         await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, effect), new JsonObject {
             ["name"] = "RGBA cache input", ["passes"] = new JsonArray(new JsonObject { ["material"] = material }) }, cancellationToken);
-        // Decode as an ordinary first effect. The original base material must remain genericimage:
-        // the engine clones it for the later puppet pass, where decoding a second time would be wrong.
+        // Slot 0 is filled with the preceding pass by WPE; slot 1 reads the original cache at its full encoded width.
+        // Keep decoding in the first effect: the engine clones the base material for a later puppet pass.
         return new JsonObject { ["id"] = id, ["file"] = effect, ["name"] = "RGBA cache input", ["visible"] = true };
     }
 
