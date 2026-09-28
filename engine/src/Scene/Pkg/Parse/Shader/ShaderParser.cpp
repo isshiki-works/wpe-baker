@@ -1984,7 +1984,7 @@ using ShaderCacheDigest = std::array<std::uint8_t, 20>;
 
 constexpr std::array<std::uint8_t, 8> kShaderCacheMagic { 'O', 'W', 'E', 'S', 'P', 'V', '3', 0 };
 constexpr std::uint32_t               kShaderCacheFormatVersion = 3;
-constexpr std::uint32_t               kShaderCacheAbiVersion    = 19;
+constexpr std::uint32_t               kShaderCacheAbiVersion    = 20;
 // 8-byte magic, six u32 fields, and four SHA-1 digests total 112 bytes.
 constexpr std::uint32_t kShaderCacheHeaderSize = static_cast<std::uint32_t>(
     kShaderCacheMagic.size() + 6 * sizeof(std::uint32_t) + 4 * ShaderCacheDigest {}.size());
@@ -2708,6 +2708,37 @@ std::string ShaderParser::PreShaderHeader(const std::string& src, const Combos& 
         // Inject #define ahead of the prologue text so the #ifndef guard
         // around our `mod` overloads sees it during glslang preprocess.
         pre = "#define WW_USER_MOD 1\n" + pre;
+    }
+
+    // HLSL defines smoothstep through saturate, including coincident/reversed
+    // edges. SPIR-V SmoothStep leaves those edges undefined. Keep the documented
+    // arithmetic and let HLSL's NClamp lowering handle NaN/Inf in the quotient.
+    // https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-smoothstep
+    // Preserve an authored overload instead of macro-renaming its declaration.
+    bool user_smoothstep = false;
+    shader_lex::Lexer smoothstep_lexer(rstd::cppstd::as_str(user_src).unwrap());
+    auto previous = NextShaderToken(smoothstep_lexer);
+    int brace_depth = 0;
+    for (auto token = NextShaderToken(smoothstep_lexer);
+         token.kind != shader_lex::TokenKind::Eof;
+         previous = token, token = NextShaderToken(smoothstep_lexer)) {
+        if (PunctIs(token, '{')) ++brace_depth;
+        if (PunctIs(token, '}')) --brace_depth;
+        if (brace_depth == 0 && token.text == "smoothstep"_str &&
+            previous.kind == shader_lex::TokenKind::Ident) user_smoothstep = true;
+    }
+    if (! user_smoothstep) {
+        // Keep scalar/vector/matrix overloads and evaluate each argument once.
+        for (std::string type : { "float", "float2", "float3", "float4",
+                                  "float1x1", "float1x2", "float1x3", "float1x4",
+                                  "float2x1", "float2x2", "float2x3", "float2x4",
+                                  "float3x1", "float3x2", "float3x3", "float3x4",
+                                  "float4x1", "float4x2", "float4x3", "float4x4" }) {
+            pre += "\n" + type + " ww_smoothstep(" + type + " lo, " + type + " hi, " +
+                   type + " x) { " + type + " t = saturate((x - lo) / (hi - lo)); " +
+                   "return t * t * (3.0 - 2.0 * t); }\n";
+        }
+        pre += "#define smoothstep ww_smoothstep\n";
     }
 
     std::string combo_defines;
