@@ -121,6 +121,41 @@ void main() { gl_FragColor = vec4(smoothstep(0.0, 1.0, 0.5)); }
     ASSERT_TRUE(result.ok) << result.error;
 }
 
+TEST(ShaderParser, ConsecutiveStorageDeclarationsOnOneLineCompileAndKeepTheirAnnotation) {
+    const std::string fragment = R"(
+uniform sampler2D g_Texture0; varying vec2 v_Uv; uniform float g_First; uniform float g_Second; // {"material":"second","default":0.25}
+void main() { gl_FragColor = texSample2D(g_Texture0, v_Uv) * (g_First + g_Second); }
+)";
+    const auto info = Parse(fragment);
+    ASSERT_TRUE(info.alias.contains("second"));
+    EXPECT_EQ(info.alias.at("second"), "g_Second");
+    EXPECT_TRUE(info.svs.contains("g_Second"));
+    EXPECT_FALSE(info.svs.contains("g_First"));
+
+    owe::SceneShaderVariantDesc desc;
+    desc.scene_id = desc.shader_name = "same-line-storage-test";
+    desc.texture_infos.push_back(owe::SceneShaderTextureCompileInfo { .enabled = true });
+    desc.stages.push_back(owe::SceneShaderVariantStage {
+        .stage = owe::ShaderType::VERTEX,
+        .source_key = "/assets/shaders/same-line-storage-test.vert",
+        .source = "attribute vec3 a_Position; attribute vec2 a_TexCoord; varying vec2 v_Uv; "
+                  "void main(){ v_Uv=a_TexCoord; gl_Position=vec4(a_Position,1.0); }",
+    });
+    desc.stages.push_back(owe::SceneShaderVariantStage {
+        .stage = owe::ShaderType::FRAGMENT,
+        .source_key = "/assets/shaders/same-line-storage-test.frag",
+        .source = fragment,
+    });
+    owe::fs::VFS vfs;
+    const auto result = owe::ShaderParser::CompileSceneShaderVariant(desc, vfs);
+    ASSERT_TRUE(result.ok) << result.error;
+    ASSERT_TRUE(result.shader);
+    EXPECT_TRUE(result.variant.stages.back().uniforms.contains("g_First"));
+    EXPECT_TRUE(result.variant.stages.back().uniforms.contains("g_Second"));
+    ASSERT_EQ(result.variant.sampler_bindings.size(), 1u);
+    EXPECT_EQ(result.variant.uniform_aliases.at("second"), "g_Second");
+}
+
 // --- annotation collection: unconditional ----------------------------------
 
 TEST(ShaderParser, TextureDefaultCollectedRegardlessOfIfdef) {
@@ -1435,7 +1470,7 @@ void main() {
                (static_cast<std::uint32_t>(header[offset + 3]) << 24);
     };
     EXPECT_EQ(read_u32(8), 3u);
-    EXPECT_EQ(read_u32(12), 21u);
+    EXPECT_EQ(read_u32(12), 22u);
     EXPECT_EQ(read_u32(16), 112u);
     EXPECT_EQ(read_u32(24), 2u);
     const auto initial_write_time = std::filesystem::last_write_time(artifact_path);

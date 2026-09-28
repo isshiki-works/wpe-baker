@@ -25,8 +25,8 @@ using namespace rstd::literals;
 
 namespace
 {
-// Decl scanners over GLSL declaration lines. Each WE shader decl is
-// line-scoped; the Cursor primitives in :shader_lex do all char-level work.
+// Decl scanners over GLSL declaration lines. Consecutive declarations may
+// share a line; the Cursor primitives in :shader_lex do all char-level work.
 
 struct DeclMatch {
     std::size_t start;       // offset of leading newline (or 0 at file start)
@@ -125,23 +125,26 @@ inline Option<DeclMatch> TryParseDeclLine(ref<str> src, usize line_start,
     return Some(m);
 }
 
-// Iterate every line; yield one DeclMatch per matching line. `keep_prefix`
-// is 1 when a leading newline exists (so callers stripping decl lines keep
-// the newline as a paragraph anchor).
+// Continue after each semicolon, including declarations of another storage
+// class. Filtering first would lose `uniform` after `varying` on the same line.
 template<typename Fn>
 inline void ForEachDeclLine(ref<str> src, std::initializer_list<ref<str>> storage_kws, Fn&& fn) {
     shader_lex::LineWalker w(src);
     for (; ! w.Done(); w.Step()) {
-        if (auto m = TryParseDeclLine(src, w.LineStart(), storage_kws)) {
+        auto cursor = w.LineStart();
+        while (auto m = TryParseDeclLine(src, cursor,
+                   { "attribute"_str, "varying"_str, "in"_str, "out"_str, "uniform"_str })) {
             DeclMatch out = *m;
-            if (w.LineStart() > rstd::usize()) {
+            if (cursor == w.LineStart() && cursor > rstd::usize()) {
                 out.start       = (w.LineStart() - rstd::usize(1)).to_primitive();
                 out.keep_prefix = 1;
-            } else {
-                out.start       = w.LineStart().to_primitive();
-                out.keep_prefix = 0;
             }
-            fn(out);
+            cursor = usize(m->end);
+            for (auto requested : storage_kws) {
+                if (out.storage != requested) continue;
+                fn(out);
+                break;
+            }
         }
     }
 }
@@ -1984,7 +1987,7 @@ using ShaderCacheDigest = std::array<std::uint8_t, 20>;
 
 constexpr std::array<std::uint8_t, 8> kShaderCacheMagic { 'O', 'W', 'E', 'S', 'P', 'V', '3', 0 };
 constexpr std::uint32_t               kShaderCacheFormatVersion = 3;
-constexpr std::uint32_t               kShaderCacheAbiVersion    = 21;
+constexpr std::uint32_t               kShaderCacheAbiVersion    = 22;
 // 8-byte magic, six u32 fields, and four SHA-1 digests total 112 bytes.
 constexpr std::uint32_t kShaderCacheHeaderSize = static_cast<std::uint32_t>(
     kShaderCacheMagic.size() + 6 * sizeof(std::uint32_t) + 4 * ShaderCacheDigest {}.size());
