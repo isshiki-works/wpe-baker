@@ -1435,7 +1435,7 @@ void main() {
                (static_cast<std::uint32_t>(header[offset + 3]) << 24);
     };
     EXPECT_EQ(read_u32(8), 3u);
-    EXPECT_EQ(read_u32(12), 20u);
+    EXPECT_EQ(read_u32(12), 21u);
     EXPECT_EQ(read_u32(16), 112u);
     EXPECT_EQ(read_u32(24), 2u);
     const auto initial_write_time = std::filesystem::last_write_time(artifact_path);

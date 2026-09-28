@@ -1984,7 +1984,7 @@ using ShaderCacheDigest = std::array<std::uint8_t, 20>;
 
 constexpr std::array<std::uint8_t, 8> kShaderCacheMagic { 'O', 'W', 'E', 'S', 'P', 'V', '3', 0 };
 constexpr std::uint32_t               kShaderCacheFormatVersion = 3;
-constexpr std::uint32_t               kShaderCacheAbiVersion    = 20;
+constexpr std::uint32_t               kShaderCacheAbiVersion    = 21;
 // 8-byte magic, six u32 fields, and four SHA-1 digests total 112 bytes.
 constexpr std::uint32_t kShaderCacheHeaderSize = static_cast<std::uint32_t>(
     kShaderCacheMagic.size() + 6 * sizeof(std::uint32_t) + 4 * ShaderCacheDigest {}.size());
@@ -2732,7 +2732,11 @@ std::string ShaderParser::PreShaderHeader(const std::string& src, const Combos& 
         for (std::string type : { "float", "float2", "float3", "float4" }) {
             pre += "\n" + type + " ww_smoothstep(" + type + " lo, " + type + " hi, " +
                    type + " x) { " + type + " t = saturate((x - lo) / (hi - lo)); " +
-                   "return t * t * (3.0 - 2.0 * t); }\n";
+                   // A driver may reassociate hi-(lo+0) to negative zero even
+                   // though the SPIR-V still contains FSub/FDiv/NClamp. Do not
+                   // use a division by zero to select the coincident-edge side.
+                   "return (lo == hi) ? (" + type + ")((x > lo) && isfinite(lo)) : " +
+                   "t * t * (3.0 - 2.0 * t); }\n";
         }
         // glslang does not implement HLSL matrix arithmetic component-wise.
         // Indexing a row gives a vector, so preserve every matrix shape by
