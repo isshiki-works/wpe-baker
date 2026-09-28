@@ -40,7 +40,8 @@ internal static class PlanTransforms
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(extraLiveRoots);
         ArgumentNullException.ThrowIfNull(runtimeDependencies);
-        HybridPlanFormat.Validate(plan);
+        // A route switch can reach here before the prefix HDR capture range is finalized.
+        HybridPlanFormat.Validate(plan, requireCaptureEncoding: false);
         var result = plan.DeepClone().AsObject();
         FullFrameDemotion.ResetAdmissionRecords(result);
         var layers = result["layers"]?.AsArray().OfType<JsonObject>().ToArray()

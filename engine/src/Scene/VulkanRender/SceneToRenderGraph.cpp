@@ -83,6 +83,7 @@ struct ExtraInfo {
     Option<rg::TextureNodeRef> mip_framebuffer_history;
     const RenderSceneSnapshot* render_scene { nullptr };
     const RenderLayerSelection* selection { nullptr };
+    const RenderCaptureTarget* capture_target { nullptr };
     // 帧间反馈之一：帧内首次写入 LOAD 叠在上一帧残留上。先读后写的纹理见 RenderGraph::frameBoundaries。
     bool                       reads_previous_frame { false };
     // M2：每个输出 key 最近两次写入（版本号、use、变化集；change 为空 = 变化集 FULL）。
@@ -250,7 +251,8 @@ static void StoreMipFramebufferHistory(ExtraInfo& extra) {
 static void AddMaterialTextureReads(SceneMaterial& material, std::string_view pass_output,
                                     ExtraInfo& extra, rg::RenderGraphBuilder& builder,
                                     vulkan::CustomShaderPass::Desc& pdesc,
-                                    bool                            reuses_previous_output) {
+                                    bool                            reuses_previous_output,
+                                    std::string_view                texture0_override = {}) {
     auto snapshots = HashMap<String, rg::TextureNodeRef>::make();
     for (std::size_t index = 0; index < material.textures.size(); ++index) {
         rstd_assert(index < material.texture_sources.len().to_primitive());
@@ -261,18 +263,24 @@ static void AddMaterialTextureReads(SceneMaterial& material, std::string_view pa
         const auto&                source = material.texture_sources[usize(index)];
         Option<rg::TextureNodeRef> input;
         std::string                binding_key;
-        if (source.kind == SceneMaterialTextureSourceKind::Empty) {
+        if (source.kind == SceneMaterialTextureSourceKind::Empty &&
+            (index != 0 || texture0_override.empty())) {
             pdesc.texture_bindings.emplace_back();
             continue;
         }
-        if (source.kind == SceneMaterialTextureSourceKind::UnsupportedSpecial) {
+        if (source.kind == SceneMaterialTextureSourceKind::UnsupportedSpecial &&
+            (index != 0 || texture0_override.empty())) {
             rstd_error("material '{}' references unsupported scene texture '{}'",
                        material.name,
                        source.key);
             pdesc.texture_bindings.emplace_back();
             continue;
         }
-        if (source.kind == SceneMaterialTextureSourceKind::LayerOutput) {
+        if (index == 0 && !texture0_override.empty()) {
+            binding_key = std::string(texture0_override);
+            input = Some(builder.createTexture(MakeTextureDesc(extra, binding_key)));
+            builder.markVirtualWrite(*input);
+        } else if (source.kind == SceneMaterialTextureSourceKind::LayerOutput) {
             auto* link = extra.render_scene != nullptr && source.wallpaper_layer >= i32()
                              ? extra.render_scene->linkSource(WallpaperLayerId {
                                    .value = source.wallpaper_layer,
@@ -334,9 +342,18 @@ static void AddMaterialTextureReads(SceneMaterial& material, std::string_view pa
 static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, ExtraInfo& extra,
                                    bool                defer_effect = false,
                                    SceneRenderViewKind render_view  = SceneRenderViewKind::Primary,
-                                   SceneImageEffectNode* effect_node = nullptr);
+                                   SceneImageEffectNode* effect_node = nullptr,
+                                   std::string_view texture0_override = {});
 
-static void LoadGraphEffects(SceneNodeLayer* effs, ExtraInfo& extra) {
+static void LoadGraphEffects(SceneNodeLayer* effs, const SceneNode* owner_node, ExtraInfo& extra) {
+    const auto* capture = extra.capture_target;
+    const auto owner = owner_node->WallpaperIdentity();
+    bool has_hdr_encoding = false;
+    for (const auto& post_process : extra.scene->PostProcesses())
+        if (post_process->name == "__hdr_scale") { has_hdr_encoding = true; break; }
+    const bool scale_terminal = capture != nullptr && capture->effect_terminal &&
+        has_hdr_encoding && owner.is_some() &&
+        owner->value.to_primitive() == capture->owner_layer_id;
     for (auto* eff : effs->ResolvedEffects()) {
         if (eff == nullptr) continue;
         auto cmdItor = eff->commands.begin();
@@ -380,6 +397,46 @@ static void LoadGraphEffects(SceneNodeLayer* effs, ExtraInfo& extra) {
             ToGraphPass(n.sceneNode.as_ptr(), ResolveEffectTarget(*effs, target), extra,
                         false, SceneRenderViewKind::Primary, &n);
             extra.m2_candidate = nullptr;
+            if (scale_terminal && &n == &eff->nodes.back() && target.kind == SceneEffectTargetKind::LayerNext &&
+                (capture->authored_effect_id < 0 || eff->authored_id == capture->authored_effect_id) &&
+                (capture->effect_ordinal < 0 || eff->authored_ordinal == capture->effect_ordinal)) {
+                // Copy this exact terminal version first. Scaling the original target would change what
+                // later authored effects and feedback read; only the capture copy may receive rgb/k.
+                bool applied = false;
+                const std::string source = std::string(ResolveEffectTarget(*effs, target));
+                if (auto original = extra.scene->RenderTarget(as_str(source).unwrap())) {
+                    const std::string copy = "_rt_wpe_baker_hdr_capture_" +
+                        std::to_string(capture->owner_layer_id) + "_" + std::to_string(eff->authored_id) + "_" +
+                        std::to_string(eff->authored_ordinal);
+                    SceneRenderTarget copy_target = **original;
+                    copy_target.force_sdr = extra.scene->HdrRangeProbe();
+                    copy_target.bind = {};
+                    copy_target.allowReuse = false;
+                    copy_target.force_clear = true;
+                    copy_target.clear_on_first_write = true;
+                    copy_target.preserve_on_write = false;
+                    extra.scene->RegisterRenderTarget(String::make(as_str(copy).unwrap()), std::move(copy_target));
+                    for (const auto& pp : extra.scene->PostProcesses()) {
+                        if (pp->name != "__hdr_scale") continue;
+                        for (auto& step : pp->steps) {
+                            if (!std::holds_alternative<ScenePostProcessPass>(step)) continue;
+                            auto& pass = std::get<ScenePostProcessPass>(step);
+                            const auto* selection = extra.selection;
+                            extra.selection = nullptr;
+                            ToGraphPass(pass.node.as_ptr(), copy, extra, false,
+                                        SceneRenderViewKind::Primary, &n, source);
+                            extra.selection = selection;
+                            applied = n.graph_pass_index.is_some();
+                            break;
+                        }
+                        break;
+                    }
+                }
+                if (!applied) {
+                    n.graph_pass_index = None();
+                    rstd_error("HDR terminal capture has no rgb/k graph pass");
+                }
+            }
             nodePos++;
         }
         emit_commands();
@@ -394,7 +451,8 @@ static void LoadGraphEffects(SceneNodeLayer* effs, ExtraInfo& extra) {
 
 static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, ExtraInfo& extra,
                                    bool defer_effect, SceneRenderViewKind render_view,
-                                   SceneImageEffectNode* effect_node) {
+                                   SceneImageEffectNode* effect_node,
+                                   std::string_view texture0_override) {
     auto& rgraph = *extra.rgraph;
     auto& scene  = *extra.scene;
 
@@ -457,6 +515,7 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
              render_view,
              effect_node,
              m2_candidate,
+             texture0_override = std::string(texture0_override),
              &scene,
              &extra](rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
                 const auto& pass        = builder.workPassNode();
@@ -491,7 +550,8 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
 
                 pdesc.output = pass_output_s;
                 AddMaterialTextureReads(
-                    *material, pass_output, extra, builder, pdesc, reuses_previous_output);
+                    *material, pass_output, extra, builder, pdesc, reuses_previous_output,
+                    texture0_override);
 
                 auto output_node =
                     builder.createTexture(MakeTextureDesc(extra, pass_output_s), true);
@@ -587,7 +647,7 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
     }
 
     if (! defer_effect && imgeff != nullptr && imgeff->HasRenderEffects())
-        LoadGraphEffects(imgeff, extra);
+        LoadGraphEffects(imgeff, node, extra);
     return imgeff;
 }
 
@@ -724,7 +784,7 @@ static void EmitSceneNode(SceneNode* node, std::string_view inherited_output,
                           linked_ids, force_visible_owner, capture_owner);
         }
         if (effect_layer != nullptr && effect_layer->HasRenderEffects()) {
-            LoadGraphEffects(effect_layer, extra);
+            LoadGraphEffects(effect_layer, node, extra);
         }
         return;
     }
@@ -844,7 +904,8 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
                                              const RenderCaptureTarget* capture_target,
                                              bool*                      reads_previous_frame) {
     auto      rgraph = Box<rg::RenderGraph>::make();
-    ExtraInfo extra { .rgraph = rgraph.get(), .scene = &scene, .render_scene = &render_scene, .selection = selection };
+    ExtraInfo extra { .rgraph = rgraph.get(), .scene = &scene, .render_scene = &render_scene,
+                      .selection = selection, .capture_target = capture_target };
 
     // The snapshot owns link-consumer discovery; graph build only consumes the
     // resulting source ids.
@@ -882,6 +943,7 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
         // hdr_scale 的 rgb/k 属于捕获出口：不含后处理的组捕获也要做；去掉选择，
         // 免得这个无图层归属的节点被剔除、或在透明底捕获里被强制写 alpha。
         const bool hdr_scale = pp->name == "__hdr_scale";
+        if (hdr_scale && capture_target != nullptr && capture_target->effect_terminal) continue;
         if (! hdr_scale && selection != nullptr && ! selection->include_postprocessing) continue;
         if (hdr_scale) extra.selection = nullptr;
         for (auto& step : pp->steps) {

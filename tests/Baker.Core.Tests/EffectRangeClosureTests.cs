@@ -262,6 +262,19 @@ public class EffectRangeClosureTests
         Assert.Equal("open", prefixTwo["hdr_radiance_closure"]!["status"]!.GetValue<string>());
         Assert.Equal("requires_resolution", prefixTwo["status"]!.GetValue<string>());
         Assert.NotEmpty(prefixTwo["blockers"]!.AsArray());
+        JsonObject brightScene = new() { ["general"] = new JsonObject { ["hdr"] = true },
+            ["objects"] = new JsonArray(ImageLayer(10, 1.64, Effect("convex"), Effect("additive"))) };
+        JsonObject bright = Report(1), unsupported = Report(1), unbounded = Report(2);
+        Verdict.ApplyPrefixRadianceClosure(bright, brightScene, new JsonObject(), trace, source, null, null, Rules(),
+            terminalSignedSqrtSupported: true, terminalAffineSupported: true);
+        Verdict.ApplyPrefixRadianceClosure(unsupported, brightScene, new JsonObject(), trace, source, null, null, Rules());
+        Verdict.ApplyPrefixRadianceClosure(unbounded, brightScene, new JsonObject(), trace, source, null, null, Rules(),
+            terminalSignedSqrtSupported: true, terminalAffineSupported: true);
+        Assert.InRange(bright["hdr_radiance_closure"]!["groups"]![0]!["capture_scale"]!.GetValue<double>(), 1.64, 1.640001);
+        Assert.Equal(0.0, bright["hdr_radiance_closure"]!["groups"]![0]!["capture_lower_bound"]!.GetValue<double>());
+        Assert.Empty(bright["blockers"]!.AsArray());
+        Assert.NotEmpty(unsupported["blockers"]!.AsArray());
+        Assert.NotEmpty(unbounded["blockers"]!.AsArray());
         return Task.CompletedTask;
     });
 }

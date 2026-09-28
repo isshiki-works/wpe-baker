@@ -8,6 +8,33 @@ using Xunit;
 [Trait("Layer", "L1")]
 public class EffectPrefixEligibilityTests
 {
+    [Fact]
+    public async Task CompositionReferenceUsesTheInstalledPrefixClock() => await TestTemp.Run(async root =>
+    {
+        string authored = Path.Combine(root, "author"), reference = Path.Combine(root, "reference");
+        var (scene, _) = Background(authored);
+        string shader = Path.Combine(authored, "shaders/effects/waves.frag");
+        Directory.CreateDirectory(Path.GetDirectoryName(shader)!);
+        await File.WriteAllTextAsync(shader,
+            "uniform float g_Time; void main(){ gl_FragColor=vec4(sin(g_Time)); }",
+            TestContext.Current.CancellationToken);
+        using var source = new ProjectSource(authored);
+        await source.ExtractAsync(reference, TestContext.Current.CancellationToken);
+        var loop = new JsonObject { ["candidates"] = new JsonArray(new JsonObject {
+            ["patches"] = new JsonArray(new JsonObject {
+                ["kind"] = "shader_speed", ["owner_layer_id"] = 1, ["effect_index"] = 0,
+                ["pass_index"] = 0, ["constant_key"] = ShaderPeriodAnalysis.TimeScaleKey,
+                ["value_index"] = 0, ["old_value"] = 1.0, ["new_value"] = 1.1 }) }) };
+        JsonArray written = await EffectPrefixBakeService.PatchCompositionReferenceAsync(reference, source,
+            authored, scene, new JsonObject(), [loop], TestContext.Current.CancellationToken);
+        Assert.Equal(1.1, scene["objects"]![0]!["effects"]![0]!["passes"]![0]!
+            ["constantshadervalues"]![ShaderPeriodAnalysis.TimeScaleKey]!.GetValue<double>());
+        Assert.Contains(written.OfType<JsonObject>(), patch => patch["resource"]?.GetValue<string>() ==
+            "shaders/effects/waves.frag");
+        Assert.Contains("g_Time*g_PeriodicaTimeScale", await File.ReadAllTextAsync(
+            Path.Combine(reference, "shaders/effects/waves.frag"), TestContext.Current.CancellationToken));
+    });
+
     /// <summary>一张 genericimage2 背景：效果 0 是纯时间特效（周期 3 s），效果 1 读指针。</summary>
     private static (JsonObject Scene, JsonObject Runtime) Background(string dir)
     {

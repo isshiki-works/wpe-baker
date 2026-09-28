@@ -9,6 +9,7 @@
 #endif
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
 #include <CLI11.hpp>
 #include <new> // wescene.json 的全局模块片段带进 <new>，这里显式包含，免得与隐式 operator new 冲突
@@ -648,8 +649,27 @@ int Render(const fs::path& job_path) {
         config.muted = false; // Offline mode has no host audio device; preserve authored audio.
         if (Field(json, "hdr_scale")) {
             config.hdr_scale = static_cast<float>(Number(json, "hdr_scale", 1.0));
-            if (!(config.hdr_scale >= 1.0f) || !std::isfinite(config.hdr_scale))
-                throw std::runtime_error("hdr_scale must be a finite number >= 1");
+            if (!(config.hdr_scale > 0.0f) || !std::isfinite(config.hdr_scale))
+                throw std::runtime_error("hdr_scale must be a finite positive number");
+        }
+        if (Field(json, "hdr_lower_bound")) {
+            config.hdr_lower_bound = static_cast<float>(Number(json, "hdr_lower_bound", 0.0));
+            if (!std::isfinite(config.hdr_lower_bound))
+                throw std::runtime_error("hdr_lower_bound must be finite");
+        }
+        config.hdr_range_probe = Bool(json, "hdr_range_probe", false);
+        if (config.hdr_range_probe && (!(config.hdr_scale > 0.0f) || !job.capture_target ||
+            !job.capture_target->effect_terminal || !job.capture_target->exact_extent || job.gpu_encode))
+            throw std::runtime_error("hdr_range_probe requires an exact effect-terminal CPU capture with HDR encoding");
+        config.hdr_signed_sqrt = Bool(json, "hdr_signed_sqrt", false);
+        if (config.hdr_signed_sqrt && (config.hdr_range_probe || !(config.hdr_scale > 0.0f) ||
+            !job.capture_target || !job.capture_target->effect_terminal || !job.capture_target->exact_extent))
+            throw std::runtime_error("hdr_signed_sqrt requires a distinct exact effect-terminal capture");
+        if (config.hdr_signed_sqrt) {
+            const float hi = config.hdr_lower_bound + config.hdr_scale;
+            const auto q = [](float value) { return std::copysign(std::sqrt(std::fabs(value)), value); };
+            if (!std::isfinite(hi) || !(q(hi) > q(config.hdr_lower_bound)))
+                throw std::runtime_error("hdr_signed_sqrt range is not finite or representable");
         }
         if (auto* properties = Field(json, "user_properties")) {
             if (!properties->is_object()) throw std::runtime_error("user_properties must be an object");
@@ -835,7 +855,7 @@ int main(int argc, char** argv) {
         }
         if (parsed && version && !render->parsed()) {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-encode-padding-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-encode-padding-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1,hdr-terminal-affine-v2,hdr-terminal-signed-sqrt-v1,hdr-range-probe-v1\n";
             return 0;
         }
         if (parsed && !version && render->parsed()) return Render(Path(job));

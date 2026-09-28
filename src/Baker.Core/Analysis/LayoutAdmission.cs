@@ -124,7 +124,8 @@ internal sealed class LayoutAdmission
     internal static Blocker? CompositionHierarchyConflict(JsonObject plan,
         IReadOnlyDictionary<int, JsonObject>? sourceObjects = null, JsonArray? dependencies = null)
     {
-        HybridPlanFormat.Validate(plan);
+        // Analysis has not attached the prefix HDR encoding yet; bake validates the finished plan.
+        HybridPlanFormat.Validate(plan, requireCaptureEncoding: false);
         JsonArray layers = plan["layers"]!.AsArray();
         var objects = sourceObjects ?? layers.OfType<JsonObject>().ToDictionary(Id, layer => new JsonObject {
             ["id"] = layer["id"]!.DeepClone(), ["parent"] = layer["parent"]?.DeepClone() });

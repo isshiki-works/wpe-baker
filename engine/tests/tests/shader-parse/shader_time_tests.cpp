@@ -126,6 +126,13 @@ TEST_F(ShaderTime, SpinMatchesEquation) {
     ExpectPeriod(Analyze({ "spin", "spin", { { "NOISE", "0" } }, { { "g_Speed", { 0.5f } } } }), kTau / 0.5);
 }
 
+TEST_F(ShaderTime, SmoothstepKeepsPeriodicTimeSignature) {
+    ExpectPeriod(Analyze({ .effect = "", .shader = "bounded_smoothstep_time", .combos = {}, .values = {},
+                           .vert = "attribute vec3 a_Position; void main() { gl_Position = vec4(a_Position, 1.0); }",
+                           .frag = "uniform float g_Time; void main() { gl_FragColor = vec4(smoothstep(0.0, 1.0, sin(g_Time))); }" }),
+                 kTau);
+}
+
 // 方程库 pulse（noiseamount 0）：2π/|speed|
 TEST_F(ShaderTime, PulseMatchesEquation) {
     ExpectPeriod(Analyze({ "pulse", "pulse", { { "AUDIOPROCESSING", "0" } },

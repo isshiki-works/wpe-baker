@@ -41,6 +41,9 @@ struct SessionConfig {
     float                                   speed { 1.0f };
     bool                                    graphviz { false };
     float                                   hdr_scale { 0.0f }; // >0：HDR 管线，见 Scene::HdrScale
+    float                                   hdr_lower_bound { 0.0f }; // 捕获编码 (rgb-lower)/scale；alpha 不变
+    bool                                    hdr_range_probe { false }; // 仅raw静态极值探针：独立捕获RT直接写UNORM
+    bool                                    hdr_signed_sqrt { false }; // effect-terminal RGB signed-sqrt 编码；alpha 不变
 };
 
 struct OfflineOptions {

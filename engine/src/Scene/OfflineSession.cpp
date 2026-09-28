@@ -680,6 +680,9 @@ void OfflineSession::Impl::loadScene(const vulkan::DeviceCapabilities& capabilit
                 // R4：解析一开始就要有 Services（BuildContext 里相机字段脚本就会建脚本运行时）。
                 .services = &m_services,
                 .hdr_scale = m_config.hdr_scale,
+                .hdr_lower_bound = m_config.hdr_lower_bound,
+                .hdr_range_probe = m_config.hdr_range_probe,
+                .hdr_signed_sqrt = m_config.hdr_signed_sqrt,
             });
         if (parsed.is_err()) {
             rstd_error("scene parse failed: {}", parsed.unwrap_err().message.as_str());
