@@ -304,6 +304,10 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
                 // 捕获点落在共用缓冲上的前缀录到的是整幅场景，这个候选不生成。
                 if (await captureProbes.TargetAsync(cache, cancellationToken) is { } probe &&
                     probe["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus) continue;
+                // 完整区间复核（与烘焙同一份捕获副本、同一判据）：短观测看不到的晚到依赖推翻这条前缀时不采用，退一级再试，
+                // 分析结论与烘焙一致，不再判"能"而烘焙 candidate_rejected_late_dependency。
+                if (await captureProbes.CompleteCaptureAsync(cache, observation.Trace, projection, cancellationToken) is { } complete &&
+                    complete["status"]?.GetValue<string>() != PrefixCaptureProbes.CompleteCapturePassedStatus) continue;
                 accepted.Add(cache.DeepClone());
                 settled.Add(ownerId);
             }

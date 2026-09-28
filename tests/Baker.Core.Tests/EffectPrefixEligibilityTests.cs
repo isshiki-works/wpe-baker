@@ -78,6 +78,25 @@ public class EffectPrefixEligibilityTests
         await Task.CompletedTask;
     });
 
+    // 分析期完整区间复核与烘焙复核同一判据：短观测里没有、完整区间里别的对象在运行中改写这一层（计时分支里才写），前缀不成立。
+    // 分析按它不采用这条前缀（PrefixCaptureProbes.CompleteCaptureAsync），结论与烘焙一致（#238 本机全集 3019976352、2931199278）。
+    [Fact]
+    public async Task LateWriteInTheCompleteCaptureVoidsThePrefix() => await TestTemp.Run(async dir =>
+    {
+        var (scene, runtime) = Background(dir);
+        using var source = new ProjectSource(dir);
+        var request = new HybridAnalyzeRequest(1, dir, dir, dir, 64, 48, 30, 1);
+        Assert.True(EffectPrefixBakeService.SurvivesCompleteCapture(scene, source, request, runtime, new JsonObject(), new JsonObject(), 1, 1));
+        var full = runtime.DeepClone().AsObject();
+        full["runtime_dependencies"]!.AsArray().Add(new JsonObject { ["owner"] = 2, ["target"] = 1, ["operation"] = "write",
+            ["property"] = "origin", ["initialization"] = false });
+        Assert.False(EffectPrefixBakeService.SurvivesCompleteCapture(scene, source, request, full, new JsonObject(), new JsonObject(), 1, 1));
+        JsonObject late = Assert.Single(EffectPrefixBakeService.LateDependencyRejection(1, 90, new JsonObject(), full, runtime)["late_dependencies"]!
+            .AsArray().OfType<JsonObject>());
+        Assert.Equal("origin", late["property"]!.GetValue<string>());
+        await Task.CompletedTask;
+    });
+
     // 烘焙时完整捕获推翻了某层的前缀：只记这一层的拒绝（带上完整捕获里新出现、涉及这一层的依赖），不抛异常让整张失败。
     [Fact]
     public void LateDependencyRejectionListsOnlyTheNewEdgesOfThatLayer()
