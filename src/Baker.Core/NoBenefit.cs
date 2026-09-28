@@ -3,10 +3,9 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// <summary>
-/// 烘了也不省电的几类方案一律拒绝，只有命令行 --no-benefit allow（调试、测功耗用）能覆盖。判据：
-/// 静态成品仍带实时层且证出省不下东西、视频流超过 <see cref="SavingProvenStreams"/> 路，
-/// 以及整层路线里每路视频省下的特效渲染不到 <see cref="MinPassCoveragePerStream"/> 道整屏（贵的层留在实时，烘掉的只是便宜的部分）。
-/// 都在分析时判（写 blocker）。视频流路数：特效前缀路线每个缓存都编成一路视频，路数就是 effect_prefix_caches 的个数；
+/// 默认拒绝有明确低价值证据的静态成品、或超过现有视频路数政策的方案；命令行 --no-benefit allow 可覆盖。
+/// pass 覆盖/视频路数只作风险线索，不能证明视频解码比省下的渲染更费电：编码会裁剪，透明度与帧率也影响工作量。
+/// 视频流路数：特效前缀路线每个缓存都编成一路视频，路数就是 effect_prefix_caches 的个数；
 /// 整层路线按已证动态的组数（<see cref="Admission.DynamicGroupCount"/>）判——没证出静态的组数越线时，分析按渲染证据证出哪些组是动态的
 /// （<see cref="SlowClosureProbe.StreamsAsync"/>，限时），证出越线就在分析里把省下渲染最少的越线几组留实时再分析；没证出的不当拒因。烘焙时仍按实际编出的视频流复核，不再退回重烘。
 /// 判据只说"预计"：不是功耗实测，覆盖后照常烘焙。
@@ -34,33 +33,34 @@ public static class NoBenefit
     public const string StaticWithLive = "static_only_with_live_layers";
     public const string TooManyStreams = "video_streams_over_limit";
 
-    /// <summary>
-    /// 整层路线每路视频至少要省下的特效渲染：被烘层的特效 pass 数按画布占比加权（bake_value 的 effect_pass_coverage）÷ 视频组数。
-    /// 一路视频在笔记本上约 0.66 W CPU 加解码（runs/SALVAGE/report.json）。笔记本 PKG 实测：更费电的 5 张（3151551777、3436033033、
-    /// 3666747189、3669680904、改前的 3737267090）在 0–0.57，省电的 3650475846 为 17.9；取 1 只拦得住已知费电的，少误伤未实测的。
-    /// </summary>
+    /// <summary>历史实测启发的低覆盖风险线索，不是视频成本下界或硬拒阈值。</summary>
     public const double MinPassCoveragePerStream = 1.0;
 
     public const string PlainLayersOnly = "only_plain_layers_baked";
     public const string VideoCostOverSaving = "video_cost_over_saved_rendering";
 
-    /// <summary>分析时就能判的条件：静态图仍带实时层且证出低价值；视频流超过上限（特效前缀按缓存数、整层按已证动态的组数）；整层路线省下的渲染抵不过视频。</summary>
+    /// <summary>分析时可写的拒因：静态图仍带实时层且证出低价值；或超过现有视频路数政策。</summary>
     public static string[] AnalysisConditions(JsonObject plan)
     {
         var hits = new List<string>();
         double? frames = plan["loop"]?["candidates"] is JsonArray { Count: > 0 } candidates ? StaticOnlyBake.Count(candidates[0]?["frames"]) : null;
-        if (frames is <= 1 && plan["live_layer_ids"] is JsonArray { Count: > 0 } &&
-            (BakeValueAssessment.IsLowValue(plan) || PlainOnly(plan, videoOnly: false)))
+        if (frames is <= 1 && plan["live_layer_ids"] is JsonArray { Count: > 0 } && BakeValueAssessment.IsLowValue(plan))
             hits.Add(StaticWithLive);
         if (plan["route"]?.GetValue<string>() == "effect_prefix" && plan["effect_prefix_caches"] is JsonArray caches && TooManyVideoStreams(caches.Count) ||
             TooManyVideoStreams(Admission.DynamicGroupCount(plan)))
             hits.Add(TooManyStreams);
-        // 只有证出解码量能降，或满足原有视频外壳规则时，decode_work 才替代特效覆盖判据；静态成品不编视频。
-        if (frames is > 1 && plan["route"]?.GetValue<string>() == "whole_layer" && !DecodeWorkCounts(plan) &&
-            Admission.GroupCount(plan) is > 0 and int streams && RemovedPassCoverage(plan) is double removed &&
-            removed < streams * MinPassCoveragePerStream)
-            hits.Add(removed == 0 ? PlainLayersOnly : VideoCostOverSaving);
         return hits.ToArray();
+    }
+
+    /// <summary>只作风险线索：pass 覆盖/视频组数没有考虑裁剪、透明打包、帧率、绘制与粒子模拟，不能作拒因。</summary>
+    internal static bool UncomparedVideoCost(JsonObject plan)
+    {
+        if (plan["route"]?.GetValue<string>() != "whole_layer" || DecodeWorkCounts(plan) ||
+            plan["loop"]?["candidates"] is not JsonArray { Count: > 0 } candidates ||
+            !(StaticOnlyBake.Count(candidates[0]?["frames"]) > 1) ||
+            RemovedPassCoverage(plan) is not double removed) return false;
+        int upper = Admission.GroupCount(plan);
+        return upper > 0 && removed < upper * MinPassCoveragePerStream;
     }
 
     /// <summary>
@@ -76,9 +76,9 @@ public static class NoBenefit
     }
 
     /// <summary>
-    /// 只有普通图层的视频组（单个源材质、普通贴图着色器、不带光照、没有特效 pass；不画东西的节点层不算）省下的渲染可证明约为 0，
-    /// 进视频只多一路视频和一个视频层的固定开销（SALVAGE 每路约 0.66 W；每层绘制约 0.46 W，并进视频枢纽后约 0.03 W，光解码这一路就不省）。返回把这些组留实时的 --retain-live 列表。
-    /// 静态成品、已证静态的组不编视频，不在此列；全部组都是普通组时没有可烘内容，交给 <see cref="PlainLayersOnly"/>。
+    /// 只有普通图层的视频组（单个源材质、普通贴图着色器、不带光照、没有特效 pass；不画东西的节点层不算）
+    /// 可试着留实时以少编一路视频。这只是路线候选；原图层绘制与新视频解码的净功耗仍需比较。返回 --retain-live 列表。
+    /// 静态成品、已证静态的组不编视频，不在此列；全部组都是普通组时没有可退的分组。
     /// </summary>
     internal static async Task<int[]?> PlainGroupRetainRootsAsync(JsonObject plan, CancellationToken token)
     {
@@ -135,7 +135,19 @@ public static class NoBenefit
         string[] conditions = ifCaptured ?? AnalysisConditions(plan);
         if (conditions.Length == 0)
         {
-            // 没命中的方案不写记录，plan 与旧版逐字节相同；只差采集能力的标出来。
+            // 覆盖/组数是经验风险线索，不能据此拒绝；保留已识别特效与视频组范围，净收益仍为未知。
+            if (UncomparedVideoCost(plan) && plan[BakeValueAssessment.Field] is JsonObject value)
+            {
+                value["status"] = WorkloadValue.UncertainVideoCost.Status;
+                value["reason_zh"] = WorkloadValue.UncertainVideoCost.ReasonZh;
+                value["reason_en"] = WorkloadValue.UncertainVideoCost.ReasonEn;
+                JsonObject evidence = value["evidence"] as JsonObject ?? new JsonObject();
+                if (value["evidence"] is not JsonObject) value["evidence"] = evidence;
+                evidence["video_group_upper_bound"] = Admission.GroupCount(plan);
+                evidence["dynamic_group_lower_bound"] = Admission.DynamicGroupCount(plan);
+                evidence["workload_risk_basis"] = "Effect-pass coverage per potential video stream is a heuristic only; encoded extent, alpha, frame rate and non-effect work are not compared.";
+            }
+            // 没命中的方案不写拒绝记录；只差采集能力的标出来。
             if (ifCaptured is not null) plan[Field] = Record(RejectChoice, CaptureOpenStatus, []);
             return;
         }

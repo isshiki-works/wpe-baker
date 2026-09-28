@@ -178,7 +178,7 @@ public class AdmissionTests
         JsonObject unknownPlain = StaticWithLive(Narrated(Plan(new JsonArray())));
         unknownPlain["bake_value"] = new JsonObject { ["status"] = "unknown", ["rule"] = WorkloadValue.NeedsWorkComparison.Rule,
             ["evidence"] = new JsonObject { ["plain_group_ids"] = new JsonArray("group-1") } };
-        Assert.Equal([NoBenefit.StaticWithLive], NoBenefit.AnalysisConditions(unknownPlain));
+        Assert.Empty(NoBenefit.AnalysisConditions(unknownPlain));
         unknownPlain["bake_value"]!["evidence"]!["plain_group_ids"] = new JsonArray();
         Assert.Empty(NoBenefit.AnalysisConditions(unknownPlain));
 
@@ -198,10 +198,15 @@ public class AdmissionTests
         prefixes["effect_prefix_caches"]!.AsArray().RemoveAt(0);
         Assert.Empty(NoBenefit.AnalysisConditions(prefixes));
 
-        // 整层路线：每路视频省下的特效（按画布占比加权的 pass 数）不到 1 道整屏就拒；bake_value 没算这项的不判。
+        // 整层路线：pass 覆盖/视频组数只是成本风险线索，不能作硬拒。
         JsonObject cheap = Narrated(Plan(new JsonArray(), groups: [[1], [3]]));
         cheap["bake_value"] = new JsonObject { ["rule"] = "cached_effect_passes", ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 1.9 } };
-        Assert.Equal([NoBenefit.VideoCostOverSaving], NoBenefit.AnalysisConditions(cheap));
+        Assert.Empty(NoBenefit.AnalysisConditions(cheap));
+        Assert.True(NoBenefit.UncomparedVideoCost(cheap));
+        Assert.Null(SlowClosureProbe.StreamLimit(cheap));
+        cheap["video_groups"]![0]!["dynamic_verified"] = true;
+        cheap["video_groups"]![1]!["dynamic_verified"] = true;
+        Assert.Empty(NoBenefit.AnalysisConditions(cheap));
         // 前缀缓存从第 0 帧起录：要整周期预热的前缀循环不提（接缝门必拒）。
         JsonObject prefixLoop = new() { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 600, ["components"] = new JsonArray(1) }) };
         Assert.True(EffectPrefixPlanner.Cacheable(prefixLoop));
@@ -213,12 +218,12 @@ public class AdmissionTests
         cheap["bake_value"] = new JsonObject { ["rule"] = "needs_work_comparison", ["evidence"] = new JsonObject { ["plain_group_ids"] = new JsonArray("group-1") } };
         Assert.Empty(NoBenefit.AnalysisConditions(cheap));
         cheap["bake_value"]!["evidence"]!["plain_group_ids"]!.AsArray().Add("group-2");
-        Assert.Equal([NoBenefit.PlainLayersOnly], NoBenefit.AnalysisConditions(cheap));
+        Assert.Empty(NoBenefit.AnalysisConditions(cheap));
 
-        // 只差透视捕获：按假设能采集照常判，命中就是不省电（结论规则排在能力缺口前），不命中留在能力缺口并标出来。
+        // 只差透视捕获：低覆盖不是硬拒，仍保留能力缺口结论。
         PlanBlockers.Add(cheap, new Blocker(BlockerCode.PerspectiveNeedsScreenspace));
         NoBenefit.Apply(cheap, allowed: false);
-        Assert.Equal(NoBenefit.RejectionReason, cheap["suitability"]!["rule"]!.GetValue<string>());
+        Assert.Equal(NoBenefit.CaptureOpenStatus, cheap[NoBenefit.Field]!["status"]!.GetValue<string>());
         JsonObject gap = Narrated(Plan(new JsonArray()));
         PlanBlockers.Add(gap, new Blocker(BlockerCode.PerspectiveNeedsScreenspace));
         NoBenefit.Apply(gap, allowed: false);
@@ -236,6 +241,43 @@ public class AdmissionTests
         Assert.False(NoBenefit.Allowed(ordinary));
         ordinary["settings"]!["allow_no_benefit"] = true;
         Assert.True(NoBenefit.Allowed(ordinary));
+    }
+
+    [Theory]
+    [InlineData(0.61, 14640)] // 2804379697: one unproven group, shader/animation periods in a long candidate.
+    [InlineData(0.01, 377)]   // 2884628849: one unproven group beside a proven static group.
+    public void LowCoverageRemainsUnknownEvenWhenVideoIsDynamic(double coverage, int frames)
+    {
+        JsonObject plan = Narrated(Plan(new JsonArray(), groups: [[1]]));
+        plan["loop"]!["candidates"]![0]!["frames"] = frames;
+        plan["bake_value"] = new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule,
+            ["evidence"] = new JsonObject { ["effect_pass_coverage"] = coverage } };
+        Assert.Empty(NoBenefit.AnalysisConditions(plan));
+        Assert.True(NoBenefit.UncomparedVideoCost(plan));
+        Assert.Null(SlowClosureProbe.StreamLimit(plan));
+        NoBenefit.Apply(plan, allowed: false);
+        Assert.Equal("unknown", plan["bake_value"]!["status"]!.GetValue<string>());
+        Assert.Null(plan[NoBenefit.Field]);
+        Assert.Equal(1, plan["bake_value"]!["evidence"]!["video_group_upper_bound"]!.GetValue<int>());
+        Assert.Equal(0, plan["bake_value"]!["evidence"]!["dynamic_group_lower_bound"]!.GetValue<int>());
+        plan["video_groups"]![0]!["dynamic_verified"] = true; // A changed sample proves this group needs video.
+        Assert.Empty(NoBenefit.AnalysisConditions(plan));
+        Assert.True(NoBenefit.UncomparedVideoCost(plan));
+        NoBenefit.Apply(plan, allowed: false);
+        Assert.Null(plan[NoBenefit.Field]);
+        Assert.Equal("unknown", plan["bake_value"]!["status"]!.GetValue<string>());
+        Assert.Equal(1, plan["bake_value"]!["evidence"]!["dynamic_group_lower_bound"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void HeavyWholeLayerDoesNotNeedAStreamProbeForTheCostRule()
+    {
+        JsonObject plan = Narrated(Plan(new JsonArray(), groups: [[1], [3]]));
+        plan["bake_value"] = new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule,
+            ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 35.7 } };
+        Assert.Empty(NoBenefit.AnalysisConditions(plan));
+        Assert.False(NoBenefit.UncomparedVideoCost(plan));
+        Assert.Null(SlowClosureProbe.StreamLimit(plan));
     }
 
     [Fact]

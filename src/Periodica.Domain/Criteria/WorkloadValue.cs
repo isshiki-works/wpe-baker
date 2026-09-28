@@ -85,6 +85,10 @@ public static class WorkloadValue
     public static readonly Verdict CachedEffectPasses = new("potential_gain", "cached_effect_passes", "方案可以省去逐帧特效计算；画面静止也可能有缓存价值。",
         "The plan can remove per-frame effects; a still result can still have caching value.");
 
+    /// <summary>特效工作已识别，但未证静态的组是否还要新增视频解码尚未确定；沿用相同规则与覆盖证据。</summary>
+    public static readonly Verdict UncertainVideoCost = new("unknown", CachedEffectPasses.Rule, "方案可以省去逐帧特效计算；新增视频开销尚未证实，省电效果未知。",
+        "The plan can remove per-frame effects, but its added video workload is unproven, so power savings remain unknown.");
+
     /// <summary>静态纹理大于输出尺寸。</summary>
     public static readonly Verdict StaticTextureFootprint = new("potential_gain", "static_texture_footprint", "原静态纹理大于输出尺寸，可能降低纹理驻留或采样开销；不能仅因画面静止而排除。",
         "The static texture exceeds the output size; residency or sampling costs may fall, so still imagery is not automatically excluded.");
