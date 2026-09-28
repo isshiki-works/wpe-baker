@@ -756,8 +756,8 @@ public static class MessageCatalog
             En: "The full terminal capture did not prove opaque pixels for every encoded source frame."),
         // {0}=停下时已编出的视频流路数 {1}=不需要实测证明的路数上限
         ["bake.no_benefit_streams"] = new(
-            Zh: "不支持：预计功耗高于原壁纸（已编出 {0} 路视频，超过 {1} 路，路数更多的成品通常比原作更费电）。已在此停止，未生成候选项目。调试或测功耗时可用 --no-benefit allow 重新分析并生成。",
-            En: "Not supported: estimated power use is higher than the original wallpaper ({0} video streams are already encoded, above {1}; results with more streams usually draw more power than the original). Stopped here, no candidate project generated. For debugging or power measurement, use --no-benefit allow to analyze and generate anyway."),
+            Zh: "已编出 {0} 路视频，超过当前 {1} 路上限；已停止，未生成候选项目。需要继续时可用 --no-benefit allow 重新分析并生成。",
+            En: "The {0} encoded video streams exceed the current limit of {1}; stopped without generating a candidate project. Use --no-benefit allow to analyze and generate if needed."),
         // 全静态、没有任何实时层的成品：整张壁纸换成一张静态图，没有实时渲染（待定文案，维护者定稿）。
         ["bake.static_only_no_live"] = new(
             Zh: "已生成静态壁纸。",

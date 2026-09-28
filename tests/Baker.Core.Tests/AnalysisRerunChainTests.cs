@@ -41,16 +41,17 @@ public class AnalysisRerunChainTests
     private static int[] Retained(JsonObject plan) => [.. plan["settings"]!["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()).Order()];
 
     [Fact]
-    public async Task APrefixThatOnlyWonOnALayoutConflictIsComparedWithTheLayeredWholeLayer()
+    public async Task AUsablePrefixIsNotReplacedByAnUnprovenPowerComparison()
     {
-        // full_frame 下整层零阻断、有候选，只被布局冲突挡住，特效前缀（层 12 的一道特效）接手就停；layered 下整层分组省下 3 道。
+        // full_frame前缀与layered整层都能生成；pass较多、视频数相同不证明coded像素率或净功耗较低。
         await TestTemp.Run(async root =>
         {
             string runtime = await RuntimeAsync(root);
             var calls = new List<HybridAnalyzeRequest>();
+            JsonObject? layeredCandidate = null;
             JsonObject result = await RunAsync(root, r =>
             {
-                if (r.VideoLayout == "layered") return Plan(r, [12, 13], 3, runtime: runtime);
+                if (r.VideoLayout == "layered") return layeredCandidate = Plan(r, [12, 13], 3, runtime: runtime);
                 JsonObject prefix = Plan(r, [12, 13], 3, runtime: runtime);
                 prefix["route"] = "effect_prefix";
                 prefix.Remove("bake_value");
@@ -61,8 +62,12 @@ public class AnalysisRerunChainTests
                     ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 600 }) } };
                 return prefix;
             }, calls);
-            Assert.Equal("whole_layer", result["route"]!.GetValue<string>());
-            Assert.Equal("layered", result["settings"]!["video_layout"]!.GetValue<string>());
+            Assert.Equal("effect_prefix", result["route"]!.GetValue<string>());
+            Assert.Equal("full_frame", result["settings"]!["video_layout"]!.GetValue<string>());
+            Assert.Contains(calls, r => r.VideoLayout == "layered");
+            Assert.NotNull(layeredCandidate);
+            Assert.True(Admission.Accepted(layeredCandidate));
+            Assert.Equal("whole_layer", layeredCandidate["route"]!.GetValue<string>());
         });
     }
 

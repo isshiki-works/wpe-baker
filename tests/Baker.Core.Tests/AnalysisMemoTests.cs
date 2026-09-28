@@ -8,10 +8,9 @@ using Xunit;
 public class AnalysisMemoTests
 {
     [Fact]
-    public async Task ParallelRetreatSelectsExactlyWhatSerialRetreatSelects()
+    public async Task ParallelAdmissionRetreatSelectsExactlyWhatSerialRetreatSelects()
     {
-        // 四个组，第一轮每组各留一次实时都不省电，取差距最小的（11 与 12 并列，串行取组序在前的 11）接着退；
-        // 第二轮 12 与 13 并列收益最大，串行取 12。并行时让组序靠后的先跑完：按完成先后挑就会选错。
+        // 四组里只有把12留实时才能解开生成准入；并行完成顺序与组序相反，也必须选中同一方案。
         await TestTemp.Run(async root =>
         {
             int active = 0, peak = 0;
@@ -22,15 +21,9 @@ public class AnalysisMemoTests
                 await Task.Delay(kept.Length == 0 ? 0 : 40 * (14 - kept.Max()));
                 Interlocked.Decrement(ref active);
                 int[] live = [.. new[] { 10, 11, 12, 13 }.Except(kept)];
-                double coverage = kept.Length switch
+                var plan = new JsonObject
                 {
-                    0 => 2,
-                    1 => new Dictionary<int, double> { [10] = 1.5, [11] = 2, [12] = 2, [13] = 1 }[kept[0]],
-                    _ => new Dictionary<int, double> { [10] = 2.5, [12] = 3, [13] = 3 }[kept.Single(id => id != 11)]
-                };
-                return new JsonObject
-                {
-                    ["summary"] = new JsonObject { ["key"] = "summary.bakeable", ["zh"] = "", ["en"] = "" },
+                    ["summary"] = new JsonObject { ["key"] = kept.Contains(12) ? "summary.bakeable" : "summary.blocked", ["zh"] = "", ["en"] = "" },
                     ["settings"] = new JsonObject { ["preset"] = r.Preset, ["interaction"] = r.Interaction,
                         ["retain_live_root_ids"] = new JsonArray([.. kept.Select(id => (JsonNode)id)]) },
                     ["route"] = "whole_layer",
@@ -39,8 +32,10 @@ public class AnalysisMemoTests
                     ["blockers"] = new JsonArray(),
                     ["loop"] = new JsonObject { ["candidates"] = new JsonArray(new JsonObject { ["frames"] = 600 }) },
                     ["bake_value"] = new JsonObject { ["rule"] = WorkloadValue.CachedEffectPasses.Rule,
-                        ["evidence"] = new JsonObject { ["effect_pass_coverage"] = coverage } }
+                        ["evidence"] = new JsonObject { ["effect_pass_coverage"] = 2.0 } }
                 };
+                if (!kept.Contains(12)) PlanBlockers.Add(plan, new Blocker(BlockerCode.BakeAllocation, ["group 12 blocks generation"]));
+                return plan;
             }
             async Task<string> RunAsync(string name, int parallelism)
             {
@@ -58,9 +53,8 @@ public class AnalysisMemoTests
             Assert.True(peak > 1);
             Assert.Equal(serial, parallel);
             JsonObject chosen = JsonNode.Parse(parallel)!.AsObject();
-            Assert.Equal([11, 12], chosen["settings"]!["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()));
-            // 目录按组序编号，与串行一致：第一轮 retreat-1..4，第二轮 retreat-5..7，12 是第二轮第二个。
-            Assert.Contains("retreat-6", chosen["output"]!.GetValue<string>());
+            Assert.Equal([12], chosen["settings"]!["retain_live_root_ids"]!.AsArray().Select(n => n!.GetValue<int>()));
+            Assert.Contains("retreat-3", chosen["output"]!.GetValue<string>());
         });
     }
 

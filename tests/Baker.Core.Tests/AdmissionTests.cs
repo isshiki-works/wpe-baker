@@ -195,6 +195,16 @@ public class AdmissionTests
         JsonObject prefixes = Narrated(Plan(new JsonArray(), route: "effect_prefix"));
         prefixes["effect_prefix_caches"] = new JsonArray([.. Enumerable.Range(0, 5).Select(i => (JsonNode)new JsonObject { ["owner_layer_id"] = i })]);
         Assert.Equal([NoBenefit.TooManyStreams], NoBenefit.AnalysisConditions(prefixes));
+        JsonObject overLimit = prefixes.DeepClone().AsObject();
+        NoBenefit.Apply(overLimit, allowed: false);
+        Assert.Equal([BlockerCode.TooManyVideoGroups], PlanBlockers.Codes(overLimit).ToArray());
+        Assert.Equal("too_many_video_groups", overLimit["suitability"]!["rule"]!.GetValue<string>());
+        Assert.Null(overLimit[NoBenefit.Field]);
+        JsonObject bakedOverLimit = new();
+        NoBenefit.RejectStreams(bakedOverLimit, 5);
+        Assert.Equal(NoBenefit.TooManyStreams, bakedOverLimit[NoBenefit.Field]!["status"]!.GetValue<string>());
+        Assert.Contains("current limit", bakedOverLimit["reason"]!.GetValue<string>());
+        Assert.DoesNotContain("power", bakedOverLimit["reason"]!.GetValue<string>());
         prefixes["effect_prefix_caches"]!.AsArray().RemoveAt(0);
         Assert.Empty(NoBenefit.AnalysisConditions(prefixes));
 

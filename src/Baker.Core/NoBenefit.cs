@@ -151,6 +151,16 @@ public static class NoBenefit
             if (ifCaptured is not null) plan[Field] = Record(RejectChoice, CaptureOpenStatus, []);
             return;
         }
+        if (conditions is [TooManyStreams])
+        {
+            if (allowed) { plan[Field] = Record(AllowChoice, OverrideStatus, conditions); return; }
+            PlanBlockers.Add(plan, new Blocker(BlockerCode.TooManyVideoGroups, [SavingProvenStreams]));
+            plan["status"] = "requires_resolution";
+            plan["preset_rejection_reason"] = "too_many_video_groups";
+            plan["suitability"] = HybridSuitability.Verdict(plan);
+            PlanNarrative.Attach(plan);
+            return;
+        }
         plan[Field] = Record(allowed ? AllowChoice : RejectChoice, allowed ? OverrideStatus : ExpectedStatus, conditions);
         if (allowed) return;
         PlanBlockers.Add(plan, new Blocker(BlockerCode.NoBenefitExpected, [Describe(conditions, english: true)], [Describe(conditions, english: false)]));
@@ -170,7 +180,7 @@ public static class NoBenefit
     public static void RejectStreams(JsonObject report, int videoLayers)
     {
         report["status"] = RejectedBakeStatus;
-        JsonObject record = Record(RejectChoice, ExpectedStatus, [TooManyStreams]);
+        JsonObject record = Record(RejectChoice, TooManyStreams, [TooManyStreams]);
         record["video_streams_encoded"] = videoLayers;
         report[Field] = record;
         new Message("bake.no_benefit_streams", [videoLayers, SavingProvenStreams]).Write(report, "reason");
@@ -206,8 +216,8 @@ public static class NoBenefit
     {
         (StaticWithLive, false) => "烘完只剩一张静态图，实时图层照旧运行",
         (StaticWithLive, true) => "the result would be a still image with the live layers still running",
-        (TooManyStreams, false) => $"成品需要超过 {SavingProvenStreams} 路视频（路数更多的成品通常比原作更费电）",
-        (TooManyStreams, true) => $"the result needs more than {SavingProvenStreams} video streams (results with more streams usually draw more power than the original)",
+        (TooManyStreams, false) => $"成品需要超过当前 {SavingProvenStreams} 路视频上限",
+        (TooManyStreams, true) => $"the result exceeds the current limit of {SavingProvenStreams} video streams",
         (PlainLayersOnly, false) => "带特效的图层都要留在实时，能转成视频的只有普通贴图，省下的渲染抵不过视频解码",
         (PlainLayersOnly, true) => "every layer with effects has to stay live and only plain images can become video, so the rendering saved does not cover video decoding",
         (VideoCostOverSaving, false) => "转成视频的特效太少或只占小块画面，视频解码比省下的渲染更费电",

@@ -866,7 +866,8 @@ public partial class MainWindow : Window
                         ? L("输出的脚本报错比原壁纸多，已停止生成（详见报告）。",
                             "The output has more script errors than the original wallpaper; generation stopped (see report).")
                         : resultStatus == NoBenefit.RejectedBakeStatus
-                        ? L("不支持：预计功耗高于原壁纸", "Not supported: estimated power use is higher than the original wallpaper.")
+                        ? L("已停止生成：", "Generation stopped: ") +
+                            (result["reason_localized"]?[english ? "en" : "zh"]?.GetValue<string>() ?? result["reason"]?.GetValue<string>() ?? "")
                         : resultStatus == ResidualMasking.LayoutRejectedStatus
                         ? L("循环首尾不衔接，已停止生成（详见报告）。",
                             "The loop doesn't join seamlessly; generation stopped (see report).")
