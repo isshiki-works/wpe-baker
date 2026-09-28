@@ -56,6 +56,50 @@ public static class ShaderPeriodAnalysis
 {
     public const string TimeScaleKey = "periodica_time_scale";
 
+    /// <summary>
+    /// A complete capture runs the already-patched shader. Its time signature names the injected uniforms,
+    /// while a later prefix analysis reads the original shader source. Restore only knobs backed by the
+    /// patch record and an exact match in that original source; keep measured periods and all other evidence.
+    /// </summary>
+    internal static JsonObject ReconcileInstalledKnobs(JsonObject runtime, ProjectSource originalSource,
+        string? assetsDirectory, JsonArray installedPatches)
+    {
+        JsonObject reconciled = runtime.DeepClone().AsObject();
+        foreach (JsonObject layer in (reconciled["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>())
+            foreach (JsonObject material in (layer["materials"] as JsonArray ?? []).OfType<JsonObject>())
+            {
+                if (material["shader"] is not JsonValue shaderValue || !shaderValue.TryGetValue(out string? shader) ||
+                    string.IsNullOrWhiteSpace(shader) || material["time_signature"] is not JsonObject signature) continue;
+                foreach (JsonObject term in (signature["terms"] as JsonArray ?? []).OfType<JsonObject>())
+                {
+                    if (term["knobs"] is not JsonArray knobs) continue;
+                    for (int i = knobs.Count - 1; i >= 0; --i)
+                    {
+                        if (knobs[i] is not JsonObject knob || knob["stage"] is not JsonValue stageValue ||
+                            !stageValue.TryGetValue(out string? stage) || stage is not ("vert" or "frag") ||
+                            knob["uniform"] is not JsonValue uniformValue || !uniformValue.TryGetValue(out string? uniform)) continue;
+                        string resource = "shaders/" + shader + "." + stage;
+                        bool Installed(string key) => installedPatches.OfType<JsonObject>().Any(patch =>
+                            patch["resource"]?.GetValue<string>() == resource &&
+                            (patch["keys"] as JsonArray ?? []).Any(item => item?.GetValue<string>() == key));
+                        if (uniform == "g_PeriodicaTimeScale")
+                        {
+                            if (Installed(TimeScaleKey) && TryReadShaderStage(originalSource, assetsDirectory, resource, out string original) &&
+                                ShaderTextPatch.HasTimeUse(original)) knobs.RemoveAt(i);
+                            continue;
+                        }
+                        if (uniform is null || !uniform.StartsWith("g_PeriodicaK_", StringComparison.Ordinal)) continue;
+                        string key = "periodica_k_" + uniform["g_PeriodicaK_".Length..];
+                        if (!Installed(key) || !TryReadShaderStage(originalSource, assetsDirectory, resource, out string text) ||
+                            !ShaderTextPatch.TryOriginalKnob(text, key, out JsonObject? restored)) continue;
+                        restored!["inverse"] = knob["inverse"]?.DeepClone();
+                        knobs[i] = restored;
+                    }
+                }
+            }
+        return reconciled;
+    }
+
     // 引擎原因码里只有这两条是不周期的证明：已知非零系数的线性时间直达输出；与线性时间比较而阈值无界（tan 极点，永不固定）。
     // 阈值有界的比较是暂态（签名给 settle_seconds），阈值范围说不清的比较与分支（compare_with_linear_time、branch_on_linear_time、
     // loop_count_time_dependent）、线性时间进了没有专门规则的运算、与别的时间量相乘、系数不定、分析没推下去，只记未收敛
