@@ -132,7 +132,7 @@ internal static class HybridSuitability
 
         // 固定在一个时段：做不出按时段切换，是工具的能力缺口，不是省不省电。待定文案。
         if (blockers.Contains(BlockerCode.FixedDaytimeState))
-            return Build("unsupported_capture", "fixed_daytime_state", "TODO_UI", "TODO_UI", notes);
+            return Build("unsupported_capture", "fixed_daytime_state", "当前方案只生成一个时段，壁纸不会随时间切换。", "This option generates one time period, so the wallpaper won't change with the time of day.", notes);
 
         // 能力缺口是工具的问题，不是壁纸的问题，单独一档。
         if (hdr || perspective)

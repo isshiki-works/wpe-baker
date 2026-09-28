@@ -203,7 +203,7 @@ public static class MessageCatalog
             En: "Not supported: estimated power use is higher than the original wallpaper ({0}). For debugging or power measurement, use --no-benefit allow to generate anyway."),
 
         // 固定在一个时段：做不出按时段切换的能力缺口（DaytimeSplit.RejectFixedState）。待定文案，由维护者定稿。
-        ["blocker.fixed_daytime_state"] = new(Zh: "TODO_UI", En: "TODO_UI"),
+        ["blocker.fixed_daytime_state"] = new(Zh: "当前方案只生成一个时段，壁纸不会随时间切换。", En: "This option generates one time period, so the wallpaper won't change with the time of day."),
 
         // fix/residual-layout-gate → feat/particle-crossfade：透明组与多组已允许淡化（packed 域线性混合即预乘空间淡化），
         // 只剩"可掩盖分量所在的图层不在任何视频组里"这一种布局确实淡化不了的情形。
@@ -760,8 +760,8 @@ public static class MessageCatalog
             En: "Not supported: estimated power use is higher than the original wallpaper ({0} video streams are already encoded, above {1}; results with more streams usually draw more power than the original). Stopped here, no candidate project generated. For debugging or power measurement, use --no-benefit allow to analyze and generate anyway."),
         // 全静态、没有任何实时层的成品：整张壁纸换成一张静态图，没有实时渲染（待定文案，维护者定稿）。
         ["bake.static_only_no_live"] = new(
-            Zh: "TODO_UI",
-            En: "TODO_UI"),
+            Zh: "已生成静态壁纸。",
+            En: "Static wallpaper generated."),
         ["bake.no_visible_output"] = new(
             Zh: "不可生成：所有视频组在生成区间内都没有可见像素，没有可替换成视频的内容。",
             En: "Cannot generate: every video group was empty over the generated interval, so there is no content to replace with video."),
