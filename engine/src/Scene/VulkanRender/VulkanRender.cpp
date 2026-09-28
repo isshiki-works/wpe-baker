@@ -1646,6 +1646,13 @@ void VulkanRender::Impl::UpdateCameraFillMode(owe::Scene& scene, owe::FillMode f
     if (m_orthographic_capture_viewport.has_value()) {
         std::string error;
         if (!ApplyOrthographicCaptureViewport(scene, error)) return;
+        // Perspective layers use global_perspective even in an orthographic scene.
+        // Keep its aspect and FOV in step with the explicit capture viewport.
+        const auto& viewport = *m_orthographic_capture_viewport;
+        gPerCam.SetAspect(viewport.width / viewport.height);
+        if (!gPerCam.IsLookAt())
+            gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
+        gPerCam.Update();
         scene.CaptureCameraPathViewports();
         return;
     }
