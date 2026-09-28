@@ -277,4 +277,49 @@ public class EffectRangeClosureTests
         Assert.NotEmpty(unbounded["blockers"]!.AsArray());
         return Task.CompletedTask;
     });
+
+    [Fact]
+    public Task ProgramAndActiveMaskMustMatchRangeProof() => TestTemp.Run(root =>
+    {
+        const string frag = "uniform sampler2D g_Texture0;\nvoid main(){gl_FragColor=texSample2D(g_Texture0,vec2(0.5));}\n";
+        const string vert = "void main(){gl_Position=vec4(0.0);}\n";
+        Write(root, "project.json", "{\"type\":\"scene\",\"file\":\"scene.json\"}");
+        Write(root, "scene.json", "{\"objects\":[]}");
+        Write(root, "effects/guarded/effect.json", "{\"passes\":[{\"material\":\"materials/effects/guarded.json\"}]}");
+        Write(root, "materials/effects/guarded.json", "{\"passes\":[{\"shader\":\"effects/guarded\",\"blending\":\"normal\"}]}");
+        Write(root, "shaders/effects/guarded.frag", frag);
+        Write(root, "shaders/effects/guarded.vert", vert);
+        byte[] mask = Tex8();
+        BinaryPrimitives.WriteInt32LittleEndian(mask.AsSpan(18), 9); // R8_UNORM mask
+        Write(root, "materials/mask.tex", mask);
+        var rules = EffectRangeRules.Parse(new JsonObject { ["rules"] = new JsonArray(new JsonObject {
+            ["id"] = "guarded", ["fragment_sha256"] = EffectRangeRules.Fingerprint(frag),
+            ["program_sha256"] = EffectRangeRules.Fingerprint(frag + "\n" + vert),
+            ["allow_combos"] = new JsonObject { ["MASK"] = new JsonObject { ["default"] = 0, ["values"] = new JsonArray(0, 1) } },
+            ["mask_texture_slot"] = 1 }) }.ToJsonString());
+        var effect = new JsonObject { ["file"] = "effects/guarded/effect.json",
+            ["passes"] = new JsonArray(new JsonObject()) };
+        using var source = new ProjectSource(root);
+        bool Closed() => rules.IsRangeClosed(effect, new(), source, null, [], out _);
+        Assert.True(Closed()); // MASK=0 needs no texture.
+        effect["passes"]![0]!["combos"] = new JsonObject { ["MASK"] = 1 };
+        Assert.False(Closed()); // Active mask without an input is unproven.
+        effect["passes"]![0]!["textures"] = new JsonArray(null, "mask");
+        Assert.True(Closed());
+        effect["passes"]![0]!.AsObject().Remove("combos");
+        Assert.True(Closed()); // A bound mask can activate MASK implicitly.
+        BinaryPrimitives.WriteInt32LittleEndian(mask.AsSpan(18), 3);
+        Write(root, "materials/mask.tex", mask);
+        Assert.False(Closed()); // An active mask with an unknown format has no [0,1] bound.
+        effect["passes"]![0]!["combos"] = new JsonObject { ["MASK"] = 0 };
+        Assert.True(Closed()); // Explicitly disabled masks do not constrain the proof.
+        BinaryPrimitives.WriteInt32LittleEndian(mask.AsSpan(18), 9);
+        Write(root, "materials/mask.tex", mask);
+        effect["passes"]![0]!["combos"] = new JsonObject { ["MASK"] = 0.5 };
+        Assert.False(Closed()); // Fractional combo must not be truncated to zero.
+        effect["passes"]![0]!["combos"] = new JsonObject { ["MASK"] = 0 };
+        Write(root, "shaders/effects/guarded.vert", vert.Replace("0.0", "1.0"));
+        Assert.False(Closed()); // Full program identity includes the vertex stage.
+        return Task.CompletedTask;
+    });
 }

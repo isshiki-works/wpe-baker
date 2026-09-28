@@ -317,7 +317,7 @@ public static class SdrRadianceClosure
                 : "text layers have no decidable output range"));
             return;
         }
-        // 作者特效：可见的每一个都须被特效值域规则表证明为输入的凸组合采样，否则整层判未知。
+        // 作者特效：可见的每一个都须被特效值域规则表证明保持 [0,1]，否则整层判未知。
         var provenEffectShaders = new HashSet<string>(StringComparer.Ordinal);
         foreach (var effect in (obj["effects"] as JsonArray ?? []).OfType<JsonObject>())
         {
@@ -422,7 +422,7 @@ public static class SdrRadianceClosure
         }
         checks.Add(Check("R1", true, provenEffectShaders.Count == 0
             ? "built-in SDR shaders only, no effect layer and no unknown combo"
-            : "built-in SDR shaders only, effect layers are proven convex resamplings, no unknown combo"));
+            : "built-in SDR shaders only, effect layers are proven range-preserving, no unknown combo"));
         // R2 混合封闭：alpha 凸组合，上界不升。
         foreach (var pass in passes.OfType<JsonObject>())
         {
