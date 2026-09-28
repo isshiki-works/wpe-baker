@@ -61,7 +61,7 @@ public static class OfficialPerformanceSampler
             ["started_utc"] = startedUtc.ToString("O"), ["report_path"] = reportPath,
             ["presentmon"] = presentMon, ["presentmon_session"] = session,
             ["presentmon_process_name"] = processName,
-            ["presentmon_filter_note"] = "Capture by verified executable name; CSV statistics retain only the requested PID.",
+            ["presentmon_filter_note"] = "Capture all processes; CSV statistics retain only the verified target PID.",
             ["swap_chain_address"] = request.SwapChainAddress, ["nvidia_gpu_uuid"] = request.NvidiaGpuUuid,
             ["presentation_tracking"] = request.TrackDisplay ? "display" : "present_api_only",
             ["presentation_tracking_note"] = request.TrackDisplay
@@ -99,10 +99,9 @@ public static class OfficialPerformanceSampler
         await WriteAsync(Path.Combine(output, "counter-discovery-errors.json"), discoveryErrors, cancellationToken);
 
         string presentCsv = Path.Combine(output, "presentmon-v1.csv");
-        // Name filtering produced usable display records in the retained PresentMon pilot.
-        // Enforce the exact PID again when parsing the resulting CSV.
-        string[] presentArguments = ["--v1_metrics", "--process_name", processName,
-            "--timed", request.Seconds.ToString(CultureInfo.InvariantCulture), "--terminate_after_timed", "--no_console_stats",
+        // PresentMon 2.5.1 can emit no CSV with --process_name even while unfiltered capture has target rows.
+        // Enforce the verified PID when parsing the resulting CSV.
+        string[] presentArguments = ["--v1_metrics", "--timed", request.Seconds.ToString(CultureInfo.InvariantCulture), "--terminate_after_timed", "--no_console_stats",
             "--no_track_input", "--no_track_gpu", "--session_name", session, "--output_file", presentCsv];
         if (!request.TrackDisplay) presentArguments = [.. presentArguments, "--no_track_display"];
         string[] presentCommand = [presentMon, .. presentArguments];
