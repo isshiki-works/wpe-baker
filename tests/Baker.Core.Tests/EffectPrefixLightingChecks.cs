@@ -13,9 +13,9 @@ internal static class EffectPrefixLightingChecks
     private const int Owner = 1, PrefixEffect = 11;
     private const string Vertex = "// Original WpeBaker test shader, MIT.\nuniform mat4 g_ModelViewProjectionMatrix;\nattribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main(){ gl_Position=mul(vec4(a_Position,1.0),g_ModelViewProjectionMatrix); v_TexCoord=a_TexCoord; }\n";
 
-    private static async Task<string> WriteSourceAsync(string root)
+    private static async Task<string> WriteSourceAsync(string root, bool sharp = false)
     {
-        string source = Path.Combine(root, "lit-prefix-source");
+        string source = Path.Combine(root, sharp ? "sharp-prefix-source" : "lit-prefix-source");
         async Task Write(string relative, string text)
         {
             string path = Path.Combine(source, relative.Replace('/', Path.DirectorySeparatorChar));
@@ -45,7 +45,17 @@ internal static class EffectPrefixLightingChecks
             for (int x = 0; x < Size; ++x)
             {
                 int i = (y * (int)Size + x) * 4;
-                texture[i] = (byte)(x * 4); texture[i + 1] = (byte)(y * 4); texture[i + 2] = 200; texture[i + 3] = 255;
+                if (sharp)
+                {
+                    texture[i] = (byte)(x % 8 == 0 || y % 8 == 0 ? 255 : 0);
+                    texture[i + 1] = (byte)(x % 8 == 0 ? 255 : 0);
+                    texture[i + 2] = (byte)(y % 8 == 0 ? 255 : 0);
+                    texture[i + 3] = (byte)(x % 8 == 0 ? 96 : 255);
+                }
+                else
+                {
+                    texture[i] = (byte)(x * 4); texture[i + 1] = (byte)(y * 4); texture[i + 2] = 200; texture[i + 3] = 255;
+                }
             }
         await TextureContainer.WriteRgbaAsync(Path.Combine(source, "materials", "lit-color.tex"), Size, Size, texture);
         await Write("shaders/genericimage4.vert", Vertex);
@@ -83,14 +93,14 @@ internal static class EffectPrefixLightingChecks
     }
 
     /// <summary>从源工程复制出候选工程，把前缀换成缓存；返回候选工程目录。</summary>
-    private static async Task<string> AssembleCandidateAsync(string root, string sourceDirectory, string cacheFile)
+    private static async Task<string> AssembleCandidateAsync(string root, string sourceDirectory, string cacheFile, bool packedAlpha = false)
     {
         using var source = new ProjectSource(sourceDirectory);
         JsonObject scene = source.ReadJson(source.SceneResource), derived = scene.DeepClone().AsObject();
-        string candidate = Path.Combine(root, "lit-prefix-candidate");
+        string candidate = Path.Combine(root, Path.GetFileName(sourceDirectory).Replace("-source", "-candidate", StringComparison.Ordinal));
         await source.ExtractAsync(candidate);
-        await EffectPrefixCache.ApplyAsync(source, scene, derived, candidate, Owner, 1, cacheFile, Size, Size, rgbaFrame: true,
-            sourceWidth: Size, sourceHeight: Size);
+        await EffectPrefixCache.ApplyAsync(source, scene, derived, candidate, Owner, 1, cacheFile,
+            packedAlpha ? Size * 2 : Size, Size, rgbaFrame: true, sourceWidth: Size, sourceHeight: Size, packedAlpha: packedAlpha);
         await File.WriteAllTextAsync(Path.Combine(candidate, source.SceneResource), derived.ToJsonString());
         return candidate;
     }
@@ -131,5 +141,69 @@ internal static class EffectPrefixLightingChecks
         double mean = total / (reference.Length * .75);
         check(reference.Length == Size * Size * 4 && candidate.Length == reference.Length && worst <= 2 && mean <= .5,
             $"a lit owner's prefix cache already holds the base-pass lighting and fog: candidate matches the source frame (worst {worst}/255, mean {mean:F3}/255)");
+    }
+
+    internal static async Task RunDirectSamplerAsync(Action<bool, string> check, string root)
+    {
+        string source = await WriteSourceAsync(root, sharp: true);
+        var runner = new NativeRenderRunner(LocalTools.Tools!);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        async Task<byte[]> Render(string project, string name, RenderCaptureSelection? capture = null)
+        {
+            JsonObject result = await runner.RenderRawAsync(new(project, source, Path.Combine(root, name), Size, Size, 60, 1, 1,
+                Seed: 17, CaptureTarget: capture), timeout.Token);
+            return await File.ReadAllBytesAsync(result["rgba_path"]!.GetValue<string>(), timeout.Token);
+        }
+        byte[] captured = await Render(source, "sharp-capture", new(Owner, PrefixEffect, EffectTerminal: true, ExactExtent: true));
+        byte[] packed = new byte[Size * 2 * Size * 4];
+        for (int y = 0; y < Size; ++y)
+            for (int x = 0; x < Size; ++x)
+            {
+                int at = (y * (int)Size + x) * 4, left = (y * (int)(Size * 2) + x) * 4, right = left + (int)Size * 4;
+                captured.AsSpan(at, 3).CopyTo(packed.AsSpan(left, 3));
+                packed[left + 3] = 255;
+                packed[right] = captured[at + 3];
+                packed[right + 3] = 255;
+            }
+        string cache = Path.Combine(root, "sharp-packed.rgba");
+        await File.WriteAllBytesAsync(cache, packed, timeout.Token);
+        string candidate = await AssembleCandidateAsync(root, source, cache, packedAlpha: true);
+        string decoderMaterial = Path.Combine(candidate, "materials", "wpe_baker_effect_prefix", Owner.ToString(), "decode.json");
+        string decoderShader = Path.Combine(candidate, "shaders", "wpe_baker_effect_prefix", Owner.ToString(), "decode.frag");
+        JsonObject material = JsonNode.Parse(await File.ReadAllTextAsync(decoderMaterial, timeout.Token))!.AsObject();
+        string shader = await File.ReadAllTextAsync(decoderShader, timeout.Token);
+        check(material["passes"]![0]!["textures"]?.ToJsonString() == "[\"\",\"wpe_baker_effect_prefix/1/cache\"]" &&
+            shader.Contains("texSample2D(g_Texture1", StringComparison.Ordinal) && !shader.Contains("g_Texture0", StringComparison.Ordinal),
+            "the first effect binds the original packed cache in slot 1; slot 0 remains the preceding owner render target");
+        JsonObject derived = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(candidate, "scene.json"), timeout.Token))!.AsObject();
+        int decoderId = derived["objects"]![0]!["effects"]![0]!["id"]!.GetValue<int>();
+        byte[] reference = await Render(source, "sharp-reference");
+        byte[] direct = await Render(candidate, "sharp-direct");
+        byte[] directTerminal = await Render(candidate, "sharp-direct-terminal", new(Owner, decoderId, EffectTerminal: true, ExactExtent: true));
+        // Recreate the previous decoder in the temporary fixture to prove the one-pixel grid loses detail when read through slot 0.
+        material["passes"]![0]!.AsObject().Remove("textures");
+        await File.WriteAllTextAsync(decoderMaterial, material.ToJsonString(), timeout.Token);
+        await File.WriteAllTextAsync(decoderShader, shader.Replace("g_Texture1", "g_Texture0", StringComparison.Ordinal), timeout.Token);
+        byte[] old = await Render(candidate, "sharp-downsampled");
+        byte[] oldTerminal = await Render(candidate, "sharp-downsampled-terminal", new(Owner, decoderId, EffectTerminal: true, ExactExtent: true));
+        static double Mae(byte[] a, byte[] b, int channelCount)
+        {
+            long total = 0;
+            for (int pixel = 0; pixel < a.Length; pixel += 4)
+                for (int channel = 0; channel < channelCount; ++channel)
+                    total += Math.Abs(a[pixel + channel] - b[pixel + channel]);
+            return (double)total / (a.Length / 4 * channelCount);
+        }
+        double directRgb = Mae(reference, direct, 3), oldRgb = Mae(reference, old, 3);
+        double AlphaMae(byte[] a, byte[] b)
+        {
+            long total = 0;
+            for (int pixel = 3; pixel < a.Length; pixel += 4) total += Math.Abs(a[pixel] - b[pixel]);
+            return (double)total / (a.Length / 4);
+        }
+        double directAlpha = AlphaMae(captured, directTerminal), oldAlpha = AlphaMae(captured, oldTerminal);
+        check(Enumerable.Range(0, captured.Length / 4).Any(pixel => captured[pixel * 4 + 3] < 255) &&
+            directRgb < oldRgb / 2 && directRgb < 2 && directAlpha < oldAlpha / 2,
+            $"sharp one-pixel color and alpha grid survives direct decode (RGB MAE old {oldRgb:F3}, direct {directRgb:F3}; alpha old {oldAlpha:F3}, direct {directAlpha:F3})");
     }
 }
