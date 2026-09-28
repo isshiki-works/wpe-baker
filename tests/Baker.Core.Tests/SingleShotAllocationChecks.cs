@@ -113,6 +113,30 @@ internal static class SingleShotAllocationChecks
             unknownIntro["status"]?.GetValue<string>() == "skipped" && unknownIntro["reason"]?.GetValue<string>() == "cross_object_dependency",
             "a settled one-time intro remains live until its video replacement starts, while real or unknown cross-object dependencies still block the switch");
 
+        var scriptedObjects = objects.DeepClone().AsArray();
+        scriptedObjects[1]!["alpha"] = new JsonObject { ["value"] = 1.0,
+            ["script"] = "export function update(value) { return engine.runtime < 2 ? 1 : 0; }" };
+        JsonObject settledScript = await PlanAsync("settled-script", new JsonArray(), scriptedObjects);
+        JsonObject settledFallback = await PlanAsync("settled-script-live", new JsonArray(), scriptedObjects,
+            singleShotLive: true);
+        JsonObject staticCandidate = settledScript["loop"]!["candidates"]![0]!.AsObject();
+        check(Allocation(settledScript, 20) == "video" && staticCandidate["frames"]!.GetValue<ulong>() == 1 &&
+            staticCandidate["source_period_warmup_frames"]!.GetValue<ulong>() == 1 &&
+            staticCandidate["shader_settle_seconds"]!.GetValue<double>() == 2 &&
+            Allocation(settledFallback, 20) == "live" && Reasons(settledFallback, 20).Contains("single_shot_animation") &&
+            GroupRoots(settledFallback).Contains(10) && !GroupRoots(settledFallback).Contains(20),
+            "a settled script captures one terminal frame while SingleShotLive keeps only its owner live");
+        using (var fixtureSource = new ProjectSource(sourceDirectory))
+        {
+            var shaderRuntime = new JsonObject { ["runtime_layers"] = new JsonArray(new JsonObject { ["owner"] = 20,
+                ["materials"] = new JsonArray(new JsonObject { ["time_signature"] = new JsonObject {
+                    ["kind"] = "periodic", ["settle_seconds"] = 2 } }) }) };
+            var graph = new SceneGraph(new JsonObject { ["objects"] = objects.DeepClone() });
+            int[] settledOwners = [.. SingleShotAllocation.SettledSourceOwners(graph, fixtureSource, null, shaderRuntime, 60, 1)];
+            check(settledOwners.SequenceEqual([20]),
+                "SingleShotLive also retains only the owner of a shader whose periodic phase settles after load: " + string.Join(',', settledOwners));
+        }
+
         foreach (string mode in new[] { "loop", "mirror" })
         {
             JsonObject looping = await PlanAsync("looping-" + mode, new JsonArray(Track(20, true, mode, "high")), objects);

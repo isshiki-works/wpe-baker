@@ -235,7 +235,7 @@ internal static class ShaderSignatureChecks
                 Settled(1000)["unresolved"]!.AsArray().Select(x => $"{x!["kind"]}/{x["mechanism"]}").SequenceEqual(["UnsupportedShaderMechanism/transient_settle_beyond_warmup"]),
                 "a bounded-threshold branch warms up one whole period past its settle time, and stays not converged when no period is longer");
 
-            // clamp 轴滚动停在边上：签名给 settle_seconds 时按静态 settle 处理，预热跳过开头；只报暂态、给不出时刻的照旧记未收敛
+            // clamp 轴滚动停在边上：入场预热走过 settle，末态只录一帧；给不出收敛时刻的照旧记未收敛。
             JsonObject clampRuntime = Runtime("""{"kind":"static","reasons":[],"external":[],"transient":false,"settle_seconds":4,"terms":[]}""");
             clampRuntime["status"] = "complete";
             clampRuntime["runtime_dependencies"] = new JsonArray();
@@ -247,7 +247,8 @@ internal static class ShaderSignatureChecks
             clampRuntime["runtime_layers"]![0]!["materials"]![0]!["textures"] = new JsonArray();
             JsonObject clamp = LoopAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, clampRuntime, [10], 30, 1).ToJson();
             check(clamp["unresolved"]!.AsArray().Count == 0 && clamp["candidates"]![0]!["shader_settle_seconds"]!.GetValue<double>() == 4 &&
-                clamp["candidates"]![0]!["source_period_warmup_frames"]!.GetValue<ulong>() >= 4 * 30 &&
+                clamp["candidates"]![0]!["frames"]!.GetValue<ulong>() == 1 &&
+                clamp["candidates"]![0]!["source_period_warmup_frames"]!.GetValue<ulong>() == 1 &&
                 ShaderPeriodAnalysis.Analyze(JsonNode.Parse("""{"objects":[{"id":10}]}""")!.AsObject(), source, null, Runtime("""
                     {"kind":"static","reasons":[],"external":[],"transient":true,"terms":[]}
                     """), [10], 600, 2).Unresolved is [{ Mechanism: "transient_clamp_scroll" }],

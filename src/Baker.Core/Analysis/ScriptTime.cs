@@ -32,8 +32,11 @@ internal static class ScriptTime
     internal sealed record Binding(int OwnerLayerId, string Name, string? Pointer, JsonObject Node, JsonObject Owner);
 
     internal static IEnumerable<Binding> Bindings(JsonObject scene, ProjectSource source, string? assets, IReadOnlyCollection<int> baked)
+        => Bindings((scene["objects"] as JsonArray ?? []).OfType<JsonObject>(), source, assets, baked);
+
+    internal static IEnumerable<Binding> Bindings(IEnumerable<JsonObject> layers, ProjectSource source, string? assets, IReadOnlyCollection<int> baked)
     {
-        foreach (JsonObject layer in (scene["objects"] as JsonArray ?? []).OfType<JsonObject>())
+        foreach (JsonObject layer in layers)
         {
             if (SceneGraph.Int(layer["id"]) is not int id || !baked.Contains(id)) continue;
             foreach (Binding binding in Of(layer, id)) yield return binding;
