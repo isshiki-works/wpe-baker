@@ -171,7 +171,8 @@ void BuildBloomPostProcess(SceneParseContext& context, fs::VFS& vfs,
     // HDR 捕获编码 (rgb-lower)/scale。此内部 pass 从原 terminal 读，向独立目标写；
     // 原目标与后续作者 effect/反馈不受捕获编码影响。
     // 单独注册为 "__hdr_scale"：组捕获不含后处理时也照做（见 SceneToRenderGraph）。
-    if (hdr_scale <= 0.0f || (!hdr_signed_sqrt && hdr_scale == 1.0f && hdr_lower_bound == 0.0f)) return;
+    if (hdr_scale <= 0.0f || (!hdr_signed_sqrt && !scene.HdrRangeProbe() &&
+                              hdr_scale == 1.0f && hdr_lower_bound == 0.0f)) return;
     declare_rt("_rt_wpe_baker_hdr_screen", 1.0f);
     (void)render_targets.insert(String::make("_rt_wpe_baker_hdr_screen"_str),
                                 String::make("_rt_wpe_baker_hdr_screen"_str));
