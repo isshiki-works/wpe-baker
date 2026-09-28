@@ -273,10 +273,15 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     ?? throw new InvalidDataException("The complete prefix capture omitted its runtime evidence.");
                 // 完整捕获推翻了这一层的前缀资格（观测窗口之后才出现的依赖或输入）：只丢这一层的缓存，层按作者原样留实时，
                 // 别的层照常烘；一个缓存都没留下时按晚到依赖拒绝，不整张失败。
-                if (!SurvivesCompleteCapture(pristine, source, settings, fullRuntime, snapshot, projection, owner, prefix))
+                if (!SurvivesCompleteCapture(pristine, source, settings, fullRuntime, snapshot, projection,
+                    owner, prefix, swayPatches))
                 {
                     DeleteRetainedFrames();
-                    result["groups"]!.AsArray().Add(LateDependencyRejection(owner, frames, loop, fullRuntime, runtime));
+                    JsonObject rejected = LateDependencyRejection(owner, frames, loop, fullRuntime, runtime);
+                    if (rejected["late_dependencies"] is JsonArray { Count: 0 })
+                        PrefixCaptureProbes.ExplainRetreat(rejected, pristine, source, settings, fullRuntime,
+                            runtime, snapshot, projection, owner, prefix, frames, loop, swayPatches);
+                    result["groups"]!.AsArray().Add(rejected);
                     continue;
                 }
                 string video = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
@@ -455,13 +460,18 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
     }
 
     /// <summary>
-    /// 完整捕获的运行时证据下，这一层仍提得出不短于 <paramref name="prefix"/> 的前缀。烘焙复核与分析期的完整区间探测
-    /// （<see cref="PrefixCaptureProbes.CompleteCaptureAsync"/>）同一判据，分析的结论因此与烘焙一致。
+    /// 完整捕获的运行时证据下，这一层仍提得出不短于 <paramref name="prefix"/> 的前缀。
+    /// 这里只复核依赖与时间机制资格；已捕获 P 的实际接缝仍由烘焙接缝门验证。
     /// </summary>
     internal static bool SurvivesCompleteCapture(JsonObject pristine, ProjectSource source, HybridAnalyzeRequest settings, JsonObject fullRuntime,
-        JsonObject snapshot, JsonObject projection, int owner, int prefix) =>
-        EffectPrefixPlanner.Propose(pristine, source, settings.Assets, fullRuntime, snapshot, settings, projection).OfType<JsonObject>()
-            .Any(value => value["owner_layer_id"]?.GetValue<int>() == owner && value["prefix_effect_count"]?.GetValue<int>() >= prefix);
+        JsonObject snapshot, JsonObject projection, int owner, int prefix, JsonArray? installedPatches = null)
+    {
+        JsonObject checkedRuntime = installedPatches is null ? fullRuntime :
+            ShaderPeriodAnalysis.ReconcileInstalledKnobs(fullRuntime, source, settings.Assets, installedPatches);
+        return EffectPrefixPlanner.Propose(pristine, source, settings.Assets, checkedRuntime, snapshot, settings, projection)
+            .OfType<JsonObject>().Any(value => value["owner_layer_id"]?.GetValue<int>() == owner &&
+                value["prefix_effect_count"]?.GetValue<int>() >= prefix);
+    }
 
     /// <summary>
     /// 完整捕获推翻前缀资格时这一层的组记录：带上完整捕获里有、分析观测里没有、涉及这一层的依赖（多半就是晚到的那条）。纯函数。

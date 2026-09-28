@@ -64,13 +64,13 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
         }
     }
 
-    /// <summary>完整区间复核通过的状态；其余（晚到依赖、探测失败）都不采用这条前缀。</summary>
+    /// <summary>完整区间复核通过的状态；晚到依赖、改频证据变化或探测失败都不采用这条前缀。</summary>
     internal const string CompleteCapturePassedStatus = "complete_capture_passed";
 
     /// <summary>
     /// 前缀的完整区间复核：按烘焙同一份捕获副本（<see cref="EffectPrefixBakeService.PrepareCaptureSourceAsync"/>）与同一个终端捕获点，
     /// 从第 0 帧渲满 P+1 帧（逐帧模拟、只留稀疏样本，尺寸不影响依赖记录），再用烘焙复核的同一判据
-    /// （<see cref="EffectPrefixBakeService.SurvivesCompleteCapture"/>）判这条前缀。短观测看不到的晚到依赖（计时、回调里才取层、写层）在这里现形，
+    /// （<see cref="EffectPrefixBakeService.SurvivesCompleteCapture"/>）判这条前缀。短观测看不到的晚到依赖或全区间改频缺口在这里现形，
     /// 分析就不判"能"、交给短一级前缀或整层实时，不再拖到烘焙才被拒。<paramref name="analyzedRuntime"/> 是写进 runtime.json 的那份观测，
     /// 只用来列出完整区间里新出现的依赖。离线 trace 没有渲染器可问，返回 null。
     /// </summary>
@@ -92,8 +92,58 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
             verdict => verdict["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.ProbeFailedStatus);
         async Task<JsonObject> ProbeAsync()
         {
-            if (AnalysisCache.Read(request.AnalysisCacheDirectory, persistentKey) is JsonObject cachedProbe) return cachedProbe;
+            if (AnalysisCache.Read(request.AnalysisCacheDirectory, persistentKey) is JsonObject cachedProbe)
+            {
+                // Older reports called changed loop eligibility a "late dependency" even with no new edge.
+                // The complete runtime is retained, so reclassify without replaying P+1 frames.
+                if (cachedProbe["status"]?.GetValue<string>() == "rejected_late_dependency" &&
+                    cachedProbe["late_dependencies"] is JsonArray { Count: 0 })
+                {
+                    string? folder = cachedProbe["probe_output"]?.GetValue<string>();
+                    string manifest = Path.Combine(folder ?? "", "render", "manifest.json");
+                    if (File.Exists(manifest))
+                    {
+                        // Recreate the exact patched source before trusting the retained full-runtime trace.
+                        // The old report omitted the installed shader-key provenance needed to interpret it.
+                        string recheck = Path.Combine(output, "effect-prefix-recheck-" + Guid.NewGuid().ToString("N"));
+                        try
+                        {
+                            JsonObject pristine = source.ReadJson(source.SceneResource);
+                            JsonArray installed = await EffectPrefixBakeService.PrepareCaptureSourceAsync(recheck,
+                                source, request.Assets, pristine, properties, loop, cancellationToken);
+                            using var prepared = new ProjectSource(recheck);
+                            JsonObject retained = JsonNode.Parse(await File.ReadAllTextAsync(manifest, cancellationToken))!.AsObject();
+                            if (await prepared.SourceHashAsync(cancellationToken) == retained["source_sha256"]?.GetValue<string>() &&
+                                retained["native_result"] is JsonObject full)
+                            {
+                                if (EffectPrefixBakeService.SurvivesCompleteCapture(pristine, source, request, full,
+                                    properties, projection, owner, prefix, installed))
+                                {
+                                    cachedProbe["status"] = CompleteCapturePassedStatus;
+                                    cachedProbe["late_dependencies"] = new JsonArray();
+                                }
+                                else ExplainRetreat(cachedProbe, pristine, source, request, full, analyzedRuntime,
+                                    properties, projection, owner, prefix, frames, loop, installed);
+                                AnalysisCache.Write(request.AnalysisCacheDirectory, persistentKey, cachedProbe);
+                                return cachedProbe;
+                            }
+                        }
+                        catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException)
+                        {
+                            // The retained trace is unusable; take a fresh capture below.
+                            _ = error;
+                        }
+                        finally
+                        {
+                            if (Directory.Exists(recheck)) Directory.Delete(recheck, recursive: true);
+                        }
+                    }
+                    // Missing or mismatched evidence cannot be upgraded by a changed diagnostic label.
+                }
+                else return cachedProbe;
+            }
             string probeOutput = Path.Combine(output, $"effect-prefix-complete-probe-{owner}-{terminal}-{prefix}-{frames}");
+            if (Directory.Exists(probeOutput)) probeOutput += "-fresh-" + Guid.NewGuid().ToString("N");
             string captureProject = Path.Combine(probeOutput, "capture-source");
             var verdict = new JsonObject { ["kind"] = "complete_capture", ["owner_layer_id"] = owner, ["terminal_effect_id"] = terminal,
                 ["prefix_effect_count"] = prefix, ["frames"] = frames, ["probe_output"] = probeOutput };
@@ -101,7 +151,8 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
             {
                 // 烘焙读的是源里的原场景（不带音频效果取舍），复核也按它，结论才与烘焙一致。
                 JsonObject pristine = source.ReadJson(source.SceneResource);
-                await EffectPrefixBakeService.PrepareCaptureSourceAsync(captureProject, source, request.Assets, pristine, properties, loop, cancellationToken);
+                JsonArray installedPatches = await EffectPrefixBakeService.PrepareCaptureSourceAsync(captureProject,
+                    source, request.Assets, pristine, properties, loop, cancellationToken);
                 var raw = await new NativeRenderRunner(tools).RenderAsync(new(captureProject, request.Assets, Path.Combine(probeOutput, "render"), 64, 64,
                     request.FpsNumerator, request.FpsDenominator, checked(frames + 1), Seed: 17,
                     CaptureTarget: new RenderCaptureSelection(owner, terminal, EffectTerminal: true, ExactExtent: false,
@@ -111,13 +162,12 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
                     OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(loop, new HashSet<int> { owner })), null, cancellationToken);
                 JsonObject fullRuntime = raw["native_result"]?.AsObject()
                     ?? throw new InvalidDataException("The complete prefix probe omitted its runtime evidence.");
-                if (EffectPrefixBakeService.SurvivesCompleteCapture(pristine, source, request, fullRuntime, properties, projection, owner, prefix))
+                if (EffectPrefixBakeService.SurvivesCompleteCapture(pristine, source, request, fullRuntime,
+                    properties, projection, owner, prefix, installedPatches))
                     verdict["status"] = CompleteCapturePassedStatus;
                 else
-                {
-                    verdict["status"] = "rejected_late_dependency";
-                    verdict["late_dependencies"] = EffectPrefixBakeService.LateDependencyRejection(owner, frames, loop, fullRuntime, analyzedRuntime)["late_dependencies"]!.DeepClone();
-                }
+                    ExplainRetreat(verdict, pristine, source, request, fullRuntime, analyzedRuntime,
+                        properties, projection, owner, prefix, frames, loop, installedPatches);
             }
             catch (Exception error) when (error is IOException or InvalidDataException)
             {
@@ -133,5 +183,24 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
                 AnalysisCache.Write(request.AnalysisCacheDirectory, persistentKey, verdict);
             return verdict;
         }
+    }
+
+    internal static void ExplainRetreat(JsonObject verdict, JsonObject scene, ProjectSource source,
+        HybridAnalyzeRequest request, JsonObject fullRuntime, JsonObject analyzedRuntime, JsonObject properties,
+        JsonObject projection, int owner, int prefix, ulong frames, JsonObject previousLoop,
+        JsonArray? installedPatches = null)
+    {
+        JsonArray late = EffectPrefixBakeService.LateDependencyRejection(owner, frames, previousLoop,
+            fullRuntime, analyzedRuntime)["late_dependencies"]!.AsArray();
+        verdict["late_dependencies"] = late.DeepClone();
+        if (late.Count > 0) { verdict["status"] = "rejected_late_dependency"; return; }
+        JsonObject checkedRuntime = installedPatches is null ? fullRuntime :
+            ShaderPeriodAnalysis.ReconcileInstalledKnobs(fullRuntime, source, request.Assets, installedPatches);
+        JsonObject revised = EffectPrefixPlanner.AnalyzeIndexedPrefix(scene, source, request.Assets,
+            checkedRuntime, properties, owner, prefix, request, projection, null);
+        verdict["revised_loop_status"] = revised["status"]?.DeepClone();
+        verdict["revised_loop_unresolved"] = revised["unresolved"]?.DeepClone() ?? new JsonArray();
+        verdict["status"] = !EffectPrefixPlanner.Cacheable(revised) ? "rejected_revised_loop" :
+            "rejected_changed_prefix_eligibility";
     }
 }
