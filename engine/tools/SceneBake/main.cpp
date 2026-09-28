@@ -328,12 +328,18 @@ Job ReadJob(const owe::NJson& json, const fs::path& base) {
             ((resize_width|resize_height)&1u))
             throw std::runtime_error("GPU resize requires paired even dimensions no larger than the crop");
         const bool resize=resize_width && (resize_width!=crop_width || resize_height!=crop_height);
-        if (!resize && ((crop_x|crop_y|crop_width|crop_height)&1u))
+        const auto pad_width=Uint(*encode,"pad_width",0), pad_height=Uint(*encode,"pad_height",0);
+        if ((pad_width==0)!=(pad_height==0) || (pad_width &&
+            (resize || crossfade || pad_width<crop_width || pad_height<crop_height ||
+             pad_width-crop_width>1 || pad_height-crop_height>1 || ((pad_width|pad_height)&1u))))
+            throw std::runtime_error("GPU padding only adds one edge pixel per odd dimension without resize or crossfade");
+        if (!resize && ((crop_x|crop_y)&1u || !pad_width && ((crop_width|crop_height)&1u)))
             throw std::runtime_error("GPU encoding without resize requires even crop dimensions and coordinates");
         if (resize && crossfade) throw std::runtime_error("GPU resize cannot be combined with loop crossfade");
         options.crop_x=static_cast<uint32_t>(crop_x); options.crop_y=static_cast<uint32_t>(crop_y);
         options.crop_width=static_cast<uint32_t>(crop_width); options.crop_height=static_cast<uint32_t>(crop_height);
         options.resize_width=static_cast<uint32_t>(resize_width); options.resize_height=static_cast<uint32_t>(resize_height);
+        options.pad_width=static_cast<uint32_t>(pad_width); options.pad_height=static_cast<uint32_t>(pad_height);
         options.collect_bounds = Bool(*encode, "collect_bounds", false);
         options.bounds_include_rgb = Bool(*encode, "bounds_include_rgb", false);
         if (auto* retained = Field(*encode, "retain_frames")) {
@@ -829,7 +835,7 @@ int main(int argc, char** argv) {
         }
         if (parsed && version && !render->parsed()) {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1\n";
+                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-encode-padding-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1\n";
             return 0;
         }
         if (parsed && !version && render->parsed()) return Render(Path(job));

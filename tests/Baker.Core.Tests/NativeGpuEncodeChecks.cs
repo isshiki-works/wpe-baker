@@ -4,6 +4,63 @@ using Baker.Core;
 
 internal static class NativeGpuEncodeChecks
 {
+    internal static async Task RunPaddingAsync(string output)
+    {
+        output = Path.GetFullPath(output);
+        Directory.CreateDirectory(output);
+        var tools = LocalTools.Tools!;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        string fixture = Path.Combine(LocalTools.RepositoryRoot, "tests", "fixtures", "native", "shader-clock");
+        string scene = Path.Combine(output, "fixture");
+        using (var source = new ProjectSource(fixture)) await source.ExtractAsync(scene, timeout.Token);
+        string shaderPath = Path.Combine(scene, "shaders", "probe.frag");
+        string shader = await File.ReadAllTextAsync(shaderPath, timeout.Token);
+        await File.WriteAllTextAsync(shaderPath, shader.Replace("gl_FragColor = vec4(c, 1.0)",
+            "if (p.x > 0.98 || p.y > 0.98) c = vec3(1.0, 0.0, 1.0); gl_FragColor = vec4(c, 0.5)",
+            StringComparison.Ordinal), timeout.Token);
+        var request = new RenderRequest(scene, fixture, Path.Combine(output, "encoded"), 131, 99, 60, 1, 4,
+            Seed: 17, PixelPacking: "rgba_side_by_side", EncodedFrames: 3, RetainFrames: [0, 3],
+            EncodePadding: new(132, 100, 0, 0),
+            GpuEncoding: new(Qp: 12, RetainQualitySamples: true),
+            LayerSelection: new([1], TransparentBackground: true, IncludePostprocessing: false));
+        var runner = new NativeRenderRunner(tools);
+        JsonObject encoded = await runner.RenderAsync(request, cancellationToken: timeout.Token);
+        if (encoded["gpu_padding"]?["width"]?.GetValue<uint>() != 132 ||
+            encoded["gpu_padding"]?["height"]?.GetValue<uint>() != 100 ||
+            encoded["gpu_resize"] is not null ||
+            encoded["encoded_stream"]?["streams"]?[0]?["width"]?.GetValue<int>() != 264 ||
+            encoded["encoded_stream"]?["streams"]?[0]?["height"]?.GetValue<int>() != 100)
+            throw new InvalidDataException("Odd capture was resized or lost its separate encoded canvas.");
+        string video = Path.Combine(output, "encoded", "preview.mp4");
+        byte[] rgb = await new FfmpegTool(tools).RunBytesAsync(["-hide_banner", "-nostdin", "-v", "error",
+            "-i", video, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+            264L * 100 * 3, timeout.Token);
+        if (rgb.Length != 264 * 100 * 3) throw new InvalidDataException("Padded video did not decode at its encoded extent.");
+        byte[] Pixel(int x, int y) => rgb.AsSpan((y * 264 + x) * 3, 3).ToArray();
+        foreach (int y in new[] { 20, 97 })
+            foreach (int half in new[] { 0, 1 })
+            {
+                byte[] edge = Pixel(half * 132 + 130, y), pad = Pixel(half * 132 + 131, y);
+                if (edge.Zip(pad).Any(pair => Math.Abs(pair.First - pair.Second) > 24))
+                    throw new InvalidDataException("Right edge padding differs from the final content column.");
+            }
+        foreach (int x in new[] { 20, 130, 132 + 20, 132 + 130 })
+        {
+            byte[] edge = Pixel(x, 98), pad = Pixel(x, 99);
+            if (edge.Zip(pad).Any(pair => Math.Abs(pair.First - pair.Second) > 24))
+                throw new InvalidDataException("Bottom edge padding differs from the final content row.");
+        }
+        byte[] marker = Pixel(130, 98);
+        if (marker[0] < 150 || marker[1] > 100 || marker[2] < 150)
+            throw new InvalidDataException("The right-bottom source marker was lost during encoding.");
+        string qualityOutput = Path.Combine(output, "quality");
+        Directory.CreateDirectory(qualityOutput);
+        JsonObject quality = await runner.GpuPlaybackQualityAsync(encoded, video, new(131, 99, 0, 0, 131, 99),
+            true, qualityOutput, timeout.Token);
+        if (quality["passed"]?.GetValue<bool>() != true)
+            throw new InvalidDataException("Padded GPU encoding failed the playback quality comparison.");
+    }
+
     internal static async Task RunAsync(string output)
     {
         output = Path.GetFullPath(output);

@@ -18,6 +18,8 @@ struct GpuCaptureOptions {
     bool retain_loop_window { false };
     // Zero keeps the crop size; otherwise Lanczos3 resize precedes alpha packing.
     std::uint32_t resize_width { 0 }, resize_height { 0 };
+    // Zero keeps the crop size; otherwise repeat the final column/row into an even canvas.
+    std::uint32_t pad_width { 0 }, pad_height { 0 };
 };
 
 // Owns the codec and conversion resources, never the renderer's Vulkan device.

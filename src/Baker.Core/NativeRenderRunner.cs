@@ -103,9 +103,9 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         if (request.GpuEncoding is { } gpu && (gpu.Codec is not ("h264_vulkan" or "hevc_vulkan" or PlaybackEncoderSelection.Av1Nvenc) ||
             gpu.Qp is < 0 or > 51 || request.LosslessTest || request.FrameSamplesOnly || request.RequireOpaquePixels ||
             request.ForceKeyFrameFrame is not null || request.FrameSampleStride != 0 ||
-            request.EncodePadding is not null || request.PlaybackEncoderKind is not null ||
+            request.PlaybackEncoderKind is not null ||
             (gpu.CrossfadeFrames > 0 && request.EncodeWidth is not null)))
-            throw new ArgumentException("GPU encoding requires even output dimensions without per-frame CPU processing, padding or external key-frame overrides; resizing cannot be combined with loop blending.");
+            throw new ArgumentException("GPU encoding requires even output dimensions without per-frame CPU processing or external key-frame overrides; resizing cannot be combined with loop blending.");
         if (request.GpuEncoding?.Crop is { } gpuCrop)
         {
             gpuCrop.Validate();
@@ -166,19 +166,25 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             throw new ArgumentException("Encoding-size override supports only ordinary video encoding without alpha bounds, frame samples, or lossless test mode.");
         if (encodeSizeRequested && (encodeWidth == 0 || encodeHeight == 0 || encodeWidth > request.Width || encodeHeight > request.Height))
             throw new ArgumentException("Encoding-size override must be positive and must not upscale the renderer output.");
-        if (request.EncodePadding is { } padding && (request.FrameSamplesOnly || request.CollectAlphaBounds || request.LosslessTest ||
+        if (request.EncodePadding is { } padding && (request.FrameSamplesOnly ||
+            (request.CollectAlphaBounds && request.GpuEncoding is null) || request.LosslessTest ||
             request.FrameSampleStride != 0 || request.FrameSamplePhaseFrames.HasValue || request.FrameSampleIncludeAlpha ||
             padding.OffsetX % 2 != 0 || padding.OffsetY % 2 != 0 ||
             (ulong)padding.OffsetX + encodeWidth > padding.Width || (ulong)padding.OffsetY + encodeHeight > padding.Height))
             throw new ArgumentException("Encode padding must contain the scaled content at even offsets and only applies to ordinary lossy video encoding.");
+        if (request.GpuEncoding is not null && request.EncodePadding is { } gpuPadding &&
+            (encodeSizeRequested || request.GpuEncoding.Crop is not null || request.GpuEncoding.CrossfadeFrames != 0 ||
+             gpuPadding.OffsetX != 0 || gpuPadding.OffsetY != 0 || gpuPadding.Width - encodeWidth > 1 ||
+             gpuPadding.Height - encodeHeight > 1))
+            throw new ArgumentException("GPU padding only adds one right or bottom edge pixel without resize, crop or crossfade.");
         // 补边之后的画布才是真正送进编码器的尺寸；下面的偶数校验、编码器选择与成品核对都按它来。
         string? padFilter = request.EncodePadding is { } pad
             ? FormattableString.Invariant($"pad={pad.Width}:{pad.Height}:{pad.OffsetX}:{pad.OffsetY}:color=black@0,") : null;
         uint canvasWidth = request.GpuEncoding is not null
-            ? request.EncodeWidth ?? (uint)(request.GpuEncoding.Crop?.Width ?? (int)request.Width)
+            ? request.EncodePadding?.Width ?? request.EncodeWidth ?? (uint)(request.GpuEncoding.Crop?.Width ?? (int)request.Width)
             : request.DirectCrop is { } cropWidth ? (uint)cropWidth.Width : request.EncodePadding?.Width ?? encodeWidth;
         uint encodedHeight = request.GpuEncoding is not null
-            ? request.EncodeHeight ?? (uint)(request.GpuEncoding.Crop?.Height ?? (int)request.Height)
+            ? request.EncodePadding?.Height ?? request.EncodeHeight ?? (uint)(request.GpuEncoding.Crop?.Height ?? (int)request.Height)
             : request.DirectCrop is { } cropHeight ? (uint)cropHeight.Height : request.EncodePadding?.Height ?? encodeHeight;
         // 播放版的软件打包越 HEVC 宽度上限时上下并排（master 与 GPU 直编仍左右并排）。
         bool below = request.GpuEncoding is null && !request.LosslessTest &&
@@ -278,6 +284,8 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             {
                 if (encodeSizeRequested && !capabilities.Has("gpu-encode-resize-v1"))
                     throw new GpuEncodeUnavailableException("GPU encode initialization: renderer cannot resize texture captures on the GPU.");
+                if (request.EncodePadding is not null && !capabilities.Has("gpu-encode-padding-v1"))
+                    throw new GpuEncodeUnavailableException("GPU encode initialization: renderer cannot pad texture captures on the GPU.");
                 if (encoding.RetainQualitySamples && !capabilities.Has("gpu-quality-samples-v1"))
                     throw new GpuEncodeUnavailableException("GPU encode initialization: renderer cannot retain the required quality samples.");
                 if (!capabilities.Has("gpu-encode-v1"))
@@ -294,7 +302,8 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                     RetainFrames: request.RetainFrames ?? [], encoding.CrossfadeFrames, encoding.RetainLoopWindow,
                     CropX: encoding.Crop?.X ?? 0, CropY: encoding.Crop?.Y ?? 0,
                     CropWidth: encoding.Crop?.Width ?? (int)request.Width, CropHeight: encoding.Crop?.Height ?? (int)request.Height,
-                    ResizeWidth: encodeSizeRequested ? encodeWidth : null, ResizeHeight: encodeSizeRequested ? encodeHeight : null) };
+                    ResizeWidth: encodeSizeRequested ? encodeWidth : null, ResizeHeight: encodeSizeRequested ? encodeHeight : null,
+                    PadWidth: request.EncodePadding?.Width, PadHeight: request.EncodePadding?.Height) };
             }
             string jobPath = Path.Combine(output, "renderer-job.json");
             await WriteJsonAsync(jobPath, JsonSerializer.SerializeToNode(job, JsonOptions)!, cancellationToken);
@@ -576,6 +585,17 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                         resize["filter"]?.GetValue<string>() != "lanczos3")
                         throw new InvalidDataException("Renderer did not confirm the requested Lanczos GPU resize.");
                     manifest["gpu_resize"] = resize.DeepClone();
+                }
+                if (request.EncodePadding is { } expectedPadding)
+                {
+                    JsonObject? observed = nativeResult.GpuCapture?.Padding;
+                    if (observed is null || observed["width"]?.GetValue<uint>() != expectedPadding.Width ||
+                        observed["height"]?.GetValue<uint>() != expectedPadding.Height ||
+                        observed["content_width"]?.GetValue<uint>() != encodeWidth ||
+                        observed["content_height"]?.GetValue<uint>() != encodeHeight ||
+                        observed["fill"]?.GetValue<string>() != "repeat_edge")
+                        throw new InvalidDataException("Renderer did not confirm the requested GPU edge padding.");
+                    manifest["gpu_padding"] = observed.DeepClone();
                 }
                 if (request.GpuEncoding.CrossfadeFrames != 0 || request.GpuEncoding.Crop is not null)
                 {

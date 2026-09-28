@@ -638,6 +638,13 @@ public class SharedLoopStartTests
 public class NativeGpuEncodeTests
 {
     [Fact]
+    public async Task RunPadding()
+    {
+        Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);
+        await TestTemp.Run(dir => NativeGpuEncodeChecks.RunPaddingAsync(Path.Combine(dir, "out")));
+    }
+
+    [Fact]
     public async Task Run()
     {
         Assert.SkipUnless(LocalTools.Tools is not null, LocalTools.Missing);

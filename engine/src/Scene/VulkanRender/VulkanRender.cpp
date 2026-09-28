@@ -843,7 +843,8 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
                 GpuCaptureOptions { encode.collect_bounds, encode.bounds_include_rgb,
                     encode.encoded_frames ? encode.encoded_frames : encode.frames, encode.retain_frames,
                     encode.crossfade_frames, encode.crop_x, encode.crop_y, encode.crop_width, encode.crop_height,
-                    encode.retain_loop_window, encode.resize_width, encode.resize_height });
+                    encode.retain_loop_window, encode.resize_width, encode.resize_height,
+                    encode.pad_width, encode.pad_height });
         } catch (const std::exception& error) {
             rstd_error("GPU encode initialization: {}", error.what());
             return false;

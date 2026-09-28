@@ -190,7 +190,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     EncodePadding: paddedContent is null ? null
                         : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY));
                 RenderRequest renderRequest = softwareRender;
-                if (playbackKind == PlaybackEncoderSelection.Vulkan && paddedContent is null)
+                bool gpuEdgePadding = paddedContent is { OffsetX: 0, OffsetY: 0 } content && !decodePlan.Vertical &&
+                    content.PaddedWidth - content.Width <= 1 && content.PaddedHeight - content.Height <= 1;
+                if (playbackKind == PlaybackEncoderSelection.Vulkan && (paddedContent is null || gpuEdgePadding))
                 {
                     bool resize = encodeWidth != sourceWidth || encodeHeight != sourceHeight;
                     string codec = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
@@ -201,7 +203,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 }
                 else if (PlaybackEncoderSelection.Normalize(request.PlaybackEncoder) != PlaybackEncoderSelection.Software)
                     encoderFallback ??= paddedContent is not null
-                        ? "GPU prefix encoding does not support decoder padding yet; using the existing software path."
+                        ? "GPU prefix encoding supports only one-pixel edge padding; using the existing software path."
                         : "This effect-prefix path supports software or same-device Vulkan encoding.";
                 try
                 {
@@ -479,6 +481,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
     internal static (uint Width, uint Height) Fit(uint sourceWidth, uint sourceHeight, uint targetWidth, uint targetHeight)
     {
         double scale = Math.Min(1, Math.Min(targetWidth / (double)sourceWidth, targetHeight / (double)sourceHeight));
+        if (scale == 1) return (sourceWidth, sourceHeight);
         uint width = Math.Max(2, (uint)Math.Floor(sourceWidth * scale / 2) * 2);
         uint height = Math.Max(2, (uint)Math.Floor(sourceHeight * scale / 2) * 2);
         return (width, height);
@@ -494,6 +497,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         if (!double.IsFinite(viewWidth) || !double.IsFinite(viewHeight) || viewWidth <= 0 || viewHeight <= 0)
             throw new InvalidDataException("A puppet atlas needs the source camera extent to preserve its projected pixel density.");
         double scale = Math.Min(1, Math.Max(targetWidth / viewWidth, targetHeight / viewHeight));
+        if (scale == 1) return (sourceWidth, sourceHeight);
         return (Math.Max(2, (uint)Math.Floor(sourceWidth * scale / 2) * 2),
             Math.Max(2, (uint)Math.Floor(sourceHeight * scale / 2) * 2));
     }

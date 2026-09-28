@@ -151,6 +151,7 @@ struct GpuEncodeOptions {
     std::uint32_t crop_x { 0 }, crop_y { 0 }, crop_width { 0 }, crop_height { 0 };
     bool retain_loop_window { false };
     std::uint32_t resize_width { 0 }, resize_height { 0 };
+    std::uint32_t pad_width { 0 }, pad_height { 0 };
 };
 
 struct RenderInitInfo {
