@@ -13,6 +13,13 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
 {
     private readonly Dictionary<string, JsonObject> probes = new(StringComparer.Ordinal);
 
+    private static (int? Id, int? Ordinal, string Key) Terminal(JsonObject cache)
+    {
+        int? id = SceneGraph.Int(cache["terminal_effect_id"]), ordinal = SceneGraph.Int(cache["terminal_effect_ordinal"]);
+        if (id is null && ordinal is null) throw new InvalidDataException("Effect-prefix terminal needs an authored ID or ordinal.");
+        return (id, ordinal, id?.ToString(CultureInfo.InvariantCulture) ?? "ordinal-" + ordinal!.Value.ToString(CultureInfo.InvariantCulture));
+    }
+
     /// <summary>本次分析探测过的捕获点（按首次探测的先后）。</summary>
     internal IReadOnlyCollection<JsonObject> Recorded => probes.Values;
 
@@ -20,9 +27,10 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
     internal async Task<JsonObject?> TargetAsync(JsonObject cache, CancellationToken cancellationToken)
     {
         if (request.RuntimeTraceFile is not null) return null;
-        int owner = cache["owner_layer_id"]!.GetValue<int>(), terminal = cache["terminal_effect_id"]!.GetValue<int>();
+        int owner = cache["owner_layer_id"]!.GetValue<int>();
+        var terminal = Terminal(cache);
         bool forceVisibleOwner = cache["preserve_external_visibility"]?.GetValue<bool>() == true;
-        string key = owner.ToString(CultureInfo.InvariantCulture) + ":" + terminal.ToString(CultureInfo.InvariantCulture);
+        string key = owner.ToString(CultureInfo.InvariantCulture) + ":" + terminal.Key;
         if (forceVisibleOwner) key += ":visible-control";
         if (probes.TryGetValue(key, out JsonObject? known)) return known;
         string persistentKey = "capture-" + AnalysisCache.Key(source.SourcePath, properties, request.Assets, tools,
@@ -35,22 +43,23 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
         {
             if (AnalysisCache.Read(request.AnalysisCacheDirectory, persistentKey) is JsonObject cachedProbe) return cachedProbe;
             string? name = EffectPrefixCaptureTarget.LayerName(scene, owner);
-            string probeOutput = Path.Combine(output, $"effect-prefix-capture-probe-{owner}-{terminal}" + (forceVisibleOwner ? "-visible" : ""));
+            string probeOutput = Path.Combine(output, $"effect-prefix-capture-probe-{owner}-{terminal.Key}" + (forceVisibleOwner ? "-visible" : ""));
             JsonObject observed = new(), verdict;
             try
             {
                 // 与 bake 的元数据探测同一个捕获选择：原始源、快照属性、1 帧，只看渲染器实际从哪个目标取帧。
                 var raw = await new NativeRenderRunner(tools).RenderRawAsync(new(source.SourcePath, request.Assets, probeOutput, 64, 64,
                     request.FpsNumerator, request.FpsDenominator, 1, Seed: 17,
-                    CaptureTarget: new RenderCaptureSelection(owner, terminal, EffectTerminal: true, ExactExtent: false,
+                    CaptureTarget: new RenderCaptureSelection(owner, terminal.Id, EffectOrdinal: terminal.Ordinal,
+                        EffectTerminal: true, ExactExtent: false,
                         ForceVisibleOwner: forceVisibleOwner ? true : null),
                     UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true), cancellationToken);
                 observed = raw["native_result"]!.AsObject();
-                verdict = EffectPrefixCaptureTarget.Evaluate(observed, owner, terminal, name);
+                verdict = EffectPrefixCaptureTarget.Evaluate(observed, owner, terminal.Id, name, terminal.Ordinal);
             }
             catch (Exception error) when (error is IOException or InvalidDataException)
             {
-                verdict = EffectPrefixCaptureTarget.ProbeFailed(owner, terminal, name, error.Message);
+                verdict = EffectPrefixCaptureTarget.ProbeFailed(owner, terminal.Id, name, error.Message, terminal.Ordinal);
             }
             finally
             {
@@ -78,12 +87,13 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
         CancellationToken cancellationToken)
     {
         if (request.RuntimeTraceFile is not null) return null;
-        int owner = cache["owner_layer_id"]!.GetValue<int>(), terminal = cache["terminal_effect_id"]!.GetValue<int>();
+        int owner = cache["owner_layer_id"]!.GetValue<int>();
+        var terminal = Terminal(cache);
         int prefix = cache["prefix_effect_count"]!.GetValue<int>();
         JsonObject loop = cache["loop"]!.AsObject();
         ulong frames = loop["candidates"]!.AsArray()[0]!["frames"]!.GetValue<ulong>();
         bool forceVisibleOwner = cache["preserve_external_visibility"]?.GetValue<bool>() == true;
-        string key = $"{owner}:{terminal}:{prefix}:{frames}:" + AnalysisCache.Key(loop) + (forceVisibleOwner ? ":visible-control" : "");
+        string key = $"{owner}:{terminal.Key}:{prefix}:{frames}:" + AnalysisCache.Key(loop) + (forceVisibleOwner ? ":visible-control" : "");
         if (probes.TryGetValue("complete:" + key, out JsonObject? known)) return known;
         string persistentKey = "complete-capture-" + AnalysisCache.Key(source.SourcePath, properties, request.Assets, tools,
             File.Exists(tools.Renderer) ? File.GetLastWriteTimeUtc(tools.Renderer).Ticks : 0,
@@ -142,11 +152,13 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
                 }
                 else return cachedProbe;
             }
-            string probeOutput = Path.Combine(output, $"effect-prefix-complete-probe-{owner}-{terminal}-{prefix}-{frames}");
+            string probeOutput = Path.Combine(output, $"effect-prefix-complete-probe-{owner}-{terminal.Key}-{prefix}-{frames}");
             if (Directory.Exists(probeOutput)) probeOutput += "-fresh-" + Guid.NewGuid().ToString("N");
             string captureProject = Path.Combine(probeOutput, "capture-source");
-            var verdict = new JsonObject { ["kind"] = "complete_capture", ["owner_layer_id"] = owner, ["terminal_effect_id"] = terminal,
+            var verdict = new JsonObject { ["kind"] = "complete_capture", ["owner_layer_id"] = owner,
+                ["terminal_effect_id"] = cache["terminal_effect_id"]?.DeepClone(),
                 ["prefix_effect_count"] = prefix, ["frames"] = frames, ["probe_output"] = probeOutput };
+            if (terminal.Ordinal is int ordinal) verdict["terminal_effect_ordinal"] = ordinal;
             try
             {
                 // 烘焙读的是源里的原场景（不带音频效果取舍），复核也按它，结论才与烘焙一致。
@@ -155,7 +167,8 @@ internal sealed class PrefixCaptureProbes(NativeTools tools, HybridAnalyzeReques
                     source, request.Assets, pristine, properties, loop, cancellationToken);
                 var raw = await new NativeRenderRunner(tools).RenderAsync(new(captureProject, request.Assets, Path.Combine(probeOutput, "render"), 64, 64,
                     request.FpsNumerator, request.FpsDenominator, checked(frames + 1), Seed: 17,
-                    CaptureTarget: new RenderCaptureSelection(owner, terminal, EffectTerminal: true, ExactExtent: false,
+                    CaptureTarget: new RenderCaptureSelection(owner, terminal.Id, EffectOrdinal: terminal.Ordinal,
+                        EffectTerminal: true, ExactExtent: false,
                         ForceVisibleOwner: forceVisibleOwner ? true : null),
                     UserProperties: properties, DeviceUuid: request.DeviceUuid, TraceScene: true,
                     FrameSamplesOnly: true, FrameSampleStride: checked((uint)frames), FrameSampleWidth: 1,

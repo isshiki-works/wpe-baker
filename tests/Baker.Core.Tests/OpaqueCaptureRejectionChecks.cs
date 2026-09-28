@@ -65,11 +65,9 @@ internal static class OpaqueCaptureRejectionChecks
             "opaque evidence is found through wrapping exceptions, absent otherwise, and returned as a copy");
 
         // 拒绝记录：纯函数，点名层、坐标与 alpha；中英理由走 MessageCatalog。
-        Type service = typeof(NativeRenderRunner).Assembly.GetType("Baker.Core.EffectPrefixBakeService", throwOnError: true)!;
-        MethodInfo rejection = service.GetMethod("OpaqueCaptureRejection", BindingFlags.Static | BindingFlags.NonPublic)!;
         (JsonObject Group, Message Reason) Reject(JsonObject scene, int owner) =>
-            ((JsonObject, Message))rejection.Invoke(null, [scene, owner, 356, 188UL, 5160U, 2160U,
-                new JsonObject { ["candidates"] = new JsonArray() }, evidence])!;
+            EffectPrefixBakeService.OpaqueCaptureRejection(scene, owner, 356, 188UL, 5160U, 2160U,
+                new JsonObject { ["candidates"] = new JsonArray() }, evidence);
         var sceneJson = new JsonObject { ["objects"] = new JsonArray(
             new JsonObject { ["id"] = 7, ["name"] = "前景" },
             new JsonObject { ["id"] = 23, ["name"] = "背景\n底图" }) };
@@ -84,5 +82,9 @@ internal static class OpaqueCaptureRejectionChecks
         JsonObject localized = message.Localized();
         check(localized["key"]?.GetValue<string>() == "bake.effect_prefix_nonopaque_capture",
             "opaque capture rejection reason localizes to Chinese with the same layer and alpha");
+        var ordinal = EffectPrefixBakeService.OpaqueCaptureRejection(sceneJson, 23, null, 188UL, 5160U, 2160U,
+            new JsonObject { ["candidates"] = new JsonArray() }, evidence, 3).Group;
+        check(ordinal["terminal_effect_id"] is null && ordinal["terminal_effect_ordinal"]?.GetValue<int>() == 3,
+            "effects without authored IDs keep their ordinal in opaque capture rejection evidence");
     }
 }
