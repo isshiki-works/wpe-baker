@@ -31,9 +31,16 @@ internal static class ScriptTime
     /// <summary>被烘图层上的一段脚本。Pointer 是相对图层对象的 JSON 指针（场景里的绑定，捕获时可改写）；模型材质里的为 null。</summary>
     internal sealed record Binding(int OwnerLayerId, string Name, string? Pointer, JsonObject Node, JsonObject Owner);
 
+    internal static ulong FrameCap(CommonLoopRational ceiling, uint fpsNumerator, uint fpsDenominator) =>
+        (ulong)UInt128.Min((UInt128)ceiling.Numerator * fpsNumerator /
+            ((UInt128)ceiling.Denominator * fpsDenominator), 1_000_000);
+
     internal static IEnumerable<Binding> Bindings(JsonObject scene, ProjectSource source, string? assets, IReadOnlyCollection<int> baked)
+        => Bindings((scene["objects"] as JsonArray ?? []).OfType<JsonObject>(), source, assets, baked);
+
+    internal static IEnumerable<Binding> Bindings(IEnumerable<JsonObject> layers, ProjectSource source, string? assets, IReadOnlyCollection<int> baked)
     {
-        foreach (JsonObject layer in (scene["objects"] as JsonArray ?? []).OfType<JsonObject>())
+        foreach (JsonObject layer in layers)
         {
             if (SceneGraph.Int(layer["id"]) is not int id || !baked.Contains(id)) continue;
             foreach (Binding binding in Of(layer, id)) yield return binding;

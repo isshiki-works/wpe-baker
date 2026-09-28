@@ -272,7 +272,9 @@ internal static class SceneAssembler
             foreach (int member in members)
                 for (int? id = member; id is int current && current != groupParent && originals.ContainsKey(current) && cloned.Add(current);
                      id = Int(originals[current]["parent"])) { }
-            if (dependencies.OfType<JsonObject>().Any(d => Int(d["owner"]) is int owner && Int(d["target"]) is int target && owner != target &&
+            if (dependencies.OfType<JsonObject>().Any(d => Int(d["owner"]) is int owner && Int(d["target"]) is int target &&
+                !(target == -1 && d["operation"]?.GetValue<string>() == "time" &&
+                  d["property"]?.GetValue<string>() is "runtime" or "frametime") && owner != target &&
                 (cloned.Contains(owner) || cloned.Contains(target)))) { skip = "cross_object_dependency"; break; }
             var map = new Dictionary<int, int>();
             var clones = new List<JsonObject>();
