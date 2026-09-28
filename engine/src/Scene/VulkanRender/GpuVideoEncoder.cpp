@@ -613,12 +613,20 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
         throw std::runtime_error("GPU resize requires paired even dimensions no larger than the crop");
     p.resizing = p.capture.resize_width &&
         (p.capture.resize_width!=p.capture.crop_width || p.capture.resize_height!=p.capture.crop_height);
-    if (!p.resizing && ((p.capture.crop_x|p.capture.crop_y|p.capture.crop_width|p.capture.crop_height)&1u))
-        throw std::runtime_error("GPU encoding without resize requires even crop coordinates and dimensions");
+    const bool padding=p.capture.pad_width!=0 || p.capture.pad_height!=0;
+    if ((p.capture.pad_width==0)!=(p.capture.pad_height==0) || (padding &&
+        (p.resizing || p.capture.crossfade_frames || p.capture.pad_width<p.capture.crop_width ||
+         p.capture.pad_height<p.capture.crop_height || p.capture.pad_width-p.capture.crop_width>1 ||
+         p.capture.pad_height-p.capture.crop_height>1 ||
+         ((p.capture.pad_width|p.capture.pad_height)&1u))))
+        throw std::runtime_error("GPU padding only adds one edge pixel per odd dimension without resize or crossfade");
+    if (!p.resizing && (((p.capture.crop_x|p.capture.crop_y)&1u) ||
+        (!padding && ((p.capture.crop_width|p.capture.crop_height)&1u))))
+        throw std::runtime_error("GPU encoding without resize requires even crop coordinates and dimensions unless padded");
     if (p.resizing && p.capture.crossfade_frames)
         throw std::runtime_error("GPU resize cannot be combined with loop crossfade");
-    p.color_width = p.resizing ? p.capture.resize_width : p.capture.crop_width;
-    p.output_height = p.resizing ? p.capture.resize_height : p.capture.crop_height;
+    p.color_width = padding ? p.capture.pad_width : p.resizing ? p.capture.resize_width : p.capture.crop_width;
+    p.output_height = padding ? p.capture.pad_height : p.resizing ? p.capture.resize_height : p.capture.crop_height;
     if (p.color_width>std::uint32_t(INT32_MAX)/(packed_alpha ? 2u : 1u) || p.output_height>INT32_MAX)
         throw std::runtime_error("GPU encoder dimensions exceed the codec range");
     p.output_width = p.color_width * (packed_alpha ? 2 : 1);
@@ -780,13 +788,15 @@ layout(binding=6, rgba8) readonly uniform image2D resizedImage;
 layout(push_constant) uniform Dimensions {
     uint width; uint height; uint colorWidth; uint outputHeight; uint outputWidth; uint stride;
     uint cropX; uint cropY; uint flags; uint blendNumerator; uint blendDenominator;
+    uint contentWidth; uint contentHeight;
 } dims;
 shared uint blockStats[8];
 shared uint compareFirst;
 vec3 rgb(uint x, uint y) {
     uvec2 q=uvec2(min(x,dims.outputWidth-1u)%dims.colorWidth,min(y,dims.outputHeight-1u));
     vec4 p=(dims.flags&16u)!=0u ? imageLoad(resizedImage,ivec2(q)) :
-        imageLoad(sourceImage,ivec2(q+uvec2(dims.cropX,dims.cropY)));
+        imageLoad(sourceImage,ivec2(min(q,uvec2(dims.contentWidth-1u,dims.contentHeight-1u))+
+            uvec2(dims.cropX,dims.cropY)));
     if ((dims.flags&8u)!=0u) {
         uint stored=loopHead.rgba[q.y*dims.colorWidth+q.x];
         uvec4 head=uvec4(stored&255u,(stored>>8u)&255u,(stored>>16u)&255u,stored>>24u);
@@ -873,7 +883,7 @@ void main() {
     VkDescriptorSetLayoutCreateInfo descriptors { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, .bindingCount = 7, .pBindings = bindings.data() };
     Vk(vkCreateDescriptorSetLayout(device, &descriptors, nullptr, &p.descriptors), "create GPU conversion descriptors");
-    VkPushConstantRange constants { VK_SHADER_STAGE_COMPUTE_BIT, 0, 44 };
+    VkPushConstantRange constants { VK_SHADER_STAGE_COMPUTE_BIT, 0, 52 };
     VkPipelineLayoutCreateInfo layout { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1, .pSetLayouts = &p.descriptors, .pushConstantRangeCount = 1, .pPushConstantRanges = &constants };
     Vk(vkCreatePipelineLayout(device, &layout, nullptr, &p.layout), "create GPU conversion layout");
@@ -1097,8 +1107,10 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
         vkCmdBindPipeline(p.command,VK_PIPELINE_BIND_POINT_COMPUTE,p.pipeline);
         std::uint32_t flags=(p.capture.collect_bounds ? (p.capture.bounds_include_rgb ? 3u : 1u) : 0u) |
             (cache_head ? 4u : 0u) | (blend_head ? 8u : 0u) | (p.resizing ? 16u : 0u);
-        std::array<std::uint32_t, 11> dimensions { p.width,p.height,p.color_width,p.output_height,p.output_width,p.stride,
-            p.capture.crop_x,p.capture.crop_y,flags,blend_head ? fade-static_cast<std::uint32_t>(head_index) : 0u,fade+1 };
+        std::array<std::uint32_t, 13> dimensions { p.width,p.height,p.color_width,p.output_height,p.output_width,p.stride,
+            p.capture.crop_x,p.capture.crop_y,flags,blend_head ? fade-static_cast<std::uint32_t>(head_index) : 0u,fade+1,
+            p.resizing ? p.color_width : p.capture.crop_width,
+            p.resizing ? p.output_height : p.capture.crop_height };
         vkCmdPushConstants(p.command, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(dimensions), dimensions.data());
         const auto scan_width=p.capture.collect_bounds ? std::max(p.stride,p.width) : p.stride;
         const auto scan_height=p.capture.collect_bounds ? p.height : p.output_height;
@@ -1238,6 +1250,10 @@ std::string GpuVideoEncoder::captureMetadata() const {
     if (p.resizing)
         out << ",\"resize\":{\"width\":" << p.color_width << ",\"height\":" << p.output_height
             << ",\"filter\":\"lanczos3\"}";
+    if (p.capture.pad_width)
+        out << ",\"padding\":{\"width\":" << p.color_width << ",\"height\":" << p.output_height
+            << ",\"content_width\":" << p.capture.crop_width << ",\"content_height\":" << p.capture.crop_height
+            << ",\"fill\":\"repeat_edge\"}";
     if (p.capture.crossfade_frames)
         out << ",\"loop_crossfade\":{\"status\":\"applied\",\"crossfade_frames\":" << p.capture.crossfade_frames
             << ",\"loop_frames\":" << p.capture.encoded_frames

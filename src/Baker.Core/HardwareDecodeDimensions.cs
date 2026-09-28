@@ -65,7 +65,7 @@ public static class HardwareDecodeDimensions
     /// 内容尺寸越过 HEVC 硬解上限（宽、高、亮度样本；透明按两半幅算）就等比缩小到上限内，回放按图层原尺寸放大，
     /// 观感交给编码后的画质门与合成门判。透明时左右、上下两种并排各算一次，取保留像素多的（打平取左右并排）；
     /// 上下并排后的总高越过常见核显的 HEVC 高度上限（<see cref="IntegratedHevc"/>）时不用它，免得显示器接核显的用户被硬解检查拒绝。
-    /// 没越限原样返回（输入须为偶数，与 Fit 一致）。
+    /// 没越限原样返回；奇数内容宽高留给 Evaluate 补边，不缩掉边缘像素。
     /// </summary>
     public static (uint Width, uint Height) FitCeiling(uint width, uint height, bool packedAlpha)
     {

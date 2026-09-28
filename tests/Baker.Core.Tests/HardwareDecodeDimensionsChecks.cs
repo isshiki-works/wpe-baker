@@ -75,6 +75,11 @@ internal static class HardwareDecodeDimensionsChecks
 
         // ---- 奇数 ----
         var odd = HardwareDecodeDimensions.Evaluate(1001, 501, false, 60, 1);
+        check(EffectPrefixBakeService.Fit(1151, 1732, 3072, 1920) == (1151u, 1732u) &&
+            HardwareDecodeDimensions.FitCeiling(1151, 1732, true) == (1151u, 1732u) &&
+            HardwareDecodeDimensions.Evaluate(1151, 1732, true, 60, 1) is
+                { ContentWidth: 1151, PaddedWidth: 1152, OffsetX: 0, StoredWidth: 2304 },
+            "an uncapped odd source keeps its final visible column and pads only the coded canvas");
         check(odd.Status == HardwareDecodeDimensions.PaddedStatus && odd.PaddedWidth == 1002 && odd.PaddedHeight == 502 &&
             odd.OffsetX == 0 && odd.OffsetY == 0 && DecodeDimensions.Grow(1001, 1001) == (1002u, 0u) &&
             DecodeDimensions.Grow(6, 64) == (66u, 30u) && DecodeDimensions.Grow(64, 48) == (64u, 0u),

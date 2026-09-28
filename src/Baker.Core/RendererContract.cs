@@ -60,7 +60,7 @@ internal sealed record RenderJob
 /// <summary>job.gpu_encode：同卡编码参数。字段全部写出（crop 缺省为整幅），resize_* 只在请求了编码尺寸时写。</summary>
 internal sealed record RenderGpuEncodeJob(string Codec, int Qp, bool PackedAlpha, ulong EncodedFrames, bool CollectBounds,
     bool BoundsIncludeRgb, ulong[] RetainFrames, uint CrossfadeFrames, bool RetainLoopWindow, int CropX, int CropY,
-    int CropWidth, int CropHeight, uint? ResizeWidth, uint? ResizeHeight);
+    int CropWidth, int CropHeight, uint? ResizeWidth, uint? ResizeHeight, uint? PadWidth, uint? PadHeight);
 
 /// <summary>
 /// wpe-render 的 result.json（schema 1）里本仓库实际读取的字段。没列出的字段反序列化时忽略、不报错；
@@ -109,5 +109,5 @@ internal sealed record RenderResult
 internal sealed record RenderResultCaptureSource(string? RenderTarget);
 
 /// <summary>result.gpu_capture：各子对象会带上路径等补充字段转写进 manifest，所以保留 JsonObject。</summary>
-internal sealed record RenderResultGpuCapture(JsonObject? Resize, JsonNode? Crop, JsonObject? LoopCrossfade, JsonObject? LoopWindow,
+internal sealed record RenderResultGpuCapture(JsonObject? Resize, JsonObject? Padding, JsonNode? Crop, JsonObject? LoopCrossfade, JsonObject? LoopWindow,
     JsonObject? AlphaBounds, JsonObject? RetainedFrames, ulong? EncodedPackets);

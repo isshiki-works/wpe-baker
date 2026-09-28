@@ -19,14 +19,32 @@ public sealed partial class NativeRenderRunner
         ulong frames = EncodedFrameCount(render);
         ulong[] samples = QualityGate.SampleFrames(frames);
         int colorWidth = (int)(request.EncodeWidth ?? (uint)crop.Width);
-        int height = (int)(request.EncodeHeight ?? (uint)crop.Height);
-        int width = colorWidth * (packed ? 2 : 1);
-        bool resized = colorWidth != crop.Width || height != crop.Height;
+        int contentHeight = (int)(request.EncodeHeight ?? (uint)crop.Height);
+        int canvasWidth = (int)(request.EncodePadding?.Width ?? (uint)colorWidth);
+        int canvasHeight = (int)(request.EncodePadding?.Height ?? (uint)contentHeight);
+        int width = canvasWidth * (packed ? 2 : 1);
+        bool resized = colorWidth != crop.Width || contentHeight != crop.Height;
         uint fade = request.GpuEncoding?.CrossfadeFrames ?? request.DirectCrossfadeFrames ?? 0;
+        byte[] PadReference(byte[] content)
+        {
+            if (request.EncodePadding is null) return content;
+            int halves = packed ? 2 : 1;
+            byte[] result = new byte[checked(width * canvasHeight * 3)];
+            for (int y = 0; y < canvasHeight; y++)
+                for (int half = 0; half < halves; half++)
+                {
+                    int source = (Math.Min(y, contentHeight - 1) * colorWidth * halves + half * colorWidth) * 3;
+                    int target = (y * width + half * canvasWidth) * 3;
+                    Buffer.BlockCopy(content, source, result, target, colorWidth * 3);
+                    for (int x = colorWidth; x < canvasWidth; x++)
+                        Buffer.BlockCopy(content, source + (colorWidth - 1) * 3, result, target + x * 3, 3);
+                }
+            return result;
+        }
         async Task WriteReferenceAsync(Stream reference, CancellationToken cancel)
         {
             (ulong[] Indices, byte[] Rgba)? scaled = resized
-                ? await EncodedLoopValidator.ScaleRetainedFramesAsync(tools, render, colorWidth, height, crop, cancel) : null;
+                ? await EncodedLoopValidator.ScaleRetainedFramesAsync(tools, render, colorWidth, contentHeight, crop, cancel) : null;
             await using FileStream? window = fade > 0 ? File.OpenRead(render["gpu_loop_window"]!["path"]!.GetValue<string>()) : null;
             foreach (ulong index in samples)
             {
@@ -35,9 +53,9 @@ public sealed partial class NativeRenderRunner
                 {
                     int position = Array.IndexOf(resizedFrames.Indices, index);
                     if (position < 0) throw new InvalidDataException("GPU quality reference omitted a requested sample.");
-                    int frameBytes = checked(colorWidth * height * 4);
+                    int frameBytes = checked(colorWidth * contentHeight * 4);
                     rgb = LoopClosureCheck.EncodedLayout(resizedFrames.Rgba.AsSpan(position * frameBytes, frameBytes),
-                        colorWidth, height, 0, 0, colorWidth, height, packed);
+                        colorWidth, contentHeight, 0, 0, colorWidth, contentHeight, packed);
                 }
                 else
                 {
@@ -53,17 +71,19 @@ public sealed partial class NativeRenderRunner
                     rgb = LoopClosureCheck.EncodedLayout(rgba, (int)request.Width, (int)request.Height,
                         crop.X, crop.Y, crop.Width, crop.Height, packed);
                 }
-                await reference.WriteAsync(rgb, cancel);
+                await reference.WriteAsync(PadReference(rgb), cancel);
             }
         }
         QualityReport measured = await qualityComparer.CompareAsync(new(video, frames, samples, request.FpsNumerator, request.FpsDenominator,
-            new FramesQualityReference(WriteReferenceAsync, width, height), output, "quality"), token);
+            new FramesQualityReference(WriteReferenceAsync, width, canvasHeight), output, "quality"), token);
         bool pass = QualityGate.Passes(measured.Ssim, QualityGate.DefaultReferenceSsim, QualityGate.DefaultRatio);
         var result = QualityGate.Summarize(samples, QualityGate.DefaultReferenceSsim, QualityGate.DefaultRatio,
             measured.Ssim, measured.Psnr, 0, pass ? QualityGate.ActionAccepted : QualityGate.ActionRejected);
         result["reference_source"] = resized
             ? "Retained original renderer RGBA resized with FFmpeg Lanczos, then alpha-packed and converted to BT.709."
-            : "Retained renderer RGBA with the same integer loop crossfade, crop, packing and BT.709 conversion.";
+            : request.EncodePadding is not null
+                ? "Retained renderer RGBA with unchanged content pixels and repeated edge padding before alpha packing and BT.709 conversion."
+                : "Retained renderer RGBA with the same integer loop crossfade, crop, packing and BT.709 conversion.";
         result["decode_scope"] = measured.DecodeScope;
         result["qp"] = request.GpuEncoding?.Qp;
         if (pass) TemporaryCaptureFiles.Delete(result, output, "quality-reference.rgb", "quality-product.yuv");
