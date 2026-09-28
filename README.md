@@ -42,7 +42,7 @@ Issues are welcome in English or Chinese. Attach `plan.json` and `bake.json` fro
 
 ## Requirements
 
-Windows 10/11 and Wallpaper Engine are used for baking, along with a GPU for the offline render. Playback uses hardware video decoding for baked video and continues rendering any layers retained for real-time input.
+Windows 10/11 64-bit, Wallpaper Engine, and a Vulkan-capable GPU for offline rendering. During playback, Wallpaper Engine decodes the baked videos and renders the retained real-time layers.
 
 ## Building from source
 
