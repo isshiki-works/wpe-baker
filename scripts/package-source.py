@@ -88,6 +88,15 @@ def main() -> None:
     for name in ("README.md", "README.zh-CN.md", "LICENSE", ".gitignore",
                  "THIRD-PARTY-NOTICES.md", "SOURCE.md"):
         candidates[name] = ROOT / name
+    # Repackaging the source snapshot requires the same pinned collector as the portable bundle.
+    presentmon = ROOT / ".tools/presentmon/PresentMon-2.5.1-x64.exe"
+    expected = json.loads((ROOT / "bench/presentmon/source.json").read_text(encoding="utf-8"))["sha256"]
+    with presentmon.open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
+            raise RuntimeError("PresentMon does not match the pinned source.json SHA256")
+    candidates[".tools/presentmon/" + presentmon.name] = presentmon
+    for name in ("LICENSE.txt", "THIRD_PARTY.txt", "source.json"):
+        candidates[".tools/presentmon/" + name] = ROOT / "bench/presentmon" / name
     for name in DEPENDENCIES:
         tree(ROOT / ".deps" / name, ".deps/" + name)
     for flavor in ("ffmpeg-lgpl21", "ffmpeg-encoder-gpl2"):
@@ -147,6 +156,9 @@ The source ZIP contains sources, not a preinstalled development toolchain.
 Downloading the pinned tools requires network access once; thereafter native
 builds use the local sources and fully disconnected dependency resolution.
 The finished portable application itself does not require Python or network.
+
+The pinned PresentMon collector and its notices are included under
+`.tools/presentmon/`, so `package-portable.py` needs no separate collector download.
 """
     print(f"Packaging {len(candidates)} source files", flush=True)
     record = {"schema_version": 1, "native_build_dir": native_build.relative_to(ROOT).as_posix(),
