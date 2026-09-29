@@ -302,6 +302,39 @@ internal static class DaytimeSplitChecks
             "source 3276911872 selector with saved string combo 0: " + saved.FallbackReason);
         check(!DaytimeSplit.Detect(clockObjects, properties: new JsonObject { ["display"] = "1", ["timevarying"] = false }).IsRecognized,
             "source 3276911872 selector with boolean false cannot claim automatic four states");
+        check(!DaytimeSplit.Detect(clockObjects, properties: new JsonObject { ["timevarying"] = null }).IsRecognized,
+            "an explicit null mode is falsy rather than a missing property default");
+        // 3448877775 adds four same-name, user-adjustable hour thresholds to that selector shape.
+        string thresholdScript = ClockAndManualSelector
+            .Replace("var timeVarying = true;", "var timeVarying = true; var morningtime = 4, daytime = 8, dusktime = 17, nighttime = 20;", StringComparison.Ordinal)
+            .Replace("hours >= 4 && hours < 8", "hours >= morningtime && hours < daytime", StringComparison.Ordinal)
+            .Replace("hours >= 8 && hours < 17", "hours >= daytime && hours < dusktime", StringComparison.Ordinal)
+            .Replace("hours >= 17 && hours < 20", "hours >= dusktime && hours < nighttime", StringComparison.Ordinal)
+            .Replace("if(changedUserProperties.hasOwnProperty('timevarying')) { timeVarying = changedUserProperties.timevarying; }",
+                "if(changedUserProperties.hasOwnProperty('timevarying')) { timeVarying = changedUserProperties.timevarying; }" +
+                "if(changedUserProperties.hasOwnProperty('morningtime')) { morningtime = changedUserProperties.morningtime; }" +
+                "if(changedUserProperties.hasOwnProperty('daytime')) { daytime = changedUserProperties.daytime; }" +
+                "if(changedUserProperties.hasOwnProperty('dusktime')) { dusktime = changedUserProperties.dusktime; }" +
+                "if(changedUserProperties.hasOwnProperty('nighttime')) { nighttime = changedUserProperties.nighttime; }", StringComparison.Ordinal);
+        clockAndManual[0]!["visible"]!["script"] = thresholdScript;
+        JsonObject thresholdProperties = new() { ["display"] = "0", ["timevarying"] = "1", ["morningtime"] = "4",
+            ["daytime"] = "9", ["dusktime"] = "17", ["nighttime"] = "20" };
+        var adjustable = DaytimeSplit.Detect(clockObjects, properties: thresholdProperties);
+        check(adjustable.IsRecognized && adjustable.States.Length == 4 &&
+            HoursAre(adjustable.StateNamed("morning")!, [[4, 9]]),
+            "source 3448877775 same-name numeric-string thresholds keep the adjusted four-state schedule: " + adjustable.FallbackReason);
+        thresholdProperties["daytime"] = "not-a-number";
+        check(!DaytimeSplit.Detect(clockObjects, properties: thresholdProperties).IsRecognized,
+            "an unparsable adjusted threshold cannot be used to certify hour branches");
+        clockAndManual[0]!["visible"]!["script"] = thresholdScript.Replace("var timeVarying = true;",
+            "var timeVarying = true; var unused = 5;", StringComparison.Ordinal).Replace(
+            "if(changedUserProperties.hasOwnProperty('nighttime')) { nighttime = changedUserProperties.nighttime; }",
+            "if(changedUserProperties.hasOwnProperty('nighttime')) { nighttime = changedUserProperties.nighttime; }" +
+            "if(changedUserProperties.hasOwnProperty('unused')) { unused = changedUserProperties.unused; }", StringComparison.Ordinal);
+        thresholdProperties["daytime"] = "9";
+        thresholdProperties["unused"] = "6";
+        check(!DaytimeSplit.Detect(clockObjects, properties: thresholdProperties).IsRecognized,
+            "an unrelated scalar property copy is still outside the proved selector");
         check(MessageCatalog.DaytimeStateLabel("dusk", "zh") == "黄昏" && MessageCatalog.DaytimeStateLabel("night", "en") == "Night" &&
             MessageCatalog.DaytimeStateLabel("00-07+18-24", "zh") == "0:00–7:00、18:00–24:00" &&
             MessageCatalog.DaytimeStateLabel("20-24", "en") == "20:00–24:00" && MessageCatalog.DaytimeStateLabel("none", "zh") == "none",
