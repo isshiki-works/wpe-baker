@@ -74,6 +74,15 @@ public class RenderJobContractTests
         Assert.Equal(SparseExpected.ReplaceLineEndings("\n"), (await JobAsync(dir, request, "sparse-readback-v1")).ReplaceLineEndings("\n"));
     });
 
+    [Fact]
+    public async Task OptionalEpochReachesNativeJobWithoutChangingDefault() => await TestTemp.Run(async dir =>
+    {
+        var ordinary = new RenderRequest(Fixture, Fixture, Path.Combine(dir, "ordinary"), 64, 48, 60, 1, 1);
+        Assert.DoesNotContain("\"epoch_ms\"", await JobAsync(dir, ordinary));
+        var timed = ordinary with { OutputDirectory = Path.Combine(dir, "timed"), EpochMs = 946_730_700_000L };
+        Assert.Contains("\"epoch_ms\": 946730700000", await JobAsync(dir, timed));
+    });
+
     private const string SampledExpected = """
         {
           "schema_version": 1,
