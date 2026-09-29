@@ -512,14 +512,17 @@ public static class ResidualMasking
             return verdict;
         }
 
-        // 「已被方程证明非周期」与「识别不了」是两回事，理由必须分开写：前者改参数也救不回来，后者是分析
-        // 没认出机制。两类都不可掩盖，措辞不能互相冒充。
+        // 实时输入相关项只说明当前未证明闭合；不能从读输入推出位移无界或方程已证无周期。
+        // 已证漂移与未识别机制仍各用原来的分类；三类都不可掩盖。
         bool provenNonPeriodic = kind == "NonPeriodicOrDriftingMechanism";
+        bool liveInput = provenNonPeriodic && LiveInput(mechanism);
         if (mechanism.Length > 0) verdict["mechanism"] = mechanism;
-        verdict["classification"] = provenNonPeriodic ? "proven_nonperiodic_unbounded" : "unrecognized";
+        verdict["classification"] = liveInput ? "live_input_unproven" : provenNonPeriodic ? "proven_nonperiodic_unbounded" : "unrecognized";
         verdict["maskable"] = false;
         string layerPrefix = owner is int unknownOwner ? MessageCatalog.Get("residual.layer_prefix", MessageCatalog.Chinese, unknownOwner) : "";
-        verdict["reason"] = provenNonPeriodic
+        verdict["reason"] = liveInput
+            ? MessageCatalog.Get("residual.live_input_unproven", MessageCatalog.Chinese, layerPrefix, kind)
+            : provenNonPeriodic
             ? MessageCatalog.Get("residual.proven_nonperiodic_unbounded", MessageCatalog.Chinese, layerPrefix, kind, ceiling, detail)
             : MessageCatalog.Get("residual.unrecognized_unbounded", MessageCatalog.Chinese, layerPrefix, kind, detail);
         return Converge(verdict, provenNonPeriodic ? mechanism : "");
@@ -527,17 +530,16 @@ public static class ResidualMasking
 
     /// <summary>理由键：分量在循环上限内不会重复（调速也够不着），结论"不能"。</summary>
     public const string NeverRepeatsReasonKey = "reason.loop_never_repeats_within_limit";
-    /// <summary>理由键：分量由外部实时输入（鼠标、音频、时钟）驱动，结论"不能"；与"上限内不重复"分开说。</summary>
+    /// <summary>理由键：分量涉及外部实时输入（鼠标、音频、时钟），当前未证明可闭合。</summary>
     public const string LiveInputReasonKey = "reason.loop_driven_by_live_input";
     /// <summary>理由键：分析没推下去（未收敛）；具体原因码留在 mechanism 里给调试用。</summary>
     public const string NotSupportedReasonKey = "reason.effect_not_yet_supported";
 
-    /// <summary>这条"不能"的证明是读外部输入：脚本时间签名 / 粒子 C7 的 script_reads_external_input，或实时判定的输入类原因。</summary>
+    /// <summary>实时输入原因码：脚本时间签名 / 粒子 C7 的 script_reads_external_input，或实时判定的输入类原因。</summary>
     internal static bool LiveInput(string? code) => code == "script_reads_external_input" || Liveness.InputReasons.Contains(code);
 
     /// <summary>
-    /// 带具名机制的 NonPeriodicOrDriftingMechanism 附有方程证明（上限内没有周期，允许的调速也够不着），结论是"不能"，不是"证不出"。
-    /// 没有具名机制的同类项（如"NOISE 开着或未证明"）不算证明，记未收敛。
+    /// 实时输入项保留原因码但不标为证明不能；其它带具名机制的 NonPeriodicOrDriftingMechanism 才标记已证不能。
     /// </summary>
     private static JsonObject Converge(JsonObject verdict, string mechanism)
     {
@@ -546,8 +548,13 @@ public static class ResidualMasking
             verdict["reason_key"] = NotSupportedReasonKey;
             return verdict;
         }
+        if (LiveInput(mechanism))
+        {
+            verdict["reason_key"] = LiveInputReasonKey;
+            return verdict;
+        }
         verdict["loop_convergence"] = "cannot";
-        verdict["reason_key"] = LiveInput(mechanism) ? LiveInputReasonKey : NeverRepeatsReasonKey;
+        verdict["reason_key"] = NeverRepeatsReasonKey;
         return verdict;
     }
 
@@ -576,7 +583,12 @@ public static class ResidualMasking
             verdict["reason_en"] = MessageCatalog.Get("residual.particle_verdict_missing", MessageCatalog.English, layer);
             return verdict;
         }
-        verdict["particle_stationarity"] = stationarity.DeepClone();
+        JsonObject recorded = stationarity.DeepClone().AsObject();
+        if (Text(recorded["reason_key"]) == LiveInputReasonKey)
+            recorded.Remove("loop_convergence");
+        foreach (JsonObject failure in (recorded["failed_conditions"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(failure => LiveInput(Text(failure["code"])))) failure.Remove("cannot");
+        verdict["particle_stationarity"] = recorded;
         if (!stationary)
         {
             string codes = string.Join(", ", (stationarity["failed_conditions"] as JsonArray ?? []).OfType<JsonObject>()
@@ -584,10 +596,13 @@ public static class ResidualMasking
             verdict["maskable"] = false;
             verdict["reason"] = MessageCatalog.Get("residual.particle_not_stationary", MessageCatalog.Chinese, layer, codes);
             verdict["reason_en"] = MessageCatalog.Get("residual.particle_not_stationary", MessageCatalog.English, layer, codes);
-            if (Text(stationarity["loop_convergence"]) == "cannot")
+            string key = Text(stationarity["reason_key"]);
+            if (key == LiveInputReasonKey)
+                verdict["reason_key"] = key; // 老计划可能还带 cannot；输入原因不能继承那条旧证明。
+            else if (Text(stationarity["loop_convergence"]) == "cannot")
             {
                 verdict["loop_convergence"] = "cannot";
-                verdict["reason_key"] = Text(stationarity["reason_key"]) is { Length: > 0 } key ? key : NeverRepeatsReasonKey;
+                verdict["reason_key"] = key.Length > 0 ? key : NeverRepeatsReasonKey;
             }
             return verdict;
         }

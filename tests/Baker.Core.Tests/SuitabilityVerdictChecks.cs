@@ -134,7 +134,7 @@ internal static class SuitabilityVerdictChecks
         check(Text(slowOpen["suitability"]!.AsObject(), "loop_convergence") == "cannot" && slowOpen["summary"]!["zh"]!.GetValue<string>()
                 .Contains(MessageCatalog.Get(ResidualMasking.NeverRepeatsReasonKey, MessageCatalog.Chinese, 180d / 60), StringComparison.Ordinal),
             "a slow component proven not to close leaves a proven cannot, not an all-live-input verdict");
-        // --- 读鼠标/音频/时钟的脚本证明的"不能"：摘要说由实时输入驱动，不说"N 分钟内不会重复"；漂移的证明照旧说不重复 ---
+        // --- 实时输入未证闭合，不能升级为证明不能；漂移方程的证明照旧成立 ---
         foreach (var (mechanism, key) in new[] { ("script_reads_external_input", ResidualMasking.LiveInputReasonKey), ("drift", ResidualMasking.NeverRepeatsReasonKey) })
         {
             JsonObject driven = Plan(groups: 1, totalLayers: 3, videoLayers: 1, loop: Loop(),
@@ -144,10 +144,39 @@ internal static class SuitabilityVerdictChecks
             driven["loop"]!["residual_masking"] = ResidualMasking.Classify(driven, new JsonObject { ["objects"] = new JsonArray() }, _ => null);
             driven["suitability"] = Verdict(driven);
             PlanNarrative.Attach(driven);
-            check(Text(driven["suitability"]!.AsObject(), "reason_key") == key && driven["summary"]!["zh"]!.GetValue<string>()
+            check(Text(driven["suitability"]!.AsObject(), "reason_key") == key,
+                $"{mechanism} keeps reason key {key}");
+            check((driven["suitability"]!["loop_convergence"]?.GetValue<string>() == "cannot") == (mechanism == "drift"),
+                $"{mechanism} keeps its proof status");
+            check(driven["summary"]!["zh"]!.GetValue<string>()
                     .Contains(MessageCatalog.Get(key, MessageCatalog.Chinese, 180d / 60), StringComparison.Ordinal),
-                $"a proven cannot from {mechanism} is summarised by {key}");
+                $"{mechanism} is summarised by {key}");
+            if (mechanism == "script_reads_external_input")
+            {
+                driven["loop"]!.AsObject().Remove("residual_masking");
+                JsonObject withoutResidual = Verdict(driven);
+                check(withoutResidual["loop_convergence"] is null && Text(withoutResidual, "reason_key") == key,
+                    "live input stays unproven when no residual classification is attached");
+            }
         }
+        JsonObject particleInput = Plan(groups: 1, totalLayers: 2, videoLayers: 1, loop: Loop(),
+            blockers: [new Blocker(BlockerCode.BakeAllocation, ["A particle has no loop."])]);
+        particleInput["loop"]!["unresolved"]!.AsArray().Add(new JsonObject {
+            ["kind"] = "runtime_animation", ["owner_layer_id"] = 0, ["mechanism"] = "particle_system",
+            ["particle_stationarity"] = new JsonObject {
+                ["stationary"] = false, ["reason_key"] = ResidualMasking.LiveInputReasonKey,
+                ["loop_convergence"] = "cannot", // older saved evidence
+                ["failed_conditions"] = new JsonArray(new JsonObject {
+                    ["condition"] = "C7", ["code"] = "script_reads_external_input", ["cannot"] = true }) } });
+        particleInput["loop"]!["residual_masking"] = ResidualMasking.Classify(particleInput,
+            new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 0, ["particle"] = "particle.json" }) }, _ => null);
+        JsonObject particleVerdict = Verdict(particleInput);
+        check(particleInput["loop"]!["residual_masking"]!["status"]!.GetValue<string>() == "rejected" &&
+            particleVerdict["loop_convergence"] is null && Text(particleVerdict, "reason_key") == ResidualMasking.LiveInputReasonKey,
+            "a saved particle input reason remains unproven through residual masking and suitability");
+        particleInput["loop"]!["residual_masking"]!["blocking_components"]![0]!["loop_convergence"] = "cannot";
+        check(Verdict(particleInput)["loop_convergence"] is null,
+            "even an older classified input block cannot restore a false proof");
         // --- 未收敛而第一条阻断是分配拒绝：摘要按收敛理由说"暂不支持"，不说"部分内容必须实时渲染" ---
         JsonObject unconverged = Plan(groups: 2, totalLayers: 50, videoLayers: 20, loop: Loop(unresolved: 1),
             blockers: [new Blocker(BlockerCode.BakeAllocation, ["A layer has no proof."])]);

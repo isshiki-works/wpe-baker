@@ -132,6 +132,17 @@ internal static class ResidualMaskingChecks
         check(failedParticle["status"]?.GetValue<string>() == "rejected" &&
             BlockedParticle(failedParticle)["reason"]!.GetValue<string>().Contains("C4 controlpoint_follows_cursor, C5 child_systems_not_recursed", StringComparison.Ordinal),
             "a particle that fails the stationary-random criteria is refused and the reason lists the failed condition codes");
+        JsonObject oldInput = ParticleItem(167, false, 13, "C7 script_reads_external_input");
+        oldInput["particle_stationarity"]!["reason_key"] = ResidualMasking.LiveInputReasonKey;
+        oldInput["particle_stationarity"]!["loop_convergence"] = "cannot";
+        oldInput["particle_stationarity"]!["failed_conditions"]![0]!["cannot"] = true;
+        JsonObject oldInputVerdict = BlockedParticle(Particle(oldInput));
+        check(oldInputVerdict["maskable"]?.GetValue<bool>() == false &&
+            oldInputVerdict["reason_key"]?.GetValue<string>() == ResidualMasking.LiveInputReasonKey &&
+            oldInputVerdict["loop_convergence"] is null &&
+            oldInputVerdict["particle_stationarity"]!["loop_convergence"] is null &&
+            oldInputVerdict["particle_stationarity"]!["failed_conditions"]![0]!["cannot"] is null,
+            "an old particle input verdict keeps the input reason but sheds the unsupported proof flags");
         check(Particle(ParticleItem(167, true, null))["status"]?.GetValue<string>() == "rejected",
             "a stationary particle verdict without a warm-up duration is refused rather than baked from frame zero");
         JsonObject fieldDecides = Particle(ParticleItem(167, true, 2), "particles/presets/fixed.json");
@@ -223,6 +234,29 @@ internal static class ResidualMaskingChecks
             driftVerdict["classification"]?.GetValue<string>() == "proven_nonperiodic_unbounded" &&
             driftVerdict["mechanism"]?.GetValue<string>() == "uv_linear_drift",
             "a proven non-periodic unbounded drift is refused as proven, never as a missing non-periodicity proof");
+        JsonObject input = ResidualMasking.Classify(
+            Plan(new JsonArray(Unresolved("NonPeriodicOrDriftingMechanism", 47, "script output depends on live input audio",
+                    mechanism: "script_reads_external_input")), new JsonArray(Layer(47, "townfbx", 0.1))),
+            Scene(new JsonObject { ["id"] = 47 }), LeavesReader);
+        JsonObject inputVerdict = input["blocking_components"]!.AsArray().OfType<JsonObject>().Single();
+        check(input["status"]?.GetValue<string>() == "rejected" && inputVerdict["maskable"]?.GetValue<bool>() == false &&
+            inputVerdict["classification"]?.GetValue<string>() == "live_input_unproven" &&
+            inputVerdict["mechanism"]?.GetValue<string>() == "script_reads_external_input" &&
+            inputVerdict["reason_key"]?.GetValue<string>() == ResidualMasking.LiveInputReasonKey &&
+            inputVerdict["loop_convergence"] is null &&
+            inputVerdict["reason"]!.GetValue<string>().Contains("未证明其输出可闭合", StringComparison.Ordinal),
+            "a live-input marker blocks masking without claiming a proven period limit or unbounded displacement");
+        JsonObject particleInputSource = new ParticleStationarity.Result(false,
+            [new ParticleStationarity.Failure("C7", "script_reads_external_input", "script", "pointer", Cannot: true)], null, null).ToJson();
+        JsonObject particleDriftSource = new ParticleStationarity.Result(false,
+            [new ParticleStationarity.Failure("C3", "turbulence_shared_field", "velocity", null, Cannot: true)], null, null).ToJson();
+        check(particleInputSource["stationary"]?.GetValue<bool>() == false &&
+            particleInputSource["reason_key"]?.GetValue<string>() == ResidualMasking.LiveInputReasonKey &&
+            particleInputSource["loop_convergence"] is null &&
+            particleInputSource["failed_conditions"]![0]!["cannot"] is null &&
+            particleDriftSource["loop_convergence"]?.GetValue<string>() == "cannot" &&
+            particleDriftSource["reason_key"]?.GetValue<string>() == ResidualMasking.NeverRepeatsReasonKey,
+            "particle input remains unproven while a true shared-field drift keeps its proof");
 
         // 3. 残差超阈值拒绝：整幅 MAE 与最差瓦片各自都能单独否决一个起点。
         const int width = 512, height = 512;
