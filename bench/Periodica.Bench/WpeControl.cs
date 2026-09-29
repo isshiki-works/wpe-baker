@@ -10,7 +10,8 @@ namespace Periodica.Bench;
 /// Wallpaper Engine 官方 <c>-control</c> 命令的最小封装（同 X1 编排脚本的做法）：按显示器编号取当前壁纸、打开壁纸、
 /// 暂停/继续播放。只关闭指定显示器的旧壁纸，不重启 WPE。
 /// </summary>
-internal sealed class WpeControl(string executable)
+internal sealed class WpeControl(string executable,
+    Func<IEnumerable<string>, CancellationToken, Task<string>>? send = null)
 {
     internal string Executable { get; } = Path.GetFullPath(executable);
     internal string ConfigPath => Path.Combine(Path.GetDirectoryName(Executable)!, "config.json");
@@ -84,6 +85,7 @@ internal sealed class WpeControl(string executable)
 
     internal async Task<string> RunAsync(IEnumerable<string> arguments, CancellationToken token)
     {
+        if (send is not null) return await send(arguments, token);
         var start = new ProcessStartInfo(Executable) { RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(Executable)! };
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
@@ -110,12 +112,14 @@ internal sealed class WpeControl(string executable)
     internal Task CloseAsync(int monitor, CancellationToken token) =>
         RunAsync(["-control", "closeWallpaper", "-monitor", monitor.ToString(CultureInfo.InvariantCulture)], token);
 
-    internal async Task IsolatedOpenAsync(string project, int monitor, CancellationToken token, Action? afterClose = null)
+    internal async Task IsolatedOpenAsync(string project, int monitor, CancellationToken token,
+        Action? afterClose = null, Action? afterOpen = null)
     {
         await StopAsync(token);
         await CloseAsync(monitor, token);
         afterClose?.Invoke();
         await OpenAsync(project, monitor, token);
+        afterOpen?.Invoke();
         await PlayAsync(token);
     }
 

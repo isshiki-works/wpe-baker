@@ -18,6 +18,27 @@ internal static class SelfTest
             if (!ok) ++failed;
         }
 
+        // A failed load must retain ownership of the old selection until Open actually succeeds.
+        foreach (string failure in new[] { "stop", "closeWallpaper", "openWallpaper", "play", "" })
+        {
+            string expected = "previous";
+            bool isolationClosed = false;
+            var controller = new WpeControl("unused.exe", (arguments, _) =>
+            {
+                if (arguments.ElementAt(1) == failure) throw new OperationCanceledException();
+                return Task.FromResult("");
+            });
+            try
+            {
+                controller.IsolatedOpenAsync("candidate", 0, CancellationToken.None,
+                    () => isolationClosed = true, () => expected = "candidate").GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) { }
+            Check(expected == (failure is "play" or "" ? "candidate" : "previous") &&
+                isolationClosed == (failure is "openWallpaper" or "play" or ""),
+                "interrupted load tracks the last successfully opened selection: " + (failure.Length == 0 ? "complete" : failure));
+        }
+
         // 原 tests/Baker.Core.Tests/OfficialTraceLossChecks：PresentMon 丢过 ETW 事件，CSV 就不能证明显示节奏。
         foreach (string diagnostics in new[] { "warning: 359413 ETW events were lost.", "warning: 2 ETW buffers were lost." })
         {
