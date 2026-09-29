@@ -17,6 +17,8 @@ public static class PlanSettings
 
     /// <summary>从 plan 读回设置；缺失即报错，不补默认值。</summary>
     public static HybridAnalyzeRequest Of(JsonObject plan) => plan["settings"] is JsonObject settings
-        ? settings.Deserialize<HybridAnalyzeRequest>(Json)!
+        ? settings.Deserialize<HybridAnalyzeRequest>(Json)! with {
+            CustomSettings = settings["custom_settings"]?.GetValue<bool>() ?? plan["custom_settings"]?.GetValue<bool>() ?? false
+        }
         : throw new InvalidDataException("Plan settings are missing.");
 }

@@ -219,11 +219,14 @@ public class AnalysisProbeTests
 
     // 残差组在烘焙第一层被拒、组里有被掩盖的粒子：粒子留实时重新分析再烘（分析的残差预检只在慢分量预检本来就跑起点搜索时判得了，
     // 其余作品只有第一层量得到）。留实时的粒子写 residual_seam_over_limit，并上原来的未解析原因；只重烘一次就生成。
-    [Fact]
-    public async Task ResidualRejectionRetainsParticlesAndRebakes() => await TestTemp.Run(async dir =>
+    [Theory]
+    [InlineData("full_frame")]
+    [InlineData("layered")]
+    public async Task ResidualRejectionRetainsParticlesAndRebakes(string layout) => await TestTemp.Run(async dir =>
     {
         string output = Path.Combine(dir, "bake");
-        var plan = new JsonObject { ["settings"] = PlanSettings.ToJson(new HybridAnalyzeRequest(2, "source", "assets", "analysis", RetainLiveRootIds: [3])),
+        var plan = new JsonObject { ["settings"] = PlanSettings.ToJson(new HybridAnalyzeRequest(2, "source", "assets", "analysis", RetainLiveRootIds: [3],
+                VideoLayout: layout, LiveOverlayPlacement: "preserve", CustomSettings: true, LayoutExplicit: true)),
             ["loop"] = new JsonObject { ["unresolved"] = new JsonArray(new JsonObject { ["owner_layer_id"] = 7, ["mechanism"] = "particle_system" }) } };
         int baked = 0;
         HybridAnalyzeRequest? replanned = null;
@@ -247,8 +250,22 @@ public class AnalysisProbeTests
         Assert.Equal("candidate_generated", result["status"]!.GetValue<string>());
         Assert.Equal([3, 7], replanned!.RetainLiveRootIds!);
         Assert.Equal(["particle_system", AnalysisOrchestrator.ResidualRetainReason], replanned.RetainLiveReasons![7]);
+        Assert.True(replanned.CustomSettings);
+        Assert.True(replanned.LayoutExplicit);
+        Assert.Equal("preserve", replanned.LiveOverlayPlacement);
+        Assert.Equal(layout, replanned.VideoLayout);
         Assert.Equal("g0", result["residual_particle_retry"]!["first_rejected_groups"]![0]!.GetValue<string>());
     });
+
+    [Fact]
+    public void SavedPlanRestoresExplicitOverlayChoiceFromExistingMetadata()
+    {
+        var settings = PlanSettings.ToJson(new HybridAnalyzeRequest(2, "source", "assets", "analysis", LiveOverlayPlacement: "preserve")).AsObject();
+        Assert.False(PlanSettings.Of(new JsonObject { ["settings"] = settings.DeepClone() }).CustomSettings);
+        var saved = new JsonObject { ["settings"] = settings, ["custom_settings"] = true };
+        Assert.True(PlanSettings.Of(saved).CustomSettings);
+        Assert.Equal("preserve", PlanSettings.Of(saved).LiveOverlayPlacement);
+    }
 
     // 自动重试（入场切换没过合成门）重新分析期间，盘上的 bake.json 是"还在跑"，不是首次的拒绝结论；首次产物挪走时带回首次的结论。
     [Fact]

@@ -29,10 +29,10 @@ public sealed record HybridAnalyzeRequest(int SchemaVersion, string Source, stri
     // 选择器脚本不再算实时控制器，它切换的受控层里不属于该状态的按剔除处理、属于该状态的视为可见。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool DaytimeSplit = false,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DaytimeState = null,
-    [property: JsonIgnore] bool CustomSettings = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool CustomSettings = false,
     [property: JsonIgnore] string? AnalysisCacheDirectory = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Interaction = null,
-    [property: JsonIgnore] bool LayoutExplicit = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool LayoutExplicit = false,
     // WPE 设置里的后处理画质档（config.json general.user.postprocessing）。只有它是 ultra/displayhdr 且场景 hdr、bloom 都开时，
     // 官方走浮点 HDR 管线；plan 的 settings 只在这种场景里记它，其余 plan 逐字不变。
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Postprocessing = null,
