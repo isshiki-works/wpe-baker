@@ -704,10 +704,9 @@ public static class MessageCatalog
         ["reason.loop_never_repeats_within_limit"] = new(
             Zh: "动画在 {0} 分钟内不会重复，无法生成循环视频。",
             En: "The animation does not repeat within {0} minutes, so a looping video cannot be made."),
-        // 待定文案（C-VERDICT）：先用占位句，维护者定稿后替换。
         ["reason.loop_driven_by_live_input"] = new(
-            Zh: "部分动画由实时输入（如鼠标、音频、时钟）驱动，无法生成循环视频。",
-            En: "Some animation is driven by live input such as the mouse, audio or the clock, so a looping video cannot be made."),
+            Zh: "部分输出涉及实时输入（如鼠标、音频、时钟），目前未证明它可闭合为循环。",
+            En: "Some output involves live input such as the mouse, audio or the clock; a reusable loop has not been established."),
         ["reason.effect_not_yet_supported"] = new(
             Zh: "暂不支持此壁纸中的部分动态效果。",
             En: "Some animated effects in this wallpaper are not supported yet."),
@@ -786,6 +785,10 @@ public static class MessageCatalog
         ["residual.proven_nonperiodic_unbounded"] = new(
             Zh: "{0}未解析分量 {1} 已由方程证明在 {2} 秒的循环上限内没有周期，而这套机制的位移没有幅度上界，接缝交叉淡化盖不住它（{3}）。",
             En: "{0}unresolved component {1} is proven by its equations to have no period within the {2}-second loop ceiling, and its displacement has no amplitude bound, so a seam crossfade cannot hide it ({3})."),
+        // {0}=层前缀，{1}=机制种类；原始细节保留在 source_detail，避免把未证依赖重复写成事实。
+        ["residual.live_input_unproven"] = new(
+            Zh: "{0}未解析分量 {1} 被标记为实时输入相关，目前未证明其输出可闭合。",
+            En: "{0}unresolved component {1} is marked as involving live input; its output has not been proven to close into a loop."),
         // {0}=层前缀，{1}=机制种类，{2}=细节
         ["residual.unrecognized_unbounded"] = new(
             Zh: "{0}未解析分量 {1} 没有可用的非周期或随机证明，也没有幅度上界（{2}）。",

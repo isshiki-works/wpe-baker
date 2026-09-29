@@ -223,6 +223,18 @@ internal static class ResidualMaskingChecks
             driftVerdict["classification"]?.GetValue<string>() == "proven_nonperiodic_unbounded" &&
             driftVerdict["mechanism"]?.GetValue<string>() == "uv_linear_drift",
             "a proven non-periodic unbounded drift is refused as proven, never as a missing non-periodicity proof");
+        JsonObject input = ResidualMasking.Classify(
+            Plan(new JsonArray(Unresolved("NonPeriodicOrDriftingMechanism", 47, "script output depends on live input audio",
+                    mechanism: "script_reads_external_input")), new JsonArray(Layer(47, "townfbx", 0.1))),
+            Scene(new JsonObject { ["id"] = 47 }), LeavesReader);
+        JsonObject inputVerdict = input["blocking_components"]!.AsArray().OfType<JsonObject>().Single();
+        check(input["status"]?.GetValue<string>() == "rejected" && inputVerdict["maskable"]?.GetValue<bool>() == false &&
+            inputVerdict["classification"]?.GetValue<string>() == "live_input_unproven" &&
+            inputVerdict["mechanism"]?.GetValue<string>() == "script_reads_external_input" &&
+            inputVerdict["reason_key"]?.GetValue<string>() == ResidualMasking.LiveInputReasonKey &&
+            inputVerdict["loop_convergence"] is null &&
+            inputVerdict["reason"]!.GetValue<string>().Contains("未证明其输出可闭合", StringComparison.Ordinal),
+            "a live-input marker blocks masking without claiming a proven period limit or unbounded displacement");
 
         // 3. 残差超阈值拒绝：整幅 MAE 与最差瓦片各自都能单独否决一个起点。
         const int width = 512, height = 512;
