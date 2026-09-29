@@ -199,7 +199,20 @@ struct CaptureBinding {
     std::uint64_t texture_version { 0 };
     owe::resource::TextureUseHandle texture_use;
     owe::rg::NodeHandle writer;
+    owe::SceneNode* owner { nullptr };
 };
+
+std::string CaptureAncestorVisibilityError(owe::Scene& scene, const owe::SceneNode& owner) {
+    const auto* root = scene.RootMut().as_raw_ptr();
+    const auto* ancestor = owner.Parent();
+    for (; ancestor != nullptr && ancestor != root; ancestor = ancestor->Parent()) {
+        const auto id = ancestor->WallpaperIdentity();
+        if (!ancestor->Visible() ||
+            (id.is_some() && scene.IsLayerVisibilityElidable(*id)))
+            return "force_visible_owner requires visible ancestors";
+    }
+    return ancestor == root ? std::string {} : "force_visible_owner has no scene-root ancestor";
+}
 
 std::string ValidateCaptureSelector(const owe::RenderCaptureTarget& selector) {
     if (selector.texture_version < -1 || selector.owner_layer_id < -1 ||
@@ -229,6 +242,7 @@ std::optional<CaptureBinding> ResolveCaptureBinding(
     owe::Scene& scene, owe::rg::RenderGraph& graph, const owe::RenderCaptureTarget& selector,
     std::string& error) {
     std::string key = selector.runtime_render_target;
+    owe::SceneNode* selected_owner = nullptr;
     if (key.empty()) {
         Option<const owe::SceneImageEffect&> selected_effect;
         bool effect_found { false };
@@ -241,10 +255,8 @@ std::optional<CaptureBinding> ResolveCaptureBinding(
             const auto owner = node->WallpaperIdentity();
             if (owner.is_none() || owner->value.to_primitive() != selector.owner_layer_id ||
                 !node->HasLayer() || !node->Layer()) continue;
-            if (selector.force_visible_owner && node->Parent() != scene.RootMut().as_raw_ptr()) {
-                error = "force_visible_owner requires a flat top-level owner";
-                return std::nullopt;
-            }
+            if (selector.force_visible_owner &&
+                !(error = CaptureAncestorVisibilityError(scene, *node)).empty()) return std::nullopt;
             const auto& layer = node->Layer();
             for (usize index {}; index < layer->EffectCount(); ++index) {
                 const auto& effect = layer->GetEffect(index);
@@ -258,6 +270,7 @@ std::optional<CaptureBinding> ResolveCaptureBinding(
                     return std::nullopt;
                 }
                 effect_found = true;
+                selected_owner = node;
                 if (selector.effect_terminal) selected_effect = Some<const owe::SceneImageEffect&>(*effect);
                 else key = rstd::cppstd::to_string(
                     scene.EffectResourceKey(effect->id,
@@ -296,6 +309,7 @@ std::optional<CaptureBinding> ResolveCaptureBinding(
                 .texture_version = written->texture.version.to_primitive(),
                 .texture_use = written->texture.use,
                 .writer = written->writer,
+                .owner = selected_owner,
             };
         }
         if (key.empty()) {
@@ -335,6 +349,7 @@ std::optional<CaptureBinding> ResolveCaptureBinding(
         .texture_version = written->texture.version.to_primitive(),
         .texture_use = written->texture.use,
         .writer = written->writer,
+        .owner = selected_owner,
     };
 }
 
@@ -1230,6 +1245,17 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         frame.error_code = VK_ERROR_INITIALIZATION_FAILED;
         frame.message = m_capture_error;
         return frame;
+    }
+    if (m_capture_target && m_capture_target->force_visible_owner && m_capture_binding) {
+        const auto error = m_capture_binding->owner
+            ? CaptureAncestorVisibilityError(scene, *m_capture_binding->owner)
+            : "force_visible_owner is absent from the scene";
+        if (!error.empty()) {
+            frame.status = CpuFrameStatus::RenderError;
+            frame.error_code = VK_ERROR_INITIALIZATION_FAILED;
+            frame.message = error;
+            return frame;
+        }
     }
     std::string capture_viewport_error;
     if (!ApplyOrthographicCaptureViewport(scene, capture_viewport_error)) {
