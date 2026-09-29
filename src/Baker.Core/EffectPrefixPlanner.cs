@@ -313,8 +313,8 @@ internal static class EffectPrefixPlanner
             string[] scripts = SceneAnalyzer.Walk(controller).OfType<JsonObject>()
                 .Select(node => node["script"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
                 .OfType<string>().ToArray();
-            bool clockSelector = scripts.Length == 1 && controller["visible"]?["script"] is not null &&
-                recognizedVisibilityController(caller, ownerId);
+            bool clockSelector = scripts.Length == 1 && controller["visible"] is JsonObject visibility &&
+                recognizedVisibilityController(caller, ownerId) && ScriptTime.OnlyVisibilitySideEffects(visibility, controller);
             if (scripts.Length == 0 || scripts.Any(script => !VisibilityScriptProven(script)) && !clockSelector) return false;
         }
         return true;

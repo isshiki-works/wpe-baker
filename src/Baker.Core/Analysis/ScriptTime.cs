@@ -127,6 +127,53 @@ internal static class ScriptTime
         catch (Exception e) when (e is not OutOfMemoryException) { return null; }
     }
 
+    /// <summary>Conservatively prove a selector's complete script can only write layer visibility.</summary>
+    internal static bool OnlyVisibilitySideEffects(JsonObject node, JsonObject owner)
+    {
+        if (node["script"] is not JsonValue value || !value.TryGetValue(out string? code)) return false;
+        try
+        {
+            X program = new Parser(code).Program();
+            var functions = All(program).Where(x => x.Op == "fdecl").Select(x => x.Name).ToHashSet(StringComparer.Ordinal);
+            foreach (X x in All(program))
+            {
+                if (x.Op is "asg" or "upd")
+                {
+                    X target = x.K[0]!;
+                    if (target.Op != "id" && !(x.Op == "asg" &&
+                        (target.Op == "mem" && target.Name == "visible" ||
+                         target.Op == "idx" && target.K[1] is { Op: "str", Name: "visible" }))) return false;
+                }
+                if (x.Op == "un" && x.Name == "delete") return false;
+                if (x.Op == "new" && x.K[0] is not { Op: "id", Name: "Date" }) return false;
+                if (x.Op == "call")
+                {
+                    X callee = x.K[0]!;
+                    if (callee.Op == "id" && (functions.Contains(callee.Name) || callee.Name == "parseInt")) continue;
+                    if (callee.Op == "mem" && callee.Name is "getLayer" or "getHours" or "map" or "forEach" or "concat" or "hasOwnProperty") continue;
+                    return false;
+                }
+            }
+            var run = new Interp(program, new(-1, "", null, node, owner), 1.0 / 30, collect: true, visibilityAudit: true);
+            run.Setup();
+            // Enter through the authored update before sweeping helper bodies with unknown arguments.
+            // Every branch is also checked structurally above, including later user-property modes.
+            if (run.Root.Vars.GetValueOrDefault("update") is Fn update)
+                run.Call(update, null, [.. update.Node.K[0]!.K.Select(_ => (V)new N('o', Why: "event_argument"))]);
+            if (run.Root.Vars.GetValueOrDefault("applyUserProperties") is Fn properties)
+            {
+                run.Call(properties, null, [.. properties.Node.K[0]!.K.Select(_ => (V)new N('o', Why: "event_argument"))]);
+                if (run.Root.Vars.GetValueOrDefault("update") is Fn afterChange)
+                    run.Call(afterChange, null, [.. afterChange.Node.K[0]!.K.Select(_ => (V)new N('o', Why: "event_argument"))]);
+            }
+            foreach (X fn in All(program).Where(x => x.Op is "fn" or "fdecl"))
+                if (!run.Executed.Contains(fn)) run.Call(new Fn(fn, run.Root), null,
+                    [.. fn.K[0]!.K.Select(_ => (V)new N('o', Why: "event_argument"))]);
+            return !run.Unresolved;
+        }
+        catch (Exception e) when (e is not OutOfMemoryException) { return false; }
+    }
+
     /// <summary>
     /// 只依赖常量的脚本（字面量、脚本属性的烘焙值、engine.canvasSize）的输出值，如父层 origin 上的"相对位置"脚本 x * engine.canvasSize.x。
     /// canvasSize 是项目尺寸，官方文档（IEngine）写明是常量；screenResolution、userProperties、时间与输入仍是未知。
@@ -806,6 +853,7 @@ internal static class ScriptTime
         private readonly Binding binding;
         private readonly double frametime;
         private readonly bool collect;
+        private readonly bool visibilityAudit;
         private V value = Un.I;
         private Dictionary<string, V> self = new(StringComparer.Ordinal);
         private Dictionary<string, V> writes = new(StringComparer.Ordinal);
@@ -820,9 +868,10 @@ internal static class ScriptTime
         /// <summary>给定时 engine.canvasSize 取这个常数（<see cref="ConstantVector"/>），否则是未知常数。</summary>
         public (double W, double H)? Canvas;
 
-        public Interp(X program, Binding binding, double frametime, bool collect)
+        public Interp(X program, Binding binding, double frametime, bool collect, bool visibilityAudit = false)
         {
             this.program = program; this.binding = binding; this.frametime = frametime; this.collect = collect;
+            this.visibilityAudit = visibilityAudit;
             foreach (string name in (string[])["engine", "input", "Math", "console", "thisScene", "shared", "localStorage", "Date", "JSON", "Object", "Array",
                 "Vec2", "Vec3", "Vec4", "createScriptProperties", "Number", "parseFloat", "parseInt", "String", "Boolean", "isNaN", "isFinite"])
                 Root.Vars[name] = new Host(name);
@@ -1430,8 +1479,15 @@ internal static class ScriptTime
                 case "idx":
                     {
                         V obj = Ev(x.K[0]!, s), key = Ev(x.K[1]!, s);
-                        if (obj is Ar a && Num(key) is var k && k.K != 'c' && k.K is 'p' or 'u')
-                            return a.E.Length == 0 ? Un.I : a.E.Skip(1).Aggregate(a.E[0], (acc, e) => Join(acc, e, k));
+                        if (obj is Ar a && Num(key) is var k)
+                        {
+                            // A selector's unknown/out-of-range index can name any known layer;
+                            // audit every possible visible write instead of losing the layer identity.
+                            if (visibilityAudit && a.E.Length > 0 && a.E.All(v => v is Ly { Name: not null and not "?" }) &&
+                                (k.K != 'c' || !double.IsInteger(k.C) || k.C < 0 || k.C >= a.E.Length)) return a;
+                            if (k.K != 'c' && k.K is 'p' or 'u')
+                                return a.E.Length == 0 ? Un.I : a.E.Skip(1).Aggregate(a.E[0], (acc, e) => Join(acc, e, k));
+                        }
                         if (Text(key) is not string name) return Opaque("dynamic_index", Tainted(key));
                         if (obj is Host { Name: "engine" } && name == "runtime") indirectRuntime = true;
                         return Get(obj, name);
@@ -1445,12 +1501,20 @@ internal static class ScriptTime
                             V self = Ev(callee.K[0]!, s);
                             string? name = callee.Op == "mem" ? callee.Name : Text(Ev(callee.K[1]!, s));
                             if (name is null) return Opaque("dynamic_method");
+                            if (visibilityAudit && !((name == "getLayer" && self is Host { Name: "thisScene" }) ||
+                                (name == "getHours" && self is N { K: 'e', Why: "wall_clock" }) ||
+                                (name is "map" or "forEach" or "concat" && self is Ar) ||
+                                (name == "hasOwnProperty" && self is N { K: 'o', Why: "event_argument" })))
+                                throw new Bail("unknown_visibility_call");
                             if (self is Ar arr && name is "push" or "pop" or "shift" or "unshift" or "splice" or "reverse" or "sort" or "fill")
                                 return Mutate(arr, name, args, callee.K[0]!, s);
                             if (callee.Num == 1 && self is Un or Nul) return Un.I;
                             return Call(Get(self, name), self, args);
                         }
-                        return Call(Ev(callee, s), null, args);
+                        V function = Ev(callee, s);
+                        if (visibilityAudit && function is not Fn and not Host { Name: "parseInt" })
+                            throw new Bail("unknown_visibility_call");
+                        return Call(function, null, args);
                     }
                 case "new":
                     {
@@ -1544,7 +1608,9 @@ internal static class ScriptTime
                         switch (obj)
                         {
                             case Ly l: Write(l, key, v); return;
-                            case Host { Name: "shared" }: return;   // 别的脚本经 shared 读，由 Liveness 处理
+                            case Host { Name: "shared" }:
+                                if (visibilityAudit) throw new Bail("shared_visibility_side_effect");
+                                return;   // 别的脚本经 shared 读，由 Liveness 处理
                             case Host { Name: "animation" }:
                                 // 本层动画速率：每次都写同一个烘焙期常量时，运行时观测给的轨道速率（跑完观测帧后读）就是它，轨道周期已按它缩放
                                 if (key != "rate") throw new Bail("layer_api", detail: "animation." + key);
@@ -1567,6 +1633,10 @@ internal static class ScriptTime
                                     Assign(target.K[0]!, new Ar([.. items]), s);
                                     return;
                                 }
+                            case Ar choices when visibilityAudit && key == "visible" &&
+                                choices.E.All(item => item is Ly { Name: not null and not "?" }):
+                                foreach (Ly layer in choices.E.Cast<Ly>()) Write(layer, key, v);
+                                return;
                         }
                         // 写进说不清的对象（thisLayer.getAnimation().rate 之类）：原因取那个对象的来源，不是运行时错误
                         if (obj is N { K: 'o', Why: string why }) throw new Bail(why, detail: "property write on " + Key(obj));
@@ -1595,6 +1665,8 @@ internal static class ScriptTime
 
         private void Write(Ly layer, string property, V v)
         {
+            if (visibilityAudit && (layer.Name == "?" || property != "visible"))
+                throw new Bail("non_visibility_side_effect");
             if (layer.Name == "?") v = Opaque("write_to_unknown_layer", Tainted(v));
             writes[(layer.Name ?? "") + "|" + property] = v;
         }

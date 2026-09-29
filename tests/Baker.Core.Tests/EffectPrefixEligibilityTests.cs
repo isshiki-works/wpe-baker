@@ -224,10 +224,24 @@ public class EffectPrefixEligibilityTests
             new JsonObject());
         Assert.True(detected.IsRecognized, detected.FallbackReason);
         JsonArray Propose() => EffectPrefixPlanner.Propose(scene, source, dir, runtime, new JsonObject(), request, projection);
-        Assert.True(Assert.Single(Propose().OfType<JsonObject>())["preserve_external_visibility"]!.GetValue<bool>());
         JsonObject controllerVisibility = scene["objects"]![4]!["visible"]!.AsObject();
+        Assert.True(ScriptTime.OnlyVisibilitySideEffects(controllerVisibility, scene["objects"]![4]!.AsObject()));
+        Assert.True(Assert.Single(Propose().OfType<JsonObject>())["preserve_external_visibility"]!.GetValue<bool>());
         string safeScript = controllerVisibility["script"]!.GetValue<string>();
         controllerVisibility["script"] = safeScript.Replace("show(dayLayers);", "show(dayLayers); thisScene.getLayer('day1').color='1 0 0';");
+        Assert.Empty(Propose());
+        controllerVisibility["script"] = safeScript.Replace("show(dayLayers);", "show(dayLayers); thisScene.getLayer('day1')['color']='1 0 0';");
+        Assert.True(DaytimeSplit.Detect(new SceneGraph(scene).Objects, runtime["runtime_dependencies"]!.AsArray(),
+            new JsonObject()).IsRecognized); // The selector alone does not prove the computed write safe.
+        Assert.False(ScriptTime.OnlyVisibilitySideEffects(controllerVisibility, scene["objects"]![4]!.AsObject()));
+        Assert.Empty(Propose());
+        controllerVisibility["script"] = safeScript.Replace("show(dayLayers);", "show(dayLayers); thisScene.getLayer('day1').setTint('1 0 0');");
+        Assert.True(DaytimeSplit.Detect(new SceneGraph(scene).Objects, runtime["runtime_dependencies"]!.AsArray(),
+            new JsonObject()).IsRecognized);
+        Assert.False(ScriptTime.OnlyVisibilitySideEffects(controllerVisibility, scene["objects"]![4]!.AsObject()));
+        Assert.Empty(Propose());
+        controllerVisibility["script"] = safeScript.Replace("show(dayLayers);",
+            "show(dayLayers); var setter=thisScene.getLayer('day1').setTint; setter('1 0 0');");
         Assert.Empty(Propose());
         controllerVisibility["script"] = safeScript;
         runtime["runtime_dependencies"]!.AsArray().Add(new JsonObject { ["owner"] = 5, ["target"] = 2,
@@ -243,6 +257,12 @@ public class EffectPrefixEligibilityTests
         scene["objects"]![1]!["origin"]!["script"] = staticOrigin;
         scene["objects"]![1]!["parent"] = "bad";
         Assert.Empty(Propose());
+        if (Environment.GetEnvironmentVariable("PERIODICA_NIGHT_SCENE") is { } realScene && File.Exists(realScene))
+        {
+            JsonObject actual = JsonNode.Parse(File.ReadAllText(realScene))!.AsObject()["objects"]!.AsArray()
+                .OfType<JsonObject>().Single(layer => SceneGraph.Int(layer["id"]) == 6852);
+            Assert.True(ScriptTime.OnlyVisibilitySideEffects(actual["visible"]!.AsObject(), actual));
+        }
         await Task.CompletedTask;
     });
 
