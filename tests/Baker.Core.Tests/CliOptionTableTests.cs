@@ -248,6 +248,17 @@ public class CliOptionTableTests
         Assert.Equal(120UL, OptionTable.Value("bake", options, "--probe-frames"));
     }
 
+    [Theory]
+    [InlineData("playing")]
+    [InlineData("paused")]
+    public void CompareReturnPlaybackIsExplicit(string state)
+    {
+        var options = OptionTable.Parse(["compare", "source", "--restore-playback", state]);
+        Assert.Equal(state, OptionTable.Value("compare", options, "--restore-playback"));
+        Assert.Equal("playing", OptionTable.Value("compare", new Dictionary<string, string>(), "--restore-playback"));
+        Assert.Throws<ArgumentException>(() => OptionTable.Find("compare", "--restore-playback")!.Read("unknown"));
+    }
+
     [Fact]
     public void EveryRowIsUsedByParsingOrHelp()
     {

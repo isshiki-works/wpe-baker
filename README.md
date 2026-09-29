@@ -29,7 +29,7 @@ wpe-baker.exe analyze <scene.pkg> --out plan.json
 wpe-baker.exe bake plan.json --out <output-dir>
 ```
 
-To compare playback cost after generation, use `wpe-baker.exe compare <original-folder> --baked <output-folder> --wallpaper-engine <wallpaper64.exe> --out <new-report-folder>`. It temporarily switches the wallpaper through A/B/B/A playback and restores the previous assignment. This requires one connected display and a single wallpaper assignment. The report separates iGPU and CPU-package power; opposing changes are shown as a tradeoff. Missing evidence gives no recommendation, and visual correctness is checked separately.
+To compare playback cost after generation, use `wpe-baker.exe compare <original-folder> --baked <output-folder> --wallpaper-engine <wallpaper64.exe> --out <new-report-folder>`. It temporarily switches the wallpaper through A/B/B/A playback and reopens the previous assignment, resuming playback by default. Add `--restore-playback paused` to return it paused. Reopening restarts playback position; saved configuration cannot reveal the prior pause state. This requires one connected display and a single wallpaper assignment. The report separates iGPU and CPU-package power; opposing changes are shown as a tradeoff. Missing evidence gives no recommendation, and visual correctness is checked separately.
 
 ## How it works
 

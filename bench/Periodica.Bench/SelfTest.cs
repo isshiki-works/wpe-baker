@@ -18,6 +18,28 @@ internal static class SelfTest
             if (!ok) ++failed;
         }
 
+        bool sentCancelledControl = false;
+        using (var cancelledControl = new CancellationTokenSource())
+        {
+            cancelledControl.Cancel();
+            var controller = new WpeControl("unused.exe", (_, _) =>
+            {
+                sentCancelledControl = true;
+                return Task.FromResult("");
+            });
+            try { controller.StopAsync(cancelledControl.Token).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+            Check(!sentCancelledControl, "an already-cancelled request sends no wallpaper control command");
+        }
+        bool invalidReturnState = false;
+        try
+        {
+            Abba.RunAsync(new("unused", "unused", null, "unused", RestorePlayback: "unknown"),
+                new Progress<string>(), CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (ArgumentException) { invalidReturnState = true; }
+        Check(invalidReturnState, "unknown return playback state is rejected before wallpaper or file access");
+
         // A failed load must retain ownership of the old selection until Open actually succeeds.
         foreach (string failure in new[] { "stop", "closeWallpaper", "openWallpaper", "play", "" })
         {

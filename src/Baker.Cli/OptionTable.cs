@@ -59,7 +59,8 @@ internal static class OptionTable
         new("apply", "REQUEST.json", false),
         new("rollback", "APPLY.json", false),
         new("compare", "ORIGINAL", false,
-            "  Explicitly switches Wallpaper Engine through A/B/B/A playback, measures both projects, and restores the previous wallpaper.",
+            "  Explicitly switches Wallpaper Engine through A/B/B/A playback, measures both projects, and reopens the previous wallpaper.",
+            "  It resumes playback by default; use --restore-playback paused to return it paused. Playback position is not saved or restored.",
             "  Result shows iGPU, CPU package, CPU, GPU and frame evidence; conflicting power domains are a tradeoff.",
             "  Supports one connected display with a single wallpaper; playlists are rejected before switching.",
             "  Visual correctness is checked separately from playback cost.",
@@ -192,6 +193,8 @@ internal static class OptionTable
         new("--wallpaper-engine", ["compare"], "EXE", Required: true),
         new("--out", ["compare"], "NEW_DIRECTORY", Required: true),
         new("--present-mon", ["compare"], "EXE"),
+        new("--restore-playback", ["compare"], Choices: ["playing", "paused"], Default: "playing", Help:
+            ["    Requested playback state after reopening the original. Prior pause state cannot be read from saved configuration."]),
         new("--monitor", ["compare"], "N", Parse: text => int.TryParse(text, out int n) && n >= 0 ? n : throw new ArgumentException("--monitor must be a nonnegative integer."), Default: "0"),
         new("--seconds", ["compare"], "N", Parse: text => int.TryParse(text, out int n) && n > 0 ? n : throw new ArgumentException("--seconds must be a positive integer."), Default: "15"),
         new("--settle", ["compare"], "N", Parse: text => int.TryParse(text, out int n) && n >= 0 ? n : throw new ArgumentException("--settle must be a nonnegative integer."), Default: "20"),

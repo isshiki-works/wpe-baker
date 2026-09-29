@@ -12,7 +12,9 @@ const string Usage = """
       swap_chain_address, track_display.
     periodica-bench abba --wpe EXE --original PROJECT [--baked PROJECT] --out NEW_DIR
         [--order ABBA] [--monitor 0] [--seconds 45] [--settle 20] [--fps 60] [--idle 0] [--present-mon EXE] [--restore FILE]
-      Plays each segment in the official Wallpaper Engine, samples it, restores the previous wallpaper.
+        [--restore-playback playing|paused] (default playing)
+      Plays each segment in the official Wallpaper Engine, samples it, reopens the previous wallpaper.
+      Return pause/play state is explicit; prior state is not read, and playback position is not saved or restored.
       --order A measures the original alone. --idle N adds paused idle segments first and last and
       subtracts their mean iGPU power before comparing.
     periodica-bench pace --renderer EXE --source SCENE --assets DIR --out NEW_PATH --frames N
@@ -46,7 +48,7 @@ try
     {
         string? baked = Opt("--baked");
         var abba = new AbbaOptions(Need("--wpe"), Need("--original"), baked, Need("--out"), Opt("--order") ?? (baked is null ? "A" : "ABBA"),
-            Int("--monitor", 0), Int("--seconds", 45), Int("--settle", 20), Real("--fps", 60), Int("--idle", 0), Opt("--present-mon"), Opt("--restore"));
+            Int("--monitor", 0), Int("--seconds", 45), Int("--settle", 20), Real("--fps", 60), Int("--idle", 0), Opt("--present-mon"), Opt("--restore"), Opt("--restore-playback") ?? "playing");
         Unknown(options);
         result = await Abba.RunAsync(abba, progress, cancellation.Token);
     }

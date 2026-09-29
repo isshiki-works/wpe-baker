@@ -8,11 +8,11 @@ namespace Periodica.Bench;
 /// <param name="IdleSeconds">大于 0 时在首尾各加一段空闲基线 I（WPE 暂停），功耗按两段空闲均值扣除。</param>
 public sealed record AbbaOptions(string WallpaperEngine, string Original, string? Baked, string Output,
     string Order = "ABBA", int Monitor = 0, int Seconds = 45, int SettleSeconds = 20, double Fps = 60,
-    int IdleSeconds = 0, string? PresentMon = null, string? Restore = null);
+    int IdleSeconds = 0, string? PresentMon = null, string? Restore = null, string RestorePlayback = "playing");
 
 /// <summary>
 /// 官方 WPE 播放功耗的 A/B/B/A 编排：记下该显示器当前壁纸，逐段打开原作/成品（或暂停作空闲基线）、等稳定、
-/// 调 <see cref="OfficialPerformanceSampler"/> 采样，最后无论成败都把原壁纸打开回去并继续播放。
+/// 调 <see cref="OfficialPerformanceSampler"/> 采样，最后重开原壁纸并按明确指定的状态播放或暂停；不读取先前暂停状态或播放位置。
 /// 判定口径同 2026-09-18 的 A/B/B/A 实测：核显域中位功耗降幅 ≥30% 算省电，升幅 >5% 算更费，其余持平。
 /// </summary>
 public static class Abba
@@ -40,6 +40,8 @@ public static class Abba
 
     public static async Task<JsonObject> RunAsync(AbbaOptions options, IProgress<string> progress, CancellationToken token)
     {
+        if (options.RestorePlayback is not ("playing" or "paused"))
+            throw new ArgumentException("--restore-playback must be playing or paused.");
         string phases = Phases(options.Order, options.IdleSeconds);
         if (phases.Contains('B') && options.Baked is null) throw new ArgumentException("--order uses B but --baked is missing.");
         // 项目缺入口文件时 WPE 照样 60 fps 出空帧，功耗接近空闲，会被误读成"大幅节省"（9/24 Q4 三张静态成品即如此）
@@ -78,6 +80,9 @@ public static class Abba
             ["idle_seconds"] = options.IdleSeconds, ["original"] = options.Original, ["baked"] = options.Baked,
             ["config_backup"] = backup, ["before_pid"] = identity.Pid, ["before_start_ticks"] = identity.StartTicks,
             ["previous_evidence"] = previousObservation.Evidence,
+            ["previous_playback_state"] = "not_observed",
+            ["requested_restore_playback"] = options.RestorePlayback,
+            ["restoration_scope"] = "Wallpaper assignment and configuration. If switching began, the original is reopened with the requested pause/play control; its prior playback state and position are not read.",
             ["control_scope"] = "One connected display, monitor 0. Each load uses stop/close/open/play. Saved assignments and this WPE process's playback readings are checked; config fallback does not establish visual correctness or official playback identity.",
             ["segments"] = segments
         };
@@ -112,6 +117,7 @@ public static class Abba
                 if (kind == 'I')
                 {
                     progress.Report($"{label}: pausing Wallpaper Engine for the idle baseline.");
+                    token.ThrowIfCancellationRequested();
                     changed = true;
                     await wpe.PauseAsync(token);
                 }
@@ -121,6 +127,7 @@ public static class Abba
                     playback["project"] = project;
                     playback["load_sequence"] = "stop/closeWallpaper/openWallpaper/play";
                     progress.Report($"{label}: opening {project}.");
+                    token.ThrowIfCancellationRequested();
                     changed = true;
                     await wpe.IsolatedOpenAsync(project, options.Monitor, token, () => ownedClose = true, () =>
                     {
@@ -163,7 +170,10 @@ public static class Abba
                     expectedProject = previous;
                     expectedIsPrevious = true;
                     await wpe.IsolatedOpenAsync(previous, options.Monitor, CancellationToken.None, () => ownedClose = true);
+                    if (options.RestorePlayback == "paused") await wpe.PauseAsync(CancellationToken.None);
                 }
+                run["restore_playback_evidence"] = changed ? "requested_control_completed_not_state_observed" : "not_changed_before_control";
+                run["playback_position"] = changed ? "not_saved_or_restored_on_reopen" : "not_changed_before_control";
                 var restored = await RequireOwnedSelection(CancellationToken.None);
                 run["restored_wallpaper"] = restored.File;
                 run["restore_evidence"] = restored.Evidence;
