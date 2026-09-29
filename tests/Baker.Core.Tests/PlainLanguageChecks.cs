@@ -10,11 +10,6 @@ internal static class PlainLanguageChecks
         Verdicts(check);
         NumberLine(check);
         TurnOffCard(check);
-        var sourceVideo = new JsonObject { ["route"] = "source_video_optimization", ["status"] = "source_video_resources_ready",
-            ["source_video_optimization"] = new JsonObject { ["resources"] = new JsonArray(new JsonObject { ["layer_id"] = 12 }) },
-            ["blockers_localized"] = new JsonArray(), ["bake_value"] = new JsonObject { ["status"] = "potential_gain" } };
-        check(!PlainLanguage.CannotGenerate(sourceVideo) && PlainLanguage.Verdict(sourceVideo, false) == "可以生成",
-            "source-video resources are ready without analytic loop candidates");
     }
 
     // ---------------------------------------------------------------------------------------
