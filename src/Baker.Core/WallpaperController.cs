@@ -238,6 +238,7 @@ public sealed class WallpaperController(string executable)
 
     private async Task<string> RunAsync(string[] arguments, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         if (!NativeEnvironment.WallpaperRunning(Executable)) throw new InvalidOperationException("Start Wallpaper Engine normally before sending a control command.");
         var info = new ProcessStartInfo(Executable) { UseShellExecute = false, CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(Executable)!, RedirectStandardOutput = true, RedirectStandardError = true,

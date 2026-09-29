@@ -35,6 +35,7 @@ internal sealed class FfmpegTool(NativeTools tools)
     /// <summary>启动一个进程；token 取消时杀掉整棵进程树。释放时先杀（若还在跑）再等它退出。</summary>
     public NativeProcess Start(string executable, IEnumerable<string> arguments, CancellationToken token, bool redirectInput = false)
     {
+        token.ThrowIfCancellationRequested();
         var info = new ProcessStartInfo(Path.GetFullPath(executable)) { UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = redirectInput,
             StandardOutputEncoding = Utf8, StandardErrorEncoding = Utf8 };

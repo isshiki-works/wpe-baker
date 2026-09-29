@@ -34,6 +34,17 @@ public class RendererCapabilitiesTests
 [Trait("Layer", "L1")]
 public class RendererClientTests
 {
+    [Fact]
+    public void AlreadyCancelledProcessStopsBeforeExecutableStartup()
+    {
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        string missing = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "never-start.exe");
+        var tools = new NativeTools(missing, missing, missing, []);
+        var error = Assert.Throws<OperationCanceledException>(() => new FfmpegTool(tools).Start(missing, [], cancelled.Token));
+        Assert.Equal(cancelled.Token, error.CancellationToken);
+    }
+
     private static string Cmd(string dir, string name, string body)
     {
         string path = Path.Combine(dir, name);
