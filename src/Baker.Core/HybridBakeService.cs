@@ -593,7 +593,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 if (setupError is not null) ExceptionDispatchInfo.Throw(setupError);
                 var groupScheduler = scheduler!;
                 var scene = original.DeepClone().AsObject();
-                if (settings.ViewMode == "fixed_view") scene["general"]!["cameraparallax"] = false;
+                if (settings.ViewMode == "fixed_view") scene["general"]!["cameraparallaxmouseinfluence"] = 0;
                 int nextId = checked(originalObjects.Keys.Max() + 1);
                 var replacements = new Dictionary<string, JsonObject>();
                 var staticIds = new HashSet<int>();

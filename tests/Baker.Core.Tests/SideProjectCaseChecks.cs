@@ -79,7 +79,7 @@ Directory.CreateDirectory(referenceSource);
 await File.WriteAllTextAsync(Path.Combine(referenceSource, "project.json"),
     "{\"type\":\"scene\",\"file\":\"scene.json\",\"general\":{\"properties\":{\"tone\":{\"value\":false}}}}");
 await File.WriteAllTextAsync(Path.Combine(referenceSource, "scene.json"),
-    "{\"general\":{\"camerashake\":true,\"cameraparallax\":true,\"preserved\":17},\"objects\":[]}");
+    "{\"general\":{\"camerashake\":true,\"cameraparallax\":true,\"cameraparallaxmouseinfluence\":0.116,\"preserved\":17},\"objects\":[]}");
 Task CreateReferenceAsync(ProjectSource source, string destination, string viewMode) =>
     ProbeBake.CreateReferenceAsync(source, destination, new JsonObject { ["tone"] = true }, viewMode, new JsonObject(), CancellationToken.None);
 using (var source = new ProjectSource(referenceSource))
@@ -89,20 +89,30 @@ using (var source = new ProjectSource(referenceSource))
     JsonObject fixedScene = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(fixedReference, "scene.json")))!.AsObject();
     JsonObject fixedProject = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(fixedReference, "project.json")))!.AsObject();
     Check(fixedScene["general"]!["camerashake"]!.GetValue<bool>() &&
-        !fixedScene["general"]!["cameraparallax"]!.GetValue<bool>() &&
+        fixedScene["general"]!["cameraparallax"]!.GetValue<bool>() &&
+        fixedScene["general"]!["cameraparallaxmouseinfluence"]!.GetValue<int>() == 0 &&
         fixedScene["general"]!["preserved"]!.GetValue<int>() == 17,
-        "fixed-view reference preserves camera shake and live scene state while disabling parallax");
+        "fixed-view reference keeps neutral parallax geometry while freezing pointer influence");
     Check(fixedProject["general"]!["properties"]!["tone"]!["value"]!.GetValue<bool>(),
         "comparison reference applies the selected property snapshot");
     string preserveReference = Path.Combine(referenceRoot, "preserve");
     await CreateReferenceAsync(source, preserveReference, "preserve");
     JsonObject preserveScene = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(preserveReference, "scene.json")))!.AsObject();
     Check(preserveScene["general"]!["camerashake"]!.GetValue<bool>() &&
-        preserveScene["general"]!["cameraparallax"]!.GetValue<bool>(),
+        preserveScene["general"]!["cameraparallax"]!.GetValue<bool>() &&
+        preserveScene["general"]!["cameraparallaxmouseinfluence"]!.GetValue<double>() == 0.116,
         "preserve reference retains original camera behavior");
     JsonObject unchanged = source.ReadJson(source.SceneResource);
     Check(unchanged["general"]!["camerashake"]!.GetValue<bool>() &&
         unchanged["general"]!["cameraparallax"]!.GetValue<bool>(), "reference construction does not mutate its source");
+    unchanged["general"]!["cameraparallax"] = false;
+    await File.WriteAllTextAsync(Path.Combine(referenceSource, "scene.json"), unchanged.ToJsonString());
+    string originallyFixed = Path.Combine(referenceRoot, "originally-fixed");
+    await CreateReferenceAsync(source, originallyFixed, "fixed_view");
+    JsonObject originallyFixedScene = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(originallyFixed, "scene.json")))!.AsObject();
+    Check(!originallyFixedScene["general"]!["cameraparallax"]!.GetValue<bool>() &&
+        originallyFixedScene["general"]!["cameraparallaxmouseinfluence"]!.GetValue<int>() == 0,
+        "fixed-view reference does not enable parallax absent from the source");
 }
 
     }

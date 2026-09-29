@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 namespace Baker.Core;
 
 /// <summary>
-/// 捕获副本（<see cref="WorkLayout.CaptureSource"/>）：原作解包后写入冻结时间属性、快照省略与状态、关掉视差（固定视角）与
+/// 捕获副本（<see cref="WorkLayout.CaptureSource"/>）：原作解包后写入冻结时间属性、快照省略与状态、固定鼠标视差输入（固定视角）与
 /// 镜头抖动、套循环补丁的场景，给起点搜索与各组主渲染用。成品工程另从源解包，不经这里。
 /// </summary>
 internal static class CaptureSourceBuilder
@@ -41,7 +41,7 @@ internal static class CaptureSourceBuilder
         DaytimeSplit.ApplyState(scene, plan);
         // 与参照、候选工程同样把置顶的实时根挪到末尾：渲染器每个 job 只有一条全局 RNG，粒子按对象顺序取数，顺序不同就是另一次随机。
         PlanTransforms.ApplyOverlayPlacement(scene, plan);
-        if (settings.ViewMode == "fixed_view") scene["general"]!["cameraparallax"] = false;
+        if (settings.ViewMode == "fixed_view") scene["general"]!["cameraparallaxmouseinfluence"] = 0;
         scene["general"]!["camerashake"] = false;
         if (!probe) HybridLoopService.ApplyPatches(scene, plan["loop"]!.AsObject());
         return scene;
