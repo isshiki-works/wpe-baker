@@ -45,7 +45,7 @@ public static class Abba
         // 项目缺入口文件时 WPE 照样 60 fps 出空帧，功耗接近空闲，会被误读成"大幅节省"（9/24 Q4 三张静态成品即如此）
         foreach (string? project in new[] { options.Original, options.Baked })
             if (project is not null) RequireEntryFile(project);
-        if (options.Seconds <= 0 || options.SettleSeconds < 0 || options.Fps <= 0 || !double.IsFinite(options.Fps) || options.Monitor < 0)
+        if (options.Seconds <= 0 || options.SettleSeconds < 0 || options.IdleSeconds < 0 || options.Fps <= 0 || !double.IsFinite(options.Fps) || options.Monitor < 0)
             throw new ArgumentException("Measurement duration, settle time, target FPS, or monitor number is invalid.");
         // Fail before touching the desktop when the collector is absent.
         if (options.PresentMon is not null && !File.Exists(options.PresentMon) ||
@@ -54,23 +54,53 @@ public static class Abba
         string output = Path.GetFullPath(options.Output);
         if (Directory.Exists(output) || File.Exists(output)) throw new IOException("--out must be a new directory.");
         var wpe = new WpeControl(options.WallpaperEngine);
-        string previous = options.Restore ?? await wpe.GetWallpaperAsync(options.Monitor, token);
-        if (previous.Length == 0 && options.Restore is null)
-        {
-            await Task.Delay(TimeSpan.FromSeconds(1), token);
-            previous = await wpe.GetWallpaperAsync(options.Monitor, token);
-        }
+        wpe.RequireSingleMonitor(options.Monitor);
+        var identity = wpe.Identity();
+        byte[] configBefore = await File.ReadAllBytesAsync(wpe.ConfigPath, token);
+        JsonObject before = WpeControl.ParseConfig(configBefore);
+        string profile = Environment.UserName;
+        JsonObject assignment = WpeControl.Assignment(before, profile);
+        var previousObservation = await wpe.ObserveAsync(options.Monitor, token);
+        string previous = previousObservation.File;
         if (previous.Length == 0)
             throw new InvalidDataException($"Wallpaper Engine reports no wallpaper on monitor {options.Monitor}; nothing to restore to.");
+        if (!File.Exists(previous) || !SamePath(previous, assignment["file"]!.GetValue<string>()) ||
+            options.Restore is not null && !SamePath(previous, options.Restore))
+            throw new InvalidDataException("The observed current wallpaper must match the saved assignment and any --restore path before comparison.");
         Directory.CreateDirectory(output);
+        string backup = Path.Combine(output, "config.before.json");
+        await File.WriteAllBytesAsync(backup, configBefore, token);
         var segments = new JsonArray();
         var run = new JsonObject
         {
             ["schema_version"] = 1, ["order"] = phases, ["monitor"] = options.Monitor, ["previous_wallpaper"] = previous,
             ["seconds"] = options.Seconds, ["settle_seconds"] = options.SettleSeconds, ["target_fps"] = options.Fps,
             ["idle_seconds"] = options.IdleSeconds, ["original"] = options.Original, ["baked"] = options.Baked,
+            ["config_backup"] = backup, ["before_pid"] = identity.Pid, ["before_start_ticks"] = identity.StartTicks,
+            ["previous_evidence"] = previousObservation.Evidence,
+            ["control_scope"] = "One connected display, monitor 0. Each load uses stop/close/open/play. Saved assignments and this WPE process's playback readings are checked; config fallback does not establish visual correctness or official playback identity.",
             ["segments"] = segments
         };
+        string expectedProject = previous;
+        bool expectedIsPrevious = true, changed = false, ownedClose = false;
+
+        async Task<(string File, string Evidence)> RequireOwnedSelection(CancellationToken checkToken, bool allowClosed = false)
+        {
+            wpe.RequireSingleMonitor(options.Monitor);
+            if (wpe.Identity() != identity) throw new InvalidDataException("Wallpaper Engine PID or start time changed; comparison stopped without replacing its current selection.");
+            JsonObject current = WpeControl.ParseConfig(await File.ReadAllBytesAsync(wpe.ConfigPath, checkToken));
+            if (allowClosed && ownedClose && WpeControl.OnlyMonitorRemoved(before, current, profile) &&
+                (await wpe.GetWallpaperAsync(options.Monitor, checkToken)).Length == 0 && wpe.Identity() == identity)
+                return ("", "own_close_verified_in_configuration");
+            var observation = await wpe.ObserveAsync(options.Monitor, checkToken);
+            string selected = observation.File;
+            if (!(expectedIsPrevious ? SamePath(previous, selected) : SelectedMatches(expectedProject, selected)) ||
+                !SamePath(selected, WpeControl.Assignment(current, profile)["file"]!.GetValue<string>()) ||
+                !WpeControl.ConfigMatchesSelection(before, current, profile) || wpe.Identity() != identity)
+                throw new InvalidDataException("The wallpaper selection or configuration changed beyond this comparison; the current user state was preserved. Use config.before.json only for manual recovery.");
+            ownedClose = false;
+            return observation;
+        }
         try
         {
             for (int index = 0; index < phases.Length; ++index)
@@ -78,46 +108,42 @@ public static class Abba
                 char kind = phases[index];
                 string label = $"{index:00}-{kind}";
                 var playback = new JsonObject { ["segment"] = label, ["kind"] = kind.ToString() };
+                await RequireOwnedSelection(token);
                 if (kind == 'I')
                 {
                     progress.Report($"{label}: pausing Wallpaper Engine for the idle baseline.");
+                    changed = true;
                     await wpe.PauseAsync(token);
                 }
                 else
                 {
                     string project = kind == 'A' ? options.Original : options.Baked!;
                     playback["project"] = project;
+                    playback["load_sequence"] = "stop/closeWallpaper/openWallpaper/play";
                     progress.Report($"{label}: opening {project}.");
-                    await wpe.OpenAsync(project, options.Monitor, token);
-                    await wpe.PlayAsync(token);
+                    changed = true;
+                    expectedProject = project;
+                    expectedIsPrevious = false;
+                    await wpe.IsolatedOpenAsync(project, options.Monitor, token, () => ownedClose = true);
                 }
                 await Task.Delay(TimeSpan.FromSeconds(options.SettleSeconds), token);
+                var selectedBefore = await RequireOwnedSelection(token);
                 if (kind != 'I')
                 {
-                    string selected = await wpe.GetWallpaperAsync(options.Monitor, token);
-                    if (selected.Length == 0)
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(1), token);
-                        selected = await wpe.GetWallpaperAsync(options.Monitor, token);
-                    }
-                    playback["selected_wallpaper"] = selected;
-                    playback["selected_verified"] = SelectedMatches(kind == 'A' ? options.Original : options.Baked!, selected);
+                    playback["selected_wallpaper"] = selectedBefore.File;
+                    playback["selected_evidence"] = selectedBefore.Evidence;
+                    playback["selected_verified"] = selectedBefore.Evidence == "official_getWallpaper";
                 }
-                JsonObject report = await OfficialPerformanceSampler.SampleAsync(new(1, wpe.ProcessId(), label,
+                JsonObject report = await OfficialPerformanceSampler.SampleAsync(new(1, identity.Pid, label,
                     Path.Combine(output, label), kind == 'I' ? options.IdleSeconds : options.Seconds, options.Fps,
                     options.PresentMon, ExpectedProcessPath: wpe.Executable), progress, playback, token);
+                var selectedAfter = await RequireOwnedSelection(token);
                 if (kind != 'I')
                 {
-                    string selected = await wpe.GetWallpaperAsync(options.Monitor, token);
-                    if (selected.Length == 0)
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(1), token);
-                        selected = await wpe.GetWallpaperAsync(options.Monitor, token);
-                    }
                     var observed = report["playback"]!.AsObject();
-                    observed["selected_after_sample"] = selected;
-                    observed["selected_verified"] = observed["selected_verified"]?.GetValue<bool>() == true &&
-                        SelectedMatches(kind == 'A' ? options.Original : options.Baked!, selected);
+                    observed["selected_after_sample"] = selectedAfter.File;
+                    observed["selected_after_evidence"] = selectedAfter.Evidence;
+                    observed["selected_verified"] = observed["selected_verified"]?.GetValue<bool>() == true && selectedAfter.Evidence == "official_getWallpaper";
                     await File.WriteAllTextAsync(report["report_path"]!.GetValue<string>(), report.ToJsonString(JsonOptions), token);
                 }
                 segments.Add(Segment(label, kind, report));
@@ -125,19 +151,43 @@ public static class Abba
         }
         finally
         {
-            // 还原永远要做，采样失败或取消也一样；还原本身失败只记录，不掩盖原始异常。
+            // Restore only while the same process still owns our expected selection and no unrelated config changed.
             try
             {
-                await wpe.OpenAsync(previous, options.Monitor, CancellationToken.None);
-                await wpe.PlayAsync(CancellationToken.None);
-                string restored = await wpe.GetWallpaperAsync(options.Monitor, CancellationToken.None);
-                if (restored.Length == 0)
+                var restoreFrom = await RequireOwnedSelection(CancellationToken.None, allowClosed: true);
+                run["restore_from_evidence"] = restoreFrom.Evidence;
+                if (changed)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(1));
-                    restored = await wpe.GetWallpaperAsync(options.Monitor, CancellationToken.None);
+                    expectedProject = previous;
+                    expectedIsPrevious = true;
+                    await wpe.IsolatedOpenAsync(previous, options.Monitor, CancellationToken.None, () => ownedClose = true);
                 }
-                run["restored_wallpaper"] = restored;
-                run["restored"] = SamePath(previous, restored);
+                var restored = await RequireOwnedSelection(CancellationToken.None);
+                run["restored_wallpaper"] = restored.File;
+                run["restore_evidence"] = restored.Evidence;
+                byte[] currentBytes = await File.ReadAllBytesAsync(wpe.ConfigPath);
+                bool sameConfig = currentBytes.AsSpan().SequenceEqual(configBefore);
+                if (!sameConfig && WpeControl.OnlyLocalFlagRemoved(before, WpeControl.ParseConfig(currentBytes), profile))
+                {
+                    string temporary = wpe.ConfigPath + ".periodica-restore-" + Guid.NewGuid().ToString("N") + ".tmp";
+                    try
+                    {
+                        await File.WriteAllBytesAsync(temporary, configBefore);
+                        await RequireOwnedSelection(CancellationToken.None);
+                        if (!(await File.ReadAllBytesAsync(wpe.ConfigPath)).AsSpan().SequenceEqual(currentBytes))
+                            throw new InvalidDataException("Configuration changed immediately before restoration; the newer file was preserved.");
+                        File.Move(temporary, wpe.ConfigPath, overwrite: true);
+                        await Task.Delay(TimeSpan.FromSeconds(5));
+                        await RequireOwnedSelection(CancellationToken.None);
+                        sameConfig = (await File.ReadAllBytesAsync(wpe.ConfigPath)).AsSpan().SequenceEqual(configBefore);
+                        run["config_local_repaired"] = sameConfig;
+                    }
+                    finally { if (File.Exists(temporary)) File.Delete(temporary); }
+                }
+                run["config_restored"] = sameConfig;
+                run["same_wpe_pid_start"] = wpe.Identity() == identity;
+                run["restored"] = sameConfig && run["same_wpe_pid_start"]!.GetValue<bool>();
+                if (!sameConfig) run["restore_error"] = "Wallpaper restored, but config bytes differ from the backup; no unrelated configuration was overwritten.";
             }
             catch (Exception error) { run["restored"] = false; run["restore_error"] = error.ToString(); }
             run["summary"] = Summarize(segments);
@@ -147,7 +197,7 @@ public static class Abba
         return run;
     }
 
-    private static bool SamePath(string a, string b) => b.Length > 0 &&
+    private static bool SamePath(string a, string b) => a.Length > 0 && b.Length > 0 &&
         string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
 
     private static bool SelectedMatches(string project, string selected)
@@ -173,7 +223,12 @@ public static class Abba
             ["presentmon_status"] = report["presentmon"]?["status"]?.DeepClone(),
             ["report_path"] = report["report_path"]?.DeepClone(),
             ["selected_wallpaper"] = report["playback"]?["selected_wallpaper"]?.DeepClone(),
+            ["selected_evidence"] = report["playback"]?["selected_evidence"]?.DeepClone(),
+            ["selected_after_evidence"] = report["playback"]?["selected_after_evidence"]?.DeepClone(),
+            ["load_sequence"] = report["playback"]?["load_sequence"]?.DeepClone(),
             ["selected_verified"] = report["playback"]?["selected_verified"]?.DeepClone(),
+            ["power_collector_complete"] = report["typeperf"]?["collector"]?["completed_successfully"]?.DeepClone(),
+            ["typeperf_status"] = report["typeperf"]?["status"]?.DeepClone(),
             ["target_status"] = report["target_validation"]?["status"]?.DeepClone(),
             ["pid"] = report["target_validation"]?["pid"]?.DeepClone(),
             ["target_fps"] = report["metadata"]?["target_fps"]?.DeepClone(),
@@ -208,10 +263,24 @@ public static class Abba
         JsonArray segments = run["segments"] as JsonArray ?? new JsonArray();
         if (!segments.Any(s => s?["kind"]?.GetValue<string>() == "A") ||
             !segments.Any(s => s?["kind"]?.GetValue<string>() == "B")) reasons.Add("Both original and baked playback segments are required.");
+        if (Number(run["idle_seconds"]) is > 0 && segments.Count(s => s?["kind"]?.GetValue<string>() == "I") != 2)
+            reasons.Add("Both requested idle baseline segments are required.");
         foreach (JsonNode? item in segments)
         {
-            if (item?["kind"]?.GetValue<string>() == "I") continue;
             string label = item?["label"]?.GetValue<string>() ?? "segment";
+            if (item?["kind"]?.GetValue<string>() == "I")
+            {
+                if (item?["power_status"]?.GetValue<string>() != "sampled" ||
+                    item?["typeperf_status"]?.GetValue<string>() != "sampled" ||
+                    item?["power_collector_complete"]?.GetValue<bool>() != true ||
+                    item?["target_status"]?.GetValue<string>() != "valid" ||
+                    Number(item?["igpu_watts"]) is null || Number(item?["package_watts"]) is null)
+                    reasons.Add($"{label}: requested idle baseline power capture was incomplete.");
+                continue;
+            }
+            if (item?["selected_evidence"]?.GetValue<string>() == "saved_configuration_getWallpaper_returned_empty" ||
+                item?["selected_after_evidence"]?.GetValue<string>() == "saved_configuration_getWallpaper_returned_empty")
+                reasons.Add($"{label}: saved configuration confirms assignment only; official playback selection was not verified.");
             if (item?["status"]?.GetValue<string>() != "sampled" ||
                 item?["power_status"]?.GetValue<string>() != "sampled" ||
                 item?["presentmon_status"]?.GetValue<string>() != "sampled" ||
@@ -255,7 +324,7 @@ public static class Abba
             (gpuChoice == "baked" ? packageB > packageA : packageA > packageB) ? "tradeoff" : gpuChoice;
         return new JsonObject { ["status"] = reasons.Count == 0 ? "measured" : "unavailable",
             ["choice"] = choice, ["gpu_choice"] = gpuChoice,
-            ["scope"] = "iGPU graphics-domain and CPU-package readings observed while these two projects played on this machine; not total-system savings or visual correctness",
+            ["scope"] = "Saved project assignments and iGPU graphics-domain/CPU-package readings from this WPE process on one display. Configuration fallback alone does not verify official playback identity. Not total-system savings or visual correctness.",
             ["reasons"] = reasons };
     }
 
@@ -284,7 +353,8 @@ public static class Abba
             ["original_nvidia_board_watts"] = Mean('A', "nvidia_board_watts"),
             ["baked_nvidia_board_watts"] = Mean('B', "nvidia_board_watts")
         };
-        summary["gain"] = Gain(original, baked, idle);
+        summary["gain"] = segments.Any(item => item?["kind"]?.GetValue<string>() == "I") && idle is null
+            ? Gain(null, null, null) : Gain(original, baked, idle);
         return summary;
     }
 

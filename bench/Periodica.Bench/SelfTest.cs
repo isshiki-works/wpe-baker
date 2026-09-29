@@ -40,6 +40,40 @@ internal static class SelfTest
         try { Abba.Phases("ABX", 0); } catch (ArgumentException) { rejected = true; }
         Check(rejected, "order letters other than A/B are rejected");
 
+        bool Refuses(Action action)
+        {
+            try { action(); return false; } catch (InvalidDataException) { return true; }
+        }
+        WpeControl.RequireSingleMonitor(0, 1);
+        Check(Refuses(() => WpeControl.RequireSingleMonitor(1, 1)) && Refuses(() => WpeControl.RequireSingleMonitor(0, 2)),
+            "isolated loading rejects non-primary or multiple connected displays before control");
+        var config = JsonNode.Parse("""
+            {"test":{"general":{"wallpaperconfig":{"selectedwallpapers":{
+              "Monitor0":{"file":"original","local":true,"playlist":false},
+              "Monitor1":{"file":"disconnected-cache"}}}},"setting":42}}
+            """)!.AsObject();
+        Check(WpeControl.Assignment(config, "test")["file"]?.GetValue<string>() == "original",
+            "disconnected assignments are preserved without pretending they are connected displays");
+        var playlist = config.DeepClone().AsObject();
+        WpeControl.Assignment(playlist, "test")["playlist"] = "favorites";
+        Check(Refuses(() => WpeControl.Assignment(playlist, "test")), "active playlist is refused before switching");
+        var during = config.DeepClone().AsObject();
+        WpeControl.Assignment(during, "test")["file"] = "candidate";
+        WpeControl.Assignment(during, "test").Remove("local");
+        Check(WpeControl.ConfigMatchesSelection(config, during, "test"), "only our selected file and local removal are allowed during comparison");
+        during["test"]!["setting"] = 43;
+        Check(!WpeControl.ConfigMatchesSelection(config, during, "test"), "unrelated user configuration changes prevent automatic switching and restoration");
+        var after = config.DeepClone().AsObject();
+        WpeControl.Assignment(after, "test").Remove("local");
+        Check(WpeControl.OnlyLocalFlagRemoved(config, after, "test"), "exact removal of local=true is the only repairable config difference");
+        WpeControl.Assignment(after, "test")["file"] = "user-later-selection";
+        Check(!WpeControl.OnlyLocalFlagRemoved(config, after, "test"), "a later user selection cannot be overwritten by the config backup");
+        var closed = config.DeepClone().AsObject();
+        closed["test"]!["general"]!["wallpaperconfig"]!["selectedwallpapers"]!.AsObject().Remove("Monitor0");
+        Check(WpeControl.OnlyMonitorRemoved(config, closed, "test"), "a successful own close can be recovered after a failed open");
+        closed["test"]!["setting"] = 43;
+        Check(!WpeControl.OnlyMonitorRemoved(config, closed, "test"), "own close does not authorize overwriting another config change");
+
         Check(Abba.Gain(10, 6.9, null)["verdict"]?.GetValue<string>() == "saved", "31% lower is saved");
         Check(Abba.Gain(10, 7.1, null)["verdict"]?.GetValue<string>() == "same", "29% lower is level");
         Check(Abba.Gain(10, 10.6, null)["verdict"]?.GetValue<string>() == "worse", "6% higher is worse");
@@ -86,6 +120,28 @@ internal static class SelfTest
         Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "unavailable", "unverified selected project withholds a choice");
         Check(Abba.Compare(Comparison(0.001, 0.002))["choice"]?.GetValue<string>() == "unavailable",
             "idle-scale iGPU telemetry cannot impersonate discrete-GPU playback cost");
+        var fallback = Comparison(10, 6);
+        fallback["segments"]![0]!["selected_evidence"] = "saved_configuration_getWallpaper_returned_empty";
+        Check(Abba.Compare(fallback)["choice"]?.GetValue<string>() == "unavailable",
+            "saved assignment fallback cannot impersonate official playback evidence");
+        var idleRun = Comparison(10, 6);
+        idleRun["idle_seconds"] = 10;
+        var idleSegments = idleRun["segments"]!.AsArray();
+        JsonObject Idle() => new() { ["kind"] = "I", ["power_status"] = "sampled", ["typeperf_status"] = "sampled",
+            ["power_collector_complete"] = true, ["target_status"] = "valid", ["igpu_watts"] = 4.0, ["package_watts"] = 5.0,
+            ["presentmon_status"] = "not_measured" };
+        idleSegments.Insert(0, Idle());
+        idleSegments.Add(Idle());
+        idleRun["summary"] = Abba.Summarize(idleSegments);
+        Check(Abba.Compare(idleRun)["choice"]?.GetValue<string>() == "baked", "idle power does not require displayed-frame evidence");
+        idleSegments[0]!["power_collector_complete"] = false;
+        Check(Abba.Compare(idleRun)["choice"]?.GetValue<string>() == "unavailable", "incomplete idle collector withholds comparison even with median readings");
+        idleSegments[0]!["power_collector_complete"] = true;
+        idleSegments[0]!["igpu_watts"] = null;
+        idleRun["summary"] = Abba.Summarize(idleSegments);
+        Check(Abba.Compare(idleRun)["choice"]?.GetValue<string>() == "unavailable" &&
+            idleRun["summary"]!["gain"]!["status"]?.GetValue<string>() == "not_measured",
+            "missing requested idle power cannot fall back to an uncorrected saving");
 
         var captured = new JsonObject
         {
