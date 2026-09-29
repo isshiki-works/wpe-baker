@@ -184,6 +184,11 @@ try
         if (before != after) throw new IOException("Source changed during extraction; output is not validated.");
         Console.WriteLine(JsonSerializer.Serialize(new { status = "extracted", source_sha256 = before, output = Path.GetFullPath(output) }, jsonOptions));
     }
+    else if (args[0] == "optimize")
+    {
+        if (!options.TryGetValue("--out", out var output)) throw new ArgumentException("--out is required.");
+        Console.WriteLine((await WaterwaveFusion.OptimizeAsync(args[1], output, cancellation.Token)).ToJsonString(jsonOptions));
+    }
     else if (args[0] == "render")
     {
         if (!options.TryGetValue("--tools", out string? toolsPath)) throw new ArgumentException("--tools is required.");

@@ -52,6 +52,9 @@ internal static class OptionTable
         new(Bake, "PLAN.json|REQUEST.json", false,
             "  A saved PLAN.json needs --out NEW_DIRECTORY; a REQUEST.json already names its output directory."),
         new("export", "EXPORT_REQUEST.json", false),
+        new("optimize", "SOURCE", false,
+            "  Copy a Scene project to --out NEW_DIRECTORY and fuse supported adjacent water-wave effects.",
+            "  Other effects and live content stay in the editable project."),
         new("targets", "WALLPAPER_ENGINE.exe", false),
         new("apply", "REQUEST.json", false),
         new("rollback", "APPLY.json", false),
@@ -172,7 +175,7 @@ internal static class OptionTable
             Default: "1", Help: ["Greater than 0 and at most 1; a scale other than 1 cannot be combined with output (whole-layer baking only)."]),
         // ---- 其它子命令：缺失时的报错由子命令自己给 ----
         new("--out", ["inspect"], "REPORT.json"),
-        new("--out", ["extract", "decode-check"], "NEW_DIRECTORY", Required: true),
+        new("--out", ["extract", "optimize", "decode-check"], "NEW_DIRECTORY", Required: true),
         new("--tools", ["render"], "TOOLS.json", Required: true),
         new("--wallpaper-engine", ["apply", "rollback"], "EXE", Required: true),
         new("--width", ["pack-video", "pack-rgba"], "W", Required: true),
