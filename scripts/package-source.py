@@ -15,7 +15,7 @@ if provenance_spec is None or provenance_spec.loader is None: raise RuntimeError
 provenance = importlib.util.module_from_spec(provenance_spec)
 provenance_spec.loader.exec_module(provenance)
 DEPENDENCIES = ("rstd", "vvk", "lz4", "freetype", "quickjs", "glslang", "vma",
-                "spirv-reflect", "eigen", "vulkan-headers", "vulkan-loader", "nlohmann-json", "cli11")
+                "spirv-reflect", "eigen", "vulkan-headers", "vulkan-loader", "nlohmann-json", "cli11", "googletest")
 # GPL v2 section 3: the renderer binary must ship with the sources it was built from.
 REQUIRED_FILES = ("README.md", "README.zh-CN.md", "LICENSE", "THIRD-PARTY-NOTICES.md", "SOURCE.md",
                   "scripts/dependency-patches/manifest.json", "scripts/dependency-patches/rstd.patch",
@@ -103,6 +103,17 @@ def main() -> None:
         tree(ROOT / ".deps" / flavor / "sources", ".deps/" + flavor + "/sources")
         for name in ("build-configuration.json", "verification.json"):
             candidates[f".deps/{flavor}/{name}"] = ROOT / ".deps" / flavor / name
+    # Synthetic test inputs let fresh decoder verification run without the old fixture encoder.
+    decoder_tests = {item["case"]: item for item in json.loads(
+        (ROOT / ".deps/ffmpeg-lgpl21/verification.json").read_text(encoding="utf-8"))["tests"]}
+    for case, name in {"h264": "h264.mp4", "av1": "av1.mkv", "pcm": "pcm.wav", "aac": "aac.m4a",
+                       "mp3": "mp3.mp3", "vorbis": "vorbis.ogg", "opus": "opus.ogg", "flac": "flac.flac"}.items():
+        relative = ".deps/ffmpeg-lgpl21/verification/fixtures/" + name
+        source = ROOT / relative
+        with source.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != decoder_tests[case]["fixture_sha256"]:
+                raise RuntimeError("Decoder fixture differs from its recorded SHA256: " + relative)
+        candidates[relative] = source
     # The encoder build guide only existed inside the source-inclusive encoder ZIP.
     encoder_guide = ROOT / ".deps/ffmpeg-encoder-gpl2/ENCODER-BUILD.md"
     if encoder_guide.is_file():
@@ -131,7 +142,39 @@ This archive contains the modified engine, patched dependencies, decoder and
 encoder sources, C# tool layer, tests, input locks and build recipes. Workshop
 projects and generated user wallpapers are excluded.
 
-The engine source files already contain the modifications used by the build.
+The engine and dependency source files already contain the modifications used
+by the build. Keep these files and their .input-* markers when preparing tools;
+do not replace them with fresh upstream checkouts.
+
+Run the commands below in PowerShell from the unpacked WpeBaker-source directory.
+Python 3.11 or newer and Git for Windows are external build requirements. The recipes use
+C:/Program Files/Git/bin/bash.exe and its usr/bin POSIX utilities, patch.exe and
+MSYS runtime. Git is also needed to restore x264's version metadata; the unpacked
+project root itself does not need a Git checkout for native or portable builds.
+
+Prepare the locked project-local tools. Skip the corresponding fetch commands
+for already prepared locked tools; running fetch requires cached download
+archives or network access:
+
+    python scripts/bootstrap-native.py tools
+    python scripts/fetch-pkgconf.py
+    python scripts/fetch-ffmpeg-lgpl21-inputs.py
+    python scripts/fetch-dotnet.py
+
+Use the versions and hashes in scripts/native-inputs.lock.json,
+scripts/distribution-inputs.lock.json and scripts/encoder-build-tools.lock.json.
+These commands do not install tools globally. Existing locked tools may be reused;
+the FFmpeg prefixes, native third-party libraries and renderer must be built from
+this source root. The following PATH change affects only this PowerShell session.
+
+Bootstrap the shader compiler from the included sources before FFmpeg. The
+third-party-only CMake configuration does not require an existing FFmpeg prefix:
+
+    $env:PATH = (Join-Path (Get-Location) '.tools/llvm-mingw-22/bin') + ';' + $env:PATH
+    .tools/cmake/bin/cmake.exe -S engine --preset release -B build/bootstrap-third-party -DWPE_THIRD_PARTY_ONLY=ON
+    .tools/cmake/bin/cmake.exe --build build/bootstrap-third-party --target glslang-standalone -j 4
+    New-Item -ItemType Directory -Force .tools/ffmpeg-build/bin, .tools/tmp | Out-Null
+    Copy-Item build/bootstrap-third-party/bin/glslang.exe .tools/ffmpeg-build/bin/glslang.exe
 
 Recreate x264's Git identity from the included bundle without replacing files:
 
@@ -139,14 +182,38 @@ Recreate x264's Git identity from the included bundle without replacing files:
     git -C .deps/ffmpeg-encoder-gpl2/sources/x264 fetch ../../../../.tools/downloads/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.bundle refs/heads/source-pin:refs/heads/source-pin refs/heads/master-pin:refs/remotes/origin/master
     git -C .deps/ffmpeg-encoder-gpl2/sources/x264 reset --mixed source-pin
 
+Build and verify the decoder, then build and verify the encoder:
+
+    python scripts/build-ffmpeg-lgpl21.py --stage all --jobs 4
+    python scripts/verify-ffmpeg-lgpl21.py
+    python scripts/build-ffmpeg-encoder-gpl2.py --stage all --jobs 4
+    python scripts/verify-ffmpeg-encoder-gpl2.py
+
+The included eight synthetic decoder fixtures are checked against the original
+verification record when packaging. Verification runs them through the newly
+built decoder and replaces verification.json with fresh DLL and license results;
+the archived verification record is not evidence for rebuilt libraries. Encoder
+verification similarly creates this root's portable encoder and checks the new
+decoder baseline. Hardware probes are optional and are not part of these commands.
+
+Build the renderer with its own third-party libraries and provenance, then publish
+the self-contained .NET applications and assemble a new portable directory:
+
+    python scripts/build-native-cmake.py --target wpe-render --build-dir build/source-rebuild22 --jobs 4
+    python scripts/package-portable.py --native-build-dir build/source-rebuild22 --out dist/source-rebuild
+
+Use a new --out directory if that directory already exists. Do not copy another
+root's compiled libraries or build provenance into this build. The portable helper
+also runs startup and device enumeration checks; scene rendering and official
+Wallpaper Engine playback remain separate verification steps.
+
 The distributed renderer includes the current rendering and encoding changes.
 The authoritative source fingerprint and packaged binary SHA256 are in
 build-records/build-wpe-render.json.
 
-Use the project-local tool versions in scripts/native-inputs.lock.json and
-scripts/encoder-build-tools.lock.json. See README.md, SOURCE.md and the two
-build guides under scripts/. The matching runtime's build-records name its exact
-source digest. The checked Windows LLVM-MinGW compiler is the llvm-mingw-22 entry.
+See README.md, SOURCE.md and the two build guides under scripts/ for background.
+The matching runtime's build-records name its exact source digest. The checked
+Windows LLVM-MinGW compiler is the llvm-mingw-22 entry.
 
 Third-party components, versions and licenses are listed in
 THIRD-PARTY-NOTICES.md; license texts are under licenses-extra/ and inside each
