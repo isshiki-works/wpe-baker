@@ -189,6 +189,7 @@ internal static class SourceVideoOptimization
         if (settings.Width < 2 || settings.Height < 2 || (settings.Width & 1) != 0 || (settings.Height & 1) != 0) return null;
         using var source = new ProjectSource(sourcePath);
         JsonObject scene = source.ReadJson(source.SceneResource);
+        if (!CameraSamplingFixed(scene, source)) return null;
         var objects = scene["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(SceneGraph.Id);
         JsonObject runtime = JsonNode.Parse(await File.ReadAllTextAsync(runtimePath, token))!.AsObject();
         JsonArray dependencies = runtime["runtime_dependencies"]?.AsArray() ?? [];
@@ -297,6 +298,33 @@ internal static class SourceVideoOptimization
         edge["binding"]?.GetValue<string>() == "visible" &&
         ((edge["operation"]?.GetValue<string>() == "read" && edge["property"]?.GetValue<string>() == "videoTexture") ||
          (edge["operation"]?.GetValue<string>() == "write" && edge["property"]?.GetValue<string>() == "visible"));
+
+    internal static bool CameraSamplingFixed(JsonObject scene, ProjectSource source)
+    {
+        // The original camera and its user properties remain in the output. A later zoom can
+        // demand more texels than the analysis frame, even when that frame uses camera "global".
+        JsonNode? ortho = scene["general"]?["orthogonalprojection"];
+        if (ortho?["width"] is not JsonValue || ortho["height"] is not JsonValue ||
+            scene["general"]?["zoom"] is JsonObject ||
+            scene["general"]?["zoom"] is JsonNode globalZoom &&
+                SceneGraph.Numeric(globalZoom, double.NaN) != 1) return false;
+        foreach (JsonObject camera in (scene["objects"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(item => item.ContainsKey("camera")))
+        {
+            if (camera["zoom"] is JsonObject ||
+                camera["zoom"] is JsonNode zoom && SceneGraph.Numeric(zoom, double.NaN) != 1) return false;
+            if (camera["path"] is JsonValue path && path.TryGetValue<string>(out string? name) && !string.IsNullOrEmpty(name))
+            {
+                try
+                {
+                    if (source.ReadJson(name)["paths"] is not JsonArray { Count: 0 }) return false;
+                }
+                catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException)
+                { return false; }
+            }
+        }
+        return true;
+    }
 
     internal static bool SimpleLeaf(JsonObject layer, IReadOnlyDictionary<int, JsonObject> objects, JsonObject described,
         double canvasWidth, double canvasHeight, uint outputWidth, uint outputHeight)

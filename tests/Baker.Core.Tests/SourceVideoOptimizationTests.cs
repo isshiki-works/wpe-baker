@@ -5,6 +5,24 @@ using Xunit;
 public class SourceVideoOptimizationTests
 {
     [Fact]
+    public async Task UserZoomUpToTwoCannotUseSnapshotSizedVideo() => await TestTemp.Run(async root =>
+    {
+        await File.WriteAllTextAsync(Path.Combine(root, "scene.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(root, "project.json"),
+            """{"type":"scene","file":"scene.json","general":{"properties":{"lens":{"type":"slider","min":0.1,"max":2,"value":1}}}}""");
+        using var source = new ProjectSource(Path.Combine(root, "scene.json"));
+        var scene = new JsonObject { ["general"] = new JsonObject {
+            ["orthogonalprojection"] = new JsonObject { ["width"] = 3840, ["height"] = 2160 }, ["zoom"] = 1.0 },
+            ["objects"] = new JsonArray(new JsonObject { ["id"] = 9, ["camera"] = "default",
+                ["zoom"] = new JsonObject { ["user"] = "lens", ["value"] = 1.0 } }) };
+        Assert.False(SourceVideoOptimization.CameraSamplingFixed(scene, source));
+        scene["objects"]![0]!["zoom"] = 2.0;
+        Assert.False(SourceVideoOptimization.CameraSamplingFixed(scene, source));
+        scene["objects"]![0]!["zoom"] = 1.0;
+        Assert.True(SourceVideoOptimization.CameraSamplingFixed(scene, source));
+    });
+
+    [Fact]
     public void ValidatesEveryAuthoredManualIndexAndExplicitAutomaticMode()
     {
         var plan = new JsonObject { ["snapshot_properties"] = new JsonObject { ["clock"] = false, ["choice"] = "2" },
