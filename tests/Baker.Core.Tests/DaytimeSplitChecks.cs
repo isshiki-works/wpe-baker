@@ -344,9 +344,10 @@ internal static class DaytimeSplitChecks
         check(!DaytimeSplit.Detect(ById(Scene(Selector.Replace("a.forEach(l => l.visible = true);",
                 "a.forEach(l => l.visible = false);", StringComparison.Ordinal)))).IsRecognized,
             "show helper that hides the selected group cannot claim a visible daytime state");
-        check(!DaytimeSplit.Detect(ById(Scene(Selector.Replace("var daytime = 8, nighttime = 20;",
-                "var daytime = 8, nighttime = 20; dayLayers = nightLayers;", StringComparison.Ordinal)))).IsRecognized,
-            "a top-level group rebind outside the proved functions must not be frozen away");
+        foreach (string rebind in new[] { "dayLayers = nightLayers;", "var showLayers = false;" })
+            check(!DaytimeSplit.Detect(ById(Scene(Selector.Replace("var daytime = 8, nighttime = 20;",
+                    "var daytime = 8, nighttime = 20; " + rebind, StringComparison.Ordinal)))).IsRecognized,
+                "a top-level group or helper rebind must not be frozen away");
 
         DaytimeSplit.Detection playback = DaytimeSplit.Detect(ById(Scene(Selector.Replace(
             "var h = new Date().getHours();",

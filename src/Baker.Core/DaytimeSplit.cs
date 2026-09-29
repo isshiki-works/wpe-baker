@@ -177,6 +177,10 @@ internal static class DaytimeSplit
         Match strict = Regex.Match(rest, @"\A\s*(?<quote>['""])use strict\k<quote>\s*;", Options);
         if (strict.Success) Consume(strict.Index, strict.Index + strict.Length);
         if (remaining.Any(c => !char.IsWhiteSpace(c))) return false;
+        string[] functions = ["init", "update", "applyUserProperties", show, .. resetHelper is null ? [] : new[] { resetHelper }];
+        if (scalars.Keys.Any(name => groups.Contains(name) || functions.Contains(name) || name is "Date" or "thisScene" or "parseInt") ||
+            groups.Any(name => functions.Contains(name) || name is "Date" or "thisScene" or "parseInt") ||
+            groups.Contains(helper.Groups["arg"].Value)) return false;
         if (modeVariable is null) return apply is null || copiedProperties.All(copy =>
             scalars.ContainsKey(copy.Key) && copy.Key == copy.Value.Key);
         if (!scalars.TryGetValue(modeVariable, out string? initial) || initial is not ("true" or "false") ||
