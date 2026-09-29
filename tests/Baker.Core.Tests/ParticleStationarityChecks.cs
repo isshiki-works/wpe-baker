@@ -493,10 +493,17 @@ internal static class ParticleStationarityChecks
             definition["initializer"]!.AsArray().OfType<JsonObject>().Single(item => item["name"]!.GetValue<string>() == "lifetimerandom")["max"] = 40);
         JsonObject longLived = Analyze([longParticle]);
         JsonObject longCapped = Analyze([longParticle], loopLengthMaximum: 60);
+        JsonObject cappedFailure = longCapped["unresolved"]!.AsArray().OfType<JsonObject>()
+            .Single(item => item["owner_layer_id"]?.GetValue<int>() == 153)["particle_stationarity"]!.AsObject();
         check(CandidateFrames(longLived).SequenceEqual([3721UL]) &&
             longLived["loop_length_default"]!["status"]!.GetValue<string>() == "applied" &&
-            CandidateFrames(longCapped).Length == 0 && longCapped["loop_length_default"]!["status"]!.GetValue<string>() == "particle_lifetime_not_shorter_than_loop",
-            "长寿命平稳粒子延长到寿命之后的首帧（62.016 s → 3721 帧），显式 60 秒上限仍拒绝，不放松交叉淡化前提");
+            CandidateFrames(longCapped).Length == 0 && longCapped["loop_length_default"] is null &&
+            cappedFailure["stationary"]?.GetValue<bool>() == false && cappedFailure["capped"]?.GetValue<bool>() == true &&
+            Math.Abs(cappedFailure["lifetime_max_seconds"]!.GetValue<double>() - 40 * 2 / 1.29) < 1e-5 &&
+            cappedFailure["failed_conditions"]!.AsArray().OfType<JsonObject>().Any(failure =>
+                failure["condition"]?.GetValue<string>() == "C2" &&
+                failure["code"]?.GetValue<string>() == "lifetime_not_shorter_than_loop_ceiling"),
+            "随机寿命长达62.016s时，32槽封顶只停发直到空槽，不替换活粒子；60s内不可淡化且未证确定周期");
         check(CandidateFrames(mixed).Length == 0 && mixed["loop_length_default"] is null,
             "未解析项里还有不满足判据的粒子（跟鼠标的 560）时不取默认长度");
         JsonObject Track(int owner, double seconds, string confidence) => new() { ["source_owner_layer_id"] = owner, ["mechanism"] = "authored_track",
