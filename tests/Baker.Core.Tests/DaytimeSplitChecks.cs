@@ -114,6 +114,33 @@ internal static class DaytimeSplitChecks
             HoursAre(detected.StateNamed("morning")!, [[4, 9]]) && HoursAre(detected.StateNamed("day")!, [[9, 17]]) &&
             HoursAre(detected.StateNamed("dusk")!, [[17, 20]]) && HoursAre(detected.StateNamed("night")!, [[0, 4], [20, 24]]),
             "视频选择器按属性阈值枚举四态，未参与时段的第五项仍为受控层");
+        properties["timevarying"] = "0";
+        var stringMode = DaytimeSplit.Detect(ById(VideoScene()), properties: properties);
+        check(stringMode.IsRecognized && stringMode.States.Length == 4 &&
+            HoursAre(stringMode.StateNamed("morning")!, [[4, 9]]),
+            "JS 字符串 '0' 为真，视频选择器仍按自动四态识别");
+        foreach (JsonNode? falsy in new JsonNode?[] { null, JsonValue.Create(false), JsonValue.Create(0), JsonValue.Create("") })
+        {
+            properties["timevarying"] = falsy?.DeepClone();
+            var manual = DaytimeSplit.Detect(ById(VideoScene()), properties: properties);
+            check(manual.IsRecognized && manual.States is [{ Name: "morning" }] && HoursAre(manual.States[0], [[0, 24]]),
+                "null、false、数字 0、空字符串均按 JS 假值进入手动字符串 0 的清晨单态");
+        }
+        properties.Remove("timevarying");
+        var defaultMode = DaytimeSplit.Detect(ById(VideoScene(VideoSelector.Replace("timeVarying = false", "timeVarying = true", StringComparison.Ordinal))),
+            properties: properties);
+        check(defaultMode.IsRecognized && defaultMode.States.Length == 4,
+            "缺省模式属性使用源码 true 默认值");
+        properties["timevarying"] = null;
+        var explicitNull = DaytimeSplit.Detect(ById(VideoScene(VideoSelector.Replace("timeVarying = false", "timeVarying = true", StringComparison.Ordinal))),
+            properties: properties);
+        check(explicitNull.IsRecognized && explicitNull.States is [{ Name: "morning" }],
+            "显式 null 覆盖源码 true 默认值，进入手动清晨单态");
+        properties["timevarying"] = true;
+        properties["morningtime"] = null;
+        check(!DaytimeSplit.Detect(ById(VideoScene()), properties: properties).IsRecognized,
+            "显式 null 时段阈值不得静默回退脚本默认值");
+        properties["morningtime"] = "4";
         string upperInclusive = VideoSelector.Replace("hours >=", "hours >", StringComparison.Ordinal)
             .Replace("hours <", "hours <=", StringComparison.Ordinal);
         var inclusive = DaytimeSplit.Detect(ById(VideoScene(upperInclusive)), properties: properties);

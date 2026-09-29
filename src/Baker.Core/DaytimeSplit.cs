@@ -198,13 +198,21 @@ internal static class DaytimeSplit
             copiedProperties.TryGetValue(modeVariable, out var modeCopy) && modeCopy.Parsed) return false;
         if (!copiedProperties.TryGetValue(modeVariable, out var copy) || properties?.ContainsKey(copy.Key) != true)
             return initial == "true";
-        if (properties[copy.Key] is not JsonValue scalar) return false;
+        return JsTruthy(properties[copy.Key]) == true;
+    }
+
+    // The accepted selectors copy JSON user properties directly into JS variables.
+    // Unknown value shapes remain outside the proved template.
+    private static bool? JsTruthy(JsonNode? value)
+    {
+        if (value is null) return false;
+        if (value is not JsonValue scalar) return null;
         return scalar.GetValueKind() switch {
             JsonValueKind.True => true, JsonValueKind.False or JsonValueKind.Null => false,
             JsonValueKind.String => scalar.GetValue<string>().Length > 0,
             JsonValueKind.Number => double.TryParse(scalar.ToJsonString(), NumberStyles.Float, CultureInfo.InvariantCulture,
                 out double number) && number != 0 && !double.IsNaN(number),
-            _ => false
+            _ => null
         };
     }
     // 先去掉注释及字符串以外的空白，再匹配整个模板。只允许选中项 play、其余 pause，
@@ -544,7 +552,7 @@ internal static class DaytimeSplit
         if (assignments.Select(match => match.Groups[1].Value).Distinct().Count() != assignments.Length)
             return Reject("overlapping_selector_variables");
         var defaults = assignments
-            .ToDictionary(match => match.Groups[1].Value, match => (JsonNode)JsonValue.Create(int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture))!);
+            .ToDictionary(match => match.Groups[1].Value, match => (JsonNode?)JsonValue.Create(int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture)));
         if (defaults.ContainsKey(Part("manual")) || defaults.ContainsKey(Part("enabled")) || Part("manual") == Part("enabled"))
             return Reject("overlapping_selector_variables");
         defaults.Add(Part("manual"), JsonNode.Parse(Part("manualDefault"))!);
@@ -565,13 +573,12 @@ internal static class DaytimeSplit
             return Reject("unsupported_selector_properties");
         bool usedProperties = false;
         foreach (Match binding in bindings)
-            if (properties?[binding.Groups["key"].Value] is { } value)
+            if (properties?.TryGetPropertyValue(binding.Groups["key"].Value, out JsonNode? value) == true)
             {
                 defaults[binding.Groups["variable"].Value] = value;
                 usedProperties = true;
             }
-        if (defaults[Part("enabled")] is not JsonValue enabledValue || !enabledValue.TryGetValue<bool>(out bool enabled))
-            return Reject("non_boolean_time_mode");
+        if (JsTruthy(defaults[Part("enabled")]) is not bool enabled) return Reject("unsupported_time_mode_value");
 
         Match[] layerLiterals = StringLiteral.Matches(Part("array")).ToArray();
         string[] stateNames = layerLiterals.Select(match => (match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value).ToLowerInvariant()).ToArray();
@@ -584,18 +591,19 @@ internal static class DaytimeSplit
         // 已完整验证的模板归一化到现有组解析器；这里只生成数据，不执行源脚本。
         string normalized = "new Date().getHours(); layer.visible=true;\n" + string.Join("\n",
             layerLiterals.Select((literal, index) => "var " + Group(index) + "=[" + literal.Value + "];").ToArray());
-        int? Integer(JsonNode value)
+        int? Integer(JsonNode? value)
         {
+            if (value is null) return null;
             string text = value is JsonValue scalar && scalar.TryGetValue<string>(out string? textValue) ? textValue : value.ToJsonString();
             return int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed) ? parsed : null;
         }
         if (!enabled)
         {
-            JsonNode selection = defaults[Part("manual")];
+            JsonNode? selection = defaults[Part("manual")];
             if (Integer(selection) is not int selected || selected < 0 || selected >= layerLiterals.Length)
                 return Reject("unresolved_manual_selection");
             // JS 的字符串 "0" 为真，数字 0 为假；假值下模板不会调用选择函数。
-            if (selected == 0 && selection.GetValueKind() != JsonValueKind.String)
+            if (selected == 0 && selection?.GetValueKind() != JsonValueKind.String)
                 return Reject("inactive_manual_selection");
             normalized += $"if(h>=0&&h<24){{show({Group(selected)});}}";
         }
