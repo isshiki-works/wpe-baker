@@ -91,14 +91,14 @@ internal sealed class ProbeBake(NativeTools tools)
         return validation;
     }
 
-    /// <summary>参照工程：原作解包，套音频/叠加层/文字效果取舍与属性快照；固定视角时关掉视差，镜头抖动保留。</summary>
+    /// <summary>参照工程：原作解包，套音频/叠加层/文字效果取舍与属性快照；固定视角时只冻结鼠标视差，镜头抖动保留。</summary>
     internal static async Task CreateReferenceAsync(ProjectSource source, string destination,
         JsonObject snapshot, string viewMode, JsonObject plan, CancellationToken cancellationToken)
     {
         JsonObject scene = source.ReadJson(source.SceneResource);
         JsonObject metadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
         PlanTransforms.ApplyAudioEffectChoice(scene, plan);
-        if (viewMode == "fixed_view") scene["general"]!["cameraparallax"] = false;
+        if (viewMode == "fixed_view") scene["general"]!["cameraparallaxmouseinfluence"] = 0;
         PlanTransforms.ApplyOverlayPlacement(scene, plan);
         PlanTransforms.ApplyTextEffectChoice(scene, plan);
         ProjectWriter.ApplyPropertySnapshot(metadata, snapshot);
