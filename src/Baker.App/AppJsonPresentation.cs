@@ -47,14 +47,6 @@ internal static class AppJsonPresentation
         bool residualMasked = result["seam_policy"]?.GetValue<string>() == ResidualMasking.SeamPolicy;
         // 源周期路线的非零起点只能是起点偏移（第 0 帧孤立异常，顺延 1 帧，见 SourceStartOffset），并且记录要对得上。
         if (!residualMasked && Number(result["source_start_frame"]) != 0 && !SourceStartOffset.Allows(result)) return false;
-        if (plan["route"]?.GetValue<string>() == "source_video_optimization")
-            return !residualMasked && result["source_video_optimization"]?["status"]?.GetValue<string>() == "validated" &&
-                result["composition_validation"]?["status"]?.GetValue<string>() == "composition_pass" &&
-                plan["source_video_optimization"]?["resources"] is JsonArray { Count: > 0 } planned &&
-                result["source_video_optimization"]?["resources"] is JsonArray completed &&
-                completed.Count == planned.Count && completed.OfType<JsonObject>().All(resource =>
-                    resource["packet_timestamps_match"]?.GetValue<bool>() == true &&
-                    resource["audio_packets_match"]?.GetValue<bool>() == true);
         if (plan["route"]?.GetValue<string>() == "effect_prefix")
             return !residualMasked && EffectPrefixCandidateCanApply(result, plan);
         if (plan["loop"] is not JsonObject loop ||
@@ -488,12 +480,6 @@ internal static class AppJsonPresentation
         if (plan is null) return "";
         int groups = Admission.GroupCount(plan), statics = Admission.StaticGroupCount(plan), live = plan["live_layer_ids"]?.AsArray().Count ?? 0;
         int prefixCaches = plan["effect_prefix_caches"]?.AsArray().Count ?? 0;
-        if (plan["route"]?.GetValue<string>() == "source_video_optimization")
-        {
-            int videos = plan["source_video_optimization"]?["resources"]?.AsArray().Count ?? 0;
-            return english ? $"{videos} source videos to resize · {live} live objects"
-                : $"待优化源视频 {videos} 段 · 实时对象 {live} 个";
-        }
         return plan["route"]?.GetValue<string>() == "effect_prefix"
             ? english ? $"{prefixCaches} effect-prefix caches · {live} live objects"
                 : $"特效前缀缓存 {prefixCaches} 组 · 实时对象 {live} 个"
@@ -571,10 +557,7 @@ internal static class AppJsonPresentation
         if (Number(candidate?["total_retime_cost_percent"]) is double retime)
             rows.Add((english ? "Total retime" : "总调速", retime.ToString("0.###", CultureInfo.InvariantCulture) + "%"));
         int groups = Admission.GroupCount(plan), statics = Admission.StaticGroupCount(plan);
-        if (plan["route"]?.GetValue<string>() == "source_video_optimization")
-            rows.Add((english ? "Source videos to resize" : "待优化源视频",
-                (plan["source_video_optimization"]?["resources"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
-        else rows.Add((english ? "Video layers" : "视频层数", groups.ToString(CultureInfo.InvariantCulture)));
+        rows.Add((english ? "Video layers" : "视频层数", groups.ToString(CultureInfo.InvariantCulture)));
         if (plan["route"]?.GetValue<string>() == "whole_layer")
             rows.Add((english ? "Static layers" : "静态层数", statics.ToString(CultureInfo.InvariantCulture)));
         rows.Add((english ? "Live layers" : "实时图层数", (plan["live_layer_ids"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));

@@ -236,14 +236,6 @@ public class EffectPrefixEligibilityTests
         Assert.Equal(2, report["encoded_video_work"]!["video_streams"]!.GetValue<int>());
         Assert.Equal((3072d * 974 + 6144d * 1000) * 60,
             report["encoded_video_work"]!["coded_pixels_per_second"]!.GetValue<double>());
-        var sourceVideo = new JsonObject { ["status"] = "candidate_generated",
-            ["plan"] = new JsonObject { ["route"] = SourceVideoOptimization.Route },
-            ["source_video_optimization"] = new JsonObject { ["resources"] = new JsonArray(
-                new JsonObject { ["target_width"] = 1920, ["target_height"] = 1080,
-                    ["fps_num"] = 60, ["fps_den"] = 1 }) } };
-        await BakeReportWriter.SaveAsync(Path.Combine(dir, "source-video.json"), sourceVideo, null, CancellationToken.None);
-        Assert.Equal(1, sourceVideo["encoded_video_work"]!["video_streams"]!.GetValue<int>());
-        Assert.Equal(1920d * 1080 * 60, sourceVideo["encoded_video_work"]!["coded_pixels_per_second"]!.GetValue<double>());
     });
 
     // 别的脚本按名字取得到这张背景、观测里却没碰过它（取层在计时分支里，短观测没跑到）：完整捕获才会冒出这条依赖，

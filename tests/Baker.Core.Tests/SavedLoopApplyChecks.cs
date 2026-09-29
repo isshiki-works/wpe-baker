@@ -21,22 +21,6 @@ internal static class SavedLoopApplyChecks
         check(!AppJsonPresentation.CandidateCanApply(report), "a saved nonzero capture origin cannot be applied");
         report.Remove("source_start_frame");
         check(!AppJsonPresentation.CandidateCanApply(report), "a saved report without an explicit source origin requires regeneration");
-        var sourceVideo = JsonNode.Parse("""
-            {"schema_version":2,"artifact_kind":"hybrid_video_candidate","status":"candidate_generated",
-             "source_start_frame":0,"plan":{"route":"source_video_optimization",
-             "source_video_optimization":{"resources":[{"layer_id":12}]}},
-             "source_video_optimization":{"status":"validated","resources":[{"layer_id":12,
-             "packet_timestamps_match":true,"audio_packets_match":true}]},
-             "composition_validation":{"status":"composition_pass"}}
-            """)!.AsObject();
-        check(AppJsonPresentation.CandidateCanApply(sourceVideo), "validated source-video resources are applicable without a loop candidate");
-        JsonObject sourcePlan = sourceVideo["plan"]!.AsObject();
-        check(AppJsonPresentation.RouteSummary(sourcePlan, false).Contains("待优化源视频 1 段") &&
-            AppJsonPresentation.NumberRows(sourcePlan, false).Any(row => row.Label == "待优化源视频" && row.Value == "1") &&
-            !AppJsonPresentation.NumberRows(sourcePlan, false).Any(row => row.Label == "视频层数"),
-            "source-video plan reports the authored resource count instead of zero generated video groups");
-        sourceVideo["source_video_optimization"]!["resources"]![0]!["audio_packets_match"] = false;
-        check(!AppJsonPresentation.CandidateCanApply(sourceVideo), "source-video audio mismatch cannot be applied");
         var masked = JsonNode.Parse("""
             {"schema_version":2,"artifact_kind":"hybrid_video_candidate","status":"candidate_generated",
              "seam_policy":"analytic_period_with_residual_masking","source_start_frame":37,"crossfade_frames":24,
