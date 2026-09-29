@@ -302,6 +302,8 @@ internal static class DaytimeSplitChecks
             "source 3276911872 selector with saved string combo 0: " + saved.FallbackReason);
         check(!DaytimeSplit.Detect(clockObjects, properties: new JsonObject { ["display"] = "1", ["timevarying"] = false }).IsRecognized,
             "source 3276911872 selector with boolean false cannot claim automatic four states");
+        check(!DaytimeSplit.Detect(clockObjects, properties: new JsonObject { ["timevarying"] = null }).IsRecognized,
+            "an explicit null mode is falsy rather than a missing property default");
         // 3448877775 adds four same-name, user-adjustable hour thresholds to that selector shape.
         string thresholdScript = ClockAndManualSelector
             .Replace("var timeVarying = true;", "var timeVarying = true; var morningtime = 4, daytime = 8, dusktime = 17, nighttime = 20;", StringComparison.Ordinal)

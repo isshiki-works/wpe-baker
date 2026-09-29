@@ -196,8 +196,9 @@ internal static class DaytimeSplit
             manualVariable is null || !scalars.TryGetValue(manualVariable, out string? manualDefault) || manualDefault != "-1" ||
             copiedProperties.Any(copy => copy.Key != modeVariable && copy.Key != manualVariable && !ThresholdCopy(copy)) ||
             copiedProperties.TryGetValue(modeVariable, out var modeCopy) && modeCopy.Parsed) return false;
-        JsonNode? selectedMode = copiedProperties.TryGetValue(modeVariable, out var copy) ? properties?[copy.Key] : null;
-        if (selectedMode is not JsonValue scalar) return initial == "true";
+        if (!copiedProperties.TryGetValue(modeVariable, out var copy) || properties?.ContainsKey(copy.Key) != true)
+            return initial == "true";
+        if (properties[copy.Key] is not JsonValue scalar) return false;
         return scalar.GetValueKind() switch {
             JsonValueKind.True => true, JsonValueKind.False or JsonValueKind.Null => false,
             JsonValueKind.String => scalar.GetValue<string>().Length > 0,
