@@ -185,6 +185,68 @@ public class EffectPrefixEligibilityTests
     });
 
     [Fact]
+    public async Task VisibleContainerParentAndRecognizedClockSelectorKeepAnEffectPrefix() => await TestTemp.Run(async dir =>
+    {
+        var (scene, runtime) = Background(dir);
+        JsonObject owner = scene["objects"]![0]!.AsObject();
+        owner["name"] = "day1";
+        owner["parent"] = 2;
+        scene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 2, ["name"] = "group",
+            ["origin"] = new JsonObject { ["value"] = "0 0 0", ["script"] =
+                "export function update(value) { value.x = engine.canvasSize.x / 2; return value; }" },
+            ["visible"] = true });
+        scene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 3, ["name"] = "morning1" });
+        scene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 4, ["name"] = "night1" });
+        scene["objects"]!.AsArray().Add(new JsonObject { ["id"] = 5, ["name"] = "clock",
+            ["visible"] = new JsonObject { ["value"] = true, ["script"] = """
+                var morningLayers=["morning1"];
+                var dayLayers=["day1"];
+                var nightLayers=["night1"];
+                export function init(){ morningLayers=morningLayers.map(layer=>thisScene.getLayer(layer));
+                    dayLayers=dayLayers.map(layer=>thisScene.getLayer(layer)); nightLayers=nightLayers.map(layer=>thisScene.getLayer(layer)); }
+                function show(layers){ var all=[].concat(morningLayers,dayLayers,nightLayers);
+                    all.forEach(layer=>layer.visible=false); layers.forEach(layer=>layer.visible=true); }
+                export function update(){ var hours=new Date().getHours();
+                    if(hours>=4&&hours<8){show(morningLayers);} else if(hours>=8&&hours<17){show(dayLayers);} else{show(nightLayers);} }
+                export function applyUserProperties(changed){ if(changed.hasOwnProperty('display')) var selected=parseInt(changed.display); }
+                """ } });
+        foreach (int target in new[] { 1, 3, 4 })
+            runtime["runtime_dependencies"]!.AsArray().Add(new JsonObject { ["owner"] = 5, ["target"] = target,
+                ["operation"] = "lookup", ["property"] = "layer", ["initialization"] = true });
+        runtime["runtime_dependencies"]!.AsArray().Add(new JsonObject { ["owner"] = 5, ["target"] = 1,
+            ["operation"] = "write", ["property"] = "visible", ["initialization"] = false });
+        using var source = new ProjectSource(dir);
+        var request = new HybridAnalyzeRequest(1, dir, dir, dir, 64, 48, 30, 1);
+        var projection = new JsonObject { ["canvas_width"] = 64.0, ["canvas_height"] = 48.0 };
+        Assert.NotNull(ScriptTime.ConstantVector(scene["objects"]![1]!["origin"]!.AsObject(),
+            scene["objects"]![1]!.AsObject(), 64, 48, new JsonObject()));
+        var detected = DaytimeSplit.Detect(new SceneGraph(scene).Objects, runtime["runtime_dependencies"]!.AsArray(),
+            new JsonObject());
+        Assert.True(detected.IsRecognized, detected.FallbackReason);
+        JsonArray Propose() => EffectPrefixPlanner.Propose(scene, source, dir, runtime, new JsonObject(), request, projection);
+        Assert.True(Assert.Single(Propose().OfType<JsonObject>())["preserve_external_visibility"]!.GetValue<bool>());
+        JsonObject controllerVisibility = scene["objects"]![4]!["visible"]!.AsObject();
+        string safeScript = controllerVisibility["script"]!.GetValue<string>();
+        controllerVisibility["script"] = safeScript.Replace("show(dayLayers);", "show(dayLayers); thisScene.getLayer('day1').color='1 0 0';");
+        Assert.Empty(Propose());
+        controllerVisibility["script"] = safeScript;
+        runtime["runtime_dependencies"]!.AsArray().Add(new JsonObject { ["owner"] = 5, ["target"] = 2,
+            ["operation"] = "write", ["property"] = "origin", ["initialization"] = false });
+        Assert.Empty(Propose());
+        runtime["runtime_dependencies"]!.AsArray().RemoveAt(runtime["runtime_dependencies"]!.AsArray().Count - 1);
+        scene["objects"]![1]!["visible"] = false;
+        Assert.Empty(Propose());
+        scene["objects"]![1]!["visible"] = true;
+        string staticOrigin = scene["objects"]![1]!["origin"]!["script"]!.GetValue<string>();
+        scene["objects"]![1]!["origin"]!["script"] = "export function update(value) { value.x = engine.runtime; return value; }";
+        Assert.Empty(Propose());
+        scene["objects"]![1]!["origin"]!["script"] = staticOrigin;
+        scene["objects"]![1]!["parent"] = "bad";
+        Assert.Empty(Propose());
+        await Task.CompletedTask;
+    });
+
+    [Fact]
     public async Task OwnerVisibilityWithPixelSideEffectCannotBeCached() => await TestTemp.Run(async dir =>
     {
         var (scene, runtime) = Background(dir);

@@ -21,11 +21,20 @@ internal static class EffectPrefixPlanner
             throw new ArgumentException("Use positive rational FPS and a retime limit from zero to ten percent.");
         var proposals = new JsonArray();
         HashSet<int>? unobservedLookups = null;
+        var objects = new SceneGraph(originalScene).Objects;
+        DaytimeSplit.Detection? daytime = null;
+        bool RecognizedVisibilityController(int caller, int ownerId)
+        {
+            daytime ??= DaytimeSplit.Detect(objects, runtime["runtime_dependencies"] as JsonArray, snapshotProperties);
+            return daytime.IsRecognized && !daytime.ControlsVideoPlayback && daytime.ControllerId == caller &&
+                daytime.ControlledLayerIds.Contains(ownerId);
+        }
         foreach (JsonObject owner in originalScene["objects"]?.AsArray().OfType<JsonObject>() ?? [])
         {
-            if (!EligibleOwner(owner, source, runtime, out bool retainedPuppetAnimation)) continue;
+            if (!EligibleOwner(owner, objects, source, runtime, snapshotProperties, projection, out bool retainedPuppetAnimation)) continue;
             int ownerId = owner["id"]!.GetValue<int>();
-            if (mayBeVisible?.Invoke(ownerId) == false || !VisibilityControllersProven(originalScene, runtime, ownerId)) continue;
+            if (mayBeVisible?.Invoke(ownerId) == false ||
+                !VisibilityControllersProven(originalScene, runtime, ownerId, RecognizedVisibilityController)) continue;
             // 别的脚本按名字取得到、观测里却没碰过的层：取层在回调或计时分支里，短观测没跑到，完整捕获才冒出来
             // （烘焙时复核这一层的前缀就作废）。观测里碰过的由上面两道判过；没碰过的不提前缀，整层照常按实时处理。
             unobservedLookups ??= UnobservedLookupTargets(originalScene, runtime);
@@ -150,10 +159,12 @@ internal static class EffectPrefixPlanner
         }
     }
 
-    private static bool EligibleOwner(JsonObject owner, ProjectSource source, JsonObject runtime, out bool retainedPuppetAnimation)
+    private static bool EligibleOwner(JsonObject owner, IReadOnlyDictionary<int, JsonObject> objects, ProjectSource source,
+        JsonObject runtime, JsonObject properties, JsonObject projection, out bool retainedPuppetAnimation)
     {
         retainedPuppetAnimation = false;
-        if (owner["id"] is not JsonValue id || !id.TryGetValue<int>(out int ownerId) || owner["parent"] is not null ||
+        if (owner["id"] is not JsonValue id || !id.TryGetValue<int>(out int ownerId) ||
+            !SafeContainerParents(owner, objects, runtime, properties, projection) ||
             owner["image"] is not JsonValue image || !image.TryGetValue<string>(out string? imageResource) ||
             string.IsNullOrWhiteSpace(imageResource) || owner["effects"] is not JsonArray { Count: > 0 } ||
             HasUnsafeOwnerDynamic(owner) || owner.ContainsKey("particle") || owner.ContainsKey("puppet") ||
@@ -170,6 +181,33 @@ internal static class EffectPrefixPlanner
         return !HasDynamic(material) && material["passes"] is JsonArray { Count: 1 } passes && passes[0] is JsonObject pass &&
             EffectPrefixCache.CacheableBaseShader(pass["shader"]?.GetValue<string>()) && pass["textures"] is JsonArray { Count: 1 } textures &&
             textures[0]?.GetValue<string>() is string texture && !texture.StartsWith("_rt_", StringComparison.Ordinal);
+    }
+
+    private static bool SafeContainerParents(JsonObject owner, IReadOnlyDictionary<int, JsonObject> objects,
+        JsonObject runtime, JsonObject properties, JsonObject projection)
+    {
+        // The terminal is texture-local; these visible containers keep their transforms around the replacement.
+        var seen = new HashSet<int>();
+        for (int? id = SceneGraph.Int(owner["parent"]); id is int parentId;)
+        {
+            if (!seen.Add(parentId) || !objects.TryGetValue(parentId, out JsonObject? parent) ||
+                parent.Any(field => field.Key is not ("id" or "name" or "parent" or "origin" or "angles" or "scale" or
+                    "visible" or "parallaxDepth" or "locktransforms")) ||
+                (runtime["runtime_dependencies"] as JsonArray ?? []).OfType<JsonObject>().Any(dependency =>
+                    dependency["initialization"]?.GetValue<bool>() != true &&
+                    SceneGraph.Int(dependency["target"]) == parentId &&
+                    SceneGraph.Int(dependency["owner"]) != parentId &&
+                    dependency["operation"]?.GetValue<string>() == "write") ||
+                parent["visible"] is JsonObject visible && visible.ContainsKey("script") ||
+                SceneGraph.Resolve(parent["visible"], properties)?.ToJsonString() == "false") return false;
+            foreach (string key in new[] { "origin", "angles", "scale" })
+                if (parent[key] is JsonObject binding && binding.ContainsKey("script") &&
+                    ScriptTime.ConstantVector(binding, parent, SceneGraph.Numeric(projection["canvas_width"], double.NaN),
+                        SceneGraph.Numeric(projection["canvas_height"], double.NaN), properties) is null) return false;
+            id = SceneGraph.Int(parent["parent"]);
+            if (parent["parent"] is not null && id is null) return false;
+        }
+        return owner["parent"] is null || SceneGraph.Int(owner["parent"]) is not null;
     }
 
     private static bool SafeEffect(JsonObject effect, ProjectSource source, bool prePuppet)
@@ -258,7 +296,8 @@ internal static class EffectPrefixPlanner
             .Select(edge => edge["target"]!.GetValue<int>()).ToHashSet();
     }
 
-    private static bool VisibilityControllersProven(JsonObject scene, JsonObject runtime, int ownerId)
+    private static bool VisibilityControllersProven(JsonObject scene, JsonObject runtime, int ownerId,
+        Func<int, int, bool> recognizedVisibilityController)
     {
         // An observed lookup/visible write is not proof that a later callback cannot
         // change pixels. Only admit a small, inspectable script subset; unknown
@@ -274,7 +313,9 @@ internal static class EffectPrefixPlanner
             string[] scripts = SceneAnalyzer.Walk(controller).OfType<JsonObject>()
                 .Select(node => node["script"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
                 .OfType<string>().ToArray();
-            if (scripts.Length == 0 || scripts.Any(script => !VisibilityScriptProven(script))) return false;
+            bool clockSelector = scripts.Length == 1 && controller["visible"]?["script"] is not null &&
+                recognizedVisibilityController(caller, ownerId);
+            if (scripts.Length == 0 || scripts.Any(script => !VisibilityScriptProven(script)) && !clockSelector) return false;
         }
         return true;
     }
