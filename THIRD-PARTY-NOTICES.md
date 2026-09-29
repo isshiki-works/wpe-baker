@@ -99,7 +99,8 @@ vvk 的完整源码与我们的补丁在源码包 `.deps\vvk\`、`scripts\depend
 | 组件 | 版本 | 许可 | 来源 | 修改 | 许可文本 |
 |---|---|---|---|---|---|
 | .NET 10.0.400 运行时（self-contained 发布） | SDK 10.0.400 / 运行时 10.0.11 | MIT | https://dotnet.microsoft.com | 否 | `licenses\dotnet.LICENSE.txt` + `dotnet.ThirdPartyNotices.txt` |
-| WpeBaker 本体（`src\`、`tests\`、`scripts\`） | 见发布说明的提交号 | 见仓库根 `LICENSE` | 本项目 | — | 包内 `LICENSE` |
+| PresentMon 2.5.1（播放帧测量） | 2.5.1 | MIT，第三方声明见随附文件 | https://github.com/GameTechDev/PresentMon/tree/v2.5.1 | 否 | `.tools\presentmon\LICENSE.txt` + `THIRD_PARTY.txt` |
+| WpeBaker 本体（`src\`、`bench\`、`tests\`、`scripts\`） | 见发布说明的提交号 | 见仓库根 `LICENSE` | 本项目 | — | 包内 `LICENSE` |
 
 ## 7. 兼容性提醒（不下法律结论）
 

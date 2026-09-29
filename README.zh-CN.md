@@ -27,6 +27,8 @@ wpe-baker.exe analyze <scene.pkg> --out plan.json
 wpe-baker.exe bake plan.json --out <输出目录>
 ```
 
+生成后可用 `wpe-baker.exe compare <原作目录> --baked <成品目录> --wallpaper-engine <wallpaper64.exe> --out <新报告目录>` 比较实际播放成本。命令会临时按 A/B/B/A 切换壁纸，结束后恢复原分配；目前要求只连接一块显示器且未使用播放列表。报告分别展示核显与 CPU 封装功耗，方向相反时标为取舍；证据不完整时不给推荐，画面正确性另行检查。
+
 ## 适用范围
 
 - 只支持场景（Scene）类壁纸。视频壁纸和网页壁纸本来就是视频或网页，不需要烘。

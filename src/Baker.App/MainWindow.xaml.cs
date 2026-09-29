@@ -928,8 +928,8 @@ public partial class MainWindow : Window
                     job.Describe(() => (StaticOnlyBake.WithoutLiveLayers(result)
                         ? MessageCatalog.Get("bake.static_only_no_live", english ? MessageCatalog.English : MessageCatalog.Chinese)
                         : resultStatus == StaticOnlyBake.Status
-                        ? L("只生成了静态图，动画仍实时渲染，不省电。",
-                            "Only a still image was generated; the animation still renders live, so no power is saved.")
+                        ? L("已生成静态缓存，动画层继续实时运行。",
+                            "Static caches generated; animated layers continue rendering live.")
                         : resultStatus == "candidate_rejected_no_loop"
                         ? L("未找到循环周期，已停止生成（详见报告）。",
                             "No loop period found; generation stopped (see report).")

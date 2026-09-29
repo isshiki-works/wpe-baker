@@ -101,6 +101,16 @@ def main() -> None:
              "--self-contained", "true", "--nologo", "-p:PublishSingleFile=false", "-p:PublishTrimmed=false",
              "-p:NuGetAudit=false", "-p:UseSharedCompilation=false", "-p:RestoreSources=https://api.nuget.org/v3/index.json",
              "-o", str(bundle)], env, output / f"{name}.publish.log")
+    presentmon = ROOT / ".tools/presentmon/PresentMon-2.5.1-x64.exe"
+    presentmon_source = ROOT / "bench/presentmon/source.json"
+    expected = json.loads(presentmon_source.read_text(encoding="utf-8"))["sha256"]
+    if digest(presentmon) != expected:
+        raise RuntimeError("PresentMon does not match the pinned source.json SHA256")
+    bundled_presentmon = bundle / ".tools/presentmon"
+    bundled_presentmon.mkdir(parents=True)
+    shutil.copy2(presentmon, bundled_presentmon)
+    for name in ("LICENSE.txt", "THIRD_PARTY.txt", "source.json"):
+        shutil.copy2(ROOT / "bench/presentmon" / name, bundled_presentmon)
     renderer = bundle / "renderer"
     renderer.mkdir()
     shutil.copy2(native_renderer, renderer)

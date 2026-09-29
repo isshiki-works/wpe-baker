@@ -29,7 +29,7 @@ REQUIRED_TREES = tuple(f".deps/{name}" for name in DEPENDENCIES) + (
 # Workshop wallpapers and baked masters must never enter a public archive.
 PRIVATE_PATTERN = re.compile(r"(^|/)(\d{9,10})(/|$)|\.pkg$|\.tex\.bak$")
 # Everything the archive picks up from the working tree, for the clean-tree check below.
-PACKAGED_PREFIXES = ("src/", "tests/", "scripts/", "engine/", "licenses-extra/")
+PACKAGED_PREFIXES = ("src/", "bench/", "tests/", "scripts/", "engine/", "licenses-extra/")
 PACKAGED_ROOT_FILES = frozenset({"README.md", "README.zh-CN.md", "LICENSE", ".gitignore",
                                  ".gitattributes", "THIRD-PARTY-NOTICES.md", "SOURCE.md"})
 
@@ -83,7 +83,7 @@ def main() -> None:
                 continue
             if path.is_file() and not any(part in skipped_names for part in relative.parts):
                 candidates[prefix + "/" + relative.as_posix()] = path
-    for name in ("src", "tests", "scripts", "engine", "licenses-extra"):
+    for name in ("src", "bench", "tests", "scripts", "engine", "licenses-extra"):
         tree(ROOT / name, name)
     for name in ("README.md", "README.zh-CN.md", "LICENSE", ".gitignore",
                  "THIRD-PARTY-NOTICES.md", "SOURCE.md"):
