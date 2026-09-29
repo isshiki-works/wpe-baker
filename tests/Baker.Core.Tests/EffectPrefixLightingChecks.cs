@@ -264,6 +264,20 @@ internal static class EffectPrefixLightingChecks
         check(mouseResponse > 1 && movedRgb < 2,
             $"enabled camera parallax responds to a non-centred cursor and base decoding follows the same transform " +
             $"(reference mouse response {mouseResponse:F3}; candidate RGB MAE {movedRgb:F3})");
+
+        // Removing the later suffix does not change the captured prefix terminal or its packed pixels.
+        scene["objects"]![0]!["effects"]!.AsArray().RemoveAt(1);
+        await File.WriteAllTextAsync(scenePath, scene.ToJsonString());
+        string allPrefixCandidate = await AssembleCandidateAsync(Path.Combine(root, "all-prefix"), source, cache, packedAlpha: true);
+        JsonObject allPrefixScene = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(allPrefixCandidate, "scene.json")))!.AsObject();
+        check(allPrefixScene["objects"]![0]!["effects"]!.AsArray().Count == 0,
+            "caching the complete authored prefix leaves no effects on the flat owner");
+        byte[] allPrefixReference = await Render(source, "sharp-all-prefix-reference");
+        byte[] allPrefixActual = await Render(allPrefixCandidate, "sharp-all-prefix-candidate");
+        double allPrefixRgb = Mae(allPrefixReference, allPrefixActual, 3), allPrefixAlpha = AlphaMae(allPrefixReference, allPrefixActual);
+        check(allPrefixRgb < 2 && allPrefixAlpha <= 1,
+            $"base decoding composites the complete prefix without an effect render target " +
+            $"(RGB MAE {allPrefixRgb:F3}; alpha MAE {allPrefixAlpha:F3})");
     }
 
     internal static async Task RunHdrAsync(Action<bool, string> check, string root, string assets, bool signed = false,
