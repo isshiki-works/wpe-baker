@@ -29,6 +29,10 @@ internal static class SelfTest
         var intact = new JsonObject { ["status"] = "sampled", ["verified_target_fps"] = true };
         OfficialPerformanceSampler.ApplyTraceLoss(intact, "Started recording.\nwarning: 0 ETW events were lost.\nStopped recording.");
         Check(intact["verified_target_fps"]!.GetValue<bool>(), "zero lost events does not invalidate cadence");
+        const string quotedPath = "D:/wallpapers/中文 & %PATH%/scene.pkg";
+        Check(WpeConsoleQuery.CleanOutput("\u001b[?25l\u001b[2J\u001b[H" + quotedPath + "\u001b]0;cmd.exe\u0007\u001b[?25h") == quotedPath,
+            "ConPTY cleanup removes VT sequences without changing legal path characters");
+        Check(WpeConsoleQuery.ExistingPath("D:/one.pkg\r\nD:/two.pkg") == "", "multiple console paths cannot establish an official selection");
 
         JsonObject noCsv = OfficialPerformanceSampler.PresentSummary(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".csv"), 60, null);
         Check(noCsv["status"]?.GetValue<string>() == "not_measured" && noCsv["reason_key"]?.GetValue<string>() == "reason.presentmon_no_csv" &&

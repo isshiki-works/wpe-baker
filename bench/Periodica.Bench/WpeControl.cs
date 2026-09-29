@@ -98,8 +98,22 @@ internal sealed class WpeControl(string executable)
         return stdout.Result.Trim().Trim('"');
     }
 
-    internal Task<string> GetWallpaperAsync(int monitor, CancellationToken token) =>
-        RunAsync(["-control", "getWallpaper", "-monitor", monitor.ToString(CultureInfo.InvariantCulture)], token);
+    internal async Task<string> GetWallpaperAsync(int monitor, CancellationToken token)
+    {
+        var identity = Identity();
+        string selected = "";
+        try
+        {
+            selected = WpeConsoleQuery.ExistingPath(await RunAsync(["-control", "getWallpaper", "-monitor", monitor.ToString(CultureInfo.InvariantCulture)], token));
+            if (selected.Length == 0) selected = await WpeConsoleQuery.ReadAsync(Executable, monitor, token);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            Console.Error.WriteLine($"Official Wallpaper Engine query unavailable ({error.GetType().Name}): {error.Message}");
+        }
+        if (Identity() != identity) throw new InvalidDataException("Wallpaper Engine PID or start time changed during the official query.");
+        return selected;
+    }
 
     internal Task OpenAsync(string project, int monitor, CancellationToken token) =>
         RunAsync(["-control", "openWallpaper", "-file", ProjectFile(project), "-monitor",
