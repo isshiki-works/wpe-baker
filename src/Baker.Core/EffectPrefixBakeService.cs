@@ -494,13 +494,39 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 await File.WriteAllTextAsync(Path.Combine(candidateProject, "project.json"), candidateMetadata.ToJsonString(), cancellationToken);
                 await File.WriteAllTextAsync(Path.Combine(referenceProject, "project.json"), referenceMetadata.ToJsonString(), cancellationToken);
             }
-            PairedComparison comparison;
+            ComparisonState[] states = ComparisonStates(plan, [.. encodedLoops.Keys]);
+            var stateValidations = new JsonArray();
+            JsonObject? composition = null;
+            ulong comparedFrames = 0;
             using (timing.Measure(StageTiming.CompositionValidation))
-            comparison = await new CandidateValidation(tools).CompareAsync(new(1, referenceProject, candidateProject, settings.Assets,
-                Path.Combine(output, "composition-validation"), settings.Width, settings.Height, settings.FpsNumerator, settings.FpsDenominator,
-                CompositionGate.RequiredFrames, 0, 17, request.DeviceUuid ?? settings.DeviceUuid,
-                snapshot), progress, cancellationToken);
-            JsonObject composition = CompositionGate.Evaluate(comparison);
+                for (int index = 0; index < states.Length; ++index)
+                {
+                    ComparisonState state = states[index];
+                    PairedComparison comparison = await new CandidateValidation(tools).CompareAsync(new(1, referenceProject, candidateProject,
+                        settings.Assets, Path.Combine(output, states.Length == 1 ? "composition-validation" : $"composition-validation-{index}"),
+                        settings.Width, settings.Height, settings.FpsNumerator, settings.FpsDenominator,
+                        state.Frames, 0, 17, request.DeviceUuid ?? settings.DeviceUuid, snapshot, EpochMs: state.EpochMs),
+                        progress, cancellationToken);
+                    JsonObject evaluated = CompositionGate.Evaluate(comparison);
+                    if (evaluated["status"]?.GetValue<string>() != CandidateScriptErrorGate.RejectedCompositionStatus &&
+                        MissingVisibleOwner(comparison.Report, pristine, state.Owners) is string hidden)
+                    {
+                        evaluated["failures"]!.AsArray().Add(hidden);
+                        evaluated["status"] = "composition_rejected";
+                        new Message("reason.composition_rejected").Write(evaluated, "reason");
+                    }
+                    evaluated["state_name"] = state.Name;
+                    if (state.EpochMs is long epoch) evaluated["epoch_ms"] = epoch;
+                    evaluated["owner_layer_ids"] = new JsonArray([.. state.Owners.Select(id => (JsonNode)JsonValue.Create(id))]);
+                    evaluated["scope"] = $"Offline composition comparison for {state.Frames} frames at a fixed state clock; not official playback.";
+                    stateValidations.Add(evaluated.DeepClone());
+                    comparedFrames += state.Frames;
+                    composition = evaluated;
+                    if (evaluated["status"]?.GetValue<string>() != "composition_pass") break;
+                }
+            if (composition is null) throw new InvalidDataException("No effect-prefix composition state was compared.");
+            composition["state_validations"] = stateValidations;
+            composition["total_frames_compared"] = comparedFrames;
             composition["reference_basis"] = "same_installed_prefix_retime";
             result["composition_validation"] = composition;
             if (composition["status"]?.GetValue<string>() == CandidateScriptErrorGate.RejectedCompositionStatus)
@@ -522,6 +548,67 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             result["status"] = cancellationToken.IsCancellationRequested ? "cancelled" : "failed";
             result["error_type"] = error.GetType().Name; result["error"] = error.Message; await Save(); throw;
         }
+    }
+
+    internal sealed record ComparisonState(string? Name, long? EpochMs, ulong Frames, int[] Owners);
+
+    /// <summary>Exercise every cached daytime owner under a clock hour that actually shows it.</summary>
+    internal static ComparisonState[] ComparisonStates(JsonObject plan, int[] owners)
+    {
+        JsonObject? split = plan["daytime_split"] as JsonObject;
+        if (split?["status"]?.GetValue<string>() != DaytimeSplit.Recognized)
+            return [new(null, null, CompositionGate.RequiredFrames, owners)];
+        var controlled = (split["controlled_layer_ids"] as JsonArray ?? throw new InvalidDataException("Daytime controls are missing."))
+            .Select(SceneGraph.Int).OfType<int>().ToHashSet();
+        int[] stateOwners = [.. owners.Where(controlled.Contains)];
+        if (stateOwners.Length == 0) return [new(null, null, CompositionGate.RequiredFrames, owners)];
+        string? fixedState = plan["settings"]?["daytime_state"]?.GetValue<string>();
+        var selected = new List<(string Name, long Epoch, int[] Owners)>();
+        foreach (JsonObject state in (split["states"] as JsonArray ?? throw new InvalidDataException("Daytime states are missing."))
+            .OfType<JsonObject>())
+        {
+            string name = state["name"]?.GetValue<string>() ?? throw new InvalidDataException("Daytime state has no name.");
+            if (fixedState is not null && name != fixedState) continue;
+            var visible = (state["visible_layer_ids"] as JsonArray ?? throw new InvalidDataException("Daytime visibility is missing."))
+                .Select(SceneGraph.Int).OfType<int>().ToHashSet();
+            if (!visible.Overlaps(stateOwners)) continue;
+            JsonArray hours = (state["hours"] as JsonArray)?[0] as JsonArray
+                ?? throw new InvalidDataException("Daytime state has no hour interval.");
+            int start = SceneGraph.Int(hours[0]) ?? -1, end = SceneGraph.Int(hours[1]) ?? -1;
+            if (start < 0 || end > 24 || start >= end) throw new InvalidDataException("Invalid daytime hour interval.");
+            int hour = (start + end) / 2;
+            long epoch = new DateTimeOffset(2000, 1, 1, hour, 30, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+            selected.Add((name, epoch, [.. owners.Where(id => !controlled.Contains(id) || visible.Contains(id))]));
+        }
+        if (selected.Count == 0 || stateOwners.Any(owner => !selected.Any(state => state.Owners.Contains(owner))) ||
+            selected.Count > (int)CompositionGate.RequiredFrames)
+            throw new InvalidDataException("No bounded daytime comparison covers every cached owner.");
+        ulong each = CompositionGate.RequiredFrames / (ulong)selected.Count;
+        int extra = (int)(CompositionGate.RequiredFrames % (ulong)selected.Count);
+        return [.. selected.Select((state, index) => new ComparisonState(state.Name, state.Epoch,
+            each + (index < extra ? 1UL : 0UL), state.Owners))];
+    }
+
+    internal static string? MissingVisibleOwner(JsonObject comparison, JsonObject scene, IEnumerable<int> owners)
+    {
+        var objects = scene["objects"]!.AsArray().OfType<JsonObject>().ToDictionary(SceneGraph.Id);
+        foreach (string side in new[] { "source", "candidate" })
+        {
+            JsonArray layers = comparison[side + "_native_result"]?["runtime_layers"] as JsonArray
+                ?? throw new InvalidDataException("The comparison omitted runtime layer visibility.");
+            foreach (int owner in owners)
+            {
+                var visited = new HashSet<int>();
+                for (int? id = owner; id is int current; id = SceneGraph.Int(objects[current]["parent"]))
+                {
+                    if (!visited.Add(current) || !objects.ContainsKey(current) ||
+                        !layers.OfType<JsonObject>().Any(layer => SceneGraph.Int(layer["owner"]) == current &&
+                            layer["visible"]?.GetValue<bool>() == true))
+                        return $"The {side} comparison did not display cached owner {owner} or its ancestor {current}.";
+                }
+            }
+        }
+        return null;
     }
 
     /// <summary>

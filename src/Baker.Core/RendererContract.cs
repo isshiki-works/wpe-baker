@@ -21,6 +21,7 @@ internal sealed record RenderJob
     public ulong Frames { get; init; }
     public ulong WarmupFrames { get; init; }
     public ulong Seed { get; init; }
+    public long? EpochMs { get; init; }
     public bool RawStdout { get; init; }
     public bool? WriteAudio { get; init; }
     public RenderCaptureSelection? CaptureTarget { get; init; }
@@ -52,7 +53,7 @@ internal sealed record RenderJob
     {
         Source = source, Assets = Path.GetFullPath(request.Assets), OutputDir = outputDir,
         Width = request.Width, Height = request.Height, FpsNum = request.FpsNumerator, FpsDen = request.FpsDenominator,
-        Frames = request.Frames, WarmupFrames = request.WarmupFrames, Seed = request.Seed, RawStdout = rawStdout,
+        Frames = request.Frames, WarmupFrames = request.WarmupFrames, Seed = request.Seed, EpochMs = request.EpochMs, RawStdout = rawStdout,
         CaptureTarget = request.CaptureTarget, OrthographicCaptureViewport = request.OrthographicCaptureViewport,
         LayerSelection = request.LayerSelection, Input = request.Input, InputTimeline = request.InputTimeline,
         UserProperties = request.UserProperties, OfflineVideoRateOverrides = request.OfflineVideoRateOverrides, DeviceUuid = request.DeviceUuid,
