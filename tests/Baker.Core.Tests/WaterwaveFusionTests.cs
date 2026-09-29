@@ -28,15 +28,27 @@ public class WaterwaveFusionTests
         {
             string source = Path.Combine(root, "source"), output = Path.Combine(root, "output");
             Directory.CreateDirectory(source);
-            await File.WriteAllTextAsync(Path.Combine(source, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
+            await File.WriteAllTextAsync(Path.Combine(source, "project.json"),
+                "{\"type\":\"scene\",\"file\":\"scene.json\",\"title\":\"Author title\",\"workshopid\":\"123\",\"publishedfileid\":\"456\",\"workshopurl\":\"author-link\"}");
             string scene = "{\"objects\":[{\"id\":7,\"effects\":[{\"file\":\"effects/unknown.json\",\"visible\":true},{\"file\":\"effects/unknown.json\",\"visible\":true}]}]}";
             await File.WriteAllTextAsync(Path.Combine(source, "scene.json"), scene);
             var result = await WaterwaveFusion.OptimizeAsync(source, output);
             Assert.Equal("unchanged", result["status"]!.GetValue<string>());
             Assert.Equal(0, result["fused_pairs"]!.GetValue<int>());
             Assert.Equal(scene, await File.ReadAllTextAsync(Path.Combine(output, "scene.json")));
-            Assert.Equal(await File.ReadAllTextAsync(Path.Combine(source, "project.json")),
-                await File.ReadAllTextAsync(Path.Combine(output, "project.json")));
+            JsonObject metadata = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(output, "project.json")))!.AsObject();
+            Assert.False(metadata.ContainsKey("workshopid"));
+            Assert.False(metadata.ContainsKey("publishedfileid"));
+            Assert.Equal("Author title", metadata["title"]!.GetValue<string>());
+            Assert.Equal("author-link", metadata["workshopurl"]!.GetValue<string>());
+            string selectedOutput = Path.Combine(root, "selected-output");
+            JsonObject selected = await WaterwaveFusion.OptimizeSelectedAsync(source, selectedOutput, new JsonObject());
+            Assert.Equal("unchanged", selected["status"]!.GetValue<string>());
+            Assert.False(Directory.Exists(selectedOutput));
+            string staleOutput = Path.Combine(root, "stale-output");
+            await Assert.ThrowsAsync<InvalidDataException>(() => WaterwaveFusion.OptimizeSelectedAsync(
+                source, staleOutput, new JsonObject(), "old-source-hash", TestContext.Current.CancellationToken));
+            Assert.False(Directory.Exists(staleOutput));
         });
     }
 

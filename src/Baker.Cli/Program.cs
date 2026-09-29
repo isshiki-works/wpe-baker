@@ -218,14 +218,16 @@ try
         // bake 选项 → 请求字段，取值按选项表校验；给了哪个才写哪个、才重写请求文本，没给的按请求里的默认。
         // encoder：播放版编码路径，支持的 Vulkan 路径直接生成成品；encode_slots：成品编码的跨进程槽位配额（0 不限）；
         // group_parallel：单案内同时在飞的组主渲染数（1 与逐组串行一致）；keep_intermediates：开发用，保留中间产物。
-        foreach (var (option, field) in new[] { ("--encoder", "playback_encoder"), ("--effect-resolution", "match_effect_resolution"),
+        foreach (var (option, field) in new[] { ("--encoder", "playback_encoder"), ("--probe-frames", "probe_frames"),
+            ("--effect-resolution", "match_effect_resolution"),
             ("--effect-render-scale", "effect_render_scale"), ("--encode-slots", "encode_slots"), ("--group-parallel", "group_parallel"),
             ("--keep-intermediates", "keep_intermediates") })
         {
             if (!options.ContainsKey(option)) continue;
             input[field] = OptionTable.Value("bake", options, option) switch
             {
-                bool flag => JsonValue.Create(flag), int count => JsonValue.Create(count), double scale => JsonValue.Create(scale),
+                bool flag => JsonValue.Create(flag), int count => JsonValue.Create(count), ulong frames => JsonValue.Create(frames),
+                double scale => JsonValue.Create(scale),
                 var value => JsonValue.Create((string)value!)
             };
             text = input.ToJsonString();

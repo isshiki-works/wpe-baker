@@ -54,7 +54,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
     internal async Task<JsonObject> BakeAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
         StageTiming timing, CancellationToken cancellationToken = default)
     {
-        if (request.SchemaVersion != 2 || request.ProbeFrames != 0) throw new InvalidDataException("Effect-prefix baking requires a production version 2 request.");
+        if (request.SchemaVersion != 2) throw new InvalidDataException("Effect-prefix baking requires a version 2 request.");
+        bool preview = request.ProbeFrames > 0;
         JsonObject plan = request.Plan.DeepClone().AsObject();
         if (plan["effect_prefix_caches"] is not JsonArray { Count: > 0 } caches)
             throw new InvalidDataException("The plan has no effect_prefix_caches.");
@@ -95,6 +96,13 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         JsonObject referenceMetadata = candidateMetadata.DeepClone().AsObject();
         HashSet<string> cachedPropertyKeys = EffectPrefixCache.FixedPropertyKeys(caches.OfType<JsonObject>());
         JsonObject result = BakeReportWriter.EffectPrefixRunning(hash, plan.DeepClone().AsObject());
+        ulong comparisonLimit = ulong.MaxValue;
+        if (preview)
+        {
+            result["artifact_kind"] = "hybrid_video_probe";
+            result["preview_frames"] = request.ProbeFrames;
+            result["loop_validation"] = "not_performed";
+        }
         string reportPath = Path.Combine(output, "bake.json");
         async Task Save()
         {
@@ -123,7 +131,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     owner, prefix, settings, projection, null);
                 if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 })
                     throw new InvalidDataException($"Effect-prefix owner {owner} has no complete source-derived period.");
-                ulong frames = loop["candidates"]!.AsArray()[0]!["frames"]!.GetValue<ulong>();
+                ulong periodFrames = loop["candidates"]!.AsArray()[0]!["frames"]!.GetValue<ulong>();
+                ulong frames = preview ? Math.Min(periodFrames, request.ProbeFrames) : periodFrames;
+                if (preview) comparisonLimit = Math.Min(comparisonLimit, frames);
                 string cacheOutput = Path.Combine(output, "prefix-" + owner);
                 string captureProject = Path.Combine(cacheOutput, "capture-source");
                 JsonArray swayPatches;
@@ -331,18 +341,14 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                             rendered["alpha_bounds"]?["first_frame_rgba_path"]?.GetValue<string>() }.OfType<string>())
                             TemporaryCaptureFiles.Delete(result, Path.GetDirectoryName(path)!, Path.GetFileName(path));
                 }
-                JsonObject fullRuntime = rendered["native_result"]?.AsObject()
-                    ?? throw new InvalidDataException("The complete prefix capture omitted its runtime evidence.");
-                // 完整捕获推翻了这一层的前缀资格（观测窗口之后才出现的依赖或输入）：只丢这一层的缓存，层按作者原样留实时，
-                // 别的层照常烘；一个缓存都没留下时按晚到依赖拒绝，不整张失败。
-                if (!SurvivesCompleteCapture(pristine, source, settings, fullRuntime, snapshot, projection,
-                    owner, prefix, swayPatches))
+                JsonObject observedRuntime = rendered["native_result"]?.AsObject()
+                    ?? throw new InvalidDataException("The prefix capture omitted its runtime evidence.");
+                // 当前捕获窗口一旦推翻前缀资格，就丢这一层缓存；短预览也不能忽略已经观察到的依赖。
+                JsonObject? rejected = ObservedCaptureRejection(pristine, source, settings, observedRuntime,
+                    runtime, snapshot, projection, owner, prefix, frames, loop, swayPatches);
+                if (rejected is not null)
                 {
                     DeleteRetainedFrames();
-                    JsonObject rejected = LateDependencyRejection(owner, frames, loop, fullRuntime, runtime);
-                    if (rejected["late_dependencies"] is JsonArray { Count: 0 })
-                        PrefixCaptureProbes.ExplainRetreat(rejected, pristine, source, settings, fullRuntime,
-                            runtime, snapshot, projection, owner, prefix, frames, loop, swayPatches);
                     result["groups"]!.AsArray().Add(rejected);
                     continue;
                 }
@@ -361,9 +367,22 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         .Write(result, "reason");
                     await Save(); return result;
                 }
-                JsonObject seam;
-                JsonObject? gpuQuality = null;
-                using (timing.Measure(StageTiming.SeamCheck))
+                JsonObject seam = new() { ["status"] = "not_performed" };
+                JsonObject? gpuQuality = preview ? rendered["playback_quality_gate"]?.DeepClone().AsObject() : null;
+                if (preview && gpuDirect && !packedAlpha)
+                {
+                    JsonObject bounds = rendered["alpha_bounds"]!.AsObject();
+                    if (bounds["observed_frames"]?.GetValue<ulong>() != frames)
+                        throw new InvalidDataException("GPU opacity evidence does not cover every preview frame.");
+                    byte[] lastFrame = await LoopClosureCheck.ReadRetainedFrameAsync(rendered, frames, cancellationToken);
+                    int minimum = bounds["minimum_alpha"]!.GetValue<int>();
+                    for (int pixel = 3; pixel < lastFrame.Length; pixel += 4) minimum = Math.Min(minimum, lastFrame[pixel]);
+                    rendered["opaque_pixels"] = new JsonObject { ["requested"] = true, ["verified"] = minimum == 255,
+                        ["checked_frames"] = frames + 1, ["checked_pixels"] = checked((ulong)sourceWidth * sourceHeight * (frames + 1)),
+                        ["minimum_alpha"] = minimum,
+                        ["basis"] = "Native-size GPU alpha reduction on preview frames, plus the retained next frame." };
+                }
+                if (!preview) using (timing.Measure(StageTiming.SeamCheck))
                 {
                     try
                     {
@@ -402,8 +421,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     }
                     finally { DeleteRetainedFrames(); }
                 }
+                if (preview) DeleteRetainedFrames();
                 JsonObject? seamPreview = null;
-                if (SeamPreview.ShouldExport(false, false, seam, request.KeepIntermediates))
+                if (!preview && SeamPreview.ShouldExport(false, false, seam, request.KeepIntermediates))
                 {
                     progress?.Report(new("exporting_seam_preview", 0, new Message("progress.exporting_seam_preview",
                         [SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator)])));
@@ -418,7 +438,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 bool opaquePass = packedAlpha || opaque?["requested"]?.GetValue<bool>() == true && opaque["verified"]?.GetValue<bool>() == true &&
                     opaque["checked_frames"]?.GetValue<ulong>() == frames + 1 && opaque["checked_pixels"]?.GetValue<ulong>() ==
                     checked((ulong)sourceWidth * sourceHeight * (frames + 1)) && opaque["minimum_alpha"]?.GetValue<int>() == 255;
-                bool seamPassed = seam["status"]?.GetValue<string>() == "observed_seam_pass";
+                bool seamPassed = preview || seam["status"]?.GetValue<string>() == "observed_seam_pass";
                 JsonObject hardware = earlyHardware ?? new() { ["status"] = "not_performed" };
                 if (seamPassed && gpuQuality?["passed"]?.GetValue<bool>() != false && opaquePass)
                     if (earlyHardware is null)
@@ -456,7 +476,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         storedWidth, storedHeight, false, cancellationToken, sourceWidth, sourceHeight, packedAlpha, paddedContent,
                         hdrScale, hdrLowerBound, hdrSignedSqrt);
                 var encodedGroup = new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "encoded",
-                    ["owner_layer_id"] = owner, ["frames"] = frames, ["source_extent"] = new JsonArray(sourceWidth, sourceHeight),
+                    ["owner_layer_id"] = owner, ["frames"] = frames,
+                    ["source_extent"] = new JsonArray(sourceWidth, sourceHeight),
                     ["encoded_extent"] = new JsonArray(storedWidth, storedHeight), ["logical_encoded_extent"] = new JsonArray(encodeWidth, encodeHeight),
                     ["sampling_basis"] = puppetAtlas ? "source_atlas_at_projected_canvas_density" : "source_image_fits_output",
                     ["packed_alpha"] = packedAlpha, ["video_path"] = video, ["period"] = loop, ["capture_target"] = captureTarget,
@@ -468,6 +489,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     encodedGroup["hdr_capture_scale"] = hdrScale;
                     encodedGroup["hdr_capture_lower_bound"] = hdrLowerBound;
                 }
+                if (preview) encodedGroup["period_frames"] = periodFrames;
                 SeamPreview.Attach(encodedGroup, seamPreview);
                 result["groups"]!.AsArray().Add(encodedGroup);
                 encodedLoops.Add(owner, loop.DeepClone().AsObject());
@@ -502,10 +524,12 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 for (int index = 0; index < states.Length; ++index)
                 {
                     ComparisonState state = states[index];
+                    ulong comparisonFrames = preview ? Math.Min(state.Frames, comparisonLimit) : state.Frames;
                     PairedComparison comparison = await new CandidateValidation(tools).CompareAsync(new(1, referenceProject, candidateProject,
                         settings.Assets, Path.Combine(output, states.Length == 1 ? "composition-validation" : $"composition-validation-{index}"),
                         settings.Width, settings.Height, settings.FpsNumerator, settings.FpsDenominator,
-                        state.Frames, 0, 17, request.DeviceUuid ?? settings.DeviceUuid, snapshot, EpochMs: state.EpochMs),
+                        comparisonFrames, 0, 17,
+                        request.DeviceUuid ?? settings.DeviceUuid, snapshot, EpochMs: state.EpochMs),
                         progress, cancellationToken);
                     JsonObject evaluated = CompositionGate.Evaluate(comparison);
                     if (evaluated["status"]?.GetValue<string>() != CandidateScriptErrorGate.RejectedCompositionStatus &&
@@ -518,9 +542,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     evaluated["state_name"] = state.Name;
                     if (state.EpochMs is long epoch) evaluated["epoch_ms"] = epoch;
                     evaluated["owner_layer_ids"] = new JsonArray([.. state.Owners.Select(id => (JsonNode)JsonValue.Create(id))]);
-                    evaluated["scope"] = $"Offline composition comparison for {state.Frames} frames at a fixed state clock; not official playback.";
+                    evaluated["scope"] = $"Offline composition comparison for {comparisonFrames} frames at a fixed state clock; not official playback.";
                     stateValidations.Add(evaluated.DeepClone());
-                    comparedFrames += state.Frames;
+                    comparedFrames += comparisonFrames;
                     composition = evaluated;
                     if (evaluated["status"]?.GetValue<string>() != "composition_pass") break;
                 }
@@ -540,7 +564,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             if (composition["status"]?.GetValue<string>() != "composition_pass")
             { result["status"] = "candidate_rejected_composition"; new Message("bake.effect_prefix_composition_failed").Write(result, "reason"); await Save(); return result; }
             if (hash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during effect-prefix bake.");
-            result["status"] = "candidate_generated"; result["loop_validation"] = "encoded_seams_passed"; result["project_path"] = candidateProject;
+            result["status"] = preview ? "preview_generated" : "candidate_generated";
+            result["loop_validation"] = preview ? "not_performed" : "encoded_seams_passed";
+            result["project_path"] = candidateProject;
             await Save(); return result;
         }
         catch (Exception error)
@@ -639,8 +665,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
     }
 
     /// <summary>
-    /// 完整捕获的运行时证据下，这一层仍提得出不短于 <paramref name="prefix"/> 的前缀。
-    /// 这里只复核依赖与时间机制资格；已捕获 P 的实际接缝仍由烘焙接缝门验证。
+    /// 已捕获窗口的运行时证据下，这一层仍提得出不短于 <paramref name="prefix"/> 的前缀。
+    /// 短预览只能排除窗口内已出现的依赖；完整周期与接缝仍由正式烘焙验证。
     /// </summary>
     internal static bool SurvivesCompleteCapture(JsonObject pristine, ProjectSource source, HybridAnalyzeRequest settings, JsonObject fullRuntime,
         JsonObject snapshot, JsonObject projection, int owner, int prefix, JsonArray? installedPatches = null)
@@ -652,8 +678,20 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 value["prefix_effect_count"]?.GetValue<int>() >= prefix);
     }
 
+    internal static JsonObject? ObservedCaptureRejection(JsonObject pristine, ProjectSource source, HybridAnalyzeRequest settings,
+        JsonObject observed, JsonObject analyzed, JsonObject snapshot, JsonObject projection, int owner, int prefix,
+        ulong frames, JsonObject loop, JsonArray? installedPatches = null)
+    {
+        if (SurvivesCompleteCapture(pristine, source, settings, observed, snapshot, projection, owner, prefix, installedPatches)) return null;
+        JsonObject rejected = LateDependencyRejection(owner, frames, loop, observed, analyzed);
+        if (rejected["late_dependencies"] is JsonArray { Count: 0 })
+            PrefixCaptureProbes.ExplainRetreat(rejected, pristine, source, settings, observed,
+                analyzed, snapshot, projection, owner, prefix, frames, loop, installedPatches);
+        return rejected;
+    }
+
     /// <summary>
-    /// 完整捕获推翻前缀资格时这一层的组记录：带上完整捕获里有、分析观测里没有、涉及这一层的依赖（多半就是晚到的那条）。纯函数。
+    /// 捕获窗口推翻前缀资格时这一层的组记录：带上本次新观察到、涉及这一层的依赖。纯函数。
     /// </summary>
     internal static JsonObject LateDependencyRejection(int owner, ulong frames, JsonObject loop, JsonObject fullRuntime, JsonObject analyzed)
     {

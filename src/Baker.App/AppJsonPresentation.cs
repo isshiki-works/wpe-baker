@@ -36,6 +36,12 @@ internal static class AppJsonPresentation
 
     public static bool CandidateCanApply(JsonObject result)
     {
+        if (result["schema_version"]?.GetValue<int>() == 1 &&
+            result["artifact_kind"]?.GetValue<string>() == "live_scene_optimized")
+            return result["status"]?.GetValue<string>() == "optimized" &&
+                Number(result["fused_pairs"]) is > 0 &&
+                result["project_path"]?.GetValue<string>() is { Length: > 0 } &&
+                result["source_sha256"]?.GetValue<string>() is { Length: > 0 };
         if (result["schema_version"]?.GetValue<int>() != 2 ||
             result["artifact_kind"]?.GetValue<string>() != "hybrid_video_candidate" ||
             !StaticOnlyBake.Finished(result["status"]?.GetValue<string>()) ||

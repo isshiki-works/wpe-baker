@@ -286,20 +286,29 @@ public class EffectPrefixEligibilityTests
         await Task.CompletedTask;
     });
 
-    // 分析期完整区间复核与烘焙复核同一判据：短观测里没有、完整区间里别的对象在运行中改写这一层（计时分支里才写），前缀不成立。
-    // 分析按它不采用这条前缀（PrefixCaptureProbes.CompleteCaptureAsync），结论与烘焙一致（#238 本机全集 3019976352、2931199278）。
+    // 分析期没出现的改写若在短预览捕获窗口内出现，也必须拒绝该前缀；短片不能以未验证完整周期为由忽略已观察到的依赖。
     [Fact]
-    public async Task LateWriteInTheCompleteCaptureVoidsThePrefix() => await TestTemp.Run(async dir =>
+    public async Task LateWriteInAShortPreviewCaptureVoidsThePrefix() => await TestTemp.Run(async dir =>
     {
         var (scene, runtime) = Background(dir);
         using var source = new ProjectSource(dir);
         var request = new HybridAnalyzeRequest(1, dir, dir, dir, 64, 48, 30, 1);
+        const ulong previewFrames = 12; // The authored waves have a 90-frame period.
+        JsonObject proposal = Assert.Single(EffectPrefixPlanner.Propose(scene, source, dir, runtime,
+            new JsonObject(), request, new JsonObject()).OfType<JsonObject>());
+        Assert.True(proposal["loop"]?["candidates"]?[0]?["frames"]?.GetValue<ulong>() > previewFrames);
         Assert.True(EffectPrefixBakeService.SurvivesCompleteCapture(scene, source, request, runtime, new JsonObject(), new JsonObject(), 1, 1));
-        var full = runtime.DeepClone().AsObject();
-        full["runtime_dependencies"]!.AsArray().Add(new JsonObject { ["owner"] = 2, ["target"] = 1, ["operation"] = "write",
+        Assert.Null(EffectPrefixBakeService.ObservedCaptureRejection(scene, source, request, runtime, runtime,
+            new JsonObject(), new JsonObject(), 1, 1, previewFrames, new JsonObject()));
+        var observed = runtime.DeepClone().AsObject();
+        observed["runtime_dependencies"]!.AsArray().Add(new JsonObject { ["owner"] = 2, ["target"] = 1, ["operation"] = "write",
             ["property"] = "origin", ["initialization"] = false });
-        Assert.False(EffectPrefixBakeService.SurvivesCompleteCapture(scene, source, request, full, new JsonObject(), new JsonObject(), 1, 1));
-        JsonObject late = Assert.Single(EffectPrefixBakeService.LateDependencyRejection(1, 90, new JsonObject(), full, runtime)["late_dependencies"]!
+        Assert.False(EffectPrefixBakeService.SurvivesCompleteCapture(scene, source, request, observed, new JsonObject(), new JsonObject(), 1, 1));
+        JsonObject rejection = Assert.IsType<JsonObject>(EffectPrefixBakeService.ObservedCaptureRejection(scene, source, request,
+            observed, runtime, new JsonObject(), new JsonObject(), 1, 1, previewFrames, new JsonObject()));
+        Assert.Equal("rejected_late_dependency", rejection["status"]!.GetValue<string>());
+        Assert.Equal(previewFrames, rejection["frames"]!.GetValue<ulong>());
+        JsonObject late = Assert.Single(rejection["late_dependencies"]!
             .AsArray().OfType<JsonObject>());
         Assert.Equal("origin", late["property"]!.GetValue<string>());
         await Task.CompletedTask;

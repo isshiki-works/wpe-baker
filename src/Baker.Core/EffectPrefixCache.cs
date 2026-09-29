@@ -185,11 +185,13 @@ internal static class EffectPrefixCache
         checkedOwner.Remove("effects");
         if (model.ContainsKey("puppet") && !retainsPuppet)
             throw new InvalidDataException("A retained puppet must be a project-owned source resource.");
-        if (!Neutral(original["alpha"], 1) || !NeutralColor(original["color"]) || !NeutralVector(original["scale"], 1) ||
+        // A layer-local effect target precedes the owner transform. Replacement
+        // retains that transform, so a fixed scale is applied exactly once.
+        if (!Neutral(original["alpha"], 1) || !NeutralColor(original["color"]) || !FiniteVector(original["scale"]) ||
             !NeutralVector(original["angles"], 0) || !NeutralAnchor(original["anchor"]) || original["crop"] is not null ||
             original.ContainsKey("puppet") || !retainsPuppet && original.ContainsKey("animationlayers") || HasScriptOrAnimation(checkedOwner) ||
             effects.Any(effect => effect is not JsonObject) || !source.Contains(sourceModel))
-            throw new InvalidDataException("Effect-prefix caching requires an unscripted flat project-owned owner with neutral appearance and geometry.");
+            throw new InvalidDataException("Effect-prefix caching requires an unscripted flat project-owned owner with neutral appearance and supported geometry.");
         if (model["autosize"]?.GetValue<bool>() != true || !ValidCropOffset(model["cropoffset"]) ||
             model["material"]?.GetValue<string>() is not string sourceMaterial || string.IsNullOrWhiteSpace(sourceMaterial) ||
             HasScriptOrAnimation(model) || !source.Contains(sourceMaterial))
@@ -246,6 +248,15 @@ internal static class EffectPrefixCache
         if (value is not JsonValue scalar || !scalar.TryGetValue<string>(out string? text)) return false;
         string[] parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         return parts.Length == 3 && parts.All(part => double.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture, out double number) && number == neutral);
+    }
+
+    private static bool FiniteVector(JsonNode? value)
+    {
+        if (value is null) return true;
+        if (value is not JsonValue scalar || !scalar.TryGetValue<string>(out string? text)) return false;
+        string[] parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 3 && parts.All(part => double.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture,
+            out double number) && double.IsFinite(number));
     }
 
     private static bool NeutralAnchor(JsonNode? value) => value is null || value is JsonValue scalar &&
