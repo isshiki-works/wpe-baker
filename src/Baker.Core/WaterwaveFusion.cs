@@ -21,6 +21,15 @@ public static class WaterwaveFusion
         double TimeOffset, string Mask, string? OffsetTexture, uint MaskWidth, uint MaskHeight);
 
     public static async Task<JsonObject> OptimizeAsync(string sourcePath, string output, CancellationToken cancellationToken = default)
+        => await OptimizeAsync(sourcePath, output, null, copyUnchanged: true, cancellationToken);
+
+    /// <summary>Desktop generation keeps the selected wallpaper values and skips an unchanged copy.</summary>
+    public static Task<JsonObject> OptimizeSelectedAsync(string sourcePath, string output, JsonObject properties,
+        CancellationToken cancellationToken = default) =>
+        OptimizeAsync(sourcePath, output, properties, copyUnchanged: false, cancellationToken);
+
+    private static async Task<JsonObject> OptimizeAsync(string sourcePath, string output, JsonObject? properties,
+        bool copyUnchanged, CancellationToken cancellationToken)
     {
         using var source = new ProjectSource(sourcePath);
         if (source.Kind != "scene") throw new InvalidDataException("Water-wave fusion requires a Scene project.");
@@ -66,6 +75,9 @@ public static class WaterwaveFusion
             }
         }
         string before = await source.SourceHashAsync(cancellationToken);
+        if (changes.Count == 0 && !copyUnchanged)
+            return new JsonObject { ["status"] = "unchanged", ["source_sha256"] = before,
+                ["output"] = null, ["fused_pairs"] = 0, ["skipped_external_effect_access"] = skippedEffectAccess };
         await source.ExtractAsync(output, cancellationToken);
         if (before != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during optimization.");
         foreach (var change in changes)
@@ -85,6 +97,15 @@ public static class WaterwaveFusion
         {
             change.Effects.RemoveAt(change.Index + 1);
             change.Effects[change.Index] = change.Replacement;
+        }
+        if (properties is not null)
+        {
+            JsonObject metadata = source.Contains("project.json") ? source.ReadJson("project.json") : new JsonObject();
+            ProjectWriter.ApplyPropertySnapshot(metadata, properties);
+            ProjectWriter.ApplyVisibilityFallbacks(scene, properties);
+            metadata["type"] = "scene";
+            metadata["file"] = source.SceneResource;
+            await File.WriteAllTextAsync(Path.Combine(output, "project.json"), metadata.ToJsonString(), cancellationToken);
         }
         if (changes.Count > 0)
             await File.WriteAllTextAsync(ProjectSource.ContainedPath(output, source.SceneResource), scene.ToJsonString(), cancellationToken);

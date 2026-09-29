@@ -224,7 +224,11 @@
                             <DockPanel>
                                 <Button x:Name="AnalyzeButton" DockPanel.Dock="Left" Tag="分析|Analyze" Click="AnalyzeClicked" MinHeight="40" Margin="0,0,8,0"/>
                                 <Button x:Name="GenerateButton" Style="{StaticResource Primary}" Tag="开始生成|Start generating" Click="GenerateClicked"/>
+                                <Button x:Name="OptimizeLiveButton" Tag="优化实时场景|Optimize live scene" Click="OptimizeLiveClicked" Margin="8,0,0,0"
+                                        ToolTip="保留原有动态内容与属性控制，不生成视频。‖Keeps the original animation and property controls without adding video."/>
                             </DockPanel>
+                            <TextBlock FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Tag="实时场景优化保留原有动态内容；只在找到可融合的效果时生成工程。|Live scene optimization keeps the original animation and creates a project only when compatible effects are found."/>
                             <TextBlock x:Name="ValidationText" FontSize="12" Margin="0,8,0,0"/>
                         </StackPanel>
                 </Border>

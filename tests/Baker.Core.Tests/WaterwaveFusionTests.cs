@@ -37,6 +37,10 @@ public class WaterwaveFusionTests
             Assert.Equal(scene, await File.ReadAllTextAsync(Path.Combine(output, "scene.json")));
             Assert.Equal(await File.ReadAllTextAsync(Path.Combine(source, "project.json")),
                 await File.ReadAllTextAsync(Path.Combine(output, "project.json")));
+            string selectedOutput = Path.Combine(root, "selected-output");
+            JsonObject selected = await WaterwaveFusion.OptimizeSelectedAsync(source, selectedOutput, new JsonObject());
+            Assert.Equal("unchanged", selected["status"]!.GetValue<string>());
+            Assert.False(Directory.Exists(selectedOutput));
         });
     }
 
