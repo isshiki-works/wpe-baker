@@ -156,6 +156,10 @@ internal static class OptionTable
         new("--lang", [Analyze, Bake], Choices: ["zh", "en"], Help: ["Default: the system interface language."]),
         // ---- bake ----
         new("--out", [Bake], "NEW_DIRECTORY", Help: ["Only with a PLAN.json."]),
+        new("--probe-frames", [Bake], "N", Parse: text =>
+            ulong.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong frames) && frames > 0
+                ? frames : throw new ArgumentException("--probe-frames must be a positive integer."),
+            Help: ["Generate a playable short preview; the complete loop remains unverified."]),
         new("--encoder", [Bake], string.Join("|", PlaybackEncoderSelection.Choices), Parse: PlaybackEncoderSelection.Normalize,
             HelpKey: "cli.bake_encoder_help"),
         new("--encode-slots", [Bake], "N", Parse: text =>

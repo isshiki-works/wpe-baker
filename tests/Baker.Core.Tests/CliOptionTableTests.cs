@@ -216,6 +216,8 @@ public class CliOptionTableTests
         { ["bake", "plan.json", "--effect-render-scale", "0"], typeof(ArgumentException) },
         { ["bake", "plan.json", "--encode-slots", "65"], typeof(ArgumentException) },
         { ["bake", "plan.json", "--group-parallel", "0"], typeof(ArgumentException) },
+        { ["bake", "plan.json", "--probe-frames", "0"], typeof(ArgumentException) },
+        { ["bake", "plan.json", "--probe-frames", "abc"], typeof(ArgumentException) },
         { ["bake", "plan.json", "--keep-intermediates", "yes"], typeof(ArgumentException) },
         { ["bake", "plan.json", "--lang", "de"], typeof(ArgumentException) },
         // 冲突组合
@@ -237,6 +239,13 @@ public class CliOptionTableTests
         }
         Exception error = Assert.ThrowsAny<Exception>(Run);
         Assert.IsType(expected, error);
+    }
+
+    [Fact]
+    public void BakeProbeFramesAcceptsShortPreview()
+    {
+        Dictionary<string, string> options = OptionTable.Parse(["bake", "plan.json", "--probe-frames", "120"]);
+        Assert.Equal(120UL, OptionTable.Value("bake", options, "--probe-frames"));
     }
 
     [Fact]
