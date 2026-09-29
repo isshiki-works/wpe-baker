@@ -29,7 +29,7 @@ std::string DescriptorType(const NJson& descriptor) {
 NJson ParseWireValue(const NJson& schema, const NJson& value) {
     if (! value.is_string()) return value;
     const auto type = DescriptorType(schema);
-    if (type.empty() || type == "textinput") return value;
+    if (type.empty() || type == "textinput" || type == "combo") return value;
 
     auto parsed = ParseNJson(value.get_ref<const std::string&>(), { .allow_comments = true });
     return parsed.is_ok() ? parsed.unwrap() : value;

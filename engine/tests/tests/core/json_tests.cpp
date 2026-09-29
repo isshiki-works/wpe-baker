@@ -116,6 +116,22 @@ TEST(UserProperty, TextInputWireValuesStayStrings) {
     }
 }
 
+TEST(UserProperty, ComboWireStringsStayStringsWithoutChangingNumericValues) {
+    auto schema = owe::ParseNJson(R"({"type":"combo","value":"1","options":[{"value":"0"},{"value":"1"}]})").unwrap();
+    for (const auto& raw : { std::string("0"), std::string("1") }) {
+        auto merged = owe::MergeUserPropertyDescriptor(schema, owe::MakeUserPropertyWirePatch(raw));
+        const auto* value = owe::Find(merged, "value");
+        ASSERT_NE(value, nullptr);
+        ASSERT_TRUE(value->is_string());
+        EXPECT_EQ(value->get<std::string>(), raw);
+    }
+    auto numeric = owe::MergeUserPropertyDescriptor(schema, owe::NJson(0));
+    const auto* value = owe::Find(numeric, "value");
+    ASSERT_NE(value, nullptr);
+    ASSERT_TRUE(value->is_number_integer());
+    EXPECT_EQ(value->get<int>(), 0);
+}
+
 TEST(UserProperty, NonTextWireValuesKeepExistingJsonCoercion) {
     auto schema = owe::ParseNJson(R"({"type":"slider","value":0})").unwrap();
     auto patch  = owe::MakeUserPropertyWirePatch("1.5");
