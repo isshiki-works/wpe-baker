@@ -459,8 +459,8 @@ internal sealed class AnalysisOrchestrator
     }
 
     /// <summary>
-    /// 布局按顺序试，第一个能生成的就用。例外：能生成的是特效前缀、而整层只被这个布局的冲突挡住（整层本身零阻断、有候选）时，
-    /// 后面的布局下整层也试一次；只在前缀不满足现有准入而整层满足时换，不凭 pass/视频路数声称功耗更低。
+    /// 布局按顺序试，第一个能生成且未命中已证低收益拒因的就用。低收益方案继续试下一布局；
+    /// 特效前缀接手但整层只被当前布局冲突挡住时也试下一布局。不凭 pass/视频路数声称功耗更低。
     /// </summary>
     private async Task<JsonObject> LayoutsAsync(HybridAnalyzeRequest candidate, string phase, string? state)
     {
@@ -472,7 +472,8 @@ internal sealed class AnalysisOrchestrator
                 tried = await TryAsync(candidate with { VideoLayout = layout }, phase, state);
             if (plan is not null && Admission.Accepted(plan)) return !Viable(plan) && Viable(tried) ? tried : plan;
             plan = tried;
-            if (Admission.Accepted(plan) && !(phase == "search" && PrefixOverLayoutConflict(plan))) break;
+            if (Admission.Accepted(plan) && (request.AllowNoBenefit || NoBenefit.AnalysisConditions(plan).Length == 0) &&
+                !(phase == "search" && PrefixOverLayoutConflict(plan))) break;
         }
         return plan!;
     }
