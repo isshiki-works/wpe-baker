@@ -6,6 +6,22 @@ using Xunit;
 public class WaterwaveFusionTests
 {
     [Fact]
+    public void FirstTimeOffsetKeepsBothMaskAndClockBindings()
+    {
+        var a = new WaterwaveFusion.Wave(new JsonObject(), -2.8, 3, 15, .29, .74, "first-mask", "first-offset", 1144, 795);
+        var b = new WaterwaveFusion.Wave(new JsonObject(), -2.4, 3, 14, .29, .24, "second-mask", "second-offset", 1144, 795);
+        string fragment = WaterwaveFusion.Fragment(a, b);
+        Assert.Contains("texSample2DLod(g_Texture2, uv, 0.0).r * M_PI_2", fragment);
+        Assert.Contains("texSample2D(g_Texture3, v_Uv).r", fragment);
+        Assert.Contains("texSample2D(g_Texture4, v_Uv).r", fragment);
+        Assert.Contains("texSample2D(g_Texture4, v_Uv).r * M_PI_2;\n    phase += 0.24 * M_PI_2;", fragment);
+        string legacy = WaterwaveFusion.Fragment(a with { OffsetTexture = null }, b);
+        Assert.DoesNotContain("g_Texture4", legacy);
+        Assert.Contains("texSample2D(g_Texture2, v_Uv).r", legacy);
+        Assert.Contains("texSample2D(g_Texture3, v_Uv).r", legacy);
+    }
+
+    [Fact]
     public async Task UnknownEffectsStayUnchangedInEditableCopy()
     {
         await TestTemp.Run(async root =>
