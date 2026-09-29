@@ -48,6 +48,155 @@ internal static class DaytimeSplit
     private static readonly Regex PropertyWrite = new(@"\.\s*(\w+)\s*=(?!=)", Options);
     private static readonly Regex MethodCall = new(@"\.\s*(play|pause|stop|seek|setText|setTexture|setEffect)\s*\(", Options);
     private static readonly Regex LiveInput = new(@"\binput\s*[.\[]|\bregisterAudioBuffers\s*\(|\bfunction\s+(cursor|media)\w*\s*\(", Options);
+
+    // Prove the branch's helper first clears every declared group, then shows exactly its argument.
+    // Accepted helpers have either an inline reset or one separate zero-argument reset helper.
+    private static bool ProvenVisibilitySwitch(string code, IReadOnlyCollection<string> groups, Match[] branches, Match otherwise,
+        JsonObject? properties)
+    {
+        string show = branches[0].Groups[4].Value;
+        if (branches.Any(branch => branch.Groups[4].Value != show) ||
+            otherwise.Success && otherwise.Groups[1].Value != show) return false;
+        string escaped = Regex.Escape(show);
+        Match helper = Regex.Match(code, @"\bfunction\s+" + escaped + @"\s*\(\s*(?<arg>\w+)\s*\)\s*\{(?<body>[^{}]*)\}", Options);
+        if (!helper.Success) return false;
+        string body = Compact(helper.Groups["body"].Value), arg = Regex.Escape(helper.Groups["arg"].Value);
+        Match display = Regex.Match(body, @"\A(?<reset>.*?)" + arg + @"\.forEach\((?<item>\w+)=>\k<item>\.visible=true\);?\z", Options);
+        if (!display.Success || PropertyWrite.Matches(code).Count != 2) return false;
+        string reset = display.Groups["reset"].Value;
+        string[]? ResetGroups(string text)
+        {
+            Match direct = Regex.Match(text, @"\A\[\]\.concat\((?<groups>\w+(?:,\w+)*)\)\.forEach\((?<item>\w+)=>\k<item>\.visible=false\);?\z", Options);
+            Match local = Regex.Match(text, @"\A(?:var|let|const)(?<all>\w+)=\[\]\.concat\((?<groups>\w+(?:,\w+)*)\);\k<all>\.forEach\((?<item>\w+)=>\k<item>\.visible=false\);?\z", Options);
+            Match match = direct.Success ? direct : local;
+            return match.Success ? match.Groups["groups"].Value.Split(',') : null;
+        }
+        string? resetHelper = null;
+        string[]? cleared = ResetGroups(reset);
+        if (cleared is null)
+        {
+            Match call = Regex.Match(reset, @"\A(?<name>\w+)\(\);\z", Options);
+            if (!call.Success) return false;
+            resetHelper = call.Groups["name"].Value;
+            string resetName = Regex.Escape(resetHelper);
+            Match function = Regex.Match(code, @"\bfunction\s+" + resetName + @"\s*\(\s*\)\s*\{(?<body>[^{}]*)\}", Options);
+            if (!function.Success) return false;
+            cleared = ResetGroups(Compact(function.Groups["body"].Value));
+        }
+        (string Body, int Start, int End, string Parameters)? Function(string function)
+        {
+            Match head = Regex.Match(code, @"\b(?:export\s+)?function\s+" + Regex.Escape(function) + @"\s*\((?<parameters>[^)]*)\)\s*\{", Options);
+            if (!head.Success) return null;
+            int start = head.Index + head.Length, depth = 1;
+            for (int i = start; i < code.Length; ++i)
+            {
+                depth += code[i] switch { '{' => 1, '}' => -1, _ => 0 };
+                if (depth == 0) return (code[start..i], head.Index, i + 1, head.Groups["parameters"].Value.Trim());
+            }
+            return null;
+        }
+        if (Function("init") is not { } init || Function("update") is not { } update || init.Parameters.Length != 0 ||
+            update.Parameters.Length != 0) return false;
+        string compactInit = Compact(init.Body), initReset = resetHelper is null ? "" : resetHelper + "();";
+        bool resetsInInit = initReset.Length > 0 && compactInit.EndsWith(initReset, StringComparison.Ordinal);
+        if (resetsInInit)
+            compactInit = compactInit[..^initReset.Length];
+        Match[] maps = Regex.Matches(compactInit, @"(?<group>\w+)=\k<group>\.map\((?<item>\w+)=>thisScene\.getLayer\(\k<item>\)\);?", Options).ToArray();
+        if (string.Concat(maps.Select(map => map.Value)) != compactInit || maps.Length != groups.Count() ||
+            !groups.ToHashSet(StringComparer.Ordinal).SetEquals(maps.Select(map => map.Groups["group"].Value))) return false;
+        if (resetHelper is not null && Regex.Matches(code, @"\b" + Regex.Escape(resetHelper) + @"\s*\(", Options).Count !=
+            (resetsInInit ? 3 : 2)) return false;
+        string compactUpdate = Compact(update.Body);
+        Match[] updateBranches = HourBranch.Matches(update.Body).ToArray();
+        Match updateElse = ElseBranch.Match(update.Body);
+        if (updateBranches.Length != branches.Length || updateElse.Success != otherwise.Success) return false;
+        string chain = string.Join("else", updateBranches.Select(branch => Compact(branch.Value))) +
+            (updateElse.Success ? "else{" + updateElse.Groups[1].Value + "(" + updateElse.Groups[2].Value + ");}" : "");
+        string? modeVariable = null, manualVariable = null;
+        Match clock = Regex.Match(compactUpdate, @"\A(?:var|let|const)(?<hour>\w+)=newDate\(\)\.getHours\(\);", Options);
+        string expectedUpdate;
+        if (clock.Success)
+        {
+            if (clock.Groups["hour"].Value != branches[0].Groups[1].Value) return false;
+            expectedUpdate = clock.Value + chain;
+        }
+        else
+        {
+            Match automatic = Regex.Match(compactUpdate,
+                @"\Aif\((?<mode>\w+)\)\{(?:var|let|const)(?<date>\w+)=newDate\(\);(?:var|let|const)(?<hour>\w+)=\k<date>\.getHours\(\);", Options);
+            Match manual = Regex.Match(compactUpdate,
+                @"\}elseif\((?<manual>\w+)!==-1\)\{(?:var|let|const)(?<selected>\w+)=\[\]\.concat\((?<groups>\w+(?:,\w+)*)\);" +
+                escaped + @"\(\[\k<selected>\[\k<manual>\]\]\);\}\z", Options);
+            if (!automatic.Success || !manual.Success || automatic.Groups["hour"].Value != branches[0].Groups[1].Value ||
+                !manual.Groups["groups"].Value.Split(',').SequenceEqual(groups)) return false;
+            modeVariable = automatic.Groups["mode"].Value;
+            manualVariable = manual.Groups["manual"].Value;
+            expectedUpdate = automatic.Value + chain + manual.Value;
+        }
+        if (compactUpdate != expectedUpdate) return false;
+        if (Regex.Matches(code, @"\b" + escaped + @"\s*\(", Options).Count !=
+            branches.Length + 1 + (otherwise.Success ? 1 : 0) + (modeVariable is null ? 0 : 1)) return false;
+        if (cleared is null || cleared.Length != groups.Count || !groups.ToHashSet(StringComparer.Ordinal).SetEquals(cleared)) return false;
+        var copiedProperties = new Dictionary<string, (string Key, bool Parsed)>(StringComparer.Ordinal);
+        var apply = Function("applyUserProperties");
+        if (apply is { } binding)
+        {
+            if (!Regex.IsMatch(binding.Parameters, @"^\w+$", Options)) return false;
+            string input = Regex.Escape(binding.Parameters), compact = Compact(binding.Body);
+            string pattern = @"if\(" + input + @"\.hasOwnProperty\((?<quote>['""])(?<key>\w+)\k<quote>\)\)\{(?<target>\w+)=(?:(?<parsed>parseInt\(" +
+                input + @"\.\k<key>\))|" + input + @"\.\k<key>);\}";
+            Match[] copies = Regex.Matches(compact, pattern, Options).ToArray();
+            if (string.Concat(copies.Select(copy => copy.Value)) != compact ||
+                copies.Any(copy => !copiedProperties.TryAdd(copy.Groups["target"].Value,
+                    (copy.Groups["key"].Value, copy.Groups["parsed"].Success)))) return false;
+        }
+        // Remove every proved function and declaration. Any other top-level statement can affect the state model.
+        char[] remaining = code.ToCharArray();
+        void Consume(int first, int end) { for (int i = first; i < end; ++i) remaining[i] = ' '; }
+        foreach (var function in new[] { init, update, Function(show)!.Value }
+            .Concat(resetHelper is null ? [] : [Function(resetHelper)!.Value])
+            .Concat(apply is null ? [] : [apply.Value])) Consume(function.Start, function.End);
+        foreach (Match declaration in GroupArray.Matches(code))
+        {
+            Consume(declaration.Index, declaration.Index + declaration.Length);
+            int next = declaration.Index + declaration.Length;
+            while (next < code.Length && char.IsWhiteSpace(code[next])) ++next;
+            if (next < code.Length && code[next] == ';') Consume(next, next + 1);
+        }
+        var scalars = new Dictionary<string, string>(StringComparer.Ordinal);
+        string rest = new(remaining);
+        foreach (Match declaration in Regex.Matches(rest,
+            @"\b(?:var|let|const)\s+(?<assignments>\w+\s*=\s*(?:true|false|-?\d{1,2})(?:\s*,\s*\w+\s*=\s*(?:true|false|-?\d{1,2}))*)\s*;", Options))
+        {
+            foreach (Match assignment in Regex.Matches(declaration.Groups["assignments"].Value,
+                @"(?<name>\w+)\s*=\s*(?<value>true|false|-?\d{1,2})", Options))
+                if (!scalars.TryAdd(assignment.Groups["name"].Value, assignment.Groups["value"].Value)) return false;
+            Consume(declaration.Index, declaration.Index + declaration.Length);
+        }
+        rest = new string(remaining);
+        Match strict = Regex.Match(rest, @"\A\s*(?<quote>['""])use strict\k<quote>\s*;", Options);
+        if (strict.Success) Consume(strict.Index, strict.Index + strict.Length);
+        if (remaining.Any(c => !char.IsWhiteSpace(c))) return false;
+        string[] functions = ["init", "update", "applyUserProperties", show, .. resetHelper is null ? [] : new[] { resetHelper }];
+        if (scalars.Keys.Any(name => groups.Contains(name) || functions.Contains(name) || name is "Date" or "thisScene" or "parseInt") ||
+            groups.Any(name => functions.Contains(name) || name is "Date" or "thisScene" or "parseInt") ||
+            groups.Contains(helper.Groups["arg"].Value)) return false;
+        if (modeVariable is null) return apply is null || copiedProperties.All(copy =>
+            scalars.ContainsKey(copy.Key) && copy.Key == copy.Value.Key);
+        if (!scalars.TryGetValue(modeVariable, out string? initial) || initial is not ("true" or "false") ||
+            manualVariable is null || !scalars.TryGetValue(manualVariable, out string? manualDefault) || manualDefault != "-1" ||
+            copiedProperties.Keys.Any(key => key != modeVariable && key != manualVariable) ||
+            copiedProperties.TryGetValue(modeVariable, out var modeCopy) && modeCopy.Parsed) return false;
+        JsonNode? selectedMode = copiedProperties.TryGetValue(modeVariable, out var copy) ? properties?[copy.Key] : null;
+        if (selectedMode is not JsonValue scalar) return initial == "true";
+        return scalar.GetValueKind() switch {
+            JsonValueKind.True => true, JsonValueKind.False or JsonValueKind.Null => false,
+            JsonValueKind.String => scalar.GetValue<string>().Length > 0,
+            JsonValueKind.Number => double.TryParse(scalar.ToJsonString(), NumberStyles.Float, CultureInfo.InvariantCulture,
+                out double number) && number != 0 && !double.IsNaN(number),
+            _ => false
+        };
+    }
     // 先去掉注释及字符串以外的空白，再匹配整个模板。只允许选中项 play、其余 pause，
     // 不能把 play/pause 从上面的通用拒绝规则中删掉，也不能只检查几个局部片段。
     private static readonly Regex IndexedVideoSelector = new("""
@@ -326,7 +475,8 @@ internal static class DaytimeSplit
         }
         var branches = new List<(int Low, int High, string Group)>();
         string? hourVariable = null;
-        foreach (Match match in HourBranch.Matches(code))
+        Match[] hourBranches = HourBranch.Matches(code).ToArray();
+        foreach (Match match in hourBranches)
         {
             hourVariable ??= match.Groups[1].Value;
             if (match.Groups[1].Value != hourVariable) return Fallback("mixed_branch_variables", id, name);
@@ -343,6 +493,8 @@ internal static class DaytimeSplit
             if (!groupIds.ContainsKey(elseMatch.Groups[2].Value)) return Fallback("else_shows_unknown_group:" + elseMatch.Groups[2].Value, id, name);
             fallbackGroup = elseMatch.Groups[2].Value;
         }
+        if (!controlsVideoPlayback && !ProvenVisibilitySwitch(code, groups.Keys, hourBranches, elseMatch, properties))
+            return Fallback("unsupported_visibility_script", id, name);
         // 逐小时求值，按脚本分支顺序取第一个命中的组；相邻同组合并成一个状态，跨午夜的段并成同一状态。
         string?[] perHour = new string?[24];
         for (int hour = 0; hour < 24; ++hour)

@@ -18,6 +18,48 @@ internal static class DaytimeSplitChecks
         export function update() { var h = new Date().getHours(); if (h >= daytime && h < nighttime) { showLayers(dayLayers); } else { showLayers(nightLayers); } }
         """;
 
+    // 3276911872 的控制器结构：init 末尾清空四组；自动时段与手动选择同在 update。
+    private const string ClockAndManualSelector = """
+        'use strict';
+        var morningLayers = ["morning1"];
+        var dayLayers = ["day1"];
+        var duskLayers = ["dusk1"];
+        var nightLayers = ["night1"];
+        var electDisplay = -1;
+        var timeVarying = true;
+        export function init() {
+            morningLayers = morningLayers.map(layer => thisScene.getLayer(layer));
+            dayLayers = dayLayers.map(layer => thisScene.getLayer(layer));
+            duskLayers = duskLayers.map(layer => thisScene.getLayer(layer));
+            nightLayers = nightLayers.map(layer => thisScene.getLayer(layer));
+            hideAllLayers();
+        }
+        function hideAllLayers() {
+            var allLayers = [].concat(morningLayers, dayLayers, duskLayers, nightLayers);
+            allLayers.forEach(layer => layer.visible = false);
+        }
+        function showLayers(layersArray) {
+            hideAllLayers();
+            layersArray.forEach(layer => layer.visible = true);
+        }
+        export function update() {
+            if(timeVarying) {
+                var time = new Date(); var hours = time.getHours();
+                if(hours >= 4 && hours < 8) { showLayers(morningLayers); }
+                else if(hours >= 8 && hours < 17) { showLayers(dayLayers); }
+                else if(hours >= 17 && hours < 20) { showLayers(duskLayers); }
+                else { showLayers(nightLayers); }
+            } else if(electDisplay !== -1) {
+                var selectedLayers = [].concat(morningLayers, dayLayers, duskLayers, nightLayers);
+                showLayers([selectedLayers[electDisplay]]);
+            }
+        }
+        export function applyUserProperties(changedUserProperties) {
+            if(changedUserProperties.hasOwnProperty('display')) { electDisplay = parseInt(changedUserProperties.display); }
+            if(changedUserProperties.hasOwnProperty('timevarying')) { timeVarying = changedUserProperties.timevarying; }
+        }
+        """;
+
     private const string VideoSelector = """
         'use strict';
         var displayVideo = ["morning", "day", "dusk", "night", "cycle"];
@@ -248,6 +290,18 @@ internal static class DaytimeSplitChecks
     internal static async Task RunAsync(Action<bool, string> check, string root)
     {
         VideoSelectors(check);
+        JsonArray clockAndManual = new(new JsonObject { ["id"] = 6852, ["name"] = "clock", ["visible"] = new JsonObject {
+                ["value"] = true, ["script"] = ClockAndManualSelector } },
+            Layer(1, "morning1"), Layer(2, "day1"), Layer(3, "dusk1"), Layer(4, "night1"));
+        var clockObjects = ById(clockAndManual);
+        var author = DaytimeSplit.Detect(clockObjects, properties: new JsonObject { ["display"] = "1", ["timevarying"] = "1" });
+        check(author.IsRecognized && author.States.Length == 4,
+            "source 3276911872 selector with author string combo defaults: " + author.FallbackReason);
+        var saved = DaytimeSplit.Detect(clockObjects, properties: new JsonObject { ["display"] = "1", ["timevarying"] = "0" });
+        check(saved.IsRecognized && saved.States.Length == 4,
+            "source 3276911872 selector with saved string combo 0: " + saved.FallbackReason);
+        check(!DaytimeSplit.Detect(clockObjects, properties: new JsonObject { ["display"] = "1", ["timevarying"] = false }).IsRecognized,
+            "source 3276911872 selector with boolean false cannot claim automatic four states");
         check(MessageCatalog.DaytimeStateLabel("dusk", "zh") == "黄昏" && MessageCatalog.DaytimeStateLabel("night", "en") == "Night" &&
             MessageCatalog.DaytimeStateLabel("00-07+18-24", "zh") == "0:00–7:00、18:00–24:00" &&
             MessageCatalog.DaytimeStateLabel("20-24", "en") == "20:00–24:00" && MessageCatalog.DaytimeStateLabel("none", "zh") == "none",
@@ -262,12 +316,38 @@ internal static class DaytimeSplitChecks
             // 跨午夜的夜间状态按小时段出现顺序并成一个状态：先 [0,8) 再 [20,24)。
             HoursAre(night, [[0, 8], [20, 24]]) && night.VisibleLayerIds.SequenceEqual(new[] { 20 }),
             "昼夜模板脚本被识别成两个状态，阈值取脚本默认值");
+        string renamedSelector = Selector.Replace("hideAll", "clearGroups", StringComparison.Ordinal)
+            .Replace("showLayers", "displayGroup", StringComparison.Ordinal)
+            .Replace("dayLayers", "lightLayers", StringComparison.Ordinal)
+            .Replace("nightLayers", "darkLayers", StringComparison.Ordinal);
+        check(DaytimeSplit.Detect(ById(Scene(renamedSelector))).IsRecognized,
+            "纯昼夜模板的组名和 reset/show 函数名由源码决定");
 
         DaytimeSplit.Detection nonVisibility = DaytimeSplit.Detect(ById(Scene(
             Selector.Replace("l.visible = true", "l.alpha = 1", StringComparison.Ordinal))));
         check(nonVisibility.Status == "fallback" &&
             nonVisibility.FallbackReason?.StartsWith("writes_non_visibility", StringComparison.Ordinal) == true,
             "选择器写了 visible 以外的属性就退回");
+
+        foreach (string sideEffect in new[] {
+            "thisScene.getLayer('day1')['color'] = '1 0 0';",
+            "thisScene.getLayer('day1').setColor('1 0 0');",
+            "thisScene.getLayer('day1').visible = false;"
+        })
+        {
+            string script = Selector.Replace("a.forEach(l => l.visible = true);",
+                "a.forEach(l => l.visible = true); " + sideEffect, StringComparison.Ordinal);
+            DaytimeSplit.Detection unsafeSelector = DaytimeSplit.Detect(ById(Scene(script)));
+            check(!unsafeSelector.IsRecognized && unsafeSelector.FallbackReason == "unsupported_visibility_script",
+                "未观测分支里的计算属性写、未知成员调用和额外显隐写不能被认作纯显隐控制器：" + sideEffect);
+        }
+        check(!DaytimeSplit.Detect(ById(Scene(Selector.Replace("a.forEach(l => l.visible = true);",
+                "a.forEach(l => l.visible = false);", StringComparison.Ordinal)))).IsRecognized,
+            "show helper that hides the selected group cannot claim a visible daytime state");
+        foreach (string rebind in new[] { "dayLayers = nightLayers;", "var showLayers = false;" })
+            check(!DaytimeSplit.Detect(ById(Scene(Selector.Replace("var daytime = 8, nighttime = 20;",
+                    "var daytime = 8, nighttime = 20; " + rebind, StringComparison.Ordinal)))).IsRecognized,
+                "a top-level group or helper rebind must not be frozen away");
 
         DaytimeSplit.Detection playback = DaytimeSplit.Detect(ById(Scene(Selector.Replace(
             "var h = new Date().getHours();",
