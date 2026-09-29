@@ -122,9 +122,11 @@ public static class Abba
                     playback["load_sequence"] = "stop/closeWallpaper/openWallpaper/play";
                     progress.Report($"{label}: opening {project}.");
                     changed = true;
-                    expectedProject = project;
-                    expectedIsPrevious = false;
-                    await wpe.IsolatedOpenAsync(project, options.Monitor, token, () => ownedClose = true);
+                    await wpe.IsolatedOpenAsync(project, options.Monitor, token, () => ownedClose = true, () =>
+                    {
+                        expectedProject = project;
+                        expectedIsPrevious = false;
+                    });
                 }
                 await Task.Delay(TimeSpan.FromSeconds(options.SettleSeconds), token);
                 var selectedBefore = await RequireOwnedSelection(token);
