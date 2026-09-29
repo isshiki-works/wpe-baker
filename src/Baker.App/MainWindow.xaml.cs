@@ -29,7 +29,7 @@ public partial class MainWindow : Window
     // 工具缺失是独立一条：setupError 是单字段五处写入，后写者赢，GPU 或源属性的错误会把"生成工具未就绪"
     // 顶掉，界面就会指着错误的原因（实测显示 No Vulkan device found，而真因是 tools 为 null）。
     private string toolsError = "";
-    private bool dark, initialized, english, analyzing, processing, closeRequested, detecting, updatingInstallation, audioEffectsChoiceKnown, presetBusy, suppressSettingsChanges;
+    private bool dark, initialized, english, analyzing, processing, closeRequested, detecting, updatingInstallation, audioEffectsChoiceKnown, presetBusy, suppressSettingsChanges, preparingLiveScene;
     // 高级区调速预算框里上一次由档位写进去的文本：与框里的内容一致就说明用户没自己填，换档时跟着换。
     private string presetBudgetText = "";
     private int settingsRevision;
@@ -666,7 +666,7 @@ public partial class MainWindow : Window
         LoadPresetButton.IsEnabled = sourceValid && !analyzing && !processing && !presetBusy && QueueList.SelectedItem is null;
         GenerateButton.IsEnabled = hybridPlan is not null && sourceValid && outputValid && fpsValid && assetsValid &&
             !hybridBlocked && !effectResolutionBlocked && tools is not null && gpuValid && !analyzing;
-        OptimizeLiveButton.IsEnabled = sourceValid && sourceRejection is null && outputValid && !analyzing && !presetBusy;
+        OptimizeLiveButton.IsEnabled = sourceValid && sourceRejection is null && outputValid && !analyzing && !presetBusy && !preparingLiveScene;
         // 工具缺失排在最前（fix/release-blockers）：它挡住分析与生成两条路，开窗时就该说清楚，而且用的是
         // 它自己的错误文本，不会被后写的 GPU 或源属性错误顶掉。文案按「界面说人话」那版，别回到术语。
         ValidationText.Text = tools is null ? L("生成工具未就绪：", "Generation tools not ready: ") +
@@ -696,7 +696,7 @@ public partial class MainWindow : Window
         ValidateButton.IsEnabled = selected?.State == "completed" && selected.LiveScene == false && !processing &&
             selected.ProjectPath is not null;
         ValidateButton.ToolTip = L("显示生成过程中记录的自动检查结果。", "Shows the checks recorded during generation.");
-        ExportButton.IsEnabled = selected?.State == "completed" && selected.LiveScene == false && selected.ProjectPath is not null &&
+        ExportButton.IsEnabled = selected?.State == "completed" && selected.ProjectPath is not null &&
             (!processing || selected.ExportArchive is not null);
         ExportButton.Content = selected?.ExportArchive is null ? L("导出 ZIP", "Export ZIP") : L("打开 ZIP", "Open ZIP");
         PropertiesEditor.IsEnabled = !processing && !analyzing && !presetBusy && selected is null;
@@ -705,7 +705,7 @@ public partial class MainWindow : Window
         RefreshTargetsButton.IsEnabled = File.Exists(WpeExeBox.Text) && !processing && !detecting;
         DetectButton.IsEnabled = !processing && !detecting;
         CurrentWallpaperBox.IsEnabled = !detecting && CurrentWallpaperBox.Items.Count > 0;
-        ApplyButton.IsEnabled = selected?.State == "completed" && selected.LiveScene == false && selected.CanApply && !processing && File.Exists(WpeExeBox.Text) &&
+        ApplyButton.IsEnabled = selected?.State == "completed" && selected.CanApply && !processing && File.Exists(WpeExeBox.Text) &&
             TargetBox.SelectedItem is TargetItem && (selected.ApplyManifest is null || selected.Restored);
         RollbackButton.IsEnabled = selected?.ApplyManifest is string application && File.Exists(application) && !processing && !selected.Restored;
         RollbackFileButton.IsEnabled = !processing;
@@ -747,9 +747,11 @@ public partial class MainWindow : Window
         {
             if (status != "optimized" || report["fused_pairs"]?.GetValue<int>() is not > 0 ||
                 report["source"]?.GetValue<string>() is not string source ||
-                report["source_sha256"]?.GetValue<string>() is not string hash || hash.Length == 0)
+                report["source_sha256"]?.GetValue<string>() is not string hash || hash.Length == 0 ||
+                report["project_path"]?.GetValue<string>() is not { Length: > 0 })
                 throw new InvalidDataException(invalid);
-            request = new HybridBakeRequest(2, new JsonObject { ["source"] = source, ["source_sha256"] = hash },
+            request = new HybridBakeRequest(2, new JsonObject { ["source"] = source, ["source_sha256"] = hash,
+                ["snapshot_properties"] = report["snapshot_properties"]?.DeepClone() ?? new JsonObject() },
                 output, ProjectDirectory: output);
         }
         else if (schema == 2 && kind is "hybrid_video_candidate" or "hybrid_video_probe")
@@ -782,6 +784,8 @@ public partial class MainWindow : Window
                 .FirstOrDefault(path => File.Exists(Path.Combine(path, "project.json")));
         if (declaredProject is not null && project is null)
             throw new FileNotFoundException(L("输出目录中缺少 project.json。", "project.json is missing from the output folder."), declaredProject);
+        if (kind == "live_scene_optimized" && !string.Equals(project, Path.Combine(output, "project"), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(invalid);
         request = request with { ProjectDirectory = project };
         // 显卡名：先按设备 ID 在当前列表里找，找不到用报告里记的分析设备名；都没有就不显示这一段。
         string? gpuName = GpuBox.Items.OfType<VulkanDeviceInfo>()
@@ -793,8 +797,8 @@ public partial class MainWindow : Window
         return new JobItem(request, tools, gpuName, definitions, liveScene)
         {
             State = "completed", ProjectPath = project, GenerationReportPath = reportPath, LatestReportPath = reportPath,
-            CanApply = canApply && !liveScene,
-            Detail = liveScene ? L("实时场景已优化，可打开新工程。", "Live scene optimized; open the new project.") : canApply
+            CanApply = canApply,
+            Detail = liveScene ? L("实时场景已优化，可预览或应用新工程。", "Live scene optimized; preview or apply the new project.") : canApply
                 ? L("已生成：可应用到桌面。", "Generated: can be applied to the desktop.")
                 : L("已生成：由旧版本生成，重新生成后可应用到桌面。", "Generated by an older version; regenerate to apply it to the desktop.")
         };
@@ -825,21 +829,38 @@ public partial class MainWindow : Window
         RefreshControls();
         if (!OptimizeLiveButton.IsEnabled) return;
         string source = SourceBox.Text.Trim();
+        int revision = settingsRevision;
+        preparingLiveScene = true; RefreshControls();
         try
         {
-            using var project = new ProjectSource(source);
-            if (project.Kind != "scene") throw new InvalidDataException(L("仅支持场景（Scene）类壁纸。", "Only Scene wallpapers are supported."));
+            using (var project = new ProjectSource(source))
+            {
+                if (project.Kind != "scene") throw new InvalidDataException(L("仅支持场景（Scene）类壁纸。", "Only Scene wallpapers are supported."));
+            }
             ReloadSourcePropertyDefinitions(source);
             JsonObject properties = AppJsonPresentation.MergeWpeProperties(sourceWpeProperties,
                 sourcePropertyDefinitions, analysisPreviewOverrides).Properties;
+            string sourceHash = await Task.Run(async () =>
+            {
+                using var project = new ProjectSource(source);
+                return await project.SourceHashAsync();
+            });
+            if (closeRequested) return;
+            if (settingsRevision != revision || !string.Equals(source, SourceBox.Text.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                StatusText.Text = L("准备期间设置有变动，请重新优化。", "Settings changed while preparing; start optimization again.");
+                return;
+            }
             string output = AppEnvironment.NewOutput(OutputBox.Text.Trim(), source);
-            var plan = new JsonObject { ["source"] = source, ["snapshot_properties"] = properties };
-            Enqueue(new JobItem(new HybridBakeRequest(2, plan, output, ProjectDirectory: output), null, null,
+            var plan = new JsonObject { ["source"] = source, ["source_sha256"] = sourceHash,
+                ["snapshot_properties"] = properties.DeepClone() };
+            Enqueue(new JobItem(new HybridBakeRequest(2, plan, output, ProjectDirectory: Path.Combine(output, "project")), null, null,
                 sourcePropertyDefinitions, liveScene: true));
             queueRun = ProcessQueueAsync();
             await queueRun;
         }
         catch (Exception error) { StatusText.Text = L("实时场景优化失败：", "Live scene optimization failed: ") + error.Message; }
+        finally { preparingLiveScene = false; RefreshControls(); }
     }
 
     private void Enqueue(JobItem job)
@@ -871,25 +892,26 @@ public partial class MainWindow : Window
                     if (job.LiveScene)
                     {
                         job.Describe(() => L("正在优化实时场景…", "Optimizing live scene…"));
+                        string project = job.Request.ProjectDirectory ?? Path.Combine(job.Request.OutputDirectory, "project");
                         var optimized = await Task.Run(() => WaterwaveFusion.OptimizeSelectedAsync(job.Source,
-                            job.Request.OutputDirectory, job.FrozenProperties ?? new JsonObject(), runCancellation.Token));
+                            project, job.FrozenProperties ?? new JsonObject(), job.SourceSha256, runCancellation.Token));
                         runCancellation.Token.ThrowIfCancellationRequested();
                         int fused = optimized["fused_pairs"]?.GetValue<int>() ?? 0;
                         if (fused > 0)
                         {
-                            string project = job.Request.OutputDirectory;
                             optimized["schema_version"] = 1;
                             optimized["artifact_kind"] = "live_scene_optimized";
                             optimized["project_path"] = project;
                             optimized["source"] = job.Source;
+                            optimized["snapshot_properties"] = job.FrozenProperties?.DeepClone();
                             await File.WriteAllTextAsync(job.GenerationReportPath, optimized.ToJsonString(), runCancellation.Token);
                             job.ProjectPath = project;
                             job.LatestReportPath = job.GenerationReportPath;
                         }
-                        job.CanApply = false;
+                        job.CanApply = AppJsonPresentation.CandidateCanApply(optimized);
                         job.State = "completed";
                         job.Describe(() => fused > 0
-                            ? L($"已融合 {fused} 组水波效果，可打开新工程。", $"Fused {fused} water-wave pairs. Open the new project.")
+                            ? L($"已融合 {fused} 组水波效果，可预览或应用新工程。", $"Fused {fused} water-wave pairs. Preview or apply the new project.")
                             : L("没有可融合的水波效果，未生成新工程。", "No compatible water-wave pairs; no project was created."));
                         continue;
                     }
@@ -1053,7 +1075,7 @@ public partial class MainWindow : Window
             ? AppEnvironment.NewOutput(OutputBox.Text.Trim(), original.Source)
             : AppEnvironment.NewWorkDirectory(original.Source, OutputBox.Text.Trim());
         var request = original.Request with { Plan = plan, OutputDirectory = output,
-            ProjectDirectory = original.LiveScene ? output : AppEnvironment.NewOutput(OutputBox.Text.Trim(), original.Source) };
+            ProjectDirectory = original.LiveScene ? Path.Combine(output, "project") : AppEnvironment.NewOutput(OutputBox.Text.Trim(), original.Source) };
         Enqueue(original.Clone(request));
         await ProcessQueueAsync();
     }
@@ -1481,8 +1503,9 @@ public partial class MainWindow : Window
     private void WindowClosing(object? sender, CancelEventArgs e)
     {
         analysisCancellation?.Cancel();
+        closeRequested = true;
         if (!processing) return;
-        closeRequested = true; e.Cancel = true;
+        e.Cancel = true;
         foreach (var job in jobs.Where(j => j.State == "queued")) { job.State = "cancelled"; job.Translate(english); }
         runCancellation?.Cancel();
         StatusText.Text = L("正在结束运行中的任务，完成后关闭窗口…", "Finishing the running job before the window closes…");
