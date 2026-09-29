@@ -269,6 +269,19 @@ internal static class DaytimeSplitChecks
             nonVisibility.FallbackReason?.StartsWith("writes_non_visibility", StringComparison.Ordinal) == true,
             "选择器写了 visible 以外的属性就退回");
 
+        foreach (string sideEffect in new[] {
+            "thisScene.getLayer('day1')['color'] = '1 0 0';",
+            "thisScene.getLayer('day1').setColor('1 0 0');",
+            "thisScene.getLayer('day1').visible = false;"
+        })
+        {
+            string script = Selector.Replace("a.forEach(l => l.visible = true);",
+                "a.forEach(l => l.visible = true); " + sideEffect, StringComparison.Ordinal);
+            DaytimeSplit.Detection unsafeSelector = DaytimeSplit.Detect(ById(Scene(script)));
+            check(!unsafeSelector.IsRecognized && unsafeSelector.FallbackReason == "unsupported_visibility_script",
+                "未观测分支里的计算属性写、未知成员调用和额外显隐写不能被认作纯显隐控制器：" + sideEffect);
+        }
+
         DaytimeSplit.Detection playback = DaytimeSplit.Detect(ById(Scene(Selector.Replace(
             "var h = new Date().getHours();",
             "var h = new Date().getHours(); thisScene.getLayer(\"day1\").play();", StringComparison.Ordinal))));

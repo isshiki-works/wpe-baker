@@ -48,6 +48,27 @@ internal static class DaytimeSplit
     private static readonly Regex PropertyWrite = new(@"\.\s*(\w+)\s*=(?!=)", Options);
     private static readonly Regex MethodCall = new(@"\.\s*(play|pause|stop|seek|setText|setTexture|setEffect)\s*\(", Options);
     private static readonly Regex LiveInput = new(@"\binput\s*[.\[]|\bregisterAudioBuffers\s*\(|\bfunction\s+(cursor|media)\w*\s*\(", Options);
+    // Only the existing group-array selector subset is safe to freeze: local helpers, Date/parseInt,
+    // array map/concat/forEach, getLayer/getHours/hasOwnProperty, and direct .visible writes.
+    // The indexed video selector has its own whole-script proof below.
+    private static bool VisibilityOnlyScript(string code)
+    {
+        string syntax = Regex.Replace(GroupArray.Replace(code, ""), @"""(?:\\.|[^""\\])*""|'(?:\\.|[^'\\])*'", "''")
+            .Replace("[]", "", StringComparison.Ordinal);
+        if (syntax.IndexOfAny(['[', ']', '?', ':', '`']) >= 0 ||
+            Regex.IsMatch(syntax, @"\+\+|--|[-+*/%&|^]=|\b(?:delete|await|yield|eval|Function|Proxy|Reflect|globalThis|window|shared|thisObject|thisLayer)\b|\bnew\s+(?!Date\b)", Options))
+            return false;
+        if (Regex.Matches(syntax, @"\.\s*([A-Za-z_$][\w$]*)\s*\(", Options)
+            .Any(call => call.Groups[1].Value is not ("getLayer" or "getHours" or "map" or "concat" or "forEach" or "hasOwnProperty")))
+            return false;
+        var local = Regex.Matches(syntax, @"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(", Options)
+            .Select(match => match.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+        return Regex.Matches(syntax, @"(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(", Options)
+            .All(call => call.Groups[1].Value is "if" or "Date" or "parseInt" || local.Contains(call.Groups[1].Value)) &&
+            // The recognized state model accounts for these forEach visibility writes only.
+            Regex.Matches(code, @"\.\s*forEach\s*\(\s*(\w+)\s*=>\s*\{?\s*\1\s*\.\s*visible\s*=\s*(?:true|false)\s*;?\s*\}?\s*\)", Options).Count ==
+            PropertyWrite.Matches(code).Count;
+    }
     // 先去掉注释及字符串以外的空白，再匹配整个模板。只允许选中项 play、其余 pause，
     // 不能把 play/pause 从上面的通用拒绝规则中删掉，也不能只检查几个局部片段。
     private static readonly Regex IndexedVideoSelector = new("""
@@ -278,6 +299,8 @@ internal static class DaytimeSplit
         string[] writes = PropertyWrite.Matches(code).Select(m => m.Groups[1].Value).Distinct().ToArray();
         if (writes.Length == 0) return Fallback("writes_no_visibility", id, name);
         if (writes.Any(property => property != "visible")) return Fallback("writes_non_visibility:" + string.Join(",", writes.Where(p => p != "visible")), id, name);
+        // The video path reaches here only after the full IndexedVideoSelector template matched.
+        if (!controlsVideoPlayback && !VisibilityOnlyScript(code)) return Fallback("unsupported_visibility_script", id, name);
         // 组：变量名 -> 图层名列表；名字按场景 name 精确对应到唯一图层。
         var groups = new Dictionary<string, string[]>(StringComparer.Ordinal);
         foreach (Match match in GroupArray.Matches(code))
