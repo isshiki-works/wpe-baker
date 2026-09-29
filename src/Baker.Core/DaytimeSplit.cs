@@ -69,6 +69,72 @@ internal static class DaytimeSplit
             Regex.Matches(code, @"\.\s*forEach\s*\(\s*(\w+)\s*=>\s*\{?\s*\1\s*\.\s*visible\s*=\s*(?:true|false)\s*;?\s*\}?\s*\)", Options).Count ==
             PropertyWrite.Matches(code).Count;
     }
+
+    // Prove the branch's helper first clears every declared group, then shows exactly its argument.
+    // Accepted helpers have either an inline reset or one separate zero-argument reset helper.
+    private static bool ProvenVisibilitySwitch(string code, IEnumerable<string> groups, Match[] branches, Match otherwise)
+    {
+        string show = branches[0].Groups[4].Value;
+        if (branches.Any(branch => branch.Groups[4].Value != show) ||
+            otherwise.Success && otherwise.Groups[1].Value != show) return false;
+        string escaped = Regex.Escape(show);
+        Match helper = Regex.Match(code, @"\bfunction\s+" + escaped + @"\s*\(\s*(?<arg>\w+)\s*\)\s*\{(?<body>[^{}]*)\}", Options);
+        if (!helper.Success || Regex.Matches(code, @"\b" + escaped + @"\s*\(", Options).Count != branches.Length + 1 + (otherwise.Success ? 1 : 0))
+            return false;
+        string body = Compact(helper.Groups["body"].Value), arg = Regex.Escape(helper.Groups["arg"].Value);
+        Match display = Regex.Match(body, @"\A(?<reset>.*?)" + arg + @"\.forEach\((?<item>\w+)=>\k<item>\.visible=true\);?\z", Options);
+        if (!display.Success || PropertyWrite.Matches(code).Count != 2) return false;
+        string reset = display.Groups["reset"].Value;
+        string[]? ResetGroups(string text)
+        {
+            Match direct = Regex.Match(text, @"\A\[\]\.concat\((?<groups>\w+(?:,\w+)*)\)\.forEach\((?<item>\w+)=>\k<item>\.visible=false\);?\z", Options);
+            Match local = Regex.Match(text, @"\A(?:var|let|const)(?<all>\w+)=\[\]\.concat\((?<groups>\w+(?:,\w+)*)\);\k<all>\.forEach\((?<item>\w+)=>\k<item>\.visible=false\);?\z", Options);
+            Match match = direct.Success ? direct : local;
+            return match.Success ? match.Groups["groups"].Value.Split(',') : null;
+        }
+        string? resetHelper = null;
+        string[]? cleared = ResetGroups(reset);
+        if (cleared is null)
+        {
+            Match call = Regex.Match(reset, @"\A(?<name>\w+)\(\);\z", Options);
+            if (!call.Success) return false;
+            resetHelper = call.Groups["name"].Value;
+            string resetName = Regex.Escape(resetHelper);
+            Match function = Regex.Match(code, @"\bfunction\s+" + resetName + @"\s*\(\s*\)\s*\{(?<body>[^{}]*)\}", Options);
+            if (!function.Success || Regex.Matches(code, @"\b" + resetName + @"\s*\(", Options).Count != 2) return false;
+            cleared = ResetGroups(Compact(function.Groups["body"].Value));
+        }
+        string? FunctionBody(string function)
+        {
+            Match head = Regex.Match(code, @"\b(?:export\s+)?function\s+" + Regex.Escape(function) + @"\s*\([^)]*\)\s*\{", Options);
+            if (!head.Success) return null;
+            int start = head.Index + head.Length, depth = 1;
+            for (int i = start; i < code.Length; ++i)
+            {
+                depth += code[i] switch { '{' => 1, '}' => -1, _ => 0 };
+                if (depth == 0) return code[start..i];
+            }
+            return null;
+        }
+        if (FunctionBody("init") is not string init || FunctionBody("update") is not string update) return false;
+        string compactInit = Compact(init);
+        Match[] maps = Regex.Matches(compactInit, @"(?<group>\w+)=\k<group>\.map\((?<item>\w+)=>thisScene\.getLayer\(\k<item>\)\);?", Options).ToArray();
+        if (string.Concat(maps.Select(map => map.Value)) != compactInit || maps.Length != groups.Count() ||
+            !groups.ToHashSet(StringComparer.Ordinal).SetEquals(maps.Select(map => map.Groups["group"].Value))) return false;
+        string compactUpdate = Compact(update);
+        Match clock = Regex.Match(compactUpdate, @"\A(?:var|let|const)(?<hour>\w+)=newDate\(\)\.getHours\(\);", Options);
+        Match[] updateBranches = HourBranch.Matches(update).ToArray();
+        Match updateElse = ElseBranch.Match(update);
+        if (!clock.Success || clock.Groups["hour"].Value != branches[0].Groups[1].Value || updateBranches.Length != branches.Length ||
+            updateElse.Success != otherwise.Success) return false;
+        string expectedUpdate = clock.Value + string.Join("else", updateBranches.Select(branch => Compact(branch.Value))) +
+            (updateElse.Success ? "else{" + updateElse.Groups[1].Value + "(" + updateElse.Groups[2].Value + ");}" : "");
+        if (compactUpdate != expectedUpdate) return false;
+        return cleared is not null && cleared.Length == groups.Count() && groups.ToHashSet(StringComparer.Ordinal).SetEquals(cleared) &&
+            Regex.Matches(code, @"\bfunction\s+(\w+)\s*\(", Options).All(function =>
+                function.Groups[1].Value is "init" or "update" or "applyUserProperties" ||
+                function.Groups[1].Value == show || function.Groups[1].Value == resetHelper);
+    }
     // 先去掉注释及字符串以外的空白，再匹配整个模板。只允许选中项 play、其余 pause，
     // 不能把 play/pause 从上面的通用拒绝规则中删掉，也不能只检查几个局部片段。
     private static readonly Regex IndexedVideoSelector = new("""
@@ -349,7 +415,8 @@ internal static class DaytimeSplit
         }
         var branches = new List<(int Low, int High, string Group)>();
         string? hourVariable = null;
-        foreach (Match match in HourBranch.Matches(code))
+        Match[] hourBranches = HourBranch.Matches(code).ToArray();
+        foreach (Match match in hourBranches)
         {
             hourVariable ??= match.Groups[1].Value;
             if (match.Groups[1].Value != hourVariable) return Fallback("mixed_branch_variables", id, name);
@@ -366,6 +433,8 @@ internal static class DaytimeSplit
             if (!groupIds.ContainsKey(elseMatch.Groups[2].Value)) return Fallback("else_shows_unknown_group:" + elseMatch.Groups[2].Value, id, name);
             fallbackGroup = elseMatch.Groups[2].Value;
         }
+        if (!controlsVideoPlayback && !ProvenVisibilitySwitch(code, groups.Keys, hourBranches, elseMatch))
+            return Fallback("unsupported_visibility_script", id, name);
         // 逐小时求值，按脚本分支顺序取第一个命中的组；相邻同组合并成一个状态，跨午夜的段并成同一状态。
         string?[] perHour = new string?[24];
         for (int hour = 0; hour < 24; ++hour)

@@ -262,6 +262,12 @@ internal static class DaytimeSplitChecks
             // 跨午夜的夜间状态按小时段出现顺序并成一个状态：先 [0,8) 再 [20,24)。
             HoursAre(night, [[0, 8], [20, 24]]) && night.VisibleLayerIds.SequenceEqual(new[] { 20 }),
             "昼夜模板脚本被识别成两个状态，阈值取脚本默认值");
+        string renamedSelector = Selector.Replace("hideAll", "clearGroups", StringComparison.Ordinal)
+            .Replace("showLayers", "displayGroup", StringComparison.Ordinal)
+            .Replace("dayLayers", "lightLayers", StringComparison.Ordinal)
+            .Replace("nightLayers", "darkLayers", StringComparison.Ordinal);
+        check(DaytimeSplit.Detect(ById(Scene(renamedSelector))).IsRecognized,
+            "纯昼夜模板的组名和 reset/show 函数名由源码决定");
 
         DaytimeSplit.Detection nonVisibility = DaytimeSplit.Detect(ById(Scene(
             Selector.Replace("l.visible = true", "l.alpha = 1", StringComparison.Ordinal))));
@@ -281,6 +287,9 @@ internal static class DaytimeSplitChecks
             check(!unsafeSelector.IsRecognized && unsafeSelector.FallbackReason == "unsupported_visibility_script",
                 "未观测分支里的计算属性写、未知成员调用和额外显隐写不能被认作纯显隐控制器：" + sideEffect);
         }
+        check(!DaytimeSplit.Detect(ById(Scene(Selector.Replace("a.forEach(l => l.visible = true);",
+                "a.forEach(l => l.visible = false);", StringComparison.Ordinal)))).IsRecognized,
+            "show helper that hides the selected group cannot claim a visible daytime state");
 
         DaytimeSplit.Detection playback = DaytimeSplit.Detect(ById(Scene(Selector.Replace(
             "var h = new Date().getHours();",
