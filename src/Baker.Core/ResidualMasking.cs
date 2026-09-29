@@ -585,11 +585,9 @@ public static class ResidualMasking
         }
         JsonObject recorded = stationarity.DeepClone().AsObject();
         if (Text(recorded["reason_key"]) == LiveInputReasonKey)
-        {
             recorded.Remove("loop_convergence");
-            foreach (JsonObject failure in (recorded["failed_conditions"] as JsonArray ?? []).OfType<JsonObject>()
-                .Where(failure => LiveInput(Text(failure["code"])))) failure.Remove("cannot");
-        }
+        foreach (JsonObject failure in (recorded["failed_conditions"] as JsonArray ?? []).OfType<JsonObject>()
+            .Where(failure => LiveInput(Text(failure["code"])))) failure.Remove("cannot");
         verdict["particle_stationarity"] = recorded;
         if (!stationary)
         {
