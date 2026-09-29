@@ -7,12 +7,12 @@ internal static class AnalysisOrchestratorChecks
     {
         var calls = new List<HybridAnalyzeRequest>();
         async Task<JsonObject> Run(string name, Func<HybridAnalyzeRequest, JsonObject> plan, string preset = "quality", bool custom = false, string interaction = "fixed",
-            bool allowNoBenefit = false, string placement = "preserve")
+            bool allowNoBenefit = false, string placement = "preserve", string? explicitLayout = null)
         {
             calls.Clear();
             return await AnalysisOrchestrator.RunAsync(new(2, "unused", "unused", Path.Combine(root, name),
                 Preset: preset, CustomSettings: custom, Interaction: interaction, AllowNoBenefit: allowNoBenefit,
-                LiveOverlayPlacement: placement), (request, _) => {
+                LiveOverlayPlacement: placement, VideoLayout: explicitLayout ?? "full_frame", LayoutExplicit: explicitLayout is not null), (request, _) => {
                 calls.Add(request);
                 return Task.FromResult(plan(request));
             }, CancellationToken.None);
@@ -25,6 +25,28 @@ internal static class AnalysisOrchestratorChecks
         JsonObject layered = await Run("preset-layered", r => Plan(r, r.VideoLayout == "layered", 4));
         check(calls.Count == 2 && layered["preset_applied"]!.GetValue<string>() == "quality" && layered["route_fallback"] is null,
             "four layered groups are a normal quality path, not experimental");
+        JsonObject StaticWithLive(HybridAnalyzeRequest request)
+        {
+            JsonObject plan = Plan(request, true, request.VideoLayout == "layered" ? 2 : 1);
+            if (request.VideoLayout == "full_frame")
+            {
+                plan["loop"]!["candidates"] = new JsonArray(new JsonObject { ["frames"] = 1 });
+                plan["live_layer_ids"] = new JsonArray(116);
+                plan["bake_value"] = new JsonObject { ["status"] = "low_value" };
+            }
+            return plan;
+        }
+        JsonObject usefulLayout = await Run("low-value-layout-fallback", StaticWithLive);
+        check(calls.Count == 2 && calls[0].VideoLayout == "full_frame" && calls[1].VideoLayout == "layered" &&
+            Admission.GroupCount(usefulLayout) == 2 && usefulLayout[NoBenefit.Field] is null,
+            "automatic layout tries a viable layered plan when the full-frame still leaves live effects");
+        JsonObject explicitStill = await Run("low-value-explicit-full-frame", StaticWithLive, explicitLayout: "full_frame");
+        check(calls.Count(r => r.Interaction == "fixed") == 1 && calls.All(r => r.VideoLayout == "full_frame") &&
+            explicitStill[NoBenefit.Field]?["status"]?.GetValue<string>() == NoBenefit.ExpectedStatus,
+            "an explicit full-frame layout keeps its existing low-benefit verdict");
+        JsonObject allowedStill = await Run("low-value-allowed", StaticWithLive, allowNoBenefit: true);
+        check(calls.Count == 1 && allowedStill[NoBenefit.Field]?["status"]?.GetValue<string>() == NoBenefit.OverrideStatus,
+            "an explicit no-benefit override keeps the first accepted layout");
         JsonObject balanced = await Run("preset-balanced", r => Plan(r, r.Preset == "balanced", 3));
         check(balanced["preset_applied"]!.GetValue<string>() == "balanced" &&
             calls.Last().ViewMode == "fixed_view" && calls.Last().ExcludedLayerIds is null &&
