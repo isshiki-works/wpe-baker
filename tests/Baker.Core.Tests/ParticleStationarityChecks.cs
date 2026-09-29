@@ -370,8 +370,12 @@ internal static class ParticleStationarityChecks
         JsonObject clockOnly = ScriptedAncestor(), pointer = ScriptedAncestor("pointer");
         check(Only(clockOnly, "C7 script_period_not_derived") && clockOnly["loop_convergence"] is null,
             "C7 未收敛：祖先对象上逐帧读时钟的脚本等于移动发射器，脚本周期还没有推导，不判不能");
-        check(Only(pointer, "C7 script_reads_external_input") && pointer["loop_convergence"]?.GetValue<string>() == "cannot",
-            "C7 不能：同一段脚本读指针，输出依赖外部输入，不是时间的周期函数");
+        check(Only(pointer, "C7 script_reads_external_input") && pointer["loop_convergence"] is null &&
+            pointer["reason_key"]?.GetValue<string>() == ResidualMasking.LiveInputReasonKey &&
+            pointer["failed_conditions"]!.AsArray().OfType<JsonObject>()
+                .Where(failure => failure["code"]?.GetValue<string>() == "script_reads_external_input")
+                .All(failure => failure["cannot"] is null),
+            "C7 实时输入未证闭合：粒子仍不平稳，但不把读指针标成方程证明不能");
         check(Only(Verdict(droplets, withDependencies: false), "C7 script_evidence_unavailable"),
             "C7 反例：运行时观测缺 runtime_dependencies 时证明不了没有脚本");
 

@@ -159,6 +159,24 @@ internal static class SuitabilityVerdictChecks
                     "live input stays unproven when no residual classification is attached");
             }
         }
+        JsonObject particleInput = Plan(groups: 1, totalLayers: 2, videoLayers: 1, loop: Loop(),
+            blockers: [new Blocker(BlockerCode.BakeAllocation, ["A particle has no loop."])]);
+        particleInput["loop"]!["unresolved"]!.AsArray().Add(new JsonObject {
+            ["kind"] = "runtime_animation", ["owner_layer_id"] = 0, ["mechanism"] = "particle_system",
+            ["particle_stationarity"] = new JsonObject {
+                ["stationary"] = false, ["reason_key"] = ResidualMasking.LiveInputReasonKey,
+                ["loop_convergence"] = "cannot", // older saved evidence
+                ["failed_conditions"] = new JsonArray(new JsonObject {
+                    ["condition"] = "C7", ["code"] = "script_reads_external_input", ["cannot"] = true }) } });
+        particleInput["loop"]!["residual_masking"] = ResidualMasking.Classify(particleInput,
+            new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 0, ["particle"] = "particle.json" }) }, _ => null);
+        JsonObject particleVerdict = Verdict(particleInput);
+        check(particleInput["loop"]!["residual_masking"]!["status"]!.GetValue<string>() == "rejected" &&
+            particleVerdict["loop_convergence"] is null && Text(particleVerdict, "reason_key") == ResidualMasking.LiveInputReasonKey,
+            "a saved particle input reason remains unproven through residual masking and suitability");
+        particleInput["loop"]!["residual_masking"]!["blocking_components"]![0]!["loop_convergence"] = "cannot";
+        check(Verdict(particleInput)["loop_convergence"] is null,
+            "even an older classified input block cannot restore a false proof");
         // --- 未收敛而第一条阻断是分配拒绝：摘要按收敛理由说"暂不支持"，不说"部分内容必须实时渲染" ---
         JsonObject unconverged = Plan(groups: 2, totalLayers: 50, videoLayers: 20, loop: Loop(unresolved: 1),
             blockers: [new Blocker(BlockerCode.BakeAllocation, ["A layer has no proof."])]);

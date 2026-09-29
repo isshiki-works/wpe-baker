@@ -33,7 +33,7 @@ internal static class ParticleStationarity
 
     /// <summary>
     /// 一条不满足：condition 是 C1–C9（或 definition / warmup），code 是稳定代号，node 指出哪个节点，value 是原始值。
-    /// Cannot = 已证明循环上限内不会重复（不是"说不清"），这一层的结论就是"不能"。
+    /// Cannot 是上游的判定；实时输入代号在输出证据时降为未证闭合，其余证明仍可标为不能。
     /// </summary>
     internal sealed record Failure(string Condition, string Code, string Node, string? Value, bool Cannot = false);
 
@@ -100,7 +100,7 @@ internal static class ParticleStationarity
                 ["failed_conditions"] = new JsonArray(Failures.Select(failure =>
                 {
                     var entry = new JsonObject { ["condition"] = failure.Condition, ["code"] = failure.Code, ["node"] = failure.Node, ["value"] = failure.Value };
-                    if (failure.Cannot) entry["cannot"] = true;
+                    if (failure.Cannot && !ResidualMasking.LiveInput(failure.Code)) entry["cannot"] = true;
                     return (JsonNode)entry;
                 }).ToArray()),
                 ["warmup_seconds"] = WarmupSeconds,
@@ -116,13 +116,14 @@ internal static class ParticleStationarity
             };
             if (Lock is not null) json["cyclostationary_lock"] = Lock.ToJson();
             if (FrozenFields.Count > 0) json["frozen_turbulence_operators"] = new JsonArray([.. FrozenFields.Select(x => (JsonNode)x.Operator)]);
-            // 任一条已证明上限内不会重复，这一层就是"不能"（ResidualMasking 据此收敛），其余条件说不说得清都不改变结论。
-            if (Failures.Any(failure => failure.Cannot))
+            // 实时输入只标记当前未证闭合；其它已证不重复的项才给出 cannot。
+            if (Failures.Any(failure => failure.Cannot && !ResidualMasking.LiveInput(failure.Code)))
             {
                 json["loop_convergence"] = "cannot";
-                json["reason_key"] = Failures.Where(failure => failure.Cannot).All(failure => ResidualMasking.LiveInput(failure.Code))
-                    ? ResidualMasking.LiveInputReasonKey : ResidualMasking.NeverRepeatsReasonKey;
+                json["reason_key"] = ResidualMasking.NeverRepeatsReasonKey;
             }
+            else if (Failures.Count > 0 && Failures.All(failure => failure.Cannot && ResidualMasking.LiveInput(failure.Code)))
+                json["reason_key"] = ResidualMasking.LiveInputReasonKey;
             return json;
         }
 

@@ -171,7 +171,8 @@ internal static class HybridSuitability
     private static JsonObject Converged(JsonObject plan, JsonObject built, bool unsupportedOtherwise = false, bool proven = false, bool liveInput = false)
     {
         JsonObject[] blocking = (plan["loop"]?["residual_masking"]?["blocking_components"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
-        bool blockingCannot = blocking.Length > 0 && blocking.All(component => Text(component["loop_convergence"]) == "cannot");
+        bool blockingCannot = blocking.Length > 0 && blocking.All(component =>
+            Text(component["loop_convergence"]) == "cannot" && Text(component["reason_key"]) != ResidualMasking.LiveInputReasonKey);
         bool cannot = proven || blockingCannot;
         if (!cannot && !unsupportedOtherwise) return built;
         if (!cannot && !liveInput && blocking.Length > 0)

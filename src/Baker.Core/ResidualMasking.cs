@@ -583,7 +583,14 @@ public static class ResidualMasking
             verdict["reason_en"] = MessageCatalog.Get("residual.particle_verdict_missing", MessageCatalog.English, layer);
             return verdict;
         }
-        verdict["particle_stationarity"] = stationarity.DeepClone();
+        JsonObject recorded = stationarity.DeepClone().AsObject();
+        if (Text(recorded["reason_key"]) == LiveInputReasonKey)
+        {
+            recorded.Remove("loop_convergence");
+            foreach (JsonObject failure in (recorded["failed_conditions"] as JsonArray ?? []).OfType<JsonObject>()
+                .Where(failure => LiveInput(Text(failure["code"])))) failure.Remove("cannot");
+        }
+        verdict["particle_stationarity"] = recorded;
         if (!stationary)
         {
             string codes = string.Join(", ", (stationarity["failed_conditions"] as JsonArray ?? []).OfType<JsonObject>()
@@ -591,10 +598,13 @@ public static class ResidualMasking
             verdict["maskable"] = false;
             verdict["reason"] = MessageCatalog.Get("residual.particle_not_stationary", MessageCatalog.Chinese, layer, codes);
             verdict["reason_en"] = MessageCatalog.Get("residual.particle_not_stationary", MessageCatalog.English, layer, codes);
-            if (Text(stationarity["loop_convergence"]) == "cannot")
+            string key = Text(stationarity["reason_key"]);
+            if (key == LiveInputReasonKey)
+                verdict["reason_key"] = key; // 老计划可能还带 cannot；输入原因不能继承那条旧证明。
+            else if (Text(stationarity["loop_convergence"]) == "cannot")
             {
                 verdict["loop_convergence"] = "cannot";
-                verdict["reason_key"] = Text(stationarity["reason_key"]) is { Length: > 0 } key ? key : NeverRepeatsReasonKey;
+                verdict["reason_key"] = key.Length > 0 ? key : NeverRepeatsReasonKey;
             }
             return verdict;
         }
