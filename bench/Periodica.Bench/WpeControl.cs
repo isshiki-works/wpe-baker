@@ -85,6 +85,7 @@ internal sealed class WpeControl(string executable,
 
     internal async Task<string> RunAsync(IEnumerable<string> arguments, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         if (send is not null) return await send(arguments, token);
         var start = new ProcessStartInfo(Executable) { RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(Executable)! };

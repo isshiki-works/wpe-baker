@@ -27,7 +27,7 @@ wpe-baker.exe analyze <scene.pkg> --out plan.json
 wpe-baker.exe bake plan.json --out <输出目录>
 ```
 
-生成后可用 `wpe-baker.exe compare <原作目录> --baked <成品目录> --wallpaper-engine <wallpaper64.exe> --out <新报告目录>` 比较实际播放成本。命令会临时按 A/B/B/A 切换壁纸，结束后恢复原分配；目前要求只连接一块显示器且未使用播放列表。报告分别展示核显与 CPU 封装功耗，方向相反时标为取舍；证据不完整时不给推荐，画面正确性另行检查。
+生成后可用 `wpe-baker.exe compare <原作目录> --baked <成品目录> --wallpaper-engine <wallpaper64.exe> --out <新报告目录>` 比较实际播放成本。命令会临时按 A/B/B/A 切换壁纸，结束后重新打开原分配，默认继续播放；加 `--restore-playback paused` 可让它结束后保持暂停。播放位置不会被保存或恢复，原来的暂停状态无法从保存配置读取。目前要求只连接一块显示器且未使用播放列表。报告分别展示核显与 CPU 封装功耗，方向相反时标为取舍；证据不完整时不给推荐，画面正确性另行检查。
 
 ## 适用范围
 

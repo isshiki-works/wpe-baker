@@ -85,7 +85,8 @@ try
             SettleSeconds: (int)OptionTable.Value("compare", options, "--settle")!,
             Fps: (double)OptionTable.Value("compare", options, "--fps")!,
             IdleSeconds: (int)OptionTable.Value("compare", options, "--idle")!,
-            PresentMon: (string?)OptionTable.Value("compare", options, "--present-mon"));
+            PresentMon: (string?)OptionTable.Value("compare", options, "--present-mon"),
+            RestorePlayback: (string)OptionTable.Value("compare", options, "--restore-playback")!);
         var progress = new Progress<string>(line => Console.Error.WriteLine(line));
         JsonObject result = await Abba.RunAsync(request, progress, cancellation.Token);
         Console.WriteLine(result.ToJsonString(jsonOptions));
