@@ -10,7 +10,8 @@ namespace Baker.Core;
 public sealed record ValidationRequest(int SchemaVersion, string Source, string Candidate, string Assets,
     string OutputDirectory, uint Width, uint Height, uint FpsNumerator = 60, uint FpsDenominator = 1,
     ulong Frames = 24, ulong WarmupFrames = 0, ulong Seed = 0, string? DeviceUuid = null,
-    JsonObject? UserProperties = null, JsonObject? Input = null, JsonArray? InputTimeline = null, uint TileSize = 64);
+    JsonObject? UserProperties = null, JsonObject? Input = null, JsonArray? InputTimeline = null, uint TileSize = 64,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] long? EpochMs = null);
 
 /// <summary>Measures sampled offline RGBA differences; never certifies visual equivalence.</summary>
 public sealed class CandidateValidation(NativeTools tools)
@@ -54,7 +55,7 @@ public sealed class CandidateValidation(NativeTools tools)
             RenderRequest RenderSide(string source, string label) => new(source, request.Assets, Path.Combine(output, label),
                 request.Width, request.Height, request.FpsNumerator, request.FpsDenominator, request.Frames,
                 request.WarmupFrames, request.Seed, DeviceUuid: request.DeviceUuid, UserProperties: request.UserProperties,
-                Input: request.Input, InputTimeline: request.InputTimeline, TraceScene: true);
+                Input: request.Input, InputTimeline: request.InputTimeline, TraceScene: true, EpochMs: request.EpochMs);
             var comparer = new PairedFrameComparer(checked((int)request.Width), checked((int)request.Height), checked((int)request.TileSize));
             await using var frameReport = new StreamWriter(new FileStream(framesPath, FileMode.CreateNew, FileAccess.Write,
                 FileShare.Read, 128 * 1024, true), new UTF8Encoding(false));

@@ -220,6 +220,34 @@ public class EffectPrefixEligibilityTests
     }
 
     [Fact]
+    public void PrefixComparisonSplitsTheExistingFrameBudgetAndRejectsHiddenOwners()
+    {
+        var plan = new JsonObject { ["daytime_split"] = new JsonObject {
+            ["status"] = "recognized", ["controlled_layer_ids"] = new JsonArray(10, 11),
+            ["states"] = new JsonArray(
+                new JsonObject { ["name"] = "day", ["hours"] = new JsonArray(new JsonArray(8, 17)),
+                    ["visible_layer_ids"] = new JsonArray(10) },
+                new JsonObject { ["name"] = "night", ["hours"] = new JsonArray(new JsonArray(0, 4), new JsonArray(20, 24)),
+                    ["visible_layer_ids"] = new JsonArray(11) }) } };
+        EffectPrefixBakeService.ComparisonState[] states = EffectPrefixBakeService.ComparisonStates(plan, [10, 11]);
+        Assert.Equal(["day", "night"], states.Select(state => state.Name));
+        Assert.Equal([24UL, 24UL], states.Select(state => state.Frames));
+        Assert.Equal([10], states[0].Owners);
+        Assert.Equal([11], states[1].Owners);
+        Assert.Equal(new DateTimeOffset(2000, 1, 1, 12, 30, 0, TimeSpan.Zero).ToUnixTimeMilliseconds(), states[0].EpochMs);
+        Assert.Equal(new DateTimeOffset(2000, 1, 1, 2, 30, 0, TimeSpan.Zero).ToUnixTimeMilliseconds(), states[1].EpochMs);
+        var scene = new JsonObject { ["objects"] = new JsonArray(new JsonObject { ["id"] = 1 },
+            new JsonObject { ["id"] = 10, ["parent"] = 1 }, new JsonObject { ["id"] = 11, ["parent"] = 1 }) };
+        JsonArray Layers(bool visible) => new(new JsonObject { ["owner"] = 1, ["visible"] = true },
+            new JsonObject { ["owner"] = 10, ["visible"] = visible });
+        var compared = new JsonObject { ["source_native_result"] = new JsonObject { ["runtime_layers"] = Layers(true) },
+            ["candidate_native_result"] = new JsonObject { ["runtime_layers"] = Layers(true) } };
+        Assert.Null(EffectPrefixBakeService.MissingVisibleOwner(compared, scene, states[0].Owners));
+        compared["candidate_native_result"]!["runtime_layers"] = Layers(false);
+        Assert.Contains("candidate", EffectPrefixBakeService.MissingVisibleOwner(compared, scene, states[0].Owners));
+    }
+
+    [Fact]
     public async Task EncodedWorkCountsCodedPixelsAndActualStreams() => await TestTemp.Run(async dir =>
     {
         var report = new JsonObject {

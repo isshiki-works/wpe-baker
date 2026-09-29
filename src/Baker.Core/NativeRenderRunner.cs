@@ -32,7 +32,8 @@ public sealed record RenderRequest(string Source, string Assets, string OutputDi
     bool SampledCoverageOnly = false, CacheRegion? DirectCrop = null, uint? DirectCrossfadeFrames = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int QuantizerOffset = 0,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool HdrRangeProbe = false,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool HdrSignedSqrt = false);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool HdrSignedSqrt = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? EpochMs = null);
 // HdrScale：官方 HDR 管线下闭合不成立的组。渲染器按浮点中间目标合成，出帧为 rgb/k；成品图层着色器再乘回 k。
 public sealed record GpuEncodeRequest(string Codec = "h264_vulkan", int Qp = 18,
     uint CrossfadeFrames = 0, CacheRegion? Crop = null, bool RetainLoopWindow = false,
