@@ -132,10 +132,7 @@ public static class TradeoffOptions
         BlockerCode[] blockerCodes = [.. PlanBlockers.Codes(plan)];
         bool dependencyBlocked = blockerCodes.Any(code => code is BlockerCode.NoInputIndependentGroup or BlockerCode.NoInputIndependentGroupGeneric);
         var record = new JsonObject {
-            ["basis"] = "Read from this plan only: turning these off requires analyzing again; residual live layer counts are estimates.",
-            ["retain_live_measured"] = "Keeping layers live measurably does not save power (laptop iGPU rail 11.63 -> 11.20 W, package +12% at 60 fps).",
-            ["retain_live_note_zh"] = MessageCatalog.Get("tradeoff.retain_live_note", MessageCatalog.Chinese),
-            ["retain_live_note_en"] = MessageCatalog.Get("tradeoff.retain_live_note", MessageCatalog.English) };
+            ["basis"] = "Read from this plan only: turning these off requires analyzing again; residual live layer counts are estimates." };
         if (dependencyBlocked)
         {
             // 只有当前依赖分析的结果，没有禁用效果后的反事实证据；列出相关机制，不推断整幅主体。
@@ -326,7 +323,7 @@ public static class TradeoffOptions
 
     /// <summary>
     /// 方案说明的分段：每段带字段名（lead 要关什么 / how 怎么关 / alternative 更轻的替代 /
-    /// collateral 连带关掉什么 / route 关掉后的路线 / residual 残留实时层 / retain_live 保留实时不省电）。
+    /// collateral 连带关掉什么 / route 关掉后的路线 / residual 残留实时层）。
     /// CLI 按这个顺序连成一段（<see cref="Narrate"/>），界面按自己的顺序分行显示，两处文案永远同一份。
     /// </summary>
     /// <param name="rank">方案序号；省略时读 option 上的 <c>rank</c>，没有就算第一个。</param>
@@ -375,7 +372,6 @@ public static class TradeoffOptions
         string residualKey = residual == 0 ? "tradeoff.residual_none"
             : Flag(option["expected_full_frame"]) == true ? "tradeoff.residual_non_drawable" : "tradeoff.residual";
         parts.Add(("residual", MessageCatalog.Get(residualKey, language, residual, KindList(residualKinds, language))));
-        parts.Add(("retain_live", MessageCatalog.Get("tradeoff.retain_live_note", language)));
         // 分析解锁不等于烘得出来：23 案真烘复验 0 通过，所以卡片底部收一句烘制阶段的免责。
         parts.Add(("bake_caveat", MessageCatalog.Get("tradeoff.bake_stage_caveat", language)));
         return [.. parts];

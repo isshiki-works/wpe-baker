@@ -103,7 +103,9 @@ internal static class GuiPresetTradeoffChecks
         check(string.Join("", TradeoffOptions.OptionLines(option, MessageCatalog.Chinese).Select(part => part.Text)) ==
             option[MessageCatalog.Chinese]!.GetValue<string>(),
             "gui tradeoff list: the segments join back into the CLI sentence");
-        check(TradeoffOptions.OptionLines(option, MessageCatalog.Chinese).Select(part => part.Field).Contains("retain_live"),
-            "gui tradeoff list: the segments are labelled by field");
+        check(plan[TradeoffOptions.Field]!["retain_live_measured"] is null &&
+            new[] { MessageCatalog.Chinese, MessageCatalog.English }.All(language =>
+                TradeoffOptions.OptionLines(option, language).All(part => part.Field != "retain_live")),
+            "gui tradeoff list: options do not assert power measurements absent from this plan");
     }
 }
