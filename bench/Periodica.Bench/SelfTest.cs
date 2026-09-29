@@ -57,6 +57,51 @@ internal static class SelfTest
         segments.Add(Seg("B", null));
         Check(Abba.Summarize(segments)["gain"]!["status"]!.GetValue<string>() == "not_measured", "one unmeasured segment withholds the verdict");
 
+        JsonObject Comparison(double originalWatts, double bakedWatts)
+        {
+            var playback = new JsonArray(Playback("A", originalWatts), Playback("B", bakedWatts),
+                Playback("B", bakedWatts), Playback("A", originalWatts));
+            return new JsonObject { ["target_fps"] = 60, ["restored"] = true,
+                ["segments"] = playback, ["summary"] = Abba.Summarize(playback) };
+        }
+        var worse = Comparison(10.3299, 11.4482);
+        Check(Abba.Compare(worse)["choice"]?.GetValue<string>() == "original", "315-like measured regression chooses original");
+        var same = Comparison(0.6893, 0.6930);
+        Check(Abba.Compare(same)["choice"]?.GetValue<string>() == "indistinguishable", "Rem preview-sized difference gives no benefit claim");
+        var saved = Comparison(10.168, 0.711);
+        Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "baked", "Rem-like measured saving chooses baked");
+        var mixed = Comparison(3.36866, 1.43179);
+        mixed["summary"]!["original_package_watts"] = 10.0032;
+        mixed["summary"]!["baked_package_watts"] = 10.5101;
+        Check(Abba.Compare(mixed)["choice"]?.GetValue<string>() == "tradeoff" &&
+            Abba.Compare(mixed)["gpu_choice"]?.GetValue<string>() == "baked", "194-like iGPU saving with higher package power is a tradeoff");
+        saved["restored"] = false;
+        Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "unavailable", "failed restoration withholds a choice");
+        saved["restored"] = true;
+        saved["segments"]![0]!["displayed_fps"] = 58;
+        Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "unavailable", "material displayed-frame loss withholds a choice");
+        saved["segments"]![0]!["displayed_fps"] = 59.98;
+        Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "baked", "59.98 of 60 in a finite 900-frame sample passes");
+        saved["segments"]![0]!["selected_verified"] = false;
+        Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "unavailable", "unverified selected project withholds a choice");
+        Check(Abba.Compare(Comparison(0.001, 0.002))["choice"]?.GetValue<string>() == "unavailable",
+            "idle-scale iGPU telemetry cannot impersonate discrete-GPU playback cost");
+
+        var captured = new JsonObject
+        {
+            ["status"] = "sampled", ["playback"] = new JsonObject { ["selected_verified"] = true },
+            ["platform_power"] = new JsonObject { ["status"] = "sampled", ["igpu_domain_watts"] = new JsonObject { ["median"] = 10.3 } },
+            ["target_validation"] = new JsonObject { ["status"] = "valid", ["pid"] = 10020 },
+            ["metadata"] = new JsonObject { ["target_fps"] = 60 }, ["display"] = new JsonObject { ["refresh_hz"] = 165 },
+            ["presentmon"] = new JsonObject { ["status"] = "sampled", ["frame_pacing_scope"] = "single_swapchain",
+                ["resolved_swapchain_address"] = "chain", ["swapchains"] = new JsonObject { ["chain"] = new JsonObject
+                    { ["displayed_rows"] = 900, ["displayed_fps"] = 59.98, ["dropped_rows"] = 0,
+                      ["display_evidence_complete"] = true } } }
+        };
+        JsonObject extracted = Abba.Segment("01-A", 'A', captured);
+        Check(extracted["pid"]?.GetValue<int>() == 10020 && extracted["displayed_rows"]?.GetValue<int>() == 900 &&
+            extracted["displayed_fps"]?.GetValue<double>() == 59.98, "official report fields reach the comparison segment");
+
         long tick = Stopwatch.Frequency / 60;
         JsonObject pace = Pacer.Summarize([0, tick, 2 * tick, 3 * tick, 6 * tick], 60);
         Check(Math.Abs(pace["achieved_fps"]!.GetValue<double>() - 40) < 1e-3 && pace["over_budget_intervals"]!.GetValue<int>() == 1 &&
@@ -67,4 +112,15 @@ internal static class SelfTest
     }
 
     private static JsonObject Seg(string kind, double? watts) => new() { ["kind"] = kind, ["igpu_watts"] = watts };
+
+    private static JsonObject Playback(string kind, double watts) => new()
+    {
+        ["kind"] = kind, ["label"] = kind, ["status"] = "sampled", ["power_status"] = "sampled",
+        ["presentmon_status"] = "sampled", ["target_status"] = "valid", ["selected_verified"] = true,
+        ["frame_pacing_scope"] = "single_swapchain", ["display_evidence_complete"] = true,
+        ["target_fps"] = 60, ["refresh_hz"] = 165, ["pid"] = 10020, ["displayed_rows"] = 900,
+        ["displayed_fps"] = 59.98, ["dropped_rows"] = 0, ["igpu_watts"] = watts,
+        ["package_watts"] = watts + 5, ["gpu_adapters"] = new JsonObject { ["one"] = new JsonObject() },
+        ["incomplete_reasons"] = new JsonArray()
+    };
 }

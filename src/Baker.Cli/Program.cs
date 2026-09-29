@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
 using Baker.Cli;
 using Baker.Core;
+using Periodica.Bench;
 
 var jsonOptions = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
@@ -75,7 +76,42 @@ try
     // 选项名字按选项表检查（成对、不重复、这个子命令认得）；取值在各子命令走到那一步时按表校验。
     Dictionary<string, string> options = OptionTable.Parse(args);
     if (options.ContainsKey("--lang")) language = (string)OptionTable.Value(args[0], options, "--lang")!;
-    if (args[0] == "decode-check")
+    if (args[0] == "compare")
+    {
+        string Need(string name) => options.TryGetValue(name, out string? value) ? value : throw new ArgumentException(name + " is required.");
+        var request = new AbbaOptions(Need("--wallpaper-engine"), args[1], Need("--baked"), Need("--out"),
+            Monitor: (int)OptionTable.Value("compare", options, "--monitor")!,
+            Seconds: (int)OptionTable.Value("compare", options, "--seconds")!,
+            SettleSeconds: (int)OptionTable.Value("compare", options, "--settle")!,
+            Fps: (double)OptionTable.Value("compare", options, "--fps")!,
+            IdleSeconds: (int)OptionTable.Value("compare", options, "--idle")!,
+            PresentMon: (string?)OptionTable.Value("compare", options, "--present-mon"));
+        var progress = new Progress<string>(line => Console.Error.WriteLine(line));
+        JsonObject result = await Abba.RunAsync(request, progress, cancellation.Token);
+        Console.WriteLine(result.ToJsonString(jsonOptions));
+        JsonObject comparison = result["comparison"]!.AsObject();
+        JsonObject summary = result["summary"]!.AsObject();
+        string choice = comparison["choice"]!.GetValue<string>();
+        Console.Error.WriteLine(choice switch
+        {
+            "original" => "Original used less measured iGPU power in this playback comparison.",
+            "baked" => "Baked project used less measured iGPU power in this playback comparison.",
+            "tradeoff" => "Playback cost is mixed: " +
+                (comparison["gpu_choice"]?.GetValue<string>() == "baked" ? "baked uses less iGPU power" : "original uses less iGPU power") +
+                ", while CPU package power moves the other way. Compare the figures below.",
+            "indistinguishable" => "Measured playback did not establish an iGPU power benefit for either project.",
+            _ => "Playback comparison unavailable: " + string.Join(" ", comparison["reasons"]!.AsArray().Select(reason => reason!.GetValue<string>()))
+        });
+        Console.Error.WriteLine($"iGPU PP1: original {summary["original_igpu_watts"]} W, baked {summary["baked_igpu_watts"]} W; " +
+            $"package: original {summary["original_package_watts"]} W, baked {summary["baked_package_watts"]} W; " +
+            $"restored: {result["restored"]}.");
+        Console.Error.WriteLine($"WPE CPU (% of one core): {summary["original_cpu_one_core_percent"]} / {summary["baked_cpu_one_core_percent"]}; " +
+            $"GPU 3D (%): {summary["original_gpu_3d_percent"]} / {summary["baked_gpu_3d_percent"]}; " +
+            $"video decode (%): {summary["original_video_decode_percent"]} / {summary["baked_video_decode_percent"]}; " +
+            $"NVIDIA board (W): {summary["original_nvidia_board_watts"]} / {summary["baked_nvidia_board_watts"]}.");
+        Console.Error.WriteLine($"Original / baked values; per-segment displayed FPS and full evidence: {Path.Combine(Path.GetFullPath(request.Output), "abba.json")}");
+    }
+    else if (args[0] == "decode-check")
     {
         if (!options.TryGetValue("--out", out string? output)) throw new ArgumentException("--out is required.");
         var tools = options.TryGetValue("--tools", out string? path) ? await ReadTools(path, cancellation.Token) : NativeEnvironment.FindTools();
@@ -303,7 +339,9 @@ try
     else throw new ArgumentException($"Unknown command: {args[0]}");
     return 0;
 }
-catch (OperationCanceledException) { Console.Error.WriteLine("Cancelled; source is unchanged. Incomplete output is retained for inspection."); return 130; }
+catch (OperationCanceledException) { Console.Error.WriteLine(args.Length > 0 && args[0] == "compare"
+    ? "Cancelled; previous wallpaper restoration was attempted. Inspect abba.json for the verified result."
+    : "Cancelled; source is unchanged. Incomplete output is retained for inspection."); return 130; }
 catch (Exception error)
 {
     Console.Error.WriteLine(JsonSerializer.Serialize(new { status = "failed", error_type = error.GetType().Name, message = error.Message }, jsonOptions));

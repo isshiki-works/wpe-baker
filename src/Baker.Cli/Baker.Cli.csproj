@@ -7,7 +7,10 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>wpe-baker</AssemblyName>
   </PropertyGroup>
-  <ItemGroup><ProjectReference Include="../Baker.Core/Baker.Core.csproj" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Baker.Core/Baker.Core.csproj" />
+    <ProjectReference Include="../../bench/Periodica.Bench/Periodica.Bench.csproj" />
+  </ItemGroup>
   <!-- 周期数学与判据类型在 Periodica.Domain（C2.1a/C2.1c 搬迁）；全局 using 让调用方写法不变。 -->
   <ItemGroup><Using Include="Periodica.Domain" /></ItemGroup>
 </Project>

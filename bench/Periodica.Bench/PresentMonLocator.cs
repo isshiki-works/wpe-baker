@@ -7,7 +7,7 @@ namespace Periodica.Bench;
 internal static class PresentMonLocator
 {
     internal const string Missing =
-        "PresentMon was not found under .tools/presentmon/; pass present_mon_path (sample) or --present-mon (abba).";
+        "PresentMon was not found under .tools/presentmon/; pass present_mon_path (sample) or --present-mon (abba/compare).";
 
     private static readonly string[] Names = ["PresentMon-2.5.1-x64.exe", "PresentMon.exe"];
 
