@@ -181,11 +181,20 @@ internal static class DaytimeSplit
         if (scalars.Keys.Any(name => groups.Contains(name) || functions.Contains(name) || name is "Date" or "thisScene" or "parseInt") ||
             groups.Any(name => functions.Contains(name) || name is "Date" or "thisScene" or "parseInt") ||
             groups.Contains(helper.Groups["arg"].Value)) return false;
-        if (modeVariable is null) return apply is null || copiedProperties.All(copy =>
-            scalars.ContainsKey(copy.Key) && copy.Key == copy.Value.Key);
+        bool ThresholdCopy(KeyValuePair<string, (string Key, bool Parsed)> copy)
+        {
+            if (copy.Key != copy.Value.Key || !scalars.TryGetValue(copy.Key, out string? initialValue) ||
+                !int.TryParse(initialValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ||
+                !branches.Any(branch => branch.Groups[2].Value == copy.Key || branch.Groups[3].Value == copy.Key)) return false;
+            if (properties?.ContainsKey(copy.Value.Key) != true) return true;
+            if (properties[copy.Value.Key] is not JsonValue value) return false;
+            string text = value.TryGetValue<string>(out string? stringValue) ? stringValue : value.ToJsonString();
+            return int.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _);
+        }
+        if (modeVariable is null) return apply is null || copiedProperties.All(ThresholdCopy);
         if (!scalars.TryGetValue(modeVariable, out string? initial) || initial is not ("true" or "false") ||
             manualVariable is null || !scalars.TryGetValue(manualVariable, out string? manualDefault) || manualDefault != "-1" ||
-            copiedProperties.Keys.Any(key => key != modeVariable && key != manualVariable) ||
+            copiedProperties.Any(copy => copy.Key != modeVariable && copy.Key != manualVariable && !ThresholdCopy(copy)) ||
             copiedProperties.TryGetValue(modeVariable, out var modeCopy) && modeCopy.Parsed) return false;
         JsonNode? selectedMode = copiedProperties.TryGetValue(modeVariable, out var copy) ? properties?[copy.Key] : null;
         if (selectedMode is not JsonValue scalar) return initial == "true";
