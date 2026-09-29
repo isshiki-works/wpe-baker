@@ -125,6 +125,45 @@ internal static class EffectPrefixLightingChecks
             pass["textures"]![0]!.GetValue<string>() == $"wpe_baker_effect_prefix/{Owner}/cache" &&
             pass["shader"]!.GetValue<string>() == "genericimage4" && pass["blending"]!.GetValue<string>() == "normal",
             "the prefix-cache material drops every authored base-pass combo and switches off the default-on FOG, keeping shader and blend state");
+
+        foreach (bool puppet in new[] { false, true })
+        {
+            string fixture = Path.Combine(root, puppet ? "puppet" : "flat");
+            string packedSource = await WriteSourceAsync(fixture);
+            JsonObject original = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(packedSource, "scene.json")))!.AsObject();
+            if (puppet)
+            {
+                JsonObject model = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(packedSource, "models/lit.json")))!.AsObject();
+                model["puppet"] = "models/retained.mdl";
+                await File.WriteAllTextAsync(Path.Combine(packedSource, "models/lit.json"), model.ToJsonString());
+                await File.WriteAllBytesAsync(Path.Combine(packedSource, "models/retained.mdl"), [1]);
+                original["objects"]![0]!["animationlayers"] = new JsonArray(new JsonObject { ["id"] = 13 });
+                await File.WriteAllTextAsync(Path.Combine(packedSource, "scene.json"), original.ToJsonString());
+            }
+            string packedCache = Path.Combine(fixture, "packed.rgba");
+            await File.WriteAllBytesAsync(packedCache, new byte[Size * 2 * Size * 4]);
+            string packedCandidate = await AssembleCandidateAsync(fixture, packedSource, packedCache, packedAlpha: true);
+            JsonObject basePass = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(packedCandidate,
+                "materials/wpe_baker_effect_prefix/1.json")))!["passes"]![0]!.AsObject();
+            JsonObject owner = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(packedCandidate, "scene.json")))!
+                ["objects"]![0]!.AsObject();
+            JsonArray effects = owner["effects"]!.AsArray();
+            string fragment = await File.ReadAllTextAsync(Path.Combine(packedCandidate, "shaders/wpe_baker_effect_prefix/1/decode.frag"));
+            check(effects.Count == (puppet ? 2 : 1) && effects[^1]!["id"]!.GetValue<int>() == 12 &&
+                basePass["shader"]!.GetValue<string>() == (puppet ? "genericimage4" : "wpe_baker_effect_prefix/1/decode") &&
+                fragment.Contains(puppet ? "g_Texture1" : "g_Texture0", StringComparison.Ordinal) &&
+                !fragment.Contains(puppet ? "g_Texture0" : "g_Texture1", StringComparison.Ordinal) &&
+                JsonNode.DeepEquals(owner["animationlayers"], original["objects"]![0]!["animationlayers"]),
+                "flat packed caches decode in the base; project-owned puppets retain first-effect decoding, animation layers, and the authored suffix");
+            if (puppet)
+            {
+                JsonObject decoder = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(packedCandidate,
+                    "materials/wpe_baker_effect_prefix/1/decode.json")))!.AsObject();
+                check(decoder["passes"]![0]!["textures"]!.ToJsonString() == "[\"\",\"wpe_baker_effect_prefix/1/cache\"]" &&
+                    effects[0]!["file"]!.GetValue<string>() == "effects/wpe_baker_effect_prefix/1/decode.json",
+                    "the retained puppet decoder still samples the original cache in slot 1");
+            }
+        }
     }
 
     internal static async Task RunRenderAsync(Action<bool, string> check, string root)
@@ -154,12 +193,20 @@ internal static class EffectPrefixLightingChecks
     internal static async Task RunDirectSamplerAsync(Action<bool, string> check, string root)
     {
         string source = await WriteSourceAsync(root, sharp: true);
+        string scenePath = Path.Combine(source, "scene.json");
+        JsonObject scene = JsonNode.Parse(await File.ReadAllTextAsync(scenePath))!.AsObject();
+        scene["general"]!["cameraparallax"] = true;
+        scene["general"]!["cameraparallaxamount"] = 0.2;
+        scene["general"]!["cameraparallaxmouseinfluence"] = 1;
+        scene["general"]!["cameraparallaxdelay"] = 0;
+        scene["objects"]![0]!["parallaxDepth"] = "1 1";
+        await File.WriteAllTextAsync(scenePath, scene.ToJsonString());
         var runner = new NativeRenderRunner(LocalTools.Tools!);
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        async Task<byte[]> Render(string project, string name, RenderCaptureSelection? capture = null)
+        async Task<byte[]> Render(string project, string name, RenderCaptureSelection? capture = null, JsonObject? input = null)
         {
             JsonObject result = await runner.RenderRawAsync(new(project, source, Path.Combine(root, name), Size, Size, 60, 1, 1,
-                Seed: 17, CaptureTarget: capture), timeout.Token);
+                Seed: 17, CaptureTarget: capture, Input: input), timeout.Token);
             return await File.ReadAllBytesAsync(result["rgba_path"]!.GetValue<string>(), timeout.Token);
         }
         byte[] captured = await Render(source, "sharp-capture", new(Owner, PrefixEffect, EffectTerminal: true, ExactExtent: true));
@@ -176,24 +223,21 @@ internal static class EffectPrefixLightingChecks
         string cache = Path.Combine(root, "sharp-packed.rgba");
         await File.WriteAllBytesAsync(cache, packed, timeout.Token);
         string candidate = await AssembleCandidateAsync(root, source, cache, packedAlpha: true);
-        string decoderMaterial = Path.Combine(candidate, "materials", "wpe_baker_effect_prefix", Owner.ToString(), "decode.json");
+        string decoderMaterial = Path.Combine(candidate, "materials", "wpe_baker_effect_prefix", Owner + ".json");
         string decoderShader = Path.Combine(candidate, "shaders", "wpe_baker_effect_prefix", Owner.ToString(), "decode.frag");
         JsonObject material = JsonNode.Parse(await File.ReadAllTextAsync(decoderMaterial, timeout.Token))!.AsObject();
         string shader = await File.ReadAllTextAsync(decoderShader, timeout.Token);
-        check(material["passes"]![0]!["textures"]?.ToJsonString() == "[\"\",\"wpe_baker_effect_prefix/1/cache\"]" &&
-            shader.Contains("texSample2D(g_Texture1", StringComparison.Ordinal) && !shader.Contains("g_Texture0", StringComparison.Ordinal),
-            "the first effect binds the original packed cache in slot 1; slot 0 remains the preceding owner render target");
+        check(material["passes"]![0]!["textures"]?.ToJsonString() == "[\"wpe_baker_effect_prefix/1/cache\"]" &&
+            material["passes"]![0]!["shader"]!.GetValue<string>() == "wpe_baker_effect_prefix/1/decode" &&
+            shader.Contains("texSample2D(g_Texture0", StringComparison.Ordinal) && !shader.Contains("g_Texture1", StringComparison.Ordinal),
+            "the flat owner's base pass decodes the original packed cache directly in slot 0");
         JsonObject derived = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(candidate, "scene.json"), timeout.Token))!.AsObject();
-        int decoderId = derived["objects"]![0]!["effects"]![0]!["id"]!.GetValue<int>();
+        check(derived["objects"]![0]!["effects"]!.AsArray().Count == 1 &&
+            derived["objects"]![0]!["effects"]![0]!["id"]!.GetValue<int>() == 12,
+            "base decoding leaves only the authored suffix effect");
         byte[] reference = await Render(source, "sharp-reference");
         byte[] direct = await Render(candidate, "sharp-direct");
-        byte[] directTerminal = await Render(candidate, "sharp-direct-terminal", new(Owner, decoderId, EffectTerminal: true, ExactExtent: true));
-        // Recreate the previous decoder in the temporary fixture to prove the one-pixel grid loses detail when read through slot 0.
-        material["passes"]![0]!.AsObject().Remove("textures");
-        await File.WriteAllTextAsync(decoderMaterial, material.ToJsonString(), timeout.Token);
-        await File.WriteAllTextAsync(decoderShader, shader.Replace("g_Texture1", "g_Texture0", StringComparison.Ordinal), timeout.Token);
-        byte[] old = await Render(candidate, "sharp-downsampled");
-        byte[] oldTerminal = await Render(candidate, "sharp-downsampled-terminal", new(Owner, decoderId, EffectTerminal: true, ExactExtent: true));
+        byte[] directTerminal = await Render(candidate, "sharp-direct-terminal", new(Owner, 12, EffectTerminal: true, ExactExtent: true));
         static double Mae(byte[] a, byte[] b, int channelCount)
         {
             long total = 0;
@@ -202,17 +246,38 @@ internal static class EffectPrefixLightingChecks
                     total += Math.Abs(a[pixel + channel] - b[pixel + channel]);
             return (double)total / (a.Length / 4 * channelCount);
         }
-        double directRgb = Mae(reference, direct, 3), oldRgb = Mae(reference, old, 3);
+        double directRgb = Mae(reference, direct, 3);
         double AlphaMae(byte[] a, byte[] b)
         {
             long total = 0;
             for (int pixel = 3; pixel < a.Length; pixel += 4) total += Math.Abs(a[pixel] - b[pixel]);
             return (double)total / (a.Length / 4);
         }
-        double directAlpha = AlphaMae(captured, directTerminal), oldAlpha = AlphaMae(captured, oldTerminal);
+        double directAlpha = AlphaMae(captured, directTerminal);
         check(Enumerable.Range(0, captured.Length / 4).Any(pixel => captured[pixel * 4 + 3] < 255) &&
-            directRgb < oldRgb / 2 && directRgb < 2 && directAlpha < oldAlpha / 2 && directAlpha <= 1,
-            $"sharp one-pixel color and alpha grid survives direct decode (RGB MAE old {oldRgb:F3}, direct {directRgb:F3}; alpha old {oldAlpha:F3}, direct {directAlpha:F3})");
+            directRgb < 2 && directAlpha <= 1,
+            $"sharp one-pixel color and alpha grid survives base decode and the retained suffix (RGB MAE {directRgb:F3}; alpha MAE {directAlpha:F3})");
+        JsonObject mouse = new() { ["cursor_x"] = 0.2, ["cursor_y"] = 0.8, ["cursor_in_window"] = true };
+        byte[] movedReference = await Render(source, "sharp-reference-mouse", input: mouse);
+        byte[] movedCandidate = await Render(candidate, "sharp-candidate-mouse", input: mouse.DeepClone().AsObject());
+        double mouseResponse = Mae(reference, movedReference, 3), movedRgb = Mae(movedReference, movedCandidate, 3);
+        check(mouseResponse > 1 && movedRgb < 2,
+            $"enabled camera parallax responds to a non-centred cursor and base decoding follows the same transform " +
+            $"(reference mouse response {mouseResponse:F3}; candidate RGB MAE {movedRgb:F3})");
+
+        // Removing the later suffix does not change the captured prefix terminal or its packed pixels.
+        scene["objects"]![0]!["effects"]!.AsArray().RemoveAt(1);
+        await File.WriteAllTextAsync(scenePath, scene.ToJsonString());
+        string allPrefixCandidate = await AssembleCandidateAsync(Path.Combine(root, "all-prefix"), source, cache, packedAlpha: true);
+        JsonObject allPrefixScene = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(allPrefixCandidate, "scene.json")))!.AsObject();
+        check(allPrefixScene["objects"]![0]!["effects"]!.AsArray().Count == 0,
+            "caching the complete authored prefix leaves no effects on the flat owner");
+        byte[] allPrefixReference = await Render(source, "sharp-all-prefix-reference");
+        byte[] allPrefixActual = await Render(allPrefixCandidate, "sharp-all-prefix-candidate");
+        double allPrefixRgb = Mae(allPrefixReference, allPrefixActual, 3), allPrefixAlpha = AlphaMae(allPrefixReference, allPrefixActual);
+        check(allPrefixRgb < 2 && allPrefixAlpha <= 1,
+            $"base decoding composites the complete prefix without an effect render target " +
+            $"(RGB MAE {allPrefixRgb:F3}; alpha MAE {allPrefixAlpha:F3})");
     }
 
     internal static async Task RunHdrAsync(Action<bool, string> check, string root, string assets, bool signed = false,
