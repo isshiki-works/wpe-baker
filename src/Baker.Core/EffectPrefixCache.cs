@@ -60,18 +60,22 @@ internal static class EffectPrefixCache
             cachedModel["autosize"] = false;
             cachedModel["width"] = logicalWidth; cachedModel["height"] = sourceHeight!.Value;
         }
-        await VideoSceneBuilder.WriteJsonAsync(materialPath, cachedMaterial, cancellationToken);
-        await VideoSceneBuilder.WriteJsonAsync(modelPath, cachedModel, cancellationToken);
-        derived["image"] = modelResource;
         for (int i = 0; i < prefixEffectCount; ++i) derived["effects"]!.AsArray().RemoveAt(0);
         if (packedAlpha || paddedContent is not null || hdrScale != 1 || hdrLowerBound != 0 || hdrSignedSqrt)
         {
-            int effectId = checked(SceneAnalyzer.Walk(derivedScene).OfType<JsonObject>()
+            // Puppet's later pass clones the base material; HDR keeps its existing decoding path.
+            bool decodeInBase = !model.ContainsKey("puppet") && hdrScale == 1 && hdrLowerBound == 0 && !hdrSignedSqrt;
+            int effectId = decodeInBase ? 0 : checked(SceneAnalyzer.Walk(derivedScene).OfType<JsonObject>()
                 .Where(node => node["id"] is JsonValue value && value.TryGetValue<int>(out _))
                 .Select(node => node["id"]!.GetValue<int>()).DefaultIfEmpty(0).Max() + 1);
-            derived["effects"]!.AsArray().Insert(0, await WriteAlphaDecoderAsync(outputProject, stem, textureResource, effectId, width,
-                cancellationToken, height, packedAlpha, paddedContent, hdrScale, hdrLowerBound, hdrSignedSqrt));
+            JsonObject? decoder = await WriteAlphaDecoderAsync(outputProject, stem, textureResource, effectId, width,
+                cancellationToken, height, packedAlpha, paddedContent, hdrScale, hdrLowerBound, hdrSignedSqrt,
+                decodeInBase ? cachedPass : null);
+            if (decoder is not null) derived["effects"]!.AsArray().Insert(0, decoder);
         }
+        await VideoSceneBuilder.WriteJsonAsync(materialPath, cachedMaterial, cancellationToken);
+        await VideoSceneBuilder.WriteJsonAsync(modelPath, cachedModel, cancellationToken);
+        derived["image"] = modelResource;
         return new(textureResource, materialResource, modelResource);
     }
 
@@ -142,15 +146,19 @@ internal static class EffectPrefixCache
             $"gl_FragColor=vec4(rgb,{alpha}); }}\n";
     }
 
-    private static async Task<JsonObject> WriteAlphaDecoderAsync(string project, string stem, string textureResource, int id, uint storedWidth,
+    private static async Task<JsonObject?> WriteAlphaDecoderAsync(string project, string stem, string textureResource, int id, uint storedWidth,
         CancellationToken cancellationToken, uint storedHeight = 0, bool packedAlpha = true, EncodedContentRegion? content = null,
-        double hdrScale = 1, double hdrLowerBound = 0, bool hdrSignedSqrt = false)
+        double hdrScale = 1, double hdrLowerBound = 0, bool hdrSignedSqrt = false, JsonObject? basePass = null)
     {
         string shader = stem + "/decode", material = "materials/" + shader + ".json", effect = "effects/" + shader + ".json";
         string vertex = "// SPDX-License-Identifier: MIT\nuniform mat4 g_ModelViewProjectionMatrix;\nattribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main(){ gl_Position=mul(vec4(a_Position,1.0),g_ModelViewProjectionMatrix); v_TexCoord=a_TexCoord; }\n";
         string fragment = DecoderFragment(storedWidth, storedHeight, packedAlpha, content, hdrScale, hdrLowerBound, hdrSignedSqrt);
+        if (basePass is not null) fragment = fragment.Replace("g_Texture1", "g_Texture0", StringComparison.Ordinal);
         string vertexPath = ProjectSource.ContainedPath(project, "shaders/" + shader + ".vert");
-        foreach (string resource in new[] { "shaders/" + shader + ".vert", "shaders/" + shader + ".frag", material, effect })
+        string[] resources = basePass is null
+            ? ["shaders/" + shader + ".vert", "shaders/" + shader + ".frag", material, effect]
+            : ["shaders/" + shader + ".vert", "shaders/" + shader + ".frag"];
+        foreach (string resource in resources)
         {
             string path = ProjectSource.ContainedPath(project, resource);
             if (File.Exists(path) || Directory.Exists(path)) throw new IOException("The alpha decoder would overwrite an existing project resource.");
@@ -158,6 +166,11 @@ internal static class EffectPrefixCache
         Directory.CreateDirectory(Path.GetDirectoryName(vertexPath)!);
         await File.WriteAllTextAsync(vertexPath, vertex, cancellationToken);
         await File.WriteAllTextAsync(ProjectSource.ContainedPath(project, "shaders/" + shader + ".frag"), fragment, cancellationToken);
+        if (basePass is not null)
+        {
+            basePass["shader"] = shader;
+            return null;
+        }
         await VideoSceneBuilder.WriteJsonAsync(ProjectSource.ContainedPath(project, material), new JsonObject {
             ["passes"] = new JsonArray(new JsonObject { ["shader"] = shader, ["textures"] = new JsonArray("", textureResource), ["blending"] = "normal",
                 ["depthtest"] = "disabled", ["depthwrite"] = "disabled", ["cullmode"] = "nocull" }) }, cancellationToken);
