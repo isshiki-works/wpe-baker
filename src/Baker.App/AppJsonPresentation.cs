@@ -598,7 +598,7 @@ internal static class AppJsonPresentation
         if (plan?[TradeoffOptions.Field] is not JsonObject record ||
             record["status"]?.GetValue<string>() != "available") return [];
         string language = english ? MessageCatalog.English : MessageCatalog.Chinese;
-        string[] order = ["lead", "how", "alternative", "collateral", "route", "residual", "retain_live", "bake_caveat"];
+        string[] order = ["lead", "how", "alternative", "collateral", "route", "residual", "bake_caveat"];
         return [.. (record["options"] as JsonArray ?? []).OfType<JsonObject>().Select(option =>
         {
             var parts = TradeoffOptions.OptionLines(option, language);

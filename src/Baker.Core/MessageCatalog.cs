@@ -1283,11 +1283,6 @@ public static class MessageCatalog
             En: "No live layer would remain after disabling.",
             Legacy: "No live layer would be left at all."),
 
-        ["tradeoff.retain_live_note"] = new(
-            Zh: "保留部分实时图层的路线实测无功耗收益：笔记本核显功耗 11.63 → 11.20 W，封装功耗 +12%。",
-            En: "Keeping some layers live shows no measured saving: laptop iGPU power 11.63 -> 11.20 W, package power +12%.",
-            Legacy: "Note: the \"keep a few layers live\" route measurably does not save power (laptop iGPU rail 11.63 -> 11.20 W, package +12%), so do not treat it as the power-saving fallback."),
-
         // 取舍清单只过了分析这一关：烘制阶段的循环分配会重新判定，粒子系统或主体动画没有周期时仍会失败。
         ["tradeoff.bake_stage_caveat"] = new(
             Zh: "禁用后需重新分析；生成阶段仍可能因粒子系统或主体动画无循环周期而失败。",
