@@ -19,12 +19,21 @@ internal static class GuiPresetTradeoffChecks
                 "s", "a", "o", null, null, 60, 1, new JsonObject());
         var fixedQuality = Gui("quality", "fixed", false, false);
         var offEfficiency = Gui("efficiency", "off", false, false);
-        check(fixedQuality is { Preset: "quality", Interaction: "fixed", LoopPreference: "quality", CustomSettings: false } &&
-            offEfficiency is { Preset: "efficiency", Interaction: "off", LoopPreference: "performance", CustomSettings: false } &&
+        check(fixedQuality is { Preset: "quality", Interaction: "fixed", LoopPreference: "quality", CustomSettings: false,
+                LiveOverlayPlacement: "preserve" } &&
+            offEfficiency is { Preset: "efficiency", Interaction: "off", LoopPreference: "performance", CustomSettings: false,
+                LiveOverlayPlacement: "preserve" } &&
             fixedQuality.UserProperties is null && offEfficiency.ExcludedLayerIds is null,
-            "GUI axes map independently to Core without implicitly excluding content or marking custom");
+            "GUI axes map independently to Core without changing layer order, excluding content or marking custom");
         check(Gui("quality", "fixed", true, true) is { CustomSettings: true, LayoutExplicit: true, VideoLayout: "layered" },
             "GUI advanced overrides are recorded separately from the preset");
+        check(AppJsonPresentation.ConfigureAnalysis(fixedQuality with { LiveOverlayPlacement = "foreground" }, "quality", "fixed", true, false)
+                .LiveOverlayPlacement == "foreground",
+            "presentation changes preserve an explicitly requested foreground placement");
+        var prefix = new JsonObject { ["route"] = "effect_prefix", ["occlusion_tradeoff"] = new JsonObject {
+            ["status"] = "applied", ["promoted_roots"] = new JsonArray(new JsonObject { ["name"] = "Rain" }) } };
+        check(!AppJsonPresentation.PlanNotes(prefix, true).Contains("Moved to foreground", StringComparison.Ordinal),
+            "effect-prefix export does not claim the whole-layer alternative's planned foreground move");
         var plan = new JsonObject { ["preset_applied"] = "balanced", ["applied_tradeoffs"] = new JsonObject {
             ["turn_off_kinds"] = new JsonArray("parallax", "parallax"), ["daytime_state"] = "morning" },
             ["live_overlays_hoisted"] = new JsonArray(new JsonObject(), new JsonObject()) };

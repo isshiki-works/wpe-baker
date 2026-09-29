@@ -301,7 +301,8 @@ internal sealed class AnalysisOrchestrator
         result["interaction_requested"] = interaction;
         result["interaction_costs"] = selectedCosts;
         result["custom_settings"] = request.CustomSettings;
-        result["live_overlays_hoisted"] = result["occlusion_tradeoff"]?["status"]?.GetValue<string>() == "applied"
+        result["live_overlays_hoisted"] = result["route"]?.GetValue<string>() == "whole_layer" &&
+            result["occlusion_tradeoff"]?["status"]?.GetValue<string>() == "applied"
             ? result["occlusion_tradeoff"]?["promoted_roots"]?.DeepClone() : new JsonArray();
         var omitted = (result["layers"] as JsonArray ?? []).OfType<JsonObject>().Where(l => l["allocation"]?.GetValue<string>() == "excluded").ToArray();
         var kinds = omitted.SelectMany(l => (l["tradeoff_kinds"] as JsonArray ?? []).Select(k => k!.GetValue<string>())).ToHashSet();
@@ -412,7 +413,6 @@ internal sealed class AnalysisOrchestrator
     {
         var reasons = new JsonArray();
         var current = request with { Interaction = interaction, ViewMode = interaction == "keep" ? "preserve" : "fixed_view",
-            LiveOverlayPlacement = request.CustomSettings ? request.LiveOverlayPlacement : "foreground",
             DaytimeSplit = interaction != "keep" || request.DaytimeSplit };
         JsonObject? last = null;
         int[]? off = null;

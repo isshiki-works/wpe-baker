@@ -44,7 +44,7 @@ public class CliOptionTableTests
             DeviceUuid: options.GetValueOrDefault("--device"),
             RetainLiveRootIds: options.TryGetValue("--retain-live", out string? keep) ? keep.Split(',').Select(int.Parse).ToArray() : null,
             VideoLayout: options.GetValueOrDefault("--video-layout", "full_frame"),
-            LiveOverlayPlacement: options.GetValueOrDefault("--live-overlays", "foreground"),
+            LiveOverlayPlacement: options.GetValueOrDefault("--live-overlays", "preserve"),
             LiveTextEffects: options.GetValueOrDefault("--text-effects", "preserve"),
             AudioEffects: options.GetValueOrDefault("--audio-effects", "preserve"),
             ExcludedLayerIds: options.TryGetValue("--exclude-layers", out string? excludedLayers)

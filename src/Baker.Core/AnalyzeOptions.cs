@@ -16,7 +16,7 @@ public sealed record AnalyzeOptions
     public bool CommonRetime { get; init; } = true;
     /// <summary>null = 自动（先整幅，不行再分层）；给了值就只按这个布局分析。</summary>
     public string? VideoLayout { get; init; }
-    public string LiveOverlays { get; init; } = "foreground";
+    public string LiveOverlays { get; init; } = "preserve";
     public string TextEffects { get; init; } = "preserve";
     public string AudioEffects { get; init; } = "preserve";
     public int[]? ExcludedLayerIds { get; init; }

@@ -7,20 +7,21 @@ internal static class AnalysisOrchestratorChecks
     {
         var calls = new List<HybridAnalyzeRequest>();
         async Task<JsonObject> Run(string name, Func<HybridAnalyzeRequest, JsonObject> plan, string preset = "quality", bool custom = false, string interaction = "fixed",
-            bool allowNoBenefit = false)
+            bool allowNoBenefit = false, string placement = "preserve")
         {
             calls.Clear();
             return await AnalysisOrchestrator.RunAsync(new(2, "unused", "unused", Path.Combine(root, name),
-                Preset: preset, CustomSettings: custom, Interaction: interaction, AllowNoBenefit: allowNoBenefit), (request, _) => {
+                Preset: preset, CustomSettings: custom, Interaction: interaction, AllowNoBenefit: allowNoBenefit,
+                LiveOverlayPlacement: placement), (request, _) => {
                 calls.Add(request);
                 return Task.FromResult(plan(request));
             }, CancellationToken.None);
         }
         JsonObject quality = await Run("preset-quality", r => Plan(r, true, 1));
-        check(calls.Count == 1 && calls[0].ViewMode == "fixed_view" && calls[0].LiveOverlayPlacement == "foreground" &&
+        check(calls.Count == 1 && calls[0].ViewMode == "fixed_view" && calls[0].LiveOverlayPlacement == "preserve" &&
             quality["preset_requested"]!.GetValue<string>() == "quality" && quality["preset_applied"]!.GetValue<string>() == "quality" &&
             quality["preset_fallback_reason"] is null,
-            "default fixed interaction is independent of quality retiming and hoists overlays");
+            "default fixed interaction is independent of quality retiming and preserves layer order");
         JsonObject layered = await Run("preset-layered", r => Plan(r, r.VideoLayout == "layered", 4));
         check(calls.Count == 2 && layered["preset_applied"]!.GetValue<string>() == "quality" && layered["route_fallback"] is null,
             "four layered groups are a normal quality path, not experimental");
@@ -42,7 +43,7 @@ internal static class AnalysisOrchestratorChecks
             calls.All(r => r.Interaction != "keep"), "eleven groups are rejected without silently restoring the legacy route");
         JsonObject none = await Run("preset-none", r => Plan(r, false, 5));
         check(none["preset_applied"]!.GetValue<string>() == "none", "unavailable across all tiers remains unavailable");
-        JsonObject overLimit = await Run("preset-over-limit", r => Plan(r, r.LiveOverlayPlacement == "foreground", 10));
+        JsonObject overLimit = await Run("preset-over-limit", r => Plan(r, true, 10));
         check(overLimit["preset_applied"]!.GetValue<string>() == "none" &&
             overLimit["preset_rejection_reason"]!.GetValue<string>() == "too_many_video_groups" &&
             overLimit["blockers"]!.AsArray().Count == 1 && !Admission.Bakeable(overLimit),
@@ -50,6 +51,17 @@ internal static class AnalysisOrchestratorChecks
         JsonObject custom = await Run("preset-custom", r => Plan(r, true, 1), custom: true);
         check(calls.Count == 1 && custom["custom_settings"]!.GetValue<bool>() && custom["preset_applied"]!.GetValue<string>() == "quality",
             "advanced overrides do not replace the retiming preset with a custom label");
+        JsonObject foreground = await Run("explicit-foreground", r => Plan(r, r.LiveOverlayPlacement == "foreground" && r.VideoLayout == "layered", 2),
+            custom: true, placement: "foreground");
+        check(calls.Count == 2 && calls.All(r => r.LiveOverlayPlacement == "foreground") && foreground["preset_applied"]!.GetValue<string>() == "quality",
+            "explicit foreground survives automatic layout fallback");
+        await Run("direct-foreground", r => Plan(r, r.LiveOverlayPlacement == "foreground", 1), placement: "foreground");
+        check(calls.Count == 1 && calls[0].LiveOverlayPlacement == "foreground",
+            "a direct foreground request is not overwritten when no unrelated custom option was set");
+        JsonObject preserved = await Run("explicit-preserve", r => Plan(r, r.LiveOverlayPlacement == "preserve", 1),
+            custom: true, placement: "preserve");
+        check(calls.Count == 1 && calls[0].LiveOverlayPlacement == "preserve" && preserved["preset_applied"]!.GetValue<string>() == "quality",
+            "explicit preserve remains distinct from the foreground opt-in");
         JsonObject suggestion = await Run("preset-suggestion", r => Plan(r, r.Interaction == "fixed", 2), interaction: "keep");
         check(suggestion["preset_applied"]!.GetValue<string>() == "none" &&
             suggestion["settings"]!["interaction"]!.GetValue<string>() == "keep" &&
@@ -132,7 +144,7 @@ internal static class AnalysisOrchestratorChecks
         JsonObject result = await planner.AnalyzeAsync(request);
         HybridPlanFormat.Validate(result);
         check(result["preset_applied"]!.GetValue<string>() == "balanced" &&
-            result["settings"]!["live_overlay_placement"]!.GetValue<string>() == "foreground",
+            result["settings"]!["live_overlay_placement"]!.GetValue<string>() == "preserve",
             "Core default entry point starts at balanced and produces a valid real plan");
         // 真实子分析逐段计时：每次子分析 A1–A15 各记一次（有记忆时源哈希不在子分析收尾重算，A2 也只记一次）。
         JsonObject timing = result["analysis_timing"]!.AsObject();
