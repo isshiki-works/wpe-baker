@@ -98,12 +98,12 @@ def main() -> None:
     if not toolchain.resolve().is_relative_to(TOOLS.resolve()) or not build.is_relative_to((ROOT / "build").resolve()):
         raise SystemExit("Toolchain and build directories must remain in the project .tools/ and build/ trees")
     validate_ffmpeg_root(ffmpeg_root, build)
-    input_snapshot = provenance.snapshot(ffmpeg_root)
     environment = native_environment(toolchain, ffmpeg_root)
     vk_import = DEPS / "install/lib/vulkan-1.dll.a"
     vk_import.parent.mkdir(parents=True, exist_ok=True)
     if not vk_import.exists():
         run([str(toolchain / "bin/llvm-dlltool.exe"), "-m", "i386:x86-64", "-d", str(DEPS / "vulkan-loader/loader/vulkan-1.def"), "-l", str(vk_import)], "vulkan-import.log", environment)
+    input_snapshot = provenance.snapshot(ffmpeg_root)
     cmake = str(TOOLS / "cmake/bin/cmake.exe")
     # 预设里是默认工具链与 FFmpeg 前缀；只有命令行改了它们才覆盖。
     preset = [cmake, "-S", str(ENGINE), "--preset", "release"]
