@@ -302,11 +302,11 @@ public partial class MainWindow : Window
     {
         if (!TryFrameSize(out uint width, out uint height))
             throw new InvalidDataException(L("宽和高需同时填写正整数，或同时留空。", "Fill in both width and height, or leave both empty."));
-        // 剩余实时图层置顶与简化文字效果两个开关已从界面移除：置顶固定为开（--live-overlays foreground），
+        // 剩余实时图层置顶与简化文字效果两个开关已从界面移除：默认保留原遮挡顺序（--live-overlays preserve），
         // 简化文字效果固定为原默认值（关，即 preserve）。
         return new(width, height, FpsBox.Text.Trim(),
             (GpuBox.SelectedItem as VulkanDeviceInfo)?.DeviceUuid, RetimeBox.IsChecked == true, SelectedInteraction() != "keep",
-            LayeredVideoBox.IsChecked == true, true, false,
+            LayeredVideoBox.IsChecked == true, false, false,
             AudioEffectsBox.IsChecked == true, SelectedLoopPreference(), SelectedInteraction(),
             SelectedPlaybackEncoder(), MatchEffectResolutionBox.IsChecked == true);
     }
@@ -470,7 +470,7 @@ public partial class MainWindow : Window
                 FpsBox.Text = preset.Settings.Fps;
                 GpuBox.SelectedItem = gpu;
                 RetimeBox.IsChecked = preset.Settings.Retime; InteractionBox.SelectedIndex = preset.Settings.Interaction switch { "keep" => 0, "off" => 2, _ => 1 };
-                // 剩余实时图层置顶／简化文字效果两项界面已移除，方案里的旧值不再回填控件（分析时固定传 foreground/preserve）。
+                // 剩余实时图层置顶／简化文字效果两项界面已移除，方案里的旧值不再回填控件（分析时固定传 preserve/preserve）。
                 LayeredVideoBox.IsChecked = preset.Settings.LayeredVideo;
                 AudioEffectsBox.IsChecked = preset.Settings.AudioEffects;
                 EncoderBox.SelectedIndex = Array.IndexOf(EncoderValues, preset.Settings.PlaybackEncoder);
@@ -514,7 +514,7 @@ public partial class MainWindow : Window
             // 属性底值是用户在 Wallpaper Engine 里的设置，面板里的改动覆盖在上；来源记录写进 plan。
             var (properties, propertiesOrigin) = AppJsonPresentation.MergeWpeProperties(sourceWpeProperties, sourcePropertyDefinitions, analysisPreviewOverrides);
             // 控件 → AnalyzeOptions → 请求，与 CLI 的选项表同一个工厂。档位走同一条 RetimeProfile 路径；
-            // 剩余实时图层置顶固定 foreground、简化文字效果固定 preserve（界面已移除这两个开关）。
+            // 剩余实时图层保留原遮挡顺序、简化文字效果固定 preserve（界面已移除这两个开关）。
             var options = AnalyzeOptions.ForDesktop(SelectedPreset(), SelectedInteraction(), RetimeBox.IsChecked == true,
                 LayeredVideoBox.IsChecked == true, AudioEffectsBox.IsChecked == true, excludedLayerIds, RetimeBudgetOverride(),
                 AdvancedIsCustom(), width, height, gpu?.DeviceUuid);

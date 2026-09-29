@@ -16,7 +16,6 @@ internal static class AppJsonPresentation
         LoopPreference = RetimeProfile.LoopPreferenceForPreset(preset),
         Interaction = interaction,
         ViewMode = interaction == "keep" ? "preserve" : "fixed_view",
-        LiveOverlayPlacement = "foreground",
         CustomSettings = custom, LayoutExplicit = layoutExplicit
     };
 
@@ -500,14 +499,15 @@ internal static class AppJsonPresentation
         string blockers = blockerLines.Length > 0 ? " · " + string.Join("; ", blockerLines) : "";
         string admissionStatus = plan["video_layout_admission"]?["status"]?.GetValue<string>() ?? "";
         string conflictAdvice = admissionStatus == "requires_user_choice"
-            ? english ? " · Choose one: tick Allow layered video, or tick Move live widgets to foreground, then reanalyze."
-                : " · 需要选择：在高级里勾上“允许把画面拆成几层做”，或勾上“把还在动的小东西放到最前面”，然后重新分析。"
+            ? english ? " · Tick Allow layered video and reanalyze. The CLI can explicitly select --live-overlays foreground, which changes occlusion."
+                : " · 在高级里勾上“允许把画面拆成几层做”后重新分析；命令行也可明确选择 --live-overlays foreground，但会改变遮挡。"
             : admissionStatus == "full_frame_unreachable"
             ? english ? " · This scene has no full-frame layout: realtime drawing that cannot be moved stays in front of the video group; no setting or layered choice changes that."
                 : " · 这个场景没有全幅布局：视频组被搬不走的实时绘制挡在前面，改设置或分层都不会改变这一点。" : "";
         var tradeoff = plan["occlusion_tradeoff"] as JsonObject;
         var promotedRoots = tradeoff?["promoted_roots"] as JsonArray;
-        string promoted = tradeoff?["status"]?.GetValue<string>() == "applied" && promotedRoots is not null
+        string promoted = plan["route"]?.GetValue<string>() == "whole_layer" &&
+            tradeoff?["status"]?.GetValue<string>() == "applied" && promotedRoots is not null
             ? string.Join(", ", promotedRoots.Select(node => node is JsonObject root
                 ? root["name"]?.GetValue<string>() ?? root["id"]?.ToString() ?? ""
                 : node?.ToString() ?? "").Where(name => name.Length > 0))
@@ -561,7 +561,7 @@ internal static class AppJsonPresentation
         if (plan["route"]?.GetValue<string>() == "whole_layer")
             rows.Add((english ? "Static layers" : "静态层数", statics.ToString(CultureInfo.InvariantCulture)));
         rows.Add((english ? "Live layers" : "实时图层数", (plan["live_layer_ids"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
-        if (plan["live_overlays_hoisted"] is JsonArray { Count: > 0 } overlays)
+        if (plan["route"]?.GetValue<string>() == "whole_layer" && plan["live_overlays_hoisted"] is JsonArray { Count: > 0 } overlays)
             rows.Add((english ? "Overlay layers" : "置顶层数", overlays.Count.ToString(CultureInfo.InvariantCulture)));
         double width = Number(plan["output_resolution"]?["width"]) ?? 0, height = Number(plan["output_resolution"]?["height"]) ?? 0;
         if (width > 0 && height > 0)
