@@ -14,6 +14,7 @@
   <ItemGroup><ProjectReference Include="../../src/Baker.Core/Baker.Core.csproj" /></ItemGroup>
   <ItemGroup><Using Include="Periodica.Domain" /></ItemGroup>
   <ItemGroup><Compile Include="../../src/Baker.App/AppJsonPresentation.cs" Link="AppJsonPresentation.cs" />
+    <Compile Include="../../src/Baker.App/AppEnvironment.cs" Link="AppEnvironment.cs" />
     <Compile Include="../../src/Baker.App/PlainLanguage.cs" Link="PlainLanguage.cs" />
     <Compile Include="../../src/Baker.App/ProgressPresentation.cs" Link="ProgressPresentation.cs" />
     <Compile Include="../../src/Baker.Cli/OptionTable.cs" Link="OptionTable.cs" /></ItemGroup>

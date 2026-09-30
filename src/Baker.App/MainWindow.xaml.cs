@@ -777,15 +777,10 @@ public partial class MainWindow : Window
                 throw new InvalidDataException(invalid);
         }
         else throw new InvalidDataException(invalid);
-        // Prefer the copied result folder; older work folders keep their project one level below.
         string? declaredProject = AppJsonPresentation.CandidateProjectPath(report);
-        string? project = declaredProject is null ? null :
-            new[] { output, Path.Combine(output, "project"), declaredProject }
-                .FirstOrDefault(path => File.Exists(Path.Combine(path, "project.json")));
+        string? project = AppJsonPresentation.ResolveCompletedProject(report, output);
         if (declaredProject is not null && project is null)
             throw new FileNotFoundException(L("输出目录中缺少 project.json。", "project.json is missing from the output folder."), declaredProject);
-        if (kind == "live_scene_optimized" && !string.Equals(project, Path.Combine(output, "project"), StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException(invalid);
         request = request with { ProjectDirectory = project };
         // 显卡名：先按设备 ID 在当前列表里找，找不到用报告里记的分析设备名；都没有就不显示这一段。
         string? gpuName = GpuBox.Items.OfType<VulkanDeviceInfo>()
@@ -854,7 +849,7 @@ public partial class MainWindow : Window
             string output = AppEnvironment.NewOutput(OutputBox.Text.Trim(), source);
             var plan = new JsonObject { ["source"] = source, ["source_sha256"] = sourceHash,
                 ["snapshot_properties"] = properties.DeepClone() };
-            Enqueue(new JobItem(new HybridBakeRequest(2, plan, output, ProjectDirectory: Path.Combine(output, "project")), null, null,
+            Enqueue(new JobItem(new HybridBakeRequest(2, plan, output, ProjectDirectory: output), null, null,
                 sourcePropertyDefinitions, liveScene: true));
             queueRun = ProcessQueueAsync();
             await queueRun;
@@ -892,19 +887,19 @@ public partial class MainWindow : Window
                     if (job.LiveScene)
                     {
                         job.Describe(() => L("正在优化实时场景…", "Optimizing live scene…"));
-                        string project = job.Request.ProjectDirectory ?? Path.Combine(job.Request.OutputDirectory, "project");
+                        string project = job.Request.ProjectDirectory ?? job.Request.OutputDirectory;
+                        string work = AppEnvironment.NewWorkDirectory(job.Source, Path.GetDirectoryName(project));
                         var optimized = await Task.Run(() => WaterwaveFusion.OptimizeSelectedAsync(job.Source,
-                            project, job.FrozenProperties ?? new JsonObject(), job.SourceSha256, runCancellation.Token));
+                            work, job.FrozenProperties ?? new JsonObject(), job.SourceSha256, runCancellation.Token));
                         runCancellation.Token.ThrowIfCancellationRequested();
                         int fused = optimized["fused_pairs"]?.GetValue<int>() ?? 0;
                         if (fused > 0)
                         {
                             optimized["schema_version"] = 1;
                             optimized["artifact_kind"] = "live_scene_optimized";
-                            optimized["project_path"] = project;
                             optimized["source"] = job.Source;
                             optimized["snapshot_properties"] = job.FrozenProperties?.DeepClone();
-                            await File.WriteAllTextAsync(job.GenerationReportPath, optimized.ToJsonString(), runCancellation.Token);
+                            await AppEnvironment.PublishLiveSceneAsync(optimized, work, project, runCancellation.Token);
                             job.ProjectPath = project;
                             job.LatestReportPath = job.GenerationReportPath;
                         }
@@ -1075,7 +1070,7 @@ public partial class MainWindow : Window
             ? AppEnvironment.NewOutput(OutputBox.Text.Trim(), original.Source)
             : AppEnvironment.NewWorkDirectory(original.Source, OutputBox.Text.Trim());
         var request = original.Request with { Plan = plan, OutputDirectory = output,
-            ProjectDirectory = original.LiveScene ? Path.Combine(output, "project") : AppEnvironment.NewOutput(OutputBox.Text.Trim(), original.Source) };
+            ProjectDirectory = original.LiveScene ? output : AppEnvironment.NewOutput(OutputBox.Text.Trim(), original.Source) };
         Enqueue(original.Clone(request));
         await ProcessQueueAsync();
     }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Text.Json.Nodes;
 using Baker.Core;
 
@@ -33,6 +34,17 @@ internal static class AppJsonPresentation
 
     public static string? CandidateProjectPath(JsonObject result) =>
         result["project_path"]?.GetValue<string>();
+
+    public static string? ResolveCompletedProject(JsonObject report, string output)
+    {
+        string? declaredProject = CandidateProjectPath(report);
+        if (declaredProject is null) return null;
+        // Prefer the copied result folder; older work folders keep their project one level below.
+        return new[] { output, Path.Combine(output, "project") }
+            .FirstOrDefault(path => File.Exists(Path.Combine(path, "project.json")))
+            ?? (report["artifact_kind"]?.GetValue<string>() != "live_scene_optimized" &&
+                File.Exists(Path.Combine(declaredProject, "project.json")) ? declaredProject : null);
+    }
 
     public static bool CandidateCanApply(JsonObject result)
     {
