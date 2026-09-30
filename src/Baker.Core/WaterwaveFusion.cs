@@ -14,11 +14,12 @@ public static class WaterwaveFusion
     // An edited shader is unknown until its sampling and math have been reviewed.
     private const string VertexSha256 = "188D1E33DE160E86708329ED1401CDC546426293E1F0B66B041D5CD556FE388F";
     private const string FragmentSha256 = "745BD77B1333EE53664718AB81F4922D92A8302FEA29A5AD05871780D1E4D1F5";
+    private const string UnscaledFragmentSha256 = "18DF156687ADDC31957922F782EC5DA44A126619B0FFD60C1B69557D2512D50E";
     private static readonly Regex EffectAccess = new(@"\b(?:getEffects?|findEffect)\s*\(|\.\s*effects\b|\[\s*['""`]effects['""`]\s*\]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex DynamicLayerAccess = new(@"\b(?:getLayerByIndex|enumerateLayers|getChildren|getParent|eval|Function|Reflect|Proxy)\b", RegexOptions.CultureInvariant);
 
     internal sealed record Wave(JsonObject Entry, double Direction, double Speed, double Scale, double Strength,
-        double TimeOffset, string Mask, string? OffsetTexture, uint MaskWidth, uint MaskHeight);
+        double TimeOffset, string Mask, string? OffsetTexture, uint MaskWidth, uint MaskHeight, bool ResolutionScaled = true);
 
     public static async Task<JsonObject> OptimizeAsync(string sourcePath, string output, CancellationToken cancellationToken = default)
         => await OptimizeAsync(sourcePath, output, null, null, copyUnchanged: true, cancellationToken);
@@ -65,9 +66,10 @@ public static class WaterwaveFusion
                 string stem = $"wpe_baker_waterwave/pair_{obj["id"]?.ToJsonString()}_{index}";
                 if (obj["id"] is null || new[] { $"effects/{stem}.json", $"materials/{stem}.json",
                     $"shaders/{stem}.vert", $"shaders/{stem}.frag" }.Any(source.Contains)) continue;
-                var fusedTextures = a.OffsetTexture is null
-                    ? new JsonArray(null, a.Mask, b!.Mask, b.OffsetTexture)
-                    : new JsonArray(null, a.Mask, a.OffsetTexture, b!.Mask, b.OffsetTexture);
+                var fusedTextures = new JsonArray(null, a.Mask);
+                if (a.OffsetTexture is not null) fusedTextures.Add(a.OffsetTexture);
+                fusedTextures.Add(b!.Mask);
+                if (b.OffsetTexture is not null) fusedTextures.Add(b.OffsetTexture);
                 var replacement = new JsonObject {
                     ["file"] = $"effects/{stem}.json", ["id"] = first["id"]?.DeepClone(),
                     ["name"] = first["name"]?.DeepClone(), ["visible"] = true,
@@ -201,7 +203,6 @@ public static class WaterwaveFusion
                 instance["constantshadervalues"] is not JsonObject values ||
                 instance["textures"] is not JsonArray textures || textures.Count is not (2 or 3) ||
                 textures[0] is not null || textures[1]?.GetValue<string>() is not string mask ||
-                (requireTimeOffset && textures.Count != 3) ||
                 (textures.Count == 3 && textures[2]?.GetValue<string>() is not string)) return false;
             JsonObject definition = source.ReadJson(effectResource);
             if (definition.Where(p => p.Key is not ("dependencies" or "editable" or "gizmos" or "group" or "name" or "passes" or "replacementkey" or "version" or "description" or "preview")).Any() ||
@@ -217,17 +218,24 @@ public static class WaterwaveFusion
                 materialPass["cullmode"]?.GetValue<string>() != "nocull" ||
                 materialPass.Where(p => p.Key is not ("shader" or "blending" or "depthtest" or "depthwrite" or "cullmode" or "textures")).Any() ||
                 materialPass["textures"] is JsonArray { Count: > 0 } ||
-                !Hash(source, $"shaders/{shader}.vert").Equals(VertexSha256, StringComparison.Ordinal) ||
-                !Hash(source, $"shaders/{shader}.frag").Equals(FragmentSha256, StringComparison.Ordinal)) return false;
+                !Hash(source, $"shaders/{shader}.vert").Equals(VertexSha256, StringComparison.Ordinal)) return false;
+            string fragmentHash = Hash(source, $"shaders/{shader}.frag");
+            bool resolutionScaled = fragmentHash.Equals(FragmentSha256, StringComparison.Ordinal);
+            if ((!resolutionScaled && !fragmentHash.Equals(UnscaledFragmentSha256, StringComparison.Ordinal)) ||
+                (resolutionScaled && requireTimeOffset && textures.Count != 3)) return false;
             if (!TextureOk(source, mask, out uint width, out uint height) ||
                 (textures.Count == 3 && (!TextureOk(source, textures[2]!.GetValue<string>(), out uint w, out uint h) || w != width || h != height))) return false;
-            foreach (string key in new[] { "direction", "speed", "scale", "strength", "globleTimeOffset", "offset", "exponent" })
+            string[] keys = resolutionScaled
+                ? ["direction", "speed", "scale", "strength", "globleTimeOffset", "offset", "exponent"]
+                : ["direction", "speed", "scale", "strength", "exponent"];
+            foreach (string key in keys)
                 if (values[key] is not JsonValue v || !v.TryGetValue<double>(out double number) || !double.IsFinite(number)) return false;
-            if (values.Count != 7 || values["offset"]!.GetValue<double>() != 0 || values["exponent"]!.GetValue<double>() != 1) return false;
+            if (values.Count != keys.Length || values["exponent"]!.GetValue<double>() != 1 ||
+                (resolutionScaled && values["offset"]!.GetValue<double>() != 0)) return false;
             wave = new Wave(effect, values["direction"]!.GetValue<double>(), values["speed"]!.GetValue<double>(),
                 values["scale"]!.GetValue<double>(), values["strength"]!.GetValue<double>(),
-                values["globleTimeOffset"]!.GetValue<double>(), mask,
-                textures.Count == 3 ? textures[2]!.GetValue<string>() : null, width, height);
+                resolutionScaled ? values["globleTimeOffset"]!.GetValue<double>() : 0, mask,
+                textures.Count == 3 ? textures[2]!.GetValue<string>() : null, width, height, resolutionScaled);
             return true;
         }
         catch (Exception e) when (e is InvalidDataException or IOException or InvalidOperationException or FormatException or ArgumentException)
@@ -239,23 +247,27 @@ public static class WaterwaveFusion
     private static string Hash(ProjectSource source, string resource) =>
         Convert.ToHexString(SHA256.HashData(source.Read(resource)));
 
-    private static bool TextureOk(ProjectSource source, string texture, out uint width, out uint height)
+    internal static bool TextureOk(ProjectSource source, string texture, out uint width, out uint height)
     {
         width = height = 0;
         string resource = $"materials/{texture}.tex";
         if (!source.Contains(resource)) return false;
-        byte[] prefix = source.ReadPrefix(resource, 71);
-        // Engine TexImageParser maps 9 to R8 UNORM; flag 2 is clamp UV. For TEXB4 with no
-        // variant table, the mip count is at byte 67. One mip makes explicit LOD 0 equivalent
-        // to the authored shader's automatic LOD for this mask.
-        return prefix.Length == 71 && TextureContainer.TryReadHeader(prefix, out var header) &&
-            header.Format == 9 && header.Flags == 2 && prefix.AsSpan(46, 9).SequenceEqual("TEXB0004\0"u8) &&
+        byte[] prefix = source.ReadPrefix(resource, 79);
+        // TexImageParser: R8 UNORM, clamp UV, one raw image. TEXB3 has no variant table;
+        // TEXB4 adds its count before the mip count. One mip makes explicit LOD 0 exact.
+        if (prefix.Length != 79) return false;
+        int mipOffset = prefix.AsSpan(46, 9).SequenceEqual("TEXB0003\0"u8) ? 63 :
+            prefix.AsSpan(46, 9).SequenceEqual("TEXB0004\0"u8) &&
+            BinaryPrimitives.ReadInt32LittleEndian(prefix.AsSpan(63, 4)) == 0 ? 67 : -1;
+        return mipOffset >= 0 && TextureContainer.TryReadHeader(prefix, out var header) &&
+            header.Format == 9 && header.Flags == 2 &&
             BinaryPrimitives.ReadInt32LittleEndian(prefix.AsSpan(55, 4)) == 1 &&
             BinaryPrimitives.ReadInt32LittleEndian(prefix.AsSpan(59, 4)) == -1 &&
-            BinaryPrimitives.ReadInt32LittleEndian(prefix.AsSpan(63, 4)) == 0 &&
-            BinaryPrimitives.ReadInt32LittleEndian(prefix.AsSpan(67, 4)) == 1 &&
+            BinaryPrimitives.ReadInt32LittleEndian(prefix.AsSpan(mipOffset, 4)) == 1 &&
             TextureContainer.TryReadImageExtent(prefix, out width, out height) &&
-            header.Width == width && header.Height == height;
+            header.Width == width && header.Height == height &&
+            BinaryPrimitives.ReadUInt32LittleEndian(prefix.AsSpan(mipOffset + 4, 4)) == width &&
+            BinaryPrimitives.ReadUInt32LittleEndian(prefix.AsSpan(mipOffset + 8, 4)) == height;
     }
 
     private static string N(double value)
@@ -285,7 +297,7 @@ public static class WaterwaveFusion
         uniform sampler2D g_Texture0; // {"hidden":true}
         uniform sampler2D g_Texture1;
         uniform sampler2D g_Texture2;
-        uniform sampler2D g_Texture3;{{(a.OffsetTexture is null ? "" : "\nuniform sampler2D g_Texture4;")}}
+        {{(a.OffsetTexture is null && b.OffsetTexture is null ? "" : "uniform sampler2D g_Texture3;")}}{{(a.OffsetTexture is null || b.OffsetTexture is null ? "" : "\nuniform sampler2D g_Texture4;")}}
         uniform vec4 g_Texture0Resolution;
         uniform float g_Time;
         varying vec2 v_Uv;
@@ -295,8 +307,8 @@ public static class WaterwaveFusion
         vec4 firstPass(vec2 uv, vec2 dirA) {
             float mask = texSample2DLod(g_Texture1, uv, 0.0).r;
             float phase = g_Time * {{N(a.Speed)}} + dot(uv, dirA) * {{N(a.Scale)}};
-            {{(a.OffsetTexture is null ? "" : "phase += texSample2DLod(g_Texture2, uv, 0.0).r * M_PI_2;\n            ")}}phase += {{N(a.TimeOffset)}} * M_PI_2;
-            vec2 strength = (CAST2(500) / g_Texture0Resolution.xy) * {{N(a.Strength)}} * {{N(a.Strength)}};
+            {{(a.OffsetTexture is null ? "" : "phase += texSample2DLod(g_Texture2, uv, 0.0).r * M_PI_2;\n            ")}}{{(a.ResolutionScaled ? "phase += " + N(a.TimeOffset) + " * M_PI_2;" : "")}}
+            {{(a.ResolutionScaled ? "vec2 strength = (CAST2(500) / g_Texture0Resolution.xy) * " : "float strength = ")}}{{N(a.Strength)}} * {{N(a.Strength)}};
             float wave = sin(phase);
             uv += abs(wave) * sign(wave) * vec2(dirA.y, -dirA.x) * strength * mask;
             vec4 color = texSample2DLod(g_Texture0, uv, 0.0);
@@ -315,8 +327,8 @@ public static class WaterwaveFusion
                 result = firstPass(v_Uv, v_DirA);
             } else {
                 float phase = g_Time * {{N(b.Speed)}} + dot(v_Uv, v_DirB) * {{N(b.Scale)}};
-                phase += texSample2D(g_Texture{{(a.OffsetTexture is null ? 3 : 4)}}, v_Uv).r * M_PI_2;{{(b.TimeOffset == 0 ? "" : "\n    phase += " + N(b.TimeOffset) + " * M_PI_2;")}}
-                vec2 strength = (CAST2(500) / g_Texture0Resolution.xy) * {{N(b.Strength)}} * {{N(b.Strength)}};
+                {{(b.OffsetTexture is null ? "" : "phase += texSample2D(g_Texture" + (a.OffsetTexture is null ? 3 : 4) + ", v_Uv).r * M_PI_2;")}}{{(!b.ResolutionScaled || b.TimeOffset == 0 ? "" : "\n    phase += " + N(b.TimeOffset) + " * M_PI_2;")}}
+                {{(b.ResolutionScaled ? "vec2 strength = (CAST2(500) / g_Texture0Resolution.xy) * " : "float strength = ")}}{{N(b.Strength)}} * {{N(b.Strength)}};
                 float wave = sin(phase);
                 vec2 uv = v_Uv + abs(wave) * sign(wave) * vec2(v_DirB.y, -v_DirB.x) * strength * mask;
                 vec2 pixel = uv * g_Texture0Resolution.xy - 0.5;
