@@ -5,6 +5,11 @@ internal static class SavedLoopApplyChecks
 {
     internal static void Run(Action<bool, string> check)
     {
+        TestTemp.Run(async dir =>
+        {
+            CheckSavedProjectPaths(check, dir);
+            await CheckLivePublication(check, dir);
+        }).GetAwaiter().GetResult();
         var report = JsonNode.Parse("""
             {"schema_version":2,"artifact_kind":"hybrid_video_candidate","status":"candidate_generated",
              "source_start_frame":0,"plan":{"loop":{"status":"analytic_candidate_requires_seam_validation",
@@ -76,5 +81,88 @@ internal static class SavedLoopApplyChecks
         prefixes["plan"]!["effect_prefix_caches"]![1]!["loop"]!["status"] = "analytic_candidate_requires_seam_validation";
         prefixes["groups"]![0]!["local_repair"] = new JsonObject();
         check(!AppJsonPresentation.CandidateCanApply(prefixes), "repaired effect-prefix output is rejected");
+    }
+
+    private static void CheckSavedProjectPaths(Action<bool, string> check, string dir)
+    {
+        static JsonObject ReadReport(string output) => JsonNode.Parse(File.ReadAllText(Path.Combine(output, "bake.json")))!.AsObject();
+        string root = Directory.CreateDirectory(Path.Combine(dir, "root")).FullName;
+        var report = new JsonObject { ["schema_version"] = 1, ["artifact_kind"] = "live_scene_optimized",
+            ["status"] = "optimized", ["fused_pairs"] = 1, ["project_path"] = root, ["source_sha256"] = "hash" };
+        File.WriteAllText(Path.Combine(root, "bake.json"), report.ToJsonString());
+        File.WriteAllText(Path.Combine(root, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
+        check(AppJsonPresentation.ResolveCompletedProject(ReadReport(root), root) == root,
+            "live report loads the project beside bake.json");
+
+        string legacy = Directory.CreateDirectory(Path.Combine(dir, "legacy")).FullName;
+        string nested = Directory.CreateDirectory(Path.Combine(legacy, "project")).FullName;
+        report["project_path"] = nested;
+        File.WriteAllText(Path.Combine(legacy, "bake.json"), report.ToJsonString());
+        File.Copy(Path.Combine(root, "project.json"), Path.Combine(nested, "project.json"));
+        check(AppJsonPresentation.ResolveCompletedProject(ReadReport(legacy), legacy) == nested,
+            "live report still loads the legacy project subfolder");
+
+        string copied = Directory.CreateDirectory(Path.Combine(dir, "copied")).FullName;
+        File.Copy(Path.Combine(legacy, "bake.json"), Path.Combine(copied, "bake.json"));
+        File.Copy(Path.Combine(nested, "project.json"), Path.Combine(copied, "project.json"));
+        check(AppJsonPresentation.ResolveCompletedProject(ReadReport(copied), copied) == copied,
+            "a copied live result loads its local root even with a stale declared project path");
+
+        string missing = Directory.CreateDirectory(Path.Combine(dir, "missing")).FullName;
+        report["project_path"] = Path.Combine(missing, "project");
+        File.WriteAllText(Path.Combine(missing, "bake.json"), report.ToJsonString());
+        check(AppJsonPresentation.ResolveCompletedProject(ReadReport(missing), missing) is null,
+            "live report without a local project cannot load");
+        File.Copy(Path.Combine(root, "bake.json"), Path.Combine(missing, "bake.json"), overwrite: true);
+        check(AppJsonPresentation.ResolveCompletedProject(ReadReport(missing), missing) is null,
+            "live report cannot fall back to an existing external declared project");
+        JsonObject hybrid = ReadReport(missing);
+        hybrid["artifact_kind"] = "hybrid_video_candidate";
+        check(AppJsonPresentation.ResolveCompletedProject(hybrid, missing) == root,
+            "non-live report retains its existing declared-project fallback");
+    }
+
+    private static async Task CheckLivePublication(Action<bool, string> check, string dir)
+    {
+        string work = Directory.CreateDirectory(Path.Combine(dir, "publish-work")).FullName;
+        string project = Path.Combine(dir, "published");
+        File.WriteAllText(Path.Combine(work, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
+        File.WriteAllText(Path.Combine(work, "scene.json"), "{\"objects\":[]}");
+        var report = new JsonObject { ["schema_version"] = 1, ["artifact_kind"] = "live_scene_optimized",
+            ["status"] = "optimized", ["fused_pairs"] = 1, ["output"] = work, ["source_sha256"] = "hash" };
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        bool stopped = false;
+        try { await AppEnvironment.PublishLiveSceneAsync(report, work, project, cancelled.Token); }
+        catch (OperationCanceledException) { stopped = true; }
+        check(stopped && !Directory.Exists(project) && File.Exists(Path.Combine(work, "project.json")),
+            "cancelled live publication leaves the final folder absent and work intact");
+
+        string failedWork = Directory.CreateDirectory(Path.Combine(dir, "failed-report-work")).FullName;
+        string failedProject = Path.Combine(dir, "failed-report-final");
+        File.Copy(Path.Combine(work, "project.json"), Path.Combine(failedWork, "project.json"));
+        Directory.CreateDirectory(Path.Combine(failedWork, "bake.json"));
+        bool writeFailed = false;
+        try { await AppEnvironment.PublishLiveSceneAsync(report.DeepClone().AsObject(), failedWork, failedProject, CancellationToken.None); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { writeFailed = true; }
+        check(writeFailed && !Directory.Exists(failedProject) && File.Exists(Path.Combine(failedWork, "project.json")),
+            "report write failure leaves the final folder absent and work intact");
+
+        string occupied = Directory.CreateDirectory(Path.Combine(dir, "occupied-final")).FullName;
+        File.WriteAllText(Path.Combine(occupied, "project.json"), "{\"title\":\"existing project\"}");
+        bool moveFailed = false;
+        try { await AppEnvironment.PublishLiveSceneAsync(report, work, occupied, CancellationToken.None); }
+        catch (IOException error) { moveFailed = error.Message.Contains(work, StringComparison.Ordinal); }
+        check(moveFailed && File.ReadAllText(Path.Combine(occupied, "project.json")) == "{\"title\":\"existing project\"}" &&
+            File.Exists(Path.Combine(work, "project.json")),
+            "live publication refuses an existing final folder and reports retained work");
+
+        await AppEnvironment.PublishLiveSceneAsync(report, work, project, CancellationToken.None);
+        JsonObject saved = JsonNode.Parse(File.ReadAllText(Path.Combine(project, "bake.json")))!.AsObject();
+        check(!Directory.Exists(work) && File.Exists(Path.Combine(project, "project.json")) &&
+            File.ReadAllText(Path.Combine(project, "scene.json")) == "{\"objects\":[]}" &&
+            saved["output"]?.GetValue<string>() == project && saved["project_path"]?.GetValue<string>() == project &&
+            AppJsonPresentation.ResolveCompletedProject(saved, project) == project && AppJsonPresentation.CandidateCanApply(saved),
+            "successful live publication moves project, resources and a loadable final-root report together");
     }
 }

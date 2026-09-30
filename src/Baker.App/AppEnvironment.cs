@@ -85,6 +85,19 @@ internal static class AppEnvironment
         return Path.Combine(Path.GetFullPath(root), $"{safe}-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
     }
 
+    public static async Task PublishLiveSceneAsync(JsonObject report, string work, string project, CancellationToken token)
+    {
+        report["output"] = project;
+        report["project_path"] = project;
+        await File.WriteAllTextAsync(Path.Combine(work, "bake.json"), report.ToJsonString(), token);
+        token.ThrowIfCancellationRequested();
+        try { Directory.Move(work, project); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Could not publish the optimized project to {project}. The work directory remains at {work}. {error.Message}", error);
+        }
+    }
+
     /// <summary>工作目录的固定名字：放在保存位置下面，与成品文件夹并排，一眼看得出是中间产物。</summary>
     public const string WorkFolderName = "wpe-baker-work";
 
