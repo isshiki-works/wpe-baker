@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Baker.Core;
 
@@ -85,11 +86,23 @@ internal static class AppEnvironment
         return Path.Combine(Path.GetFullPath(root), $"{safe}-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
     }
 
+    public static string NewApplicationDirectory(string project, string? recordRoot = null)
+    {
+        string root = recordRoot ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WpeBaker", "applications");
+        string directory = Path.Combine(Path.GetFullPath(root), "apply-" + Guid.NewGuid().ToString("N"));
+        if (!OutputValid(directory, project)) throw new InvalidDataException("The application record must be outside the project.");
+        return directory;
+    }
+
     public static async Task PublishLiveSceneAsync(JsonObject report, string work, string project, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         report["output"] = project;
         report["project_path"] = project;
-        await File.WriteAllTextAsync(Path.Combine(work, "bake.json"), report.ToJsonString(), token);
+        string reportPath = GenerationReportPath.NewPath(work);
+        report["publication_report_path"] = Path.Combine(project, Path.GetFileName(reportPath));
+        await using (var file = new FileStream(reportPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            await JsonSerializer.SerializeAsync(file, report, cancellationToken: token);
         token.ThrowIfCancellationRequested();
         try { Directory.Move(work, project); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)

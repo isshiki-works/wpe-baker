@@ -11,14 +11,11 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
     internal static void ValidateSource(ProjectSource source, JsonObject scene, JsonObject cache)
     {
         int owner = cache["owner_layer_id"]?.GetValue<int>() ?? throw new InvalidDataException("Effect-prefix cache owner_layer_id is missing.");
-        int prefix = cache["prefix_effect_count"]?.GetValue<int>() ?? 0;
-        int? terminalOrdinal = SceneGraph.Int(cache["terminal_effect_ordinal"]);
+        int prefix = cache["prefix_effect_count"] is JsonValue prefixValue && prefixValue.TryGetValue<int>(out int count) ? count : 0;
         JsonObject node = scene["objects"]?.AsArray().OfType<JsonObject>().SingleOrDefault(x => SceneGraph.Id(x) == owner)
             ?? throw new InvalidDataException("Effect-prefix cache owner is absent from the source scene.");
-        if (prefix <= 0 || node["effects"] is not JsonArray effects || prefix > effects.Count ||
-            effects[prefix - 1]?["id"]?.GetValue<int>() != cache["terminal_effect_id"]?.GetValue<int>() ||
-            (cache["terminal_effect_id"] is null && terminalOrdinal is null) ||
-            (terminalOrdinal is int ordinal && ordinal != prefix - 1) ||
+        if (!EffectPrefixCaptureTarget.HasValidTerminalIdentity(cache) || node["effects"] is not JsonArray effects || prefix > effects.Count ||
+            !JsonNode.DeepEquals(effects[prefix - 1]?["id"], cache["terminal_effect_id"]) ||
             node["image"]?.GetValue<string>() != cache["source_image"]?.GetValue<string>() ||
             cache["loop"] is not JsonObject || cache["fixed_user_properties"] is not JsonObject)
             throw new InvalidDataException("Effect-prefix cache description no longer matches its source owner, terminal effect, or fixed properties.");

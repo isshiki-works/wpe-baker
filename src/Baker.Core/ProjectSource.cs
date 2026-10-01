@@ -350,6 +350,47 @@ public sealed class ProjectSource : IDisposable
         }
     }
 
+    // Preserve physical package representation so this digest can be compared with the original tree.
+    // Loose resources are copied, never linked: authors may still overwrite them during observation.
+    internal async Task CopySnapshotAsync(string destination, string expectedHash, CancellationToken token,
+        Action<string>? beforeCopy = null)
+    {
+        destination = Path.GetFullPath(destination);
+        if (Directory.Exists(destination) || File.Exists(destination)) throw new IOException("Snapshot requires a new directory.");
+        if (destination.StartsWith(DirectoryPath.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase)) throw new IOException("Snapshot cannot be inside its source project.");
+        EnsureNoReparsePoints(destination);
+        string[] files = EnumerateLooseFiles().Order(StringComparer.Ordinal).ToArray();
+        ulong bytes = 0;
+        foreach (string resource in files)
+            bytes = checked(bytes + (ulong)new FileInfo(ContainedPath(DirectoryPath, resource)).Length);
+        TemporaryCaptureFiles.RequireFreeSpace(destination, bytes);
+        Directory.CreateDirectory(destination);
+        try
+        {
+            foreach (string resource in files)
+            {
+                token.ThrowIfCancellationRequested();
+                beforeCopy?.Invoke(resource);
+                string inputPath = ContainedPath(DirectoryPath, resource), target = ContainedPath(destination, resource);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                // Copy pkg too: the original's FileShare.Read lock would prevent removing a hard-linked snapshot on Windows.
+                await using var input = File.OpenRead(inputPath);
+                await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                await input.CopyToAsync(output, token);
+            }
+            using var snapshot = new ProjectSource(Path.Combine(destination, Path.GetFileName(SourcePath)));
+            if (await snapshot.SourceHashAsync(token) != expectedHash)
+                throw new IOException("Source snapshot does not match its observation key.");
+        }
+        catch
+        {
+            try { Directory.Delete(destination, recursive: true); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
+    }
+
     private const long LinkMinimumBytes = 1 << 20;
 
     private static bool Linkable(string resource) =>

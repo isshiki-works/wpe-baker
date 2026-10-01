@@ -35,7 +35,7 @@ public sealed partial class NativeRenderRunner
         if (Directory.Exists(output) || File.Exists(output)) throw new IOException("Raw render output must be new.");
         if (output.StartsWith(source.DirectoryPath.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new IOException("Raw render output cannot be inside its source project.");
-        string sourceHash = await source.SourceHashAsync(cancellationToken, reuse: true);
+        string sourceHash = await source.SourceHashAsync(cancellationToken);
         ulong expected = checked((ulong)request.Width * request.Height * 4 * request.Frames);
         ulong pcmBytes = checked((ulong)(((UInt128)request.Frames * request.FpsDenominator * 384000 +
             request.FpsNumerator - 1) / request.FpsNumerator));
@@ -108,7 +108,7 @@ public sealed partial class NativeRenderRunner
                 throw new InvalidDataException("Renderer did not use the requested GPU.");
             if (frameSink is null && (ulong)new FileInfo(Path.Combine(native, "frames.rgba")).Length != expected)
                 throw new InvalidDataException("Raw output length does not match the frame contract.");
-            if (sourceHash != await source.SourceHashAsync(cancellationToken, reuse: true)) throw new IOException("Source changed during raw rendering.");
+            if (sourceHash != await source.SourceHashAsync(cancellationToken)) throw new IOException("Source changed during raw rendering.");
             manifest["native_result"] = result.Json;
             manifest["status"] = "completed";
             if (frameSink is null) manifest["rgba_path"] = Path.Combine(native, "frames.rgba");

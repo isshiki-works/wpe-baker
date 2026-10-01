@@ -59,6 +59,8 @@ internal static class BakeDiskBudgetChecks
 
         // ---- ③ 结束后按 WorkLayout 登记表清理 ----
         string output = Path.Combine(root, "disk-budget-cleanup");
+        var cleanupLayout = new WorkLayout(output + Path.DirectorySeparatorChar);
+        cleanupLayout.RequireNewAnalysisRefresh();
         string[] removed = [Path.Combine(output, "capture-source"), Path.Combine(output, "reference"),
             Path.Combine(output, "group-1", "master"), Path.Combine(output, "group-1", "master.gpu-unavailable"),
             Path.Combine(output, "group-1", "master.h264_vulkan-qp18"), Path.Combine(output, "group-1", "master.av1_nvenc-failed"),
@@ -76,7 +78,8 @@ internal static class BakeDiskBudgetChecks
         }
         File.WriteAllText(Path.Combine(output, "group-1", "seam-preview.mp4"), "x");
         File.WriteAllText(Path.Combine(output, "bake.json"), "{}");
-        JsonArray? errors = new WorkLayout(output + Path.DirectorySeparatorChar).RemoveIntermediates(
+        cleanupLayout.AnalysisRefreshCreated();
+        JsonArray? errors = cleanupLayout.RemoveIntermediates(
             WorkLayout.KeepsCompositionProbe(new JsonObject { ["status"] = "candidate_generated" }));
         check(errors is null && removed.All(directory => !Directory.Exists(directory)) && kept.All(Directory.Exists) &&
             File.Exists(Path.Combine(output, "bake.json")) && File.Exists(Path.Combine(output, "group-1", "seam-preview.mp4")),

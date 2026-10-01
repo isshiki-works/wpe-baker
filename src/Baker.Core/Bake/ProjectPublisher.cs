@@ -24,22 +24,47 @@ internal static class ProjectPublisher
     }
 
     /// <summary>
-    /// 成品与 static_only 解包到目标目录，报告改指向目标并记下工作目录，工作目录与目标目录各写一份 bake.json。
+    /// 成品先在目标卷暂存，完整报告写好后才整体移动；来源自带的报告文件保留。
     /// 其余状态什么都不做。
     /// </summary>
     internal static async Task PublishAsync(JsonObject report, string project, string? destination, WorkLayout layout,
         StageTiming timing, IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
     {
         if (destination is null || !StaticOnlyBake.Finished(report["status"]!.GetValue<string>())) return;
+        try
+        {
         progress?.Report(new("saving_project", 1, new Message("progress.saving_project")));
+        cancellationToken.ThrowIfCancellationRequested();
+        string stagingRoot = Path.Combine(Path.GetDirectoryName(destination)!, $".wpe-baker-work-{Guid.NewGuid():N}");
+        if (Path.Exists(stagingRoot)) throw new IOException("The publication work directory must be new.");
+        string staged = Path.Combine(stagingRoot, "project");
+        report["publication_work_directory"] = stagingRoot;
         using (timing.Measure(StageTiming.ProjectAssembly))
         {
             using var generated = new ProjectSource(project);
-            await generated.ExtractAsync(destination, cancellationToken);
+            await generated.ExtractAsync(staged, cancellationToken);
         }
+        string reportPath = GenerationReportPath.NewPath(staged);
         report["project_path"] = destination;
         report["work_directory"] = layout.Output;
+        report["publication_report_path"] = Path.Combine(destination, Path.GetFileName(reportPath));
         await BakeReportWriter.SaveAsync(layout.Report, report, timing, CancellationToken.None);
-        await BakeReportWriter.WriteNewAsync(Path.Combine(destination, "bake.json"), report, null, cancellationToken);
+        await BakeReportWriter.WriteNewAsync(reportPath, report, null, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        Directory.Move(staged, destination);
+        try { Directory.Delete(stagingRoot); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
+        catch (Exception error)
+        {
+            report["status"] = cancellationToken.IsCancellationRequested || error is OperationCanceledException ? "cancelled" : "failed";
+            report["project_path"] = project;
+            report.Remove("publication_report_path");
+            report["error_type"] = error.GetType().Name;
+            report["error"] = error.Message;
+            try { await BakeReportWriter.SaveAsync(layout.Report, report, timing, CancellationToken.None); }
+            catch (Exception saveError) when (saveError is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
     }
 }

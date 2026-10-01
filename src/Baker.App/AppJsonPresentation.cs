@@ -35,6 +35,31 @@ internal static class AppJsonPresentation
     public static string? CandidateProjectPath(JsonObject result) =>
         result["project_path"]?.GetValue<string>();
 
+    public static string? ApplicationManifest(IReadOnlyList<(string Profile, string Location, string Manifest, bool Restored)> records,
+        string profile, string location) => records.LastOrDefault(record =>
+            record.Profile == profile && record.Location == location && !record.Restored).Manifest;
+
+    public static void MarkApplicationRestored(List<(string Profile, string Location, string Manifest, bool Restored)> records, string manifest)
+    {
+        int index = records.FindIndex(record => string.Equals(record.Manifest, manifest, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0) records[index] = (records[index].Profile, records[index].Location, records[index].Manifest, true);
+    }
+
+    public static (uint Width, uint Height) PreviewDimensions(JsonObject plan, bool liveScene, string project,
+        Func<(uint Width, uint Height)?> display)
+    {
+        if (!liveScene)
+        {
+            HybridAnalyzeRequest settings = PlanSettings.Of(plan);
+            return (settings.Width, settings.Height);
+        }
+        using var source = new ProjectSource(project);
+        JsonObject definitions = LoadPropertyDefinitions(source);
+        JsonObject properties = ComposePropertyValues(definitions, null, new JsonObject());
+        OutputResolution.Choice choice = OutputResolution.Choose(source.ReadJson(source.SceneResource), properties, 0, 0, null, display);
+        return (choice.Width, choice.Height);
+    }
+
     public static string? ResolveCompletedProject(JsonObject report, string output)
     {
         string? declaredProject = CandidateProjectPath(report);
@@ -104,8 +129,7 @@ internal static class AppJsonPresentation
         foreach (JsonObject cache in caches.OfType<JsonObject>())
         {
             int? owner = cache["owner_layer_id"] is JsonValue ownerValue && ownerValue.TryGetValue<int>(out int id) ? id : null;
-            if (owner is null || Number(cache["prefix_effect_count"]) is not > 0 ||
-                Number(cache["terminal_effect_id"]) is null || cache["source_image"] is not JsonValue image ||
+            if (owner is null || !EffectPrefixCaptureTarget.HasValidTerminalIdentity(cache) || cache["source_image"] is not JsonValue image ||
                 !image.TryGetValue<string>(out _) || cache["fixed_user_properties"] is not JsonObject ||
                 cache["loop"] is not JsonObject loop ||
                 loop["status"]?.GetValue<string>() != "analytic_candidate_requires_seam_validation" ||

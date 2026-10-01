@@ -224,6 +224,7 @@ public sealed class HybridBakeService(NativeTools tools)
         IProgress<RenderProgress>? progress, CancellationToken cancellationToken)
     {
         var layout = new WorkLayout(request.OutputDirectory);
+        layout.RequireNewAnalysisRefresh();
         record["first_status"] = first["status"]?.DeepClone();
         record["first_reason_localized"] = first["reason_localized"]?.DeepClone();
         record["first_stage_timing"] = first["stage_timing"]?.DeepClone();
@@ -234,6 +235,7 @@ public sealed class HybridBakeService(NativeTools tools)
         long started = Stopwatch.GetTimestamp();
         HybridAnalyzeRequest settings = replan(PlanSettings.Of(request.Plan) with { OutputDirectory = layout.AnalysisRefresh, RuntimeTraceFile = null });
         JsonObject plan = analyze is null ? await new HybridScenePlanner(tools).AnalyzeAsync(settings, progress, cancellationToken) : await analyze(settings);
+        if (analyze is null) layout.AnalysisRefreshCreated();
         record["replan_seconds"] = Math.Round(Stopwatch.GetElapsedTime(started).TotalSeconds, 1);
         if (plan["blockers"] is not JsonArray { Count: 0 })
         {
@@ -252,7 +254,9 @@ public sealed class HybridBakeService(NativeTools tools)
         foreach (string part in new[] { "composition-validation", "composition-probe", "composition-reference" })
             if (Directory.Exists(layout.Output + "." + part)) Directory.Move(layout.Output + "." + part, Path.Combine(firstAttempt, part));
         record["first_attempt_directory"] = firstAttempt;
-        JsonObject retried = await bake(request with { Plan = plan });
+        JsonObject retried;
+        try { retried = await bake(request with { Plan = plan }); }
+        finally { layout.RemoveAnalysisRefresh(); }
         record["status"] = "retried";
         retried[key] = record;
         await BakeReportWriter.SaveAsync(layout.Report, retried, null, CancellationToken.None);
@@ -264,9 +268,9 @@ public sealed class HybridBakeService(NativeTools tools)
     {
         var layout = new WorkLayout(request.OutputDirectory);
         if (request.ProbeFrames > 0 || request.KeepIntermediates || layout.Occupied)
-            return await BakeRunAsync(request, progress, cancellationToken);
+            return await BakeRunAsync(request, progress, cancellationToken, layout);
         JsonObject? result = null;
-        try { return result = await BakeRunAsync(request, progress, cancellationToken); }
+        try { return result = await BakeRunAsync(request, progress, cancellationToken, layout); }
         finally
         {
             // 按 WorkLayout 的登记表清理；合成被拒时探针与参照留给报告指路。
@@ -282,7 +286,7 @@ public sealed class HybridBakeService(NativeTools tools)
     }
 
     private async Task<JsonObject> BakeRunAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, WorkLayout layout)
     {
         var timing = new StageTiming(progress);
         if (!double.IsFinite(request.EffectRenderScale) || request.EffectRenderScale is <= 0 or > 1)
@@ -295,7 +299,7 @@ public sealed class HybridBakeService(NativeTools tools)
         timing.SetDevice(request.DeviceUuid ?? request.Plan["settings"]?["device_uuid"]?.GetValue<string>());
         if (request.Plan["route"]?.GetValue<string>() == "effect_prefix")
             return await BakeEffectPrefixesAsync(request, progress, timing, cancellationToken);
-        return bakeOnce is null ? await BakeOnceAsync(request, progress, timing, cancellationToken) : await bakeOnce(request);
+        return bakeOnce is null ? await BakeOnceAsync(request, progress, timing, cancellationToken, layout) : await bakeOnce(request);
     }
 
     private async Task VerifyPlanRendererAsync(JsonObject plan, CancellationToken cancellationToken)
@@ -334,25 +338,15 @@ public sealed class HybridBakeService(NativeTools tools)
         await VerifyPlanRendererAsync(request.Plan, cancellationToken);
         JsonObject result = await new EffectPrefixBakeService(tools).BakeAsync(request, progress, timing, cancellationToken);
         AttachPlanProvenance(result, request.Plan);
-        if (destination is not null && StaticOnlyBake.Finished(result["status"]?.GetValue<string>()))
-        {
-            using (timing.Measure(StageTiming.ProjectAssembly))
-            {
-                using var generated = new ProjectSource(result["project_path"]!.GetValue<string>());
-                await generated.ExtractAsync(destination, cancellationToken);
-            }
-            result["project_path"] = destination;
-            result["work_directory"] = output;
-            timing.Stamp(result);
-            await VideoSceneBuilder.WriteJsonAsync(Path.Combine(destination, "bake.json"), result, cancellationToken);
-        }
-        timing.Stamp(result);
-        await File.WriteAllTextAsync(Path.Combine(output, "bake.json"), result.ToJsonString(JsonOptions), cancellationToken);
+        await ProjectPublisher.PublishAsync(result, result["project_path"]?.GetValue<string>() ?? "", destination,
+            new WorkLayout(output), timing, progress, cancellationToken);
+        if (destination is null || !StaticOnlyBake.Finished(result["status"]?.GetValue<string>()))
+            await BakeReportWriter.SaveAsync(Path.Combine(output, "bake.json"), result, timing, cancellationToken);
         return result;
     }
 
     private async Task<JsonObject> BakeOnceAsync(HybridBakeRequest request, IProgress<RenderProgress>? progress,
-        StageTiming timing, CancellationToken cancellationToken)
+        StageTiming timing, CancellationToken cancellationToken, WorkLayout layout)
     {
         var plan = request.Plan.DeepClone().AsObject();
         if (request.SchemaVersion != 2)
@@ -378,7 +372,6 @@ public sealed class HybridBakeService(NativeTools tools)
         using var source = new ProjectSource(plan["source"]!.GetValue<string>());
         string sourceHash = await source.SourceHashAsync(cancellationToken, reuse: probe);
         if (sourceHash != plan["source_sha256"]!.GetValue<string>()) throw new InvalidDataException("Source changed; analyze it again.");
-        var layout = new WorkLayout(request.OutputDirectory);
         string output = layout.Output;
         EnsureNewDerivedOutput(source, output, "Hybrid output");
         string? destination = ProjectPublisher.Destination(request.ProjectDirectory, source, output);
@@ -904,7 +897,7 @@ public sealed class HybridBakeService(NativeTools tools)
                 report["retained_object_count"] = finalObjects.Count - replacements.Count - (hub is null ? 0 : 1);
                 report["source_draw_objects_removed"] = groups.Sum(g => g["layer_ids"]!.AsArray().Count);
                 await ProjectPublisher.PublishAsync(report, project, destination, layout, timing, progress, cancellationToken);
-                await Save();
+                if (destination is null || !StaticOnlyBake.Finished(report["status"]?.GetValue<string>())) await Save();
                 return report;
             }
             catch (Exception error)

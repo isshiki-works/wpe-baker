@@ -18,7 +18,7 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
         JsonObject scene, JsonObject project, JsonObject properties, SceneGraph graph, string output, NativeRuntimeObserver observer,
         IProgress<RenderProgress>? progress, CancellationToken cancellationToken, AnalysisMemo? memo = null)
     {
-        async Task<JsonObject> ProbeAsync(string renderSource, string directory, Func<Task>? prepare = null)
+        async Task<JsonObject> ProbeAsync(string directory, bool audioChoice = false)
         {
             JsonObject? daytimeScene = request.DaytimeSplit && request.DaytimeState is string state
                 ? DaytimeSplit.PrepareVideoObservation(scene, properties, state) : null;
@@ -34,24 +34,51 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
             return memo is null ? await ObserveOnceAsync() : await memo.JsonAsync(cacheKey, ObserveOnceAsync);
             async Task<JsonObject> ObserveOnceAsync()
             {
-                if (AnalysisCache.Read(request.AnalysisCacheDirectory, cacheKey) is JsonObject cached) return cached;
-                if (prepare is not null) await prepare();
+                bool derived = audioChoice || daytimeScene is not null;
+                if (AnalysisCache.Read(request.AnalysisCacheDirectory, cacheKey) is JsonObject cached)
+                {
+                    key.VerifyObservation(cached, derived ? null : sourceHash);
+                    return cached;
+                }
+                string snapshotRoot = Path.Combine(Path.GetFullPath(output), ".runtime-source-" + Guid.NewGuid().ToString("N"));
+                // OfflineSession uses the parent directory's leaf name as scene_id.
+                string snapshotDirectory = Path.Combine(snapshotRoot, new DirectoryInfo(source.DirectoryPath).Name);
+                bool snapshotOwned = false;
                 try
                 {
-                    if (daytimeScene is not null)
+                    if (derived && sourceHash != await source.SourceHashAsync(cancellationToken))
+                        throw new IOException("Source changed before runtime observation preparation.");
+                    if (Directory.Exists(snapshotRoot) || File.Exists(snapshotRoot)) throw new IOException("Snapshot root is occupied.");
+                    ProjectSource.EnsureNoReparsePoints(snapshotRoot);
+                    Directory.CreateDirectory(snapshotRoot);
+                    snapshotOwned = true;
+                    await observer.CopySnapshotAsync(source, snapshotDirectory, sourceHash, cancellationToken);
+                    using var snapshot = new ProjectSource(Path.Combine(snapshotDirectory, Path.GetFileName(source.SourcePath)));
+                    string renderSource = snapshot.SourcePath;
+                    if (derived)
                     {
-                        // renderSource 不是原作时已经是本次分析创建的音频选择副本，直接复用。
-                        if (renderSource.Equals(source.SourcePath, StringComparison.OrdinalIgnoreCase))
-                        {
-                            renderSource = Path.Combine(output, directory + "-daytime-source");
-                            await source.ExtractAsync(renderSource, cancellationToken);
-                        }
-                        await File.WriteAllTextAsync(ProjectSource.ContainedPath(renderSource, source.SceneResource), daytimeScene.ToJsonString(), cancellationToken);
+                        renderSource = Path.Combine(output, audioChoice ? "audio-choice-source" : directory + "-daytime-source");
+                        await snapshot.ExtractAsync(renderSource, cancellationToken);
+                        await File.WriteAllTextAsync(ProjectSource.ContainedPath(renderSource, source.SceneResource),
+                            (daytimeScene ?? scene).ToJsonString(), cancellationToken);
                         var observedProject = project.DeepClone().AsObject();
                         observedProject["file"] = source.SceneResource;
                         await File.WriteAllTextAsync(Path.Combine(renderSource, "project.json"), observedProject.ToJsonString(), cancellationToken);
                     }
-                    JsonObject observed = await observer.ObserveAsync(new(key, renderSource, probeOutput, request.DeviceUuid), cancellationToken);
+                    string expectedSourceHash = sourceHash;
+                    if (derived)
+                    {
+                        if (sourceHash != await source.SourceHashAsync(cancellationToken))
+                            throw new IOException("Source changed during runtime observation preparation.");
+                        // Legal state/audio edits change the capture's source digest. Bind Raw to this prepared input,
+                        // while the key continues to identify the original source plus the selected scene.
+                        using var prepared = new ProjectSource(renderSource);
+                        expectedSourceHash = await prepared.SourceHashAsync(cancellationToken);
+                    }
+                    JsonObject observed = await observer.ObserveAsync(new(key, renderSource, probeOutput, request.DeviceUuid,
+                        expectedSourceHash), cancellationToken);
+                    key.VerifyObservation(observed, expectedSourceHash);
+                    observed["source"] = source.SourcePath;
                     AnalysisCache.Write(request.AnalysisCacheDirectory, cacheKey, observed);
                     return observed;
                 }
@@ -61,6 +88,12 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
                 {
                     throw new AnalysisToolLimitationException(AnalysisToolLimitation.BuildReport(findings, scene, source.SourcePath,
                         sourceHash, probeOutput, error.Message), error);
+                }
+                finally
+                {
+                    if (snapshotOwned)
+                        try { Directory.Delete(snapshotRoot, recursive: true); }
+                        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
                 }
             }
         }
@@ -72,7 +105,7 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
                 throw new InvalidDataException("Runtime trace belongs to another source.");
             // A precomputed trace is only an explicit developer input, never an automatic cache hit.
         }
-        else trace = await ProbeAsync(source.SourcePath, "runtime-probe");
+        else trace = await ProbeAsync("runtime-probe");
         if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray dependencies ||
             trace["runtime_layers"] is not JsonArray runtimeLayers)
             throw new InvalidDataException("A complete runtime dependency observation is required.");
@@ -84,24 +117,17 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
             await VideoSceneBuilder.WriteJsonAsync(beforePath, trace, cancellationToken);
             audioEffectChoice["original_runtime_evidence"] = beforePath;
             PlanTransforms.ApplyAudioEffectChoice(scene, new JsonObject { ["audio_effects_choice"] = audioEffectChoice.DeepClone() });
-            string chosenSource = Path.Combine(output, "audio-choice-source");
             progress?.Report(new("analyzing", null, new Message("progress.observing_without_audio_effects")));
             // 整树拷贝只给渲染器用：观测命中缓存时不拷。
-            trace = await ProbeAsync(chosenSource, "audio-choice-runtime-probe", async () =>
-            {
-                // 解包出来的副本里已经有原作的场景与 project.json：改过的这两份覆盖写（与昼夜状态副本同一写法），不能按新建写。
-                await source.ExtractAsync(chosenSource, cancellationToken);
-                await File.WriteAllTextAsync(ProjectSource.ContainedPath(chosenSource, source.SceneResource), scene.ToJsonString(), cancellationToken);
-                var chosenProject = project.DeepClone().AsObject();
-                chosenProject["file"] = source.SceneResource;
-                await File.WriteAllTextAsync(Path.Combine(chosenSource, "project.json"), chosenProject.ToJsonString(), cancellationToken);
-            });
+            trace = await ProbeAsync("audio-choice-runtime-probe", audioChoice: true);
             if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray chosenDependencies ||
                 trace["runtime_layers"] is not JsonArray chosenLayers)
                 throw new InvalidDataException("Audio-effect omission requires a complete new runtime observation.");
             dependencies = chosenDependencies; runtimeLayers = chosenLayers;
             audioEffectChoice["runtime_evidence"] = Path.Combine(output, "runtime.json");
         }
+        // Public traces belong to the logical input, including cache hits from another identical copy.
+        trace["source"] = source.SourcePath;
         LinkComposites(graph, dependencies, runtimeLayers);
         await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "runtime.json"), trace, cancellationToken);
         return new(trace, dependencies, runtimeLayers, audioEffectChoice);
