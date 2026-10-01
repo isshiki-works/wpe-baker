@@ -34,6 +34,22 @@ internal sealed class WorkLayout(string outputDirectory)
     internal string Report => Path.Combine(Output, "bake.json");
     internal string CaptureSource => Path.Combine(Output, CaptureSourceName);
     internal string AnalysisRefresh => Output + ".analysis-refresh";
+    private bool analysisRefreshOwned;
+
+    internal void RequireNewAnalysisRefresh()
+    {
+        if (Path.Exists(AnalysisRefresh)) throw new IOException("The analysis refresh directory must be new.");
+    }
+
+    // Called only after the analyzer's must-be-new output operation completed successfully.
+    internal void AnalysisRefreshCreated() => analysisRefreshOwned = true;
+
+    internal void RemoveAnalysisRefresh()
+    {
+        if (!analysisRefreshOwned) return;
+        try { if (Directory.Exists(AnalysisRefresh)) Directory.Delete(AnalysisRefresh, recursive: true); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+    }
 
     /// <summary>输出根或合成探针 / 参照已存在：烘焙会以 must-be-new 拒绝，这些不是本案建的，结束时不按登记表清理。</summary>
     internal bool Occupied => Path.Exists(Output) || Siblings.Any(sibling => sibling.CompositionProbe && Path.Exists(Output + sibling.Suffix));
@@ -64,7 +80,7 @@ internal sealed class WorkLayout(string outputDirectory)
             }
         }
         foreach (var (suffix, probe) in Siblings)
-            if (!(probe && keepCompositionProbe)) Remove(Output + suffix);
+            if (!(probe && keepCompositionProbe) && (suffix != ".analysis-refresh" || analysisRefreshOwned)) Remove(Output + suffix);
         if (!Directory.Exists(Output)) return errors;
         foreach (var (name, probe) in RootDirectories)
             if (!(probe && keepCompositionProbe)) Remove(Path.Combine(Output, name));

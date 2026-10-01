@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Baker.App;
+using Baker.Core;
 
 internal static class SavedLoopApplyChecks
 {
@@ -9,6 +10,8 @@ internal static class SavedLoopApplyChecks
         {
             CheckSavedProjectPaths(check, dir);
             await CheckLivePublication(check, dir);
+            await CheckApplicationContracts(check, dir);
+            CheckTerminalSourceIdentity(check, dir);
         }).GetAwaiter().GetResult();
         var report = JsonNode.Parse("""
             {"schema_version":2,"artifact_kind":"hybrid_video_candidate","status":"candidate_generated",
@@ -67,6 +70,22 @@ internal static class SavedLoopApplyChecks
             ["composition_validation"] = new JsonObject { ["status"] = "composition_pass" }
         };
         check(AppJsonPresentation.CandidateCanApply(prefixes), "independent verified effect-prefix caches can be applied without a global loop or measured gain");
+        JsonObject ordinalCandidate = JsonNode.Parse(prefixes.ToJsonString())!.AsObject();
+        JsonObject ordinalCache = ordinalCandidate["plan"]!["effect_prefix_caches"]![0]!.AsObject();
+        ordinalCache["terminal_effect_id"] = null;
+        ordinalCache["terminal_effect_ordinal"] = 0;
+        check(AppJsonPresentation.CandidateCanApply(ordinalCandidate),
+            "a JSON report with an ID-less terminal at prefix-1 remains applicable (contract only, no rendering proof)");
+        foreach (var (field, value) in new (string, JsonNode?)[] {
+            ("terminal_effect_id", JsonValue.Create(1.5)), ("terminal_effect_id", JsonValue.Create(-1)),
+            ("terminal_effect_ordinal", JsonValue.Create(1)), ("terminal_effect_ordinal", JsonValue.Create(-1)),
+            ("terminal_effect_ordinal", JsonValue.Create(0.5)), ("terminal_effect_ordinal", null),
+            ("prefix_effect_count", JsonValue.Create(1.5)) })
+        {
+            JsonObject invalid = ordinalCandidate.DeepClone().AsObject();
+            invalid["plan"]!["effect_prefix_caches"]![0]![field] = value?.DeepClone();
+            check(!AppJsonPresentation.CandidateCanApply(invalid), "malformed terminal identity cannot enable Apply: " + field);
+        }
         check(AppJsonPresentation.Number(JsonValue.Create(0)) == 0 &&
             AppJsonPresentation.Number(JsonValue.Create(uint.MaxValue)) == uint.MaxValue &&
             AppJsonPresentation.Number(JsonValue.Create(ulong.MaxValue)) == (double)ulong.MaxValue &&
@@ -81,6 +100,83 @@ internal static class SavedLoopApplyChecks
         prefixes["plan"]!["effect_prefix_caches"]![1]!["loop"]!["status"] = "analytic_candidate_requires_seam_validation";
         prefixes["groups"]![0]!["local_repair"] = new JsonObject();
         check(!AppJsonPresentation.CandidateCanApply(prefixes), "repaired effect-prefix output is rejected");
+    }
+
+    private static async Task CheckApplicationContracts(Action<bool, string> check, string dir)
+    {
+        string project = Directory.CreateDirectory(Path.Combine(dir, "application-project")).FullName;
+        File.WriteAllText(Path.Combine(project, "project.json"), """
+            {"type":"scene","file":"scene.json","general":{"properties":{"canvaswidth":{"type":"slider","value":2560}}}}
+            """);
+        File.WriteAllText(Path.Combine(project, "scene.json"), """
+            {"general":{"orthogonalprojection":{"width":{"user":"canvaswidth","value":1920},"height":1440}},"objects":[]}
+            """);
+        var livePlan = new JsonObject { ["source"] = "unavailable-original", ["snapshot_properties"] = new JsonObject { ["canvaswidth"] = 64 } };
+        check(AppJsonPresentation.PreviewDimensions(livePlan, true, project, () => null) == (2560u, 1440u) && !livePlan.ContainsKey("settings"),
+            "saved live preview reads the actual project canvas and property values without adding hybrid settings");
+        check(AppJsonPresentation.PreviewDimensions(livePlan, true, project, () => (3840u, 2160u)) == (3840u, 2160u),
+            "live preview uses the shared display resolution rule");
+        var hybridPlan = new JsonObject { ["settings"] = PlanSettings.ToJson(new HybridAnalyzeRequest(2, "missing", "missing", "missing", 1280, 720)) };
+        check(AppJsonPresentation.PreviewDimensions(hybridPlan, false, "missing", () => throw new InvalidOperationException()) == (1280u, 720u),
+            "hybrid preview keeps its saved dimensions without consulting display or source");
+
+        string recordsRoot = Path.Combine(dir, "application-records");
+        string first = AppEnvironment.NewApplicationDirectory(project, recordsRoot);
+        string second = AppEnvironment.NewApplicationDirectory(project, recordsRoot);
+        check(first != second && AppEnvironment.OutputValid(first, project) && AppEnvironment.OutputValid(second, project) &&
+            !Directory.Exists(first) && !Directory.Exists(second), "application record paths are fresh and outside the published project");
+        bool rejectedInside = false;
+        try { await new WallpaperController("not-started").ApplyAsync(new(1, project, "account", "Monitor0", Path.Combine(project, "apply-inside"))); }
+        catch (IOException error) { rejectedInside = error.Message.Contains("inside the project", StringComparison.Ordinal); }
+        check(rejectedInside && !Directory.Exists(Path.Combine(project, "apply-inside")), "the Core inside-project application guard remains active before any command");
+        using var source = new ProjectSource(project);
+        string beforeHash = await source.SourceHashAsync();
+        Directory.CreateDirectory(first); Directory.CreateDirectory(second);
+        string manifest0 = Path.Combine(first, "apply.json"), manifest1 = Path.Combine(second, "apply.json");
+        File.WriteAllText(manifest0, "{\"profile\":\"account\",\"location\":\"Monitor0\",\"status\":\"prepared\"}");
+        File.WriteAllText(manifest1, "{\"profile\":\"account\",\"location\":\"Monitor1\",\"status\":\"applied\"}");
+        check(await source.SourceHashAsync() == beforeHash, "two target application records do not alter the project's source identity");
+        var records = new List<(string Profile, string Location, string Manifest, bool Restored)> {
+            ("account", "Monitor0", manifest0, false), ("account", "Monitor1", manifest1, false) };
+        check(AppJsonPresentation.ApplicationManifest(records, "account", "Monitor0") == manifest0 &&
+            AppJsonPresentation.ApplicationManifest(records, "account", "Monitor1") == manifest1 &&
+            AppJsonPresentation.ApplicationManifest(records, "another-account", "Monitor0") is null &&
+            AppJsonPresentation.ApplicationManifest(records, "account", "Monitor2") is null,
+            "prepared recovery records block only their own profile and location, leaving other targets available");
+        AppJsonPresentation.MarkApplicationRestored(records, manifest0);
+        check(AppJsonPresentation.ApplicationManifest(records, "account", "Monitor0") is null &&
+            AppJsonPresentation.ApplicationManifest(records, "account", "Monitor1") == manifest1 && File.Exists(manifest0),
+            "restoring one target retains the other target's recovery point and the original record file");
+        string reapplied = Path.Combine(dir, "apply-again.json");
+        records.Add(("account", "Monitor0", reapplied, false));
+        check(records.Count == 3 && records[0].Restored && AppJsonPresentation.ApplicationManifest(records, "account", "Monitor0") == reapplied,
+            "reapplication retains the earlier restoration history");
+    }
+
+    private static void CheckTerminalSourceIdentity(Action<bool, string> check, string dir)
+    {
+        string project = Directory.CreateDirectory(Path.Combine(dir, "terminal-identity-project")).FullName;
+        File.WriteAllText(Path.Combine(project, "project.json"), "{\"type\":\"scene\",\"file\":\"scene.json\"}");
+        File.WriteAllText(Path.Combine(project, "model.json"), "{\"autosize\":true,\"material\":\"material.json\"}");
+        File.WriteAllText(Path.Combine(project, "material.json"), "{\"passes\":[{\"shader\":\"genericimage2\",\"textures\":[\"base\"]}]}");
+        File.WriteAllText(Path.Combine(project, "effect.json"), "{\"passes\":[{\"material\":\"effect-material.json\"}]}");
+        File.WriteAllText(Path.Combine(project, "effect-material.json"), "{\"passes\":[{\"shader\":\"effect\"}]}");
+        File.WriteAllText(Path.Combine(project, "scene.json"), """
+            {"objects":[{"id":1,"image":"model.json","effects":[{"file":"effect.json","passes":[{}]}]}]}
+            """);
+        using var source = new ProjectSource(project);
+        JsonObject scene = source.ReadJson(source.SceneResource);
+        JsonObject cache = JsonNode.Parse("""
+            {"owner_layer_id":1,"prefix_effect_count":1,"terminal_effect_id":null,"terminal_effect_ordinal":0,
+             "source_image":"model.json","loop":{},"fixed_user_properties":{}}
+            """)!.AsObject();
+        EffectPrefixBakeService.ValidateSource(source, scene, cache);
+        check(EffectPrefixCaptureTarget.HasValidTerminalIdentity(cache), "the same ID-less ordinal identity passes Core source validation against a disk-backed scene");
+        cache["terminal_effect_id"] = 99;
+        bool rejected = false;
+        try { EffectPrefixBakeService.ValidateSource(source, scene, cache); }
+        catch (InvalidDataException) { rejected = true; }
+        check(rejected, "an invented terminal ID cannot match an ID-less authored effect");
     }
 
     private static void CheckSavedProjectPaths(Action<bool, string> check, string dir)
@@ -141,11 +237,12 @@ internal static class SavedLoopApplyChecks
         string failedWork = Directory.CreateDirectory(Path.Combine(dir, "failed-report-work")).FullName;
         string failedProject = Path.Combine(dir, "failed-report-final");
         File.Copy(Path.Combine(work, "project.json"), Path.Combine(failedWork, "project.json"));
-        Directory.CreateDirectory(Path.Combine(failedWork, "bake.json"));
+        string movedWork = failedWork + "-moved";
+        Directory.Move(failedWork, movedWork);
         bool writeFailed = false;
         try { await AppEnvironment.PublishLiveSceneAsync(report.DeepClone().AsObject(), failedWork, failedProject, CancellationToken.None); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { writeFailed = true; }
-        check(writeFailed && !Directory.Exists(failedProject) && File.Exists(Path.Combine(failedWork, "project.json")),
+        check(writeFailed && !Directory.Exists(failedProject) && File.Exists(Path.Combine(movedWork, "project.json")),
             "report write failure leaves the final folder absent and work intact");
 
         string occupied = Directory.CreateDirectory(Path.Combine(dir, "occupied-final")).FullName;
@@ -158,7 +255,7 @@ internal static class SavedLoopApplyChecks
             "live publication refuses an existing final folder and reports retained work");
 
         await AppEnvironment.PublishLiveSceneAsync(report, work, project, CancellationToken.None);
-        JsonObject saved = JsonNode.Parse(File.ReadAllText(Path.Combine(project, "bake.json")))!.AsObject();
+        JsonObject saved = JsonNode.Parse(File.ReadAllText(report["publication_report_path"]!.GetValue<string>()))!.AsObject();
         check(!Directory.Exists(work) && File.Exists(Path.Combine(project, "project.json")) &&
             File.ReadAllText(Path.Combine(project, "scene.json")) == "{\"objects\":[]}" &&
             saved["output"]?.GetValue<string>() == project && saved["project_path"]?.GetValue<string>() == project &&

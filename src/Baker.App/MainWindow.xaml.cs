@@ -705,9 +705,11 @@ public partial class MainWindow : Window
         RefreshTargetsButton.IsEnabled = File.Exists(WpeExeBox.Text) && !processing && !detecting;
         DetectButton.IsEnabled = !processing && !detecting;
         CurrentWallpaperBox.IsEnabled = !detecting && CurrentWallpaperBox.Items.Count > 0;
+        string? application = selected is not null && TargetBox.SelectedItem is TargetItem selectedTarget
+            ? AppJsonPresentation.ApplicationManifest(selected.ApplicationRecords, selectedTarget.Target.Profile, selectedTarget.Target.Location) : null;
         ApplyButton.IsEnabled = selected?.State == "completed" && selected.CanApply && !processing && File.Exists(WpeExeBox.Text) &&
-            TargetBox.SelectedItem is TargetItem && (selected.ApplyManifest is null || selected.Restored);
-        RollbackButton.IsEnabled = selected?.ApplyManifest is string application && File.Exists(application) && !processing && !selected.Restored;
+            TargetBox.SelectedItem is TargetItem && application is null;
+        RollbackButton.IsEnabled = application is not null && File.Exists(application) && !processing;
         RollbackFileButton.IsEnabled = !processing;
         QueueEmpty.Visibility = jobs.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -718,7 +720,7 @@ public partial class MainWindow : Window
         var dialog = new OpenFileDialog
         {
             Title = L("打开已有输出", "Open existing output"),
-            Filter = L("生成报告", "Generation reports") + " (bake.json)|bake.json|JSON|*.json", CheckFileExists = true
+            Filter = L("生成报告", "Generation reports") + " (bake*.json)|bake*.json|JSON|*.json", CheckFileExists = true
         };
         if (dialog.ShowDialog(this) != true) return;
         try
@@ -900,6 +902,7 @@ public partial class MainWindow : Window
                             optimized["source"] = job.Source;
                             optimized["snapshot_properties"] = job.FrozenProperties?.DeepClone();
                             await AppEnvironment.PublishLiveSceneAsync(optimized, work, project, runCancellation.Token);
+                            job.GenerationReportPath = optimized["publication_report_path"]!.GetValue<string>();
                             job.ProjectPath = project;
                             job.LatestReportPath = job.GenerationReportPath;
                         }
@@ -1386,18 +1389,22 @@ public partial class MainWindow : Window
         if (!ApplyButton.IsEnabled || QueueList.SelectedItem is not JobItem { ProjectPath: { } project } job ||
             TargetBox.SelectedItem is not TargetItem target) return;
         string executable = WpeExeBox.Text.Trim();
-        string directory = Path.Combine(job.Request.OutputDirectory, "apply-" + Guid.NewGuid().ToString("N")[..8]);
-        job.ApplyManifest = Path.Combine(directory, "apply.json");
-        job.Restored = false;
+        string? manifest = null;
         await RunJobOperationAsync(job, "applying", async token =>
         {
+            string directory = AppEnvironment.NewApplicationDirectory(project);
+            manifest = Path.Combine(directory, "apply.json");
             var result = await new WallpaperController(executable).ApplyAsync(new(1, project, target.Target.Profile, target.Target.Location, directory), token);
-            job.LatestReportPath = job.ApplyManifest;
+            job.LatestReportPath = manifest;
             return result["status"]?.GetValue<string>() == "applied"
                 ? L("已应用到该屏幕。", "Applied to that screen.")
                 : L("切换指令已发送至 Wallpaper Engine。", "Switch request sent to Wallpaper Engine.");
         });
-        if (!File.Exists(job.ApplyManifest)) job.ApplyManifest = null;
+        if (manifest is not null && File.Exists(manifest))
+        {
+            job.ApplicationRecords.Add((target.Target.Profile, target.Target.Location, manifest, false));
+            job.LatestReportPath = manifest;
+        }
         RefreshControls();
     }
 
@@ -1405,7 +1412,8 @@ public partial class MainWindow : Window
     {
         if (processing) return;
         JobItem? job = sender == RollbackFileButton ? null : QueueList.SelectedItem as JobItem;
-        string? manifest = job?.ApplyManifest;
+        string? manifest = job is not null && TargetBox.SelectedItem is TargetItem target
+            ? AppJsonPresentation.ApplicationManifest(job.ApplicationRecords, target.Target.Profile, target.Target.Location) : null;
         if (manifest is null)
         {
             var dialog = new OpenFileDialog
@@ -1415,7 +1423,7 @@ public partial class MainWindow : Window
             };
             if (dialog.ShowDialog(this) != true) return;
             manifest = dialog.FileName;
-            job = jobs.FirstOrDefault(item => string.Equals(item.ApplyManifest, manifest, StringComparison.OrdinalIgnoreCase));
+            job = jobs.FirstOrDefault(item => item.ApplicationRecords.Any(record => string.Equals(record.Manifest, manifest, StringComparison.OrdinalIgnoreCase)));
         }
         await RunJobOperationAsync(job, "restoring", async token =>
         {
@@ -1425,7 +1433,7 @@ public partial class MainWindow : Window
                 ?? throw new InvalidDataException(L("恢复记录无效。", "Invalid restore point."));
             if (!File.Exists(executable)) throw new FileNotFoundException(L("记录中的 Wallpaper Engine 已不存在。", "The recorded Wallpaper Engine is missing."), executable);
             var result = await new WallpaperController(executable).RollbackAsync(manifest, token);
-            if (job is not null) { job.Restored = true; job.LatestReportPath = manifest; }
+            if (job is not null) { AppJsonPresentation.MarkApplicationRestored(job.ApplicationRecords, manifest); job.LatestReportPath = manifest; }
             return result["status"]?.GetValue<string>() == "restored"
                 ? L("已恢复上一个壁纸。", "Previous wallpaper restored.")
                 : L("已发送恢复请求。", "Restore requested.");
@@ -1471,8 +1479,7 @@ public partial class MainWindow : Window
         string executable = WpeExeBox.Text.Trim();
         await RunJobOperationAsync(job, "previewing", async token =>
         {
-            HybridAnalyzeRequest settings = PlanSettings.Of(job.Request.Plan);
-            var (width, height) = (settings.Width, settings.Height);
+            var (width, height) = AppJsonPresentation.PreviewDimensions(job.Request.Plan, job.LiveScene, project, OutputResolution.PrimaryDisplay);
             if (officialPreviewExecutable is not null)
                 await new WallpaperController(officialPreviewExecutable).CloseWindowAsync(officialPreviewName, token);
             await new WallpaperController(executable).OpenInWindowAsync(project, officialPreviewName, width, height, token, activate: true);
@@ -1712,8 +1719,7 @@ public partial class MainWindow : Window
         public JsonObject? FrozenProperties => Request.Plan["snapshot_properties"]?.AsObject();
         public string GenerationReportPath { get; set; } = Path.Combine(request.OutputDirectory, "bake.json");
         public string? LatestReportPath { get; set; }
-        public string? ApplyManifest { get; set; }
-        public bool Restored { get; set; }
+        public List<(string Profile, string Location, string Manifest, bool Restored)> ApplicationRecords { get; } = [];
         public bool CanApply { get; set; } = true;
         public JobItem Clone(HybridBakeRequest replacement) => new(replacement, Tools, GpuName, PropertyDefinitions, LiveScene);
         public void Translate(bool english)

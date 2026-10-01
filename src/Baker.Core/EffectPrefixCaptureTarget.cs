@@ -19,6 +19,17 @@ public static class EffectPrefixCaptureTarget
     public const string RejectedStatus = "rejected_not_layer_target";
     public const string ProbeFailedStatus = "probe_failed";
 
+    /// <summary>Authored IDs are optional; an ID-less terminal must identify the last prefix effect by ordinal.</summary>
+    public static bool HasValidTerminalIdentity(JsonObject cache)
+    {
+        static int? Integer(JsonNode? node) => node is JsonValue value && value.TryGetValue<int>(out int number) ? number : null;
+        int? prefix = Integer(cache["prefix_effect_count"]);
+        int? id = Integer(cache["terminal_effect_id"]), ordinal = Integer(cache["terminal_effect_ordinal"]);
+        return prefix is > 0 && (cache["terminal_effect_id"] is null || id is >= 0) &&
+            (cache["terminal_effect_ordinal"] is null || ordinal == prefix - 1) &&
+            (id is >= 0 || ordinal == prefix - 1);
+    }
+
     /// <summary>这一层在运行时证据里自己读写的渲染目标：它的效果材质引用的 _rt_ 纹理，去掉全场景缓冲。</summary>
     public static string[] LayerTargets(JsonObject nativeResult, int ownerLayerId) =>
         (nativeResult["runtime_layers"] as JsonArray ?? []).OfType<JsonObject>()

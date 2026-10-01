@@ -15,9 +15,11 @@ internal sealed class ScriptEvidenceGate(NativeTools tools) : IBakeGate
         if (errors is null)
         {
             context.Progress?.Report(new("refreshing_script_fault_evidence", 0, new Message("progress.refreshing_script_fault_evidence")));
+            context.Layout.RequireNewAnalysisRefresh();
             JsonObject plan = await new HybridScenePlanner(tools).AnalyzeSingleAsync(context.Settings with {
                 Source = context.Source.SourcePath, OutputDirectory = context.Layout.AnalysisRefresh, RuntimeTraceFile = null
                 }, context.Progress, cancellationToken);
+            context.Layout.AnalysisRefreshCreated();
             HybridPlanFormat.Validate(plan);
             if (plan["blockers"] is JsonArray { Count: > 0 })
                 throw new InvalidDataException("The refreshed analysis requires resolution before generation.");

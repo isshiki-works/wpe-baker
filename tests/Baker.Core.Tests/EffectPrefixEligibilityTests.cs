@@ -363,7 +363,8 @@ public class EffectPrefixEligibilityTests
         await File.WriteAllTextAsync(trace, runtime.ToJsonString());
         var request = new HybridAnalyzeRequest(1, project, project, output, 64, 48, 30, 1, RuntimeTraceFile: trace, Interaction: "off");
         var observer = new NativeRuntimeObserver(new NativeTools(Path.Combine(tools, "renderer"), Path.Combine(tools, "ffmpeg"), Path.Combine(tools, "ffprobe"), []));
-        Exception? error = await Record.ExceptionAsync(() => RuntimeObservation.ObserveAsync(request, source, "hash", scene, new JsonObject(), new JsonObject(),
+        string sourceHash = await source.SourceHashAsync(CancellationToken.None);
+        Exception? error = await Record.ExceptionAsync(() => RuntimeObservation.ObserveAsync(request, source, sourceHash, scene, new JsonObject(), new JsonObject(),
             new SceneGraph(scene), output, observer, null, CancellationToken.None));
         Assert.DoesNotContain("already exists", error?.Message ?? "");
         JsonObject chosen = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(output, "audio-choice-source", "scene.json")))!.AsObject();
