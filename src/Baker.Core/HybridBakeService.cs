@@ -225,7 +225,7 @@ public sealed class HybridBakeService(NativeTools tools)
     {
         // A fallback can itself trigger another fallback while this replan is still alive.
         var layout = new WorkLayout(request.OutputDirectory,
-            Path.GetFullPath(request.OutputDirectory) + ".analysis-refresh-" + Guid.NewGuid().ToString("N"));
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.OutputDirectory)) + ".analysis-refresh-" + Guid.NewGuid().ToString("N"));
         layout.RequireNewAnalysisRefresh();
         record["first_status"] = first["status"]?.DeepClone();
         record["first_reason_localized"] = first["reason_localized"]?.DeepClone();

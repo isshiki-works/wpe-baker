@@ -7,8 +7,10 @@ using Xunit;
 [Trait("Layer", "L1")]
 public class AnalysisProbeTests
 {
-    [Fact]
-    public async Task NestedResidualReplansUseIndependentRefreshDirectories() => await TestTemp.Run(async root =>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NestedResidualReplansUseIndependentRefreshDirectories(bool trailingSeparator) => await TestTemp.Run(async root =>
     {
         string output = Path.Combine(root, "bake"), sentinel = output + ".analysis-refresh";
         Directory.CreateDirectory(sentinel);
@@ -39,7 +41,7 @@ public class AnalysisProbeTests
                 next["blockers"] = new JsonArray();
                 return Task.FromResult(next);
             });
-        JsonObject result = await service.BakeAsync(new(2, plan, output));
+        JsonObject result = await service.BakeAsync(new(2, plan, trailingSeparator ? output + Path.DirectorySeparatorChar : output));
         Assert.Equal("candidate_generated", result["status"]!.GetValue<string>());
         Assert.Equal(3, bakes);
         Assert.Equal(2, refreshes.Distinct().Count());
