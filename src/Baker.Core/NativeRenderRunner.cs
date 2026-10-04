@@ -148,12 +148,12 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         // 强制关键帧是给后面的分段改写用的切点：那一帧必须真的在这次编码的帧序列里。
         if (request.ForceKeyFrameFrame is { } forcedKeyFrame && (request.FrameSamplesOnly || forcedKeyFrame == 0 || forcedKeyFrame >= encodedFrames))
             throw new ArgumentException("Forced key frame must be a positive frame index inside an encoded video request.");
-        // 直编成品：裁剪区先验就是整幅，所以不缩放、不补边；无损 master 与它互斥（直编就是为了不写 master）。
+        // 直编成品复用同一条缩放/透明打包滤镜链；显式裁剪仍不能与缩放或补边组合。
         if (request.PlaybackEncoderKind is { } directKind && (request.FrameSamplesOnly || request.LosslessTest ||
-            (request.PixelPacking != "rgb" && request.DirectCrop is null) || request.EncodeWidth.HasValue || request.EncodeHeight.HasValue ||
-            request.EncodePadding is not null || PlaybackEncoderSelection.Normalize(directKind) != directKind ||
-            directKind == PlaybackEncoderSelection.Auto))
-            throw new ArgumentException("Direct playback encoding needs a resolved encoder kind on an opaque full-frame lossy render.");
+            (request.PixelPacking != "rgb" && request.DirectCrop is null && !request.EncodeWidth.HasValue) ||
+            request.DirectCrop is not null && (request.EncodeWidth.HasValue || request.EncodeHeight.HasValue || request.EncodePadding is not null) ||
+            PlaybackEncoderSelection.Normalize(directKind) != directKind || directKind == PlaybackEncoderSelection.Auto))
+            throw new ArgumentException("Direct playback encoding needs a resolved encoder kind; explicit crops cannot also resize or pad.");
         if ((request.DirectCrop is not null || request.DirectCrossfadeFrames is not null) && (request.PlaybackEncoderKind is null ||
             request.DirectCrop is { } checkedCrop && (checkedCrop.CaptureWidth != request.Width || checkedCrop.CaptureHeight != request.Height ||
                 ((checkedCrop.X | checkedCrop.Y | checkedCrop.Width | checkedCrop.Height) & 1) != 0) ||
@@ -254,9 +254,14 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             // checks still require their original complete input. Older renderers keep that path.
             bool sampleConsumer = request.FrameSamplesOnly && !request.CollectAlphaBounds && !request.RequireOpaquePixels &&
                 (request.RetainFrames ?? []).All(frame => IsSampleFrame(request, frame));
+            bool resizeReadbackCandidate = request.GpuEncoding is null && request.PlaybackEncoderKind is not null &&
+                encodeSizeRequested && (encodeWidth != request.Width || encodeHeight != request.Height) &&
+                request.PixelPacking == "rgb" && request.RequireOpaquePixels && !request.CollectAlphaBounds &&
+                request.DirectCrop is null && request.DirectCrossfadeFrames is null && request.EncodePadding is null &&
+                request.HdrScale is null && !request.HdrSignedSqrt;
             // 只在要按能力分支时才握手；同一个渲染器文件在进程内只跑一次 --version（RendererClient 缓存）。
             bool hdrTerminal = request.HdrScale is > 0 && request.CaptureTarget?.EffectTerminal == true;
-            RendererCapabilities capabilities = sampleConsumer || request.GpuEncoding is not null || request.EffectRenderScale != 1.0 || request.MatchEffectResolution || request.CaptureTarget?.ForceVisibleOwner == true || hdrTerminal || request.HdrLowerBound != 0
+            RendererCapabilities capabilities = sampleConsumer || resizeReadbackCandidate || request.GpuEncoding is not null || request.EffectRenderScale != 1.0 || request.MatchEffectResolution || request.CaptureTarget?.ForceVisibleOwner == true || hdrTerminal || request.HdrLowerBound != 0
                 ? await client.CapabilitiesAsync(Path.Combine(output, "renderer-capabilities.stderr.log"), cancellationToken) : new([]);
             if (hdrTerminal && !capabilities.Has("hdr-terminal-affine-v2"))
                 throw new InvalidDataException("Renderer does not support affine HDR capture at an effect terminal.");
@@ -273,7 +278,16 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             bool sparseInput = sampleConsumer && capabilities.SparseReadback;
             // 要留全分辨率原帧时不在 GPU 上缩样本：稀疏读回照样只传样本帧，但传的是整帧 RGBA。
             bool nativeSamples = sparseInput && capabilities.Has("gpu-samples-v1") && request.RetainFrames is not { Length: > 0 };
+            bool nativeResize = resizeReadbackCandidate && capabilities.Has("gpu-resize-readback-v1");
             RenderRequest streamRequest = request;
+            if (nativeResize)
+            {
+                job = job with { OutputResizeWidth = encodeWidth, OutputResizeHeight = encodeHeight,
+                    EncodedFrames = encodedFrames, RetainFrames = request.RetainFrames ?? [], RequireOpaquePixels = true };
+                // Native retains the original pixels and checks their alpha before downscaling.
+                streamRequest = request with { Width = encodeWidth, Height = encodeHeight,
+                    RetainFrames = null, RequireOpaquePixels = false };
+            }
             if (sparseInput)
             {
                 job = job with { OutputFrameStride = request.FrameSampleStride,
@@ -290,7 +304,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                         capabilities.Has("gpu-sampled-coverage-v1") ? true : null };
                 streamRequest = request with { Width = sampleWidth, Height = sampleHeight, FrameSampleWidth = sampleWidth };
             }
-            manifest["native_frame_transport"] = nativeSamples ? "sampled_rgba" : sparseInput ? "sparse_rgba" : "full_rgba";
+            manifest["native_frame_transport"] = nativeResize ? "resized_rgba" : nativeSamples ? "sampled_rgba" : sparseInput ? "sparse_rgba" : "full_rgba";
             if (request.GpuEncoding is { } encoding)
             {
                 if (encodeSizeRequested && !capabilities.Has("gpu-encode-resize-v1"))
@@ -465,11 +479,11 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                     colorFilter = FormattableString.Invariant($"format=gbrp,crop={encodedWidth}:{encodedHeight}:{(packedInput ? 0 : directCrop?.X ?? 0)}:{(packedInput ? 0 : directCrop?.Y ?? 0)},") + colorFilter;
                 string packedCrop = packedInput && directCrop is { } c ? FormattableString.Invariant($"crop={c.Width}:{c.Height}:{c.X}:{c.Y},") : "";
                 var encoderArguments = new List<string> { "-hide_banner", "-nostdin", "-n", "-f", "rawvideo", "-pixel_format", "rgba",
-                    "-video_size", $"{request.Width}x{request.Height}", "-framerate", fps, "-i", "pipe:0", "-an" };
+                    "-video_size", $"{streamRequest.Width}x{streamRequest.Height}", "-framerate", fps, "-i", "pipe:0", "-an" };
                 // 补边放在缩放之后、拆 RGB/alpha 之前：两半幅用同一张透明黑画布，alphaextract 得到的补边 alpha 为 0。
                 if (request.PixelPacking == "rgba_side_by_side")
                     encoderArguments.AddRange(["-filter_complex", $"[0:v]{packedCrop}{(encodeSizeRequested ? $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,format=rgba," : "")}{padFilter}split=2[color][mask];[color]format=rgb24[rgb];[mask]alphaextract,format=rgb24[alpha];[rgb][alpha]{(below ? "vstack" : "hstack")}=inputs=2,{colorFilter}[packed]", "-map", "[packed]"]);
-                else encoderArguments.AddRange(["-vf", encodeSizeRequested
+                else encoderArguments.AddRange(["-vf", encodeSizeRequested && !nativeResize
                     ? $"scale={encodeWidth}:{encodeHeight}:flags=lanczos,{padFilter}{colorFilter}"
                     : padFilter + colorFilter]);
                 // 在淡化窗口末尾强制一个 IDR，让接缝改写只需要重编码这一小段，后面全部 stream copy。
@@ -505,7 +519,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                     try
                     {
                         var captured = await CopyFrameStreamAsync(renderer.StandardOutput.BaseStream,
-                            encoder.StandardInput.BaseStream, request, output, progress, cancellationToken);
+                            encoder.StandardInput.BaseStream, streamRequest, output, progress, cancellationToken);
                         if (captured.Bounds is not null) manifest["alpha_bounds"] = captured.Bounds;
                         if (captured.Samples is not null) manifest["frame_samples"] = captured.Samples;
                         if (captured.OpaquePixels is not null) manifest["opaque_pixels"] = captured.OpaquePixels;
@@ -573,6 +587,8 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 if (directCrop is not null) manifest["gpu_crop"] = JsonSerializer.SerializeToNode(directCrop, JsonOptions);
             }
             RenderResult nativeResult = await RendererClient.ReadResultAsync(renderDirectory, cancellationToken);
+            if (nativeResize)
+                await ConfirmResizedReadbackAsync(request, nativeResult, manifest, renderDirectory, encodedFrames, cancellationToken);
             if (!nativeResult.Confirms(request.Frames))
                 throw new InvalidDataException("Renderer result did not confirm the requested frame sequence.");
             manifest["native_result"] = nativeResult.Json;
@@ -655,18 +671,8 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                     manifest["alpha_bounds"] = bounds;
                 }
                 if (request.RetainFrames is { } retainedIndices)
-                {
-                    var retained = nativeResult.GpuCapture?.RetainedFrames?.DeepClone().AsObject()
-                        ?? throw new InvalidDataException("Renderer omitted selected GPU reference frames.");
-                    string path = Path.Combine(renderDirectory, RetainedFramesFile);
-                    if (retained["width"]?.GetValue<uint>() != request.Width || retained["height"]?.GetValue<uint>() != request.Height ||
-                        retained["encoded_frames"]?.GetValue<ulong>() != encodedFrames ||
-                        !JsonNode.DeepEquals(retained["frame_indices"], JsonSerializer.SerializeToNode(retainedIndices)) ||
-                        new FileInfo(path).Length != (long)request.Width * request.Height * 4 * retainedIndices.Length)
-                        throw new InvalidDataException("GPU reference frame dimensions or sequence differ from the request.");
-                    retained["path"] = path;
-                    manifest["retained_frames"] = retained;
-                }
+                    manifest["retained_frames"] = ConfirmNativeRetainedFrames(nativeResult, renderDirectory,
+                        request, retainedIndices, encodedFrames);
             }
             ConfirmVideoRateOverrides(request, nativeResult);
             if (request.DeviceUuid is not null && !string.Equals(request.DeviceUuid, nativeResult.DeviceUuid, StringComparison.OrdinalIgnoreCase))
@@ -884,6 +890,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
     private static IOException Classified(string message, Exception? inner)
     {
         bool gpuUnavailable = message.Contains("GPU encode initialization", StringComparison.Ordinal) ||
+            message.Contains("GPU readback initialization", StringComparison.Ordinal) ||
             message.Contains("required vulkan device extension", StringComparison.Ordinal) ||
             message.Contains("failed to find GPU with vulkan support", StringComparison.Ordinal);
         return gpuUnavailable ? new GpuEncodeUnavailableException(message, inner) : new IOException(message, inner);

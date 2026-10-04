@@ -153,6 +153,7 @@ struct GpuEncodeOptions {
     bool retain_loop_window { false };
     std::uint32_t resize_width { 0 }, resize_height { 0 };
     std::uint32_t pad_width { 0 }, pad_height { 0 };
+    bool require_opaque_pixels { false };
 };
 
 struct RenderInitInfo {
@@ -175,6 +176,7 @@ struct RenderInitInfo {
     // 只在读回的取样帧上量覆盖度（不逐帧光栅），并报取样边距（sample_margin）。
     bool             sampling_coverage_sampled_only { false };
     std::optional<GpuEncodeOptions> gpu_encode;
+    std::optional<GpuEncodeOptions> gpu_readback;
     std::optional<RenderCaptureTarget> capture_target;
     std::optional<OrthographicCaptureViewport> orthographic_capture_viewport;
     RenderLayerSelection layer_selection;

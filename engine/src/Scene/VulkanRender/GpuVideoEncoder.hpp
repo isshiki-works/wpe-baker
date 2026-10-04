@@ -20,6 +20,7 @@ struct GpuCaptureOptions {
     std::uint32_t resize_width { 0 }, resize_height { 0 };
     // Zero keeps the crop size; otherwise repeat the final column/row into an even canvas.
     std::uint32_t pad_width { 0 }, pad_height { 0 };
+    bool require_opaque_pixels { false };
 };
 
 // Owns the codec and conversion resources, never the renderer's Vulkan device.
@@ -38,6 +39,8 @@ public:
     // Input arrives and leaves in TRANSFER_SRC_OPTIMAL. Asynchronous input must
     // have its render submission ordered before conversion on this graphics queue.
     void encode(VkImage rgba, std::uint64_t index, bool asynchronous = false);
+    // Internal rgba_readback mode shares the Lanczos resources but opens no codec.
+    void readRgba(VkImage rgba, std::uint64_t index, std::span<std::uint8_t> pixels);
     void waitConversion();
     void finish();
     std::string captureMetadata() const;
