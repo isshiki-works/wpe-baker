@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Periodica: deterministic animation baking for Wallpaper Engine. WPE Baker bakes a scene's periodic animation into one seamless video — up to 96% less GPU power, measured in the official player.">
+<meta name="description" content="Periodica: deterministic animation baking for Wallpaper Engine. WPE Baker bakes a scene's periodic animation into seamless video loops — up to 96.8% less iGPU power, measured in the official player.">
 <link rel="icon" href="data:,">
 <link rel="alternate" hreflang="zh" href="zh.html">
 <link rel="alternate" hreflang="en" href="index.html">
@@ -16,8 +16,8 @@
 
 <div class="wrap">
 <nav>
-  <div class="logo">PERIODICA<small>WPE BAKER · 1.0.2</small></div>
-  <div class="links"><a href="#loop">The loop</a><a href="#numbers">Numbers</a><a href="#refresh">Refresh rate</a><a href="#gui">The tool</a><a href="#roadmap">Roadmap</a></div>
+  <div class="logo">PERIODICA<small>WPE BAKER · 2.0.0-rc.1</small></div>
+  <div class="links"><a href="#loop">The loop</a><a href="#numbers">Numbers</a><a href="#refresh">Refresh rate</a><a href="#gui">The tool</a><a href="#astra">Technology</a><a href="#roadmap">Roadmap</a></div>
   <div class="lang"><a href="index.html" aria-current="page" onclick="try{localStorage.setItem('lang','en')}catch(e){}">EN</a><a href="zh.html" onclick="try{localStorage.setItem('lang','zh')}catch(e){}">中文</a></div>
 </nav>
 
@@ -25,31 +25,30 @@
   <div>
     <div class="eyebrow">Deterministic animation baking engine</div>
     <h1>Your wallpaper renders forever.<br><span>Bake it once.</span></h1>
-    <p class="lead">Periodica models a Wallpaper Engine scene’s entire animation math, retunes its periods until the whole scene closes into one loop, and plays it back as video. Nearly the same look; up to 96% less GPU load and power, plugged in or on battery. Its first application is WPE Baker, for Wallpaper Engine.</p>
+    <p class="lead">Periodica builds mathematical models of Wallpaper Engine animations, coordinates the periods of the parts it can bake, and plays the resulting seamless loop as video. Clocks, audio response and other live content can stay in the scene, preserving the animated look while reducing repeated rendering. Its first application is WPE Baker, for Wallpaper Engine.</p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/latest">Download for Windows</a>
+      <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1">Download for Windows</a>
       <a class="btn ghost" href="#numbers">Read the measurements</a>
     </div>
-    <div class="fine" style="margin-top:12px">open source · portable · no model calls at runtime</div>
+    <div class="fine" style="margin-top:12px">open source · portable · no AI model calls at runtime</div>
   </div>
   <div class="screen">
     <video src="site/hero-landscape.mp4" autoplay muted loop playsinline aria-label="Baked wallpaper output playing as a seamless 50-second loop"></video>
-    <div class="bar"><span>SAMPLE OUTPUT · THE BAKED LOOP · Lost Landscape 3 (northway, 329k subscribers)<br><span class="tag">original: 37 layers, 11 particle systems, 71 shader passes every frame · baked: one seam-checked 50 s loop at 60 fps, playing here as a 3.4 MB file</span></span><b>−57%</b></div>
+    <div class="bar"><span>SAMPLE OUTPUT · THE BAKED LOOP · Lost Landscape 3 (northway)<br><span class="tag">one seam-checked 50 s loop at 60 fps, playing here as a 3.4 MB file</span></span><b>−59.2%</b></div>
   </div>
 </div>
 
 <div class="strip">
-  <div><div class="n">113</div><div class="l">wallpapers measured in the official player</div></div>
-  <div><div class="n">up to −96%</div><div class="l">GPU load and power on baked scenes</div></div>
-  <div><div class="n">3.9 W</div><div class="l">Atri at 165 Hz on the iGPU rail; the original draws 26.0 W</div></div>
-  <div><div class="n">1,400+</div><div class="l">automated checks in the release build</div></div>
-  <div><div class="n">0</div><div class="l">model calls at runtime</div></div>
+  <div><div class="n">8</div><div class="l">Wallpapers measured in the official Wallpaper Engine player</div></div>
+  <div><div class="n">Up to −96.8%</div><div class="l">iGPU power reduction</div></div>
+  <div><div class="n">2.19 W</div><div class="l">Atri iGPU power at 165 Hz, down from 25.55 W</div></div>
+  <div><div class="n">0</div><div class="l">Runtime AI model calls</div></div>
 </div>
 
 <section id="loop">
   <div class="eyebrow">The loop</div>
-  <h2>Solved from the math, so it always closes.</h2>
-  <p class="sub">A frame-comparison tool guesses where a video might repeat. Periodica reads the equations that produce the motion — shader time, animation tracks, particle cycles, video timebases — and retunes them into one common period. Drag the divider: the first frame and the last frame of the 50-second loop above.</p>
+  <h2>Back to the same moment.</h2>
+  <p class="sub">Frame-comparison tools look for repetitions in the images; Periodica analyzes the mathematical relationships behind the animation, coordinating shader time, animation tracks, particle cycles and video timebases to solve loops for the content it can bake. Independent video groups can use their own periods without waiting for the entire scene to return to its starting state. Drag the divider to compare the first and last frames of the loop above.</p>
   <div class="cmp" id="cmp">
     <img src="site/land-last.jpg" alt="Last frame of the baked loop">
     <img class="top" id="cmpTop" src="site/land-first.jpg" alt="First frame of the baked loop">
@@ -58,116 +57,98 @@
     <input type="range" id="cmpRange" min="0" max="100" value="50" aria-label="Compare first and last frame">
   </div>
   <div class="trace" aria-label="Power trace, original vs baked, A/B/B/A run">
-    <div class="hdr"><span>RAPL PP1 · iGPU rail · W · Nijika (3650475846)</span><span>A / B / B / A · 45 s samples · Arc B390</span></div>
-    <svg viewBox="0 0 560 300" role="img" aria-label="Original stays near 22 watts; baked output stays near 2 watts">
+    <div class="hdr"><span>RAPL PP1 · iGPU rail · W · Nijika (3650475846)</span><span>A / B / B / A · 20 s samples · Arc B390</span></div>
+    <svg viewBox="0 0 560 300" role="img" aria-label="Measured iGPU power: original and baked">
       <rect class="band" x="40" y="14" width="120" height="250"></rect>
-      <rect class="band" x="300" y="14" width="120" height="250"></rect>
-      <text class="bandl" x="100" y="28">A · original</text>
-      <text class="bandl" x="230" y="28">B · baked</text>
-      <text class="bandl" x="360" y="28">B · baked</text>
-      <text class="bandl" x="490" y="28">A · original</text>
+      <text class="bandl" x="100" y="28">A · Original</text>
+      <path class="tr-o" d="M40.00,75.39 L46.32,76.04 L52.63,73.84 L58.95,69.09 L65.26,72.99 L71.58,72.91 L77.89,68.92 L84.21,63.21 L90.53,67.03 L96.84,72.57 L103.16,69.03 L109.47,69.55 L115.79,67.92 L122.11,70.70 L128.42,69.83 L134.74,69.76 L141.05,67.15 L147.37,69.87 L153.68,70.96 L160.00,71.90"></path>
+      <text class="bandl" x="230" y="28">B · Baked</text>
+      <path class="tr-b" d="M170.00,130.34 L176.32,131.56 L182.63,131.16 L188.95,129.31 L195.26,129.30 L201.58,131.07 L207.89,129.35 L214.21,126.58 L220.53,131.10 L226.84,129.17 L233.16,126.84 L239.47,129.41 L245.79,128.46 L252.11,129.37 L258.42,129.04 L264.74,127.70 L271.05,129.53 L277.37,128.31 L283.68,128.13 L290.00,127.25"></path>
+      <text class="bandl" x="360" y="28">B · Baked</text>
+      <path class="tr-b" d="M300.00,129.01 L306.32,130.00 L312.63,129.54 L318.95,130.15 L325.26,128.46 L331.58,130.09 L337.89,131.19 L344.21,128.46 L350.53,128.73 L356.84,128.53 L363.16,129.96 L369.47,128.96 L375.79,131.81 L382.11,129.50 L388.42,130.42 L394.74,128.75 L401.05,131.51 L407.37,130.27 L413.68,128.46 L420.00,127.17"></path>
+      <rect class="band" x="430" y="14" width="120" height="250"></rect>
+      <text class="bandl" x="490" y="28">A · Original</text>
+      <path class="tr-o" d="M430.00,78.53 L436.32,73.38 L442.63,82.51 L448.95,77.19 L455.26,69.59 L461.58,76.17 L467.89,69.53 L474.21,73.28 L480.53,68.66 L486.84,71.48 L493.16,72.29 L499.47,71.62 L505.79,75.55 L512.11,74.83 L518.42,73.33 L524.74,72.10 L531.05,75.58 L537.37,80.91 L543.68,80.02 L550.00,76.77"></path>
       <line class="ax" x1="40" y1="264" x2="560" y2="264"></line>
       <line class="ax" x1="40" y1="14" x2="40" y2="264"></line>
-      <text class="axl" x="6" y="52">25</text><line class="ax" x1="36" y1="48" x2="40" y2="48"></line>
-      <text class="axl" x="6" y="140">12.5</text><line class="ax" x1="36" y1="136" x2="40" y2="136"></line>
-      <text class="axl" x="12" y="268">0</text>
-      <text class="axl" x="40" y="286">0 s</text><text class="axl" x="270" y="286">90 s</text><text class="axl" x="518" y="286">180 s</text>
-      <path class="tr-o" d="M40,72 L52,70 L64,74 L76,69 L88,73 L100,71 L112,75 L124,70 L136,72 L148,69 L160,73 L168,120 L176,205 L184,240 L188,244"></path>
-      <path class="tr-o" d="M420,246 L424,232 L430,170 L436,96 L442,73 L452,70 L464,73 L476,70 L488,74 L500,71 L512,72 L524,69 L536,73 L548,71 L556,72"></path>
-      <path class="tr-b" d="M188,244 L200,246 L212,244 L224,247 L236,245 L248,246 L260,244 L272,247 L284,245 L296,246 L308,245 L320,247 L332,244 L344,246 L356,245 L368,247 L380,244 L392,246 L404,245 L416,247 L420,246"></path>
-      <text class="axl" x="164" y="66">22.5 W</text>
-      <text class="axl" x="244" y="238" style="fill:#0e7f6d">1.86 W · −92%</text>
-    </svg>
+      <text class="axl" x="5" y="268">0</text>
+      <text class="axl" x="5" y="153">12.5</text>
+      <text class="axl" x="5" y="38">25</text>
+      <text class="axl" x="40" y="286">0 s</text><text class="axl" x="285" y="286">40 s</text><text class="axl" x="518" y="286">80 s</text>
+      </svg>
     <div class="legend"><span><i style="background:var(--trace)"></i>Original scene</span><span><i style="background:var(--signal)"></i>Baked output</span></div>
   </div>
 </section>
 
 <section id="period">
   <div class="eyebrow">The hard part</div>
-  <h2>Most scenes have no period. Periodica makes one.</h2>
-  <p class="sub">A wave at 7.3 s, a sway at 11.1 s, a particle cycle at 4.6 s and a video at 20 s almost never return to the same phase together; a naive recording would need hours to repeat and would still show a cut. Periodica solves each component's own period, then retunes their speeds by a fraction of a percent so they share one common loop — a period the artist never authored.</p>
+  <h2>Different periods. Periodica coordinates their loops.</h2>
+  <p class="sub">A wave repeats every 7.3 s, a sway every 11.1 s, a particle cycle every 4.6 s and a video every 20 s. They may take too long to return to their starting states together for a practical video loop. Periodica solves each component’s period, then adjusts its playback speed within the selected budget so animations that need to play together form a seamless loop.</p>
   <div class="rows">
-    <div class="row"><div class="k">BUDGET</div><h3>A visible-change budget</h3><p>Three presets cap how far any component may be retuned: Efficiency 5%, Balanced 3%, Quality the smallest change that still closes. Yuri's 100 periodic components were reconciled into one 180.4 s loop; Nijika's 20 into 44 s; Ayanami Rei's scene closes in 56.2 s with a total retime of 4.68%.</p></div>
-    <div class="row"><div class="k">GUARDS</div><h3>Rules that keep the changes nearly invisible</h3><p>The slowest visible component completes at least three cycles per loop; visible drift stays under 0.2 px/s; sways are retuned in frequency only, never in path. Every retune is bounded per component and listed in the report. If the rules cannot be met, the layer stays live and the report says which one.</p></div>
-    <div class="row"><div class="k">PROOF</div><h3>Every seam verified frame by frame against the original</h3><p>Every output is rendered past its loop point and compared tile by tile with the original's next frame before it is accepted; that proves the loop closes, and the per-component budget bounds how far any motion drifts from the original over the whole loop.</p></div>
+    <div class="row"><div class="k">BUDGET</div><h3>Control how much the animation changes</h3><p>The three precision presets set a visible-change budget: Efficiency allows up to 5%, Balanced up to 3%, and Quality finds the smallest change that still closes the loop. The program favors smaller adjustments and reports the periods and speed changes it actually uses.</p></div>
+    <div class="row"><div class="k">GUARDS</div><h3>Keep retiming visually subtle</h3><p>Each component has its own adjustment limit. For very slow motion, the program also considers displacement and changes in speed when checking whether a loop can close. Content that cannot meet the conditions stays live, with the layer and reason listed in the report.</p></div>
+    <div class="row"><div class="k">PROOF</div><h3>Verify loop seams against the original scene</h3><p>During generation, the program renders extra frames around the loop point, checks the encoded seam and compares the assembled result of baked content and live layers. Outputs are accepted once the corresponding checks pass.</p></div>
   </div>
 </section>
 
 <section id="gui">
   <div class="eyebrow">The tool</div>
   <h2>Drop a scene in, get a verdict.</h2>
-  <p class="sub">Two controls and one verdict. Animation precision bounds how far any motion may be retimed; Interaction decides what input-driven content does. Advanced holds the options for power users.</p>
+  <p class="sub">Two settings, one analysis result. Animation precision limits how much the animation can be retimed; Interaction controls how mouse and audio effects are handled. More settings are available under Advanced.</p>
   <div class="tool">
     <div class="steps">
       <div><b>01</b><h3>Drop the wallpaper folder in</h3><p>From <span class="mono">steamapps\workshop\content\431960</span>. The output directory is Wallpaper Engine's own project folder, so the result appears in its list.</p></div>
-      <div><b>02</b><h3>Animation precision · Interaction</h3><p>Quality, balanced and efficiency are the visible-change budget; balanced is the default. If the loop does not close inside the current budget, the solver steps down a level and retries, and the verdict says which one it used. Keep, fixed view or off is what mouse and audio do. Clocks, dates and media text stay live in every mode.</p></div>
-      <div><b>03</b><h3>Read the verdict</h3><p>One of four fixed states. "Not included in this bake" lists what was left out. If your settings do not close but another pair does, the report offers it as a single click.</p></div>
+      <div><b>02</b><h3>Animation precision · Interaction</h3><p>Quality, Balanced and Efficiency set different visible-change budgets; Balanced is the default. If the current precision setting cannot produce a closed loop, the analysis tries the next precision preset and reports the one it selects. Interaction offers Keep, Fixed view and Off for mouse and audio effects. Clocks, dates and media text stay live in every mode.</p></div>
+      <div><b>03</b><h3>Read the verdict</h3><p>The result is one of four states. "Not included in this bake" lists the content excluded from baking. If the current settings cannot close the loop but another combination can, the report offers a suggestion you can apply with one click.</p></div>
     </div>
-    <figure class="shot"><img src="site/gui-en.png" alt="WPE Baker 1.0.2 window: Alone (3448877775) analyzed at quality precision with fixed view; verdict Ready to generate; mouse parallax not included" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker 1.0.2 · Alone (3448877775), quality precision, fixed view.</figcaption></figure>
+    <figure class="shot"><img src="site/gui-en.png" alt="WPE Baker window: Alone (3448877775) analyzed at quality precision with fixed view; verdict Ready to generate; mouse parallax not included" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker · Alone (3448877775), quality precision, fixed view.</figcaption></figure>
   </div>
 </section>
 
 <section id="numbers">
   <div class="eyebrow">Measurements</div>
-  <h2>Every number here comes from a real measurement.</h2>
-  <p class="sub">Intel Arc B390 laptop, official Wallpaper Engine, A/B/B/A runs at 60 fps, RAPL iGPU rail. Original scene against its baked output.</p>
+  <h2>The cost of repetition.</h2>
+  <p class="sub">Measurements use an Intel Arc B390 laptop and the official Wallpaper Engine player, alternating the original scene and baked output in A/B/B/A order. Outputs use 1920×1080 at 60 fps, Balanced precision and default wallpaper properties; originals render normally on the 3072×1920 screen. iGPU and CPU-package power are recorded separately.</p>
   <div class="gal">
-    <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 wallpaper preview"><figcaption><b>−57%</b>Lost Landscape 3<small>3713073223 · 329k subs · effect prefix</small></figcaption></figure>
-    <figure><img src="site/thumb-3448877775.jpg" alt="Alone wallpaper preview"><figcaption><b>−82%</b>Alone<small>3448877775 · 665k subs · state split</small></figcaption></figure>
-    <figure><img src="site/thumb-3650475846.jpg" alt="Nijika wallpaper preview"><figcaption><b>−92%</b>Nijika<small>3650475846 · 109k subs · whole frame</small></figcaption></figure>
-    <figure><img src="site/thumb-3426865175.jpg" alt="Frieren wallpaper preview"><figcaption><b>−65%</b>Frieren<small>3426865175 · 642k subs · fixed view + layers</small></figcaption></figure>
-    <figure><img src="site/thumb-3669681034.jpg" alt="Atri wallpaper preview"><figcaption><b>−90%</b>Atri<small>3669681034 · 195k subs · effect prefix</small></figcaption></figure>
-    <figure><img src="site/thumb-3685247684.jpg" alt="Ultraman Leo wallpaper preview"><figcaption><b>−73%</b>Ultraman Leo<small>3685247684 · effect prefix + live</small></figcaption></figure>
+    <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 wallpaper preview"><figcaption><b>−59.2%</b>Lost Landscape 3<small>3713073223 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3448877775.jpg" alt="Alone wallpaper preview"><figcaption><b>−12.8%</b>Alone<small>3448877775 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3650475846.jpg" alt="Nijika wallpaper preview"><figcaption><b>−29.9%</b>Nijika<small>3650475846 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3426865175.jpg" alt="Frieren wallpaper preview"><figcaption><b>−31.6%</b>Frieren<small>3426865175 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3669681034.jpg" alt="Atri wallpaper preview"><figcaption><b>−96.8%</b>Atri<small>3669681034 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3685247684.jpg" alt="Ultraman Leo wallpaper preview"><figcaption><b>−84.1%</b>Ultraman Leo<small>3685247684 · effect prefix + live layers</small></figcaption></figure>
   </div>
   <div class="tablewrap">
   <table>
-    <thead><tr><th>Wallpaper</th><th>Original</th><th>Baked</th><th style="text-align:right">Change</th><th>Route</th></tr></thead>
-    <tbody>
-      <tr><td>Nijika (Bocchi the Rock!)<span class="id">3650475846</span></td><td class="num"><span class="tbar o" style="width:112px"></span> 22.51 W</td><td class="num"><span class="tbar" style="width:9px"></span> 1.86 W</td><td class="delta">−91.7%</td><td>whole frame</td></tr>
-      <tr><td>Alone (day/night scene)<span class="id">3448877775</span></td><td class="num"><span class="tbar o" style="width:28px"></span> 5.66 W</td><td class="num"><span class="tbar" style="width:5px"></span> 1.05 W</td><td class="delta">−81.5%</td><td>state split + layers</td></tr>
-      <tr><td>Atri — My Dear Moments<span class="id">3669681034</span></td><td class="num"><span class="tbar o" style="width:42px"></span> 8.45 W</td><td class="num"><span class="tbar" style="width:4px"></span> 0.81 W</td><td class="delta">−90.4%</td><td>effect prefix</td></tr>
-      <tr><td>Ultraman Leo<span class="id">3685247684</span></td><td class="num"><span class="tbar o" style="width:46px"></span> 9.13 W</td><td class="num"><span class="tbar" style="width:12px"></span> 2.46 W</td><td class="delta">−73.0%</td><td>effect prefix + live layers</td></tr>
-      <tr><td>Yuri<span class="id">3572877776</span></td><td class="num"><span class="tbar o" style="width:12px"></span> 2.38 W</td><td class="num"><span class="tbar" style="width:4px"></span> 0.71 W</td><td class="delta">−70.3%</td><td>whole frame</td></tr>
-      <tr><td>Frieren — Pagoda of flowers<span class="id">3426865175</span></td><td class="num"><span class="tbar o" style="width:50px"></span> 10.09 W</td><td class="num"><span class="tbar" style="width:17px"></span> 3.50 W</td><td class="delta">−65.3%</td><td>fixed view + layers</td></tr>
-      <tr><td>Lost Landscape 3<span class="id">3713073223</span></td><td class="num"><span class="tbar o" style="width:40px"></span> 8.11 W</td><td class="num"><span class="tbar" style="width:17px"></span> 3.48 W</td><td class="delta">−57.1%</td><td>effect prefix</td></tr>
-      <tr><td>Ayanami Rei<span class="id">3258032485</span></td><td class="num"><span class="tbar o" style="width:11px"></span> 2.29 W</td><td class="num"><span class="tbar" style="width:1px"></span> 0.19 W</td><td class="delta">−91.8%</td><td>whole frame</td></tr>
-    </tbody>
-  </table>
+<thead><tr><th>Wallpaper</th><th>Original iGPU</th><th>Baked iGPU</th><th>Change</th><th>CPU package: original → baked</th></tr></thead>
+<tbody>
+<tr><td>Nijika (Bocchi the Rock!)<span class="id">3650475846</span></td><td class="num">20.87 W</td><td class="num">14.63 W</td><td class="delta">−29.9%</td><td class="num">31.80 → 26.51 W</td></tr>
+<tr><td>Alone (day/night scene)<span class="id">3448877775</span></td><td class="num">5.52 W</td><td class="num">4.81 W</td><td class="delta">−12.8%</td><td class="num">15.45 → 16.17 W</td></tr>
+<tr><td>Atri — My Dear Moments<span class="id">3669681034</span></td><td class="num">8.51 W</td><td class="num">0.27 W</td><td class="delta">−96.8%</td><td class="num">17.85 → 9.26 W</td></tr>
+<tr><td>Ultraman Leo<span class="id">3685247684</span></td><td class="num">9.08 W</td><td class="num">1.44 W</td><td class="delta">−84.1%</td><td class="num">19.58 → 11.58 W</td></tr>
+<tr><td>Yuri<span class="id">3572877776</span></td><td class="num">2.10 W</td><td class="num">0.48 W</td><td class="delta">−77.4%</td><td class="num">11.59 → 9.45 W</td></tr>
+<tr><td>Frieren — Pagoda of flowers<span class="id">3426865175</span></td><td class="num">10.57 W</td><td class="num">7.23 W</td><td class="delta">−31.6%</td><td class="num">19.62 → 19.64 W</td></tr>
+<tr><td>Lost Landscape 3<span class="id">3713073223</span></td><td class="num">8.10 W</td><td class="num">3.30 W</td><td class="delta">−59.2%</td><td class="num">17.96 → 13.61 W</td></tr>
+<tr><td>Ayanami Rei<span class="id">3258032485</span></td><td class="num">2.16 W</td><td class="num">0.14 W</td><td class="delta">−93.4%</td><td class="num">11.23 → 8.72 W</td></tr>
+</tbody></table>
   </div>
-  <div class="note">At 120 fps the originals roughly double (Atri 8.45 → 16.25 W, Ayanami Rei 2.29 → 7.77 W) while the baked outputs stay near 1 W (1.51 W and 0.31 W): the refresh rate becomes free. Per-title tables for every measured output, including the ones that did not save, ship in the README. Wallpaper artwork belongs to its Steam Workshop authors and is shown to demonstrate the tool.</div>
+  <div class="note">AC power · Default wallpaper properties · Balanced precision · 20 seconds per segment. <a href="validation-2.0.0.json">Measurement data</a>. Wallpaper artwork belongs to its Steam Workshop authors.</div>
 </section>
 
 <section id="refresh">
   <div class="eyebrow">Refresh rate</div>
-  <h2>Max out the refresh rate. The fans still stay off.</h2>
-  <p class="sub">A heavy wallpaper costs the GPU roughly twice as much at 120 fps as at 60; a fully baked output barely notices: the decoder does the work and the 3D engine idles. This project started on an iGPU laptop.</p>
-  <div class="tablewrap">
-  <table>
-    <thead><tr><th>Wallpaper</th><th>Original 60 → 120 fps</th><th>Baked 60 → 120 fps</th><th style="text-align:right">Baked at 120 vs original at 60</th><th>Package power, 120 fps</th></tr></thead>
-    <tbody>
-      <tr><td>Atri<span class="id">3669681034 · effect prefix</span></td><td class="num">8.45 → 16.25 W</td><td class="num">0.81 → 1.51 W</td><td class="delta">−82%</td><td class="num">30.3 → 12.2 W (−60%)</td></tr>
-      <tr><td>Ayanami Rei<span class="id">3258032485 · whole frame</span></td><td class="num">2.29 → 7.77 W</td><td class="num">0.19 → 0.31 W</td><td class="delta">−86%</td><td class="num">19.6 → 10.9 W (−45%)</td></tr>
-      <tr><td>Yuri<span class="id">3572877776 · whole frame</span></td><td class="num">2.38 → 6.70 W</td><td class="num">0.71 → 1.35 W</td><td class="delta">−43%</td><td class="num">19.7 → 12.3 W (−38%)</td></tr>
-      <tr><td>Ultraman Leo<span class="id">3685247684 · effect prefix + live layers</span></td><td class="num">9.13 → 17.29 W</td><td class="num">2.46 → 8.80 W</td><td class="delta">−4%</td><td class="num">30.1 → 20.6 W (−31%)</td></tr>
-    </tbody>
-  </table>
-  </div>
-  <div class="tablewrap">
-  <table>
-    <thead><tr><th>Atri at the panel's full 165 Hz</th><th>Original</th><th>Baked</th><th style="text-align:right">Change</th></tr></thead>
-    <tbody>
-      <tr><td>iGPU rail</td><td class="num">26.03 W</td><td class="num">3.95 W</td><td class="delta">−84.8%</td></tr>
-      <tr><td>CPU package</td><td class="num">41.44 W</td><td class="num">15.36 W</td><td class="delta">−62.9%</td></tr>
-      <tr><td>3D engine busy</td><td class="num">86.9%</td><td class="num">29.2%</td><td class="delta">decoder takes 21.8%</td></tr>
-    </tbody>
-  </table>
-  </div>
-  <div class="note">iGPU rail and CPU package, official player, screen-resolution outputs (3072×1920), A/B/B/A. Leo keeps its live layers.</div>
+  <h2>High refresh rates. Lower power use.</h2>
+  <p class="sub">As playback frame rate rises, the original scene has to render more images in real time. Baking periodic animation into video lets the video decoder handle that part of playback, reducing repeated work on the 3D engine. Retained clocks, audio response and other live content continue to run as before.<br><br>This project began on a laptop with an iGPU.</p>
+  <div class="tablewrap"><table><thead><tr><th>Wallpaper / frame rate</th><th>Original iGPU</th><th>Baked iGPU</th><th>Change</th><th>CPU package: original → baked</th></tr></thead><tbody>
+<tr><td>Atri · 60 fps</td><td class="num">8.50 W</td><td class="num">0.30 W</td><td class="delta">−96.5%</td><td class="num">16.53 → 9.33 W</td></tr>
+<tr><td>Atri · 165 fps</td><td class="num">25.55 W</td><td class="num">2.19 W</td><td class="delta">−91.4%</td><td class="num">37.67 → 12.84 W</td></tr>
+<tr><td>Ayanami Rei · 120 fps</td><td class="num">8.75 W</td><td class="num">1.97 W</td><td class="delta">−77.5%</td><td class="num">18.62 → 13.72 W</td></tr>
+</tbody></table></div>
+  <div class="note">Original and baked output at native display resolution (3072×1920), official player, AC power, A/B/B/A, 20 seconds per segment.</div>
 </section>
 
 <section id="what">
-  <div class="eyebrow">What counts as animation</div>
-  <h2>Deterministic motion is baked. Input stays input.</h2>
+  <div class="eyebrow">What gets baked</div>
+  <h2>Bake periodic motion.<br>Handle interaction and live content separately.</h2>
   <div class="two">
     <div>
       <h3>Baked into the loop</h3>
@@ -179,26 +160,50 @@
       </ul>
     </div>
     <div>
-      <h3>Treated as input<span class="tag">Interaction: keep · fixed view · off</span></h3>
+      <h3>Interactive and live content</h3>
       <ul>
         <li>Mouse parallax and pointer effects</li>
-        <li>Audio-reactive layers and spectrums</li>
-        <li>Clocks, dates, day/night switching</li>
-        <li>Interactive panels and customization scripts</li>
+        <li>Audio-reactive effects and spectrum displays</li>
+        <li>Clocks, dates and day/night switching</li>
+        <li>Interactive panels and custom scripts</li>
       </ul>
-      <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">Default: fixed view. Clocks, dates and media text stay live in every mode. Keep: experimental, may increase GPU load.</p>
+      <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">Interaction offers three modes: Keep, Fixed view and Off. Fixed view is the default.</p>
+      <p class="mono" style="margin:8px 0 0;color:var(--dim);font-size:13px">Clocks, dates and media text update live in every mode. Keep is experimental and may increase GPU load.</p>
+    </div>
+  </div>
+</section>
+
+<section id="astra">
+  <div class="eyebrow">Under the hood</div>
+  <h2>From period analysis to offline rendering.</h2>
+  <div class="spec">
+    <div>
+      <p>A Wallpaper Engine scene can contain hundreds of shader variants, particle systems, script controllers and video layers. Finding two similar frames is not enough to bake them into a loop: the program needs to know how animation changes over time, and which parts must keep responding to live input.</p>
+      <p>2.0 replaces the old library of period equations with shader time analysis. It applies abstract interpretation to the compiled SPIR-V, following time through the data flow to derive cycles, continuous drift and animation that settles after a while. New effects no longer need a hand-written equation of their own; unfamiliar custom shaders can be analyzed too.</p>
+      <p>Once the periods are known, the program looks for parameters it can adjust locally. Waves, glows and scrolling within one effect no longer have to speed up together. Independently adjustable motion will be coordinated separately, and independent video groups will loop at their own periods.</p>
+      <p>Author scripts are also included in time analysis. Constants, periodic changes and opening animations can be identified; where state carried between frames can be simulated exactly, the program searches for that state to recur. Content that depends on the mouse, audio or the clock stays live.</p>
+      <p>To put the baked result back into the original scene, Periodica also handles transparency, blending order and HDR intermediate images. Brightness outside ordinary video range is mapped into the video and restored by a generated shader, so cached content can continue through the author’s existing effect chain.</p>
+      <p>The offline renderer uses Vulkan and reduces readbacks, intermediate files and repeated encoding. Supported GPU paths encode images directly from GPU memory; other paths stream rendering into encoding. Seam, image-quality, composition and hardware-decoding checks run as part of generation.</p>
+    </div>
+    <div class="kvs">
+      <div><span>Engine</span><span>Periodica · deterministic animation baking</span></div>
+      <div><span>Solver</span><span>SPIR-V time analysis · Script time analysis · Local retiming</span></div>
+      <div><span>Renderer</span><span>Vulkan offline rendering · Multithreaded · Frame-exact</span></div>
+      <div><span>Encoder</span><span>H.264 / HEVC / AV1 · Hardware decoding verified</span></div>
+      <div><span>Power measurement</span><span>Official player · RAPL · A/B/B/A</span></div>
+      <div><span>Runtime AI calls</span><span>None</span></div>
     </div>
   </div>
 </section>
 
 <section id="roadmap">
   <div class="eyebrow">Where Periodica goes</div>
-  <h2>Every screen that loops is a candidate.</h2>
+  <h2>The next screen.</h2>
   <div class="road">
-    <div class="now"><div class="when">1.0.2 · NOW</div><h3>Wallpaper Engine, Windows</h3><p>One admission check for analysis and bake, no automatic re-renders, balanced precision and fixed view by default, at most four video groups, verified one-click suggestions, day/night state splitting.</p></div>
-    <div><div class="when">NEXT</div><h3>Passthrough controller</h3><p>The baked video as a layer inside the original scene, so pointer and audio effects keep running on top of it at their own cost.</p></div>
-    <div class="big"><div class="when">THE BIG ONE</div><h3>Temporal reconstruction</h3><p>Bake at a fraction of the resolution with sub-pixel jitter; reconstruct at playback from motion vectors solved offline. Better inputs than DLSS gets in a game, at a fraction of the decode.</p></div>
-    <div><div class="when">BEYOND</div><h3>Any looping surface</h3><p>Phone live wallpapers, lock screens, kiosks, stream backdrops. Wallpaper Engine is the first screen Periodica runs on.</p></div>
+    <div><div class="when">1.x · Released</div><h3>Wallpaper Engine, Windows</h3><p>Bake repeating scene animation into video and place it back alongside retained live content. Wallpaper Engine is Periodica’s first application area.</p></div>
+    <div class="now"><div class="when">2.0</div><h3>Performance update</h3><p>Replace individually maintained period equations with shader and script time analysis, expanding the range of animation that can be baked. Give independent video groups their own loops, improve HDR intermediate-image handling, and reduce readbacks, repeated encoding and waits during generation.</p></div>
+    <div><div class="when">2.x</div><h3>General-purpose baking</h3><p>Use caching, reuse, precomputation and deterministic replay to bring more real-time layers within practical baking range, including a new AI-accelerated generation pipeline.</p></div>
+    <div class="big"><div class="when">3.0</div><h3>Temporal reconstruction</h3><p>Use history and motion information to reconstruct frames, reducing the work of rendering each frame from scratch, and explore cooperation between the GPU and NPU.</p></div>
   </div>
 </section>
 
@@ -206,16 +211,16 @@
   <div class="eyebrow">FAQ</div>
   <h2>Short answers.</h2>
   <div class="faq">
-    <details><summary>What is the simplest thing I get?</summary><p>Your favorite wallpaper at its highest refresh rate and quality, and the fans stay off. That is the whole reason this exists.</p></details>
-    <details><summary>Will it make every wallpaper cheaper?</summary><p>Light scenes have nothing to save, and it says so before rendering. Heavy, mostly periodic scenes are where the 46–96% savings come from; interaction-heavy scenes get their deterministic core baked and the rest treated as input.</p></details>
-    <details><summary>Does the loop look different from the original?</summary><p>You choose the visible-change budget — efficiency, balanced or quality — and the report lists every retimed component with its exact percentage. Seams are validated against the original's own motion before an output is accepted.</p></details>
-    <details><summary>What do I need?</summary><p>Windows, Wallpaper Engine, and a GPU for the offline render. The portable build has no installer and no Python. Baking a typical scene takes minutes; playback needs only hardware video decode.</p></details>
+    <details><summary>What is the main benefit?</summary><p>Run your favorite animated wallpaper with lower power use.</p></details>
+    <details><summary>Will it reduce resource use for every wallpaper?</summary><p>Lightweight scenes offer little room for savings, and the tool tells you before rendering. Heavy scenes dominated by periodic animation are where the 13–97% reductions come from. For scenes with extensive interaction, the deterministic core is baked while interactive and live content is handled separately.</p></details>
+    <details><summary>Does the loop look different from the original?</summary><p>Choose Efficiency, Balanced or Quality to set the visible-change budget. The report lists every retimed component and its exact adjustment percentage. Each seam is checked against the original scene's motion before the output is accepted.</p></details>
+    <details><summary>What do I need?</summary><p>Windows, Wallpaper Engine, and a GPU for the offline render. The portable build has no installer and no Python. Baking a typical scene takes minutes; the video decoder handles baked content while retained live layers continue rendering.</p></details>
     <details><summary>Is it open source?</summary><p>Yes. Tooling under MIT, the renderer under GPL v2; full source, third-party notices and build records are in the repository.</p></details>
   </div>
 </section>
 
 <footer>
-  <div>Periodica · first application: WPE Baker 1.0.2 · 2026</div>
+  <div>Periodica · first application: WPE Baker 2.0.0-rc.1 · 2026</div>
   <div>Wallpaper artwork shown belongs to its Steam Workshop authors</div>
 </footer>
 </div>
