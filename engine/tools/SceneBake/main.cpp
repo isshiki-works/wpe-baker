@@ -371,9 +371,9 @@ Job ReadJob(const owe::NJson& json, const fs::path& base) {
             uint64_t denominator = Uint(item, "rate_denominator", 0);
             if (owner > std::numeric_limits<int32_t>::max() || numerator == 0 || denominator == 0)
                 throw std::runtime_error("offline video rate override values are out of range");
-            const long double rate = static_cast<long double>(numerator) / denominator;
-            if (!std::isfinite(rate) || rate < 0.98L || rate > 1.02L)
-                throw std::runtime_error("offline video rate override must be within 2 percent of rate 1");
+            const uint64_t difference = numerator > denominator ? numerator - denominator : denominator - numerator;
+            if (difference > denominator / 10)
+                throw std::runtime_error("offline video rate override must be within 10 percent of rate 1");
             const uint64_t divisor = Gcd(numerator, denominator);
             numerator /= divisor;
             denominator /= divisor;

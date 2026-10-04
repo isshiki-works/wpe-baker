@@ -1571,10 +1571,10 @@ auto Scene::ApplyOfflineVideoPlaybackRateOverrides(
             result.error = "offline video rate override must name an owner and use a positive rate fraction";
             return result;
         }
-        const long double rate = static_cast<long double>(override.rate_numerator) /
-            static_cast<long double>(override.rate_denominator);
-        if (!std::isfinite(rate) || rate < 0.98L || rate > 1.02L) {
-            result.error = "offline video rate override must remain within 2 percent of rate 1";
+        const std::uint64_t difference = override.rate_numerator > override.rate_denominator
+            ? override.rate_numerator - override.rate_denominator : override.rate_denominator - override.rate_numerator;
+        if (difference > override.rate_denominator / 10) {
+            result.error = "offline video rate override must remain within 10 percent of rate 1";
             return result;
         }
         bool found = false;
