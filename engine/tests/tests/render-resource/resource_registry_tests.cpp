@@ -346,10 +346,38 @@ TEST(TextureRegistry, ReleasesPhysicalResourcesOutsideTheActivePlan) {
     ASSERT_TRUE(
         registry.Publish(second, TextureAllocation(2), owe::resource::ReadyToken {}).is_some());
 
+    registry.ClearGraphResources();
+    EXPECT_TRUE(registry.Resolve(first).is_some());
+    EXPECT_TRUE(registry.Resolve(second).is_some());
     auto active = rstd::array<owe::resource::TextureHandle, 1> { first };
     registry.RetainActive(active.as_slice());
     EXPECT_TRUE(registry.Resolve(first).is_some());
     EXPECT_TRUE(registry.Resolve(second).is_none());
+}
+
+TEST(TextureRegistry, RebuildClearsRenderTargetsWithoutRetainedHistoryContent) {
+    owe::resource::TextureRegistry registry;
+    for (unsigned index = 0; index < 3; ++index) {
+        auto handle = registry.Register(owe::resource::TextureRequest {
+            .kind = owe::resource::TextureRequestKind::RenderTarget,
+            .name = rstd::format("target-{}", index),
+            .lifetime = index == 0 ? owe::resource::TextureLifetimeClass::Retained
+                                   : owe::resource::TextureLifetimeClass::FrameLocal,
+            .content = owe::resource::TextureContentFlag(
+                index == 2 ? owe::resource::TextureContent::PreserveAcrossFrames
+                            : owe::resource::TextureContent::SourceDefined),
+        });
+        ASSERT_TRUE(registry.Publish(
+            handle, TextureAllocation(index + 1), owe::resource::ReadyToken {}).is_some());
+    }
+
+    registry.ClearGraphResources();
+    for (unsigned index = 0; index < 3; ++index) {
+        auto handle = registry.Find(owe::resource::TextureRequestKind::RenderTarget,
+                                     rstd::format("target-{}", index).as_str());
+        ASSERT_TRUE(handle.is_some());
+        EXPECT_TRUE(registry.Resolve(*handle).is_none());
+    }
 }
 
 TEST(TextureAllocation, OwnsAttachedRuntimeForItsWholeLeaseLifetime) {
@@ -687,7 +715,7 @@ TEST(ResourcePrepareService, VisitsBufferAndShaderPlansThroughTypedProviders) {
     EXPECT_EQ(shader_provider.loads, rstd::usize(1));
 }
 
-TEST(ResourcePrepareService, InitializesRetainedHistoryTextureOnce) {
+TEST(ResourcePrepareService, PreservesRetainedHistoryAcrossVisibilityGraphRebuilds) {
     owe::resource::TextureRegistry         textures;
     owe::resource_registry::BufferRegistry buffers;
     owe::resource_registry::ShaderRegistry shaders;
@@ -713,7 +741,9 @@ TEST(ResourcePrepareService, InitializesRetainedHistoryTextureOnce) {
                 }),
                 .lifetime   = owe::resource::TextureLifetimeClass::Retained,
                 .content    = owe::resource::TextureContentFlag(
-                    owe::resource::TextureContent::InitializeTransparent),
+                    owe::resource::TextureContent::InitializeTransparent) |
+                    owe::resource::TextureContentFlag(
+                        owe::resource::TextureContent::PreserveAcrossFrames),
             },
         .access = owe::resource::ResourceAccess::ReadWrite,
     });
@@ -724,11 +754,47 @@ TEST(ResourcePrepareService, InitializesRetainedHistoryTextureOnce) {
     ASSERT_TRUE(first.is_ok());
     EXPECT_EQ(first->TextureCount(), rstd::usize(1));
     EXPECT_EQ(image_backend.transparent_creates, rstd::usize(1));
+    auto use = plan.textures[rstd::usize()].handle;
+    auto first_texture = first->Resolve(use);
+    ASSERT_TRUE(first_texture.is_some());
+    auto resource = (**first_texture).resource;
+    auto physical = (**first_texture).physical.as_ptr().as_raw_ptr();
+    auto physical_generation = (**first_texture).physical_generation;
 
+    // Release prepared leases, then rebuild to a hidden graph with no history use.
+    first = rstd::Ok(owe::resource_registry::PreparedResourceTable {});
+    textures.ClearGraphResources();
+    owe::resource::ResourcePlan hidden_plan { .generation = rstd::u64(21) };
+    auto hidden = service.Prepare(hidden_plan);
+    ASSERT_TRUE(hidden.is_ok());
+    auto hidden_resources = hidden->TextureResources();
+    textures.RetainActive(hidden_resources.as_slice());
+    textures.EvictUnused();
+    ASSERT_TRUE(textures.ResolveCurrent(resource).is_some());
+
+    plan.generation = rstd::u64(22);
+    plan.textures[rstd::usize()].handle.generation = plan.generation;
+    use = plan.textures[rstd::usize()].handle;
+    textures.ClearGraphResources();
     auto second = service.Prepare(plan);
     ASSERT_TRUE(second.is_ok());
     EXPECT_EQ(second->TextureCount(), rstd::usize(1));
     EXPECT_EQ(image_backend.transparent_creates, rstd::usize(1));
+    auto second_texture = second->Resolve(use);
+    ASSERT_TRUE(second_texture.is_some());
+    EXPECT_EQ((**second_texture).resource, resource);
+    EXPECT_EQ((**second_texture).physical.as_ptr().as_raw_ptr(), physical);
+    EXPECT_EQ((**second_texture).physical_generation, physical_generation);
+
+    // ReleaseSceneTextures/reset deliberately starts new history content.
+    textures.Reset();
+    auto reset = service.Prepare(plan);
+    ASSERT_TRUE(reset.is_ok());
+    auto reset_texture = reset->Resolve(use);
+    ASSERT_TRUE(reset_texture.is_some());
+    EXPECT_NE((**reset_texture).resource, resource);
+    EXPECT_NE((**reset_texture).physical.as_ptr().as_raw_ptr(), physical);
+    EXPECT_EQ(image_backend.transparent_creates, rstd::usize(2));
 }
 
 TEST(ResourcePrepareService, MapsLogicalTextureUsesToPlannedPhysicalSlots) {

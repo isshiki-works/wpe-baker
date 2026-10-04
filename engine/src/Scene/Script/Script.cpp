@@ -1190,8 +1190,10 @@ bool TimerDue(double deadline, double now) {
 // are derived from their original schedule to avoid cumulative addition drift.
 void SweepDeferred(JSContext* ctx, EngineHostState* host) {
     const double now = host->inputs.runtime;
-    // Iterate by index; callbacks may push_back new entries.
-    for (size_t i = 0; i < host->deferred.size(); ++i) {
+    // New timers wait until the next frame, including zero-delay self-scheduling.
+    // Iterate by index; callbacks may push_back and reallocate the storage.
+    const size_t pending = host->deferred.size();
+    for (size_t i = 0; i < pending; ++i) {
         if (host->deferred[i].dead) continue;
         while (! host->deferred[i].dead && TimerDue(host->deferred[i].fire_at, now)) {
             auto* previous = host->active_field_script;

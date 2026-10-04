@@ -114,8 +114,7 @@ public sealed partial class NativeRenderRunner
         }
         // 后面的段把前面的时间轴也模拟过一遍；依赖与脚本报错仍按全部段去重合并，墙钟取最慢的一段。
         var native = manifest["native_result"]!.AsObject();
-        native["runtime_dependencies"] = parts.Select(part => part["native_result"]!["runtime_dependencies"]!.AsArray())
-            .Aggregate(new JsonArray(), SceneAssembler.MergeRuntimeDependencies);
+        MergeSegmentRuntimeDependencies(native, parts);
         var errors = new JsonArray();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (JsonNode? error in parts.SelectMany(part => part["native_result"]!["source_script_errors"]!.AsArray()))
@@ -132,5 +131,13 @@ public sealed partial class NativeRenderRunner
         return manifest;
 
         static bool Same(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
+    }
+
+    internal static void MergeSegmentRuntimeDependencies(JsonObject native, JsonObject[] parts)
+    {
+        native["runtime_dependencies_complete"] = parts.All(part =>
+            part["native_result"] is JsonObject result && RuntimeObservation.DependenciesComplete(result));
+        native["runtime_dependencies"] = parts.Select(part => part["native_result"]!["runtime_dependencies"]!.AsArray())
+            .Aggregate(new JsonArray(), SceneAssembler.MergeRuntimeDependencies);
     }
 }

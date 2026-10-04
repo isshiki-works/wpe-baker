@@ -518,12 +518,12 @@ int Render(const fs::path& job_path) {
             << ",\"fps_num\":" << job.fps_num << ",\"fps_den\":" << job.fps_den
             << ",\"requested_frames\":" << job.frames << ",\"written_frames\":" << written
             << ",\"output_frame_stride\":" << job.output_stride
-            << ",\"draw_selected_frames_only\":false"
+            << ",\"draw_selected_frames_only\":" << (drawn_frames < simulated_frames ? "true" : "false")
             << ",\"simulated_frames\":" << simulated_frames
             << ",\"drawn_frames\":" << drawn_frames
-            << ",\"skipped_draw_frames\":0"
+            << ",\"skipped_draw_frames\":" << (simulated_frames - drawn_frames)
             << ",\"frame_counts_include_warmup\":true"
-            << ",\"last_step_draw_skipped\":false"
+            << ",\"last_step_draw_skipped\":" << (wallpaper.readback().rasterized ? "false" : "true")
             << ",\"output_frame_phase\":" << (job.output_phase ? std::to_string(*job.output_phase) : "null")
             << ",\"readback_width\":" << (job.sample_width ? job.sample_width : job.width)
             << ",\"readback_height\":" << (job.sample_height ? job.sample_height : job.height)
@@ -626,7 +626,9 @@ int Render(const fs::path& job_path) {
         if (job.trace_scene) {
             out << ",\"runtime_layers\":" << wallpaper.sceneDescription()
                 << ",\"runtime_projection\":" << wallpaper.projection()
-                << ",\"runtime_animation_periods\":" << wallpaper.animationPeriods() << ",\"runtime_dependencies\":[";
+                << ",\"runtime_animation_periods\":" << wallpaper.animationPeriods()
+                << ",\"runtime_dependencies_complete\":" << (wallpaper.dependenciesComplete() ? "true" : "false")
+                << ",\"runtime_dependencies\":[";
             bool first_dependency = true;
             for (const auto& item : wallpaper.dependencies()) {
                 if (!first_dependency) out << ',';
@@ -765,7 +767,7 @@ int Render(const fs::path& job_path) {
             if (!pixels.sampling_coverage.empty()) sampling_coverage = pixels.sampling_coverage;
             ++simulated_frames;
             gpu_sampled = gpu_sampled || pixels.gpu_sampled;
-            ++drawn_frames;
+            if (pixels.rasterized) ++drawn_frames;
             if (!pixels.pixels.empty()) ++readback_frames;
             if (frame < job.warmup) continue;
             if (job.write_audio) {

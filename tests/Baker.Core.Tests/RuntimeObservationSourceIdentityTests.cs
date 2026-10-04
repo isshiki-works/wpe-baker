@@ -134,7 +134,7 @@ public class RuntimeObservationSourceIdentityTests
     }
     private static JsonObject Raw(string hash, JsonObject? trace = null) => new() {
         ["status"] = "completed", ["source_sha256"] = hash, ["source_digest_scope"] = ProjectSource.DigestScope,
-        ["native_result"] = trace ?? new JsonObject { ["status"] = "complete", ["runtime_dependencies"] = new JsonArray(),
+        ["native_result"] = trace ?? new JsonObject { ["status"] = "complete", ["runtime_dependencies_complete"] = true, ["runtime_dependencies"] = new JsonArray(),
             ["runtime_layers"] = new JsonArray(), ["source_script_error_count"] = 0, ["source_script_errors"] = new JsonArray() } };
     private static async Task<RuntimeObservation> Observe(HybridAnalyzeRequest request, ProjectSource source, string hash,
         JsonObject scene, NativeRuntimeObserver observer, AnalysisMemo memo)
@@ -241,8 +241,10 @@ public class RuntimeObservationSourceIdentityTests
         Assert.False(Directory.Exists(request.AnalysisCacheDirectory));
     });
 
-    [Fact]
-    public async Task OldRuntimeCacheWithoutCaptureIdentityIsNotReusedOrDeleted() => await TestTemp.Run(async root =>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("runtime-observation-source-snapshot-v2")]
+    public async Task OldRuntimeCacheWithoutCaptureIdentityOrCompletenessValidationIsNotReusedOrDeleted(string? legacyVersion) => await TestTemp.Run(async root =>
     {
         string directory = Path.Combine(root, "source"), cache = Path.Combine(root, "cache");
         JsonObject scene = Scene();
@@ -250,7 +252,7 @@ public class RuntimeObservationSourceIdentityTests
         using var source = new ProjectSource(directory);
         string hash = await source.SourceHashAsync(TestContext.Current.CancellationToken);
         var key = new ObservationKey(hash, scene, new JsonObject(), root, 4, 4, 30, 1, false, null, "missing");
-        string oldKey = "runtime-" + AnalysisCache.Key(key);
+        string oldKey = "runtime-" + (legacyVersion is null ? AnalysisCache.Key(key) : AnalysisCache.Key(legacyVersion, key));
         var legacy = new JsonObject { ["sentinel"] = "legacy runtime cache" };
         AnalysisCache.Write(cache, oldKey, legacy);
         int calls = 0;

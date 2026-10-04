@@ -54,6 +54,7 @@ struct CpuFrameResult {
     std::uint32_t            row_pitch { 0 };
     VkFormat                 format { VK_FORMAT_UNDEFINED };
     std::uint64_t            frame_index { 0 };
+    bool                     rasterized { false };
     // Populated for a selected graph capture; output dimensions remain above.
     std::string              source_render_target;
     std::string              source_pass;

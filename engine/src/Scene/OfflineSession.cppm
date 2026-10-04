@@ -108,6 +108,7 @@ public:
     std::vector<std::string> diagnostics() const;
     const std::vector<OfflineSourceScriptError>& sourceScriptErrors() const;
     std::vector<OfflineDependency> dependencies() const;
+    bool dependenciesComplete() const;
     uint64_t ikChainSolves() const;
     std::string sceneDescription() const;
     std::string animationPeriods() const;

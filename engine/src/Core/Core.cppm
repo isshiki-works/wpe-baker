@@ -180,6 +180,7 @@ struct Services {
     bool trace_scene { false };
     uint64_t runtime_ik_chain_solves { 0 };
     std::vector<OfflineDependency> dependencies;
+    bool dependencies_complete { true };
     std::unordered_set<std::string> dependency_keys;
     std::vector<OfflineSourceScriptError> source_script_errors;
     std::vector<std::string> diagnostics;
@@ -191,10 +192,16 @@ struct Services {
     }
     void trace(OfflineDependency value) {
         if (!trace_scene) return;
-        if (dependencies.size() >= 10000) { diagnose("Runtime dependency trace reached its 10000-entry limit"); return; }
         std::string key = std::to_string(value.owner) + ':' + std::to_string(value.target) + ':' +
             value.operation + ':' + value.property + ':' + value.binding + ':' + (value.initialization ? '1' : '0');
-        if (dependency_keys.insert(std::move(key)).second) dependencies.push_back(std::move(value));
+        if (dependency_keys.contains(key)) return;
+        if (dependencies.size() >= 10000) {
+            dependencies_complete = false;
+            diagnose("Runtime dependency trace reached its 10000-entry limit");
+            return;
+        }
+        dependency_keys.insert(std::move(key));
+        dependencies.push_back(std::move(value));
     }
 };
 

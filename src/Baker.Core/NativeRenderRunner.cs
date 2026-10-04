@@ -100,10 +100,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         if (request.HdrSignedSqrt && (request.HdrScale is not > 0 || request.CaptureTarget is not { EffectTerminal: true, ExactExtent: true }))
             throw new ArgumentException("Signed HDR encoding requires an exact effect-terminal capture.");
         if (request.SchemaVersion != 1) throw new InvalidDataException("Unsupported render request version.");
-        if (!double.IsFinite(request.EffectRenderScale) || request.EffectRenderScale is <= 0 or > 1)
-            throw new ArgumentException("EffectRenderScale must be finite and in (0, 1].");
-        if (request.MatchEffectResolution && request.EffectRenderScale != 1.0)
-            throw new ArgumentException("Adaptive effect resolution cannot be combined with EffectRenderScale other than 1.");
+        ValidateRenderOptions(request);
         if (request.PixelPacking is not "rgb" and not "rgba_side_by_side") throw new ArgumentException("Unsupported pixel packing.");
         if (request.CollectSamplingCoverage && !request.FrameSamplesOnly)
             throw new ArgumentException("Sampling coverage applies only to frame-sample requests.");
@@ -249,8 +246,6 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             RenderJob job = RenderJob.From(request, source.SourcePath, renderDirectory, rawStdout: true) with
             {
                 WriteAudio = request.IncludeAudio,
-                EffectRenderScale = request.EffectRenderScale != 1.0 ? request.EffectRenderScale : null,
-                MatchEffectResolution = request.MatchEffectResolution,
                 HdrScale = request.HdrScale,
                 HdrLowerBound = request.HdrLowerBound != 0 ? request.HdrLowerBound : null,
                 HdrSignedSqrt = request.HdrSignedSqrt ? true : null
@@ -777,7 +772,15 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
         return null;
     }
 
-    private static void ConfirmRenderOptions(RenderRequest request, RenderResult nativeResult)
+    private static void ValidateRenderOptions(RenderRequest request)
+    {
+        if (!double.IsFinite(request.EffectRenderScale) || request.EffectRenderScale is <= 0 or > 1)
+            throw new ArgumentException("EffectRenderScale must be finite and in (0, 1].");
+        if (request.MatchEffectResolution && request.EffectRenderScale != 1.0)
+            throw new ArgumentException("Adaptive effect resolution cannot be combined with EffectRenderScale other than 1.");
+    }
+
+    internal static void ConfirmRenderOptions(RenderRequest request, RenderResult nativeResult)
     {
         if ((nativeResult.EffectRenderScale ?? 1.0) != request.EffectRenderScale)
             throw new InvalidDataException("Renderer did not confirm the requested effect resolution scale.");
