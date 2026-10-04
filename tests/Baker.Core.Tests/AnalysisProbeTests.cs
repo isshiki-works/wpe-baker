@@ -7,6 +7,49 @@ using Xunit;
 [Trait("Layer", "L1")]
 public class AnalysisProbeTests
 {
+    [Fact]
+    public async Task NestedResidualReplansUseIndependentRefreshDirectories() => await TestTemp.Run(async root =>
+    {
+        string output = Path.Combine(root, "bake"), sentinel = output + ".analysis-refresh";
+        Directory.CreateDirectory(sentinel);
+        File.WriteAllText(Path.Combine(sentinel, "user.txt"), "preserve");
+        var plan = new JsonObject {
+            ["settings"] = PlanSettings.ToJson(new HybridAnalyzeRequest(2, "source", "assets", "analysis", RetainLiveRootIds: [3])),
+            ["loop"] = new JsonObject { ["unresolved"] = new JsonArray(
+                new JsonObject { ["owner_layer_id"] = 7, ["mechanism"] = "particle_system" },
+                new JsonObject { ["owner_layer_id"] = 8, ["mechanism"] = "particle_system" }) }
+        };
+        int bakes = 0;
+        var refreshes = new List<string>();
+        var service = new HybridBakeService(new("not-started", "not-started", "not-started", []),
+            bakeOnce: _ => {
+                Directory.CreateDirectory(output);
+                if (++bakes == 3) return Task.FromResult(new JsonObject { ["status"] = "candidate_generated" });
+                int owner = bakes == 1 ? 7 : 8;
+                return Task.FromResult(new JsonObject { ["status"] = "candidate_rejected_seam", ["loop_validation"] = "residual_above_limits",
+                    ["groups"] = new JsonArray(new JsonObject { ["id"] = "g" + owner, ["source_layers"] = new JsonArray(owner), ["status"] = "rejected_seam_residual" }),
+                    ["residual_masking"] = new JsonObject { ["residual_layers"] = new JsonArray(new JsonObject { ["owner_layer_id"] = owner, ["mechanism"] = "particle_system" }) } });
+            },
+            analyze: settings => {
+                Assert.False(Directory.Exists(settings.OutputDirectory));
+                Directory.CreateDirectory(settings.OutputDirectory);
+                refreshes.Add(settings.OutputDirectory);
+                JsonObject next = plan.DeepClone().AsObject();
+                next["settings"] = PlanSettings.ToJson(settings);
+                next["blockers"] = new JsonArray();
+                return Task.FromResult(next);
+            });
+        JsonObject result = await service.BakeAsync(new(2, plan, output));
+        Assert.Equal("candidate_generated", result["status"]!.GetValue<string>());
+        Assert.Equal(3, bakes);
+        Assert.Equal(2, refreshes.Distinct().Count());
+        var owned = new WorkLayout(output, refreshes[0]);
+        owned.AnalysisRefreshCreated();
+        owned.RemoveIntermediates(keepCompositionProbe: false);
+        Assert.False(Directory.Exists(refreshes[0]));
+        Assert.Equal("preserve", File.ReadAllText(Path.Combine(sentinel, "user.txt")));
+    });
+
     private static JsonObject Closure(bool closed) => new() { ["status"] = closed ? "closed" : LoopClosureCheck.NotClosedStatus };
 
     private static int[] Ids(int[]? ids) => [.. (ids ?? []).Order()];

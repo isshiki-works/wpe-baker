@@ -7,7 +7,7 @@ namespace Baker.Core;
 /// 清理只删登记表里的名字，不按"除了什么都删"推断，成品工程、bake.json、编码成品、接缝预览、硬解探测日志与
 /// 合成比对结果都不在表里。
 /// </summary>
-internal sealed class WorkLayout(string outputDirectory)
+internal sealed class WorkLayout(string outputDirectory, string? analysisRefreshDirectory = null)
 {
     private const string CaptureSourceName = "capture-source";
     private const string ReferenceName = "reference";
@@ -33,7 +33,7 @@ internal sealed class WorkLayout(string outputDirectory)
     internal string Output { get; } = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputDirectory));
     internal string Report => Path.Combine(Output, "bake.json");
     internal string CaptureSource => Path.Combine(Output, CaptureSourceName);
-    internal string AnalysisRefresh => Output + ".analysis-refresh";
+    internal string AnalysisRefresh => analysisRefreshDirectory ?? Output + ".analysis-refresh";
     private bool analysisRefreshOwned;
 
     internal void RequireNewAnalysisRefresh()
@@ -80,7 +80,8 @@ internal sealed class WorkLayout(string outputDirectory)
             }
         }
         foreach (var (suffix, probe) in Siblings)
-            if (!(probe && keepCompositionProbe) && (suffix != ".analysis-refresh" || analysisRefreshOwned)) Remove(Output + suffix);
+            if (suffix != ".analysis-refresh" && !(probe && keepCompositionProbe)) Remove(Output + suffix);
+        if (analysisRefreshOwned) Remove(AnalysisRefresh);
         if (!Directory.Exists(Output)) return errors;
         foreach (var (name, probe) in RootDirectories)
             if (!(probe && keepCompositionProbe)) Remove(Path.Combine(Output, name));
