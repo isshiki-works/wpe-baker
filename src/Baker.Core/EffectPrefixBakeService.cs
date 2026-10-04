@@ -43,8 +43,27 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
         string? assets, JsonObject referenceScene, JsonObject snapshot, IEnumerable<JsonObject> encodedLoops,
         CancellationToken cancellationToken)
     {
-        PlanTransforms.FreezeTemporalProperties(referenceScene, snapshot);
-        foreach (JsonObject loop in encodedLoops) HybridLoopService.ApplyPatches(referenceScene, loop);
+        foreach (JsonObject loop in encodedLoops)
+        {
+            // Resolve only the numeric input being retimed. Freezing live visibility
+            // bindings can change the renderer's disabled-composite pass topology.
+            foreach (JsonObject patch in (loop["candidates"]?[0]?["patches"] as JsonArray ?? []).OfType<JsonObject>())
+            {
+                // Prefixes exclude scripted/animated effects and retained puppet clips.
+                // Video-rate patches need no scene numeric input (ApplyPatches skips them).
+                if (patch["kind"]?.GetValue<string>() != "shader_speed") continue;
+                JsonObject owner = referenceScene["objects"]!.AsArray().OfType<JsonObject>()
+                    .Single(node => SceneGraph.Id(node) == patch["owner_layer_id"]!.GetValue<int>());
+                JsonObject? values = owner["effects"]?[patch["effect_index"]!.GetValue<int>()]?
+                    ["passes"]?[patch["pass_index"]!.GetValue<int>()]?["constantshadervalues"] as JsonObject;
+                string key = patch["constant_key"]!.GetValue<string>();
+                if (values?[key] is not JsonObject binding || !binding.ContainsKey("user") || SceneGraph.Dynamic(binding)) continue;
+                JsonNode? value = SceneGraph.Resolve(binding, snapshot);
+                if (value is JsonValue flag && flag.TryGetValue(out bool on)) value = JsonValue.Create(on ? 1.0 : 0.0);
+                values[key] = value;
+            }
+            HybridLoopService.ApplyPatches(referenceScene, loop);
+        }
         return ShaderTextPatch.WriteTimeScaleAsync(referenceProject, source, assets, referenceScene, cancellationToken);
     }
 

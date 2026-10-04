@@ -1113,6 +1113,12 @@ public partial class MainWindow : Window
                 "video" => L("视频图层", "video layer"), "live" => L("实时图层", "live layer"),
                 "excluded" => L("已排除", "excluded"), "omitted" => L("来源中已禁用", "disabled in the source"),
                 _ => L("不渲染", "not rendered") };
+            if (hybridPlan?["route"]?.GetValue<string>() == "effect_prefix" &&
+                layer["allocation"]?.GetValue<string>() is not ("excluded" or "omitted"))
+                allocation = (hybridPlan["effect_prefix_caches"] as JsonArray ?? []).OfType<JsonObject>()
+                    .Any(cache => cache["owner_layer_id"]?.GetValue<int>() == id)
+                    ? L("特效前缀缓存；图层与后续特效实时", "cached effect prefix; owner and later effects stay live")
+                    : L("作者图层保持实时", "authored layer stays live");
             string quadrant = layer["quadrant"]?.GetValue<string>() switch {
                 "top_left" => L("左上", "top left"), "top_right" => L("右上", "top right"),
                 "bottom_left" => L("左下", "bottom left"), "bottom_right" => L("右下", "bottom right"),
