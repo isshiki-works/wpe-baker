@@ -1,4 +1,4 @@
-# WPE Baker
+# WPE Baker 2.0
 
 [English](README.md) ｜ 简体中文
 
@@ -6,11 +6,13 @@
 
 WPE Baker 为场景壁纸里的动画建立数学模型（着色器时间、动画轨道、粒子循环和视频时间基准），并在可见变化预算内微调周期，让周期动画首尾闭合。一次离线生成会把确定性部分预渲染为视频或静态缓存；成品可以包含多个视频和纹理。重复播放时，预计算动画通过视频解码播放，保留的鼠标交互、音频响应、时钟和昼夜效果等图层则按所选模式继续实时运行。运行时不调用任何模型，也不需要 Python。
 
-官网：**https://isshiki-works.github.io/wpe-baker/zh.html** · 下载：**[Releases](https://github.com/isshiki-works/wpe-baker/releases/latest)** · 技术细节与项目记录：[技术记录](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.zh-CN.md)
+官网：**https://isshiki-works.github.io/wpe-baker/zh.html** · 下载：**[2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1)** · 技术细节与项目记录：[技术记录](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.zh-CN.md)
+
+2.0 用着色器时间分析取代了旧版的周期方程库。程序对实际编译得到的 SPIR-V 进行抽象解释，沿数据流追踪时间变量，推导周期、持续漂移，以及经过一段时间后停止变化的动画。不必为每一种新效果单独编写方程，陌生的自定义着色器也可以进入分析。
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/isshiki-works/wpe-baker/releases/latest) 下载 Windows 压缩包，**整个**解压到有写入权限的目录（例如 `D:\WpeBaker`）。不要放进 `C:\Program Files`，也不要在压缩软件窗口里直接运行。
+1. 从 [2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1) 下载 `WpeBaker-2.0.0-rc.1-win-x64.zip`，**整个**解压到有写入权限的目录（例如 `D:\WpeBaker`）。不要放进 `C:\Program Files`，也不要在压缩软件窗口里直接运行。
 2. 双击 `WpeBaker\WpeBaker.exe`。第一次运行如果弹出"Windows 已保护你的电脑"，点"更多信息"→"仍要运行"：程序没有购买代码签名证书，提示只说明这一点。
 3. 把 `steamapps\workshop\content\431960\` 下你想烘的那张壁纸的文件夹拖进窗口，点"分析"。
 4. 看结论，点"开始生成"。成品会直接出现在 Wallpaper Engine 的壁纸列表里。
@@ -50,7 +52,7 @@ wpe-baker.exe bake plan.json --out <输出目录>
 
 第三方组件与许可文本见 `THIRD-PARTY-NOTICES.md` 和源码包里的 `licenses/`。烘焙成品仅供在自己的电脑上使用，壁纸作品版权归创意工坊作者所有，请勿二次上传。本项目与 Wallpaper Engine 官方无关联。
 
-从源码构建：Releases 页的源码包包含完整源码、第三方声明与构建记录，步骤见其中的 `REBUILD.md`。
+从源码构建：Releases 页的 `WpeBaker-2.0.0-rc.1-source.zip` 包含对应源码、第三方声明与构建记录，步骤见其中的 `REBUILD.md`。旧版本保存的方案请用 2.0 重新分析。
 
 ## 致谢
 
