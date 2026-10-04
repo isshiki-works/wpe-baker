@@ -1242,14 +1242,6 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         frame.message = "render graph or final pass is not ready";
         return frame;
     }
-    if (!raster) {
-        frame.width = m_readback_width;
-        frame.height = m_readback_height;
-        frame.row_pitch = m_readback_width * 4;
-        frame.status = CpuFrameStatus::Completed;
-        ++m_cpu_frame_index;
-        return frame;
-    }
     auto fail = [&](VkResult result, std::string operation) -> CpuFrameResult {
         m_cpu_failed = true;
         frame.status = result == VK_TIMEOUT ? CpuFrameStatus::Timeout :
@@ -1262,9 +1254,6 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         frame.gpu_draw_ms.reset();
         return std::move(frame);
     };
-
-    if (const auto error = finishPendingFrame(); !error.empty())
-        return fail(VK_ERROR_INITIALIZATION_FAILED, error);
 
     const auto extent = m_device->out_extent();
     if (extent.width != m_cpu_image.extent.width || extent.height != m_cpu_image.extent.height) {
@@ -1297,6 +1286,15 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
                             "; selected source differs from the configured CPU output");
         }
     }
+    frame.video_decoders = m_rendering_resources.resources.ObserveVideoDecoders();
+    if (!raster) {
+        frame.status = CpuFrameStatus::Completed;
+        ++m_cpu_frame_index;
+        return frame;
+    }
+    frame.rasterized = true;
+    if (const auto error = finishPendingFrame(); !error.empty())
+        return fail(VK_ERROR_INITIALIZATION_FAILED, error);
     // Take the recycled buffer: when it already holds a full frame the resize
     // below is a no-op, so no allocation and no zero fill precede the copy.
     if (read_pixels) {
@@ -1620,7 +1618,6 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         }
         m_cpu_staging.handle.UnMapMemory();
     }
-    frame.video_decoders = rr.resources.ObserveVideoDecoders();
     frame.status = m_pending_cpu_submission.Valid() ? CpuFrameStatus::Submitted : CpuFrameStatus::Completed;
     ++m_cpu_frame_index;
     return frame;

@@ -257,6 +257,56 @@ TEST(ScriptTimer, SetIntervalRepeats) {
     EXPECT_EQ(std::get<ScalarValue>(fs->last_value()).v, 5.0);
 }
 
+TEST(ScriptTimer, FiniteZeroDelayReschedulingWaitsForNextFrame) {
+    JsRuntime rt;
+    auto* fs = MakeProbe(rt, "test/finite_zero_delay", R"JS(
+        let n = 0;
+        function again() {
+            ++n;
+            if (n < 3) setTimeout(again, 0);
+            // Exercise queue reallocation while the current callback runs.
+            for (let i = 0; i < 128; ++i) setTimeout(() => {}, 0);
+        }
+        setTimeout(again, 0);
+        export function update() { return n; }
+    )JS");
+    ASSERT_NE(fs, nullptr);
+    for (int frame = 1; frame <= 4; ++frame) {
+        Tick(rt, 0.0);
+        EXPECT_EQ(LastScalar(fs), static_cast<double>(std::min(frame, 3)));
+    }
+}
+
+TEST(ScriptTimer, InfiniteZeroDelayReschedulingAllowsPeerUpdatesAndCancellation) {
+    owe::Services offline;
+    JsRuntime rt(&offline);
+    auto* fs = MakeProbe(rt, "test/infinite_zero_delay", R"JS(
+        let n = 0, cancel;
+        function again() {
+            ++n;
+            cancel = setTimeout(again, 0);
+        }
+        cancel = setTimeout(again, 0);
+        export function update() {
+            if (n === 3) clearTimeout(cancel);
+            return n;
+        }
+    )JS");
+    auto* peer = MakeProbe(rt, "test/zero_delay_peer", R"JS(
+        let n = 0;
+        export function update() { return ++n; }
+    )JS");
+    ASSERT_NE(fs, nullptr);
+    ASSERT_NE(peer, nullptr);
+    for (int frame = 1; frame <= 5; ++frame) {
+        Tick(rt, 0.0);
+        EXPECT_EQ(LastScalar(fs), static_cast<double>(std::min(frame, 3)));
+        EXPECT_EQ(LastScalar(peer), static_cast<double>(frame));
+    }
+    EXPECT_FALSE(offline.failed);
+    EXPECT_TRUE(offline.source_script_errors.empty());
+}
+
 TEST(ScriptTimer, ClearTimeoutCancels) {
     JsRuntime   rt;
     FrameInputs fi {};

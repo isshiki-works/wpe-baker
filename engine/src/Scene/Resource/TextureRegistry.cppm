@@ -310,12 +310,13 @@ public:
             (void)active.insert(handles[index]);
         }
         m_resources.retain([&](const resource::TextureHandle& handle, TexturePhysical&) {
-            return active.contains(handle);
+            return active.contains(handle) || IsFrameHistory(handle);
         });
     }
 
     void EvictUnused(bool transient_only = false) {
         m_resources.retain([&](const resource::TextureHandle& handle, TexturePhysical& physical) {
+            if (IsFrameHistory(handle)) return true;
             if (physical.allocation.strong_count() > usize(1)) return true;
             if (! transient_only) return false;
             auto texture = m_textures.get(handle);
@@ -327,7 +328,8 @@ public:
     void ClearGraphResources() {
         m_resources.retain([&](const resource::TextureHandle& handle, TexturePhysical&) {
             auto texture = m_textures.get(handle);
-            return texture.is_some() && (**texture).request.kind == TextureRequestKind::Imported;
+            return IsFrameHistory(handle) ||
+                   (texture.is_some() && (**texture).request.kind == TextureRequestKind::Imported);
         });
     }
 
@@ -346,6 +348,15 @@ public:
     auto Size() const noexcept -> usize { return m_textures.len(); }
 
 private:
+    // A visibility rebuild may omit feedback targets; keep their accumulated content until reset.
+    bool IsFrameHistory(resource::TextureHandle handle) const {
+        auto texture = m_textures.get(handle);
+        if (texture.is_none()) return false;
+        const auto& request = (**texture).request;
+        return request.lifetime == TextureLifetimeClass::Retained &&
+               (request.content & TextureContentFlag(TextureContent::PreserveAcrossFrames)) != u32();
+    }
+
     template<typename Value>
     using HandleMap = rstd::collections::HashMap<resource::TextureHandle, Value>;
 

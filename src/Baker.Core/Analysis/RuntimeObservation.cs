@@ -38,6 +38,7 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
                 if (AnalysisCache.Read(request.AnalysisCacheDirectory, cacheKey) is JsonObject cached)
                 {
                     key.VerifyObservation(cached, derived ? null : sourceHash);
+                    ValidateTrace(cached);
                     return cached;
                 }
                 string snapshotRoot = Path.Combine(Path.GetFullPath(output), ".runtime-source-" + Guid.NewGuid().ToString("N"));
@@ -78,6 +79,7 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
                     JsonObject observed = await observer.ObserveAsync(new(key, renderSource, probeOutput, request.DeviceUuid,
                         expectedSourceHash), cancellationToken);
                     key.VerifyObservation(observed, expectedSourceHash);
+                    ValidateTrace(observed);
                     observed["source"] = source.SourcePath;
                     AnalysisCache.Write(request.AnalysisCacheDirectory, cacheKey, observed);
                     return observed;
@@ -106,9 +108,7 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
             // A precomputed trace is only an explicit developer input, never an automatic cache hit.
         }
         else trace = await ProbeAsync("runtime-probe");
-        if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray dependencies ||
-            trace["runtime_layers"] is not JsonArray runtimeLayers)
-            throw new InvalidDataException("A complete runtime dependency observation is required.");
+        var (dependencies, runtimeLayers) = ValidateTrace(trace);
         var audioEffectChoice = PlanTransforms.DescribeAudioEffectChoice(scene, source, request.Assets, properties, trace, request.AudioEffects,
             interactionOff: request.Interaction == "off");
         if (audioEffectChoice["status"]?.GetValue<string>() == "applied")
@@ -120,10 +120,7 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
             progress?.Report(new("analyzing", null, new Message("progress.observing_without_audio_effects")));
             // 整树拷贝只给渲染器用：观测命中缓存时不拷。
             trace = await ProbeAsync("audio-choice-runtime-probe", audioChoice: true);
-            if (trace["status"]?.GetValue<string>() != "complete" || trace["runtime_dependencies"] is not JsonArray chosenDependencies ||
-                trace["runtime_layers"] is not JsonArray chosenLayers)
-                throw new InvalidDataException("Audio-effect omission requires a complete new runtime observation.");
-            dependencies = chosenDependencies; runtimeLayers = chosenLayers;
+            (dependencies, runtimeLayers) = ValidateTrace(trace);
             audioEffectChoice["runtime_evidence"] = Path.Combine(output, "runtime.json");
         }
         // Public traces belong to the logical input, including cache hits from another identical copy.
@@ -131,6 +128,31 @@ internal sealed record RuntimeObservation(JsonObject Trace, JsonArray Dependenci
         LinkComposites(graph, dependencies, runtimeLayers);
         await VideoSceneBuilder.WriteJsonAsync(Path.Combine(output, "runtime.json"), trace, cancellationToken);
         return new(trace, dependencies, runtimeLayers, audioEffectChoice);
+    }
+
+    // Legacy renderers omitted this field. Below the cap, with no cap diagnostic, their trace is still usable.
+    // At the cap the old protocol cannot distinguish duplicates from dropped edges; request fresh evidence.
+    internal static bool DependenciesComplete(JsonObject trace) =>
+        trace["status"] is JsonValue status && status.TryGetValue<string>(out var state) && state == "complete" &&
+        trace["runtime_dependencies"] is JsonArray dependencies &&
+        (trace.ContainsKey("runtime_dependencies_complete")
+            ? trace["runtime_dependencies_complete"] is JsonValue complete && complete.TryGetValue<bool>(out bool value) && value
+            : dependencies.Count < 10000 && !(trace["diagnostics"] as JsonArray ?? []).OfType<JsonValue>().Any(diagnostic =>
+                diagnostic.TryGetValue<string>(out string? message) && message == "Runtime dependency trace reached its 10000-entry limit"));
+
+    internal static JsonArray RequireCompleteDependencies(JsonObject trace)
+    {
+        if (!DependenciesComplete(trace))
+            throw new InvalidDataException("Runtime dependency trace is incomplete or cannot be verified; collect a fresh trace.");
+        return trace["runtime_dependencies"]!.AsArray();
+    }
+
+    private static (JsonArray Dependencies, JsonArray Layers) ValidateTrace(JsonObject trace)
+    {
+        JsonArray dependencies = RequireCompleteDependencies(trace);
+        if (trace["runtime_layers"] is not JsonArray layers)
+            throw new InvalidDataException("Runtime layer observation is missing; collect a fresh trace.");
+        return (dependencies, layers);
     }
 
     /// <summary>

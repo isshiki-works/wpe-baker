@@ -898,7 +898,8 @@ JsonObject LateEvent(int owner, int target, string operation, string property, b
     ["owner"] = owner, ["target"] = target, ["operation"] = operation, ["property"] = property,
     ["initialization"] = initialization, ["frame"] = 240 };
 JsonArray LateDependencies(params JsonObject[] dependencies) => (JsonArray)lateDependencyMethod.Invoke(null, new object[] {
-    new JsonObject { ["native_result"] = new JsonObject { ["runtime_dependencies"] = new JsonArray(dependencies.Select(d => (JsonNode)d).ToArray()) } },
+    new JsonObject { ["native_result"] = new JsonObject { ["status"] = "complete", ["runtime_dependencies_complete"] = true,
+        ["runtime_dependencies"] = new JsonArray(dependencies.Select(d => (JsonNode)d).ToArray()) } },
     new HashSet<int> { 1702, 1703 }, lateSourceObjects })!;
 var lateAncestorWrite = LateEvent(1800, 1700, "write", "origin");
 var lateAncestorDependencies = LateDependencies(lateAncestorWrite, LateEvent(1800, 1701, "write", "alpha"));

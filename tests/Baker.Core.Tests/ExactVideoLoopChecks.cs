@@ -20,6 +20,20 @@ internal static class ExactVideoLoopChecks
             new JsonObject { ["objects"] = new JsonArray { owner?.DeepClone() ?? new JsonObject { ["id"] = 1 } } }, source, null,
             new JsonObject { ["runtime_animation_periods"] = new JsonArray { trace.DeepClone() } }, [1], 30000, 1001).ToJson();
 
+        JsonObject firstVideo = Trace(), secondVideo = Trace();
+        firstVideo["duration_numerator"] = 601; firstVideo["duration_denominator"] = 60;
+        secondVideo["source_owner_layer_id"] = 2; secondVideo["track_name"] = "second";
+        secondVideo["duration_numerator"] = 641; secondVideo["duration_denominator"] = 60;
+        JsonObject budgeted = LoopAnalysis.Analyze(new JsonObject { ["objects"] = new JsonArray(
+                new JsonObject { ["id"] = 1 }, new JsonObject { ["id"] = 2 }) }, source, null,
+            new JsonObject { ["runtime_animation_periods"] = new JsonArray(firstVideo, secondVideo) }, [1, 2], 60, 1,
+            maximumRetimePercent: 5, preference: CommonLoopPreference.Performance, loopLengthMaximumSeconds: 600,
+            videoGroups: new JsonArray(new JsonObject { ["id"] = "video-group", ["layer_ids"] = new JsonArray(1, 2) })).ToJson();
+        check(budgeted["candidates"]!.AsArray().OfType<JsonObject>().Any(c => c["patches"]!.AsArray().OfType<JsonObject>()
+                .Any(p => p["kind"]?.GetValue<string>() == "video_rate" &&
+                    Math.Abs(p["delta_percent"]!.GetValue<double>()) is > 2 and <= 5)),
+            "the efficiency video budget preserves a common-loop candidate above the old native two-percent policy");
+
         JsonObject exact = Analyze(Trace());
         JsonObject candidate = exact["candidates"]!.AsArray().First()!.AsObject();
         check(candidate["frames"]!.GetValue<ulong>() == 100 && exact["fixed_frame_step"]!.GetValue<ulong>() == 100 &&

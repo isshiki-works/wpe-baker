@@ -18,6 +18,7 @@ target_link_libraries(owe-test-support PRIVATE spirv-reflect)
 
 add_executable(core-tests EXCLUDE_FROM_ALL)
 target_sources(core-tests PRIVATE
+  tests/core/dependency_trace_tests.cpp
   tests/core/frame_writer_tests.cpp
   tests/core/json_tests.cpp
   tests/core/vfs_tests.cpp)

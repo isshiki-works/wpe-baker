@@ -15,8 +15,8 @@ internal sealed record ObservationRequest(ObservationKey Key, string RenderSourc
 internal sealed record ObservationKey(string SourceSha256, JsonObject Scene, JsonObject Properties, string Assets,
     uint Width, uint Height, uint FpsNumerator, uint FpsDenominator, bool GpuTiming, string? TimingDevice, string Renderer)
 {
-    // Earlier runtime caches discarded the raw capture's source identity; they cannot be reused.
-    internal string Hash() => AnalysisCache.Key("runtime-observation-source-snapshot-v2", this);
+    // Earlier caches did not validate dependency trace completeness before storing a successful observation.
+    internal string Hash() => AnalysisCache.Key("runtime-observation-source-snapshot-v3", this);
 
     internal void VerifyObservation(JsonObject trace, string? expectedSourceSha256 = null)
     {

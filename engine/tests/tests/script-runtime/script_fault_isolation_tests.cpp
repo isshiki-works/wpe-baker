@@ -260,3 +260,46 @@ TEST(ScriptFaultIsolation, CompileFaultPreservesInitialValueAndPeer) {
     EXPECT_EQ(offline.source_script_errors.front().owner_layer_id, 701);
     EXPECT_NE(offline.source_script_errors.front().message.find("SyntaxError"), std::string::npos);
 }
+
+TEST(ScriptFaultIsolation, ZeroDelayTimerFaultKeepsOwnerAndPeerTraceable) {
+    owe::Services offline;
+    JsRuntime runtime(&offline);
+    auto owner = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(),
+                                           Eigen::Vector3f::Ones(),
+                                           Eigen::Vector3f::Zero(),
+                                           "FAULTY_TIMER");
+    owner->SetGeneratorIdentity(Some(owe::WallpaperLayerId { .value = rstd::i32(703) }));
+    auto* faulty = runtime.MakeFieldScript(
+        R"JS(
+            export function init() {
+                setTimeout(() => { throw new Error('ZERO_DELAY_TIMER_TOKEN'); }, 0);
+            }
+            export function update() { return 7; }
+        )JS",
+        "test/zero_delay_timer_fault",
+        FieldKind::Scalar,
+        owe::NJson::object(),
+        owe::NJson(0),
+        ScriptBindingContext::ForLayer(owner.as_ptr(), "alpha"_str));
+    auto* peer = runtime.MakeFieldScript(
+        "let n = 0; export function update() { return ++n; }",
+        "test/zero_delay_timer_fault_peer",
+        FieldKind::Scalar,
+        owe::NJson::object(),
+        owe::NJson(0));
+    ASSERT_NE(faulty, nullptr);
+    ASSERT_NE(peer, nullptr);
+    runtime.SetSceneRoot(owner.as_ptr());
+    for (int frame = 0; frame < 3; ++frame) runtime.TickAll();
+    EXPECT_DOUBLE_EQ(std::get<ScalarValue>(faulty->last_value()).v, 7.0);
+    EXPECT_DOUBLE_EQ(std::get<ScalarValue>(peer->last_value()).v, 3.0);
+    EXPECT_FALSE(offline.failed);
+    ASSERT_EQ(offline.source_script_errors.size(), 1u);
+    const auto& error = offline.source_script_errors.front();
+    EXPECT_EQ(error.phase, "timer");
+    EXPECT_EQ(error.owner_layer_id, 703);
+    EXPECT_EQ(error.property, "alpha");
+    EXPECT_EQ(error.script_sha, "test/zero_delay_timer_fault");
+    EXPECT_NE(error.message.find("ZERO_DELAY_TIMER_TOKEN"), std::string::npos);
+    EXPECT_NE(error.stack.find("test/zero_delay_timer_fault"), std::string::npos);
+}

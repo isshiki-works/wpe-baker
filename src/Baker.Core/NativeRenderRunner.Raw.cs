@@ -16,6 +16,7 @@ public sealed partial class NativeRenderRunner
     internal async Task<JsonObject> RenderRawAsync(RenderRequest request, CandidateValidation.Lockstep.Side? frameSink, CancellationToken cancellationToken)
     {
         if (request.SchemaVersion != 1) throw new InvalidDataException("Unsupported render request version.");
+        ValidateRenderOptions(request);
         if (request.Width == 0 || request.Height == 0 || request.Width > ushort.MaxValue || request.Height > ushort.MaxValue ||
             request.FpsNumerator == 0 || request.FpsDenominator == 0 || request.Frames == 0)
             throw new ArgumentException("Invalid raw render extent, frame count or rational FPS.");
@@ -48,6 +49,14 @@ public sealed partial class NativeRenderRunner
         await WriteJsonAsync(manifestPath, manifest, cancellationToken);
         try
         {
+            if (request.EffectRenderScale != 1.0 &&
+                !(await client.CapabilitiesAsync(Path.Combine(output, "renderer-version.stderr.log"), cancellationToken))
+                    .Has("effect-render-scale-v1"))
+                throw new InvalidDataException("Renderer does not support internal effect scaling.");
+            if (request.MatchEffectResolution &&
+                !(await client.CapabilitiesAsync(Path.Combine(output, "renderer-version.stderr.log"), cancellationToken))
+                    .Has("adaptive-effect-resolution-v1"))
+                throw new InvalidDataException("Renderer does not support adaptive effect resolution.");
             if (request.HdrRangeProbe && (request.HdrScale is not > 0 ||
                 request.CaptureTarget is not { EffectTerminal: true, ExactExtent: true }))
                 throw new ArgumentException("An HDR range probe requires an exact effect-terminal capture.");
@@ -96,6 +105,7 @@ public sealed partial class NativeRenderRunner
             if (!result.Confirms(request.Frames))
                 throw new InvalidDataException("Native raw render did not confirm every requested frame.");
             ConfirmVideoRateOverrides(request, result);
+            ConfirmRenderOptions(request, result);
             if (request.CaptureTarget is not null && string.IsNullOrWhiteSpace(result.CaptureSource?.RenderTarget))
                 throw new InvalidDataException("Renderer did not confirm its actual capture target.");
             if (request.OrthographicCaptureViewport is not null && !JsonNode.DeepEquals(result.OrthographicCaptureViewport, JsonSerializer.SerializeToNode(request.OrthographicCaptureViewport, JsonOptions)))

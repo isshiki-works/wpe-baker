@@ -1,6 +1,7 @@
 module;
 #include <rstd/macro.hpp>
 #include <typeindex>
+#include <stdexcept>
 
 module wescene.pkg.parse;
 import eigen;
@@ -22,6 +23,15 @@ namespace
 
 constexpr float  kTau   = rstd::f32::consts::TAU.to_primitive();
 constexpr double kTau64 = rstd::f64::consts::TAU.to_primitive();
+
+void ReadControlpoint(const NJson& json, std::string_view field, i32& value) {
+    // Validate before narrowing: large integers can otherwise wrap into an index.
+    double index = static_cast<double>(value.to_primitive());
+    owe::GetJsonValue(json, field, index, false);
+    if (! (index >= 0.0 && index < 8.0))
+        throw std::out_of_range("particle " + std::string(field) + " must be between 0 and 7");
+    value = rstd::as_cast<i32>(f64(index));
+}
 
 inline Vector3d GenRandomVec3(Services* services, const std::array<float, 3>& min,
                               const std::array<float, 3>& max) {
@@ -85,7 +95,7 @@ struct MapSequenceAroundControlPoint {
 
     static auto ReadFromJson(const NJson& json) -> MapSequenceAroundControlPoint {
         MapSequenceAroundControlPoint value;
-        owe::GetJsonValue(json, "controlpoint", value.controlpoint, false);
+        ReadControlpoint(json, "controlpoint", value.controlpoint);
         owe::GetJsonValue(json, "count", value.count, false);
         owe::GetJsonValue(json, "bounds", value.bounds, false);
         owe::GetJsonValue(json, "axis", value.axis, false);
@@ -103,7 +113,7 @@ struct MapSequenceAroundControlPointProgram {
                     const particle::ParticleFrameContext* frame_context) {
         auto frame         = ParticleFrameFrom(frame_context);
         auto controlpoints = frame->subsystem->Controlpoints();
-        auto controlpoint  = rstd::as_cast<usize>(config.controlpoint % i32(8));
+        auto controlpoint  = rstd::as_cast<usize>(config.controlpoint);
         auto center        = controlpoints[controlpoint].offset;
 
         Eigen::Vector3d axis { Eigen::Vector3f { config.axis.data() }.cast<double>() };
@@ -145,8 +155,8 @@ struct MapSequenceBetweenControlPoints {
         -> MapSequenceBetweenControlPoints {
         MapSequenceBetweenControlPoints value;
         value.count = rstd::cmp::max(implicit_count, u32(2));
-        owe::GetJsonValue(json, "controlpointstart", value.controlpoint_start, false);
-        owe::GetJsonValue(json, "controlpointend", value.controlpoint_end, false);
+        ReadControlpoint(json, "controlpointstart", value.controlpoint_start);
+        ReadControlpoint(json, "controlpointend", value.controlpoint_end);
         if (Find(json, "count") != nullptr) {
             owe::GetJsonValue(json, "count", value.count, false);
             value.count = rstd::cmp::max(value.count, u32(2));
@@ -163,8 +173,8 @@ struct MapSequenceBetweenControlPointsProgram {
                     const particle::ParticleFrameContext* frame_context) {
         auto frame         = ParticleFrameFrom(frame_context);
         auto controlpoints = frame->subsystem->Controlpoints();
-        auto start_index   = rstd::as_cast<usize>(config.controlpoint_start % i32(8));
-        auto end_index     = rstd::as_cast<usize>(config.controlpoint_end % i32(8));
+        auto start_index   = rstd::as_cast<usize>(config.controlpoint_start);
+        auto end_index     = rstd::as_cast<usize>(config.controlpoint_end);
         auto start         = controlpoints[start_index].offset;
         auto end           = controlpoints[end_index].offset;
         auto path          = end - start;
@@ -684,9 +694,7 @@ struct Vortex {
 
     static auto ReadFromJson(const NJson& j) {
         Vortex v;
-        owe::GetJsonValue(j, "controlpoint", v.controlpoint, false);
-        if (v.controlpoint >= i32(8)) rstd_error("wrong contropoint index {}", v.controlpoint);
-        v.controlpoint %= i32(8);
+        ReadControlpoint(j, "controlpoint", v.controlpoint);
 
         owe::GetJsonValue(j, "distanceinner", v.distanceinner, false);
         owe::GetJsonValue(j, "distanceouter", v.distanceouter, false);
@@ -746,9 +754,7 @@ struct ControlPointForce {
 
     static auto ReadFromJson(const NJson& j) {
         ControlPointForce v;
-        owe::GetJsonValue(j, "controlpoint", v.controlpoint, false);
-        if (v.controlpoint >= i32(8)) rstd_error("wrong contropoint index {}", v.controlpoint);
-        v.controlpoint %= i32(8);
+        ReadControlpoint(j, "controlpoint", v.controlpoint);
 
         owe::GetJsonValue(j, "scale", v.scale, false);
         owe::GetJsonValue(j, "threshold", v.threshold, false);
@@ -795,9 +801,8 @@ struct MaintainDistance {
 
     static auto ReadFromJson(const NJson& json) -> MaintainDistance {
         MaintainDistance value;
-        owe::GetJsonValue(json, "controlpoint", value.controlpoint, false);
+        ReadControlpoint(json, "controlpoint", value.controlpoint);
         owe::GetJsonValue(json, "variablestrength", value.variable_strength, false);
-        value.controlpoint %= i32(8);
         return value;
     }
 };

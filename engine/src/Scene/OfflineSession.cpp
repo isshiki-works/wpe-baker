@@ -1063,6 +1063,7 @@ const std::vector<OfflineSourceScriptError>& OfflineSession::sourceScriptErrors(
 std::vector<OfflineDependency> OfflineSession::dependencies() const {
     return m_impl->m_services.dependencies;
 }
+bool OfflineSession::dependenciesComplete() const { return m_impl->m_services.dependencies_complete; }
 
 uint64_t OfflineSession::ikChainSolves() const { return m_impl->m_services.runtime_ik_chain_solves; }
 

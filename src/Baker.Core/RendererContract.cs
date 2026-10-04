@@ -58,6 +58,8 @@ internal sealed record RenderJob
         LayerSelection = request.LayerSelection, Input = request.Input, InputTimeline = request.InputTimeline,
         UserProperties = request.UserProperties, OfflineVideoRateOverrides = request.OfflineVideoRateOverrides, DeviceUuid = request.DeviceUuid,
         GpuTiming = request.GpuTiming ? true : null, TraceScene = request.TraceScene ? true : null,
+        EffectRenderScale = request.EffectRenderScale != 1.0 ? request.EffectRenderScale : null,
+        MatchEffectResolution = request.MatchEffectResolution,
         HdrRangeProbe = request.HdrRangeProbe ? true : null,
         HdrSignedSqrt = request.HdrSignedSqrt ? true : null
     };

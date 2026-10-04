@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <typeindex>
+#include <stdexcept>
 
 import rstd;
 import rstd.cppstd;
@@ -654,6 +655,64 @@ TEST(ParticleSubSystem, AppliesVortexAroundWorldSpaceOwner) {
     auto positions = subsystem.System().Instance(usize()).Binding().Read().Positions();
     ASSERT_EQ(positions.len(), usize(1));
     EXPECT_GT(std::abs(positions[usize()].z()), 0.01f);
+}
+
+TEST(ParticleParser, RejectsControlpointBoundsBeforeCreatingPrograms) {
+    owe::Scene scene;
+    owe::ParticleSubSystem subsystem(scene,
+                                     nullptr,
+                                     std::make_shared<owe::SceneMesh>(),
+                                     u32(1),
+                                     f64(),
+                                     u32(1),
+                                     f64(1.0),
+                                     owe::ParticleSubSystem::SpawnType::STATIC,
+                                     owe::ParticleAnimationSpec {});
+    auto modifiers = owe::ParticleInstanceModifiers(
+        rstd::sync::Arc<owe::wpscene::ParticleInstanceoverride>::make(),
+        owe::wpscene::Particle::EFlags { 0 },
+        true);
+    struct Case {
+        const char* name;
+        const char* field;
+        bool initializer;
+    };
+    const Case cases[] = {
+        { "mapsequencearoundcontrolpoint", "controlpoint", true },
+        { "mapsequencebetweencontrolpoints", "controlpointstart", true },
+        { "mapsequencebetweencontrolpoints", "controlpointend", true },
+        { "vortex", "controlpoint", false },
+        { "vortex_v2", "controlpoint", false },
+        { "controlpointattract", "controlpoint", false },
+        { "maintaindistancetocontrolpoint", "controlpoint", false },
+    };
+    usize operator_index {};
+    for (const auto& test : cases) {
+        auto parse = [&](const char* value) {
+            std::string json = "{\"name\":\"" + std::string(test.name) + "\"";
+            if (value != nullptr)
+                json += ",\"" + std::string(test.field) + "\":" + value;
+            json += "}";
+            auto config = owe::ParseNJson(json).unwrap();
+            if (test.initializer)
+                (void)owe::ParticleParser::GenInitializer(config, u32(2), nullptr);
+            else
+                (void)owe::ParticleParser::GenOperator(
+                    config, modifiers.Clone(), subsystem, operator_index++);
+        };
+        SCOPED_TRACE(std::string(test.name) + "." + test.field);
+        for (const char* value : { "-0.5", "-1", "-8", "-2147483648", "8", "2147483647",
+                                  "4294967296", "18446744073709551615", "1e100", "-1e100" }) {
+            SCOPED_TRACE(value);
+            EXPECT_THROW(parse(value), std::out_of_range);
+        }
+        EXPECT_NO_THROW(parse(nullptr));
+        EXPECT_NO_THROW(parse("0"));
+        EXPECT_NO_THROW(parse("7"));
+        // Preserve the existing GetJsonValue conversion and value wrapper.
+        EXPECT_NO_THROW(parse("7.5"));
+        EXPECT_NO_THROW(parse("{\"value\":7}"));
+    }
 }
 
 TEST(ParticleSubSystem, UsesEmitterPeriodLimitForImplicitControlpointSequenceCount) {

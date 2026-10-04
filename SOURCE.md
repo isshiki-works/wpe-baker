@@ -114,13 +114,14 @@ python scripts/apply-dependency-patches.py
 python scripts/build-native-cmake.py --target wpe-render
 ```
 
-The packaging scripts (`scripts\package-portable.py`, `scripts\package-source.py`,
-`scripts\verify-package.ps1`) still expect the 1.0.x source layout and **do not work at the
-moment**; they are being rebuilt together with the replacement of the build tooling.
+`scripts\package-portable.py` and `scripts\package-source.py` package the verified native
+build selected with `--native-build-dir`. Both archives carry the matching native build
+records; the source archive's `REBUILD.md` describes its inputs and rebuilding steps.
+Keep the source archive beside its corresponding portable archive.
 
-打包脚本（`scripts\package-portable.py`、`scripts\package-source.py`、
-`scripts\verify-package.ps1`）仍按 1.0.x 的源码包布局编写，**目前不可用**；它们正随构建生态的
-替换一起重做。
+`scripts\package-portable.py` 与 `scripts\package-source.py` 按 `--native-build-dir`
+指定的已核验原生构建打包。两包携带对应的原生构建记录，源码包中的 `REBUILD.md` 说明输入和
+重建步骤。源码包须与对应的便携包一起提供。
 
 ## How to rebuild FFmpeg / 如何重建 FFmpeg
 

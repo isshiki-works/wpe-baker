@@ -31,8 +31,9 @@ internal static class HybridExportSafety
     internal static JsonArray LateExternalDependencies(JsonObject master, IReadOnlySet<int> groupLayers,
         IReadOnlyDictionary<int, JsonObject> sourceObjects)
     {
-        if (master["native_result"]?["runtime_dependencies"] is not JsonArray dependencies)
+        if (master["native_result"] is not JsonObject native)
             throw new InvalidDataException("A full group capture did not return the requested runtime dependency trace.");
+        JsonArray dependencies = RuntimeObservation.RequireCompleteDependencies(native);
         var protectedLayers = ProtectedLayers(groupLayers, sourceObjects);
         var unsafeDependencies = new JsonArray();
         foreach (var dependency in dependencies.OfType<JsonObject>())
