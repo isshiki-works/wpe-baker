@@ -140,6 +140,7 @@ internal static class PlanWriter
             ["projection"] = projection,
             ["snapshot_properties"] = properties, ["has_parallax"] = parallax,
             ["video_groups"] = composer.Groups, ["composition"] = composer.Composition,
+            ["layer_allocation_scope"] = "whole_layer_plan; effect_prefix replaces only its selected effect prefixes, retaining authored owners and remaining effects",
             ["live_layer_ids"] = JsonSerializer.SerializeToNode(sourceOrder.Where(allocation.LiveIds.Contains)),
             ["omitted_snapshot_layer_ids"] = JsonSerializer.SerializeToNode(sourceOrder.Where(allocation.OmittedIds.Contains)),
             ["excluded_layer_ids"] = JsonSerializer.SerializeToNode(allocation.ExcludedRoots),

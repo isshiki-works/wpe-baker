@@ -35,6 +35,46 @@ public class EffectPrefixEligibilityTests
             Path.Combine(reference, "shaders/effects/waves.frag"), TestContext.Current.CancellationToken));
     });
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CompositionReferenceResolvesOnlyTheRetimedValue(bool checkbox) => await TestTemp.Run(async root =>
+    {
+        string authored = Path.Combine(root, "author"), reference = Path.Combine(root, "reference");
+        var (scene, _) = Background(authored);
+        JsonObject owner = scene["objects"]![0]!.AsObject();
+        JsonObject prefix = owner["effects"]![0]!.AsObject();
+        prefix["visible"] = JsonNode.Parse("""{"user":"animations","value":true}""");
+        prefix["passes"]![0]!["constantshadervalues"] = JsonNode.Parse("""
+            {"speed":{"user":"speed","value":1},"strength":{"user":"strength","value":0.5}}
+            """);
+        owner["effects"]![1]!["passes"]![0]!["constantshadervalues"] = JsonNode.Parse("""
+            {"speed":{"user":"speed","value":1}}
+            """);
+        scene["objects"]!.AsArray().Add(JsonNode.Parse("""
+            {"id":2,"image":"models/util/composelayer.json","scale":"1.05115 1.05115 1.05115",
+             "effects":[{"visible":{"user":"blur","value":false},
+              "passes":[{"constantshadervalues":{"opacity":{"user":"strength","value":0.5}}}]}]}
+            """));
+        JsonObject original = scene.DeepClone().AsObject();
+        using var source = new ProjectSource(authored);
+        await source.ExtractAsync(reference, TestContext.Current.CancellationToken);
+        double oldSpeed = checkbox ? 1.0 : 2.0;
+        var snapshot = new JsonObject { ["speed"] = checkbox ? JsonValue.Create(true) : JsonValue.Create(oldSpeed),
+            ["strength"] = 0.75, ["animations"] = true, ["blur"] = false };
+        var loop = new JsonObject { ["candidates"] = new JsonArray(new JsonObject {
+            ["patches"] = new JsonArray(new JsonObject {
+                ["kind"] = "shader_speed", ["owner_layer_id"] = 1, ["effect_index"] = 0,
+                ["pass_index"] = 0, ["constant_key"] = "speed", ["value_index"] = 0,
+                ["old_value"] = oldSpeed, ["new_value"] = oldSpeed * 1.1 }) }) };
+        await EffectPrefixBakeService.PatchCompositionReferenceAsync(reference, source, authored, scene,
+            snapshot, [loop], TestContext.Current.CancellationToken);
+        // The expected scene differs at precisely one patched field; all visibility,
+        // unrelated prefix constants, live suffix constants and compose bindings survive.
+        original["objects"]![0]!["effects"]![0]!["passes"]![0]!["constantshadervalues"]!["speed"] = oldSpeed * 1.1;
+        Assert.True(JsonNode.DeepEquals(original, scene));
+    });
+
     /// <summary>一张 genericimage2 背景：效果 0 是纯时间特效（周期 3 s），效果 1 读指针。</summary>
     private static (JsonObject Scene, JsonObject Runtime) Background(string dir)
     {

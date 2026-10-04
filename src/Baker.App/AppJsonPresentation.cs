@@ -522,8 +522,8 @@ internal static class AppJsonPresentation
         int groups = Admission.GroupCount(plan), statics = Admission.StaticGroupCount(plan), live = plan["live_layer_ids"]?.AsArray().Count ?? 0;
         int prefixCaches = plan["effect_prefix_caches"]?.AsArray().Count ?? 0;
         return plan["route"]?.GetValue<string>() == "effect_prefix"
-            ? english ? $"{prefixCaches} effect-prefix caches · {live} live objects"
-                : $"特效前缀缓存 {prefixCaches} 组 · 实时对象 {live} 个"
+            ? english ? $"{prefixCaches} effect-prefix caches · other authored layers and later effects stay live"
+                : $"特效前缀缓存 {prefixCaches} 组 · 其余作者图层与后续特效保持实时"
             : english ? $"{groups} video groups · {statics} static caches · {live} live objects"
                 : $"视频组 {groups} 个 · 静态缓存 {statics} 组 · 实时对象 {live} 个";
     }
@@ -599,10 +599,15 @@ internal static class AppJsonPresentation
         if (Number(candidate?["total_retime_cost_percent"]) is double retime)
             rows.Add((english ? "Total retime" : "总调速", retime.ToString("0.###", CultureInfo.InvariantCulture) + "%"));
         int groups = Admission.GroupCount(plan), statics = Admission.StaticGroupCount(plan);
-        rows.Add((english ? "Video layers" : "视频层数", groups.ToString(CultureInfo.InvariantCulture)));
+        bool prefixRoute = plan["route"]?.GetValue<string>() == "effect_prefix";
+        rows.Add((prefixRoute ? english ? "Effect-prefix caches" : "特效前缀缓存数" : english ? "Video layers" : "视频层数",
+            (prefixRoute ? plan["effect_prefix_caches"]?.AsArray().Count ?? 0 : groups).ToString(CultureInfo.InvariantCulture)));
         if (plan["route"]?.GetValue<string>() == "whole_layer")
             rows.Add((english ? "Static layers" : "静态层数", statics.ToString(CultureInfo.InvariantCulture)));
-        rows.Add((english ? "Live layers" : "实时图层数", (plan["live_layer_ids"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
+        if (prefixRoute)
+            rows.Add((english ? "Remaining rendering" : "剩余渲染", english ? "Authored layers and later effects stay live" : "作者图层与后续特效保持实时"));
+        else
+            rows.Add((english ? "Live layers" : "实时图层数", (plan["live_layer_ids"]?.AsArray().Count ?? 0).ToString(CultureInfo.InvariantCulture)));
         if (plan["route"]?.GetValue<string>() == "whole_layer" && plan["live_overlays_hoisted"] is JsonArray { Count: > 0 } overlays)
             rows.Add((english ? "Overlay layers" : "置顶层数", overlays.Count.ToString(CultureInfo.InvariantCulture)));
         double width = Number(plan["output_resolution"]?["width"]) ?? 0, height = Number(plan["output_resolution"]?["height"]) ?? 0;

@@ -53,6 +53,7 @@ internal static class BakeReportWriter
         report["groups"] = new JsonArray();
         report["source_start_frame"] = 0;
         report["seam_policy"] = "source_period_no_repair";
+        report["rendering_scope"] = "Only groups with status encoded replace their owner's selected effect prefix. Other authored layers and suffix effects remain live; plan.layers and plan.live_layer_ids describe the whole-layer allocation, not this output's realtime work.";
         AddNotVerified(report);
         return report;
     }
