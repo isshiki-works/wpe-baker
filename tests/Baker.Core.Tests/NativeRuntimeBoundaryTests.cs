@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Baker.Core;
+using Xunit;
 
 [Trait("Layer", "L3"), Collection("L3 本机工具")]
 public class NativeRuntimeBoundaryTests
@@ -20,14 +21,14 @@ public class NativeRuntimeBoundaryTests
                 var render = await runner.RenderAsync(new(source, source, Path.Combine(directory, "sparse-" + frames),
                     128, 64, 30, 1, frames, WarmupFrames: 2, TraceScene: true,
                     FrameSamplesOnly: true, FrameSampleStride: 8, FrameSampleWidth: 32,
-                    CaptureTarget: new(RuntimeRenderTarget: "_rt_FullFrameBuffer")), cancellationToken: timeout.Token);
+                    CaptureTarget: new(RuntimeRenderTarget: "_rt_default")), cancellationToken: timeout.Token);
                 JsonObject native = render["native_result"]!.AsObject();
                 Assert.Equal(frames + 2, native["simulated_frames"]!.GetValue<ulong>());
                 Assert.Equal(2ul, native["drawn_frames"]!.GetValue<ulong>());
                 Assert.Equal(frames, native["skipped_draw_frames"]!.GetValue<ulong>());
                 Assert.Equal(frames == 10, native["last_step_draw_skipped"]!.GetValue<bool>());
                 Assert.True(native["runtime_dependencies_complete"]!.GetValue<bool>());
-                Assert.Equal("_rt_FullFrameBuffer", native["capture_source"]!["render_target"]!.GetValue<string>());
+                Assert.Equal("_rt_default", native["capture_source"]!["render_target"]!.GetValue<string>());
                 Assert.Equal("observed", native["runtime_video_decoder_observation"]!["status"]!.GetValue<string>());
                 if (first is not null)
                 {
