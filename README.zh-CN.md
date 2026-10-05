@@ -1,24 +1,38 @@
-# WPE Baker
+# WPE Baker 2.0
 
 [English](README.md) ｜ 简体中文
 
-**面向 Wallpaper Engine 的确定性动画烘焙工具**，基于 Periodica 引擎。
+**你的壁纸一直在实时渲染。烘焙一次就够了。**
 
-WPE Baker 为场景壁纸里的动画建立数学模型（着色器时间、动画轨道、粒子循环和视频时间基准），并在可见变化预算内微调周期，让周期动画首尾闭合。一次离线生成会把确定性部分预渲染为视频或静态缓存；成品可以包含多个视频和纹理。重复播放时，预计算动画通过视频解码播放，保留的鼠标交互、音频响应、时钟和昼夜效果等图层则按所选模式继续实时运行。运行时不调用任何模型，也不需要 Python。
+WPE Baker 将 Wallpaper Engine 场景中反复播放的动画提前渲染成无缝循环视频。壁纸照常动，显卡不必一遍遍重算相同的效果；时钟、音乐响应等实时内容也可以保留。
 
-官网：**https://isshiki-works.github.io/wpe-baker/zh.html** · 下载：**[Releases](https://github.com/isshiki-works/wpe-baker/releases/latest)** · 技术细节与项目记录：[技术记录](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.zh-CN.md)
+它是 Periodica 的首个应用。Periodica 通过分析和协调动画周期，让原本各自运动的画面形成循环。整个过程在本机完成，无需上传壁纸，也不调用 AI 模型。
+
+官网：**https://isshiki-works.github.io/wpe-baker/zh.html** · 下载：**[2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1)** · 技术细节与项目记录：[技术记录](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.zh-CN.md)
+
+## 2.0 更新了什么
+
+- **从逐项编写方程，到直接分析着色器。** 程序沿编译后 SPIR-V 的数据流追踪时间，识别循环、持续运动和逐渐停止的动画，并将作者脚本纳入分析。支持范围不再只取决于预先整理了多少种效果。
+- **独立的动画，分别协调。** 通过局部调速缩短循环，彼此独立的视频组采用各自的周期。烘焙内容放回原场景时，透明度、混合顺序和 HDR 也一并处理。
+- **生成更快。** 在 GPU 上完成缩放后再回读，减少原始帧搬运，并接通 Intel、AMD、NVIDIA 的硬件编码。Intel Arc B390 上，亚托莉以 3072×1920、60 FPS 完整生成，用时约 4 分 55 秒。
+- **以液态玻璃美学重新设计界面。** 当前壁纸、生成设置与任务队列集中在同一窗口。预览图直接从场景渲染，不再放大小尺寸封面。
+
+![WPE Baker 2.0 界面](https://isshiki-works.github.io/wpe-baker/site/gui-2.0-zh.jpg)
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/isshiki-works/wpe-baker/releases/latest) 下载 Windows 压缩包，**整个**解压到有写入权限的目录（例如 `D:\WpeBaker`）。不要放进 `C:\Program Files`，也不要在压缩软件窗口里直接运行。
-2. 双击 `WpeBaker\WpeBaker.exe`。第一次运行如果弹出"Windows 已保护你的电脑"，点"更多信息"→"仍要运行"：程序没有购买代码签名证书，提示只说明这一点。
-3. 把 `steamapps\workshop\content\431960\` 下你想烘的那张壁纸的文件夹拖进窗口，点"分析"。
-4. 看结论，点"开始生成"。成品会直接出现在 Wallpaper Engine 的壁纸列表里。
+1. 从 [2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1) 下载 `WpeBaker-2.0.0-rc.1-win-x64.zip`，**整个**解压到有写入权限的目录（例如 `D:\WpeBaker`）。不要放进 `C:\Program Files`，也不要在压缩软件窗口里直接运行。
+2. 双击 `WpeBaker\WpeBaker.exe`。
+3. 选择当前壁纸，或把场景壁纸的文件夹、`scene.pkg` 拖进窗口，点 **分析**。
+4. 查看方案，调整帧率和分辨率，点 **开始生成**。
+5. 选中已完成的任务，即可在 Wallpaper Engine 中预览、应用到指定屏幕，或导出 ZIP。
 
-界面只有两个主要选项：
+两个主要选项：
 
 - **动画精度**：效率（5%）、平衡（3%，默认）、质量（能闭合的最小改动）。更严的档位闭合不了时会自动降一档，结论里写明实际用的是哪一档。
 - **交互处理**：保留、固定视角（默认）、关闭，决定鼠标和音频驱动的效果怎么处理。时钟、日期、媒体文字在任何模式下都保持实时。
+
+也可以选择 **优化实时场景**，合并兼容的效果，保留场景实时运行，不生成视频。
 
 命令行：
 
@@ -50,7 +64,7 @@ wpe-baker.exe bake plan.json --out <输出目录>
 
 第三方组件与许可文本见 `THIRD-PARTY-NOTICES.md` 和源码包里的 `licenses/`。烘焙成品仅供在自己的电脑上使用，壁纸作品版权归创意工坊作者所有，请勿二次上传。本项目与 Wallpaper Engine 官方无关联。
 
-从源码构建：Releases 页的源码包包含完整源码、第三方声明与构建记录，步骤见其中的 `REBUILD.md`。
+从源码构建：Releases 页的 `WpeBaker-2.0.0-rc.1-source.zip` 包含对应源码、第三方声明与构建记录，步骤见其中的 `REBUILD.md`。旧版本保存的方案请用 2.0 重新分析。
 
 ## 致谢
 

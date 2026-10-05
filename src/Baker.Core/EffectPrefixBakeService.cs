@@ -239,7 +239,12 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                     OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(loop, new HashSet<int> { owner }),
                     EncodePadding: paddedContent is null ? null
                         : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY));
-                RenderRequest renderRequest = softwareRender;
+                // Non-Vulkan hardware encoders must also reach prefix captures. Previously auto
+                // successfully selected MF on Intel, then this path silently encoded with libx264.
+                RenderRequest renderRequest = paddedContent is null &&
+                    playbackKind is not PlaybackEncoderSelection.Vulkan and not PlaybackEncoderSelection.Software
+                    ? softwareRender with { PlaybackEncoderKind = playbackKind }
+                    : softwareRender;
                 string[] gpuCodecs = [];
                 bool gpuEdgePadding = paddedContent is { OffsetX: 0, OffsetY: 0 } content && !decodePlan.Vertical &&
                     content.PaddedWidth - content.Width <= 1 && content.PaddedHeight - content.Height <= 1;
@@ -254,7 +259,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         RequireOpaquePixels = false, CollectAlphaBounds = !packedAlpha,
                         EncodeWidth = resize ? encodeWidth : null, EncodeHeight = resize ? encodeHeight : null };
                 }
-                else if (PlaybackEncoderSelection.Normalize(request.PlaybackEncoder) != PlaybackEncoderSelection.Software)
+                else if (playbackKind == PlaybackEncoderSelection.Vulkan ||
+                    paddedContent is not null && playbackKind != PlaybackEncoderSelection.Software)
                     encoderFallback ??= paddedContent is not null
                         ? "GPU prefix encoding supports only one-pixel edge padding; using the existing software path."
                         : "This effect-prefix path supports software or same-device Vulkan encoding.";
@@ -269,7 +275,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         // GPU 成品先过画质门：不过降 QP 在 GPU 上重渲一次，还不过与编码器初始化失败一样按软件路线重渲。
                         async Task<bool> GpuQualityPassesAsync()
                         {
-                            string qualityOutput = Path.Combine(cacheOutput, $"quality-{renderRequest.GpuEncoding!.Codec}-qp{renderRequest.GpuEncoding.Qp}");
+                            string qualityName = renderRequest.GpuEncoding is { } selectedGpu
+                                ? $"{selectedGpu.Codec}-qp{selectedGpu.Qp}" : renderRequest.PlaybackEncoderKind!;
+                            string qualityOutput = Path.Combine(cacheOutput, $"quality-{qualityName}");
                             Directory.CreateDirectory(qualityOutput);
                             JsonObject gate = await runner.GpuPlaybackQualityAsync(rendered,
                                 rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4"),
@@ -311,13 +319,26 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                                             throw new GpuEncodeUnavailableException($"{gpu.Codec} did not pass hardware decoding on this machine's playback adapter.");
                                     }
                                 }
+                                else if (renderRequest.PlaybackEncoderKind is not null)
+                                {
+                                    if (!await GpuQualityPassesAsync())
+                                        throw new GpuEncodeUnavailableException($"{renderRequest.PlaybackEncoderKind} did not pass the playback quality gate.");
+                                    if (new FileInfo(Path.Combine(renderOutput, "preview.mp4")).Length > EmbeddedVideoBudget.MaximumBytes)
+                                        throw new GpuEncodeUnavailableException($"{renderRequest.PlaybackEncoderKind} exceeded the embedded video size budget.");
+                                    earlyHardware = await runner.ProbeHardwareDecodeAsync(Path.Combine(renderOutput, "preview.mp4"),
+                                        Path.Combine(cacheOutput, $"hardware-decode-{renderRequest.PlaybackEncoderKind}"), Math.Min(frames, 5),
+                                        cancellationToken, request.DeviceUuid ?? settings.DeviceUuid);
+                                    if (earlyHardware["all_adapters_passed"]?.GetValue<bool>() != true)
+                                        throw new GpuEncodeUnavailableException($"{renderRequest.PlaybackEncoderKind} did not pass hardware decoding on this machine's playback adapter.");
+                                }
                                 break;
                             }
-                            catch (GpuEncodeUnavailableException error) when (renderRequest.GpuEncoding is not null && !cancellationToken.IsCancellationRequested)
+                            catch (GpuEncodeUnavailableException error) when ((renderRequest.GpuEncoding is not null ||
+                                renderRequest.PlaybackEncoderKind is not null) && !cancellationToken.IsCancellationRequested)
                             {
                                 encoderFallback = error.Message;
                                 earlyHardware = null;
-                                if (++codecIndex < gpuCodecs.Length)
+                                if (renderRequest.GpuEncoding is not null && ++codecIndex < gpuCodecs.Length)
                                 {
                                     renderOutput = Path.Combine(cacheOutput, $"encoded-{gpuCodecs[codecIndex]}");
                                     renderRequest = firstGpuRequest with { OutputDirectory = renderOutput,
@@ -344,7 +365,9 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                 }
                 timing.AddMasterBreakdown(rendered);
                 bool gpuDirect = rendered["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
-                var encodeInfo = new JsonObject { ["encoder_used"] = gpuDirect ? "vulkan" : "software",
+                string actualEncoder = gpuDirect ? PlaybackEncoderSelection.Vulkan
+                    : rendered["request"]?["playback_encoder_kind"]?.GetValue<string>() ?? PlaybackEncoderSelection.Software;
+                var encodeInfo = new JsonObject { ["encoder_used"] = actualEncoder,
                     ["encoder_fallback_reason"] = encoderFallback, ["encode_seconds"] = null,
                     ["readback_frames"] = rendered["readback_frames"]?.DeepClone(),
                     ["readback_bytes"] = rendered["readback_bytes"]?.DeepClone(),
@@ -432,8 +455,8 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                                 packedAlpha, reference, paddedContent, cancellationToken);
                         }
                         // 门在渲染后就过了（见上面的降 QP 重试）；这里只在接缝过了时记下结果。
-                        if (gpuDirect && seam["status"]?.GetValue<string>() == "observed_seam_pass")
-                            gpuQuality = rendered["playback_quality_gate"]!.DeepClone().AsObject();
+                        if (seam["status"]?.GetValue<string>() == "observed_seam_pass")
+                            gpuQuality = rendered["playback_quality_gate"]?.DeepClone().AsObject();
                     }
                     finally { DeleteRetainedFrames(); }
                 }

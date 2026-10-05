@@ -44,6 +44,11 @@ internal sealed record RenderJob
     public ulong? OutputFramePhase { get; init; }
     public uint? OutputSampleWidth { get; init; }
     public uint? OutputSampleHeight { get; init; }
+    public uint? OutputResizeWidth { get; init; }
+    public uint? OutputResizeHeight { get; init; }
+    public ulong? EncodedFrames { get; init; }
+    public ulong[]? RetainFrames { get; init; }
+    public bool? RequireOpaquePixels { get; init; }
     public bool? CollectSamplingCoverage { get; init; }
     public bool? SamplingCoverageSampledOnly { get; init; }
     public RenderGpuEncodeJob? GpuEncode { get; init; }

@@ -426,6 +426,8 @@ struct VulkanRender::Impl {
     vvk::PipelineLayout m_sample_layout;
     vvk::Pipeline m_sample_pipeline;
     std::unique_ptr<GpuVideoEncoder> m_gpu_encoder;
+    std::unique_ptr<GpuVideoEncoder> m_gpu_readback;
+    std::optional<GpuEncodeOptions> m_readback_options;
     owe::resource::CompletionToken m_pending_cpu_submission;
     bool m_gpu_pipeline { false };
     std::optional<GpuEncodeOptions> m_encode_options;
@@ -773,6 +775,7 @@ bool VulkanRender::Impl::initRes() {
 
 bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
     m_encode_options = info.gpu_encode;
+    m_readback_options = info.gpu_readback;
     const auto extent = m_device->out_extent();
     if ((info.sample_width == 0) != (info.sample_height == 0) ||
         info.sample_width > extent.width || info.sample_height > extent.height) {
@@ -782,6 +785,13 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
     m_sample_readback = info.sample_width != 0;
     m_readback_width = m_sample_readback ? info.sample_width : extent.width;
     m_readback_height = m_sample_readback ? info.sample_height : extent.height;
+    if (m_readback_options) {
+        if (m_sample_readback || m_encode_options) return false;
+        m_readback_width=m_readback_options->resize_width;
+        m_readback_height=m_readback_options->resize_height;
+        if (!m_readback_width || !m_readback_height || m_readback_width>extent.width || m_readback_height>extent.height)
+            return false;
+    }
     if (extent.width > m_device->limits().maxImageDimension2D ||
         extent.height > m_device->limits().maxImageDimension2D) {
         rstd_error("CPU output extent exceeds maxImageDimension2D");
@@ -820,7 +830,7 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
         .samples       = VK_SAMPLE_COUNT_1_BIT,
         .tiling        = VK_IMAGE_TILING_OPTIMAL,
         .usage         = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                         (m_gpu_samples || m_encode_options ? VK_IMAGE_USAGE_STORAGE_BIT : 0u),
+                         (m_gpu_samples || m_encode_options || m_readback_options ? VK_IMAGE_USAGE_STORAGE_BIT : 0u),
         .sharingMode   = VK_SHARING_MODE_EXCLUSIVE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
@@ -830,6 +840,30 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
                                        image_allocation, m_cpu_image.handle));
     m_cpu_image.extent = image_info.extent;
     m_cpu_image.generation = u64(1);
+
+    if (m_readback_options) {
+        if (!(features & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ||
+            !(queue_properties[usize(m_device->graphics_queue().family_index)].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
+            rstd_error("GPU readback initialization: storage images and a compute graphics queue are required");
+            return false;
+        }
+        const auto& options=*m_readback_options;
+        try {
+            GpuCaptureOptions capture;
+            capture.encoded_frames=options.encoded_frames;
+            capture.retain_frames=options.retain_frames;
+            capture.resize_width=options.resize_width; capture.resize_height=options.resize_height;
+            capture.require_opaque_pixels=options.require_opaque_pixels;
+            m_gpu_readback=std::make_unique<GpuVideoEncoder>(m_device->instance_handle(),*m_device->gpu(),
+                *m_device->handle(),m_device->graphics_queue().family_index,m_device->enabled_instance_extensions(),
+                m_device->enabled_device_extensions(),extent.width,extent.height,false,options.fps_num,options.fps_den,
+                0,"rgba_readback",options.path,std::move(capture));
+        } catch (const std::exception& error) {
+            rstd_error("GPU readback initialization: {}",error.what());
+            return false;
+        }
+        return true;
+    }
 
     if (m_encode_options) {
         if (m_sample_readback || !(features & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) return false;
@@ -1090,6 +1124,7 @@ void VulkanRender::Impl::destroy() {
         m_program.clear();
         m_rendering_resources.resources.Reset();
         m_gpu_encoder.reset();
+        m_gpu_readback.reset();
         m_sample_pipeline = vvk::Pipeline {};
         m_sample_layout = vvk::PipelineLayout {};
         m_sample_descriptors = vvk::DescriptorSetLayout {};
@@ -1436,7 +1471,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         to_readback.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
         to_readback.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         rr.command.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, to_readback);
-    } else if (read_pixels)
+    } else if (read_pixels && !m_gpu_readback)
         rr.command.CopyImageToBuffer(*m_cpu_image.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                       *m_cpu_staging.handle, region);
     if (coverage_last) {
@@ -1461,7 +1496,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         .offset = 0,
         .size = m_cpu_staging.req_size,
     };
-    if (read_pixels || coverage_last) rr.command.PipelineBarrier(
+    if ((read_pixels && !m_gpu_readback) || coverage_last) rr.command.PipelineBarrier(
                                 (compact_readback ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT) |
                                     (coverage_last ? VK_PIPELINE_STAGE_TRANSFER_BIT : 0u),
                                 VK_PIPELINE_STAGE_HOST_BIT,
@@ -1550,8 +1585,21 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
             frame.cpu_encode_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-encode_started).count();
     }
 
+    if (m_gpu_readback && m_cpu_frame_index>=m_readback_options->first_frame) {
+        const auto index=m_cpu_frame_index-m_readback_options->first_frame;
+        if (index<m_readback_options->frames) {
+            try {
+                m_gpu_readback->readRgba(*m_cpu_image.handle,index,frame.pixels);
+                if (index+1==m_readback_options->frames) m_gpu_readback->finish();
+                frame.gpu_capture_metadata=m_gpu_readback->captureMetadata();
+                frame.gpu_readback_frames=m_gpu_readback->readbackFrames();
+            } catch (const std::exception& error) {
+                return fail(VK_ERROR_INITIALIZATION_FAILED,error.what());
+            }
+        }
+    }
     if (coverage_frame) ++m_sample_coverage_observed;
-    if (read_pixels || coverage_last) {
+    if ((read_pixels && !m_gpu_readback) || coverage_last) {
         void* mapped = nullptr;
         result = m_cpu_staging.handle.MapMemory(&mapped);
         if (result != VK_SUCCESS) return fail(result, "map CPU staging buffer");

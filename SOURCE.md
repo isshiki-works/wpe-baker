@@ -9,8 +9,7 @@ WPE Baker 发行包含有以 GNU GPL v2 与 LGPL v2.1 授权的程序。它们�
 `engine/`，带完整 Git 历史。每次发行还会在便携包**同一位置**提供 `WpeBaker-<version>-source.zip`，
 内含该次构建所用依赖的源码快照。
 
-- Download page / 发布页：release information is published on the Product Hunt page and the
-  GitHub Release, which link to each other / 发布信息见 Product Hunt 页面与 GitHub Release，两者互相链接。
+- Download page / 发布页：[WPE Baker 2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1).
 - Source archive / 源码包：`WpeBaker-<version>-source.zip` — SHA256 is listed on the download page
   (it is generated when the archives are packed and is deliberately not written back into the
   package, which would change the source archive's own hash) / SHA256 见发布页（打包后生成，
@@ -40,10 +39,11 @@ commit keeps its original hash.
 并入时的 engine 提交是 `d732d6223600cbb46a4fef5476a3bd749157b4d4`（合并提交 `cabe223`），
 所有 engine 提交保留原哈希。
 
-`engine/LICENSE` (GPL v2, without "or later") applies **only to `engine/`**. Everything else in
-this repository is under the root `LICENSE` (MIT).
-`engine/LICENSE`（GPL v2，无 "or later"）**只适用于 `engine/` 目录**；本仓库其余部分按根目录
-`LICENSE`（MIT）。
+`engine/LICENSE` (GPL v2, without "or later") applies to `engine/`. The C# application/tool
+layer and developer scripts use the root `LICENSE` (MIT); dependency sources and bundled
+third-party programs retain their own licenses listed in `THIRD-PARTY-NOTICES.md`.
+`engine/LICENSE`（GPL v2，无 "or later"）适用于 `engine/`。C# 应用/工具层和开发脚本使用根目录
+`LICENSE`（MIT）；依赖源码和第三方程序保留各自的许可，见 `THIRD-PARTY-NOTICES.md`。
 
 Two of the renderer's dependencies carry our fixes: rstd and vvk. The audio/video decoding in
 `engine/src/Media/` is ported from wavsen (MIT), which is no longer built as a dependency. The patches and

@@ -1,23 +1,35 @@
-# WPE Baker
+# WPE Baker 2.0
 
 English ｜ [简体中文](README.zh-CN.md)
 
-**Deterministic animation baking for Wallpaper Engine.** The first product built on Periodica.
+**Bake your animated wallpaper once. Play it with less GPU work.**
 
-WPE Baker models a scene's animation — shader time, animation tracks, particle cycles and video timebases — and retunes periodic motion within a visible-change budget until it closes into a loop. One offline generation pass pre-renders the deterministic parts as video or static caches; the result can contain multiple videos and textures. On repeat playback, the precomputed animation is decoded while retained layers such as mouse interaction, audio response, clocks and day/night effects keep running according to the selected mode. No model calls or Python are needed at runtime.
+WPE Baker turns repeating animation in Wallpaper Engine scenes into seamless video loops. Your wallpaper keeps moving, while the GPU spends less time rendering the same effects over and over. Clocks, music response and other live content can stay in the scene.
 
-Website: **https://isshiki-works.github.io/wpe-baker/** · Download: **[Releases](https://github.com/isshiki-works/wpe-baker/releases/latest)** · 中文：[README.zh-CN.md](README.zh-CN.md)
+It is the first application of Periodica, an engine that finds and coordinates animation periods. Everything runs locally, with no uploads or AI model calls.
+
+Website: **https://isshiki-works.github.io/wpe-baker/** · Download: **[2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1)** · 中文：[README.zh-CN.md](README.zh-CN.md)
+
+## What's new in 2.0
+
+- **Shader analysis replaces hand-written period equations.** Periodica follows time through compiled SPIR-V shaders to find loops, continuous motion and animations that settle. It also analyzes author scripts, so support can extend beyond a fixed catalog of effects.
+- **Independent animations get their own loops.** Local speed adjustments coordinate motion without forcing the whole scene into one long cycle. Transparency, blending and HDR are preserved when the baked content is placed back into the scene.
+- **Faster generation.** GPU resizing before readback reduces frame transfers, and hardware encoding is available on Intel, AMD and NVIDIA GPUs. On an Intel Arc B390, the full Atri example took about 4 min 55 s at 3072×1920 and 60 FPS.
+- **A redesigned liquid glass interface.** Load the current wallpaper, adjust the output and manage jobs in one window. Scene previews are rendered directly from the wallpaper, instead of enlarging its thumbnail.
+
+![WPE Baker 2.0 interface](https://isshiki-works.github.io/wpe-baker/site/gui-2.0-en.jpg)
 
 Technical details and project notes: [technical notes](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.md).
 
 ## Quick start
 
-1. Download the Windows archive from [Releases](https://github.com/isshiki-works/wpe-baker/releases/latest) and unzip the **whole** archive into a folder you can write to (not `C:\Program Files`). No installer.
-2. Run `WpeBaker\WpeBaker.exe`. If Windows SmartScreen appears, choose More info → Run anyway; the build is not code-signed.
-3. Drag a Scene wallpaper folder from `steamapps\workshop\content\431960\` into the window and click Analyze.
-4. Read the verdict and click Start generating. The output appears in Wallpaper Engine's own list.
+1. Download `WpeBaker-2.0.0-rc.1-win-x64.zip` from [2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1) and unzip the **whole** archive into a folder you can write to (not `C:\Program Files`). No installer.
+2. Run `WpeBaker\WpeBaker.exe`.
+3. Choose the current wallpaper, or drag in a Scene wallpaper folder or `scene.pkg`, then click **Analyze**.
+4. Review the plan, choose your frame rate and resolution, and click **Start generating**.
+5. Select the completed job to preview it in Wallpaper Engine, apply it to a screen, or export a ZIP.
 
-Two controls:
+The main choices:
 
 - **Animation precision**: efficiency (5 %), balanced (3 %, default) or quality (smallest change that closes). If a stricter level does not close, it steps down one level and the verdict names the one used.
 - **Interaction**: keep, fixed view (default) or off; decides what mouse- and audio-driven effects do. Clocks, dates and media text stay live in every mode.
@@ -33,10 +45,11 @@ To compare playback cost after generation, use `wpe-baker.exe compare <original-
 
 ## How it works
 
-- **Measure** — optionally plays the original in the official player first and reads the GPU power counters.
-- **Solve** — each periodic component is solved for its own period, then retuned within the preset's budget (efficiency 5 %, balanced 3 %, quality: smallest change that closes) into one common loop.
-- **Bake** — deterministic parts are pre-rendered as video or static caches; the output is rendered past its loop point and checked tile by tile against the original's next frame before it is accepted. Retained real-time layers continue to use live input according to the selected interaction mode.
-- **Input stays input** — mouse parallax, audio-reactive effects, clocks and interactive panels are treated as input: kept live, fixed, or left out, and always listed before generation.
+- **Analyze the motion.** Find the periods in shaders, animation tracks, particles and embedded videos, and identify content that needs live input.
+- **Find a practical loop.** Adjust animation speeds within the chosen precision budget. Independent groups can repeat at different intervals.
+- **Render once.** Save the repeating parts as video or static textures, then combine them with the live layers. Generation checks the loop seam, image quality, composition and hardware decoding.
+
+You can also choose **Optimize live scene** to combine compatible effects while keeping the scene live, without generating video.
 
 ## Feedback
 
@@ -48,7 +61,7 @@ Windows 10/11 64-bit, Wallpaper Engine, and a Vulkan-capable GPU for offline ren
 
 ## Building from source
 
-The source archive on the release page contains the full source, third-party notices and build records. See `REBUILD.md` in that archive.
+`WpeBaker-2.0.0-rc.1-source.zip` on the release page contains the corresponding source, third-party notices and build records. See `REBUILD.md` in that archive. Older saved plans should be re-analyzed with 2.0.
 
 ## Licenses
 

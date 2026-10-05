@@ -202,7 +202,14 @@ public partial class MainWindow : Window
     {
         try
         {
-            SourceBox.Text = AppEnvironment.ValidateSource(path);
+            string source = AppEnvironment.ValidateSource(path);
+            bool sameSource = SourceBox.Text == source;
+            SourceBox.Text = source;
+            if (sameSource)
+            {
+                ReloadSourcePropertyDefinitions(source);
+                _ = RefreshScenePreviewAsync();
+            }
             StatusText.Text = sourceRejection?.Text(AppEnvironment.Language) ?? L("壁纸来源已载入。可执行分析。", "Wallpaper source loaded. Ready to analyze.");
             return true;
         }
@@ -255,6 +262,7 @@ public partial class MainWindow : Window
         if (sender == SourceBox) { analysisPreviewOverrides = new(); layerList = null; excludedLayerIds.Clear(); }
         BuildPropertyEditors();
         UpdatePlanSummary(); RefreshControls();
+        if (sender == SourceBox || sender == AssetsBox) _ = RefreshScenePreviewAsync();
     }
     private void SettingsChanged(object sender, RoutedEventArgs e)
     {
@@ -1510,6 +1518,7 @@ public partial class MainWindow : Window
 
     private void WindowClosing(object? sender, CancelEventArgs e)
     {
+        previewCancellation?.Cancel();
         analysisCancellation?.Cancel();
         closeRequested = true;
         if (!processing) return;
@@ -1658,8 +1667,21 @@ public partial class MainWindow : Window
     private string ScreenName(string location) =>
         location.StartsWith("Monitor", StringComparison.Ordinal) && int.TryParse(location.AsSpan(7), out int index)
             ? L("显示器 ", "Display ") + (index + 1) : location;
-    private sealed record CurrentWallpaperItem(string Label, string? Source, string Detail, string? Title = null,
-        System.Windows.Media.ImageSource? Preview = null);
+    private sealed class CurrentWallpaperItem(string label, string? source, string detail, string? title = null,
+        System.Windows.Media.ImageSource? preview = null) : ObservableItem
+    {
+        public string Label => label;
+        public string? Source => source;
+        public string Detail => detail;
+        public string? Title => title;
+        public System.Windows.Media.ImageSource? Preview
+        {
+            get => preview;
+            set { preview = value; Changed(); }
+        }
+        private string? previewError;
+        public string? PreviewError { get => previewError; set { previewError = value; Changed(); } }
+    }
 
     /// <summary>壁纸自带的预览图（project.json 的 preview）；一次读进内存，不占着工坊目录里的文件。读不了就不显示。</summary>
     private static System.Windows.Media.Imaging.BitmapImage? LoadPreview(string path)
@@ -1670,7 +1692,6 @@ public partial class MainWindow : Window
             var image = new System.Windows.Media.Imaging.BitmapImage();
             image.BeginInit();
             image.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-            image.DecodePixelWidth = 480;
             image.UriSource = new Uri(path);
             image.EndInit();
             image.Freeze();

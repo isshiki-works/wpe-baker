@@ -35,6 +35,62 @@ public sealed partial class NativeRenderRunner
     internal static JsonObject? OpaquePixelEvidence(Exception error) =>
         FindOpaquePixelFailure(error)?.Evidence.DeepClone().AsObject();
 
+    private static async Task ConfirmResizedReadbackAsync(RenderRequest request, RenderResult result,
+        JsonObject manifest, string directory, ulong encodedFrames, CancellationToken token)
+    {
+        uint width = request.EncodeWidth!.Value, height = request.EncodeHeight!.Value;
+        JsonObject? resize = result.GpuCapture?.Resize;
+        if (result.ReadbackWidth != width || result.ReadbackHeight != height ||
+            resize?["width"]?.GetValue<uint>() != width || resize["height"]?.GetValue<uint>() != height ||
+            resize["filter"]?.GetValue<string>() != "lanczos3")
+            throw new InvalidDataException("Renderer did not confirm Lanczos resizing before raw frame readback.");
+        JsonObject? opacity = result.Json["gpu_capture"]?["opaque_pixels"] as JsonObject;
+        if (opacity?["requested"]?.GetValue<bool>() != true ||
+            opacity["checked_frames"]?.GetValue<ulong>() != request.Frames ||
+            opacity["frame_width"]?.GetValue<uint>() != request.Width ||
+            opacity["frame_height"]?.GetValue<uint>() != request.Height)
+            throw new InvalidDataException("Renderer did not check opacity over every full-resolution source frame.");
+        if (opacity["verified"]?.GetValue<bool>() != true || opacity["minimum_alpha"]?.GetValue<int>() != 255)
+        {
+            ulong badFrame = opacity["first_nonopaque_frame"]?.GetValue<ulong>()
+                ?? throw new InvalidDataException("Renderer omitted the non-opaque source frame index.");
+            string badPath = Path.Combine(directory, "nonopaque-frame.rgba");
+            if (badFrame >= request.Frames || new FileInfo(badPath).Length != (long)request.Width * request.Height * 4)
+                throw new InvalidDataException("Renderer's non-opaque source frame evidence is incomplete.");
+            byte[] pixels = await File.ReadAllBytesAsync(badPath, token);
+            for (int alpha = 3; alpha < pixels.Length; alpha += 4)
+                if (pixels[alpha] != byte.MaxValue)
+                    throw new OpaquePixelException(NonOpaqueFrameEvidence(pixels, checked((int)request.Width),
+                        checked((int)request.Height), badFrame, alpha));
+            throw new InvalidDataException("Renderer's opacity failure disagrees with its original reference pixels.");
+        }
+        var confirmedOpacity = opacity.DeepClone().AsObject();
+        confirmedOpacity["checked_pixels"] = checked((ulong)request.Width * request.Height * request.Frames);
+        manifest["opaque_pixels"] = confirmedOpacity;
+        manifest["gpu_resize"] = resize.DeepClone();
+        manifest["pipe_rgba_bytes"] = checked(request.Frames * width * height * 4);
+        manifest["readback_frames"] = request.Frames + (ulong)(request.RetainFrames?.Length ?? 0);
+        manifest["readback_bytes"] = checked(request.Frames * width * height * 4 +
+            (ulong)(request.RetainFrames?.Length ?? 0) * request.Width * request.Height * 4);
+        if (request.RetainFrames is { Length: > 0 } retained)
+            manifest["retained_frames"] = ConfirmNativeRetainedFrames(result, directory, request, retained, encodedFrames);
+    }
+
+    private static JsonObject ConfirmNativeRetainedFrames(RenderResult result, string directory,
+        RenderRequest request, ulong[] indices, ulong encodedFrames)
+    {
+        var retained = result.GpuCapture?.RetainedFrames?.DeepClone().AsObject()
+            ?? throw new InvalidDataException("Renderer omitted selected GPU reference frames.");
+        string path = Path.Combine(directory, RetainedFramesFile);
+        if (retained["width"]?.GetValue<uint>() != request.Width || retained["height"]?.GetValue<uint>() != request.Height ||
+            retained["encoded_frames"]?.GetValue<ulong>() != encodedFrames ||
+            !JsonNode.DeepEquals(retained["frame_indices"], System.Text.Json.JsonSerializer.SerializeToNode(indices)) ||
+            new FileInfo(path).Length != (long)request.Width * request.Height * 4 * indices.Length)
+            throw new InvalidDataException("GPU reference frame dimensions or sequence differ from the request.");
+        retained["path"] = path;
+        return retained;
+    }
+
     /// <summary>
     /// 第一个非不透明像素所在帧的完整证据：首个坐标与 alpha 保持原样，另把这一帧扫完，
     /// 记下非不透明像素数、最低 alpha，以及它们离画面边缘最远有多远（用来区分"只是边缘几行"还是"成片透明"）。

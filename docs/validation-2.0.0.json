@@ -1,0 +1,396 @@
+{
+  "release": "2.0.0-rc.1",
+  "scope": "Measurements during 2.0 validation, original versus baked; not old-baked versus new-baked. Percentages calculated from raw power readings.",
+  "method": {
+    "device": "Intel Arc B390 laptop",
+    "power": "AC",
+    "player": "Wallpaper Engine",
+    "output": [
+      1920,
+      1080,
+      60
+    ],
+    "display": [
+      3072,
+      1920,
+      165
+    ],
+    "precision": "balanced",
+    "author_properties": "defaults",
+    "phases": "A/B/B/A",
+    "seconds_per_phase": 20,
+    "identity": "Configuration assignments plus manual image inspection. Official getter returned empty; automatic comparison unavailable.",
+    "limits": "Different render/output resolutions; sampled playback only, not every frame or interaction. PP1 and CPU package are separate domains, not whole-system or battery measurements."
+  },
+  "cases": [
+    {
+      "id": "3650475846",
+      "date": "2026-10-04",
+      "build": "b02cc255",
+      "igpu_original": 20.8717487785,
+      "igpu_baked": 14.62897805625,
+      "igpu_change_percent": -29.91014690959044,
+      "package_original": 31.7994619935,
+      "package_baked": 26.5059779065,
+      "package_change_percent": -16.64645800637137
+    },
+    {
+      "id": "3669681034",
+      "date": "2026-10-04",
+      "build": "b02cc255",
+      "igpu_original": 8.50718509975,
+      "igpu_baked": 0.26969605375,
+      "igpu_change_percent": -96.82978505125126,
+      "package_original": 17.8537993315,
+      "package_baked": 9.257371579500001,
+      "package_change_percent": -48.149010708510986
+    },
+    {
+      "id": "3685247684",
+      "date": "2026-10-05",
+      "build": "a2679a4b",
+      "igpu_original": 9.084980977,
+      "igpu_baked": 1.4409641685,
+      "igpu_change_percent": -84.13905134036034,
+      "package_original": 19.575795199749997,
+      "package_baked": 11.584008815249998,
+      "package_change_percent": -40.82483650320403
+    },
+    {
+      "id": "3713073223",
+      "date": "2026-10-04",
+      "build": "b02cc255",
+      "igpu_original": 8.09975487225,
+      "igpu_baked": 3.30279541075,
+      "igpu_change_percent": -59.22351400947361,
+      "package_original": 17.961871471000002,
+      "package_baked": 13.611594595,
+      "package_change_percent": -24.219507878250102
+    },
+    {
+      "id": "3426865175",
+      "date": "2026-10-04",
+      "build": "b02cc255",
+      "igpu_original": 10.574963814250001,
+      "igpu_baked": 7.23158256475,
+      "igpu_change_percent": -31.616006524719452,
+      "package_original": 19.616260160499998,
+      "package_baked": 19.639619218,
+      "package_change_percent": 0.11908007596186376
+    },
+    {
+      "id": "3448877775",
+      "date": "2026-10-04",
+      "build": "b02cc255",
+      "igpu_original": 5.5193923295000005,
+      "igpu_baked": 4.8147920719999995,
+      "igpu_change_percent": -12.765902755889623,
+      "package_original": 15.44786129375,
+      "package_baked": 16.171990931499998,
+      "package_change_percent": 4.687572110988403
+    },
+    {
+      "id": "3572877776",
+      "date": "2026-10-04",
+      "build": "b02cc255",
+      "igpu_original": 2.100646259,
+      "igpu_baked": 0.47503942475,
+      "igpu_change_percent": -77.38603428755589,
+      "package_original": 11.58854064075,
+      "package_baked": 9.4492579575,
+      "package_change_percent": -18.460328608827727
+    },
+    {
+      "id": "3258032485",
+      "date": "2026-10-04",
+      "build": "b02cc255",
+      "igpu_original": 2.1565039095,
+      "igpu_baked": 0.14247247799999999,
+      "igpu_change_percent": -93.39335869634323,
+      "package_original": 11.232660770499999,
+      "package_baked": 8.71632098775,
+      "package_change_percent": -22.401992138484104
+    }
+  ],
+  "leo_final_sample": {
+    "cpu_one_core_original_percent": 11.83481855129684,
+    "cpu_one_core_baked_percent": 27.811995864468187,
+    "fps_range": [
+      59.987502870624894,
+      60.014094595658676
+    ],
+    "dropped_frames": 0
+  },
+  "historical_high_refresh": {
+    "version": "1.0.x",
+    "output_resolution": [
+      3072,
+      1920
+    ],
+    "source": "Archived website draft bb024755, section refresh; not re-run with 2.0."
+  },
+  "native_refresh": [
+    {
+      "id": "3669681034",
+      "fps": 60,
+      "summary": {
+        "metric": "platform_power.igpu_domain_watts.median, mean over segments of the same kind",
+        "idle_igpu_watts": 0.0013407325000000002,
+        "original_igpu_watts": 8.503211162249999,
+        "baked_igpu_watts": 0.29771692,
+        "idle_package_watts": 3.97872725275,
+        "original_package_watts": 16.533871845249998,
+        "baked_package_watts": 9.330456946,
+        "original_cpu_one_core_percent": 8.374935791491232,
+        "baked_cpu_one_core_percent": 19.98783163513161,
+        "original_gpu_3d_percent": 40.6753855,
+        "baked_gpu_3d_percent": 10.948917250000001,
+        "original_video_decode_percent": 0,
+        "baked_video_decode_percent": 16.451471499999997,
+        "original_nvidia_board_watts": null,
+        "baked_nvidia_board_watts": null,
+        "gain": {
+          "status": "measured",
+          "baseline_subtracted": true,
+          "original_watts": 8.50187042975,
+          "baked_watts": 0.2963761875,
+          "change_percent": -96.51398842232514,
+          "verdict": "saved"
+        }
+      },
+      "phases": [
+        {
+          "label": "01-A",
+          "displayed_fps": 60.009500535817786,
+          "displayed_rows": 1198,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 8.500519032499998,
+          "package_watts": 15.890418287500001
+        },
+        {
+          "label": "02-B",
+          "displayed_fps": 59.97471291740832,
+          "displayed_rows": 1197,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 0.29331368599999996,
+          "package_watts": 9.5073198
+        },
+        {
+          "label": "03-B",
+          "displayed_fps": 60.02079725635013,
+          "displayed_rows": 1198,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 0.30212015400000003,
+          "package_watts": 9.153594092
+        },
+        {
+          "label": "04-A",
+          "displayed_fps": 59.973951780852694,
+          "displayed_rows": 1198,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 8.505903292,
+          "package_watts": 17.177325402999998
+        }
+      ],
+      "original_config_bytes_restored": true,
+      "automated_comparison": {
+        "status": "unavailable",
+        "choice": "unavailable",
+        "gpu_choice": "unavailable",
+        "scope": "Saved project assignments and iGPU graphics-domain/CPU-package readings from this WPE process on one display. Configuration fallback alone does not verify official playback identity. Not total-system savings or visual correctness.",
+        "reasons": [
+          "01-A: saved configuration confirms assignment only; official playback selection was not verified.",
+          "01-A: playback selection, PID, power, or display capture was incomplete.",
+          "02-B: saved configuration confirms assignment only; official playback selection was not verified.",
+          "02-B: playback selection, PID, power, or display capture was incomplete.",
+          "03-B: saved configuration confirms assignment only; official playback selection was not verified.",
+          "03-B: playback selection, PID, power, or display capture was incomplete.",
+          "04-A: saved configuration confirms assignment only; official playback selection was not verified.",
+          "04-A: playback selection, PID, power, or display capture was incomplete."
+        ]
+      }
+    },
+    {
+      "id": "3669681034",
+      "fps": 165,
+      "summary": {
+        "metric": "platform_power.igpu_domain_watts.median, mean over segments of the same kind",
+        "idle_igpu_watts": 0.0014746725,
+        "original_igpu_watts": 25.55191166975,
+        "baked_igpu_watts": 2.189677271,
+        "idle_package_watts": 3.48748433425,
+        "original_package_watts": 37.6735049695,
+        "baked_package_watts": 12.84018611275,
+        "original_cpu_one_core_percent": 8.918273326313372,
+        "baked_cpu_one_core_percent": 33.75614271082385,
+        "original_gpu_3d_percent": 81.3397205,
+        "baked_gpu_3d_percent": 20.73679175,
+        "original_video_decode_percent": 0,
+        "baked_video_decode_percent": 39.35411725,
+        "original_nvidia_board_watts": null,
+        "baked_nvidia_board_watts": null,
+        "gain": {
+          "status": "measured",
+          "baseline_subtracted": true,
+          "original_watts": 25.550436997250003,
+          "baked_watts": 2.1882025984999998,
+          "change_percent": -91.43575274765158,
+          "verdict": "saved"
+        }
+      },
+      "phases": [
+        {
+          "label": "01-A",
+          "displayed_fps": 164.99918430967247,
+          "displayed_rows": 3298,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 25.565615766500002,
+          "package_watts": 37.8244780145
+        },
+        {
+          "label": "02-B",
+          "displayed_fps": 164.96564286708485,
+          "displayed_rows": 3299,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 2.2200609195,
+          "package_watts": 13.1807649485
+        },
+        {
+          "label": "03-B",
+          "displayed_fps": 164.97703891904965,
+          "displayed_rows": 3297,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 2.1592936225,
+          "package_watts": 12.499607276999999
+        },
+        {
+          "label": "04-A",
+          "displayed_fps": 164.9915480353007,
+          "displayed_rows": 3298,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 25.538207573,
+          "package_watts": 37.5225319245
+        }
+      ],
+      "original_config_bytes_restored": true,
+      "automated_comparison": {
+        "status": "unavailable",
+        "choice": "unavailable",
+        "gpu_choice": "unavailable",
+        "scope": "Saved project assignments and iGPU graphics-domain/CPU-package readings from this WPE process on one display. Configuration fallback alone does not verify official playback identity. Not total-system savings or visual correctness.",
+        "reasons": [
+          "01-A: saved configuration confirms assignment only; official playback selection was not verified.",
+          "01-A: playback selection, PID, power, or display capture was incomplete.",
+          "02-B: saved configuration confirms assignment only; official playback selection was not verified.",
+          "02-B: playback selection, PID, power, or display capture was incomplete.",
+          "03-B: saved configuration confirms assignment only; official playback selection was not verified.",
+          "03-B: playback selection, PID, power, or display capture was incomplete.",
+          "04-A: saved configuration confirms assignment only; official playback selection was not verified.",
+          "04-A: playback selection, PID, power, or display capture was incomplete."
+        ]
+      }
+    },
+    {
+      "id": "3258032485",
+      "fps": 120,
+      "summary": {
+        "metric": "platform_power.igpu_domain_watts.median, mean over segments of the same kind",
+        "idle_igpu_watts": 0.00177548675,
+        "original_igpu_watts": 8.75306068325,
+        "baked_igpu_watts": 1.968801516,
+        "idle_package_watts": 3.4894415194999997,
+        "original_package_watts": 18.6228544795,
+        "baked_package_watts": 13.717521262,
+        "original_cpu_one_core_percent": 8.060086349852153,
+        "baked_cpu_one_core_percent": 25.903815684182764,
+        "original_gpu_3d_percent": 39.946096499999996,
+        "baked_gpu_3d_percent": 9.042287250000001,
+        "original_video_decode_percent": 0,
+        "baked_video_decode_percent": 31.163472000000002,
+        "original_nvidia_board_watts": null,
+        "baked_nvidia_board_watts": null,
+        "gain": {
+          "status": "measured",
+          "baseline_subtracted": true,
+          "original_watts": 8.7512851965,
+          "baked_watts": 1.9670260292500001,
+          "change_percent": -77.52300393504837,
+          "verdict": "saved"
+        }
+      },
+      "phases": [
+        {
+          "label": "01-A",
+          "displayed_fps": 119.9759369696658,
+          "displayed_rows": 2398,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 8.803872719000001,
+          "package_watts": 18.490654593499997
+        },
+        {
+          "label": "02-B",
+          "displayed_fps": 119.93802888146776,
+          "displayed_rows": 2396,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 1.9390791374999998,
+          "package_watts": 13.386088178
+        },
+        {
+          "label": "03-B",
+          "displayed_fps": 119.97663927752092,
+          "displayed_rows": 2398,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 1.9985238945000001,
+          "package_watts": 14.048954346
+        },
+        {
+          "label": "04-A",
+          "displayed_fps": 119.99743604977672,
+          "displayed_rows": 2397,
+          "dropped_rows": 0,
+          "refresh_hz": 165,
+          "igpu_watts": 8.7022486475,
+          "package_watts": 18.7550543655
+        }
+      ],
+      "original_config_bytes_restored": true,
+      "automated_comparison": {
+        "status": "unavailable",
+        "choice": "unavailable",
+        "gpu_choice": "unavailable",
+        "scope": "Saved project assignments and iGPU graphics-domain/CPU-package readings from this WPE process on one display. Configuration fallback alone does not verify official playback identity. Not total-system savings or visual correctness.",
+        "reasons": [
+          "01-A: saved configuration confirms assignment only; official playback selection was not verified.",
+          "01-A: playback selection, PID, power, or display capture was incomplete.",
+          "02-B: saved configuration confirms assignment only; official playback selection was not verified.",
+          "02-B: playback selection, PID, power, or display capture was incomplete.",
+          "02-B: displayed frame count, drops, or cadence did not establish target FPS.",
+          "03-B: saved configuration confirms assignment only; official playback selection was not verified.",
+          "03-B: playback selection, PID, power, or display capture was incomplete.",
+          "04-A: saved configuration confirms assignment only; official playback selection was not verified.",
+          "04-A: playback selection, PID, power, or display capture was incomplete."
+        ]
+      }
+    }
+  ],
+  "homepage_chart": {
+    "kind": "illustrative_continuous_ABBA_trace",
+    "layout_source": "bb024755",
+    "wallpaper_id": "3669681034",
+    "fps": 165,
+    "igpu_original_w": 25.55191166975,
+    "igpu_baked_w": 2.189677271,
+    "note": "Curve geometry follows the approved early website illustration; measured levels calibrate its vertical scale. The transitions are illustrative, not sampled switch transients."
+  }
+}

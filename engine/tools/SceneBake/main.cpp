@@ -166,7 +166,7 @@ struct Job {
     uint64_t frames{}, warmup{}, seed{}, readback_budget{};
     uint64_t output_stride { 1 };
     std::optional<uint64_t> output_phase;
-    std::optional<owe::GpuEncodeOptions> gpu_encode;
+    std::optional<owe::GpuEncodeOptions> gpu_encode, gpu_readback;
     double epoch_ms{};
     double effect_render_scale { 1.0 };
     bool match_effect_resolution { false };
@@ -355,6 +355,33 @@ Job ReadJob(const owe::NJson& json, const fs::path& base) {
         }
         job.gpu_encode = std::move(options);
     }
+    if (Field(json,"output_resize_width") || Field(json,"output_resize_height")) {
+        owe::GpuEncodeOptions options;
+        options.resize_width=narrow("output_resize_width",0,job.width);
+        options.resize_height=narrow("output_resize_height",0,job.height);
+        if (((options.resize_width|options.resize_height)&1u) || job.sample_width || job.gpu_encode ||
+            job.output_stride!=1 || job.output_phase || Field(json,"hdr_scale") ||
+            Bool(json,"hdr_range_probe",false) || Bool(json,"hdr_signed_sqrt",false))
+            throw std::runtime_error("GPU readback resize requires paired even output dimensions, ordinary full RGBA frames and stride 1");
+        options.path=Utf8(job.output/"frames.rgba");
+        options.first_frame=job.warmup; options.frames=job.frames;
+        options.fps_num=job.fps_num; options.fps_den=job.fps_den;
+        options.encoded_frames=Uint(json,"encoded_frames",job.frames);
+        if (!options.encoded_frames || options.encoded_frames>job.frames)
+            throw std::runtime_error("Resized encoded_frames must be a positive frame prefix");
+        options.require_opaque_pixels=Bool(json,"require_opaque_pixels",false);
+        if (auto* retained=Field(json,"retain_frames")) {
+            if (!retained->is_array()) throw std::runtime_error("Resized retain_frames must be an array");
+            for (const auto& item:*retained) {
+                if (!item.is_number_unsigned() || item.get<uint64_t>()>=job.frames || options.retain_frames.size()>=32 ||
+                    (!options.retain_frames.empty() && item.get<uint64_t>()<=options.retain_frames.back()))
+                    throw std::runtime_error("Resized retained frames must be up to 32 increasing indices inside the render");
+                options.retain_frames.push_back(item.get<uint64_t>());
+            }
+        }
+        job.gpu_readback=std::move(options);
+    } else if (Field(json,"retain_frames") || Field(json,"encoded_frames") || Field(json,"require_opaque_pixels"))
+        throw std::runtime_error("Top-level retained frames and opacity validation require GPU readback resize");
     job.validation = Bool(json, "vulkan_validation", false);
     job.gpu_timing = Bool(json, "gpu_timing", false);
     job.trace_scene = Bool(json, "trace_scene", false);
@@ -525,8 +552,8 @@ int Render(const fs::path& job_path) {
             << ",\"frame_counts_include_warmup\":true"
             << ",\"last_step_draw_skipped\":" << (wallpaper.readback().rasterized ? "false" : "true")
             << ",\"output_frame_phase\":" << (job.output_phase ? std::to_string(*job.output_phase) : "null")
-            << ",\"readback_width\":" << (job.sample_width ? job.sample_width : job.width)
-            << ",\"readback_height\":" << (job.sample_height ? job.sample_height : job.height)
+            << ",\"readback_width\":" << (job.gpu_readback ? job.gpu_readback->resize_width : job.sample_width ? job.sample_width : job.width)
+            << ",\"readback_height\":" << (job.gpu_readback ? job.gpu_readback->resize_height : job.sample_height ? job.sample_height : job.height)
             << ",\"gpu_sampled\":" << (gpu_sampled ? "true" : "false")
             << ",\"sampling_coverage\":" << (sampling_coverage.empty() ? "null" : sampling_coverage)
             << ",\"gpu_encoded\":" << (job.gpu_encode ? "true" : "false")
@@ -696,6 +723,7 @@ int Render(const fs::path& job_path) {
         info.sampling_coverage_frames=job.frames;
         info.sampling_coverage_sampled_only=job.sampling_coverage_sampled_only;
         info.gpu_encode = job.gpu_encode;
+        info.gpu_readback = job.gpu_readback;
         owe::OfflineOptions offline;
         offline.seed = job.seed;
         offline.epoch_ms = job.epoch_ms;
@@ -747,8 +775,8 @@ int Render(const fs::path& job_path) {
             RequireNoLoggedErrors();
             const auto& pixels = wallpaper.readback();
             const bool read_pixels = !job.gpu_encode && offline.readsFrame(frame);
-            const uint32_t output_width = job.sample_width ? job.sample_width : job.width;
-            const uint32_t output_height = job.sample_height ? job.sample_height : job.height;
+            const uint32_t output_width = job.gpu_readback ? job.gpu_readback->resize_width : job.sample_width ? job.sample_width : job.width;
+            const uint32_t output_height = job.gpu_readback ? job.gpu_readback->resize_height : job.sample_height ? job.sample_height : job.height;
             if (wallpaper.stepStatus() != owe::OfflineStepStatus::Drawn ||
                 (!pixels.completed() && !(!read_pixels && frame + 1 < job.warmup + job.frames && pixels.submitted())) || pixels.frame_index != frame || pixels.width != output_width ||
                 pixels.height != output_height || pixels.row_pitch != output_width * 4 ||
@@ -857,7 +885,7 @@ int main(int argc, char** argv) {
         }
         if (parsed && version && !render->parsed()) {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-encode-padding-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1,hdr-terminal-affine-v2,hdr-terminal-signed-sqrt-v1,hdr-range-probe-v1\n";
+                      << " features=sparse-readback-v1,gpu-resize-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-encode-padding-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1,hdr-terminal-affine-v2,hdr-terminal-signed-sqrt-v1,hdr-range-probe-v1\n";
             return 0;
         }
         if (parsed && !version && render->parsed()) return Render(Path(job));

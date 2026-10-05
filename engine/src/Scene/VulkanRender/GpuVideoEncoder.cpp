@@ -135,7 +135,9 @@ struct GpuVideoEncoder::Impl {
     VkImage horizontal_image {}, resized_image {};
     VkImageView horizontal_view {}, resized_view {};
     VkDeviceMemory horizontal_memory {}, resized_memory {};
-    bool resizing {};
+    bool resizing {}, raw_readback {};
+    std::uint32_t minimum_alpha {255};
+    std::uint64_t first_nonopaque {UINT64_MAX};
     GpuCaptureOptions capture;
     std::filesystem::path directory;
     std::ofstream retained;
@@ -347,7 +349,7 @@ struct GpuVideoEncoder::Impl {
         VkImageCreateInfo info { .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
             .format = format, .extent = {image_width,image_height,1}, .mipLevels = 1, .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = VK_IMAGE_USAGE_STORAGE_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE };
+            .usage = VK_IMAGE_USAGE_STORAGE_BIT | (raw_readback ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u), .sharingMode = VK_SHARING_MODE_EXCLUSIVE };
         Vk(vkCreateImage(device, &info, nullptr, &image), "create GPU resize image");
         VkMemoryRequirements requirements;
         vkGetImageMemoryRequirements(device, image, &requirements);
@@ -532,6 +534,41 @@ struct GpuVideoEncoder::Impl {
         writePacket();
     }
 
+    void resizeSource(std::uint64_t index) {
+        if (resizing) {
+            std::array<VkImageMemoryBarrier,2> scratch;
+            for (std::size_t i=0;i<scratch.size();++i) {
+                scratch[i] = { .sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .srcAccessMask=index==0 ? VkAccessFlags(0) : VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,
+                    .dstAccessMask=VK_ACCESS_SHADER_WRITE_BIT,
+                    .oldLayout=index==0 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+                    .newLayout=VK_IMAGE_LAYOUT_GENERAL, .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED, .image=i==0 ? horizontal_image : resized_image,
+                    .subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1} };
+            }
+            vkCmdPipelineBarrier(command,index==0 ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,0,nullptr,0,nullptr,2,scratch.data());
+            vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,resize_pipeline);
+            std::array<std::uint32_t,7> resize_dimensions { capture.crop_x,capture.crop_y,
+                capture.crop_width,capture.crop_height,color_width,output_height,0 };
+            vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(resize_dimensions),resize_dimensions.data());
+            vkCmdDispatch(command,(color_width+7)/8,(capture.crop_height+7)/8,1);
+            scratch[0].srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+            scratch[0].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+            scratch[0].oldLayout=VK_IMAGE_LAYOUT_GENERAL;
+            vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,0,nullptr,0,nullptr,1,&scratch[0]);
+            resize_dimensions[6]=1;
+            vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(resize_dimensions),resize_dimensions.data());
+            vkCmdDispatch(command,(color_width+7)/8,(output_height+7)/8,1);
+            scratch[1].srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+            scratch[1].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+            scratch[1].oldLayout=VK_IMAGE_LAYOUT_GENERAL;
+            vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,0,nullptr,0,nullptr,1,&scratch[1]);
+        }
+    }
+
     void beginCapture() {
         waitConversion();
         Vk(vkResetCommandBuffer(command, 0), "reset capture command");
@@ -550,21 +587,22 @@ struct GpuVideoEncoder::Impl {
         Vk(vkEndCommandBuffer(command), "end capture command");
         Vk(vkResetFences(device, 1, &fence), "reset capture fence");
         VkSubmitInfo submit { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &command };
-        auto* hw = reinterpret_cast<AVHWDeviceContext*>(hardware->data);
-        auto* vk = reinterpret_cast<AVVulkanDeviceContext*>(hw->hwctx);
-        vk->lock_queue(hw, family, 0);
+        auto* hw = hardware ? reinterpret_cast<AVHWDeviceContext*>(hardware->data) : nullptr;
+        auto* vk = hw ? reinterpret_cast<AVVulkanDeviceContext*>(hw->hwctx) : nullptr;
+        if (vk) vk->lock_queue(hw, family, 0);
         const auto result = vkQueueSubmit(queue, 1, &submit, fence);
-        vk->unlock_queue(hw, family, 0);
+        if (vk) vk->unlock_queue(hw, family, 0);
         Vk(result, "submit capture copy");
         Vk(vkWaitForFences(device, 1, &fence, VK_TRUE, timeout_ns), "wait capture copy");
     }
 
     void retain(VkImage rgba, std::uint64_t index) {
-        bool first = capture.collect_bounds && index == 0;
+        bool first = !raw_readback && capture.collect_bounds && index == 0;
+        bool nonopaque = raw_readback && first_nonopaque == index;
         bool keep = std::binary_search(capture.retain_frames.begin(), capture.retain_frames.end(), index);
         bool window=capture.retain_loop_window && (index<capture.crossfade_frames ||
             (index>=capture.encoded_frames && index-capture.encoded_frames<capture.crossfade_frames));
-        if (!first && !keep && !window) return;
+        if (!first && !keep && !window && !nonopaque) return;
         beginCapture();
         VkBufferImageCopy copy { .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
             .imageExtent = { width, height, 1 } };
@@ -576,6 +614,12 @@ struct GpuVideoEncoder::Impl {
             file.write(static_cast<const char*>(mapped), bytes);
             file.flush();
             if (!file) throw std::runtime_error("write first GPU reference frame");
+        }
+        if (nonopaque) {
+            std::ofstream file(directory / "nonopaque-frame.rgba", std::ios::binary);
+            file.write(static_cast<const char*>(mapped), bytes);
+            file.flush();
+            if (!file) throw std::runtime_error("write nonopaque GPU reference frame");
         }
         if (keep) {
             retained.write(static_cast<const char*>(mapped), bytes);
@@ -599,6 +643,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     auto& p = *impl;
     p.device = device; p.gpu = gpu; p.family = graphics_family;
     p.width = width; p.height = height;
+    p.raw_readback = codec_name == "rgba_readback";
     p.capture = std::move(capture);
     p.capture.crop_width = p.capture.crop_width ? p.capture.crop_width : width;
     p.capture.crop_height = p.capture.crop_height ? p.capture.crop_height : height;
@@ -639,11 +684,12 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
         throw std::runtime_error("Invalid GPU capture frame selection");
     if (!width || !height || !fps_num || !fps_den ||
         fps_num > INT32_MAX || fps_den > INT32_MAX || qp < 0 || qp > 51 ||
-        (codec_name != "h264_vulkan" && codec_name != "hevc_vulkan" && codec_name != "av1_nvenc"))
+        (!p.raw_readback && codec_name != "h264_vulkan" && codec_name != "hevc_vulkan" && codec_name != "av1_nvenc"))
         throw std::runtime_error("GPU encoding requires positive capture dimensions, a rational FPS and Vulkan H.264/HEVC or NVENC AV1");
     vkGetDeviceQueue(device, graphics_family, 0, &p.queue);
     p.push_descriptors = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR"));
     if (!p.push_descriptors) throw std::runtime_error("GPU conversion requires push descriptors");
+    if (!p.raw_readback) {
     p.hardware = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VULKAN);
     if (!p.hardware) throw std::bad_alloc();
     auto* hw = reinterpret_cast<AVHWDeviceContext*>(p.hardware->data);
@@ -733,12 +779,13 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.frame = av_frame_alloc(); p.packet = av_packet_alloc();
     if (!p.frame || !p.packet) throw std::bad_alloc();
 
+    }
     if (p.nvenc) p.exportRing();
-    else p.makeBuffer(std::max<std::uint64_t>(32,std::uint64_t(p.stride) * p.output_height * 3 / 2),
+    else p.makeBuffer(std::max<std::uint64_t>(32,p.raw_readback ? 32 : std::uint64_t(p.stride) * p.output_height * 3 / 2),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, p.nv12, p.memory);
-    if (p.capture.collect_bounds || !p.capture.retain_frames.empty() || p.capture.retain_loop_window) {
-        p.makeBuffer(std::max<std::uint64_t>(32, std::uint64_t(width) * height * 4), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    if (p.raw_readback || p.capture.collect_bounds || !p.capture.retain_frames.empty() || p.capture.retain_loop_window) {
+        p.makeBuffer(std::max<std::uint64_t>(32, std::uint64_t(width) * height * 4 + (p.raw_readback ? 32 : 0)), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, p.readback, p.readback_memory,
             VK_MEMORY_PROPERTY_HOST_CACHED_BIT); // CPU reads of uncached memory ran at ~156 MB/s (8K retained frames)
         Vk(vkMapMemory(device, p.readback_memory, 0, VK_WHOLE_SIZE, 0, &p.mapped), "map selected-frame readback");
@@ -752,10 +799,11 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
         p.loop_window.open(p.directory/"loop-window.rgba",std::ios::binary);
         if (!p.loop_window) throw std::runtime_error("open original GPU loop window");
     }
-    if (p.capture.collect_bounds) {
+    if (p.capture.collect_bounds || p.capture.require_opaque_pixels) {
         p.makeBuffer(32, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, p.statistics, p.statistics_memory);
         p.bounds = {width, height, 0, 0, 255, 0, 0, 0};
+        if (!p.raw_readback) {
         VkImageCreateInfo image { .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
             .format = VK_FORMAT_R8G8B8A8_UNORM, .extent = {width,height,1}, .mipLevels = 1, .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
@@ -769,6 +817,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
             .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
             .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1} };
         Vk(vkCreateImageView(device, &view, nullptr, &p.first_view), "view GPU first-frame reference");
+        }
     }
     if (p.resizing) {
         p.makeResizeImage(p.color_width,p.capture.crop_height,VK_FORMAT_R32G32B32A32_SFLOAT,
@@ -823,7 +872,7 @@ void main() {
         if (gl_LocalInvocationIndex==0u) {
             blockStats[0]=dims.width; blockStats[1]=dims.height; blockStats[2]=0u; blockStats[3]=0u;
             blockStats[4]=255u; blockStats[5]=0u; blockStats[6]=0u; blockStats[7]=0u;
-            compareFirst = atomicOr(stats.data[6],0u)==0u ? 1u : 0u;
+            compareFirst = (dims.flags&32u)==0u && atomicOr(stats.data[6],0u)==0u ? 1u : 0u;
         }
         barrier();
         if (y<dims.height && x<dims.width) {
@@ -854,7 +903,7 @@ void main() {
         }
     }
     // Initial loop-head frames are only cached; they are encoded after blending.
-    if (!insideImage || (dims.flags&4u)!=0u) return;
+    if (!insideImage || (dims.flags&36u)!=0u) return;
     uvec4 Y = uvec4(byteValue(luma(rgb(x,y))),byteValue(luma(rgb(x+1u,y))),
                    byteValue(luma(rgb(x+2u,y))),byteValue(luma(rgb(x+3u,y))));
     outputData.words[(y*dims.stride+x)/4u] = Y.x | (Y.y<<8u) | (Y.z<<16u) | (Y.w<<24u);
@@ -966,6 +1015,92 @@ GpuVideoEncoder::~GpuVideoEncoder() = default;
 
 void GpuVideoEncoder::waitConversion() { impl->waitConversion(); }
 
+void GpuVideoEncoder::readRgba(VkImage rgba, std::uint64_t index, std::span<std::uint8_t> pixels) {
+    auto& p = *impl;
+    const auto bytes = std::uint64_t(p.color_width) * p.output_height * 4;
+    if (!p.raw_readback || p.finished || pixels.size()!=bytes || index!=p.observed_frames)
+        throw std::runtime_error("Invalid GPU resized readback sequence or shape");
+    p.beginCapture();
+    if (rgba != p.source_image) {
+        if (p.source_view) vkDestroyImageView(p.device,p.source_view,nullptr);
+        p.source_view = VK_NULL_HANDLE;
+        VkImageViewCreateInfo view { .sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image=rgba,.viewType=VK_IMAGE_VIEW_TYPE_2D,.format=VK_FORMAT_R8G8B8A8_UNORM,
+            .subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1} };
+        Vk(vkCreateImageView(p.device,&view,nullptr,&p.source_view),"view RGBA readback source");
+        p.source_image=rgba;
+    }
+    VkImageMemoryBarrier source { .sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,.newLayout=VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+        .image=rgba,.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1} };
+    vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,0,nullptr,0,nullptr,1,&source);
+    const VkDescriptorImageInfo input { .imageView=p.source_view,.imageLayout=VK_IMAGE_LAYOUT_GENERAL };
+    const VkDescriptorImageInfo horizontal { .imageView=p.horizontal_view,.imageLayout=VK_IMAGE_LAYOUT_GENERAL };
+    const VkDescriptorImageInfo resized { .imageView=p.resized_view ? p.resized_view : p.source_view,.imageLayout=VK_IMAGE_LAYOUT_GENERAL };
+    const VkDescriptorBufferInfo stats { .buffer=p.statistics ? p.statistics : p.nv12,.offset=0,.range=32 };
+    const VkDescriptorBufferInfo dummy { .buffer=p.nv12,.offset=0,.range=32 };
+    const std::array<VkWriteDescriptorSet,7> writes {{
+        { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=0,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,.pImageInfo=&input },
+        { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=1,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&dummy },
+        { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=2,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,.pImageInfo=&input },
+        { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=3,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&stats },
+        { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=4,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&dummy },
+        { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=6,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,.pImageInfo=&resized },
+        { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=5,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,.pImageInfo=&horizontal } }};
+    p.push_descriptors(p.command,VK_PIPELINE_BIND_POINT_COMPUTE,p.layout,0,p.resizing ? 7 : 6,writes.data());
+    p.resizeSource(index);
+    if (p.capture.require_opaque_pixels) {
+        vkCmdUpdateBuffer(p.command,p.statistics,0,sizeof(p.bounds),p.bounds.data());
+        VkBufferMemoryBarrier ready { .sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,
+            .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+            .buffer=p.statistics,.offset=0,.size=32 };
+        vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,0,nullptr,1,&ready,0,nullptr);
+        vkCmdBindPipeline(p.command,VK_PIPELINE_BIND_POINT_COMPUTE,p.pipeline);
+        const std::array<std::uint32_t,13> dimensions {p.width,p.height,p.color_width,p.output_height,p.output_width,p.stride,0,0,33,0,1,p.width,p.height};
+        vkCmdPushConstants(p.command,p.layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(dimensions),dimensions.data());
+        vkCmdDispatch(p.command,(p.width+31)/32,(p.height+7)/8,1);
+        ready.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT; ready.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,0,nullptr,1,&ready,0,nullptr);
+        const VkBufferCopy copy { .srcOffset=0,.dstOffset=bytes,.size=32 };
+        vkCmdCopyBuffer(p.command,p.statistics,p.readback,1,&copy);
+    }
+    source.srcAccessMask=VK_ACCESS_SHADER_READ_BIT; source.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+    source.oldLayout=VK_IMAGE_LAYOUT_GENERAL; source.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,0,nullptr,0,nullptr,1,&source);
+    VkImageMemoryBarrier target=source;
+    if (p.resizing) {
+        target.image=p.resized_image; target.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,0,nullptr,0,nullptr,1,&target);
+    }
+    const VkBufferImageCopy copy { .imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},.imageExtent={p.color_width,p.output_height,1} };
+    vkCmdCopyImageToBuffer(p.command,p.resizing ? p.resized_image : rgba,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,p.readback,1,&copy);
+    if (p.resizing) {
+        target.srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT; target.dstAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+        target.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; target.newLayout=VK_IMAGE_LAYOUT_GENERAL;
+        vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,0,nullptr,0,nullptr,1,&target);
+    }
+    p.readCapture();
+    std::memcpy(pixels.data(),p.mapped,bytes);
+    ++p.observed_frames;
+    ++p.readbacks;
+    if (p.capture.require_opaque_pixels) {
+        std::uint32_t minimum;
+        std::memcpy(&minimum,static_cast<const std::uint8_t*>(p.mapped)+bytes+16,sizeof(minimum));
+        p.minimum_alpha=std::min(p.minimum_alpha,minimum);
+        if (minimum<255 && p.first_nonopaque==UINT64_MAX) p.first_nonopaque=index;
+    }
+    p.retain(rgba,index);
+}
+
 void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronous) {
     auto& p = *impl;
     if (p.finished) throw std::runtime_error("GPU encoder already finished");
@@ -1072,38 +1207,7 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
             { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=5,.descriptorCount=1,
               .descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,.pImageInfo=&horizontal } }};
         p.push_descriptors(p.command, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, p.resizing ? 7 : 6, writes.data());
-        if (p.resizing) {
-            std::array<VkImageMemoryBarrier,2> scratch;
-            for (std::size_t i=0;i<scratch.size();++i) {
-                scratch[i] = { .sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .srcAccessMask=index==0 ? VkAccessFlags(0) : VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,
-                    .dstAccessMask=VK_ACCESS_SHADER_WRITE_BIT,
-                    .oldLayout=index==0 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
-                    .newLayout=VK_IMAGE_LAYOUT_GENERAL, .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED, .image=i==0 ? p.horizontal_image : p.resized_image,
-                    .subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1} };
-            }
-            vkCmdPipelineBarrier(p.command,index==0 ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,0,nullptr,0,nullptr,2,scratch.data());
-            vkCmdBindPipeline(p.command,VK_PIPELINE_BIND_POINT_COMPUTE,p.resize_pipeline);
-            std::array<std::uint32_t,7> resize_dimensions { p.capture.crop_x,p.capture.crop_y,
-                p.capture.crop_width,p.capture.crop_height,p.color_width,p.output_height,0 };
-            vkCmdPushConstants(p.command,p.layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(resize_dimensions),resize_dimensions.data());
-            vkCmdDispatch(p.command,(p.color_width+7)/8,(p.capture.crop_height+7)/8,1);
-            scratch[0].srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
-            scratch[0].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
-            scratch[0].oldLayout=VK_IMAGE_LAYOUT_GENERAL;
-            vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0,0,nullptr,0,nullptr,1,&scratch[0]);
-            resize_dimensions[6]=1;
-            vkCmdPushConstants(p.command,p.layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(resize_dimensions),resize_dimensions.data());
-            vkCmdDispatch(p.command,(p.color_width+7)/8,(p.output_height+7)/8,1);
-            scratch[1].srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
-            scratch[1].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
-            scratch[1].oldLayout=VK_IMAGE_LAYOUT_GENERAL;
-            vkCmdPipelineBarrier(p.command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0,0,nullptr,0,nullptr,1,&scratch[1]);
-        }
+        p.resizeSource(index);
         vkCmdBindPipeline(p.command,VK_PIPELINE_BIND_POINT_COMPUTE,p.pipeline);
         std::uint32_t flags=(p.capture.collect_bounds ? (p.capture.bounds_include_rgb ? 3u : 1u) : 0u) |
             (cache_head ? 4u : 0u) | (blend_head ? 8u : 0u) | (p.resizing ? 16u : 0u);
@@ -1191,13 +1295,16 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
 void GpuVideoEncoder::finish() {
     auto& p = *impl;
     if (p.finished) return;
-    if (p.nvenc) {
+    if (p.raw_readback) {
+        p.waitConversion();
+    } else if (p.nvenc) {
         p.waitConversion();
         while (p.nv_collected < p.nv_sent) p.nvCollect();
     } else {
         Av(avcodec_send_frame(p.codec, nullptr), "flush Vulkan encoder");
         p.packets();
     }
+    if (!p.raw_readback) {
     if (p.encoded_packets != p.capture.encoded_frames) throw std::runtime_error("Incomplete GPU encoded frame sequence");
     Av(av_write_trailer(p.mux), "finish GPU video");
     Av(avio_closep(&p.mux->pb), "close GPU video");
@@ -1205,6 +1312,7 @@ void GpuVideoEncoder::finish() {
         Av(av_write_trailer(p.head_mux),"finish GPU loop head");
         Av(avio_closep(&p.head_mux->pb),"close GPU loop head");
         p.assembleLoop();
+    }
     }
     if (p.retained.is_open()) {
         p.retained.flush();
@@ -1218,7 +1326,7 @@ void GpuVideoEncoder::finish() {
             throw std::runtime_error("Original GPU loop window is incomplete");
         p.loop_window.close();
     }
-    if (p.capture.collect_bounds) {
+    if (!p.raw_readback && p.capture.collect_bounds) {
         p.beginCapture();
         VkBufferMemoryBarrier ready { .sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
             .srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT,.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT,
@@ -1239,7 +1347,7 @@ std::string GpuVideoEncoder::captureMetadata() const {
     out << "{\"readback_frames\":" << p.readbacks
         << ",\"encoded_packets\":" << p.encoded_packets
         << ",\"quality_level\":" << p.quality_level << ",\"async_depth\":" << p.async_depth
-        << ",\"encoder\":\"" << (p.nvenc ? "nvenc_sdk" : "vulkan_video") << '"';
+        << ",\"encoder\":\"" << (p.raw_readback ? "rgba_readback" : p.nvenc ? "nvenc_sdk" : "vulkan_video") << '"';
     if (p.capture.retain_loop_window)
         out << ",\"loop_window\":{\"path\":\"loop-window.rgba\",\"format\":\"rgba\",\"width\":" << p.width
             << ",\"height\":" << p.height << ",\"crossfade_frames\":" << p.capture.crossfade_frames
@@ -1258,7 +1366,7 @@ std::string GpuVideoEncoder::captureMetadata() const {
         out << ",\"loop_crossfade\":{\"status\":\"applied\",\"crossfade_frames\":" << p.capture.crossfade_frames
             << ",\"loop_frames\":" << p.capture.encoded_frames
             << ",\"method\":\"GPU integer RGBA blend; independent head/body GOPs restored by packet-only remux.\"}";
-    if (p.capture.collect_bounds) {
+    if (!p.raw_readback && p.capture.collect_bounds) {
         bool content=p.bounds[7]!=0;
         out << ",\"alpha_bounds\":{\"has_content\":" << (content ? "true" : "false")
             << ",\"x\":" << (content ? p.bounds[0] : 0) << ",\"y\":" << (content ? p.bounds[1] : 0)
@@ -1269,6 +1377,16 @@ std::string GpuVideoEncoder::captureMetadata() const {
             << ",\"observed_frames\":" << p.observed_frames
             << ",\"first_frame_rgba_path\":\"first-frame.rgba\",\"basis\":\"GPU reduction over all source frames used by this output, including crossfade continuation when requested.\","
                "\"pixel_identity_scope\":\"Source RGBA compared against the first frame on the GPU; ordinary unencoded continuation is excluded.\"}";
+    }
+    if (p.raw_readback && p.capture.require_opaque_pixels) {
+        out << ",\"opaque_pixels\":{\"requested\":true,\"verified\":" << (p.minimum_alpha==255 ? "true" : "false")
+            << ",\"checked_frames\":" << p.observed_frames << ",\"frame_width\":" << p.width
+            << ",\"frame_height\":" << p.height << ",\"checked_pixels\":" << std::uint64_t(p.width)*p.height*p.observed_frames
+            << ",\"minimum_alpha\":" << p.minimum_alpha;
+        if (p.first_nonopaque!=UINT64_MAX)
+            out << ",\"first_nonopaque_frame\":" << p.first_nonopaque
+                << ",\"first_nonopaque_frame_rgba_path\":\"nonopaque-frame.rgba\"";
+        out << '}';
     }
     if (!p.capture.retain_frames.empty()) {
         out << ",\"retained_frames\":{\"path\":\"retained-frames.rgba\",\"format\":\"rgba\",\"width\":" << p.width
