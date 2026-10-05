@@ -211,7 +211,7 @@ The distributed renderer includes the current rendering and encoding changes.
 The authoritative source fingerprint and packaged binary SHA256 are in
 build-records/build-wpe-render.json.
 
-See README.md, SOURCE.md and the two build guides under scripts/ for background.
+See README.md, SOURCE.md and scripts/DISTRIBUTION-DEPENDENCIES.md for background.
 The matching runtime's build-records name its exact source digest. The checked
 Windows LLVM-MinGW compiler is the llvm-mingw-22 entry.
 

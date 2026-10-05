@@ -16,7 +16,7 @@ licenses-extra/** -text
 # LF、native-inputs.lock.json 还是混合换行，与仓库 blob 并不逐字节相同；一旦
 # 被这里的规则纳入，git status 会把它们判成 modified（打包脚本的「工作树必须
 # 干净」检查随即拒绝），而按常规方式还原又会把它们重写成 CRLF、直接毁掉已经
-# verified 的绑定。正确做法写在 scripts/DISTRIBUTION-DEPENDENCIES.md：切分支只用
+# verified 的绑定。保留字节的要求见 scripts/DISTRIBUTION-DEPENDENCIES.md：切分支只用
 # git fetch <bundle> <分支>:<分支> + git switch，不对 scripts/ 用 checkout -f /
 # reset --hard / stash / clean -x。
 # 上面两条规则只匹配 *.patch 与 licenses-extra/，

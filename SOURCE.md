@@ -93,12 +93,12 @@ archives remain on their GitHub Release pages.
 The native renderer is still built with the scripts in `scripts/`: fetch the pinned inputs,
 apply the dependency patches, then build with CMake. Tool versions are pinned in
 `scripts/native-inputs.lock.json`; fetching needs network access once, after that the build is
-offline. Details are in `scripts/NATIVE-BUILD-STATE.md` and
-`scripts/DISTRIBUTION-DEPENDENCIES.md`.
+offline. Follow `REBUILD.md` in the matching release source archive;
+`scripts/DISTRIBUTION-DEPENDENCIES.md` lists the build inputs and entry points.
 
 原生渲染器目前仍用 `scripts/` 下的脚本构建：先取锁定的输入，再应用依赖补丁，最后用 CMake 构建。
 工具链版本锁在 `scripts/native-inputs.lock.json`，首次下载需要联网，之后构建完全离线。
-细节见 `scripts/NATIVE-BUILD-STATE.md` 与 `scripts/DISTRIBUTION-DEPENDENCIES.md`。
+完整步骤见对应发行源码包内的 `REBUILD.md`；构建输入与入口见 `scripts/DISTRIBUTION-DEPENDENCIES.md`。
 
 ```powershell
 # 1) 取锁定的工具链与依赖源码到 .tools/、.deps/
