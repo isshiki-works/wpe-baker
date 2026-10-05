@@ -2,76 +2,105 @@
 
 English ｜ [简体中文](README.zh-CN.md)
 
-**Bake your animated wallpaper once. Play it with less GPU work.**
+**Deterministic animation baking for Wallpaper Engine.** Built on Periodica.
 
-WPE Baker turns repeating animation in Wallpaper Engine scenes into seamless video loops. Your wallpaper keeps moving, while the GPU spends less time rendering the same effects over and over. Clocks, music response and other live content can stay in the scene.
+Periodica analyzes animation in Wallpaper Engine scenes, coordinates its periods into seamless loops, and renders those loops as video. Clocks, music response and other live content can remain in the scene, reducing repeated rendering while preserving the animated wallpaper. Its first application is WPE Baker for Wallpaper Engine.
 
-It is the first application of Periodica, an engine that finds and coordinates animation periods. Everything runs locally, with no uploads or AI model calls.
+The output is a standalone Wallpaper Engine project. The video decoder plays the repeating animation while retained layers continue responding to live input. Analysis and generation run locally, with no wallpaper uploads or AI model calls.
 
-Website: **https://isshiki-works.github.io/wpe-baker/** · Download: **[2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1)** · 中文：[README.zh-CN.md](README.zh-CN.md)
+[Website](https://isshiki-works.github.io/wpe-baker/) · [Download 2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1)
 
-## What's new in 2.0
+## Measured
 
-- **Shader analysis replaces hand-written period equations.** Periodica follows time through compiled SPIR-V shaders to find loops, continuous motion and animations that settle. It also analyzes author scripts, so support can extend beyond a fixed catalog of effects.
-- **Independent animations get their own loops.** Local speed adjustments coordinate motion without forcing the whole scene into one long cycle. Transparency, blending and HDR are preserved when the baked content is placed back into the scene.
-- **Faster generation.** GPU resizing before readback reduces frame transfers, and hardware encoding is available on Intel, AMD and NVIDIA GPUs. On an Intel Arc B390, the full Atri example took about 4 min 55 s at 3072×1920 and 60 FPS.
-- **A redesigned liquid glass interface.** Load the current wallpaper, adjust the output and manage jobs in one window. Scene previews are rendered directly from the wallpaper, instead of enlarging its thumbnail.
+Official Wallpaper Engine player, Intel Arc B390 laptop on AC power. Original and baked scenes alternate in A/B/B/A order, with 20 seconds sampled per segment. The table below uses Balanced precision and default wallpaper properties. Baked output is 1920×1080 at 60 FPS; originals render normally on the 3072×1920 display.
+
+| Wallpaper | Original iGPU | Baked iGPU | Change | CPU package: original → baked |
+|---|---:|---:|---:|---:|
+| Nijika (3650475846) | 20.87 W | 14.63 W | −29.9% | 31.80 → 26.51 W |
+| Ayanami Rei (3258032485) | 2.16 W | 0.14 W | −93.4% | 11.23 → 8.72 W |
+| Atri (3669681034) | 8.51 W | 0.27 W | −96.8% | 17.85 → 9.26 W |
+| Alone (3448877775) | 5.52 W | 4.81 W | −12.8% | 15.45 → 16.17 W |
+| Ultraman Leo (3685247684) | 9.08 W | 1.44 W | −84.1% | 19.58 → 11.58 W |
+| Yuri (3572877776) | 2.10 W | 0.48 W | −77.4% | 11.59 → 9.45 W |
+| Frieren (3426865175) | 10.57 W | 7.23 W | −31.6% | 19.62 → 19.64 W |
+| Lost Landscape 3 (3713073223) | 8.10 W | 3.30 W | −59.2% | 17.96 → 13.61 W |
+
+Power savings also extend to high refresh rates. These tests use the same alternating playback method, with both original and baked output at the display's native 3072×1920 resolution:
+
+| Wallpaper and frame rate | Original iGPU | Baked iGPU | Change | CPU package: original → baked |
+|---|---:|---:|---:|---:|
+| Atri · 60 FPS | 8.50 W | 0.30 W | −96.5% | 16.53 → 9.33 W |
+| Atri · 165 FPS | 25.55 W | 2.19 W | −91.4% | 37.67 → 12.84 W |
+| Ayanami Rei · 120 FPS | 8.75 W | 1.97 W | −77.5% | 18.62 → 13.72 W |
+
+## 2.0 · Performance update
+
+**From period equations to shader analysis.** 2.0 applies abstract interpretation to compiled SPIR-V, following time through the data flow to derive cycles, continuous drift and animation that settles after a while. New effects no longer need a hand-written equation of their own; unfamiliar custom shaders can be analyzed too. Author scripts are also included in time analysis.
+
+**Independent motion, separate adjustments.** Waves, glows and scrolling within one effect no longer have to speed up together. Motions that can be controlled independently are adjusted separately, and independent video groups repeat at their own intervals. Transparency and blending order are preserved when baked content returns to the scene. HDR intermediate images are mapped into video and restored by a generated shader.
+
+**Faster generation.** Resizing on the GPU before readback reduces transfers of high-resolution raw frames, with hardware encoding available on Intel, AMD and NVIDIA GPUs. On Intel Arc B390, Atri generated all 15,456 frames at 3072×1920 and 60 FPS in about 4 min 55 s, using default properties and Balanced precision.
+
+**A redesigned interface.** 2.0 brings liquid glass styling to wallpaper selection, generation settings and the task queue, all in one window. Previews are rendered directly from the scene. Completed jobs can be previewed, applied or exported.
 
 ![WPE Baker 2.0 interface](https://isshiki-works.github.io/wpe-baker/site/gui-2.0-en.jpg)
 
-Technical details and project notes: [technical notes](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.md).
-
 ## Quick start
 
-1. Download `WpeBaker-2.0.0-rc.1-win-x64.zip` from [2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1) and unzip the **whole** archive into a folder you can write to (not `C:\Program Files`). No installer.
-2. Run `WpeBaker\WpeBaker.exe`.
-3. Choose the current wallpaper, or drag in a Scene wallpaper folder or `scene.pkg`, then click **Analyze**.
-4. Review the plan, choose your frame rate and resolution, and click **Start generating**.
-5. Select the completed job to preview it in Wallpaper Engine, apply it to a screen, or export a ZIP.
+Requires Windows 10/11 64-bit, Wallpaper Engine from Steam and a Vulkan-capable GPU. The portable package includes its runtime dependencies; no separate .NET, Python or FFmpeg installation is needed.
 
-The main choices:
+1. Download `WpeBaker-2.0.0-rc.1-win-x64.zip` from the release page and extract the whole archive into a writable directory.
+2. Open the extracted `WpeBaker` folder and run `WpeBaker.exe`.
+3. Choose the current wallpaper, or drop in a wallpaper folder or `scene.pkg`. Workshop wallpapers are usually under `steamapps\workshop\content\431960` in your Steam library.
+4. Choose animation precision, interaction, frame rate and resolution, then click **Analyze**. The plan shows what can be baked, what stays live and which settings will be used. Analyze again after changing settings.
+5. Click **Start generating**. Select the completed task to preview it in Wallpaper Engine, apply it to a screen, or export a ZIP. You can restore the previous wallpaper after applying it.
 
-- **Animation precision**: efficiency (5 %), balanced (3 %, default) or quality (smallest change that closes). If a stricter level does not close, it steps down one level and the verdict names the one used.
-- **Interaction**: keep, fixed view (default) or off; decides what mouse- and audio-driven effects do. Clocks, dates and media text stay live in every mode.
+### Main controls
 
-Command line:
+- **Animation precision:** Efficiency, Balanced (default) or Quality. Efficiency and Balanced use visible-change budgets of 5% and 3% to constrain animation adjustments. Quality seeks the smallest change that forms a loop. The analysis shows the preset actually used.
+- **Interaction:** Keep, Fixed view (default) or Off, for retaining mouse effects, fixing the view or turning mouse effects off. The plan lists how mouse- and audio-driven content will be handled. Clocks, dates and media text stay live.
+- **Output:** Set the frame rate and resolution. Higher settings increase generation time and file size.
+- **Wallpaper properties:** Adjust switches, colors and other controls supplied by the author before analyzing and generating.
 
+You can also choose **Optimize live scene** to combine compatible water-wave effects while keeping the scene live, without generating video. Re-analyze plans saved by older versions with 2.0.
+
+## How it works and where it helps
+
+The program analyzes time in shaders, animation tracks, particles and videos, then adjusts motion within the selected precision to form repeatable loops. Periodic content is pre-rendered as video or static textures and combined with layers that need to stay live. Generation checks loop seams, image quality, composition and hardware decoding.
+
+WPE Baker works with Scene wallpapers. Scenes with demanding, repeating animation usually offer more room for savings; lightweight scenes have less rendering work to remove. Wallpaper Engine still plays the finished project and renders its live layers.
+
+## Command line
+
+The command-line program is `wpe-baker.exe` in the same folder. Open PowerShell there:
+
+```powershell
+.\wpe-baker.exe analyze "D:\Wallpapers\scene.pkg" --out plan.json
+.\wpe-baker.exe bake plan.json --out "D:\Wallpapers\BakedScene"
+.\wpe-baker.exe --help
 ```
-wpe-baker.exe analyze <scene.pkg> --out plan.json
-wpe-baker.exe bake plan.json --out <output-dir>
+
+For `bake`, `--out` must name a new output directory. After generation, use `compare` to measure playback power for the original and baked projects:
+
+```powershell
+.\wpe-baker.exe compare "D:\Wallpapers\Original" --baked "D:\Wallpapers\BakedScene" --wallpaper-engine "D:\SteamLibrary\steamapps\common\wallpaper_engine\wallpaper64.exe" --out "D:\Wallpapers\PowerReport"
 ```
 
-To compare playback cost after generation, use `wpe-baker.exe compare <original-folder> --baked <output-folder> --wallpaper-engine <wallpaper64.exe> --out <new-report-folder>`. It temporarily switches the wallpaper through A/B/B/A playback and reopens the previous assignment, resuming playback by default. Add `--restore-playback paused` to return it paused. Reopening restarts playback position; saved configuration cannot reveal the prior pause state. This requires one connected display and a single wallpaper assignment. The report separates iGPU and CPU-package power; opposing changes are shown as a tradeoff. Missing evidence gives no recommendation, and visual correctness is checked separately.
-
-## How it works
-
-- **Analyze the motion.** Find the periods in shaders, animation tracks, particles and embedded videos, and identify content that needs live input.
-- **Find a practical loop.** Adjust animation speeds within the chosen precision budget. Independent groups can repeat at different intervals.
-- **Render once.** Save the repeating parts as video or static textures, then combine them with the live layers. Generation checks the loop seam, image quality, composition and hardware decoding.
-
-You can also choose **Optimize live scene** to combine compatible effects while keeping the scene live, without generating video.
+Measurement requires one display and a single wallpaper assignment, and temporarily switches the desktop wallpaper. It reopens the original wallpaper afterward, restarting playback. Add `--restore-playback paused` to leave it paused instead. The report records iGPU and CPU-package power separately.
 
 ## Feedback
 
-Issues are welcome in English or Chinese. Attach `plan.json` and `bake.json` from the output folder, your GPU and the Workshop id; that is usually enough to find the cause.
+[Issues](https://github.com/isshiki-works/wpe-baker/issues) are welcome in English or Chinese. Include the application version, GPU, Workshop ID, steps to reproduce and error messages. If analysis or generation produced reports, attach `plan.json`, `bake.json` and relevant logs.
 
-## Requirements
+## Source and licenses
 
-Windows 10/11 64-bit, Wallpaper Engine, and a Vulkan-capable GPU for offline rendering. During playback, Wallpaper Engine decodes the baked videos and renders the retained real-time layers.
+The release includes the matching `WpeBaker-2.0.0-rc.1-source.zip`, with dependency sources, third-party notices and build records. Complete build instructions are in its `REBUILD.md`.
 
-## Building from source
-
-`WpeBaker-2.0.0-rc.1-source.zip` on the release page contains the corresponding source, third-party notices and build records. See `REBUILD.md` in that archive. Older saved plans should be re-analyzed with 2.0.
-
-## Licenses
-
-The MIT license in `LICENSE` covers the C# application/tool layer and the developer scripts. `engine/` (the offline renderer, derived from open-wallpaper-engine) and its modifications keep the upstream GPL-2.0; see `engine/LICENSE`. FFmpeg, x264 and other dependencies keep their own licenses.
-
-Third-party components and license texts: `THIRD-PARTY-NOTICES.md` and `licenses/` in the source archive. Baked outputs are for personal use on your own machine; wallpaper artwork remains the property of its Steam Workshop authors. WPE Baker is not affiliated with or endorsed by Wallpaper Engine.
+The C# application and developer scripts use the [MIT license](LICENSE). The offline renderer derives from [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) and uses [GPL-2.0](engine/LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for dependency licenses and [SOURCE.md](SOURCE.md) for corresponding source details. Wallpaper artwork belongs to its respective authors. WPE Baker is not affiliated with Wallpaper Engine.
 
 ## Credits
 
-- **hypengw** — vvk, wavsen and rstd, the libraries under the renderer.
-- **isshiki** — direction, product decisions, hardware, testing.
+- **hypengw:** vvk, wavsen, rstd and related libraries.
+- **isshiki:** product direction, design, hardware and testing.
 
-Developed with AI coding agents: Claude Code (Anthropic) and OpenAI Codex.
+Developed with Claude Code (Anthropic) and OpenAI Codex.

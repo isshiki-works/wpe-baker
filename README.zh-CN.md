@@ -2,73 +2,105 @@
 
 [English](README.md) ｜ 简体中文
 
-**你的壁纸一直在实时渲染。烘焙一次就够了。**
+**面向 Wallpaper Engine 的确定性动画烘焙工具**，基于 Periodica 引擎。
 
-WPE Baker 将 Wallpaper Engine 场景中反复播放的动画提前渲染成无缝循环视频。壁纸照常动，显卡不必一遍遍重算相同的效果；时钟、音乐响应等实时内容也可以保留。
+Periodica 分析 Wallpaper Engine 场景，通过数学建模协调其中可烘焙动画的周期，让画面形成首尾衔接的循环，再以视频形式播放。时钟、音乐响应等实时内容可以继续保留，在维持动态画面效果的同时，减少重复渲染的开销。它的首个应用是面向 Wallpaper Engine 的 WPE Baker。
 
-它是 Periodica 的首个应用。Periodica 通过分析和协调动画周期，让原本各自运动的画面形成循环。整个过程在本机完成，无需上传壁纸，也不调用 AI 模型。
+输出是一个独立的 Wallpaper Engine 项目。周期动画由视频解码器播放，保留的实时图层继续响应输入。分析与生成都在本机完成，无需上传壁纸，也不调用 AI 模型。
 
-官网：**https://isshiki-works.github.io/wpe-baker/zh.html** · 下载：**[2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1)** · 技术细节与项目记录：[技术记录](https://github.com/isshiki-works/wpe-baker/blob/main/docs/technical-notes.zh-CN.md)
+[官网](https://isshiki-works.github.io/wpe-baker/zh.html) · [下载 2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1)
 
-## 2.0 更新了什么
+## 实测
 
-- **从逐项编写方程，到直接分析着色器。** 程序沿编译后 SPIR-V 的数据流追踪时间，识别循环、持续运动和逐渐停止的动画，并将作者脚本纳入分析。支持范围不再只取决于预先整理了多少种效果。
-- **独立的动画，分别协调。** 通过局部调速缩短循环，彼此独立的视频组采用各自的周期。烘焙内容放回原场景时，透明度、混合顺序和 HDR 也一并处理。
-- **生成更快。** 在 GPU 上完成缩放后再回读，减少原始帧搬运，并接通 Intel、AMD、NVIDIA 的硬件编码。Intel Arc B390 上，亚托莉以 3072×1920、60 FPS 完整生成，用时约 4 分 55 秒。
-- **以液态玻璃美学重新设计界面。** 当前壁纸、生成设置与任务队列集中在同一窗口。预览图直接从场景渲染，不再放大小尺寸封面。
+官方 Wallpaper Engine 播放器，Intel Arc B390 笔记本，接电，以原作／成品／成品／原作的顺序交替播放，每段采样 20 秒。下表使用平衡精度、默认壁纸属性，成品为 1920×1080、60 FPS，原作在 3072×1920 屏幕上正常渲染。
+
+| 壁纸 | 原作核显功耗 | 烘焙后 | 变化 | CPU 封装：原作 → 成品 |
+|---|---:|---:|---:|---:|
+| 虹夏（3650475846） | 20.87 W | 14.63 W | −29.9% | 31.80 → 26.51 W |
+| 绫波丽（3258032485） | 2.16 W | 0.14 W | −93.4% | 11.23 → 8.72 W |
+| 亚托莉（3669681034） | 8.51 W | 0.27 W | −96.8% | 17.85 → 9.26 W |
+| Alone（3448877775） | 5.52 W | 4.81 W | −12.8% | 15.45 → 16.17 W |
+| 奥特曼雷欧（3685247684） | 9.08 W | 1.44 W | −84.1% | 19.58 → 11.58 W |
+| 百合（3572877776） | 2.10 W | 0.48 W | −77.4% | 11.59 → 9.45 W |
+| 芙莉莲（3426865175） | 10.57 W | 7.23 W | −31.6% | 19.62 → 19.64 W |
+| Lost Landscape 3（3713073223） | 8.10 W | 3.30 W | −59.2% | 17.96 → 13.61 W |
+
+高刷新率下也能保持低功耗。以下原作与成品均以屏幕原生分辨率 3072×1920 播放，使用同样的交替测试方法：
+
+| 壁纸与帧率 | 原作核显功耗 | 烘焙后 | 变化 | CPU 封装：原作 → 成品 |
+|---|---:|---:|---:|---:|
+| 亚托莉 · 60 FPS | 8.50 W | 0.30 W | −96.5% | 16.53 → 9.33 W |
+| 亚托莉 · 165 FPS | 25.55 W | 2.19 W | −91.4% | 37.67 → 12.84 W |
+| 绫波丽 · 120 FPS | 8.75 W | 1.97 W | −77.5% | 18.62 → 13.72 W |
+
+## 2.0 · 性能更新
+
+**从周期方程库到着色器分析。** 2.0 对实际编译得到的 SPIR-V 进行抽象解释，沿数据流追踪时间变量，推导周期、持续漂移，以及经过一段时间后停止变化的动画。不必为每一种新效果单独编写方程，陌生的自定义着色器也可以进入分析。作者脚本同样纳入时间分析。
+
+**分别协调独立的运动。** 一个效果里的水波、光晕和滚动不必再一起加速。程序分别调整能够独立控制的运动，彼此独立的视频组按各自的周期循环。烘焙结果放回原场景时，保留透明度与混合顺序；HDR 中间画面通过亮度映射存入视频，再由生成的着色器还原。
+
+**提高生成效率。** 渲染器在 GPU 上缩放后再回读，减少高分辨率原始帧的搬运，并支持 Intel、AMD、NVIDIA 硬件编码。Intel Arc B390 上，亚托莉以默认属性、平衡精度、3072×1920、60 FPS 完整生成 15,456 帧，用时约 4 分 55 秒。
+
+**重新设计界面。** 2.0 采用液态玻璃美学，将壁纸选择、生成设置与任务队列集中在同一窗口。预览图直接从场景渲染，生成后可预览、应用或导出成品。
 
 ![WPE Baker 2.0 界面](https://isshiki-works.github.io/wpe-baker/site/gui-2.0-zh.jpg)
 
 ## 快速开始
 
-1. 从 [2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1) 下载 `WpeBaker-2.0.0-rc.1-win-x64.zip`，**整个**解压到有写入权限的目录（例如 `D:\WpeBaker`）。不要放进 `C:\Program Files`，也不要在压缩软件窗口里直接运行。
-2. 双击 `WpeBaker\WpeBaker.exe`。
-3. 选择当前壁纸，或把场景壁纸的文件夹、`scene.pkg` 拖进窗口，点 **分析**。
-4. 查看方案，调整帧率和分辨率，点 **开始生成**。
-5. 选中已完成的任务，即可在 Wallpaper Engine 中预览、应用到指定屏幕，或导出 ZIP。
+需要 Windows 10/11 64 位、Wallpaper Engine（Steam 版）和支持 Vulkan 的显卡。便携包已包含运行依赖，无需另装 .NET、Python 或 FFmpeg。
 
-两个主要选项：
+1. 从发布页下载 `WpeBaker-2.0.0-rc.1-win-x64.zip`，完整解压到有写入权限的目录。
+2. 打开解压后的 `WpeBaker` 文件夹，双击 `WpeBaker.exe`。
+3. 选择当前壁纸，或把壁纸文件夹、`scene.pkg` 拖进窗口。创意工坊壁纸通常位于 Steam 库的 `steamapps\workshop\content\431960` 下。
+4. 选择动画精度、交互方式、帧率和分辨率，点击 **分析**。方案会列出可烘焙的内容、保留的实时部分和实际采用的设置；修改设置后重新分析。
+5. 点击 **开始生成**。完成后选中任务，即可在 Wallpaper Engine 中预览、应用到指定屏幕，或导出 ZIP。应用后可恢复上一个壁纸。
 
-- **动画精度**：效率（5%）、平衡（3%，默认）、质量（能闭合的最小改动）。更严的档位闭合不了时会自动降一档，结论里写明实际用的是哪一档。
-- **交互处理**：保留、固定视角（默认）、关闭，决定鼠标和音频驱动的效果怎么处理。时钟、日期、媒体文字在任何模式下都保持实时。
+### 主要选项
 
-也可以选择 **优化实时场景**，合并兼容的效果，保留场景实时运行，不生成视频。
+- **动画精度**：效率、平衡（默认）、质量。效率与平衡的可见变化预算分别为 5% 和 3%，用于约束动画调整；质量档寻找能够形成循环的最小改动。分析结果会显示实际采用的档位。
+- **交互处理**：保留、固定视角（默认）、关闭，分别用于保留鼠标效果、固定视角和关闭鼠标效果。鼠标与音频相关内容的具体处理列在分析方案中；时钟、日期和媒体文字继续实时更新。
+- **输出规格**：设置成品帧率与分辨率。较高的规格会增加生成时间和文件大小。
+- **壁纸属性**：调整作者提供的开关、颜色等选项，再按这些设置分析和生成。
 
-命令行：
+也可以选择 **优化实时场景**，合并场景中兼容的水波效果，保留实时渲染，无需生成视频。旧版本保存的生成方案，请用 2.0 重新分析。
 
+## 工作原理与适用范围
+
+程序先分析着色器、动画轨道、粒子和视频的时间关系，再在所选精度内调整动画，使其形成可重复播放的循环。周期内容预渲染为视频或静态纹理，与需要实时运行的图层共同组成成品。生成过程中会检查循环接缝、画质、合成结果和硬件解码。
+
+WPE Baker 面向场景（Scene）类壁纸。包含大量周期动画、渲染开销较高的场景通常有更大的节省空间；原本就很轻量的场景，收益相对有限。播放成品仍使用 Wallpaper Engine，实时图层继续由它渲染。
+
+## 命令行
+
+同目录下的 `wpe-baker.exe` 是命令行版本。在该目录打开 PowerShell：
+
+```powershell
+.\wpe-baker.exe analyze "D:\Wallpapers\scene.pkg" --out plan.json
+.\wpe-baker.exe bake plan.json --out "D:\Wallpapers\BakedScene"
+.\wpe-baker.exe --help
 ```
-wpe-baker.exe analyze <scene.pkg> --out plan.json
-wpe-baker.exe bake plan.json --out <输出目录>
+
+`bake` 的 `--out` 指定新的输出目录。生成后可用 `compare` 比较原作与成品的实际播放功耗：
+
+```powershell
+.\wpe-baker.exe compare "D:\Wallpapers\Original" --baked "D:\Wallpapers\BakedScene" --wallpaper-engine "D:\SteamLibrary\steamapps\common\wallpaper_engine\wallpaper64.exe" --out "D:\Wallpapers\PowerReport"
 ```
 
-生成后可用 `wpe-baker.exe compare <原作目录> --baked <成品目录> --wallpaper-engine <wallpaper64.exe> --out <新报告目录>` 比较实际播放成本。命令会临时按 A/B/B/A 切换壁纸，结束后重新打开原分配，默认继续播放；加 `--restore-playback paused` 可让它结束后保持暂停。播放位置不会被保存或恢复，原来的暂停状态无法从保存配置读取。目前要求只连接一块显示器且未使用播放列表。报告分别展示核显与 CPU 封装功耗，方向相反时标为取舍；证据不完整时不给推荐，画面正确性另行检查。
-
-## 适用范围
-
-- 只支持场景（Scene）类壁纸。视频壁纸和网页壁纸本来就是视频或网页，不需要烘。
-- 重型、以周期动画为主的壁纸是主要应用场景。分析会列出可缓存的动画和需要保留的实时图层。
-- 鼠标与音频响应按所选交互模式处理，时钟、日期和媒体文字保持实时。
-- 离线渲染按帧推进，烘焙耗时取决于场景复杂度、循环长度、输出分辨率和显卡。
-
-## 系统要求
-
-烘焙需要 Windows 10/11 64 位、Wallpaper Engine（Steam 版）和支持 Vulkan 的显卡。播放时，Wallpaper Engine 解码烘焙视频，并渲染保留的实时图层。
+测量需要单屏、单个壁纸分配，会临时切换桌面壁纸。结束后重新打开原壁纸并从头播放；如需恢复后暂停，添加 `--restore-playback paused`。报告分别记录核显与 CPU 封装功耗。
 
 ## 反馈
 
-遇到问题欢迎[开 issue](https://github.com/isshiki-works/wpe-baker/issues)，中文完全没问题。请附上输出目录里的 `plan.json` 和 `bake.json`、显卡型号和壁纸的创意工坊 id，这几样基本能定位原因。
+欢迎用中文或英文[提交问题](https://github.com/isshiki-works/wpe-baker/issues)。请提供程序版本、显卡型号、创意工坊 ID、复现步骤与错误信息；已有分析或生成结果时，可附上 `plan.json`、`bake.json` 和相关日志。
 
-## 许可
+## 源码与许可
 
-`LICENSE` 中的 MIT 许可适用于 C# 应用/工具层和开发脚本。`engine/`（离线渲染器，源自 open-wallpaper-engine）及其修改沿用上游的 GPL-2.0，见 `engine/LICENSE`。FFmpeg、x264 等依赖保留各自的许可。
+发布页提供对应的 `WpeBaker-2.0.0-rc.1-source.zip`，包含依赖源码、第三方声明与构建记录，完整构建步骤见包内 `REBUILD.md`。
 
-第三方组件与许可文本见 `THIRD-PARTY-NOTICES.md` 和源码包里的 `licenses/`。烘焙成品仅供在自己的电脑上使用，壁纸作品版权归创意工坊作者所有，请勿二次上传。本项目与 Wallpaper Engine 官方无关联。
-
-从源码构建：Releases 页的 `WpeBaker-2.0.0-rc.1-source.zip` 包含对应源码、第三方声明与构建记录，步骤见其中的 `REBUILD.md`。旧版本保存的方案请用 2.0 重新分析。
+C# 应用与开发脚本采用 [MIT 许可](LICENSE)。离线渲染器源自 [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine)，采用 [GPL-2.0](engine/LICENSE)。依赖许可见 [第三方声明](THIRD-PARTY-NOTICES.md)，对应源码说明见 [SOURCE.md](SOURCE.md)。壁纸作品版权归各自作者所有。本项目与 Wallpaper Engine 官方无关联。
 
 ## 致谢
 
-- **hypengw**：渲染器底下的 vvk、wavsen、rstd 等库。
-- **isshiki**：方向、产品决策、硬件与测试。
+- **hypengw**：vvk、wavsen、rstd 等底层库。
+- **isshiki**：产品方向、设计、硬件与测试。
 
-开发中使用了 AI 编程代理：Claude Code（Anthropic）与 OpenAI Codex。
+开发中使用了 Claude Code（Anthropic）与 OpenAI Codex。
