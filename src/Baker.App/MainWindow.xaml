@@ -39,20 +39,20 @@
                                     </Style.Triggers></Style></ComboBox.Style>
                                 </ComboBox>
                                 <!-- 当前壁纸：预览图 + 标题；选中项没有可导入的来源时换成下面的拖入区。 -->
-                                <Border x:Name="CurrentWallpaperCard" DataContext="{Binding SelectedItem, ElementName=CurrentWallpaperBox}" Padding="0" ToolTip="{Binding Detail}">
+                                <Border x:Name="CurrentWallpaperCard" Padding="0" ToolTip="{Binding Detail}">
                                     <Border.Style><Style TargetType="Border" BasedOn="{StaticResource Inset}"><Style.Triggers>
                                         <DataTrigger Binding="{Binding}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
                                         <DataTrigger Binding="{Binding Source}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
                                     </Style.Triggers></Style></Border.Style>
                                     <StackPanel>
                                         <Border Height="200" CornerRadius="7,7,0,0" Background="{DynamicResource Fill}">
-                                            <Border CornerRadius="7,7,0,0"><Border.Background><ImageBrush ImageSource="{Binding Preview}" Stretch="UniformToFill"/></Border.Background></Border>
+                                            <Border CornerRadius="7,7,0,0" ToolTip="{Binding PreviewError}"><Border.Background><ImageBrush ImageSource="{Binding Preview}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/></Border.Background></Border>
                                         </Border>
                                         <StackPanel Margin="14,12,14,14">
                                             <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Margin="0,0,0,10"/>
                                             <Border Background="{DynamicResource AccentSoft}" CornerRadius="10" Padding="10,3" HorizontalAlignment="Left">
                                                 <TextBlock FontSize="12" Foreground="{DynamicResource AccentText}"
-                                                    Tag="来自 Wallpaper Engine|From Wallpaper Engine"/>
+                                                    Tag="场景预览|Scene preview"/>
                                             </Border>
                                         </StackPanel>
                                     </StackPanel>

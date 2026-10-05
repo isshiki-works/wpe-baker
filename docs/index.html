@@ -25,7 +25,7 @@
   <div>
     <div class="eyebrow">Deterministic animation baking engine</div>
     <h1>Your wallpaper renders forever.<br><span>Bake it once.</span></h1>
-    <p class="lead">Periodica builds mathematical models of Wallpaper Engine animations, coordinates the periods of the parts it can bake, and plays the resulting seamless loop as video. Clocks, audio response and other live content can stay in the scene, preserving the animated look while reducing repeated rendering. Its first application is WPE Baker, for Wallpaper Engine.</p>
+    <p class="lead">Periodica analyzes the motion in Wallpaper Engine scenes, brings repeating animations into a seamless loop, and renders that loop as video. Your wallpaper keeps moving, with clocks, music response and other live content alongside it. The GPU does less of the same work, over and over. Its first application is WPE Baker.</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1">Download for Windows</a>
       <a class="btn ghost" href="#numbers">Read the measurements</a>
@@ -71,9 +71,9 @@
       <text class="axl" x="6" y="148">15</text><line class="ax" x1="36" y1="144" x2="40" y2="144"></line>
       <text class="axl" x="12" y="268">0</text>
       <text class="axl" x="438" y="286">Playback time →</text>
-      <path class="tr-o" d="M40,59.58 L52,57.44 L64,61.73 L76,56.36 L88,60.66 L100,58.51 L112,62.81 L124,57.44 L136,59.58 L148,56.36 L160,60.66 L168,111.14 L176,202.44 L184,240.04 L188,244.33"></path>
-      <path class="tr-o" d="M420,246.48 L424,231.44 L430,164.85 L436,85.36 L442,60.66 L452,57.44 L464,60.66 L476,57.44 L488,61.73 L500,58.51 L512,59.58 L524,56.36 L536,60.66 L548,58.51 L556,59.58"></path>
-      <path class="tr-b" d="M188,244.33 L200,246.48 L212,244.33 L224,247.56 L236,245.41 L248,246.48 L260,244.33 L272,247.56 L284,245.41 L296,246.48 L308,245.41 L320,247.56 L332,244.33 L344,246.48 L356,245.41 L368,247.56 L380,244.33 L392,246.48 L404,245.41 L416,247.56 L420,246.48"></path>
+      <path class="tr-o" d="M40,59.58 L52,58.73 L64,60.44 L76,58.29 L88,60.01 L100,59.15 L112,60.87 L124,58.73 L136,59.58 L148,58.29 L160,60.01 L168,111.14 L176,202.44 L184,240.04 L188,245.62"></path>
+      <path class="tr-o" d="M420,246.48 L424,231.44 L430,164.85 L436,85.36 L442,60.01 L452,58.73 L464,60.01 L476,58.73 L488,60.44 L500,59.15 L512,59.58 L524,58.29 L536,60.01 L548,59.15 L556,59.58"></path>
+      <path class="tr-b" d="M188,245.62 L200,246.48 L212,245.62 L224,246.91 L236,246.05 L248,246.48 L260,245.62 L272,246.91 L284,246.05 L296,246.48 L308,246.05 L320,246.91 L332,245.62 L344,246.48 L356,246.05 L368,246.91 L380,245.62 L392,246.48 L404,246.05 L416,246.91 L420,246.48"></path>
       <text class="axl" x="164" y="50">25.6 W</text>
       <text class="axl" x="244" y="238" style="fill:#0e7f6d">2.2 W · −91%</text>
     </svg>
@@ -83,7 +83,7 @@
 
 <section id="period">
   <div class="eyebrow">The hard part</div>
-  <h2>Different periods. Periodica coordinates their loops.</h2>
+  <h2>Different rhythms. One seamless loop.</h2>
   <p class="sub">A wave repeats every 7.3 s, a sway every 11.1 s, a particle cycle every 4.6 s and a video every 20 s. They may take too long to return to their starting states together for a practical video loop. Periodica solves each component’s period, then adjusts its playback speed within the selected budget so animations that need to play together form a seamless loop.</p>
   <div class="rows">
     <div class="row"><div class="k">BUDGET</div><h3>Control how much the animation changes</h3><p>The three precision presets set a visible-change budget: Efficiency allows up to 5%, Balanced up to 3%, and Quality finds the smallest change that still closes the loop. The program favors smaller adjustments and reports the periods and speed changes it actually uses.</p></div>
@@ -93,16 +93,16 @@
 </section>
 
 <section id="gui">
-  <div class="eyebrow">The tool</div>
-  <h2>Drop a scene in, get a verdict.</h2>
-  <p class="sub">Two settings, one analysis result. Animation precision limits how much the animation can be retimed; Interaction controls how mouse and audio effects are handled. More settings are available under Advanced.</p>
+  <div class="eyebrow">2.0 · Redesigned interface</div>
+  <h2>From scene to finished wallpaper.</h2>
+  <p class="sub">2.0 brings a new liquid glass interface, with wallpaper selection, generation settings and the task queue in one window. Start with your current wallpaper or drop in a scene, choose how it should look and play, then preview, apply or export the result.</p>
   <div class="tool">
     <div class="steps">
-      <div><b>01</b><h3>Drop the wallpaper folder in</h3><p>From <span class="mono">steamapps\workshop\content\431960</span>. The output directory is Wallpaper Engine's own project folder, so the result appears in its list.</p></div>
-      <div><b>02</b><h3>Animation precision · Interaction</h3><p>Quality, Balanced and Efficiency set different visible-change budgets; Balanced is the default. If the current precision setting cannot produce a closed loop, the analysis tries the next precision preset and reports the one it selects. Interaction offers Keep, Fixed view and Off for mouse and audio effects. Clocks, dates and media text stay live in every mode.</p></div>
-      <div><b>03</b><h3>Read the verdict</h3><p>The result is one of four states. "Not included in this bake" lists the content excluded from baking. If the current settings cannot close the loop but another combination can, the report offers a suggestion you can apply with one click.</p></div>
+      <div><b>01</b><h3>Use the current wallpaper or drop in a scene</h3><p>The app reads the wallpaper currently selected in Wallpaper Engine. You can also drop in a wallpaper folder or scene file to begin analysis.</p></div>
+      <div><b>02</b><h3>Review the plan and choose the output</h3><p>The analysis shows what can be generated and what stays live. Adjust animation precision, interaction, frame rate and resolution on the left, alongside the wallpaper’s own configurable properties.</p></div>
+      <div><b>03</b><h3>Generate, preview and apply</h3><p>The queue on the right shows progress and check results. Once a job finishes, preview it in Wallpaper Engine, apply it to a selected screen, export a ZIP, or restore the previous wallpaper.</p></div>
     </div>
-    <figure class="shot"><img src="site/gui-en.png" alt="WPE Baker window: Alone (3448877775) analyzed at quality precision with fixed view; verdict Ready to generate; mouse parallax not included" width="1240" height="1340" loading="lazy"><figcaption>WPE Baker · Alone (3448877775), quality precision, fixed view.</figcaption></figure>
+    <figure class="shot"><img src="site/gui-2.0-en.jpg" alt="WPE Baker 2.0 liquid glass interface with a detailed scene preview, generation settings and a completed task" width="1227" height="944" loading="lazy"><figcaption>WPE Baker 2.0 · Scene preview and task management.</figcaption></figure>
   </div>
 </section>
 
@@ -169,7 +169,7 @@
         <li>Interactive panels and custom scripts</li>
       </ul>
       <p class="mono" style="margin:12px 0 0;color:var(--dim);font-size:13px">Interaction offers three modes: Keep, Fixed view and Off. Fixed view is the default.</p>
-      <p class="mono" style="margin:8px 0 0;color:var(--dim);font-size:13px">Clocks, dates and media text update live in every mode. Keep is experimental and may increase GPU load.</p>
+      <p class="mono" style="margin:8px 0 0;color:var(--dim);font-size:13px">Keep preserves mouse and audio response. Clocks, dates and media text update live in every mode.</p>
     </div>
   </div>
 </section>
@@ -181,7 +181,7 @@
     <div>
       <p>A Wallpaper Engine scene can contain hundreds of shader variants, particle systems, script controllers and video layers. Finding two similar frames is not enough to bake them into a loop: the program needs to know how animation changes over time, and which parts must keep responding to live input.</p>
       <p>2.0 replaces the old library of period equations with shader time analysis. It applies abstract interpretation to the compiled SPIR-V, following time through the data flow to derive cycles, continuous drift and animation that settles after a while. New effects no longer need a hand-written equation of their own; unfamiliar custom shaders can be analyzed too.</p>
-      <p>Once the periods are known, the program looks for parameters it can adjust locally. Waves, glows and scrolling within one effect no longer have to speed up together. Independently adjustable motion will be coordinated separately, and independent video groups will loop at their own periods.</p>
+      <p>Once the periods are known, the program looks for parameters it can adjust locally. Waves, glows and scrolling within one effect no longer have to speed up together. Motions that can be adjusted independently are coordinated separately, and independent video groups repeat at their own intervals.</p>
       <p>Author scripts are also included in time analysis. Constants, periodic changes and opening animations can be identified; where state carried between frames can be simulated exactly, the program searches for that state to recur. Content that depends on the mouse, audio or the clock stays live.</p>
       <p>To put the baked result back into the original scene, Periodica also handles transparency, blending order and HDR intermediate images. Brightness outside ordinary video range is mapped into the video and restored by a generated shader, so cached content can continue through the author’s existing effect chain.</p>
       <p>The offline renderer uses Vulkan and reduces readbacks, intermediate files and repeated encoding. Supported GPU paths encode images directly from GPU memory; other paths stream rendering into encoding. Seam, image-quality, composition and hardware-decoding checks run as part of generation.</p>
@@ -213,7 +213,7 @@
   <h2>Short answers.</h2>
   <div class="faq">
     <details><summary>What is the main benefit?</summary><p>Run your favorite animated wallpaper with lower power use.</p></details>
-    <details><summary>Will it reduce resource use for every wallpaper?</summary><p>Lightweight scenes offer little room for savings, and the tool tells you before rendering. Heavy scenes dominated by periodic animation are where the 13–97% reductions come from. For scenes with extensive interaction, the deterministic core is baked while interactive and live content is handled separately.</p></details>
+    <details><summary>Which wallpapers benefit most?</summary><p>Scenes with demanding, repeating animation have the most to gain. The examples above used 13–97% less iGPU power after baking. Lightweight scenes have less work to save; scenes with extensive interaction keep their live content alongside the baked animation.</p></details>
     <details><summary>Does the loop look different from the original?</summary><p>Choose Efficiency, Balanced or Quality to set the visible-change budget. The report lists every retimed component and its exact adjustment percentage. Each seam is checked against the original scene's motion before the output is accepted.</p></details>
     <details><summary>What do I need?</summary><p>Windows, Wallpaper Engine, and a GPU for the offline render. The portable build has no installer and no Python. Baking a typical scene takes minutes; the video decoder handles baked content while retained live layers continue rendering.</p></details>
     <details><summary>Is it open source?</summary><p>Yes. Tooling under MIT, the renderer under GPL v2; full source, third-party notices and build records are in the repository.</p></details>
