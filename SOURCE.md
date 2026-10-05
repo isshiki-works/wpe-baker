@@ -9,7 +9,7 @@ WPE Baker 发行包含有以 GNU GPL v2 与 LGPL v2.1 授权的程序。它们�
 `engine/`，带完整 Git 历史。每次发行还会在便携包**同一位置**提供 `WpeBaker-<version>-source.zip`，
 内含该次构建所用依赖的源码快照。
 
-- Download page / 发布页：[WPE Baker 2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1).
+- Download page / 发布页：[WPE Baker 2.0.0](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0).
 - Source archive / 源码包：`WpeBaker-<version>-source.zip` — SHA256 is listed on the download page
   (it is generated when the archives are packed and is deliberately not written back into the
   package, which would change the source archive's own hash) / SHA256 见发布页（打包后生成，
