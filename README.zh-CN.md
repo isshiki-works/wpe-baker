@@ -8,7 +8,7 @@ Periodica 分析 Wallpaper Engine 场景，通过数学建模协调其中可烘�
 
 输出是一个独立的 Wallpaper Engine 项目。周期动画由视频解码器播放，保留的实时图层继续响应输入。分析与生成都在本机完成，无需上传壁纸，也不调用 AI 模型。
 
-[官网](https://isshiki-works.github.io/wpe-baker/zh.html) · [下载 2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1)
+[官网](https://isshiki-works.github.io/wpe-baker/zh.html) · [下载 2.0.0](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0)
 
 ## 实测
 
@@ -49,7 +49,7 @@ Periodica 分析 Wallpaper Engine 场景，通过数学建模协调其中可烘�
 
 需要 Windows 10/11 64 位、Wallpaper Engine（Steam 版）和支持 Vulkan 的显卡。便携包已包含运行依赖，无需另装 .NET、Python 或 FFmpeg。
 
-1. 从发布页下载 `WpeBaker-2.0.0-rc.1-win-x64.zip`，完整解压到有写入权限的目录。
+1. 从发布页下载 `WpeBaker-2.0.0-win-x64.zip`，完整解压到有写入权限的目录。
 2. 打开解压后的 `WpeBaker` 文件夹，双击 `WpeBaker.exe`。
 3. 选择当前壁纸，或把壁纸文件夹、`scene.pkg` 拖进窗口。创意工坊壁纸通常位于 Steam 库的 `steamapps\workshop\content\431960` 下。
 4. 选择动画精度、交互方式、帧率和分辨率，点击 **分析**。方案会列出可烘焙的内容、保留的实时部分和实际采用的设置；修改设置后重新分析。
@@ -94,7 +94,7 @@ WPE Baker 面向场景（Scene）类壁纸。包含大量周期动画、渲染�
 
 ## 源码与许可
 
-发布页提供对应的 `WpeBaker-2.0.0-rc.1-source.zip`，包含依赖源码、第三方声明与构建记录，完整构建步骤见包内 `REBUILD.md`。
+发布页提供对应的 `WpeBaker-2.0.0-source.zip`，包含依赖源码、第三方声明与构建记录，完整构建步骤见包内 `REBUILD.md`。
 
 C# 应用与开发脚本采用 [MIT 许可](LICENSE)。离线渲染器源自 [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine)，采用 [GPL-2.0](engine/LICENSE)。依赖许可见 [第三方声明](THIRD-PARTY-NOTICES.md)，对应源码说明见 [SOURCE.md](SOURCE.md)。壁纸作品版权归各自作者所有。本项目与 Wallpaper Engine 官方无关联。
 

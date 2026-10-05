@@ -8,7 +8,7 @@ Periodica analyzes animation in Wallpaper Engine scenes, coordinates its periods
 
 The output is a standalone Wallpaper Engine project. The video decoder plays the repeating animation while retained layers continue responding to live input. Analysis and generation run locally, with no wallpaper uploads or AI model calls.
 
-[Website](https://isshiki-works.github.io/wpe-baker/) · [Download 2.0.0-rc.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0-rc.1)
+[Website](https://isshiki-works.github.io/wpe-baker/) · [Download 2.0.0](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0)
 
 ## Measured
 
@@ -49,7 +49,7 @@ Power savings also extend to high refresh rates. These tests use the same altern
 
 Requires Windows 10/11 64-bit, Wallpaper Engine from Steam and a Vulkan-capable GPU. The portable package includes its runtime dependencies; no separate .NET, Python or FFmpeg installation is needed.
 
-1. Download `WpeBaker-2.0.0-rc.1-win-x64.zip` from the release page and extract the whole archive into a writable directory.
+1. Download `WpeBaker-2.0.0-win-x64.zip` from the release page and extract the whole archive into a writable directory.
 2. Open the extracted `WpeBaker` folder and run `WpeBaker.exe`.
 3. Choose the current wallpaper, or drop in a wallpaper folder or `scene.pkg`. Workshop wallpapers are usually under `steamapps\workshop\content\431960` in your Steam library.
 4. Choose animation precision, interaction, frame rate and resolution, then click **Analyze**. The plan shows what can be baked, what stays live and which settings will be used. Analyze again after changing settings.
@@ -94,7 +94,7 @@ Measurement requires one display and a single wallpaper assignment, and temporar
 
 ## Source and licenses
 
-The release includes the matching `WpeBaker-2.0.0-rc.1-source.zip`, with dependency sources, third-party notices and build records. Complete build instructions are in its `REBUILD.md`.
+The release includes the matching `WpeBaker-2.0.0-source.zip`, with dependency sources, third-party notices and build records. Complete build instructions are in its `REBUILD.md`.
 
 The C# application and developer scripts use the [MIT license](LICENSE). The offline renderer derives from [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) and uses [GPL-2.0](engine/LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for dependency licenses and [SOURCE.md](SOURCE.md) for corresponding source details. Wallpaper artwork belongs to its respective authors. WPE Baker is not affiliated with Wallpaper Engine.
 

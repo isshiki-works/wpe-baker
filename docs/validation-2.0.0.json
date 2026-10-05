@@ -1,5 +1,5 @@
 {
-  "release": "2.0.0-rc.1",
+  "release": "2.0.0",
   "scope": "Measurements during 2.0 validation, original versus baked; not old-baked versus new-baked. Percentages calculated from raw power readings.",
   "method": {
     "device": "Intel Arc B390 laptop",
