@@ -38,10 +38,10 @@
 </div>
 
 <div class="strip">
-  <div><div class="n">8</div><div class="l">在 Wallpaper Engine 官方播放器中实测的壁纸数量</div></div>
-  <div><div class="n">最高 −96.8%</div><div class="l">核显功耗降幅</div></div>
-  <div><div class="n">2.19 W</div><div class="l">Atri 在 165 Hz 下的 iGPU 功耗，原版为 25.55 W</div></div>
-  <div><div class="n">0</div><div class="l">运行时 AI 模型调用</div></div>
+  <div><div class="n">最高 −97%</div><div class="l">减少核显功耗</div></div>
+  <div><div class="n">165 FPS</div><div class="l">高刷壁纸满速播放</div></div>
+  <div><div class="n">实时内容</div><div class="l">保留实时控件</div></div>
+  <div><div class="n">本地生成</div><div class="l">无需上传壁纸或调用 AI</div></div>
 </div>
 
 <section id="loop">
@@ -55,26 +55,27 @@
     <span class="lab l">第 1 帧</span><span class="lab r">第 3,000 帧</span>
     <input type="range" id="cmpRange" min="0" max="100" value="50" aria-label="比较第一帧与最后一帧">
   </div>
-  <div class="trace" aria-label="功耗曲线，原始场景与烘焙输出，A/B/B/A 测试">
-    <div class="hdr"><span>RAPL PP1 · iGPU 功耗轨 · W · Nijika（3650475846）</span><span>A / B / B / A · 每段采样 20 秒 · Arc B390</span></div>
-    <svg viewBox="0 0 560 300" role="img" aria-label="原作与烘焙输出的核显功耗实测曲线">
+  <div class="trace" aria-label="原作与烘焙成品的功耗变化示意">
+    <div class="hdr"><span>核显功耗 · W · 亚托莉 · 165 FPS</span><span>A / B / B / A · 功耗变化示意</span></div>
+    <svg viewBox="0 0 560 300" role="img" aria-label="原作约 25.6 W，烘焙后约 2.2 W；曲线示意原作与烘焙成品切换时的功耗变化">
       <rect class="band" x="40" y="14" width="120" height="250"></rect>
+      <rect class="band" x="300" y="14" width="120" height="250"></rect>
       <text class="bandl" x="100" y="28">A · 原始场景</text>
-      <path class="tr-o" d="M40.00,75.39 L46.32,76.04 L52.63,73.84 L58.95,69.09 L65.26,72.99 L71.58,72.91 L77.89,68.92 L84.21,63.21 L90.53,67.03 L96.84,72.57 L103.16,69.03 L109.47,69.55 L115.79,67.92 L122.11,70.70 L128.42,69.83 L134.74,69.76 L141.05,67.15 L147.37,69.87 L153.68,70.96 L160.00,71.90"></path>
       <text class="bandl" x="230" y="28">B · 烘焙输出</text>
-      <path class="tr-b" d="M170.00,130.34 L176.32,131.56 L182.63,131.16 L188.95,129.31 L195.26,129.30 L201.58,131.07 L207.89,129.35 L214.21,126.58 L220.53,131.10 L226.84,129.17 L233.16,126.84 L239.47,129.41 L245.79,128.46 L252.11,129.37 L258.42,129.04 L264.74,127.70 L271.05,129.53 L277.37,128.31 L283.68,128.13 L290.00,127.25"></path>
       <text class="bandl" x="360" y="28">B · 烘焙输出</text>
-      <path class="tr-b" d="M300.00,129.01 L306.32,130.00 L312.63,129.54 L318.95,130.15 L325.26,128.46 L331.58,130.09 L337.89,131.19 L344.21,128.46 L350.53,128.73 L356.84,128.53 L363.16,129.96 L369.47,128.96 L375.79,131.81 L382.11,129.50 L388.42,130.42 L394.74,128.75 L401.05,131.51 L407.37,130.27 L413.68,128.46 L420.00,127.17"></path>
-      <rect class="band" x="430" y="14" width="120" height="250"></rect>
       <text class="bandl" x="490" y="28">A · 原始场景</text>
-      <path class="tr-o" d="M430.00,78.53 L436.32,73.38 L442.63,82.51 L448.95,77.19 L455.26,69.59 L461.58,76.17 L467.89,69.53 L474.21,73.28 L480.53,68.66 L486.84,71.48 L493.16,72.29 L499.47,71.62 L505.79,75.55 L512.11,74.83 L518.42,73.33 L524.74,72.10 L531.05,75.58 L537.37,80.91 L543.68,80.02 L550.00,76.77"></path>
       <line class="ax" x1="40" y1="264" x2="560" y2="264"></line>
       <line class="ax" x1="40" y1="14" x2="40" y2="264"></line>
-      <text class="axl" x="5" y="268">0</text>
-      <text class="axl" x="5" y="153">12.5</text>
-      <text class="axl" x="5" y="38">25</text>
-      <text class="axl" x="40" y="286">0 s</text><text class="axl" x="285" y="286">40 s</text><text class="axl" x="518" y="286">80 s</text>
-      </svg>
+      <text class="axl" x="6" y="28">30</text><line class="ax" x1="36" y1="24" x2="40" y2="24"></line>
+      <text class="axl" x="6" y="148">15</text><line class="ax" x1="36" y1="144" x2="40" y2="144"></line>
+      <text class="axl" x="12" y="268">0</text>
+      <text class="axl" x="438" y="286">播放时间 →</text>
+      <path class="tr-o" d="M40,59.58 L52,57.44 L64,61.73 L76,56.36 L88,60.66 L100,58.51 L112,62.81 L124,57.44 L136,59.58 L148,56.36 L160,60.66 L168,111.14 L176,202.44 L184,240.04 L188,244.33"></path>
+      <path class="tr-o" d="M420,246.48 L424,231.44 L430,164.85 L436,85.36 L442,60.66 L452,57.44 L464,60.66 L476,57.44 L488,61.73 L500,58.51 L512,59.58 L524,56.36 L536,60.66 L548,58.51 L556,59.58"></path>
+      <path class="tr-b" d="M188,244.33 L200,246.48 L212,244.33 L224,247.56 L236,245.41 L248,246.48 L260,244.33 L272,247.56 L284,245.41 L296,246.48 L308,245.41 L320,247.56 L332,244.33 L344,246.48 L356,245.41 L368,247.56 L380,244.33 L392,246.48 L404,245.41 L416,247.56 L420,246.48"></path>
+      <text class="axl" x="164" y="50">25.6 W</text>
+      <text class="axl" x="244" y="238" style="fill:#0e7f6d">2.2 W · −91%</text>
+    </svg>
     <div class="legend"><span><i style="background:var(--trace)"></i>原始场景</span><span><i style="background:var(--signal)"></i>烘焙输出</span></div>
   </div>
 </section>
@@ -130,7 +131,7 @@
 <tr><td>Ayanami Rei<span class="id">3258032485</span></td><td class="num">2.16 W</td><td class="num">0.14 W</td><td class="delta">−93.4%</td><td class="num">11.23 → 8.72 W</td></tr>
 </tbody></table>
   </div>
-  <div class="note">接电 · 默认壁纸属性 · 平衡精度 · 每段采样 20 秒。<a href="validation-2.0.0.json">查看测量数据</a>。页面展示的壁纸美术作品归各自的 Steam Workshop 作者所有。</div>
+  <div class="note">接电 · 默认壁纸属性 · 平衡精度 · 每段采样 20 秒。页面展示的壁纸美术作品归各自的 Steam Workshop 作者所有。</div>
 </section>
 
 <section id="refresh">
@@ -201,7 +202,7 @@
   <div class="road">
     <div><div class="when">1.x · 已发布</div><h3>Wallpaper Engine，Windows</h3><p>将可重复的场景动画烘焙成视频，并与保留的实时内容一同放回原场景。Wallpaper Engine 是 Periodica 的第一个应用场景。</p></div>
     <div class="now"><div class="when">2.0</div><h3>性能更新</h3><p>以着色器和脚本时间分析取代逐项维护的周期方程，扩展可烘焙的动画范围。独立视频组采用各自的循环周期，完善 HDR 中间画面的处理，并减少生成过程中的数据回读、重复编码和等待。</p></div>
-    <div><div class="when">2.x</div><h3>通用烘焙世代</h3><p>通过缓存、复用、预计算和确定性重放，让更多实时图层进入实用的烘焙范围，并引入基于 AI 加速的全新构建方案。</p></div>
+    <div><div class="when">2.x</div><h3>通用世代</h3><p>通过缓存、复用、预计算和确定性重放，让更多实时图层进入实用的烘焙范围，并引入基于 AI 加速的全新构建方案。</p></div>
     <div class="big"><div class="when">3.0</div><h3>时域重建（Temporal reconstruction）</h3><p>利用历史帧与运动信息重建画面，减少每一帧都从头渲染的工作，并探索 GPU 与 NPU 的协同加速。</p></div>
   </div>
 </section>

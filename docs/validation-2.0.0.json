@@ -383,5 +383,14 @@
         ]
       }
     }
-  ]
+  ],
+  "homepage_chart": {
+    "kind": "illustrative_continuous_ABBA_trace",
+    "layout_source": "bb024755",
+    "wallpaper_id": "3669681034",
+    "fps": 165,
+    "igpu_original_w": 25.55191166975,
+    "igpu_baked_w": 2.189677271,
+    "note": "Curve geometry follows the approved early website illustration; measured levels calibrate its vertical scale. The transitions are illustrative, not sampled switch transients."
+  }
 }
