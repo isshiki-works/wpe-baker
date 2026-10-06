@@ -29,6 +29,7 @@ STATIC_LICENSES = {
     "lz4.LICENSE": ".deps/lz4/LICENSE",
     "lz4.lib.LICENSE": ".deps/lz4/lib/LICENSE",
     "quickjs-ng.LICENSE": ".deps/quickjs/LICENSE",
+    "mimalloc.LICENSE": ".deps/mimalloc/LICENSE",
     "vma.LICENSE.txt": ".deps/vma/LICENSE.txt",
     "spirv-reflect.LICENSE": ".deps/spirv-reflect/LICENSE",
     "cli11.LICENSE": None,

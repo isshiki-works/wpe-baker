@@ -14,7 +14,7 @@ provenance_spec = importlib.util.spec_from_file_location("native_provenance", RO
 if provenance_spec is None or provenance_spec.loader is None: raise RuntimeError("Could not load native provenance helper.")
 provenance = importlib.util.module_from_spec(provenance_spec)
 provenance_spec.loader.exec_module(provenance)
-DEPENDENCIES = ("rstd", "vvk", "lz4", "freetype", "quickjs", "glslang", "vma",
+DEPENDENCIES = ("rstd", "vvk", "lz4", "freetype", "quickjs", "mimalloc", "glslang", "vma",
                 "spirv-reflect", "eigen", "vulkan-headers", "vulkan-loader", "nlohmann-json", "cli11", "googletest")
 # GPL v2 section 3: the renderer binary must ship with the sources it was built from.
 REQUIRED_FILES = ("README.md", "README.zh-CN.md", "LICENSE", "THIRD-PARTY-NOTICES.md", "SOURCE.md",
