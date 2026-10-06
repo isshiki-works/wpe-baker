@@ -126,6 +126,7 @@ struct RenderProgram {
         rstd::vec::Vec<String>          release_textures;
         PassResourceUses                resources;
         PassInvalidationFlags           invalidation_flags { PassInvalidationNone };
+        bool                            uniforms_need_prepare { true };
 
         bool invalidated() const { return invalidation_flags != PassInvalidationNone; }
 
@@ -776,6 +777,7 @@ struct RenderProgram {
         for (auto& record : pass_records) {
             auto pass = resolve(record);
             if (pass) {
+                if (record.needsPrepare(*pass)) record.uniforms_need_prepare = true;
                 if (record.invalidated()) {
                     rr.resources.RemovePreparedGraphics(record.resources.pipelines.as_slice(),
                                                         record.resources.render_passes.as_slice(),
@@ -794,13 +796,15 @@ struct RenderProgram {
         return true;
     }
 
-    bool prepareUniformBufferUpdates(owe::Scene& scene, RenderingResources& rr) {
+    bool prepareUniformBufferUpdates(owe::Scene& scene, RenderingResources& rr,
+                                      bool changed_only = false) {
         uniform_updates.clear();
-        uniform_update_owners.clear();
+        if (!changed_only) uniform_update_owners.clear();
         SceneUniformBindingPrepareContext uniform_prepare_impl(scene);
         const UniformBindingPrepareContext* uniform_prepare = &uniform_prepare_impl;
         Vec<resource::BufferUseHandle> prepared_uniform_buffers;
         for (auto& record : pass_records) {
+            if (changed_only && !record.uniforms_need_prepare) continue;
             auto pass = resolve(record);
             if (pass.is_none()) continue;
             PreparedPassResources resources(rr.resources.Prepared(), record.resources);
@@ -823,8 +827,18 @@ struct RenderProgram {
                 }
                 if (exists) continue;
                 prepared_uniform_buffers.push(binding->Buffer());
-                uniform_update_owners.push(rstd::move(binding));
+                bool replaced = false;
+                if (changed_only) {
+                    for (auto& owner : uniform_update_owners) {
+                        if (owner->Buffer() != binding->Buffer()) continue;
+                        owner = rstd::move(binding);
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (!replaced) uniform_update_owners.push(rstd::move(binding));
             }
+            record.uniforms_need_prepare = false;
         }
         uniform_updates.reserve(uniform_update_owners.len());
         for (const auto& binding : uniform_update_owners) {
@@ -845,9 +859,9 @@ struct RenderProgram {
             }
         }
         // Texture-only plans retain shaders, buffers, layouts and the global binding.
-        // Uniform update owners snapshot resource sizes, so recreate them after resize.
+        // Refresh resource-size snapshots only for passes prepared again after resize.
         if (texture_only_prepare && !pipeline_layout_assignments.entries.is_empty()) {
-            if (!preparePassRecords(scene, device, rr) || !prepareUniformBufferUpdates(scene, rr))
+            if (!preparePassRecords(scene, device, rr) || !prepareUniformBufferUpdates(scene, rr, true))
                 return RenderProgramPrepareStatus::Failed;
             return RenderProgramPrepareStatus::Complete;
         }
