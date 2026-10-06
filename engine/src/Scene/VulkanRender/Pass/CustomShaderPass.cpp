@@ -900,7 +900,6 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, PassPrepareCo
     }
 
     std::vector<Uni_ShaderSpv> spvs;
-    ShaderReflected            shader_reflection;
     const ShaderReflected*     ref { nullptr };
     {
         SceneShader& shader = *(material_ref.customShader.shader);
@@ -914,14 +913,19 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, PassPrepareCo
             rstd_error("prepared shader artifact unavailable, {}", shader.name);
             return;
         }
-        const auto& artifact = (**prepared_shader).shader.physical->artifact;
-        shader_reflection    = ShaderReflectionFromArtifact(artifact);
+        const auto& physical = (**prepared_shader).shader.physical;
+        const auto& artifact = physical->artifact;
+        if (m_desc.shader_reflection_owner.is_none() ||
+            (*m_desc.shader_reflection_owner).as_ptr() != physical.as_ptr()) {
+            m_desc.shader_reflection = ShaderReflectionFromArtifact(artifact);
+            m_desc.shader_reflection_owner.insert(physical.clone());
+        }
         spvs                 = ShaderSpvsFromArtifact(artifact);
         if (spvs.empty()) {
             rstd_error("prepared shader artifact is empty, {}", shader.name);
             return;
         }
-        ref = &shader_reflection;
+        ref = &m_desc.shader_reflection;
 
         m_desc.vk_tex_binding.clear();
         m_desc.vk_tex_binding.reserve(vk_textures.size());

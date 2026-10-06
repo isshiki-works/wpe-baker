@@ -181,6 +181,20 @@ public:
         writeRawU32(value);
     }
 
+    void writeU32Values(std::span<const unsigned int> values) {
+        if (values.empty()) return;
+        const auto start = m_bytes.size();
+        if (values.size() > (m_bytes.max_size() - start) / 5)
+            throw std::length_error("pipeline shader key is too large");
+        m_bytes.resize(start + values.size() * 5);
+        auto* out = m_bytes.data() + start;
+        for (auto value : values) {
+            *out++ = static_cast<std::byte>(ValueType::U32);
+            for (unsigned shift = 0; shift < 32; shift += 8)
+                *out++ = static_cast<std::byte>((value >> shift) & 0xffu);
+        }
+    }
+
     void writeU64(std::uint64_t value) {
         writeType(ValueType::U64);
         writeRawU64(value);
@@ -223,12 +237,9 @@ private:
     };
 
     static std::size_t HashCanonicalBytes(std::span<const std::byte> bytes) {
-        std::uint64_t hash { 1469598103934665603ull };
-        for (auto byte : bytes) {
-            hash ^= static_cast<std::uint8_t>(byte);
-            hash *= 1099511628211ull;
-        }
-        return static_cast<std::size_t>(hash);
+        // Equality still compares all canonical bytes, including hash collisions.
+        return std::hash<std::string_view>{}(std::string_view(
+            reinterpret_cast<const char*>(bytes.data()), bytes.size()));
     }
 
     void writeType(ValueType type) { writeRawU8(static_cast<std::uint8_t>(type)); }
@@ -315,7 +326,7 @@ inline void WritePipelineShaderStages(PipelineKeyWriter&         writer,
         writer.writeString(record.entry_point);
         writer.writeArraySize(record.spirv != nullptr ? record.spirv->size() : std::size_t { 0 });
         if (record.spirv != nullptr) {
-            for (auto word : *record.spirv) writer.writeU32(static_cast<std::uint32_t>(word));
+            writer.writeU32Values(*record.spirv);
         }
     }
 }

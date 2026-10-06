@@ -59,6 +59,9 @@ public:
         rstd::Option<resource::FramebufferUseHandle> framebuffer_use;
 
         // -----prepared
+        // Immutable shader data survives texture/framebuffer re-preparation.
+        Option<Arc<resource_registry::ShaderPhysical>> shader_reflection_owner;
+        ShaderReflected shader_reflection;
         // vulkan texs
         std::vector<rstd::int32_t>              vk_tex_binding;
         std::vector<u32>                        vk_tex_set;

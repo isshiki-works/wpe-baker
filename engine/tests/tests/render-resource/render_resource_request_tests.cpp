@@ -1805,6 +1805,17 @@ TEST(PipelineLayoutPlanner, SplitsCompatibleSupersetsAtDeviceLimits) {
     EXPECT_EQ(plan.conflicts.len(), rstd::usize(1));
 }
 
+TEST(PipelineCacheDiagnostics, ShaderWordsKeepCanonicalByteEncoding) {
+    owe::vulkan::PipelineKeyWriter writer;
+    const unsigned int words[] { 0u, 0x01020304u, 0xffffffffu };
+    writer.writeU32Values(words);
+    writer.writeU32Values({});
+    EXPECT_EQ(std::move(writer).finish().bytes,
+              Bytes({ 1u, 0u, 0u, 0u, 0u,
+                      1u, 4u, 3u, 2u, 1u,
+                      1u, 255u, 255u, 255u, 255u }));
+}
+
 TEST(PipelineCacheDiagnostics, RecordsStableKeys) {
     auto make_request = [](VkPrimitiveTopology topology) {
         owe::vulkan::PipelineResourceRequest request;
