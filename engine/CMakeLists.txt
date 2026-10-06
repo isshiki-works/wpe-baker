@@ -123,6 +123,11 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(OWE_FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswresample libswscale)
 
 # 带模块的依赖（rstd/vvk）的 BMI 与编译器、选项绑定，留在主构建里编。
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  # Cross-module optimization for the renderer; keep strict FP settings above.
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-flto=thin>")
+  add_link_options(-flto=thin "LINKER:--thinlto-jobs=1")
+endif()
 set(RSTD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(RSTD_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WPE_DEPS}/rstd" dependencies/rstd EXCLUDE_FROM_ALL)

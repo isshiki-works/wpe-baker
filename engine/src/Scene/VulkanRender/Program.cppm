@@ -185,6 +185,7 @@ struct RenderProgram {
     rstd::vec::Vec<std::unique_ptr<UniformBufferUpdate>>           uniform_update_owners;
     rstd::vec::Vec<const UniformBufferUpdate*>           uniform_updates;
     resource_registry::DescriptorBindingRecordState         descriptor_record_state;
+    DrawRecordState draw_record_state;
     PipelineLayoutAssignments                               pipeline_layout_assignments;
     Option<resource::DescriptorBindingHandle>               global_descriptor_binding;
     rstd::Option<resource_registry::ResourcePrepareSession> resource_prepare_session;
@@ -1157,6 +1158,7 @@ struct RenderProgram {
                 rstd::mut_ref<resource_registry::DescriptorBindingRecordState>::from_raw_parts(
                     rstd::addressof(descriptor_record_state)),
             .global_descriptor = global_descriptor,
+            .draw_state = &draw_record_state,
         };
         callback(*pass, context);
     }
@@ -1227,6 +1229,7 @@ struct RenderProgram {
         if (timing) timing->mark(rr.command, PassTimestampWriter::uploads);
 
         for (auto& scope : scopes) {
+            draw_record_state.Reset();
             if (scope.single) {
                 auto index = *scope.single;
                 auto pass  = resolve(pass_records[index]);

@@ -1436,7 +1436,9 @@ void CustomShaderPass::recordRenderScopeDraw(PassRecordContext& context) {
             .Record(cmd, (**pipeline).physical->pipeline.layout, *context.descriptor_state);
     }
 
-    cmd.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *(**pipeline).physical->pipeline.handle);
+    const auto pipeline_handle = *(**pipeline).physical->pipeline.handle;
+    if (!context.draw_state || context.draw_state->UsePipeline(pipeline_handle))
+        cmd.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_handle);
     VkViewport viewport {
         .x        = 0,
         .y        = (float)outext.height,
@@ -1447,16 +1449,15 @@ void CustomShaderPass::recordRenderScopeDraw(PassRecordContext& context) {
     };
     VkRect2D scissor { { 0, 0 }, { outext.width, outext.height } };
 
-    if (m_desc.viewports.is_empty()) {
-        cmd.SetViewport(0, viewport);
-    } else {
-        cmd.SetViewport(0, m_desc.viewports.as_slice());
+    const bool cache_defaults = context.draw_state && !m_desc.m2_active &&
+        m_desc.viewports.is_empty() && m_desc.scissors.is_empty();
+    if (!cache_defaults || context.draw_state->UseDefaultExtent(outext)) {
+        if (m_desc.viewports.is_empty()) cmd.SetViewport(0, viewport);
+        else cmd.SetViewport(0, m_desc.viewports.as_slice());
+        if (m_desc.scissors.is_empty()) cmd.SetScissor(0, scissor);
+        else cmd.SetScissor(0, m_desc.scissors.as_slice());
     }
-    if (m_desc.scissors.is_empty()) {
-        cmd.SetScissor(0, scissor);
-    } else {
-        cmd.SetScissor(0, m_desc.scissors.as_slice());
-    }
+    if (!cache_defaults && context.draw_state) context.draw_state->defaults_set = false;
 
     auto& draw_buffers = m_desc.draw_buffers;
     for (usize i {}; i < draw_buffers.vertices.len(); i++) {
