@@ -38,6 +38,7 @@ SOURCES = [
     ("spirv-reflect", "https://github.com/hypengw/SPIRV-Reflect", "355785128c1b6ba808e3a7d0e344814fe6cff502"),
     ("glslang", "https://github.com/KhronosGroup/glslang", "275822a6261ee689aadb1da5f09a0ec2f058685c"),
     ("quickjs", "https://github.com/quickjs-ng/quickjs", "3c051980ab7e783dfbfb1c70c014ce5e05ecf24c"),
+    ("mimalloc", "https://github.com/microsoft/mimalloc", "d4881d338125e1cb7c47ba4cfb398d6f7c0c8d45"),
     ("vma", "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator", "3aa921224c154a0d2c43912bc88e1c42ce1f7607"),
     ("lz4", "https://github.com/lz4/lz4", "v1.10.0"),
     ("freetype", "https://github.com/freetype/freetype", "VER-2-14-1"),

@@ -168,4 +168,4 @@ target_link_libraries(owe-scene PRIVATE dwrite)
 target_link_libraries(owe-scene PRIVATE PkgConfig::OWE_FFMPEG)
 # nv-codec-headers（MIT，只有头文件）：GpuVideoEncoder 运行时动态加载 nvcuda.dll / nvEncodeAPI64.dll
 target_include_directories(owe-scene PRIVATE "${WPE_DEPS}/ffmpeg-encoder-gpl2/sources/nv-codec-headers/include")
-target_link_libraries(owe-scene PUBLIC qjs lz4_static freetype)
+target_link_libraries(owe-scene PUBLIC qjs lz4_static freetype PRIVATE wpe-mimalloc)

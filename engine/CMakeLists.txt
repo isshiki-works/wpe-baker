@@ -37,7 +37,7 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # WPE_THIRD_PARTY_ONLY=ON 只编这些库并导出导入文件，供 scripts/build-native-cmake.py 生成预构建目录。
 set(WPE_THIRD_PARTY_DIR "" CACHE PATH "预构建第三方库目录（空 = 在本构建内编译）")
 option(WPE_THIRD_PARTY_ONLY "只构建并导出第三方库" OFF)
-set(WPE_THIRD_PARTY_TARGETS lz4_static freetype qjs glslang SPIRV glslang-default-resource-limits
+set(WPE_THIRD_PARTY_TARGETS lz4_static freetype qjs wpe-mimalloc glslang SPIRV glslang-default-resource-limits
     OSDependent MachineIndependent GenericCodeGen glslang-standalone VulkanMemoryAllocator spirv-reflect
     gtest gtest_main)
 if(WPE_THIRD_PARTY_DIR)
@@ -65,6 +65,19 @@ else()
   set(QJS_BUILD_CLI_WITH_MIMALLOC OFF CACHE BOOL "" FORCE)
   set(QJS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
   add_subdirectory("${WPE_DEPS}/quickjs" dependencies/quickjs EXCLUDE_FROM_ALL)
+  # Representative Windows x64 IR profile; only qjs uses ThinLTO.
+  target_compile_options(qjs PRIVATE
+      "-fprofile-use=${CMAKE_CURRENT_LIST_DIR}/third_party/quickjs-pgo-win64.profdata"
+      -mllvm -static-func-full-module-prefix=false
+      -Werror=profile-instr-out-of-date -flto=thin)
+  target_link_options(qjs INTERFACE -flto=thin "LINKER:--thinlto-jobs=1")
+
+  # Static, explicit allocator callbacks; no process-wide malloc override.
+  add_library(wpe-mimalloc STATIC "${WPE_DEPS}/mimalloc/src/static.c")
+  target_include_directories(wpe-mimalloc PUBLIC "${WPE_DEPS}/mimalloc/include")
+  target_compile_definitions(wpe-mimalloc PRIVATE MI_STATIC_LIB)
+  set_target_properties(wpe-mimalloc PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
+  target_link_libraries(wpe-mimalloc PUBLIC psapi shell32 user32 advapi32 bcrypt)
 
   set(ENABLE_GLSLANG_BINARIES ON CACHE BOOL "" FORCE)
   set(ENABLE_HLSL ON CACHE BOOL "" FORCE)

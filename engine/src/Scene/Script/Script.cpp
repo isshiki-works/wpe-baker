@@ -7,6 +7,7 @@ module;
 #include <limits>
 #include <rstd/macro.hpp>
 #include "quickjs.h"
+#include "mimalloc.h"
 
 #include "JsonNlohmann.hpp"
 
@@ -35,6 +36,16 @@ namespace owe::script
 
 namespace
 {
+
+// Same allocator adapter as QuickJS's CLI. Each runtime retains these
+// callbacks; renderer buffers and the rest of the process keep their allocator.
+void* ScriptCalloc(void*, size_t count, size_t size) { return mi_calloc(count, size); }
+void* ScriptMalloc(void*, size_t size) { return mi_malloc(size); }
+void ScriptFree(void*, void* ptr) { mi_free(ptr); }
+void* ScriptRealloc(void*, void* ptr, size_t size) { return mi_realloc(ptr, size); }
+const JSMallocFunctions kScriptAllocator {
+    ScriptCalloc, ScriptMalloc, ScriptFree, ScriptRealloc, mi_usable_size
+};
 
 FieldKind GuessFieldKind(std::string_view field) {
     // Visible/enabled-style fields: bool. Several scripts return numbers
@@ -4045,7 +4056,7 @@ JsRuntime::JsRuntime(Services* offline): m_impl(std::make_unique<Impl>()) {
         if (seconds < 0.0) seconds += 86400.0;
         m_impl->host.inputs.time_of_day = static_cast<float>(seconds / 86400.0);
     }
-    m_impl->rt  = JS_NewRuntime();
+    m_impl->rt  = JS_NewRuntime2(&kScriptAllocator, nullptr);
     m_impl->ctx = JS_NewContext(m_impl->rt);
     if (! m_impl->rt || ! m_impl->ctx) {
         rstd_error("script: JS_NewRuntime/JS_NewContext failed");

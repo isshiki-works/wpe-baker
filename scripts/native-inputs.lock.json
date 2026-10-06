@@ -135,5 +135,13 @@
     "repository": "https://github.com/google/googletest",
     "revision": "v1.18.0",
     "license": "BSD-3-Clause"
+  },
+  {
+    "name": "mimalloc",
+    "url": "https://codeload.github.com/microsoft/mimalloc/zip/d4881d338125e1cb7c47ba4cfb398d6f7c0c8d45",
+    "sha256": "7437cfd11d69162ff5427dc6d06cb811f4c590ab35171b525a3a40f524c5c523",
+    "path": ".deps\\mimalloc",
+    "repository": "https://github.com/microsoft/mimalloc",
+    "revision": "d4881d338125e1cb7c47ba4cfb398d6f7c0c8d45"
   }
 ]
