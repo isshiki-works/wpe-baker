@@ -64,6 +64,20 @@ internal static class StageTimingChecks
         timing.Stamp(report);
         check(report["stage_timing"]?["frames"]?.GetValue<ulong>() == 720UL, "报告落盘时按报告自己的帧数打上计时");
 
+        // Prefix reports omit top-level frames; the encoded loop excludes the extra seam reference frame.
+        JsonObject prefixReport = JsonNode.Parse("""{"status":"candidate_generated","groups":[{"id":"effect-prefix-17","status":"encoded","frames":15456}]}""")!.AsObject();
+        timing.Stamp(prefixReport);
+        bool singlePrefix = prefixReport["stage_timing"]!["frames"]!.GetValue<ulong>() == 15456UL &&
+            StageTiming.Summary(prefixReport)!.Contains("共 15456 帧", StringComparison.Ordinal) &&
+            StageTiming.Summary(prefixReport, english: true)!.Contains("15456 frames", StringComparison.Ordinal);
+        prefixReport["groups"]!.AsArray().Add(new JsonObject { ["id"] = "effect-prefix-18", ["status"] = "encoded", ["frames"] = 16000 });
+        timing.Stamp(prefixReport);
+        bool multiplePrefixes = prefixReport["stage_timing"]!["frames"]!.GetValue<ulong>() == 16000UL;
+        prefixReport["frames"] = 720;
+        timing.Stamp(prefixReport);
+        check(singlePrefix && multiplePrefixes && prefixReport["stage_timing"]!["frames"]!.GetValue<ulong>() == 720UL,
+            "前缀报告按最长组循环帧数生成中英文汇总，已有顶层循环帧数仍优先，不累加组帧数或接缝参照帧");
+
         check(StageTiming.Summary(new JsonObject { ["status"] = "failed" }) is null, "没有 stage_timing 的旧报告不生成汇总行");
         var inlineGroup = new JsonObject { ["playback_encode"] = new JsonObject {
             ["encoder_used"] = "software", ["encode_seconds"] = null } };

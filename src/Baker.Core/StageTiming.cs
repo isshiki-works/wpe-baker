@@ -120,10 +120,14 @@ public sealed class StageTiming(IProgress<RenderProgress>? progress = null)
     private static JsonNode? Round(double? value) =>
         value is null || !double.IsFinite(value.Value) ? null : JsonValue.Create(Math.Round(value.Value, 3));
 
-    /// <summary>把最新的分阶段计时写进报告顶层，帧数取报告自己记录的帧数。</summary>
+    /// <summary>把最新的分阶段计时写进报告顶层。帧数是报告的循环长度；没有公共循环时取各组循环帧数的最大值，不含预热或接缝参照帧。</summary>
     public void Stamp(JsonObject report) =>
-        report["stage_timing"] = ToJson(report["frames"] is JsonValue frames &&
-            ulong.TryParse(frames.ToJsonString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong count) ? count : 0);
+        report["stage_timing"] = ToJson(FrameCount(report["frames"]) ??
+            (report["groups"] as JsonArray ?? []).OfType<JsonObject>().Select(group => FrameCount(group["frames"])).Max() ?? 0);
+
+    private static ulong? FrameCount(JsonNode? node) =>
+        node is JsonValue value && ulong.TryParse(value.ToJsonString(), NumberStyles.Integer,
+            CultureInfo.InvariantCulture, out ulong count) ? count : null;
 
     /// <summary>生成 bake.json 顶层的 stage_timing。</summary>
     public JsonObject ToJson(ulong frames)
