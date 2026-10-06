@@ -102,6 +102,35 @@ TEST(ResourceModel, DistinguishesDepthSamplingAndComparisonSamplerDefinitions) {
                                                owe::resource::TextureUsage::Sampled));
 }
 
+TEST(ResourcePlan, TextureUpdatesFollowHandlesAfterEntryOrderChanges) {
+    owe::resource::ResourcePlan plan { .generation = rstd::u64(7) };
+    auto first = plan.DeclareTexture(TextureRequest("first", rstd::u32(128)),
+                                    owe::resource::ResourceAccess::Read);
+    auto second = plan.DeclareTexture(TextureRequest("second", rstd::u32(128)),
+                                     owe::resource::ResourceAccess::Read);
+    ASSERT_TRUE(plan.UpdateTextureRequest(second, TextureRequest("second", rstd::u32(256))));
+    EXPECT_EQ(plan.textures[rstd::usize(1)].request.definition->width, rstd::i32(256));
+    std::swap(plan.textures[rstd::usize()], plan.textures[rstd::usize(1)]);
+    ASSERT_TRUE(plan.UpdateTextureRequest(first, TextureRequest("first", rstd::u32(512))));
+    EXPECT_EQ(plan.textures[rstd::usize(1)].handle, first);
+    EXPECT_EQ(plan.textures[rstd::usize(1)].request.definition->width, rstd::i32(512));
+    auto stale = first;
+    stale.generation = rstd::u64(8);
+    EXPECT_FALSE(plan.UpdateTextureRequest(stale, TextureRequest("stale", rstd::u32(1024))));
+}
+
+TEST(ResourcePlan, TextureResizeKeepsGraphFeedbackContentPolicy) {
+    owe::resource::ResourcePlan plan { .generation = rstd::u64(7) };
+    auto request = TextureRequest("feedback", rstd::u32(128));
+    const auto history = owe::resource::TextureContentFlag(owe::resource::TextureContent::PreserveAcrossFrames) |
+                         owe::resource::TextureContentFlag(owe::resource::TextureContent::InitializeTransparent);
+    request.content |= history;
+    auto handle = plan.DeclareTexture(rstd::move(request), owe::resource::ResourceAccess::ReadWrite);
+    ASSERT_TRUE(plan.UpdateTextureRequest(handle, TextureRequest("feedback", rstd::u32(256))));
+    EXPECT_EQ(plan.textures[rstd::usize()].request.content & history, history);
+    EXPECT_EQ(plan.textures[rstd::usize()].request.definition->width, rstd::i32(256));
+}
+
 TEST(ResourcePlan, OwnsBackendNeutralRequestsByTypedUseHandle) {
     owe::resource::ResourcePlan plan { .generation = rstd::u64(7) };
     plan.textures.push(owe::resource::TexturePlanEntry {

@@ -598,6 +598,63 @@ TEST(ScriptNodeParent, DefaultLayerParentIsUndefined) {
     EXPECT_EQ(LastScalar(fs), 1.0);
 }
 
+TEST(ScriptBridge, InternedNamesPreserveBindingSettersAndReturnProxyReads) {
+    owe::SceneNode node;
+    JsRuntime rt;
+    auto* fs = rt.MakeFieldScript(
+        R"JS(
+            let boundLayer = thisLayer, boundObject = thisObject;
+            let layer = boundLayer, object = boundObject;
+            let layerWrites = 0, objectWrites = 0, reads = 0, calls = 0;
+            let previous;
+            Object.defineProperty(globalThis, 'thisLayer', {
+                configurable: true,
+                get() { return layer; },
+                set(value) { ++layerWrites; layer = value; }
+            });
+            Object.defineProperty(globalThis, 'thisObject', {
+                configurable: true,
+                get() { return object; },
+                set(value) { ++objectWrites; object = value; }
+            });
+            export function update(value) {
+                ++calls;
+                if (thisLayer !== boundLayer || thisObject !== boundObject ||
+                    layerWrites !== calls || objectWrites !== calls)
+                    throw new Error('Binding setter or restoration was skipped');
+                if (!(value instanceof Vec3) || value === previous ||
+                    (calls > 1 && value.z !== reads))
+                    throw new Error('Next value lost its fresh coerced shape');
+                previous = value;
+                thisLayer = null;
+                thisObject = null;
+                // Exclude the author's assignments from the next bind count.
+                --layerWrites;
+                --objectWrites;
+                return new Proxy({}, {
+                    get(target, key) {
+                        if (key === 'x' || key === 'y' || key === 'z') return ++reads;
+                        return undefined;
+                    }
+                });
+            }
+        )JS",
+        "test/bridge_interned_names",
+        FieldKind::Vec3,
+        owe::NJson::object(),
+        owe::NJson("0 0 0"),
+        &node);
+    ASSERT_NE(fs, nullptr);
+    for (unsigned frame = 0; frame < 3; ++frame) {
+        rt.TickAll();
+        ASSERT_TRUE(std::holds_alternative<Vec3Value>(fs->last_value()));
+        const auto& value = std::get<Vec3Value>(fs->last_value());
+        EXPECT_EQ(value.x, frame * 3 + 1);
+        EXPECT_EQ(value.y, frame * 3 + 2);
+        EXPECT_EQ(value.z, frame * 3 + 3);
+    }
+}
+
 TEST(ScriptNodeSoftMutation, VisibleAndAlphaWrites) {
     owe::SceneNode node;
     JsRuntime      rt;

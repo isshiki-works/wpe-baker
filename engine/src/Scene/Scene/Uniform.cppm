@@ -120,6 +120,20 @@ public:
         return value;
     }
     static ShaderValue fromMatrix(const Eigen::Ref<const Eigen::MatrixXd>& mat) {
+        if (mat.size() <= 16) {
+            ShaderValue value;
+            value.m_size = usize(mat.size());
+            value.m_layout = UniformValueLayout::Matrix(
+                u32(static_cast<rstd::uint32_t>(mat.rows())),
+                u32(static_cast<rstd::uint32_t>(mat.cols())),
+                usize(1),
+                UniformMatrixStorage::ColumnMajor);
+            usize index {};
+            for (Eigen::Index column = 0; column < mat.cols(); ++column)
+                for (Eigen::Index row = 0; row < mat.rows(); ++row)
+                    value.m_value[index++] = static_cast<float>(mat(row, column));
+            return value;
+        }
         Eigen::MatrixXf matf = mat.cast<float>();
         return fromMatrix(matf);
     }

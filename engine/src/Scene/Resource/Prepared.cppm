@@ -840,7 +840,23 @@ private:
                 .message = rstd::format("texture definition {} unavailable", request.name.as_str()),
             });
         }
-        auto image = m_textures_backend->AllocateTexture(ToTextureKey(*request.definition));
+        const auto& definition = *request.definition;
+        const bool first_write_clears =
+            (request.content & resource::TextureContentFlag(
+                                   resource::TextureContent::ClearOnFirstWrite)) != u32();
+        const auto preserved_content =
+            resource::TextureContentFlag(resource::TextureContent::PreserveAcrossFrames) |
+            resource::TextureContentFlag(resource::TextureContent::InitializeTransparent);
+        // Only single-mip color RTs whose first writer clears can let that
+        // render pass perform UNDEFINED -> attachment. Keep LOAD/history,
+        // depth, MSAA and mipmap initialization on the existing synchronous path.
+        const bool discard_initial_layout =
+            request.kind == resource::TextureRequestKind::RenderTarget &&
+            definition.usage == resource::TextureUsage::Color &&
+            definition.samples == u32(1) && definition.mip_levels == u32(1) &&
+            first_write_clears && (request.content & preserved_content) == u32();
+        auto image = m_textures_backend->AllocateTexture(ToTextureKey(definition),
+                                                        ! discard_initial_layout);
         if (image.is_none()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,

@@ -120,6 +120,7 @@ public:
 
     template<typename Value>
     void Write(UniformOutputId output, const Value& value) {
+        if (m_failed || !m_sink->Wants(output)) return;
         auto uniform = UniformValue(value);
         WriteView(output, uniform.View());
     }
@@ -609,11 +610,14 @@ auto TransformUniformSource::Evaluate(const UniformUpdateContext* context,
     const bool req_effect_model = writer.Wants(Output::EffectModel) || req_emvp || req_emvpi ||
                                   writer.Wants(Output::LayerModel);
 
-    Matrix4d    view_projection   = camera.GetViewProjectionMatrix(render_view);
+    const bool req_vp = writer.Wants(Output::ViewProjection);
+    const bool req_view_projection = req_vp || req_mvp || req_mvpi;
+    Matrix4d view_projection = req_view_projection
+        ? camera.GetViewProjectionMatrix(render_view) : Matrix4d::Identity();
     const auto& shake             = m_state->CameraShake();
     auto        active_camera_ref = m_node->camera_resolver->Active();
     const bool  active_camera     = (*camera_ref).as_raw_ptr() == active_camera_ref.as_raw_ptr();
-    if (shake.enable && active_camera && ! camera.IsPerspective() && shake.amplitude > 0.0f &&
+    if (req_view_projection && shake.enable && active_camera && ! camera.IsPerspective() && shake.amplitude > 0.0f &&
         shake.speed > 0.0f) {
         const auto  ortho       = m_state->Ortho();
         const float base_extent = std::min(ortho[usize(0)], ortho[usize(1)]);
@@ -625,11 +629,12 @@ auto TransformUniformSource::Evaluate(const UniformUpdateContext* context,
             Affine3d(Translation3d(Vector3d(offset.x() * scale, offset.y() * scale, 0.0))).matrix();
     }
 
-    if (writer.Wants(Output::ViewProjection))
+    if (req_vp)
         writer.Write(Output::ViewProjection, ShaderValue::fromMatrix(view_projection));
-    if (m_node->eye_position_override.is_some()) {
+    if (writer.Wants(Output::EyePosition) && m_node->eye_position_override.is_some()) {
         writer.Write(Output::EyePosition, *m_node->eye_position_override);
-    } else if (m_node->use_camera_eye_position || camera.IsPerspective()) {
+    } else if (writer.Wants(Output::EyePosition) &&
+               (m_node->use_camera_eye_position || camera.IsPerspective())) {
         const auto position = camera.GetPosition(render_view).cast<float>();
         writer.Write(Output::EyePosition,
                      rstd::array<float, 3> { position.x(), position.y(), position.z() });
@@ -1072,6 +1077,11 @@ auto TextureUniformSource::Evaluate(const UniformUpdateContext* context,
     UniformWriter writer(sink);
     auto          resources = context->Resources();
     for (usize index {}; index < WE_GLTEX_NAMES.len(); ++index) {
+        if (!writer.Wants(TextureResolutionOutput(index.to_primitive())) &&
+            !writer.Wants(TextureTexelOutput(index.to_primitive())) &&
+            !writer.Wants(TextureMipmapOutput(index.to_primitive())) &&
+            !writer.Wants(TextureRotationOutput(index.to_primitive())) &&
+            !writer.Wants(TextureTranslationOutput(index.to_primitive()))) continue;
         auto texture = resources->Texture(index);
         if (texture.is_none()) continue;
         if (texture->has_extent) {

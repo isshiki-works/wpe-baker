@@ -24,6 +24,14 @@ struct TexturePlanEntry {
     String           allocation_key;
     ResourceAccess   access { ResourceAccess::Read };
     u32              version { 0 };
+
+    void UpdateRequest(TextureRequest next) {
+        // These bits belong to graph feedback edges, rather than a pass's size request.
+        const auto history = TextureContentFlag(TextureContent::PreserveAcrossFrames) |
+                             TextureContentFlag(TextureContent::InitializeTransparent);
+        next.content |= request.content & history;
+        request = rstd::move(next);
+    }
 };
 
 struct BufferPlanEntry {
@@ -86,9 +94,14 @@ struct ResourcePlan {
 
     bool UpdateTextureRequest(TextureUseHandle handle, TextureRequest request) {
         if (handle.generation != generation) return false;
+        const auto index = handle.index.to_primitive();
+        if (index < textures.len().to_primitive() && textures[usize(index)].handle == handle) {
+            textures[usize(index)].UpdateRequest(rstd::move(request));
+            return true;
+        }
         for (auto& entry : textures) {
             if (entry.handle != handle) continue;
-            entry.request = rstd::move(request);
+            entry.UpdateRequest(rstd::move(request));
             return true;
         }
         return false;

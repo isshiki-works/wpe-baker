@@ -1,5 +1,6 @@
 module;
 #include <rstd/macro.hpp>
+#include <cstring>
 
 export module wescene.scene;
 import eigen;
@@ -1123,13 +1124,15 @@ public:
     void SetWidth(double value) {
         m_width  = value;
         m_aspect = m_width / m_height;
+        InvalidateProjection();
     }
     void SetHeight(double value) {
         m_height = value;
         m_aspect = m_width / m_height;
+        InvalidateProjection();
     }
-    void SetAspect(double aspect) { m_aspect = aspect; }
-    void SetFov(double value) { m_fov = value; }
+    void SetAspect(double aspect) { m_aspect = aspect; InvalidateProjection(); }
+    void SetFov(double value) { m_fov = value; InvalidateProjection(); }
 
     // Explicit eye/center/up view, used by perspective scenes (general
     // isOrtho==false) whose camera is given in WE world units rather than the
@@ -1141,6 +1144,7 @@ public:
         m_center = center;
         m_up     = up;
         m_lookat = true;
+        InvalidateView();
     }
     bool IsLookAt() const { return m_lookat; }
     auto Transforms() const -> SceneCameraTransforms;
@@ -1151,10 +1155,8 @@ public:
     Eigen::Vector3d GetPosition(SceneRenderViewKind view = SceneRenderViewKind::Primary) const;
     Eigen::Vector3d GetDirection() const;
 
-    // Lazy: recomputes from m_node->ModelTrans() on every call. Cheap when
-    // the attached node hasn't moved (UpdateTrans early-exits on clean
-    // m_dirty), correctness-keeping when scripts / parent-chain attachment
-    // shift the node between frames.
+    // Reuse matrices until camera parameters or the attached node's effective
+    // world transform change, including changes within the same frame.
     Eigen::Matrix4d GetViewMatrix();
     Eigen::Matrix4d
     GetViewProjectionMatrix(SceneRenderViewKind view = SceneRenderViewKind::Primary);
@@ -1177,6 +1179,8 @@ public:
         m_center      = cam.m_center;
         m_up          = cam.m_up;
         m_node        = cam.m_node;
+        InvalidateView();
+        InvalidateProjection();
     }
 
 private:
@@ -1193,8 +1197,17 @@ private:
 
     explicit SceneCamera(PerspectiveTag, double aspect, double near, double far, double fov)
         : m_aspect(aspect), m_nearClip(near), m_farClip(far), m_fov(fov), m_perspective(true) {}
+    void RefreshNodeTransform();
+    void CalculateViewMatrix();
+    void CalculateProjectionMatrix();
     void            CalculateViewProjectionMatrix();
     Eigen::Matrix4d CalculateReflectionViewProjectionMatrix();
+    void InvalidateView() {
+        m_view_dirty = m_view_projection_dirty = m_reflection_dirty = true;
+    }
+    void InvalidateProjection() {
+        m_projection_dirty = m_view_projection_dirty = m_reflection_dirty = true;
+    }
 
     double m_width { 1.0f };
     double m_height { 1.0f };
@@ -1211,6 +1224,14 @@ private:
 
     Eigen::Matrix4d m_viewMat { Eigen::Matrix4d::Identity() };
     Eigen::Matrix4d m_viewProjectionMat { Eigen::Matrix4d::Identity() };
+    Eigen::Matrix4d m_projectionMat { Eigen::Matrix4d::Identity() };
+    Eigen::Matrix4d m_reflectionViewProjectionMat { Eigen::Matrix4d::Identity() };
+    Eigen::Matrix4d m_node_transform { Eigen::Matrix4d::Identity() };
+    bool m_node_transform_valid { false };
+    bool m_view_dirty { true };
+    bool m_projection_dirty { true };
+    bool m_view_projection_dirty { true };
+    bool m_reflection_dirty { true };
 
     SceneNode* m_node { nullptr };
 };
@@ -1580,29 +1601,40 @@ public:
         // otherwise — force a recompute on next UpdateTrans.
         sub->MarkTransDirty();
         m_children.push(rstd::move(sub));
+        MarkTreeChanged();
     }
     auto            ChildIndex(const SceneNode& child) const -> Option<usize>;
     bool            MoveChild(SceneNode& child, usize index);
+    void            ClearChildren();
     Eigen::Matrix4d GetLocalTrans() const;
 
     const auto& Translate() const { return m_translate; }
     const auto& Rotation() const { return m_rotation; }
     const auto& Scale() const { return m_scale; }
     const auto& LocalFrame() const { return m_local_frame; }
+    // Preserve script-visible signed zero changes; NaN is never a no-op.
     void        SetLocalFrame(Eigen::Matrix4d frame) {
+        if (std::memcmp(m_local_frame.data(), frame.data(), 16 * sizeof(double)) == 0 &&
+            (m_local_frame.array() == frame.array()).all()) return;
         m_local_frame = rstd::move(frame);
         MarkTransDirty();
     }
     void SetRotation(Eigen::Vector3f v) {
+        if (std::memcmp(m_rotation.data(), v.data(), 3 * sizeof(float)) == 0 &&
+            (m_rotation.array() == v.array()).all()) return;
         m_rotation = v;
         MarkTransDirty();
     }
     void RotateObjectSpace(const Eigen::Vector3f& rotation);
     void SetTranslate(Eigen::Vector3f v) {
+        if (std::memcmp(m_translate.data(), v.data(), 3 * sizeof(float)) == 0 &&
+            (m_translate.array() == v.array()).all()) return;
         m_translate = v;
         MarkTransDirty();
     }
     void SetScale(Eigen::Vector3f v) {
+        if (std::memcmp(m_scale.data(), v.data(), 3 * sizeof(float)) == 0 &&
+            (m_scale.array() == v.array()).all()) return;
         m_scale = v;
         MarkTransDirty();
     }
@@ -1821,7 +1853,6 @@ public:
     bool HasMaterial() const { return m_mesh && m_mesh->Material() != nullptr; };
 
     const auto& GetChildren() const { return m_children; }
-    auto&       GetChildren() { return m_children; }
 
     const std::string& Name() const { return m_name; }
     SceneNode*         Parent() const { return m_parent; }
@@ -1851,7 +1882,7 @@ public:
         MarkTransDirty();
     }
 
-    // BFS over self + descendants; returns first node whose Name() matches.
+    // DFS over self + descendants; returns the first matching node.
     SceneNode* FindByName(std::string_view name);
 
     SceneNodeId              Identity() const { return m_identity; }
@@ -1870,6 +1901,7 @@ private:
     friend class Scene;
 
     void MarkTransDirty();
+    static void MarkTreeChanged();
     void SetFieldAnimation(String field, SceneNodeAnimationTarget target, SceneAnimationTrack track,
                            Eigen::Vector3f vector_base, float scalar_base);
 
@@ -1878,6 +1910,8 @@ private:
     Option<WallpaperLayerId> m_generator_identity;
     i32                      m_id { -1 };
     std::string              m_name;
+    std::unique_ptr<Map<std::string, SceneNode*>> m_name_index;
+    u64 m_name_index_epoch {};
 
     bool            m_dirty;
     Eigen::Matrix4d m_trans;

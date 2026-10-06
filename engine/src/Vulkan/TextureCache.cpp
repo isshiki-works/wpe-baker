@@ -324,7 +324,7 @@ void TextureCache::allocateCmd() {
     m_tex_cmd = vvk::CommandBuffer(m_tex_cmds[usize()], m_device.handle().Dispatch());
 }
 
-Option<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
+Option<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key, bool initialize_layout) {
     VmaImageParameters image_paras;
     do {
         VkSamplerCreateInfo sam_info = GenSamplerInfo(tex_key);
@@ -361,18 +361,23 @@ Option<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
         } else
             break;
 
+        // A first-write CLEAR render pass accepts UNDEFINED directly; there is
+        // no initialization command to submit or wait for in that case.
+        if (! initialize_layout) return Some(rstd::move(image_paras));
+
         // Single-sample images settle in SHADER_READ_ONLY (sampled by other
         // passes). MSAA twin is never sampled — pre-transition to
         // COLOR_ATTACHMENT_OPTIMAL so the first render pass with LoadOp=LOAD
         // doesn't see UNDEFINED on a non-DONT_CARE attachment.
         if (! m_tex_cmd) allocateCmd();
-        TransImgLayout(m_device.graphics_queue().handle,
-                       m_tex_cmd,
-                       ToImageParameters(image_paras),
-                       depth_usage ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                       : tex_key.samples == VK_SAMPLE_COUNT_1_BIT
-                           ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                           : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VVK_CHECK_ACT(break,
+                      TransImgLayout(m_device.graphics_queue().handle,
+                                     m_tex_cmd,
+                                     ToImageParameters(image_paras),
+                                     depth_usage ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                     : tex_key.samples == VK_SAMPLE_COUNT_1_BIT
+                                         ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                         : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
 
         VVK_CHECK_ACT(break, m_device.handle().WaitIdle());
         return Some(rstd::move(image_paras));
@@ -380,8 +385,9 @@ Option<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
     return None();
 }
 
-Option<rstd::sync::Arc<TextureAllocation>> TextureCache::AllocateTexture(TextureKey key) {
-    auto image = CreateTex(rstd::move(key));
+Option<rstd::sync::Arc<TextureAllocation>> TextureCache::AllocateTexture(TextureKey key,
+                                                                       bool initialize_layout) {
+    auto image = CreateTex(rstd::move(key), initialize_layout);
     if (image.is_none()) return None();
     ImageSlots slots;
     slots.slots.push_back(rstd::move(image).unwrap());

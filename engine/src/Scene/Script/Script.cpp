@@ -73,6 +73,13 @@ const char* KindName(FieldKind k) {
 
 bool IsFinite(double value) { return std::isfinite(value); }
 
+// Intern bridge property names once; property access still runs JS getters,
+// setters and Proxy traps on every call.
+struct BridgeAtoms {
+    JSAtom x {}, y {}, z {}, w {}, r {}, g {}, b {};
+    JSAtom this_layer {}, this_object {};
+};
+
 JSValue MakeVecValue(JSContext* ctx, double x, double y, double z, int n) {
     JSValue global  = JS_GetGlobalObject(ctx);
     JSValue ctor    = JS_GetPropertyStr(ctx, global, n == 2 ? "Vec2" : "Vec3");
@@ -100,11 +107,11 @@ JSValue MakeVec4Value(JSContext* ctx, double x, double y, double z, double w) {
 
 // JSValue→ScriptValue coercion. Mirrors the table in the API doc; never
 // throws, returns monostate for unrecognised shapes.
-ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
+ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind, const BridgeAtoms& atoms) {
     if (JS_IsUndefined(ret) || JS_IsNull(ret)) return {};
 
-    auto read_field = [&](JSValue obj, const char* name, double& out) -> bool {
-        JSValue v = JS_GetPropertyStr(ctx, obj, name);
+    auto read_field = [&](JSValue obj, JSAtom name, double& out) -> bool {
+        JSValue v = JS_GetProperty(ctx, obj, name);
         if (JS_IsUndefined(v)) {
             JS_FreeValue(ctx, v);
             return false;
@@ -150,8 +157,8 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
             read_index(ret, 0, v.x);
             read_index(ret, 1, v.y);
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
+            read_field(ret, atoms.x, v.x);
+            read_field(ret, atoms.y, v.y);
         } else if (JS_IsNumber(ret)) {
             double scalar = 0.0;
             if (JS_ToFloat64(ctx, &scalar, ret) < 0 || ! IsFinite(scalar)) return {};
@@ -169,9 +176,9 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
             read_index(ret, 1, v.y);
             read_index(ret, 2, v.z);
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
-            read_field(ret, "z", v.z);
+            read_field(ret, atoms.x, v.x);
+            read_field(ret, atoms.y, v.y);
+            read_field(ret, atoms.z, v.z);
         } else if (JS_IsNumber(ret)) {
             // Many audio-response scripts return a *scalar* even when bound
             // to scale (vec3). Splat into all three components.
@@ -192,10 +199,10 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
             read_index(ret, 2, v.z);
             read_index(ret, 3, v.w);
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
-            read_field(ret, "z", v.z);
-            read_field(ret, "w", v.w);
+            read_field(ret, atoms.x, v.x);
+            read_field(ret, atoms.y, v.y);
+            read_field(ret, atoms.z, v.z);
+            read_field(ret, atoms.w, v.w);
         } else if (JS_IsNumber(ret)) {
             double d = 0.0;
             JS_ToFloat64(ctx, &d, ret);
@@ -213,9 +220,9 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
             read_index(ret, 1, v.g);
             read_index(ret, 2, v.b);
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "r", v.r);
-            read_field(ret, "g", v.g);
-            read_field(ret, "b", v.b);
+            read_field(ret, atoms.r, v.r);
+            read_field(ret, atoms.g, v.g);
+            read_field(ret, atoms.b, v.b);
         } else {
             return {};
         }
@@ -428,6 +435,7 @@ struct AudioBufferSlot {
 
 struct EngineHostState {
     Services*                       offline { nullptr };
+    BridgeAtoms                     atoms;
     FrameInputs                     inputs;
     MediaStatus                     media;
     bool                            media_initialized { false };
@@ -541,6 +549,12 @@ struct FieldScript::Impl {
     bool             capture_init_return { false };
     std::uint64_t    binding_id { 0 };
     std::uint64_t    initialization_order { 0 };
+    double          profile_update_ms {};
+    unsigned long long profile_update_calls {};
+    struct GetLayerCosts {
+        unsigned long long calls {}, hits {}, misses {};
+        double lookup_ms {}, remainder_ms {};
+    } profile_get_layer;
     JSValue          current_value {
         JS_UNDEFINED
     }; // last `value` returned, kept as JSValue for the (value)-arg form
@@ -629,6 +643,22 @@ struct JsRuntime::Impl {
     JSRuntime*      rt { nullptr };
     JSContext*      ctx { nullptr };
     EngineHostState host;
+    struct ScriptCosts {
+        struct Phase {
+            double ms {};
+            unsigned long long calls {};
+            double Add(std::chrono::steady_clock::time_point started) {
+                const double elapsed = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started).count();
+                ms += elapsed;
+                ++calls;
+                return elapsed;
+            }
+        };
+        bool enabled { false };
+        unsigned frames {};
+        Phase bind, call, coerce, rebuild;
+    } script_costs;
     // Compiled-module dedup: same script source under the same sha is
     // imported once per runtime, exposing one shared namespace. A
     // FieldScript holds a JS_DupValue of the namespace.
@@ -2727,12 +2757,33 @@ JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
     const char* name = JS_ToCString(ctx, argv[0]);
     if (! name) return JS_DupValue(ctx, host->default_layer);
     std::string     layer_name { name };
+    FieldScript::Impl::GetLayerCosts* probe = nullptr;
+    if (auto* active = host->active_field_script;
+        active && active->m_impl->rt->script_costs.enabled) {
+        probe = &active->m_impl->profile_get_layer;
+    }
+    std::chrono::steady_clock::time_point lookup_started, lookup_finished;
+    if (probe) lookup_started = std::chrono::steady_clock::now();
     owe::SceneNode* hit = n ? n->FindByName(layer_name) : nullptr;
+    if (probe) lookup_finished = std::chrono::steady_clock::now();
     TraceDependency(ctx, "lookup", layer_name, hit);
     JS_FreeCString(ctx, name);
-    if (hit) return WrapLayerNode(ctx, hit);
-    if (host && host->scene_root) return JS_NULL;
-    return WrapLayerName(ctx, std::move(layer_name));
+    JSValue result;
+    if (hit) result = WrapLayerNode(ctx, hit);
+    else if (host && host->scene_root) result = JS_NULL;
+    else result = WrapLayerName(ctx, std::move(layer_name));
+    if (probe) {
+        const auto finished = std::chrono::steady_clock::now();
+        ++probe->calls;
+        if (hit) ++probe->hits;
+        else ++probe->misses;
+        probe->lookup_ms += std::chrono::duration<double, std::milli>(
+            lookup_finished - lookup_started).count();
+        // Only the post-lookup bridge work: tracing, CString release and wrapping.
+        probe->remainder_ms += std::chrono::duration<double, std::milli>(
+            finished - lookup_finished).count();
+    }
+    return result;
 }
 
 JSValue NodeGetEffect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -3770,9 +3821,10 @@ void CaptureDefaultBindings(JSContext* ctx) {
 }
 
 void BindThisContext(JSContext* ctx, JSValueConst layer, JSValueConst object) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "thisLayer", JS_DupValue(ctx, layer));
-    JS_SetPropertyStr(ctx, g, "thisObject", JS_DupValue(ctx, object));
+    JS_SetProperty(ctx, g, host->atoms.this_layer, JS_DupValue(ctx, layer));
+    JS_SetProperty(ctx, g, host->atoms.this_object, JS_DupValue(ctx, object));
     JS_FreeValue(ctx, g);
 }
 
@@ -3986,6 +4038,8 @@ void InstallOfflineGlobals(JSContext* ctx) {
 
 JsRuntime::JsRuntime(Services* offline): m_impl(std::make_unique<Impl>()) {
     m_impl->host.offline = offline;
+    const char* script_costs = std::getenv("WPE_PROFILE_SCRIPT_COSTS");
+    m_impl->script_costs.enabled = script_costs && std::string_view(script_costs) == "1";
     if (m_impl->host.offline) {
         double seconds = std::fmod(m_impl->host.offline->epoch_ms / 1000.0, 86400.0);
         if (seconds < 0.0) seconds += 86400.0;
@@ -4006,6 +4060,13 @@ JsRuntime::JsRuntime(Services* offline): m_impl(std::make_unique<Impl>()) {
     // response style scripts in the corpus.
     JS_SetMaxStackSize(m_impl->rt, 0);
     JS_SetContextOpaque(m_impl->ctx, &m_impl->host);
+    m_impl->host.atoms = {
+        JS_NewAtom(m_impl->ctx, "x"), JS_NewAtom(m_impl->ctx, "y"),
+        JS_NewAtom(m_impl->ctx, "z"), JS_NewAtom(m_impl->ctx, "w"),
+        JS_NewAtom(m_impl->ctx, "r"), JS_NewAtom(m_impl->ctx, "g"),
+        JS_NewAtom(m_impl->ctx, "b"), JS_NewAtom(m_impl->ctx, "thisLayer"),
+        JS_NewAtom(m_impl->ctx, "thisObject"),
+    };
     // Built-in ES modules (WEMath, …). Resolves bare `import 'WEMath'`
     // against the kBuiltinModules table; unknown names raise
     // ReferenceError via the loader.
@@ -4065,6 +4126,12 @@ JsRuntime::~JsRuntime() {
         if (! JS_IsUndefined(d.fn)) JS_FreeValue(m_impl->ctx, d.fn);
     }
     m_impl->host.deferred.clear();
+    const auto& atoms = m_impl->host.atoms;
+    if (m_impl->ctx) {
+        for (auto atom : { atoms.x, atoms.y, atoms.z, atoms.w, atoms.r, atoms.g, atoms.b,
+                           atoms.this_layer, atoms.this_object })
+            JS_FreeAtom(m_impl->ctx, atom);
+    }
     if (m_impl->ctx) JS_FreeContext(m_impl->ctx);
     if (m_impl->rt) JS_FreeRuntime(m_impl->rt);
 }
@@ -4311,7 +4378,7 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
             }
             // The callback may hand back a replacement property value, the
             // same way update() does; keep it for the update() that follows.
-            auto value = CoerceReturn(ctx, ret, I->kind);
+            auto value = CoerceReturn(ctx, ret, I->kind, m_impl->host.atoms);
             if (! std::holds_alternative<std::monostate>(value)) {
                 JSValue next_value = ScriptValueToJs(ctx, value);
                 JS_FreeValue(ctx, I->current_value);
@@ -4323,6 +4390,8 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
     }
     m_impl->host.active_field_script = nullptr;
 
+    auto& costs = m_impl->script_costs;
+    const bool profile_costs = costs.enabled;
     for (size_t script_index = 0; script_index < m_impl->scripts.size(); ++script_index) {
         auto* fs = m_impl->scripts[script_index].get();
         auto* I  = fs->m_impl.get();
@@ -4330,32 +4399,102 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
         if (JS_IsUndefined(I->update_fn)) continue;
         // Swap `thisLayer` to this script's bound node before update. When
         // unbound, restore the original stub captured at bootstrap.
+        std::chrono::steady_clock::time_point cost_started;
+        if (profile_costs) cost_started = std::chrono::steady_clock::now();
         BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
+        if (profile_costs) costs.bind.Add(cost_started);
         m_impl->host.active_field_script = fs;
         JSValue ret;
         if (I->update_takes_arg) {
             JSValue args[1] = { JS_DupValue(ctx, I->current_value) };
+            if (profile_costs) cost_started = std::chrono::steady_clock::now();
             ret             = JS_Call(ctx, I->update_fn, JS_UNDEFINED, 1, args);
+            if (profile_costs) {
+                I->profile_update_ms += costs.call.Add(cost_started);
+                ++I->profile_update_calls;
+            }
             JS_FreeValue(ctx, args[0]);
         } else {
+            if (profile_costs) cost_started = std::chrono::steady_clock::now();
             ret = JS_Call(ctx, I->update_fn, JS_UNDEFINED, 0, nullptr);
+            if (profile_costs) {
+                I->profile_update_ms += costs.call.Add(cost_started);
+                ++I->profile_update_calls;
+            }
         }
         if (JS_IsException(ret)) {
             m_impl->LogError(ctx, I->sha, "update threw", fs, "update");
             JS_FreeValue(ctx, ret);
             continue;
         }
-        I->last_value = CoerceReturn(ctx, ret, I->kind);
+        if (profile_costs) cost_started = std::chrono::steady_clock::now();
+        I->last_value = CoerceReturn(ctx, ret, I->kind, m_impl->host.atoms);
+        if (profile_costs) costs.coerce.Add(cost_started);
         // Keep the next argument in the field's coerced shape. Vec3 scripts
         // often return a scalar for scale, but still read value.x next frame.
         if (I->update_takes_arg && ! std::holds_alternative<std::monostate>(I->last_value)) {
+            if (profile_costs) cost_started = std::chrono::steady_clock::now();
             JSValue next_value = ScriptValueToJs(ctx, I->last_value);
             JS_FreeValue(ctx, I->current_value);
             I->current_value = next_value;
+            if (profile_costs) costs.rebuild.Add(cost_started);
         }
         JS_FreeValue(ctx, ret);
     }
     m_impl->host.active_field_script = nullptr;
+    if (profile_costs && ++costs.frames == 120) {
+        std::fprintf(stderr,
+            "[script-costs] frames=120 bind_ms=%.6f bind_calls=%llu "
+            "update_call_ms=%.6f update_call_calls=%llu coerce_ms=%.6f coerce_calls=%llu "
+            "rebuild_ms=%.6f rebuild_calls=%llu\n",
+            costs.bind.ms, costs.bind.calls, costs.call.ms, costs.call.calls,
+            costs.coerce.ms, costs.coerce.calls, costs.rebuild.ms, costs.rebuild.calls);
+        FieldScript::Impl* top[10] {};
+        FieldScript::Impl::GetLayerCosts get_layer_totals;
+        for (const auto& script : m_impl->scripts) {
+            auto* candidate = script->m_impl.get();
+            const auto& lookup = candidate->profile_get_layer;
+            get_layer_totals.calls += lookup.calls;
+            get_layer_totals.hits += lookup.hits;
+            get_layer_totals.misses += lookup.misses;
+            get_layer_totals.lookup_ms += lookup.lookup_ms;
+            get_layer_totals.remainder_ms += lookup.remainder_ms;
+            if (candidate->profile_update_calls == 0) continue;
+            for (size_t rank = 0; rank < 10; ++rank) {
+                if (top[rank] && top[rank]->profile_update_ms >= candidate->profile_update_ms)
+                    continue;
+                for (size_t next = 9; next > rank; --next) top[next] = top[next - 1];
+                top[rank] = candidate;
+                break;
+            }
+        }
+        unsigned rank = 0;
+        for (const auto* script : top) {
+            if (! script) break;
+            const auto property = rstd::cppstd::as_string_view(script->property.as_str());
+            const auto& lookup = script->profile_get_layer;
+            std::fprintf(stderr,
+                "[script-costs-top] frames=120 rank=%u owner_layer_id=%d "
+                "property=\"%.*s\" script_sha=\"%s\" update_ms=%.6f update_calls=%llu "
+                "get_layer_calls=%llu get_layer_hits=%llu get_layer_misses=%llu "
+                "get_layer_lookup_ms=%.6f get_layer_remainder_ms=%.6f\n",
+                ++rank, DependencyLayerId(script->node), static_cast<int>(property.size()),
+                property.data(), script->sha.c_str(), script->profile_update_ms,
+                script->profile_update_calls, lookup.calls, lookup.hits, lookup.misses,
+                lookup.lookup_ms, lookup.remainder_ms);
+        }
+        for (const auto& script : m_impl->scripts) {
+            script->m_impl->profile_update_ms = 0;
+            script->m_impl->profile_update_calls = 0;
+            script->m_impl->profile_get_layer = {};
+        }
+        std::fprintf(stderr,
+            "[script-costs-get-layer] frames=120 scope=field_scripts calls=%llu "
+            "hits=%llu misses=%llu lookup_ms=%.6f remainder_ms=%.6f\n",
+            get_layer_totals.calls, get_layer_totals.hits, get_layer_totals.misses,
+            get_layer_totals.lookup_ms, get_layer_totals.remainder_ms);
+        costs = Impl::ScriptCosts { .enabled = true };
+    }
 }
 
 void JsRuntime::ForEachScript(EachFn fn, void* user) {
@@ -4470,7 +4609,7 @@ void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs) {
     if (JS_IsException(r)) {
         rt->LogError(ctx, I->sha, "init threw", fs, "init");
     } else if (I->capture_init_return) {
-        auto value = CoerceReturn(ctx, r, I->kind);
+        auto value = CoerceReturn(ctx, r, I->kind, rt->host.atoms);
         if (! std::holds_alternative<std::monostate>(value)) {
             JSValue next_value = ScriptValueToJs(ctx, value);
             JS_FreeValue(ctx, I->current_value);
@@ -4587,7 +4726,7 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
         auto* raw = fault.get();
         m_impl->LogError(ctx, script_sha, what, raw, phase);
         I->current_value = CoerceInitialValue(ctx, initial_value, I->kind);
-        I->last_value = CoerceReturn(ctx, I->current_value, I->kind);
+        I->last_value = CoerceReturn(ctx, I->current_value, I->kind, m_impl->host.atoms);
         m_impl->scripts.push_back(rstd::move(fault));
         return raw;
     };

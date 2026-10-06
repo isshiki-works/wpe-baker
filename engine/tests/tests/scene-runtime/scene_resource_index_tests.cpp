@@ -507,7 +507,7 @@ TEST(SceneResourceIndex, RebuildInvalidatesRemovedNodesWithoutRenumberingRemaini
     ASSERT_TRUE(remaining_mesh_id.is_some());
     ASSERT_TRUE(remaining_material_id.is_some());
 
-    scene.RootMut()->GetChildren().clear();
+    scene.RootMut()->ClearChildren();
     scene.RootMut()->AppendChild(remaining_node.clone());
     scene.RebuildResourceIndex();
 

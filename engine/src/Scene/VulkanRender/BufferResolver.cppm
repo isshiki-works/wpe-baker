@@ -37,6 +37,10 @@ struct DrawBufferRefs {
 
     std::vector<DrawBufferKey> vertex_keys;
     Option<DrawBufferKey>      index_key;
+    // Last successfully queued upload source; null after prepare. Identity only:
+    // never dereference these after a geometry replacement.
+    std::vector<const SceneVertexArray*> vertex_sources;
+    const SceneIndexArray*              index_source { nullptr };
 
     Vec<resource::BufferUseHandle>    vertices;
     Option<resource::BufferUseHandle> index;

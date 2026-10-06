@@ -1,4 +1,7 @@
 module;
+#include <atomic>
+#include <cstdint>
+#include <memory>
 
 module wescene.scene;
 import eigen;
@@ -7,6 +10,17 @@ import rstd.cppstd;
 
 using namespace owe;
 using namespace Eigen;
+
+namespace
+{
+// Coarse invalidation keeps transform-only anchors and shared child membership
+// out of the name cache's ownership rules. Stable scenes only load this epoch.
+std::atomic_uint64_t scene_node_tree_epoch { 1 };
+}
+
+void SceneNode::MarkTreeChanged() {
+    scene_node_tree_epoch.fetch_add(1, std::memory_order_relaxed);
+}
 
 Matrix4d SceneNode::GetLocalTrans() const {
     Affine3d trans = Affine3d::Identity();
@@ -84,11 +98,36 @@ bool SceneNode::MoveChild(SceneNode& child, usize index) {
             m_children[cursor] = rstd::move(m_children[cursor - usize(1)]);
     }
     m_children[index] = rstd::move(moving);
+    MarkTreeChanged();
     return true;
+}
+
+void SceneNode::ClearChildren() {
+    if (m_children.is_empty()) return;
+    for (auto& child : m_children) {
+        if (child->m_parent == this) child->SetParentAnchor(nullptr);
+    }
+    m_children.clear();
+    MarkTreeChanged();
 }
 
 SceneNode* SceneNode::FindByName(std::string_view name) {
     if (m_name == name) return this;
+    if (m_parent == nullptr) {
+        const auto epoch = u64(scene_node_tree_epoch.load(std::memory_order_relaxed));
+        if (! m_name_index || m_name_index_epoch != epoch) {
+            auto index = std::make_unique<Map<std::string, SceneNode*>>();
+            auto visit = [&](auto& self, SceneNode& node) -> void {
+                index->try_emplace(node.m_name, &node);
+                for (const auto& child : node.m_children) self(self, *child);
+            };
+            visit(visit, *this);
+            m_name_index = rstd::move(index);
+            m_name_index_epoch = epoch;
+        }
+        const auto found = m_name_index->find(name);
+        return found != m_name_index->end() ? found->second : nullptr;
+    }
     for (auto& child : m_children) {
         if (auto* hit = child->FindByName(name)) return hit;
     }

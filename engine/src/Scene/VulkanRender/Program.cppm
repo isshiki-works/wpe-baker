@@ -187,6 +187,7 @@ struct RenderProgram {
     PipelineLayoutAssignments                               pipeline_layout_assignments;
     Option<resource::DescriptorBindingHandle>               global_descriptor_binding;
     rstd::Option<resource_registry::ResourcePrepareSession> resource_prepare_session;
+    bool                                                    texture_only_prepare { false };
     bool                                                    loaded { false };
 
     void clear() {
@@ -667,6 +668,7 @@ struct RenderProgram {
                 record.invalidate(flags);
                 loaded = false;
             }
+            if (flags == PassInvalidationNone && pass->prepared() && !record.invalidated()) continue;
             for (const auto& diagnostic : pass->textureRequestDiagnostics()) {
                 if (diagnostic.request.is_none()) continue;
                 if (diagnostic.use.is_some() && resource_plan.UpdateTextureRequest(
@@ -679,7 +681,7 @@ struct RenderProgram {
                         rstd::cppstd::as_string_view(entry.request.name.as_str()) != request_name) {
                         continue;
                     }
-                    entry.request = diagnostic.request->clone();
+                    entry.UpdateRequest(diagnostic.request->clone());
                 }
             }
         }
@@ -700,6 +702,7 @@ struct RenderProgram {
             resource::ResourcePlanIncludes(sections, resource::ResourcePlanBuffers);
         const bool prepare_shaders =
             resource::ResourcePlanIncludes(sections, resource::ResourcePlanShaders);
+        texture_only_prepare = !prepare_buffers && !prepare_shaders;
         if (prepare_buffers != prepare_shaders) {
             rstd_error("render resource declaration requires buffers and shaders together");
             return RenderProgramPrepareStatus::Failed;
@@ -762,6 +765,74 @@ struct RenderProgram {
         return finishPrepare(scene, device, rr);
     }
 
+    bool preparePassRecords(owe::Scene& scene, const Device& device, RenderingResources& rr) {
+        PassPrepareContext prepare_context {
+            .resources = rstd::ref<owe::resource_registry::PreparedResourceTable>::from_raw_parts(
+                rstd::addressof(rr.resources.Prepared())),
+            .graphics = &rr.resources,
+            .pipeline_layouts = rstd::ref<PipelineLayoutAssignments>::from_raw_parts(
+                rstd::addressof(pipeline_layout_assignments)),
+        };
+        for (auto& record : pass_records) {
+            auto pass = resolve(record);
+            if (pass) {
+                if (record.invalidated()) {
+                    rr.resources.RemovePreparedGraphics(record.resources.pipelines.as_slice(),
+                                                        record.resources.render_passes.as_slice(),
+                                                        record.resources.framebuffers.as_slice(),
+                                                        record.resources.descriptors.as_slice(),
+                                                        record.resources.externals.as_slice());
+                }
+                record.prepareIfNeeded(*pass, scene, device, prepare_context);
+                if (!pass->prepared()) {
+                    rstd_error("prepare pass failed for {}", record.pass_name);
+                    return false;
+                }
+                record.resources = pass->resourceUses();
+            }
+        }
+        return true;
+    }
+
+    bool prepareUniformBufferUpdates(owe::Scene& scene, RenderingResources& rr) {
+        uniform_updates.clear();
+        uniform_update_owners.clear();
+        SceneUniformBindingPrepareContext uniform_prepare_impl(scene);
+        const UniformBindingPrepareContext* uniform_prepare = &uniform_prepare_impl;
+        Vec<resource::BufferUseHandle> prepared_uniform_buffers;
+        for (auto& record : pass_records) {
+            auto pass = resolve(record);
+            if (pass.is_none()) continue;
+            PreparedPassResources resources(rr.resources.Prepared(), record.resources);
+            auto created = pass->createUniformBufferUpdates(uniform_prepare, resources);
+            if (created.is_err()) {
+                auto error = rstd::move(created).unwrap_err_unchecked();
+                rstd_error("prepare uniform binding failed for {}: {}",
+                           record.pass_name,
+                           error.message.as_str());
+                return false;
+            }
+            auto bindings = rstd::move(created).unwrap_unchecked();
+            for (auto& binding : bindings) {
+                bool exists = false;
+                for (const auto& prepared : prepared_uniform_buffers) {
+                    if (prepared == binding->Buffer()) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (exists) continue;
+                prepared_uniform_buffers.push(binding->Buffer());
+                uniform_update_owners.push(rstd::move(binding));
+            }
+        }
+        uniform_updates.reserve(uniform_update_owners.len());
+        for (const auto& binding : uniform_update_owners) {
+            uniform_updates.push(binding.get());
+        }
+        return true;
+    }
+
     auto finishPrepare(owe::Scene& scene, const Device& device, RenderingResources& rr)
         -> RenderProgramPrepareStatus {
         owe::resource_registry::TextureStatePreparer* state_preparer = &rr.resources.States();
@@ -772,6 +843,13 @@ struct RenderProgram {
                 rstd_error("prepare resource states failed for {}", record.pass_name);
                 return RenderProgramPrepareStatus::Failed;
             }
+        }
+        // Texture-only plans retain shaders, buffers, layouts and the global binding.
+        // Uniform update owners snapshot resource sizes, so recreate them after resize.
+        if (texture_only_prepare && !pipeline_layout_assignments.entries.is_empty()) {
+            if (!preparePassRecords(scene, device, rr) || !prepareUniformBufferUpdates(scene, rr))
+                return RenderProgramPrepareStatus::Failed;
+            return RenderProgramPrepareStatus::Complete;
         }
         Vec<PipelineLayoutRequirement> layout_requirements;
         for (auto& record : pass_records) {
@@ -942,66 +1020,8 @@ struct RenderProgram {
             }
             next_global_descriptor_binding = Some(rstd::move(prepared).unwrap_unchecked());
         }
-        PassPrepareContext prepare_context {
-            .resources = rstd::ref<owe::resource_registry::PreparedResourceTable>::from_raw_parts(
-                rstd::addressof(rr.resources.Prepared())),
-            .graphics         = graphics,
-            .pipeline_layouts = rstd::ref<PipelineLayoutAssignments>::from_raw_parts(
-                rstd::addressof(pipeline_layout_assignments)),
-        };
-        for (auto& record : pass_records) {
-            auto pass = resolve(record);
-            if (pass) {
-                if (record.invalidated()) {
-                    rr.resources.RemovePreparedGraphics(record.resources.pipelines.as_slice(),
-                                                        record.resources.render_passes.as_slice(),
-                                                        record.resources.framebuffers.as_slice(),
-                                                        record.resources.descriptors.as_slice(),
-                                                        record.resources.externals.as_slice());
-                }
-                record.prepareIfNeeded(*pass, scene, device, prepare_context);
-                if (! pass->prepared()) {
-                    rstd_error("prepare pass failed for {}", record.pass_name);
-                    return RenderProgramPrepareStatus::Failed;
-                }
-                record.resources = pass->resourceUses();
-            }
-        }
-        uniform_updates.clear();
-        uniform_update_owners.clear();
-        SceneUniformBindingPrepareContext uniform_prepare_impl(scene);
-        const UniformBindingPrepareContext* uniform_prepare = &uniform_prepare_impl;
-        Vec<resource::BufferUseHandle> prepared_uniform_buffers;
-        for (auto& record : pass_records) {
-            auto pass = resolve(record);
-            if (pass.is_none()) continue;
-            PreparedPassResources resources(rr.resources.Prepared(), record.resources);
-            auto created = pass->createUniformBufferUpdates(uniform_prepare, resources);
-            if (created.is_err()) {
-                auto error = rstd::move(created).unwrap_err_unchecked();
-                rstd_error("prepare uniform binding failed for {}: {}",
-                           record.pass_name,
-                           error.message.as_str());
-                return RenderProgramPrepareStatus::Failed;
-            }
-            auto bindings = rstd::move(created).unwrap_unchecked();
-            for (auto& binding : bindings) {
-                bool exists = false;
-                for (const auto& prepared : prepared_uniform_buffers) {
-                    if (prepared == binding->Buffer()) {
-                        exists = true;
-                        break;
-                    }
-                }
-                if (exists) continue;
-                prepared_uniform_buffers.push(binding->Buffer());
-                uniform_update_owners.push(rstd::move(binding));
-            }
-        }
-        uniform_updates.reserve(uniform_update_owners.len());
-        for (const auto& binding : uniform_update_owners) {
-            uniform_updates.push(binding.get());
-        }
+        if (!preparePassRecords(scene, device, rr)) return RenderProgramPrepareStatus::Failed;
+        if (!prepareUniformBufferUpdates(scene, rr)) return RenderProgramPrepareStatus::Failed;
         global_descriptor_binding = next_global_descriptor_binding;
         return RenderProgramPrepareStatus::Complete;
     }

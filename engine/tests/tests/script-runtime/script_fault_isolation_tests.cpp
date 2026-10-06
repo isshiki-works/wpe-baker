@@ -202,10 +202,28 @@ TEST(ScriptFaultIsolation, ModuleFaultKeepsPeerRunningAndPreservesUnsupportedFat
     EXPECT_NE(offline.source_script_errors.front().message.find("scene is not defined"),
               std::string::npos);
 
+    // Unknown engine members are author errors, not missing host APIs.
+    auto* unknown = runtime.MakeFieldScript(
+        "engine.notImplementedOffline();",
+        "test/module_unknown_engine_member",
+        FieldKind::Scalar,
+        owe::NJson::object(),
+        owe::NJson(0.75),
+        ScriptBindingContext::ForLayer(faulty.as_ptr(), "alpha"_str));
+    ASSERT_NE(unknown, nullptr);
+    EXPECT_FALSE(offline.failed);
+    ASSERT_EQ(offline.source_script_errors.size(), 2u);
+    EXPECT_EQ(offline.source_script_errors.back().phase, "module");
+    EXPECT_EQ(offline.source_script_errors.back().owner_layer_id, 701);
+    EXPECT_EQ(offline.source_script_errors.back().script_sha, "test/module_unknown_engine_member");
+    EXPECT_DOUBLE_EQ(std::get<ScalarValue>(unknown->last_value()).v, 0.75);
+
     owe::Services unsupported_offline;
     JsRuntime     unsupported_runtime(&unsupported_offline);
+    // Simulate a missing documented IEngine member without relying on a
+    // production capability gap. A missing official API must still be fatal.
     EXPECT_NE(unsupported_runtime.MakeFieldScript(
-                  "engine.notImplementedOffline();",
+                  "delete engine.runtime; const value = engine.runtime;",
                   "test/module_unsupported_fatal",
                   FieldKind::Scalar,
                   owe::NJson::object(),
@@ -213,6 +231,10 @@ TEST(ScriptFaultIsolation, ModuleFaultKeepsPeerRunningAndPreservesUnsupportedFat
                   ScriptBindingContext::ForLayer(faulty.as_ptr(), "alpha"_str)),
               nullptr);
     EXPECT_TRUE(unsupported_offline.failed);
+    ASSERT_EQ(unsupported_offline.source_script_errors.size(), 1u);
+    EXPECT_NE(unsupported_offline.source_script_errors.front().message.find(
+                  "Unsupported offline API: engine.runtime"),
+              std::string::npos);
 }
 
 TEST(ScriptFaultIsolation, CompileFaultPreservesInitialValueAndPeer) {

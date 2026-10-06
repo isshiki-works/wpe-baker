@@ -48,6 +48,7 @@ struct CpuFrameResult {
     // times, not GPU timestamps, and distinguish preparation from waits.
     std::optional<double>    cpu_prepare_ms, cpu_render_wait_ms, cpu_encode_ms, cpu_pass_check_ms;
     std::optional<double>    cpu_scene_ms, cpu_resources_ms, cpu_script_ms, cpu_pending_wait_ms;
+    std::optional<double>    cpu_rt_refresh_ms, cpu_mesh_refresh_ms, cpu_material_refresh_ms;
     CpuFrameStatus           status { CpuFrameStatus::NotReady };
     std::uint32_t            width { 0 };
     std::uint32_t            height { 0 };

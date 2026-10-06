@@ -100,10 +100,14 @@ Option<DrawBufferRefs> RenderBufferResolver::prepareDrawBuffers(const DrawBuffer
     out.allocation_generation = resolve_allocation_generation(request, out.dynamic);
     auto keys                 = BuildDrawBufferKeys(request, out.allocation_generation);
     out.vertex_keys.reserve(submesh.vertex_arrays.size());
+    out.vertex_sources.reserve(submesh.vertex_arrays.size());
 
     for (std::size_t i = 0; i < submesh.vertex_arrays.size(); i++) {
         const auto& vertex = submesh.vertex_arrays[i];
         out.vertex_keys.push_back(keys[i]);
+        // Preparing a reused dynamic allocation does not upload its contents.
+        // The first update must queue the current CPU data before it can be skipped.
+        out.vertex_sources.push_back(nullptr);
         out.draw_count += rstd::as_cast<u32>(vertex.DataSize() / vertex.OneSize());
 
         if (i >= request.buffer_uses.len().to_primitive()) return None();
@@ -145,8 +149,6 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(
     } else {
         buffers.draw_count = u32();
     }
-    if ((mesh.DirtyFlags() & SceneMeshDirtyData) == 0) return true;
-
     auto require_reprepare = [&mesh] {
         mesh.SetLayoutDirty();
         return false;
@@ -155,23 +157,32 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(
         return require_reprepare();
     if (buffers.vertex_keys.size() != submesh.vertex_arrays.size()) return require_reprepare();
     if (buffers.index.is_some() != ! submesh.index_arrays.empty()) return require_reprepare();
+    if (buffers.vertex_sources.size() != submesh.vertex_arrays.size())
+        buffers.vertex_sources.assign(submesh.vertex_arrays.size(), nullptr);
 
     for (std::size_t i = 0; i < submesh.vertex_arrays.size(); i++) {
-        const auto& vertex                     = submesh.vertex_arrays[i];
-        buffers.vertex_keys[i].data_generation = vertex.DataGeneration();
+        const auto& vertex = submesh.vertex_arrays[i];
+        const auto generation = vertex.DataGeneration();
+        if (buffers.vertex_sources[i] == &vertex &&
+            buffers.vertex_keys[i].data_generation == generation) continue;
         auto updated = writer->UpdateBuffer(buffers.vertices[usize(i)],
                                             bytesOf(vertex.Data(), vertex.DataSizeOf()));
         if (updated.is_err()) return require_reprepare();
+        buffers.vertex_keys[i].data_generation = generation;
+        buffers.vertex_sources[i] = &vertex;
     }
 
     if (! submesh.index_arrays.empty()) {
         const auto& index = submesh.index_arrays[0];
-        if (buffers.index_key.is_some()) {
-            buffers.index_key->data_generation = index.DataGeneration();
+        const auto generation = index.DataGeneration();
+        if (buffers.index_source != &index || buffers.index_key.is_none() ||
+            buffers.index_key->data_generation != generation) {
+            auto updated =
+                writer->UpdateBuffer(*buffers.index, bytesOf(index.Data(), index.DataSizeOf()));
+            if (updated.is_err()) return require_reprepare();
+            if (buffers.index_key.is_some()) buffers.index_key->data_generation = generation;
+            buffers.index_source = &index;
         }
-        auto updated =
-            writer->UpdateBuffer(*buffers.index, bytesOf(index.Data(), index.DataSizeOf()));
-        if (updated.is_err()) return require_reprepare();
     }
 
     return true;

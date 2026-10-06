@@ -899,9 +899,9 @@ auto ImagePrepareContext::CreateImportedTexture(
     });
 }
 
-auto ImagePrepareContext::AllocateTexture(TextureKey key)
+auto ImagePrepareContext::AllocateTexture(TextureKey key, bool initialize_layout)
     -> Option<rstd::sync::Arc<TextureAllocation>> {
-    return m_textures.AllocateTexture(rstd::move(key));
+    return m_textures.AllocateTexture(rstd::move(key), initialize_layout);
 }
 
 auto ImagePrepareContext::AllocateTransparentTexture(TextureKey key)

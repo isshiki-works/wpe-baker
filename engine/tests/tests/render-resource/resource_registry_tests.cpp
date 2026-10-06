@@ -124,6 +124,7 @@ struct ImageBackend final : owe::vulkan::ImagePrepareBackend {
     rstd::usize creates { 0 };
     rstd::usize transparent_creates { 0 };
     rstd::u64   generation { 0 };
+    bool        last_initialize_layout { true };
 
     auto CreateImportedTexture(rstd::ref<owe::Image>,
                                rstd::Option<rstd::sync::Arc<owe::VideoPlaybackState>>)
@@ -138,10 +139,11 @@ struct ImageBackend final : owe::vulkan::ImagePrepareBackend {
         });
     }
 
-    auto AllocateTexture(owe::vulkan::TextureKey)
+    auto AllocateTexture(owe::vulkan::TextureKey, bool initialize_layout = true)
         -> rstd::Option<rstd::sync::Arc<owe::vulkan::TextureAllocation>> override {
         ++creates;
         ++generation;
+        last_initialize_layout = initialize_layout;
         return rstd::Some(TextureAllocation(generation.to_primitive()));
     }
 
@@ -795,6 +797,59 @@ TEST(ResourcePrepareService, PreservesRetainedHistoryAcrossVisibilityGraphRebuil
     EXPECT_NE((**reset_texture).resource, resource);
     EXPECT_NE((**reset_texture).physical.as_ptr().as_raw_ptr(), physical);
     EXPECT_EQ(image_backend.transparent_creates, rstd::usize(2));
+}
+
+TEST(ResourcePrepareService, SkipsLayoutInitializationOnlyForFirstClearColorTargets) {
+    using namespace owe::resource;
+    const auto clear = TextureContentFlag(TextureContent::ClearOnFirstWrite);
+    auto check = [](TextureDefinition definition, TextureContentFlags content,
+                    TextureRequestKind kind, bool expected_initialization) {
+        TextureRegistry textures;
+        owe::resource_registry::BufferRegistry buffers;
+        owe::resource_registry::ShaderRegistry shaders;
+        BufferBackend buffer_backend;
+        ImageBackend image_backend;
+        ResourcePlan plan { .generation = rstd::u64(1) };
+        plan.textures.push(TexturePlanEntry {
+            .handle = { .index = rstd::u64(1), .generation = rstd::u64(1) },
+            .request = TextureRequest {
+                .kind = kind,
+                .name = rstd::string::String::make("target"_str),
+                .definition = rstd::Some(definition),
+                .content = content,
+            },
+            .access = ResourceAccess::Write,
+        });
+        owe::resource_registry::ResourcePrepareService service(
+            textures, &image_backend, buffers, &buffer_backend, shaders);
+        auto prepared = service.Prepare(plan);
+        ASSERT_TRUE(prepared.is_ok());
+        EXPECT_EQ(image_backend.creates, rstd::usize(1));
+        EXPECT_EQ(image_backend.last_initialize_layout, expected_initialization);
+        const bool transparent =
+            (content & TextureContentFlag(TextureContent::InitializeTransparent)) != rstd::u32();
+        EXPECT_EQ(image_backend.transparent_creates, rstd::usize(transparent ? 1 : 0));
+    };
+    TextureDefinition color { .width = rstd::i32(64), .height = rstd::i32(32) };
+    check(color, clear, TextureRequestKind::RenderTarget, false);
+    check(color, TextureContentFlag(TextureContent::SourceDefined),
+          TextureRequestKind::RenderTarget, true);
+    check(color, clear | TextureContentFlag(TextureContent::PreserveAcrossFrames),
+          TextureRequestKind::RenderTarget, true);
+    check(color, clear | TextureContentFlag(TextureContent::InitializeTransparent),
+          TextureRequestKind::RenderTarget, true);
+    color.mip_levels = rstd::u32(2);
+    check(color, clear, TextureRequestKind::RenderTarget, true);
+    color.mip_levels = rstd::u32(1);
+    color.samples = rstd::u32(4);
+    check(color, clear, TextureRequestKind::RenderTarget, true);
+    check(color, clear, TextureRequestKind::RenderTargetMsaa, true);
+    color.samples = rstd::u32(1);
+    color.usage = TextureUsage::Depth;
+    color.format = owe::TextureFormat::D32F;
+    check(color, clear, TextureRequestKind::DepthAttachment, true);
+    color.usage = TextureUsage::DepthAttachment | TextureUsage::Sampled;
+    check(color, clear, TextureRequestKind::RenderTarget, true);
 }
 
 TEST(ResourcePrepareService, MapsLogicalTextureUsesToPlannedPhysicalSlots) {

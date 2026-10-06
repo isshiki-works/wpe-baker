@@ -413,9 +413,19 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
             vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
     }
     if (!early) m_scene->Runtime().BeforeRender();
-    refreshPreparedRenderTargetDirtyEvents();
+    const auto rt_started = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (rasters()) {
+        refreshPreparedRenderTargetDirtyEvents();
+    } else {
+        // Keep CPU sizes current, but leave dirty RT events for the first frame
+        // that uses GPU pixels instead of allocating every intermediate text size.
+        m_render->configureRenderTargets(*m_scene);
+    }
+    const auto rt_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     refreshPreparedMeshDirtyEvents();
+    const auto meshes_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     refreshPreparedMaterialDirtyEvents();
+    const auto materials_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     // 上面的刷新可能重建渲染图、打开帧反馈，光栅与否在这里重算。
     const bool raster = rasters();
@@ -427,7 +437,7 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
     /* Upload any glyph rects the actuators added this tick. Runs after
      * TickSceneScripts (which calls FontFace::Populate) and before
      * drawFrame so newly-rasterised glyphs are visible the same frame. */
-    m_render->pumpFontAtlases(*m_scene);
+    if (raster) m_render->pumpFontAtlases(*m_scene);
     const auto resources_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     if (m_services.failed) return false;
@@ -437,6 +447,9 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
         m_cpu_frame.cpu_script_ms = profile.script_ms;
         m_cpu_frame.cpu_pending_wait_ms = std::chrono::duration<double,std::milli>(pending_finished-early_finished).count();
         m_cpu_frame.cpu_resources_ms = std::chrono::duration<double,std::milli>((early_finished-profile.scene_finished)+(resources_finished-pending_finished)).count();
+        m_cpu_frame.cpu_rt_refresh_ms = std::chrono::duration<double,std::milli>(rt_finished-rt_started).count();
+        m_cpu_frame.cpu_mesh_refresh_ms = std::chrono::duration<double,std::milli>(meshes_finished-rt_finished).count();
+        m_cpu_frame.cpu_material_refresh_ms = std::chrono::duration<double,std::milli>(materials_finished-meshes_finished).count();
     }
     m_cpu_frame.frame_index = clock.index;
     if (!m_cpu_frame.completed() && !m_cpu_frame.submitted()) return false;
@@ -506,14 +519,16 @@ void OfflineSession::Impl::refreshPreparedMeshDirtyEvents() {
         return;
     }
 
+    bool refresh_resources = false;
     for (const auto& event : events) {
         if ((event.flags & SceneMeshDirtyData) == 0) continue;
-        m_render->refreshPreparedMesh(
-            *m_scene,
-            m_render_scene,
-            event.mesh,
+        m_render->invalidatePreparedRenderItems(
+            m_render_scene.renderItemsFor(event.mesh),
             vulkan::ToPassInvalidationFlags(vulkan::PassInvalidation::Resources));
+        refresh_resources = true;
     }
+    // All mutations happened before this stage; prepare their shared resource plan once.
+    if (refresh_resources) m_render->refreshPreparedResources(*m_scene, m_render_scene);
 }
 
 void OfflineSession::Impl::refreshPreparedMaterialDirtyEvents() {
@@ -541,11 +556,14 @@ void OfflineSession::Impl::refreshPreparedMaterialDirtyEvents() {
         rebuildRenderGraph(vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
         return;
     }
+    bool refresh_resources = false;
     for (const auto& event : events) {
         auto flags = MaterialDirtyToPassInvalidationFlags(event.flags);
         if (flags == vulkan::PassInvalidationNone) continue;
-        m_render->refreshPreparedMaterial(*m_scene, m_render_scene, event.material, flags);
+        m_render->invalidatePreparedRenderItems(m_render_scene.renderItemsFor(event.material), flags);
+        refresh_resources = true;
     }
+    if (refresh_resources) m_render->refreshPreparedResources(*m_scene, m_render_scene);
 }
 
 void OfflineSession::Impl::installScene(Box<Scene> scene, Arc<UniformRuntimeInput> uniform_input) {
