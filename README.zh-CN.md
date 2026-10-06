@@ -49,7 +49,7 @@ Periodica 在 open-wallpaper-engine 的基础上，重构了场景执行与 Vulk
 
 **重新设计界面。** 2.0 采用液态玻璃美学，将壁纸选择、生成设置与任务队列集中在同一窗口。预览图直接从场景渲染，生成后可预览、应用或导出成品。
 
-![WPE Baker 2.0 界面](https://isshiki-works.github.io/wpe-baker/site/gui-2.0-zh.jpg)
+![WPE Baker 2.0 界面](https://isshiki-works.github.io/wpe-baker/site/gui-2.0-zh.png)
 
 ## 快速开始
 
@@ -75,6 +75,10 @@ Periodica 在 open-wallpaper-engine 的基础上，重构了场景执行与 Vulk
 程序先分析着色器、动画轨道、粒子和视频的时间关系，再在所选精度内调整动画，使其形成可重复播放的循环。周期内容预渲染为视频或静态纹理，与需要实时运行的图层共同组成成品。生成过程中会检查循环接缝、画质、合成结果和硬件解码。
 
 WPE Baker 面向场景（Scene）类壁纸。包含大量周期动画、渲染开销较高的场景通常有更大的节省空间；原本就很轻量的场景，收益相对有限。播放成品仍使用 Wallpaper Engine，实时图层继续由它渲染。
+
+### 离线场景渲染器
+
+Periodica 同时提供 Windows 上的 **Wallpaper Engine 离线场景渲染器**。开发者可以直接加载 `scene.pkg` 或 `scene.json`，通过 JSON 作业指定分辨率、帧率和帧数，输出 RGBA 原始帧或硬件编码视频，用于接入其他视频工具。源码位于 [engine](engine/)，参数定义见 [渲染入口](engine/tools/SceneBake/main.cpp)。
 
 ## 命令行
 

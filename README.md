@@ -49,7 +49,7 @@ In a same-scene comparison on an RTX 5090 D v2, full 4K baking time fell from ab
 
 **A redesigned interface.** 2.0 brings liquid glass styling to wallpaper selection, generation settings and the task queue, all in one window. Previews are rendered directly from the scene. Completed jobs can be previewed, applied or exported.
 
-![WPE Baker 2.0 interface](https://isshiki-works.github.io/wpe-baker/site/gui-2.0-en.jpg)
+![WPE Baker 2.0 interface](https://isshiki-works.github.io/wpe-baker/site/gui-2.0-en.png)
 
 ## Quick start
 
@@ -75,6 +75,10 @@ You can also choose **Optimize live scene** to combine compatible water-wave eff
 The program analyzes time in shaders, animation tracks, particles and videos, then adjusts motion within the selected precision to form repeatable loops. Periodic content is pre-rendered as video or static textures and combined with layers that need to stay live. Generation checks loop seams, image quality, composition and hardware decoding.
 
 WPE Baker works with Scene wallpapers. Scenes with demanding, repeating animation usually offer more room for savings; lightweight scenes have less rendering work to remove. Wallpaper Engine still plays the finished project and renders its live layers.
+
+### Offline scene renderer
+
+Periodica also provides an offline **Wallpaper Engine scene renderer** for Windows. Developers can load `scene.pkg` or `scene.json`, specify the resolution, frame rate and frame count in a JSON job, and export raw RGBA frames or hardware-encoded video for other video tools. Source is in [engine](engine/); the [rendering entry point](engine/tools/SceneBake/main.cpp) defines the parameters.
 
 ## Command line
 
