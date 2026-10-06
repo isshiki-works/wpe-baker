@@ -1,0 +1,309 @@
+{
+  "date": "2026-10-05",
+  "method": {
+    "output": [
+      3840,
+      2160
+    ],
+    "simulation_hz": 60,
+    "warmup_frames": 30,
+    "measured_frames": 120,
+    "readback": "full RGBA",
+    "encoding": false,
+    "startup_in_fps": false,
+    "clock_inputs": "Periodica uses a fixed epoch; other runtimes retain their own clock. Throughput does not certify pixel equivalence."
+  },
+  "interpretation": "Each implementation uses its own internal rendering strategy. WSL2 translation cost is included. Visual mismatches are excluded from speed ranking.",
+  "rows": [
+    {
+      "gpu": "5090",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "Periodica 2.0",
+      "fps": 266.31779036129336,
+      "mean_ms": 3.7549125,
+      "status": "completed",
+      "runtime": "Windows · Vulkan"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "WebWallGL 2.1.0",
+      "fps": 160.4492579185058,
+      "mean_ms": 6.232500000142803,
+      "status": "completed",
+      "runtime": "Windows · Edge WebGL2 / D3D11"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "Almamu",
+      "fps": 155.44177442194876,
+      "mean_ms": 6.43327705,
+      "status": "visual_mismatch",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "Portghost",
+      "fps": null,
+      "mean_ms": null,
+      "status": "load_timeout",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "Periodica 2.0",
+      "fps": 302.66076646316935,
+      "mean_ms": 3.3040291666666666,
+      "status": "completed",
+      "runtime": "Windows · Vulkan"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "WebWallGL 2.1.0",
+      "fps": 166.94490817839704,
+      "mean_ms": 5.990000000068297,
+      "status": "completed",
+      "runtime": "Windows · Edge WebGL2 / D3D11"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "Almamu",
+      "fps": 173.5871810935508,
+      "mean_ms": 5.76079405,
+      "status": "completed",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "Portghost",
+      "fps": 192.6748379166278,
+      "mean_ms": 5.1900913,
+      "status": "completed",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "Periodica 2.0",
+      "fps": 107.4389858475996,
+      "mean_ms": 9.307608333333333,
+      "status": "completed",
+      "runtime": "Windows · Vulkan"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "WebWallGL 2.1.0",
+      "fps": 60.462538418473365,
+      "mean_ms": 16.539166666784634,
+      "status": "completed",
+      "runtime": "Windows · Edge WebGL2 / D3D11"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "Almamu",
+      "fps": 49.58475808369433,
+      "mean_ms": 20.167487725,
+      "status": "visual_mismatch",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "Portghost",
+      "fps": null,
+      "mean_ms": null,
+      "status": "load_timeout",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "Periodica 2.0",
+      "fps": 115.32646423284261,
+      "mean_ms": 8.671036666666666,
+      "status": "completed",
+      "runtime": "Windows · Vulkan"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "WebWallGL 2.1.0",
+      "fps": 49.96668887413044,
+      "mean_ms": 20.01333333331471,
+      "status": "completed",
+      "runtime": "Windows · Edge WebGL2 / D3D11"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "Almamu",
+      "fps": 51.32798790093932,
+      "mean_ms": 19.482548233333333,
+      "status": "completed",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "Portghost",
+      "fps": 86.18427701767452,
+      "mean_ms": 11.603044483333333,
+      "status": "completed",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "Mac renderer (Linux build)",
+      "fps": 127.75085653223238,
+      "mean_ms": 7.827736166666667,
+      "status": "visual_mismatch",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "Mac renderer (Linux build)",
+      "fps": 175.96701437313675,
+      "mean_ms": 5.682883258333334,
+      "status": "completed",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "AnisPaper",
+      "fps": 87.72781893828545,
+      "mean_ms": 11.398892758333334,
+      "status": "visual_mismatch",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "5090",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "AnisPaper",
+      "fps": 96.97375599726314,
+      "mean_ms": 10.31206835,
+      "status": "completed",
+      "runtime": "WSL2 · OpenGL / D3D12",
+      "internal_framebuffer": [
+        7680,
+        4320
+      ]
+    },
+    {
+      "gpu": "B390",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "Mac renderer (Linux build)",
+      "fps": 51.948341441991076,
+      "mean_ms": 19.249892725,
+      "status": "visual_mismatch",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "Mac renderer (Linux build)",
+      "fps": 49.82359110567985,
+      "mean_ms": 20.0708134,
+      "status": "completed",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3441873795",
+      "title": "Swimming Kirby",
+      "engine": "AnisPaper",
+      "fps": 96.0147501699801,
+      "mean_ms": 10.415066416666667,
+      "status": "visual_mismatch",
+      "runtime": "WSL2 · OpenGL / D3D12"
+    },
+    {
+      "gpu": "B390",
+      "scene": "3669681034",
+      "title": "Atri",
+      "engine": "AnisPaper",
+      "fps": 82.38074628557418,
+      "mean_ms": 12.138758691666666,
+      "status": "completed",
+      "runtime": "WSL2 · OpenGL / D3D12",
+      "internal_framebuffer": [
+        7680,
+        4320
+      ]
+    }
+  ],
+  "revisions": [
+    {
+      "Repo": "3x-haust--wallpaperengine-mac-renderer",
+      "Commit": "22e81811c707e8a2d6e7b0f17124a25e36ef7f86"
+    },
+    {
+      "Repo": "Almamu--linux-wallpaperengine",
+      "Commit": "b016d7d1fdcf4e5fd2f9c9fa420a8aaa07fee02d"
+    },
+    {
+      "Repo": "AzPepoze--linux-wallpaperengine",
+      "Commit": "884ffd7109fb33e2471f514dad0431b31281f16e"
+    },
+    {
+      "Repo": "CaptSilver--wallpaper-scene-renderer",
+      "Commit": "eb5a60d755566341c1858f1eaed52b4aac1ca2be"
+    },
+    {
+      "Repo": "catsout--wallpaper-scene-renderer",
+      "Commit": "476347b292289adfb8e983c5f263a2b77fd69696"
+    },
+    {
+      "Repo": "NixaXI--AnisPaper",
+      "Commit": "e010a7987214e901d21abf57490d15fa768f35e4"
+    },
+    {
+      "Repo": "oneincase--webwallgl",
+      "Commit": "040675b60b9fc9f2ba87d03c04ae0fa02edfe685"
+    },
+    {
+      "Repo": "portghost-dev--linux-wallpaperengine",
+      "Commit": "50530e5167c0822e63f052f50ef8d8613663915a"
+    },
+    {
+      "Repo": "waywallen--open-wallpaper-engine",
+      "Commit": "dc96e0b00117a366622caa2d4202476dd3b499f3"
+    },
+    {
+      "Repo": "wqLouis--linux-wallpaperengine",
+      "Commit": "e06ca360610308b4a1df3a2bc7af2f3a852bcc43"
+    }
+  ]
+}
